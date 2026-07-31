@@ -10,12 +10,3 @@ output_contracts:
   report:
     - name: review-target.md
       format: review-gather
-rules:
-  - condition: Review target information gathered
-    next: plan
-  - condition: Cannot identify review target, insufficient info
-    next: ABORT
-    appendix: |
-      Clarifications needed:
-      - {Question 1}
-      - {Question 2}

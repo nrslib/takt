@@ -18,6 +18,50 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const E2E_CONFIG_FIXTURE_PATH = resolve(__dirname, '../fixtures/config.e2e.yaml');
 
+function removeClaudeSkillsEnabledFromProviderOptions(
+  providerOptions: string | undefined,
+): string | undefined {
+  if (!providerOptions) {
+    return providerOptions;
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(providerOptions);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return providerOptions;
+    }
+    const options = parsed as Record<string, unknown>;
+    const claude = options.claude;
+    if (!claude || typeof claude !== 'object' || Array.isArray(claude)) {
+      return providerOptions;
+    }
+    const skills = (claude as Record<string, unknown>).skills;
+    if (!skills || typeof skills !== 'object' || Array.isArray(skills)
+      || !Object.hasOwn(skills, 'enabled')) {
+      return providerOptions;
+    }
+    const enabled = (skills as Record<string, unknown>).enabled;
+    if (typeof enabled !== 'boolean') {
+      return providerOptions;
+    }
+
+    const { enabled: _enabled, ...remainingSkills } = skills as Record<string, unknown>;
+    const { skills: _skills, ...remainingClaude } = claude as Record<string, unknown>;
+    const nextOptions = { ...options };
+    if (Object.keys(remainingSkills).length > 0) {
+      nextOptions.claude = { ...remainingClaude, skills: remainingSkills };
+    } else if (Object.keys(remainingClaude).length > 0) {
+      nextOptions.claude = remainingClaude;
+    } else {
+      delete nextOptions.claude;
+    }
+    return Object.keys(nextOptions).length > 0 ? JSON.stringify(nextOptions) : undefined;
+  } catch {
+    // Keep malformed input so the normal configuration boundary reports it unchanged.
+    return providerOptions;
+  }
+}
+
 function readE2EFixtureConfig(): E2EConfig {
   const raw = readFileSync(E2E_CONFIG_FIXTURE_PATH, 'utf-8');
   const parsed = parseYaml(raw);
@@ -87,6 +131,11 @@ export function updateIsolatedConfig(taktDir: string, patch: E2EConfig): void {
  */
 export function createIsolatedEnv(): IsolatedEnv {
   const baseDir = mkdtempSync(join(tmpdir(), 'te-'));
+  const {
+    TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED: _claudeSkillsEnabled,
+    TAKT_PROVIDER_OPTIONS: providerOptions,
+    ...parentEnv
+  } = process.env;
 
   const taktDir = join(baseDir, '.takt');
   const gitConfigPath = join(baseDir, '.gitconfig');
@@ -139,7 +188,8 @@ export function createIsolatedEnv(): IsolatedEnv {
 
   // ...process.env inherits all env vars including TAKT_OPENAI_API_KEY (for Codex)
   const env: NodeJS.ProcessEnv = {
-    ...process.env,
+    ...parentEnv,
+    TAKT_PROVIDER_OPTIONS: removeClaudeSkillsEnabledFromProviderOptions(providerOptions),
     TAKT_CONFIG_DIR: taktDir,
     GIT_CONFIG_GLOBAL: gitConfigPath,
     ...(provider === 'mock' ? { GIT_TERMINAL_PROMPT: '0' } : {}),

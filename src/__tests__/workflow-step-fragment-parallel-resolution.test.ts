@@ -12,14 +12,22 @@ function writeFile(root: string, relativePath: string, content: string): string 
   return filePath;
 }
 
-function workflow(uses: string, override = ''): string {
+function workflow(uses: string, childName: string, override = ''): string {
   return [
     'name: parallel-fragment-resolution',
     'initial_step: reviewers',
     'max_steps: 1',
     'steps:',
-    `  - uses: ${uses}`,
+    '  - name: reviewers',
+    `    uses: ${uses}`,
     ...(override.length > 0 ? override.split('\n').map((line) => `    ${line}`) : []),
+    '    rules:',
+    '      self:',
+    '        - condition: all("done")',
+    '          next: COMPLETE',
+    '      parallel:',
+    `        ${childName}:`,
+    '          - condition: done',
     '',
   ].join('\n');
 }
@@ -60,28 +68,19 @@ describe('workflow step fragment parallel resolution', () => {
     writeFile(globalConfigDir, 'steps/reviewers.yaml', [
       'parallel:',
       '  - uses: reviewer',
-      'rules:',
-      '  - condition: all("done")',
-      '    next: COMPLETE',
       '',
     ].join('\n'));
     writeFile(globalConfigDir, 'steps/reviewer.yaml', [
       'name: global-reviewer',
       'instruction: global review',
-      'rules:',
-      '  - condition: done',
-      '    next: COMPLETE',
       '',
     ].join('\n'));
     writeFile(projectDir, '.takt/steps/reviewer.yaml', [
       'name: project-reviewer',
       'instruction: project review',
-      'rules:',
-      '  - condition: done',
-      '    next: COMPLETE',
       '',
     ].join('\n'));
-    const workflowPath = writeFile(projectDir, '.takt/workflows/review.yaml', workflow('reviewers'));
+    const workflowPath = writeFile(projectDir, '.takt/workflows/review.yaml', workflow('reviewers', 'global-reviewer'));
 
     const loaded = loadWorkflowFromFile(workflowPath, projectDir);
 
@@ -95,30 +94,23 @@ describe('workflow step fragment parallel resolution', () => {
     writeFile(globalConfigDir, 'steps/reviewers.yaml', [
       'parallel:',
       '  - uses: discarded-reviewer',
-      'rules:',
-      '  - condition: all("done")',
-      '    next: COMPLETE',
       '',
     ].join('\n'));
     writeFile(projectDir, '.takt/steps/reviewer.yaml', [
       'name: project-reviewer',
       'instruction: project review',
-      'rules:',
-      '  - condition: done',
-      '    next: COMPLETE',
       '',
     ].join('\n'));
     writeFile(globalConfigDir, 'steps/reviewer.yaml', [
       'name: global-reviewer',
       'instruction: global review',
-      'rules:',
-      '  - condition: done',
-      '    next: COMPLETE',
       '',
     ].join('\n'));
-    const workflowPath = writeFile(projectDir, '.takt/workflows/review.yaml', workflow('reviewers', [
+    const workflowPath = writeFile(projectDir, '.takt/workflows/review.yaml', workflow('reviewers', 'project-reviewer', [
       'parallel:',
       '  - uses: reviewer',
+      '    rules:',
+      '      - condition: done',
     ].join('\n')));
 
     const loaded = loadWorkflowFromFile(workflowPath, projectDir);
@@ -133,12 +125,9 @@ describe('workflow step fragment parallel resolution', () => {
     writeFile(globalConfigDir, 'steps/reviewers.yaml', [
       'parallel:',
       '  - uses: reviewers',
-      'rules:',
-      '  - condition: all("done")',
-      '    next: COMPLETE',
       '',
     ].join('\n'));
-    const workflowPath = writeFile(projectDir, '.takt/workflows/review.yaml', workflow('reviewers'));
+    const workflowPath = writeFile(projectDir, '.takt/workflows/review.yaml', workflow('reviewers', 'cycle'));
 
     const message = errorMessage(() => loadWorkflowFromFile(workflowPath, projectDir));
 
@@ -150,12 +139,9 @@ describe('workflow step fragment parallel resolution', () => {
     writeFile(globalConfigDir, 'steps/reviewers.yaml', [
       'parallel:',
       '  - uses: missing-reviewer',
-      'rules:',
-      '  - condition: all("done")',
-      '    next: COMPLETE',
       '',
     ].join('\n'));
-    const workflowPath = writeFile(projectDir, '.takt/workflows/review.yaml', workflow('reviewers', [
+    const workflowPath = writeFile(projectDir, '.takt/workflows/review.yaml', workflow('reviewers', 'inline-reviewer', [
       'parallel:',
       '  - name: inline-reviewer',
       '    instruction: review',

@@ -25,24 +25,7 @@ loop_monitors:
 
 steps:
   - name: gather
-    tags:
-      - plan
-    edit: false
-    persona: planner
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Bash
-          - WebSearch
-          - WebFetch
-    instruction: gather-review
-    output_contracts:
-      report:
-        - name: review-target.md
-          format: review-gather
+    uses: review-gather-to-reviewers
     rules:
       - condition: Review target information gathered
         next: reviewers
@@ -210,37 +193,16 @@ steps:
       - condition: ABORT
         next: ABORT
   - name: fix
-    tags:
-      - coding
-    edit: true
-    persona: coder
-    policy:
-      - coding
-      - testing
-    knowledge:
-      - backend
-      - cqrs-es
-      - security
-      - architecture
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Edit
-          - Write
-          - Bash
-          - WebSearch
-          - WebFetch
-    required_permission_mode: edit
-    pass_previous_response: false
-    instruction: fix
-    output_contracts:
-      report:
-        - name: fix-report.md
-          format: fix-report
-          use_judge: false
+    uses: fix-with-provider-tools
+    with:
+      fix_policy:
+        - coding
+        - testing
+      fix_knowledge:
+        - backend
+        - cqrs-es
+        - security
+        - architecture
     rules:
       - condition: Fixes complete
         next: reviewers

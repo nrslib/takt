@@ -11,6 +11,7 @@ export interface ClaudeHeadlessCallOptions {
   /** Anthropic-compatible API base URL */
   baseUrl?: string;
   effort?: ClaudeEffort;
+  skillsEnabled?: boolean;
   allowedTools?: string[];
   mcpServers?: Record<string, McpServerConfig>;
   permissionMode?: PermissionMode;

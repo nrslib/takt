@@ -29,6 +29,7 @@ import { invalidateGlobalConfigCache } from '../infra/config/index.js';
 
 const runAllTasksNoWorkflow = runAllTasks as (projectCwd: string) => ReturnType<typeof runAllTasks>;
 const defaultCodexSkills = { repo: false, user: false } as const;
+const defaultClaudeSkills = { enabled: false } as const;
 
 interface TestEnv {
   root: string;
@@ -139,6 +140,7 @@ describe('IT: runAllTasks provider_options reflection', () => {
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
     expect(options?.providerOptions).toEqual({
       codex: { skills: defaultCodexSkills },
+      claude: { skills: defaultClaudeSkills },
       opencode: { variant: 'high' },
     });
   });
@@ -155,6 +157,7 @@ describe('IT: runAllTasks provider_options reflection', () => {
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
     expect(options?.providerOptions).toEqual({
       codex: { skills: defaultCodexSkills },
+      claude: { skills: defaultClaudeSkills },
       opencode: { variant: 'high' },
     });
   });
@@ -176,6 +179,7 @@ describe('IT: runAllTasks provider_options reflection', () => {
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
     expect(options?.providerOptions).toEqual({
       codex: { networkAccess: false, skills: defaultCodexSkills },
+      claude: { skills: defaultClaudeSkills },
     });
   });
 
@@ -200,7 +204,10 @@ describe('IT: runAllTasks provider_options reflection', () => {
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
     expect(options?.providerOptions).toEqual({
       codex: { skills: defaultCodexSkills },
-      claude: { allowedTools: ['Read', 'Edit'] },
+      claude: {
+        allowedTools: ['Read', 'Edit'],
+        skills: defaultClaudeSkills,
+      },
     });
     expect(options?.allowedTools).toEqual(['Read', 'Edit']);
   });
@@ -225,6 +232,7 @@ describe('IT: runAllTasks provider_options reflection', () => {
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
     expect(options?.providerOptions).toEqual({
       codex: { skills: defaultCodexSkills },
+      claude: { skills: defaultClaudeSkills },
       opencode: {
         networkAccess: true,
         variant: 'high',
@@ -251,6 +259,7 @@ describe('IT: runAllTasks provider_options reflection', () => {
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
     expect(options?.providerOptions).toEqual({
       codex: { networkAccess: true, skills: defaultCodexSkills },
+      claude: { skills: defaultClaudeSkills },
     });
   });
 });

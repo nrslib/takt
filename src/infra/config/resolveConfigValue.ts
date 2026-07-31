@@ -50,9 +50,17 @@ export interface CodexSkillDefaults {
   readonly user: boolean;
 }
 
+export interface ClaudeSkillDefaults {
+  readonly enabled: boolean;
+}
+
 const DEFAULT_CODEX_SKILLS: CodexSkillDefaults = {
   repo: false,
   user: false,
+};
+
+const DEFAULT_CLAUDE_SKILLS: ClaudeSkillDefaults = {
+  enabled: false,
 };
 
 function createDefaultProviderOptions(
@@ -60,7 +68,10 @@ function createDefaultProviderOptions(
 ): StepProviderOptions {
   return {
     codex: {
-      skills: codexSkills,
+      skills: { ...codexSkills },
+    },
+    claude: {
+      skills: { ...DEFAULT_CLAUDE_SKILLS },
     },
   };
 }
@@ -543,7 +554,12 @@ export function resolveProviderOptionsWithTrace(
     if (hasProviderOptionsPath(global.providerOptions, path)) {
       return globalTrace.getOrigin(toProviderOptionsTracePath(path));
     }
-    if (path === 'codex.skills' || path.startsWith('codex.skills.')) {
+    if (
+      path === 'codex.skills'
+      || path.startsWith('codex.skills.')
+      || path === 'claude.skills'
+      || path.startsWith('claude.skills.')
+    ) {
       return 'default';
     }
     if (project.providerOptions !== undefined) {

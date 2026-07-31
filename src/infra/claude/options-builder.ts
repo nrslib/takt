@@ -82,6 +82,7 @@ export class SdkOptionsBuilder {
 
     if (this.options.model) sdkOptions.model = this.options.model;
     if (this.options.effort) sdkOptions.effort = this.options.effort;
+    if (this.options.skillsEnabled === false) sdkOptions.skills = [];
     if (this.options.maxTurns != null) sdkOptions.maxTurns = this.options.maxTurns;
     if (this.options.allowedTools) sdkOptions.allowedTools = this.options.allowedTools;
     if (this.options.agents) sdkOptions.agents = this.options.agents;

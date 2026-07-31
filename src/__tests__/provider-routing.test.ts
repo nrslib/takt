@@ -317,6 +317,97 @@ describe('provider_routing provider_options resolution', () => {
     });
   });
 
+  it('Given persona, ordered tag, and step routes for Claude Skills, When building options, Then the highest routing layer determines enabled', () => {
+    const step = createStep({
+      providerRoutingPersonaKey: 'coder',
+      tags: ['first', 'second'],
+    });
+    const builder = createBuilder({
+      providerOptions: {
+        claude: { skills: { enabled: false } },
+      },
+      providerRouting: {
+        personas: {
+          coder: { providerOptions: { claude: { skills: { enabled: true } } } },
+        },
+        tags: {
+          first: { providerOptions: { claude: { skills: { enabled: false } } } },
+          second: { providerOptions: { claude: { skills: { enabled: true } } } },
+        },
+        steps: {
+          implement: { providerOptions: { claude: { skills: { enabled: false } } } },
+        },
+      },
+    });
+
+    expect(builder.buildBaseOptions(step).providerOptions).toEqual({
+      claude: { skills: { enabled: false } },
+    });
+    expect(builder.resolveStepProviderModel(step).providerOptionsSources).toMatchObject({
+      'claude.skills.enabled': 'provider_routing.steps',
+    });
+  });
+
+  it('Given a sibling Claude env option, When workflow, step, and routing enable Skills, Then each explicit value and source win', () => {
+    const builder = createBuilder({
+      providerOptionsSource: 'project',
+      providerOptionsOriginResolver: (path: string) => {
+        if (path === 'claude') return 'env';
+        return 'default';
+      },
+      providerOptions: {
+        claude: { effort: 'high', skills: { enabled: false } },
+      },
+      providerRouting: {
+        personas: {
+          coder: { providerOptions: { claude: { skills: { enabled: true } } } },
+        },
+        tags: {
+          implementation: { providerOptions: { claude: { skills: { enabled: true } } } },
+        },
+        steps: {
+          implement: { providerOptions: { claude: { skills: { enabled: true } } } },
+        },
+      },
+    });
+
+    const directStep = createStep({
+      providerRoutingPersonaKey: 'coder',
+      tags: ['implementation'],
+      providerOptions: { claude: { skills: { enabled: true } } },
+    });
+    expect(builder.buildBaseOptions(directStep).providerOptions).toEqual({
+      claude: { effort: 'high', skills: { enabled: true } },
+    });
+    expect(builder.resolveStepProviderModel(directStep).providerOptionsSources).toMatchObject({
+      'claude.skills.enabled': 'step',
+    });
+
+    const routedStep = createStep({ providerRoutingPersonaKey: 'coder', tags: ['implementation'] });
+    expect(builder.buildBaseOptions(routedStep).providerOptions).toEqual({
+      claude: { effort: 'high', skills: { enabled: true } },
+    });
+    expect(builder.resolveStepProviderModel(routedStep).providerOptionsSources).toMatchObject({
+      'claude.skills.enabled': 'provider_routing.steps',
+    });
+
+    const taggedStep = createStep({ name: 'review', tags: ['implementation'] });
+    expect(builder.buildBaseOptions(taggedStep).providerOptions).toEqual({
+      claude: { effort: 'high', skills: { enabled: true } },
+    });
+    expect(builder.resolveStepProviderModel(taggedStep).providerOptionsSources).toMatchObject({
+      'claude.skills.enabled': 'provider_routing.tags',
+    });
+
+    const personaStep = createStep({ name: 'review', providerRoutingPersonaKey: 'coder' });
+    expect(builder.buildBaseOptions(personaStep).providerOptions).toEqual({
+      claude: { effort: 'high', skills: { enabled: true } },
+    });
+    expect(builder.resolveStepProviderModel(personaStep).providerOptionsSources).toMatchObject({
+      'claude.skills.enabled': 'provider_routing.personas',
+    });
+  });
+
   it('Given env-origin config leaf, When provider_routing and step set same leaf, Then env-origin config still wins', () => {
     const step = createStep({
       providerRoutingPersonaKey: 'coder',

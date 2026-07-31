@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { parse as parseYaml } from 'yaml';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
@@ -40,18 +40,17 @@ import {
 import { initializeGitFixture } from './helpers/git-fixture.js';
 import { invalidateAllResolvedConfigCache, invalidateGlobalConfigCache } from '../infra/config/index.js';
 import {
-  getBuiltinLanguageStepsDir,
-  getBuiltinStepsDir,
   getBuiltinWorkflowsDir,
 } from '../infra/config/paths.js';
 
 interface BuiltinFragmentCase {
-  fragment: 'fix' | 'gather' | 'replan';
+  fragment: 'fix' | 'gather';
   language: 'en' | 'ja';
   label: string;
   nextStep: string;
   persona: string;
   ruleIndex: number;
+  ruleNextStep?: string;
 }
 
 interface FinalGateReturnCase {
@@ -61,14 +60,15 @@ interface FinalGateReturnCase {
 }
 
 interface RawRule {
+  condition?: string;
   next?: string;
   return?: string;
 }
 
-function readRules(path: string, stepName?: string): RawRule[] {
+function readRuleSpec(path: string, stepName?: string): unknown {
   const raw = parseYaml(readFileSync(path, 'utf-8')) as {
-    rules?: RawRule[];
-    steps?: Array<{ name?: string; rules?: RawRule[] }>;
+    rules?: unknown;
+    steps?: Array<{ name?: string; rules?: unknown }>;
   };
   const rules = stepName === undefined
     ? raw.rules
@@ -77,6 +77,22 @@ function readRules(path: string, stepName?: string): RawRule[] {
     throw new Error(`Expected rules in builtin asset: ${path}`);
   }
   return rules;
+}
+
+function readRules(path: string, stepName?: string): RawRule[] {
+  const rules = readRuleSpec(path, stepName);
+  if (!Array.isArray(rules)) {
+    throw new Error(`Expected rule array in builtin asset: ${path}`);
+  }
+  return rules as RawRule[];
+}
+
+function yamlFieldLines(field: string, value: unknown, indentation: number): string[] {
+  const prefix = ' '.repeat(indentation);
+  return stringifyYaml({ [field]: value }, { lineWidth: 0 })
+    .trimEnd()
+    .split('\n')
+    .map((line) => prefix + line);
 }
 
 function findRuleIndex(rules: readonly RawRule[], field: 'next' | 'return', value: string): number {
@@ -137,19 +153,29 @@ function mockFindingContractAgents(
   });
 }
 
-function fragmentRuleIndex(
-  language: 'en' | 'ja',
-  fragment: 'fix' | 'gather' | 'replan',
-  nextStep: string,
-): number {
+function fragmentRuleIndex(language: 'en' | 'ja', fragment: 'fix' | 'gather', nextStep: string): number {
+  const workflow = fragment === 'fix'
+    ? 'takt-default-high.yaml'
+    : 'review-fix-takt-default-high.yaml';
   return findRuleIndex(
-    readRules(join(getBuiltinLanguageStepsDir(language), `${fragment}.yaml`)),
+    readRules(join(getBuiltinWorkflowsDir(language), workflow), fragment),
     'next',
     nextStep,
   );
 }
 
-const SUPERVISE_RULES = readRules(join(getBuiltinStepsDir(), 'finding-contract-supervise.yaml'));
+const SUPERVISE_RULES = readRules(
+  join(getBuiltinWorkflowsDir('en'), 'merge-readiness-finding-contract-final-gate.yaml'),
+  'supervise',
+);
+const FINAL_GATE_CALLER_RULES = readRuleSpec(
+  join(getBuiltinWorkflowsDir('en'), 'takt-default-high.yaml'),
+  'final-gate',
+);
+const REVIEWERS_CALLER_RULES = {
+  en: readRuleSpec(join(getBuiltinWorkflowsDir('en'), 'takt-default-high.yaml'), 'reviewers'),
+  ja: readRuleSpec(join(getBuiltinWorkflowsDir('ja'), 'takt-default-high.yaml'), 'reviewers'),
+};
 const MERGE_READINESS_REVIEW_RULES = readRules(
   join(getBuiltinWorkflowsDir('en'), 'merge-readiness-finding-contract-final-gate.yaml'),
   'merge-readiness-review',
@@ -164,13 +190,9 @@ const BUILTIN_FRAGMENT_CASES: BuiltinFragmentCase[] = [
   { fragment: 'fix', language: 'en', label: 'Fixes are complete', nextStep: 'reviewers', persona: 'coder', ruleIndex: fragmentRuleIndex('en', 'fix', 'reviewers') },
   { fragment: 'fix', language: 'en', label: 'Cannot proceed with fixes, or the implementation approach must be redefined', nextStep: 'replan', persona: 'coder', ruleIndex: fragmentRuleIndex('en', 'fix', 'replan') },
   { fragment: 'gather', language: 'en', label: 'Review target information gathered', nextStep: 'plan', persona: 'planner', ruleIndex: fragmentRuleIndex('en', 'gather', 'plan') },
-  { fragment: 'replan', language: 'en', label: 'An actionable, untried project-scoped change or investigation and its verification steps were defined', nextStep: 'implement', persona: 'planner', ruleIndex: fragmentRuleIndex('en', 'replan', 'implement') },
-  { fragment: 'replan', language: 'en', label: 'Concrete evidence shows the current implementation meets the requirements and acceptance criteria, all required project-scoped verification is complete, no untried change or investigation remains, and only independent review is needed', nextStep: 'reviewers', persona: 'planner', ruleIndex: fragmentRuleIndex('en', 'replan', 'reviewers') },
   { fragment: 'fix', language: 'ja', label: '修正完了', nextStep: 'reviewers', persona: 'coder', ruleIndex: fragmentRuleIndex('ja', 'fix', 'reviewers') },
   { fragment: 'fix', language: 'ja', label: '修正を進められない、または実装方針の再定義が必要', nextStep: 'replan', persona: 'coder', ruleIndex: fragmentRuleIndex('ja', 'fix', 'replan') },
   { fragment: 'gather', language: 'ja', label: 'レビュー対象の情報収集完了', nextStep: 'plan', persona: 'planner', ruleIndex: fragmentRuleIndex('ja', 'gather', 'plan') },
-  { fragment: 'replan', language: 'ja', label: 'プロジェクト内で実行可能な未試行の変更または原因調査と、その検証手順を具体化した', nextStep: 'implement', persona: 'planner', ruleIndex: fragmentRuleIndex('ja', 'replan', 'implement') },
-  { fragment: 'replan', language: 'ja', label: '現行実装が要件・受入条件を満たす具体的根拠があり、必要なプロジェクト内検証が完了し、未試行の変更・調査を残さず、独立レビューだけが必要', nextStep: 'reviewers', persona: 'planner', ruleIndex: fragmentRuleIndex('ja', 'replan', 'reviewers') },
 ];
 
 const FINAL_GATE_RETURN_CASES: FinalGateReturnCase[] = [
@@ -193,8 +215,13 @@ function writeBuiltinFragmentWorkflow(projectDir: string, fragmentCase: BuiltinF
     'workflow_config:',
     '  provider: claude',
     'steps:',
-    `  - uses: ${fragmentCase.fragment}`,
-    '    name: entry',
+    '  - name: entry',
+    `    uses: ${fragmentCase.fragment}`,
+    ...Array.from({ length: fragmentCase.ruleIndex + 1 }, (_unused, index) => [
+      ...(index === 0 ? ['    rules:'] : []),
+      `      - condition: result-${index}`,
+      `        next: ${index === fragmentCase.ruleIndex ? (fragmentCase.ruleNextStep ?? fragmentCase.nextStep) : 'ABORT'}`,
+    ]).flat(),
     `  - name: ${fragmentCase.nextStep}`,
     '    instruction: complete',
     '    rules:',
@@ -217,20 +244,6 @@ function writeBuiltinFragmentWorkflow(projectDir: string, fragmentCase: BuiltinF
     ...(fragmentCase.nextStep === 'plan' ? [] : [
       '  - name: plan',
       '    instruction: plan',
-      '    rules:',
-      '      - condition: done',
-      '        next: COMPLETE',
-    ]),
-    ...(fragmentCase.nextStep === 'write_tests' ? [] : [
-      '  - name: write_tests',
-      '    instruction: write_tests',
-      '    rules:',
-      '      - condition: done',
-      '        next: COMPLETE',
-    ]),
-    ...(fragmentCase.nextStep === 'implement' ? [] : [
-      '  - name: implement',
-      '    instruction: implement',
       '    rules:',
       '      - condition: done',
       '        next: COMPLETE',
@@ -258,8 +271,9 @@ function writeBuiltinReturnWorkflow(projectDir: string): string {
     '    instruction: findings-manager',
     '    output_contract: findings-manager',
     'steps:',
-    '  - uses: finding-contract-final-gate',
-    '    name: final-gate',
+    '  - name: final-gate',
+    '    uses: finding-contract-final-gate',
+    ...yamlFieldLines('rules', FINAL_GATE_CALLER_RULES, 4),
     '  - name: fix',
     '    persona: coder',
     '    instruction: fix',
@@ -299,8 +313,9 @@ function writeBuiltinReviewersWorkflow(projectDir: string, language: 'en' | 'ja'
     '    instruction: findings-manager',
     '    output_contract: findings-manager',
     'steps:',
-    '  - uses: reviewers',
-    '    name: reviewers',
+    '  - name: reviewers',
+    '    uses: reviewers',
+    ...yamlFieldLines('rules', REVIEWERS_CALLER_RULES[language], 4),
     '  - name: final-gate',
     '    instruction: complete',
     '    rules:',
@@ -433,39 +448,7 @@ describe('builtin step fragment runtime contracts', () => {
         nextStep: 'plan',
         persona: 'planner',
         ruleIndex: abortRuleIndex,
-      }),
-      projectDir,
-    );
-    const engine = new WorkflowEngine(workflow, projectDir, 'test task', { projectCwd: projectDir });
-    engines.push(engine);
-    mockRunAgentSequence([makeResponse({ persona: 'planner', content: label })]);
-    mockRuleEvaluationSequence([{ index: abortRuleIndex, method: 'phase3_tag' }]);
-
-    const state = await engine.run();
-
-    expect(state.status).toBe('aborted');
-    expect(vi.mocked(runAgent)).toHaveBeenCalledOnce();
-  });
-
-  it.each([
-    {
-      language: 'en' as const,
-      label: 'Confirmed evidence shows that project-scoped changes or investigation cannot resolve the issue, leaving only external action or mutually unsatisfiable requirements',
-    },
-    {
-      language: 'ja' as const,
-      label: '確認済みの根拠により、プロジェクト内の変更や調査では解消できず、外部操作だけが残るか要件が両立不能である',
-    },
-  ])('routes the $language replan abort branch to the terminal sink', async ({ language, label }) => {
-    const abortRuleIndex = fragmentRuleIndex(language, 'replan', 'ABORT');
-    const workflow = loadWorkflowFromFile(
-      writeBuiltinFragmentWorkflow(projectDir, {
-        fragment: 'replan',
-        language,
-        label,
-        nextStep: 'implement',
-        persona: 'planner',
-        ruleIndex: abortRuleIndex,
+        ruleNextStep: 'ABORT',
       }),
       projectDir,
     );
@@ -500,7 +483,7 @@ describe('builtin step fragment runtime contracts', () => {
     mockFindingContractAgents({ 'final-gate': 'done' });
     mockRuleEvaluationSequence([
       ...reviewerPersonas.map(() => ({ index: 0, method: 'phase3_tag' as const })),
-      { index: 5, method: 'aggregate' },
+      { index: 6, method: 'aggregate' },
       { index: 0, method: 'phase3_tag' },
     ]);
 
@@ -519,11 +502,6 @@ describe('builtin step fragment runtime contracts', () => {
     writeFileSync(join(projectDir, '.takt', 'steps', 'delegate.yaml'), [
       'kind: workflow_call',
       'call: ./child.yaml',
-      'rules:',
-      '  - condition: COMPLETE',
-      '    next: COMPLETE',
-      '  - condition: ABORT',
-      '    next: ABORT',
       '',
     ].join('\n'), 'utf-8');
     writeFileSync(parentPath, [
@@ -531,8 +509,13 @@ describe('builtin step fragment runtime contracts', () => {
       'initial_step: delegate',
       'max_steps: 2',
       'steps:',
-      '  - uses: delegate',
-      '    name: delegate',
+      '  - name: delegate',
+      '    uses: delegate',
+      '    rules:',
+      '      - condition: COMPLETE',
+      '        next: COMPLETE',
+      '      - condition: ABORT',
+      '        next: ABORT',
       '',
     ].join('\n'), 'utf-8');
     writeFileSync(childPath, [
@@ -595,7 +578,7 @@ describe('builtin step fragment runtime contracts', () => {
       supervisor: returnValue,
       ...(nextStep ? { [nextStep]: 'done' } : {}),
     });
-      mockRuleEvaluationSequence([
+    mockRuleEvaluationSequence([
       { index: MERGE_READINESS_TO_SUPERVISE_RULE_INDEX, method: 'phase3_tag' },
       { index: superviseRuleIndex, method: 'phase3_tag' },
       ...(nextStep ? [{ index: 0, method: 'phase3_tag' as const }] : []),
@@ -613,8 +596,6 @@ describe('builtin step fragment runtime contracts', () => {
       ...(returnValue === 'needs_conflict_adjudication' ? ['finding-conflict-adjudication'] : []),
       ...(nextStep ? [nextStep] : []),
     ]);
-    // merge-readiness と supervise は Finding Contract reviewer の
-    // Phase 1 + report publication をそれぞれ1回ずつ実行する。
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(nextStep ? 5 : 4);
   });
 });

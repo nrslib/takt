@@ -106,9 +106,6 @@ describe('workflow step fragment provider provenance', () => {
   it('does not associate a fragment when engine provider metadata has no source', () => {
     write(projectDir, '.takt/steps/review.yaml', [
       'instruction: review',
-      'rules:',
-      '  - condition: done',
-      '    next: COMPLETE',
       '',
     ].join('\n'));
     const workflowPath = write(projectDir, '.takt/workflows/default.yaml', [
@@ -116,8 +113,11 @@ describe('workflow step fragment provider provenance', () => {
       'initial_step: review',
       'max_steps: 1',
       'steps:',
-      '  - uses: review',
-      '    name: review',
+      '  - name: review',
+      '    uses: review',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
       '',
     ].join('\n'));
 
@@ -141,9 +141,6 @@ describe('workflow step fragment provider provenance', () => {
       'promotion:',
       '  - at: 2',
       '    provider: claude',
-      'rules:',
-      '  - condition: done',
-      '    next: COMPLETE',
       '',
     ].join('\n'));
     const outerPath = write(projectDir, '.takt/steps/outer.yaml', [
@@ -158,8 +155,11 @@ describe('workflow step fragment provider provenance', () => {
       'initial_step: review',
       'max_steps: 1',
       'steps:',
-      '  - uses: outer',
-      '    name: review',
+      '  - name: review',
+      '    uses: outer',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
       '',
     ].join('\n'));
 
@@ -184,9 +184,6 @@ describe('workflow step fragment provider provenance', () => {
       'promotion:',
       '  - at: 2',
       '    provider: claude',
-      'rules:',
-      '  - condition: done',
-      '    next: COMPLETE',
       '',
     ].join('\n'));
     const workflowPath = write(projectDir, '.takt/workflows/default.yaml', [
@@ -194,11 +191,14 @@ describe('workflow step fragment provider provenance', () => {
       'initial_step: review',
       'max_steps: 1',
       'steps:',
-      '  - uses: review',
-      '    name: review',
+      '  - name: review',
+      '    uses: review',
       '    promotion:',
       '      - at: 2',
       '        provider: opencode',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
       '',
     ].join('\n'));
 
@@ -224,9 +224,6 @@ describe('workflow step fragment provider provenance', () => {
       'call: child',
       'overrides:',
       '  provider: opencode',
-      'rules:',
-      '  - condition: COMPLETE',
-      '    next: COMPLETE',
       '',
     ].join('\n'));
     const childPath = write(projectDir, '.takt/workflows/child.yaml', [
@@ -248,8 +245,11 @@ describe('workflow step fragment provider provenance', () => {
       'initial_step: delegate',
       'max_steps: 1',
       'steps:',
-      '  - uses: delegate',
-      '    name: delegate',
+      '  - name: delegate',
+      '    uses: delegate',
+      '    rules:',
+      '      - condition: COMPLETE',
+      '        next: COMPLETE',
       '',
     ].join('\n'));
     const engine = new WorkflowEngine(loadWorkflowFromFile(workflowPath, projectDir), projectDir, 'test task', {
@@ -276,9 +276,6 @@ describe('workflow step fragment provider provenance', () => {
       'call: child',
       'overrides:',
       '  provider: claude',
-      'rules:',
-      '  - condition: COMPLETE',
-      '    next: COMPLETE',
       '',
     ].join('\n'));
     const childPath = write(projectDir, '.takt/workflows/child.yaml', [
@@ -300,10 +297,13 @@ describe('workflow step fragment provider provenance', () => {
       'initial_step: delegate',
       'max_steps: 1',
       'steps:',
-      '  - uses: delegate',
-      '    name: delegate',
+      '  - name: delegate',
+      '    uses: delegate',
       '    overrides:',
       '      provider: opencode',
+      '    rules:',
+      '      - condition: COMPLETE',
+      '        next: COMPLETE',
       '',
     ].join('\n'));
     const engine = new WorkflowEngine(loadWorkflowFromFile(workflowPath, projectDir), projectDir, 'test task', {

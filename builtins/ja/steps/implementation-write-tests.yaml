@@ -1,0 +1,23 @@
+params:
+  test_knowledge:
+    type: facet_ref[]
+    facet_kind: knowledge
+name: write_tests
+tags:
+  - coding
+  - test-planning
+edit: true
+persona: coder
+policy:
+  - coding
+  - testing
+knowledge:
+  $param: test_knowledge
+provider_options:
+  extends: edit
+required_permission_mode: edit
+instruction: write-tests-first
+output_contracts:
+  report:
+    - name: test-report.md
+      format: test-report

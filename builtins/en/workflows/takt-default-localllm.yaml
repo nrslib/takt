@@ -31,49 +31,9 @@ loop_monitors:
           next: replan
         - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
           next: ABORT
-  - cycle: [replan, implement, reviewers, boundary-reviewers]
-    threshold: 2
-    judge:
-      persona: supervisor
-      instruction: loop-monitor-fix-replan
-      rules:
-        - condition: The implementation approach can be redefined without changing requirements or acceptance criteria
-          next: replan
-        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
-          next: ABORT
-  - cycle: [replan, implement, reviewers, boundary-reviewers, final-gate]
-    threshold: 2
-    judge:
-      persona: supervisor
-      instruction: loop-monitor-fix-replan
-      rules:
-        - condition: The implementation approach can be redefined without changing requirements or acceptance criteria
-          next: replan
-        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
-          next: ABORT
   - cycle: [replan, implement, reviewers, fix]
     threshold: 2
     judge: &replan_progress_judge
-      persona: supervisor
-      instruction: loop-monitor-fix-replan
-      rules:
-        - condition: Replanning is making progress on blockers
-          next: replan
-        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
-          next: ABORT
-  - cycle: [replan, implement, reviewers, boundary-reviewers, fix]
-    threshold: 2
-    judge:
-      persona: supervisor
-      instruction: loop-monitor-fix-replan
-      rules:
-        - condition: Replanning is making progress on blockers
-          next: replan
-        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
-          next: ABORT
-  - cycle: [replan, implement, reviewers, boundary-reviewers, final-gate, fix]
-    threshold: 2
-    judge:
       persona: supervisor
       instruction: loop-monitor-fix-replan
       rules:
@@ -144,19 +104,7 @@ loop_monitors:
   - cycle: [replan, reviewers]
     threshold: 2
     judge: *replan_standard_judge
-  - cycle: [replan, reviewers, boundary-reviewers]
-    threshold: 2
-    judge: *replan_standard_judge
-  - cycle: [replan, reviewers, boundary-reviewers, final-gate]
-    threshold: 2
-    judge: *replan_standard_judge
   - cycle: [replan, reviewers, fix]
-    threshold: 2
-    judge: *replan_progress_judge
-  - cycle: [replan, reviewers, boundary-reviewers, fix]
-    threshold: 2
-    judge: *replan_progress_judge
-  - cycle: [replan, reviewers, boundary-reviewers, final-gate, fix]
     threshold: 2
     judge: *replan_progress_judge
   - cycle: [replan, reviewers, local-review-integrity-gate]
@@ -243,30 +191,6 @@ loop_monitors:
           next: replan
         - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
           next: ABORT
-  - cycle: [fix, reviewers, boundary-reviewers]
-    threshold: 3
-    judge:
-      persona: supervisor
-      instruction: loop-monitor-reviewers-fix-fc
-      rules:
-        - condition: The post-fix review confirms progress and the next fix is actionable
-          next: fix
-        - condition: The same finding repeats but replanning may resolve it
-          next: replan
-        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
-          next: ABORT
-  - cycle: [fix, reviewers, boundary-reviewers, final-gate]
-    threshold: 3
-    judge:
-      persona: supervisor
-      instruction: loop-monitor-reviewers-fix-fc
-      rules:
-        - condition: The post-fix review confirms progress and the next fix is actionable
-          next: fix
-        - condition: The same finding repeats but replanning may resolve it
-          next: replan
-        - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
-          next: ABORT
   - cycle: [fix, reviewers, local-review-integrity-gate]
     threshold: 3
     judge:
@@ -329,11 +253,7 @@ loop_monitors:
           next: ABORT
 steps:
   - name: plan
-    tags: [plan]
-    edit: false
-    persona: planner
-    knowledge: architecture
-    instruction: plan
+    uses: implementation-high-plan-to-write-tests
     rules:
       - condition: Requirements are clear and implementable
         next: write_tests
@@ -341,22 +261,18 @@ steps:
         next: COMPLETE
       - condition: Requirements are unclear or insufficient
         next: ABORT
-    output_contracts:
-      report:
-        - name: plan.md
-          format: plan
-
-  - uses: replan
-    name: replan
+  - name: replan
+    uses: implementation-high-replan-to-implement
+    rules:
+      - condition: An actionable, untried project-scoped change or investigation and its verification steps were defined
+        next: implement
+      - condition: Concrete evidence shows the current implementation meets the requirements and acceptance criteria, all required project-scoped verification is complete, no untried change or investigation remains, and only independent review is needed
+        next: reviewers
+      - condition: Confirmed evidence shows that project-scoped changes or investigation cannot resolve the issue, leaving only external action or mutually unsatisfiable requirements
+        next: ABORT
 
   - name: write_tests
-    tags: [coding, test-planning]
-    edit: true
-    persona: coder
-    policy: [coding, testing]
-    knowledge: [takt, architecture, unit-testing, e2e-testing, implementation-semantics]
-    required_permission_mode: edit
-    instruction: write-tests-first
+    uses: implementation-high-write-tests-to-implement
     rules:
       - condition: Tests written
         next: implement
@@ -368,11 +284,6 @@ steps:
         next: write_tests
         requires_user_input: true
         interactive_only: true
-    output_contracts:
-      report:
-        - name: test-report.md
-          format: test-report
-
   - name: implement
     tags: [leader]
     edit: true
@@ -397,122 +308,35 @@ steps:
         next: replan
 
   - name: reviewers
-    tags: [review]
-    parallel:
-      - name: arch-review
-        tags: [review]
-        edit: false
-        session: compact
-        persona: architecture-reviewer
-        policy: review
-        knowledge: architecture
-        instruction: review-arch
-        rules:
-          - condition: approved
-          - condition: needs_fix
-        output_contracts:
-          report:
-            - name: architect-review.md
-              format: architecture-review-finding-contract
-      - name: ai-antipattern-review
-        tags: [review]
-        edit: false
-        session: compact
-        persona: ai-antipattern-reviewer
-        policy: [review, ai-antipattern]
-        instruction: ai-antipattern-review
-        rules:
-          - condition: No AI-specific issues
-          - condition: AI-specific issues found
-        output_contracts:
-          report:
-            - name: ai-antipattern-review.md
-              format: ai-antipattern-review-finding-contract
-      - name: coding-review
-        tags: [review]
-        edit: false
-        session: compact
-        persona: coding-reviewer
-        policy: [review, coding]
-        instruction: review-coding
-        rules:
-          - condition: approved
-          - condition: needs_fix
-        output_contracts:
-          report:
-            - name: coding-review.md
-              format: coding-review-finding-contract
-      - name: implementation-semantics-review
-        tags: [review]
-        edit: false
-        session: compact
-        persona: implementation-semantics-reviewer
-        policy: review
-        knowledge: implementation-semantics
-        instruction: review-implementation-semantics
-        rules:
-          - condition: approved
-          - condition: needs_fix
-        output_contracts:
-          report:
-            - name: implementation-semantics-review.md
-              format: implementation-semantics-review-finding-contract
-      - name: contract-lifecycle-review
-        tags: [review]
-        edit: false
-        session: compact
-        persona: contract-lifecycle-reviewer
-        policy: review
-        knowledge: contract-lifecycle
-        instruction: contract-lifecycle-review
-        rules:
-          - condition: approved
-          - condition: needs_fix
-        output_contracts:
-          report:
-            - name: contract-lifecycle-review.md
-              format: contract-lifecycle-review-finding-contract
-      - name: robustness-review
-        tags: [review]
-        edit: false
-        session: compact
-        persona: robustness-reviewer
-        policy: review
-        knowledge: robustness
-        instruction: robustness-review
-        rules:
-          - condition: approved
-          - condition: needs_fix
-        output_contracts:
-          report:
-            - name: robustness-review.md
-              format: robustness-review-finding-contract
+    uses: reviewers
     rules:
-      - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)
-        next: finding-conflict-adjudication
-      - condition: when(findings.conflicts.count > 0)
-        next: ABORT
-      - condition: when(findings.provisional.dismissEligible.count > 0 && findings.conflicts.count == 0)
-        next: local-review-integrity-gate
-      - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
-        next: replan
-      - condition: when(findings.rounds.budgetExhausted == true && findings.provisional.count > 0 && findings.conflicts.count == 0)
-        next: replan
-      - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
-        next: replan
-      - condition: when(findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0)
-        next: local-review-integrity-gate
-      - condition: when(findings.open.count > 0 && findings.provisional.count == 0 && findings.conflicts.count == 0)
-        next: fix
+      self:
+        - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)
+          next: finding-conflict-adjudication
+        - condition: when(findings.conflicts.count > 0)
+          next: ABORT
+        - condition: when(findings.provisional.dismissEligible.count > 0 && findings.conflicts.count == 0)
+          next: local-review-integrity-gate
+        - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
+          next: replan
+        - condition: when(findings.rounds.budgetExhausted == true && findings.provisional.count > 0 && findings.conflicts.count == 0)
+          next: replan
+        - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
+          next: replan
+        - condition: when(findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0)
+          next: local-review-integrity-gate
+        - condition: when(findings.open.count > 0 && findings.provisional.count == 0 && findings.conflicts.count == 0)
+          next: fix
+      parallel:
+        arch-review: [{ condition: approved }, { condition: needs_fix }]
+        ai-antipattern-review: [{ condition: No AI-specific issues }, { condition: AI-specific issues found }]
+        coding-review: [{ condition: approved }, { condition: needs_fix }]
+        implementation-semantics-review: [{ condition: approved }, { condition: needs_fix }]
+        contract-lifecycle-review: [{ condition: approved }, { condition: needs_fix }]
+        robustness-review: [{ condition: approved }, { condition: needs_fix }]
 
   - name: local-review-integrity-gate
-    kind: workflow_call
-    call: merge-readiness-finding-contract-final-gate
-    finding_contract_authority: terminal_adjudication
-    args:
-      supervise_knowledge:
-        - architecture
-        - takt
+    uses: finding-contract-final-gate
     rules:
       - condition: COMPLETE
         next: boundary-reviewers
@@ -528,85 +352,32 @@ steps:
         next: ABORT
 
   - name: boundary-reviewers
-    tags: [review, boundary-review]
-    parallel:
-      - name: contract-wiring-review
-        session_key: contract-wiring-review
-        tags: [review, boundary-review]
-        edit: false
-        session: compact
-        pass_previous_response: false
-        persona: contract-lifecycle-reviewer
-        policy: review
-        knowledge: contract-lifecycle
-        instruction: review-contract-wiring
-        rules:
-          - condition: approved
-          - condition: needs_fix
-        output_contracts:
-          report:
-            - name: contract-wiring-review.md
-              format: contract-wiring-review-finding-contract
-      - name: resource-ownership-review
-        session_key: resource-ownership-review
-        tags: [review, boundary-review]
-        edit: false
-        session: compact
-        pass_previous_response: false
-        persona: resource-ownership-reviewer
-        policy: review
-        knowledge: resource-ownership
-        instruction: review-resource-ownership
-        rules:
-          - condition: approved
-          - condition: needs_fix
-        output_contracts:
-          report:
-            - name: resource-ownership-review.md
-              format: resource-ownership-review-finding-contract
-      - name: failure-boundary-review
-        session_key: failure-boundary-review
-        tags: [review, boundary-review]
-        edit: false
-        session: compact
-        pass_previous_response: false
-        persona: failure-boundary-reviewer
-        policy: review
-        knowledge: failure-boundary
-        instruction: review-failure-boundary
-        rules:
-          - condition: approved
-          - condition: needs_fix
-        output_contracts:
-          report:
-            - name: failure-boundary-review.md
-              format: failure-boundary-review-finding-contract
+    uses: boundary-reviewers
     rules:
-      - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)
-        next: finding-conflict-adjudication
-      - condition: when(findings.conflicts.count > 0)
-        next: ABORT
-      - condition: when(findings.provisional.dismissEligible.count > 0 && findings.conflicts.count == 0)
-        next: final-gate
-      - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
-        next: replan
-      - condition: when(findings.rounds.budgetExhausted == true && findings.provisional.count > 0 && findings.conflicts.count == 0)
-        next: replan
-      - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
-        next: replan
-      - condition: when(findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0)
-        next: final-gate
-      - condition: when(findings.open.count > 0 && findings.provisional.count == 0 && findings.conflicts.count == 0)
-        next: fix
+      self:
+        - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)
+          next: finding-conflict-adjudication
+        - condition: when(findings.conflicts.count > 0)
+          next: ABORT
+        - condition: when(findings.provisional.dismissEligible.count > 0 && findings.conflicts.count == 0)
+          next: final-gate
+        - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
+          next: replan
+        - condition: when(findings.rounds.budgetExhausted == true && findings.provisional.count > 0 && findings.conflicts.count == 0)
+          next: replan
+        - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
+          next: replan
+        - condition: when(findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0)
+          next: final-gate
+        - condition: when(findings.open.count > 0 && findings.provisional.count == 0 && findings.conflicts.count == 0)
+          next: fix
+      parallel:
+        contract-wiring-review: [{ condition: approved }, { condition: needs_fix }]
+        resource-ownership-review: [{ condition: approved }, { condition: needs_fix }]
+        failure-boundary-review: [{ condition: approved }, { condition: needs_fix }]
 
   - name: final-gate
-    kind: workflow_call
-    call: merge-readiness-finding-contract-final-gate
-    finding_contract_authority: terminal_adjudication
-    args:
-      supervise_knowledge:
-        - architecture
-        - takt
+    uses: finding-contract-final-gate
     rules:
       - condition: COMPLETE
         next: COMPLETE

@@ -225,16 +225,16 @@ steps:
   it('attributes runtime validation errors to the referenced step fragment', async () => {
     const fragmentPath = writeWorkflow(projectDir, '.takt/steps/opencode-review.yaml', `provider: opencode
 instruction: review the implementation
-rules:
-  - condition: done
-    next: COMPLETE
 `);
     const filePath = writeWorkflow(projectDir, '.takt/workflows/fragment-runtime-error.yaml', `name: fragment-runtime-error
 max_steps: 1
 initial_step: review
 steps:
-  - uses: opencode-review
-    name: review
+  - name: review
+    uses: opencode-review
+    rules:
+      - condition: done
+        next: COMPLETE
 `);
 
     await expect(doctorWorkflowCommand([filePath], projectDir)).rejects.toThrow('Workflow validation failed');
@@ -1841,17 +1841,9 @@ steps:
     }]);
   });
 
-  it('attributes a parallel sub-step routing warning to its fragment next field', () => {
+  it('reports caller-owned parallel sub-step routing warnings after fragment expansion', () => {
     const fragmentPath = writeWorkflow(projectDir, '.takt/steps/reviewers.yaml', `parallel:
   - name: sub-review
-    rules:
-      - condition: conflict
-        next: finding-conflict-adjudication
-      - condition: approved
-        next: COMPLETE
-rules:
-  - condition: done
-    next: COMPLETE
 `);
     const filePath = writeWorkflow(projectDir, '.takt/workflows/adjudication-parallel-fragment.yaml', `name: adjudication-parallel-fragment
 max_steps: 10
@@ -1864,8 +1856,18 @@ finding_contract:
     instruction: findings-manager
     output_contract: findings-manager
 steps:
-  - uses: reviewers
-    name: step1
+  - name: step1
+    uses: reviewers
+    rules:
+      self:
+        - condition: done
+          next: COMPLETE
+      parallel:
+        sub-review:
+          - condition: conflict
+            next: finding-conflict-adjudication
+          - condition: approved
+            next: COMPLETE
 `);
 
     const warning = inspectWorkflowFile(filePath, projectDir).diagnostics.find(
@@ -1873,8 +1875,8 @@ steps:
     );
 
     expect(warning?.message).toContain('ignored by parallel aggregation');
-    expect(warning?.message).toContain('from step fragment "reviewers"');
-    expect(warning?.message).toContain(fragmentPath);
+    expect(warning?.message).not.toContain('from step fragment');
+    expect(warning?.message).not.toContain(fragmentPath);
   });
 
   it('reports a parallel sub-step routing to finding-conflict-adjudication without finding_contract configured', () => {

@@ -24,6 +24,7 @@ describe('providerOptionsContract', () => {
       'provider_options.opencode.allowed_tools',
       'provider_options.claude.base_url',
       'provider_options.claude.effort',
+      'provider_options.claude.skills.enabled',
       'provider_options.claude.sandbox.allow_unsandboxed_commands',
       'provider_options.claude.sandbox.excluded_commands',
       'provider_options.claude_terminal.backend',
@@ -36,6 +37,7 @@ describe('providerOptionsContract', () => {
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.base_url');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.claude.base_url');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.claude.allowed_tools');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.claude.skills.enabled');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.reasoning_effort');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.skills.repo');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.skills.user');
@@ -64,6 +66,8 @@ describe('providerOptionsContract', () => {
       .toBe('provider_options.claude.sandbox.allow_unsandboxed_commands');
     expect(toProviderOptionsTracePath('claude.allowedTools'))
       .toBe('provider_options.claude.allowed_tools');
+    expect(toProviderOptionsTracePath('claude.skills.enabled'))
+      .toBe('provider_options.claude.skills.enabled');
     expect(toProviderOptionsTracePath('codex.reasoningEffort'))
       .toBe('provider_options.codex.reasoning_effort');
     expect(toProviderOptionsTracePath('codex.skills.repo'))
@@ -93,6 +97,7 @@ describe('providerOptionsContract', () => {
         baseUrl: 'http://127.0.0.1:8787',
         effort: 'medium',
         sandbox: { excludedCommands: ['rm -rf'] },
+        skills: { enabled: false },
       },
       claudeTerminal: { backend: 'tmux', keepSession: false },
       copilot: { effort: 'high' },
@@ -107,6 +112,7 @@ describe('providerOptionsContract', () => {
       'claude.baseUrl',
       'claude.effort',
       'claude.sandbox.excludedCommands',
+      'claude.skills.enabled',
       'claudeTerminal.backend',
       'claudeTerminal.keepSession',
       'copilot.effort',

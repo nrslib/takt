@@ -34,9 +34,6 @@ describe('workflow step fragment normalizer provenance', () => {
       '  merge:',
       '    strategy: custom',
       '    inline_js: return items',
-      'rules:',
-      '  - condition: done',
-      '    next: COMPLETE',
       '',
     ].join('\n'));
     write(projectDir, '.takt/steps/outer.yaml', 'uses: inner\narpeggio:\n  source: csv\n');
@@ -45,8 +42,11 @@ describe('workflow step fragment normalizer provenance', () => {
       'initial_step: review',
       'max_steps: 1',
       'steps:',
-      '  - uses: outer',
-      '    name: review',
+      '  - name: review',
+      '    uses: outer',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
       '',
     ].join('\n'));
 
@@ -64,9 +64,6 @@ describe('workflow step fragment normalizer provenance', () => {
       '  source: custom-module',
       '  source_path: input.csv',
       '  template: prompt.md',
-      'rules:',
-      '  - condition: done',
-      '    next: COMPLETE',
       '',
     ].join('\n'));
     const workflowPath = write(projectDir, '.takt/workflows/default.yaml', [
@@ -74,8 +71,11 @@ describe('workflow step fragment normalizer provenance', () => {
       'initial_step: review',
       'max_steps: 1',
       'steps:',
-      '  - uses: review',
-      '    name: review',
+      '  - name: review',
+      '    uses: review',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
       '',
     ].join('\n'));
 
@@ -96,9 +96,6 @@ describe('workflow step fragment normalizer provenance', () => {
       '  merge:',
       '    strategy: custom',
       '    file: merge.js',
-      'rules:',
-      '  - condition: done',
-      '    next: COMPLETE',
       '',
     ].join('\n'));
     const workflowPath = write(projectDir, '.takt/workflows/default.yaml', [
@@ -106,8 +103,11 @@ describe('workflow step fragment normalizer provenance', () => {
       'initial_step: review',
       'max_steps: 1',
       'steps:',
-      '  - uses: review',
-      '    name: review',
+      '  - name: review',
+      '    uses: review',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
       '',
     ].join('\n'));
 
@@ -121,9 +121,6 @@ describe('workflow step fragment normalizer provenance', () => {
   it('retains fragment context while identifying a caller-provided provider option reference error as workflow-defined', () => {
     write(projectDir, '.takt/steps/review.yaml', [
       'instruction: review',
-      'rules:',
-      '  - condition: done',
-      '    next: COMPLETE',
       '',
     ].join('\n'));
     const workflowPath = write(projectDir, '.takt/workflows/default.yaml', [
@@ -131,9 +128,13 @@ describe('workflow step fragment normalizer provenance', () => {
       'initial_step: review',
       'max_steps: 1',
       'steps:',
-      '  - uses: review',
+      '  - name: review',
+      '    uses: review',
       '    provider_options:',
       '      extends: missing-options',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
       '',
     ].join('\n'));
 
@@ -148,9 +149,6 @@ describe('workflow step fragment normalizer provenance', () => {
     const fragmentPath = write(projectDir, '.takt/steps/review.yaml', [
       'instruction: review',
       'tags: ["   "]',
-      'rules:',
-      '  - condition: done',
-      '    next: COMPLETE',
       '',
     ].join('\n'));
     const workflowPath = write(projectDir, '.takt/workflows/default.yaml', [
@@ -158,8 +156,11 @@ describe('workflow step fragment normalizer provenance', () => {
       'initial_step: review',
       'max_steps: 1',
       'steps:',
-      '  - uses: review',
-      '    name: review',
+      '  - name: review',
+      '    uses: review',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
       '',
     ].join('\n'));
 
@@ -176,9 +177,6 @@ describe('workflow step fragment normalizer provenance', () => {
       'mcp_servers:',
       '  local:',
       '    command: local-mcp',
-      'rules:',
-      '  - condition: done',
-      '    next: COMPLETE',
       '',
     ].join('\n'));
     const workflowPath = write(projectDir, '.takt/workflows/default.yaml', [
@@ -186,8 +184,11 @@ describe('workflow step fragment normalizer provenance', () => {
       'initial_step: review',
       'max_steps: 1',
       'steps:',
-      '  - uses: review',
-      '    name: review',
+      '  - name: review',
+      '    uses: review',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
       '',
     ].join('\n'));
 
@@ -205,9 +206,6 @@ describe('workflow step fragment normalizer provenance', () => {
       '  remote:',
       '    type: sse',
       '    url: https://example.invalid/mcp',
-      'rules:',
-      '  - condition: done',
-      '    next: COMPLETE',
       '',
     ].join('\n'));
     const workflowPath = write(projectDir, '.takt/workflows/default.yaml', [
@@ -215,8 +213,11 @@ describe('workflow step fragment normalizer provenance', () => {
       'initial_step: review',
       'max_steps: 1',
       'steps:',
-      '  - uses: review',
-      '    name: review',
+      '  - name: review',
+      '    uses: review',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
       '',
     ].join('\n'));
 
@@ -232,9 +233,6 @@ describe('workflow step fragment normalizer provenance', () => {
       'instruction: review',
       'team_leader:',
       '  inspect_tools: [bash]',
-      'rules:',
-      '  - condition: done',
-      '    next: COMPLETE',
       '',
     ].join('\n'));
     const workflowPath = write(projectDir, '.takt/workflows/default.yaml', [
@@ -242,8 +240,11 @@ describe('workflow step fragment normalizer provenance', () => {
       'initial_step: review',
       'max_steps: 1',
       'steps:',
-      '  - uses: review',
-      '    name: review',
+      '  - name: review',
+      '    uses: review',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
       '',
     ].join('\n'));
 
@@ -261,9 +262,6 @@ describe('workflow step fragment normalizer provenance', () => {
       '  report:',
       '    - name: review.md',
       '      format: review-finding-contract',
-      'rules:',
-      '  - condition: done',
-      '    next: COMPLETE',
       '',
     ].join('\n'));
     const workflowPath = write(projectDir, '.takt/workflows/default.yaml', [
@@ -271,8 +269,11 @@ describe('workflow step fragment normalizer provenance', () => {
       'initial_step: review',
       'max_steps: 1',
       'steps:',
-      '  - uses: review',
-      '    name: review',
+      '  - name: review',
+      '    uses: review',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
       '',
     ].join('\n'));
 
@@ -297,9 +298,6 @@ describe('workflow step fragment normalizer provenance', () => {
       'team_leader:',
       '  persona: inner.md',
       '  part_tags: [review]',
-      'rules:',
-      '  - condition: done',
-      '    next: COMPLETE',
       '',
     ].join('\n'));
     const outerPath = write(projectDir, '.takt/steps/outer.yaml', [
@@ -313,8 +311,11 @@ describe('workflow step fragment normalizer provenance', () => {
       'initial_step: review',
       'max_steps: 1',
       'steps:',
-      '  - uses: outer',
-      '    name: review',
+      '  - name: review',
+      '    uses: outer',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
       '',
     ].join('\n'));
 
@@ -330,9 +331,6 @@ describe('workflow step fragment normalizer provenance', () => {
       'instruction: review',
       'team_leader:',
       '  part_tags: [review]',
-      'rules:',
-      '  - condition: done',
-      '    next: COMPLETE',
       '',
     ].join('\n'));
     const outerPath = write(projectDir, '.takt/steps/outer.yaml', [
@@ -346,8 +344,11 @@ describe('workflow step fragment normalizer provenance', () => {
       'initial_step: review',
       'max_steps: 1',
       'steps:',
-      '  - uses: outer',
-      '    name: review',
+      '  - name: review',
+      '    uses: outer',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
       '',
     ].join('\n'));
 
@@ -368,9 +369,6 @@ describe('workflow step fragment normalizer provenance', () => {
       '    - name: review.md',
       '      format: review format',
       '      order: ../facets/output-contracts/empty-order.md',
-      'rules:',
-      '  - condition: done',
-      '    next: COMPLETE',
       '',
     ].join('\n'));
     const workflowPath = write(projectDir, '.takt/workflows/default.yaml', [
@@ -378,8 +376,11 @@ describe('workflow step fragment normalizer provenance', () => {
       'initial_step: review',
       'max_steps: 1',
       'steps:',
-      '  - uses: review',
-      '    name: review',
+      '  - name: review',
+      '    uses: review',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
       '',
     ].join('\n'));
 

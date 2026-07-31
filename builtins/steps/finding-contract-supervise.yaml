@@ -1,3 +1,7 @@
+params:
+  supervise_knowledge:
+    type: facet_ref[]
+    facet_kind: knowledge
 name: supervise
 tags: [review, final-gate, supervise]
 edit: false
@@ -7,25 +11,6 @@ policy: review
 knowledge:
   $param: supervise_knowledge
 instruction: supervise-finding-contract
-rules:
-  - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)
-    return: needs_conflict_adjudication
-  - condition: when(findings.conflicts.count > 0)
-    next: ABORT
-  - condition: when(findings.provisional.fixpoint == true)
-    return: need_replan
-  - condition: when(findings.rounds.budgetExhausted == true && findings.provisional.count > 0)
-    return: need_replan
-  - condition: when(findings.provisional.count > 0)
-    return: need_replan
-  - condition: when(findings.open.count == 0 && findings.reviewerAnomalies.count > 0 && findings.reviewerAnomalies.budgetExhausted == true)
-    return: need_replan
-  - condition: when(findings.open.count == 0 && findings.reviewerAnomalies.count > 0)
-    return: needs_review
-  - condition: when(findings.open.count > 0 && findings.provisional.count == 0 && findings.conflicts.count == 0)
-    return: needs_fix
-  - condition: when(findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0)
-    next: COMPLETE
 output_contracts:
   report:
     - name: supervisor-validation.md

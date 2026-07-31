@@ -153,31 +153,12 @@ steps:
           format: coder-decisions
           use_judge: false
   - name: ai-antipattern-review-1st
-    tags:
-      - review
-    edit: false
-    persona: ai-antipattern-reviewer
-    policy:
-      - review
-      - ai-antipattern
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - WebSearch
-          - WebFetch
-    instruction: ai-antipattern-review
+    uses: ai-antipattern-first-pass
     rules:
       - condition: AI特有の問題が見つからない
         next: reviewers_1
       - condition: AI特有の問題が検出された
         next: ai-antipattern-fix
-    output_contracts:
-      report:
-        - name: ai-antipattern-review.md
-          format: ai-antipattern-review
   - name: ai-antipattern-fix
     tags:
       - coding
@@ -213,23 +194,12 @@ steps:
       - condition: 修正を進行できない
         next: ai-antipattern-no-fix
   - name: ai-antipattern-no-fix
-    tags:
-      - review
-    edit: false
-    persona: architecture-reviewer
-    policy: review
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
+    uses: ai-antipattern-arbitration
     rules:
       - condition: ai-antipattern-review-1stの指摘が妥当（修正すべき）
         next: ai-antipattern-fix
       - condition: ai-antipattern-fixの判断が妥当（修正不要）
         next: reviewers_1
-    instruction: arbitrate
   - name: reviewers_1
     tags:
       - review
@@ -316,86 +286,17 @@ steps:
       - condition: any("needs_fix")
         next: fix
   - name: reviewers_2
-    tags:
-      - review
-    parallel:
-      - name: security-review
-        tags:
-          - review
-        edit: false
-        persona: security-reviewer
-        policy: review
-        knowledge: security
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - WebSearch
-              - WebFetch
-        rules:
-          - condition: approved
-          - condition: needs_fix
-        instruction: review-security
-        output_contracts:
-          report:
-            - name: security-review.md
-              format: security-review
-      - name: qa-review
-        tags:
-          - review
-        edit: false
-        persona: qa-reviewer
-        policy:
-          - review
-          - qa
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - WebSearch
-              - WebFetch
-        rules:
-          - condition: approved
-          - condition: needs_fix
-        instruction: review-qa
-        output_contracts:
-          report:
-            - name: qa-review.md
-              format: qa-review
-      - name: coding-review
-        tags:
-          - review
-        edit: false
-        persona: coding-reviewer
-        policy:
-          - review
-          - coding
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
-        instruction: review-coding
-        output_contracts:
-          report:
-            - name: coding-review.md
-              format: coding-review
-        rules:
-          - condition: approved
-          - condition: needs_fix
+    uses: implementation-reviewers-second-pass
     rules:
-      - condition: all("approved")
-        next: final-gate
-      - condition: any("needs_fix")
-        next: fix
+      self:
+        - condition: all("approved")
+          next: final-gate
+        - condition: any("needs_fix")
+          next: fix
+      parallel:
+        security-review: [{ condition: approved }, { condition: needs_fix }]
+        qa-review: [{ condition: approved }, { condition: needs_fix }]
+        coding-review: [{ condition: approved }, { condition: needs_fix }]
   - name: final-gate
     kind: workflow_call
     call: merge-readiness-dual-final-gate
@@ -420,39 +321,18 @@ steps:
       - condition: ABORT
         next: ABORT
   - name: fix
-    tags:
-      - coding
-    edit: true
-    persona: coder
-    policy:
-      - coding
-      - testing
-    knowledge:
-      - backend
-      - cqrs-es
-      - security
-      - architecture
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Edit
-          - Write
-          - Bash
-          - WebSearch
-          - WebFetch
-    required_permission_mode: edit
-    pass_previous_response: false
+    uses: fix-with-provider-tools
+    with:
+      fix_policy:
+        - coding
+        - testing
+      fix_knowledge:
+        - backend
+        - cqrs-es
+        - security
+        - architecture
     rules:
       - condition: 修正が完了した
         next: reviewers_1
       - condition: 修正を進行できない
         next: plan
-    instruction: fix
-    output_contracts:
-      report:
-        - name: fix-report.md
-          format: fix-report
-          use_judge: false

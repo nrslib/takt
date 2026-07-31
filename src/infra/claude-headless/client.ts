@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { AgentResponse, PermissionMode } from '../../core/models/index.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { prepareClaudeMcpConfig } from '../claude/mcp-config.js';
+import { assertClaudeSkillsDisableSupported } from '../claude/cli-capability.js';
 import {
   type ClaudePermissionExpression,
   taktPermissionModeToClaudeExpression,
@@ -98,6 +99,9 @@ async function buildSpawnArgs(
   if (options.effort) {
     args.push('--effort', options.effort);
   }
+  if (options.skillsEnabled === false) {
+    args.push('--disable-slash-commands');
+  }
 
   if (options.systemPrompt?.trim()) {
     args.push('--system-prompt', options.systemPrompt.trim());
@@ -151,6 +155,12 @@ export async function callClaudeHeadless(
   let response: AgentResponse;
 
   try {
+    if (options.skillsEnabled === false) {
+      await assertClaudeSkillsDisableSupported(
+        options.claudeCliPath ?? 'claude',
+        options.abortSignal,
+      );
+    }
     const prepared = await buildSpawnArgs(prompt, options);
     cleanup = prepared.cleanup;
     const { args, expectedSessionId } = prepared;

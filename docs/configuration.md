@@ -693,7 +693,7 @@ Workflow `provider_options.extends` can load shared YAML presets by name. Names 
 
 `provider_options.extends` fails fast as a configuration error when a preset or path cannot be resolved, a scoped ref points to an unavailable repertoire package, the target YAML is invalid or is not a provider-options object, the extends chain is circular, or the removed `$ref` key is used. Relative paths are resolved from the workflow file and must stay inside the workflow directory after symlink resolution; absolute paths and paths whose real target escapes that directory are rejected.
 
-Provider option leaves can also be overridden from env. For OpenCode model variants, use `TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT=high` to set `provider_options.opencode.variant`. For provider base URLs, use `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL=http://127.0.0.1:8787/v1` or `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL=http://127.0.0.1:8787`; these populate the config layer and do not override step or workflow routing `base_url` leaves. For Codex Skill inheritance, use `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_REPO=true` or `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_USER=true`. For Claude terminal, use `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_BACKEND=tmux`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TIMEOUT_MS=900000`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_KEEP_SESSION=false`, or `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TRANSCRIPT_POLL_INTERVAL_MS=500`. For Kiro custom agents, use `TAKT_PROVIDER_OPTIONS_KIRO_AGENT=planner-agent` to set `provider_options.kiro.agent`.
+Provider option leaves can also be overridden from env. For OpenCode model variants, use `TAKT_PROVIDER_OPTIONS_OPENCODE_VARIANT=high` to set `provider_options.opencode.variant`. For provider base URLs, use `TAKT_PROVIDER_OPTIONS_CODEX_BASE_URL=http://127.0.0.1:8787/v1` or `TAKT_PROVIDER_OPTIONS_CLAUDE_BASE_URL=http://127.0.0.1:8787`; these populate the config layer and do not override step or workflow routing `base_url` leaves. For Codex Skill inheritance, use `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_REPO=true` or `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_USER=true`. For Claude Skill inheritance, use `TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED=true`. For Claude terminal, use `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_BACKEND=tmux`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TIMEOUT_MS=900000`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_KEEP_SESSION=false`, or `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TRANSCRIPT_POLL_INTERVAL_MS=500`. For Kiro custom agents, use `TAKT_PROVIDER_OPTIONS_KIRO_AGENT=planner-agent` to set `provider_options.kiro.agent`.
 
 This allows mixing providers and models within a single workflow while keeping display names independent from provider selection.
 
@@ -765,6 +765,21 @@ provider_options:
 - `true` passes no enable override for that scope, so Codex's standard behavior and existing user configuration remain in effect.
 
 Discovery uses the same depth, directory, and entry limits as Codex. If a scan exceeds a limit, TAKT fails the provider call instead of applying a partial deny list. These settings do not modify the user's Codex config. ADMIN, SYSTEM, and Plugin Skills are outside their discovery roots and retain Codex's standard behavior. The settings use the normal provider-option leaf priority and apply unchanged to retries and resumed sessions.
+
+#### Claude Skill inheritance (`skills`)
+
+TAKT disables filesystem Skill discovery for `claude-sdk`, `claude`, and `claude-terminal` by default. Enable it only when a workflow intentionally depends on repository or user Skills:
+
+```yaml
+provider_options:
+  claude:
+    skills:
+      enabled: true
+```
+
+With `enabled: false`, `claude-sdk` receives `skills: []`; `claude` and `claude-terminal` receive `--disable-slash-commands`. This also disables custom Claude slash commands for those CLI sessions. With `enabled: true`, TAKT adds no Skill option or flag, preserving Claude's normal discovery. The setting follows normal provider-option leaf priority, including `TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED`, and is retained for retries and resumed sessions.
+
+This is a context filter, not a sandbox: a Skill file can still be reachable through Read or Bash. TAKT does not change `settingSources`, Claude settings, or user/repository Skill files. The bundled Agent SDK version is `0.3.206`. CLI sessions require a Claude Code version that supports `--disable-slash-commands`; TAKT verifies the flag before starting either a headless (`claude`) or terminal (`claude-terminal`) CLI session and reports an update error when unavailable. Claude Code `2.1.220` is the verified minimum.
 
 #### Claude Code sandbox control (`allow_unsandboxed_commands`)
 

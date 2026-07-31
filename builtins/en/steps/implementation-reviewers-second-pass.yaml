@@ -1,0 +1,67 @@
+name: reviewers_2
+tags:
+  - review
+parallel:
+  - name: security-review
+    tags:
+      - review
+    edit: false
+    persona: security-reviewer
+    policy: review
+    knowledge: security
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - WebSearch
+          - WebFetch
+    instruction: review-security
+    output_contracts:
+      report:
+        - name: security-review.md
+          format: security-review
+  - name: qa-review
+    tags:
+      - review
+    edit: false
+    persona: qa-reviewer
+    policy:
+      - review
+      - qa
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - WebSearch
+          - WebFetch
+    instruction: review-qa
+    output_contracts:
+      report:
+        - name: qa-review.md
+          format: qa-review
+  - name: coding-review
+    tags:
+      - review
+    edit: false
+    persona: coding-reviewer
+    policy:
+      - review
+      - coding
+    provider_options:
+      claude:
+        allowed_tools:
+          - Read
+          - Glob
+          - Grep
+          - Bash
+          - WebSearch
+          - WebFetch
+    instruction: review-coding
+    output_contracts:
+      report:
+        - name: coding-review.md
+          format: coding-review

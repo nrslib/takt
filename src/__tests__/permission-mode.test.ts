@@ -105,6 +105,25 @@ describe('SdkOptionsBuilder.build() — mcpServers', () => {
 });
 
 describe('SdkOptionsBuilder.build() — settingSources', () => {
+  it('Given Skills are disabled, When building SDK options, Then it passes an empty Skill allowlist without changing settingSources', () => {
+    const options = buildSdkOptions({
+      cwd: '/test',
+      skillsEnabled: false,
+    });
+
+    expect(options.skills).toEqual([]);
+    expect(options.settingSources).toEqual(['project']);
+  });
+
+  it('Given Skills are enabled, When building SDK options, Then it leaves the SDK Skill option unset for standard discovery', () => {
+    const options = buildSdkOptions({
+      cwd: '/test',
+      skillsEnabled: true,
+    });
+
+    expect(options).not.toHaveProperty('skills');
+  });
+
   it('includes project in settingSources', () => {
     const options = buildSdkOptions({ cwd: '/test' });
     expect(options.settingSources).toEqual(['project']);

@@ -108,6 +108,7 @@ export interface ClaudeCallOptions {
   mcpServers?: Record<string, McpServerConfig>;
   model?: string;
   effort?: ClaudeEffort;
+  skillsEnabled?: boolean;
   maxTurns?: number;
   systemPrompt?: string;
   /** SDK agents to register for sub-agent execution */
@@ -146,6 +147,7 @@ export interface ClaudeSpawnOptions {
   mcpServers?: Record<string, McpServerConfig>;
   model?: string;
   effort?: ClaudeEffort;
+  skillsEnabled?: boolean;
   maxTurns?: number;
   systemPrompt?: string;
   /** Enable streaming mode with callback */

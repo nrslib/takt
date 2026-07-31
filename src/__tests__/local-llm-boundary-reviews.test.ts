@@ -19,6 +19,8 @@ import {
   invalidateGlobalConfigCache,
 } from '../infra/config/index.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowLoader.js';
+import { buildStepFragmentLookupDirs } from '../infra/config/loaders/stepFragmentLookupDirectories.js';
+import { resolveWorkflowStepFragments } from '../infra/config/loaders/workflowStepFragmentResolver.js';
 
 type Locale = 'ja' | 'en';
 
@@ -31,6 +33,7 @@ interface RawStep {
   name: string;
   uses?: string;
   call?: string;
+  finding_contract_authority?: string;
   tags?: string[];
   parallel?: Array<{ name: string }>;
   rules?: RawRule[];
@@ -75,14 +78,7 @@ const EXPECTED_UNMONITORED_CYCLES = [
 const EXPECTED_CYCLES = [
   { cycle: ['replan', 'implement'], threshold: 2 },
   { cycle: ['replan', 'implement', 'reviewers'], threshold: 2 },
-  { cycle: ['replan', 'implement', 'reviewers', 'boundary-reviewers'], threshold: 2 },
-  { cycle: ['replan', 'implement', 'reviewers', 'boundary-reviewers', 'final-gate'], threshold: 2 },
   { cycle: ['replan', 'implement', 'reviewers', 'fix'], threshold: 2 },
-  { cycle: ['replan', 'implement', 'reviewers', 'boundary-reviewers', 'fix'], threshold: 2 },
-  {
-    cycle: ['replan', 'implement', 'reviewers', 'boundary-reviewers', 'final-gate', 'fix'],
-    threshold: 2,
-  },
   { cycle: ['replan', 'implement', 'reviewers', 'local-review-integrity-gate'], threshold: 2 },
   {
     cycle: ['replan', 'implement', 'reviewers', 'local-review-integrity-gate', 'boundary-reviewers'],
@@ -117,14 +113,7 @@ const EXPECTED_CYCLES = [
     threshold: 2,
   },
   { cycle: ['replan', 'reviewers'], threshold: 2 },
-  { cycle: ['replan', 'reviewers', 'boundary-reviewers'], threshold: 2 },
-  { cycle: ['replan', 'reviewers', 'boundary-reviewers', 'final-gate'], threshold: 2 },
   { cycle: ['replan', 'reviewers', 'fix'], threshold: 2 },
-  { cycle: ['replan', 'reviewers', 'boundary-reviewers', 'fix'], threshold: 2 },
-  {
-    cycle: ['replan', 'reviewers', 'boundary-reviewers', 'final-gate', 'fix'],
-    threshold: 2,
-  },
   { cycle: ['replan', 'reviewers', 'local-review-integrity-gate'], threshold: 2 },
   {
     cycle: ['replan', 'reviewers', 'local-review-integrity-gate', 'boundary-reviewers'],
@@ -205,8 +194,6 @@ const EXPECTED_CYCLES = [
     threshold: 1,
   },
   { cycle: ['fix', 'reviewers'], threshold: 3 },
-  { cycle: ['fix', 'reviewers', 'boundary-reviewers'], threshold: 3 },
-  { cycle: ['fix', 'reviewers', 'boundary-reviewers', 'final-gate'], threshold: 3 },
   { cycle: ['fix', 'reviewers', 'local-review-integrity-gate'], threshold: 3 },
   { cycle: ['fix', 'reviewers', 'local-review-integrity-gate', 'boundary-reviewers'], threshold: 3 },
   {
@@ -301,6 +288,36 @@ const INNER_GATE_MONITORS = [
   },
 ] as const;
 
+const HIGH_WORKFLOW_NAMES = [
+  'takt-default-high',
+  'takt-default-team-high',
+  'review-fix-takt-default-high',
+] as const;
+
+const HIGH_FINITE_STOP_MONITORS = [
+  {
+    cycle: ['replan', 'implement', 'reviewers', 'final-gate', 'fix'],
+    path: ['final-gate', 'fix', 'replan', 'implement', 'reviewers', 'final-gate'],
+    instruction: 'loop-monitor-fix-replan',
+    nextSteps: ['replan', 'ABORT'],
+    exit: 'reviewers',
+  },
+  {
+    cycle: ['replan', 'reviewers', 'final-gate', 'fix'],
+    path: ['final-gate', 'fix', 'replan', 'reviewers', 'final-gate'],
+    instruction: 'loop-monitor-fix-replan',
+    nextSteps: ['replan', 'ABORT'],
+    exit: 'reviewers',
+  },
+  {
+    cycle: ['reviewers', 'final-gate'],
+    path: ['reviewers', 'final-gate', 'reviewers'],
+    instruction: 'loop-monitor-gate-needs-review',
+    nextSteps: ['reviewers', 'fix', 'replan', 'ABORT'],
+    exit: 'COMPLETE',
+  },
+] as const;
+
 let testRoot: string;
 let previousTaktConfigDir: string | undefined;
 
@@ -309,18 +326,13 @@ function workflowPath(locale: Locale, name: string): string {
 }
 
 function readRawWorkflow(locale: Locale, name = 'takt-default-localllm'): RawWorkflow {
-  const workflow = parseYaml(readFileSync(workflowPath(locale, name), 'utf-8')) as RawWorkflow;
-  return {
-    ...workflow,
-    steps: workflow.steps.map((step) => {
-      if (step.uses === undefined) return step;
-      const fragment = parseYaml(readFileSync(
-        join(process.cwd(), 'builtins', locale, 'steps', `${step.uses}.yaml`),
-        'utf-8',
-      )) as Omit<RawStep, 'name'>;
-      return { ...fragment, ...step };
-    }),
-  };
+  const path = workflowPath(locale, name);
+  const workflow = parseYaml(readFileSync(path, 'utf-8')) as RawWorkflow;
+  return resolveWorkflowStepFragments(workflow, {
+    candidateDirs: buildStepFragmentLookupDirs({ lang: locale }),
+    context: { lang: locale, projectDir: process.cwd() },
+    workflowPath: path,
+  }).raw as RawWorkflow;
 }
 
 function loadBuiltinWorkflow(locale: Locale, name = 'takt-default-localllm'): WorkflowConfig {
@@ -626,6 +638,76 @@ describe('takt-default-localllm boundary reviews', () => {
     }
   });
 
+  it('high 3 workflowのfinite-stop monitorは英日で同じ構造を持つ', () => {
+    const monitorStructure = (locale: Locale, workflowName: string) => {
+      const monitors = readRawWorkflow(locale, workflowName).loop_monitors ?? [];
+      return HIGH_FINITE_STOP_MONITORS.map(({ cycle }) => {
+        const matches = monitors.filter((monitor) => (
+          JSON.stringify(monitor.cycle) === JSON.stringify(cycle)
+        ));
+        expect(matches).toHaveLength(1);
+        const monitor = matches[0]!;
+        return {
+          cycle: monitor.cycle,
+          threshold: monitor.threshold,
+          instruction: monitor.judge.instruction,
+          nextSteps: monitor.judge.rules.map((rule) => rule.next),
+        };
+      });
+    };
+
+    const expected = HIGH_FINITE_STOP_MONITORS.map(({ cycle, instruction, nextSteps }) => ({
+      cycle: [...cycle],
+      threshold: 2,
+      instruction,
+      nextSteps: [...nextSteps],
+    }));
+
+    for (const workflowName of HIGH_WORKFLOW_NAMES) {
+      expect(monitorStructure('en', workflowName)).toEqual(expected);
+      expect(monitorStructure('ja', workflowName)).toEqual(expected);
+    }
+  });
+
+  it.each(['ja', 'en'] as const)(
+    '%s のhigh 3 workflowは対象cycleの自然遷移で初回を許容し、2回目だけ発火する',
+    (locale) => {
+      for (const workflowName of HIGH_WORKFLOW_NAMES) {
+        const rawWorkflow = readRawWorkflow(locale, workflowName);
+        const monitors = loadBuiltinWorkflow(locale, workflowName).loopMonitors ?? [];
+
+        for (const { cycle, path, exit } of HIGH_FINITE_STOP_MONITORS) {
+          expectReachablePath(rawWorkflow, path);
+          const monitor = monitors.find((candidate) => (
+            JSON.stringify(candidate.cycle) === JSON.stringify(cycle)
+          ));
+          expect(monitor).toBeDefined();
+          expect(monitor?.threshold).toBe(2);
+
+          const firstIteration = [...cycle, cycle[0]];
+          expectReachablePath(rawWorkflow, firstIteration);
+          expect(recordPath(new CycleDetector([monitor!]), firstIteration)
+            .every((result) => !result.triggered)).toBe(true);
+
+          const secondIteration = [...cycle, ...cycle, cycle[0]];
+          expectReachablePath(rawWorkflow, secondIteration);
+          const results = recordPath(new CycleDetector([monitor!]), secondIteration);
+          expect(results.slice(0, -1).every((result) => !result.triggered)).toBe(true);
+          expect(results.at(-1)).toEqual({
+            triggered: true,
+            cycleCount: 2,
+            monitor,
+          });
+
+          const naturalExit = [...cycle, ...cycle, exit];
+          expectReachablePath(rawWorkflow, naturalExit);
+          expect(recordPath(new CycleDetector([monitor!]), naturalExit)
+            .every((result) => !result.triggered)).toBe(true);
+        }
+      }
+    },
+  );
+
   it.each(['ja', 'en'] as const)('%s のraw rulesにある未監視cycleは意図した2件だけである', (locale) => {
     const workflow = readRawWorkflow(locale);
     const monitoredCycleKeys = new Set(
@@ -647,7 +729,7 @@ describe('takt-default-localllm boundary reviews', () => {
         && cycle[2] === 'reviewers'
       ));
 
-      expect(implementCycles).toHaveLength(14);
+      expect(implementCycles).toHaveLength(10);
       for (const source of implementCycles) {
         const companionCycle = [source.cycle[0]!, ...source.cycle.slice(2)];
         const companion = monitors.find(({ cycle }) => (

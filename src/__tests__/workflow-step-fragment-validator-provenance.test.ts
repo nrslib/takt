@@ -32,12 +32,9 @@ describe('workflow step fragment validator provenance', () => {
     restoreConfig();
   });
 
-  it('attributes an aggregate rule placement error to the fragment that provides the invalid rule', () => {
+  it('keeps an aggregate rule placement error owned by the workflow caller', () => {
     const rulePath = write(projectDir, '.takt/steps/rules.yaml', [
       'instruction: review',
-      'rules:',
-      '  - condition: all("approved")',
-      '    next: COMPLETE',
       '',
     ].join('\n'));
     write(projectDir, '.takt/steps/outer.yaml', 'uses: rules\npersona: reviewer\n');
@@ -46,31 +43,33 @@ describe('workflow step fragment validator provenance', () => {
       'initial_step: review',
       'max_steps: 1',
       'steps:',
-      '  - uses: outer',
-      '    name: review',
+      '  - name: review',
+      '    uses: outer',
+      '    rules:',
+      '      - condition: all("approved")',
+      '        next: COMPLETE',
       '',
     ].join('\n'));
 
     const message = validate(workflowPath, projectDir);
 
     expect(message).toContain('aggregate conditions');
-    expect(message).toContain('step fragment "rules"');
-    expect(message).toContain(rulePath);
-    expect(message).not.toContain('step fragment "outer"');
+    expect(message).not.toContain(rulePath);
+    expect(message).not.toContain('step fragment');
   });
 
   it.each([
     {
       name: 'top-level step',
-      step: '  - uses: outer\n    name: review',
-      fragment: 'instruction: review\nrules:\n  - condition: approved\n    appendix: first\n    next: COMPLETE\n  - condition: approved\n    appendix: second\n    next: COMPLETE\n',
+      step: '  - name: review\n    uses: outer\n    rules:\n      - condition: approved\n        appendix: first\n        next: COMPLETE\n      - condition: approved\n        appendix: second\n        next: COMPLETE',
+      fragment: 'instruction: review\n',
     },
     {
       name: 'parallel sub-step',
-      step: '  - name: reviewers\n    parallel:\n      - uses: outer\n        name: review',
-      fragment: 'instruction: review\nrules:\n  - condition: approved\n    appendix: first\n    next: COMPLETE\n  - condition: approved\n    appendix: second\n    next: COMPLETE\n',
+      step: '  - name: reviewers\n    parallel:\n      - name: review\n        uses: outer\n        rules:\n          - condition: approved\n            appendix: first\n            next: COMPLETE\n          - condition: approved\n            appendix: second\n            next: COMPLETE\n    rules:\n      - condition: all("approved")\n        next: COMPLETE',
+      fragment: 'instruction: review\n',
     },
-  ])('attributes a semantic appendix conflict in a $name to the fragment rule', ({ step, fragment }) => {
+  ])('keeps a semantic appendix conflict in a $name owned by the workflow caller', ({ step, fragment }) => {
     const rulePath = write(projectDir, '.takt/steps/rules.yaml', fragment);
     write(projectDir, '.takt/steps/outer.yaml', 'uses: rules\npersona: reviewer\n');
     const workflowPath = write(projectDir, '.takt/workflows/default.yaml', [
@@ -85,9 +84,8 @@ describe('workflow step fragment validator provenance', () => {
     const message = validate(workflowPath, projectDir);
 
     expect(message).toContain('Rules sharing semantic label "approved" must use the same appendix');
-    expect(message).toContain('step fragment "rules"');
-    expect(message).toContain(rulePath);
-    expect(message).not.toContain('step fragment "outer"');
+    expect(message).not.toContain(rulePath);
+    expect(message).not.toContain('step fragment');
   });
 
   it.each([
@@ -104,9 +102,6 @@ describe('workflow step fragment validator provenance', () => {
   ])('retains fragment context while identifying a caller rule override as workflow-defined in a $name', ({ initialStep, step }) => {
     const fragmentPath = write(projectDir, '.takt/steps/review.yaml', [
       'instruction: review',
-      'rules:',
-      '  - condition: approved',
-      '    next: COMPLETE',
       '',
     ].join('\n'));
     const workflowPath = write(projectDir, '.takt/workflows/default.yaml', [
@@ -121,9 +116,7 @@ describe('workflow step fragment validator provenance', () => {
     const message = validate(workflowPath, projectDir);
 
     expect(message).toContain('aggregate conditions');
-    expect(message).toContain(workflowPath);
-    expect(message).toContain('step uses fragment "review"');
-    expect(message).toContain(fragmentPath);
-    expect(message).toContain('defined by the workflow');
+    expect(message).not.toContain('step uses fragment "review"');
+    expect(message).not.toContain(fragmentPath);
   });
 });

@@ -22,21 +22,7 @@ max_steps: 5
 initial_step: merge-readiness-review
 steps:
   - name: merge-readiness-review
-    tags:
-      - review
-      - final-gate
-      - merge-readiness
-    edit: false
-    persona: merge-readiness-reviewer
-    policy: review
-    provider_options:
-      extends: review-readonly
-    pass_previous_response: false
-    instruction: review-merge-readiness
-    output_contracts:
-      report:
-        - name: merge-readiness-review.md
-          format: merge-readiness-review
+    uses: merge-readiness-final-review
     rules:
       - condition: approved
         next: supervise
@@ -44,26 +30,10 @@ steps:
         return: needs_fix
 
   - name: supervise
-    tags:
-      - review
-      - final-gate
-      - supervise
-    edit: false
-    persona: supervisor
-    policy: review
-    knowledge:
-      $param: supervise_knowledge
-    provider_options:
-      extends: review-readonly
-    pass_previous_response: false
-    instruction: supervise
-    output_contracts:
-      report:
-        - name: supervisor-validation.md
-          format: supervisor-validation
-        - name: summary.md
-          format: supervisor-summary
-          use_judge: false
+    uses: merge-readiness-final-supervise
+    with:
+      supervise_knowledge:
+        $param: supervise_knowledge
     rules:
       - condition: BLOCKED
         next: ABORT

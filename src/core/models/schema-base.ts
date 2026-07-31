@@ -79,6 +79,9 @@ export const StepProviderOptionsObjectSchema = z.object({
     base_url: z.string().min(1).optional(),
     allowed_tools: z.array(z.string()).optional(),
     effort: z.enum(CLAUDE_EFFORT_VALUES).optional(),
+    skills: z.object({
+      enabled: z.boolean().optional(),
+    }).strict().optional(),
     sandbox: ClaudeSandboxSchema,
   }).optional(),
   claude_terminal: z.object({

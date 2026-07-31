@@ -1,0 +1,10 @@
+name: replan
+tags: [plan]
+edit: false
+persona: planner
+knowledge: architecture
+instruction: replan-implementation
+output_contracts:
+  report:
+    - name: plan.md
+      format: plan

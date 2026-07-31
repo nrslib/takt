@@ -27,6 +27,9 @@ export function buildClaudeTerminalCommand(
   if (options.effort) {
     args.push('--effort', options.effort);
   }
+  if (options.skillsEnabled === false) {
+    args.push('--disable-slash-commands');
+  }
   if (options.allowedTools && options.allowedTools.length > 0) {
     args.push('--allowed-tools', options.allowedTools.join(','));
   }

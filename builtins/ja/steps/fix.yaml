@@ -12,8 +12,3 @@ output_contracts:
     - name: fix-report.md
       format: fix-report
       use_judge: false
-rules:
-  - condition: 修正完了
-    next: reviewers
-  - condition: 修正を進められない、または実装方針の再定義が必要
-    next: replan

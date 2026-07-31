@@ -49,6 +49,7 @@ function toTerminalOptions(options: ProviderCallOptions): ClaudeTerminalCallOpti
     sessionId: options.sessionId,
     model: options.model,
     effort: claudeOptions?.effort,
+    skillsEnabled: claudeOptions?.skills?.enabled,
     allowedTools: options.allowedTools,
     mcpServers: options.mcpServers,
     ...(options.maxTurns !== undefined ? { maxTurns: options.maxTurns } : {}),

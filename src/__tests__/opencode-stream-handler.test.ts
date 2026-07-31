@@ -387,6 +387,43 @@ describe('handlePartUpdated', () => {
     });
   });
 
+  it('should keep text and reasoning offsets independent across delta and snapshot updates', () => {
+    const onStream = vi.fn();
+    const state = createStreamTrackingState();
+
+    handlePartUpdated(
+      { id: 'text-1', type: 'text', text: 'Hello world' },
+      'Hello',
+      onStream,
+      state,
+    );
+    handlePartUpdated(
+      { id: 'reasoning-1', type: 'reasoning', text: 'Thinking...' },
+      'Think',
+      onStream,
+      state,
+    );
+    handlePartUpdated(
+      { id: 'text-1', type: 'text', text: 'Hello world' },
+      undefined,
+      onStream,
+      state,
+    );
+    handlePartUpdated(
+      { id: 'reasoning-1', type: 'reasoning', text: 'Thinking...' },
+      undefined,
+      onStream,
+      state,
+    );
+
+    expect(onStream.mock.calls.map(([event]) => event)).toEqual([
+      { type: 'text', data: { text: 'Hello' } },
+      { type: 'thinking', data: { thinking: 'Think' } },
+      { type: 'text', data: { text: ' world' } },
+      { type: 'thinking', data: { thinking: 'ing...' } },
+    ]);
+  });
+
   it('should redact a known secret split at every text delta boundary', () => {
     const secret = 'split-opencode-secret';
     for (let split = 1; split < secret.length; split += 1) {
@@ -454,6 +491,28 @@ describe('handlePartUpdated', () => {
       type: 'thinking',
       data: { thinking: 'Thinking' },
     });
+  });
+
+  it('should not apply the text byte limit to reasoning parts', () => {
+    const onStream = vi.fn();
+    const state = createStreamTrackingState();
+    const repeatCount = Math.floor(OPENCODE_STREAM_TEXT_BYTE_LIMIT / 'Reasoning '.length) + 1;
+    const reasoning = 'Reasoning '.repeat(repeatCount);
+    const part: OpenCodeReasoningPart = {
+      id: 'r1',
+      sessionID: 'session-1',
+      type: 'reasoning',
+      text: reasoning,
+    };
+
+    handlePartUpdated(part, reasoning, onStream, state);
+
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'thinking',
+      data: { thinking: reasoning },
+    });
+    expect(state.textBytes).toBe(0);
+    expect(state.exhausted).toBe(false);
   });
 
   it('should handle reasoning part without delta using offset tracking', () => {

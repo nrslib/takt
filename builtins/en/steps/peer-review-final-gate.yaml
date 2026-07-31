@@ -1,0 +1,10 @@
+params:
+  arch_knowledge:
+    type: facet_ref[]
+    facet_kind: knowledge
+name: final-gate
+kind: workflow_call
+call: merge-readiness-final-gate
+args:
+  supervise_knowledge:
+    $param: arch_knowledge

@@ -1,0 +1,13 @@
+name: ai-antipattern-no-fix
+tags:
+  - review
+edit: false
+persona: architecture-reviewer
+policy: review
+provider_options:
+  claude:
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+instruction: arbitrate

@@ -1,0 +1,10 @@
+name: plan
+tags: [plan]
+edit: false
+persona: planner
+knowledge: architecture
+instruction: plan
+output_contracts:
+  report:
+    - name: plan.md
+      format: plan

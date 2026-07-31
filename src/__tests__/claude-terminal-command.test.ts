@@ -68,4 +68,35 @@ describe('Claude terminal command builder', () => {
 
     expect(command.args).toEqual(['--session-id', 'generated-session-1']);
   });
+
+  it('Given Skills are disabled for a new terminal session, When building the command, Then it disables slash commands alongside the generated session id', () => {
+    const command = buildClaudeTerminalCommand({
+      pathToClaudeCodeExecutable: 'claude',
+      newSessionId: 'generated-session-1',
+      skillsEnabled: false,
+    });
+
+    expect(command.args).toContain('--disable-slash-commands');
+    expect(command.args).toContain('--session-id');
+  });
+
+  it('Given Skills are disabled for a resumed terminal session, When building the command, Then it disables slash commands alongside resume', () => {
+    const command = buildClaudeTerminalCommand({
+      pathToClaudeCodeExecutable: 'claude',
+      sessionId: 'existing-session',
+      skillsEnabled: false,
+    });
+
+    expect(command.args).toContain('--disable-slash-commands');
+    expect(command.args).toEqual(expect.arrayContaining(['--resume', 'existing-session']));
+  });
+
+  it('Given Skills are enabled, When building the terminal command, Then it preserves standard slash-command discovery', () => {
+    const command = buildClaudeTerminalCommand({
+      pathToClaudeCodeExecutable: 'claude',
+      skillsEnabled: true,
+    });
+
+    expect(command.args).not.toContain('--disable-slash-commands');
+  });
 });

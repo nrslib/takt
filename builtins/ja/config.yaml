@@ -115,6 +115,8 @@ language: ja         # 表示言語: ja | en
 #   opencode:
 #     variant: high
 #   claude:
+#     skills:
+#       enabled: false
 #     sandbox:
 #       allow_unsandboxed_commands: true
 

@@ -229,14 +229,14 @@ describe('ejectBuiltin', () => {
 initial_step: final-gate
 max_steps: 1
 steps:
-  - uses: final-gate
+  - name: final-gate
+    uses: final-gate
+    rules:
+      - condition: done
+        next: COMPLETE
 `);
     mkdirSync(mocks.builtinStepsDir, { recursive: true });
-    writeFileSync(join(mocks.builtinStepsDir, 'final-gate.yaml'), `uses: delegate
-rules:
-  - condition: done
-    next: COMPLETE
-`);
+    writeFileSync(join(mocks.builtinStepsDir, 'final-gate.yaml'), 'uses: delegate\n');
     writeFileSync(join(mocks.builtinStepsDir, 'delegate.yaml'), `kind: workflow_call
 call: called
 `);
@@ -252,7 +252,11 @@ call: called
 initial_step: depth-0
 max_steps: 1
 steps:
-  - uses: depth-0
+  - name: depth-0
+    uses: depth-0
+    rules:
+      - condition: done
+        next: COMPLETE
 `);
     mkdirSync(mocks.builtinStepsDir, { recursive: true });
     for (let index = 0; index <= 64; index += 1) {
@@ -273,7 +277,11 @@ steps:
 initial_step: parent
 max_steps: 1
 steps:
-  - uses: parent
+  - name: parent
+    uses: parent
+    rules:
+      - condition: done
+        next: COMPLETE
 `);
     mkdirSync(mocks.builtinLanguageStepsDir, { recursive: true });
     mkdirSync(mocks.builtinStepsDir, { recursive: true });
@@ -294,8 +302,16 @@ steps:
 initial_step: language-parent
 max_steps: 1
 steps:
-  - uses: language-parent
-  - uses: shared-parent
+  - name: language-parent
+    uses: language-parent
+    rules:
+      - condition: done
+        next: COMPLETE
+  - name: shared-parent
+    uses: shared-parent
+    rules:
+      - condition: done
+        next: COMPLETE
 `);
     mkdirSync(mocks.builtinLanguageStepsDir, { recursive: true });
     mkdirSync(mocks.builtinStepsDir, { recursive: true });
@@ -319,7 +335,11 @@ steps:
 initial_step: parent
 max_steps: 1
 steps:
-  - uses: parent
+  - name: parent
+    uses: parent
+    rules:
+      - condition: done
+        next: COMPLETE
 `);
     mkdirSync(mocks.globalStepsDir, { recursive: true });
     mkdirSync(mocks.projectStepsDir, { recursive: true });
@@ -343,7 +363,11 @@ steps:
 initial_step: parent
 max_steps: 1
 steps:
-  - uses: parent
+  - name: parent
+    uses: parent
+    rules:
+      - condition: done
+        next: COMPLETE
 `);
     mkdirSync(mocks.builtinStepsDir, { recursive: true });
     writeFileSync(join(mocks.builtinStepsDir, 'parent.yaml'), 'uses: child\n');
@@ -367,7 +391,11 @@ steps:
 initial_step: review
 max_steps: 1
 steps:
-  - uses: review
+  - name: review
+    uses: review
+    rules:
+      - condition: done
+        next: COMPLETE
 `);
     mkdirSync(mocks.builtinStepsDir, { recursive: true });
     writeFileSync(join(mocks.builtinStepsDir, 'review.yaml'), 'instruction: builtin review\n');
@@ -388,7 +416,11 @@ steps:
 initial_step: invalid
 max_steps: 1
 steps:
-  - uses: invalid
+  - name: invalid
+    uses: invalid
+    rules:
+      - condition: done
+        next: COMPLETE
 `);
     mkdirSync(mocks.builtinStepsDir, { recursive: true });
     writeFileSync(join(mocks.builtinStepsDir, 'invalid.yaml'), '- not a step object\n');
@@ -410,7 +442,11 @@ steps:
 initial_step: review
 max_steps: 1
 steps:
-  - uses: "@owner/repo/unsafe"
+  - name: review
+    uses: "@owner/repo/unsafe"
+    rules:
+      - condition: done
+        next: COMPLETE
 `);
       const repertoireStepsDir = join(configDir, 'repertoire', '@owner', 'repo', 'steps');
       mkdirSync(repertoireStepsDir, { recursive: true });

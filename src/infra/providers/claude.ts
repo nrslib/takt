@@ -8,6 +8,7 @@ import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions } from '.
 function toClaudeOptions(options: ProviderCallOptions): ClaudeCallOptions {
   const claudeSandbox = options.providerOptions?.claude?.sandbox;
   const effort = options.providerOptions?.claude?.effort;
+  const skillsEnabled = options.providerOptions?.claude?.skills?.enabled;
   return {
     cwd: options.cwd,
     abortSignal: options.abortSignal,
@@ -16,6 +17,7 @@ function toClaudeOptions(options: ProviderCallOptions): ClaudeCallOptions {
     mcpServers: options.mcpServers,
     model: options.model,
     effort,
+    skillsEnabled,
     maxTurns: options.maxTurns,
     permissionMode: options.permissionMode,
     onStream: options.onStream,

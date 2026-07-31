@@ -130,6 +130,24 @@ describe('denormalizeProviderOptions', () => {
     expect(denormalizedProviderOptions).toEqual(rawProviderOptions);
   });
 
+  it('should round-trip Claude Skill enabled through normalize and denormalize', () => {
+    const rawProviderOptions = {
+      claude: {
+        skills: { enabled: false },
+      },
+    };
+
+    const normalizedProviderOptions = normalizeProviderOptions(rawProviderOptions);
+    const denormalizedProviderOptions = denormalizeProviderOptions(normalizedProviderOptions);
+
+    expect(normalizedProviderOptions).toEqual({
+      claude: {
+        skills: { enabled: false },
+      },
+    });
+    expect(denormalizedProviderOptions).toEqual(rawProviderOptions);
+  });
+
   it('should round-trip copilot effort through normalize and denormalize', () => {
     const rawProviderOptions = {
       copilot: {

@@ -181,6 +181,28 @@ describe('ClaudeHeadlessProvider', () => {
       childProcessEnv,
     }));
   });
+
+  it('Given disabled Claude Skills, When the provider calls the headless client, Then it forwards the resolved false value', async () => {
+    callClaudeHeadlessMock.mockResolvedValue({
+      persona: 'test',
+      status: 'done',
+      content: 'ok',
+      timestamp: new Date(),
+    });
+    const provider = new ClaudeHeadlessProvider();
+    const agent = provider.setup({ name: 'test' });
+
+    await agent.call('prompt', {
+      cwd: '/tmp',
+      providerOptions: {
+        claude: { skills: { enabled: false } },
+      } as never,
+    });
+
+    expect(callClaudeHeadlessMock).toHaveBeenCalledWith('test', 'prompt', expect.objectContaining({
+      skillsEnabled: false,
+    }));
+  });
 });
 
 describe('ProviderRegistry with Claude headless', () => {

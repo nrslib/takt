@@ -6,9 +6,19 @@ export type RawRecord = Record<string, unknown>;
 const FORBIDDEN_OBJECT_KEYS = new Set(['__proto__']);
 const MAX_STEP_FRAGMENT_BYTES = 1024 * 1024;
 
+interface StepFragmentConfigurationErrorOptions extends ErrorOptions {
+  readonly path?: readonly PropertyKey[];
+  readonly sourcePath?: string;
+}
+
 export class StepFragmentConfigurationError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
+  readonly path?: readonly PropertyKey[];
+  readonly sourcePath?: string;
+
+  constructor(message: string, options?: StepFragmentConfigurationErrorOptions) {
     super(message, options);
+    this.path = options?.path;
+    this.sourcePath = options?.sourcePath;
   }
 }
 
@@ -63,6 +73,42 @@ export function assertSafeStepFragmentObject(
   visited.delete(value);
 }
 
+export function formatPropertyPath(path: readonly PropertyKey[]): string {
+  return path.map((segment, index) => (
+    typeof segment === 'number'
+      ? `[${segment}]`
+      : `${index === 0 ? '' : '.'}${String(segment)}`
+  )).join('');
+}
+
+function assertStepFragmentDoesNotDefineRules(
+  step: RawRecord,
+  workflowPath: string,
+  ref: string,
+  sourcePath: string,
+  stepPath: readonly PropertyKey[] = [],
+): void {
+  if (Object.hasOwn(step, 'rules')) {
+    const rulesPath = formatPropertyPath([...stepPath, 'rules']);
+    throw workflowError(
+      workflowPath,
+      `step fragment "${ref}" at ${sourcePath} must not define "${rulesPath}"; define rules on each concrete workflow step that uses the fragment`,
+    );
+  }
+  const parallel = getOwnValue(step, 'parallel');
+  if (!Array.isArray(parallel)) return;
+  for (const [index, subStep] of parallel.entries()) {
+    if (!isRecord(subStep)) continue;
+    assertStepFragmentDoesNotDefineRules(
+      subStep,
+      workflowPath,
+      ref,
+      sourcePath,
+      [...stepPath, 'parallel', index],
+    );
+  }
+}
+
 export function readStepFragment(path: string, workflowPath: string, ref: string): RawRecord {
   let fileDescriptor: number | undefined;
   let parsed: unknown;
@@ -113,9 +159,17 @@ export function readStepFragment(path: string, workflowPath: string, ref: string
     throw workflowError(workflowPath, `step fragment "${ref}" at ${path} must contain one step object`);
   }
   assertSafeStepFragmentObject(parsed, workflowPath, `step fragment "${ref}" at ${path}`);
+  assertStepFragmentDoesNotDefineRules(parsed, workflowPath, ref, path);
   return parsed;
 }
 
-export function workflowError(workflowPath: string, message: string): Error {
-  return new StepFragmentConfigurationError(`Configuration error in workflow ${workflowPath}: ${message}`);
+export function workflowError(
+  workflowPath: string,
+  message: string,
+  options?: StepFragmentConfigurationErrorOptions,
+): Error {
+  return new StepFragmentConfigurationError(
+    `Configuration error in workflow ${workflowPath}: ${message}`,
+    options,
+  );
 }

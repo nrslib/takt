@@ -2,11 +2,22 @@ import { describe, expect, it } from 'vitest';
 import {
   resolveEffectiveProviderOptions,
   resolveEffectiveTeamLeaderPartProviderOptions,
+  resolveProviderOptionOrigin,
 } from '../infra/config/providerOptions.js';
 import * as providerOptionsModule from '../infra/config/providerOptions.js';
 import type { StepProviderOptions } from '../core/models/workflow-provider-options.js';
 
 describe('resolveEffectiveProviderOptions', () => {
+  it('Skill leaves do not inherit a sibling provider origin', () => {
+    const resolver = (path: string) => (
+      path === 'codex' || path === 'claude' ? 'env' : 'default'
+    );
+
+    expect(resolveProviderOptionOrigin(resolver, 'codex.skills.repo', 'project')).toBe('default');
+    expect(resolveProviderOptionOrigin(resolver, 'codex.skills.user', 'project')).toBe('default');
+    expect(resolveProviderOptionOrigin(resolver, 'claude.skills.enabled', 'project')).toBe('default');
+  });
+
   it('env origin keeps config value only for overridden leaf', () => {
     const result = resolveEffectiveProviderOptions(
       'project',
@@ -44,6 +55,23 @@ describe('resolveEffectiveProviderOptions', () => {
 
     expect(result).toEqual({
       codex: { skills: { repo: false, user: true } },
+    });
+  });
+
+  it('Claude Skill enabled resolves false from config even when other Claude leaves come from the step', () => {
+    const result = resolveEffectiveProviderOptions(
+      'project',
+      (path: string) => (path === 'claude.skills.enabled' ? 'env' : 'local'),
+      {
+        claude: { skills: { enabled: false }, effort: 'medium' },
+      } as StepProviderOptions,
+      {
+        claude: { skills: { enabled: true }, effort: 'high' },
+      } as StepProviderOptions,
+    );
+
+    expect(result).toEqual({
+      claude: { skills: { enabled: false }, effort: 'high' },
     });
   });
 
@@ -290,6 +318,7 @@ describe('resolveEffectiveTeamLeaderPartProviderOptions', () => {
         opencode: { networkAccess: true },
         claude: {
           allowedTools: ['Read', 'Glob'],
+          skills: { enabled: false },
           sandbox: { allowUnsandboxedCommands: true },
         },
       },
@@ -307,6 +336,7 @@ describe('resolveEffectiveTeamLeaderPartProviderOptions', () => {
     expect(result).toEqual({
       opencode: { networkAccess: false },
       claude: {
+        skills: { enabled: false },
         sandbox: {
           allowUnsandboxedCommands: true,
           excludedCommands: ['./gradlew'],
@@ -349,7 +379,10 @@ describe('resolveEffectiveTeamLeaderPartProviderOptions', () => {
       { kiro: { agent: 'config-agent' } },
       {
         kiro: { agent: 'step-agent' },
-        claude: { allowedTools: ['Read', 'Edit'] },
+        claude: {
+          allowedTools: ['Read', 'Edit'],
+          skills: { enabled: false },
+        },
       },
       'kiro',
       ['Read', 'Edit', 'Write'],
@@ -357,6 +390,7 @@ describe('resolveEffectiveTeamLeaderPartProviderOptions', () => {
 
     expect(result).toEqual({
       kiro: { agent: 'step-agent' },
+      claude: { skills: { enabled: false } },
     });
   });
 
@@ -373,6 +407,7 @@ describe('resolveEffectiveTeamLeaderPartProviderOptions', () => {
       {
         claude: {
           allowedTools: ['Read', 'Edit'],
+          skills: { enabled: false },
           sandbox: { excludedCommands: ['./gradlew'] },
         },
       },
@@ -382,6 +417,7 @@ describe('resolveEffectiveTeamLeaderPartProviderOptions', () => {
 
     expect(result).toEqual({
       claude: {
+        skills: { enabled: false },
         sandbox: {
           allowUnsandboxedCommands: true,
           excludedCommands: ['./gradlew'],

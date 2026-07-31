@@ -181,31 +181,12 @@ steps:
       - デザイン参照がある場合、主要画面のレイアウト・文言・色・間隔を要素単位で照合したこと
       - デザイン参照がある場合、プラットフォーム制約による差分は決定ログに明記したこと
   - name: ai-antipattern-review-1st
-    tags:
-      - review
-    edit: false
-    persona: ai-antipattern-reviewer
-    policy:
-      - review
-      - ai-antipattern
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - WebSearch
-          - WebFetch
-    instruction: ai-antipattern-review
+    uses: ai-antipattern-first-pass
     rules:
       - condition: AI特有の問題が見つからない
         next: reviewers_1
       - condition: AI特有の問題が検出された
         next: ai-antipattern-fix
-    output_contracts:
-      report:
-        - name: ai-antipattern-review.md
-          format: ai-antipattern-review
   - name: ai-antipattern-fix
     tags:
       - coding
@@ -245,23 +226,12 @@ steps:
       - condition: 修正を進行できない
         next: ai-antipattern-no-fix
   - name: ai-antipattern-no-fix
-    tags:
-      - review
-    edit: false
-    persona: architecture-reviewer
-    policy: review
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
+    uses: ai-antipattern-arbitration
     rules:
       - condition: ai-antipattern-review-1stの指摘が妥当（修正すべき）
         next: ai-antipattern-fix
       - condition: ai-antipattern-fixの判断が妥当（修正不要）
         next: reviewers_1
-    instruction: arbitrate
   - name: reviewers_1
     tags:
       - review

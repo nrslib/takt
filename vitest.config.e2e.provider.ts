@@ -20,7 +20,11 @@ const commonTests = [
 const providerSpecificTests: Record<string, string[]> = {
   codex: ['e2e/specs/codex-permission-mode.e2e.ts'],
   opencode: ['e2e/specs/opencode-conversation.e2e.ts'],
-  claude: ['e2e/specs/claude-allowed-tools-pytest.e2e.ts'],
+  claude: [
+    'e2e/specs/claude-allowed-tools-pytest.e2e.ts',
+    'e2e/specs/claude-skills.e2e.ts',
+  ],
+  'claude-sdk': ['e2e/specs/claude-skills.e2e.ts'],
 };
 
 export default defineConfig({

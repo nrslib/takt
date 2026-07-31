@@ -1,0 +1,25 @@
+params:
+  supervise_knowledge:
+    type: facet_ref[]
+    facet_kind: knowledge
+name: supervise
+tags:
+  - review
+  - final-gate
+  - supervise
+edit: false
+persona: supervisor
+policy: review
+knowledge:
+  $param: supervise_knowledge
+provider_options:
+  extends: review-readonly
+pass_previous_response: false
+instruction: supervise
+output_contracts:
+  report:
+    - name: supervisor-validation.md
+      format: supervisor-validation
+    - name: summary.md
+      format: supervisor-summary
+      use_judge: false

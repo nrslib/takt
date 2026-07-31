@@ -6,6 +6,7 @@ import {
   findFragmentProvenanceForStep,
   type WorkflowStepFragmentProvenance,
 } from './workflowStepFragmentProvenance.js';
+import type { WorkflowStepFragmentRulePathMapping } from './workflowStepFragmentResolver.js';
 import {
   hasVisitedWorkflowErrorContext,
   markVisitedWorkflowErrorContext,
@@ -13,6 +14,7 @@ import {
 
 interface FragmentErrorContext {
   readonly provenance: readonly WorkflowStepFragmentProvenance[];
+  readonly rulePathMappings: readonly WorkflowStepFragmentRulePathMapping[];
   readonly raw: object;
   readonly workflowPath: string;
 }
@@ -24,8 +26,9 @@ export function registerWorkflowStepFragmentErrorContext(
   provenance: readonly WorkflowStepFragmentProvenance[],
   raw: object,
   workflowPath: string,
+  rulePathMappings: readonly WorkflowStepFragmentRulePathMapping[] = [],
 ): void {
-  contexts.set(workflow, { provenance, raw, workflowPath });
+  contexts.set(workflow, { provenance, rulePathMappings, raw, workflowPath });
 }
 
 export function formatWorkflowStepFragmentErrorContext(
@@ -55,6 +58,9 @@ export function translateWorkflowStepFragmentError(workflow: WorkflowConfig, err
   if (!shouldTranslateWorkflowStepFragmentError(error, path)) {
     return normalized;
   }
+  if (context.rulePathMappings.some((mapping) => pathStartsWith(path, mapping.normalizedPath))) {
+    return normalized;
+  }
   const rawPath = toRawStepFieldPath(path, context.raw);
   const exact = findFragmentProvenanceAtExactPath(context.provenance, rawPath);
   const source = exact ?? findFragmentProvenanceForStep(context.provenance, rawPath);
@@ -65,6 +71,11 @@ export function translateWorkflowStepFragmentError(workflow: WorkflowConfig, err
   const translated = new Error(`${normalized.message} (${details})`, { cause: normalized });
   markVisitedWorkflowErrorContext(normalized, translated, 'normalized', context.workflowPath);
   return translated;
+}
+
+function pathStartsWith(path: readonly PropertyKey[], prefix: readonly PropertyKey[]): boolean {
+  return prefix.length <= path.length
+    && prefix.every((entry, index) => entry === path[index]);
 }
 
 function shouldTranslateWorkflowStepFragmentError(

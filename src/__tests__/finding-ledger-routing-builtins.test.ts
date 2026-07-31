@@ -11,10 +11,10 @@ import type {
 import { parseWorkflowRuleCondition } from '../core/models/workflow-rule-condition.js';
 import { RuleEvaluator } from '../core/workflow/evaluation/RuleEvaluator.js';
 import {
-  getBuiltinLanguageStepsDir,
-  getBuiltinStepsDir,
   getBuiltinWorkflowsDir,
 } from '../infra/config/paths.js';
+import { buildStepFragmentLookupDirs } from '../infra/config/loaders/stepFragmentLookupDirectories.js';
+import { resolveWorkflowStepFragments } from '../infra/config/loaders/workflowStepFragmentResolver.js';
 import { makeStep } from './test-helpers.js';
 
 type Language = 'en' | 'ja';
@@ -29,6 +29,10 @@ interface RawStep {
   name?: string;
   parallel?: RawStep[];
   rules?: RawRule[];
+}
+
+interface RawWorkflow {
+  steps: RawStep[];
 }
 
 interface FindingCounts {
@@ -46,11 +50,16 @@ interface FindingCounts {
 const EMPTY_LEDGER_CONDITION = 'findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0';
 const ACTIONABLE_OPEN_CONDITION = 'findings.open.count > 0 && findings.provisional.count == 0 && findings.conflicts.count == 0';
 
-function readStep(path: string, stepName?: string): RawStep {
-  const raw = parseYaml(readFileSync(path, 'utf-8')) as RawStep & { steps?: RawStep[] };
-  if (stepName === undefined) return raw;
-  const step = raw.steps?.find((candidate) => candidate.name === stepName);
-  if (step === undefined) throw new Error(`Missing builtin step: ${stepName}`);
+function readExpandedStep(language: Language, workflowName: string, stepName: string): RawStep {
+  const workflowPath = join(getBuiltinWorkflowsDir(language), `${workflowName}.yaml`);
+  const raw = parseYaml(readFileSync(workflowPath, 'utf-8')) as RawWorkflow;
+  const expanded = resolveWorkflowStepFragments(raw, {
+    candidateDirs: buildStepFragmentLookupDirs({ lang: language }),
+    context: { lang: language, projectDir: process.cwd() },
+    workflowPath,
+  }).raw as RawWorkflow;
+  const step = expanded.steps.find((candidate) => candidate.name === stepName);
+  if (step === undefined) throw new Error(`Missing expanded builtin step: ${stepName}`);
   return step;
 }
 
@@ -150,14 +159,11 @@ function transition(
 }
 
 function sharedReviewers(language: Language): RawStep {
-  return readStep(join(getBuiltinLanguageStepsDir(language), 'reviewers.yaml'));
+  return readExpandedStep(language, 'takt-default-high', 'reviewers');
 }
 
 function localReviewers(language: Language, name: 'reviewers' | 'boundary-reviewers'): RawStep {
-  return readStep(
-    join(getBuiltinWorkflowsDir(language), 'takt-default-localllm.yaml'),
-    name,
-  );
+  return readExpandedStep(language, 'takt-default-localllm', name);
 }
 
 describe('builtin Finding ledger routing', () => {
@@ -179,10 +185,12 @@ describe('builtin Finding ledger routing', () => {
     const step = toWorkflowStep(sharedReviewers(language));
 
     for (const reviewerRuleIndex of [0, 1]) {
-      for (const anomalies of [0, 3]) {
-        expect(transition(step, { anomalies }, reviewerRuleIndex)).toBe('final-gate');
+      for (const label of [undefined, 'all("approved")', 'any("needs_fix")', 'needs_fix', 'need_replan']) {
+        for (const anomalies of [0, 3]) {
+          expect(transition(step, { anomalies }, reviewerRuleIndex, label)).toBe('final-gate');
+        }
+        expect(transition(step, { open: 1 }, reviewerRuleIndex, label)).toBe('fix');
       }
-      expect(transition(step, { open: 1 }, reviewerRuleIndex)).toBe('fix');
     }
   });
 
@@ -191,12 +199,15 @@ describe('builtin Finding ledger routing', () => {
     const boundary = toWorkflowStep(localReviewers(language, 'boundary-reviewers'));
 
     for (const reviewerRuleIndex of [0, 1]) {
-      for (const anomalies of [0, 3]) {
-        expect(transition(regular, { anomalies }, reviewerRuleIndex)).toBe('local-review-integrity-gate');
-        expect(transition(boundary, { anomalies }, reviewerRuleIndex)).toBe('final-gate');
+      for (const label of [undefined, 'all("approved")', 'any("needs_fix")', 'needs_fix', 'need_replan']) {
+        for (const anomalies of [0, 3]) {
+          expect(transition(regular, { anomalies }, reviewerRuleIndex, label))
+            .toBe('local-review-integrity-gate');
+          expect(transition(boundary, { anomalies }, reviewerRuleIndex, label)).toBe('final-gate');
+        }
+        expect(transition(regular, { open: 1 }, reviewerRuleIndex, label)).toBe('fix');
+        expect(transition(boundary, { open: 1 }, reviewerRuleIndex, label)).toBe('fix');
       }
-      expect(transition(regular, { open: 1 }, reviewerRuleIndex)).toBe('fix');
-      expect(transition(boundary, { open: 1 }, reviewerRuleIndex)).toBe('fix');
     }
   });
 
@@ -219,8 +230,9 @@ describe('builtin Finding ledger routing', () => {
   });
 
   it.each(['en', 'ja'] as const)('%s merge-readinessは空台帳のneeds_fixをsuperviseへ進める', (language) => {
-    const raw = readStep(
-      join(getBuiltinWorkflowsDir(language), 'merge-readiness-finding-contract-final-gate.yaml'),
+    const raw = readExpandedStep(
+      language,
+      'merge-readiness-finding-contract-final-gate',
       'merge-readiness-review',
     );
     const step = toWorkflowStep(raw);
@@ -238,22 +250,30 @@ describe('builtin Finding ledger routing', () => {
     )).toBe('need_replan');
   });
 
-  it('supervisorは空台帳のneeds_fixをCOMPLETEにし、actionable openだけをneeds_fixにする', () => {
-    const raw = readStep(join(getBuiltinStepsDir(), 'finding-contract-supervise.yaml'));
-    const step = toWorkflowStep(raw);
+  it.each(['en', 'ja'] as const)(
+    '%s supervisor callerは空台帳の生labelを無視してCOMPLETEにし、台帳だけで遷移する',
+    (language) => {
+      const raw = readExpandedStep(
+        language,
+        'merge-readiness-finding-contract-final-gate',
+        'supervise',
+      );
+      const step = toWorkflowStep(raw);
 
-    expect(raw.rules?.some((rule) => rule.condition === 'needs_fix')).toBe(false);
-    expect(transition(step, {}, 0, 'needs_fix')).toBe('COMPLETE');
-    expect(transition(step, {}, 0, 'need_replan')).toBe('COMPLETE');
-    expect(transition(step, { open: 1 }, 0, 'approved')).toBe('needs_fix');
-    expect(transition(step, { open: 1 }, 0, 'needs_fix')).toBe('needs_fix');
-    expect(transition(step, { anomalies: 1 }, 0, 'needs_fix')).toBe('needs_review');
-    expect(transition(
-      step,
-      { anomalies: 1, anomalyBudgetExhausted: true },
-      0,
-      'needs_fix',
-    )).toBe('need_replan');
-    expect(transition(step, { open: 1, provisional: 1 }, 0, 'needs_fix')).toBe('need_replan');
-  });
+      expect(raw.rules?.some((rule) => ['approved', 'needs_fix', 'need_replan'].includes(rule.condition)))
+        .toBe(false);
+      for (const label of ['approved', 'needs_fix', 'need_replan']) {
+        expect(transition(step, {}, 0, label)).toBe('COMPLETE');
+        expect(transition(step, { open: 1 }, 0, label)).toBe('needs_fix');
+        expect(transition(step, { anomalies: 1 }, 0, label)).toBe('needs_review');
+        expect(transition(
+          step,
+          { anomalies: 1, anomalyBudgetExhausted: true },
+          0,
+          label,
+        )).toBe('need_replan');
+        expect(transition(step, { open: 1, provisional: 1 }, 0, label)).toBe('need_replan');
+      }
+    },
+  );
 });

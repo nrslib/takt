@@ -376,42 +376,21 @@ steps:
       - condition: ABORT
         next: ABORT
   - name: fix
-    tags:
-      - coding
-    edit: true
-    persona: coder
-    policy:
-      - coding
-      - testing
-      - design-fidelity
-      - screen-api
-    knowledge:
-      - frontend
-      - backend
-      - cqrs-es
-      - security
-      - architecture
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Edit
-          - Write
-          - Bash
-          - WebSearch
-          - WebFetch
-    required_permission_mode: edit
-    pass_previous_response: false
+    uses: fix-with-provider-tools
+    with:
+      fix_policy:
+        - coding
+        - testing
+        - design-fidelity
+        - screen-api
+      fix_knowledge:
+        - frontend
+        - backend
+        - cqrs-es
+        - security
+        - architecture
     rules:
       - condition: 修正が完了した
         next: reviewers
       - condition: 修正を進行できない
         next: plan
-    instruction: fix
-    output_contracts:
-      report:
-        - name: fix-report.md
-          format: fix-report
-          use_judge: false

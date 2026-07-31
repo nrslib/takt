@@ -62,10 +62,15 @@ export interface ClaudeSandboxSettings {
   excludedCommands?: string[];
 }
 
+export interface ClaudeSkillOptions {
+  enabled?: boolean;
+}
+
 export interface ClaudeProviderOptions {
   baseUrl?: string;
   allowedTools?: string[];
   effort?: ClaudeEffort;
+  skills?: ClaudeSkillOptions;
   sandbox?: ClaudeSandboxSettings;
 }
 

@@ -389,6 +389,21 @@ describe('QueryExecutor rate limit cause preservation', () => {
     ).toBeUndefined();
   });
 
+  it('Skills 無効の resume 失敗を再試行するときも、SDK の空の Skill allowlist を維持する', async () => {
+    queryMock.mockImplementation(() => createMockQuery([], new Error(EXIT_CODE_MESSAGE)));
+    const executor = new QueryExecutor();
+
+    await executor.execute('test prompt', {
+      cwd: '/tmp/project',
+      sessionId: 'resume-session-1',
+      skillsEnabled: false,
+    });
+
+    expect(queryMock).toHaveBeenCalledTimes(2);
+    expect((queryMock.mock.calls[0]?.[0] as { options?: { skills?: unknown } }).options?.skills).toEqual([]);
+    expect((queryMock.mock.calls[1]?.[0] as { options?: { skills?: unknown } }).options?.skills).toEqual([]);
+  });
+
   it.each([
     ['allowed', 'allowed'],
     ['allowed_warning', 'allowed_warning'],

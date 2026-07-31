@@ -748,6 +748,9 @@ export function denormalizeProviderOptions(
     if (providerOptions.claude.effort !== undefined) {
       claude.effort = providerOptions.claude.effort;
     }
+    if (providerOptions.claude.skills?.enabled !== undefined) {
+      claude.skills = { enabled: providerOptions.claude.skills.enabled };
+    }
     const sandbox: Record<string, unknown> = {};
     if (providerOptions.claude.sandbox?.allowUnsandboxedCommands !== undefined) {
       sandbox.allow_unsandboxed_commands = providerOptions.claude.sandbox.allowUnsandboxedCommands;

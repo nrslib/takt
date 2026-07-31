@@ -36,6 +36,9 @@ type RawProviderOptions = {
     base_url?: string;
     allowed_tools?: string[];
     effort?: ClaudeEffort;
+    skills?: {
+      enabled?: boolean;
+    };
     sandbox?: {
       allow_unsandboxed_commands?: boolean;
       excluded_commands?: string[];
@@ -202,6 +205,7 @@ export function normalizeProviderOptions(
     options.claude?.base_url !== undefined
     || options.claude?.allowed_tools !== undefined
     || options.claude?.effort !== undefined
+    || options.claude?.skills?.enabled !== undefined
     || options.claude?.sandbox
   ) {
     const claude: NonNullable<StepProviderOptions['claude']> = {};
@@ -215,6 +219,9 @@ export function normalizeProviderOptions(
     }
     if (options.claude.effort !== undefined) {
       claude.effort = options.claude.effort;
+    }
+    if (options.claude.skills?.enabled !== undefined) {
+      claude.skills = { enabled: options.claude.skills.enabled };
     }
     if (options.claude.sandbox) {
       const sandbox = {
@@ -309,6 +316,9 @@ export function mergeProviderOptions(
         ...(layer.claude.effort !== undefined
           ? { effort: layer.claude.effort }
           : {}),
+        ...(layer.claude.skills?.enabled !== undefined
+          ? { skills: { enabled: layer.claude.skills.enabled } }
+          : {}),
         ...(layer.claude.sandbox
           ? { sandbox: { ...result.claude?.sandbox, ...layer.claude.sandbox } }
           : {}),
@@ -356,7 +366,11 @@ export function resolveProviderOptionOrigin(
     return resolveFallbackOrigin(fallbackSource);
   }
 
-  if (path === 'codex.skills.repo' || path === 'codex.skills.user') {
+  if (
+    path === 'codex.skills.repo'
+    || path === 'codex.skills.user'
+    || path === 'claude.skills.enabled'
+  ) {
     return resolver(path);
   }
 
@@ -519,6 +533,12 @@ export function resolveEffectiveProviderOptions(
     stepOptions?.claude?.effort,
     resolveProviderOptionOrigin(originResolver, 'claude.effort', source),
   );
+  const claudeSkillsEnabled = selectProviderValue(
+    resolvedConfigOptions.claude?.skills?.enabled,
+    personaOptions?.claude?.skills?.enabled,
+    stepOptions?.claude?.skills?.enabled,
+    resolveProviderOptionOrigin(originResolver, 'claude.skills.enabled', source),
+  );
 
   const codexNetworkAccess = selectProviderValue(
     resolvedConfigOptions.codex?.networkAccess,
@@ -641,12 +661,14 @@ export function resolveEffectiveProviderOptions(
       || claudeAllowedTools !== undefined
       || claudeBaseUrl !== undefined
       || claudeEffort !== undefined
+      || claudeSkillsEnabled !== undefined
       ? {
           claude: {
             ...claude,
             ...(claudeAllowedTools !== undefined ? { allowedTools: claudeAllowedTools } : {}),
             ...(claudeBaseUrl !== undefined ? { baseUrl: claudeBaseUrl } : {}),
             ...(claudeEffort !== undefined ? { effort: claudeEffort } : {}),
+            ...(claudeSkillsEnabled !== undefined ? { skills: { enabled: claudeSkillsEnabled } } : {}),
           },
         }
       : {}),
@@ -686,6 +708,9 @@ function stripClaudeAllowedTools(
           : {}),
         ...(providerOptions.claude.effort !== undefined
           ? { effort: providerOptions.claude.effort }
+          : {}),
+        ...(providerOptions.claude.skills?.enabled !== undefined
+          ? { skills: { enabled: providerOptions.claude.skills.enabled } }
           : {}),
         ...(providerOptions.claude.sandbox !== undefined
           ? { sandbox: { ...providerOptions.claude.sandbox } }
@@ -754,6 +779,7 @@ export const PROVIDER_OPTION_PATHS = [
   'claude.allowedTools',
   'claude.sandbox.allowUnsandboxedCommands',
   'claude.sandbox.excludedCommands',
+  'claude.skills.enabled',
   'codex.baseUrl',
   'codex.networkAccess',
   'codex.reasoningEffort',

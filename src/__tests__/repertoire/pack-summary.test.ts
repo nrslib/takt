@@ -93,7 +93,17 @@ provider_options:
 `);
 
       const result = detectEditWorkflows(
-        [{ name: 'workflow.yaml', content: 'steps:\n  - uses: permissioned\n', relativePath: 'workflows/workflow.yaml' }],
+        [{
+          name: 'workflow.yaml',
+          content: `steps:
+  - name: permissioned
+    uses: permissioned
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`,
+          relativePath: 'workflows/workflow.yaml',
+        }],
         [],
         {
           stepFragmentCandidateDirs: [stepsDir],
@@ -132,7 +142,13 @@ provider_options:
       const result = detectEditWorkflows(
         [{
           name: 'workflow.yaml',
-          content: 'steps:\n  - uses: "@nrslib/takt-review/permissioned"\n',
+          content: `steps:
+  - name: permissioned
+    uses: "@nrslib/takt-review/permissioned"
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`,
           relativePath: 'workflows/workflow.yaml',
         }],
         [],

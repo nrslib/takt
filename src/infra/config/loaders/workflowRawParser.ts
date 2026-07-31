@@ -2,7 +2,10 @@ import { WorkflowConfigRawSchema } from '../../../core/models/index.js';
 import type { WorkflowConfig } from '../../../core/models/types.js';
 import { ZodError } from 'zod';
 import type { FacetResolutionContext } from './resource-resolver.js';
-import type { WorkflowStepFragmentProvenance } from './workflowStepFragmentResolver.js';
+import type {
+  WorkflowStepFragmentProvenance,
+  WorkflowStepFragmentRulePathMapping,
+} from './workflowStepFragmentResolver.js';
 import { resolveWorkflowStepFragments } from './workflowStepFragmentResolver.js';
 import {
   findFragmentProvenanceAtExactPath,
@@ -21,7 +24,12 @@ import {
   markVisitedWorkflowErrorContext,
 } from './workflowFragmentErrorVisitTracker.js';
 
-const provenanceByRawWorkflow = new WeakMap<object, readonly WorkflowStepFragmentProvenance[]>();
+interface RawWorkflowFragmentContext {
+  readonly provenance: readonly WorkflowStepFragmentProvenance[];
+  readonly rulePathMappings: readonly WorkflowStepFragmentRulePathMapping[];
+}
+
+const fragmentContextByRawWorkflow = new WeakMap<object, RawWorkflowFragmentContext>();
 
 export interface WorkflowRawParserOptions {
   context?: FacetResolutionContext;
@@ -33,14 +41,23 @@ export function parseWorkflowRaw(raw: unknown, options: WorkflowRawParserOptions
   const resolved = resolveWorkflowStepFragments(raw, options);
   try {
     const parsed = WorkflowConfigRawSchema.parse(resolved.raw);
-    provenanceByRawWorkflow.set(parsed, resolved.provenance);
+    fragmentContextByRawWorkflow.set(parsed, {
+      provenance: resolved.provenance,
+      rulePathMappings: resolved.rulePathMappings,
+    });
     return parsed;
   } catch (error) {
-    if (!(error instanceof ZodError) || resolved.provenance.length === 0) {
+    if (!(error instanceof ZodError)) {
       throw error;
     }
-    throw new ZodError(error.issues.map((issue) => {
-      const provenance = findFragmentErrorProvenance(issue, resolved.provenance);
+    const remappedIssues = error.issues.map((issue) => remapZodIssue(issue, resolved.rulePathMappings));
+    if (resolved.provenance.length === 0) {
+      throw new ZodError(remappedIssues);
+    }
+    throw new ZodError(remappedIssues.map((issue) => {
+      const provenance = isCallerRulePath(issue.path, resolved.rulePathMappings)
+        ? undefined
+        : findFragmentErrorProvenance(issue, resolved.provenance);
       if (!provenance) {
         return issue;
       }
@@ -50,6 +67,67 @@ export function parseWorkflowRaw(raw: unknown, options: WorkflowRawParserOptions
       };
     }));
   }
+}
+
+function remapZodIssue(
+  issue: ZodError['issues'][number],
+  mappings: readonly WorkflowStepFragmentRulePathMapping[],
+): ZodError['issues'][number] {
+  const originalPath = issue.path;
+  const path = [...remapRulePath(originalPath, mappings)];
+  if (issue.code !== 'invalid_union') {
+    return { ...issue, path };
+  }
+  const errors = issue.errors.map((branch) => branch.map((nestedIssue) => {
+    const nestedAbsolutePath = [...originalPath, ...nestedIssue.path];
+    const remappedNestedPath = remapRulePath(nestedAbsolutePath, mappings);
+    const nestedPath = startsWithPath(remappedNestedPath, path)
+      ? remappedNestedPath.slice(path.length)
+      : remappedNestedPath;
+    return remapZodIssue(
+      { ...nestedIssue, path: [...nestedPath] } as ZodError['issues'][number],
+      [],
+    );
+  })) as typeof issue.errors;
+  return {
+    ...issue,
+    path,
+    errors,
+  } as ZodError['issues'][number];
+}
+
+function remapRulePath(
+  path: readonly PropertyKey[],
+  mappings: readonly WorkflowStepFragmentRulePathMapping[],
+): readonly PropertyKey[] {
+  const mapping = mappings
+    .filter((candidate) => startsWithPath(path, candidate.normalizedPath))
+    .sort((left, right) => right.normalizedPath.length - left.normalizedPath.length)[0];
+  return mapping === undefined
+    ? path
+    : [...mapping.callerPath, ...path.slice(mapping.normalizedPath.length)];
+}
+
+function startsWithPath(
+  path: readonly PropertyKey[],
+  prefix: readonly PropertyKey[],
+): boolean {
+  return prefix.length <= path.length
+    && prefix.every((entry, index) => entry === path[index]);
+}
+
+function isCallerRulePath(
+  path: readonly PropertyKey[],
+  mappings: readonly WorkflowStepFragmentRulePathMapping[],
+): boolean {
+  return mappings.some((mapping) => startsWithPath(path, mapping.callerPath));
+}
+
+function isNormalizedRulePath(
+  path: readonly PropertyKey[],
+  mappings: readonly WorkflowStepFragmentRulePathMapping[],
+): boolean {
+  return mappings.some((mapping) => startsWithPath(path, mapping.normalizedPath));
 }
 
 export function annotateWorkflowFragmentError(
@@ -62,8 +140,12 @@ export function annotateWorkflowFragmentError(
   if (error instanceof Error && hasVisitedWorkflowErrorContext(error, 'raw', workflowPath)) {
     return error;
   }
-  const provenance = provenanceByRawWorkflow.get(raw) ?? [];
+  const context = fragmentContextByRawWorkflow.get(raw);
+  const provenance = context?.provenance ?? [];
   const errorPath = sourcePath ?? getWorkflowConfigErrorPath(error);
+  if (errorPath !== undefined && isNormalizedRulePath(errorPath, context?.rulePathMappings ?? [])) {
+    return error instanceof Error ? error : new Error(message);
+  }
   const exactSource = errorPath === undefined
     ? undefined
     : findFragmentProvenanceAtExactPath(provenance, errorPath);
@@ -85,9 +167,10 @@ export function registerWorkflowFragmentErrorSource(
 ): void {
   registerWorkflowStepFragmentErrorContext(
     workflow,
-    provenanceByRawWorkflow.get(raw) ?? [],
+    fragmentContextByRawWorkflow.get(raw)?.provenance ?? [],
     raw,
     workflowPath,
+    fragmentContextByRawWorkflow.get(raw)?.rulePathMappings ?? [],
   );
   attachWorkflowConfigErrorTranslator(
     workflow,

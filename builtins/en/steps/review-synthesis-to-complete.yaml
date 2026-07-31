@@ -1,0 +1,25 @@
+name: review-synthesis
+tags:
+  - review
+  - final-gate
+  - supervise
+edit: false
+persona: supervisor
+policy: review
+provider_options:
+  claude:
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - WebSearch
+      - WebFetch
+pass_previous_response: false
+instruction: supervise
+output_contracts:
+  report:
+    - name: supervisor-validation.md
+      format: supervisor-validation
+    - name: summary.md
+      format: supervisor-summary
+      use_judge: false

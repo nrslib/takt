@@ -1,5 +1,5 @@
 name: takt-default
-description: TAKT development workflow (plan -> write_tests -> draft (implement + AI self-review) -> peer-review (specialist reviewers + fix + sequential final gate) -> COMPLETE).
+description: TAKT development workflow (plan -> write_tests -> draft (implement + AI self-review) -> peer-review (specialist reviewers + fix planning + fix + sequential final gate) -> COMPLETE).
 workflow_config:
   provider_options:
     codex:
@@ -10,13 +10,7 @@ max_steps: 50
 initial_step: plan
 steps:
   - name: plan
-    tags:
-      - plan
-    edit: false
-    persona: planner
-    knowledge: architecture
-    provider_options:
-      extends: review-readonly
+    uses: implementation-plan-to-write-tests
     rules:
       - condition: Requirements are clear and implementable
         next: write_tests
@@ -28,29 +22,14 @@ steps:
           Items to confirm:
           - {question 1}
           - {question 2}
-    instruction: plan
-    output_contracts:
-      report:
-        - name: plan.md
-          format: plan
   - name: write_tests
-    tags:
-      - coding
-      - test-planning
-    edit: true
-    persona: coder
-    policy:
-      - coding
-      - testing
-    knowledge:
-      - takt
-      - architecture
-      - unit-testing
-      - e2e-testing
-    provider_options:
-      extends: edit
-    required_permission_mode: edit
-    instruction: write-tests-first
+    uses: implementation-write-tests
+    with:
+      test_knowledge:
+        - takt
+        - architecture
+        - unit-testing
+        - e2e-testing
     rules:
       - condition: Tests written
         next: draft
@@ -62,13 +41,8 @@ steps:
         next: write_tests
         requires_user_input: true
         interactive_only: true
-    output_contracts:
-      report:
-        - name: test-report.md
-          format: test-report
   - name: draft
-    kind: workflow_call
-    call: draft
+    uses: takt-default-draft
     rules:
       - condition: COMPLETE
         next: peer-review
@@ -77,8 +51,7 @@ steps:
       - condition: ABORT
         next: ABORT
   - name: peer-review
-    kind: workflow_call
-    call: peer-review
+    uses: takt-default-peer-review
     rules:
       - condition: COMPLETE
         next: COMPLETE

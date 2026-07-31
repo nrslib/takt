@@ -216,4 +216,22 @@ describe('ClaudeTerminalProvider wiring', () => {
       systemPrompt: 'You are a judge.',
     }));
   });
+
+  it('Given disabled Claude Skills, When the provider starts or resumes a terminal session, Then it forwards the resolved false value', async () => {
+    const provider = new ClaudeTerminalProvider();
+    const agent = provider.setup({ name: 'coder' });
+
+    await agent.call('implement this', {
+      cwd: '/tmp/worktree',
+      sessionId: 'session-123',
+      providerOptions: {
+        claude: { skills: { enabled: false } },
+      } as never,
+    });
+
+    expect(mockCallClaudeTerminal).toHaveBeenCalledWith('coder', 'implement this', expect.objectContaining({
+      sessionId: 'session-123',
+      skillsEnabled: false,
+    }));
+  });
 });

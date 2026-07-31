@@ -57,6 +57,12 @@ export type OpenCodeToolState =
 
 export type OpenCodePart = OpenCodeTextPart | OpenCodeReasoningPart | OpenCodeToolPart | { id: string; type: string; sessionID?: string };
 
+export type OpenCodeStreamTrackingLimitReason =
+  | 'event_count'
+  | 'tracked_id_count'
+  | 'text_bytes'
+  | 'sensitive_sources';
+
 /** OpenCode SSE event types relevant for stream handling */
 export interface OpenCodeMessagePartUpdatedEvent {
   type: 'message.part.updated';
@@ -165,12 +171,14 @@ export interface StreamTrackingState {
   thinkingOffsets: Map<string, number>;
   textRedactors: Map<string, SensitiveTextStreamRedactor>;
   thinkingRedactors: Map<string, SensitiveTextStreamRedactor>;
+  partTypes: Map<string, string>;
   startedTools: Set<string>;
   latestToolInputs: Map<string, Record<string, unknown>>;
   sensitiveSources: BoundedSensitiveValues;
   eventCount: number;
   textBytes: number;
   trackedIds: Set<string>;
+  trackingLimitReason?: OpenCodeStreamTrackingLimitReason;
   exhausted: boolean;
 }
 
@@ -185,12 +193,14 @@ export function createStreamTrackingState(): StreamTrackingState {
     thinkingOffsets: new Map<string, number>(),
     textRedactors: new Map<string, SensitiveTextStreamRedactor>(),
     thinkingRedactors: new Map<string, SensitiveTextStreamRedactor>(),
+    partTypes: new Map<string, string>(),
     startedTools: new Set<string>(),
     latestToolInputs: new Map<string, Record<string, unknown>>(),
     sensitiveSources: createBoundedSensitiveValues(),
     eventCount: 0,
     textBytes: 0,
     trackedIds: new Set<string>(),
+    trackingLimitReason: undefined,
     exhausted: false,
   };
 }
@@ -201,18 +211,25 @@ export function trackOpenCodeTextBytes(state: StreamTrackingState, text: string)
   }
   const nextTextBytes = state.textBytes + Buffer.byteLength(text, 'utf8');
   if (nextTextBytes > OPENCODE_STREAM_TEXT_BYTE_LIMIT) {
-    exhaustStreamTrackingState(state);
+    exhaustStreamTrackingState(state, 'text_bytes');
     return false;
   }
   state.textBytes = nextTextBytes;
   return true;
 }
 
-function exhaustStreamTrackingState(state: StreamTrackingState): void {
+function exhaustStreamTrackingState(
+  state: StreamTrackingState,
+  reason?: OpenCodeStreamTrackingLimitReason,
+): void {
+  if (reason !== undefined && state.trackingLimitReason === undefined) {
+    state.trackingLimitReason = reason;
+  }
   state.textOffsets.clear();
   state.thinkingOffsets.clear();
   state.textRedactors.clear();
   state.thinkingRedactors.clear();
+  state.partTypes.clear();
   state.startedTools.clear();
   state.latestToolInputs.clear();
   state.trackedIds.clear();
@@ -228,11 +245,26 @@ function trackStreamId(state: StreamTrackingState, id: string): boolean {
     return true;
   }
   if (state.trackedIds.size >= OPENCODE_STREAM_ID_LIMIT) {
-    exhaustStreamTrackingState(state);
+    exhaustStreamTrackingState(state, 'tracked_id_count');
     return false;
   }
   state.trackedIds.add(id);
   return true;
+}
+
+function rememberPartType(state: StreamTrackingState, part: OpenCodePart): void {
+  const partId = part.type === 'tool'
+    ? ((part as OpenCodeToolPart).callID || part.id)
+    : part.id;
+  state.partTypes.set(partId, part.type);
+}
+
+export function describeOpenCodeStreamTrackingLimitFailure(
+  reason: OpenCodeStreamTrackingLimitReason | undefined,
+): string {
+  return reason === undefined
+    ? OPENCODE_STREAM_TRACKING_LIMIT_MESSAGE
+    : `${OPENCODE_STREAM_TRACKING_LIMIT_MESSAGE}: ${reason}`;
 }
 
 export function trackOpenCodeStreamEvent(
@@ -244,7 +276,7 @@ export function trackOpenCodeStreamEvent(
   }
   state.eventCount += 1;
   if (state.eventCount > OPENCODE_STREAM_EVENT_LIMIT) {
-    exhaustStreamTrackingState(state);
+    exhaustStreamTrackingState(state, 'event_count');
     return false;
   }
   if (event.type === 'message.part.updated') {
@@ -252,7 +284,11 @@ export function trackOpenCodeStreamEvent(
     const partId = part.type === 'tool'
       ? ((part as OpenCodeToolPart).callID || part.id)
       : part.id;
-    return trackStreamId(state, partId);
+    if (!trackStreamId(state, partId)) {
+      return false;
+    }
+    rememberPartType(state, part);
+    return true;
   }
   if (event.type === 'message.part.delta') {
     const partId = event.properties['partID'];
@@ -417,6 +453,7 @@ export function handlePartUpdated(
   if (!trackStreamId(state, partId)) {
     return false;
   }
+  rememberPartType(state, part);
   switch (part.type) {
     case 'text': {
       if (!onStream) return true;
@@ -428,6 +465,8 @@ export function handlePartUpdated(
           delta,
           state.sensitiveSources,
         ));
+        const previous = state.textOffsets.get(textPart.id) ?? 0;
+        state.textOffsets.set(textPart.id, previous + delta.length);
       } else {
         const prev = state.textOffsets.get(textPart.id) ?? 0;
         if (textPart.text.length > prev) {
@@ -455,6 +494,8 @@ export function handlePartUpdated(
           delta,
           state.sensitiveSources,
         ));
+        const previous = state.thinkingOffsets.get(reasoningPart.id) ?? 0;
+        state.thinkingOffsets.set(reasoningPart.id, previous + delta.length);
       } else {
         const prev = state.thinkingOffsets.get(reasoningPart.id) ?? 0;
         if (reasoningPart.text.length > prev) {
@@ -493,7 +534,7 @@ function handleToolPartUpdated(
   if (previousInput !== toolPart.state.input) {
     state.sensitiveSources.add(toolPart.state.input);
     if (state.sensitiveSources.exhausted) {
-      exhaustStreamTrackingState(state);
+      exhaustStreamTrackingState(state, 'sensitive_sources');
       return false;
     }
   }

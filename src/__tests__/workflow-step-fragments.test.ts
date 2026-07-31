@@ -12,10 +12,15 @@ import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader
 import { getWorkflowDescription } from '../infra/config/loaders/workflowPreview.js';
 import { WorkflowEngine } from '../core/workflow/index.js';
 
-const COMPLETE_RULE = `
-rules:
-  - condition: done
-    next: COMPLETE`;
+const COMPLETE_CALLER_RULES = `
+    rules:
+      - condition: done
+        next: COMPLETE`;
+
+const COMPLETE_PARALLEL_CALLER_RULES = `
+        rules:
+          - condition: done
+            next: COMPLETE`;
 
 function writeFile(root: string, relativePath: string, content: string): string {
   const filePath = join(root, relativePath);
@@ -97,8 +102,13 @@ describe('workflow step fragments', () => {
   });
 
   it('should expand a top-level agent step from a project fragment', () => {
-    writeProjectFragment(projectDir, 'implement', `instruction: implement the task${COMPLETE_RULE}\n`);
-    const workflowPath = writeWorkflow(projectDir, 'agent-fragment', '  - uses: implement', 'implement');
+    writeProjectFragment(projectDir, 'implement', 'instruction: implement the task\n');
+    const workflowPath = writeWorkflow(
+      projectDir,
+      'agent-fragment',
+      `  - uses: implement${COMPLETE_CALLER_RULES}`,
+      'implement',
+    );
 
     const workflow = loadWorkflowFromFile(workflowPath, projectDir);
 
@@ -113,11 +123,13 @@ describe('workflow step fragments', () => {
     writeCallableWorkflow(projectDir);
     writeProjectFragment(projectDir, 'delegate', `kind: workflow_call
 call: called
-rules:
-  - condition: done
-    next: COMPLETE
 `);
-    const workflowPath = writeWorkflow(projectDir, 'workflow-call-fragment', '  - uses: delegate', 'delegate');
+    const workflowPath = writeWorkflow(
+      projectDir,
+      'workflow-call-fragment',
+      `  - uses: delegate${COMPLETE_CALLER_RULES}`,
+      'delegate',
+    );
 
     const workflow = loadWorkflowFromFile(workflowPath, projectDir);
 
@@ -128,14 +140,16 @@ rules:
     writeProjectFragment(projectDir, 'reviewers', `parallel:
   - name: review
     instruction: review the task
-    rules:
-      - condition: done
-        next: COMPLETE
-rules:
-  - condition: all("done")
-    next: COMPLETE
 `);
-    const workflowPath = writeWorkflow(projectDir, 'parallel-parent-fragment', '  - uses: reviewers', 'reviewers');
+    const workflowPath = writeWorkflow(projectDir, 'parallel-parent-fragment', `  - uses: reviewers
+    rules:
+      self:
+        - condition: all("done")
+          next: COMPLETE
+      parallel:
+        review:
+          - condition: done
+            next: COMPLETE`, 'reviewers');
 
     const workflow = loadWorkflowFromFile(workflowPath, projectDir);
 
@@ -146,10 +160,10 @@ rules:
   });
 
   it('should expand an agent parallel sub-step from a project fragment', () => {
-    writeProjectFragment(projectDir, 'review', `instruction: review the task${COMPLETE_RULE}\n`);
+    writeProjectFragment(projectDir, 'review', 'instruction: review the task\n');
     const workflowPath = writeWorkflow(projectDir, 'parallel-agent-fragment', `  - name: reviewers
     parallel:
-      - uses: review
+      - uses: review${COMPLETE_PARALLEL_CALLER_RULES}
     rules:
       - condition: all("done")
         next: COMPLETE`, 'reviewers');
@@ -163,13 +177,10 @@ rules:
     writeCallableWorkflow(projectDir);
     writeProjectFragment(projectDir, 'delegate', `kind: workflow_call
 call: called
-rules:
-  - condition: done
-    next: COMPLETE
 `);
     const workflowPath = writeWorkflow(projectDir, 'parallel-call-fragment', `  - name: delegates
     parallel:
-      - uses: delegate
+      - uses: delegate${COMPLETE_PARALLEL_CALLER_RULES}
     rules:
       - condition: all("done")
         next: COMPLETE`, 'delegates');
@@ -185,15 +196,15 @@ rules:
     ['structured_output', 'structured_output: {}'],
     ['system_inputs', 'system_inputs: []'],
     ['effects', 'effects: []'],
-    ['parallel', 'parallel: []'],
+    ['parallel', 'parallel:\n  - name: nested\n    instruction: nested'],
     ['concurrency', 'concurrency: 1'],
     ['arpeggio', 'arpeggio: {}'],
     ['team_leader', 'team_leader: {}'],
   ])('should reject unsupported agent parallel sub-step field %s supplied by a fragment', (field, value) => {
-    writeProjectFragment(projectDir, 'review', `${value}\ninstruction: review${COMPLETE_RULE}\n`);
+    writeProjectFragment(projectDir, 'review', `${value}\ninstruction: review\n`);
     const workflowPath = writeWorkflow(projectDir, 'parallel-agent-invalid-field', `  - name: reviewers
     parallel:
-      - uses: review
+      - uses: review${COMPLETE_PARALLEL_CALLER_RULES}
     rules:
       - condition: all("done")
         next: COMPLETE`, 'reviewers');
@@ -209,16 +220,16 @@ rules:
     ['structured_output', 'structured_output: {}'],
     ['system_inputs', 'system_inputs: []'],
     ['effects', 'effects: []'],
-    ['parallel', 'parallel: []'],
+    ['parallel', 'parallel:\n  - name: nested\n    instruction: nested'],
     ['concurrency', 'concurrency: 1'],
     ['arpeggio', 'arpeggio: {}'],
     ['team_leader', 'team_leader: {}'],
   ])('should reject unsupported workflow_call parallel sub-step field %s supplied by a fragment', (field, value) => {
     writeCallableWorkflow(projectDir);
-    writeProjectFragment(projectDir, 'delegate', `kind: workflow_call\ncall: called\n${value}${COMPLETE_RULE}\n`);
+    writeProjectFragment(projectDir, 'delegate', `kind: workflow_call\ncall: called\n${value}\n`);
     const workflowPath = writeWorkflow(projectDir, 'parallel-call-invalid-field', `  - name: delegates
     parallel:
-      - uses: delegate
+      - uses: delegate${COMPLETE_PARALLEL_CALLER_RULES}
     rules:
       - condition: all("done")
         next: COMPLETE`, 'delegates');
@@ -228,10 +239,37 @@ rules:
     expect(message).toContain(`"${field}"`);
   });
 
+  it.each([
+    ['agent', 'instruction: review'],
+    ['workflow_call', 'kind: workflow_call\ncall: called'],
+  ])('should reject a rule tree on a %s parallel sub-step fragment caller', (_kind, fragment) => {
+    if (fragment.includes('workflow_call')) writeCallableWorkflow(projectDir);
+    writeProjectFragment(projectDir, 'nested-rules', `${fragment}\n`);
+    const workflowPath = writeWorkflow(projectDir, 'parallel-sub-step-rule-tree', `  - name: reviewers
+    parallel:
+      - uses: nested-rules
+        rules:
+          self:
+            - condition: all("done")
+          parallel:
+            nested:
+              - condition: done
+    rules:
+      - condition: all("done")
+        next: COMPLETE`, 'reviewers');
+
+    expect(() => loadWorkflowFromFile(workflowPath, projectDir)).toThrow();
+  });
+
   it('should prefer a project fragment over the global fragment with the same name', () => {
-    writeGlobalFragment(globalConfigDir, 'shared', `instruction: global instruction${COMPLETE_RULE}\n`);
-    writeProjectFragment(projectDir, 'shared', `instruction: project instruction${COMPLETE_RULE}\n`);
-    const workflowPath = writeWorkflow(projectDir, 'project-precedence', '  - uses: shared', 'shared');
+    writeGlobalFragment(globalConfigDir, 'shared', 'instruction: global instruction\n');
+    writeProjectFragment(projectDir, 'shared', 'instruction: project instruction\n');
+    const workflowPath = writeWorkflow(
+      projectDir,
+      'project-precedence',
+      `  - uses: shared${COMPLETE_CALLER_RULES}`,
+      'shared',
+    );
 
     const workflow = loadWorkflowFromFile(workflowPath, projectDir);
 
@@ -239,8 +277,13 @@ rules:
   });
 
   it('should use a global fragment when the project has no matching fragment', () => {
-    writeGlobalFragment(globalConfigDir, 'shared', `instruction: global instruction${COMPLETE_RULE}\n`);
-    const workflowPath = writeWorkflow(projectDir, 'global-fallback', '  - uses: shared', 'shared');
+    writeGlobalFragment(globalConfigDir, 'shared', 'instruction: global instruction\n');
+    const workflowPath = writeWorkflow(
+      projectDir,
+      'global-fallback',
+      `  - uses: shared${COMPLETE_CALLER_RULES}`,
+      'shared',
+    );
 
     const workflow = loadWorkflowFromFile(workflowPath, projectDir);
 
@@ -248,13 +291,13 @@ rules:
   });
 
   it('should prefer a package-local fragment for a repertoire workflow', () => {
-    writeProjectFragment(projectDir, 'shared', `instruction: project instruction${COMPLETE_RULE}\n`);
-    writePackageFragment(globalConfigDir, 'owner', 'package', 'shared', `instruction: package instruction${COMPLETE_RULE}\n`);
+    writeProjectFragment(projectDir, 'shared', 'instruction: project instruction\n');
+    writePackageFragment(globalConfigDir, 'owner', 'package', 'shared', 'instruction: package instruction\n');
     const workflowPath = writeFile(globalConfigDir, 'repertoire/@owner/package/workflows/package-workflow.yaml', `name: package-workflow
 initial_step: shared
 max_steps: 1
 steps:
-  - uses: shared
+  - uses: shared${COMPLETE_CALLER_RULES}
 `);
 
     const workflow = loadWorkflowFromFile(workflowPath, projectDir);
@@ -263,8 +306,13 @@ steps:
   });
 
   it('should resolve a scoped fragment from the named repertoire package', () => {
-    writePackageFragment(globalConfigDir, 'owner', 'package', 'shared', `instruction: package instruction${COMPLETE_RULE}\n`);
-    const workflowPath = writeWorkflow(projectDir, 'scoped-fragment', '  - uses: "@owner/package/shared"', 'shared');
+    writePackageFragment(globalConfigDir, 'owner', 'package', 'shared', 'instruction: package instruction\n');
+    const workflowPath = writeWorkflow(
+      projectDir,
+      'scoped-fragment',
+      `  - uses: "@owner/package/shared"${COMPLETE_CALLER_RULES}`,
+      'shared',
+    );
 
     const workflow = loadWorkflowFromFile(workflowPath, projectDir);
 
@@ -272,8 +320,13 @@ steps:
   });
 
   it('should reject an incomplete scoped reference before it can resolve another package fragment', () => {
-    writePackageFragment(globalConfigDir, 'owner', 'rep', 'repo', `instruction: wrong package${COMPLETE_RULE}\n`);
-    const workflowPath = writeWorkflow(projectDir, 'incomplete-scoped-fragment', '  - uses: "@owner/repo"', 'repo');
+    writePackageFragment(globalConfigDir, 'owner', 'rep', 'repo', 'instruction: wrong package\n');
+    const workflowPath = writeWorkflow(
+      projectDir,
+      'incomplete-scoped-fragment',
+      `  - uses: "@owner/repo"${COMPLETE_CALLER_RULES}`,
+      'repo',
+    );
 
     const message = errorMessage(() => loadWorkflowFromFile(workflowPath, projectDir));
 
@@ -293,7 +346,10 @@ steps:
   it.each(['en', 'ja'] as const)('should resolve the shared final-gate fragment for %s builtins', (lang) => {
     const workflowPath = join(getBuiltinLanguageStepsDir(lang), 'fixture-workflow.yaml');
     const resolution = resolveWorkflowStepFragments({
-      steps: [{ uses: 'finding-contract-final-gate' }],
+      steps: [{
+        uses: 'finding-contract-final-gate',
+        rules: [{ condition: 'done', next: 'COMPLETE' }],
+      }],
     }, {
       workflowPath,
       candidateDirs: [getBuiltinLanguageStepsDir(lang), getBuiltinStepsDir()],
@@ -318,26 +374,28 @@ steps:
   });
 
   it('should retain the resolved source layer for nested bare fragment references', () => {
-    writeProjectFragment(projectDir, 'inner', `instruction: project instruction${COMPLETE_RULE}\n`);
+    writeProjectFragment(projectDir, 'inner', 'instruction: project instruction\n');
     writeGlobalFragment(globalConfigDir, 'outer', 'uses: inner\n');
-    writeGlobalFragment(globalConfigDir, 'inner', `instruction: global instruction${COMPLETE_RULE}\n`);
-    const workflowPath = writeWorkflow(projectDir, 'nested-layer', '  - uses: outer', 'inner');
+    writeGlobalFragment(globalConfigDir, 'inner', 'instruction: global instruction\n');
+    const workflowPath = writeWorkflow(
+      projectDir,
+      'nested-layer',
+      `  - uses: outer${COMPLETE_CALLER_RULES}`,
+      'inner',
+    );
 
     const workflow = loadWorkflowFromFile(workflowPath, projectDir);
 
     expect(workflow.steps[0]?.instruction).toBe('global instruction');
   });
 
-  it('should deep merge object overrides and replace array overrides from the workflow', () => {
+  it('should deep merge object overrides and use rules from the workflow', () => {
     writeProjectFragment(projectDir, 'base', `name: fragment-name
 instruction: fragment instruction
 provider_options:
   codex:
     network_access: false
     reasoning_effort: low
-rules:
-  - condition: fragment
-    next: COMPLETE
 `);
     const workflowPath = writeWorkflow(projectDir, 'merge-overrides', `  - uses: base
     name: caller-name
@@ -360,8 +418,14 @@ rules:
 
   it('should use the fragment name before the uses name when the caller omits name', () => {
     writeProjectFragment(projectDir, 'reference-name', `name: fragment-name
-instruction: fragment instruction${COMPLETE_RULE}\n`);
-    const workflowPath = writeWorkflow(projectDir, 'fragment-name-default', '  - uses: reference-name', 'fragment-name');
+instruction: fragment instruction
+`);
+    const workflowPath = writeWorkflow(
+      projectDir,
+      'fragment-name-default',
+      `  - uses: reference-name${COMPLETE_CALLER_RULES}`,
+      'fragment-name',
+    );
 
     const workflow = loadWorkflowFromFile(workflowPath, projectDir);
 
@@ -369,8 +433,13 @@ instruction: fragment instruction${COMPLETE_RULE}\n`);
   });
 
   it('should use the uses name when neither caller nor fragment declares a name', () => {
-    writeProjectFragment(projectDir, 'reference-name', `instruction: fragment instruction${COMPLETE_RULE}\n`);
-    const workflowPath = writeWorkflow(projectDir, 'uses-name-default', '  - uses: reference-name', 'reference-name');
+    writeProjectFragment(projectDir, 'reference-name', 'instruction: fragment instruction\n');
+    const workflowPath = writeWorkflow(
+      projectDir,
+      'uses-name-default',
+      `  - uses: reference-name${COMPLETE_CALLER_RULES}`,
+      'reference-name',
+    );
 
     const workflow = loadWorkflowFromFile(workflowPath, projectDir);
 
@@ -378,9 +447,14 @@ instruction: fragment instruction${COMPLETE_RULE}\n`);
   });
 
   it('should expand a fragment that uses another fragment', () => {
-    writeProjectFragment(projectDir, 'base', `instruction: fragment instruction${COMPLETE_RULE}\n`);
+    writeProjectFragment(projectDir, 'base', 'instruction: fragment instruction\n');
     writeProjectFragment(projectDir, 'derived', 'uses: base\n');
-    const workflowPath = writeWorkflow(projectDir, 'nested-fragment', '  - uses: derived', 'derived');
+    const workflowPath = writeWorkflow(
+      projectDir,
+      'nested-fragment',
+      `  - uses: derived${COMPLETE_CALLER_RULES}`,
+      'derived',
+    );
 
     const workflow = loadWorkflowFromFile(workflowPath, projectDir);
 
@@ -388,11 +462,16 @@ instruction: fragment instruction${COMPLETE_RULE}\n`);
   });
 
   it('should apply a changed fragment definition on the next workflow load', () => {
-    const fragmentPath = writeProjectFragment(projectDir, 'changeable', `instruction: before${COMPLETE_RULE}\n`);
-    const workflowPath = writeWorkflow(projectDir, 'fragment-reload', '  - uses: changeable', 'changeable');
+    const fragmentPath = writeProjectFragment(projectDir, 'changeable', 'instruction: before\n');
+    const workflowPath = writeWorkflow(
+      projectDir,
+      'fragment-reload',
+      `  - uses: changeable${COMPLETE_CALLER_RULES}`,
+      'changeable',
+    );
 
     const firstLoad = loadWorkflowFromFile(workflowPath, projectDir);
-    writeFileSync(fragmentPath, `instruction: after${COMPLETE_RULE}\n`, 'utf-8');
+    writeFileSync(fragmentPath, 'instruction: after\n', 'utf-8');
     const secondLoad = loadWorkflowFromFile(workflowPath, projectDir);
 
     expect(firstLoad.steps[0]?.instruction).toBe('before');
@@ -400,13 +479,14 @@ instruction: fragment instruction${COMPLETE_RULE}\n`);
   });
 
   it('should normalize a fragment-backed step identically to its inline definition', () => {
-    const stepDefinition = `name: plan
+    const fragmentDefinition = `name: plan
 instruction: plan the task
-rules:
+`;
+    const stepDefinition = `${fragmentDefinition}rules:
   - condition: done
     next: COMPLETE
 `;
-    writeProjectFragment(projectDir, 'plan', stepDefinition);
+    writeProjectFragment(projectDir, 'plan', fragmentDefinition);
     const inlineWorkflowPath = writeFile(projectDir, '.takt/workflows/inline.yaml', `name: inline
 initial_step: plan
 max_steps: 3
@@ -431,7 +511,7 @@ loop_monitors:
         - condition: stop
           next: ABORT
 steps:
-  - uses: plan
+  - uses: plan${COMPLETE_CALLER_RULES}
 `);
 
     const inlineWorkflow = loadWorkflowFromFile(inlineWorkflowPath, projectDir);
@@ -443,7 +523,12 @@ steps:
   });
 
   it('should reject an unknown fragment with workflow and uses context', () => {
-    const workflowPath = writeWorkflow(projectDir, 'unknown-fragment', '  - uses: missing-fragment', 'missing-fragment');
+    const workflowPath = writeWorkflow(
+      projectDir,
+      'unknown-fragment',
+      `  - uses: missing-fragment${COMPLETE_CALLER_RULES}`,
+      'missing-fragment',
+    );
 
     const message = errorMessage(() => loadWorkflowFromFile(workflowPath, projectDir));
 
@@ -453,7 +538,12 @@ steps:
   });
 
   it('should report only the scoped package steps directory when a scoped fragment is missing', () => {
-    const workflowPath = writeWorkflow(projectDir, 'missing-scoped-fragment', '  - uses: "@owner/missing/review"', 'review');
+    const workflowPath = writeWorkflow(
+      projectDir,
+      'missing-scoped-fragment',
+      `  - uses: "@owner/missing/review"${COMPLETE_CALLER_RULES}`,
+      'review',
+    );
 
     const message = errorMessage(() => loadWorkflowFromFile(workflowPath, projectDir));
 
@@ -481,12 +571,12 @@ steps:
   });
 
   it('should retain fragment context when rejecting forbidden object keys in a caller step', () => {
-    const fragmentPath = writeProjectFragment(projectDir, 'safe', `instruction: safe${COMPLETE_RULE}\n`);
+    const fragmentPath = writeProjectFragment(projectDir, 'safe', 'instruction: safe\n');
     const workflowPath = writeWorkflow(projectDir, 'forbidden-key', `  - uses: safe
     provider_options:
       codex:
         __proto__:
-          instruction: injected`, 'safe');
+          instruction: injected${COMPLETE_CALLER_RULES}`, 'safe');
 
     const message = errorMessage(() => loadWorkflowFromFile(workflowPath, projectDir));
 
@@ -501,7 +591,7 @@ steps:
   sse: true
   stdio: true
 `);
-    writeProjectFragment(projectDir, 'mcp-records', `instruction: safe${COMPLETE_RULE}
+    writeProjectFragment(projectDir, 'mcp-records', `instruction: safe
 mcp_servers:
   constructor:
     type: sse
@@ -521,7 +611,7 @@ mcp_servers:
           prototype: caller-header
       prototype:
         env:
-          prototype: caller-env`, 'mcp-records');
+          prototype: caller-env${COMPLETE_CALLER_RULES}`, 'mcp-records');
 
     const workflow = loadWorkflowFromFile(workflowPath, projectDir);
 
@@ -545,15 +635,12 @@ mcp_servers:
 call: called
 args:
   constructor: fragment-value
-rules:
-  - condition: done
-    next: COMPLETE
 `);
     const workflowPath = writeWorkflow(projectDir, 'parallel-args-record-keys', `  - name: delegates
     parallel:
       - uses: delegate-with-args
         args:
-          prototype: caller-value
+          prototype: caller-value${COMPLETE_PARALLEL_CALLER_RULES}
     rules:
       - condition: all("done")
         next: COMPLETE`, 'delegates');
@@ -569,7 +656,12 @@ rules:
   it('should reject circular fragment references with the complete reference chain', () => {
     writeProjectFragment(projectDir, 'first', 'uses: second\n');
     writeProjectFragment(projectDir, 'second', 'uses: first\n');
-    const workflowPath = writeWorkflow(projectDir, 'circular-fragment', '  - uses: first', 'first');
+    const workflowPath = writeWorkflow(
+      projectDir,
+      'circular-fragment',
+      `  - uses: first${COMPLETE_CALLER_RULES}`,
+      'first',
+    );
 
     const message = errorMessage(() => loadWorkflowFromFile(workflowPath, projectDir));
 
@@ -581,7 +673,12 @@ rules:
   it.each(['../outside', '/tmp/fragment', 'nested/fragment', 'nested\\fragment'])(
     'should reject unsafe uses reference %s before loading a fragment',
     (uses) => {
-      const workflowPath = writeWorkflow(projectDir, 'unsafe-fragment', `  - uses: ${uses}`, 'unsafe');
+      const workflowPath = writeWorkflow(
+        projectDir,
+        'unsafe-fragment',
+        `  - uses: ${uses}${COMPLETE_CALLER_RULES}`,
+        'unsafe',
+      );
 
       const message = errorMessage(() => loadWorkflowFromFile(workflowPath, projectDir));
 
@@ -594,7 +691,12 @@ rules:
     'should reject a fragment YAML document that is not a single object: %s',
     (fragment) => {
       writeProjectFragment(projectDir, 'invalid-shape', `${fragment}\n`);
-      const workflowPath = writeWorkflow(projectDir, 'invalid-fragment-shape', '  - uses: invalid-shape', 'invalid-shape');
+      const workflowPath = writeWorkflow(
+        projectDir,
+        'invalid-fragment-shape',
+        `  - uses: invalid-shape${COMPLETE_CALLER_RULES}`,
+        'invalid-shape',
+      );
 
       const message = errorMessage(() => loadWorkflowFromFile(workflowPath, projectDir));
 
@@ -605,11 +707,16 @@ rules:
   );
 
   it('should reject a fragment symlink that resolves outside the steps root', () => {
-    const outsidePath = writeFile(projectDir, 'outside.yaml', `instruction: outside${COMPLETE_RULE}\n`);
+    const outsidePath = writeFile(projectDir, 'outside.yaml', 'instruction: outside\n');
     const stepsDir = join(projectDir, '.takt', 'steps');
     mkdirSync(stepsDir, { recursive: true });
     symlinkSync(outsidePath, join(stepsDir, 'linked.yaml'));
-    const workflowPath = writeWorkflow(projectDir, 'symlink-fragment', '  - uses: linked', 'linked');
+    const workflowPath = writeWorkflow(
+      projectDir,
+      'symlink-fragment',
+      `  - uses: linked${COMPLETE_CALLER_RULES}`,
+      'linked',
+    );
 
     const message = errorMessage(() => loadWorkflowFromFile(workflowPath, projectDir));
 
@@ -620,10 +727,15 @@ rules:
   it('should reject an empty symlinked project steps directory before resolving a global fragment', () => {
     const outsideDir = mkdtempSync(join(tmpdir(), 'takt-step-fragment-empty-steps-outside-'));
     try {
-      writeGlobalFragment(globalConfigDir, 'gather', `instruction: global${COMPLETE_RULE}\n`);
+      writeGlobalFragment(globalConfigDir, 'gather', 'instruction: global\n');
       mkdirSync(join(projectDir, '.takt'), { recursive: true });
       symlinkSync(outsideDir, join(projectDir, '.takt', 'steps'));
-      const workflowPath = writeWorkflow(projectDir, 'symlinked-steps-root', '  - uses: gather', 'gather');
+      const workflowPath = writeWorkflow(
+        projectDir,
+        'symlinked-steps-root',
+        `  - uses: gather${COMPLETE_CALLER_RULES}`,
+        'gather',
+      );
 
       const message = errorMessage(() => loadWorkflowFromFile(workflowPath, projectDir));
 
@@ -636,7 +748,12 @@ rules:
 
   it('should preserve existing schema validation for an invalid expanded step', () => {
     writeProjectFragment(projectDir, 'invalid-step', 'kind: workflow_call\n');
-    const workflowPath = writeWorkflow(projectDir, 'invalid-expanded-step', '  - uses: invalid-step', 'invalid-step');
+    const workflowPath = writeWorkflow(
+      projectDir,
+      'invalid-expanded-step',
+      `  - uses: invalid-step${COMPLETE_CALLER_RULES}`,
+      'invalid-step',
+    );
 
     let error: unknown;
     try {
@@ -657,7 +774,7 @@ rules:
   it('should retain fragment provenance for a missing workflow_call field after a caller renames the step', () => {
     writeProjectFragment(projectDir, 'invalid-step', 'kind: workflow_call\n');
     const workflowPath = writeWorkflow(projectDir, 'renamed-invalid-expanded-step', `  - uses: invalid-step
-    name: renamed`, 'renamed');
+    name: renamed${COMPLETE_CALLER_RULES}`, 'renamed');
 
     let error: unknown;
     try {
@@ -672,8 +789,11 @@ rules:
   });
 
   it('should leave inline step schema errors unannotated when another step uses a fragment', () => {
-    writeProjectFragment(projectDir, 'valid-step', `instruction: valid${COMPLETE_RULE}\n`);
+    writeProjectFragment(projectDir, 'valid-step', 'instruction: valid\n');
     const workflowPath = writeWorkflow(projectDir, 'inline-schema-error', `  - uses: valid-step
+    rules:
+      - condition: done
+        next: COMPLETE
   - name: invalid
     kind: workflow_call`, 'valid-step');
 
@@ -692,10 +812,10 @@ rules:
   });
 
   it('should retain fragment context for schema errors from caller overrides', () => {
-    writeProjectFragment(projectDir, 'valid-step', `instruction: valid${COMPLETE_RULE}\n`);
+    writeProjectFragment(projectDir, 'valid-step', 'instruction: valid\n');
     const workflowPath = writeWorkflow(projectDir, 'override-schema-error', `  - uses: valid-step
     instruction:
-      - invalid`, 'valid-step');
+      - invalid${COMPLETE_CALLER_RULES}`, 'valid-step');
 
     let error: unknown;
     try {
@@ -711,7 +831,7 @@ rules:
   });
 
   it('should retain fragment context for nested schema errors from caller overrides', () => {
-    writeProjectFragment(projectDir, 'valid-options', `instruction: valid${COMPLETE_RULE}
+    writeProjectFragment(projectDir, 'valid-options', `instruction: valid
 provider_options:
   codex:
     reasoning_effort: low
@@ -719,7 +839,7 @@ provider_options:
     const workflowPath = writeWorkflow(projectDir, 'nested-override-schema-error', `  - uses: valid-options
     provider_options:
       codex:
-        reasoning_effort: invalid`, 'valid-options');
+        reasoning_effort: invalid${COMPLETE_CALLER_RULES}`, 'valid-options');
 
     let error: unknown;
     try {
@@ -735,7 +855,7 @@ provider_options:
   });
 
   it('should retain fragment provenance for an unmodified leaf in an overridden object', () => {
-    writeProjectFragment(projectDir, 'invalid-options', `instruction: valid${COMPLETE_RULE}
+    writeProjectFragment(projectDir, 'invalid-options', `instruction: valid
 provider_options:
   codex:
     reasoning_effort: invalid
@@ -744,7 +864,7 @@ provider_options:
     const workflowPath = writeWorkflow(projectDir, 'fragment-leaf-provenance', `  - uses: invalid-options
     provider_options:
       codex:
-        network_access: true`, 'invalid-options');
+        network_access: true${COMPLETE_CALLER_RULES}`, 'invalid-options');
 
     let error: unknown;
     try {
@@ -759,11 +879,11 @@ provider_options:
   });
 
   it('should replace a nullable scalar with null from the workflow', () => {
-    writeProjectFragment(projectDir, 'modelled', `instruction: valid${COMPLETE_RULE}
+    writeProjectFragment(projectDir, 'modelled', `instruction: valid
 model: gpt-5
 `);
     const workflowPath = writeWorkflow(projectDir, 'null-model-override', `  - uses: modelled
-    model: null`, 'modelled');
+    model: null${COMPLETE_CALLER_RULES}`, 'modelled');
 
     const workflow = loadWorkflowFromFile(workflowPath, projectDir);
 
@@ -774,13 +894,18 @@ model: gpt-5
     let containingFragmentPath = '';
     for (let index = 0; index <= 65; index += 1) {
       const fragmentPath = writeProjectFragment(projectDir, `depth-${index}`, index === 65
-        ? `instruction: valid${COMPLETE_RULE}\n`
+        ? 'instruction: valid\n'
         : `uses: depth-${index + 1}\n`);
       if (index === 63) {
         containingFragmentPath = fragmentPath;
       }
     }
-    const workflowPath = writeWorkflow(projectDir, 'depth-limit', '  - uses: depth-0', 'depth-0');
+    const workflowPath = writeWorkflow(
+      projectDir,
+      'depth-limit',
+      `  - uses: depth-0${COMPLETE_CALLER_RULES}`,
+      'depth-0',
+    );
 
     const message = errorMessage(() => loadWorkflowFromFile(workflowPath, projectDir));
 
@@ -792,10 +917,15 @@ model: gpt-5
   it('should expand a fragment chain at the maximum supported depth', () => {
     for (let index = 0; index < 64; index += 1) {
       writeProjectFragment(projectDir, `depth-${index}`, index === 63
-        ? `instruction: valid${COMPLETE_RULE}\n`
+        ? 'instruction: valid\n'
         : `uses: depth-${index + 1}\n`);
     }
-    const workflowPath = writeWorkflow(projectDir, 'depth-boundary', '  - uses: depth-0', 'depth-0');
+    const workflowPath = writeWorkflow(
+      projectDir,
+      'depth-boundary',
+      `  - uses: depth-0${COMPLETE_CALLER_RULES}`,
+      'depth-0',
+    );
 
     const workflow = loadWorkflowFromFile(workflowPath, projectDir);
 
@@ -805,25 +935,35 @@ model: gpt-5
   it('should accept a one-megabyte fragment and reject one byte beyond the limit', () => {
     const maxBytes = 1024 * 1024;
     const prefix = 'instruction: ';
-    const suffix = `${COMPLETE_RULE}\n`;
+    const suffix = '\n';
     const exactContent = prefix + 'x'.repeat(maxBytes - prefix.length - suffix.length) + suffix;
     writeProjectFragment(projectDir, 'at-byte-limit', exactContent);
-    const exactWorkflowPath = writeWorkflow(projectDir, 'at-byte-limit', '  - uses: at-byte-limit', 'at-byte-limit');
+    const exactWorkflowPath = writeWorkflow(
+      projectDir,
+      'at-byte-limit',
+      `  - uses: at-byte-limit${COMPLETE_CALLER_RULES}`,
+      'at-byte-limit',
+    );
 
     expect(() => loadWorkflowFromFile(exactWorkflowPath, projectDir)).not.toThrow();
 
     writeProjectFragment(projectDir, 'over-byte-limit', `${exactContent}x`);
-    const oversizedWorkflowPath = writeWorkflow(projectDir, 'over-byte-limit', '  - uses: over-byte-limit', 'over-byte-limit');
+    const oversizedWorkflowPath = writeWorkflow(
+      projectDir,
+      'over-byte-limit',
+      `  - uses: over-byte-limit${COMPLETE_CALLER_RULES}`,
+      'over-byte-limit',
+    );
 
     expect(() => loadWorkflowFromFile(oversizedWorkflowPath, projectDir)).toThrow('exceeds 1048576 bytes');
   });
 
   it('should accept the maximum number of fragment references and reject one more', () => {
     const maxReferences = 512;
-    const fragmentPath = writeProjectFragment(projectDir, 'shared', `instruction: valid${COMPLETE_RULE}\n`);
+    const fragmentPath = writeProjectFragment(projectDir, 'shared', 'instruction: valid\n');
     const steps = (count: number) => Array.from(
       { length: count },
-      (_value, index) => `  - uses: shared\n    name: shared-${index}`,
+      (_value, index) => `  - name: shared-${index}\n    uses: shared${COMPLETE_CALLER_RULES}`,
     ).join('\n');
     const acceptedWorkflowPath = writeWorkflow(projectDir, 'reference-limit', steps(maxReferences), 'shared-0');
 
@@ -841,12 +981,18 @@ model: gpt-5
     const fragmentPath = writeProjectFragment(
       projectDir,
       'empty-persona',
-      ['persona: ""', `instruction: work${COMPLETE_RULE}`, ''].join('\n'),
+      ['persona: ""', 'instruction: work', ''].join('\n'),
     );
     const workflowPath = writeWorkflow(
       projectDir,
       'empty-persona-fragment',
-      ['  - uses: empty-persona', '    name: renamed'].join('\n'),
+      [
+        '  - uses: empty-persona',
+        '    name: renamed',
+        '    rules:',
+        '      - condition: done',
+        '        next: COMPLETE',
+      ].join('\n'),
       'renamed',
     );
 
@@ -862,7 +1008,7 @@ model: gpt-5
     const fragmentPath = writeProjectFragment(
       projectDir,
       'command-gate',
-      ['instruction: review', 'quality_gates:', '  - type: command', '    command: npm test', COMPLETE_RULE, ''].join('\n'),
+      ['instruction: review', 'quality_gates:', '  - type: command', '    command: npm test', ''].join('\n'),
     );
     const workflowPath = writeWorkflow(
       projectDir,
@@ -871,6 +1017,9 @@ model: gpt-5
         '  - name: reviewers',
         '    parallel:',
         '      - uses: command-gate',
+        '        rules:',
+        '          - condition: done',
+        '            next: COMPLETE',
         '    rules:',
         '      - condition: all("done")',
         '        next: COMPLETE',
@@ -904,12 +1053,14 @@ model: gpt-5
     const fragmentPath = writeProjectFragment(projectDir, 'delegate', [
       'kind: workflow_call',
       'call: required',
-      'rules:',
-      '  - condition: done',
-      '    next: COMPLETE',
       '',
     ].join('\n'));
-    const workflowPath = writeWorkflow(projectDir, 'doctor-contract-fragment', '  - uses: delegate', 'delegate');
+    const workflowPath = writeWorkflow(
+      projectDir,
+      'doctor-contract-fragment',
+      `  - uses: delegate${COMPLETE_CALLER_RULES}`,
+      'delegate',
+    );
 
     const report = inspectWorkflowFile(workflowPath, projectDir);
     const message = report.diagnostics[0]?.message ?? '';
@@ -920,9 +1071,9 @@ model: gpt-5
   });
 
   it('should retain fragment context for caller-originated missing required fields', () => {
-    writeProjectFragment(projectDir, 'agent-step', `instruction: valid${COMPLETE_RULE}\n`);
+    writeProjectFragment(projectDir, 'agent-step', 'instruction: valid\n');
     const workflowPath = writeWorkflow(projectDir, 'caller-required-field-error', `  - uses: agent-step
-    kind: workflow_call`, 'agent-step');
+    kind: workflow_call${COMPLETE_CALLER_RULES}`, 'agent-step');
 
     let error: unknown;
     try {
@@ -939,7 +1090,12 @@ model: gpt-5
 
   it('should include the containing fragment path for an unresolved nested uses reference', () => {
     const fragmentPath = writeProjectFragment(projectDir, 'outer', 'uses: missing\n');
-    const workflowPath = writeWorkflow(projectDir, 'nested-missing-fragment', '  - uses: outer', 'outer');
+    const workflowPath = writeWorkflow(
+      projectDir,
+      'nested-missing-fragment',
+      `  - uses: outer${COMPLETE_CALLER_RULES}`,
+      'outer',
+    );
 
     const message = errorMessage(() => loadWorkflowFromFile(workflowPath, projectDir));
 
@@ -949,7 +1105,12 @@ model: gpt-5
 
   it('should include the containing fragment name and path for an invalid nested uses value', () => {
     const fragmentPath = writeProjectFragment(projectDir, 'outer', 'uses: 0\n');
-    const workflowPath = writeWorkflow(projectDir, 'nested-invalid-fragment', '  - uses: outer', 'outer');
+    const workflowPath = writeWorkflow(
+      projectDir,
+      'nested-invalid-fragment',
+      `  - uses: outer${COMPLETE_CALLER_RULES}`,
+      'outer',
+    );
 
     const message = errorMessage(() => loadWorkflowFromFile(workflowPath, projectDir));
 
@@ -959,12 +1120,11 @@ model: gpt-5
   });
 
   it('should report an invalid transition after expanding a fragment', () => {
-    writeProjectFragment(projectDir, 'invalid-transition', `instruction: invalid transition
-rules:
-  - condition: done
-    next: missing-step
-`);
-    const workflowPath = writeWorkflow(projectDir, 'invalid-expanded-transition', '  - uses: invalid-transition', 'invalid-transition');
+    writeProjectFragment(projectDir, 'invalid-transition', 'instruction: invalid transition\n');
+    const workflowPath = writeWorkflow(projectDir, 'invalid-expanded-transition', `  - uses: invalid-transition
+    rules:
+      - condition: done
+        next: missing-step`, 'invalid-transition');
 
     const report = inspectWorkflowFile(workflowPath, projectDir);
 
@@ -974,12 +1134,13 @@ rules:
   });
 
   it('should use expanded steps for doctor reference and graph validation', () => {
-    writeProjectFragment(projectDir, 'inspectable', `instruction: inspectable task
-rules:
-  - condition: done
-    next: COMPLETE
-`);
-    const workflowPath = writeWorkflow(projectDir, 'doctor-fragment', '  - uses: inspectable', 'inspectable');
+    writeProjectFragment(projectDir, 'inspectable', 'instruction: inspectable task\n');
+    const workflowPath = writeWorkflow(
+      projectDir,
+      'doctor-fragment',
+      `  - uses: inspectable${COMPLETE_CALLER_RULES}`,
+      'inspectable',
+    );
 
     const report = inspectWorkflowFile(workflowPath, projectDir);
 
@@ -987,8 +1148,13 @@ rules:
   });
 
   it('should use expanded steps when building a workflow preview', () => {
-    writeProjectFragment(projectDir, 'preview-step', `instruction: preview instruction${COMPLETE_RULE}\n`);
-    writeWorkflow(projectDir, 'preview-fragment', '  - uses: preview-step', 'preview-step');
+    writeProjectFragment(projectDir, 'preview-step', 'instruction: preview instruction\n');
+    writeWorkflow(
+      projectDir,
+      'preview-fragment',
+      `  - uses: preview-step${COMPLETE_CALLER_RULES}`,
+      'preview-step',
+    );
 
     const preview = getWorkflowDescription('preview-fragment', projectDir, 1);
 
@@ -996,8 +1162,11 @@ rules:
   });
 
   it('should reject duplicate top-level names introduced by fragments', () => {
-    writeProjectFragment(projectDir, 'duplicate', 'name: duplicate\ninstruction: work\nrules:\n  - condition: done\n    next: COMPLETE\n');
+    writeProjectFragment(projectDir, 'duplicate', 'name: duplicate\ninstruction: work\n');
     const workflowPath = writeWorkflow(projectDir, 'duplicate-expanded-name', `  - uses: duplicate
+    rules:
+      - condition: done
+        next: COMPLETE
   - name: duplicate
     instruction: other
     rules:
@@ -1010,11 +1179,17 @@ rules:
   });
 
   it('reports fragment context when a caller-provided duplicate name collides with a fragment-defined name', () => {
-    writeProjectFragment(projectDir, 'first', 'name: duplicate\ninstruction: work\nrules:\n  - condition: done\n    next: COMPLETE\n');
-    writeProjectFragment(projectDir, 'second', 'instruction: other\nrules:\n  - condition: done\n    next: COMPLETE\n');
+    writeProjectFragment(projectDir, 'first', 'name: duplicate\ninstruction: work\n');
+    writeProjectFragment(projectDir, 'second', 'instruction: other\n');
     const workflowPath = writeWorkflow(projectDir, 'caller-duplicate-name', `  - uses: first
+    rules:
+      - condition: done
+        next: COMPLETE
   - uses: second
-    name: duplicate`, 'duplicate');
+    name: duplicate
+    rules:
+      - condition: done
+        next: COMPLETE`, 'duplicate');
 
     const message = errorMessage(() => new WorkflowEngine(loadWorkflowFromFile(workflowPath, projectDir), projectDir, 'test task', {
       projectCwd: projectDir,
@@ -1026,14 +1201,25 @@ rules:
 
   it('should reject system steps supplied by a fragment', () => {
     writeProjectFragment(projectDir, 'system-step', 'kind: system\ninputs: []\neffects: []\n');
-    const workflowPath = writeWorkflow(projectDir, 'system-fragment', '  - uses: system-step', 'system-step');
+    const workflowPath = writeWorkflow(
+      projectDir,
+      'system-fragment',
+      `  - uses: system-step${COMPLETE_CALLER_RULES}`,
+      'system-step',
+    );
 
     expect(() => loadWorkflowFromFile(workflowPath, projectDir)).toThrow(/unsupported kind "system"/);
   });
 
   it.each([
-    ['top-level', '  - uses: system-step'],
-    ['parallel', '  - name: parent\n    instruction: work\n    parallel:\n      - uses: system-step\n    rules:\n      - condition: all("done")\n        next: COMPLETE'],
+    ['top-level', `  - uses: system-step${COMPLETE_CALLER_RULES}`],
+    ['parallel', `  - name: parent
+    instruction: work
+    parallel:
+      - uses: system-step${COMPLETE_PARALLEL_CALLER_RULES}
+    rules:
+      - condition: all("done")
+        next: COMPLETE`],
   ])('should reject mode: system supplied by a fragment in a %s step', (_placement, steps) => {
     writeProjectFragment(projectDir, 'system-step', 'mode: system\ninputs: []\neffects: []\n');
     const workflowPath = writeWorkflow(projectDir, 'system-mode-fragment', steps, 'parent');
@@ -1043,18 +1229,26 @@ rules:
 
   it('should reject YAML sets as step fragments', () => {
     writeProjectFragment(projectDir, 'set-step', '!!set\n? instruction\n');
-    const workflowPath = writeWorkflow(projectDir, 'set-fragment', '  - uses: set-step', 'set-step');
+    const workflowPath = writeWorkflow(
+      projectDir,
+      'set-fragment',
+      `  - uses: set-step${COMPLETE_CALLER_RULES}`,
+      'set-step',
+    );
 
     expect(() => loadWorkflowFromFile(workflowPath, projectDir)).toThrow(/must contain one step object/);
   });
 
   it('publishes an immutable dependency manifest with eject sources', () => {
     const stepsDir = join(projectDir, '.takt', 'steps');
-    const innerPath = writeProjectFragment(projectDir, 'inner', `instruction: review${COMPLETE_RULE}\n`);
+    const innerPath = writeProjectFragment(projectDir, 'inner', 'instruction: review\n');
     const outerPath = writeProjectFragment(projectDir, 'outer', 'uses: inner\n');
 
     const resolution = resolveWorkflowStepFragments({
-      steps: [{ uses: 'outer' }],
+      steps: [{
+        uses: 'outer',
+        rules: [{ condition: 'done', next: 'COMPLETE' }],
+      }],
     }, {
       workflowPath: join(projectDir, '.takt', 'workflows', 'default.yaml'),
       candidateDirs: [stepsDir],

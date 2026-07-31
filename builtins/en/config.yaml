@@ -115,6 +115,8 @@ language: en        # UI language: en | ja
 #   opencode:
 #     variant: high
 #   claude:
+#     skills:
+#       enabled: false
 #     sandbox:
 #       allow_unsandboxed_commands: true
 

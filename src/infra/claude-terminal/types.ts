@@ -89,6 +89,7 @@ export interface ClaudeTerminalCallOptions {
   sessionId?: string;
   model?: string;
   effort?: ClaudeEffort;
+  skillsEnabled?: boolean;
   allowedTools?: string[];
   mcpServers?: Record<string, McpServerConfig>;
   maxTurns?: number;
@@ -113,6 +114,7 @@ export interface BuildClaudeTerminalCommandOptions {
   pathToClaudeCodeExecutable?: string;
   model?: string;
   effort?: ClaudeEffort;
+  skillsEnabled?: boolean;
   allowedTools?: string[];
   mcpConfigPath?: string;
   permissionMode?: PermissionMode;

@@ -264,6 +264,61 @@ describe('OpenCodeClient tool call failure logging', () => {
     expect(evidence).toContain('[REDACTED]');
   });
 
+  it('unknown message.part.delta part types do not leak secrets while staying out of text processing', async () => {
+    const secret = 'unknown-delta-secret';
+    const partId = 'mystery-part';
+    installOpenCodeMock([
+      {
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            id: partId,
+            sessionID: 'session-1',
+            type: 'mystery',
+          },
+        },
+      },
+      {
+        type: 'message.part.delta',
+        properties: {
+          sessionID: 'session-1',
+          partID: partId,
+          field: 'text',
+          delta: secret,
+        },
+      },
+      { type: 'session.idle', properties: { sessionID: 'session-1' } },
+    ]);
+    const client = new OpenCodeClient();
+    const observed = vi.fn();
+
+    const result = await client.call('coder', 'prompt', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      onStream: observed,
+    });
+
+    expect(result.status).toBe('done');
+    expect(result.content).toBe('');
+
+    const visibleEvents = observed.mock.calls
+      .map(([event]) => event as { type: string; data?: { text?: string; thinking?: string } })
+      .filter((event) => event.type === 'text' || event.type === 'thinking');
+    expect(visibleEvents).toEqual([]);
+    for (const event of visibleEvents) {
+      const value = event.type === 'text' ? event.data?.text : event.data?.thinking;
+      expect(value).not.toContain(secret);
+      expect(value).not.toContain(partId);
+    }
+
+    const evidence = JSON.stringify({
+      result,
+      debugCalls: debugLogSpy.mock.calls,
+    });
+    expect(evidence).not.toContain(secret);
+    expect(evidence).not.toContain(partId);
+  });
+
   it('onStream なしのtool inputを同一attemptのprompt例外とretry結果からマスクする', async () => {
     const toolSecret = 'silent-tool-prompt-exception-secret';
     const { promptAsync } = installOpenCodeMock([
@@ -694,5 +749,69 @@ describe('OpenCodeClient tool call failure logging', () => {
 
     expect(data.input.offset).toBe('290.0');
     expect(data.input.filepaath).toBe('/x');
+  });
+
+  it.each([
+    'message.updated',
+    'message.completed',
+    'message.failed',
+    'session.error',
+  ])('%s の tracking-limit 風エラーでも known secret をマスクする', async (eventType) => {
+    const knownSecret = `known-tracking-limit-${eventType}-secret`;
+    const rawError = `OpenCode stream tracking limit exceeded: provider rejected ${knownSecret}`;
+    installOpenCodeMock([
+      sensitiveToolEvent(knownSecret),
+      providerErrorEvent(eventType, { name: 'ProviderError', data: { message: rawError } }),
+    ]);
+    const logsDir = mkdtempSync(join(tmpdir(), 'takt-opencode-provider-error-'));
+
+    try {
+      const providerLogger = createProviderEventLogger({
+        logsDir,
+        sessionId: `provider-error-tracking-limit-${eventType}`,
+        runId: 'provider-error-tracking-limit-run',
+        enabled: true,
+      });
+      const observed = vi.fn();
+      const client = new OpenCodeClient();
+      const result = await client.call('coder', 'prompt', {
+        cwd: '/tmp',
+        model: 'opencode/big-pickle',
+        onStream: (event) => {
+          providerLogger.logEvent({
+            provider: 'opencode',
+            providerModel: 'big-pickle',
+            step: 'review',
+          }, event);
+          observed(event);
+        },
+        opencodeApiKey: `opaque-api-key-${eventType}`,
+        childProcessEnv: { OPENCODE_ACCESS_TOKEN: `opaque-child-env-${eventType}` },
+      });
+      const evidence = JSON.stringify({
+        result,
+        debugCalls: debugLogSpy.mock.calls,
+        infoCalls: infoLogSpy.mock.calls,
+        streamCalls: observed.mock.calls,
+        jsonl: readFileSync(providerLogger.filepath, 'utf8'),
+      });
+      expect(result.status).toBe('error');
+      expect(evidence).not.toContain(knownSecret);
+      expect(evidence).not.toContain(`opaque-api-key-${eventType}`);
+      expect(evidence).not.toContain(`opaque-child-env-${eventType}`);
+      expect(evidence).toContain('[REDACTED]');
+      expect(evidence).toContain('OpenCode stream tracking limit exceeded');
+      for (const internalReason of [
+        'event_count',
+        'tracked_id_count',
+        'text_bytes',
+        'sensitive_sources',
+      ]) {
+        expect(result.error).not.toContain(internalReason);
+        expect(evidence).not.toContain(internalReason);
+      }
+    } finally {
+      rmSync(logsDir, { recursive: true, force: true });
+    }
   });
 });

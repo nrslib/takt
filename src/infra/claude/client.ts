@@ -42,6 +42,7 @@ export class ClaudeClient {
       mcpServers: options.mcpServers,
       model: options.model,
       effort: options.effort,
+      skillsEnabled: options.skillsEnabled,
       maxTurns: options.maxTurns,
       systemPrompt: options.systemPrompt,
       agents: options.agents,

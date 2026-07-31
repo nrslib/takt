@@ -1,0 +1,25 @@
+params:
+  fix_knowledge:
+    type: facet_ref[]
+    facet_kind: knowledge
+name: fix-plan
+tags:
+  - plan
+  - review
+edit: false
+persona: planner
+policy:
+  - coding
+  - testing
+  - review
+knowledge:
+  $param: fix_knowledge
+provider_options:
+  extends: review-readonly
+pass_previous_response: false
+instruction: fix-plan
+output_contracts:
+  report:
+    - name: fix-plan.md
+      format: fix-plan
+      use_judge: false

@@ -173,73 +173,32 @@ steps:
       - condition: any("Requirements unmet, tests failing")
         next: supervise_fix
   - name: fix_both
-    tags:
-      - coding
-    parallel:
-      - name: ai-antipattern-fix-parallel
-        tags:
-          - coding
-        edit: true
-        persona: coder
-        policy:
-          - coding
-          - testing
-          - design-fidelity
-        knowledge:
-          - frontend
-          - backend
-          - security
-          - architecture
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Edit
-              - Bash
-              - WebSearch
-              - WebFetch
-        required_permission_mode: edit
-        rules:
+    uses: mini-fix-both
+    with:
+      fix_policy:
+        - coding
+        - testing
+        - design-fidelity
+      fix_knowledge:
+        - frontend
+        - backend
+        - security
+        - architecture
+    rules:
+      self:
+        - condition: all("AI Reviewer's issues fixed", "Supervisor's issues fixed")
+          next: reviewers
+        - condition: any("No fix needed (verified target files/spec)", "Cannot proceed,
+            insufficient info")
+          next: implement
+      parallel:
+        ai-antipattern-fix-parallel:
           - condition: AI Reviewer's issues fixed
           - condition: No fix needed (verified target files/spec)
           - condition: Cannot proceed, insufficient info
-        instruction: ai-antipattern-fix
-      - name: supervise_fix_parallel
-        tags:
-          - coding
-        edit: true
-        persona: coder
-        policy:
-          - coding
-          - testing
-          - design-fidelity
-        knowledge:
-          - frontend
-          - backend
-          - security
-          - architecture
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Edit
-              - Bash
-              - WebSearch
-              - WebFetch
-        required_permission_mode: edit
-        rules:
+        supervise_fix_parallel:
           - condition: Supervisor's issues fixed
           - condition: Cannot proceed, insufficient info
-        instruction: fix-supervisor
-    rules:
-      - condition: all("AI Reviewer's issues fixed", "Supervisor's issues fixed")
-        next: reviewers
-      - condition: any("No fix needed (verified target files/spec)", "Cannot proceed, insufficient info")
-        next: implement
   - name: ai-antipattern-fix
     tags:
       - coding

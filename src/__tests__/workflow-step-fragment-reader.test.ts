@@ -76,7 +76,7 @@ describe('workflow step fragment reader', () => {
   });
 
   it('should read the complete fragment when the file descriptor returns short reads', () => {
-    const content = 'instruction: review\nrules:\n  - condition: done\n    next: COMPLETE\n';
+    const content = 'name: review\ninstruction: review\n';
     let contentOffset = 0;
     fs.openSync.mockReturnValue(7);
     fs.fstatSync.mockReturnValue({ isFile: () => true, size: content.length });
@@ -87,8 +87,8 @@ describe('workflow step fragment reader', () => {
     });
 
     expect(readStepFragment(fragmentPath, workflowPath, 'review')).toMatchObject({
+      name: 'review',
       instruction: 'review',
-      rules: [{ condition: 'done', next: 'COMPLETE' }],
     });
   });
 

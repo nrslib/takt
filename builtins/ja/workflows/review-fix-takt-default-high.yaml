@@ -41,6 +41,16 @@ loop_monitors:
           next: replan
         - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
           next: ABORT
+  - cycle: [replan, implement, reviewers, final-gate, fix]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: 再計画により blocker の解消が進んでいる
+          next: replan
+        - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
+          next: ABORT
   - cycle: [replan, implement, reviewers, fix]
     threshold: 2
     judge:
@@ -71,6 +81,16 @@ loop_monitors:
           next: replan
         - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
           next: ABORT
+  - cycle: [replan, reviewers, final-gate, fix]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-fix-replan
+      rules:
+        - condition: 再計画により blocker の解消が進んでいる
+          next: replan
+        - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
+          next: ABORT
   - cycle: [replan, reviewers, fix]
     threshold: 2
     judge:
@@ -80,6 +100,20 @@ loop_monitors:
         - condition: 再計画により blocker の解消が進んでいる
           next: replan
         - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
+          next: ABORT
+  - cycle: [reviewers, final-gate]
+    threshold: 2
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-gate-needs-review
+      rules:
+        - condition: 不足証拠を具体的に補完でき、同じレビューをもう一度実行する価値がある
+          next: reviewers
+        - condition: 完了ゲートが示した問題を具体的な実装修正で解消できる
+          next: fix
+        - condition: 要件と受入条件を変えずに実装方針またはテスト方針を再定義できる
+          next: replan
+        - condition: 試行済みのレビューと再計画を踏まえても要件を満たす実現可能な方針がない
           next: ABORT
   - cycle: [fix, reviewers]
     threshold: 3
@@ -106,14 +140,19 @@ loop_monitors:
         - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
           next: ABORT
 steps:
-  - uses: gather
-    name: gather
+  - name: gather
+    uses: gather
+    rules:
+      - condition: レビュー対象の情報収集完了
+        next: plan
+      - condition: レビュー対象を特定できない、情報不足
+        next: ABORT
+        appendix: |
+          確認事項:
+          - {質問1}
+          - {質問2}
   - name: plan
-    tags: [plan]
-    edit: false
-    persona: planner
-    knowledge: architecture
-    instruction: plan
+    uses: implementation-high-plan-to-write-tests
     rules:
       - condition: タスク分析と計画が完了した
         next: write_tests
@@ -121,22 +160,19 @@ steps:
         next: COMPLETE
       - condition: 要件が不明確で計画を立てられない
         next: ABORT
-    output_contracts:
-      report:
-        - name: plan.md
-          format: plan
 
-  - uses: replan
-    name: replan
+  - name: replan
+    uses: implementation-high-replan-to-implement
+    rules:
+      - condition: プロジェクト内で実行可能な未試行の変更または原因調査と、その検証手順を具体化した
+        next: implement
+      - condition: 現行実装が要件・受入条件を満たす具体的根拠があり、必要なプロジェクト内検証が完了し、未試行の変更・調査を残さず、独立レビューだけが必要
+        next: reviewers
+      - condition: 確認済みの根拠により、プロジェクト内の変更や調査では解消できず、外部操作だけが残るか要件が両立不能である
+        next: ABORT
 
   - name: write_tests
-    tags: [coding, test-planning]
-    edit: true
-    persona: coder
-    policy: [coding, testing]
-    knowledge: [takt, architecture, unit-testing, e2e-testing, implementation-semantics]
-    required_permission_mode: edit
-    instruction: write-tests-first
+    uses: implementation-high-write-tests-to-implement
     rules:
       - condition: テスト作成が完了した
         next: implement
@@ -148,10 +184,6 @@ steps:
         next: write_tests
         requires_user_input: true
         interactive_only: true
-    output_contracts:
-      report:
-        - name: test-report.md
-          format: test-report
 
   - name: implement
     tags: [coding]
@@ -167,11 +199,53 @@ steps:
         next: reviewers
       - condition: 実装を進められない
         next: replan
+  - name: reviewers
+    uses: reviewers
+    rules:
+      self:
+        - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)
+          next: finding-conflict-adjudication
+        - condition: when(findings.conflicts.count > 0)
+          next: ABORT
+        - condition: when(findings.provisional.dismissEligible.count > 0 && findings.conflicts.count == 0)
+          next: final-gate
+        - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
+          next: replan
+        - condition: when(findings.rounds.budgetExhausted == true && findings.provisional.count > 0 && findings.conflicts.count == 0)
+          next: replan
+        - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
+          next: replan
+        - condition: when(findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0)
+          next: final-gate
+        - condition: when(findings.open.count > 0 && findings.provisional.count == 0 && findings.conflicts.count == 0)
+          next: fix
+      parallel:
+        arch-review: [{ condition: approved }, { condition: needs_fix }]
+        ai-antipattern-review: [{ condition: AI特有の問題なし }, { condition: AI特有の問題あり }]
+        coding-review: [{ condition: approved }, { condition: needs_fix }]
+        implementation-semantics-review: [{ condition: approved }, { condition: needs_fix }]
+        contract-lifecycle-review: [{ condition: approved }, { condition: needs_fix }]
+        robustness-review: [{ condition: approved }, { condition: needs_fix }]
+  - name: final-gate
+    uses: finding-contract-final-gate
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+      - condition: needs_review
+        next: reviewers
+      - condition: need_replan
+        next: replan
+      - condition: needs_fix
+        next: fix
+      - condition: needs_conflict_adjudication
+        next: finding-conflict-adjudication
+      - condition: ABORT
+        next: ABORT
 
-  - uses: reviewers
-    name: reviewers
-  - uses: finding-contract-final-gate
-    name: final-gate
-
-  - uses: fix
-    name: fix
+  - name: fix
+    uses: fix
+    rules:
+      - condition: 修正完了
+        next: reviewers
+      - condition: 修正を進められない、または実装方針の再定義が必要
+        next: replan

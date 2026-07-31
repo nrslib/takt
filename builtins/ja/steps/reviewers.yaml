@@ -5,13 +5,12 @@ parallel:
     tags: [review]
     edit: false
     session: compact
+    provider_options:
+      extends: review-readonly
     persona: architecture-reviewer
     policy: review
     knowledge: architecture
     instruction: review-arch
-    rules:
-      - condition: approved
-      - condition: needs_fix
     output_contracts:
       report:
         - name: architect-review.md
@@ -20,12 +19,11 @@ parallel:
     tags: [review]
     edit: false
     session: compact
+    provider_options:
+      extends: review-readonly
     persona: ai-antipattern-reviewer
     policy: [review, ai-antipattern]
     instruction: ai-antipattern-review
-    rules:
-      - condition: AI特有の問題なし
-      - condition: AI特有の問題あり
     output_contracts:
       report:
         - name: ai-antipattern-review.md
@@ -34,12 +32,11 @@ parallel:
     tags: [review]
     edit: false
     session: compact
+    provider_options:
+      extends: review-readonly
     persona: coding-reviewer
     policy: [review, coding]
     instruction: review-coding
-    rules:
-      - condition: approved
-      - condition: needs_fix
     output_contracts:
       report:
         - name: coding-review.md
@@ -48,13 +45,12 @@ parallel:
     tags: [review]
     edit: false
     session: compact
+    provider_options:
+      extends: review-readonly
     persona: implementation-semantics-reviewer
     policy: review
     knowledge: implementation-semantics
     instruction: review-implementation-semantics
-    rules:
-      - condition: approved
-      - condition: needs_fix
     output_contracts:
       report:
         - name: implementation-semantics-review.md
@@ -63,13 +59,12 @@ parallel:
     tags: [review]
     edit: false
     session: compact
+    provider_options:
+      extends: review-readonly
     persona: contract-lifecycle-reviewer
     policy: review
     knowledge: contract-lifecycle
     instruction: contract-lifecycle-review
-    rules:
-      - condition: approved
-      - condition: needs_fix
     output_contracts:
       report:
         - name: contract-lifecycle-review.md
@@ -78,31 +73,13 @@ parallel:
     tags: [review]
     edit: false
     session: compact
+    provider_options:
+      extends: review-readonly
     persona: robustness-reviewer
     policy: review
     knowledge: robustness
     instruction: robustness-review
-    rules:
-      - condition: approved
-      - condition: needs_fix
     output_contracts:
       report:
         - name: robustness-review.md
           format: robustness-review-finding-contract
-rules:
-  - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)
-    next: finding-conflict-adjudication
-  - condition: when(findings.conflicts.count > 0)
-    next: ABORT
-  - condition: when(findings.provisional.dismissEligible.count > 0 && findings.conflicts.count == 0)
-    next: final-gate
-  - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
-    next: replan
-  - condition: when(findings.rounds.budgetExhausted == true && findings.provisional.count > 0 && findings.conflicts.count == 0)
-    next: replan
-  - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
-    next: replan
-  - condition: when(findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0)
-    next: final-gate
-  - condition: when(findings.open.count > 0 && findings.provisional.count == 0 && findings.conflicts.count == 0)
-    next: fix

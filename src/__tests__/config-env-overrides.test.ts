@@ -130,6 +130,39 @@ describe('config traced env overrides', () => {
     });
   });
 
+  it('project config は Claude Skills の boolean env override を反映する', () => {
+    const projectDir = join(testRoot, 'project-claude-skills-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.yaml'),
+      [
+        'provider_options:',
+        '  claude:',
+        '    skills:',
+        '      enabled: false',
+      ].join('\n'),
+      'utf-8',
+    );
+    process.env.TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED = 'true';
+
+    const config = loadProjectConfig(projectDir);
+
+    expect(config.providerOptions).toEqual({
+      claude: { skills: { enabled: true } },
+    });
+  });
+
+  it('project config は Claude Skills の不正な env override を拒否する', () => {
+    const projectDir = join(testRoot, 'project-claude-skills-invalid-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), 'provider: claude\n', 'utf-8');
+    process.env.TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED = 'enabled';
+
+    expect(() => loadProjectConfig(projectDir)).toThrow(/boolean|enabled/i);
+  });
+
   it('project config は effort 系の env override を traced-config 経由で反映する', () => {
     const projectDir = join(testRoot, 'project-effort-env');
     const configDir = getProjectConfigDir(projectDir);

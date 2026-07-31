@@ -10,12 +10,3 @@ output_contracts:
   report:
     - name: review-target.md
       format: review-gather
-rules:
-  - condition: レビュー対象の情報収集完了
-    next: plan
-  - condition: レビュー対象を特定できない、情報不足
-    next: ABORT
-    appendix: |
-      確認事項:
-      - {質問1}
-      - {質問2}

@@ -26,6 +26,7 @@ import { executeTask } from '../features/tasks/execute/taskExecution.js';
 import { invalidateGlobalConfigCache } from '../infra/config/index.js';
 
 const defaultCodexSkills = { repo: false, user: false } as const;
+const defaultClaudeSkills = { enabled: false } as const;
 
 interface TestEnv {
   projectDir: string;
@@ -146,6 +147,7 @@ describe('IT: provider block reflection', () => {
     expect(options?.resolvedModel).toBe('gpt-5.3');
     expect(options?.providerOptions).toEqual({
       codex: { networkAccess: false, skills: defaultCodexSkills },
+      claude: { skills: defaultClaudeSkills },
     });
   });
 
@@ -188,6 +190,7 @@ describe('IT: provider block reflection', () => {
     expect(options?.resolvedModel).toBe('workflow-model');
     expect(options?.providerOptions).toEqual({
       codex: { networkAccess: true, skills: defaultCodexSkills },
+      claude: { skills: defaultClaudeSkills },
     });
   });
 
@@ -231,6 +234,7 @@ describe('IT: provider block reflection', () => {
     expect(options?.resolvedModel).toBe('project-model');
     expect(options?.providerOptions).toEqual({
       codex: { networkAccess: false, skills: defaultCodexSkills },
+      claude: { skills: defaultClaudeSkills },
     });
   });
 
@@ -275,6 +279,7 @@ describe('IT: provider block reflection', () => {
     expect(options?.providerOptions).toEqual({
       codex: { skills: defaultCodexSkills },
       claude: {
+        skills: defaultClaudeSkills,
         sandbox: {
           allowUnsandboxedCommands: true,
           excludedCommands: ['./gradlew'],
@@ -328,6 +333,7 @@ describe('IT: provider block reflection', () => {
       codex: { skills: defaultCodexSkills },
       claude: {
         effort: 'high',
+        skills: defaultClaudeSkills,
         allowedTools: ['Read', 'Edit'],
       },
       claudeTerminal: {

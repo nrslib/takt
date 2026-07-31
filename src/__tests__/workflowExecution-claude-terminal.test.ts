@@ -18,6 +18,10 @@ const terminalMocks = vi.hoisted(() => ({
   }),
 }));
 
+vi.mock('../infra/claude/cli-capability.js', () => ({
+  assertClaudeSkillsDisableSupported: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock('../infra/claude-terminal/tmux-backend.js', () => ({
   TmuxTerminalBackend: vi.fn().mockImplementation(() => ({
     start: terminalMocks.start,

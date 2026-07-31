@@ -120,6 +120,14 @@ E2Eテストを追加・変更した場合は、このドキュメントも更�
     - `takt --task 'Create a short report and finish' --workflow e2e/fixtures/workflows/report-judge.yaml --provider mock` を実行する。
     - run配下に `*-usage-events.phase.jsonl`, `*-otel-session-shadow.jsonl`, `monitor.json` が出力されることを確認する。
     - command gate から nested `takt` を起動し、子 run 側の `.takt/config.yaml` に observability 設定がない状態でも、親 run から伝播した env snapshot により子 run 配下にも同じ observability artifact が出力されることを確認する。
+- Claude filesystem Skill metadata（`e2e/specs/claude-skills.e2e.ts`）
+  - 目的: `claude` と `claude-sdk` で同一promptからモデルに初期contextのSkill名を列挙させ、project sentinel Skillを報告するかを `provider_options.claude.skills.enabled` の有効・無効で比較する補助観測。
+  - LLM: `TAKT_E2E_PROVIDER=claude` または `claude-sdk` の実provider E2Eでのみ呼び出す。
+  - 手順（ユーザー行動/コマンド）:
+    - 一時repositoryの `.claude/skills/<sentinel>/SKILL.md` を作成する。
+    - `enabled: false` で実行し、モデルがsentinel Skill名を報告しないことを確認する。これはmetadata非混入を直接証明しない。
+    - `enabled: true` で実行し、モデルがsentinel Skill名を報告することを確認する。
+    - metadata非混入の決定的保証は、SDKへ`skills: []`を渡すこととCLI argvへ`--disable-slash-commands`を付与することを検証するunit/integration testが担う。
 - Add task（`e2e/specs/add.e2e.ts`）
   - 目的: `takt add` がIssue参照からタスクファイルを生成できることを確認。
   - LLM: 呼び出さない（`provider: mock` + `TAKT_MOCK_SCENARIO` 固定）

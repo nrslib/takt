@@ -24,16 +24,19 @@ loop_monitors:
         - condition: Unproductive (same replan reason repeating)
           next: ABORT
 steps:
-  - uses: gather
-    name: gather
+  - name: gather
+    uses: gather
+    rules:
+      - condition: Review target information gathered
+        next: plan
+      - condition: Cannot identify review target, insufficient info
+        next: ABORT
+        appendix: |
+          Clarifications needed:
+          - {Question 1}
+          - {Question 2}
   - name: plan
-    tags:
-      - plan
-    edit: false
-    persona: planner
-    knowledge: architecture
-    provider_options:
-      extends: review-readonly
+    uses: implementation-plan-to-write-tests
     rules:
       - condition: Requirements are clear and implementable
         next: write_tests
@@ -45,11 +48,6 @@ steps:
           Items to confirm:
           - {question 1}
           - {question 2}
-    instruction: plan
-    output_contracts:
-      report:
-        - name: plan.md
-          format: plan
   - name: write_tests
     tags:
       - coding

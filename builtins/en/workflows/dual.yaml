@@ -181,31 +181,12 @@ steps:
       - When design references exist, verify major screens element by element for layout, copy, color, and spacing
       - When design references exist, record any platform-driven deviations in the decision log
   - name: ai-antipattern-review-1st
-    tags:
-      - review
-    edit: false
-    persona: ai-antipattern-reviewer
-    policy:
-      - review
-      - ai-antipattern
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - WebSearch
-          - WebFetch
-    instruction: ai-antipattern-review
+    uses: ai-antipattern-first-pass
     rules:
       - condition: No AI-specific issues found
         next: reviewers_1
       - condition: AI-specific issues detected
         next: ai-antipattern-fix
-    output_contracts:
-      report:
-        - name: ai-antipattern-review.md
-          format: ai-antipattern-review
   - name: ai-antipattern-fix
     tags:
       - coding
@@ -245,23 +226,12 @@ steps:
       - condition: Unable to proceed with fixes
         next: ai-antipattern-no-fix
   - name: ai-antipattern-no-fix
-    tags:
-      - review
-    edit: false
-    persona: architecture-reviewer
-    policy: review
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
+    uses: ai-antipattern-arbitration
     rules:
       - condition: ai-antipattern-review-1st's findings are valid (fix required)
         next: ai-antipattern-fix
       - condition: ai-antipattern-fix's judgment is valid (no fix needed)
         next: reviewers_1
-    instruction: arbitrate
   - name: reviewers_1
     tags:
       - review

@@ -11,24 +11,7 @@ initial_step: gather
 
 steps:
   - name: gather
-    tags:
-      - plan
-    edit: false
-    persona: planner
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Bash
-          - WebSearch
-          - WebFetch
-    instruction: gather-review
-    output_contracts:
-      report:
-        - name: review-target.md
-          format: review-gather
+    uses: review-gather-to-reviewers
     rules:
       - condition: レビュー対象の情報収集完了
         next: reviewers
@@ -147,27 +130,7 @@ steps:
         next: supervise
 
   - name: merge-readiness-review
-    tags:
-      - review
-      - final-gate
-      - merge-readiness
-    edit: false
-    persona: merge-readiness-reviewer
-    policy: review
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Bash
-          - WebSearch
-          - WebFetch
-    instruction: review-merge-readiness
-    output_contracts:
-      report:
-        - name: merge-readiness-review.md
-          format: merge-readiness-review
+    uses: merge-readiness-to-review-synthesis
     rules:
       - condition: approved
         next: review-synthesis
@@ -175,30 +138,7 @@ steps:
         next: review-synthesis
 
   - name: review-synthesis
-    tags:
-      - review
-      - final-gate
-      - supervise
-    edit: false
-    persona: supervisor
-    policy: review
-    provider_options: &review_synthesis_provider_options
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - WebSearch
-          - WebFetch
-    pass_previous_response: false
-    instruction: &review_synthesis_instruction supervise
-    output_contracts: &review_synthesis_output_contracts
-      report:
-        - name: supervisor-validation.md
-          format: supervisor-validation
-        - name: summary.md
-          format: supervisor-summary
-          use_judge: false
+    uses: review-synthesis-to-complete
     rules:
       - condition: BLOCKED
         next: ABORT
@@ -206,16 +146,7 @@ steps:
         next: COMPLETE
 
   - name: supervise
-    tags:
-      - review
-      - supervise
-    edit: false
-    persona: supervisor
-    policy: review
-    provider_options: *review_synthesis_provider_options
-    pass_previous_response: false
-    instruction: *review_synthesis_instruction
-    output_contracts: *review_synthesis_output_contracts
+    uses: review-supervise-to-complete
     rules:
       - condition: BLOCKED
         next: ABORT

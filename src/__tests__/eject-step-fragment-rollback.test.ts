@@ -71,8 +71,16 @@ describe('eject step fragment rollback', () => {
 
     expect(() => copyReferencedBuiltinStepFragments([
       'steps:',
-      '  - uses: gather',
-      '  - uses: fix',
+      '  - name: gather',
+      '    uses: gather',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
+      '  - name: fix',
+      '    uses: fix',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
       '',
     ].join('\n'), 'en', targetDir, workflowPath, true)).toThrow('simulated second fragment write failure');
 
@@ -89,7 +97,11 @@ describe('eject step fragment rollback', () => {
 
     expect(() => copyReferencedBuiltinStepFragments([
       'steps:',
-      '  - uses: gather',
+      '  - name: gather',
+      '    uses: gather',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
       '',
     ].join('\n'), 'en', targetDir, workflowPath, true)).toThrow('simulated fragment close failure');
 
@@ -108,7 +120,11 @@ describe('eject step fragment rollback', () => {
 
     expect(() => copyReferencedBuiltinStepFragments([
       'steps:',
-      '  - uses: gather',
+      '  - name: gather',
+      '    uses: gather',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
       '',
     ].join('\n'), 'en', targetDir, workflowPath, true)).toThrow('simulated fragment close failure');
 

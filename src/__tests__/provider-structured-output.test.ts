@@ -172,6 +172,19 @@ describe('ClaudeProvider — structured output', () => {
     expect(opts).toHaveProperty('baseUrl', 'http://127.0.0.1:8787');
   });
 
+  it('provider_options.claude.skills.enabled を callClaude に渡す', async () => {
+    mockCallClaude.mockResolvedValue(doneResponse('coder'));
+    const providerOptions = {
+      claude: { skills: { enabled: false } },
+    } as unknown as StepProviderOptions;
+
+    const agent = new ClaudeProvider().setup({ name: 'coder' });
+    await agent.call('prompt', { cwd: '/tmp', providerOptions });
+
+    const opts = mockCallClaude.mock.calls[0]?.[2];
+    expect(opts).toHaveProperty('skillsEnabled', false);
+  });
+
   it('systemPrompt 指定時も outputSchema が callClaudeCustom に渡される', async () => {
     mockCallClaudeCustom.mockResolvedValue(doneResponse('judge', { step: 1 }));
 

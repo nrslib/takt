@@ -10,13 +10,7 @@ max_steps: 50
 initial_step: plan
 steps:
   - name: plan
-    tags:
-      - plan
-    edit: false
-    persona: planner
-    knowledge: architecture
-    provider_options:
-      extends: review-readonly
+    uses: implementation-plan-to-write-tests
     rules:
       - condition: 要件が明確で実装可能
         next: write_tests
@@ -28,11 +22,6 @@ steps:
           確認事項:
           - {質問1}
           - {質問2}
-    instruction: plan
-    output_contracts:
-      report:
-        - name: plan.md
-          format: plan
   - name: write_tests
     tags:
       - coding

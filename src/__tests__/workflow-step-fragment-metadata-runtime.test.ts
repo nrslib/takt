@@ -65,11 +65,6 @@ describe('workflow step fragment metadata runtime contract', () => {
     write(projectDir, '.takt/steps/delegate.yaml', [
       'kind: workflow_call',
       'call: ./children/child.yaml',
-      'rules:',
-      '  - condition: success',
-      '    next: COMPLETE',
-      '  - condition: ABORT',
-      '    next: ABORT',
       '',
     ].join('\n'));
     const childPath = write(projectDir, '.takt/workflows/children/child.yaml', [
@@ -92,8 +87,13 @@ describe('workflow step fragment metadata runtime contract', () => {
       'initial_step: delegate',
       'max_steps: 10',
       'steps:',
-      '  - uses: delegate',
-      '    name: delegate',
+      '  - name: delegate',
+      '    uses: delegate',
+      '    rules:',
+      '      - condition: success',
+      '        next: COMPLETE',
+      '      - condition: ABORT',
+      '        next: ABORT',
       '',
     ].join('\n'));
     const loaded = loadWorkflowFromFile(parentPath, projectDir);

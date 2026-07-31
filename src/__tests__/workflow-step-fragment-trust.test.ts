@@ -35,9 +35,9 @@ describe('step fragment trust boundaries', () => {
   });
 
   it.each([
-    ['top-level step', '  - uses: "@owner/repo/unsafe"\n    name: review', 'instruction: review\nallow_git_commit: true\nrules:\n  - condition: done\n    next: COMPLETE\n'],
-    ['parallel parent', '  - uses: "@owner/repo/unsafe"\n    name: reviewers', 'allow_git_commit: true\nparallel:\n  - name: review\n    instruction: review\n'],
-    ['parallel sub-step', '  - name: reviewers\n    parallel:\n      - uses: "@owner/repo/unsafe"\n        name: review', 'instruction: review\nallow_git_commit: true\n'],
+    ['top-level step', '  - name: review\n    uses: "@owner/repo/unsafe"\n    rules:\n      - condition: done\n        next: COMPLETE', 'instruction: review\nallow_git_commit: true\n'],
+    ['parallel parent', '  - name: reviewers\n    uses: "@owner/repo/unsafe"\n    rules:\n      self:\n        - condition: done\n          next: COMPLETE\n      parallel:\n        review:\n          - condition: done', 'allow_git_commit: true\nparallel:\n  - name: review\n    instruction: review\n'],
+    ['parallel sub-step', '  - name: reviewers\n    parallel:\n      - name: review\n        uses: "@owner/repo/unsafe"\n        rules:\n          - condition: done\n    rules:\n      - condition: all("done")\n        next: COMPLETE', 'instruction: review\nallow_git_commit: true\n'],
   ])('rejects low-trust allow_git_commit from a %s', (_placement, steps, fragment) => {
     const fragmentPath = write(configDir, 'repertoire/@owner/repo/steps/unsafe.yaml', fragment);
     const workflowPath = write(projectDir, '.takt/workflows/default.yaml', [
@@ -57,9 +57,6 @@ describe('step fragment trust boundaries', () => {
     write(configDir, 'repertoire/@owner/repo/steps/unsafe.yaml', [
       'instruction: review',
       'allow_git_commit: true',
-      'rules:',
-      '  - condition: done',
-      '    next: COMPLETE',
       '',
     ].join('\n'));
     const workflowPath = write(projectDir, '.takt/workflows/default.yaml', [
@@ -67,9 +64,12 @@ describe('step fragment trust boundaries', () => {
       'initial_step: review',
       'max_steps: 1',
       'steps:',
-      '  - uses: "@owner/repo/unsafe"',
-      '    name: review',
+      '  - name: review',
+      '    uses: "@owner/repo/unsafe"',
       '    allow_git_commit: false',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
       '',
     ].join('\n'));
 
@@ -84,8 +84,11 @@ describe('step fragment trust boundaries', () => {
       'initial_step: review',
       'max_steps: 1',
       'steps:',
-      '  - uses: "@owner/repo/unsafe"',
-      '    name: review',
+      '  - name: review',
+      '    uses: "@owner/repo/unsafe"',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
       '',
     ].join('\n'));
 
@@ -100,7 +103,7 @@ describe('step fragment trust boundaries', () => {
     write(projectDir, '.takt/steps/unsafe.yaml', fragment);
 
     const error = captureConfigError(() => resolveWorkflowStepFragments({
-      steps: [{ uses: 'unsafe' }],
+      steps: [{ uses: 'unsafe', rules: [{ condition: 'done', next: 'COMPLETE' }] }],
     }, {
       workflowPath: join(projectDir, '.takt', 'workflows', 'default.yaml'),
       candidateDirs: [stepsDir],

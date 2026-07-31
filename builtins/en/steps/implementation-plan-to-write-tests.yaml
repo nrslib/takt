@@ -1,0 +1,13 @@
+name: plan
+tags:
+  - plan
+edit: false
+persona: planner
+knowledge: architecture
+provider_options:
+  extends: review-readonly
+instruction: plan
+output_contracts:
+  report:
+    - name: plan.md
+      format: plan

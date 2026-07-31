@@ -15,6 +15,7 @@ function toHeadlessOptions(options: ProviderCallOptions): ClaudeHeadlessCallOpti
     anthropicApiKey: options.anthropicApiKey ?? resolveAnthropicApiKey(),
     baseUrl: claudeOptions?.baseUrl,
     effort: claudeOptions?.effort,
+    skillsEnabled: claudeOptions?.skills?.enabled,
     allowedTools: options.allowedTools,
     mcpServers: options.mcpServers,
     permissionMode: options.permissionMode,
