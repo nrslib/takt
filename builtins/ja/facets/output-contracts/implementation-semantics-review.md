@@ -9,7 +9,7 @@
 ## 非finding化した懸念
 | 項目 | 場所 | 分類 | finding化しない根拠 |
 |------|------|------|---------------------|
-| {懸念。なければ「なし」} | `src/file.ts:42` | false_positive / overreach / out_of_scope / no_issue_after_verification | {根拠} |
+| {懸念。なければ「なし」} | `src/file.ts:42` | false_positive / overreach / outside_contract_jurisdiction / no_issue_after_verification | {根拠} |
 
 ## 今回の指摘（new）
 | # | finding_id | family_tag | 重大度 | 場所 | 問題 | 壊れる条件 | 修正案 |

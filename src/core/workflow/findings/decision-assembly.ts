@@ -604,8 +604,9 @@ function assembleDismissDecisions(input: {
   decisions: FindingManagerDecisions['dismissDecisions'];
   eligibleFindingIds: ReadonlySet<string>;
   transitionedFindingIds: ReadonlySet<string>;
-  /** このラウンドで match / conflict として再観測された finding。clean 証拠の再観測は dismiss より優先する。 */
+  /** このラウンドで match / conflict として再観測された finding。outside_task_scope 以外では clean 証拠を優先する。 */
   reobservedFindingIds: ReadonlySet<string>;
+  conflictFindingIds: ReadonlySet<string>;
   managerAuthority: FindingManagerAuthority;
 }): { dismissedFindings: FindingManagerDismissedFinding[]; rejected: RejectedDismissDecision[] } {
   const findingsById = new Map(input.previousLedger.findings.map((finding) => [finding.id, finding]));
@@ -647,21 +648,44 @@ function assembleDismissDecisions(input: {
       });
       continue;
     }
-    if (input.transitionedFindingIds.has(decision.findingId)) {
+    if (
+      decision.basis === 'outside_task_scope'
+      && (
+        decision.taskQuote === undefined
+        || decision.workflowTaskDigest === undefined
+        || decision.adjudicationTaskId === undefined
+      )
+    ) {
+      rejected.push({
+        findingId: decision.findingId,
+        reason: `Cannot dismiss finding "${decision.findingId}" as outside_task_scope without a verified taskQuote and control-task binding`,
+      });
+      continue;
+    }
+    if (
+      decision.basis !== 'outside_task_scope'
+      && input.transitionedFindingIds.has(decision.findingId)
+    ) {
       rejected.push({
         findingId: decision.findingId,
         reason: `Cannot dismiss finding "${decision.findingId}" because clean evidence settles it in this output`,
       });
       continue;
     }
-    if (input.reobservedFindingIds.has(decision.findingId)) {
+    if (
+      decision.basis !== 'outside_task_scope'
+      && input.reobservedFindingIds.has(decision.findingId)
+    ) {
       rejected.push({
         findingId: decision.findingId,
         reason: `Cannot dismiss finding "${decision.findingId}" because it is re-observed (match/conflict) in this output; evidence takes precedence over jurisdiction adjudication`,
       });
       continue;
     }
-    if (activeConflictFindingIds.has(decision.findingId)) {
+    if (
+      activeConflictFindingIds.has(decision.findingId)
+      || input.conflictFindingIds.has(decision.findingId)
+    ) {
       rejected.push({
         findingId: decision.findingId,
         reason: `Cannot dismiss finding "${decision.findingId}" while an active conflict references it; adjudicate the conflict first`,
@@ -672,7 +696,14 @@ function assembleDismissDecisions(input: {
       findingId: decision.findingId,
       basis: decision.basis,
       reason: decision.reason,
-      evidence: decision.evidence,
+      ...(decision.evidence !== undefined ? { evidence: decision.evidence } : {}),
+      ...(decision.taskQuote !== undefined ? { taskQuote: decision.taskQuote } : {}),
+      ...(decision.workflowTaskDigest !== undefined
+        ? { workflowTaskDigest: decision.workflowTaskDigest }
+        : {}),
+      ...(decision.adjudicationTaskId !== undefined
+        ? { adjudicationTaskId: decision.adjudicationTaskId }
+        : {}),
       authority: input.managerAuthority,
     });
   }
@@ -1105,6 +1136,9 @@ export function assembleManagerOutput(input: AssembleManagerOutputInput): Assemb
     eligibleFindingIds: input.dismissCandidateFindingIds ?? new Set(),
     transitionedFindingIds: stateTransitionFindingIds,
     reobservedFindingIds: unresolvedEvidenceFindingIds,
+    conflictFindingIds: new Set(
+      canonicalRaw.conflicts.flatMap((conflict) => conflict.findingIds),
+    ),
     managerAuthority: input.managerAuthority,
   });
   const withInvalidateTransitioned = new Set([
@@ -1325,7 +1359,14 @@ export function flattenManagerOutputToDecisions(
     findingId: dismissed.findingId,
     basis: dismissed.basis,
     reason: dismissed.reason,
-    evidence: dismissed.evidence,
+    ...(dismissed.evidence !== undefined ? { evidence: dismissed.evidence } : {}),
+    ...(dismissed.taskQuote !== undefined ? { taskQuote: dismissed.taskQuote } : {}),
+    ...(dismissed.workflowTaskDigest !== undefined
+      ? { workflowTaskDigest: dismissed.workflowTaskDigest }
+      : {}),
+    ...(dismissed.adjudicationTaskId !== undefined
+      ? { adjudicationTaskId: dismissed.adjudicationTaskId }
+      : {}),
   }));
 
   return {

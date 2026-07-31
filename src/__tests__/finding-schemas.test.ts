@@ -1416,7 +1416,7 @@ describe('finding schemas', () => {
     ];
 
     for (const parse of parsers) {
-      for (const basis of ['out_of_scope', 'unverifiable_claim'] as const) {
+      for (const basis of ['outside_contract_jurisdiction', 'unverifiable_claim'] as const) {
         expect(() => parse({ basis, authority: 'standard' })).not.toThrow();
         expect(() => parse({ basis, authority: 'terminal_adjudication' })).not.toThrow();
       }

@@ -310,7 +310,7 @@ Do not tolerate problems just because existing code does the same. If existing c
 - Only issues not directly related to the change may be classified as "existing problems" or "non-blocking"
 - "The code itself existed before" is not a valid reason for non-blocking when the issue is in changed or directly related code
 - "Same as existing behavior" is not an approval reason when a new public entry, adapter, or tool exposes that contract
-- When a concern mentioned in prose is not made a finding, classify it as `false_positive` / `overreach` / `out_of_scope` / `no_issue_after_verification` and provide evidence
+- When a concern mentioned in prose is not made a finding, classify it as `false_positive` / `overreach` / `outside_contract_jurisdiction` / `no_issue_after_verification` and provide evidence
 - If even one issue exists, REJECT. "APPROVE with warnings" or "APPROVE with suggestions" is prohibited
 
 ## Basic Review Procedure

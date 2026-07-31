@@ -25,6 +25,7 @@ import {
   hasLifecycleProductTransitionCapability,
   hasLifecycleTransitionIntent,
 } from './raw-relation-capabilities.js';
+import { computeWorkflowTaskDigest } from './task-scope-adjudication.js';
 
 export {
   FINDING_MANAGER_SCHEMA_REF,
@@ -59,6 +60,7 @@ export async function runManagerDecisionStage(params: {
     taintedAdmitted,
     provisionalOnlyLadderRawIds,
   } = admission;
+  const workflowTaskDigest = computeWorkflowTaskDigest(input.workflowTask);
   const rawRecovery = await runRawAdjudicationRecovery({
     runInput: input,
     previousLedger,
@@ -79,6 +81,7 @@ export async function runManagerDecisionStage(params: {
             target: item.canonical.targetFindingId === undefined
               ? undefined
               : findingsById.get(item.canonical.targetFindingId),
+            workflowTaskDigest,
           })
         ))
         .map((item) => item.wire.rawFindingId),
@@ -130,6 +133,8 @@ export async function runManagerDecisionStage(params: {
         managerStep,
         runInput: input,
         managerAuthority: input.managerAuthority,
+        workflowTask: input.workflowTask,
+        subResults: input.subResults,
       });
       initialInvalidAttempts = taskExecution.invalidAttemptMessages.map((message, index) => ({
         attempt: index + 1,

@@ -22,6 +22,16 @@ import { canonicalRawFindingFixture } from './helpers/finding-lifecycle-fixture.
 import { serializeFindingManagerValidationReport } from '../core/workflow/findings/manager-report-content.js';
 import { parseFindingManagerValidationReport } from '../core/workflow/findings/schemas.js';
 import type { FindingManagerValidationReport } from '../core/workflow/findings/store.js';
+import {
+  createFindingReviewPublication,
+  STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+} from '../core/workflow/findings/review-publication.js';
+import {
+  bindReviewerReportExcerpt,
+} from '../core/workflow/findings/raw-canonicalization.js';
+import {
+  collectTaskScopeReportExcerpts,
+} from '../core/workflow/findings/task-scope-adjudication.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({ executeAgent: vi.fn() }));
 
@@ -150,6 +160,25 @@ interface ControlManifestView {
   }>;
 }
 
+function reviewPublication(
+  reportContent: string,
+  rawFindings: readonly unknown[],
+) {
+  return createFindingReviewPublication({
+    identity: {
+      scopeIdentity: 'scope-test',
+      callNamespace: '',
+      parentStepName: 'reviewers',
+      stepIteration: 1,
+      reviewerStepName: 'reviewer',
+      reportName: 'reviewer.md',
+    },
+    protocol: STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+    reportContent,
+    rawFindings,
+  });
+}
+
 function response(structuredOutput: Record<string, unknown>): AgentResponse {
   return {
     persona: 'findings-manager',
@@ -191,6 +220,9 @@ async function run(rawFindings: RawFinding[], previousLedger = emptyLedger()) {
     evidenceRecordsByRawFindingId: new Map(),
     managerStep,
     runInput,
+    managerAuthority: 'standard',
+    workflowTask: 'Review the requested implementation.',
+    subResults: [],
   });
 }
 
@@ -199,6 +231,436 @@ beforeEach(() => {
 });
 
 describe('main manager bounded task runner', () => {
+  it('binds control task ids to authority, workflow task, and related publication excerpts', () => {
+    const finding = {
+      ...ledgerFinding(1),
+      title: 'GitLab attachment support is missing',
+    };
+    const rawFinding = {
+      rawExcerpt: 'GitLab attachment support is missing',
+      candidate: {
+        rawFindingId: 'raw-001',
+        targetFindingIds: ['F-0001'],
+      },
+    };
+    const publication = reviewPublication(
+      'GitLab attachment support is missing',
+      [rawFinding],
+    );
+    const taskIdFor = (
+      managerAuthority: 'standard' | 'terminal_adjudication',
+      workflowTask: string,
+      reportContent = publication.reportContent,
+    ): string => createMainManagerControlTaskManifest({
+      previousLedger: emptyLedger({ findings: [finding] }),
+      reviewScopeSnapshotId: 'scope-test',
+      priorStepResponseText: undefined,
+      invalidLocationCandidates: new Map(),
+      dismissCandidates: new Map([['F-0001', 'terminal claim']]),
+      managerAuthority,
+      workflowTask,
+      subResults: [{
+        subStep: managerStep,
+        publication: reviewPublication(reportContent, [rawFinding]),
+      }],
+    })[0]!.task.taskId;
+
+    const base = taskIdFor(
+      'terminal_adjudication',
+      'Support GitHub issue attachments.',
+    );
+    expect(taskIdFor(
+      'standard',
+      'Support GitHub issue attachments.',
+    )).not.toBe(base);
+    expect(taskIdFor(
+      'terminal_adjudication',
+      'Support GitHub and GitLab issue attachments.',
+    )).not.toBe(base);
+    expect(taskIdFor(
+      'terminal_adjudication',
+      'Support GitHub issue attachments.',
+      `Current review:\n${publication.reportContent}`,
+    )).not.toBe(base);
+    const unrelatedPublication = reviewPublication(
+      'An unrelated reviewer report.',
+      [{
+        rawExcerpt: 'An unrelated reviewer report.',
+        candidate: {
+          rawFindingId: 'unrelated',
+          targetFindingIds: ['F-9999'],
+        },
+      }],
+    );
+    const unrelated = createMainManagerControlTaskManifest({
+      previousLedger: emptyLedger({ findings: [finding] }),
+      reviewScopeSnapshotId: 'scope-test',
+      priorStepResponseText: undefined,
+      invalidLocationCandidates: new Map(),
+      dismissCandidates: new Map([['F-0001', 'terminal claim']]),
+      managerAuthority: 'terminal_adjudication',
+      workflowTask: 'Support GitHub issue attachments.',
+      subResults: [{
+        subStep: managerStep,
+        publication: unrelatedPublication,
+      }],
+    })[0]!;
+    expect(unrelated.task.taskScopeContext?.reportExcerpts).toEqual([]);
+  });
+
+  it('does not bind raw-1 to raw-10 by identifier substring', () => {
+    const finding = {
+      ...ledgerFinding(1),
+      rawFindingIds: ['raw-1'],
+    };
+    const publication = reviewPublication(
+      'raw-10 reports an unrelated concern',
+      [{
+        rawExcerpt: 'raw-10 reports an unrelated concern',
+        candidate: {
+          rawFindingId: 'raw-10',
+          targetFindingIds: [],
+        },
+      }],
+    );
+
+    expect(collectTaskScopeReportExcerpts({
+      finding,
+      ledgerRawFindings: [],
+      publications: [publication],
+    })).toEqual([]);
+  });
+
+  it('does not bind a local raw id to a namespaced suffix without source proof', () => {
+    const finding = {
+      ...ledgerFinding(1),
+      rawFindingIds: ['run:reviewers:1:reviewer:raw-1'],
+    };
+    const publication = reviewPublication(
+      'A local raw-1 observation',
+      [{
+        rawExcerpt: 'A local raw-1 observation',
+        candidate: {
+          rawFindingId: 'raw-1',
+          targetFindingIds: [],
+        },
+      }],
+    );
+
+    expect(collectTaskScopeReportExcerpts({
+      finding,
+      ledgerRawFindings: [],
+      publications: [publication],
+    })).toEqual([]);
+  });
+
+  it('selects only the later excerpt with an exact target finding id', () => {
+    const finding = ledgerFinding(1);
+    const unrelatedExcerpt = 'F-00010 is unrelated';
+    const relatedExcerpt = 'F-0001 is the exact target';
+    const publication = reviewPublication(
+      `${unrelatedExcerpt}\n${relatedExcerpt}`,
+      [
+        {
+          rawExcerpt: unrelatedExcerpt,
+          candidate: {
+            rawFindingId: 'raw-10',
+            targetFindingIds: ['F-00010'],
+          },
+        },
+        {
+          rawExcerpt: relatedExcerpt,
+          candidate: {
+            rawFindingId: 'raw-1',
+            targetFindingIds: ['F-0001'],
+          },
+        },
+      ],
+    );
+
+    expect(collectTaskScopeReportExcerpts({
+      finding,
+      ledgerRawFindings: [],
+      publications: [publication],
+    })).toMatchObject([{
+      excerpt: relatedExcerpt,
+    }]);
+  });
+
+  it('binds a namespaced ledger raw through its verified source binding', () => {
+    const excerpt = 'GitLab attachment support is missing';
+    const publication = reviewPublication(excerpt, [{
+      rawExcerpt: excerpt,
+      candidate: {
+        rawFindingId: 'raw-1',
+        targetFindingIds: [],
+      },
+    }]);
+    const namespacedRawId = 'run:reviewers:1:reviewer:raw-1';
+    const ledgerRaw = rawFinding(1, {
+      rawFindingId: namespacedRawId,
+      sourceBinding: bindReviewerReportExcerpt(
+        publication.reportContent,
+        excerpt,
+      ),
+    });
+    const finding = {
+      ...ledgerFinding(1),
+      rawFindingIds: [namespacedRawId],
+    };
+
+    expect(collectTaskScopeReportExcerpts({
+      finding,
+      ledgerRawFindings: [ledgerRaw],
+      publications: [publication],
+    })).toMatchObject([{ excerpt }]);
+  });
+
+  it('omits task-scope bindings from standard, dismissless, and conflict task ids', () => {
+    const finding = ledgerFinding(1);
+    const conflict: FindingLedgerConflict = {
+      id: 'C-0001',
+      status: 'active',
+      findingIds: [finding.id],
+      rawFindingIds: [],
+      description: 'Needs adjudication',
+      firstSeen: finding.firstSeen,
+      lastSeen: finding.lastSeen,
+      revision: 1,
+    };
+    const manifestFor = (input: {
+      authority: 'standard' | 'terminal_adjudication';
+      workflowTask: string;
+      dismiss?: boolean;
+      invalidate?: boolean;
+      conflict?: boolean;
+    }) => createMainManagerControlTaskManifest({
+      previousLedger: emptyLedger({
+        findings: [finding],
+        conflicts: input.conflict ? [conflict] : [],
+      }),
+      reviewScopeSnapshotId: 'scope-test',
+      priorStepResponseText: undefined,
+      invalidLocationCandidates: input.invalidate
+        ? new Map([[finding.id, 'invalid location']])
+        : new Map(),
+      dismissCandidates: input.dismiss
+        ? new Map([[finding.id, 'terminal claim']])
+        : new Map(),
+      managerAuthority: input.authority,
+      workflowTask: input.workflowTask,
+      subResults: [],
+    })[0]!.task;
+
+    const standardA = manifestFor({
+      authority: 'standard',
+      workflowTask: 'TASK-SCOPE-MARKER-A',
+      dismiss: true,
+    });
+    const standardB = manifestFor({
+      authority: 'standard',
+      workflowTask: 'TASK-SCOPE-MARKER-B',
+      dismiss: true,
+    });
+    expect(standardA.taskScopeContext).toBeUndefined();
+    expect(standardB.taskId).toBe(standardA.taskId);
+
+    const dismisslessA = manifestFor({
+      authority: 'terminal_adjudication',
+      workflowTask: 'TASK-SCOPE-MARKER-A',
+      invalidate: true,
+    });
+    const dismisslessB = manifestFor({
+      authority: 'terminal_adjudication',
+      workflowTask: 'TASK-SCOPE-MARKER-B',
+      invalidate: true,
+    });
+    expect(dismisslessA.taskScopeContext).toBeUndefined();
+    expect(dismisslessB.taskId).toBe(dismisslessA.taskId);
+
+    const conflictA = manifestFor({
+      authority: 'terminal_adjudication',
+      workflowTask: 'TASK-SCOPE-MARKER-A',
+      conflict: true,
+    });
+    const conflictB = manifestFor({
+      authority: 'terminal_adjudication',
+      workflowTask: 'TASK-SCOPE-MARKER-B',
+      conflict: true,
+    });
+    expect(conflictA.taskScopeContext).toBeUndefined();
+    expect(conflictB.taskId).toBe(conflictA.taskId);
+  });
+
+  it('does not place a terminal workflow task in a dismissless control prompt', async () => {
+    const workflowTaskMarker = 'TASK-SCOPE-INPUT-MUST-NOT-APPEAR';
+    const workflowTask = workflowTaskMarker
+      + 'x'.repeat(MAIN_MANAGER_INPUT_MAX_BYTES + 1);
+    executeAgentMock.mockImplementation(async (_persona, instruction) => {
+      expect(instruction).toContain('## Control task output override');
+      expect(instruction).not.toContain('## Original workflow task');
+      expect(instruction).not.toContain(workflowTaskMarker);
+      const manifest = sectionJson<ControlManifestView>(
+        instruction,
+        '## Task manifest',
+      );
+      return response({
+        taskId: manifest.taskId,
+        evaluations: manifest.candidateIntents.map((intent) => ({
+          intentId: intent.intentId,
+          result: { kind: 'no_action', reason: 'No action required' },
+        })),
+        selectedIntentId: null,
+      });
+    });
+
+    const result = await runMainManagerTasks({
+      contract,
+      previousLedger: emptyLedger({ findings: [ledgerFinding(1)] }),
+      reviewScopeSnapshotId: 'scope-test',
+      residualRawFindings: [],
+      mechanicallyClassifiedCount: 0,
+      priorStepResponseText: undefined,
+      invalidLocationCandidates: new Map([['F-0001', 'invalid location']]),
+      dismissCandidates: new Map(),
+      evidenceRecordsByRawFindingId: new Map(),
+      managerStep,
+      runInput,
+      managerAuthority: 'terminal_adjudication',
+      workflowTask,
+      subResults: [],
+    });
+
+    expect(result.taskAudits).toMatchObject([{ status: 'succeeded' }]);
+  });
+
+  it.each([
+    {
+      name: 'accepts a GitLab claim as outside a GitHub-only terminal task',
+      authority: 'terminal_adjudication' as const,
+      workflowTask: 'Support GitHub issue attachments.',
+      taskQuote: 'GitHub issue attachments',
+      accepted: true,
+    },
+    {
+      name: 'rejects outside_task_scope under standard authority',
+      authority: 'standard' as const,
+      workflowTask: 'Support GitHub issue attachments.',
+      taskQuote: 'GitHub issue attachments',
+      accepted: false,
+    },
+    {
+      name: 'rejects a taskQuote that is not byte-exact',
+      authority: 'terminal_adjudication' as const,
+      workflowTask: 'Support GitHub issue attachments.',
+      taskQuote: 'Support GitLab issue attachments.',
+      accepted: false,
+    },
+  ])('$name', async ({ authority, workflowTask, taskQuote, accepted }) => {
+    executeAgentMock.mockImplementation(async (_persona, instruction) => {
+      expect(instruction).toContain('## Control task output override');
+      expect(instruction).toContain(
+        'Return exactly one object whose only top-level fields are taskId, evaluations, and selectedIntentId.',
+      );
+      expect(instruction).toContain(
+        'Do not return rawDecisions, dismissDecisions, or any other legacy envelope field.',
+      );
+      expect(instruction).toContain(
+        '{"kind":"dismiss","findingId":"<intent entityId>","basis":"outside_task_scope"',
+      );
+      if (authority === 'terminal_adjudication') {
+        expect(instruction).toContain('## Original workflow task');
+        expect(instruction).toContain(workflowTask);
+      } else {
+        expect(instruction).not.toContain('## Original workflow task');
+        expect(instruction).not.toContain(workflowTask);
+      }
+      const manifest = sectionJson<ControlManifestView>(
+        instruction as string,
+        '## Task manifest',
+      );
+      const intent = manifest.candidateIntents[0]!;
+      return response({
+        taskId: manifest.taskId,
+        evaluations: [{
+          intentId: intent.intentId,
+          result: {
+            kind: 'dismiss',
+            findingId: intent.entityId,
+            basis: 'outside_task_scope',
+            reason: 'The finding concerns GitLab, outside this GitHub-only task.',
+            taskQuote,
+          },
+        }],
+        selectedIntentId: intent.intentId,
+      });
+    });
+
+    const result = await runMainManagerTasks({
+      contract,
+      previousLedger: emptyLedger({
+        findings: [{
+          ...ledgerFinding(1),
+          title: 'GitLab attachment support is missing',
+        }],
+      }),
+      reviewScopeSnapshotId: 'scope-test',
+      residualRawFindings: [],
+      mechanicallyClassifiedCount: 0,
+      priorStepResponseText: undefined,
+      invalidLocationCandidates: new Map(),
+      dismissCandidates: new Map([['F-0001', 'terminal claim']]),
+      evidenceRecordsByRawFindingId: new Map(),
+      managerStep,
+      runInput,
+      managerAuthority: authority,
+      workflowTask,
+      subResults: [],
+    });
+
+    expect(result.decisions.dismissDecisions).toHaveLength(accepted ? 1 : 0);
+    expect(result.taskAudits[0]?.status).toBe(accepted ? 'succeeded' : 'failed');
+  });
+
+  it('retains a GitLab claim when the workflow task requests both GitHub and GitLab', async () => {
+    executeAgentMock.mockImplementation(async (_persona, instruction) => {
+      const manifest = sectionJson<ControlManifestView>(
+        instruction as string,
+        '## Task manifest',
+      );
+      return response({
+        taskId: manifest.taskId,
+        evaluations: manifest.candidateIntents.map((intent) => ({
+          intentId: intent.intentId,
+          result: {
+            kind: 'no_action',
+            reason: 'GitLab is explicitly within the original task.',
+          },
+        })),
+        selectedIntentId: null,
+      });
+    });
+    const result = await runMainManagerTasks({
+      contract,
+      previousLedger: emptyLedger({ findings: [ledgerFinding(1)] }),
+      reviewScopeSnapshotId: 'scope-test',
+      residualRawFindings: [],
+      mechanicallyClassifiedCount: 0,
+      priorStepResponseText: undefined,
+      invalidLocationCandidates: new Map(),
+      dismissCandidates: new Map([['F-0001', 'terminal claim']]),
+      evidenceRecordsByRawFindingId: new Map(),
+      managerStep,
+      runInput,
+      managerAuthority: 'terminal_adjudication',
+      workflowTask: 'Support GitHub and GitLab issue attachments.',
+      subResults: [],
+    });
+
+    expect(result.decisions.dismissDecisions).toEqual([]);
+    expect(result.taskAudits[0]?.status).toBe('succeeded');
+  });
+
   it('rejects a raw task atomically when exact cover is missing', async () => {
     const shared = {
       title: 'Shared issue',
@@ -302,6 +764,8 @@ describe('main manager bounded task runner', () => {
       revision: 1,
     };
     executeAgentMock.mockImplementation(async (_persona, instruction) => {
+      expect(instruction).not.toContain('## Original workflow task');
+      expect(instruction).not.toContain('## Relevant current review report excerpts');
       const manifest = sectionJson<ControlManifestView>(instruction, '## Task manifest');
       return response({
         taskId: manifest.taskId,
@@ -483,6 +947,9 @@ describe('main manager bounded task runner', () => {
         '## Disputed Findings\n- findingId: F-0001\n  reason: stale\n  evidence: src/a.ts:10',
       invalidLocationCandidates: new Map([['F-0001', 'missing location']]),
       dismissCandidates: new Map([['F-0001', 'expired provisional']]),
+      managerAuthority: 'standard',
+      workflowTask: 'Review the requested implementation.',
+      subResults: [],
     });
 
     expect(tasks).toHaveLength(1);
@@ -529,6 +996,9 @@ describe('main manager bounded task runner', () => {
         evidenceRecordsByRawFindingId: new Map(),
         managerStep,
         runInput,
+        managerAuthority: 'standard',
+        workflowTask: 'Review the requested implementation.',
+        subResults: [],
       });
 
       expect(result.taskAudits).toMatchObject([{
@@ -595,6 +1065,9 @@ describe('main manager bounded task runner', () => {
         evidenceRecordsByRawFindingId: new Map(),
         managerStep,
         runInput,
+        managerAuthority: 'standard',
+        workflowTask: 'Review the requested implementation.',
+        subResults: [],
       });
 
       expect(result.taskAudits).toMatchObject([{ status: 'failed' }]);
@@ -621,6 +1094,9 @@ describe('main manager bounded task runner', () => {
       evidenceRecordsByRawFindingId: new Map(),
       managerStep,
       runInput,
+      managerAuthority: 'standard',
+      workflowTask: 'Review the requested implementation.',
+      subResults: [],
     });
 
     expect(executeAgentMock).not.toHaveBeenCalled();
@@ -642,6 +1118,9 @@ describe('main manager bounded task runner', () => {
       priorStepResponseText: undefined,
       invalidLocationCandidates: new Map(),
       dismissCandidates: new Map(),
+      managerAuthority: 'standard',
+      workflowTask: 'Review the requested implementation.',
+      subResults: [],
     });
 
     expect(tasks).toEqual([]);

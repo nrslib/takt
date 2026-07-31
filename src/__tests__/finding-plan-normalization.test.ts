@@ -389,7 +389,7 @@ describe('normalizeMergedManagerPlan（保存直前のフル正規化）', () =>
         invalidatedFindings: [{ findingId: 'F-0001', evidence: 'location unresolvable' }],
         dismissedFindings: [{
           findingId: 'F-0002',
-          basis: 'out_of_scope',
+          basis: 'outside_contract_jurisdiction',
           reason: '管轄外',
           evidence: '品質ゲートの実行記録だけを対象にしている',
           authority: 'standard',
@@ -401,6 +401,57 @@ describe('normalizeMergedManagerPlan（保存直前のフル正規化）', () =>
     expect(result.output.invalidatedFindings).toEqual([]);
     expect(result.output.dismissedFindings).toEqual([]);
     expect(result.rejections).toHaveLength(2);
+  });
+
+  it('outside_task_scope は同一ラウンドの clean 観測を監査対象として抑止する', () => {
+    const result = normalizeMergedManagerPlan({
+      output: outputWith({
+        matches: [{ findingId: 'F-0001', rawFindingIds: ['raw-persist'] }],
+        resolvedFindings: [{
+          findingId: 'F-0001',
+          rawFindingIds: ['raw-confirm'],
+          evidence: 'clean confirmation',
+        }],
+        dismissedFindings: [{
+          findingId: 'F-0001',
+          basis: 'outside_task_scope',
+          reason: 'GitLab は GitHub 限定 task の範囲外',
+          taskQuote: 'GitHub issue attachments',
+          workflowTaskDigest: '1'.repeat(64),
+          adjudicationTaskId: '2'.repeat(64),
+          authority: 'terminal_adjudication',
+        }],
+      }),
+      activeConflictFindingIds: new Set(),
+    });
+
+    expect(result.output.matches).toEqual([]);
+    expect(result.output.resolvedFindings).toEqual([]);
+    expect(result.output.dismissedFindings).toHaveLength(1);
+    expect(result.taskScopeSuppressedObservations).toEqual([
+      { findingId: 'F-0001', rawFindingId: 'raw-persist' },
+      { findingId: 'F-0001', rawFindingId: 'raw-confirm' },
+    ]);
+  });
+
+  it('outside_task_scope でも active conflict の裁定権限は迂回しない', () => {
+    const result = normalizeMergedManagerPlan({
+      output: outputWith({
+        dismissedFindings: [{
+          findingId: 'F-0001',
+          basis: 'outside_task_scope',
+          reason: 'task 範囲外',
+          taskQuote: 'GitHub issue attachments',
+          workflowTaskDigest: '1'.repeat(64),
+          adjudicationTaskId: '2'.repeat(64),
+          authority: 'terminal_adjudication',
+        }],
+      }),
+      activeConflictFindingIds: new Set(['F-0001']),
+    });
+
+    expect(result.output.dismissedFindings).toEqual([]);
+    expect(result.rejections[0]).toContain('active conflict');
   });
 
   it('後着証拠が触れた waive は disputeNote へ降格し finding を open に保つ', () => {

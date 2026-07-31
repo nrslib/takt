@@ -28,7 +28,10 @@ import type {
 } from '../core/workflow/findings/types.js';
 import { canonicalJson } from '../shared/utils/canonical-json.js';
 import { openRunStorage } from '../infra/run-storage/root.js';
-import { canonicalRawFindingFixture } from './helpers/finding-lifecycle-fixture.js';
+import {
+  authorizeFindingLedgerFixture,
+  canonicalRawFindingFixture,
+} from './helpers/finding-lifecycle-fixture.js';
 
 afterEach(cleanupRealRunStorages);
 
@@ -42,6 +45,80 @@ function rootFindingRevision(
 }
 
 describe('Finding manager SQLite adapter', () => {
+  it('round-trips outside_task_scope audit bindings through the SQLite projection', async () => {
+    const storage = createRealRunStorage({ findingContractEnabled: true });
+    const lease = storage.root.claimLease({
+      ownerKey: 'task-scope-roundtrip',
+      leaseDurationMs: 9_000,
+    });
+    const runtime = storage.root.runtime({ lease });
+    const execution = runtime.execution.startStep({
+      stepKey: 'task-scope-manager',
+      expectedScopeRevision: 0,
+    });
+    const store = runtime.findingManager({
+      workflowName: 'default',
+      producer: execution.handle,
+    });
+    const current = store.loadLedger();
+    const observation = {
+      runId: store.runId,
+      stepName: 'reviewers',
+      timestamp: current.updatedAt,
+    };
+    const ledger = authorizeFindingLedgerFixture({
+      ...current,
+      nextId: 2,
+      findings: [{
+        id: 'F-0001',
+        status: 'dismissed',
+        lifecycle: 'dismissed',
+        target: null,
+        targetIdentityHash: null,
+        claimIdentityHash: null,
+        semanticClaimIdentityHash: null,
+        severity: 'medium',
+        title: 'GitLab attachment support is missing',
+        evidenceIds: [],
+        reviewers: ['coding-review'],
+        rawFindingIds: [],
+        firstSeen: observation,
+        lastSeen: observation,
+        revision: 2,
+        provisional: {
+          kind: 'raw-meaning-ambiguous',
+          stableKey: 'scope-stable',
+          lineageKey: 'scope-lineage',
+          sourceRawFindingIds: [],
+          reason: 'claim requires terminal adjudication',
+          firstObservedAt: observation,
+          lastObservedAt: observation,
+          interpretationEpochs: 2,
+          gateEffect: 'block',
+          firstObservedRound: 1,
+        },
+        dismissal: {
+          basis: 'outside_task_scope',
+          reason: 'GitLab is outside the GitHub-only task.',
+          taskQuote: 'GitHub issue attachments',
+          workflowTaskDigest: 'a'.repeat(64),
+          adjudicationTaskId: 'b'.repeat(64),
+          authority: 'terminal_adjudication',
+          decidedAt: observation,
+        },
+      }],
+    });
+
+    await store.updateLedger(() => ({ ledger, result: undefined }));
+
+    expect(store.loadLedger().findings[0]?.dismissal).toMatchObject({
+      basis: 'outside_task_scope',
+      taskQuote: 'GitHub issue attachments',
+      workflowTaskDigest: 'a'.repeat(64),
+      adjudicationTaskId: 'b'.repeat(64),
+    });
+  });
+
   it('reopens valid authority after ledger, pending, finalized, and parallel updates', async () => {
     const createFindingStore = () => {
       const storage = createRealRunStorage({ findingContractEnabled: true });

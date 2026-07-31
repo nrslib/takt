@@ -197,7 +197,21 @@ export interface MainManagerControlIntent {
   note: string;
 }
 
-export interface MainManagerControlTask {
+export interface MainManagerControlReportExcerpt {
+  publicationId: string;
+  reportDigest: string;
+  excerpt: string;
+  excerptDigest: string;
+}
+
+export interface MainManagerTaskScopeContext {
+  managerAuthority: 'terminal_adjudication';
+  workflowTaskDigest: string;
+  workflowTask: string;
+  reportExcerpts: MainManagerControlReportExcerpt[];
+}
+
+interface MainManagerControlTaskBase {
   taskId: string;
   kind: MainManagerControlTaskKind;
   ownedEntityIds: string[];
@@ -205,6 +219,14 @@ export interface MainManagerControlTask {
   conflictEvidenceSetHashes: ReadonlyMap<string, string>;
   candidateIntents: MainManagerControlIntent[];
 }
+
+export type MainManagerControlTask =
+  | (MainManagerControlTaskBase & {
+      taskScopeContext: MainManagerTaskScopeContext;
+    })
+  | (MainManagerControlTaskBase & {
+      taskScopeContext?: never;
+    });
 
 const noActionResultSchema = z.object({
   kind: z.literal('no_action'),
@@ -230,10 +252,18 @@ const invalidateResultSchema = z.object({
   evidence: z.string().min(1).max(2_048),
 }).strict();
 
-const dismissResultSchema = z.object({
+const taskScopeDismissResultSchema = z.object({
   kind: z.literal('dismiss'),
   findingId: z.string().min(1),
-  basis: z.enum(FINDING_DISMISSAL_BASES),
+  basis: z.literal('outside_task_scope'),
+  reason: z.string().min(1).max(2_048),
+  taskQuote: z.string().min(1).max(2_048),
+}).strict();
+
+const otherDismissResultSchema = z.object({
+  kind: z.literal('dismiss'),
+  findingId: z.string().min(1),
+  basis: z.enum(FINDING_DISMISSAL_BASES).exclude(['outside_task_scope']),
   reason: z.string().min(1).max(2_048),
   evidence: z.string().min(1).max(2_048),
 }).strict();
@@ -243,7 +273,8 @@ export const MainManagerControlTaskResultSchema = z.union([
   disputeResultSchema,
   conflictResultSchema,
   invalidateResultSchema,
-  dismissResultSchema,
+  taskScopeDismissResultSchema,
+  otherDismissResultSchema,
 ]);
 
 export type MainManagerControlTaskResult = z.infer<
@@ -312,11 +343,26 @@ const controlResultJsonSchemas = [
   {
     type: 'object',
     additionalProperties: false,
+    required: ['kind', 'findingId', 'basis', 'reason', 'taskQuote'],
+    properties: {
+      kind: { type: 'string', const: 'dismiss' },
+      findingId: { type: 'string', minLength: 1 },
+      basis: { type: 'string', const: 'outside_task_scope' },
+      reason: { type: 'string', minLength: 1, maxLength: 2_048 },
+      taskQuote: { type: 'string', minLength: 1, maxLength: 2_048 },
+    },
+  },
+  {
+    type: 'object',
+    additionalProperties: false,
     required: ['kind', 'findingId', 'basis', 'reason', 'evidence'],
     properties: {
       kind: { type: 'string', const: 'dismiss' },
       findingId: { type: 'string', minLength: 1 },
-      basis: { type: 'string', enum: FINDING_DISMISSAL_BASES },
+      basis: {
+        type: 'string',
+        enum: FINDING_DISMISSAL_BASES.filter((basis) => basis !== 'outside_task_scope'),
+      },
       reason: { type: 'string', minLength: 1, maxLength: 2_048 },
       evidence: { type: 'string', minLength: 1, maxLength: 2_048 },
     },

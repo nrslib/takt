@@ -64,6 +64,10 @@ function validateFindingDismissalAuthority(
   dismissal: {
     basis: typeof FINDING_DISMISSAL_BASES[number];
     authority: typeof FINDING_MANAGER_AUTHORITIES[number];
+    evidence?: string;
+    taskQuote?: string;
+    workflowTaskDigest?: string;
+    adjudicationTaskId?: string;
   },
   ctx: z.RefinementCtx,
 ): void {
@@ -75,6 +79,32 @@ function validateFindingDismissalAuthority(
       code: 'custom',
       path: ['authority'],
       message: `dismissal basis "${dismissal.basis}" requires terminal_adjudication authority`,
+    });
+  }
+  if (dismissal.basis === 'outside_task_scope') {
+    if (
+      dismissal.taskQuote === undefined
+      || dismissal.workflowTaskDigest === undefined
+      || dismissal.adjudicationTaskId === undefined
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['taskQuote'],
+        message: 'outside_task_scope dismissal requires taskQuote, workflowTaskDigest, and adjudicationTaskId',
+      });
+    }
+    if (dismissal.evidence !== undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['evidence'],
+        message: 'outside_task_scope dismissal uses taskQuote instead of evidence',
+      });
+    }
+  } else if (dismissal.evidence === undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['evidence'],
+      message: `dismissal basis "${dismissal.basis}" requires evidence`,
     });
   }
 }
@@ -598,7 +628,10 @@ const FindingActionRecoverySchema = z.discriminatedUnion('action', [
     findingId: nonEmptyString,
     basis: z.enum(FINDING_DISMISSAL_BASES),
     reason: nonEmptyString,
-    evidence: nonEmptyString,
+    evidence: nonEmptyString.optional(),
+    taskQuote: nonEmptyString.optional(),
+    workflowTaskDigest: Sha256Schema.optional(),
+    adjudicationTaskId: Sha256Schema.optional(),
     authority: z.enum(FINDING_MANAGER_AUTHORITIES),
     targetPreconditions: z.array(FindingMutationPreconditionSchema).min(1),
   }).strict(),
@@ -683,7 +716,10 @@ export const FindingLedgerEntrySchema = z.object({
   dismissal: z.object({
     basis: z.enum(FINDING_DISMISSAL_BASES),
     reason: nonEmptyString,
-    evidence: nonEmptyString,
+    evidence: nonEmptyString.optional(),
+    taskQuote: nonEmptyString.optional(),
+    workflowTaskDigest: Sha256Schema.optional(),
+    adjudicationTaskId: Sha256Schema.optional(),
     authority: z.enum(FINDING_MANAGER_AUTHORITIES),
     decidedAt: FindingObservationSchema,
   }).strict().superRefine(validateFindingDismissalAuthority).optional(),
@@ -1448,7 +1484,10 @@ export const FindingManagerOutputSchema = z.object({
     findingId: nonEmptyString,
     basis: z.enum(FINDING_DISMISSAL_BASES),
     reason: nonEmptyString,
-    evidence: nonEmptyString,
+    evidence: nonEmptyString.optional(),
+    taskQuote: nonEmptyString.optional(),
+    workflowTaskDigest: Sha256Schema.optional(),
+    adjudicationTaskId: Sha256Schema.optional(),
     authority: z.enum(FINDING_MANAGER_AUTHORITIES),
   }).strict().superRefine(validateFindingDismissalAuthority)),
 }).strict();
@@ -1491,8 +1530,38 @@ export const FindingManagerDismissDecisionSchema = z.object({
   findingId: nonEmptyString,
   basis: z.enum(FINDING_DISMISSAL_BASES),
   reason: nonEmptyString,
-  evidence: nonEmptyString,
-}).strict();
+  evidence: nonEmptyString.optional(),
+  taskQuote: nonEmptyString.optional(),
+  workflowTaskDigest: Sha256Schema.optional(),
+  adjudicationTaskId: Sha256Schema.optional(),
+}).strict().superRefine((decision, ctx) => {
+  if (decision.basis === 'outside_task_scope') {
+    if (
+      decision.taskQuote === undefined
+      || decision.workflowTaskDigest === undefined
+      || decision.adjudicationTaskId === undefined
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['taskQuote'],
+        message: 'outside_task_scope decision requires verified task binding',
+      });
+    }
+    if (decision.evidence !== undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['evidence'],
+        message: 'outside_task_scope decision uses taskQuote instead of evidence',
+      });
+    }
+  } else if (decision.evidence === undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['evidence'],
+      message: `dismissal basis "${decision.basis}" requires evidence`,
+    });
+  }
+});
 
 export const FindingManagerDuplicateDecisionSchema = z.object({
   canonicalFindingId: nonEmptyString,
@@ -1663,12 +1732,15 @@ export const FindingManagerOutputJsonSchema = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['findingId', 'basis', 'reason', 'evidence', 'authority'],
+        required: ['findingId', 'basis', 'reason', 'authority'],
         properties: {
           findingId: { type: 'string', minLength: 1 },
           basis: { enum: FINDING_DISMISSAL_BASES },
           reason: { type: 'string', minLength: 1 },
           evidence: { type: 'string', minLength: 1 },
+          taskQuote: { type: 'string', minLength: 1 },
+          workflowTaskDigest: { type: 'string', pattern: SHA256_HEX_PATTERN.source },
+          adjudicationTaskId: { type: 'string', pattern: SHA256_HEX_PATTERN.source },
           authority: { enum: ['standard', 'terminal_adjudication'] },
         },
       },
@@ -1784,12 +1856,12 @@ export const FindingManagerDecisionsJsonSchema = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['findingId', 'basis', 'reason', 'evidence'],
+        required: ['findingId', 'basis', 'reason'],
         properties: {
           findingId: { type: 'string', minLength: 1 },
           basis: {
             enum: FINDING_DISMISSAL_BASES,
-            description: 'out_of_scope and unverifiable_claim are standard jurisdiction bases. false_positive, overreach, and no_issue_after_verification require terminal_adjudication authority.',
+            description: 'outside_contract_jurisdiction and unverifiable_claim are standard jurisdiction bases. outside_task_scope, false_positive, overreach, and no_issue_after_verification require terminal_adjudication authority.',
           },
           reason: { type: 'string', minLength: 1 },
           evidence: {
@@ -1797,6 +1869,13 @@ export const FindingManagerDecisionsJsonSchema = {
             minLength: 1,
             description: 'Concrete current-code evidence supporting the classification. Silence or lack of a repeated report is not evidence.',
           },
+          taskQuote: {
+            type: 'string',
+            minLength: 1,
+            description: 'Required only for outside_task_scope: a byte-exact non-empty substring of the original workflow task.',
+          },
+          workflowTaskDigest: { type: 'string', pattern: SHA256_HEX_PATTERN.source },
+          adjudicationTaskId: { type: 'string', pattern: SHA256_HEX_PATTERN.source },
         },
       },
     },

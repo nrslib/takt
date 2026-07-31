@@ -196,6 +196,9 @@ export function renderFindingLedgerInstructionSummary(ledger: FindingLedger): st
         title: finding.title,
         basis: finding.dismissal?.basis,
         reason: finding.dismissal?.reason,
+        taskQuote: finding.dismissal?.taskQuote,
+        workflowTaskDigest: finding.dismissal?.workflowTaskDigest,
+        adjudicationTaskId: finding.dismissal?.adjudicationTaskId,
       })),
     conflicts: ledger.conflicts.map((conflict) => ({
       id: conflict.id,

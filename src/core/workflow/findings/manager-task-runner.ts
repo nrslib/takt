@@ -22,11 +22,17 @@ import {
   parseMainManagerControlTaskOutput,
   parseMainManagerRawTaskOutput,
   type MainManagerControlIntent,
+  type MainManagerTaskScopeContext,
   type MainManagerControlTask,
   type MainManagerControlTaskOutput,
   type MainManagerRawTask,
   type MainManagerRawTaskDecision,
 } from './manager-task-contracts.js';
+import {
+  collectTaskScopeReportExcerpts,
+  computeWorkflowTaskDigest,
+  isByteExactWorkflowTaskQuote,
+} from './task-scope-adjudication.js';
 import { captureFindingLifecycleHead } from './lifecycle-mutation.js';
 import {
   findingFileQuoteLocations,
@@ -776,6 +782,7 @@ function controlTask(
   kind: MainManagerControlTask['kind'],
   ownedEntityIds: string[],
   candidateIntents: MainManagerControlIntent[],
+  taskScopeContext?: MainManagerTaskScopeContext,
 ): ControlTaskQueueItem {
   const sortedIds = sortedUnique(ownedEntityIds);
   const sortedIntents = [...candidateIntents].sort((left, right) => (
@@ -814,6 +821,19 @@ function controlTask(
     targetHeads: [...targetHeads.entries()],
     conflictEvidenceSetHashes: [...conflictEvidenceSetHashes.entries()],
     candidateIntents: sortedIntents,
+    ...(taskScopeContext === undefined
+      ? {}
+      : {
+          taskScopeBinding: {
+            managerAuthority: taskScopeContext.managerAuthority,
+            workflowTaskDigest: taskScopeContext.workflowTaskDigest,
+            reportExcerptBindings: taskScopeContext.reportExcerpts.map((excerpt) => ({
+              publicationId: excerpt.publicationId,
+              reportDigest: excerpt.reportDigest,
+              excerptDigest: excerpt.excerptDigest,
+            })),
+          },
+        }),
   });
   return {
     task: {
@@ -823,6 +843,7 @@ function controlTask(
       targetHeads,
       conflictEvidenceSetHashes,
       candidateIntents: sortedIntents,
+      ...(taskScopeContext === undefined ? {} : { taskScopeContext }),
     },
   };
 }
@@ -850,6 +871,9 @@ export function createMainManagerControlTaskManifest(input: {
   priorStepResponseText: string | undefined;
   invalidLocationCandidates: ReadonlyMap<string, string>;
   dismissCandidates: ReadonlyMap<string, string>;
+  managerAuthority: RunFindingManagerForStepInput['managerAuthority'];
+  workflowTask: string;
+  subResults: RunFindingManagerForStepInput['subResults'];
 }): ControlTaskQueueItem[] {
   const tasks: ControlTaskQueueItem[] = [];
   const findingIntents = new Map<string, MainManagerControlIntent[]>();
@@ -884,12 +908,34 @@ export function createMainManagerControlTaskManifest(input: {
   }
   for (const [findingId, candidateIntents] of [...findingIntents]
     .sort(([left], [right]) => compareBinaryStrings(left, right))) {
+    const finding = input.previousLedger.findings.find(
+      (candidate) => candidate.id === findingId,
+    );
+    if (finding === undefined) {
+      throw new Error(`Control task target finding "${findingId}" is missing`);
+    }
+    const taskScopeContext: MainManagerTaskScopeContext | undefined = (
+      input.managerAuthority === 'terminal_adjudication'
+      && candidateIntents.some((intent) => intent.kind === 'dismiss')
+    )
+      ? {
+          managerAuthority: input.managerAuthority,
+          workflowTaskDigest: computeWorkflowTaskDigest(input.workflowTask),
+          workflowTask: input.workflowTask,
+          reportExcerpts: collectTaskScopeReportExcerpts({
+            finding,
+            ledgerRawFindings: input.previousLedger.rawFindings,
+            publications: input.subResults.map((result) => result.publication),
+          }),
+        }
+      : undefined;
     tasks.push(controlTask(
       input.previousLedger,
       input.reviewScopeSnapshotId,
       'finding_control',
       [findingId],
       candidateIntents,
+      taskScopeContext,
     ));
   }
   for (const conflict of [...input.previousLedger.conflicts]
@@ -945,18 +991,29 @@ function buildControlTaskInstruction(input: {
   contract: FindingContractConfig;
   previousLedger: FindingLedger;
   task: MainManagerControlTask;
-  managerAuthority: RunFindingManagerForStepInput['managerAuthority'];
 }): string {
-  const dismissalAuthorityInstruction = input.managerAuthority === 'terminal_adjudication'
-    ? 'For dismiss intents, you may additionally use false_positive, overreach, or no_issue_after_verification after directly checking the current code. Each dismissal requires concrete current-code evidence; silence or non-repetition is never sufficient.'
-    : 'For dismiss intents, only out_of_scope or unverifiable_claim are allowed. false_positive, overreach, and no_issue_after_verification are not authorized in this task.';
+  const hasDismissIntent = input.task.candidateIntents.some(
+    (intent) => intent.kind === 'dismiss',
+  );
+  const dismissalAuthorityInstruction = !hasDismissIntent
+    ? []
+    : input.task.taskScopeContext !== undefined
+      ? ['For dismiss intents, outside_task_scope is authorized only when taskQuote is a non-empty byte-exact quote from the Original workflow task. outside_contract_jurisdiction and unverifiable_claim retain their existing meanings. You may additionally use false_positive, overreach, or no_issue_after_verification after directly checking the current code. Non-task-scope dismissals require concrete current-code evidence; silence or non-repetition is never sufficient.']
+      : ['For dismiss intents, only outside_contract_jurisdiction or unverifiable_claim are allowed. outside_task_scope, false_positive, overreach, and no_issue_after_verification are not authorized in this task.'];
+  const taskScopeContext = input.task.taskScopeContext;
   return [
     input.contract.manager.instruction,
+    '',
+    '## Control task output override',
+    'The Finding Manager instruction above may describe a legacy rawDecisions/dismissDecisions envelope. That envelope is disabled for this control task.',
+    'Return exactly one object whose only top-level fields are taskId, evaluations, and selectedIntentId. Do not return rawDecisions, dismissDecisions, or any other legacy envelope field.',
+    'Each evaluations entry must contain exactly intentId and result. Exact-cover every candidate intent.',
+    'An outside_task_scope result has exactly this shape: {"kind":"dismiss","findingId":"<intent entityId>","basis":"outside_task_scope","reason":"<separate reason>","taskQuote":"<non-empty byte-exact workflow task substring>"}. It has no evidence field.',
     '',
     'This is one engine-owned control task. Return the exact taskId and exact-cover evaluations for every candidate intent.',
     'Set selectedIntentId to null when every evaluation is no_action. Otherwise select exactly one intent, return its matching action, and return no_action for every other intent.',
     'Never reference an entity outside the intent entityId. The engine will reject stale target heads at commit.',
-    dismissalAuthorityInstruction,
+    ...dismissalAuthorityInstruction,
     '',
     '## Task manifest',
     renderFencedJsonBlock({
@@ -969,7 +1026,28 @@ function buildControlTaskInstruction(input: {
         targetHead: input.task.targetHeads.get(entityId) ?? null,
         evidenceSetHash: input.task.conflictEvidenceSetHashes.get(entityId) ?? null,
       })),
+      ...(taskScopeContext === undefined
+        ? {}
+        : {
+            managerAuthority: taskScopeContext.managerAuthority,
+            workflowTaskDigest: taskScopeContext.workflowTaskDigest,
+            reportExcerptBindings: taskScopeContext.reportExcerpts.map((excerpt) => ({
+              publicationId: excerpt.publicationId,
+              reportDigest: excerpt.reportDigest,
+              excerptDigest: excerpt.excerptDigest,
+            })),
+          }),
     }),
+    ...(taskScopeContext === undefined
+      ? []
+      : [
+          '',
+          '## Original workflow task',
+          taskScopeContext.workflowTask,
+          '',
+          '## Relevant current review report excerpts',
+          renderFencedJsonBlock(taskScopeContext.reportExcerpts),
+        ]),
     '',
     '## Relevant ledger projection',
     renderFencedJsonBlock(taskLedgerProjection(
@@ -1030,6 +1108,21 @@ function validateControlTaskOutput(
         `Control intent "${intent.intentId}" returned out-of-scope conflict "${result.conflictId}"`,
       );
     }
+    if (
+      result.kind === 'dismiss'
+      && result.basis === 'outside_task_scope'
+      && (
+        task.taskScopeContext === undefined
+        || !isByteExactWorkflowTaskQuote(
+          task.taskScopeContext.workflowTask,
+          result.taskQuote,
+        )
+      )
+    ) {
+      throw new Error(
+        `Control intent "${intent.intentId}" returned an unauthorized or mismatched outside_task_scope taskQuote`,
+      );
+    }
   }
   return output.evaluations;
 }
@@ -1037,6 +1130,7 @@ function validateControlTaskOutput(
 function appendControlResult(
   decisions: FindingManagerDecisions,
   result: MainManagerControlTaskOutput['evaluations'][number]['result'],
+  task: MainManagerControlTask,
 ): void {
   switch (result.kind) {
     case 'no_action':
@@ -1065,12 +1159,28 @@ function appendControlResult(
       });
       return;
     case 'dismiss':
-      decisions.dismissDecisions.push({
-        findingId: result.findingId,
-        basis: result.basis,
-        reason: result.reason,
-        evidence: result.evidence,
-      });
+      if (result.basis === 'outside_task_scope') {
+        if (task.taskScopeContext === undefined) {
+          throw new Error(
+            `Control task "${task.taskId}" lacks an outside_task_scope binding`,
+          );
+        }
+        decisions.dismissDecisions.push({
+          findingId: result.findingId,
+          basis: result.basis,
+          reason: result.reason,
+          taskQuote: result.taskQuote,
+          workflowTaskDigest: task.taskScopeContext.workflowTaskDigest,
+          adjudicationTaskId: task.taskId,
+        });
+      } else {
+        decisions.dismissDecisions.push({
+          findingId: result.findingId,
+          basis: result.basis,
+          reason: result.reason,
+          evidence: result.evidence,
+        });
+      }
   }
 }
 
@@ -1084,6 +1194,8 @@ async function executeControlTasks(input: {
   managerStep: AgentWorkflowStep;
   runInput: Pick<RunFindingManagerForStepInput, 'optionsBuilder' | 'stepExecutor'>;
   managerAuthority: RunFindingManagerForStepInput['managerAuthority'];
+  workflowTask: string;
+  subResults: RunFindingManagerForStepInput['subResults'];
 }): Promise<{
   decisions: FindingManagerDecisions;
   conflictTargetHeads: Map<string, CapturedManagerConflictHead>;
@@ -1101,7 +1213,6 @@ async function executeControlTasks(input: {
       contract: input.contract,
       previousLedger: input.previousLedger,
       task: item.task,
-      managerAuthority: input.managerAuthority,
     });
     const phase1Instruction = input.runInput.stepExecutor.buildPhase1Instruction(
       instruction,
@@ -1133,7 +1244,7 @@ async function executeControlTasks(input: {
       );
       const evaluations = validateControlTaskOutput(item.task, output);
       for (const evaluation of evaluations) {
-        appendControlResult(decisions, evaluation.result);
+        appendControlResult(decisions, evaluation.result, item.task);
         if (
           evaluation.result.kind === 'resolve'
           || evaluation.result.kind === 'keep'
@@ -1243,6 +1354,8 @@ export async function runMainManagerTasks(input: {
   managerStep: AgentWorkflowStep;
   runInput: Pick<RunFindingManagerForStepInput, 'optionsBuilder' | 'stepExecutor'>;
   managerAuthority: RunFindingManagerForStepInput['managerAuthority'];
+  workflowTask: string;
+  subResults: RunFindingManagerForStepInput['subResults'];
 }): Promise<MainManagerTaskExecution> {
   assertFixedPrefixFits({
     contract: input.contract,

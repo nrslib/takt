@@ -16,7 +16,7 @@ Fill this when the diff adds or changes IDs, names, metadata, config, environmen
 ## Non-Finding Concerns
 | Item | Location | Classification | Evidence for Not Making a Finding |
 |------|----------|----------------|-----------------------------------|
-| {Concern, or "none"} | `src/file.ts:42` | false_positive / overreach / out_of_scope / no_issue_after_verification | {Evidence} |
+| {Concern, or "none"} | `src/file.ts:42` | false_positive / overreach / outside_contract_jurisdiction / no_issue_after_verification | {Evidence} |
 
 ## Current Iteration Findings (new)
 | # | finding_id | family_tag | Severity | Location | Issue | Impact | Fix Suggestion |

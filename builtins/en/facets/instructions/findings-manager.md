@@ -30,12 +30,13 @@ The prompt may list open findings the engine deterministically flagged because t
 
 The prompt may list open provisional findings that hold mechanically unsettleable claims and are blocking the completion gate as dismissal candidates. Adjudicate each candidate's claim on its substance:
 
-- The claim is outside the finding contract's jurisdiction (for example, demands about quality-gate execution or its evidence reporting — evaluating verification results is the final gate's job) → dismiss with `basis: out_of_scope`
+- The claim is outside the finding contract's jurisdiction → dismiss with `basis: outside_contract_jurisdiction`
+- The claim is real but outside the original workflow task → only with explicit `terminal_adjudication`, dismiss with `basis: outside_task_scope` and a non-empty `taskQuote` copied byte-for-byte from the original workflow task
 - The claim can never be substantiated (neither a quote nor later clean evidence can ever establish it) → dismiss with `basis: unverifiable_claim`
 - Only when the engine explicitly grants `terminal_adjudication` authority for this control task, you may use `false_positive`, `overreach`, or `no_issue_after_verification`, backed by concrete evidence from directly inspecting the current code
 - The underlying concern is real and could still be settled by later clean review evidence → do not dismiss; leave it out (stays open)
 
-A dismissal requires both a concrete reason and current-code evidence. Silence, non-repetition, or an approval label alone is never evidence. A standard dismissal means "outside adjudication scope", never "fixed". A `terminal_adjudication` semantic dismissal must explain why the claim does not hold. Both remain on the ledger as audit records. You may only dismiss findings from the list; the engine rejects entries outside it. Leave `dismissDecisions` empty when there are no candidates.
+A non-task-scope dismissal requires both a concrete reason and current-code evidence. `outside_task_scope` requires `taskQuote` instead of free-form evidence, with reason kept separate. Silence, non-repetition, or an approval label alone is never evidence. All dismissals remain on the ledger as audit records. You may only dismiss findings from the list; the engine rejects entries outside it. Leave `dismissDecisions` empty when there are no candidates.
 
 ## Duplicate findings
 

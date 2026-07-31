@@ -26,6 +26,8 @@ import {
 import { computeClaimIdentityHash } from '../core/workflow/findings/evidence-domain.js';
 import { createRawRecoveryAttempt } from '../core/models/finding-raw-recovery.js';
 import { captureFindingLifecycleHead } from '../core/workflow/findings/lifecycle-mutation.js';
+import { hasLifecycleProductTransitionCapability } from '../core/workflow/findings/raw-relation-capabilities.js';
+import { renderFindingLedgerInstructionSummary } from '../core/workflow/findings/context.js';
 import {
   createFindingManagerPublicationDouble,
   RevisionedFindingLedgerTestRepository,
@@ -198,7 +200,7 @@ describe('computeDismissCandidates', () => {
 describe('assembleManagerOutput dismissDecisions', () => {
   const dismissal = {
     findingId: 'F-0001',
-    basis: 'out_of_scope' as const,
+    basis: 'outside_contract_jurisdiction' as const,
     reason: '検証結果の評価は final gate の職掌',
     evidence: '主張はコードではなく品質ゲートの実行記録だけを対象にしている',
   };
@@ -294,6 +296,42 @@ describe('assembleManagerOutput dismissDecisions', () => {
     expect(assembly.rejectedDismissDecisions[0]?.reason).toContain('re-observed');
   });
 
+  it('outside_task_scope は同一ラウンドの clean 再観測より優先して採用する', () => {
+    const ledger = makeLedger([provisionalEntry({ revision: 1 })]);
+    const assembly = assembleManagerOutput({
+      previousLedger: ledger,
+      residualRawFindings: [],
+      decisions: makeDecisions({
+        dismissDecisions: [{
+          findingId: 'F-0001',
+          basis: 'outside_task_scope',
+          reason: 'GitLab は GitHub 限定 task の範囲外',
+          taskQuote: 'GitHub issue attachments',
+          workflowTaskDigest: '1'.repeat(64),
+          adjudicationTaskId: '2'.repeat(64),
+        }],
+      }),
+      mechanicalOutput: {
+        ...createEmptyManagerOutput(),
+        matches: [{
+          findingId: 'F-0001',
+          rawFindingIds: ['persist-1'],
+          evidence: 'GitLab 添付の未対応を再観測した',
+        }],
+      },
+      dismissCandidateFindingIds: new Set(['F-0001']),
+      managerAuthority: 'terminal_adjudication',
+    });
+
+    expect(assembly.output.dismissedFindings).toEqual([
+      expect.objectContaining({
+        findingId: 'F-0001',
+        basis: 'outside_task_scope',
+      }),
+    ]);
+    expect(assembly.rejectedDismissDecisions).toEqual([]);
+  });
+
   it('エンジンが候補として提示していない finding への dismiss は不採用にする', () => {
     const ledger = makeLedger([provisionalEntry({ revision: 1 })]);
     const assembly = assembleManagerOutput({
@@ -385,7 +423,7 @@ describe('reconcileFindingLedger dismissedFindings', () => {
         ...createEmptyManagerOutput(),
         dismissedFindings: [{
           findingId: 'F-0001',
-          basis: 'out_of_scope',
+          basis: 'outside_contract_jurisdiction',
           reason: 'final gate の職掌',
           evidence: '品質ゲートの実行記録だけを対象にしている',
           authority: 'standard',
@@ -399,7 +437,7 @@ describe('reconcileFindingLedger dismissedFindings', () => {
     expect(dismissed.lifecycle).toBe('dismissed');
     expect(dismissed.revision).toBe(4);
     expect(dismissed.dismissal).toMatchObject({
-      basis: 'out_of_scope',
+      basis: 'outside_contract_jurisdiction',
       reason: 'final gate の職掌',
       evidence: '品質ゲートの実行記録だけを対象にしている',
       authority: 'standard',
@@ -407,7 +445,7 @@ describe('reconcileFindingLedger dismissedFindings', () => {
     });
   });
 
-  it('dismiss と同一ラウンドの監査観測を別の実変更として revision に反映する', () => {
+  it('outside_task_scope は同一ラウンドの persists を dismissed_same_round の監査だけにする', () => {
     const current = provisionalEntry({ revision: 3 });
     const currentLedger = makeLedger([current]);
     const rawFinding: RawFinding = canonicalRawFindingFixture({
@@ -419,8 +457,14 @@ describe('reconcileFindingLedger dismissedFindings', () => {
       title: current.title,
       description: current.description ?? 'same claim',
       suggestion: null,
-      relation: 'new',
-      targetFindingId: null,
+      relation: 'persists',
+      targetFindingId: current.id,
+      targetPrecondition: {
+        targetFindingId: current.id,
+        targetRevision: current.revision,
+        targetStatus: 'open',
+        targetEvidenceHash: '0'.repeat(64),
+      },
       evidence: [],
     });
 
@@ -436,22 +480,22 @@ describe('reconcileFindingLedger dismissedFindings', () => {
       rawFindings: [rawFinding],
       managerOutput: {
         ...createEmptyManagerOutput(),
+        matches: [{
+          findingId: current.id,
+          rawFindingIds: [rawFinding.rawFindingId],
+          evidence: 'GitLab concern still exists',
+        }],
         dismissedFindings: [{
           findingId: current.id,
-          basis: 'out_of_scope',
-          reason: 'final gate の職掌',
-          evidence: '品質ゲートの実行記録だけを対象にしている',
-          authority: 'standard',
+          basis: 'outside_task_scope',
+          reason: 'GitLab は GitHub 限定 task の範囲外',
+          taskQuote: 'GitHub issue attachments',
+          workflowTaskDigest: '1'.repeat(64),
+          adjudicationTaskId: '2'.repeat(64),
+          authority: 'terminal_adjudication',
         }],
       },
-      provisionalSpecs: [{
-        ...current.provisional!,
-        sourceRawFindingIds: [rawFinding.rawFindingId],
-        title: current.title,
-        severity: current.severity,
-        description: rawFinding.description,
-        reviewers: [rawFinding.reviewer],
-      }],
+      provisionalSpecs: [],
       entityProvisionalMutations: [],
       anomalySpecs: [],
       pendingRejectedObservations: [],
@@ -469,7 +513,7 @@ describe('reconcileFindingLedger dismissedFindings', () => {
           current.provisional!.lineageKey,
         ),
       ]]),
-      cleanWire: [],
+      cleanWire: [rawFinding],
       explicitResolvedByMapping: new Map(),
       explicitPromotedFindingIds: new Set(),
       recoveryProvisionalRawFindingIds: new Set(),
@@ -524,7 +568,7 @@ describe('fixpoint snapshot with dismissed provisionals', () => {
         status: 'dismissed',
         lifecycle: 'dismissed',
         dismissal: {
-          basis: 'out_of_scope',
+          basis: 'outside_contract_jurisdiction',
           reason: 'final gate の職掌',
           evidence: '品質ゲートの実行記録だけを対象にしている',
           authority: 'standard',
@@ -535,6 +579,62 @@ describe('fixpoint snapshot with dismissed provisionals', () => {
     );
     expect(after.provisionalKeys).toEqual([]);
     expect(after.substantiveEntries).toEqual(['F-0001:dismissed']);
+  });
+});
+
+describe('outside_task_scope reopen capability', () => {
+  const taskDigest = 'a'.repeat(64);
+  const dismissed = provisionalEntry({
+    revision: 2,
+    status: 'dismissed',
+    lifecycle: 'dismissed',
+    dismissal: {
+      basis: 'outside_task_scope',
+      reason: 'GitLab は GitHub 限定 task の範囲外',
+      taskQuote: 'GitHub issue attachments',
+      workflowTaskDigest: taskDigest,
+      adjudicationTaskId: 'b'.repeat(64),
+      authority: 'terminal_adjudication',
+      decidedAt: {
+        runId: 'run-2',
+        stepName: 'reviewers',
+        timestamp: '2026-07-02T00:00:00.000Z',
+      },
+    },
+  });
+
+  it('同じ workflow task digest の reopened raw は audit-only にする', () => {
+    expect(hasLifecycleProductTransitionCapability({
+      relation: 'reopened',
+      target: dismissed,
+      workflowTaskDigest: taskDigest,
+    })).toBe(false);
+  });
+
+  it('別 workflow task digest では新しい scope として reopen を評価できる', () => {
+    expect(hasLifecycleProductTransitionCapability({
+      relation: 'reopened',
+      target: dismissed,
+      workflowTaskDigest: 'c'.repeat(64),
+    })).toBe(true);
+  });
+
+  it('dismissal の task binding を台帳コンテキストへ表示する', () => {
+    const summary = JSON.parse(renderFindingLedgerInstructionSummary(
+      makeLedger([dismissed]),
+    )) as {
+      dismissed: Array<{
+        taskQuote: string;
+        workflowTaskDigest: string;
+        adjudicationTaskId: string;
+      }>;
+    };
+
+    expect(summary.dismissed[0]).toMatchObject({
+      taskQuote: 'GitHub issue attachments',
+      workflowTaskDigest: taskDigest,
+      adjudicationTaskId: 'b'.repeat(64),
+    });
   });
 });
 
@@ -580,7 +680,7 @@ describe('runFindingManagerForStep dismiss round trip', () => {
         duplicateDecisions: [],
         dismissDecisions: [{
           findingId: 'F-0001',
-          basis: 'out_of_scope',
+          basis: 'outside_contract_jurisdiction',
           reason: '品質ゲート証跡の評価は final gate の職掌',
           evidence: '主張は品質ゲートの実行記録だけを対象にしている',
         }],
@@ -613,13 +713,14 @@ describe('runFindingManagerForStep dismiss round trip', () => {
       callNamespace: '',
       timestamp: '2026-07-02T00:00:00.000Z',
       managerAuthority: 'standard',
+      workflowTask: 'Review the requested implementation.',
       });
 
       expect(executeAgentMock).toHaveBeenCalledTimes(1);
 
       const dismissed = result.ledger.findings.find((finding) => finding.id === 'F-0001')!;
       expect(dismissed.status).toBe('dismissed');
-      expect(dismissed.dismissal?.basis).toBe('out_of_scope');
+      expect(dismissed.dismissal?.basis).toBe('outside_contract_jurisdiction');
       expect(result.ledger.findings.filter((finding) => finding.status === 'open')).toEqual([]);
     } finally {
       rmSync(reportDir, { recursive: true, force: true });

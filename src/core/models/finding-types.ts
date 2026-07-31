@@ -335,12 +335,13 @@ export const DISMISSABLE_PROVISIONAL_KINDS = [
 
 /**
  * dismiss 裁定の根拠分類。
- * out_of_scope / unverifiable_claim は通常の管轄裁定、
- * false_positive / overreach / no_issue_after_verification は
+ * outside_contract_jurisdiction / unverifiable_claim は通常の管轄裁定、
+ * outside_task_scope / false_positive / overreach / no_issue_after_verification は
  * terminal_adjudication 専用の意味裁定。
  */
 export const FINDING_DISMISSAL_BASES = [
-  'out_of_scope',
+  'outside_contract_jurisdiction',
+  'outside_task_scope',
   'unverifiable_claim',
   'false_positive',
   'overreach',
@@ -348,6 +349,7 @@ export const FINDING_DISMISSAL_BASES = [
 ] as const;
 export type FindingDismissalBasis = typeof FINDING_DISMISSAL_BASES[number];
 export const SEMANTIC_FINDING_DISMISSAL_BASES = [
+  'outside_task_scope',
   'false_positive',
   'overreach',
   'no_issue_after_verification',
@@ -364,7 +366,10 @@ export type FindingManagerAuthority =
 export interface FindingDismissalRecord {
   basis: FindingDismissalBasis;
   reason: string;
-  evidence: string;
+  evidence?: string;
+  taskQuote?: string;
+  workflowTaskDigest?: string;
+  adjudicationTaskId?: string;
   authority: FindingManagerAuthority;
   decidedAt: FindingObservation;
 }
@@ -389,7 +394,10 @@ export type FindingActionProposal =
       findingId: string;
       basis: FindingDismissalBasis;
       reason: string;
-      evidence: string;
+      evidence?: string;
+      taskQuote?: string;
+      workflowTaskDigest?: string;
+      adjudicationTaskId?: string;
       authority: FindingManagerAuthority;
     };
 
@@ -1568,7 +1576,10 @@ export interface FindingManagerDismissedFinding {
   findingId: string;
   basis: FindingDismissalBasis;
   reason: string;
-  evidence: string;
+  evidence?: string;
+  taskQuote?: string;
+  workflowTaskDigest?: string;
+  adjudicationTaskId?: string;
   authority: FindingManagerAuthority;
 }
 
@@ -1725,7 +1736,10 @@ export interface FindingManagerDismissDecision {
   findingId: string;
   basis: FindingDismissalBasis;
   reason: string;
-  evidence: string;
+  evidence?: string;
+  taskQuote?: string;
+  workflowTaskDigest?: string;
+  adjudicationTaskId?: string;
 }
 
 /** LLM が返す「判断だけ」の出力。組み立て・不変条件の強制は decision-assembly.ts が行う。 */

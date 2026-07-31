@@ -1157,7 +1157,14 @@ function reconcileFindingLedgerWithValidator(
       dismissal: {
         basis: dismissed.basis,
         reason: dismissed.reason,
-        evidence: dismissed.evidence,
+        ...(dismissed.evidence !== undefined ? { evidence: dismissed.evidence } : {}),
+        ...(dismissed.taskQuote !== undefined ? { taskQuote: dismissed.taskQuote } : {}),
+        ...(dismissed.workflowTaskDigest !== undefined
+          ? { workflowTaskDigest: dismissed.workflowTaskDigest }
+          : {}),
+        ...(dismissed.adjudicationTaskId !== undefined
+          ? { adjudicationTaskId: dismissed.adjudicationTaskId }
+          : {}),
         authority: dismissed.authority,
         decidedAt: observationFromContext(input.context),
       },

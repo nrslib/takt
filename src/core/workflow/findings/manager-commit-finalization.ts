@@ -137,20 +137,32 @@ export function reconcileCommitPlan(input: {
     output: input.managerOutput,
     activeConflictFindingIds: collectActiveConflictFindingIds(input.freshLedger),
   });
+  const scopeDismissedFindingIds = new Set(
+    normalized.output.dismissedFindings
+      .filter((dismissed) => dismissed.basis === 'outside_task_scope')
+      .map((dismissed) => dismissed.findingId),
+  );
   const settlement = settleProvisionalsWithCleanEvidence({
     output: normalized.output,
     cleanRawIds: new Set(input.cleanWire.map((wire) => wire.rawFindingId)),
     wireById: new Map(input.rawFindings.map((wire) => [wire.rawFindingId, wire])),
     freshLedger: input.freshLedger,
-    explicitResolvedByMapping: input.explicitResolvedByMapping,
-    explicitPromotedFindingIds: input.explicitPromotedFindingIds,
+    explicitResolvedByMapping: new Map(
+      [...input.explicitResolvedByMapping].filter(
+        ([findingId]) => !scopeDismissedFindingIds.has(findingId),
+      ),
+    ),
+    explicitPromotedFindingIds: new Set(
+      [...input.explicitPromotedFindingIds].filter(
+        (findingId) => !scopeDismissedFindingIds.has(findingId),
+      ),
+    ),
     healthyReviewerStableKeys: input.healthyReviewerStableKeys,
     replayOrigins: new Map(),
   });
-  // clean 証拠による settlement（昇格 / 決定的 same による解消）が確定した
-  // provisional への dismiss は不採用にする — clean 証拠が常に管轄裁定より
-  // 優先（settlement 側が status を変えるため、残すと reconciler の
-  // 「1 finding = 1 決定」検証で出力全体が落ちる）。
+  // clean 証拠による settlement が確定した provisional への通常 dismiss は
+  // 不採用にする。outside_task_scope は上で対象 raw を audit-only に移しており、
+  // 実在性と task scope の裁定を両立するため dismissal を維持する。
   const settledFindingIds = new Set([
     ...settlement.promotedFindingIds,
     ...settlement.resolvedByMapping.keys(),
@@ -164,7 +176,10 @@ export function reconcileCommitPlan(input: {
       ? {
           ...settlement.output,
           dismissedFindings: settlement.output.dismissedFindings.filter(
-            (dismissed) => !settledFindingIds.has(dismissed.findingId),
+            (dismissed) => (
+              dismissed.basis === 'outside_task_scope'
+              || !settledFindingIds.has(dismissed.findingId)
+            ),
           ),
         }
       : settlement.output,
@@ -214,6 +229,17 @@ export function reconcileCommitPlan(input: {
       outcome: 'audit_only' as const,
       reason: `The observation was recorded on the finding dismissed in this round: ${spec.reason}`,
     }))),
+    ...normalized.taskScopeSuppressedObservations
+      .filter((observation) => (
+        !suppressedSpecs.some((spec) => (
+          spec.sourceRawFindingIds.includes(observation.rawFindingId)
+        ))
+      ))
+      .map((observation) => ({
+        rawFindingId: observation.rawFindingId,
+        outcome: 'audit_only' as const,
+        reason: `The observation was recorded on finding "${observation.findingId}" dismissed as outside_task_scope in this round`,
+      })),
     ...[...input.recoveryProvisionalRawFindingIds].flatMap((rawFindingId) => (
       landedRawFindingIds.has(rawFindingId) || provisionalRawFindingIds.has(rawFindingId)
         ? []
@@ -338,6 +364,7 @@ export function reconcileCommitPlan(input: {
     ...planSuppressedObservationsForDismissed(
       settled,
       suppressedSpecs,
+      normalized.taskScopeSuppressedObservations,
       new Set(settledOutput.dismissedFindings.map((dismissed) => dismissed.findingId)),
     ),
     ...terminalEntityResults.flatMap((result) => (
@@ -428,9 +455,13 @@ function dropRegeneratedConflictResolves(
 function planSuppressedObservationsForDismissed(
   ledger: FindingLedger,
   suppressedSpecs: readonly ProvisionalFindingSpec[],
+  taskScopeSuppressedObservations: readonly {
+    findingId: string;
+    rawFindingId: string;
+  }[],
   dismissedThisRoundFindingIds: ReadonlySet<string>,
 ): RejectedObservationAttachment[] {
-  if (suppressedSpecs.length === 0) {
+  if (suppressedSpecs.length === 0 && taskScopeSuppressedObservations.length === 0) {
     return [];
   }
   const rawIdsByStableKey = new Map<string, Set<string>>();
@@ -445,11 +476,12 @@ function planSuppressedObservationsForDismissed(
     if (!dismissedThisRoundFindingIds.has(finding.id) || finding.provisional === undefined) {
       return [];
     }
-    const rawIds = rawIdsByStableKey.get(finding.provisional.stableKey);
-    if (rawIds === undefined) {
-      return [];
-    }
-    return [...rawIds].map((rawFindingId) => ({
+    const rawIds = rawIdsByStableKey.get(finding.provisional.stableKey)
+      ?? new Set<string>();
+    const taskScopeRawIds = taskScopeSuppressedObservations
+      .filter((observation) => observation.findingId === finding.id)
+      .map((observation) => observation.rawFindingId);
+    return [...new Set([...rawIds, ...taskScopeRawIds])].map((rawFindingId) => ({
       targetFindingId: finding.id,
       rawFindingId,
       reason: 'Same-claim observation arrived in the round its provisional was dismissed; recorded for audit only — the dismissal covers this re-assertion',

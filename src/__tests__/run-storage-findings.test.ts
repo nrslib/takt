@@ -129,6 +129,8 @@ describe('Finding authority boundary', () => {
       runId: 'run-1',
       callNamespace: '',
       timestamp: '2026-07-31T00:00:00.000Z',
+      workflowTask: 'Review the requested implementation.',
+      managerAuthority: 'standard',
     });
 
     expect(result.status).toBe('updated');

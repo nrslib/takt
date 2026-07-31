@@ -69,9 +69,9 @@
   "dismissDecisions": [
     {
       "findingId": "F-0021",
-      "basis": "out_of_scope",
-      "reason": "Demands evidence of quality-gate execution; evaluating verification results is the final gate's jurisdiction, and the claim alleges no code defect",
-      "evidence": "The claim addresses only the quality-gate execution record and identifies no behavior or structure in the changed code"
+      "basis": "outside_task_scope",
+      "reason": "The claim concerns GitLab attachments, while this workflow task requests GitHub attachment support only",
+      "taskQuote": "Support GitHub issue attachments"
     }
   ]
 }
@@ -94,9 +94,10 @@ Rules for `invalidateDecisions` and `duplicateDecisions`:
 
 Rules for `dismissDecisions`:
 - Only finding ids the prompt lists as dismissal candidates (open provisional findings whose claims cannot be settled mechanically) are eligible. The engine rejects dismissals outside the list.
-- `basis` is normally `out_of_scope` or `unverifiable_claim`. Only when the engine explicitly grants `terminal_adjudication` for the control task may it be `false_positive`, `overreach`, or `no_issue_after_verification`.
-- `evidence` must state concrete current-code evidence. Silence or lack of a repeated report is insufficient.
-- Keep a candidate open (leave it out) when the underlying concern is real and could still be settled by later clean review evidence. A standard dismissal means "outside adjudication scope", never "fixed". A `terminal_adjudication` semantic dismissal records why the claim does not hold. Both stay on the ledger with an audit record.
+- `basis` is normally `outside_contract_jurisdiction` or `unverifiable_claim`. Only when the engine explicitly grants `terminal_adjudication` for the control task may it be `outside_task_scope`, `false_positive`, `overreach`, or `no_issue_after_verification`.
+- `outside_task_scope` requires `taskQuote`, a non-empty byte-exact substring of the original workflow task. Keep `reason` separate and do not return free-form `evidence` for this basis.
+- Every other basis requires concrete current-code `evidence`. Silence or lack of a repeated report is insufficient.
+- Keep a candidate open when it is within the workflow task. A real concern may still be dismissed as `outside_task_scope`; later observations under the same task remain audit-only, while another workflow task evaluates its own scope.
 - An engine decision rejection, stale findingId, unsupported decision, or missing decision is not itself grounds for dismissal. Evaluate the raw claim and keep it open when it describes a real code concern.
 - Leave empty when there are no candidates or every candidate deserves to stay open.
 

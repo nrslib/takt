@@ -69,9 +69,9 @@
   "dismissDecisions": [
     {
       "findingId": "F-0021",
-      "basis": "out_of_scope",
-      "reason": "品質ゲートの実行証跡への要求であり、検証結果の評価は final gate の職掌。コードの欠陥を主張していない",
-      "evidence": "対象主張は品質ゲートの実行記録だけを要求しており、変更対象コードの挙動や構造を指していない"
+      "basis": "outside_task_scope",
+      "reason": "主張は GitLab 添付を対象とするが、元の workflow task は GitHub 添付対応だけを要求している",
+      "taskQuote": "GitHub issue の添付に対応する"
     }
   ]
 }
@@ -94,9 +94,10 @@
 
 `dismissDecisions` のルール。
 - プロンプトが dismiss 候補として列挙した finding id（機械で確定できない open な暫定 finding）のみが対象です。リスト外への dismiss はエンジンが不採用にします。
-- `basis` は通常 `out_of_scope` または `unverifiable_claim` です。エンジンが control task に `terminal_adjudication` を明示した場合だけ `false_positive`、`overreach`、`no_issue_after_verification` も選べます。
-- `evidence` には現在のコードを確認した具体的根拠を入れます。沈黙や再報告されなかったことだけでは不十分です。
-- 懸念が実在し、後続の clean なレビュー証拠で確定し得るなら dismiss せず open のままにしてください。通常の dismiss は「修正済み」ではなく「審査対象外」の裁定であり、意味裁定を含め監査記録付きで台帳に残ります。
+- `basis` は通常 `outside_contract_jurisdiction` または `unverifiable_claim` です。エンジンが control task に `terminal_adjudication` を明示した場合だけ `outside_task_scope`、`false_positive`、`overreach`、`no_issue_after_verification` も選べます。
+- `outside_task_scope` では、元の workflow task の非空 byte-exact substring を `taskQuote` に入れ、`reason` と分離します。この basis に自由文 `evidence` を返してはいけません。
+- その他の basis の `evidence` には現在のコードを確認した具体的根拠を入れます。沈黙や再報告されなかったことだけでは不十分です。
+- 懸念が実在しても元 task の範囲外なら `outside_task_scope` にできます。同一 task の後続観測は監査のみとし、別 task は独自の scope で評価します。
 - エンジンによる decision rejection、stale findingId、unsupported、decision 欠落そのものは dismiss の根拠にしないでください。raw の内容を評価し、実在するコード上の懸念なら open のまま残してください。
 - 候補が無い、またはすべて open のままにする場合は空配列にしてください。
 

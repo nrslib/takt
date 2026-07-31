@@ -307,7 +307,7 @@ Finding Contract で再発が別問題なら reviewer は raw relation を `new`
 - 「既存問題」「非ブロッキング」に分類してよいのは、変更と直接関係しない箇所の問題のみ
 - 「コード自体は以前から存在していた」は、変更箇所・関係箇所の問題を非ブロッキングにする理由にならない
 - 「既存実装と同じ挙動」は、新しい公開入口・adapter・tool がその契約を露出する変更の承認理由にならない
-- 本文で触れた懸念を finding 化しない場合は、`false_positive` / `overreach` / `out_of_scope` / `no_issue_after_verification` のいずれかに分類し、根拠を示す
+- 本文で触れた懸念を finding 化しない場合は、`false_positive` / `overreach` / `outside_contract_jurisdiction` / `no_issue_after_verification` のいずれかに分類し、根拠を示す
 - 問題が1件でもあればREJECT。「APPROVE + 警告」「APPROVE + 提案」は禁止
 
 ## レビューの基本手順

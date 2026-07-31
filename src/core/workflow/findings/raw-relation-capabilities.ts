@@ -25,11 +25,14 @@ export function hasLifecycleTransitionIntent(input: {
  *
  * invalidated / superseded target の reopen は、検証済み証拠があっても過去の
  * terminal adjudication を reviewer observation だけで覆せないため audit-only。
- * dismissed は後続の検証済み証拠による reopen の既存経路を維持する。
+ * dismissed は後続の検証済み証拠による reopen の既存経路を維持するが、
+ * outside_task_scope は同一 workflow task の観測では覆さず audit-only にする。
+ * task digest が変われば新しい scope として reopen を評価できる。
  */
 export function hasLifecycleProductTransitionCapability(input: {
   relation: Exclude<RawFindingRelation, 'new'>;
   target: FindingLedgerEntry | undefined;
+  workflowTaskDigest: string;
 }): boolean {
   if (input.target === undefined) {
     return false;
@@ -39,6 +42,13 @@ export function hasLifecycleProductTransitionCapability(input: {
     case 'resolution_confirmation':
       return input.target.status === 'open';
     case 'reopened':
+      if (
+        input.target.status === 'dismissed'
+        && input.target.dismissal?.basis === 'outside_task_scope'
+        && input.target.dismissal.workflowTaskDigest === input.workflowTaskDigest
+      ) {
+        return false;
+      }
       return input.target.status === 'resolved'
         || input.target.status === 'waived'
         || input.target.status === 'dismissed';

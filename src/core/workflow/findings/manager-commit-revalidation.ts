@@ -30,6 +30,7 @@ import {
   hasLifecycleProductTransitionCapability,
   hasLifecycleTransitionIntent,
 } from './raw-relation-capabilities.js';
+import { computeWorkflowTaskDigest } from './task-scope-adjudication.js';
 
 export interface RevalidatedManagerPlan {
   output: FindingManagerOutput;
@@ -43,6 +44,7 @@ function unsupportedLifecycleReport(input: {
   wire: RawFinding;
   freshLedger: FindingLedger;
   reason: string;
+  workflowTask: string;
 }): UnsupportedRawFindingReport | undefined {
   if (!hasLifecycleTransitionIntent({
     relation: input.wire.relation,
@@ -59,6 +61,7 @@ function unsupportedLifecycleReport(input: {
     && hasLifecycleProductTransitionCapability({
       relation: input.wire.relation,
       target,
+      workflowTaskDigest: computeWorkflowTaskDigest(input.workflowTask),
     });
   return {
     rawFindingId: input.wire.rawFindingId,
@@ -168,6 +171,7 @@ export function revalidateManagerPlan(input: {
       wire,
       freshLedger: input.freshLedger,
       reason,
+      workflowTask: input.runInput.workflowTask,
     });
     return unsupported === undefined
       ? {
@@ -191,6 +195,7 @@ export function revalidateManagerPlan(input: {
     callNamespace: input.runInput.callNamespace,
     parentStepName: input.runInput.parentStep.name,
     cleanWireById: input.cleanWireById,
+    workflowTask: input.runInput.workflowTask,
   });
   return {
     output: preconditions.output,
@@ -370,6 +375,7 @@ function applyPreconditionChecks(input: {
   callNamespace: string;
   parentStepName: string;
   cleanWireById: ReadonlyMap<string, RawFinding>;
+  workflowTask: string;
 }): {
   output: FindingManagerOutput;
   provisionalSpecs: ProvisionalFindingSpec[];
@@ -397,6 +403,7 @@ function applyPreconditionChecks(input: {
         wire,
         freshLedger: input.freshLedger,
         reason,
+        workflowTask: input.workflowTask,
       });
       return report === undefined ? [] : [report];
     });
@@ -618,7 +625,14 @@ function applyPreconditionChecks(input: {
       findingId: dismissed.findingId,
       basis: dismissed.basis,
       reason: dismissed.reason,
-      evidence: dismissed.evidence,
+      ...(dismissed.evidence !== undefined ? { evidence: dismissed.evidence } : {}),
+      ...(dismissed.taskQuote !== undefined ? { taskQuote: dismissed.taskQuote } : {}),
+      ...(dismissed.workflowTaskDigest !== undefined
+        ? { workflowTaskDigest: dismissed.workflowTaskDigest }
+        : {}),
+      ...(dismissed.adjudicationTaskId !== undefined
+        ? { adjudicationTaskId: dismissed.adjudicationTaskId }
+        : {}),
       authority: dismissed.authority,
     })
   ));
