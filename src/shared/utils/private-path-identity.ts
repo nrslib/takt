@@ -1,5 +1,5 @@
-import { lstatSync, statSync, type Stats } from 'node:fs';
-import { isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
+import { lstatSync, realpathSync, statSync, type Stats } from 'node:fs';
+import { join, parse, relative, resolve, sep } from 'node:path';
 
 export interface DirectoryIdentity {
   path: string;
@@ -24,28 +24,40 @@ export function lstatOrUndefined(path: string): Stats | undefined {
   }
 }
 
+function resolveFilesystemRootAlias(targetPath: string): string {
+  const absolute = resolve(targetPath);
+  const { root } = parse(absolute);
+  const [rootEntry, ...remainingComponents] = relative(root, absolute).split(sep).filter(Boolean);
+  if (rootEntry === undefined) return absolute;
+
+  const rootEntryPath = join(root, rootEntry);
+  if (!lstatOrUndefined(rootEntryPath)?.isSymbolicLink()) return absolute;
+  return join(realpathSync(rootEntryPath), ...remainingComponents);
+}
+
 export function artifactBoundary(targetPath: string): {
+  targetPath: string;
   trustedRoot: string;
   rejectTrustedRootSymlink: boolean;
 } {
-  const absolute = resolve(targetPath);
+  const absolute = resolveFilesystemRootAlias(targetPath);
   const { root } = parse(absolute);
   const components = relative(root, absolute).split(sep).filter(Boolean);
   const taktIndex = components.indexOf('.takt');
   if (taktIndex >= 0) {
     return {
+      targetPath: absolute,
       trustedRoot: join(root, ...components.slice(0, taktIndex)),
       rejectTrustedRootSymlink: false,
     };
   }
-  return { trustedRoot: root, rejectTrustedRootSymlink: true };
+  return { targetPath: absolute, trustedRoot: root, rejectTrustedRootSymlink: true };
 }
 
 export function assertSafePath(targetPath: string, targetIsDirectory: boolean): void {
-  if (!isAbsolute(targetPath)) {
-    targetPath = resolve(targetPath);
-  }
-  const { trustedRoot, rejectTrustedRootSymlink } = artifactBoundary(targetPath);
+  const boundary = artifactBoundary(targetPath);
+  targetPath = boundary.targetPath;
+  const { trustedRoot, rejectTrustedRootSymlink } = boundary;
   const rootLinkStat = lstatSync(trustedRoot);
   if (rejectTrustedRootSymlink && rootLinkStat.isSymbolicLink()) {
     throw new Error(`Private artifact trusted root is a symlink: ${trustedRoot}`);
@@ -77,8 +89,7 @@ export function inspectPrivateArtifactPath(
   targetPath: string,
   targetKind: 'file' | 'directory',
 ): PrivateFileInspection {
-  const absolute = resolve(targetPath);
-  const { trustedRoot, rejectTrustedRootSymlink } = artifactBoundary(absolute);
+  const { targetPath: absolute, trustedRoot, rejectTrustedRootSymlink } = artifactBoundary(targetPath);
   const rootLinkStat = lstatSync(trustedRoot) as Stats;
   if (rejectTrustedRootSymlink && rootLinkStat.isSymbolicLink()) {
     throw new Error(`Private artifact trusted root is a symlink: ${trustedRoot}`);
