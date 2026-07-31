@@ -38,10 +38,12 @@ Extraction rules:
    use target kind `code` when at least one path is explicit, even if line
    numbers or quotes are absent. Otherwise use target `null`.
 6. Evidence requests are requests, never proof. Add a `file_quote` only when
-   path, line range, and verbatim code are all explicit. Add other evidence
+   its path and bounded 1-based line range are explicit. Do not copy or return
+   source text or a verbatimExcerpt. Add other evidence
    requests only when the corresponding request details are explicit. Never
    invent proof IDs, snapshot IDs, run IDs, digests, search results, or source
-   text.
+   text. A lifecycle claim without a locator keeps its relation and target ID,
+   with `evidenceRequests: []`, so the engine can retain it for audit only.
 7. Preserve uncertainty. Do not investigate, verify, classify truth, decide
    final lifecycle state, resolve ambiguous wording, or create a finding that
    is not explicitly present in the report.

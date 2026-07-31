@@ -386,7 +386,7 @@ describe('finding reviewer observability wiring', () => {
     expect(ledger.reviewerAnomalies ?? []).toHaveLength(0);
   });
 
-  it('reviewer 実行中に source が変わると不一致 quote を reviewer anomaly に隔離する', async () => {
+  it('reviewer 実行中に source が変わっても engine snapshot から quote を発行する', async () => {
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
       options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
       if (hasSchemaProperty(options?.outputSchema, 'rawFindings')) {
@@ -425,8 +425,7 @@ describe('finding reviewer observability wiring', () => {
     }).runSingleIteration();
 
     const ledger = readFindingLedger(cwd);
-    expect(ledger.findings).toHaveLength(0);
-    expect(ledger.reviewerAnomalies).toHaveLength(1);
-    expect(ledger.reviewerAnomalies?.[0]?.kind).toBe('quote-mismatch');
+    expect(ledger.findings).toHaveLength(1);
+    expect(ledger.reviewerAnomalies ?? []).toHaveLength(0);
   });
 });

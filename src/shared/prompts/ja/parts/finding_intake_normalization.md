@@ -33,10 +33,12 @@ schema に一致する JSON object を1つだけ返してください。説明�
    問題は roots と manifest targets が明示されている場合だけ `structure` target に
    できます。code 問題は path が1つ以上明示されていれば、行番号や引用がなくても
    `code` target にできます。それ以外は target を `null` にしてください。
-6. evidence request は証拠ではありません。path、行範囲、逐語コードがすべて明示された
-   場合だけ `file_quote` を追加してください。他の evidence request も必要な詳細が
-   明示された場合だけ追加してください。proof ID、snapshot ID、run ID、digest、検索結果、
-   source text を捏造しないでください。
+6. evidence request は証拠ではありません。path と有界な1始まりの行範囲が明示された
+   場合だけ `file_quote` を追加し、source text や verbatimExcerpt はコピー・出力しないで
+   ください。他の evidence request も必要な詳細が明示された場合だけ追加してください。
+   proof ID、snapshot ID、run ID、digest、検索結果、source text を捏造しないでください。
+   locator がない lifecycle claim は relation と対象 ID を保持し、`evidenceRequests: []` と
+   して、エンジンが audit-only で保持できるようにしてください。
 7. 不確実性を保持してください。調査、裏取り、真偽分類、最終 lifecycle 判定、曖昧表現の
    解決、報告に明示されていない finding の作成は禁止です。
 8. ClaimsがNoneで、残りの要約や検証表が修正済み・解消済みと述べるだけのAPPROVE報告には

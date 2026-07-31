@@ -169,7 +169,9 @@ describe('finding identity case sensitivity', () => {
         evidence: [],
         engineProofRecords: [],
         coverageGaps: [],
+        materializedQuoteBytes: 0,
       }),
+      commitEvidenceIssuance: () => {},
     }).candidates[0]!;
     const canonical = canonicalizeReviewerRawFinding(candidate, { ledger: currentLedger }).canonical;
     const ladder: LadderResult = {

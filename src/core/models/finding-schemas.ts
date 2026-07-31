@@ -913,7 +913,12 @@ export const RawFindingSchema = RawFindingFieldsSchema.superRefine((value, ctx) 
 });
 
 export const FindingEvidenceRequestSchema = z.discriminatedUnion('kind', [
-  FileQuoteEvidenceSchema.omit({ snapshotId: true }).strict(),
+  z.object({
+    kind: z.literal('file_quote'),
+    path: nonEmptyString.max(RAW_FINDING_FIELD_LIMITS.maxEvidencePathChars),
+    startLine: z.number().int().positive(),
+    endLine: z.number().int().positive(),
+  }).strict(),
   z.object({
     kind: z.literal('engine_proof'),
     subject: z.discriminatedUnion('kind', [
@@ -2105,7 +2110,7 @@ const RawFindingsOutputIntakeJsonSchema = {
                         {
                           type: 'object',
                           additionalProperties: false,
-                          required: ['kind', 'path', 'startLine', 'endLine', 'verbatimExcerpt'],
+                          required: ['kind', 'path', 'startLine', 'endLine'],
                           properties: {
                             kind: { const: 'file_quote' },
                             path: {
@@ -2115,11 +2120,6 @@ const RawFindingsOutputIntakeJsonSchema = {
                             },
                             startLine: { type: 'integer', minimum: 1 },
                             endLine: { type: 'integer', minimum: 1 },
-                            verbatimExcerpt: {
-                              type: 'string',
-                              minLength: 1,
-                              maxLength: RAW_FINDING_FIELD_LIMITS.maxVerbatimExcerptChars,
-                            },
                           },
                         },
                         {

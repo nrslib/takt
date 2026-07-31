@@ -171,7 +171,9 @@ function reviewerCandidates(
       )),
       engineProofRecords: [],
       coverageGaps: [],
+      materializedQuoteBytes: 0,
     }),
+    commitEvidenceIssuance: () => {},
   } as never).candidates;
 }
 
@@ -1015,7 +1017,9 @@ describe('不完全な review_scope finding の lineage', () => {
         evidence: [],
         engineProofRecords: [],
         coverageGaps: [],
+        materializedQuoteBytes: 0,
       }),
+      commitEvidenceIssuance: () => {},
     }).candidates[0]!;
     return canonicalizeReviewerRawFinding(candidate, {
       ledger: makeLedger([]),
@@ -1180,7 +1184,9 @@ describe('relation 別 intake と target atomization', () => {
         evidence: [],
         engineProofRecords: [],
         coverageGaps: [],
+        materializedQuoteBytes: 0,
       }),
+      commitEvidenceIssuance: () => {},
     };
   }
 

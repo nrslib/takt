@@ -32,6 +32,7 @@ import type { RunFindingManagerForStepInput } from '../core/workflow/findings/ma
 import { applyRawAdjudicationRecovery } from '../core/workflow/findings/raw-adjudication-commit.js';
 import { completeRawRecoveryAttempts } from '../core/workflow/findings/raw-recovery-result.js';
 import { runRawAdjudicationRecovery } from '../core/workflow/findings/raw-adjudication-recovery.js';
+import { prepareRawAdjudicationBatch } from '../core/workflow/findings/raw-adjudication-agent.js';
 import { reserveRawAdjudicationRecovery } from '../core/workflow/findings/raw-adjudication-reservation.js';
 import {
   estimateTokens,
@@ -893,6 +894,78 @@ beforeEach(() => {
 });
 
 describe('bounded raw adjudication recovery', () => {
+  it('includes every lifecycle target in full detail and applies the semantic resolution rule during recovery', () => {
+    const targetSource = sourceRaw(9000);
+    const target = provisionalFinding({
+      index: 9000,
+      source: targetSource,
+      firstObservedRound: 1,
+    });
+    target.suggestion = targetSource.suggestion ?? undefined;
+    const targetSnapshot: FindingLedger = {
+      ...makeBacklog({ count: 0, firstObservedRound: 1 }),
+      nextId: 9001,
+      rawFindings: [targetSource],
+      findings: [target],
+    };
+    const confirmation = stampTargetRaw(
+      sourceRaw(1),
+      'resolution_confirmation',
+      target.id,
+      targetSnapshot,
+    );
+    const prepared = prepareRawAdjudicationBatch({
+      queue: [confirmation],
+      contract: {
+        ledgerPath: '.takt/findings/ledger.json',
+        rawFindingsPath: '.takt/findings/raw',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'Reconcile findings.',
+          outputContract: 'Return JSON.',
+        },
+      },
+      previousLedger: {
+        ...targetSnapshot,
+        rawFindings: [targetSource, confirmation],
+      },
+      mechanicallyClassifiedCount: 1,
+      managerStep: {
+        kind: 'agent',
+        name: 'findings-manager',
+        persona: 'findings-manager',
+        edit: false,
+      },
+      stepExecutor: { buildPhase1Instruction: (instruction) => instruction },
+    });
+    const ledgerMatch = /Previous ledger metadata:\n(`{3,})json\n([\s\S]*?)\n\1/.exec(
+      prepared.phase1Instruction,
+    );
+    expect(ledgerMatch?.[2]).toBeDefined();
+    const ledger = JSON.parse(ledgerMatch![2]!) as {
+      findings: Array<Record<string, unknown>>;
+    };
+
+    expect(ledger.findings).toEqual([expect.objectContaining({
+      id: target.id,
+      description: target.description,
+      suggestion: target.suggestion,
+      target: target.target,
+      rawFindings: [expect.objectContaining({
+        evidenceDetails: [expect.objectContaining({
+          verbatimExcerpt: quote.verbatimExcerpt,
+        })],
+      })],
+      evidenceDetails: expect.any(Array),
+    })]);
+    expect(prepared.phase1Instruction).toContain(
+      'the original finding failure mode and required fix are actually satisfied',
+    );
+    expect(prepared.phase1Instruction).not.toContain(
+      'exact resolution confirmations',
+    );
+  });
+
   it('keeps identity, source binding, proof details, and revision in compact manager views', () => {
     const ledger = authorizeInitialLedgerFixture(makeBacklog({
       count: 1,

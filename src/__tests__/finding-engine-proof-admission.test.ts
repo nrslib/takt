@@ -141,6 +141,7 @@ function issue(input: {
 }) {
   const claimIdentityHash = computeClaimIdentityHash(claim(input.target));
   return issueFindingEvidenceRequests({
+    cwd: process.cwd(),
     snapshot: input.snapshot ?? completeSnapshot,
     workflowName: 'workflow',
     runId: 'run',
@@ -152,6 +153,10 @@ function issue(input: {
     claimIdentityHash,
     targetFindingId: null,
     requests: input.requests,
+    quoteByteBudget: {
+      reviewerRemainingBytes: 256 * 1024,
+      stepRemainingBytes: 512 * 1024,
+    },
   });
 }
 

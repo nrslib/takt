@@ -15,6 +15,7 @@ type EvidenceFailure =
   | { outcome: 'quote-mismatch'; reason: string }
   | { outcome: 'mismatch'; reason: string }
   | { outcome: 'protocol-anomaly'; reason: string }
+  | { outcome: 'resource_exhausted'; reason: string }
   | { outcome: 'stale-snapshot'; reason: string }
   | { outcome: 'unverifiable'; reason: string; error?: unknown };
 

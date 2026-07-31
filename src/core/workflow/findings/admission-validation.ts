@@ -4,6 +4,8 @@ import { resolve, sep } from 'node:path';
 import { readRegularFileNoFollow } from '../../../shared/utils/private-file.js';
 import { parseFindingLocation, parseFindingLocationRange } from './location.js';
 import type { FileQuoteEvidence } from '../../models/finding-types.js';
+import { FINDING_EVIDENCE_ISSUANCE_LIMITS } from '../../models/finding-contract-limits.js';
+import { decodeSourceUtf8, materializeSourceQuote } from './source-quote.js';
 
 /**
  * Deterministic, cwd-based verification that a "path:line" location string
@@ -48,48 +50,7 @@ function countLines(content: string): number {
   return content.endsWith('\n') ? segments.length - 1 : segments.length;
 }
 
-function decodeUtf8Fatal(content: Buffer): string {
-  return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(content);
-}
-
-function countBufferLines(content: Buffer): number {
-  if (content.length === 0) return 0;
-  let lineFeeds = 0;
-  for (const byte of content) {
-    if (byte === 0x0a) lineFeeds += 1;
-  }
-  return content[content.length - 1] === 0x0a ? lineFeeds : lineFeeds + 1;
-}
-
-/**
- * 行末は引用範囲に含めず、範囲内の行間 separator は元 bytes のまま保持する。
- * これにより LF/CRLF を暗黙変換せずに byte-exact な照合ができる。
- */
-function lineRangeBytes(
-  content: Buffer,
-  startLine: number,
-  endLine: number,
-): Buffer {
-  let currentLine = 1;
-  let startOffset = 0;
-  let endOffset = content.length;
-  for (let index = 0; index < content.length; index += 1) {
-    if (content[index] !== 0x0a) continue;
-    if (currentLine < startLine) {
-      startOffset = index + 1;
-    }
-    if (currentLine === endLine) {
-      endOffset = index > startOffset && content[index - 1] === 0x0d
-        ? index - 1
-        : index;
-      break;
-    }
-    currentLine += 1;
-  }
-  return content.subarray(startOffset, endOffset);
-}
-
-type RealPathResolution =
+export type RealPathResolution =
   | { ok: true; realPath: string; stat: Stats }
   | { ok: false; outcome: 'invalid' | 'unverifiable'; reason: string; error?: unknown };
 
@@ -98,7 +59,7 @@ function isMissingPathError(error: unknown): boolean {
   return code === 'ENOENT' || code === 'ENOTDIR';
 }
 
-export const MAX_EVIDENCE_SOURCE_FILE_BYTES = 1024 * 1024;
+export const MAX_EVIDENCE_SOURCE_FILE_BYTES = FINDING_EVIDENCE_ISSUANCE_LIMITS.maxSourceFileBytes;
 
 function evidenceFileLimitReason(path: string, size: number): string {
   return `location path "${path}" is ${size} bytes, exceeding the evidence inspection limit of ${MAX_EVIDENCE_SOURCE_FILE_BYTES} bytes`;
@@ -111,7 +72,7 @@ function evidenceFileLimitReason(path: string, size: number): string {
  * 使う唯一の実装。node_modules/... のようなプロジェクト外実体を受理しない規則を
  * 一元化し、検証経路間の不一致を防ぐ。
  */
-function resolveRealPathWithinProject(cwd: string, path: string): RealPathResolution {
+export function resolveRealPathWithinProject(cwd: string, path: string): RealPathResolution {
   const resolvedBase = resolve(cwd);
   const resolvedPath = resolve(resolvedBase, path);
   if (!isInsideBase(resolvedBase, resolvedPath)) {
@@ -137,6 +98,21 @@ function resolveRealPathWithinProject(cwd: string, path: string): RealPathResolu
       reason: `project root "${cwd}" cannot be resolved: ${error instanceof Error ? error.message : String(error)}`,
       ...(!isMissingPathError(error) ? { error } : {}),
     };
+  }
+  try {
+    const unresolvedStat = lstatSync(resolvedPath);
+    if (unresolvedStat.isSymbolicLink()) {
+      return { ok: false, outcome: 'invalid', reason: `location path "${path}" is a symbolic link` };
+    }
+  } catch (error) {
+    return isMissingPathError(error)
+      ? { ok: false, outcome: 'invalid', reason: `location path "${path}" does not exist` }
+      : {
+        ok: false,
+        outcome: 'unverifiable',
+        reason: `location path "${path}" could not be inspected: ${error instanceof Error ? error.message : String(error)}`,
+        error,
+      };
   }
   try {
     realPath = realpathSync(resolvedPath);
@@ -202,7 +178,7 @@ export function validateLocationAdmission(cwd: string, location: string | undefi
     }
     let content: string;
     try {
-      content = decodeUtf8Fatal(
+      content = decodeSourceUtf8(
         readRegularFileNoFollow(resolution.realPath, resolution.stat),
       );
     } catch (error) {
@@ -266,23 +242,26 @@ export function validateLocationSetAdmission(
  * 機械的な上限 — 引用は「この claim を裏づける最小限の証拠」であるべきで、
  * ファイル丸ごとの貼り付けは証拠として機能しない。
  */
-export const MAX_SOURCE_QUOTE_LINES = 200;
+export const MAX_SOURCE_QUOTE_LINES = FINDING_EVIDENCE_ISSUANCE_LIMITS.maxFileQuoteLines;
 
 export type SourceQuoteVerificationOutcome =
   | { outcome: 'match'; fileHash: string }
   | { outcome: 'quote-mismatch'; reason: string }
+  | { outcome: 'resource_exhausted'; reason: string }
   | { outcome: 'stale-snapshot'; reason: string }
   | { outcome: 'unverifiable'; reason: string; error?: unknown };
 
 /**
- * verbatimExcerpt の決定的機械照合（review-integrity protocol の中核）。三分類:
+ * verbatimExcerpt の決定的機械照合（review-integrity protocol の中核）。
  *   - match: path が project 内実在ファイルで、startLine/endLine が正順かつ
  *     実在範囲内で、verbatimExcerpt がその行範囲の全文と完全一致し、かつ
  *     snapshotId が検証時点の review scope と一致する。
  *   - quote-mismatch: 上記のいずれかが不成立（path 不在・symlink 脱出・範囲外・
- *     文字列不一致・空引用・広すぎる引用）。証拠が成立しないだけで、欠陥の
+ *     文字列不一致・空引用）。証拠が成立しないだけで、欠陥の
  *     真偽そのものは証明しない — 呼び出し元は reviewer anomaly（review-integrity
  *     側）へ隔離し、product gate は塞がない。
+ *   - resource_exhausted: locator は実在範囲内だが、対象の行数または byte 数が
+ *     機械照合上限を超える。呼び出し元は coverage gap として扱う。
  *   - stale-snapshot: snapshotId が現在の review scope と食い違う。レビュー後に
  *     対象が変化した可能性があり、幻覚か正当な再観測かを判定できない —
  *     呼び出し元は再取得対象として隔離する（match/quote-mismatch のどちらとも
@@ -301,23 +280,6 @@ export function verifyFileQuoteEvidence(
     return {
       outcome: 'stale-snapshot',
       reason: `evidence snapshotId "${evidence.snapshotId}" does not match the current review scope snapshot "${expectedSnapshotId}"`,
-    };
-  }
-
-  if (evidence.verbatimExcerpt.trim().length === 0) {
-    return { outcome: 'quote-mismatch', reason: 'verbatimExcerpt is empty' };
-  }
-  if (evidence.endLine < evidence.startLine) {
-    return {
-      outcome: 'quote-mismatch',
-      reason: `startLine ${evidence.startLine} is after endLine ${evidence.endLine}`,
-    };
-  }
-  const quotedLineSpan = evidence.endLine - evidence.startLine + 1;
-  if (quotedLineSpan > MAX_SOURCE_QUOTE_LINES) {
-    return {
-      outcome: 'quote-mismatch',
-      reason: `quoted range spans ${quotedLineSpan} lines, exceeding the ${MAX_SOURCE_QUOTE_LINES}-line limit for a single verbatim excerpt`,
     };
   }
 
@@ -342,7 +304,6 @@ export function verifyFileQuoteEvidence(
   let contentBytes: Buffer;
   try {
     contentBytes = readRegularFileNoFollow(resolution.realPath, resolution.stat);
-    decodeUtf8Fatal(contentBytes);
   } catch (error) {
     return {
       outcome: 'unverifiable',
@@ -350,27 +311,22 @@ export function verifyFileQuoteEvidence(
       ...(!isMissingPathError(error) ? { error } : {}),
     };
   }
-  const lineCount = countBufferLines(contentBytes);
-  if (evidence.startLine < 1 || evidence.endLine > lineCount) {
-    return {
-      outcome: 'quote-mismatch',
-      reason: `line range ${evidence.startLine}-${evidence.endLine} is out of range for "${evidence.path}" (file has ${lineCount} lines)`,
-    };
+  const materialized = materializeSourceQuote({
+    path: evidence.path,
+    content: contentBytes,
+    startLine: evidence.startLine,
+    endLine: evidence.endLine,
+  });
+  if (!materialized.ok) {
+    if (materialized.kind === 'unverifiable') {
+      return { outcome: 'unverifiable', reason: materialized.reason };
+    }
+    if (materialized.kind === 'resource_exhausted') {
+      return { outcome: 'resource_exhausted', reason: materialized.reason };
+    }
+    return { outcome: 'quote-mismatch', reason: materialized.reason };
   }
-
-  // 完全一致のみ採用（部分行・空白緩和なし）。行全体を要求するため
-  // 「部分行だけの恣意的引用」は構造的に排除される。
-  const actualExcerptBytes = lineRangeBytes(
-    contentBytes,
-    evidence.startLine,
-    evidence.endLine,
-  );
-  const actualExcerpt = decodeUtf8Fatal(actualExcerptBytes);
-  const claimedExcerptBytes = Buffer.from(evidence.verbatimExcerpt, 'utf8');
-  if (
-    actualExcerpt !== evidence.verbatimExcerpt
-    || !actualExcerptBytes.equals(claimedExcerptBytes)
-  ) {
+  if (materialized.verbatimExcerpt !== evidence.verbatimExcerpt) {
     return {
       outcome: 'quote-mismatch',
       reason: `verbatimExcerpt does not exactly match "${evidence.path}" lines ${evidence.startLine}-${evidence.endLine}`,

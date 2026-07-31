@@ -206,6 +206,7 @@ export function collectEntityBindingCandidates(
       || item.interpretationRecoveryAttempt === true
       || (canonical.relation !== 'new' && canonical.relation !== null)
       || canonical.evidence.length > 0
+      || canonical.evidenceCoverageGaps.length > 0
       || canonical.provenance.ambiguityCodes.includes('invalid-evidence-shape')
     ) {
       return [];

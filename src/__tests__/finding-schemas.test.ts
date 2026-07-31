@@ -987,7 +987,6 @@ describe('finding schemas', () => {
       'path',
       'startLine',
       'endLine',
-      'verbatimExcerpt',
     ]);
     expect(fileQuote).toMatchObject({
       properties: {
@@ -1003,6 +1002,7 @@ describe('finding schemas', () => {
       },
     });
     expect(fileQuote?.properties).not.toHaveProperty('snapshotId');
+    expect(fileQuote?.properties).not.toHaveProperty('verbatimExcerpt');
     expect(engineProof?.properties).not.toHaveProperty('proofId');
   });
 
@@ -1054,7 +1054,6 @@ describe('finding schemas', () => {
         path: 'src/a.ts',
         startLine: 1,
         endLine: 1,
-        verbatimExcerpt: 'evidence',
       }],
     });
     expect(() => ReviewerRawFindingSchema.parse({
@@ -1077,8 +1076,20 @@ describe('finding schemas', () => {
           path: 'src/a.ts',
           startLine: 1,
           endLine: 1,
-          verbatimExcerpt: 'evidence',
           snapshotId: 'a'.repeat(64),
+        }],
+      },
+    })).toThrow();
+    expect(() => ReviewerRawFindingSchema.parse({
+      ...base,
+      candidate: {
+        ...base.candidate,
+        evidenceRequests: [{
+          kind: 'file_quote',
+          path: 'src/a.ts',
+          startLine: 1,
+          endLine: 1,
+          verbatimExcerpt: 'reviewer-supplied source',
         }],
       },
     })).toThrow();

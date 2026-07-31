@@ -21,16 +21,21 @@ export function prepareRawAdjudicationBatch(input: {
 }): PreparedRawAdjudicationBatch {
   const prepare = (batch: RawFinding[]): PreparedRawAdjudicationBatch => {
     const batchRawFindingIds = new Set(batch.map((rawFinding) => rawFinding.rawFindingId));
+    const batchTargetFindingIds = new Set(batch.flatMap((rawFinding) => (
+      rawFinding.targetFindingId === null ? [] : [rawFinding.targetFindingId]
+    )));
     const contextFindings = input.previousLedger.findings.filter((finding) => (
       finding.provisional === undefined
       || finding.rawFindingIds.some((rawFindingId) => batchRawFindingIds.has(rawFindingId))
+      || batchTargetFindingIds.has(finding.id)
     ));
     const contextFindingIds = new Set(contextFindings.map((finding) => finding.id));
     const fullDetailFindingIds = new Set(
       contextFindings
-        .filter((finding) => finding.rawFindingIds.some((rawFindingId) => (
-          batchRawFindingIds.has(rawFindingId)
-        )))
+        .filter((finding) => (
+          batchTargetFindingIds.has(finding.id)
+          || finding.rawFindingIds.some((rawFindingId) => batchRawFindingIds.has(rawFindingId))
+        ))
         .map((finding) => finding.id),
     );
     const contextLedger: FindingLedger = {

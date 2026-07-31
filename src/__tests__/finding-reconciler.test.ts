@@ -484,7 +484,9 @@ describe('reconcileFindingLedger', () => {
         evidence: [],
         engineProofRecords: [],
         coverageGaps: [],
+        materializedQuoteBytes: 0,
       }),
+      commitEvidenceIssuance: () => {},
     });
     expect(intake.rejections).toEqual([]);
     const canonical = canonicalizeReviewerRawFinding(intake.candidates[0]!, {
@@ -1062,7 +1064,9 @@ describe('reconcileFindingLedger', () => {
         evidence: [],
         engineProofRecords: [],
         coverageGaps: [],
+        materializedQuoteBytes: 0,
       }),
+      commitEvidenceIssuance: () => {},
     }).candidates[0]!;
     const canonical = canonicalizeReviewerRawFinding(candidate, {
       ledger: baseLedger,
@@ -1284,7 +1288,9 @@ describe('reconcileFindingLedger', () => {
           evidence: [],
           engineProofRecords: [],
           coverageGaps: [],
+          materializedQuoteBytes: 0,
         }),
+        commitEvidenceIssuance: () => {},
     }).candidates[0]!;
     };
 

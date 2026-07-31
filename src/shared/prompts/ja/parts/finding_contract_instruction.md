@@ -11,7 +11,7 @@
 - `new` / `persists` / `resolution_confirmation` / `reopened` は、証跡と必要な ledger ID を添える raw relation です。最終 lifecycle 判定と finding ID の対応づけは findings-manager とエンジンが行うため、レビュワーは最終状態を採番・判定しないでください。
 {{/if}}{{#if plainTextNormalizedReviewer}}- 通常の Markdown レビュー報告を書いてください。JSON や structured output は返さないでください。
 - 観測した各問題と明示的な台帳 lifecycle claim を、通常の文章で1件ずつ分けて明確に記述してください。隔離された抽出器が見るのはこの最終報告だけであり、リポジトリ調査や暗黙の主張の推論は行いません。
-- 利用できる場合は path・行範囲・コードの完全一致引用を記載してください。欠けている location や quote を捏造しないでください。対象構造を明確に特定できるリポジトリ全体またはアーキテクチャ上の問題は、行範囲がなくても有効です。
+- 利用できる場合は path と有界な1始まりの行範囲を記載してください。欠けている locator を捏造しないでください。対象構造を明確に特定できるリポジトリ全体またはアーキテクチャ上の問題は、行範囲がなくても有効です。
 - 承認、要約、検証表、スコープ説明を問題として記述しないでください。
 {{/if}}{{#if reviewerHasOpenFindings}}- 毎ラウンド、自分のレビュー範囲に入る open な台帳の指摘を検証してください。
 {{/if}}{{#if structuredReviewerHasOpenFindings}}- open な指摘が修正済みだと確認できたら、relation を `resolution_confirmation`、`targetFindingIds` にその台帳 ID だけを入れた structured raw finding を1件出力してください。指摘が resolved になる経路はこの確認だけです。
@@ -24,7 +24,7 @@
 {{/if}}{{#if structuredReviewer}}- rawFindingId はこの応答の中で一意にしてください。
 - まずレビュー報告本文を書き、その後で各 structured entry を本文から追加主張なしに抽出してください。`rawExcerpt` は issue または lifecycle claim 全体を記述した、報告本文中の一意かつ完全一致の文章、`candidate` はその excerpt を欠落なく構造化したもの、忠実に抽出できない場合は `null` にしてください。欠けている title・description・severity・target・relation・evidence request を補わないでください。
 - target は必ず1種類にしてください。既存コードの欠陥は `code` と binary-sorted unique な paths、必須のリポジトリ構造は `structure` と明示的な review-scope roots / manifest targets、存在すべき path の不存在または明示 roots 配下での UTF-8 完全一致 literal 0件は `absence` を使います。regex・glob・semantic depth・暗黙/default root は使わず、一般的な manifest を元の義務の根拠にしないでください。
-- 証拠はリクエストするだけで、発行・検証済みだと主張しないでください。`code` target は引用範囲から一字一句コピーした verbatimExcerpt を持つ `file_quote`、`structure` target は `repository_manifest`、`absence` target は対応する `repository_query`（`path_state` または `exact_literal_search`）と、元の義務を定める登録済み task / public declaration の `authoritative_quote` の両方をリクエストしてください。エンジンが確認するのは quote の存在までで、その quote が主張する義務に関連するかは findings manager が別に裁定します。
+- 証拠はリクエストするだけで、発行・検証済みだと主張しないでください。`code` target は path と有界な1始まりの startLine/endLine だけを指定した `file_quote` を使い、source text や verbatimExcerpt は出力しないでください。`structure` target は `repository_manifest`、`absence` target は対応する `repository_query`（`path_state` または `exact_literal_search`）と、元の義務を定める登録済み task / public declaration の `authoritative_quote` の両方をリクエストしてください。エンジンが確認するのは quote の存在までで、その quote が主張する義務に関連するかは findings manager が別に裁定します。
 - 必須 path/root が除外・読取不能・非 UTF-8・上限超過・未対応などで完全探索できない場合は coverage gap であり、ゼロ件の証拠ではありません。不完全な探索を absence claim に変換しないでください。
 - proofId・snapshotId・runId・offset・digest・観測 manifest 内容・query 件数/結果・検証結果は出力しないでください。レビュワーと抽出器ができるのは evidence request までで、evidence を発行できるのはエンジンだけです。
 - 品質ゲートの実行・証跡（build / lint / テスト / E2E を実行したか・結果が報告されているか）への要求を raw issue にしないでください。検証結果の評価は final gate の職掌です。テスト不足の指摘は、テストを欠く変更箇所を `code` target と対応する `file_quote` request で特定できる場合だけ issue にしてください。

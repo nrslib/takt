@@ -213,7 +213,9 @@ function createReviewerRawFindingCandidates(
       evidence: [],
       engineProofRecords: [],
       coverageGaps: [],
+      materializedQuoteBytes: 0,
     }),
+    commitEvidenceIssuance: () => {},
   }).candidates;
 }
 
@@ -384,6 +386,37 @@ function currentManagerRawFindingIds(instruction: string): string[] {
   ));
 }
 
+function respondToSemanticResolutions(): void {
+  executeAgentMock.mockImplementation(async (_persona, instruction) => {
+    const match = /## Owned raw findings\n(`{3,})json\n([\s\S]*?)\n\1/.exec(instruction as string);
+    if (match?.[2] === undefined) {
+      throw new Error('Test setup error: semantic resolution task input is missing');
+    }
+    const rawFindings = JSON.parse(match[2]) as Array<{
+      rawFindingId: string;
+      relation: string;
+      targetFindingId: string | null;
+    }>;
+    return findingManagerTaskResponse(instruction as string, {
+      rawDecisions: rawFindings.map((rawFinding) => ({
+        decision: rawFinding.relation === 'resolution_confirmation'
+          ? 'resolved' as const
+          : 'unsupported' as const,
+        rawFindingId: rawFinding.rawFindingId,
+        findingId: rawFinding.targetFindingId ?? '',
+        evidence: rawFinding.relation === 'resolution_confirmation'
+          ? 'The materialized quote satisfies the original failure mode and required fix.'
+          : 'No semantic lifecycle decision is supported.',
+      })),
+      disputeDecisions: [],
+      conflictDecisions: [],
+      invalidateDecisions: [],
+      duplicateDecisions: [],
+      dismissDecisions: [],
+    });
+  });
+}
+
 beforeEach(() => {
   executeAgentMock.mockReset();
 });
@@ -529,7 +562,8 @@ describe('ケース2: candidate/canonical 型混同（factory を通らない ob
 describe('ケース3: stale confirmation（prompt 後の persists 保存と競合する形式的に正しい確認）', () => {
   it('coherent confirmation の snapshot 後に別 caller が persists を保存すると、canonical finding が reopened になり一級 conflictへ収束する', async () => {
     const harness = makeHarness(makeLedger());
-    // 形式的に正しい confirmation（coherent）→ 機械分類で resolved 候補になる。
+    respondToSemanticResolutions();
+    // 形式的に正しい confirmation（coherent）を manager が resolved と判定する。
     const confirmation = {
       rawFindingId: 'c-1',
       familyTag: 'bug',
@@ -579,8 +613,7 @@ describe('ケース3: stale confirmation（prompt 後の persists 保存と競�
     });
 
     expect(result.status).toBe('updated');
-    // 機械分類だけで完結する入力なので manager は呼ばれない（coherent 経路の再現）。
-    expect(executeAgentMock).not.toHaveBeenCalled();
+    expect(executeAgentMock).toHaveBeenCalledOnce();
 
     const saved = harness.currentLedger();
     const target = saved.findings.find((finding) => finding.id === 'F-0001');
@@ -1560,6 +1593,7 @@ const INTERPRETATION_KEY = computeInterpretationAttemptKey(BASE_INTERPRETATION_K
   it('同じ confirmation の再適用は冪等（同じ evidence で resolved 済みなら二重 resolve にならない）', async () => {
     // 1回目: confirmation が F-0001 を resolve する。
     const harness = makeHarness(makeLedger());
+    respondToSemanticResolutions();
     const confirmation = {
       rawFindingId: 'c-1',
       familyTag: 'bug',
@@ -1581,7 +1615,7 @@ const INTERPRETATION_KEY = computeInterpretationAttemptKey(BASE_INTERPRETATION_K
     // ladder へ載せず audit-only とする。
     const second = await harness.run({ reviewerRawFindings: [confirmation], runId: 'run-3' });
     const target = second.ledger.findings.find((finding) => finding.id === 'F-0001');
-    expect(executeAgentMock).not.toHaveBeenCalled();
+    expect(executeAgentMock).toHaveBeenCalledOnce();
     expect(target?.status).toBe('resolved');
     expect(target?.revision).toBe(revisionAfterFirst);
     expect(second.ledger.findings.every((finding) => finding.provisional === undefined)).toBe(true);
@@ -2305,6 +2339,7 @@ describe('解釈梯子の追加必須テスト', () => {
 
   it('A-3 完全版（codex ブロッカー2）: 同一ラウンドの confirmation が target を閉じた場合、証跡不成立 persists は resolved target へ添付されず reviewer anomaly に隔離する', async () => {
     const harness = makeHarness(makeLedger());
+    respondToSemanticResolutions();
     const result = await harness.run({
       reviewerRawFindings: [
         {
@@ -2996,6 +3031,7 @@ describe('codex 検証2巡目#2: 未検証 persists/reopened は既存 finding �
     const harness = makeHarness(makeLedger({
       findings: [makeFinding({ revision: 1 })], // F-0001 open, src/a.ts:10
     }));
+    respondToSemanticResolutions();
     const result = await harness.run({
       reviewerRawFindings: [
         {
@@ -3053,6 +3089,7 @@ describe('codex 検証2巡目#2: 未検証 persists/reopened は既存 finding �
 describe('証拠なし raw finding の admission', () => {
   it('証拠なし persists は有効な confirmation を conflict 化して close を妨害できない', async () => {
     const harness = makeHarness(makeLedger({ findings: [makeFinding({ revision: 1 })] })); // F-0001 open, src/a.ts:10
+    respondToSemanticResolutions();
     const result = await harness.run({
       reviewerRawFindings: [
         {

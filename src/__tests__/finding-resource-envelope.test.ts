@@ -54,7 +54,9 @@ const context = {
     evidence: [],
     engineProofRecords: [],
     coverageGaps: [],
+    materializedQuoteBytes: 0,
   }),
+  commitEvidenceIssuance: () => {},
 };
 
 function intakeExtractions(

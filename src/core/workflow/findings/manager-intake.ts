@@ -24,6 +24,7 @@ import { createLogger } from '../../../shared/utils/index.js';
 import { issueFindingEvidenceRequests } from './evidence-request-issuer.js';
 import type { ReviewScopeProofSnapshot } from './snapshot.js';
 import type { CanonicalFindingReviewPublication } from './review-publication.js';
+import { FINDING_EVIDENCE_ISSUANCE_LIMITS } from '../../models/finding-contract-limits.js';
 
 const log = createLogger('finding-manager-intake');
 
@@ -48,11 +49,10 @@ export function intakeReviewerOutputs(input: {
   reviewScopeSnapshot: ReviewScopeProofSnapshot;
 }): ReviewerIntakeResult {
   const authoritativeTargetByFindingId = new Map(
-    input.previousLedger.findings.flatMap((finding) => (
-      finding.provisional === undefined && finding.target !== null
-        ? [[finding.id, structuredClone(finding.target)] as const]
-        : []
-    )),
+    input.previousLedger.findings.map((finding) => [
+      finding.id,
+      finding.target === null ? null : structuredClone(finding.target),
+    ] as const),
   );
   const result: ReviewerIntakeResult = {
     items: [],
@@ -67,8 +67,10 @@ export function intakeReviewerOutputs(input: {
   };
   let admittedAtomizedCount = 0;
   let admittedBytes = 0;
+  let issuedStepQuoteBytes = 0;
 
   for (const subResult of input.subResults) {
+    let issuedReviewerQuoteBytes = 0;
     const items = [...subResult.publication.rawFindings];
     const resourceEnvelope = projectReviewerRawStructuredOutputWithEnvelope({
       rawFindings: items,
@@ -92,14 +94,30 @@ export function intakeReviewerOutputs(input: {
       reviewReport: subResult.publication.reportContent,
       ledger: input.previousLedger,
       authoritativeTargetByFindingId,
-      issueEvidenceRequests: (request) => issueFindingEvidenceRequests({
-        snapshot: input.reviewScopeSnapshot,
-        workflowName: input.workflowName,
-        runId: input.runId,
-        scopeIdentity: input.scopeIdentity,
-        workflowTask: input.workflowTask,
-        issuedAt: input.issuedAt,
-      }, request),
+      issueEvidenceRequests: (request) => {
+        const issued = issueFindingEvidenceRequests({
+          cwd: input.cwd,
+          snapshot: input.reviewScopeSnapshot,
+          workflowName: input.workflowName,
+          runId: input.runId,
+          scopeIdentity: input.scopeIdentity,
+          workflowTask: input.workflowTask,
+          issuedAt: input.issuedAt,
+        }, {
+          ...request,
+          quoteByteBudget: {
+            reviewerRemainingBytes: FINDING_EVIDENCE_ISSUANCE_LIMITS.maxReviewerBytes
+              - issuedReviewerQuoteBytes,
+            stepRemainingBytes: FINDING_EVIDENCE_ISSUANCE_LIMITS.maxStepBytes
+              - issuedStepQuoteBytes,
+          },
+        });
+        return issued;
+      },
+      commitEvidenceIssuance: (materializedQuoteBytes) => {
+        issuedReviewerQuoteBytes += materializedQuoteBytes;
+        issuedStepQuoteBytes += materializedQuoteBytes;
+      },
     };
     if (subResult.relationClarification !== undefined) {
       result.clarifications.push({

@@ -40,6 +40,8 @@ import { selectActionableFindingEntries } from './context.js';
 export { RAW_FINDINGS_SCHEMA_REF };
 export { FINDING_MANAGER_SCHEMA_REF } from './manager-step.js';
 
+export const SEMANTIC_RESOLUTION_INSTRUCTION = 'For a code resolution_confirmation, resolve only when the materialized quote shows that the original finding failure mode and required fix are actually satisfied. A valid quote at the same path, or a valid quote by itself, is not evidence of semantic resolution.';
+
 export function createRawFindingsStructuredOutput(): WorkflowStructuredOutput {
   return {
     schemaRef: RAW_FINDINGS_SCHEMA_REF,
@@ -412,13 +414,17 @@ export function buildManagerInstruction(input: {
     input.fullDetailFindingIds
       ?? collectFullDetailFindingIds(input.previousLedger, input.residualRawFindings),
   );
-  const mechanicalNote = input.mechanicallyClassifiedCount > 0
-    ? [
-      input.contract.manager.instruction,
-      '',
-      `NOTE: ${input.mechanicallyClassifiedCount} raw findings (exact duplicates, explicit persists/reopened references, and exact resolution confirmations) were already classified mechanically by the engine and are NOT shown below. Classify only the raw findings listed below. Do not reference raw finding ids that are not listed.`,
-    ].join('\n')
-    : input.contract.manager.instruction;
+  const managerInstruction = [
+    input.contract.manager.instruction,
+    '',
+    SEMANTIC_RESOLUTION_INSTRUCTION,
+    ...(input.mechanicallyClassifiedCount > 0
+      ? [
+        '',
+        `NOTE: ${input.mechanicallyClassifiedCount} raw findings (exact duplicates and explicit persists references) were already classified mechanically by the engine and are NOT shown below. Classify only the raw findings listed below. Do not reference raw finding ids that are not listed.`,
+      ]
+      : []),
+  ].join('\n');
   const invalidateCandidatesBlock = [...input.invalidLocationCandidates.entries()]
     .map(([findingId, reason]) => `- ${findingId}: ${reason}`)
     .join('\n');
@@ -433,7 +439,7 @@ export function buildManagerInstruction(input: {
     ].join('\n'))
     .join('\n');
   return loadTemplate('finding_manager_instruction', 'en', {
-    managerInstruction: mechanicalNote,
+    managerInstruction,
     outputContract: input.contract.manager.outputContract,
     anchorRelevanceInstruction: PROVIDER_ANCHOR_RELEVANCE_INSTRUCTION,
     managerInputLedger: renderFencedJsonBlock(managerInputLedger),

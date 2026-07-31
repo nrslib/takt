@@ -124,7 +124,7 @@ describe('engine-issued review scope evidence determines admission outcome (mana
    */
   async function runManagerWithQuoteRequest(
     store: FindingLedgerStore,
-    verbatimExcerpt?: string,
+    _legacyVerbatimExcerpt?: string,
     options: {
       reviewReport?: string;
       runId?: string;
@@ -141,10 +141,7 @@ describe('engine-issued review scope evidence determines admission outcome (mana
       suggestion: 'Fix it.',
       relation: 'new',
       targetFindingId: null,
-      evidence: [{
-        ...quote,
-        verbatimExcerpt: verbatimExcerpt ?? quote.verbatimExcerpt,
-      }],
+      evidence: [quote],
     });
     const optionsBuilder = {
       buildAgentOptions: () => ({}),
@@ -260,17 +257,21 @@ describe('engine-issued review scope evidence determines admission outcome (mana
     expect(quote.snapshotId).toBe(computeReviewScopeSnapshotId(cwd));
   });
 
-  it('isolates a mismatched quote request as a reviewer anomaly', async () => {
+  it('ignores a legacy reviewer excerpt and materializes the quote from the engine snapshot', async () => {
     const { store, current } = makeLedgerStore();
+    const expectedQuote = verifiedSourceQuoteFields(cwd, 'src/example.ts', 3);
 
     const result = await runManagerWithQuoteRequest(store, '// stale line 3');
 
     expect(result.status).toBe('updated');
     const ledger = current();
-    expect(ledger.findings).toHaveLength(0);
-    const anomalies = ledger.reviewerAnomalies ?? [];
-    expect(anomalies).toHaveLength(1);
-    expect(anomalies[0]?.kind).toBe('quote-mismatch');
+    expect(ledger.findings).toHaveLength(1);
+    expect(ledger.reviewerAnomalies ?? []).toHaveLength(0);
+    const evidence = ledger.rawFindings[0]?.evidence[0];
+    expect(evidence).toMatchObject({
+      kind: 'file_quote',
+      verbatimExcerpt: expectedQuote.verbatimExcerpt,
+    });
   });
 
   it('rejects a source-binding mismatch before manager intake', async () => {

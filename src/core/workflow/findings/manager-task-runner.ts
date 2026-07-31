@@ -14,6 +14,7 @@ import {
   buildManagerInputLedger,
   managerRawFindingView,
   runPreparedManagerAttempt,
+  SEMANTIC_RESOLUTION_INSTRUCTION,
 } from './manager-agent.js';
 import { buildFindingManagerControlTaskStep } from './manager-step.js';
 import {
@@ -95,8 +96,11 @@ interface ControlTaskQueueItem {
   task: MainManagerControlTask;
 }
 
-function taskLedgerProjection(ledger: FindingLedger): unknown {
-  const projection = buildManagerInputLedger(ledger, new Set()) as {
+function taskLedgerProjection(
+  ledger: FindingLedger,
+  fullDetailFindingIds: ReadonlySet<string>,
+): unknown {
+  const projection = buildManagerInputLedger(ledger, fullDetailFindingIds) as {
     workflowName: string;
     findings: unknown[];
     conflicts: unknown[];
@@ -453,6 +457,7 @@ function buildRawTaskInstruction(input: {
     'Return the manifest taskId and exactly one decision for every owned raw finding id. Do not add, omit, or duplicate ids.',
     'Copy each engine-issued componentId exactly.',
     PROVIDER_ANCHOR_RELEVANCE_INSTRUCTION,
+    SEMANTIC_RESOLUTION_INSTRUCTION,
     'Use findingId="" when the decision has no finding target (for example "new").',
     'Do not emit dispute, conflict-control, invalidate, duplicate, or dismiss actions in this task.',
     ...(input.mechanicallyClassifiedCount === 0
@@ -466,7 +471,12 @@ function buildRawTaskInstruction(input: {
     renderFencedJsonBlock(input.context.coverage),
     '',
     '## Relevant ledger projection',
-    renderFencedJsonBlock(taskLedgerProjection(input.context.ledger)),
+    renderFencedJsonBlock(taskLedgerProjection(
+      input.context.ledger,
+      new Set(input.rawFindings.flatMap((rawFinding) => (
+        rawFinding.targetFindingId === null ? [] : [rawFinding.targetFindingId]
+      ))),
+    )),
     '',
     '## Owned raw findings',
     renderFencedJsonBlock(input.rawFindings.map((rawFinding) => (
@@ -1072,6 +1082,7 @@ function buildControlTaskInstruction(input: {
     '## Relevant ledger projection',
     renderFencedJsonBlock(taskLedgerProjection(
       controlContextLedger(input.previousLedger, input.task),
+      new Set(),
     )),
   ].join('\n');
 }

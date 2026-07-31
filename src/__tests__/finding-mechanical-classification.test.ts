@@ -3,7 +3,6 @@ import {
   classifyRawFindingsMechanically,
   mergeFindingManagerOutputs,
 } from '../core/workflow/findings/mechanical-classification.js';
-import { validateFindingManagerOutput } from '../core/workflow/findings/manager-output-validation.js';
 import {
   authorizeFindingLedgerFixture,
   canonicalRawFindingFixture,
@@ -77,7 +76,7 @@ function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
 }
 
 describe('classifyRawFindingsMechanically resolution confirmations (case 3)', () => {
-  it('Given a resolution confirmation targeting an open finding When classified Then it lands in resolvedFindings without residual', () => {
+  it('Given a resolution confirmation targeting an open finding When classified Then manager semantic judgment remains required', () => {
     const raw = makeRawFinding({
       rawFindingId: 'raw-confirm',
       relation: 'resolution_confirmation',
@@ -85,20 +84,18 @@ describe('classifyRawFindingsMechanically resolution confirmations (case 3)', ()
       description: 'Verified fixed at src/a.ts:10.',
     });
     const result = classifyRawFindingsMechanically({ previousLedger: makeLedger(), rawFindings: [raw] });
-    expect(result.residualRawFindings).toEqual([]);
-    expect(result.output.resolvedFindings).toEqual([
-      { findingId: 'F-0001', rawFindingIds: ['raw-confirm'], evidence: 'Verified fixed at src/a.ts:10.' },
-    ]);
+    expect(result.output.resolvedFindings).toEqual([]);
+    expect(result.residualRawFindings).toEqual([raw]);
   });
 
-  it('Given multiple confirmations for the same finding When classified Then rawFindingIds are merged into one entry', () => {
+  it('Given multiple confirmations for the same finding When classified Then every confirmation remains residual', () => {
     const raws = [
       makeRawFinding({ rawFindingId: 'raw-c1', relation: 'resolution_confirmation', targetFindingId: 'F-0001' }),
       makeRawFinding({ rawFindingId: 'raw-c2', relation: 'resolution_confirmation', targetFindingId: 'F-0001' }),
     ];
     const result = classifyRawFindingsMechanically({ previousLedger: makeLedger(), rawFindings: raws });
-    expect(result.output.resolvedFindings).toHaveLength(1);
-    expect(result.output.resolvedFindings[0]?.rawFindingIds).toEqual(['raw-c1', 'raw-c2']);
+    expect(result.output.resolvedFindings).toEqual([]);
+    expect(result.residualRawFindings).toEqual(raws);
   });
 
   it('Given a confirmation targeting a missing finding When classified Then it goes to residual', () => {
@@ -237,17 +234,13 @@ describe('classifyRawFindingsMechanically exact duplicate content (case 1)', () 
     }]);
   });
 
-  it('Given a fully mechanical round When validated with the real validator Then the output passes', () => {
+  it('Given only a resolution confirmation When classified Then no mechanical output is emitted', () => {
     const raws = [
       makeRawFinding({ rawFindingId: 'raw-confirm', relation: 'resolution_confirmation', targetFindingId: 'F-0001', description: 'Verified.' }),
     ];
     const result = classifyRawFindingsMechanically({ previousLedger: makeLedger(), rawFindings: raws });
-    const validation = validateFindingManagerOutput({
-      previousLedger: makeLedger(),
-      rawFindings: raws,
-      managerOutput: result.output,
-    });
-    expect(validation.ok).toBe(true);
+    expect(result.output.resolvedFindings).toEqual([]);
+    expect(result.residualRawFindings).toEqual(raws);
   });
 });
 
@@ -289,6 +282,29 @@ describe('mergeFindingManagerOutputs', () => {
     expect(merged.disputeNotes).toHaveLength(1);
   });
 
+  it('Given a mechanical persists match and a manager resolution for the same finding When merged Then it stays open with a conflict', () => {
+    const base = makeOutput({
+      matches: [{ findingId: 'F-0001', rawFindingIds: ['raw-persists'] }],
+    });
+    const extra = makeOutput({
+      resolvedFindings: [{
+        findingId: 'F-0001',
+        rawFindingIds: ['raw-confirm'],
+        evidence: 'Manager judged the confirmation semantically sufficient.',
+      }],
+    });
+
+    const merged = mergeFindingManagerOutputs(base, extra);
+
+    expect(merged.matches).toEqual(base.matches);
+    expect(merged.resolvedFindings).toEqual([]);
+    expect(merged.conflicts).toEqual([{
+      findingIds: ['F-0001'],
+      rawFindingIds: ['raw-confirm'],
+      description: 'Resolution confirmation conflicts with evidence that finding "F-0001" still persists in the same round',
+    }]);
+  });
+
   it('Given the base output When merged Then the base arrays are not mutated', () => {
     const base = makeOutput({ matches: [{ findingId: 'F-0001', rawFindingIds: ['raw-a'] }] });
     const extra = makeOutput({ matches: [{ findingId: 'F-0001', rawFindingIds: ['raw-b'] }] });
@@ -298,7 +314,7 @@ describe('mergeFindingManagerOutputs', () => {
 });
 
 describe('classifyRawFindingsMechanically conflicting signals', () => {
-  it('Given a confirmation and a re-reported issue for the same finding When classified Then all related raws fall to residual', () => {
+  it('Given a confirmation and a re-reported issue for the same finding When classified Then the confirmation remains residual and persists stays mechanically open', () => {
     const confirmation = makeRawFinding({
       rawFindingId: 'raw-confirm',
       relation: 'resolution_confirmation',
@@ -314,8 +330,10 @@ describe('classifyRawFindingsMechanically conflicting signals', () => {
       rawFindings: [confirmation, reReport],
     });
     expect(result.output.resolvedFindings).toEqual([]);
-    expect(result.output.matches).toEqual([]);
-    expect(new Set(result.residualRawFindings.map((raw) => raw.rawFindingId)))
-      .toEqual(new Set(['raw-confirm', 'raw-issue']));
+    expect(result.output.matches).toEqual([{
+      findingId: 'F-0001',
+      rawFindingIds: ['raw-issue'],
+    }]);
+    expect(result.residualRawFindings).toEqual([confirmation]);
   });
 });

@@ -82,6 +82,7 @@ function emptyLedger(
 
 function issueAbsenceEvidence() {
   return issueFindingEvidenceRequests({
+    cwd: process.cwd(),
     snapshot,
     workflowName: 'workflow',
     runId: 'run',
@@ -92,6 +93,10 @@ function issueAbsenceEvidence() {
     target,
     claimIdentityHash,
     targetFindingId: null,
+    quoteByteBudget: {
+      reviewerRemainingBytes: 256 * 1024,
+      stepRemainingBytes: 512 * 1024,
+    },
     requests: [{
       kind: 'engine_proof',
       subject: { kind: 'repository_query' },

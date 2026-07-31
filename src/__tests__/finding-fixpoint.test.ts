@@ -523,7 +523,6 @@ function hallucinatedRaw(overrides: Record<string, unknown> = {}): Record<string
       path: 'src/does-not-exist.ts',
       startLine: 5,
       endLine: 5,
-      verbatimExcerpt: 'missing fixture line',
     }],
     ...overrides,
   };
@@ -601,6 +600,77 @@ function unresolvedRecoveryResponse(
   });
 }
 
+function resolutionAwareResponse(
+  instruction: string,
+  unresolvedRawFindingId: string,
+): AgentResponse {
+  if (instruction.includes('entity-binding contract')) {
+    const response = unresolvedRecoveryResponse(instruction, unresolvedRawFindingId);
+    if (instruction.includes(':confirm-1"')) {
+      const output = response.structuredOutput as {
+        decisions: Array<{
+          rawFindingId: string;
+          decision: string;
+          findingId: string;
+          groupRawFindingId: string;
+          reason: string;
+        }>;
+      };
+      output.decisions = output.decisions.map((decision) => (
+        decision.rawFindingId.endsWith(':confirm-1')
+          ? {
+              ...decision,
+              decision: 'bind_existing',
+              findingId: 'F-0001',
+              groupRawFindingId: '',
+              reason: 'The lifecycle observation explicitly targets this existing finding.',
+            }
+          : decision
+      ));
+    }
+    return response;
+  }
+  const manifest = instructionSectionJson<{
+    rawFindings?: Array<{ rawFindingId: string }>;
+  }>(instruction, '## Task manifest');
+  const confirmation = manifest.rawFindings?.find((raw) => (
+    raw.rawFindingId.endsWith(':confirm-1')
+  ));
+  if (confirmation === undefined) {
+    return unresolvedRecoveryResponse(instruction, unresolvedRawFindingId);
+  }
+  const taskManifest = instructionSectionJson<{
+    taskId: string;
+    rawFindings: Array<{ rawFindingId: string; componentId: string }>;
+  }>(instruction, '## Task manifest');
+  return {
+    persona: 'findings-manager',
+    status: 'done',
+    content: '',
+    structuredOutput: {
+      taskId: taskManifest.taskId,
+      decisions: taskManifest.rawFindings.map((raw) => (
+        raw.rawFindingId === confirmation.rawFindingId
+          ? {
+              rawFindingId: raw.rawFindingId,
+              componentId: raw.componentId,
+              decision: 'resolved',
+              findingId: 'F-0001',
+              evidence: 'The materialized quote satisfies the original failure mode and required fix.',
+            }
+          : {
+              rawFindingId: raw.rawFindingId,
+              componentId: raw.componentId,
+              decision: 'unsupported',
+              findingId: '',
+              evidence: 'Cannot determine the identity of this re-report.',
+            }
+      )),
+    },
+    timestamp: new Date('2026-07-01T00:00:01.000Z'),
+  } as unknown as AgentResponse;
+}
+
 function unverifiedClaimRaw(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   const candidate = {
     rawFindingId: 'ambiguous-1',
@@ -621,8 +691,8 @@ function unverifiedClaimRaw(overrides: Record<string, unknown> = {}): Record<str
   } as Parameters<typeof reviewerRawExtractionFixture>[0]);
 }
 
-describe('runFindingManagerForStep: failed file_quote evidence is isolated from product findings', () => {
-  it('a nonexistent file_quote is recorded as a reviewer anomaly and needs no manager call', async () => {
+describe('runFindingManagerForStep: failed file_quote evidence is isolated from admitted findings', () => {
+  it('a nonexistent file_quote becomes an engine-gap provisional and needs no manager call', async () => {
     const harness = makeRoundHarness({
       workflowName: 'peer-review', nextId: 1, updatedAt: '2026-07-01T00:00:00.000Z',
       findings: [], evidenceRecords: [], rawFindings: [], conflicts: [], interpretations: [],
@@ -632,12 +702,12 @@ describe('runFindingManagerForStep: failed file_quote evidence is isolated from 
 
     expect(executeAgentMock).not.toHaveBeenCalled();
     const ledger = harness.currentLedger();
-    expect(ledger.findings).toHaveLength(0);
+    expect(ledger.findings).toHaveLength(1);
     const context = buildFindingsRuleContext(ledger);
-    expect(context.provisional.count).toBe(0);
-    expect(context.open.count).toBe(0);
-    expect(context.reviewerAnomalies.count).toBe(1);
-    expect(result.ledger.reviewerAnomalies?.[0]?.kind).toBe('quote-mismatch');
+    expect(context.provisional.count).toBe(1);
+    expect(context.open.count).toBe(1);
+    expect(context.reviewerAnomalies.count).toBe(0);
+    expect(result.ledger.reviewerAnomalies).toBeUndefined();
   });
 });
 
@@ -702,13 +772,31 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
   it('a measured substantive finding resolving across rounds blocks fixpoint until the unverified claim stabilizes', async () => {
     // F-0001 pre-seeded as an already-open substantive finding (as if an
     // earlier round created it) — round 1 below is the round where it is
-    // confirmed resolved by a mechanically-handled resolution_confirmation.
+    // confirmed resolved by a semantically adjudicated resolution_confirmation.
+    const seedRaw = canonicalRawFindingFixture({
+      rawFindingId: 'raw-seed',
+      stepName: 'reviewers',
+      reviewer: 'arch-review',
+      familyTag: 'bug',
+      severity: 'medium',
+      title: 'Real, fixable issue',
+      description: 'A genuine issue that the fixer can and will resolve.',
+      suggestion: null,
+      relation: 'new',
+      targetFindingId: null,
+      target: { kind: 'code', paths: ['src/real.ts'] },
+      evidence: [],
+    });
     const harness = makeRoundHarness({
       workflowName: 'peer-review', nextId: 2, updatedAt: '2026-07-01T00:00:00.000Z',
       findings: [{
         id: 'F-0001',
         status: 'open',
         lifecycle: 'new',
+        target: seedRaw.target,
+        targetIdentityHash: seedRaw.targetIdentityHash,
+        claimIdentityHash: seedRaw.claimIdentityHash,
+        semanticClaimIdentityHash: seedRaw.semanticClaimIdentityHash,
         severity: 'medium',
         title: 'Real, fixable issue',
         description: 'A genuine issue that the fixer can and will resolve.',
@@ -720,30 +808,36 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
         revision: 1,
       }],
       evidenceRecords: [],
-      rawFindings: [{
-        rawFindingId: 'raw-seed',
-        stepName: 'reviewers',
-        reviewer: 'arch-review',
-        familyTag: 'bug',
-        severity: 'medium',
-        title: 'Real, fixable issue',
-        description: 'A genuine issue that the fixer can and will resolve.',
-        suggestion: null,
-        relation: 'new',
-        targetFindingId: null,
-        target: { kind: 'code', paths: ['src/real.ts'] },
-        evidence: [],
-      }],
+      rawFindings: [seedRaw],
       conflicts: [],
       interpretations: [],
     });
 
     executeAgentMock.mockImplementation(async (_persona, instruction) => {
-      const rawId = extractResidualRawIdFromEitherLocalId(
-        instruction as string,
-        ['ambiguous-1', 'ambiguous-1-r2', 'ambiguous-1-r3', 'ambiguous-1-r4'],
-      );
-      return unresolvedRecoveryResponse(instruction as string, rawId);
+      const taskInstruction = instruction as string;
+      if (taskInstruction.includes('## Control task output override')) {
+        return findingManagerTaskResponse(taskInstruction, {
+          rawDecisions: [],
+          disputeDecisions: [],
+          conflictDecisions: [],
+          invalidateDecisions: [],
+          duplicateDecisions: [],
+          dismissDecisions: [],
+        });
+      }
+      const rawFindingIds = [...taskInstruction.matchAll(/"rawFindingId":\s*"([^"]+)"/g)]
+        .map((match) => match[1]!);
+      const rawId = rawFindingIds.find((id) => [
+        'ambiguous-1',
+        'ambiguous-1-r2',
+        'ambiguous-1-r3',
+        'ambiguous-1-r4',
+      ].some((localId) => id.endsWith(`:${localId}`)))
+        ?? rawFindingIds.find((id) => id.endsWith(':confirm-1'));
+      if (rawId === undefined) {
+        throw new Error(`Test setup error: no expected raw finding in instruction: ${taskInstruction}`);
+      }
+      return resolutionAwareResponse(taskInstruction, rawId);
     });
 
     // Round 1: the unverified claim is first observed; the substantive finding
@@ -764,13 +858,15 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
         suggestion: null,
         relation: 'resolution_confirmation',
         targetFindingId: 'F-0001',
+        target: { kind: 'code', paths: ['src/real.ts'] },
         // confirmation は検証済み file_quote 証跡が
         // 無いと resolve できない（機械照合を通らず finding を閉じさせない）。
         evidence: [verifiedSourceQuoteFields(FIXTURE_CWD, 'src/real.ts', 10)],
       }),
     ]);
     const afterRound2 = harness.currentLedger();
-    expect(afterRound2.findings.find((finding) => finding.id === 'F-0001')?.status).toBe('resolved');
+    expect(afterRound2.findings.find((finding) => finding.id === 'F-0001')?.status)
+      .toBe('resolved');
     expect(buildFindingsRuleContext(afterRound2).provisional.fixpoint).toBe(false);
 
     // The second bounded recovery attempt is still progress.

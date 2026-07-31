@@ -15,8 +15,8 @@ import type { FindingManagerConflict, FindingManagerOutput } from './types.js';
  * （「未修正の証拠がある finding は resolved にしない」が不変条件）。
  *
  * 適用箇所は2つある。組み立て直後（LLM の判断が衝突した場合）と、機械分類の結果と
- * merge した直後（resolution_confirmation は機械分類が処理するため、LLM の
- * 組み立てには現れず、衝突は merge で初めて生まれる）。
+ * merge した直後（persists は機械分類、resolution_confirmation は manager が
+ * 処理するため、衝突は merge で初めて生まれる）。
  */
 export function canonicalizeFindingManagerOutput(output: FindingManagerOutput): FindingManagerOutput {
   const collidingFindingIds = new Set([

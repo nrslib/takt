@@ -729,7 +729,10 @@ describe('item 1/4: raw admission validation and invalidate', () => {
     const target = savedLedger?.findings.find((f) => f.id === 'F-0001');
     expect(target?.status).toBe('resolved');
     expect(savedLedger?.findings).toHaveLength(1);
-    expect(target?.rejectedObservations ?? []).toEqual([]);
+    expect(target?.rejectedObservations ?? []).toEqual([expect.objectContaining({
+      rawFindingId: expect.stringContaining('p-1'),
+      reason: expect.stringContaining('recorded for audit only'),
+    })]);
     expect(savedLedger?.reviewerAnomalies ?? []).toEqual([]);
     expect(savedLedger?.rawFindings.some(
       (rawFinding) => rawFinding.rawFindingId.includes('p-1'),
@@ -744,7 +747,7 @@ describe('item 1/4: raw admission validation and invalidate', () => {
     expect(report.rawFindingDispositions).toEqual(expect.arrayContaining([
       expect.objectContaining({
         rawFindingId: expect.stringContaining('p-1'),
-        outcome: 'unsupported',
+        outcome: 'audit_only',
       }),
     ]));
   });

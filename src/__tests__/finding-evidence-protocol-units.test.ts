@@ -13,6 +13,7 @@ import {
   validateLocationAdmission,
   verifyFileQuoteEvidence,
 } from '../core/workflow/findings/admission-validation.js';
+import { FINDING_EVIDENCE_ISSUANCE_LIMITS } from '../core/models/finding-contract-limits.js';
 import {
   applyReviewerAnomalySpecsToLedger,
   isOutstandingReviewerAnomaly,
@@ -123,16 +124,35 @@ describe('verifyFileQuoteEvidence (admission-validation.ts)', () => {
     expect(result.outcome).toBe('quote-mismatch');
   });
 
-  it(`引用範囲が ${MAX_SOURCE_QUOTE_LINES} 行を超えると quote-mismatch（過度に広い引用は不採用）`, () => {
+  it(`正しい引用範囲が ${MAX_SOURCE_QUOTE_LINES} 行を超えると resource_exhausted`, () => {
+    const excerpt = Array.from(
+      { length: MAX_SOURCE_QUOTE_LINES + 1 },
+      (_, index) => `// wide line ${index + 1}`,
+    ).join('\n');
+    writeFileSync(join(cwd, 'src', 'wide.ts'), `${excerpt}\n`);
     const result = verifyFileQuoteEvidence(cwd, {
       kind: 'file_quote',
-      path: 'src/a.ts',
+      path: 'src/wide.ts',
       startLine: 1,
-      endLine: MAX_SOURCE_QUOTE_LINES + 2,
-      verbatimExcerpt: 'anything',
+      endLine: MAX_SOURCE_QUOTE_LINES + 1,
+      verbatimExcerpt: excerpt,
       snapshotId,
     }, snapshotId);
-    expect(result.outcome).toBe('quote-mismatch');
+    expect(result.outcome).toBe('resource_exhausted');
+  });
+
+  it('正しい1行引用が quote byte 上限のみを超えると resource_exhausted', () => {
+    const excerpt = 'x'.repeat(FINDING_EVIDENCE_ISSUANCE_LIMITS.maxFileQuoteBytes + 1);
+    writeFileSync(join(cwd, 'src', 'wide-line.ts'), `${excerpt}\n`);
+    const result = verifyFileQuoteEvidence(cwd, {
+      kind: 'file_quote',
+      path: 'src/wide-line.ts',
+      startLine: 1,
+      endLine: 1,
+      verbatimExcerpt: excerpt,
+      snapshotId,
+    }, snapshotId);
+    expect(result.outcome).toBe('resource_exhausted');
   });
 
   it('path がプロジェクト外を指す（相対パスでの脱出）なら quote-mismatch', () => {

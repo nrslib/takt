@@ -81,7 +81,9 @@ function reviewerCandidates(items: readonly unknown[]) {
       )),
       engineProofRecords: [],
       coverageGaps: [],
+      materializedQuoteBytes: 0,
     }),
+    commitEvidenceIssuance: () => {},
   } as never).candidates;
 }
 

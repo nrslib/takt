@@ -937,8 +937,101 @@ describe('main manager bounded task runner', () => {
     expect(initialManifest.map((item) => item.task.ownedRawFindingIds.length))
       .toEqual([16, 1, 16, 1]);
     expect(executeAgentMock).toHaveBeenCalledTimes(result.taskAudits.length);
+    expect(executeAgentMock.mock.calls[0]?.[1]).toContain(
+      'the original finding failure mode and required fix are actually satisfied',
+    );
+    expect(executeAgentMock.mock.calls[0]?.[1]).toContain(
+      'A valid quote at the same path, or a valid quote by itself, is not evidence of semantic resolution',
+    );
     expect(result.decisions.rawDecisions).toHaveLength(34);
     expect(result.rawFailures.size).toBe(0);
+  });
+
+  it('provides the original finding in full detail and does not resolve from a valid but semantically unrelated quote', async () => {
+    const original = rawFinding(1, {
+      target: { kind: 'code', paths: ['src/original.ts'] },
+      description: 'The error branch leaks the acquired handle.',
+      suggestion: 'Release the handle on every error branch.',
+      evidence: [{
+        kind: 'file_quote',
+        path: 'src/original.ts',
+        startLine: 10,
+        endLine: 10,
+        verbatimExcerpt: 'return withoutReleasing(handle);',
+        snapshotId: 'a'.repeat(64),
+      }],
+    });
+    const finding: FindingLedgerEntry = {
+      ...ledgerFinding(1),
+      target: original.target,
+      targetIdentityHash: original.targetIdentityHash,
+      claimIdentityHash: original.claimIdentityHash,
+      semanticClaimIdentityHash: original.semanticClaimIdentityHash,
+      description: original.description ?? undefined,
+      suggestion: original.suggestion ?? undefined,
+      rawFindingIds: [original.rawFindingId],
+    };
+    const confirmation = rawFinding(2, {
+      relation: 'resolution_confirmation',
+      targetFindingId: finding.id,
+      target: original.target,
+      title: 'Nearby cleanup refactor landed',
+      description: 'A nearby helper was renamed at the same path.',
+      evidence: [{
+        kind: 'file_quote',
+        path: 'src/original.ts',
+        startLine: 20,
+        endLine: 20,
+        verbatimExcerpt: 'const renamedHelper = true;',
+        snapshotId: 'a'.repeat(64),
+      }],
+    });
+    executeAgentMock.mockImplementationOnce(async (_persona, instruction) => {
+      const manifest = sectionJson<RawManifestView>(instruction, '## Task manifest');
+      const ledger = sectionJson<{
+        findings: Array<{
+          id: string;
+          description?: string;
+          suggestion?: string;
+          target: unknown;
+          rawFindings?: Array<{ evidenceDetails: Array<{ verbatimExcerpt?: string }> }>;
+        }>;
+      }>(instruction, '## Relevant ledger projection');
+      expect(ledger.findings).toEqual([expect.objectContaining({
+        id: 'F-0001',
+        description: 'The error branch leaks the acquired handle.',
+        suggestion: 'Release the handle on every error branch.',
+        target: { kind: 'code', paths: ['src/original.ts'] },
+        rawFindings: [expect.objectContaining({
+          evidenceDetails: [expect.objectContaining({
+            verbatimExcerpt: 'return withoutReleasing(handle);',
+          })],
+        })],
+      })]);
+      return response({
+        taskId: manifest.taskId,
+        decisions: [{
+          rawFindingId: confirmation.rawFindingId,
+          componentId: manifest.rawFindings[0]!.componentId,
+          decision: 'same',
+          findingId: finding.id,
+          evidence: 'The valid quote does not address the original failure mode or required fix.',
+        }],
+      });
+    });
+
+    const result = await run([confirmation], emptyLedger({
+      findings: [finding],
+      rawFindings: [original],
+    }));
+
+    expect(result.decisions.rawDecisions).toEqual([expect.objectContaining({
+      rawFindingId: confirmation.rawFindingId,
+      decision: 'same',
+      findingId: finding.id,
+    })]);
+    expect(result.decisions.rawDecisions.some((decision) => decision.decision === 'resolved'))
+      .toBe(false);
   });
 
   it('assigns every finding control candidate to one unique task without priority dropping', () => {

@@ -47,6 +47,7 @@ import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
 import { createFindingManagerPublicationDouble, RevisionedFindingLedgerTestRepository } from './helpers/finding-manager-publication.js';
 import {
   authorizeFindingLedgerFixture,
+  canonicalRawFindingFixture,
   emptyFindingAuthorityProjection,
   reviewerRawExtractionFixture,
 } from './helpers/finding-lifecycle-fixture.js';
@@ -302,6 +303,8 @@ function makeRunner(options: {
   const stepExecutor = {
     buildInstruction: vi.fn((step: WorkflowStep) => `instruction:${step.name}`),
     buildPhase1Instruction: vi.fn((instruction: string) => instruction),
+    recordSynthesizedAgentUsage: vi.fn(),
+    normalizeStructuredOutput: vi.fn((_step: WorkflowStep, response: AgentResponse) => response),
     emitStepReports: vi.fn(),
     persistPreviousResponseSnapshot: vi.fn(),
     normalizeStructuredOutputWithDiagnostics: vi.fn(
@@ -435,6 +438,46 @@ function queueAgentResponse(response: AgentResponse): void {
       userInstruction: instruction,
     });
     return response;
+  });
+}
+
+function queueSemanticResolutionResponse(
+  rawFindingIdSuffix: string,
+  findingId: string,
+): void {
+  vi.mocked(executeAgent).mockImplementationOnce(async (_persona, instruction, options) => {
+    options.onPromptResolved?.({
+      systemPrompt: 'system prompt',
+      userInstruction: instruction,
+    });
+    const match = /## Task manifest\n(`{3,})json\n([\s\S]*?)\n\1/.exec(instruction);
+    if (match?.[2] === undefined) {
+      throw new Error('Missing manager task manifest');
+    }
+    const manifest = JSON.parse(match[2]) as {
+      taskId: string;
+      rawFindings: Array<{ rawFindingId: string; componentId: string }>;
+    };
+    const raw = manifest.rawFindings.find((item) => (
+      item.rawFindingId.endsWith(`:${rawFindingIdSuffix}`)
+    ));
+    if (raw === undefined) {
+      throw new Error(`Missing manager raw finding ${rawFindingIdSuffix}`);
+    }
+    return makeAgentResponse({
+      persona: 'findings-manager',
+      content: '',
+      structuredOutput: {
+        taskId: manifest.taskId,
+        decisions: [{
+          rawFindingId: raw.rawFindingId,
+          componentId: raw.componentId,
+          decision: 'resolved',
+          findingId,
+          evidence: 'The materialized quote satisfies the original failure mode and required fix.',
+        }],
+      },
+    });
   });
 }
 
@@ -932,6 +975,20 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
       writeFileSync(join(projectCwd, 'src/fixed.ts'), 'const fixed = true;\n');
       initializeGitFixture(projectCwd, ['src/fixed.ts']);
       const evidence = verifiedSourceQuoteFields(projectCwd, 'src/fixed.ts', 1);
+      const existingRaw = canonicalRawFindingFixture({
+        rawFindingId: 'raw-existing',
+        stepName: 'reviewers',
+        reviewer: 'ai-antipattern-review',
+        familyTag: 'bug',
+        severity: 'high',
+        title: 'Open issue',
+        description: 'Previously reported issue.',
+        suggestion: null,
+        relation: 'new',
+        targetFindingId: null,
+        target: { kind: 'code', paths: ['src/fixed.ts'] },
+        evidence: [evidence],
+      });
       const confirmation = reviewerRawExtractionFixture({
         rawFindingId: 'confirmation-open',
         familyTag: 'bug',
@@ -941,6 +998,7 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
         suggestion: null,
         relation: 'resolution_confirmation',
         targetFindingId: 'F-0001',
+        target: { kind: 'code', paths: ['src/fixed.ts'] },
         evidence: [evidence],
       });
       const structuredContext = makeFindingContractContext({
@@ -966,6 +1024,10 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
             id: 'F-0001',
             status: 'open',
             lifecycle: 'new',
+            target: existingRaw.target,
+            targetIdentityHash: existingRaw.targetIdentityHash,
+            claimIdentityHash: existingRaw.claimIdentityHash,
+            semanticClaimIdentityHash: existingRaw.semanticClaimIdentityHash,
             revision: 1,
             severity: 'high',
             title: 'Open issue',
@@ -975,19 +1037,7 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
             firstSeen: { runId: 'old-run', stepName: 'reviewers', timestamp: '2026-07-12T00:00:00.000Z' },
             lastSeen: { runId: 'old-run', stepName: 'reviewers', timestamp: '2026-07-12T00:00:00.000Z' },
           }],
-          rawFindings: [{
-            rawFindingId: 'raw-existing',
-            stepName: 'reviewers',
-            reviewer: 'ai-antipattern-review',
-            familyTag: 'bug',
-            severity: 'high',
-            title: 'Open issue',
-            description: 'Previously reported issue.',
-            suggestion: null,
-            relation: 'new',
-            targetFindingId: null,
-            evidence: [evidence],
-          }],
+          rawFindings: [existingRaw],
           evidenceRecords: [],
           conflicts: [],
           interpretations: [],
@@ -1004,6 +1054,7 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
         persona: 'security-review',
         content: '**APPROVE**',
       }));
+      queueSemanticResolutionResponse('confirmation-open', 'F-0001');
       const actualContractIntake = await vi.importActual<typeof import('../core/workflow/findings/contract-intake.js')>(
         '../core/workflow/findings/contract-intake.js',
       );
@@ -1013,7 +1064,9 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
 
       await runner.runParallelStep(makeParallelStep(), makeState(), 'test task', 5, vi.fn());
 
-      expect(ledgerStore.loadLedger().findings.find(
+      expect(executeAgent).toHaveBeenCalledTimes(3);
+      const savedLedger = ledgerStore.loadLedger();
+      expect(savedLedger.findings.find(
         (finding) => finding.id === 'F-0001',
       )?.status).toBe('resolved');
       expect(ingestFindingContractResults).toHaveBeenCalledOnce();

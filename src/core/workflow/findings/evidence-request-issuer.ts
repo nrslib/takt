@@ -1,15 +1,20 @@
 import { createHash } from 'node:crypto';
 import { posix } from 'node:path';
+import { readRegularFileNoFollow } from '../../../shared/utils/private-file.js';
 import { canonicalJson } from '../../../shared/utils/canonical-json.js';
 import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
 import { createEngineProofRecord } from '../../models/finding-evidence-record.js';
 import type {
   EngineProofRecord,
   ClaimEvidenceSubject,
+  FileQuoteEvidenceRequest,
   FindingEvidenceRequest,
   FindingTarget,
   RawFindingEvidence,
 } from './types.js';
+import { FINDING_EVIDENCE_ISSUANCE_LIMITS } from '../../models/finding-contract-limits.js';
+import { resolveRealPathWithinProject } from './admission-validation.js';
+import { materializeSourceQuote } from './source-quote.js';
 import type { ReviewScopeProofSnapshot, ReviewScopeQueryInventoryEntry } from './snapshot.js';
 import type {
   EngineProofSubjectVerification,
@@ -118,6 +123,7 @@ function createClaimProof(input: {
 }
 
 export interface EvidenceRequestIssuerContext {
+  cwd: string;
   snapshot: ReviewScopeProofSnapshot;
   workflowName: string;
   runId: string;
@@ -132,6 +138,123 @@ export interface IssuedEvidenceRequests {
   evidence: RawFindingEvidence[];
   engineProofRecords: EngineProofRecord[];
   coverageGaps: string[];
+  quoteFailureReasons: string[];
+  materializedQuoteBytes: number;
+}
+
+export interface EvidenceIssuanceByteBudget {
+  reviewerRemainingBytes: number;
+  stepRemainingBytes: number;
+}
+
+type QuoteIssuanceFailure = {
+  ok: false;
+  kind: 'reviewer_invalid' | 'engine_unverifiable' | 'resource_exhausted';
+  reason: string;
+};
+
+type QuoteSourceResolution =
+  | { ok: true; content: Buffer }
+  | QuoteIssuanceFailure;
+
+function contentSha256(content: Buffer): string {
+  return createHash('sha256').update(content).digest('hex');
+}
+
+function rereadDigestBoundSource(
+  context: EvidenceRequestIssuerContext,
+  request: FileQuoteEvidenceRequest,
+  contentDigest: string,
+): QuoteSourceResolution {
+  const resolution = resolveRealPathWithinProject(context.cwd, request.path);
+  if (!resolution.ok) {
+    return { ok: false, kind: 'engine_unverifiable', reason: resolution.reason };
+  }
+  if (resolution.stat.size > FINDING_EVIDENCE_ISSUANCE_LIMITS.maxSourceFileBytes) {
+    return {
+      ok: false,
+      kind: 'resource_exhausted',
+      reason: `source file "${request.path}" exceeds the ${FINDING_EVIDENCE_ISSUANCE_LIMITS.maxSourceFileBytes}-byte evidence source limit`,
+    };
+  }
+  let content: Buffer;
+  try {
+    content = readRegularFileNoFollow(resolution.realPath, resolution.stat);
+  } catch (error) {
+    return {
+      ok: false,
+      kind: 'engine_unverifiable',
+      reason: `source file "${request.path}" could not be read: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  if (contentSha256(content) !== contentDigest) {
+    return {
+      ok: false,
+      kind: 'engine_unverifiable',
+      reason: `source file "${request.path}" no longer matches its review scope contentDigest`,
+    };
+  }
+  return { ok: true, content };
+}
+
+function resolveDigestBoundQuoteSource(
+  context: EvidenceRequestIssuerContext,
+  request: FileQuoteEvidenceRequest,
+  entry: ReviewScopeQueryInventoryEntry | undefined,
+): QuoteSourceResolution {
+  if (!isCanonicalRelativePath(request.path)) {
+    return {
+      ok: false,
+      kind: 'reviewer_invalid',
+      reason: `file_quote path "${request.path}" is not canonical`,
+    };
+  }
+  if (entry === undefined || entry.kind !== 'file') {
+    return {
+      ok: false,
+      kind: 'engine_unverifiable',
+      reason: `file_quote path "${request.path}" is outside complete file coverage`,
+    };
+  }
+  if (entry.contentDigest === undefined || !/^[0-9a-f]{64}$/.test(entry.contentDigest)) {
+    return {
+      ok: false,
+      kind: 'engine_unverifiable',
+      reason: `file_quote path "${request.path}" has no canonical contentDigest`,
+    };
+  }
+  if (entry.coverage === 'resource_cap') {
+    return {
+      ok: false,
+      kind: 'resource_exhausted',
+      reason: `file_quote path "${request.path}" has coverage "${entry.coverage}"`,
+    };
+  }
+  if (entry.coverage !== 'complete') {
+    return {
+      ok: false,
+      kind: 'engine_unverifiable',
+      reason: `file_quote path "${request.path}" has coverage "${entry.coverage}"`,
+    };
+  }
+  if (entry.content !== undefined) {
+    if (entry.content.length > FINDING_EVIDENCE_ISSUANCE_LIMITS.maxSourceFileBytes) {
+      return {
+        ok: false,
+        kind: 'resource_exhausted',
+        reason: `source file "${request.path}" exceeds the ${FINDING_EVIDENCE_ISSUANCE_LIMITS.maxSourceFileBytes}-byte evidence source limit`,
+      };
+    }
+    if (contentSha256(entry.content) !== entry.contentDigest) {
+      return {
+        ok: false,
+        kind: 'engine_unverifiable',
+        reason: `retained content for "${request.path}" does not match its contentDigest`,
+      };
+    }
+    return { ok: true, content: Buffer.from(entry.content) };
+  }
+  return rereadDigestBoundSource(context, request, entry.contentDigest);
 }
 
 /**
@@ -145,6 +268,7 @@ export function issueFindingEvidenceRequests(
     claimIdentityHash: string;
     targetFindingId: string | null;
     requests: readonly FindingEvidenceRequest[];
+    quoteByteBudget: EvidenceIssuanceByteBudget;
   },
 ): IssuedEvidenceRequests {
   if (input.target.kind === 'review_scope') {
@@ -154,17 +278,32 @@ export function issueFindingEvidenceRequests(
       coverageGaps: [
         'Review-scope finding has no concrete target for typed evidence verification',
       ],
+      quoteFailureReasons: [],
+      materializedQuoteBytes: 0,
     };
   }
   const evidence: RawFindingEvidence[] = [];
+  const fileQuoteEvidence: RawFindingEvidence[] = [];
   const engineProofRecords: EngineProofRecord[] = [];
   const coverageGaps: string[] = [];
+  const quoteFailureReasons: string[] = [];
+  let fileQuoteFailed = false;
+  let materializedQuoteBytes = 0;
+  let reviewerRemainingBytes = input.quoteByteBudget.reviewerRemainingBytes;
+  let stepRemainingBytes = input.quoteByteBudget.stepRemainingBytes;
   const inventory = context.snapshot.queryInventory;
   const byPath = new Map(inventory.map((entry) => [entry.path, entry]));
 
   const addProof = (record: EngineProofRecord): void => {
     engineProofRecords.push(record);
     evidence.push({ kind: 'engine_proof', proofId: record.proofId });
+  };
+  const addFileQuoteFailure = (failure: QuoteIssuanceFailure): void => {
+    coverageGaps.push(failure.reason);
+    if (failure.kind === 'reviewer_invalid') {
+      quoteFailureReasons.push(failure.reason);
+    }
+    fileQuoteFailed = true;
   };
 
   for (const request of input.requests) {
@@ -173,11 +312,58 @@ export function issueFindingEvidenceRequests(
         input.target.kind !== 'code'
         || !input.target.paths.includes(request.path)
       ) {
-        coverageGaps.push('file_quote request is unrelated to the code target');
+        addFileQuoteFailure({
+          ok: false,
+          kind: 'reviewer_invalid',
+          reason: 'file_quote request is unrelated to the code target',
+        });
         continue;
       }
-      evidence.push({
+      const source = resolveDigestBoundQuoteSource(context, request, byPath.get(request.path));
+      if (!source.ok) {
+        addFileQuoteFailure(source);
+        continue;
+      }
+      const materialized = materializeSourceQuote({
+        path: request.path,
+        content: source.content,
+        startLine: request.startLine,
+        endLine: request.endLine,
+      });
+      if (!materialized.ok) {
+        addFileQuoteFailure({
+          ok: false,
+          kind: materialized.kind === 'invalid'
+            ? 'reviewer_invalid'
+            : materialized.kind === 'unverifiable'
+              ? 'engine_unverifiable'
+              : 'resource_exhausted',
+          reason: materialized.reason,
+        });
+        continue;
+      }
+      if (materialized.quoteBytes > reviewerRemainingBytes) {
+        addFileQuoteFailure({
+          ok: false,
+          kind: 'resource_exhausted',
+          reason: `file_quote issuance exceeds the remaining reviewer byte budget (${reviewerRemainingBytes} bytes)`,
+        });
+        continue;
+      }
+      if (materialized.quoteBytes > stepRemainingBytes) {
+        addFileQuoteFailure({
+          ok: false,
+          kind: 'resource_exhausted',
+          reason: `file_quote issuance exceeds the remaining step byte budget (${stepRemainingBytes} bytes)`,
+        });
+        continue;
+      }
+      reviewerRemainingBytes -= materialized.quoteBytes;
+      stepRemainingBytes -= materialized.quoteBytes;
+      materializedQuoteBytes += materialized.quoteBytes;
+      fileQuoteEvidence.push({
         ...request,
+        verbatimExcerpt: materialized.verbatimExcerpt,
         snapshotId: context.snapshot.reviewScopeSnapshotId,
       });
       continue;
@@ -425,7 +611,13 @@ export function issueFindingEvidenceRequests(
     }));
   }
 
-  return { evidence, engineProofRecords, coverageGaps };
+  return {
+    evidence: fileQuoteFailed ? evidence : [...fileQuoteEvidence, ...evidence],
+    engineProofRecords,
+    coverageGaps,
+    quoteFailureReasons,
+    materializedQuoteBytes,
+  };
 }
 
 export function createSnapshotEngineProofVerifiers(input: {

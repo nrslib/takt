@@ -127,7 +127,11 @@ export function reviewerRawExtractionFixture(input: {
     if (evidence.kind !== 'file_quote') {
       return [];
     }
-    const { snapshotId: _snapshotId, ...request } = evidence;
+    const {
+      snapshotId: _snapshotId,
+      verbatimExcerpt: _verbatimExcerpt,
+      ...request
+    } = evidence;
     return [request];
   });
   const target = input.target ?? {

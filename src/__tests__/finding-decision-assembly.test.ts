@@ -1224,10 +1224,9 @@ describe('assembleManagerOutput "new" decisions reconciled against the ledger', 
     expect(result.output.conflicts[0]?.rawFindingIds).toEqual(['raw-confirmation']);
   });
 
-  // 本番経路の再現。resolution_confirmation は機械分類が処理して resolvedFindings に入り、
-  // 残存指摘だけが LLM に渡って matches になる。衝突は merge で初めて生まれるため、
-  // 組み立てだけを直しても台帳は凍ったままになる（takt-bench で実測）。
-  it('Given the confirmation is consumed by mechanical classification When merged with the LLM matches Then the merged output is canonical and valid', () => {
+  // resolution_confirmation は意味判定が必要なので残余 raw として manager に渡す。
+  // 同時に残存指摘がある場合は manager の二決定を canonicalize して open を維持する。
+  it('Given the confirmation remains for semantic classification When merged with the LLM match Then the merged output is canonical and valid', () => {
     const ledger = makeLedger();
     const stillPresent = makeRawFinding({
       rawFindingId: 'raw-still-present',
@@ -1244,14 +1243,20 @@ describe('assembleManagerOutput "new" decisions reconciled against the ledger', 
     const rawFindings = [confirmation, stillPresent];
 
     const mechanical = classifyRawFindingsMechanically({ previousLedger: ledger, rawFindings });
-    expect(mechanical.output.resolvedFindings.map((resolved) => resolved.findingId)).toEqual(['F-0001']);
-    expect(mechanical.residualRawFindings.map((raw) => raw.rawFindingId)).toEqual(['raw-still-present']);
+    expect(mechanical.output.resolvedFindings).toEqual([]);
+    expect(mechanical.residualRawFindings.map((raw) => raw.rawFindingId)).toEqual([
+      'raw-confirmation',
+      'raw-still-present',
+    ]);
 
     const assembly = assembleManagerOutput({
       previousLedger: ledger,
       residualRawFindings: mechanical.residualRawFindings,
       decisions: makeDecisions({
-        rawDecisions: [{ rawFindingId: 'raw-still-present', decision: 'same', findingId: 'F-0001', evidence: 'src/a.ts:22' }],
+        rawDecisions: [
+          { rawFindingId: 'raw-confirmation', decision: 'resolved', findingId: 'F-0001', evidence: 'The original failure mode is fixed.' },
+          { rawFindingId: 'raw-still-present', decision: 'same', findingId: 'F-0001', evidence: 'src/a.ts:22' },
+        ],
       }),
     });
 
@@ -1296,14 +1301,20 @@ describe('assembleManagerOutput "new" decisions reconciled against the ledger', 
     const rawFindings = [confirmation, stillPresent];
 
     const mechanical = classifyRawFindingsMechanically({ previousLedger: ledger, rawFindings });
-    expect(mechanical.output.resolvedFindings.map((resolved) => resolved.findingId)).toEqual(['F-0001']);
-    expect(mechanical.residualRawFindings.map((raw) => raw.rawFindingId)).toEqual(['raw-still-present']);
+    expect(mechanical.output.resolvedFindings).toEqual([]);
+    expect(mechanical.residualRawFindings.map((raw) => raw.rawFindingId)).toEqual([
+      'raw-confirmation',
+      'raw-still-present',
+    ]);
 
     const assembly = assembleManagerOutput({
       previousLedger: ledger,
       residualRawFindings: mechanical.residualRawFindings,
       decisions: makeDecisions({
-        rawDecisions: [{ rawFindingId: 'raw-still-present', decision: 'same', findingId: 'F-0001', evidence: 'src/a.ts:22' }],
+        rawDecisions: [
+          { rawFindingId: 'raw-confirmation', decision: 'resolved', findingId: 'F-0001', evidence: 'The original failure mode is fixed.' },
+          { rawFindingId: 'raw-still-present', decision: 'same', findingId: 'F-0001', evidence: 'src/a.ts:22' },
+        ],
       }),
       mechanicalOutput: mechanical.output,
     });

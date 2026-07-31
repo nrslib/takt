@@ -1508,7 +1508,6 @@ describe('StepExecutor', () => {
           path: 'src/fixed.ts',
           startLine: 1,
           endLine: 1,
-          verbatimExcerpt: evidence.verbatimExcerpt,
         }],
       },
     }];
@@ -1830,7 +1829,9 @@ describe('StepExecutor', () => {
       join(cwd, reportDir, 'findings-manager-validation.review.json'),
       'utf-8',
     )) as FindingManagerValidationReport;
-    expect(report.unsupportedRawFindings?.some(
+    expect(savedLedger.findings.find(
+      (finding) => finding.id === 'F-0001',
+    )?.rejectedObservations?.some(
       (entry) => entry.rawFindingId.endsWith(':confirmation-resolved'),
     )).toBe(true);
     expect(report.rawNormalizations?.find(

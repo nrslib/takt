@@ -775,6 +775,7 @@ export interface ReviewerRawFindingCandidate {
   readonly candidateIdentityHash: string;
   readonly issuedEngineProofRecords: readonly EngineProofRecord[];
   readonly evidenceCoverageGaps: readonly string[];
+  readonly evidenceQuoteFailureReasons?: readonly string[];
 
   readonly reviewerRawFindingId?: string;
   /** atomization・内部一意化前に reviewer が明示した相関 ID。 */
@@ -825,6 +826,7 @@ interface CanonicalRawFindingBase {
   readonly sourceBinding: CandidateSourceBinding;
   readonly issuedEngineProofRecords: readonly EngineProofRecord[];
   readonly evidenceCoverageGaps: readonly string[];
+  readonly evidenceQuoteFailureReasons?: readonly string[];
   readonly evidenceSetHash: string;
 
   readonly relation: RawFindingRelation | null;
@@ -1248,7 +1250,6 @@ export interface FileQuoteEvidenceRequest {
   path: string;
   startLine: number;
   endLine: number;
-  verbatimExcerpt: string;
 }
 
 /**

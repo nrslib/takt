@@ -73,6 +73,37 @@ function createDeferredSignal(): DeferredSignal {
   return { promise, resolve };
 }
 
+function semanticLifecycleResponse(instruction: string): AgentResponse {
+  const match = /## Owned raw findings\n(`{3,})json\n([\s\S]*?)\n\1/.exec(instruction);
+  if (match?.[2] === undefined) {
+    throw new Error('Test setup error: semantic lifecycle task input is missing');
+  }
+  const rawFindings = JSON.parse(match[2]) as Array<{
+    rawFindingId: string;
+    relation: string;
+    targetFindingId: string | null;
+  }>;
+  return findingManagerTaskResponse(instruction, {
+    rawDecisions: rawFindings.map((rawFinding) => ({
+      decision: rawFinding.relation === 'resolution_confirmation'
+        ? 'resolved' as const
+        : 'same' as const,
+      rawFindingId: rawFinding.rawFindingId,
+      findingId: rawFinding.targetFindingId ?? '',
+      evidence: rawFinding.relation === 'resolution_confirmation'
+        ? 'The materialized quote satisfies the original failure mode and required fix.'
+        : 'The materialized quote confirms that the existing issue persists.',
+    })),
+    disputeDecisions: [],
+    conflictDecisions: [],
+    invalidateDecisions: [],
+    duplicateDecisions: [],
+    dismissDecisions: [],
+  });
+}
+
+function recordSynthesizedAgentUsage(): void {}
+
 describe('finding manager filesystem error propagation', () => {
   let cwd: string;
   let reportDir: string;
@@ -136,6 +167,7 @@ describe('finding manager filesystem error propagation', () => {
       stepExecutor: {
         buildPhase1Instruction: (instruction: string) => instruction,
         normalizeStructuredOutput: (_step: WorkflowStep, response: AgentResponse) => response,
+        recordSynthesizedAgentUsage,
       },
       cwd,
       parentStep: { kind: 'agent', name: 'reviewers', persona: 'reviewer', edit: false },
@@ -168,6 +200,7 @@ describe('finding manager filesystem error propagation', () => {
         }),
       }],
       workflowName: 'peer-review',
+      workflowTask: 'Fix the source issue.',
       runId: 'run-1',
       callNamespace: '',
       timestamp: '2026-07-17T00:00:00.000Z',
@@ -230,6 +263,7 @@ describe('finding manager filesystem error propagation', () => {
       stepExecutor: {
         buildPhase1Instruction: (instruction: string) => instruction,
         normalizeStructuredOutput: (_step: WorkflowStep, response: AgentResponse) => response,
+        recordSynthesizedAgentUsage,
       },
       cwd,
       parentStep: { kind: 'agent', name: 'reviewers', persona: 'reviewer', edit: false },
@@ -262,6 +296,7 @@ describe('finding manager filesystem error propagation', () => {
         }),
       }],
       workflowName: 'peer-review',
+      workflowTask: 'Fix the source issue.',
       runId: 'run-1',
       callNamespace: '',
       timestamp: '2026-07-17T00:00:00.000Z',
@@ -278,6 +313,9 @@ describe('finding manager filesystem error propagation', () => {
   });
 
   it('同じopen revisionを観測した解消と検証済みpersistsはcommit順に依存せず同じcanonical projectionへ収束する', async () => {
+    executeAgentMock.mockImplementation(async (_persona, instruction) => (
+      semanticLifecycleResponse(instruction as string)
+    ));
     const initialLedger: FindingLedger = authorizeFindingLedgerFixture({
       workflowName: 'peer-review',
       nextId: 2,
@@ -388,6 +426,7 @@ describe('finding manager filesystem error propagation', () => {
         stepExecutor: {
           buildPhase1Instruction: (instruction: string) => instruction,
           normalizeStructuredOutput: (_step: WorkflowStep, response: AgentResponse) => response,
+          recordSynthesizedAgentUsage,
         },
         cwd,
         parentStep: { kind: 'agent', name: 'reviewers', persona: 'reviewer', edit: false },
@@ -403,6 +442,7 @@ describe('finding manager filesystem error propagation', () => {
           }),
         }],
         workflowName: 'peer-review',
+        workflowTask: 'Fix the source issue.',
         runId: 'run-1',
         callNamespace: '',
         timestamp: '2026-07-17T00:00:01.000Z',
@@ -523,6 +563,6 @@ describe('finding manager filesystem error propagation', () => {
         ],
       }),
     ]);
-    expect(executeAgentMock).not.toHaveBeenCalled();
+    expect(executeAgentMock).toHaveBeenCalledTimes(2);
   });
 });

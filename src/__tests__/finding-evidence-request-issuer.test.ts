@@ -1,3 +1,7 @@
+import { createHash } from 'node:crypto';
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import {
   computeClaimIdentityHash,
@@ -7,7 +11,7 @@ import {
 } from '../core/models/finding-schemas.js';
 import {
   createSnapshotEngineProofVerifiers,
-  issueFindingEvidenceRequests,
+  issueFindingEvidenceRequests as issueFindingEvidenceRequestsCore,
 } from '../core/workflow/findings/evidence-request-issuer.js';
 import {
   createReviewerRawFindingCandidates,
@@ -18,6 +22,27 @@ import type {
 import type {
   ReviewScopeProofSnapshot,
 } from '../core/workflow/findings/snapshot.js';
+
+type IssuerContext = Parameters<typeof issueFindingEvidenceRequestsCore>[0];
+type IssuerInput = Parameters<typeof issueFindingEvidenceRequestsCore>[1];
+
+function issueFindingEvidenceRequests(
+  context: Omit<IssuerContext, 'cwd'> & Partial<Pick<IssuerContext, 'cwd'>>,
+  input: Omit<IssuerInput, 'quoteByteBudget'>
+    & Partial<Pick<IssuerInput, 'quoteByteBudget'>>,
+) {
+  return issueFindingEvidenceRequestsCore({ cwd: process.cwd(), ...context }, {
+    ...input,
+    quoteByteBudget: input.quoteByteBudget ?? {
+      reviewerRemainingBytes: 256 * 1024,
+      stepRemainingBytes: 512 * 1024,
+    },
+  });
+}
+
+function sha256(content: Buffer): string {
+  return createHash('sha256').update(content).digest('hex');
+}
 
 const snapshotId = 'a'.repeat(64);
 const snapshot: ReviewScopeProofSnapshot = {
@@ -598,7 +623,9 @@ describe('Finding evidence request issuer', () => {
         evidence: [],
         engineProofRecords: [],
         coverageGaps: [],
+        materializedQuoteBytes: 0,
       }),
+      commitEvidenceIssuance: () => {},
     };
 
     const unique = createReviewerRawFindingCandidates([extraction], context);
@@ -614,6 +641,534 @@ describe('Finding evidence request issuer', () => {
     });
     expect(ambiguous.candidates).toEqual([]);
     expect(ambiguous.rejections[0]?.reason).toMatch(/multiple matches/);
+  });
+
+  it('uses the ledger target for lifecycle supplements and flags an explicit mismatch without rewriting the reviewer relation or finding id', () => {
+    const ledgerTarget: FindingTarget = { kind: 'code', paths: ['src/a.ts'], symbol: null };
+    const baseCandidate = {
+      rawFindingId: 'R-1',
+      relation: 'persists' as const,
+      targetFindingIds: ['F-0001'],
+      familyTag: 'bug',
+      severity: 'high' as const,
+      title: 'Issue persists',
+      description: 'The original failure remains.',
+      suggestion: null,
+      evidenceRequests: [],
+    };
+    const context = {
+      workflowName: 'workflow',
+      callNamespace: '',
+      parentStepName: 'review',
+      stepIteration: 1,
+      runId: 'run',
+      reviewerStepName: 'reviewer',
+      reviewerPersonaKey: 'reviewer',
+      reviewReport: 'The original failure remains.',
+      ledger: { findings: [] } as never,
+      authoritativeTargetByFindingId: new Map([['F-0001', ledgerTarget]]),
+      issueEvidenceRequests: () => ({
+        evidence: [],
+        engineProofRecords: [],
+        coverageGaps: [],
+        materializedQuoteBytes: 0,
+      }),
+      commitEvidenceIssuance: () => {},
+    };
+    const supplement = createReviewerRawFindingCandidates([{
+      rawExcerpt: 'The original failure remains.',
+      candidate: { ...baseCandidate, target: null },
+    }], context).candidates[0]!;
+    const mismatch = createReviewerRawFindingCandidates([{
+      rawExcerpt: 'The original failure remains.',
+      candidate: {
+        ...baseCandidate,
+        target: { kind: 'code', paths: ['src/other.ts'], symbol: null },
+      },
+    }], context).candidates[0]!;
+
+    expect(supplement).toMatchObject({
+      relation: 'persists',
+      targetFindingId: 'F-0001',
+      target: ledgerTarget,
+      evidenceCoverageGaps: [],
+    });
+    expect(mismatch).toMatchObject({
+      relation: 'persists',
+      targetFindingId: 'F-0001',
+      target: ledgerTarget,
+      evidenceCoverageGaps: [
+        'Lifecycle target "F-0001" does not exactly match the authoritative ledger target',
+      ],
+    });
+  });
+
+  it.each([
+    {
+      name: 'LF',
+      content: Buffer.from('alpha\nbeta\ngamma\n'),
+      startLine: 2,
+      endLine: 3,
+      expected: 'beta\ngamma',
+    },
+    {
+      name: 'CRLF',
+      content: Buffer.from('alpha\r\nbeta\r\ngamma\r\n'),
+      startLine: 2,
+      endLine: 3,
+      expected: 'beta\r\ngamma',
+    },
+    {
+      name: 'UTF-8',
+      content: Buffer.from('先頭\n証拠です\n末尾\n'),
+      startLine: 2,
+      endLine: 2,
+      expected: '証拠です',
+    },
+  ])('materializes a $name quote from digest-bound retained inventory bytes', ({
+    content,
+    startLine,
+    endLine,
+    expected,
+  }) => {
+    const codeTarget: FindingTarget = {
+      kind: 'code',
+      paths: ['src/a.ts'],
+      symbol: null,
+    };
+    const result = issueFindingEvidenceRequests({
+      snapshot: {
+        ...snapshot,
+        queryInventory: [{
+          path: 'src/a.ts',
+          kind: 'file',
+          contentDigest: sha256(content),
+          content,
+          coverage: 'complete',
+        }],
+      },
+      workflowName: 'workflow',
+      runId: 'run',
+      scopeIdentity: 'scope',
+      workflowTask: 'Fix the code.',
+      issuedAt: '2026-07-29T00:00:00.000Z',
+    }, {
+      target: codeTarget,
+      claimIdentityHash: 'c'.repeat(64),
+      targetFindingId: null,
+      requests: [{ kind: 'file_quote', path: 'src/a.ts', startLine, endLine }],
+    });
+
+    expect(result.coverageGaps).toEqual([]);
+    expect(result.evidence).toEqual([{
+      kind: 'file_quote',
+      path: 'src/a.ts',
+      startLine,
+      endLine,
+      verbatimExcerpt: expected,
+      snapshotId,
+    }]);
+    expect(result.materializedQuoteBytes).toBe(Buffer.byteLength(expected));
+  });
+
+  it('re-reads complete inventory without retained bytes only when the canonical file matches the snapshot digest', () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-quote-reread-'));
+    try {
+      mkdirSync(join(cwd, 'src'));
+      const content = Buffer.from('first\nsecond\n');
+      writeFileSync(join(cwd, 'src/a.ts'), content);
+      const codeTarget: FindingTarget = {
+        kind: 'code',
+        paths: ['src/a.ts'],
+        symbol: null,
+      };
+      const issue = (contentDigest: string) => issueFindingEvidenceRequests({
+        cwd,
+        snapshot: {
+          ...snapshot,
+          queryInventory: [{
+            path: 'src/a.ts',
+            kind: 'file',
+            contentDigest,
+            coverage: 'complete',
+          }],
+        },
+        workflowName: 'workflow',
+        runId: 'run',
+        scopeIdentity: 'scope',
+        workflowTask: 'Fix the code.',
+        issuedAt: '2026-07-29T00:00:00.000Z',
+      }, {
+        target: codeTarget,
+        claimIdentityHash: 'c'.repeat(64),
+        targetFindingId: null,
+        requests: [{ kind: 'file_quote', path: 'src/a.ts', startLine: 2, endLine: 2 }],
+      });
+
+      expect(issue(sha256(content))).toMatchObject({
+        coverageGaps: [],
+        evidence: [{ verbatimExcerpt: 'second' }],
+      });
+      expect(issue('f'.repeat(64))).toMatchObject({
+        evidence: [],
+        coverageGaps: ['source file "src/a.ts" no longer matches its review scope contentDigest'],
+        quoteFailureReasons: [],
+      });
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps resource-capped inventory as an engine coverage gap', () => {
+    const result = issueFindingEvidenceRequests({
+      snapshot: {
+        ...snapshot,
+        queryInventory: [{
+          path: 'src/a.ts',
+          kind: 'file',
+          contentDigest: sha256(Buffer.from('source\n')),
+          coverage: 'resource_cap',
+        }],
+      },
+      workflowName: 'workflow',
+      runId: 'run',
+      scopeIdentity: 'scope',
+      workflowTask: 'Fix the code.',
+      issuedAt: '2026-07-29T00:00:00.000Z',
+    }, {
+      target: { kind: 'code', paths: ['src/a.ts'], symbol: null },
+      claimIdentityHash: 'c'.repeat(64),
+      targetFindingId: null,
+      requests: [{ kind: 'file_quote', path: 'src/a.ts', startLine: 1, endLine: 1 }],
+    });
+
+    expect(result).toMatchObject({
+      evidence: [],
+      coverageGaps: ['file_quote path "src/a.ts" has coverage "resource_cap"'],
+      quoteFailureReasons: [],
+    });
+  });
+
+  it('rejects retained bytes whose digest does not match the snapshot inventory digest', () => {
+    const content = Buffer.from('current\n');
+    const result = issueFindingEvidenceRequests({
+      snapshot: {
+        ...snapshot,
+        queryInventory: [{
+          path: 'src/a.ts',
+          kind: 'file',
+          contentDigest: 'f'.repeat(64),
+          content,
+          coverage: 'complete',
+        }],
+      },
+      workflowName: 'workflow',
+      runId: 'run',
+      scopeIdentity: 'scope',
+      workflowTask: 'Fix the code.',
+      issuedAt: '2026-07-29T00:00:00.000Z',
+    }, {
+      target: { kind: 'code', paths: ['src/a.ts'], symbol: null },
+      claimIdentityHash: 'c'.repeat(64),
+      targetFindingId: null,
+      requests: [{ kind: 'file_quote', path: 'src/a.ts', startLine: 1, endLine: 1 }],
+    });
+
+    expect(result.evidence).toEqual([]);
+    expect(result.coverageGaps).toEqual([
+      'retained content for "src/a.ts" does not match its contentDigest',
+    ]);
+    expect(result.quoteFailureReasons).toEqual([]);
+  });
+
+  it.each([
+    {
+      name: 'outside the code target',
+      targetPaths: ['src/a.ts'],
+      requestPath: 'src/other.ts',
+      reason: 'file_quote request is unrelated to the code target',
+    },
+    {
+      name: 'outside the canonical project namespace',
+      targetPaths: ['../outside.ts'],
+      requestPath: '../outside.ts',
+      reason: 'file_quote path "../outside.ts" is not canonical',
+    },
+  ])('rejects a request $name', ({ targetPaths, requestPath, reason }) => {
+    const result = issueFindingEvidenceRequests({
+      snapshot,
+      workflowName: 'workflow',
+      runId: 'run',
+      scopeIdentity: 'scope',
+      workflowTask: 'Fix the code.',
+      issuedAt: '2026-07-29T00:00:00.000Z',
+    }, {
+      target: { kind: 'code', paths: targetPaths, symbol: null },
+      claimIdentityHash: 'c'.repeat(64),
+      targetFindingId: null,
+      requests: [{ kind: 'file_quote', path: requestPath, startLine: 1, endLine: 1 }],
+    });
+
+    expect(result.evidence).toEqual([]);
+    expect(result.coverageGaps).toEqual([reason]);
+    expect(result.quoteFailureReasons).toEqual([reason]);
+  });
+
+  it.each([
+    {
+      name: 'non-UTF-8 bytes',
+      content: Buffer.from([0xff, 0xfe]),
+      startLine: 1,
+      endLine: 1,
+      reason: /not valid UTF-8/,
+      reviewerInvalid: false,
+    },
+    {
+      name: 'an out-of-range line',
+      content: Buffer.from('one\n'),
+      startLine: 2,
+      endLine: 2,
+      reason: /out of range/,
+      reviewerInvalid: true,
+    },
+    {
+      name: 'a non-positive start line',
+      content: Buffer.from('one\n'),
+      startLine: 0,
+      endLine: 1,
+      reason: /line range 0-1 is invalid/,
+      reviewerInvalid: true,
+    },
+    {
+      name: 'a reversed line range',
+      content: Buffer.from('one\ntwo\n'),
+      startLine: 2,
+      endLine: 1,
+      reason: /line range 2-1 is invalid/,
+      reviewerInvalid: true,
+    },
+    {
+      name: 'an over-limit span outside the real file range',
+      content: Buffer.from('one\n'),
+      startLine: 1,
+      endLine: 201,
+      reason: /out of range/,
+      reviewerInvalid: true,
+    },
+    {
+      name: 'an empty materialized quote',
+      content: Buffer.from('\n'),
+      startLine: 1,
+      endLine: 1,
+      reason: /materialized file quote is empty/,
+      reviewerInvalid: true,
+    },
+    {
+      name: 'more than 200 lines',
+      content: Buffer.from('x\n'.repeat(201)),
+      startLine: 1,
+      endLine: 201,
+      reason: /200-line quote limit/,
+      reviewerInvalid: false,
+    },
+    {
+      name: 'more than 8192 quote bytes',
+      content: Buffer.from(`${'x'.repeat(8193)}\n`),
+      startLine: 1,
+      endLine: 1,
+      reason: /8192-byte quote limit/,
+      reviewerInvalid: false,
+    },
+    {
+      name: 'more than 1 MiB of source bytes',
+      content: Buffer.alloc((1024 * 1024) + 1, 0x78),
+      startLine: 1,
+      endLine: 1,
+      reason: /1048576-byte evidence source limit/,
+      reviewerInvalid: false,
+    },
+  ])('fails closed without a partial quote for $name', ({
+    content,
+    startLine,
+    endLine,
+    reason,
+    reviewerInvalid,
+  }) => {
+    const codeTarget: FindingTarget = {
+      kind: 'code',
+      paths: ['src/a.ts'],
+      symbol: null,
+    };
+    const result = issueFindingEvidenceRequests({
+      snapshot: {
+        ...snapshot,
+        queryInventory: [{
+          path: 'src/a.ts',
+          kind: 'file',
+          contentDigest: sha256(content),
+          content,
+          coverage: 'complete',
+        }],
+      },
+      workflowName: 'workflow',
+      runId: 'run',
+      scopeIdentity: 'scope',
+      workflowTask: 'Fix the code.',
+      issuedAt: '2026-07-29T00:00:00.000Z',
+    }, {
+      target: codeTarget,
+      claimIdentityHash: 'c'.repeat(64),
+      targetFindingId: null,
+      requests: [{ kind: 'file_quote', path: 'src/a.ts', startLine, endLine }],
+    });
+
+    expect(result.evidence).toEqual([]);
+    expect(result.coverageGaps).toHaveLength(1);
+    expect(result.coverageGaps[0]).toMatch(reason);
+    expect(result.quoteFailureReasons).toHaveLength(reviewerInvalid ? 1 : 0);
+  });
+
+  it('rejects symlink and missing re-read paths within the canonical project boundary', () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-quote-path-'));
+    try {
+      mkdirSync(join(cwd, 'src'));
+      writeFileSync(join(cwd, 'actual.ts'), 'actual\n');
+      symlinkSync('../actual.ts', join(cwd, 'src/linked.ts'));
+      const codeTarget: FindingTarget = {
+        kind: 'code',
+        paths: ['src/linked.ts', 'src/missing.ts'],
+        symbol: null,
+      };
+      const issue = (path: string) => issueFindingEvidenceRequests({
+        cwd,
+        snapshot: {
+          ...snapshot,
+          queryInventory: [{
+            path,
+            kind: 'file',
+            contentDigest: sha256(Buffer.from('actual\n')),
+            coverage: 'complete',
+          }],
+        },
+        workflowName: 'workflow',
+        runId: 'run',
+        scopeIdentity: 'scope',
+        workflowTask: 'Fix the code.',
+        issuedAt: '2026-07-29T00:00:00.000Z',
+      }, {
+        target: codeTarget,
+        claimIdentityHash: 'c'.repeat(64),
+        targetFindingId: null,
+        requests: [{ kind: 'file_quote', path, startLine: 1, endLine: 1 }],
+      });
+
+      expect(issue('src/linked.ts').coverageGaps[0]).toMatch(/symbolic link/);
+      expect(issue('src/missing.ts').coverageGaps[0]).toMatch(/does not exist|could not be inspected/);
+      expect(issue('src/linked.ts').quoteFailureReasons).toEqual([]);
+      expect(issue('src/missing.ts').quoteFailureReasons).toEqual([]);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('withholds every file quote after one quote request fails while retaining engine proof evidence', () => {
+    const content = Buffer.from('one\ntwo\n');
+    const codeTarget: FindingTarget = {
+      kind: 'code',
+      paths: ['src/a.ts'],
+      symbol: null,
+    };
+    const result = issueFindingEvidenceRequests({
+      snapshot: {
+        ...snapshot,
+        queryInventory: [{
+          path: 'src/a.ts',
+          kind: 'file',
+          contentDigest: sha256(content),
+          content,
+          coverage: 'complete',
+        }],
+      },
+      workflowName: 'workflow',
+      runId: 'run',
+      scopeIdentity: 'scope',
+      workflowTask: 'Fix the code.',
+      issuedAt: '2026-07-29T00:00:00.000Z',
+    }, {
+      target: codeTarget,
+      claimIdentityHash: 'c'.repeat(64),
+      targetFindingId: null,
+      requests: [
+        { kind: 'file_quote', path: 'src/a.ts', startLine: 1, endLine: 1 },
+        { kind: 'engine_proof', subject: {
+          kind: 'authoritative_quote',
+          source: 'task',
+          declarationId: 'workflow_task',
+          verbatimExcerpt: 'Fix the code.',
+        } },
+        { kind: 'file_quote', path: 'src/a.ts', startLine: 99, endLine: 99 },
+      ],
+    });
+
+    expect(result.evidence).toEqual([{
+      kind: 'engine_proof',
+      proofId: result.engineProofRecords[0]!.proofId,
+    }]);
+    expect(result.engineProofRecords).toHaveLength(1);
+    expect(result.materializedQuoteBytes).toBe(3);
+    expect(result.coverageGaps[0]).toMatch(/out of range/);
+    expect(result.quoteFailureReasons[0]).toMatch(/out of range/);
+  });
+
+  it('enforces exact reviewer and step byte budgets without truncation', () => {
+    const content = Buffer.from(`${'x'.repeat(8192)}\n`);
+    const codeTarget: FindingTarget = {
+      kind: 'code',
+      paths: ['src/a.ts'],
+      symbol: null,
+    };
+    const issue = (reviewerRemainingBytes: number, stepRemainingBytes: number) => (
+      issueFindingEvidenceRequests({
+        snapshot: {
+          ...snapshot,
+          queryInventory: [{
+            path: 'src/a.ts',
+            kind: 'file',
+            contentDigest: sha256(content),
+            content,
+            coverage: 'complete',
+          }],
+        },
+        workflowName: 'workflow',
+        runId: 'run',
+        scopeIdentity: 'scope',
+        workflowTask: 'Fix the code.',
+        issuedAt: '2026-07-29T00:00:00.000Z',
+      }, {
+        target: codeTarget,
+        claimIdentityHash: 'c'.repeat(64),
+        targetFindingId: null,
+        requests: [{ kind: 'file_quote', path: 'src/a.ts', startLine: 1, endLine: 1 }],
+        quoteByteBudget: { reviewerRemainingBytes, stepRemainingBytes },
+      })
+    );
+
+    expect(issue(8192, 8192)).toMatchObject({
+      coverageGaps: [],
+      materializedQuoteBytes: 8192,
+    });
+    expect(issue(8191, 8192)).toMatchObject({
+      evidence: [],
+      coverageGaps: ['file_quote issuance exceeds the remaining reviewer byte budget (8191 bytes)'],
+      quoteFailureReasons: [],
+      materializedQuoteBytes: 0,
+    });
+    expect(issue(8192, 8191)).toMatchObject({
+      evidence: [],
+      coverageGaps: ['file_quote issuance exceeds the remaining step byte budget (8191 bytes)'],
+      quoteFailureReasons: [],
+      materializedQuoteBytes: 0,
+    });
   });
 
   it('keeps snapshotId, proofId, and run binding out of the normalizer schema', () => {

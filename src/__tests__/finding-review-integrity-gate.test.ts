@@ -76,21 +76,20 @@ function createTestTmpDir(): string {
   return dir;
 }
 
-// A hallucinated finding: a fresh claim citing a file that does not exist, with no
-// verifiable evidence → the engine isolates it as a reviewer anomaly (never a
-// product finding). The reviewer re-emits the same raw every round.
+// A hallucinated finding with a deterministically invalid locator. The reviewer
+// re-emits the same raw every round.
 const HALLUCINATED_RAW = reviewerRawExtractionFixture({
   rawFindingId: 'h-1',
   familyTag: 'security',
   severity: 'high',
-  title: 'Hallucinated issue in a nonexistent file',
-  description: 'Claims a bug in a file that is not part of the reviewed tree.',
+  title: 'Hallucinated issue at an invalid source line',
+  description: 'Claims a bug at a line outside the reviewed source file.',
   suggestion: null,
   relation: 'new',
   targetFindingId: null,
   evidence: [{
     kind: 'file_quote',
-    path: 'src/does-not-exist.ts',
+    path: 'src/a.ts',
     startLine: 99,
     endLine: 99,
     verbatimExcerpt: 'hallucinated source line',

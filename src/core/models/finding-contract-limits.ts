@@ -21,3 +21,11 @@ export const RAW_FINDING_NORMALIZER_LIMITS = {
   /** 1 extraction が atomize できる lifecycle target 数。 */
   maxTargetFindingIdsPerCandidate: 64,
 } as const;
+
+export const FINDING_EVIDENCE_ISSUANCE_LIMITS = {
+  maxFileQuoteLines: 200,
+  maxFileQuoteBytes: 8 * 1024,
+  maxSourceFileBytes: 1024 * 1024,
+  maxReviewerBytes: 256 * 1024,
+  maxStepBytes: 512 * 1024,
+} as const;

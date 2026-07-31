@@ -195,6 +195,10 @@ describe('buildFindingContractInstruction', () => {
       expect(structuredJa).toContain('code の確認は `file_quote`');
       expect(structuredJa).toContain('structure の確認は `repository_manifest`');
       expect(structuredJa).toContain('absence の確認は `repository_query` と `authoritative_quote`');
+      expect(structuredEn).toContain('path and bounded 1-based startLine/endLine only');
+      expect(structuredEn).toContain('do not provide source text or verbatimExcerpt');
+      expect(structuredJa).toContain('path と有界な1始まりの startLine/endLine だけ');
+      expect(structuredJa).toContain('source text や verbatimExcerpt は出力しない');
 
       for (const rendered of [
         structuredEn,

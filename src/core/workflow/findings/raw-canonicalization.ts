@@ -237,7 +237,7 @@ export interface ReviewerRawIntakeContext {
   /** normalizer rejection と正常 canonicalization が共有する ambiguity 正本。 */
   ledger: FindingLedger;
   /** normalizer が lifecycle target を反復しなくても、identity は ledger 正本へ束縛する。 */
-  authoritativeTargetByFindingId?: ReadonlyMap<string, FindingTarget>;
+  authoritativeTargetByFindingId?: ReadonlyMap<string, FindingTarget | null>;
   issueEvidenceRequests(input: {
     target: FindingTarget;
     claimIdentityHash: string;
@@ -247,7 +247,10 @@ export interface ReviewerRawIntakeContext {
     evidence: RawFindingEvidence[];
     engineProofRecords: EngineProofRecord[];
     coverageGaps: string[];
+    quoteFailureReasons?: string[];
+    materializedQuoteBytes: number;
   };
+  commitEvidenceIssuance(materializedQuoteBytes: number): void;
 }
 
 function namespacedRawFindingId(context: ReviewerRawIntakeContext, rawFindingId: string): string {
@@ -309,9 +312,9 @@ function projectEvidenceRequests(value: unknown): FindingEvidenceRequest[] | und
     const keys = Object.keys(record);
     if (
       record.kind === 'file_quote'
-      && keys.length === 5
+      && keys.length === 4
       && keys.every((key) => (
-        ['kind', 'path', 'startLine', 'endLine', 'verbatimExcerpt'].includes(key)
+        ['kind', 'path', 'startLine', 'endLine'].includes(key)
       ))
       && typeof record.path === 'string'
       && record.path.length > 0
@@ -319,15 +322,12 @@ function projectEvidenceRequests(value: unknown): FindingEvidenceRequest[] | und
       && Number(record.startLine) > 0
       && Number.isSafeInteger(record.endLine)
       && Number(record.endLine) > 0
-      && typeof record.verbatimExcerpt === 'string'
-      && record.verbatimExcerpt.length > 0
     ) {
       projected.push({
         kind: 'file_quote',
         path: record.path,
         startLine: Number(record.startLine),
         endLine: Number(record.endLine),
-        verbatimExcerpt: record.verbatimExcerpt,
       });
       continue;
     }
@@ -1094,17 +1094,24 @@ export function createReviewerRawFindingCandidates(
     const rawExcerpt = pickString(record.rawExcerpt);
     const relation = pickRelation(record.relation);
     const targetFindingId = pickString(record.targetFindingId);
-    const authoritativeTarget = (
-        record.target === null
-        && relation !== undefined
-        && relation !== 'new'
-        && targetFindingId !== undefined
-          ? context.authoritativeTargetByFindingId?.get(targetFindingId)
-          : undefined
+    const reviewerTarget = projectFindingTarget(record.target);
+    const hasAuthoritativeTarget = relation !== undefined
+      && relation !== 'new'
+      && targetFindingId !== undefined
+      && context.authoritativeTargetByFindingId?.has(targetFindingId) === true;
+    const authoritativeTarget = hasAuthoritativeTarget
+      ? context.authoritativeTargetByFindingId!.get(targetFindingId)!
+      : undefined;
+    const lifecycleTargetMismatch = hasAuthoritativeTarget
+      && reviewerTarget !== undefined
+      && (
+        authoritativeTarget === null
+        || canonicalJson(authoritativeTarget) !== canonicalJson(reviewerTarget)
       );
-    const target = projectFindingTarget(record.target)
-      ?? authoritativeTarget
-      ?? (record.target === null ? { kind: 'review_scope' as const } : undefined);
+    const target = hasAuthoritativeTarget
+      ? authoritativeTarget ?? { kind: 'review_scope' as const }
+      : reviewerTarget
+        ?? (record.target === null ? { kind: 'review_scope' as const } : undefined);
     if (rawExcerpt === undefined) {
       const claimIdentityHash = target === undefined
         ? undefined
@@ -1198,7 +1205,13 @@ export function createReviewerRawFindingCandidates(
         sourceBinding,
       }),
       issuedEngineProofRecords: issued.engineProofRecords.map((record) => structuredClone(record)),
-      evidenceCoverageGaps: [...issued.coverageGaps],
+      evidenceCoverageGaps: [
+        ...(lifecycleTargetMismatch
+          ? [`Lifecycle target "${targetFindingId}" does not exactly match the authoritative ledger target`]
+          : []),
+        ...issued.coverageGaps,
+      ],
+      evidenceQuoteFailureReasons: [...(issued.quoteFailureReasons ?? [])],
       ...(reviewerRawFindingId !== undefined ? { reviewerRawFindingId } : {}),
       ...(sourceReviewerRawFindingId !== undefined ? { sourceReviewerRawFindingId } : {}),
       ...(pickString(record.familyTag) !== undefined ? { familyTag: pickString(record.familyTag)! } : {}),
@@ -1218,6 +1231,12 @@ export function createReviewerRawFindingCandidates(
     if (!projectedItems[index]!.evidenceShapeValid) {
       CANDIDATE_INVALID_EVIDENCE_SHAPES.add(candidate);
     }
+    const commitQuoteBytes = projectedItems[index]!.evidenceShapeValid
+      && !lifecycleTargetMismatch
+      && issued.coverageGaps.length === 0
+      ? issued.materializedQuoteBytes
+      : 0;
+    context.commitEvidenceIssuance(commitQuoteBytes);
     candidates.push(candidate);
   });
   return { candidates, rejections };
@@ -1253,6 +1272,7 @@ export function candidateFromStoredRawFinding(
     candidateIdentityHash: raw.candidateIdentityHash,
     issuedEngineProofRecords: [],
     evidenceCoverageGaps: [],
+    evidenceQuoteFailureReasons: [],
     ...(raw.familyTag !== null ? { familyTag: raw.familyTag } : {}),
     ...(raw.severity !== null ? { severity: raw.severity } : {}),
     ...(raw.title !== null ? { title: raw.title } : {}),
@@ -1565,6 +1585,7 @@ export function canonicalizeReviewerRawFinding(
     sourceBinding: { ...candidate.sourceBinding },
     issuedEngineProofRecords: candidate.issuedEngineProofRecords.map((record) => structuredClone(record)),
     evidenceCoverageGaps: [...candidate.evidenceCoverageGaps],
+    evidenceQuoteFailureReasons: [...(candidate.evidenceQuoteFailureReasons ?? [])],
     evidenceSetHash,
     relation,
     reviewer: candidate.reviewer,

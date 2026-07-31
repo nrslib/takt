@@ -240,6 +240,14 @@ function classifyEvidence(input: {
       reason: 'Reviewer evidence does not match the typed evidence protocol',
     };
   }
+  if ((item.canonical.evidenceQuoteFailureReasons?.length ?? 0) > 0) {
+    return {
+      admit: false,
+      disposition: 'anomaly',
+      anomalyKind: 'quote-mismatch',
+      reason: item.canonical.evidenceQuoteFailureReasons!.join('; '),
+    };
+  }
   if (item.canonical.evidenceCoverageGaps.length > 0) {
     return {
       admit: false,
@@ -342,6 +350,14 @@ function classifyEvidence(input: {
       admit: false,
       disposition: 'anomaly',
       anomalyKind: verification.outcome,
+      reason: verification.reason,
+      failedEvidence,
+    };
+  }
+  if (verification.outcome === 'resource_exhausted') {
+    return {
+      admit: false,
+      disposition: 'provisional',
       reason: verification.reason,
       failedEvidence,
     };
