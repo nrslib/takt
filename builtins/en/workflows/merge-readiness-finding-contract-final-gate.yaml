@@ -47,11 +47,9 @@ steps:
         return: need_replan
       - condition: when(findings.open.count == 0 && findings.reviewerAnomalies.count > 0)
         return: needs_review
-      - condition: needs_fix
+      - condition: when(findings.open.count > 0 && findings.provisional.count == 0 && findings.conflicts.count == 0)
         return: needs_fix
-      - condition: when(findings.open.count > 0)
-        return: needs_fix
-      - condition: approved && when(findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0)
+      - condition: when(findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0)
         next: supervise
     output_contracts:
       report:

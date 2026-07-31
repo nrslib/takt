@@ -160,6 +160,7 @@ const EXPECTED_CYCLES = [
     cycle: [
       'replan',
       'reviewers',
+      'local-review-integrity-gate',
       'boundary-reviewers',
       'final-gate',
       'boundary-reviewers',
@@ -184,6 +185,7 @@ const EXPECTED_CYCLES = [
       'replan',
       'implement',
       'reviewers',
+      'local-review-integrity-gate',
       'boundary-reviewers',
       'final-gate',
       'boundary-reviewers',
@@ -215,6 +217,7 @@ const EXPECTED_CYCLES = [
     cycle: [
       'fix',
       'reviewers',
+      'local-review-integrity-gate',
       'boundary-reviewers',
       'final-gate',
       'boundary-reviewers',
@@ -239,6 +242,7 @@ const COMPOSITE_CLOSED_PATHS = [
     path: [
       'fix',
       'reviewers',
+      'local-review-integrity-gate',
       'boundary-reviewers',
       'final-gate',
       'boundary-reviewers',
@@ -252,6 +256,7 @@ const COMPOSITE_CLOSED_PATHS = [
       'replan',
       'implement',
       'reviewers',
+      'local-review-integrity-gate',
       'boundary-reviewers',
       'final-gate',
       'boundary-reviewers',
@@ -456,14 +461,22 @@ describe('takt-default-localllm boundary reviews', () => {
     const finalGate = getRawStep(rawWorkflow, 'final-gate');
 
     expect(loadedWorkflow.findingContract).not.toHaveProperty('reviewerOutput');
-    expect(transitionFor(reviewers, 'all(')).toBe('boundary-reviewers');
-    expect(transitionFor(reviewers, 'reviewerAnomalies.count > 0')).toBe('local-review-integrity-gate');
-    expect(reviewers.rules?.find((rule) => rule.condition.includes('all('))?.condition)
-      .toContain('reviewerAnomalies.count == 0');
+    expect(transitionFor(
+      reviewers,
+      'findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0',
+    )).toBe('local-review-integrity-gate');
+    expect(reviewers.rules?.some((rule) => /^(?:all|any)\(/u.test(rule.condition))).toBe(false);
     expect(transitionFor(localIntegrityGate, 'COMPLETE')).toBe('boundary-reviewers');
     expect(transitionFor(localIntegrityGate, 'needs_review')).toBe('reviewers');
-    expect(transitionFor(boundary, 'all(')).toBe('final-gate');
-    expect(transitionFor(boundary, 'any("needs_fix")')).toBe('fix');
+    expect(transitionFor(
+      boundary,
+      'findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0',
+    )).toBe('final-gate');
+    expect(transitionFor(
+      boundary,
+      'findings.open.count > 0 && findings.provisional.count == 0 && findings.conflicts.count == 0',
+    )).toBe('fix');
+    expect(boundary.rules?.some((rule) => /^(?:all|any)\(/u.test(rule.condition))).toBe(false);
     expect(transitionFor(finalGate, 'needs_review')).toBe('boundary-reviewers');
     expect(localIntegrityGate.call).toBe('merge-readiness-finding-contract-final-gate');
     expect(finalGate.call).toBe(localIntegrityGate.call);
@@ -681,8 +694,8 @@ describe('takt-default-localllm boundary reviews', () => {
     const workflow = loadBuiltinWorkflow(locale);
     const monitors = workflow.loopMonitors ?? [];
     const paths = [
-      ['fix', 'reviewers', 'boundary-reviewers', 'final-gate', 'boundary-reviewers'],
-      ['replan', 'implement', 'reviewers', 'boundary-reviewers', 'final-gate', 'boundary-reviewers'],
+      ['fix', 'reviewers', 'local-review-integrity-gate', 'boundary-reviewers', 'final-gate', 'boundary-reviewers'],
+      ['replan', 'implement', 'reviewers', 'local-review-integrity-gate', 'boundary-reviewers', 'final-gate', 'boundary-reviewers'],
       ['fix', 'reviewers', 'local-review-integrity-gate', 'reviewers'],
       ['replan', 'implement', 'reviewers', 'local-review-integrity-gate', 'reviewers'],
     ];

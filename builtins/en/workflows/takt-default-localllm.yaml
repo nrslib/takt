@@ -177,7 +177,7 @@ loop_monitors:
   - cycle: [replan, reviewers, local-review-integrity-gate, boundary-reviewers, final-gate, fix]
     threshold: 2
     judge: *replan_progress_judge
-  - cycle: [replan, reviewers, boundary-reviewers, final-gate, boundary-reviewers, final-gate]
+  - cycle: [replan, reviewers, local-review-integrity-gate, boundary-reviewers, final-gate, boundary-reviewers, final-gate]
     threshold: 1
     judge: *replan_standard_judge
   - cycle: [replan, reviewers, local-review-integrity-gate, reviewers, local-review-integrity-gate]
@@ -211,7 +211,7 @@ loop_monitors:
           next: replan
         - condition: No feasible approach can satisfy the requirements after the attempted reviews and replans
           next: ABORT
-  - cycle: [replan, implement, reviewers, boundary-reviewers, final-gate, boundary-reviewers, final-gate]
+  - cycle: [replan, implement, reviewers, local-review-integrity-gate, boundary-reviewers, final-gate, boundary-reviewers, final-gate]
     threshold: 1
     judge:
       persona: supervisor
@@ -303,7 +303,7 @@ loop_monitors:
           next: replan
         - condition: No feasible approach can satisfy the requirements even after considering the attempted replans
           next: ABORT
-  - cycle: [fix, reviewers, boundary-reviewers, final-gate, boundary-reviewers, final-gate]
+  - cycle: [fix, reviewers, local-review-integrity-gate, boundary-reviewers, final-gate, boundary-reviewers, final-gate]
     threshold: 1
     judge:
       persona: supervisor
@@ -500,13 +500,9 @@ steps:
         next: replan
       - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
         next: replan
-      - condition: all("approved", "No AI-specific issues", "approved", "approved", "approved", "approved") && when(findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count == 0)
-        next: boundary-reviewers
-      - condition: any("approved", "needs_fix", "No AI-specific issues", "AI-specific issues found") && when(findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)
+      - condition: when(findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0)
         next: local-review-integrity-gate
-      - condition: any("needs_fix", "AI-specific issues found") && when(findings.conflicts.count == 0)
-        next: fix
-      - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
+      - condition: when(findings.open.count > 0 && findings.provisional.count == 0 && findings.conflicts.count == 0)
         next: fix
 
   - name: local-review-integrity-gate
@@ -598,13 +594,9 @@ steps:
         next: replan
       - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
         next: replan
-      - condition: all("approved", "approved", "approved") && when(findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count == 0)
+      - condition: when(findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0)
         next: final-gate
-      - condition: any("approved", "needs_fix") && when(findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)
-        next: final-gate
-      - condition: any("needs_fix") && when(findings.conflicts.count == 0)
-        next: fix
-      - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
+      - condition: when(findings.open.count > 0 && findings.provisional.count == 0 && findings.conflicts.count == 0)
         next: fix
 
   - name: final-gate
