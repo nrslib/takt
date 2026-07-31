@@ -33,8 +33,9 @@ import { applyRejectedObservationAttachments } from './manager-provisional-settl
 import { attachFixpointState } from './fixpoint.js';
 import type { ReviewScopeProofSnapshot } from './snapshot.js';
 import {
-  settleReviewerAnomaliesFromVerifiedResolutions,
+  settleReviewerAnomaliesFromAuthorizedTerminalEvents,
 } from './reviewer-anomaly-settlement.js';
+import { computeWorkflowTaskDigest } from './task-scope-adjudication.js';
 
 export interface CommitFindingManagerRoundResult {
   applied: boolean;
@@ -162,10 +163,11 @@ export async function commitFindingManagerRound(params: {
         recoveryOrigins,
         params.observation,
       );
-      const settledAnomalies = settleReviewerAnomaliesFromVerifiedResolutions(
+      const settledAnomalies = settleReviewerAnomaliesFromAuthorizedTerminalEvents(
         freshLedger,
         proofed.ledger,
         completedRecovery,
+        computeWorkflowTaskDigest(params.input.workflowTask),
       );
       const withReviewIntegrity = attachReviewIntegrityState(
         freshLedger,

@@ -1,6 +1,9 @@
 import { formatConflictId, type ConflictIdentity } from './finding-conflict-identity.js';
 import { canonicalJson } from '../../shared/utils/canonical-json.js';
 import {
+  reviewerAnomalySettlementEligibilityViolation,
+} from './finding-reviewer-anomaly-settlement-policy.js';
+import {
   rawRecoveryAttemptIdentityViolation,
   rawRecoveryResultIdentityViolation,
 } from './finding-raw-recovery.js';
@@ -247,15 +250,8 @@ function collectReviewerAnomalySettlementViolations(
   rawById: ReadonlyMap<string, RawFinding>,
 ): void {
   const anomalyIds = new Set<string>();
-  const findingsById = new Map(projection.findings.map((finding) => [finding.id, finding]));
-  const eventsById = new Map(projection.lifecycleEvents.map((event) => [event.eventId, event]));
-  const reservationsById = new Map(
-    projection.lifecycleReservations.map((reservation) => [reservation.reservationId, reservation]),
-  );
-  const bindingsById = new Map(
-    projection.evidenceBindings.map((binding) => [binding.bindingId, binding]),
-  );
-  const evidenceIds = new Set(projection.evidenceRecords.map((record) => record.evidenceId));
+  const anomalyIdentityByStableKey = new Map<string, string>();
+  const outstandingStableKeys = new Set<string>();
 
   for (const [index, anomaly] of (projection.reviewerAnomalies ?? []).entries()) {
     if (anomalyIds.has(anomaly.id)) {
@@ -265,46 +261,52 @@ function collectReviewerAnomalySettlementViolations(
       });
     }
     anomalyIds.add(anomaly.id);
+    const stableIdentity = canonicalJson({
+      kind: anomaly.kind,
+      lineageKey: anomaly.lineageKey,
+    });
+    const priorStableIdentity = anomalyIdentityByStableKey.get(anomaly.stableKey);
+    if (priorStableIdentity !== undefined && priorStableIdentity !== stableIdentity) {
+      violations.push({
+        path: ['reviewerAnomalies', index, 'stableKey'],
+        message: `Reviewer anomaly stable key "${anomaly.stableKey}" identifies different anomaly content`,
+      });
+    }
+    anomalyIdentityByStableKey.set(anomaly.stableKey, stableIdentity);
+    if (anomaly.promotedFindingId === undefined && anomaly.settlement === undefined) {
+      if (outstandingStableKeys.has(anomaly.stableKey)) {
+        violations.push({
+          path: ['reviewerAnomalies', index, 'stableKey'],
+          message: `Reviewer anomaly stable key "${anomaly.stableKey}" has multiple outstanding episodes`,
+        });
+      }
+      outstandingStableKeys.add(anomaly.stableKey);
+    }
+    anomaly.sourceRawFindingIds.forEach((rawFindingId, sourceIndex) => {
+      if (!rawById.has(rawFindingId)) {
+        violations.push({
+          path: ['reviewerAnomalies', index, 'sourceRawFindingIds', sourceIndex],
+          message: `Reviewer anomaly "${anomaly.id}" references unknown raw finding "${rawFindingId}"`,
+        });
+      }
+    });
     const settlement = anomaly.settlement;
     if (settlement === undefined) {
       continue;
     }
-    if (anomaly.promotedFindingId !== undefined) {
+    const eligibilityViolation = reviewerAnomalySettlementEligibilityViolation({
+      projection,
+      anomaly,
+      settlement,
+      sourceHead: { kind: 'projection' },
+      workflowTaskDigest: null,
+    });
+    if (eligibilityViolation !== undefined) {
       violations.push({
         path: ['reviewerAnomalies', index, 'settlement'],
-        message: `Reviewer anomaly "${anomaly.id}" cannot be both promoted and settled`,
-      });
-    }
-    const targetIds = new Set(anomaly.sourceRawFindingIds.flatMap((rawFindingId) => {
-      const targetFindingId = rawById.get(rawFindingId)?.targetFindingId;
-      return targetFindingId === null || targetFindingId === undefined ? [] : [targetFindingId];
-    }));
-    const event = eventsById.get(settlement.lifecycleEventId);
-    const reservation = event === undefined
-      ? undefined
-      : reservationsById.get(event.reservationId);
-    const transitionMatches = event?.operation === 'resolve_finding'
-      && event.transitions.some((transition) => (
-        transition.after.entityKind === 'finding'
-        && transition.after.entityId === settlement.findingId
-      ));
-    const bindingMatches = event?.evidenceBindingIds.some((bindingId) => {
-      const binding = bindingsById.get(bindingId);
-      return binding?.operation === 'resolve_finding'
-        && binding.target.entityKind === 'finding'
-        && binding.target.entityId === settlement.findingId
-        && evidenceIds.has(binding.evidenceId);
-    }) === true;
-    if (
-      !targetIds.has(settlement.findingId)
-      || !findingsById.has(settlement.findingId)
-      || transitionMatches !== true
-      || reservation?.authority.kind !== 'verified_evidence'
-      || bindingMatches !== true
-    ) {
-      violations.push({
-        path: ['reviewerAnomalies', index, 'settlement'],
-        message: `Reviewer anomaly "${anomaly.id}" has an invalid verified-resolution settlement`,
+        message: settlement.kind === 'target_resolved_by_verified_evidence'
+          ? `Reviewer anomaly "${anomaly.id}" has an invalid verified-resolution settlement: ${eligibilityViolation}`
+          : `Reviewer anomaly "${anomaly.id}" has an invalid terminal-dismissal settlement: ${eligibilityViolation}`,
       });
     }
   }

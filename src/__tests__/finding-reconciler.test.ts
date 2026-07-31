@@ -1449,7 +1449,12 @@ describe('reconcileFindingLedger', () => {
         promotedFindingId: 'F-0001',
       }),
     ];
-    const previousLedger = makeLedger({ reviewerAnomalies });
+    const previousLedger = makeLedger({
+      reviewerAnomalies,
+      rawFindings: reviewerAnomalies.flatMap((anomaly) => (
+        anomaly.sourceRawFindingIds.map((rawFindingId) => makeRawFinding({ rawFindingId }))
+      )),
+    });
 
     const ledger = reconcileFindingLedger({
       previousLedger,
@@ -1470,7 +1475,10 @@ describe('reconcileFindingLedger', () => {
       reviewers: ['ai-antipattern-reviewer'],
       title: 'Unverified recovery finding',
     })];
-    const previousLedger = makeLedger({ reviewerAnomalies });
+    const previousLedger = makeLedger({
+      reviewerAnomalies,
+      rawFindings: [makeRawFinding({ rawFindingId: 'raw-anomaly-action-recovery' })],
+    });
 
     const ledger = reconcileManagerActionRecovery({
       previousLedger,

@@ -595,7 +595,10 @@ export const ReviewerAnomalyEntrySchema = z.object({
   occurrences: z.number().int().positive(),
   promotedFindingId: nonEmptyString.optional(),
   settlement: z.object({
-    kind: z.literal('target_resolved_by_verified_evidence'),
+    kind: z.enum([
+      'target_resolved_by_verified_evidence',
+      'target_dismissed_by_terminal_adjudication',
+    ]),
     findingId: nonEmptyString,
     lifecycleEventId: nonEmptyString,
   }).strict().optional(),

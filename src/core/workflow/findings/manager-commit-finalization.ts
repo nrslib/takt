@@ -3,6 +3,7 @@ import {
   type CanonicalRawReconcileProvenance,
   type ProvisionalFindingSpec,
 } from './reconciler.js';
+import { createEmptyManagerOutput } from './manager-output.js';
 import {
   applyReviewerAnomalySpecsToLedger,
   createReviewerAnomalySpec,
@@ -44,6 +45,8 @@ import {
   applyResolutionRenotificationTransitions,
   type ResolutionRenotificationTransition,
 } from './resolution-renotification.js';
+import { resolveCurrentLifecycleObservationTarget } from './reviewer-anomaly-policy.js';
+import { canonicalRawIntegrityDigestOf } from './raw-canonicalization.js';
 
 export interface RejectedObservationAttachment {
   targetFindingId: string;
@@ -55,6 +58,7 @@ export interface RejectedObservationAttachment {
 interface RejectedObservationPlan {
   attachments: RejectedObservationAttachment[];
   anomalySpecs: ReviewerAnomalySpec[];
+  rawFindingDispositions: RawFindingDisposition[];
 }
 
 function classifyRejectedObservations(
@@ -63,7 +67,14 @@ function classifyRejectedObservations(
 ): RejectedObservationPlan {
   return pendingObservations.reduce<RejectedObservationPlan>((plan, pending) => {
     const target = ledger.findings.find((finding) => finding.id === pending.targetFindingId);
-    if (pending.destination === 'target_audit' && target !== undefined) {
+    const auditTarget = resolveCurrentLifecycleObservationTarget(
+      ledger,
+      pending.item.wire,
+    );
+    if (
+      pending.destination === 'target_audit'
+      && auditTarget?.id === pending.targetFindingId
+    ) {
       return {
         ...plan,
         attachments: [...plan.attachments, {
@@ -72,19 +83,68 @@ function classifyRejectedObservations(
           reason: `${pending.reason}; recorded for audit only without lifecycle or evidence authority`,
           rejectionCode: 'evidence_admission_failed',
         }],
+        rawFindingDispositions: [...plan.rawFindingDispositions, {
+          rawFindingId: pending.item.wire.rawFindingId,
+          outcome: 'audit_only',
+          reason: pending.reason,
+        }],
       };
     }
+    const anomalySpec = createReviewerAnomalySpec({
+      wire: pending.item.wire,
+      canonical: pending.item.canonical,
+      anomalyKind: pending.anomalyKind,
+      failedEvidence: pending.failedEvidence,
+      reason: `${pending.reason}; lifecycle evidence failure is audit-only and cannot mutate the target (current status: ${target?.status ?? 'missing'})`,
+    });
     return {
       ...plan,
-      anomalySpecs: [...plan.anomalySpecs, createReviewerAnomalySpec({
-        wire: pending.item.wire,
-        canonical: pending.item.canonical,
-        anomalyKind: pending.anomalyKind,
-        failedEvidence: pending.failedEvidence,
-        reason: `${pending.reason}; lifecycle evidence failure is audit-only and cannot mutate the target (current status: ${target?.status ?? 'missing'})`,
-      })],
+      anomalySpecs: [...plan.anomalySpecs, anomalySpec],
+      rawFindingDispositions: [...plan.rawFindingDispositions, {
+        rawFindingId: pending.item.wire.rawFindingId,
+        outcome: 'reviewer_anomaly',
+        reason: anomalySpec.mismatchReason,
+      }],
     };
-  }, { attachments: [], anomalySpecs: [] });
+  }, { attachments: [], anomalySpecs: [], rawFindingDispositions: [] });
+}
+
+function landRejectedObservationRaws(input: {
+  ledger: FindingLedger;
+  pendingObservations: RawAdmissionEvaluation['pendingRejectedObservations'];
+  dispositions: readonly RawFindingDisposition[];
+  runInput: RunFindingManagerForStepInput;
+}): FindingLedger {
+  if (input.pendingObservations.length === 0) {
+    return input.ledger;
+  }
+  const rawFindings = input.pendingObservations.map(({ item }) => item.wire);
+  const rawProvenanceByRawFindingId = new Map(
+    input.pendingObservations.map(({ item }) => [item.wire.rawFindingId, {
+      reviewerStableKey: item.canonical.reviewerStableKey,
+      lineageKey: item.canonical.lineageKey,
+      claimIdentityHash: item.canonical.claimIdentityHash,
+      canonicalIntegrityDigest: canonicalRawIntegrityDigestOf(item.canonical),
+      canonicalProvenance: item.canonical.provenance,
+    }] as const),
+  );
+  return reconcileFindingLedgerPlan({
+    previousLedger: input.ledger,
+    rawFindings,
+    managerOutput: createEmptyManagerOutput(),
+    provisionalFindings: [],
+    entityProvisionalMutations: [],
+    terminalEntityAttachmentFindingIds: new Set(),
+    rawFindingDispositions: input.dispositions,
+    rawProvenanceByRawFindingId,
+    verifiedEvidenceRecordsByRawFindingId: new Map(),
+    context: {
+      workflowName: input.runInput.workflowName,
+      stepName: input.runInput.parentStep.name,
+      runId: input.runInput.runId,
+      timestamp: input.runInput.timestamp,
+    },
+  }).ledger;
 }
 
 export function reconcileCommitPlan(input: {
@@ -95,7 +155,6 @@ export function reconcileCommitPlan(input: {
   provisionalSpecs: ProvisionalFindingSpec[];
   entityProvisionalMutations: PreAdmissionEntityProvisionalMutation[];
   anomalySpecs: ReviewerAnomalySpec[];
-  pendingRejectedObservations: RawAdmissionEvaluation['pendingRejectedObservations'];
   rawProvenanceByRawFindingId: Map<string, CanonicalRawReconcileProvenance>;
   cleanWire: RawFinding[];
   explicitResolvedByMapping: ReadonlyMap<string, string>;
@@ -214,11 +273,6 @@ export function reconcileCommitPlan(input: {
     ],
   );
   const rawFindingDispositions: RawFindingDisposition[] = [
-    ...input.pendingRejectedObservations.map((pending) => ({
-      rawFindingId: pending.item.wire.rawFindingId,
-      outcome: 'audit_only' as const,
-      reason: pending.reason,
-    })),
     ...input.anomalySpecs.flatMap((spec) => spec.sourceRawFindingIds.map((rawFindingId) => ({
       rawFindingId,
       outcome: 'reviewer_anomaly' as const,
@@ -507,14 +561,21 @@ export function applyCommitLedgerStates(input: {
   ledger: FindingLedger;
   reviewerAnomalyLandings: ReviewerAnomalyLandingReport[];
   rejectedObservationAttachments: RejectedObservationAttachment[];
+  rawFindingDispositions: RawFindingDisposition[];
 } {
   const rejectedObservations = classifyRejectedObservations(
     input.pendingRejectedObservations,
     input.settledLedger,
   );
+  const withRejectedObservationRaws = landRejectedObservationRaws({
+    ledger: input.settledLedger,
+    pendingObservations: input.pendingRejectedObservations,
+    dispositions: rejectedObservations.rawFindingDispositions,
+    runInput: input.runInput,
+  });
   const anomalySpecs = [...input.baseAnomalySpecs, ...rejectedObservations.anomalySpecs];
   const withAnomalies = applyReviewerAnomalySpecsToLedger(
-    input.settledLedger,
+    withRejectedObservationRaws,
     anomalySpecs,
     {
       workflowName: input.runInput.workflowName,
@@ -548,5 +609,6 @@ export function applyCommitLedgerStates(input: {
       sourceIntakeIds: spec.sourceIntakeIds,
     })),
     rejectedObservationAttachments: rejectedObservations.attachments,
+    rawFindingDispositions: rejectedObservations.rawFindingDispositions,
   };
 }

@@ -1466,7 +1466,9 @@ export const REVIEWER_ANOMALY_KINDS = [
 export type ReviewerAnomalyKind = typeof REVIEWER_ANOMALY_KINDS[number];
 
 export interface ReviewerAnomalySettlement {
-  kind: 'target_resolved_by_verified_evidence';
+  kind:
+    | 'target_resolved_by_verified_evidence'
+    | 'target_dismissed_by_terminal_adjudication';
   findingId: string;
   lifecycleEventId: string;
 }
@@ -1487,7 +1489,7 @@ export interface ReviewerAnomalySettlement {
 export interface ReviewerAnomalyEntry {
   id: string;
   kind: ReviewerAnomalyKind;
-  /** 決定的な再発同定キー(sha256(reviewerStableKey, lineageKey, 'reviewer-anomaly', kind))。upsert のキー。 */
+  /** 決定的な再発同定キー。未決着 episode の upsert と決着後の再観測判定に使う。 */
   stableKey: string;
   lineageKey: string;
   /** 実在して台帳へ保存された raw finding のみを参照する。 */
@@ -1504,7 +1506,7 @@ export interface ReviewerAnomalyEntry {
   mismatchReason: string;
   firstObserved: FindingObservation;
   lastObserved: FindingObservation;
-  /** この stableKey で観測された回数(upsert のたびに +1)。 */
+  /** この episode で観測された回数(upsert のたびに +1)。 */
   occurrences: number;
   /**
    * 後続ラウンドの clean な verbatimExcerpt 一致で product finding へ昇格した

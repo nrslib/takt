@@ -34,6 +34,7 @@ import type {
 import { formatConflictId } from '../core/models/finding-conflict-identity.js';
 import { storedRawReconcileProvenance } from './helpers/finding-integrity.js';
 import {
+  applyFindingLedgerFixtureRevision,
   authorizeFindingLedgerFixture,
   canonicalRawFindingFixture,
   reviewerRawExtractionFixture,
@@ -1422,6 +1423,49 @@ describe('relation 別 intake と target atomization', () => {
           timestamp: `2026-07-30T00:00:0${round}.000Z`,
         };
         const wire = intake.items[0]!.wire;
+        if (round === 0) {
+          const target = ledger.findings.find((finding) => finding.id === 'F-0001')!;
+          const staleLedger = applyFindingLedgerFixtureRevision({
+            ledger,
+            entityKind: 'finding',
+            entity: {
+              ...target,
+              lifecycle: 'persists',
+              revision: target.revision + 1,
+              lastSeen: observation,
+            },
+          });
+          const staleCommit = applyCommitLedgerStates({
+            runInput: {
+              workflowName: 'peer-review',
+              parentStep: { name: 'reviewers' },
+              runId: observation.runId,
+              timestamp: observation.timestamp,
+            } as never,
+            freshLedger: ledger,
+            settledLedger: staleLedger,
+            baseAnomalySpecs: [],
+            pendingRejectedObservations: admission.pendingRejectedObservations,
+            interpretationResults: new Map(),
+            interpretationReservations: new Map(),
+            interpretationIntegrityDigests: new Map(),
+            observation,
+            verifiedEvidenceCandidates: [],
+            stopBudgetLimits: resolveStopBudgetLimits(undefined),
+            stopBudgetRoundMarker: 'stale-round',
+          });
+          expect(staleCommit.rejectedObservationAttachments).toEqual([]);
+          expect(staleCommit.rawFindingDispositions).toEqual([
+            expect.objectContaining({
+              rawFindingId: wire.rawFindingId,
+              outcome: 'reviewer_anomaly',
+            }),
+          ]);
+          expect(staleCommit.ledger.rawFindings).toContainEqual(wire);
+          expect(staleCommit.ledger.reviewerAnomalies).toEqual([
+            expect.objectContaining({ sourceRawFindingIds: [wire.rawFindingId] }),
+          ]);
+        }
         const committed = applyCommitLedgerStates({
           runInput: {
             workflowName: 'peer-review',
@@ -1430,10 +1474,7 @@ describe('relation 別 intake と target atomization', () => {
             timestamp: observation.timestamp,
           } as never,
           freshLedger: ledger,
-          settledLedger: {
-            ...ledger,
-            rawFindings: [...ledger.rawFindings, wire],
-          },
+          settledLedger: ledger,
           baseAnomalySpecs: [],
           pendingRejectedObservations: admission.pendingRejectedObservations,
           interpretationResults: new Map(),
@@ -1446,6 +1487,10 @@ describe('relation 別 intake と target atomization', () => {
         });
         expect(committed.reviewerAnomalyLandings).toEqual([]);
         expect(committed.rejectedObservationAttachments).toHaveLength(1);
+        expect(committed.rawFindingDispositions).toEqual([
+          expect.objectContaining({ rawFindingId: wire.rawFindingId, outcome: 'audit_only' }),
+        ]);
+        expect(committed.ledger.rawFindings).toContainEqual(wire);
         ledger = applyRejectedObservationAttachments(
           committed.ledger,
           committed.rejectedObservationAttachments,
@@ -1458,4 +1503,131 @@ describe('relation 別 intake と target atomization', () => {
       expect(ledger.findings[0]?.rejectedObservations).toHaveLength(3);
     },
   );
+
+  it('target付きprotocol anomalyとstale target preconditionをblocking anomalyに保つ', () => {
+    const ledger = lifecycleLedger();
+    const extraction = reviewerRawExtractionFixture({
+      rawFindingId: 'protocol-target',
+      familyTag: 'bug',
+      severity: 'high',
+      title: 'Existing lifecycle issue',
+      description: 'The target is still affected.',
+      suggestion: null,
+      relation: 'persists',
+      targetFindingId: 'F-0001',
+      target: { kind: 'code', paths: ['src/lifecycle.ts'] },
+      evidence: [],
+      rawExcerpt: 'Protocol anomaly targeting F-0001.',
+    });
+    const intake = intakeReviewerOutputs({
+      subResults: [{
+        subStep: {
+          kind: 'agent',
+          name: 'arch-review',
+          persona: 'arch-review',
+          edit: false,
+        } as never,
+        publication: findingReviewPublicationFixture({
+          scopeIdentity: '/test/lifecycle-anomaly-policy/ledger.json',
+          parentStepName: 'reviewers',
+          stepIteration: 1,
+          reviewerStepName: 'arch-review',
+          rawFindings: [extraction],
+        }),
+      }],
+      previousLedger: ledger,
+      workflowName: 'peer-review',
+      callNamespace: '',
+      parentStepName: 'reviewers',
+      stepIteration: 1,
+      runId: 'run-policy',
+      workflowTask: 'Review.',
+      cwd: process.cwd(),
+      scopeIdentity: '/test/lifecycle-anomaly-policy/ledger.json',
+      issuedAt: '2026-07-30T00:00:00.000Z',
+      reviewScopeSnapshot: {
+        reviewScopeSnapshotId: 'a'.repeat(64),
+        trackedDiff: undefined,
+        untrackedEvidence: [],
+        queryInventory: [],
+      },
+    });
+    const item = intake.items[0]!;
+    const protocolAdmission = evaluateRawAdmission({
+      cwd: process.cwd(),
+      reviewScopeSnapshotId: 'a'.repeat(64),
+      runId: 'run-policy',
+      scopeIdentity: 'scope',
+      previousLedger: ledger,
+      intake: {
+        ...intake,
+        items: [{
+          ...item,
+          canonical: {
+            ...item.canonical,
+            provenance: {
+              ...item.canonical.provenance,
+              ambiguityCodes: [
+                ...item.canonical.provenance.ambiguityCodes,
+                'invalid-evidence-shape',
+              ],
+            },
+          },
+        }],
+      },
+      reviewScopeSnapshot: {
+        reviewScopeSnapshotId: 'a'.repeat(64),
+        trackedDiff: undefined,
+        untrackedEvidence: [],
+        queryInventory: [],
+      },
+      workflowTask: 'Review.',
+    });
+    expect(protocolAdmission.pendingRejectedObservations).toEqual([]);
+    expect(protocolAdmission.admissionAnomalySpecs).toEqual([
+      expect.objectContaining({ kind: 'protocol-anomaly' }),
+    ]);
+
+    const staleAdmission = evaluateRawAdmission({
+      cwd: process.cwd(),
+      reviewScopeSnapshotId: 'a'.repeat(64),
+      runId: 'run-stale',
+      scopeIdentity: 'scope',
+      previousLedger: ledger,
+      intake: {
+        ...intake,
+        items: [{
+          ...item,
+          canonical: {
+            ...item.canonical,
+            provenance: {
+              ...item.canonical.provenance,
+              ambiguityOrigin: true,
+            },
+          },
+          wire: {
+            ...item.wire,
+            targetPrecondition: {
+              ...item.wire.targetPrecondition!,
+              targetRevision: item.wire.targetPrecondition!.targetRevision + 1,
+            },
+          },
+        }],
+      },
+      reviewScopeSnapshot: {
+        reviewScopeSnapshotId: 'a'.repeat(64),
+        trackedDiff: undefined,
+        untrackedEvidence: [],
+        queryInventory: [],
+      },
+      workflowTask: 'Review.',
+    });
+    expect(staleAdmission.pendingRejectedObservations).toEqual([]);
+    expect(staleAdmission.admissionRejectedItems).toEqual([
+      expect.objectContaining({ wire: expect.objectContaining({ rawFindingId: item.wire.rawFindingId }) }),
+    ]);
+    expect(staleAdmission.ladderAnomalySpecs).toEqual([
+      expect.objectContaining({ kind: 'lifecycle-admission-failure' }),
+    ]);
+  });
 });

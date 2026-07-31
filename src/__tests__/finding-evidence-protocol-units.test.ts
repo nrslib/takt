@@ -15,6 +15,7 @@ import {
 } from '../core/workflow/findings/admission-validation.js';
 import {
   applyReviewerAnomalySpecsToLedger,
+  isOutstandingReviewerAnomaly,
   linkPromotedReviewerAnomalies,
   type ReviewerAnomalySpec,
 } from '../core/workflow/findings/reviewer-anomalies.js';
@@ -254,6 +255,40 @@ describe('applyReviewerAnomalySpecsToLedger / linkPromotedReviewerAnomalies (rev
     expect(anomaly.mismatchReason).toBe('the location changed but still does not exist');
     expect(anomaly.firstObserved).toEqual({ runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-12T00:00:00.000Z' });
     expect(anomaly.lastObserved).toEqual({ runId: 'run-2', stepName: 'reviewers', timestamp: '2026-07-12T01:00:00.000Z' });
+  });
+
+  it('settle済みstableKeyの新観測はsettlementを継承せず別episodeへ保存する', () => {
+    const first = applyReviewerAnomalySpecsToLedger(makeLedger(), [makeSpec()], context);
+    const settled = {
+      ...first,
+      reviewerAnomalies: [{
+        ...first.reviewerAnomalies![0]!,
+        settlement: {
+          kind: 'target_resolved_by_verified_evidence' as const,
+          findingId: 'F-0001',
+          lifecycleEventId: 'event-resolved',
+        },
+      }],
+    };
+    const nextSpec = makeSpec({ sourceRawFindingIds: ['raw-2'] });
+    const observed = applyReviewerAnomalySpecsToLedger(settled, [nextSpec], {
+      ...context,
+      runId: 'run-2',
+    });
+    const replayed = applyReviewerAnomalySpecsToLedger(observed, [nextSpec], context);
+
+    expect(observed.reviewerAnomalies).toHaveLength(2);
+    expect(observed.reviewerAnomalies?.[0]).toEqual(settled.reviewerAnomalies[0]);
+    expect(observed.reviewerAnomalies?.[1]).toMatchObject({
+      stableKey: 'sk-anomaly-1',
+      sourceRawFindingIds: ['raw-2'],
+      occurrences: 1,
+    });
+    expect(observed.reviewerAnomalies?.[1]?.id)
+      .not.toBe(observed.reviewerAnomalies?.[0]?.id);
+    expect(observed.reviewerAnomalies?.[1]?.settlement).toBeUndefined();
+    expect(isOutstandingReviewerAnomaly(observed.reviewerAnomalies![1]!)).toBe(true);
+    expect(replayed.reviewerAnomalies).toEqual(observed.reviewerAnomalies);
   });
 
   it('crash/replay 冪等（codex 検証ブロッカー#3）: 同一 stableKey・同一 sourceRawFindingIds の再適用は occurrences を二重計上せず完全な no-op になる', () => {

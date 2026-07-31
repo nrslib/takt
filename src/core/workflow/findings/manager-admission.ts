@@ -34,6 +34,7 @@ import type {
   PreAdmissionEntityProvisionalMutation,
 } from './pre-admission-entity-binding-types.js';
 import { resolvePreAdmissionEntityBindings } from './pre-admission-entity-binding-commit.js';
+import { resolveCurrentLifecycleObservationTarget } from './reviewer-anomaly-policy.js';
 
 export type { PreAdmissionEntityBinding } from './pre-admission-entity-binding-types.js';
 
@@ -357,9 +358,9 @@ function evaluateRejectedItem(input: {
   item: CanonicalIntakeItem;
   pool: AdmissionPool;
   classification: Extract<EvidenceClassification, { admit: false }>;
-  previousFindingsById: ReadonlyMap<string, FindingLedger['findings'][number]>;
+  previousLedger: FindingLedger;
 }): AdmissionItemEvaluation {
-  const { item, pool, classification, previousFindingsById } = input;
+  const { item, pool, classification } = input;
   const rejection = {
     rawFindingId: item.wire.rawFindingId,
     location: classification.failedEvidence?.kind === 'file_quote'
@@ -374,7 +375,7 @@ function evaluateRejectedItem(input: {
     return {
       pool,
       rejection,
-      ...(pool === 'clean' ? { rejectedItem: item } : {}),
+      rejectedItem: item,
       anomalySpec: createReviewerAnomalySpec({
         wire: item.wire,
         canonical: item.canonical,
@@ -388,29 +389,20 @@ function evaluateRejectedItem(input: {
     relation: item.canonical.relation,
     targetFindingId: item.canonical.targetFindingId,
   });
-  if (
-    item.canonical.relation === 'resolution_confirmation'
-    && classification.disposition === 'anomaly'
-  ) {
-    return { pool, rejection };
-  }
-
-  const targetFindingId = item.wire.targetFindingId
-    ?? item.canonical.targetFindingId
-    ?? null;
-  const target = targetFindingId !== null ? previousFindingsById.get(targetFindingId) : undefined;
-  if (lifecycleIntent && targetFindingId !== null && target !== undefined) {
+  const auditTarget = resolveCurrentLifecycleObservationTarget(
+    input.previousLedger,
+    item.wire,
+  );
+  if (lifecycleIntent && auditTarget !== undefined) {
     return {
       pool,
       rejection,
       rejectedItem: item,
       pendingRejectedObservation: {
         item,
-        targetFindingId,
+        targetFindingId: auditTarget.id,
         reason: `Evidence failed deterministic admission (${classification.reason}); recorded as a rejected lifecycle observation of the target`,
-        destination: classification.disposition === 'provisional'
-          ? 'target_audit'
-          : 'reviewer_anomaly',
+        destination: 'target_audit',
         anomalyKind: classification.disposition === 'anomaly'
           ? classification.anomalyKind
           : 'lifecycle-admission-failure',
@@ -419,7 +411,21 @@ function evaluateRejectedItem(input: {
     };
   }
   if (lifecycleIntent) {
-    return { pool, rejection };
+    const anomalyKind = classification.disposition === 'anomaly'
+      ? classification.anomalyKind
+      : 'lifecycle-admission-failure';
+    return {
+      pool,
+      rejection,
+      rejectedItem: item,
+      anomalySpec: createReviewerAnomalySpec({
+        wire: item.wire,
+        canonical: item.canonical,
+        anomalyKind,
+        failedEvidence: classification.failedEvidence,
+        reason: `Evidence failed deterministic admission (${classification.reason}); the lifecycle target or engine-issued target precondition is not current`,
+      }),
+    };
   }
   if (classification.disposition === 'provisional') {
     return {
@@ -437,7 +443,7 @@ function evaluateRejectedItem(input: {
   return {
     pool,
     rejection,
-    ...(pool === 'clean' ? { rejectedItem: item } : {}),
+    rejectedItem: item,
     anomalySpec: createReviewerAnomalySpec({
       wire: item.wire,
       canonical: item.canonical,
@@ -456,7 +462,6 @@ function evaluateAdmissionItem(input: {
   previousLedger: FindingLedger;
   item: CanonicalIntakeItem;
   pool: AdmissionPool;
-  previousFindingsById: ReadonlyMap<string, FindingLedger['findings'][number]>;
   reviewScopeSnapshot: ReviewScopeProofSnapshot;
   workflowTask: string;
   entityBindings: ReviewerIntakeResult['entityBindings'];
@@ -541,7 +546,6 @@ export function evaluateRawAdmission(input: {
     (item) => item.canonical.coherence === 'coherent' && !item.canonical.provenance.ambiguityOrigin,
   );
   const tainted = nonOverflow.filter((item) => item.canonical.provenance.ambiguityOrigin);
-  const previousFindingsById = new Map(input.previousLedger.findings.map((finding) => [finding.id, finding]));
   const evaluations = [
     ...clean.map((item) => evaluateAdmissionItem({
       cwd: input.cwd,
@@ -551,7 +555,6 @@ export function evaluateRawAdmission(input: {
       previousLedger: input.previousLedger,
       item,
       pool: 'clean',
-      previousFindingsById,
       reviewScopeSnapshot: input.reviewScopeSnapshot,
       workflowTask: input.workflowTask,
       entityBindings: input.intake.entityBindings,
@@ -564,7 +567,6 @@ export function evaluateRawAdmission(input: {
       previousLedger: input.previousLedger,
       item,
       pool: 'tainted',
-      previousFindingsById,
       reviewScopeSnapshot: input.reviewScopeSnapshot,
       workflowTask: input.workflowTask,
       entityBindings: input.intake.entityBindings,

@@ -409,9 +409,14 @@ function prepareCommitReconciliation(
   };
   const freshAdmittedItems = [...admission.cleanAdmitted, ...admission.taintedAdmitted];
   const freshAdmittedRawIds = new Set(freshAdmittedItems.map((item) => item.wire.rawFindingId));
+  const pendingRejectedRawFindingIds = new Set(
+    admission.pendingRejectedObservations.map(({ item }) => item.wire.rawFindingId),
+  );
   const reconcileRawFindings = [
     ...admission.cleanWire,
-    ...admission.admissionRejectedItems.map((item) => item.wire),
+    ...admission.admissionRejectedItems
+      .filter((item) => !pendingRejectedRawFindingIds.has(item.wire.rawFindingId))
+      .map((item) => item.wire),
     ...admission.taintedAdmitted
       .map((item) => item.wire),
     ...params.intake.items
@@ -598,7 +603,6 @@ export function buildFindingManagerCommitMutation(
     provisionalSpecs: specs,
     entityProvisionalMutations: admission.preAdmissionEntityMutations,
     anomalySpecs: prepared.anomalySpecs,
-    pendingRejectedObservations: admission.pendingRejectedObservations,
     rawProvenanceByRawFindingId,
     cleanWire: admission.cleanWire,
     explicitResolvedByMapping: ladderCommit.recoverySettlements,
@@ -708,6 +712,7 @@ export function buildFindingManagerCommitMutation(
     ),
     ...rawAdjudicationRecovery.rawFindingDispositions,
     ...reconcilePlan.rawFindingDispositions,
+    ...finalized.rawFindingDispositions,
   ].sort((left, right) => (
     compareBinaryStrings(left.rawFindingId, right.rawFindingId)
     || compareCanonicalJsonValues(left, right)

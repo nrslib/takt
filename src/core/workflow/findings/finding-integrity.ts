@@ -3,6 +3,10 @@ import { compareBinaryStrings } from '../../../shared/utils/binary-string-compar
 import { canonicalJson } from '../../../shared/utils/canonical-json.js';
 import { findingEvidenceRecordIdentityViolation } from '../../models/finding-evidence-record.js';
 import { assertFindingLifecycleAuthorityInvariant } from '../../models/finding-lifecycle-invariants.js';
+import {
+  reviewerAnomalySettlementEligibilityViolation,
+  type ReviewerAnomalySettlementProjection,
+} from '../../models/finding-reviewer-anomaly-settlement-policy.js';
 export { computeRawFindingIntegrityDigest } from '../../models/finding-raw-integrity.js';
 import { computeRawFindingIntegrityDigest } from '../../models/finding-raw-integrity.js';
 import type {
@@ -11,6 +15,7 @@ import type {
   FindingLedger,
   FindingManagerReportPublication,
   RawFinding,
+  ReviewerAnomalyEntry,
 } from './types.js';
 import { addRoundMarker } from './round-marker.js';
 
@@ -151,18 +156,22 @@ export function assertFindingLedgerAppendOnlyProjection(
 }
 
 function assertReviewerAnomalySettlementTransition(
-  current: Pick<FindingLedger, 'reviewerAnomalies' | 'lifecycleEvents' | 'findings'>,
-  next: Pick<FindingLedger, 'reviewerAnomalies' | 'lifecycleEvents' | 'findings'>,
+  current: ReviewerAnomalySettlementProjection & Pick<FindingLedger, 'reviewerAnomalies'>,
+  next: ReviewerAnomalySettlementProjection & Pick<FindingLedger, 'reviewerAnomalies'>,
 ): void {
+  const nextAnomalies = next.reviewerAnomalies ?? [];
   const nextById = new Map(
-    (next.reviewerAnomalies ?? []).map((anomaly) => [anomaly.id, anomaly]),
+    nextAnomalies.map((anomaly) => [anomaly.id, anomaly]),
   );
-  const currentEventIds = new Set(current.lifecycleEvents.map((event) => event.eventId));
+  if (nextById.size !== nextAnomalies.length) {
+    throw new Error('Duplicate reviewer anomaly ids are not allowed');
+  }
   for (const existing of current.reviewerAnomalies ?? []) {
     const candidate = nextById.get(existing.id);
     if (candidate === undefined) {
       throw new Error(`Reviewer anomaly "${existing.id}" cannot be removed`);
     }
+    assertReviewerAnomalyAppendOnlyUpdate(existing, candidate);
     if (
       existing.settlement !== undefined
       && (
@@ -173,27 +182,92 @@ function assertReviewerAnomalySettlementTransition(
       throw new Error(`Reviewer anomaly "${existing.id}" settlement cannot be removed or replaced`);
     }
   }
-  for (const anomaly of next.reviewerAnomalies ?? []) {
+  for (const anomaly of nextAnomalies) {
     const previousSettlement = (current.reviewerAnomalies ?? [])
       .find((candidate) => candidate.id === anomaly.id)?.settlement;
-    if (
-      previousSettlement === undefined
-      && anomaly.settlement !== undefined
-    ) {
-      if (currentEventIds.has(anomaly.settlement.lifecycleEventId)) {
+    if (anomaly.settlement !== undefined) {
+      const violation = reviewerAnomalySettlementEligibilityViolation({
+        projection: next,
+        anomaly,
+        settlement: anomaly.settlement,
+        sourceHead: previousSettlement === undefined
+          ? { kind: 'ledger', ledger: current }
+          : { kind: 'projection' },
+        workflowTaskDigest: null,
+      });
+      if (violation !== undefined) {
         throw new Error(
-          `Reviewer anomaly "${anomaly.id}" settlement must reference a lifecycle event added in the same transition`,
-        );
-      }
-      const target = next.findings.find(
-        (finding) => finding.id === anomaly.settlement?.findingId,
-      );
-      if (target?.status !== 'resolved') {
-        throw new Error(
-          `Reviewer anomaly "${anomaly.id}" settlement target must be resolved when the settlement is added`,
+          `Reviewer anomaly "${anomaly.id}" has an ineligible settlement: ${violation}`,
         );
       }
     }
+  }
+}
+
+function assertReviewerAnomalyAppendOnlyUpdate(
+  current: ReviewerAnomalyEntry,
+  next: ReviewerAnomalyEntry,
+): void {
+  const currentIdentity = {
+    id: current.id,
+    kind: current.kind,
+    stableKey: current.stableKey,
+    lineageKey: current.lineageKey,
+    title: current.title,
+    firstObserved: current.firstObserved,
+  };
+  const nextIdentity = {
+    id: next.id,
+    kind: next.kind,
+    stableKey: next.stableKey,
+    lineageKey: next.lineageKey,
+    title: next.title,
+    firstObserved: next.firstObserved,
+  };
+  if (!sameCanonicalValue(currentIdentity, nextIdentity)) {
+    throw new Error(`Reviewer anomaly "${current.id}" identity cannot be replaced`);
+  }
+  assertStringSetContains(
+    current.sourceRawFindingIds,
+    next.sourceRawFindingIds,
+    `Reviewer anomaly "${current.id}" source raw findings`,
+  );
+  assertStringSetContains(
+    current.sourceIntakeIds,
+    next.sourceIntakeIds,
+    `Reviewer anomaly "${current.id}" source intake ids`,
+  );
+  assertStringSetContains(
+    current.reviewers,
+    next.reviewers,
+    `Reviewer anomaly "${current.id}" reviewers`,
+  );
+  if (next.occurrences < current.occurrences) {
+    throw new Error(`Reviewer anomaly "${current.id}" occurrences cannot decrease`);
+  }
+  if (
+    current.promotedFindingId !== undefined
+    && current.promotedFindingId !== next.promotedFindingId
+  ) {
+    throw new Error(`Reviewer anomaly "${current.id}" promotion cannot be removed or replaced`);
+  }
+  if (current.settlement !== undefined) {
+    const currentEpisode = { ...current, settlement: undefined };
+    const nextEpisode = { ...next, settlement: undefined };
+    if (!sameCanonicalValue(currentEpisode, nextEpisode)) {
+      throw new Error(`Settled reviewer anomaly "${current.id}" episode cannot be changed`);
+    }
+  }
+}
+
+function assertStringSetContains(
+  current: readonly string[],
+  next: readonly string[],
+  label: string,
+): void {
+  const nextValues = new Set(next);
+  if (current.some((value) => !nextValues.has(value))) {
+    throw new Error(`${label} cannot be removed`);
   }
 }
 

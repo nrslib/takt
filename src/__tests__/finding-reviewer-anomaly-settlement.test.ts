@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it } from 'vitest';
 import type {
@@ -5,13 +6,14 @@ import type {
   FindingLedger,
   FindingLifecycleEvent,
   FindingLifecycleOperation,
+  FindingMutationPrecondition,
   ReviewerAnomalyEntry,
 } from '../core/workflow/findings/types.js';
 import {
   isOutstandingReviewerAnomaly,
 } from '../core/workflow/findings/reviewer-anomalies.js';
 import {
-  settleReviewerAnomaliesFromVerifiedResolutions,
+  settleReviewerAnomaliesFromAuthorizedTerminalEvents,
 } from '../core/workflow/findings/reviewer-anomaly-settlement.js';
 import {
   attachReviewIntegrityState,
@@ -32,6 +34,17 @@ import {
   cleanupRealRunStorages,
   createRealRunStorage,
 } from './helpers/run-storage.js';
+import { canonicalJson } from '../shared/utils/canonical-json.js';
+import { captureFindingMutationPrecondition } from '../core/workflow/findings/finding-preconditions.js';
+import {
+  applyVerifiedLifecycleMutation,
+  captureFindingLifecycleHead,
+  reserveVerifiedLifecycleMutation,
+} from '../core/workflow/findings/lifecycle-mutation.js';
+import {
+  createFindingLifecycleReservation,
+} from '../core/models/finding-lifecycle-identity.js';
+import { assertFindingLedgerProjectionInvariant } from '../core/models/finding-ledger-invariants.js';
 
 afterEach(cleanupRealRunStorages);
 
@@ -44,6 +57,11 @@ const afterObservation = {
   runId: 'run-1',
   stepName: 'reviewers',
   timestamp: '2026-07-31T00:01:00.000Z',
+};
+const WORKFLOW_TASK_DIGEST = 'a'.repeat(64);
+const historicalObservation = {
+  ...afterObservation,
+  timestamp: '2026-07-31T00:02:00.000Z',
 };
 
 function anomaly(overrides: Partial<ReviewerAnomalyEntry> = {}): ReviewerAnomalyEntry {
@@ -68,13 +86,20 @@ function lifecycleEvent(
   operation: FindingLifecycleOperation = 'resolve_finding',
   findingId = 'F-0003',
 ): FindingLifecycleEvent {
+  const before = {
+    entityKind: 'finding' as const,
+    entityId: findingId,
+    revision: 1,
+    eventId: `event-before-${findingId}`,
+    projectionDigest: 'projection-before',
+  };
   return {
     eventId: `event-${operation}-${findingId}`,
     mutationId: `mutation-${operation}-${findingId}`,
     reservationId: `reservation-${operation}-${findingId}`,
     operation,
     transitions: [{
-      before: null,
+      before,
       after: {
         entityKind: 'finding',
         entityId: findingId,
@@ -150,7 +175,11 @@ function ledger(input: {
       reservationId: event.reservationId,
       mutationId: event.mutationId,
       operation,
-      targets: [],
+      targets: [{
+        entityKind: 'finding',
+        entityId: targetFindingId,
+        expectedHead: event.transitions[0]!.before,
+      }],
       evidenceBindingIds: event.evidenceBindingIds,
       authority: { kind: 'verified_evidence' },
       context: { kind: 'transaction' },
@@ -238,13 +267,308 @@ function validSettledLedger(): FindingLedger {
   };
 }
 
+function terminalDismissalFixture(): {
+  previous: FindingLedger;
+  anomaliesApplied: FindingLedger;
+  next: FindingLedger;
+} {
+  const initial = authorizeFindingLedgerFixture({
+    workflowName: 'default',
+    nextId: 2,
+    updatedAt: beforeObservation.timestamp,
+    findings: [{
+      id: 'F-0001',
+      status: 'open',
+      lifecycle: 'new',
+      severity: 'high',
+      title: 'Terminal target',
+      evidenceIds: [],
+      reviewers: ['architecture'],
+      rawFindingIds: [],
+      firstSeen: beforeObservation,
+      lastSeen: beforeObservation,
+      revision: 1,
+    }],
+    evidenceRecords: [],
+    evidenceBindings: [],
+    lifecycleReservations: [],
+    lifecycleEvents: [],
+    rawRecoveryAttempts: [],
+    rawRecoveryResults: [],
+    rawFindings: [],
+    conflicts: [],
+    interpretations: [],
+  });
+  const targetPrecondition = captureFindingMutationPrecondition(initial, 'F-0001')!;
+  const raw = canonicalRawFindingFixture({
+    rawFindingId: 'raw-anomaly',
+    stepName: 'architecture',
+    reviewer: 'architecture',
+    relation: 'reopened',
+    targetFindingId: 'F-0001',
+    targetPrecondition,
+    evidence: [],
+  });
+  const previous = {
+    ...initial,
+    rawFindings: [...initial.rawFindings, raw],
+  };
+  const dismissal = {
+    basis: 'outside_task_scope' as const,
+    reason: 'The claim is outside this workflow task.',
+    taskQuote: 'Review the scoped implementation.',
+    workflowTaskDigest: WORKFLOW_TASK_DIGEST,
+    adjudicationTaskId: 'c'.repeat(64),
+    authority: 'terminal_adjudication' as const,
+    decidedAt: { ...afterObservation },
+  };
+  const decision = {
+    findingId: 'F-0001',
+    basis: dismissal.basis,
+    reason: dismissal.reason,
+    taskQuote: dismissal.taskQuote,
+    workflowTaskDigest: dismissal.workflowTaskDigest,
+    adjudicationTaskId: dismissal.adjudicationTaskId,
+    authority: dismissal.authority,
+  };
+  const target = previous.findings[0]!;
+  const reservation = createFindingLifecycleReservation({
+    operation: 'dismiss_finding',
+    targets: [{
+      entityKind: 'finding',
+      entityId: target.id,
+      expectedHead: captureFindingLifecycleHead(
+        previous,
+        'finding',
+        target.id,
+      )!,
+    }],
+    evidenceBindingIds: [],
+    authority: {
+      kind: 'engine_policy',
+      decisionKind: 'dismiss',
+      decisionDigest: createHash('sha256')
+        .update(canonicalJson(decision))
+        .digest('hex'),
+    },
+    context: { kind: 'transaction' },
+    reservedAt: afterObservation,
+  });
+  const reserved = reserveVerifiedLifecycleMutation(previous, {
+    reservation,
+    evidenceBindings: [],
+  });
+  const dismissed = applyVerifiedLifecycleMutation(reserved, {
+    mutationId: reservation.mutationId,
+    findings: [{
+      ...target,
+      status: 'dismissed',
+      lifecycle: 'dismissed',
+      revision: target.revision + 1,
+      dismissal,
+    }],
+    conflicts: [],
+    occurredAt: afterObservation,
+  });
+  const anomalyEntry = anomaly({ sourceRawFindingIds: [raw.rawFindingId] });
+  return {
+    previous,
+    anomaliesApplied: {
+      ...previous,
+      reviewerAnomalies: [anomalyEntry],
+    },
+    next: {
+      ...dismissed,
+      reviewerAnomalies: [anomalyEntry],
+    },
+  };
+}
+
+function verifiedResolutionFixture(
+  mutatePrecondition?: (
+    precondition: FindingMutationPrecondition,
+  ) => FindingMutationPrecondition,
+): {
+  previous: FindingLedger;
+  anomaliesApplied: FindingLedger;
+  next: FindingLedger;
+} {
+  const initial = authorizeFindingLedgerFixture({
+    workflowName: 'default',
+    nextId: 2,
+    updatedAt: beforeObservation.timestamp,
+    findings: [{
+      id: 'F-0001',
+      status: 'open',
+      lifecycle: 'new',
+      severity: 'high',
+      title: 'Verified resolution target',
+      evidenceIds: [],
+      reviewers: ['architecture'],
+      rawFindingIds: [],
+      firstSeen: beforeObservation,
+      lastSeen: beforeObservation,
+      revision: 1,
+    }],
+    evidenceRecords: [],
+    evidenceBindings: [],
+    lifecycleReservations: [],
+    lifecycleEvents: [],
+    rawRecoveryAttempts: [],
+    rawRecoveryResults: [],
+    rawFindings: [],
+    conflicts: [],
+    interpretations: [],
+  });
+  const currentPrecondition = captureFindingMutationPrecondition(
+    initial,
+    'F-0001',
+  )!;
+  const source = canonicalRawFindingFixture({
+    rawFindingId: 'raw-anomaly',
+    stepName: 'architecture',
+    reviewer: 'architecture',
+    relation: 'persists',
+    targetFindingId: 'F-0001',
+    targetPrecondition: mutatePrecondition === undefined
+      ? currentPrecondition
+      : mutatePrecondition(currentPrecondition),
+    evidence: [],
+  });
+  const previous = {
+    ...initial,
+    rawFindings: [...initial.rawFindings, source],
+  };
+  const target = previous.findings[0]!;
+  const resolved = applyFindingLedgerFixtureRevision({
+    ledger: previous,
+    entityKind: 'finding',
+    entity: {
+      ...target,
+      status: 'resolved',
+      lifecycle: 'resolved',
+      revision: target.revision + 1,
+      lastSeen: afterObservation,
+      resolvedAt: afterObservation.timestamp,
+      resolvedEvidence: 'Verified resolution.',
+    },
+  });
+  const anomalyEntry = anomaly({ sourceRawFindingIds: [source.rawFindingId] });
+  return {
+    previous,
+    anomaliesApplied: {
+      ...previous,
+      reviewerAnomalies: [anomalyEntry],
+    },
+    next: {
+      ...resolved,
+      reviewerAnomalies: [anomalyEntry],
+    },
+  };
+}
+
+function historicalTerminalDismissalFixture(
+  mutatePrecondition?: (
+    precondition: FindingMutationPrecondition,
+  ) => FindingMutationPrecondition,
+): {
+  eventBaseline: FindingLedger;
+  anomalyLedger: FindingLedger;
+  next: FindingLedger;
+} {
+  const { next: dismissed } = terminalDismissalFixture();
+  const {
+    reviewerAnomalies: _reviewerAnomalies,
+    ...eventBaseline
+  } = dismissed;
+  const currentPrecondition = captureFindingMutationPrecondition(
+    eventBaseline,
+    'F-0001',
+  )!;
+  const sourceRaws = [1, 2, 3].map((index) => canonicalRawFindingFixture({
+    rawFindingId: `raw-historical-dismiss-${index}`,
+    stepName: 'architecture',
+    reviewer: 'architecture',
+    relation: 'reopened',
+    targetFindingId: 'F-0001',
+    targetPrecondition: index === 3 && mutatePrecondition !== undefined
+      ? mutatePrecondition(currentPrecondition)
+      : currentPrecondition,
+    evidence: [],
+  }));
+  const anomalyEntry = anomaly({
+    id: 'RA-HISTORICAL-DISMISS',
+    sourceRawFindingIds: sourceRaws.map((raw) => raw.rawFindingId),
+    firstObserved: historicalObservation,
+    lastObserved: historicalObservation,
+  });
+  const anomalyLedger = {
+    ...eventBaseline,
+    rawFindings: [...eventBaseline.rawFindings, ...sourceRaws],
+    reviewerAnomalies: [anomalyEntry],
+  };
+  return {
+    eventBaseline,
+    anomalyLedger,
+    next: { ...anomalyLedger },
+  };
+}
+
+function historicalVerifiedResolutionFixture(
+  mutatePrecondition?: (
+    precondition: FindingMutationPrecondition,
+  ) => FindingMutationPrecondition,
+): {
+  eventBaseline: FindingLedger;
+  anomalyLedger: FindingLedger;
+} {
+  const { next: resolvedWithAnomaly } = verifiedResolutionFixture();
+  const {
+    reviewerAnomalies: _reviewerAnomalies,
+    ...eventBaseline
+  } = resolvedWithAnomaly;
+  const currentPrecondition = captureFindingMutationPrecondition(
+    eventBaseline,
+    'F-0001',
+  )!;
+  const sourceRaws = [1, 2, 3].map((index) => canonicalRawFindingFixture({
+    rawFindingId: `raw-historical-resolution-${index}`,
+    stepName: 'architecture',
+    reviewer: 'architecture',
+    relation: 'reopened',
+    targetFindingId: 'F-0001',
+    targetPrecondition: index === 3 && mutatePrecondition !== undefined
+      ? mutatePrecondition(currentPrecondition)
+      : currentPrecondition,
+    evidence: [],
+  }));
+  const anomalyEntry = anomaly({
+    id: 'RA-HISTORICAL-RESOLUTION',
+    sourceRawFindingIds: sourceRaws.map((raw) => raw.rawFindingId),
+    firstObserved: historicalObservation,
+    lastObserved: historicalObservation,
+  });
+  return {
+    eventBaseline,
+    anomalyLedger: {
+      ...eventBaseline,
+      rawFindings: [...eventBaseline.rawFindings, ...sourceRaws],
+      reviewerAnomalies: [anomalyEntry],
+    },
+  };
+}
+
 describe('reviewer anomaly settlement', () => {
   it('同一manager roundで観測したanomalyをverified resolve後にsettleする', () => {
-    const { previous, anomaliesApplied, next } = ledger();
-    const settled = settleReviewerAnomaliesFromVerifiedResolutions(
+    const { previous, anomaliesApplied, next } = verifiedResolutionFixture();
+    const resolutionEvent = next.lifecycleEvents.find(
+      (event) => event.operation === 'resolve_finding',
+    )!;
+    const settled = settleReviewerAnomaliesFromAuthorizedTerminalEvents(
       previous,
       anomaliesApplied,
       next,
+      WORKFLOW_TASK_DIGEST,
     );
 
     expect(settled.reviewerAnomalies).toEqual([
@@ -252,8 +576,8 @@ describe('reviewer anomaly settlement', () => {
         id: 'RA-1',
         settlement: {
           kind: 'target_resolved_by_verified_evidence',
-          findingId: 'F-0003',
-          lifecycleEventId: 'event-resolve_finding-F-0003',
+          findingId: 'F-0001',
+          lifecycleEventId: resolutionEvent.eventId,
         },
       }),
     ]);
@@ -270,6 +594,94 @@ describe('reviewer anomaly settlement', () => {
   });
 
   it.each([
+    ['revision', (precondition: FindingMutationPrecondition) => ({
+      ...precondition,
+      targetRevision: precondition.targetRevision + 1,
+    })],
+    ['status', (precondition: FindingMutationPrecondition) => ({
+      ...precondition,
+      targetStatus: 'resolved' as const,
+    })],
+    ['evidence hash', (precondition: FindingMutationPrecondition) => ({
+      ...precondition,
+      targetEvidenceHash: 'f'.repeat(64),
+    })],
+  ])('同一round verified resolveはsource rawの%s不一致でsettleしない', (
+    _label,
+    mutatePrecondition,
+  ) => {
+    const { previous, anomaliesApplied, next }
+      = verifiedResolutionFixture(mutatePrecondition);
+    const result = settleReviewerAnomaliesFromAuthorizedTerminalEvents(
+      previous,
+      anomaliesApplied,
+      next,
+      WORKFLOW_TASK_DIGEST,
+    );
+    expect(result.reviewerAnomalies?.[0]?.settlement).toBeUndefined();
+
+    const resolutionEvent = next.lifecycleEvents.find(
+      (event) => event.operation === 'resolve_finding',
+    )!;
+    const forged = {
+      ...next,
+      reviewerAnomalies: [{
+        ...next.reviewerAnomalies![0]!,
+        settlement: {
+          kind: 'target_resolved_by_verified_evidence' as const,
+          findingId: 'F-0001',
+          lifecycleEventId: resolutionEvent.eventId,
+        },
+      }],
+    };
+    expect(() => assertFindingLedgerAppendOnlyTransition(
+      anomaliesApplied,
+      forged,
+    )).toThrow(/all source raws must match the required target head/u);
+  });
+
+  it('protocol anomalyはauthorized terminal eventでも全検証層でsettleできない', () => {
+    const fixture = terminalDismissalFixture();
+    const protocolAnomaly = anomaly({ kind: 'protocol-anomaly' });
+    const anomaliesApplied = {
+      ...fixture.anomaliesApplied,
+      reviewerAnomalies: [protocolAnomaly],
+    };
+    const next = {
+      ...fixture.next,
+      reviewerAnomalies: [protocolAnomaly],
+    };
+    const result = settleReviewerAnomaliesFromAuthorizedTerminalEvents(
+      fixture.previous,
+      anomaliesApplied,
+      next,
+      WORKFLOW_TASK_DIGEST,
+    );
+    expect(result.reviewerAnomalies?.[0]?.settlement).toBeUndefined();
+
+    const dismissalEvent = next.lifecycleEvents.find(
+      (event) => event.operation === 'dismiss_finding',
+    )!;
+    const forged = {
+      ...next,
+      reviewerAnomalies: [{
+        ...protocolAnomaly,
+        settlement: {
+          kind: 'target_dismissed_by_terminal_adjudication' as const,
+          findingId: 'F-0001',
+          lifecycleEventId: dismissalEvent.eventId,
+        },
+      }],
+    };
+    expect(() => assertFindingLedgerAppendOnlyTransition(
+      anomaliesApplied,
+      forged,
+    )).toThrow(/protocol anomalies cannot be settled/u);
+    expect(() => assertFindingLedgerProjectionInvariant(forged))
+      .toThrow(/protocol anomalies cannot be settled/u);
+  });
+
+  it.each([
     ['anomaly以前のresolve', { eventInPrevious: true }],
     ['generic APPROVE', { eventInNext: false }],
     ['budget exhaustedのみ', { eventInNext: false, budgetExhausted: true }],
@@ -279,14 +691,398 @@ describe('reviewer anomaly settlement', () => {
     ['waive', { operation: 'waive_finding' as const, status: 'waived' as const }],
   ])('%sではsettleしない', (_label, input) => {
     const { previous, anomaliesApplied, next } = ledger(input);
-    const result = settleReviewerAnomaliesFromVerifiedResolutions(
+    const result = settleReviewerAnomaliesFromAuthorizedTerminalEvents(
       previous,
       anomaliesApplied,
       next,
+      WORKFLOW_TASK_DIGEST,
     );
 
     expect(result.reviewerAnomalies?.[0]?.settlement).toBeUndefined();
     expect(isOutstandingReviewerAnomaly(result.reviewerAnomalies![0]!)).toBe(true);
+  });
+
+  it('anomaly後のterminal_adjudication dismissをsettleしappend-only/SQLite遷移を保つ', async () => {
+    const { previous, anomaliesApplied, next } = terminalDismissalFixture();
+    const settled = settleReviewerAnomaliesFromAuthorizedTerminalEvents(
+      previous,
+      anomaliesApplied,
+      next,
+      WORKFLOW_TASK_DIGEST,
+    );
+
+    expect(settled.reviewerAnomalies?.[0]?.settlement).toEqual({
+      kind: 'target_dismissed_by_terminal_adjudication',
+      findingId: 'F-0001',
+      lifecycleEventId: next.lifecycleEvents.at(-1)?.eventId,
+    });
+    expect(buildFindingsRuleContext(
+      settled,
+      process.cwd(),
+    ).reviewerAnomalies.count).toBe(0);
+    expect(() => assertFindingLedgerAppendOnlyTransition(
+      anomaliesApplied,
+      settled,
+    )).not.toThrow();
+
+    const { root } = createRealRunStorage({ findingContractEnabled: true });
+    const lease = root.claimLease({
+      ownerKey: 'terminal-dismissal-settlement-test',
+      leaseDurationMs: 10_000,
+    });
+    const execution = root.runtime({ lease }).execution.startStep({
+      stepKey: 'findings-manager',
+      expectedScopeRevision: 0,
+    });
+    const store = root.runtime({ lease }).findingManager({
+      workflowName: 'default',
+      producer: execution.handle,
+    });
+    await store.updateLedger(() => ({
+      ledger: anomaliesApplied,
+      result: undefined,
+    }));
+    await store.updateLedger(() => ({ ledger: settled, result: undefined }));
+    expect(store.loadLedger().reviewerAnomalies?.[0]?.settlement).toEqual(
+      settled.reviewerAnomalies?.[0]?.settlement,
+    );
+  });
+
+  it('outside_task_scope dismissはworkflowTaskDigestが異なるtaskのanomalyをsettleしない', () => {
+    const { previous, anomaliesApplied, next } = terminalDismissalFixture();
+    const settled = settleReviewerAnomaliesFromAuthorizedTerminalEvents(
+      previous,
+      anomaliesApplied,
+      next,
+      'b'.repeat(64),
+    );
+
+    expect(settled.reviewerAnomalies?.[0]?.settlement).toBeUndefined();
+  });
+
+  it('baseline DBに既存のterminal dismissへcurrent headで束縛された3 rawをsettleする', async () => {
+    const {
+      eventBaseline,
+      anomalyLedger,
+      next,
+    } = historicalTerminalDismissalFixture();
+    const dismissalEvent = eventBaseline.lifecycleEvents.find(
+      (event) => event.operation === 'dismiss_finding',
+    )!;
+    const expectedPrecondition = captureFindingMutationPrecondition(
+      eventBaseline,
+      'F-0001',
+    )!;
+
+    expect(expectedPrecondition).toMatchObject({
+      targetRevision: 2,
+      targetStatus: 'dismissed',
+    });
+    expect(anomalyLedger.reviewerAnomalies?.[0]?.sourceRawFindingIds).toHaveLength(3);
+    expect(next.lifecycleEvents).toEqual(eventBaseline.lifecycleEvents);
+    for (const rawFindingId of anomalyLedger.reviewerAnomalies![0]!.sourceRawFindingIds) {
+      expect(anomalyLedger.rawFindings.find(
+        (raw) => raw.rawFindingId === rawFindingId,
+      )?.targetPrecondition).toEqual(expectedPrecondition);
+    }
+
+    const settled = settleReviewerAnomaliesFromAuthorizedTerminalEvents(
+      eventBaseline,
+      anomalyLedger,
+      next,
+      WORKFLOW_TASK_DIGEST,
+    );
+
+    expect(settled.reviewerAnomalies?.[0]?.settlement).toEqual({
+      kind: 'target_dismissed_by_terminal_adjudication',
+      findingId: 'F-0001',
+      lifecycleEventId: dismissalEvent.eventId,
+    });
+    expect(() => assertFindingLedgerAppendOnlyTransition(
+      anomalyLedger,
+      settled,
+    )).not.toThrow();
+
+    const { root } = createRealRunStorage({ findingContractEnabled: true });
+    const lease = root.claimLease({
+      ownerKey: 'historical-terminal-dismissal-settlement-test',
+      leaseDurationMs: 10_000,
+    });
+    const execution = root.runtime({ lease }).execution.startStep({
+      stepKey: 'findings-manager',
+      expectedScopeRevision: 0,
+    });
+    const store = root.runtime({ lease }).findingManager({
+      workflowName: 'default',
+      producer: execution.handle,
+    });
+    await store.updateLedger(() => ({ ledger: eventBaseline, result: undefined }));
+    expect(store.loadLedger()).toMatchObject({
+      lifecycleEvents: expect.arrayContaining([
+        expect.objectContaining({ eventId: dismissalEvent.eventId }),
+      ]),
+    });
+    expect(store.loadLedger().reviewerAnomalies).toBeUndefined();
+
+    await store.updateLedger(() => ({ ledger: anomalyLedger, result: undefined }));
+    expect(store.loadLedger()).toMatchObject({
+      lifecycleEvents: eventBaseline.lifecycleEvents,
+      reviewerAnomalies: [expect.objectContaining({
+        id: 'RA-HISTORICAL-DISMISS',
+      })],
+    });
+    expect(store.loadLedger().reviewerAnomalies?.[0]?.settlement).toBeUndefined();
+
+    await store.updateLedger(() => ({ ledger: settled, result: undefined }));
+    expect(store.loadLedger().reviewerAnomalies?.[0]?.settlement).toEqual(
+      settled.reviewerAnomalies?.[0]?.settlement,
+    );
+  });
+
+  it.each([
+    ['revision', (precondition: FindingMutationPrecondition) => ({
+      ...precondition,
+      targetRevision: precondition.targetRevision + 1,
+    })],
+    ['status', (precondition: FindingMutationPrecondition) => ({
+      ...precondition,
+      targetStatus: 'resolved' as const,
+    })],
+    ['evidence hash', (precondition: FindingMutationPrecondition) => ({
+      ...precondition,
+      targetEvidenceHash: 'f'.repeat(64),
+    })],
+  ])('historical terminal dismissはsource rawの%s不一致でsettleしない', (
+    _label,
+    mutatePrecondition,
+  ) => {
+    const { eventBaseline, anomalyLedger, next }
+      = historicalTerminalDismissalFixture(mutatePrecondition);
+    const settled = settleReviewerAnomaliesFromAuthorizedTerminalEvents(
+      eventBaseline,
+      anomalyLedger,
+      next,
+      WORKFLOW_TASK_DIGEST,
+    );
+
+    expect(settled.reviewerAnomalies?.[0]?.settlement).toBeUndefined();
+  });
+
+  it('historical outside_task_scope dismissはcurrent workflowTaskDigest不一致でsettleしない', () => {
+    const { eventBaseline, anomalyLedger, next }
+      = historicalTerminalDismissalFixture();
+    const settled = settleReviewerAnomaliesFromAuthorizedTerminalEvents(
+      eventBaseline,
+      anomalyLedger,
+      next,
+      'b'.repeat(64),
+    );
+
+    expect(settled.reviewerAnomalies?.[0]?.settlement).toBeUndefined();
+  });
+
+  it('historical verified resolutionはcurrent headに一致する3 sourceをsettleする', () => {
+    const { eventBaseline, anomalyLedger }
+      = historicalVerifiedResolutionFixture();
+    const resolutionEvent = eventBaseline.lifecycleEvents.find(
+      (event) => event.operation === 'resolve_finding',
+    )!;
+    const settled = settleReviewerAnomaliesFromAuthorizedTerminalEvents(
+      eventBaseline,
+      anomalyLedger,
+      anomalyLedger,
+      WORKFLOW_TASK_DIGEST,
+    );
+
+    expect(settled.reviewerAnomalies?.[0]?.settlement).toEqual({
+      kind: 'target_resolved_by_verified_evidence',
+      findingId: 'F-0001',
+      lifecycleEventId: resolutionEvent.eventId,
+    });
+    expect(() => assertFindingLedgerAppendOnlyTransition(
+      anomalyLedger,
+      settled,
+    )).not.toThrow();
+    expect(() => assertFindingLedgerProjectionInvariant(settled)).not.toThrow();
+  });
+
+  it.each([
+    ['同一timestamp', afterObservation.timestamp],
+    ['時計逆行', beforeObservation.timestamp],
+  ])('%sでもhistorical settlementを構造的に保存・loadできる', (_label, timestamp) => {
+    const { eventBaseline, anomalyLedger } = historicalVerifiedResolutionFixture();
+    const anomalyEntry = anomalyLedger.reviewerAnomalies![0]!;
+    const observed = {
+      ...anomalyLedger,
+      reviewerAnomalies: [{
+        ...anomalyEntry,
+        firstObserved: { ...anomalyEntry.firstObserved, timestamp },
+        lastObserved: { ...anomalyEntry.lastObserved, timestamp },
+      }],
+    };
+    const settled = settleReviewerAnomaliesFromAuthorizedTerminalEvents(
+      eventBaseline,
+      observed,
+      observed,
+      WORKFLOW_TASK_DIGEST,
+    );
+
+    expect(settled.reviewerAnomalies?.[0]?.settlement?.lifecycleEventId)
+      .toBe(eventBaseline.lifecycleEvents.at(-1)?.eventId);
+    expect(() => assertFindingLedgerAppendOnlyTransition(observed, settled)).not.toThrow();
+    expect(() => assertFindingLedgerProjectionInvariant(settled)).not.toThrow();
+  });
+
+  it('historical sourceのhead以前に複数terminal eventがある場合は最新eventだけを選ぶ', () => {
+    const { eventBaseline } = historicalVerifiedResolutionFixture();
+    const original = eventBaseline.findings[0]!;
+    const {
+      resolvedAt: _resolvedAt,
+      resolvedEvidence: _resolvedEvidence,
+      ...withoutResolution
+    } = original;
+    const reopened = applyFindingLedgerFixtureRevision({
+      ledger: eventBaseline,
+      entityKind: 'finding',
+      entity: {
+        ...withoutResolution,
+        status: 'open',
+        lifecycle: 'reopened',
+        revision: original.revision + 1,
+        reopenedEvidence: 'Verified recurrence.',
+      },
+    });
+    const resolvedAgain = applyFindingLedgerFixtureRevision({
+      ledger: reopened,
+      entityKind: 'finding',
+      entity: {
+        ...reopened.findings[0]!,
+        status: 'resolved',
+        lifecycle: 'resolved',
+        revision: reopened.findings[0]!.revision + 1,
+        resolvedAt: historicalObservation.timestamp,
+        resolvedEvidence: 'Verified again.',
+      },
+    });
+    const raw = canonicalRawFindingFixture({
+      rawFindingId: 'raw-after-second-resolution',
+      stepName: 'architecture',
+      reviewer: 'architecture',
+      relation: 'reopened',
+      targetFindingId: 'F-0001',
+      targetPrecondition: captureFindingMutationPrecondition(resolvedAgain, 'F-0001')!,
+      evidence: [],
+    });
+    const observed = {
+      ...resolvedAgain,
+      rawFindings: [...resolvedAgain.rawFindings, raw],
+      reviewerAnomalies: [anomaly({ sourceRawFindingIds: [raw.rawFindingId] })],
+    };
+    const resolutionEvents = resolvedAgain.lifecycleEvents.filter(
+      (event) => event.operation === 'resolve_finding',
+    );
+    const settled = settleReviewerAnomaliesFromAuthorizedTerminalEvents(
+      resolvedAgain,
+      observed,
+      observed,
+      WORKFLOW_TASK_DIGEST,
+    );
+
+    expect(resolutionEvents).toHaveLength(2);
+    expect(settled.reviewerAnomalies?.[0]?.settlement?.lifecycleEventId)
+      .toBe(resolutionEvents.at(-1)?.eventId);
+  });
+
+  it.each([
+    ['revision', (precondition: FindingMutationPrecondition) => ({
+      ...precondition,
+      targetRevision: precondition.targetRevision + 1,
+    })],
+    ['status', (precondition: FindingMutationPrecondition) => ({
+      ...precondition,
+      targetStatus: 'dismissed' as const,
+    })],
+    ['evidence hash', (precondition: FindingMutationPrecondition) => ({
+      ...precondition,
+      targetEvidenceHash: 'e'.repeat(64),
+    })],
+  ])('historical verified resolutionは1/3 sourceの%s不一致で全体をsettleしない', (
+    _label,
+    mutatePrecondition,
+  ) => {
+    const { eventBaseline, anomalyLedger }
+      = historicalVerifiedResolutionFixture(mutatePrecondition);
+    const result = settleReviewerAnomaliesFromAuthorizedTerminalEvents(
+      eventBaseline,
+      anomalyLedger,
+      anomalyLedger,
+      WORKFLOW_TASK_DIGEST,
+    );
+    expect(result.reviewerAnomalies?.[0]?.settlement).toBeUndefined();
+
+    const resolutionEvent = eventBaseline.lifecycleEvents.find(
+      (event) => event.operation === 'resolve_finding',
+    )!;
+    const forged = {
+      ...anomalyLedger,
+      reviewerAnomalies: [{
+        ...anomalyLedger.reviewerAnomalies![0]!,
+        settlement: {
+          kind: 'target_resolved_by_verified_evidence' as const,
+          findingId: 'F-0001',
+          lifecycleEventId: resolutionEvent.eventId,
+        },
+      }],
+    };
+    expect(() => assertFindingLedgerAppendOnlyTransition(
+      anomalyLedger,
+      forged,
+    )).toThrow(/all source raws must match the required target head/u);
+    expect(() => assertFindingLedgerProjectionInvariant(forged))
+      .toThrow(/all source raws must match the required target head/u);
+  });
+
+  it('current target preconditionで束縛されたhistorical verified resolutionを安全にsettleする', () => {
+    const resolvedWithSettlement = validSettledLedger();
+    const resolved = {
+      ...resolvedWithSettlement,
+      reviewerAnomalies: undefined,
+    };
+    const raw = canonicalRawFindingFixture({
+      rawFindingId: 'raw-historical-observation',
+      stepName: 'architecture',
+      reviewer: 'architecture',
+      relation: 'reopened',
+      targetFindingId: 'F-0001',
+      targetPrecondition: captureFindingMutationPrecondition(
+        resolved,
+        'F-0001',
+      )!,
+      evidence: [],
+    });
+    const baseline = {
+      ...resolved,
+      rawFindings: [...resolved.rawFindings, raw],
+      reviewerAnomalies: [anomaly({
+        id: 'RA-HISTORICAL',
+        sourceRawFindingIds: [raw.rawFindingId],
+      })],
+    };
+    const settled = settleReviewerAnomaliesFromAuthorizedTerminalEvents(
+      baseline,
+      baseline,
+      baseline,
+      WORKFLOW_TASK_DIGEST,
+    );
+
+    expect(settled.reviewerAnomalies?.[0]?.settlement).toMatchObject({
+      kind: 'target_resolved_by_verified_evidence',
+      findingId: 'F-0001',
+    });
+    expect(() => assertFindingLedgerAppendOnlyTransition(
+      baseline,
+      settled,
+    )).not.toThrow();
   });
 
   it('settlementの削除・差替えと過去eventへの後付けを拒否する', () => {
@@ -299,9 +1095,38 @@ describe('reviewer anomaly settlement', () => {
     };
 
     expect(() => assertFindingLedgerAppendOnlyTransition(unsettled, settled))
-      .toThrow(/event added in the same transition/u);
+      .toThrow(/all source raws must match the required target head/u);
     expect(() => assertFindingLedgerAppendOnlyTransition(settled, unsettled))
       .toThrow(/settlement cannot be removed or replaced/u);
+  });
+
+  it.each([
+    ['kind', (entry: ReviewerAnomalyEntry) => ({ ...entry, kind: 'stale-snapshot' as const })],
+    ['stableKey', (entry: ReviewerAnomalyEntry) => ({ ...entry, stableKey: 'replaced' })],
+    ['lineageKey', (entry: ReviewerAnomalyEntry) => ({ ...entry, lineageKey: 'replaced' })],
+    ['firstObserved', (entry: ReviewerAnomalyEntry) => ({
+      ...entry,
+      firstObserved: { ...entry.firstObserved, runId: 'replaced' },
+    })],
+    ['sourceRawFindingIds', (entry: ReviewerAnomalyEntry) => ({
+      ...entry,
+      sourceRawFindingIds: entry.sourceRawFindingIds.slice(1),
+    })],
+    ['sourceIntakeIds', (entry: ReviewerAnomalyEntry) => ({ ...entry, sourceIntakeIds: [] })],
+    ['reviewers', (entry: ReviewerAnomalyEntry) => ({ ...entry, reviewers: [] })],
+    ['occurrences', (entry: ReviewerAnomalyEntry) => ({ ...entry, occurrences: 1 })],
+  ])('append-only境界は既存anomalyの%s巻き戻しを拒否する', (_label, mutate) => {
+    const { anomalyLedger } = historicalVerifiedResolutionFixture();
+    const existing = {
+      ...anomalyLedger.reviewerAnomalies![0]!,
+      sourceIntakeIds: ['intake-1'],
+      reviewers: ['architecture', 'ai-antipattern'],
+      occurrences: 2,
+    };
+    const current = { ...anomalyLedger, reviewerAnomalies: [existing] };
+    const next = { ...current, reviewerAnomalies: [mutate(existing)] };
+
+    expect(() => assertFindingLedgerAppendOnlyTransition(current, next)).toThrow();
   });
 
   it('settlement後の正当なreopenを許可しSQLite revisionからloadする', async () => {
@@ -320,8 +1145,21 @@ describe('reviewer anomaly settlement', () => {
       workflowName: 'default',
       producer: execution.handle,
     });
-    const settled = validSettledLedger();
-
+    const fixture = verifiedResolutionFixture();
+    await store.updateLedger(() => ({
+      ledger: fixture.previous,
+      result: undefined,
+    }));
+    await store.updateLedger(() => ({
+      ledger: fixture.anomaliesApplied,
+      result: undefined,
+    }));
+    const settled = settleReviewerAnomaliesFromAuthorizedTerminalEvents(
+      fixture.previous,
+      fixture.anomaliesApplied,
+      fixture.next,
+      WORKFLOW_TASK_DIGEST,
+    );
     await store.updateLedger(() => ({ ledger: settled, result: undefined }));
     expect(store.loadLedger().reviewerAnomalies).toEqual(settled.reviewerAnomalies);
 
@@ -407,12 +1245,12 @@ describe('reviewer anomaly settlement', () => {
     expect(database.prepare(`
       SELECT count(*) AS count
       FROM finding_reviewer_anomaly_entries
-      WHERE revision IN (2, 3, 4, 5)
+      WHERE revision IN (2, 3, 4, 5, 6)
     `).get()).toEqual({ count: 4 });
     expect(database.prepare(`
       SELECT count(*) AS count
       FROM finding_ledger_revisions
-    `).get()).toEqual({ count: 5 });
+    `).get()).toEqual({ count: 7 });
     database.close();
   });
 });

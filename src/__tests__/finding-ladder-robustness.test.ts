@@ -1931,7 +1931,6 @@ describe('解釈梯子の追加必須テスト', () => {
             rawFindingId,
             decision: 'new',
             findingId: '',
-            anchorRelevance: 'not_applicable',
             evidence: 'fresh',
           })),
           disputeDecisions: [],
@@ -2365,8 +2364,8 @@ describe('解釈梯子の追加必須テスト', () => {
     ))).toBe(true);
   });
 
-  it('A-3: 証跡不成立 persists は open/provisional target へ監査添付し、terminal/unknown target は reviewer anomaly に隔離する', async () => {
-    // 台帳: open F-0001、provisional F-0002、resolved F-0003。
+  it('A-3: current precondition の証跡不成立 lifecycle 観測は terminal target を含め監査添付し、unknown target は reviewer anomaly に隔離する', async () => {
+    // 台帳: open F-0001、provisional F-0002、resolved F-0003、dismissed F-0004。
     const provisionalEntry = makeFinding({ revision: 1,
       id: 'F-0002',
       title: 'Provisional observation',
@@ -2392,9 +2391,32 @@ describe('解釈梯子の追加必須テスト', () => {
       status: 'resolved',
       lifecycle: 'resolved',
     });
+    const dismissedEntry = makeFinding({ revision: 2,
+      id: 'F-0004',
+      title: 'Dismissed one',
+      description: 'Terminally adjudicated.',
+      status: 'dismissed',
+      lifecycle: 'dismissed',
+      dismissal: {
+        basis: 'no_issue_after_verification',
+        reason: 'Terminal verification found no product issue.',
+        evidence: 'The terminal adjudicator verified the current target.',
+        authority: 'terminal_adjudication',
+        decidedAt: {
+          runId: 'old',
+          stepName: 'findings-manager',
+          timestamp: '2026-06-13T00:00:00.000Z',
+        },
+      },
+    });
     const harness = makeHarness(makeLedger({
-      nextId: 4,
-      findings: [makeFinding({ revision: 1 }), provisionalEntry, resolvedEntry],
+      nextId: 5,
+      findings: [
+        makeFinding({ revision: 1 }),
+        provisionalEntry,
+        resolvedEntry,
+        dismissedEntry,
+      ],
     }));
     const base = {
       familyTag: 'bug',
@@ -2414,7 +2436,8 @@ describe('解釈梯子の追加必須テスト', () => {
       reviewerRawFindings: [
         { ...base, rawFindingId: 'p-open', title: 'Existing issue', description: 'Still there (bad evidence).', targetFindingId: 'F-0001' },
         { ...base, rawFindingId: 'p-prov', title: 'Provisional observation', description: 'Still there too (bad evidence).', targetFindingId: 'F-0002' },
-        { ...base, rawFindingId: 'p-terminal', title: 'Fixed one', description: 'Came back (bad evidence).', targetFindingId: 'F-0003' },
+        { ...base, rawFindingId: 'p-terminal', title: 'Rephrased recurrence claim', description: 'Different wording on the same current head.', targetFindingId: 'F-0003' },
+        { ...base, rawFindingId: 'p-dismissed', title: 'Rephrased dismissed claim', description: 'Different wording on the same dismissed head.', relation: 'reopened', targetFindingId: 'F-0004' },
         { ...base, rawFindingId: 'p-unknown', title: 'Ghost issue', description: 'References nothing real.', targetFindingId: 'F-9999' },
       ],
     });
@@ -2424,20 +2447,31 @@ describe('解釈梯子の追加必須テスト', () => {
     // lifecycle evidence failure is audit-only and never mutates a target.
     const target = saved.findings.find((finding) => finding.id === 'F-0001')!;
     expect(target.status).toBe('open');
-    expect(target.revision).toBe(1);
+    expect(target.revision).toBe(2);
     expect(target.rawFindingIds).toEqual(['raw-existing']);
-    expect(target.rejectedObservations ?? []).toEqual([]);
+    expect(target.rejectedObservations).toHaveLength(1);
 
     // provisional target also remains unchanged.
     const provisionalTarget = saved.findings.find((finding) => finding.id === 'F-0002')!;
-    expect(provisionalTarget.rejectedObservations ?? []).toEqual([]);
+    expect(provisionalTarget.rejectedObservations).toHaveLength(1);
 
-    // terminal / unknown target は product finding へ混ぜず reviewer anomaly に隔離する。
+    // current terminal target は audit-only。言い換えた semantic identity は
+    // 収束判定に使わず、engine-issued target precondition だけで対象を確定する。
     const terminalTarget = saved.findings.find((finding) => finding.id === 'F-0003')!;
     expect(terminalTarget.status).toBe('resolved');
-    expect(terminalTarget.rejectedObservations ?? []).toEqual([]);
+    expect(terminalTarget.rejectedObservations).toHaveLength(1);
+    const dismissedTarget = saved.findings.find((finding) => finding.id === 'F-0004')!;
+    expect(dismissedTarget.status).toBe('dismissed');
+    expect(dismissedTarget.rejectedObservations).toHaveLength(1);
     expect(saved.findings.filter((finding) => finding.provisional !== undefined)).toHaveLength(1);
-    expect(saved.reviewerAnomalies ?? []).toHaveLength(3);
+    expect(saved.reviewerAnomalies ?? []).toHaveLength(1);
+    expect(saved.reviewerAnomalies?.some((anomaly) => anomaly.sourceRawFindingIds.some(
+      (rawFindingId) => rawFindingId.endsWith(':p-unknown'),
+    ))).toBe(true);
+    const unknownAnomalyRawIds = saved.reviewerAnomalies![0]!.sourceRawFindingIds;
+    expect(unknownAnomalyRawIds.every((rawFindingId) => (
+      saved.rawFindings.some((raw) => raw.rawFindingId === rawFindingId)
+    ))).toBe(true);
     expect(executeAgentMock).not.toHaveBeenCalled();
   });
 
@@ -3000,11 +3034,16 @@ describe('codex 検証2巡目#2: 未検証 persists/reopened は既存 finding �
       'raw-existing',
       expect.stringContaining(':c-ok'),
     ]);
-    expect(target.rejectedObservations).toEqual([
-      expect.objectContaining({ rawFindingId: expect.stringContaining(':p-bad') }),
-    ]);
+    expect(target.rejectedObservations).toBeUndefined();
     expect(saved.findings).toHaveLength(1);
-    expect(saved.reviewerAnomalies ?? []).toHaveLength(0);
+    expect(saved.reviewerAnomalies).toEqual([
+      expect.objectContaining({
+        kind: 'lifecycle-admission-failure',
+        sourceRawFindingIds: [
+          expect.stringContaining(':p-bad'),
+        ],
+      }),
+    ]);
   });
 });
 
@@ -3053,11 +3092,16 @@ describe('証拠なし raw finding の admission', () => {
       'raw-existing',
       expect.stringContaining(':c-ok'),
     ]);
-    expect(target.rejectedObservations).toEqual([
-      expect.objectContaining({ rawFindingId: expect.stringContaining(':p-bad') }),
-    ]);
+    expect(target.rejectedObservations).toBeUndefined();
     expect(saved.findings).toHaveLength(1);
-    expect(saved.reviewerAnomalies ?? []).toHaveLength(0);
+    expect(saved.reviewerAnomalies).toEqual([
+      expect.objectContaining({
+        kind: 'lifecycle-admission-failure',
+        sourceRawFindingIds: [
+          expect.stringContaining(':p-bad'),
+        ],
+      }),
+    ]);
   });
 
   it('証拠なし reopened は resolved finding を open に戻さず audit observation に留める', async () => {

@@ -398,6 +398,8 @@ describe('finding schemas', () => {
         status: 'resolved',
         lifecycle: 'resolved',
         revision: 2,
+        firstSeen: observation,
+        lastSeen: observation,
         resolvedAt: observation.timestamp,
         resolvedEvidence: 'Verified resolution.',
       }],
