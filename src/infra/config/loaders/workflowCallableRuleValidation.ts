@@ -2,6 +2,7 @@ import type { z } from 'zod/v4';
 import { WorkflowConfigRawSchema } from '../../../core/models/index.js';
 import { isWorkflowParamReference } from './workflowCallableParamRef.js';
 import { withWorkflowConfigErrorPath as withWorkflowStepErrorPath } from '../../../core/workflow/workflow-config-error.js';
+import { enumerateParallelSubSteps } from './workflowParallelTraversal.js';
 
 type RawWorkflowConfig = z.output<typeof WorkflowConfigRawSchema>;
 
@@ -9,7 +10,14 @@ const RESERVED_WORKFLOW_CALL_RESULTS = new Set(['COMPLETE', 'ABORT']);
 
 export function assertNoParamReferences(steps: RawWorkflowConfig['steps'], parentPath: readonly PropertyKey[] = ['steps']): void {
   for (const [stepIndex, step] of steps.entries()) {
-    const stepPath = [...parentPath, stepIndex];
+    assertNoParamReferencesInStep(step, [...parentPath, stepIndex]);
+  }
+}
+
+function assertNoParamReferencesInStep(
+  step: RawWorkflowConfig['steps'][number],
+  stepPath: readonly PropertyKey[],
+): void {
     if (isWorkflowParamReference(step.policy)) {
       throw withWorkflowStepErrorPath(new Error(`Step "${step.name}" cannot use $param in policy outside a callable subworkflow`), [...stepPath, 'policy']);
     }
@@ -30,9 +38,10 @@ export function assertNoParamReferences(steps: RawWorkflowConfig['steps'], paren
       }
     }
     if (step.parallel) {
-      assertNoParamReferences(step.parallel as RawWorkflowConfig['steps'], [...stepPath, 'parallel']);
+      for (const { subStep, path } of enumerateParallelSubSteps(step.parallel, [...stepPath, 'parallel'])) {
+        assertNoParamReferencesInStep(subStep as RawWorkflowConfig['steps'][number], path);
+      }
     }
-  }
 }
 
 export function validateReturnRules(
@@ -43,7 +52,17 @@ export function validateReturnRules(
   parentPath: readonly PropertyKey[] = ['steps'],
 ): void {
   for (const [stepIndex, step] of steps.entries()) {
-    const stepPath = [...parentPath, stepIndex];
+    validateReturnRulesInStep(step, [...parentPath, stepIndex], isCallable, declaredReturns, insideParallel);
+  }
+}
+
+function validateReturnRulesInStep(
+  step: RawWorkflowConfig['steps'][number],
+  stepPath: readonly PropertyKey[],
+  isCallable: boolean,
+  declaredReturns: Set<string>,
+  insideParallel: boolean,
+): void {
     for (const [ruleIndex, rule] of (step.rules ?? []).entries()) {
       const rulePath = [...stepPath, 'rules', ruleIndex];
       if (rule.return !== undefined && rule.next !== undefined) {
@@ -67,7 +86,14 @@ export function validateReturnRules(
     }
 
     if (step.parallel) {
-      validateReturnRules(step.parallel as RawWorkflowConfig['steps'], isCallable, declaredReturns, true, [...stepPath, 'parallel']);
+      for (const { subStep, path } of enumerateParallelSubSteps(step.parallel, [...stepPath, 'parallel'])) {
+        validateReturnRulesInStep(
+          subStep as RawWorkflowConfig['steps'][number],
+          path,
+          isCallable,
+          declaredReturns,
+          true,
+        );
+      }
     }
-  }
 }

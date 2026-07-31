@@ -32,12 +32,17 @@ export type {
   WorkflowSubworkflowConfig,
   WorkflowResumePointEntry,
   WorkflowResumePoint,
+  WorkflowCallInvocationRecord,
+  WorkflowStepParticipationRecord,
   WorkflowPromotionEntry,
   FindingContractConfig,
   FindingsRuleContext,
   AgentWorkflowStep,
   NormalAgentWorkflowStep,
   ParallelWorkflowStep,
+  DynamicParallelFixedSubStep,
+  DynamicParallelPoolSubStep,
+  DynamicParallelSubSteps,
   ArpeggioWorkflowStep,
   TeamLeaderWorkflowStep,
   SystemWorkflowStep,
@@ -88,6 +93,9 @@ export type {
 
 export {
   WORKFLOW_SESSION_MODES,
+  getAllParallelSubSteps,
+  isDynamicParallelSubSteps,
+  isNormalAgentWorkflowStep,
 } from './types.js';
 
 // Re-export from agent.ts

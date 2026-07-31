@@ -121,7 +121,8 @@ function toRawStepFieldPath(path: readonly PropertyKey[], raw: object): readonly
 }
 
 function workflowStepFieldStart(path: readonly PropertyKey[]): number {
-  return path[2] === 'parallel' ? 4 : 2;
+  return path[2] === 'parallel' && (path[3] === 'fixed' || path[3] === 'pool') ? 5
+    : path[2] === 'parallel' ? 4 : 2;
 }
 
 function getRawStepAtPath(raw: object, path: readonly PropertyKey[]): Record<string, unknown> | undefined {
@@ -135,9 +136,16 @@ function getRawStepAtPath(raw: object, path: readonly PropertyKey[]): Record<str
   if (path[2] !== 'parallel') {
     return parent;
   }
-  return typeof path[3] === 'number' && Array.isArray(parent.parallel) && isRecord(parent.parallel[path[3]])
-    ? parent.parallel[path[3]]
-    : undefined;
+  if (typeof path[3] === 'number' && Array.isArray(parent.parallel) && isRecord(parent.parallel[path[3]])) {
+    return parent.parallel[path[3]];
+  }
+  if ((path[3] === 'fixed' || path[3] === 'pool') && isRecord(parent.parallel)) {
+    const branch = parent.parallel[path[3]];
+    if (Array.isArray(branch) && typeof path[4] === 'number' && isRecord(branch[path[4]])) {
+      return branch[path[4]];
+    }
+  }
+  return undefined;
 }
 
 function hasProviderModel(value: unknown): boolean {

@@ -848,7 +848,7 @@ describe('WorkflowEngine Integration: Happy Path', () => {
         startStep: 'implement',
         initialIteration: 10,
         resumePoint: {
-          version: 1,
+          version: 2,
           stack: [{
             workflow: 'resume-workflow',
             workflow_ref: 'resume-workflow',
@@ -859,6 +859,8 @@ describe('WorkflowEngine Integration: Happy Path', () => {
           }],
           iteration: 10,
           elapsed_ms: 1_000,
+          workflow_call_invocations: {},
+          workflow_step_participations: {},
         },
       });
       mockRunAgentSequence([makeResponse({ persona: 'coder', content: 'done' })]);

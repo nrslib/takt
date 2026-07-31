@@ -11,9 +11,16 @@ import {
   isWorkflowPath,
   resolveWorkflowConfigValues,
 } from '../../../infra/config/index.js';
+import { resolveWorkflowSelector } from '../../../infra/config/workflowSelectorResolution.js';
 import { resolveProviderOptionsWithTrace } from '../../../infra/config/resolveConfigValue.js';
-import { resolveAssistantScopedProviderModelFromConfig } from '../../../core/config/provider-resolution.js';
-import type { StepProviderInfo, WorkflowTraceTaskMetadata } from '../../../core/workflow/types.js';
+import {
+  resolveAssistantScopedProviderModelFromConfig,
+} from '../../../core/config/provider-resolution.js';
+import type {
+  SelectorProviderInfo,
+  StepProviderInfo,
+  WorkflowTraceTaskMetadata,
+} from '../../../core/workflow/types.js';
 import { info, error } from '../../../shared/ui/index.js';
 import { createLogger } from '../../../shared/utils/index.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
@@ -172,6 +179,12 @@ export async function executeTaskWorkflow(
     modelSource: agentOverrides?.modelSource,
     autoStrategy: agentOverrides?.autoStrategy,
     reportFallbackProvider: resolveReportFallbackProviderModel(projectCwd),
+    selectorProvider: resolveSelectorProvider(
+      workflowConfig,
+      projectCwd,
+      cwd,
+      agentOverrides,
+    ),
     outputMode,
     eventSink,
     onAskUserQuestion,
@@ -225,6 +238,31 @@ function resolveReportFallbackProviderModel(projectCwd: string): StepProviderInf
   return {
     provider: resolved.provider,
     model: resolved.model,
+  };
+}
+
+function resolveSelectorProvider(
+  workflow: WorkflowConfig,
+  projectCwd: string,
+  lookupCwd: string,
+  overrides: ExecuteTaskOptions['agentOverrides'],
+): SelectorProviderInfo | undefined {
+  const resolution = resolveWorkflowSelector(workflow, {
+    projectCwd,
+    lookupCwd,
+    overrides,
+  });
+  if (!resolution.applies) {
+    return undefined;
+  }
+  const resolved = resolution.selectorProvider;
+  return {
+    provider: resolved.provider,
+    model: resolved.model,
+    providerSource: resolved.providerSource,
+    modelSource: resolved.modelSource,
+    providerOptions: resolved.providerOptions,
+    nativeTools: resolved.nativeTools,
   };
 }
 

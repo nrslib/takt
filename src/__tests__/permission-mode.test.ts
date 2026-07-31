@@ -105,6 +105,33 @@ describe('SdkOptionsBuilder.build() — mcpServers', () => {
 });
 
 describe('SdkOptionsBuilder.build() — settingSources', () => {
+  it('isolates strict read-only internal agents from tools, filesystem settings, and ambient MCP', () => {
+    const options = buildSdkOptions({
+      cwd: '/test',
+      internalAgentIsolation: 'strict-readonly',
+      allowedTools: [],
+      mcpServers: {},
+      permissionMode: 'readonly',
+    });
+
+    expect(options).toMatchObject({
+      tools: [],
+      settingSources: [],
+      strictMcpConfig: true,
+      allowedTools: [],
+      mcpServers: {},
+      permissionMode: 'default',
+    });
+  });
+
+  it('does not apply strict internal isolation to an ordinary Claude call', () => {
+    const options = buildSdkOptions({ cwd: '/test', permissionMode: 'readonly' });
+
+    expect(options.settingSources).toEqual(['project']);
+    expect(options).not.toHaveProperty('tools');
+    expect(options).not.toHaveProperty('strictMcpConfig');
+  });
+
   it('Given Skills are disabled, When building SDK options, Then it passes an empty Skill allowlist without changing settingSources', () => {
     const options = buildSdkOptions({
       cwd: '/test',

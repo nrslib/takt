@@ -26,6 +26,8 @@ function makeState(workflowName: string, status: WorkflowState['status'], iterat
     userInputs: [],
     personaSessions: new Map(),
     stepIterations: new Map([['delegate', 1]]),
+    dynamicParallelSelections: new Map(),
+    resumedDynamicParallelSteps: new Set(),
     status,
   };
 }
@@ -124,6 +126,7 @@ describe('WorkflowCallExecutor', () => {
     const createEngine = vi.fn().mockReturnValue(childEngine);
     const emit = vi.fn();
     const setActiveResumePoint = vi.fn();
+    const sharedRuntime = { startedAtMs: Date.now(), maxSteps: 10 };
     const traceTaskMetadata = {
       taskSummary: 'Review PR #827 trace metadata',
       taskSource: 'pr_review',
@@ -145,7 +148,7 @@ describe('WorkflowCallExecutor', () => {
       getCwd: () => '/tmp/project',
       projectCwd: '/tmp/project',
       task: 'task',
-      sharedRuntime: { startedAtMs: Date.now(), maxSteps: 10 },
+      sharedRuntime,
       resumeStackPrefix: [],
       consumeWorkflowCallContinuation: vi.fn(),
       runPaths: {
@@ -180,6 +183,7 @@ describe('WorkflowCallExecutor', () => {
       }),
     );
     const childOptions = createEngine.mock.calls[0]?.[3];
+    expect(childOptions?.sharedRuntime).toBe(sharedRuntime);
     expect(childOptions?.traceTaskMetadata).toBe(traceTaskMetadata);
     expect(childOptions?.resumeStackPrefix).toEqual([{
       workflow: 'parent',
@@ -188,6 +192,7 @@ describe('WorkflowCallExecutor', () => {
       kind: 'workflow_call',
       occurrence: 3,
       step_iterations: { delegate: 3 },
+      call_instance: 3,
     }]);
     expect(childEngine.on).toHaveBeenCalledWith('step:start', expect.any(Function));
     const childStep = childConfig.steps[0];

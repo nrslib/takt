@@ -14,10 +14,8 @@ import {
   TaskExecutionConfigSchema,
 } from '../../../infra/task/index.js';
 import type { WorkflowResumePoint } from '../../../core/models/index.js';
-import {
-  parseWorkflowResumePoint,
-  type RunResumeSource,
-} from '../../../core/workflow/run/run-meta.js';
+import type { RunResumeSource } from '../../../core/workflow/run/run-meta.js';
+import { parseWorkflowResumePoint } from '../../../core/workflow/resume-point-codec.js';
 import { trimResumePointStackForWorkflow } from '../../../core/workflow/run/resume-point.js';
 import { getGitProvider, type GitProvider, type Issue } from '../../../infra/git/index.js';
 import { withProgress } from '../../../shared/ui/index.js';

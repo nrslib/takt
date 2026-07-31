@@ -14,6 +14,7 @@ import type {
   WorkflowMaxSteps,
   WorkflowResumePointEntry,
 } from '../../models/types.js';
+import { isDynamicParallelSubSteps } from '../../models/types.js';
 import { executeAgent } from '../../../agents/agent-usecases.js';
 import { getWorkflowResumeFrameKind, isWorkflowCallStep } from '../step-kind.js';
 import { ParallelLogger } from './parallel-logger.js';
@@ -70,6 +71,8 @@ import {
   reviewerOperationOrigin,
   runtimeForOperation,
 } from './fallback-operation.js';
+import type { DynamicParallelSelectorCoordinator } from '../dynamic-parallel/selector-coordinator.js';
+import { validateProviderModelRequirements } from '../provider-model-requirements.js';
 
 const log = createLogger('parallel-runner');
 
@@ -153,7 +156,7 @@ export interface ParallelRunnerDeps {
   readonly stepExecutor: StepExecutor;
   readonly engineOptions: WorkflowEngineOptions;
   readonly getCwd: () => string;
-  readonly getReportDir: () => string;
+  readonly dynamicParallelSelector: DynamicParallelSelectorCoordinator;
   readonly getWorkflowName: () => string;
   readonly getTask: () => string;
   readonly getInteractive: () => boolean;
@@ -240,7 +243,10 @@ export class ParallelRunner {
     if (!step.parallel) {
       throw new Error(`Step "${step.name}" has no parallel sub-steps`);
     }
-    const subSteps = step.parallel;
+    const subSteps = isDynamicParallelSubSteps(step.parallel)
+      ? await this.deps.dynamicParallelSelector.selectParticipants(step, state, task)
+      : step.parallel;
+    this.deps.engineOptions.abortSignal?.throwIfAborted();
     // 直前ステップ（通常は coder の fix）の応答。異議申告の裁定材料として
     // manager に渡すため、サブステップ実行で lastOutput が変わる前に捕捉する。
     const priorStepResponseText = state.lastOutput?.content;
@@ -272,6 +278,13 @@ export class ParallelRunner {
       log.debug('Concurrency limit enabled', { step: step.name, concurrency: step.concurrency });
     }
     const agentSubSteps = subSteps.filter(isAgentParallelSubStep);
+    const configuredProviderInfoByStep = new Map(subSteps.map((subStep) => {
+      const providerInfo = this.deps.optionsBuilder.resolveStepProviderModelBeforeAutoRouting(subStep, runtime);
+      validateProviderModelRequirements(providerInfo.provider, providerInfo.model, {
+        modelFieldName: `Configuration error: parallel sub-step "${subStep.name}" model`,
+      });
+      return [subStep.name, providerInfo];
+    }));
     const routingLedger = this.deps.engineOptions.autoRouting && agentSubSteps.length > 0
       ? this.deps.findingLedgerStore?.loadLedger()
       : undefined;
@@ -309,7 +322,7 @@ export class ParallelRunner {
               findings: buildRoutingFindings(routingLedger),
               sensitiveValues: this.deps.engineOptions.routingSensitiveValues,
             }),
-            currentProviderInfo: this.deps.optionsBuilder.resolveStepProviderModelBeforeAutoRouting(subStep, runtime),
+            currentProviderInfo: configuredProviderInfoByStep.get(subStep.name)!,
           })),
           estimator: this.deps.engineOptions.autoRoutingEstimator,
           runtime: this.deps.engineOptions.routingRuntime,
@@ -345,6 +358,21 @@ export class ParallelRunner {
     const workflowCallResumeStack = subSteps.some(isWorkflowCallStep)
       ? this.requireWorkflowCallResumeStack(step, stepIteration)
       : undefined;
+    const providerInfoByStep = new Map(subSteps.map((subStep) => {
+      const routedProviderInfo = routedProviderInfoByStep.get(subStep.name);
+      const subRuntime = routedProviderInfo === undefined
+        ? runtime
+        : { ...runtime, providerInfo: routedProviderInfo };
+      const providerInfo = routedProviderInfo === undefined
+        ? (runtime
+          ? this.deps.optionsBuilder.resolveStepProviderModel(subStep, runtime)
+          : this.deps.optionsBuilder.resolveStepProviderModel(subStep))
+        : this.deps.optionsBuilder.resolveStepProviderModel(subStep, subRuntime);
+      validateProviderModelRequirements(providerInfo.provider, providerInfo.model, {
+        modelFieldName: `Configuration error: parallel sub-step "${subStep.name}" model`,
+      });
+      return [subStep.name, providerInfo];
+    }));
 
     // Run all sub-steps concurrently (failures are captured, not thrown)
     // When semaphore is set, at most `concurrency` sub-steps execute simultaneously.
@@ -446,9 +474,10 @@ export class ParallelRunner {
             : subInstruction;
           subStepInstructionByName.set(subStep.name, phase1Instruction);
           const parentIteration = state.iteration;
-          const subPm = subRuntime
-            ? this.deps.optionsBuilder.resolveStepProviderModel(executableSubStep, subRuntime)
-            : this.deps.optionsBuilder.resolveStepProviderModel(executableSubStep);
+          const subPm = providerInfoByStep.get(subStep.name);
+          if (subPm === undefined) {
+            throw new Error(`Provider preflight result is missing for parallel sub-step "${subStep.name}"`);
+          }
           const subRuleCtx = {
             state,
             interactive: this.deps.getInteractive(),

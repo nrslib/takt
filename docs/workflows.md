@@ -243,11 +243,56 @@ Sub-steps execute concurrently, and the parent aggregates sub-step matches via `
 - Sub-step `rules` define possible outcomes; `next` is optional (parent handles routing)
 - Parallel sub-steps do not support `promotion`
 
-### Finding Contract reviewer output and manager provider/model
+### Finding Contract reviewer output normalization
 
 Finding Contract reviewers use native structured output by default. Runtime
 configuration under `finding_contract.intake_normalize` can select ordinary
 Markdown plus isolated extraction by exact resolved reviewer provider/model.
+
+### Dynamic Parallel Step
+
+`parallel` may instead define a fixed set and a selectable pool. TAKT runs an internal read-only selector when the step is entered; it is not a workflow step and cannot create agents or change the workflow. The selector runs with read-only permissions, permission bypass disabled, no inherited MCP servers, and a TAKT-owned structured output contract.
+
+```yaml
+  - name: reviewers
+    parallel:
+      fixed:
+        - name: architecture
+          persona: architecture-reviewer
+          instruction: Review architecture
+          rules: [{ condition: approved }]
+      pool:
+        - name: frontend
+          persona: frontend-reviewer
+          description: Review frontend and UI changes
+          instruction: Review frontend
+          rules: [{ condition: approved }]
+        - name: backend
+          persona: backend-reviewer
+          description: Review API and persistence changes
+          instruction: Review backend
+          rules: [{ condition: approved }]
+      selection:
+        mode: replace
+    rules:
+      - condition: all("approved")
+        next: COMPLETE
+```
+
+- `pool` must be non-empty and every pool item must have a non-empty `description`.
+- A `fixed` or `pool` item that declares `uses` owns its `rules` at that call site. The referenced fragment must not define them.
+- `fixed` always runs. The selector can select only expanded `pool` step names, and execution follows YAML order.
+- `replace` (the default) replaces a previous pool selection on a new round. `cumulative` retains every pool item selected in earlier rounds.
+- A resume of the same round restores its saved effective selection and does not invoke the selector again.
+- `all()` and `any()` aggregate only the fixed and selected pool items of the current round. Dynamic parallel rejects position-dependent aggregate expressions.
+- Invalid selector output, an unknown selection, or an invalid saved selection fails before a fixed or pool agent starts; there is no all-pool fallback.
+- Loading fails before execution when `pool` is missing or empty, a pool description is empty, a fragment cannot expand, an expanded name is duplicated, a fixed/pool item is not an agent sub-step, `selection.mode` is not `replace` or `cumulative`, or an aggregate label is not defined by every candidate. Selector execution also fails before reviewer startup when the provider is unresolved, its strict output is invalid, or fixed plus selected pool items is empty. Resume fails before startup when its identity or saved IDs no longer match the expanded candidates.
+- The selector input contains the task, reports available in the current workflow-call scope, the current staged, unstaged, deleted, and untracked changes against `HEAD`, candidate IDs and descriptions, the previous selection for `cumulative`, and whether this is an initial entry or a new round. Its output must be a completed JSON object with only `selected_ids` and `rationale`; non-arrays, non-string IDs, duplicate IDs, and extra properties are rejected.
+- Selector evidence is complete on success and uses UTF-8 byte limits. Each report and each changed-path payload may be at most 64 KiB; at most 1,024 changed paths are accepted; each Git path list may be at most 1 MiB; and the combined rendered reports and current diff may be at most 1 MiB. A value exactly at a limit is accepted, while one byte or one path above it fails before the selector or any participant starts. `.takt/runs/` paths are excluded. Untracked symlinks contribute only their link target text and are never dereferenced; other non-regular files are rejected.
+- The current diff includes changes that already existed when the run started. Changes committed during a run are no longer different from `HEAD` and are not guaranteed to remain in later selector inputs; prior reports remain available as separate evidence. A normal empty diff is passed explicitly. A non-Git directory, an unavailable Git command, or a repository without `HEAD` fails before agent startup.
+- The saved participant manifest is keyed by the workflow invocation path, workflow-call instance path, and parallel step. Report inheritance and aggregate evaluation use that manifest, so a reviewer removed by `replace` cannot contribute stale reports or findings to the current round.
+
+### Finding Contract manager provider/model
 
 `finding_contract.manager` can set a dedicated provider and model for the synthetic Finding Manager step:
 

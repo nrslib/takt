@@ -18,6 +18,7 @@ import {
 import type { ScopedProviderOptionsCandidateDirs } from '../../infra/config/loaders/providerOptionsLookupDirectories.js';
 import { resolveWorkflowStepFragments } from '../../infra/config/loaders/workflowStepFragmentResolver.js';
 import type { ScopedStepFragmentCandidateDirs } from '../../infra/config/loaders/stepFragmentLookupDirectories.js';
+import { enumerateRawParallelSubSteps } from '../../infra/config/loaders/workflowParallelTraversal.js';
 
 const log = createLogger('pack-summary');
 const PACKAGE_ROOT = '/__takt_repertoire_package__';
@@ -81,6 +82,12 @@ function normalizeSummarySteps(value: unknown): RawSummaryStep[] {
   return Array.isArray(value)
     ? value.filter(isRecord) as RawSummaryStep[]
     : [];
+}
+
+function normalizeParallelSummarySteps(value: unknown): RawSummaryStep[] {
+  return enumerateRawParallelSubSteps(value, ['parallel'])
+    .map(({ subStep }) => subStep)
+    .filter(isRecord) as RawSummaryStep[];
 }
 
 function normalizePromotionEntries(value: unknown): { provider_options?: unknown }[] {
@@ -210,7 +217,7 @@ function collectPermissionSteps(
     );
     return [
       { step, providerOptions },
-      ...collectPermissionSteps(normalizeSummarySteps(step.parallel), providerOptions, resolveStepProviderOptions),
+      ...collectPermissionSteps(normalizeParallelSummarySteps(step.parallel), providerOptions, resolveStepProviderOptions),
     ];
   });
 }

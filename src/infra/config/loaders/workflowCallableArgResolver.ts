@@ -312,10 +312,20 @@ function expandStepFields(
 
   expandedStep.args = expandWorkflowCallArgs(step, params, resolvedArgs, stepPath);
 
-  if (expandedStep.parallel) {
+  if (Array.isArray(expandedStep.parallel)) {
     expandedStep.parallel = expandedStep.parallel.map((substep, index) =>
       expandStepFields(substep as RawWorkflowStep, params, resolvedArgs, [...stepPath, 'parallel', index]),
     ) as RawWorkflowStep['parallel'];
+  } else if (expandedStep.parallel) {
+    expandedStep.parallel = {
+      ...expandedStep.parallel,
+      fixed: expandedStep.parallel.fixed.map((substep, index) =>
+        expandStepFields(substep as RawWorkflowStep, params, resolvedArgs, [...stepPath, 'parallel', 'fixed', index]),
+      ),
+      pool: expandedStep.parallel.pool.map((substep, index) =>
+        expandStepFields(substep as RawWorkflowStep, params, resolvedArgs, [...stepPath, 'parallel', 'pool', index]),
+      ),
+    } as RawWorkflowStep['parallel'];
   }
 
   return expandedStep;

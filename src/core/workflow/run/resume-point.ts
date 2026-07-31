@@ -5,6 +5,7 @@ import type {
   WorkflowResumePointEntry,
   WorkflowStep,
 } from '../../models/types.js';
+import { getAllParallelSubSteps } from '../../models/types.js';
 import { getWorkflowResumeFrameKind, isWorkflowCallStep } from '../step-kind.js';
 import { workflowEntriesMatch, workflowEntryMatchesWorkflow } from '../workflow-reference.js';
 import {
@@ -77,8 +78,10 @@ export function matchesResumeStackPrefix(
 
   return resumeStackPrefix.every((entry, index) => {
     const candidate = stack[index];
-    return candidate !== undefined
-      && workflowEntriesMatch(candidate, entry)
+    if (candidate === undefined) {
+      return false;
+    }
+    return workflowEntriesMatch(candidate, entry)
       && candidate.step === entry.step
       && candidate.kind === entry.kind
       && candidate.occurrence === entry.occurrence;
@@ -137,10 +140,10 @@ function canResolveResumePointSuffix(
       candidateSteps = childWorkflow.steps;
       continue;
     }
-    if (step.parallel === undefined || step.parallel.length === 0) {
+    if (step.parallel === undefined || getAllParallelSubSteps(step.parallel).length === 0) {
       return false;
     }
-    candidateSteps = step.parallel;
+    candidateSteps = getAllParallelSubSteps(step.parallel);
   }
 
   return true;
@@ -157,7 +160,10 @@ export function trimResumePointStackForWorkflow(
 
   for (let stackLength = resumePoint.stack.length; stackLength > resumeStackPrefix.length; stackLength -= 1) {
     const candidateStack = resumePoint.stack.slice(0, stackLength);
-    if (!matchesResumeStackPrefix(candidateStack, resumeStackPrefix)) {
+    if (!matchesResumeStackPrefix(
+      candidateStack,
+      resumeStackPrefix,
+    )) {
       continue;
     }
 

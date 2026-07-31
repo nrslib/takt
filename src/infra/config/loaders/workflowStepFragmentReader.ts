@@ -1,5 +1,6 @@
 import { closeSync, constants, fstatSync, openSync, readSync } from 'node:fs';
 import { parse as parseYaml } from 'yaml';
+import { enumerateRawParallelSubSteps } from './workflowParallelTraversal.js';
 
 export type RawRecord = Record<string, unknown>;
 
@@ -40,9 +41,8 @@ export function collectStepFragmentUses(value: unknown, refs = new Set<string>()
   visited.add(value);
   const uses = getOwnValue(value, 'uses');
   if (typeof uses === 'string') refs.add(uses);
-  const parallel = getOwnValue(value, 'parallel');
-  if (Array.isArray(parallel)) {
-    for (const subStep of parallel) collectStepFragmentUses(subStep, refs, visited);
+  for (const { subStep } of enumerateRawParallelSubSteps(getOwnValue(value, 'parallel'), ['parallel'])) {
+    collectStepFragmentUses(subStep, refs, visited);
   }
   visited.delete(value);
   return refs;
@@ -79,34 +79,6 @@ export function formatPropertyPath(path: readonly PropertyKey[]): string {
       ? `[${segment}]`
       : `${index === 0 ? '' : '.'}${String(segment)}`
   )).join('');
-}
-
-function assertStepFragmentDoesNotDefineRules(
-  step: RawRecord,
-  workflowPath: string,
-  ref: string,
-  sourcePath: string,
-  stepPath: readonly PropertyKey[] = [],
-): void {
-  if (Object.hasOwn(step, 'rules')) {
-    const rulesPath = formatPropertyPath([...stepPath, 'rules']);
-    throw workflowError(
-      workflowPath,
-      `step fragment "${ref}" at ${sourcePath} must not define "${rulesPath}"; define rules on each concrete workflow step that uses the fragment`,
-    );
-  }
-  const parallel = getOwnValue(step, 'parallel');
-  if (!Array.isArray(parallel)) return;
-  for (const [index, subStep] of parallel.entries()) {
-    if (!isRecord(subStep)) continue;
-    assertStepFragmentDoesNotDefineRules(
-      subStep,
-      workflowPath,
-      ref,
-      sourcePath,
-      [...stepPath, 'parallel', index],
-    );
-  }
 }
 
 export function readStepFragment(path: string, workflowPath: string, ref: string): RawRecord {
@@ -159,7 +131,6 @@ export function readStepFragment(path: string, workflowPath: string, ref: string
     throw workflowError(workflowPath, `step fragment "${ref}" at ${path} must contain one step object`);
   }
   assertSafeStepFragmentObject(parsed, workflowPath, `step fragment "${ref}" at ${path}`);
-  assertStepFragmentDoesNotDefineRules(parsed, workflowPath, ref, path);
   return parsed;
 }
 

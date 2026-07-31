@@ -538,6 +538,287 @@ describe('WorkflowConfigRawSchema with parallel steps', () => {
     }
   });
 
+  it('should continue to accept the legacy parallel array form', () => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'legacy-reviewers',
+      parallel: [
+        { name: 'architecture', instruction: 'Review architecture' },
+      ],
+      rules: [{ condition: 'all("approved")', next: 'COMPLETE' }],
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('should accept dynamic parallel fixed and pool sub-steps with replace as the default selection mode', () => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'reviewers',
+      parallel: {
+        fixed: [
+          {
+            name: 'architecture',
+            instruction: 'Review architecture',
+            rules: [{ condition: 'approved', next: 'COMPLETE' }],
+          },
+        ],
+        pool: [
+          {
+            name: 'frontend',
+            description: 'Review frontend changes',
+            instruction: 'Review frontend implementation',
+            rules: [{ condition: 'approved', next: 'COMPLETE' }],
+          },
+        ],
+      },
+      rules: [{ condition: 'all("approved")', next: 'COMPLETE' }],
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    expect(result.data.parallel).toMatchObject({
+      selection: { mode: 'replace' },
+      fixed: [{ name: 'architecture' }],
+      pool: [{ name: 'frontend', description: 'Review frontend changes' }],
+    });
+  });
+
+  it.each([
+    ['missing pool', { fixed: [] }],
+    ['empty pool', { fixed: [], pool: [] }],
+    ['unknown selection mode', {
+      pool: [{ name: 'frontend', description: 'Review frontend changes', instruction: 'Review frontend' }],
+      selection: { mode: 'latest' },
+    }],
+  ])('should reject dynamic parallel with %s', (_name, parallel) => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'reviewers',
+      parallel,
+      rules: [{ condition: 'all("approved")', next: 'COMPLETE' }],
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it('should reject a dynamic pool sub-step without a description', () => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'reviewers',
+      parallel: {
+        pool: [{ name: 'frontend', instruction: 'Review frontend' }],
+      },
+      rules: [{ condition: 'all("approved")', next: 'COMPLETE' }],
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it.each([
+    ['a null fixed list', { fixed: null, pool: [{ name: 'frontend', description: 'Review frontend', instruction: 'Review frontend' }] }],
+    ['an object fixed list', { fixed: {}, pool: [{ name: 'frontend', description: 'Review frontend', instruction: 'Review frontend' }] }],
+    ['a null pool list', { fixed: [], pool: null }],
+    ['an object pool list', { fixed: [], pool: {} }],
+    ['a blank pool description', { fixed: [], pool: [{ name: 'frontend', description: '   ', instruction: 'Review frontend' }] }],
+  ])('should reject dynamic parallel with %s at the schema boundary', (_label, parallel) => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'reviewers',
+      parallel,
+      rules: [{ condition: 'all("approved")', next: 'COMPLETE' }],
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it.each(['fixed', 'pool'] as const)('should reject a workflow_call sub-step in dynamic %s', (branch) => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'reviewers',
+      parallel: {
+        fixed: branch === 'fixed' ? [
+          {
+            name: 'delegated-review',
+            kind: 'workflow_call',
+            call: 'shared-review',
+          },
+        ] : [],
+        pool: branch === 'pool' ? [{
+          name: 'delegated-review',
+          description: 'Delegate review',
+          kind: 'workflow_call',
+          call: 'shared-review',
+        }] : [{
+          name: 'frontend',
+          description: 'Review frontend',
+          instruction: 'Review frontend',
+        }],
+      },
+      rules: [{ condition: 'all("approved")', next: 'COMPLETE' }],
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it('should reject fixed-position aggregate conditions on a dynamic parallel step', () => {
+    expect(() => normalizeWorkflowConfig({
+      name: 'invalid-dynamic-position-aggregate',
+      initial_step: 'reviewers',
+      max_steps: 1,
+      steps: [{
+        name: 'reviewers',
+        parallel: {
+          pool: [
+            {
+              name: 'frontend',
+              description: 'Review frontend changes',
+              instruction: 'Review frontend',
+              rules: [{ condition: 'approved', next: 'COMPLETE' }],
+            },
+          ],
+        },
+        rules: [{ condition: 'all("approved", "needs_fix")', next: 'COMPLETE' }],
+      }],
+    }, process.cwd())).toThrow('require exactly one bare result label');
+  });
+
+  it.each([
+    'all("when(true)")',
+    'all("approved && when(true)")',
+  ])('should reject non-semantic dynamic aggregate target %s', (condition) => {
+    expect(() => normalizeWorkflowConfig({
+      name: 'invalid-dynamic-semantic-aggregate',
+      initial_step: 'reviewers',
+      max_steps: 1,
+      steps: [{
+        name: 'reviewers',
+        parallel: {
+          pool: [{
+            name: 'frontend',
+            description: 'Review frontend changes',
+            instruction: 'Review frontend',
+            rules: [{ condition: 'approved', next: 'COMPLETE' }],
+          }],
+        },
+        rules: [{ condition, next: 'COMPLETE' }],
+      }],
+    }, process.cwd())).toThrow('require exactly one bare result label');
+  });
+
+  it('should accept a parent when() clause combined with a semantic dynamic aggregate', () => {
+    expect(() => normalizeWorkflowConfig({
+      name: 'dynamic-parent-when',
+      initial_step: 'reviewers',
+      max_steps: 1,
+      steps: [{
+        name: 'reviewers',
+        parallel: {
+          pool: [{
+            name: 'frontend',
+            description: 'Review frontend changes',
+            instruction: 'Review frontend',
+            rules: [{ condition: 'approved', next: 'COMPLETE' }],
+          }],
+        },
+        rules: [{ condition: 'all("approved") && when(true)', next: 'COMPLETE' }],
+      }],
+    }, process.cwd())).not.toThrow();
+  });
+
+  it('should accept a dynamic candidate that provides the aggregate label through a compound rule', () => {
+    expect(() => normalizeWorkflowConfig({
+      name: 'dynamic-compound-result-rule',
+      initial_step: 'reviewers',
+      max_steps: 1,
+      steps: [{
+        name: 'reviewers',
+        parallel: {
+          pool: [{
+            name: 'frontend',
+            description: 'Review frontend changes',
+            instruction: 'Review frontend',
+            rules: [{ condition: 'approved && when(true)', next: 'COMPLETE' }],
+          }],
+        },
+        rules: [{ condition: 'all("approved")', next: 'COMPLETE' }],
+      }],
+    }, process.cwd())).not.toThrow();
+  });
+
+  it('should reject a dynamic candidate that does not define the parent aggregate label after normalization', () => {
+    expect(() => normalizeWorkflowConfig({
+      name: 'dynamic-aggregate-contract',
+      initial_step: 'reviewers',
+      max_steps: 1,
+      steps: [{
+        name: 'reviewers',
+        parallel: {
+          fixed: [{
+            name: 'architecture',
+            instruction: 'Review architecture',
+            rules: [{ condition: 'approved', next: 'COMPLETE' }],
+          }],
+          pool: [{
+            name: 'frontend',
+            description: 'Review frontend changes',
+            instruction: 'Review frontend',
+            rules: [{ condition: 'needs_fix', next: 'COMPLETE' }],
+          }],
+        },
+        rules: [{ condition: 'all("approved")', next: 'COMPLETE' }],
+      }],
+    }, process.cwd())).toThrow('requires sub-step "frontend" to define result label "approved"');
+  });
+
+  it('should normalize dynamic parallel into a discriminated fixed and pool model', () => {
+    const config = normalizeWorkflowConfig({
+      name: 'dynamic-domain-model',
+      initial_step: 'reviewers',
+      max_steps: 1,
+      steps: [{
+        name: 'reviewers',
+        parallel: {
+          fixed: [{
+            name: 'architecture',
+            instruction: 'Review architecture',
+            rules: [{ condition: 'approved', next: 'COMPLETE' }],
+          }],
+          pool: [{
+            name: 'frontend',
+            description: 'Review frontend',
+            instruction: 'Review frontend',
+            rules: [{ condition: 'approved', next: 'COMPLETE' }],
+          }],
+        },
+        rules: [{ condition: 'any("approved")', next: 'COMPLETE' }],
+      }],
+    }, process.cwd());
+
+    expect(config.steps[0]?.parallel).toMatchObject({
+      kind: 'dynamic',
+      fixed: [{ name: 'architecture' }],
+      pool: [{ name: 'frontend' }],
+      selection: { mode: 'replace' },
+    });
+    expect(Array.isArray(config.steps[0]?.parallel)).toBe(false);
+  });
+
+  it('should reject a fixed-position aggregate condition combined with when() on a dynamic parallel step', () => {
+    expect(() => normalizeWorkflowConfig({
+      name: 'invalid-dynamic-position-aggregate-with-when',
+      initial_step: 'reviewers',
+      max_steps: 1,
+      steps: [{
+        name: 'reviewers',
+        parallel: {
+          pool: [{
+            name: 'frontend',
+            description: 'Review frontend changes',
+            instruction: 'Review frontend',
+            rules: [{ condition: 'approved', next: 'COMPLETE' }],
+          }],
+        },
+        rules: [{ condition: 'all("approved", "needs_fix") && when(true)', next: 'COMPLETE' }],
+      }],
+    }, process.cwd())).toThrow('require exactly one bare result label');
+  });
+
   it('Given workflow YAML contains a parallel workflow_call sub-step, When normalizing, Then the sub-step remains a workflow_call', () => {
     const raw = {
       name: 'parallel-workflow-call-normalization',

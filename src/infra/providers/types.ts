@@ -1,6 +1,6 @@
 import type { AgentResponse, Language, PermissionMode, McpServerConfig, StepProviderOptions } from '../../core/models/index.js';
 import type { ProviderType as SharedProviderType } from '../../shared/types/provider.js';
-import type { StreamCallback } from '../../shared/types/provider.js';
+import type { InternalAgentIsolation, StreamCallback } from '../../shared/types/provider.js';
 import type { PermissionHandler, AskUserQuestionHandler } from '../../core/workflow/types.js';
 
 export interface AgentSetup {
@@ -20,6 +20,7 @@ export interface ProviderCallOptions {
   executionProfile?: ProviderExecutionProfile;
   abortSignal?: AbortSignal;
   sessionId?: string;
+  internalAgentIsolation?: InternalAgentIsolation;
   model?: string;
   allowedTools?: string[];
   mcpServers?: Record<string, McpServerConfig>;
@@ -58,6 +59,7 @@ export interface Provider {
   supportsStructuredOutput: boolean;
   supportsNativeImageInput: boolean;
   supportsIsolatedStructuredExecution?: boolean;
+  supportsStrictInternalAgentIsolation: boolean;
   getRuntimeInstructions(allowedTools?: string[], permissionMode?: import('../../core/models/index.js').PermissionMode, networkAccess?: boolean): string | null;
   keepsAllowedToolWithoutEdit(tool: string): boolean;
   setup(config: AgentSetup): ProviderAgent;

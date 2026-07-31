@@ -173,7 +173,13 @@ export async function executeDefaultAction(task?: string): Promise<void> {
   }
 
   const previewCount = globalConfig.interactivePreviewSteps;
-  const workflowDesc = getWorkflowDescription(workflowId, resolvedCwd, previewCount);
+  const workflowDesc = getWorkflowDescription(
+    workflowId,
+    resolvedCwd,
+    previewCount,
+    resolvedCwd,
+    agentOverrides,
+  );
 
   const availableInteractiveModes = sourceContext && !directTask
     ? INTERACTIVE_MODES.filter((mode) => mode !== 'passthrough')

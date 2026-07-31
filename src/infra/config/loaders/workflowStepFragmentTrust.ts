@@ -3,6 +3,7 @@ import { getOwnValue, isRecord, type RawRecord, workflowError } from './workflow
 import { isPathWithin, type WorkflowStepFragmentProvenance } from './workflowStepFragmentProvenance.js';
 import { resolveWorkflowTrustInfo, type WorkflowTrustInfo } from './workflowTrustSource.js';
 import { getWorkflowStepKind } from '../../../core/models/workflow-step-kind.js';
+import { enumerateRawParallelSubSteps } from './workflowParallelTraversal.js';
 
 interface TrustOptions {
   context?: FacetResolutionContext;
@@ -60,8 +61,9 @@ export function assertWorkflowCallTrustBoundaries(raw: RawRecord, options: Trust
     if (!isRecord(step)) return;
     assertWorkflowCallTrustBoundary(step, options, provenance, stepPath);
     assertAllowGitCommitTrustBoundary(step, options, provenance, stepPath);
-    const parallel = getOwnValue(step, 'parallel');
-    if (Array.isArray(parallel)) parallel.forEach((subStep, index) => visit(subStep, [...stepPath, 'parallel', index]));
+    for (const { subStep, path } of enumerateRawParallelSubSteps(getOwnValue(step, 'parallel'), [...stepPath, 'parallel'])) {
+      visit(subStep, path);
+    }
   };
   steps.forEach((step, index) => visit(step, ['steps', index]));
 }

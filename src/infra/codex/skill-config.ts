@@ -15,15 +15,15 @@ const MAX_SCAN_DEPTH = 6;
 const MAX_DIRECTORIES_PER_ROOT = 2_000;
 const MAX_ENTRIES_PER_ROOT = 20_000;
 
-interface SkillInheritance {
+export interface CodexSkillScopes {
   repo: boolean;
   user: boolean;
 }
 
-interface SkillConfigInput {
+export interface CodexSkillConfigInput {
   cwd: string;
   env: Readonly<Record<string, string | undefined>>;
-  inheritance: SkillInheritance;
+  inheritance: CodexSkillScopes;
 }
 
 interface TraversalState {
@@ -193,9 +193,32 @@ function getUserSkillRoots(
   };
 }
 
-export function buildCodexSkillConfig(input: SkillConfigInput): CodexOptions['config'] | undefined {
+export function buildCodexSkillConfig(input: CodexSkillConfigInput): CodexOptions['config'] | undefined {
   if (input.inheritance.repo && input.inheritance.user) {
     return undefined;
+  }
+
+  return buildSkillConfig(
+    collectSkillPaths(input, {
+      repo: !input.inheritance.repo,
+      user: !input.inheritance.user,
+    }),
+    false,
+  );
+}
+
+export function buildIsolatedCodexSkillConfig(
+  input: CodexSkillConfigInput,
+): CodexOptions['config'] | undefined {
+  return buildSkillConfig(collectSkillPaths(input, input.inheritance), true);
+}
+
+function collectSkillPaths(
+  input: CodexSkillConfigInput,
+  scopes: CodexSkillScopes,
+): string[] {
+  if (!scopes.repo && !scopes.user) {
+    return [];
   }
 
   const userScope = getUserSkillRoots(input.env);
@@ -203,8 +226,8 @@ export function buildCodexSkillConfig(input: SkillConfigInput): CodexOptions['co
     .map(realpathIfResolvable)
     .filter((entry): entry is string => entry !== undefined);
   const roots = [
-    ...(input.inheritance.repo ? [] : getRepoSkillRoots(input.cwd)),
-    ...(input.inheritance.user ? [] : userScope.roots),
+    ...(scopes.repo ? getRepoSkillRoots(input.cwd) : []),
+    ...(scopes.user ? userScope.roots : []),
   ];
   const visitedDirectories = new Set<string>();
   const skillFiles = new Set<string>();
@@ -219,13 +242,19 @@ export function buildCodexSkillConfig(input: SkillConfigInput): CodexOptions['co
     );
   }
 
-  const paths = [...skillFiles].sort();
+  return [...skillFiles].sort();
+}
+
+function buildSkillConfig(
+  paths: readonly string[],
+  enabled: boolean,
+): CodexOptions['config'] | undefined {
   if (paths.length === 0) {
     return undefined;
   }
   return {
     skills: {
-      config: paths.map((path) => ({ path, enabled: false })),
+      config: paths.map((path) => ({ path, enabled })),
     },
   };
 }

@@ -123,6 +123,31 @@ describe('formatStepPreviews', () => {
     expect(result).toContain('**Provider:** codex');
     expect(result).toContain('**Model:** gpt-5.5');
   });
+
+  it('selectorの非機密metadata・readonly・tool-free契約をworkflow summaryに表示する', () => {
+    const result = formatStepPreviews([
+      {
+        name: 'dynamic-selector',
+        personaDisplayName: 'TAKT internal selector',
+        personaContent: '',
+        instructionContent: '',
+        allowedTools: [],
+        canEdit: false,
+        provider: 'codex',
+        model: 'gpt-selector',
+        providerSource: 'project',
+        modelSource: 'global',
+        permissionMode: 'readonly',
+        internalAgent: true,
+      },
+    ], 'en');
+
+    expect(result).toContain('**Provider source:** project');
+    expect(result).toContain('**Model source:** global');
+    expect(result).toContain('**Permission:** readonly');
+    expect(result).toContain('**Tools:** None');
+    expect(result).toContain('**Edit:** No');
+  });
 });
 
 describe('buildSummaryActionOptions', () => {

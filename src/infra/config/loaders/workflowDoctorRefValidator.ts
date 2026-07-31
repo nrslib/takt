@@ -9,6 +9,7 @@ import {
 import { isWorkflowParamReference } from './workflowCallableArgResolver.js';
 import type { FacetType } from '../paths.js';
 import type { WorkflowDiagnostic } from './workflowDoctorTypes.js';
+import { enumerateParallelSubSteps } from './workflowParallelTraversal.js';
 type RawWorkflow = ReturnType<typeof WorkflowConfigRawSchema.parse>;
 type RawStep = RawWorkflow['steps'][number];
 type RawParamDefinition = NonNullable<NonNullable<RawWorkflow['subworkflow']>['params']>[string];
@@ -145,7 +146,10 @@ function collectUsedLocalKeys(raw: RawWorkflow): Record<'personas' | 'policies' 
         used.report_formats.add(ref);
       }
     }
-    for (const sub of step.parallel ?? []) {
+    const parallelSubSteps = step.parallel === undefined
+      ? []
+      : enumerateParallelSubSteps(step.parallel, []);
+    for (const { subStep: sub } of parallelSubSteps) {
       collectStep(sub as RawStep);
     }
   };
@@ -259,7 +263,10 @@ function validateStepRefs(
       );
     }
   }
-  for (const [subStepIndex, sub] of (step.parallel ?? []).entries()) {
+  const parallelSubSteps = step.parallel === undefined
+    ? []
+    : enumerateParallelSubSteps(step.parallel, [...stepPath, 'parallel']);
+  for (const { subStep: sub, path } of parallelSubSteps) {
     validateStepRefs(
       raw,
       sub as RawStep,
@@ -267,7 +274,7 @@ function validateStepRefs(
       context,
       diagnostics,
       `${label}/${sub.name}`,
-      [...stepPath, 'parallel', subStepIndex],
+      path,
     );
   }
 }

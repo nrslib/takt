@@ -4,6 +4,7 @@ import type {
   FindingContractConfig,
   WorkflowConfig,
   WorkflowCallStep,
+  WorkflowCallInvocationRecord,
   WorkflowMaxSteps,
   WorkflowResumePointEntry,
   WorkflowState,
@@ -22,6 +23,9 @@ import { RoutingRuntime } from '../auto-routing/runtime.js';
 import { buildWorkflowResumePointEntry, workflowEntryMatchesWorkflow } from '../workflow-reference.js';
 import { buildWorkflowCallSiteIdentity } from '../workflow-call-site-identity.js';
 import { buildWorkflowStackStepIterationIdentity } from '../step-iteration-identity.js';
+import {
+  workflowCallNamespaceSegmentMatchesInvocation,
+} from '../workflow-call-namespace.js';
 import type {
   StepProviderInfo,
   AutoRoutingEstimatorSource,
@@ -37,6 +41,7 @@ import { getProviderValidationErrorSource } from '../provider-validation-error.j
 import { withWorkflowConfigErrorPath } from '../workflow-config-error.js';
 import { findWorkflowStepLocation } from '../workflow-step-location.js';
 import { translateWorkflowConfigError } from '../../../shared/workflowConfigMetadata.js';
+import { restoreWorkflowCallInvocationEvidence } from '../workflow-call-invocation-index.js';
 
 export interface WorkflowCallSessionUpdate {
   expectedSessionId: string | undefined;
@@ -203,7 +208,10 @@ export type WorkflowCallExecutionResult = WorkflowState & {
 export class WorkflowCallExecutor {
   private readonly childRoutingRuntimes = new Map<string, ChildRoutingRuntime>();
 
-  constructor(private readonly deps: WorkflowCallExecutorDeps) {}
+  constructor(private readonly deps: WorkflowCallExecutorDeps) {
+    deps.sharedRuntime.workflowCallInvocationEvidence ??=
+      restoreWorkflowCallInvocationEvidence(deps.getOptions().resumePoint);
+  }
 
   private getChildRoutingRuntime(
     childWorkflow: WorkflowConfig,
@@ -272,19 +280,19 @@ export class WorkflowCallExecutor {
    * occurrence をステップ名に組み合わせ、ループの各回を区別する。resume
    * continuation では source frame の occurrence を再利用する。
    */
-  private buildWorkflowCallNamespace(runPathSegment: string): string[] {
+  private buildWorkflowCallNamespace(record: WorkflowCallInvocationRecord): string[] {
     const baseNamespace = this.deps.getOptions().runPathNamespace ?? [];
-
     return [
       ...baseNamespace,
       'subworkflows',
-      runPathSegment,
+      record.report_namespace_segment,
     ];
   }
 
   private buildCurrentWorkflowCallFrame(
     step: WorkflowCallStep,
     occurrence: number,
+    callInstance: number,
   ): WorkflowResumePointEntry {
     return buildWorkflowResumePointEntry(
       this.deps.getConfig(),
@@ -292,6 +300,7 @@ export class WorkflowCallExecutor {
       'workflow_call',
       occurrence,
       this.deps.state.stepIterations,
+      callInstance,
     );
   }
 
@@ -349,6 +358,53 @@ export class WorkflowCallExecutor {
       frame,
       ...(resumePoint !== undefined ? { resumePoint } : {}),
     };
+  }
+
+  private recordWorkflowCallInvocation(
+    step: WorkflowCallStep,
+    childWorkflow: WorkflowConfig,
+    occurrence: number,
+    resumeStackPrefix: readonly WorkflowResumePointEntry[],
+  ): WorkflowCallInvocationRecord {
+    const existing = this.deps.sharedRuntime.workflowCallInvocationEvidence!.index.get(
+      this.deps.getConfig(),
+      step.name,
+      resumeStackPrefix,
+    );
+    if (existing?.call_instance === occurrence) {
+      if (!workflowCallNamespaceSegmentMatchesInvocation(
+        existing.report_namespace_segment,
+        step.name,
+        childWorkflow.name,
+      )) {
+        throw new Error(`workflow_call step "${step.name}" report namespace does not match the resolved child workflow`);
+      }
+      return existing;
+    }
+    const record = {
+      call_instance: occurrence,
+      report_namespace_segment: buildWorkflowCallSiteIdentity({
+        stack: [
+          ...resumeStackPrefix,
+          buildWorkflowResumePointEntry(
+            this.deps.getConfig(),
+            step.name,
+            'workflow_call',
+            occurrence,
+            this.deps.state.stepIterations,
+            occurrence,
+          ),
+        ],
+        childWorkflow,
+      }).runPathSegment,
+    };
+    this.deps.sharedRuntime.workflowCallInvocationEvidence!.index.record(
+      this.deps.getConfig(),
+      step.name,
+      resumeStackPrefix,
+      record,
+    );
+    return record;
   }
 
   private relayChildEvents(childEngine: WorkflowCallChildEngine, resumeStepName: string): void {
@@ -456,6 +512,17 @@ export class WorkflowCallExecutor {
     if (occurrence === undefined) {
       throw new Error(`workflow_call step "${request.step.name}" has no occurrence`);
     }
+    const invocation = this.recordWorkflowCallInvocation(
+      request.step,
+      request.childWorkflow,
+      occurrence,
+      executeOptions.resumeStackPrefix,
+    );
+    this.deps.setActiveResumePoint(
+      request.step,
+      this.deps.state.iteration,
+      occurrence,
+    );
     const continuation = this.resolveChildContinuation(
       request.step,
       request.childWorkflow,
@@ -464,7 +531,11 @@ export class WorkflowCallExecutor {
     );
     const childResumePoint = continuation?.resumePoint;
     const workflowCallFrame = continuation?.frame
-      ?? this.buildCurrentWorkflowCallFrame(request.step, occurrence);
+      ?? this.buildCurrentWorkflowCallFrame(
+        request.step,
+        occurrence,
+        invocation.call_instance,
+      );
     if (workflowCallFrame.occurrence !== occurrence) {
       throw new Error(
         `workflow_call step "${request.step.name}" continuation occurrence does not match active occurrence`,
@@ -523,9 +594,7 @@ export class WorkflowCallExecutor {
       resumePoint: childResumePoint,
       initialIteration: this.deps.state.iteration,
       reportDirName: this.deps.runPaths.slug,
-      runPathNamespace: this.buildWorkflowCallNamespace(
-        workflowCallSite.runPathSegment,
-      ),
+      runPathNamespace: this.buildWorkflowCallNamespace(invocation),
       findingCallNamespace: workflowCallSite.key,
       workflowCallSiteIdentity: workflowCallSite.key,
       sharedRuntime: this.deps.sharedRuntime,

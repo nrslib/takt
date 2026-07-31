@@ -115,6 +115,30 @@ export function semanticLabelsOf(condition: WorkflowRuleCondition): string[] {
   }
 }
 
+export function aggregateConditionsOf(
+  condition: WorkflowRuleCondition,
+): Extract<WorkflowRuleCondition, { kind: 'aggregate' }>[] {
+  if (condition.kind === 'aggregate') {
+    return [condition];
+  }
+  if (condition.kind === 'and') {
+    return [
+      ...aggregateConditionsOf(condition.left),
+      ...aggregateConditionsOf(condition.right),
+    ];
+  }
+  return [];
+}
+
+export function dynamicParallelAggregateTargetLabel(
+  condition: Extract<WorkflowRuleCondition, { kind: 'aggregate' }>,
+): string | undefined {
+  const [target] = condition.targetConditions;
+  return condition.targetConditions.length === 1 && target?.kind === 'semantic'
+    ? target.label
+    : undefined;
+}
+
 export function findSemanticAppendixConflicts(
   rules: readonly SemanticAppendixRule[],
 ): SemanticAppendixConflict[] {

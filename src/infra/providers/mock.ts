@@ -19,6 +19,7 @@ function toMockOptions(options: ProviderCallOptions): MockCallOptions {
     cwd: options.cwd,
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
+    model: options.model,
     onStream: options.onStream,
     allowedTools: options.allowedTools,
   };
@@ -29,6 +30,7 @@ export class MockProvider implements Provider {
   readonly supportsStructuredOutput = true;
   readonly supportsNativeImageInput = false;
   readonly supportsIsolatedStructuredExecution = true;
+  readonly supportsStrictInternalAgentIsolation = true;
 
   getRuntimeInstructions(_allowedTools?: string[]): string | null {
     return null;

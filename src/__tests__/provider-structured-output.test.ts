@@ -196,6 +196,26 @@ describe('ClaudeProvider — structured output', () => {
     expect(result.structuredOutput).toEqual({ step: 1 });
   });
 
+  it('strict read-only internal agent isolation を Claude SDK client に渡す', async () => {
+    mockCallClaudeCustom.mockResolvedValue(doneResponse('selector', {}));
+
+    const agent = new ClaudeProvider().setup({ name: 'selector', systemPrompt: 'Select reviewers.' });
+    await agent.call('prompt', {
+      cwd: '/tmp',
+      internalAgentIsolation: 'strict-readonly',
+      permissionMode: 'readonly',
+      allowedTools: [],
+      mcpServers: {},
+    });
+
+    expect(mockCallClaudeCustom.mock.calls[0]?.[3]).toMatchObject({
+      internalAgentIsolation: 'strict-readonly',
+      permissionMode: 'readonly',
+      allowedTools: [],
+      mcpServers: {},
+    });
+  });
+
   it('structuredOutput がない場合は undefined', async () => {
     mockCallClaude.mockResolvedValue(doneResponse('coder'));
 
@@ -366,6 +386,34 @@ describe('CodexProvider — structured output', () => {
 
     const opts = mockCallCodex.mock.calls[0]?.[2];
     expect(opts).toHaveProperty('skills', { repo: false, user: false });
+  });
+
+  it('strict read-only internal agent isolation を Codex client に渡す', async () => {
+    mockCallCodexCustom.mockResolvedValue(doneResponse('selector', {}));
+
+    const agent = new CodexProvider().setup({ name: 'selector', systemPrompt: 'Select reviewers.' });
+    await agent.call('prompt', {
+      cwd: '/tmp',
+      internalAgentIsolation: 'strict-readonly',
+      permissionMode: 'readonly',
+      allowedTools: [],
+      mcpServers: {},
+      outputSchema: SCHEMA,
+      providerOptions: {
+        codex: {
+          networkAccess: false,
+          skills: { repo: true, user: false },
+        },
+      },
+    });
+
+    expect(mockCallCodexCustom.mock.calls[0]?.[3]).toMatchObject({
+      internalAgentIsolation: 'strict-readonly',
+      permissionMode: 'readonly',
+      outputSchema: SCHEMA,
+      networkAccess: false,
+      skills: { repo: true, user: false },
+    });
   });
 
   it('childProcessEnv を callCodex に渡す', async () => {

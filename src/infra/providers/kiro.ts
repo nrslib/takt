@@ -41,6 +41,7 @@ function toKiroOptions(options: ProviderCallOptions, systemPrompt?: string): Kir
 export class KiroProvider implements Provider {
   readonly supportsStructuredOutput = false;
   readonly supportsNativeImageInput = false;
+  readonly supportsStrictInternalAgentIsolation = false;
 
   getRuntimeInstructions(_allowedTools?: string[]): string | null {
     return null;

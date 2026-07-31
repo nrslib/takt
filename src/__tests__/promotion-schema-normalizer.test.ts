@@ -230,15 +230,6 @@ describe('WorkflowStepRawSchema promotion', () => {
     });
 
     expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.issues.some((issue) =>
-        issue.code === 'invalid_union'
-        && expectPath(issue.path, ['parallel', 0])
-        && issue.errors.some((branch) =>
-          branch.some((branchIssue) => expectPath(branchIssue.path, ['promotion'])),
-        ),
-      )).toBe(true);
-    }
   });
 
   it('rejects promotion on delegated root agent steps', () => {

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockInitWorkflowCommand = vi.fn();
 const mockDoctorWorkflowCommand = vi.fn();
+const mockPreviewPrompts = vi.fn();
 
 const { rootCommand, commandActions, commandMocks } = vi.hoisted(() => {
   const commandActions = new Map<string, (...args: unknown[]) => void>();
@@ -63,12 +64,18 @@ vi.mock('../features/workflowAuthoring/doctor.js', () => ({
   doctorWorkflowCommand: (...args: unknown[]) => mockDoctorWorkflowCommand(...args),
 }));
 
+vi.mock('../features/prompt/preview.js', () => ({
+  previewPrompts: (...args: unknown[]) => mockPreviewPrompts(...args),
+}));
+
 import '../app/cli/commands.js';
 
 describe('CLI workflow command', () => {
   beforeEach(() => {
     mockInitWorkflowCommand.mockClear();
     mockDoctorWorkflowCommand.mockClear();
+    mockPreviewPrompts.mockClear();
+    rootCommand.opts.mockReturnValue({});
   });
 
   it('should register workflow root command and subcommands', () => {
@@ -134,6 +141,24 @@ describe('CLI workflow command', () => {
 
     await doctorAction?.(['default', './flow.yaml']);
 
-    expect(mockDoctorWorkflowCommand).toHaveBeenCalledWith(['default', './flow.yaml'], '/test/cwd');
+    expect(mockDoctorWorkflowCommand).toHaveBeenCalledWith(['default', './flow.yaml'], '/test/cwd', undefined);
+  });
+
+  it('should propagate CLI execution overrides to prompt preview and workflow doctor', async () => {
+    rootCommand.opts.mockReturnValue({ provider: 'mock', model: 'cli-model' });
+    const promptAction = commandActions.get('root.prompt');
+    const doctorAction = commandActions.get('root.workflow.doctor');
+    const expectedOverrides = {
+      provider: 'mock',
+      providerSource: 'cli',
+      model: 'cli-model',
+      modelSource: 'cli',
+    };
+
+    await promptAction?.('default');
+    await doctorAction?.(['default']);
+
+    expect(mockPreviewPrompts).toHaveBeenCalledWith('/test/cwd', 'default', expectedOverrides);
+    expect(mockDoctorWorkflowCommand).toHaveBeenCalledWith(['default'], '/test/cwd', expectedOverrides);
   });
 });

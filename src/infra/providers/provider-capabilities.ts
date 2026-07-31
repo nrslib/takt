@@ -1,5 +1,6 @@
 import type { ProviderType } from './types.js';
 import { getProvider } from './index.js';
+import { createStrictInternalAgentIsolationError } from '../../shared/types/provider.js';
 
 const MCP_SERVER_PROVIDERS = new Set<ProviderType>([
   'claude',
@@ -44,7 +45,16 @@ interface ProviderCapabilities {
   supportsClaudeAllowedTools: boolean;
   supportsOpenCodeAllowedTools: boolean;
   supportsMaxTurns: boolean;
+  supportsStrictInternalAgentIsolation: boolean;
 }
+
+const STRICT_INTERNAL_AGENT_NATIVE_TOOLS: Readonly<Partial<Record<ProviderType, readonly string[]>>> = {
+  codex: ['request_user_input', 'update_plan', 'view_image', 'web_search'],
+  claude: [],
+  'claude-sdk': [],
+  'claude-terminal': [],
+  mock: [],
+};
 
 function resolveProviderCapabilities(
   provider: ProviderType | undefined,
@@ -65,7 +75,42 @@ function resolveProviderCapabilities(
     supportsClaudeAllowedTools: CLAUDE_ALLOWED_TOOLS_PROVIDERS.has(provider),
     supportsOpenCodeAllowedTools: OPENCODE_ALLOWED_TOOLS_PROVIDERS.has(provider),
     supportsMaxTurns: MAX_TURNS_PROVIDERS.has(provider),
+    supportsStrictInternalAgentIsolation: providerImpl.supportsStrictInternalAgentIsolation,
   };
+}
+
+export function providerSupportsStrictInternalAgentIsolation(
+  provider: ProviderType | undefined,
+): boolean | undefined {
+  return resolveProviderCapabilities(provider)?.supportsStrictInternalAgentIsolation;
+}
+
+export function assertProviderSupportsStrictInternalAgentIsolation(
+  provider: ProviderType,
+): void {
+  if (providerSupportsStrictInternalAgentIsolation(provider) !== true) {
+    throw createStrictInternalAgentIsolationError(provider);
+  }
+}
+
+export function assertProviderSupportsSelectorExecution(provider: ProviderType): void {
+  assertProviderSupportsStrictInternalAgentIsolation(provider);
+  if (providerSupportsStructuredOutput(provider) !== true) {
+    throw new Error(
+      `Provider "${provider}" does not support native structured output required by dynamic parallel selector`,
+    );
+  }
+}
+
+export function resolveStrictInternalAgentNativeTools(
+  provider: ProviderType,
+): readonly string[] {
+  assertProviderSupportsStrictInternalAgentIsolation(provider);
+  const tools = STRICT_INTERNAL_AGENT_NATIVE_TOOLS[provider];
+  if (tools === undefined) {
+    throw new Error(`Provider "${provider}" has no strict internal-agent native tool profile`);
+  }
+  return [...tools];
 }
 
 export function providerSupportsStructuredOutput(

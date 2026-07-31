@@ -8,11 +8,14 @@ import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions } from '.
 function toClaudeOptions(options: ProviderCallOptions): ClaudeCallOptions {
   const claudeSandbox = options.providerOptions?.claude?.sandbox;
   const effort = options.providerOptions?.claude?.effort;
-  const skillsEnabled = options.providerOptions?.claude?.skills?.enabled;
+  const skillsEnabled = options.internalAgentIsolation === 'strict-readonly'
+    ? false
+    : options.providerOptions?.claude?.skills?.enabled;
   return {
     cwd: options.cwd,
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
+    internalAgentIsolation: options.internalAgentIsolation,
     allowedTools: options.allowedTools,
     mcpServers: options.mcpServers,
     model: options.model,
@@ -40,6 +43,7 @@ function toClaudeOptions(options: ProviderCallOptions): ClaudeCallOptions {
 export class ClaudeProvider implements Provider {
   readonly supportsStructuredOutput = true;
   readonly supportsNativeImageInput = true;
+  readonly supportsStrictInternalAgentIsolation = true;
 
   getRuntimeInstructions(_allowedTools?: string[]): string | null {
     return null;

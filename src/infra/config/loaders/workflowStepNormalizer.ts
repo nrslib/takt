@@ -1,6 +1,8 @@
 import type { z } from 'zod';
 import type {
   AgentWorkflowStep,
+  DynamicParallelFixedSubStep,
+  DynamicParallelPoolSubStep,
   NormalAgentWorkflowStep,
   SystemWorkflowStep,
   WorkflowCallStep,
@@ -392,7 +394,7 @@ export function normalizeStepFromRaw(
     knowledgeContents,
   };
 
-  if (step.parallel && step.parallel.length > 0) {
+  if (step.parallel && Array.isArray(step.parallel) && step.parallel.length > 0) {
     const normalizedStep: AgentWorkflowStep = {
       ...normalizedAgentFields,
       parallel: step.parallel.map((sub, index) =>
@@ -420,6 +422,54 @@ export function normalizeStepFromRaw(
       ...(step.concurrency != null ? { concurrency: step.concurrency } : {}),
     };
     return normalizedStep;
+  }
+
+  if (step.parallel && !Array.isArray(step.parallel)) {
+    const normalizeDynamicSubStep = (
+      sub: typeof step.parallel.fixed[number] | typeof step.parallel.pool[number],
+      branch: 'fixed' | 'pool',
+      index: number,
+    ): DynamicParallelFixedSubStep => {
+      const normalized = normalizeStepFromRaw(
+      sub,
+      workflowDir,
+      sections,
+      workflowSchemas,
+      [...stepPath, 'parallel', branch, index],
+      normalizedAgentFields.provider,
+      normalizedAgentFields.model,
+      normalizedAgentFields.modelSpecified,
+      normalizedAgentFields.directProviderOptions,
+      normalizedAgentFields.workflowProviderOptions,
+      normalizedAgentFields.allowGitCommit,
+      normalizedAgentFields.providerSpecified === false,
+      normalizedAgentFields.modelSpecified === false,
+      context,
+      projectOverrides,
+      globalOverrides,
+      workflowArpeggioPolicy,
+      workflowMcpServersPolicy,
+      );
+      return normalized as DynamicParallelFixedSubStep;
+    };
+    const fixed: DynamicParallelFixedSubStep[] = step.parallel.fixed.map(
+      (sub, index) => normalizeDynamicSubStep(sub, 'fixed', index),
+    );
+    const pool: DynamicParallelPoolSubStep[] = step.parallel.pool.map((sub, index) => {
+      const normalized = normalizeDynamicSubStep(sub, 'pool', index);
+      return normalized as DynamicParallelPoolSubStep;
+    });
+    const parallel = {
+      kind: 'dynamic' as const,
+      fixed,
+      pool,
+      selection: step.parallel.selection,
+    };
+    return {
+      ...normalizedAgentFields,
+      parallel,
+      ...(step.concurrency != null ? { concurrency: step.concurrency } : {}),
+    };
   }
 
   const arpeggio = normalizeArpeggio(step.arpeggio, workflowDir);

@@ -49,7 +49,7 @@ function createBridgeHarness(options?: {
   display?: { flush: ReturnType<typeof vi.fn> };
 }) {
   const resumePoint = options?.resumePoint ?? {
-    version: 1,
+    version: 2,
     stack: [{
       workflow: 'parent',
       workflow_ref: 'project:sha256:parent',
@@ -59,6 +59,8 @@ function createBridgeHarness(options?: {
     }],
     iteration: 2,
     elapsed_ms: 100,
+    workflow_call_invocations: {},
+    workflow_step_participations: {},
   } satisfies WorkflowResumePoint;
   const engine = new TestEngine(resumePoint, options?.findingIds);
   const out = {

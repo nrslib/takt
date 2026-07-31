@@ -4,6 +4,7 @@ import type { NormalAgentWorkflowStep, WorkflowConfig, WorkflowRule } from '../c
 import { validateWorkflowConfig } from '../core/workflow/engine/WorkflowValidator.js';
 import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
 import { getProviderValidationErrorSource } from '../core/workflow/provider-validation-error.js';
+import { getWorkflowConfigErrorPath } from '../core/workflow/workflow-config-error.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 
 function createFakeLedgerStore(): FindingLedgerStore {
@@ -65,6 +66,27 @@ function createPlanAgent(overrides: Partial<NormalAgentWorkflowStep> = {}): Norm
     rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
     ...overrides,
   };
+}
+
+function createProgrammaticDynamicParallelWorkflow(
+  fixed: readonly unknown[],
+  pool: readonly unknown[],
+): WorkflowConfig {
+  return {
+    ...createWorkflow(),
+    initialStep: 'reviewers',
+    steps: [{
+      name: 'reviewers',
+      personaDisplayName: 'reviewers',
+      instruction: 'review',
+      parallel: {
+        kind: 'dynamic',
+        fixed,
+        pool,
+        selection: { mode: 'replace' },
+      },
+    }],
+  } as unknown as WorkflowConfig;
 }
 
 function createFindingContractParallelWorkflow(
@@ -1096,6 +1118,198 @@ describe('validateWorkflowConfig', () => {
 
     expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).toThrow(
       'Configuration error: workflowCallResolver is required when workflow contains workflow_call steps',
+    );
+  });
+
+  it.each([
+    {
+      label: 'system fixed participant',
+      fixed: [{
+        name: 'cleanup',
+        kind: 'system',
+        personaDisplayName: 'cleanup',
+        instruction: 'cleanup',
+      }],
+      pool: [{
+        name: 'frontend',
+        description: 'Review frontend',
+        personaDisplayName: 'frontend',
+        instruction: 'review frontend',
+      }],
+      expectedMessage: 'dynamic parallel fixed sub-step "cleanup" of step "reviewers" must be a normal agent step',
+      expectedPath: ['steps', 0, 'parallel', 'fixed', 0],
+    },
+    {
+      label: 'workflow_call pool participant',
+      fixed: [],
+      pool: [{
+        name: 'delegate',
+        description: 'Delegate review',
+        kind: 'workflow_call',
+        call: 'child',
+        personaDisplayName: 'delegate',
+        instruction: '',
+      }],
+      expectedMessage: 'dynamic parallel pool sub-step "delegate" of step "reviewers" must be a normal agent step',
+      expectedPath: ['steps', 0, 'parallel', 'pool', 0],
+    },
+    {
+      label: 'delegated agent pool participant',
+      fixed: [],
+      pool: [{
+        name: 'delegated',
+        description: 'Delegate review',
+        personaDisplayName: 'delegated',
+        instruction: 'review',
+        teamLeader: { maxParts: 2, mode: 'default' },
+      }],
+      expectedMessage: 'dynamic parallel pool sub-step "delegated" of step "reviewers" must be a normal agent step',
+      expectedPath: ['steps', 0, 'parallel', 'pool', 0],
+    },
+    {
+      label: 'missing pool description',
+      fixed: [],
+      pool: [{
+        name: 'frontend',
+        personaDisplayName: 'frontend',
+        instruction: 'review frontend',
+      }],
+      expectedMessage: 'dynamic parallel pool sub-step "frontend" of step "reviewers" requires a non-empty description',
+      expectedPath: ['steps', 0, 'parallel', 'pool', 0, 'description'],
+    },
+    {
+      label: 'blank pool description',
+      fixed: [],
+      pool: [{
+        name: 'frontend',
+        description: '   ',
+        personaDisplayName: 'frontend',
+        instruction: 'review frontend',
+      }],
+      expectedMessage: 'dynamic parallel pool sub-step "frontend" of step "reviewers" requires a non-empty description',
+      expectedPath: ['steps', 0, 'parallel', 'pool', 0, 'description'],
+    },
+  ])('fails fast for $label before resolving workflow calls or providers', ({
+    fixed,
+    pool,
+    expectedMessage,
+    expectedPath,
+  }) => {
+    const workflow = createProgrammaticDynamicParallelWorkflow(fixed, pool);
+
+    let validationError: unknown;
+    try {
+      validateWorkflowConfig(workflow, { projectCwd: process.cwd() });
+    } catch (error) {
+      validationError = error;
+    }
+
+    expect(validationError).toBeInstanceOf(Error);
+    expect((validationError as Error).message).toContain(expectedMessage);
+    expect(getWorkflowConfigErrorPath(validationError)).toEqual(expectedPath);
+  });
+
+  it('accepts a valid programmatic dynamic parallel contract without pre-validating pool providers', () => {
+    const workflow = createProgrammaticDynamicParallelWorkflow(
+      [{
+        name: 'architecture',
+        personaDisplayName: 'architecture',
+        instruction: 'review architecture',
+      }],
+      [{
+        name: 'frontend',
+        description: 'Review frontend',
+        personaDisplayName: 'frontend',
+        instruction: 'review frontend',
+        provider: 'opencode',
+      }],
+    );
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).not.toThrow();
+  });
+
+  it.each([
+    {
+      label: 'an empty pool',
+      mutate: (parallel: Record<string, unknown>) => {
+        parallel.pool = [];
+      },
+      expectedMessage: 'requires at least one pool sub-step',
+      expectedPath: ['steps', 0, 'parallel', 'pool'],
+    },
+    {
+      label: 'a missing selection mode',
+      mutate: (parallel: Record<string, unknown>) => {
+        parallel.selection = {};
+      },
+      expectedMessage: 'selection.mode must be "replace" or "cumulative"',
+      expectedPath: ['steps', 0, 'parallel', 'selection', 'mode'],
+    },
+    {
+      label: 'an unknown selection mode',
+      mutate: (parallel: Record<string, unknown>) => {
+        parallel.selection = { mode: 'adaptive' };
+      },
+      expectedMessage: 'selection.mode must be "replace" or "cumulative"',
+      expectedPath: ['steps', 0, 'parallel', 'selection', 'mode'],
+    },
+  ])('rejects programmatic dynamic parallel with $label', ({
+    mutate,
+    expectedMessage,
+    expectedPath,
+  }) => {
+    const workflow = createProgrammaticDynamicParallelWorkflow([], [{
+      name: 'frontend',
+      description: 'Review frontend',
+      personaDisplayName: 'frontend',
+      instruction: 'review frontend',
+    }]);
+    const parallel = workflow.steps[0]!.parallel as unknown as Record<string, unknown>;
+    mutate(parallel);
+
+    let validationError: unknown;
+    try {
+      validateWorkflowConfig(workflow, { projectCwd: process.cwd() });
+    } catch (error) {
+      validationError = error;
+    }
+
+    expect(validationError).toBeInstanceOf(Error);
+    expect((validationError as Error).message).toContain(expectedMessage);
+    expect(getWorkflowConfigErrorPath(validationError)).toEqual(expectedPath);
+  });
+
+  it('rejects a position-dependent aggregate in a programmatic dynamic parallel contract', () => {
+    const workflow = createProgrammaticDynamicParallelWorkflow([], [{
+      name: 'frontend',
+      description: 'Review frontend',
+      personaDisplayName: 'frontend',
+      instruction: 'review frontend',
+      rules: [normalizeRule({ condition: 'approved' })],
+    }]);
+    workflow.steps[0]!.rules = [
+      normalizeRule({ condition: 'all("approved", "approved")', next: 'COMPLETE' }),
+    ];
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).toThrow(
+      'Dynamic parallel aggregate conditions require exactly one bare result label',
+    );
+  });
+
+  it('rejects a programmatic dynamic parallel participant missing a required aggregate label', () => {
+    const workflow = createProgrammaticDynamicParallelWorkflow([], [{
+      name: 'frontend',
+      description: 'Review frontend',
+      personaDisplayName: 'frontend',
+      instruction: 'review frontend',
+      rules: [normalizeRule({ condition: 'needs_fix' })],
+    }]);
+    workflow.steps[0]!.rules = [
+      normalizeRule({ condition: 'all("approved")', next: 'COMPLETE' }),
+    ];
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).toThrow(
+      'requires sub-step "frontend" to define result label "approved"',
     );
   });
 

@@ -1,12 +1,12 @@
 import { dirname } from 'node:path';
 import type { WorkflowConfig } from '../../../core/models/index.js';
-import { collectWorkflowCallSteps } from '../../../core/workflow/workflow-step-traversal.js';
 import { validateWorkflowCallRulesAgainstChildReturns } from './workflowCallContracts.js';
 import { getWorkflowSourcePath } from './workflowSourceMetadata.js';
 import { getWorkflowTrustInfo, type WorkflowTrustInfo } from './workflowTrustSource.js';
 import { withWorkflowConfigErrorPath as withWorkflowStepErrorPath } from '../../../core/workflow/workflow-config-error.js';
 import { findWorkflowStepLocation } from '../../../core/workflow/workflow-step-location.js';
 import { annotateWorkflowConfigFragmentError } from './workflowRawParser.js';
+import { collectWorkflowCallSteps } from './workflowParallelTraversal.js';
 
 interface WorkflowCallValidationLookupOptions {
   basePath?: string;

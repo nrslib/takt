@@ -41,6 +41,7 @@ function toCursorOptions(options: ProviderCallOptions): CursorCallOptions {
 export class CursorProvider implements Provider {
   readonly supportsStructuredOutput = false;
   readonly supportsNativeImageInput = false;
+  readonly supportsStrictInternalAgentIsolation = false;
 
   getRuntimeInstructions(_allowedTools?: string[]): string | null {
     return null;

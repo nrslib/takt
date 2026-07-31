@@ -5,7 +5,11 @@ import type {
   WorkflowRuntimeConfig,
 } from '../../core/models/workflow-types.js';
 import type { z } from 'zod';
-import type { QualityGatesSchema } from '../../core/models/schema-base.js';
+import {
+  NormalizedTaktSelectorProviderEntrySchema,
+  type QualityGatesSchema,
+} from '../../core/models/schema-base.js';
+import { ConfiguredModelSchema } from '../../core/models/model-schema.js';
 import type { WorkflowOverridesSchema } from '../../core/models/config-schemas.js';
 import type { PermissionMode } from '../../core/models/status.js';
 import type { ProviderPermissionProfiles } from '../../core/models/provider-profiles.js';
@@ -19,6 +23,7 @@ import type {
   ProviderRoutingConfig,
   ProviderRoutingEntry,
   TaktProviderConfigEntry,
+  TaktSelectorProviderConfigEntry,
   TaktProvidersConfig,
   TelemetryConfig,
 } from '../../core/models/config-types.js';
@@ -27,7 +32,11 @@ import {
   normalizeConfigProviderReferenceDetailed,
   type ConfigProviderReference,
 } from './providerReference.js';
-import { normalizeProviderOptions, type NormalizeProviderOptionsOptions } from './providerOptions.js';
+import {
+  assertAllowedNormalizedProviderBaseUrls,
+  normalizeProviderOptions,
+  type NormalizeProviderOptionsOptions,
+} from './providerOptions.js';
 
 type RawFindingIntakeNormalizeConfig = {
   provider: ConfigProviderReference<FindingIntakeNormalizeConfig['provider']>;
@@ -620,15 +629,43 @@ export function normalizeTaktProviders(raw: {
     provider?: TaktProviderConfigEntry['provider'];
     model?: string;
   };
-} | undefined): TaktProvidersConfig | undefined {
+  selector?: {
+    provider?: TaktProviderConfigEntry['provider'];
+    model?: string;
+    provider_options?: Record<string, unknown>;
+  };
+} | undefined, options: NormalizeProviderOptionsOptions = {}): TaktProvidersConfig | undefined {
   if (!raw) {
     return undefined;
   }
   const normalizedAssistant = normalizeTaktAssistantProvider(raw.assistant);
-  if (!normalizedAssistant) {
+  const normalizedSelector = normalizeTaktSelectorProvider(raw.selector, options);
+  if (!normalizedAssistant && !normalizedSelector) {
     return undefined;
   }
-  return { assistant: normalizedAssistant };
+  return {
+    ...(normalizedAssistant ? { assistant: normalizedAssistant } : {}),
+    ...(normalizedSelector ? { selector: normalizedSelector } : {}),
+  };
+}
+
+export function normalizeTaktSelectorProvider(
+  selector: { provider?: TaktProviderConfigEntry['provider']; model?: string; provider_options?: Record<string, unknown> } | undefined,
+  options: NormalizeProviderOptionsOptions = {},
+): TaktSelectorProviderConfigEntry | undefined {
+  if (!selector) return undefined;
+  const providerOptions = normalizeProviderOptions(selector.provider_options, options);
+  const model = selector.model === undefined
+    ? undefined
+    : ConfiguredModelSchema.parse(selector.model);
+  if (selector.provider === undefined && model === undefined && providerOptions === undefined) {
+    throw new Error("Configuration error: 'takt_providers.selector' must include provider, model, or provider_options.");
+  }
+  return {
+    ...(selector.provider !== undefined ? { provider: selector.provider } : {}),
+    ...(model !== undefined ? { model } : {}),
+    ...(providerOptions !== undefined ? { providerOptions } : {}),
+  };
 }
 
 export function normalizeTaktAssistantProvider(
@@ -667,18 +704,29 @@ export function normalizeTaktAssistantProvider(
 
 export function buildRawTaktProvidersOrThrow(
   taktProviders: TaktProvidersConfig | undefined,
-): { assistant: TaktProviderConfigEntry } | undefined {
+  options: NormalizeProviderOptionsOptions = {},
+): { assistant?: TaktProviderConfigEntry; selector?: { provider?: TaktSelectorProviderConfigEntry['provider']; model?: string; provider_options?: Record<string, unknown> } } | undefined {
   if (taktProviders === undefined) {
     return undefined;
   }
-  if (taktProviders.assistant === undefined) {
-    throw new Error("Configuration error: 'takt_providers.assistant' is required when takt_providers is set.");
-  }
   const assistant = normalizeTaktAssistantProvider(taktProviders.assistant);
-  if (!assistant) {
-    throw new Error("Configuration error: 'takt_providers.assistant' must include provider or model.");
+  const selector = taktProviders.selector === undefined
+    ? undefined
+    : NormalizedTaktSelectorProviderEntrySchema.parse(taktProviders.selector);
+  assertAllowedNormalizedProviderBaseUrls(selector?.providerOptions, options);
+  if (!assistant && !selector) {
+    throw new Error("Configuration error: 'takt_providers' must include assistant or selector.");
   }
-  return { assistant };
+  return {
+    ...(assistant ? { assistant } : {}),
+    ...(selector ? {
+      selector: {
+        ...(selector.provider !== undefined ? { provider: selector.provider } : {}),
+        ...(selector.model !== undefined ? { model: selector.model } : {}),
+        ...(selector.providerOptions !== undefined ? { provider_options: denormalizeProviderOptions(selector.providerOptions) } : {}),
+      },
+    } : {}),
+  };
 }
 
 export function denormalizeProviderOptions(

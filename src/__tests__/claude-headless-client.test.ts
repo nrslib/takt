@@ -1410,6 +1410,48 @@ describe('callClaudeHeadless', () => {
     expect(argv).not.toContain('--effort');
   });
 
+  it('isolates strict read-only internal agents from tools, filesystem settings, and ambient MCP', async () => {
+    stubSpawn({
+      stdoutChunks: [`${JSON.stringify({ type: 'text', text: 'x' })}\n`],
+      closeCode: 0,
+    });
+
+    await callClaudeHeadless('selector', 'p', {
+      cwd: '/tmp',
+      internalAgentIsolation: 'strict-readonly',
+      permissionMode: 'readonly',
+      skillsEnabled: true,
+    });
+
+    const argv = lastSpawnArgv();
+    expect(argv).toEqual(expect.arrayContaining([
+      '--tools',
+      '',
+      '--setting-sources',
+      '',
+      '--strict-mcp-config',
+      '--disable-slash-commands',
+    ]));
+    expect(argv).not.toContain('--allowed-tools');
+  });
+
+  it('does not apply strict internal isolation flags to an ordinary headless call', async () => {
+    stubSpawn({
+      stdoutChunks: [`${JSON.stringify({ type: 'text', text: 'x' })}\n`],
+      closeCode: 0,
+    });
+
+    await callClaudeHeadless('agent', 'p', {
+      cwd: '/tmp',
+      permissionMode: 'readonly',
+    });
+
+    const argv = lastSpawnArgv();
+    expect(argv).not.toContain('--tools');
+    expect(argv).not.toContain('--setting-sources');
+    expect(argv).not.toContain('--strict-mcp-config');
+  });
+
   it('passes --effort without --allowed-tools when tools list is empty', async () => {
     stubSpawn({
       stdoutChunks: [`${JSON.stringify({ type: 'text', text: 'x' })}\n`],
@@ -1426,4 +1468,5 @@ describe('callClaudeHeadless', () => {
     expect(effortIdx).toBeGreaterThanOrEqual(0);
     expect(argv[effortIdx + 1]).toBe('low');
   });
+
 });

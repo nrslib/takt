@@ -3,10 +3,8 @@ import { resolve } from 'node:path';
 import { isPathInside, isValidReportDirName } from '../../../shared/utils/index.js';
 import { getErrorMessage } from '../../../shared/utils/error.js';
 import type { WorkflowResumePoint } from '../../models/types.js';
-import {
-  parseCanonicalWorkflowResumeFrame,
-} from '../../../shared/types/workflow-resume.js';
 import type { RunStorageBackend } from '../../models/config-types.js';
+import { parseWorkflowResumePoint } from '../resume-point-codec.js';
 import type { WorkflowTraceDiscovery } from '../observability/traceDiscovery.js';
 import { buildRunPaths } from './run-paths.js';
 import {
@@ -67,7 +65,8 @@ interface RawRunMeta extends Omit<
   | 'prContext'
   | 'terminalPublicationId'
 > {
-  resume_point?: WorkflowResumePoint;
+  resumePoint?: unknown;
+  resume_point?: unknown;
   source_run_slug?: string;
   resume_mode?: RunResumeMode;
   resume_artifacts?: string;
@@ -81,10 +80,8 @@ export type RunMetaWarningHandler = (warning: string) => void;
 
 function normalizeRunMeta(value: unknown): RunMeta {
   const raw = parseRawRunMeta(value);
-  if (raw.storageBackend !== 'file' && raw.storageBackend !== 'sqlite') {
-    throw new Error('Run metadata storageBackend must be "file" or "sqlite"');
-  }
   const {
+    resumePoint: camelResumePoint,
     resume_point: persistedResumePoint,
     source_run_slug: persistedSourceRunSlug,
     resume_mode: persistedResumeMode,
@@ -95,11 +92,13 @@ function normalizeRunMeta(value: unknown): RunMeta {
     terminal_publication_id: persistedTerminalPublicationId,
     ...baseMeta
   } = raw;
+  const rawResumePoint = camelResumePoint ?? persistedResumePoint;
+  const resumePoint = rawResumePoint === undefined
+    ? undefined
+    : parseWorkflowResumePoint(rawResumePoint);
   return {
     ...baseMeta,
-    ...(persistedResumePoint === undefined
-      ? {}
-      : { resumePoint: persistedResumePoint }),
+    ...(resumePoint === undefined ? {} : { resumePoint }),
     ...(persistedSourceRunSlug === undefined
       ? {}
       : { sourceRunSlug: persistedSourceRunSlug }),
@@ -188,6 +187,9 @@ function parseRawRunMeta(value: unknown): RawRunMeta {
     ...(raw.observability === undefined
       ? {}
       : { observability: parseRunMetaObservability(raw.observability) }),
+    ...(raw.resumePoint === undefined
+      ? {}
+      : { resumePoint: parseWorkflowResumePoint(raw.resumePoint) }),
     ...(raw.resume_point === undefined
       ? {}
       : { resume_point: parseWorkflowResumePoint(raw.resume_point) }),
@@ -208,50 +210,6 @@ function parseRawRunMeta(value: unknown): RawRunMeta {
     )),
   };
   return result;
-}
-
-export function parseWorkflowResumePoint(value: unknown): WorkflowResumePoint {
-  const point = requireRecord(value, 'resume_point');
-  if (point.version !== 1) {
-    throw new Error('resume_point.version must be 1');
-  }
-  if (!Array.isArray(point.stack) || point.stack.length === 0) {
-    throw new Error('resume_point.stack must be a non-empty array');
-  }
-  const stack = point.stack.map((entry, index) => {
-    const frame = parseCanonicalWorkflowResumeFrame(
-      entry,
-      `resume_point.stack[${index}]`,
-    );
-    const record = requireRecord(entry, `resume_point.stack[${index}]`);
-    if (record.step_iterations === undefined) {
-      return frame;
-    }
-    const iterations = requireRecord(
-      record.step_iterations,
-      `resume_point.stack[${index}].step_iterations`,
-    );
-    const stepIterations: Record<string, number> = {};
-    for (const [step, occurrence] of Object.entries(iterations)) {
-      if (
-        step.length === 0
-        || !Number.isSafeInteger(occurrence)
-        || (occurrence as number) <= 0
-      ) {
-        throw new Error(
-          `resume_point.stack[${index}].step_iterations is invalid`,
-        );
-      }
-      stepIterations[step] = occurrence as number;
-    }
-    return { ...frame, step_iterations: stepIterations };
-  });
-  return {
-    version: 1,
-    stack,
-    iteration: requiredNonNegativeInteger(point.iteration, 'resume_point.iteration'),
-    elapsed_ms: requiredNonNegativeInteger(point.elapsed_ms, 'resume_point.elapsed_ms'),
-  };
 }
 
 function requireRecord(

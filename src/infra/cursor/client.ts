@@ -7,6 +7,7 @@ import { crossSpawn, getErrorMessage } from '../../shared/utils/index.js';
 import { buildEnvWithNestedObservabilitySnapshot } from '../../shared/telemetry/index.js';
 import { AGENT_FAILURE_CATEGORIES, type AgentFailureCategory } from '../../shared/types/agent-failure.js';
 import type { CursorCallOptions } from './types.js';
+import { formatProcessExitCause } from '../../shared/utils/process-exit.js';
 
 export type { CursorCallOptions } from './types.js';
 
@@ -212,11 +213,9 @@ function execCursor(args: string[], options: CursorCallOptions): Promise<CursorE
       }
 
       rejectOnce(createExecError(
-        signal
-          ? `cursor-agent terminated by signal ${signal}`
-          : `cursor-agent exited with code ${code ?? 'unknown'}`,
+        `cursor-agent exited with ${formatProcessExitCause(code, signal)}`,
         {
-          code: code ?? undefined,
+          ...(typeof code === 'number' ? { code } : {}),
           stdout,
           stderr,
           signal,

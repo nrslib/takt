@@ -11,7 +11,11 @@ import type {
   WorkflowStep,
   WorkflowSubworkflowConfig,
 } from '../../../core/models/index.js';
-import { hasFindingsReference, parseWorkflowRuleCondition } from '../../../core/models/workflow-rule-condition.js';
+import { enumerateParallelSubSteps } from './workflowParallelTraversal.js';
+import {
+  hasFindingsReference,
+  parseWorkflowRuleCondition,
+} from '../../../core/models/workflow-rule-condition.js';
 import {
   FINDING_CONFLICT_ADJUDICATION_PERSONA,
   workflowWiresFindingConflictAdjudication,
@@ -44,6 +48,7 @@ import {
 } from './workflowRawParser.js';
 import type { WorkflowTrustInfo } from './workflowTrustSource.js';
 import { withWorkflowConfigErrorPath as withWorkflowStepErrorPath } from '../../../core/workflow/workflow-config-error.js';
+import { validateDynamicParallelContracts } from '../../../core/workflow/dynamic-parallel/validator.js';
 
 function normalizeSubworkflowConfig(
   raw: ReturnType<typeof WorkflowConfigRawSchema.parse>['subworkflow'],
@@ -210,7 +215,10 @@ function validateFindingsRulesRequireContract(
         ['steps', stepIndex, 'rules', ruleIndex],
       );
     }
-    for (const [subStepIndex, subStep] of (step.parallel ?? []).entries()) {
+    const parallelSubSteps = step.parallel === undefined
+      ? []
+      : enumerateParallelSubSteps(step.parallel, ['steps', stepIndex, 'parallel']);
+    for (const { subStep: subStep, path } of parallelSubSteps) {
       for (const [ruleIndex, rule] of (subStep.rules ?? []).entries()) {
         if (!hasFindingsReference(parseWorkflowRuleCondition(rule.condition))) {
           continue;
@@ -219,7 +227,7 @@ function validateFindingsRulesRequireContract(
           new Error(
             `Configuration error: parallel sub-step "${subStep.name}" in step "${step.name}" uses findings.* rule but finding_contract is not configured`,
           ),
-          ['steps', stepIndex, 'parallel', subStepIndex, 'rules', ruleIndex],
+          [...path, 'rules', ruleIndex],
         );
       }
     }
@@ -339,6 +347,7 @@ export function normalizeWorkflowConfig(
   );
 
   const loopMonitors = normalizeLoopMonitors(parsed.loop_monitors, workflowDir, sections, context);
+  validateDynamicParallelContracts(steps, ['steps']);
   const findingContract = normalizeFindingContractConfig(parsed.finding_contract, workflowDir, sections, context);
   validateFindingsRulesRequireContract(
     parsed.steps,

@@ -11,8 +11,8 @@ import {
   parseRunMeta,
   type RunMeta,
   type RunResumeSource,
-  parseWorkflowResumePoint,
 } from '../../../core/workflow/run/run-meta.js';
+import { parseWorkflowResumePoint } from '../../../core/workflow/resume-point-codec.js';
 import type { RunPaths } from '../../../core/workflow/run/run-paths.js';
 import type { WorkflowResumePoint } from '../../../core/models/index.js';
 import type { WorkflowTraceDiscovery } from '../../../core/workflow/observability/traceDiscovery.js';

@@ -44,7 +44,7 @@ describe('workflow-reference', () => {
       ],
     }, '/tmp/project'), 'project:sha256:child-b');
     const resumePoint = {
-      version: 1 as const,
+      version: 2 as const,
       stack: [
         {
           workflow: 'shared/workflow',
@@ -56,6 +56,8 @@ describe('workflow-reference', () => {
       ],
       iteration: 7,
       elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
 
     expect(workflowEntryMatchesWorkflow(resumePoint.stack[0]!, workflow)).toBe(true);
@@ -97,19 +99,23 @@ describe('workflow-reference', () => {
         ],
       }, '/tmp/project'), 'project:sha256:child-a');
     const resumePoint = {
-      version: 1 as const,
+      version: 2 as const,
       stack: [
-        buildWorkflowResumePointEntry(parentWorkflow, 'delegate', 'workflow_call', 1),
+        buildWorkflowResumePointEntry(parentWorkflow, 'delegate', 'workflow_call', 1, undefined, 1),
         buildWorkflowResumePointEntry(childWorkflow, 'review', 'agent', 1),
       ],
       iteration: 7,
       elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
 
     expect(trimResumePointStackForWorkflow({
       workflow: childWorkflow,
       resumePoint,
-      resumeStackPrefix: [buildWorkflowResumePointEntry(parentWorkflow, 'delegate', 'workflow_call', 1)],
+      resumeStackPrefix: [
+        buildWorkflowResumePointEntry(parentWorkflow, 'delegate', 'workflow_call', 1, undefined, 1),
+      ],
       resolveWorkflowCall: () => null,
     })).toEqual(resumePoint);
   });
@@ -145,19 +151,23 @@ describe('workflow-reference', () => {
         ],
       }, '/tmp/project'), 'project:sha256:child-a');
     const resumePoint = {
-      version: 1 as const,
+      version: 2 as const,
       stack: [
-        buildWorkflowResumePointEntry(parentWorkflow, 'delegate', 'workflow_call', 1),
+        buildWorkflowResumePointEntry(parentWorkflow, 'delegate', 'workflow_call', 1, undefined, 1),
         buildWorkflowResumePointEntry(childWorkflow, 'review', 'agent', 1),
       ],
       iteration: 7,
       elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
 
     expect(trimResumePointStackForWorkflow({
       workflow: childWorkflow,
       resumePoint,
-      resumeStackPrefix: [buildWorkflowResumePointEntry(otherParentWorkflow, 'delegate', 'workflow_call', 1)],
+      resumeStackPrefix: [
+        buildWorkflowResumePointEntry(otherParentWorkflow, 'delegate', 'workflow_call', 1, undefined, 1),
+      ],
       resolveWorkflowCall: () => null,
     })).toBeUndefined();
   });

@@ -39,6 +39,10 @@ import type { FindingLedgerStore } from './findings/store.js';
 import type { OperationJournalStore } from './operations/operation-journal-types.js';
 import type { PullRequestContext } from './pr-context.js';
 import type { RunPaths } from './run/run-paths.js';
+import type { DynamicParallelSelectionStore } from './dynamic-parallel/selection-store.js';
+import type { WorkflowCallInvocationEvidence } from './workflow-call-invocation-index.js';
+import type { WorkflowStepParticipationIndex } from './workflow-step-participation-index.js';
+import type { SelectorGitCommandRunner } from './dynamic-parallel/selector-git-command-runner.js';
 
 import type { ProviderType, StreamCallback, StreamEvent } from '../../shared/types/provider.js';
 
@@ -127,6 +131,12 @@ export interface StepProviderInfo {
   };
 }
 
+export interface SelectorProviderInfo extends StepProviderInfo {
+  provider: ProviderType;
+  providerOptions: StepProviderOptions;
+  nativeTools: readonly string[];
+}
+
 export interface ProviderStreamContext {
   readonly step: string;
   readonly provider: ProviderType;
@@ -179,6 +189,9 @@ export interface WorkflowSharedRuntimeState {
   startedAtMs: number;
   activeResumePoint?: WorkflowResumePoint;
   maxSteps?: WorkflowMaxSteps;
+  dynamicParallelSelectionStore?: DynamicParallelSelectionStore;
+  workflowCallInvocationEvidence?: WorkflowCallInvocationEvidence;
+  workflowStepParticipationIndex?: WorkflowStepParticipationIndex;
 }
 
 export type WorkflowAbortKind =
@@ -423,6 +436,9 @@ export interface WorkflowEngineOptions {
   rateLimitFallback?: RateLimitFallbackConfig;
   /** Resolved provider options */
   providerOptions?: StepProviderOptions;
+  selectorProvider?: SelectorProviderInfo;
+  /** Reads the current working-tree evidence required by a dynamic selector. */
+  selectorGitCommandRunner?: SelectorGitCommandRunner;
   /** Resolved automatic provider/model routing configuration */
   autoRouting?: AutoRoutingConfig;
   /** Opt-in reviewer report extraction for effective Finding Contract workflows. */
@@ -460,6 +476,7 @@ export interface WorkflowEngineOptions {
   /** Resume point for workflow_call-aware retries */
   resumePoint?: WorkflowResumePoint;
   resumeSource?: RunResumeSource;
+  onDynamicParallelSelectionPersisted?: (resumePoint: WorkflowResumePoint) => Promise<void> | void;
   operationJournal?: WorkflowOperationJournalContext;
   /** Override report directory name (without parent path). */
   reportDirName?: string;

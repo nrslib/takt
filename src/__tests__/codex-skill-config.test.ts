@@ -9,7 +9,10 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildCodexSkillConfig } from '../infra/codex/skill-config.js';
+import {
+  buildCodexSkillConfig,
+  buildIsolatedCodexSkillConfig,
+} from '../infra/codex/skill-config.js';
 
 const tempRoots = new Set<string>();
 
@@ -191,4 +194,44 @@ describe('buildCodexSkillConfig', () => {
       expect(disabledPaths(config)).toEqual([hiddenSkill]);
     },
   );
+});
+
+describe('buildIsolatedCodexSkillConfig', () => {
+  it('明示された scope の Skill だけを enabled config にする', () => {
+    const root = createTempRoot();
+    mkdirSync(join(root, '.git'));
+    const repoSkill = createSkill(join(root, '.agents', 'skills'), 'repo-skill');
+    const home = join(root, 'home');
+    const userSkill = createSkill(join(home, '.agents', 'skills'), 'user-skill');
+
+    const repoOnly = buildIsolatedCodexSkillConfig({
+      cwd: root,
+      env: { HOME: home },
+      inheritance: { repo: true, user: false },
+    });
+    const both = buildIsolatedCodexSkillConfig({
+      cwd: root,
+      env: { HOME: home },
+      inheritance: { repo: true, user: true },
+    });
+
+    expect(repoOnly).toEqual({
+      skills: { config: [{ path: repoSkill, enabled: true }] },
+    });
+    expect(both).toEqual({
+      skills: {
+        config: [repoSkill, userSkill]
+          .sort()
+          .map((path) => ({ path, enabled: true })),
+      },
+    });
+  });
+
+  it('scope が明示されない場合は ambient Skill を探索しない', () => {
+    expect(buildIsolatedCodexSkillConfig({
+      cwd: '/path/that/does/not/exist',
+      env: {},
+      inheritance: { repo: false, user: false },
+    })).toBeUndefined();
+  });
 });

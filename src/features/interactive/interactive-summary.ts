@@ -67,6 +67,9 @@ function formatStepPreview(p: StepPreview, label: string, lang: TaskHistoryLocal
   const editLabel = lang === 'ja' ? '編集' : 'Edit';
   const providerLabel = lang === 'ja' ? 'プロバイダー' : 'Provider';
   const modelLabel = lang === 'ja' ? 'モデル' : 'Model';
+  const providerSourceLabel = lang === 'ja' ? 'プロバイダー解決元' : 'Provider source';
+  const modelSourceLabel = lang === 'ja' ? 'モデル解決元' : 'Model source';
+  const permissionLabel = lang === 'ja' ? '権限' : 'Permission';
 
   const lines = [
     `### ${label}. ${p.name} (${p.personaDisplayName})`,
@@ -77,6 +80,15 @@ function formatStepPreview(p: StepPreview, label: string, lang: TaskHistoryLocal
   }
   if (p.model) {
     lines.push(`**${modelLabel}:** ${p.model}`);
+  }
+  if (p.providerSource) {
+    lines.push(`**${providerSourceLabel}:** ${p.providerSource}`);
+  }
+  if (p.modelSource) {
+    lines.push(`**${modelSourceLabel}:** ${p.modelSource}`);
+  }
+  if (p.permissionMode) {
+    lines.push(`**${permissionLabel}:** ${p.permissionMode}`);
   }
   if (p.personaContent) {
     lines.push(`**${personaLabel}:**`, p.personaContent);

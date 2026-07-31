@@ -19,12 +19,14 @@ import { ArpeggioRunner } from './ArpeggioRunner.js';
 import { LoopMonitorJudgeRunner } from './LoopMonitorJudgeRunner.js';
 import { OptionsBuilder } from './OptionsBuilder.js';
 import { ParallelRunner } from './ParallelRunner.js';
+import { DynamicParallelSelectorCoordinator } from '../dynamic-parallel/selector-coordinator.js';
 import { recordAgentUsageEvent } from './agent-usage-event.js';
 import { StepExecutor } from './StepExecutor.js';
 import { SystemStepExecutor } from './SystemStepExecutor.js';
 import { TeamLeaderRunner } from './TeamLeaderRunner.js';
 import { createWorkflowPhaseRelay } from './WorkflowEnginePhaseRelay.js';
 import { WorkflowCallRunner } from './WorkflowCallRunner.js';
+import { getWorkflowReference } from '../workflow-reference.js';
 import type { WorkflowCallChildEngine } from '../types.js';
 import type { StructuredOutputNormalizerRegistry } from './structured-output-normalizer.js';
 import { runQualityGates } from '../quality-gates/qualityGateRunner.js';
@@ -45,6 +47,18 @@ import type {
 } from '../instruction/instruction-context.js';
 import { requireWorkflowResumeStackSnapshot } from '../run/resume-point.js';
 import { resolveFindingIntakeNormalizeConfig } from '../findings/intake-normalize-policy.js';
+import {
+  createReviewReportDiscoveryContext,
+  resolveWorkflowStepReportNamesWithDiagnostics,
+} from '../review-report-discovery.js';
+import { DynamicParallelSelectionStore } from '../dynamic-parallel/selection-store.js';
+import {
+  restoreWorkflowCallInvocationEvidence,
+  snapshotWorkflowCallInvocationEvidence,
+  type WorkflowCallInvocationEvidence,
+} from '../workflow-call-invocation-index.js';
+import { SelectorInputReader } from '../dynamic-parallel/selector-input-reader.js';
+import { restoreWorkflowStepParticipationIndex } from '../workflow-step-participation-index.js';
 
 const log = createLogger('workflow-engine');
 
@@ -60,7 +74,7 @@ interface WorkflowEngineSetupParams {
   options: WorkflowEngineOptions & { structuredOutputNormalizers: StructuredOutputNormalizerRegistry };
   structuredCaller: StructuredCaller;
   sharedRuntime: WorkflowSharedRuntimeState;
-  resumeStackPrefix: WorkflowEngineOptions['resumeStackPrefix'];
+  resumeStackPrefix: readonly WorkflowResumePointEntry[];
   getCurrentWorkflowStack: () => WorkflowResumePointEntry[] | undefined;
   runPaths: RunPaths;
   updateMaxSteps: (maxSteps: WorkflowMaxSteps) => void;
@@ -78,6 +92,12 @@ interface WorkflowEngineSetupParams {
     iteration: number,
     occurrence: number,
   ) => void;
+  persistDynamicParallelSelection: (
+    step: WorkflowStep,
+    iteration: number,
+    identity: string,
+    selection: import('../../models/types.js').DynamicParallelSelectionSnapshot,
+  ) => Promise<void>;
   refreshFindingsState: () => void;
   /** 自前 or workflow_call 親から継承した、この engine で有効な Finding Contract。 */
   findingContract?: FindingContractConfig;
@@ -122,6 +142,11 @@ export function createSharedRuntime(
   return {
     startedAtMs: resumePoint ? now - resumePoint.elapsed_ms : now,
     maxSteps,
+    dynamicParallelSelectionStore: new DynamicParallelSelectionStore(
+      new Map(Object.entries(resumePoint?.dynamic_parallel_selections ?? {})),
+    ),
+    workflowCallInvocationEvidence: restoreWorkflowCallInvocationEvidence(resumePoint),
+    workflowStepParticipationIndex: restoreWorkflowStepParticipationIndex(resumePoint),
   };
 }
 
@@ -271,7 +296,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     task: params.task,
     getOptions: () => params.options,
     sharedRuntime: params.sharedRuntime,
-    resumeStackPrefix: params.resumeStackPrefix ?? [],
+    resumeStackPrefix: [...(params.resumeStackPrefix ?? [])],
     consumeWorkflowCallContinuation: params.consumeWorkflowCallContinuation,
     runPaths: params.runPaths,
     setActiveResumePoint: params.setActiveResumePoint as never,
@@ -283,12 +308,35 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     refreshFindingsState: params.refreshFindingsState,
   });
 
+  const dynamicParallelSelector = new DynamicParallelSelectorCoordinator({
+    engineOptions: params.options,
+    selectionStore: params.sharedRuntime.dynamicParallelSelectionStore!,
+    getCwd: params.getCwd,
+    getReportDirectory: () => params.runPaths.reportsAbs,
+    getReportNames: (_step, state) => getSelectorReportNames(
+      params.config,
+      state,
+      params.resumeStackPrefix,
+      params.options.workflowCallResolver,
+      params.projectCwd,
+      params.getCwd(),
+      params.sharedRuntime.workflowCallInvocationEvidence!,
+      params.sharedRuntime.workflowStepParticipationIndex!,
+    ),
+    getWorkflowReference: () => getWorkflowReference(params.config),
+    workflowCallPath: params.resumeStackPrefix,
+    commitSelection: params.persistDynamicParallelSelection,
+    ...(params.options.selectorGitCommandRunner === undefined
+      ? {}
+      : { inputReader: new SelectorInputReader(params.options.selectorGitCommandRunner) }),
+  });
+
   const parallelRunner = new ParallelRunner({
     optionsBuilder,
     stepExecutor,
     engineOptions: params.options,
     getCwd: params.getCwd,
-    getReportDir: params.getReportDir,
+    dynamicParallelSelector,
     getWorkflowName: () => params.config.name,
     getTask: () => params.task,
     getInteractive: () => params.options.interactive === true,
@@ -451,4 +499,39 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     loopMonitorJudgeRunner,
     workflowCallRunner,
   };
+}
+
+function getSelectorReportNames(
+  config: WorkflowConfig,
+  state: WorkflowState,
+  resumeStackPrefix: readonly WorkflowResumePointEntry[],
+  workflowCallResolver: WorkflowEngineOptions['workflowCallResolver'],
+  projectCwd: string,
+  lookupCwd: string,
+  workflowCallInvocationEvidence: WorkflowCallInvocationEvidence,
+  workflowStepParticipationIndex: import('../workflow-step-participation-index.js').WorkflowStepParticipationIndex,
+): readonly string[] {
+  const results = config.steps
+    .map((step) => resolveWorkflowStepReportNamesWithDiagnostics(step, createReviewReportDiscoveryContext({
+      step,
+      workflow: config,
+      workflowCallResolver,
+      projectCwd,
+      lookupCwd,
+      resumeStackPrefix,
+      stepOutputNames: new Set(state.stepOutputs.keys()),
+      restoredStepIterationNames: state.restoredStepIterationNames,
+      dynamicParallelSelections: state.dynamicParallelSelections,
+      workflowCallInvocations: snapshotWorkflowCallInvocationEvidence(
+        workflowCallInvocationEvidence,
+      ),
+      workflowStepParticipations: workflowStepParticipationIndex.snapshot(),
+    })));
+  const failures = results.flatMap((result) => result.failures);
+  if (failures.length > 0) {
+    throw new Error(
+      `Unable to resolve dynamic selector report inputs: ${failures.map((failure) => failure.reason).join('; ')}`,
+    );
+  }
+  return results.flatMap((result) => result.reportNames);
 }

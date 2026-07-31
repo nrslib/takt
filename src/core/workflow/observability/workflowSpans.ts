@@ -20,7 +20,7 @@ import {
   sanitizeTraceTaskMetadataText,
   sanitizeTraceTaskSummary,
 } from './traceDiscovery.js';
-import { redactProviderOptionsForLogging } from '../providerOptionsRedaction.js';
+import { redactProviderOptions } from '../providerOptionsRedaction.js';
 
 const tracer = trace.getTracer('takt.workflow');
 const WORKFLOW_RUN_COUNTER_OPTIONS = {
@@ -581,7 +581,7 @@ function usageAttributes(usage: ProviderUsageSnapshot | undefined): AttributeInp
 function providerOptionsAttributes(providerInfo: StepProviderInfo | undefined): AttributeInput {
   return {
     'takt.provider.options': providerInfo?.providerOptions !== undefined
-      ? JSON.stringify(redactProviderOptionsForLogging(providerInfo.providerOptions))
+      ? JSON.stringify(redactProviderOptions(providerInfo.providerOptions))
       : undefined,
     'takt.provider.options_sources': providerInfo?.providerOptionsSources !== undefined
       ? JSON.stringify(providerInfo.providerOptionsSources)

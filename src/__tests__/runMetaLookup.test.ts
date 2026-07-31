@@ -144,7 +144,7 @@ describe('run-meta lookup', () => {
       startTime: '2026-04-09T00:00:00.000Z',
       currentIteration: 7,
       resumePoint: {
-        version: 1,
+        version: 2,
         stack: [
           {
             workflow: 'default',
@@ -152,6 +152,7 @@ describe('run-meta lookup', () => {
             step: 'dev',
             kind: 'workflow_call',
             occurrence: 1,
+            call_instance: 1,
           },
           {
             workflow: 'takt/coding',
@@ -163,6 +164,8 @@ describe('run-meta lookup', () => {
         ],
         iteration: 7,
         elapsed_ms: 183245,
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
       },
     });
 
@@ -184,24 +187,38 @@ describe('run-meta lookup', () => {
       currentStep: 'delegate',
       currentIteration: 7,
       resume_point: {
-        version: 1,
+        version: 2,
         stack: [
-          { workflow: 'default', workflow_ref: 'project:sha256:default', step: 'delegate', kind: 'workflow_call', occurrence: 1 },
+          { workflow: 'default', workflow_ref: 'project:sha256:default', step: 'delegate', kind: 'workflow_call', occurrence: 1, call_instance: 1 },
           { workflow: 'takt/coding', workflow_ref: 'project:sha256:coding', step: 'review', kind: 'agent', occurrence: 1 },
         ],
         iteration: 7,
         elapsed_ms: 183245,
+        workflow_call_invocations: {
+          '{"workflow":"project:sha256:default","step":"delegate","calls":[]}': {
+            call_instance: 1,
+            report_namespace_segment: 'iteration-1--step-delegate--workflow-takt%2Fcoding',
+          },
+        },
+        workflow_step_participations: {},
       },
     });
 
     expect(readRunMeta(metaPath)?.resumePoint).toEqual({
-      version: 1,
+      version: 2,
       stack: [
-        { workflow: 'default', workflow_ref: 'project:sha256:default', step: 'delegate', kind: 'workflow_call', occurrence: 1 },
+        { workflow: 'default', workflow_ref: 'project:sha256:default', step: 'delegate', kind: 'workflow_call', occurrence: 1, call_instance: 1 },
         { workflow: 'takt/coding', workflow_ref: 'project:sha256:coding', step: 'review', kind: 'agent', occurrence: 1 },
       ],
       iteration: 7,
       elapsed_ms: 183245,
+      workflow_call_invocations: {
+        '{"workflow":"project:sha256:default","step":"delegate","calls":[]}': {
+          call_instance: 1,
+          report_namespace_segment: 'iteration-1--step-delegate--workflow-takt%2Fcoding',
+        },
+      },
+      workflow_step_participations: {},
     });
   });
 
@@ -225,7 +242,7 @@ describe('run-meta lookup', () => {
       status: 'running',
       startTime: '2026-04-09T00:00:00.000Z',
       resume_point: {
-        version: 1,
+        version: 2,
         stack: [{
           workflow: 'default',
           workflow_ref: 'project:sha256:default',
@@ -234,13 +251,14 @@ describe('run-meta lookup', () => {
         }],
         iteration: 1,
         elapsed_ms: 0,
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
       },
     });
 
     expect(readRunMeta(metaPath, (warning) => warnings.push(warning))).toBeNull();
     expect(warnings[0]).toContain('occurrence');
   });
-
   it('should normalize operation journal ownership metadata at the read boundary', () => {
     const metaPath = path.join(projectDir, '.takt', 'runs', '20260409-run-a', 'meta.json');
     writeMeta(projectDir, '20260409-run-a', {

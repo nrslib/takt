@@ -6,9 +6,9 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { appendFileSync } from 'node:fs';
 import type { AgentResponse } from '../../core/models/index.js';
 import type { StreamEvent } from '../../shared/types/provider.js';
+import { appendPrivateFile } from '../../shared/utils/private-file.js';
 import { getScenarioQueue } from './scenario.js';
 import type { MockCallOptions } from './types.js';
 
@@ -33,7 +33,11 @@ function generateMockSessionId(): string {
 function recordMockCall(
   event: 'start' | 'complete',
   personaName: string,
-  outcome?: { status: AgentResponse['status']; aborted: boolean },
+  details?: {
+    model?: string;
+    status?: AgentResponse['status'];
+    aborted?: boolean;
+  },
 ): void {
   const logPath = process.env.TAKT_MOCK_CALL_LOG;
   if (!logPath) {
@@ -45,7 +49,13 @@ function recordMockCall(
       return value === undefined ? [] : [[key, value]];
     }),
   );
-  appendFileSync(logPath, `${JSON.stringify({ event, personaName, runtimeEnvironment, ...outcome })}\n`);
+  appendPrivateFile(logPath, `${JSON.stringify({
+    event,
+    provider: 'mock',
+    personaName,
+    runtimeEnvironment,
+    ...details,
+  })}\n`);
 }
 
 async function delayWithAbort(ms: number, signal: AbortSignal | undefined): Promise<void> {
@@ -89,7 +99,9 @@ export async function callMock(
 
   // Scenario queue takes priority over explicit options
   const scenarioEntry = getScenarioQueue()?.consume(personaName);
-  recordMockCall('start', personaName);
+  recordMockCall('start', personaName, {
+    model: options.model,
+  });
 
   // Apply deterministic abort gating or an artificial delay when requested.
   if (scenarioEntry?.waitForAbort === true || scenarioEntry?.delayMs) {

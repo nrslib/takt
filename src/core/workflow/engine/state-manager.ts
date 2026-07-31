@@ -5,13 +5,22 @@
  * user inputs and agent sessions.
  */
 
-import type { WorkflowState, WorkflowConfig, AgentResponse } from '../../models/types.js';
+import {
+  isDynamicParallelSubSteps,
+  type WorkflowState,
+  type WorkflowConfig,
+  type AgentResponse,
+} from '../../models/types.js';
 import {
   MAX_USER_INPUTS,
   MAX_INPUT_LENGTH,
 } from '../constants.js';
 import type { WorkflowEngineOptions } from '../types.js';
-import { workflowEntryMatchesWorkflow } from '../workflow-reference.js';
+import {
+  workflowEntryMatchesWorkflow,
+} from '../workflow-reference.js';
+import { buildDynamicParallelSelectionIdentity } from '../dynamic-parallel/identity.js';
+import { restoreAndValidateDynamicParallelSelections } from '../dynamic-parallel/resume-state.js';
 
 /**
  * Manages workflow execution state.
@@ -42,6 +51,36 @@ export class StateManager {
       && workflowEntryMatchesWorkflow(resumeEntry, config)
       ? new Map(Object.entries(resumeEntry.step_iterations ?? {}))
       : new Map<string, number>();
+    const dynamicParallelSelections = restoreAndValidateDynamicParallelSelections(config, options);
+    const isResumeTarget = resumeEntry !== undefined
+      && resumeEntry.step === currentStep
+      && workflowEntryMatchesWorkflow(resumeEntry, config);
+    const currentStepConfig = config.steps.find((step) => step.name === currentStep);
+    const dynamicParallelSelectionIdentity = currentStepConfig?.parallel !== undefined
+      && isDynamicParallelSubSteps(currentStepConfig.parallel)
+      ? buildDynamicParallelSelectionIdentity(config, currentStep, options.resumeStackPrefix ?? [])
+      : undefined;
+    const savedSelectionForCurrentStep = dynamicParallelSelectionIdentity === undefined
+      ? undefined
+      : dynamicParallelSelections.get(dynamicParallelSelectionIdentity);
+    if (
+      isResumeTarget
+      && currentStepConfig?.parallel !== undefined
+      && isDynamicParallelSubSteps(currentStepConfig.parallel)
+      && savedSelectionForCurrentStep === undefined
+    ) {
+      throw new Error(
+        `Dynamic parallel selection snapshot is required to resume "${currentStep}"`,
+      );
+    }
+    if (
+      savedSelectionForCurrentStep !== undefined
+      && savedSelectionForCurrentStep.step_name !== currentStep
+    ) {
+      throw new Error(
+        `Dynamic parallel selection snapshot step_name does not match resumed step "${currentStep}"`,
+      );
+    }
 
     this.state = {
       workflowName: config.name,
@@ -56,6 +95,18 @@ export class StateManager {
       userInputs,
       personaSessions,
       stepIterations,
+      restoredStepIterationNames: new Set(stepIterations.keys()),
+      dynamicParallelSelections,
+      resumedDynamicParallelSteps: isResumeTarget
+        && dynamicParallelSelectionIdentity !== undefined
+        && savedSelectionForCurrentStep !== undefined
+        ? new Set([dynamicParallelSelectionIdentity])
+        : new Set(),
+      ...(!isResumeTarget
+        || dynamicParallelSelectionIdentity === undefined
+        || savedSelectionForCurrentStep === undefined
+        ? {}
+        : { activeDynamicParallelSelectionIdentity: dynamicParallelSelectionIdentity }),
       status: 'running',
     };
   }

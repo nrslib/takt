@@ -106,13 +106,15 @@ describe('RunMetaManager', () => {
   it('should persist and retain resume point metadata for workflow_call retries', () => {
     const manager = new RunMetaManager(createRunPaths(), 'Force fail task', 'default', 'file');
     const resumePoint = {
-      version: 1,
+      version: 2,
       stack: [
-        { workflow: 'default', workflow_ref: 'project:sha256:default', step: 'dev', kind: 'workflow_call', occurrence: 1 },
+        { workflow: 'default', workflow_ref: 'project:sha256:default', step: 'dev', kind: 'workflow_call', occurrence: 1, call_instance: 1 },
         { workflow: 'takt/coding', workflow_ref: 'project:sha256:coding', step: 'review', kind: 'agent', occurrence: 1 },
       ],
       iteration: 7,
       elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
 
     (
@@ -132,21 +134,25 @@ describe('RunMetaManager', () => {
   it('should refresh resume point without rolling back current step metadata', () => {
     const manager = new RunMetaManager(createRunPaths(), 'Force fail task', 'default', 'file');
     const staleResumePoint = {
-      version: 1,
+      version: 2,
       stack: [
-        { workflow: 'default', workflow_ref: 'project:sha256:default', step: 'delegate', kind: 'workflow_call', occurrence: 1 },
+        { workflow: 'default', workflow_ref: 'project:sha256:default', step: 'delegate', kind: 'workflow_call', occurrence: 1, call_instance: 1 },
         { workflow: 'takt/coding', workflow_ref: 'project:sha256:coding', step: 'review', kind: 'agent', occurrence: 1 },
       ],
       iteration: 7,
       elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
     const refreshedResumePoint = {
-      version: 1,
+      version: 2,
       stack: [
-        { workflow: 'default', workflow_ref: 'project:sha256:default', step: 'delegate', kind: 'workflow_call', occurrence: 1 },
+        { workflow: 'default', workflow_ref: 'project:sha256:default', step: 'delegate', kind: 'workflow_call', occurrence: 1, call_instance: 1 },
       ],
       iteration: 7,
       elapsed_ms: 183900,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
 
     manager.updateStep('delegate', 7, staleResumePoint);

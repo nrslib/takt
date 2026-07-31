@@ -43,13 +43,17 @@ function createCaughtProviderErrorResponse(
 function toTerminalOptions(options: ProviderCallOptions): ClaudeTerminalCallOptions {
   const claudeOptions = options.providerOptions?.claude;
   const terminalOptions = options.providerOptions?.claudeTerminal;
+  const skillsEnabled = options.internalAgentIsolation === 'strict-readonly'
+    ? false
+    : claudeOptions?.skills?.enabled;
   return {
     cwd: options.cwd,
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
+    internalAgentIsolation: options.internalAgentIsolation,
     model: options.model,
     effort: claudeOptions?.effort,
-    skillsEnabled: claudeOptions?.skills?.enabled,
+    skillsEnabled,
     allowedTools: options.allowedTools,
     mcpServers: options.mcpServers,
     ...(options.maxTurns !== undefined ? { maxTurns: options.maxTurns } : {}),
@@ -71,6 +75,7 @@ function toTerminalOptions(options: ProviderCallOptions): ClaudeTerminalCallOpti
 export class ClaudeTerminalProvider implements Provider {
   readonly supportsStructuredOutput = true;
   readonly supportsNativeImageInput = false;
+  readonly supportsStrictInternalAgentIsolation = true;
 
   getRuntimeInstructions(_allowedTools?: string[]): string | null {
     return null;

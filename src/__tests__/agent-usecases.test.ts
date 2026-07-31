@@ -4,6 +4,7 @@ import { parseParts } from '../core/workflow/engine/task-decomposer.js';
 import { detectJudgeIndex } from '../agents/judge-utils.js';
 import {
   executeAgent,
+  executeIsolatedStructuredInternalAgent,
   generateReport,
   executePart,
   evaluateCondition,
@@ -86,6 +87,81 @@ describe('agent-usecases', () => {
     expect(runAgent).toHaveBeenNthCalledWith(2, 'coder', 'write report', { cwd: '/tmp' });
     expect(runAgent).toHaveBeenNthCalledWith(3, 'coder', 'part work', { cwd: '/tmp' });
   });
+
+  it('should execute internal structured agents with a provider-neutral read-only contract', async () => {
+    vi.mocked(runAgent).mockResolvedValue(doneResponse(
+      'ignored',
+      { selected_ids: ['frontend'], rationale: 'UI changed' },
+    ));
+    const schema = { type: 'object', additionalProperties: false };
+
+    const response = await executeIsolatedStructuredInternalAgent(
+      'selector system prompt',
+      'select reviewers',
+      schema,
+      {
+        cwd: '/tmp',
+        sessionId: 'ambient-session',
+        resolution: {
+          provider: 'mock',
+          model: undefined,
+          providerOptions: {
+            codex: { skills: { repo: true, user: true } },
+            opencode: { allowedTools: ['write'] },
+            claude: { allowedTools: ['Bash'], skills: { enabled: true } },
+          },
+        },
+      },
+    );
+
+    expect(response.structuredOutput).toEqual({
+      selected_ids: ['frontend'],
+      rationale: 'UI changed',
+    });
+    expect(runAgent).toHaveBeenCalledWith(
+      undefined,
+      'select reviewers',
+      expect.objectContaining({
+        internalAgentIsolation: 'strict-readonly',
+        allowedTools: [],
+        mcpServers: {},
+        bypassPermissions: false,
+        sessionId: undefined,
+        outputSchema: schema,
+        resolvedExecution: {
+          provider: 'mock',
+          model: undefined,
+          permissionMode: 'readonly',
+          providerOptions: {
+            codex: { skills: { repo: true, user: true } },
+            opencode: { allowedTools: ['write'] },
+            claude: { allowedTools: ['Bash'], skills: { enabled: true } },
+          },
+        },
+      }),
+    );
+  });
+
+  it.each(['copilot', 'cursor', 'kiro', 'opencode'] as const)(
+    'should reject %s before invoking an internal agent without strict isolation support',
+    async (provider) => {
+      await expect(executeIsolatedStructuredInternalAgent(
+        'selector system prompt',
+        'select reviewers',
+        { type: 'object' },
+        {
+          cwd: '/tmp',
+          resolution: {
+            provider,
+            model: undefined,
+            providerOptions: {},
+          },
+        },
+      )).rejects.toThrow(`Provider "${provider}" does not support strict internal-agent isolation`);
+
+      expect(runAgent).not.toHaveBeenCalled();
+    },
+  );
 
   it('evaluateCondition は構造化出力の matched_index を優先する', async () => {
     vi.mocked(runAgent).mockResolvedValue(doneResponse('ignored', { matched_index: 2, reason: 'second condition' }));

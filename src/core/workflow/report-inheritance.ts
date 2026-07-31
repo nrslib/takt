@@ -1,7 +1,11 @@
 import { chmodSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
 import { getErrorMessage, isPathInside, isValidReportDirName } from '../../shared/utils/index.js';
-import { workflowCallNamespacePathsMatch, workflowCallNamespaceSegmentsMatch } from './workflow-call-namespace.js';
+import {
+  workflowCallReportRequestPathsMatch,
+  workflowCallReportRequestSegmentsMatch,
+  workflowCallRunNamespacePathsCorrespond,
+} from './workflow-call-namespace.js';
 import { scanReportEntries } from './report-file-index.js';
 import {
   classifyReportRelativePath,
@@ -65,8 +69,8 @@ function candidateFor(
       if (candidateSegments.length < reportPathSegments.length) return false;
       const candidateReportSegments = candidateSegments.slice(-reportPathSegments.length);
       const candidateNamespace = candidateSegments.slice(0, -reportPathSegments.length);
-      return workflowCallNamespacePathsMatch(candidateReportSegments, reportPathSegments)
-        && workflowCallNamespacePathsMatch(candidateNamespace, targetNamespace);
+      return workflowCallReportRequestPathsMatch(candidateReportSegments, reportPathSegments)
+        && workflowCallRunNamespacePathsCorrespond(candidateNamespace, targetNamespace);
     })
     .map((path) => ({
       path,
@@ -79,7 +83,8 @@ function candidateFor(
 
 function reportPathAfterNamespace(reportSegments: string[], targetNamespace: string[]): string[] {
   const hasNamespacePrefix = reportSegments.length > targetNamespace.length
-    && targetNamespace.every((segment, index) => workflowCallNamespaceSegmentsMatch(segment, reportSegments[index]!));
+    && targetNamespace.every((segment, index) =>
+      workflowCallReportRequestSegmentsMatch(segment, reportSegments[index]!));
   return hasNamespacePrefix ? reportSegments.slice(targetNamespace.length) : reportSegments;
 }
 

@@ -4,6 +4,7 @@ import type {
   WorkflowResumeFrameKind,
   WorkflowStep,
 } from '../models/types.js';
+import { getAllParallelSubSteps } from '../models/types.js';
 import {
   getWorkflowStepKind as getRawWorkflowStepKind,
   type WorkflowStepKindLike,
@@ -20,7 +21,7 @@ export function getWorkflowResumeFrameKind(
   if (kind !== 'agent') {
     return kind;
   }
-  return step.parallel !== undefined && step.parallel.length > 0
+  return step.parallel !== undefined && getAllParallelSubSteps(step.parallel).length > 0
     ? 'parallel'
     : 'agent';
 }
@@ -30,7 +31,7 @@ export function isDelegatedWorkflowStep(step: WorkflowStepKindLike & Pick<Workfl
   return (
     kind === 'system'
     || kind === 'workflow_call'
-    || (step.parallel?.length ?? 0) > 0
+    || (step.parallel !== undefined && getAllParallelSubSteps(step.parallel).length > 0)
     || step.arpeggio !== undefined
     || step.teamLeader !== undefined
   );

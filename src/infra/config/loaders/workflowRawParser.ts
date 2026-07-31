@@ -57,7 +57,7 @@ export function parseWorkflowRaw(raw: unknown, options: WorkflowRawParserOptions
     throw new ZodError(remappedIssues.map((issue) => {
       const provenance = isCallerRulePath(issue.path, resolved.rulePathMappings)
         ? undefined
-        : findFragmentErrorProvenance(issue, resolved.provenance);
+        : findFragmentErrorProvenance(issue, resolved.provenance, resolved.raw);
       if (!provenance) {
         return issue;
       }
@@ -185,6 +185,7 @@ export function annotateWorkflowConfigFragmentError(error: unknown, workflow: ob
 function findFragmentErrorProvenance(
   issue: ZodError['issues'][number],
   provenance: readonly WorkflowStepFragmentProvenance[],
+  raw: unknown,
 ) : { source: WorkflowStepFragmentProvenance; workflowDefined: boolean } | undefined {
   const unionPath = findCommonUnionIssuePath(issue);
   if (unionPath !== undefined) {
@@ -194,6 +195,10 @@ function findFragmentErrorProvenance(
       ? undefined
       : { source, workflowDefined: exactSource === undefined };
   }
+  const unionProvenance = findUniqueUnionFragmentProvenance(issue, provenance, raw);
+  if (unionProvenance !== undefined) {
+    return unionProvenance;
+  }
   const issuePath = issue.path;
   const exactSource = findFragmentProvenanceAtExactPath(provenance, issuePath);
   const source = exactSource ?? findFragmentProvenanceForStep(provenance, issuePath);
@@ -201,6 +206,54 @@ function findFragmentErrorProvenance(
     return undefined;
   }
   return { source, workflowDefined: exactSource === undefined };
+}
+
+function findUniqueUnionFragmentProvenance(
+  issue: ZodError['issues'][number],
+  provenance: readonly WorkflowStepFragmentProvenance[],
+  raw: unknown,
+): { source: WorkflowStepFragmentProvenance; workflowDefined: boolean } | undefined {
+  if (issue.code !== 'invalid_union') return undefined;
+  const existingPaths = collectLeafIssuePaths(issue)
+    .filter((path, _index, paths) => !paths.some((other) =>
+      other.length > path.length && startsWithPath(other, path)))
+    .filter((path) => hasOwnPath(raw, path));
+  if (existingPaths.length === 0) return undefined;
+  const candidates = existingPaths.map((path) =>
+    findFragmentProvenanceAtExactPath(provenance, path));
+  if (candidates.some((candidate) => candidate === undefined)) return undefined;
+  const sources = candidates as WorkflowStepFragmentProvenance[];
+  const first = sources[0];
+  if (first === undefined) return undefined;
+  if (sources.some((source) =>
+    source.ref !== first.ref || source.sourcePath !== first.sourcePath)) {
+    return undefined;
+  }
+  return {
+    source: first,
+    workflowDefined: false,
+  };
+}
+
+function hasOwnPath(value: unknown, path: readonly PropertyKey[]): boolean {
+  let current = value;
+  for (const part of path) {
+    if ((typeof current !== 'object' || current === null) || !Object.hasOwn(current, part)) {
+      return false;
+    }
+    current = (current as Record<PropertyKey, unknown>)[part];
+  }
+  return true;
+}
+
+function collectLeafIssuePaths(
+  issue: ZodError['issues'][number],
+  parentPath: readonly PropertyKey[] = [],
+): readonly (readonly PropertyKey[])[] {
+  const path = [...parentPath, ...issue.path];
+  if (issue.code !== 'invalid_union') return [path];
+  return issue.errors.flatMap((branch) =>
+    branch.flatMap((nestedIssue) => collectLeafIssuePaths(nestedIssue, path)));
 }
 
 function findCommonUnionIssuePath(

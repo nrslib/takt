@@ -141,6 +141,7 @@ function makeParallelDeps(
         sessionId: 'session-1',
       }),
       buildPhaseRunnerContext: vi.fn().mockReturnValue({ childProcessEnv: undefined }),
+      resolveStepProviderModelBeforeAutoRouting: vi.fn().mockReturnValue({ provider: 'opencode', model: 'opencode/big-pickle' }),
       resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'opencode', model: 'opencode/big-pickle' }),
     } as unknown as ParallelRunnerDeps['optionsBuilder'],
     stepExecutor: {
@@ -656,6 +657,7 @@ describe('session compaction Phase 1 wiring', () => {
       optionsBuilder: {
         buildAgentOptions: vi.fn().mockReturnValue(phase1Options),
         buildPhaseRunnerContext: vi.fn().mockReturnValue({ childProcessEnv: undefined }),
+        resolveStepProviderModelBeforeAutoRouting: vi.fn().mockReturnValue({ provider: 'opencode', model: 'opencode/big-pickle' }),
         resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'opencode', model: 'opencode/big-pickle' }),
       } as unknown as ParallelRunnerDeps['optionsBuilder'],
       stepExecutor: {
@@ -708,6 +710,7 @@ describe('session compaction Phase 1 wiring', () => {
       optionsBuilder: {
         buildAgentOptions: vi.fn().mockReturnValue(phase1Options),
         buildPhaseRunnerContext: vi.fn().mockReturnValue({ childProcessEnv: undefined }),
+        resolveStepProviderModelBeforeAutoRouting: vi.fn().mockReturnValue({ provider: 'opencode', model: 'opencode/big-pickle' }),
         resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'opencode', model: 'opencode/big-pickle' }),
       } as unknown as ParallelRunnerDeps['optionsBuilder'],
       stepExecutor: {

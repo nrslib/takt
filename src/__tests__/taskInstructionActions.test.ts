@@ -580,8 +580,38 @@ describe('instructBranch direct execution flow', () => {
       '/project',
       3,
       '/project/.takt/worktrees/done-task',
+      undefined,
     );
     expect(mockSelectWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('should pass the same selector override to instruct preview and execution', async () => {
+    const overrides = { provider: 'mock' as const, model: 'mock-selector' };
+
+    await instructBranch('/project', {
+      kind: 'completed',
+      name: 'done-task',
+      createdAt: '2026-02-14T00:00:00.000Z',
+      filePath: '/project/.takt/tasks.yaml',
+      content: 'done',
+      branch: 'takt/done-task',
+      worktreePath: '/project/.takt/worktrees/done-task',
+      data: { task: 'done', workflow: 'default' },
+    }, overrides);
+
+    expect(mockGetWorkflowDescription).toHaveBeenCalledWith(
+      'default',
+      '/project',
+      3,
+      '/project/.takt/worktrees/done-task',
+      overrides,
+    );
+    expect(mockExecuteAndCompleteTask).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.any(Object),
+      '/project',
+      overrides,
+    );
   });
 
   it('should build branch context from diff and commit sections without dropping either section', async () => {

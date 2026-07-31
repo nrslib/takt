@@ -316,6 +316,71 @@ describe('option resolution order', () => {
     );
   });
 
+  it('should execute a complete resolved handoff without reading config or persona resolvers', async () => {
+    loadProjectConfigMock.mockImplementation(() => {
+      throw new Error('project config must not be read');
+    });
+    loadGlobalConfigMock.mockImplementation(() => {
+      throw new Error('global config must not be read');
+    });
+    resolveConfigValueMock.mockImplementation(() => {
+      throw new Error('persona config must not be read');
+    });
+    resolveProviderOptionsWithTraceMock.mockImplementation(() => {
+      throw new Error('provider options must not be resolved');
+    });
+    const providerOptions = {
+      codex: {
+        reasoningEffort: 'high' as const,
+      },
+    };
+
+    await runAgent(undefined, 'task', {
+      cwd: '/repo',
+      internalSystemPrompt: 'internal',
+      resolvedExecution: {
+        provider: 'codex',
+        model: 'gpt-resolved',
+        providerOptions,
+        permissionMode: 'readonly',
+      },
+    });
+
+    expect(loadProjectConfigMock).not.toHaveBeenCalled();
+    expect(loadGlobalConfigMock).not.toHaveBeenCalled();
+    expect(resolveConfigValueMock).not.toHaveBeenCalled();
+    expect(resolveProviderOptionsWithTraceMock).not.toHaveBeenCalled();
+    expect(loadCustomAgentsMock).not.toHaveBeenCalled();
+    expect(loadAgentPromptMock).not.toHaveBeenCalled();
+    expect(loadPersonaPromptFromPathMock).not.toHaveBeenCalled();
+    expect(getProviderMock).toHaveBeenCalledWith('codex');
+    expect(providerCallMock).toHaveBeenCalledWith(
+      'task',
+      expect.objectContaining({
+        model: 'gpt-resolved',
+        providerOptions,
+        permissionMode: 'readonly',
+      }),
+    );
+  });
+
+  it('should reject a resolved handoff mixed with unresolved resolution inputs', async () => {
+    await expect(runAgent(undefined, 'task', {
+      cwd: '/repo',
+      provider: 'mock',
+      resolvedExecution: {
+        provider: 'codex',
+        model: undefined,
+        providerOptions: {},
+        permissionMode: 'readonly',
+      },
+    })).rejects.toThrow('resolvedExecution cannot be mixed');
+
+    expect(loadProjectConfigMock).not.toHaveBeenCalled();
+    expect(loadGlobalConfigMock).not.toHaveBeenCalled();
+    expect(getProviderMock).not.toHaveBeenCalled();
+  });
+
   it('should merge persona providerOptions into standalone runAgent calls', async () => {
     resolveConfigValueMock.mockReturnValue({
       conductor: {

@@ -140,6 +140,23 @@ function assertAllowedProviderBaseUrl(
   );
 }
 
+export function assertAllowedNormalizedProviderBaseUrls(
+  providerOptions: StepProviderOptions | undefined,
+  options: NormalizeProviderOptionsOptions = {},
+): void {
+  const prefix = options.pathPrefix ?? 'provider_options';
+  assertAllowedProviderBaseUrl(
+    `${prefix}.codex.base_url`,
+    providerOptions?.codex?.baseUrl,
+    options,
+  );
+  assertAllowedProviderBaseUrl(
+    `${prefix}.claude.base_url`,
+    providerOptions?.claude?.baseUrl,
+    options,
+  );
+}
+
 /** Convert raw YAML provider_options (snake_case) to internal format (camelCase). */
 export function normalizeProviderOptions(
   raw: RawProviderOptions | Record<string, unknown> | undefined,

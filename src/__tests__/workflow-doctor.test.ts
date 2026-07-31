@@ -177,6 +177,167 @@ steps:
     expect(mockError).not.toHaveBeenCalled();
   });
 
+  it('validates dynamic fixed/pool review tags, aggregate rules, and report references', async () => {
+    writeWorkflow(projectDir, '.takt/config.yaml', 'provider: mock\n');
+    writeWorkflow(
+      projectDir,
+      '.takt/facets/output-contracts/review-report.md',
+      'Write the review result.',
+    );
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/dynamic-doctor.yaml', `name: dynamic-doctor
+max_steps: 2
+initial_step: reviewers
+steps:
+  - name: reviewers
+    parallel:
+      fixed:
+        - name: architecture
+          tags: [review]
+          instruction: review architecture
+          output_contracts:
+            report:
+              - name: architecture.md
+                format: review-report
+          rules:
+            - condition: approved
+      pool:
+        - name: security
+          tags: [review]
+          description: review security
+          instruction: review security
+          output_contracts:
+            report:
+              - name: security.md
+                format: review-report
+          rules:
+            - condition: approved
+      selection:
+        mode: replace
+    rules:
+      - condition: all("approved")
+        next: fix
+  - name: fix
+    instruction: use {report:architecture.md} and {report:security.md}
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    expect(inspectWorkflowFile(filePath, projectDir).diagnostics).toEqual([]);
+    await expect(doctorWorkflowCommand([filePath], projectDir)).resolves.toBeUndefined();
+
+    expect(mockSuccess).toHaveBeenCalledWith(expect.stringContaining('dynamic-doctor.yaml'));
+    expect(mockError).not.toHaveBeenCalled();
+  });
+
+  it('reports an unresolved dynamic selector provider contract', async () => {
+    writeWorkflow(projectDir, '.takt/config.yaml', [
+      'takt_providers:',
+      '  selector:',
+      '    provider: opencode',
+      '    model: opencode/big-pickle',
+    ].join('\n'));
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/dynamic-selector-provider.yaml', `name: dynamic-selector-provider
+max_steps: 1
+initial_step: reviewers
+steps:
+  - name: reviewers
+    parallel:
+      pool:
+        - name: security
+          description: review security
+          instruction: review security
+      selection:
+        mode: replace
+`);
+
+    await expect(doctorWorkflowCommand([filePath], projectDir)).rejects.toThrow(
+      'Workflow validation failed',
+    );
+
+    expect(mockError).toHaveBeenCalledWith(
+      expect.stringContaining('Provider "opencode" does not support strict internal-agent isolation'),
+    );
+  });
+
+  it('uses the CLI selector override for runtime contract validation', async () => {
+    writeWorkflow(projectDir, '.takt/config.yaml', [
+      'takt_providers:',
+      '  selector:',
+      '    provider: opencode',
+      '    model: opencode/big-pickle',
+    ].join('\n'));
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/dynamic-selector-override.yaml', `name: dynamic-selector-override
+max_steps: 1
+initial_step: reviewers
+steps:
+  - name: reviewers
+    parallel:
+      pool:
+        - name: security
+          description: review security
+          instruction: review security
+      selection:
+        mode: replace
+`);
+
+    await expect(doctorWorkflowCommand(
+      [filePath],
+      projectDir,
+      { provider: 'mock' },
+    )).resolves.toBeUndefined();
+
+    expect(mockSuccess).toHaveBeenCalledWith(expect.stringContaining('dynamic-selector-override.yaml'));
+    expect(mockError).not.toHaveBeenCalled();
+  });
+
+  it('reports selector resolution failures when only a called workflow is dynamic', async () => {
+    writeWorkflow(projectDir, '.takt/config.yaml', [
+      'takt_providers:',
+      '  selector:',
+      '    provider: opencode',
+      '    model: opencode/big-pickle',
+    ].join('\n'));
+    writeWorkflow(projectDir, '.takt/workflows/child-dynamic.yaml', `name: child-dynamic
+subworkflow:
+  callable: true
+max_steps: 1
+initial_step: reviewers
+steps:
+  - name: reviewers
+    parallel:
+      pool:
+        - name: security
+          description: review security
+          instruction: review security
+          rules:
+            - condition: approved
+      selection:
+        mode: replace
+    rules:
+      - condition: all("approved")
+        next: COMPLETE
+`);
+    const parentPath = writeWorkflow(projectDir, '.takt/workflows/parent-dynamic.yaml', `name: parent-dynamic
+max_steps: 1
+initial_step: delegate
+steps:
+  - name: delegate
+    kind: workflow_call
+    call: child-dynamic
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+
+    await expect(doctorWorkflowCommand([parentPath], projectDir)).rejects.toThrow(
+      'Workflow validation failed',
+    );
+    expect(mockError).toHaveBeenCalledWith(
+      expect.stringContaining('Provider "opencode" does not support strict internal-agent isolation'),
+    );
+  });
+
   it('reports invalid team_leader inspect_tools from workflow doctor output', async () => {
     const filePath = writeWorkflow(projectDir, '.takt/workflows/invalid-team-leader-inspect-tools.yaml', `name: invalid-team-leader-inspect-tools
 max_steps: 10

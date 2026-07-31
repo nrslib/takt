@@ -145,13 +145,34 @@ export interface WorkflowSubworkflowConfig {
 
 export interface WorkflowResumePointEntry extends CanonicalWorkflowResumeFrame {
   step_iterations?: Record<string, number>;
+  call_instance?: number;
 }
 
 export interface WorkflowResumePoint {
-  version: 1;
+  version: 2;
   stack: WorkflowResumePointEntry[];
   iteration: number;
   elapsed_ms: number;
+  dynamic_parallel_selections?: Record<string, DynamicParallelSelectionSnapshot>;
+  workflow_call_invocations: Record<string, WorkflowCallInvocationRecord>;
+  workflow_step_participations: Record<string, WorkflowStepParticipationRecord>;
+}
+
+export interface WorkflowStepParticipationRecord {
+  report_names: string[];
+}
+
+export interface WorkflowCallInvocationRecord {
+  call_instance: number;
+  report_namespace_segment: string;
+}
+
+export interface DynamicParallelSelectionSnapshot {
+  identity: string;
+  step_name: string;
+  round: number;
+  selected_pool_ids: string[];
+  effective_selection_ids: string[];
 }
 
 export interface WorkflowPromotionEntry {
@@ -213,7 +234,7 @@ interface AgentWorkflowStepBase extends WorkflowStepBase {
   systemInputs?: never;
   effects?: never;
   outputContracts?: OutputContractEntry[];
-  parallel?: WorkflowStep[];
+  parallel?: ParallelSubSteps;
   concurrency?: number;
   arpeggio?: ArpeggioStepConfig;
   teamLeader?: TeamLeaderConfig;
@@ -231,10 +252,39 @@ export interface NormalAgentWorkflowStep extends AgentWorkflowStepBase {
 
 export interface ParallelWorkflowStep extends AgentWorkflowStepBase {
   session?: never;
-  parallel: WorkflowStep[];
+  parallel: ParallelSubSteps;
   concurrency?: number;
   arpeggio?: never;
   teamLeader?: never;
+}
+
+export type DynamicParallelSelectionMode = 'replace' | 'cumulative';
+
+export type DynamicParallelFixedSubStep = NormalAgentWorkflowStep;
+
+export interface DynamicParallelPoolSubStep extends NormalAgentWorkflowStep {
+  readonly description: string;
+}
+
+export interface DynamicParallelSubSteps {
+  readonly kind: 'dynamic';
+  readonly fixed: readonly DynamicParallelFixedSubStep[];
+  readonly pool: readonly DynamicParallelPoolSubStep[];
+  readonly selection: { readonly mode: DynamicParallelSelectionMode };
+}
+
+export type ParallelSubSteps = WorkflowStep[] | DynamicParallelSubSteps;
+
+export function isDynamicParallelSubSteps(
+  parallel: ParallelSubSteps,
+): parallel is DynamicParallelSubSteps {
+  return !Array.isArray(parallel) && parallel.kind === 'dynamic';
+}
+
+export function getAllParallelSubSteps(parallel: ParallelSubSteps): readonly WorkflowStep[] {
+  return isDynamicParallelSubSteps(parallel)
+    ? [...parallel.fixed, ...parallel.pool]
+    : parallel;
 }
 
 export interface ArpeggioWorkflowStep extends AgentWorkflowStepBase {
@@ -327,6 +377,15 @@ export interface WorkflowCallStep extends WorkflowStepBase {
 }
 
 export type WorkflowStep = AgentWorkflowStep | SystemWorkflowStep | WorkflowCallStep;
+
+export function isNormalAgentWorkflowStep(step: WorkflowStep): step is NormalAgentWorkflowStep {
+  return (
+    (step.kind === undefined || step.kind === 'agent')
+    && step.parallel === undefined
+    && step.arpeggio === undefined
+    && step.teamLeader === undefined
+  );
+}
 
 export interface ArpeggioMergeStepConfig {
   readonly strategy: 'concat' | 'custom';
@@ -458,6 +517,10 @@ export interface WorkflowState {
   userInputs: string[];
   personaSessions: Map<string, string>;
   stepIterations: Map<string, number>;
+  restoredStepIterationNames: Set<string>;
+  dynamicParallelSelections: Map<string, DynamicParallelSelectionSnapshot>;
+  resumedDynamicParallelSteps: Set<string>;
+  activeDynamicParallelSelectionIdentity?: string;
   pendingFallback?: FallbackContext;
   rateLimitFallbackState?: RateLimitFallbackState;
   status: 'running' | 'completed' | 'aborted';

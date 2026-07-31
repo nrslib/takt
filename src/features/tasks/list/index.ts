@@ -215,7 +215,7 @@ export async function listTasks(
           showFullDiff(cwd, task);
           break;
         case 'instruct':
-          await instructBranch(cwd, task);
+          await instructBranch(cwd, task, options);
           break;
         case 'sync':
           await syncBranchWithRoot(cwd, task);
@@ -242,7 +242,7 @@ export async function listTasks(
       if (taskAction === 'requeue') {
         await taskRetryActions.requeueFailedTask(task, cwd);
       } else if (taskAction === 'retry') {
-        await taskRetryActions.retryFailedTask(task, cwd);
+        await taskRetryActions.retryFailedTask(task, cwd, options);
       } else if (taskAction === 'delete') {
         await deleteTaskByKind(task);
       }
@@ -270,7 +270,7 @@ export async function listTasks(
           showFullDiff(cwd, task);
           break;
         case 'instruct':
-          await instructBranch(cwd, task);
+          await instructBranch(cwd, task, options);
           break;
         case 'sync':
           await syncBranchWithRoot(cwd, task);

@@ -17,6 +17,7 @@ function toCodexOptions(options: ProviderCallOptions): CodexCallOptions {
     cwd: options.cwd,
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
+    internalAgentIsolation: options.internalAgentIsolation,
     model: options.model,
     reasoningEffort: options.providerOptions?.codex?.reasoningEffort,
     permissionMode: options.permissionMode,
@@ -40,6 +41,7 @@ export class CodexProvider implements Provider {
   readonly supportsStructuredOutput = true;
   readonly supportsNativeImageInput = true;
   readonly supportsIsolatedStructuredExecution = true;
+  readonly supportsStrictInternalAgentIsolation = true;
 
   getRuntimeInstructions(_allowedTools?: string[]): string | null {
     return null;

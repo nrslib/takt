@@ -92,6 +92,201 @@ describe('getWorkflowDescription', () => {
     ].join('\n'));
   }
 
+  it('dynamic parallel の mode と fixed/pool role を preview に含める', () => {
+    const projectDir = createProject();
+    const workflowDir = join(projectDir, '.takt', 'workflows');
+    mkdirSync(workflowDir, { recursive: true });
+    writeFileSync(join(projectDir, '.takt', 'config.yaml'), [
+      'provider: codex',
+      'model: gpt-default',
+      'takt_providers:',
+      '  selector:',
+      '    model: gpt-selector',
+      '    provider_options:',
+      '      codex:',
+      '        reasoning_effort: medium',
+    ].join('\n'));
+    writeFileSync(join(workflowDir, 'dynamic-preview.yaml'), [
+      'name: dynamic-preview',
+      'initial_step: reviewers',
+      'max_steps: 1',
+      'steps:',
+      '  - name: reviewers',
+      '    parallel:',
+      '      fixed:',
+      '        - name: architecture',
+      '          instruction: Review architecture',
+      '          rules:',
+      '            - condition: approved',
+      '      pool:',
+      '        - name: frontend',
+      '          description: Review frontend',
+      '          instruction: Review frontend',
+      '          rules:',
+      '            - condition: approved',
+      '      selection:',
+      '        mode: cumulative',
+      '    rules:',
+      '      - condition: all("approved")',
+      '        next: COMPLETE',
+    ].join('\n'));
+
+    const description = getWorkflowDescription('dynamic-preview', projectDir, 1);
+
+    expect(description.workflowStructure).toContain('selector mode: cumulative');
+    expect(description.workflowStructure).toContain('fixed: architecture');
+    expect(description.workflowStructure).toContain('pool candidate: frontend');
+    expect(description.stepPreviews[0]).toMatchObject({
+      name: 'reviewers',
+      dynamicSelectionMode: 'cumulative',
+      substeps: [
+        {
+          name: 'dynamic-selector',
+          internalAgent: true,
+          provider: 'codex',
+          model: 'gpt-selector',
+          providerSource: 'project',
+          permissionMode: 'readonly',
+          allowedTools: ['request_user_input', 'update_plan', 'view_image', 'web_search'],
+          canEdit: false,
+        },
+        { name: 'architecture', parallelRole: 'fixed' },
+        { name: 'frontend', parallelRole: 'pool' },
+      ],
+    });
+
+    const overridden = getWorkflowDescription(
+      'dynamic-preview',
+      projectDir,
+      1,
+      projectDir,
+      {
+        provider: 'mock',
+        model: 'cli-selector',
+        providerSource: 'cli',
+        modelSource: 'cli',
+      },
+    );
+    expect(overridden.stepPreviews[0]?.substeps?.[0]).toMatchObject({
+      name: 'dynamic-selector',
+      provider: 'mock',
+      model: 'cli-selector',
+      providerSource: 'cli',
+      modelSource: 'cli',
+    });
+    expect(description.stepPreviews[0]?.substeps?.[0]).not.toHaveProperty('providerOptions');
+    expect(overridden.stepPreviews[0]?.substeps?.[0]).not.toHaveProperty('providerOptions');
+  });
+
+  it('OpenCode selectorをpreview生成前に拒否する', () => {
+    const projectDir = createProject();
+    const workflowDir = join(projectDir, '.takt', 'workflows');
+    mkdirSync(workflowDir, { recursive: true });
+    writeFileSync(join(projectDir, '.takt', 'config.yaml'), [
+      'takt_providers:',
+      '  selector:',
+      '    provider: opencode',
+      '    model: opencode/big-pickle',
+    ].join('\n'));
+    writeFileSync(join(workflowDir, 'unsupported-selector-preview.yaml'), [
+      'name: unsupported-selector-preview',
+      'initial_step: reviewers',
+      'max_steps: 1',
+      'steps:',
+      '  - name: reviewers',
+      '    parallel:',
+      '      pool:',
+      '        - name: security',
+      '          description: Review security',
+      '          instruction: Review security',
+      '          rules:',
+      '            - condition: approved',
+      '    rules:',
+      '      - condition: all("approved")',
+      '        next: COMPLETE',
+    ].join('\n'));
+
+    expect(() => getWorkflowDescription(
+      'unsupported-selector-preview',
+      projectDir,
+      1,
+    )).toThrow('Provider "opencode" does not support strict internal-agent isolation');
+  });
+
+  it('AI向けselector previewへ実行用provider optionsを含めない', () => {
+    const projectDir = createProject();
+    const workflowDir = join(projectDir, '.takt', 'workflows');
+    mkdirSync(workflowDir, { recursive: true });
+    writeFileSync(join(projectDir, '.takt', 'config.yaml'), [
+      'provider: codex',
+      'model: gpt-default',
+      'takt_providers:',
+      '  selector:',
+      '    model: gpt-selector',
+      '    provider_options:',
+      '      codex:',
+      '        base_url: "http://selector-user:selector-password@127.0.0.1:8787?token=selector-token"',
+      '        reasoning_effort: medium',
+    ].join('\n'));
+    writeFileSync(join(workflowDir, 'secret-preview.yaml'), [
+      'name: secret-preview',
+      'initial_step: reviewers',
+      'max_steps: 1',
+      'steps:',
+      '  - name: reviewers',
+      '    parallel:',
+      '      pool:',
+      '        - name: security',
+      '          description: Review security',
+      '          instruction: Review security',
+      '          rules:',
+      '            - condition: approved',
+      '    rules:',
+      '      - condition: all("approved")',
+      '        next: COMPLETE',
+    ].join('\n'));
+
+    const description = getWorkflowDescription('secret-preview', projectDir, 1);
+    const serializedPreview = JSON.stringify(description.stepPreviews);
+    const selectorPreview = description.stepPreviews[0]?.substeps?.[0];
+
+    expect(selectorPreview).toMatchObject({
+      provider: 'codex',
+      model: 'gpt-selector',
+      providerSource: 'project',
+      permissionMode: 'readonly',
+    });
+    expect(selectorPreview).not.toHaveProperty('providerOptions');
+    expect(serializedPreview).not.toContain('selector-user');
+    expect(serializedPreview).not.toContain('selector-password');
+    expect(serializedPreview).not.toContain('selector-token');
+    expect(serializedPreview).not.toContain('127.0.0.1:8787');
+  });
+
+  it('dynamic parallelを含まないworkflowでは未使用の不正selector設定を解決しない', () => {
+    const projectDir = createProject();
+    const workflowDir = join(projectDir, '.takt', 'workflows');
+    mkdirSync(workflowDir, { recursive: true });
+    writeFileSync(join(projectDir, '.takt', 'config.yaml'), [
+      'takt_providers:',
+      '  selector:',
+      '    provider: opencode',
+    ].join('\n'));
+    writeFileSync(join(workflowDir, 'ordinary-preview.yaml'), [
+      'name: ordinary-preview',
+      'initial_step: implement',
+      'max_steps: 1',
+      'steps:',
+      '  - name: implement',
+      '    instruction: Implement',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
+    ].join('\n'));
+
+    expect(() => getWorkflowDescription('ordinary-preview', projectDir, 1)).not.toThrow();
+  });
+
   it('finding manager の解決済み provider/model を parallel step summary に含める', () => {
     const projectDir = createProject();
     writeFindingManagerWorkflow(projectDir, ['provider: codex', 'model: gpt-5.5']);

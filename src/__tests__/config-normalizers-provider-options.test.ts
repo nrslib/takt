@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildRawTaktProvidersOrThrow,
   denormalizeProviderOptions,
+  normalizeTaktSelectorProvider,
 } from '../infra/config/configNormalizers.js';
 import { normalizeProviderOptions } from '../infra/config/providerOptions.js';
 
@@ -262,5 +263,46 @@ describe('buildRawTaktProvidersOrThrow', () => {
         assistant: {},
       }),
     ).toThrow(/Configuration error: 'takt_providers\.assistant' must include provider or model\./);
+  });
+
+  it.each([
+    {
+      selector: { provider: 'claude' as const, model: 'selector-model' },
+      expected: { provider: 'claude', model: 'selector-model' },
+    },
+    {
+      selector: { model: 'selector-model', provider: 'claude' as const },
+      expected: { provider: 'claude', model: 'selector-model' },
+    },
+  ])('should persist normalized selector fields independently of key insertion order', ({ selector, expected }) => {
+    expect(buildRawTaktProvidersOrThrow({ selector })).toEqual({ selector: expected });
+  });
+
+  it.each([
+    ['an empty selector entry', {}],
+    ['empty selector provider options', { providerOptions: {} }],
+    ['an empty selector provider branch', { providerOptions: { codex: {} } }],
+    ['an unknown selector provider branch', { providerOptions: { unknownProvider: { enabled: true } } }],
+    ['an unknown selector option mixed with a valid option', {
+      providerOptions: { codex: { reasoningEffort: 'medium', unknownOption: true } },
+    }],
+    ['an unknown nested selector option', {
+      providerOptions: { codex: { skills: { repo: true, unknownSkill: true } } },
+    }],
+    ['an invalid selector enum value', { providerOptions: { codex: { reasoningEffort: 'turbo' } } }],
+    ['a blank selector model', { model: '   ' }],
+    ['a snake_case selector alias', { provider_options: { codex: { reasoning_effort: 'medium' } } }],
+    ['a snake_case nested option alias', { providerOptions: { codex: { reasoning_effort: 'medium' } } }],
+  ])('should reject %s before denormalizing selector provider options', (_label, selector) => {
+    expect(() => buildRawTaktProvidersOrThrow({
+      selector,
+    } as never)).toThrow();
+  });
+
+  it('should enforce the trimmed non-empty model contract in direct selector normalization', () => {
+    expect(() => normalizeTaktSelectorProvider({ model: '   ' })).toThrow(/model must not be empty/);
+    expect(normalizeTaktSelectorProvider({ model: ' selector-model ' })).toEqual({
+      model: 'selector-model',
+    });
   });
 });

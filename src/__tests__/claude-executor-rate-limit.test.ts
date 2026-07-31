@@ -404,6 +404,20 @@ describe('QueryExecutor rate limit cause preservation', () => {
     expect((queryMock.mock.calls[1]?.[0] as { options?: { skills?: unknown } }).options?.skills).toEqual([]);
   });
 
+  it('strict read-only 隔離では Skills 有効指定より空の Skill allowlist を優先する', async () => {
+    queryMock.mockImplementation(() => createMockQuery([]));
+    const executor = new QueryExecutor();
+
+    await executor.execute('test prompt', {
+      cwd: '/tmp/project',
+      internalAgentIsolation: 'strict-readonly',
+      skillsEnabled: true,
+    });
+
+    expect(queryMock).toHaveBeenCalledTimes(1);
+    expect((queryMock.mock.calls[0]?.[0] as { options?: { skills?: unknown } }).options?.skills).toEqual([]);
+  });
+
   it.each([
     ['allowed', 'allowed'],
     ['allowed_warning', 'allowed_warning'],

@@ -17,8 +17,13 @@ import {
 } from '../infra/config/index.js';
 import { TaskRunner, type TaskInfo } from '../infra/task/index.js';
 import { parseFindingLedger } from '../core/models/finding-schemas.js';
-import { getWorkflowReference } from '../core/workflow/workflow-reference.js';
+import {
+  buildWorkflowResumePointEntry,
+  getWorkflowReference,
+} from '../core/workflow/workflow-reference.js';
 import { buildWorkflowCallSiteIdentity } from '../core/workflow/workflow-call-site-identity.js';
+import { WorkflowCallInvocationIndex } from '../core/workflow/workflow-call-invocation-index.js';
+import { WorkflowStepParticipationIndex } from '../core/workflow/workflow-step-participation-index.js';
 
 const sourceRunSlug = '20260717-source-run';
 const resumeModes = ['requeue', 'retry', 'instruct'] as const;
@@ -74,10 +79,12 @@ function createEnvironment(withFindingContract: boolean): TestEnvironment {
     '      - name: arch-review',
     '        persona: ./personas/fixer.md',
     '        instruction: arch review',
-    '        output_contracts:',
-    '          report:',
-    '            - name: 05-arch-review.md',
-    '              format: "# Architecture Review"',
+      '        output_contracts:',
+      '          report:',
+      '            - name: 05-arch-review.md',
+      ...(withFindingContract
+        ? ['              format: architecture-review-finding-contract']
+        : ['              format: "# Architecture Review"']),
     '        rules:',
     '          - condition: approved',
     '            next: COMPLETE',
@@ -132,26 +139,32 @@ function buildWorkflowCallNamespace(projectDir: string, occurrence: number): str
 
 function buildResumePoint(projectDir: string) {
   const { parent, child } = loadResumeWorkflows(projectDir);
+  const delegateEntry = buildWorkflowResumePointEntry(
+    parent,
+    'delegate',
+    'workflow_call',
+    1,
+    undefined,
+    1,
+  );
+  const invocationIndex = new WorkflowCallInvocationIndex(new Map());
+  invocationIndex.record(parent, 'delegate', [], {
+    call_instance: 1,
+    report_namespace_segment: buildWorkflowCallNamespace(projectDir, 1),
+  });
+  const participationIndex = new WorkflowStepParticipationIndex(new Map());
+  participationIndex.record(child, 'reviewers', [delegateEntry], []);
+  participationIndex.record(child, 'arch-review', [delegateEntry], ['05-arch-review.md']);
   return {
-    version: 1 as const,
+    version: 2 as const,
     stack: [
-      {
-        workflow: parent.name,
-        workflow_ref: parent.name,
-        step: 'delegate',
-        kind: 'workflow_call' as const,
-        occurrence: 1,
-      },
-      {
-        workflow: child.name,
-        workflow_ref: getWorkflowReference(child),
-        step: 'fix',
-        kind: 'agent' as const,
-        occurrence: 1,
-      },
+      delegateEntry,
+      buildWorkflowResumePointEntry(child, 'fix', 'agent', 1, new Map([['reviewers', 1]])),
     ],
     iteration: 1,
     elapsed_ms: 0,
+    workflow_call_invocations: invocationIndex.serialized(),
+    workflow_step_participations: participationIndex.serialized(),
   };
 }
 
@@ -254,6 +267,12 @@ function writeSourceReports(projectDir: string, withFindingContract: boolean): {
     rawFindings: [],
     conflicts: [],
     interpretations: [],
+    evidenceRecords: [],
+    evidenceBindings: [],
+    lifecycleReservations: [],
+    lifecycleEvents: [],
+    rawRecoveryAttempts: [],
+    rawRecoveryResults: [],
   }));
   const ledgerPath = join(projectDir, '.takt', 'findings', 'review-ledger.json');
   mkdirSync(join(projectDir, '.takt', 'findings'), { recursive: true });
@@ -354,6 +373,16 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
       buildWorkflowCallNamespace(environment.projectDir, 1),
       '05-arch-review.md',
     ].join('/');
+    const inheritanceDiagnosticPath = join(
+      environment.projectDir,
+      '.takt',
+      'runs',
+      resumedRunSlug,
+      'reports',
+      'subworkflows',
+      buildWorkflowCallNamespace(environment.projectDir, 1),
+      'review-report-inheritance.json',
+    );
 
     expect(success).toBe(true);
     expect(instructions).toHaveLength(1);
@@ -374,6 +403,15 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
           sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
         }),
       ],
+    }));
+    expect(JSON.parse(readFileSync(inheritanceDiagnosticPath, 'utf-8'))).toEqual(expect.objectContaining({
+      sourceReportDirectory: join(environment.projectDir, '.takt', 'runs', sourceRunSlug, 'reports'),
+      status: 'partial',
+      fallbackUsed: true,
+      skipped: [expect.objectContaining({
+        reportName: '05-arch-review.md',
+        reason: 'target_exists',
+      })],
     }));
     if (source.sourceLedger !== undefined) {
       expect(readFileSync(join(environment.projectDir, '.takt', 'findings', 'review-ledger.json'), 'utf-8'))
@@ -442,6 +480,23 @@ describe('IT: missing report source through task resume', () => {
       resumedRunSlug,
       'meta.json',
     ), 'utf-8')) as { reason?: string };
+    const reportRoot = join(
+      environment.projectDir,
+      '.takt',
+      'runs',
+      resumedRunSlug,
+      'reports',
+    );
+    const diagnosticRelativePaths = (readdirSync(reportRoot, { recursive: true }) as string[])
+      .filter((entry) => entry.endsWith('review-report-inheritance.json'));
+    expect(diagnosticRelativePaths).toHaveLength(1);
+    const diagnosticPath = join(reportRoot, diagnosticRelativePaths[0]!);
+    const diagnostic = JSON.parse(readFileSync(diagnosticPath, 'utf-8')) as {
+      sourceRunSlug?: string;
+      status?: string;
+      fallbackUsed?: boolean;
+      skipped?: Array<{ reason?: string }>;
+    };
 
     expect(success).toBe(false);
     expect(instructions).toHaveLength(0);
@@ -450,6 +505,15 @@ describe('IT: missing report source through task resume', () => {
       sourceRunSlug,
       targetRunSlug: resumedRunSlug,
       files: [],
+    }));
+    expect(diagnostic).toEqual(expect.objectContaining({
+      sourceRunSlug,
+      status: 'unavailable',
+      fallbackUsed: true,
+      skipped: [expect.objectContaining({
+        reportName: '05-arch-review.md',
+        reason: 'not_found',
+      })],
     }));
     expect(resumedMeta.reason).toContain('source report snapshot does not contain it');
   });

@@ -1,31 +1,24 @@
 import { z } from 'zod/v4';
 import { buildTaskSchema } from './taskConfigSerialization.js';
 import { getLocalBranchNameError } from '../../shared/utils/gitBranchValidation.js';
-import { WORKFLOW_RESUME_FRAME_KINDS } from '../../shared/types/workflow-resume.js';
+import { parseWorkflowResumePoint } from '../../core/workflow/resume-point-codec.js';
 
 const positiveSafeIntegerSchema = z.number().refine(
   (value) => Number.isSafeInteger(value) && value > 0,
   { message: 'Expected a positive safe integer' },
 );
 
-const ResumePointEntrySchema = z.object({
-  workflow: z.string().min(1),
-  workflow_ref: z.string().min(1),
-  step: z.string().min(1),
-  kind: z.enum(WORKFLOW_RESUME_FRAME_KINDS),
-  occurrence: positiveSafeIntegerSchema,
-  step_iterations: z.record(
-    z.string().min(1),
-    positiveSafeIntegerSchema,
-  ).optional(),
-}).strict();
-
-const ResumePointSchema = z.object({
-  version: z.literal(1),
-  stack: z.array(ResumePointEntrySchema).min(1),
-  iteration: z.number().int().min(0),
-  elapsed_ms: z.number().int().min(0),
-}).strict();
+const WorkflowResumePointCodecSchema = z.unknown().transform((value, ctx) => {
+  try {
+    return parseWorkflowResumePoint(value);
+  } catch (error) {
+    ctx.addIssue({
+      code: 'custom',
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return z.NEVER;
+  }
+});
 
 export const TaskExecutionConfigObjectSchema = z.object({
   worktree: z.union([z.boolean(), z.string()]).optional(),
@@ -44,7 +37,7 @@ export const TaskExecutionConfigObjectSchema = z.object({
   source: z.enum(['pr_review', 'issue', 'manual']).optional(),
   pr_number: positiveSafeIntegerSchema.optional(),
   context_pr_number: positiveSafeIntegerSchema.optional(),
-  resume_point: ResumePointSchema.optional(),
+  resume_point: WorkflowResumePointCodecSchema.optional(),
 }).superRefine((data, ctx) => {
   if (data.source === 'pr_review' && data.pr_number === undefined) {
     ctx.addIssue({

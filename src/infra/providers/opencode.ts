@@ -87,6 +87,7 @@ function requireOpenCodeModel(model: string | undefined): string {
 export class OpenCodeProvider implements Provider {
   readonly supportsStructuredOutput = true;
   readonly supportsNativeImageInput = false;
+  readonly supportsStrictInternalAgentIsolation = false;
 
   getRuntimeInstructions(allowedTools?: string[], permissionMode?: PermissionMode, networkAccess?: boolean): string | null {
     if (allowedTools === undefined) {

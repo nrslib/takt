@@ -167,4 +167,16 @@ describe('resolveAgentOverrides', () => {
       autoStrategy: 'cost',
     });
   });
+
+  it('preserves CLI model values for provider forwarding', () => {
+    const blankProgram = {
+      opts: () => ({ model: '   ' }),
+    } as unknown as Command;
+    const modelProgram = {
+      opts: () => ({ model: ' gpt-5 ' }),
+    } as unknown as Command;
+
+    expect(resolveAgentOverrides(blankProgram)).toMatchObject({ model: '   ' });
+    expect(resolveAgentOverrides(modelProgram)).toMatchObject({ model: ' gpt-5 ' });
+  });
 });

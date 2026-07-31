@@ -72,6 +72,8 @@ export type {
   WorkflowSubworkflowConfig,
   WorkflowResumePointEntry,
   WorkflowResumePoint,
+  WorkflowCallInvocationRecord,
+  WorkflowStepParticipationRecord,
   StepProviderOptions,
   FindingContractConfig,
   FindingLedger,
@@ -79,6 +81,12 @@ export type {
   AgentWorkflowStep,
   NormalAgentWorkflowStep,
   ParallelWorkflowStep,
+  DynamicParallelFixedSubStep,
+  DynamicParallelPoolSubStep,
+  DynamicParallelSubSteps,
+  DynamicParallelSelectionMode,
+  DynamicParallelSelectionSnapshot,
+  ParallelSubSteps,
   ArpeggioWorkflowStep,
   TeamLeaderWorkflowStep,
   SystemWorkflowStep,
@@ -102,6 +110,9 @@ export type {
 
 export {
   WORKFLOW_SESSION_MODES,
+  getAllParallelSubSteps,
+  isDynamicParallelSubSteps,
+  isNormalAgentWorkflowStep,
 } from './workflow-types.js';
 
 

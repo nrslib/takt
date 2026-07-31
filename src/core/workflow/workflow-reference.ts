@@ -20,6 +20,7 @@ export function buildWorkflowResumePointEntry(
   kind: WorkflowResumeFrameKind,
   occurrence: number,
   stepIterations?: ReadonlyMap<string, number>,
+  callInstance?: number,
 ): WorkflowResumePointEntry {
   if (!Number.isSafeInteger(occurrence) || occurrence <= 0) {
     throw new Error(`Workflow resume frame "${workflow.name}/${step}" occurrence is invalid`);
@@ -34,11 +35,25 @@ export function buildWorkflowResumePointEntry(
     ...(stepIterations !== undefined
       ? { step_iterations: Object.fromEntries(stepIterations) }
       : {}),
+    ...(callInstance === undefined ? {} : { call_instance: callInstance }),
   };
 }
 
 export function getResumePointWorkflowReference(entry: WorkflowResumePointEntry): string {
   return entry.workflow_ref;
+}
+
+export function normalizeWorkflowResumePointEntry(
+  entry: WorkflowResumePointEntry,
+): WorkflowResumePointEntry {
+  if (entry.call_instance !== undefined) {
+    return entry;
+  }
+  const callInstance = entry.step_iterations?.[entry.step];
+  if (callInstance === undefined) {
+    return entry;
+  }
+  return { ...entry, call_instance: callInstance };
 }
 
 export function workflowEntryMatchesWorkflow(
@@ -52,5 +67,10 @@ export function workflowEntriesMatch(
   left: WorkflowResumePointEntry,
   right: WorkflowResumePointEntry,
 ): boolean {
-  return left.workflow_ref === right.workflow_ref;
+  const normalizedLeft = normalizeWorkflowResumePointEntry(left);
+  const normalizedRight = normalizeWorkflowResumePointEntry(right);
+  if (normalizedLeft.call_instance !== normalizedRight.call_instance) {
+    return false;
+  }
+  return normalizedLeft.workflow_ref === normalizedRight.workflow_ref;
 }

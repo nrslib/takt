@@ -74,8 +74,15 @@ export type TaktProviderModelOnlyEntry = {
 
 export type TaktProviderConfigEntry = TaktProviderEntry | TaktProviderModelOnlyEntry;
 
+export interface TaktSelectorProviderConfigEntry {
+  provider?: ProviderType;
+  model?: string;
+  providerOptions?: StepProviderOptions;
+}
+
 export interface TaktProvidersConfig {
-  assistant: TaktProviderConfigEntry;
+  assistant?: TaktProviderConfigEntry;
+  selector?: TaktSelectorProviderConfigEntry;
 }
 
 export interface AssistantConfig {

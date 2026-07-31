@@ -44,6 +44,17 @@ export * from './resolveConfigValue.js';
 export * from './resolveWorkflowConfigValue.js';
 export { resolveNonWorkflowProviderModel } from './nonWorkflowProvider.js';
 export {
+  resolveSelectorProviderForProject,
+  resolveSelectorProviderFromConfig,
+  type ResolvedSelectorProvider,
+  type SelectorProviderOverrides,
+} from './selectorProviderResolution.js';
+export {
+  resolveWorkflowSelector,
+  type WorkflowSelectorResolution,
+  type WorkflowSelectorResolutionOptions,
+} from './workflowSelectorResolution.js';
+export {
   loadAgentsFromDir,
   loadCustomAgents,
   listCustomAgents,

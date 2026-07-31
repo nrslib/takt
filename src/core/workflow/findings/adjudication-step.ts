@@ -5,6 +5,7 @@ import type {
   WorkflowConfig,
   WorkflowStep,
 } from '../../models/types.js';
+import { getAllParallelSubSteps } from '../../models/types.js';
 import { parseWorkflowRuleCondition } from '../../models/workflow-rule-condition.js';
 import { FINDING_CONFLICT_ADJUDICATION_STEP } from '../constants.js';
 import { FindingConflictAdjudicationOutputJsonSchema } from './schemas.js';
@@ -110,7 +111,9 @@ export function workflowWiresFindingConflictAdjudication(
 ): boolean {
   const stepWires = steps.some((step) => (
     rulesWireAdjudication(step.rules)
-    || (step.parallel ?? []).some((subStep) => rulesWireAdjudication(subStep.rules))
+    || (step.parallel === undefined
+      ? false
+      : getAllParallelSubSteps(step.parallel).some((subStep) => rulesWireAdjudication(subStep.rules)))
   ));
   return stepWires || (loopMonitors ?? []).some((monitor) => rulesWireAdjudication(monitor.judge.rules));
 }

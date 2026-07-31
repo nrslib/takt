@@ -122,6 +122,14 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 #   assistant:
 #     provider: claude
 #     model: opus
+#   selector:              # optional dynamic-parallel selector override
+#     provider: codex
+#     model: gpt-5
+#     provider_options:
+#       codex:
+#         reasoning_effort: medium
+
+`takt_providers.selector` is optional. Provider/model precedence is explicit CLI or environment override, project selector, global selector, project top-level, then global top-level. A model is accepted only when its candidate belongs to the resolved provider. Only selector entries contribute `provider_options`, merged by option leaf from global then project; top-level, persona, and pool sub-step options are not inherited by the selector. An empty selector entry or an empty `provider_options` entry is rejected during configuration loading. Dynamic selectors require a provider that guarantees strict read-only internal-agent isolation; Claude, Codex, and Mock satisfy this contract, while OpenCode, Cursor, Copilot, and Kiro are rejected before selector or participant startup. Selector settings remain unused and do not affect workflows without dynamic parallel.
 
 # Finding Contract plain-text intake normalizer
 # finding_contract:

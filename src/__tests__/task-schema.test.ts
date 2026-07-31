@@ -148,9 +148,11 @@ describe('TaskExecutionConfigSchema', () => {
 
   it('should require occurrence and accept omitted or positive integer step iterations', () => {
     const baseResumePoint = {
-      version: 1,
+      version: 2,
       iteration: 3,
       elapsed_ms: 100,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
     };
 
     expect(() => TaskExecutionConfigSchema.parse({
@@ -194,7 +196,7 @@ describe('TaskExecutionConfigSchema', () => {
   it.each([0, -1, 1.5])('should reject invalid occurrence %s', (occurrence) => {
     expect(() => TaskExecutionConfigSchema.parse({
       resume_point: {
-        version: 1,
+        version: 2,
         stack: [{
           workflow: 'default',
           workflow_ref: 'project:sha256:default',
@@ -204,6 +206,8 @@ describe('TaskExecutionConfigSchema', () => {
         }],
         iteration: 3,
         elapsed_ms: 100,
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
       },
     })).toThrow();
   });
@@ -211,7 +215,7 @@ describe('TaskExecutionConfigSchema', () => {
   it('should accept parallel resume frame kind', () => {
     expect(() => TaskExecutionConfigSchema.parse({
       resume_point: {
-        version: 1,
+        version: 2,
         stack: [{
           workflow: 'default',
           workflow_ref: 'project:sha256:default',
@@ -221,8 +225,73 @@ describe('TaskExecutionConfigSchema', () => {
         }],
         iteration: 3,
         elapsed_ms: 100,
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
       },
     })).not.toThrow();
+  });
+
+  it('should round-trip dynamic parallel resume selections', () => {
+    const parsed = TaskExecutionConfigSchema.parse({
+      resume_point: {
+        version: 2,
+        stack: [{
+          workflow: 'default',
+          workflow_ref: 'project:sha256:default',
+          step: 'reviewers',
+          kind: 'parallel',
+          occurrence: 1,
+        }],
+        iteration: 3,
+        elapsed_ms: 100,
+        dynamic_parallel_selections: {
+          '{"workflow":"default","step":"reviewers","calls":[]}': {
+            identity: '{"workflow":"default","step":"reviewers","calls":[]}',
+            step_name: 'reviewers',
+            round: 1,
+            selected_pool_ids: ['frontend'],
+            effective_selection_ids: ['architecture', 'frontend'],
+          },
+        },
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
+      },
+    });
+
+    expect(parsed.resume_point?.dynamic_parallel_selections).toBeDefined();
+  });
+
+  it('should round-trip the canonical workflow-call invocation index', () => {
+    const invocationIdentity = '{"workflow":"default","step":"delegate","calls":[]}';
+    const parsed = TaskExecutionConfigSchema.parse({
+      resume_point: {
+        version: 2,
+        stack: [{
+          workflow: 'default',
+          workflow_ref: 'project:sha256:default',
+          step: 'delegate',
+          kind: 'workflow_call',
+          occurrence: 2,
+          call_instance: 2,
+        }],
+        iteration: 3,
+        elapsed_ms: 100,
+        workflow_call_invocations: {
+          [invocationIdentity]: {
+            call_instance: 2,
+            report_namespace_segment: 'iteration-3--step-delegate--workflow-child',
+          },
+        },
+        workflow_step_participations: {},
+      },
+    });
+
+    expect(parsed.resume_point?.workflow_call_invocations).toEqual({
+      [invocationIdentity]: {
+        call_instance: 2,
+        report_namespace_segment: 'iteration-3--step-delegate--workflow-child',
+      },
+    });
   });
 
   it.each([
@@ -233,7 +302,7 @@ describe('TaskExecutionConfigSchema', () => {
   ])('should reject step iterations containing %s', (_name, stepIterations) => {
     expect(() => TaskExecutionConfigSchema.parse({
       resume_point: {
-        version: 1,
+        version: 2,
         stack: [{
           workflow: 'default',
           workflow_ref: 'project:sha256:default',
@@ -244,9 +313,30 @@ describe('TaskExecutionConfigSchema', () => {
         }],
         iteration: 3,
         elapsed_ms: 100,
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
       },
     })).toThrow();
   });
+
+  it.each(['workflow_call_invocations', 'workflow_step_participations'] as const)(
+    'should reject version 2 resume points missing %s',
+    (field) => {
+      const completeResumePoint = {
+        version: 2,
+        stack: [{ workflow: 'default', step: 'implement', kind: 'agent' }],
+        iteration: 3,
+        elapsed_ms: 100,
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
+      };
+      const resumePoint = Object.fromEntries(
+        Object.entries(completeResumePoint).filter(([key]) => key !== field),
+      );
+
+      expect(() => TaskExecutionConfigSchema.parse({ resume_point: resumePoint })).toThrow();
+    },
+  );
 
 
   it('should reject conflicting start_step and start_movement values', () => {

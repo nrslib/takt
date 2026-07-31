@@ -71,6 +71,20 @@ describe('loadGlobalConfig', () => {
     expect(config.interactivePreviewSteps).toBeUndefined();
   });
 
+  it.each(['codex', 'claude'])('should accept an external %s selector base_url in global config', (provider) => {
+    mkdirSync(join(testHomeDir, '.takt'), { recursive: true });
+    writeFileSync(getGlobalConfigPath(), [
+      'takt_providers:',
+      '  selector:',
+      `    provider: ${provider}`,
+      '    provider_options:',
+      `      ${provider}:`,
+      '        base_url: https://selector.example.test/v1',
+    ].join('\n'), 'utf-8');
+
+    expect(loadGlobalConfig().taktProviders?.selector?.providerOptions).toBeDefined();
+  });
+
   it('should accept project-local keys in global config.yaml', () => {
     const taktDir = join(testHomeDir, '.takt');
     mkdirSync(taktDir, { recursive: true });
@@ -123,6 +137,101 @@ describe('loadGlobalConfig', () => {
     expect(config.taktProviders).toEqual({
       assistant: { provider: 'claude', model: 'haiku' },
     });
+  });
+
+  it('should load selector provider options from global config.yaml', () => {
+    const taktDir = join(testHomeDir, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    writeFileSync(
+      getGlobalConfigPath(),
+      [
+        'takt_providers:',
+        '  selector:',
+        '    provider: codex',
+        '    provider_options:',
+        '      codex:',
+        '        reasoning_effort: low',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const config = loadGlobalConfig();
+
+    expect(config.taktProviders).toEqual({
+      selector: {
+        provider: 'codex',
+        providerOptions: { codex: { reasoningEffort: 'low' } },
+      },
+    });
+  });
+
+  it('should reject a blank selector model in global config', () => {
+    mkdirSync(join(testHomeDir, '.takt'), { recursive: true });
+    writeFileSync(getGlobalConfigPath(), [
+      'takt_providers:',
+      '  selector:',
+      '    model: "   "',
+    ].join('\n'), 'utf-8');
+
+    expect(() => loadGlobalConfig()).toThrow(/model must not be empty/);
+  });
+
+  it('should preserve a blank TAKT_MODEL for ordinary provider forwarding', () => {
+    process.env.TAKT_MODEL = '   ';
+
+    expect(loadGlobalConfig().model).toBe('   ');
+  });
+
+  it('should load a provider-only OpenCode selector before top-level composition', () => {
+    mkdirSync(join(testHomeDir, '.takt'), { recursive: true });
+    writeFileSync(getGlobalConfigPath(), [
+      'provider: opencode',
+      'model: opencode/big-pickle',
+      'takt_providers:',
+      '  selector:',
+      '    provider: opencode',
+    ].join('\n'), 'utf-8');
+
+    expect(loadGlobalConfig().taktProviders?.selector).toEqual({
+      provider: 'opencode',
+    });
+  });
+
+  it.each([
+    ['an empty selector entry', ['takt_providers:', '  selector: {}']],
+    ['empty selector provider options', ['takt_providers:', '  selector:', '    provider_options: {}']],
+    ['an empty selector provider branch', ['takt_providers:', '  selector:', '    provider_options:', '      codex: {}']],
+    ['an unknown selector provider branch', ['takt_providers:', '  selector:', '    provider_options:', '      unknown_provider:', '        enabled: true']],
+    ['an unknown selector field', ['takt_providers:', '  selector:', '    provider: codex', '    unsupported: true']],
+    ['a mixed valid and unknown selector option', [
+      'takt_providers:',
+      '  selector:',
+      '    provider_options:',
+      '      codex:',
+      '        reasoning_effort: medium',
+      '        unknown_option: true',
+    ]],
+    ['an unknown nested selector option', [
+      'takt_providers:',
+      '  selector:',
+      '    provider_options:',
+      '      codex:',
+      '        skills:',
+      '          repo: true',
+      '          unknown_skill: true',
+    ]],
+    ['an invalid selector enum', [
+      'takt_providers:',
+      '  selector:',
+      '    provider_options:',
+      '      codex:',
+      '        reasoning_effort: turbo',
+    ]],
+  ])('should reject %s when loading global config', (_label, lines) => {
+    mkdirSync(join(testHomeDir, '.takt'), { recursive: true });
+    writeFileSync(getGlobalConfigPath(), lines.join('\n'), 'utf-8');
+
+    expect(() => loadGlobalConfig()).toThrow();
   });
 
   it('should persist project-local keys when saving global config', () => {
@@ -283,6 +392,32 @@ describe('loadGlobalConfig', () => {
     expect(raw).toContain('model: haiku');
   });
 
+  it('should persist selector provider options when saving global config', () => {
+    const taktDir = join(testHomeDir, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
+
+    const config = loadGlobalConfig();
+    config.taktProviders = {
+      selector: {
+        model: 'global-selector-model',
+        provider: 'codex',
+        providerOptions: { codex: { reasoningEffort: 'high' } },
+      },
+    } as typeof config.taktProviders;
+
+    saveGlobalConfig(config);
+    invalidateGlobalConfigCache();
+
+    expect(loadGlobalConfig().taktProviders).toEqual({
+      selector: {
+        model: 'global-selector-model',
+        provider: 'codex',
+        providerOptions: { codex: { reasoningEffort: 'high' } },
+      },
+    });
+  });
+
   it('should allow arbitrary codex model names in takt_providers.assistant on load', () => {
     const taktDir = join(testHomeDir, '.takt');
     mkdirSync(taktDir, { recursive: true });
@@ -305,7 +440,7 @@ describe('loadGlobalConfig', () => {
     });
   });
 
-  it('should fail fast on save when takt_providers is set without assistant', () => {
+  it('should fail fast on save when takt_providers has no configured entry', () => {
     const taktDir = join(testHomeDir, '.takt');
     mkdirSync(taktDir, { recursive: true });
     writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
@@ -313,7 +448,31 @@ describe('loadGlobalConfig', () => {
     const config = loadGlobalConfig();
     config.taktProviders = {} as unknown as NonNullable<typeof config.taktProviders>;
 
-    expect(() => saveGlobalConfig(config)).toThrow(/Configuration error: 'takt_providers\.assistant' is required when takt_providers is set\./);
+    expect(() => saveGlobalConfig(config)).toThrow(/Configuration error: 'takt_providers' must include assistant or selector\./);
+  });
+
+  it.each([
+    ['an empty selector entry', {}],
+    ['empty selector provider options', { providerOptions: {} }],
+    ['an empty selector provider branch', { providerOptions: { codex: {} } }],
+    ['an unknown selector provider branch', { providerOptions: { unknownProvider: { enabled: true } } }],
+    ['an unknown selector field', { provider: 'codex', unsupported: true }],
+    ['a mixed valid and unknown selector option', {
+      providerOptions: { codex: { reasoningEffort: 'medium', unknownOption: true } },
+    }],
+    ['an unknown nested selector option', {
+      providerOptions: { codex: { skills: { repo: true, unknownSkill: true } } },
+    }],
+    ['an invalid selector enum', { providerOptions: { codex: { reasoningEffort: 'turbo' } } }],
+  ])('should reject %s when saving global config', (_label, selector) => {
+    const taktDir = join(testHomeDir, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
+
+    const config = loadGlobalConfig();
+    config.taktProviders = { selector } as unknown as NonNullable<typeof config.taktProviders>;
+
+    expect(() => saveGlobalConfig(config)).toThrow();
   });
 
   it('should allow arbitrary codex model names in takt_providers.assistant on save', () => {

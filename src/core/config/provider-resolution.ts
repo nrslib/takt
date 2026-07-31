@@ -3,6 +3,7 @@ import {
   resolveModelFromCandidates,
   type ProviderModelOutput,
 } from '../provider-resolution.js';
+import type { StepProviderOptions } from '../models/workflow-types.js';
 import type { ProviderType } from '../workflow/types.js';
 
 export interface AssistantProviderConfigSource {
@@ -12,6 +13,11 @@ export interface AssistantProviderConfigSource {
     assistant?: {
       provider?: ProviderType;
       model?: string;
+    };
+    selector?: {
+      provider?: ProviderType;
+      model?: string;
+      providerOptions?: StepProviderOptions;
     };
   };
 }

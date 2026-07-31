@@ -128,6 +128,34 @@ describe('ClaudeTerminalProvider wiring', () => {
     expect(Object.prototype.hasOwnProperty.call(terminalOptions, 'maxTurns')).toBe(false);
   });
 
+  it('Given strict read-only internal isolation, When call is invoked, Then it reaches the terminal client', async () => {
+    const agent = new ClaudeTerminalProvider().setup({
+      name: 'selector',
+      systemPrompt: 'Select reviewers.',
+    });
+
+    await agent.call('prompt', {
+      cwd: '/tmp/worktree',
+      internalAgentIsolation: 'strict-readonly',
+      permissionMode: 'readonly',
+      allowedTools: [],
+      mcpServers: {},
+      providerOptions: {
+        claude: {
+          skills: { enabled: true },
+        },
+      },
+    });
+
+    expect(mockCallClaudeTerminal).toHaveBeenCalledWith('selector', 'prompt', expect.objectContaining({
+      internalAgentIsolation: 'strict-readonly',
+      permissionMode: 'readonly',
+      allowedTools: [],
+      mcpServers: {},
+      skillsEnabled: false,
+    }));
+  });
+
   it('Given claude sandbox provider option, When call is invoked, Then terminal provider ignores sandbox and continues', async () => {
     const provider = new ClaudeTerminalProvider();
     const agent = provider.setup({ name: 'coder' });

@@ -25,11 +25,13 @@ import { extractPersonaName } from './persona-spec.js';
 export type { RunAgentOptions, StreamCallback } from './types.js';
 
 const log = createLogger('runner');
-type ResolvedProviderOptionsHandoff = {
-  resolvedProviderOptions?: ProviderCallOptions['providerOptions'] | null;
+type RunnerHandoffOptions = RunAgentOptions;
+type AgentExecutionResolution = {
+  readonly provider: ProviderType;
+  readonly model: string | undefined;
+  readonly providerOptions: ProviderCallOptions['providerOptions'];
+  readonly permissionMode: RunAgentOptions['permissionMode'];
 };
-
-type RunnerHandoffOptions = RunAgentOptions & ResolvedProviderOptionsHandoff;
 
 export class AgentRunner {
   private static resolvePersonaProviders(cwd: string) {
@@ -111,32 +113,71 @@ export class AgentRunner {
     );
   }
 
-  private static buildCallOptions(
-    resolvedModel: string | undefined,
-    resolvedProvider: ProviderType,
-    resolvedProviderOptions: ProviderCallOptions['providerOptions'],
-    options: RunAgentOptions,
-    localConfig: ReturnType<typeof loadProjectConfig>,
-    globalConfig: ReturnType<typeof loadGlobalConfig>,
-  ): ProviderCallOptions {
-    const permissionMode = AgentRunner.resolvePermissionMode(
-      resolvedProvider,
-      options,
-      localConfig,
-      globalConfig,
-    );
+  private static assertResolvedExecutionIsNotMixed(options: RunAgentOptions): void {
+    const mixedFields = [
+      options.provider,
+      options.model,
+      options.resolvedProvider,
+      options.resolvedModel,
+      options.providerOptions,
+      options.resolvedProviderOptions,
+      options.permissionResolution,
+      options.permissionMode,
+    ];
+    if (mixedFields.some((value) => value !== undefined)) {
+      throw new Error('resolvedExecution cannot be mixed with unresolved agent resolution inputs');
+    }
+  }
 
+  private static resolveExecution(
+    cwd: string,
+    personaDisplayName: string | undefined,
+    options: RunnerHandoffOptions,
+  ): AgentExecutionResolution {
+    if (options.resolvedExecution !== undefined) {
+      AgentRunner.assertResolvedExecutionIsNotMixed(options);
+      return {
+        provider: options.resolvedExecution.provider,
+        model: options.resolvedExecution.model,
+        providerOptions: options.resolvedExecution.providerOptions,
+        permissionMode: options.resolvedExecution.permissionMode,
+      };
+    }
+    const resolved = AgentRunner.resolveProviderAndModel(cwd, personaDisplayName, options);
+    return {
+      provider: resolved.provider,
+      model: resolved.model,
+      providerOptions: AgentRunner.resolveProviderOptions(
+        cwd,
+        personaDisplayName,
+        options,
+        resolved.personaProviders,
+      ),
+      permissionMode: AgentRunner.resolvePermissionMode(
+        resolved.provider,
+        options,
+        resolved.localConfig,
+        resolved.globalConfig,
+      ),
+    };
+  }
+
+  private static buildCallOptions(
+    resolution: AgentExecutionResolution,
+    options: RunAgentOptions,
+  ): ProviderCallOptions {
     return {
       cwd: options.cwd,
       executionProfile: options.executionProfile,
       abortSignal: options.abortSignal,
       sessionId: options.sessionId,
+      internalAgentIsolation: options.internalAgentIsolation,
       allowedTools: options.allowedTools,
       mcpServers: options.mcpServers,
       ...(options.maxTurns !== undefined ? { maxTurns: options.maxTurns } : {}),
-      model: resolvedModel,
-      permissionMode,
-      providerOptions: resolvedProviderOptions,
+      model: resolution.model,
+      permissionMode: resolution.permissionMode,
+      providerOptions: resolution.providerOptions,
       onStream: options.onStream,
       onPermissionRequest: options.onPermissionRequest,
       onAskUserQuestion: options.onAskUserQuestion,
@@ -171,36 +212,26 @@ export class AgentRunner {
     task: string,
     options: RunAgentOptions,
   ): Promise<AgentResponse> {
-    const resolved = AgentRunner.resolveProviderAndModel(options.cwd, agentConfig.name, options);
-    const providerType = resolved.provider;
-    const provider = getProvider(providerType);
+    const customOptions: RunnerHandoffOptions = {
+      ...options,
+      allowedTools: options.allowedTools ?? agentConfig.allowedTools,
+    };
+    const resolution = AgentRunner.resolveExecution(
+      options.cwd,
+      agentConfig.name,
+      customOptions,
+    );
+    const provider = getProvider(resolution.provider);
     if (
       options.executionProfile === 'isolated-structured'
       && provider.supportsIsolatedStructuredExecution !== true
     ) {
       throw new Error(
-        `Provider "${providerType}" does not support strict isolated structured execution`,
+        `Provider "${resolution.provider}" does not support strict isolated structured execution`,
       );
     }
     const resolvedSystemPrompt = loadAgentPrompt(agentConfig, options.cwd);
-    const customOptions: RunnerHandoffOptions = {
-      ...options,
-      allowedTools: options.allowedTools ?? agentConfig.allowedTools,
-    };
-    const resolvedProviderOptions = AgentRunner.resolveProviderOptions(
-      options.cwd,
-      agentConfig.name,
-      customOptions,
-      resolved.personaProviders,
-    );
-    const callOptions = AgentRunner.buildCallOptions(
-      resolved.model,
-      providerType,
-      resolvedProviderOptions,
-      customOptions,
-      resolved.localConfig,
-      resolved.globalConfig,
-    );
+    const callOptions = AgentRunner.buildCallOptions(resolution, customOptions);
     const providerRuntimeInstructions = provider.getRuntimeInstructions(customOptions.allowedTools, callOptions.permissionMode, callOptions.providerOptions?.opencode?.networkAccess);
     const systemPrompt = buildWrappedSystemPrompt(resolvedSystemPrompt, {
       ...customOptions,
@@ -238,31 +269,30 @@ export class AgentRunner {
       permissionMode: options.permissionMode,
     });
 
-    const resolved = AgentRunner.resolveProviderAndModel(options.cwd, personaName, options);
-    const providerType = resolved.provider;
-    const provider = getProvider(providerType);
+    const resolution = AgentRunner.resolveExecution(options.cwd, personaName, options);
+    const provider = getProvider(resolution.provider);
     if (
       options.executionProfile === 'isolated-structured'
       && provider.supportsIsolatedStructuredExecution !== true
     ) {
       throw new Error(
-        `Provider "${providerType}" does not support strict isolated structured execution`,
+        `Provider "${resolution.provider}" does not support strict isolated structured execution`,
       );
     }
-    const resolvedProviderOptions = AgentRunner.resolveProviderOptions(
-      options.cwd,
-      personaName,
-      options as RunnerHandoffOptions,
-      resolved.personaProviders,
-    );
-    const callOptions = AgentRunner.buildCallOptions(
-      resolved.model,
-      providerType,
-      resolvedProviderOptions,
-      options,
-      resolved.localConfig,
-      resolved.globalConfig,
-    );
+    const callOptions = AgentRunner.buildCallOptions(resolution, options);
+
+    if (options.internalSystemPrompt !== undefined) {
+      const systemPrompt = buildWrappedSystemPrompt(options.internalSystemPrompt, {
+        ...options,
+        providerRuntimeInstructions: provider.getRuntimeInstructions(options.allowedTools, callOptions.permissionMode, callOptions.providerOptions?.opencode?.networkAccess),
+      });
+      options.onPromptResolved?.({
+        systemPrompt,
+        userInstruction: task,
+      });
+      const agent = provider.setup({ name: 'takt-internal', systemPrompt });
+      return agent.call(task, callOptions);
+    }
 
     if (options.personaPath) {
       const agentDefinition = loadPersonaPromptFromPath(
