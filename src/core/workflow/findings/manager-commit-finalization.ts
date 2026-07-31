@@ -10,7 +10,6 @@ import {
   type ReviewerAnomalySpec,
 } from './reviewer-anomalies.js';
 import { attachStopBudgetState, resolveStopBudgetLimits } from './stop-budget.js';
-import { attachReviewIntegrityState, resolveReviewIntegrityLimits } from './review-integrity.js';
 import {
   markInterpretationsApplied,
 } from './interpretation-wal.js';
@@ -472,7 +471,6 @@ export function applyCommitLedgerStates(input: {
   verifiedEvidenceCandidates: RawAdmissionEvaluation['verifiedEvidenceCandidates'];
   stopBudgetLimits: ReturnType<typeof resolveStopBudgetLimits>;
   stopBudgetRoundMarker: string;
-  reviewIntegrityLimits: ReturnType<typeof resolveReviewIntegrityLimits>;
 }): {
   ledger: FindingLedger;
   reviewerAnomalyLandings: ReviewerAnomalyLandingReport[];
@@ -509,13 +507,7 @@ export function applyCommitLedgerStates(input: {
     input.runInput.timestamp,
   );
   return {
-    ledger: attachReviewIntegrityState(
-      input.freshLedger,
-      withStopBudget,
-      input.reviewIntegrityLimits,
-      input.stopBudgetRoundMarker,
-      input.runInput.timestamp,
-    ),
+    ledger: withStopBudget,
     reviewerAnomalyLandings: anomalySpecs.map((spec) => ({
       kind: spec.kind,
       stableKey: spec.stableKey,

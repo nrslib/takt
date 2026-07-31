@@ -224,4 +224,88 @@ describe('finding intake extraction prompt', () => {
     expect(prompt).toContain('前回出力の再利用、議論、修復は禁止');
     expect(prompt.match(/唯一の報告/g)).toHaveLength(1);
   });
+
+  it.each([
+    ['en' as const, [
+      '## Verdict',
+      'APPROVE',
+      '## Claims',
+      'None',
+      '## Verification',
+      '| Check | Result |',
+      '| Cleanup | fixed |',
+      '| Host match | resolved |',
+    ].join('\n'), [
+      'Do not extract approvals,\n   compliments, summaries, verification tables',
+      'An APPROVE report whose Claims section says None',
+      'return `{"rawFindings":[]}`',
+    ]],
+    ['ja' as const, [
+      '## 判定',
+      'APPROVE',
+      '## Claims',
+      'None',
+      '## 検証',
+      '| 確認 | 結果 |',
+      '| cleanup | すべて修正済み |',
+      '| host match | 解消済み |',
+    ].join('\n'), [
+      '承認、称賛、要約、検証表、\n   レビュースコープ説明',
+      'ClaimsがNoneで、残りの要約や検証表が修正済み・解消済みと述べるだけのAPPROVE報告',
+      '`{"rawFindings":[]}`を返してください',
+    ]],
+  ])('%s: APPROVEの要約・検証表をlifecycle claimにしない', (
+    language,
+    report,
+    requiredInstructions,
+  ) => {
+    const prompt = buildFindingIntakeExtractionPrompt(report, language);
+    expect(prompt).toContain(report);
+    for (const instruction of requiredInstructions) {
+      expect(prompt).toContain(instruction);
+    }
+  });
+
+  it.each([
+    [
+      'en' as const,
+      'F-0003 relation=resolution_confirmation',
+      'only when one contiguous claim passage contains both the\n   literal relation token and an explicit target finding ID',
+    ],
+    [
+      'ja' as const,
+      'F-0003 relation=resolution_confirmation',
+      '1つの連続したclaim箇所にrelationのliteral tokenと明示的な対象finding IDの両方が\n   ある場合だけ',
+    ],
+  ])('%s: 同じclaim箇所にrelation tokenとtarget IDを要求する', (
+    language,
+    claim,
+    requiredInstruction,
+  ) => {
+    const prompt = buildFindingIntakeExtractionPrompt(claim, language);
+    expect(prompt).toContain(claim);
+    expect(prompt).toContain(requiredInstruction);
+    expect(prompt).toContain('`rawExcerpt`');
+  });
+
+  it.each([
+    [
+      'en' as const,
+      'The repository architecture creates a dependency cycle.',
+      'an issue without a\n   path or line still uses a candidate object with `target: null`; do not turn\n   it into `candidate: null` or discard it',
+    ],
+    [
+      'ja' as const,
+      'リポジトリ全体の設計に循環依存があります。',
+      '特にpathや行番号がない\n   問題も、`target: null` のcandidate objectとして保持し、`candidate: null`への変換や\n   破棄をしないでください',
+    ],
+  ])('%s: pathやlineがない明示的な問題もtarget nullで保持する', (
+    language,
+    claim,
+    requiredInstruction,
+  ) => {
+    const prompt = buildFindingIntakeExtractionPrompt(claim, language);
+    expect(prompt).toContain(claim);
+    expect(prompt).toContain(requiredInstruction);
+  });
 });

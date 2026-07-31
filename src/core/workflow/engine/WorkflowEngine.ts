@@ -54,6 +54,7 @@ import type { FindingLedger, FindingLedgerEntry, ReviewerAnomalyEntry } from '..
 import { injectFindingConflictAdjudicationStep } from '../findings/adjudication-step.js';
 import { createFindingConflictAdjudicationRunner } from '../findings/adjudication-runner.js';
 import { rebindPendingManagerPublicationAtBootstrap } from '../findings/manager-commit.js';
+import { isOutstandingReviewerAnomaly } from '../findings/reviewer-anomalies.js';
 import { ERROR_MESSAGES } from '../constants.js';
 import { inheritReviewReports, writeReviewReportInheritanceDiagnostic } from '../report-inheritance.js';
 import {
@@ -472,9 +473,9 @@ export class WorkflowEngine extends EventEmitter {
     );
   }
 
-  /** 二系統台帳（review-integrity protocol）の未昇格 anomaly。 */
+  /** 二系統台帳（review-integrity protocol）の未決着 anomaly。 */
   private loadOutstandingReviewerAnomalies(ledger: FindingLedger): ReviewerAnomalyEntry[] {
-    return (ledger.reviewerAnomalies ?? []).filter((anomaly) => anomaly.promotedFindingId === undefined);
+    return (ledger.reviewerAnomalies ?? []).filter(isOutstandingReviewerAnomaly);
   }
 
   /**
@@ -483,8 +484,8 @@ export class WorkflowEngine extends EventEmitter {
    * 1. product gate: open な provisional finding（意味を確定
    *    できなかった観測）が1件でも残っていれば COMPLETE を拒否する。
    *
-   * 2. review-integrity gate（review-integrity requirement）: 未昇格（promotedFindingId
-   *    無し）の reviewer anomaly が1件でも残っていれば COMPLETE を拒否する。
+   * 2. review-integrity gate（review-integrity requirement）: 未昇格かつ未settleの
+   *    reviewer anomaly が1件でも残っていれば COMPLETE を拒否する。
    *    二系統台帳（review-integrity protocol）で全指摘が anomaly に隔離された run は product
    *    gate が空になり「即 COMPLETE」で実質レビューされずに通り得たため、product
    *    gate とは別にここで fail-closed にする。anomaly は product finding では

@@ -8,20 +8,26 @@ schema に一致する JSON object を1つだけ返してください。説明�
 
 抽出規則:
 
-1. 報告に明示された各問題と各 lifecycle claim を、報告順に1回ずつ抽出してください。
-   承認、称賛、要約、レビュースコープ説明、欠陥や lifecycle 変更を主張しない通常文は
-   抽出しないでください。
+1. 根拠情報が不足していても、明示された問題主張はすべて抽出してください。
+   肯定的 lifecycle claim は規則4を満たすものだけを別に抽出してください。
+   対象となるclaimは報告順に1回ずつ抽出します。承認、称賛、要約、検証表、
+   レビュースコープ説明、問題自体を主張しない通常文は抽出しないでください。
 2. `rawExcerpt` は、問題または lifecycle claim 全体を記述し、報告内で1回だけ現れる
    byte-exact な substring にしてください。trim、空白正規化、要約、翻訳、言い換え、
    離れた文章の結合は禁止です。
 3. 明示された問題は、行番号、コード引用、severity、title、path、evidence、relation、
    修正案が欠けていても candidate として保持してください。欠落または曖昧な scalar は
-   `null`、欠落した list は `[]` にし、補完しないでください。`candidate: null` は、
-   excerpt が明示的な問題または lifecycle claim である一方、忠実な candidate object を
-   まったく形成できない場合だけ使用してください。
-4. relation の `new`、`persists`、`resolution_confirmation`、`reopened` は、報告に
-   明示されている場合だけ使用してください。それ以外は `null` にしてください。
-   `targetFindingIds` には明示された台帳 finding ID だけをコピーしてください。
+   `null`、欠落した list は `[]` にし、補完しないでください。特にpathや行番号がない
+   問題も、`target: null` のcandidate objectとして保持し、`candidate: null`への変換や
+   破棄をしないでください。
+4. 肯定的 lifecycle relation（`persists`、`resolution_confirmation`、`reopened`）は、
+   1つの連続したclaim箇所にrelationのliteral tokenと明示的な対象finding IDの両方が
+   ある場合だけ使用してください。`rawExcerpt`にも両方が含まれなければなりません。
+   APPROVEの要約、検証表、一般文にある「fixed」「resolved」「すべて修正済み」
+   「解消済み」などの文章はlifecycle claimではないため抽出しません。
+   `targetFindingIds`には、その同じclaim箇所にあるfinding IDだけをコピーしてください。
+   `new`は問題箇所が明示的に`new`とラベル付けした場合だけ使用し、それ以外は
+   relationを`null`にしてください。
 5. title、description、suggestion、family tag、severity、path は同じ問題箇所からだけ
    コピーし、改善や補完をしないでください。広範な architecture / repository design の
    問題は roots と manifest targets が明示されている場合だけ `structure` target に
@@ -33,7 +39,9 @@ schema に一致する JSON object を1つだけ返してください。説明�
    source text を捏造しないでください。
 7. 不確実性を保持してください。調査、裏取り、真偽分類、最終 lifecycle 判定、曖昧表現の
    解決、報告に明示されていない finding の作成は禁止です。
-8. 明示的な問題または lifecycle claim がない場合は `{"rawFindings":[]}` を返してください。
+8. ClaimsがNoneで、残りの要約や検証表が修正済み・解消済みと述べるだけのAPPROVE報告には
+   抽出対象がありません。対象となる問題またはlifecycle claimがない場合は
+   `{"rawFindings":[]}`を返してください。
 
 {{#if correction}}前回の抽出は schema または機械 intake 検証に失敗しました。同じ報告から新規に1回だけ
 抽出してください。前回出力の再利用、議論、修復は禁止です。

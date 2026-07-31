@@ -16,6 +16,7 @@ import type {
   RawFinding,
   RawRecoveryAttempt,
   RawRecoveryResult,
+  ReviewerAnomalyEntry,
 } from './finding-types.js';
 
 const FINDING_ID_PATTERN = /^F-(\d{4})$/;
@@ -31,6 +32,7 @@ export interface FindingLedgerProjectionInvariantInput {
   rawRecoveryResults: readonly RawRecoveryResult[];
   rawFindings: readonly RawFinding[];
   conflicts: readonly (ConflictIdentity & FindingLedgerConflict)[];
+  reviewerAnomalies?: readonly ReviewerAnomalyEntry[];
 }
 
 export interface FindingLedgerProjectionInvariantViolation {
@@ -125,6 +127,7 @@ export function collectFindingLedgerProjectionInvariantViolations(
     }
   });
   const rawById = new Map(projection.rawFindings.map((raw) => [raw.rawFindingId, raw]));
+  collectReviewerAnomalySettlementViolations(projection, violations, rawById);
   const attemptsById = new Map<string, RawRecoveryAttempt>();
   projection.rawRecoveryAttempts.forEach((attempt, index) => {
     const identityViolation = rawRecoveryAttemptIdentityViolation(attempt);
@@ -235,6 +238,75 @@ export function collectFindingLedgerProjectionInvariantViolations(
     resultAttempts.add(result.attemptId);
   });
   return violations;
+}
+
+function collectReviewerAnomalySettlementViolations(
+  projection: FindingLedgerProjectionInvariantInput,
+  violations: FindingLedgerProjectionInvariantViolation[],
+  rawById: ReadonlyMap<string, RawFinding>,
+): void {
+  const anomalyIds = new Set<string>();
+  const findingsById = new Map(projection.findings.map((finding) => [finding.id, finding]));
+  const eventsById = new Map(projection.lifecycleEvents.map((event) => [event.eventId, event]));
+  const reservationsById = new Map(
+    projection.lifecycleReservations.map((reservation) => [reservation.reservationId, reservation]),
+  );
+  const bindingsById = new Map(
+    projection.evidenceBindings.map((binding) => [binding.bindingId, binding]),
+  );
+  const evidenceIds = new Set(projection.evidenceRecords.map((record) => record.evidenceId));
+
+  for (const [index, anomaly] of (projection.reviewerAnomalies ?? []).entries()) {
+    if (anomalyIds.has(anomaly.id)) {
+      violations.push({
+        path: ['reviewerAnomalies', index, 'id'],
+        message: `Duplicate reviewer anomaly id "${anomaly.id}"`,
+      });
+    }
+    anomalyIds.add(anomaly.id);
+    const settlement = anomaly.settlement;
+    if (settlement === undefined) {
+      continue;
+    }
+    if (anomaly.promotedFindingId !== undefined) {
+      violations.push({
+        path: ['reviewerAnomalies', index, 'settlement'],
+        message: `Reviewer anomaly "${anomaly.id}" cannot be both promoted and settled`,
+      });
+    }
+    const targetIds = new Set(anomaly.sourceRawFindingIds.flatMap((rawFindingId) => {
+      const targetFindingId = rawById.get(rawFindingId)?.targetFindingId;
+      return targetFindingId === null || targetFindingId === undefined ? [] : [targetFindingId];
+    }));
+    const event = eventsById.get(settlement.lifecycleEventId);
+    const reservation = event === undefined
+      ? undefined
+      : reservationsById.get(event.reservationId);
+    const transitionMatches = event?.operation === 'resolve_finding'
+      && event.transitions.some((transition) => (
+        transition.after.entityKind === 'finding'
+        && transition.after.entityId === settlement.findingId
+      ));
+    const bindingMatches = event?.evidenceBindingIds.some((bindingId) => {
+      const binding = bindingsById.get(bindingId);
+      return binding?.operation === 'resolve_finding'
+        && binding.target.entityKind === 'finding'
+        && binding.target.entityId === settlement.findingId
+        && evidenceIds.has(binding.evidenceId);
+    }) === true;
+    if (
+      !targetIds.has(settlement.findingId)
+      || !findingsById.has(settlement.findingId)
+      || transitionMatches !== true
+      || reservation?.authority.kind !== 'verified_evidence'
+      || bindingMatches !== true
+    ) {
+      violations.push({
+        path: ['reviewerAnomalies', index, 'settlement'],
+        message: `Reviewer anomaly "${anomaly.id}" has an invalid verified-resolution settlement`,
+      });
+    }
+  }
 }
 
 export function assertFindingLedgerProjectionInvariant(

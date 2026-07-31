@@ -178,7 +178,7 @@ describe('renderLoopMonitorFindingsSummary', () => {
     expect(summary).toContain('findings.reviewerAnomalies.count: 1');
   });
 
-  it('promoted/unpromoted anomaly が混在しても未昇格だけを数える', () => {
+  it('promoted/settled/outstanding anomaly が混在しても未決着だけを数える', () => {
     const ledger: FindingLedger = {
       ...makeLedger([]),
       reviewerAnomalies: [
@@ -187,6 +187,15 @@ describe('renderLoopMonitorFindingsSummary', () => {
           id: 'RA-PROMOTED',
           stableKey: 'promoted-stable-key',
           promotedFindingId: 'F-0001',
+        }),
+        reviewerAnomaly({
+          id: 'RA-SETTLED',
+          stableKey: 'settled-stable-key',
+          settlement: {
+            kind: 'target_resolved_by_verified_evidence',
+            findingId: 'F-0002',
+            lifecycleEventId: 'event-1',
+          },
         }),
       ],
     };
@@ -198,6 +207,7 @@ describe('renderLoopMonitorFindingsSummary', () => {
     expect(summary).toContain('findings.reviewerAnomalies.count: 1');
     expect(summary).not.toContain('RA-UNPROMOTED');
     expect(summary).not.toContain('RA-PROMOTED');
+    expect(summary).not.toContain('RA-SETTLED');
   });
 
   it.each([false, true])(

@@ -164,7 +164,7 @@ function fixtureObservation(
   return cloneFixture(entity.lastSeen);
 }
 
-function applyFixtureRevision(input: {
+export function applyFindingLedgerFixtureRevision(input: {
   ledger: FindingLedger;
   entityKind: 'finding' | 'conflict';
   entity: FindingLedgerEntry | FindingLedgerConflict;
@@ -500,7 +500,7 @@ function applyFixtureRevision(input: {
   });
 }
 
-function applyFixtureSupersession(input: {
+export function applyFindingLedgerFixtureSupersession(input: {
   ledger: FindingLedger;
   canonicalFindingId: string;
   duplicates: FindingLedgerEntry[];
@@ -515,7 +515,7 @@ function applyFixtureSupersession(input: {
     );
   }
   if (currentCanonical.lifecycle !== 'persists') {
-    ledger = applyFixtureRevision({
+    ledger = applyFindingLedgerFixtureRevision({
       ledger,
       entityKind: 'finding',
       entity: {
@@ -763,7 +763,7 @@ export function authorizeFindingLedgerFixture(input: FindingLedger): FindingLedg
         revision: 1,
       });
       delete baseline.supersededByFindingId;
-      ledger = applyFixtureRevision({
+      ledger = applyFindingLedgerFixtureRevision({
         ledger,
         entityKind: 'finding',
         entity: baseline,
@@ -809,7 +809,7 @@ export function authorizeFindingLedgerFixture(input: FindingLedger): FindingLedg
         delete entity.supersededByFindingId;
         delete entity.dismissal;
       }
-      ledger = applyFixtureRevision({
+      ledger = applyFindingLedgerFixtureRevision({
         ledger,
         entityKind: 'finding',
         entity,
@@ -829,7 +829,7 @@ export function authorizeFindingLedgerFixture(input: FindingLedger): FindingLedg
     supersededByCanonical.set(finding.supersededByFindingId, duplicates);
   }
   for (const [canonicalFindingId, duplicates] of supersededByCanonical) {
-    ledger = applyFixtureSupersession({
+    ledger = applyFindingLedgerFixtureSupersession({
       ledger,
       canonicalFindingId,
       duplicates,
@@ -847,7 +847,7 @@ export function authorizeFindingLedgerFixture(input: FindingLedger): FindingLedg
         delete entity.resolvedAt;
         delete entity.resolvedEvidence;
       }
-      ledger = applyFixtureRevision({
+      ledger = applyFindingLedgerFixtureRevision({
         ledger,
         entityKind: 'conflict',
         entity,

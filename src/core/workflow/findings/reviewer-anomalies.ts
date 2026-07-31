@@ -172,7 +172,7 @@ export interface ReviewerAnomalyPromotionCandidate {
 
 /**
  * 後続ラウンドの clean な verbatimExcerpt 一致が product finding を確定させた
- * 場合に、同じ lineageKey を持つ未昇格の reviewer anomaly へ promotedFindingId を
+ * 場合に、同じ lineageKey を持つ未決着の reviewer anomaly へ promotedFindingId を
  * 記録する。レコード自体は削除・改変しない — 昇格後も監査履歴として
  * 残る（観測消去の禁止）。呼び出し元は reconcile 完了後の最終 ledger（finding id
  * 割当済み）を渡すこと — このタイミングでしか「どの finding id に着地したか」が
@@ -202,12 +202,21 @@ export function linkPromotedReviewerAnomalies(
   if (promotedFindingIdByLineageKey.size === 0) {
     return ledger;
   }
+  let changed = false;
   const updated = anomalies.map((anomaly) => {
-    if (anomaly.promotedFindingId !== undefined) {
+    if (!isOutstandingReviewerAnomaly(anomaly)) {
       return anomaly;
     }
     const promotedFindingId = promotedFindingIdByLineageKey.get(anomaly.lineageKey);
-    return promotedFindingId === undefined ? anomaly : { ...anomaly, promotedFindingId };
+    if (promotedFindingId === undefined) {
+      return anomaly;
+    }
+    changed = true;
+    return { ...anomaly, promotedFindingId };
   });
-  return { ...ledger, reviewerAnomalies: updated };
+  return changed ? { ...ledger, reviewerAnomalies: updated } : ledger;
+}
+
+export function isOutstandingReviewerAnomaly(anomaly: ReviewerAnomalyEntry): boolean {
+  return anomaly.promotedFindingId === undefined && anomaly.settlement === undefined;
 }

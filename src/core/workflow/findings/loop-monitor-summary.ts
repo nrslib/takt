@@ -4,6 +4,7 @@ import { isDismissCandidate } from './manager-utils.js';
 import { stopBudgetRoundsCompleted } from './stop-budget.js';
 import { resolveStopBudgetLimits } from './stop-budget.js';
 import type { FindingContractConfig } from './types.js';
+import { isOutstandingReviewerAnomaly } from './reviewer-anomalies.js';
 
 export interface LoopMonitorProvisionalSummary {
   id: string;
@@ -60,7 +61,7 @@ export function buildLoopMonitorFindingsSummaryData(
     maxRounds: limits.maxRounds,
     reviewerAnomalies: {
       count: (ledger.reviewerAnomalies ?? [])
-        .filter((anomaly) => anomaly.promotedFindingId === undefined).length,
+        .filter(isOutstandingReviewerAnomaly).length,
       budgetExhausted: ledger.reviewIntegrity?.exhausted ?? false,
     },
   };

@@ -9,7 +9,10 @@ import type {
   RunFindingManagerForStepInput,
 } from './manager-contracts.js';
 import { buildManagerCommitReport } from './manager-report.js';
-import { resolveReviewIntegrityLimits } from './review-integrity.js';
+import {
+  attachReviewIntegrityState,
+  resolveReviewIntegrityLimits,
+} from './review-integrity.js';
 import { resolveStopBudgetLimits } from './stop-budget.js';
 import type { ProvisionalLandingReport, RawAdmissionRejectionReport, ReviewerAnomalyLandingReport } from './store.js';
 import type { FindingLedger, FindingObservation } from './types.js';
@@ -29,6 +32,9 @@ import { completeRawRecoveryAttempts } from './raw-recovery-result.js';
 import { applyRejectedObservationAttachments } from './manager-provisional-settlement.js';
 import { attachFixpointState } from './fixpoint.js';
 import type { ReviewScopeProofSnapshot } from './snapshot.js';
+import {
+  settleReviewerAnomaliesFromVerifiedResolutions,
+} from './reviewer-anomaly-settlement.js';
 
 export interface CommitFindingManagerRoundResult {
   applied: boolean;
@@ -156,11 +162,23 @@ export async function commitFindingManagerRound(params: {
         recoveryOrigins,
         params.observation,
       );
+      const settledAnomalies = settleReviewerAnomaliesFromVerifiedResolutions(
+        freshLedger,
+        proofed.ledger,
+        completedRecovery,
+      );
+      const withReviewIntegrity = attachReviewIntegrityState(
+        freshLedger,
+        settledAnomalies,
+        params.reviewIntegrityLimits,
+        params.stopBudgetRoundMarker,
+        params.input.timestamp,
+      );
       const lifecycleMutation = {
         ...commitMutation,
         ledger: attachFixpointState(
           freshLedger,
-          completedRecovery,
+          withReviewIntegrity,
           params.input.cwd,
         ),
       };

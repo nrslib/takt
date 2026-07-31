@@ -565,6 +565,11 @@ export const ReviewerAnomalyEntrySchema = z.object({
   lastObserved: FindingObservationSchema,
   occurrences: z.number().int().positive(),
   promotedFindingId: nonEmptyString.optional(),
+  settlement: z.object({
+    kind: z.literal('target_resolved_by_verified_evidence'),
+    findingId: nonEmptyString,
+    lifecycleEventId: nonEmptyString,
+  }).strict().optional(),
 }).strict();
 
 const FindingActionRecoverySchema = z.discriminatedUnion('action', [

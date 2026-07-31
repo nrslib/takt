@@ -102,6 +102,7 @@ export function assertFindingLedgerAppendOnlyProjection(
     | 'rawRecoveryAttempts'
     | 'rawRecoveryResults'
     | 'conflicts'
+    | 'reviewerAnomalies'
     | 'pendingManagerCommit'
   >,
 ): void {
@@ -144,7 +145,55 @@ export function assertFindingLedgerAppendOnlyProjection(
       'resultId',
       'Raw recovery result',
     );
+    assertReviewerAnomalySettlementTransition(ledger, completed);
     assertFindingLifecycleAuthorityInvariant(completed);
+  }
+}
+
+function assertReviewerAnomalySettlementTransition(
+  current: Pick<FindingLedger, 'reviewerAnomalies' | 'lifecycleEvents' | 'findings'>,
+  next: Pick<FindingLedger, 'reviewerAnomalies' | 'lifecycleEvents' | 'findings'>,
+): void {
+  const nextById = new Map(
+    (next.reviewerAnomalies ?? []).map((anomaly) => [anomaly.id, anomaly]),
+  );
+  const currentEventIds = new Set(current.lifecycleEvents.map((event) => event.eventId));
+  for (const existing of current.reviewerAnomalies ?? []) {
+    const candidate = nextById.get(existing.id);
+    if (candidate === undefined) {
+      throw new Error(`Reviewer anomaly "${existing.id}" cannot be removed`);
+    }
+    if (
+      existing.settlement !== undefined
+      && (
+        candidate.settlement === undefined
+        || !sameCanonicalValue(existing.settlement, candidate.settlement)
+      )
+    ) {
+      throw new Error(`Reviewer anomaly "${existing.id}" settlement cannot be removed or replaced`);
+    }
+  }
+  for (const anomaly of next.reviewerAnomalies ?? []) {
+    const previousSettlement = (current.reviewerAnomalies ?? [])
+      .find((candidate) => candidate.id === anomaly.id)?.settlement;
+    if (
+      previousSettlement === undefined
+      && anomaly.settlement !== undefined
+    ) {
+      if (currentEventIds.has(anomaly.settlement.lifecycleEventId)) {
+        throw new Error(
+          `Reviewer anomaly "${anomaly.id}" settlement must reference a lifecycle event added in the same transition`,
+        );
+      }
+      const target = next.findings.find(
+        (finding) => finding.id === anomaly.settlement?.findingId,
+      );
+      if (target?.status !== 'resolved') {
+        throw new Error(
+          `Reviewer anomaly "${anomaly.id}" settlement target must be resolved when the settlement is added`,
+        );
+      }
+    }
   }
 }
 
@@ -293,6 +342,7 @@ export function assertFindingLedgerAppendOnlyTransition(
     'resultId',
     'Raw recovery result',
   );
+  assertReviewerAnomalySettlementTransition(current, next);
 
   const pending = current.pendingManagerCommit;
   const nextPending = next.pendingManagerCommit;

@@ -699,7 +699,6 @@ export function buildFindingManagerCommitMutation(
     verifiedEvidenceCandidates: admission.verifiedEvidenceCandidates,
     stopBudgetLimits: params.stopBudgetLimits,
     stopBudgetRoundMarker: params.stopBudgetRoundMarker,
-    reviewIntegrityLimits: params.reviewIntegrityLimits,
   });
   const rawFindingDispositions = [
     ...interpretationRecoveryDispositions(interpretationRecoveryFailures).filter(

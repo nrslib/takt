@@ -15,6 +15,7 @@ import {
   formatFileQuoteLocation,
 } from './evidence-location.js';
 import { computeDismissCandidates } from './manager-utils.js';
+import { isOutstandingReviewerAnomaly } from './reviewer-anomalies.js';
 
 function findingLocations(
   ledger: FindingLedger,
@@ -326,13 +327,13 @@ export function buildFindingsRuleContext(ledger: FindingLedger, cwd: string): Fi
     superseded: {
       count: ledger.findings.filter((finding) => finding.status === 'superseded').length,
     },
-    // review-integrity protocol: 二系統台帳の review-integrity 側。未昇格（promotedFindingId
-    // 無し）の anomaly だけを数える — 昇格済みは既に product finding 側
+    // review-integrity protocol: 二系統台帳の review-integrity 側。未昇格かつ
+    // 未settleの anomaly だけを数える — 昇格済みは既に product finding 側
     // （open/provisional 等）でカウントされているため二重計上しない。product
     // gate（COMPLETE 判定）はこの count を一切参照しない — reviewerAnomalies は
     // findings 配列と別物なので、参照しなくても構造的に gate を塞げない。
     reviewerAnomalies: {
-      count: (ledger.reviewerAnomalies ?? []).filter((anomaly) => anomaly.promotedFindingId === undefined).length,
+      count: (ledger.reviewerAnomalies ?? []).filter(isOutstandingReviewerAnomaly).length,
       // review-integrity requirement: review-integrity 予算が尽きたか（台帳側で計算・
       // 永続化済み。ここは読むだけ）。未昇格 anomaly が残る限り COMPLETE は許さず
       // 再レビューへ送るが、有限回で補完できなければ builtin はこれを見て

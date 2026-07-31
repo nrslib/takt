@@ -138,6 +138,7 @@ export type {
   ReviewerAnomalyEntry,
   ReviewerAnomalyLandingReport,
   ReviewerAnomalyKind,
+  ReviewerAnomalySettlement,
   ReviewerOutputOverflowReport,
   RawNormalizationAuditRecord,
   ProvisionalLandingReport,

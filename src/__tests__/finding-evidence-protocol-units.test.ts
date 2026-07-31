@@ -368,6 +368,40 @@ describe('applyReviewerAnomalySpecsToLedger / linkPromotedReviewerAnomalies (rev
     expect(reattempted.reviewerAnomalies![0]!.promotedFindingId).toBe('F-0001');
   });
 
+  it('linkPromotedReviewerAnomalies: settlement済みの同lineage anomalyはclean候補で昇格しない', () => {
+    const withAnomaly = applyReviewerAnomalySpecsToLedger(
+      makeLedger(),
+      [makeSpec({ lineageKey: 'lk-settled' })],
+      context,
+    );
+    const settledAnomaly = {
+      ...withAnomaly.reviewerAnomalies![0]!,
+      settlement: {
+        kind: 'target_resolved_by_verified_evidence' as const,
+        findingId: 'F-0001',
+        lifecycleEventId: 'a'.repeat(64),
+      },
+    };
+    const finding = makeFinding({
+      revision: 1,
+      id: 'F-0042',
+      rawFindingIds: ['raw-clean'],
+    });
+    const settledLedger: FindingLedger = {
+      ...withAnomaly,
+      findings: [finding],
+      reviewerAnomalies: [settledAnomaly],
+    };
+
+    const linked = linkPromotedReviewerAnomalies(settledLedger, [
+      { lineageKey: 'lk-settled', rawFindingId: 'raw-clean' },
+    ]);
+
+    expect(linked).toBe(settledLedger);
+    expect(linked.reviewerAnomalies![0]).toBe(settledAnomaly);
+    expect(linked.reviewerAnomalies![0]!.promotedFindingId).toBeUndefined();
+  });
+
   it('linkPromotedReviewerAnomalies: reviewerAnomalies が無い/候補が空なら ledger をそのまま返す（no-op）', () => {
     const ledger = makeLedger({ findings: [makeFinding({ revision: 1 })] });
     expect(linkPromotedReviewerAnomalies(ledger, [{ lineageKey: 'lk-x', rawFindingId: 'raw-existing' }])).toBe(ledger);

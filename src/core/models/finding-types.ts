@@ -1457,10 +1457,16 @@ export const REVIEWER_ANOMALY_KINDS = [
 ] as const;
 export type ReviewerAnomalyKind = typeof REVIEWER_ANOMALY_KINDS[number];
 
+export interface ReviewerAnomalySettlement {
+  kind: 'target_resolved_by_verified_evidence';
+  findingId: string;
+  lifecycleEventId: string;
+}
+
 /**
  * 二系統台帳(review-integrity protocol)の review-integrity レコード。product finding
  * (FindingLedgerEntry)とは別の型 — status/lifecycle/revision/waivers を持たず、
- * invalidated/resolved/waived という「決着した」語彙も持たない。安全不変条件
+ * product finding の invalidated/resolved/waived 状態を持たない。安全不変条件
  * 安全不変条件:
  *   - invalidated/resolved/waived として扱わない(この型にそもそもその状態がない)
  *   - 既存 finding の状態・revision・evidence hash を変更しない(別配列)
@@ -1497,6 +1503,11 @@ export interface ReviewerAnomalyEntry {
    * 場合の参照先。設定後もこのレコード自体は削除・改変しない(観測消去の禁止)。
    */
   promotedFindingId?: string;
+  /**
+   * anomaly が参照した既存 finding が、後続の検証済み証拠によって解消された記録。
+   * product finding への昇格とは別の決着なので promotedFindingId と混同しない。
+   */
+  settlement?: ReviewerAnomalySettlement;
 }
 
 export interface FindingManagerMatch {

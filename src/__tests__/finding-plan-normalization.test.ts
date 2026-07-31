@@ -44,7 +44,6 @@ import { evaluateRawAdmission } from '../core/workflow/findings/manager-admissio
 import { applyCommitLedgerStates } from '../core/workflow/findings/manager-commit-finalization.js';
 import { applyRejectedObservationAttachments } from '../core/workflow/findings/manager-provisional-settlement.js';
 import { resolveStopBudgetLimits } from '../core/workflow/findings/stop-budget.js';
-import { resolveReviewIntegrityLimits } from '../core/workflow/findings/review-integrity.js';
 import { findingReviewPublicationFixture } from './helpers/finding-review-publication.js';
 import { provisionalSpecForRawKind } from '../core/workflow/findings/manager-provisional.js';
 
@@ -1393,7 +1392,6 @@ describe('relation 別 intake と target atomization', () => {
           verifiedEvidenceCandidates: [],
           stopBudgetLimits: resolveStopBudgetLimits(undefined),
           stopBudgetRoundMarker: `round-${round}`,
-          reviewIntegrityLimits: resolveReviewIntegrityLimits(undefined),
         });
         expect(committed.reviewerAnomalyLandings).toEqual([]);
         expect(committed.rejectedObservationAttachments).toHaveLength(1);

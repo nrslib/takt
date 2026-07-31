@@ -41,6 +41,7 @@ import {
 import { deduplicateRawEvidence } from '../core/workflow/findings/evidence-domain.js';
 import { createFindingLifecycleReservation } from '../core/models/finding-lifecycle-identity.js';
 import {
+  authorizeFindingLedgerFixture,
   canonicalRawFindingFixture,
   emptyFindingAuthorityProjection,
   reviewerRawExtractionFixture,
@@ -379,6 +380,108 @@ describe('finding schemas', () => {
     };
 
     expect(parseFindingLedger(ledger)).toEqual(ledger);
+  });
+
+  it('round-trips a reviewer anomaly settlement bound to a complete verified resolution', () => {
+    const observation = {
+      runId: 'run-1',
+      stepName: 'reviewers',
+      timestamp: '2026-07-31T00:00:00.000Z',
+    };
+    const resolved = authorizeFindingLedgerFixture({
+      workflowName: 'peer-review',
+      nextId: 2,
+      updatedAt: observation.timestamp,
+      findings: [{
+        ...pendingFinding('F-0001'),
+        rawFindingIds: [],
+        status: 'resolved',
+        lifecycle: 'resolved',
+        revision: 2,
+        resolvedAt: observation.timestamp,
+        resolvedEvidence: 'Verified resolution.',
+      }],
+      evidenceRecords: [],
+      rawFindings: [],
+      conflicts: [],
+      interpretations: [],
+      ...emptyFindingAuthorityProjection(),
+    });
+    const event = resolved.lifecycleEvents.find(
+      (candidate) => candidate.operation === 'resolve_finding',
+    )!;
+    const sourceRawFindingId = resolved.evidenceBindings
+      .find((binding) => (
+        event.evidenceBindingIds.includes(binding.bindingId)
+        && binding.target.entityId === 'F-0001'
+      ))!.sourceRawFindingId!;
+    const ledger = {
+      ...resolved,
+      reviewerAnomalies: [{
+        id: 'RA-VALID',
+        kind: 'quote-mismatch',
+        stableKey: 'stable-1',
+        lineageKey: 'lineage-1',
+        sourceRawFindingIds: [sourceRawFindingId],
+        sourceIntakeIds: [],
+        reviewers: ['architecture'],
+        title: 'Unverified claim',
+        mismatchReason: 'Quote mismatch',
+        firstObserved: observation,
+        lastObserved: observation,
+        occurrences: 1,
+        settlement: {
+          kind: 'target_resolved_by_verified_evidence',
+          findingId: 'F-0001',
+          lifecycleEventId: event.eventId,
+        },
+      }],
+    };
+
+    expect(parseFindingLedger(ledger)).toEqual(ledger);
+    expect(event.eventId).toMatch(/^[0-9a-f]{64}$/u);
+    expect(event.evidenceBindingIds[0]).toMatch(/^[0-9a-f]{64}$/u);
+  });
+
+  it('rejects reviewer anomaly settlement references outside the verified resolution graph', () => {
+    const observation = {
+      runId: 'run-1',
+      stepName: 'reviewers',
+      timestamp: '2026-07-31T00:00:00.000Z',
+    };
+    const ledger = {
+      workflowName: 'peer-review',
+      nextId: 1,
+      updatedAt: observation.timestamp,
+      findings: [],
+      evidenceRecords: [],
+      rawFindings: [],
+      conflicts: [],
+      interpretations: [],
+      ...emptyFindingAuthorityProjection(),
+      reviewerAnomalies: [{
+        id: 'RA-INVALID',
+        kind: 'quote-mismatch',
+        stableKey: 'stable-invalid',
+        lineageKey: 'lineage-invalid',
+        sourceRawFindingIds: ['missing-raw'],
+        sourceIntakeIds: [],
+        reviewers: ['architecture'],
+        title: 'Unverified claim',
+        mismatchReason: 'Quote mismatch',
+        firstObserved: observation,
+        lastObserved: observation,
+        occurrences: 1,
+        settlement: {
+          kind: 'target_resolved_by_verified_evidence',
+          findingId: 'F-0001',
+          lifecycleEventId: 'a'.repeat(64),
+        },
+      }],
+    };
+
+    expect(() => parseFindingLedger(ledger))
+      .toThrow(/invalid verified-resolution settlement/u);
   });
 
   it('rejects unexpected fields on the finding ledger root', () => {
