@@ -13,7 +13,7 @@ steps:
       testing_knowledge: [takt, architecture, unit-testing, e2e-testing]
       development_policy: [coding, testing]
       development_knowledge: [takt, architecture, task-decomposition]
-      implementation_instruction: team-leader-implement
+      implementation_instruction: implement
       review_policy: [coding, testing, review]
       review_knowledge: [takt, architecture, unit-testing, e2e-testing]
       supervisor_persona: supervisor

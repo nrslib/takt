@@ -12,10 +12,10 @@ TAKT に同梱されているすべてのビルトイン workflow と persona �
 | `simple-mini` | 強いモデルの判断力を信頼する軽量版です。独立したテスト作成と最終監督を省き、計画 → 実装 → コードレビュー → 修正ループ → 完了。 |
 | `default` | 共通開発コアを使う標準テスト先行 workflow です。計画 → テスト作成 → 実装 → 専門ピアレビュー → 修正計画 → 修正 → 検証 → merge-readiness・監督 → 完了。 |
 | `default-mini` | テストなしのミニ開発 workflow です。`default` から `write_tests` を抜き、軽量に回したいタスク向けの構成です。計画 → 実装 → AIアンチパターンレビュー → 並列レビュー → 完了。 |
-| `default-high` | 共通開発コアをチームリーダー実装で使い、専門ピアレビュー、収束修正、merge-readiness、監督まで行うフルスペック workflow です。 |
+| `default-high` | 共通開発コアを直接実装で使い、専門ピアレビュー、収束修正、merge-readiness、監督まで行うフルスペック workflow です。 |
 | `frontend` | フロントエンド特化開発 workflow。React/Next.js に焦点を当てたレビューとナレッジ注入付き。 |
 | `backend` | バックエンド特化開発 workflow。バックエンド、セキュリティ、QA エキスパートレビュー付き。 |
-| `dual` | フロントエンド＋バックエンド開発 workflow。チームリーダー実装、architecture、frontend、security、QA レビューと修正ループ付き。 |
+| `dual` | フロントエンド＋バックエンド開発 workflow。直接実装、architecture、frontend、security、QA レビューと修正ループ付き。 |
 
 ## 全ビルトイン Workflow 一覧
 
@@ -26,7 +26,7 @@ TAKT に同梱されているすべてのビルトイン workflow と persona �
 | 🚀 クイックスタート | `simple` | 強いモデルの判断力を信頼するシンプルな開発 workflow。モデル自身が関連 SKILL を選び、計画 → テスト作成 → 実装 → コードレビュー → 修正ループ → 最終監督 → 完了。 |
 | | `default` | 共通開発コアを使い、専門ピアレビュー、収束修正、merge-readiness、監督まで行う標準テスト先行 workflow です。 |
 | | `default-mini` | テストなしのミニ開発 workflow。`default` から `write_tests` を抜いた軽量版。計画 → 実装 → AIアンチパターンレビュー → 並列レビュー → 完了。 |
-| | `default-high` | 共通開発コアをチームリーダー実装で使い、専門ピアレビュー、収束修正、merge-readiness、監督まで行うフルスペック workflow です。 |
+| | `default-high` | 共通開発コアを直接実装で使い、専門ピアレビュー、収束修正、merge-readiness、監督まで行うフルスペック workflow です。 |
 | | `frontend` | フロントエンド特化開発 workflow。React/Next.js に焦点を当てたレビューとナレッジ注入付き。 |
 | | `backend` | バックエンド特化開発 workflow。バックエンド、セキュリティ、QA エキスパートレビュー付き。 |
 | | `dual` | フロントエンド＋バックエンド開発 workflow: architecture、frontend、security、QA レビューと修正ループ付き。 |

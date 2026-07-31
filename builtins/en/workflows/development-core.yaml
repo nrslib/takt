@@ -1,5 +1,5 @@
 name: development-core
-description: Shared development flow that injects domain facets into planning, testing, delegated implementation, peer review, and convergent remediation.
+description: Shared development flow that injects domain facets into planning, testing, direct implementation, peer review, and convergent remediation.
 subworkflow:
   callable: true
   visibility: internal

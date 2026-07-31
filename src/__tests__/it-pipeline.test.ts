@@ -361,21 +361,7 @@ describe('Pipeline Integration Tests', () => {
     setMockScenario([
       { persona: 'planner', status: 'done', content: '[PLAN:1]\n\nRequirements are clear and implementable' },
       { persona: 'coder', status: 'done', content: '[WRITE_TESTS:1]\n\nTests written successfully' },
-      {
-        persona: 'coder',
-        status: 'done',
-        content: 'Implementation work decomposed.',
-        structuredOutput: {
-          parts: [{ id: 'implementation', title: 'Implement', instruction: 'Implement the planned change.' }],
-        },
-      },
       { persona: 'coder', status: 'done', content: '[IMPLEMENT:1]\n\nImplementation complete' },
-      {
-        persona: 'coder',
-        status: 'done',
-        content: 'No additional work is needed.',
-        structuredOutput: { done: true, reasoning: 'Implementation is complete.', cancelPartIds: [], parts: [] },
-      },
       { persona: 'architecture-reviewer', status: 'done', content: '[ARCH-REVIEW:1]\n\napproved' },
       { persona: 'security-reviewer', status: 'done', content: '[SECURITY-REVIEW:1]\n\napproved' },
       { persona: 'qa-reviewer', status: 'done', content: '[QA-REVIEW:1]\n\napproved' },
@@ -403,21 +389,7 @@ describe('Pipeline Integration Tests', () => {
     setMockScenario([
       { persona: 'planner', status: 'done', content: '[PLAN:1]\n\nPlan completed.' },
       { persona: 'coder', status: 'done', content: '[WRITE_TESTS:1]\n\nTests created.' },
-      {
-        persona: 'coder',
-        status: 'done',
-        content: 'Implementation work decomposed.',
-        structuredOutput: {
-          parts: [{ id: 'implementation', title: 'Implement', instruction: 'Implement the planned change.' }],
-        },
-      },
       { persona: 'coder', status: 'done', content: '[IMPLEMENT:1]\n\nImplementation completed.' },
-      {
-        persona: 'coder',
-        status: 'done',
-        content: 'No additional work is needed.',
-        structuredOutput: { done: true, reasoning: 'Implementation is complete.', cancelPartIds: [], parts: [] },
-      },
       { persona: 'architecture-reviewer', status: 'done', content: '[ARCH-REVIEW:2]\n\nA fix is required.' },
       { persona: 'security-reviewer', status: 'done', content: '[SECURITY-REVIEW:1]\n\nApproved.' },
       { persona: 'qa-reviewer', status: 'done', content: '[QA-REVIEW:1]\n\nApproved.' },

@@ -1,5 +1,5 @@
 name: development-core
-description: ドメイン固有ファセットを注入して、計画、テスト、分割実装、ピアレビューと収束修正を実行する共通開発フロー。
+description: ドメイン固有ファセットを注入して、計画、テスト、直接実装、ピアレビューと収束修正を実行する共通開発フロー。
 subworkflow:
   callable: true
   visibility: internal

@@ -93,8 +93,7 @@ function createPrivateArtifact(
 
 
 export function ensurePrivateDirectory(directoryPath: string): void {
-  const absolute = resolve(directoryPath);
-  const { trustedRoot } = artifactBoundary(absolute);
+  const { targetPath: absolute, trustedRoot } = artifactBoundary(directoryPath);
   assertSafePath(absolute, true);
   let current = trustedRoot;
   for (const component of relative(trustedRoot, absolute).split(sep).filter(Boolean)) {
