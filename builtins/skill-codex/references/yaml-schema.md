@@ -116,11 +116,14 @@ fragment root の `params` は必須の型付き parameter を宣言し、`uses`
         - condition: "approved"
         - condition: "needs_fix"
 
-    - name: qa-review
-      persona: qa-reviewer
-      policy: review
+    - name: testing-review
+      persona: testing-reviewer
+      policy: testing
+      knowledge:
+        - unit-testing
+        - e2e-testing
       edit: false
-      instruction: review-qa
+      instruction: review-test
       rules:
         - condition: "approved"
         - condition: "needs_fix"

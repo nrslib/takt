@@ -16,4 +16,5 @@
 12. 既存 Aggregate の通常ライフサイクルで済む処理を、入力元別の専用 command / wrapper / service / deletion path にしていないか確認する
 
 **注意:** このプロジェクトが CQRS+ES パターンを使用していない場合は、一般的なドメイン設計の観点からレビューしてください。
+{{include:instructions/review-family-completion}}
 {{include:instructions/review-pr-context}}

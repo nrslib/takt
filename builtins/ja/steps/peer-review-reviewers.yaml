@@ -46,25 +46,6 @@ parallel:
       report:
         - name: security-review.md
           format: security-review
-  - name: qa-review
-    tags:
-      - review
-    edit: false
-    persona: qa-reviewer
-    policy:
-      - review
-      - qa
-      - $param: review_policy_additions
-    knowledge:
-      - takt
-      - $param: review_knowledge_additions
-    provider_options:
-      extends: review-readonly
-    instruction: review-qa
-    output_contracts:
-      report:
-        - name: qa-review.md
-          format: qa-review
   - name: testing-review
     tags:
       - review

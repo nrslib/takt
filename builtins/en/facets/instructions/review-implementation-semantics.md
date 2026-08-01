@@ -14,4 +14,5 @@ Steps:
 **This is review iteration {step_iteration}.**
 On the first review, cover the entire cumulative diff and report all locations in the same family in that review. On later reviews, apply every Policy / Knowledge criterion to prior open findings, their fixes, and directly affected paths without restarting untouched-area discovery from scratch each time. If the focused check would return APPROVE, first perform a final review of the entire cumulative diff.
 From the second review onward, record the chapters checked and the evidence in the report's Re-scan Evidence section (required even on APPROVE).
+{{include:instructions/review-family-completion}}
 {{include:instructions/review-pr-context}}

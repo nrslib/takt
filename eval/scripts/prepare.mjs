@@ -52,12 +52,19 @@ const TARGETS = [
   { id: 'loop-monitor-reviewers-fix-fc', workflow: 'takt-default-high', monitorCycle: ['fix', 'reviewers'], fixture: 'eval/fixtures/sample-project' },
   { id: 'frontend-implement', workflow: 'frontend', step: 'implement', fixture: 'eval/fixtures/frontend-app', mutable: true },
   { id: 'cqrs-implement', workflow: 'backend-cqrs', step: 'implement', fixture: 'eval/fixtures/backend-cqrs', mutable: true },
+  { id: 'fix-closure', workflow: 'review-remediation', step: 'fix', fixture: 'eval/fixtures/fix-closure', mutable: true },
+  { id: 'review-family-closure', workflow: 'peer-review-suite-base', step: 'coding-review', fixture: 'eval/fixtures/review-family-closure' },
 ];
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, '../..');
 
-const { loadWorkflowByIdentifier, resolveWorkflowConfigValue, loadPersonaPromptFromPath } = await import(
+const {
+  loadWorkflowByIdentifier,
+  resolveWorkflowCallTarget,
+  resolveWorkflowConfigValue,
+  loadPersonaPromptFromPath,
+} = await import(
   pathToFileURL(join(repoRoot, 'dist/infra/config/index.js')).href
 );
 const { InstructionBuilder } = await import(
@@ -65,6 +72,12 @@ const { InstructionBuilder } = await import(
 );
 const { StatusJudgmentBuilder } = await import(
   pathToFileURL(join(repoRoot, 'dist/core/workflow/instruction/StatusJudgmentBuilder.js')).href
+);
+const { getAllParallelSubSteps } = await import(
+  pathToFileURL(join(repoRoot, 'dist/core/models/types.js')).href
+);
+const { MAX_WORKFLOW_CALL_DEPTH } = await import(
+  pathToFileURL(join(repoRoot, 'dist/core/workflow/workflow-call-depth.js')).href
 );
 
 const requested = process.argv.slice(2);
@@ -78,6 +91,39 @@ const targets = requested.length > 0 ? TARGETS.filter((t) => requested.includes(
 const language = resolveWorkflowConfigValue(repoRoot, 'language');
 const preparedDirs = new Set();
 
+function findStepTarget(workflow, stepName, depth = 0) {
+  if (depth > MAX_WORKFLOW_CALL_DEPTH) {
+    throw new Error(`Workflow-call nesting exceeded while resolving step "${stepName}"`);
+  }
+
+  for (const [stepIndex, step] of workflow.steps.entries()) {
+    if (step.name === stepName) {
+      return { workflow, target: step, stepIndex };
+    }
+    const substep = (step.parallel === undefined ? [] : getAllParallelSubSteps(step.parallel))
+      .find((candidate) => candidate.name === stepName);
+    if (substep) {
+      return { workflow, target: substep, stepIndex };
+    }
+  }
+
+  for (const step of workflow.steps) {
+    const candidates = [
+      step,
+      ...(step.parallel === undefined ? [] : getAllParallelSubSteps(step.parallel)),
+    ];
+    for (const candidate of candidates) {
+      if (candidate.kind !== 'workflow_call') continue;
+      const child = resolveWorkflowCallTarget(workflow, candidate, repoRoot);
+      if (!child) continue;
+      const found = findStepTarget(child, stepName, depth + 1);
+      if (found) return found;
+    }
+  }
+
+  return null;
+}
+
 for (const { id, workflow: workflowName, step: stepName, monitorCycle, fixture, mutable } of targets) {
   const fixtureDir = resolve(repoRoot, fixture);
 
@@ -90,7 +136,7 @@ for (const { id, workflow: workflowName, step: stepName, monitorCycle, fixture, 
     cpSync(fixtureDir, runDir, { recursive: true });
   }
 
-  const config = loadWorkflowByIdentifier(workflowName, repoRoot);
+  let config = loadWorkflowByIdentifier(workflowName, repoRoot);
   if (!config) {
     throw new Error(`Workflow not found: ${workflowName}`);
   }
@@ -116,22 +162,19 @@ for (const { id, workflow: workflowName, step: stepName, monitorCycle, fixture, 
     };
     stepIndex = config.steps.findIndex(({ name }) => name === monitor.cycle.at(-1));
   } else {
-    for (const [i, step] of config.steps.entries()) {
-      if (step.name === stepName) {
-        target = step;
-        stepIndex = i;
-        break;
-      }
-      const substep = (step.parallel ?? []).find((s) => s.name === stepName);
-      if (substep) {
-        target = substep;
-        stepIndex = i;
-        break;
-      }
+    const found = findStepTarget(config, stepName);
+    if (found) {
+      config = found.workflow;
+      target = found.target;
+      stepIndex = found.stepIndex;
     }
   }
   if (!target) {
-    const names = config.steps.flatMap((s) => [s.name, ...(s.parallel ?? []).map((p) => p.name)]);
+    const names = config.steps.flatMap((step) => [
+      step.name,
+      ...(step.parallel === undefined ? [] : getAllParallelSubSteps(step.parallel))
+        .map((substep) => substep.name),
+    ]);
     throw new Error(`Step "${stepName}" not found in ${workflowName}. Available: ${names.join(', ')}`);
   }
 

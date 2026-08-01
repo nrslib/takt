@@ -29,6 +29,8 @@ not the pass/fail summary.
 | `rescan` | peer-review / arch-review (round 2) | inventory-es | re-scan evidence + recall on 4 planted defects after previous findings were resolved |
 | `frontend-coder` | frontend / implement | frontend-app (work copy) | artifact checks on the implemented change |
 | `cqrs-coder` | backend-cqrs / implement | backend-cqrs (work copy) | artifact checks on the implemented change |
+| `fix-closure` | review-remediation / fix | fix-closure (work copy) | whether remediation closes every participating path instead of patching only the latest reported example |
+| `review-family-closure` | peer-review-suite-base / coding-review | review-family-closure | whether one review reports every path affected by the same contract defect instead of stopping at a representative example |
 
 Reviewer suites run read-only against `eval/fixtures/*`. Coder suites run
 with `sandbox_mode: workspace-write` in a disposable copy under `eval/.work/`
@@ -96,6 +98,7 @@ npm run eval:prompts             # prepare + ALL suites
 npm run eval:prompts -- arch cqrs        # only selected suites
 npm run eval:prompts -- arch --repeat 3  # extra flags pass through to promptfoo
 npm run eval:prompts:prepare     # prepare only (inspect eval/prompts/)
+npm run eval:prompts:review-family-closure
 npx promptfoo view               # browse results in the web UI
 ```
 

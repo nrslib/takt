@@ -2573,7 +2573,7 @@ describe('exec command setup', () => {
     );
     mockSelectMultipleOptionsQueue(
       ['coding'],
-      ['review', 'qa'],
+      ['review', 'testing'],
       ['review'],
     );
     mockCallAIWithRetry
@@ -2587,7 +2587,7 @@ describe('exec command setup', () => {
     const judge = workflow.steps.find((step: { name: string }) => step.name === 'review');
     const replan = workflow.steps.find((step: { name: string }) => step.name === 'replan');
     expect(execute.parallel[0].policy).toEqual(['coding']);
-    expect(judge.parallel[0].policy).toEqual(['review', 'qa']);
+    expect(judge.parallel[0].policy).toEqual(['review', 'testing']);
     expect(replan).not.toHaveProperty('policy');
   });
 

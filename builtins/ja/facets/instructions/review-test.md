@@ -18,4 +18,5 @@
 8. 禁止・拒否・非継承・非対応・隔離の検証が、完全一致文字列の不在だけでなく、観測単位を抽出して禁止値ごとに確認しているか確認する
 9. 新しい設定境界では、空文字列、空白だけの文字列、空配列、大小文字違いなどの正規化対象を必要に応じて確認する
 10. E2E の timeout、cleanup、強制終了の扱いが既存の同種テスト規約と一致しているか確認する
+{{include:instructions/review-family-completion}}
 {{include:instructions/review-pr-context}}

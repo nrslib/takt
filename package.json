@@ -24,6 +24,8 @@
     "analyze:usage": "node dist/commands/analyze-usage.js",
     "eval:prompts:prepare": "node eval/scripts/prepare.mjs",
     "eval:prompts": "npm run eval:prompts:prepare && node eval/scripts/run-evals.mjs",
+    "eval:prompts:fix-closure": "node eval/scripts/prepare.mjs fix-closure && node eval/scripts/run-evals.mjs fix-closure",
+    "eval:prompts:review-family-closure": "node eval/scripts/prepare.mjs review-family-closure && node eval/scripts/run-evals.mjs review-family-closure",
     "test": "npm run test:type-contracts && node scripts/run-npm-test.mjs",
     "test:type-contracts": "tsc --noEmit -p tsconfig.type-contracts.json",
     "test:unit": "vitest run --config vitest.config.unit.parallel.ts",

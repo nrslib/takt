@@ -6,4 +6,5 @@
 3. 列挙した各セクションの判定基準を変更差分と照合し、該当する問題を検出する
 
 **注意:** このプロジェクトがフロントエンドを含まない場合は、問題なしとして次に進んでください。
+{{include:instructions/review-family-completion}}
 {{include:instructions/review-pr-context}}
