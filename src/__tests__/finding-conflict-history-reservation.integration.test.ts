@@ -7,13 +7,19 @@ import {
   createFindingLifecycleReservation,
 } from '../core/models/finding-lifecycle-identity.js';
 import { formatConflictId } from '../core/models/finding-conflict-identity.js';
-import { reserveFindingConflictAdjudication } from '../core/workflow/findings/adjudication-reservation.js';
+import {
+  findPendingFindingConflictAdjudication,
+  reserveFindingConflictAdjudication,
+} from '../core/workflow/findings/adjudication-reservation.js';
 import { commitFindingConflictAdjudication } from '../core/workflow/findings/adjudication-commit.js';
 import { captureFindingMutationPrecondition } from '../core/workflow/findings/finding-preconditions.js';
 import {
   captureFindingLifecycleHead,
+  findingLifecycleReservationMatchesCurrentHeads,
   reserveVerifiedLifecycleMutation,
 } from '../core/workflow/findings/lifecycle-mutation.js';
+import { applyFindingLifecycleCommands } from '../core/workflow/findings/lifecycle-transaction.js';
+import { applyRejectedObservationAttachments } from '../core/workflow/findings/manager-provisional-settlement.js';
 import { createTestFindingLedgerStore } from './helpers/finding-storage.js';
 import type { FindingLedger, RawFinding } from '../core/workflow/findings/types.js';
 import { verifiedFindingEvidenceFixture } from './helpers/finding-evidence.js';
@@ -134,6 +140,38 @@ function makeLedger(cwd: string): FindingLedger {
   });
 }
 
+function advanceConflictLifecycleHead(input: {
+  ledger: FindingLedger;
+  conflictId: string;
+  timestamp: string;
+}): FindingLedger {
+  const conflict = input.ledger.conflicts.find(
+    (candidate) => candidate.id === input.conflictId,
+  )!;
+  const { revision: _revision, ...projection } = conflict;
+  void _revision;
+  return applyFindingLifecycleCommands({
+    ledger: input.ledger,
+    commands: [{
+      operation: 'observe_conflict',
+      changes: { findings: [], conflicts: [projection] },
+      authority: { kind: 'verified_evidence' },
+      evidenceSourcesByTarget: new Map([[
+        `conflict\0${conflict.id}`,
+        {
+          sourceRawFindingIds: conflict.rawFindingIds,
+          authorityEvidenceIds: [],
+        },
+      ]]),
+    }],
+    occurredAt: {
+      runId: 'run-2',
+      stepName: 'reviewers',
+      timestamp: input.timestamp,
+    },
+  });
+}
+
 describe('conflict lifecycle reservation persistence', () => {
   let cwd: string;
 
@@ -211,7 +249,7 @@ describe('conflict lifecycle reservation persistence', () => {
     expect(resumed.ledger.lifecycleEvents).toEqual(first.ledger.lifecycleEvents);
   });
 
-  it('reuses a source run pending mutation in the resumed run and commits only to the target database', async () => {
+  it('replaces a source reservation after a target-only rejected observation and commits only to the target database', async () => {
     mkdirSync(join(cwd, '.takt', 'runs', 'run-1', 'reports'), { recursive: true });
     const sourceStore = createStore('run-1');
     const initial = makeLedger(cwd);
@@ -235,6 +273,19 @@ describe('conflict lifecycle reservation persistence', () => {
     const sourceBeforeResume = sourceStore.loadLedger();
 
     const targetStore = createStore('run-2', 'run-1');
+    await targetStore.updateLedger((ledger) => ({
+      ledger: applyRejectedObservationAttachments(ledger, [{
+        targetFindingId: 'F-0001',
+        rawFindingId: 'raw-current',
+        reason: 'The imported observation is retained for audit only.',
+        rejectionCode: 'evidence_admission_failed',
+      }], {
+        runId: 'run-2',
+        stepName: 'reviewers',
+        timestamp: '2026-06-14T00:01:00.000Z',
+      }),
+      result: undefined,
+    }));
     const resumed = await reserveFindingConflictAdjudication({
       ledgerStore: targetStore,
       conflictId,
@@ -243,24 +294,28 @@ describe('conflict lifecycle reservation persistence', () => {
       observation: {
         runId: 'run-2',
         stepName: 'finding-conflict-adjudication',
-        timestamp: '2026-06-14T00:01:00.000Z',
+        timestamp: '2026-06-14T00:02:00.000Z',
       },
       cwd,
     });
     expect(resumed.result).toMatchObject({
       started: true,
       originStep: 'final-gate',
-      reservationToken: sourceReservation.result.reservationToken,
+      evidenceHash: sourceReservation.result.evidenceHash,
     });
-    const resumedReservations = resumed.ledger.lifecycleReservations.filter(
-      (reservation) => reservation.context.kind === 'conflict_adjudication',
-    );
-    expect(resumedReservations).toHaveLength(1);
-    expect(resumedReservations[0]?.reservedAt.runId).toBe('run-1');
-
     if (!resumed.result.started) {
       throw new Error('Expected resumed adjudication reservation');
     }
+    expect(resumed.result.reservationToken).not.toBe(
+      sourceReservation.result.reservationToken,
+    );
+    const resumedReservations = resumed.ledger.lifecycleReservations.filter(
+      (reservation) => reservation.context.kind === 'conflict_adjudication',
+    );
+    expect(resumedReservations).toHaveLength(2);
+    expect(resumedReservations[0]?.reservedAt.runId).toBe('run-1');
+    expect(resumedReservations[1]?.reservedAt.runId).toBe('run-2');
+
     const committed = await commitFindingConflictAdjudication({
       ledgerStore: targetStore,
       conflictId,
@@ -275,7 +330,7 @@ describe('conflict lifecycle reservation persistence', () => {
       workflowName: WORKFLOW_NAME,
       stepName: 'finding-conflict-adjudication',
       runId: 'run-2',
-      timestamp: '2026-06-14T00:02:00.000Z',
+      timestamp: '2026-06-14T00:03:00.000Z',
       originStep: resumed.result.originStep,
     });
 
@@ -284,7 +339,7 @@ describe('conflict lifecycle reservation persistence', () => {
       (event) => event.outcome.kind === 'conflict_adjudication',
     )).toEqual([
       expect.objectContaining({
-        mutationId: sourceReservation.result.reservationToken,
+        mutationId: resumed.result.reservationToken,
         occurredAt: expect.objectContaining({ runId: 'run-2' }),
       }),
     ]);
@@ -372,6 +427,335 @@ describe('conflict lifecycle reservation persistence', () => {
       occurredAt: expect.objectContaining({ runId: targetRunId }),
     }));
     expect(sourceStore.loadLedger()).toEqual(sourceBeforeResume);
+  });
+
+  it('keeps a stale reservation as audit history, retries on the current head, and commits the new token', async () => {
+    const store = createStore();
+    const initial = makeLedger(cwd);
+    await store.updateLedger(() => ({ ledger: initial, result: undefined }));
+    const conflictId = initial.conflicts[0]!.id;
+    const stale = await reserveFindingConflictAdjudication({
+      ledgerStore: store,
+      conflictId,
+      requestedOriginStep: 'final-gate',
+      runId: 'run-2',
+      observation: {
+        runId: 'run-2',
+        stepName: 'finding-conflict-adjudication',
+        timestamp: '2026-06-14T02:00:00.000Z',
+      },
+      cwd,
+    });
+    if (!stale.result.started) {
+      throw new Error('Expected initial adjudication reservation');
+    }
+    await store.updateLedger((ledger) => ({
+      ledger: advanceConflictLifecycleHead({
+        ledger,
+        conflictId,
+        timestamp: '2026-06-14T02:01:00.000Z',
+      }),
+      result: undefined,
+    }));
+
+    const adjudicationOutput = {
+      conflictId,
+      outcome: 'finding_stale' as const,
+      rationale: 'The current source no longer exhibits the disputed finding.',
+    };
+    await expect(commitFindingConflictAdjudication({
+      ledgerStore: store,
+      conflictId,
+      promptedEvidenceHash: stale.result.evidenceHash,
+      reservationMutationId: 'missing-reservation-token',
+      output: adjudicationOutput,
+      cwd,
+      workflowName: WORKFLOW_NAME,
+      stepName: 'finding-conflict-adjudication',
+      runId: 'run-2',
+      timestamp: '2026-06-14T02:02:00.000Z',
+      originStep: stale.result.originStep,
+    })).rejects.toThrow(/missing pre-reservation/);
+    await expect(commitFindingConflictAdjudication({
+      ledgerStore: store,
+      conflictId,
+      promptedEvidenceHash: stale.result.evidenceHash,
+      reservationMutationId: stale.result.reservationToken,
+      output: adjudicationOutput,
+      cwd,
+      workflowName: WORKFLOW_NAME,
+      stepName: 'finding-conflict-adjudication',
+      runId: 'run-2',
+      timestamp: '2026-06-14T02:02:00.000Z',
+      originStep: 'reviewers',
+    })).rejects.toThrow(/no longer matches pre-reservation/);
+
+    const beforeDiscard = store.loadLedger();
+    writeFileSync(join(cwd, 'src', 'example.ts'), 'export const example = false;\n');
+    const evidenceChanged = await commitFindingConflictAdjudication({
+      ledgerStore: store,
+      conflictId,
+      promptedEvidenceHash: stale.result.evidenceHash,
+      reservationMutationId: stale.result.reservationToken,
+      output: adjudicationOutput,
+      cwd,
+      workflowName: WORKFLOW_NAME,
+      stepName: 'finding-conflict-adjudication',
+      runId: 'run-2',
+      timestamp: '2026-06-14T02:02:00.000Z',
+      originStep: stale.result.originStep,
+    });
+    expect(evidenceChanged.result).toMatchObject({
+      applied: false,
+      reason: expect.stringContaining('evidence changed'),
+      freshEvidenceHash: expect.any(String),
+    });
+    if (evidenceChanged.result.applied) {
+      throw new Error('Expected changed evidence to discard the adjudication');
+    }
+    expect(evidenceChanged.result.freshEvidenceHash).not.toBe(stale.result.evidenceHash);
+    expect(evidenceChanged.ledger).toEqual(beforeDiscard);
+    writeFileSync(join(cwd, 'src', 'example.ts'), 'export const example = true;\n');
+
+    const discarded = await commitFindingConflictAdjudication({
+      ledgerStore: store,
+      conflictId,
+      promptedEvidenceHash: stale.result.evidenceHash,
+      reservationMutationId: stale.result.reservationToken,
+      output: adjudicationOutput,
+      cwd,
+      workflowName: WORKFLOW_NAME,
+      stepName: 'finding-conflict-adjudication',
+      runId: 'run-2',
+      timestamp: '2026-06-14T02:02:00.000Z',
+      originStep: stale.result.originStep,
+    });
+    expect(discarded.result).toMatchObject({
+      applied: false,
+      reason: expect.stringContaining('full head changed'),
+    });
+    expect(discarded.ledger).toEqual(beforeDiscard);
+    expect(store.loadLedger()).toEqual(beforeDiscard);
+
+    const current = await reserveFindingConflictAdjudication({
+      ledgerStore: store,
+      conflictId,
+      requestedOriginStep: 'reviewers',
+      runId: 'run-2',
+      observation: {
+        runId: 'run-2',
+        stepName: 'finding-conflict-adjudication',
+        timestamp: '2026-06-14T02:03:00.000Z',
+      },
+      cwd,
+    });
+    if (!current.result.started) {
+      throw new Error('Expected replacement adjudication reservation');
+    }
+    expect(current.result).toMatchObject({
+      evidenceHash: stale.result.evidenceHash,
+      originStep: 'final-gate',
+    });
+    expect(current.result.reservationToken).not.toBe(stale.result.reservationToken);
+    const currentReservation = current.ledger.lifecycleReservations.find(
+      (reservation) => reservation.mutationId === current.result.reservationToken,
+    )!;
+    expect(findingLifecycleReservationMatchesCurrentHeads(
+      current.ledger,
+      currentReservation,
+    )).toBe(true);
+
+    const committed = await commitFindingConflictAdjudication({
+      ledgerStore: store,
+      conflictId,
+      promptedEvidenceHash: current.result.evidenceHash,
+      reservationMutationId: current.result.reservationToken,
+      output: adjudicationOutput,
+      cwd,
+      workflowName: WORKFLOW_NAME,
+      stepName: 'finding-conflict-adjudication',
+      runId: 'run-2',
+      timestamp: '2026-06-14T02:04:00.000Z',
+      originStep: current.result.originStep,
+    });
+    expect(committed.result).toMatchObject({ applied: true });
+    expect(committed.ledger.lifecycleEvents.some(
+      (event) => event.mutationId === stale.result.reservationToken,
+    )).toBe(false);
+    expect(committed.ledger.lifecycleEvents).toContainEqual(expect.objectContaining({
+      mutationId: current.result.reservationToken,
+    }));
+  });
+
+  it('reports an existing adjudication before the consumed reservation full-head mismatch', async () => {
+    const store = createStore();
+    const initial = makeLedger(cwd);
+    await store.updateLedger(() => ({ ledger: initial, result: undefined }));
+    const conflictId = initial.conflicts[0]!.id;
+    const reservation = await reserveFindingConflictAdjudication({
+      ledgerStore: store,
+      conflictId,
+      requestedOriginStep: 'final-gate',
+      runId: 'run-2',
+      observation: {
+        runId: 'run-2',
+        stepName: 'finding-conflict-adjudication',
+        timestamp: '2026-06-14T02:10:00.000Z',
+      },
+      cwd,
+    });
+    if (!reservation.result.started) {
+      throw new Error('Expected adjudication reservation');
+    }
+    const output = {
+      conflictId,
+      outcome: 'undetermined' as const,
+      rationale: 'The available evidence does not establish either conclusion.',
+    };
+    const applied = await commitFindingConflictAdjudication({
+      ledgerStore: store,
+      conflictId,
+      promptedEvidenceHash: reservation.result.evidenceHash,
+      reservationMutationId: reservation.result.reservationToken,
+      output,
+      cwd,
+      workflowName: WORKFLOW_NAME,
+      stepName: 'finding-conflict-adjudication',
+      runId: 'run-2',
+      timestamp: '2026-06-14T02:11:00.000Z',
+      originStep: reservation.result.originStep,
+    });
+    expect(applied.result).toMatchObject({ applied: true });
+    const afterApplied = store.loadLedger();
+
+    const repeated = await commitFindingConflictAdjudication({
+      ledgerStore: store,
+      conflictId,
+      promptedEvidenceHash: reservation.result.evidenceHash,
+      reservationMutationId: reservation.result.reservationToken,
+      output,
+      cwd,
+      workflowName: WORKFLOW_NAME,
+      stepName: 'finding-conflict-adjudication',
+      runId: 'run-2',
+      timestamp: '2026-06-14T02:12:00.000Z',
+      originStep: reservation.result.originStep,
+    });
+    expect(repeated.result).toMatchObject({
+      applied: false,
+      reason: expect.stringContaining('already adjudicated'),
+      freshEvidenceHash: reservation.result.evidenceHash,
+    });
+    expect(repeated.ledger).toEqual(afterApplied);
+    expect(store.loadLedger()).toEqual(afterApplied);
+  });
+
+  it('inherits a durable null origin when replacing a stale reservation', async () => {
+    const store = createStore();
+    const initial = makeLedger(cwd);
+    await store.updateLedger(() => ({ ledger: initial, result: undefined }));
+    const conflictId = initial.conflicts[0]!.id;
+    const stale = await reserveFindingConflictAdjudication({
+      ledgerStore: store,
+      conflictId,
+      requestedOriginStep: undefined,
+      runId: 'run-2',
+      observation: {
+        runId: 'run-2',
+        stepName: 'finding-conflict-adjudication',
+        timestamp: '2026-06-14T03:00:00.000Z',
+      },
+      cwd,
+    });
+    if (!stale.result.started) {
+      throw new Error('Expected initial adjudication reservation');
+    }
+    await store.updateLedger((ledger) => ({
+      ledger: advanceConflictLifecycleHead({
+        ledger,
+        conflictId,
+        timestamp: '2026-06-14T03:01:00.000Z',
+      }),
+      result: undefined,
+    }));
+
+    const current = await reserveFindingConflictAdjudication({
+      ledgerStore: store,
+      conflictId,
+      requestedOriginStep: 'reviewers',
+      runId: 'run-2',
+      observation: {
+        runId: 'run-2',
+        stepName: 'finding-conflict-adjudication',
+        timestamp: '2026-06-14T03:02:00.000Z',
+      },
+      cwd,
+    });
+    if (!current.result.started) {
+      throw new Error('Expected replacement adjudication reservation');
+    }
+    expect(current.result.originStep).toBeUndefined();
+    expect(current.result.reservationToken).not.toBe(stale.result.reservationToken);
+    expect(current.ledger.lifecycleReservations.find(
+      (reservation) => reservation.mutationId === current.result.reservationToken,
+    )?.context).toMatchObject({
+      kind: 'conflict_adjudication',
+      originStep: null,
+    });
+  });
+
+  it('selects the current reservation after multiple stale reservations without consuming history', async () => {
+    const store = createStore();
+    const initial = makeLedger(cwd);
+    await store.updateLedger(() => ({ ledger: initial, result: undefined }));
+    const conflictId = initial.conflicts[0]!.id;
+    const reservations = [];
+    for (let index = 0; index < 3; index += 1) {
+      const reserved = await reserveFindingConflictAdjudication({
+        ledgerStore: store,
+        conflictId,
+        requestedOriginStep: index === 0 ? 'final-gate' : 'reviewers',
+        runId: 'run-2',
+        observation: {
+          runId: 'run-2',
+          stepName: 'finding-conflict-adjudication',
+          timestamp: `2026-06-14T04:0${index * 2}:00.000Z`,
+        },
+        cwd,
+      });
+      if (!reserved.result.started) {
+        throw new Error('Expected adjudication reservation');
+      }
+      reservations.push(reserved.result);
+      if (index < 2) {
+        await store.updateLedger((ledger) => ({
+          ledger: advanceConflictLifecycleHead({
+            ledger,
+            conflictId,
+            timestamp: `2026-06-14T04:0${index * 2 + 1}:00.000Z`,
+          }),
+          result: undefined,
+        }));
+      }
+    }
+
+    const ledger = store.loadLedger();
+    expect(new Set(reservations.map((reservation) => reservation.reservationToken)).size)
+      .toBe(3);
+    expect(reservations.map((reservation) => reservation.originStep))
+      .toEqual(['final-gate', 'final-gate', 'final-gate']);
+    const adjudicationReservations = ledger.lifecycleReservations.filter(
+      (reservation) => reservation.context.kind === 'conflict_adjudication',
+    );
+    expect(adjudicationReservations).toHaveLength(3);
+    expect(ledger.lifecycleEvents.some((event) => (
+      reservations.some((reservation) => reservation.reservationToken === event.mutationId)
+    ))).toBe(false);
+    expect(findPendingFindingConflictAdjudication({
+      ledger,
+      conflictId,
+      evidenceHash: reservations[2]!.evidenceHash,
+    })?.mutationId).toBe(reservations[2]!.reservationToken);
   });
 
   it('rejects a same-revision reservation when another full-head field is stale', () => {

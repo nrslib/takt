@@ -395,6 +395,7 @@ describe('finding-conflict-adjudication runner', () => {
       stepName: 'finding-conflict-adjudication',
       runId: 'run-1',
       timestamp: '2026-06-13T02:00:00.000Z',
+      originStep: reservation.result.originStep,
     });
 
     await precedingUpdate;
@@ -456,6 +457,7 @@ describe('finding-conflict-adjudication runner', () => {
       stepName: 'finding-conflict-adjudication',
       runId: 'run-1',
       timestamp: '2026-06-13T02:00:00.000Z',
+      originStep: reservation.result.originStep,
     });
 
     const persisted = ledgerStore.loadLedger();

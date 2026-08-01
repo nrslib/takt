@@ -12,6 +12,7 @@ import type {
 } from './types.js';
 import type { FindingAdjudicationStore, FindingLedgerMutation } from './store.js';
 import { reserveFindingConflictAdjudicationLifecycle } from './lifecycle-transaction.js';
+import { findingLifecycleReservationMatchesCurrentHeads } from './lifecycle-mutation.js';
 
 export type AdjudicationAttemptReservation =
   | { started: false }
@@ -23,19 +24,38 @@ export type AdjudicationAttemptReservation =
     reservationToken: string;
   };
 
+type PendingFindingConflictAdjudication = FindingLifecycleReservation & {
+  context: Extract<
+    FindingLifecycleReservation['context'],
+    { kind: 'conflict_adjudication' }
+  >;
+};
+
+function pendingFindingConflictAdjudications(input: {
+  ledger: FindingLedger;
+  conflictId: string;
+  evidenceHash: string;
+}): PendingFindingConflictAdjudication[] {
+  const appliedMutationIds = new Set(
+    input.ledger.lifecycleEvents.map((event) => event.mutationId),
+  );
+  return input.ledger.lifecycleReservations.filter(
+    (reservation): reservation is PendingFindingConflictAdjudication => (
+      reservation.context.kind === 'conflict_adjudication'
+      && reservation.context.conflictId === input.conflictId
+      && reservation.context.evidenceHash === input.evidenceHash
+      && !appliedMutationIds.has(reservation.mutationId)
+    ),
+  );
+}
+
 export function findPendingFindingConflictAdjudication(input: {
   ledger: FindingLedger;
   conflictId: string;
   evidenceHash: string;
 }): FindingLifecycleReservation | undefined {
-  const appliedMutationIds = new Set(
-    input.ledger.lifecycleEvents.map((event) => event.mutationId),
-  );
-  return input.ledger.lifecycleReservations.find((reservation) => (
-    reservation.context.kind === 'conflict_adjudication'
-    && reservation.context.conflictId === input.conflictId
-    && reservation.context.evidenceHash === input.evidenceHash
-    && !appliedMutationIds.has(reservation.mutationId)
+  return pendingFindingConflictAdjudications(input).find((reservation) => (
+    findingLifecycleReservationMatchesCurrentHeads(input.ledger, reservation)
   ));
 }
 
@@ -85,12 +105,19 @@ export async function reserveFindingConflictAdjudication(input: {
     if (!isConflictUnadjudicated(freshConflict, freshHash)) {
       return { ledger: fresh, result: { started: false as const } };
     }
-    const originStep = input.requestedOriginStep;
+    const previousPending = pendingFindingConflictAdjudications({
+      ledger: fresh,
+      conflictId: freshConflict.id,
+      evidenceHash: freshHash,
+    })[0];
+    const originStep = previousPending === undefined
+      ? input.requestedOriginStep ?? null
+      : previousPending.context.originStep;
     const reserved = reserveFindingConflictAdjudicationLifecycle({
       ledger: fresh,
       conflictId: freshConflict.id,
       evidenceHash: freshHash,
-      originStep: originStep ?? null,
+      originStep,
       reservedAt: input.observation,
     });
     return {
@@ -99,7 +126,7 @@ export async function reserveFindingConflictAdjudication(input: {
         started: true as const,
         evidenceHash: freshHash,
         evidenceSnapshot,
-        originStep,
+        originStep: originStep ?? undefined,
         reservationToken: reserved.mutationId,
       },
     };

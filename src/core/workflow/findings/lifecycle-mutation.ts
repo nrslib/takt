@@ -97,25 +97,42 @@ function assertSuppliedBindings(input: VerifiedLifecycleReservation): void {
   }
 }
 
+function reservationTargetMatchesCurrentHead(
+  ledger: FindingLedger,
+  target: FindingLifecycleReservation['targets'][number],
+): boolean {
+  const current = currentEntity(ledger, target.entityKind, target.entityId);
+  const head = captureFindingLifecycleHead(ledger, target.entityKind, target.entityId);
+  return target.expectedHead === null
+    ? current === undefined && head === undefined
+    : current !== undefined
+      && head !== undefined
+      && sameValue(head, target.expectedHead);
+}
+
+export function findingLifecycleReservationMatchesCurrentHeads(
+  ledger: FindingLedger,
+  reservation: Pick<FindingLifecycleReservation, 'targets'>,
+): boolean {
+  return reservation.targets.every((target) => (
+    reservationTargetMatchesCurrentHead(ledger, target)
+  ));
+}
+
 function assertReservationPremises(
   ledger: FindingLedger,
   reservation: FindingLifecycleReservation,
 ): void {
-  for (const target of reservation.targets) {
-    const current = currentEntity(ledger, target.entityKind, target.entityId);
-    const head = captureFindingLifecycleHead(ledger, target.entityKind, target.entityId);
-    if (target.expectedHead === null) {
-      if (current !== undefined || head !== undefined) {
-        throw new Error(`Lifecycle reservation expected "${target.entityId}" to be absent`);
-      }
-    } else if (
-      current === undefined
-      || head === undefined
-      || !sameValue(head, target.expectedHead)
-    ) {
-      throw new Error(`Lifecycle reservation has a stale full head for "${target.entityId}"`);
-    }
+  if (findingLifecycleReservationMatchesCurrentHeads(ledger, reservation)) {
+    return;
   }
+  const staleTarget = reservation.targets.find((target) => (
+    !reservationTargetMatchesCurrentHead(ledger, target)
+  ))!;
+  if (staleTarget.expectedHead === null) {
+    throw new Error(`Lifecycle reservation expected "${staleTarget.entityId}" to be absent`);
+  }
+  throw new Error(`Lifecycle reservation has a stale full head for "${staleTarget.entityId}"`);
 }
 
 export function reserveVerifiedLifecycleMutation(

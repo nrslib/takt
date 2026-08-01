@@ -3,7 +3,11 @@ import {
   buildAdjudicationEvidenceSnapshot,
   computeAdjudicationEvidenceHash,
 } from './adjudication-evidence.js';
-import type { FindingConflictAdjudicationOutput } from './types.js';
+import type {
+  FindingConflictAdjudicationOutput,
+  FindingLedger,
+  FindingLifecycleReservation,
+} from './types.js';
 import type { FindingAdjudicationStore, FindingLedgerMutation } from './store.js';
 import { captureReviewScopeSnapshot } from './snapshot.js';
 import { applyFindingLifecycleCommands } from './lifecycle-transaction.js';
@@ -11,6 +15,7 @@ import {
   FindingLedgerConflictSchema,
   FindingLedgerEntrySchema,
 } from '../../models/finding-schemas.js';
+import { findingLifecycleReservationMatchesCurrentHeads } from './lifecycle-mutation.js';
 
 export type AdjudicationApplyOutcome =
   | {
@@ -22,6 +27,47 @@ export type AdjudicationApplyOutcome =
     applied: true;
     disposition: FindingConflictAdjudicationDisposition;
   };
+
+function requireAdjudicationReservation(input: {
+  ledger: FindingLedger;
+  mutationId: string;
+  conflictId: string;
+  evidenceHash: string;
+  originStep: string | null;
+}): FindingLifecycleReservation {
+  const reservation = input.ledger.lifecycleReservations.find(
+    (candidate) => candidate.mutationId === input.mutationId,
+  );
+  if (reservation === undefined) {
+    throw new Error(
+      `Lifecycle command references missing pre-reservation "${input.mutationId}"`,
+    );
+  }
+  if (
+    reservation.operation !== 'apply_conflict_adjudication'
+    || reservation.context.kind !== 'conflict_adjudication'
+    || reservation.context.conflictId !== input.conflictId
+    || reservation.context.evidenceHash !== input.evidenceHash
+    || reservation.context.originStep !== input.originStep
+  ) {
+    throw new Error(
+      `Lifecycle command no longer matches pre-reservation "${input.mutationId}"`,
+    );
+  }
+  return reservation;
+}
+
+function staleReservationOutcome(
+  ledger: FindingLedger,
+): FindingLedgerMutation<AdjudicationApplyOutcome> {
+  return {
+    ledger,
+    result: {
+      applied: false,
+      reason: 'the conflict adjudication reservation full head changed while the decision was being prepared',
+    },
+  };
+}
 
 export async function commitFindingConflictAdjudication(input: {
   ledgerStore: FindingAdjudicationStore;
@@ -37,7 +83,13 @@ export async function commitFindingConflictAdjudication(input: {
   originStep?: string;
 }): Promise<FindingLedgerMutation<AdjudicationApplyOutcome>> {
   return input.ledgerStore.updateLedger<AdjudicationApplyOutcome>((fresh) => {
-    const freshReviewScopeSnapshot = captureReviewScopeSnapshot(input.cwd);
+    const reservation = requireAdjudicationReservation({
+      ledger: fresh,
+      mutationId: input.reservationMutationId,
+      conflictId: input.conflictId,
+      evidenceHash: input.promptedEvidenceHash,
+      originStep: input.originStep ?? null,
+    });
     const freshConflict = fresh.conflicts.find((conflict) => conflict.id === input.conflictId);
     if (freshConflict === undefined || freshConflict.status !== 'active') {
       return {
@@ -48,6 +100,7 @@ export async function commitFindingConflictAdjudication(input: {
         },
       };
     }
+    const freshReviewScopeSnapshot = captureReviewScopeSnapshot(input.cwd);
     const freshEvidenceHash = computeAdjudicationEvidenceHash(buildAdjudicationEvidenceSnapshot({
       ledger: fresh,
       conflictId: freshConflict.id,
@@ -72,6 +125,9 @@ export async function commitFindingConflictAdjudication(input: {
           freshEvidenceHash,
         },
       };
+    }
+    if (!findingLifecycleReservationMatchesCurrentHeads(fresh, reservation)) {
+      return staleReservationOutcome(fresh);
     }
     const applied = applyFindingConflictAdjudication({
       ledger: fresh,
@@ -142,6 +198,13 @@ export async function commitFindingConflictAdjudication(input: {
     if (!prepared.result.applied) {
       return { mutation: prepared, publish: true };
     }
+    const reservation = requireAdjudicationReservation({
+      ledger: fresh,
+      mutationId: input.reservationMutationId,
+      conflictId: input.conflictId,
+      evidenceHash: input.promptedEvidenceHash,
+      originStep: input.originStep ?? null,
+    });
     const conflict = fresh.conflicts.find((candidate) => candidate.id === input.conflictId);
     if (conflict === undefined || conflict.status !== 'active') {
       return {
@@ -161,19 +224,35 @@ export async function commitFindingConflictAdjudication(input: {
       conflictId: conflict.id,
       reviewScopeSnapshot,
     }));
-    if (evidenceHash === input.promptedEvidenceHash) {
-      return { mutation: prepared, publish: true };
-    }
-    return {
-      publish: false,
-      mutation: {
-        ledger: fresh,
-        result: {
-          applied: false as const,
-          reason: 'the conflict\'s evidence changed while the adjudication decision was being applied',
-          freshEvidenceHash: evidenceHash,
+    if (evidenceHash !== input.promptedEvidenceHash) {
+      return {
+        publish: false,
+        mutation: {
+          ledger: fresh,
+          result: {
+            applied: false as const,
+            reason: 'the conflict\'s evidence changed while the adjudication decision was being applied',
+            freshEvidenceHash: evidenceHash,
+          },
         },
-      },
-    };
+      };
+    }
+    if ((conflict.adjudications ?? []).some((record) => record.evidenceHash === evidenceHash)) {
+      return {
+        publish: false,
+        mutation: {
+          ledger: fresh,
+          result: {
+            applied: false as const,
+            reason: `conflict "${input.conflictId}" was already adjudicated for the prompted evidence`,
+            freshEvidenceHash: evidenceHash,
+          },
+        },
+      };
+    }
+    if (!findingLifecycleReservationMatchesCurrentHeads(fresh, reservation)) {
+      return { mutation: staleReservationOutcome(fresh), publish: false };
+    }
+    return { mutation: prepared, publish: true };
   });
 }
