@@ -30,7 +30,11 @@ not the pass/fail summary.
 | `frontend-coder` | frontend / implement | frontend-app (work copy) | artifact checks on the implemented change |
 | `cqrs-coder` | backend-cqrs / implement | backend-cqrs (work copy) | artifact checks on the implemented change |
 | `fix-closure` | review-remediation / fix | fix-closure (work copy) | whether remediation closes every participating path instead of patching only the latest reported example |
+| `fix-plan-fresh-findings` | peer-review / fix-plan | fix-plan-fresh-findings | whether fix-plan uses the canonical review resolution's actionable families without reviving its non-actionable findings |
 | `review-family-closure` | peer-review-suite-base / coding-review | review-family-closure | whether one review reports every path affected by the same contract defect instead of stopping at a representative example |
+| `review-adjudication` | peer-review / review-adjudication | review-adjudication | whether real defects remain actionable while duplicates, overreach, false positives, and environment-only gaps are separated by evidence |
+| `final-readiness-supervision` | peer-review / final-gate | final-readiness-supervision | whether the final supervisor catches a merge-blocking unmet requirement without reopening an adjudicated non-actionable finding |
+| `final-readiness-precision` | peer-review / final-gate | final-readiness-precision | whether the final supervisor accepts a complete change without reopening an adjudicated documentation improvement |
 
 Reviewer suites run read-only against `eval/fixtures/*`. Coder suites run
 with `sandbox_mode: workspace-write` in a disposable copy under `eval/.work/`
@@ -99,6 +103,10 @@ npm run eval:prompts -- arch cqrs        # only selected suites
 npm run eval:prompts -- arch --repeat 3  # extra flags pass through to promptfoo
 npm run eval:prompts:prepare     # prepare only (inspect eval/prompts/)
 npm run eval:prompts:review-family-closure
+npm run eval:prompts:review-adjudication
+npm run eval:prompts:fix-plan-fresh-findings
+npm run eval:prompts:final-readiness-supervision
+npm run eval:prompts:final-readiness-precision
 npx promptfoo view               # browse results in the web UI
 ```
 

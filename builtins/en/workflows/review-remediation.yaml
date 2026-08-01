@@ -65,6 +65,7 @@ steps:
         $param: plan_policy
       fix_knowledge:
         $param: fix_knowledge
+      plan_instruction: fix-plan
     rules:
       - condition: Fix plan finalized
         next: fix

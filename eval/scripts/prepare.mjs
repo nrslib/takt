@@ -53,7 +53,11 @@ const TARGETS = [
   { id: 'frontend-implement', workflow: 'frontend', step: 'implement', fixture: 'eval/fixtures/frontend-app', mutable: true },
   { id: 'cqrs-implement', workflow: 'backend-cqrs', step: 'implement', fixture: 'eval/fixtures/backend-cqrs', mutable: true },
   { id: 'fix-closure', workflow: 'review-remediation', step: 'fix', fixture: 'eval/fixtures/fix-closure', mutable: true },
+  { id: 'fix-plan-fresh-findings', workflow: 'peer-review', step: 'fix-plan', fixture: 'eval/fixtures/fix-plan-fresh-findings' },
   { id: 'review-family-closure', workflow: 'peer-review-suite-base', step: 'coding-review', fixture: 'eval/fixtures/review-family-closure' },
+  { id: 'review-adjudication', workflow: 'peer-review', step: 'review-adjudication', fixture: 'eval/fixtures/review-adjudication' },
+  { id: 'final-readiness-supervision', workflow: 'peer-review', step: 'final-gate', fixture: 'eval/fixtures/final-readiness-supervision' },
+  { id: 'final-readiness-precision', workflow: 'peer-review', step: 'final-gate', fixture: 'eval/fixtures/final-readiness-precision' },
 ];
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));

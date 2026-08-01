@@ -16,7 +16,6 @@ steps:
       implementation_instruction: implement
       review_policy: [coding, testing, review]
       review_knowledge: [takt, architecture, unit-testing, e2e-testing]
-      supervisor_persona: supervisor
     rules:
       - condition: COMPLETE
         next: COMPLETE

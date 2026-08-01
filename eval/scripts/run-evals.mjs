@@ -6,7 +6,9 @@
  * Usage: node eval/scripts/run-evals.mjs [suite...] [--promptfoo-flags...]
  * Suites: coding, arch, antipattern, frontend, cqrs, rescan, rescan-coding,
  *         rescan-semantics, rescan-precision, loop-monitor-fc, frontend-coder,
- *         cqrs-coder, fix-closure, review-family-closure
+ *         cqrs-coder, fix-closure, fix-plan-fresh-findings,
+ *         review-family-closure, review-adjudication,
+ *         final-readiness-supervision, final-readiness-precision
  *         (default: all except rescan suites,
  *         which need opencode auth)
  * Example: npm run eval:prompts -- arch --repeat 3
@@ -29,7 +31,11 @@ const SUITES = {
   'frontend-coder': 'promptfooconfig.frontend-coder.yaml',
   'cqrs-coder': 'promptfooconfig.cqrs-coder.yaml',
   'fix-closure': 'promptfooconfig.fix-closure.yaml',
+  'fix-plan-fresh-findings': 'promptfooconfig.fix-plan-fresh-findings.yaml',
   'review-family-closure': 'promptfooconfig.review-family-closure.yaml',
+  'review-adjudication': 'promptfooconfig.review-adjudication.yaml',
+  'final-readiness-supervision': 'promptfooconfig.final-readiness-supervision.yaml',
+  'final-readiness-precision': 'promptfooconfig.final-readiness-precision.yaml',
 };
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));

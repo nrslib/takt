@@ -1,5 +1,5 @@
 name: peer-review
-description: 専門並列ピアレビュー（+ ai-antipattern-review-2nd）→ 修正計画 → 修正 → 修正完了検証のループ後、merge-readiness-review、supervise の順で最終ゲートを実行する。
+description: 専門並列ピアレビュー（+ ai-antipattern-review-2nd）→ 指摘裁定 → 共通修正ループ後、merge-readiness 観点を統合した supervisor が最終裁定する。
 subworkflow:
   callable: true
   visibility: internal
@@ -45,10 +45,6 @@ subworkflow:
         - coding
         - testing
         - review
-    supervisor_persona:
-      type: facet_ref
-      facet_kind: persona
-      default: supervisor
 workflow_config:
   provider_options:
     codex:
@@ -60,7 +56,10 @@ initial_step: reviewers
 loop_monitors:
   - cycle:
       - reviewers
-      - remediation
+      - review-adjudication
+      - fix-plan
+      - fix
+      - fix-verifier
     threshold: 5
     judge:
       persona: supervisor
@@ -71,13 +70,16 @@ loop_monitors:
         - condition: 修正未完了または報告未収束だが、次のレビュー・修正が実行可能である
           next: reviewers
         - condition: 修正方針の前提を変える必要があり、再計画が実行可能である
-          next: remediation
+          next: fix-plan
         - condition: 要件を満たす実現可能な打開手段がない
           next: ABORT
   - cycle:
       - reviewers
+      - review-adjudication
       - final-gate
-      - remediation
+      - fix-plan
+      - fix
+      - fix-verifier
     threshold: 5
     judge:
       persona: supervisor
@@ -88,7 +90,24 @@ loop_monitors:
         - condition: 修正未完了または報告未収束だが、次のレビュー・修正が実行可能である
           next: reviewers
         - condition: 修正方針の前提を変える必要があり、再計画が実行可能である
-          next: remediation
+          next: fix-plan
+        - condition: 要件を満たす実現可能な打開手段がない
+          next: ABORT
+  - cycle:
+      - fix-plan
+      - fix
+      - fix-verifier
+    threshold: 4
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix
+      rules:
+        - condition: 健全（修正進捗があり、報告内容も収束している）
+          next: fix-plan
+        - condition: 修正未完了または報告未収束だが、次のレビュー・修正が実行可能である
+          next: fix-plan
+        - condition: 修正方針の前提を変える必要があり、再計画が実行可能である
+          next: fix-plan
         - condition: 要件を満たす実現可能な打開手段がない
           next: ABORT
 steps:
@@ -103,44 +122,79 @@ steps:
         $param: review_knowledge_additions
     rules:
       - condition: COMPLETE
-        next: final-gate
+        next: review-adjudication
       - condition: needs_fix
-        next: remediation
+        next: review-adjudication
+  - name: review-adjudication
+    uses: peer-review-adjudication
+    with:
+      review_policy_additions:
+        $param: review_policy_additions
+      review_knowledge_additions:
+        $param: review_knowledge_additions
+    rules:
+      - condition: 修正対象あり
+        next: fix-plan
+      - condition: 修正対象なし
+        next: final-gate
+      - condition: タスク全体の再計画が必要
+        return: need_replan
   - name: final-gate
     uses: peer-review-final-gate
     with:
       merge_readiness_policy:
         $param: verification_policy
-      merge_readiness_knowledge:
+      review_knowledge:
         $param: review_knowledge_additions
-      supervise_knowledge:
-        $param: review_knowledge_additions
-      supervisor_persona:
-        $param: supervisor_persona
     rules:
-      - condition: COMPLETE
+      - condition: マージ可能
         next: COMPLETE
-      - condition: needs_fix
-        next: remediation
-      - condition: need_replan
+      - condition: 修正が必要
+        next: fix-plan
+      - condition: タスク全体の再計画が必要
         return: need_replan
-      - condition: ABORT
+      - condition: 実行環境により判定不能
         next: ABORT
-  - name: remediation
-    uses: review-remediation
+  - name: fix-plan
+    uses: peer-review-fix-plan
     with:
       plan_policy:
         $param: plan_policy
+      fix_knowledge:
+        $param: fix_knowledge
+      plan_instruction: fix-plan-from-review-resolution
+    rules:
+      - condition: 修正計画を確定した
+        next: fix
+      - condition: タスク全体の再計画が必要
+        return: need_replan
+
+  - name: fix
+    uses: peer-review-fix
+    with:
       fix_policy:
         $param: fix_policy
+      fix_knowledge:
+        $param: fix_knowledge
+    rules:
+      - condition: 修正完了
+        next: fix-verifier
+      - condition: 修正計画の見直しが必要
+        next: fix-plan
+      - condition: タスク全体の再計画が必要
+        return: need_replan
+
+  - name: fix-verifier
+    uses: peer-review-fix-verifier
+    with:
       verification_policy:
         $param: verification_policy
       fix_knowledge:
         $param: fix_knowledge
     rules:
-      - condition: COMPLETE
+      - condition: verified
         next: reviewers
-      - condition: need_replan
-        return: need_replan
-      - condition: ABORT
-        next: ABORT
+      - condition: incomplete
+        next: fix
+      - condition: plan_invalid
+        next: fix-plan
