@@ -58,6 +58,31 @@ const snapshot: ReviewScopeProofSnapshot = {
   }],
 };
 
+function issueResourceCappedFileQuote(cwd: string, contentDigest: string) {
+  return issueFindingEvidenceRequests({
+    cwd,
+    snapshot: {
+      ...snapshot,
+      queryInventory: [{
+        path: 'src/a.ts',
+        kind: 'file',
+        contentDigest,
+        coverage: 'resource_cap',
+      }],
+    },
+    workflowName: 'workflow',
+    runId: 'run',
+    scopeIdentity: 'scope',
+    workflowTask: 'Fix the code.',
+    issuedAt: '2026-07-29T00:00:00.000Z',
+  }, {
+    target: { kind: 'code', paths: ['src/a.ts'], symbol: null },
+    claimIdentityHash: 'c'.repeat(64),
+    targetFindingId: null,
+    requests: [{ kind: 'file_quote', path: 'src/a.ts', startLine: 2, endLine: 2 }],
+  });
+}
+
 const target: FindingTarget = {
   kind: 'absence',
   predicate: {
@@ -819,34 +844,54 @@ describe('Finding evidence request issuer', () => {
     }
   });
 
-  it('keeps resource-capped inventory as an engine coverage gap', () => {
-    const result = issueFindingEvidenceRequests({
-      snapshot: {
-        ...snapshot,
-        queryInventory: [{
-          path: 'src/a.ts',
-          kind: 'file',
-          contentDigest: sha256(Buffer.from('source\n')),
-          coverage: 'resource_cap',
-        }],
-      },
-      workflowName: 'workflow',
-      runId: 'run',
-      scopeIdentity: 'scope',
-      workflowTask: 'Fix the code.',
-      issuedAt: '2026-07-29T00:00:00.000Z',
-    }, {
-      target: { kind: 'code', paths: ['src/a.ts'], symbol: null },
-      claimIdentityHash: 'c'.repeat(64),
-      targetFindingId: null,
-      requests: [{ kind: 'file_quote', path: 'src/a.ts', startLine: 1, endLine: 1 }],
-    });
+  it('re-reads a resource-capped file quote when the source matches the snapshot digest', () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-resource-cap-quote-'));
+    try {
+      mkdirSync(join(cwd, 'src'));
+      const content = Buffer.from('first\nsecond\n');
+      writeFileSync(join(cwd, 'src/a.ts'), content);
 
-    expect(result).toMatchObject({
-      evidence: [],
-      coverageGaps: ['file_quote path "src/a.ts" has coverage "resource_cap"'],
-      quoteFailureReasons: [],
-    });
+      expect(issueResourceCappedFileQuote(cwd, sha256(content))).toMatchObject({
+        evidence: [{ verbatimExcerpt: 'second' }],
+        coverageGaps: [],
+      });
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a resource-capped file quote when the source digest changed', () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-resource-cap-quote-'));
+    try {
+      mkdirSync(join(cwd, 'src'));
+      writeFileSync(join(cwd, 'src/a.ts'), 'first\nsecond\n');
+
+      expect(issueResourceCappedFileQuote(cwd, 'f'.repeat(64))).toMatchObject({
+        evidence: [],
+        coverageGaps: ['source file "src/a.ts" no longer matches its review scope contentDigest'],
+        quoteFailureReasons: [],
+      });
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a resource-capped file quote when the source exceeds 1 MiB', () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-resource-cap-quote-'));
+    try {
+      mkdirSync(join(cwd, 'src'));
+      const oversized = Buffer.alloc((1024 * 1024) + 1, 0x78);
+      writeFileSync(join(cwd, 'src/a.ts'), oversized);
+
+      const oversizedResult = issueResourceCappedFileQuote(cwd, sha256(oversized));
+      expect(oversizedResult.evidence).toEqual([]);
+      expect(oversizedResult.coverageGaps).toEqual([
+        'source file "src/a.ts" exceeds the 1048576-byte evidence source limit',
+      ]);
+      expect(oversizedResult.quoteFailureReasons).toEqual([]);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
   });
 
   it('rejects retained bytes whose digest does not match the snapshot inventory digest', () => {

@@ -224,11 +224,7 @@ function resolveDigestBoundQuoteSource(
     };
   }
   if (entry.coverage === 'resource_cap') {
-    return {
-      ok: false,
-      kind: 'resource_exhausted',
-      reason: `file_quote path "${request.path}" has coverage "${entry.coverage}"`,
-    };
+    return rereadDigestBoundSource(context, request, entry.contentDigest);
   }
   if (entry.coverage !== 'complete') {
     return {

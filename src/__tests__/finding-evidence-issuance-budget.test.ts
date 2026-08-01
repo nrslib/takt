@@ -391,7 +391,12 @@ describe('finding evidence issuance byte budgets', () => {
     })]);
   });
 
-  it('lands resource-capped quote issuance as a provisional instead of a reviewer anomaly', () => {
+  it('cleanly admits a digest-matching resource-capped file quote without a provisional', ({ onTestFinished }) => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-resource-cap-admission-'));
+    onTestFinished(() => rmSync(cwd, { recursive: true, force: true }));
+    mkdirSync(join(cwd, 'src'));
+    const content = Buffer.from('source\n');
+    writeFileSync(join(cwd, 'src/a.ts'), content);
     const previousLedger = emptyLedger();
     const snapshot: ReviewScopeProofSnapshot = {
       reviewScopeSnapshotId: snapshotId,
@@ -400,12 +405,12 @@ describe('finding evidence issuance byte budgets', () => {
       queryInventory: [{
         path: 'src/a.ts',
         kind: 'file',
-        contentDigest: sha256(Buffer.from('source\n')),
+        contentDigest: sha256(content),
         coverage: 'resource_cap',
       }],
     };
     const intake = intakeSingleCandidate({
-      cwd: process.cwd(),
+      cwd,
       previousLedger,
       snapshot,
       candidate: {
@@ -421,9 +426,10 @@ describe('finding evidence issuance byte budgets', () => {
         evidenceRequests: [{ kind: 'file_quote', path: 'src/a.ts', startLine: 1, endLine: 1 }],
       },
     });
-    const admission = evaluateIntake({ cwd: process.cwd(), previousLedger, snapshot, intake });
+    const admission = evaluateIntake({ cwd, previousLedger, snapshot, intake });
 
-    expect(admission.admissionProvisionalSpecs).toHaveLength(1);
+    expect(admission.cleanAdmitted).toHaveLength(1);
+    expect(admission.admissionProvisionalSpecs).toEqual([]);
     expect(admission.admissionAnomalySpecs).toEqual([]);
   });
 
