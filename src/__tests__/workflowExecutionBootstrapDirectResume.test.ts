@@ -300,6 +300,65 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     expect(getAttachedWorkflowOpaqueRef(bootstrap.effectiveWorkflowConfig)).toBeUndefined();
   });
 
+  it.each([
+    { initialIterationOverride: 50, maxStepsOverride: undefined, expectedMaxSteps: 51 },
+    { initialIterationOverride: 56, maxStepsOverride: undefined, expectedMaxSteps: 102 },
+    { initialIterationOverride: 56, maxStepsOverride: 102, expectedMaxSteps: 102 },
+    { initialIterationOverride: 102, maxStepsOverride: 102, expectedMaxSteps: 204 },
+    { initialIterationOverride: 205, maxStepsOverride: undefined, expectedMaxSteps: 408 },
+  ])(
+    'resolves max steps to $expectedMaxSteps for restored iteration $initialIterationOverride',
+    async ({ initialIterationOverride, maxStepsOverride, expectedMaxSteps }) => {
+      const projectDir = createTempProject();
+      const bootstrap = await createWorkflowExecutionBootstrap(
+        { ...workflowConfig, maxSteps: 51 },
+        'Resume workflow iteration',
+        projectDir,
+        {
+          projectCwd: projectDir,
+          provider: 'mock',
+          initialIterationOverride,
+          ...(maxStepsOverride === undefined ? {} : { maxStepsOverride }),
+        },
+      );
+
+      expect(bootstrap.effectiveWorkflowConfig.maxSteps).toBe(expectedMaxSteps);
+    },
+  );
+
+  it('keeps an infinite max steps limit when restoring an iteration', async () => {
+    const projectDir = createTempProject();
+    const bootstrap = await createWorkflowExecutionBootstrap(
+      { ...workflowConfig, maxSteps: 'infinite' },
+      'Resume workflow iteration',
+      projectDir,
+      {
+        projectCwd: projectDir,
+        provider: 'mock',
+        initialIterationOverride: 56,
+      },
+    );
+
+    expect(bootstrap.effectiveWorkflowConfig.maxSteps).toBe('infinite');
+  });
+
+  it('rejects a restored iteration when the next finite limit is not safely representable', async () => {
+    const projectDir = createTempProject();
+
+    await expect(createWorkflowExecutionBootstrap(
+      { ...workflowConfig, maxSteps: Number.MAX_SAFE_INTEGER },
+      'Resume workflow iteration',
+      projectDir,
+      {
+        projectCwd: projectDir,
+        provider: 'mock',
+        initialIterationOverride: Number.MAX_SAFE_INTEGER,
+      },
+    )).rejects.toThrow();
+    expect(mockWriteFileAtomic).not.toHaveBeenCalled();
+    expect(mockCreateOutputFns).not.toHaveBeenCalled();
+  });
+
   it('does not replace metadata already attached to the inheritance target', () => {
     const source = attachWorkflowSourcePath({}, '/source/workflow.yaml');
     const target = attachWorkflowSourcePath({}, '/target/workflow.yaml');

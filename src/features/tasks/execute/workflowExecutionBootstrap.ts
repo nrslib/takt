@@ -113,12 +113,35 @@ class AutoRoutingReachTracker {
   }
 }
 
+function resolveMaxStepsForRestoredIteration(
+  maxSteps: WorkflowConfig['maxSteps'],
+  initialIteration: number | undefined,
+): WorkflowConfig['maxSteps'] {
+  if (maxSteps === 'infinite' || initialIteration === undefined || initialIteration < maxSteps) {
+    return maxSteps;
+  }
+
+  let resumedMaxSteps = maxSteps;
+  while (initialIteration >= resumedMaxSteps) {
+    const nextMaxSteps = resumedMaxSteps * 2;
+    if (!Number.isSafeInteger(nextMaxSteps)) {
+      throw new Error('Cannot resume workflow because the next max steps limit exceeds the safe integer range');
+    }
+    resumedMaxSteps = nextMaxSteps;
+  }
+  return resumedMaxSteps;
+}
+
 export async function createWorkflowExecutionBootstrap(
   workflowConfig: WorkflowConfig,
   task: string,
   cwd: string,
   options: WorkflowExecutionOptions,
 ): Promise<WorkflowExecutionBootstrap> {
+  const effectiveMaxSteps = resolveMaxStepsForRestoredIteration(
+    options.maxStepsOverride ?? workflowConfig.maxSteps,
+    options.initialIterationOverride,
+  );
   const { headerPrefix = 'Running Workflow:', interactiveUserInput = false, outputMode = 'terminal' } = options;
   const projectCwd = options.projectCwd;
   const safeWorkflowName = sanitizeTerminalText(workflowConfig.name);
@@ -340,7 +363,7 @@ export async function createWorkflowExecutionBootstrap(
     autoRouting: inheritedAutoRouting,
     rateLimitFallback: workflowConfig.rateLimitFallback ?? globalConfig.rateLimitFallback,
     runtime: resolveRuntimeConfig(globalConfig.runtime, workflowConfig.runtime),
-    ...(options.maxStepsOverride !== undefined ? { maxSteps: options.maxStepsOverride } : {}),
+    maxSteps: effectiveMaxSteps,
   };
   inheritWorkflowConfigMetadata(workflowConfig, effectiveWorkflowConfig);
   const providerEventLogger = createProviderEventLogger({
