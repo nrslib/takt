@@ -425,7 +425,7 @@ export async function resolveTaskExecution(
   );
   const resolvedRetryNote = data.retry_note;
   const maxStepsOverride = data.exceeded_max_steps;
-  const initialIterationOverride = data.exceeded_current_iteration ?? retryResume.resumePoint?.iteration;
+  const initialIterationOverride = data.exceeded_current_iteration;
 
   const autoPr = data.auto_pr ?? resolveWorkflowConfigValue(defaultCwd, 'autoPr') ?? false;
   const draftPr = data.draft_pr ?? resolveWorkflowConfigValue(defaultCwd, 'draftPr') ?? false;

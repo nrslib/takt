@@ -414,6 +414,8 @@ describe('WorkflowCallExecutor', () => {
     const state = makeState(parentConfig.name, 'running', 2);
     const childState = makeState(childConfig.name, 'aborted', 4);
     childState.lastOutput = makeResponse({ content: 'stale child success' });
+    childState.personaSessions.set('reviewer', 'child-session');
+    const setActiveResumePoint = vi.fn();
 
     const childEngine = createChildEngine({
       state: childState,
@@ -443,7 +445,7 @@ describe('WorkflowCallExecutor', () => {
       createEngine: vi.fn().mockReturnValue(childEngine),
       emit: vi.fn(),
       state,
-      setActiveResumePoint: vi.fn(),
+      setActiveResumePoint,
       refreshFindingsState: vi.fn(),
     });
 
@@ -458,6 +460,9 @@ describe('WorkflowCallExecutor', () => {
     expect(result.status).toBe('aborted');
     expect(result.abortKind).toBe('runtime_error');
     expect(result.abortReason).toBe('Step execution failed: child exploded');
+    expect(state.iteration).toBe(4);
+    expect(state.personaSessions.get('reviewer')).toBe('child-session');
+    expect(setActiveResumePoint).not.toHaveBeenCalled();
   });
 
   it('共通 workflow types の child engine 契約だけで executor を駆動できる', async () => {

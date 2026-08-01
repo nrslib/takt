@@ -491,10 +491,7 @@ export class WorkflowCallExecutor {
   }
 
   private syncStateFromChild(
-    step: WorkflowCallStep,
     childState: WorkflowState,
-    occurrence: number,
-    resumeStackPrefix: readonly WorkflowResumePointEntry[],
   ): void {
     if (this.deps.sharedRuntime.maxSteps !== undefined) {
       this.deps.updateMaxSteps(this.deps.sharedRuntime.maxSteps);
@@ -508,12 +505,6 @@ export class WorkflowCallExecutor {
     for (const [sessionKey, sessionId] of childState.personaSessions) {
       this.deps.state.personaSessions.set(sessionKey, sessionId);
     }
-    this.deps.setActiveResumePoint(
-      step,
-      this.deps.state.iteration,
-      occurrence,
-      resumeStackPrefix,
-    );
     // 子が Finding Contract の台帳（親と共有）へ書き込んでいても、iteration /
     // session の同期だけでは親の state.findings は古いまま。親の
     // when(findings.*) ルールが子の取り込み結果を見られるよう、ここで
@@ -669,12 +660,15 @@ export class WorkflowCallExecutor {
     const childResult = await childEngine.runWithResult();
     const childState = childResult.state;
     if (executeOptions.syncParentState) {
-      this.syncStateFromChild(
-        request.step,
-        childState,
-        occurrence,
-        resumeStackPrefix,
-      );
+      this.syncStateFromChild(childState);
+      if (childState.status === 'completed') {
+        this.deps.setActiveResumePoint(
+          request.step,
+          this.deps.state.iteration,
+          occurrence,
+          resumeStackPrefix,
+        );
+      }
     }
     return {
       ...childState,

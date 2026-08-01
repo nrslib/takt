@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import type { TaskInfo } from '../infra/task/index.js';
 import * as infraTask from '../infra/task/index.js';
 import { TaskRunner } from '../infra/task/runner.js';
+import { TaskStore } from '../infra/task/store.js';
 import * as runOrderContent from '../core/workflow/run/order-content.js';
 import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig.js';
 import { invalidateAllResolvedConfigCache } from '../infra/config/resolveConfigValue.js';
@@ -289,6 +290,144 @@ describe('resolveTaskExecution', () => {
     expect(result.reportDirName).not.toBe(sourceRunSlug);
   });
 
+  it.each(['requeue', 'retry', 'instruct'] as const)(
+    'should reset the target run iteration for %s while retaining its resume location',
+    async (resumeMode) => {
+      const root = createTempProjectDir();
+      writeTaktFile(root, 'workflows/default.yaml', [
+        'name: default',
+        'initial_step: implement',
+        'max_steps: 5',
+        'steps:',
+        '  - name: implement',
+        '    persona: coder',
+        '    instruction: Implement',
+        '    rules:',
+        '      - condition: done',
+        '        next: COMPLETE',
+      ].join('\n'));
+      const resumePoint = {
+        version: 2 as const,
+        stack: [{
+          workflow: 'default',
+          workflow_ref: projectWorkflowRef(root, 'default.yaml'),
+          step: 'implement',
+          kind: 'agent' as const,
+          occurrence: 3,
+          step_iterations: { implement: 3 },
+        }],
+        iteration: 17,
+        elapsed_ms: 183245,
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
+      };
+      const runner = new TaskRunner(root);
+      const queued = runner.addTask('Run task', { workflow: 'default' });
+      const running = runner.claimNextTasks(1)[0]!;
+      runner.updateRunningTaskExecution(running.name, { runSlug: 'source-run' });
+      runner.forceFailRunningTask(running.name, {
+        step: 'implement',
+        error: 'source run failed',
+      });
+      let task: TaskInfo;
+      if (resumeMode === 'requeue') {
+        runner.requeueTask(
+          queued.name,
+          ['failed'],
+          'implement',
+          undefined,
+          resumePoint,
+          undefined,
+          undefined,
+          'source-run',
+        );
+        task = runner.claimNextTasks(1)[0]!;
+      } else {
+        task = runner.startReExecution(
+          queued.name,
+          ['failed'],
+          resumeMode,
+          'implement',
+          undefined,
+          resumePoint,
+          undefined,
+          undefined,
+          'source-run',
+        );
+      }
+
+      const result = await resolveTaskExecutionStrict(task, root);
+
+      expect(result.startStep).toBe('implement');
+      expect(result.resumePoint).toEqual(resumePoint);
+      expect(result.initialIterationOverride).toBeUndefined();
+      expect(result.resumeSource).toEqual({
+        sourceRunSlug: 'source-run',
+        resumeMode,
+      });
+    },
+  );
+
+  it('should reset the target run iteration for auto requeue while retaining its resume location', async () => {
+    const root = createTempProjectDir();
+    writeTaktFile(root, 'workflows/default.yaml', [
+      'name: default',
+      'initial_step: implement',
+      'max_steps: 5',
+      'steps:',
+      '  - name: implement',
+      '    persona: coder',
+      '    instruction: Implement',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
+    ].join('\n'));
+    const resumePoint = {
+      version: 2 as const,
+      stack: [{
+        workflow: 'default',
+        workflow_ref: projectWorkflowRef(root, 'default.yaml'),
+        step: 'implement',
+        kind: 'agent' as const,
+        occurrence: 2,
+        step_iterations: { implement: 2 },
+      }],
+      iteration: 9,
+      elapsed_ms: 1200,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
+    };
+    const runner = new TaskRunner(root);
+    const queued = runner.addTask('Auto requeue task', { workflow: 'default' });
+    const running = runner.claimNextTasks(1)[0]!;
+    runner.updateRunningTaskExecution(running.name, { runSlug: 'source-run' });
+    runner.forceFailRunningTask(running.name, {
+      step: 'implement',
+      error: 'retryable failure',
+      retryable: true,
+    });
+    const store = new TaskStore(root);
+    store.update((current) => ({
+      tasks: current.tasks.map((task) => (
+        task.name === queued.name ? { ...task, resume_point: resumePoint } : task
+      )),
+    }));
+
+    expect(runner.autoRequeueFailedTask(queued.name, { maxAttempts: 1 })).toMatchObject({
+      requeued: true,
+    });
+    const task = runner.claimNextTasks(1)[0]!;
+    const result = await resolveTaskExecutionStrict(task, root);
+
+    expect(result.startStep).toBe('implement');
+    expect(result.resumePoint).toEqual(resumePoint);
+    expect(result.initialIterationOverride).toBeUndefined();
+    expect(result.resumeSource).toEqual({
+      sourceRunSlug: 'source-run',
+      resumeMode: 'requeue',
+    });
+  });
+
   it('should prefer resume_point root step over stored start_movement on workflow_call retry', async () => {
     const root = createTempProjectDir();
     const workflowDir = path.join(root, '.takt', 'workflows');
@@ -338,7 +477,7 @@ describe('resolveTaskExecution', () => {
       ...task.data?.resume_point,
       stack: task.data?.resume_point?.stack.slice(0, 1),
     });
-    expect(result.initialIterationOverride).toBe(7);
+    expect(result.initialIterationOverride).toBeUndefined();
     expect(mockWarn).toHaveBeenCalledTimes(1);
   });
 
@@ -411,7 +550,7 @@ describe('resolveTaskExecution', () => {
       ...resumePoint,
       stack: resumePoint.stack.slice(0, 1),
     });
-    expect(result.initialIterationOverride).toBe(7);
+    expect(result.initialIterationOverride).toBeUndefined();
   });
 
   it('should preserve resume_point when child workflow no longer exists', async () => {
@@ -463,7 +602,7 @@ describe('resolveTaskExecution', () => {
       ...resumePoint,
       stack: resumePoint.stack.slice(0, 1),
     });
-    expect(result.initialIterationOverride).toBe(7);
+    expect(result.initialIterationOverride).toBeUndefined();
   });
 
   it('should preserve child resume_point entries when worktree workflow exists only under execCwd', async () => {
@@ -540,7 +679,7 @@ describe('resolveTaskExecution', () => {
     expect(result.execCwd).toBe(worktreePath);
     expect(result.startStep).toBe('delegate');
     expect(result.resumePoint).toEqual(resumePoint);
-    expect(result.initialIterationOverride).toBe(7);
+    expect(result.initialIterationOverride).toBeUndefined();
   });
 
   it('should trim resume_point to the nearest valid workflow_call when a deep child step no longer resolves', async () => {
@@ -634,7 +773,7 @@ describe('resolveTaskExecution', () => {
       ...resumePoint,
       stack: resumePoint.stack.slice(0, 2),
     });
-    expect(result.initialIterationOverride).toBe(7);
+    expect(result.initialIterationOverride).toBeUndefined();
   });
 
   it('should drop resume_point without a UI warning in silent output mode', async () => {
