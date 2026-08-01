@@ -57,6 +57,22 @@ loop_monitors:
           next: fix-plan
         - condition: No feasible path can satisfy the requirements
           next: ABORT
+  - cycle:
+      - fix
+      - fix-verifier
+    threshold: 4
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix
+      rules:
+        - condition: Healthy (fix progress exists and report content is converging)
+          next: fix
+        - condition: Fixes are incomplete or reports have not converged, but another fix is feasible
+          next: fix
+        - condition: The fix approach assumptions must change and replanning is feasible
+          next: fix-plan
+        - condition: No feasible path can satisfy the requirements
+          next: ABORT
 steps:
   - name: fix-plan
     uses: peer-review-fix-plan

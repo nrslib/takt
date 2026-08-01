@@ -42,5 +42,5 @@
 ```
 
 **Cognitive load reduction rules:**
-- APPROVE: Summary and unverified scope only (8 lines or fewer)
+- APPROVE: Summary, unverified scope, and only the checked criteria and verification evidence required for a follow-up review (concisely aggregated)
 - REJECT: Include every verified finding in tables and aggregate locations with the same cause

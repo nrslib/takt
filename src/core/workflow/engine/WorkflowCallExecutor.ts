@@ -505,6 +505,10 @@ export class WorkflowCallExecutor {
       reportDirName: this.deps.runPaths.slug,
       runPathNamespace: this.buildWorkflowCallNamespace(invocation),
       findingCallNamespace: this.buildFindingCallNamespace(request.step),
+      workflowCallVars: {
+        ...options.workflowCallVars,
+        ...request.step.vars,
+      },
       sharedRuntime: this.deps.sharedRuntime,
       resumeStackPrefix: [
         ...this.deps.resumeStackPrefix,

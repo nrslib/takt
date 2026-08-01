@@ -15,8 +15,6 @@
 12. 指摘は、現在の差分が導入した問題、または変更箇所・変更の正しさ・契約・配線に直接影響する関係箇所のblocking問題に限定し、場所・影響・修正方針を具体化する。後者は差分以前から存在していても対象にする
 13. 根拠のない推測、好みだけの変更、変更の正しさ・契約・配線に直接関係しない既存問題は指摘しない
 
-**これは {step_iteration} 回目のレビューです。**
-初回は累積差分全体を網羅し、同じfamilyの問題を同じ回で出し切ってください。2回目以降は前回のopen findings、その修正箇所、直接影響する経路をPolicy / Knowledgeの全章基準で確認し、未変更領域を毎回ゼロから再探索しないでください。重点確認でblocking findingがなくAPPROVEを出す場合は、その直前に累積差分全体を最終レビューしてください。
-2回目以降は、確認した章と根拠をレポートの「再走査証跡」セクションに必ず記録してください（APPROVE でも省略不可）。
+{{include:instructions/review-round-scope}}
 {{include:instructions/review-family-completion}}
 {{include:instructions/review-pr-context}}

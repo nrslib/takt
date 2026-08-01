@@ -284,6 +284,7 @@ export function normalizeStepFromRaw(
       description: step.description,
       kind: 'workflow_call',
       call: step.call!,
+      vars: step.vars,
       overrides: normalizedOverrides
         ? {
             provider: normalizedOverrides.provider,

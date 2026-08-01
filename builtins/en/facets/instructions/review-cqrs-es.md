@@ -16,5 +16,6 @@ Procedure:
 12. Check whether processing that fits an existing Aggregate's normal lifecycle was turned into input-source-specific commands, wrappers, services, or deletion paths
 
 **Note:** If this project does not use the CQRS+ES pattern, review from a general domain design perspective instead.
+{{include:instructions/review-round-scope}}
 {{include:instructions/review-family-completion}}
 {{include:instructions/review-pr-context}}

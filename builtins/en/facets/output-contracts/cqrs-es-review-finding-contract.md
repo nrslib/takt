@@ -37,6 +37,6 @@
 ```
 
 **Cognitive load reduction rules:**
-- APPROVE with no resolution confirmations → Summary only (5 lines or fewer)
-- APPROVE with resolution confirmations → Summary and Resolution Confirmations only
+- APPROVE with no resolution confirmations → Summary and only the checked criteria and completed-scan evidence required for a follow-up review (concisely aggregated)
+- APPROVE with resolution confirmations → Summary, Resolution Confirmations, and only the checked criteria and completed-scan evidence required for a follow-up review (concisely aggregated)
 - REJECT → Include every verified finding and necessary resolution confirmation, aggregating locations with the same cause

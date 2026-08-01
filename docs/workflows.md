@@ -404,6 +404,19 @@ A step invokes another workflow by name. The child workflow runs in the same run
 
 The called workflow can declare `subworkflow.params` so the parent passes values (e.g. `impl_knowledge` or `fix_knowledge`) to customize the child without duplicating step definitions. See [Workflow-level Configuration](#workflow-level-configuration) for `subworkflow` declaration.
 
+A `workflow_call` step may also declare scalar `vars` for execution context that is not a facet reference. Strings, finite numbers, and booleans are inherited through nested workflow calls; a nested call overrides a key by declaring it again. Agent instruction facets read a value with `{var:name}`. A missing value renders as `unspecified`, so an instruction can define a safe fallback explicitly.
+
+```yaml
+- name: follow-up-review
+  kind: workflow_call
+  call: peer-review-suite
+  vars:
+    review_mode: follow_up
+  rules:
+    - condition: COMPLETE
+      next: COMPLETE
+```
+
 ## Output Contracts (Report Files)
 
 Steps can generate report files in the report directory:

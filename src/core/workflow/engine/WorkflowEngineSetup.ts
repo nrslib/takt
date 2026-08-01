@@ -37,6 +37,7 @@ import {
   ledgerHasWaivedFindings,
   renderFindingLedgerInstructionSummary,
   renderFindingLedgerReportSummary,
+  resolveFindingLedgerInstructionProjection,
 } from '../findings/context.js';
 import { renderLoopMonitorFindingsSummary } from '../findings/loop-monitor-summary.js';
 import { computeReviewScopeSnapshotId } from '../findings/snapshot.js';
@@ -180,7 +181,9 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
       throw new Error('Finding contract is configured but finding ledger store is not available');
     }
 
-    const ledger = params.findingLedgerStore.loadLedger();
+    const ledger = resolveFindingLedgerInstructionProjection(
+      params.findingLedgerStore.loadLedger(),
+    );
     let reviewerContext: Pick<
       FindingContractInstructionContext,
       'rawFindingsStructuredOutput' | 'reviewScopeSnapshotId'
@@ -227,6 +230,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getWorkflowSteps: () => params.config.steps.map((step) => ({ name: step.name, description: step.description })),
     getWorkflowName: () => params.config.name,
     getWorkflowDescription: () => params.config.description,
+    getWorkflowCallVars: () => params.options.workflowCallVars,
     getRetryNote: () => params.options.retryNote,
     getPrContext: () => params.options.prContext,
     getObservabilityRunId: () => params.options.observabilityRunId,

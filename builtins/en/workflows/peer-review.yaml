@@ -52,7 +52,7 @@ workflow_config:
     opencode:
       network_access: true
 max_steps: 30
-initial_step: reviewers
+initial_step: initial-reviewers
 loop_monitors:
   - cycle:
       - reviewers
@@ -110,12 +110,46 @@ loop_monitors:
           next: fix-plan
         - condition: No feasible action can satisfy the requirements
           next: ABORT
+  - cycle:
+      - fix
+      - fix-verifier
+    threshold: 4
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix
+      rules:
+        - condition: Healthy (fixes progressing and report content converging)
+          next: fix
+        - condition: Implementation incomplete or report not converged, but the next fix is actionable
+          next: fix
+        - condition: The remediation assumptions must change and replanning is actionable
+          next: fix-plan
+        - condition: No feasible action can satisfy the requirements
+          next: ABORT
 steps:
+  - name: initial-reviewers
+    uses: peer-review-suite-call
+    vars:
+      review_mode: initial
+    with:
+      reviewer_suite:
+        $param: reviewer_suite
+      review_policy_additions:
+        $param: review_policy_additions
+      review_knowledge_additions:
+        $param: review_knowledge_additions
+    rules:
+      - condition: COMPLETE
+        next: review-adjudication
+      - condition: needs_fix
+        next: review-adjudication
   - name: reviewers
-    kind: workflow_call
-    call:
-      $param: reviewer_suite
-    args:
+    uses: peer-review-suite-call
+    vars:
+      review_mode: follow_up
+    with:
+      reviewer_suite:
+        $param: reviewer_suite
       review_policy_additions:
         $param: review_policy_additions
       review_knowledge_additions:

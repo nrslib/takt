@@ -52,7 +52,7 @@ workflow_config:
     opencode:
       network_access: true
 max_steps: 30
-initial_step: reviewers
+initial_step: initial-reviewers
 loop_monitors:
   - cycle:
       - reviewers
@@ -110,12 +110,46 @@ loop_monitors:
           next: fix-plan
         - condition: 要件を満たす実現可能な打開手段がない
           next: ABORT
+  - cycle:
+      - fix
+      - fix-verifier
+    threshold: 4
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix
+      rules:
+        - condition: 健全（修正進捗があり、報告内容も収束している）
+          next: fix
+        - condition: 修正未完了または報告未収束だが、次の修正が実行可能である
+          next: fix
+        - condition: 修正方針の前提を変える必要があり、再計画が実行可能である
+          next: fix-plan
+        - condition: 要件を満たす実現可能な打開手段がない
+          next: ABORT
 steps:
+  - name: initial-reviewers
+    uses: peer-review-suite-call
+    vars:
+      review_mode: initial
+    with:
+      reviewer_suite:
+        $param: reviewer_suite
+      review_policy_additions:
+        $param: review_policy_additions
+      review_knowledge_additions:
+        $param: review_knowledge_additions
+    rules:
+      - condition: COMPLETE
+        next: review-adjudication
+      - condition: needs_fix
+        next: review-adjudication
   - name: reviewers
-    kind: workflow_call
-    call:
-      $param: reviewer_suite
-    args:
+    uses: peer-review-suite-call
+    vars:
+      review_mode: follow_up
+    with:
+      reviewer_suite:
+        $param: reviewer_suite
       review_policy_additions:
         $param: review_policy_additions
       review_knowledge_additions:

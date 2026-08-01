@@ -48,5 +48,5 @@ Scope: "In-scope" (fixable in this change) / "Out-of-scope" (existing issue, non
 ```
 
 **Cognitive load reduction rules:**
-- APPROVE → Summary only (5 lines or fewer)
+- APPROVE → Summary and only the checked criteria and completed-scan evidence required for a follow-up review (concisely aggregated)
 - REJECT → Include every verified finding row and aggregate locations with the same cause

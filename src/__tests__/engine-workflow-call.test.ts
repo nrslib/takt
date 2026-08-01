@@ -5422,6 +5422,91 @@ steps:
     expect(parentOutput?.content).toContain('## local-review\nLocal review complete');
   });
 
+  it('workflow_call vars は parallel caller から nested reviewer instruction まで継承される', async () => {
+    writeWorkflow(tmpDir, 'shared/nested-review.yaml', `name: shared/nested-review
+subworkflow:
+  callable: true
+initial_step: review
+max_steps: 2
+steps:
+  - name: review
+    persona: nested-reviewer
+    instruction: "mode={var:review_mode}; domain={var:domain}"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    writeWorkflow(tmpDir, 'shared/review.yaml', `name: shared/review
+subworkflow:
+  callable: true
+initial_step: nested-review
+max_steps: 3
+steps:
+  - name: nested-review
+    kind: workflow_call
+    call: shared/nested-review
+    vars:
+      domain: frontend
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parent',
+      initial_step: 'reviewers',
+      max_steps: 4,
+      steps: [{
+        name: 'reviewers',
+        instruction: 'Run reviewers',
+        parallel: [{
+          name: 'delegate-review',
+          kind: 'workflow_call',
+          call: 'shared/review',
+          vars: {
+            review_mode: 'follow_up',
+            domain: 'base',
+          },
+          rules: [
+            { condition: 'COMPLETE', next: 'COMPLETE' },
+            { condition: 'ABORT', next: 'ABORT' },
+          ],
+        }, {
+          name: 'local-review',
+          persona: 'local-reviewer',
+          instruction: 'Review locally',
+          rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+        }],
+        rules: [{ condition: 'all("COMPLETE")', next: 'COMPLETE' }],
+      }],
+    });
+    vi.mocked(runAgent).mockImplementation(async (persona, prompt, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: prompt,
+      });
+      if (persona === 'nested-reviewer' || persona === 'local-reviewer') {
+        return makeResponse({ persona, content: 'Review complete' });
+      }
+      throw new Error(`Unexpected persona: ${String(persona)}`);
+    });
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'aggregate' },
+    ]);
+    engine = new WorkflowEngine(config, tmpDir, 'Run nested review', createWorkflowCallOptions(tmpDir));
+
+    const state = await engine.run();
+    const nestedPrompt = vi.mocked(runAgent).mock.calls.find(([persona]) => (
+      persona === 'nested-reviewer'
+    ))?.[1];
+
+    expect(state.status).toBe('completed');
+    expect(nestedPrompt).toContain('mode=follow_up; domain=frontend');
+    expect(nestedPrompt).not.toContain('{var:');
+  });
+
   it('non-interactive parallel workflow_call の no-match は親 fallback rule より先に中断する', async () => {
     writeWorkflow(tmpDir, 'shared/review.yaml', `name: shared/review
 subworkflow:

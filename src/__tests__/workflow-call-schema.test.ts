@@ -111,6 +111,37 @@ const workflowCallForbiddenFieldCases = [
 ] as const;
 
 describe('workflow_call schema', () => {
+  it('accepts scalar vars only on workflow_call steps and preserves them after normalization', () => {
+    const raw = {
+      name: 'parent',
+      steps: [createWorkflowCallStep({
+        vars: {
+          review_mode: 'follow_up',
+          attempt: 2,
+          strict: true,
+        },
+      })],
+    };
+
+    expect(WorkflowConfigRawSchema.safeParse(raw).success).toBe(true);
+    expect(normalizeWorkflowConfig(raw, '/tmp').steps[0]).toMatchObject({
+      vars: {
+        review_mode: 'follow_up',
+        attempt: 2,
+        strict: true,
+      },
+    });
+
+    const agentResult = WorkflowStepRawSchema.safeParse({
+      name: 'review',
+      persona: 'reviewer',
+      instruction: 'review',
+      vars: { review_mode: 'initial' },
+      rules: [{ condition: 'done', next: 'COMPLETE' }],
+    });
+    expect(agentResult.success).toBe(false);
+  });
+
   it('accepts workflow_ref params and empty facet_ref array values', () => {
     const result = WorkflowConfigRawSchema.safeParse({
       name: 'composer',

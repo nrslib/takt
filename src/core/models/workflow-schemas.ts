@@ -65,6 +65,11 @@ const WorkflowCallArgsRawSchema = z.record(
   z.union([WorkflowFacetRefValueSchema, WorkflowParamReferenceRawSchema]),
 );
 
+const WorkflowCallVarsRawSchema = z.record(
+  z.string().regex(/^[A-Za-z_][A-Za-z0-9_.-]*$/),
+  z.union([z.string(), z.number().finite(), z.boolean()]),
+);
+
 const WorkflowStepProviderOptionsSchema = StepProviderOptionsObjectSchema.extend({
   extends: z.string().min(1).optional(),
 }).strict().optional();
@@ -416,6 +421,7 @@ const WorkflowCallParallelSubStepRawSchema = z.object({
   call: WorkflowReferenceOrParamSchema,
   overrides: WorkflowCallOverridesRawSchema.optional(),
   args: WorkflowCallArgsRawSchema.optional(),
+  vars: WorkflowCallVarsRawSchema.optional(),
   description: z.string().optional(),
   session_key: z.never().optional(),
   session: z.never().optional(),
@@ -521,6 +527,7 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
     call: WorkflowReferenceOrParamSchema.optional(),
     overrides: WorkflowCallOverridesRawSchema.optional(),
     args: WorkflowCallArgsRawSchema.optional(),
+    vars: WorkflowCallVarsRawSchema.optional(),
     session: z.enum(WORKFLOW_SESSION_MODES).optional(),
     persona: WorkflowPersonaRefOrParamSchema.optional(),
     persona_name: z.string().optional(),
@@ -646,6 +653,14 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
         code: z.ZodIssueCode.custom,
         path: ['args'],
         message: 'Only workflow_call steps can declare "args"',
+      });
+    }
+
+    if (data.vars !== undefined && stepKind !== 'workflow_call') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['vars'],
+        message: 'Only workflow_call steps can declare "vars"',
       });
     }
 

@@ -403,6 +403,19 @@ step が別の workflow を名前で呼び出します。子 workflow は同じ 
 
 呼ばれる側の workflow は `subworkflow.params` を宣言することで、親から `impl_knowledge` や `fix_knowledge` などの値を受け取って動作を変えられます。step 定義の重複を避けられます。`subworkflow` の宣言については [Workflow レベルの設定](#workflow-レベルの設定) を参照してください。
 
+`workflow_call` step には、facet 参照ではない実行コンテキストを scalar の `vars` として指定することもできます。文字列、有限数、真偽値が nested workflow call の子孫まで継承され、下位の呼び出しが同じ key を宣言した場合はその値で上書きされます。agent の instruction facet では `{var:name}` で参照します。値がない場合は `unspecified` になるため、instruction 側で安全な fallback を明示できます。
+
+```yaml
+- name: follow-up-review
+  kind: workflow_call
+  call: peer-review-suite
+  vars:
+    review_mode: follow_up
+  rules:
+    - condition: COMPLETE
+      next: COMPLETE
+```
+
 ## Output Contracts（レポートファイル）
 
 step はレポートディレクトリ配下にレポートファイルを生成できます。

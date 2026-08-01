@@ -14,7 +14,10 @@ import { resolveWorkflowStepFragments } from '../infra/config/loaders/workflowSt
 import { CycleDetector } from '../core/workflow/engine/cycle-detector.js';
 
 type RawStep = Record<string, unknown>;
-type RawWorkflow = { steps: RawStep[] };
+type RawWorkflow = {
+  initial_step?: unknown;
+  steps: RawStep[];
+};
 type Language = 'en' | 'ja';
 
 const LANGUAGES: Language[] = ['en', 'ja'];
@@ -95,6 +98,26 @@ function containsParam(value: unknown, paramName: string): boolean {
   if (typeof value !== 'object' || value === null) return false;
   const record = value as RawStep;
   return record.$param === paramName;
+}
+
+function expectLoopMonitorsTrigger(
+  monitors: readonly { cycle: string[]; threshold: number }[],
+  expectedCycles: string[][],
+): void {
+  expect(monitors.map(({ cycle }) => cycle)).toEqual(expectedCycles);
+  for (const monitor of monitors) {
+    const detector = new CycleDetector([monitor]);
+    let result = { triggered: false };
+    for (let repetition = 0; repetition < monitor.threshold; repetition += 1) {
+      for (const [index, step] of monitor.cycle.entries()) {
+        result = detector.recordAndCheck(
+          step,
+          index === monitor.cycle.length - 1 ? monitor.cycle[0]! : monitor.cycle[index + 1]!,
+        );
+      }
+    }
+    expect(result.triggered, monitor.cycle.join(' -> ')).toBe(true);
+  }
 }
 
 describe('builtin workflow step fragment migration', () => {
@@ -328,22 +351,52 @@ describe('builtin workflow step fragment migration', () => {
       ['reviewers', 'review-adjudication', 'fix-plan', 'fix', 'fix-verifier'],
       ['reviewers', 'review-adjudication', 'final-gate', 'fix-plan', 'fix', 'fix-verifier'],
       ['fix-plan', 'fix', 'fix-verifier'],
+      ['fix', 'fix-verifier'],
     ];
 
-    expect(workflow.loopMonitors?.map(({ cycle }) => cycle)).toEqual(expectedCycles);
-    for (const monitor of workflow.loopMonitors ?? []) {
-      const detector = new CycleDetector([monitor]);
-      let result = { triggered: false };
-      for (let repetition = 0; repetition < monitor.threshold; repetition += 1) {
-        for (const [index, step] of monitor.cycle.entries()) {
-          result = detector.recordAndCheck(
-            step,
-            index === monitor.cycle.length - 1 ? monitor.cycle[0]! : monitor.cycle[index + 1]!,
-          );
-        }
-      }
-      expect(result.triggered, monitor.cycle.join(' -> ')).toBe(true);
-    }
+    expectLoopMonitorsTrigger(workflow.loopMonitors ?? [], expectedCycles);
+  });
+
+  it.each(LANGUAGES)('detects every %s shared remediation cycle at its configured threshold', (lang) => {
+    mkdirSync(join(projectDir, '.takt'), { recursive: true });
+    writeFileSync(join(projectDir, '.takt', 'config.yaml'), 'language: ' + lang + '\n', 'utf-8');
+    invalidateAllResolvedConfigCache();
+
+    const workflow = loadWorkflowFromFile(
+      join(getBuiltinWorkflowsDir(lang), 'review-remediation.yaml'),
+      projectDir,
+    );
+    const expectedCycles = [
+      ['fix-plan', 'fix', 'fix-verifier'],
+      ['fix', 'fix-verifier'],
+    ];
+
+    expectLoopMonitorsTrigger(workflow.loopMonitors ?? [], expectedCycles);
+  });
+
+  it.each(LANGUAGES)('keeps the %s initial peer review outside the remediation review loop', (lang) => {
+    const workflow = readBuiltinWorkflow(lang, 'peer-review');
+    const initialReviewers = getStep(workflow, 'initial-reviewers');
+    const followUpReviewers = getStep(workflow, 'reviewers');
+    const verifier = getStep(workflow, 'fix-verifier');
+    const allRules = workflow.steps.flatMap((step) => (
+      Array.isArray(step.rules) ? step.rules as RawStep[] : []
+    ));
+
+    expect(workflow.initial_step).toBe('initial-reviewers');
+    expect(initialReviewers.vars).toEqual({ review_mode: 'initial' });
+    expect(followUpReviewers.vars).toEqual({ review_mode: 'follow_up' });
+    expect(initialReviewers.rules).toEqual(expect.arrayContaining([
+      expect.objectContaining({ next: 'review-adjudication' }),
+    ]));
+    expect(followUpReviewers.rules).toEqual(expect.arrayContaining([
+      expect.objectContaining({ next: 'review-adjudication' }),
+    ]));
+    expect(verifier.rules).toEqual(expect.arrayContaining([
+      expect.objectContaining({ condition: 'verified', next: 'reviewers' }),
+      expect.objectContaining({ condition: 'incomplete', next: 'fix' }),
+    ]));
+    expect(allRules.some((rule) => rule.next === 'initial-reviewers')).toBe(false);
   });
 
   it.each(LANGUAGES)('keeps %s migrated reviewers on the read-only provider preset', (lang) => {
