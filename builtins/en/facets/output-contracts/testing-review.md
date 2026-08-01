@@ -58,5 +58,6 @@
 ```
 
 **Cognitive load reduction rules:**
-- APPROVE: Summary, unverified scope, and only the checked criteria and verification evidence required for a follow-up review (concisely aggregated)
+- APPROVE with no resolved findings: Summary, unverified scope, and only the checked criteria and verification evidence required for a follow-up review (concisely aggregated)
+- APPROVE with resolved findings: Summary, Resolved Findings, unverified scope, and only the checked criteria and verification evidence required for a follow-up review (concisely aggregated)
 - REJECT: Include every verified finding in tables and aggregate locations with the same cause

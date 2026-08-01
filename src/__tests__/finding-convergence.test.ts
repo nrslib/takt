@@ -819,7 +819,6 @@ describe('finding family visibility', () => {
       ledgerHasOpenFindings,
       renderFindingLedgerInstructionSummary,
       renderFindingLedgerReportSummary,
-      resolveFindingLedgerInstructionProjection,
     } = await import('../core/workflow/findings/context.js');
     const renderMode = (ledger: FindingLedger): unknown => (
       JSON.parse(renderFindingLedgerInstructionSummary(ledger)) as Record<string, unknown>
@@ -899,11 +898,10 @@ describe('finding family visibility', () => {
     ) as { reviewMode: string; open: Array<{ id: string }> };
     expect(pendingSummary.reviewMode).toBe('follow_up');
     expect(pendingSummary.open.map(({ id }) => id)).toEqual(['F-0001']);
-    const pendingProjection = resolveFindingLedgerInstructionProjection(pendingLedger);
     const pendingReportSummary = JSON.parse(
-      renderFindingLedgerReportSummary(pendingProjection),
+      renderFindingLedgerReportSummary(pendingLedger),
     ) as { openFindingIds: string[] };
-    expect(ledgerHasOpenFindings(pendingProjection)).toBe(true);
+    expect(ledgerHasOpenFindings(pendingLedger)).toBe(true);
     expect(pendingReportSummary.openFindingIds).toEqual(['F-0001']);
   });
 

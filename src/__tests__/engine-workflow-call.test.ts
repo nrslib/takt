@@ -5474,7 +5474,7 @@ steps:
         }, {
           name: 'local-review',
           persona: 'local-reviewer',
-          instruction: 'Review locally',
+          instruction: 'Review locally; mode={var:review_mode}',
           rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
         }],
         rules: [{ condition: 'all("COMPLETE")', next: 'COMPLETE' }],
@@ -5501,10 +5501,90 @@ steps:
     const nestedPrompt = vi.mocked(runAgent).mock.calls.find(([persona]) => (
       persona === 'nested-reviewer'
     ))?.[1];
+    const localPrompt = vi.mocked(runAgent).mock.calls.find(([persona]) => (
+      persona === 'local-reviewer'
+    ))?.[1];
 
     expect(state.status).toBe('completed');
     expect(nestedPrompt).toContain('mode=follow_up; domain=frontend');
     expect(nestedPrompt).not.toContain('{var:');
+    expect(localPrompt).toContain('mode=unspecified');
+  });
+
+  it('initial review の後は follow-up review だけを再実行する', async () => {
+    writeWorkflow(tmpDir, 'shared/round-review.yaml', `name: shared/round-review
+subworkflow:
+  callable: true
+  returns:
+    - needs_fix
+initial_step: review
+max_steps: 2
+steps:
+  - name: review
+    persona: round-reviewer
+    instruction: "mode={var:review_mode}"
+    rules:
+      - condition: needs_fix
+        return: needs_fix
+      - condition: done
+        next: COMPLETE
+`);
+    const config = createParentWorkflow(tmpDir, {
+      name: 'review-do-while',
+      initial_step: 'initial-review',
+      max_steps: 20,
+      steps: [{
+        name: 'initial-review',
+        kind: 'workflow_call',
+        call: 'shared/round-review',
+        vars: { review_mode: 'initial' },
+        rules: [{ condition: 'COMPLETE', next: 'fix' }],
+      }, {
+        name: 'fix',
+        persona: 'fixer',
+        instruction: 'Fix the current findings',
+        rules: [{ condition: 'fixed', next: 'follow-up-review' }],
+      }, {
+        name: 'follow-up-review',
+        kind: 'workflow_call',
+        call: 'shared/round-review',
+        vars: { review_mode: 'follow_up' },
+        rules: [
+          { condition: 'needs_fix', next: 'fix' },
+          { condition: 'COMPLETE', next: 'COMPLETE' },
+        ],
+      }],
+    });
+    const reviewPrompts: string[] = [];
+    vi.mocked(runAgent).mockImplementation(async (persona, prompt, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: prompt,
+      });
+      if (persona === 'round-reviewer') {
+        reviewPrompts.push(prompt);
+        return makeResponse({ persona, content: 'Review complete' });
+      }
+      if (persona === 'fixer') {
+        return makeResponse({ persona, content: 'Fix complete' });
+      }
+      throw new Error(`Unexpected persona: ${String(persona)}`);
+    });
+    mockRuleEvaluationSequence([
+      { index: 1, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 1, method: 'phase3_tag' },
+    ]);
+    engine = new WorkflowEngine(config, tmpDir, 'Review until complete', createWorkflowCallOptions(tmpDir));
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(reviewPrompts.map((prompt) => (
+      prompt.match(/mode=(initial|follow_up)/)?.[1]
+    ))).toEqual(['initial', 'follow_up', 'follow_up']);
   });
 
   it('non-interactive parallel workflow_call の no-match は親 fallback rule より先に中断する', async () => {

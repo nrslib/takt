@@ -119,6 +119,8 @@ describe('workflow_call schema', () => {
           review_mode: 'follow_up',
           attempt: 2,
           strict: true,
+          disabled: false,
+          offset: 0,
         },
       })],
     };
@@ -129,6 +131,8 @@ describe('workflow_call schema', () => {
         review_mode: 'follow_up',
         attempt: 2,
         strict: true,
+        disabled: false,
+        offset: 0,
       },
     });
 
@@ -140,6 +144,49 @@ describe('workflow_call schema', () => {
       rules: [{ condition: 'done', next: 'COMPLETE' }],
     });
     expect(agentResult.success).toBe(false);
+  });
+
+  it.each([
+    ['', 'empty'],
+    ['1mode', 'leading digit'],
+    ['review mode', 'whitespace'],
+  ])('rejects a workflow_call var key at the parser boundary: %s (%s)', (key) => {
+    const result = WorkflowStepRawSchema.safeParse(createWorkflowCallStep({
+      vars: { [key]: 'follow_up' },
+    }));
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((issue) => issue.path.includes('vars'))).toBe(true);
+    }
+  });
+
+  it.each([Number.POSITIVE_INFINITY, Number.NaN])(
+    'rejects a non-finite workflow_call var value: %s',
+    (value) => {
+      const result = WorkflowStepRawSchema.safeParse(createWorkflowCallStep({
+        vars: { attempt: value },
+      }));
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some((issue) => issue.path.includes('vars'))).toBe(true);
+      }
+    },
+  );
+
+  it('rejects vars on system steps', () => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'route',
+      kind: 'system',
+      vars: { review_mode: 'initial' },
+      rules: [{ condition: 'when(true)', next: 'COMPLETE' }],
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((issue) => issue.path[0] === 'vars')).toBe(true);
+    }
   });
 
   it('accepts workflow_ref params and empty facet_ref array values', () => {

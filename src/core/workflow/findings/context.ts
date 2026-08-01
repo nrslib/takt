@@ -106,7 +106,7 @@ export function renderCompactActionableFindingLedgerInstructionSummary(
   }, null, 2);
 }
 
-export function resolveFindingLedgerInstructionProjection(ledger: FindingLedger): FindingLedger {
+function resolveFindingLedgerInstructionProjection(ledger: FindingLedger): FindingLedger {
   const completed = ledger.pendingManagerCommit?.completed;
   if (completed === undefined) {
     return ledger;
@@ -224,14 +224,15 @@ export function renderFindingLedgerInstructionSummary(ledger: FindingLedger): st
 }
 
 export function renderFindingLedgerReportSummary(ledger: FindingLedger): string {
+  const projection = resolveFindingLedgerInstructionProjection(ledger);
   return JSON.stringify({
-    openFindingIds: ledger.findings
+    openFindingIds: projection.findings
       .filter((finding) => finding.status === 'open')
       .map((finding) => finding.id),
-    resolvedFindingIds: ledger.findings
+    resolvedFindingIds: projection.findings
       .filter((finding) => finding.status === 'resolved')
       .map((finding) => finding.id),
-    waivedFindings: ledger.findings
+    waivedFindings: projection.findings
       .filter((finding) => finding.status === 'waived')
       .map((finding) => ({
         id: finding.id,
@@ -239,31 +240,34 @@ export function renderFindingLedgerReportSummary(ledger: FindingLedger): string 
         reason: finding.waivers?.at(-1)?.reason,
         evidence: finding.waivers?.at(-1)?.evidence,
       })),
-    invalidatedFindingIds: ledger.findings
+    invalidatedFindingIds: projection.findings
       .filter((finding) => finding.status === 'invalidated')
       .map((finding) => finding.id),
-    supersededFindingIds: ledger.findings
+    supersededFindingIds: projection.findings
       .filter((finding) => finding.status === 'superseded')
       .map((finding) => finding.id),
-    dismissedFindingIds: ledger.findings
+    dismissedFindingIds: projection.findings
       .filter((finding) => finding.status === 'dismissed')
       .map((finding) => finding.id),
-    conflictIds: ledger.conflicts.map((conflict) => conflict.id),
+    conflictIds: projection.conflicts.map((conflict) => conflict.id),
   }, null, 2);
 }
 
 /** 台帳に open な指摘が存在するか（異議申告ガイドの注入判定に使う）。 */
 export function ledgerHasOpenFindings(ledger: FindingLedger): boolean {
-  return ledger.findings.some((finding) => finding.status === 'open');
+  return resolveFindingLedgerInstructionProjection(ledger).findings
+    .some((finding) => finding.status === 'open');
 }
 
 /** 台帳に waived な指摘が存在するか（waived 除外指示の注入判定に使う）。 */
 export function ledgerHasWaivedFindings(ledger: FindingLedger): boolean {
-  return ledger.findings.some((finding) => finding.status === 'waived');
+  return resolveFindingLedgerInstructionProjection(ledger).findings
+    .some((finding) => finding.status === 'waived');
 }
 
 export function ledgerHasDismissedFindings(ledger: FindingLedger): boolean {
-  return ledger.findings.some((finding) => finding.status === 'dismissed');
+  return resolveFindingLedgerInstructionProjection(ledger).findings
+    .some((finding) => finding.status === 'dismissed');
 }
 
 export function buildFindingsRuleContext(ledger: FindingLedger, cwd: string): FindingsRuleContext {
