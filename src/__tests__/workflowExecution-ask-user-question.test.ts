@@ -34,7 +34,8 @@ const { disabledObservability, MockWorkflowEngine } = vi.hoisted(() => {
     abort(): void {}
 
     getResumePoint(): WorkflowResumePoint | undefined {
-      return MockWorkflowEngine.activeResumePoint;
+      return MockWorkflowEngine.activeResumePoint
+        ?? this.receivedOptions.resumePoint as WorkflowResumePoint | undefined;
     }
 
     buildResumePointForStepName(stepName: string): WorkflowResumePoint | undefined {
@@ -288,6 +289,33 @@ describe('executeWorkflow AskUserQuestion deny handler wiring', () => {
       newMaxSteps: 10,
       currentIteration: 1,
     });
+  });
+
+  it('should preserve a nested checkpoint when a resumed run exceeds before its first step', async () => {
+    const resumePoint = {
+      version: 2 as const,
+      stack: [
+        { workflow: 'default', step: 'develop', kind: 'workflow_call' as const, call_instance: 1 },
+        { workflow: 'development-core', step: 'peer-review', kind: 'workflow_call' as const, call_instance: 1 },
+        { workflow: 'peer-review', step: 'fix', kind: 'agent' as const },
+      ],
+      iteration: 59,
+      elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
+    };
+    MockWorkflowEngine.triggerIterationLimit = true;
+    MockWorkflowEngine.iterationLimitCurrentStep = 'develop';
+    MockWorkflowEngine.iterationLimitCurrentIteration = 59;
+
+    const result = await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+      startStep: 'develop',
+      resumePoint,
+      initialIterationOverride: 59,
+    });
+
+    expect(result.exceededInfo?.resumePoint).toEqual(resumePoint);
   });
 
   it('should use maxStepsOverride when exceeded handling runs for an infinite workflow', async () => {

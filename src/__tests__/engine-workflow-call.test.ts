@@ -3927,6 +3927,95 @@ steps:
     expect(capturedResumePoint?.iteration).toBe(2);
   });
 
+  it('再開した子 workflow が最初の step 前に max_steps へ達しても child checkpoint を保持する', async () => {
+    writeWorkflow(tmpDir, 'takt/coding.yaml', `name: takt/coding
+subworkflow:
+  callable: true
+initial_step: review
+max_steps: 5
+steps:
+  - name: review
+    persona: reviewer
+    instruction: "Review child workflow"
+    rules:
+      - condition: done
+        next: fix
+  - name: fix
+    persona: fixer
+    instruction: "Fix child workflow"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parent',
+      initial_step: 'delegate',
+      max_steps: 2,
+      steps: [
+        {
+          name: 'delegate',
+          kind: 'workflow_call',
+          call: 'takt/coding',
+          rules: [
+            {
+              condition: 'COMPLETE',
+              next: 'COMPLETE',
+            },
+            {
+              condition: 'ABORT',
+              next: 'ABORT',
+            },
+          ],
+        },
+      ],
+    });
+    const resumePoint = {
+      version: 2 as const,
+      stack: [
+        { workflow: 'parent', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },
+        { workflow: 'takt/coding', step: 'fix', kind: 'agent' as const },
+      ],
+      iteration: 1,
+      elapsed_ms: 183245,
+      workflow_call_invocations: {
+        '{"workflow":"parent","step":"delegate","calls":[]}': {
+          call_instance: 1,
+          report_namespace_segment: 'iteration-1--step-delegate--workflow-takt%2Fcoding',
+        },
+      },
+      workflow_step_participations: {},
+    };
+    let capturedResumePoint: ReturnType<WorkflowEngine['getResumePoint']>;
+    engine = new WorkflowEngine(config, tmpDir, 'Resume child at iteration limit', createWorkflowCallOptions(tmpDir, {
+      initialIteration: 1,
+      resumePoint,
+      onIterationLimit: vi.fn().mockImplementation(async () => {
+        capturedResumePoint = engine?.getResumePoint();
+        return null;
+      }),
+    }));
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(runAgent).not.toHaveBeenCalled();
+    expect(capturedResumePoint?.stack).toEqual([
+      expect.objectContaining({
+        workflow: 'parent',
+        step: 'delegate',
+        kind: 'workflow_call',
+      }),
+      expect.objectContaining({
+        workflow: 'takt/coding',
+        step: 'fix',
+        kind: 'agent',
+      }),
+    ]);
+    expect(capturedResumePoint?.iteration).toBe(2);
+    expect(capturedResumePoint?.elapsed_ms).toBeGreaterThanOrEqual(resumePoint.elapsed_ms);
+  });
+
   it('resolveWorkflowCallTarget は child workflow の max_steps を書き換えない', () => {
     writeWorkflow(tmpDir, 'takt/coding.yaml', `name: takt/coding
 subworkflow:

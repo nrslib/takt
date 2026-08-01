@@ -231,6 +231,11 @@ export class WorkflowEngine extends EventEmitter {
       restoreWorkflowCallInvocationEvidence(this.options.resumePoint);
     this.sharedRuntime.workflowStepParticipationIndex ??=
       restoreWorkflowStepParticipationIndex(this.options.resumePoint);
+    restoreActiveResumePoint(
+      this.sharedRuntime,
+      this.options.resumePoint,
+      this.options.initialIteration,
+    );
     this.sharedRuntime.workflowCallInvocationEvidence.index.validateResumePoint(this.options.resumePoint);
     this.sharedRuntime.maxSteps ??= initialMaxSteps;
     this.maxSteps = this.sharedRuntime.maxSteps;
@@ -926,4 +931,37 @@ export class WorkflowEngine extends EventEmitter {
       (result, error) => error !== undefined || result?.isComplete === true || this.state.status !== 'running',
     );
   }
+}
+
+function restoreActiveResumePoint(
+  sharedRuntime: WorkflowSharedRuntimeState,
+  resumePoint: WorkflowResumePoint | undefined,
+  initialIteration: number | undefined,
+): void {
+  if (resumePoint === undefined) {
+    return;
+  }
+
+  const restored = cloneWorkflowResumePoint(resumePoint);
+  const current = sharedRuntime.activeResumePoint === undefined
+    ? undefined
+    : cloneWorkflowResumePoint(sharedRuntime.activeResumePoint);
+  restored.iteration = Math.max(
+    restored.iteration,
+    initialIteration ?? restored.iteration,
+    current?.iteration ?? restored.iteration,
+  );
+  restored.elapsed_ms = Math.max(restored.elapsed_ms, current?.elapsed_ms ?? restored.elapsed_ms);
+
+  if (current !== undefined) {
+    restored.workflow_call_invocations = current.workflow_call_invocations;
+    restored.workflow_step_participations = current.workflow_step_participations;
+    if (current.dynamic_parallel_selections === undefined) {
+      delete restored.dynamic_parallel_selections;
+    } else {
+      restored.dynamic_parallel_selections = current.dynamic_parallel_selections;
+    }
+  }
+
+  sharedRuntime.activeResumePoint = restored;
 }
