@@ -14,6 +14,7 @@ import {
   FindingProvisionalMetadataSchema,
   FindingObservationSchema,
   FindingManagerDecisionsJsonSchema,
+  FindingConflictAdjudicationOutputJsonSchema,
   FindingManagerOutputJsonSchema,
   FindingSeveritySchema,
   FindingStatusSchema,
@@ -23,6 +24,7 @@ import {
   ReviewerRawFindingSchema,
   createRawFindingsOutputJsonSchema,
   parseFindingLedger,
+  parseFindingConflictAdjudicationOutput,
   parseFindingManagerDecisions,
   parseFindingManagerOutput,
 } from '../core/models/finding-schemas.js';
@@ -898,6 +900,32 @@ describe('finding schemas', () => {
     expect(managerProperties.reopenedFindings.items.required).toEqual(Object.keys(managerProperties.reopenedFindings.items.properties));
     expect(managerProperties.conflicts.items.required).toEqual(Object.keys(managerProperties.conflicts.items.properties));
     expect(managerProperties.resolvedConflicts.items.required).toEqual(Object.keys(managerProperties.resolvedConflicts.items.properties));
+
+    expect(FindingConflictAdjudicationOutputJsonSchema.required).toEqual(
+      Object.keys(FindingConflictAdjudicationOutputJsonSchema.properties),
+    );
+  });
+
+  it('requires nullable adjudication fields and normalizes null to undefined', () => {
+    expect(FindingConflictAdjudicationOutputJsonSchema.properties.actionableFix.type)
+      .toEqual(['string', 'null']);
+    expect(FindingConflictAdjudicationOutputJsonSchema.properties.rationale.type)
+      .toEqual(['string', 'null']);
+    expect(parseFindingConflictAdjudicationOutput({
+      conflictId: 'C-0001',
+      outcome: 'undetermined',
+      actionableFix: null,
+      rationale: null,
+    })).toEqual({
+      conflictId: 'C-0001',
+      outcome: 'undetermined',
+      actionableFix: undefined,
+      rationale: undefined,
+    });
+    expect(() => parseFindingConflictAdjudicationOutput({
+      conflictId: 'C-0001',
+      outcome: 'undetermined',
+    })).toThrow();
   });
 
   it('keeps strict JSON Schema object properties listed in required for the manager decisions schema', () => {

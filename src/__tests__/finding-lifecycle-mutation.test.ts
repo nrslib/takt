@@ -2012,6 +2012,8 @@ describe('verified finding lifecycle mutation', () => {
     expect(() => parseFindingConflictAdjudicationOutput({
       conflictId: 'C-123',
       outcome: 'finding_stale',
+      actionableFix: null,
+      rationale: null,
       findingTransition: 'resolved',
       evidence: ['src/a.ts:5'],
     })).toThrow();

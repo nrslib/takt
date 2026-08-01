@@ -273,6 +273,7 @@ describe('finding-conflict-adjudication runner', () => {
       structuredOutput: {
         conflictId: 'C-FA2947446963',
         outcome: 'finding_stale',
+        actionableFix: null,
         rationale: evidence,
       },
       timestamp: new Date('2026-06-13T02:00:00.000Z'),
@@ -311,6 +312,7 @@ describe('finding-conflict-adjudication runner', () => {
         structuredOutput: {
           conflictId: 'C-FA2947446963',
           outcome: 'finding_stale',
+          actionableFix: null,
           rationale: 'Verified fixed at src/a.ts:5.',
         },
         timestamp: new Date('2026-06-13T02:00:00.000Z'),
@@ -513,6 +515,7 @@ describe('finding-conflict-adjudication runner', () => {
         structuredOutput: {
           conflictId: 'C-FA2947446963',
           outcome: 'undetermined',
+          actionableFix: null,
           rationale: 'The evidence remains inconclusive.',
         },
         timestamp: new Date('2026-06-13T02:00:00.000Z'),
@@ -565,6 +568,7 @@ describe('finding-conflict-adjudication runner', () => {
         structuredOutput: {
           conflictId: 'C-FA2947446963',
           outcome: 'finding_stale',
+          actionableFix: null,
           rationale: 'Verified fixed at src/a.ts:5.',
         },
         timestamp: new Date('2026-06-13T02:00:00.000Z'),
@@ -597,6 +601,7 @@ describe('finding-conflict-adjudication runner', () => {
         structuredOutput: {
           conflictId: 'C-FA2947446963',
           outcome: 'finding_stale',
+          actionableFix: null,
           rationale: 'Verified fixed at src/a.ts:5.',
         },
         timestamp: new Date('2026-06-13T02:00:00.000Z'),
@@ -642,6 +647,7 @@ describe('finding-conflict-adjudication runner', () => {
         structuredOutput: {
           conflictId: 'C-FA2947446963',
           outcome: 'undetermined',
+          actionableFix: null,
           rationale: 'Still disputed.',
         },
         timestamp: new Date('2026-06-13T02:00:00.000Z'),
@@ -701,6 +707,7 @@ describe('finding-conflict-adjudication runner', () => {
       structuredOutput: {
         conflictId: 'C-FA2947446963',
         outcome: 'undetermined',
+        actionableFix: null,
         rationale: 'Still cannot decide.',
       },
       timestamp: new Date('2026-06-13T02:05:00.000Z'),
@@ -734,6 +741,7 @@ describe('finding-conflict-adjudication runner', () => {
       structuredOutput: {
         conflictId: 'C-FA2947446963',
         outcome: 'undetermined',
+        actionableFix: null,
         rationale: 'Still disputed.',
       },
       timestamp: new Date('2026-06-13T02:05:00.000Z'),
@@ -770,6 +778,7 @@ describe('finding-conflict-adjudication runner', () => {
         structuredOutput: {
           conflictId: 'C-FA2947446963',
           outcome: 'undetermined',
+          actionableFix: null,
           rationale: 'Cannot decide.',
         },
         timestamp: new Date('2026-06-13T02:00:00.000Z'),
@@ -804,6 +813,7 @@ describe('finding-conflict-adjudication runner', () => {
         structuredOutput: {
           conflictId: 'C-FA2947446963',
           outcome: 'undetermined',
+          actionableFix: null,
           rationale: `concurrent decision ${callNumber}`,
         },
         timestamp: new Date('2026-06-13T02:00:00.000Z'),
@@ -882,6 +892,7 @@ describe('finding-conflict-adjudication runner', () => {
         structuredOutput: {
           conflictId: 'C-FA2947446963',
           outcome: 'undetermined',
+          actionableFix: null,
           rationale: 'No longer actionable.',
         },
         timestamp: new Date('2026-06-13T02:00:00.000Z'),
@@ -914,6 +925,7 @@ describe('finding-conflict-adjudication runner', () => {
       structuredOutput: {
         conflictId: 'C-FA2947446963',
         outcome: 'evidence_invalid',
+        actionableFix: null,
         rationale: 'invalid premise',
       },
       timestamp: new Date('2026-06-13T02:00:00.000Z'),
@@ -947,6 +959,7 @@ describe('finding-conflict-adjudication runner', () => {
       structuredOutput: {
         conflictId: 'C-FA2947446963',
         outcome: 'finding_stale',
+        actionableFix: null,
         rationale,
       },
       timestamp: new Date('2026-06-13T02:00:00.000Z'),

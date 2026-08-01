@@ -1909,14 +1909,14 @@ export const FindingManagerDecisionsJsonSchema = {
 export const FindingConflictAdjudicationOutputSchema = z.object({
   conflictId: nonEmptyString,
   outcome: FindingConflictAdjudicationOutcomeSchema,
-  actionableFix: nonEmptyString.optional(),
-  rationale: nonEmptyString.optional(),
+  actionableFix: nonEmptyString.nullable().transform((value) => value ?? undefined),
+  rationale: nonEmptyString.nullable().transform((value) => value ?? undefined),
 }).strict();
 
 export const FindingConflictAdjudicationOutputJsonSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['conflictId', 'outcome'],
+  required: ['conflictId', 'outcome', 'actionableFix', 'rationale'],
   properties: {
     conflictId: {
       type: 'string',
@@ -1925,17 +1925,17 @@ export const FindingConflictAdjudicationOutputJsonSchema = {
     },
     outcome: {
       enum: FINDING_CONFLICT_ADJUDICATION_OUTCOMES,
-      description: 'finding_valid = the reviewer finding is legitimate and still stands; state the concrete coder fix in actionableFix so the workflow can route to the fix step (a finding_valid with an empty actionableFix is treated as undetermined). finding_stale = the finding no longer applies (already fixed, or the code it describes no longer exists). evidence_invalid = the finding\'s own premise does not hold (it was never a real problem). undetermined = you could not reach a conclusion from the evidence available.',
+      description: 'finding_valid = the reviewer finding is legitimate and still stands; state the concrete coder fix in actionableFix so the workflow can route to the fix step (a finding_valid with a null actionableFix is treated as undetermined). finding_stale = the finding no longer applies (already fixed, or the code it describes no longer exists). evidence_invalid = the finding\'s own premise does not hold (it was never a real problem). undetermined = you could not reach a conclusion from the evidence available.',
     },
     actionableFix: {
-      type: 'string',
+      type: ['string', 'null'],
       minLength: 1,
-      description: 'For finding_valid: the concrete code change the coder must make. Omit for every other outcome. A finding_valid without this field is treated as undetermined and blocks the run.',
+      description: 'For finding_valid: the concrete code change the coder must make. Use null for every other outcome. A finding_valid with null is treated as undetermined and blocks the run.',
     },
     rationale: {
-      type: 'string',
+      type: ['string', 'null'],
       minLength: 1,
-      description: 'Optional concise explanation of the judgment. This is an annotation only; it is never treated as lifecycle evidence.',
+      description: 'A concise explanation of the judgment, or null when there is no annotation. This is never treated as lifecycle evidence.',
     },
   },
 } as const;

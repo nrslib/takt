@@ -308,6 +308,7 @@ describe('finding-conflict-adjudication engine detour', () => {
           structuredOutput: {
             conflictId: 'C-FA2947446963',
             outcome: 'finding_stale',
+            actionableFix: null,
             rationale: 'Verified fixed against current code at src/a.ts:5.',
           },
           timestamp: new Date('2026-06-13T02:00:00.000Z'),
@@ -342,7 +343,7 @@ describe('finding-conflict-adjudication engine detour', () => {
 
   it.each([
     ['undetermined'],
-    // finding_valid with an EMPTY actionableFix demonstrates no fixability and
+    // finding_valid with a null actionableFix demonstrates no fixability and
     // must land on the ABORT side exactly like undetermined (codex design).
     ['finding_valid'],
   ] as const)('%s adjudication without an actionable fix keeps the conflict active and routes to ABORT', async (outcome) => {
@@ -358,6 +359,7 @@ describe('finding-conflict-adjudication engine detour', () => {
           structuredOutput: {
             conflictId: 'C-FA2947446963',
             outcome,
+            actionableFix: null,
             rationale: 'Cannot state a concrete resolution from the evidence available.',
           },
           timestamp: new Date('2026-06-13T02:00:00.000Z'),
@@ -407,6 +409,7 @@ describe('finding-conflict-adjudication engine detour', () => {
           structuredOutput: {
             conflictId: 'C-FA2947446963',
             outcome: 'finding_stale',
+            actionableFix: null,
             rationale: 'Verified fixed against current code at src/a.ts:5.',
           },
           timestamp: new Date('2026-06-13T02:00:00.000Z'),
@@ -460,6 +463,7 @@ describe('finding-conflict-adjudication engine detour', () => {
           structuredOutput: {
             conflictId: 'C-FA2947446963',
             outcome: 'finding_stale',
+            actionableFix: null,
             rationale: 'Verified fixed against current code at src/a.ts:5.',
           },
           timestamp: new Date('2026-06-13T02:00:00.000Z'),
@@ -612,6 +616,7 @@ describe('finding-conflict-adjudication engine detour', () => {
           structuredOutput: {
             conflictId: 'C-FA2947446963',
             outcome: 'finding_stale',
+            actionableFix: null,
             rationale: 'Verified fixed against current code at src/a.ts:5.',
           },
           timestamp: new Date('2026-06-13T02:00:00.000Z'),
@@ -715,6 +720,7 @@ describe('finding-conflict-adjudication engine detour', () => {
           structuredOutput: {
             conflictId: 'C-FA2947446963',
             outcome: 'finding_stale',
+            actionableFix: null,
             rationale: 'Verified fixed against current code at src/a.ts:5.',
           },
           timestamp: new Date('2026-06-13T02:00:00.000Z'),
@@ -778,6 +784,7 @@ describe('finding-conflict-adjudication engine detour', () => {
           structuredOutput: {
             conflictId: 'C-FA2947446963',
             outcome: 'finding_stale',
+            actionableFix: null,
             rationale: 'Verified fixed against current code at src/a.ts:5.',
           },
           timestamp: new Date('2026-06-13T02:05:00.000Z'),
@@ -855,6 +862,7 @@ describe('finding-conflict-adjudication engine detour', () => {
         const fenced = JSON.stringify({
           conflictId: 'C-FA2947446963',
           outcome: 'finding_stale',
+          actionableFix: null,
           rationale: 'Verified fixed against current code at src/a.ts:5.',
         }, null, 2);
         return {
