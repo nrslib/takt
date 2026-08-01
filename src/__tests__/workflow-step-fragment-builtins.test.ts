@@ -114,6 +114,9 @@ function expectLoopMonitorsTrigger(
           index === monitor.cycle.length - 1 ? monitor.cycle[0]! : monitor.cycle[index + 1]!,
         );
       }
+      if (repetition < monitor.threshold - 1) {
+        expect(result.triggered, monitor.cycle.join(' -> ')).toBe(false);
+      }
     }
     expect(result.triggered, monitor.cycle.join(' -> ')).toBe(true);
   }
