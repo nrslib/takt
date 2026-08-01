@@ -8,6 +8,7 @@ import {
 } from '../core/models/finding-lifecycle-identity.js';
 import { formatConflictId } from '../core/models/finding-conflict-identity.js';
 import { reserveFindingConflictAdjudication } from '../core/workflow/findings/adjudication-reservation.js';
+import { commitFindingConflictAdjudication } from '../core/workflow/findings/adjudication-commit.js';
 import { captureFindingMutationPrecondition } from '../core/workflow/findings/finding-preconditions.js';
 import {
   captureFindingLifecycleHead,
@@ -155,12 +156,13 @@ describe('conflict lifecycle reservation persistence', () => {
     }
   });
 
-  function createStore() {
+  function createStore(runId = 'run-2', sourceRunId?: string) {
     return createTestFindingLedgerStore({
       projectCwd: cwd,
-      runId: 'run-2',
-      reportDir: join(cwd, '.takt', 'runs', 'run-2', 'reports'),
+      runId,
+      reportDir: join(cwd, '.takt', 'runs', runId, 'reports'),
       workflowName: WORKFLOW_NAME,
+      ...(sourceRunId === undefined ? {} : { sourceRunId }),
     });
   }
 
@@ -207,6 +209,169 @@ describe('conflict lifecycle reservation persistence', () => {
     expect(resumed.result).toEqual(first.result);
     expect(resumed.ledger.lifecycleReservations).toEqual(first.ledger.lifecycleReservations);
     expect(resumed.ledger.lifecycleEvents).toEqual(first.ledger.lifecycleEvents);
+  });
+
+  it('reuses a source run pending mutation in the resumed run and commits only to the target database', async () => {
+    mkdirSync(join(cwd, '.takt', 'runs', 'run-1', 'reports'), { recursive: true });
+    const sourceStore = createStore('run-1');
+    const initial = makeLedger(cwd);
+    await sourceStore.updateLedger(() => ({ ledger: initial, result: undefined }));
+    const conflictId = initial.conflicts[0]!.id;
+    const sourceReservation = await reserveFindingConflictAdjudication({
+      ledgerStore: sourceStore,
+      conflictId,
+      requestedOriginStep: 'final-gate',
+      runId: 'run-1',
+      observation: {
+        runId: 'run-1',
+        stepName: 'finding-conflict-adjudication',
+        timestamp: '2026-06-14T00:00:00.000Z',
+      },
+      cwd,
+    });
+    if (!sourceReservation.result.started) {
+      throw new Error('Expected source adjudication reservation');
+    }
+    const sourceBeforeResume = sourceStore.loadLedger();
+
+    const targetStore = createStore('run-2', 'run-1');
+    const resumed = await reserveFindingConflictAdjudication({
+      ledgerStore: targetStore,
+      conflictId,
+      requestedOriginStep: 'reviewers',
+      runId: 'run-2',
+      observation: {
+        runId: 'run-2',
+        stepName: 'finding-conflict-adjudication',
+        timestamp: '2026-06-14T00:01:00.000Z',
+      },
+      cwd,
+    });
+    expect(resumed.result).toMatchObject({
+      started: true,
+      originStep: 'final-gate',
+      reservationToken: sourceReservation.result.reservationToken,
+    });
+    const resumedReservations = resumed.ledger.lifecycleReservations.filter(
+      (reservation) => reservation.context.kind === 'conflict_adjudication',
+    );
+    expect(resumedReservations).toHaveLength(1);
+    expect(resumedReservations[0]?.reservedAt.runId).toBe('run-1');
+
+    if (!resumed.result.started) {
+      throw new Error('Expected resumed adjudication reservation');
+    }
+    const committed = await commitFindingConflictAdjudication({
+      ledgerStore: targetStore,
+      conflictId,
+      promptedEvidenceHash: resumed.result.evidenceHash,
+      reservationMutationId: resumed.result.reservationToken,
+      output: {
+        conflictId,
+        outcome: 'finding_stale',
+        rationale: 'The current source no longer exhibits the disputed finding.',
+      },
+      cwd,
+      workflowName: WORKFLOW_NAME,
+      stepName: 'finding-conflict-adjudication',
+      runId: 'run-2',
+      timestamp: '2026-06-14T00:02:00.000Z',
+      originStep: resumed.result.originStep,
+    });
+
+    expect(committed.result).toMatchObject({ applied: true });
+    expect(committed.ledger.lifecycleEvents.filter(
+      (event) => event.outcome.kind === 'conflict_adjudication',
+    )).toEqual([
+      expect.objectContaining({
+        mutationId: sourceReservation.result.reservationToken,
+        occurredAt: expect.objectContaining({ runId: 'run-2' }),
+      }),
+    ]);
+    expect(sourceStore.loadLedger()).toEqual(sourceBeforeResume);
+  });
+
+  it('keeps a persisted null origin when the resumed run supplies a new origin candidate', async () => {
+    const sourceRunId = 'run-null-origin-source';
+    const targetRunId = 'run-null-origin-target';
+    mkdirSync(join(cwd, '.takt', 'runs', sourceRunId, 'reports'), { recursive: true });
+    mkdirSync(join(cwd, '.takt', 'runs', targetRunId, 'reports'), { recursive: true });
+    const sourceStore = createStore(sourceRunId);
+    const initial = makeLedger(cwd);
+    await sourceStore.updateLedger(() => ({ ledger: initial, result: undefined }));
+    const conflictId = initial.conflicts[0]!.id;
+    const sourceReservation = await reserveFindingConflictAdjudication({
+      ledgerStore: sourceStore,
+      conflictId,
+      requestedOriginStep: undefined,
+      runId: sourceRunId,
+      observation: {
+        runId: sourceRunId,
+        stepName: 'finding-conflict-adjudication',
+        timestamp: '2026-06-14T01:00:00.000Z',
+      },
+      cwd,
+    });
+    if (!sourceReservation.result.started) {
+      throw new Error('Expected source adjudication reservation');
+    }
+    const sourceBeforeResume = sourceStore.loadLedger();
+    const sourcePending = sourceBeforeResume.lifecycleReservations.find(
+      (reservation) => reservation.mutationId === sourceReservation.result.reservationToken,
+    )!;
+    expect(sourcePending.context).toMatchObject({
+      kind: 'conflict_adjudication',
+      originStep: null,
+    });
+
+    const targetStore = createStore(targetRunId, sourceRunId);
+    const resumed = await reserveFindingConflictAdjudication({
+      ledgerStore: targetStore,
+      conflictId,
+      requestedOriginStep: 'reviewers',
+      runId: targetRunId,
+      observation: {
+        runId: targetRunId,
+        stepName: 'finding-conflict-adjudication',
+        timestamp: '2026-06-14T01:01:00.000Z',
+      },
+      cwd,
+    });
+    expect(resumed.result).toMatchObject({
+      started: true,
+      reservationToken: sourceReservation.result.reservationToken,
+    });
+    expect(resumed.result.originStep).toBeUndefined();
+    expect(resumed.ledger.lifecycleReservations.find(
+      (reservation) => reservation.mutationId === sourceReservation.result.reservationToken,
+    )).toEqual(sourcePending);
+
+    if (!resumed.result.started) {
+      throw new Error('Expected resumed adjudication reservation');
+    }
+    const committed = await commitFindingConflictAdjudication({
+      ledgerStore: targetStore,
+      conflictId,
+      promptedEvidenceHash: resumed.result.evidenceHash,
+      reservationMutationId: resumed.result.reservationToken,
+      output: {
+        conflictId,
+        outcome: 'finding_stale',
+        rationale: 'The current source no longer exhibits the disputed finding.',
+      },
+      cwd,
+      workflowName: WORKFLOW_NAME,
+      stepName: 'finding-conflict-adjudication',
+      runId: targetRunId,
+      timestamp: '2026-06-14T01:02:00.000Z',
+    });
+
+    expect(committed.result).toMatchObject({ applied: true });
+    expect(committed.ledger.lifecycleEvents).toContainEqual(expect.objectContaining({
+      mutationId: sourceReservation.result.reservationToken,
+      occurredAt: expect.objectContaining({ runId: targetRunId }),
+    }));
+    expect(sourceStore.loadLedger()).toEqual(sourceBeforeResume);
   });
 
   it('rejects a same-revision reservation when another full-head field is stale', () => {

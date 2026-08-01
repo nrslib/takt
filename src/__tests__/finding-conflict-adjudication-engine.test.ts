@@ -163,11 +163,12 @@ function reviewerExtraction(
 function createLedgerStore(
   cwd: string,
   workflowName = 'adjudication-engine-test',
+  runId = 'test-report-dir',
 ): FindingLedgerStore {
   return createTestFindingLedgerStore({
     projectCwd: cwd,
-    runId: 'test-report-dir',
-    reportDir: join(cwd, '.takt', 'runs', 'test-report-dir', 'reports'),
+    runId,
+    reportDir: join(cwd, '.takt', 'runs', runId, 'reports'),
     workflowName,
   });
 }
@@ -512,7 +513,7 @@ describe('finding-conflict-adjudication engine detour', () => {
     expect(ledger.conflicts[0]?.status).toBe('resolved');
   });
 
-  it('resume 相互作用: 裁定途中で中断しても lifecycle reservation が台帳に残り、再開後に同一 evidence で再裁定されない', async () => {
+  it('resume 相互作用: 別 run に継承した pending reservation を再利用して裁定を完遂する', async () => {
     await seedLedger();
 
     // 1走目: 裁定 LLM が中断相当の例外で死ぬ → run は runtime_error abort。
@@ -550,14 +551,24 @@ describe('finding-conflict-adjudication engine detour', () => {
     expect(conflictAdjudicationReservations(ledgerAfterInterrupt)).toHaveLength(1);
     expect(conflictAdjudicationEvents(ledgerAfterInterrupt)).toHaveLength(0);
 
-    // 2走目（resume 相当・同一 evidence）: 別 run の pending reservation が
-    // 封鎖するため裁定 LLM は呼ばれず、
-    // unadjudicated.count == 0 のため ABORT 側に落ちる。
+    // 2走目（resume 相当・同一 evidence）: 別 run に複製された pending reservation
+    // を同じ mutationId のまま引き継ぎ、裁定を完遂する。
     vi.mocked(runAgent).mockClear();
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
       options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
       if (isAdjudicationSchema(options?.outputSchema)) {
-        throw new Error('the adjudicator must not be invoked again for the same evidence');
+        return {
+          persona,
+          status: 'done',
+          content: '{}',
+          structuredOutput: {
+            conflictId: 'C-FA2947446963',
+            outcome: 'finding_stale',
+            actionableFix: null,
+            rationale: 'Verified fixed against current code at src/a.ts:5.',
+          },
+          timestamp: new Date('2026-06-13T03:00:00.000Z'),
+        };
       }
       return {
         persona,
@@ -567,7 +578,7 @@ describe('finding-conflict-adjudication engine detour', () => {
       };
     });
 
-    // 別 run（異なる runId）として再開: pending attempt は封鎖として働く
+    // 別 run（異なる runId）として再開
     const secondRun = await new WorkflowEngine(baseConfig(cwd, rules), cwd, 'task', {
       projectCwd: cwd,
       provider: 'claude',
@@ -577,11 +588,21 @@ describe('finding-conflict-adjudication engine detour', () => {
         resumeMode: 'retry',
       },
     }).run();
-    expect(secondRun.status).toBe('aborted');
+    expect(secondRun.status).toBe('completed');
     const adjudicatorCalls = vi.mocked(runAgent).mock.calls.filter(([, , options]) => (
       isAdjudicationSchema(options?.outputSchema)
     ));
-    expect(adjudicatorCalls).toHaveLength(0);
+    expect(adjudicatorCalls).toHaveLength(1);
+    const resumedLedger = createLedgerStore(
+      cwd,
+      'adjudication-engine-test',
+      'test-report-dir-resume',
+    ).loadLedger();
+    const reservations = conflictAdjudicationReservations(resumedLedger);
+    const events = conflictAdjudicationEvents(resumedLedger);
+    expect(reservations).toHaveLength(1);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.mutationId).toBe(reservations[0]?.mutationId);
   });
 
   it('R1: 複数配線構成の resume（previousStep なし）でも pending attempt の originStep へ正しく戻る', async () => {

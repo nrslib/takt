@@ -10,15 +10,11 @@ import {
   type FindingConflictAdjudicationDisposition,
 } from './adjudication-apply.js';
 import {
-  computeConflictEvidenceHash,
   isLedgerConflictUnadjudicated,
   renderAdjudicationInstruction,
 } from './adjudication-evidence.js';
 import { captureReviewScopeSnapshot } from './snapshot.js';
-import {
-  findPendingFindingConflictAdjudication,
-  reserveFindingConflictAdjudication,
-} from './adjudication-reservation.js';
+import { reserveFindingConflictAdjudication } from './adjudication-reservation.js';
 import { commitFindingConflictAdjudication } from './adjudication-commit.js';
 import { parseFindingConflictAdjudicationOutput } from './schemas.js';
 import type {
@@ -126,23 +122,10 @@ export function createFindingConflictAdjudicationRunner(deps: FindingConflictAdj
     const targetConflict = selectConflictForAdjudication(
       initialLedger,
       (conflict) => {
-        const evidenceHash = computeConflictEvidenceHash(
+        return isLedgerConflictUnadjudicated(
           conflict,
           initialLedger,
           initialReviewScopeSnapshot.reviewScopeSnapshotId,
-        );
-        const pending = findPendingFindingConflictAdjudication({
-          ledger: initialLedger,
-          conflictId: conflict.id,
-          evidenceHash,
-        });
-        return (
-          isLedgerConflictUnadjudicated(
-            conflict,
-            initialLedger,
-            initialReviewScopeSnapshot.reviewScopeSnapshotId,
-          )
-          && (pending === undefined || pending.reservedAt.runId === deps.runId)
         );
       },
     );

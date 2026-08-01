@@ -29,6 +29,7 @@ import {
 } from '../core/workflow/findings/raw-canonicalization.js';
 import { foldRawFindingEvidence } from '../core/workflow/findings/finding-evidence-fold.js';
 import { computeClaimIdentityHash } from '../core/workflow/findings/evidence-domain.js';
+import { captureFindingPreconditions } from '../core/workflow/findings/finding-preconditions.js';
 import { detectClarifiableRawMismatches } from '../core/workflow/findings/relation-coherence.js';
 import type {
   FindingLedger,
@@ -687,6 +688,143 @@ describe('reconcileCommitPlan の resolvedConflicts 再生成不採用', () => {
     ))).toBe(true);
     const savedConflict = result.ledger.conflicts.find((entry) => entry.id === 'C-FA2947446963')!;
     expect(savedConflict.status).toBe('active');
+  });
+});
+
+describe('provisional match の materialization 境界', () => {
+  it('継承 provisional と異なる claim の persists を監査へ隔離し、回復 spec の旧 claim を維持する', () => {
+    const oldRaw = makeRaw({
+      rawFindingId: 'raw-old-provisional',
+      evidence: [],
+    });
+    const reviewerStableKey = computeReviewerStableKey({
+      workflowName: 'peer-review',
+      callNamespace: '',
+      parentStepName: 'reviewers',
+      reviewerPersonaKey: oldRaw.reviewer,
+    });
+    const oldLineageKey = computeLineageKey({
+      claimIdentityHash: oldRaw.claimIdentityHash,
+    });
+    const oldSpec = provisionalSpecForRawKind({
+      wire: oldRaw,
+      canonical: { reviewerStableKey, lineageKey: oldLineageKey },
+      reason: 'The original claim needs interpretation recovery.',
+    }, 'raw-meaning-ambiguous');
+    const inherited = authorizeFindingLedgerFixture(applyProvisionalFindingSpecsToLedger(
+      makeLedger([], { rawFindings: [oldRaw] }),
+      [oldSpec],
+      {
+        workflowName: 'peer-review',
+        stepName: 'reviewers',
+        runId: 'run-1',
+        timestamp: '2026-07-31T00:00:00.000Z',
+      },
+    ));
+    const inheritedFinding = inherited.findings[0]!;
+    const targetPrecondition = captureFindingPreconditions(inherited)
+      .get(inheritedFinding.id)!.precondition;
+    const mismatchedPersists = makeRaw({
+      rawFindingId: 'raw-fresh-mismatched-claim',
+      title: 'A different fresh claim',
+      description: 'This description must not overwrite the inherited provisional claim.',
+      relation: 'persists',
+      targetFindingId: inheritedFinding.id,
+      targetPrecondition,
+      target: oldRaw.target,
+      evidence: [],
+    });
+    const recoveryRaw = makeRaw({
+      ...oldRaw,
+      rawFindingId: 'raw-recovery-original-claim',
+      evidence: [],
+    });
+    const recoverySpec = {
+      ...oldSpec,
+      sourceRawFindingIds: [recoveryRaw.rawFindingId],
+    };
+    const mismatchedLineageKey = computeLineageKey({
+      targetFindingId: inheritedFinding.id,
+      claimIdentityHash: mismatchedPersists.claimIdentityHash,
+    });
+
+    const result = reconcileCommitPlan({
+      runInput: {
+        workflowName: 'peer-review',
+        callNamespace: '',
+        runId: 'run-2',
+        timestamp: '2026-07-31T00:01:00.000Z',
+        cwd: process.cwd(),
+        parentStep: { kind: 'agent', name: 'reviewers', persona: 'reviewer', edit: false },
+      } as never,
+      freshLedger: inherited,
+      rawFindings: [mismatchedPersists, recoveryRaw],
+      managerOutput: outputWith({
+        matches: [{
+          findingId: inheritedFinding.id,
+          rawFindingIds: [mismatchedPersists.rawFindingId],
+          evidence: 'The manager associated the fresh claim with the inherited provisional.',
+        }],
+      }),
+      provisionalSpecs: [recoverySpec],
+      entityProvisionalMutations: [],
+      anomalySpecs: [],
+      verifiedEvidenceRecordsByRawFindingId: new Map(),
+      rawProvenanceByRawFindingId: new Map([
+        [mismatchedPersists.rawFindingId, storedRawReconcileProvenance(
+          mismatchedPersists,
+          reviewerStableKey,
+          mismatchedLineageKey,
+        )],
+        [recoveryRaw.rawFindingId, storedRawReconcileProvenance(
+          recoveryRaw,
+          reviewerStableKey,
+          oldLineageKey,
+        )],
+      ]),
+      cleanWire: [mismatchedPersists],
+      explicitResolvedByMapping: new Map(),
+      explicitPromotedFindingIds: new Set(),
+      recoveryProvisionalRawFindingIds: new Set([recoveryRaw.rawFindingId]),
+      staleRawFindingIds: new Set(),
+      deferredRawFindingIds: new Set(),
+      resolutionRenotifications: [],
+      unsupportedRawFindingReports: [],
+      healthyReviewerStableKeys: new Set(),
+    });
+
+    expect(result.managerOutput.matches).toEqual([]);
+    expect(result.ledger.findings[0]).toMatchObject({
+      id: inheritedFinding.id,
+      title: oldRaw.title,
+      description: oldRaw.description,
+      rawFindingIds: [oldRaw.rawFindingId, recoveryRaw.rawFindingId],
+      provisional: { stableKey: oldSpec.stableKey },
+    });
+    expect(result.rawFindingDispositions).toContainEqual(expect.objectContaining({
+      rawFindingId: mismatchedPersists.rawFindingId,
+      outcome: 'audit_only',
+    }));
+    expect(result.rejectedObservationAttachments).toEqual([
+      expect.objectContaining({
+        targetFindingId: inheritedFinding.id,
+        rawFindingId: mismatchedPersists.rawFindingId,
+        rejectionCode: 'evidence_admission_failed',
+      }),
+    ]);
+    const audited = applyRejectedObservationAttachments(
+      authorizeFindingLedgerFixture(result.ledger),
+      result.rejectedObservationAttachments,
+      {
+        runId: 'run-2',
+        stepName: 'reviewers',
+        timestamp: '2026-07-31T00:01:00.000Z',
+      },
+    );
+    expect(audited.findings[0]?.description).toBe(oldRaw.description);
+    expect(audited.findings[0]?.rejectedObservations).toEqual([
+      expect.objectContaining({ rawFindingId: mismatchedPersists.rawFindingId }),
+    ]);
   });
 });
 

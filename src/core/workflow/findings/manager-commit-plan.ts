@@ -27,8 +27,8 @@ import { buildLadderCommitPlan, selectCommittableLadder } from './manager-ladder
 import {
   applyCommitLedgerStates,
   reconcileCommitPlan,
-  type RejectedObservationAttachment,
 } from './manager-commit-finalization.js';
+import type { RejectedObservationAttachment } from './manager-provisional-settlement.js';
 import {
   collectManagerActionRecoveryCandidates,
   planManagerActionRecovery,
@@ -773,6 +773,7 @@ export function buildFindingManagerCommitMutation(
       interpretationRecoverySettlements,
       resolutionRenotifications: revalidated.resolutionRenotifications,
       rejectedObservationAttachments: [
+        ...rawAdjudicationRecovery.rejectedObservationAttachments,
         ...reconcilePlan.rejectedObservationAttachments,
         ...finalized.rejectedObservationAttachments,
       ],

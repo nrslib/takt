@@ -805,7 +805,7 @@ describe('ケース4: persists の不正吸収（ambiguous persists を target �
 // ケース5: 永久機関
 // ---------------------------------------------------------------------------
 describe('ケース5: 永久機関（同一 lineage の ambiguous raw を run/iteration/id/説明文/行番号を変えて繰り返す）', () => {
-  it('finding ID は増殖せず同じ provisional が更新され、manager 解釈は lineage 上限2 epoch で止まる', async () => {
+  it('finding ID は増殖せず、解釈上限後の非昇格観測を監査へ隔離する', async () => {
     const harness = makeHarness(makeLedger({
       findings: [makeFinding({ revision: 1, status: 'resolved', lifecycle: 'resolved' })],
     }));
@@ -859,8 +859,10 @@ describe('ケース5: 永久機関（同一 lineage の ambiguous raw を run/it
     expect(provisionals).toHaveLength(1);
     expect(provisionals[0]?.status).toBe('open');
     expect(provisionals[0]?.lifecycle).toBe('persists');
-    // 4ラウンド分の raw が同じ provisional に集約されている。
-    expect(provisionals[0]?.rawFindingIds.length).toBeGreaterThanOrEqual(4);
+    // 解釈できた2ラウンドだけが provisional の正準観測になり、以後の
+    // 非昇格 match は claim を書き換えず監査に隔離される。
+    expect(provisionals[0]?.rawFindingIds).toHaveLength(2);
+    expect(provisionals[0]?.rejectedObservations).toHaveLength(2);
     // manager 解釈は lineage あたり最大2 epoch（3・4ラウンド目は呼ばれない）。
     expect(interpretationCalls).toBe(2);
     // 「今回出なかった」だけでは resolve されない（無 raw ラウンド後も open のまま）。

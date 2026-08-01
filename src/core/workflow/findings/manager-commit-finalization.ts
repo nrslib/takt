@@ -34,6 +34,7 @@ import {
   applyProvisionalSettlement,
   buildProvisionalSettlementLifecycleCommands,
   settleProvisionalsWithCleanEvidence,
+  type RejectedObservationAttachment,
 } from './manager-provisional-settlement.js';
 import {
   collectActiveConflictFindingIds,
@@ -43,7 +44,6 @@ import {
 import { canonicalizeFindingManagerOutput } from './canonicalize.js';
 import { collectRegeneratedConflictIds } from '../../models/finding-conflict-identity.js';
 import { collectLandedRawIds } from './manager-utils.js';
-import type { FindingRejectedObservationCode } from '../../models/finding-types.js';
 import type { FindingLifecycleCommand } from './lifecycle-transaction.js';
 import {
   applyResolutionRenotificationTransitions,
@@ -51,13 +51,6 @@ import {
 } from './resolution-renotification.js';
 import { resolveCurrentLifecycleObservationTarget } from './reviewer-anomaly-policy.js';
 import { canonicalRawIntegrityDigestOf } from './raw-canonicalization.js';
-
-export interface RejectedObservationAttachment {
-  targetFindingId: string;
-  rawFindingId: string;
-  reason: string;
-  rejectionCode: FindingRejectedObservationCode;
-}
 
 interface RejectedObservationPlan {
   attachments: RejectedObservationAttachment[];
@@ -223,6 +216,25 @@ export function reconcileCommitPlan(input: {
     healthyReviewerStableKeys: input.healthyReviewerStableKeys,
     replayOrigins: new Map(),
   });
+  const rejectedProvisionalMatchRawIds = new Set(
+    settlement.rejectedObservationAttachments.map((attachment) => attachment.rawFindingId),
+  );
+  const provisionalSpecs = input.provisionalSpecs.flatMap((spec) => {
+    const sourceRawFindingIds = spec.sourceRawFindingIds.filter(
+      (rawFindingId) => !rejectedProvisionalMatchRawIds.has(rawFindingId),
+    );
+    return sourceRawFindingIds.length === 0
+      ? []
+      : [{ ...spec, sourceRawFindingIds }];
+  });
+  const entityProvisionalMutations = input.entityProvisionalMutations.flatMap((mutation) => {
+    const sourceRawFindingIds = mutation.sourceRawFindingIds.filter(
+      (rawFindingId) => !rejectedProvisionalMatchRawIds.has(rawFindingId),
+    );
+    return sourceRawFindingIds.length === 0
+      ? []
+      : [{ ...mutation, sourceRawFindingIds }];
+  });
   // clean 証拠による settlement が確定した provisional への通常 dismiss は
   // 不採用にする。outside_task_scope は上で対象 raw を audit-only に移しており、
   // 実在性と task scope の裁定を両立するため dismissal を維持する。
@@ -263,20 +275,25 @@ export function reconcileCommitPlan(input: {
       return finding?.provisional !== undefined ? [finding.provisional.stableKey] : [];
     }),
   );
-  const suppressedSpecs = input.provisionalSpecs.filter((spec) => dismissedStableKeys.has(spec.stableKey));
+  const suppressedSpecs = provisionalSpecs.filter((spec) => dismissedStableKeys.has(spec.stableKey));
   const landedSpecs = suppressedSpecs.length > 0
-    ? input.provisionalSpecs.filter((spec) => !dismissedStableKeys.has(spec.stableKey))
-    : input.provisionalSpecs;
+    ? provisionalSpecs.filter((spec) => !dismissedStableKeys.has(spec.stableKey))
+    : provisionalSpecs;
   const landedRawFindingIds = collectLandedRawIds(settledOutput);
   const provisionalRawFindingIds = new Set(
     [
       ...landedSpecs.flatMap((spec) => spec.sourceRawFindingIds),
-      ...input.entityProvisionalMutations.flatMap(
+      ...entityProvisionalMutations.flatMap(
         (mutation) => mutation.sourceRawFindingIds,
       ),
     ],
   );
   const rawFindingDispositions: RawFindingDisposition[] = [
+    ...settlement.rejectedObservationAttachments.map((attachment) => ({
+      rawFindingId: attachment.rawFindingId,
+      outcome: 'audit_only' as const,
+      reason: attachment.reason,
+    })),
     ...input.anomalySpecs.flatMap((spec) => spec.sourceRawFindingIds.map((rawFindingId) => ({
       rawFindingId,
       outcome: 'reviewer_anomaly' as const,
@@ -363,7 +380,7 @@ export function reconcileCommitPlan(input: {
     rawFindings: input.rawFindings,
     managerOutput: settledOutput,
     provisionalFindings: landedSpecs,
-    entityProvisionalMutations: input.entityProvisionalMutations,
+    entityProvisionalMutations,
     terminalEntityAttachmentFindingIds: new Set([
       ...settlement.promotedFindingIds,
       ...settlement.resolvedByMapping.keys(),
@@ -419,6 +436,7 @@ export function reconcileCommitPlan(input: {
     settlement,
   });
   const rejectedObservationAttachments = [
+    ...settlement.rejectedObservationAttachments,
     ...planSuppressedObservationsForDismissed(
       settled,
       suppressedSpecs,

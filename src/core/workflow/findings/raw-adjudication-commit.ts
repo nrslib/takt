@@ -11,6 +11,7 @@ import {
   applyProvisionalSettlement,
   buildProvisionalSettlementLifecycleCommands,
   settleProvisionalsWithCleanEvidence,
+  type RejectedObservationAttachment,
 } from './manager-provisional-settlement.js';
 import { collectLandedRawIds } from './manager-utils.js';
 import { reconcileFindingLedgerPlan } from './reconciler.js';
@@ -217,6 +218,7 @@ export function applyRawAdjudicationRecovery(input: {
   managerDecisionCommands: FindingLifecycleCommand[];
   settlementCommands: FindingLifecycleCommand[];
   rawFindingDispositions: RawFindingDisposition[];
+  rejectedObservationAttachments: RejectedObservationAttachment[];
 } {
   if (input.recovery.origins.size === 0) {
     return {
@@ -225,6 +227,7 @@ export function applyRawAdjudicationRecovery(input: {
       managerDecisionCommands: [],
       settlementCommands: [],
       rawFindingDispositions: [],
+      rejectedObservationAttachments: [],
     };
   }
   const fresh = collectFreshOrigins({
@@ -251,6 +254,7 @@ export function applyRawAdjudicationRecovery(input: {
         }
         return dispositionForFailure(rawFindingId, failure);
       }),
+      rejectedObservationAttachments: [],
     };
   }
   const eligibleRawIds = new Set(origins.keys());
@@ -341,6 +345,13 @@ export function applyRawAdjudicationRecovery(input: {
     healthyReviewerStableKeys: new Set(),
     replayOrigins: replayAuthorities,
   });
+  for (const attachment of settlement.rejectedObservationAttachments) {
+    failures.set(attachment.rawFindingId, {
+      kind: 'admission_rejected',
+      outcome: 'audit_only',
+      reason: attachment.reason,
+    });
+  }
   for (const rawFindingId of origins.keys()) {
     if (!settlement.settledReplayRawIds.has(rawFindingId) && !failures.has(rawFindingId)) {
       failures.set(rawFindingId, {
@@ -417,5 +428,6 @@ export function applyRawAdjudicationRecovery(input: {
       settlement,
     }),
     rawFindingDispositions,
+    rejectedObservationAttachments: settlement.rejectedObservationAttachments,
   };
 }

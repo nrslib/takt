@@ -279,6 +279,7 @@ export function planManagerActionRecovery(input: {
   });
   const settled = applyProvisionalSettlement(applied, {
     output: plan.output,
+    rejectedObservationAttachments: [],
     promotedFindingIds: new Set(),
     promotionSourceRawFindingIds: new Map(),
     replayPromotionAuthoritiesByFindingId: new Map(),

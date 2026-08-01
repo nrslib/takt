@@ -1414,6 +1414,142 @@ describe('provisional recovery', () => {
     );
   });
 
+  it('merges compatible replay origins into the canonical provisional target', () => {
+    const firstSource = raw('source-p1');
+    const secondSource = raw('source-p2');
+    const first = provisional('F-0001', 'raw-adjudication-unresolved');
+    const second = provisional('F-0002', 'raw-adjudication-unresolved');
+    first.rawFindingIds = [firstSource.rawFindingId];
+    first.provisional!.sourceRawFindingIds = [firstSource.rawFindingId];
+    second.rawFindingIds = [secondSource.rawFindingId];
+    second.provisional!.sourceRawFindingIds = [secondSource.rawFindingId];
+    const freshLedger = ledger([first, second], [firstSource, secondSource]);
+    const firstReplay = { ...firstSource, rawFindingId: 'replay-p1' };
+    const secondReplay = { ...secondSource, rawFindingId: 'replay-p2' };
+    const firstOrigin = rawRecoveryOrigin(
+      freshLedger,
+      first,
+      firstSource.rawFindingId,
+    );
+    const secondOrigin = rawRecoveryOrigin(
+      freshLedger,
+      second,
+      secondSource.rawFindingId,
+    );
+    const settlement = settleProvisionalsWithCleanEvidence({
+      output: {
+        ...emptyOutput(),
+        newFindings: [{
+          rawFindingIds: [firstReplay.rawFindingId, secondReplay.rawFindingId],
+          title: firstReplay.title,
+          severity: firstReplay.severity,
+        }],
+      },
+      cleanRawIds: new Set([firstReplay.rawFindingId, secondReplay.rawFindingId]),
+      wireById: new Map([
+        [firstReplay.rawFindingId, firstReplay],
+        [secondReplay.rawFindingId, secondReplay],
+      ]),
+      freshLedger,
+      explicitResolvedByMapping: new Map(),
+      explicitPromotedFindingIds: new Set(),
+      healthyReviewerStableKeys: new Set(),
+      replayOrigins: new Map([
+        [firstReplay.rawFindingId, {
+          replayRawFindingId: firstReplay.rawFindingId,
+          attemptId: firstOrigin.attemptId,
+          sourceRawFindingId: firstOrigin.sourceRawFindingId,
+          sourceRawIntegrityDigest: firstOrigin.sourceRawIntegrityDigest!,
+          expectedHead: firstOrigin.expectedHead,
+          attempt: firstOrigin.attempt,
+          recoveryOrigin: firstOrigin.recoveryOrigin,
+        }],
+        [secondReplay.rawFindingId, {
+          replayRawFindingId: secondReplay.rawFindingId,
+          attemptId: secondOrigin.attemptId,
+          sourceRawFindingId: secondOrigin.sourceRawFindingId,
+          sourceRawIntegrityDigest: secondOrigin.sourceRawIntegrityDigest!,
+          expectedHead: secondOrigin.expectedHead,
+          attempt: secondOrigin.attempt,
+          recoveryOrigin: secondOrigin.recoveryOrigin,
+        }],
+      ]),
+    });
+
+    expect(settlement.output.newFindings).toEqual([]);
+    expect(settlement.output.matches).toEqual([
+      expect.objectContaining({
+        findingId: first.id,
+        rawFindingIds: [firstReplay.rawFindingId, secondReplay.rawFindingId],
+      }),
+    ]);
+    expect(settlement.promotedFindingIds).toEqual(new Set([first.id]));
+    expect(settlement.resolvedByMapping).toEqual(new Map([[second.id, first.id]]));
+    expect(settlement.settledReplayRawIds).toEqual(
+      new Set([firstReplay.rawFindingId, secondReplay.rawFindingId]),
+    );
+    expect(settlement.rejectedObservationAttachments).toEqual([]);
+  });
+
+  it('does not let a replay origin for one provisional authorize a different provisional match', () => {
+    const originFinding = provisional('F-0001', 'raw-adjudication-unresolved');
+    const otherFinding = provisional('F-0002', 'raw-adjudication-unresolved');
+    const source = raw('source-1');
+    const freshLedger = ledger([originFinding, otherFinding], [source]);
+    const replay = { ...source, rawFindingId: 'replay-for-origin-only' };
+    const origin = rawRecoveryOrigin(
+      freshLedger,
+      originFinding,
+      source.rawFindingId,
+    );
+    const settlement = settleProvisionalsWithCleanEvidence({
+      output: {
+        ...emptyOutput(),
+        matches: [{
+          findingId: otherFinding.id,
+          rawFindingIds: [replay.rawFindingId],
+          evidence: 'The manager associated the replay with another provisional.',
+        }],
+      },
+      cleanRawIds: new Set([replay.rawFindingId]),
+      wireById: new Map([[replay.rawFindingId, replay]]),
+      freshLedger,
+      explicitResolvedByMapping: new Map(),
+      explicitPromotedFindingIds: new Set(),
+      healthyReviewerStableKeys: new Set(),
+      replayOrigins: new Map([[replay.rawFindingId, {
+        replayRawFindingId: replay.rawFindingId,
+        attemptId: origin.attemptId,
+        sourceRawFindingId: origin.sourceRawFindingId,
+        sourceRawIntegrityDigest: origin.sourceRawIntegrityDigest!,
+        expectedHead: origin.expectedHead,
+        attempt: origin.attempt,
+        recoveryOrigin: origin.recoveryOrigin,
+      }]]),
+    });
+
+    expect(settlement.output.matches).toEqual([]);
+    expect(settlement.promotedFindingIds).toEqual(new Set());
+    expect(settlement.resolvedByMapping).toEqual(new Map());
+    expect(settlement.settledReplayRawIds).toEqual(new Set());
+    expect(settlement.rejectedObservationAttachments).toEqual([
+      expect.objectContaining({
+        targetFindingId: otherFinding.id,
+        rawFindingId: replay.rawFindingId,
+        rejectionCode: 'evidence_admission_failed',
+      }),
+    ]);
+
+    const applied = applyProvisionalSettlement({
+      ...freshLedger,
+      rawFindings: [...freshLedger.rawFindings, replay],
+    }, settlement, observation.timestamp);
+    expect(applied.findings.find((finding) => finding.id === originFinding.id))
+      .toEqual(freshLedger.findings.find((finding) => finding.id === originFinding.id));
+    expect(applied.findings.find((finding) => finding.id === otherFinding.id))
+      .toEqual(freshLedger.findings.find((finding) => finding.id === otherFinding.id));
+  });
+
   it('recognizes a clean resolution confirmation as direct provisional settlement', () => {
     const processFinding = provisional('F-0001', 'raw-adjudication-unresolved');
     const freshLedger = ledger([processFinding], [raw('source-1')]);

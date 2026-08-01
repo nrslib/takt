@@ -65,9 +65,6 @@ export async function reserveFindingConflictAdjudication(input: {
       evidenceHash: freshHash,
     });
     if (pending !== undefined) {
-      if (pending.reservedAt.runId !== input.runId) {
-        return { ledger: fresh, result: { started: false as const } };
-      }
       const context = pending.context;
       if (context.kind !== 'conflict_adjudication') {
         throw new Error(
@@ -80,7 +77,7 @@ export async function reserveFindingConflictAdjudication(input: {
           started: true as const,
           evidenceHash: freshHash,
           evidenceSnapshot,
-          originStep: input.requestedOriginStep ?? context.originStep ?? undefined,
+          originStep: context.originStep ?? undefined,
           reservationToken: pending.mutationId,
         },
       };
