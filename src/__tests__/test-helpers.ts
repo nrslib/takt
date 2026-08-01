@@ -67,7 +67,6 @@ export function makeFileRunMetaPathFields(cwd: string, slug: string) {
     reportDirectory: paths.reportsRootRel,
     contextDirectory: paths.contextRel,
     logsDirectory: paths.logsRel,
-    storageBackend: 'file' as const,
   };
 }
 

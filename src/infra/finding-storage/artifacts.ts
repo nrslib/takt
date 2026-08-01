@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import type {
   FindingManagerReportPublication,
   FindingManagerValidationReport,
+  FindingConflictAdjudicationAuditReport,
   RawFinding,
 } from '../../core/workflow/findings/types.js';
 import { parseRawFindings } from '../../core/workflow/findings/schemas.js';
@@ -18,7 +19,6 @@ import {
   writeReportFile,
 } from '../../core/workflow/report-writer.js';
 import type { ReportPublicationReceipt } from '../../core/workflow/report-publication.js';
-import type { FindingConflictAdjudicationAuditReport } from '../../core/workflow/findings/store.js';
 
 function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex');

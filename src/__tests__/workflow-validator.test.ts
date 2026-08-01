@@ -95,8 +95,6 @@ function createFindingContractParallelWorkflow(
 ): WorkflowConfig {
   return createWorkflow({
     findingContract: {
-      ledgerPath: '.takt/findings/peer-review.json',
-      rawFindingsPath: '.takt/findings/raw',
       manager: {
         persona: 'findings-manager',
         instruction: 'findings-manager',
@@ -281,8 +279,6 @@ describe('validateWorkflowConfig', () => {
   it('fails fast for incompatible auto-routing on the finding manager', () => {
     const workflow = createWorkflow({
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -301,8 +297,6 @@ describe('validateWorkflowConfig', () => {
   it('retains a workflow_call model source when auto-routing rejects the finding manager', () => {
     const workflow = createWorkflow({
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -334,8 +328,6 @@ describe('validateWorkflowConfig', () => {
     // 初めて落ち、エラーは捕捉されてバッチ全体が provisional 化されてしまう。
     const workflow = createWorkflow({
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -354,8 +346,6 @@ describe('validateWorkflowConfig', () => {
   it('retains a workflow_call model source when auto-routing rejects the finding interpreter', () => {
     const workflow = createWorkflow({
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -386,8 +376,6 @@ describe('validateWorkflowConfig', () => {
     // codex + sonnet の組み合わせ）を検証すると、有効な構成を拒否する偽陽性になる。
     const workflow = createWorkflow({
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -515,8 +503,6 @@ describe('validateWorkflowConfig', () => {
   it('accepts findings rules when findingContract is configured', () => {
     const workflow = createWorkflow({
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -610,8 +596,6 @@ describe('validateWorkflowConfig', () => {
   it('accepts step, parallel sub-step, and loop monitor routes to finding-conflict-adjudication when findingContract is configured', () => {
     const workflow = createWorkflow({
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -647,8 +631,6 @@ describe('validateWorkflowConfig', () => {
   it('fails fast when finding_contract.manager uses opencode without a model', () => {
     const workflow = createWorkflow({
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -674,8 +656,6 @@ describe('validateWorkflowConfig', () => {
     const workflow = createWorkflow({
       provider: 'opencode',
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -693,8 +673,6 @@ describe('validateWorkflowConfig', () => {
   it('validates finding_contract.manager through provider_routing.personas when manager provider is not direct', () => {
     const workflow = createWorkflow({
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           providerRoutingPersonaKey: 'findings-manager',
@@ -718,8 +696,6 @@ describe('validateWorkflowConfig', () => {
   it('prefers finding_contract.manager provider/model over provider_routing and persona_providers', () => {
     const workflow = createWorkflow({
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           providerRoutingPersonaKey: 'findings-manager',
@@ -757,8 +733,6 @@ describe('validateWorkflowConfig', () => {
     // 最終不変条件が fail-fast する）。
     const workflow = createWorkflow({
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -800,8 +774,6 @@ describe('validateWorkflowConfig', () => {
   it('accepts loop monitor judge findings rules when findingContract is configured', () => {
     const workflow = createWorkflow({
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -856,8 +828,6 @@ describe('validateWorkflowConfig', () => {
   it('accepts parallel sub-step findings rules when findingContract is configured', () => {
     const workflow = createWorkflow({
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -920,8 +890,6 @@ describe('validateWorkflowConfig', () => {
   it('rejects a parallel Finding Contract reviewer without a report', () => {
     const workflow = createWorkflow({
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -944,8 +912,6 @@ describe('validateWorkflowConfig', () => {
   it('rejects a Finding Contract reviewer with multiple reports', () => {
     const workflow = createWorkflow({
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -986,8 +952,6 @@ describe('validateWorkflowConfig', () => {
     const workflow = createWorkflow({
       initialStep: 'reviewers',
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -1012,8 +976,6 @@ describe('validateWorkflowConfig', () => {
   it('fails fast when findingContract parallel sub-steps already declare structuredOutput', () => {
     const workflow = createWorkflow({
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -1056,8 +1018,6 @@ describe('validateWorkflowConfig', () => {
   it('fails fast when a normal finding-contract producer also declares structuredOutput', () => {
     const workflow = createWorkflow({
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: { persona: 'findings-manager', instruction: 'findings-manager', outputContract: 'findings-manager' },
       },
       steps: [createPlanAgent({
@@ -1692,8 +1652,6 @@ describe('validateWorkflowConfig', () => {
   it('accepts a *-finding-contract report format when the workflow declares its own finding_contract', () => {
       const workflow = createWorkflow({
         findingContract: {
-          ledgerPath: '.takt/findings/peer-review.json',
-          rawFindingsPath: '.takt/findings/raw',
           manager: {
             persona: 'findings-manager',
             instruction: 'findings-manager',
@@ -1741,8 +1699,6 @@ describe('validateWorkflowConfig', () => {
         projectCwd: process.cwd(),
         inheritedFindingContract: {
           contract: {
-            ledgerPath: '.takt/findings/peer-review.json',
-            rawFindingsPath: '.takt/findings/raw',
             manager: {
               persona: 'findings-manager',
               instruction: 'findings-manager',
@@ -1774,8 +1730,6 @@ describe('validateWorkflowConfig', () => {
         projectCwd: process.cwd(),
         inheritedFindingContract: {
           contract: {
-            ledgerPath: '.takt/findings/peer-review.json',
-            rawFindingsPath: '.takt/findings/raw',
             manager: {
               persona: 'findings-manager',
               instruction: 'findings-manager',
@@ -1811,8 +1765,6 @@ describe('validateWorkflowConfig', () => {
         projectCwd: process.cwd(),
         inheritedFindingContract: {
           contract: {
-            ledgerPath: '.takt/findings/peer-review.json',
-            rawFindingsPath: '.takt/findings/raw',
             manager: {
               persona: 'findings-manager',
               instruction: 'findings-manager',
@@ -1825,11 +1777,9 @@ describe('validateWorkflowConfig', () => {
       })).not.toThrow();
     });
 
-    it('fails fast when a workflow declares its own finding_contract while also inheriting one from a workflow_call parent', () => {
+    it('accepts a local finding_contract while inheriting the parent authority', () => {
       const workflow = createWorkflow({
         findingContract: {
-          ledgerPath: '.takt/findings/own.json',
-          rawFindingsPath: '.takt/findings/own/raw',
           manager: {
             persona: 'findings-manager',
             instruction: 'findings-manager',
@@ -1842,8 +1792,6 @@ describe('validateWorkflowConfig', () => {
         projectCwd: process.cwd(),
         inheritedFindingContract: {
           contract: {
-            ledgerPath: '.takt/findings/parent.json',
-            rawFindingsPath: '.takt/findings/parent/raw',
             manager: {
               persona: 'findings-manager',
               instruction: 'findings-manager',
@@ -1853,9 +1801,7 @@ describe('validateWorkflowConfig', () => {
           ledgerStore: createFakeLedgerStore(),
           managerAuthority: 'standard',
         },
-      })).toThrow(
-        /declares its own finding_contract while also being called as a workflow_call subworkflow that inherits/,
-      );
+      })).not.toThrow();
     });
 
     it('fails fast when finding_contract.manager uses opencode without a model and the contract is inherited from a workflow_call parent', () => {
@@ -1866,8 +1812,6 @@ describe('validateWorkflowConfig', () => {
         provider: 'claude',
         inheritedFindingContract: {
           contract: {
-            ledgerPath: '.takt/findings/peer-review.json',
-            rawFindingsPath: '.takt/findings/raw',
             manager: {
               persona: 'findings-manager',
               instruction: 'findings-manager',
@@ -1889,8 +1833,6 @@ describe('validateWorkflowConfig', () => {
         provider: 'claude',
         inheritedFindingContract: {
           contract: {
-            ledgerPath: '.takt/findings/peer-review.json',
-            rawFindingsPath: '.takt/findings/raw',
             manager: {
               persona: 'findings-manager',
               instruction: 'findings-manager',

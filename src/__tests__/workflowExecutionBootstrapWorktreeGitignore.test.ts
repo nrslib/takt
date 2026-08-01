@@ -110,7 +110,7 @@ import {
 } from '../features/tasks/execute/workflowExecutionBootstrap.js';
 import type {
   WorkflowRunBootstrap,
-} from '../features/tasks/execute/workflowRunStorage.js';
+} from '../features/tasks/execute/workflowRunLifecycle.js';
 import { RunMetaManager } from '../features/tasks/execute/runMeta.js';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import {
@@ -154,12 +154,13 @@ function createRunBootstrap(
   return {
     runSlug,
     runPaths: buildRunPaths(cwd, runSlug),
+    startedAt: '2026-08-01T00:00:00.000Z',
+    sessionId: 'test-session-id',
     publishRunMeta(input): RunMetaManager {
       return new RunMetaManager(
         input.runPaths,
         input.task,
         input.workflowName,
-        'file',
         input.resumeSource,
         input.options,
       );

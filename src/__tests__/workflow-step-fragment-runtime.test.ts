@@ -88,8 +88,6 @@ function workflowSteps(fragmentName?: string): string {
     'workflow_config:',
     '  provider: claude',
     'finding_contract:',
-    '  ledger_path: .takt/findings/ledger.json',
-    '  raw_findings_path: .takt/findings/raw',
     '  manager:',
     '    persona: findings-manager',
     '    instruction: findings-manager',

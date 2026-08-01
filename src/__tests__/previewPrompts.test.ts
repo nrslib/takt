@@ -361,8 +361,6 @@ describe('previewPrompts', () => {
       name: 'finding-contract-preview',
       maxSteps: 1,
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           personaDisplayName: 'Findings Manager',
@@ -393,8 +391,6 @@ describe('previewPrompts', () => {
       name: 'finding-contract-preview',
       maxSteps: 1,
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'manager instruction',
@@ -433,8 +429,6 @@ describe('previewPrompts', () => {
       name: 'finding-contract-preview',
       maxSteps: 1,
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           personaDisplayName: 'Findings Manager',
@@ -467,8 +461,6 @@ describe('previewPrompts', () => {
       name: 'finding-contract-preview',
       maxSteps: 1,
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'manager instruction',
@@ -502,8 +494,6 @@ describe('previewPrompts', () => {
       name: 'finding-contract-preview',
       maxSteps: 1,
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           personaDisplayName: 'Findings Manager',
@@ -552,8 +542,6 @@ describe('previewPrompts', () => {
       name: 'finding-contract-preview',
       maxSteps: 1,
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'manager instruction',
@@ -594,8 +582,6 @@ describe('previewPrompts', () => {
       name: 'finding-contract-preview',
       maxSteps: 1,
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'manager instruction',

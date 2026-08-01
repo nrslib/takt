@@ -260,15 +260,12 @@ export class WorkflowEngine extends EventEmitter {
     // workflow_call の親から継承した Finding Contract があればそれを優先する。
     // 継承しないと子の parallel レビューが出す raw findings が親の台帳に届かず、
     // fix ステップへ渡らないまま reviewers ↔ fix が回り続ける（実測: 56周・9時間）。
-    // 自前 finding_contract と継承の同時指定は WorkflowValidator で設定エラーに
-    // しているため、ここでは「継承 or 自前」のどちらか一方だけが来る前提で良い。
+    // 親から継承した authority がある場合は、子の契約定義より優先する。
     this.findingContract = this.options.inheritedFindingContract?.contract ?? this.config.findingContract;
     this.findingManagerAuthority =
       this.options.inheritedFindingContract?.managerAuthority ?? 'standard';
     if (this.options.inheritedFindingContract !== undefined) {
       // 継承時は親と同一の FindingLedgerStore インスタンスをそのまま使う。
-      // ledger_path / raw_findings_path はワークフロー名に紐づくため、子が
-      // 自前で store を作り直すと親の when(findings.*) と別の台帳を見てしまう。
       this.findingLedgerStore = this.options.inheritedFindingContract.ledgerStore;
     } else if (this.findingContract !== undefined) {
       if (this.options.findingAuthorityResolver === undefined) {

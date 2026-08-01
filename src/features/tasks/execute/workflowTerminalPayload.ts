@@ -7,9 +7,6 @@ import {
   parseCanonicalWorkflowResumeFrame,
 } from '../../../shared/types/workflow-resume.js';
 import type { TraceReportMode } from './traceReport.js';
-import type {
-  BootstrapRecoverySeed,
-} from '../../../core/workflow/run/bootstrap-recovery-seed.js';
 import {
   buildWorkflowAbortSessionFinalization,
   buildWorkflowSuccessSessionFinalization,
@@ -32,11 +29,6 @@ export interface WorkflowTerminalPublicationContext {
   readonly traceReportMode: TraceReportMode;
   readonly promptLogPath?: string;
   readonly traceDiscovery?: WorkflowTraceDiscovery;
-  readonly metaSeed: {
-    readonly backend: BootstrapRecoverySeed['backend'];
-    readonly startedAt: string;
-    readonly resumeSource: BootstrapRecoverySeed['resumeSource'];
-  };
 }
 
 export interface WorkflowTerminalPublicationPayload {
@@ -55,7 +47,6 @@ export interface WorkflowTerminalPublicationPayload {
   readonly traceReportMode: TraceReportMode;
   readonly promptLogPath?: string;
   readonly traceDiscovery?: WorkflowTraceDiscovery;
-  readonly metaSeed: WorkflowTerminalPublicationContext['metaSeed'];
 }
 
 export interface WorkflowTerminalPayloadFactory {
@@ -166,28 +157,7 @@ function assembleWorkflowTerminalPublicationPayload(
     ...(input.traceDiscovery === undefined
       ? {}
       : { traceDiscovery: input.traceDiscovery }),
-    metaSeed: input.metaSeed,
   };
-}
-
-export function serializeWorkflowTerminalPublication(
-  payload: WorkflowTerminalPublicationPayload,
-): string {
-  return JSON.stringify(payload);
-}
-
-export function deserializeWorkflowTerminalPublication(
-  serialized: string,
-): WorkflowTerminalPublicationPayload {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(serialized) as unknown;
-  } catch (error) {
-    throw new Error('Workflow terminal publication is not valid JSON', {
-      cause: error,
-    });
-  }
-  return canonicalizeWorkflowTerminalPublicationPayload(parsed);
 }
 
 function canonicalizeWorkflowTerminalPublicationPayload(
@@ -222,7 +192,6 @@ function assertWorkflowTerminalPublicationPayload(
     'traceReportMode',
     'promptLogPath',
     'traceDiscovery',
-    'metaSeed',
   ], '$');
   requireNonEmptyString(payload.runSlug, '$.runSlug');
   requireNonEmptyString(payload.projectCwd, '$.projectCwd');
@@ -262,59 +231,6 @@ function assertWorkflowTerminalPublicationPayload(
   }
   if (payload.traceDiscovery !== undefined) {
     requireRecord(payload.traceDiscovery, '$.traceDiscovery');
-  }
-  assertTerminalMetaSeed(payload.metaSeed, payload);
-}
-
-function assertTerminalMetaSeed(
-  value: unknown,
-  payload: Readonly<Record<string, unknown>>,
-): void {
-  const seed = requireRecord(value, '$.metaSeed');
-  assertAllowedKeys(seed, [
-    'backend',
-    'startedAt',
-    'resumeSource',
-  ], '$.metaSeed');
-  if (
-    (seed.backend !== 'file' && seed.backend !== 'sqlite')
-    || typeof seed.startedAt !== 'string'
-    || !Number.isFinite(Date.parse(seed.startedAt))
-    || seed.startedAt !== requireRecord(
-      payload.sessionLog,
-      '$.sessionLog',
-    ).startTime
-  ) {
-    throw new TypeError('Workflow terminal payload metaSeed is invalid');
-  }
-  if (seed.resumeSource === null) {
-    return;
-  }
-  const resumeSource = requireRecord(
-    seed.resumeSource,
-    '$.metaSeed.resumeSource',
-  );
-  assertAllowedKeys(resumeSource, [
-    'mode',
-    'sourceRunSlug',
-  ], '$.metaSeed.resumeSource');
-  if (
-    (
-      resumeSource.mode !== 'requeue'
-      && resumeSource.mode !== 'retry'
-      && resumeSource.mode !== 'instruct'
-    )
-    || (
-      resumeSource.sourceRunSlug !== null
-      && (
-        typeof resumeSource.sourceRunSlug !== 'string'
-        || resumeSource.sourceRunSlug.length === 0
-      )
-    )
-  ) {
-    throw new TypeError(
-      'Workflow terminal payload metaSeed.resumeSource is invalid',
-    );
   }
 }
 

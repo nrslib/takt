@@ -13,7 +13,7 @@
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../agents/runner.js', () => ({
@@ -26,10 +26,14 @@ vi.mock('../infra/providers/index.js', () => ({
   getProvider: vi.fn((provider: string) => ({ supportsStructuredOutput: provider !== 'cursor' })),
 }));
 
-vi.mock('../core/workflow/phase-runner.js', () => ({
-  runReportPhase: vi.fn().mockResolvedValue(undefined),
-  runStatusJudgmentPhase: vi.fn().mockResolvedValue(undefined),
-}));
+vi.mock('../core/workflow/phase-runner.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/phase-runner.js')>();
+  return {
+    ...actual,
+    runReportPhase: vi.fn().mockResolvedValue(undefined),
+    runStatusJudgmentPhase: vi.fn().mockResolvedValue(undefined),
+  };
+});
 
 // 実装をそのまま通しつつ、WorkflowEngine が runner へ渡す deps（特に
 // workflowName — 継承時は台帳 store の正準名でなければならない）を観測する。
@@ -45,7 +49,8 @@ import { WorkflowEngine } from './helpers/workflow-engine.js';
 import type { WorkflowConfig } from '../core/models/index.js';
 import { runAgent } from '../agents/runner.js';
 import { makeRule, makeStep } from './test-helpers.js';
-import { createFindingLedgerStore, resolveFindingLedgerRoot } from '../core/workflow/findings/store.js';
+import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
+import { createTestFindingLedgerStore } from './helpers/finding-storage.js';
 import { createFindingConflictAdjudicationRunner } from '../core/workflow/findings/adjudication-runner.js';
 import { reserveFindingConflictAdjudication } from '../core/workflow/findings/adjudication-reservation.js';
 import {
@@ -68,6 +73,21 @@ function isAdjudicationSchema(outputSchema: unknown): boolean {
     && schemaText.includes('"finding_stale"')
     && schemaText.includes('"evidence_invalid"')
   );
+}
+
+function managerTaskManifest(instruction: string): Record<string, unknown> | undefined {
+  const match = /## Task manifest\s+```json\s+([\s\S]*?)\s+```/.exec(instruction);
+  if (match?.[1] === undefined) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(match[1]) as unknown;
+    return typeof parsed === 'object' && parsed !== null
+      ? parsed as Record<string, unknown>
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function conflictAdjudicationReservations(ledger: {
@@ -140,8 +160,16 @@ function reviewerExtraction(
   });
 }
 
-function getAuthoritativeLedgerPath(cwd: string): string {
-  return join(resolveFindingLedgerRoot(cwd), '.takt', 'findings', 'peer-review.json');
+function createLedgerStore(
+  cwd: string,
+  workflowName = 'adjudication-engine-test',
+): FindingLedgerStore {
+  return createTestFindingLedgerStore({
+    projectCwd: cwd,
+    runId: 'test-report-dir',
+    reportDir: join(cwd, '.takt', 'runs', 'test-report-dir', 'reports'),
+    workflowName,
+  });
 }
 
 function baseConfig(cwd: string, rules: ReturnType<typeof makeRule>[]): WorkflowConfig {
@@ -151,8 +179,6 @@ function baseConfig(cwd: string, rules: ReturnType<typeof makeRule>[]): Workflow
     initialStep: 'reviewers',
     provider: 'claude',
     findingContract: {
-      ledgerPath: '.takt/findings/peer-review.json',
-      rawFindingsPath: '.takt/findings/raw',
       manager: {
         persona: 'findings-manager',
         instruction: 'findings-manager',
@@ -191,9 +217,9 @@ describe('finding-conflict-adjudication engine detour', () => {
     }
   });
 
-  const seedLedger = (workflowName = 'adjudication-engine-test'): void => {
-    const ledgerPath = getAuthoritativeLedgerPath(cwd);
-    mkdirSync(dirname(ledgerPath), { recursive: true });
+  const seedLedger = async (
+    workflowName = 'adjudication-engine-test',
+  ): Promise<FindingLedgerStore> => {
     const evidence = verifiedFindingEvidenceFixture({
       cwd,
       path: 'src/a.ts',
@@ -257,7 +283,9 @@ describe('finding-conflict-adjudication engine detour', () => {
       rawRecoveryResults: [],
       interpretations: [],
     });
-    writeFileSync(ledgerPath, JSON.stringify(seededLedger, null, 2), 'utf-8');
+    const store = createLedgerStore(cwd, workflowName);
+    await store.updateLedger(() => ({ ledger: seededLedger, result: undefined }));
+    return store;
   };
 
   const rules = [
@@ -268,7 +296,7 @@ describe('finding-conflict-adjudication engine detour', () => {
   ];
 
   it('finding_stale adjudication resolves the finding, resolves the conflict, and returns to reviewers which then completes', async () => {
-    seedLedger();
+    await seedLedger();
 
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
       options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
@@ -303,8 +331,7 @@ describe('finding-conflict-adjudication engine detour', () => {
 
     expect(result.status).toBe('completed');
 
-    const ledgerPath = getAuthoritativeLedgerPath(cwd);
-    const ledger = JSON.parse(readFileSync(ledgerPath, 'utf-8')) as {
+    const ledger = createLedgerStore(cwd).loadLedger() as {
       findings: Array<{ id: string; status: string }>;
       conflicts: Array<{ id: string; status: string; adjudications?: unknown[] }>;
     };
@@ -319,7 +346,7 @@ describe('finding-conflict-adjudication engine detour', () => {
     // must land on the ABORT side exactly like undetermined (codex design).
     ['finding_valid'],
   ] as const)('%s adjudication without an actionable fix keeps the conflict active and routes to ABORT', async (outcome) => {
-    seedLedger();
+    await seedLedger();
 
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
       options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
@@ -352,8 +379,7 @@ describe('finding-conflict-adjudication engine detour', () => {
 
     expect(result.status).toBe('aborted');
 
-    const ledgerPath = getAuthoritativeLedgerPath(cwd);
-    const ledger = JSON.parse(readFileSync(ledgerPath, 'utf-8')) as {
+    const ledger = createLedgerStore(cwd).loadLedger() as {
       conflicts: Array<{ id: string; status: string; adjudications?: unknown[] }>;
     };
     expect(ledger.conflicts[0]?.status).toBe('active');
@@ -369,7 +395,7 @@ describe('finding-conflict-adjudication engine detour', () => {
   });
 
   it('runSingleIteration でも合成ステップが Unknown step にならず実行・遷移できる (codex B4)', async () => {
-    seedLedger();
+    await seedLedger();
 
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
       options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
@@ -411,7 +437,7 @@ describe('finding-conflict-adjudication engine detour', () => {
     expect(second.nextStep).toBe('reviewers');
     expect(second.isComplete).toBe(false);
 
-    const ledger = JSON.parse(readFileSync(getAuthoritativeLedgerPath(cwd), 'utf-8')) as {
+    const ledger = createLedgerStore(cwd).loadLedger() as {
       findings: Array<{ id: string; status: string }>;
       conflicts: Array<{ id: string; status: string }>;
     };
@@ -421,15 +447,8 @@ describe('finding-conflict-adjudication engine detour', () => {
 
   it('workflow_call 継承: 裁定 runner の workflowName は store の正準名（親名）を使い、台帳の workflowName が親名のまま保存される', async () => {
     // 親の台帳（workflowName: parent-workflow）を継承する子エンジンを模す。
-    seedLedger('parent-workflow');
-    const parentLedgerStore = createFindingLedgerStore({
-      projectCwd: cwd,
-      runId: 'test-report-dir',
-      reportDir: join(cwd, '.takt', 'runs', 'test-report-dir', 'reports'),
-      workflowName: 'parent-workflow',
-      ledgerPath: '.takt/findings/peer-review.json',
-      rawFindingsPath: '.takt/findings/raw',
-    });
+    await seedLedger('parent-workflow');
+    const parentLedgerStore = createLedgerStore(cwd, 'parent-workflow');
 
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
       options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
@@ -479,7 +498,7 @@ describe('finding-conflict-adjudication engine detour', () => {
 
     // 裁定適用と保存を経ても ledger.workflowName は親名のまま
     // （store の assertLedgerWorkflowName 検証を通る）。
-    const ledger = JSON.parse(readFileSync(getAuthoritativeLedgerPath(cwd), 'utf-8')) as {
+    const ledger = createLedgerStore(cwd, 'parent-workflow').loadLedger() as {
       workflowName: string;
       findings: Array<{ id: string; status: string }>;
       conflicts: Array<{ id: string; status: string }>;
@@ -490,7 +509,7 @@ describe('finding-conflict-adjudication engine detour', () => {
   });
 
   it('resume 相互作用: 裁定途中で中断しても lifecycle reservation が台帳に残り、再開後に同一 evidence で再裁定されない', async () => {
-    seedLedger();
+    await seedLedger();
 
     // 1走目: 裁定 LLM が中断相当の例外で死ぬ → run は runtime_error abort。
     // ただし lifecycle reservation は LLM 呼び出しの前に台帳へ記録済み。
@@ -514,7 +533,7 @@ describe('finding-conflict-adjudication engine detour', () => {
     }).run();
     expect(firstRun.status).toBe('aborted');
 
-    const ledgerAfterInterrupt = JSON.parse(readFileSync(getAuthoritativeLedgerPath(cwd), 'utf-8')) as {
+    const ledgerAfterInterrupt = createLedgerStore(cwd).loadLedger() as {
       lifecycleReservations: Array<{
         mutationId: string;
         context: { kind: string; originStep?: string | null };
@@ -549,6 +568,10 @@ describe('finding-conflict-adjudication engine detour', () => {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir-resume',
+      resumeSource: {
+        sourceRunSlug: 'test-report-dir',
+        resumeMode: 'retry',
+      },
     }).run();
     expect(secondRun.status).toBe('aborted');
     const adjudicatorCalls = vi.mocked(runAgent).mock.calls.filter(([, , options]) => (
@@ -563,16 +586,8 @@ describe('finding-conflict-adjudication engine detour', () => {
     // から直接始まると previousStep が無く、旧実装は「配線元の最初」
     // （reviewers）へ誤遷移していた — reservation に永続化した originStep が
     // final-gate へ正しく戻す。
-    const ledgerPath = getAuthoritativeLedgerPath(cwd);
-    seedLedger();
-    const ledgerStore = createFindingLedgerStore({
-      projectCwd: cwd,
-      runId: 'test-report-dir',
-      reportDir: join(cwd, '.takt', 'runs', 'test-report-dir', 'reports'),
-      workflowName: 'adjudication-engine-test',
-      ledgerPath: '.takt/findings/peer-review.json',
-      rawFindingsPath: '.takt/findings/raw',
-    });
+    await seedLedger();
+    const ledgerStore = createLedgerStore(cwd);
     const reservation = await reserveFindingConflictAdjudication({
       ledgerStore,
       conflictId: 'C-FA2947446963',
@@ -646,7 +661,7 @@ describe('finding-conflict-adjudication engine detour', () => {
     expect(result.stepOutputs.has('final-gate')).toBe(true);
     expect(result.stepOutputs.has('reviewers')).toBe(false);
 
-    const ledger = JSON.parse(readFileSync(ledgerPath, 'utf-8')) as {
+    const ledger = createLedgerStore(cwd).loadLedger() as {
       findings: Array<{ status: string }>;
       conflicts: Array<{ status: string; adjudications?: unknown[] }>;
       lifecycleReservations: Array<{
@@ -674,16 +689,8 @@ describe('finding-conflict-adjudication engine detour', () => {
     // R1 テストと同じ複数配線構成だが、pending reservation に originStep が無い。
     // previousStep も runner 由来の origin も無く、配線元が
     // 2つで曖昧 — 推測して誤遷移する代わりに ABORT へ落とす。
-    const ledgerPath = getAuthoritativeLedgerPath(cwd);
-    seedLedger();
-    const ledgerStore = createFindingLedgerStore({
-      projectCwd: cwd,
-      runId: 'test-report-dir',
-      reportDir: join(cwd, '.takt', 'runs', 'test-report-dir', 'reports'),
-      workflowName: 'adjudication-engine-test',
-      ledgerPath: '.takt/findings/peer-review.json',
-      rawFindingsPath: '.takt/findings/raw',
-    });
+    await seedLedger();
+    const ledgerStore = createLedgerStore(cwd);
     const reservation = await reserveFindingConflictAdjudication({
       ledgerStore,
       conflictId: 'C-FA2947446963',
@@ -748,7 +755,7 @@ describe('finding-conflict-adjudication engine detour', () => {
   });
 
   it('R2(a): rate_limited → 同一 run の fallback 再実行が予約を引き継ぎ、代替 provider で裁定が完走する', async () => {
-    seedLedger();
+    await seedLedger();
 
     let adjudicationCallCount = 0;
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
@@ -799,7 +806,7 @@ describe('finding-conflict-adjudication engine detour', () => {
     ));
     expect(adjudicationCalls[1]![2]?.resolvedProvider).toBe('codex');
 
-    const ledger = JSON.parse(readFileSync(getAuthoritativeLedgerPath(cwd), 'utf-8')) as {
+    const ledger = createLedgerStore(cwd).loadLedger() as {
       findings: Array<{ status: string }>;
       conflicts: Array<{ status: string; adjudications?: unknown[] }>;
       lifecycleReservations: Array<{
@@ -823,7 +830,7 @@ describe('finding-conflict-adjudication engine detour', () => {
   });
 
   it('R2(a) 変形: structured output 非対応 provider（cursor）への fallback でフェンス方式の指示注入と正規化が代替 provider 基準で行われる', async () => {
-    seedLedger();
+    await seedLedger();
 
     let adjudicationCallCount = 0;
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
@@ -889,7 +896,7 @@ describe('finding-conflict-adjudication engine detour', () => {
     expect(adjudicationCalls[1]![1]).not.toContain('"findingTransition"');
 
     // フェンス JSON の正規化（cursor 基準）を経て裁定が適用されている
-    const ledger = JSON.parse(readFileSync(getAuthoritativeLedgerPath(cwd), 'utf-8')) as {
+    const ledger = createLedgerStore(cwd).loadLedger() as {
       findings: Array<{ status: string }>;
       conflicts: Array<{ status: string; adjudications?: unknown[] }>;
       lifecycleReservations: Array<{
@@ -1041,8 +1048,6 @@ describe('finding-conflict-adjudication engine detour', () => {
       initialStep: 'reviewers',
       provider: 'claude',
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -1063,6 +1068,9 @@ describe('finding-conflict-adjudication engine detour', () => {
               name: 'sub-review',
               persona: 'reviewer',
               instruction: 'Review.',
+              outputContracts: [
+                { name: 'review.md', format: 'resolved facet body', formatRef: 'review-finding-contract' },
+              ],
               rules: [
                 makeRule('needs adjudication', 'finding-conflict-adjudication'),
                 makeRule('approved', 'COMPLETE'),
@@ -1098,8 +1106,6 @@ describe('finding-conflict-adjudication engine detour', () => {
       initialStep: 'reviewers',
       provider: 'claude',
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -1148,25 +1154,76 @@ describe('finding-conflict-adjudication engine detour', () => {
   });
 
   it('finding_valid + actionableFix: conflict をレビュア側支持で解消し fix へ遷移、修正後の reviewers で COMPLETE まで到達する', async () => {
-    seedLedger();
+    await seedLedger();
 
     let reviewerCallCount = 0;
+    let fixApplied = false;
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
       options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
       if (persona === 'findings-manager') {
-        // run 1 の manager: 残余 raw なし・active conflict の裁定待ちだけがある。
-        // keep（未解決のまま）を返し、裁定は adjudication ステップに委ねる。
+        const manifest = managerTaskManifest(instruction);
+        const rawFindings = Array.isArray(manifest?.rawFindings)
+          ? manifest.rawFindings.filter(
+              (item): item is Record<string, unknown> => (
+                typeof item === 'object' && item !== null
+              ),
+            )
+          : [];
+        if (typeof manifest?.taskId === 'string' && rawFindings.length > 0) {
+          return {
+            persona,
+            status: 'done',
+            content: '',
+            structuredOutput: {
+              taskId: manifest.taskId,
+              decisions: rawFindings.map((raw) => ({
+                componentId: raw.componentId,
+                rawFindingId: raw.rawFindingId,
+                decision: typeof raw.rawFindingId === 'string'
+                  && raw.rawFindingId.endsWith('raw-confirm')
+                  ? 'resolved'
+                  : 'same',
+                findingId: 'F-0001',
+                evidence: typeof raw.rawFindingId === 'string'
+                  && raw.rawFindingId.endsWith('raw-confirm')
+                  ? 'The null guard now prevents the disputed dereference.'
+                  : 'This observation is the existing disputed finding.',
+              })),
+            },
+            timestamp: new Date('2026-06-13T03:00:02.000Z'),
+          };
+        }
+        const candidateIntents = Array.isArray(manifest?.candidateIntents)
+          ? manifest.candidateIntents.filter(
+              (item): item is Record<string, unknown> => (
+                typeof item === 'object' && item !== null
+              ),
+            )
+          : [];
+        const conflictIntent = candidateIntents.find((intent) => intent.kind === 'conflict');
+        if (
+          typeof manifest?.taskId !== 'string'
+          || typeof conflictIntent?.intentId !== 'string'
+          || typeof conflictIntent.entityId !== 'string'
+        ) {
+          throw new Error(`Expected current conflict control task: ${instruction}`);
+        }
+        // active conflict は keep とし、合成 adjudication ステップへ委ねる。
         return {
           persona,
           status: 'done',
           content: '',
           structuredOutput: {
-            rawDecisions: [],
-            disputeDecisions: [],
-            conflictDecisions: [{ conflictId: 'C-FA2947446963', decision: 'keep', evidence: 'Reviewers still disagree.' }],
-            invalidateDecisions: [],
-            duplicateDecisions: [],
-            dismissDecisions: [],
+            taskId: manifest.taskId,
+            evaluations: [{
+              intentId: conflictIntent.intentId,
+              result: {
+                kind: 'keep',
+                conflictId: conflictIntent.entityId,
+                evidence: 'Reviewers still disagree.',
+              },
+            }],
+            selectedIntentId: conflictIntent.intentId,
           },
           timestamp: new Date('2026-06-13T00:00:02.000Z'),
         };
@@ -1188,13 +1245,16 @@ describe('finding-conflict-adjudication engine detour', () => {
       }
       if (schemaText.includes('"rawFindings"')) {
         reviewerCallCount += 1;
-        if (reviewerCallCount === 1) {
-          // run 1: 新しい raw は無い（conflict の裁定待ちだけの状態を再現）。
+        if (!fixApplied) {
+          // fix 前: 新しい raw は無い（conflict の裁定待ちだけの状態を再現）。
           return {
             persona,
             status: 'done',
             content: 'Review report body.',
-            structuredOutput: { rawFindings: [] },
+            structuredOutput: {
+              reportContent: 'Review report body.',
+              rawFindings: [],
+            },
             timestamp: new Date('2026-06-13T00:00:01.000Z'),
           };
         }
@@ -1204,6 +1264,7 @@ describe('finding-conflict-adjudication engine detour', () => {
           status: 'done',
           content: 'Confirmed the fix.',
           structuredOutput: {
+            reportContent: 'Confirmed the fix.',
             rawFindings: [reviewerExtraction({
               rawFindingId: 'raw-confirm',
               familyTag: 'bug',
@@ -1223,6 +1284,9 @@ describe('finding-conflict-adjudication engine detour', () => {
         };
       }
       // fix ステップ本体
+      if (persona === 'coder') {
+        fixApplied = true;
+      }
       return {
         persona,
         status: 'done',
@@ -1237,8 +1301,6 @@ describe('finding-conflict-adjudication engine detour', () => {
       initialStep: 'reviewers',
       provider: 'claude',
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -1275,13 +1337,19 @@ describe('finding-conflict-adjudication engine detour', () => {
       ],
     };
 
-    const result = await new WorkflowEngine(config, cwd, 'task', {
+    const engine = new WorkflowEngine(config, cwd, 'task', {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-    }).run();
+    });
+    const abortReasons: string[] = [];
+    engine.on('workflow:abort', (_state, reason) => abortReasons.push(reason));
+    const result = await engine.run();
 
-    expect(result.status).toBe('completed');
+    expect(
+      result.status,
+      JSON.stringify({ abortReasons, reviewerCallCount }, null, 2),
+    ).toBe('completed');
     // 裁定後の遷移先が fix（reviewers 再実行ではなく直接 fix ルート）
     expect(result.stepOutputs.has('fix')).toBe(true);
 
@@ -1300,7 +1368,7 @@ describe('finding-conflict-adjudication engine detour', () => {
     const adjudicationOptions = calls[adjudicationCallIndex]![2];
     expect(adjudicationOptions?.personaPath).toBe(supervisorPersonaPath(cwd));
 
-    const ledger = JSON.parse(readFileSync(getAuthoritativeLedgerPath(cwd), 'utf-8')) as {
+    const ledger = createLedgerStore(cwd).loadLedger() as {
       findings: Array<{ id: string; status: string; suggestion?: string }>;
       conflicts: Array<{
         id: string;
@@ -1321,11 +1389,9 @@ describe('finding-conflict-adjudication engine detour', () => {
     expect(finding?.suggestion).toContain('[adjudicated fix] Add the missing null guard');
   });
 
-  it('レビュア突き返し: correction で persists に直っても taint は消えず、target へ吸収されずに conflict + provisional に着地する（攻撃4対策）', async () => {
+  it('レビュア突き返し: correction で persists に直っても taint は消えず、target を変えず監査だけに残す（攻撃4対策）', async () => {
     // conflict なし・open F-0001 だけの台帳。reviewer が同じ問題を relation=new で
     // 再報告してくる（弱いモデルの典型挙動）ケース。
-    const ledgerPath = getAuthoritativeLedgerPath(cwd);
-    mkdirSync(dirname(ledgerPath), { recursive: true });
     const evidence = verifiedFindingEvidenceFixture({
       cwd,
       path: 'src/secret.ts',
@@ -1346,6 +1412,7 @@ describe('finding-conflict-adjudication engine detour', () => {
         revision: 1,
         severity: 'high',
         title: 'Secret is logged',
+        target: { kind: 'code', paths: ['src/secret.ts'] },
         evidenceIds: [evidence.record.evidenceId],
         description: 'The code logs a token.',
         reviewers: ['review'],
@@ -1363,11 +1430,14 @@ describe('finding-conflict-adjudication engine detour', () => {
       rawRecoveryResults: [],
       interpretations: [],
     });
-    writeFileSync(ledgerPath, JSON.stringify(seededLedger, null, 2), 'utf-8');
+    await createLedgerStore(cwd).updateLedger(() => ({
+      ledger: seededLedger,
+      result: undefined,
+    }));
 
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
       options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
-      if (instruction.includes('contradictory relation/targetFindingId labeling')) {
+      if (instruction.includes('contradictory relation/targetFindingIds labeling')) {
         // 突き返し呼び出し: relation を persists に直して全量再出力
         const rawExcerpt = 'Token logging is still present, observed at a new line.';
         return {
@@ -1375,6 +1445,7 @@ describe('finding-conflict-adjudication engine detour', () => {
           status: 'done',
           content: rawExcerpt,
           structuredOutput: {
+            reportContent: rawExcerpt,
             rawFindings: [reviewerExtraction({
               rawFindingId: 'raw-1',
               familyTag: 'security',
@@ -1421,6 +1492,7 @@ describe('finding-conflict-adjudication engine detour', () => {
           status: 'done',
           content: rawExcerpt,
           structuredOutput: {
+            reportContent: rawExcerpt,
             rawFindings: [reviewerExtraction({
               rawFindingId: 'raw-1',
               familyTag: 'security',
@@ -1450,8 +1522,6 @@ describe('finding-conflict-adjudication engine detour', () => {
       initialStep: 'review',
       provider: 'claude',
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -1480,35 +1550,44 @@ describe('finding-conflict-adjudication engine detour', () => {
     }).run();
 
     // correction で persists に直っても taint は消えない（攻撃4:
-    // persists 洗浄の防止）。targetFindingId が書かれているだけでは F-0001 に
-    // 吸収されず、manager 提案（open_conflict）に従い conflict + provisional に
-    // 着地する。provisional が残るため COMPLETE はエンジン最終不変条件で拒否
-    // される（fail-fast abort）。
-    expect(result.status).toBe('aborted');
+    // persists 洗浄の防止）。曖昧起源の lifecycle claim は product finding を
+    // 変更せず、独立 finding / conflict / provisional を増殖させず監査だけに残す。
+    expect(result.status).toBe('completed');
     // 突き返しが1回だけ走った
     const regenerationCalls = vi.mocked(runAgent).mock.calls.filter(([, instruction]) => (
-      instruction.includes('contradictory relation/targetFindingId labeling')
+      instruction.includes('contradictory relation/targetFindingIds labeling')
     ));
     expect(regenerationCalls).toHaveLength(1);
 
-    const ledger = JSON.parse(readFileSync(ledgerPath, 'utf-8')) as {
+    const ledger = createLedgerStore(cwd).loadLedger() as {
       findings: Array<{ id: string; status: string; rawFindingIds: string[]; provisional?: { kind: string } }>;
       conflicts: Array<{ status: string; findingIds: string[] }>;
+      rawFindings: Array<{ rawFindingId: string; relation: string; targetFindingId: string | null }>;
     };
     // F-0001 は不変（rawFindingIds へも合流していない = 洗浄されていない）。
     const target = ledger.findings.find((f) => f.id === 'F-0001');
     expect(target?.status).toBe('open');
     expect(target?.rawFindingIds).toEqual(['raw-existing']);
-    // 観測は provisional として保持され、target との active conflict が立つ。
-    const provisional = ledger.findings.find((f) => f.provisional !== undefined);
-    expect(provisional?.status).toBe('open');
-    expect(provisional?.provisional?.kind).toBe('raw-meaning-ambiguous');
-    expect(ledger.conflicts.some((c) => c.status === 'active' && c.findingIds.includes('F-0001'))).toBe(true);
+    expect(ledger.findings.some((f) => f.provisional !== undefined)).toBe(false);
+    expect(ledger.conflicts).toEqual([]);
+    expect(ledger.rawFindings.some((raw) => (
+      raw.rawFindingId.endsWith(':raw-1')
+      && raw.relation === 'persists'
+      && raw.targetFindingId === 'F-0001'
+    ))).toBe(true);
+
+    const reportPath = join(cwd, '.takt', 'runs', 'test-report-dir', 'reports', 'findings-manager-validation.review.json');
+    const report = JSON.parse(readFileSync(reportPath, 'utf-8')) as {
+      unsupportedRawFindings?: Array<{ rawFindingId: string; targetFindingId: string; evidence: string }>;
+    };
+    expect(report.unsupportedRawFindings?.some((entry) => (
+      entry.rawFindingId.endsWith(':raw-1')
+      && entry.targetFindingId === 'F-0001'
+      && entry.evidence.includes('recorded for audit only')
+    ))).toBe(true);
   });
 
-  it('レビュア突き返し: 突き返し後も relation=new のままなら確定 finding にせず gate-blocking provisional として台帳に残す', async () => {
-    const ledgerPath = getAuthoritativeLedgerPath(cwd);
-    mkdirSync(dirname(ledgerPath), { recursive: true });
+  it('レビュア突き返し: 突き返し後も relation=new + target のままなら product finding を増やさず監査だけに残す', async () => {
     const evidence = verifiedFindingEvidenceFixture({
       cwd,
       path: 'src/secret.ts',
@@ -1529,6 +1608,7 @@ describe('finding-conflict-adjudication engine detour', () => {
         revision: 1,
         severity: 'high',
         title: 'Secret is logged',
+        target: { kind: 'code', paths: ['src/secret.ts'] },
         evidenceIds: [evidence.record.evidenceId],
         description: 'The code logs a token.',
         reviewers: ['review'],
@@ -1546,7 +1626,10 @@ describe('finding-conflict-adjudication engine detour', () => {
       rawRecoveryResults: [],
       interpretations: [],
     });
-    writeFileSync(ledgerPath, JSON.stringify(seededLedger, null, 2), 'utf-8');
+    await createLedgerStore(cwd).updateLedger(() => ({
+      ledger: seededLedger,
+      result: undefined,
+    }));
 
     const incoherentRawExcerpt = 'Token logging is still present, observed at a new line.';
     const incoherentOutput = {
@@ -1568,13 +1651,16 @@ describe('finding-conflict-adjudication engine detour', () => {
     };
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
       options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
-      if (instruction.includes('contradictory relation/targetFindingId labeling')) {
+      if (instruction.includes('contradictory relation/targetFindingIds labeling')) {
         // 突き返しでも直さない（relation=new のまま返してくる）
         return {
           persona,
           status: 'done',
           content: incoherentRawExcerpt,
-          structuredOutput: incoherentOutput,
+          structuredOutput: {
+            reportContent: incoherentRawExcerpt,
+            ...incoherentOutput,
+          },
           timestamp: new Date('2026-06-13T00:00:02.000Z'),
         };
       }
@@ -1602,7 +1688,10 @@ describe('finding-conflict-adjudication engine detour', () => {
           persona,
           status: 'done',
           content: incoherentRawExcerpt,
-          structuredOutput: incoherentOutput,
+          structuredOutput: {
+            reportContent: incoherentRawExcerpt,
+            ...incoherentOutput,
+          },
           timestamp: new Date('2026-06-13T00:00:01.000Z'),
         };
       }
@@ -1620,8 +1709,6 @@ describe('finding-conflict-adjudication engine detour', () => {
       initialStep: 'review',
       provider: 'claude',
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -1649,27 +1736,34 @@ describe('finding-conflict-adjudication engine detour', () => {
       reportDirName: 'test-report-dir',
     }).run();
 
-    // 直らなかった raw は drop されず provisional として台帳に残り、
-    // COMPLETE はエンジン最終不変条件で拒否される。
-    expect(result.status).toBe('aborted');
+    // 直らなかった raw は監査 raw として残るが、曖昧起源の lifecycle claim に
+    // product finding を作成・変更する権限はないため通常完了できる。
+    expect(result.status).toBe('completed');
 
-    const ledger = JSON.parse(readFileSync(ledgerPath, 'utf-8')) as {
+    const ledger = createLedgerStore(cwd).loadLedger() as {
       findings: Array<{ id: string; rawFindingIds: string[]; provisional?: { kind: string } }>;
+      conflicts: Array<unknown>;
+      rawFindings: Array<{ rawFindingId: string; relation: string; targetFindingId: string | null }>;
     };
-    // 確定 finding としては立たず、F-0001 にも合流していない（不採用）。
-    // ただし監査 JSON だけに残して台帳から消すこともない — provisional が立つ。
+    // 確定 finding としては立たず、F-0001 にも合流していない。
     const target = ledger.findings.find((f) => f.id === 'F-0001');
     expect(target?.rawFindingIds).toEqual(['raw-existing']);
-    const provisional = ledger.findings.find((f) => f.provisional !== undefined);
-    expect(provisional?.provisional?.kind).toBe('raw-meaning-ambiguous');
+    expect(ledger.findings.some((f) => f.provisional !== undefined)).toBe(false);
+    expect(ledger.conflicts).toEqual([]);
+    expect(
+      ledger.rawFindings.some((raw) => raw.rawFindingId.endsWith(':raw-1')),
+      JSON.stringify(ledger.rawFindings, null, 2),
+    ).toBe(true);
 
-    // 検証レポートに provisional 着地の監査記録が残る
+    // 検証レポートに audit-only の記録が残る。
     const reportPath = join(cwd, '.takt', 'runs', 'test-report-dir', 'reports', 'findings-manager-validation.review.json');
     const report = JSON.parse(readFileSync(reportPath, 'utf-8')) as {
-      provisionalLandings?: Array<{ kind: string; sourceRawFindingIds: string[] }>;
+      unsupportedRawFindings?: Array<{ rawFindingId: string; targetFindingId: string; evidence: string }>;
     };
-    expect(report.provisionalLandings?.some((landing) => (
-      landing.sourceRawFindingIds.some((id) => id.endsWith(':raw-1'))
+    expect(report.unsupportedRawFindings?.some((entry) => (
+      entry.rawFindingId.endsWith(':raw-1')
+      && entry.targetFindingId === 'F-0001'
+      && entry.evidence.includes('recorded for audit only')
     ))).toBe(true);
   });
 });

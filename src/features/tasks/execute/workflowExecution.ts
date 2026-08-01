@@ -43,9 +43,9 @@ import {
 import { USAGE_MISSING_REASONS } from '../../../core/logging/contracts.js';
 import { createPullRequestContext } from '../../../core/workflow/pr-context.js';
 import {
-  createWorkflowRunComposition,
+  createWorkflowRunLifecycle,
   type WorkflowRunHandle,
-} from './workflowRunStorage.js';
+} from './workflowRunLifecycle.js';
 import {
   RunCleanupError,
   RunLiveDeliveryError,
@@ -211,15 +211,14 @@ async function executeWorkflowInternal(
     projectCwd: options.projectCwd,
     lookupCwd: cwd,
   });
-  const runStorageComposition = createWorkflowRunComposition({
+  const runLifecycle = createWorkflowRunLifecycle({
     cwd,
-    projectCwd: options.projectCwd,
   });
   const availableSourceLineage = resolveAvailableSourceLineage(
     cwd,
     options.resumeSource,
   );
-  const activeRun = await runStorageComposition.storage.beginRun({
+  const activeRun = await runLifecycle.lifecycle.beginRun({
     workflowConfig,
     task,
     ...(options.reportDirName === undefined
@@ -280,16 +279,6 @@ async function executeWorkflowInternal(
     sessionId: activeRun.bootstrap.sessionId,
     ndjsonLogPath: bootstrap.ndjsonLogPath,
     traceReportMode: bootstrap.traceReportMode,
-    metaSeed: {
-      backend: activeRun.bootstrap.backend,
-      startedAt: activeRun.bootstrap.startedAt,
-      resumeSource: publishedResumeSource === undefined
-        ? null
-        : {
-            mode: publishedResumeSource.resumeMode,
-            sourceRunSlug: publishedResumeSource.sourceRunSlug ?? null,
-          },
-    },
     ...(bootstrap.promptLogPath === undefined
       ? {}
       : { promptLogPath: bootstrap.promptLogPath }),
@@ -520,7 +509,7 @@ async function executeWorkflowInternal(
     if (eventBridge !== undefined && stagedAbort === undefined) {
       if (runExecution === undefined) {
         terminalizationErrors.push(
-          new Error('Workflow event bridge exists without run storage'),
+          new Error('Workflow event bridge exists without a run lifecycle'),
         );
       } else {
         const activeEventBridge = eventBridge;
@@ -690,16 +679,6 @@ async function terminalizeBootstrapFailure(input: {
     sessionId,
     ndjsonLogPath,
     traceReportMode: 'redacted',
-    metaSeed: {
-      backend: input.activeRun.bootstrap.backend,
-      startedAt: input.activeRun.bootstrap.startedAt,
-      resumeSource: input.resumeSource === undefined
-        ? null
-        : {
-            mode: input.resumeSource.resumeMode,
-            sourceRunSlug: input.resumeSource.sourceRunSlug ?? null,
-          },
-    },
   });
   const payload = terminalPayloads.create({
     status: 'failed',

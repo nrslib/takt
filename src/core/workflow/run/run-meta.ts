@@ -3,7 +3,6 @@ import { resolve } from 'node:path';
 import { isPathInside, isValidReportDirName } from '../../../shared/utils/index.js';
 import { getErrorMessage } from '../../../shared/utils/error.js';
 import type { WorkflowResumePoint } from '../../models/types.js';
-import type { RunStorageBackend } from '../../models/config-types.js';
 import { parseWorkflowResumePoint } from '../resume-point-codec.js';
 import type { WorkflowTraceDiscovery } from '../observability/traceDiscovery.js';
 import { buildRunPaths } from './run-paths.js';
@@ -32,7 +31,6 @@ export interface RunMeta {
   reportDirectory: string;
   contextDirectory: string;
   logsDirectory: string;
-  storageBackend: RunStorageBackend;
   status: 'running' | 'completed' | 'aborted' | 'failed';
   reason?: string;
   startTime: string;
@@ -51,7 +49,6 @@ export interface RunMeta {
   operationJournalRunSlug?: string;
   operationClaimToken?: string;
   prContext?: PullRequestContext;
-  terminalPublicationId?: string;
 }
 
 export const RESUMABLE_RUN_STATUSES = Object.freeze([
@@ -74,7 +71,6 @@ interface RawRunMeta extends Omit<
   | 'operationJournalRunSlug'
   | 'operationClaimToken'
   | 'prContext'
-  | 'terminalPublicationId'
 > {
   resumePoint?: unknown;
   resume_point?: unknown;
@@ -84,7 +80,6 @@ interface RawRunMeta extends Omit<
   operation_journal_run_slug?: string;
   operation_claim_token?: string;
   pr_context?: unknown;
-  terminal_publication_id?: string;
 }
 
 export type RunMetaWarningHandler = (warning: string) => void;
@@ -100,7 +95,6 @@ function normalizeRunMeta(value: unknown): RunMeta {
     operation_journal_run_slug: persistedOperationJournalRunSlug,
     operation_claim_token: persistedOperationClaimToken,
     pr_context: persistedPrContext,
-    terminal_publication_id: persistedTerminalPublicationId,
     ...baseMeta
   } = raw;
   const rawResumePoint = camelResumePoint ?? persistedResumePoint;
@@ -126,9 +120,6 @@ function normalizeRunMeta(value: unknown): RunMeta {
     ...(persistedPrContext === undefined
       ? {}
       : { prContext: decodePullRequestContext(persistedPrContext) }),
-    ...(persistedTerminalPublicationId === undefined
-      ? {}
-      : { terminalPublicationId: persistedTerminalPublicationId }),
   };
 }
 
@@ -164,10 +155,6 @@ export function readRunMeta(metaPath: string, onWarning?: RunMetaWarningHandler)
 
 function parseRawRunMeta(value: unknown): RawRunMeta {
   const raw = requireRecord(value, 'Run metadata');
-  const storageBackend = raw.storageBackend;
-  if (storageBackend !== 'file' && storageBackend !== 'sqlite') {
-    throw new Error('Run metadata storageBackend must be "file" or "sqlite"');
-  }
   const status = raw.status;
   if (
     status !== 'running'
@@ -185,7 +172,6 @@ function parseRawRunMeta(value: unknown): RawRunMeta {
     reportDirectory: requiredString(raw.reportDirectory, 'reportDirectory'),
     contextDirectory: requiredString(raw.contextDirectory, 'contextDirectory'),
     logsDirectory: requiredString(raw.logsDirectory, 'logsDirectory'),
-    storageBackend,
     status,
     startTime: requiredString(raw.startTime, 'startTime'),
     ...(optionalString(raw.reason, 'reason')),
@@ -215,10 +201,6 @@ function parseRawRunMeta(value: unknown): RawRunMeta {
     )),
     ...(optionalString(raw.operation_claim_token, 'operation_claim_token')),
     ...(raw.pr_context === undefined ? {} : { pr_context: raw.pr_context }),
-    ...(optionalString(
-      raw.terminal_publication_id,
-      'terminal_publication_id',
-    )),
   };
   return result;
 }

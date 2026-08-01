@@ -1,10 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { assembleManagerOutput } from '../core/workflow/findings/decision-assembly.js';
 import {
+  normalizeEngineDerivedWaiverConflicts,
   normalizeMergedManagerPlan,
   rejectConflictTouchedDuplicates,
   transferSupersededMatches,
 } from '../core/workflow/findings/manager-plan-normalization.js';
+import { canonicalizeFindingManagerOutput } from '../core/workflow/findings/canonicalize.js';
+import {
+  createEngineDerivedWaiverConflict,
+  createEngineDerivedWaiverDisputeNote,
+  isEngineDerivedWaiverConflict,
+} from '../core/workflow/findings/waiver-conflict.js';
 import { validateFindingManagerOutput } from '../core/workflow/findings/manager-output-validation.js';
 import { reconcileCommitPlan } from '../core/workflow/findings/manager-commit-finalization.js';
 import {
@@ -487,6 +494,108 @@ describe('normalizeMergedManagerPlan（保存直前のフル正規化）', () =>
     expect(result.output.conflicts).toHaveLength(1);
     expect(result.output.conflicts[0]!.rawFindingIds.sort()).toEqual(['raw-a', 'raw-b']);
     expect(result.rejections.some((rejection) => rejection.includes('already referenced by another conflict'))).toBe(true);
+  });
+
+  it('late merge で raw-backed conflict が後着したら derived marker を継承せず plain conflict を正本にする', () => {
+    const result = normalizeMergedManagerPlan({
+      output: outputWith({
+        matches: [{ findingId: 'F-0001', rawFindingIds: ['raw-match'] }],
+        conflicts: [
+          createEngineDerivedWaiverConflict('F-0001'),
+          {
+            findingIds: ['F-0001'],
+            rawFindingIds: ['raw-conflict'],
+            description: 'Reviewer evidence conflicts with F-0001.',
+          },
+        ],
+        disputeNotes: [createEngineDerivedWaiverDisputeNote({
+          findingId: 'F-0001',
+          reason: 'frozen contract',
+          evidence: 'src/types.ts:94',
+        })],
+      }),
+      activeConflictFindingIds: new Set(),
+    });
+
+    expect(result.output.conflicts).toHaveLength(1);
+    expect(result.output.conflicts[0]?.rawFindingIds).toEqual(['raw-conflict']);
+    expect(result.output.conflicts[0]?.description).toBe('Reviewer evidence conflicts with F-0001.');
+    expect(isEngineDerivedWaiverConflict(result.output.conflicts[0]!)).toBe(false);
+    expect(Reflect.ownKeys(result.output.conflicts[0]!).every((key) => typeof key === 'string')).toBe(true);
+    expect([
+      ...result.output.matches.flatMap((match) => match.rawFindingIds),
+      ...result.output.conflicts.flatMap((conflict) => conflict.rawFindingIds),
+    ].sort()).toEqual(['raw-conflict', 'raw-match']);
+  });
+
+  it('rawless derived と部分重複する multi-finding raw-backed conflict は拒否せず plain 正本として残す', () => {
+    const result = normalizeMergedManagerPlan({
+      output: outputWith({
+        matches: [{ findingId: 'F-0001', rawFindingIds: ['raw-match'] }],
+        conflicts: [
+          createEngineDerivedWaiverConflict('F-0001'),
+          {
+            findingIds: ['F-0001', 'F-0002'],
+            rawFindingIds: ['raw-recovery-conflict'],
+            description: 'Recovery evidence spans F-0001 and F-0002.',
+          },
+        ],
+        disputeNotes: [createEngineDerivedWaiverDisputeNote({
+          findingId: 'F-0001',
+          reason: 'frozen contract',
+          evidence: 'src/types.ts:94',
+        })],
+      }),
+      activeConflictFindingIds: new Set(),
+    });
+
+    expect(result.output.conflicts).toEqual([{
+      findingIds: ['F-0001', 'F-0002'],
+      rawFindingIds: ['raw-recovery-conflict'],
+      description: 'Recovery evidence spans F-0001 and F-0002.',
+    }]);
+    expect(isEngineDerivedWaiverConflict(result.output.conflicts[0]!)).toBe(false);
+    expect(result.rejections.some((rejection) => rejection.includes('already referenced'))).toBe(false);
+  });
+
+  it('canonicalize の resolution collision が derived conflict に raw を足すとき plain raw-backed conflict へ変換する', () => {
+    const output = canonicalizeFindingManagerOutput(outputWith({
+      matches: [{ findingId: 'F-0001', rawFindingIds: ['raw-match'] }],
+      resolvedFindings: [{
+        findingId: 'F-0001',
+        rawFindingIds: ['raw-confirm'],
+        evidence: 'The issue is fixed.',
+      }],
+      conflicts: [createEngineDerivedWaiverConflict('F-0001')],
+      disputeNotes: [createEngineDerivedWaiverDisputeNote({
+        findingId: 'F-0001',
+        reason: 'frozen contract',
+        evidence: 'src/types.ts:94',
+      })],
+    }));
+
+    expect(output.resolvedFindings).toEqual([]);
+    expect(output.conflicts).toHaveLength(1);
+    expect(output.conflicts[0]?.rawFindingIds).toEqual(['raw-confirm']);
+    expect(isEngineDerivedWaiverConflict(output.conflicts[0]!)).toBe(false);
+    expect(Reflect.ownKeys(output.conflicts[0]!).every((key) => typeof key === 'string')).toBe(true);
+  });
+
+  it('後段 isolation で raw-backed conflict が消えても current match が残れば rawless derived conflict を復元する', () => {
+    const output = normalizeEngineDerivedWaiverConflicts(outputWith({
+      matches: [{ findingId: 'F-0001', rawFindingIds: ['raw-match'] }],
+      conflicts: [],
+      disputeNotes: [createEngineDerivedWaiverDisputeNote({
+        findingId: 'F-0001',
+        reason: 'frozen contract',
+        evidence: 'src/types.ts:94',
+      })],
+    }));
+
+    expect(output.conflicts).toHaveLength(1);
+    expect(output.conflicts[0]?.rawFindingIds).toEqual([]);
+    expect(isEngineDerivedWaiverConflict(output.conflicts[0]!)).toBe(true);
+    expect(JSON.stringify(output)).not.toContain('engine-derived-waiver-conflict');
   });
 
   it('reopened と同じ finding への後着 match は reopened の観測へ畳む', () => {

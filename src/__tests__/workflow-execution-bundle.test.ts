@@ -178,7 +178,6 @@ describe('workflow execution bundle', () => {
       reportDirectory: paths.reportsRel,
       contextDirectory: paths.contextRel,
       logsDirectory: paths.logsRel,
-      storageBackend: 'file',
       status: 'failed',
       startTime: '2026-01-01T00:00:00.000Z',
       resume_point: {
@@ -314,7 +313,6 @@ describe('workflow execution bundle', () => {
       reportDirectory: paths.reportsRel,
       contextDirectory: paths.contextRel,
       logsDirectory: paths.logsRel,
-      storageBackend: 'file',
       status: 'failed',
       startTime: '2026-01-01T00:00:00.000Z',
       resume_point: {

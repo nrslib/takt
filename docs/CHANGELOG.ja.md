@@ -41,7 +41,7 @@
 
 ### Changed
 
-- **BREAKING:** Node.js `>=24.15.0` が必須になりました (#1111)。従来は `^20.20.0 || >=22.22.0` でしたが、新しい run ストレージが組み込みの `node:sqlite` モジュールを使うためです。
+- **BREAKING:** Node.js `>=24.15.0` が必須になりました (#1111)。従来は `^20.20.0 || >=22.22.0` でしたが、Finding Contract authority が組み込みの `node:sqlite` モジュールを使うためです。
 - **BREAKING:** Auto Routing の candidates をプールとティア中心に再設計しました (#1103)。`cost_tier` は `routing_tier`（`high` | `medium` | `low`）にリネームされ、`default_pool` と `candidate_pools`（各プールにプールローカルな `fallback`）が必須になりました。任意の `pool_rules` で tags / steps / personas をプールに固定できます。router は正規化されたタスク・ステップ指示・現在の残作業から必要ティアの推定のみを行い、候補は TAKT が決定的に選択します。`cost` と `balanced` は選択プール内で必要ティアを満たす最小の `routing_tier` を、`performance` は最大を選びます。既存の設定は `cost_tier` のリネームと `default_pool` / `candidate_pools` の追加が必要です。
 - high 系ワークフローのステップ上限を 50 にしました (#1061)。`takt-default-high`、`review-fix-takt-default-high`、`takt-default-team-high` の `max_steps` を 200 から 50 に引き下げました。
 - high 系ワークフローで merge-readiness を最終監督より前に実行するようにしました (#1060)。Finding Contract 用の最終ゲートは `merge-readiness-finding-contract-final-gate` として切り出されました。
@@ -61,7 +61,7 @@
 
 ### Internal
 
-- run 単位の SQLite ストレージ基盤 (#1111)。`node:sqlite` ベースの run 単位ストア（artifacts、findings、reports、unit-of-work）が `src/infra/run-storage/` に追加され、Finding Contract の整合性モデルの単一形式への再構成も行われました。エンジンへの接続は今後のリリースで行われ、本リリースでは `.takt/` の出力は変わりません。
+- Finding Contract専用SQLite authority (#1111)。Finding状態をrun lifecycle artifactから分離し、`.takt/runs/<run>/finding-contract.sqlite` で管理するよう再構成しました。
 - ビルトインの TAKT ワークフローをルールの first-match セマンティクスに統一しました (#1083)。
 - MCP stdio 統合テストが隔離済み `TAKT_CONFIG_DIR` を起動したサーバーに渡すようになり、実行者の実際の `~/.takt/config.yaml` を読まなくなりました。
 - ドキュメント: 再利用可能な TAKT 概要アセット (#1108, #1109) と YouTube チュートリアルリンク (#1112) を追加しました。

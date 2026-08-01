@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
-import { DatabaseSync } from 'node:sqlite';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type {
   FindingEvidenceRecord,
@@ -31,9 +33,9 @@ import {
   canonicalRawFindingFixture,
 } from './helpers/finding-lifecycle-fixture.js';
 import {
-  cleanupRealRunStorages,
-  createRealRunStorage,
-} from './helpers/run-storage.js';
+  cleanupTestFindingStorage,
+  createTestFindingLedgerStore,
+} from './helpers/finding-storage.js';
 import { canonicalJson } from '../shared/utils/canonical-json.js';
 import { captureFindingMutationPrecondition } from '../core/workflow/findings/finding-preconditions.js';
 import {
@@ -46,7 +48,28 @@ import {
 } from '../core/models/finding-lifecycle-identity.js';
 import { assertFindingLedgerProjectionInvariant } from '../core/models/finding-ledger-invariants.js';
 
-afterEach(cleanupRealRunStorages);
+const storageRoots: string[] = [];
+
+afterEach(() => {
+  cleanupTestFindingStorage();
+  for (const root of storageRoots.splice(0)) {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+function createFindingStore(runId: string) {
+  const projectCwd = mkdtempSync(join(tmpdir(), 'takt-anomaly-settlement-'));
+  storageRoots.push(projectCwd);
+  return {
+    projectCwd,
+    store: createTestFindingLedgerStore({
+      projectCwd,
+      runId,
+      reportDir: join(projectCwd, '.takt', 'runs', runId, 'reports'),
+      workflowName: 'default',
+    }),
+  };
+}
 
 const beforeObservation = {
   runId: 'run-1',
@@ -725,19 +748,7 @@ describe('reviewer anomaly settlement', () => {
       settled,
     )).not.toThrow();
 
-    const { root } = createRealRunStorage({ findingContractEnabled: true });
-    const lease = root.claimLease({
-      ownerKey: 'terminal-dismissal-settlement-test',
-      leaseDurationMs: 10_000,
-    });
-    const execution = root.runtime({ lease }).execution.startStep({
-      stepKey: 'findings-manager',
-      expectedScopeRevision: 0,
-    });
-    const store = root.runtime({ lease }).findingManager({
-      workflowName: 'default',
-      producer: execution.handle,
-    });
+    const { store } = createFindingStore('terminal-dismissal-settlement-test');
     await store.updateLedger(() => ({
       ledger: anomaliesApplied,
       result: undefined,
@@ -803,19 +814,9 @@ describe('reviewer anomaly settlement', () => {
       settled,
     )).not.toThrow();
 
-    const { root } = createRealRunStorage({ findingContractEnabled: true });
-    const lease = root.claimLease({
-      ownerKey: 'historical-terminal-dismissal-settlement-test',
-      leaseDurationMs: 10_000,
-    });
-    const execution = root.runtime({ lease }).execution.startStep({
-      stepKey: 'findings-manager',
-      expectedScopeRevision: 0,
-    });
-    const store = root.runtime({ lease }).findingManager({
-      workflowName: 'default',
-      producer: execution.handle,
-    });
+    const { store } = createFindingStore(
+      'historical-terminal-dismissal-settlement-test',
+    );
     await store.updateLedger(() => ({ ledger: eventBaseline, result: undefined }));
     expect(store.loadLedger()).toMatchObject({
       lifecycleEvents: expect.arrayContaining([
@@ -1130,21 +1131,8 @@ describe('reviewer anomaly settlement', () => {
   });
 
   it('settlement後の正当なreopenを許可しSQLite revisionからloadする', async () => {
-    const { databasePath, root } = createRealRunStorage({
-      findingContractEnabled: true,
-    });
-    const lease = root.claimLease({
-      ownerKey: 'reviewer-anomaly-settlement-test',
-      leaseDurationMs: 10_000,
-    });
-    const execution = root.runtime({ lease }).execution.startStep({
-      stepKey: 'findings-manager',
-      expectedScopeRevision: 0,
-    });
-    const store = root.runtime({ lease }).findingManager({
-      workflowName: 'default',
-      producer: execution.handle,
-    });
+    const runId = 'reviewer-anomaly-settlement-test';
+    const { projectCwd, store } = createFindingStore(runId);
     const fixture = verifiedResolutionFixture();
     await store.updateLedger(() => ({
       ledger: fixture.previous,
@@ -1240,17 +1228,13 @@ describe('reviewer anomaly settlement', () => {
       reviewerAnomalies: settled.reviewerAnomalies,
     });
 
-    root.close();
-    const database = new DatabaseSync(databasePath, { readOnly: true });
-    expect(database.prepare(`
-      SELECT count(*) AS count
-      FROM finding_reviewer_anomaly_entries
-      WHERE revision IN (2, 3, 4, 5, 6)
-    `).get()).toEqual({ count: 4 });
-    expect(database.prepare(`
-      SELECT count(*) AS count
-      FROM finding_ledger_revisions
-    `).get()).toEqual({ count: 7 });
-    database.close();
+    cleanupTestFindingStorage();
+    const reopenedStore = createTestFindingLedgerStore({
+      projectCwd,
+      runId,
+      reportDir: join(projectCwd, '.takt', 'runs', runId, 'reports'),
+      workflowName: 'default',
+    });
+    expect(reopenedStore.loadLedger()).toEqual(superseded);
   });
 });

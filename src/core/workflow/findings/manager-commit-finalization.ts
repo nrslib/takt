@@ -35,7 +35,11 @@ import {
   buildProvisionalSettlementLifecycleCommands,
   settleProvisionalsWithCleanEvidence,
 } from './manager-provisional-settlement.js';
-import { collectActiveConflictFindingIds, normalizeMergedManagerPlan } from './manager-plan-normalization.js';
+import {
+  collectActiveConflictFindingIds,
+  normalizeEngineDerivedWaiverConflicts,
+  normalizeMergedManagerPlan,
+} from './manager-plan-normalization.js';
 import { canonicalizeFindingManagerOutput } from './canonicalize.js';
 import { collectRegeneratedConflictIds } from '../../models/finding-conflict-identity.js';
 import { collectLandedRawIds } from './manager-utils.js';
@@ -230,7 +234,7 @@ export function reconcileCommitPlan(input: {
   // settlement も matches を後着させる（clean new → provisional への match 変換）。
   // resolution confirmation と衝突した場合に備え、canonicalize をもう一度通す
   // （純・冪等 — 衝突が無ければ no-op）。
-  const canonicalized = canonicalizeFindingManagerOutput(
+  const canonicalized = normalizeEngineDerivedWaiverConflicts(canonicalizeFindingManagerOutput(
     settledFindingIds.size > 0
       ? {
           ...settlement.output,
@@ -242,7 +246,7 @@ export function reconcileCommitPlan(input: {
           ),
         }
       : settlement.output,
-  );
+  ));
   const { output: settledOutput, rejections: normalizationRejections } = dropRegeneratedConflictResolves(
     canonicalized,
     input.freshLedger,

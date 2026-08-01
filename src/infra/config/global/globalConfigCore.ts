@@ -32,7 +32,6 @@ import { sanitizeConfigValue } from './globalConfigLegacyMigration.js';
 import { serializeGlobalConfig } from './globalConfigSerializer.js';
 import { loadGlobalConfigTrace, type ConfigTrace } from '../traced/tracedConfigLoader.js';
 import { PROVIDER_OPTIONS_FILE_PREFERRED_ENV_PATHS } from '../providerOptionsContract.js';
-import { normalizeRunStorage } from '../project/projectConfigTransforms.js';
 export { validateCliPath } from './cliPathValidator.js';
 
 function getRecord(value: unknown): Record<string, unknown> | undefined {
@@ -206,7 +205,6 @@ export class GlobalConfigManager {
         sse: parsed.workflow_mcp_servers.sse,
         http: parsed.workflow_mcp_servers.http,
       } : undefined,
-      runStorage: normalizeRunStorage(parsed.run_storage),
       preventSleep: parsed.prevent_sleep,
       notificationSound: parsed.notification_sound,
       notificationSoundEvents: parsed.notification_sound_events ? {

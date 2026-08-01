@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { WorkflowConfig } from '../core/models/index.js';
 import { WorkflowEngine } from '../core/workflow/index.js';
-import { createFindingLedgerStore } from '../core/workflow/findings/store.js';
+import { createTestFindingLedgerStore } from './helpers/finding-storage.js';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 
 const roots: string[] = [];
@@ -27,8 +27,6 @@ function workflow(): WorkflowConfig {
     maxSteps: 1,
     initialStep: 'review',
     findingContract: {
-      ledgerPath: '.takt/findings/injection.json',
-      rawFindingsPath: '.takt/findings/raw',
       manager: {
         persona: 'findings-manager',
         instruction: 'manage',
@@ -57,13 +55,11 @@ describe('WorkflowEngine Finding ledger store dependency', () => {
   it('accepts the run-bound resolver constructed by the composition root', () => {
     const cwd = createRoot();
     const config = workflow();
-    const findingLedgerStore = createFindingLedgerStore({
+    const findingLedgerStore = createTestFindingLedgerStore({
       projectCwd: cwd,
       runId: 'run',
       reportDir: buildRunPaths(cwd, 'run').reportsAbs,
       workflowName: config.name,
-      ledgerPath: config.findingContract!.ledgerPath,
-      rawFindingsPath: config.findingContract!.rawFindingsPath,
     });
 
     expect(() => new WorkflowEngine(config, cwd, 'task', {
@@ -78,13 +74,11 @@ describe('WorkflowEngine Finding ledger store dependency', () => {
   it('keeps an authority resolver available for a child with its own contract', () => {
     const cwd = createRoot();
     const configWithContract = workflow();
-    const findingLedgerStore = createFindingLedgerStore({
+    const findingLedgerStore = createTestFindingLedgerStore({
       projectCwd: cwd,
       runId: 'run',
       reportDir: buildRunPaths(cwd, 'run').reportsAbs,
       workflowName: configWithContract.name,
-      ledgerPath: configWithContract.findingContract!.ledgerPath,
-      rawFindingsPath: configWithContract.findingContract!.rawFindingsPath,
     });
     const configWithoutContract = { ...configWithContract };
     delete configWithoutContract.findingContract;

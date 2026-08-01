@@ -57,15 +57,10 @@ import {
 import { storedRawReconcileProvenance } from './helpers/finding-integrity.js';
 import type { FindingManagerOutput } from '../core/workflow/findings/types.js';
 import { assertFindingLedgerAppendOnlyTransition } from '../core/workflow/findings/finding-integrity.js';
-import { createFindingLedgerStore } from '../core/workflow/findings/store.js';
+import { createTestFindingLedgerStore } from './helpers/finding-storage.js';
 import { reserveRawAdjudicationRecovery } from '../core/workflow/findings/raw-adjudication-reservation.js';
 import { parseFindingConflictAdjudicationOutput } from '../core/workflow/findings/schemas.js';
 import { applyInterpretationRecoveryFailures } from '../core/workflow/findings/interpretation-recovery.js';
-import {
-  cleanupRealRunStorages,
-  createRealRunStorage,
-  resumeRealRunStorage,
-} from './helpers/run-storage.js';
 import { canonicalRawFindingFixture } from './helpers/finding-lifecycle-fixture.js';
 import { createAnchorAdjudication } from '../core/models/finding-anchor-relevance.js';
 import {
@@ -88,29 +83,11 @@ const OBSERVATION: FindingObservation = {
 const temporaryDirectories = new Set<string>();
 
 afterEach(() => {
-  cleanupRealRunStorages();
   for (const directory of temporaryDirectories) {
     rmSync(directory, { recursive: true, force: true });
   }
   temporaryDirectories.clear();
 });
-
-function loadRootFindingLedger(
-  root: ReturnType<typeof createRealRunStorage>['root'],
-  ownerKey: string,
-): FindingLedger {
-  const lease = root.claimLease({ ownerKey, leaseDurationMs: 10_000 });
-  const runtime = root.runtime({ lease });
-  const scope = runtime.scopes.get();
-  const execution = runtime.execution.startStep({
-    stepKey: `${ownerKey}-load`,
-    expectedScopeRevision: scope.revision,
-  });
-  return runtime.findingManager({
-    workflowName: 'default',
-    producer: execution.handle,
-  }).loadLedger();
-}
 
 function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex');
@@ -2976,13 +2953,11 @@ describe('verified finding lifecycle mutation', () => {
     temporaryDirectories.add(projectCwd);
     const reportDir = join(projectCwd, '.takt', 'runs', 'run-1', 'reports');
     mkdirSync(reportDir, { recursive: true });
-    const store = createFindingLedgerStore({
+    const store = createTestFindingLedgerStore({
       projectCwd,
       reportDir,
       runId: 'run-1',
       workflowName: 'default',
-      ledgerPath: '.takt/findings/default.json',
-      rawFindingsPath: '.takt/findings/raw',
     });
     await store.updateLedger(() => ({ ledger: created, result: undefined }));
 
@@ -3004,174 +2979,15 @@ describe('verified finding lifecycle mutation', () => {
     expect(second.result[0]?.expectedHead).toEqual(latestHead(created, 'F-0001'));
   });
 
-  it('keeps File and SQLite authority equivalent across pending, apply, stage, and resume', async () => {
-    const projectCwd = mkdtempSync(join(tmpdir(), 'takt-lifecycle-file-'));
+  it('resumes a nullable provisional from Finding SQLite', async () => {
+    const projectCwd = mkdtempSync(join(tmpdir(), 'takt-nullable-provisional-'));
     temporaryDirectories.add(projectCwd);
-    const reportDir = join(projectCwd, '.takt', 'runs', 'run-1', 'reports');
-    mkdirSync(reportDir, { recursive: true });
-    const fileStore = createFindingLedgerStore({
+    const sourceRunId = 'nullable-provisional-source';
+    const store = createTestFindingLedgerStore({
       projectCwd,
-      reportDir,
-      runId: 'run-1',
+      runId: sourceRunId,
+      reportDir: join(projectCwd, '.takt', 'runs', sourceRunId, 'reports'),
       workflowName: 'default',
-      ledgerPath: '.takt/findings/default.json',
-      rawFindingsPath: '.takt/findings/raw',
-    });
-    const sqlite = createRealRunStorage({ findingContractEnabled: true });
-    sqlite.clock.set(Date.parse(OBSERVATION.timestamp));
-    const owner = sqlite.root.claimLease({
-      ownerKey: 'lifecycle-parity',
-      leaseDurationMs: 10_000,
-    });
-    const runtime = sqlite.root.runtime({ lease: owner });
-    const execution = runtime.execution.startStep({
-      stepKey: 'lifecycle-parity',
-      expectedScopeRevision: 0,
-    });
-    const sqliteStore = runtime.findingManager({
-      workflowName: 'default',
-      producer: execution.handle,
-    });
-    const source = evidenceSource({
-      rawFindingId: 'raw-create',
-      targetFindingId: null,
-      title: 'Stored finding',
-      description: 'Stored description.',
-    });
-    for (const store of [fileStore, sqliteStore]) {
-      await store.updateLedger((current) => ({
-        ledger: {
-          ...current,
-          evidenceRecords: [source.record],
-          rawFindings: [source.raw],
-        },
-        result: undefined,
-      }));
-    }
-    const target = {
-      entityKind: 'finding' as const,
-      entityId: 'F-0001',
-      expectedHead: null,
-    };
-    const reservedInput = reservation({
-      operation: 'create_finding',
-      targets: [target],
-      sources: [source],
-    });
-    const result = mutation({
-      reservation: reservedInput,
-      findings: [finding({
-        id: 'F-0001',
-        source,
-        revision: 1,
-      })],
-    });
-    for (const store of [fileStore, sqliteStore]) {
-      await store.updateLedger((current) => ({
-        ledger: reserveVerifiedLifecycleMutation(current, reservedInput),
-        result: undefined,
-      }));
-      expect(store.loadLedger().lifecycleEvents).toEqual([]);
-      await store.updateLedger((current) => ({
-        ledger: applyVerifiedLifecycleMutation(current, result),
-        result: undefined,
-      }));
-      await store.updateLedger((current) => {
-        const attempt = createRawRecoveryAttempt({
-          provisionalFindingId: 'F-0001',
-          expectedHead: latestHead(current, 'F-0001'),
-          sourceRawFindingId: source.raw.rawFindingId,
-          sourceRawIntegrityDigest: computeRawFindingIntegrityDigest(source.raw),
-          promptSnapshotDigest: sha256('raw-recovery-prompt'),
-          attempt: 1,
-          startedAt: OBSERVATION,
-        });
-        return {
-          ledger: {
-            ...current,
-            rawRecoveryAttempts: [...current.rawRecoveryAttempts, attempt],
-            rawRecoveryResults: [
-              ...current.rawRecoveryResults,
-              createRawRecoveryResult({
-                attemptId: attempt.attemptId,
-                replayRawFindingId: null,
-                mutationIds: [],
-                outcome: 'failed',
-                completedAt: OBSERVATION,
-              }),
-            ],
-          },
-          result: undefined,
-        };
-      });
-    }
-    const authority = (ledger: FindingLedger) => ({
-      findings: ledger.findings,
-      evidenceBindings: ledger.evidenceBindings,
-      lifecycleReservations: ledger.lifecycleReservations,
-      lifecycleEvents: ledger.lifecycleEvents,
-      rawRecoveryAttempts: ledger.rawRecoveryAttempts,
-      rawRecoveryResults: ledger.rawRecoveryResults,
-    });
-    expect(authority(sqliteStore.loadLedger())).toEqual(authority(fileStore.loadLedger()));
-
-    const roundMarker = 'lifecycle-pending-round';
-    for (const store of [fileStore, sqliteStore]) {
-      await store.commitManagerLedger((current) => ({
-        ledger: {
-          ...current,
-          stopBudget: {
-            roundMarkers: [roundMarker],
-            firstRoundAt: current.updatedAt,
-            exhausted: false,
-          },
-        },
-        publication: {
-          roundMarker,
-          report: {
-            version: 1,
-            runId: store.runId,
-            stepName: 'findings-manager',
-            retryCount: 0,
-            ledgerUpdated: true,
-            finalErrors: [],
-            attempts: [],
-          },
-        },
-        result: undefined,
-      }));
-    }
-    expect(sqliteStore.loadLedger().pendingManagerCommit?.completed.lifecycleEvents)
-      .toEqual(fileStore.loadLedger().pendingManagerCommit?.completed.lifecycleEvents);
-
-    const resumed = resumeRealRunStorage(sqlite.root, {
-      slug: 'lifecycle-resume',
-      findingContractEnabled: true,
-    });
-    const resumedLedger = loadRootFindingLedger(
-      resumed.root,
-      'lifecycle-resume-load',
-    );
-    expect(authority(resumedLedger)).toEqual(authority(sqliteStore.loadLedger()));
-    expect(resumedLedger.pendingManagerCommit?.completed.lifecycleEvents)
-      .toEqual(sqliteStore.loadLedger().pendingManagerCommit?.completed.lifecycleEvents);
-  });
-
-  it('resumes a nullable provisional from SQLite', async () => {
-    const sqlite = createRealRunStorage({ findingContractEnabled: true });
-    sqlite.clock.set(Date.parse(OBSERVATION.timestamp));
-    const owner = sqlite.root.claimLease({
-      ownerKey: 'nullable-provisional-resume',
-      leaseDurationMs: 10_000,
-    });
-    const runtime = sqlite.root.runtime({ lease: owner });
-    const execution = runtime.execution.startStep({
-      stepKey: 'nullable-provisional-resume',
-      expectedScopeRevision: 0,
-    });
-    const store = runtime.findingManager({
-      workflowName: 'default',
-      producer: execution.handle,
     });
     const source = evidenceSource({
       rawFindingId: 'raw-sqlite-nullable',
@@ -3260,14 +3076,19 @@ describe('verified finding lifecycle mutation', () => {
       },
       result: undefined,
     }));
-    const resumed = resumeRealRunStorage(sqlite.root, {
-      slug: 'nullable-provisional-resume',
-      findingContractEnabled: true,
-    });
-    const resumedFinding = loadRootFindingLedger(
-      resumed.root,
-      'nullable-provisional-resume-load',
-    ).findings[0];
+    const resumedFinding = createTestFindingLedgerStore({
+      projectCwd,
+      runId: 'nullable-provisional-resume',
+      sourceRunId,
+      reportDir: join(
+        projectCwd,
+        '.takt',
+        'runs',
+        'nullable-provisional-resume',
+        'reports',
+      ),
+      workflowName: 'default',
+    }).loadLedger().findings[0];
 
     expect(resumedFinding).toMatchObject({
       id: provisional.id,
@@ -3284,41 +3105,40 @@ describe('verified finding lifecycle mutation', () => {
     });
   });
 
-  it('resumes a durable provisional product transition proof from SQLite', async () => {
+  it('resumes a durable provisional product transition proof from Finding SQLite', async () => {
     const fixture = promotionBoundaryFixture();
     const proof = fixture.ledger.evidenceRecords.find((record) => (
       record.kind === 'engine_proof'
       && record.subject.kind === 'finding_provisional_product_transition'
     ));
     expect(proof).toBeDefined();
-    const sqlite = createRealRunStorage({ findingContractEnabled: true });
-    sqlite.clock.set(Date.parse(OBSERVATION.timestamp));
-    const owner = sqlite.root.claimLease({
-      ownerKey: 'provisional-transition-proof-resume',
-      leaseDurationMs: 10_000,
-    });
-    const runtime = sqlite.root.runtime({ lease: owner });
-    const execution = runtime.execution.startStep({
-      stepKey: 'provisional-transition-proof-resume',
-      expectedScopeRevision: 0,
-    });
-    const store = runtime.findingManager({
+    const projectCwd = mkdtempSync(join(tmpdir(), 'takt-proof-resume-'));
+    temporaryDirectories.add(projectCwd);
+    const sourceRunId = 'provisional-proof-source';
+    const store = createTestFindingLedgerStore({
+      projectCwd,
+      runId: sourceRunId,
+      reportDir: join(projectCwd, '.takt', 'runs', sourceRunId, 'reports'),
       workflowName: 'default',
-      producer: execution.handle,
     });
     await store.updateLedger(() => ({
       ledger: fixture.ledger,
       result: undefined,
     }));
 
-    const resumed = resumeRealRunStorage(sqlite.root, {
-      slug: 'provisional-transition-proof-resume',
-      findingContractEnabled: true,
-    });
-    const resumedProof = loadRootFindingLedger(
-      resumed.root,
-      'provisional-proof-resume-load',
-    ).evidenceRecords.find(
+    const resumedProof = createTestFindingLedgerStore({
+      projectCwd,
+      runId: 'provisional-proof-resume',
+      sourceRunId,
+      reportDir: join(
+        projectCwd,
+        '.takt',
+        'runs',
+        'provisional-proof-resume',
+        'reports',
+      ),
+      workflowName: 'default',
+    }).loadLedger().evidenceRecords.find(
         (record) => record.evidenceId === proof?.evidenceId,
       );
     expect(resumedProof).toEqual(proof);

@@ -29,15 +29,15 @@ export async function forceFailRunningTask(
   }
 
   try {
-    const runStorage = createTaskRunForceFailStorage({
+    const runHandle = createTaskRunForceFailStorage({
       task,
       projectDir,
       onWarning: warn,
     });
-    const finalization = await runStorage?.terminalize(FORCE_FAIL_ERROR);
+    const finalization = await runHandle?.terminalize(FORCE_FAIL_ERROR);
     const runner = new TaskRunner(projectDir, { onWarning: warn });
     runner.forceFailRunningTask(task.name, {
-      step: runStorage?.currentStep,
+      step: runHandle?.currentStep,
       error: FORCE_FAIL_ERROR,
     });
     for (const issue of finalization?.issues ?? []) {

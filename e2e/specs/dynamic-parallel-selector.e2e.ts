@@ -5,6 +5,7 @@ import { createIsolatedEnv, type IsolatedEnv, updateIsolatedConfig } from '../he
 import { runTakt } from '../helpers/takt-runner';
 import { createTestRepo, type TestRepo } from '../helpers/test-repo';
 import { readSessionRecords } from '../helpers/session-log';
+import { readOnlyRunFindingLedger } from '../helpers/finding-ledger';
 
 function writeDynamicParallelFixture(
   repoPath: string,
@@ -248,8 +249,6 @@ function writeSelectedArtifactsFixture(repoPath: string): { workflowPath: string
     '  review-finding-contract: Return a concise E2E review report.',
     '  findings-manager: Return the finding manager JSON contract.',
     'finding_contract:',
-    '  ledger_path: .takt/findings/peer-review.json',
-    '  raw_findings_path: .takt/findings/raw',
     '  manager:',
     '    persona: ./agents/findings-manager.md',
     '    instruction: findings-manager',
@@ -661,18 +660,40 @@ describe('E2E: dynamic parallel selector (mock)', () => {
     expect(historyContents.some((content) => content.includes('frontend report'))).toBe(false);
     expect(historyContents.some((content) => content.includes('backend report'))).toBe(false);
 
-    const rawDirectory = join(testRepo.path, '.takt', 'findings', 'raw');
-    const rawBatches = readdirSync(rawDirectory)
-      .map((file) => JSON.parse(readFileSync(join(rawDirectory, file), 'utf-8')) as Array<{ reviewer: string }>);
+    const rawSnapshotFiles = readdirSync(reportDir)
+      .filter((file) => file.startsWith('raw-findings.') && file.endsWith('.json'));
+    expect(rawSnapshotFiles).toHaveLength(1);
+    const rawBatches = [
+      readFileSync(join(reportDir, rawSnapshotFiles[0]!), 'utf-8'),
+      ...historyContents,
+    ].flatMap((content): Array<Array<{ reviewer: string }>> => {
+      try {
+        const parsed: unknown = JSON.parse(content);
+        return Array.isArray(parsed)
+          && parsed.every((entry) => (
+            typeof entry === 'object'
+            && entry !== null
+            && typeof Reflect.get(entry, 'reviewer') === 'string'
+          ))
+          ? [parsed as Array<{ reviewer: string }>]
+          : [];
+      } catch {
+        return [];
+      }
+    });
     expect(rawBatches).toHaveLength(2);
-    const firstRoundRaw = rawBatches.find((batch) => batch.some((finding) => finding.reviewer === 'frontend'));
-    const secondRoundRaw = rawBatches.find((batch) => batch.some((finding) => finding.reviewer === 'backend'));
-    expect(firstRoundRaw?.map((finding) => finding.reviewer).sort()).toEqual(['architecture', 'frontend']);
-    expect(secondRoundRaw?.map((finding) => finding.reviewer).sort()).toEqual(['architecture', 'backend']);
+    const firstRoundRaw = rawBatches.find(
+      (batch) => batch.some((finding) => finding.reviewer === 'frontend'),
+    );
+    const secondRoundRaw = rawBatches.find(
+      (batch) => batch.some((finding) => finding.reviewer === 'backend'),
+    );
+    expect(firstRoundRaw?.map((finding) => finding.reviewer).sort())
+      .toEqual(['architecture', 'frontend']);
+    expect(secondRoundRaw?.map((finding) => finding.reviewer).sort())
+      .toEqual(['architecture', 'backend']);
 
-    const ledger = JSON.parse(readFileSync(join(testRepo.path, '.takt', 'findings', 'peer-review.json'), 'utf-8')) as {
-      rawFindings: Array<{ reviewer: string }>;
-    };
+    const ledger = readOnlyRunFindingLedger(testRepo.path);
     expect(ledger.rawFindings.map((finding) => finding.reviewer).sort())
       .toEqual(['architecture', 'architecture', 'backend', 'frontend']);
 

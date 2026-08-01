@@ -24,6 +24,7 @@ import {
   canonicalRawFindingFixture,
 } from './helpers/finding-lifecycle-fixture.js';
 import { computeClaimIdentityHash } from '../core/workflow/findings/evidence-domain.js';
+import { isEngineDerivedWaiverConflict } from '../core/workflow/findings/waiver-conflict.js';
 
 const DEFAULT_CONFLICT_ID = formatConflictId({
   findingIds: ['F-0001'],
@@ -1515,6 +1516,8 @@ describe('assembleManagerOutput "new" decisions reconciled against the ledger', 
     expect(output.matches.map((match) => match.findingId)).toEqual(['F-0001']);
     expect(output.conflicts).toHaveLength(1);
     expect(output.conflicts[0]?.findingIds).toEqual(['F-0001']);
+    // manager decision は1 raw = 1 decisionを維持し、waiver conflict 自体は rawless。
+    expect(output.conflicts[0]?.rawFindingIds).toEqual([]);
     expect(output.disputeNotes).toEqual([
       { findingId: 'F-0001', reason: 'frozen contract', evidence: 'src/types.ts:94' },
     ]);
@@ -1534,6 +1537,8 @@ describe('assembleManagerOutput "new" decisions reconciled against the ledger', 
     });
     expect(next.findings.find((finding) => finding.id === 'F-0001')?.status).toBe('open');
     expect(next.conflicts).toHaveLength(1);
+    // 永続 conflict と lifecycle plan に限って同ラウンド match lineage を束縛する。
+    expect(next.conflicts[0]?.rawFindingIds).toEqual(['raw-still-present']);
   });
 
   // conflict + waive（match なし）。変換の発動条件が matches しか見ないと waive が
@@ -1596,6 +1601,8 @@ describe('assembleManagerOutput "new" decisions reconciled against the ledger', 
     expect(output.matches.map((match) => match.findingId)).toEqual(['F-0001']);
     expect(output.conflicts).toHaveLength(1);
     expect(output.conflicts[0]?.findingIds).toEqual(['F-0001']);
+    // raw-backed conflict を維持し、match raw を conflict decision へ二重帰属させない。
+    expect(output.conflicts[0]?.rawFindingIds).toEqual(['raw-b']);
     expect(output.disputeNotes).toHaveLength(1);
     expect(validateFindingManagerOutput({
       previousLedger: ledger,
@@ -1661,6 +1668,120 @@ describe('assembleManagerOutput "new" decisions reconciled against the ledger', 
     expect(next.findings.find((finding) => finding.id === 'F-0001')?.status).toBe('open');
     expect(next.conflicts).toHaveLength(1);
     expect(next.conflicts[0]?.status).toBe('active');
+    expect(next.conflicts[0]?.rawFindingIds).toEqual(['raw-still-present']);
+  });
+
+  it('binds a waiver conflict only to deduplicated current matches for the same finding', () => {
+    const base = makeLedger();
+    const historicalOther = makeRawFinding({
+      rawFindingId: 'raw-existing-2',
+      familyTag: 'other',
+      location: 'src/other.ts:1',
+    });
+    const ledger = makeLedger({
+      nextId: 3,
+      findings: [
+        base.findings[0]!,
+        makeFinding({
+          id: 'F-0002',
+          revision: 1,
+          title: 'Other issue',
+          rawFindingIds: ['raw-existing-2'],
+        }),
+      ],
+      rawFindings: [...base.rawFindings, historicalOther],
+    });
+    const currentRawFindings = [
+      makeRawFinding({ rawFindingId: 'raw-z', location: 'src/a.ts:20' }),
+      makeRawFinding({ rawFindingId: 'raw-a', location: 'src/a.ts:21' }),
+      makeRawFinding({ rawFindingId: 'raw-other', location: 'src/other.ts:2' }),
+    ];
+    const { output } = assembleManagerOutput({
+      previousLedger: ledger,
+      residualRawFindings: currentRawFindings,
+      decisions: makeDecisions({
+        rawDecisions: [
+          { rawFindingId: 'raw-z', decision: 'same', findingId: 'F-0001', evidence: 'src/a.ts:20' },
+          { rawFindingId: 'raw-a', decision: 'same', findingId: 'F-0001', evidence: 'src/a.ts:21' },
+          { rawFindingId: 'raw-other', decision: 'same', findingId: 'F-0002', evidence: 'src/other.ts:2' },
+        ],
+        disputeDecisions: [{ findingId: 'F-0001', decision: 'waive', reason: 'frozen contract', evidence: 'src/types.ts:94' }],
+      }),
+      priorStepResponseText: DISPUTE_CLAIM,
+    });
+
+    expect(output.conflicts[0]?.rawFindingIds).toEqual([]);
+    const next = reconcileFindingLedger({
+      previousLedger: ledger,
+      rawFindings: currentRawFindings,
+      managerOutput: output,
+      priorStepResponseText: DISPUTE_CLAIM,
+      context: { workflowName: 'peer-review', stepName: 'reviewers', runId: 'run-2', timestamp: '2026-07-10T00:00:00.000Z' },
+    });
+
+    expect(next.conflicts).toHaveLength(1);
+    expect(next.conflicts[0]?.findingIds).toEqual(['F-0001']);
+    expect(next.conflicts[0]?.rawFindingIds).toEqual(['raw-a', 'raw-z']);
+  });
+
+  it('fails fast when an engine-derived waiver conflict has no matching current-round raw', () => {
+    const ledger = makeLedger();
+    const rawFindings = [makeRawFinding({ rawFindingId: 'raw-current' })];
+    const assembled = assembleManagerOutput({
+      previousLedger: ledger,
+      residualRawFindings: rawFindings,
+      decisions: makeDecisions({
+        rawDecisions: [{ rawFindingId: 'raw-current', decision: 'same', findingId: 'F-0001', evidence: 'src/a.ts:10' }],
+        disputeDecisions: [{ findingId: 'F-0001', decision: 'waive', reason: 'frozen contract', evidence: 'src/types.ts:94' }],
+      }),
+      priorStepResponseText: DISPUTE_CLAIM,
+    });
+    const withoutCurrentMatches = {
+      ...assembled.output,
+      anchorAdjudications: [],
+      matches: [],
+    };
+
+    expect(() => reconcileFindingLedger({
+      previousLedger: ledger,
+      rawFindings: [],
+      managerOutput: withoutCurrentMatches,
+      priorStepResponseText: DISPUTE_CLAIM,
+      context: { workflowName: 'peer-review', stepName: 'reviewers', runId: 'run-2', timestamp: '2026-07-10T00:00:00.000Z' },
+    })).toThrow('has no current-round match evidence');
+  });
+
+  it('rejects a multi-finding shape for an engine-derived waiver conflict', () => {
+    const base = makeLedger();
+    const secondRaw = makeRawFinding({ rawFindingId: 'raw-existing-2', location: 'src/other.ts:1' });
+    const ledger = makeLedger({
+      nextId: 3,
+      findings: [
+        base.findings[0]!,
+        makeFinding({ id: 'F-0002', revision: 1, rawFindingIds: ['raw-existing-2'] }),
+      ],
+      rawFindings: [...base.rawFindings, secondRaw],
+    });
+    const rawFindings = [makeRawFinding({ rawFindingId: 'raw-current' })];
+    const assembled = assembleManagerOutput({
+      previousLedger: ledger,
+      residualRawFindings: rawFindings,
+      decisions: makeDecisions({
+        rawDecisions: [{ rawFindingId: 'raw-current', decision: 'same', findingId: 'F-0001', evidence: 'src/a.ts:10' }],
+        disputeDecisions: [{ findingId: 'F-0001', decision: 'waive', reason: 'frozen contract', evidence: 'src/types.ts:94' }],
+      }),
+      priorStepResponseText: DISPUTE_CLAIM,
+    });
+    const malformedConflict = assembled.output.conflicts[0]!;
+    malformedConflict.findingIds = ['F-0001', 'F-0002'];
+
+    expect(() => reconcileFindingLedger({
+      previousLedger: ledger,
+      rawFindings,
+      managerOutput: { ...assembled.output, conflicts: [malformedConflict] },
+      priorStepResponseText: DISPUTE_CLAIM,
+      context: { workflowName: 'peer-review', stepName: 'reviewers', runId: 'run-2', timestamp: '2026-07-10T00:00:00.000Z' },
+    })).toThrow('must target exactly one finding');
   });
 });
 

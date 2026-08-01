@@ -1,6 +1,6 @@
 再計画を含む実装・レビューのループが {cycle_count} 回繰り返されました。
 
-このモニターは、通常遷移が再び replan へ戻り、同じサイクルへ実際に再突入するときだけ発火します。Finding Contract の台帳サマリー / `findings-ledger.json` を主要な根拠にし、Report Directory 内に存在する最新の計画・レビュー・修正報告を補助証拠として判断してください。
+このモニターは、通常遷移が再び replan へ戻り、同じサイクルへ実際に再突入するときだけ発火します。エンジンが提供する live Finding Contract ledger summary / current Finding state を正本として扱ってください。`findings-ledger.json` が存在しても、補助的な snapshot にすぎません。Report Directory 内に存在する最新の計画・レビュー・修正報告は補助証拠として判断してください。
 
 **判断順序:**
 1. 前回の blocker に対し、直近の計画が新しい分解、別の実装方針、または検証可能な受入条件を示しているか確認してください。

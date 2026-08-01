@@ -8,7 +8,6 @@ function writeMeta(runRoot: string, slug: string, meta: Record<string, unknown>)
   const metaPath = path.join(runRoot, '.takt', 'runs', slug, 'meta.json');
   fs.mkdirSync(path.dirname(metaPath), { recursive: true });
   fs.writeFileSync(metaPath, JSON.stringify({
-    storageBackend: 'file',
     ...meta,
   }, null, 2), 'utf-8');
 }
@@ -99,7 +98,7 @@ describe('run-meta lookup', () => {
     ]);
   });
 
-  it('should reject run metadata without storageBackend instead of assuming file', () => {
+  it('should reject run metadata missing the required run identity fields', () => {
     const metaPath = path.join(projectDir, '.takt', 'runs', '20260409-run-a', 'meta.json');
     const warnings: string[] = [];
     fs.mkdirSync(path.dirname(metaPath), { recursive: true });
@@ -112,7 +111,7 @@ describe('run-meta lookup', () => {
 
     expect(readRunMeta(metaPath, (warning) => warnings.push(warning))).toBeNull();
     expect(warnings).toEqual([
-      expect.stringContaining('storageBackend must be "file" or "sqlite"'),
+      expect.stringContaining('runSlug must be a non-empty string'),
     ]);
   });
 

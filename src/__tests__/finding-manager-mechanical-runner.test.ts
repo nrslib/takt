@@ -10,7 +10,8 @@ import type {
   RawFinding,
 } from '../core/workflow/findings/types.js';
 import { runFindingManagerForStep } from '../core/workflow/findings/manager-runner.js';
-import { createFindingLedgerStore, type FindingManagerValidationReport } from '../core/workflow/findings/store.js';
+import type { FindingManagerValidationReport } from '../core/workflow/findings/store.js';
+import { createTestFindingLedgerStore } from './helpers/finding-storage.js';
 import { createFindingAdjudicationReservation } from './helpers/finding-adjudication-reservation.js';
 import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
@@ -228,8 +229,6 @@ function makeHarness(
   };
   const parentStep: WorkflowStep = { kind: 'agent', name: 'reviewers', persona: 'reviewer', edit: false } as WorkflowStep;
   const contract = {
-    ledgerPath: '.takt/findings/ledger.json',
-    rawFindingsPath: '.takt/findings/raw',
     manager: {
       persona: 'findings-manager',
       instruction: 'Reconcile findings.',
@@ -340,8 +339,6 @@ function runFindingManagerWithStore(input: {
   const extractions = input.reviewerRawFindings.map(reviewerExtraction);
   return runFindingManagerForStep({
     contract: {
-      ledgerPath: '.takt/findings/peer-review.json',
-      rawFindingsPath: '.takt/findings/raw',
       manager: {
         persona: 'findings-manager',
         instruction: 'Reconcile findings.',
@@ -515,13 +512,11 @@ describe('runFindingManagerForStep mechanical path', () => {
     writeFileSync(join(projectCwd, 'src/b.ts'), `${Array.from({ length: 10 }, (_, i) => `// line ${i + 1}`).join('\n')}\n`);
     initializeGitFixture(projectCwd, ['src/b.ts']);
 
-    const createStore = (reportDir: string) => createFindingLedgerStore({
+    const createStore = (reportDir: string) => createTestFindingLedgerStore({
       projectCwd,
       runId: 'shared-run',
       reportDir,
       workflowName: 'peer-review',
-      ledgerPath: '.takt/findings/peer-review.json',
-      rawFindingsPath: '.takt/findings/raw',
     });
     const storeA = createStore(reportDirA);
     const storeB = createStore(reportDirB);
@@ -612,14 +607,12 @@ describe('runFindingManagerForStep mechanical path', () => {
       runId: string,
       reportDir: string,
       trustedResumeSourceRunId?: string,
-    ) => createFindingLedgerStore({
+    ) => createTestFindingLedgerStore({
       projectCwd,
       runId,
       reportDir,
       workflowName: 'peer-review',
-      ledgerPath: '.takt/findings/peer-review.json',
-      rawFindingsPath: '.takt/findings/raw',
-      ...(trustedResumeSourceRunId === undefined ? {} : { trustedResumeSourceRunId }),
+      ...(trustedResumeSourceRunId === undefined ? {} : { sourceRunId: trustedResumeSourceRunId }),
     });
     const storeA = createStore('pending-run', reportDirA);
     await storeA.updateLedger(() => ({
@@ -1522,8 +1515,6 @@ describe('runFindingManagerForStep workflow_call sub-steps', () => {
     };
     const parentStep: WorkflowStep = { kind: 'agent', name: 'reviewers', persona: 'reviewer', edit: false } as WorkflowStep;
     const contract = {
-      ledgerPath: '.takt/findings/ledger.json',
-      rawFindingsPath: '.takt/findings/raw',
       manager: {
         persona: 'findings-manager',
         instruction: 'Reconcile findings.',
@@ -1569,7 +1560,7 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
   // codex の再現ケース: 並列 workflow_call の子エンジンが同じ store（親から
   // 継承した台帳）を共有すると、各子は「LLM 呼び出し前に読んだ台帳」を基準に
   // 非同期処理後に保存するため、後勝ちで一方の新規指摘が消える。
-  // 台帳を実ファイルで共有する createFindingLedgerStore を使い、2つの
+  // 同じ SQLite authority を共有する store を使い、2つの
   // runFindingManagerForStep 呼び出しを Promise.all で同時実行して確認する。
   const cleanupDirs = new Set<string>();
 
@@ -1595,13 +1586,11 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
     // workflow_call の並列子は親から継承した同一の FindingLedgerStore
     // インスタンスを共有する（WorkflowCallExecutor.ts の inheritedFindingContract
     // 参照）。ここでも1つの store インスタンスを両呼び出しで共有する。
-    const store = createFindingLedgerStore({
+    const store = createTestFindingLedgerStore({
       projectCwd,
       runId: 'shared-run',
       reportDir,
       workflowName: 'peer-review',
-      ledgerPath: '.takt/findings/peer-review.json',
-      rawFindingsPath: '.takt/findings/raw',
     });
     const storeA = store;
     const storeB = store;
@@ -1658,8 +1647,6 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
     };
     const parentStep: WorkflowStep = { kind: 'agent', name: 'reviewers', persona: 'reviewer', edit: false } as WorkflowStep;
     const contract = {
-      ledgerPath: '.takt/findings/peer-review.json',
-      rawFindingsPath: '.takt/findings/raw',
       manager: {
         persona: 'findings-manager',
         instruction: 'Reconcile findings.',
@@ -1750,13 +1737,11 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
     writeFileSync(join(projectCwd, 'src/dup.ts'), `${Array.from({ length: 15 }, (_, i) => `// line ${i + 1}`).join('\n')}\n`);
     initializeGitFixture(projectCwd, ['src/dup.ts']);
 
-    const store = createFindingLedgerStore({
+    const store = createTestFindingLedgerStore({
       projectCwd,
       runId: 'shared-run-dup',
       reportDir,
       workflowName: 'peer-review',
-      ledgerPath: '.takt/findings/peer-review.json',
-      rawFindingsPath: '.takt/findings/raw',
     });
     await store.updateLedger(() => ({
       ledger: {
@@ -1805,8 +1790,6 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
     };
     const parentStep: WorkflowStep = { kind: 'agent', name: 'reviewers', persona: 'reviewer', edit: false } as WorkflowStep;
     const contract = {
-      ledgerPath: '.takt/findings/peer-review.json',
-      rawFindingsPath: '.takt/findings/raw',
       manager: {
         persona: 'findings-manager',
         instruction: 'Reconcile findings.',
@@ -1973,8 +1956,6 @@ describe('runFindingManagerForStep stale rejection isolation', () => {
     };
     const parentStep: WorkflowStep = { kind: 'agent', name: 'reviewers', persona: 'reviewer', edit: false } as WorkflowStep;
     const contract = {
-      ledgerPath: '.takt/findings/ledger.json',
-      rawFindingsPath: '.takt/findings/raw',
       manager: {
         persona: 'findings-manager',
         instruction: 'Reconcile findings.',

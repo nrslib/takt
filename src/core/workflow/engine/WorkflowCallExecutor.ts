@@ -631,11 +631,10 @@ export class WorkflowCallExecutor {
         ...resumeStackPrefix,
         workflowCallFrame,
       ],
-      // 親の Finding Contract を子エンジンへ継承する。継承しないと子の
-      // parallel レビューが出す raw findings が台帳に入らず、fix に届かないまま
-      // reviewers ↔ fix が回り続ける（実測: 56周・9時間）。子が自前の
-      // finding_contract も持つ場合は WorkflowValidator が設定エラーで落とす
-      // ため、ここでは無条件に継承値を渡してよい。
+      // 親の Finding Contract と ledger store を子エンジンへ継承する。継承値は
+      // 子のローカル finding_contract より優先され、親子で同じ authority を使う。
+      // 継承しないと子の parallel レビューが出す raw findings が親の台帳に入らず、
+      // fix に届かないまま reviewers ↔ fix が回り続ける（実測: 56周・9時間）。
       ...(this.deps.findingContract !== undefined && this.deps.findingLedgerStore !== undefined
         ? {
             inheritedFindingContract: {

@@ -24,7 +24,6 @@ function writeRunMeta(testDir: string, slug: string, meta: Record<string, unknow
   const metaPath = join(testDir, '.takt', 'runs', slug, 'meta.json');
   mkdirSync(join(testDir, '.takt', 'runs', slug), { recursive: true });
   writeFileSync(metaPath, JSON.stringify({
-    storageBackend: 'file',
     ...meta,
   }, null, 2), 'utf-8');
 }

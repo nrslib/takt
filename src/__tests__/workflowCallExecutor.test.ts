@@ -85,8 +85,6 @@ function prepareExecutionRequest(
 }
 
 const FAKE_FINDING_CONTRACT: FindingContractConfig = {
-  ledgerPath: '.takt/findings/peer-review.json',
-  rawFindingsPath: '.takt/findings/raw',
   manager: {
     persona: 'findings-manager',
     instruction: 'findings-manager',
@@ -95,8 +93,6 @@ const FAKE_FINDING_CONTRACT: FindingContractConfig = {
 };
 
 const FAKE_FINDING_CONTRACT_WITH_INVALID_MANAGER_PROVIDER: FindingContractConfig = {
-  ledgerPath: '.takt/findings/peer-review.json',
-  rawFindingsPath: '.takt/findings/raw',
   manager: {
     persona: 'findings-manager',
     instruction: 'findings-manager',

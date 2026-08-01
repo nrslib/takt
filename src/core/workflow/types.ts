@@ -516,9 +516,7 @@ export interface WorkflowEngineOptions {
    * workflow_call の親から継承する Finding Contract。
    * 継承しないと子の parallel レビューが出す raw findings が親の台帳に届かず、
    * fix ステップへ渡らないまま reviewers ↔ fix が回り続ける（実測: 56周・9時間）。
-   * ledgerStore は親と同一インスタンスを渡す。ledger_path / raw_findings_path は
-   * ワークフロー名に紐づくため、子が自前で store を作り直すと親の
-   * when(findings.*) と別の台帳を見てしまう。
+   * ledgerStore は親と同一インスタンスを渡し、同じ authority を共有する。
    */
   inheritedFindingContract?: {
     contract: FindingContractConfig;

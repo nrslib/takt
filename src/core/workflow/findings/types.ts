@@ -49,6 +49,7 @@ export type {
   ReviewerRawFindingCandidate,
   DisputeDecisionKind,
   FindingConflictAdjudicationOutcome,
+  FindingConflictAdjudicationAuditReport,
   FindingConflictAdjudicationOutput,
   FindingConflictAdjudicationRecord,
   FindingConflictAdjudicationTransition,

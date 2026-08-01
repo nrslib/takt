@@ -780,8 +780,6 @@ function makeHarness(
   } as never);
   const runInput = {
     contract: {
-      ledgerPath: '.takt/findings/ledger.json',
-      rawFindingsPath: '.takt/findings/raw',
       manager: {
         persona: 'findings-manager',
         instruction: 'Reconcile findings.',
@@ -917,8 +915,6 @@ describe('bounded raw adjudication recovery', () => {
     const prepared = prepareRawAdjudicationBatch({
       queue: [confirmation],
       contract: {
-        ledgerPath: '.takt/findings/ledger.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'Reconcile findings.',

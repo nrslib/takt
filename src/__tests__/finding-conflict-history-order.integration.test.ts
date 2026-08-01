@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { formatConflictId } from '../core/models/finding-conflict-identity.js';
+import { createAnchorAdjudication } from '../core/models/finding-anchor-relevance.js';
 import { reserveFindingConflictAdjudication } from '../core/workflow/findings/adjudication-reservation.js';
 import { computeClaimIdentityHash } from '../core/workflow/findings/evidence-domain.js';
 import { captureFindingMutationPrecondition } from '../core/workflow/findings/finding-preconditions.js';
@@ -11,7 +12,7 @@ import { applyManagerDecisionLifecycleCommands } from '../core/workflow/findings
 import { captureFindingLifecycleHead } from '../core/workflow/findings/lifecycle-mutation.js';
 import { computeLineageKey, computeReviewerStableKey } from '../core/workflow/findings/raw-canonicalization.js';
 import { reconcileFindingLedgerPlan } from '../core/workflow/findings/reconciler.js';
-import { createFindingLedgerStore } from '../core/workflow/findings/store.js';
+import { createTestFindingLedgerStore } from './helpers/finding-storage.js';
 import type {
   FindingEvidenceRecord,
   FindingLedger,
@@ -21,17 +22,17 @@ import type {
 import { compareBinaryStrings } from '../shared/utils/binary-string-comparator.js';
 import { verifiedFindingEvidenceFixture } from './helpers/finding-evidence.js';
 import { storedRawReconcileProvenance } from './helpers/finding-integrity.js';
-import { authorizeFindingLedgerFixture } from './helpers/finding-lifecycle-fixture.js';
+import {
+  authorizeFindingLedgerFixture,
+  canonicalRawFindingFixture,
+} from './helpers/finding-lifecycle-fixture.js';
 
 const WORKFLOW_NAME = 'peer-review';
-const LEDGER_PATH = '.takt/findings/peer-review.json';
-const RAW_FINDINGS_PATH = '.takt/findings/raw';
-
 function makeRawFinding(
   rawFindingId: string,
   evidence: RawFinding['evidence'] = [],
 ): RawFinding {
-  return {
+  return canonicalRawFindingFixture({
     rawFindingId,
     stepName: 'reviewers',
     reviewer: 'coding-review',
@@ -43,11 +44,18 @@ function makeRawFinding(
     relation: 'new',
     targetFindingId: null,
     evidence,
-  };
+  });
 }
 
 function makeManagerOutput(rawFindingId: string): FindingManagerOutput {
   return {
+    anchorAdjudications: [createAnchorAdjudication({
+      rawFindingId,
+      decision: 'conflict',
+      findingId: 'F-0001',
+      anchorRelevance: 'not_applicable',
+      evidence: 'Reobserved conflict.',
+    })],
     matches: [],
     newFindings: [],
     resolvedFindings: [],
@@ -279,13 +287,11 @@ describe('reconciled conflict lifecycle history order', () => {
       }],
     });
 
-    const store = createFindingLedgerStore({
+    const store = createTestFindingLedgerStore({
       projectCwd: cwd,
       runId: 'run-2',
       reportDir: join(cwd, '.takt', 'runs', 'run-2', 'reports'),
       workflowName: WORKFLOW_NAME,
-      ledgerPath: LEDGER_PATH,
-      rawFindingsPath: RAW_FINDINGS_PATH,
     });
     await store.updateLedger(() => ({ ledger: applied, result: undefined }));
     const persisted = store.loadLedger();

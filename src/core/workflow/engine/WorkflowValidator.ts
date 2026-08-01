@@ -471,26 +471,6 @@ function validateFindingContractTeamLeaderMode(config: WorkflowConfig, findingCo
   );
 }
 
-/**
- * 子ワークフローが自前の finding_contract を持ちながら、workflow_call の親からも
- * 継承している場合を設定エラーで落とす。ledger_path / raw_findings_path は
- * ワークフロー名に紐づくため、暗黙に両方を許すと子は自分の台帳へ、親の
- * when(findings.open.count == 0) 等は親の台帳へ、と別々の台帳を見てしまう。
- */
-function validateFindingContractInheritanceConflict(
-  config: WorkflowConfig,
-  options: WorkflowEngineOptions,
-): void {
-  if (config.findingContract !== undefined && options.inheritedFindingContract !== undefined) {
-    throw new Error(
-      `Configuration error: workflow "${config.name}" declares its own finding_contract while also being called `
-      + 'as a workflow_call subworkflow that inherits a finding_contract from its parent; a workflow cannot combine '
-      + 'both because ledger_path/raw_findings_path are keyed by workflow name and the parent\'s when(findings.*) '
-      + 'rules would end up observing a different ledger than the child writes to',
-    );
-  }
-}
-
 function validateRequiredInheritedFindingContract(
   config: WorkflowConfig,
   options: WorkflowEngineOptions,
@@ -670,7 +650,6 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
   validateFindingConflictAdjudicationReservedName(config);
   validateWorkflowStepNamesUnique(config);
   validateRequiredInheritedFindingContract(config, options);
-  validateFindingContractInheritanceConflict(config, options);
   validateFindingContractOutputFormatRequiresContract(config, findingContractEnabled);
   validateFindingContractReviewerReports(config, findingContractEnabled);
   validateFindingContractDelegatedIntake(config, findingContractEnabled);

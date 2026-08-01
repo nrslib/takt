@@ -12,15 +12,13 @@
 import { mkdirSync, mkdtempSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const failingRead = vi.hoisted(() => ({
   suffix: '',
   afterReadSuffix: '',
   afterRead: undefined as (() => void) | undefined,
-  beforeWritePathFragment: '',
-  beforeWrite: undefined as (() => void) | undefined,
   descriptorPaths: new Map<number, string>(),
 }));
 
@@ -55,21 +53,6 @@ vi.mock('node:fs', async () => {
       }
       return content;
     },
-    writeFileSync(...args: Parameters<typeof actual.writeFileSync>) {
-      const path = typeof args[0] === 'number'
-        ? failingRead.descriptorPaths.get(args[0])
-        : String(args[0]);
-      if (
-        failingRead.beforeWritePathFragment.length > 0
-        && path?.includes(failingRead.beforeWritePathFragment)
-      ) {
-        const beforeWrite = failingRead.beforeWrite;
-        failingRead.beforeWritePathFragment = '';
-        failingRead.beforeWrite = undefined;
-        beforeWrite?.();
-      }
-      return actual.writeFileSync(...args);
-    },
   };
 });
 
@@ -86,7 +69,8 @@ import {
   computeAdjudicationEvidenceHash,
 } from '../core/workflow/findings/adjudication-evidence.js';
 import { buildFindingConflictAdjudicationStep, FINDING_CONFLICT_ADJUDICATION_RULE_INDEX } from '../core/workflow/findings/adjudication-step.js';
-import { createFindingLedgerStore } from '../core/workflow/findings/store.js';
+import { createTestFindingLedgerStore } from './helpers/finding-storage.js';
+import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
 import { captureReviewScopeSnapshot } from '../core/workflow/findings/snapshot.js';
 import type { FindingContractConfig } from '../core/workflow/findings/types.js';
 import type { WorkflowState } from '../core/models/types.js';
@@ -121,8 +105,6 @@ function conflictAdjudicationEvents(ledger: {
 
 function makeContract(cwd: string): FindingContractConfig {
   return {
-    ledgerPath: '.takt/findings/peer-review.json',
-    rawFindingsPath: '.takt/findings/raw',
     manager: {
       persona: 'findings-manager',
       instruction: 'findings-manager',
@@ -153,8 +135,10 @@ function makeState(): WorkflowState {
   };
 }
 
-function seedLedger(cwd: string, ledgerPath: string): void {
-  mkdirSync(dirname(ledgerPath), { recursive: true });
+async function seedLedger(
+  cwd: string,
+  ledgerStore: FindingLedgerStore,
+): Promise<void> {
   const evidence = verifiedFindingEvidenceFixture({
     cwd,
     path: 'src/a.ts',
@@ -219,23 +203,28 @@ function seedLedger(cwd: string, ledgerPath: string): void {
     rawRecoveryResults: [],
     interpretations: [],
   });
-  writeFileSync(ledgerPath, JSON.stringify(ledger, null, 2), 'utf-8');
+  await ledgerStore.updateLedger(() => ({ ledger, result: undefined }));
 }
 
 describe('finding-conflict-adjudication runner', () => {
   let cwd: string;
   let reportDir: string;
-  let ledgerPath: string;
+  let ledgerStore: FindingLedgerStore;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     cwd = mkdtempSync(join(tmpdir(), 'takt-adjudication-runner-'));
     reportDir = join(cwd, '.takt', 'runs', 'run-1', 'reports');
     mkdirSync(reportDir, { recursive: true });
     mkdirSync(join(cwd, 'src'), { recursive: true });
     writeFileSync(join(cwd, 'src', 'a.ts'), Array.from({ length: 20 }, (_, i) => `// line ${i + 1}`).join('\n') + '\n');
-    ledgerPath = join(cwd, '.takt', 'findings', 'peer-review.json');
     initializeGitFixture(cwd, ['src/a.ts']);
-    seedLedger(cwd, ledgerPath);
+    ledgerStore = createTestFindingLedgerStore({
+      projectCwd: cwd,
+      runId: 'run-1',
+      reportDir,
+      workflowName: 'runner-test',
+    });
+    await seedLedger(cwd, ledgerStore);
     executeAgentMock.mockReset();
   });
 
@@ -243,8 +232,6 @@ describe('finding-conflict-adjudication runner', () => {
     failingRead.suffix = '';
     failingRead.afterReadSuffix = '';
     failingRead.afterRead = undefined;
-    failingRead.beforeWritePathFragment = '';
-    failingRead.beforeWrite = undefined;
     failingRead.descriptorPaths.clear();
     if (existsSync(cwd)) {
       rmSync(cwd, { recursive: true, force: true });
@@ -256,14 +243,6 @@ describe('finding-conflict-adjudication runner', () => {
     emitEvent: (event: string, ...args: unknown[]) => void = () => {},
   ) {
     const contract = makeContract(cwd);
-    const ledgerStore = createFindingLedgerStore({
-      projectCwd: cwd,
-      runId: 'run-1',
-      reportDir,
-      workflowName: 'runner-test',
-      ledgerPath: contract.ledgerPath,
-      rawFindingsPath: contract.rawFindingsPath,
-    });
     const step = buildFindingConflictAdjudicationStep({ contract, workflowProvider: 'claude' });
     const runner = createFindingConflictAdjudicationRunner({
       ledgerStore,
@@ -345,7 +324,7 @@ describe('finding-conflict-adjudication runner', () => {
     expect(result.response.matchedRuleIndex).toBe(FINDING_CONFLICT_ADJUDICATION_RULE_INDEX.FINDING_CLOSED);
     expect(result.response.content).toContain('discarded');
 
-    const ledger = JSON.parse(readFileSync(ledgerPath, 'utf-8')) as {
+    const ledger = ledgerStore.loadLedger() as {
       findings: Array<{ status: string }>;
       conflicts: Array<{ status: string; adjudications?: unknown[] }>;
       lifecycleReservations: Array<{ mutationId: string; context: { kind: string; evidenceHash?: string } }>;
@@ -438,7 +417,7 @@ describe('finding-conflict-adjudication runner', () => {
     expect(persistedConflict.adjudications ?? []).toHaveLength(0);
   });
 
-  it('保存処理中に作業ツリーが変化した裁定を公開しない', async () => {
+  it('予約後かつcommit前に作業ツリーが変化した裁定を公開しない', async () => {
     const { ledgerStore } = makeRunner();
     const initialLedger = ledgerStore.loadLedger();
     const conflict = initialLedger.conflicts[0]!;
@@ -458,10 +437,7 @@ describe('finding-conflict-adjudication runner', () => {
       throw new Error('Expected conflict adjudication reservation');
     }
     const promptedEvidenceHash = reservation.result.evidenceHash;
-    failingRead.beforeWritePathFragment = 'peer-review.json';
-    failingRead.beforeWrite = () => {
-      writeFileSync(join(cwd, 'src', 'a.ts'), '// changed during ledger save\n');
-    };
+    writeFileSync(join(cwd, 'src', 'a.ts'), '// changed before commit\n');
 
     const mutation = await commitFindingConflictAdjudication({
       ledgerStore,
@@ -598,7 +574,7 @@ describe('finding-conflict-adjudication runner', () => {
     const result = await runner.run(step, makeState());
 
     expect(result.response.content).toContain('discarded');
-    const ledger = JSON.parse(readFileSync(ledgerPath, 'utf-8')) as {
+    const ledger = ledgerStore.loadLedger() as {
       findings: Array<{ status: string }>;
       conflicts: Array<{ status: string; adjudications?: unknown[] }>;
     };
@@ -629,7 +605,7 @@ describe('finding-conflict-adjudication runner', () => {
 
     const result = await runner.run(step, makeState());
 
-    const ledger = JSON.parse(readFileSync(ledgerPath, 'utf-8')) as {
+    const ledger = ledgerStore.loadLedger() as {
       findings: Array<{ status: string }>;
       conflicts: Array<{ status: string; adjudications?: unknown[] }>;
     };
@@ -676,7 +652,7 @@ describe('finding-conflict-adjudication runner', () => {
 
     expect(result.response.content).toContain('Adjudicated conflict C-FA2947446963');
     expect(emitEvent).toHaveBeenCalledTimes(2);
-    const ledger = JSON.parse(readFileSync(ledgerPath, 'utf-8')) as {
+    const ledger = ledgerStore.loadLedger() as {
       findings: Array<{ title: string }>;
       rawFindings: Array<{ description: string }>;
       conflicts: Array<{ adjudications?: unknown[] }>;
@@ -707,7 +683,7 @@ describe('finding-conflict-adjudication runner', () => {
     const first = await runner.run(step, makeState());
     expect(first.response.status).toBe('rate_limited');
 
-    const ledgerAfterRateLimit = JSON.parse(readFileSync(ledgerPath, 'utf-8')) as {
+    const ledgerAfterRateLimit = ledgerStore.loadLedger() as {
       conflicts: Array<{ adjudications?: unknown[] }>;
       lifecycleReservations: Array<{ mutationId: string; context: { kind: string; evidenceHash?: string } }>;
       lifecycleEvents: Array<{ mutationId: string; outcome: { kind: string } }>;
@@ -734,7 +710,7 @@ describe('finding-conflict-adjudication runner', () => {
     expect(second.response.matchedRuleIndex).toBe(FINDING_CONFLICT_ADJUDICATION_RULE_INDEX.UNRESOLVED);
     expect(executeAgentMock).toHaveBeenCalledTimes(2);
 
-    const ledgerAfterRetry = JSON.parse(readFileSync(ledgerPath, 'utf-8')) as {
+    const ledgerAfterRetry = ledgerStore.loadLedger() as {
       conflicts: Array<{ adjudications?: unknown[] }>;
       lifecycleReservations: Array<{ mutationId: string; context: { kind: string; evidenceHash?: string } }>;
       lifecycleEvents: Array<{ mutationId: string; outcome: { kind: string } }>;
@@ -768,7 +744,7 @@ describe('finding-conflict-adjudication runner', () => {
 
     expect(retried.response.content).toContain('Adjudicated conflict C-FA2947446963');
     expect(executeAgentMock).toHaveBeenCalledTimes(1);
-    const ledger = JSON.parse(readFileSync(ledgerPath, 'utf-8')) as {
+    const ledger = ledgerStore.loadLedger() as {
       conflicts: Array<{ adjudications?: unknown[] }>;
       lifecycleReservations: Array<{ mutationId: string; context: { kind: string; evidenceHash?: string } }>;
       lifecycleEvents: Array<{ mutationId: string; outcome: { kind: string } }>;
@@ -783,7 +759,7 @@ describe('finding-conflict-adjudication runner', () => {
 
     let reservationsAtLlmTime: unknown[] | undefined;
     executeAgentMock.mockImplementation(async () => {
-      const current = JSON.parse(readFileSync(ledgerPath, 'utf-8')) as {
+      const current = ledgerStore.loadLedger() as {
         lifecycleReservations: unknown[];
       };
       reservationsAtLlmTime = conflictAdjudicationReservations(current);
@@ -843,7 +819,7 @@ describe('finding-conflict-adjudication runner', () => {
     expect(executeAgentMock).toHaveBeenCalledTimes(1);
     expect(ownerResult.response.content).toContain('Adjudicated conflict C-FA2947446963');
     expect(competingResult.response.content).toContain('already being adjudicated');
-    const ledger = JSON.parse(readFileSync(ledgerPath, 'utf-8')) as {
+    const ledger = ledgerStore.loadLedger() as {
       conflicts: Array<{
         adjudications?: Array<{ rationale?: string }>;
       }>;
@@ -917,7 +893,7 @@ describe('finding-conflict-adjudication runner', () => {
       join(reportDir, 'findings-adjudication.C-FA2947446963.json'),
       'utf-8',
     )) as { reason: string };
-    const ledger = JSON.parse(readFileSync(ledgerPath, 'utf-8')) as {
+    const ledger = ledgerStore.loadLedger() as {
       findings: Array<{ status: string }>;
       conflicts: Array<{ status: string; adjudications?: unknown[] }>;
     };
@@ -947,7 +923,7 @@ describe('finding-conflict-adjudication runner', () => {
     const result = await runner.run(step, makeState());
 
     failingRead.suffix = '';
-    const ledger = JSON.parse(readFileSync(ledgerPath, 'utf-8')) as {
+    const ledger = ledgerStore.loadLedger() as {
       findings: Array<{ status: string }>;
       conflicts: Array<{ status: string; adjudications?: unknown[] }>;
       lifecycleReservations: Array<{ mutationId: string; context: { kind: string; evidenceHash?: string } }>;
@@ -980,7 +956,7 @@ describe('finding-conflict-adjudication runner', () => {
     const result = await runner.run(step, makeState());
 
     failingRead.suffix = '';
-    const ledger = JSON.parse(readFileSync(ledgerPath, 'utf-8')) as {
+    const ledger = ledgerStore.loadLedger() as {
       findings: Array<{ status: string }>;
       conflicts: Array<{ status: string; adjudications?: Array<{ rationale?: string }> }>;
       lifecycleReservations: Array<{ mutationId: string; context: { kind: string; evidenceHash?: string } }>;

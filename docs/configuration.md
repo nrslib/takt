@@ -16,8 +16,6 @@ logging:
   level: info                 # Log level: debug, info, warn, error
 provider: claude              # Default provider: claude, claude-sdk, claude-terminal, codex, opencode, cursor, copilot, kiro, or mock
 model: sonnet                 # Default model (optional, passed to provider as-is)
-run_storage:
-  backend: file               # Run storage authority: file (default) or sqlite
 branch_name_strategy: romaji  # Branch name generation: 'romaji' (fast) or 'ai' (slow)
 prevent_sleep: false          # Prevent macOS idle sleep during execution (caffeinate)
 notification_sound: true      # Enable/disable notification sounds
@@ -188,7 +186,6 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 | `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | `"claude"` | Default concrete AI provider (`claude` = headless CLI mode, `claude-sdk` = SDK/API mode, `claude-terminal` = experimental interactive terminal mode) |
 | `logging.trace` | boolean | `false` | Enable trace-level logging (suppresses high-frequency debug noise) |
 | `model` | string | - | Default model name (passed to provider as-is) |
-| `run_storage.backend` | `"file"` \| `"sqlite"` | `"file"` | Run storage authority. SQLite stores each run in `.takt/runs/<run>/run.sqlite` |
 | `branch_name_strategy` | `"romaji"` \| `"ai"` | `"romaji"` | Branch name generation strategy |
 | `prevent_sleep` | boolean | `false` | Prevent macOS idle sleep (caffeinate) |
 | `notification_sound` | boolean | `true` | Enable notification sounds |
@@ -244,8 +241,6 @@ Configure project-specific settings in `.takt/config.yaml`. This file is created
 # .takt/config.yaml
 provider: claude              # Override provider for this project
 model: sonnet                 # Override model for this project
-run_storage:
-  backend: sqlite             # Override run storage authority for this project
 auto_pr: true                 # Auto-create PR after worktree execution
 logging:
   level: info                 # Console log level: debug | info | warn | error
@@ -297,7 +292,6 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 |-------|------|---------|-------------|
 | `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | - | Override concrete provider |
 | `model` | string | - | Override model name (passed to provider as-is) |
-| `run_storage.backend` | `"file"` \| `"sqlite"` | global setting, then `"file"` | Project run storage authority override |
 | `allow_git_hooks` | boolean | `false` | Allow git hooks during TAKT-managed auto-commit |
 | `allow_git_filters` | boolean | `false` | Allow git filters during TAKT-managed auto-commit |
 | `auto_pr` | boolean | - | Auto-create PR after worktree execution |
@@ -331,10 +325,14 @@ The normalizer provider/model/options are isolated from reviewer routing and CLI
 overrides; only a rate-limit fallback for the `finding_intake_normalizer`
 operation may replace them. The project block atomically replaces the global block.
 
-With `backend: sqlite`, TAKT uses only `.takt/runs/<run>/run.sqlite` as the
-Finding Contract authority; it does not dual-write or fall back to the file
-ledger. Resume fails if the source database is missing or its recorded backend
-does not match the currently resolved backend.
+Run metadata, session logs, traces, reports, and other run lifecycle artifacts
+are files under `.takt/runs/<run>/`. Finding Contract state is separate: TAKT
+lazily creates `.takt/runs/<run>/finding-contract.sqlite` only when a Finding
+authority is first resolved. The database is an internal, run-scoped authority
+for Finding Contract management, not the run record itself. Resume and requeue
+may seed a target run from the source run's Finding database even though the
+target is a different run. If the source has no Finding database, the target
+starts with an empty ledger instead of rejecting the resume.
 
 ### Task Execution Config Environment Overrides
 

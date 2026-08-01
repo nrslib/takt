@@ -8,7 +8,6 @@
 import { writeFileAtomic, ensureDir } from '../../../infra/config/index.js';
 import {
   readRunMeta,
-  parseRunMeta,
   type RunMeta,
   type RunResumeSource,
 } from '../../../core/workflow/run/run-meta.js';
@@ -16,20 +15,12 @@ import { parseWorkflowResumePoint } from '../../../core/workflow/resume-point-co
 import type { RunPaths } from '../../../core/workflow/run/run-paths.js';
 import type { WorkflowResumePoint } from '../../../core/models/index.js';
 import type { WorkflowTraceDiscovery } from '../../../core/workflow/observability/traceDiscovery.js';
-import type { RunStorageBackend } from '../../../core/models/config-types.js';
 import {
   createPullRequestContext,
   encodePullRequestContext,
   type PersistedPullRequestContext,
   type PullRequestContext,
 } from '../../../core/workflow/pr-context.js';
-import {
-  PrivateArtifactPublicationConflictError,
-  readPrivateFileState,
-  writePrivateFileWithModeExpected,
-} from '../../../shared/utils/private-file.js';
-
-const RUN_META_MODE = 0o600;
 
 export interface RunMetaManagerOptions {
   readonly startTime?: string;
@@ -50,7 +41,6 @@ type PersistedRunMeta = Omit<
   | 'operationJournalRunSlug'
   | 'operationClaimToken'
   | 'prContext'
-  | 'terminalPublicationId'
 > & {
   resume_point?: WorkflowResumePoint;
   source_run_slug?: string;
@@ -59,7 +49,6 @@ type PersistedRunMeta = Omit<
   operation_journal_run_slug?: string;
   operation_claim_token?: string;
   pr_context?: PersistedPullRequestContext;
-  terminal_publication_id?: string;
 };
 
 function serializeRunMeta(meta: RunMeta, updatedAt: string): PersistedRunMeta {
@@ -71,7 +60,6 @@ function serializeRunMeta(meta: RunMeta, updatedAt: string): PersistedRunMeta {
     operationJournalRunSlug,
     operationClaimToken,
     prContext,
-    terminalPublicationId,
     ...baseMeta
   } = meta;
   return {
@@ -88,84 +76,7 @@ function serializeRunMeta(meta: RunMeta, updatedAt: string): PersistedRunMeta {
       ? { operation_claim_token: operationClaimToken }
       : {}),
     ...(prContext ? { pr_context: encodePullRequestContext(prContext) } : {}),
-    ...(terminalPublicationId === undefined
-      ? {}
-      : { terminal_publication_id: terminalPublicationId }),
   };
-}
-
-export function projectTerminalRunMeta(input: {
-  readonly runPaths: RunPaths;
-  readonly publicationId: string;
-  readonly seed: {
-    readonly task: string;
-    readonly workflowName: string;
-    readonly projectCwd: string;
-    readonly backend: RunStorageBackend;
-    readonly startedAt: string;
-    readonly resumeSource: null | {
-      readonly mode: RunResumeSource['resumeMode'];
-      readonly sourceRunSlug: string | null;
-    };
-  };
-  readonly status: 'completed' | 'aborted' | 'failed';
-  readonly iterations: number;
-  readonly reason?: string;
-  readonly endTime: string;
-}): void {
-  while (true) {
-    const snapshot = readPrivateFileState(input.runPaths.metaAbs);
-    const current = snapshot.state.exists
-      ? parseRunMeta(JSON.parse(
-          requireMetaContent(snapshot, input.runPaths.metaAbs)
-            .toString('utf-8'),
-        ) as unknown)
-      : createRunMetaFromTerminalSeed(input);
-    assertTerminalMetaIdentity(current, input);
-    const finalized: RunMeta = {
-      ...current,
-      status: input.status,
-      endTime: input.endTime,
-      iterations: input.iterations,
-      ...(input.reason === undefined ? {} : { reason: input.reason }),
-      terminalPublicationId: input.publicationId,
-    };
-    if (
-      current.terminalPublicationId === input.publicationId
-      && current.status === finalized.status
-      && current.endTime === finalized.endTime
-      && current.iterations === finalized.iterations
-      && current.reason === finalized.reason
-    ) {
-      return;
-    }
-    if (
-      current.terminalPublicationId !== undefined
-      || current.status !== 'running'
-    ) {
-      throw new Error(
-        `Run metadata terminal state conflicts for "${input.runPaths.slug}"`,
-      );
-    }
-    try {
-      writePrivateFileWithModeExpected(
-        input.runPaths.metaAbs,
-        JSON.stringify(
-          serializeRunMeta(finalized, input.endTime),
-          null,
-          2,
-        ),
-        RUN_META_MODE,
-        snapshot.state,
-      );
-      return;
-    } catch (error) {
-      if (error instanceof PrivateArtifactPublicationConflictError) {
-        continue;
-      }
-      throw error;
-    }
-  }
 }
 
 export function finalizeFileRunMeta(input: {
@@ -179,7 +90,6 @@ export function finalizeFileRunMeta(input: {
   if (
     current === null
     || current.runSlug !== input.runPaths.slug
-    || current.storageBackend !== 'file'
   ) {
     throw new Error(
       `File run metadata identity does not match "${input.runPaths.slug}"`,
@@ -187,7 +97,6 @@ export function finalizeFileRunMeta(input: {
   }
   const finalized: RunMeta = {
     ...current,
-    terminalPublicationId: undefined,
     status: input.status,
     endTime: input.endTime,
     iterations: input.iterations,
@@ -199,79 +108,6 @@ export function finalizeFileRunMeta(input: {
   );
 }
 
-function assertTerminalMetaIdentity(
-  current: RunMeta,
-  input: {
-    readonly runPaths: RunPaths;
-    readonly seed: {
-      readonly task: string;
-      readonly workflowName: string;
-      readonly backend: RunStorageBackend;
-      readonly startedAt: string;
-    };
-  },
-): void {
-  if (
-    current.runSlug !== input.runPaths.slug
-    || current.task !== input.seed.task
-    || current.workflow !== input.seed.workflowName
-    || current.storageBackend !== input.seed.backend
-    || current.startTime !== input.seed.startedAt
-  ) {
-    throw new Error(
-      `Run metadata identity conflicts for "${input.runPaths.slug}"`,
-    );
-  }
-}
-
-function requireMetaContent(
-  snapshot: ReturnType<typeof readPrivateFileState>,
-  path: string,
-): Buffer {
-  if (!('content' in snapshot)) {
-    throw new Error(`Run metadata content is missing: ${path}`);
-  }
-  return snapshot.content;
-}
-
-function createRunMetaFromTerminalSeed(input: {
-  readonly runPaths: RunPaths;
-  readonly seed: {
-    readonly task: string;
-    readonly workflowName: string;
-    readonly projectCwd: string;
-    readonly backend: RunStorageBackend;
-    readonly startedAt: string;
-    readonly resumeSource: null | {
-      readonly mode: RunResumeSource['resumeMode'];
-      readonly sourceRunSlug: string | null;
-    };
-  };
-}): RunMeta {
-  return {
-    task: input.seed.task,
-    workflow: input.seed.workflowName,
-    runSlug: input.runPaths.slug,
-    runRoot: input.runPaths.runRootRel,
-    reportDirectory: input.runPaths.reportsRel,
-    contextDirectory: input.runPaths.contextRel,
-    logsDirectory: input.runPaths.logsRel,
-    storageBackend: input.seed.backend,
-    status: 'running',
-    startTime: input.seed.startedAt,
-    ...(input.seed.resumeSource === null
-      ? {}
-      : {
-          resumeMode: input.seed.resumeSource.mode,
-          ...(input.seed.resumeSource.sourceRunSlug === null
-            ? {}
-            : {
-                sourceRunSlug: input.seed.resumeSource.sourceRunSlug,
-              }),
-        }),
-  };
-}
-
 export class RunMetaManager {
   private readonly runMeta: RunMeta;
   private readonly metaAbs: string;
@@ -280,7 +116,6 @@ export class RunMetaManager {
     runPaths: RunPaths,
     task: string,
     workflowName: string,
-    storageBackend: RunStorageBackend,
     resumeSource?: RunResumeSource,
     options?: RunMetaManagerOptions,
   ) {
@@ -293,7 +128,6 @@ export class RunMetaManager {
       reportDirectory: runPaths.reportsRel,
       contextDirectory: runPaths.contextRel,
       logsDirectory: runPaths.logsRel,
-      storageBackend,
       status: 'running',
       startTime: options?.startTime ?? new Date().toISOString(),
       ...(resumeSource ? {

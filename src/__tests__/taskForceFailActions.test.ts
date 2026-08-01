@@ -6,11 +6,6 @@ import type { TaskListItem } from '../infra/task/types.js';
 import { isStaleRunningTask } from '../infra/task/index.js';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import { initNdjsonLog } from '../infra/fs/index.js';
-import {
-  createRunStorage,
-  openRunStorage,
-} from '../infra/run-storage/index.js';
-import { createBootstrapRecoverySeed } from '../core/workflow/run/bootstrap-recovery-seed.js';
 
 const {
   mockConfirm,
@@ -93,7 +88,6 @@ function writeMetaOnly(runRoot: string, slug: string, meta: Record<string, unkno
     reportDirectory: path.join(relativeRunRoot, 'reports'),
     contextDirectory: path.join(relativeRunRoot, 'context'),
     logsDirectory: path.join(relativeRunRoot, 'logs'),
-    storageBackend: 'file',
     status: 'running',
     startTime: '2026-04-09T00:00:00.000Z',
     ...meta,
@@ -111,17 +105,6 @@ function writeMeta(runRoot: string, slug: string, meta: Record<string, unknown>)
       startTime: '2026-04-09T00:00:00.000Z',
     },
   );
-}
-
-function sqliteBootstrapSeed(projectDir: string) {
-  return createBootstrapRecoverySeed({
-    task: 'Stored from run context',
-    workflowName: 'default',
-    projectCwd: projectDir,
-    backend: 'sqlite',
-    startedAt: '2026-04-09T00:00:00.000Z',
-    sessionId: 'force-fail-session',
-  });
 }
 
 describe('forceFailRunningTask', () => {
@@ -143,7 +126,6 @@ describe('forceFailRunningTask', () => {
       const runSlug = '20260409-run-a';
       const runPaths = buildRunPaths(projectDir, runSlug);
       writeMeta(projectDir, runSlug, {
-        storageBackend: 'file',
         status: 'running',
         currentStep: 'implement',
         currentIteration: 2,
@@ -160,7 +142,6 @@ describe('forceFailRunningTask', () => {
         .resolves.toMatchObject({ issues: [] });
       await expect(storage.terminalize('contract force-fail'))
         .resolves.toMatchObject({ issues: [] });
-      expect(fs.existsSync(runPaths.databaseAbs)).toBe(false);
       const meta = JSON.parse(
         fs.readFileSync(runPaths.metaAbs, 'utf-8'),
       ) as { status: string; reason?: string };
@@ -187,7 +168,6 @@ describe('forceFailRunningTask', () => {
     const runSlug = '20260409-bootstrap-partial';
     const runPaths = buildRunPaths(projectDir, runSlug);
     writeMetaOnly(projectDir, runSlug, {
-      storageBackend: 'file',
       status: 'running',
     });
 
@@ -214,7 +194,6 @@ describe('forceFailRunningTask', () => {
     const runSlug = '20260409-multiple-logs';
     const runPaths = buildRunPaths(projectDir, runSlug);
     writeMeta(projectDir, runSlug, {
-      storageBackend: 'file',
       status: 'running',
       currentStep: 'implement',
     });
@@ -607,52 +586,6 @@ describe('forceFailRunningTask', () => {
       'Failed to mark running task "running-task" as failed: runner exploded',
     );
     expect(mockSuccess).not.toHaveBeenCalled();
-  });
-
-  it('SQLite leaseが残っていてもfile lifecycleでforce-failする', async () => {
-    mockConfirm.mockResolvedValue(true);
-    mockForceFailRunningTask.mockImplementation(() => undefined);
-    const runSlug = '20260409-run-a';
-    const runPaths = buildRunPaths(projectDir, runSlug);
-    writeMeta(projectDir, runSlug, {
-      storageBackend: 'file',
-      status: 'running',
-      currentStep: 'implement',
-      currentIteration: 2,
-    });
-    const root = createRunStorage({
-      databasePath: runPaths.databaseAbs,
-      bootstrapSeed: sqliteBootstrapSeed(projectDir),
-      run: {
-        runId: runSlug,
-        workflowName: 'default',
-        findingContractEnabled: false,
-      },
-    });
-    root.claimLease({
-      ownerKey: `finding-contract:${runSlug}`,
-      leaseDurationMs: 30_000,
-    });
-    root.close();
-
-    const result = await forceFailRunningTask(
-      createRunningTask(projectDir),
-      projectDir,
-    );
-
-    expect(result).toBe(true);
-    const reopened = openRunStorage({
-      databasePath: runPaths.databaseAbs,
-    });
-    expect(reopened.readResumeSnapshot().run.status).toBe('running');
-    expect(reopened.readTerminalPublication()).toBeUndefined();
-    reopened.close();
-    expect(JSON.parse(fs.readFileSync(runPaths.metaAbs, 'utf-8')))
-      .toMatchObject({ status: 'failed' });
-    expect(mockForceFailRunningTask).toHaveBeenCalledWith('running-task', {
-      step: 'implement',
-      error: 'Manually marked as failed',
-    });
   });
 
 });

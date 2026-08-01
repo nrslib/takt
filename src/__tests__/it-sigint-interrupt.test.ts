@@ -87,19 +87,19 @@ vi.mock('../core/workflow/index.js', async () => {
   };
 });
 
-vi.mock('../features/tasks/execute/workflowRunStorage.js', async (importOriginal) => {
+vi.mock('../features/tasks/execute/workflowRunLifecycle.js', async (importOriginal) => {
   const actual = await importOriginal<
-    typeof import('../features/tasks/execute/workflowRunStorage.js')
+    typeof import('../features/tasks/execute/workflowRunLifecycle.js')
   >();
-  const { createWorkflowRunStorageCompositionTestDouble } = await import(
-    './helpers/run-storage.js'
+  const { createWorkflowRunLifecycleCompositionTestDouble } = await import(
+    './helpers/run-lifecycle.js'
   );
   return {
     ...actual,
-    createWorkflowRunComposition: (
-      input: Parameters<typeof actual.createWorkflowRunComposition>[0],
-    ) => createWorkflowRunStorageCompositionTestDouble(
-      actual.createWorkflowRunComposition,
+    createWorkflowRunLifecycle: (
+      input: Parameters<typeof actual.createWorkflowRunLifecycle>[0],
+    ) => createWorkflowRunLifecycleCompositionTestDouble(
+      actual.createWorkflowRunLifecycle,
       input,
       {
         sessionId: 'test-session-id',
@@ -138,9 +138,6 @@ vi.mock('../infra/config/index.js', () => ({
     }
     return result;
   },
-  resolveWorkflowConfigValue: vi.fn().mockReturnValue({
-    backend: 'file',
-  }),
   saveSessionState: vi.fn(),
   ensureDir: vi.fn(),
   writeFileAtomic: vi.fn(),

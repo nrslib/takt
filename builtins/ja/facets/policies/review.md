@@ -214,7 +214,7 @@ DRY違反の修正案は、単に共通化を求めるだけでは不十分と�
 
 Finding Contract は individual finding 単位ではなく review workflow 全体に適用される。
 Finding Contract workflow かどうかは、workflow レベルの `finding_contract` 設定が
-宣言されている場合に限って判定する。`findings-ledger.json`、instruction template 内の
+宣言されている場合に限って判定する。補助 snapshot である `findings-ledger.json`、instruction template 内の
 専用 `Finding Contract` セクション、output contract の `観測した指摘` table は、
 すでに Finding Contract が設定された workflow 内での補助証跡であり、それ自体では
 Finding Contract を有効化しない。
@@ -222,16 +222,17 @@ Finding Contract を有効化しない。
 Finding Contract 利用時、レビュワーは新規の最終 `finding_id` を採番せず、最終 lifecycle
 状態も判定しない。観測した問題は `観測した指摘` table に、証跡付き raw finding として
 報告する。raw relation には `new` / `persists` / `resolution_confirmation` / `reopened`
-だけを使い、既存 ID への言及は ledger に載っている指摘を参照する場合に限る。最終
+だけを使い、既存 ID への言及はエンジンが提供する live ledger summary / Finding state に載っている指摘を参照する場合に限る。最終
 lifecycle 判定と finding ID の対応づけは findings-manager とエンジンの責務である。
 
-Finding Contract が設定された workflow で parse 可能な ledger がある場合、tracked findings
-の正本は ledger である。個別レポートと raw finding 詳細は補助証跡として扱う。ledger が
-存在するが不完全な場合は、mapped findings は ledger に従い、unmapped raw findings は
-findings-manager reconciliation 待ちの potential new entries として扱う。Finding Contract
-が設定された workflow で parse 可能な ledger がない場合、レポート履歴は observed raw
-findings の補助証跡としてのみ使う。最終 `finding_id` や lifecycle 状態は割り当てず、
-従来ルールも適用しない。ledger 再生成または findings-manager reconciliation を待つ。
+Finding Contract が設定された workflow では、エンジンが提供する live ledger summary /
+Finding state が tracked findings の正本である。個別レポート、raw finding 詳細、
+`findings-ledger.json` snapshot は補助証跡としてのみ扱う。live summary が不完全な場合は、
+mapped findings は live state に従い、unmapped raw findings は findings-manager reconciliation
+待ちの potential new entries として扱う。live Finding state がない場合、レポート履歴は
+observed raw findings の補助証跡としてのみ使う。最終 `finding_id` や lifecycle 状態は
+割り当てず、従来ルールも適用しない。エンジンまたは findings-manager が reconciled state
+を提供するのを待つ。
 
 ### 従来の Finding ID ルール（Finding Contract を使わない workflow 向け）
 
@@ -393,9 +394,9 @@ Finding Contract で再発が別問題なら reviewer は raw relation を `new`
 
 **優先順位:**
 
-1. Finding Contract が設定された workflow で parse 可能な Finding Contract ledger / `findings-ledger.json` が利用できる場合、tracked findings の正本として ledger を使用する。修正対象は ledger 上の open findings（`new`、`persists`、`reopened`）のみとし、resolved / closed findings は修正対象外とする。個別レポートは ledger から辿る補助証跡として扱う。
-2. ledger が存在するが不完全な場合は、mapped findings は ledger に従い、unmapped raw findings は findings-manager reconciliation 待ちの potential new entries として扱う。
-3. Finding Contract が設定された workflow で parse 可能な ledger がない場合、Report Directory の最新レビューは observed raw findings の補助証跡としてのみ使う。最終 `finding_id` や lifecycle 状態は割り当てず、従来ルールも適用しない。ledger 再生成または findings-manager reconciliation を待つ。
+1. Finding Contract が設定された workflow では、エンジンが提供する live ledger summary / Finding state を tracked findings の正本として使用する。修正対象は live state 上の open findings（`new`、`persists`、`reopened`）のみとし、resolved / closed findings は修正対象外とする。個別レポートと `findings-ledger.json` snapshot は補助証跡としてのみ扱う。
+2. live summary が不完全な場合は、mapped findings は live state に従い、unmapped raw findings は findings-manager reconciliation 待ちの potential new entries として扱う。
+3. Finding Contract が設定されているが live Finding state がない場合、Report Directory の最新レビューは observed raw findings の補助証跡としてのみ使う。最終 `finding_id` や lifecycle 状態は割り当てず、従来ルールも適用しない。エンジンまたは findings-manager が reconciled state を提供するのを待つ。
 4. `finding_contract` 設定がない workflow では、Report Directory の最新レビューを primary evidence として扱い、従来ルールを適用する:
    - Report Directory 内で、このステップが前回までに出力したレビューレポートとそのタイムスタンプ付き履歴を確認する
    - 無印ファイルを最新結果、直前のタイムスタンプ付きファイル（`{レポート名}.{タイムスタンプ}`）を前回結果として扱う

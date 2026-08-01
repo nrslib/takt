@@ -50,8 +50,6 @@ import { initializeGitFixture } from './helpers/git-fixture.js';
 import { MAIN_MANAGER_INPUT_MAX_BYTES } from '../core/workflow/findings/manager-task-contracts.js';
 
 const FINDING_CONTRACT: FindingContractConfig = {
-  ledgerPath: '.takt/findings/peer-review.json',
-  rawFindingsPath: '.takt/findings/raw',
   manager: {
     persona: 'findings-manager',
     instruction: 'Reconcile findings.',

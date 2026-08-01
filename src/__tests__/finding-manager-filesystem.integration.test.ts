@@ -2,27 +2,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const readFileFailure = vi.hoisted(() => ({
   path: '',
-  descriptor: undefined as number | undefined,
   error: Object.assign(new Error('injected read failure'), { code: 'EIO' }),
 }));
 
-vi.mock('node:fs', async () => {
-  const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
+vi.mock('../shared/utils/private-file.js', async () => {
+  const actual = await vi.importActual<
+    typeof import('../shared/utils/private-file.js')
+  >('../shared/utils/private-file.js');
   return {
     ...actual,
-    openSync(...args: Parameters<typeof actual.openSync>): ReturnType<typeof actual.openSync> {
-      const descriptor = actual.openSync(...args);
-      if (String(args[0]) === readFileFailure.path) {
-        readFileFailure.descriptor = descriptor;
-      }
-      return descriptor;
-    },
-    readFileSync(...args: Parameters<typeof actual.readFileSync>): ReturnType<typeof actual.readFileSync> {
-      if (args[0] === readFileFailure.descriptor) {
-        readFileFailure.descriptor = undefined;
+    readRegularFileNoFollow(
+      ...args: Parameters<typeof actual.readRegularFileNoFollow>
+    ): ReturnType<typeof actual.readRegularFileNoFollow> {
+      if (args[0] === readFileFailure.path) {
         throw readFileFailure.error;
       }
-      return actual.readFileSync(...args);
+      return actual.readRegularFileNoFollow(...args);
     },
   };
 });
@@ -32,13 +27,13 @@ vi.mock('../agents/agent-usecases.js', () => ({
 }));
 
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentResponse, FindingContractConfig, WorkflowStep } from '../core/models/types.js';
 import { runFindingManagerForStep } from '../core/workflow/findings/manager-runner.js';
 import { computeReviewScopeSnapshotId } from '../core/workflow/findings/snapshot.js';
-import { createFindingLedgerStore } from '../core/workflow/findings/store.js';
+import { createTestFindingLedgerStore } from './helpers/finding-storage.js';
 import type { FindingLedger, FindingLedgerStore } from '../core/workflow/findings/types.js';
 import { executeAgent } from '../agents/agent-usecases.js';
 import { findingReviewPublicationFixture } from './helpers/finding-review-publication.js';
@@ -51,8 +46,6 @@ import { findingManagerTaskResponse } from './helpers/finding-manager-task-respo
 const executeAgentMock = vi.mocked(executeAgent);
 
 const FINDING_CONTRACT: FindingContractConfig = {
-  ledgerPath: '.takt/findings/peer-review.json',
-  rawFindingsPath: '.takt/findings/raw',
   manager: {
     persona: 'findings-manager',
     instruction: 'Reconcile findings.',
@@ -127,18 +120,15 @@ describe('finding manager filesystem error propagation', () => {
 
   afterEach(() => {
     readFileFailure.path = '';
-    readFileFailure.descriptor = undefined;
     rmSync(cwd, { recursive: true, force: true });
   });
 
   it.each(['EIO', 'EACCES', 'EPERM'])('source quote の %s を実 runner/store 境界で握りつぶさず、台帳を更新しない', async (code) => {
-    const ledgerStore = createFindingLedgerStore({
+    const ledgerStore = createTestFindingLedgerStore({
       projectCwd: cwd,
       runId: 'run-1',
       reportDir,
       workflowName: 'peer-review',
-      ledgerPath: FINDING_CONTRACT.ledgerPath,
-      rawFindingsPath: FINDING_CONTRACT.rawFindingsPath,
     });
     const initialLedger: FindingLedger = authorizeFindingLedgerFixture({
       workflowName: 'peer-review',
@@ -151,10 +141,8 @@ describe('finding manager filesystem error propagation', () => {
       interpretations: [],
     });
     await ledgerStore.updateLedger(() => ({ ledger: initialLedger, result: undefined }));
-    const ledgerPath = join(cwd, FINDING_CONTRACT.ledgerPath);
-    const initialLedgerContent = readFileSync(ledgerPath, 'utf-8');
     const snapshotId = computeReviewScopeSnapshotId(cwd);
-    readFileFailure.path = sourcePath;
+    readFileFailure.path = realpathSync(sourcePath);
     readFileFailure.error = Object.assign(new Error('injected read failure'), { code });
 
     const run = runFindingManagerForStep({
@@ -208,18 +196,15 @@ describe('finding manager filesystem error propagation', () => {
 
     await expect(run).rejects.toBe(readFileFailure.error);
     readFileFailure.path = '';
-    expect(readFileSync(ledgerPath, 'utf-8')).toBe(initialLedgerContent);
     expect(ledgerStore.loadLedger()).toEqual(initialLedger);
   });
 
   it('manager 応答待ち中に source quote が古くなった場合は reviewer anomaly に隔離する', async () => {
-    const ledgerStore = createFindingLedgerStore({
+    const ledgerStore = createTestFindingLedgerStore({
       projectCwd: cwd,
       runId: 'run-1',
       reportDir,
       workflowName: 'peer-review',
-      ledgerPath: FINDING_CONTRACT.ledgerPath,
-      rawFindingsPath: FINDING_CONTRACT.rawFindingsPath,
     });
     await ledgerStore.updateLedger(() => ({
       ledger: authorizeFindingLedgerFixture({
@@ -375,8 +360,6 @@ describe('finding manager filesystem error propagation', () => {
       runId: 'run-1',
       reportDir,
       workflowName: 'peer-review',
-      ledgerPath: FINDING_CONTRACT.ledgerPath,
-      rawFindingsPath: FINDING_CONTRACT.rawFindingsPath,
     };
     const runOrder = async (
       first: 'resolution' | 'persists',
@@ -384,15 +367,15 @@ describe('finding manager filesystem error propagation', () => {
     ): Promise<FindingLedger> => {
       const runStoreOptions = {
         ...storeOptions,
-        ledgerPath: `${FINDING_CONTRACT.ledgerPath}.${first}-${iterationOffset}`,
+        authorityKey: `commit-order-${first}`,
       };
-      const seedStore = createFindingLedgerStore(runStoreOptions);
+      const seedStore = createTestFindingLedgerStore(runStoreOptions);
       await seedStore.updateLedger(() => ({
         ledger: initialLedger,
         result: undefined,
       }));
-      const resolutionStore = createFindingLedgerStore(runStoreOptions);
-      const persistsStore = createFindingLedgerStore(runStoreOptions);
+      const resolutionStore = seedStore;
+      const persistsStore = seedStore;
       const resolutionReached = createDeferredSignal();
       const persistsReached = createDeferredSignal();
       const releaseResolution = createDeferredSignal();
@@ -402,15 +385,25 @@ describe('finding manager filesystem error propagation', () => {
         ledgerIdentity: string,
         reached: DeferredSignal,
         release: DeferredSignal,
-      ): FindingLedgerStore => ({
-        ...store,
-        ledgerIdentity,
-        commitManagerLedger: async (mutator) => {
+      ): FindingLedgerStore => {
+        const commitManagerLedger: FindingLedgerStore['commitManagerLedger'] = async (mutator) => {
           reached.resolve();
           await release.promise;
           return store.commitManagerLedger(mutator);
-        },
-      });
+        };
+        return new Proxy(store, {
+          get(target, property) {
+            if (property === 'ledgerIdentity') {
+              return ledgerIdentity;
+            }
+            if (property === 'commitManagerLedger') {
+              return commitManagerLedger;
+            }
+            const value: unknown = Reflect.get(target, property, target);
+            return typeof value === 'function' ? value.bind(target) : value;
+          },
+        });
+      };
       const run = (
         store: FindingLedgerStore,
         stepIteration: number,

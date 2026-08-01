@@ -464,8 +464,6 @@ function makeRoundHarness(
   };
   const parentStep: WorkflowStep = { kind: 'agent', name: 'reviewers', persona: 'reviewer', edit: false } as WorkflowStep;
   const contract = {
-    ledgerPath: '.takt/findings/ledger.json',
-    rawFindingsPath: '.takt/findings/raw',
     manager: {
       persona: 'findings-manager',
       instruction: 'Reconcile findings.',
@@ -881,7 +879,7 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
     expect(context.provisional.fixpoint).toBe(true);
   });
 
-  it('fresh process continuity: reopening the same run storage continues bounded recovery progress toward fixpoint', async () => {
+  it('fresh process continuity: reopening the same Finding authority continues bounded recovery progress toward fixpoint', async () => {
     const runId = 'run-process-continuity';
     const priorProcess = makeRoundHarness({
       workflowName: 'peer-review', nextId: 1, updatedAt: '2026-07-01T00:00:00.000Z',

@@ -67,6 +67,7 @@ import type {
   PreAdmissionEntityProvisionalMutation,
 } from './pre-admission-entity-binding-types.js';
 import { entityBindingDigest } from './pre-admission-entity-binding-identity.js';
+import { isEngineDerivedWaiverConflict } from './waiver-conflict.js';
 
 /**
  * provisional finding の upsert 指示。stableKey が同じ
@@ -395,6 +396,44 @@ function withoutConflictResolutionFields(
   };
 }
 
+function conflictLifecycleRawFindingIds(input: {
+  conflict: FindingManagerOutput['conflicts'][number];
+  managerOutput: FindingManagerOutput;
+  currentRawFindingIds: ReadonlySet<string>;
+}): string[] {
+  if (!isEngineDerivedWaiverConflict(input.conflict)) {
+    return input.conflict.rawFindingIds;
+  }
+  if (
+    input.conflict.findingIds.length !== 1
+    || input.conflict.rawFindingIds.length !== 0
+  ) {
+    throw new Error(
+      'Engine-derived waiver conflict must target exactly one finding and remain rawless in manager output',
+    );
+  }
+  const findingId = input.conflict.findingIds[0]!;
+  const evidenceRawFindingIds = [...new Set(
+    input.managerOutput.matches
+      .filter((match) => match.findingId === findingId)
+      .flatMap((match) => match.rawFindingIds),
+  )].sort(compareBinaryStrings);
+  if (evidenceRawFindingIds.length === 0) {
+    throw new Error(
+      `Engine-derived waiver conflict for finding "${findingId}" has no current-round match evidence`,
+    );
+  }
+  const nonCurrent = evidenceRawFindingIds.filter(
+    (rawFindingId) => !input.currentRawFindingIds.has(rawFindingId),
+  );
+  if (nonCurrent.length > 0) {
+    throw new Error(
+      `Engine-derived waiver conflict for finding "${findingId}" references non-current match evidence: ${nonCurrent.join(', ')}`,
+    );
+  }
+  return evidenceRawFindingIds;
+}
+
 function reconcileLedgerConflicts(input: {
   previousLedger: FindingLedger;
   managerOutput: FindingManagerOutput;
@@ -408,6 +447,7 @@ function reconcileLedgerConflicts(input: {
   lifecycleCommands: FindingLifecycleCommand[];
 } {
   const conflictsById = new Map(input.previousLedger.conflicts.map((conflict) => [conflict.id, { ...conflict }]));
+  const currentRawFindingIds = new Set(input.rawFindings.map((rawFinding) => rawFinding.rawFindingId));
   const lifecycleCommands: FindingLifecycleCommand[] = [];
   const appendCommand = (
     operation: 'create_conflict' | 'observe_conflict' | 'resolve_conflict',
@@ -460,6 +500,11 @@ function reconcileLedgerConflicts(input: {
   }
 
   for (const conflict of input.managerOutput.conflicts) {
+    const lifecycleRawFindingIds = conflictLifecycleRawFindingIds({
+      conflict,
+      managerOutput: input.managerOutput,
+      currentRawFindingIds,
+    });
     if (conflict.findingIds.length === 0) {
       assertNonEmptyIds(conflict.rawFindingIds, 'raw finding id');
     }
@@ -470,6 +515,9 @@ function reconcileLedgerConflicts(input: {
     if (conflict.rawFindingIds.length > 0) {
       assertKnownRawFindings(input.rawFindingIds, conflict.rawFindingIds);
       markRawFindingIdsUsed(input.usedRawFindingIds, conflict.rawFindingIds);
+    }
+    if (isEngineDerivedWaiverConflict(conflict)) {
+      assertKnownRawFindings(input.rawFindingIds, lifecycleRawFindingIds);
     }
 
     const conflictId = formatConflictId(conflict);
@@ -490,7 +538,7 @@ function reconcileLedgerConflicts(input: {
     const updated: FindingLedgerConflict = {
       ...base,
       status: 'active',
-      rawFindingIds: mergeBinarySortedUniqueStrings(base.rawFindingIds, conflict.rawFindingIds),
+      rawFindingIds: mergeBinarySortedUniqueStrings(base.rawFindingIds, lifecycleRawFindingIds),
       description: conflict.description,
       lastSeen: observationFromContext(input.context),
       revision: existing === undefined ? 1 : existing.revision + 1,
@@ -501,11 +549,11 @@ function reconcileLedgerConflicts(input: {
       updated,
       rawFindingLifecycleAuthority({
         operation: existing === undefined ? 'create_conflict' : 'observe_conflict',
-        rawFindingIds: conflict.rawFindingIds,
+        rawFindingIds: lifecycleRawFindingIds,
         rawFindings: input.rawFindings,
         adjudications: input.managerOutput.anchorAdjudications,
       }),
-      conflict.rawFindingIds,
+      lifecycleRawFindingIds,
     );
   }
 

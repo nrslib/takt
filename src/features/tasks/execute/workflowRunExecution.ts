@@ -41,28 +41,12 @@ export interface TerminalCommitReceipt {
   readonly runStatus: WorkflowRunTerminalStatus;
   readonly iteration: number;
   readonly payloadSha256: string;
-  readonly proof:
-    | {
-        readonly backend: 'file';
-      }
-    | {
-        readonly backend: 'sqlite';
-        readonly terminalAt: number;
-      };
 }
 
 export type RunFinalizationIssue =
   | RunProjectionError
   | RunCleanupError
-  | AuthorityPostCommitIssue
   | RunLiveDeliveryError;
-
-export class AuthorityPostCommitIssue extends Error {
-  constructor(error: unknown) {
-    super(errorMessage(error), { cause: error });
-    this.name = 'AuthorityPostCommitIssue';
-  }
-}
 
 export class RunProjectionError extends Error {
   readonly stage: 'publication' | 'meta' | 'session' | 'trace';

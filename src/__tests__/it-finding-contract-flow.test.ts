@@ -132,8 +132,6 @@ describe('Finding Contract integration flow', () => {
     const workflow = normalizeWorkflowConfig({
       name: 'finding-contract-workflow',
       finding_contract: {
-        ledger_path: '.takt/findings/peer-review.json',
-        raw_findings_path: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -221,7 +219,6 @@ describe('Finding Contract integration flow', () => {
     const result = new RuleEvaluator(workflow.steps[0]!, ctx).evaluate(undefined);
 
     expect(workflow.findingContract).toEqual(expect.objectContaining({
-      ledgerPath: '.takt/findings/peer-review.json',
     }));
     expect(result).toEqual({ index: 1, method: 'auto_select' });
   });

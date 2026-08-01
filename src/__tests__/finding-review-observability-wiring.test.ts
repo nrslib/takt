@@ -5,13 +5,13 @@ import {
   type ReadableSpan,
   type SpanExporter,
 } from '@opentelemetry/sdk-trace-base';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkflowConfig, WorkflowStep } from '../core/models/types.js';
-import { createFindingLedgerStore } from '../core/workflow/findings/store.js';
+import { createTestFindingLedgerStore } from './helpers/finding-storage.js';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import { runAgent } from '../agents/runner.js';
 import { makeRule, makeStep } from './test-helpers.js';
@@ -57,8 +57,6 @@ function readSpanInstruction(span: ReadableSpan): string {
 
 function makeFindingContract() {
   return {
-    ledgerPath: '.takt/findings/peer-review.json',
-    rawFindingsPath: 'review-raw',
     manager: {
       persona: 'findings-manager',
       instruction: 'Reconcile findings.',
@@ -92,13 +90,16 @@ function makeSourceQuoteFinding(persona: string | undefined, schema: unknown): R
   });
 }
 
-function readFindingLedger(cwd: string): {
+function readFindingLedger(cwd: string, workflowName: string): {
   findings: Array<{ title: string; evidenceIds: string[] }>;
   reviewerAnomalies?: Array<{ kind: string }>;
 } {
-  return JSON.parse(
-    readFileSync(join(cwd, '.takt/findings/peer-review.json'), 'utf-8'),
-  ) as {
+  return createTestFindingLedgerStore({
+    projectCwd: cwd,
+    runId: 'test-report-dir',
+    reportDir: buildRunPaths(cwd, 'test-report-dir').reportsAbs,
+    workflowName,
+  }).loadLedger() as {
     findings: Array<{ title: string; evidenceIds: string[] }>;
     reviewerAnomalies?: Array<{ kind: string }>;
   };
@@ -169,13 +170,11 @@ function createTestFindingAuthorityResolver(config: WorkflowConfig, cwd: string)
   if (contract === undefined) {
     throw new Error('Expected Finding Contract');
   }
-  const store = createFindingLedgerStore({
+  const store = createTestFindingLedgerStore({
     projectCwd: cwd,
     runId: 'test-report-dir',
     reportDir: buildRunPaths(cwd, 'test-report-dir').reportsAbs,
     workflowName: config.name,
-    ledgerPath: contract.ledgerPath,
-    rawFindingsPath: contract.rawFindingsPath,
   });
   return {
     resolve: () => store,
@@ -335,8 +334,11 @@ describe('finding reviewer observability wiring', () => {
       expect(startedSteps).toHaveLength(0);
       expect(completedSteps).toHaveLength(0);
     }
-    expect(existsSync(join(cwd, 'review-raw'))).toBe(true);
-    const ledger = readFindingLedger(cwd);
+    expect(existsSync(join(
+      buildRunPaths(cwd, 'test-report-dir').reportsAbs,
+      'raw-findings.review.json',
+    ))).toBe(true);
+    const ledger = readFindingLedger(cwd, config.name);
     expect(ledger.findings).toHaveLength(1);
     expect(ledger.reviewerAnomalies ?? []).toHaveLength(0);
   });
@@ -373,8 +375,11 @@ describe('finding reviewer observability wiring', () => {
       }
       expect(readSpanInstruction(phaseSpan)).toBe(providerPrompt);
     }
-    expect(existsSync(join(cwd, 'review-raw'))).toBe(true);
-    const ledger = readFindingLedger(cwd);
+    expect(existsSync(join(
+      buildRunPaths(cwd, 'test-report-dir').reportsAbs,
+      'raw-findings.reviewers.json',
+    ))).toBe(true);
+    const ledger = readFindingLedger(cwd, config.name);
     expect(ledger.findings).toHaveLength(2);
     expect(ledger.findings.map((finding) => finding.evidenceIds)).toEqual([
       [expect.any(String)],
@@ -424,7 +429,7 @@ describe('finding reviewer observability wiring', () => {
       findingAuthorityResolver: createTestFindingAuthorityResolver(config, cwd),
     }).runSingleIteration();
 
-    const ledger = readFindingLedger(cwd);
+    const ledger = readFindingLedger(cwd, config.name);
     expect(ledger.findings).toHaveLength(1);
     expect(ledger.reviewerAnomalies ?? []).toHaveLength(0);
   });

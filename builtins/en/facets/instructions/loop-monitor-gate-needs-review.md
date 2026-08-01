@@ -2,7 +2,7 @@ The `needs_review` retry between a review and its completion gate has repeated {
 
 This monitor runs only on the second retry when the completion gate's natural decision returns to the same review. It does not intervene when the completion gate naturally exits to `COMPLETE`, a fix, replanning, conflict adjudication, or an abort.
 
-Use the Finding Contract ledger summary / `findings-ledger.json` as the primary evidence and the latest two review reports and completion-gate reports as supporting evidence. Decide in this order:
+Treat the engine-provided live Finding Contract ledger summary / current Finding state as authoritative. A `findings-ledger.json` file, when present, is only an auxiliary snapshot. Use the latest two review reports and completion-gate reports as supporting evidence. Decide in this order:
 
 1. Identify the evidence requested by the completion gate and the new evidence obtained by the latest retry.
 2. Choose another review only when the evidence and locations to check next are concrete and rerunning the same review is worthwhile.

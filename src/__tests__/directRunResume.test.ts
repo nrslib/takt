@@ -142,7 +142,6 @@ function createRun(overrides?: Record<string, unknown>) {
       reportDirectory: '.takt/runs/20260524-direct-failed/reports',
       contextDirectory: '.takt/runs/20260524-direct-failed/context',
       logsDirectory: '.takt/runs/20260524-direct-failed/logs',
-      storageBackend: 'file',
       status: 'aborted',
       startTime: '2026-05-24T00:00:00.000Z',
       updatedAt: '2026-05-24T00:10:00.000Z',

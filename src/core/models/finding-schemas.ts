@@ -174,8 +174,6 @@ export const FindingContractReviewBudgetRawSchema = z.object({
 }).strict();
 
 export const FindingContractConfigRawSchema = z.object({
-  ledger_path: nonEmptyString,
-  raw_findings_path: nonEmptyString,
   manager: FindingContractManagerConfigRawSchema,
   stop_budget: FindingContractStopBudgetRawSchema.optional(),
   review_budget: FindingContractReviewBudgetRawSchema.optional(),

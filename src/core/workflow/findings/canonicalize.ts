@@ -1,4 +1,8 @@
 import type { FindingManagerConflict, FindingManagerOutput } from './types.js';
+import {
+  isEngineDerivedWaiverConflict,
+  plainFindingManagerConflict,
+} from './waiver-conflict.js';
 
 /**
  * 同じ finding に「まだ在る」証拠（matches / conflicts）と「直った」(resolvedFindings)
@@ -42,10 +46,17 @@ export function canonicalizeFindingManagerOutput(output: FindingManagerOutput): 
       });
       continue;
     }
-    conflicts[existingIndex] = {
-      ...existing,
-      rawFindingIds: [...new Set([...existing.rawFindingIds, ...resolved.rawFindingIds])],
-    };
+    const rawFindingIds = [...new Set([...existing.rawFindingIds, ...resolved.rawFindingIds])];
+    conflicts[existingIndex] = isEngineDerivedWaiverConflict(existing)
+      ? {
+          findingIds: [...existing.findingIds],
+          rawFindingIds,
+          description: `Resolution confirmation conflicts with evidence that finding "${resolved.findingId}" still persists in the same round`,
+        }
+      : {
+          ...plainFindingManagerConflict(existing),
+          rawFindingIds,
+        };
   }
 
   return {

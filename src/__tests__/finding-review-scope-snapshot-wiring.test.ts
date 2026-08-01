@@ -159,8 +159,6 @@ function makeParallelStep(): WorkflowStep {
 }
 
 const FINDING_CONTRACT: FindingContractConfig = {
-  ledgerPath: '.takt/findings/peer-review.json',
-  rawFindingsPath: '.takt/findings/raw',
   manager: {
     persona: 'findings-manager',
     instruction: 'Reconcile findings.',

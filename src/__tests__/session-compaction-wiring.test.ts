@@ -453,8 +453,6 @@ describe('session compaction Phase 1 wiring', () => {
       structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
       reviewerOutputStrategy: { kind: 'structured', reportGeneration: 'structured', intake: 'reviewer_structured' },
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',

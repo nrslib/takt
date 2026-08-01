@@ -122,11 +122,6 @@ function createBridgeHarness(options?: {
     sessionId: 'session',
     ndjsonLogPath: '/tmp/project/run/logs/session.jsonl',
     traceReportMode: 'redacted',
-    metaSeed: {
-      backend: 'file',
-      startedAt: sessionLog.startTime,
-      resumeSource: null,
-    },
     ...(options?.traceDiscovery === undefined
       ? {}
       : {

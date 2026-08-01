@@ -13,15 +13,12 @@ import {
   captureFindingLifecycleHead,
   reserveVerifiedLifecycleMutation,
 } from '../core/workflow/findings/lifecycle-mutation.js';
-import { createFindingLedgerStore } from '../core/workflow/findings/store.js';
+import { createTestFindingLedgerStore } from './helpers/finding-storage.js';
 import type { FindingLedger, RawFinding } from '../core/workflow/findings/types.js';
 import { verifiedFindingEvidenceFixture } from './helpers/finding-evidence.js';
 import { authorizeFindingLedgerFixture } from './helpers/finding-lifecycle-fixture.js';
 
 const WORKFLOW_NAME = 'peer-review';
-const LEDGER_PATH = '.takt/findings/peer-review.json';
-const RAW_FINDINGS_PATH = '.takt/findings/raw';
-
 function makeLedger(cwd: string): FindingLedger {
   const observation = {
     runId: 'run-1',
@@ -159,13 +156,11 @@ describe('conflict lifecycle reservation persistence', () => {
   });
 
   function createStore() {
-    return createFindingLedgerStore({
+    return createTestFindingLedgerStore({
       projectCwd: cwd,
       runId: 'run-2',
       reportDir: join(cwd, '.takt', 'runs', 'run-2', 'reports'),
       workflowName: WORKFLOW_NAME,
-      ledgerPath: LEDGER_PATH,
-      rawFindingsPath: RAW_FINDINGS_PATH,
     });
   }
 

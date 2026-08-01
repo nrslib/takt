@@ -68,7 +68,7 @@ import type { TraceReportMode } from './traceReport.js';
 import { sanitizeTextForStorage } from './traceReportRedaction.js';
 import type { WorkflowExecutionOptions } from './types.js';
 import { assertTaskPrefixPair, detectStepType } from './workflowExecutionUtils.js';
-import type { WorkflowRunBootstrap } from './workflowRunStorage.js';
+import type { WorkflowRunBootstrap } from './workflowRunLifecycle.js';
 import { inheritWorkflowConfigMetadata } from '../../../shared/workflowConfigMetadata.js';
 
 const log = createLogger('workflow');
@@ -274,7 +274,7 @@ export async function createWorkflowExecutionBootstrap(
   task: string,
   cwd: string,
   options: WorkflowExecutionOptions,
-  runStorageBootstrap: WorkflowRunBootstrap,
+  runBootstrap: WorkflowRunBootstrap,
   resumeLineage: WorkflowExecutionResumeLineage,
 ): Promise<WorkflowExecutionBootstrap> {
   const { headerPrefix = 'Running Workflow:', interactiveUserInput = false, outputMode = 'terminal' } = options;
@@ -313,7 +313,7 @@ export async function createWorkflowExecutionBootstrap(
   const isWorktree = cwd !== projectCwd;
   log.debug('Session mode', { isRetry, isWorktree });
 
-  const { runSlug, runPaths } = runStorageBootstrap;
+  const { runSlug, runPaths } = runBootstrap;
   if (isWorktree) {
     ensureWorktreeTaktRuntimeProtection(cwd);
   }
@@ -372,7 +372,7 @@ export async function createWorkflowExecutionBootstrap(
     task,
     projectCwd,
     workflowConfig.name,
-    { startTime: runStorageBootstrap.startedAt },
+    { startTime: runBootstrap.startedAt },
   );
   const globalConfig = resolveWorkflowConfigValues(projectCwd, [
     'notificationSound',
@@ -401,7 +401,7 @@ export async function createWorkflowExecutionBootstrap(
         sanitizeText: sanitizeObservabilityText,
       })
     : undefined;
-  const runMetaManager = runStorageBootstrap.publishRunMeta({
+  const runMetaManager = runBootstrap.publishRunMeta({
     runPaths,
     task,
     workflowName: workflowConfig.name,
@@ -421,14 +421,14 @@ export async function createWorkflowExecutionBootstrap(
       ...(options.prContext ? { prContext: options.prContext } : {}),
     },
   });
-  const workflowSessionId = runStorageBootstrap.sessionId;
+  const workflowSessionId = runBootstrap.sessionId;
   const ndjsonLogPath = initNdjsonLog(
     workflowSessionId,
     task,
     workflowConfig.name,
     {
       logsDir: runPaths.logsAbs,
-      startTime: runStorageBootstrap.startedAt,
+      startTime: runBootstrap.startedAt,
     },
   );
   const sessionLogger = new SessionLogger(ndjsonLogPath, allowSensitiveData);

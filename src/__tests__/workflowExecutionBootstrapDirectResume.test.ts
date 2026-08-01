@@ -140,7 +140,7 @@ import {
 } from '../features/tasks/execute/workflowExecutionBootstrap.js';
 import type {
   WorkflowRunBootstrap,
-} from '../features/tasks/execute/workflowRunStorage.js';
+} from '../features/tasks/execute/workflowRunLifecycle.js';
 import { RunMetaManager } from '../features/tasks/execute/runMeta.js';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import { generateExecutionReportDir } from '../core/workflow/run/run-slug.js';
@@ -161,7 +161,6 @@ async function createWorkflowExecutionBootstrap(
   ]
 ) {
   const runBootstrap = createRunBootstrap({
-    backend: 'file',
     cwd: args[2],
     task: args[1],
     requestedRunSlug: args[3].reportDirName,
@@ -179,7 +178,6 @@ async function createWorkflowExecutionBootstrap(
 }
 
 function createRunBootstrap(setup: {
-  readonly backend: 'file' | 'sqlite';
   readonly cwd: string;
   readonly task: string;
   readonly requestedRunSlug?: string;
@@ -201,12 +199,13 @@ function createRunBootstrap(setup: {
   return {
     runSlug,
     runPaths: buildRunPaths(setup.cwd, runSlug),
+    startedAt: '2026-08-01T00:00:00.000Z',
+    sessionId: 'test-session-id',
     publishRunMeta(input): RunMetaManager {
       return new RunMetaManager(
         input.runPaths,
         input.task,
         input.workflowName,
-        setup.backend,
         input.resumeSource,
         input.options,
       );
@@ -297,7 +296,6 @@ function seedResumeSourceRun(
       reportDirectory: `.takt/runs/${slug}/reports`,
       contextDirectory: `.takt/runs/${slug}/context`,
       logsDirectory: `.takt/runs/${slug}/logs`,
-      storageBackend: 'file',
       status: options?.status ?? 'failed',
       startTime: '2026-05-24T00:00:00.000Z',
       operation_journal_run_slug: options?.journalRunSlug ?? '20260524-source-run',
@@ -1176,7 +1174,6 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
         reportDirectory: '.takt/runs/20260524-source-run/reports',
         contextDirectory: '.takt/runs/20260524-source-run/context',
         logsDirectory: '.takt/runs/20260524-source-run/logs',
-        storageBackend: 'file',
         status: 'failed',
         startTime: '2026-05-24T00:00:00.000Z',
         operation_journal_run_slug: '../outside',
@@ -1248,7 +1245,6 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
           },
         },
         createRunBootstrap({
-          backend: 'sqlite',
           cwd: projectDir,
           task: 'Resume same SQLite run',
           requestedRunSlug: sharedRunSlug,

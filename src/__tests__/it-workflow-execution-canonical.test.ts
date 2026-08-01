@@ -16,19 +16,19 @@ vi.mock('../core/workflow/index.js', () => ({
   createDenyAskUserQuestionHandler: vi.fn(() => 'deny-handler'),
 }));
 
-vi.mock('../features/tasks/execute/workflowRunStorage.js', async (importOriginal) => {
+vi.mock('../features/tasks/execute/workflowRunLifecycle.js', async (importOriginal) => {
   const actual = await importOriginal<
-    typeof import('../features/tasks/execute/workflowRunStorage.js')
+    typeof import('../features/tasks/execute/workflowRunLifecycle.js')
   >();
-  const { createWorkflowRunStorageCompositionTestDouble } = await import(
-    './helpers/run-storage.js'
+  const { createWorkflowRunLifecycleCompositionTestDouble } = await import(
+    './helpers/run-lifecycle.js'
   );
   return {
     ...actual,
-    createWorkflowRunComposition: (
-      input: Parameters<typeof actual.createWorkflowRunComposition>[0],
-    ) => createWorkflowRunStorageCompositionTestDouble(
-      actual.createWorkflowRunComposition,
+    createWorkflowRunLifecycle: (
+      input: Parameters<typeof actual.createWorkflowRunLifecycle>[0],
+    ) => createWorkflowRunLifecycleCompositionTestDouble(
+      actual.createWorkflowRunLifecycle,
       input,
       {
         sessionId: 'session-id',
@@ -50,7 +50,6 @@ vi.mock('../infra/config/index.js', () => ({
   updatePersonaSession: vi.fn(),
   loadWorktreeSessions: vi.fn(() => ({})),
   updateWorktreeSession: vi.fn(),
-  resolveWorkflowConfigValue: vi.fn(() => ({ backend: 'file' })),
   resolveWorkflowConfigValues: vi.fn(() => ({
     provider: 'mock',
     logging: {},
@@ -281,7 +280,6 @@ describe('workflow execution canonical entrypoints', () => {
 
   it('should construct WorkflowEngine through executeWorkflow', async () => {
     const { executeWorkflow } = await import('../features/tasks/execute/workflowExecution.js');
-    const { resolveWorkflowConfigValue } = await import('../infra/config/index.js');
     const config: WorkflowConfig = {
       name: 'default',
       description: '',
@@ -315,11 +313,6 @@ describe('workflow execution canonical entrypoints', () => {
           runSlug: 'test-report-dir',
         },
       }),
-    );
-    expect(resolveWorkflowConfigValue).toHaveBeenCalledTimes(1);
-    expect(resolveWorkflowConfigValue).toHaveBeenCalledWith(
-      '/tmp/project',
-      'runStorage',
     );
   });
 });

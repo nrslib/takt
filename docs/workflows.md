@@ -300,8 +300,6 @@ Markdown plus isolated extraction by exact resolved reviewer provider/model.
 
 ```yaml
 finding_contract:
-  ledger_path: .takt/findings/review.json
-  raw_findings_path: .takt/findings/review/raw
   manager:
     persona: findings-manager
     instruction: findings-manager

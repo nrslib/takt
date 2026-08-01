@@ -396,8 +396,6 @@ steps:
 max_steps: 10
 initial_step: step1
 finding_contract:
-  ledger_path: .takt/findings/peer-review.json
-  raw_findings_path: .takt/findings/raw
   manager:
     persona: findings-manager
     instruction: findings-manager
@@ -419,8 +417,6 @@ steps:
   it('propagates a root finding contract through an expanded workflow_ref invocation', async () => {
     const filePath = writeWorkflow(projectDir, '.takt/workflows/root.yaml', `name: root
 finding_contract:
-  ledger_path: .takt/findings/root.json
-  raw_findings_path: .takt/findings/root/raw
   manager:
     persona: findings-manager
     instruction: findings-manager
@@ -526,8 +522,6 @@ steps:
 max_steps: 10
 initial_step: reviewers
 finding_contract:
-  ledger_path: .takt/findings/peer-review.json
-  raw_findings_path: .takt/findings/raw
   manager:
     persona: findings-manager
     instruction: findings-manager
@@ -564,8 +558,6 @@ steps:
 max_steps: 10
 initial_step: reviewers
 finding_contract:
-  ledger_path: .takt/findings/peer-review.json
-  raw_findings_path: .takt/findings/raw
   manager:
     persona: findings-manager
     instruction: findings-manager
@@ -611,8 +603,6 @@ steps:
 max_steps: 10
 initial_step: reviewers
 finding_contract:
-  ledger_path: .takt/findings/peer-review.json
-  raw_findings_path: .takt/findings/raw
   manager:
     persona: findings-manager
     instruction: findings-manager
@@ -649,8 +639,6 @@ steps:
 max_steps: 10
 initial_step: reviewers
 finding_contract:
-  ledger_path: .takt/findings/peer-review.json
-  raw_findings_path: .takt/findings/raw
   manager:
     persona: findings-manager
     instruction: findings-manager
@@ -709,8 +697,6 @@ steps:
 max_steps: 10
 initial_step: reviewers
 finding_contract:
-  ledger_path: .takt/findings/peer-review.json
-  raw_findings_path: .takt/findings/raw
   manager:
     persona: findings-manager
     instruction: findings-manager
@@ -739,8 +725,6 @@ ${parallelSteps}
 max_steps: 10
 initial_step: reviewers
 finding_contract:
-  ledger_path: .takt/findings/peer-review.json
-  raw_findings_path: .takt/findings/raw
   manager:
     persona: findings-manager
     instruction: findings-manager
@@ -810,8 +794,6 @@ steps:
 max_steps: 10
 initial_step: reviewers
 finding_contract:
-  ledger_path: .takt/findings/peer-review.json
-  raw_findings_path: .takt/findings/raw
   manager:
     persona: findings-manager
     instruction: findings-manager
@@ -862,8 +844,6 @@ steps:
 max_steps: 10
 initial_step: reviewers
 finding_contract:
-  ledger_path: .takt/findings/peer-review.json
-  raw_findings_path: .takt/findings/raw
   manager:
     persona: findings-manager
     instruction: findings-manager
@@ -2036,8 +2016,6 @@ steps:
 max_steps: 10
 initial_step: step1
 finding_contract:
-  ledger_path: .takt/findings/adjudication-wired.json
-  raw_findings_path: .takt/findings/adjudication-wired/raw
   manager:
     persona: findings-manager
     instruction: findings-manager
@@ -2085,8 +2063,6 @@ steps:
 max_steps: 10
 initial_step: step1
 finding_contract:
-  ledger_path: .takt/findings/adjudication-parallel-sub.json
-  raw_findings_path: .takt/findings/adjudication-parallel-sub/raw
   manager:
     persona: findings-manager
     instruction: findings-manager
@@ -2121,8 +2097,6 @@ steps:
 max_steps: 10
 initial_step: step1
 finding_contract:
-  ledger_path: .takt/findings/adjudication-parallel-fragment.json
-  raw_findings_path: .takt/findings/adjudication-parallel-fragment/raw
   manager:
     persona: findings-manager
     instruction: findings-manager

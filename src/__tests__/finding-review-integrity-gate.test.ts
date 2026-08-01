@@ -13,7 +13,7 @@
  *      再計画へ進み、再計画後も解消不能な反復だけ loop monitor が停止する。
  * を検証する。
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -59,7 +59,7 @@ import { WorkflowEngine } from './helpers/workflow-engine.js';
 import type { WorkflowConfig } from '../core/models/index.js';
 import { runAgent } from '../agents/runner.js';
 import { makeRule, makeStep } from './test-helpers.js';
-import { resolveFindingLedgerRoot } from '../core/workflow/findings/store.js';
+import { createTestFindingLedgerStore } from './helpers/finding-storage.js';
 import { reviewerRawExtractionFixture } from './helpers/finding-lifecycle-fixture.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
 
@@ -137,6 +137,15 @@ function reviewerStep(rules: ReturnType<typeof makeRule>[]): ReturnType<typeof m
   });
 }
 
+function loadRootLedger(cwd: string, workflowName: string) {
+  return createTestFindingLedgerStore({
+    projectCwd: cwd,
+    runId: 'test-report-dir',
+    reportDir: join(cwd, '.takt', 'runs', 'test-report-dir', 'reports'),
+    workflowName,
+  }).loadLedger();
+}
+
 describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', () => {
   let cwd: string;
 
@@ -163,8 +172,6 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
       initialStep: 'reviewers',
       provider: 'claude',
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: { persona: 'findings-manager', instruction: 'findings-manager', outputContract: 'findings-manager' },
       },
       steps: [
@@ -187,8 +194,7 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
     expect(abortReason).toContain('reviewer anomaly');
 
     // 台帳: product finding 0、未昇格 anomaly 1。
-    const ledgerPath = join(resolveFindingLedgerRoot(cwd), '.takt', 'findings', 'peer-review.json');
-    const ledger = JSON.parse(readFileSync(ledgerPath, 'utf-8')) as {
+    const ledger = loadRootLedger(cwd, config.name) as {
       findings: unknown[];
       reviewerAnomalies?: Array<{ kind: string; promotedFindingId?: string }>;
     };
@@ -209,8 +215,6 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
       initialStep: 'reviewers',
       provider: 'claude',
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: { persona: 'findings-manager', instruction: 'findings-manager', outputContract: 'findings-manager' },
       },
       steps: [
@@ -264,8 +268,6 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
       initialStep: 'final-gate',
       provider: 'claude',
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: { persona: 'findings-manager', instruction: 'findings-manager', outputContract: 'findings-manager' },
       },
       steps: [
@@ -340,8 +342,6 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
         },
       }],
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: { persona: 'findings-manager', instruction: 'findings-manager', outputContract: 'findings-manager' },
         reviewBudget: { maxReviewRounds: 2 },
       },
@@ -398,8 +398,7 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
     expect(reviewerCalls.length).toBeGreaterThan(2);
 
     // 台帳: 予算を使い切り、anomaly は監査に残る（消えない）。
-    const ledgerPath = join(resolveFindingLedgerRoot(cwd), '.takt', 'findings', 'peer-review.json');
-    const ledger = JSON.parse(readFileSync(ledgerPath, 'utf-8')) as {
+    const ledger = loadRootLedger(cwd, config.name) as {
       findings: unknown[];
       reviewerAnomalies?: Array<{ occurrences: number; promotedFindingId?: string }>;
       reviewIntegrity?: { roundMarkers: string[]; exhausted: boolean };
@@ -422,8 +421,6 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
       initialStep: 'supervise',
       provider: 'claude',
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: { persona: 'findings-manager', instruction: 'findings-manager', outputContract: 'findings-manager' },
       },
       steps: [
@@ -456,10 +453,7 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
     ));
     expect(publicationCalls).toHaveLength(1);
 
-    const rawFindingsDir = join(resolveFindingLedgerRoot(cwd), '.takt', 'findings', 'raw');
-    const rawFindingFiles = readdirSync(rawFindingsDir);
-    expect(rawFindingFiles).toHaveLength(1);
-    const rawFindings = JSON.parse(readFileSync(join(rawFindingsDir, rawFindingFiles[0]), 'utf-8')) as Array<{ rawFindingId: string }>;
+    const rawFindings = loadRootLedger(cwd, config.name).rawFindings;
     expect(rawFindings).toHaveLength(1);
     expect(new Set(rawFindings.map((finding) => finding.rawFindingId)).size).toBe(rawFindings.length);
   });

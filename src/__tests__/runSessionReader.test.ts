@@ -39,7 +39,6 @@ function createRunDir(
   mkdirSync(join(runDir, 'logs'), { recursive: true });
   mkdirSync(join(runDir, 'reports'), { recursive: true });
   writeFileSync(join(runDir, 'meta.json'), JSON.stringify({
-    storageBackend: 'file',
     runSlug: slug,
     runRoot: `.takt/runs/${slug}`,
     reportDirectory: `.takt/runs/${slug}/reports`,

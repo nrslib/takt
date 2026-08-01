@@ -24,6 +24,8 @@ import {
 import { buildWorkflowCallSiteIdentity } from '../core/workflow/workflow-call-site-identity.js';
 import { WorkflowCallInvocationIndex } from '../core/workflow/workflow-call-invocation-index.js';
 import { WorkflowStepParticipationIndex } from '../core/workflow/workflow-step-participation-index.js';
+import { createTestFindingLedgerStore } from './helpers/finding-storage.js';
+import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
 
 const sourceRunSlug = '20260717-source-run';
 const resumeModes = ['requeue', 'retry', 'instruct'] as const;
@@ -64,8 +66,6 @@ function createEnvironment(withFindingContract: boolean): TestEnvironment {
     '  callable: true',
     ...(withFindingContract ? [
       'finding_contract:',
-      '  ledger_path: .takt/findings/review-ledger.json',
-      '  raw_findings_path: .takt/findings/raw',
       '  manager:',
       '    persona: findings-manager',
       '    instruction: findings-manager',
@@ -128,7 +128,7 @@ function buildWorkflowCallNamespace(projectDir: string, occurrence: number): str
   return buildWorkflowCallSiteIdentity({
     stack: [{
       workflow: parent.name,
-      workflow_ref: parent.name,
+      workflow_ref: getWorkflowReference(parent),
       step: 'delegate',
       kind: 'workflow_call',
       occurrence,
@@ -232,16 +232,18 @@ function writeSourceRunMeta(projectDir: string): void {
     reportDirectory: `${runRoot}/reports`,
     contextDirectory: `${runRoot}/context`,
     logsDirectory: `${runRoot}/logs`,
-    storageBackend: 'file',
-    status: 'completed',
+    status: 'failed',
     startTime: '2026-07-17T00:00:00.000Z',
+    endTime: '2026-07-17T00:01:00.000Z',
+    reason: 'source run stopped before the resumed fix',
   }), 'utf-8');
 }
 
-function writeSourceReports(projectDir: string, withFindingContract: boolean): {
+async function writeSourceReports(projectDir: string, withFindingContract: boolean): Promise<{
   sourceReportDir: string;
-  sourceLedger?: string;
-} {
+  sourceLedger?: ReturnType<typeof parseFindingLedger>;
+  sourceStore?: FindingLedgerStore;
+}> {
   writeSourceRunMeta(projectDir);
   const sourceReportDir = join(
     projectDir,
@@ -259,7 +261,7 @@ function writeSourceReports(projectDir: string, withFindingContract: boolean): {
     return { sourceReportDir };
   }
 
-  const sourceLedger = JSON.stringify(parseFindingLedger({
+  const sourceLedger = parseFindingLedger({
     workflowName: 'child-fix',
     nextId: 1,
     updatedAt: '2026-07-17T00:00:00.000Z',
@@ -273,11 +275,19 @@ function writeSourceReports(projectDir: string, withFindingContract: boolean): {
     lifecycleEvents: [],
     rawRecoveryAttempts: [],
     rawRecoveryResults: [],
+  });
+  const sourceStore = createTestFindingLedgerStore({
+    projectCwd: projectDir,
+    runId: sourceRunSlug,
+    reportDir: sourceReportDir,
+    workflowName: 'child-fix',
+    authorityKey: buildWorkflowCallNamespace(projectDir, 1),
+  });
+  await sourceStore.updateLedger(() => ({
+    ledger: sourceLedger,
+    result: undefined,
   }));
-  const ledgerPath = join(projectDir, '.takt', 'findings', 'review-ledger.json');
-  mkdirSync(join(projectDir, '.takt', 'findings'), { recursive: true });
-  writeFileSync(ledgerPath, sourceLedger, 'utf-8');
-  return { sourceReportDir, sourceLedger };
+  return { sourceReportDir, sourceLedger, sourceStore };
 }
 
 function findResumedRunSlug(projectDir: string): string {
@@ -347,7 +357,7 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
       };
     });
 
-    const source = writeSourceReports(environment.projectDir, withFindingContract);
+    const source = await writeSourceReports(environment.projectDir, withFindingContract);
     const runner = new TaskRunner(environment.projectDir);
     const resumedTask = prepareResumedTask(
       runner,
@@ -413,9 +423,8 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
         reason: 'target_exists',
       })],
     }));
-    if (source.sourceLedger !== undefined) {
-      expect(readFileSync(join(environment.projectDir, '.takt', 'findings', 'review-ledger.json'), 'utf-8'))
-        .toBe(source.sourceLedger);
+    if (source.sourceLedger !== undefined && source.sourceStore !== undefined) {
+      expect(source.sourceStore.loadLedger()).toEqual(source.sourceLedger);
     }
   });
 });

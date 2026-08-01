@@ -1,7 +1,7 @@
 import type { WorkflowConfig } from '../../core/models/index.js';
 import { WorkflowEngine as WorkflowEngineImpl } from '../../core/workflow/index.js';
 import type { WorkflowEngineOptions } from '../../core/workflow/types.js';
-import { createFindingLedgerStore } from '../../core/workflow/findings/store.js';
+import { createTestFindingLedgerStore } from './finding-storage.js';
 
 export class WorkflowEngine extends WorkflowEngineImpl {
   constructor(
@@ -13,21 +13,28 @@ export class WorkflowEngine extends WorkflowEngineImpl {
     const findingAuthorityResolver = options.inheritedFindingContract === undefined
       && options.findingAuthorityResolver === undefined
       ? {
-          resolve: ({ workflowConfig, runPaths }) => {
+          resolve: ({ workflowConfig, runPaths, runPathNamespace, workflowCallSiteIdentity }) => {
             const contract = workflowConfig.findingContract;
             if (contract === undefined) {
               throw new Error('Test Finding authority requires a Finding Contract');
             }
-            return createFindingLedgerStore({
+            const authorityKey = runPathNamespace.length === 0
+              ? 'root'
+              : workflowCallSiteIdentity;
+            if (authorityKey === undefined) {
+              throw new Error(
+                'Child Finding authority requires a workflow call-site identity',
+              );
+            }
+            return createTestFindingLedgerStore({
               projectCwd: options.projectCwd,
               runId: runPaths.slug,
               reportDir: runPaths.reportsAbs,
               workflowName: workflowConfig.name,
-              ledgerPath: contract.ledgerPath,
-              rawFindingsPath: contract.rawFindingsPath,
+              authorityKey,
               ...(options.resumeSource?.sourceRunSlug === undefined
                 ? {}
-                : { trustedResumeSourceRunId: options.resumeSource.sourceRunSlug }),
+                : { sourceRunId: options.resumeSource.sourceRunSlug }),
             });
           },
         }

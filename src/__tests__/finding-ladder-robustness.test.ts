@@ -26,7 +26,8 @@ import type {
   RawFinding,
 } from '../core/workflow/findings/types.js';
 import { runFindingManagerForStep } from '../core/workflow/findings/manager-runner.js';
-import { createFindingLedgerStore, type FindingManagerValidationReport } from '../core/workflow/findings/store.js';
+import type { FindingManagerValidationReport } from '../core/workflow/findings/store.js';
+import { createTestFindingLedgerStore } from './helpers/finding-storage.js';
 import {
   canonicalizeReviewerRawFinding,
   candidateFromStoredRawFinding,
@@ -285,8 +286,6 @@ function makeHarness(
   };
   const parentStep: WorkflowStep = { kind: 'agent', name: 'reviewers', persona: 'reviewer', edit: false } as WorkflowStep;
   const contract = {
-    ledgerPath: '.takt/findings/ledger.json',
-    rawFindingsPath: '.takt/findings/raw',
     manager: {
       persona: 'findings-manager',
       instruction: 'Reconcile findings.',
@@ -2192,13 +2191,11 @@ describe('解釈梯子の追加必須テスト', () => {
       execFileSync('git', ['add', 'src/b.ts', '.gitignore'], { cwd: projectCwd });
       execFileSync('git', ['-c', 'user.name=TAKT test', '-c', 'user.email=takt-test@example.invalid', 'commit', '--quiet', '-m', 'fixture'], { cwd: projectCwd });
 
-      const realStore = createFindingLedgerStore({
+      const realStore = createTestFindingLedgerStore({
         projectCwd,
         runId: 'crash-run',
         reportDir,
         workflowName: 'peer-review',
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
       });
       await realStore.updateLedger(() => ({
         ledger: authorizeFindingLedgerFixture({
@@ -2242,8 +2239,6 @@ describe('解釈梯子の追加必須テスト', () => {
 
       await expect(runFindingManagerForStep({
         contract: {
-          ledgerPath: '.takt/findings/peer-review.json',
-          rawFindingsPath: '.takt/findings/raw',
           manager: { persona: 'findings-manager', instruction: 'Reconcile.', outputContract: 'JSON.' },
         } as never,
         ledgerStore: crashingStore,
@@ -2538,13 +2533,11 @@ describe('解釈梯子の追加必須テスト', () => {
       execFileSync('git', ['add', 'src/a.ts', '.gitignore'], { cwd: projectCwd });
       execFileSync('git', ['-c', 'user.name=TAKT test', '-c', 'user.email=takt-test@example.invalid', 'commit', '--quiet', '-m', 'fixture'], { cwd: projectCwd });
 
-      const store = createFindingLedgerStore({
+      const store = createTestFindingLedgerStore({
         projectCwd,
         runId: 'shared-run',
         reportDir,
         workflowName: 'peer-review',
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
       });
       await store.updateLedger(() => ({
         ledger: authorizeFindingLedgerFixture({
@@ -2581,8 +2574,6 @@ describe('解釈梯子の追加必須テスト', () => {
         });
         return runFindingManagerForStep({
           contract: {
-            ledgerPath: '.takt/findings/peer-review.json',
-            rawFindingsPath: '.takt/findings/raw',
             manager: { persona: 'findings-manager', instruction: 'Reconcile.', outputContract: 'JSON.' },
           } as never,
           ledgerStore: store,

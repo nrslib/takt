@@ -252,8 +252,6 @@ export interface FindingContractReviewBudgetConfig {
 }
 
 export interface FindingContractConfig {
-  ledgerPath: string;
-  rawFindingsPath: string;
   manager: FindingContractManagerConfig;
   /** Present when the supervisor persona was resolved for the finding-conflict-adjudication synthetic step. */
   adjudicator?: FindingContractAdjudicatorConfig;
@@ -261,6 +259,17 @@ export interface FindingContractConfig {
   stopBudget?: FindingContractStopBudgetConfig;
   /** Optional per-workflow override of the review-integrity re-review budget; see FindingContractReviewBudgetConfig. */
   reviewBudget?: FindingContractReviewBudgetConfig;
+}
+
+export interface FindingConflictAdjudicationAuditReport {
+  version: 1;
+  runId: string;
+  conflictId: string;
+  discarded: true;
+  reason: string;
+  promptEvidenceHash: string;
+  freshEvidenceHash?: string;
+  output: unknown;
 }
 
 export interface FindingObservation {

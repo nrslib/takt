@@ -11,7 +11,6 @@ import {
   denormalizeFindingIntakeNormalize,
 } from '../configNormalizers.js';
 import { denormalizeObservabilityConfig } from '../observabilityConfig.js';
-import { denormalizeRunStorage } from '../project/projectConfigTransforms.js';
 
 export function serializeGlobalConfig(config: GlobalConfig): Record<string, unknown> {
   const raw: Record<string, unknown> = {
@@ -179,10 +178,6 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
   }
   if (config.workflowMcpServers && Object.keys(config.workflowMcpServers).length > 0) {
     raw.workflow_mcp_servers = config.workflowMcpServers;
-  }
-  const runStorage = denormalizeRunStorage(config.runStorage);
-  if (runStorage !== undefined) {
-    raw.run_storage = runStorage;
   }
   if (config.preventSleep !== undefined) {
     raw.prevent_sleep = config.preventSleep;

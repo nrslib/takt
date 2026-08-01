@@ -15,7 +15,6 @@ describe('buildRunPaths', () => {
     expect(paths.logsRel).toBe('.takt/runs/20260210-demo-task/logs');
     expect(paths.operationsRel).toBe('.takt/runs/20260210-demo-task/operations');
     expect(paths.operationJournalRel).toBe('.takt/runs/20260210-demo-task/operations/journal.json');
-    expect(paths.databaseRel).toBe('.takt/runs/20260210-demo-task/run.sqlite');
     expect(paths.findingContractDatabaseRel).toBe(
       '.takt/runs/20260210-demo-task/finding-contract.sqlite',
     );
@@ -25,7 +24,6 @@ describe('buildRunPaths', () => {
     expect(paths.contextTaskAbs).toBe('/tmp/project/.takt/runs/20260210-demo-task/context/task');
     expect(paths.contextTaskOrderAbs).toBe('/tmp/project/.takt/runs/20260210-demo-task/context/task/order.md');
     expect(paths.operationJournalAbs).toBe('/tmp/project/.takt/runs/20260210-demo-task/operations/journal.json');
-    expect(paths.databaseAbs).toBe('/tmp/project/.takt/runs/20260210-demo-task/run.sqlite');
     expect(paths.findingContractDatabaseAbs).toBe(
       '/tmp/project/.takt/runs/20260210-demo-task/finding-contract.sqlite',
     );

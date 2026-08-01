@@ -379,7 +379,7 @@ export function attachLegacyWorkflowExecutionBundle(
     operationClaimToken: readRunMetaBySlug(options.projectDir, options.runSlug)?.operationClaimToken,
   };
   if (JSON.stringify(identityAfterPreparation) !== JSON.stringify(identityBefore)) {
-    throw new Error('Legacy attach changed run storage or operation identity');
+    throw new Error('Legacy attach changed run lifecycle or operation identity');
   }
   if (options.dryRun !== true) publishWorkflowExecutionBundle(runPaths, prepared);
   return {

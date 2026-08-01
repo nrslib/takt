@@ -88,6 +88,11 @@ import { createAnchorAdjudication } from '../core/models/finding-anchor-relevanc
 import { computeConflictEvidenceHash } from '../core/workflow/findings/adjudication-evidence.js';
 import * as reviewScopeSnapshot from '../core/workflow/findings/snapshot.js';
 import { canonicalJson } from '../shared/utils/canonical-json.js';
+import {
+  createEngineDerivedWaiverConflict,
+  createEngineDerivedWaiverDisputeNote,
+  isEngineDerivedWaiverConflict,
+} from '../core/workflow/findings/waiver-conflict.js';
 
 const observation = {
   runId: 'run-1',
@@ -324,6 +329,7 @@ function emptyCommitPlanInput(
       runId: observation.runId,
       callNamespace: '',
       timestamp: observation.timestamp,
+      managerAuthority: 'standard',
     } as RunFindingManagerForStepInput,
     previousLedger,
     intake: {
@@ -3020,6 +3026,332 @@ describe('provisional recovery', () => {
         reason: expect.stringContaining('mixed manager entry'),
       }),
     }));
+  });
+
+  it('restores a derived waiver conflict through commit isolation, revalidation, and final reconciliation', () => {
+    const cwd = process.cwd();
+    const quote = verifiedSourceQuoteFields(
+      cwd,
+      'src/core/workflow/findings/provisional-recovery-origin.ts',
+      1,
+    );
+    const target: FindingLedgerEntry = {
+      ...provisional('F-0001', 'manager-budget-exhausted', quote.path),
+      provisional: undefined,
+    };
+    const recoveryProcess = provisional(
+      'F-0002',
+      'manager-budget-exhausted',
+      quote.path,
+    );
+    const initialLedger = ledger([target, recoveryProcess], [raw('source-1', quote.path)]);
+    const isolatedSource: RawFinding = {
+      ...raw('raw-isolated-conflict', quote.path),
+      evidence: [quote],
+    };
+    const isolatedCanonical = canonicalizeReviewerRawFinding(
+      candidateFromStoredRawFinding(isolatedSource, 'reviewer-stable-a'),
+      { ledger: initialLedger },
+    ).canonical;
+    recoveryProcess.provisional!.lineageKey = isolatedCanonical.lineageKey;
+    const recoveryOrigin = snapshotProvisionalRecoveryOrigin(recoveryProcess);
+    const previousLedger = ledger(
+      [target, recoveryProcess],
+      [raw('source-1', quote.path)],
+    );
+    const matchedSource = stampTargetPrecondition({
+      ...raw('raw-current-match', quote.path),
+      relation: 'persists',
+      targetFindingId: target.id,
+      evidence: [quote],
+    }, previousLedger);
+    const matchedCanonical = canonicalizeReviewerRawFinding(
+      candidateFromStoredRawFinding(matchedSource, 'reviewer-stable-a'),
+      { ledger: previousLedger },
+    ).canonical;
+    const matchedWire = toLedgerRawFinding(matchedCanonical);
+    const isolatedWire = toLedgerRawFinding(isolatedCanonical);
+    const freshLedger = authorizeFindingLedgerFixture({
+      ...previousLedger,
+      findings: previousLedger.findings.map((finding) => (
+        finding.id === recoveryProcess.id
+          ? { ...finding, revision: finding.revision + 1 }
+          : finding
+      )),
+    });
+    const base = emptyCommitPlanInput({
+      previousLedger,
+      intake: {
+        ...emptyCommitPlanInput().intake,
+        items: [
+          { canonical: matchedCanonical, wire: matchedWire },
+          {
+            canonical: isolatedCanonical,
+            wire: isolatedWire,
+            recoveryOrigins: [recoveryOrigin],
+            interpretationRecoveryAttempt: true,
+          },
+        ],
+      },
+      managerDecision: {
+        ...emptyCommitPlanInput().managerDecision,
+        managerOutput: {
+          ...emptyOutput(),
+          anchorAdjudications: [
+            createAnchorAdjudication({
+              rawFindingId: matchedWire.rawFindingId,
+              decision: 'same',
+              findingId: target.id,
+              anchorRelevance: 'not_applicable',
+              evidence: 'The current source evidence confirms the finding persists.',
+            }),
+            createAnchorAdjudication({
+              rawFindingId: isolatedWire.rawFindingId,
+              decision: 'conflict',
+              findingId: target.id,
+              anchorRelevance: 'not_applicable',
+              evidence: 'The recovery observation conflicts with the target finding.',
+            }),
+          ],
+          matches: [{
+            findingId: target.id,
+            rawFindingIds: [matchedWire.rawFindingId],
+            evidence: 'The current source evidence confirms the finding persists.',
+          }],
+          conflicts: [{
+            findingIds: [target.id],
+            rawFindingIds: [isolatedWire.rawFindingId],
+            description: 'The recovery observation conflicts with the target finding.',
+          }],
+          disputeNotes: [createEngineDerivedWaiverDisputeNote({
+            findingId: target.id,
+            reason: 'The implementation is constrained by a frozen contract.',
+            evidence: `${quote.path}:1`,
+          })],
+        },
+        cleanWireById: new Map([
+          [matchedWire.rawFindingId, matchedWire],
+          [isolatedWire.rawFindingId, isolatedWire],
+        ]),
+        cleanCanonicalById: new Map([
+          [matchedCanonical.rawFindingId, matchedCanonical],
+          [isolatedCanonical.rawFindingId, isolatedCanonical],
+        ]),
+      },
+      reviewScopeSnapshotId: quote.snapshotId,
+      reviewScopeSnapshot: emptyReviewScopeSnapshot(quote.snapshotId),
+      stopBudgetRoundMarker: 'round-waiver-isolation-regression',
+    });
+    const mutation = buildFindingManagerCommitMutation({
+      ...base,
+      input: {
+        ...base.input,
+        cwd,
+        priorStepResponseText: `## Disputed Findings\n- findingId: ${target.id}\n  reason: frozen contract\n  evidence: ${quote.path}:1`,
+      },
+    }, freshLedger);
+
+    expect(mutation.result.lifecycleManagerOutput.anchorAdjudications).toEqual([
+      expect.objectContaining({
+        rawFindingId: matchedWire.rawFindingId,
+        rawDecision: 'same',
+        decision: 'not_applicable',
+      }),
+    ]);
+    expect(mutation.result.lifecycleManagerOutput.conflicts).toHaveLength(1);
+    expect(mutation.result.lifecycleManagerOutput.conflicts[0]?.rawFindingIds).toEqual([]);
+    expect(isEngineDerivedWaiverConflict(
+      mutation.result.lifecycleManagerOutput.conflicts[0]!,
+    )).toBe(true);
+    expect(mutation.result.lifecycleManagerOutput.disputeNotes).toEqual([
+      expect.objectContaining({ findingId: target.id }),
+    ]);
+    expect(mutation.ledger.conflicts).toHaveLength(1);
+    expect(mutation.ledger.conflicts[0]).toMatchObject({
+      findingIds: [target.id],
+      rawFindingIds: [matchedWire.rawFindingId],
+    });
+    expect(mutation.ledger.rawFindings.map((item) => item.rawFindingId))
+      .not.toContain(isolatedWire.rawFindingId);
+  });
+
+  it('prefers a late ladder raw-backed multi-finding conflict over a base derived waiver conflict at final commit', () => {
+    const cwd = process.cwd();
+    const quote = verifiedSourceQuoteFields(
+      cwd,
+      'src/core/workflow/findings/provisional-recovery-origin.ts',
+      1,
+    );
+    const target: FindingLedgerEntry = {
+      ...provisional('F-0001', 'manager-budget-exhausted', quote.path),
+      provisional: undefined,
+    };
+    const recoveryProcess = provisional(
+      'F-0002',
+      'manager-budget-exhausted',
+      quote.path,
+    );
+    const seedLedger = ledger([target, recoveryProcess], [raw('source-1', quote.path)]);
+    const lateSource: RawFinding = {
+      ...raw('raw-late-ladder-conflict', quote.path),
+      evidence: [quote],
+    };
+    const lateCanonical = canonicalizeReviewerRawFinding(
+      candidateFromStoredRawFinding(lateSource, 'reviewer-stable-a'),
+      { ledger: seedLedger },
+    ).canonical;
+    recoveryProcess.provisional!.lineageKey = lateCanonical.lineageKey;
+    const previousLedger = ledger(
+      [target, recoveryProcess],
+      [raw('source-1', quote.path)],
+    );
+    const recoveryOrigin = snapshotProvisionalRecoveryOrigin(
+      previousLedger.findings.find((finding) => finding.id === recoveryProcess.id)!,
+    );
+    const baseSource = stampTargetPrecondition({
+      ...raw('raw-base-match', quote.path),
+      relation: 'persists',
+      targetFindingId: target.id,
+      evidence: [quote],
+    }, previousLedger);
+    const baseCanonical = canonicalizeReviewerRawFinding(
+      candidateFromStoredRawFinding(baseSource, 'reviewer-stable-a'),
+      { ledger: previousLedger },
+    ).canonical;
+    const baseWire = toLedgerRawFinding(baseCanonical);
+    const lateWire = toLedgerRawFinding(lateCanonical);
+    const baseInterpretationKey = computeBaseInterpretationKey({
+      reviewerStableKey: lateCanonical.reviewerStableKey,
+      lineageKey: lateCanonical.lineageKey,
+      candidateEvidenceHash: lateCanonical.evidenceSetHash,
+      canonicalIntegrityDigest: canonicalRawIntegrityDigestOf(lateCanonical),
+    });
+    const interpretationKey = computeInterpretationAttemptKey(baseInterpretationKey, 1);
+    const targetPrecondition = captureFindingPreconditions(previousLedger)
+      .get(target.id)?.precondition;
+    if (targetPrecondition === undefined) {
+      throw new Error('Test target precondition is missing');
+    }
+    const freshLedger: FindingLedger = {
+      ...previousLedger,
+      interpretations: [{
+        interpretationKey,
+        baseInterpretationKey,
+        attemptOrdinal: 1,
+        reviewerStableKey: lateCanonical.reviewerStableKey,
+        lineageKey: lateCanonical.lineageKey,
+        candidateEvidenceHash: lateCanonical.evidenceSetHash,
+        canonicalIntegrityDigest: canonicalRawIntegrityDigestOf(lateCanonical),
+        stage: 'interpretation_completed',
+        startedAt: observation,
+        completedAt: observation,
+        reservationToken: 'owner-late-conflict',
+        promptPreconditions: [targetPrecondition],
+        validatedDecision: {
+          decision: 'open_conflict',
+          rawFindingId: lateWire.rawFindingId,
+          targetFindingId: target.id,
+        },
+      }],
+    };
+    const base = emptyCommitPlanInput({
+      previousLedger,
+      intake: {
+        ...emptyCommitPlanInput().intake,
+        items: [
+          { canonical: baseCanonical, wire: baseWire },
+          {
+            canonical: lateCanonical,
+            wire: lateWire,
+            recoveryOrigins: [recoveryOrigin],
+            interpretationRecoveryAttempt: true,
+          },
+        ],
+      },
+      managerDecision: {
+        ...emptyCommitPlanInput().managerDecision,
+        managerOutput: {
+          ...emptyOutput(),
+          anchorAdjudications: [createAnchorAdjudication({
+            rawFindingId: baseWire.rawFindingId,
+            decision: 'same',
+            findingId: target.id,
+            anchorRelevance: 'not_applicable',
+            evidence: 'The current source evidence confirms the finding persists.',
+          })],
+          matches: [{
+            findingId: target.id,
+            rawFindingIds: [baseWire.rawFindingId],
+            evidence: 'The current source evidence confirms the finding persists.',
+          }],
+          conflicts: [createEngineDerivedWaiverConflict(target.id)],
+          disputeNotes: [createEngineDerivedWaiverDisputeNote({
+            findingId: target.id,
+            reason: 'The implementation is constrained by a frozen contract.',
+            evidence: `${quote.path}:1`,
+          })],
+        },
+        cleanWireById: new Map([
+          [baseWire.rawFindingId, baseWire],
+          [lateWire.rawFindingId, lateWire],
+        ]),
+        cleanCanonicalById: new Map([
+          [baseCanonical.rawFindingId, baseCanonical],
+          [lateCanonical.rawFindingId, lateCanonical],
+        ]),
+        ladder: {
+          ...emptyCommitPlanInput().managerDecision.ladder,
+          interpretationReservations: new Map([[
+            interpretationKey,
+            'owner-late-conflict',
+          ]]),
+          interpretationIntegrityDigests: new Map([[
+            interpretationKey,
+            canonicalRawIntegrityDigestOf(lateCanonical),
+          ]]),
+          pendingConflicts: [{
+            target: {
+              canonical: lateCanonical,
+              wire: lateWire,
+              baseInterpretationKey,
+              interpretationKey,
+              attemptOrdinal: 1,
+              interpretationRecoveryAttempt: true,
+              recoveryOrigins: [recoveryOrigin],
+            },
+            targetFindingId: target.id,
+            viaInterpretationKey: interpretationKey,
+          }],
+        },
+      },
+      reviewScopeSnapshotId: quote.snapshotId,
+      reviewScopeSnapshot: emptyReviewScopeSnapshot(quote.snapshotId),
+      stopBudgetRoundMarker: 'round-late-ladder-waiver-regression',
+    });
+    const mutation = buildFindingManagerCommitMutation({
+      ...base,
+      input: {
+        ...base.input,
+        cwd,
+        priorStepResponseText: `## Disputed Findings\n- findingId: ${target.id}\n  reason: frozen contract\n  evidence: ${quote.path}:1`,
+      },
+    }, freshLedger);
+
+    expect(mutation.result.lifecycleManagerOutput.conflicts).toHaveLength(1);
+    expect(mutation.result.lifecycleManagerOutput.conflicts[0]).toMatchObject({
+      findingIds: [target.id, recoveryProcess.id],
+      rawFindingIds: [lateWire.rawFindingId],
+    });
+    expect(isEngineDerivedWaiverConflict(
+      mutation.result.lifecycleManagerOutput.conflicts[0]!,
+    )).toBe(false);
+    expect(mutation.ledger.conflicts).toHaveLength(1);
+    expect(mutation.ledger.conflicts[0]).toMatchObject({
+      findingIds: [target.id, recoveryProcess.id],
+      rawFindingIds: [lateWire.rawFindingId],
+    });
+    expect(mutation.ledger.findings.find((finding) => finding.id === target.id)?.status)
+      .toBe('open');
   });
 
   it('marks a stale recovery provisional as stale_precondition without storing its raw observation', () => {

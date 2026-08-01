@@ -456,7 +456,7 @@ describe('Finding Contract SQLite storage', () => {
       writeFileSync(sourcePath, 'not sqlite');
     } else if (kind === 'old source schema') {
       const database = new DatabaseSync(sourcePath);
-      database.exec('CREATE TABLE legacy_run_storage (id TEXT PRIMARY KEY) STRICT');
+      database.exec('CREATE TABLE unrelated_table (id TEXT PRIMARY KEY) STRICT');
       database.close();
     } else if (kind === 'source run mismatch') {
       const sourceResolver = createResolver({ root: sourceRoot, runId: 'another-run' });

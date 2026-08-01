@@ -68,7 +68,6 @@ export function createFileWorkflowRunTerminalPublisher(input: {
           runStatus: outcome.status,
           iteration: outcome.iteration,
           payloadSha256,
-          proof: Object.freeze({ backend: 'file' as const }),
         }),
         issues: Object.freeze([]),
       });

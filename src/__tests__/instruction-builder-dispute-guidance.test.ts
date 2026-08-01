@@ -68,7 +68,6 @@ describe('dispute guidance injection', () => {
 
     const section = extractFindingContractSection(instruction);
     expect(section).not.toContain('Consolidated ledger copy');
-    expect(section).not.toContain('/tmp/.takt/findings/ledger.json');
     expect(section).not.toContain('Disputed Findings');
     expect(section).not.toContain('dispute claim');
   });

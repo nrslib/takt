@@ -36,7 +36,8 @@ import { ingestFindingContractResults } from '../core/workflow/findings/contract
 import { createRawFindingsStructuredOutput } from '../core/workflow/findings/manager-agent.js';
 import { createFindingReviewPublicationStructuredOutput } from '../core/workflow/findings/review-publication-structured-output.js';
 import { RawFindingsOutputValidationJsonSchema } from '../core/models/finding-schemas.js';
-import { createFindingLedgerStore, type FindingManagerValidationReport } from '../core/workflow/findings/store.js';
+import type { FindingManagerValidationReport } from '../core/workflow/findings/store.js';
+import { createTestFindingLedgerStore } from './helpers/finding-storage.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
 import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
 import { authorizeFindingLedgerFixture } from './helpers/finding-lifecycle-fixture.js';
@@ -235,8 +236,6 @@ describe('StepExecutor', () => {
       observabilityEnabled: () => false,
       recordSynthesizedAgentUsage,
       findingContract: {
-        ledgerPath: '.takt/findings/ledger.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'Reconcile.',
@@ -1582,13 +1581,11 @@ describe('StepExecutor', () => {
     const buildFindingContractInstructionContext = vi.fn().mockReturnValue(findingContractContext);
     const reportDir = '.takt/runs/test-run/reports';
     mkdirSync(join(cwd, reportDir), { recursive: true });
-    const findingLedgerStore = createFindingLedgerStore({
+    const findingLedgerStore = createTestFindingLedgerStore({
       projectCwd: cwd,
       runId: 'test-run',
       reportDir: join(cwd, reportDir),
       workflowName: 'test-workflow',
-      ledgerPath: '.takt/findings/ledger.json',
-      rawFindingsPath: '.takt/findings/raw',
     });
     await findingLedgerStore.updateLedger(() => ({
       ledger: authorizeFindingLedgerFixture({
@@ -1675,8 +1672,6 @@ describe('StepExecutor', () => {
       structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
       reviewerOutputStrategy: { kind: 'structured', reportGeneration: 'structured', intake: 'reviewer_structured' },
       findingContract: {
-        ledgerPath: '.takt/findings/ledger.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: { persona: 'findings-manager', instruction: 'Reconcile.', outputContract: 'Return JSON.' },
       },
       findingLedgerStore,

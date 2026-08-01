@@ -252,20 +252,35 @@ function containsIsolatedRawFinding(
   return sourceRawFindingIds.some((rawFindingId) => isolatedRawFindingIds.has(rawFindingId));
 }
 
-function isolateManagerOutput(
+function isolateManagerOutputForCommit(
   output: FindingManagerOutput,
   isolatedRawFindingIds: ReadonlySet<string>,
 ): FindingManagerOutput {
   const retain = <T extends { rawFindingIds: string[] }>(entries: readonly T[]): T[] => (
     entries.filter((entry) => !containsIsolatedRawFinding(entry.rawFindingIds, isolatedRawFindingIds))
   );
+  const matches = retain(output.matches);
+  const newFindings = retain(output.newFindings);
+  const resolvedFindings = retain(output.resolvedFindings);
+  const reopenedFindings = retain(output.reopenedFindings);
+  const conflicts = retain(output.conflicts);
+  const landedRawFindingIds = new Set([
+    ...matches.flatMap((entry) => entry.rawFindingIds),
+    ...newFindings.flatMap((entry) => entry.rawFindingIds),
+    ...resolvedFindings.flatMap((entry) => entry.rawFindingIds),
+    ...reopenedFindings.flatMap((entry) => entry.rawFindingIds),
+    ...conflicts.flatMap((entry) => entry.rawFindingIds),
+  ]);
   return {
     ...output,
-    matches: retain(output.matches),
-    newFindings: retain(output.newFindings),
-    resolvedFindings: retain(output.resolvedFindings),
-    reopenedFindings: retain(output.reopenedFindings),
-    conflicts: retain(output.conflicts),
+    anchorAdjudications: output.anchorAdjudications.filter(
+      (adjudication) => landedRawFindingIds.has(adjudication.rawFindingId),
+    ),
+    matches,
+    newFindings,
+    resolvedFindings,
+    reopenedFindings,
+    conflicts,
   };
 }
 
@@ -548,7 +563,7 @@ export function buildFindingManagerCommitMutation(
   const { input, managerDecision } = params;
   const { managerOutput } = managerDecision;
   const { admission } = prepared;
-  const isolatedManagerOutput = isolateManagerOutput(
+  const isolatedManagerOutput = isolateManagerOutputForCommit(
     managerOutput,
     managerEntryIsolation.droppedRawFindingIds,
   );
@@ -580,7 +595,7 @@ export function buildFindingManagerCommitMutation(
     ladderCommit.staleRecoveryRawFindingIds,
   ));
   const interpretationResults = ladderCommit.interpretationResults;
-  let merged = isolateManagerOutput(
+  let merged = isolateManagerOutputForCommit(
     mergeOutputs(output, ladderCommit.output),
     managerEntryIsolation.droppedRawFindingIds,
   );

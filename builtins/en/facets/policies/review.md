@@ -213,7 +213,7 @@ To prevent circular rejections, track findings by ID.
 
 Finding Contract applies to the whole review workflow, not to individual findings.
 Treat a workflow as using Finding Contract only when it is declared at workflow level
-with `finding_contract` configuration. A `findings-ledger.json` file, a dedicated
+with `finding_contract` configuration. An auxiliary `findings-ledger.json` snapshot, a dedicated
 "Finding Contract" section in the instruction template, or an `Observed Findings`
 table in the output contract is supporting evidence inside an already configured
 Finding Contract workflow; none of these artifacts enables Finding Contract by itself.
@@ -222,18 +222,18 @@ When Finding Contract is in use, reviewers must not allocate new final `finding_
 values or decide final lifecycle state. Report observed problems as evidence-backed
 raw findings in the `Observed Findings` table. Use only the raw relations `new`,
 `persists`, `resolution_confirmation`, and `reopened`; refer to existing IDs only
-when they are present in the ledger. Final lifecycle decisions and finding-ID matching
+when they are present in the engine-provided live ledger summary / Finding state. Final lifecycle decisions and finding-ID matching
 belong to the findings-manager and engine.
 
-When a workflow is configured with Finding Contract and a parseable ledger is available,
-the ledger is the authoritative source for tracked findings. Individual reports and raw
-finding details are supporting evidence. If a ledger exists but is incomplete, follow
-mapped findings from the ledger and treat unmapped raw findings as potential new entries
-pending findings-manager reconciliation. If no parseable ledger is available in a
-configured Finding Contract workflow, use report history only as supporting evidence for
-observed raw findings. Do not assign final `finding_id` values or lifecycle states and
-do not apply the legacy rules; wait for ledger regeneration or findings-manager
-reconciliation.
+When a workflow is configured with Finding Contract, the engine-provided live ledger
+summary / Finding state is authoritative for tracked findings. Individual reports, raw
+finding details, and `findings-ledger.json` snapshots are supporting evidence only. If
+the live summary is incomplete, follow its mapped findings and treat unmapped raw
+findings as potential new entries pending findings-manager reconciliation. If no live
+Finding state is available in a configured Finding Contract workflow, use report history
+only as supporting evidence for observed raw findings. Do not assign final `finding_id`
+values or lifecycle states and do not apply the legacy rules; wait for the engine or
+findings-manager to provide reconciled state.
 
 ### Legacy Finding ID Rules (for workflows without Finding Contract)
 
@@ -396,9 +396,9 @@ When a change involves side effects or state changes such as external calls, con
 
 **Precedence:**
 
-1. If a parseable Finding Contract ledger / `findings-ledger.json` is available in a workflow configured with Finding Contract, use the ledger as the authoritative source for tracked findings. Fix only open findings from the ledger (`new`, `persists`, or `reopened`); ignore resolved or closed findings. Treat individual reports as supporting evidence reachable from the ledger.
-2. If a ledger exists but is incomplete, follow mapped findings from the ledger and treat unmapped raw findings as potential new entries pending findings-manager reconciliation.
-3. If the workflow is configured with Finding Contract but no parseable ledger is available, use the latest review reports in the Report Directory only as supporting evidence for observed raw findings. Do not assign final `finding_id` values or lifecycle states and do not apply the legacy rules; wait for ledger regeneration or findings-manager reconciliation.
+1. In a workflow configured with Finding Contract, use the engine-provided live ledger summary / Finding state as the authoritative source for tracked findings. Fix only open findings from the live state (`new`, `persists`, or `reopened`); ignore resolved or closed findings. Treat individual reports and `findings-ledger.json` snapshots as supporting evidence only.
+2. If the live summary is incomplete, follow mapped findings from the live state and treat unmapped raw findings as potential new entries pending findings-manager reconciliation.
+3. If the workflow is configured with Finding Contract but no live Finding state is available, use the latest review reports in the Report Directory only as supporting evidence for observed raw findings. Do not assign final `finding_id` values or lifecycle states and do not apply the legacy rules; wait for the engine or findings-manager to provide reconciled state.
 4. If the workflow does not use `finding_contract` configuration, use the latest review reports in the Report Directory as the primary evidence and apply the legacy rules:
    - Look in the Report Directory for review reports this step has previously produced, along with their timestamped history
    - Treat the unsuffixed file as the latest result and the most recent `{report-name}.{timestamp}` as the previous result

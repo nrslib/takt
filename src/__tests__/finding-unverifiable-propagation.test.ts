@@ -115,7 +115,7 @@ describe('unverifiable propagation', () => {
         }],
       },
       runId: 'run-1',
-      scopeIdentity: '/project/.takt/findings/ledger.json',
+      scopeIdentity: 'finding-storage:test:root',
       workflowTask: 'Review the project.',
       previousLedger: ledger,
       intake: {

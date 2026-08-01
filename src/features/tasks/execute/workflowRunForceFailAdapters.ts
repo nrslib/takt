@@ -93,16 +93,6 @@ function buildForceFailPublicationPayload(input: {
     ),
     ndjsonLogPath,
     traceReportMode: 'redacted',
-    metaSeed: {
-      backend: input.meta.storageBackend,
-      startedAt: input.meta.startTime,
-      resumeSource: input.meta.resumeMode === undefined
-        ? null
-        : {
-            mode: input.meta.resumeMode,
-            sourceRunSlug: input.meta.sourceRunSlug ?? null,
-          },
-    },
     ...(input.meta.observability?.traceDiscovery === undefined
       ? {}
       : { traceDiscovery: input.meta.observability.traceDiscovery }),

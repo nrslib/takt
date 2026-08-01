@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { RunPaths } from '../core/workflow/run/run-paths.js';
+import { buildRunPaths, type RunPaths } from '../core/workflow/run/run-paths.js';
 
 vi.mock('../infra/config/index.js', () => ({
   ensureDir: vi.fn(),
@@ -10,35 +10,7 @@ import { ensureDir, writeFileAtomic } from '../infra/config/index.js';
 import { RunMetaManager } from '../features/tasks/execute/runMeta.js';
 
 function createRunPaths(): RunPaths {
-  return {
-    slug: '20260409-force-fail-test',
-    runRootAbs: '/tmp/project/.takt/runs/20260409-force-fail-test',
-    runRootRel: '.takt/runs/20260409-force-fail-test',
-    reportsAbs: '/tmp/project/.takt/runs/20260409-force-fail-test/reports',
-    reportsRel: '.takt/runs/20260409-force-fail-test/reports',
-    contextAbs: '/tmp/project/.takt/runs/20260409-force-fail-test/context',
-    contextRel: '.takt/runs/20260409-force-fail-test/context',
-    contextTaskAbs: '/tmp/project/.takt/runs/20260409-force-fail-test/context/task',
-    contextTaskRel: '.takt/runs/20260409-force-fail-test/context/task',
-    contextTaskOrderAbs: '/tmp/project/.takt/runs/20260409-force-fail-test/context/task/order.md',
-    contextTaskOrderRel: '.takt/runs/20260409-force-fail-test/context/task/order.md',
-    contextKnowledgeAbs: '/tmp/project/.takt/runs/20260409-force-fail-test/context/knowledge',
-    contextKnowledgeRel: '.takt/runs/20260409-force-fail-test/context/knowledge',
-    contextPolicyAbs: '/tmp/project/.takt/runs/20260409-force-fail-test/context/policy',
-    contextPolicyRel: '.takt/runs/20260409-force-fail-test/context/policy',
-    contextPreviousResponsesAbs: '/tmp/project/.takt/runs/20260409-force-fail-test/context/previous_responses',
-    contextPreviousResponsesRel: '.takt/runs/20260409-force-fail-test/context/previous_responses',
-    logsAbs: '/tmp/project/.takt/runs/20260409-force-fail-test/logs',
-    logsRel: '.takt/runs/20260409-force-fail-test/logs',
-    operationsAbs: '/tmp/project/.takt/runs/20260409-force-fail-test/operations',
-    operationsRel: '.takt/runs/20260409-force-fail-test/operations',
-    operationJournalAbs: '/tmp/project/.takt/runs/20260409-force-fail-test/operations/journal.json',
-    operationJournalRel: '.takt/runs/20260409-force-fail-test/operations/journal.json',
-    databaseAbs: '/tmp/project/.takt/runs/20260409-force-fail-test/run.sqlite',
-    databaseRel: '.takt/runs/20260409-force-fail-test/run.sqlite',
-    metaAbs: '/tmp/project/.takt/runs/20260409-force-fail-test/meta.json',
-    metaRel: '.takt/runs/20260409-force-fail-test/meta.json',
-  };
+  return buildRunPaths('/tmp/project', '20260409-force-fail-test');
 }
 
 describe('RunMetaManager', () => {
@@ -47,7 +19,7 @@ describe('RunMetaManager', () => {
   });
 
   it('should persist currentStep and currentIteration on updateStep', () => {
-    const manager = new RunMetaManager(createRunPaths(), 'Force fail task', 'default', 'file');
+    const manager = new RunMetaManager(createRunPaths(), 'Force fail task', 'default');
 
     manager.updateStep('implement', 2);
 
@@ -68,7 +40,6 @@ describe('RunMetaManager', () => {
     };
 
     expect(initialMeta.status).toBe('running');
-    expect(initialMeta).toMatchObject({ storageBackend: 'file' });
     expect(initialMeta.updatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect(initialMeta.currentStep).toBeUndefined();
     expect(initialMeta.currentIteration).toBeUndefined();
@@ -79,7 +50,7 @@ describe('RunMetaManager', () => {
   });
 
   it('should persist the latest phase alongside step progress', () => {
-    const manager = new RunMetaManager(createRunPaths(), 'Force fail task', 'default', 'file');
+    const manager = new RunMetaManager(createRunPaths(), 'Force fail task', 'default');
     manager.updateStep('review', 3);
 
     (
@@ -104,7 +75,7 @@ describe('RunMetaManager', () => {
   });
 
   it('should persist and retain resume point metadata for workflow_call retries', () => {
-    const manager = new RunMetaManager(createRunPaths(), 'Force fail task', 'default', 'file');
+    const manager = new RunMetaManager(createRunPaths(), 'Force fail task', 'default');
     const resumePoint = {
       version: 2,
       stack: [
@@ -132,7 +103,7 @@ describe('RunMetaManager', () => {
   });
 
   it('should refresh resume point without rolling back current step metadata', () => {
-    const manager = new RunMetaManager(createRunPaths(), 'Force fail task', 'default', 'file');
+    const manager = new RunMetaManager(createRunPaths(), 'Force fail task', 'default');
     const staleResumePoint = {
       version: 2,
       stack: [
@@ -192,7 +163,6 @@ describe('RunMetaManager', () => {
       createRunPaths(),
       'Force fail task',
       'default',
-      'sqlite',
       undefined,
       { traceDiscovery },
     );
@@ -207,7 +177,6 @@ describe('RunMetaManager', () => {
     };
 
     expect(initialMeta.observability?.traceDiscovery).toEqual(traceDiscovery);
-    expect(initialMeta).toMatchObject({ storageBackend: 'sqlite' });
     expect(updatedMeta.observability?.traceDiscovery).toEqual(traceDiscovery);
   });
 
@@ -216,7 +185,6 @@ describe('RunMetaManager', () => {
       createRunPaths(),
       'Force fail task',
       'default',
-      'sqlite',
       {
         sourceRunSlug: '20260409-source-run',
         resumeMode: 'retry',
@@ -249,7 +217,6 @@ describe('RunMetaManager', () => {
       createRunPaths(),
       'Force fail task',
       'default',
-      'file',
       undefined,
       {
         operationJournalRunSlug: '20260409-original-run',
@@ -280,7 +247,6 @@ describe('RunMetaManager', () => {
       createRunPaths(),
       'Review PR changes',
       'default',
-      'file',
       undefined,
       { prContext },
     );

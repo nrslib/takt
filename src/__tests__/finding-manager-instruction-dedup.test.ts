@@ -101,8 +101,6 @@ describe('buildManagerInstruction', () => {
   it('inlines ledger and raw findings without presenting storage references as file paths', () => {
     const instruction = buildManagerInstruction({
       contract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'Reconcile findings.',

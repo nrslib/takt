@@ -542,8 +542,6 @@ describe('OptionsBuilder auto routing deterministic completion', () => {
     // buildAgentOptions の structured_output ガードを通過すること。
     const managerStep = buildFindingManagerStep({
       contract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',

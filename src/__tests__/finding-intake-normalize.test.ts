@@ -27,8 +27,6 @@ import { clearTaktEnv, restoreTaktEnv, type TaktEnvSnapshot } from './helpers/ta
 
 const dirs: string[] = [];
 const findingContract: FindingContractConfig = {
-  ledgerPath: '.takt/findings/peer-review.json',
-  rawFindingsPath: '.takt/findings/raw',
   manager: {
     persona: 'findings-manager',
     instruction: 'findings-manager',

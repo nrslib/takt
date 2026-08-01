@@ -299,8 +299,6 @@ provider/model完全一致を条件として、通常Markdownと隔離extractor�
 
 ```yaml
 finding_contract:
-  ledger_path: .takt/findings/review.json
-  raw_findings_path: .takt/findings/review/raw
   manager:
     persona: findings-manager
     instruction: findings-manager

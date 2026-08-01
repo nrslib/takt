@@ -54,8 +54,6 @@ import {
   denormalizeSyncConflictResolver,
   normalizeWorkflowMcpServers,
   denormalizeWorkflowMcpServers,
-  normalizeRunStorage,
-  denormalizeRunStorage,
 } from './projectConfigTransforms.js';
 import {
   denormalizeObservabilityConfig,
@@ -115,7 +113,6 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     ignore_exceed,
     sync_conflict_resolver,
     observability,
-    run_storage,
   } = parsedConfigResult;
   const projectBaseUrlOptions = {
     baseUrlTrust: 'local-loopback-only' as const,
@@ -229,7 +226,6 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     workflowArpeggio: normalizeWorkflowArpeggioPolicy(parsedConfigResult.workflow_arpeggio),
     syncConflictResolver: normalizeSyncConflictResolver(sync_conflict_resolver),
     workflowMcpServers: normalizeWorkflowMcpServers(parsedConfigResult.workflow_mcp_servers),
-    runStorage: normalizeRunStorage(run_storage),
   };
 }
 
@@ -350,12 +346,6 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
   } else {
     delete savePayload.assistant;
   }
-  const rawRunStorage = denormalizeRunStorage(config.runStorage);
-  if (rawRunStorage) {
-    savePayload.run_storage = rawRunStorage;
-  } else {
-    delete savePayload.run_storage;
-  }
   if (normalizedSubmodules !== undefined) {
     savePayload.submodules = normalizedSubmodules;
     delete savePayload.with_submodules;
@@ -367,7 +357,7 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
       delete savePayload.with_submodules;
     }
   }
-  for (const k of ['providerProfiles', 'providerOptions', 'autoRouting', 'findingContract', 'rateLimitFallback', 'autoPr', 'draftPr', 'allowGitHooks', 'allowGitFilters', 'vcsProvider', 'baseBranch', 'withSubmodules', 'branchNameStrategy', 'minimalOutput', 'taskPollIntervalMs', 'interactivePreviewSteps', 'syncProjectLocalTaktOnRetry', 'autoRequeueMaxAttempts', 'ignoreExceed', 'personaProviders', 'providerRouting', 'taktProviders', 'workflowRuntimePrepare', 'workflowCommandGates', 'workflowArpeggio', 'syncConflictResolver', 'workflowMcpServers', 'runStorage'] as const) {
+  for (const k of ['providerProfiles', 'providerOptions', 'autoRouting', 'findingContract', 'rateLimitFallback', 'autoPr', 'draftPr', 'allowGitHooks', 'allowGitFilters', 'vcsProvider', 'baseBranch', 'withSubmodules', 'branchNameStrategy', 'minimalOutput', 'taskPollIntervalMs', 'interactivePreviewSteps', 'syncProjectLocalTaktOnRetry', 'autoRequeueMaxAttempts', 'ignoreExceed', 'personaProviders', 'providerRouting', 'taktProviders', 'workflowRuntimePrepare', 'workflowCommandGates', 'workflowArpeggio', 'syncConflictResolver', 'workflowMcpServers'] as const) {
     delete savePayload[k];
   }
 

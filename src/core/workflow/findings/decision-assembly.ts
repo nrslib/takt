@@ -35,6 +35,11 @@ import {
   computeManagerOutputBinding,
   createAnchorAdjudication,
 } from '../../models/finding-anchor-relevance.js';
+import {
+  createEngineDerivedWaiverConflict,
+  createEngineDerivedWaiverDisputeNote,
+  isEngineDerivedWaiverDisputeNote,
+} from './waiver-conflict.js';
 
 /**
  * findings-manager が最終結果（8配列以上）を自力で組み立てると、台帳の不変条件
@@ -825,6 +830,8 @@ function assembleDisputeDecisions(input: {
    * conflicts|waivedFindings の併存違反で出力全体が無効になる。
    */
   unresolvedEvidenceFindingIds: ReadonlySet<string>;
+  /** finding ids already covered by a current-round raw-backed conflict. */
+  rawBackedConflictFindingIds: ReadonlySet<string>;
 }): {
   waivedFindings: FindingManagerWaivedFinding[];
   disputeNotes: FindingManagerDisputeNote[];
@@ -879,12 +886,14 @@ function assembleDisputeDecisions(input: {
     // （assembleManagerOutput）が既存の conflicts へ統合するため、同一 finding の
     // conflict が既にあっても重複しない。
     if (decision.decision === 'waive' && input.unresolvedEvidenceFindingIds.has(decision.findingId)) {
-      disputeNotes.push({ findingId: decision.findingId, reason: decision.reason, evidence: decision.evidence });
-      conflicts.push({
-        findingIds: [decision.findingId],
-        rawFindingIds: [],
-        description: `Waiver for finding "${decision.findingId}" conflicts with evidence that it still persists in the same round`,
-      });
+      disputeNotes.push(createEngineDerivedWaiverDisputeNote({
+        findingId: decision.findingId,
+        reason: decision.reason,
+        evidence: decision.evidence,
+      }));
+      if (!input.rawBackedConflictFindingIds.has(decision.findingId)) {
+        conflicts.push(createEngineDerivedWaiverConflict(decision.findingId));
+      }
       continue;
     }
 
@@ -1116,6 +1125,11 @@ export function assembleManagerOutput(input: AssembleManagerOutputInput): Assemb
     ...canonicalRaw.matches.map((match) => match.findingId),
     ...canonicalRaw.conflicts.flatMap((conflict) => conflict.findingIds),
   ]);
+  const rawBackedConflictFindingIds = new Set(
+    canonicalRaw.conflicts.flatMap((conflict) => (
+      conflict.rawFindingIds.length === 0 ? [] : conflict.findingIds
+    )),
+  );
 
   // invalidate は resolved/reopened と同じラウンドで同じ finding を対象に
   // できない（collectDecisionSets 参照）。duplicate（superseded 側）も同様。
@@ -1168,6 +1182,7 @@ export function assembleManagerOutput(input: AssembleManagerOutputInput): Assemb
     priorStepResponseText: input.priorStepResponseText,
     transitionedFindingIds,
     unresolvedEvidenceFindingIds,
+    rawBackedConflictFindingIds,
   });
   const canonicalFindingIds = new Set(
     duplicateResult.duplicateFindings.map((duplicate) => duplicate.canonicalFindingId),
@@ -1332,7 +1347,9 @@ export function flattenManagerOutputToDecisions(
     })),
     ...output.disputeNotes.map((note) => ({
       findingId: note.findingId,
-      decision: 'note' as const,
+      decision: isEngineDerivedWaiverDisputeNote(note)
+        ? 'waive' as const
+        : 'note' as const,
       reason: note.reason,
       evidence: note.evidence,
     })),

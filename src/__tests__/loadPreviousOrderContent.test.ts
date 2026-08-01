@@ -31,7 +31,6 @@ function createRunWithOrder(cwd: string, slug: string, taskContent: string, orde
     contextDirectory: `.takt/runs/${slug}/context`,
     runRoot: `.takt/runs/${slug}`,
     runSlug: slug,
-    storageBackend: 'file',
   };
   writeFileSync(join(runDir, 'meta.json'), JSON.stringify(meta), 'utf-8');
   writeFileSync(join(runDir, 'context', 'task', 'order.md'), orderContent, 'utf-8');
@@ -51,7 +50,6 @@ function createRunWithoutOrder(cwd: string, slug: string, taskContent: string): 
     contextDirectory: `.takt/runs/${slug}/context`,
     runRoot: `.takt/runs/${slug}`,
     runSlug: slug,
-    storageBackend: 'file',
   };
   writeFileSync(join(runDir, 'meta.json'), JSON.stringify(meta), 'utf-8');
 }

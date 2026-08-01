@@ -362,8 +362,6 @@ function makeRoundHarness(
   };
   const parentStep: WorkflowStep = { kind: 'agent', name: 'reviewers', persona: 'reviewer', edit: false } as WorkflowStep;
   const contract = {
-    ledgerPath: '.takt/findings/ledger.json',
-    rawFindingsPath: '.takt/findings/raw',
     manager: {
       persona: 'findings-manager',
       instruction: 'Reconcile findings.',
@@ -632,8 +630,6 @@ describe('runFindingManagerForStep across rounds: churn that never reaches fixpo
       saveConflictAdjudicationReport: () => {},
     };
     const contract = {
-      ledgerPath: '.takt/findings/ledger.json',
-      rawFindingsPath: '.takt/findings/raw',
       manager: { persona: 'findings-manager', instruction: 'Reconcile.', outputContract: 'JSON.' },
       stopBudget: { maxRounds: 5 },
     };

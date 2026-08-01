@@ -41,7 +41,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- **BREAKING:** Node.js `>=24.15.0` is now required (#1111), up from `^20.20.0 || >=22.22.0`, because the new run storage uses the built-in `node:sqlite` module.
+- **BREAKING:** Node.js `>=24.15.0` is now required (#1111), up from `^20.20.0 || >=22.22.0`, because Finding Contract authority uses the built-in `node:sqlite` module.
 - **BREAKING:** Auto-routing candidates were reworked around pools and tiers (#1103). `cost_tier` was renamed to `routing_tier` (`high` | `medium` | `low`), and `default_pool` plus `candidate_pools` (each with a pool-local `fallback`) are now required; optional `pool_rules` pin tags/steps/personas to a pool. The router now only estimates the required tier — from the normalized task, the raw step instruction, and current remaining work — and TAKT deterministically picks the candidate: `cost` and `balanced` take the lowest sufficient `routing_tier` in the selected pool, `performance` the highest. Existing configs must rename `cost_tier` and add `default_pool` / `candidate_pools`.
 - High workflows are capped at 50 steps (#1061): `max_steps` dropped from 200 to 50 on `takt-default-high`, `review-fix-takt-default-high`, and `takt-default-team-high`.
 - Merge-readiness now runs before final supervision in the high workflows (#1060), and the Finding Contract final gate was extracted into `merge-readiness-finding-contract-final-gate`.
@@ -61,7 +61,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Internal
 
-- Run-scoped SQLite storage foundation (#1111): a `node:sqlite`-backed per-run store (artifacts, findings, reports, unit-of-work) landed under `src/infra/run-storage/`, alongside a consolidation of the Finding Contract integrity model. Engine wiring comes later; `.takt/` output is unchanged in this release.
+- Finding Contract-only SQLite authority (#1111). Finding state is separated from run lifecycle artifacts and managed in `.takt/runs/<run>/finding-contract.sqlite`.
 - Builtin TAKT workflows were unified on first-match rule semantics (#1083).
 - The MCP stdio integration test now passes the isolated `TAKT_CONFIG_DIR` to the spawned server, so it no longer reads the operator's real `~/.takt/config.yaml`.
 - Docs: reusable TAKT overview assets (#1108, #1109) and YouTube tutorial links (#1112).
