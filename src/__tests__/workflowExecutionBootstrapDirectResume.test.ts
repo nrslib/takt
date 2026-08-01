@@ -143,6 +143,7 @@ import type {
 } from '../features/tasks/execute/workflowRunLifecycle.js';
 import { RunMetaManager } from '../features/tasks/execute/runMeta.js';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
+import type { RunMeta } from '../core/workflow/run/run-meta.js';
 import { generateExecutionReportDir } from '../core/workflow/run/run-slug.js';
 import { FindingContractOperationJournal } from '../core/workflow/engine/team-leader-finding-contract-operation-journal.js';
 import { ExplicitPartFailureError } from '../core/workflow/operations/operation-recovery-error.js';
@@ -279,7 +280,7 @@ function seedResumeSourceRun(
     readonly sourceRunSlug?: string;
     readonly journalRunSlug?: string;
     readonly claimToken?: string;
-    readonly status?: 'running' | 'failed';
+    readonly status?: RunMeta['status'];
   },
 ): void {
   mkdirSync(
@@ -1326,29 +1327,39 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     );
   });
 
-  it('rejects a running immediate resume source without inspecting terminal ancestors', async () => {
+  it.each([
+    'running',
+    'completed',
+    'aborted',
+    'failed',
+  ] as const)('inherits operation lineage from a %s resume source', async (status) => {
     const projectDir = createTempProject();
-    seedResumeSourceRun(projectDir, 'running-source', {
-      journalRunSlug: 'running-source',
-      claimToken: 'claim-running',
-      status: 'running',
+    const sourceRunSlug = `${status}-source`;
+    seedResumeSourceRun(projectDir, sourceRunSlug, {
+      journalRunSlug: sourceRunSlug,
+      claimToken: `claim-${status}`,
+      status,
     });
 
-    await expect(createWorkflowExecutionBootstrap(
+    const bootstrap = await createWorkflowExecutionBootstrap(
       workflowConfig,
-      'Resume running source',
+      `Resume ${status} source`,
       projectDir,
       {
         projectCwd: projectDir,
         provider: 'mock',
-        reportDirName: 'distinct-target',
+        reportDirName: `${status}-target`,
         resumeSource: {
-          sourceRunSlug: 'running-source',
+          sourceRunSlug,
           resumeMode: 'requeue',
         },
       },
-    )).rejects.toThrow(/not in a resumable terminal status/);
-    expect(existsSync(join(projectDir, '.takt', 'runs', 'distinct-target'))).toBe(false);
+    );
+
+    expect(bootstrap.operationJournal.journalRunSlug).toBe(sourceRunSlug);
+    expect(bootstrap.operationJournal.sourceClaimTokens).toEqual(
+      new Set([`claim-${status}`]),
+    );
   });
 
   it('fails fast on an invalid source slug before report inheritance', async () => {

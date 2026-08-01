@@ -6,6 +6,12 @@ import type { TaskListItem } from '../infra/task/types.js';
 import { isStaleRunningTask } from '../infra/task/index.js';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import { initNdjsonLog } from '../infra/fs/index.js';
+import { createUsageEventLogger } from '../core/logging/usageEventLogger.js';
+import {
+  OTEL_SESSION_SHADOW_LOG_FILE_SUFFIX,
+  PHASE_USAGE_EVENTS_LOG_FILE_SUFFIX,
+  PROVIDER_EVENTS_LOG_FILE_SUFFIX,
+} from '../core/logging/contracts.js';
 
 const {
   mockConfirm,
@@ -221,6 +227,157 @@ describe('forceFailRunningTask', () => {
     )).toContain('"type":"workflow_abort"');
     expect(fs.readFileSync(unrelatedPath, 'utf-8'))
       .not.toContain('"type":"workflow_abort"');
+  });
+
+  it('観測sidecarが併存してもsession logをforce-failする', async () => {
+    const runSlug = '20260409-usage-sidecar';
+    const runPaths = buildRunPaths(projectDir, runSlug);
+    writeMeta(projectDir, runSlug, {
+      status: 'running',
+      currentStep: 'implement',
+    });
+    const usageLogger = createUsageEventLogger({
+      logsDir: runPaths.logsAbs,
+      sessionId: 'force-fail-session',
+      runId: runSlug,
+      enabled: true,
+    });
+    usageLogger.logUsageFor({
+      provider: 'mock',
+      providerModel: 'mock-model',
+      step: 'implement',
+      stepType: 'normal',
+    }, {
+      success: true,
+      usage: {
+        inputTokens: 1,
+        outputTokens: 1,
+        totalTokens: 2,
+        usageMissing: false,
+      },
+    });
+    fs.writeFileSync(
+      path.join(
+        runPaths.logsAbs,
+        `force-fail-session${PROVIDER_EVENTS_LOG_FILE_SUFFIX}`,
+      ),
+      '{}\n',
+      'utf-8',
+    );
+    fs.writeFileSync(
+      path.join(
+        runPaths.logsAbs,
+        `force-fail-session${PHASE_USAGE_EVENTS_LOG_FILE_SUFFIX}`,
+      ),
+      '{}\n',
+      'utf-8',
+    );
+    fs.writeFileSync(
+      path.join(
+        runPaths.logsAbs,
+        `force-fail-session${OTEL_SESSION_SHADOW_LOG_FILE_SUFFIX}`,
+      ),
+      `${JSON.stringify({
+        type: 'workflow_start',
+        task: 'Stored from run context',
+        workflowName: 'default',
+        startTime: '2026-04-09T00:00:00.000Z',
+      })}\n`,
+      'utf-8',
+    );
+
+    const storage = createTaskRunForceFailStorage({
+      task: createRunningTask(projectDir, { runSlug }),
+      projectDir,
+      onWarning: mockWarn,
+    });
+
+    await expect(storage.terminalize('usage sidecar force-fail'))
+      .resolves.toMatchObject({ issues: [] });
+    expect(JSON.parse(fs.readFileSync(runPaths.metaAbs, 'utf-8')))
+      .toMatchObject({
+        status: 'failed',
+        reason: 'usage sidecar force-fail',
+      });
+    expect(fs.readFileSync(
+      path.join(runPaths.logsAbs, 'force-fail-session.jsonl'),
+      'utf-8',
+    )).toContain('"type":"workflow_abort"');
+  });
+
+  it('正常sessionと通常名の破損JSONLが併存する場合はforce-failを拒否する', async () => {
+    const runSlug = '20260409-corrupt-extra-log';
+    const runPaths = buildRunPaths(projectDir, runSlug);
+    writeMeta(projectDir, runSlug, {
+      status: 'running',
+      currentStep: 'implement',
+    });
+    fs.writeFileSync(
+      path.join(runPaths.logsAbs, 'unexpected.jsonl'),
+      '{"run_id":"20260409-corrupt-extra-log"}\n',
+      'utf-8',
+    );
+
+    const storage = createTaskRunForceFailStorage({
+      task: createRunningTask(projectDir, { runSlug }),
+      projectDir,
+      onWarning: mockWarn,
+    });
+
+    await expect(storage.terminalize('corrupt extra log force-fail'))
+      .rejects.toThrow('NDJSON session record type is invalid');
+    expect(JSON.parse(fs.readFileSync(runPaths.metaAbs, 'utf-8')))
+      .toMatchObject({ status: 'running' });
+  });
+
+  it('正常sessionと空の通常名JSONLが併存する場合はforce-failを拒否する', async () => {
+    const runSlug = '20260409-empty-extra-log';
+    const runPaths = buildRunPaths(projectDir, runSlug);
+    writeMeta(projectDir, runSlug, {
+      status: 'running',
+      currentStep: 'implement',
+    });
+    const emptyLogPath = path.join(runPaths.logsAbs, 'empty.jsonl');
+    fs.writeFileSync(emptyLogPath, '', 'utf-8');
+
+    const storage = createTaskRunForceFailStorage({
+      task: createRunningTask(projectDir, { runSlug }),
+      projectDir,
+      onWarning: mockWarn,
+    });
+
+    await expect(storage.terminalize('empty extra log force-fail'))
+      .rejects.toThrow(
+        `Run force-fail session log is missing or invalid: ${emptyLogPath}`,
+      );
+    expect(JSON.parse(fs.readFileSync(runPaths.metaAbs, 'utf-8')))
+      .toMatchObject({ status: 'running' });
+  });
+
+  it('唯一のsession logが壊れている場合はforce-failを拒否する', async () => {
+    const runSlug = '20260409-corrupt-session';
+    const runPaths = buildRunPaths(projectDir, runSlug);
+    writeMetaOnly(projectDir, runSlug, {
+      status: 'running',
+      currentStep: 'implement',
+    });
+    fs.mkdirSync(runPaths.logsAbs, { recursive: true });
+    fs.writeFileSync(
+      path.join(runPaths.logsAbs, 'force-fail-session.jsonl'),
+      '{"run_id":"20260409-corrupt-session"}\n',
+      'utf-8',
+    );
+
+    const storage = createTaskRunForceFailStorage({
+      task: createRunningTask(projectDir, { runSlug }),
+      projectDir,
+      onWarning: mockWarn,
+    });
+
+    await expect(storage.terminalize('corrupt session force-fail'))
+      .rejects.toThrow('NDJSON session record type is invalid');
+    expect(JSON.parse(fs.readFileSync(runPaths.metaAbs, 'utf-8')))
+      .toMatchObject({ status: 'running' });
   });
 
   it('should return false when confirmation is cancelled', async () => {

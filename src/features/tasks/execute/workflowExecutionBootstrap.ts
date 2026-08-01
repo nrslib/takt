@@ -7,10 +7,7 @@ import type {
   ResolvedObservabilityConfig,
 } from '../../../core/models/config-types.js';
 import { buildRunPaths } from '../../../core/workflow/run/run-paths.js';
-import {
-  isResumableRunStatus,
-  readRunMetaBySlug,
-} from '../../../core/workflow/run/run-meta.js';
+import { readRunMetaBySlug } from '../../../core/workflow/run/run-meta.js';
 import {
   OperationLineageUnavailableError,
   OperationRecoveryError,
@@ -53,7 +50,10 @@ import { createProviderEventLogger, isProviderEventsEnabled } from '../../../cor
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import { createUsageEventLogger, isUsageEventsEnabled } from '../../../core/logging/usageEventLogger.js';
 import { initializeOtelFoundation, type OtelFoundationHandle } from '../../../infra/observability/otelFoundation.js';
-import { PHASE_USAGE_EVENTS_LOG_FILE_SUFFIX } from '../../../core/logging/contracts.js';
+import {
+  OTEL_SESSION_SHADOW_LOG_FILE_SUFFIX,
+  PHASE_USAGE_EVENTS_LOG_FILE_SUFFIX,
+} from '../../../core/logging/contracts.js';
 import {
   resolveEffectiveAutoRouting,
 } from '../../../core/workflow/auto-routing/effective-auto-routing.js';
@@ -165,14 +165,6 @@ function resolveOperationJournalSourceClaims(
     if (sourceMeta === null) {
       throw new OperationLineageUnavailableError(
         `Resume source run "${sourceRunSlug}" is missing`,
-      );
-    }
-    if (
-      sourceRunSlug === immediateSourceRunSlug
-      && !isResumableRunStatus(sourceMeta.status)
-    ) {
-      throw new OperationRecoveryError(
-        `Resume source run "${sourceRunSlug}" is not in a resumable terminal status`,
       );
     }
     if (
@@ -536,7 +528,10 @@ export async function createWorkflowExecutionBootstrap(
           ? {
               sessionLogExporter: {
                 runId: runSlug,
-                shadowLogPath: join(runPaths.logsAbs, `${workflowSessionId}-otel-session-shadow.jsonl`),
+                shadowLogPath: join(
+                  runPaths.logsAbs,
+                  `${workflowSessionId}${OTEL_SESSION_SHADOW_LOG_FILE_SUFFIX}`,
+                ),
                 sanitizedTask: sanitizeTextForStorage(task, allowSensitiveData),
                 workflowName: workflowConfig.name,
               },

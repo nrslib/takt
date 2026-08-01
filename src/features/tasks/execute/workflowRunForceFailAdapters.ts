@@ -3,6 +3,12 @@ import {
   readdirSync,
 } from 'node:fs';
 import { basename, extname, join } from 'node:path';
+import {
+  OTEL_SESSION_SHADOW_LOG_FILE_SUFFIX,
+  PHASE_USAGE_EVENTS_LOG_FILE_SUFFIX,
+  PROVIDER_EVENTS_LOG_FILE_SUFFIX,
+  USAGE_EVENTS_LOG_FILE_SUFFIX,
+} from '../../../core/logging/contracts.js';
 import { buildRunPaths } from '../../../core/workflow/run/run-paths.js';
 import type { RunMeta } from '../../../core/workflow/run/run-meta.js';
 import {
@@ -27,6 +33,13 @@ interface TaskRunForceFailAdapterContext
   readonly projectDir: string;
   readonly cwd: string;
 }
+
+const RUN_LOG_SIDECAR_FILE_SUFFIXES = Object.freeze([
+  PROVIDER_EVENTS_LOG_FILE_SUFFIX,
+  USAGE_EVENTS_LOG_FILE_SUFFIX,
+  PHASE_USAGE_EVENTS_LOG_FILE_SUFFIX,
+  OTEL_SESSION_SHADOW_LOG_FILE_SUFFIX,
+]);
 
 class FileTaskRunForceFailStorage implements WorkflowRunForceFailHandle {
   readonly currentStep: string | undefined;
@@ -114,21 +127,26 @@ function resolveRunNdjsonLog(
     return createForceFailSessionLog(logsDirectory, meta);
   }
   const files = readdirSync(logsDirectory, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl'))
+    .filter((entry) => entry.isFile() && isSessionLogFileName(entry.name))
     .map((entry) => join(logsDirectory, entry.name));
   if (files.length === 0) {
     return createForceFailSessionLog(logsDirectory, meta);
   }
-  const matching = files.filter((path) => {
-    const sessionLog = loadSessionLog(path);
-    return sessionLog !== null && sessionLogMatchesRun(sessionLog, meta);
-  });
+  const matching = files.filter((path) => sessionLogMatchesRun(
+    loadRequiredSessionLog(path),
+    meta,
+  ));
   if (matching.length !== 1) {
     throw new Error(
       `Run force-fail requires exactly one identity-matching NDJSON session log in ${logsDirectory}`,
     );
   }
   return matching[0]!;
+}
+
+function isSessionLogFileName(name: string): boolean {
+  return name.endsWith('.jsonl')
+    && RUN_LOG_SIDECAR_FILE_SUFFIXES.every((suffix) => !name.endsWith(suffix));
 }
 
 function createForceFailSessionLog(
@@ -151,10 +169,7 @@ function requireSessionLog(
   meta: RunMeta,
   projectDir: string,
 ): SessionLog {
-  const sessionLog = loadSessionLog(path);
-  if (sessionLog === null) {
-    throw new Error(`Run force-fail session log is missing or invalid: ${path}`);
-  }
+  const sessionLog = loadRequiredSessionLog(path);
   if (!sessionLogMatchesRun(sessionLog, meta)) {
     throw new Error(
       `Run force-fail session log identity does not match run "${meta.runSlug}"`,
@@ -164,6 +179,14 @@ function requireSessionLog(
     ...sessionLog,
     projectDir,
   };
+}
+
+function loadRequiredSessionLog(path: string): SessionLog {
+  const sessionLog = loadSessionLog(path);
+  if (sessionLog === null) {
+    throw new Error(`Run force-fail session log is missing or invalid: ${path}`);
+  }
+  return sessionLog;
 }
 
 function sessionLogMatchesRun(
