@@ -1,9 +1,9 @@
+import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createBootstrapRecoverySeed } from '../../core/workflow/run/bootstrap-recovery-seed.js';
 import { buildRunPaths } from '../../core/workflow/run/run-paths.js';
-import type { RunStorageBackend } from '../../core/models/index.js';
 import type { RunStorageRoot } from '../../infra/run-storage/index.js';
 import {
   createRunStorage,
@@ -23,10 +23,8 @@ import { TEST_RUN_STORAGE_CLOCK } from './run-storage-clock.js';
 const roots: string[] = [];
 export function createWorkflowRunStorageCompositionTestDouble(
   createComposition: (
-    backend: RunStorageBackend,
     input: WorkflowRunStorageCompositionInput,
   ) => WorkflowRunStorageComposition,
-  backend: RunStorageBackend,
   input: WorkflowRunStorageCompositionInput,
   options: {
     readonly sessionId: string;
@@ -34,12 +32,9 @@ export function createWorkflowRunStorageCompositionTestDouble(
     readonly projectTerminalArtifacts: boolean;
   },
 ): WorkflowRunStorageComposition {
-  const composition = createComposition(backend, input);
+  const composition = createComposition(input);
   return {
     ...composition,
-    recovery: {
-      reconcilePending: async () => {},
-    },
     storage: {
       beginRun: async (runInput): Promise<WorkflowRunHandle> => {
         const runSlug = runInput.requestedRunSlug
@@ -50,7 +45,7 @@ export function createWorkflowRunStorageCompositionTestDouble(
         const runPaths = buildRunPaths(input.cwd, runSlug);
         let runMetaManager: RunMetaManager | undefined;
         const bootstrap: WorkflowRunBootstrap = {
-          backend,
+          backend: 'file',
           runSlug,
           runPaths,
           startedAt: options.startedAt,
@@ -63,7 +58,7 @@ export function createWorkflowRunStorageCompositionTestDouble(
               metaInput.runPaths,
               metaInput.task,
               metaInput.workflowName,
-              backend,
+              'file',
               metaInput.resumeSource,
               metaInput.options,
             );
@@ -74,7 +69,7 @@ export function createWorkflowRunStorageCompositionTestDouble(
           runSlug,
           runPaths,
           bootstrap,
-          finish: async (_outcome, payload) => {
+          finish: async (outcome, payload) => {
             if (runMetaManager === undefined) {
               throw new Error('Run meta projection is not bound');
             }
@@ -97,7 +92,20 @@ export function createWorkflowRunStorageCompositionTestDouble(
                 });
               }
             }
-            return { issues: [] };
+            const payloadSha256 = createHash('sha256')
+              .update(JSON.stringify(payload))
+              .digest('hex');
+            return {
+              receipt: {
+                runId: runSlug,
+                publicationId: `mock-file-terminal:${runSlug}:${payloadSha256}`,
+                runStatus: outcome.status,
+                iteration: outcome.iteration,
+                payloadSha256,
+                proof: { backend: 'file' },
+              },
+              issues: [],
+            };
           },
           bindExecution: async () => ({
             findingAuthorityResolver: {

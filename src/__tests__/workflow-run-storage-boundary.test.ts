@@ -108,10 +108,10 @@ async function failRun(
 }
 
 describe('workflow run storage boundary', () => {
-  it.each(['file', 'sqlite'] as const)(
-    '%s Finding設定でもrun lifecycleは単一storage portだけを公開する',
-    (backend) => {
-      const provider = createWorkflowRunComposition(backend, {
+  it(
+    'Finding storage設定に依存せずrun lifecycleは単一storage portだけを公開する',
+    () => {
+      const provider = createWorkflowRunComposition({
         cwd: '/nonexistent/workflow-run-storage-boundary',
         projectCwd: '/nonexistent/workflow-run-storage-boundary',
       });
@@ -134,11 +134,11 @@ describe('workflow run storage boundary', () => {
     expect(runMeta).not.toHaveProperty('finalizeStoredRunMeta');
   });
 
-  it.each(['file', 'sqlite'] as const)(
-    '%s beginRunは共通handleを返し、backend固有の初期化を隠蔽する',
-    async (backend) => {
+  it(
+    'beginRunはfile lifecycleの共通handleを返す',
+    async () => {
       const cwd = createRoot();
-      const composition = createWorkflowRunComposition(backend, {
+      const composition = createWorkflowRunComposition({
         cwd,
         projectCwd: cwd,
       });
@@ -147,7 +147,7 @@ describe('workflow run storage boundary', () => {
       const activeRun = await composition.storage.beginRun({
         workflowConfig: workflow,
         task: 'same task',
-        requestedRunSlug: `${backend}-reserved-run`,
+        requestedRunSlug: 'reserved-run',
       });
 
       expect(existsSync(activeRun.runPaths.runRootAbs)).toBe(true);
@@ -163,7 +163,7 @@ describe('workflow run storage boundary', () => {
       vi.useFakeTimers();
       vi.setSystemTime(new Date('2026-08-01T00:00:00.000Z'));
       const cwd = createRoot();
-      const composition = createWorkflowRunComposition('file', {
+      const composition = createWorkflowRunComposition({
         cwd,
         projectCwd: cwd,
       });
@@ -189,7 +189,7 @@ describe('workflow run storage boundary', () => {
     'File明示slugの競合では一方だけが予約し敗者は勝者artifactを変更しない',
     async () => {
       const cwd = createRoot();
-      const composition = createWorkflowRunComposition('file', {
+      const composition = createWorkflowRunComposition({
         cwd,
         projectCwd: cwd,
       });
@@ -218,7 +218,7 @@ describe('workflow run storage boundary', () => {
     const paths = buildRunPaths(cwd, 'existing-file-run');
     mkdirSync(paths.runRootAbs, { recursive: true });
     writeFileSync(paths.metaAbs, 'existing-meta', 'utf-8');
-    const composition = createWorkflowRunComposition('file', {
+    const composition = createWorkflowRunComposition({
       cwd,
       projectCwd: cwd,
     });
@@ -235,7 +235,7 @@ describe('workflow run storage boundary', () => {
     'SQLite Finding設定でも同一秒の2開始をfile directoryで別slugへ予約する',
     async () => {
       const cwd = createRoot();
-      const composition = createWorkflowRunComposition('sqlite', {
+      const composition = createWorkflowRunComposition({
         cwd,
         projectCwd: cwd,
       });
@@ -253,6 +253,8 @@ describe('workflow run storage boundary', () => {
       expect(existsSync(second.runPaths.runRootAbs)).toBe(true);
       expect(existsSync(first.runPaths.databaseAbs)).toBe(false);
       expect(existsSync(second.runPaths.databaseAbs)).toBe(false);
+      expect(existsSync(first.runPaths.findingContractDatabaseAbs)).toBe(false);
+      expect(existsSync(second.runPaths.findingContractDatabaseAbs)).toBe(false);
       await failRun(first, cwd);
       await failRun(second, cwd);
     },

@@ -99,11 +99,10 @@ vi.mock('../features/tasks/execute/workflowRunStorage.js', async (importOriginal
   return {
     ...actual,
     createWorkflowRunComposition: (
-      ...args: Parameters<typeof actual.createWorkflowRunComposition>
+      input: Parameters<typeof actual.createWorkflowRunComposition>[0],
     ) => createWorkflowRunStorageCompositionTestDouble(
       actual.createWorkflowRunComposition,
-      args[0],
-      args[1],
+      input,
       {
         sessionId: 'test-session-id',
         startedAt: '2026-04-01T00:00:00.000Z',

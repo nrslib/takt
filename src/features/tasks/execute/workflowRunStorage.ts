@@ -1,13 +1,11 @@
 import type { WorkflowConfig } from '../../../core/models/index.js';
-import { existsSync, mkdirSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { generateSessionId } from '../../../infra/fs/index.js';
 import { join } from 'node:path';
-import type { RunStorageBackend } from '../../../core/models/config-types.js';
 import type {
   FindingAuthorityResolver,
 } from '../../../core/workflow/types.js';
 import type { FindingLedgerStore } from '../../../core/workflow/findings/store.js';
-import { createFindingLedgerStore } from '../../../core/workflow/findings/store.js';
 import type { RunPaths } from '../../../core/workflow/run/run-paths.js';
 import { buildRunPaths } from '../../../core/workflow/run/run-paths.js';
 import type {
@@ -19,20 +17,15 @@ import {
   isValidReportDirName,
 } from '../../../shared/utils/index.js';
 import {
-  createRunStorage,
-  resumeRunStorage,
-  type RunStorageRoot,
-} from '../../../infra/run-storage/index.js';
-import {
-  openRunStorageResumeSource,
-} from '../../../infra/run-storage/root.js';
+  FindingStorageResolver,
+  ROOT_FINDING_AUTHORITY_KEY,
+} from '../../../infra/finding-storage/index.js';
 import {
   RunMetaManager,
   type RunMetaManagerOptions,
 } from './runMeta.js';
 import {
-  WorkflowRunExecutionControlError,
-  type RunFinalization,
+  RunCleanupError,
   type WorkflowRunExecutionControl,
   type WorkflowRunExecutionHandle,
 } from './workflowRunExecution.js';
@@ -46,12 +39,6 @@ import {
   createBootstrapRecoverySeed,
   type BootstrapRecoverySeed,
 } from '../../../core/workflow/run/bootstrap-recovery-seed.js';
-import { SqliteFindingStoreLifecycle } from './sqliteFindingStoreLifecycle.js';
-
-const LEASE_DURATION_MS = 30_000;
-
-export const TOP_LEVEL_WORKFLOW_EXECUTION_STEP_KEY =
-  'takt.top-level-workflow';
 
 export interface WorkflowRunExecutionContext {
   readonly workflowConfig: WorkflowConfig;
@@ -109,13 +96,9 @@ export interface WorkflowRunStoragePort {
 }
 
 export function createWorkflowRunComposition(
-  findingStorageBackend: RunStorageBackend,
   input: WorkflowRunStorageCompositionInput,
 ): WorkflowRunStorageComposition {
-  const storage = new WorkflowRunStorageAdapter(
-    findingStorageBackend,
-    input,
-  );
+  const storage = new WorkflowRunStorageAdapter(input);
   return Object.freeze({
     storage: Object.freeze({
       beginRun: (
@@ -140,17 +123,10 @@ export function createWorkflowRunComposition(
 }
 
 class WorkflowRunStorageAdapter {
-  readonly #findingStorageBackend: RunStorageBackend;
   readonly #cwd: string;
-  readonly #projectCwd: string;
 
-  constructor(
-    findingStorageBackend: RunStorageBackend,
-    input: WorkflowRunStorageCompositionInput,
-  ) {
-    this.#findingStorageBackend = findingStorageBackend;
+  constructor(input: WorkflowRunStorageCompositionInput) {
     this.#cwd = input.cwd;
-    this.#projectCwd = input.projectCwd;
   }
 
   async beginRun(input: {
@@ -179,27 +155,9 @@ class WorkflowRunStorageAdapter {
       runPaths,
     });
     let runMetaManager: RunMetaManager | undefined;
-    let findingSession: SqliteFindingSession | undefined;
+    let findingStorage: FindingStorageResolver | undefined;
     let bound = false;
     let finished = false;
-
-    const getFindingSession = (): SqliteFindingSession => {
-      if (findingSession !== undefined) {
-        return findingSession;
-      }
-      const created = createSqliteFindingSession({
-        workflowConfig: input.workflowConfig,
-        runPaths,
-        cwd: this.#cwd,
-        abortController,
-        bootstrapSeed: input.bootstrapSeed,
-        ...(input.resumeSource === undefined
-          ? {}
-          : { resumeSource: input.resumeSource }),
-      });
-      findingSession = created;
-      return created;
-    };
 
     const finish: WorkflowRunExecutionHandle['finish'] = async (
       outcome,
@@ -217,7 +175,12 @@ class WorkflowRunStorageAdapter {
       } catch (error) {
         publicationError = error;
       }
-      const cleanupIssues = findingSession?.close().issues ?? [];
+      const cleanupIssues: RunCleanupError[] = [];
+      try {
+        findingStorage?.close();
+      } catch (error) {
+        cleanupIssues.push(new RunCleanupError(error));
+      }
       if (publicationError !== undefined) {
         throw combineErrors(publicationError, cleanupIssues);
       }
@@ -267,7 +230,7 @@ class WorkflowRunStorageAdapter {
         },
       }),
       bindExecution: async (
-        context: Omit<WorkflowRunExecutionContext, 'runPaths'>,
+        _context: Omit<WorkflowRunExecutionContext, 'runPaths'>,
       ) => {
         if (bound) {
           throw new Error(
@@ -278,12 +241,16 @@ class WorkflowRunStorageAdapter {
         const executionControl = createWorkflowRunExecutionControl(
           abortController,
         );
-        const findingAuthorityResolver = this.#findingStorageBackend === 'file'
-          ? createFileFindingAuthorityResolver(
-            { ...context, runPaths },
-            this.#projectCwd,
-          )
-          : createLazySqliteFindingAuthorityResolver(getFindingSession);
+        findingStorage = createFindingStorageResolver({
+          runPaths,
+          cwd: this.#cwd,
+          ...(input.resumeSource === undefined
+            ? {}
+            : { resumeSource: input.resumeSource }),
+        });
+        const findingAuthorityResolver = createFindingAuthorityResolver(
+          findingStorage,
+        );
         return {
           findingAuthorityResolver,
           execution: {
@@ -291,23 +258,7 @@ class WorkflowRunStorageAdapter {
               operation: (
                 control: WorkflowRunExecutionControl,
               ) => Promise<T>,
-            ): Promise<T> => {
-              try {
-                const result = await operation(executionControl);
-                findingSession?.assertHealthy();
-                return result;
-              } catch (operationError) {
-                try {
-                  findingSession?.assertHealthy();
-                } catch (controlError) {
-                  throw new WorkflowRunExecutionControlError(
-                    controlError,
-                    operationError,
-                  );
-                }
-                throw operationError;
-              }
-            },
+            ): Promise<T> => operation(executionControl),
           },
         };
       },
@@ -359,71 +310,35 @@ class WorkflowRunStorageAdapter {
   }
 }
 
-interface SqliteFindingSession {
-  readonly resolver: FindingAuthorityResolver;
-  assertHealthy(): void;
-  close(): RunFinalization;
-}
-
-function createLazySqliteFindingAuthorityResolver(
-  getSession: () => SqliteFindingSession,
-): FindingAuthorityResolver {
-  return {
-    resolve(input): FindingLedgerStore {
-      return getSession().resolver.resolve(input);
-    },
-  };
-}
-
-function createSqliteFindingSession(input: {
-  readonly workflowConfig: WorkflowConfig;
+function createFindingStorageResolver(input: {
   readonly runPaths: RunPaths;
   readonly resumeSource?: RunResumeSource;
   readonly cwd: string;
-  readonly abortController: AbortController;
-  readonly bootstrapSeed: BootstrapRecoverySeed;
-}): SqliteFindingSession {
-  const root = createSqliteFindingStorageRoot(input);
-  let lease: ReturnType<RunStorageRoot['claimLease']> | undefined;
-  try {
-    lease = root.claimLease({
-      ownerKey: `finding-contract:${input.runPaths.slug}`,
-      leaseDurationMs: LEASE_DURATION_MS,
-    });
-    const lifecycle = new SqliteFindingStoreLifecycle({
-      root,
-      lease,
-      abortController: input.abortController,
-    });
-    return Object.freeze({
-      resolver: createSqliteFindingAuthorityResolver(root, lease),
-      assertHealthy: lifecycle.assertHealthy.bind(lifecycle),
-      close: lifecycle.close.bind(lifecycle),
-    });
-  } catch (error) {
-    const cleanupErrors: unknown[] = [];
-    const claimedLease = lease;
-    if (claimedLease !== undefined) {
-      captureError(cleanupErrors, () => root.releaseLease(claimedLease));
-    }
-    captureError(cleanupErrors, () => root.close());
-    throw combineErrors(error, cleanupErrors);
-  }
+}): FindingStorageResolver {
+  const sourceRunSlug = input.resumeSource?.sourceRunSlug;
+  return new FindingStorageResolver({
+    databasePath: input.runPaths.findingContractDatabaseAbs,
+    runId: input.runPaths.slug,
+    ...(sourceRunSlug === undefined
+      ? {}
+      : {
+          source: {
+            databasePath: buildRunPaths(input.cwd, sourceRunSlug)
+              .findingContractDatabaseAbs,
+            runId: sourceRunSlug,
+          },
+        }),
+  });
 }
 
-function createSqliteFindingAuthorityResolver(
-  root: RunStorageRoot,
-  lease: ReturnType<RunStorageRoot['claimLease']>,
+function createFindingAuthorityResolver(
+  storage: FindingStorageResolver,
 ): FindingAuthorityResolver {
-  const runtime = root.runtime({ lease });
-  const topLevelExecution = runtime.execution.startStep({
-    stepKey: TOP_LEVEL_WORKFLOW_EXECUTION_STEP_KEY,
-    expectedScopeRevision: 0,
-  }).handle;
   const stores = new Map<string, FindingLedgerStore>();
   return {
     resolve({
       workflowConfig,
+      runPaths,
       workflowCallSiteIdentity,
     }): FindingLedgerStore {
       if (workflowConfig.findingContract === undefined) {
@@ -433,139 +348,20 @@ function createSqliteFindingAuthorityResolver(
         );
       }
       const authorityKey = workflowCallSiteIdentity
-        ?? JSON.stringify({ rootWorkflow: workflowConfig.name });
+        ?? ROOT_FINDING_AUTHORITY_KEY;
       const existing = stores.get(authorityKey);
       if (existing !== undefined) {
         return existing;
       }
-      if (workflowCallSiteIdentity === undefined) {
-        const store = runtime.findingManager({
-          workflowName: workflowConfig.name,
-          producer: topLevelExecution,
-        });
-        stores.set(authorityKey, store);
-        return store;
-      }
-      const scope = runtime.scopes.resolveWorkflowCallChild({
-        scopeKey: authorityKey,
-        findingContractEnabled: true,
-      });
-      const childRuntime = root.runtime({ lease, scope });
-      const childExecution = childRuntime.execution.startStep({
-        stepKey: TOP_LEVEL_WORKFLOW_EXECUTION_STEP_KEY,
-        expectedScopeRevision: 0,
-      }).handle;
-      const store = childRuntime.findingManager({
+      const store = storage.resolveAuthority({
+        authorityKey,
         workflowName: workflowConfig.name,
-        producer: childExecution,
+        reportDir: runPaths.reportsAbs,
       });
       stores.set(authorityKey, store);
       return store;
     },
   };
-}
-
-function createFileFindingAuthorityResolver(
-  input: WorkflowRunExecutionContext,
-  projectCwd: string,
-): FindingAuthorityResolver {
-  return {
-    resolve({ workflowConfig, runPaths }): FindingLedgerStore {
-      const contract = workflowConfig.findingContract;
-      if (contract === undefined) {
-        throw new Error(
-          `Finding authority requested for workflow "${workflowConfig.name}" without Finding Contract`,
-        );
-      }
-      return createFindingLedgerStore({
-        projectCwd,
-        runId: input.runPaths.slug,
-        reportDir: runPaths.reportsAbs,
-        workflowName: workflowConfig.name,
-        ledgerPath: contract.ledgerPath,
-        rawFindingsPath: contract.rawFindingsPath,
-        ...(input.resumeSource?.sourceRunSlug === undefined
-          ? {}
-          : { trustedResumeSourceRunId: input.resumeSource.sourceRunSlug }),
-      });
-    },
-  };
-}
-
-function createSqliteFindingStorageRoot(input: {
-  readonly workflowConfig: WorkflowConfig;
-  readonly runPaths: RunPaths;
-  readonly resumeSource?: RunResumeSource;
-  readonly cwd: string;
-  readonly bootstrapSeed: BootstrapRecoverySeed;
-}): RunStorageRoot {
-  const createOptions = (findingContractEnabled: boolean) => ({
-    databasePath: input.runPaths.databaseAbs,
-    run: {
-      runId: input.runPaths.slug,
-      workflowName: input.workflowConfig.name,
-      findingContractEnabled,
-    },
-    bootstrapSeed: input.bootstrapSeed,
-  } as const);
-  const rootFindingContractEnabled =
-    input.workflowConfig.findingContract !== undefined;
-  const sourceRunSlug = input.resumeSource?.sourceRunSlug;
-  if (sourceRunSlug === undefined) {
-    return createRunStorage(createOptions(rootFindingContractEnabled));
-  }
-
-  const sourcePaths = buildRunPaths(input.cwd, sourceRunSlug);
-  if (!existsSync(sourcePaths.databaseAbs)) {
-    return createRunStorage(createOptions(rootFindingContractEnabled));
-  }
-  const source = openRunStorageResumeSource({
-    databasePath: sourcePaths.databaseAbs,
-  });
-  let target: RunStorageRoot | undefined;
-  let primaryError: unknown;
-  try {
-    const sourceSnapshot = source.readResumeSnapshot();
-    if (sourceSnapshot.run.runId !== sourceRunSlug) {
-      throw new Error(
-        `SQLite Finding source database slug `
-        + `"${String(sourceSnapshot.run.runId)}" does not match `
-        + `source run "${sourceRunSlug}"`,
-      );
-    }
-    const sourceRoot = sourceSnapshot.scopes.find(
-      (scope) => scope.scopeId === 'root',
-    );
-    const targetRootFindingContractEnabled = rootFindingContractEnabled
-      || sourceRoot?.findingContractEnabled === 1;
-    target = resumeRunStorage({
-      ...createOptions(targetRootFindingContractEnabled),
-      source,
-    });
-  } catch (error) {
-    primaryError = error;
-  }
-
-  const closeErrors: unknown[] = [];
-  captureError(closeErrors, () => source.close());
-  if (primaryError !== undefined || closeErrors.length !== 0) {
-    const openedTarget = target;
-    if (openedTarget !== undefined) {
-      captureError(closeErrors, () => openedTarget.close());
-    }
-    const primary = primaryError ?? closeErrors[0];
-    const errors = primaryError === undefined
-      ? closeErrors
-      : [primaryError, ...closeErrors];
-    if (errors.length === 1) {
-      throw primary;
-    }
-    throw new AggregateError(errors, errorMessage(primary), { cause: primary });
-  }
-  if (target === undefined) {
-    throw new Error('SQLite Finding resume did not create a target store');
-  }
-  return target;
 }
 
 function requireValidRunSlug(runSlug: string): string {
@@ -606,14 +402,6 @@ function assertRunPathsIdentity(
     throw new Error(
       `Run metadata paths do not match reserved run "${reserved.slug}"`,
     );
-  }
-}
-
-function captureError(errors: unknown[], action: () => void): void {
-  try {
-    action();
-  } catch (error) {
-    errors.push(error);
   }
 }
 

@@ -42,7 +42,6 @@ import {
 } from '../../../infra/fs/index.js';
 import { USAGE_MISSING_REASONS } from '../../../core/logging/contracts.js';
 import { createPullRequestContext } from '../../../core/workflow/pr-context.js';
-import { resolveWorkflowConfigValue } from '../../../infra/config/index.js';
 import {
   createWorkflowRunComposition,
   type WorkflowRunHandle,
@@ -50,7 +49,6 @@ import {
 import {
   RunCleanupError,
   RunLiveDeliveryError,
-  WorkflowRunExecutionControlError,
   type RunFinalizationIssue,
   type WorkflowRunExecutionControl,
   type WorkflowRunExecutionHandle,
@@ -213,14 +211,10 @@ async function executeWorkflowInternal(
     projectCwd: options.projectCwd,
     lookupCwd: cwd,
   });
-  const runStorage = resolveWorkflowConfigValue(options.projectCwd, 'runStorage');
-  const runStorageComposition = createWorkflowRunComposition(
-    runStorage.backend,
-    {
-      cwd,
-      projectCwd: options.projectCwd,
-    },
-  );
+  const runStorageComposition = createWorkflowRunComposition({
+    cwd,
+    projectCwd: options.projectCwd,
+  });
   const availableSourceLineage = resolveAvailableSourceLineage(
     cwd,
     options.resumeSource,
@@ -506,12 +500,8 @@ async function executeWorkflowInternal(
       }
     });
   } catch (caughtError) {
-    const executionControlFailed =
-      caughtError instanceof WorkflowRunExecutionControlError;
     const error = caughtError;
-    const stagedAbort = executionControlFailed
-      ? undefined
-      : eventBridge?.getStagedAbort();
+    const stagedAbort = eventBridge?.getStagedAbort();
     if (stagedAbort !== undefined) {
       latentAbortPrimary = new WorkflowAbortError(
         stagedAbort.reason,
@@ -523,8 +513,7 @@ async function executeWorkflowInternal(
       primaryError = error;
     }
     const failurePublicationStatus = stagedAbort === undefined
-      ? !executionControlFailed
-        && runExecutionControl?.signal.aborted === true
+      ? runExecutionControl?.signal.aborted === true
           ? 'aborted'
           : 'failed'
       : stagedAbort.status;
@@ -536,10 +525,7 @@ async function executeWorkflowInternal(
       } else {
         const activeEventBridge = eventBridge;
         captureError(terminalizationErrors, () => {
-          const stageFailure = executionControlFailed
-            ? activeEventBridge.stageHeartbeatFailure
-            : activeEventBridge.stageWorkflowFailure;
-          stageFailure(
+          activeEventBridge.stageWorkflowFailure(
             activeEventBridge.state.currentIteration,
             getErrorMessage(error),
             failurePublicationStatus,

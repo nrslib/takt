@@ -6,6 +6,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -40,10 +41,6 @@ const terminal = vi.hoisted(() => ({
   }),
 }));
 
-const sqliteLifecycle = vi.hoisted(() => ({
-  closedDatabases: [] as string[],
-}));
-
 vi.mock('../infra/claude/cli-capability.js', async (importOriginal) => ({
   ...(await importOriginal<
     typeof import('../infra/claude/cli-capability.js')
@@ -73,35 +70,12 @@ vi.mock('../infra/claude-terminal/transcript-reader.js', async (importOriginal) 
   };
 });
 
-vi.mock('../infra/run-storage/index.js', async (importOriginal) => {
-  const actual = await importOriginal<
-    typeof import('../infra/run-storage/index.js')
-  >();
+function workflow(
+  withFindingContract: boolean,
+  name = withFindingContract ? 'root-finding' : 'without-finding',
+): WorkflowConfig {
   return {
-    ...actual,
-    createRunStorage: (
-      options: Parameters<typeof actual.createRunStorage>[0],
-    ) => {
-      const root = actual.createRunStorage(options);
-      return new Proxy(root, {
-        get(target, property) {
-          if (property === 'close') {
-            return () => {
-              sqliteLifecycle.closedDatabases.push(options.databasePath);
-              return target.close();
-            };
-          }
-          const value = Reflect.get(target, property);
-          return typeof value === 'function' ? value.bind(target) : value;
-        },
-      });
-    },
-  };
-});
-
-function workflow(withFindingContract: boolean): WorkflowConfig {
-  return {
-    name: withFindingContract ? 'root-finding' : 'without-finding',
+    name,
     maxSteps: 3,
     initialStep: 'implement',
     steps: [{
@@ -127,12 +101,12 @@ function workflow(withFindingContract: boolean): WorkflowConfig {
   };
 }
 
-function configureSqliteFindingStorage(projectDir: string): void {
+function configureLegacyFileFindingStorage(projectDir: string): void {
   const configDir = join(projectDir, '.takt');
   mkdirSync(configDir, { recursive: true });
   writeFileSync(join(configDir, 'config.yaml'), [
     'run_storage:',
-    '  backend: sqlite',
+    '  backend: file',
     '',
   ].join('\n'));
 }
@@ -148,7 +122,6 @@ describe('SQLite Finding store / file run lifecycle integration', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    sqliteLifecycle.closedDatabases.length = 0;
     terminal.waitForAssistantResponse.mockResolvedValue({
       sessionId: 'claude-session-1',
       assistantText: 'done',
@@ -158,7 +131,7 @@ describe('SQLite Finding store / file run lifecycle integration', () => {
     globalConfigDir = mkdtempSync(join(tmpdir(), 'takt-sqlite-global-'));
     originalTaktConfigDir = process.env.TAKT_CONFIG_DIR;
     process.env.TAKT_CONFIG_DIR = globalConfigDir;
-    configureSqliteFindingStorage(projectDir);
+    configureLegacyFileFindingStorage(projectDir);
   });
 
   afterEach(() => {
@@ -190,6 +163,7 @@ describe('SQLite Finding store / file run lifecycle integration', () => {
     );
 
     expect(result.success).toBe(true);
+    expect(existsSync(runPaths.findingContractDatabaseAbs)).toBe(false);
     expect(existsSync(runPaths.databaseAbs)).toBe(false);
     expect(readMeta(projectDir, runSlug)).toMatchObject({
       storageBackend: 'file',
@@ -216,15 +190,30 @@ describe('SQLite Finding store / file run lifecycle integration', () => {
     );
 
     expect(result.success).toBe(true);
-    expect(existsSync(runPaths.databaseAbs)).toBe(true);
+    expect(existsSync(runPaths.findingContractDatabaseAbs)).toBe(true);
+    expect(existsSync(runPaths.databaseAbs)).toBe(false);
     expect(readMeta(projectDir, runSlug)).toMatchObject({
       storageBackend: 'file',
       status: 'completed',
     });
-    const { openRunStorage } = await import('../infra/run-storage/index.js');
-    const sqlite = openRunStorage({ databasePath: runPaths.databaseAbs });
-    expect(sqlite.readResumeSnapshot().findingHeads).toHaveLength(1);
-    expect(sqlite.readTerminalPublication()).toBeUndefined();
+    const sqlite = new DatabaseSync(runPaths.findingContractDatabaseAbs, {
+      readOnly: true,
+    });
+    expect(sqlite.prepare(`
+      SELECT authority_key AS authorityKey, workflow_name AS workflowName
+      FROM finding_authorities
+    `).all()).toEqual([{
+      authorityKey: 'root',
+      workflowName: 'root-finding',
+    }]);
+    expect(sqlite.prepare(`
+      SELECT name FROM sqlite_schema
+      WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+      ORDER BY name
+    `).all()).toEqual([
+      { name: 'database_identity' },
+      { name: 'finding_authorities' },
+    ]);
     sqlite.close();
   });
 
@@ -286,18 +275,18 @@ steps:
     });
 
     expect(result.success).toBe(true);
-    expect(existsSync(runPaths.databaseAbs)).toBe(true);
-    const { openRunStorage } = await import('../infra/run-storage/index.js');
-    const sqlite = openRunStorage({ databasePath: runPaths.databaseAbs });
-    const snapshot = sqlite.readResumeSnapshot();
-    expect(snapshot.findingHeads).toHaveLength(1);
-    expect(snapshot.scopes).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        kind: 'workflow_call',
-        findingContractEnabled: 1,
-      }),
-    ]));
-    expect(sqlite.readTerminalPublication()).toBeUndefined();
+    expect(existsSync(runPaths.findingContractDatabaseAbs)).toBe(true);
+    expect(existsSync(runPaths.databaseAbs)).toBe(false);
+    const sqlite = new DatabaseSync(runPaths.findingContractDatabaseAbs, {
+      readOnly: true,
+    });
+    const authorities = sqlite.prepare(`
+      SELECT authority_key AS authorityKey, workflow_name AS workflowName
+      FROM finding_authorities
+    `).all() as Array<{ authorityKey: string; workflowName: string }>;
+    expect(authorities).toHaveLength(1);
+    expect(authorities[0]).toMatchObject({ workflowName: 'child' });
+    expect(authorities[0]?.authorityKey).not.toBe('root');
     sqlite.close();
     expect(readMeta(projectDir, runSlug)).toMatchObject({
       storageBackend: 'file',
@@ -327,7 +316,7 @@ steps:
       },
     );
     expect(sourceResult.success).toBe(false);
-    unlinkSync(sourcePaths.databaseAbs);
+    unlinkSync(sourcePaths.findingContractDatabaseAbs);
 
     const targetResult = await executeWorkflow(
       workflow(true),
@@ -345,18 +334,159 @@ steps:
     );
 
     expect(targetResult.success).toBe(true);
-    expect(existsSync(targetPaths.databaseAbs)).toBe(true);
-    const { openRunStorage } = await import('../infra/run-storage/index.js');
-    const sqlite = openRunStorage({ databasePath: targetPaths.databaseAbs });
-    expect(sqlite.readResumeSnapshot().findingRevisions).toEqual([
-      expect.objectContaining({ next_id: 1 }),
-    ]);
+    expect(existsSync(targetPaths.findingContractDatabaseAbs)).toBe(true);
+    expect(existsSync(targetPaths.databaseAbs)).toBe(false);
+    const sqlite = new DatabaseSync(targetPaths.findingContractDatabaseAbs, {
+      readOnly: true,
+    });
+    const row = sqlite.prepare(`
+      SELECT revision, ledger_json AS ledgerJson
+      FROM finding_authorities WHERE authority_key = 'root'
+    `).get() as { revision: number; ledgerJson: string };
+    expect(row.revision).toBe(1);
+    expect(JSON.parse(row.ledgerJson)).toMatchObject({ nextId: 1, findings: [] });
     sqlite.close();
     expect(readMeta(projectDir, targetRunSlug)).toMatchObject({
       storageBackend: 'file',
       status: 'completed',
       sourceRunSlug,
     });
+  });
+
+  it('workflow変更後もsource authorityを新workflow名でseedする', async () => {
+    const sourceRunSlug = 'workflow-change-source';
+    const targetRunSlug = 'workflow-change-target';
+    const { executeWorkflow } = await import(
+      '../features/tasks/execute/workflowExecution.js'
+    );
+    terminal.waitForAssistantResponse.mockRejectedValueOnce(
+      new Error('source interrupted for workflow change'),
+    );
+    expect((await executeWorkflow(
+      workflow(true, 'source-workflow'),
+      'source task',
+      projectDir,
+      {
+        projectCwd: projectDir,
+        provider: 'claude-terminal',
+        reportDirName: sourceRunSlug,
+      },
+    )).success).toBe(false);
+
+    expect((await executeWorkflow(
+      workflow(true, 'target-workflow'),
+      'target task',
+      projectDir,
+      {
+        projectCwd: projectDir,
+        provider: 'claude-terminal',
+        reportDirName: targetRunSlug,
+        resumeSource: {
+          sourceRunSlug,
+          resumeMode: 'requeue',
+        },
+      },
+    )).success).toBe(true);
+
+    const targetPaths = buildRunPaths(projectDir, targetRunSlug);
+    const database = new DatabaseSync(targetPaths.findingContractDatabaseAbs, {
+      readOnly: true,
+    });
+    const row = database.prepare(`
+      SELECT workflow_name AS workflowName, revision, ledger_json AS ledgerJson
+      FROM finding_authorities WHERE authority_key = 'root'
+    `).get() as { workflowName: string; revision: number; ledgerJson: string };
+    expect(row.workflowName).toBe('target-workflow');
+    expect(row.revision).toBeGreaterThanOrEqual(1);
+    expect(JSON.parse(row.ledgerJson)).toMatchObject({
+      workflowName: 'target-workflow',
+    });
+    database.close();
+    expect(existsSync(targetPaths.databaseAbs)).toBe(false);
+  });
+
+  it('parallel workflow calls use distinct child authority keys', async () => {
+    const workflowsDir = join(projectDir, '.takt', 'workflows');
+    mkdirSync(workflowsDir, { recursive: true });
+    writeFileSync(join(workflowsDir, 'parallel-parent.yaml'), `name: parallel-parent
+initial_step: fanout
+max_steps: 3
+steps:
+  - name: fanout
+    parallel:
+      - name: child-a
+        kind: workflow_call
+        call: parallel-child
+        rules:
+          - condition: COMPLETE
+      - name: child-b
+        kind: workflow_call
+        call: parallel-child
+        rules:
+          - condition: COMPLETE
+    rules:
+      - condition: all("COMPLETE")
+        next: COMPLETE
+`);
+    writeFileSync(join(workflowsDir, 'parallel-child.yaml'), `name: parallel-child
+subworkflow:
+  callable: true
+finding_contract:
+  ledger_path: .takt/findings/parallel-child.json
+  raw_findings_path: .takt/findings/parallel-child-raw
+  manager:
+    persona: findings-manager
+    instruction: Manage findings
+    output_contract: findings-manager
+initial_step: review
+max_steps: 2
+steps:
+  - name: review
+    persona: reviewer
+    persona_display_name: reviewer
+    provider: claude-terminal
+    instruction: Review
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    const { loadWorkflowByIdentifier } = await import(
+      '../infra/config/loaders/workflowLoader.js'
+    );
+    const parent = loadWorkflowByIdentifier('parallel-parent', projectDir);
+    if (parent === null) {
+      throw new Error('Parallel parent workflow was not loaded');
+    }
+    const runSlug = 'parallel-child-authorities';
+    const { executeWorkflow } = await import(
+      '../features/tasks/execute/workflowExecution.js'
+    );
+
+    const result = await executeWorkflow(parent, 'parallel task', projectDir, {
+      projectCwd: projectDir,
+      provider: 'claude-terminal',
+      reportDirName: runSlug,
+    });
+
+    expect(result.success).toBe(true);
+    const runPaths = buildRunPaths(projectDir, runSlug);
+    const database = new DatabaseSync(runPaths.findingContractDatabaseAbs, {
+      readOnly: true,
+    });
+    const authorities = database.prepare(`
+      SELECT authority_key AS authorityKey, workflow_name AS workflowName
+      FROM finding_authorities ORDER BY authority_key
+    `).all() as Array<{ authorityKey: string; workflowName: string }>;
+    expect(authorities).toHaveLength(2);
+    expect(authorities.map((authority) => authority.workflowName)).toEqual([
+      'parallel-child',
+      'parallel-child',
+    ]);
+    expect(authorities[0]?.authorityKey).not.toBe(authorities[1]?.authorityKey);
+    expect(authorities.every((authority) => authority.authorityKey !== 'root'))
+      .toBe(true);
+    database.close();
+    expect(existsSync(runPaths.databaseAbs)).toBe(false);
   });
 
   it('provider abort後にSQLite Finding resourceをcloseしfileへfailedを確定する', async () => {
@@ -384,15 +514,60 @@ steps:
       success: false,
       reason: 'Step "implement" failed: injected provider failure',
     });
-    expect(sqliteLifecycle.closedDatabases).toContain(runPaths.databaseAbs);
+    expect(existsSync(runPaths.findingContractDatabaseAbs)).toBe(true);
+    expect(existsSync(runPaths.databaseAbs)).toBe(false);
     expect(readMeta(projectDir, runSlug)).toMatchObject({
       storageBackend: 'file',
       status: 'failed',
       reason: 'Step "implement" failed: injected provider failure',
     });
-    const { openRunStorage } = await import('../infra/run-storage/index.js');
-    const sqlite = openRunStorage({ databasePath: runPaths.databaseAbs });
-    expect(sqlite.readTerminalPublication()).toBeUndefined();
+    const sqlite = new DatabaseSync(runPaths.findingContractDatabaseAbs, {
+      readOnly: true,
+    });
+    expect(sqlite.prepare(`
+      SELECT count(*) AS count FROM finding_authorities
+    `).get()).toEqual({ count: 1 });
     sqlite.close();
+  });
+
+  it('external abortでもFinding DBにterminal stateを入れずfileへ確定する', async () => {
+    const runSlug = 'aborted-finding-contract';
+    const runPaths = buildRunPaths(projectDir, runSlug);
+    const abortController = new AbortController();
+    abortController.abort('integration abort');
+    const { executeWorkflow } = await import(
+      '../features/tasks/execute/workflowExecution.js'
+    );
+
+    const result = await executeWorkflow(
+      workflow(true),
+      'aborted finding task',
+      projectDir,
+      {
+        projectCwd: projectDir,
+        provider: 'claude-terminal',
+        reportDirName: runSlug,
+        abortSignal: abortController.signal,
+      },
+    );
+
+    expect(result.success).toBe(false);
+    expect(readMeta(projectDir, runSlug)).toMatchObject({
+      storageBackend: 'file',
+      status: 'aborted',
+    });
+    expect(existsSync(runPaths.databaseAbs)).toBe(false);
+    const database = new DatabaseSync(runPaths.findingContractDatabaseAbs, {
+      readOnly: true,
+    });
+    expect(database.prepare(`
+      SELECT name FROM sqlite_schema
+      WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+      ORDER BY name
+    `).all()).toEqual([
+      { name: 'database_identity' },
+      { name: 'finding_authorities' },
+    ]);
+    database.close();
   });
 });
