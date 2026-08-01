@@ -36,8 +36,8 @@ import {
   type WorkflowRunExecutionContext,
 } from '../features/tasks/execute/workflowRunStorage.js';
 import {
-  SqliteWorkflowRunStorageLifecycle,
-} from '../features/tasks/execute/sqliteWorkflowRunStorageLifecycle.js';
+  SqliteFindingStoreLifecycle,
+} from '../features/tasks/execute/sqliteFindingStoreLifecycle.js';
 import { authorizeFindingLedgerFixture } from './helpers/finding-lifecycle-fixture.js';
 import {
   createWorkflowTerminalPayloadFactory,
@@ -116,7 +116,7 @@ async function createTestWorkflowRunStorage(
     ndjsonLogPath,
     traceReportMode: 'redacted',
     metaSeed: {
-      backend,
+      backend: activeRun.bootstrap.backend,
       startedAt: activeRun.bootstrap.startedAt,
       resumeSource: input.resumeSource === undefined
         ? null
@@ -453,10 +453,9 @@ describe('workflow run storage composition', () => {
     expect(existsSync(join(runPaths.runRootAbs, 'trace.md'))).toBe(true);
   });
 
-  it('SQLite terminal status assert失敗でもheartbeat停止・lease解放・closeを完了する', async () => {
-    vi.useFakeTimers();
+  it('SQLite設定でもFindingへ初アクセスするまでDBを作成しない', async () => {
     const cwd = createRoot();
-    const runPaths = buildRunPaths(cwd, 'sqlite-status-assert-run');
+    const runPaths = buildRunPaths(cwd, 'sqlite-lazy-run');
     const storage = await createTestWorkflowRunStorage({
       backend: 'sqlite',
       workflowConfig: workflow(false),
@@ -464,135 +463,17 @@ describe('workflow run storage composition', () => {
       cwd,
       runPaths,
     });
-    const payload = storage.terminalPayloads.create({
+
+    expect(existsSync(runPaths.databaseAbs)).toBe(false);
+    await storage.complete({
       status: 'completed',
-      iterations: 1,
-      lastStepContent: 'done',
-      lastStepName: 'done',
-      endTime: '2026-07-27T10:00:00.000Z',
+      iteration: 1,
+      publicationPayload: TERMINAL_PUBLICATION_PAYLOAD,
     });
-
-    await expect(
-      storage.executionHandle.finish({
-        status: 'failed',
-        iteration: 1,
-        reason: 'failed',
-      }, payload),
-    ).rejects.toThrow(/does not match run status/i);
-    expect(vi.getTimerCount()).toBe(0);
-    const reopened = openRunStorage({
-      databasePath: runPaths.databaseAbs,
-    });
-    const replacementLease = reopened.claimLease({
-      ownerKey: 'replacement-owner',
-      leaseDurationMs: 30_000,
-    });
-    reopened.releaseLease(replacementLease);
-    reopened.close();
-  });
-
-  it('SQLiteがstage時点のnested terminal snapshotを投影する', async () => {
-    const observations: Array<{
-      readonly content: string;
-      readonly stackStep: string;
-      readonly traceQuery: string;
-    }> = [];
-
-    for (const backend of ['sqlite'] as const) {
-      const cwd = createRoot();
-      const runPaths = buildRunPaths(cwd, `${backend}-snapshot-run`);
-      const workflowConfig = workflow(false);
-      const storage = await createTestWorkflowRunStorage({
-        backend,
-        workflowConfig,
-        projectCwd: cwd,
-        cwd,
-        runPaths,
-      });
-      const sessionLog = createSessionLog(
-        'task',
-        cwd,
-        workflowConfig.name,
-        { startTime: storage.bootstrap.startedAt },
-      );
-      sessionLog.history.push({
-        step: 'done',
-        persona: 'coder',
-        instruction: 'done',
-        status: 'done',
-        timestamp: '2026-07-27T09:30:00.000Z',
-        content: 'before-content',
-        stack: [{
-          workflow: workflowConfig.name,
-          workflow_ref: 'project:sha256:snapshot-workflow',
-          step: 'done',
-          kind: 'agent',
-          occurrence: 1,
-        }],
-      });
-      const ndjsonLogPath = initNdjsonLog(
-        storage.bootstrap.sessionId,
-        'task',
-        workflowConfig.name,
-        {
-          logsDir: runPaths.logsAbs,
-          startTime: sessionLog.startTime,
-        },
-      );
-      const traceQueries = ['before-query'];
-      const payload = createWorkflowTerminalPayloadFactory({
-        runSlug: runPaths.slug,
-        projectCwd: cwd,
-        task: 'task',
-        workflowName: workflowConfig.name,
-        sessionLog,
-        sessionId: storage.bootstrap.sessionId,
-        ndjsonLogPath,
-        traceReportMode: 'redacted',
-        metaSeed: {
-          backend,
-          startedAt: storage.bootstrap.startedAt,
-          resumeSource: null,
-        },
-        traceDiscovery: {
-          serviceName: 'takt',
-          runId: runPaths.slug,
-          workflowName: workflowConfig.name,
-          queries: traceQueries,
-        },
-      }).create({
-        status: 'completed',
-        iterations: 1,
-        lastStepContent: 'done',
-        lastStepName: 'done',
-        endTime: '2026-07-27T10:00:00.000Z',
-      });
-
-      sessionLog.startTime = '2026-07-27T09:59:00.000Z';
-      sessionLog.history[0]!.content = 'after-content';
-      sessionLog.history[0]!.stack![0]!.step = 'after-step';
-      traceQueries[0] = 'after-query';
-      const finalization = await storage.finishPayload(payload, 'completed');
-      expect(finalization.issues).toEqual([]);
-
-      const reopened = openRunStorage({
-        databasePath: runPaths.databaseAbs,
-      });
-      const stored = JSON.parse(
-        reopened.readTerminalPublication()!.payload,
-      ) as typeof payload;
-      reopened.close();
-      observations.push({
-        content: stored.sessionLog.history[0]!.content,
-        stackStep: stored.sessionLog.history[0]!.stack![0]!.step,
-        traceQuery: stored.traceDiscovery!.queries[0]!,
-      });
-    }
-
-    expect(observations[0]).toEqual({
-      content: 'before-content',
-      stackStep: 'done',
-      traceQuery: 'before-query',
+    expect(existsSync(runPaths.databaseAbs)).toBe(false);
+    expect(readRunMeta(runPaths.metaAbs)).toMatchObject({
+      storageBackend: 'file',
+      status: 'completed',
     });
   });
 
@@ -664,7 +545,7 @@ describe('workflow run storage composition', () => {
     expect(existsSync(runPaths.databaseAbs)).toBe(false);
   });
 
-  it('creates SQLite authority and records a named top-level execution', async () => {
+  it('creates SQLite only for Finding authority and releases its lease at file terminalization', async () => {
     const cwd = createRoot();
     const runPaths = buildRunPaths(cwd, 'sqlite-run');
     const storage = await createTestWorkflowRunStorage({
@@ -674,6 +555,7 @@ describe('workflow run storage composition', () => {
       cwd,
       runPaths,
     });
+    expect(existsSync(runPaths.databaseAbs)).toBe(false);
     const rootStore = storage.findingAuthorityResolver.resolve({
       workflowConfig: workflow(true),
       runPaths,
@@ -701,14 +583,24 @@ describe('workflow run storage composition', () => {
 
     const reopened = openRunStorage({ databasePath: runPaths.databaseAbs });
     const snapshot = reopened.readResumeSnapshot();
-    expect(snapshot.run.status).toBe('completed');
+    expect(snapshot.run.status).toBe('running');
     expect(snapshot.scopes[0]?.stepExecutions).toEqual([
       expect.objectContaining({
         stepId: TOP_LEVEL_WORKFLOW_EXECUTION_STEP_KEY,
-        status: 'completed',
+        status: 'running',
       }),
     ]);
+    expect(reopened.readTerminalPublication()).toBeUndefined();
+    const replacementLease = reopened.claimLease({
+      ownerKey: 'replacement-finding-owner',
+      leaseDurationMs: 30_000,
+    });
+    reopened.releaseLease(replacementLease);
     reopened.close();
+    expect(readRunMeta(runPaths.metaAbs)).toMatchObject({
+      storageBackend: 'file',
+      status: 'completed',
+    });
   });
 
   it('imports the source SQLite Finding authority into a resumed target', async () => {
@@ -847,9 +739,14 @@ describe('workflow run storage composition', () => {
       },
     });
 
-    const importedRoot = openRunStorage({
-      databasePath: targetPaths.databaseAbs,
+    expect(existsSync(targetPaths.databaseAbs)).toBe(false);
+    const resumedA = target.findingAuthorityResolver.resolve({
+      workflowConfig: childA,
+      runPaths: targetPaths,
+      runPathNamespace: ['call-a'],
+      workflowCallSiteIdentity: 'call-a',
     });
+    const importedRoot = openRunStorage({ databasePath: targetPaths.databaseAbs });
     const imported = importedRoot.readResumeSnapshot();
     importedRoot.close();
     expect(imported.findingHeads).toEqual(expect.arrayContaining([
@@ -862,12 +759,6 @@ describe('workflow run storage composition', () => {
     ]));
 
     const scopeCountBeforeResolve = imported.scopes.length;
-    const resumedA = target.findingAuthorityResolver.resolve({
-      workflowConfig: childA,
-      runPaths: targetPaths,
-      runPathNamespace: ['call-a'],
-      workflowCallSiteIdentity: 'call-a',
-    });
     const newAuthority = target.findingAuthorityResolver.resolve({
       workflowConfig: childC,
       runPaths: targetPaths,
@@ -894,9 +785,7 @@ describe('workflow run storage composition', () => {
     const completed = openRunStorage({ databasePath: targetPaths.databaseAbs });
     const completedSnapshot = completed.readResumeSnapshot();
     expect(completedSnapshot.scopes).toHaveLength(scopeCountBeforeResolve + 1);
-    expect(completedSnapshot.scopes.every(
-      (scope) => scope.runtime.status === 'completed',
-    )).toBe(true);
+    expect(completed.readTerminalPublication()).toBeUndefined();
     expect(completedSnapshot.findingHeads).toEqual(expect.arrayContaining([
       expect.objectContaining({
         current_revision: 1,
@@ -981,7 +870,7 @@ describe('workflow run storage composition', () => {
     completed.close();
     expect(snapshot.run).toMatchObject({
       findingContractEnabled: 1,
-      status: 'completed',
+      status: 'running',
     });
     expect(snapshot.scopes).toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -1052,13 +941,13 @@ describe('workflow run storage composition', () => {
     });
   });
 
-  it('fails loudly when resume authority selects another backend', async () => {
+  it('source DBがないfile runからSQLite FindingをFinding 0で開始できる', async () => {
     const cwd = createRoot();
     const sourcePaths = buildRunPaths(cwd, 'file-source');
     writeRunMeta(cwd, sourcePaths.slug, 'file');
     const targetPaths = buildRunPaths(cwd, 'sqlite-target');
 
-    await expect(createTestWorkflowRunStorage({
+    const target = await createTestWorkflowRunStorage({
       backend: 'sqlite',
       workflowConfig: workflow(true),
       projectCwd: cwd,
@@ -1068,8 +957,18 @@ describe('workflow run storage composition', () => {
         sourceRunSlug: 'file-source',
         resumeMode: 'retry',
       },
-    })).rejects.toThrow(/backend mismatch/i);
+    });
     expect(existsSync(targetPaths.databaseAbs)).toBe(false);
+    const store = target.findingAuthorityResolver.resolve({
+      workflowConfig: workflow(true),
+      runPaths: targetPaths,
+    });
+    expect(store.loadLedger()).toMatchObject({ nextId: 1, findings: [] });
+    await target.complete({
+      status: 'completed',
+      iteration: 1,
+      publicationPayload: TERMINAL_PUBLICATION_PAYLOAD,
+    });
   });
 
   it('requested source directory slugとSQLite内run slugの差替えを拒否する', async () => {
@@ -1099,7 +998,7 @@ describe('workflow run storage composition', () => {
     writeRunMeta(cwd, requestedPaths.slug, 'sqlite');
     const targetPaths = buildRunPaths(cwd, 'target-run');
 
-    await expect(createTestWorkflowRunStorage({
+    const target = await createTestWorkflowRunStorage({
       backend: 'sqlite',
       workflowConfig: workflow(true),
       projectCwd: cwd,
@@ -1109,13 +1008,17 @@ describe('workflow run storage composition', () => {
         sourceRunSlug: requestedPaths.slug,
         resumeMode: 'retry',
       },
-    })).rejects.toThrow(
-      /database slug "run-b".*requested source run "run-a"/i,
+    });
+    expect(() => target.findingAuthorityResolver.resolve({
+      workflowConfig: workflow(true),
+      runPaths: targetPaths,
+    })).toThrow(
+      /database slug "run-b".*source run "run-a"/i,
     );
     expect(existsSync(targetPaths.databaseAbs)).toBe(false);
   });
 
-  it('also rejects a SQLite source when the current backend is file', async () => {
+  it('SQLite sourceでも現在のFinding storageがfileなら通常のfile runを開始する', async () => {
     const cwd = createRoot();
     const sourcePaths = buildRunPaths(cwd, 'sqlite-source');
     mkdirSync(sourcePaths.runRootAbs, { recursive: true });
@@ -1137,7 +1040,7 @@ describe('workflow run storage composition', () => {
     }).close();
     const targetPaths = buildRunPaths(cwd, 'file-target');
 
-    await expect(createTestWorkflowRunStorage({
+    const target = await createTestWorkflowRunStorage({
       backend: 'file',
       workflowConfig: workflow(true),
       projectCwd: cwd,
@@ -1147,7 +1050,14 @@ describe('workflow run storage composition', () => {
         sourceRunSlug: 'sqlite-source',
         resumeMode: 'retry',
       },
-    })).rejects.toThrow(/backend mismatch/i);
+    });
+    expect(target.bootstrap.backend).toBe('file');
+    expect(existsSync(targetPaths.databaseAbs)).toBe(false);
+    await target.complete({
+      status: 'completed',
+      iteration: 1,
+      publicationPayload: TERMINAL_PUBLICATION_PAYLOAD,
+    });
   });
 
   it('rejects an identical SQLite resume source and target path', async () => {
@@ -1199,12 +1109,12 @@ describe('workflow run storage composition', () => {
     })).rejects.toThrow(/distinct source and target run slugs/);
   });
 
-  it('fails loudly when the SQLite resume source database is missing', async () => {
+  it('SQLite source DBが削除されていてもresumeしFinding 0で再作成する', async () => {
     const cwd = createRoot();
     writeRunMeta(cwd, 'missing-source', 'sqlite');
     const targetPaths = buildRunPaths(cwd, 'sqlite-target');
 
-    await expect(createTestWorkflowRunStorage({
+    const target = await createTestWorkflowRunStorage({
       backend: 'sqlite',
       workflowConfig: workflow(true),
       projectCwd: cwd,
@@ -1214,32 +1124,32 @@ describe('workflow run storage composition', () => {
         sourceRunSlug: 'missing-source',
         resumeMode: 'retry',
       },
-    })).rejects.toThrow();
+    });
     expect(existsSync(targetPaths.databaseAbs)).toBe(false);
+    const store = target.findingAuthorityResolver.resolve({
+      workflowConfig: workflow(true),
+      runPaths: targetPaths,
+    });
+    expect(store.loadLedger()).toMatchObject({ nextId: 1, findings: [] });
+    await target.complete({
+      status: 'completed',
+      iteration: 1,
+      publicationPayload: TERMINAL_PUBLICATION_PAYLOAD,
+    });
   });
 
   it('aborts on heartbeat failure and clears the timer during cleanup', async () => {
     vi.useFakeTimers();
     const abortController = new AbortController();
-    const finishRun = vi.fn(() => ({
-      runId: 'heartbeat-run',
-      eventId: 'a'.repeat(64),
-      runStatus: 'failed' as const,
-      iteration: 2,
-      payloadDigest:
-        '44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a',
-      terminalAt: 1,
-    }));
     const close = vi.fn();
     const root = {
       heartbeatLease: vi.fn(() => {
         throw new Error('heartbeat failed');
       }),
-      finishRun,
       releaseLease: vi.fn(),
       close,
     } as unknown as RunStorageRoot;
-    const lifecycle = new SqliteWorkflowRunStorageLifecycle({
+    const lifecycle = new SqliteFindingStoreLifecycle({
       root,
       lease: {} as LeaseHandle,
       abortController,
@@ -1252,57 +1162,22 @@ describe('workflow run storage composition', () => {
       new Error('heartbeat failed'),
     );
     expect(() => lifecycle.assertHealthy()).toThrow('heartbeat failed');
-    expect(lifecycle.finish({
-      status: 'failed',
-      iteration: 2,
-      reason: 'heartbeat failed',
-    }, TERMINAL_PUBLICATION_PAYLOAD)).toEqual({
-      receipt: {
-        runId: 'heartbeat-run',
-        publicationId: 'a'.repeat(64),
-        runStatus: 'failed',
-        iteration: 2,
-        payloadSha256:
-          '44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a',
-        proof: {
-          backend: 'sqlite',
-          terminalAt: 1,
-        },
-      },
-      issues: [],
-    });
-    expect(finishRun).toHaveBeenCalledWith(
-      expect.anything(),
-      {
-        status: 'failed',
-        failureReason: 'heartbeat failed',
-        publication: {
-          status: 'failed',
-          iteration: 2,
-          reason: 'heartbeat failed',
-          payload: TERMINAL_PUBLICATION_PAYLOAD,
-        },
-      },
-    );
-    expect(root.releaseLease).not.toHaveBeenCalled();
+    expect(lifecycle.close()).toEqual({ issues: [] });
+    expect(root.releaseLease).toHaveBeenCalledOnce();
     expect(close).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it('terminal commit失敗時も全cleanup errorをprimaryへ集約する', () => {
-    const finishRun = vi.fn(() => {
-      throw new Error('terminalize failed');
-    });
+  it('Finding store cleanupの全errorをissueとして返す', () => {
     const releaseLease = vi.fn(() => {
       throw new Error('release failed');
     });
     const close = vi.fn(() => {
       throw new Error('close failed');
     });
-    const lifecycle = new SqliteWorkflowRunStorageLifecycle({
+    const lifecycle = new SqliteFindingStoreLifecycle({
       root: {
         heartbeatLease: vi.fn(),
-        finishRun,
         releaseLease,
         close,
       } as unknown as RunStorageRoot,
@@ -1310,52 +1185,34 @@ describe('workflow run storage composition', () => {
       abortController: new AbortController(),
     });
 
-    let caught: unknown;
-    try {
-      lifecycle.finish({
-        status: 'failed',
-        iteration: 2,
-        reason: 'workflow failed',
-      }, TERMINAL_PUBLICATION_PAYLOAD);
-    } catch (error) {
-      caught = error;
-    }
-    expect(caught).toBeInstanceOf(AggregateError);
-    expect((caught as AggregateError).errors).toEqual([
-      expect.objectContaining({ message: 'terminalize failed' }),
-      expect.objectContaining({ message: 'release failed' }),
-      expect.objectContaining({ message: 'close failed' }),
+    expect(lifecycle.close().issues).toEqual([
+      expect.objectContaining({
+        name: 'RunCleanupError',
+        cause: expect.objectContaining({ message: 'release failed' }),
+      }),
+      expect.objectContaining({
+        name: 'RunCleanupError',
+        cause: expect.objectContaining({ message: 'close failed' }),
+      }),
     ]);
   });
 
-  it('reports a committed terminal state close error as cleanup issue', () => {
+  it('reports a Finding store close error as cleanup issue', () => {
     const closeError = new Error('close failed after commit');
     const root = {
       heartbeatLease: vi.fn(),
-      finishRun: vi.fn(() => ({
-        runId: 'cleanup-run',
-        eventId: 'b'.repeat(64),
-        runStatus: 'completed' as const,
-        iteration: 2,
-        payloadDigest:
-          '44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a',
-        terminalAt: 2,
-      })),
       releaseLease: vi.fn(),
       close: vi.fn(() => {
         throw closeError;
       }),
     } as unknown as RunStorageRoot;
-    const lifecycle = new SqliteWorkflowRunStorageLifecycle({
+    const lifecycle = new SqliteFindingStoreLifecycle({
       root,
       lease: {} as LeaseHandle,
       abortController: new AbortController(),
     });
 
-    const result = lifecycle.finish({
-      status: 'completed',
-      iteration: 2,
-    }, TERMINAL_PUBLICATION_PAYLOAD);
+    const result = lifecycle.close();
 
     expect(result.issues).toEqual([
       expect.objectContaining({
@@ -1363,6 +1220,6 @@ describe('workflow run storage composition', () => {
         cause: closeError,
       }),
     ]);
-    expect(root.releaseLease).not.toHaveBeenCalled();
+    expect(root.releaseLease).toHaveBeenCalledOnce();
   });
 });

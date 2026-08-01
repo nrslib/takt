@@ -2,8 +2,12 @@ import { buildRunPaths } from '../../../core/workflow/run/run-paths.js';
 import { readRunContextOrderContent } from '../../../core/workflow/run/order-content.js';
 import { trimResumePointStackForWorkflow } from '../../../core/workflow/run/resume-point.js';
 import type { WorkflowConfig, WorkflowResumePoint } from '../../../core/models/index.js';
-import { resolveWorkflowConfigValue } from '../../../infra/config/index.js';
-import { getWorkflowDescriptionFromConfig } from '../../../infra/config/loaders/workflowPreview.js';
+import {
+  getWorkflowDescription,
+  loadWorkflowByIdentifier,
+  resolveWorkflowConfigValue,
+} from '../../../infra/config/index.js';
+import { resolveWorkflowCallTarget } from '../../../infra/config/loaders/workflowCallResolver.js';
 import { selectOption } from '../../../shared/prompt/index.js';
 import { blankLine, header, info } from '../../../shared/ui/index.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
@@ -35,9 +39,6 @@ import {
 import type { RunResumeSource } from '../../../core/workflow/run/run-meta.js';
 import type { TaskExecutionOptions } from '../execute/types.js';
 import { buildTraceTaskMetadata } from '../execute/traceTaskMetadata.js';
-import {
-  reconcilePendingWorkflowRuns,
-} from '../execute/workflowRunStorage.js';
 import type { TaskAttachment } from '../attachments.js';
 import {
   cleanupPreparedRetryTaskSpec,
@@ -47,10 +48,7 @@ import {
 } from '../retryTaskSpecAttachments.js';
 import { runDirectInstructMode } from './directInstructMode.js';
 import { findLatestResumableDirectRun, type ResumableDirectRun } from './directRunFinder.js';
-import {
-  loadWorkflowExecutionBundle,
-  type LoadedWorkflowExecutionBundle,
-} from '../execute/workflowExecutionBundle.js';
+import { warnIfResumePointAdjusted } from '../execute/resumePointAdjustmentWarning.js';
 
 type DirectRunResumeAction = 'requeue' | 'retry' | 'instruct' | 'view_reports' | 'cancel';
 
@@ -138,23 +136,19 @@ function resolveTaskContent(projectDir: string, run: ResumableDirectRun): Resolv
 
 function resolveResumePoint(
   projectDir: string,
-  bundle: LoadedWorkflowExecutionBundle,
+  workflowConfig: WorkflowConfig,
   run: ResumableDirectRun,
 ): WorkflowResumePoint | undefined {
-  const resolved = trimResumePointStackForWorkflow({
-    workflow: bundle.rootWorkflow,
+  return trimResumePointStackForWorkflow({
+    workflow: workflowConfig,
     resumePoint: run.meta.resumePoint,
-    resolveWorkflowCall: (parentWorkflow, step) => bundle.workflowCallResolver({
+    resolveWorkflowCall: (parentWorkflow, step) => resolveWorkflowCallTarget(
       parentWorkflow,
       step,
-      projectCwd: projectDir,
-      lookupCwd: projectDir,
-    }),
+      projectDir,
+      projectDir,
+    ),
   });
-  if (run.meta.resumePoint !== undefined && resolved?.stack.length !== run.meta.resumePoint.stack.length) {
-    throw new Error(`Direct run "${run.slug}" resume stack does not match its workflow execution bundle.`);
-  }
-  return resolved;
 }
 
 function resolveStartStep(
@@ -175,23 +169,36 @@ function resolveStartStep(
   return undefined;
 }
 
-function loadWorkflow(projectDir: string, run: ResumableDirectRun): LoadedWorkflowExecutionBundle {
-  return loadWorkflowExecutionBundle(buildRunPaths(projectDir, run.slug));
+function loadWorkflow(projectDir: string, run: ResumableDirectRun): WorkflowConfig {
+  const workflowConfig = loadWorkflowByIdentifier(
+    run.meta.workflow,
+    projectDir,
+    { lookupCwd: projectDir },
+  );
+  if (!workflowConfig) {
+    throw new Error(
+      `Workflow "${sanitizeTerminalText(run.meta.workflow)}" not found for `
+      + `direct run "${sanitizeTerminalText(run.slug)}".`,
+    );
+  }
+  return workflowConfig;
 }
 
 function buildWorkflowContext(
   projectDir: string,
-  bundle: LoadedWorkflowExecutionBundle,
+  workflowIdentifier: string,
   agentOverrides: TaskExecutionOptions | undefined,
 ): WorkflowContext {
-  const workflowDesc = getWorkflowDescriptionFromConfig(
-    bundle.rootWorkflow,
+  const previewCount = resolveWorkflowConfigValue(
     projectDir,
-    resolveWorkflowConfigValue(projectDir, 'interactivePreviewSteps'),
+    'interactivePreviewSteps',
+  );
+  const workflowDesc = getWorkflowDescription(
+    workflowIdentifier,
+    projectDir,
+    previewCount,
     projectDir,
     agentOverrides,
-    bundle.workflowCallResolver,
-    bundle.resourceRoot,
   );
   return {
     name: workflowDesc.name,
@@ -227,9 +234,17 @@ function buildExecutionContext(
   run: ResumableDirectRun,
   agentOverrides: TaskExecutionOptions | undefined,
 ): DirectRunResumeExecutionContext {
-  const bundle = loadWorkflow(projectDir, run);
-  const workflowConfig = bundle.rootWorkflow;
-  const resumePoint = resolveResumePoint(projectDir, bundle, run);
+  const workflowConfig = loadWorkflow(projectDir, run);
+  const resumePoint = resolveResumePoint(projectDir, workflowConfig, run);
+  const startStep = resolveStartStep(workflowConfig, run, resumePoint);
+  warnIfResumePointAdjusted({
+    context: 'direct_resume',
+    outputMode: 'terminal',
+    workflow: workflowConfig.name,
+    original: run.meta.resumePoint,
+    accepted: resumePoint,
+    startStep,
+  });
   const resolvedTask = resolveTaskContent(projectDir, run);
   const materializedRun = run.meta.prContext === undefined
     ? run
@@ -244,9 +259,13 @@ function buildExecutionContext(
     run: materializedRun,
     taskContent: resolvedTask.taskContent,
     previousOrderContent: resolvedTask.previousOrderContent,
-    startStep: resolveStartStep(workflowConfig, run, resumePoint),
+    startStep,
     resumePoint,
-    workflowContext: buildWorkflowContext(projectDir, bundle, agentOverrides),
+    workflowContext: buildWorkflowContext(
+      projectDir,
+      run.meta.workflow,
+      agentOverrides,
+    ),
   };
 }
 
@@ -455,7 +474,6 @@ export async function resumeDirectRun(
   projectDir: string,
   agentOverrides?: TaskExecutionOptions,
 ): Promise<boolean> {
-  await reconcilePendingWorkflowRuns({ cwd: projectDir });
   const run = findLatestResumableDirectRun(projectDir);
   if (!run) {
     info('No resumable direct run found. Use `takt list` for queued tasks.');

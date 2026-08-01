@@ -11,7 +11,10 @@ import {
   isResumableRunStatus,
   readRunMetaBySlug,
 } from '../../../core/workflow/run/run-meta.js';
-import { OperationRecoveryError } from '../../../core/workflow/operations/operation-recovery-error.js';
+import {
+  OperationLineageUnavailableError,
+  OperationRecoveryError,
+} from '../../../core/workflow/operations/operation-recovery-error.js';
 import type { WorkflowOperationJournalContext } from '../../../core/workflow/types.js';
 import {
   inheritResumeReportSnapshot,
@@ -160,7 +163,9 @@ function resolveOperationJournalSourceClaims(
     visited.add(sourceRunSlug);
     const sourceMeta = readRunMetaBySlug(cwd, sourceRunSlug);
     if (sourceMeta === null) {
-      throw new OperationRecoveryError(`Resume source run "${sourceRunSlug}" is missing`);
+      throw new OperationLineageUnavailableError(
+        `Resume source run "${sourceRunSlug}" is missing`,
+      );
     }
     if (
       sourceRunSlug === immediateSourceRunSlug
@@ -174,7 +179,7 @@ function resolveOperationJournalSourceClaims(
       sourceMeta.operationJournalRunSlug === undefined
       || sourceMeta.operationClaimToken === undefined
     ) {
-      throw new OperationRecoveryError(
+      throw new OperationLineageUnavailableError(
         `Source run "${sourceRunSlug}" has incomplete operation journal ownership metadata`,
       );
     }
@@ -196,7 +201,9 @@ function resolveOperationJournalSourceClaims(
     sourceRunSlug = sourceMeta.sourceRunSlug;
   }
   if (journalRunSlug === undefined) {
-    throw new OperationRecoveryError('Resume source ancestry has no operation journal');
+    throw new OperationLineageUnavailableError(
+      'Resume source ancestry has no operation journal',
+    );
   }
   return {
     journalRunSlug,
@@ -218,7 +225,27 @@ export function resolveWorkflowExecutionResumeLineage(
     };
   }
 
-  return resolveWorkflowExecutionResumeSourceLineage(cwd, resumeSource);
+  try {
+    return resolveWorkflowExecutionResumeSourceLineage(cwd, resumeSource);
+  } catch (error) {
+    if (!(error instanceof OperationLineageUnavailableError)) {
+      throw error;
+    }
+    log.warn(
+      'Resume source operation lineage is unavailable; starting a new operation journal',
+      {
+        sourceRunSlug,
+        targetRunSlug: runSlug,
+        reason: getErrorMessage(error),
+      },
+    );
+    return {
+      sourceRunSlug,
+      publishedResumeSource: resumeSource,
+      operationJournalRunSlug: runSlug,
+      operationClaimToken: randomUUID(),
+    };
+  }
 }
 
 export function resolveWorkflowExecutionResumeSourceLineage(

@@ -1,33 +1,26 @@
 import {
+  existsSync,
   readdirSync,
 } from 'node:fs';
 import { basename, extname, join } from 'node:path';
 import { buildRunPaths } from '../../../core/workflow/run/run-paths.js';
 import type { RunMeta } from '../../../core/workflow/run/run-meta.js';
-import { loadSessionLog, type SessionLog } from '../../../infra/fs/index.js';
 import {
-  openRunStorageTerminalRecovery,
-} from '../../../infra/run-storage/root.js';
+  initNdjsonLog,
+  loadSessionLog,
+  type SessionLog,
+} from '../../../infra/fs/index.js';
 import {
   createWorkflowTerminalPayloadFactory,
-  serializeWorkflowTerminalPublication,
 } from './workflowTerminalPayload.js';
 import {
   createFileWorkflowRunTerminalPublisher,
 } from './fileWorkflowRunTerminalPublisher.js';
-import {
-  recoverWorkflowTerminalPublication,
-} from './workflowTerminalPublication.js';
 import type {
   WorkflowRunForceFailContext,
   WorkflowRunForceFailHandle,
 } from './workflowRunAdmin.js';
-import {
-  RunCleanupError,
-  type RunFinalization,
-} from './workflowRunExecution.js';
-
-const FORCE_FAIL_LEASE_DURATION_MS = 30_000;
+import type { RunFinalization } from './workflowRunExecution.js';
 
 interface TaskRunForceFailAdapterContext
   extends WorkflowRunForceFailContext {
@@ -66,95 +59,10 @@ class FileTaskRunForceFailStorage implements WorkflowRunForceFailHandle {
   }
 }
 
-class SqliteTaskRunForceFailStorage implements WorkflowRunForceFailHandle {
-  readonly currentStep: string | undefined;
-
-  constructor(
-    private readonly context: TaskRunForceFailAdapterContext,
-  ) {
-    this.currentStep = context.meta.status === 'running'
-      ? context.meta.currentStep
-      : undefined;
-  }
-
-  async terminalize(reason: string): Promise<RunFinalization> {
-    const runPaths = buildRunPaths(this.context.cwd, this.context.meta.runSlug);
-    const payload = buildForceFailPublicationPayload({
-      projectDir: this.context.projectDir,
-      runPaths,
-      meta: this.context.meta,
-      reason,
-    });
-    const root = openRunStorageTerminalRecovery({
-      databasePath: runPaths.databaseAbs,
-    });
-    let primaryError: unknown;
-    let commitReceipt: ReturnType<typeof root.forceFailRun> | undefined;
-    try {
-      commitReceipt = root.forceFailRun({
-        expectedRunId: this.context.meta.runSlug,
-        ownerKey: `task-force-fail:${this.context.taskName}`,
-        leaseDurationMs: FORCE_FAIL_LEASE_DURATION_MS,
-        reason,
-        iteration: payload.iterations,
-        publicationPayload: serializeWorkflowTerminalPublication(payload),
-      });
-    } catch (error) {
-      primaryError = error;
-    }
-    const cleanupErrors: unknown[] = [];
-    try {
-      root.close();
-    } catch (error) {
-      cleanupErrors.push(error);
-    }
-    if (primaryError !== undefined) {
-      if (cleanupErrors.length === 0) {
-        throw primaryError;
-      }
-      throw new AggregateError(
-        [primaryError, ...cleanupErrors],
-        errorMessage(primaryError),
-        { cause: primaryError },
-      );
-    }
-    if (commitReceipt === undefined) {
-      throw new Error('SQLite force-fail terminal commit receipt is missing');
-    }
-    const finalization = await recoverWorkflowTerminalPublication({
-      databasePath: runPaths.databaseAbs,
-      expectedRunId: this.context.meta.runSlug,
-    });
-    return Object.freeze({
-      receipt: Object.freeze({
-        runId: commitReceipt.runId,
-        publicationId: commitReceipt.eventId,
-        runStatus: 'failed' as const,
-        iteration: commitReceipt.iteration,
-        payloadSha256: commitReceipt.payloadDigest,
-        proof: {
-          backend: 'sqlite' as const,
-          terminalAt: commitReceipt.terminalAt,
-        },
-      }),
-      issues: Object.freeze([
-        ...cleanupErrors.map((error) => new RunCleanupError(error)),
-        ...finalization.issues,
-      ]),
-    });
-  }
-}
-
 export function createFileTaskRunForceFailStorage(
   context: TaskRunForceFailAdapterContext,
 ): WorkflowRunForceFailHandle {
   return new FileTaskRunForceFailStorage(context);
-}
-
-export function createSqliteTaskRunForceFailStorage(
-  context: TaskRunForceFailAdapterContext,
-): WorkflowRunForceFailHandle {
-  return new SqliteTaskRunForceFailStorage(context);
 }
 
 function buildForceFailPublicationPayload(input: {
@@ -163,7 +71,10 @@ function buildForceFailPublicationPayload(input: {
   readonly meta: RunMeta;
   readonly reason: string;
 }) {
-  const ndjsonLogPath = resolveRunNdjsonLog(input.runPaths.logsAbs);
+  const ndjsonLogPath = resolveRunNdjsonLog(
+    input.runPaths.logsAbs,
+    input.meta,
+  );
   const sessionLog = requireSessionLog(
     ndjsonLogPath,
     input.meta,
@@ -205,16 +116,44 @@ function buildForceFailPublicationPayload(input: {
   });
 }
 
-function resolveRunNdjsonLog(logsDirectory: string): string {
+function resolveRunNdjsonLog(
+  logsDirectory: string,
+  meta: RunMeta,
+): string {
+  if (!existsSync(logsDirectory)) {
+    return createForceFailSessionLog(logsDirectory, meta);
+  }
   const files = readdirSync(logsDirectory, { withFileTypes: true })
     .filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl'))
-    .map((entry) => entry.name);
-  if (files.length !== 1) {
+    .map((entry) => join(logsDirectory, entry.name));
+  if (files.length === 0) {
+    return createForceFailSessionLog(logsDirectory, meta);
+  }
+  const matching = files.filter((path) => {
+    const sessionLog = loadSessionLog(path);
+    return sessionLog !== null && sessionLogMatchesRun(sessionLog, meta);
+  });
+  if (matching.length !== 1) {
     throw new Error(
-      `Run force-fail requires exactly one NDJSON session log in ${logsDirectory}`,
+      `Run force-fail requires exactly one identity-matching NDJSON session log in ${logsDirectory}`,
     );
   }
-  return join(logsDirectory, files[0]!);
+  return matching[0]!;
+}
+
+function createForceFailSessionLog(
+  logsDirectory: string,
+  meta: RunMeta,
+): string {
+  return initNdjsonLog(
+    `force-fail-${meta.runSlug}`,
+    meta.task,
+    meta.workflow,
+    {
+      logsDir: logsDirectory,
+      startTime: meta.startTime,
+    },
+  );
 }
 
 function requireSessionLog(
@@ -226,10 +165,7 @@ function requireSessionLog(
   if (sessionLog === null) {
     throw new Error(`Run force-fail session log is missing or invalid: ${path}`);
   }
-  if (
-    sessionLog.task !== meta.task
-    || sessionLog.workflowName !== meta.workflow
-  ) {
+  if (!sessionLogMatchesRun(sessionLog, meta)) {
     throw new Error(
       `Run force-fail session log identity does not match run "${meta.runSlug}"`,
     );
@@ -240,12 +176,17 @@ function requireSessionLog(
   };
 }
 
+function sessionLogMatchesRun(
+  sessionLog: SessionLog,
+  meta: RunMeta,
+): boolean {
+  return sessionLog.task === meta.task
+    && sessionLog.workflowName === meta.workflow
+    && sessionLog.startTime === meta.startTime;
+}
+
 function resolveForceFailIteration(meta: RunMeta, sessionLog: SessionLog): number {
   return meta.currentIteration === undefined
     ? sessionLog.iterations
     : meta.currentIteration;
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

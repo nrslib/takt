@@ -268,13 +268,57 @@ describe('executeWorkflow claude-terminal integration', () => {
       operation_claim_token: expect.any(String),
     });
 
-    const resumed = await executeWorkflow(makeConfig(), 'resumed target task', projectDir, {
+    terminalMocks.waitForAssistantResponse
+      .mockResolvedValueOnce({
+        sessionId: 'claude-session-1',
+        assistantText: 'work complete',
+        events: [],
+      })
+      .mockResolvedValueOnce({
+        sessionId: 'claude-session-1',
+        assistantText: '{"step":1,"reason":"done"}',
+        events: [],
+      });
+    const resumed = await executeWorkflow(makeMultiRuleConfig(), 'resumed target task', projectDir, {
       projectCwd: projectDir,
       provider: 'claude-terminal',
       reportDirName: resumedRunSlug,
       resumeSource: { sourceRunSlug: failedRunSlug, resumeMode: 'requeue' },
     });
     expect(resumed.success).toBe(true);
+    const resumedMeta = JSON.parse(await readFile(
+      join(projectDir, '.takt', 'runs', resumedRunSlug, 'meta.json'),
+      'utf-8',
+    )) as { workflow: string };
+    expect(resumedMeta.workflow).toBe('claude-terminal-workflow-phase3');
+  });
+
+  it('source runが欠落したrequeueも新しいrunとして開始する', async () => {
+    const { executeWorkflow } = await import('../features/tasks/execute/workflowExecution.js');
+    const targetRunSlug = '20260801-missing-source-resumed';
+
+    const resumed = await executeWorkflow(makeConfig(), 'resumed task', projectDir, {
+      projectCwd: projectDir,
+      provider: 'claude-terminal',
+      reportDirName: targetRunSlug,
+      resumeSource: {
+        sourceRunSlug: '20260801-missing-source',
+        resumeMode: 'requeue',
+      },
+    });
+
+    expect(resumed.success).toBe(true);
+    const resumedMeta = JSON.parse(await readFile(
+      join(projectDir, '.takt', 'runs', targetRunSlug, 'meta.json'),
+      'utf-8',
+    )) as {
+      source_run_slug?: string;
+      operation_journal_run_slug?: string;
+    };
+    expect(resumedMeta).toMatchObject({
+      source_run_slug: '20260801-missing-source',
+      operation_journal_run_slug: targetRunSlug,
+    });
   });
 
 });

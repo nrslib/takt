@@ -14,6 +14,9 @@ import {
   type WorkflowExecutionResumeLineage,
 } from './workflowExecutionBootstrap.js';
 import {
+  OperationLineageUnavailableError,
+} from '../../../core/workflow/operations/operation-recovery-error.js';
+import {
   createWorkflowExecutionContext,
   createWorkflowCallResolver,
 } from './workflowExecutionContext.js';
@@ -67,7 +70,6 @@ import {
 } from './workflowExecutionReporting.js';
 import { stageTaskSpecForExecution } from './taskSpecContext.js';
 import { GitSelectorCommandRunner } from '../../../infra/task/selector-git-command-runner.js';
-import { buildRunPaths } from '../../../core/workflow/run/run-paths.js';
 import {
   loadWorkflowExecutionBundle,
   prepareWorkflowExecutionBundle,
@@ -202,20 +204,12 @@ async function executeWorkflowInternal(
     ? options
     : { ...options, prContext };
   const parentRunPid = process.pid;
-  const sourceRunSlug = options.resumeSource?.sourceRunSlug;
-  if (options.resumeSource !== undefined && sourceRunSlug === undefined) {
-    throw new Error('Workflow resume requires a source run slug with an execution bundle');
-  }
-  const sourceBundle = sourceRunSlug === undefined
-    ? undefined
-    : loadWorkflowExecutionBundle(buildRunPaths(cwd, sourceRunSlug));
-  const inputWorkflowConfig = sourceBundle?.rootWorkflow ?? workflowConfig;
-  const liveWorkflowCallResolver = sourceBundle === undefined
-    ? createWorkflowCallResolver(createWorkflowExecutionContext(workflowConfig, options.projectCwd))
-    : undefined;
-  const preparedBundle = sourceBundle?.prepared ?? prepareWorkflowExecutionBundle({
+  const liveWorkflowCallResolver = createWorkflowCallResolver(
+    createWorkflowExecutionContext(workflowConfig, options.projectCwd),
+  );
+  const preparedBundle = prepareWorkflowExecutionBundle({
     rootWorkflow: workflowConfig,
-    workflowCallResolver: liveWorkflowCallResolver!,
+    workflowCallResolver: liveWorkflowCallResolver,
     projectCwd: options.projectCwd,
     lookupCwd: cwd,
   });
@@ -227,12 +221,12 @@ async function executeWorkflowInternal(
       projectCwd: options.projectCwd,
     },
   );
-  await runStorageComposition.recovery.reconcilePending();
-  const validatedResumeLineage = options.resumeSource === undefined
-    ? undefined
-    : resolveWorkflowExecutionResumeSourceLineage(cwd, options.resumeSource);
+  const availableSourceLineage = resolveAvailableSourceLineage(
+    cwd,
+    options.resumeSource,
+  );
   const activeRun = await runStorageComposition.storage.beginRun({
-    workflowConfig: inputWorkflowConfig,
+    workflowConfig,
     task,
     ...(options.reportDirName === undefined
       ? {}
@@ -242,8 +236,12 @@ async function executeWorkflowInternal(
       : { resumeSource: options.resumeSource }),
   });
   const publishedResumeSource = options.resumeSource;
-  const resumeLineage: WorkflowExecutionResumeLineage = validatedResumeLineage
-    ?? resolveWorkflowExecutionResumeLineage(cwd, activeRun.runSlug, undefined);
+  const resumeLineage: WorkflowExecutionResumeLineage =
+    availableSourceLineage ?? resolveWorkflowExecutionResumeLineage(
+      cwd,
+      activeRun.runSlug,
+      options.resumeSource,
+    );
   let bootstrap: WorkflowExecutionBootstrap;
   try {
     publishWorkflowExecutionBundle(activeRun.runPaths, preparedBundle);
@@ -267,7 +265,7 @@ async function executeWorkflowInternal(
   } catch (bootstrapError) {
     return await terminalizeBootstrapFailure({
       activeRun,
-      workflowConfig: inputWorkflowConfig,
+      workflowConfig,
       task,
       projectCwd: options.projectCwd,
       primaryError: bootstrapError,
@@ -623,6 +621,23 @@ async function executeWorkflowInternal(
         ...executionResult,
         finalizationIssues: Object.freeze([...finalizationIssues]),
       };
+}
+
+function resolveAvailableSourceLineage(
+  cwd: string,
+  resumeSource: WorkflowExecutionOptions['resumeSource'],
+): WorkflowExecutionResumeLineage | undefined {
+  if (resumeSource?.sourceRunSlug === undefined) {
+    return undefined;
+  }
+  try {
+    return resolveWorkflowExecutionResumeSourceLineage(cwd, resumeSource);
+  } catch (error) {
+    if (error instanceof OperationLineageUnavailableError) {
+      return undefined;
+    }
+    throw error;
+  }
 }
 
 async function terminalizeBootstrapFailure(input: {

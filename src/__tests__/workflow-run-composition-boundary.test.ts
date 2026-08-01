@@ -9,7 +9,7 @@ function source(path: string): string {
 }
 
 describe('workflow run composition boundary', () => {
-  it('workflow orchestrationとforce-fail actionはgeneric compositionだけを参照する', () => {
+  it('run lifecycleはfile authorityに固定しSQLite実装を上位層へ露出しない', () => {
     const upperLayerSources = [
       source('src/features/tasks/execute/workflowExecution.ts'),
       source('src/features/tasks/list/taskRunForceFailStorage.ts'),
@@ -18,16 +18,15 @@ describe('workflow run composition boundary', () => {
 
     expect(upperLayerSources).toContain('workflowRunStorage.js');
     expect(upperLayerSources).not.toMatch(
-      /fileWorkflowRun|sqliteWorkflowRun|openRunStorage|createRunStorage/,
+      /sqliteWorkflowRun|openRunStorage|createRunStorage/,
     );
-    expect(upperLayerSources).not.toContain('workflowRunForceFailAdapters');
     expect(upperLayerSources).not.toMatch(
-      /storageBackend\s*===|case ['"](?:file|sqlite)['"]/,
+      /storageBackend\s*===|case ['"]sqlite['"]/,
     );
     expect(upperLayerSources).not.toContain('.storageBackend');
   });
 
-  it('backend選択は唯一のcomposition factoryにだけ存在する', () => {
+  it('compositionはrun lifecycle backendを選択せずFinding storageだけを選択する', () => {
     const composition = source(
       'src/features/tasks/execute/workflowRunStorage.ts',
     );
@@ -35,8 +34,11 @@ describe('workflow run composition boundary', () => {
       'src/features/tasks/execute/workflowRunExecution.ts',
     );
 
-    expect(composition.match(/case 'file'/g)).toHaveLength(1);
-    expect(composition.match(/case 'sqlite'/g)).toHaveLength(1);
+    expect(composition).toContain('#findingStorageBackend');
+    expect(composition).toContain("backend: 'file'");
+    expect(composition).not.toMatch(/case ['"](?:file|sqlite)['"]/);
+    expect(composition).not.toContain('reconcilePending');
+    expect(composition).not.toContain('createForceFail');
     expect(execution).toContain('finish(');
     expect(execution).not.toContain('stageTerminal');
     expect(execution).not.toMatch(/\bcomplete\(/);

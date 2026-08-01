@@ -1,4 +1,6 @@
 import {
+  loadWorkflowByIdentifier,
+  resolveWorkflowCallTarget,
   resolveWorkflowConfigValue,
 } from '../../../infra/config/index.js';
 import {
@@ -15,7 +17,6 @@ import type { WorkflowResumePoint } from '../../../core/models/index.js';
 import type { RunResumeSource } from '../../../core/workflow/run/run-meta.js';
 import { parseWorkflowResumePoint } from '../../../core/workflow/resume-point-codec.js';
 import { trimResumePointStackForWorkflow } from '../../../core/workflow/run/resume-point.js';
-import { buildRunPaths } from '../../../core/workflow/run/run-paths.js';
 import { getGitProvider, type GitProvider, type Issue } from '../../../infra/git/index.js';
 import { withProgress } from '../../../shared/ui/index.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
@@ -33,7 +34,7 @@ import {
   materializeTaskPullRequestWorktreeContext,
   resolveTaskPullRequestContext,
 } from '../pullRequestWorktreeContext.js';
-import { loadWorkflowExecutionBundle } from './workflowExecutionBundle.js';
+import { warnIfResumePointAdjusted } from './resumePointAdjustmentWarning.js';
 
 const log = createLogger('task');
 
@@ -174,7 +175,7 @@ function resolveRetryResume(
   lookupCwd: string,
   configuredStartStep: string | undefined,
   resumePoint: WorkflowResumePoint | undefined,
-  sourceRunSlug: string | undefined,
+  outputMode: ExecuteTaskOptions['outputMode'],
 ): {
   startStep?: string;
   resumePoint?: WorkflowResumePoint;
@@ -182,36 +183,54 @@ function resolveRetryResume(
   if (!resumePoint) {
     return configuredStartStep ? { startStep: configuredStartStep } : {};
   }
-  if (sourceRunSlug === undefined) {
-    throw new Error('Workflow resume point requires a source run execution bundle');
+  const workflowConfig = loadWorkflowByIdentifier(
+    workflowIdentifier,
+    projectCwd,
+    { lookupCwd },
+  );
+  if (!workflowConfig) {
+    const resolved = configuredStartStep
+      ? { startStep: configuredStartStep }
+      : {};
+    warnIfResumePointAdjusted({
+      context: 'task_reexecution',
+      outputMode,
+      workflow: workflowIdentifier,
+      original: resumePoint,
+      accepted: undefined,
+      startStep: configuredStartStep,
+    });
+    return resolved;
   }
-  const sourceBundle = loadWorkflowExecutionBundle(buildRunPaths(lookupCwd, sourceRunSlug));
-  const workflowConfig = sourceBundle.rootWorkflow;
 
   const resolvedResumePoint = trimResumePointStackForWorkflow({
     workflow: workflowConfig,
     resumePoint,
-    resolveWorkflowCall: (parentWorkflow, step) => sourceBundle.workflowCallResolver({
+    resolveWorkflowCall: (parentWorkflow, step) => resolveWorkflowCallTarget(
       parentWorkflow,
       step,
       projectCwd,
       lookupCwd,
-    }),
+    ),
   });
-  if (resolvedResumePoint?.stack.length !== resumePoint.stack.length) {
-    throw new Error(`Source run "${sourceRunSlug}" resume stack does not match its workflow execution bundle`);
-  }
   const rootEntry = resolvedResumePoint?.stack[0];
-  if (rootEntry) {
-    return {
+  const resolved = rootEntry
+    ? {
       startStep: rootEntry.step,
       resumePoint: resolvedResumePoint,
+    }
+    : {
+      ...(configuredStartStep ? { startStep: configuredStartStep } : {}),
     };
-  }
-
-  return {
-    ...(configuredStartStep ? { startStep: configuredStartStep } : {}),
-  };
+  warnIfResumePointAdjusted({
+    context: 'task_reexecution',
+    outputMode,
+    workflow: workflowConfig.name,
+    original: resumePoint,
+    accepted: resolvedResumePoint,
+    startStep: resolved.startStep,
+  });
+  return resolved;
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
@@ -402,7 +421,7 @@ export async function resolveTaskExecution(
     execCwd,
     configuredStartStep,
     resumePoint,
-    resumeSource?.sourceRunSlug,
+    options?.outputMode,
   );
   const resolvedRetryNote = data.retry_note;
   const maxStepsOverride = data.exceeded_max_steps;

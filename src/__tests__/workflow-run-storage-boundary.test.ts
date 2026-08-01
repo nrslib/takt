@@ -22,7 +22,6 @@ import {
 import {
   createWorkflowTerminalPayloadFactory,
 } from '../features/tasks/execute/workflowTerminalPayload.js';
-import { openRunStorage } from '../infra/run-storage/index.js';
 
 const roots: string[] = [];
 
@@ -110,7 +109,7 @@ async function failRun(
 
 describe('workflow run storage boundary', () => {
   it.each(['file', 'sqlite'] as const)(
-    '%s strategy binds terminal infrastructure before exposing publication',
+    '%s Finding設定でもrun lifecycleは単一storage portだけを公開する',
     (backend) => {
       const provider = createWorkflowRunComposition(backend, {
         cwd: '/nonexistent/workflow-run-storage-boundary',
@@ -125,13 +124,9 @@ describe('workflow run storage boundary', () => {
       expect(provider).not.toHaveProperty('abortController');
       expect(provider).not.toHaveProperty('bootstrap');
       expect(provider).toHaveProperty('storage.beginRun');
-      expect(provider).toHaveProperty('admin.createForceFail');
-      expect(provider).toHaveProperty('recovery.reconcilePending');
-      expect(Object.keys(provider).sort()).toEqual([
-        'admin',
-        'recovery',
-        'storage',
-      ]);
+      expect(provider).not.toHaveProperty('admin');
+      expect(provider).not.toHaveProperty('recovery');
+      expect(Object.keys(provider)).toEqual(['storage']);
     },
   );
 
@@ -156,9 +151,7 @@ describe('workflow run storage boundary', () => {
       });
 
       expect(existsSync(activeRun.runPaths.runRootAbs)).toBe(true);
-      if (backend === 'sqlite') {
-        expect(existsSync(activeRun.runPaths.databaseAbs)).toBe(true);
-      }
+      expect(existsSync(activeRun.runPaths.databaseAbs)).toBe(false);
       await failRun(activeRun, cwd);
       expect(existsSync(activeRun.runPaths.metaAbs)).toBe(true);
     },
@@ -239,7 +232,7 @@ describe('workflow run storage boundary', () => {
   });
 
   it(
-    'SQLite同一秒の2開始を原子的に別slugへ予約し、先行authorityを上書きしない',
+    'SQLite Finding設定でも同一秒の2開始をfile directoryで別slugへ予約する',
     async () => {
       const cwd = createRoot();
       const composition = createWorkflowRunComposition('sqlite', {
@@ -256,11 +249,10 @@ describe('workflow run storage boundary', () => {
       });
 
       expect(second.runSlug).not.toBe(first.runSlug);
-      const firstRoot = openRunStorage({
-        databasePath: first.runPaths.databaseAbs,
-      });
-      expect(firstRoot.readResumeSnapshot().run.runId).toBe(first.runSlug);
-      firstRoot.close();
+      expect(existsSync(first.runPaths.runRootAbs)).toBe(true);
+      expect(existsSync(second.runPaths.runRootAbs)).toBe(true);
+      expect(existsSync(first.runPaths.databaseAbs)).toBe(false);
+      expect(existsSync(second.runPaths.databaseAbs)).toBe(false);
       await failRun(first, cwd);
       await failRun(second, cwd);
     },

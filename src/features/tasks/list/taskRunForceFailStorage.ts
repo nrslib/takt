@@ -1,6 +1,4 @@
-import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { buildRunPaths } from '../../../core/workflow/run/run-paths.js';
 import {
   readRunMetaBySlug,
   type RunMeta,
@@ -9,8 +7,8 @@ import { resolveCloneBaseDir } from '../../../infra/task/clone.js';
 import type { TaskListItem } from '../../../infra/task/types.js';
 import { isPathInside } from '../../../shared/utils/index.js';
 import {
-  createWorkflowRunCompositionForExistingRun,
-} from '../execute/workflowRunStorage.js';
+  createFileTaskRunForceFailStorage,
+} from '../execute/workflowRunForceFailAdapters.js';
 import type {
   WorkflowRunForceFailHandle,
 } from '../execute/workflowRunAdmin.js';
@@ -29,16 +27,11 @@ export function createTaskRunForceFailStorage(input: {
   if (run === undefined) {
     return undefined;
   }
-  const composition = createWorkflowRunCompositionForExistingRun(
-    run.meta,
-    {
-      cwd: run.cwd,
-      projectCwd: input.projectDir,
-    },
-  );
-  return composition.admin.createForceFail({
+  return createFileTaskRunForceFailStorage({
     taskName: input.task.name,
     meta: run.meta,
+    cwd: run.cwd,
+    projectDir: input.projectDir,
   });
 }
 
@@ -55,12 +48,6 @@ function resolveTaskRun(input: {
     const meta = readRunMetaBySlug(cwd, runSlug, input.onWarning);
     if (meta !== null) {
       return { cwd, meta };
-    }
-    const runPaths = buildRunPaths(cwd, runSlug);
-    if (existsSync(runPaths.databaseAbs)) {
-      throw new Error(
-        `Run metadata is required for SQLite force-fail "${runSlug}"`,
-      );
     }
   }
   return undefined;

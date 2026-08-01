@@ -22,11 +22,17 @@ import {
 } from '../features/tasks/execute/workflowExecutionBundle.js';
 
 const mockGetGitProvider = vi.hoisted(() => vi.fn());
+const mockWarn = vi.hoisted(() => vi.fn());
 let originalTaktConfigDir: string | undefined;
 
 vi.mock('../infra/git/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   getGitProvider: mockGetGitProvider,
+}));
+
+vi.mock('../shared/ui/index.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  warn: mockWarn,
 }));
 
 import { resolveTaskExecution, resolveTaskIssue } from '../features/tasks/execute/resolveTask.js';
@@ -50,6 +56,7 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  mockWarn.mockClear();
   originalTaktConfigDir = process.env.TAKT_CONFIG_DIR;
   invalidateGlobalConfigCache();
   invalidateAllResolvedConfigCache();
@@ -282,7 +289,7 @@ describe('resolveTaskExecution', () => {
     expect(result.reportDirName).not.toBe(sourceRunSlug);
   });
 
-  it('should reject workflow_call retry resume_point without a source bundle', async () => {
+  it('should prefer resume_point root step over stored start_movement on workflow_call retry', async () => {
     const root = createTempProjectDir();
     const workflowDir = path.join(root, '.takt', 'workflows');
     fs.mkdirSync(workflowDir, { recursive: true });
@@ -324,11 +331,18 @@ describe('resolveTaskExecution', () => {
       } as unknown) as NonNullable<TaskInfo['data']>,
     });
 
-    await expect(resolveTaskExecutionStrict(task, root))
-      .rejects.toThrow('Workflow resume point requires a source run execution bundle');
+    const result = await resolveTaskExecutionStrict(task, root);
+
+    expect(result.startStep).toBe('delegate');
+    expect(result.resumePoint).toEqual({
+      ...task.data?.resume_point,
+      stack: task.data?.resume_point?.stack.slice(0, 1),
+    });
+    expect(result.initialIterationOverride).toBe(7);
+    expect(mockWarn).toHaveBeenCalledTimes(1);
   });
 
-  it('should reject child resume_point without a source bundle even when live workflows exist', async () => {
+  it('should preserve resume_point when child workflow step no longer resolves', async () => {
     const root = createTempProjectDir();
     const workflowDir = path.join(root, '.takt', 'workflows');
     fs.mkdirSync(path.join(workflowDir, 'takt'), { recursive: true });
@@ -390,11 +404,17 @@ describe('resolveTaskExecution', () => {
       } as unknown) as NonNullable<TaskInfo['data']>,
     });
 
-    await expect(resolveTaskExecutionStrict(task, root))
-      .rejects.toThrow('Workflow resume point requires a source run execution bundle');
+    const result = await resolveTaskExecutionStrict(task, root);
+
+    expect(result.startStep).toBe('delegate');
+    expect(result.resumePoint).toEqual({
+      ...resumePoint,
+      stack: resumePoint.stack.slice(0, 1),
+    });
+    expect(result.initialIterationOverride).toBe(7);
   });
 
-  it('should reject child resume_point without a source bundle instead of live fallback', async () => {
+  it('should preserve resume_point when child workflow no longer exists', async () => {
     const root = createTempProjectDir();
     const workflowDir = path.join(root, '.takt', 'workflows');
     fs.mkdirSync(workflowDir, { recursive: true });
@@ -436,11 +456,17 @@ describe('resolveTaskExecution', () => {
       } as unknown) as NonNullable<TaskInfo['data']>,
     });
 
-    await expect(resolveTaskExecutionStrict(task, root))
-      .rejects.toThrow('Workflow resume point requires a source run execution bundle');
+    const result = await resolveTaskExecutionStrict(task, root);
+
+    expect(result.startStep).toBe('delegate');
+    expect(result.resumePoint).toEqual({
+      ...resumePoint,
+      stack: resumePoint.stack.slice(0, 1),
+    });
+    expect(result.initialIterationOverride).toBe(7);
   });
 
-  it('should reject worktree child resume_point when its source bundle is missing', async () => {
+  it('should preserve child resume_point entries when worktree workflow exists only under execCwd', async () => {
     const root = createTempProjectDir();
     const worktreePath = path.join(root, '.takt', 'worktrees', 'task-name');
     const worktreeRootWorkflowDir = path.join(worktreePath, '.takt', 'workflows');
@@ -509,11 +535,15 @@ describe('resolveTaskExecution', () => {
       } as unknown) as NonNullable<TaskInfo['data']>,
     });
 
-    await expect(resolveTaskExecutionStrict(task, root))
-      .rejects.toThrow('Workflow resume point requires a source run execution bundle');
+    const result = await resolveTaskExecutionStrict(task, root);
+
+    expect(result.execCwd).toBe(worktreePath);
+    expect(result.startStep).toBe('delegate');
+    expect(result.resumePoint).toEqual(resumePoint);
+    expect(result.initialIterationOverride).toBe(7);
   });
 
-  it('should reject deep resume_point without a source bundle instead of trimming live workflows', async () => {
+  it('should trim resume_point to the nearest valid workflow_call when a deep child step no longer resolves', async () => {
     const root = createTempProjectDir();
     const workflowDir = path.join(root, '.takt', 'workflows');
     fs.mkdirSync(path.join(workflowDir, 'takt'), { recursive: true });
@@ -597,11 +627,17 @@ describe('resolveTaskExecution', () => {
       } as unknown) as NonNullable<TaskInfo['data']>,
     });
 
-    await expect(resolveTaskExecutionStrict(task, root))
-      .rejects.toThrow('Workflow resume point requires a source run execution bundle');
+    const result = await resolveTaskExecutionStrict(task, root);
+
+    expect(result.startStep).toBe('delegate');
+    expect(result.resumePoint).toEqual({
+      ...resumePoint,
+      stack: resumePoint.stack.slice(0, 2),
+    });
+    expect(result.initialIterationOverride).toBe(7);
   });
 
-  it('should reject invalid root resume_point without a source bundle instead of dropping it', async () => {
+  it('should drop resume_point without a UI warning in silent output mode', async () => {
     const root = createTempProjectDir();
     const workflowDir = path.join(root, '.takt', 'workflows');
     fs.mkdirSync(workflowDir, { recursive: true });
@@ -636,8 +672,14 @@ describe('resolveTaskExecution', () => {
       } as unknown) as NonNullable<TaskInfo['data']>,
     });
 
-    await expect(resolveTaskExecutionStrict(task, root))
-      .rejects.toThrow('Workflow resume point requires a source run execution bundle');
+    const result = await resolveTaskExecution(task, root, undefined, {
+      outputMode: 'silent',
+    });
+
+    expect(result.startStep).toBe('implement');
+    expect(result.resumePoint).toBeUndefined();
+    expect(result.initialIterationOverride).toBeUndefined();
+    expect(mockWarn).not.toHaveBeenCalled();
   });
 
 
@@ -1856,7 +1898,7 @@ describe('resolveTaskExecution', () => {
     branchExistsSpy.mockRestore();
   });
 
-  it('should sync project-local .takt resources before rejecting a missing resume source bundle', async () => {
+  it('should sync project-local .takt resources for a reused worktree re-execution resumed from resume_point', async () => {
     const root = createTempProjectDir();
     configureIsolatedGlobalConfig(root);
     const worktreePath = path.join(root, '.takt', 'worktrees', 'existing-safe-worktree');
@@ -1891,8 +1933,7 @@ describe('resolveTaskExecution', () => {
       status: 'pending',
     });
 
-    await expect(resolveTaskExecutionStrict(task, root))
-      .rejects.toThrow('Workflow resume point requires a source run execution bundle');
+    await resolveTaskExecutionStrict(task, root);
 
     expect(readTaktFile(worktreePath, 'config.yaml')).toBe('language: ja\n');
     expect(readTaktFile(worktreePath, 'facets/personas/coder.md')).toBe('You are root coder.\n');

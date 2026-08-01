@@ -26,9 +26,6 @@ import { createLogger } from '../../../shared/utils/index.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import type { ExecuteTaskOptions, WorkflowExecutionOptions, WorkflowExecutionResult } from './types.js';
 import { buildTraceTaskMetadata } from './traceTaskMetadata.js';
-import { buildRunPaths } from '../../../core/workflow/run/run-paths.js';
-import type { WorkflowCallResolver } from '../../../core/workflow/types.js';
-import { loadWorkflowExecutionBundle } from './workflowExecutionBundle.js';
 
 const log = createLogger('task');
 
@@ -148,14 +145,11 @@ export async function executeTaskWorkflow(
     prContext,
   } = options;
   const traceTaskMetadata = resolveTraceTaskMetadata(options);
-  if (resumeSource !== undefined && resumeSource.sourceRunSlug === undefined) {
-    throw new Error('Workflow resume requires a source run slug with an execution bundle');
-  }
-  const sourceBundle = resumeSource?.sourceRunSlug === undefined
-    ? undefined
-    : loadWorkflowExecutionBundle(buildRunPaths(cwd, resumeSource.sourceRunSlug));
-  const workflowConfig = sourceBundle?.rootWorkflow
-    ?? loadWorkflowByIdentifier(workflowIdentifier, projectCwd, { lookupCwd: cwd });
+  const workflowConfig = loadWorkflowByIdentifier(
+    workflowIdentifier,
+    projectCwd,
+    { lookupCwd: cwd },
+  );
   const safeWorkflowIdentifier = sanitizeTerminalText(workflowIdentifier);
 
   if (!workflowConfig) {
@@ -194,7 +188,6 @@ export async function executeTaskWorkflow(
       projectCwd,
       cwd,
       agentOverrides,
-      sourceBundle?.workflowCallResolver,
     ),
     outputMode,
     eventSink,
@@ -257,13 +250,11 @@ function resolveSelectorProvider(
   projectCwd: string,
   lookupCwd: string,
   overrides: ExecuteTaskOptions['agentOverrides'],
-  workflowCallResolver?: WorkflowCallResolver,
 ): SelectorProviderInfo | undefined {
   const resolution = resolveWorkflowSelector(workflow, {
     projectCwd,
     lookupCwd,
     overrides,
-    ...(workflowCallResolver === undefined ? {} : { workflowCallResolver }),
   });
   if (!resolution.applies) {
     return undefined;

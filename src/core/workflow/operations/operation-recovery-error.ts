@@ -5,6 +5,13 @@ export class OperationRecoveryError extends Error {
   }
 }
 
+export class OperationLineageUnavailableError extends OperationRecoveryError {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'OperationLineageUnavailableError';
+  }
+}
+
 export class OperationJournalConflictError extends OperationRecoveryError {
   constructor(message: string, options?: ErrorOptions) {
     super(message, options);

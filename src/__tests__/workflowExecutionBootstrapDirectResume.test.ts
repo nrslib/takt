@@ -1135,6 +1135,34 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     expect(existsSync(join(projectDir, '.takt', 'runs', 'run-c'))).toBe(false);
   });
 
+  it('rejects source ancestry that crosses operation journals', async () => {
+    const projectDir = createTempProject();
+    seedResumeSourceRun(projectDir, 'journal-a-source', {
+      journalRunSlug: 'journal-a-source',
+      claimToken: 'claim-a',
+    });
+    seedResumeSourceRun(projectDir, 'journal-b-source', {
+      sourceRunSlug: 'journal-a-source',
+      journalRunSlug: 'journal-b-source',
+      claimToken: 'claim-b',
+    });
+
+    await expect(createWorkflowExecutionBootstrap(
+      workflowConfig,
+      'Resume different journal',
+      projectDir,
+      {
+        projectCwd: projectDir,
+        provider: 'mock',
+        reportDirName: 'different-journal-target',
+        resumeSource: {
+          sourceRunSlug: 'journal-b-source',
+          resumeMode: 'requeue',
+        },
+      },
+    )).rejects.toThrow(/belongs to a different operation journal/);
+  });
+
   it('rejects a restored operation journal slug that traverses outside the runs directory', async () => {
     const projectDir = createTempProject();
     seedResumeSourceRun(projectDir);
@@ -1239,10 +1267,10 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     );
   });
 
-  it('fails fast when a resume source run is unavailable', async () => {
+  it('starts a new operation journal when resume source lineage is unavailable', async () => {
     const projectDir = createTempProject();
 
-    await expect(createWorkflowExecutionBootstrap(workflowConfig, 'Resume missing run', projectDir, {
+    const bootstrap = await createWorkflowExecutionBootstrap(workflowConfig, 'Resume missing run', projectDir, {
       projectCwd: projectDir,
       provider: 'mock',
       reportDirName: 'fallback-resume',
@@ -1250,9 +1278,56 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
         sourceRunSlug: '20260524-missing-run',
         resumeMode: 'requeue',
       },
-    })).rejects.toThrow('Resume source run "20260524-missing-run" is missing');
-    expect(mockLogWarn).not.toHaveBeenCalled();
-    expect(existsSync(join(projectDir, '.takt', 'runs', 'fallback-resume'))).toBe(false);
+    });
+
+    expect(bootstrap.operationJournal.journalRunSlug).toBe('fallback-resume');
+    expect(mockLogWarn).toHaveBeenCalledWith(
+      'Resume source operation lineage is unavailable; starting a new operation journal',
+      expect.objectContaining({
+        sourceRunSlug: '20260524-missing-run',
+        targetRunSlug: 'fallback-resume',
+      }),
+    );
+    expect(bootstrap.runSlug).toBe('fallback-resume');
+  });
+
+  it('starts a new operation journal when source lineage metadata is incomplete', async () => {
+    const projectDir = createTempProject();
+    seedResumeSourceRun(projectDir, 'incomplete-source');
+    const sourceMetaPath = join(
+      projectDir,
+      '.takt',
+      'runs',
+      'incomplete-source',
+      'meta.json',
+    );
+    const sourceMeta = JSON.parse(
+      readFileSync(sourceMetaPath, 'utf-8'),
+    ) as Record<string, unknown>;
+    delete sourceMeta.operation_claim_token;
+    writeFileSync(sourceMetaPath, JSON.stringify(sourceMeta), 'utf-8');
+
+    const bootstrap = await createWorkflowExecutionBootstrap(
+      workflowConfig,
+      'Resume incomplete lineage',
+      projectDir,
+      {
+        projectCwd: projectDir,
+        provider: 'mock',
+        reportDirName: 'incomplete-lineage-target',
+        resumeSource: {
+          sourceRunSlug: 'incomplete-source',
+          resumeMode: 'requeue',
+        },
+      },
+    );
+
+    expect(bootstrap.operationJournal.journalRunSlug)
+      .toBe('incomplete-lineage-target');
+    expect(mockLogWarn).toHaveBeenCalledWith(
+      'Resume source operation lineage is unavailable; starting a new operation journal',
+      expect.objectContaining({ sourceRunSlug: 'incomplete-source' }),
+    );
   });
 
   it('rejects a running immediate resume source without inspecting terminal ancestors', async () => {
