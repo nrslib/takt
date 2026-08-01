@@ -127,7 +127,12 @@ export class TaskLifecycleService {
     }
 
     if (retryMetadata.startStep) {
-      return { startStep: retryMetadata.startStep };
+      return {
+        startStep: retryMetadata.startStep,
+        ...(retryMetadata.currentIteration !== undefined
+          ? { currentIteration: retryMetadata.currentIteration }
+          : {}),
+      };
     }
 
     if (hasInheritedRetryCheckpoint(task)) {

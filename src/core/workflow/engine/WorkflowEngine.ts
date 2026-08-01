@@ -942,6 +942,8 @@ function restoreActiveResumePoint(
     return;
   }
 
+  // The persisted stack identifies where to resume. Keep the current runtime-owned
+  // evidence indexes and selection snapshot so restoration does not discard newer state.
   const restored = cloneWorkflowResumePoint(resumePoint);
   const current = sharedRuntime.activeResumePoint === undefined
     ? undefined

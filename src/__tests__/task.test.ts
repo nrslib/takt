@@ -542,7 +542,7 @@ describe('TaskRunner (tasks.yaml)', () => {
     const failedTask = loadTasksFile(testDir).tasks[0];
     expect(failedTask?.start_movement).toBe('final-review');
     expect(failedTask?.resume_point).toBeUndefined();
-    expect(failedTask?.exceeded_current_iteration).toBeUndefined();
+    expect(failedTask?.exceeded_current_iteration).toBe(60);
     expect(failedTask?.exceeded_max_steps).toBeUndefined();
   });
 
