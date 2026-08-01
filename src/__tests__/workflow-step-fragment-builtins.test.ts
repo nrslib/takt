@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
+import { validateWorkflowConfig } from '../core/workflow/engine/WorkflowValidator.js';
 import { invalidateAllResolvedConfigCache, invalidateGlobalConfigCache } from '../infra/config/index.js';
 import {
   getBuiltinLanguageStepsDir,
@@ -11,6 +12,10 @@ import {
 import { buildStepFragmentLookupDirs } from '../infra/config/loaders/stepFragmentLookupDirectories.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
 import { resolveWorkflowStepFragments } from '../infra/config/loaders/workflowStepFragmentResolver.js';
+import {
+  cleanupTestFindingStorage,
+  createTestFindingLedgerStore,
+} from './helpers/finding-storage.js';
 
 type RawStep = Record<string, unknown>;
 type RawWorkflow = { steps: RawStep[] };
@@ -120,6 +125,7 @@ describe('builtin workflow step fragment migration', () => {
   });
 
   afterEach(() => {
+    cleanupTestFindingStorage();
     rmSync(projectDir, { recursive: true, force: true });
     rmSync(globalConfigDir, { recursive: true, force: true });
     if (previousConfigDir === undefined) delete process.env.TAKT_CONFIG_DIR;
@@ -219,6 +225,44 @@ describe('builtin workflow step fragment migration', () => {
     expect(expandedStep).not.toHaveProperty('with');
     expect(expandedStep.knowledge).toEqual({ $param: 'supervise_knowledge' });
     expect(expandedStep.rules).toEqual(step.rules);
+  });
+
+  it.each(LANGUAGES)('keeps the expanded %s supervise step valid for Finding Contract intake', (lang) => {
+    mkdirSync(join(projectDir, '.takt'), { recursive: true });
+    writeFileSync(join(projectDir, '.takt', 'config.yaml'), 'language: ' + lang + '\n', 'utf-8');
+    invalidateAllResolvedConfigCache();
+    const workflow = loadWorkflowFromFile(
+      join(getBuiltinWorkflowsDir(lang), 'merge-readiness-finding-contract-final-gate.yaml'),
+      projectDir,
+    );
+    const supervise = workflow.steps.find((candidate) => candidate.name === 'supervise');
+    const runId = `merge-readiness-supervise-${lang}`;
+
+    expect(supervise?.outputContracts).toEqual([
+      expect.objectContaining({
+        name: 'supervisor-validation.md',
+        formatRef: 'supervisor-validation-finding-contract',
+      }),
+    ]);
+    expect(() => validateWorkflowConfig(workflow, {
+      projectCwd: projectDir,
+      inheritedFindingContract: {
+        contract: {
+          manager: {
+            persona: 'findings-manager',
+            instruction: 'findings-manager',
+            outputContract: 'findings-manager',
+          },
+        },
+        ledgerStore: createTestFindingLedgerStore({
+          projectCwd: projectDir,
+          runId,
+          reportDir: join(projectDir, '.takt', 'runs', runId, 'reports'),
+          workflowName: workflow.name,
+        }),
+        managerAuthority: 'standard',
+      },
+    })).not.toThrow();
   });
 
   it.each(LANGUAGES)('moves structurally identical %s remediation calls to one typed fragment', (lang) => {

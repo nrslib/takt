@@ -15,6 +15,3 @@ output_contracts:
   report:
     - name: supervisor-validation.md
       format: supervisor-validation-finding-contract
-    - name: supervisor-gate-summary.md
-      format: supervisor-gate-summary-finding-contract
-      use_judge: false
