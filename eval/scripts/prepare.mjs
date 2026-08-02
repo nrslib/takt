@@ -70,6 +70,12 @@ const TARGETS = [
     fixture: 'eval/fixtures/initial-review-contract-discovery',
   },
   {
+    id: 'replan-contract-closure',
+    workflow: 'takt-default-high',
+    step: 'replan',
+    fixture: 'eval/fixtures/initial-review-contract-discovery',
+  },
+  {
     id: 'write-tests-contract-traceability',
     workflow: 'default',
     step: 'write_tests',
