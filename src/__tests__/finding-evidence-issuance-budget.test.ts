@@ -46,11 +46,8 @@ function emptyLedger(): FindingLedger {
     evidenceBindings: [],
     lifecycleReservations: [],
     lifecycleEvents: [],
-    rawRecoveryAttempts: [],
-    rawRecoveryResults: [],
     rawFindings: [],
     conflicts: [],
-    interpretations: [],
   };
 }
 
@@ -661,7 +658,6 @@ describe('finding evidence issuance byte budgets', () => {
           reason: 'Target is not established',
           firstObservedAt: observedAt,
           lastObservedAt: observedAt,
-          interpretationEpochs: 0,
           gateEffect: 'block',
           firstObservedRound: 1,
         },

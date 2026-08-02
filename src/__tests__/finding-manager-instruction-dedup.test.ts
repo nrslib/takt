@@ -51,7 +51,6 @@ function ledgerWith(findings: FindingLedgerEntry[]): FindingLedger {
     evidenceRecords,
     rawFindings: [],
     conflicts: [],
-    interpretations: [],
     findings,
   };
 }
@@ -86,7 +85,6 @@ describe('collectDuplicateLocusGroups', () => {
         reason: 'r',
         firstObservedAt: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
         lastObservedAt: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
-        interpretationEpochs: 0,
         gateEffect: 'block' as const,
       },
     };

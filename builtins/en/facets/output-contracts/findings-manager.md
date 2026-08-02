@@ -93,13 +93,8 @@ Rules for `invalidateDecisions` and `duplicateDecisions`:
 - `duplicateDecisions`: for open findings that are the same underlying problem. Leave empty when you find no duplicates among the open findings shown.
 
 Rules for `dismissDecisions`:
-- Only finding ids the prompt lists as dismissal candidates (open provisional findings whose claims cannot be settled mechanically) are eligible. The engine rejects dismissals outside the list.
-- `basis` is normally `outside_contract_jurisdiction` or `unverifiable_claim`. Only when the engine explicitly grants `terminal_adjudication` for the control task may it be `outside_task_scope`, `false_positive`, `overreach`, or `no_issue_after_verification`.
-- `outside_task_scope` requires `taskQuote`, a non-empty byte-exact substring of the original workflow task. Keep `reason` separate and do not return free-form `evidence` for this basis.
-- Every other basis requires concrete current-code `evidence`. Silence or lack of a repeated report is insufficient.
-- Keep a candidate open when it is within the workflow task. A real concern may still be dismissed as `outside_task_scope`; later observations under the same task remain audit-only, while another workflow task evaluates its own scope.
-- An engine decision rejection, stale findingId, unsupported decision, or missing decision is not itself grounds for dismissal. Evaluate the raw claim and keep it open when it describes a real code concern.
-- Leave empty when there are no candidates or every candidate deserves to stay open.
+- Always leave this array empty. Claim-bearing provisional findings are dismissed only by the separate verified terminal-adjudication path.
+- A manager response, missing evidence, silence, non-repetition, stale findingId, or unsupported decision never grants dismissal authority.
 
 Interpretation phase (separate call, when ambiguous raw findings exist):
 - The engine may also call you with an "Ambiguous raw finding interpretation" prompt. There you return `interpretations` (one PROPOSAL per ambiguous raw finding): `create_independent`, `same_with_proof` (only with an engine-issued proofId from the prompt), `open_conflict`, or `provisional`.

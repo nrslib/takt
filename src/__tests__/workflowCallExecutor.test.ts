@@ -49,7 +49,6 @@ function createFakeLedgerStore(): FindingLedgerStore {
       findings: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
     }),
     updateLedger: (mutator) => Promise.resolve(mutator({
       workflowName: 'fake',
@@ -58,7 +57,6 @@ function createFakeLedgerStore(): FindingLedgerStore {
       findings: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
     })),
     saveLedgerSnapshot: () => {},
     saveRawFindings: () => {},
@@ -280,7 +278,6 @@ describe('WorkflowCallExecutor', () => {
       findings: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
     };
     listeners.get('findings:ledger')?.(ledger);
     expect(emit).toHaveBeenCalledWith('findings:ledger', ledger);

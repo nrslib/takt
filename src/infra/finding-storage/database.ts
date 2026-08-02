@@ -86,23 +86,6 @@ function initializeOrValidateTarget(
   }
 }
 
-function openMemoryDatabase(runId: string): {
-  readonly database: DatabaseSync;
-  readonly identity: FindingDatabaseIdentity;
-} {
-  const database = new DatabaseSync(':memory:');
-  try {
-    configureConnection(database);
-    return {
-      database,
-      identity: initializeOrValidateTarget(database, runId).identity,
-    };
-  } catch (error) {
-    database.close();
-    throw error;
-  }
-}
-
 export class FindingDatabase {
   readonly databasePath: string;
   readonly identity: FindingDatabaseIdentity;
@@ -125,25 +108,9 @@ export class FindingDatabase {
   static openTarget(input: {
     readonly databasePath: string;
     readonly runId: string;
-    readonly warn: (message: string, error?: unknown) => void;
-    readonly forceMemoryReason?: string;
     readonly timeoutMs?: number;
   }): FindingDatabase {
     const databasePath = resolve(input.databasePath);
-    if (input.forceMemoryReason !== undefined) {
-      input.warn(
-        'Finding storage target is using an isolated in-memory database',
-        new Error(input.forceMemoryReason),
-      );
-      const memory = openMemoryDatabase(input.runId);
-      return new FindingDatabase(
-        databasePath,
-        memory.database,
-        memory.identity,
-        false,
-      );
-    }
-
     mkdirSync(dirname(databasePath), { recursive: true, mode: 0o700 });
     let target: DatabaseSync | undefined;
     try {
@@ -160,12 +127,7 @@ export class FindingDatabase {
       if (target?.isOpen === true) {
         target.close();
       }
-      input.warn(
-        'Finding storage target is unusable; using an isolated in-memory database',
-        error,
-      );
-      const memory = openMemoryDatabase(input.runId);
-      return new FindingDatabase(databasePath, memory.database, memory.identity, false);
+      throw error;
     }
   }
 

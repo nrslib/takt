@@ -35,7 +35,10 @@ import {
   findingManagerValidationReportFileName,
   serializeFindingManagerValidationReport,
 } from '../../core/workflow/findings/manager-report-content.js';
-import { authorizeFindingLedgerFixture } from './finding-lifecycle-fixture.js';
+import {
+  authorizeFindingLedgerFixture,
+  emptyFindingAuthorityProjection,
+} from './finding-lifecycle-fixture.js';
 
 type PublicationMethods = FindingManagerCommitRebinder
   & FindingManagerCommitFinalizer
@@ -58,12 +61,11 @@ export class RevisionedFindingLedgerTestRepository {
 
   constructor(initialLedger: FindingLedger) {
     const completeProjection = {
+      ...emptyFindingAuthorityProjection(),
       ...initialLedger,
       evidenceBindings: initialLedger.evidenceBindings ?? [],
       lifecycleReservations: initialLedger.lifecycleReservations ?? [],
       lifecycleEvents: initialLedger.lifecycleEvents ?? [],
-      rawRecoveryAttempts: initialLedger.rawRecoveryAttempts ?? [],
-      rawRecoveryResults: initialLedger.rawRecoveryResults ?? [],
     };
     const authorized = completeProjection.lifecycleEvents.length > 0
       || (completeProjection.findings.length === 0

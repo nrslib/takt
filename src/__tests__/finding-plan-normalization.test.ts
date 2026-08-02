@@ -85,7 +85,6 @@ function makeLedger(findings: FindingLedgerEntry[], overrides: Partial<FindingLe
     evidenceRecords: [],
     rawFindings: [],
     conflicts: [],
-    interpretations: [],
     findings,
     ...overrides,
   });
@@ -414,7 +413,7 @@ describe('normalizeMergedManagerPlan（保存直前のフル正規化）', () =>
     expect(result.rejections).toHaveLength(2);
   });
 
-  it('outside_task_scope は同一ラウンドの clean 観測を監査対象として抑止する', () => {
+  it('terminal 形式を装った manager outside_task_scope dismissal も不採用にする', () => {
     const result = normalizeMergedManagerPlan({
       output: outputWith({
         matches: [{ findingId: 'F-0001', rawFindingIds: ['raw-persist'] }],
@@ -436,16 +435,17 @@ describe('normalizeMergedManagerPlan（保存直前のフル正規化）', () =>
       activeConflictFindingIds: new Set(),
     });
 
-    expect(result.output.matches).toEqual([]);
+    expect(result.output.matches).toEqual([
+      { findingId: 'F-0001', rawFindingIds: ['raw-persist'] },
+    ]);
     expect(result.output.resolvedFindings).toEqual([]);
-    expect(result.output.dismissedFindings).toHaveLength(1);
-    expect(result.taskScopeSuppressedObservations).toEqual([
-      { findingId: 'F-0001', rawFindingId: 'raw-persist' },
-      { findingId: 'F-0001', rawFindingId: 'raw-confirm' },
+    expect(result.output.dismissedFindings).toEqual([]);
+    expect(result.rejections).toEqual([
+      expect.stringContaining('manager dismissal requires verified terminal adjudication'),
     ]);
   });
 
-  it('outside_task_scope でも active conflict の裁定権限は迂回しない', () => {
+  it('active conflict の有無にかかわらず manager outside_task_scope dismissal を拒否する', () => {
     const result = normalizeMergedManagerPlan({
       output: outputWith({
         dismissedFindings: [{
@@ -462,7 +462,7 @@ describe('normalizeMergedManagerPlan（保存直前のフル正規化）', () =>
     });
 
     expect(result.output.dismissedFindings).toEqual([]);
-    expect(result.rejections[0]).toContain('active conflict');
+    expect(result.rejections[0]).toContain('manager dismissal requires verified terminal adjudication');
   });
 
   it('後着証拠が触れた waive は disputeNote へ降格し finding を open に保つ', () => {
@@ -615,17 +615,17 @@ describe('normalizeMergedManagerPlan（保存直前のフル正規化）', () =>
   });
 });
 
-describe('reconcileCommitPlan の resolvedConflicts 再生成不採用', () => {
-  it('後着証拠が同じ conflict を再生成する場合、その resolve を不採用にして active を保つ', () => {
-    const conflictId = formatConflictId({ findingIds: ['F-0001'], rawFindingIds: ['raw-old'] });
-    const conflict = makeConflict({ id: conflictId, findingIds: ['F-0001'], rawFindingIds: ['raw-old'] });
+describe('reconcileCommitPlan の conflict registry 契約', () => {
+  it('active conflict に fresh adjudication snapshot がなければ保存を拒否する', () => {
+    const conflictId = formatConflictId({ findingIds: ['F-0001'], rawFindingIds: [] });
+    const conflict = makeConflict({ id: conflictId, findingIds: ['F-0001'], rawFindingIds: [] });
     const freshLedger = makeLedger(
       [makeFinding({ revision: 1, id: 'F-0001' })],
       { conflicts: [conflict] },
     );
     const ladderRaw = makeRaw({ rawFindingId: 'raw-ladder' });
 
-    const result = reconcileCommitPlan({
+    expect(() => reconcileCommitPlan({
       runInput: {
         workflowName: 'peer-review',
         callNamespace: '',
@@ -681,13 +681,7 @@ describe('reconcileCommitPlan の resolvedConflicts 再生成不採用', () => {
       resolutionRenotifications: [],
       unsupportedRawFindingReports: [],
       healthyReviewerStableKeys: new Set(),
-    });
-
-    expect(result.normalizationRejections.some((rejection) => (
-      rejection.includes('C-FA2947446963') && rejection.includes('regenerated')
-    ))).toBe(true);
-    const savedConflict = result.ledger.conflicts.find((entry) => entry.id === 'C-FA2947446963')!;
-    expect(savedConflict.status).toBe('active');
+    })).toThrow('must have exactly one fresh adjudication snapshot');
   });
 });
 
@@ -801,10 +795,6 @@ describe('provisional match の materialization 境界', () => {
       rawFindingIds: [oldRaw.rawFindingId, recoveryRaw.rawFindingId],
       provisional: { stableKey: oldSpec.stableKey },
     });
-    expect(result.rawFindingDispositions).toContainEqual(expect.objectContaining({
-      rawFindingId: mismatchedPersists.rawFindingId,
-      outcome: 'audit_only',
-    }));
     expect(result.rejectedObservationAttachments).toEqual([
       expect.objectContaining({
         targetFindingId: inheritedFinding.id,
@@ -878,7 +868,6 @@ describe('assembleManagerOutput → 保存正規化 → reconciler（ラウン�
       entityProvisionalMutations: [],
       terminalEntityAttachmentFindingIds: new Set(),
       provisionalFindings: [],
-      rawFindingDispositions: [],
       verifiedEvidenceRecordsByRawFindingId: new Map(),
       rawProvenanceByRawFindingId: new Map(persistsRaws.map((rawFinding) => [
         rawFinding.rawFindingId,
@@ -1708,13 +1697,6 @@ describe('relation 別 intake と target atomization', () => {
             stopBudgetRoundMarker: 'stale-round',
           });
           expect(staleCommit.rejectedObservationAttachments).toEqual([]);
-          expect(staleCommit.rawFindingDispositions).toEqual([
-            expect.objectContaining({
-              rawFindingId: wire.rawFindingId,
-              outcome: 'reviewer_anomaly',
-            }),
-          ]);
-          expect(staleCommit.ledger.rawFindings).toContainEqual(wire);
           expect(staleCommit.ledger.reviewerAnomalies).toEqual([
             expect.objectContaining({ sourceRawFindingIds: [wire.rawFindingId] }),
           ]);
@@ -1740,12 +1722,11 @@ describe('relation 別 intake と target atomization', () => {
         });
         expect(committed.reviewerAnomalyLandings).toEqual([]);
         expect(committed.rejectedObservationAttachments).toHaveLength(1);
-        expect(committed.rawFindingDispositions).toEqual([
-          expect.objectContaining({ rawFindingId: wire.rawFindingId, outcome: 'audit_only' }),
-        ]);
-        expect(committed.ledger.rawFindings).toContainEqual(wire);
         ledger = applyRejectedObservationAttachments(
-          committed.ledger,
+          authorizeFindingLedgerFixture({
+            ...committed.ledger,
+            rawFindings: [...committed.ledger.rawFindings, wire],
+          }),
           committed.rejectedObservationAttachments,
           observation,
         );

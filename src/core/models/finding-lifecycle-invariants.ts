@@ -13,6 +13,8 @@ import {
   sortFindingLifecycleTargets,
 } from './finding-lifecycle-identity.js';
 import { computeRawFindingIntegrityDigest } from './finding-raw-integrity.js';
+import { findingScopeBindingDependencyViolation } from './finding-scope-binding-dependencies.js';
+import { findingScopePredicateResult } from './finding-scope-predicate.js';
 import {
   computeAnchorRelevanceDecisionDigest,
 } from './finding-anchor-relevance.js';
@@ -39,6 +41,7 @@ export interface FindingLifecycleAuthorityProjection {
   readonly lifecycleEvents: readonly FindingLedger['lifecycleEvents'][number][];
   readonly rawFindings: readonly FindingLedger['rawFindings'][number][];
   readonly conflicts: readonly FindingLedger['conflicts'][number][];
+  readonly findingScopeBindings: readonly FindingLedger['findingScopeBindings'][number][];
 }
 
 function targetKey(target: {
@@ -132,49 +135,13 @@ function assertCanonicalTargets(
 
 function assertReservationContext(
   reservation: FindingLedger['lifecycleReservations'][number],
-  conflicts: readonly FindingLedger['conflicts'][number][],
+  _conflicts: readonly FindingLedger['conflicts'][number][],
 ): void {
-  const targetKeys = new Set(reservation.targets.map(targetKey));
-  if (reservation.context.kind === 'conflict_adjudication') {
-    const context = reservation.context;
-    const conflict = conflicts.find(
-      (candidate) => candidate.id === context.conflictId,
-    );
-    if (
-      reservation.operation !== 'apply_conflict_adjudication'
-      || reservation.authority.kind !== 'conflict_adjudication'
-      || conflict === undefined
-      || reservation.authority.conflictId !== context.conflictId
-      || reservation.authority.evidenceHash !== context.evidenceHash
-      || reservation.authority.originStep !== context.originStep
-      || !sameValue(
-        reservation.authority.inputBindingIds,
-        reservation.evidenceBindingIds,
-      )
-      || !sameValue(
-        reservation.authority.findingIds,
-        conflict.findingIds,
-      )
-      || !sameValue(
-        conflict.findingIds,
-        reservation.targets
-          .filter((target) => target.entityKind === 'finding')
-          .map((target) => target.entityId),
-      )
-      || !targetKeys.has(targetKey({
-        entityKind: 'conflict',
-        entityId: context.conflictId,
-      }))
-    ) {
-      throw new Error(`Lifecycle reservation "${reservation.reservationId}" has an invalid conflict adjudication context`);
-    }
-    return;
-  }
-  if (reservation.operation === 'apply_conflict_adjudication') {
+  if (
+    reservation.operation === 'apply_conflict_adjudication'
+    && reservation.authority.kind !== 'verified_conflict_adjudication'
+  ) {
     throw new Error(`Lifecycle reservation "${reservation.reservationId}" requires an operation-specific context`);
-  }
-  if (reservation.authority.kind === 'conflict_adjudication') {
-    throw new Error(`Lifecycle reservation "${reservation.reservationId}" has an invalid transaction authority`);
   }
 }
 
@@ -440,6 +407,40 @@ function assertEngineProofOperation(input: {
         reject();
       }
       return;
+    case 'finding_claim_identical':
+      if (
+        (input.operation !== 'apply_conflict_adjudication'
+          && input.operation !== 'supersede_findings')
+        || !subject.findingIds.includes(input.target.entityId)
+      ) {
+        reject();
+      }
+      return;
+    case 'finding_claim_supported_after_verification':
+      if (
+        input.operation !== 'apply_conflict_adjudication'
+        && input.operation !== 'promote_provisional'
+      ) {
+        reject();
+      }
+      if (subject.findingId !== input.target.entityId) {
+        reject();
+      }
+      return;
+    case 'finding_no_issue_after_verification':
+    case 'finding_claim_refuted':
+      if (
+        input.operation !== 'apply_conflict_adjudication'
+        && input.operation !== 'resolve_finding'
+        && input.operation !== 'invalidate_finding'
+        && input.operation !== 'dismiss_finding'
+      ) {
+        reject();
+      }
+      if (subject.findingId !== input.target.entityId) {
+        reject();
+      }
+      return;
     default:
       reject();
   }
@@ -454,6 +455,7 @@ export function assertEligibleEvidenceForLifecycleOperation(input: {
   evidenceRecords: readonly FindingEvidenceRecord[];
   rawFindings: readonly RawFinding[];
   findings: readonly FindingLedger['findings'][number][];
+  findingScopeBindings: readonly FindingLedger['findingScopeBindings'][number][];
 }): void {
   assertCanonicalTargets(input.operation, input.targets);
   assertCanonicalIds(input.evidenceBindingIds, 'Lifecycle evidence binding ids');
@@ -593,25 +595,62 @@ export function assertEligibleEvidenceForLifecycleOperation(input: {
     }
     return;
   }
-  if (input.authority.kind === 'conflict_adjudication') {
-    const authority = input.authority;
+  if (
+    input.authority.kind === 'verified_conflict_adjudication'
+    || input.authority.kind === 'verified_terminal_adjudication'
+  ) {
+    const proofRecordIds = new Set(input.authority.proofRecordIds);
+    const knownProofRecordIds = new Set(input.evidenceRecords.map((record) => record.evidenceId));
+    const scopeBindingIds = input.authority.kind === 'verified_terminal_adjudication'
+      ? new Set(input.authority.scopeBindingIds)
+      : new Set<string>();
+    const scopeBindingsById = new Map(input.findingScopeBindings.map((binding) => [
+      binding.bindingId,
+      binding,
+    ]));
+    const scopeCoveredTargets = new Set<string>();
+    if (input.authority.kind === 'verified_terminal_adjudication') {
+      for (const bindingId of scopeBindingIds) {
+        const binding = scopeBindingsById.get(bindingId);
+        const target = binding === undefined
+          ? undefined
+          : targetByKey.get(`finding\0${binding.findingId}`);
+        const finding = binding === undefined
+          ? undefined
+          : findingsById.get(binding.findingId);
+        if (
+          binding === undefined
+          || target === undefined
+          || finding === undefined
+          || findingScopeBindingDependencyViolation(binding) !== undefined
+          || !sameValue(binding.expectedHead, target.expectedHead)
+          || binding.result !== 'outside'
+          || findingScopePredicateResult({ predicate: binding.predicate, finding }) !== 'outside'
+        ) {
+          throw new Error(`Lifecycle operation "${input.operation}" has a mismatched scope binding`);
+        }
+        scopeCoveredTargets.add(targetKey(target));
+      }
+    }
     if (
-      input.operation !== 'apply_conflict_adjudication'
-      || input.evidenceBindingIds.length === 0
-      || !sameValue(input.authority.inputBindingIds, input.evidenceBindingIds)
-      || !sameValue(
-        authority.findingIds,
-        input.targets
-          .filter((target) => target.entityKind === 'finding')
-          .map((target) => target.entityId),
-      )
-      || !input.targets.some((target) => (
-        target.entityKind === 'conflict'
-        && target.entityId === authority.conflictId
-        && coveredTargets.has(targetKey(target))
+      proofRecordIds.size + scopeBindingIds.size === 0
+      || [...proofRecordIds].some((proofRecordId) => !knownProofRecordIds.has(proofRecordId))
+      || [...targetByKey.keys()].some((key) => (
+        key.startsWith('finding\0')
+        && !coveredTargets.has(key)
+        && !scopeCoveredTargets.has(key)
       ))
     ) {
-      throw new Error(`Lifecycle operation "${input.operation}" has invalid adjudication input authority`);
+      throw new Error(`Lifecycle operation "${input.operation}" has invalid verified adjudication authority`);
+    }
+    return;
+  }
+  if (
+    input.authority.kind === 'interpretation_unreserved_landing'
+    || input.authority.kind === 'interpretation_case_rejection'
+  ) {
+    if (coveredTargets.size !== targetByKey.size) {
+      throw new Error(`Lifecycle operation "${input.operation}" lacks raw evidence for interpretation landing`);
     }
     return;
   }
@@ -682,29 +721,10 @@ function assertReservationTargetPremise(input: {
 }
 
 function assertEventOutcome(
-  reservation: FindingLedger['lifecycleReservations'][number],
+  _reservation: FindingLedger['lifecycleReservations'][number],
   event: FindingLedger['lifecycleEvents'][number],
-  conflicts: readonly FindingLedger['conflicts'][number][],
+  _conflicts: readonly FindingLedger['conflicts'][number][],
 ): void {
-  if (reservation.authority.kind === 'conflict_adjudication') {
-    if (
-      event.outcome.kind !== 'conflict_adjudication'
-      || event.outcome.conflictId !== reservation.authority.conflictId
-      || event.outcome.evidenceHash !== reservation.authority.evidenceHash
-    ) {
-      throw new Error(`Lifecycle event "${event.eventId}" has an invalid adjudication outcome`);
-    }
-    const outcome = event.outcome;
-    const adjudication = conflicts
-      .find((conflict) => conflict.id === outcome.conflictId)
-      ?.adjudications?.find((record) => (
-        record.evidenceHash === outcome.evidenceHash
-      ));
-    if (adjudication?.outcome !== outcome.outcome) {
-      throw new Error(`Lifecycle event "${event.eventId}" has no matching closed adjudication record`);
-    }
-    return;
-  }
   if (event.outcome.kind !== 'projection_applied') {
     throw new Error(`Lifecycle event "${event.eventId}" has an unexpected specialized outcome`);
   }
@@ -764,6 +784,7 @@ export function assertFindingLifecycleAuthorityInvariant(
       evidenceRecords: ledger.evidenceRecords,
       rawFindings: ledger.rawFindings,
       findings: ledger.findings,
+      findingScopeBindings: ledger.findingScopeBindings,
     });
     reservation.evidenceBindingIds.forEach((bindingId) => referencedBindingIds.add(bindingId));
     reservationsById.set(reservation.reservationId, reservation);

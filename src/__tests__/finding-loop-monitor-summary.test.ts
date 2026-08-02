@@ -36,7 +36,6 @@ function provisionalEntry(
       reason: 'claim has no mechanically verified evidence',
       firstObservedAt: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
       lastObservedAt: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
-      interpretationEpochs: 2,
       gateEffect: 'block',
       firstObservedRound: 1,
     },
@@ -52,7 +51,6 @@ function makeLedger(findings: FindingLedgerEntry[], roundMarkers: string[] = [])
     evidenceRecords: [],
     rawFindings: [],
     conflicts: [],
-    interpretations: [],
     findings,
     ...(roundMarkers.length > 0
       ? { stopBudget: { roundMarkers, firstRoundAt: '2026-07-01T00:00:00.000Z', exhausted: false } }
@@ -319,7 +317,6 @@ describe('provisional firstObservedRound persistence', () => {
         severity: 'medium',
         reviewers: ['coding-review'],
       }],
-      rawFindingDispositions: [],
       verifiedEvidenceRecordsByRawFindingId: new Map(),
       rawProvenanceByRawFindingId: new Map([[
         'raw-9',

@@ -4,10 +4,9 @@ import {
   formatFileQuoteLocation,
 } from './evidence-location.js';
 import {
-  classifyProvisionalRecovery,
   isOpenProvisional,
-  provisionalRecoveryAttemptCount,
-} from './provisional-recovery.js';
+  isTerminalAdjudicationCandidate,
+} from './terminal-adjudication-candidates.js';
 import { stopBudgetRoundsCompleted } from './stop-budget.js';
 import type { AssembleManagerOutputResult } from './decision-assembly.js';
 import {
@@ -22,7 +21,7 @@ import {
  * engine 主導の recovery（解釈の前進 / source raw の再裁定 / 機械 resolve）が
  * 残っている間は候補にしない — recovery を使い切った、または最初から機械処理の
  * 余地が無い provisional だけが内容の管轄裁定へ回る。
- * 分類は provisional-recovery.ts が正本。
+ * 分類は terminal-adjudication-candidates.ts が正本。
  */
 export function isDismissCandidate(
   ledger: FindingLedger,
@@ -35,11 +34,11 @@ export function isDismissCandidate(
   if (!(DISMISSABLE_PROVISIONAL_KINDS as readonly string[]).includes(finding.provisional.kind)) {
     return false;
   }
-  return classifyProvisionalRecovery(
-    finding.provisional,
-    roundsCompleted,
-    provisionalRecoveryAttemptCount(ledger, finding.id),
-  ) === 'terminal-adjudication';
+  return isTerminalAdjudicationCandidate({
+    ledger,
+    finding,
+    currentRound: roundsCompleted + 1,
+  });
 }
 
 /**

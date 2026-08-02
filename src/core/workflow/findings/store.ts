@@ -1,5 +1,4 @@
 import type {
-  FindingConflictAdjudicationAuditReport,
   FindingLedger,
   FindingManagerReportPublication,
   FindingManagerValidationReport,
@@ -8,16 +7,12 @@ import type {
 import type {
   InterpretationLiveClaimRegistry,
 } from './interpretation-live-claims.js';
-import type {
-  AdjudicationLiveClaimRegistry,
-} from './adjudication-live-claims.js';
 import type { ReportPublicationReceipt } from '../report-publication.js';
 
 export interface LedgerRepository {
   readonly runId: string;
   readonly ledgerIdentity: string;
   readonly interpretationLiveClaims: InterpretationLiveClaimRegistry;
-  readonly adjudicationLiveClaims: AdjudicationLiveClaimRegistry;
   readonly workflowName: string;
   loadLedger: () => FindingLedger;
   updateLedger: <Result>(
@@ -65,9 +60,6 @@ export interface FindingArtifactWriter {
   publishManagerValidationPublication: (
     publication: FindingManagerReportPublication,
   ) => ReportPublicationReceipt;
-  saveConflictAdjudicationReport: (
-    report: FindingConflictAdjudicationAuditReport,
-  ) => void;
 }
 
 export interface FindingManagerCommitRebinder {
@@ -105,8 +97,7 @@ export type FindingManagerStore = LedgerRepository
     | 'publishManagerValidationPublication'
   >;
 
-export type FindingAdjudicationStore = LedgerRepository
-  & Pick<FindingArtifactWriter, 'saveConflictAdjudicationReport'>;
+export type FindingAdjudicationStore = LedgerRepository;
 
 export interface FindingLedgerMutation<Result> {
   ledger: FindingLedger;
@@ -124,7 +115,6 @@ export interface FindingLedgerPublicationDecision<Result> {
 }
 
 export type {
-  FindingConflictAdjudicationAuditReport,
   FindingManagerValidationAttemptReport,
   FindingManagerValidationReport,
   InterpretationStatsReport,

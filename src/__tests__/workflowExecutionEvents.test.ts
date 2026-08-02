@@ -443,7 +443,6 @@ describe('bindWorkflowExecutionEvents', () => {
       findings: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
     };
 
     const context = {
@@ -537,7 +536,6 @@ describe('bindWorkflowExecutionEvents', () => {
         ],
         rawFindings: [],
         conflicts: [],
-        interpretations: [],
       };
 
       expect(() => engine.emit('findings:ledger', ledger, {

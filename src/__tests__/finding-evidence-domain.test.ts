@@ -72,11 +72,8 @@ function emptyLedger(
     evidenceBindings: [],
     lifecycleReservations: [],
     lifecycleEvents: [],
-    rawRecoveryAttempts: [],
-    rawRecoveryResults: [],
     rawFindings: [],
     conflicts: [],
-    interpretations: [],
   };
 }
 

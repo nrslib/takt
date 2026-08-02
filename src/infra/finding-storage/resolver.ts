@@ -1,7 +1,7 @@
 import { resolve } from 'node:path';
 import type { FindingLedger } from '../../core/workflow/findings/types.js';
+import { createEmptyFindingContractRegistries } from '../../core/models/finding-contract-seed.js';
 import type { FindingLedgerStore } from '../../core/workflow/findings/store.js';
-import { createLogger } from '../../shared/utils/debug.js';
 import { FindingArtifactStore } from './artifacts.js';
 import { FindingDatabase } from './database.js';
 import {
@@ -28,8 +28,6 @@ export interface FindingStorageWarning {
   readonly error?: unknown;
 }
 
-const log = createLogger('finding-storage');
-
 function emptyLedger(workflowName: string, now: string): FindingLedger {
   return {
     workflowName,
@@ -39,11 +37,9 @@ function emptyLedger(workflowName: string, now: string): FindingLedger {
     evidenceBindings: [],
     lifecycleReservations: [],
     lifecycleEvents: [],
-    rawRecoveryAttempts: [],
-    rawRecoveryResults: [],
     rawFindings: [],
     conflicts: [],
-    interpretations: [],
+    ...createEmptyFindingContractRegistries(),
     updatedAt: now,
   };
 }
@@ -75,7 +71,6 @@ export class FindingStorageResolver {
   readonly runId: string;
   readonly #source: FindingStorageSource | undefined;
   readonly #now: () => string;
-  readonly #onWarning: (warning: FindingStorageWarning) => void;
   readonly #timeoutMs: number | undefined;
   readonly #sourceMatchesTarget: boolean;
   #database: FindingDatabase | undefined;
@@ -98,11 +93,6 @@ export class FindingStorageResolver {
     this.#now = input.now ?? (() => new Date().toISOString());
     this.#timeoutMs = input.timeoutMs;
     this.#sourceMatchesTarget = this.#source?.databasePath === this.databasePath;
-    this.#onWarning = input.onWarning ?? ((warning) => {
-      log.warn(warning.message, warning.error === undefined ? undefined : {
-        error: warning.error,
-      });
-    });
   }
 
   resolveAuthority(input: FindingAuthorityInput): FindingLedgerStore {
@@ -118,13 +108,6 @@ export class FindingStorageResolver {
       workflowName: input.workflowName,
       seed: () => ({
         ledger: this.#seedAuthority(input.authorityKey, input.workflowName),
-      }),
-      reset: () => ({
-        ledger: emptyLedger(input.workflowName, this.#now()),
-      }),
-      onInvalid: (error) => this.#onWarning({
-        message: `Finding authority "${input.authorityKey}" was invalid and has been reset`,
-        error,
       }),
     });
     const artifacts = new FindingArtifactStore({
@@ -162,10 +145,6 @@ export class FindingStorageResolver {
       this.#database = FindingDatabase.openTarget({
         databasePath: this.databasePath,
         runId: this.runId,
-        warn: (message, error) => this.#onWarning({ message, error }),
-        ...(this.#sourceMatchesTarget
-          ? { forceMemoryReason: 'Finding storage source and target paths are identical' }
-          : {}),
         ...(this.#timeoutMs === undefined ? {} : { timeoutMs: this.#timeoutMs }),
       });
       this.#repository = new FindingAuthorityRepository(this.#database, this.#now);
@@ -174,26 +153,21 @@ export class FindingStorageResolver {
   }
 
   #seedAuthority(authorityKey: string, workflowName: string): FindingLedger {
-    if (this.#source === undefined || this.#sourceMatchesTarget) {
+    if (this.#source === undefined) {
       return emptyLedger(workflowName, this.#now());
     }
-    try {
-      const source = FindingDatabase.readSource({
-        databasePath: this.#source.databasePath,
-        runId: this.#source.runId,
-        ...(this.#timeoutMs === undefined ? {} : { timeoutMs: this.#timeoutMs }),
-        read: (database) => readSourceAuthority(database, authorityKey),
-      });
-      if (source === undefined) {
-        throw new Error(`Finding authority "${authorityKey}" is missing from the source`);
-      }
-      return importLedger(source, workflowName, this.runId);
-    } catch (error) {
-      this.#onWarning({
-        message: `Finding authority "${authorityKey}" could not be seeded; starting empty`,
-        error,
-      });
-      return emptyLedger(workflowName, this.#now());
+    if (this.#sourceMatchesTarget) {
+      throw new Error(`Finding authority "${authorityKey}" is missing from the source target`);
     }
+    const source = FindingDatabase.readSource({
+      databasePath: this.#source.databasePath,
+      runId: this.#source.runId,
+      ...(this.#timeoutMs === undefined ? {} : { timeoutMs: this.#timeoutMs }),
+      read: (database) => readSourceAuthority(database, authorityKey),
+    });
+    if (source === undefined) {
+      throw new Error(`Finding authority "${authorityKey}" is missing from the source`);
+    }
+    return importLedger(source, workflowName, this.runId);
   }
 }

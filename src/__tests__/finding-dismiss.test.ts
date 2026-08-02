@@ -24,8 +24,6 @@ import {
   canonicalRawFindingFixture,
 } from './helpers/finding-lifecycle-fixture.js';
 import { computeClaimIdentityHash } from '../core/workflow/findings/evidence-domain.js';
-import { createRawRecoveryAttempt } from '../core/models/finding-raw-recovery.js';
-import { captureFindingLifecycleHead } from '../core/workflow/findings/lifecycle-mutation.js';
 import { hasLifecycleProductTransitionCapability } from '../core/workflow/findings/raw-relation-capabilities.js';
 import { renderFindingLedgerInstructionSummary } from '../core/workflow/findings/context.js';
 import {
@@ -33,6 +31,7 @@ import {
   RevisionedFindingLedgerTestRepository,
 } from './helpers/finding-manager-publication.js';
 import { findingManagerTaskResponse } from './helpers/finding-manager-task-response.js';
+import { processInterpretationLiveClaims } from '../core/workflow/findings/interpretation-live-claims.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
   executeAgent: vi.fn(),
@@ -63,7 +62,6 @@ function provisionalEntry(
       reason: 'the raw finding meaning requires adjudication',
       firstObservedAt: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
       lastObservedAt: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
-      interpretationEpochs: 2,
       gateEffect: 'block',
       firstObservedRound: 1,
     },
@@ -79,7 +77,6 @@ function makeLedger(findings: FindingLedgerEntry[], overrides: Partial<FindingLe
     evidenceRecords: [],
     rawFindings: [],
     conflicts: [],
-    interpretations: [],
     findings,
     ...overrides,
   });
@@ -88,7 +85,7 @@ function makeLedger(findings: FindingLedgerEntry[], overrides: Partial<FindingLe
 type TestReconcileInput = Omit<
   Parameters<typeof reconcileFindingLedgerStrict>[0],
   'provisionalFindings' | 'entityProvisionalMutations'
-  | 'terminalEntityAttachmentFindingIds' | 'rawFindingDispositions'
+  | 'terminalEntityAttachmentFindingIds'
   | 'rawProvenanceByRawFindingId' | 'verifiedEvidenceRecordsByRawFindingId'
 >;
 
@@ -98,7 +95,6 @@ function reconcileFindingLedger(input: TestReconcileInput): FindingLedger {
     entityProvisionalMutations: [],
     terminalEntityAttachmentFindingIds: new Set(),
     provisionalFindings: [],
-    rawFindingDispositions: [],
     verifiedEvidenceRecordsByRawFindingId: new Map(),
     rawProvenanceByRawFindingId: new Map(input.rawFindings.map((rawFinding) => [
       rawFinding.rawFindingId,
@@ -134,18 +130,18 @@ function makeDecisions(overrides: Partial<FindingManagerDecisions> = {}): Findin
 }
 
 describe('computeDismissCandidates', () => {
-  it('open な provisional のうち裁定可能な kind だけを候補にする', () => {
+  it('manager には provisional dismissal 候補を公開しない', () => {
     const findings = [
       provisionalEntry({ revision: 1, id: 'F-0001' }),
       // 解釈 epoch を使い切った ambiguous — 解釈ラダーの所有権が切れたので候補
       provisionalEntry({ revision: 1,
         id: 'F-0002',
-        provisional: { ...provisionalEntry({ revision: 1 }).provisional!, kind: 'raw-meaning-ambiguous', stableKey: 'stable-2', interpretationEpochs: 2 },
+        provisional: { ...provisionalEntry({ revision: 1 }).provisional!, kind: 'raw-meaning-ambiguous', stableKey: 'stable-2' },
       }),
       // 解釈 epoch が残る ambiguous — 解釈ラダーが所有権を持つ間は候補にしない
       provisionalEntry({ revision: 1,
         id: 'F-0007',
-        provisional: { ...provisionalEntry({ revision: 1 }).provisional!, kind: 'raw-meaning-ambiguous', stableKey: 'stable-7', interpretationEpochs: 1 },
+        provisional: { ...provisionalEntry({ revision: 1 }).provisional!, kind: 'raw-meaning-ambiguous', stableKey: 'stable-7' },
       }),
       // 処理失敗の証跡 — 候補にしない
       provisionalEntry({ revision: 1,
@@ -160,40 +156,15 @@ describe('computeDismissCandidates', () => {
         id: 'F-0008',
         provisional: { ...provisionalEntry({ revision: 1 }).provisional!, kind: 'stale-precondition', stableKey: 'stable-8' },
       }),
-      provisionalEntry({ revision: 1,
-        id: 'F-0009',
-        provisional: {
-          ...provisionalEntry({ revision: 1 }).provisional!,
-          kind: 'raw-adjudication-unresolved',
-          stableKey: 'stable-9',
-        },
-      }),
       // provisional でない open finding — 候補にしない
       provisionalEntry({ revision: 1, id: 'F-0005', provisional: undefined }),
       // open でない provisional — 候補にしない
       provisionalEntry({ revision: 1, id: 'F-0006', status: 'resolved' }),
     ];
 
-    const baseLedger = makeLedger(findings);
-    const expectedHead = captureFindingLifecycleHead(baseLedger, 'finding', 'F-0009');
-    if (expectedHead === undefined) {
-      throw new Error('Missing lifecycle head for F-0009');
-    }
-    const candidates = computeDismissCandidates({
-      ...baseLedger,
-      rawRecoveryAttempts: [1, 2].map((attempt) => createRawRecoveryAttempt({
-        provisionalFindingId: 'F-0009',
-        expectedHead,
-        sourceRawFindingId: `replay-${attempt}`,
-        sourceRawIntegrityDigest: null,
-        promptSnapshotDigest: String(attempt).repeat(64),
-        attempt,
-        startedAt: provisionalEntry({ revision: 1 }).lastSeen,
-      })),
-    });
+    const candidates = computeDismissCandidates(makeLedger(findings));
 
-    expect([...candidates.keys()].sort()).toEqual(['F-0001', 'F-0002', 'F-0009']);
-    expect(candidates.get('F-0001')).toContain('raw-meaning-ambiguous');
+    expect(candidates).toEqual(new Map());
   });
 });
 
@@ -205,7 +176,7 @@ describe('assembleManagerOutput dismissDecisions', () => {
     evidence: '主張はコードではなく品質ゲートの実行記録だけを対象にしている',
   };
 
-  it('候補集合にある open provisional への dismiss を採用する', () => {
+  it('候補集合を注入しても standard manager dismissal を拒否する', () => {
     const ledger = makeLedger([provisionalEntry({ revision: 1 })]);
     const assembly = assembleManagerOutput({
       previousLedger: ledger,
@@ -215,11 +186,9 @@ describe('assembleManagerOutput dismissDecisions', () => {
       managerAuthority: 'standard',
     });
 
-    expect(assembly.output.dismissedFindings).toEqual([{
-      ...dismissal,
-      authority: 'standard',
-    }]);
-    expect(assembly.rejectedDismissDecisions).toEqual([]);
+    expect(assembly.output.dismissedFindings).toEqual([]);
+    expect(assembly.rejectedDismissDecisions[0]?.reason)
+      .toContain('outside verified terminal adjudication');
   });
 
   it('standard authority では semantic dismissal を拒否する', () => {
@@ -239,10 +208,11 @@ describe('assembleManagerOutput dismissDecisions', () => {
     });
 
     expect(assembly.output.dismissedFindings).toEqual([]);
-    expect(assembly.rejectedDismissDecisions[0]?.reason).toContain('without terminal_adjudication authority');
+    expect(assembly.rejectedDismissDecisions[0]?.reason)
+      .toContain('outside verified terminal adjudication');
   });
 
-  it('terminal adjudicator は明示的な根拠付き semantic dismissal を採用する', () => {
+  it('manager assembly は terminal_adjudication ラベルを自己申告されても dismissal を拒否する', () => {
     const ledger = makeLedger([provisionalEntry({ revision: 1 })]);
     const semanticDismissal = {
       findingId: 'F-0001',
@@ -258,12 +228,10 @@ describe('assembleManagerOutput dismissDecisions', () => {
       managerAuthority: 'terminal_adjudication',
     });
 
-    expect(assembly.output.dismissedFindings).toEqual([{
-      ...semanticDismissal,
-      authority: 'terminal_adjudication',
-    }]);
+    expect(assembly.output.dismissedFindings).toEqual([]);
     expect(assembly.output.newFindings).toEqual([]);
-    expect(assembly.rejectedDismissDecisions).toEqual([]);
+    expect(assembly.rejectedDismissDecisions[0]?.reason)
+      .toContain('outside verified terminal adjudication');
   });
 
   it('terminal adjudicator でも同一ラウンドで再観測された finding は dismiss しない', () => {
@@ -293,10 +261,11 @@ describe('assembleManagerOutput dismissDecisions', () => {
 
     expect(assembly.output.dismissedFindings).toEqual([]);
     expect(assembly.output.matches.map((match) => match.findingId)).toEqual(['F-0001']);
-    expect(assembly.rejectedDismissDecisions[0]?.reason).toContain('re-observed');
+    expect(assembly.rejectedDismissDecisions[0]?.reason)
+      .toContain('outside verified terminal adjudication');
   });
 
-  it('outside_task_scope は同一ラウンドの clean 再観測より優先して採用する', () => {
+  it('outside_task_scope も manager assembly では採用しない', () => {
     const ledger = makeLedger([provisionalEntry({ revision: 1 })]);
     const assembly = assembleManagerOutput({
       previousLedger: ledger,
@@ -323,13 +292,10 @@ describe('assembleManagerOutput dismissDecisions', () => {
       managerAuthority: 'terminal_adjudication',
     });
 
-    expect(assembly.output.dismissedFindings).toEqual([
-      expect.objectContaining({
-        findingId: 'F-0001',
-        basis: 'outside_task_scope',
-      }),
-    ]);
-    expect(assembly.rejectedDismissDecisions).toEqual([]);
+    expect(assembly.output.dismissedFindings).toEqual([]);
+    expect(assembly.output.matches.map((match) => match.findingId)).toEqual(['F-0001']);
+    expect(assembly.rejectedDismissDecisions[0]?.reason)
+      .toContain('outside verified terminal adjudication');
   });
 
   it('エンジンが候補として提示していない finding への dismiss は不採用にする', () => {
@@ -343,7 +309,8 @@ describe('assembleManagerOutput dismissDecisions', () => {
     });
 
     expect(assembly.output.dismissedFindings).toEqual([]);
-    expect(assembly.rejectedDismissDecisions[0]?.reason).toContain('did not offer it as a dismissal candidate');
+    expect(assembly.rejectedDismissDecisions[0]?.reason)
+      .toContain('outside verified terminal adjudication');
   });
 
   it('同ラウンドの clean 証拠による settlement を dismiss より優先する', () => {
@@ -383,7 +350,8 @@ describe('assembleManagerOutput dismissDecisions', () => {
     });
 
     expect(assembly.output.dismissedFindings).toEqual([]);
-    expect(assembly.rejectedDismissDecisions[0]?.reason).toContain('clean evidence settles it');
+    expect(assembly.rejectedDismissDecisions[0]?.reason)
+      .toContain('outside verified terminal adjudication');
     expect(assembly.output.resolvedFindings.map((resolved) => resolved.findingId)).toEqual(['F-0001']);
   });
 
@@ -409,14 +377,15 @@ describe('assembleManagerOutput dismissDecisions', () => {
     });
 
     expect(assembly.output.dismissedFindings).toEqual([]);
-    expect(assembly.rejectedDismissDecisions[0]?.reason).toContain('active conflict');
+    expect(assembly.rejectedDismissDecisions[0]?.reason)
+      .toContain('outside verified terminal adjudication');
   });
 });
 
 describe('reconcileFindingLedger dismissedFindings', () => {
-  it('dismiss を status/lifecycle=dismissed + 監査記録 + revision 加算で適用する', () => {
+  it('standard manager dismissal を reconciliation 境界で拒否する', () => {
     const ledger = makeLedger([provisionalEntry({ revision: 3 })]);
-    const next = reconcileFindingLedger({
+    expect(() => reconcileFindingLedger({
       previousLedger: ledger,
       rawFindings: [],
       managerOutput: {
@@ -430,22 +399,10 @@ describe('reconcileFindingLedger dismissedFindings', () => {
         }],
       },
       context: { workflowName: 'peer-review', stepName: 'reviewers', runId: 'run-2', timestamp: '2026-07-02T00:00:00.000Z' },
-    });
-
-    const dismissed = next.findings.find((finding) => finding.id === 'F-0001')!;
-    expect(dismissed.status).toBe('dismissed');
-    expect(dismissed.lifecycle).toBe('dismissed');
-    expect(dismissed.revision).toBe(4);
-    expect(dismissed.dismissal).toMatchObject({
-      basis: 'outside_contract_jurisdiction',
-      reason: 'final gate の職掌',
-      evidence: '品質ゲートの実行記録だけを対象にしている',
-      authority: 'standard',
-      decidedAt: { runId: 'run-2', stepName: 'reviewers' },
-    });
+    })).toThrow(/outside verified terminal adjudication/);
   });
 
-  it('outside_task_scope は同一ラウンドの persists を dismissed_same_round の監査だけにする', () => {
+  it('terminal_adjudication ラベル付きでも manager commit 経由の dismissal を拒否する', () => {
     const current = provisionalEntry({ revision: 3 });
     const currentLedger = makeLedger([current]);
     const rawFinding: RawFinding = canonicalRawFindingFixture({
@@ -523,17 +480,11 @@ describe('reconcileFindingLedger dismissedFindings', () => {
       unsupportedRawFindingReports: [],
       healthyReviewerStableKeys: new Set(),
     });
-
-    const dismissed = result.ledger.findings[0]!;
-    expect(dismissed.status).toBe('dismissed');
-    expect(dismissed.revision).toBe(4);
-    expect(dismissed.rejectedObservations ?? []).toEqual([]);
-    expect(result.rejectedObservationAttachments).toEqual([
-      expect.objectContaining({
-        rawFindingId: rawFinding.rawFindingId,
-        rejectionCode: 'dismissed_same_round',
-      }),
-    ]);
+    expect(result.managerOutput.dismissedFindings).toEqual([]);
+    expect(result.normalizationRejections).toContainEqual(
+      expect.stringContaining('manager dismissal requires verified terminal adjudication'),
+    );
+    expect(result.ledger.findings.find((finding) => finding.id === current.id)?.status).toBe('open');
   });
 
   it('provisional でない finding への dismiss 適用は例外にする（防衛線）', () => {
@@ -545,7 +496,7 @@ describe('reconcileFindingLedger dismissedFindings', () => {
         ...createEmptyManagerOutput(),
         dismissedFindings: [{
           findingId: 'F-0001',
-          basis: 'unverifiable_claim',
+          basis: 'outside_contract_jurisdiction',
           reason: 'x',
           evidence: 'claim has no verifiable subject',
           authority: 'standard',
@@ -560,7 +511,7 @@ describe('fixpoint snapshot with dismissed provisionals', () => {
   it('dismissed になった provisional は provisionalKeys から消え、id:status として substantiveEntries に現れる', () => {
     const cwd = process.cwd();
     const before = computeFixpointSnapshot(makeLedger([provisionalEntry({ revision: 1 })]), cwd);
-    expect(before.provisionalKeys).toEqual(['stable-1:recovery:2:0:0:0']);
+    expect(before.provisionalKeys).toEqual(['stable-1']);
     expect(before.substantiveEntries).toEqual([]);
 
     const after = computeFixpointSnapshot(
@@ -639,13 +590,12 @@ describe('outside_task_scope reopen capability', () => {
 });
 
 describe('runFindingManagerForStep dismiss round trip', () => {
-  it('残余 raw ゼロでも dismiss 候補があれば manager を起動し、裁定で完了ゲートが開く', async () => {
+  it('残余 raw ゼロでは manager dismissal 候補を生成せず provisional を open のまま保つ', async () => {
     const repository = new RevisionedFindingLedgerTestRepository(
       makeLedger([provisionalEntry({ revision: 1 })]),
     );
     const reportDir = mkdtempSync(join(tmpdir(), 'takt-finding-dismiss-'));
     const savedValidationReports: unknown[] = [];
-    const reservations = new Set<string>();
     const publicationDouble = createFindingManagerPublicationDouble(
       (report) => join(
         reportDir,
@@ -660,12 +610,7 @@ describe('runFindingManagerForStep dismiss round trip', () => {
       updateLedger: (mutator, revalidateBeforeSave) => (
         repository.updateLedger(mutator, revalidateBeforeSave)
       ),
-      claimAdjudicationReservation: (token) => {
-        if (reservations.has(token)) return false;
-        reservations.add(token);
-        return true;
-      },
-      releaseAdjudicationReservation: (token) => { reservations.delete(token); },
+      interpretationLiveClaims: processInterpretationLiveClaims,
       saveLedgerSnapshot: () => {},
       saveRawFindings: () => {},
       saveManagerValidationReport: (report) => { savedValidationReports.push(report); },
@@ -714,12 +659,13 @@ describe('runFindingManagerForStep dismiss round trip', () => {
       workflowTask: 'Review the requested implementation.',
       });
 
-      expect(executeAgentMock).toHaveBeenCalledTimes(1);
+      expect(executeAgentMock).not.toHaveBeenCalled();
 
       const dismissed = result.ledger.findings.find((finding) => finding.id === 'F-0001')!;
-      expect(dismissed.status).toBe('dismissed');
-      expect(dismissed.dismissal?.basis).toBe('outside_contract_jurisdiction');
-      expect(result.ledger.findings.filter((finding) => finding.status === 'open')).toEqual([]);
+      expect(dismissed.status).toBe('open');
+      expect(dismissed.dismissal).toBeUndefined();
+      expect(result.ledger.findings.filter((finding) => finding.status === 'open'))
+        .toEqual([dismissed]);
     } finally {
       rmSync(reportDir, { recursive: true, force: true });
     }

@@ -5,7 +5,7 @@ import {
   sameFindingMutationPrecondition,
   type CapturedFindingPrecondition,
 } from './finding-preconditions.js';
-import { collectLandedRawIds, computeDismissCandidates, computeInvalidLocationCandidates, describeManagerRejections } from './manager-utils.js';
+import { collectLandedRawIds, computeInvalidLocationCandidates, describeManagerRejections } from './manager-utils.js';
 import { provisionalSpecForRawKind, stalePreconditionSpec } from './manager-provisional.js';
 import type { ProvisionalFindingSpec } from './reconciler.js';
 import type {
@@ -129,11 +129,7 @@ export function revalidateManagerPlan(input: {
     invalidLocationCandidateFindingIds: new Set(
       computeInvalidLocationCandidates(input.runInput.cwd, input.freshLedger).keys(),
     ),
-    // fresh ledger に対して候補を再計算する: 初回判断と保存の間に clean 証拠で
-    // settle された（open でなくなった）対象への dismiss は stale として不採用になる。
-    dismissCandidateFindingIds: new Set(
-      computeDismissCandidates(input.freshLedger).keys(),
-    ),
+    dismissCandidateFindingIds: new Set(),
     managerAuthority: input.runInput.managerAuthority,
   });
   const freshLandedRawIds = collectLandedRawIds(freshAssembly.output);
@@ -344,7 +340,6 @@ function actionTargetFindingIds(action: FindingActionProposal): string[] {
   switch (action.action) {
     case 'invalidate':
     case 'waive':
-    case 'dismiss':
       return [action.findingId];
     case 'duplicate':
       return [action.canonicalFindingId, ...action.duplicateFindingIds];
@@ -616,27 +611,6 @@ function applyPreconditionChecks(input: {
     });
     return false;
   });
-  // dismiss も他の終端遷移と同水準の楽観的前提条件を通す: manager 判断中に
-  // 同じ provisional へ新しい観測が積まれて revision が進んでいたら、古い
-  // 判断のままでは適用しない（stale として不採用 → 次ラウンドで再裁定）。
-  const dismissedFindings = input.output.dismissedFindings.filter((dismissed) => (
-    checkClosingDecision(dismissed.findingId, [], ['open'], 'Dismiss', {
-      action: 'dismiss',
-      findingId: dismissed.findingId,
-      basis: dismissed.basis,
-      reason: dismissed.reason,
-      ...(dismissed.evidence !== undefined ? { evidence: dismissed.evidence } : {}),
-      ...(dismissed.taskQuote !== undefined ? { taskQuote: dismissed.taskQuote } : {}),
-      ...(dismissed.workflowTaskDigest !== undefined
-        ? { workflowTaskDigest: dismissed.workflowTaskDigest }
-        : {}),
-      ...(dismissed.adjudicationTaskId !== undefined
-        ? { adjudicationTaskId: dismissed.adjudicationTaskId }
-        : {}),
-      authority: dismissed.authority,
-    })
-  ));
-
   const output = {
     ...input.output,
     resolvedFindings,
@@ -644,7 +618,6 @@ function applyPreconditionChecks(input: {
     invalidatedFindings,
     waivedFindings,
     duplicateFindings,
-    dismissedFindings,
   };
   const landedRawFindingIds = collectLandedRawIds(output);
   return {

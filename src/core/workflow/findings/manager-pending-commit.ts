@@ -4,6 +4,7 @@ import type {
   FindingManagerReportPublication,
 } from './types.js';
 import { assertFindingLedgerProjectionInvariant } from '../../models/finding-ledger-invariants.js';
+import { projectFindingContractRegistries } from '../../models/finding-contract-seed.js';
 import {
   assertFindingLedgerAppendOnlyTransition,
 } from './finding-integrity.js';
@@ -17,11 +18,9 @@ function projectManagerCommit(ledger: FindingLedger): FindingManagerCommitProjec
     evidenceBindings: ledger.evidenceBindings,
     lifecycleReservations: ledger.lifecycleReservations,
     lifecycleEvents: ledger.lifecycleEvents,
-    rawRecoveryAttempts: ledger.rawRecoveryAttempts,
-    rawRecoveryResults: ledger.rawRecoveryResults,
     rawFindings: ledger.rawFindings,
     conflicts: ledger.conflicts,
-    interpretations: ledger.interpretations,
+    ...projectFindingContractRegistries(ledger),
     ...(ledger.fixpoint === undefined ? {} : { fixpoint: ledger.fixpoint }),
     ...(ledger.stopBudget === undefined ? {} : { stopBudget: ledger.stopBudget }),
     ...(ledger.reviewerAnomalies === undefined

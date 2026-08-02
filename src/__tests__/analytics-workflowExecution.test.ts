@@ -576,7 +576,6 @@ describe('AnalyticsEmitter findings ledger integration', () => {
       evidenceRecords: [evidenceRecord],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
     };
 
     emitter.onFindingLedgerUpdated(ledger, {
@@ -632,7 +631,6 @@ describe('AnalyticsEmitter findings ledger integration', () => {
       evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
     };
 
     expect(() => emitter.onFindingLedgerUpdated(ledger, {
@@ -717,7 +715,6 @@ describe('AnalyticsEmitter findings ledger integration', () => {
       evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
     });
 
     emitter.onFindingLedgerUpdated(ledger('child-b', 'F-0002'), {

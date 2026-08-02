@@ -37,7 +37,6 @@ const ledger: FindingLedger = {
   evidenceRecords: [],
   rawFindings: [],
   conflicts: [],
-  interpretations: [],
 };
 
 const context = {

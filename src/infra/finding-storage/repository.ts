@@ -63,35 +63,14 @@ export class FindingAuthorityRepository {
     readonly authorityKey: string;
     readonly workflowName: string;
     readonly seed: () => FindingAuthoritySeed;
-    readonly reset: () => FindingAuthoritySeed;
-    readonly onInvalid: (error: unknown) => void;
   }): FindingAuthorityRevision {
     return this.#database.transaction(() => {
       const existing = readAuthorityRow(this.#database.connection, input.authorityKey);
       if (existing !== undefined) {
-        try {
-          return {
-            revision: existing.revision,
-            ledger: parseStoredLedger(existing, input.workflowName),
-          };
-        } catch (error) {
-          const ledger = normalizeFindingLedger(
-            input.reset().ledger,
-            input.workflowName,
-          );
-          this.#database.connection.prepare(`
-            UPDATE finding_authorities
-            SET workflow_name = ?, revision = 1, ledger_json = ?, updated_at = ?
-            WHERE authority_key = ?
-          `).run(
-            input.workflowName,
-            JSON.stringify(ledger),
-            this.#now(),
-            input.authorityKey,
-          );
-          input.onInvalid(error);
-          return { revision: 1, ledger };
-        }
+        return {
+          revision: existing.revision,
+          ledger: parseStoredLedger(existing, input.workflowName),
+        };
       }
 
       const ledger = normalizeFindingLedger(input.seed().ledger, input.workflowName);

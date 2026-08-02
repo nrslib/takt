@@ -20,7 +20,6 @@ function makeEmptyLedger(): FindingLedger {
     findings: [],
     rawFindings: [],
     conflicts: [],
-    interpretations: [],
     updatedAt: '2026-06-13T00:00:00.000Z',
   };
 }
@@ -188,7 +187,6 @@ describe('Finding Contract integration flow', () => {
       entityProvisionalMutations: [],
       terminalEntityAttachmentFindingIds: new Set(),
       provisionalFindings: [],
-      rawFindingDispositions: [],
       rawProvenanceByRawFindingId: new Map([[
         rawFinding.rawFindingId,
         storedRawReconcileProvenance(

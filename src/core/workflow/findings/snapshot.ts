@@ -42,6 +42,7 @@ interface CapturedSnapshot {
   untrackedEvidence: ReviewScopeUntrackedEvidence[];
   presentationDigest: string;
   queryInventory: ReviewScopeQueryInventoryEntry[];
+  changedPaths: string[];
 }
 
 export interface ReviewScopeUntrackedEvidence {
@@ -76,6 +77,8 @@ export interface ReviewScopeQueryInventoryEntry {
 
 export interface ReviewScopeProofSnapshot extends ReviewScopeSnapshot {
   queryInventory: ReviewScopeQueryInventoryEntry[];
+  /** Engine-captured tracked/untracked paths that define the current task review scope. */
+  changedPaths?: string[];
 }
 
 interface FileSnapshot {
@@ -618,6 +621,11 @@ function captureSnapshot(
   const tracked = parseNulEntries(trackedOutput, 'git ls-files --cached --stage -z parse', cwd)
     .map((record) => parseTrackedEntry(record, cwd));
   const untracked = parseNulEntries(untrackedOutput, 'git ls-files --others --exclude-standard -z parse', cwd);
+  const trackedChanged = parseNulEntries(
+    runGit(cwd, ['diff', '--name-only', '-z', 'HEAD', '--']),
+    'git diff --name-only -z parse',
+    cwd,
+  );
   const excluded = parseNulEntries(
     excludedOutput,
     'git ls-files --others --ignored --exclude-standard --directory -z parse',
@@ -656,6 +664,8 @@ function captureSnapshot(
   const presentationDigest = createHash('sha256')
     .update(trackedDiff ?? '')
     .update(JSON.stringify(untrackedEvidence))
+    .update(JSON.stringify([...new Set([...trackedChanged, ...untracked]
+      .map((path) => decodeRepositoryPath(path)))].sort()))
     .digest('hex');
   return {
     inventory,
@@ -669,6 +679,8 @@ function captureSnapshot(
         ? {}
         : { content: Buffer.from(entry.queryEntry.content) }),
     })),
+    changedPaths: [...new Set([...trackedChanged, ...untracked]
+      .map((path) => decodeRepositoryPath(path)))].sort(),
   };
 }
 
@@ -714,6 +726,7 @@ function computeStableSnapshot(
             ...entry,
             ...(entry.content === undefined ? {} : { content: Buffer.from(entry.content) }),
           })),
+          changedPaths: [...second.changedPaths],
         };
       }
     }

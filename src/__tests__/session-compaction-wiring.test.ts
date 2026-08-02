@@ -468,7 +468,6 @@ describe('session compaction Phase 1 wiring', () => {
           evidenceRecords: [],
           rawFindings: [],
           conflicts: [],
-          interpretations: [],
           ...emptyFindingAuthorityProjection(),
         } satisfies FindingLedger),
       } as NonNullable<StepExecutorDeps['findingLedgerStore']>,

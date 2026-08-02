@@ -1,6 +1,5 @@
-import { createHash } from 'node:crypto';
 import { compareBinaryStrings } from '../../shared/utils/binary-string-comparator.js';
-import { canonicalJson } from '../../shared/utils/canonical-json.js';
+import { findingContentAddress } from './finding-contract-identity.js';
 import type {
   FindingEvidenceBinding,
   FindingLedgerConflict,
@@ -14,12 +13,6 @@ import type {
   FindingLifecycleReservation,
   FindingLifecycleReservationContext,
 } from './finding-types.js';
-
-function contentAddress(domain: string, payload: unknown): string {
-  return createHash('sha256')
-    .update(canonicalJson({ domain, payload }))
-    .digest('hex');
-}
 
 function targetKey(target: FindingLifecycleMutationTarget): string {
   return `${target.entityKind}\0${target.entityId}`;
@@ -42,7 +35,7 @@ export type FindingEvidenceBindingPayload = Omit<FindingEvidenceBinding, 'bindin
 export function computeFindingEvidenceBindingId(
   binding: FindingEvidenceBindingPayload,
 ): string {
-  return contentAddress('finding-evidence-binding', binding);
+  return findingContentAddress('finding-evidence-binding', binding);
 }
 
 export function createFindingEvidenceBinding(
@@ -81,7 +74,7 @@ export type FindingLifecycleReservationPayload =
 export function computeFindingLifecycleMutationId(
   reservation: FindingLifecycleReservationIdentityPayload,
 ): string {
-  return contentAddress(
+  return findingContentAddress(
     'finding-lifecycle-mutation',
     reservationIdentityPayload(reservation),
   );
@@ -90,7 +83,7 @@ export function computeFindingLifecycleMutationId(
 export function computeFindingLifecycleReservationId(
   reservation: FindingLifecycleReservationIdentityPayload,
 ): string {
-  return contentAddress(
+  return findingContentAddress(
     'finding-lifecycle-reservation',
     reservationIdentityPayload(reservation),
   );
@@ -148,7 +141,7 @@ function eventIdentityPayload(event: FindingLifecycleEventPayload | FindingLifec
 export function computeFindingLifecycleEventId(
   event: FindingLifecycleEventPayload | FindingLifecycleEvent,
 ): string {
-  return contentAddress('finding-lifecycle-event', eventIdentityPayload(event));
+  return findingContentAddress('finding-lifecycle-event', eventIdentityPayload(event));
 }
 
 export function createFindingLifecycleEvent(
@@ -172,7 +165,7 @@ export function createFindingLifecycleEvent(
 function computeResultDigest(
   heads: readonly Omit<FindingLifecycleEntityHead, 'eventId'>[],
 ): string {
-  return contentAddress('finding-lifecycle-result', {
+  return findingContentAddress('finding-lifecycle-result', {
     heads: [...heads].sort((left, right) => (
       compareBinaryStrings(
         `${left.entityKind}\0${left.entityId}`,
@@ -185,7 +178,7 @@ function computeResultDigest(
 export function computeFindingLifecycleProjectionDigest(
   projection: FindingLedgerEntry | FindingLedgerConflict,
 ): string {
-  return contentAddress('finding-lifecycle-entity-projection', projection);
+  return findingContentAddress('finding-lifecycle-entity-projection', projection);
 }
 
 export function computeFindingLifecycleResultDigest(input: {
@@ -227,6 +220,7 @@ export function findingEvidenceBindingIdentityViolation(
     claimIdentityHash: binding.claimIdentityHash,
     sourceRawFindingId: binding.sourceRawFindingId,
     sourceRawIntegrityDigest: binding.sourceRawIntegrityDigest,
+    contributionOrigin: binding.contributionOrigin,
     operation: binding.operation,
     target: binding.target,
   });

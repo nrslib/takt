@@ -1,6 +1,5 @@
 import type {
   FindingArtifactWriter,
-  FindingConflictAdjudicationAuditReport,
   FindingLedgerMutation,
   FindingLedgerStore,
   FindingManagerCommitStager,
@@ -27,14 +26,21 @@ declare const rebinder: FindingManagerCommitRebinder;
 declare const finalizer: FindingManagerCommitFinalizer;
 declare const rawFindings: RawFinding[];
 declare const managerReport: FindingManagerValidationReport;
-declare const adjudicationReport: FindingConflictAdjudicationAuditReport;
 declare const publication: FindingManagerReportPublication;
 declare const receipt: ReportPublicationReceipt;
 
 const ledgerSnapshotResult: void = writer.saveLedgerSnapshot();
 const rawFindingsResult: void = writer.saveRawFindings('run-id', 'reviewers', rawFindings);
 const managerReportResult: void = writer.saveManagerValidationReport(managerReport);
-const adjudicationReportResult: void = writer.saveConflictAdjudicationReport(adjudicationReport);
+const plannedPublicationResult: FindingManagerReportPublication = (
+  writer.planManagerValidationPublication('round-marker', managerReport)
+);
+const boundPublicationResult: FindingManagerReportPublication = (
+  writer.bindManagerValidationPublication('round-marker', publication)
+);
+const publishedReceiptResult: ReportPublicationReceipt = (
+  writer.publishManagerValidationPublication(publication)
+);
 const rebindResult: Promise<FindingLedger> = (
   rebinder.rebindPendingManagerValidationPublication(publication)
 );
@@ -68,7 +74,9 @@ createFindingManagerPublicationDouble(
 void ledgerSnapshotResult;
 void rawFindingsResult;
 void managerReportResult;
-void adjudicationReportResult;
+void plannedPublicationResult;
+void boundPublicationResult;
+void publishedReceiptResult;
 void rebindResult;
 void finalizationResult;
 void managerCommitResult;

@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -31,12 +30,12 @@ import {
   applyFindingLedgerFixtureSupersession,
   authorizeFindingLedgerFixture,
   canonicalRawFindingFixture,
+  rawCanonicalSnapshotFixture,
 } from './helpers/finding-lifecycle-fixture.js';
 import {
   cleanupTestFindingStorage,
   createTestFindingLedgerStore,
 } from './helpers/finding-storage.js';
-import { canonicalJson } from '../shared/utils/canonical-json.js';
 import { captureFindingMutationPrecondition } from '../core/workflow/findings/finding-preconditions.js';
 import {
   applyVerifiedLifecycleMutation,
@@ -47,6 +46,9 @@ import {
   createFindingLifecycleReservation,
 } from '../core/models/finding-lifecycle-identity.js';
 import { assertFindingLedgerProjectionInvariant } from '../core/models/finding-ledger-invariants.js';
+import { issueFindingScopeBindings } from '../core/workflow/findings/finding-scope-binding.js';
+import type { FindingContractConfig } from '../core/models/finding-types.js';
+import { computeWorkflowTaskDigest } from '../core/workflow/findings/task-scope-adjudication.js';
 
 const storageRoots: string[] = [];
 
@@ -81,7 +83,16 @@ const afterObservation = {
   stepName: 'reviewers',
   timestamp: '2026-07-31T00:01:00.000Z',
 };
-const WORKFLOW_TASK_DIGEST = 'a'.repeat(64);
+const TERMINAL_DISMISSAL_TASK = 'Review only src/in-scope.ts.';
+const WORKFLOW_TASK_DIGEST = computeWorkflowTaskDigest(TERMINAL_DISMISSAL_TASK);
+const TERMINAL_DISMISSAL_CONTRACT: FindingContractConfig = {
+  manager: {
+    persona: 'manager',
+    instruction: 'Manage findings.',
+    outputContract: 'Return structured findings.',
+  },
+  adjudicator: { persona: 'supervisor' },
+};
 const historicalObservation = {
   ...afterObservation,
   timestamp: '2026-07-31T00:02:00.000Z',
@@ -209,11 +220,8 @@ function ledger(input: {
       reservedAt: afterObservation,
     }],
     lifecycleEvents: input.eventInPrevious === true ? [event] : [],
-    rawRecoveryAttempts: [],
-    rawRecoveryResults: [],
     rawFindings: [source],
     conflicts: [],
-    interpretations: [],
     ...(input.budgetExhausted === true
       ? {
           reviewIntegrity: {
@@ -263,11 +271,8 @@ function validSettledLedger(): FindingLedger {
     evidenceBindings: [],
     lifecycleReservations: [],
     lifecycleEvents: [],
-    rawRecoveryAttempts: [],
-    rawRecoveryResults: [],
     rawFindings: [],
     conflicts: [],
-    interpretations: [],
   });
   const event = resolved.lifecycleEvents.find(
     (candidate) => candidate.operation === 'resolve_finding',
@@ -305,6 +310,7 @@ function terminalDismissalFixture(): {
       lifecycle: 'new',
       severity: 'high',
       title: 'Terminal target',
+      target: { kind: 'code', paths: ['docs/outside.md'] },
       evidenceIds: [],
       reviewers: ['architecture'],
       rawFindingIds: [],
@@ -316,11 +322,8 @@ function terminalDismissalFixture(): {
     evidenceBindings: [],
     lifecycleReservations: [],
     lifecycleEvents: [],
-    rawRecoveryAttempts: [],
-    rawRecoveryResults: [],
     rawFindings: [],
     conflicts: [],
-    interpretations: [],
   });
   const targetPrecondition = captureFindingMutationPrecondition(initial, 'F-0001')!;
   const raw = canonicalRawFindingFixture({
@@ -332,47 +335,65 @@ function terminalDismissalFixture(): {
     targetPrecondition,
     evidence: [],
   });
-  const previous = {
+  const previousWithoutScopeBinding = {
     ...initial,
     rawFindings: [...initial.rawFindings, raw],
+    rawCanonicalSnapshots: [
+      ...initial.rawCanonicalSnapshots,
+      rawCanonicalSnapshotFixture(raw, afterObservation),
+    ],
   };
   const dismissal = {
     basis: 'outside_task_scope' as const,
     reason: 'The claim is outside this workflow task.',
-    taskQuote: 'Review the scoped implementation.',
+    taskQuote: TERMINAL_DISMISSAL_TASK,
     workflowTaskDigest: WORKFLOW_TASK_DIGEST,
     adjudicationTaskId: 'c'.repeat(64),
     authority: 'terminal_adjudication' as const,
     decidedAt: { ...afterObservation },
   };
-  const decision = {
-    findingId: 'F-0001',
-    basis: dismissal.basis,
-    reason: dismissal.reason,
-    taskQuote: dismissal.taskQuote,
-    workflowTaskDigest: dismissal.workflowTaskDigest,
-    adjudicationTaskId: dismissal.adjudicationTaskId,
-    authority: dismissal.authority,
+  const target = previousWithoutScopeBinding.findings[0]!;
+  const expectedHead = captureFindingLifecycleHead(
+    previousWithoutScopeBinding,
+    'finding',
+    target.id,
+  )!;
+  const scopeBinding = issueFindingScopeBindings({
+    finding: target,
+    expectedHead,
+    workflowTask: TERMINAL_DISMISSAL_TASK,
+    contract: TERMINAL_DISMISSAL_CONTRACT,
+    reviewScopeSnapshot: {
+      reviewScopeSnapshotId: 'b'.repeat(64),
+      trackedDiff: undefined,
+      untrackedEvidence: [],
+      queryInventory: [],
+      changedPaths: ['src/in-scope.ts'],
+    },
+    issuedAt: afterObservation,
+  }).find(({ source }) => source === 'workflow_task_scope')!;
+  const previous = {
+    ...previousWithoutScopeBinding,
+    findingScopeBindings: [
+      ...previousWithoutScopeBinding.findingScopeBindings,
+      scopeBinding,
+    ],
   };
-  const target = previous.findings[0]!;
   const reservation = createFindingLifecycleReservation({
     operation: 'dismiss_finding',
     targets: [{
       entityKind: 'finding',
       entityId: target.id,
-      expectedHead: captureFindingLifecycleHead(
-        previous,
-        'finding',
-        target.id,
-      )!,
+      expectedHead,
     }],
     evidenceBindingIds: [],
     authority: {
-      kind: 'engine_policy',
-      decisionKind: 'dismiss',
-      decisionDigest: createHash('sha256')
-        .update(canonicalJson(decision))
-        .digest('hex'),
+      kind: 'verified_terminal_adjudication',
+      episodeId: 'd'.repeat(64),
+      attemptId: dismissal.adjudicationTaskId,
+      verificationDigest: 'e'.repeat(64),
+      proofRecordIds: [],
+      scopeBindingIds: [scopeBinding.bindingId],
     },
     context: { kind: 'transaction' },
     reservedAt: afterObservation,
@@ -437,11 +458,8 @@ function verifiedResolutionFixture(
     evidenceBindings: [],
     lifecycleReservations: [],
     lifecycleEvents: [],
-    rawRecoveryAttempts: [],
-    rawRecoveryResults: [],
     rawFindings: [],
     conflicts: [],
-    interpretations: [],
   });
   const currentPrecondition = captureFindingMutationPrecondition(
     initial,
@@ -461,6 +479,10 @@ function verifiedResolutionFixture(
   const previous = {
     ...initial,
     rawFindings: [...initial.rawFindings, source],
+    rawCanonicalSnapshots: [
+      ...initial.rawCanonicalSnapshots,
+      rawCanonicalSnapshotFixture(source, beforeObservation),
+    ],
   };
   const target = previous.findings[0]!;
   const resolved = applyFindingLedgerFixtureRevision({
@@ -528,6 +550,10 @@ function historicalTerminalDismissalFixture(
   const anomalyLedger = {
     ...eventBaseline,
     rawFindings: [...eventBaseline.rawFindings, ...sourceRaws],
+    rawCanonicalSnapshots: [
+      ...eventBaseline.rawCanonicalSnapshots,
+      ...sourceRaws.map((raw) => rawCanonicalSnapshotFixture(raw, historicalObservation)),
+    ],
     reviewerAnomalies: [anomalyEntry],
   };
   return {
@@ -576,6 +602,10 @@ function historicalVerifiedResolutionFixture(
     anomalyLedger: {
       ...eventBaseline,
       rawFindings: [...eventBaseline.rawFindings, ...sourceRaws],
+      rawCanonicalSnapshots: [
+        ...eventBaseline.rawCanonicalSnapshots,
+        ...sourceRaws.map((raw) => rawCanonicalSnapshotFixture(raw, historicalObservation)),
+      ],
       reviewerAnomalies: [anomalyEntry],
     },
   };

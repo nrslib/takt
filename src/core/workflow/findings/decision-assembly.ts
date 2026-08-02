@@ -23,7 +23,6 @@ import type {
 } from './types.js';
 import {
   FINDING_SEVERITIES,
-  SEMANTIC_FINDING_DISMISSAL_BASES,
 } from '../../models/finding-types.js';
 import { canonicalizeFindingManagerOutput } from './canonicalize.js';
 import { hasDisputeClaimFor } from './manager-output-validation.js';
@@ -596,124 +595,16 @@ function assembleInvalidateDecisions(input: {
   return { invalidatedFindings, rejected };
 }
 
-/**
- * manager が dismissDecisions で選んだ finding id を、engine が事前に構築した
- * 候補集合（open な provisional かつ DISMISSABLE_PROVISIONAL_KINDS）と照合して
- * から適用する。invalidate と同じ授権モデル: LLM の reason だけでは dismiss を
- * 成立させない。clean な後続証拠による settlement が同ラウンドにある finding は
- * そちらを優先して dismiss を不採用にし、active conflict が参照する finding は
- * 裁定（adjudication）経路を迂回させないため拒否する。
- */
 function assembleDismissDecisions(input: {
-  previousLedger: FindingLedger;
   decisions: FindingManagerDecisions['dismissDecisions'];
-  eligibleFindingIds: ReadonlySet<string>;
-  transitionedFindingIds: ReadonlySet<string>;
-  /** このラウンドで match / conflict として再観測された finding。outside_task_scope 以外では clean 証拠を優先する。 */
-  reobservedFindingIds: ReadonlySet<string>;
-  conflictFindingIds: ReadonlySet<string>;
-  managerAuthority: FindingManagerAuthority;
 }): { dismissedFindings: FindingManagerDismissedFinding[]; rejected: RejectedDismissDecision[] } {
-  const findingsById = new Map(input.previousLedger.findings.map((finding) => [finding.id, finding]));
-  const activeConflictFindingIds = collectActiveConflictFindingIds(input.previousLedger);
-  const dismissedFindings: FindingManagerDismissedFinding[] = [];
-  const rejected: RejectedDismissDecision[] = [];
-  const seenFindingIds = new Set<string>();
-
-  for (const decision of input.decisions) {
-    if (seenFindingIds.has(decision.findingId)) {
-      rejected.push({ findingId: decision.findingId, reason: `Duplicate dismiss decision for finding id "${decision.findingId}"` });
-      continue;
-    }
-    seenFindingIds.add(decision.findingId);
-
-    const finding = findingsById.get(decision.findingId);
-    if (finding === undefined) {
-      rejected.push({ findingId: decision.findingId, reason: `Unknown finding id "${decision.findingId}"` });
-      continue;
-    }
-    if (finding.status !== 'open') {
-      rejected.push({ findingId: decision.findingId, reason: `Cannot dismiss finding "${decision.findingId}" because it is not open` });
-      continue;
-    }
-    if (!input.eligibleFindingIds.has(decision.findingId)) {
-      rejected.push({
-        findingId: decision.findingId,
-        reason: `Cannot dismiss finding "${decision.findingId}" because the engine did not offer it as a dismissal candidate`,
-      });
-      continue;
-    }
-    if (
-      input.managerAuthority !== 'terminal_adjudication'
-      && SEMANTIC_FINDING_DISMISSAL_BASES.some((basis) => basis === decision.basis)
-    ) {
-      rejected.push({
-        findingId: decision.findingId,
-        reason: `Cannot dismiss finding "${decision.findingId}" with basis "${decision.basis}" without terminal_adjudication authority`,
-      });
-      continue;
-    }
-    if (
-      decision.basis === 'outside_task_scope'
-      && (
-        decision.taskQuote === undefined
-        || decision.workflowTaskDigest === undefined
-        || decision.adjudicationTaskId === undefined
-      )
-    ) {
-      rejected.push({
-        findingId: decision.findingId,
-        reason: `Cannot dismiss finding "${decision.findingId}" as outside_task_scope without a verified taskQuote and control-task binding`,
-      });
-      continue;
-    }
-    if (
-      decision.basis !== 'outside_task_scope'
-      && input.transitionedFindingIds.has(decision.findingId)
-    ) {
-      rejected.push({
-        findingId: decision.findingId,
-        reason: `Cannot dismiss finding "${decision.findingId}" because clean evidence settles it in this output`,
-      });
-      continue;
-    }
-    if (
-      decision.basis !== 'outside_task_scope'
-      && input.reobservedFindingIds.has(decision.findingId)
-    ) {
-      rejected.push({
-        findingId: decision.findingId,
-        reason: `Cannot dismiss finding "${decision.findingId}" because it is re-observed (match/conflict) in this output; evidence takes precedence over jurisdiction adjudication`,
-      });
-      continue;
-    }
-    if (
-      activeConflictFindingIds.has(decision.findingId)
-      || input.conflictFindingIds.has(decision.findingId)
-    ) {
-      rejected.push({
-        findingId: decision.findingId,
-        reason: `Cannot dismiss finding "${decision.findingId}" while an active conflict references it; adjudicate the conflict first`,
-      });
-      continue;
-    }
-    dismissedFindings.push({
+  return {
+    dismissedFindings: [],
+    rejected: input.decisions.map((decision) => ({
       findingId: decision.findingId,
-      basis: decision.basis,
-      reason: decision.reason,
-      ...(decision.evidence !== undefined ? { evidence: decision.evidence } : {}),
-      ...(decision.taskQuote !== undefined ? { taskQuote: decision.taskQuote } : {}),
-      ...(decision.workflowTaskDigest !== undefined
-        ? { workflowTaskDigest: decision.workflowTaskDigest }
-        : {}),
-      ...(decision.adjudicationTaskId !== undefined
-        ? { adjudicationTaskId: decision.adjudicationTaskId }
-        : {}),
-      authority: input.managerAuthority,
-    });
-  }
-
-  return { dismissedFindings, rejected };
+      reason: `Cannot dismiss finding "${decision.findingId}" outside verified terminal adjudication`,
+    })),
+  };
 }
 
 /**
@@ -942,8 +833,6 @@ function assembleConflictDecisions(input: {
    */
   regeneratedConflictIds: ReadonlySet<string>;
 }): { resolvedConflicts: FindingManagerResolvedConflict[]; rejected: RejectedConflictDecision[] } {
-  const conflictsById = new Map(input.previousLedger.conflicts.map((conflict) => [conflict.id, conflict]));
-  const resolvedConflicts: FindingManagerResolvedConflict[] = [];
   const rejected: RejectedConflictDecision[] = [];
   const seenConflictIds = new Set<string>();
 
@@ -961,36 +850,14 @@ function assembleConflictDecisions(input: {
     if (decision.decision === 'keep') {
       continue;
     }
-
-    const conflict = conflictsById.get(decision.conflictId);
-    if (conflict === undefined) {
-      rejected.push({ conflictId: decision.conflictId, decision: decision.decision, reason: `Unknown conflict id "${decision.conflictId}"` });
-      continue;
-    }
-    if (conflict.status !== 'active') {
-      rejected.push({
-        conflictId: decision.conflictId,
-        decision: decision.decision,
-        reason: `Cannot resolve conflict "${decision.conflictId}" because it is not active`,
-      });
-      continue;
-    }
-    // reconciler は resolvedConflicts を先に適用し、その後同一の正準 conflict を
-    // active へ戻す。同じラウンドで同じ conflict が再生成されるなら、
-    // 「resolve を採用した」という記録と実状態（active のまま）が食い違うため
-    // 不採用にする。
-    if (input.regeneratedConflictIds.has(decision.conflictId)) {
-      rejected.push({
-        conflictId: decision.conflictId,
-        decision: decision.decision,
-        reason: `Conflict "${decision.conflictId}" is regenerated by evidence in the same round; cannot resolve it while it recurs`,
-      });
-      continue;
-    }
-    resolvedConflicts.push({ conflictId: decision.conflictId, evidence: decision.evidence });
+    rejected.push({
+      conflictId: decision.conflictId,
+      decision: decision.decision,
+      reason: `Conflict "${decision.conflictId}" requires verified conflict adjudication`,
+    });
   }
 
-  return { resolvedConflicts, rejected };
+  return { resolvedConflicts: [], rejected };
 }
 
 /**
@@ -1141,19 +1008,10 @@ export function assembleManagerOutput(input: AssembleManagerOutputInput): Assemb
     transitionedFindingIds: stateTransitionFindingIds,
     reobservedFindingIds: unresolvedEvidenceFindingIds,
   });
-  // dismiss は invalidate と同じ段で確定する（clean 証拠の settlement =
-  // stateTransitionFindingIds を優先して不採用にし、確定分は以降の判断の
-  // 除外集合へ足し込む）。
+  // manager の dismiss proposal は権限を持たない。verified terminal
+  // adjudication だけが別経路で dismissal lifecycle を適用できる。
   const dismissResult = assembleDismissDecisions({
-    previousLedger: input.previousLedger,
     decisions: input.decisions.dismissDecisions,
-    eligibleFindingIds: input.dismissCandidateFindingIds ?? new Set(),
-    transitionedFindingIds: stateTransitionFindingIds,
-    reobservedFindingIds: unresolvedEvidenceFindingIds,
-    conflictFindingIds: new Set(
-      canonicalRaw.conflicts.flatMap((conflict) => conflict.findingIds),
-    ),
-    managerAuthority: input.managerAuthority,
   });
   const withInvalidateTransitioned = new Set([
     ...stateTransitionFindingIds,

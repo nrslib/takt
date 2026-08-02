@@ -22,7 +22,6 @@ import {
   applyPreAdmissionEntityProvisionalMutationsToLedger,
   type ProvisionalFindingSpec,
 } from '../core/workflow/findings/reconciler.js';
-import { snapshotProvisionalRecoveryOrigin } from '../core/workflow/findings/provisional-recovery-origin.js';
 import { reconcileCommitPlan } from '../core/workflow/findings/manager-commit-finalization.js';
 import { createEmptyManagerOutput } from '../core/workflow/findings/manager-output.js';
 import { applyRejectedObservationAttachments } from '../core/workflow/findings/manager-provisional-settlement.js';
@@ -39,6 +38,8 @@ import type { ReviewScopeProofSnapshot } from '../core/workflow/findings/snapsho
 import {
   authorizeFindingLedgerFixture,
   canonicalRawFindingFixture,
+  emptyFindingAuthorityProjection,
+  rawCanonicalSnapshotFixture,
 } from './helpers/finding-lifecycle-fixture.js';
 import { storedRawReconcileProvenance } from './helpers/finding-integrity.js';
 import { MAIN_MANAGER_INPUT_MAX_BYTES } from '../core/workflow/findings/manager-task-contracts.js';
@@ -84,7 +85,7 @@ function runInput(options: Record<string, unknown> = {}) {
 }
 
 function emptyLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
-  return {
+  const ledger = {
     workflowName: 'entity-binding',
     nextId: 1,
     updatedAt: '2026-07-30T00:00:00.000Z',
@@ -93,12 +94,19 @@ function emptyLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
     evidenceBindings: [],
     lifecycleReservations: [],
     lifecycleEvents: [],
-    rawRecoveryAttempts: [],
-    rawRecoveryResults: [],
     rawFindings: [],
     conflicts: [],
-    interpretations: [],
+    ...emptyFindingAuthorityProjection(),
     ...overrides,
+  };
+  return {
+    ...ledger,
+    rawCanonicalSnapshots: overrides.rawCanonicalSnapshots
+      ?? ledger.rawFindings.map((raw) => rawCanonicalSnapshotFixture(raw, {
+        runId: 'run-0',
+        stepName: 'reviewers',
+        timestamp: ledger.updatedAt,
+      })),
   };
 }
 
@@ -340,7 +348,6 @@ function provisionalFinding(input: {
       reason: 'Existing provisional.',
       firstObservedAt: { ...observation },
       lastObservedAt: { ...observation },
-      interpretationEpochs: 0,
       gateEffect: 'block',
       firstObservedRound: 1,
     },
@@ -565,61 +572,6 @@ describe('pre-admission semantic entity binding', () => {
       provisionalKind: 'raw-meaning-ambiguous',
       sourceRawFindingIds: ['raw-a', 'raw-b'],
     }]);
-  });
-
-  it('keeps interpretation recovery raws out of mixed entity-binding groups', async () => {
-    const sourceRaw = rawFinding({
-      rawFindingId: 'raw-source',
-      title: 'Existing recovery source',
-      description: 'The recovery raw belongs to the interpretation ladder.',
-    });
-    const process = provisionalFinding({
-      id: 'F-0001',
-      raw: sourceRaw,
-      kind: 'raw-meaning-ambiguous',
-    });
-    const ledger = emptyLedger({
-      findings: [process],
-      rawFindings: [sourceRaw],
-      nextId: 2,
-    });
-    const base = intakeFor(ledger, [
-      rawFinding({
-        rawFindingId: 'raw-recovery',
-        title: 'Recovery attempt',
-        description: 'This raw must stay with the interpretation ladder.',
-      }),
-      rawFinding({
-        rawFindingId: 'raw-normal',
-        title: 'Normal observation',
-        description: 'This raw remains eligible for entity binding.',
-      }),
-    ]);
-    const recovery = base.items[0]!;
-    const intake: ReviewerIntakeResult = {
-      ...base,
-      items: [
-        {
-          ...recovery,
-          interpretationRecoveryAttempt: true,
-          recoveryOrigins: [snapshotProvisionalRecoveryOrigin({
-            ...process,
-            provisional: process.provisional!,
-          })],
-        },
-        base.items[1]!,
-      ],
-    };
-    mockGroupedDecision((rawFindingId) => ({
-      decision: 'ambiguous',
-      groupRawFindingId: rawFindingId,
-    }));
-
-    const bound = await bind({ ledger, intake });
-
-    expect(executeAgentMock).toHaveBeenCalledOnce();
-    expect(bound.intake.entityBindings.has('raw-recovery')).toBe(false);
-    expect(bound.intake.entityBindings.has('raw-normal')).toBe(true);
   });
 
   it('does not reuse stable or lineage identity after a closed provisional', async () => {
@@ -1008,7 +960,7 @@ describe('pre-admission semantic entity binding', () => {
     expect(committed.managerDecisionCommands[0]?.operation).toBe('update_provisional');
   });
 
-  it('converts an attachment to terminal audit when the target is dismissed in the same commit', async () => {
+  it('rejects a standard manager dismissal before converting an attachment to terminal audit', async () => {
     const priorRaw = rawFinding({
       rawFindingId: 'raw-prior',
       title: 'Dismissed ambiguity',
@@ -1041,39 +993,18 @@ describe('pre-admission semantic entity binding', () => {
         ...createEmptyManagerOutput(),
         dismissedFindings: [{
           findingId: existing.id,
-          basis: 'unverifiable_claim',
+          basis: 'outside_contract_jurisdiction',
           reason: 'The ambiguity is terminal.',
           evidence: 'The observation contains no verifiable subject.',
           authority: 'standard',
         }],
       },
     });
-    const observation = {
-      runId: 'run-1',
-      stepName: managerStep.name,
-      timestamp: '2026-07-30T00:00:00.000Z',
-    };
-    const audited = applyRejectedObservationAttachments(
-      authorizeFindingLedgerFixture(committed.ledger),
-      committed.rejectedObservationAttachments,
-      observation,
+    expect(committed.managerOutput.dismissedFindings).toEqual([]);
+    expect(committed.normalizationRejections).toContainEqual(
+      expect.stringContaining('manager dismissal requires verified terminal adjudication'),
     );
-
-    expect(committed.entityMutationResults).toMatchObject([{
-      outcome: 'terminal_audit',
-      targetFindingId: existing.id,
-      sourceRawFindingIds: ['raw-terminal'],
-    }]);
-    expect(committed.ledger.rawFindings.map((raw) => raw.rawFindingId))
-      .toContain('raw-terminal');
-    expect(committed.ledger.findings[0]?.rawFindingIds).not.toContain('raw-terminal');
-    expect(committed.rawFindingDispositions).toMatchObject([{
-      rawFindingId: 'raw-terminal',
-      outcome: 'audit_only',
-    }]);
-    expect(audited.findings[0]?.rejectedObservations).toMatchObject([{
-      rawFindingId: 'raw-terminal',
-    }]);
+    expect(committed.ledger.findings.find((finding) => finding.id === existing.id)?.status).toBe('open');
   });
 
   it('converts an attachment to terminal audit when clean evidence promotes the target', async () => {
@@ -1157,10 +1088,6 @@ describe('pre-admission semantic entity binding', () => {
     expect(committed.ledger.rawFindings.map((raw) => raw.rawFindingId))
       .toContain('raw-terminal');
     expect(committed.ledger.findings[0]?.rawFindingIds).not.toContain('raw-terminal');
-    expect(committed.rawFindingDispositions).toMatchObject([{
-      rawFindingId: 'raw-terminal',
-      outcome: 'audit_only',
-    }]);
     expect(audited.findings[0]?.rejectedObservations).toMatchObject([{
       rawFindingId: 'raw-terminal',
     }]);

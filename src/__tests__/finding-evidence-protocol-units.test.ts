@@ -56,7 +56,6 @@ function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
     evidenceRecords: [],
     rawFindings: [],
     conflicts: [],
-    interpretations: [],
     ...overrides,
   };
 }

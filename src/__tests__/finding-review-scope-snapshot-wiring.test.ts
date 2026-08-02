@@ -279,7 +279,6 @@ function makeRunner(options: {
     evidenceRecords: [],
     rawFindings: [],
     conflicts: [],
-    interpretations: [],
     ...emptyFindingAuthorityProjection(),
   });
   let findingLedgerStore: NonNullable<ParallelRunnerDeps['findingLedgerStore']>;
@@ -296,7 +295,6 @@ function makeRunner(options: {
       (report) => validationReportWriter(report),
       ledgerRepository,
     ),
-    saveConflictAdjudicationReport: vi.fn(),
   } as unknown as NonNullable<ParallelRunnerDeps['findingLedgerStore']>;
   const stepExecutor = {
     buildInstruction: vi.fn((step: WorkflowStep) => `instruction:${step.name}`),
@@ -1038,7 +1036,6 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
           rawFindings: [existingRaw],
           evidenceRecords: [],
           conflicts: [],
-          interpretations: [],
           ...emptyFindingAuthorityProjection(),
         }),
         result: undefined,
@@ -1137,7 +1134,6 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
         }],
         evidenceRecords: [],
         conflicts: [],
-        interpretations: [],
         ...emptyFindingAuthorityProjection(),
       });
       const ledgerStore = deps.findingLedgerStore!;

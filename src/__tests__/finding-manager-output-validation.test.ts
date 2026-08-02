@@ -19,7 +19,6 @@ function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
     updatedAt: '2026-06-13T00:00:00.000Z',
     rawFindings: [makeRawFinding({ rawFindingId: 'raw-existing' })],
     conflicts: [],
-    interpretations: [],
     findings: [
       {
         id: 'F-0001',

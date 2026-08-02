@@ -5,6 +5,7 @@ import {
   renderFencedTextBlock,
 } from '../instruction/fenced-block.js';
 import type { ReviewScopeSnapshot, ReviewScopeUntrackedEvidence } from './snapshot.js';
+import type { ConflictAdjudicationSnapshot } from '../../models/finding-contract-types.js';
 import type {
   FindingLedger,
   FindingLedgerConflict,
@@ -213,23 +214,15 @@ export function renderAdjudicationInstruction(snapshot: AdjudicationEvidenceSnap
   });
 }
 
-export function isConflictUnadjudicated(
-  conflict: Pick<FindingLedgerConflict, 'adjudications'>,
-  currentEvidenceHash: string,
-): boolean {
-  const seen = (conflict.adjudications ?? []).some(
-    (record) => record.evidenceHash === currentEvidenceHash,
-  );
-  return !seen;
-}
-
-export function isLedgerConflictUnadjudicated(
-  conflict: FindingLedgerConflict,
-  ledger: FindingLedger,
-  reviewScopeSnapshotId: string,
-): boolean {
-  return isConflictUnadjudicated(
-    conflict,
-    computeConflictEvidenceHash(conflict, ledger, reviewScopeSnapshotId),
-  );
+export function renderConflictAdjudicationInstruction(
+  snapshot: ConflictAdjudicationSnapshot,
+): string {
+  return [
+    'Adjudicate the durable finding conflict snapshot below. You are read-only.',
+    'Return exactly one configured proposal. References must use subjectId values from the snapshot and authorityRefIds must identify exact engine-proof records.',
+    'Use merge_holding only for a verified identical claim, promote_holding only with verification supporting the complete product projection, terminate_subject only with verification supporting no-issue or refutation, and undetermined otherwise.',
+    '',
+    '## Durable conflict snapshot',
+    renderFencedJsonBlock(snapshot),
+  ].join('\n');
 }

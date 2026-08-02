@@ -16,14 +16,12 @@ import type {
   FindingManagerOutput,
   FindingObservation,
   InterpretationRecoveryOriginSettlement,
-  RawFindingDisposition,
 } from './types.js';
 import { evaluateRawAdmission, type RawAdmissionEvaluation, type ReviewerIntakeResult } from './manager-admission.js';
 import { provisionalSpecForRawKind } from './manager-provisional.js';
 import type { ManagerDecisionStageResult, RunFindingManagerForStepInput } from './manager-contracts.js';
 
 import { mergeOutputs, revalidateManagerPlan } from './manager-commit-revalidation.js';
-import { buildLadderCommitPlan, selectCommittableLadder } from './manager-ladder-commit-plan.js';
 import {
   applyCommitLedgerStates,
   reconcileCommitPlan,
@@ -35,20 +33,7 @@ import {
   type ManagerActionRecoveryLifecyclePlan,
 } from './manager-action-recovery.js';
 import { stopBudgetRoundsCompleted } from './stop-budget.js';
-import { applyRawAdjudicationRecovery } from './raw-adjudication-commit.js';
-import {
-  applyInterpretationRecoveryFailures,
-  resolveInterpretationRecoveryFailuresForCommit,
-  type InterpretationRecoveryCommitFailure,
-  retainInterpretationRecoveryForLadder,
-  type InterpretationRecoveryFailure,
-} from './interpretation-recovery.js';
-import {
-  collectStaleRecoveryRawFindingIds,
-  matchesProvisionalRecoveryOrigin,
-} from './provisional-recovery-origin.js';
 import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
-import { compareCanonicalJsonValues } from '../../../shared/utils/canonical-json.js';
 import { canonicalRawIntegrityDigestOf } from './raw-canonicalization.js';
 import type { ResolutionRenotificationTransition } from './resolution-renotification.js';
 import type { FindingLifecycleCommand } from './lifecycle-transaction.js';
@@ -57,6 +42,14 @@ import {
   type ReviewScopeProofSnapshot,
 } from './snapshot.js';
 import { computeConflictEvidenceHash } from './adjudication-evidence.js';
+import {
+  prepareInterpretationCaseActions,
+  stagePreparedInterpretationCaseOwnership,
+  type PreparedInterpretationCasePlan,
+} from './interpretation-case-finalizer.js';
+import { issueInterpretationCaseConflictAuthority } from './interpretation-case-authority.js';
+import { createAnchorAdjudication } from '../../models/finding-anchor-relevance.js';
+import { createEmptyManagerOutput } from './manager-output.js';
 
 export function attachCapturedConflictHeads(input: {
   commands: readonly FindingLifecycleCommand[];
@@ -66,7 +59,6 @@ export function attachCapturedConflictHeads(input: {
 }): FindingLifecycleCommand[] {
   return input.commands.map((command) => {
     const expectedHeadsByTarget = new Map(command.expectedHeadsByTarget);
-    let conflictEvidencePrecondition = command.conflictEvidencePrecondition;
     for (const conflict of command.changes.conflicts) {
       if (
         input.resolvedConflictIds.has(conflict.id)
@@ -77,32 +69,38 @@ export function attachCapturedConflictHeads(input: {
           `conflict\0${conflict.id}`,
           captured.lifecycleHead,
         );
-        conflictEvidencePrecondition = {
-          conflictId: conflict.id,
-          evidenceSetHash: captured.evidenceSetHash,
-          cwd: input.cwd,
-        };
       }
     }
     return expectedHeadsByTarget.size === 0
-      && conflictEvidencePrecondition === undefined
       ? command
       : {
           ...command,
           expectedHeadsByTarget,
-          ...(conflictEvidencePrecondition === undefined
-            ? {}
-            : { conflictEvidencePrecondition }),
         };
   });
 }
 
+function attachInterpretationCaseOrigins(
+  commands: readonly FindingLifecycleCommand[],
+  prepared: PreparedInterpretationCasePlan,
+): FindingLifecycleCommand[] {
+  const caseIdsByRawFindingId = new Map<string, string>();
+  for (const preparedCase of prepared.cases) {
+    for (const rawFindingId of preparedCase.rawFindingIds) {
+      if (caseIdsByRawFindingId.has(rawFindingId)) {
+        throw new Error(`Interpretation raw finding "${rawFindingId}" has multiple case owners`);
+      }
+      caseIdsByRawFindingId.set(rawFindingId, preparedCase.caseId);
+    }
+  }
+  return commands.map((command) => ({
+    ...command,
+    interpretationCaseIdsByRawFindingId: caseIdsByRawFindingId,
+  }));
+}
+
 export interface CommitMutationResult {
   applied: boolean;
-  rawRecoveryManagerDecisionLedger: FindingLedger;
-  rawRecoveryManagerDecisionCommands: FindingLifecycleCommand[];
-  rawRecoveryLedger: FindingLedger;
-  rawRecoverySettlementCommands: FindingLifecycleCommand[];
   managerDecisionLedger: FindingLedger;
   managerDecisionCommands: FindingLifecycleCommand[];
   lifecycleManagerOutput: FindingManagerOutput;
@@ -111,19 +109,18 @@ export interface CommitMutationResult {
   admissionRejections: RawAdmissionEvaluation['admissionRejections'];
   provisionalLandings: ProvisionalLandingReport[];
   reviewerAnomalyLandings: ReviewerAnomalyLandingReport[];
-  rawFindingDispositions: RawFindingDisposition[];
   interpretationRecoverySettlements: InterpretationRecoveryOriginSettlement[];
   resolutionRenotifications: ResolutionRenotificationTransition[];
   rejectedObservationAttachments: RejectedObservationAttachment[];
   settlementCommands: FindingLifecycleCommand[];
   actionRecoveryPlan: ManagerActionRecoveryLifecyclePlan | null;
+  interpretationPrepared: PreparedInterpretationCasePlan;
 }
 
 export interface FindingManagerCommitPlanInput {
   input: RunFindingManagerForStepInput;
   previousLedger: FindingLedger;
   intake: ReviewerIntakeResult;
-  interpretationRecoveryFailures: InterpretationRecoveryFailure[];
   admission: RawAdmissionEvaluation;
   managerDecision: ManagerDecisionStageResult;
   observation: FindingObservation;
@@ -132,117 +129,6 @@ export interface FindingManagerCommitPlanInput {
   reviewIntegrityLimits: ReturnType<typeof resolveReviewIntegrityLimits>;
   reviewScopeSnapshotId: string;
   reviewScopeSnapshot: ReviewScopeProofSnapshot;
-}
-
-function interpretationRecoveryDispositions(
-  failures: readonly InterpretationRecoveryCommitFailure[],
-): RawFindingDisposition[] {
-  const failuresByRawFindingId = new Map<string, InterpretationRecoveryCommitFailure[]>();
-  for (const failure of failures) {
-    failuresByRawFindingId.set(
-      failure.sourceRawFindingId,
-      [...(failuresByRawFindingId.get(failure.sourceRawFindingId) ?? []), failure],
-    );
-  }
-  return [...failuresByRawFindingId]
-    .sort(([left], [right]) => compareBinaryStrings(left, right))
-    .map(([rawFindingId, rawFailures]) => {
-      const ordered = [...rawFailures].sort((left, right) => (
-        compareBinaryStrings(
-          left.recoveryOrigin.provisionalFindingId,
-          right.recoveryOrigin.provisionalFindingId,
-        )
-      ));
-      return {
-        rawFindingId,
-        outcome: ordered.every((failure) => failure.outcome === 'stale')
-          ? 'stale' as const
-          : 'audit_only' as const,
-        reason: ordered.map((failure) => (
-          `[${failure.recoveryOrigin.provisionalFindingId}] ${failure.reason}`
-        )).join('; '),
-      };
-    });
-}
-
-function buildInterpretationRecoverySettlements(input: {
-  failures: readonly InterpretationRecoveryCommitFailure[];
-  intake: ReviewerIntakeResult;
-  recoveryLedger: FindingLedger;
-  finalizedLedger: FindingLedger;
-  ladderCommit: ReturnType<typeof buildLadderCommitPlan>;
-}): InterpretationRecoveryOriginSettlement[] {
-  const settlements = new Map<string, InterpretationRecoveryOriginSettlement>();
-  for (const failure of input.failures) {
-    const settlement: InterpretationRecoveryOriginSettlement = failure.outcome === 'stale'
-      ? {
-          provisionalFindingId: failure.recoveryOrigin.provisionalFindingId,
-          sourceRawFindingId: failure.sourceRawFindingId,
-          outcome: 'stale',
-          reason: failure.reason,
-        }
-      : {
-          provisionalFindingId: failure.recoveryOrigin.provisionalFindingId,
-          sourceRawFindingId: failure.sourceRawFindingId,
-          outcome: 'audit_only',
-          failureKind: failure.kind,
-          reason: failure.reason,
-        };
-    settlements.set(settlement.provisionalFindingId, settlement);
-  }
-  for (const item of input.intake.items) {
-    for (const origin of item.recoveryOrigins ?? []) {
-      if (settlements.has(origin.provisionalFindingId)) {
-        continue;
-      }
-      const sourceRawFindingId = item.wire.rawFindingId;
-      const originFinding = input.recoveryLedger.findings.find(
-        (finding) => finding.id === origin.provisionalFindingId,
-      );
-      if (originFinding === undefined
-        || !matchesProvisionalRecoveryOrigin(originFinding, origin)) {
-        settlements.set(origin.provisionalFindingId, {
-          provisionalFindingId: origin.provisionalFindingId,
-          sourceRawFindingId,
-          outcome: 'stale',
-          reason: 'The recovery origin changed before the shared raw payload was committed',
-        });
-        continue;
-      }
-      const targetFindingId = input.ladderCommit.recoverySettlements.get(
-        origin.provisionalFindingId,
-      ) ?? (input.ladderCommit.recoveryPromotions.has(origin.provisionalFindingId)
-        ? origin.provisionalFindingId
-        : undefined);
-      if (targetFindingId !== undefined) {
-        settlements.set(origin.provisionalFindingId, {
-          provisionalFindingId: origin.provisionalFindingId,
-          sourceRawFindingId,
-          outcome: 'settled',
-          targetFindingId,
-        });
-        continue;
-      }
-      const finalizedFinding = input.finalizedLedger.findings.find(
-        (finding) => finding.id === origin.provisionalFindingId,
-      );
-      settlements.set(origin.provisionalFindingId, finalizedFinding?.provisional === undefined
-        ? {
-            provisionalFindingId: origin.provisionalFindingId,
-            sourceRawFindingId,
-            outcome: 'settled',
-            targetFindingId: origin.provisionalFindingId,
-          }
-        : {
-            provisionalFindingId: origin.provisionalFindingId,
-            sourceRawFindingId,
-            outcome: 'retained',
-          });
-    }
-  }
-  return [...settlements.values()].sort((left, right) => (
-    compareBinaryStrings(left.provisionalFindingId, right.provisionalFindingId)
-  ));
 }
 
 function containsIsolatedRawFinding(
@@ -369,10 +255,10 @@ function planManagerEntryIsolation(
 function prepareCommitReconciliation(
   params: FindingManagerCommitPlanInput,
   freshLedger: FindingLedger,
-  ladder: ManagerDecisionStageResult['ladder'],
+  interpretationPrepared: PreparedInterpretationCasePlan,
   isolatedRawFindingIds: ReadonlySet<string>,
 ) {
-  const evaluatedAdmission = retainInterpretationRecoveryForLadder(evaluateRawAdmission({
+  const evaluatedAdmission = evaluateRawAdmission({
     cwd: params.input.cwd,
     reviewScopeSnapshotId: params.reviewScopeSnapshotId,
     runId: params.input.ledgerStore.runId,
@@ -381,7 +267,7 @@ function prepareCommitReconciliation(
     intake: params.intake,
     reviewScopeSnapshot: params.reviewScopeSnapshot,
     workflowTask: params.input.workflowTask,
-  }), params.intake);
+  });
   const retainItem = (item: { wire: { rawFindingId: string } }): boolean => (
     !isolatedRawFindingIds.has(item.wire.rawFindingId)
   );
@@ -461,7 +347,7 @@ function prepareCommitReconciliation(
       retainSpec(spec)
       && spec.sourceRawFindingIds.every((rawFindingId) => freshAdmittedRawIds.has(rawFindingId))
     )),
-    ...ladder.provisionalSpecs.filter((spec) => (
+    ...interpretationPrepared.provisionalFindings.filter((spec) => (
       retainSpec(spec)
       && spec.sourceRawFindingIds.every((rawFindingId) => freshAdmittedRawIds.has(rawFindingId))
     )),
@@ -483,6 +369,72 @@ function prepareCommitReconciliation(
       ...admission.admissionAnomalySpecs,
       ...admission.ladderAnomalySpecs,
     ],
+    invalidInterpretationRawFindingIds: new Set([
+      ...admission.admissionAnomalySpecs,
+      ...admission.ladderAnomalySpecs,
+    ].flatMap((spec) => spec.sourceRawFindingIds)),
+  };
+}
+
+function interpretationManagerOutput(
+  prepared: PreparedInterpretationCasePlan,
+  items: readonly ReviewerIntakeResult['items'][number][],
+): FindingManagerOutput {
+  const rawFindingsById = new Map(items.map((item) => [item.wire.rawFindingId, item.wire]));
+  const adjudicate = (input: {
+    rawFindingId: string;
+    decision: 'same' | 'new' | 'conflict';
+    findingId?: string;
+    evidence: string;
+  }) => {
+    const rawFinding = rawFindingsById.get(input.rawFindingId);
+    if (rawFinding === undefined) {
+      throw new Error(`Interpretation output is missing raw finding "${input.rawFindingId}"`);
+    }
+    if (rawFinding.target.kind === 'absence') {
+      throw new Error(
+        `Absence raw finding "${input.rawFindingId}" cannot land without explicit anchor relevance`,
+      );
+    }
+    return createAnchorAdjudication({
+      rawFindingId: input.rawFindingId,
+      decision: input.decision,
+      anchorRelevance: 'not_applicable',
+      ...(input.findingId === undefined ? {} : { findingId: input.findingId }),
+      evidence: input.evidence,
+    });
+  };
+  return {
+    ...prepared.managerOutput,
+    anchorAdjudications: [
+      ...prepared.managerOutput.matches.flatMap((match) => (
+        match.rawFindingIds.map((rawFindingId) => adjudicate({
+          rawFindingId,
+          decision: 'same',
+          findingId: match.findingId,
+          evidence: match.evidence ?? 'Engine-issued interpretation-case SameProof.',
+        }))
+      )),
+      ...prepared.managerOutput.newFindings.flatMap((finding) => (
+        finding.rawFindingIds.map((rawFindingId) => adjudicate({
+          rawFindingId,
+          decision: 'new',
+          evidence: 'Interpretation case created one independent product finding.',
+        }))
+      )),
+      ...prepared.managerOutput.conflicts.flatMap((conflict) => {
+        const findingId = conflict.findingIds[0];
+        if (findingId === undefined || conflict.findingIds.length !== 1) {
+          throw new Error('Interpretation case conflict must reference exactly one product finding');
+        }
+        return conflict.rawFindingIds.map((rawFindingId) => adjudicate({
+          rawFindingId,
+          decision: 'conflict',
+          findingId,
+          evidence: conflict.description,
+        }));
+      }),
+    ],
   };
 }
 
@@ -495,10 +447,6 @@ export function buildFindingManagerCommitMutation(
       ledger: freshLedger,
       result: {
         applied: false,
-        rawRecoveryManagerDecisionLedger: freshLedger,
-        rawRecoveryManagerDecisionCommands: [],
-        rawRecoveryLedger: freshLedger,
-        rawRecoverySettlementCommands: [],
         managerDecisionLedger: freshLedger,
         managerDecisionCommands: [],
         lifecycleManagerOutput: params.managerDecision.managerOutput,
@@ -507,54 +455,59 @@ export function buildFindingManagerCommitMutation(
         admissionRejections: [],
         provisionalLandings: [],
         reviewerAnomalyLandings: [],
-        rawFindingDispositions: [],
         interpretationRecoverySettlements: [],
         resolutionRenotifications: [],
         rejectedObservationAttachments: [],
         settlementCommands: [],
         actionRecoveryPlan: null,
+        interpretationPrepared: {
+          cases: [],
+          managerOutput: createEmptyManagerOutput(),
+          provisionalFindings: [],
+        },
       },
     };
   }
-  const interpretationRecoveryFailures = resolveInterpretationRecoveryFailuresForCommit(
-    freshLedger,
-    params.interpretationRecoveryFailures,
-  );
-  const interpretationRecoveryLedger = applyInterpretationRecoveryFailures({
-    ledger: freshLedger,
-    failures: interpretationRecoveryFailures,
-    observation: params.observation,
+  const recoveryLedger = freshLedger;
+  let interpretationPrepared = prepareInterpretationCaseActions({
+    ledger: recoveryLedger,
+    items: params.managerDecision.interpretation.items,
+    completedAttemptIds:
+      params.managerDecision.interpretation.completedAttemptIdsForCommit,
+    directPlans: params.managerDecision.interpretation.directPlans,
+    proofFastPathPlans: params.managerDecision.interpretation.proofFastPathPlans,
+    provisionalOnlyRawFindingIds:
+      params.managerDecision.interpretation.provisionalOnlyRawFindingIds,
   });
-  const rawAdjudicationRecovery = applyRawAdjudicationRecovery({
-    freshLedger: interpretationRecoveryLedger,
-    recovery: params.managerDecision.rawRecovery,
-    runInput: params.input,
-    observation: params.observation,
-    reviewScopeSnapshotId: params.reviewScopeSnapshotId,
-    reviewScopeSnapshot: params.reviewScopeSnapshot,
-  });
-  const recoveryLedger = rawAdjudicationRecovery.ledger;
-  const ladder = selectCommittableLadder(params.managerDecision.ladder, recoveryLedger);
-  const staleRecoveryRawFindingIds = collectStaleRecoveryRawFindingIds(
-    params.intake.items,
-    recoveryLedger,
-  );
-  const ladderCommit = buildLadderCommitPlan(
-    ladder,
-    recoveryLedger,
-    staleRecoveryRawFindingIds,
-  );
+  const staleRecoveryRawFindingIds = new Set<string>();
   const managerEntryIsolation = planManagerEntryIsolation(
     params.managerDecision.managerOutput,
-    ladderCommit.staleRecoveryRawFindingIds,
+    staleRecoveryRawFindingIds,
     params.intake,
   );
-  const prepared = prepareCommitReconciliation(
+  let prepared = prepareCommitReconciliation(
     params,
     recoveryLedger,
-    ladder,
-    ladderCommit.staleRecoveryRawFindingIds,
+    interpretationPrepared,
+    staleRecoveryRawFindingIds,
   );
+  if (prepared.invalidInterpretationRawFindingIds.size > 0) {
+    interpretationPrepared = prepareInterpretationCaseActions({
+      ledger: recoveryLedger,
+      items: params.managerDecision.interpretation.items,
+      completedAttemptIds: params.managerDecision.interpretation.completedAttemptIdsForCommit,
+      directPlans: params.managerDecision.interpretation.directPlans,
+      proofFastPathPlans: params.managerDecision.interpretation.proofFastPathPlans,
+      provisionalOnlyRawFindingIds: params.managerDecision.interpretation.provisionalOnlyRawFindingIds,
+      invalidRawFindingIds: prepared.invalidInterpretationRawFindingIds,
+    });
+    prepared = prepareCommitReconciliation(
+      params,
+      recoveryLedger,
+      interpretationPrepared,
+      staleRecoveryRawFindingIds,
+    );
+  }
   const roundsCompleted = stopBudgetRoundsCompleted(freshLedger);
   const actionRecoveryCandidates = collectManagerActionRecoveryCandidates(
     recoveryLedger,
@@ -588,25 +541,39 @@ export function buildFindingManagerCommitMutation(
   const specs = [
     ...prepared.baseSpecs,
     ...revalidated.provisionalSpecs,
-    ...ladderCommit.provisionalSpecs,
     ...managerEntryIsolation.provisionalSpecs,
   ].filter((spec) => !containsIsolatedRawFinding(
     spec.sourceRawFindingIds,
-    ladderCommit.staleRecoveryRawFindingIds,
+    staleRecoveryRawFindingIds,
   ));
-  const interpretationResults = ladderCommit.interpretationResults;
   let merged = isolateManagerOutputForCommit(
-    mergeOutputs(output, ladderCommit.output),
+    mergeOutputs(
+      output,
+      interpretationManagerOutput(interpretationPrepared, params.managerDecision.interpretation.items),
+    ),
     managerEntryIsolation.droppedRawFindingIds,
+  );
+  const conflictAuthorityByRawFindingId = new Map(
+    interpretationPrepared.cases.flatMap((preparedCase) => {
+      if (preparedCase.action.kind !== 'open_conflict') {
+        return [];
+      }
+      const authority = issueInterpretationCaseConflictAuthority({
+        ledger: recoveryLedger,
+        preparedCase,
+        items: params.managerDecision.interpretation.items,
+      });
+      return preparedCase.rawFindingIds.map((rawFindingId) => [rawFindingId, authority] as const);
+    }),
   );
   const rawProvenanceByRawFindingId = new Map(
     [...prepared.rawProvenanceByRawFindingId].map(([rawFindingId, provenance]) => {
-      const authority = ladderCommit.openConflictOutcomeAuthorities.get(rawFindingId);
+      const authority = conflictAuthorityByRawFindingId.get(rawFindingId);
       return [
         rawFindingId,
         authority === undefined
           ? provenance
-          : { ...provenance, openConflictOutcomeAuthority: authority },
+          : { ...provenance, interpretationCaseConflictAuthority: authority },
       ] as const;
     }),
   );
@@ -620,15 +587,11 @@ export function buildFindingManagerCommitMutation(
     anomalySpecs: prepared.anomalySpecs,
     rawProvenanceByRawFindingId,
     cleanWire: admission.cleanWire,
-    explicitResolvedByMapping: ladderCommit.recoverySettlements,
-    explicitPromotedFindingIds: ladderCommit.recoveryPromotions,
-    recoveryProvisionalRawFindingIds: new Set(
-      [...ladderCommit.recoveryProvisionalRawFindingIds].filter(
-        (rawFindingId) => !ladderCommit.staleRecoveryRawFindingIds.has(rawFindingId),
-      ),
-    ),
-    staleRawFindingIds: ladderCommit.staleRecoveryRawFindingIds,
-    deferredRawFindingIds: ladder.deferredRawFindingIds,
+    explicitResolvedByMapping: new Map<string, string>(),
+    explicitPromotedFindingIds: new Set<string>(),
+    recoveryProvisionalRawFindingIds: new Set<string>(),
+    staleRawFindingIds: staleRecoveryRawFindingIds,
+    deferredRawFindingIds: new Set<string>(),
     resolutionRenotifications: revalidated.resolutionRenotifications,
     unsupportedRawFindingReports: [
       ...managerDecision.unsupportedRawFindingReports,
@@ -652,7 +615,17 @@ export function buildFindingManagerCommitMutation(
     },
     observation: params.observation,
   });
-  let actionRecoveryPlan = buildActionRecoveryPlan(reconcilePlan.ledger);
+  const noActionRecoveryPlan = (ledger: FindingLedger): ManagerActionRecoveryLifecyclePlan => ({
+    ledger,
+    output: createEmptyManagerOutput(),
+    appliedLedger: ledger,
+    settledLedger: ledger,
+    settlements: new Map(),
+    failures: new Map(),
+  });
+  let actionRecoveryPlan = interpretationPrepared.cases.length === 0
+    ? buildActionRecoveryPlan(reconcilePlan.ledger)
+    : noActionRecoveryPlan(reconcilePlan.ledger);
   const prospectiveStaleConflictIds = prospectiveStaleConflictResolutions({
     recoveryLedger,
     prospectiveLedger: actionRecoveryPlan.ledger,
@@ -676,7 +649,9 @@ export function buildFindingManagerCommitMutation(
       ...reconcileInput,
       managerOutput: merged,
     });
-    actionRecoveryPlan = buildActionRecoveryPlan(reconcilePlan.ledger);
+    actionRecoveryPlan = interpretationPrepared.cases.length === 0
+      ? buildActionRecoveryPlan(reconcilePlan.ledger)
+      : noActionRecoveryPlan(reconcilePlan.ledger);
   }
   // 監査レポートには実際に着地した spec だけを載せる（dismiss と同一ラウンドで
   // 抑止された同一 claim の spec は着地していない — reconcileCommitPlan 参照）。
@@ -705,55 +680,33 @@ export function buildFindingManagerCommitMutation(
     }),
   ];
 
+  const stagedManagerDecisionLedger = stagePreparedInterpretationCaseOwnership({
+    ledger: reconcilePlan.managerDecisionLedger,
+    prepared: interpretationPrepared,
+    items: params.managerDecision.interpretation.items,
+    observation: params.observation,
+  });
+  const stagedSettledLedger = stagePreparedInterpretationCaseOwnership({
+    ledger: actionRecoveryPlan.ledger,
+    prepared: interpretationPrepared,
+    items: params.managerDecision.interpretation.items,
+    observation: params.observation,
+  });
   const finalized = applyCommitLedgerStates({
     runInput: input,
     freshLedger,
-    settledLedger: actionRecoveryPlan.ledger,
+    settledLedger: stagedSettledLedger,
     baseAnomalySpecs: prepared.anomalySpecs,
     pendingRejectedObservations: admission.pendingRejectedObservations,
-    interpretationResults,
-    interpretationReservations: ladder.interpretationReservations,
-    interpretationIntegrityDigests: ladder.interpretationIntegrityDigests,
-    observation: params.observation,
     verifiedEvidenceCandidates: admission.verifiedEvidenceCandidates,
-    stopBudgetLimits: params.stopBudgetLimits,
-    stopBudgetRoundMarker: params.stopBudgetRoundMarker,
   });
-  const rawFindingDispositions = [
-    ...interpretationRecoveryDispositions(interpretationRecoveryFailures).filter(
-      (disposition) => !params.intake.items.some(
-        (item) => item.wire.rawFindingId === disposition.rawFindingId,
-      ),
-    ),
-    ...rawAdjudicationRecovery.rawFindingDispositions,
-    ...reconcilePlan.rawFindingDispositions,
-    ...finalized.rawFindingDispositions,
-  ].sort((left, right) => (
-    compareBinaryStrings(left.rawFindingId, right.rawFindingId)
-    || compareCanonicalJsonValues(left, right)
-  ));
-  if (new Set(rawFindingDispositions.map(
-    (disposition) => disposition.rawFindingId,
-  )).size !== rawFindingDispositions.length) {
-    throw new Error('A raw finding received multiple finite dispositions across recovery and commit');
-  }
-  const interpretationRecoverySettlements = buildInterpretationRecoverySettlements({
-    failures: interpretationRecoveryFailures,
-    intake: params.intake,
-    recoveryLedger,
-    finalizedLedger: finalized.ledger,
-    ladderCommit,
-  });
+  const interpretationRecoverySettlements: InterpretationRecoveryOriginSettlement[] = [];
   return {
     ledger: finalized.ledger,
     result: {
       applied: true,
-      rawRecoveryManagerDecisionLedger: rawAdjudicationRecovery.managerDecisionLedger,
-      rawRecoveryManagerDecisionCommands: rawAdjudicationRecovery.managerDecisionCommands,
-      rawRecoveryLedger: rawAdjudicationRecovery.ledger,
-      rawRecoverySettlementCommands: rawAdjudicationRecovery.settlementCommands,
-      managerDecisionLedger: reconcilePlan.managerDecisionLedger,
-      managerDecisionCommands: attachCapturedConflictHeads({
+      managerDecisionLedger: stagedManagerDecisionLedger,
+      managerDecisionCommands: attachInterpretationCaseOrigins(attachCapturedConflictHeads({
         commands: reconcilePlan.managerDecisionCommands,
         resolvedConflictIds: new Set(
           reconcilePlan.managerOutput.resolvedConflicts.map(
@@ -762,23 +715,25 @@ export function buildFindingManagerCommitMutation(
         ),
         capturedConflictHeads: managerDecision.conflictTargetHeads,
         cwd: input.cwd,
-      }),
+      }), interpretationPrepared),
       lifecycleManagerOutput: reconcilePlan.managerOutput,
       staleRejections: [...staleRejections, ...reconcilePlan.normalizationRejections],
       unsupportedRawFindingReports: revalidated.unsupportedRawFindingReports,
       admissionRejections: admission.admissionRejections,
       provisionalLandings,
       reviewerAnomalyLandings: finalized.reviewerAnomalyLandings,
-      rawFindingDispositions,
       interpretationRecoverySettlements,
       resolutionRenotifications: revalidated.resolutionRenotifications,
       rejectedObservationAttachments: [
-        ...rawAdjudicationRecovery.rejectedObservationAttachments,
         ...reconcilePlan.rejectedObservationAttachments,
         ...finalized.rejectedObservationAttachments,
       ],
-      settlementCommands: reconcilePlan.settlementCommands,
+      settlementCommands: attachInterpretationCaseOrigins(
+        reconcilePlan.settlementCommands,
+        interpretationPrepared,
+      ),
       actionRecoveryPlan,
+      interpretationPrepared,
     },
   };
 }

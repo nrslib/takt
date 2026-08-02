@@ -14,8 +14,11 @@ import {
   FindingProvisionalMetadataSchema,
   FindingObservationSchema,
   FindingManagerDecisionsJsonSchema,
-  FindingConflictAdjudicationOutputJsonSchema,
+  ConflictAdjudicationProviderProposalJsonSchema,
   FindingManagerOutputJsonSchema,
+  InterpretationAttemptSchema,
+  InterpretationBatchReceiptSchema,
+  InterpretationRawObservationSchema,
   FindingSeveritySchema,
   FindingStatusSchema,
   RawFindingSchema,
@@ -24,11 +27,12 @@ import {
   ReviewerRawFindingSchema,
   createRawFindingsOutputJsonSchema,
   parseFindingLedger,
-  parseFindingConflictAdjudicationOutput,
+  parseConflictAdjudicationProposal,
   parseFindingManagerDecisions,
   parseFindingManagerOutput,
 } from '../core/models/finding-schemas.js';
 import { compareRfc3339Timestamps } from '../core/models/rfc3339.js';
+import { compareBinaryStrings } from '../shared/utils/binary-string-comparator.js';
 import { formatConflictId } from '../core/models/finding-conflict-identity.js';
 import {
   RAW_FINDING_FIELD_LIMITS,
@@ -43,13 +47,17 @@ import {
 import { deduplicateRawEvidence } from '../core/workflow/findings/evidence-domain.js';
 import { createFindingLifecycleReservation } from '../core/models/finding-lifecycle-identity.js';
 import {
+  computeInterpretationAttemptId,
+  computeInterpretationBatchId,
+  computeInterpretationCohortId,
+} from '../core/models/finding-interpretation-identity.js';
+import {
   authorizeFindingLedgerFixture,
   canonicalRawFindingFixture,
   emptyFindingAuthorityProjection,
   reviewerRawExtractionFixture,
 } from './helpers/finding-lifecycle-fixture.js';
 
-const TEST_INTEGRITY_DIGEST = 'a'.repeat(64);
 import { FINDING_CONFLICT_ADJUDICATION_SCHEMA_REF } from '../core/workflow/findings/adjudication-step.js';
 import { RAW_FINDINGS_SCHEMA_REF } from '../core/workflow/findings/manager-agent.js';
 import {
@@ -57,7 +65,6 @@ import {
   FINDING_INTERPRETATION_SCHEMA_REF,
   FINDING_MANAGER_SCHEMA_REF,
 } from '../core/workflow/findings/manager-step.js';
-import { RAW_ADJUDICATION_SCHEMA_REF } from '../core/workflow/findings/raw-adjudication-step.js';
 
 function pendingLedgerWithCompleted(
   completed: {
@@ -75,7 +82,6 @@ function pendingLedgerWithCompleted(
     evidenceRecords: [],
     rawFindings: [],
     conflicts: [],
-    interpretations: [],
     ...emptyFindingAuthorityProjection(),
     pendingManagerCommit: {
       roundMarker,
@@ -103,7 +109,6 @@ function pendingLedgerWithCompleted(
         evidenceRecords: [],
         rawFindings: [],
         conflicts: completed.conflicts ?? [],
-        interpretations: [],
         ...emptyFindingAuthorityProjection(),
         stopBudget: {
           roundMarkers: [roundMarker],
@@ -134,14 +139,15 @@ function pendingFinding(id: string) {
       familyTag: 'fixture',
       severity: 'high',
       title: 'Pending finding',
-      description: null,
+      description: 'Pending finding description.',
       suggestion: null,
     }),
     semanticClaimIdentityHash: computeSemanticClaimIdentityHash({
       target,
       title: 'Pending finding',
-      description: null,
+      description: 'Pending finding description.',
     }),
+    description: 'Pending finding description.',
     reviewers: ['reviewer'],
     rawFindingIds: ['raw-1'],
     evidenceIds: [],
@@ -166,14 +172,12 @@ describe('finding schemas', () => {
       FINDING_INTERPRETATION_SCHEMA_REF,
       FINDING_MANAGER_SCHEMA_REF,
       FINDING_MANAGER_CONTROL_SCHEMA_REF,
-      RAW_ADJUDICATION_SCHEMA_REF,
     ]).toEqual([
       'takt.findings.adjudication',
       'takt.findings.raw',
-      'takt.findings.interpretation',
+      'takt.findings.interpretation-case',
       'takt.findings.manager.raw-task',
       'takt.findings.manager.control-task',
-      'takt.findings.raw-adjudication',
     ]);
   });
 
@@ -186,7 +190,6 @@ describe('finding schemas', () => {
       evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
       ...emptyFindingAuthorityProjection(),
     };
 
@@ -218,7 +221,6 @@ describe('finding schemas', () => {
           stepName: 'reviewers',
           timestamp: '2026-07-24T00:00:00.000Z',
         },
-        interpretationEpochs: 0,
         gateEffect: 'block' as const,
         firstObservedRound: 1,
       },
@@ -321,7 +323,6 @@ describe('finding schemas', () => {
       evidenceRecords: [evidenceRecord],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
       ...emptyFindingAuthorityProjection(),
     };
 
@@ -351,7 +352,6 @@ describe('finding schemas', () => {
       evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
       ...emptyFindingAuthorityProjection(),
       [field]: {
         roundMarkers,
@@ -375,7 +375,6 @@ describe('finding schemas', () => {
       evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
       ...emptyFindingAuthorityProjection(),
       stopBudget: state,
       reviewIntegrity: state,
@@ -408,7 +407,6 @@ describe('finding schemas', () => {
       evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
       ...emptyFindingAuthorityProjection(),
     });
     const event = resolved.lifecycleEvents.find(
@@ -461,7 +459,6 @@ describe('finding schemas', () => {
       evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
       ...emptyFindingAuthorityProjection(),
       reviewerAnomalies: [{
         id: 'RA-INVALID',
@@ -497,7 +494,6 @@ describe('finding schemas', () => {
       evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
       unexpectedField: true,
     })).toThrow();
   });
@@ -545,133 +541,6 @@ describe('finding schemas', () => {
     }))).toThrow('must equal its canonical content-derived id');
   });
 
-  it('enforces the final interpretation WAL record contract without a finding policy version', () => {
-    const record = {
-      interpretationKey: 'attempt-key',
-      baseInterpretationKey: 'base-key',
-      attemptOrdinal: 1,
-      reviewerStableKey: 'reviewer-key',
-      lineageKey: 'lineage-key',
-      candidateEvidenceHash: 'evidence-hash',
-      canonicalIntegrityDigest: TEST_INTEGRITY_DIGEST,
-      stage: 'interpretation_started',
-      reservationToken: 'reservation-1',
-      startedAt: {
-        runId: 'run-1',
-        stepName: 'reviewers',
-        timestamp: '2026-07-24T00:00:00.000Z',
-      },
-      promptPreconditions: [],
-    };
-    const ledger = {
-      workflowName: 'peer-review',
-      nextId: 1,
-      updatedAt: '2026-07-24T00:00:00.000Z',
-      findings: [],
-      evidenceRecords: [],
-      rawFindings: [],
-      conflicts: [],
-      interpretations: [record],
-      ...emptyFindingAuthorityProjection(),
-    };
-
-    expect(parseFindingLedger(ledger).interpretations).toEqual([record]);
-    expect(() => parseFindingLedger({
-      ...ledger,
-      interpretations: [{ ...record, baseInterpretationKey: undefined }],
-    })).toThrow();
-    expect(() => parseFindingLedger({
-      ...ledger,
-      interpretations: [{ ...record, attemptOrdinal: undefined }],
-    })).toThrow();
-    expect(() => parseFindingLedger({
-      ...ledger,
-      interpretations: [{ ...record, canonicalIntegrityDigest: undefined }],
-    })).toThrow();
-  });
-
-  it('enforces required and contradictory fields for every interpretation WAL stage', () => {
-    const observation = {
-      runId: 'run-1',
-      stepName: 'reviewers',
-      timestamp: '2026-07-24T00:00:00.000Z',
-    };
-    const base = {
-      interpretationKey: 'attempt-key',
-      baseInterpretationKey: 'base-key',
-      attemptOrdinal: 1,
-      reviewerStableKey: 'reviewer-key',
-      lineageKey: 'lineage-key',
-      candidateEvidenceHash: 'evidence-hash',
-      canonicalIntegrityDigest: TEST_INTEGRITY_DIGEST,
-      startedAt: observation,
-      promptPreconditions: [],
-    };
-    const decision = {
-      decision: 'provisional',
-      rawFindingId: 'raw-1',
-      reason: 'Needs another observation.',
-    };
-    const ledgerFor = (record: Record<string, unknown>) => ({
-      workflowName: 'peer-review',
-      nextId: 1,
-      updatedAt: '2026-07-24T00:00:00.000Z',
-      findings: [],
-      evidenceRecords: [],
-      rawFindings: [],
-      conflicts: [],
-      interpretations: [record],
-      ...emptyFindingAuthorityProjection(),
-    });
-    const started = {
-      ...base,
-      stage: 'interpretation_started',
-      reservationToken: 'reservation-1',
-    };
-    const interrupted = {
-      ...base,
-      stage: 'interpretation_interrupted',
-      reservationToken: 'reservation-1',
-      interruptedAt: observation,
-    };
-    const completed = {
-      ...base,
-      stage: 'interpretation_completed',
-      reservationToken: 'reservation-1',
-      completedAt: observation,
-      validatedDecision: decision,
-    };
-    const applied = {
-      ...completed,
-      stage: 'ledger_applied',
-      appliedAt: observation,
-      applicationResult: 'provisional_created',
-    };
-
-    for (const valid of [started, interrupted, completed, applied]) {
-      expect(parseFindingLedger(ledgerFor(valid)).interpretations).toEqual([valid]);
-    }
-
-    for (const invalid of [
-      { ...started, reservationToken: undefined },
-      { ...started, completedAt: observation },
-      { ...interrupted, interruptedAt: undefined },
-      { ...interrupted, validatedDecision: decision },
-      { ...completed, reservationToken: undefined },
-      { ...completed, completedAt: undefined },
-      { ...completed, validatedDecision: undefined },
-      { ...completed, interruptedAt: observation },
-      { ...applied, reservationToken: undefined },
-      { ...applied, completedAt: undefined },
-      { ...applied, validatedDecision: undefined },
-      { ...applied, appliedAt: undefined },
-      { ...applied, applicationResult: undefined },
-      { ...applied, interruptedAt: observation },
-    ]) {
-      expect(() => parseFindingLedger(ledgerFor(invalid))).toThrow();
-    }
-  });
-
   it('requires firstObservedRound on every provisional finding', () => {
     const provisional = {
       kind: 'raw-adjudication-unresolved',
@@ -689,7 +558,6 @@ describe('finding schemas', () => {
         stepName: 'reviewers',
         timestamp: '2026-07-24T00:00:00.000Z',
       },
-      interpretationEpochs: 0,
       gateEffect: 'block',
     };
 
@@ -714,7 +582,6 @@ describe('finding schemas', () => {
       evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
       ...emptyFindingAuthorityProjection(),
     })).toThrow();
   });
@@ -746,7 +613,6 @@ describe('finding schemas', () => {
       evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
       ...emptyFindingAuthorityProjection(),
     };
 
@@ -782,7 +648,6 @@ describe('finding schemas', () => {
           timestamp: '2026-07-24T00:00:00.000Z',
         },
       }],
-      interpretations: [],
       ...emptyFindingAuthorityProjection(),
     };
 
@@ -901,31 +766,33 @@ describe('finding schemas', () => {
     expect(managerProperties.conflicts.items.required).toEqual(Object.keys(managerProperties.conflicts.items.properties));
     expect(managerProperties.resolvedConflicts.items.required).toEqual(Object.keys(managerProperties.resolvedConflicts.items.properties));
 
-    expect(FindingConflictAdjudicationOutputJsonSchema.required).toEqual(
-      Object.keys(FindingConflictAdjudicationOutputJsonSchema.properties),
-    );
+    for (const alternative of ConflictAdjudicationProviderProposalJsonSchema.oneOf) {
+      expect(alternative.required).toEqual(Object.keys(alternative.properties));
+    }
   });
 
   it('requires nullable adjudication fields and normalizes null to undefined', () => {
-    expect(FindingConflictAdjudicationOutputJsonSchema.properties.actionableFix.type)
+    const mergeSchema = ConflictAdjudicationProviderProposalJsonSchema.oneOf[0];
+    expect(mergeSchema.properties.actionableFix.type)
       .toEqual(['string', 'null']);
-    expect(FindingConflictAdjudicationOutputJsonSchema.properties.rationale.type)
+    expect(mergeSchema.properties.rationale.type)
       .toEqual(['string', 'null']);
-    expect(parseFindingConflictAdjudicationOutput({
-      conflictId: 'C-0001',
-      outcome: 'undetermined',
-      actionableFix: null,
+    expect(parseConflictAdjudicationProposal({
+      kind: 'undetermined',
+      subjectIds: ['subject-1'],
       rationale: null,
     })).toEqual({
-      conflictId: 'C-0001',
-      outcome: 'undetermined',
-      actionableFix: undefined,
+      kind: 'undetermined',
+      subjectIds: ['subject-1'],
       rationale: undefined,
     });
-    expect(() => parseFindingConflictAdjudicationOutput({
-      conflictId: 'C-0001',
-      outcome: 'undetermined',
-    })).toThrow();
+    expect(parseConflictAdjudicationProposal({
+      kind: 'undetermined',
+      subjectIds: ['subject-1'],
+    })).toEqual({
+      kind: 'undetermined',
+      subjectIds: ['subject-1'],
+    });
   });
 
   it('keeps strict JSON Schema object properties listed in required for the manager decisions schema', () => {
@@ -1416,15 +1283,8 @@ describe('finding schemas', () => {
       reason: 'The observation requires terminal adjudication.',
       firstObservedAt: observation,
       lastObservedAt: observation,
-      interpretationEpochs: 2,
       gateEffect: 'block' as const,
       firstObservedRound: 1,
-    };
-    const targetPrecondition = {
-      targetFindingId: 'F-0001',
-      targetRevision: 1,
-      targetStatus: 'open' as const,
-      targetEvidenceHash: 'a'.repeat(64),
     };
     const managerOutputBase = {
       anchorAdjudications: [],
@@ -1440,18 +1300,20 @@ describe('finding schemas', () => {
       duplicateFindings: [],
       dismissedFindings: [],
     };
+    expect(() => FindingProvisionalMetadataSchema.parse({
+      ...provisional,
+      actionRecovery: {
+        action: 'dismiss',
+        findingId: 'F-0001',
+        basis: 'outside_contract_jurisdiction',
+        authority: 'terminal_adjudication',
+        reason: 'Adjudicated claim.',
+        evidence: 'Current-code evidence.',
+        targetPreconditions: [],
+      },
+    })).toThrow();
+
     const parsers: Array<(dismissal: DismissalPair) => unknown> = [
-      (dismissal) => FindingProvisionalMetadataSchema.parse({
-        ...provisional,
-        actionRecovery: {
-          action: 'dismiss',
-          findingId: 'F-0001',
-          ...dismissal,
-          reason: 'Adjudicated claim.',
-          evidence: 'Current-code evidence.',
-          targetPreconditions: [targetPrecondition],
-        },
-      }),
       (dismissal) => FindingLedgerEntrySchema.parse({
         ...pendingFinding('F-0001'),
         status: 'dismissed',
@@ -1476,11 +1338,8 @@ describe('finding schemas', () => {
     ];
 
     for (const parse of parsers) {
-      for (const basis of ['outside_contract_jurisdiction', 'unverifiable_claim'] as const) {
-        expect(() => parse({ basis, authority: 'standard' })).not.toThrow();
-        expect(() => parse({ basis, authority: 'terminal_adjudication' })).not.toThrow();
-      }
       for (const basis of [
+        'outside_contract_jurisdiction',
         'false_positive',
         'overreach',
         'no_issue_after_verification',
@@ -1489,6 +1348,132 @@ describe('finding schemas', () => {
         expect(() => parse({ basis, authority: 'standard' }))
           .toThrow(/requires terminal_adjudication authority/u);
       }
+      expect(() => parse({
+        basis: 'unverifiable_claim' as FindingDismissalBasis,
+        authority: 'terminal_adjudication',
+      })).toThrow();
     }
+  });
+});
+
+describe('interpretation case schemas', () => {
+  const caseId = '1'.repeat(64);
+  const semanticProjectionDigest = '2'.repeat(64);
+  const lineageKey = '4'.repeat(64);
+  const caseSnapshotId = '5'.repeat(64);
+  const providerCallId = '6'.repeat(64);
+  const cohortId = computeInterpretationCohortId(
+    caseId,
+    semanticProjectionDigest,
+    ['raw-schema'],
+  );
+  const observation = {
+    runId: 'run-schema',
+    stepName: 'reviewers',
+    timestamp: '2026-08-02T00:00:00.000Z',
+  };
+  const attemptId = computeInterpretationAttemptId(caseSnapshotId, 1, 0);
+  const attemptBase = {
+    attemptId,
+    caseSnapshotId,
+    caseId,
+    cohortId,
+    lineageKey,
+    semanticProjectionDigest,
+    attemptOrdinal: 1,
+    retryOrdinal: 0,
+    rawFindingIds: ['raw-schema'],
+    providerCallId,
+  };
+
+  it('requires semantic projection identity and stage-specific attempt times', () => {
+    expect(() => InterpretationRawObservationSchema.parse({
+      rawFindingId: 'raw-schema',
+      caseId,
+      cohortId,
+      lineageKey,
+      canonicalIntegrityDigest: '3'.repeat(64),
+    })).toThrow();
+    expect(() => InterpretationAttemptSchema.parse({
+      ...attemptBase,
+      stage: 'started',
+    })).toThrow();
+    expect(() => InterpretationAttemptSchema.parse({
+      ...attemptBase,
+      stage: 'applied',
+      startedAt: observation,
+      completedAt: observation,
+      decision: { kind: 'provisional', reason: 'Held for review.' },
+    })).toThrow();
+  });
+
+  it('rejects attempt timestamps that move backward', () => {
+    expect(() => InterpretationAttemptSchema.parse({
+      ...attemptBase,
+      stage: 'applied',
+      startedAt: { ...observation, timestamp: '2026-08-02T00:02:00.000Z' },
+      completedAt: { ...observation, timestamp: '2026-08-02T00:01:00.000Z' },
+      appliedAt: observation,
+      decision: { kind: 'provisional', reason: 'Held for review.' },
+      application: {
+        classification: 'decision_applied',
+        originSettlementIds: [],
+      },
+    })).toThrow(/must not precede/u);
+  });
+
+  it('derives a receipt solely from its canonical fences', () => {
+    const fences = [{
+      attemptId,
+      caseId,
+      semanticProjectionDigest,
+      rawFindingIds: ['raw-schema'],
+    }];
+    const receipt = {
+      batchId: computeInterpretationBatchId(fences),
+      fences,
+    };
+
+    expect(InterpretationBatchReceiptSchema.parse(receipt)).toEqual(receipt);
+    expect(() => InterpretationBatchReceiptSchema.parse({
+      ...receipt,
+      batchId: '5'.repeat(64),
+    })).toThrow(/canonical fences/u);
+    expect(() => InterpretationBatchReceiptSchema.parse({
+      ...receipt,
+      ownedAttemptIds: [attemptId],
+    })).toThrow();
+  });
+
+  it('requires receipt fences to be unique and binary-sorted by attempt id', () => {
+    const otherAttemptId = computeInterpretationAttemptId(caseSnapshotId, 2, 0);
+    const fences = [
+      {
+        attemptId,
+        caseId,
+        semanticProjectionDigest,
+        rawFindingIds: ['raw-schema'],
+      },
+      {
+        attemptId: otherAttemptId,
+        caseId,
+        semanticProjectionDigest,
+        rawFindingIds: ['raw-schema-other'],
+      },
+    ].sort((left, right) => compareBinaryStrings(left.attemptId, right.attemptId));
+    const receipt = {
+      batchId: computeInterpretationBatchId(fences),
+      fences,
+    };
+
+    expect(InterpretationBatchReceiptSchema.parse(receipt)).toEqual(receipt);
+    expect(() => InterpretationBatchReceiptSchema.parse({
+      batchId: computeInterpretationBatchId([...fences].reverse()),
+      fences: [...fences].reverse(),
+    })).toThrow(/binary-sorted/u);
+    expect(() => InterpretationBatchReceiptSchema.parse({
+      batchId: computeInterpretationBatchId([fences[0]!, fences[0]!]),
+      fences: [fences[0]!, fences[0]!],
+    })).toThrow(/unique/u);
   });
 });

@@ -20,6 +20,7 @@ import {
 } from '../core/workflow/findings/fixpoint.js';
 import { runFindingManagerForStep, type FindingManagerSubStepResult } from '../core/workflow/findings/manager-runner.js';
 import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
+import { processInterpretationLiveClaims } from '../core/workflow/findings/interpretation-live-claims.js';
 import { buildFindingsRuleContext as buildFindingsRuleContextWithCwd } from '../core/workflow/findings/context.js';
 import {
   verifiedSourceQuoteFields,
@@ -33,7 +34,6 @@ import {
 } from './helpers/finding-lifecycle-fixture.js';
 import { findingReviewPublicationFixture } from './helpers/finding-review-publication.js';
 import { findingManagerTaskResponse } from './helpers/finding-manager-task-response.js';
-import { createRawRecoveryAttempt } from '../core/models/finding-raw-recovery.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
@@ -108,7 +108,6 @@ function provisionalFinding(
       reason: 'No mechanically verifiable evidence was supplied',
       firstObservedAt: observation(),
       lastObservedAt: observation(),
-      interpretationEpochs: 0,
       gateEffect: 'block',
     },
     ...overrides,
@@ -155,7 +154,7 @@ function substantiveFinding(
 }
 
 function ledger(overrides: Partial<FindingLedger> = {}): FindingLedger {
-  return {
+  return authorizeFindingLedgerFixture({
     workflowName: 'peer-review',
     nextId: 3,
     updatedAt: '2026-07-01T00:00:00.000Z',
@@ -163,10 +162,9 @@ function ledger(overrides: Partial<FindingLedger> = {}): FindingLedger {
     evidenceRecords: [],
     rawFindings: [],
     conflicts: [],
-    interpretations: [],
     ...emptyFindingAuthorityProjection(),
     ...overrides,
-  };
+  });
 }
 
 function fixpointRawFinding(overrides: Partial<RawFinding> = {}): RawFinding {
@@ -306,41 +304,6 @@ describe('computeFixpointSnapshot', () => {
     expect(snapshot1.provisionalKeys).toEqual(['aaa', 'zzz']);
   });
 
-  it('treats a bounded recovery attempt as progress instead of a fixpoint', () => {
-    const before = ledger({ findings: [provisionalFinding({ revision: 1,
-      provisional: {
-        ...provisionalFinding({ revision: 1 }).provisional!,
-        kind: 'raw-adjudication-unresolved',
-      },
-    })] });
-    const after = ledger({ findings: [provisionalFinding({ revision: 1,
-      provisional: {
-        ...provisionalFinding({ revision: 1 }).provisional!,
-        kind: 'raw-adjudication-unresolved',
-      },
-    })],
-    rawRecoveryAttempts: [createRawRecoveryAttempt({
-      provisionalFindingId: 'F-0001',
-      expectedHead: {
-        entityKind: 'finding',
-        entityId: 'F-0001',
-        revision: 1,
-        projectionDigest: '1'.repeat(64),
-        eventId: '2'.repeat(64),
-      },
-      sourceRawFindingId: 'raw-1',
-      sourceRawIntegrityDigest: null,
-      promptSnapshotDigest: '3'.repeat(64),
-      attempt: 1,
-      startedAt: observation(),
-    })],
-    });
-
-    expect(computeFixpointSnapshot(before).provisionalKeys).toEqual(['stable-key-a']);
-    expect(computeFixpointSnapshot(after).provisionalKeys).toEqual([
-      'stable-key-a:recovery:0:1:0:0',
-    ]);
-  });
 });
 
 describe('attachFixpointState', () => {
@@ -432,18 +395,12 @@ function makeRoundHarness(
   const ledgerRepository = new RevisionedFindingLedgerTestRepository(
     authorizeFindingLedgerFixture(initialLedger),
   );
-  const reservations = new Set<string>();
   const ledgerStore: FindingLedgerStore = {
     ledgerIdentity: '/test/finding-fixpoint/ledger.json',
     workflowName: 'peer-review',
     loadLedger: () => ledgerRepository.loadLedger(),
     updateLedger: (mutator) => ledgerRepository.updateLedger(mutator),
-    claimAdjudicationReservation: (token) => {
-      if (reservations.has(token)) return false;
-      reservations.add(token);
-      return true;
-    },
-    releaseAdjudicationReservation: (token) => { reservations.delete(token); },
+    interpretationLiveClaims: processInterpretationLiveClaims,
     saveLedgerSnapshot: () => {},
     saveRawFindings: () => {},
     saveManagerValidationReport: () => {},
@@ -451,7 +408,6 @@ function makeRoundHarness(
       (report) => join(REPORT_DIR, `findings-manager-validation.${report.stepName}.json`),
       ledgerRepository,
     ),
-    saveConflictAdjudicationReport: () => {},
   };
   const optionsBuilder = {
     buildAgentOptions: () => ({}),
@@ -693,7 +649,7 @@ describe('runFindingManagerForStep: failed file_quote evidence is isolated from 
   it('a nonexistent file_quote becomes an engine-gap provisional and needs no manager call', async () => {
     const harness = makeRoundHarness({
       workflowName: 'peer-review', nextId: 1, updatedAt: '2026-07-01T00:00:00.000Z',
-      findings: [], evidenceRecords: [], rawFindings: [], conflicts: [], interpretations: [],
+      findings: [], evidenceRecords: [], rawFindings: [], conflicts: [],
     });
 
     const result = await harness.run([hallucinatedRaw()]);
@@ -713,7 +669,7 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
   it('is not a fixpoint on the first round, even though a provisional is already open', async () => {
     const harness = makeRoundHarness({
       workflowName: 'peer-review', nextId: 1, updatedAt: '2026-07-01T00:00:00.000Z',
-      findings: [], evidenceRecords: [], rawFindings: [], conflicts: [], interpretations: [],
+      findings: [], evidenceRecords: [], rawFindings: [], conflicts: [],
     });
 
     await harness.run([unverifiedClaimRaw()]);
@@ -724,7 +680,7 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
   it('reaches fixpoint after bounded raw-adjudication recovery is exhausted and the claim stabilizes', async () => {
     const harness = makeRoundHarness({
       workflowName: 'peer-review', nextId: 1, updatedAt: '2026-07-01T00:00:00.000Z',
-      findings: [], evidenceRecords: [], rawFindings: [], conflicts: [], interpretations: [],
+      findings: [], evidenceRecords: [], rawFindings: [], conflicts: [],
     });
 
     executeAgentMock.mockImplementation(async (_persona, instruction) => {
@@ -747,7 +703,7 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
   it('does not reach fixpoint when a different claim shows up on the second round instead', async () => {
     const harness = makeRoundHarness({
       workflowName: 'peer-review', nextId: 1, updatedAt: '2026-07-01T00:00:00.000Z',
-      findings: [], evidenceRecords: [], rawFindings: [], conflicts: [], interpretations: [],
+      findings: [], evidenceRecords: [], rawFindings: [], conflicts: [],
     });
 
     executeAgentMock.mockImplementation(async (_persona, instruction) => {
@@ -808,7 +764,6 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
       evidenceRecords: [],
       rawFindings: [seedRaw],
       conflicts: [],
-      interpretations: [],
     });
 
     executeAgentMock.mockImplementation(async (_persona, instruction) => {
@@ -883,7 +838,7 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
     const runId = 'run-process-continuity';
     const priorProcess = makeRoundHarness({
       workflowName: 'peer-review', nextId: 1, updatedAt: '2026-07-01T00:00:00.000Z',
-      findings: [], evidenceRecords: [], rawFindings: [], conflicts: [], interpretations: [],
+      findings: [], evidenceRecords: [], rawFindings: [], conflicts: [],
     }, runId);
     executeAgentMock.mockImplementation(async (_persona, instruction) => {
       const rawId = extractResidualRawIdFromEitherLocalId(
@@ -909,7 +864,7 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
   it('a new explicit claim after a fixpoint breaks it, routing back to replan instead of staying stuck', async () => {
     const harness = makeRoundHarness({
       workflowName: 'peer-review', nextId: 1, updatedAt: '2026-07-01T00:00:00.000Z',
-      findings: [], evidenceRecords: [], rawFindings: [], conflicts: [], interpretations: [],
+      findings: [], evidenceRecords: [], rawFindings: [], conflicts: [],
     });
     executeAgentMock.mockImplementation(async (_persona, instruction) => {
       const rawId = extractResidualRawIdFromEitherLocalId(

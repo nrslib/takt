@@ -77,11 +77,8 @@ function emptyLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
     evidenceBindings: [],
     lifecycleReservations: [],
     lifecycleEvents: [],
-    rawRecoveryAttempts: [],
-    rawRecoveryResults: [],
     rawFindings: [],
     conflicts: [],
-    interpretations: [],
     ...overrides,
   };
 }

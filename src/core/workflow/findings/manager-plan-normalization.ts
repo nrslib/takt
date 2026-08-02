@@ -185,8 +185,8 @@ export function normalizeEngineDerivedWaiverConflicts(
  * 1. resolved × match/conflict は canonicalize と同じ規則で conflict へ畳む
  * 2. 同一 finding 集合の conflict を統合し、部分重複する後着 conflict は不採用
  * 3. reopened × match は match を reopened の観測へ畳む（matches|reopenedFindings は排他）
- * 4. invalidate / 通常 dismiss は後着 match/conflict が触れたら項目単位で不採用。
- *    outside_task_scope だけは match/settlement を監査観測へ落として優先する
+ * 4. invalidate は後着 match/conflict が触れたら項目単位で不採用。
+ *    manager dismissal はすべて不採用とし、verified terminal adjudication に限定する
  * 5. waive は後着証拠が触れたら disputeNote へ降格（finding は open のまま）
  * 6. conflict が触れる duplicate を不採用にし、残る統合の match を canonical へ転写
  */
@@ -196,19 +196,14 @@ export function normalizeMergedManagerPlan(input: {
 }): {
   output: FindingManagerOutput;
   rejections: string[];
-  taskScopeSuppressedObservations: Array<{
-    findingId: string;
-    rawFindingId: string;
-  }>;
 } {
-  const rejections: string[] = [];
-  const taskScopePriority = applyTaskScopeDismissalPriority(
-    input.output,
-    input.activeConflictFindingIds,
-    rejections,
-  );
-
-  let output = canonicalizeFindingManagerOutput(taskScopePriority.output);
+  const rejections = input.output.dismissedFindings.map((dismissed) => (
+    `dismissDecisions: finding "${dismissed.findingId}" rejected at save time: manager dismissal requires verified terminal adjudication`
+  ));
+  let output = canonicalizeFindingManagerOutput({
+    ...input.output,
+    dismissedFindings: [],
+  });
   output = mergeOverlappingConflicts(output, rejections);
 
   const evidenceFindingIds = new Set([
@@ -230,83 +225,6 @@ export function normalizeMergedManagerPlan(input: {
   return {
     output: transferSupersededMatches(duplicateResult.output),
     rejections,
-    taskScopeSuppressedObservations: taskScopePriority.suppressedObservations,
-  };
-}
-
-function applyTaskScopeDismissalPriority(
-  output: FindingManagerOutput,
-  activeConflictFindingIds: ReadonlySet<string>,
-  rejections: string[],
-): {
-  output: FindingManagerOutput;
-  suppressedObservations: Array<{ findingId: string; rawFindingId: string }>;
-} {
-  const currentConflictFindingIds = new Set(
-    output.conflicts.flatMap((conflict) => conflict.findingIds),
-  );
-  const acceptedScopeFindingIds = new Set(
-    output.dismissedFindings.flatMap((dismissed) => {
-      if (dismissed.basis !== 'outside_task_scope') {
-        return [];
-      }
-      if (
-        activeConflictFindingIds.has(dismissed.findingId)
-        || currentConflictFindingIds.has(dismissed.findingId)
-      ) {
-        rejections.push(
-          `dismissDecisions: finding "${dismissed.findingId}" rejected at save time: an active conflict retains adjudication authority`,
-        );
-        return [];
-      }
-      return [dismissed.findingId];
-    }),
-  );
-  const dismissedFindings = output.dismissedFindings.filter((dismissed) => (
-    dismissed.basis !== 'outside_task_scope'
-    || acceptedScopeFindingIds.has(dismissed.findingId)
-  ));
-  if (acceptedScopeFindingIds.size === 0) {
-    return {
-      output: dismissedFindings.length === output.dismissedFindings.length
-        ? output
-        : { ...output, dismissedFindings },
-      suppressedObservations: [],
-    };
-  }
-  const suppressedObservations = [
-    ...output.matches,
-    ...output.resolvedFindings,
-    ...output.reopenedFindings,
-  ].flatMap((transition) => (
-    acceptedScopeFindingIds.has(transition.findingId)
-      ? transition.rawFindingIds.map((rawFindingId) => ({
-          findingId: transition.findingId,
-          rawFindingId,
-        }))
-      : []
-  ));
-  const suppressedRawFindingIds = new Set(
-    suppressedObservations.map((observation) => observation.rawFindingId),
-  );
-  return {
-    output: {
-      ...output,
-      anchorAdjudications: output.anchorAdjudications.filter(
-        (adjudication) => !suppressedRawFindingIds.has(adjudication.rawFindingId),
-      ),
-      matches: output.matches.filter(
-        (match) => !acceptedScopeFindingIds.has(match.findingId),
-      ),
-      resolvedFindings: output.resolvedFindings.filter(
-        (resolved) => !acceptedScopeFindingIds.has(resolved.findingId),
-      ),
-      reopenedFindings: output.reopenedFindings.filter(
-        (reopened) => !acceptedScopeFindingIds.has(reopened.findingId),
-      ),
-      dismissedFindings,
-    },
-    suppressedObservations,
   };
 }
 
@@ -413,7 +331,7 @@ function foldMatchesIntoReopened(output: FindingManagerOutput): FindingManagerOu
   return { ...output, matches, reopenedFindings };
 }
 
-/** 後着の match/conflict が触れた invalidate / 通常 dismiss を不採用にし、waive を disputeNote へ降格する。 */
+/** 後着の match/conflict が触れた invalidate を不採用にし、waive を disputeNote へ降格する。 */
 function dropLateEvidenceClosures(
   output: FindingManagerOutput,
   evidenceFindingIds: ReadonlySet<string>,
@@ -428,18 +346,8 @@ function dropLateEvidenceClosures(
     );
     return false;
   });
-  const dismissedFindings = output.dismissedFindings.filter((dismissed) => {
-    if (!evidenceFindingIds.has(dismissed.findingId)) {
-      return true;
-    }
-    rejections.push(
-      `dismissDecisions: finding "${dismissed.findingId}" rejected at save time: re-observed (match/conflict) after merge; evidence takes precedence over jurisdiction adjudication`,
-    );
-    return false;
-  });
   const demotedWaives = output.waivedFindings.filter((waived) => evidenceFindingIds.has(waived.findingId));
   if (invalidatedFindings.length === output.invalidatedFindings.length
-    && dismissedFindings.length === output.dismissedFindings.length
     && demotedWaives.length === 0) {
     return output;
   }
@@ -449,7 +357,6 @@ function dropLateEvidenceClosures(
   return {
     ...output,
     invalidatedFindings,
-    dismissedFindings,
     waivedFindings: output.waivedFindings.filter((waived) => !evidenceFindingIds.has(waived.findingId)),
     disputeNotes: [
       ...output.disputeNotes,

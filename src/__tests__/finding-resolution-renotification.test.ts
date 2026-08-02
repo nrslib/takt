@@ -85,11 +85,11 @@ function ledger(overrides: Partial<FindingLedger> = {}): FindingLedger {
     evidenceBindings: [],
     lifecycleReservations: [],
     lifecycleEvents: [],
-    rawRecoveryAttempts: [],
-    rawRecoveryResults: [],
     rawFindings: [originalRaw],
     conflicts: [],
-    interpretations: [],
+    interpretationRawObservations: [],
+    interpretationAttempts: [],
+    rawInterpretationOutcomes: [],
     ...overrides,
   };
 }
@@ -431,7 +431,6 @@ describe('resolution/renotification exact authority', () => {
           entityProvisionalMutations: [],
           terminalEntityAttachmentFindingIds: new Set(),
           provisionalFindings: [],
-          rawFindingDispositions: [],
           verifiedEvidenceRecordsByRawFindingId: new Map(),
           rawProvenanceByRawFindingId: new Map([
             [

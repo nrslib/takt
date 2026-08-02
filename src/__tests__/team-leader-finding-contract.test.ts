@@ -200,7 +200,6 @@ describe('Finding Contract Team Leader contract', () => {
         },
       ],
       conflicts: [],
-      interpretations: [],
     };
 
     const summary = JSON.parse(renderCompactActionableFindingContractSummary(ledger)) as {

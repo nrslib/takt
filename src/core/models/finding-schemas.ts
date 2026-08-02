@@ -1,8 +1,9 @@
 import { z } from 'zod/v4';
 import { PROVIDER_TYPES } from '../../shared/types/provider.js';
 import { compareBinaryStrings } from '../../shared/utils/binary-string-comparator.js';
-import { normalizeRfc3339Timestamp } from './rfc3339.js';
+import { compareRfc3339Timestamps, normalizeRfc3339Timestamp } from './rfc3339.js';
 import { collectFindingLedgerProjectionInvariantViolations } from './finding-ledger-invariants.js';
+import { computeInterpretationBatchId } from './finding-interpretation-identity.js';
 import {
   RAW_FINDING_FIELD_LIMITS,
   RAW_FINDING_NORMALIZER_LIMITS,
@@ -19,7 +20,8 @@ import {
   SHA256_HEX_PATTERN,
 } from './finding-evidence-record.js';
 import type {
-  FindingConflictAdjudicationOutput,
+  ConflictAdjudicationProposal,
+  TerminalAdjudicationProposal,
   FindingLedger,
   FindingManagerOutput,
   FindingManagerValidationReport,
@@ -27,14 +29,10 @@ import type {
   RawFinding,
   RawFindingRelation,
 } from './finding-types.js';
-import type { AmbiguousInterpretation } from './finding-types.js';
 import {
-  AMBIGUOUS_INTERPRETATION_DECISIONS,
   RAW_FINDING_RELATIONS,
   CONFLICT_DECISION_KINDS,
   DISPUTE_DECISION_KINDS,
-  FINDING_CONFLICT_ADJUDICATION_OUTCOMES,
-  FINDING_CONFLICT_ADJUDICATION_TRANSITIONS,
   FINDING_CONFLICT_STATUSES,
   FINDING_DISMISSAL_BASES,
   FINDING_LIFECYCLES,
@@ -45,10 +43,8 @@ import {
   FINDING_PROVISIONAL_KINDS,
   FINDING_SEVERITIES,
   FINDING_STATUSES,
-  INTERPRETATION_APPLICATION_RESULTS,
-  INTERPRETATION_RECOVERY_FAILURE_CODES,
+  RAW_AMBIGUITY_CODES,
   RAW_DECISION_KINDS,
-  RAW_FINDING_DISPOSITION_OUTCOMES,
   REVIEWER_ANOMALY_KINDS,
   SEMANTIC_FINDING_DISMISSAL_BASES,
 } from './finding-types.js';
@@ -99,7 +95,10 @@ function validateFindingDismissalAuthority(
         message: 'outside_task_scope dismissal uses taskQuote instead of evidence',
       });
     }
-  } else if (dismissal.evidence === undefined) {
+  } else if (
+    dismissal.authority !== 'terminal_adjudication'
+    && dismissal.evidence === undefined
+  ) {
     ctx.addIssue({
       code: 'custom',
       path: ['evidence'],
@@ -133,15 +132,6 @@ const BinarySortedUniqueSha256SetSchema = z.array(Sha256Schema).superRefine((val
     });
   }
 });
-const UniqueSha256ListSchema = z.array(Sha256Schema).superRefine((values, ctx) => {
-  if (new Set(values).size !== values.length) {
-    ctx.addIssue({
-      code: 'custom',
-      message: 'Expected unique SHA-256 values',
-    });
-  }
-});
-
 export const Rfc3339TimestampSchema = z.string().min(1).transform((timestamp, ctx) => {
   try {
     return normalizeRfc3339Timestamp(timestamp);
@@ -216,6 +206,13 @@ export const FindingEvidenceBindingSchema = z.object({
   claimIdentityHash: Sha256Schema.nullable(),
   sourceRawFindingId: nonEmptyString.nullable(),
   sourceRawIntegrityDigest: Sha256Schema.nullable(),
+  contributionOrigin: z.discriminatedUnion('kind', [
+    z.object({ kind: z.literal('external') }).strict(),
+    z.object({
+      kind: z.literal('interpretation_case'),
+      caseId: Sha256Schema,
+    }).strict(),
+  ]),
   operation: z.enum(FINDING_LIFECYCLE_OPERATIONS),
   target: FindingLifecycleMutationTargetSchema,
 }).strict();
@@ -226,15 +223,9 @@ const FindingAnchorAuthorityAdjudicationSchema = z.object({
   managerOutputBinding: Sha256Schema,
 }).strict();
 
-export const FindingLifecycleReservationContextSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('transaction') }).strict(),
-  z.object({
-    kind: z.literal('conflict_adjudication'),
-    conflictId: nonEmptyString,
-    evidenceHash: Sha256Schema,
-    originStep: nonEmptyString.nullable(),
-  }).strict(),
-]);
+export const FindingLifecycleReservationContextSchema = z.object({
+  kind: z.literal('transaction'),
+}).strict();
 
 export const FindingLifecycleAuthoritySchema = z.union([
   z.object({
@@ -245,8 +236,6 @@ export const FindingLifecycleAuthoritySchema = z.union([
     decisionKind: z.enum([
       'waive',
       'dispute',
-      'dismiss',
-      'resolve_conflict',
       'semantic_duplicate',
     ]),
     decisionDigest: Sha256Schema,
@@ -272,19 +261,47 @@ export const FindingLifecycleAuthoritySchema = z.union([
       }),
   }).strict(),
   z.object({
-    kind: z.literal('conflict_adjudication'),
+    kind: z.literal('verified_conflict_adjudication'),
     conflictId: nonEmptyString,
-    findingIds: BinarySortedUniqueStringSetSchema,
-    evidenceHash: Sha256Schema,
-    inputBindingIds: BinarySortedUniqueSha256SetSchema,
-    originStep: nonEmptyString.nullable(),
+    conflictSnapshotId: Sha256Schema,
+    attemptId: Sha256Schema,
+    verificationDigest: Sha256Schema,
+    proofRecordIds: BinarySortedUniqueStringSetSchema,
+  }).strict(),
+  z.object({
+    kind: z.literal('verified_terminal_adjudication'),
+    episodeId: Sha256Schema,
+    attemptId: Sha256Schema,
+    verificationDigest: Sha256Schema,
+    proofRecordIds: BinarySortedUniqueStringSetSchema,
+    scopeBindingIds: BinarySortedUniqueSha256SetSchema,
+  }).strict(),
+  z.object({
+    kind: z.literal('interpretation_unreserved_landing'),
+    roundIdentity: Sha256Schema,
+    budgetScopeId: Sha256Schema,
+    reason: z.enum([
+      'manager-budget-exhausted',
+      'manager-input-overflow',
+      'manager-output-discarded',
+      'interpretation-interrupted',
+    ]),
+    rawFindingIds: BinarySortedUniqueStringSetSchema.min(1),
+    rawCanonicalSnapshotIds: BinarySortedUniqueSha256SetSchema.min(1),
+  }).strict(),
+  z.object({
+    kind: z.literal('interpretation_case_rejection'),
+    caseSnapshotId: Sha256Schema,
+    attemptId: Sha256Schema,
+    classification: z.enum(['decision_rejected_stale', 'decision_rejected_raw_invalid']),
+    rawFindingIds: BinarySortedUniqueStringSetSchema.min(1),
+    staleCauseDigests: BinarySortedUniqueSha256SetSchema,
   }).strict(),
   z.object({
     kind: z.literal('system'),
     action: z.enum([
       'record_recovery_attempt',
       'settle_action_recovery',
-      'sync_interpretation_epoch',
     ]),
   }).strict(),
   z.object({
@@ -311,17 +328,9 @@ export const FindingLifecycleTransitionSchema = z.object({
   after: FindingLifecycleEntityHeadSchema,
 }).strict();
 
-export const FindingLifecycleOutcomeSchema = z.discriminatedUnion('kind', [
-  z.object({
-    kind: z.literal('projection_applied'),
-  }).strict(),
-  z.object({
-    kind: z.literal('conflict_adjudication'),
-    conflictId: nonEmptyString,
-    evidenceHash: Sha256Schema,
-    outcome: z.enum(FINDING_CONFLICT_ADJUDICATION_OUTCOMES),
-  }).strict(),
-]);
+export const FindingLifecycleOutcomeSchema = z.object({
+  kind: z.literal('projection_applied'),
+}).strict();
 
 export const FindingLifecycleEventSchema = z.object({
   eventId: Sha256Schema,
@@ -333,26 +342,6 @@ export const FindingLifecycleEventSchema = z.object({
   outcome: FindingLifecycleOutcomeSchema,
   resultDigest: Sha256Schema,
   occurredAt: FindingObservationSchema,
-}).strict();
-
-export const RawRecoveryAttemptSchema = z.object({
-  attemptId: Sha256Schema,
-  provisionalFindingId: nonEmptyString,
-  expectedHead: FindingLifecycleEntityHeadSchema,
-  sourceRawFindingId: nonEmptyString,
-  sourceRawIntegrityDigest: Sha256Schema.nullable(),
-  promptSnapshotDigest: Sha256Schema,
-  attempt: z.number().int().positive(),
-  startedAt: FindingObservationSchema,
-}).strict();
-
-export const RawRecoveryResultSchema = z.object({
-  resultId: Sha256Schema,
-  attemptId: Sha256Schema,
-  replayRawFindingId: nonEmptyString.nullable(),
-  mutationIds: UniqueSha256ListSchema,
-  outcome: z.enum(['applied', 'stale', 'failed']),
-  completedAt: FindingObservationSchema,
 }).strict();
 
 // ---------------------------------------------------------------------------
@@ -527,6 +516,43 @@ const LifecycleAuthoritySubjectSchema = z.discriminatedUnion('kind', [
     }).strict(),
     materializedProductClaimDigest: Sha256Schema,
   }).strict(),
+  z.object({
+    kind: z.literal('finding_claim_identical'),
+    adjudicationKind: z.enum(['conflict', 'terminal']),
+    subjectIds: BinarySortedUniqueStringSetSchema.min(2),
+    findingIds: BinarySortedUniqueStringSetSchema.min(2),
+    expectedHeads: z.array(FindingLifecycleEntityHeadSchema).min(2),
+    claimSnapshotDigests: BinarySortedUniqueSha256SetSchema.min(2),
+    rawClaimRefIds: BinarySortedUniqueStringSetSchema,
+    exactClaimIdentityDigest: Sha256Schema,
+  }).strict(),
+  z.object({
+    kind: z.literal('finding_claim_supported_after_verification'),
+    adjudicationKind: z.enum(['conflict', 'terminal']),
+    subjectId: nonEmptyString,
+    findingId: nonEmptyString,
+    expectedHead: FindingLifecycleEntityHeadSchema,
+    rawClaimRefIds: BinarySortedUniqueStringSetSchema.min(1),
+    productProjectionDigest: Sha256Schema,
+  }).strict(),
+  z.object({
+    kind: z.literal('finding_no_issue_after_verification'),
+    adjudicationKind: z.enum(['conflict', 'terminal']),
+    subjectId: nonEmptyString,
+    findingId: nonEmptyString,
+    expectedHead: FindingLifecycleEntityHeadSchema,
+    claimSnapshotDigest: Sha256Schema,
+    rawClaimRefIds: BinarySortedUniqueStringSetSchema,
+  }).strict(),
+  z.object({
+    kind: z.literal('finding_claim_refuted'),
+    adjudicationKind: z.enum(['conflict', 'terminal']),
+    subjectId: nonEmptyString,
+    findingId: nonEmptyString,
+    expectedHead: FindingLifecycleEntityHeadSchema,
+    claimSnapshotDigest: Sha256Schema,
+    rawClaimRefIds: BinarySortedUniqueStringSetSchema,
+  }).strict(),
 ]);
 
 const EngineProofRecordBaseSchema = z.object({
@@ -623,22 +649,7 @@ const FindingActionRecoverySchema = z.discriminatedUnion('action', [
     evidence: nonEmptyString,
     targetPreconditions: z.array(FindingMutationPreconditionSchema).min(1),
   }).strict(),
-  z.object({
-    action: z.literal('dismiss'),
-    findingId: nonEmptyString,
-    basis: z.enum(FINDING_DISMISSAL_BASES),
-    reason: nonEmptyString,
-    evidence: nonEmptyString.optional(),
-    taskQuote: nonEmptyString.optional(),
-    workflowTaskDigest: Sha256Schema.optional(),
-    adjudicationTaskId: Sha256Schema.optional(),
-    authority: z.enum(FINDING_MANAGER_AUTHORITIES),
-    targetPreconditions: z.array(FindingMutationPreconditionSchema).min(1),
-  }).strict(),
 ]).superRefine((recovery, ctx) => {
-  if (recovery.action === 'dismiss') {
-    validateFindingDismissalAuthority(recovery, ctx);
-  }
   const targetFindingIds = recovery.action === 'duplicate'
     ? [recovery.canonicalFindingId, ...recovery.duplicateFindingIds]
     : [recovery.findingId];
@@ -668,7 +679,6 @@ export const FindingProvisionalMetadataSchema = z.object({
   reason: nonEmptyString,
   firstObservedAt: FindingObservationSchema,
   lastObservedAt: FindingObservationSchema,
-  interpretationEpochs: z.number().int().min(0),
   gateEffect: z.literal('block'),
   firstObservedRound: z.number().int().positive(),
   actionRecovery: FindingActionRecoverySchema.optional(),
@@ -952,17 +962,6 @@ export const ReviewerRawFindingSchema = z.object({
   candidate: ReviewerCandidatePayloadSchema.nullable(),
 }).strict();
 
-export const FindingConflictAdjudicationOutcomeSchema = z.enum(FINDING_CONFLICT_ADJUDICATION_OUTCOMES);
-export const FindingConflictAdjudicationTransitionSchema = z.enum(FINDING_CONFLICT_ADJUDICATION_TRANSITIONS);
-
-export const FindingConflictAdjudicationRecordSchema = z.object({
-  evidenceHash: nonEmptyString,
-  outcome: FindingConflictAdjudicationOutcomeSchema,
-  actionableFix: nonEmptyString.optional(),
-  rationale: nonEmptyString.optional(),
-  decidedAt: FindingObservationSchema,
-}).strict();
-
 export const FindingLedgerConflictSchema = z.object({
   id: nonEmptyString,
   status: z.enum(FINDING_CONFLICT_STATUSES),
@@ -973,125 +972,940 @@ export const FindingLedgerConflictSchema = z.object({
   lastSeen: FindingObservationSchema,
   resolvedAt: Rfc3339TimestampSchema.optional(),
   resolvedEvidence: nonEmptyString.optional(),
-  adjudications: z.array(FindingConflictAdjudicationRecordSchema).optional(),
   revision: z.number().int().positive(),
 }).strict();
 
-/** 楽観的前提条件（CAS）。 */
-/**
- * manager が ambiguous raw に返す「提案」。台帳操作そのものでは
- * ない。decision ごとの必須フィールドは AmbiguousInterpretationSchema の
- * superRefine と raw-capabilities.ts の runtime 検証の両方で強制する。
- */
-export const AmbiguousInterpretationSchema = z.object({
-  decision: z.enum(AMBIGUOUS_INTERPRETATION_DECISIONS),
-  rawFindingId: nonEmptyString,
-  // strict 様式の構造化出力では全プロパティ required になるため、該当なしは
-  // 空文字で埋めさせて未指定として扱う。
-  proofId: z.string().optional().transform((value) => (value ? value : undefined)),
-  targetFindingId: z.string().optional().transform((value) => (value ? value : undefined)),
-  reason: z.string().optional().transform((value) => (value ? value : undefined)),
-}).strict();
-
-export type ParsedAmbiguousInterpretation = z.infer<typeof AmbiguousInterpretationSchema>;
-
-/**
- * parse 済み提案を判別可能な AmbiguousInterpretation へ正規化する。decision ごとの
- * 必須フィールド欠損は undefined を返す（呼び出し元が提案不正 → provisional へ
- * 落とす。例外にしない: manager の壊れた応答で run を殺さない）。
- */
-export function toAmbiguousInterpretation(parsed: {
-  decision: ParsedAmbiguousInterpretation['decision'];
-  rawFindingId: string;
-  proofId?: string | undefined;
-  targetFindingId?: string | undefined;
-  reason?: string | undefined;
-}): AmbiguousInterpretation | undefined {
-  switch (parsed.decision) {
-    case 'create_independent':
-      return { decision: 'create_independent', rawFindingId: parsed.rawFindingId };
-    case 'same_with_proof':
-      return parsed.proofId !== undefined
-        ? { decision: 'same_with_proof', rawFindingId: parsed.rawFindingId, proofId: parsed.proofId }
-        : undefined;
-    case 'open_conflict':
-      return parsed.targetFindingId !== undefined
-        ? { decision: 'open_conflict', rawFindingId: parsed.rawFindingId, targetFindingId: parsed.targetFindingId }
-        : undefined;
-    case 'provisional':
-      return parsed.reason !== undefined
-        ? { decision: 'provisional', rawFindingId: parsed.rawFindingId, reason: parsed.reason }
-        : undefined;
-  }
-}
-
-/** WAL に保存する検証済み提案。判別型を復元できる形で保存する。 */
-const StoredAmbiguousInterpretationSchema: z.ZodType<AmbiguousInterpretation> = z.discriminatedUnion('decision', [
+export const InterpretationDecisionSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('create_independent') }).strict(),
   z.object({
-    decision: z.literal('create_independent'),
-    rawFindingId: nonEmptyString,
-  }).strict(),
-  z.object({
-    decision: z.literal('same_with_proof'),
-    rawFindingId: nonEmptyString,
-    proofId: nonEmptyString,
-  }).strict(),
-  z.object({
-    decision: z.literal('open_conflict'),
-    rawFindingId: nonEmptyString,
+    kind: z.literal('open_conflict'),
     targetFindingId: nonEmptyString,
   }).strict(),
   z.object({
-    decision: z.literal('provisional'),
-    rawFindingId: nonEmptyString,
+    kind: z.literal('provisional'),
     reason: nonEmptyString,
   }).strict(),
 ]);
 
-const FindingInterpretationRecordBaseSchema = z.object({
-  interpretationKey: nonEmptyString,
-  baseInterpretationKey: nonEmptyString,
-  attemptOrdinal: z.number().int().positive(),
-  reviewerStableKey: nonEmptyString,
-  lineageKey: nonEmptyString,
-  candidateEvidenceHash: nonEmptyString,
-  canonicalIntegrityDigest: z.string().regex(/^[0-9a-f]{64}$/),
-  startedAt: FindingObservationSchema,
-  promptPreconditions: z.array(FindingMutationPreconditionSchema),
+export const InterpretationCaseDecisionOutputSchema = z.object({
+  caseId: Sha256Schema,
+  decision: InterpretationDecisionSchema,
+}).strict();
+
+export type ParsedInterpretationCaseDecisionOutput = z.infer<
+  typeof InterpretationCaseDecisionOutputSchema
+>;
+
+const CanonicalRawFindingProvenanceSchema = z.object({
+  origin: z.enum(['reviewer', 'stored-ledger', 'system']),
+  ambiguityOrigin: z.boolean(),
+  clarificationAttempted: z.boolean(),
+  ambiguityCodes: z.array(z.enum(RAW_AMBIGUITY_CODES)),
+}).strict();
+
+export const RawCanonicalSnapshotSchema = z.object({
+  rawCanonicalSnapshotId: Sha256Schema,
+  rawFindingId: rawFindingIdString,
+  rawPayloadDigest: Sha256Schema,
+  reviewerStableKey: Sha256Schema,
+  lineageKey: Sha256Schema,
+  targetIdentityHash: Sha256Schema,
+  claimIdentityHash: Sha256Schema,
+  semanticClaimIdentityHash: Sha256Schema,
+  canonicalProvenance: CanonicalRawFindingProvenanceSchema,
+  canonicalizationContextDigest: Sha256Schema,
+  captureAdmissionSnapshotId: Sha256Schema,
+  captureDependencyDigests: BinarySortedUniqueStringSetSchema,
+  canonicalIntegrityDigest: Sha256Schema,
+  capturedAt: FindingObservationSchema,
+}).strict();
+
+export const InterpretationCaseSnapshotSchema = z.object({
+  caseSnapshotId: Sha256Schema,
+  caseId: Sha256Schema,
+  cohortId: Sha256Schema,
+  roundIdentity: Sha256Schema,
+  lineageKey: Sha256Schema,
+  policyClass: z.enum(['general', 'confirmation', 'provisional_only']),
+  semanticProjectionDigest: Sha256Schema,
+  memberRawFindingIds: BinarySortedUniqueStringSetSchema,
+  memberObservationDigests: z.array(Sha256Schema),
+  originSnapshotSetDigest: Sha256Schema,
+  createdAt: FindingObservationSchema,
+}).strict().superRefine((snapshot, context) => {
+  if (snapshot.memberRawFindingIds.length !== snapshot.memberObservationDigests.length) {
+    context.addIssue({
+      code: 'custom',
+      path: ['memberObservationDigests'],
+      message: 'case snapshot raw members and observation digests must have equal lengths',
+    });
+  }
 });
 
-export const FindingInterpretationRecordSchema = z.discriminatedUnion('stage', [
-  FindingInterpretationRecordBaseSchema.extend({
-    stage: z.literal('interpretation_started'),
-    reservationToken: nonEmptyString,
+export const InterpretationRawObservationSchema = z.object({
+  observationDigest: Sha256Schema,
+  rawFindingId: rawFindingIdString,
+  rawCanonicalSnapshotId: Sha256Schema,
+  caseId: Sha256Schema,
+  cohortId: Sha256Schema,
+  caseSnapshotId: Sha256Schema,
+  lineageKey: Sha256Schema,
+  semanticProjectionDigest: Sha256Schema,
+  originSnapshotDigests: BinarySortedUniqueStringSetSchema,
+  recoveryOriginBindingIds: BinarySortedUniqueStringSetSchema,
+}).strict();
+
+export const InterpretationRecoveryOriginBindingSchema = z.object({
+  bindingId: Sha256Schema,
+  caseSnapshotId: Sha256Schema,
+  caseId: Sha256Schema,
+  cohortId: Sha256Schema,
+  observationRawFindingId: rawFindingIdString,
+  originFindingId: nonEmptyString,
+  expectedHead: FindingLifecycleEntityHeadSchema,
+  originProvisionalKind: z.enum(FINDING_PROVISIONAL_KINDS),
+  originStableKey: Sha256Schema,
+  originLineageKey: Sha256Schema,
+  recoveryReviewerStableKey: Sha256Schema,
+  sourceRawFindingIdsDigest: Sha256Schema,
+  originSnapshotDigest: Sha256Schema,
+  boundAt: FindingObservationSchema,
+}).strict();
+
+const InterpretationRecoveryOriginSettlementBaseSchema = z.object({
+  settlementId: Sha256Schema,
+  bindingId: Sha256Schema,
+  caseSnapshotId: Sha256Schema,
+  caseId: Sha256Schema,
+  observationRawFindingId: rawFindingIdString,
+  originFindingId: nonEmptyString,
+  originSnapshotDigest: Sha256Schema,
+  recordedAt: FindingObservationSchema,
+});
+
+export const InterpretationRecoveryOriginSettlementSchema = z.discriminatedUnion('outcome', [
+  InterpretationRecoveryOriginSettlementBaseSchema.extend({
+    outcome: z.literal('stale'),
+    reason: nonEmptyString,
   }).strict(),
-  FindingInterpretationRecordBaseSchema.extend({
-    stage: z.literal('interpretation_interrupted'),
-    reservationToken: nonEmptyString,
+  InterpretationRecoveryOriginSettlementBaseSchema.extend({
+    outcome: z.literal('retained'),
+    reason: z.enum([
+      'case_decision_provisional',
+      'case_decision_rejected_stale',
+      'case_decision_rejected_raw_invalid',
+      'origin_not_targeted',
+    ]),
+  }).strict(),
+  InterpretationRecoveryOriginSettlementBaseSchema.extend({
+    outcome: z.literal('settled'),
+    targetFindingId: nonEmptyString,
+    lifecycleEventId: Sha256Schema,
+  }).strict(),
+]);
+
+const InterpretationAttemptApplicationSchema = z.discriminatedUnion('classification', [
+  z.object({
+    classification: z.literal('decision_applied'),
+    originSettlementIds: BinarySortedUniqueStringSetSchema,
+  }).strict(),
+  z.object({
+    classification: z.literal('decision_rejected_stale'),
+    staleCauseDigests: BinarySortedUniqueStringSetSchema,
+    originSettlementIds: BinarySortedUniqueStringSetSchema,
+  }).strict(),
+  z.object({
+    classification: z.literal('decision_rejected_raw_invalid'),
+    invalidRawFindingIds: BinarySortedUniqueStringSetSchema,
+    originSettlementIds: BinarySortedUniqueStringSetSchema,
+  }).strict(),
+]);
+
+const InterpretationAttemptBaseSchema = z.object({
+  attemptId: Sha256Schema,
+  caseSnapshotId: Sha256Schema,
+  caseId: Sha256Schema,
+  cohortId: Sha256Schema,
+  lineageKey: Sha256Schema,
+  semanticProjectionDigest: Sha256Schema,
+  attemptOrdinal: z.number().int().positive(),
+  retryOrdinal: z.union([z.literal(0), z.literal(1)]),
+  rawFindingIds: BinarySortedUniqueStringSetSchema,
+  providerCallId: Sha256Schema,
+});
+
+export const InterpretationAttemptSchema = z.discriminatedUnion('stage', [
+  InterpretationAttemptBaseSchema.extend({
+    stage: z.literal('started'),
+    startedAt: FindingObservationSchema,
+  }).strict(),
+  InterpretationAttemptBaseSchema.extend({
+    stage: z.literal('interrupted'),
+    startedAt: FindingObservationSchema,
     interruptedAt: FindingObservationSchema,
+    reason: z.literal('provider_result_unknown'),
   }).strict(),
-  FindingInterpretationRecordBaseSchema.extend({
-    stage: z.enum(['interpretation_retryable_failure', 'interpretation_terminal_failure']),
-    failedAt: FindingObservationSchema,
-    failureCode: z.enum(INTERPRETATION_RECOVERY_FAILURE_CODES),
-    failureReason: nonEmptyString,
-    sourceRawFindingId: nonEmptyString,
-    provisionalFindingId: nonEmptyString,
-  }).strict(),
-  FindingInterpretationRecordBaseSchema.extend({
-    stage: z.literal('interpretation_completed'),
-    reservationToken: nonEmptyString,
+  InterpretationAttemptBaseSchema.extend({
+    stage: z.literal('completed'),
+    startedAt: FindingObservationSchema,
     completedAt: FindingObservationSchema,
-    validatedDecision: StoredAmbiguousInterpretationSchema,
+    decision: InterpretationDecisionSchema,
   }).strict(),
-  FindingInterpretationRecordBaseSchema.extend({
-    stage: z.literal('ledger_applied'),
-    reservationToken: nonEmptyString,
+  InterpretationAttemptBaseSchema.extend({
+    stage: z.literal('applied'),
+    startedAt: FindingObservationSchema,
     completedAt: FindingObservationSchema,
-    validatedDecision: StoredAmbiguousInterpretationSchema,
     appliedAt: FindingObservationSchema,
-    applicationResult: z.enum(INTERPRETATION_APPLICATION_RESULTS),
+    decision: InterpretationDecisionSchema,
+    application: InterpretationAttemptApplicationSchema,
   }).strict(),
+]).superRefine((attempt, context) => {
+  if (
+    attempt.stage === 'interrupted'
+    && compareRfc3339Timestamps(attempt.startedAt.timestamp, attempt.interruptedAt.timestamp) > 0
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['interruptedAt', 'timestamp'],
+      message: 'interruptedAt must not precede startedAt',
+    });
+  }
+  if (
+    (attempt.stage === 'completed' || attempt.stage === 'applied')
+    && compareRfc3339Timestamps(attempt.startedAt.timestamp, attempt.completedAt.timestamp) > 0
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['completedAt', 'timestamp'],
+      message: 'completedAt must not precede startedAt',
+    });
+  }
+  if (
+    attempt.stage === 'applied'
+    && compareRfc3339Timestamps(attempt.completedAt.timestamp, attempt.appliedAt.timestamp) > 0
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['appliedAt', 'timestamp'],
+      message: 'appliedAt must not precede completedAt',
+    });
+  }
+});
+
+export const InterpretationAttemptFenceSchema = z.object({
+  attemptId: Sha256Schema,
+  caseId: Sha256Schema,
+  semanticProjectionDigest: Sha256Schema,
+  rawFindingIds: BinarySortedUniqueStringSetSchema,
+}).strict();
+
+export const InterpretationBatchReceiptSchema = z.object({
+  batchId: Sha256Schema,
+  fences: z.array(InterpretationAttemptFenceSchema),
+}).strict().superRefine((receipt, context) => {
+  const attemptIds = receipt.fences.map((fence) => fence.attemptId);
+  const canonicalAttemptIds = [...new Set(attemptIds)].sort(compareBinaryStrings);
+  if (
+    canonicalAttemptIds.length !== attemptIds.length
+    || canonicalAttemptIds.some((attemptId, index) => attemptId !== attemptIds[index])
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['fences'],
+      message: 'interpretation receipt fences must be unique and binary-sorted by attemptId',
+    });
+  }
+  if (receipt.batchId !== computeInterpretationBatchId(receipt.fences)) {
+    context.addIssue({
+      code: 'custom',
+      path: ['batchId'],
+      message: 'interpretation batch id must match its canonical fences',
+    });
+  }
+});
+
+export const RawInterpretationOutcomeSchema = z.discriminatedUnion('kind', [
+  z.object({
+    rawFindingId: rawFindingIdString,
+    kind: z.literal('pending_attempt'),
+    attemptId: Sha256Schema,
+  }).strict(),
+  z.object({
+    rawFindingId: rawFindingIdString,
+    kind: z.literal('finding'),
+    findingId: nonEmptyString,
+    outcome: z.enum(['created', 'matched_with_proof']),
+    landingEventId: Sha256Schema,
+  }).strict(),
+  z.object({
+    rawFindingId: rawFindingIdString,
+    kind: z.literal('provisional'),
+    provisionalFindingId: nonEmptyString,
+    landingEventId: Sha256Schema,
+  }).strict(),
+  z.object({
+    rawFindingId: rawFindingIdString,
+    kind: z.literal('conflict'),
+    conflictId: nonEmptyString,
+    rawClaimLandingId: Sha256Schema,
+    provisionalFindingId: nonEmptyString,
+    conflictLandingEventId: Sha256Schema,
+    provisionalLandingEventId: Sha256Schema,
+  }).strict(),
+  z.object({
+    rawFindingId: rawFindingIdString,
+    kind: z.literal('reviewer_anomaly'),
+    anomalyId: nonEmptyString,
+  }).strict(),
+]);
+
+export const ConflictRawClaimLandingSchema = z.object({
+  rawClaimLandingId: Sha256Schema,
+  conflictId: nonEmptyString,
+  rawFindingId: rawFindingIdString,
+  rawCanonicalSnapshotId: Sha256Schema,
+  rawPayloadDigest: Sha256Schema,
+  claimSnapshotDigest: Sha256Schema,
+  holdingAllocationId: Sha256Schema,
+  holdingFindingId: nonEmptyString,
+  holdingHeadAfterLanding: FindingLifecycleEntityHeadSchema,
+  landingEventId: Sha256Schema,
+  landedAt: FindingObservationSchema,
+}).strict();
+
+export const FindingManagerProviderBudgetLimitsSchema = z.object({
+  maxCallsPerRound: z.number().int().positive(),
+  maxAdapterVisibleInputTokensPerCall: z.number().int().positive(),
+  maxOutputTokensPerCall: z.number().int().positive(),
+  maxChargedInputTokensPerRound: z.number().int().positive(),
+  maxChargedOutputTokensPerRound: z.number().int().positive(),
+}).strict();
+
+export const FindingManagerProviderBudgetScopeSchema = z.object({
+  budgetScopeId: Sha256Schema,
+  roundIdentity: Sha256Schema,
+  scopeIdentity: nonEmptyString,
+  workflowName: nonEmptyString,
+  roundMarker: nonEmptyString,
+  limits: FindingManagerProviderBudgetLimitsSchema,
+  createdAt: FindingObservationSchema,
+}).strict();
+
+const FindingManagerAttemptKindSchema = z.enum([
+  'interpretation',
+  'terminal_adjudication',
+  'conflict_adjudication',
+]);
+const FindingManagerCallFailurePhaseSchema = z.enum([
+  'provider_failed',
+  'parse_failed',
+  'provider_contract_rejected',
+  'output_oversize',
+  'provider_result_unknown',
+]);
+const FindingManagerTokenChargeSchema = z.object({
+  callCount: z.literal(1),
+  inputTokens: z.number().int().nonnegative(),
+  outputTokens: z.number().int().nonnegative(),
+  inputBasis: z.enum([
+    'provider_usage',
+    'exact_tokenizer',
+    'request_ceiling',
+    'failure_ceiling',
+  ]),
+  outputBasis: z.enum([
+    'provider_usage',
+    'exact_tokenizer',
+    'utf8_byte_upper_bound',
+    'response_ceiling',
+    'failure_ceiling',
+  ]),
+}).strict();
+const FindingManagerProviderCallBaseSchema = z.object({
+  providerCallId: Sha256Schema,
+  budgetScopeId: Sha256Schema,
+  purpose: FindingManagerAttemptKindSchema,
+  callOrdinal: z.number().int().positive(),
+  ownerAttemptKind: FindingManagerAttemptKindSchema,
+  ownerAttemptId: Sha256Schema,
+  attemptIds: BinarySortedUniqueStringSetSchema,
+  requestDigest: Sha256Schema,
+  requestByteLength: z.number().int().nonnegative(),
+  measuredAdapterVisibleInputTokens: z.number().int().nonnegative(),
+  inputMeasurementBasis: z.enum(['exact_tokenizer', 'utf8_byte_upper_bound']),
+  reservedInputTokens: z.number().int().positive(),
+  reservedOutputTokens: z.number().int().positive(),
+  reservedAt: FindingObservationSchema,
+});
+
+export const FindingManagerProviderCallSchema = z.discriminatedUnion('state', [
+  FindingManagerProviderCallBaseSchema.extend({ state: z.literal('reserved') }).strict(),
+  FindingManagerProviderCallBaseSchema.extend({
+    state: z.literal('dispatched'),
+    dispatchedAt: FindingObservationSchema,
+  }).strict(),
+  FindingManagerProviderCallBaseSchema.extend({
+    state: z.literal('settled'),
+    dispatchedAt: FindingObservationSchema,
+    settledAt: FindingObservationSchema,
+    resultKind: z.enum(['accepted', 'rejected', 'interrupted_unknown']),
+    failurePhase: FindingManagerCallFailurePhaseSchema.optional(),
+    responseDigest: Sha256Schema.optional(),
+    charge: FindingManagerTokenChargeSchema,
+  }).strict(),
+]);
+
+const FindingScopePredicateSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('target_path_roots'),
+    allowedRoots: BinarySortedUniqueStringSetSchema,
+  }).strict(),
+  z.object({
+    kind: z.literal('target_kind_set'),
+    allowedKinds: z.array(z.enum(['review_scope', 'code', 'structure', 'absence'])),
+  }).strict(),
+  z.object({
+    kind: z.literal('family_tag_set'),
+    allowedFamilyTags: BinarySortedUniqueStringSetSchema,
+  }).strict(),
+]);
+
+export const FindingScopeBindingSchema = z.object({
+  bindingId: Sha256Schema,
+  source: z.enum(['workflow_task_scope', 'finding_contract_scope']),
+  findingId: nonEmptyString,
+  expectedHead: FindingLifecycleEntityHeadSchema,
+  workflowTaskDigest: Sha256Schema,
+  findingContractDigest: Sha256Schema,
+  predicate: FindingScopePredicateSchema,
+  result: z.literal('outside'),
+  verifierId: nonEmptyString,
+  verifierVersion: nonEmptyString,
+  dependencyDigests: BinarySortedUniqueStringSetSchema,
+  issuedAt: FindingObservationSchema,
+}).strict();
+
+const ProductFindingProjectionSchema = z.object({
+  target: FindingTargetSchema,
+  targetIdentityHash: Sha256Schema,
+  familyTag: nonEmptyString,
+  severity: FindingSeveritySchema,
+  title: nonEmptyString,
+  description: nonEmptyString,
+  suggestion: nonEmptyString.nullable(),
+  claimIdentityHash: Sha256Schema,
+  semanticClaimIdentityHash: Sha256Schema,
+  evidenceRecordIds: BinarySortedUniqueStringSetSchema,
+}).strict();
+
+const findingTargetJsonSchema = {
+  oneOf: [
+    {
+      type: 'object', additionalProperties: false, required: ['kind'],
+      properties: { kind: { const: 'review_scope' } },
+    },
+    {
+      type: 'object', additionalProperties: false, required: ['kind', 'paths'],
+      properties: {
+        kind: { const: 'code' },
+        paths: { type: 'array', minItems: 1, uniqueItems: true, items: { type: 'string', minLength: 1 } },
+      },
+    },
+    {
+      type: 'object', additionalProperties: false, required: ['kind', 'scope', 'manifestTargets'],
+      properties: {
+        kind: { const: 'structure' },
+        scope: {
+          type: 'object', additionalProperties: false, required: ['kind', 'roots'],
+          properties: {
+            kind: { const: 'review_scope' },
+            roots: { type: 'array', minItems: 1, uniqueItems: true, items: { type: 'string', minLength: 1 } },
+          },
+        },
+        manifestTargets: { type: 'array', minItems: 1, uniqueItems: true, items: { type: 'string', minLength: 1 } },
+      },
+    },
+    {
+      type: 'object', additionalProperties: false, required: ['kind', 'predicate'],
+      properties: {
+        kind: { const: 'absence' },
+        predicate: {
+          oneOf: [
+            {
+              type: 'object', additionalProperties: false, required: ['kind', 'path', 'expected'],
+              properties: {
+                kind: { const: 'path_state' }, path: { type: 'string', minLength: 1 }, expected: { const: 'absent' },
+              },
+            },
+            {
+              type: 'object', additionalProperties: false,
+              required: ['kind', 'roots', 'literal', 'textDomain'],
+              properties: {
+                kind: { const: 'exact_literal_search' },
+                roots: { type: 'array', minItems: 1, uniqueItems: true, items: { type: 'string', minLength: 1 } },
+                literal: { type: 'string', minLength: 1 }, textDomain: { const: 'utf8' },
+              },
+            },
+          ],
+        },
+      },
+    },
+  ],
+} as const;
+
+const productFindingProjectionJsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: [
+    'target', 'targetIdentityHash', 'familyTag', 'severity', 'title',
+    'description', 'suggestion', 'claimIdentityHash',
+    'semanticClaimIdentityHash', 'evidenceRecordIds',
+  ],
+  properties: {
+    target: findingTargetJsonSchema,
+    targetIdentityHash: { type: 'string', pattern: '^[a-f0-9]{64}$' },
+    familyTag: { type: 'string', minLength: 1 },
+    severity: { enum: FINDING_SEVERITIES },
+    title: { type: 'string', minLength: 1 },
+    description: { type: 'string', minLength: 1 },
+    suggestion: { type: ['string', 'null'], minLength: 1 },
+    claimIdentityHash: { type: 'string', pattern: '^[a-f0-9]{64}$' },
+    semanticClaimIdentityHash: { type: 'string', pattern: '^[a-f0-9]{64}$' },
+    evidenceRecordIds: { type: 'array', uniqueItems: true, items: { type: 'string', minLength: 1 } },
+  },
+} as const;
+
+const OptionalAdjudicationTextSchema = z.preprocess(
+  (value) => value === null ? undefined : value,
+  nonEmptyString.optional(),
+);
+
+const TerminalSourceClaimRefSchema = z.object({
+  sourceClaimRefId: Sha256Schema,
+  rawFindingId: rawFindingIdString,
+  rawCanonicalSnapshotId: Sha256Schema,
+  rawPayloadDigest: Sha256Schema,
+  provenanceEventId: Sha256Schema,
+}).strict();
+const TerminalTargetCandidateRefSchema = z.object({
+  targetRefId: Sha256Schema,
+  findingId: nonEmptyString,
+  expectedHead: FindingLifecycleEntityHeadSchema,
+  claimSnapshotDigest: Sha256Schema,
+}).strict();
+export const TerminalAdjudicationCandidateSnapshotSchema = z.object({
+  candidateSnapshotDigest: Sha256Schema,
+  findingId: nonEmptyString,
+  expectedHead: FindingLifecycleEntityHeadSchema,
+  provisionalKind: z.enum(FINDING_PROVISIONAL_KINDS),
+  provisionalStableKey: Sha256Schema,
+  lineageKey: Sha256Schema,
+  sourceClaims: z.array(TerminalSourceClaimRefSchema),
+  targetCandidates: z.array(TerminalTargetCandidateRefSchema),
+}).strict();
+const TerminalAdjudicationSelectionMemberSchema = z.object({
+  findingId: nonEmptyString,
+  episodeId: Sha256Schema,
+  candidateSnapshotDigest: Sha256Schema,
+}).strict();
+export const TerminalAdjudicationRoundSchema = z.object({
+  roundIdentity: Sha256Schema,
+  selectionId: Sha256Schema,
+  members: z.array(TerminalAdjudicationSelectionMemberSchema),
+  selectedAt: FindingObservationSchema,
+}).strict();
+export const TerminalAdjudicationEpisodeSchema = z.object({
+  episodeId: Sha256Schema,
+  selectionId: Sha256Schema,
+  roundIdentity: Sha256Schema,
+  findingId: nonEmptyString,
+  expectedHead: FindingLifecycleEntityHeadSchema,
+  candidateSnapshotDigest: Sha256Schema,
+  maxAttempts: z.literal(2),
+  createdAt: FindingObservationSchema,
+}).strict();
+
+export const TerminalAdjudicationProposalSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('promote_independent'),
+    proposedProduct: ProductFindingProjectionSchema,
+    authorityRefIds: BinarySortedUniqueStringSetSchema,
+    rationale: OptionalAdjudicationTextSchema,
+  }).strict(),
+  z.object({
+    kind: z.literal('merge_existing'),
+    targetRefId: Sha256Schema,
+    authorityRefIds: BinarySortedUniqueStringSetSchema,
+    rationale: OptionalAdjudicationTextSchema,
+  }).strict(),
+  z.object({
+    kind: z.literal('dismiss'),
+    basis: z.enum([
+      'outside_contract_jurisdiction',
+      'outside_task_scope',
+      'false_positive',
+      'overreach',
+      'no_issue_after_verification',
+    ]),
+    authorityRefIds: BinarySortedUniqueStringSetSchema,
+    rationale: OptionalAdjudicationTextSchema,
+  }).strict(),
+  z.object({
+    kind: z.literal('undetermined'),
+    rationale: OptionalAdjudicationTextSchema,
+  }).strict(),
+]);
+
+export const TerminalAdjudicationProposalJsonSchema = {
+  oneOf: [
+    {
+      type: 'object', additionalProperties: false,
+      required: ['kind', 'proposedProduct', 'authorityRefIds', 'rationale'],
+      properties: {
+        kind: { const: 'promote_independent' },
+        proposedProduct: productFindingProjectionJsonSchema,
+        authorityRefIds: { type: 'array', minItems: 1, uniqueItems: true, items: { type: 'string', minLength: 1 } },
+        rationale: { type: ['string', 'null'], minLength: 1 },
+      },
+    },
+    {
+      type: 'object', additionalProperties: false,
+      required: ['kind', 'targetRefId', 'authorityRefIds', 'rationale'],
+      properties: {
+        kind: { const: 'merge_existing' }, targetRefId: { type: 'string', minLength: 1 },
+        authorityRefIds: { type: 'array', minItems: 1, uniqueItems: true, items: { type: 'string', minLength: 1 } },
+        rationale: { type: ['string', 'null'], minLength: 1 },
+      },
+    },
+    {
+      type: 'object', additionalProperties: false,
+      required: ['kind', 'basis', 'authorityRefIds', 'rationale'],
+      properties: {
+        kind: { const: 'dismiss' },
+        basis: { enum: ['outside_contract_jurisdiction', 'outside_task_scope', 'false_positive', 'overreach', 'no_issue_after_verification'] },
+        authorityRefIds: { type: 'array', minItems: 1, uniqueItems: true, items: { type: 'string', minLength: 1 } },
+        rationale: { type: ['string', 'null'], minLength: 1 },
+      },
+    },
+    {
+      type: 'object', additionalProperties: false, required: ['kind', 'rationale'],
+      properties: { kind: { const: 'undetermined' }, rationale: { type: ['string', 'null'], minLength: 1 } },
+    },
+  ],
+} as const;
+
+export function parseTerminalAdjudicationProposal(value: unknown): TerminalAdjudicationProposal {
+  return TerminalAdjudicationProposalSchema.parse(value);
+}
+const AppliedTerminalAdjudicationProposalSchema = z.discriminatedUnion('kind', [
+  TerminalAdjudicationProposalSchema.options[0],
+  TerminalAdjudicationProposalSchema.options[1],
+  TerminalAdjudicationProposalSchema.options[2],
+]);
+const TerminalAttemptBaseSchema = z.object({
+  attemptId: Sha256Schema,
+  episodeId: Sha256Schema,
+  selectionId: Sha256Schema,
+  roundIdentity: Sha256Schema,
+  findingId: nonEmptyString,
+  expectedHead: FindingLifecycleEntityHeadSchema,
+  candidateSnapshotDigest: Sha256Schema,
+  attemptOrdinal: z.union([z.literal(1), z.literal(2)]),
+  retryOrdinal: z.union([z.literal(0), z.literal(1)]),
+  providerCallId: Sha256Schema,
+  requestDigest: Sha256Schema,
+  sourceClaimRefIds: BinarySortedUniqueStringSetSchema,
+});
+const TerminalDiagnosticResultSchema = z.object({
+  kind: z.literal('diagnostic_undetermined'),
+  code: z.enum([
+    'provider_contract_rejected',
+    'parse_failed',
+    'provider_failed',
+    'output_oversize',
+  ]),
+  responseDigest: Sha256Schema.nullable(),
+  diagnosticDigest: Sha256Schema,
+}).strict();
+const TerminalVerificationResultSchema = z.object({
+  kind: z.literal('verification_undetermined'),
+  proposal: TerminalAdjudicationProposalSchema,
+  proposalDigest: Sha256Schema,
+  reasonCodes: BinarySortedUniqueStringSetSchema,
+}).strict();
+const TerminalStaleResultSchema = z.object({
+  kind: z.literal('stale_precondition'),
+  proposal: TerminalAdjudicationProposalSchema.nullable(),
+  proposalDigest: Sha256Schema.nullable(),
+  actualHead: FindingLifecycleEntityHeadSchema.nullable(),
+}).strict().superRefine((result, ctx) => {
+  if ((result.proposal === null) !== (result.proposalDigest === null)) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'Stale terminal proposal and digest must both be present or both be absent',
+    });
+  }
+});
+export const TerminalAdjudicationAttemptSchema = z.discriminatedUnion('stage', [
+  TerminalAttemptBaseSchema.extend({
+    stage: z.literal('started'),
+    startedAt: FindingObservationSchema,
+  }).strict(),
+  TerminalAttemptBaseSchema.extend({
+    stage: z.literal('interrupted'),
+    startedAt: FindingObservationSchema,
+    interruptedAt: FindingObservationSchema,
+    reason: z.literal('provider_result_unknown'),
+  }).strict(),
+  TerminalAttemptBaseSchema.extend({
+    stage: z.literal('proposed'),
+    startedAt: FindingObservationSchema,
+    completedAt: FindingObservationSchema,
+    proposal: TerminalAdjudicationProposalSchema,
+    proposalDigest: Sha256Schema,
+  }).strict(),
+  TerminalAttemptBaseSchema.extend({
+    stage: z.literal('completed'),
+    startedAt: FindingObservationSchema,
+    completedAt: FindingObservationSchema,
+    result: z.union([
+      TerminalDiagnosticResultSchema,
+      TerminalVerificationResultSchema,
+      TerminalStaleResultSchema,
+    ]),
+  }).strict(),
+  TerminalAttemptBaseSchema.extend({
+    stage: z.literal('applied'),
+    startedAt: FindingObservationSchema,
+    completedAt: FindingObservationSchema,
+    appliedAt: FindingObservationSchema,
+    proposal: AppliedTerminalAdjudicationProposalSchema,
+    proposalDigest: Sha256Schema,
+    verificationDigest: Sha256Schema,
+    settlementId: Sha256Schema,
+    lifecycleEventIds: BinarySortedUniqueStringSetSchema,
+  }).strict(),
+]);
+const TerminalSettlementBaseSchema = z.object({
+  settlementId: Sha256Schema,
+  episodeId: Sha256Schema,
+  attemptId: Sha256Schema,
+  provisionalFindingId: nonEmptyString,
+  expectedHead: FindingLifecycleEntityHeadSchema,
+  sourceClaimRefIds: BinarySortedUniqueStringSetSchema,
+  lifecycleEventIds: BinarySortedUniqueStringSetSchema,
+  verificationDigest: Sha256Schema,
+  recordedAt: FindingObservationSchema,
+});
+export const TerminalAdjudicationSettlementSchema = z.discriminatedUnion('outcome', [
+  TerminalSettlementBaseSchema.extend({
+    outcome: z.literal('promoted'),
+    targetFindingId: nonEmptyString,
+  }).strict(),
+  TerminalSettlementBaseSchema.extend({
+    outcome: z.literal('merged'),
+    targetFindingId: nonEmptyString,
+  }).strict(),
+  TerminalSettlementBaseSchema.extend({ outcome: z.literal('dismissed') }).strict(),
+  z.object({
+    settlementId: Sha256Schema,
+    episodeId: Sha256Schema,
+    attemptId: Sha256Schema,
+    provisionalFindingId: nonEmptyString,
+    expectedHead: FindingLifecycleEntityHeadSchema,
+    candidateSnapshotDigest: Sha256Schema,
+    outcome: z.literal('exhausted'),
+    reason: z.literal('stale_precondition'),
+    supersedingEpisodeId: Sha256Schema.nullable(),
+    supersedingCandidateSnapshotDigest: Sha256Schema.nullable(),
+    recordedAt: FindingObservationSchema,
+  }).strict(),
+  z.object({
+    settlementId: Sha256Schema,
+    episodeId: Sha256Schema,
+    provisionalFindingId: nonEmptyString,
+    expectedHead: FindingLifecycleEntityHeadSchema,
+    candidateSnapshotDigest: Sha256Schema,
+    outcome: z.literal('superseded'),
+    reason: z.enum(['candidate_snapshot_changed', 'subject_no_longer_candidate']),
+    supersedingEpisodeId: Sha256Schema.nullable(),
+    supersedingCandidateSnapshotDigest: Sha256Schema.nullable(),
+    recordedAt: FindingObservationSchema,
+  }).strict(),
+]);
+
+const ConflictProductSubjectSchema = z.object({
+  subjectId: Sha256Schema,
+  conflictId: nonEmptyString,
+  role: z.literal('product_finding'),
+  findingId: nonEmptyString,
+  expectedHead: FindingLifecycleEntityHeadSchema,
+  targetIdentityHash: Sha256Schema.nullable(),
+  claimIdentityHash: Sha256Schema.nullable(),
+  semanticClaimIdentityHash: Sha256Schema.nullable(),
+  claimSnapshotDigest: Sha256Schema,
+  sourceRawFindingIds: BinarySortedUniqueStringSetSchema,
+  sourceRawPayloadDigests: BinarySortedUniqueStringSetSchema,
+  rawClaimLandingIds: z.tuple([]),
+  evidenceBindingIds: BinarySortedUniqueStringSetSchema,
+  evidenceSetDigest: Sha256Schema,
+}).strict();
+const ConflictHoldingSubjectSchema = ConflictProductSubjectSchema.omit({
+  role: true,
+  rawClaimLandingIds: true,
+}).extend({
+  role: z.literal('holding_provisional'),
+  rawClaimLandingIds: BinarySortedUniqueStringSetSchema.min(1),
+}).strict();
+const ConflictClaimSubjectSchema = z.discriminatedUnion('role', [
+  ConflictProductSubjectSchema,
+  ConflictHoldingSubjectSchema,
+]);
+export const ConflictAdjudicationSnapshotSchema = z.object({
+  conflictSnapshotId: Sha256Schema,
+  conflictId: nonEmptyString,
+  expectedConflictHead: FindingLifecycleEntityHeadSchema,
+  claimUniverseDigest: Sha256Schema,
+  coverageSnapshotDigest: Sha256Schema,
+  evidenceSnapshotDigest: Sha256Schema,
+  rawClaimLandingIds: BinarySortedUniqueStringSetSchema,
+  priorSettlementIds: BinarySortedUniqueStringSetSchema,
+  subjects: z.array(ConflictClaimSubjectSchema),
+  originStep: nonEmptyString.nullable(),
+  createdAt: FindingObservationSchema,
+}).strict();
+export const ConflictAdjudicationEpisodeSchema = z.object({
+  episodeId: Sha256Schema,
+  conflictSnapshotId: Sha256Schema,
+  conflictId: nonEmptyString,
+  expectedConflictHead: FindingLifecycleEntityHeadSchema,
+  maxAttempts: z.literal(2),
+  createdAt: FindingObservationSchema,
+}).strict();
+const ConflictAdjudicationProposalSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('merge_holding'),
+    holdingSubjectId: Sha256Schema,
+    targetProductSubjectId: Sha256Schema,
+    authorityRefIds: BinarySortedUniqueStringSetSchema,
+    actionableFix: nonEmptyString.optional(),
+    rationale: nonEmptyString.optional(),
+  }).strict(),
+  z.object({
+    kind: z.literal('promote_holding'),
+    holdingSubjectId: Sha256Schema,
+    proposedProduct: ProductFindingProjectionSchema,
+    authorityRefIds: BinarySortedUniqueStringSetSchema,
+    actionableFix: nonEmptyString.optional(),
+    rationale: nonEmptyString.optional(),
+  }).strict(),
+  z.object({
+    kind: z.literal('terminate_subject'),
+    subjectId: Sha256Schema,
+    basis: z.enum(['finding_no_issue_after_verification', 'finding_claim_refuted']),
+    authorityRefIds: BinarySortedUniqueStringSetSchema,
+    rationale: nonEmptyString.optional(),
+  }).strict(),
+  z.object({
+    kind: z.literal('undetermined'),
+    subjectIds: BinarySortedUniqueStringSetSchema,
+    rationale: nonEmptyString.optional(),
+  }).strict(),
+]);
+const AppliedConflictAdjudicationProposalSchema = z.discriminatedUnion('kind', [
+  ConflictAdjudicationProposalSchema.options[0],
+  ConflictAdjudicationProposalSchema.options[1],
+  ConflictAdjudicationProposalSchema.options[2],
+]);
+const ConflictAttemptBaseSchema = z.object({
+  attemptId: Sha256Schema,
+  episodeId: Sha256Schema,
+  conflictSnapshotId: Sha256Schema,
+  conflictId: nonEmptyString,
+  expectedConflictHead: FindingLifecycleEntityHeadSchema,
+  attemptOrdinal: z.union([z.literal(1), z.literal(2)]),
+  retryOrdinal: z.union([z.literal(0), z.literal(1)]),
+  providerCallId: Sha256Schema,
+  requestDigest: Sha256Schema,
+  subjectIds: BinarySortedUniqueStringSetSchema,
+  originStep: nonEmptyString.nullable(),
+});
+const ConflictVerificationResultSchema = z.object({
+  kind: z.literal('verification_undetermined'),
+  proposal: ConflictAdjudicationProposalSchema,
+  proposalDigest: Sha256Schema,
+  reasonCodes: BinarySortedUniqueStringSetSchema,
+}).strict();
+const ConflictStaleResultSchema = z.object({
+  kind: z.literal('stale_precondition'),
+  proposal: ConflictAdjudicationProposalSchema,
+  proposalDigest: Sha256Schema,
+}).strict();
+export const ConflictAdjudicationAttemptSchema = z.discriminatedUnion('stage', [
+  ConflictAttemptBaseSchema.extend({
+    stage: z.literal('started'),
+    startedAt: FindingObservationSchema,
+  }).strict(),
+  ConflictAttemptBaseSchema.extend({
+    stage: z.literal('interrupted'),
+    startedAt: FindingObservationSchema,
+    interruptedAt: FindingObservationSchema,
+    reason: z.literal('provider_result_unknown'),
+  }).strict(),
+  ConflictAttemptBaseSchema.extend({
+    stage: z.literal('proposed'),
+    startedAt: FindingObservationSchema,
+    completedAt: FindingObservationSchema,
+    proposal: ConflictAdjudicationProposalSchema,
+    proposalDigest: Sha256Schema,
+  }).strict(),
+  ConflictAttemptBaseSchema.extend({
+    stage: z.literal('completed'),
+    startedAt: FindingObservationSchema,
+    completedAt: FindingObservationSchema,
+    result: z.union([
+      TerminalDiagnosticResultSchema,
+      ConflictVerificationResultSchema,
+      ConflictStaleResultSchema,
+    ]),
+  }).strict(),
+  ConflictAttemptBaseSchema.extend({
+    stage: z.literal('applied'),
+    startedAt: FindingObservationSchema,
+    completedAt: FindingObservationSchema,
+    appliedAt: FindingObservationSchema,
+    proposal: AppliedConflictAdjudicationProposalSchema,
+    proposalDigest: Sha256Schema,
+    verificationDigest: Sha256Schema,
+    claimSettlementIds: BinarySortedUniqueStringSetSchema,
+    lifecycleEventIds: BinarySortedUniqueStringSetSchema,
+  }).strict(),
+]);
+const ConflictClaimSettlementBaseSchema = z.object({
+  settlementId: Sha256Schema,
+  conflictId: nonEmptyString,
+  conflictSnapshotId: Sha256Schema,
+  subjectId: Sha256Schema,
+  subjectRole: z.enum(['product_finding', 'holding_provisional']),
+  findingId: nonEmptyString,
+  expectedHead: FindingLifecycleEntityHeadSchema,
+  attemptId: Sha256Schema,
+  rawClaimLandingIds: BinarySortedUniqueStringSetSchema,
+  lifecycleEventIds: BinarySortedUniqueStringSetSchema,
+  verificationDigest: Sha256Schema,
+  recordedAt: FindingObservationSchema,
+});
+export const ConflictClaimSettlementSchema = z.discriminatedUnion('outcome', [
+  ConflictClaimSettlementBaseSchema.extend({
+    outcome: z.literal('merged'),
+    targetFindingId: nonEmptyString,
+  }).strict(),
+  ConflictClaimSettlementBaseSchema.extend({
+    outcome: z.literal('promoted'),
+    targetFindingId: nonEmptyString,
+  }).strict(),
+  ConflictClaimSettlementBaseSchema.extend({ outcome: z.literal('resolved') }).strict(),
+  ConflictClaimSettlementBaseSchema.extend({ outcome: z.literal('invalidated') }).strict(),
 ]);
 
 /** ラウンド跨ぎの fixpoint 比較スナップショット。 */
@@ -1183,43 +1997,6 @@ const InterpretationStatsReportSchema = z.object({
   budgetExhaustedLineages: z.number().int().nonnegative(),
 }).strict();
 
-const RawFindingDispositionSchema = z.object({
-  rawFindingId: nonEmptyString,
-  outcome: z.enum(RAW_FINDING_DISPOSITION_OUTCOMES),
-  reason: nonEmptyString,
-}).strict();
-
-const InterpretationRecoveryOriginSettlementSchema = z.discriminatedUnion('outcome', [
-  z.object({
-    provisionalFindingId: nonEmptyString,
-    sourceRawFindingId: nonEmptyString,
-    outcome: z.literal('audit_only'),
-    failureKind: z.enum([
-      'source_missing',
-      'reviewer_provenance_missing',
-      'recovery_contract_mismatch',
-    ]),
-    reason: nonEmptyString,
-  }).strict(),
-  z.object({
-    provisionalFindingId: nonEmptyString,
-    sourceRawFindingId: nonEmptyString,
-    outcome: z.literal('stale'),
-    reason: nonEmptyString,
-  }).strict(),
-  z.object({
-    provisionalFindingId: nonEmptyString,
-    sourceRawFindingId: nonEmptyString,
-    outcome: z.literal('settled'),
-    targetFindingId: nonEmptyString,
-  }).strict(),
-  z.object({
-    provisionalFindingId: nonEmptyString,
-    sourceRawFindingId: nonEmptyString,
-    outcome: z.literal('retained'),
-  }).strict(),
-]);
-
 const FindingManagerValidationReportSchema = z.object({
   version: z.literal(1),
   runId: nonEmptyString,
@@ -1239,7 +2016,6 @@ const FindingManagerValidationReportSchema = z.object({
     reviewer: nonEmptyString,
     flaggedRawFindingIds: z.array(nonEmptyString),
   }).strict()).optional(),
-  rawFindingDispositions: z.array(RawFindingDispositionSchema).optional(),
   interpretationRecoverySettlements: z.array(
     InterpretationRecoveryOriginSettlementSchema,
   ).optional(),
@@ -1289,11 +2065,27 @@ const FindingManagerCommitProjectionSchema = z.object({
   evidenceBindings: z.array(FindingEvidenceBindingSchema),
   lifecycleReservations: z.array(FindingLifecycleReservationSchema),
   lifecycleEvents: z.array(FindingLifecycleEventSchema),
-  rawRecoveryAttempts: z.array(RawRecoveryAttemptSchema),
-  rawRecoveryResults: z.array(RawRecoveryResultSchema),
   rawFindings: z.array(RawFindingSchema),
+  rawCanonicalSnapshots: z.array(RawCanonicalSnapshotSchema),
   conflicts: z.array(FindingLedgerConflictSchema),
-  interpretations: z.array(FindingInterpretationRecordSchema),
+  conflictRawClaimLandings: z.array(ConflictRawClaimLandingSchema),
+  conflictAdjudicationSnapshots: z.array(ConflictAdjudicationSnapshotSchema),
+  conflictAdjudicationEpisodes: z.array(ConflictAdjudicationEpisodeSchema),
+  conflictAdjudicationAttempts: z.array(ConflictAdjudicationAttemptSchema),
+  conflictClaimSettlements: z.array(ConflictClaimSettlementSchema),
+  interpretationCaseSnapshots: z.array(InterpretationCaseSnapshotSchema),
+  interpretationRawObservations: z.array(InterpretationRawObservationSchema),
+  interpretationRecoveryOriginBindings: z.array(InterpretationRecoveryOriginBindingSchema),
+  interpretationRecoveryOriginSettlements: z.array(InterpretationRecoveryOriginSettlementSchema),
+  interpretationAttempts: z.array(InterpretationAttemptSchema),
+  rawInterpretationOutcomes: z.array(RawInterpretationOutcomeSchema),
+  findingManagerProviderBudgetScopes: z.array(FindingManagerProviderBudgetScopeSchema),
+  findingManagerProviderCalls: z.array(FindingManagerProviderCallSchema),
+  findingScopeBindings: z.array(FindingScopeBindingSchema),
+  terminalAdjudicationRounds: z.array(TerminalAdjudicationRoundSchema),
+  terminalAdjudicationEpisodes: z.array(TerminalAdjudicationEpisodeSchema),
+  terminalAdjudicationAttempts: z.array(TerminalAdjudicationAttemptSchema),
+  terminalAdjudicationSettlements: z.array(TerminalAdjudicationSettlementSchema),
   fixpoint: FindingLedgerFixpointStateSchema.optional(),
   stopBudget: FindingLedgerStopBudgetStateSchema.optional(),
   reviewerAnomalies: z.array(ReviewerAnomalyEntrySchema).optional(),
@@ -1325,11 +2117,27 @@ export const FindingLedgerSchema = z.object({
   evidenceBindings: z.array(FindingEvidenceBindingSchema),
   lifecycleReservations: z.array(FindingLifecycleReservationSchema),
   lifecycleEvents: z.array(FindingLifecycleEventSchema),
-  rawRecoveryAttempts: z.array(RawRecoveryAttemptSchema),
-  rawRecoveryResults: z.array(RawRecoveryResultSchema),
   rawFindings: z.array(RawFindingSchema),
+  rawCanonicalSnapshots: z.array(RawCanonicalSnapshotSchema),
   conflicts: z.array(FindingLedgerConflictSchema),
-  interpretations: z.array(FindingInterpretationRecordSchema),
+  conflictRawClaimLandings: z.array(ConflictRawClaimLandingSchema),
+  conflictAdjudicationSnapshots: z.array(ConflictAdjudicationSnapshotSchema),
+  conflictAdjudicationEpisodes: z.array(ConflictAdjudicationEpisodeSchema),
+  conflictAdjudicationAttempts: z.array(ConflictAdjudicationAttemptSchema),
+  conflictClaimSettlements: z.array(ConflictClaimSettlementSchema),
+  interpretationCaseSnapshots: z.array(InterpretationCaseSnapshotSchema),
+  interpretationRawObservations: z.array(InterpretationRawObservationSchema),
+  interpretationRecoveryOriginBindings: z.array(InterpretationRecoveryOriginBindingSchema),
+  interpretationRecoveryOriginSettlements: z.array(InterpretationRecoveryOriginSettlementSchema),
+  interpretationAttempts: z.array(InterpretationAttemptSchema),
+  rawInterpretationOutcomes: z.array(RawInterpretationOutcomeSchema),
+  findingManagerProviderBudgetScopes: z.array(FindingManagerProviderBudgetScopeSchema),
+  findingManagerProviderCalls: z.array(FindingManagerProviderCallSchema),
+  findingScopeBindings: z.array(FindingScopeBindingSchema),
+  terminalAdjudicationRounds: z.array(TerminalAdjudicationRoundSchema),
+  terminalAdjudicationEpisodes: z.array(TerminalAdjudicationEpisodeSchema),
+  terminalAdjudicationAttempts: z.array(TerminalAdjudicationAttemptSchema),
+  terminalAdjudicationSettlements: z.array(TerminalAdjudicationSettlementSchema),
   fixpoint: FindingLedgerFixpointStateSchema.optional(),
   stopBudget: FindingLedgerStopBudgetStateSchema.optional(),
   // 二系統台帳（review-integrity protocol）の review-integrity 側。
@@ -1371,48 +2179,47 @@ export const FindingLedgerSchema = z.object({
   }
 });
 
-/**
- * findings-manager の ambiguous 解釈フェーズが返す structured output の JSON
- * schema。提案（proposal）だけを返させる — 台帳操作の配列は返させない。
- */
-export const AmbiguousInterpretationsOutputJsonSchema = {
+const InterpretationCaseDecisionsOutputIntakeJsonSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['interpretations'],
+  required: ['decisions'],
   properties: {
-    interpretations: {
+    decisions: {
       type: 'array',
-      description: 'Exactly one interpretation per ambiguous raw finding listed in the prompt. These are PROPOSALS: the engine holds all authority and rejects anything outside your granted capabilities.',
-      // 構造的なハード上限（synthetic-step requirement）: 出力サイズは schema レベルで有界化する。
-      // batch は最大16件（MANAGER_INTERPRETATION_LIMITS.maxAmbiguousCandidatesPerBatch）、
-      // 各フィールドは固定長。chars/4 のトークン概算は計測・ログ用であって
-      // ハード上限ではない（native structured output provider は生成自体が
-      // この schema で拘束される）。
       maxItems: 16,
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['decision', 'rawFindingId', 'proofId', 'targetFindingId', 'reason'],
+        required: ['caseId', 'decision'],
         properties: {
+          caseId: { type: 'string', minLength: 64, maxLength: 64 },
           decision: {
-            enum: AMBIGUOUS_INTERPRETATION_DECISIONS,
-            description: 'create_independent = the observation is a real, independent problem; a NEW open finding is created (existing findings are never touched). same_with_proof = you assert it is identical to an existing open finding AND the prompt gave you an engine-issued proofId for that pair; echo that proofId. open_conflict = it relates to an existing finding but you cannot determine identity; an active conflict is recorded against that finding (the finding is not closed). provisional = you cannot determine the meaning; the observation is kept as a gate-blocking provisional finding.',
-          },
-          rawFindingId: { type: 'string', minLength: 1, maxLength: 512 },
-          proofId: {
-            type: 'string',
-            maxLength: 128,
-            description: 'Required for same_with_proof: an engine-issued proof id from the prompt. Empty string otherwise. You cannot mint proof ids yourself.',
-          },
-          targetFindingId: {
-            type: 'string',
-            maxLength: 128,
-            description: 'Required for open_conflict: the existing finding id the observation conflicts with. Empty string otherwise.',
-          },
-          reason: {
-            type: 'string',
-            maxLength: 2048,
-            description: 'Required for provisional: why the meaning cannot be determined. Empty string otherwise.',
+            oneOf: [
+              {
+                type: 'object',
+                additionalProperties: false,
+                required: ['kind'],
+                properties: { kind: { const: 'create_independent' } },
+              },
+              {
+                type: 'object',
+                additionalProperties: false,
+                required: ['kind', 'targetFindingId'],
+                properties: {
+                  kind: { const: 'open_conflict' },
+                  targetFindingId: { type: 'string', minLength: 1, maxLength: 128 },
+                },
+              },
+              {
+                type: 'object',
+                additionalProperties: false,
+                required: ['kind', 'reason'],
+                properties: {
+                  kind: { const: 'provisional' },
+                  reason: { type: 'string', minLength: 1, maxLength: 2048 },
+                },
+              },
+            ],
           },
         },
       },
@@ -1420,9 +2227,12 @@ export const AmbiguousInterpretationsOutputJsonSchema = {
   },
 } as const;
 
-export function parseAmbiguousInterpretations(value: unknown): ParsedAmbiguousInterpretation[] {
-  const parsed = z.object({ interpretations: z.array(AmbiguousInterpretationSchema) }).strict().parse(value);
-  return parsed.interpretations;
+export function parseInterpretationCaseDecisions(
+  value: unknown,
+): ParsedInterpretationCaseDecisionOutput[] {
+  return z.object({
+    decisions: z.array(InterpretationCaseDecisionOutputSchema),
+  }).strict().parse(value).decisions;
 }
 
 export const FindingManagerOutputSchema = z.object({
@@ -1885,7 +2695,7 @@ export const FindingManagerDecisionsJsonSchema = {
           findingId: { type: 'string', minLength: 1 },
           basis: {
             enum: FINDING_DISMISSAL_BASES,
-            description: 'outside_contract_jurisdiction and unverifiable_claim are standard jurisdiction bases. outside_task_scope, false_positive, overreach, and no_issue_after_verification require terminal_adjudication authority.',
+            description: 'All dismissal bases require verified terminal_adjudication authority. Unverifiable claims remain open and lead to a safe ABORT.',
           },
           reason: { type: 'string', minLength: 1 },
           evidence: {
@@ -1906,42 +2716,103 @@ export const FindingManagerDecisionsJsonSchema = {
   },
 } as const;
 
-export const FindingConflictAdjudicationOutputSchema = z.object({
-  conflictId: nonEmptyString,
-  outcome: FindingConflictAdjudicationOutcomeSchema,
-  actionableFix: nonEmptyString.nullable().transform((value) => value ?? undefined),
-  rationale: nonEmptyString.nullable().transform((value) => value ?? undefined),
+const ProductFindingProjectionOutputSchema = z.object({
+  target: FindingTargetSchema,
+  targetIdentityHash: Sha256Schema,
+  familyTag: nonEmptyString,
+  severity: FindingSeveritySchema,
+  title: nonEmptyString,
+  description: nonEmptyString,
+  suggestion: nonEmptyString.nullable(),
+  claimIdentityHash: Sha256Schema,
+  semanticClaimIdentityHash: Sha256Schema,
+  evidenceRecordIds: BinarySortedUniqueStringSetSchema,
 }).strict();
 
-export const FindingConflictAdjudicationOutputJsonSchema = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['conflictId', 'outcome', 'actionableFix', 'rationale'],
-  properties: {
-    conflictId: {
-      type: 'string',
-      minLength: 1,
-      description: 'The conflict id given to you in the prompt. Echo it back unchanged.',
-    },
-    outcome: {
-      enum: FINDING_CONFLICT_ADJUDICATION_OUTCOMES,
-      description: 'finding_valid = the reviewer finding is legitimate and still stands; state the concrete coder fix in actionableFix so the workflow can route to the fix step (a finding_valid with a null actionableFix is treated as undetermined). finding_stale = the finding no longer applies (already fixed, or the code it describes no longer exists). evidence_invalid = the finding\'s own premise does not hold (it was never a real problem). undetermined = you could not reach a conclusion from the evidence available.',
-    },
-    actionableFix: {
-      type: ['string', 'null'],
-      minLength: 1,
-      description: 'For finding_valid: the concrete code change the coder must make. Use null for every other outcome. A finding_valid with null is treated as undetermined and blocks the run.',
-    },
-    rationale: {
-      type: ['string', 'null'],
-      minLength: 1,
-      description: 'A concise explanation of the judgment, or null when there is no annotation. This is never treated as lifecycle evidence.',
-    },
-  },
+export const ConflictAdjudicationProviderProposalSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('merge_holding'),
+    holdingSubjectId: nonEmptyString,
+    targetProductSubjectId: nonEmptyString,
+    authorityRefIds: BinarySortedUniqueStringSetSchema.min(1),
+    actionableFix: OptionalAdjudicationTextSchema,
+    rationale: OptionalAdjudicationTextSchema,
+  }).strict(),
+  z.object({
+    kind: z.literal('promote_holding'),
+    holdingSubjectId: nonEmptyString,
+    proposedProduct: ProductFindingProjectionOutputSchema,
+    authorityRefIds: BinarySortedUniqueStringSetSchema.min(1),
+    actionableFix: OptionalAdjudicationTextSchema,
+    rationale: OptionalAdjudicationTextSchema,
+  }).strict(),
+  z.object({
+    kind: z.literal('terminate_subject'),
+    subjectId: nonEmptyString,
+    basis: z.enum(['finding_no_issue_after_verification', 'finding_claim_refuted']),
+    authorityRefIds: BinarySortedUniqueStringSetSchema.min(1),
+    rationale: OptionalAdjudicationTextSchema,
+  }).strict(),
+  z.object({
+    kind: z.literal('undetermined'),
+    subjectIds: BinarySortedUniqueStringSetSchema.min(1),
+    rationale: OptionalAdjudicationTextSchema,
+  }).strict(),
+]);
+
+const adjudicationTextJsonSchema = { type: ['string', 'null'], minLength: 1 } as const;
+const authorityRefsJsonSchema = {
+  type: 'array',
+  minItems: 1,
+  uniqueItems: true,
+  items: { type: 'string', minLength: 1 },
 } as const;
 
-export function parseFindingConflictAdjudicationOutput(value: unknown): FindingConflictAdjudicationOutput {
-  return FindingConflictAdjudicationOutputSchema.parse(value);
+export const ConflictAdjudicationProviderProposalJsonSchema = {
+  oneOf: [
+    {
+      type: 'object', additionalProperties: false,
+      required: ['kind', 'holdingSubjectId', 'targetProductSubjectId', 'authorityRefIds', 'actionableFix', 'rationale'],
+      properties: {
+        kind: { const: 'merge_holding' }, holdingSubjectId: { type: 'string', minLength: 1 },
+        targetProductSubjectId: { type: 'string', minLength: 1 },
+        authorityRefIds: authorityRefsJsonSchema, actionableFix: adjudicationTextJsonSchema,
+        rationale: adjudicationTextJsonSchema,
+      },
+    },
+    {
+      type: 'object', additionalProperties: false,
+      required: ['kind', 'holdingSubjectId', 'proposedProduct', 'authorityRefIds', 'actionableFix', 'rationale'],
+      properties: {
+        kind: { const: 'promote_holding' }, holdingSubjectId: { type: 'string', minLength: 1 },
+        proposedProduct: productFindingProjectionJsonSchema,
+        authorityRefIds: authorityRefsJsonSchema,
+        actionableFix: adjudicationTextJsonSchema, rationale: adjudicationTextJsonSchema,
+      },
+    },
+    {
+      type: 'object', additionalProperties: false,
+      required: ['kind', 'subjectId', 'basis', 'authorityRefIds', 'rationale'],
+      properties: {
+        kind: { const: 'terminate_subject' }, subjectId: { type: 'string', minLength: 1 },
+        basis: { enum: ['finding_no_issue_after_verification', 'finding_claim_refuted'] },
+        authorityRefIds: authorityRefsJsonSchema, rationale: adjudicationTextJsonSchema,
+      },
+    },
+    {
+      type: 'object', additionalProperties: false,
+      required: ['kind', 'subjectIds', 'rationale'],
+      properties: {
+        kind: { const: 'undetermined' },
+        subjectIds: { type: 'array', minItems: 1, uniqueItems: true, items: { type: 'string', minLength: 1 } },
+        rationale: adjudicationTextJsonSchema,
+      },
+    },
+  ],
+} as const;
+
+export function parseConflictAdjudicationProposal(value: unknown): ConflictAdjudicationProposal {
+  return ConflictAdjudicationProviderProposalSchema.parse(value);
 }
 
 const RawFindingsOutputIntakeJsonSchema = {
@@ -2222,6 +3093,11 @@ function projectNativeStructuredOutputSchema(value: unknown): unknown {
 export const RawFindingsOutputJsonSchema = projectNativeStructuredOutputSchema(
   RawFindingsOutputIntakeJsonSchema,
 ) as typeof RawFindingsOutputIntakeJsonSchema;
+
+export const InterpretationCaseDecisionsOutputJsonSchema =
+  projectNativeStructuredOutputSchema(
+    InterpretationCaseDecisionsOutputIntakeJsonSchema,
+  ) as typeof InterpretationCaseDecisionsOutputIntakeJsonSchema;
 
 /** normalizer schema は snapshot/run/proof へ束縛せず、抽出だけを許可する。 */
 export function createRawFindingsOutputJsonSchema() {

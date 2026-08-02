@@ -13,22 +13,14 @@ import {
   attachReviewIntegrityState,
   resolveReviewIntegrityLimits,
 } from './review-integrity.js';
-import { resolveStopBudgetLimits } from './stop-budget.js';
+import { attachStopBudgetState, resolveStopBudgetLimits } from './stop-budget.js';
 import type { ProvisionalLandingReport, RawAdmissionRejectionReport, ReviewerAnomalyLandingReport } from './store.js';
 import type { FindingLedger, FindingObservation } from './types.js';
 import type {
   InterpretationRecoveryOriginSettlement,
-  RawFindingDisposition,
 } from './types.js';
-import type { InterpretationRecoveryFailure } from './interpretation-recovery.js';
-import { releaseRawAdjudicationReservations } from './raw-adjudication-reservation.js';
-import {
-  releaseInterpretationReservations,
-  syncProvisionalInterpretationEpochs,
-} from './interpretation-wal.js';
 import { issueManagerLifecycleAuthority } from './manager-lifecycle-authority.js';
 import { assembleAndApplyManagerLifecycleTransactions } from './manager-lifecycle-assembly.js';
-import { completeRawRecoveryAttempts } from './raw-recovery-result.js';
 import { applyRejectedObservationAttachments } from './manager-provisional-settlement.js';
 import { attachFixpointState } from './fixpoint.js';
 import type { ReviewScopeProofSnapshot } from './snapshot.js';
@@ -36,6 +28,12 @@ import {
   settleReviewerAnomaliesFromAuthorizedTerminalEvents,
 } from './reviewer-anomaly-settlement.js';
 import { computeWorkflowTaskDigest } from './task-scope-adjudication.js';
+import { finalizeInterpretationCaseProjection } from './interpretation-case-finalizer.js';
+import { refreshActiveConflictAdjudicationSnapshots } from './conflict-adjudication-model.js';
+import {
+  landUnownedConflictRawClaims,
+  stageCanonicalRawSnapshots,
+} from './conflict-claim-landing.js';
 
 export interface CommitFindingManagerRoundResult {
   applied: boolean;
@@ -52,7 +50,6 @@ interface FindingManagerCommitResult {
   admissionRejections: RawAdmissionRejectionReport[];
   provisionalLandings: ProvisionalLandingReport[];
   reviewerAnomalyLandings: ReviewerAnomalyLandingReport[];
-  rawFindingDispositions: RawFindingDisposition[];
   interpretationRecoverySettlements: InterpretationRecoveryOriginSettlement[];
 }
 
@@ -60,7 +57,6 @@ export async function commitFindingManagerRound(params: {
   input: RunFindingManagerForStepInput;
   previousLedger: FindingLedger;
   intake: ReviewerIntakeResult;
-  interpretationRecoveryFailures: InterpretationRecoveryFailure[];
   admission: RawAdmissionEvaluation;
   managerDecision: ManagerDecisionStageResult;
   observation: FindingObservation;
@@ -70,33 +66,13 @@ export async function commitFindingManagerRound(params: {
   reviewScopeSnapshotId: string;
   reviewScopeSnapshot: ReviewScopeProofSnapshot;
 }): Promise<CommitFindingManagerRoundResult> {
-  try {
-    const mutation = await params.input.ledgerStore.commitManagerLedger((freshLedger) => {
+  const mutation = await params.input.ledgerStore.commitManagerLedger((freshLedger) => {
       const commitMutation = buildFindingManagerCommitMutation(params, freshLedger);
-      const recoveryOrigins = new Map([...params.managerDecision.rawRecovery.origins].map(
-        ([replayRawFindingId, origin]) => [origin.attemptId, replayRawFindingId],
-      ));
       if (!commitMutation.result.applied) {
-        return {
-          ...commitMutation,
-          ledger: completeRawRecoveryAttempts(
-            freshLedger,
-            freshLedger,
-            params.managerDecision.rawRecovery.reservationTokens,
-            recoveryOrigins,
-            params.observation,
-          ),
-        };
+        return commitMutation;
       }
       const proofed = issueManagerLifecycleAuthority({
-        current: commitMutation.result.rawRecoveryLedger,
-        rawRecoveryCurrent: freshLedger,
-        rawRecoveryManagerDecisionProposed:
-          commitMutation.result.rawRecoveryManagerDecisionLedger,
-        rawRecoveryManagerDecisionCommands:
-          commitMutation.result.rawRecoveryManagerDecisionCommands,
-        rawRecoverySettlementCommands:
-          commitMutation.result.rawRecoverySettlementCommands,
+        current: freshLedger,
         managerDecisionProposed: commitMutation.result.managerDecisionLedger,
         managerDecisionCommands: commitMutation.result.managerDecisionCommands,
         settlementCommands: commitMutation.result.settlementCommands,
@@ -117,13 +93,6 @@ export async function commitFindingManagerRound(params: {
       });
       const lifecycleLedger = assembleAndApplyManagerLifecycleTransactions({
         current: freshLedger,
-        rawRecoveryManagerDecisionCommands:
-          commitMutation.result.rawRecoveryManagerDecisionCommands,
-        rawRecoveryManagerDecisionProposed:
-          commitMutation.result.rawRecoveryManagerDecisionLedger,
-        rawRecoverySettlementCommands:
-          commitMutation.result.rawRecoverySettlementCommands,
-        rawRecoveryProposed: commitMutation.result.rawRecoveryLedger,
         managerDecisionCommands: commitMutation.result.managerDecisionCommands,
         managerDecisionProposed: commitMutation.result.managerDecisionLedger,
         proposed: proofed.ledger,
@@ -133,18 +102,12 @@ export async function commitFindingManagerRound(params: {
         settlementCommands: commitMutation.result.settlementCommands,
         actionRecoveryPlan: commitMutation.result.actionRecoveryPlan,
         provisionalProofIdsByFinding: proofed.provisionalProofIdsByFinding,
-        rawRecoveryProvisionalProofIdsByFinding:
-          proofed.rawRecoveryProvisionalProofIdsByFinding,
         invalidationProofIdsByFinding: proofed.invalidationProofIdsByFinding,
         duplicateProofIdsByCommandKey: proofed.duplicateProofIdsByCommandKey,
         managerDecisionProvisionalTransitionProofIdsByCommandKey:
           proofed.managerDecisionProvisionalTransitionProofIdsByCommandKey,
         provisionalTransitionProofIdsByCommandKey:
           proofed.provisionalTransitionProofIdsByCommandKey,
-        rawRecoveryManagerDecisionProvisionalTransitionProofIdsByCommandKey:
-          proofed.rawRecoveryManagerDecisionProvisionalTransitionProofIdsByCommandKey,
-        rawRecoveryProvisionalTransitionProofIdsByCommandKey:
-          proofed.rawRecoveryProvisionalTransitionProofIdsByCommandKey,
         invalidationReasonsByFinding: proofed.invalidationReasonsByFinding,
       });
       const withRejectedObservations = applyRejectedObservationAttachments(
@@ -152,26 +115,41 @@ export async function commitFindingManagerRound(params: {
         commitMutation.result.rejectedObservationAttachments,
         params.observation,
       );
-      const epochSynchronized = syncProvisionalInterpretationEpochs(
-        withRejectedObservations,
-        params.observation,
-      );
-      const completedRecovery = completeRawRecoveryAttempts(
-        freshLedger,
-        epochSynchronized,
-        params.managerDecision.rawRecovery.reservationTokens,
-        recoveryOrigins,
-        params.observation,
-      );
       const settledAnomalies = settleReviewerAnomaliesFromAuthorizedTerminalEvents(
         freshLedger,
         proofed.ledger,
-        completedRecovery,
+        withRejectedObservations,
         computeWorkflowTaskDigest(params.input.workflowTask),
+      );
+      const interpretationFinalized = finalizeInterpretationCaseProjection({
+        ledger: settledAnomalies,
+        prepared: commitMutation.result.interpretationPrepared,
+        observation: params.observation,
+      });
+      const withRawSnapshots = stageCanonicalRawSnapshots({
+        ledger: interpretationFinalized,
+        items: params.intake.items,
+        observation: params.observation,
+      });
+      const withConflictLandings = landUnownedConflictRawClaims({
+        ledger: withRawSnapshots,
+        observation: params.observation,
+      });
+      const withConflictSnapshots = refreshActiveConflictAdjudicationSnapshots({
+        ledger: withConflictLandings,
+        originStep: params.input.parentStep.name,
+        createdAt: params.observation,
+      });
+      const withStopBudget = attachStopBudgetState(
+        freshLedger,
+        withConflictSnapshots,
+        params.stopBudgetLimits,
+        params.stopBudgetRoundMarker,
+        params.input.timestamp,
       );
       const withReviewIntegrity = attachReviewIntegrityState(
         freshLedger,
-        settledAnomalies,
+        withStopBudget,
         params.reviewIntegrityLimits,
         params.stopBudgetRoundMarker,
         params.input.timestamp,
@@ -195,7 +173,7 @@ export async function commitFindingManagerRound(params: {
           report,
         },
       };
-    });
+  });
     const committed: FindingManagerCommitResult = {
       applied: mutation.result.applied,
       nextLedger: mutation.ledger,
@@ -203,7 +181,6 @@ export async function commitFindingManagerRound(params: {
       admissionRejections: mutation.result.admissionRejections,
       provisionalLandings: mutation.result.provisionalLandings,
       reviewerAnomalyLandings: mutation.result.reviewerAnomalyLandings,
-      rawFindingDispositions: mutation.result.rawFindingDispositions,
       interpretationRecoverySettlements: mutation.result.interpretationRecoverySettlements,
     };
     if (committed.applied && mutation.ledger.pendingManagerCommit !== undefined) {
@@ -213,24 +190,13 @@ export async function commitFindingManagerRound(params: {
       }
       committed.nextLedger = resumed.ledger;
     }
-    return {
+  return {
       applied: committed.applied,
       nextLedger: committed.nextLedger,
       staleRejectionCount: committed.staleRejections.length,
       provisionalLandingCount: committed.provisionalLandings.length,
       reviewerAnomalyLandingCount: committed.reviewerAnomalyLandings.length,
-    };
-  } finally {
-    await releaseInterpretationReservations(
-      params.input.ledgerStore,
-      params.managerDecision.ladder.interpretationReservations,
-      params.observation,
-    );
-    releaseRawAdjudicationReservations(
-      params.input.ledgerStore,
-      params.managerDecision.rawRecovery.reservationTokens,
-    );
-  }
+  };
 }
 
 function buildCommitReport(
@@ -243,13 +209,11 @@ function buildCommitReport(
     stepName: input.parentStep.name,
     managerOutput: managerDecision.managerOutput,
     invalidAttempts: [
-      ...managerDecision.rawRecovery.invalidAttempts,
       ...managerDecision.invalidAttempts,
     ],
     staleRejections: committed.staleRejections,
     admissionRejections: committed.admissionRejections,
     unsupportedRawFindingReports: [
-      ...managerDecision.rawRecovery.unsupportedRawFindingReports,
       ...managerDecision.unsupportedRawFindingReports,
       ...committed.unsupportedRawFindingReports,
     ],
@@ -258,8 +222,7 @@ function buildCommitReport(
     reviewerAnomalyLandings: committed.reviewerAnomalyLandings,
     rawNormalizations: intake.rawNormalizations,
     clarifications: intake.clarifications,
-    interpretationStats: managerDecision.ladder.stats,
-    rawFindingDispositions: committed.rawFindingDispositions,
+    interpretationStats: managerDecision.interpretation.stats,
     interpretationRecoverySettlements: committed.interpretationRecoverySettlements,
     managerTaskAudits: managerDecision.taskAudits,
   });

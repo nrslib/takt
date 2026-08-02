@@ -33,6 +33,7 @@ vi.mock('node:fs', async (importOriginal) => {
 import { linkSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { processInterpretationLiveClaims } from '../core/workflow/findings/interpretation-live-claims.js';
 import type { AgentResponse, FindingContractConfig, WorkflowStep } from '../core/models/types.js';
 import { verifyFileQuoteEvidence } from '../core/workflow/findings/admission-validation.js';
 import { computeReviewScopeSnapshotId } from '../core/workflow/findings/snapshot.js';
@@ -90,21 +91,14 @@ describe('engine-issued review scope evidence determines admission outcome (mana
       evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
       ...emptyFindingAuthorityProjection(),
     });
-    const reservations = new Set<string>();
     const store: FindingLedgerStore = {
       ledgerIdentity: '/test/finding-review-scope-snapshot-admission/ledger.json',
       workflowName: 'peer-review',
       loadLedger: () => ledgerRepository.loadLedger(),
       updateLedger: (mutator) => ledgerRepository.updateLedger(mutator),
-      claimAdjudicationReservation: (token) => {
-        if (reservations.has(token)) return false;
-        reservations.add(token);
-        return true;
-      },
-      releaseAdjudicationReservation: (token) => { reservations.delete(token); },
+      interpretationLiveClaims: processInterpretationLiveClaims,
       saveLedgerSnapshot: () => {},
       saveRawFindings: () => {},
       saveManagerValidationReport: () => {},
@@ -112,7 +106,6 @@ describe('engine-issued review scope evidence determines admission outcome (mana
         (report) => join(reportDir, `findings-manager-validation.${report.stepName}.json`),
         ledgerRepository,
       ),
-      saveConflictAdjudicationReport: () => {},
     };
     return { store, current: () => ledgerRepository.loadLedger() };
   }
@@ -312,9 +305,8 @@ describe('engine-issued review scope evidence determines admission outcome (mana
         status: string;
         inputBytes: number;
       }>;
-      rawFindingDispositions: Array<{
-        rawFindingId: string;
-        outcome: string;
+      reviewerAnomalyLandings: Array<{
+        sourceRawFindingIds: string[];
       }>;
     };
     expect(report.managerTaskAudits).toMatchObject([{
@@ -324,9 +316,9 @@ describe('engine-issued review scope evidence determines admission outcome (mana
     expect(report.managerTaskAudits[0]?.inputBytes).toBeGreaterThan(
       MAIN_MANAGER_INPUT_MAX_BYTES,
     );
-    expect(report.rawFindingDispositions).toHaveLength(4);
-    expect(report.rawFindingDispositions.every(
-      (disposition) => disposition.outcome === 'reviewer_anomaly',
+    expect(report.reviewerAnomalyLandings).toHaveLength(4);
+    expect(report.reviewerAnomalyLandings.every(
+      (landing) => landing.sourceRawFindingIds.length === 1,
     )).toBe(true);
   });
 

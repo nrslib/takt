@@ -1,4 +1,5 @@
 import type { AgentWorkflowStep } from '../../models/types.js';
+import { computeFindingManagerRoundIdentity } from '../../models/finding-contract-identity.js';
 import type {
   FindingLedger,
   FindingManagerTaskAudit,
@@ -7,7 +8,6 @@ import type {
 import { classifyRawFindingsMechanically } from './mechanical-classification.js';
 import type { RawAdmissionEvaluation } from './manager-admission.js';
 import {
-  computeDismissCandidates,
   computeInvalidLocationCandidates,
 } from './manager-utils.js';
 import { hasDisputeClaimsHeading } from './manager-output-validation.js';
@@ -15,17 +15,16 @@ import type {
   FindingManagerValidationAttemptReport,
 } from './store.js';
 import type { ManagerDecisionStageResult, RunFindingManagerForStepInput } from './manager-contracts.js';
-import { runAmbiguousLadder } from './manager-interpretation.js';
+import { runInterpretationCases } from './interpretation-case-runner.js';
 import { assembleCleanManagerDecision } from './manager-clean-decision.js';
-import { runRawAdjudicationRecovery } from './raw-adjudication-recovery.js';
-import { releaseRawAdjudicationReservations } from './raw-adjudication-reservation.js';
-import type { ReviewScopeProofSnapshot } from './snapshot.js';
 import { runMainManagerTasks } from './manager-task-runner.js';
 import {
   hasLifecycleProductTransitionCapability,
   hasLifecycleTransitionIntent,
 } from './raw-relation-capabilities.js';
 import { computeWorkflowTaskDigest } from './task-scope-adjudication.js';
+import { runTerminalAdjudication } from './terminal-adjudication-runner.js';
+import type { ReviewScopeProofSnapshot } from './snapshot.js';
 
 export {
   FINDING_MANAGER_SCHEMA_REF,
@@ -51,8 +50,6 @@ export async function runManagerDecisionStage(params: {
     managerStep,
     observation,
     reviewScopeSnapshotId,
-    reviewScopeSnapshot,
-    stopBudgetRoundMarker,
     preAdmissionTaskAudits,
   } = params;
   const {
@@ -61,17 +58,8 @@ export async function runManagerDecisionStage(params: {
     provisionalOnlyLadderRawIds,
   } = admission;
   const workflowTaskDigest = computeWorkflowTaskDigest(input.workflowTask);
-  const rawRecovery = await runRawAdjudicationRecovery({
-    runInput: input,
-    previousLedger,
-    managerStep,
-    observation,
-    reviewScopeSnapshotId,
-    reviewScopeSnapshot,
-  });
-  try {
-    const findingsById = new Map(previousLedger.findings.map((finding) => [finding.id, finding]));
-    const cleanAuditOnlyLifecycleRawIds = new Set(
+  const findingsById = new Map(previousLedger.findings.map((finding) => [finding.id, finding]));
+  const cleanAuditOnlyLifecycleRawIds = new Set(
       admission.cleanAdmitted
         .filter((item) => (
           item.canonical.relation !== null
@@ -86,7 +74,7 @@ export async function runManagerDecisionStage(params: {
         ))
         .map((item) => item.wire.rawFindingId),
     );
-    const decisionAdmission: RawAdmissionEvaluation = cleanAuditOnlyLifecycleRawIds.size === 0
+  const decisionAdmission: RawAdmissionEvaluation = cleanAuditOnlyLifecycleRawIds.size === 0
       ? admission
       : {
           ...admission,
@@ -97,9 +85,9 @@ export async function runManagerDecisionStage(params: {
             (wire) => !cleanAuditOnlyLifecycleRawIds.has(wire.rawFindingId),
           ),
         };
-    const invalidLocationCandidates = computeInvalidLocationCandidates(input.cwd, previousLedger);
+  const invalidLocationCandidates = computeInvalidLocationCandidates(input.cwd, previousLedger);
     const invalidLocationCandidateFindingIds = new Set(invalidLocationCandidates.keys());
-    const dismissCandidates = computeDismissCandidates(previousLedger);
+    const dismissCandidates = new Map<string, string>();
     const dismissCandidateFindingIds = new Set(dismissCandidates.keys());
     const mechanical = classifyRawFindingsMechanically({
       previousLedger,
@@ -107,9 +95,6 @@ export async function runManagerDecisionStage(params: {
     });
     const hasDisputeClaims = hasDisputeClaimsHeading(input.priorStepResponseText);
     const hasActiveConflict = previousLedger.conflicts.some((conflict) => conflict.status === 'active');
-    // dismiss 候補（滞留する provisional）が1件でもあれば、残余 raw がゼロでも
-    // manager を起動する — 起動しないと候補が裁定されないまま完了ゲートを
-    // 塞ぎ続ける（1ラウンド税の成立条件）。
     const needsAgent = mechanical.residualRawFindings.length > 0
       || hasDisputeClaims
       || hasActiveConflict
@@ -194,10 +179,20 @@ export async function runManagerDecisionStage(params: {
     const ladderTainted = taintedAdmitted.filter(
       (item) => !taintedLifecycle.includes(item),
     );
-    const ladder = await runAmbiguousLadder({
-      tainted: ladderTainted,
+    await runTerminalAdjudication({
+      runInput: input,
+      observation,
+      roundIdentity: computeFindingManagerRoundIdentity({
+        scopeIdentity: workflowTaskDigest,
+        workflowName: input.workflowName,
+        roundMarker: params.stopBudgetRoundMarker,
+      }),
+      scopeIdentity: workflowTaskDigest,
+      reviewScopeSnapshot: params.reviewScopeSnapshot,
+    });
+    const interpretation = await runInterpretationCases({
+      items: ladderTainted,
       provisionalOnlyRawFindingIds: provisionalOnlyLadderRawIds,
-      previousLedger,
       ledgerStore: input.ledgerStore,
       contract: input.contract,
       workflowProvider: input.workflowProvider,
@@ -205,29 +200,23 @@ export async function runManagerDecisionStage(params: {
       optionsBuilder: input.optionsBuilder,
       stepExecutor: input.stepExecutor,
       observation,
-      workflowName: input.workflowName,
-      callNamespace: input.callNamespace,
-      parentStepName: input.parentStep.name,
-      stopBudgetRoundMarker,
+      roundMarker: params.stopBudgetRoundMarker,
+      scopeIdentity: workflowTaskDigest,
+      verifiedEvidenceRecordsByRawFindingId: admission.verifiedEvidenceRecordsByRawFindingId,
     });
 
-    return {
-      managerOutput,
-      conflictTargetHeads: taskExecution?.conflictTargetHeads ?? new Map(),
-      invalidAttempts,
-      cleanProvisionalSpecs,
-      unsupportedRawFindingReports,
-      cleanWireById,
-      cleanCanonicalById,
-      ladder,
-      rawRecovery,
-      taskAudits: [
-        ...preAdmissionTaskAudits,
-        ...(taskExecution?.taskAudits ?? []),
-      ],
-    };
-  } catch (error) {
-    releaseRawAdjudicationReservations(input.ledgerStore, rawRecovery.reservationTokens);
-    throw error;
-  }
+  return {
+    managerOutput,
+    conflictTargetHeads: taskExecution?.conflictTargetHeads ?? new Map(),
+    invalidAttempts,
+    cleanProvisionalSpecs,
+    unsupportedRawFindingReports,
+    cleanWireById,
+    cleanCanonicalById,
+    interpretation,
+    taskAudits: [
+      ...preAdmissionTaskAudits,
+      ...(taskExecution?.taskAudits ?? []),
+    ],
+  };
 }

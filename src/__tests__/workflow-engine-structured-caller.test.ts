@@ -413,7 +413,6 @@ describe('WorkflowEngine structured caller defaults', () => {
         },
       ],
       conflicts: [],
-      interpretations: [],
     };
     const ledgerReference = getAuthoritativeLedgerReference(cwd);
     await writeTestFindingLedger(ledgerReference, serializeFindingLedger(initialLedger), 'utf-8');
@@ -680,7 +679,6 @@ describe('WorkflowEngine structured caller defaults', () => {
       evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
     }), 'utf-8');
     vi.mocked(runAgent).mockImplementation(async (_persona, instruction, options) => {
       options?.onPromptResolved?.({
@@ -757,7 +755,6 @@ describe('WorkflowEngine structured caller defaults', () => {
       evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
     }), 'utf-8');
 
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
@@ -903,7 +900,6 @@ describe('WorkflowEngine structured caller defaults', () => {
       evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
     }), 'utf-8');
 
     const correctedRawFindingId = 'raw-corrected';
@@ -1332,7 +1328,6 @@ describe('WorkflowEngine structured caller defaults', () => {
       evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
     }), 'utf-8');
     vi.mocked(runAgent).mockImplementation(async (_persona, instruction, options) => {
       options?.onPromptResolved?.({
@@ -1418,7 +1413,6 @@ describe('WorkflowEngine structured caller defaults', () => {
           evidenceRecords: [],
           rawFindings: [],
       conflicts: [],
-      interpretations: [],
         }), 'utf-8');
       }
       return {
@@ -1507,7 +1501,6 @@ describe('WorkflowEngine structured caller defaults', () => {
         },
       ],
       conflicts: [],
-      interpretations: [],
     };
 
     // 呼び出し順に依存しないモック: 判定ステージ（step スキーマ）だけ
@@ -1608,7 +1601,6 @@ describe('WorkflowEngine structured caller defaults', () => {
           lastSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
         },
       ],
-      interpretations: [],
     };
 
     vi.mocked(runAgent).mockImplementation(async (_persona, instruction, options) => {
@@ -1687,7 +1679,6 @@ describe('WorkflowEngine structured caller defaults', () => {
       evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
     };
 
     let reviewerCalls = 0;
@@ -1806,7 +1797,6 @@ describe('WorkflowEngine structured caller defaults', () => {
       evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
     };
 
     let reviewerCalls = 0;
@@ -1933,7 +1923,6 @@ describe('WorkflowEngine structured caller defaults', () => {
       evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
     };
 
     let reviewerCalls = 0;
@@ -2080,7 +2069,6 @@ describe('WorkflowEngine structured caller defaults', () => {
         },
       ],
       conflicts: [],
-      interpretations: [],
     };
 
     vi.mocked(runAgent).mockImplementation(async (_persona, instruction, options) => {
@@ -2400,7 +2388,6 @@ describe('WorkflowEngine structured caller defaults', () => {
       evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
     };
     const ledgerReference = getAuthoritativeLedgerReference(cwd);
     await writeTestFindingLedger(ledgerReference, serializeFindingLedger(initialLedger), 'utf-8');
@@ -2738,7 +2725,6 @@ describe('WorkflowEngine structured caller defaults', () => {
         },
       ],
       conflicts: [],
-      interpretations: [],
     };
     const ledgerReference = getAuthoritativeLedgerReference(cwd);
     await writeTestFindingLedger(ledgerReference, serializeFindingLedger(initialLedger), 'utf-8');
@@ -2964,7 +2950,6 @@ describe('WorkflowEngine structured caller defaults', () => {
         },
       ],
       conflicts: [],
-      interpretations: [],
     };
     const ledgerReference = getAuthoritativeLedgerReference(cwd);
     await writeTestFindingLedger(ledgerReference, serializeFindingLedger(initialLedger), 'utf-8');
@@ -3244,7 +3229,6 @@ describe('WorkflowEngine structured caller defaults', () => {
       evidenceRecords: [],
       rawFindings: [previousRawFinding],
       conflicts: [],
-      interpretations: [],
     };
     const ledgerReference = getAuthoritativeLedgerReference(cwd);
     await writeTestFindingLedger(ledgerReference, serializeFindingLedger(initialLedger), 'utf-8');
@@ -3398,7 +3382,6 @@ describe('WorkflowEngine structured caller defaults', () => {
         },
       ],
       conflicts: [],
-      interpretations: [],
     };
     const ledgerReference = getAuthoritativeLedgerReference(cwd);
     await writeTestFindingLedger(ledgerReference, serializeFindingLedger(initialLedger), 'utf-8');

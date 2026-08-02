@@ -155,6 +155,7 @@ export function reserveVerifiedLifecycleMutation(
     evidenceRecords: ledger.evidenceRecords,
     rawFindings: ledger.rawFindings,
     findings: ledger.findings,
+    findingScopeBindings: ledger.findingScopeBindings,
   });
   const existing = ledger.lifecycleReservations.find(
     (reservation) => reservation.mutationId === input.reservation.mutationId,
@@ -245,7 +246,6 @@ function assertFindingState(
     operation === 'record_dispute'
     || operation === 'record_rejected_observation'
     || operation === 'record_recovery_attempt'
-    || operation === 'sync_interpretation_epoch'
   ) {
     if (
       current !== undefined
@@ -281,26 +281,6 @@ function assertSpecialAuthorityDelta(input: {
     ) {
       throw new Error(
         `Rejected observation authority for "${target.entityId}" does not match its append-only projection delta`,
-      );
-    }
-  }
-  if (
-    authority.kind === 'system'
-    && authority.action === 'sync_interpretation_epoch'
-  ) {
-    const target = input.reservation.targets[0]!;
-    const before = currentEntity(input.ledger, 'finding', target.entityId) as FindingLedgerEntry;
-    const after = input.changes.get(targetKey(target)) as FindingLedgerEntry;
-    if (
-      before.provisional === undefined
-      || after.provisional === undefined
-      || !sameValue(
-        { ...before.provisional, interpretationEpochs: after.provisional.interpretationEpochs },
-        after.provisional,
-      )
-    ) {
-      throw new Error(
-        `Interpretation epoch sync for "${target.entityId}" changed fields outside interpretationEpochs`,
       );
     }
   }
@@ -396,169 +376,12 @@ function changedProjectionKeys(
   );
 }
 
-function assertAdjudicationMutationContract(input: {
-  ledger: FindingLedger;
-  reservation: FindingLifecycleReservation;
-  mutation: VerifiedLifecycleMutation;
-  changes: ReadonlyMap<string, FindingLedgerEntry | FindingLedgerConflict>;
-}): void {
-  if (
-    input.reservation.context.kind !== 'conflict_adjudication'
-    || input.reservation.authority.kind !== 'conflict_adjudication'
-  ) {
-    throw new Error('Conflict adjudication mutation is missing adjudication authority context');
-  }
-  const conflictId = input.reservation.context.conflictId;
-  const beforeConflict = currentEntity(
-    input.ledger,
-    'conflict',
-    conflictId,
-  ) as FindingLedgerConflict | undefined;
-  const afterConflict = input.changes.get(
-    targetKey({ entityKind: 'conflict', entityId: conflictId }),
-  ) as FindingLedgerConflict | undefined;
-  if (beforeConflict === undefined || afterConflict === undefined) {
-    throw new Error('Conflict adjudication mutation must transition its reserved conflict');
-  }
-  const beforeAdjudications = beforeConflict.adjudications ?? [];
-  const afterAdjudications = afterConflict.adjudications ?? [];
-  if (
-    afterAdjudications.length !== beforeAdjudications.length + 1
-    || !sameValue(afterAdjudications.slice(0, beforeAdjudications.length), beforeAdjudications)
-  ) {
-    throw new Error('Conflict adjudication must append exactly one adjudication record');
-  }
-  const record = afterAdjudications.at(-1)!;
-  if (
-    record.evidenceHash !== input.reservation.context.evidenceHash
-    || record.decidedAt.timestamp !== input.mutation.occurredAt.timestamp
-    || record.decidedAt.runId !== input.mutation.occurredAt.runId
-    || record.decidedAt.stepName !== input.mutation.occurredAt.stepName
-  ) {
-    throw new Error('Conflict adjudication record does not match its reserved evidence and observation');
-  }
-  const actionableFix = record.actionableFix?.trim() ?? '';
-  const resolvesConflict = record.outcome === 'finding_stale'
-    || record.outcome === 'evidence_invalid'
-    || (record.outcome === 'finding_valid' && actionableFix.length > 0);
-  const expectedConflictFields = new Set([
-    'revision',
-    'adjudications',
-    ...(resolvesConflict
-      ? ['status', 'resolvedAt', 'resolvedEvidence']
-      : []),
-  ]);
-  if (!sameValue(
-    [...changedProjectionKeys(beforeConflict, afterConflict)].sort(compareBinaryStrings),
-    [...expectedConflictFields].sort(compareBinaryStrings),
-  )) {
-    throw new Error('Conflict adjudication projection does not match its outcome disposition');
-  }
-  if (
-    (resolvesConflict && (
-      afterConflict.status !== 'resolved'
-      || afterConflict.resolvedAt !== record.decidedAt.timestamp
-      || afterConflict.resolvedEvidence
-        !== `Conflict adjudication ${conflictId}@${record.evidenceHash}: ${record.outcome}`
-    ))
-    || (!resolvesConflict && afterConflict.status !== 'active')
-  ) {
-    throw new Error('Conflict adjudication conflict disposition is inconsistent');
-  }
-
-  const reservedFindingIds = input.reservation.targets
-    .filter((target) => target.entityKind === 'finding')
-    .map((target) => target.entityId)
-    .sort(compareBinaryStrings);
-  if (!sameValue(
-    reservedFindingIds,
-    [...beforeConflict.findingIds].sort(compareBinaryStrings),
-  )) {
-    throw new Error('Conflict adjudication premises do not cover the conflict finding set');
-  }
-  const shouldChangeFindings = record.outcome === 'finding_stale'
-    || record.outcome === 'evidence_invalid'
-    || (record.outcome === 'finding_valid' && actionableFix.length > 0);
-  const expectedFindingIds = shouldChangeFindings ? reservedFindingIds : [];
-  const changedFindingIds = input.mutation.findings
-    .map((finding) => finding.id)
-    .sort(compareBinaryStrings);
-  if (!sameValue(changedFindingIds, expectedFindingIds)) {
-    throw new Error('Conflict adjudication finding transitions do not match its outcome');
-  }
-  for (const findingId of changedFindingIds) {
-    const before = currentEntity(input.ledger, 'finding', findingId) as FindingLedgerEntry;
-    const after = input.changes.get(
-      targetKey({ entityKind: 'finding', entityId: findingId }),
-    ) as FindingLedgerEntry;
-    const changedFields = changedProjectionKeys(before, after);
-    const semanticFields = [...changedFields].filter((field) => field !== 'revision');
-    if (semanticFields.length === 0) {
-      throw new Error(`Conflict adjudication cannot emit a revision-only finding transition for "${findingId}"`);
-    }
-    const expectedFields = new Set(
-      record.outcome === 'finding_stale'
-        ? ['revision', 'status', 'lifecycle', 'resolvedAt', 'resolvedEvidence']
-        : record.outcome === 'evidence_invalid'
-          ? ['revision', 'status', 'lifecycle', 'invalidatedAt', 'invalidatedEvidence']
-          : [
-              'revision',
-              'suggestion',
-              ...(!sameValue(before.lastSeen, after.lastSeen) ? ['lastSeen'] : []),
-            ],
-    );
-    if (!sameValue(
-      [...changedFields].sort(compareBinaryStrings),
-      [...expectedFields].sort(compareBinaryStrings),
-    )) {
-      throw new Error(
-        `Conflict adjudication produced an invalid finding delta for "${findingId}"`,
-      );
-    }
-    if (record.outcome === 'finding_stale') {
-      if (
-        after.status !== 'resolved'
-        || after.lifecycle !== 'resolved'
-        || after.resolvedAt !== record.decidedAt.timestamp
-        || after.resolvedEvidence
-          !== `Conflict adjudication ${conflictId}@${record.evidenceHash}: finding_stale`
-      ) {
-        throw new Error(`Conflict adjudication did not resolve finding "${findingId}"`);
-      }
-    } else if (record.outcome === 'evidence_invalid') {
-      if (
-        after.status !== 'invalidated'
-        || after.lifecycle !== 'invalidated'
-        || after.invalidatedAt !== record.decidedAt.timestamp
-        || after.invalidatedEvidence
-          !== `Conflict adjudication ${conflictId}@${record.evidenceHash}: evidence_invalid`
-      ) {
-        throw new Error(`Conflict adjudication did not invalidate finding "${findingId}"`);
-      }
-    } else if (
-      record.outcome === 'finding_valid'
-      && (
-        after.status !== before.status
-        || after.lifecycle !== before.lifecycle
-        || after.lastSeen.timestamp !== record.decidedAt.timestamp
-        || !after.suggestion?.endsWith(`[adjudicated fix] ${actionableFix}`)
-      )
-    ) {
-      throw new Error(`Conflict adjudication did not apply the actionable fix to finding "${findingId}"`);
-    }
-  }
-}
-
 function assertMutationTargetCoverage(input: {
   ledger: FindingLedger;
   reservation: FindingLifecycleReservation;
   mutation: VerifiedLifecycleMutation;
   changes: ReadonlyMap<string, FindingLedgerEntry | FindingLedgerConflict>;
 }): void {
-  if (input.reservation.operation === 'apply_conflict_adjudication') {
-    assertAdjudicationMutationContract(input);
-    return;
-  }
   const reservedKeys = input.reservation.targets.map(targetKey).sort(compareBinaryStrings);
   const changedKeys = [...input.changes.keys()].sort(compareBinaryStrings);
   if (!sameValue(reservedKeys, changedKeys)) {
@@ -589,6 +412,28 @@ function assertOperationProjectionDelta(input: {
       throw new Error(
         `Lifecycle operation "${input.operation}" changed forbidden projection fields for "${key}": ${forbidden.join(', ')}`,
       );
+    }
+  }
+}
+
+function assertSettledConflictSubjectContinuity(input: {
+  ledger: FindingLedger;
+  changes: ReadonlyMap<string, FindingLedgerEntry | FindingLedgerConflict>;
+}): void {
+  for (const settlement of input.ledger.conflictClaimSettlements) {
+    const changed = input.changes.get(`finding\0${settlement.findingId}`);
+    if (changed === undefined || 'findingIds' in changed) {
+      continue;
+    }
+    if (
+      (settlement.outcome === 'merged'
+        && (changed.status !== 'superseded'
+          || changed.supersededByFindingId !== settlement.targetFindingId))
+      || (settlement.outcome === 'promoted' && changed.provisional !== undefined)
+      || (settlement.outcome === 'resolved' && changed.status !== 'resolved')
+      || (settlement.outcome === 'invalidated' && changed.status !== 'invalidated')
+    ) {
+      throw new Error(`Settled conflict subject "${settlement.findingId}" cannot be reopened or repurposed`);
     }
   }
 }
@@ -876,33 +721,10 @@ function nextFindingId(ledger: FindingLedger, changes: readonly FindingLedgerEnt
 }
 
 function lifecycleOutcome(
-  reservation: FindingLifecycleReservation,
-  mutation: VerifiedLifecycleMutation,
+  _reservation: FindingLifecycleReservation,
+  _mutation: VerifiedLifecycleMutation,
 ): FindingLifecycleOutcome {
-  if (
-    reservation.authority.kind !== 'conflict_adjudication'
-    || reservation.context.kind !== 'conflict_adjudication'
-  ) {
-    return { kind: 'projection_applied' };
-  }
-  const context = reservation.context;
-  const conflict = mutation.conflicts.find(
-    (candidate) => candidate.id === context.conflictId,
-  );
-  const adjudication = [...(conflict?.adjudications ?? [])].reverse().find(
-    (candidate) => candidate.evidenceHash === context.evidenceHash,
-  );
-  if (adjudication === undefined) {
-    throw new Error(
-      `Lifecycle adjudication mutation "${reservation.mutationId}" has no closed outcome`,
-    );
-  }
-  return {
-    kind: 'conflict_adjudication',
-    conflictId: context.conflictId,
-    evidenceHash: context.evidenceHash,
-    outcome: adjudication.outcome,
-  };
+  return { kind: 'projection_applied' };
 }
 
 export function applyVerifiedLifecycleMutation(
@@ -940,6 +762,7 @@ export function applyVerifiedLifecycleMutation(
     rawFindings: ledger.rawFindings,
   });
   assertMutationTargetCoverage({ ledger, reservation, mutation, changes });
+  assertSettledConflictSubjectContinuity({ ledger, changes });
   assertOperationProjectionDelta({
     operation: reservation.operation,
     ledger,

@@ -1,133 +1,196 @@
 import {
-  buildAdjudicationEvidenceSnapshot,
-  computeAdjudicationEvidenceHash,
-  isConflictUnadjudicated,
-} from './adjudication-evidence.js';
-import type { AdjudicationEvidenceSnapshot } from './adjudication-evidence.js';
-import { captureReviewScopeSnapshot } from './snapshot.js';
+  computeConflictAttemptId,
+} from '../../models/finding-contract-identity.js';
 import type {
-  FindingLedger,
-  FindingLifecycleReservation,
-  FindingObservation,
-} from './types.js';
+  ConflictAdjudicationAttempt,
+  ConflictAdjudicationEpisode,
+  ConflictAdjudicationSnapshot,
+  FindingManagerProviderCall,
+} from '../../models/finding-contract-types.js';
+import {
+  createConflictAdjudicationEpisode,
+  freshConflictAdjudicationSnapshot,
+  isConflictSnapshotAdjudicated,
+} from './conflict-adjudication-model.js';
+import {
+  reserveFindingManagerProviderCall,
+  settleFindingManagerProviderCall,
+} from './finding-manager-provider-call.js';
+import { MANAGER_INTERPRETATION_LIMITS } from './raw-finding-limits.js';
 import type { FindingAdjudicationStore, FindingLedgerMutation } from './store.js';
-import { reserveFindingConflictAdjudicationLifecycle } from './lifecycle-transaction.js';
-import { findingLifecycleReservationMatchesCurrentHeads } from './lifecycle-mutation.js';
+import type { FindingObservation } from './types.js';
 
 export type AdjudicationAttemptReservation =
   | { started: false }
   | {
-    started: true;
-    evidenceHash: string;
-    evidenceSnapshot: AdjudicationEvidenceSnapshot;
-    originStep: string | undefined;
-    reservationToken: string;
-  };
+      started: true;
+      snapshot: ConflictAdjudicationSnapshot;
+      episode: ConflictAdjudicationEpisode;
+      attempt: Extract<ConflictAdjudicationAttempt, { stage: 'started' }>;
+      providerCall: FindingManagerProviderCall;
+      originStep: string | undefined;
+    };
 
-type PendingFindingConflictAdjudication = FindingLifecycleReservation & {
-  context: Extract<
-    FindingLifecycleReservation['context'],
-    { kind: 'conflict_adjudication' }
-  >;
-};
-
-function pendingFindingConflictAdjudications(input: {
-  ledger: FindingLedger;
-  conflictId: string;
-  evidenceHash: string;
-}): PendingFindingConflictAdjudication[] {
-  const appliedMutationIds = new Set(
-    input.ledger.lifecycleEvents.map((event) => event.mutationId),
-  );
-  return input.ledger.lifecycleReservations.filter(
-    (reservation): reservation is PendingFindingConflictAdjudication => (
-      reservation.context.kind === 'conflict_adjudication'
-      && reservation.context.conflictId === input.conflictId
-      && reservation.context.evidenceHash === input.evidenceHash
-      && !appliedMutationIds.has(reservation.mutationId)
-    ),
-  );
-}
-
-export function findPendingFindingConflictAdjudication(input: {
-  ledger: FindingLedger;
-  conflictId: string;
-  evidenceHash: string;
-}): FindingLifecycleReservation | undefined {
-  return pendingFindingConflictAdjudications(input).find((reservation) => (
-    findingLifecycleReservationMatchesCurrentHeads(input.ledger, reservation)
+function exactEpisode(
+  episodes: readonly ConflictAdjudicationEpisode[],
+  snapshot: ConflictAdjudicationSnapshot,
+  observation: FindingObservation,
+): { episodes: ConflictAdjudicationEpisode[]; episode: ConflictAdjudicationEpisode } {
+  const matches = episodes.filter((episode) => (
+    episode.conflictSnapshotId === snapshot.conflictSnapshotId
   ));
+  if (matches.length > 1) {
+    throw new Error(`Conflict snapshot "${snapshot.conflictSnapshotId}" has multiple episodes`);
+  }
+  const episode = matches[0] ?? createConflictAdjudicationEpisode({
+    snapshot,
+    createdAt: observation,
+  });
+  return {
+    episodes: matches.length === 0 ? [...episodes, episode] : [...episodes],
+    episode,
+  };
 }
 
 export async function reserveFindingConflictAdjudication(input: {
   ledgerStore: FindingAdjudicationStore;
   conflictId: string;
+  expectedSnapshotId: string;
   requestedOriginStep: string | undefined;
-  runId: string;
   observation: FindingObservation;
-  cwd: string;
+  requestBytes: string;
+  scopeIdentity: string;
+  workflowName: string;
+  roundMarker: string;
 }): Promise<FindingLedgerMutation<AdjudicationAttemptReservation>> {
   return input.ledgerStore.updateLedger<AdjudicationAttemptReservation>((fresh) => {
-    const freshConflict = fresh.conflicts.find((conflict) => conflict.id === input.conflictId);
-    if (freshConflict === undefined || freshConflict.status !== 'active') {
-      return { ledger: fresh, result: { started: false as const } };
+    const conflict = fresh.conflicts.find((candidate) => candidate.id === input.conflictId);
+    if (conflict === undefined || conflict.status !== 'active') {
+      return { ledger: fresh, result: { started: false } };
     }
-    const reviewScopeSnapshot = captureReviewScopeSnapshot(input.cwd);
-    const evidenceSnapshot = buildAdjudicationEvidenceSnapshot({
-      ledger: fresh,
-      conflictId: freshConflict.id,
-      reviewScopeSnapshot,
-    });
-    const freshHash = computeAdjudicationEvidenceHash(evidenceSnapshot);
-    const pending = findPendingFindingConflictAdjudication({
-      ledger: fresh,
-      conflictId: freshConflict.id,
-      evidenceHash: freshHash,
-    });
-    if (pending !== undefined) {
-      const context = pending.context;
-      if (context.kind !== 'conflict_adjudication') {
-        throw new Error(
-          `Lifecycle reservation "${pending.mutationId}" has an invalid adjudication context`,
-        );
+    const snapshot = freshConflictAdjudicationSnapshot(fresh, conflict.id);
+    if (snapshot.conflictSnapshotId !== input.expectedSnapshotId) {
+      return { ledger: fresh, result: { started: false } };
+    }
+    if (isConflictSnapshotAdjudicated(fresh, snapshot)) {
+      return { ledger: fresh, result: { started: false } };
+    }
+    const ensured = exactEpisode(
+      fresh.conflictAdjudicationEpisodes,
+      snapshot,
+      input.observation,
+    );
+    const episodeAttempts = fresh.conflictAdjudicationAttempts.filter(
+      (attempt) => attempt.episodeId === ensured.episode.episodeId,
+    );
+    const started = episodeAttempts.find((attempt) => attempt.stage === 'started');
+    if (started?.stage === 'started') {
+      const call = fresh.findingManagerProviderCalls.find(
+        (candidate) => candidate.providerCallId === started.providerCallId,
+      );
+      if (call?.state === 'reserved') {
+        return {
+          ledger: fresh,
+          result: {
+            started: true,
+            snapshot,
+            episode: ensured.episode,
+            attempt: started,
+            providerCall: call,
+            originStep: started.originStep ?? undefined,
+          },
+        };
       }
-      return {
-        ledger: fresh,
-        result: {
-          started: true as const,
-          evidenceHash: freshHash,
-          evidenceSnapshot,
-          originStep: context.originStep ?? undefined,
-          reservationToken: pending.mutationId,
-        },
+      if (call?.state !== 'dispatched') {
+        throw new Error(`Started conflict attempt "${started.attemptId}" has no live provider call`);
+      }
+      const settled = settleFindingManagerProviderCall({
+        calls: fresh.findingManagerProviderCalls,
+        providerCallId: call.providerCallId,
+        settledAt: input.observation,
+        resultKind: 'interrupted_unknown',
+        failurePhase: 'provider_result_unknown',
+      });
+      fresh = {
+        ...fresh,
+        findingManagerProviderCalls: settled.calls,
+        conflictAdjudicationAttempts: fresh.conflictAdjudicationAttempts.map((attempt) => (
+          attempt.attemptId === started.attemptId
+            ? {
+                ...started,
+                stage: 'interrupted' as const,
+                interruptedAt: structuredClone(input.observation),
+                reason: 'provider_result_unknown' as const,
+              }
+            : attempt
+        )),
       };
     }
-    if (!isConflictUnadjudicated(freshConflict, freshHash)) {
-      return { ledger: fresh, result: { started: false as const } };
+    const used = fresh.conflictAdjudicationAttempts.filter(
+      (attempt) => attempt.episodeId === ensured.episode.episodeId,
+    ).length;
+    if (used >= ensured.episode.maxAttempts) {
+      return { ledger: fresh, result: { started: false } };
     }
-    const previousPending = pendingFindingConflictAdjudications({
-      ledger: fresh,
-      conflictId: freshConflict.id,
-      evidenceHash: freshHash,
-    })[0];
-    const originStep = previousPending === undefined
-      ? input.requestedOriginStep ?? null
-      : previousPending.context.originStep;
-    const reserved = reserveFindingConflictAdjudicationLifecycle({
-      ledger: fresh,
-      conflictId: freshConflict.id,
-      evidenceHash: freshHash,
-      originStep,
+    const attemptOrdinal = (used + 1) as 1 | 2;
+    const retryOrdinal = used as 0 | 1;
+    const attemptId = computeConflictAttemptId({
+      episodeId: ensured.episode.episodeId,
+      attemptOrdinal,
+      retryOrdinal,
+    });
+    const reserved = reserveFindingManagerProviderCall({
+      scopes: fresh.findingManagerProviderBudgetScopes,
+      calls: fresh.findingManagerProviderCalls,
+      scopeIdentity: input.scopeIdentity,
+      workflowName: input.workflowName,
+      roundMarker: input.roundMarker,
+      limits: {
+        maxCallsPerRound: MANAGER_INTERPRETATION_LIMITS.maxManagerCallsPerStep,
+        maxAdapterVisibleInputTokensPerCall: MANAGER_INTERPRETATION_LIMITS.maxInputTokensPerCall,
+        maxOutputTokensPerCall: MANAGER_INTERPRETATION_LIMITS.maxOutputTokensPerCall,
+        maxChargedInputTokensPerRound: MANAGER_INTERPRETATION_LIMITS.maxInputTokensPerStep,
+        maxChargedOutputTokensPerRound: MANAGER_INTERPRETATION_LIMITS.maxOutputTokensPerStep,
+      },
+      purpose: 'conflict_adjudication',
+      ownerAttemptKind: 'conflict_adjudication',
+      attemptIds: [attemptId],
+      requestBytes: input.requestBytes,
+      adapterSupportsUtf8ByteUpperBound: true,
       reservedAt: input.observation,
     });
+    const attempt: Extract<ConflictAdjudicationAttempt, { stage: 'started' }> = {
+      attemptId,
+      episodeId: ensured.episode.episodeId,
+      conflictSnapshotId: snapshot.conflictSnapshotId,
+      conflictId: snapshot.conflictId,
+      expectedConflictHead: structuredClone(snapshot.expectedConflictHead),
+      attemptOrdinal,
+      retryOrdinal,
+      providerCallId: reserved.call.providerCallId,
+      requestDigest: reserved.call.requestDigest,
+      subjectIds: snapshot.subjects.map(({ subjectId }) => subjectId),
+      originStep: input.requestedOriginStep ?? null,
+      stage: 'started',
+      startedAt: structuredClone(input.observation),
+    };
+    const ledger = {
+      ...fresh,
+      updatedAt: input.observation.timestamp,
+      findingManagerProviderBudgetScopes: reserved.scopes,
+      findingManagerProviderCalls: reserved.calls,
+      conflictAdjudicationEpisodes: ensured.episodes,
+      conflictAdjudicationAttempts: [...fresh.conflictAdjudicationAttempts, attempt],
+    };
     return {
-      ledger: reserved.ledger,
+      ledger,
       result: {
-        started: true as const,
-        evidenceHash: freshHash,
-        evidenceSnapshot,
-        originStep: originStep ?? undefined,
-        reservationToken: reserved.mutationId,
+        started: true,
+        snapshot,
+        episode: ensured.episode,
+        attempt,
+        providerCall: reserved.call,
+        originStep: attempt.originStep ?? undefined,
       },
     };
   });

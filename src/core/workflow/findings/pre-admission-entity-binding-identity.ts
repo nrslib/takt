@@ -203,7 +203,6 @@ export function collectEntityBindingCandidates(
     const { canonical } = item;
     if (
       canonical.target.kind === 'review_scope'
-      || item.interpretationRecoveryAttempt === true
       || (canonical.relation !== 'new' && canonical.relation !== null)
       || canonical.evidence.length > 0
       || canonical.evidenceCoverageGaps.length > 0

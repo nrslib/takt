@@ -164,7 +164,6 @@ describe('ledgerHasOpenFindings', () => {
       updatedAt: '2026-07-05T00:00:00.000Z',
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
       findings: statuses.map((status, index) => ({
         id: `F-000${index + 1}`,
         status,

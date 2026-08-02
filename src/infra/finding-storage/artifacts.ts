@@ -3,7 +3,6 @@ import { resolve } from 'node:path';
 import type {
   FindingManagerReportPublication,
   FindingManagerValidationReport,
-  FindingConflictAdjudicationAuditReport,
   RawFinding,
 } from '../../core/workflow/findings/types.js';
 import { parseRawFindings } from '../../core/workflow/findings/schemas.js';
@@ -194,11 +193,4 @@ export class FindingArtifactStore {
     }, finalize);
   }
 
-  saveConflictAdjudicationReport(report: FindingConflictAdjudicationAuditReport): void {
-    writeReportFile(
-      this.#reportDir,
-      `findings-adjudication.${sanitizeFileSegment(report.conflictId)}.json`,
-      JSON.stringify(report, null, 2),
-    );
-  }
 }

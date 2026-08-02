@@ -35,7 +35,6 @@ const EMPTY_LEDGER: FindingLedger = {
   evidenceRecords: [],
   rawFindings: [],
   conflicts: [],
-  interpretations: [],
 };
 
 const REVIEWER_CONTEXT = {
@@ -96,7 +95,6 @@ function reconcileNewFindings(items: readonly unknown[]): Record<string, {
     entityProvisionalMutations: [],
     terminalEntityAttachmentFindingIds: new Set(),
     provisionalFindings: [],
-    rawFindingDispositions: [],
     verifiedEvidenceRecordsByRawFindingId: new Map(),
     rawProvenanceByRawFindingId: new Map(canonicals.map((canonical) => [
       canonical.rawFindingId,
@@ -230,7 +228,7 @@ describe('Finding deterministic contract', () => {
       .toBe(computeAdjudicationEvidenceHash(reversed));
   });
 
-  it('serializes manager report keys, dispositions, and recovery settlements canonically', () => {
+  it('serializes manager report keys and recovery settlements canonically', () => {
     const ids = ['é', 'e\u0301', 'A', 'a', '\u{1F600}', '\u{1F601}'];
     const report = (ordered: string[]): FindingManagerValidationReport => ({
       version: 1,
@@ -247,11 +245,6 @@ describe('Finding deterministic contract', () => {
         },
         validationErrors: [],
       }],
-      rawFindingDispositions: ordered.map((id) => ({
-        rawFindingId: id,
-        outcome: 'audit_only',
-        reason: id,
-      })),
       interpretationRecoverySettlements: ordered.map((id) => ({
         provisionalFindingId: id,
         sourceRawFindingId: id,

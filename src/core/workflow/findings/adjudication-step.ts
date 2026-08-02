@@ -8,7 +8,7 @@ import type {
 import { getAllParallelSubSteps } from '../../models/types.js';
 import { parseWorkflowRuleCondition } from '../../models/workflow-rule-condition.js';
 import { FINDING_CONFLICT_ADJUDICATION_STEP } from '../constants.js';
-import { FindingConflictAdjudicationOutputJsonSchema } from './schemas.js';
+import { ConflictAdjudicationProviderProposalJsonSchema } from './schemas.js';
 
 // Current output is a closed outcome plus optional actionableFix/rationale.
 // Finding transitions are engine-owned and derived from the outcome.
@@ -87,7 +87,7 @@ export function buildFindingConflictAdjudicationStep(input: {
     edit: false,
     structuredOutput: {
       schemaRef: FINDING_CONFLICT_ADJUDICATION_SCHEMA_REF,
-      schema: FindingConflictAdjudicationOutputJsonSchema,
+      schema: ConflictAdjudicationProviderProposalJsonSchema,
     },
     rules: [
       // Dynamic next (resolved from WorkflowState.previousStep) — see

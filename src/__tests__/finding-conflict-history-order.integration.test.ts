@@ -25,7 +25,10 @@ import { storedRawReconcileProvenance } from './helpers/finding-integrity.js';
 import {
   authorizeFindingLedgerFixture,
   canonicalRawFindingFixture,
+  rawCanonicalSnapshotFixture,
 } from './helpers/finding-lifecycle-fixture.js';
+import { landUnownedConflictRawClaims } from '../core/workflow/findings/conflict-claim-landing.js';
+import { refreshActiveConflictAdjudicationSnapshots } from '../core/workflow/findings/conflict-adjudication-model.js';
 
 const WORKFLOW_NAME = 'peer-review';
 function makeRawFinding(
@@ -74,7 +77,7 @@ function makeManagerOutput(rawFindingId: string): FindingManagerOutput {
   };
 }
 
-function makeLedger(): FindingLedger {
+function makeLedger(cwd: string): FindingLedger {
   const leapSecondObservation = {
     runId: 'run-0',
     stepName: 'reviewers',
@@ -89,8 +92,19 @@ function makeLedger(): FindingLedger {
     findingIds: ['F-0001'],
     rawFindingIds: ['raw-generated'],
   });
+  const evidence = verifiedFindingEvidenceFixture({
+    cwd,
+    path: 'src/example.ts',
+    startLine: 1,
+    title: 'Conflicting review conclusion',
+    description: 'The review evidence conflicts.',
+    familyTag: 'bug',
+    targetFindingId: 'F-0001',
+  });
 
-  return authorizeFindingLedgerFixture({
+  return refreshActiveConflictAdjudicationSnapshots({
+    ledger: landUnownedConflictRawClaims({
+      ledger: authorizeFindingLedgerFixture({
     workflowName: WORKFLOW_NAME,
     nextId: 2,
     updatedAt: nextMinuteObservation.timestamp,
@@ -102,23 +116,20 @@ function makeLedger(): FindingLedger {
       severity: 'high',
       title: 'Conflicting review conclusion',
       description: 'The review evidence conflicts.',
-      evidenceIds: [],
+      evidenceIds: [evidence.record.evidenceId],
       reviewers: ['coding-review'],
       rawFindingIds: ['raw-previous'],
       firstSeen: leapSecondObservation,
       lastSeen: nextMinuteObservation,
     }],
-    evidenceRecords: [],
+    evidenceRecords: [evidence.record],
     evidenceBindings: [],
     lifecycleReservations: [],
     lifecycleEvents: [],
-    rawRecoveryAttempts: [],
-    rawRecoveryResults: [],
     rawFindings: [
-      makeRawFinding('raw-previous'),
-      makeRawFinding('raw-generated'),
+      makeRawFinding('raw-previous', [evidence.evidence]),
+      makeRawFinding('raw-generated', [evidence.evidence]),
     ],
-    interpretations: [],
     conflicts: [{
       id: conflictId,
       status: 'active',
@@ -127,24 +138,13 @@ function makeLedger(): FindingLedger {
       description: 'Existing conflict.',
       firstSeen: leapSecondObservation,
       lastSeen: nextMinuteObservation,
-      adjudications: [{
-        evidenceHash: '1'.repeat(64),
-        outcome: 'undetermined',
-        rationale: 'Previous conflicting evidence.',
-        decidedAt: leapSecondObservation,
-      }, {
-        evidenceHash: '2'.repeat(64),
-        outcome: 'undetermined',
-        rationale: 'Same-timestamp conflicting evidence.',
-        decidedAt: nextMinuteObservation,
-      }, {
-        evidenceHash: '3'.repeat(64),
-        outcome: 'undetermined',
-        rationale: 'Generated conflicting evidence.',
-        decidedAt: nextMinuteObservation,
-      }],
       revision: 1,
     }],
+      }),
+      observation: nextMinuteObservation,
+    }),
+    originStep: 'final-gate',
+    createdAt: nextMinuteObservation,
   });
 }
 
@@ -162,7 +162,6 @@ function reconcileCurrentRaw(input: {
     entityProvisionalMutations: [],
     terminalEntityAttachmentFindingIds: new Set(),
     provisionalFindings: [],
-    rawFindingDispositions: [],
     verifiedEvidenceRecordsByRawFindingId: new Map([[
       input.rawFinding.rawFindingId,
       [input.evidenceRecord],
@@ -214,7 +213,7 @@ describe('reconciled conflict lifecycle history order', () => {
   });
 
   it('preserves completed decisions and appends lifecycle authority through reconcile, persistence, and reservation', async () => {
-    const previousLedger = makeLedger();
+    const previousLedger = makeLedger(cwd);
     const evidence = verifiedFindingEvidenceFixture({
       cwd,
       path: 'src/example.ts',
@@ -251,11 +250,15 @@ describe('reconciled conflict lifecycle history order', () => {
       },
       rawFindingIds: ['raw-previous', 'raw-generated', 'raw-current'].sort(compareBinaryStrings),
     });
-    expect(reconciled.conflicts[0]?.adjudications?.map((record) => record.evidenceHash)).toEqual([
-      '1'.repeat(64),
-      '2'.repeat(64),
-      '3'.repeat(64),
-    ]);
+    expect(reconciled.conflicts[0]).not.toHaveProperty('adjudications');
+    expect(reconciled.conflictAdjudicationSnapshots)
+      .toEqual(previousLedger.conflictAdjudicationSnapshots);
+    expect(reconciled.conflictAdjudicationEpisodes)
+      .toEqual(previousLedger.conflictAdjudicationEpisodes);
+    expect(reconciled.conflictAdjudicationAttempts)
+      .toEqual(previousLedger.conflictAdjudicationAttempts);
+    expect(reconciled.conflictClaimSettlements)
+      .toEqual(previousLedger.conflictClaimSettlements);
     expect(reconciled.lifecycleReservations).toEqual(previousLedger.lifecycleReservations);
     expect(reconciled.lifecycleEvents).toEqual(previousLedger.lifecycleEvents);
 
@@ -287,58 +290,82 @@ describe('reconciled conflict lifecycle history order', () => {
       }],
     });
 
+    const contractObservation = {
+      runId: 'run-2',
+      stepName: 'reviewers',
+      timestamp: '2017-01-01T00:01:00.000Z',
+    };
+    const contractReady = refreshActiveConflictAdjudicationSnapshots({
+      ledger: landUnownedConflictRawClaims({
+        ledger: {
+          ...applied,
+          rawCanonicalSnapshots: [
+            ...applied.rawCanonicalSnapshots,
+            rawCanonicalSnapshotFixture(rawFinding, contractObservation),
+          ],
+        },
+        observation: contractObservation,
+      }),
+      originStep: 'reviewers',
+      createdAt: contractObservation,
+    });
     const store = createTestFindingLedgerStore({
       projectCwd: cwd,
       runId: 'run-2',
       reportDir: join(cwd, '.takt', 'runs', 'run-2', 'reports'),
       workflowName: WORKFLOW_NAME,
     });
-    await store.updateLedger(() => ({ ledger: applied, result: undefined }));
+    await store.updateLedger(() => ({ ledger: contractReady, result: undefined }));
     const persisted = store.loadLedger();
-    expect(persisted.lifecycleReservations).toEqual(applied.lifecycleReservations);
-    expect(persisted.lifecycleEvents).toEqual(applied.lifecycleEvents);
-    expect(persisted.conflicts[0]?.adjudications).toEqual(applied.conflicts[0]?.adjudications);
+    expect(persisted.lifecycleReservations).toEqual(contractReady.lifecycleReservations);
+    expect(persisted.lifecycleEvents).toEqual(contractReady.lifecycleEvents);
+    expect(persisted.conflicts[0]).not.toHaveProperty('adjudications');
+    expect(persisted.conflictAdjudicationSnapshots)
+      .toEqual(contractReady.conflictAdjudicationSnapshots);
+    expect(persisted.conflictAdjudicationEpisodes).toEqual([]);
+    expect(persisted.conflictAdjudicationAttempts).toEqual([]);
+    expect(persisted.conflictClaimSettlements).toEqual([]);
+
+    const snapshot = persisted.conflictAdjudicationSnapshots.find((candidate) => (
+      candidate.conflictId === conflictId
+      && candidate.expectedConflictHead.revision === 2
+    ));
+    expect(snapshot).toBeDefined();
 
     const reservation = await reserveFindingConflictAdjudication({
       ledgerStore: store,
       conflictId,
+      expectedSnapshotId: snapshot!.conflictSnapshotId,
       requestedOriginStep: 'final-gate',
-      runId: 'run-2',
       observation: {
         runId: 'run-2',
         stepName: 'finding-conflict-adjudication',
         timestamp: '2017-01-01T00:02:00.000Z',
       },
-      cwd,
+      requestBytes: '{"kind":"conflict-adjudication"}',
+      scopeIdentity: store.ledgerIdentity,
+      workflowName: WORKFLOW_NAME,
+      roundMarker: 'history-order-round',
     });
 
     expect(reservation.result).toMatchObject({
       started: true,
       originStep: 'final-gate',
     });
-    expect(reservation.ledger.lifecycleReservations.slice(0, applied.lifecycleReservations.length))
-      .toEqual(applied.lifecycleReservations);
-    expect(reservation.ledger.lifecycleEvents).toEqual(applied.lifecycleEvents);
-    expect(reservation.ledger.lifecycleReservations.at(-1)).toMatchObject({
-      mutationId: reservation.result.started ? reservation.result.reservationToken : undefined,
-      operation: 'apply_conflict_adjudication',
-      context: {
-        kind: 'conflict_adjudication',
-        conflictId,
+    expect(reservation.ledger.lifecycleReservations).toEqual(contractReady.lifecycleReservations);
+    expect(reservation.ledger.lifecycleEvents).toEqual(contractReady.lifecycleEvents);
+    expect(reservation.ledger.conflictAdjudicationEpisodes).toEqual([
+      expect.objectContaining({ conflictSnapshotId: snapshot!.conflictSnapshotId }),
+    ]);
+    expect(reservation.ledger.conflictAdjudicationAttempts).toEqual([
+      expect.objectContaining({
+        conflictSnapshotId: snapshot!.conflictSnapshotId,
         originStep: 'final-gate',
-      },
-      targets: expect.arrayContaining([
-        expect.objectContaining({
-          entityKind: 'finding',
-          entityId: 'F-0001',
-          expectedHead: captureFindingLifecycleHead(applied, 'finding', 'F-0001'),
-        }),
-        expect.objectContaining({
-          entityKind: 'conflict',
-          entityId: conflictId,
-          expectedHead: captureFindingLifecycleHead(applied, 'conflict', conflictId),
-        }),
-      ]),
-    });
+        stage: 'started',
+      }),
+    ]);
+    expect(reservation.ledger.findingManagerProviderCalls).toEqual([
+      expect.objectContaining({ purpose: 'conflict_adjudication', state: 'reserved' }),
+    ]);
   });
 });

@@ -26,17 +26,9 @@ For each active conflict in the previous ledger, return one entry in `conflictDe
 
 The prompt may list open findings the engine deterministically flagged because their location does not resolve against the reviewed code. For each one you agree has no valid premise, return an entry in `invalidateDecisions` with findingId and evidence. You may only invalidate findings from that list; the engine ignores any entry for a finding not on it — your evidence explains your agreement, it does not grant new authority. Leave a candidate out if you believe the finding is still real despite the location mismatch. Leave `invalidateDecisions` empty when the prompt lists no candidates.
 
-## Dismissal (jurisdiction adjudication of provisional findings)
+## Dismissal
 
-The prompt may list open provisional findings that hold mechanically unsettleable claims and are blocking the completion gate as dismissal candidates. Adjudicate each candidate's claim on its substance:
-
-- The claim is outside the finding contract's jurisdiction → dismiss with `basis: outside_contract_jurisdiction`
-- The claim is real but outside the original workflow task → only with explicit `terminal_adjudication`, dismiss with `basis: outside_task_scope` and a non-empty `taskQuote` copied byte-for-byte from the original workflow task
-- The claim can never be substantiated (neither a quote nor later clean evidence can ever establish it) → dismiss with `basis: unverifiable_claim`
-- Only when the engine explicitly grants `terminal_adjudication` authority for this control task, you may use `false_positive`, `overreach`, or `no_issue_after_verification`, backed by concrete evidence from directly inspecting the current code
-- The underlying concern is real and could still be settled by later clean review evidence → do not dismiss; leave it out (stays open)
-
-A non-task-scope dismissal requires both a concrete reason and current-code evidence. `outside_task_scope` requires `taskQuote` instead of free-form evidence, with reason kept separate. Silence, non-repetition, or an approval label alone is never evidence. All dismissals remain on the ledger as audit records. You may only dismiss findings from the list; the engine rejects entries outside it. Leave `dismissDecisions` empty when there are no candidates.
+Leave `dismissDecisions` empty. Claim-bearing provisional findings may be dismissed only by the engine's separate verified terminal-adjudication path. A manager response, lack of evidence, silence, or non-repetition never grants dismissal authority.
 
 ## Duplicate findings
 

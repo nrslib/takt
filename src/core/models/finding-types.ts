@@ -1,4 +1,10 @@
 import type { ProviderType } from '../../shared/types/provider.js';
+import type {
+  FindingContractLedgerRegistries,
+  InterpretationRecoveryOriginSettlement,
+} from './finding-contract-types.js';
+
+export * from './finding-contract-types.js';
 
 export const FINDING_SEVERITIES = ['critical', 'high', 'medium', 'low'] as const;
 // 'invalidated': the finding's premise does not hold (deterministically verified:
@@ -6,9 +12,7 @@ export const FINDING_SEVERITIES = ['critical', 'high', 'medium', 'low'] as const
 // finding is valid but won't be fixed) — critical findings can never be waived,
 // but CAN be invalidated, because invalidation says the finding was never real.
 // 'superseded': the finding was merged into a canonical duplicate (duplicateDecisions).
-// 'dismissed': a provisional finding's claim was adjudicated out of the
-// contract's jurisdiction, found semantically false by a terminal adjudicator,
-// or cannot be verified (dismissDecisions).
+// 'dismissed': a provisional finding's claim was dismissed by verified terminal adjudication.
 // All are terminal, additive statuses.
 export const FINDING_STATUSES = ['open', 'resolved', 'waived', 'invalidated', 'superseded', 'dismissed'] as const;
 export const FINDING_LIFECYCLES = ['new', 'persists', 'resolved', 'reopened', 'waived', 'invalidated', 'superseded', 'dismissed'] as const;
@@ -34,7 +38,6 @@ export const FINDING_LIFECYCLE_OPERATIONS = [
   'promote_provisional',
   'record_rejected_observation',
   'record_recovery_attempt',
-  'sync_interpretation_epoch',
   'create_conflict',
   'observe_conflict',
   'resolve_conflict',
@@ -68,12 +71,20 @@ export interface FindingLifecycleMutationTarget {
   expectedHead: FindingLifecycleEntityHead | null;
 }
 
+export type FindingEvidenceContributionOrigin =
+  | { kind: 'external' }
+  | {
+      kind: 'interpretation_case';
+      caseId: string;
+    };
+
 export interface FindingEvidenceBinding {
   bindingId: string;
   evidenceId: string;
   claimIdentityHash: string | null;
   sourceRawFindingId: string | null;
   sourceRawIntegrityDigest: string | null;
+  contributionOrigin: FindingEvidenceContributionOrigin;
   operation: FindingLifecycleOperation;
   target: FindingLifecycleMutationTarget;
 }
@@ -96,7 +107,7 @@ export type FindingLifecycleAuthority =
   | { kind: 'verified_evidence' }
   | {
       kind: 'engine_policy';
-      decisionKind: 'waive' | 'dispute' | 'dismiss' | 'resolve_conflict' | 'semantic_duplicate';
+      decisionKind: 'waive' | 'dispute' | 'semantic_duplicate';
       decisionDigest: string;
     }
   | {
@@ -106,19 +117,46 @@ export type FindingLifecycleAuthority =
       anchorAdjudications: FindingAnchorAuthorityAdjudication[];
     }
   | {
-      kind: 'conflict_adjudication';
+      kind: 'verified_conflict_adjudication';
       conflictId: string;
-      findingIds: string[];
-      evidenceHash: string;
-      inputBindingIds: string[];
-      originStep: string | null;
+      conflictSnapshotId: string;
+      attemptId: string;
+      verificationDigest: string;
+      proofRecordIds: string[];
+    }
+  | {
+      kind: 'verified_terminal_adjudication';
+      episodeId: string;
+      attemptId: string;
+      verificationDigest: string;
+      proofRecordIds: string[];
+      scopeBindingIds: string[];
+    }
+  | {
+      kind: 'interpretation_unreserved_landing';
+      roundIdentity: string;
+      budgetScopeId: string;
+      reason:
+        | 'manager-budget-exhausted'
+        | 'manager-input-overflow'
+        | 'manager-output-discarded'
+        | 'interpretation-interrupted';
+      rawFindingIds: string[];
+      rawCanonicalSnapshotIds: string[];
+    }
+  | {
+      kind: 'interpretation_case_rejection';
+      caseSnapshotId: string;
+      attemptId: string;
+      classification: 'decision_rejected_stale' | 'decision_rejected_raw_invalid';
+      rawFindingIds: string[];
+      staleCauseDigests: string[];
     }
   | {
       kind: 'system';
       action:
         | 'record_recovery_attempt'
-        | 'settle_action_recovery'
-        | 'sync_interpretation_epoch';
+        | 'settle_action_recovery';
     }
   | {
       kind: 'rejected_observation';
@@ -127,14 +165,7 @@ export type FindingLifecycleAuthority =
       rejectionCode: FindingRejectedObservationCode;
     };
 
-export type FindingLifecycleReservationContext =
-  | { kind: 'transaction' }
-  | {
-      kind: 'conflict_adjudication';
-      conflictId: string;
-      evidenceHash: string;
-      originStep: string | null;
-    };
+export type FindingLifecycleReservationContext = { kind: 'transaction' };
 
 export interface FindingLifecycleReservation {
   reservationId: string;
@@ -152,14 +183,7 @@ export interface FindingLifecycleTransition {
   after: FindingLifecycleEntityHead;
 }
 
-export type FindingLifecycleOutcome =
-  | { kind: 'projection_applied' }
-  | {
-      kind: 'conflict_adjudication';
-      conflictId: string;
-      evidenceHash: string;
-      outcome: FindingConflictAdjudicationOutcome;
-    };
+export type FindingLifecycleOutcome = { kind: 'projection_applied' };
 
 export interface FindingLifecycleEvent {
   eventId: string;
@@ -171,26 +195,6 @@ export interface FindingLifecycleEvent {
   outcome: FindingLifecycleOutcome;
   resultDigest: string;
   occurredAt: FindingObservation;
-}
-
-export interface RawRecoveryAttempt {
-  attemptId: string;
-  provisionalFindingId: string;
-  expectedHead: FindingLifecycleEntityHead;
-  sourceRawFindingId: string;
-  sourceRawIntegrityDigest: string | null;
-  promptSnapshotDigest: string;
-  attempt: number;
-  startedAt: FindingObservation;
-}
-
-export interface RawRecoveryResult {
-  resultId: string;
-  attemptId: string;
-  replayRawFindingId: string | null;
-  mutationIds: string[];
-  outcome: 'applied' | 'stale' | 'failed';
-  completedAt: FindingObservation;
 }
 
 export interface FindingContractManagerConfig {
@@ -261,17 +265,6 @@ export interface FindingContractConfig {
   reviewBudget?: FindingContractReviewBudgetConfig;
 }
 
-export interface FindingConflictAdjudicationAuditReport {
-  version: 1;
-  runId: string;
-  conflictId: string;
-  discarded: true;
-  reason: string;
-  promptEvidenceHash: string;
-  freshEvidenceHash?: string;
-  output: unknown;
-}
-
 export interface FindingObservation {
   runId: string;
   stepName: string;
@@ -321,6 +314,7 @@ export const FINDING_PROVISIONAL_KINDS = [
    * 再裁定）と、attempt 枯渇後の管轄裁定（dismiss 候補化）。
    */
   'raw-adjudication-unresolved',
+  'recovery-origin-stale',
 ] as const;
 export type FindingProvisionalKind = typeof FINDING_PROVISIONAL_KINDS[number];
 
@@ -328,13 +322,14 @@ export type FindingProvisionalKind = typeof FINDING_PROVISIONAL_KINDS[number];
 export const CLAIM_BEARING_PROVISIONAL_KINDS = [
   'raw-meaning-ambiguous',
   'raw-adjudication-unresolved',
+  'recovery-origin-stale',
 ] as const satisfies readonly FindingProvisionalKind[];
 
 /**
  * manager の dismissDecisions が却下してよい provisional 種別の静的な下限。
- * 実際の候補判定は provisional-recovery.ts の分類が正本 — kind だけでなく
- * 「その provisional に engine 主導の recovery（解釈 / 再裁定）が残っているか」
- * を見る。recovery が残る間は候補にせず、枯渇後に内容の管轄裁定へ回す。
+ * 実際の候補判定は terminal-adjudication-candidates.ts の fresh snapshot 導出が
+ * 正本 — kind だけでなく「その provisional に未完了の解釈処理が残っているか」
+ * を見る。処理中は候補にせず、終端候補だけを内容の管轄裁定へ回す。
  * overflow / budget / interrupted / stale 系は「処理失敗の証跡」であり、
  * manager が消すと final gate の迂回路になるため候補にしない。
  */
@@ -343,21 +338,18 @@ export const DISMISSABLE_PROVISIONAL_KINDS = [
 ] as const satisfies readonly FindingProvisionalKind[];
 
 /**
- * dismiss 裁定の根拠分類。
- * outside_contract_jurisdiction / unverifiable_claim は通常の管轄裁定、
- * outside_task_scope / false_positive / overreach / no_issue_after_verification は
- * terminal_adjudication 専用の意味裁定。
+ * verified terminal adjudication が発行できる dismiss 裁定の根拠分類。
  */
 export const FINDING_DISMISSAL_BASES = [
   'outside_contract_jurisdiction',
   'outside_task_scope',
-  'unverifiable_claim',
   'false_positive',
   'overreach',
   'no_issue_after_verification',
 ] as const;
 export type FindingDismissalBasis = typeof FINDING_DISMISSAL_BASES[number];
 export const SEMANTIC_FINDING_DISMISSAL_BASES = [
+  'outside_contract_jurisdiction',
   'outside_task_scope',
   'false_positive',
   'overreach',
@@ -397,17 +389,6 @@ export type FindingActionProposal =
       canonicalFindingId: string;
       duplicateFindingIds: string[];
       evidence: string;
-    }
-  | {
-      action: 'dismiss';
-      findingId: string;
-      basis: FindingDismissalBasis;
-      reason: string;
-      evidence?: string;
-      taskQuote?: string;
-      workflowTaskDigest?: string;
-      adjudicationTaskId?: string;
-      authority: FindingManagerAuthority;
     };
 
 export type FindingActionRecovery = FindingActionProposal & {
@@ -423,8 +404,6 @@ export interface FindingProvisionalMetadata {
   reason: string;
   firstObservedAt: FindingObservation;
   lastObservedAt: FindingObservation;
-  /** この lineage に対する自動 manager 解釈の消費 epoch 数。上限は raw-finding-limits.ts の MAX_INTERPRETATION_EPOCHS_PER_LINEAGE。 */
-  interpretationEpochs: number;
   gateEffect: 'block';
   actionRecovery?: FindingActionRecovery;
   actionRecoveryAttempts?: FindingActionRecoveryAttempt[];
@@ -540,8 +519,8 @@ export interface FindingLedgerStopBudgetState {
    * この台帳に適用済みの findings-manager ラウンドの一意マーカー集合（重複排除・
    * ソート済み）。ラウンド数（roundsCompleted）はこの集合の要素数から導出する —
    * crash/replay で同一 identity のラウンドが再適用されても、Set への追加が no-op に
-   * なるため二重計上しない（interpretation-wal.ts の ledger_applied 集合と同じ
-   * 「台帳に永続した適用済み集合へ冪等に追記する」思想）。集合は追記専用なので
+   * なるため二重計上しない（永続した適用済み集合へ冪等に追記する）。集合は
+   * 追記専用なので
    * 巻き戻りもしない。マーカーは (runId, callNamespace, parentStepName,
    * stepIteration) から作る run 内一意の値であり、進捗（resolved の増加等）では
    * 変化しないため、予算は単調累積のみとなる。
@@ -587,7 +566,7 @@ export interface FindingLedgerReviewIntegrityState {
   exhausted: boolean;
 }
 
-export interface FindingLedger {
+export interface FindingLedger extends FindingContractLedgerRegistries {
   workflowName: string;
   nextId: number;
   updatedAt: string;
@@ -597,15 +576,8 @@ export interface FindingLedger {
   evidenceBindings: FindingEvidenceBinding[];
   lifecycleReservations: FindingLifecycleReservation[];
   lifecycleEvents: FindingLifecycleEvent[];
-  rawRecoveryAttempts: RawRecoveryAttempt[];
-  rawRecoveryResults: RawRecoveryResult[];
   rawFindings: RawFinding[];
   conflicts: FindingLedgerConflict[];
-  /**
-   * 解釈 WAL（write-ahead log）。ambiguous raw への manager 解釈を
-   * 冪等化する。
-   */
-  interpretations: FindingInterpretationRecord[];
   /**
    * provisional fixpoint に対する再計画または有限停止の判定に使う直近の
    * findings-manager ラウンド終了時点の比較スナップショットと fixpoint 到達
@@ -914,19 +886,100 @@ export interface DeterministicSameProof {
  * 権限はエンジン発行の capability（AmbiguousRawCapabilities / SameProof）だけ
  * から決まる。
  */
-export const AMBIGUOUS_INTERPRETATION_DECISIONS = [
-  'create_independent',
-  'same_with_proof',
-  'open_conflict',
-  'provisional',
+export const INTERPRETATION_POLICY_CLASSES = [
+  'general',
+  'confirmation',
+  'provisional_only',
 ] as const;
-export type AmbiguousInterpretationDecision = typeof AMBIGUOUS_INTERPRETATION_DECISIONS[number];
+export type InterpretationPolicyClass = typeof INTERPRETATION_POLICY_CLASSES[number];
 
-export type AmbiguousInterpretation =
-  | { decision: 'create_independent'; rawFindingId: string }
-  | { decision: 'same_with_proof'; rawFindingId: string; proofId: string }
-  | { decision: 'open_conflict'; rawFindingId: string; targetFindingId: string }
-  | { decision: 'provisional'; rawFindingId: string; reason: string };
+/** Provider decision for a whole interpretation case. Raw identity is engine-owned. */
+export type InterpretationDecision =
+  | { kind: 'create_independent' }
+  | { kind: 'open_conflict'; targetFindingId: string }
+  | { kind: 'provisional'; reason: string };
+
+export interface SemanticDecisionCapabilitiesV1 {
+  mayCreateIndependentFinding: boolean;
+  mayOpenConflict: boolean;
+  mayCreateProvisional: boolean;
+}
+
+export interface TargetSemanticHeadV1 {
+  targetFindingId: string;
+  status: FindingStatus;
+  lifecycle: FindingLifecycle;
+  target: FindingTarget | null;
+  targetIdentityHash: string | null;
+  claimIdentityHash: string | null;
+  semanticClaimIdentityHash: string | null;
+  severity: FindingSeverity | null;
+  title: string | null;
+  description: string | null;
+  suggestion: string | null;
+  evidenceContentDigest: string;
+}
+
+/** The exact semantic object shown to the provider and hashed for reuse. */
+export interface SemanticDecisionContextV1 {
+  version: 1;
+  claim: {
+    familyTag: string | null;
+    severity: FindingSeverity | null;
+    title: string | null;
+    description: string | null;
+    suggestion: string | null;
+    relation: RawFindingRelation | null;
+    targetFindingId: string | null;
+    target: FindingTarget;
+    targetIdentityHash: string;
+    claimIdentityHash: string;
+    semanticClaimIdentityHash: string;
+    evidenceContentDigest: string;
+  };
+  ambiguityCodes: RawAmbiguityCode[];
+  policyClass: InterpretationPolicyClass;
+  capabilities: SemanticDecisionCapabilitiesV1;
+  candidateTargets: TargetSemanticHeadV1[];
+}
+
+export interface InterpretationAttemptFence {
+  attemptId: string;
+  caseId: string;
+  semanticProjectionDigest: string;
+  rawFindingIds: string[];
+}
+
+/** Engine-issued ownership receipt for one begin/complete batch. */
+export interface InterpretationBatchReceipt {
+  batchId: string;
+  fences: InterpretationAttemptFence[];
+}
+
+export interface InterpretationCaseMember {
+  rawFindingId: string;
+  canonicalIntegrityDigest: string;
+  proofBinding?: DeterministicSameProof;
+}
+
+interface InterpretationCaseBase {
+  caseId: string;
+  lineageKey: string;
+  policyClass: InterpretationPolicyClass;
+  semanticProjectionDigest: string;
+  members: InterpretationCaseMember[];
+}
+
+export type InterpretationCase =
+  | InterpretationCaseBase & {
+      kind: 'provider_case';
+      decisionContext: SemanticDecisionContextV1;
+    }
+  | InterpretationCaseBase & {
+      kind: 'case_provisional';
+      decisionContext: null;
+      reason: string;
+    };
 
 /**
  * 楽観的前提条件（CAS）。confirmation を機械処理または prompt へ
@@ -946,133 +999,10 @@ export interface ConfirmationProposal {
   precondition: FindingMutationPrecondition;
 }
 
-/** 解釈 WAL の段階。 */
-export const INTERPRETATION_STAGES = [
-  'interpretation_started',
-  'interpretation_interrupted',
-  'interpretation_retryable_failure',
-  'interpretation_terminal_failure',
-  'interpretation_completed',
-  'ledger_applied',
-] as const;
-export type InterpretationStage = typeof INTERPRETATION_STAGES[number];
-
-export const INTERPRETATION_RECOVERY_FAILURE_CODES = [
-  'source_missing',
-  'reviewer_provenance_missing',
-  'recovery_contract_mismatch',
-  'recovery_origin_stale',
-] as const;
-export type InterpretationRecoveryFailureCode =
-  typeof INTERPRETATION_RECOVERY_FAILURE_CODES[number];
-
-export const INTERPRETATION_APPLICATION_RESULTS = [
-  'created',
-  'matched_with_proof',
-  'conflict_created',
-  'provisional_created',
-  'provisional_updated',
-  'stale_precondition',
-] as const;
-export type InterpretationApplicationResult = typeof INTERPRETATION_APPLICATION_RESULTS[number];
-
-interface FindingInterpretationRecordBase {
-  interpretationKey: string;
-  baseInterpretationKey: string;
-  attemptOrdinal: number;
-  reviewerStableKey: string;
-  lineageKey: string;
-  candidateEvidenceHash: string;
-  canonicalIntegrityDigest: string;
-
-  startedAt: FindingObservation;
-  promptPreconditions: FindingMutationPrecondition[];
-}
-
-export type FindingInterpretationRecord =
-  | FindingInterpretationRecordBase & {
-      stage: 'interpretation_started';
-      reservationToken: string;
-    }
-  | FindingInterpretationRecordBase & {
-      stage: 'interpretation_interrupted';
-      reservationToken: string;
-      interruptedAt: FindingObservation;
-    }
-  | FindingInterpretationRecordBase & {
-      stage: 'interpretation_retryable_failure' | 'interpretation_terminal_failure';
-      failedAt: FindingObservation;
-      failureCode: InterpretationRecoveryFailureCode;
-      /** Annotation only. Retry and authority rules use failureCode/stage. */
-      failureReason: string;
-      sourceRawFindingId: string;
-      provisionalFindingId: string;
-    }
-  | FindingInterpretationRecordBase & {
-      stage: 'interpretation_completed';
-      reservationToken: string;
-      completedAt: FindingObservation;
-      validatedDecision: AmbiguousInterpretation;
-    }
-  | FindingInterpretationRecordBase & {
-      stage: 'ledger_applied';
-      reservationToken: string;
-      completedAt: FindingObservation;
-      validatedDecision: AmbiguousInterpretation;
-      appliedAt: FindingObservation;
-      applicationResult: InterpretationApplicationResult;
-    };
-
 // raw finding と台帳の関係を表す現行契約。新規観測、継続、解消確認、再発を
 // 明示し、targetFindingId の要否を一意に決める。
 export const RAW_FINDING_RELATIONS = ['new', 'persists', 'resolution_confirmation', 'reopened'] as const;
 export type RawFindingRelation = typeof RAW_FINDING_RELATIONS[number];
-
-export const RAW_FINDING_DISPOSITION_OUTCOMES = [
-  'reviewer_anomaly',
-  'audit_only',
-  'unsupported',
-  'stale',
-  'deferred',
-  'confirmation_not_applied',
-  'resolution_renotification_conflict',
-] as const;
-export type RawFindingDispositionOutcome = typeof RAW_FINDING_DISPOSITION_OUTCOMES[number];
-
-export interface RawFindingDisposition {
-  rawFindingId: string;
-  outcome: RawFindingDispositionOutcome;
-  reason: string;
-}
-
-export type InterpretationRecoveryOriginSettlement =
-  | {
-      provisionalFindingId: string;
-      sourceRawFindingId: string;
-      outcome: 'audit_only';
-      failureKind:
-        | 'source_missing'
-        | 'reviewer_provenance_missing'
-        | 'recovery_contract_mismatch';
-      reason: string;
-    }
-  | {
-      provisionalFindingId: string;
-      sourceRawFindingId: string;
-      outcome: 'stale';
-      reason: string;
-    }
-  | {
-      provisionalFindingId: string;
-      sourceRawFindingId: string;
-      outcome: 'settled';
-      targetFindingId: string;
-    }
-  | {
-      provisionalFindingId: string;
-      sourceRawFindingId: string;
-      outcome: 'retained';
-    };
 
 export interface FindingManagerValidationAttemptReport {
   attempt: number;
@@ -1153,7 +1083,6 @@ export interface FindingManagerValidationReport {
   rawNormalizations?: RawNormalizationAuditRecord[];
   interpretationStats?: InterpretationStatsReport;
   relationClarifications?: Array<{ reviewer: string; flaggedRawFindingIds: string[] }>;
-  rawFindingDispositions?: RawFindingDisposition[];
   interpretationRecoverySettlements?: InterpretationRecoveryOriginSettlement[];
   managerTaskAudits?: FindingManagerTaskAudit[];
 }
@@ -1187,7 +1116,7 @@ export type FindingManagerTaskAudit =
       reason: string;
     };
 
-export interface FindingManagerCommitProjection {
+export interface FindingManagerCommitProjection extends FindingContractLedgerRegistries {
   nextId: number;
   updatedAt: string;
   findings: FindingLedgerEntry[];
@@ -1195,11 +1124,8 @@ export interface FindingManagerCommitProjection {
   evidenceBindings: FindingEvidenceBinding[];
   lifecycleReservations: FindingLifecycleReservation[];
   lifecycleEvents: FindingLifecycleEvent[];
-  rawRecoveryAttempts: RawRecoveryAttempt[];
-  rawRecoveryResults: RawRecoveryResult[];
   rawFindings: RawFinding[];
   conflicts: FindingLedgerConflict[];
-  interpretations: FindingInterpretationRecord[];
   fixpoint?: FindingLedgerFixpointState;
   stopBudget?: FindingLedgerStopBudgetState;
   reviewerAnomalies?: ReviewerAnomalyEntry[];
@@ -1365,6 +1291,34 @@ export type EngineProofSubject =
         projectionDigest: string;
       };
       materializedProductClaimDigest: string;
+    }
+  | {
+      kind: 'finding_claim_identical';
+      adjudicationKind: 'conflict' | 'terminal';
+      subjectIds: string[];
+      findingIds: string[];
+      expectedHeads: FindingLifecycleEntityHead[];
+      claimSnapshotDigests: string[];
+      rawClaimRefIds: string[];
+      exactClaimIdentityDigest: string;
+    }
+  | {
+      kind: 'finding_claim_supported_after_verification';
+      adjudicationKind: 'conflict' | 'terminal';
+      subjectId: string;
+      findingId: string;
+      expectedHead: FindingLifecycleEntityHead;
+      rawClaimRefIds: string[];
+      productProjectionDigest: string;
+    }
+  | {
+      kind: 'finding_no_issue_after_verification' | 'finding_claim_refuted';
+      adjudicationKind: 'conflict' | 'terminal';
+      subjectId: string;
+      findingId: string;
+      expectedHead: FindingLifecycleEntityHead;
+      claimSnapshotDigest: string;
+      rawClaimRefIds: string[];
     };
 
 interface EngineProofRecordBase {
@@ -1611,39 +1565,6 @@ export interface FindingManagerDuplicateDecision {
 // finding's own premise does not hold — engine moves it to invalidated.
 // 'undetermined': the adjudicator could not decide; never opens the gate.
 // See adjudication-apply.ts's FindingConflictAdjudicationDisposition.
-export const FINDING_CONFLICT_ADJUDICATION_OUTCOMES = ['finding_valid', 'finding_stale', 'evidence_invalid', 'undetermined'] as const;
-export type FindingConflictAdjudicationOutcome = typeof FINDING_CONFLICT_ADJUDICATION_OUTCOMES[number];
-
-// The finding-side effect of an adjudication outcome. Fixed 1:1 mapping from
-// outcome and derived exclusively by the engine (adjudication-apply.ts).
-export const FINDING_CONFLICT_ADJUDICATION_TRANSITIONS = ['keep_open', 'resolved', 'invalidated'] as const;
-export type FindingConflictAdjudicationTransition = typeof FINDING_CONFLICT_ADJUDICATION_TRANSITIONS[number];
-
-/** Structured output of the finding-conflict-adjudication synthetic step (one conflict per call). */
-export interface FindingConflictAdjudicationOutput {
-  conflictId: string;
-  outcome: FindingConflictAdjudicationOutcome;
-  actionableFix?: string;
-  rationale?: string;
-}
-
-/**
- * One completed adjudication recorded on a conflict, keyed by evidenceHash (see
- * adjudication-evidence.ts). The "1回制限" rule: a conflict is never adjudicated
- * twice against the same evidence — eligibility requires the current hash to be
- * absent from every past completed record, not just the latest one, so evidence
- * that reverts to a previously-adjudicated state cannot be re-adjudicated.
- * New raw finding content or new disputes change the hash and re-open
- * eligibility.
- */
-export interface FindingConflictAdjudicationRecord {
-  evidenceHash: string;
-  outcome: FindingConflictAdjudicationOutcome;
-  actionableFix?: string;
-  rationale?: string;
-  decidedAt: FindingObservation;
-}
-
 export interface FindingLedgerConflict {
   id: string;
   status: FindingConflictStatus;
@@ -1654,8 +1575,6 @@ export interface FindingLedgerConflict {
   lastSeen: FindingObservation;
   resolvedAt?: string;
   resolvedEvidence?: string;
-  /** Completed finding-conflict-adjudication decisions against this conflict, newest last. */
-  adjudications?: FindingConflictAdjudicationRecord[];
   revision: number;
 }
 

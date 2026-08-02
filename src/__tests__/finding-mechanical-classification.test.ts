@@ -69,7 +69,6 @@ function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
     evidenceRecords: [],
     rawFindings: [makeRawFinding({ rawFindingId: 'raw-existing' })],
     conflicts: [],
-    interpretations: [],
     findings: [makeFinding({ revision: 1 })],
     ...overrides,
   });

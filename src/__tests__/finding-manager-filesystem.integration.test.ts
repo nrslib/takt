@@ -138,7 +138,6 @@ describe('finding manager filesystem error propagation', () => {
       evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
     });
     await ledgerStore.updateLedger(() => ({ ledger: initialLedger, result: undefined }));
     const snapshotId = computeReviewScopeSnapshotId(cwd);
@@ -215,7 +214,6 @@ describe('finding manager filesystem error propagation', () => {
         evidenceRecords: [],
         rawFindings: [],
         conflicts: [],
-        interpretations: [],
       }),
       result: undefined,
     }));
@@ -353,7 +351,6 @@ describe('finding manager filesystem error propagation', () => {
         }],
       }],
       conflicts: [],
-      interpretations: [],
     });
     const storeOptions = {
       projectCwd: cwd,

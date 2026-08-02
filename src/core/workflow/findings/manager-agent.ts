@@ -481,7 +481,7 @@ export function parseManagerDecisions(
   };
 }
 
-function buildManagerAgentOptions(
+export function buildManagerAgentOptions(
   optionsBuilder: OptionsBuilder,
   managerStep: AgentWorkflowStep,
 ): ReturnType<OptionsBuilder['buildAgentOptions']> {

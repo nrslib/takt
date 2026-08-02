@@ -67,10 +67,7 @@ function makeLedger(cwd: string): FindingLedger {
     evidenceBindings: [],
     lifecycleReservations: [],
     lifecycleEvents: [],
-    rawRecoveryAttempts: [],
-    rawRecoveryResults: [],
     rawFindings: [baseRawFinding],
-    interpretations: [],
     conflicts: [],
   });
   const evidence = verifiedFindingEvidenceFixture({
@@ -123,10 +120,7 @@ function makeLedger(cwd: string): FindingLedger {
     evidenceBindings: [],
     lifecycleReservations: [],
     lifecycleEvents: [],
-    rawRecoveryAttempts: [],
-    rawRecoveryResults: [],
     rawFindings: [baseRawFinding, rawFinding],
-    interpretations: [],
     conflicts: [{
       id: conflictId,
       status: 'active',

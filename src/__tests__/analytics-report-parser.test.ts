@@ -270,7 +270,6 @@ describe('buildReviewFindingEventsFromLedger', () => {
         },
       ],
       conflicts: [],
-      interpretations: [],
       findings: [
         {
           id: 'F-0001',
@@ -326,7 +325,6 @@ describe('buildReviewFindingEventsFromLedger', () => {
       evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
       findings: [
         {
           id: 'F-0001',

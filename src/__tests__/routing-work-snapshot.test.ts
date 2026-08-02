@@ -198,7 +198,6 @@ describe('buildRoutingWorkSnapshot', () => {
           reason: 'The reviewer observation does not yet contain a complete claim.',
           firstObservedAt: observedAt,
           lastObservedAt: observedAt,
-          interpretationEpochs: 0,
           gateEffect: 'block',
           firstObservedRound: 1,
         },
@@ -206,7 +205,6 @@ describe('buildRoutingWorkSnapshot', () => {
       evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
       ...emptyFindingAuthorityProjection(),
     });
 

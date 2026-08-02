@@ -93,7 +93,6 @@ function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
     ],
     evidenceRecords: [],
     conflicts: [],
-    interpretations: [],
     findings: [
       {
         id: 'F-0001',
@@ -132,7 +131,6 @@ function makeProvisionalLedger(
         reason: 'Pending recovery',
         firstObservedAt: finding.firstSeen,
         lastObservedAt: finding.lastSeen,
-        interpretationEpochs: 0,
         gateEffect: 'block',
         firstObservedRound: 1,
         recoveryReviewerStableKey: 'reviewer-stable-a',
@@ -265,6 +263,7 @@ function makeHarness(
         },
       ],
       workflowName: 'peer-review',
+      workflowTask: 'Review the implementation.',
       runId: 'run-2',
       // トップレベルの走行を模す（呼び出し名前空間なし）。既存 id の形は変わらない。
       callNamespace: '',
@@ -369,6 +368,7 @@ function runFindingManagerWithStore(input: {
       }),
     }],
     workflowName: 'peer-review',
+    workflowTask: 'Review the implementation.',
     runId: input.runId,
     callNamespace: '',
     timestamp: '2026-06-14T00:00:00.000Z',
@@ -529,7 +529,6 @@ describe('runFindingManagerForStep mechanical path', () => {
         evidenceRecords: [],
         rawFindings: [],
         conflicts: [],
-        interpretations: [],
         ...emptyFindingAuthorityProjection(),
       },
       result: undefined,
@@ -586,7 +585,7 @@ describe('runFindingManagerForStep mechanical path', () => {
       expect(copySpies.reduce((count, spy) => count + spy.mock.calls.length, 0)).toBe(1);
       expect(rawSpies.reduce((count, spy) => count + spy.mock.calls.length, 0)).toBe(1);
       expect(reportSpies.reduce((count, spy) => count + spy.mock.calls.length, 0)).toBe(0);
-      expect(storeA.loadLedger().interpretations).toEqual([]);
+      expect(storeA.loadLedger().interpretationAttempts).toEqual([]);
       expect(storeA.loadLedger().rawFindings).toHaveLength(1);
     } finally {
       rmSync(projectCwd, { recursive: true, force: true });
@@ -624,7 +623,6 @@ describe('runFindingManagerForStep mechanical path', () => {
         evidenceRecords: [],
         rawFindings: [],
         conflicts: [],
-        interpretations: [],
         ...emptyFindingAuthorityProjection(),
       },
       result: undefined,
@@ -819,10 +817,9 @@ describe('runFindingManagerForStep mechanical path', () => {
     expect(harness.currentLedger().lifecycleEvents.some(
       (event) => event.operation === 'resolve_finding',
     )).toBe(false);
-    expect(harness.savedValidationReports.at(-1)?.rawFindingDispositions)
+    expect(harness.savedValidationReports.at(-1)?.unsupportedRawFindings)
       .toContainEqual(expect.objectContaining({
         rawFindingId: expect.stringMatching(/:c-1$/),
-        outcome: 'confirmation_not_applied',
       }));
   });
 
@@ -911,11 +908,6 @@ describe('runFindingManagerForStep mechanical path', () => {
     });
     expect(ledger.findings.every((finding) => finding.provisional === undefined)).toBe(true);
     const report = harness.savedValidationReports.at(-1);
-    expect(report?.rawFindingDispositions).toContainEqual(expect.objectContaining({
-      rawFindingId: expect.stringMatching(/:p-1$/),
-      outcome: 'unsupported',
-      reason: expect.stringContaining('audit-only at commit'),
-    }));
     expect(report?.unsupportedRawFindings).toContainEqual(expect.objectContaining({
       rawFindingId: expect.stringMatching(/:p-1$/),
       targetFindingId: 'F-0001',
@@ -972,11 +964,6 @@ describe('runFindingManagerForStep mechanical path', () => {
     });
     expect(ledger.findings.every((finding) => finding.provisional === undefined)).toBe(true);
     const report = harness.savedValidationReports.at(-1);
-    expect(report?.rawFindingDispositions).toContainEqual(expect.objectContaining({
-      rawFindingId: expect.stringMatching(/:r-1$/),
-      outcome: 'unsupported',
-      reason: expect.stringContaining('transition capability: unavailable'),
-    }));
     expect(report?.unsupportedRawFindings).toContainEqual(expect.objectContaining({
       rawFindingId: expect.stringMatching(/:r-1$/),
       targetFindingId: 'F-0001',
@@ -1106,13 +1093,6 @@ describe('runFindingManagerForStep rejected decisions land as provisional withou
     // 監査には不採用の事実が残る。
     const report = harness.savedValidationReports.at(-1) as FindingManagerValidationReport | undefined;
     expect(report?.unsupportedRawFindings?.some((entry) => entry.rawFindingId.endsWith(':c-1'))).toBe(true);
-    expect(report?.rawFindingDispositions).toEqual([
-      expect.objectContaining({
-        rawFindingId: expect.stringMatching(/:c-1$/),
-        outcome: 'unsupported',
-        reason: expect.any(String),
-      }),
-    ]);
   });
 
   it('Given the agent repeats an invalid decision When run Then the raw finding lands as provisional (never forced to "new")', async () => {
@@ -1177,11 +1157,6 @@ describe('runFindingManagerForStep rejected decisions land as provisional withou
     expect(provisionals[0]?.title).toBe('New unmatched issue');
     const report = harness.savedValidationReports.at(-1) as FindingManagerValidationReport | undefined;
     expect(report?.unsupportedRawFindings?.some((entry) => entry.rawFindingId.endsWith(':c-1'))).toBe(true);
-    expect(report?.rawFindingDispositions).toContainEqual(expect.objectContaining({
-      rawFindingId: expect.stringMatching(/:c-1$/),
-      outcome: 'unsupported',
-      reason: expect.any(String),
-    }));
   });
 
   it('Given a resolved-target confirmation and a manager that incorrectly returns new for it When run Then the confirmation remains an unsupported finite audit outcome', async () => {
@@ -1222,10 +1197,8 @@ describe('runFindingManagerForStep rejected decisions land as provisional withou
     await harness.run({ reviewerRawFindings: [UNMATCHED_ISSUE_RAW, CONFIRMATION_RAW] });
 
     const report = harness.savedValidationReports.at(-1);
-    expect(report?.rawFindingDispositions).toContainEqual(expect.objectContaining({
+    expect(report?.unsupportedRawFindings).toContainEqual(expect.objectContaining({
       rawFindingId: 'run-2:reviewers:2:arch-review:c-1',
-      outcome: 'unsupported',
-      reason: expect.stringContaining('has no product transition capability'),
     }));
     expect(harness.currentLedger().findings.filter(
       (finding) => finding.rawFindingIds.includes('run-2:reviewers:2:arch-review:c-1'),
@@ -1603,7 +1576,6 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
         evidenceRecords: [],
         rawFindings: [],
         conflicts: [],
-        interpretations: [],
         ...emptyFindingAuthorityProjection(),
       },
       result: undefined,
@@ -1752,7 +1724,6 @@ describe('runFindingManagerForStep concurrent workflow_call lost update', () => 
         evidenceRecords: [],
         rawFindings: [],
         conflicts: [],
-        interpretations: [],
         ...emptyFindingAuthorityProjection(),
       },
       result: undefined,

@@ -268,13 +268,10 @@ async function writeSourceReports(projectDir: string, withFindingContract: boole
     findings: [],
     rawFindings: [],
     conflicts: [],
-    interpretations: [],
     evidenceRecords: [],
     evidenceBindings: [],
     lifecycleReservations: [],
     lifecycleEvents: [],
-    rawRecoveryAttempts: [],
-    rawRecoveryResults: [],
   });
   const sourceStore = createTestFindingLedgerStore({
     projectCwd: projectDir,

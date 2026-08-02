@@ -115,7 +115,6 @@ function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
     evidenceRecords: [],
     rawFindings: [makeRawFinding({ rawFindingId: 'raw-existing', familyTag: 'bug' })],
     conflicts: [],
-    interpretations: [],
     findings: [makeFinding({ revision: 1 })],
     ...overrides,
   });
@@ -124,7 +123,7 @@ function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
 type TestReconcileInput = Omit<
   Parameters<typeof reconcileFindingLedgerStrict>[0],
   'provisionalFindings' | 'entityProvisionalMutations'
-  | 'terminalEntityAttachmentFindingIds' | 'rawFindingDispositions'
+  | 'terminalEntityAttachmentFindingIds'
   | 'rawProvenanceByRawFindingId'
 >;
 
@@ -134,7 +133,6 @@ function reconcileFindingLedger(input: TestReconcileInput): FindingLedger {
     entityProvisionalMutations: [],
     terminalEntityAttachmentFindingIds: new Set(),
     provisionalFindings: [],
-    rawFindingDispositions: [],
     verifiedEvidenceRecordsByRawFindingId: new Map(),
     rawProvenanceByRawFindingId: new Map(input.rawFindings.map((rawFinding) => [
       rawFinding.rawFindingId,
@@ -605,7 +603,7 @@ describe('assembleManagerOutput dispute decisions', () => {
 });
 
 describe('assembleManagerOutput conflict decisions', () => {
-  it('Given a "resolve" decision on an active conflict When assembled Then it lands in resolvedConflicts', () => {
+  it('Given a "resolve" decision on an active conflict When assembled Then it requires verified conflict adjudication', () => {
     const ledger = makeLedger({ conflicts: [makeConflict()] });
     const result = assembleManagerOutput({
       previousLedger: ledger,
@@ -614,10 +612,11 @@ describe('assembleManagerOutput conflict decisions', () => {
         conflictDecisions: [{ conflictId: DEFAULT_CONFLICT_ID, decision: 'resolve', evidence: 'Adjudicated in favor of F-0001.' }],
       }),
     });
-    expect(result.rejectedConflictDecisions).toEqual([]);
-    expect(result.output.resolvedConflicts).toEqual([
-      { conflictId: DEFAULT_CONFLICT_ID, evidence: 'Adjudicated in favor of F-0001.' },
-    ]);
+    expect(result.rejectedConflictDecisions).toEqual([expect.objectContaining({
+      conflictId: DEFAULT_CONFLICT_ID,
+      reason: expect.stringContaining('requires verified conflict adjudication'),
+    })]);
+    expect(result.output.resolvedConflicts).toEqual([]);
   });
 
   it('Given a "keep" decision When assembled Then nothing is added and nothing is rejected', () => {
@@ -646,7 +645,7 @@ describe('assembleManagerOutput conflict decisions', () => {
     });
     expect(result.output.resolvedConflicts).toEqual([]);
     expect(result.rejectedConflictDecisions).toHaveLength(1);
-    expect(result.rejectedConflictDecisions[0]?.reason).toContain('not active');
+    expect(result.rejectedConflictDecisions[0]?.reason).toContain('requires verified conflict adjudication');
   });
 
   // reconciler は resolvedConflicts を先に適用し、その後 conflicts で同じ ID を
@@ -667,12 +666,12 @@ describe('assembleManagerOutput conflict decisions', () => {
     });
     expect(result.output.resolvedConflicts).toEqual([]);
     expect(result.rejectedConflictDecisions).toHaveLength(1);
-    expect(result.rejectedConflictDecisions[0]?.reason).toContain('regenerated');
+    expect(result.rejectedConflictDecisions[0]?.reason).toContain('requires verified conflict adjudication');
     // 再生成された conflict 自体は出力に残る（active のまま）。
     expect(result.output.conflicts.map((conflict) => conflict.findingIds)).toEqual([['F-0001']]);
   });
 
-  it('Given a canonical active conflict ID for regenerated evidence When assembled Then its resolve is rejected and reconciliation keeps it active', () => {
+  it('Given a canonical active conflict ID for regenerated evidence When assembled Then manager resolve is rejected', () => {
     const recurringConflictShape = { findingIds: ['F-0001'], rawFindingIds: [] };
     const conflictId = formatConflictId(recurringConflictShape);
     const ledger = makeLedger({
@@ -690,15 +689,9 @@ describe('assembleManagerOutput conflict decisions', () => {
 
     expect(result.output.resolvedConflicts).toEqual([]);
     expect(result.rejectedConflictDecisions.map((rejection) => rejection.conflictId)).toEqual([conflictId]);
-    expect(result.rejectedConflictDecisions.every((rejection) => rejection.reason.includes('regenerated'))).toBe(true);
-
-    const nextLedger = reconcileFindingLedger({
-      previousLedger: ledger,
-      rawFindings: [raw],
-      managerOutput: result.output,
-      context: { workflowName: 'peer-review', stepName: 'reviewers', runId: 'run-2', timestamp: '2026-06-14T00:00:00.000Z' },
-    });
-    expect(nextLedger.conflicts).toEqual([expect.objectContaining({ id: conflictId, status: 'active' })]);
+    expect(result.rejectedConflictDecisions.every(
+      (rejection) => rejection.reason.includes('requires verified conflict adjudication'),
+    )).toBe(true);
   });
 
   it('Given raw-only regenerated evidence When collecting regenerated IDs Then it returns only the canonical ID', () => {
@@ -735,13 +728,12 @@ describe('assembleManagerOutput conflict decisions', () => {
     expect(result.output.resolvedConflicts).toEqual([]);
     expect(result.rejectedConflictDecisions).toHaveLength(1);
     expect(result.rejectedConflictDecisions[0]?.conflictId).toBe(conflictId);
-    expect(result.rejectedConflictDecisions[0]?.reason).toContain('regenerated');
+    expect(result.rejectedConflictDecisions[0]?.reason).toContain('requires verified conflict adjudication');
   });
 });
 
 describe('assembleManagerOutput combined decision kinds', () => {
-  it('Given independent duplicate, invalidate, waive, dispute note, and conflict resolution decisions When assembled, validated, and reconciled Then every transition is retained without rejection', () => {
-    const conflictId = formatConflictId({ findingIds: ['F-0006'], rawFindingIds: [] });
+  it('Given independent duplicate, invalidate, waive, and dispute note decisions When assembled, validated, and reconciled Then every transition is retained without rejection', () => {
     const ledger = makeLedger({
       nextId: 7,
       rawFindings: [],
@@ -753,7 +745,7 @@ describe('assembleManagerOutput combined decision kinds', () => {
         makeFinding({ revision: 1, id: 'F-0005', location: 'src/note.ts:1' }),
         makeFinding({ revision: 1, id: 'F-0006', location: 'src/conflict.ts:1' }),
       ],
-      conflicts: [makeConflict({ id: conflictId, findingIds: ['F-0006'], rawFindingIds: [] })],
+      conflicts: [],
     });
     const priorStepResponseText = [
       '## Disputed Findings',
@@ -779,7 +771,6 @@ describe('assembleManagerOutput combined decision kinds', () => {
           { findingId: 'F-0004', decision: 'waive', reason: 'frozen contract', evidence: 'src/waive.ts:1' },
           { findingId: 'F-0005', decision: 'note', reason: 'needs a record', evidence: 'src/note.ts:1' },
         ],
-        conflictDecisions: [{ conflictId, decision: 'resolve', evidence: 'src/conflict.ts:1' }],
       }),
       invalidLocationCandidateFindingIds: new Set(['F-0003']),
       priorStepResponseText,
@@ -798,7 +789,7 @@ describe('assembleManagerOutput combined decision kinds', () => {
     expect(result.output.invalidatedFindings).toEqual([{ findingId: 'F-0003', evidence: 'src/invalid.ts:1' }]);
     expect(result.output.waivedFindings).toEqual([{ findingId: 'F-0004', reason: 'frozen contract', evidence: 'src/waive.ts:1' }]);
     expect(result.output.disputeNotes).toEqual([{ findingId: 'F-0005', reason: 'needs a record', evidence: 'src/note.ts:1' }]);
-    expect(result.output.resolvedConflicts).toEqual([{ conflictId, evidence: 'src/conflict.ts:1' }]);
+    expect(result.output.resolvedConflicts).toEqual([]);
     expect(validateFindingManagerOutput({
       previousLedger: ledger,
       rawFindings: [],
@@ -832,7 +823,7 @@ describe('assembleManagerOutput combined decision kinds', () => {
         runId: 'run-2',
       },
     });
-    expect(next.conflicts).toEqual([expect.objectContaining({ id: conflictId, status: 'resolved' })]);
+    expect(next.conflicts).toEqual([]);
   });
 });
 
@@ -1849,11 +1840,6 @@ describe('assembleManagerOutput carried conflicts', () => {
       entityProvisionalMutations: [],
       terminalEntityAttachmentFindingIds: new Set(),
       provisionalFindings: [],
-      rawFindingDispositions: fresh.rejectedRawDecisions.map((rejected) => ({
-        rawFindingId: rejected.rawFindingId,
-        outcome: 'stale' as const,
-        reason: rejected.reason,
-      })),
       verifiedEvidenceRecordsByRawFindingId: new Map(),
       rawProvenanceByRawFindingId: new Map(rawFindings.map((rawFinding) => [
         rawFinding.rawFindingId,

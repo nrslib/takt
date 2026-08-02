@@ -6,10 +6,8 @@ import {
 import { createEmptyManagerOutput } from './manager-output.js';
 import { applyProvisionalSettlement } from './manager-provisional-settlement.js';
 import {
-  classifyProvisionalRecovery,
   isOpenProvisional,
-  provisionalRecoveryAttemptCount,
-} from './provisional-recovery.js';
+} from './terminal-adjudication-candidates.js';
 import { reconcileManagerActionRecovery } from './reconciler.js';
 import type {
   FindingActionRecovery,
@@ -65,11 +63,9 @@ export function collectManagerActionRecoveryCandidates(
 ): ManagerActionRecoveryCandidate[] {
   return ledger.findings.flatMap((finding) => (
     isOpenProvisional(finding)
-      && classifyProvisionalRecovery(
-        finding.provisional,
-        roundsCompleted,
-        provisionalRecoveryAttemptCount(ledger, finding.id),
-      ) === 'action'
+      && finding.provisional.actionRecovery !== undefined
+      && finding.provisional.firstObservedRound < roundsCompleted + 1
+      && (finding.provisional.actionRecoveryAttempts?.length ?? 0) < 2
       ? [{ provisionalFindingId: finding.id, expectedRevision: finding.revision }]
       : []
   ));
@@ -135,21 +131,6 @@ function planDuplicate(
   };
 }
 
-function planDismiss(
-  ledger: FindingLedger,
-  recovery: Extract<FindingActionRecovery, { action: 'dismiss' }>,
-): { apply: boolean; settled: boolean; reason: string } {
-  const target = ledger.findings.find((finding) => finding.id === recovery.findingId);
-  if (target?.status === 'dismissed') {
-    return { apply: false, settled: true, reason: `finding "${recovery.findingId}" is already dismissed` };
-  }
-  return {
-    apply: false,
-    settled: false,
-    reason: `finding "${recovery.findingId}" requires a fresh dismissal adjudication`,
-  };
-}
-
 function addActionToOutput(
   output: FindingManagerOutput,
   recovery: FindingActionRecovery,
@@ -161,8 +142,6 @@ function addActionToOutput(
       return { ...output, waivedFindings: [...output.waivedFindings, recovery] };
     case 'duplicate':
       return { ...output, duplicateFindings: [...output.duplicateFindings, recovery] };
-    case 'dismiss':
-      return { ...output, dismissedFindings: [...output.dismissedFindings, recovery] };
   }
 }
 
@@ -193,9 +172,7 @@ function buildActionRecoveryPlan(input: {
       ? planInvalidate(input.ledger, input.cwd, recovery)
       : recovery.action === 'waive'
         ? planWaive(input.ledger, recovery)
-        : recovery.action === 'duplicate'
-          ? planDuplicate(input.ledger, recovery)
-          : planDismiss(input.ledger, recovery);
+        : planDuplicate(input.ledger, recovery);
     if (decision.settled) {
       return {
         ...plan,
@@ -282,10 +259,8 @@ export function planManagerActionRecovery(input: {
     rejectedObservationAttachments: [],
     promotedFindingIds: new Set(),
     promotionSourceRawFindingIds: new Map(),
-    replayPromotionAuthoritiesByFindingId: new Map(),
     resolvedByMapping: plan.settlements,
     resolvedByEvidence: new Map(),
-    settledReplayRawIds: new Set(),
   }, input.context.timestamp);
   return {
     ledger: recordActionRecoveryFailures(

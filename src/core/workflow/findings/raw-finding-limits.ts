@@ -50,23 +50,6 @@ export const MANAGER_INTERPRETATION_LIMITS = {
   maxInterpretationEpochsPerLineage: 2,
 } as const;
 
-/**
- * engine 主導の再裁定（RawAdjudicationRecovery）の上限。
- * maxReplayAttempts は「初回着地の失敗後に engine が再裁定を試みる回数」で、
- * 解釈 epoch（初回を含む解釈 attempt 総数）とは別カウンタ・別意味。
- * 枯渇後は dismiss 候補（内容の管轄裁定）へ回す。
- */
-export const RAW_ADJUDICATION_RECOVERY_LIMITS = {
-  maxReplayTargetsPerStep: 64,
-  maxReplayCandidatesPerBatch: 16,
-  maxManagerCallsPerStep: 4,
-  maxInputTokensPerCall: 24_000,
-  maxInputTokensPerStep: 64_000,
-  maxOutputTokensPerCall: 2_048,
-  maxOutputTokensPerStep: 8_192,
-  maxReplayAttempts: 2,
-} as const;
-
 export const MANAGER_ACTION_RECOVERY_LIMITS = {
   maxAttempts: 2,
 } as const;

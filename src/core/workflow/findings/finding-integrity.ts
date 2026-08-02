@@ -12,12 +12,17 @@ import { computeRawFindingIntegrityDigest } from '../../models/finding-raw-integ
 import type {
   CanonicalRawFindingProvenance,
   FindingEvidenceRecord,
+  FindingContractLedgerRegistries,
   FindingLedger,
   FindingManagerReportPublication,
+  InterpretationAttempt,
+  InterpretationRawObservation,
   RawFinding,
+  RawInterpretationOutcome,
   ReviewerAnomalyEntry,
 } from './types.js';
 import { addRoundMarker } from './round-marker.js';
+import { compareRfc3339Timestamps } from '../../models/rfc3339.js';
 
 const CANONICAL_RAW_INTEGRITY_VERSION = 1;
 
@@ -96,25 +101,23 @@ export function assertRawFindingsAppendOnly(
 
 /** File/SQLite/resume reconstruction が共有する ledger append-only 境界。 */
 export function assertFindingLedgerAppendOnlyProjection(
-  ledger: Pick<
-    FindingLedger,
-    | 'findings'
-    | 'rawFindings'
-    | 'evidenceRecords'
-    | 'evidenceBindings'
-    | 'lifecycleReservations'
-    | 'lifecycleEvents'
-    | 'rawRecoveryAttempts'
-    | 'rawRecoveryResults'
-    | 'conflicts'
-    | 'reviewerAnomalies'
-    | 'pendingManagerCommit'
-  >,
+  ledger: FindingLedger,
 ): void {
   assertFindingLifecycleAuthorityInvariant(ledger);
   assertRawFindingsAppendOnly([], ledger.rawFindings);
   assertEvidenceRecordsAppendOnly([], ledger.evidenceRecords);
   assertCanonicalBindingSetAppendOnly([], ledger.evidenceBindings);
+  assertInterpretationCaseTransition(
+    {
+      interpretationRawObservations: [],
+      interpretationAttempts: [],
+      rawInterpretationOutcomes: [],
+      rawCanonicalSnapshots: [],
+      lifecycleReservations: [],
+      lifecycleEvents: [],
+    },
+    ledger,
+  );
   const completed = ledger.pendingManagerCommit?.completed;
   if (completed !== undefined) {
     assertRawFindingsAppendOnly(ledger.rawFindings, completed.rawFindings);
@@ -126,6 +129,8 @@ export function assertFindingLedgerAppendOnlyProjection(
       ledger.evidenceBindings,
       completed.evidenceBindings,
     );
+    assertInterpretationCaseTransition(ledger, completed);
+    assertContractRegistryTransitions(ledger, completed);
     assertRegistryPrefix(
       ledger.lifecycleReservations,
       completed.lifecycleReservations,
@@ -137,18 +142,6 @@ export function assertFindingLedgerAppendOnlyProjection(
       completed.lifecycleEvents,
       'eventId',
       'Lifecycle event',
-    );
-    assertRegistryPrefix(
-      ledger.rawRecoveryAttempts,
-      completed.rawRecoveryAttempts,
-      'attemptId',
-      'Raw recovery attempt',
-    );
-    assertRegistryPrefix(
-      ledger.rawRecoveryResults,
-      completed.rawRecoveryResults,
-      'resultId',
-      'Raw recovery result',
     );
     assertReviewerAnomalySettlementTransition(ledger, completed);
     assertFindingLifecycleAuthorityInvariant(completed);
@@ -320,6 +313,462 @@ function assertRegistryPrefix<
   });
 }
 
+function assertStatefulRegistryTransition<Value>(input: {
+  current: readonly Value[];
+  next: readonly Value[];
+  idOf: (value: Value) => string;
+  stateOf: (value: Value) => string;
+  identityOf: (value: Value) => unknown;
+  canTransition: (current: string, next: string) => boolean;
+  initialState: string;
+  label: string;
+}): void {
+  if (input.next.length < input.current.length) {
+    throw new Error(`${input.label} registry prefix cannot be removed`);
+  }
+  input.current.forEach((existing, index) => {
+    const candidate = input.next[index];
+    if (candidate === undefined || input.idOf(candidate) !== input.idOf(existing)) {
+      throw new Error(`${input.label} registry prefix changed at index ${index}`);
+    }
+    const existingState = input.stateOf(existing);
+    const candidateState = input.stateOf(candidate);
+    if (
+      !sameCanonicalValue(input.identityOf(existing), input.identityOf(candidate))
+      || !input.canTransition(existingState, candidateState)
+    ) {
+      throw new Error(
+        `${input.label} "${input.idOf(existing)}" cannot transition from ${existingState} to ${candidateState}`,
+      );
+    }
+    if (existingState === candidateState && !sameCanonicalValue(existing, candidate)) {
+      throw new Error(`${input.label} "${input.idOf(existing)}" cannot be replaced`);
+    }
+  });
+  input.next.slice(input.current.length).forEach((value) => {
+    if (input.stateOf(value) !== input.initialState) {
+      throw new Error(
+        `New ${input.label.toLowerCase()} "${input.idOf(value)}" must begin in ${input.initialState}`,
+      );
+    }
+  });
+}
+
+function stateIdentity(value: object, stateFields: readonly string[]): unknown {
+  const identity = { ...value } as Record<string, unknown>;
+  for (const field of stateFields) {
+    delete identity[field];
+  }
+  return identity;
+}
+
+function assertContractRegistryTransitions(
+  current: FindingContractLedgerRegistries,
+  next: FindingContractLedgerRegistries,
+): void {
+  assertRegistryPrefix(
+    current.rawCanonicalSnapshots,
+    next.rawCanonicalSnapshots,
+    'rawCanonicalSnapshotId',
+    'Raw canonical snapshot',
+  );
+  assertRegistryPrefix(
+    current.conflictRawClaimLandings,
+    next.conflictRawClaimLandings,
+    'rawClaimLandingId',
+    'Conflict raw claim landing',
+  );
+  assertRegistryPrefix(
+    current.conflictAdjudicationSnapshots,
+    next.conflictAdjudicationSnapshots,
+    'conflictSnapshotId',
+    'Conflict adjudication snapshot',
+  );
+  assertRegistryPrefix(
+    current.conflictAdjudicationEpisodes,
+    next.conflictAdjudicationEpisodes,
+    'episodeId',
+    'Conflict adjudication episode',
+  );
+  assertRegistryPrefix(
+    current.conflictClaimSettlements,
+    next.conflictClaimSettlements,
+    'settlementId',
+    'Conflict claim settlement',
+  );
+  assertRegistryPrefix(
+    current.interpretationCaseSnapshots,
+    next.interpretationCaseSnapshots,
+    'caseSnapshotId',
+    'Interpretation case snapshot',
+  );
+  assertRegistryPrefix(
+    current.interpretationRecoveryOriginBindings,
+    next.interpretationRecoveryOriginBindings,
+    'bindingId',
+    'Interpretation origin binding',
+  );
+  assertRegistryPrefix(
+    current.interpretationRecoveryOriginSettlements,
+    next.interpretationRecoveryOriginSettlements,
+    'settlementId',
+    'Interpretation origin settlement',
+  );
+  assertRegistryPrefix(
+    current.findingManagerProviderBudgetScopes,
+    next.findingManagerProviderBudgetScopes,
+    'budgetScopeId',
+    'Finding manager provider budget scope',
+  );
+  assertRegistryPrefix(
+    current.findingScopeBindings,
+    next.findingScopeBindings,
+    'bindingId',
+    'Finding scope binding',
+  );
+  assertRegistryPrefix(
+    current.terminalAdjudicationRounds,
+    next.terminalAdjudicationRounds,
+    'selectionId',
+    'Terminal adjudication round',
+  );
+  assertRegistryPrefix(
+    current.terminalAdjudicationEpisodes,
+    next.terminalAdjudicationEpisodes,
+    'episodeId',
+    'Terminal adjudication episode',
+  );
+  assertRegistryPrefix(
+    current.terminalAdjudicationSettlements,
+    next.terminalAdjudicationSettlements,
+    'settlementId',
+    'Terminal adjudication settlement',
+  );
+  assertStatefulRegistryTransition({
+    current: current.findingManagerProviderCalls,
+    next: next.findingManagerProviderCalls,
+    idOf: (call) => call.providerCallId,
+    stateOf: (call) => call.state,
+    identityOf: (call) => stateIdentity(call, [
+      'state',
+      'dispatchedAt',
+      'settledAt',
+      'resultKind',
+      'failurePhase',
+      'responseDigest',
+      'charge',
+    ]),
+    canTransition: (from, to) => from === to
+      || (from === 'reserved' && to === 'dispatched')
+      || (from === 'dispatched' && to === 'settled'),
+    initialState: 'reserved',
+    label: 'Finding manager provider call',
+  });
+  const attemptStateFields = [
+    'stage',
+    'interruptedAt',
+    'completedAt',
+    'appliedAt',
+    'reason',
+    'proposal',
+    'proposalDigest',
+    'result',
+    'verificationDigest',
+    'settlementId',
+    'claimSettlementIds',
+    'lifecycleEventIds',
+  ] as const;
+  const canAttemptTransition = (from: string, to: string): boolean => from === to
+    || (from === 'started' && ['interrupted', 'proposed', 'applied', 'completed'].includes(to))
+    || (from === 'proposed' && ['applied', 'completed'].includes(to));
+  assertStatefulRegistryTransition({
+    current: current.terminalAdjudicationAttempts,
+    next: next.terminalAdjudicationAttempts,
+    idOf: (attempt) => attempt.attemptId,
+    stateOf: (attempt) => attempt.stage,
+    identityOf: (attempt) => stateIdentity(attempt, attemptStateFields),
+    canTransition: canAttemptTransition,
+    initialState: 'started',
+    label: 'Terminal adjudication attempt',
+  });
+  assertStatefulRegistryTransition({
+    current: current.conflictAdjudicationAttempts,
+    next: next.conflictAdjudicationAttempts,
+    idOf: (attempt) => attempt.attemptId,
+    stateOf: (attempt) => attempt.stage,
+    identityOf: (attempt) => stateIdentity(attempt, attemptStateFields),
+    canTransition: canAttemptTransition,
+    initialState: 'started',
+    label: 'Conflict adjudication attempt',
+  });
+}
+
+interface InterpretationCaseProjection {
+  interpretationRawObservations: readonly InterpretationRawObservation[];
+  interpretationAttempts: readonly InterpretationAttempt[];
+  rawInterpretationOutcomes: readonly RawInterpretationOutcome[];
+  rawCanonicalSnapshots: FindingLedger['rawCanonicalSnapshots'];
+  lifecycleReservations: FindingLedger['lifecycleReservations'];
+  lifecycleEvents: FindingLedger['lifecycleEvents'];
+}
+
+function assertInterpretationCaseTransition(
+  current: InterpretationCaseProjection,
+  next: InterpretationCaseProjection,
+): void {
+  assertRegistryPrefix(
+    current.interpretationRawObservations,
+    next.interpretationRawObservations,
+    'observationDigest',
+    'Interpretation observation',
+  );
+
+  if (next.interpretationAttempts.length < current.interpretationAttempts.length) {
+    throw new Error('Interpretation attempt registry prefix cannot be removed');
+  }
+  current.interpretationAttempts.forEach((existing, index) => {
+    const candidate = next.interpretationAttempts[index];
+    if (candidate === undefined || candidate.attemptId !== existing.attemptId) {
+      throw new Error(`Interpretation attempt registry prefix changed at index ${index}`);
+    }
+    const existingIdentity = {
+      attemptId: existing.attemptId,
+      caseSnapshotId: existing.caseSnapshotId,
+      caseId: existing.caseId,
+      cohortId: existing.cohortId,
+      lineageKey: existing.lineageKey,
+      semanticProjectionDigest: existing.semanticProjectionDigest,
+      attemptOrdinal: existing.attemptOrdinal,
+      retryOrdinal: existing.retryOrdinal,
+      rawFindingIds: existing.rawFindingIds,
+      providerCallId: existing.providerCallId,
+      startedAt: existing.startedAt,
+    };
+    const candidateIdentity = {
+      attemptId: candidate.attemptId,
+      caseSnapshotId: candidate.caseSnapshotId,
+      caseId: candidate.caseId,
+      cohortId: candidate.cohortId,
+      lineageKey: candidate.lineageKey,
+      semanticProjectionDigest: candidate.semanticProjectionDigest,
+      attemptOrdinal: candidate.attemptOrdinal,
+      retryOrdinal: candidate.retryOrdinal,
+      rawFindingIds: candidate.rawFindingIds,
+      providerCallId: candidate.providerCallId,
+      startedAt: candidate.startedAt,
+    };
+    if (!sameCanonicalValue(existingIdentity, candidateIdentity)) {
+      throw new Error(`Interpretation attempt "${existing.attemptId}" identity cannot be replaced`);
+    }
+    const allowed = existing.stage === candidate.stage
+      || (existing.stage === 'started'
+        && (candidate.stage === 'interrupted' || candidate.stage === 'completed'))
+      || (existing.stage === 'completed' && candidate.stage === 'applied');
+    if (!allowed) {
+      throw new Error(
+        `Interpretation attempt "${existing.attemptId}" cannot transition from ${existing.stage} to ${candidate.stage}`,
+      );
+    }
+    if (
+      (existing.stage === 'completed' || existing.stage === 'applied')
+      && (
+        candidate.stage === 'started'
+        || candidate.stage === 'interrupted'
+        || !sameCanonicalValue(existing.decision, candidate.decision)
+      )
+    ) {
+      throw new Error(`Interpretation attempt "${existing.attemptId}" decision cannot be replaced`);
+    }
+    if (
+      existing.stage === 'interrupted'
+      && (
+        candidate.stage !== 'interrupted'
+        || !sameCanonicalValue(existing.interruptedAt, candidate.interruptedAt)
+      )
+    ) {
+      throw new Error(`Interpretation attempt "${existing.attemptId}" interruption cannot be replaced`);
+    }
+    if (
+      (existing.stage === 'completed' || existing.stage === 'applied')
+      && (
+        (candidate.stage !== 'completed' && candidate.stage !== 'applied')
+        || !sameCanonicalValue(existing.completedAt, candidate.completedAt)
+      )
+    ) {
+      throw new Error(`Interpretation attempt "${existing.attemptId}" completion cannot be replaced`);
+    }
+    if (
+      existing.stage === 'applied'
+      && (
+        candidate.stage !== 'applied'
+        || !sameCanonicalValue(existing.appliedAt, candidate.appliedAt)
+        || !sameCanonicalValue(existing.application, candidate.application)
+      )
+    ) {
+      throw new Error(`Interpretation attempt "${existing.attemptId}" application cannot be replaced`);
+    }
+  });
+
+  const currentAttempts = new Map(
+    current.interpretationAttempts.map((attempt) => [attempt.attemptId, attempt]),
+  );
+  const nextAttempts = new Map(
+    next.interpretationAttempts.map((attempt) => [attempt.attemptId, attempt]),
+  );
+  const nextOutcomes = new Map(
+    next.rawInterpretationOutcomes.map((outcome) => [outcome.rawFindingId, outcome]),
+  );
+  const isInterruptedLanding = (
+    attempt: InterpretationAttempt | undefined,
+    outcome: RawInterpretationOutcome | undefined,
+  ): boolean => {
+    if (attempt?.stage !== 'interrupted' || outcome?.kind !== 'provisional') {
+      return false;
+    }
+    const event = next.lifecycleEvents.find(
+      (candidate) => candidate.eventId === outcome.landingEventId,
+    );
+    const reservation = event === undefined
+      ? undefined
+      : next.lifecycleReservations.find(
+          (candidate) => candidate.mutationId === event.mutationId,
+        );
+    if (reservation?.authority.kind !== 'interpretation_unreserved_landing') {
+      return false;
+    }
+    if (event === undefined) {
+      return false;
+    }
+    const authority = reservation.authority;
+    const expectedSnapshotIds = attempt.rawFindingIds.map((rawFindingId) => (
+      next.rawCanonicalSnapshots.find(
+        (snapshot) => snapshot.rawFindingId === rawFindingId,
+      )?.rawCanonicalSnapshotId
+    ));
+    return expectedSnapshotIds.every((snapshotId): snapshotId is string => snapshotId !== undefined)
+      && authority.rawFindingIds.length === attempt.rawFindingIds.length
+      && authority.rawFindingIds.every((rawFindingId, index) => (
+        rawFindingId === attempt.rawFindingIds[index]
+      ))
+      && authority.rawCanonicalSnapshotIds.length === expectedSnapshotIds.length
+      && authority.rawCanonicalSnapshotIds.every((snapshotId, index) => (
+        snapshotId === [...expectedSnapshotIds].sort(compareBinaryStrings)[index]
+      ))
+      && event.transitions.some((transition) => (
+        transition.after.entityKind === 'finding'
+        && transition.after.entityId === outcome.provisionalFindingId
+      ));
+  };
+  for (const existing of current.rawInterpretationOutcomes) {
+    const candidate = nextOutcomes.get(existing.rawFindingId);
+    if (candidate === undefined) {
+      throw new Error(`Interpretation outcome for "${existing.rawFindingId}" cannot be removed`);
+    }
+    const replaceable = existing.kind === 'pending_attempt';
+    if (!replaceable && !sameCanonicalValue(existing, candidate)) {
+      throw new Error(`Terminal interpretation outcome for "${existing.rawFindingId}" cannot be replaced`);
+    }
+    if (
+      existing.kind === 'pending_attempt'
+      && candidate.kind === 'pending_attempt'
+      && candidate.attemptId !== existing.attemptId
+    ) {
+      const currentAttempt = currentAttempts.get(existing.attemptId);
+      const interruptedAttempt = nextAttempts.get(existing.attemptId);
+      const replacementAttempt = nextAttempts.get(candidate.attemptId);
+      if (
+        (currentAttempt?.stage !== 'started' && currentAttempt?.stage !== 'interrupted')
+        || interruptedAttempt?.stage !== 'interrupted'
+        || currentAttempts.has(candidate.attemptId)
+        || replacementAttempt?.stage !== 'started'
+        || replacementAttempt.caseId !== currentAttempt.caseId
+        || replacementAttempt.cohortId !== currentAttempt.cohortId
+        || replacementAttempt.attemptOrdinal !== currentAttempt.attemptOrdinal
+        || replacementAttempt.retryOrdinal !== currentAttempt.retryOrdinal + 1
+        || compareRfc3339Timestamps(
+          interruptedAttempt.interruptedAt.timestamp,
+          replacementAttempt.startedAt.timestamp,
+        ) > 0
+      ) {
+        throw new Error(
+          `Pending interpretation outcome for "${existing.rawFindingId}" may change owner only with an atomic started-to-interrupted retry handoff`,
+        );
+      }
+    }
+    if (
+      existing.kind === 'pending_attempt'
+      && candidate.kind !== 'pending_attempt'
+    ) {
+      const currentAttempt = currentAttempts.get(existing.attemptId);
+      const nextAttempt = nextAttempts.get(existing.attemptId);
+      const appliedCompletion = currentAttempt?.stage === 'completed'
+        && nextAttempt?.stage === 'applied';
+      const interruptedLanding = currentAttempt?.stage === 'started'
+        && isInterruptedLanding(nextAttempt, candidate);
+      if (!appliedCompletion && !interruptedLanding) {
+        throw new Error(
+          `Terminal interpretation outcome for "${existing.rawFindingId}" requires an applied completion or bounded interrupted landing in the same mutation`,
+        );
+      }
+    }
+  }
+
+  for (const existingAttempt of current.interpretationAttempts) {
+    if (existingAttempt.stage !== 'started') {
+      continue;
+    }
+    const candidateAttempt = nextAttempts.get(existingAttempt.attemptId);
+    if (candidateAttempt?.stage !== 'interrupted') {
+      continue;
+    }
+    for (const rawFindingId of existingAttempt.rawFindingIds) {
+      const currentOutcome = current.rawInterpretationOutcomes.find(
+        (outcome) => outcome.rawFindingId === rawFindingId,
+      );
+      const nextOutcome = nextOutcomes.get(rawFindingId);
+      if (isInterruptedLanding(candidateAttempt, nextOutcome)) {
+        continue;
+      }
+      if (
+        currentOutcome?.kind !== 'pending_attempt'
+        || currentOutcome.attemptId !== existingAttempt.attemptId
+        || nextOutcome?.kind !== 'pending_attempt'
+        || nextOutcome.attemptId === existingAttempt.attemptId
+      ) {
+        throw new Error(
+          `Interrupted interpretation attempt "${existingAttempt.attemptId}" requires every owned raw outcome to transfer atomically`,
+        );
+      }
+    }
+  }
+
+  for (const existingAttempt of current.interpretationAttempts) {
+    if (existingAttempt.stage !== 'completed') {
+      continue;
+    }
+    const candidateAttempt = nextAttempts.get(existingAttempt.attemptId);
+    if (candidateAttempt?.stage !== 'applied') {
+      continue;
+    }
+    for (const rawFindingId of existingAttempt.rawFindingIds) {
+      const currentOutcome = current.rawInterpretationOutcomes.find(
+        (outcome) => outcome.rawFindingId === rawFindingId,
+      );
+      const nextOutcome = nextOutcomes.get(rawFindingId);
+      if (
+        currentOutcome?.kind !== 'pending_attempt'
+        || currentOutcome.attemptId !== existingAttempt.attemptId
+        || nextOutcome === undefined
+        || nextOutcome.kind === 'pending_attempt'
+      ) {
+        throw new Error(
+          `Applied interpretation attempt "${existingAttempt.attemptId}" requires every owned pending outcome to become terminal in the same mutation`,
+        );
+      }
+    }
+  }
+}
+
 export type FindingLedgerPendingTransitionKind =
   | 'ordinary'
   | 'stage'
@@ -404,19 +853,29 @@ export function assertFindingLedgerAppendOnlyTransition(
     'eventId',
     'Lifecycle event',
   );
-  assertRegistryPrefix(
-    current.rawRecoveryAttempts,
-    next.rawRecoveryAttempts,
-    'attemptId',
-    'Raw recovery attempt',
-  );
-  assertRegistryPrefix(
-    current.rawRecoveryResults,
-    next.rawRecoveryResults,
-    'resultId',
-    'Raw recovery result',
-  );
+  assertContractRegistryTransitions(current, next);
   assertReviewerAnomalySettlementTransition(current, next);
+  next.interpretationAttempts
+    .slice(current.interpretationAttempts.length)
+    .forEach((attempt) => {
+      if (attempt.stage !== 'started') {
+        throw new Error(`New interpretation attempt "${attempt.attemptId}" must begin in started stage`);
+      }
+      for (const rawFindingId of attempt.rawFindingIds) {
+        const outcome = next.rawInterpretationOutcomes.find(
+          (candidate) => candidate.rawFindingId === rawFindingId,
+        );
+        if (
+          outcome?.kind !== 'pending_attempt'
+          || outcome.attemptId !== attempt.attemptId
+        ) {
+          throw new Error(
+            `New interpretation attempt "${attempt.attemptId}" must own every raw outcome`,
+          );
+        }
+      }
+    });
+  assertInterpretationCaseTransition(current, next);
 
   const pending = current.pendingManagerCommit;
   const nextPending = next.pendingManagerCommit;

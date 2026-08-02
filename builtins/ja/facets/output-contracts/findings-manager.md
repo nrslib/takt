@@ -93,13 +93,8 @@
 - `duplicateDecisions` は同一の根本問題である open finding のためのものです。重複が見つからなければ空配列にしてください。
 
 `dismissDecisions` のルール。
-- プロンプトが dismiss 候補として列挙した finding id（機械で確定できない open な暫定 finding）のみが対象です。リスト外への dismiss はエンジンが不採用にします。
-- `basis` は通常 `outside_contract_jurisdiction` または `unverifiable_claim` です。エンジンが control task に `terminal_adjudication` を明示した場合だけ `outside_task_scope`、`false_positive`、`overreach`、`no_issue_after_verification` も選べます。
-- `outside_task_scope` では、元の workflow task の非空 byte-exact substring を `taskQuote` に入れ、`reason` と分離します。この basis に自由文 `evidence` を返してはいけません。
-- その他の basis の `evidence` には現在のコードを確認した具体的根拠を入れます。沈黙や再報告されなかったことだけでは不十分です。
-- 懸念が実在しても元 task の範囲外なら `outside_task_scope` にできます。同一 task の後続観測は監査のみとし、別 task は独自の scope で評価します。
-- エンジンによる decision rejection、stale findingId、unsupported、decision 欠落そのものは dismiss の根拠にしないでください。raw の内容を評価し、実在するコード上の懸念なら open のまま残してください。
-- 候補が無い、またはすべて open のままにする場合は空配列にしてください。
+- 常に空配列にしてください。主張を持つ暫定 finding は、独立した verified terminal-adjudication 経路だけが dismiss できます。
+- manager 応答、証拠不足、沈黙、再報告されなかったこと、stale findingId、unsupported decision は dismiss 権限を与えません。
 
 解釈フェーズ（ambiguous な raw finding が存在するときの別呼び出し）:
 - エンジンは「Ambiguous raw finding interpretation」プロンプトであなたを呼ぶことがあります。そこでは ambiguous raw finding 1件につき1つの「提案」を `interpretations` で返します: `create_independent`、`same_with_proof`（プロンプトでエンジンが発行した proofId がある場合のみ）、`open_conflict`、`provisional` のいずれかです。

@@ -65,12 +65,8 @@ function provisionalTransitionRawFindingIds(
   command: FindingLifecycleCommand,
   findingId: string,
 ): string[] {
-  const sourceRawFindingIds = command.replayOriginAuthorities === undefined
-    ? command.evidenceSourcesByTarget
-        .get(`finding\0${findingId}`)?.sourceRawFindingIds ?? []
-    : command.replayOriginAuthorities.map(
-        (authority) => authority.replayRawFindingId,
-      );
+  const sourceRawFindingIds = command.evidenceSourcesByTarget
+    .get(`finding\0${findingId}`)?.sourceRawFindingIds ?? [];
   return [...new Set(sourceRawFindingIds)].sort(compareBinaryStrings);
 }
 
@@ -101,10 +97,6 @@ function findingClaimIdentitySet(
  */
 export function issueManagerLifecycleAuthority(input: {
   current: FindingLedger;
-  rawRecoveryCurrent: FindingLedger;
-  rawRecoveryManagerDecisionProposed: FindingLedger;
-  rawRecoveryManagerDecisionCommands: readonly FindingLifecycleCommand[];
-  rawRecoverySettlementCommands: readonly FindingLifecycleCommand[];
   managerDecisionProposed: FindingLedger;
   proposed: FindingLedger;
   managerDecisionCommands: readonly FindingLifecycleCommand[];
@@ -119,7 +111,6 @@ export function issueManagerLifecycleAuthority(input: {
 }): {
   ledger: FindingLedger;
   provisionalProofIdsByFinding: ReadonlyMap<string, readonly string[]>;
-  rawRecoveryProvisionalProofIdsByFinding: ReadonlyMap<string, readonly string[]>;
   invalidationProofIdsByFinding: ReadonlyMap<string, readonly string[]>;
   duplicateProofIdsByCommandKey: ReadonlyMap<
     string,
@@ -130,31 +121,14 @@ export function issueManagerLifecycleAuthority(input: {
     readonly string[]
   >;
   provisionalTransitionProofIdsByCommandKey: ReadonlyMap<string, readonly string[]>;
-  rawRecoveryManagerDecisionProvisionalTransitionProofIdsByCommandKey: ReadonlyMap<
-    string,
-    readonly string[]
-  >;
-  rawRecoveryProvisionalTransitionProofIdsByCommandKey: ReadonlyMap<
-    string,
-    readonly string[]
-  >;
   invalidationReasonsByFinding: ReadonlyMap<string, string>;
 } {
-  if (
-    input.rawRecoveryCurrent === undefined
-    || input.rawRecoveryManagerDecisionProposed === undefined
-    || input.rawRecoveryManagerDecisionCommands === undefined
-    || input.rawRecoverySettlementCommands === undefined
-    || input.settlementCommands === undefined
-  ) {
-    throw new Error(
-      'Lifecycle authority issuance requires complete normal and raw recovery command phases',
-    );
+  if (input.settlementCommands === undefined) {
+    throw new Error('Lifecycle authority issuance requires the settlement command phase');
   }
   const evidenceRecords = [...input.proposed.evidenceRecords];
   const proofIdsByFinding = new Map<string, string[]>();
   const provisionalProofIdsByFinding = new Map<string, string[]>();
-  const rawRecoveryProvisionalProofIdsByFinding = new Map<string, string[]>();
   const invalidationProofIdsByFinding = new Map<string, string[]>();
   const duplicateProofIdsByCommandKey = new Map<
     string,
@@ -165,14 +139,6 @@ export function issueManagerLifecycleAuthority(input: {
     string[]
   >();
   const provisionalTransitionProofIdsByCommandKey = new Map<string, string[]>();
-  const rawRecoveryManagerDecisionProvisionalTransitionProofIdsByCommandKey = new Map<
-    string,
-    string[]
-  >();
-  const rawRecoveryProvisionalTransitionProofIdsByCommandKey = new Map<
-    string,
-    string[]
-  >();
   const addProof = (
     findingId: string,
     subject: LifecycleAuthoritySubject,
@@ -261,54 +227,6 @@ export function issueManagerLifecycleAuthority(input: {
       finding.id,
       [...(provisionalProofIdsByFinding.get(finding.id) ?? []), proofId],
     );
-  }
-
-  if (
-    input.rawRecoveryCurrent !== undefined
-    && input.rawRecoveryManagerDecisionProposed !== undefined
-  ) {
-    for (const proposal of input.rawRecoveryManagerDecisionProposed.findings) {
-      const finding = FindingLedgerEntrySchema.parse(proposal);
-      const current = input.rawRecoveryCurrent.findings.find(
-        (candidate) => candidate.id === finding.id,
-      );
-      if (
-        finding.provisional === undefined
-        || finding.status !== 'open'
-        || !(input.rawRecoveryManagerDecisionCommands ?? []).some((command) => (
-          command.operation === 'update_provisional'
-          && command.changes.findings.some((candidate) => candidate.id === finding.id)
-        ))
-        || (
-          current !== undefined
-          && canonicalJson(JSON.parse(JSON.stringify(current)))
-            === canonicalJson(JSON.parse(JSON.stringify(finding)))
-        )
-      ) {
-        continue;
-      }
-      const proofId = addProof(
-        finding.id,
-        {
-          kind: 'finding_provisional_isolation',
-          findingId: finding.id,
-          provisionalKind: finding.provisional.kind,
-          stableKey: finding.provisional.stableKey,
-        },
-        {
-          findingId: finding.id,
-          provisionalKind: finding.provisional.kind,
-          sourceRawFindingIds: finding.provisional.sourceRawFindingIds,
-          isolated: true,
-        },
-        finding,
-        input.rawRecoveryCurrent,
-      );
-      rawRecoveryProvisionalProofIdsByFinding.set(
-        finding.id,
-        [...(rawRecoveryProvisionalProofIdsByFinding.get(finding.id) ?? []), proofId],
-      );
-    }
   }
 
   const invalidCandidates = computeInvalidLocationCandidates(input.cwd, input.current);
@@ -458,11 +376,6 @@ export function issueManagerLifecycleAuthority(input: {
         operation: command.operation,
         findingId: change.id,
         transitionRawFindings,
-        ...(command.replayOriginAuthorities === undefined
-          ? {}
-          : {
-              replayOriginAuthorities: command.replayOriginAuthorities,
-            }),
         product,
         workflowName: input.workflowName,
         runId: input.runId,
@@ -482,90 +395,20 @@ export function issueManagerLifecycleAuthority(input: {
       phase.proofIdsByCommandKey.set(commandKey, [proof.evidenceId]);
     }
   };
-  if (
-    input.rawRecoveryCurrent !== undefined
-    && input.rawRecoveryManagerDecisionProposed !== undefined
-  ) {
-    issueTransitionProofs({
-      observationLedger: input.rawRecoveryCurrent,
-      intermediateLedger: input.rawRecoveryCurrent,
-      commands: input.rawRecoveryManagerDecisionCommands ?? [],
-      proofIdsByCommandKey:
-        rawRecoveryManagerDecisionProvisionalTransitionProofIdsByCommandKey,
-    });
-    issueTransitionProofs({
-      observationLedger: input.rawRecoveryCurrent,
-      intermediateLedger: input.rawRecoveryManagerDecisionProposed,
-      commands: input.rawRecoverySettlementCommands ?? [],
-      proofIdsByCommandKey: rawRecoveryProvisionalTransitionProofIdsByCommandKey,
-      priorProofIdsByFinding: rawRecoveryProvisionalProofIdsByFinding,
-    });
-  }
-  const rawRecoveryProofIdsByFinding = new Map<string, string[]>();
-  const collectRawRecoveryProofIds = (proofIds: readonly string[]): void => {
-    for (const proofId of proofIds) {
-      const record = evidenceRecords.find(
-        (candidate) => candidate.evidenceId === proofId,
-      );
-      if (
-        record?.kind !== 'engine_proof'
-        || record.targetFindingId === null
-      ) {
-        throw new Error(`Raw recovery lifecycle proof "${proofId}" has no finding target`);
-      }
-      rawRecoveryProofIdsByFinding.set(
-        record.targetFindingId,
-        [
-          ...(rawRecoveryProofIdsByFinding.get(record.targetFindingId) ?? []),
-          proofId,
-        ],
-      );
-    }
-  };
-  collectRawRecoveryProofIds(
-    [...rawRecoveryProvisionalProofIdsByFinding.values()].flat(),
-  );
-  collectRawRecoveryProofIds(
-    [...rawRecoveryManagerDecisionProvisionalTransitionProofIdsByCommandKey.values()]
-      .flat(),
-  );
-  collectRawRecoveryProofIds(
-    [...rawRecoveryProvisionalTransitionProofIdsByCommandKey.values()].flat(),
-  );
   issueTransitionProofs({
     observationLedger: input.current,
     intermediateLedger: input.current,
     commands: input.managerDecisionCommands,
     proofIdsByCommandKey: managerDecisionProvisionalTransitionProofIdsByCommandKey,
-    priorProofIdsByFinding: rawRecoveryProofIdsByFinding,
+    priorProofIdsByFinding: provisionalProofIdsByFinding,
   });
-  const settlementPriorProofIdsByFinding = new Map<string, string[]>();
-  for (const findingId of new Set([
-    ...rawRecoveryProofIdsByFinding.keys(),
-    ...provisionalProofIdsByFinding.keys(),
-  ])) {
-    settlementPriorProofIdsByFinding.set(
-      findingId,
-      [
-        ...(rawRecoveryProofIdsByFinding.get(findingId) ?? []),
-        ...(provisionalProofIdsByFinding.get(findingId) ?? []),
-      ].sort(compareBinaryStrings),
-    );
-  }
   issueTransitionProofs({
     observationLedger: input.current,
     intermediateLedger: input.managerDecisionProposed,
     commands: input.settlementCommands ?? [],
     proofIdsByCommandKey: provisionalTransitionProofIdsByCommandKey,
-    priorProofIdsByFinding: settlementPriorProofIdsByFinding,
+    priorProofIdsByFinding: provisionalProofIdsByFinding,
   });
-
-  const rawRecoveryProofIds = new Set([
-    ...[...rawRecoveryProvisionalProofIdsByFinding.values()].flat(),
-    ...[...rawRecoveryManagerDecisionProvisionalTransitionProofIdsByCommandKey.values()]
-      .flat(),
-    ...[...rawRecoveryProvisionalTransitionProofIdsByCommandKey.values()].flat(),
-  ]);
   return {
     ledger: {
       ...input.proposed,
@@ -580,8 +423,6 @@ export function issueManagerLifecycleAuthority(input: {
           (candidate) => candidate.id === finding.id,
         )?.revision;
         const hasRevisionAdvancingProof = proofIds.some((proofId) => (
-          !rawRecoveryProofIds.has(proofId)
-          &&
           evidenceRecords.some((record) => (
             record.evidenceId === proofId
             && (
@@ -604,13 +445,10 @@ export function issueManagerLifecycleAuthority(input: {
       }),
     },
     provisionalProofIdsByFinding,
-    rawRecoveryProvisionalProofIdsByFinding,
     invalidationProofIdsByFinding,
     duplicateProofIdsByCommandKey,
     managerDecisionProvisionalTransitionProofIdsByCommandKey,
     provisionalTransitionProofIdsByCommandKey,
-    rawRecoveryManagerDecisionProvisionalTransitionProofIdsByCommandKey,
-    rawRecoveryProvisionalTransitionProofIdsByCommandKey,
     invalidationReasonsByFinding,
   };
 }

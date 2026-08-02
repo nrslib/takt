@@ -162,8 +162,9 @@ export function computeCanonicalLineageKey(input: {
 }
 
 /**
- * raw の evidence hash。行番号・rawFindingId・runId は含めない（それらだけを
- * 変えた再発は「同一 evidence」= manager を再呼び出さない）。
+ * raw の evidence hash。行番号・rawFindingId・runId は含めず、証拠集合としての
+ * 同一性だけを表す。WAL は同じ解釈 cohort 内の raw へ決定的な slot を割り当て、
+ * 同時に現れた別 raw の attempt だけを分離する。
  * description 等の実質変更は hash を変え、再解釈候補になる（ただし epoch 上限
  * MAX 2 / lineage は raw-finding-limits.ts が別途強制する）。
  */
@@ -202,12 +203,61 @@ export function computeOverflowStableKey(reviewerStableKey: string): string {
   return sha256Of(reviewerStableKey, 'reviewer-output-overflow');
 }
 
-export function computeBaseInterpretationKey(input: {
+export function computeInterpretationCohortKey(input: {
   reviewerStableKey: string;
   lineageKey: string;
   candidateEvidenceHash: string;
 }): string {
-  return sha256Of('interpretation-base-key', input.reviewerStableKey, input.lineageKey, input.candidateEvidenceHash);
+  return sha256Of(
+    'interpretation-cohort-key',
+    input.reviewerStableKey,
+    input.lineageKey,
+    input.candidateEvidenceHash,
+  );
+}
+
+export function computeBaseInterpretationKey(input: {
+  reviewerStableKey: string;
+  lineageKey: string;
+  candidateEvidenceHash: string;
+  interpretationIdentitySlot: number;
+}): string {
+  if (!Number.isSafeInteger(input.interpretationIdentitySlot)
+    || input.interpretationIdentitySlot < 0) {
+    throw new Error('Interpretation identity slot must be a non-negative safe integer');
+  }
+  return sha256Of(
+    'interpretation-base-key',
+    computeInterpretationCohortKey(input),
+    String(input.interpretationIdentitySlot),
+  );
+}
+
+/**
+ * 通常の cohort slot がまだ発行されていない recovery failure 用 identity。
+ * raw id を専用 namespace の base key へ束縛するため、通常 slot 0 や別 raw の
+ * recovery base とは衝突しない。この raw-bound lane 内の slot は常に 0 である。
+ */
+export function computeRecoveryInterpretationIdentity(input: {
+  reviewerStableKey: string;
+  lineageKey: string;
+  candidateEvidenceHash: string;
+  sourceRawFindingId: string;
+}): {
+  baseInterpretationKey: string;
+  interpretationIdentitySlot: 0;
+} {
+  if (input.sourceRawFindingId.length === 0) {
+    throw new Error('Recovery interpretation source raw finding id must not be empty');
+  }
+  return {
+    baseInterpretationKey: sha256Of(
+      'interpretation-recovery-base-key',
+      computeInterpretationCohortKey(input),
+      input.sourceRawFindingId,
+    ),
+    interpretationIdentitySlot: 0,
+  };
 }
 
 export function computeInterpretationAttemptKey(

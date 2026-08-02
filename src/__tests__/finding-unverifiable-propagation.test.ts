@@ -67,7 +67,6 @@ function makeLedger(): FindingLedger {
       firstSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-17T00:00:00.000Z' },
       lastSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-17T00:00:00.000Z' },
     }],
-    interpretations: [],
     ...emptyFindingAuthorityProjection(),
   });
 }
@@ -166,6 +165,7 @@ describe('unverifiable propagation', () => {
       claimIdentityHash: '3'.repeat(64),
       sourceRawFindingId: null,
       sourceRawIntegrityDigest: null,
+      contributionOrigin: { kind: 'external' },
       operation: 'apply_conflict_adjudication',
       target,
     });

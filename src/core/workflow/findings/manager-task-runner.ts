@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { AgentResponse, AgentWorkflowStep, FindingContractConfig } from '../../models/types.js';
 import { normalizeFindingText } from '../../models/finding-claim-identity.js';
+import { createEmptyFindingContractRegistries } from '../../models/finding-contract-seed.js';
 import { canonicalJson } from '../../../shared/utils/canonical-json.js';
 import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
 import {
@@ -1028,8 +1029,8 @@ function buildControlTaskInstruction(input: {
   const dismissalAuthorityInstruction = !hasDismissIntent
     ? []
     : input.task.taskScopeContext !== undefined
-      ? ['For dismiss intents, outside_task_scope is authorized only when taskQuote is a non-empty byte-exact quote from the Original workflow task. outside_contract_jurisdiction and unverifiable_claim retain their existing meanings. You may additionally use false_positive, overreach, or no_issue_after_verification after directly checking the current code. Non-task-scope dismissals require concrete current-code evidence; silence or non-repetition is never sufficient.']
-      : ['For dismiss intents, only outside_contract_jurisdiction or unverifiable_claim are allowed. outside_task_scope, false_positive, overreach, and no_issue_after_verification are not authorized in this task.'];
+      ? ['Dismissal is applied only through verified terminal adjudication. Return no_action here and leave the claim open.']
+      : ['Dismissal is not authorized in this control task. Return no_action and leave the claim open.'];
   const taskScopeContext = input.task.taskScopeContext;
   return [
     input.contract.manager.instruction,
@@ -1323,6 +1324,7 @@ function assertFixedPrefixFits(input: {
   stepExecutor: RunFindingManagerForStepInput['stepExecutor'];
 }): void {
   const emptyTask = createRawTask({
+    ...createEmptyFindingContractRegistries(),
     workflowName: '__manager-prefix-check__',
     nextId: 1,
     updatedAt: '1970-01-01T00:00:00.000Z',
@@ -1331,11 +1333,8 @@ function assertFixedPrefixFits(input: {
     evidenceBindings: [],
     lifecycleReservations: [],
     lifecycleEvents: [],
-    rawRecoveryAttempts: [],
-    rawRecoveryResults: [],
     rawFindings: [],
     conflicts: [],
-    interpretations: [],
   }, [], new Map(), []);
   const instruction = buildRawTaskInstruction({
     contract: input.contract,
@@ -1343,6 +1342,7 @@ function assertFixedPrefixFits(input: {
     rawFindings: [],
     context: rawTaskContext(
       {
+        ...createEmptyFindingContractRegistries(),
         workflowName: '__manager-prefix-check__',
         nextId: 1,
         updatedAt: '1970-01-01T00:00:00.000Z',
@@ -1351,11 +1351,8 @@ function assertFixedPrefixFits(input: {
         evidenceBindings: [],
         lifecycleReservations: [],
         lifecycleEvents: [],
-        rawRecoveryAttempts: [],
-        rawRecoveryResults: [],
         rawFindings: [],
         conflicts: [],
-        interpretations: [],
       },
       [],
       0,

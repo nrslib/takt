@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { canonicalJson } from '../../shared/utils/canonical-json.js';
 import {
   captureFindingMutationPrecondition,
@@ -218,39 +217,15 @@ function hasVerifiedResolutionEvidence(input: {
   });
 }
 
-function dismissalDecision(finding: FindingLedgerEntry): unknown {
-  const dismissal = finding.dismissal;
-  if (dismissal === undefined) {
-    return undefined;
-  }
-  return {
-    findingId: finding.id,
-    basis: dismissal.basis,
-    reason: dismissal.reason,
-    ...(dismissal.evidence !== undefined ? { evidence: dismissal.evidence } : {}),
-    ...(dismissal.taskQuote !== undefined ? { taskQuote: dismissal.taskQuote } : {}),
-    ...(dismissal.workflowTaskDigest !== undefined
-      ? { workflowTaskDigest: dismissal.workflowTaskDigest }
-      : {}),
-    ...(dismissal.adjudicationTaskId !== undefined
-      ? { adjudicationTaskId: dismissal.adjudicationTaskId }
-      : {}),
-    authority: dismissal.authority,
-  };
-}
-
 function hasTerminalDismissalAuthority(input: {
   finding: FindingLedgerEntry;
-  event: FindingLifecycleEvent;
   reservation: FindingLifecycleReservation;
   workflowTaskDigest: string | null;
 }): boolean {
   const dismissal = input.finding.dismissal;
   if (
     dismissal?.authority !== 'terminal_adjudication'
-    || input.reservation.authority.kind !== 'engine_policy'
-    || input.reservation.authority.decisionKind !== 'dismiss'
-    || input.event.evidenceBindingIds.length !== 0
+    || input.reservation.authority.kind !== 'verified_terminal_adjudication'
   ) {
     return false;
   }
@@ -260,6 +235,7 @@ function hasTerminalDismissalAuthority(input: {
       dismissal.taskQuote === undefined
       || dismissal.workflowTaskDigest === undefined
       || dismissal.adjudicationTaskId === undefined
+      || dismissal.adjudicationTaskId !== input.reservation.authority.attemptId
       || (
         input.workflowTaskDigest !== null
         && dismissal.workflowTaskDigest !== input.workflowTaskDigest
@@ -268,9 +244,7 @@ function hasTerminalDismissalAuthority(input: {
   ) {
     return false;
   }
-  return input.reservation.authority.decisionDigest === createHash('sha256')
-    .update(canonicalJson(dismissalDecision(input.finding)))
-    .digest('hex');
+  return true;
 }
 
 export function reviewerAnomalySettlementEligibilityViolation(input: {
@@ -340,7 +314,6 @@ export function reviewerAnomalySettlementEligibilityViolation(input: {
     )
     && hasTerminalDismissalAuthority({
       finding,
-      event,
       reservation,
       workflowTaskDigest: input.workflowTaskDigest,
     })

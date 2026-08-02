@@ -141,7 +141,6 @@ function makeLedger(): FindingLedger {
       },
     ],
     conflicts: [],
-    interpretations: [],
     reviewerAnomalies: [],
   };
 }

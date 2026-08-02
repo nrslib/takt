@@ -224,11 +224,8 @@ describe('workflow execution bundle', () => {
       evidenceBindings: [],
       lifecycleReservations: [],
       lifecycleEvents: [],
-      rawRecoveryAttempts: [],
-      rawRecoveryResults: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
     }));
     findingDatabase.close();
     const metaBefore = readFileSync(paths.metaAbs, 'utf-8');

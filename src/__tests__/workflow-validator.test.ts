@@ -17,7 +17,6 @@ function createFakeLedgerStore(): FindingLedgerStore {
       findings: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
     }),
     updateLedger: (mutator) => Promise.resolve(mutator({
       workflowName: 'fake',
@@ -26,7 +25,6 @@ function createFakeLedgerStore(): FindingLedgerStore {
       findings: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
     })),
     saveLedgerSnapshot: () => {},
     saveRawFindings: () => {},

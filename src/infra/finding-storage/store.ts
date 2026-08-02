@@ -14,7 +14,6 @@ import {
   normalizePendingManagerCommitStage,
 } from '../../core/workflow/findings/ledger-mutation.js';
 import { processInterpretationLiveClaims } from '../../core/workflow/findings/interpretation-live-claims.js';
-import { processAdjudicationLiveClaims } from '../../core/workflow/findings/adjudication-live-claims.js';
 import type {
   FindingManagerReportPublication,
   FindingManagerPendingCommit,
@@ -86,7 +85,6 @@ export class SqliteFindingLedgerStore implements FindingLedgerStore {
   readonly runId: string;
   readonly ledgerIdentity: string;
   readonly interpretationLiveClaims = processInterpretationLiveClaims;
-  readonly adjudicationLiveClaims = processAdjudicationLiveClaims;
   workflowName: string;
   readonly #authorityKey: string;
   readonly #repository: FindingAuthorityRepository;
@@ -270,12 +268,6 @@ export class SqliteFindingLedgerStore implements FindingLedgerStore {
         return mutation.result;
       },
     );
-  }
-
-  saveConflictAdjudicationReport(
-    report: Parameters<FindingLedgerStore['saveConflictAdjudicationReport']>[0],
-  ): void {
-    this.#artifacts.saveConflictAdjudicationReport(report);
   }
 
   #assertPendingPublication(

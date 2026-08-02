@@ -51,7 +51,6 @@ describe('Finding manager publication contract double', () => {
       evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
       ...emptyFindingAuthorityProjection(),
     });
     const publicationDouble = createFindingManagerPublicationDouble((current) => {
@@ -118,7 +117,6 @@ describe('Finding manager publication contract double', () => {
       evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
       ...emptyFindingAuthorityProjection(),
     });
     const publicationDouble = createFindingManagerPublicationDouble(
@@ -141,7 +139,6 @@ describe('Finding manager publication contract double', () => {
       evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
       ...emptyFindingAuthorityProjection(),
     });
     const publicationDouble = createFindingManagerPublicationDouble(
@@ -164,7 +161,6 @@ describe('Finding manager publication contract double', () => {
       evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
       ...emptyFindingAuthorityProjection(),
     } satisfies FindingLedger;
     const first = createFindingManagerPublicationDouble(
@@ -211,7 +207,6 @@ describe('Finding manager publication contract double', () => {
       evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
       ...emptyFindingAuthorityProjection(),
     };
     const repository = new RevisionedFindingLedgerTestRepository(initial);
@@ -281,7 +276,6 @@ describe('Finding manager publication contract double', () => {
       evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
       ...emptyFindingAuthorityProjection(),
     };
     const repository = new RevisionedFindingLedgerTestRepository(initial);
@@ -354,7 +348,6 @@ describe('Finding manager publication contract double', () => {
       evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
       ...emptyFindingAuthorityProjection(),
     };
     const repository = new RevisionedFindingLedgerTestRepository(initial);
@@ -380,7 +373,6 @@ describe('Finding manager publication contract double', () => {
       evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
       ...emptyFindingAuthorityProjection(),
       stopBudget: {
         roundMarkers: ['z-round'],
@@ -427,7 +419,6 @@ describe('Finding manager publication contract double', () => {
       evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
       ...emptyFindingAuthorityProjection(),
     });
     const publicationDouble = createFindingManagerPublicationDouble(
@@ -455,7 +446,6 @@ describe('Finding manager publication contract double', () => {
       evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
       ...emptyFindingAuthorityProjection(),
     };
     const repository = new RevisionedFindingLedgerTestRepository(initial);
@@ -485,7 +475,6 @@ describe('Finding manager publication contract double', () => {
       evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
       ...emptyFindingAuthorityProjection(),
     };
     const repository = new RevisionedFindingLedgerTestRepository(initial);

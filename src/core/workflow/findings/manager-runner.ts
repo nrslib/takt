@@ -10,7 +10,6 @@ import type {
 } from './manager-contracts.js';
 import { runManagerDecisionStage } from './manager-decision.js';
 import { prepareFindingManagerRound } from './manager-preparation.js';
-import { retainInterpretationRecoveryForLadder } from './interpretation-recovery.js';
 import { captureReviewScopeProofSnapshot } from './snapshot.js';
 import { computeRoundMarker } from './round-marker.js';
 import { runManagerRoundExclusive } from './manager-round-lock.js';
@@ -90,7 +89,7 @@ export async function runFindingManagerForStep(
       runInput: input,
     });
     const intake = entityBinding.intake;
-    const admission = retainInterpretationRecoveryForLadder(evaluateRawAdmission({
+    const admission = evaluateRawAdmission({
       cwd: input.cwd,
       reviewScopeSnapshotId,
       runId: input.ledgerStore.runId,
@@ -99,7 +98,7 @@ export async function runFindingManagerForStep(
       intake,
       reviewScopeSnapshot,
       workflowTask: input.workflowTask,
-    }), intake);
+    });
     const managerDecision = await runManagerDecisionStage({
       input,
       previousLedger: prepared.previousLedger,
@@ -115,7 +114,6 @@ export async function runFindingManagerForStep(
       input,
       previousLedger: prepared.previousLedger,
       intake,
-      interpretationRecoveryFailures: prepared.interpretationRecoveryFailures,
       admission,
       managerDecision,
       observation: prepared.observation,
@@ -137,8 +135,8 @@ export async function runFindingManagerForStep(
     log.info('Finding contract intake completed', {
       step: input.parentStep.name,
       rawFindings: prepared.intake.items.length,
-      ambiguous: managerDecision.ladder.stats.ambiguousRawCount,
-      managerCalls: managerDecision.ladder.stats.managerCalls,
+      ambiguous: managerDecision.interpretation.stats.ambiguousRawCount,
+      managerCalls: managerDecision.interpretation.stats.managerCalls,
       provisionalLandings: committed.provisionalLandingCount,
       reviewerAnomalyLandings: committed.reviewerAnomalyLandingCount,
       overflowReviewers: prepared.intake.overflowReports.length,

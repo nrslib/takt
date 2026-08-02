@@ -79,7 +79,6 @@ export function verifiedFindingEvidenceFixture(input: {
       evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
     }),
     proofVerifiers: createEngineProofVerifierRegistry([]),
     proofContext: {

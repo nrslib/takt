@@ -10,17 +10,18 @@ import type {
   FindingRecord,
   FindingSeverity,
   CanonicalRawFindingProvenance,
-  RawFindingDisposition,
   RawFinding,
 } from './types.js';
-import { RAW_FINDING_DISPOSITION_OUTCOMES } from './types.js';
 import { assertFindingLedgerProjectionInvariant } from '../../models/finding-ledger-invariants.js';
 import {
   validateFindingManagerOutput,
   validateManagerActionRecoveryOutput,
 } from './manager-output-validation.js';
-import { countInterpretationEpochs } from './interpretation-wal.js';
 import { formatConflictId } from '../../models/finding-conflict-identity.js';
+import {
+  computeConflictRawClaimLandingId,
+  computeRawPayloadDigest,
+} from '../../models/finding-contract-identity.js';
 import { stopBudgetRoundsCompleted } from './stop-budget.js';
 import {
   foldFindingObservation,
@@ -33,9 +34,9 @@ import {
   compareCanonicalJsonValues,
 } from '../../../shared/utils/canonical-json.js';
 import {
-  verifyOpenConflictOutcomeAuthority,
-  type OpenConflictOutcomeAuthority,
-} from './raw-capabilities.js';
+  verifyInterpretationCaseConflictAuthority,
+  type InterpretationCaseConflictAuthority,
+} from './interpretation-case-authority.js';
 import {
   absenceRawFindings,
   authorityAnchorAdjudications,
@@ -93,6 +94,7 @@ export interface ProvisionalFindingSpec {
   semanticClaimIdentityHash?: string;
   recoveryReviewerStableKey?: string;
   actionRecovery?: FindingProvisionalMetadata['actionRecovery'];
+  landingAuthority?: import('../../models/finding-contract-types.js').InterpretationUnreservedLandingAuthority;
 }
 
 export interface CanonicalRawReconcileProvenance {
@@ -101,7 +103,7 @@ export interface CanonicalRawReconcileProvenance {
   claimIdentityHash: string;
   canonicalIntegrityDigest: string;
   canonicalProvenance: CanonicalRawFindingProvenance;
-  openConflictOutcomeAuthority?: OpenConflictOutcomeAuthority;
+  interpretationCaseConflictAuthority?: InterpretationCaseConflictAuthority;
 }
 
 interface ReconcileFindingLedgerInput {
@@ -113,7 +115,6 @@ interface ReconcileFindingLedgerInput {
   provisionalFindings: ProvisionalFindingSpec[];
   entityProvisionalMutations: PreAdmissionEntityProvisionalMutation[];
   terminalEntityAttachmentFindingIds: ReadonlySet<string>;
-  rawFindingDispositions: readonly RawFindingDisposition[];
   rawProvenanceByRawFindingId: ReadonlyMap<string, CanonicalRawReconcileProvenance>;
   verifiedEvidenceRecordsByRawFindingId: ReadonlyMap<
     string,
@@ -160,12 +161,6 @@ function formatFindingId(nextId: number): string {
 function assertKnownFinding(findingIds: Set<string>, findingId: string): void {
   if (!findingIds.has(findingId)) {
     throw new Error(`Unknown finding id "${findingId}"`);
-  }
-}
-
-function assertKnownConflict(conflictsById: ReadonlyMap<string, FindingLedgerConflict>, conflictId: string): void {
-  if (!conflictsById.has(conflictId)) {
-    throw new Error(`Unknown conflict id "${conflictId}"`);
   }
 }
 
@@ -391,7 +386,6 @@ function withoutConflictResolutionFields(
     description: conflict.description,
     firstSeen: conflict.firstSeen,
     lastSeen: conflict.lastSeen,
-    ...(conflict.adjudications !== undefined ? { adjudications: conflict.adjudications } : {}),
     revision: conflict.revision,
   };
 }
@@ -434,7 +428,7 @@ function conflictLifecycleRawFindingIds(input: {
   return evidenceRawFindingIds;
 }
 
-function reconcileLedgerConflicts(input: {
+export function reconcileLedgerConflicts(input: {
   previousLedger: FindingLedger;
   managerOutput: FindingManagerOutput;
   knownFindingIds: Set<string>;
@@ -449,6 +443,40 @@ function reconcileLedgerConflicts(input: {
   const conflictsById = new Map(input.previousLedger.conflicts.map((conflict) => [conflict.id, { ...conflict }]));
   const currentRawFindingIds = new Set(input.rawFindings.map((rawFinding) => rawFinding.rawFindingId));
   const lifecycleCommands: FindingLifecycleCommand[] = [];
+  const verifyExistingRawOwner = (
+    conflictId: string,
+    rawFindingId: string,
+  ): void => {
+    const stored = input.previousLedger.rawFindings.filter(
+      (rawFinding) => rawFinding.rawFindingId === rawFindingId,
+    );
+    const observed = input.rawFindings.filter(
+      (rawFinding) => rawFinding.rawFindingId === rawFindingId,
+    );
+    const snapshots = input.previousLedger.rawCanonicalSnapshots.filter(
+      (snapshot) => snapshot.rawFindingId === rawFindingId,
+    );
+    const owners = input.previousLedger.conflictRawClaimLandings.filter(
+      (landing) => landing.rawFindingId === rawFindingId,
+    );
+    if (stored.length !== 1 || observed.length !== 1 || snapshots.length !== 1 || owners.length !== 1) {
+      throw new Error(`Existing conflict raw "${rawFindingId}" does not have exact persisted ownership`);
+    }
+    const storedDigest = computeRawPayloadDigest(stored[0]!);
+    const observedDigest = computeRawPayloadDigest(observed[0]!);
+    const snapshot = snapshots[0]!;
+    const owner = owners[0]!;
+    if (
+      storedDigest !== observedDigest
+      || snapshot.rawPayloadDigest !== storedDigest
+      || owner.conflictId !== conflictId
+      || owner.rawCanonicalSnapshotId !== snapshot.rawCanonicalSnapshotId
+      || owner.rawPayloadDigest !== snapshot.rawPayloadDigest
+      || owner.rawClaimLandingId !== computeConflictRawClaimLandingId(owner)
+    ) {
+      throw new Error(`Existing conflict raw "${rawFindingId}" has stale payload or owner identity`);
+    }
+  };
   const appendCommand = (
     operation: 'create_conflict' | 'observe_conflict' | 'resolve_conflict',
     conflict: FindingLedgerConflict,
@@ -471,32 +499,8 @@ function reconcileLedgerConflicts(input: {
     });
   };
 
-  for (const resolvedConflict of input.managerOutput.resolvedConflicts) {
-    assertKnownConflict(conflictsById, resolvedConflict.conflictId);
-    const conflict = conflictsById.get(resolvedConflict.conflictId)!;
-    if (conflict.status !== 'active') {
-      throw new Error(`Cannot resolve conflict "${conflict.id}" because it is not active`);
-    }
-    const updated: FindingLedgerConflict = {
-      ...conflict,
-      status: 'resolved',
-      resolvedAt: input.context.timestamp,
-      resolvedEvidence: resolvedConflict.evidence,
-      revision: conflict.revision + 1,
-    };
-    conflictsById.set(conflict.id, updated);
-    appendCommand(
-      'resolve_conflict',
-      updated,
-      {
-        kind: 'engine_policy',
-        decisionKind: 'resolve_conflict',
-        decisionDigest: createHash('sha256')
-          .update(canonicalJson(resolvedConflict))
-          .digest('hex'),
-      },
-      [],
-    );
+  if (input.managerOutput.resolvedConflicts.length > 0) {
+    throw new Error('Manager conflict resolution requires verified conflict adjudication');
   }
 
   for (const conflict of input.managerOutput.conflicts) {
@@ -522,6 +526,17 @@ function reconcileLedgerConflicts(input: {
 
     const conflictId = formatConflictId(conflict);
     const existing = conflictsById.get(conflictId);
+    const newRawFindingIds = existing === undefined
+      ? lifecycleRawFindingIds
+      : lifecycleRawFindingIds.filter((rawFindingId) => (
+          !existing.rawFindingIds.includes(rawFindingId)
+        ));
+    if (existing !== undefined && newRawFindingIds.length === 0) {
+      for (const rawFindingId of lifecycleRawFindingIds) {
+        verifyExistingRawOwner(existing.id, rawFindingId);
+      }
+      continue;
+    }
     const base = existing !== undefined
       ? withoutConflictResolutionFields(existing)
       : {
@@ -538,7 +553,7 @@ function reconcileLedgerConflicts(input: {
     const updated: FindingLedgerConflict = {
       ...base,
       status: 'active',
-      rawFindingIds: mergeBinarySortedUniqueStrings(base.rawFindingIds, lifecycleRawFindingIds),
+      rawFindingIds: mergeBinarySortedUniqueStrings(base.rawFindingIds, newRawFindingIds),
       description: conflict.description,
       lastSeen: observationFromContext(input.context),
       revision: existing === undefined ? 1 : existing.revision + 1,
@@ -553,7 +568,7 @@ function reconcileLedgerConflicts(input: {
         rawFindings: input.rawFindings,
         adjudications: input.managerOutput.anchorAdjudications,
       }),
-      lifecycleRawFindingIds,
+      newRawFindingIds,
     );
   }
 
@@ -623,7 +638,6 @@ export function reconcileManagerActionRecovery(input: Pick<
       provisionalFindings: [],
       entityProvisionalMutations: [],
       terminalEntityAttachmentFindingIds: new Set(),
-      rawFindingDispositions: [],
       rawProvenanceByRawFindingId: new Map(),
       verifiedEvidenceRecordsByRawFindingId: new Map(),
     },
@@ -642,9 +656,6 @@ function assertCanonicalReconcileInput(input: ReconcileFindingLedgerInput): void
     throw new Error(
       'Reconciler input terminalEntityAttachmentFindingIds must be an explicit Set',
     );
-  }
-  if (!Array.isArray(input.rawFindingDispositions)) {
-    throw new Error('Reconciler input rawFindingDispositions must be an explicit array');
   }
   if (!(input.rawProvenanceByRawFindingId instanceof Map)) {
     throw new Error('Reconciler input rawProvenanceByRawFindingId must be an explicit Map');
@@ -668,23 +679,6 @@ function assertCanonicalReconcileInput(input: ReconcileFindingLedgerInput): void
     }
   }
   assertVerifiedEvidenceBindings(input);
-  const knownRawFindingIds = new Set(input.rawFindings.map((rawFinding) => rawFinding.rawFindingId));
-  const dispositionRawFindingIds = new Set<string>();
-  for (const disposition of input.rawFindingDispositions) {
-    if (!knownRawFindingIds.has(disposition.rawFindingId)) {
-      throw new Error(`Raw finding disposition references unknown raw finding "${disposition.rawFindingId}"`);
-    }
-    if (dispositionRawFindingIds.has(disposition.rawFindingId)) {
-      throw new Error(`Raw finding "${disposition.rawFindingId}" has multiple dispositions`);
-    }
-    if (!RAW_FINDING_DISPOSITION_OUTCOMES.includes(disposition.outcome)) {
-      throw new Error(`Raw finding disposition has unknown outcome "${disposition.outcome}"`);
-    }
-    if (disposition.reason.trim().length === 0) {
-      throw new Error(`Raw finding disposition "${disposition.rawFindingId}" must include a reason`);
-    }
-    dispositionRawFindingIds.add(disposition.rawFindingId);
-  }
 }
 
 function assertVerifiedEvidenceBindings(input: ReconcileFindingLedgerInput): void {
@@ -766,7 +760,6 @@ interface RawOutcomeCounts {
   finding: number;
   conflict: number;
   provisionalKinds: FindingProvisionalKind[];
-  disposition: number;
 }
 
 function assertAuthorizedConflictProvisionalOutcome(input: {
@@ -783,29 +776,23 @@ function assertAuthorizedConflictProvisionalOutcome(input: {
     raw.rawFindingId === input.rawFindingId
   ));
   const provenance = input.reconcileInput.rawProvenanceByRawFindingId.get(input.rawFindingId);
-  const authority = provenance?.openConflictOutcomeAuthority;
+  const caseAuthority = provenance?.interpretationCaseConflictAuthority;
   if (
     rawFinding === undefined
     || provenance === undefined
-    || authority === undefined
+    || caseAuthority === undefined
   ) {
     throw new Error(
       `Raw finding "${input.rawFindingId}" has an unauthorized conflict + provisional compound outcome`,
     );
   }
-  const verification = verifyOpenConflictOutcomeAuthority({
-    authority,
+  const verification = verifyInterpretationCaseConflictAuthority({
+    authority: caseAuthority,
     ledger: input.reconcileInput.previousLedger,
     rawFinding,
     conflicts,
     provisionalFindings,
-    provenance: {
-      reviewerStableKey: provenance.reviewerStableKey,
-      lineageKey: provenance.lineageKey,
-      claimIdentityHash: provenance.claimIdentityHash,
-      canonicalIntegrityDigest: provenance.canonicalIntegrityDigest,
-      canonicalProvenance: provenance.canonicalProvenance,
-    },
+    provenance,
   });
   if (!verification.ok) {
     throw new Error(
@@ -818,11 +805,11 @@ function assertExactlyOneRawOutcome(input: ReconcileFindingLedgerInput): void {
   const knownRawFindingIds = new Set(input.rawFindings.map((rawFinding) => rawFinding.rawFindingId));
   const outcomeCounts = new Map<string, RawOutcomeCounts>(input.rawFindings.map((rawFinding) => [
     rawFinding.rawFindingId,
-    { finding: 0, conflict: 0, provisionalKinds: [], disposition: 0 },
+    { finding: 0, conflict: 0, provisionalKinds: [] },
   ]));
   const recordKnownOutcome = (
     rawFindingId: string,
-    kind: 'finding' | 'conflict' | 'disposition',
+    kind: 'finding' | 'conflict',
   ): void => {
     if (knownRawFindingIds.has(rawFindingId)) {
       const counts = outcomeCounts.get(rawFindingId)!;
@@ -857,18 +844,17 @@ function assertExactlyOneRawOutcome(input: ReconcileFindingLedgerInput): void {
       );
     }
   }
-  for (const disposition of input.rawFindingDispositions) {
-    recordKnownOutcome(disposition.rawFindingId, 'disposition');
-  }
   for (const [rawFindingId, counts] of outcomeCounts) {
-    const count = counts.finding + counts.conflict + counts.provisionalKinds.length + counts.disposition;
+    const count = counts.finding + counts.conflict + counts.provisionalKinds.length;
     if (count === 0) {
-      throw new Error(`Raw finding "${rawFindingId}" has no explicit reconcile outcome`);
+      continue;
     }
     const hasConflictProvisionalClaim = counts.finding === 0
       && counts.conflict > 0
-      && counts.provisionalKinds.includes('raw-meaning-ambiguous')
-      && counts.disposition === 0;
+      && (
+        counts.provisionalKinds.includes('raw-meaning-ambiguous')
+        || counts.provisionalKinds.includes('raw-adjudication-unresolved')
+      );
     if (hasConflictProvisionalClaim) {
       assertAuthorizedConflictProvisionalOutcome({
         reconcileInput: input,
@@ -890,6 +876,9 @@ function reconcileFindingLedgerWithValidator(
   input: ReconcileFindingLedgerInput,
   validateOutput: ManagerOutputValidator,
 ): ReconcileFindingLedgerPlan {
+  if (input.managerOutput.resolvedConflicts.length > 0) {
+    throw new Error('Manager conflict resolution requires verified conflict adjudication');
+  }
   const validation = validateOutput({
     previousLedger: input.previousLedger,
     rawFindings: input.rawFindings,
@@ -948,7 +937,7 @@ function reconcileFindingLedgerWithValidator(
     },
   ]));
   const policyAuthority = (
-    decisionKind: 'waive' | 'dispute' | 'dismiss' | 'semantic_duplicate',
+    decisionKind: 'waive' | 'dispute' | 'semantic_duplicate',
     decision: unknown,
   ): FindingLifecycleCommand['authority'] => ({
     kind: 'engine_policy',
@@ -1187,43 +1176,8 @@ function reconcileFindingLedgerWithValidator(
     );
   }
 
-  // dismiss はエンジンが decision-assembly.ts で候補集合（open な provisional
-  // かつ DISMISSABLE_PROVISIONAL_KINDS）と照合済みの裁定だけを通してくる。
-  // 監査記録（basis / reason / decidedAt）を残して終端し、黙って消さない。
-  for (const dismissed of input.managerOutput.dismissedFindings) {
-    assertKnownFinding(knownFindingIds, dismissed.findingId);
-    const finding = updatedById.get(dismissed.findingId)!;
-    assertFindingStatus(finding, 'open', 'dismiss');
-    if (finding.provisional === undefined) {
-      throw new Error(`Cannot dismiss finding "${dismissed.findingId}" because it is not provisional`);
-    }
-    const updated: FindingRecord = {
-      ...finding,
-      status: 'dismissed',
-      lifecycle: 'dismissed',
-      revision: bumpRevision(finding),
-      dismissal: {
-        basis: dismissed.basis,
-        reason: dismissed.reason,
-        ...(dismissed.evidence !== undefined ? { evidence: dismissed.evidence } : {}),
-        ...(dismissed.taskQuote !== undefined ? { taskQuote: dismissed.taskQuote } : {}),
-        ...(dismissed.workflowTaskDigest !== undefined
-          ? { workflowTaskDigest: dismissed.workflowTaskDigest }
-          : {}),
-        ...(dismissed.adjudicationTaskId !== undefined
-          ? { adjudicationTaskId: dismissed.adjudicationTaskId }
-          : {}),
-        authority: dismissed.authority,
-        decidedAt: observationFromContext(input.context),
-      },
-    };
-    updatedById.set(dismissed.findingId, updated);
-    findingCommand(
-      'dismiss_finding',
-      [updated],
-      policyAuthority('dismiss', dismissed),
-      verifiedFindingSources([dismissed.findingId], []),
-    );
+  if (input.managerOutput.dismissedFindings.length > 0) {
+    throw new Error('Manager output cannot dismiss findings outside verified terminal adjudication');
   }
 
   // duplicateDecisions: duplicate 側の rawFindingIds/reviewers/disputes を
@@ -1349,6 +1303,8 @@ function reconcileFindingLedgerWithValidator(
     updatedById,
     ledger: input.previousLedger,
     specs: provisionalSpecs,
+    verifiedEvidenceRecordsByRawFindingId:
+      input.verifiedEvidenceRecordsByRawFindingId,
     allocateId: () => {
       const id = formatFindingId(nextId);
       nextId += 1;
@@ -1385,15 +1341,30 @@ function reconcileFindingLedgerWithValidator(
   );
   for (const finding of [...provisionalChangesById.values()]
     .sort((left, right) => compareBinaryStrings(left.id, right.id))) {
+    if (finding.provisional === undefined) {
+      throw new Error(`Provisional lifecycle change "${finding.id}" has no provisional metadata`);
+    }
+    const landingAuthorities = provisionalSpecs.flatMap((spec) => (
+      spec.stableKey === finding.provisional?.stableKey && spec.landingAuthority !== undefined
+        ? [spec.landingAuthority]
+        : []
+    ));
+    if (landingAuthorities.length > 1) {
+      throw new Error(`Provisional finding "${finding.id}" has multiple landing authorities`);
+    }
     findingCommand(
       'update_provisional',
       [finding],
-      { kind: 'verified_evidence' },
-      verifiedFindingSources([finding.id], []),
+      landingAuthorities[0] ?? { kind: 'verified_evidence' },
+      verifiedFindingSources(
+        [finding.id],
+        finding.provisional.sourceRawFindingIds,
+      ),
     );
   }
 
   const ledger: FindingLedger = {
+    ...input.previousLedger,
     workflowName: input.context.workflowName,
     nextId,
     updatedAt: input.context.timestamp,
@@ -1407,11 +1378,8 @@ function reconcileFindingLedgerWithValidator(
     evidenceBindings: input.previousLedger.evidenceBindings,
     lifecycleReservations: input.previousLedger.lifecycleReservations,
     lifecycleEvents: input.previousLedger.lifecycleEvents,
-    rawRecoveryAttempts: input.previousLedger.rawRecoveryAttempts,
-    rawRecoveryResults: input.previousLedger.rawRecoveryResults,
     rawFindings: mergeRawFindingDetails(input.previousLedger.rawFindings, input.rawFindings),
     conflicts: [...conflicts].sort((left, right) => compareBinaryStrings(left.id, right.id)),
-    interpretations: input.previousLedger.interpretations,
     ...(input.previousLedger.reviewerAnomalies !== undefined
       ? { reviewerAnomalies: input.previousLedger.reviewerAnomalies }
       : {}),
@@ -1446,6 +1414,7 @@ export function applyProvisionalFindingSpecsToLedger(
     updatedById,
     ledger,
     specs,
+    verifiedEvidenceRecordsByRawFindingId: new Map(),
     allocateId: () => {
       const id = formatFindingId(nextId);
       nextId += 1;
@@ -1682,7 +1651,6 @@ function applyPreAdmissionEntityProvisionalMutations(input: {
         reason: mutation.reason,
         firstObservedAt: observation,
         lastObservedAt: observation,
-        interpretationEpochs: 0,
         gateEffect: 'block',
         firstObservedRound: stopBudgetRoundsCompleted(input.ledger) + 1,
       },
@@ -1747,6 +1715,7 @@ function applyProvisionalFindingSpecs(input: {
   updatedById: Map<string, FindingRecord>;
   ledger: FindingLedger;
   specs: readonly ProvisionalFindingSpec[];
+  verifiedEvidenceRecordsByRawFindingId: ReconcileFindingLedgerInput['verifiedEvidenceRecordsByRawFindingId'];
   allocateId: () => string;
   context: FindingReconcileContext;
 }): FindingRecord[] {
@@ -1785,6 +1754,13 @@ function applyProvisionalFindingSpecs(input: {
       input.updatedById.set(existingId, createProvisionalFindingEntry({
         ...claim,
         lifecycle: 'persists',
+        evidenceIds: mergeBinarySortedUniqueStrings(
+          existing.evidenceIds,
+          evidenceIdsForRawFindings(
+            spec.sourceRawFindingIds,
+            input.verifiedEvidenceRecordsByRawFindingId,
+          ),
+        ),
         rawFindingIds: mergeBinarySortedUniqueStrings(existing.rawFindingIds, spec.sourceRawFindingIds),
         reviewers: Array.from(new Set([...existing.reviewers, ...spec.reviewers])),
         lastSeen: observation,
@@ -1797,7 +1773,6 @@ function applyProvisionalFindingSpecs(input: {
           ),
           reason: spec.reason,
           lastObservedAt: observation,
-          interpretationEpochs: countInterpretationEpochs(input.ledger, spec.lineageKey),
           ...(spec.recoveryReviewerStableKey !== undefined
             ? { recoveryReviewerStableKey: spec.recoveryReviewerStableKey }
             : {}),
@@ -1826,6 +1801,13 @@ function applyProvisionalFindingSpecs(input: {
       });
       createdByStableKey.set(spec.stableKey, createProvisionalFindingEntry({
         ...claim,
+        evidenceIds: mergeBinarySortedUniqueStrings(
+          createdExisting.evidenceIds,
+          evidenceIdsForRawFindings(
+            spec.sourceRawFindingIds,
+            input.verifiedEvidenceRecordsByRawFindingId,
+          ),
+        ),
         rawFindingIds: mergeBinarySortedUniqueStrings(
           createdExisting.rawFindingIds,
           spec.sourceRawFindingIds,
@@ -1837,7 +1819,6 @@ function applyProvisionalFindingSpecs(input: {
             createdExisting.provisional.sourceRawFindingIds,
             spec.sourceRawFindingIds,
           ),
-          interpretationEpochs: countInterpretationEpochs(input.ledger, spec.lineageKey),
         },
       }));
       continue;
@@ -1852,7 +1833,10 @@ function applyProvisionalFindingSpecs(input: {
       semanticClaimIdentityHash: spec.semanticClaimIdentityHash ?? null,
       severity: spec.severity,
       title: spec.title,
-      evidenceIds: [],
+      evidenceIds: evidenceIdsForRawFindings(
+        spec.sourceRawFindingIds,
+        input.verifiedEvidenceRecordsByRawFindingId,
+      ),
       ...(spec.description !== undefined ? { description: spec.description } : {}),
       ...(spec.suggestion !== undefined ? { suggestion: spec.suggestion } : {}),
       reviewers: [...spec.reviewers],
@@ -1868,7 +1852,6 @@ function applyProvisionalFindingSpecs(input: {
         reason: spec.reason,
         firstObservedAt: observation,
         lastObservedAt: observation,
-        interpretationEpochs: countInterpretationEpochs(input.ledger, spec.lineageKey),
         gateEffect: 'block',
         ...(spec.recoveryReviewerStableKey !== undefined
           ? { recoveryReviewerStableKey: spec.recoveryReviewerStableKey }

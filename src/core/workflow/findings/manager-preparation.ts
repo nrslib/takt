@@ -6,12 +6,6 @@ import { intakeReviewerOutputs } from './manager-intake.js';
 import { buildFindingManagerStep } from './manager-step.js';
 import { resolveReviewIntegrityLimits } from './review-integrity.js';
 import { resolveStopBudgetLimits } from './stop-budget.js';
-import { stopBudgetRoundsCompleted } from './stop-budget.js';
-import {
-  attachInterpretationRecoveryOrigins,
-  collectInterpretationRecoveryPlan,
-  type InterpretationRecoveryFailure,
-} from './interpretation-recovery.js';
 import type { RunFindingManagerForStepInput } from './manager-contracts.js';
 import type { ReviewScopeProofSnapshot } from './snapshot.js';
 
@@ -22,7 +16,6 @@ export interface PreparedFindingManagerRound {
   stopBudgetRoundMarker: string;
   reviewIntegrityLimits: ReturnType<typeof resolveReviewIntegrityLimits>;
   intake: ReviewerIntakeResult;
-  interpretationRecoveryFailures: InterpretationRecoveryFailure[];
   managerStep: AgentWorkflowStep;
   providerInfo: StepProviderInfo;
 }
@@ -55,21 +48,7 @@ export function prepareFindingManagerRound(
     issuedAt: input.timestamp,
     reviewScopeSnapshot,
   });
-  const roundsCompleted = stopBudgetRoundsCompleted(previousLedger);
-  const currentItems = attachInterpretationRecoveryOrigins({
-    ledger: previousLedger,
-    currentItems: reviewerIntake.items,
-    roundsCompleted,
-  });
-  const interpretationRecovery = collectInterpretationRecoveryPlan({
-    ledger: previousLedger,
-    currentItems,
-    roundsCompleted,
-  });
-  const intake: ReviewerIntakeResult = {
-    ...reviewerIntake,
-    items: [...interpretationRecovery.items, ...currentItems],
-  };
+  const intake: ReviewerIntakeResult = reviewerIntake;
   input.ledgerStore.saveRawFindings(
     input.runId,
     input.parentStep.name,
@@ -106,7 +85,6 @@ export function prepareFindingManagerRound(
     stopBudgetRoundMarker,
     reviewIntegrityLimits,
     intake,
-    interpretationRecoveryFailures: interpretationRecovery.failures,
     managerStep,
     providerInfo: input.optionsBuilder.resolveStepProviderModel(managerStep),
   };

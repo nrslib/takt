@@ -388,19 +388,12 @@ describe('Finding Contract SQLite storage', () => {
       ...sourcePending?.publication,
       destinationRunId: 'target-run',
     });
-    const missing = targetResolver.resolveAuthority({
+    expect(() => targetResolver.resolveAuthority({
       authorityKey: 'child-call-site',
       workflowName: 'child-workflow',
       reportDir: join(targetRoot, 'child-reports'),
-    });
-    expect(missing.loadLedger()).toMatchObject({
-      workflowName: 'child-workflow',
-      findings: [],
-      nextId: 1,
-    });
-    expect(warnings).toEqual([
-      'Finding authority "child-call-site" could not be seeded; starting empty',
-    ]);
+    })).toThrow('Finding authority "child-call-site" is missing from the source');
+    expect(warnings).toEqual([]);
 
     const targetDatabase = new DatabaseSync(targetResolver.databasePath, { readOnly: true });
     expect(targetDatabase.prepare(`
@@ -445,11 +438,11 @@ describe('Finding Contract SQLite storage', () => {
   });
 
   it.each([
-    'missing source',
-    'corrupt source',
-    'old source schema',
-    'source run mismatch',
-  ])('warns and starts at Finding 0 for %s', (kind) => {
+    ['missing source', /unable to open database file/],
+    ['corrupt source', /not a database/],
+    ['old source schema', /schema tables mismatch/],
+    ['source run mismatch', /source run id mismatch/],
+  ] as const)('fails closed for %s', (kind, expectedError) => {
     const sourceRoot = tempRoot();
     const sourcePath = join(sourceRoot, 'finding-contract.sqlite');
     if (kind === 'corrupt source') {
@@ -471,15 +464,38 @@ describe('Finding Contract SQLite storage', () => {
       source: { databasePath: sourcePath, runId: 'source-run' },
       warnings,
     });
-    const store = resolveRoot(resolver, targetRoot);
-
-    expect(store.loadLedger()).toMatchObject({ nextId: 1, findings: [] });
-    expect(warnings).toHaveLength(1);
+    expect(() => resolveRoot(resolver, targetRoot)).toThrow(expectedError);
+    expect(warnings).toEqual([]);
     const database = new DatabaseSync(resolver.databasePath, { readOnly: true });
     expect(database.prepare(`
-      SELECT revision FROM finding_authorities WHERE authority_key = 'root'
-    `).get()).toEqual({ revision: 1 });
+      SELECT count(*) AS count FROM finding_authorities
+    `).get()).toEqual({ count: 0 });
     database.close();
+    resolver.close();
+  });
+
+  it('fails closed when the resume source is locked', () => {
+    const sourceRoot = tempRoot();
+    const sourceResolver = createResolver({ root: sourceRoot, runId: 'source-run' });
+    resolveRoot(sourceResolver, sourceRoot);
+    sourceResolver.close();
+    const sourcePath = join(sourceRoot, 'finding-contract.sqlite');
+    const blocker = new DatabaseSync(sourcePath);
+    blocker.exec('BEGIN EXCLUSIVE');
+
+    const targetRoot = tempRoot();
+    const resolver = createResolver({
+      root: targetRoot,
+      source: { databasePath: sourcePath, runId: 'source-run' },
+      timeoutMs: 20,
+    });
+    expect(() => resolveRoot(resolver, targetRoot)).toThrow(/locked/u);
+    const target = new DatabaseSync(resolver.databasePath, { readOnly: true });
+    expect(target.prepare('SELECT count(*) AS count FROM finding_authorities').get())
+      .toEqual({ count: 0 });
+    target.close();
+    blocker.exec('ROLLBACK');
+    blocker.close();
     resolver.close();
   });
 
@@ -521,7 +537,7 @@ describe('Finding Contract SQLite storage', () => {
         `).run();
       },
     },
-  ])('resets only an accessed authority with $name corruption', ({ corrupt }) => {
+  ])('fails closed without rewriting an accessed authority with $name corruption', ({ corrupt }) => {
     const root = tempRoot();
     const setupResolver = createResolver({ root });
     resolveRoot(setupResolver, root);
@@ -542,24 +558,9 @@ describe('Finding Contract SQLite storage', () => {
 
     const warnings: string[] = [];
     const recoveryResolver = createResolver({ root, warnings });
-    const recovered = resolveRoot(recoveryResolver, root);
-
-    expect(recovered.loadLedger()).toMatchObject({
-      workflowName: 'root-workflow',
-      nextId: 1,
-      findings: [],
-    });
-    expect(warnings).toEqual([
-      'Finding authority "root" was invalid and has been reset',
-    ]);
+    expect(() => resolveRoot(recoveryResolver, root)).toThrow();
+    expect(warnings).toEqual([]);
     const database = new DatabaseSync(databasePath, { readOnly: true });
-    expect(database.prepare(`
-      SELECT revision, ledger_json AS ledgerJson
-      FROM finding_authorities WHERE authority_key = 'root'
-    `).get()).toMatchObject({
-      revision: 1,
-      ledgerJson: expect.stringContaining('"workflowName":"root-workflow"'),
-    });
     expect(database.prepare(`
       SELECT ledger_json AS ledgerJson
       FROM finding_authorities WHERE authority_key = 'unaccessed-child'
@@ -593,7 +594,7 @@ describe('Finding Contract SQLite storage', () => {
     resolver.close();
   });
 
-  it('leaves an unusable target untouched and falls back to isolated memory', () => {
+  it('leaves an unusable target untouched and fails closed', () => {
     const root = tempRoot();
     const databasePath = join(root, 'finding-contract.sqlite');
     const legacy = new DatabaseSync(databasePath);
@@ -603,12 +604,8 @@ describe('Finding Contract SQLite storage', () => {
     const warnings: string[] = [];
     const resolver = createResolver({ root, warnings });
 
-    const store = resolveRoot(resolver, root);
-
-    expect(store.loadLedger().findings).toEqual([]);
-    expect(warnings).toEqual([
-      'Finding storage target is unusable; using an isolated in-memory database',
-    ]);
+    expect(() => resolveRoot(resolver, root)).toThrow(/schema tables mismatch/);
+    expect(warnings).toEqual([]);
     expect(databaseFileSnapshot(databasePath)).toEqual(before);
     const unchanged = new DatabaseSync(databasePath, { readOnly: true });
     expect(unchanged.prepare(`
@@ -626,12 +623,8 @@ describe('Finding Contract SQLite storage', () => {
     const warnings: string[] = [];
     const resolver = createResolver({ root, warnings });
 
-    const store = resolveRoot(resolver, root);
-
-    expect(store.loadLedger()).toMatchObject({ nextId: 1, findings: [] });
-    expect(warnings).toEqual([
-      'Finding storage target is unusable; using an isolated in-memory database',
-    ]);
+    expect(() => resolveRoot(resolver, root)).toThrow(/not a database/);
+    expect(warnings).toEqual([]);
     expect(databaseFileSnapshot(databasePath)).toEqual(before);
     resolver.close();
   });
@@ -650,15 +643,8 @@ describe('Finding Contract SQLite storage', () => {
     const warnings: string[] = [];
     const otherResolver = createResolver({ root, runId: 'other-run', warnings });
 
-    const isolated = resolveRoot(otherResolver, root);
-    await isolated.updateLedger((current) => ({
-      ledger: updateTimestamp(current, '2026-08-01T00:00:10.000Z'),
-      result: undefined,
-    }));
-
-    expect(warnings).toEqual([
-      'Finding storage target is unusable; using an isolated in-memory database',
-    ]);
+    expect(() => resolveRoot(otherResolver, root)).toThrow(/run id mismatch/);
+    expect(warnings).toEqual([]);
     expect(databaseFileSnapshot(databasePath)).toEqual(before);
     const unchanged = new DatabaseSync(databasePath, { readOnly: true });
     const row = unchanged.prepare(`
@@ -695,16 +681,9 @@ describe('Finding Contract SQLite storage', () => {
       warnings,
     });
 
-    const target = resolveRoot(targetResolver, root, 'target-workflow');
-
-    expect(target.loadLedger()).toMatchObject({
-      workflowName: 'target-workflow',
-      updatedAt: '2026-08-01T00:00:00.000Z',
-      findings: [],
-    });
-    expect(warnings).toEqual([
-      'Finding storage target is using an isolated in-memory database',
-    ]);
+    expect(() => resolveRoot(targetResolver, root, 'target-workflow'))
+      .toThrow(/run id mismatch/);
+    expect(warnings).toEqual([]);
     expect(databaseFileSnapshot(databasePath)).toEqual(before);
     targetResolver.close();
   });

@@ -48,7 +48,6 @@ async function seedFindingLedger(
     updatedAt: '2026-07-23T00:00:00.000Z',
     rawFindings: [raw],
     conflicts: [],
-    interpretations: [],
     findings: [{
       id: 'F-0001',
       status: 'open',

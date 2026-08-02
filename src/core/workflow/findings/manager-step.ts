@@ -1,5 +1,5 @@
 import type { AgentWorkflowStep, FindingContractConfig, WorkflowConfig } from '../../models/types.js';
-import { AmbiguousInterpretationsOutputJsonSchema } from './schemas.js';
+import { InterpretationCaseDecisionsOutputJsonSchema } from './schemas.js';
 import {
   FindingEntityBindingTaskOutputJsonSchema,
   MainManagerControlTaskOutputJsonSchema,
@@ -11,7 +11,9 @@ export const FINDING_MANAGER_CONTROL_SCHEMA_REF = 'takt.findings.manager.control
 export const FINDING_ENTITY_BINDING_SCHEMA_REF = 'takt.findings.manager.entity-binding';
 
 /** ambiguous raw 解釈フェーズの structured output。提案のみ。 */
-export const FINDING_INTERPRETATION_SCHEMA_REF = 'takt.findings.interpretation';
+export const FINDING_INTERPRETATION_SCHEMA_REF = 'takt.findings.interpretation-case';
+const FINDING_INTERPRETATION_INSTRUCTION =
+  'Decide each supplied interpretation case exactly once using only its decisionContext. Return no ledger operations or raw-finding decisions.';
 
 /**
  * findings-manager の合成ステップを組み立てる。実行（manager-runner.ts）と
@@ -83,9 +85,9 @@ export function buildFindingEntityBindingTaskStep(
 }
 
 /**
- * ambiguous raw の解釈フェーズ用の合成ステップ。decisions manager と同じ
+ * interpretation case の解釈フェーズ用の合成ステップ。decisions manager と同じ
  * persona / provider / model 解決を共有する（別の解決をすると preview と実行が
- * 食い違う）。structured output は「提案」（AmbiguousInterpretation）のみ —
+ * 食い違う）。structured output は caseId 単位の decision のみ —
  * 台帳操作の8配列は返させない。
  */
 export function buildFindingInterpretationStep(input: {
@@ -97,9 +99,10 @@ export function buildFindingInterpretationStep(input: {
   return {
     ...base,
     name: 'findings-interpreter',
+    instruction: FINDING_INTERPRETATION_INSTRUCTION,
     structuredOutput: {
       schemaRef: FINDING_INTERPRETATION_SCHEMA_REF,
-      schema: AmbiguousInterpretationsOutputJsonSchema,
+      schema: InterpretationCaseDecisionsOutputJsonSchema,
     },
   };
 }

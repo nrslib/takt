@@ -7,15 +7,15 @@ export type FindingLifecycleAuthorityContract =
   | 'verified_evidence'
   | 'engine_policy:waive'
   | 'engine_policy:dispute'
-  | 'engine_policy:dismiss'
-  | 'engine_policy:resolve_conflict'
   | 'engine_policy:semantic_duplicate'
   | 'engine_policy:anchor_relevance'
-  | 'conflict_adjudication'
+  | 'verified_conflict_adjudication'
+  | 'verified_terminal_adjudication'
+  | 'interpretation_unreserved_landing'
+  | 'interpretation_case_rejection'
   | 'rejected_observation'
   | 'system:record_recovery_attempt'
-  | 'system:settle_action_recovery'
-  | 'system:sync_interpretation_epoch';
+  | 'system:settle_action_recovery';
 
 export interface LifecycleOperationContract {
   readonly targetShape:
@@ -53,7 +53,7 @@ export const FINDING_LIFECYCLE_OPERATION_CONTRACTS: Readonly<
   resolve_finding: {
     targetShape: 'one_finding',
     allowsCreate: false,
-    authorities: ['verified_evidence', 'engine_policy:anchor_relevance', 'system:settle_action_recovery'],
+    authorities: ['verified_evidence', 'engine_policy:anchor_relevance', 'system:settle_action_recovery', 'verified_conflict_adjudication'],
     findingDelta: [
       'status', 'lifecycle', 'revision', 'rawFindingIds', 'reviewers',
       'evidenceIds', 'lastSeen', 'resolvedAt', 'resolvedEvidence',
@@ -84,7 +84,7 @@ export const FINDING_LIFECYCLE_OPERATION_CONTRACTS: Readonly<
   invalidate_finding: {
     targetShape: 'one_finding',
     allowsCreate: false,
-    authorities: ['verified_evidence'],
+    authorities: ['verified_evidence', 'verified_conflict_adjudication'],
     findingDelta: [
       'status', 'lifecycle', 'revision', 'evidenceIds', 'invalidatedAt',
       'invalidatedEvidence',
@@ -94,7 +94,7 @@ export const FINDING_LIFECYCLE_OPERATION_CONTRACTS: Readonly<
   supersede_findings: {
     targetShape: 'multiple_findings',
     allowsCreate: false,
-    authorities: ['verified_evidence', 'engine_policy:semantic_duplicate'],
+    authorities: ['verified_evidence', 'engine_policy:semantic_duplicate', 'verified_conflict_adjudication', 'verified_terminal_adjudication'],
     findingDelta: [
       'status', 'lifecycle', 'revision', 'supersededByFindingId',
       'rawFindingIds', 'reviewers', 'evidenceIds', 'disputes', 'lastSeen',
@@ -104,7 +104,7 @@ export const FINDING_LIFECYCLE_OPERATION_CONTRACTS: Readonly<
   dismiss_finding: {
     targetShape: 'one_finding',
     allowsCreate: false,
-    authorities: ['engine_policy:dismiss'],
+    authorities: ['verified_terminal_adjudication'],
     findingDelta: ['status', 'lifecycle', 'revision', 'dismissal'],
     conflictDelta: [],
   },
@@ -118,7 +118,7 @@ export const FINDING_LIFECYCLE_OPERATION_CONTRACTS: Readonly<
   update_provisional: {
     targetShape: 'one_finding',
     allowsCreate: true,
-    authorities: ['verified_evidence'],
+    authorities: ['verified_evidence', 'interpretation_unreserved_landing', 'interpretation_case_rejection'],
     findingDelta: [
       'revision', 'lifecycle', 'severity', 'title', 'description', 'suggestion',
       'target', 'targetIdentityHash', 'claimIdentityHash',
@@ -130,7 +130,7 @@ export const FINDING_LIFECYCLE_OPERATION_CONTRACTS: Readonly<
   promote_provisional: {
     targetShape: 'one_finding',
     allowsCreate: true,
-    authorities: ['verified_evidence', 'engine_policy:anchor_relevance'],
+    authorities: ['verified_evidence', 'engine_policy:anchor_relevance', 'verified_conflict_adjudication', 'verified_terminal_adjudication'],
     findingDelta: [
       'revision', 'status', 'lifecycle', 'severity', 'title', 'description',
       'target', 'targetIdentityHash', 'claimIdentityHash',
@@ -154,13 +154,6 @@ export const FINDING_LIFECYCLE_OPERATION_CONTRACTS: Readonly<
     findingDelta: ['revision', 'provisional'],
     conflictDelta: [],
   },
-  sync_interpretation_epoch: {
-    targetShape: 'one_finding',
-    allowsCreate: false,
-    authorities: ['system:sync_interpretation_epoch'],
-    findingDelta: ['revision', 'provisional'],
-    conflictDelta: [],
-  },
   create_conflict: {
     targetShape: 'one_conflict',
     allowsCreate: true,
@@ -178,7 +171,7 @@ export const FINDING_LIFECYCLE_OPERATION_CONTRACTS: Readonly<
   resolve_conflict: {
     targetShape: 'one_conflict',
     allowsCreate: false,
-    authorities: ['engine_policy:resolve_conflict'],
+    authorities: ['verified_conflict_adjudication'],
     findingDelta: [],
     conflictDelta: [
       'status', 'revision', 'resolvedAt', 'resolvedEvidence',
@@ -187,13 +180,16 @@ export const FINDING_LIFECYCLE_OPERATION_CONTRACTS: Readonly<
   apply_conflict_adjudication: {
     targetShape: 'conflict_and_its_findings',
     allowsCreate: false,
-    authorities: ['conflict_adjudication'],
+    authorities: ['verified_conflict_adjudication'],
     findingDelta: [
-      'status', 'lifecycle', 'revision', 'suggestion', 'lastSeen',
+      'status', 'lifecycle', 'revision', 'suggestion', 'lastSeen', 'provisional',
+      'target', 'targetIdentityHash', 'claimIdentityHash',
+      'semanticClaimIdentityHash', 'severity', 'title', 'description',
+      'rawFindingIds', 'reviewers', 'evidenceIds', 'supersededByFindingId',
       'resolvedAt', 'resolvedEvidence', 'invalidatedAt', 'invalidatedEvidence',
     ],
     conflictDelta: [
-      'status', 'revision', 'adjudications', 'resolvedAt', 'resolvedEvidence',
+      'status', 'revision', 'resolvedAt', 'resolvedEvidence',
     ],
   },
   apply_resolution_renotification: {
@@ -217,7 +213,10 @@ export function findingLifecycleAuthorityContract(
 ): FindingLifecycleAuthorityContract {
   switch (authority.kind) {
     case 'verified_evidence':
-    case 'conflict_adjudication':
+    case 'verified_conflict_adjudication':
+    case 'verified_terminal_adjudication':
+    case 'interpretation_unreserved_landing':
+    case 'interpretation_case_rejection':
     case 'rejected_observation':
       return authority.kind;
     case 'engine_policy':

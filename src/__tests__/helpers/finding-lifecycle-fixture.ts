@@ -6,6 +6,11 @@ import {
   computeTargetIdentityHash,
 } from '../../core/models/finding-claim-identity.js';
 import {
+  computeRawCanonicalSnapshotId,
+  computeRawPayloadDigest,
+  findingContentAddress,
+} from '../../core/models/finding-contract-identity.js';
+import {
   computeFileQuoteEvidenceRecordId,
   createEngineProofRecord,
 } from '../../core/models/finding-evidence-record.js';
@@ -21,6 +26,7 @@ import type {
   FindingLedger,
   FindingLedgerConflict,
   FindingLedgerEntry,
+  FindingEvidenceContributionOrigin,
   FindingLifecycleAuthority,
   FindingLifecycleOperation,
   FindingObservation,
@@ -33,6 +39,9 @@ import {
   reserveVerifiedLifecycleMutation,
 } from '../../core/workflow/findings/lifecycle-mutation.js';
 import { captureFindingMutationPrecondition } from '../../core/workflow/findings/finding-preconditions.js';
+import { createEmptyFindingContractRegistries } from '../../core/models/finding-contract-seed.js';
+import type { FindingContractLedgerRegistries } from '../../core/models/finding-contract-types.js';
+import type { RawCanonicalSnapshot } from '../../core/models/finding-contract-types.js';
 
 function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex');
@@ -40,6 +49,47 @@ function sha256(value: string): string {
 
 function cloneFixture<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+export function rawCanonicalSnapshotFixture(
+  rawFinding: RawFinding,
+  capturedAt: FindingObservation,
+): RawCanonicalSnapshot {
+  const snapshotWithoutId = {
+    rawFindingId: rawFinding.rawFindingId,
+    rawPayloadDigest: computeRawPayloadDigest(rawFinding),
+    reviewerStableKey: findingContentAddress('fixture-reviewer-stable-key', {
+      rawFindingId: rawFinding.rawFindingId,
+    }),
+    lineageKey: findingContentAddress('fixture-lineage-key', {
+      rawFindingId: rawFinding.rawFindingId,
+    }),
+    targetIdentityHash: rawFinding.targetIdentityHash,
+    claimIdentityHash: rawFinding.claimIdentityHash,
+    semanticClaimIdentityHash: rawFinding.semanticClaimIdentityHash,
+    canonicalProvenance: {
+      origin: 'system' as const,
+      ambiguityOrigin: false,
+      clarificationAttempted: false,
+      ambiguityCodes: [],
+    },
+    canonicalizationContextDigest: findingContentAddress('fixture-canonicalization-context', {
+      reviewer: rawFinding.reviewer,
+      stepName: rawFinding.stepName,
+      sourceBinding: rawFinding.sourceBinding,
+    }),
+    captureAdmissionSnapshotId: findingContentAddress('fixture-capture-admission', {
+      rawFindingId: rawFinding.rawFindingId,
+      evidence: rawFinding.evidence,
+    }),
+    captureDependencyDigests: [],
+    canonicalIntegrityDigest: computeRawFindingIntegrityDigest(rawFinding),
+  };
+  return {
+    rawCanonicalSnapshotId: computeRawCanonicalSnapshotId(snapshotWithoutId),
+    ...snapshotWithoutId,
+    capturedAt: cloneFixture(capturedAt),
+  };
 }
 
 export function canonicalRawFindingFixture(
@@ -172,6 +222,7 @@ export function applyFindingLedgerFixtureRevision(input: {
   ledger: FindingLedger;
   entityKind: 'finding' | 'conflict';
   entity: FindingLedgerEntry | FindingLedgerConflict;
+  contributionOrigin?: FindingEvidenceContributionOrigin;
 }): FindingLedger {
   const observation = fixtureObservation(input.entity);
   const finding = input.entityKind === 'finding'
@@ -221,23 +272,38 @@ export function applyFindingLedgerFixtureRevision(input: {
           decisionDigest: sha256(`fixture-policy:waive:${input.entity.id}:${input.entity.revision}`),
         };
       case 'dismiss_finding':
-        return {
-          kind: 'engine_policy',
-          decisionKind: 'dismiss',
-          decisionDigest: sha256(`fixture-policy:dismiss:${input.entity.id}:${input.entity.revision}`),
-        };
+        throw new Error('Fixture dismissal requires a verified terminal adjudication transaction');
       case 'resolve_conflict':
         return {
-          kind: 'engine_policy',
-          decisionKind: 'resolve_conflict',
-          decisionDigest: sha256(`fixture-policy:resolve-conflict:${input.entity.id}:${input.entity.revision}`),
+          kind: 'verified_conflict_adjudication',
+          conflictId: input.entity.id,
+          conflictSnapshotId: sha256(
+            `fixture-conflict-snapshot:${input.entity.id}:${input.entity.revision}`,
+          ),
+          attemptId: sha256(
+            `fixture-conflict-attempt:${input.entity.id}:${input.entity.revision}`,
+          ),
+          verificationDigest: sha256(
+            `fixture-conflict-verification:${input.entity.id}:${input.entity.revision}`,
+          ),
+          proofRecordIds: [...new Set(
+            input.ledger.evidenceBindings
+              .filter((binding) => (
+                binding.target.entityKind === 'conflict'
+                && binding.target.entityId === input.entity.id
+              ))
+              .map((binding) => binding.evidenceId),
+          )].sort(),
         };
       default:
         return { kind: 'verified_evidence' };
     }
   })();
-  const usesManagerProof = operation === 'update_provisional'
-    || operation === 'invalidate_finding';
+  const usesManagerProof = input.contributionOrigin === undefined
+    && (
+      operation === 'update_provisional'
+      || operation === 'invalidate_finding'
+    );
   const relation: RawFinding['relation'] = (() => {
     switch (operation) {
       case 'resolve_finding':
@@ -261,7 +327,11 @@ export function applyFindingLedgerFixtureRevision(input: {
     ))
     .flatMap((candidate) => candidate?.evidence ?? [])
     .find((evidence) => evidence.kind === 'file_quote');
-  const retainedSourceRaw = finding?.rawFindingIds
+  const retainedSourceRawIds = finding?.rawFindingIds
+    ?? (input.contributionOrigin === undefined
+      ? []
+      : (input.entity as FindingLedgerConflict).rawFindingIds);
+  const retainedSourceRaw = retainedSourceRawIds
     .map((rawFindingId) => input.ledger.rawFindings.find(
       (candidate) => candidate.rawFindingId === rawFindingId,
     ))
@@ -311,9 +381,21 @@ export function applyFindingLedgerFixtureRevision(input: {
     endByte: Buffer.byteLength(reportExcerpt),
     excerptDigest: sha256(reportExcerpt),
   };
+  const interpretedRetainedSource = retainedSourceRaw !== undefined
+    && (
+      input.contributionOrigin?.kind === 'interpretation_case'
+      || input.ledger.interpretationRawObservations.some(
+        (observation) => observation.rawFindingId === retainedSourceRaw.rawFindingId,
+      )
+    )
+    ? retainedSourceRaw
+    : undefined;
+  const rawTargetPrecondition = rawTargetFindingId === null
+    ? undefined
+    : captureFindingMutationPrecondition(input.ledger, rawTargetFindingId);
   const raw: RawFinding | undefined = authority.kind === 'verified_evidence'
     && !usesManagerProof
-    ? {
+    ? interpretedRetainedSource ?? {
         rawFindingId: `fixture-raw:${input.entityKind}:${input.entity.id}:${input.entity.revision}:${input.ledger.rawFindings.length}`,
         stepName: observation.stepName,
         reviewer: 'fixture-reviewer',
@@ -347,13 +429,10 @@ export function applyFindingLedgerFixtureRevision(input: {
         sourceBinding,
         relation,
         targetFindingId: rawTargetFindingId,
-        ...(rawTargetFindingId === null
+        ...(rawTargetPrecondition === undefined
           ? {}
           : {
-              targetPrecondition: captureFindingMutationPrecondition(
-                input.ledger,
-                rawTargetFindingId,
-              ),
+              targetPrecondition: rawTargetPrecondition,
             }),
         evidence: [{
           kind: 'file_quote',
@@ -432,6 +511,11 @@ export function applyFindingLedgerFixtureRevision(input: {
     entityId: input.entity.id,
     expectedHead,
   };
+  const interpretationObservation = raw === undefined
+    ? undefined
+    : input.ledger.interpretationRawObservations.find(
+        (observation) => observation.rawFindingId === raw.rawFindingId,
+      );
   const binding = evidenceRecord === undefined
     ? undefined
     : createFindingEvidenceBinding({
@@ -441,6 +525,9 @@ export function applyFindingLedgerFixtureRevision(input: {
         sourceRawIntegrityDigest: raw === undefined
           ? null
           : computeRawFindingIntegrityDigest(raw),
+        contributionOrigin: input.contributionOrigin ?? (interpretationObservation === undefined
+          ? { kind: 'external' }
+          : { kind: 'interpretation_case', caseId: interpretationObservation.caseId }),
         operation,
         target,
       });
@@ -468,6 +555,13 @@ export function applyFindingLedgerFixtureRevision(input: {
       )
         ? input.ledger.rawFindings
         : [...input.ledger.rawFindings, raw],
+    rawCanonicalSnapshots: raw === undefined
+      ? input.ledger.rawCanonicalSnapshots
+      : input.ledger.rawCanonicalSnapshots.some(
+          (snapshot) => snapshot.rawFindingId === raw.rawFindingId,
+        )
+        ? input.ledger.rawCanonicalSnapshots
+        : [...input.ledger.rawCanonicalSnapshots, rawCanonicalSnapshotFixture(raw, observation)],
   }, {
     reservation,
     evidenceBindings: binding === undefined ? [] : [binding],
@@ -603,17 +697,15 @@ export function applyFindingLedgerFixtureSupersession(input: {
 export function authorizeFindingLedgerFixture(input: FindingLedger): FindingLedger {
   const cloned = cloneFixture(input);
   const desired: FindingLedger = {
+    ...createEmptyFindingContractRegistries(),
     ...cloned,
     findings: cloned.findings ?? [],
     evidenceRecords: cloned.evidenceRecords ?? [],
     rawFindings: cloned.rawFindings ?? [],
     conflicts: cloned.conflicts ?? [],
-    interpretations: cloned.interpretations ?? [],
     evidenceBindings: cloned.evidenceBindings ?? [],
     lifecycleReservations: cloned.lifecycleReservations ?? [],
     lifecycleEvents: cloned.lifecycleEvents ?? [],
-    rawRecoveryAttempts: cloned.rawRecoveryAttempts ?? [],
-    rawRecoveryResults: cloned.rawRecoveryResults ?? [],
   };
   desired.rawFindings = desired.rawFindings.map((rawFinding) => {
     if (
@@ -705,58 +797,22 @@ export function authorizeFindingLedgerFixture(input: FindingLedger): FindingLedg
       }),
     };
   });
-  const interpretations = [...desired.interpretations];
-  for (const finding of desired.findings) {
-    const provisional = finding.provisional;
-    if (provisional === undefined) {
-      continue;
-    }
-    const appliedEpochs = interpretations.filter((record) => (
-      record.lineageKey === provisional.lineageKey
-      && record.stage === 'ledger_applied'
-      && record.applicationResult !== 'stale_precondition'
-    )).length;
-    for (
-      let attemptOrdinal = appliedEpochs + 1;
-      attemptOrdinal <= provisional.interpretationEpochs;
-      attemptOrdinal += 1
-    ) {
-      const identity = `${finding.id}:${provisional.lineageKey}:${attemptOrdinal}`;
-      interpretations.push({
-        interpretationKey: sha256(`fixture-interpretation:${identity}`),
-        baseInterpretationKey: sha256(`fixture-interpretation-base:${finding.id}:${provisional.lineageKey}`),
-        attemptOrdinal,
-        reviewerStableKey: provisional.recoveryReviewerStableKey ?? finding.reviewers[0] ?? 'test-reviewer',
-        lineageKey: provisional.lineageKey,
-        candidateEvidenceHash: sha256(`fixture-candidate:${identity}`),
-        canonicalIntegrityDigest: sha256(`fixture-canonical:${identity}`),
-        startedAt: cloneFixture(provisional.firstObservedAt),
-        promptPreconditions: [],
-        stage: 'ledger_applied',
-        reservationToken: sha256(`fixture-reservation:${identity}`),
-        completedAt: cloneFixture(provisional.lastObservedAt),
-        validatedDecision: {
-          decision: 'provisional',
-          rawFindingId: provisional.sourceRawFindingIds[0] ?? `fixture-raw:${finding.id}`,
-          reason: provisional.reason,
-        },
-        appliedAt: cloneFixture(provisional.lastObservedAt),
-        applicationResult: attemptOrdinal === 1
-          ? 'provisional_created'
-          : 'provisional_updated',
-      });
-    }
-  }
   let ledger: FindingLedger = {
     ...desired,
-    interpretations,
     findings: [],
     conflicts: [],
     evidenceBindings: [],
     lifecycleReservations: [],
     lifecycleEvents: [],
-    rawRecoveryAttempts: desired.rawRecoveryAttempts ?? [],
-    rawRecoveryResults: desired.rawRecoveryResults ?? [],
+    rawCanonicalSnapshots: desired.rawFindings.map((rawFinding) => (
+      desired.rawCanonicalSnapshots.find(
+        (snapshot) => snapshot.rawFindingId === rawFinding.rawFindingId,
+      ) ?? rawCanonicalSnapshotFixture(rawFinding, {
+        runId: 'fixture-run',
+        stepName: rawFinding.stepName,
+        timestamp: desired.updatedAt,
+      })
+    )),
   };
   for (const desiredFinding of desired.findings) {
     if (desiredFinding.status === 'superseded') {
@@ -870,14 +926,11 @@ export function emptyFindingAuthorityProjection(): Pick<
   | 'evidenceBindings'
   | 'lifecycleReservations'
   | 'lifecycleEvents'
-  | 'rawRecoveryAttempts'
-  | 'rawRecoveryResults'
-> {
+> & FindingContractLedgerRegistries {
   return {
     evidenceBindings: [],
     lifecycleReservations: [],
     lifecycleEvents: [],
-    rawRecoveryAttempts: [],
-    rawRecoveryResults: [],
+    ...createEmptyFindingContractRegistries(),
   };
 }

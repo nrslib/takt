@@ -47,7 +47,6 @@ import {
 } from './helpers/finding-lifecycle-fixture.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
 import { computeLineageKey, computeReviewerStableKey } from '../core/workflow/findings/raw-canonicalization.js';
-import { formatConflictId } from '../core/models/finding-conflict-identity.js';
 import { computeClaimIdentityHash } from '../core/workflow/findings/evidence-domain.js';
 import { computeFileQuoteEvidenceRecordId } from '../core/models/finding-evidence-record.js';
 import {
@@ -128,7 +127,6 @@ function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
     evidenceRecords: [],
     rawFindings: [makeRawFinding({ rawFindingId: 'raw-existing' })],
     conflicts: [],
-    interpretations: [],
     findings: [makeFinding({ revision: 1 })],
     ...overrides,
   });
@@ -137,7 +135,7 @@ function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
 type TestReconcileInput = Omit<
   Parameters<typeof reconcileFindingLedgerStrict>[0],
   'provisionalFindings' | 'entityProvisionalMutations'
-  | 'terminalEntityAttachmentFindingIds' | 'rawFindingDispositions'
+  | 'terminalEntityAttachmentFindingIds'
   | 'rawProvenanceByRawFindingId'
 >;
 
@@ -147,7 +145,6 @@ function reconcileFindingLedger(input: TestReconcileInput): FindingLedger {
     entityProvisionalMutations: [],
     terminalEntityAttachmentFindingIds: new Set(),
     provisionalFindings: [],
-    rawFindingDispositions: [],
     rawProvenanceByRawFindingId: new Map(input.rawFindings.map((rawFinding) => [
       rawFinding.rawFindingId,
       storedRawReconcileProvenance(
@@ -739,13 +736,12 @@ describe('item 1/4: raw admission validation and invalidate', () => {
     expect(harness.savedValidationReports).toHaveLength(2);
     const report = harness.savedValidationReports.at(-1) as {
       provisionalLandings?: Array<{ kind: string; reason: string; sourceRawFindingIds: string[] }>;
-      rawFindingDispositions?: Array<{ rawFindingId: string; outcome: string }>;
+      unsupportedRawFindings?: Array<{ rawFindingId: string }>;
     };
     expect(report.provisionalLandings ?? []).toEqual([]);
-    expect(report.rawFindingDispositions).toEqual(expect.arrayContaining([
+    expect(report.unsupportedRawFindings).toEqual(expect.arrayContaining([
       expect.objectContaining({
         rawFindingId: expect.stringContaining('p-1'),
-        outcome: 'audit_only',
       }),
     ]));
   });
@@ -978,8 +974,7 @@ describe('B4: F-0016 raw-group replay against a coherent synthetic ledger', () =
       '20260710-145911-pr-task-attachments-takt-add-p:reviewers:10:ai-antipattern-review:AI-PERSIST-F-0006-ROUTING',
       '20260710-145911-pr-task-attachments-takt-add-p:reviewers:10:ai-antipattern-review:AI-PERSIST-F-0017-ROUTING',
     ]);
-    expect(ledger.conflicts).toHaveLength(1);
-    expect(ledger.conflicts[0]?.id).toBe(formatConflictId(ledger.conflicts[0]!));
+    expect(ledger.conflicts).toEqual([]);
   });
 
   it('preserves the three historical raw claims verbatim except for final-contract fields', () => {

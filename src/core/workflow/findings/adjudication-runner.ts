@@ -1,36 +1,36 @@
 import { executeAgent } from '../../../agents/agent-usecases.js';
 import type { AgentResponse, WorkflowState, WorkflowStep } from '../../models/types.js';
+import type { ConflictAdjudicationProposal } from '../../models/finding-contract-types.js';
 import type { OptionsBuilder } from '../engine/OptionsBuilder.js';
 import type { StepExecutor } from '../engine/StepExecutor.js';
 import type { RuntimeStepResolution, StepRunResult } from '../types.js';
-import { createLogger } from '../../../shared/utils/index.js';
-import { FINDING_CONFLICT_ADJUDICATION_RULE_INDEX } from './adjudication-step.js';
 import {
   selectConflictForAdjudication,
   type FindingConflictAdjudicationDisposition,
 } from './adjudication-apply.js';
 import {
-  isLedgerConflictUnadjudicated,
-  renderAdjudicationInstruction,
-} from './adjudication-evidence.js';
-import { captureReviewScopeSnapshot } from './snapshot.js';
+  commitFindingConflictAdjudication,
+  completeFailedConflictAdjudication,
+} from './adjudication-commit.js';
+import { renderConflictAdjudicationInstruction } from './adjudication-evidence.js';
+import {
+  freshConflictAdjudicationSnapshot,
+  isActiveConflictUnadjudicated,
+} from './conflict-adjudication-model.js';
+import {
+  dispatchFindingManagerProviderCall,
+  responseUpperBound,
+} from './finding-manager-provider-call.js';
 import { reserveFindingConflictAdjudication } from './adjudication-reservation.js';
-import { commitFindingConflictAdjudication } from './adjudication-commit.js';
-import { parseFindingConflictAdjudicationOutput } from './schemas.js';
-import type {
-  FindingConflictAdjudicationOutput,
-  FindingLedger,
-  FindingObservation,
-} from './types.js';
+import { FINDING_CONFLICT_ADJUDICATION_RULE_INDEX } from './adjudication-step.js';
+import { parseConflictAdjudicationProposal } from './schemas.js';
 import type { FindingAdjudicationStore } from './store.js';
-
-const log = createLogger('finding-conflict-adjudication');
+import type { FindingLedger, FindingObservation } from './types.js';
 
 export interface FindingConflictAdjudicationRunnerDeps {
   ledgerStore: FindingAdjudicationStore;
   optionsBuilder: Pick<OptionsBuilder, 'buildAgentOptions' | 'resolveStepProviderModel'>;
   stepExecutor: Pick<StepExecutor, 'buildPhase1Instruction' | 'normalizeStructuredOutput'>;
-  /** cwd the reviewed code lives in (see admission-validation.ts). */
   getCwd: () => string;
   workflowName: string;
   analyticsWorkflowName: string;
@@ -40,246 +40,226 @@ export interface FindingConflictAdjudicationRunnerDeps {
   emitEvent: (event: string, ...args: unknown[]) => void;
 }
 
-function parseAdjudicationOutput(response: AgentResponse): FindingConflictAdjudicationOutput {
-  const output = response.structuredOutput;
-  if (typeof output !== 'object' || output == null || Array.isArray(output)) {
-    throw new Error('Finding conflict adjudication output must be an object');
-  }
-  return parseFindingConflictAdjudicationOutput(output);
-}
-
 const DISPOSITION_RULE_INDEX: Record<FindingConflictAdjudicationDisposition, number> = {
   finding_closed: FINDING_CONFLICT_ADJUDICATION_RULE_INDEX.FINDING_CLOSED,
   actionable_fix: FINDING_CONFLICT_ADJUDICATION_RULE_INDEX.ACTIONABLE_FIX,
   unresolved: FINDING_CONFLICT_ADJUDICATION_RULE_INDEX.UNRESOLVED,
 };
 
-/**
- * Executor for the finding-conflict-adjudication synthetic step (synthetic-step requirement:
- * a REAL step in config.steps dispatched by WorkflowEngineStepCoordinator, not
- * a run-loop interception). Behaves like SystemStepExecutor: produces an
- * AgentResponse whose matchedRuleIndex selects one of the step's synthesized
- * rules, and the standard transition machinery routes from there.
- *
- * The decision is applied only when the evidence hash at apply time EQUALS
- *   the hash the LLM was prompted with (evidence CAS requirement); otherwise the decision is
- *   discarded (audited via saveConflictAdjudicationReport) and the conflict
- *   stays unadjudicated for its NEW evidence, so the next round can adjudicate
- *   the fresh state.
- *
- * Provider failures (error / rate_limited / blocked) are returned as-is so the
- * run loop's standard handling applies. Concurrent decisions race only at the
- * atomic evidence-CAS commit; a completed adjudication blocks later attempts.
- *
- * getLastOriginStep exposes the origin (the step the workflow advanced from
- * into this step) that this runner last resolved — from WorkflowState
- * .previousStep when available, otherwise from the durable originStep recorded
- * on the pending attempt (origin-step requirement). WorkflowEngineStepCoordinator uses it as
- * the second candidate when resolving the dynamic return-to-origin transition.
- */
+function response(input: {
+  step: WorkflowStep;
+  content: string;
+  matchedRuleIndex: number;
+  structuredOutput?: Record<string, unknown>;
+}): AgentResponse {
+  return {
+    persona: input.step.personaDisplayName,
+    status: 'done',
+    content: input.content,
+    matchedRuleIndex: input.matchedRuleIndex,
+    timestamp: new Date(),
+    ...(input.structuredOutput === undefined ? {} : { structuredOutput: input.structuredOutput }),
+  };
+}
+
+function requestBytes(input: {
+  step: WorkflowStep;
+  phase1Instruction: string;
+  agentOptions: ReturnType<OptionsBuilder['buildAgentOptions']>;
+}): string {
+  return JSON.stringify({
+    persona: input.step.persona,
+    provider: input.step.provider ?? null,
+    model: input.step.model ?? null,
+    phase1Instruction: input.phase1Instruction,
+    structuredOutput: input.step.structuredOutput,
+    tools: input.agentOptions.allowedTools ?? [],
+    applicationTokenOptions: {
+      internalSystemPrompt: input.agentOptions.internalSystemPrompt ?? null,
+      maxTurns: input.agentOptions.maxTurns ?? null,
+      model: input.agentOptions.model ?? null,
+      provider: input.agentOptions.provider ?? null,
+      providerOptions: input.agentOptions.providerOptions ?? null,
+      resolvedModel: input.agentOptions.resolvedModel ?? null,
+      resolvedProvider: input.agentOptions.resolvedProvider ?? null,
+      resolvedProviderOptions: input.agentOptions.resolvedProviderOptions ?? null,
+    },
+  });
+}
+
 export function createFindingConflictAdjudicationRunner(deps: FindingConflictAdjudicationRunnerDeps): {
   run: (step: WorkflowStep, state: WorkflowState, runtime?: RuntimeStepResolution) => Promise<StepRunResult>;
   getLastOriginStep: () => string | undefined;
 } {
   let lastOriginStep: string | undefined;
-  const finishResponse = (state: WorkflowState, step: WorkflowStep, response: AgentResponse): AgentResponse => {
-    state.stepOutputs.set(step.name, response);
-    state.lastOutput = response;
-    return response;
+  const finish = (state: WorkflowState, step: WorkflowStep, value: AgentResponse): AgentResponse => {
+    state.stepOutputs.set(step.name, value);
+    state.lastOutput = value;
+    return value;
   };
-
-  const buildResponse = (input: {
-    step: WorkflowStep;
-    content: string;
-    matchedRuleIndex: number;
-    structuredOutput?: Record<string, unknown>;
-  }): AgentResponse => ({
-    persona: input.step.personaDisplayName,
-    status: 'done',
-    content: input.content,
-    ...(input.structuredOutput !== undefined ? { structuredOutput: input.structuredOutput } : {}),
-    matchedRuleIndex: input.matchedRuleIndex,
-    timestamp: new Date(),
-  });
-
-  const run = async (step: WorkflowStep, state: WorkflowState, runtime?: RuntimeStepResolution): Promise<StepRunResult> => {
+  const run = async (
+    step: WorkflowStep,
+    state: WorkflowState,
+    runtime?: RuntimeStepResolution,
+  ): Promise<StepRunResult> => {
     const providerInfo = deps.optionsBuilder.resolveStepProviderModel(step, runtime);
     const observation: FindingObservation = {
       runId: deps.runId,
       stepName: step.name,
       timestamp: new Date().toISOString(),
     };
-    // Origin candidate (origin-step requirement): the live previousStep when this step was
-    // entered normally; a pending attempt's durable originStep otherwise
-    // (resolved below once the target conflict is known).
     lastOriginStep = state.previousStep !== undefined && state.previousStep !== step.name
       ? state.previousStep
       : undefined;
-
-    const initialLedger = deps.ledgerStore.loadLedger();
-    const cwd = deps.getCwd();
-    const initialReviewScopeSnapshot = captureReviewScopeSnapshot(cwd);
-    const targetConflict = selectConflictForAdjudication(
-      initialLedger,
-      (conflict) => {
-        return isLedgerConflictUnadjudicated(
-          conflict,
-          initialLedger,
-          initialReviewScopeSnapshot.reviewScopeSnapshotId,
-        );
-      },
+    const initial = deps.ledgerStore.loadLedger();
+    const conflict = selectConflictForAdjudication(
+      initial,
+      (candidate) => isActiveConflictUnadjudicated(initial, candidate.id),
     );
-    const noTargetResult = (ledger: FindingLedger, reason: string): StepRunResult => {
-      const hasActiveConflicts = ledger.conflicts.some((conflict) => conflict.status === 'active');
-      const response = buildResponse({
+    const noTarget = (ledger: FindingLedger, reason: string): StepRunResult => {
+      const active = ledger.conflicts.some((candidate) => candidate.status === 'active');
+      const value = response({
         step,
-        content: `No conflict is currently eligible for adjudication (${reason}). `
-          + (hasActiveConflicts
-            ? 'Active conflicts remain but were already adjudicated for their current evidence.'
-            : 'No active conflicts remain.'),
-        matchedRuleIndex: hasActiveConflicts
+        content: reason,
+        matchedRuleIndex: active
           ? FINDING_CONFLICT_ADJUDICATION_RULE_INDEX.UNRESOLVED
           : FINDING_CONFLICT_ADJUDICATION_RULE_INDEX.FINDING_CLOSED,
       });
       deps.refreshFindingsState();
-      return { response: finishResponse(state, step, response), instruction: '', providerInfo };
+      return { response: finish(state, step, value), instruction: '', providerInfo };
     };
-    if (targetConflict === undefined) {
-      return noTargetResult(initialLedger, 'no unadjudicated active conflict');
+    if (conflict === undefined) {
+      return noTarget(initial, 'No conflict is eligible for adjudication.');
     }
-
-    const attemptMutation = await reserveFindingConflictAdjudication({
+    const snapshot = freshConflictAdjudicationSnapshot(initial, conflict.id);
+    const instruction = deps.stepExecutor.buildPhase1Instruction(
+      renderConflictAdjudicationInstruction(snapshot),
+      step,
+      runtime,
+    );
+    const agentOptions = {
+      ...deps.optionsBuilder.buildAgentOptions(step, runtime),
+      sessionId: undefined,
+    };
+    const exactRequestBytes = requestBytes({ step, phase1Instruction: instruction, agentOptions });
+    const reserved = await reserveFindingConflictAdjudication({
       ledgerStore: deps.ledgerStore,
-      conflictId: targetConflict.id,
+      conflictId: conflict.id,
+      expectedSnapshotId: snapshot.conflictSnapshotId,
       requestedOriginStep: lastOriginStep,
-      runId: deps.runId,
       observation,
-      cwd,
+      requestBytes: exactRequestBytes,
+      scopeIdentity: deps.findingScopeIdentity,
+      workflowName: deps.workflowName,
+      roundMarker: `${deps.runId}:${state.iteration}:${step.name}`,
     });
-    const ledgerAtAttempt = attemptMutation.ledger;
-    if (!attemptMutation.result.started) {
-      return noTargetResult(ledgerAtAttempt, `conflict "${targetConflict.id}" became ineligible before the attempt could start`);
+    if (!reserved.result.started) {
+      return noTarget(reserved.ledger, `Conflict "${conflict.id}" became ineligible.`);
     }
-    lastOriginStep = attemptMutation.result.originStep;
-    const promptedEvidenceHash = attemptMutation.result.evidenceHash;
-    const reservationToken = attemptMutation.result.reservationToken;
-    if (!deps.ledgerStore.adjudicationLiveClaims.claim(
-      deps.ledgerStore.ledgerIdentity,
-      reservationToken,
-    )) {
-      return noTargetResult(
-        ledgerAtAttempt,
-        `conflict "${targetConflict.id}" is already being adjudicated`,
-      );
-    }
-    try {
-      deps.emitEvent('findings:ledger', structuredClone(ledgerAtAttempt), {
-        iteration: state.iteration,
-        workflowName: deps.analyticsWorkflowName,
-        scopeIdentity: deps.findingScopeIdentity,
-      });
-      deps.refreshFindingsState();
-      const evidenceSnapshot = attemptMutation.result.evidenceSnapshot;
-      const promptConflict = evidenceSnapshot.conflict;
-      const phase1Instruction = deps.stepExecutor.buildPhase1Instruction(
-        renderAdjudicationInstruction(evidenceSnapshot),
-        step,
-        runtime,
-      );
-      const baseOptions = deps.optionsBuilder.buildAgentOptions(step, runtime);
-      const agentOptions = { ...baseOptions, sessionId: undefined };
-      const rawResponse = await executeAgent(step.persona, phase1Instruction, agentOptions);
-      const response = deps.stepExecutor.normalizeStructuredOutput(step, rawResponse, runtime);
-      if (response.status !== 'done') {
-        // Let the run loop's standard error / blocked / rate_limited handling
-        // apply. The recorded attempt stays on the ledger for auditability.
-        return { response: finishResponse(state, step, response), instruction: phase1Instruction, providerInfo };
-      }
-      const output = parseAdjudicationOutput(response);
-      if (output.conflictId !== promptConflict.id) {
-        throw new Error(
-          `Finding conflict adjudication returned conflictId "${output.conflictId}" but was asked about "${promptConflict.id}"`,
-        );
-      }
-
-      const applyMutation = await commitFindingConflictAdjudication({
-        ledgerStore: deps.ledgerStore,
-        conflictId: promptConflict.id,
-        promptedEvidenceHash,
-        reservationMutationId: reservationToken,
-        output,
-        cwd,
-        workflowName: deps.workflowName,
-        stepName: step.name,
-        runId: deps.runId,
-        timestamp: observation.timestamp,
-        ...(lastOriginStep === undefined ? {} : { originStep: lastOriginStep }),
-      });
-      const nextLedger = applyMutation.ledger;
-
-      deps.emitEvent('findings:ledger', structuredClone(nextLedger), {
-        iteration: state.iteration,
-        workflowName: deps.analyticsWorkflowName,
-        scopeIdentity: deps.findingScopeIdentity,
-      });
-      deps.refreshFindingsState();
-
-      if (!applyMutation.result.applied) {
-        // Discarded: nothing was applied. The started attempt (old hash) stays;
-        // the NEW evidence has never been attempted, so returning to the origin
-        // lets its unadjudicated-conflict rule route back here for a fresh
-        // adjudication of the changed evidence.
-        const discardReason = applyMutation.result.reason;
-        deps.ledgerStore.saveConflictAdjudicationReport({
-          version: 1,
-          runId: deps.runId,
-          conflictId: promptConflict.id,
-          discarded: true,
-          reason: discardReason,
-          promptEvidenceHash: promptedEvidenceHash,
-          ...(applyMutation.result.freshEvidenceHash !== undefined
-            ? { freshEvidenceHash: applyMutation.result.freshEvidenceHash }
-            : {}),
-          output,
-        });
-        log.info('Adjudication decision discarded', { conflictId: promptConflict.id, reason: discardReason });
-        const discardResponse = buildResponse({
-          step,
-          content: `Adjudication of conflict ${promptConflict.id} was discarded: ${discardReason}. `
-            + 'The decision was not applied; an audit record was saved and the conflict remains open '
-            + 'for re-adjudication against its current evidence.',
-          matchedRuleIndex: FINDING_CONFLICT_ADJUDICATION_RULE_INDEX.FINDING_CLOSED,
-          structuredOutput: output as unknown as Record<string, unknown>,
-        });
-        return { response: finishResponse(state, step, discardResponse), instruction: phase1Instruction, providerInfo };
-      }
-
-      const disposition: FindingConflictAdjudicationDisposition = applyMutation.result.disposition;
-      const summary = [
-        `Adjudicated conflict ${promptConflict.id}: outcome ${output.outcome} (${disposition}).`,
-        ...((output.actionableFix?.trim().length ?? 0) > 0
-          ? [`Actionable fix: ${output.actionableFix!.trim()}`]
-          : []),
-        ...(output.rationale !== undefined ? [`Rationale: ${output.rationale}`] : []),
-      ].join('\n');
-      const doneResponse = buildResponse({
-        step,
-        content: summary,
-        matchedRuleIndex: DISPOSITION_RULE_INDEX[disposition],
-        structuredOutput: output as unknown as Record<string, unknown>,
+    lastOriginStep = reserved.result.originStep;
+    await deps.ledgerStore.updateLedger((ledger) => {
+      const dispatched = dispatchFindingManagerProviderCall({
+        calls: ledger.findingManagerProviderCalls,
+        providerCallId: reserved.result.started ? reserved.result.attempt.providerCallId : '',
+        requestBytes: exactRequestBytes,
+        adapterSupportsUtf8ByteUpperBound: true,
+        dispatchedAt: observation,
       });
       return {
-        response: finishResponse(state, step, doneResponse),
-        instruction: phase1Instruction,
-        providerInfo,
+        ledger: {
+          ...ledger,
+          updatedAt: observation.timestamp,
+          findingManagerProviderCalls: dispatched.calls,
+        },
+        result: undefined,
       };
-    } finally {
-      deps.ledgerStore.adjudicationLiveClaims.release(
-        deps.ledgerStore.ledgerIdentity,
-        reservationToken,
+    });
+    deps.emitEvent('findings:ledger', structuredClone(deps.ledgerStore.loadLedger()), {
+      iteration: state.iteration,
+      workflowName: deps.analyticsWorkflowName,
+      scopeIdentity: deps.findingScopeIdentity,
+    });
+    deps.refreshFindingsState();
+    let agentResponse: AgentResponse;
+    try {
+      agentResponse = deps.stepExecutor.normalizeStructuredOutput(
+        step,
+        await executeAgent(step.persona, instruction, agentOptions),
+        runtime,
       );
+    } catch (error) {
+      await completeFailedConflictAdjudication({
+        ledgerStore: deps.ledgerStore,
+        attemptId: reserved.result.attempt.attemptId,
+        code: 'provider_failed',
+        observation,
+      });
+      throw error;
     }
+    if (agentResponse.status !== 'done') {
+      await completeFailedConflictAdjudication({
+        ledgerStore: deps.ledgerStore,
+        attemptId: reserved.result.attempt.attemptId,
+        code: 'provider_failed',
+        observation,
+      });
+      return { response: finish(state, step, agentResponse), instruction, providerInfo };
+    }
+    const outputBytes = JSON.stringify(agentResponse.structuredOutput ?? {});
+    if (responseUpperBound({ responseBytes: outputBytes }).tokens > reserved.result.providerCall.reservedOutputTokens) {
+      await completeFailedConflictAdjudication({
+        ledgerStore: deps.ledgerStore,
+        attemptId: reserved.result.attempt.attemptId,
+        code: 'output_oversize',
+        responseBytes: outputBytes,
+        observation,
+      });
+      return noTarget(deps.ledgerStore.loadLedger(), 'Conflict adjudication output exceeded its reservation.');
+    }
+    let proposal: ConflictAdjudicationProposal;
+    try {
+      proposal = parseConflictAdjudicationProposal(agentResponse.structuredOutput);
+    } catch {
+      await completeFailedConflictAdjudication({
+        ledgerStore: deps.ledgerStore,
+        attemptId: reserved.result.attempt.attemptId,
+        code: 'parse_failed',
+        responseBytes: outputBytes,
+        observation,
+      });
+      return noTarget(deps.ledgerStore.loadLedger(), 'Conflict adjudication output was invalid.');
+    }
+    const providerUsage = agentResponse.providerUsage?.inputTokens !== undefined
+      && agentResponse.providerUsage.outputTokens !== undefined
+      ? {
+          inputTokens: agentResponse.providerUsage.inputTokens,
+          outputTokens: agentResponse.providerUsage.outputTokens,
+        }
+      : undefined;
+    const committed = await commitFindingConflictAdjudication({
+      ledgerStore: deps.ledgerStore,
+      attemptId: reserved.result.attempt.attemptId,
+      proposal,
+      responseBytes: outputBytes,
+      ...(providerUsage === undefined ? {} : { providerUsage }),
+      observation,
+    });
+    deps.emitEvent('findings:ledger', structuredClone(committed.ledger), {
+      iteration: state.iteration,
+      workflowName: deps.analyticsWorkflowName,
+      scopeIdentity: deps.findingScopeIdentity,
+    });
+    deps.refreshFindingsState();
+    const disposition = committed.result.applied ? committed.result.disposition : 'unresolved';
+    const value = response({
+      step,
+      content: committed.result.applied
+        ? `Conflict ${conflict.id} adjudication applied (${proposal.kind}).`
+        : `Conflict ${conflict.id} remains unresolved (${committed.result.reason}).`,
+      matchedRuleIndex: DISPOSITION_RULE_INDEX[disposition],
+      structuredOutput: proposal as unknown as Record<string, unknown>,
+    });
+    return { response: finish(state, step, value), instruction, providerInfo };
   };
-
   return { run, getLastOriginStep: () => lastOriginStep };
 }

@@ -22,12 +22,6 @@ import {
 } from '../core/models/finding-anchor-relevance.js';
 import { FindingLifecycleAuthoritySchema } from '../core/models/finding-schemas.js';
 import {
-  candidateFromStoredRawFinding,
-  canonicalizeReviewerRawFinding,
-} from '../core/workflow/findings/raw-canonicalization.js';
-import { buildLadderCommitPlan } from '../core/workflow/findings/manager-ladder-commit-plan.js';
-import type { LadderResult } from '../core/workflow/findings/manager-contracts.js';
-import {
   adaptProviderRawDecision,
 } from '../core/workflow/findings/manager-raw-decision-adapter.js';
 
@@ -88,11 +82,8 @@ const ledger: FindingLedger = {
   evidenceBindings: [],
   lifecycleReservations: [],
   lifecycleEvents: [],
-  rawRecoveryAttempts: [],
-  rawRecoveryResults: [],
   rawFindings: [],
   conflicts: [],
-  interpretations: [],
 };
 
 function decisions(
@@ -209,42 +200,6 @@ describe('absence anchor relevance adjudication', () => {
       ...result.output,
       anchorAdjudications: [],
     })).toThrow(/missing anchor adjudication/);
-  });
-
-  it('keeps an interpreted absence claim provisional until a manager explicitly adjudicates anchor relevance', () => {
-    const canonical = canonicalizeReviewerRawFinding(
-      candidateFromStoredRawFinding(raw, 'reviewer-stable-key'),
-      { ledger },
-    ).canonical;
-    const ladder: LadderResult = {
-      interpretationReservations: new Map(),
-      interpretationIntegrityDigests: new Map(),
-      integrityStaleInterpretationKeys: new Set(),
-      deferredRawFindingIds: new Set(),
-      pendingSameWithProof: [],
-      pendingIndependentNew: [{
-        wire: raw,
-        canonical,
-      }],
-      pendingConflicts: [],
-      provisionalSpecs: [],
-      provisionalByInterpretationKey: new Map(),
-      pendingAppliedReattach: [],
-      recoveryProvisionalOrigins: new Map(),
-      stats: {} as LadderResult['stats'],
-    };
-
-    const plan = buildLadderCommitPlan(ladder, ledger, new Set());
-
-    expect(plan.output.newFindings).toEqual([]);
-    expect(plan.output.anchorAdjudications).toEqual([]);
-    expect(plan.provisionalSpecs).toEqual([
-      expect.objectContaining({
-        kind: 'raw-adjudication-unresolved',
-        sourceRawFindingIds: [raw.rawFindingId],
-        reason: expect.stringContaining('explicit manager judgment'),
-      }),
-    ]);
   });
 
   it('rejects a tampered manager output binding while keeping rationale non-authoritative', () => {

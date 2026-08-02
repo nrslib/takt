@@ -37,6 +37,7 @@ import {
 } from '../core/workflow/findings/review-publication.js';
 import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
 import { buildFindingsRuleContext as buildFindingsRuleContextWithCwd } from '../core/workflow/findings/context.js';
+import { processInterpretationLiveClaims } from '../core/workflow/findings/interpretation-live-claims.js';
 import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
 import { createFindingManagerPublicationDouble, RevisionedFindingLedgerTestRepository } from './helpers/finding-manager-publication.js';
 import {
@@ -80,7 +81,6 @@ function ledger(overrides: Partial<FindingLedger> = {}): FindingLedger {
     findings: [],
     rawFindings: [],
     conflicts: [],
-    interpretations: [],
     ...overrides,
   };
 }
@@ -327,18 +327,12 @@ function makeRoundHarness(
       : initialLedger,
   );
   const publicationReportDir = makePublicationDir('takt-stop-budget-publication-');
-  const reservations = new Set<string>();
   const ledgerStore: FindingLedgerStore = {
     ledgerIdentity: '/test/finding-stop-budget/ledger.json',
     workflowName: 'peer-review',
     loadLedger: () => ledgerRepository.loadLedger(),
     updateLedger: (mutator) => ledgerRepository.updateLedger(mutator),
-    claimAdjudicationReservation: (token) => {
-      if (reservations.has(token)) return false;
-      reservations.add(token);
-      return true;
-    },
-    releaseAdjudicationReservation: (token) => { reservations.delete(token); },
+    interpretationLiveClaims: processInterpretationLiveClaims,
     saveLedgerSnapshot: () => {},
     saveRawFindings: () => {},
     saveManagerValidationReport: () => {},
@@ -349,7 +343,6 @@ function makeRoundHarness(
       ),
       ledgerRepository,
     ),
-    saveConflictAdjudicationReport: () => {},
   };
   const optionsBuilder = {
     buildAgentOptions: () => ({}),
@@ -435,20 +428,26 @@ function hallucinatedRaw(rawFindingId: string, title: string, path: string): Rec
   });
 }
 
-/** ambiguous ladder の interpretation 呼び出しへの汎用応答（'provisional' 提案）。instruction から正規化済み rawFindingId を動的に抽出する。 */
+/** ambiguous ladder の interpretation 呼び出しへの汎用応答（'provisional' 提案）。 */
 function interpretationRunAgentResponse(instruction: string): AgentResponse {
-  const match = /"rawFindingId":\s*"([^"]+)"/.exec(instruction);
-  const rawFindingId = match?.[1];
-  if (rawFindingId === undefined) {
-    throw new Error(`Test setup error: rawFindingId not found in interpretation instruction: ${instruction}`);
+  const match = /"caseId":\s*"([^"]+)"/.exec(instruction);
+  const caseId = match?.[1];
+  if (caseId === undefined) {
+    throw new Error(`Test setup error: caseId not found in interpretation instruction: ${instruction}`);
   }
   return {
     persona: 'findings-manager',
     status: 'done',
     content: '',
     structuredOutput: {
-      interpretations: [
-        { decision: 'provisional', rawFindingId, proofId: '', targetFindingId: '', reason: 'Cannot determine the identity of this re-report.' },
+      decisions: [
+        {
+          caseId,
+          decision: {
+            kind: 'provisional',
+            reason: 'Cannot determine the identity of this re-report.',
+          },
+        },
       ],
     },
     timestamp: new Date(),
@@ -458,7 +457,7 @@ function interpretationRunAgentResponse(instruction: string): AgentResponse {
 function emptyLedger(): FindingLedger {
   return {
     workflowName: 'peer-review', nextId: 1, updatedAt: '2026-07-01T00:00:00.000Z',
-    findings: [], evidenceRecords: [], rawFindings: [], conflicts: [], interpretations: [],
+    findings: [], evidenceRecords: [], rawFindings: [], conflicts: [],
     ...emptyFindingAuthorityProjection(),
   };
 }
@@ -542,7 +541,6 @@ describe('runFindingManagerForStep across rounds: churn that never reaches fixpo
       evidenceRecords: [],
       rawFindings: [seedRaw],
       conflicts: [],
-      interpretations: [],
       ...emptyFindingAuthorityProjection(),
     };
     const harness = makeRoundHarness(seeded, { maxRounds: 3 });
@@ -605,18 +603,12 @@ describe('runFindingManagerForStep across rounds: churn that never reaches fixpo
     // re-commits before the workflow checkpoint advanced.
     const ledgerRepository = new RevisionedFindingLedgerTestRepository(emptyLedger());
     const publicationReportDir = makePublicationDir('takt-stop-budget-replay-publication-');
-    const reservations = new Set<string>();
     const ledgerStore: FindingLedgerStore = {
       ledgerIdentity: '/test/finding-stop-budget/integrity-ledger.json',
       workflowName: 'peer-review',
       loadLedger: () => ledgerRepository.loadLedger(),
       updateLedger: (mutator) => ledgerRepository.updateLedger(mutator),
-      claimAdjudicationReservation: (token) => {
-        if (reservations.has(token)) return false;
-        reservations.add(token);
-        return true;
-      },
-      releaseAdjudicationReservation: (token) => { reservations.delete(token); },
+      interpretationLiveClaims: processInterpretationLiveClaims,
       saveLedgerSnapshot: () => {},
       saveRawFindings: () => {},
       saveManagerValidationReport: () => {},
@@ -627,7 +619,6 @@ describe('runFindingManagerForStep across rounds: churn that never reaches fixpo
         ),
         ledgerRepository,
       ),
-      saveConflictAdjudicationReport: () => {},
     };
     const contract = {
       manager: { persona: 'findings-manager', instruction: 'Reconcile.', outputContract: 'JSON.' },
@@ -661,6 +652,7 @@ describe('runFindingManagerForStep across rounds: churn that never reaches fixpo
         publication: sameRoundPublication,
       }],
       workflowName: 'peer-review',
+      workflowTask: 'Review the implementation.',
       runId: 'run-crashed',
       callNamespace: '',
       timestamp,

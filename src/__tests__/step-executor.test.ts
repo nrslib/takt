@@ -1620,7 +1620,6 @@ describe('StepExecutor', () => {
         evidence: [],
       }],
       conflicts: [],
-        interpretations: [],
       }),
       result: undefined,
     }));

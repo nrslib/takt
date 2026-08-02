@@ -33,6 +33,7 @@ import type { AgentResponse, WorkflowStep } from '../core/models/types.js';
 import type { FindingLedger } from '../core/workflow/findings/types.js';
 import { runFindingManagerForStep, type FindingManagerSubStepResult } from '../core/workflow/findings/manager-runner.js';
 import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
+import { processInterpretationLiveClaims } from '../core/workflow/findings/interpretation-live-claims.js';
 import { buildFindingsRuleContext as buildFindingsRuleContextWithCwd } from '../core/workflow/findings/context.js';
 import { computeReviewScopeSnapshotId } from '../core/workflow/findings/snapshot.js';
 import { computeFileQuoteEvidenceRecordId } from '../core/models/finding-evidence-record.js';
@@ -224,18 +225,12 @@ function makeHarness(initialLedger: FindingLedger): {
   run: () => ReturnType<typeof runFindingManagerForStep>;
 } {
   const ledgerRepository = new RevisionedFindingLedgerTestRepository(initialLedger);
-  const reservations = new Set<string>();
   const ledgerStore: FindingLedgerStore = {
     ledgerIdentity: '/test/finding-evidence-protocol-fixture/ledger.json',
     workflowName: 'peer-review',
     loadLedger: () => ledgerRepository.loadLedger(),
     updateLedger: (mutator) => ledgerRepository.updateLedger(mutator),
-    claimAdjudicationReservation: (token) => {
-      if (reservations.has(token)) return false;
-      reservations.add(token);
-      return true;
-    },
-    releaseAdjudicationReservation: (token) => { reservations.delete(token); },
+    interpretationLiveClaims: processInterpretationLiveClaims,
     saveLedgerSnapshot: () => {},
     saveRawFindings: () => {},
     saveManagerValidationReport: () => {},
@@ -243,7 +238,6 @@ function makeHarness(initialLedger: FindingLedger): {
       (report) => join(REPORT_DIR, `findings-manager-validation.${report.stepName}.json`),
       ledgerRepository,
     ),
-    saveConflictAdjudicationReport: () => {},
   };
   const optionsBuilder = {
     buildAgentOptions: () => ({}),
@@ -301,7 +295,7 @@ describe('codex 対策#4 red/green fixture: 実測の gemma 架空指摘7件（a
   it('GREEN: engine coverage gap 6件は provisional、invalid locator 1件は reviewer anomaly へ隔離される', async () => {
     const harness = makeHarness({
       workflowName: 'peer-review', nextId: 1, updatedAt: '2026-07-12T00:00:00.000Z',
-      findings: [], evidenceRecords: [], rawFindings: [], conflicts: [], interpretations: [],
+      findings: [], evidenceRecords: [], rawFindings: [], conflicts: [],
       ...emptyFindingAuthorityProjection(),
     });
 
@@ -375,7 +369,6 @@ describe('codex 対策#4 red/green fixture: 実測の gemma 架空指摘7件（a
         evidence: [unverifiedFileQuote('src/shared/constants.ts', 5, '// unrelated line 5')],
       })],
       conflicts: [],
-      interpretations: [],
     });
     const harness = makeHarness(initialLedger);
 

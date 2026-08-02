@@ -33,9 +33,6 @@ import {
   captureFindingLifecycleHead,
   reserveVerifiedLifecycleMutation,
 } from './lifecycle-mutation.js';
-import { computeConflictEvidenceHash } from './adjudication-evidence.js';
-import { captureReviewScopeSnapshot } from './snapshot.js';
-import type { VerifiedReplayOriginAuthority } from './provisional-recovery-origin.js';
 
 function targetKey(target: { entityKind: string; entityId: string }): string {
   return `${target.entityKind}\0${target.entityId}`;
@@ -143,29 +140,59 @@ function evidenceRecordMatchesRawClaim(
   );
 }
 
-function rawSourceForRecord(input: {
+function rawSourcesForRecord(input: {
   rawFindings: readonly RawFinding[];
   preferredRawFindingIds: ReadonlySet<string>;
   record: FindingEvidenceRecord;
-}): RawFinding | undefined {
+}): RawFinding[] {
   if (
     input.preferredRawFindingIds.size === 0
     && input.record.kind === 'engine_proof'
     && input.record.subject.kind === 'finding_provisional_product_transition'
   ) {
-    return undefined;
+    return [];
   }
-  const candidates = [
-    ...input.rawFindings.filter((raw) => input.preferredRawFindingIds.has(raw.rawFindingId)),
-    ...input.rawFindings.filter((raw) => !input.preferredRawFindingIds.has(raw.rawFindingId)),
-  ];
-  return candidates.find((raw) => (
+  const matches = (raw: RawFinding): boolean => (
     evidenceRecordMatchesRawClaim(input.record, raw)
     && (
       input.record.kind !== 'engine_proof'
       || input.record.targetFindingId === raw.targetFindingId
     )
+  );
+  const preferred = input.rawFindings.filter((raw) => (
+    input.preferredRawFindingIds.has(raw.rawFindingId) && matches(raw)
   ));
+  if (preferred.length > 0) {
+    return preferred;
+  }
+  const fallback = input.rawFindings.find((raw) => matches(raw));
+  return fallback === undefined ? [] : [fallback];
+}
+
+function contributionOriginForRaw(
+  ledger: FindingLedger,
+  raw: RawFinding | undefined,
+  interpretationCaseIdsByRawFindingId?: ReadonlyMap<string, string>,
+): FindingEvidenceBinding['contributionOrigin'] {
+  if (raw === undefined) {
+    return { kind: 'external' };
+  }
+  const explicitCaseId = interpretationCaseIdsByRawFindingId?.get(raw.rawFindingId);
+  if (explicitCaseId !== undefined) {
+    return { kind: 'interpretation_case', caseId: explicitCaseId };
+  }
+  const observations = ledger.interpretationRawObservations.filter(
+    (observation) => observation.rawFindingId === raw.rawFindingId,
+  );
+  if (observations.length > 1) {
+    throw new Error(
+      `Raw finding "${raw.rawFindingId}" has multiple interpretation observations`,
+    );
+  }
+  const observation = observations[0];
+  return observation === undefined
+    ? { kind: 'external' }
+    : { kind: 'interpretation_case', caseId: observation.caseId };
 }
 
 export interface LifecycleEvidenceSource {
@@ -173,131 +200,17 @@ export interface LifecycleEvidenceSource {
   authorityEvidenceIds: readonly string[];
 }
 
-type LifecycleAuthorityInput =
-  | Exclude<FindingLifecycleAuthority, { kind: 'conflict_adjudication' }>
-  | Omit<Extract<FindingLifecycleAuthority, { kind: 'conflict_adjudication' }>, 'inputBindingIds'>;
-
 export interface FindingLifecycleCommand {
   operation: FindingLifecycleOperation;
   changes: {
     findings: readonly Omit<FindingLedgerEntry, 'revision'>[];
     conflicts: readonly Omit<FindingLedgerConflict, 'revision'>[];
   };
-  authority: LifecycleAuthorityInput;
+  authority: FindingLifecycleAuthority;
   evidenceSourcesByTarget: ReadonlyMap<string, LifecycleEvidenceSource>;
-  replayOriginAuthorities?: readonly VerifiedReplayOriginAuthority[];
+  interpretationCaseIdsByRawFindingId?: ReadonlyMap<string, string>;
   expectedHeadsByTarget?: ReadonlyMap<string, FindingLifecycleEntityHead | null>;
-  conflictEvidencePrecondition?: {
-    conflictId: string;
-    evidenceSetHash: string;
-    cwd: string;
-  };
   reservedMutationId?: string;
-}
-
-function assertConflictEvidencePrecondition(
-  ledger: FindingLedger,
-  command: FindingLifecycleCommand,
-): void {
-  const precondition = command.conflictEvidencePrecondition;
-  if (precondition === undefined) {
-    return;
-  }
-  if (
-    command.operation !== 'resolve_conflict'
-    || !command.changes.conflicts.some(
-      (conflict) => conflict.id === precondition.conflictId,
-    )
-  ) {
-    throw new Error('Conflict evidence precondition is only valid for its resolve command');
-  }
-  const conflict = ledger.conflicts.find(
-    (candidate) => candidate.id === precondition.conflictId,
-  );
-  const freshEvidenceSetHash = conflict === undefined
-    ? null
-    : computeConflictEvidenceHash(
-        conflict,
-        ledger,
-        captureReviewScopeSnapshot(precondition.cwd).reviewScopeSnapshotId,
-      );
-  if (freshEvidenceSetHash !== precondition.evidenceSetHash) {
-    throw new Error(
-      `Conflict evidence dependency CAS failed for "${precondition.conflictId}"`,
-    );
-  }
-}
-
-export function reserveFindingConflictAdjudicationLifecycle(input: {
-  ledger: FindingLedger;
-  conflictId: string;
-  evidenceHash: string;
-  originStep: string | null;
-  reservedAt: FindingObservation;
-}): {
-  ledger: FindingLedger;
-  mutationId: string;
-} {
-  const conflict = input.ledger.conflicts.find(
-    (candidate) => candidate.id === input.conflictId,
-  );
-  if (conflict === undefined || conflict.status !== 'active') {
-    throw new Error(`Cannot reserve inactive conflict "${input.conflictId}" for adjudication`);
-  }
-  const findings = conflict.findingIds.map((findingId) => {
-    const finding = input.ledger.findings.find((candidate) => candidate.id === findingId);
-    if (finding === undefined) {
-      throw new Error(
-        `Conflict adjudication reservation references unknown finding "${findingId}"`,
-      );
-    }
-    return finding;
-  });
-  const targets = lifecycleTargets({
-    current: input.ledger,
-    findings,
-    conflicts: [conflict],
-  });
-  const bindings = evidenceBindings({
-    ledger: input.ledger,
-    operation: 'apply_conflict_adjudication',
-    targets,
-    evidenceSourcesByTarget: new Map([[
-      `conflict\0${conflict.id}`,
-      {
-        sourceRawFindingIds: conflict.rawFindingIds,
-        authorityEvidenceIds: [],
-      },
-    ]]),
-  });
-  const authority: FindingLifecycleAuthority = {
-    kind: 'conflict_adjudication',
-    conflictId: conflict.id,
-    findingIds: [...conflict.findingIds],
-    evidenceHash: input.evidenceHash,
-    inputBindingIds: bindings.map((binding) => binding.bindingId),
-    originStep: input.originStep,
-  };
-  const reservation = createFindingLifecycleReservation({
-    operation: 'apply_conflict_adjudication',
-    targets,
-    evidenceBindingIds: authority.inputBindingIds,
-    authority,
-    context: {
-      kind: 'conflict_adjudication',
-      conflictId: conflict.id,
-      evidenceHash: input.evidenceHash,
-      originStep: input.originStep,
-    },
-    reservedAt: input.reservedAt,
-  });
-  return {
-    ledger: reserveVerifiedLifecycleMutation(input.ledger, {
-      reservation,
-      evidenceBindings: bindings,
-    }),
-    mutationId: reservation.mutationId,
-  };
 }
 
 function targetEvidence(input: {
@@ -335,6 +248,7 @@ function evidenceBindings(input: {
   operation: FindingLifecycleOperation;
   targets: readonly FindingLifecycleMutationTarget[];
   evidenceSourcesByTarget: ReadonlyMap<string, LifecycleEvidenceSource>;
+  interpretationCaseIdsByRawFindingId?: ReadonlyMap<string, string>;
 }): FindingEvidenceBinding[] {
   const evidenceRecordsById = new Map(
     input.ledger.evidenceRecords.map((record) => [record.evidenceId, record]),
@@ -354,24 +268,30 @@ function evidenceBindings(input: {
       if (record === undefined) {
         throw new Error(`Lifecycle transaction references unknown evidence "${evidenceId}"`);
       }
-      const raw = rawSourceForRecord({
+      const raws = rawSourcesForRecord({
         rawFindings: input.ledger.rawFindings,
         preferredRawFindingIds: evidence.preferredRawFindingIds,
         record,
       });
-      if (raw === undefined && record.kind !== 'engine_proof') {
+      if (raws.length === 0 && record.kind !== 'engine_proof') {
         return [];
       }
-      return [createFindingEvidenceBinding({
+      const bindingRaws = raws.length === 0 ? [undefined] : raws;
+      return bindingRaws.map((raw) => createFindingEvidenceBinding({
         evidenceId,
         claimIdentityHash: record.claimIdentityHash,
         sourceRawFindingId: raw?.rawFindingId ?? null,
         sourceRawIntegrityDigest: raw === undefined
           ? null
           : computeRawFindingIntegrityDigest(raw),
+        contributionOrigin: contributionOriginForRaw(
+          input.ledger,
+          raw,
+          input.interpretationCaseIdsByRawFindingId,
+        ),
         operation: input.operation,
         target,
-      })];
+      }));
     });
   });
   return [...new Map(bindings.map((binding) => [binding.bindingId, binding])).values()]
@@ -379,16 +299,9 @@ function evidenceBindings(input: {
 }
 
 function commandContext(
-  authority: LifecycleAuthorityInput,
+  _authority: FindingLifecycleAuthority,
 ): FindingLifecycleReservationContext {
-  return authority.kind === 'conflict_adjudication'
-    ? {
-        kind: 'conflict_adjudication',
-        conflictId: authority.conflictId,
-        evidenceHash: authority.evidenceHash,
-        originStep: authority.originStep,
-      }
-    : { kind: 'transaction' };
+  return { kind: 'transaction' };
 }
 
 function commandChanges(
@@ -433,7 +346,6 @@ export function applyFindingLifecycleCommands(input: {
 }): FindingLedger {
   let ledger = input.ledger;
   for (const command of input.commands) {
-    assertConflictEvidencePrecondition(ledger, command);
     const changes = commandChanges(ledger, command);
     if (command.reservedMutationId !== undefined) {
       const reservation = ledger.lifecycleReservations.find(
@@ -471,18 +383,13 @@ export function applyFindingLifecycleCommands(input: {
       operation: command.operation,
       targets,
       evidenceSourcesByTarget: command.evidenceSourcesByTarget,
+      interpretationCaseIdsByRawFindingId: command.interpretationCaseIdsByRawFindingId,
     });
-    const authority = command.authority.kind === 'conflict_adjudication'
-      ? {
-          ...command.authority,
-          inputBindingIds: bindings.map((binding) => binding.bindingId),
-        }
-      : command.authority;
     const reservation = createFindingLifecycleReservation({
       operation: command.operation,
       targets,
       evidenceBindingIds: bindings.map((binding) => binding.bindingId),
-      authority,
+      authority: command.authority,
       context: commandContext(command.authority),
       reservedAt: input.occurredAt,
     });
@@ -505,8 +412,6 @@ function transactionBase(current: FindingLedger, proposed: FindingLedger): Findi
     !sameValue(current.evidenceBindings, proposed.evidenceBindings)
     || !sameValue(current.lifecycleReservations, proposed.lifecycleReservations)
     || !sameValue(current.lifecycleEvents, proposed.lifecycleEvents)
-    || !sameValue(current.rawRecoveryAttempts, proposed.rawRecoveryAttempts)
-    || !sameValue(current.rawRecoveryResults, proposed.rawRecoveryResults)
   ) {
     throw new Error('Lifecycle transaction proposal cannot mutate authority registries directly');
   }
@@ -517,8 +422,6 @@ function transactionBase(current: FindingLedger, proposed: FindingLedger): Findi
     evidenceBindings: current.evidenceBindings,
     lifecycleReservations: current.lifecycleReservations,
     lifecycleEvents: current.lifecycleEvents,
-    rawRecoveryAttempts: current.rawRecoveryAttempts,
-    rawRecoveryResults: current.rawRecoveryResults,
   };
 }
 

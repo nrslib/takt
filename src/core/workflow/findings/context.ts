@@ -7,8 +7,7 @@ import {
   type FindingsRuleContext,
 } from './types.js';
 import { isProductFindingEntry } from './finding-entry.js';
-import { isLedgerConflictUnadjudicated } from './adjudication-evidence.js';
-import { computeReviewScopeSnapshotId } from './snapshot.js';
+import { isActiveConflictUnadjudicated } from './conflict-adjudication-model.js';
 import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
 import {
   findingFileQuoteLocations,
@@ -253,17 +252,13 @@ export function ledgerHasDismissedFindings(ledger: FindingLedger): boolean {
   return ledger.findings.some((finding) => finding.status === 'dismissed');
 }
 
-export function buildFindingsRuleContext(ledger: FindingLedger, cwd: string): FindingsRuleContext {
+export function buildFindingsRuleContext(ledger: FindingLedger, _cwd: string): FindingsRuleContext {
   const openItems = ledger.findings.filter((finding) => finding.status === 'open');
   const familyTagsByRawFindingId = indexRawFindingFamilyTags(ledger);
   const activeConflicts = ledger.conflicts.filter((conflict) => conflict.status === 'active');
-  let unadjudicatedConflictCount = 0;
-  if (activeConflicts.length > 0) {
-    const reviewScopeSnapshotId = computeReviewScopeSnapshotId(cwd);
-    unadjudicatedConflictCount = activeConflicts.filter((conflict) => (
-      isLedgerConflictUnadjudicated(conflict, ledger, reviewScopeSnapshotId)
-    )).length;
-  }
+  const unadjudicatedConflictCount = activeConflicts.filter((conflict) => (
+    isActiveConflictUnadjudicated(ledger, conflict.id)
+  )).length;
   const bySeverity = Object.fromEntries(
     FINDING_SEVERITIES.map((severity) => [severity, 0]),
   ) as Record<FindingSeverity, number>;
