@@ -175,12 +175,16 @@ async function executeWorkflowInternal(
       const workflowMaxSteps = workflowConfig.maxSteps === 'infinite'
         ? requireFiniteWorkflowMaxSteps(bootstrap.effectiveWorkflowConfig)
         : workflowConfig.maxSteps;
+      const newMaxSteps = request.maxSteps + workflowMaxSteps;
+      if (!Number.isSafeInteger(newMaxSteps)) {
+        throw new Error('Cannot continue workflow because the next max steps limit exceeds the safe integer range');
+      }
       const resumePoint = getLatestResumePoint()
         ?? buildResumePointForStep(request.currentStep)
         ?? eventBridge?.state.lastResumePoint;
       eventBridge!.state.exceededInfo = {
         currentStep: request.currentStep,
-        newMaxSteps: request.maxSteps + workflowMaxSteps,
+        newMaxSteps,
         currentIteration: request.currentIteration,
         ...(resumePoint ? { resumePoint } : {}),
       };
