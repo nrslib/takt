@@ -193,6 +193,10 @@ function durableTestChecks() {
       'return { provider: checkpoint.pending.provider, iteration: checkpoint.run.iteration };',
       'return { provider: checkpoint.pending.provider, iteration: checkpoint.run.iteration + 1 };',
     )],
+    ['direct-count-constant', mutateHierarchyDepth(
+      "  return entries.filter(({ kind }) => kind === 'workflow_call').length;",
+      '  return 1;',
+    )],
     ['recursive-counts-wrappers', mutateHierarchyDepth(
       "total + (entry.kind === 'workflow_call' ? 1 : 0) + countWorkflowCalls(entry.children ?? [])",
       'total + 1 + countWorkflowCalls(entry.children ?? [])',
@@ -382,7 +386,12 @@ export default async function assertFixClosure() {
       ['provider-tail-mismatch-rejected', rejectsCheckpoint({ attempts: ['primary', 'other'] })],
       ['resume-keeps-provider', resumed.provider === pending.provider],
       ['resume-keeps-iteration', resumed.iteration === validCheckpoint.run.iteration],
+      ['direct-call-count-zero', countDirectWorkflowCalls(hierarchy.slice(1)) === 0],
       ['direct-call-count', countDirectWorkflowCalls(hierarchy) === 1],
+      ['direct-call-count-multiple', countDirectWorkflowCalls([
+        ...hierarchy,
+        { kind: 'workflow_call', children: [] },
+      ]) === 2],
       ['recursive-call-count', countWorkflowCalls(hierarchy) === 4],
       ['maximum-call-depth', maxWorkflowCallDepth(hierarchy) === 3],
       ['durable-regression-tests-pass', testResult.status === 0],
