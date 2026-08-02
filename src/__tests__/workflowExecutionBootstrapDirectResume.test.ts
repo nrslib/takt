@@ -326,7 +326,7 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     },
   );
 
-  it('uses the latest workflow max steps as the increment after the workflow definition changes', async () => {
+  it('should use the latest workflow max steps when the workflow definition changes', async () => {
     const projectDir = createTempProject();
     const bootstrap = await createWorkflowExecutionBootstrap(
       { ...workflowConfig, maxSteps: 60 },
@@ -343,7 +343,7 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     expect(bootstrap.effectiveWorkflowConfig.maxSteps).toBe(162);
   });
 
-  it('allows an additive extension exactly to the safe integer boundary', async () => {
+  it('should allow an additive extension when it reaches the safe integer boundary exactly', async () => {
     const projectDir = createTempProject();
     const maxStepsOverride = Number.MAX_SAFE_INTEGER - 51;
     const bootstrap = await createWorkflowExecutionBootstrap(
@@ -381,7 +381,7 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     { initialIterationOverride: 7, expectedMaxSteps: 12 },
     { initialIterationOverride: 12, expectedMaxSteps: 24 },
   ])(
-    'doubles a finite override to $expectedMaxSteps for an infinite workflow restored at $initialIterationOverride',
+    'should double a finite override to $expectedMaxSteps when an infinite workflow is restored at $initialIterationOverride',
     async ({ initialIterationOverride, expectedMaxSteps }) => {
       const projectDir = createTempProject();
       const bootstrap = await createWorkflowExecutionBootstrap(
@@ -400,7 +400,7 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     },
   );
 
-  it('rejects an infinite workflow override when doubling exceeds the safe integer range', async () => {
+  it('should reject an infinite workflow override when doubling exceeds the safe integer range', async () => {
     const projectDir = createTempProject();
     const maxStepsOverride = Math.floor(Number.MAX_SAFE_INTEGER / 2) + 1;
 
@@ -419,7 +419,7 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     expect(mockCreateOutputFns).not.toHaveBeenCalled();
   });
 
-  it('rejects a restored iteration when the next finite limit is not safely representable', async () => {
+  it('should reject a restored iteration when the next finite limit is not safely representable', async () => {
     const projectDir = createTempProject();
     const maxStepsOverride = Number.MAX_SAFE_INTEGER - 50;
 
