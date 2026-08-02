@@ -263,39 +263,43 @@ describe('builtin workflow step fragment migration', () => {
     }
   });
 
-  it.each(LANGUAGES)('composes %s lightweight development routines from shared step fragments', (lang) => {
-    const expectedFragments: Record<string, Record<string, string>> = {
-      'simple-core': {
-        plan: 'development-core-plan',
-        write_tests: 'development-core-write-tests',
-        implement: 'development-core-implement',
-      },
-      'mini-core': {
-        plan: 'development-core-plan',
-        implement: 'development-core-implement',
-      },
-      'simple-mini': {
-        plan: 'development-core-plan',
-        implement: 'development-core-implement',
-      },
-    };
+  it.each(LANGUAGES)('loads %s lightweight development routines with resolved runtime report contracts', (lang) => {
+    mkdirSync(join(projectDir, '.takt'), { recursive: true });
+    writeFileSync(join(projectDir, '.takt', 'config.yaml'), 'language: ' + lang + '\n', 'utf-8');
+    invalidateAllResolvedConfigCache();
 
-    for (const [workflowName, stepFragments] of Object.entries(expectedFragments)) {
-      const raw = readBuiltinWorkflow(lang, workflowName);
-      const expanded = resolveBuiltinWorkflow(lang, workflowName);
+    for (const workflowName of LIGHTWEIGHT_CORE_WORKFLOWS) {
+      const workflowPath = join(getBuiltinWorkflowsDir(lang), workflowName + '.yaml');
+      const workflow = loadWorkflowFromFile(workflowPath, projectDir);
+      const plan = workflow.steps.find((step) => step.name === 'plan');
+      const implement = workflow.steps.find((step) => step.name === 'implement');
+      const planFormat = plan?.outputContracts?.find((contract) => contract.name === 'plan.md')?.format;
 
-      for (const [stepName, fragmentName] of Object.entries(stepFragments)) {
-        expect(expectFragmentReference(getStep(raw, stepName), stepName), workflowName).toBe(fragmentName);
-        const expandedStep = getStep(expanded, stepName);
-        expect(expandedStep).not.toHaveProperty('uses');
-        expect(expandedStep).not.toHaveProperty('with');
-      }
-
-      const implementReports = (getStep(expanded, 'implement').output_contracts as {
-        report?: Array<{ name?: string }>;
-      } | undefined)?.report ?? [];
-      expect(implementReports.some((report) => report.name === 'implementation-report.md'), workflowName).toBe(true);
+      expect(planFormat?.trim().length, workflowName).toBeGreaterThan(0);
+      expect(
+        implement?.outputContracts?.some((contract) => contract.name === 'implementation-report.md'),
+        workflowName,
+      ).toBe(true);
     }
+  });
+
+  it.each(LANGUAGES)('resolves a non-default %s plan report format through callable step composition', (lang) => {
+    mkdirSync(join(projectDir, '.takt'), { recursive: true });
+    writeFileSync(join(projectDir, '.takt', 'config.yaml'), 'language: ' + lang + '\n', 'utf-8');
+    invalidateAllResolvedConfigCache();
+
+    const workflow = loadWorkflowFromFile(join(getBuiltinWorkflowsDir(lang), 'mini-core.yaml'), projectDir, {
+      callableArgs: { plan_report_format: 'plan-frontend' },
+    });
+    const planContract = workflow.steps
+      .find((step) => step.name === 'plan')
+      ?.outputContracts?.find((contract) => contract.name === 'plan.md');
+
+    expect(planContract).toMatchObject({
+      formatRef: 'plan-frontend',
+      format: expect.any(String),
+    });
+    expect(planContract?.format?.trim().length).toBeGreaterThan(0);
   });
 
   it.each(LANGUAGES)('composes %s domain reviewer suites without dropping specialist or maintenance facets', (lang) => {
