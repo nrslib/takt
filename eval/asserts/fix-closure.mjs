@@ -17,7 +17,13 @@ async function load(path) {
 }
 
 function runFixtureTests() {
-  return spawnSync('npm', ['test'], { cwd: workDir, encoding: 'utf8' });
+  const result = spawnSync('npm', ['test'], {
+    cwd: workDir,
+    encoding: 'utf8',
+    timeout: 120_000,
+  });
+  if (result.error) throw result.error;
+  return result;
 }
 
 function fixtureTestsPassWith(replacements) {
@@ -83,6 +89,14 @@ export function resumeAttempt(checkpoint) {
 }
 `;
 
+function mutateAttemptState(search, replacement) {
+  const mutated = validAttemptState.replace(search, replacement);
+  if (mutated === validAttemptState) {
+    throw new Error(`mutation template did not apply: ${search}`);
+  }
+  return { 'src/attempt-state.js': mutated };
+}
+
 function durableTestChecks() {
   const validSolution = {
     'src/report-emitter.js': validEmitter,
@@ -118,42 +132,42 @@ function durableTestChecks() {
   return emitter.emit(childEvent.report, parentContext);
 }
 ` }],
-    ['success-clear', { 'src/attempt-state.js': validAttemptState.replace(
+    ['success-clear', mutateAttemptState(
       "if (outcome.status === 'success') return { ...state, pending: undefined };",
       "if (outcome.status === 'success') return { ...state };",
-    ) }],
-    ['error-preservation', { 'src/attempt-state.js': validAttemptState.replace(
+    )],
+    ['error-preservation', mutateAttemptState(
       "if (outcome.status === 'success') return { ...state, pending: undefined };",
       "if (outcome.status === 'success' || outcome.status === 'error') return { ...state, pending: undefined };",
-    ) }],
-    ['blocked-preservation', { 'src/attempt-state.js': validAttemptState.replace(
+    )],
+    ['blocked-preservation', mutateAttemptState(
       "if (outcome.status === 'success') return { ...state, pending: undefined };",
       "if (outcome.status === 'success' || outcome.status === 'blocked') return { ...state, pending: undefined };",
-    ) }],
-    ['run-id-validation', { 'src/attempt-state.js': validAttemptState.replace(
+    )],
+    ['run-id-validation', mutateAttemptState(
       "  if (checkpoint.run.id !== checkpoint.judge.runId) throw new Error('run mismatch');\n",
       '',
-    ) }],
-    ['iteration-validation', { 'src/attempt-state.js': validAttemptState.replace(
+    )],
+    ['iteration-validation', mutateAttemptState(
       "  if (checkpoint.run.iteration !== checkpoint.judge.iteration) throw new Error('iteration mismatch');\n",
       '',
-    ) }],
-    ['step-validation', { 'src/attempt-state.js': validAttemptState.replace(
+    )],
+    ['step-validation', mutateAttemptState(
       "  if (checkpoint.pending.stepIteration !== checkpoint.judge.stepIteration) throw new Error('step mismatch');\n",
       '',
-    ) }],
-    ['provider-validation', { 'src/attempt-state.js': validAttemptState.replace(
+    )],
+    ['provider-validation', mutateAttemptState(
       "  if (checkpoint.attempts.at(-1) !== checkpoint.pending.provider) throw new Error('provider mismatch');\n",
       '',
-    ) }],
-    ['resume-provider', { 'src/attempt-state.js': validAttemptState.replace(
+    )],
+    ['resume-provider', mutateAttemptState(
       'return { provider: checkpoint.pending.provider, iteration: checkpoint.run.iteration };',
       'return { provider: checkpoint.originalProvider, iteration: checkpoint.run.iteration };',
-    ) }],
-    ['resume-iteration', { 'src/attempt-state.js': validAttemptState.replace(
+    )],
+    ['resume-iteration', mutateAttemptState(
       'return { provider: checkpoint.pending.provider, iteration: checkpoint.run.iteration };',
       'return { provider: checkpoint.pending.provider, iteration: checkpoint.run.iteration + 1 };',
-    ) }],
+    )],
   ];
   const survivingMutants = mutants
     .filter(([, replacements]) => fixtureTestsPassWith({ ...validSolution, ...replacements }))
@@ -206,13 +220,13 @@ export default async function assertFixClosure() {
     const pending = { provider: 'secondary', stepIteration: 3 };
     const createAttemptState = () => ({ pending: { ...pending }, attempts: ['primary', 'secondary'] });
     const successInput = createAttemptState();
-    const successSnapshot = structuredClone(successInput);
+    const successSnapshot = globalThis.structuredClone(successInput);
     const succeededState = finishAttempt(successInput, { status: 'success' });
     const failedInput = createAttemptState();
-    const failedSnapshot = structuredClone(failedInput);
+    const failedSnapshot = globalThis.structuredClone(failedInput);
     const failedState = finishAttempt(failedInput, { status: 'error' });
     const blockedInput = createAttemptState();
-    const blockedSnapshot = structuredClone(blockedInput);
+    const blockedSnapshot = globalThis.structuredClone(blockedInput);
     const blockedState = finishAttempt(blockedInput, { status: 'blocked' });
     const validCheckpoint = {
       run: { id: 'run-1', iteration: 7 },

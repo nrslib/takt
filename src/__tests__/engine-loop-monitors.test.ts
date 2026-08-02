@@ -1355,6 +1355,16 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       }).toThrow('nonexistent');
     });
 
+    it('should throw when loop_monitor ignore_steps overlaps the monitored cycle', () => {
+      const config = buildConfigWithLoopMonitor(3, {
+        ignoreSteps: ['ai_fix'],
+      });
+
+      expect(() => {
+        new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      }).toThrow('cannot appear in both cycle and ignore_steps');
+    });
+
     it('should throw when loop_monitor judge rule references nonexistent step', () => {
       const config = buildConfigWithLoopMonitor(3);
       config.loopMonitors = [

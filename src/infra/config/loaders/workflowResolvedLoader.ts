@@ -46,7 +46,7 @@ export function loadWorkflowFileWithResolutionOptions(
   const loadWorkflow = options.loadMode === 'discovery'
     ? loadWorkflowFromFileForDiscovery
     : loadWorkflowFromFile;
-  const workflow = loadWorkflow(canonicalFilePath, options.projectCwd, {
+  const workflow = loadWorkflow(filePath, options.projectCwd, {
     trustInfo,
     callableArgs: options.callableArgs,
     callableArgPolicy: buildWorkflowCallArgPolicy(options.parentTrustInfo, trustInfo),

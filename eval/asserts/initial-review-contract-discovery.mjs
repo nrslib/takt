@@ -3,6 +3,18 @@ function hasRejectVerdict(output) {
     || /^#+\s*REJECT\s*$/im.test(output);
 }
 
+function unwrapProviderOutput(output) {
+  try {
+    const parsed = JSON.parse(output);
+    if (parsed !== null && typeof parsed === 'object' && typeof parsed.output === 'string') {
+      return parsed.output;
+    }
+  } catch {
+    return output;
+  }
+  return output;
+}
+
 function splitMarkdownRow(line) {
   const cells = [];
   let cell = '';
@@ -59,23 +71,63 @@ function extractTableFamilyRecords(output) {
 }
 
 function extractLabeledFamilyRecords(output) {
-  const matches = [...output.matchAll(/family[_ -]?tag`?\s*[=:|]\s*`?([a-z0-9_-]+)/gi)];
+  const matches = [...output.matchAll(/^\s*(?:[-*]\s+)?`?family[_ -]?tag`?\s*[=:：]\s*`?([a-z0-9_-]+)/gim)];
   return matches.map((match, index) => ({
     familyTag: match[1],
     content: output.slice(match.index, matches[index + 1]?.index ?? output.length),
   }));
 }
 
+function appendEvidence(current, incoming, key) {
+  if (incoming[key] === undefined) return;
+  current[key] = current[key] === undefined
+    ? incoming[key]
+    : `${current[key]}\n${incoming[key]}`;
+}
+
+function aggregateFamilyRecords(records) {
+  const aggregated = new Map();
+  for (const record of records) {
+    const familyTag = record.familyTag.trim().toLowerCase();
+    const current = aggregated.get(familyTag);
+    if (!current) {
+      aggregated.set(familyTag, { ...record, familyTag });
+      continue;
+    }
+    current.content += `\n${record.content}`;
+    appendEvidence(current, record, 'locationEvidence');
+    appendEvidence(current, record, 'problemEvidence');
+    appendEvidence(current, record, 'repairEvidence');
+  }
+  return [...aggregated.values()];
+}
+
 function extractFamilyRecords(output) {
-  return [...extractTableFamilyRecords(output), ...extractLabeledFamilyRecords(output)];
+  return aggregateFamilyRecords([
+    ...extractTableFamilyRecords(output),
+    ...extractLabeledFamilyRecords(output),
+  ]);
 }
 
 function extractLocationEvidence(record) {
   const locations = [];
   let tableLocationIndex = -1;
+  let locationSectionIndent = -1;
   for (const line of record.split('\n')) {
-    const labeled = line.match(/^\s*[-*]?\s*(?:場所|Location|Paths?|Files?)\s*[:：]\s*(.+)$/i);
-    if (labeled) locations.push(labeled[1]);
+    const labeled = line.match(/^(\s*)[-*]?\s*(?:場所|Location|Paths?|Files?|根本原因|Root Cause|影響箇所|Affected (?:Paths?|Files?))\s*[:：]\s*(.*)$/i);
+    if (labeled) {
+      locationSectionIndent = labeled[1].length;
+      if (labeled[2].trim()) locations.push(labeled[2]);
+      continue;
+    }
+    if (locationSectionIndent >= 0) {
+      const listItem = line.match(/^(\s*)[-*]\s+(.+)$/);
+      if (listItem && listItem[1].length > locationSectionIndent) {
+        locations.push(listItem[2]);
+        continue;
+      }
+      if (line.trim()) locationSectionIndent = -1;
+    }
 
     if (!line.includes('|')) continue;
     const cells = line.split('|').map((cell) => cell.trim());
@@ -101,6 +153,7 @@ function recordIncludesAllLocations(record, paths) {
 }
 
 export default function assertInitialReviewContractDiscovery(output) {
+  const reviewOutput = unwrapProviderOutput(output);
   const projectionPaths = [
     'src/preview.js',
     'src/doctor.js',
@@ -113,19 +166,19 @@ export default function assertInitialReviewContractDiscovery(output) {
     'src/checkpoint.js',
     'src/event-bus.js',
   ];
-  const records = extractFamilyRecords(output);
+  const records = extractFamilyRecords(reviewOutput);
   const projectionRecord = records.find((record) => recordIncludesAllLocations(record, projectionPaths));
   const identityRecord = records.find((record) => recordIncludesAllLocations(record, identityPaths));
   const hasProblemAndRepair = (record) => {
     if (record === undefined) return false;
-    if (record.problemEvidence !== undefined || record.repairEvidence !== undefined) {
+    if (record.problemEvidence !== undefined && record.repairEvidence !== undefined) {
       return Boolean(record.problemEvidence?.trim() && record.repairEvidence?.trim());
     }
     return /(問題|違反|誤認|欠陥|incorrect|broken|bug|violation|collision|衝突)/i.test(record.content)
       && /(修正|変更|統一|分離|追加|維持|fix|change|unify|separate|encode|preserve|test)/i.test(record.content);
   };
   const checks = [
-    ['reject-verdict', hasRejectVerdict(output)],
+    ['reject-verdict', hasRejectVerdict(reviewOutput)],
     ['projection-family-complete', projectionRecord !== undefined],
     ['projection-contract-grounded', projectionRecord !== undefined
       && /(control|制御).*(worker|実行者|task|タスク)|(worker|実行者|task|タスク).*(control|制御)/is.test(projectionRecord.content)],

@@ -1,5 +1,5 @@
 import { dirname, join } from 'node:path';
-import { mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
@@ -16,6 +16,7 @@ import {
   workflowEntryMatchesWorkflow,
 } from '../core/workflow/workflow-reference.js';
 import { trimResumePointStackForWorkflow } from '../core/workflow/run/resume-point.js';
+import { invalidateAllResolvedConfigCache, invalidateGlobalConfigCache } from '../infra/config/index.js';
 
 const tempDirs = new Set<string>();
 
@@ -241,5 +242,61 @@ steps:
     expect(getWorkflowSourcePath(resolvedFromAlias)).toBe(getWorkflowSourcePath(resolvedFromPath));
     expect(getAttachedWorkflowTrustInfo(resolvedFromAlias)).toEqual(getAttachedWorkflowTrustInfo(resolvedFromPath));
     expect(resolvedFromAlias.steps[0]?.personaPath).toBe(resolvedFromPath.steps[0]?.personaPath);
+  });
+
+  it('repertoire の祖先 symlink 経路でも package facet と canonical identity を両立する', () => {
+    const projectDir = createProjectDir();
+    const realConfigDir = join(projectDir, 'config-real');
+    const aliasConfigDir = join(projectDir, 'config-alias');
+    const realPackageDir = join(realConfigDir, 'repertoire', '@nrslib', 'pkg');
+    const realWorkflowPath = join(realPackageDir, 'workflows', 'child.yaml');
+    const aliasWorkflowPath = join(aliasConfigDir, 'repertoire', '@nrslib', 'pkg', 'workflows', 'child.yaml');
+    const previousConfigDir = process.env.TAKT_CONFIG_DIR;
+    mkdirSync(dirname(realWorkflowPath), { recursive: true });
+    mkdirSync(join(realPackageDir, 'facets', 'instructions'), { recursive: true });
+    writeFileSync(join(realPackageDir, 'facets', 'instructions', 'package-only.md'), 'Package instruction', 'utf-8');
+    writeFileSync(join(dirname(realWorkflowPath), 'reviewer.md'), '# Reviewer', 'utf-8');
+    writeFileSync(realWorkflowPath, `name: child
+initial_step: review
+max_steps: 3
+steps:
+  - name: review
+    persona: ./reviewer.md
+    instruction: package-only
+    rules:
+      - condition: done
+        next: COMPLETE
+`, 'utf-8');
+    symlinkSync(realConfigDir, aliasConfigDir, 'dir');
+
+    process.env.TAKT_CONFIG_DIR = aliasConfigDir;
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+    try {
+      const workflowFromAlias = loadWorkflowFileWithResolutionOptions(aliasWorkflowPath, {
+        lookupCwd: projectDir,
+        projectCwd: projectDir,
+        source: 'repertoire',
+      });
+      const workflowFromCanonicalPath = loadWorkflowFileWithResolutionOptions(realWorkflowPath, {
+        lookupCwd: projectDir,
+        projectCwd: projectDir,
+        source: 'repertoire',
+      });
+
+      expect(workflowFromAlias.steps[0]?.instruction).toBe('Package instruction');
+      expect(workflowFromCanonicalPath.steps[0]?.instruction).toBe('Package instruction');
+      expect(getWorkflowReference(workflowFromAlias)).toBe(getWorkflowReference(workflowFromCanonicalPath));
+      expect(getWorkflowSourcePath(workflowFromAlias)).toBe(realpathSync(realWorkflowPath));
+      expect(getWorkflowSourcePath(workflowFromAlias)).toBe(getWorkflowSourcePath(workflowFromCanonicalPath));
+      expect(getAttachedWorkflowTrustInfo(workflowFromAlias)).toEqual(
+        getAttachedWorkflowTrustInfo(workflowFromCanonicalPath),
+      );
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.TAKT_CONFIG_DIR;
+      else process.env.TAKT_CONFIG_DIR = previousConfigDir;
+      invalidateGlobalConfigCache();
+      invalidateAllResolvedConfigCache();
+    }
   });
 });

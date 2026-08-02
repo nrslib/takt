@@ -130,9 +130,9 @@ steps:
         $param: fix_knowledge
       fix_instruction: apply-fix-verification
     rules:
-      - condition: Fix completed
+      - condition: Fix complete
         next: fix-verifier
-      - condition: Fix plan revision required
+      - condition: Fix plan requires revision
         next: fix-plan
-      - condition: Overall task replanning required
+      - condition: Task-level replanning required
         return: need_replan

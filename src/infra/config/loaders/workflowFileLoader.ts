@@ -7,6 +7,7 @@ import { resolveWorkflowConfigValue } from '../resolveWorkflowConfigValue.js';
 import { loadGlobalConfig } from '../global/globalConfig.js';
 import { loadProjectConfig } from '../project/projectConfig.js';
 import type { FacetResolutionContext } from './resource-resolver.js';
+import { isPackageWorkflow } from './workflowPackageScope.js';
 import { normalizeWorkflowConfig } from './workflowParser.js';
 import {
   resolveWorkflowArpeggioPolicy,
@@ -43,20 +44,30 @@ function loadWorkflowFromFileInternal(
 
   const canonicalFilePath = realpathSync(filePath);
   const raw = parseYaml(readFileSync(canonicalFilePath, 'utf-8'));
-  const workflowDir = dirname(canonicalFilePath);
-  const context: FacetResolutionContext = {
-    lang: resolveWorkflowConfigValue(projectDir, 'language'),
-    projectDir,
-    workflowDir,
-    repertoireDir: getRepertoireDir(),
-  };
-
   const projectConfig = loadProjectConfig(projectDir);
   const globalConfig = loadGlobalConfig();
   const trustInfo = options?.trustInfo ?? resolveWorkflowTrustInfo({
     filePath: canonicalFilePath,
     projectCwd: projectDir,
   });
+  const configuredRepertoireDir = getRepertoireDir();
+  const logicalWorkflowDir = dirname(filePath);
+  const useLogicalRepertoireBoundary = trustInfo.source === 'repertoire'
+    && isPackageWorkflow(logicalWorkflowDir, configuredRepertoireDir);
+  const repertoireDir = trustInfo.source === 'repertoire'
+    && !useLogicalRepertoireBoundary
+    && existsSync(configuredRepertoireDir)
+    ? realpathSync(configuredRepertoireDir)
+    : configuredRepertoireDir;
+  const workflowDir = useLogicalRepertoireBoundary
+    ? logicalWorkflowDir
+    : dirname(canonicalFilePath);
+  const context: FacetResolutionContext = {
+    lang: resolveWorkflowConfigValue(projectDir, 'language'),
+    projectDir,
+    workflowDir,
+    repertoireDir,
+  };
 
   const config = normalizeWorkflowConfig(
     raw,

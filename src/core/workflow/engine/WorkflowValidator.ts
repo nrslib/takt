@@ -745,6 +745,9 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
       if (!stepNames.has(ignoredName)) {
         throw new Error(`Invalid loop_monitor: ignore_steps references unknown step "${ignoredName}"`);
       }
+      if (monitor.cycle.includes(ignoredName)) {
+        throw new Error(`Invalid loop_monitor: step "${ignoredName}" cannot appear in both cycle and ignore_steps`);
+      }
     }
     for (const rule of monitor.judge.rules) {
       if (!stepNames.has(rule.next)) {
