@@ -107,6 +107,7 @@ function durableTestChecks() {
     'src/attempt-state.js': validAttemptState,
   };
   const validAlternativeAccepted = fixtureTestsPassWith(validSolution);
+  const successClearLine = "if (outcome.status === 'success') return { ...state, pending: undefined };";
   const mutants = [
     ['emitter-fallback', { 'src/report-emitter.js': `export class ReportEmitter {
   emit(report, attribution) {
@@ -133,15 +134,15 @@ function durableTestChecks() {
 }
 ` }],
     ['success-clear', mutateAttemptState(
-      "if (outcome.status === 'success') return { ...state, pending: undefined };",
+      successClearLine,
       "if (outcome.status === 'success') return { ...state };",
     )],
     ['error-preservation', mutateAttemptState(
-      "if (outcome.status === 'success') return { ...state, pending: undefined };",
+      successClearLine,
       "if (outcome.status === 'success' || outcome.status === 'error') return { ...state, pending: undefined };",
     )],
     ['blocked-preservation', mutateAttemptState(
-      "if (outcome.status === 'success') return { ...state, pending: undefined };",
+      successClearLine,
       "if (outcome.status === 'success' || outcome.status === 'blocked') return { ...state, pending: undefined };",
     )],
     ['run-id-validation', mutateAttemptState(
