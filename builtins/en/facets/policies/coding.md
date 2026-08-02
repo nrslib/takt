@@ -434,6 +434,18 @@ When changing contracts that other code or users depend on — types, interfaces
 | Persistence, sending, or diffing depends on derived values | REJECT |
 | Only canonical state is stored, and derived values are generated at use sites or boundaries | OK |
 
+## Separate Input Sets from Generated Artifacts
+
+Do not implicitly mix the inputs discovered by a process with artifacts written by that process. When generated artifacts intentionally become downstream inputs, define the iteration boundary, termination condition, and deduplication contract explicitly.
+
+| Criteria | Judgment |
+|----------|----------|
+| A process writes into a directory and then scans the same scope without excluding its generated artifacts | REJECT |
+| Temporary or intermediate artifacts are captured by an overly broad glob or listing and receive the same transformation or validation again | REJECT |
+| Generated artifacts feed back into the same process without a defined iteration boundary, termination condition, and deduplication contract | REJECT |
+| The input set is fixed before side effects, or input and output locations or artifact kinds are separated | OK |
+| Generated artifacts intentionally enter the next iteration, with termination and idempotency verified as behavior | OK |
+
 ## Unfinished Code
 
 Do not leave TODO/FIXME comments, empty implementations, stubs, or commented-out old implementations as substitutes for completed code. Implement what is needed now and delete what is not needed.

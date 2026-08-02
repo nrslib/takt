@@ -252,6 +252,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getWorkflowSteps: () => params.config.steps.map((step) => ({ name: step.name, description: step.description })),
     getWorkflowName: () => params.config.name,
     getWorkflowDescription: () => params.config.description,
+    getWorkflowCallVars: () => params.options.workflowCallVars,
     getRetryNote: () => params.options.retryNote,
     getPrContext: () => params.options.prContext,
     getObservabilityRunId: () => params.options.observabilityRunId,

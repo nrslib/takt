@@ -512,6 +512,10 @@ export class WorkflowCallExecutor {
       reportDirName: this.deps.runPaths.slug,
       runPathNamespace: this.buildWorkflowCallNamespace(request.reportNamespaceSegment),
       findingCallNamespace: this.buildFindingCallNamespace(request.reportNamespaceSegment),
+      workflowCallVars: {
+        ...options.workflowCallVars,
+        ...request.step.vars,
+      },
       sharedRuntime: this.deps.sharedRuntime,
       resumeStackPrefix: request.callStack.map((entry) => ({
         ...entry,

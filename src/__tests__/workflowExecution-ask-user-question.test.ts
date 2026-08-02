@@ -28,13 +28,15 @@ const { disabledObservability, MockWorkflowEngine } = vi.hoisted(() => {
       super();
       this.config = config;
       this.receivedOptions = options;
+      MockWorkflowEngine.activeResumePoint ??= options.resumePoint as WorkflowResumePoint | undefined;
       MockWorkflowEngine.lastInstance = this;
     }
 
     abort(): void {}
 
     getResumePoint(): WorkflowResumePoint | undefined {
-      return MockWorkflowEngine.activeResumePoint;
+      return MockWorkflowEngine.activeResumePoint
+        ?? this.receivedOptions.resumePoint as WorkflowResumePoint | undefined;
     }
 
     buildResumePointForStepName(stepName: string): WorkflowResumePoint | undefined {
@@ -332,6 +334,44 @@ describe('executeWorkflow AskUserQuestion deny handler wiring', () => {
     });
   });
 
+  it('should preserve a nested checkpoint when a resumed run exceeds before its first step', async () => {
+    const resumeStack = [
+      {
+        workflow: 'default',
+        step: 'develop',
+        kind: 'workflow_call' as const,
+        call_instance: 1,
+      },
+      {
+        workflow: 'development-core',
+        step: 'peer-review',
+        kind: 'workflow_call' as const,
+        call_instance: 1,
+      },
+      { workflow: 'peer-review', step: 'fix', kind: 'agent' as const },
+    ];
+    const resumePoint = {
+      version: 2 as const,
+      stack: resumeStack,
+      iteration: 59,
+      elapsed_ms: 183245,
+      workflow_call_invocations: buildWorkflowCallInvocationFixture(resumeStack),
+      workflow_step_participations: {},
+    };
+    MockWorkflowEngine.triggerIterationLimit = true;
+    MockWorkflowEngine.iterationLimitCurrentStep = 'develop';
+    MockWorkflowEngine.iterationLimitCurrentIteration = 59;
+
+    const result = await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+      startStep: 'develop',
+      resumePoint,
+      initialIterationOverride: 59,
+    });
+
+    expect(result.exceededInfo?.resumePoint).toEqual(resumePoint);
+  });
+
   it('should use maxStepsOverride when exceeded handling runs for an infinite workflow', async () => {
     MockWorkflowEngine.triggerIterationLimit = true;
 
@@ -351,6 +391,73 @@ describe('executeWorkflow AskUserQuestion deny handler wiring', () => {
       currentIteration: 1,
       resumePoint: MockWorkflowEngine.activeResumePoint,
     });
+  });
+
+  it('should add the latest workflow max steps when a resumed workflow exceeds again', async () => {
+    MockWorkflowEngine.triggerIterationLimit = true;
+
+    const result = await executeWorkflow({
+      ...makeConfig(),
+      maxSteps: 51,
+    }, 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+      maxStepsOverride: 102,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.exceeded).toBe(true);
+    expect(result.exceededInfo).toEqual({
+      currentStep: 'implement',
+      newMaxSteps: 153,
+      currentIteration: 1,
+      resumePoint: MockWorkflowEngine.activeResumePoint,
+    });
+  });
+
+  it('should allow the next max steps when a finite workflow reaches the safe integer boundary', async () => {
+    MockWorkflowEngine.triggerIterationLimit = true;
+
+    const result = await executeWorkflow({
+      ...makeConfig(),
+      maxSteps: 51,
+    }, 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+      maxStepsOverride: Number.MAX_SAFE_INTEGER - 51,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.exceeded).toBe(true);
+    expect(result.exceededInfo).toEqual({
+      currentStep: 'implement',
+      newMaxSteps: Number.MAX_SAFE_INTEGER,
+      currentIteration: 1,
+      resumePoint: MockWorkflowEngine.activeResumePoint,
+    });
+  });
+
+  it('should reject the next max steps when a finite workflow would exceed the safe integer range', async () => {
+    MockWorkflowEngine.triggerIterationLimit = true;
+
+    await expect(executeWorkflow({
+      ...makeConfig(),
+      maxSteps: 51,
+    }, 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+      maxStepsOverride: Number.MAX_SAFE_INTEGER - 50,
+    })).rejects.toThrow('safe integer range');
+  });
+
+  it('should reject the next max steps when an infinite workflow override would exceed the safe integer range', async () => {
+    MockWorkflowEngine.triggerIterationLimit = true;
+    const maxStepsOverride = Math.floor(Number.MAX_SAFE_INTEGER / 2) + 1;
+
+    await expect(executeWorkflow({
+      ...makeConfig(),
+      maxSteps: 'infinite',
+    }, 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+      maxStepsOverride,
+    })).rejects.toThrow('safe integer range');
   });
 
   it('should use engine getResumePoint when currentStep cannot be rebuilt in exceeded handling', async () => {

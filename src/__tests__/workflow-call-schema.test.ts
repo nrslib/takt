@@ -177,6 +177,84 @@ describe('workflow_call schema', () => {
     expect(workflow.maxSteps).toBeUndefined();
   });
 
+  it('accepts scalar vars only on workflow_call steps and preserves them after normalization', () => {
+    const raw = {
+      name: 'parent',
+      steps: [createWorkflowCallStep({
+        vars: {
+          review_mode: 'follow_up',
+          attempt: 2,
+          strict: true,
+          disabled: false,
+          offset: 0,
+        },
+      })],
+    };
+
+    expect(WorkflowConfigRawSchema.safeParse(raw).success).toBe(true);
+    expect(normalizeWorkflowConfig(raw, '/tmp').steps[0]).toMatchObject({
+      vars: {
+        review_mode: 'follow_up',
+        attempt: 2,
+        strict: true,
+        disabled: false,
+        offset: 0,
+      },
+    });
+
+    const agentResult = WorkflowStepRawSchema.safeParse({
+      name: 'review',
+      persona: 'reviewer',
+      instruction: 'review',
+      vars: { review_mode: 'initial' },
+      rules: [{ condition: 'done', next: 'COMPLETE' }],
+    });
+    expect(agentResult.success).toBe(false);
+  });
+
+  it.each([
+    ['', 'empty'],
+    ['1mode', 'leading digit'],
+    ['review mode', 'whitespace'],
+  ])('rejects a workflow_call var key at the parser boundary: %s (%s)', (key) => {
+    const result = WorkflowStepRawSchema.safeParse(createWorkflowCallStep({
+      vars: { [key]: 'follow_up' },
+    }));
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((issue) => issue.path.includes('vars'))).toBe(true);
+    }
+  });
+
+  it.each([Number.POSITIVE_INFINITY, Number.NaN])(
+    'rejects a non-finite workflow_call var value: %s',
+    (value) => {
+      const result = WorkflowStepRawSchema.safeParse(createWorkflowCallStep({
+        vars: { attempt: value },
+      }));
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some((issue) => issue.path.includes('vars'))).toBe(true);
+      }
+    },
+  );
+
+  it('rejects vars on system steps', () => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'route',
+      kind: 'system',
+      vars: { review_mode: 'initial' },
+      rules: [{ condition: 'when(true)', next: 'COMPLETE' }],
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((issue) => issue.path[0] === 'vars')).toBe(true);
+    }
+  });
+
   it('accepts workflow_ref params and empty facet_ref array values', () => {
     const result = WorkflowConfigRawSchema.safeParse({
       name: 'composer',

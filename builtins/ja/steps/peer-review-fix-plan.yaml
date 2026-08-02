@@ -5,6 +5,9 @@ params:
   fix_knowledge:
     type: facet_ref[]
     facet_kind: knowledge
+  plan_instruction:
+    type: facet_ref
+    facet_kind: instruction
 name: fix-plan
 tags:
   - plan
@@ -18,7 +21,8 @@ knowledge:
 provider_options:
   extends: review-readonly
 pass_previous_response: false
-instruction: fix-plan
+instruction:
+  $param: plan_instruction
 output_contracts:
   report:
     - name: fix-plan.md

@@ -3,6 +3,7 @@ import {
   WorkflowConfigRawSchema,
   ParallelSubStepRawSchema,
   WorkflowStepRawSchema,
+  LoopMonitorSchema,
   LoopMonitorJudgeSchema,
 } from '../core/models/index.js';
 import {
@@ -416,6 +417,32 @@ describe('WorkflowStepRawSchema with parallel', () => {
         call: 'shared/review',
       });
     }
+  });
+});
+
+describe('LoopMonitorSchema', () => {
+  const judge = {
+    rules: [{ condition: 'continue', next: 'review' }],
+  };
+
+  it('accepts intermediate steps that are excluded from cycle matching', () => {
+    const result = LoopMonitorSchema.safeParse({
+      cycle: ['review', 'fix'],
+      ignore_steps: ['verify', 'retry'],
+      judge,
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects a step that is both monitored and ignored', () => {
+    const result = LoopMonitorSchema.safeParse({
+      cycle: ['review', 'fix'],
+      ignore_steps: ['fix'],
+      judge,
+    });
+
+    expect(result.success).toBe(false);
   });
 });
 

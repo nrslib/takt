@@ -116,11 +116,14 @@ fragment root の `params` は必須の型付き parameter を宣言し、`uses`
         - condition: "approved"
         - condition: "needs_fix"
 
-    - name: qa-review
-      persona: qa-reviewer
-      policy: review
+    - name: testing-review
+      persona: testing-reviewer
+      policy: testing
+      knowledge:
+        - unit-testing
+        - e2e-testing
       edit: false
-      instruction: review-qa
+      instruction: review-test
       rules:
         - condition: "approved"
         - condition: "needs_fix"
@@ -285,6 +288,7 @@ quality_gates:
 ```yaml
 loop_monitors:
   - cycle: [step_a, step_b]           # 監視対象の step 名のサイクル
+    ignore_steps: [verification]       # サイクル照合から除外する任意の中間 step
     threshold: 3                       # 発動閾値（サイクル回数）
     judge:
       persona: supervisor              # ペルソナキー参照
@@ -298,7 +302,7 @@ loop_monitors:
           next: alternative_step
 ```
 
-特定の step 間のサイクルが閾値に達した場合、judge が介入して遷移先を判断する。
+特定の step 間のサイクルが閾値に達した場合、judge が介入して遷移先を判断する。`ignore_steps` は任意回数の検証・再修正などを照合から除外する。`cycle` と同じ step は指定できない。
 
 ## allowed_tools について
 

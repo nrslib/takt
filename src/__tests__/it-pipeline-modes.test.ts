@@ -158,7 +158,16 @@ vi.mock('../shared/prompt/index.js', () => ({
 
 vi.mock('../core/workflow/phase-runner.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../core/workflow/phase-runner.js')>()),
-  runReportPhase: vi.fn().mockResolvedValue(undefined),
+  runReportPhase: vi.fn().mockImplementation(async (
+    step: WorkflowStep,
+    _stepIteration: number,
+    context: { reportDir: string; lastResponse?: string },
+  ) => {
+    mkdirSync(context.reportDir, { recursive: true });
+    for (const contract of step.outputContracts ?? []) {
+      writeFileSync(join(context.reportDir, contract.name), context.lastResponse ?? 'Mock report');
+    }
+  }),
   runStatusJudgmentPhase: vi.fn().mockImplementation(selectSemanticLabelFromTag),
 }));
 
@@ -334,29 +343,14 @@ describe('Pipeline Modes IT: --task + --workflow name (builtin)', () => {
     setMockScenario([
       { persona: 'planner', status: 'done', content: '[PLAN:1]\n\nRequirements are clear and implementable' },
       { persona: 'coder', status: 'done', content: '[WRITE_TESTS:1]\n\nTests written successfully' },
-      {
-        persona: 'coder',
-        status: 'done',
-        content: 'Implementation work decomposed.',
-        structuredOutput: {
-          parts: [{ id: 'implementation', title: 'Implement', instruction: 'Implement the planned change.' }],
-        },
-      },
       { persona: 'coder', status: 'done', content: '[IMPLEMENT:1]\n\nImplementation complete' },
-      {
-        persona: 'coder',
-        status: 'done',
-        content: 'No additional work is needed.',
-        structuredOutput: { done: true, reasoning: 'Implementation is complete.', cancelPartIds: [], parts: [] },
-      },
       { persona: 'architecture-reviewer', status: 'done', content: '[ARCH-REVIEW:1]\n\napproved' },
       { persona: 'security-reviewer', status: 'done', content: '[SECURITY-REVIEW:1]\n\napproved' },
-      { persona: 'qa-reviewer', status: 'done', content: '[QA-REVIEW:1]\n\napproved' },
       { persona: 'testing-reviewer', status: 'done', content: '[TESTING-REVIEW:1]\n\napproved' },
       { persona: 'coding-reviewer', status: 'done', content: '[CODING-REVIEW:1]\n\napproved' },
       { persona: 'ai-antipattern-reviewer', status: 'done', content: '[AI-ANTIPATTERN-REVIEW-2ND:1]\n\napproved' },
-      { persona: 'merge-readiness-reviewer', status: 'done', content: '[MERGE-READINESS-REVIEW:1]\n\napproved' },
-      { persona: 'supervisor', status: 'done', content: '[SUPERVISE:2]\n\napproved' },
+      { persona: 'review-adjudicator', status: 'done', content: '[REVIEW-ADJUDICATION:2]\n\nNo actionable findings remain.' },
+      { persona: 'merge-readiness-supervisor', status: 'done', content: '[FINAL-GATE:1]\n\nMergeable.' },
     ]);
 
     const exitCode = await executePipeline({

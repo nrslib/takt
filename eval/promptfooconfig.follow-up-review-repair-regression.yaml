@@ -1,0 +1,36 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'TAKT facet eval: follow-up review independently falsifies remediation claims'
+
+prompts:
+  - file://prompts/follow-up-review-repair-regression.phase1.md
+
+providers:
+  - id: openai:codex-sdk
+    label: codex
+    config:
+      working_dir: fixtures/follow-up-review-repair-regression
+      sandbox_mode: read-only
+      approval_policy: never
+      skip_git_repo_check: true
+      model_reasoning_effort: low
+
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model_reasoning_effort: low
+
+tests:
+  - description: 'follow-up review: distinguish an incomplete repair from repair-induced and adjacent contract defects'
+    vars:
+      task: file://cases/follow-up-review-repair-regression-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: review/remediation-falsification
+        value: |
+          Judge causal classification and code evidence, not headings, table shape, labels, or exact wording. Pass only if the review rejects, identifies src/public-key.js as a collision defect introduced by the repair, separately keeps the original finding unresolved for src/retry-token.js and src/checkpoint.js, and does not report src/primary-key.js or src/structured-key.js as defective. Merely listing all defects under the original persistent finding fails because it does not distinguish the repair-induced regression.

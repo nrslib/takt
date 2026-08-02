@@ -726,7 +726,7 @@ describe('CodexClient strict read-only isolation', () => {
     5_000,
   );
 
-  it('should keep ambient instructions and capabilities out of the real Codex request', async () => {
+  it('should keep ambient instructions and capabilities out of the real Codex request', async (context) => {
     const ambientRoot = mkdtempSync(join(tmpdir(), 'takt-codex-real-ambient-'));
     temporaryDirectories.push(ambientRoot);
     const ambientHome = join(ambientRoot, 'home');
@@ -776,7 +776,22 @@ describe('CodexClient strict read-only isolation', () => {
         response.end(JSON.stringify({ error: { message: 'capture complete' } }));
       });
     });
-    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const handleError = (error: Error) => reject(error);
+        server.once('error', handleError);
+        server.listen(0, '127.0.0.1', () => {
+          server.off('error', handleError);
+          resolve();
+        });
+      });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EPERM') {
+        context.skip();
+        return;
+      }
+      throw error;
+    }
     try {
       const address = server.address();
       if (address === null || typeof address === 'string') {

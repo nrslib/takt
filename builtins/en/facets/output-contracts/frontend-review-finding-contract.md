@@ -13,6 +13,11 @@
 | Accessibility | ✅ | - |
 | Type safety | ✅ | - |
 
+## Problem-Family Completion Sweep
+| family_tag / changed contract | Invariant or root cause | Definition, production, validation | Consumption, persistence, reinjection | Failure, interruption, retry, resume, parallel, auxiliary entries | Mocks, fixtures, test doubles | Unchecked paths | Result |
+|-------------------------------|-------------------------|------------------------------------|---------------------------------------|--------------------------------------------------------------------------|------------------------------|-----------------|--------|
+| {problem family or contract reviewed} | {condition to preserve} | {locations checked} | {locations checked} | {paths checked} | {test assets checked} | {none or reason unchecked} | {no issue / finding number} |
+
 ## Observed Findings
 | # | family_tag | Severity | Location | Issue | Impact | Fix Suggestion |
 |---|------------|----------|----------|-------|--------|----------------|
@@ -32,6 +37,6 @@
 ```
 
 **Cognitive load reduction rules:**
-- APPROVE with no resolution confirmations → Summary only (5 lines or fewer)
-- APPROVE with resolution confirmations → Summary and Resolution Confirmations only
+- APPROVE with no resolution confirmations → Summary and only the checked criteria and completed-scan evidence required for a follow-up review (concisely aggregated)
+- APPROVE with resolution confirmations → Summary, Resolution Confirmations, and only the checked criteria and completed-scan evidence required for a follow-up review (concisely aggregated)
 - REJECT → Include every verified finding and necessary resolution confirmation, aggregating locations with the same cause

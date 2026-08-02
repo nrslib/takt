@@ -175,7 +175,7 @@ describe('runReportPhase report history behavior', () => {
     vi.setSystemTime(new Date('2026-02-10T06:11:43Z'));
 
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
-    const step = createStep('06-qa-review.md');
+    const step = createStep('06-testing-review.md');
     const ctx = createContext(reportDir);
     queueRunAgentResponses([
       {
@@ -207,11 +207,11 @@ describe('runReportPhase report history behavior', () => {
     await runReportPhase(step, 3, ctx);
 
     // Then
-    const versionedFiles = writerHistoryPaths(reportDir, '06-qa-review.md')
+    const versionedFiles = writerHistoryPaths(reportDir, '06-testing-review.md')
       .map((path) => basename(path));
     expect(versionedFiles).toEqual([
-      '06-qa-review.md.20260210T061143Z',
-      '06-qa-review.md.20260210T061143Z.1',
+      '06-testing-review.md.20260210T061143Z',
+      '06-testing-review.md.20260210T061143Z.1',
     ]);
   });
 

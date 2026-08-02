@@ -405,6 +405,19 @@ step が別の workflow を名前で呼び出します。子 workflow は同じ 
 
 `max_steps` はルート workflow が所有し、すべての子孫で共有する予算です。`workflow_call` は制御ノードなので予算を消費せず、自身の provider / model も選択しません。iteration を消費するのは子 workflow 内の実行可能な step だけです。たとえば `plan → workflow_call(implement → review) → supervise` は4 iterationを消費するため、`implement` と `review` を callable workflow へ抽出しても `max_steps` を増やす必要はありません。nested call でも同じです。call lifecycle は invocation 番号と完全な call stack を伴って session log と trace から引き続き確認できます。
 
+`workflow_call` step には、facet 参照ではない実行コンテキストを scalar の `vars` として指定することもできます。文字列、有限数、真偽値が nested workflow call の子孫まで継承され、下位の呼び出しが同じ key を宣言した場合はその値で上書きされます。agent の instruction facet では `{var:name}` で参照します。値がない場合は `unspecified` になるため、instruction 側で安全な fallback を明示できます。
+
+```yaml
+- name: follow-up-review
+  kind: workflow_call
+  call: peer-review-suite
+  vars:
+    review_mode: follow_up
+  rules:
+    - condition: COMPLETE
+      next: COMPLETE
+```
+
 ## Output Contracts（レポートファイル）
 
 step はレポートディレクトリ配下にレポートファイルを生成できます。
@@ -571,6 +584,7 @@ step 間の循環パターン（例: `review` → `fix` → `review` の無限�
 ```yaml
 loop_monitors:
   - cycle: [review, fix]
+    ignore_steps: [verify]
     threshold: 3
     judge:
       session_key: loop-supervisor
@@ -582,6 +596,8 @@ loop_monitors:
         - condition: "進捗なし"
           next: ABORT
 ```
+
+`ignore_steps` はサイクル照合から中間 step を除外します。任意回数の検証・再修正 step を含む論理サイクルを監視するときに使用します。`cycle` に含む step と同じ step は指定できません。
 
 `loop_monitors.judge` は agent step と同じ provider/model 検証で `provider`、`model`、`provider_options` を指定できます。`provider` を省略した場合、judge はトリガー元 step の provider と model を継承します。`provider` を指定して `model` を省略した場合、継承 model はクリアされます。トリガー元 step に解決済み model があっても provider または CLI のデフォルトを使わせたい場合は、`model: null` を指定してください。
 

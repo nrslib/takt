@@ -1,5 +1,5 @@
 name: review-fix-default
-description: Multi-perspective review + fix loop (architecture, security, QA, testing, and coding in parallel, followed by merge-readiness review and then supervision)
+description: Multi-perspective review + fix loop (architecture, security, testing, and coding in parallel, followed by merge-readiness review and then supervision)
 workflow_config:
   provider_options:
     codex:
@@ -88,32 +88,6 @@ steps:
           report:
             - name: security-review.md
               format: security-review
-        rules:
-          - condition: approved
-          - condition: needs_fix
-
-      - name: qa-review
-        tags:
-          - review
-        edit: false
-        persona: qa-reviewer
-        policy:
-          - review
-          - qa
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
-        instruction: review-qa
-        output_contracts:
-          report:
-            - name: qa-review.md
-              format: qa-review
         rules:
           - condition: approved
           - condition: needs_fix

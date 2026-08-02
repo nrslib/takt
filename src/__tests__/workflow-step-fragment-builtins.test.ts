@@ -11,9 +11,13 @@ import {
 import { buildStepFragmentLookupDirs } from '../infra/config/loaders/stepFragmentLookupDirectories.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
 import { resolveWorkflowStepFragments } from '../infra/config/loaders/workflowStepFragmentResolver.js';
+import { CycleDetector } from '../core/workflow/engine/cycle-detector.js';
 
 type RawStep = Record<string, unknown>;
-type RawWorkflow = { steps: RawStep[] };
+type RawWorkflow = {
+  initial_step?: unknown;
+  steps: RawStep[];
+};
 type Language = 'en' | 'ja';
 
 const LANGUAGES: Language[] = ['en', 'ja'];
@@ -94,6 +98,28 @@ function containsParam(value: unknown, paramName: string): boolean {
   if (typeof value !== 'object' || value === null) return false;
   const record = value as RawStep;
   return record.$param === paramName;
+}
+
+function expectLoopMonitorsTrigger(
+  monitors: readonly { cycle: string[]; threshold: number }[],
+): void {
+  expect(monitors.length).toBeGreaterThan(0);
+  for (const monitor of monitors) {
+    const detector = new CycleDetector([monitor]);
+    let result = { triggered: false };
+    for (let repetition = 0; repetition < monitor.threshold; repetition += 1) {
+      for (const [index, step] of monitor.cycle.entries()) {
+        result = detector.recordAndCheck(
+          step,
+          index === monitor.cycle.length - 1 ? monitor.cycle[0]! : monitor.cycle[index + 1]!,
+        );
+      }
+      if (repetition < monitor.threshold - 1) {
+        expect(result.triggered, monitor.cycle.join(' -> ')).toBe(false);
+      }
+    }
+    expect(result.triggered, monitor.cycle.join(' -> ')).toBe(true);
+  }
 }
 
 describe('builtin workflow step fragment migration', () => {
@@ -285,10 +311,57 @@ describe('builtin workflow step fragment migration', () => {
     const finalGate = getStep(peerReview, 'final-gate');
     expect(finalGate.with).toMatchObject({
       merge_readiness_policy: { $param: 'verification_policy' },
-      merge_readiness_knowledge: { $param: 'review_knowledge_additions' },
-      supervise_knowledge: { $param: 'review_knowledge_additions' },
-      supervisor_persona: { $param: 'supervisor_persona' },
+      review_knowledge: { $param: 'review_knowledge_additions' },
     });
+
+    const adjudication = getStep(peerReview, 'review-adjudication');
+    const fixPlan = getStep(peerReview, 'fix-plan');
+    const finalGateFragment = parseYaml(readFileSync(
+      join(getBuiltinLanguageStepsDir(lang), 'peer-review-final-gate.yaml'),
+      'utf-8',
+    )) as RawStep;
+    const adjudicationFragment = parseYaml(readFileSync(
+      join(getBuiltinLanguageStepsDir(lang), 'peer-review-adjudication.yaml'),
+      'utf-8',
+    )) as RawStep;
+
+    expect(adjudication.rules).toEqual(expect.any(Array));
+    expect(fixPlan.with).toMatchObject({
+      plan_instruction: 'fix-plan-from-review-resolution',
+    });
+    expect(adjudicationFragment.output_contracts).toEqual({
+      report: [{ name: 'review-resolution.md', format: 'review-decision' }],
+    });
+    expect(finalGateFragment).toMatchObject({
+      persona: 'merge-readiness-supervisor',
+      output_contracts: {
+        report: [{ name: 'review-resolution.md', format: 'merge-readiness-supervision' }],
+      },
+    });
+  });
+
+  it.each(LANGUAGES)('detects every %s peer-review remediation cycle at its configured threshold', (lang) => {
+    mkdirSync(join(projectDir, '.takt'), { recursive: true });
+    writeFileSync(join(projectDir, '.takt', 'config.yaml'), 'language: ' + lang + '\n', 'utf-8');
+    invalidateAllResolvedConfigCache();
+
+    const workflow = loadWorkflowFromFile(
+      join(getBuiltinWorkflowsDir(lang), 'peer-review.yaml'),
+      projectDir,
+    );
+    expectLoopMonitorsTrigger(workflow.loopMonitors ?? []);
+  });
+
+  it.each(LANGUAGES)('detects every %s shared remediation cycle at its configured threshold', (lang) => {
+    mkdirSync(join(projectDir, '.takt'), { recursive: true });
+    writeFileSync(join(projectDir, '.takt', 'config.yaml'), 'language: ' + lang + '\n', 'utf-8');
+    invalidateAllResolvedConfigCache();
+
+    const workflow = loadWorkflowFromFile(
+      join(getBuiltinWorkflowsDir(lang), 'review-remediation.yaml'),
+      projectDir,
+    );
+    expectLoopMonitorsTrigger(workflow.loopMonitors ?? []);
   });
 
   it.each(LANGUAGES)('keeps %s migrated reviewers on the read-only provider preset', (lang) => {

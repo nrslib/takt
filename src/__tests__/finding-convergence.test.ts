@@ -814,6 +814,97 @@ describe('B5: invalidated / superseded audit visibility', () => {
 });
 
 describe('finding family visibility', () => {
+  it('derives review mode from durable ledger history instead of workflow-local step iterations', async () => {
+    const {
+      ledgerHasOpenFindings,
+      renderFindingLedgerInstructionSummary,
+      renderFindingLedgerReportSummary,
+    } = await import('../core/workflow/findings/context.js');
+    const renderMode = (ledger: FindingLedger): unknown => (
+      JSON.parse(renderFindingLedgerInstructionSummary(ledger)) as Record<string, unknown>
+    ).reviewMode;
+
+    expect(renderMode(makeLedger({ rawFindings: [], findings: [] }))).toBe('initial');
+    expect(renderMode(makeLedger({ rawFindings: [makeRawFinding()] }))).toBe('follow_up');
+    expect(renderMode(makeLedger({ findings: [makeFinding({ revision: 1 })] }))).toBe('follow_up');
+    expect(renderMode(makeLedger({
+      rawFindings: [],
+      findings: [],
+      stopBudget: {
+        roundMarkers: ['run-1:reviewers:1'],
+        firstRoundAt: '2026-07-01T00:00:00.000Z',
+        exhausted: false,
+      },
+    }))).toBe('follow_up');
+    expect(renderMode(makeLedger({
+      rawFindings: [],
+      findings: [],
+      reviewerAnomalies: [{
+        id: 'RA-0001',
+        stableKey: 'reviewer:raw-1',
+        kind: 'source_quote_mismatch',
+        reviewer: 'reviewer',
+        stepName: 'review',
+        rawFindingId: 'raw-1',
+        title: 'Unverified review claim',
+        mismatchReason: 'quoted source does not match',
+        firstObservedAt: '2026-07-01T00:00:00.000Z',
+        lastObservedAt: '2026-07-01T00:00:00.000Z',
+      }],
+    }))).toBe('follow_up');
+    const pendingLedger = makeLedger({
+      rawFindings: [],
+      findings: [],
+      pendingManagerCommit: {
+        roundMarker: 'round-pending',
+        publication: {
+          publicationId: 'a'.repeat(64),
+          domainId: 'b'.repeat(64),
+          originRunId: 'run-1',
+          destinationRunId: 'run-1',
+          fileName: 'findings-manager-validation.reviewers.json',
+          contentSha256: 'c'.repeat(64),
+          report: {
+            version: 1,
+            runId: 'run-1',
+            stepName: 'reviewers',
+            retryCount: 0,
+            ledgerUpdated: true,
+            finalErrors: [],
+            attempts: [],
+          },
+        },
+        completed: {
+          nextId: 2,
+          updatedAt: '2026-07-01T00:01:00.000Z',
+          findings: [makeFinding({
+            revision: 1,
+            rawFindingIds: ['raw-pending'],
+          })],
+          rawFindings: [makeRawFinding({ rawFindingId: 'raw-pending' })],
+          conflicts: [],
+          interpretations: [],
+          stopBudget: {
+            roundMarkers: ['round-pending'],
+            firstRoundAt: '2026-07-01T00:01:00.000Z',
+            exhausted: false,
+          },
+        },
+      },
+    });
+    expect(renderMode(pendingLedger)).toBe('follow_up');
+    const pendingSummary = JSON.parse(
+      renderFindingLedgerInstructionSummary(pendingLedger),
+    ) as { reviewMode: string; open: Array<{ id: string }> };
+    expect(pendingSummary.reviewMode).toBe('follow_up');
+    expect(pendingSummary.open.map(({ id }) => id)).toEqual(['F-0001']);
+    const pendingReportSummary = JSON.parse(
+      renderFindingLedgerReportSummary(pendingLedger),
+    ) as { openFindingIds: string[] };
+    expect(ledgerHasOpenFindings(pendingLedger)).toBe(true);
+    expect(pendingReportSummary.openFindingIds).toEqual(['F-0001']);
+  });
+
   it('Given one canonical finding backed by multiple raw families When fixer contexts are built Then all family tags are exposed once in stable order', async () => {
     const ledger = makeLedger({
       rawFindings: [

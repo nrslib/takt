@@ -121,6 +121,7 @@ export type QualityGate = string | CommandQualityGate;
 export type WorkflowParamType = 'facet_ref' | 'facet_ref[]' | 'workflow_ref';
 export type WorkflowParamFacetKind = 'knowledge' | 'policy' | 'instruction' | 'persona' | 'report_format';
 export type WorkflowCallArgValue = string | string[];
+export type WorkflowCallVariableValue = string | number | boolean;
 
 interface WorkflowFacetSubworkflowParamConfig {
   type: 'facet_ref' | 'facet_ref[]';
@@ -243,6 +244,7 @@ interface AgentWorkflowStepBase extends WorkflowStepBase {
   kind?: 'agent';
   mode?: never;
   call?: never;
+  vars?: never;
   overrides?: never;
   sessionKey?: string;
   requiresUserInput?: boolean;
@@ -344,6 +346,7 @@ export interface SystemWorkflowStep extends WorkflowStepBase {
   kind: 'system';
   mode?: never;
   call?: never;
+  vars?: never;
   overrides?: never;
   sessionKey?: never;
   requiresUserInput?: never;
@@ -377,6 +380,7 @@ export interface WorkflowCallStep extends WorkflowStepBase {
   passPreviousResponse?: never;
   mode?: never;
   call: string;
+  vars?: Record<string, WorkflowCallVariableValue>;
   overrides?: WorkflowCallOverrides;
   args?: Record<string, WorkflowCallArgValue>;
   sessionKey?: never;
@@ -460,6 +464,7 @@ export interface LoopMonitorJudge {
 
 export interface LoopMonitorConfig {
   cycle: string[];
+  ignoreSteps?: string[];
   threshold: number;
   judge: LoopMonitorJudge;
 }

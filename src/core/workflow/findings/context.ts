@@ -8,6 +8,7 @@ import {
 import { isLedgerConflictUnadjudicated } from './adjudication-evidence.js';
 import { computeReviewScopeSnapshotId } from './snapshot.js';
 import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
+import { stopBudgetRoundsCompleted } from './stop-budget.js';
 
 function indexRawFindingFamilyTags(ledger: FindingLedger): ReadonlyMap<string, string> {
   const familyTagsByRawFindingId = new Map<string, string>();
@@ -105,11 +106,50 @@ export function renderCompactActionableFindingLedgerInstructionSummary(
   }, null, 2);
 }
 
-export function renderFindingLedgerInstructionSummary(ledger: FindingLedger): string {
-  const familyTagsByRawFindingId = indexRawFindingFamilyTags(ledger);
-  return JSON.stringify({
+function resolveFindingLedgerInstructionProjection(ledger: FindingLedger): FindingLedger {
+  const completed = ledger.pendingManagerCommit?.completed;
+  if (completed === undefined) {
+    return ledger;
+  }
+  return {
     workflowName: ledger.workflowName,
-    open: ledger.findings
+    nextId: completed.nextId,
+    updatedAt: completed.updatedAt,
+    findings: completed.findings,
+    rawFindings: completed.rawFindings,
+    conflicts: completed.conflicts,
+    interpretations: completed.interpretations,
+    ...(completed.fixpoint !== undefined ? { fixpoint: completed.fixpoint } : {}),
+    ...(completed.stopBudget !== undefined ? { stopBudget: completed.stopBudget } : {}),
+    ...(completed.reviewerAnomalies !== undefined
+      ? { reviewerAnomalies: completed.reviewerAnomalies }
+      : {}),
+    ...(completed.reviewIntegrity !== undefined
+      ? { reviewIntegrity: completed.reviewIntegrity }
+      : {}),
+    pendingManagerCommit: ledger.pendingManagerCommit,
+  };
+}
+
+export function resolveFindingLedgerReviewMode(ledger: FindingLedger): 'initial' | 'follow_up' {
+  const projection = resolveFindingLedgerInstructionProjection(ledger);
+  const hasReviewHistory = projection.findings.length > 0
+    || projection.rawFindings.length > 0
+    || projection.conflicts.length > 0
+    || projection.interpretations.length > 0
+    || (projection.reviewerAnomalies?.length ?? 0) > 0
+    || stopBudgetRoundsCompleted(projection) > 0
+    || projection.pendingManagerCommit !== undefined;
+  return hasReviewHistory ? 'follow_up' : 'initial';
+}
+
+export function renderFindingLedgerInstructionSummary(ledger: FindingLedger): string {
+  const projection = resolveFindingLedgerInstructionProjection(ledger);
+  const familyTagsByRawFindingId = indexRawFindingFamilyTags(projection);
+  return JSON.stringify({
+    workflowName: projection.workflowName,
+    reviewMode: resolveFindingLedgerReviewMode(projection),
+    open: projection.findings
       .filter((finding) => finding.status === 'open')
       .map((finding) => {
         const familyContext = deriveFindingFamilyTags(finding, familyTagsByRawFindingId);
@@ -130,7 +170,7 @@ export function renderFindingLedgerInstructionSummary(ledger: FindingLedger): st
             : {}),
         };
       }),
-    resolved: ledger.findings
+    resolved: projection.findings
       .filter((finding) => finding.status === 'resolved')
       .map((finding) => ({
         id: finding.id,
@@ -138,7 +178,7 @@ export function renderFindingLedgerInstructionSummary(ledger: FindingLedger): st
         severity: finding.severity,
         title: finding.title,
       })),
-    waived: ledger.findings
+    waived: projection.findings
       .filter((finding) => finding.status === 'waived')
       .map((finding) => ({
         id: finding.id,
@@ -150,7 +190,7 @@ export function renderFindingLedgerInstructionSummary(ledger: FindingLedger): st
     // エンジンが検証済み）と superseded（重複として canonical へ統合済み）は
     // ブロッキング対象外だが、「消えた」のではなく「こう裁定された」ことが
     // サマリから追えるようにする。既存キーの形式は変えない（追加のみ）。
-    invalidated: ledger.findings
+    invalidated: projection.findings
       .filter((finding) => finding.status === 'invalidated')
       .map((finding) => ({
         id: finding.id,
@@ -158,14 +198,14 @@ export function renderFindingLedgerInstructionSummary(ledger: FindingLedger): st
         title: finding.title,
         evidence: finding.invalidatedEvidence,
       })),
-    superseded: ledger.findings
+    superseded: projection.findings
       .filter((finding) => finding.status === 'superseded')
       .map((finding) => ({
         id: finding.id,
         title: finding.title,
         supersededBy: finding.supersededByFindingId,
       })),
-    dismissed: ledger.findings
+    dismissed: projection.findings
       .filter((finding) => finding.status === 'dismissed')
       .map((finding) => ({
         id: finding.id,
@@ -173,7 +213,7 @@ export function renderFindingLedgerInstructionSummary(ledger: FindingLedger): st
         basis: finding.dismissal?.basis,
         reason: finding.dismissal?.reason,
       })),
-    conflicts: ledger.conflicts.map((conflict) => ({
+    conflicts: projection.conflicts.map((conflict) => ({
       id: conflict.id,
       status: conflict.status,
       findingIds: conflict.findingIds,
@@ -184,14 +224,15 @@ export function renderFindingLedgerInstructionSummary(ledger: FindingLedger): st
 }
 
 export function renderFindingLedgerReportSummary(ledger: FindingLedger): string {
+  const projection = resolveFindingLedgerInstructionProjection(ledger);
   return JSON.stringify({
-    openFindingIds: ledger.findings
+    openFindingIds: projection.findings
       .filter((finding) => finding.status === 'open')
       .map((finding) => finding.id),
-    resolvedFindingIds: ledger.findings
+    resolvedFindingIds: projection.findings
       .filter((finding) => finding.status === 'resolved')
       .map((finding) => finding.id),
-    waivedFindings: ledger.findings
+    waivedFindings: projection.findings
       .filter((finding) => finding.status === 'waived')
       .map((finding) => ({
         id: finding.id,
@@ -199,31 +240,34 @@ export function renderFindingLedgerReportSummary(ledger: FindingLedger): string 
         reason: finding.waivers?.at(-1)?.reason,
         evidence: finding.waivers?.at(-1)?.evidence,
       })),
-    invalidatedFindingIds: ledger.findings
+    invalidatedFindingIds: projection.findings
       .filter((finding) => finding.status === 'invalidated')
       .map((finding) => finding.id),
-    supersededFindingIds: ledger.findings
+    supersededFindingIds: projection.findings
       .filter((finding) => finding.status === 'superseded')
       .map((finding) => finding.id),
-    dismissedFindingIds: ledger.findings
+    dismissedFindingIds: projection.findings
       .filter((finding) => finding.status === 'dismissed')
       .map((finding) => finding.id),
-    conflictIds: ledger.conflicts.map((conflict) => conflict.id),
+    conflictIds: projection.conflicts.map((conflict) => conflict.id),
   }, null, 2);
 }
 
 /** 台帳に open な指摘が存在するか（異議申告ガイドの注入判定に使う）。 */
 export function ledgerHasOpenFindings(ledger: FindingLedger): boolean {
-  return ledger.findings.some((finding) => finding.status === 'open');
+  return resolveFindingLedgerInstructionProjection(ledger).findings
+    .some((finding) => finding.status === 'open');
 }
 
 /** 台帳に waived な指摘が存在するか（waived 除外指示の注入判定に使う）。 */
 export function ledgerHasWaivedFindings(ledger: FindingLedger): boolean {
-  return ledger.findings.some((finding) => finding.status === 'waived');
+  return resolveFindingLedgerInstructionProjection(ledger).findings
+    .some((finding) => finding.status === 'waived');
 }
 
 export function ledgerHasDismissedFindings(ledger: FindingLedger): boolean {
-  return ledger.findings.some((finding) => finding.status === 'dismissed');
+  return resolveFindingLedgerInstructionProjection(ledger).findings
+    .some((finding) => finding.status === 'dismissed');
 }
 
 export function buildFindingsRuleContext(ledger: FindingLedger, cwd: string): FindingsRuleContext {

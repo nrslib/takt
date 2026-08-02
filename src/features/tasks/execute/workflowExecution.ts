@@ -302,7 +302,16 @@ async function executeWorkflowInternal(
     abortHandler.install();
     const finalState = await engine.run();
     if (rejectedIterationLimit !== undefined) {
-      const workflowMaxSteps = requireFiniteWorkflowMaxSteps(bootstrap.effectiveWorkflowConfig);
+      const workflowMaxSteps = workflowConfig.maxSteps === 'infinite'
+        ? requireFiniteWorkflowMaxSteps(bootstrap.effectiveWorkflowConfig)
+        : workflowConfig.maxSteps;
+      if (workflowMaxSteps === undefined) {
+        throw new Error(`Root workflow "${workflowConfig.name}" requires max_steps`);
+      }
+      const newMaxSteps = rejectedIterationLimit.maxSteps + workflowMaxSteps;
+      if (!Number.isSafeInteger(newMaxSteps)) {
+        throw new Error('Cannot continue workflow because the next max steps limit exceeds the safe integer range');
+      }
       const resumePoint = getLatestResumePoint();
       if (resumePoint === undefined) {
         throw new Error('Iteration limit rejection completed without a resume point');
@@ -313,7 +322,7 @@ async function executeWorkflowInternal(
       }
       eventBridge.state.exceededInfo = {
         currentStep,
-        newMaxSteps: rejectedIterationLimit.maxSteps + workflowMaxSteps,
+        newMaxSteps,
         currentIteration: finalState.iteration,
         resumePoint,
       };

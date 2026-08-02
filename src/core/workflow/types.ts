@@ -497,6 +497,8 @@ export interface WorkflowEngineOptions {
   sharedRuntime?: WorkflowSharedRuntimeState;
   resumeStackPrefix?: WorkflowResumePointEntry[];
   workflowCallResolver?: WorkflowCallResolver;
+  /** Scalar execution context inherited through nested workflow_call boundaries. */
+  workflowCallVars?: Readonly<Record<string, string | number | boolean>>;
   /**
    * workflow_call の親から継承する Finding Contract。
    * 継承しないと子の parallel レビューが出す raw findings が親の台帳に届かず、

@@ -1,5 +1,5 @@
 name: review-dual-cqrs
-description: Frontend + CQRS+ES focused review (structure, modularization, domain model, component design, security, QA)
+description: Frontend + CQRS+ES focused review (structure, modularization, domain model, component design, security, coding)
 workflow_config:
   provider_options:
     codex:
@@ -121,31 +121,6 @@ steps:
           report:
             - name: security-review.md
               format: security-review
-        rules:
-          - condition: approved
-          - condition: needs_fix
-
-      - name: qa-review
-        tags:
-          - review
-        edit: false
-        persona: qa-reviewer
-        policy:
-          - review
-          - qa
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - WebSearch
-              - WebFetch
-        instruction: review-qa
-        output_contracts:
-          report:
-            - name: qa-review.md
-              format: qa-review
         rules:
           - condition: approved
           - condition: needs_fix

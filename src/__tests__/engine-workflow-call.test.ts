@@ -4771,6 +4771,95 @@ steps:
     );
   });
 
+  it('再開した子 workflow が最初の step 前に max_steps へ達しても child checkpoint を保持する', async () => {
+    writeWorkflow(tmpDir, 'takt/coding.yaml', `name: takt/coding
+subworkflow:
+  callable: true
+initial_step: review
+steps:
+  - name: review
+    persona: reviewer
+    instruction: "Review child workflow"
+    rules:
+      - condition: done
+        next: fix
+  - name: fix
+    persona: fixer
+    instruction: "Fix child workflow"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parent',
+      initial_step: 'delegate',
+      max_steps: 1,
+      steps: [
+        {
+          name: 'delegate',
+          kind: 'workflow_call',
+          call: 'takt/coding',
+          rules: [
+            {
+              condition: 'COMPLETE',
+              next: 'COMPLETE',
+            },
+            {
+              condition: 'ABORT',
+              next: 'ABORT',
+            },
+          ],
+        },
+      ],
+    });
+    const resumePoint = {
+      version: 2 as const,
+      stack: [
+        { workflow: 'parent', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },
+        { workflow: 'takt/coding', step: 'fix', kind: 'agent' as const },
+      ],
+      iteration: 1,
+      elapsed_ms: 183245,
+      workflow_call_invocations: buildWorkflowCallInvocationRecordsFixture([{
+        workflowReference: 'parent',
+        step: 'delegate',
+        ownerPath: [],
+        childWorkflowReference: 'takt/coding',
+        callInstance: 1,
+      }]),
+      workflow_step_participations: {},
+    };
+    let capturedResumePoint: ReturnType<WorkflowEngine['getResumePoint']>;
+    engine = new WorkflowEngine(config, tmpDir, 'Resume child at iteration limit', createWorkflowCallOptions(tmpDir, {
+      initialIteration: 1,
+      resumePoint,
+      onIterationLimit: vi.fn().mockImplementation(async () => {
+        capturedResumePoint = engine?.getResumePoint();
+        return null;
+      }),
+    }));
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(runAgent).not.toHaveBeenCalled();
+    expect(capturedResumePoint?.stack).toEqual([
+      expect.objectContaining({
+        workflow: 'parent',
+        step: 'delegate',
+        kind: 'workflow_call',
+      }),
+      expect.objectContaining({
+        workflow: 'takt/coding',
+        step: 'fix',
+        kind: 'agent',
+      }),
+    ]);
+    expect(capturedResumePoint?.iteration).toBe(1);
+    expect(capturedResumePoint?.elapsed_ms).toBeGreaterThanOrEqual(resumePoint.elapsed_ms);
+  });
+
   it('resolveWorkflowCallTarget は callable child へ max_steps default を注入しない', () => {
     writeWorkflow(tmpDir, 'takt/coding.yaml', `name: takt/coding
 subworkflow:
@@ -6466,6 +6555,168 @@ steps:
     expect(state.status).toBe('completed');
     expect(activeCountsAtCompletion).toEqual([1]);
     expect(tracker.activeBranchCount()).toBe(0);
+  });
+
+  it('workflow_call vars は parallel caller から nested reviewer instruction まで継承される', async () => {
+    writeWorkflow(tmpDir, 'shared/nested-review.yaml', `name: shared/nested-review
+subworkflow:
+  callable: true
+initial_step: review
+steps:
+  - name: review
+    persona: nested-reviewer
+    instruction: "mode={var:review_mode}; domain={var:domain}"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    writeWorkflow(tmpDir, 'shared/review.yaml', `name: shared/review
+subworkflow:
+  callable: true
+initial_step: nested-review
+steps:
+  - name: nested-review
+    kind: workflow_call
+    call: shared/nested-review
+    vars:
+      domain: frontend
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parent',
+      initial_step: 'reviewers',
+      max_steps: 4,
+      steps: [{
+        name: 'reviewers',
+        instruction: 'Run reviewers',
+        parallel: [{
+          name: 'delegate-review',
+          kind: 'workflow_call',
+          call: 'shared/review',
+          vars: {
+            review_mode: 'follow_up',
+            domain: 'base',
+          },
+          rules: [
+            { condition: 'COMPLETE', next: 'COMPLETE' },
+            { condition: 'ABORT', next: 'ABORT' },
+          ],
+        }, {
+          name: 'local-review',
+          persona: 'local-reviewer',
+          instruction: 'Review locally; mode={var:review_mode}',
+          rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+        }],
+        rules: [{ condition: 'all("COMPLETE")', next: 'COMPLETE' }],
+      }],
+    });
+    vi.mocked(runAgent).mockImplementation(async (persona, prompt, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: prompt,
+      });
+      if (persona === 'nested-reviewer' || persona === 'local-reviewer') {
+        return makeResponse({ persona, content: 'Review complete' });
+      }
+      throw new Error(`Unexpected persona: ${String(persona)}`);
+    });
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'aggregate' },
+    ]);
+    engine = new WorkflowEngine(config, tmpDir, 'Run nested review', createWorkflowCallOptions(tmpDir));
+
+    const state = await engine.run();
+    const nestedPrompt = vi.mocked(runAgent).mock.calls.find(([persona]) => (
+      persona === 'nested-reviewer'
+    ))?.[1];
+    const localPrompt = vi.mocked(runAgent).mock.calls.find(([persona]) => (
+      persona === 'local-reviewer'
+    ))?.[1];
+
+    expect(state.status).toBe('completed');
+    expect(nestedPrompt).toContain('mode=follow_up; domain=frontend');
+    expect(nestedPrompt).not.toContain('{var:');
+    expect(localPrompt).toContain('mode=unspecified');
+  });
+
+  it('initial review の後は follow-up review だけを再実行する', async () => {
+    writeWorkflow(tmpDir, 'shared/round-review.yaml', `name: shared/round-review
+subworkflow:
+  callable: true
+  returns:
+    - needs_fix
+initial_step: review
+steps:
+  - name: review
+    persona: round-reviewer
+    instruction: "mode={var:review_mode}"
+    rules:
+      - condition: needs_fix
+        return: needs_fix
+      - condition: done
+        next: COMPLETE
+`);
+    const config = createParentWorkflow(tmpDir, {
+      name: 'review-do-while',
+      initial_step: 'initial-review',
+      max_steps: 20,
+      steps: [{
+        name: 'initial-review',
+        kind: 'workflow_call',
+        call: 'shared/round-review',
+        vars: { review_mode: 'initial' },
+        rules: [{ condition: 'COMPLETE', next: 'fix' }],
+      }, {
+        name: 'fix',
+        persona: 'fixer',
+        instruction: 'Fix the current findings',
+        rules: [{ condition: 'fixed', next: 'follow-up-review' }],
+      }, {
+        name: 'follow-up-review',
+        kind: 'workflow_call',
+        call: 'shared/round-review',
+        vars: { review_mode: 'follow_up' },
+        rules: [
+          { condition: 'needs_fix', next: 'fix' },
+          { condition: 'COMPLETE', next: 'COMPLETE' },
+        ],
+      }],
+    });
+    const reviewPrompts: string[] = [];
+    vi.mocked(runAgent).mockImplementation(async (persona, prompt, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: prompt,
+      });
+      if (persona === 'round-reviewer') {
+        reviewPrompts.push(prompt);
+        return makeResponse({ persona, content: 'Review complete' });
+      }
+      if (persona === 'fixer') {
+        return makeResponse({ persona, content: 'Fix complete' });
+      }
+      throw new Error(`Unexpected persona: ${String(persona)}`);
+    });
+    mockRuleEvaluationSequence([
+      { index: 1, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 1, method: 'phase3_tag' },
+    ]);
+    engine = new WorkflowEngine(config, tmpDir, 'Review until complete', createWorkflowCallOptions(tmpDir));
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(reviewPrompts.map((prompt) => (
+      prompt.match(/mode=(initial|follow_up)/)?.[1]
+    ))).toEqual(['initial', 'follow_up', 'follow_up']);
   });
 
   it('non-interactive parallel workflow_call の no-match は親 fallback rule より先に中断する', async () => {

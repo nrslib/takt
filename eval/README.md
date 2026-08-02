@@ -29,6 +29,15 @@ not the pass/fail summary.
 | `rescan` | peer-review / arch-review (round 2) | inventory-es | re-scan evidence + recall on 4 planted defects after previous findings were resolved |
 | `frontend-coder` | frontend / implement | frontend-app (work copy) | artifact checks on the implemented change |
 | `cqrs-coder` | backend-cqrs / implement | backend-cqrs (work copy) | artifact checks on the implemented change |
+| `fix-closure` | review-remediation / fix-retry | fix-closure (work copy) | whether verifier-return remediation closes every falsifiable obligation across multiple fix units and hierarchical projections instead of patching only the latest verifier example or relying on broad test success |
+| `fix-plan-fresh-findings` | peer-review / fix-plan | fix-plan-fresh-findings | whether fix-plan uses the canonical review resolution's actionable families without reviving its non-actionable findings |
+| `fix-plan-boundary-preflight` | peer-review / fix-plan | fix-plan-boundary-preflight | whether fix-plan rejects a locally valid method that violates its representation and persistence boundary |
+| `review-family-closure` | peer-review-suite-base / coding-review | review-family-closure | whether one review reports every path affected by the same contract defect instead of stopping at a representative example |
+| `initial-review-contract-discovery` | peer-review / initial coding-review | initial-review-contract-discovery | whether the initial review independently discovers multiple blocking families and completes each family sweep |
+| `follow-up-review-repair-regression` | peer-review / follow-up coding-review | follow-up-review-repair-regression | whether follow-up review independently falsifies completion claims and distinguishes repair-induced defects from adjacent omissions |
+| `review-adjudication` | peer-review / review-adjudication | review-adjudication | whether real defects remain actionable while duplicates, overreach, false positives, and environment-only gaps are separated by evidence |
+| `final-readiness-supervision` | peer-review / final-gate | final-readiness-supervision | whether the final supervisor catches a merge-blocking unmet requirement without reopening an adjudicated non-actionable finding |
+| `final-readiness-precision` | peer-review / final-gate | final-readiness-precision | whether the final supervisor accepts a complete change without reopening an adjudicated documentation improvement |
 
 Reviewer suites run read-only against `eval/fixtures/*`. Coder suites run
 with `sandbox_mode: workspace-write` in a disposable copy under `eval/.work/`
@@ -55,7 +64,9 @@ test case — and the case must FAIL before the facet fix is trusted.
    change that addresses the cause.
 5. **Run and confirm PASS (green)**, then run the other affected suites to
    check nothing regressed. Because detection is stochastic, confirm
-   important fixes with `--repeat 3`, not a single lucky pass.
+   important reviewer fixes with `--repeat 3`. For mutable coder suites,
+   run the complete `prepare -> single eval` command three separate times;
+   `--repeat` would share one work copy across trials.
 6. Keep the case forever — it is the regression test for that miss.
 
 ## How it works
@@ -96,8 +107,21 @@ npm run eval:prompts             # prepare + ALL suites
 npm run eval:prompts -- arch cqrs        # only selected suites
 npm run eval:prompts -- arch --repeat 3  # extra flags pass through to promptfoo
 npm run eval:prompts:prepare     # prepare only (inspect eval/prompts/)
+npm run eval:prompts:review-family-closure
+npm run eval:prompts:initial-review-contract-discovery
+npm run eval:prompts:review-adjudication
+npm run eval:prompts:fix-plan-fresh-findings
+npm run eval:prompts:fix-plan-boundary-preflight
+npm run eval:prompts:follow-up-review-repair-regression
+npm run eval:prompts:final-readiness-supervision
+npm run eval:prompts:final-readiness-precision
 npx promptfoo view               # browse results in the web UI
 ```
+
+Do not use `--repeat` with mutable coder suites such as `fix-closure`,
+`frontend-coder`, or `cqrs-coder`. Their trials edit `eval/.work/<id>`, so
+independent evidence requires rerunning the suite command, including prepare,
+for each trial.
 
 Run from the repo root. Note: `working_dir` in the configs is resolved
 relative to the config file's directory (`eval/`), not the process cwd.

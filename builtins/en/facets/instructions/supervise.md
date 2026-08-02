@@ -44,7 +44,7 @@ Procedure:
 
 - Do not treat summary reports as primary evidence. Use execution-result reports, reviewer reports with concrete verification details, and actual code in that order
 - You may treat `Build Results` / `Test Results` sections in execution-result reports as primary evidence
-- For `architecture-review`, `qa-review`, `testing-review`, and `security-review`, prioritize each report's `Verification Evidence` section
+- For `architecture-review`, `testing-review`, and `security-review`, prioritize each report's `Verification Evidence` section
 - Treat each `Verification Evidence` item as supporting evidence only when it states the verified target, what was checked, and observed result. If any part is missing, mark that item as `unverified`
 - Evidence based on mocks, static inspection, or limited unit tests must not be treated as verification beyond that scope
 - If items of evidence conflict, prioritize them in this order: `execution-result report > reviewer report with concrete verification details > summary report`

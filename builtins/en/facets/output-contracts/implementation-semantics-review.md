@@ -11,6 +11,11 @@
 |------|----------|----------|--------------------------------|
 | {concern, or "none"} | `src/file.ts:42` | false_positive / overreach / out_of_scope / no_issue_after_verification | {reason} |
 
+## Problem-Family Completion Sweep
+| family_tag / changed contract | Invariant or root cause | Definition, production, validation | Consumption, persistence, reinjection | Failure, interruption, retry, resume, parallel, auxiliary entries | Mocks, fixtures, test doubles | Unchecked paths | Result |
+|-------------------------------|-------------------------|------------------------------------|---------------------------------------|--------------------------------------------------------------------------|------------------------------|-----------------|--------|
+| {problem family or contract reviewed} | {condition to preserve} | {locations checked} | {locations checked} | {paths checked} | {test assets checked} | {none or reason unchecked} | {no issue / finding number} |
+
 ## New Findings (new)
 | # | finding_id | family_tag | Severity | Location | Problem | Breaking condition | Fix |
 |---|------------|------------|----------|----------|---------|--------------------|-----|

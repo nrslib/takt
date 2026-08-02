@@ -42,7 +42,9 @@ loop_monitors:
   - cycle:
       - fix-plan
       - fix
+    ignore_steps:
       - fix-verifier
+      - fix-retry
     threshold: 4
     judge:
       persona: supervisor
@@ -56,6 +58,22 @@ loop_monitors:
           next: fix-plan
         - condition: No feasible path can satisfy the requirements
           next: ABORT
+  - cycle:
+      - fix-retry
+      - fix-verifier
+    threshold: 4
+    judge:
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix
+      rules:
+        - condition: Healthy (fix progress exists and report content is converging)
+          next: fix-retry
+        - condition: Fixes are incomplete or reports have not converged, but another fix is feasible
+          next: fix-retry
+        - condition: The fix approach assumptions must change and replanning is feasible
+          next: fix-plan
+        - condition: No feasible path can satisfy the requirements
+          next: ABORT
 steps:
   - name: fix-plan
     uses: peer-review-fix-plan
@@ -64,6 +82,7 @@ steps:
         $param: plan_policy
       fix_knowledge:
         $param: fix_knowledge
+      plan_instruction: fix-plan
     rules:
       - condition: Fix plan finalized
         next: fix
@@ -77,6 +96,7 @@ steps:
         $param: fix_policy
       fix_knowledge:
         $param: fix_knowledge
+      fix_instruction: apply-fix-plan
     rules:
       - condition: Fix completed
         next: fix-verifier
@@ -96,6 +116,22 @@ steps:
       - condition: verified
         next: COMPLETE
       - condition: incomplete
-        next: fix
+        next: fix-retry
       - condition: plan_invalid
         next: fix-plan
+
+  - name: fix-retry
+    uses: peer-review-fix
+    with:
+      fix_policy:
+        $param: fix_policy
+      fix_knowledge:
+        $param: fix_knowledge
+      fix_instruction: apply-fix-verification
+    rules:
+      - condition: Fix complete
+        next: fix-verifier
+      - condition: Fix plan requires revision
+        next: fix-plan
+      - condition: Task-level replanning required
+        return: need_replan

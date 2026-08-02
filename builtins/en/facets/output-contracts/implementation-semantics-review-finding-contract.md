@@ -11,6 +11,11 @@
 | Checked Chapters | Unverified Chapters (only when any) | Checked Route | Current Evidence | Result |
 |------------------|------------------------------------|---------------|------------------|--------|
 | Checked Chapters N/N | {unverified chapters; otherwise "none"} | {cumulative diff, code, and test} | {current file:line or execution evidence} | {verified result or unverified} |
+## Problem-Family Completion Sweep
+| family_tag / changed contract | Invariant or root cause | Definition, production, validation | Consumption, persistence, reinjection | Failure, interruption, retry, resume, parallel, auxiliary entries | Mocks, fixtures, test doubles | Unchecked paths | Result |
+|-------------------------------|-------------------------|------------------------------------|---------------------------------------|--------------------------------------------------------------------------|------------------------------|-----------------|--------|
+| {problem family or contract reviewed} | {condition to preserve} | {locations checked} | {locations checked} | {paths checked} | {test assets checked} | {none or reason unchecked} | {no issue / finding number} |
+
 ## Observed Findings
 | # | family_tag | Severity | Location | Issue | Impact or Failure Condition | Fix Direction |
 |---|------------|----------|----------|-------|-----------------------------|---------------|

@@ -12,6 +12,11 @@ Use exactly two specialist tables in total: one row per external input in the in
 | Failed Operation | Failure Type | May Continue | Caller / User Visibility | Partial-Success Result |
 |------------------|--------------|--------------|--------------------------|------------------------|
 | {operation} | {failure} | {continue or stop} | {notice or error} | {result or none} |
+## Problem-Family Completion Sweep
+| family_tag / changed contract | Invariant or root cause | Definition, production, validation | Consumption, persistence, reinjection | Failure, interruption, retry, resume, parallel, auxiliary entries | Mocks, fixtures, test doubles | Unchecked paths | Result |
+|-------------------------------|-------------------------|------------------------------------|---------------------------------------|--------------------------------------------------------------------------|------------------------------|-----------------|--------|
+| {problem family or contract reviewed} | {condition to preserve} | {locations checked} | {locations checked} | {paths checked} | {test assets checked} | {none or reason unchecked} | {no issue / finding number} |
+
 ## Observed Findings
 | # | family_tag | Severity | Location | Issue | Impact or Failure Condition | Fix Direction |
 |---|------------|----------|----------|-------|-----------------------------|---------------|

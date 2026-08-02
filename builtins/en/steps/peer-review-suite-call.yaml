@@ -1,0 +1,17 @@
+kind: workflow_call
+call:
+  $param: reviewer_suite
+args:
+  review_policy_additions:
+    $param: review_policy_additions
+  review_knowledge_additions:
+    $param: review_knowledge_additions
+params:
+  reviewer_suite:
+    type: workflow_ref
+  review_policy_additions:
+    type: facet_ref[]
+    facet_kind: policy
+  review_knowledge_additions:
+    type: facet_ref[]
+    facet_kind: knowledge

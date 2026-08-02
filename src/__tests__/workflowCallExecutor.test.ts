@@ -153,6 +153,7 @@ describe('WorkflowCallExecutor', () => {
     const step = {
       name: 'delegate',
       call: 'child',
+      vars: { review_mode: 'follow_up' },
       personaDisplayName: 'delegate',
       instruction: '',
     } as WorkflowCallStep;
@@ -219,6 +220,7 @@ describe('WorkflowCallExecutor', () => {
         projectCwd: '/tmp/project',
         reportDirName: 'run',
         traceTaskMetadata,
+        workflowCallVars: { domain: 'frontend', review_mode: 'initial' },
       }),
       getCwd: () => '/tmp/project',
       projectCwd: '/tmp/project',
@@ -264,6 +266,10 @@ describe('WorkflowCallExecutor', () => {
     const childOptions = createEngine.mock.calls[0]?.[3];
     expect(childOptions?.sharedRuntime).toBe(sharedRuntime);
     expect(childOptions?.traceTaskMetadata).toBe(traceTaskMetadata);
+    expect(childOptions?.workflowCallVars).toEqual({
+      domain: 'frontend',
+      review_mode: 'follow_up',
+    });
     expect(childOptions?.resumeStackPrefix).toEqual([{
       workflow: 'parent',
       step: 'delegate',
