@@ -42,8 +42,7 @@ import {
 } from './interpretation-origin-binding.js';
 import { planInterpretationOriginAttachments } from './interpretation-origin-attachment.js';
 import {
-  assertCompatibleRawCanonicalSnapshot,
-  createRawCanonicalSnapshot,
+  appendRawFindingsWithCanonicalSnapshots,
 } from './raw-canonical-snapshot.js';
 import { captureFindingLifecycleHead } from './lifecycle-mutation.js';
 import type { ProvisionalFindingSpec } from './reconciler.js';
@@ -1233,29 +1232,22 @@ function materializeDirectCaseRecords(input: {
     currentRound: (input.ledger.stopBudget?.roundMarkers.length ?? 0) + 1,
   });
   const originDigestsByRawFindingId = originSnapshotDigestsByRawFindingId(originPlans);
-  const rawCanonicalSnapshots = [...input.ledger.rawCanonicalSnapshots];
-  const rawFindings = [...input.ledger.rawFindings];
+  const withRawSnapshots = appendRawFindingsWithCanonicalSnapshots({
+    ledger: input.ledger,
+    items,
+    capturedAt: input.observation,
+  });
   const cohortId = computeInterpretationCohortId(
     input.prepared.caseId,
     input.prepared.semanticProjectionDigest,
     input.prepared.rawFindingIds,
   );
   const observations = items.map((item) => {
-    const candidateSnapshot = createRawCanonicalSnapshot({
-      item,
-      capturedAt: input.observation,
-    });
-    const existingSnapshot = rawCanonicalSnapshots.find(
+    const snapshot = withRawSnapshots.rawCanonicalSnapshots.find(
       (snapshot) => snapshot.rawFindingId === item.canonical.rawFindingId,
     );
-    const snapshot = existingSnapshot ?? candidateSnapshot;
-    if (existingSnapshot === undefined) {
-      rawCanonicalSnapshots.push(candidateSnapshot);
-    } else {
-      assertCompatibleRawCanonicalSnapshot(existingSnapshot, candidateSnapshot);
-    }
-    if (!rawFindings.some((raw) => raw.rawFindingId === item.wire.rawFindingId)) {
-      rawFindings.push(structuredClone(item.wire));
+    if (snapshot === undefined) {
+      throw new Error(`Direct interpretation raw finding "${item.canonical.rawFindingId}" has no canonical snapshot`);
     }
     const originSnapshotDigests = originDigestsByRawFindingId.get(
       item.canonical.rawFindingId,
@@ -1309,9 +1301,7 @@ function materializeDirectCaseRecords(input: {
     );
   }
   return {
-    ...input.ledger,
-    rawFindings,
-    rawCanonicalSnapshots,
+    ...withRawSnapshots,
     interpretationCaseSnapshots: [...input.ledger.interpretationCaseSnapshots, caseSnapshot],
     interpretationRawObservations: [
       ...input.ledger.interpretationRawObservations,
@@ -1438,25 +1428,14 @@ export function stagePreparedInterpretationCaseOwnership(input: {
   const itemsByRawFindingId = new Map(
     input.items.map((item) => [item.canonical.rawFindingId, item]),
   );
-  const rawCanonicalSnapshots = [...input.ledger.rawCanonicalSnapshots];
+  const ownedItems: CanonicalIntakeItem[] = [];
   for (const preparedCase of input.prepared.cases) {
     for (const rawFindingId of preparedCase.rawFindingIds) {
       const item = itemsByRawFindingId.get(rawFindingId);
       if (item === undefined) {
         throw new Error(`Interpretation ownership is missing raw finding "${rawFindingId}"`);
       }
-      const candidate = createRawCanonicalSnapshot({
-        item,
-        capturedAt: input.observation,
-      });
-      const existing = rawCanonicalSnapshots.find(
-        (snapshot) => snapshot.rawFindingId === rawFindingId,
-      );
-      if (existing === undefined) {
-        rawCanonicalSnapshots.push(candidate);
-      } else {
-        assertCompatibleRawCanonicalSnapshot(existing, candidate);
-      }
+      ownedItems.push(item);
     }
     if (preparedCase.attemptId === null) {
       continue;
@@ -1477,8 +1456,9 @@ export function stagePreparedInterpretationCaseOwnership(input: {
       }
     }
   }
-  return {
-    ...input.ledger,
-    rawCanonicalSnapshots,
-  };
+  return appendRawFindingsWithCanonicalSnapshots({
+    ledger: input.ledger,
+    items: ownedItems,
+    capturedAt: input.observation,
+  });
 }

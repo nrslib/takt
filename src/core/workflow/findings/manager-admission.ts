@@ -86,6 +86,7 @@ interface PendingRejectedObservation {
   targetFindingId: string;
   reason: string;
   destination: 'target_audit' | 'reviewer_anomaly';
+  targetValidation: 'lifecycle_precondition' | 'entity_binding';
   anomalyKind: ReviewerAnomalyKind;
   failedEvidence?: RawFindingEvidence;
 }
@@ -336,6 +337,7 @@ function evaluateRejectedItem(input: {
         targetFindingId: auditTarget.id,
         reason: `Evidence failed deterministic admission (${classification.reason}); recorded as a rejected lifecycle observation of the target`,
         destination: 'target_audit',
+        targetValidation: 'lifecycle_precondition',
         anomalyKind: classification.disposition === 'anomaly'
           ? classification.anomalyKind
           : 'lifecycle-admission-failure',
@@ -537,6 +539,7 @@ export function evaluateRawAdmission(input: {
         targetFindingId: attachment.targetFindingId,
         reason: attachment.reason,
         destination: 'target_audit',
+        targetValidation: 'entity_binding',
         anomalyKind: 'lifecycle-admission-failure',
       };
     })),

@@ -32,7 +32,6 @@ import { finalizeInterpretationCaseProjection } from './interpretation-case-fina
 import { refreshActiveConflictAdjudicationSnapshots } from './conflict-adjudication-model.js';
 import {
   landUnownedConflictRawClaims,
-  stageCanonicalRawSnapshots,
 } from './conflict-claim-landing.js';
 
 export interface CommitFindingManagerRoundResult {
@@ -126,13 +125,8 @@ export async function commitFindingManagerRound(params: {
         prepared: commitMutation.result.interpretationPrepared,
         observation: params.observation,
       });
-      const withRawSnapshots = stageCanonicalRawSnapshots({
-        ledger: interpretationFinalized,
-        items: params.intake.items,
-        observation: params.observation,
-      });
       const withConflictLandings = landUnownedConflictRawClaims({
-        ledger: withRawSnapshots,
+        ledger: interpretationFinalized,
         observation: params.observation,
       });
       const withConflictSnapshots = refreshActiveConflictAdjudicationSnapshots({

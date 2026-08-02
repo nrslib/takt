@@ -1,4 +1,5 @@
 import type {
+  FindingActionRecovery,
   FindingLedger,
   FindingEvidenceRecord,
   FindingLedgerConflict,
@@ -63,6 +64,7 @@ import {
   mergeProvisionalClaimProjection,
 } from './finding-entry.js';
 import { isProvisionalReopenSource } from './provisional-promotion-eligibility.js';
+import { findingMatchesMutationPrecondition } from './finding-preconditions.js';
 import type {
   PreAdmissionEntityMutationResult,
   PreAdmissionEntityProvisionalMutation,
@@ -579,6 +581,66 @@ export function reconcileLedgerConflicts(input: {
 }
 
 type ManagerOutputValidator = typeof validateFindingManagerOutput;
+type PreviousLedgerValidator = (
+  ledger: FindingLedger,
+  managerOutput: FindingManagerOutput,
+) => void;
+
+function assertManagerActionRecoveryTargets(
+  ledger: FindingLedger,
+  managerOutput: FindingManagerOutput,
+): void {
+  const recoveries = [
+    ...managerOutput.invalidatedFindings.map((recovery) => ({
+      recovery,
+      targetFindingIds: [recovery.findingId],
+    })),
+    ...managerOutput.waivedFindings.map((recovery) => ({
+      recovery,
+      targetFindingIds: [recovery.findingId],
+    })),
+    ...managerOutput.duplicateFindings.map((recovery) => ({
+      recovery,
+      targetFindingIds: [recovery.canonicalFindingId, ...recovery.duplicateFindingIds],
+    })),
+  ];
+  for (const { recovery, targetFindingIds } of recoveries) {
+    if (
+      !('targetPreconditions' in recovery)
+      || !Array.isArray(recovery.targetPreconditions)
+    ) {
+      throw new Error('Manager action recovery output is missing target preconditions');
+    }
+    const targetPreconditions = recovery.targetPreconditions as
+      FindingActionRecovery['targetPreconditions'];
+    const preconditionsByTarget = new Map(
+      targetPreconditions.map((precondition) => [precondition.targetFindingId, precondition]),
+    );
+    if (
+      targetPreconditions.length !== targetFindingIds.length
+      || preconditionsByTarget.size !== targetFindingIds.length
+      || targetFindingIds.some((findingId) => !preconditionsByTarget.has(findingId))
+    ) {
+      throw new Error('Manager action recovery target preconditions do not match its targets');
+    }
+    for (const precondition of targetPreconditions) {
+      const findingId = precondition.targetFindingId;
+      const targets = ledger.findings.filter(
+        (finding) => finding.id === findingId,
+      );
+      if (targets.length !== 1) {
+        throw new Error(
+          `Manager action recovery target "${findingId}" must resolve to exactly one finding`,
+        );
+      }
+      if (!findingMatchesMutationPrecondition(ledger, precondition)) {
+        throw new Error(
+          `Manager action recovery target "${findingId}" no longer matches its captured head`,
+        );
+      }
+    }
+  }
+}
 
 function rawFindingLifecycleAuthority(input: {
   operation: FindingLifecycleCommand['operation'];
@@ -624,7 +686,11 @@ export function reconcileFindingLedgerPlan(
   input: ReconcileFindingLedgerInput,
 ): ReconcileFindingLedgerPlan {
   assertCanonicalReconcileInput(input);
-  return reconcileFindingLedgerWithValidator(input, validateFindingManagerOutput);
+  return reconcileFindingLedgerWithValidator(
+    input,
+    validateFindingManagerOutput,
+    assertFindingLedgerProjectionInvariant,
+  );
 }
 
 export function reconcileManagerActionRecovery(input: Pick<
@@ -642,6 +708,7 @@ export function reconcileManagerActionRecovery(input: Pick<
       verifiedEvidenceRecordsByRawFindingId: new Map(),
     },
     validateManagerActionRecoveryOutput,
+    assertManagerActionRecoveryTargets,
   ).ledger;
 }
 
@@ -875,6 +942,7 @@ function assertExactlyOneRawOutcome(input: ReconcileFindingLedgerInput): void {
 function reconcileFindingLedgerWithValidator(
   input: ReconcileFindingLedgerInput,
   validateOutput: ManagerOutputValidator,
+  validatePreviousLedger: PreviousLedgerValidator,
 ): ReconcileFindingLedgerPlan {
   if (input.managerOutput.resolvedConflicts.length > 0) {
     throw new Error('Manager conflict resolution requires verified conflict adjudication');
@@ -891,7 +959,7 @@ function reconcileFindingLedgerWithValidator(
   assertExactlyOneRawOutcome(input);
   const rawFindingIds = new Set(input.rawFindings.map((finding) => finding.rawFindingId));
   assertUniqueIds(input.rawFindings.map((finding) => finding.rawFindingId), 'raw finding id');
-  assertFindingLedgerProjectionInvariant(input.previousLedger);
+  validatePreviousLedger(input.previousLedger, input.managerOutput);
   const previousById = new Map(input.previousLedger.findings.map((finding) => [finding.id, finding]));
   const previousRawFindingsById = new Map(input.previousLedger.rawFindings.map((finding) => [
     finding.rawFindingId,

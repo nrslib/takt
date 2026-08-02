@@ -8,7 +8,7 @@ import {
 import type { RawCanonicalSnapshot } from '../../models/finding-contract-types.js';
 import { canonicalRawIntegrityDigestOf } from './raw-canonicalization.js';
 import type { CanonicalIntakeItem } from './manager-admission.js';
-import type { FindingObservation } from './types.js';
+import type { FindingLedger, FindingObservation } from './types.js';
 
 function sortedSet(values: readonly string[]): string[] {
   return binarySortedUnique([...new Set(values)]);
@@ -62,4 +62,55 @@ export function assertCompatibleRawCanonicalSnapshot(
       `Raw canonical snapshot for "${candidate.rawFindingId}" conflicts with persisted content`,
     );
   }
+}
+
+export function appendRawFindingsWithCanonicalSnapshots(input: {
+  ledger: FindingLedger;
+  items: readonly CanonicalIntakeItem[];
+  capturedAt: FindingObservation;
+}): FindingLedger {
+  const rawFindings = [...input.ledger.rawFindings];
+  const rawCanonicalSnapshots = [...input.ledger.rawCanonicalSnapshots];
+  for (const item of input.items) {
+    const rawFindingId = item.wire.rawFindingId;
+    if (item.canonical.rawFindingId !== rawFindingId) {
+      throw new Error(
+        `Canonical and wire raw finding identity mismatch: "${item.canonical.rawFindingId}" !== "${rawFindingId}"`,
+      );
+    }
+    const existingRaws = rawFindings.filter((raw) => raw.rawFindingId === rawFindingId);
+    const existingSnapshots = rawCanonicalSnapshots.filter(
+      (snapshot) => snapshot.rawFindingId === rawFindingId,
+    );
+    if (existingRaws.length > 1 || existingSnapshots.length > 1) {
+      throw new Error(`Raw finding "${rawFindingId}" does not have exact persisted identity`);
+    }
+    if (existingRaws.length === 0 && existingSnapshots.length === 1) {
+      throw new Error(`Canonical snapshot for "${rawFindingId}" references a missing raw finding`);
+    }
+
+    const candidate = createRawCanonicalSnapshot({ item, capturedAt: input.capturedAt });
+    const existingRaw = existingRaws[0];
+    if (
+      existingRaw !== undefined
+      && computeRawPayloadDigest(existingRaw) !== candidate.rawPayloadDigest
+    ) {
+      throw new Error(`Raw finding "${rawFindingId}" conflicts with persisted content`);
+    }
+    if (existingRaw === undefined) {
+      rawFindings.push(structuredClone(item.wire));
+    }
+
+    const existingSnapshot = existingSnapshots[0];
+    if (existingSnapshot === undefined) {
+      rawCanonicalSnapshots.push(candidate);
+    } else {
+      assertCompatibleRawCanonicalSnapshot(existingSnapshot, candidate);
+    }
+  }
+  return {
+    ...input.ledger,
+    rawFindings,
+    rawCanonicalSnapshots,
+  };
 }

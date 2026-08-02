@@ -7,15 +7,13 @@ import {
 import { computeInterpretationAttemptId } from '../../models/finding-interpretation-identity.js';
 import type { CanonicalIntakeItem } from './manager-admission.js';
 import {
-  assertCompatibleRawCanonicalSnapshot,
-  createRawCanonicalSnapshot,
+  appendRawFindingsWithCanonicalSnapshots,
 } from './raw-canonical-snapshot.js';
 import type {
   FindingLedger,
   FindingObservation,
   InterpretationAttempt,
   InterpretationCase,
-  RawFinding,
 } from './types.js';
 import { planInterpretationOriginAttachments } from './interpretation-origin-attachment.js';
 import {
@@ -86,19 +84,6 @@ function nextAttempt(input: {
   };
 }
 
-function appendRawFindings(
-  ledger: FindingLedger,
-  items: readonly CanonicalIntakeItem[],
-): RawFinding[] {
-  const existingIds = new Set(ledger.rawFindings.map((rawFinding) => rawFinding.rawFindingId));
-  return [
-    ...ledger.rawFindings,
-    ...items
-      .filter((item) => !existingIds.has(item.wire.rawFindingId))
-      .map((item) => structuredClone(item.wire)),
-  ];
-}
-
 export function appendStartedInterpretationAttempt(input: {
   ledger: FindingLedger;
   plannedCase: Extract<InterpretationCase, { kind: 'provider_case' }>;
@@ -150,21 +135,18 @@ export function appendStartedInterpretationAttempt(input: {
     currentRound: (input.ledger.stopBudget?.roundMarkers.length ?? 0) + 1,
   });
   const originDigestsByRawFindingId = originSnapshotDigestsByRawFindingId(originPlans);
-  const rawCanonicalSnapshots = [...input.ledger.rawCanonicalSnapshots];
+  const withRawSnapshots = appendRawFindingsWithCanonicalSnapshots({
+    ledger: input.ledger,
+    items: input.items,
+    capturedAt: input.observation,
+  });
   const observations = [...input.ledger.interpretationRawObservations];
   const newObservations = input.items.map((item) => {
-    const candidateSnapshot = createRawCanonicalSnapshot({
-      item,
-      capturedAt: input.observation,
-    });
-    const existingSnapshot = rawCanonicalSnapshots.find(
+    const snapshot = withRawSnapshots.rawCanonicalSnapshots.find(
       (snapshot) => snapshot.rawFindingId === item.canonical.rawFindingId,
     );
-    const snapshot = existingSnapshot ?? candidateSnapshot;
-    if (existingSnapshot === undefined) {
-      rawCanonicalSnapshots.push(candidateSnapshot);
-    } else {
-      assertCompatibleRawCanonicalSnapshot(existingSnapshot, candidateSnapshot);
+    if (snapshot === undefined) {
+      throw new Error(`Interpretation raw finding "${item.canonical.rawFindingId}" has no canonical snapshot`);
     }
     const observationWithoutDigest = {
       rawFindingId: item.canonical.rawFindingId,
@@ -251,10 +233,8 @@ export function appendStartedInterpretationAttempt(input: {
   }
   return {
     ledger: {
-      ...input.ledger,
+      ...withRawSnapshots,
       updatedAt: input.observation.timestamp,
-      rawFindings: appendRawFindings(input.ledger, input.items),
-      rawCanonicalSnapshots,
       interpretationCaseSnapshots: [
         ...input.ledger.interpretationCaseSnapshots,
         caseSnapshot,

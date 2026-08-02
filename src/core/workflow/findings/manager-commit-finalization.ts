@@ -59,7 +59,11 @@ function classifyRejectedObservations(
     );
     if (
       pending.destination === 'target_audit'
-      && auditTarget?.id === pending.targetFindingId
+      && (
+        pending.targetValidation === 'entity_binding'
+          ? target !== undefined
+          : auditTarget?.id === pending.targetFindingId
+      )
     ) {
       return {
         ...plan,

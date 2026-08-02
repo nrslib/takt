@@ -10,11 +10,6 @@ import type { ConflictRawClaimLanding } from '../../models/finding-contract-type
 import { evidenceRecordMatchesRawEvidence } from '../../models/finding-evidence-record.js';
 import { createFindingLedgerEntry } from './finding-entry.js';
 import { applyFindingLifecycleCommands } from './lifecycle-transaction.js';
-import type { CanonicalIntakeItem } from './manager-admission.js';
-import {
-  assertCompatibleRawCanonicalSnapshot,
-  createRawCanonicalSnapshot,
-} from './raw-canonical-snapshot.js';
 import { stopBudgetRoundsCompleted } from './stop-budget.js';
 import type {
   FindingLedger,
@@ -25,28 +20,6 @@ import type {
 
 function findingId(nextId: number): string {
   return `F-${String(nextId).padStart(4, '0')}`;
-}
-
-export function stageCanonicalRawSnapshots(input: {
-  ledger: FindingLedger;
-  items: readonly CanonicalIntakeItem[];
-  observation: FindingObservation;
-}): FindingLedger {
-  const rawIds = new Set(input.ledger.rawFindings.map((raw) => raw.rawFindingId));
-  const snapshots = [...input.ledger.rawCanonicalSnapshots];
-  for (const item of input.items) {
-    if (!rawIds.has(item.wire.rawFindingId)) {
-      continue;
-    }
-    const candidate = createRawCanonicalSnapshot({ item, capturedAt: input.observation });
-    const existing = snapshots.find((snapshot) => snapshot.rawFindingId === item.wire.rawFindingId);
-    if (existing === undefined) {
-      snapshots.push(candidate);
-    } else {
-      assertCompatibleRawCanonicalSnapshot(existing, candidate);
-    }
-  }
-  return { ...input.ledger, rawCanonicalSnapshots: snapshots };
 }
 
 function rawEvidenceIds(ledger: FindingLedger, raw: RawFinding): string[] {
@@ -142,7 +115,7 @@ function createLanding(input: {
   const applied = applyFindingLifecycleCommands({
     ledger: input.ledger,
     commands: [{
-      operation: 'create_finding',
+      operation: 'update_provisional',
       changes: { findings: [holdingWithoutRevision], conflicts: [] },
       authority: { kind: 'verified_evidence' },
       evidenceSourcesByTarget: new Map([[

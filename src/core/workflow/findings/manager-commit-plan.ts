@@ -50,6 +50,7 @@ import {
 import { issueInterpretationCaseConflictAuthority } from './interpretation-case-authority.js';
 import { createAnchorAdjudication } from '../../models/finding-anchor-relevance.js';
 import { createEmptyManagerOutput } from './manager-output.js';
+import { appendRawFindingsWithCanonicalSnapshots } from './raw-canonical-snapshot.js';
 
 export function attachCapturedConflictHeads(input: {
   commands: readonly FindingLifecycleCommand[];
@@ -438,6 +439,30 @@ function interpretationManagerOutput(
   };
 }
 
+function completeReconciledRawSnapshots(input: {
+  plan: ReturnType<typeof reconcileCommitPlan>;
+  items: readonly ReviewerIntakeResult['items'][number][];
+  observation: FindingObservation;
+}): ReturnType<typeof reconcileCommitPlan> {
+  const completeLedger = (ledger: FindingLedger): FindingLedger => {
+    const storedRawFindingIds = new Set(
+      ledger.rawFindings.map((raw) => raw.rawFindingId),
+    );
+    return appendRawFindingsWithCanonicalSnapshots({
+      ledger,
+      items: input.items.filter(
+        (item) => storedRawFindingIds.has(item.wire.rawFindingId),
+      ),
+      capturedAt: input.observation,
+    });
+  };
+  return {
+    ...input.plan,
+    ledger: completeLedger(input.plan.ledger),
+    managerDecisionLedger: completeLedger(input.plan.managerDecisionLedger),
+  };
+}
+
 export function buildFindingManagerCommitMutation(
   params: FindingManagerCommitPlanInput,
   freshLedger: FindingLedger,
@@ -600,7 +625,19 @@ export function buildFindingManagerCommitMutation(
     healthyReviewerStableKeys: params.intake.healthyReviewerStableKeys,
     verifiedEvidenceRecordsByRawFindingId: admission.verifiedEvidenceRecordsByRawFindingId,
   };
-  let reconcilePlan = reconcileCommitPlan(reconcileInput);
+  let reconcilePlan = completeReconciledRawSnapshots({
+    plan: reconcileCommitPlan(reconcileInput),
+    items: params.intake.items,
+    observation: params.observation,
+  });
+  const noActionRecoveryPlan = (ledger: FindingLedger): ManagerActionRecoveryLifecyclePlan => ({
+    ledger,
+    output: createEmptyManagerOutput(),
+    appliedLedger: ledger,
+    settledLedger: ledger,
+    settlements: new Map(),
+    failures: new Map(),
+  });
   const buildActionRecoveryPlan = (
     ledger: FindingLedger,
   ): ManagerActionRecoveryLifecyclePlan => planManagerActionRecovery({
@@ -615,15 +652,9 @@ export function buildFindingManagerCommitMutation(
     },
     observation: params.observation,
   });
-  const noActionRecoveryPlan = (ledger: FindingLedger): ManagerActionRecoveryLifecyclePlan => ({
-    ledger,
-    output: createEmptyManagerOutput(),
-    appliedLedger: ledger,
-    settledLedger: ledger,
-    settlements: new Map(),
-    failures: new Map(),
-  });
-  let actionRecoveryPlan = interpretationPrepared.cases.length === 0
+  const shouldBuildActionRecoveryPlan = interpretationPrepared.cases.length === 0
+    && actionRecoveryCandidates.length > 0;
+  let actionRecoveryPlan = shouldBuildActionRecoveryPlan
     ? buildActionRecoveryPlan(reconcilePlan.ledger)
     : noActionRecoveryPlan(reconcilePlan.ledger);
   const prospectiveStaleConflictIds = prospectiveStaleConflictResolutions({
@@ -645,11 +676,15 @@ export function buildFindingManagerCommitMutation(
       .map((conflictId) => (
         `conflictDecisions: conflict "${conflictId}" (resolve) rejected at commit: the same plan changes its adjudication evidence dependencies`
       )));
-    reconcilePlan = reconcileCommitPlan({
-      ...reconcileInput,
-      managerOutput: merged,
+    reconcilePlan = completeReconciledRawSnapshots({
+      plan: reconcileCommitPlan({
+        ...reconcileInput,
+        managerOutput: merged,
+      }),
+      items: params.intake.items,
+      observation: params.observation,
     });
-    actionRecoveryPlan = interpretationPrepared.cases.length === 0
+    actionRecoveryPlan = shouldBuildActionRecoveryPlan
       ? buildActionRecoveryPlan(reconcilePlan.ledger)
       : noActionRecoveryPlan(reconcilePlan.ledger);
   }
@@ -700,9 +735,14 @@ export function buildFindingManagerCommitMutation(
     pendingRejectedObservations: admission.pendingRejectedObservations,
     verifiedEvidenceCandidates: admission.verifiedEvidenceCandidates,
   });
+  const finalizedLedger = appendRawFindingsWithCanonicalSnapshots({
+    ledger: finalized.ledger,
+    items: admission.pendingRejectedObservations.map(({ item }) => item),
+    capturedAt: params.observation,
+  });
   const interpretationRecoverySettlements: InterpretationRecoveryOriginSettlement[] = [];
   return {
-    ledger: finalized.ledger,
+    ledger: finalizedLedger,
     result: {
       applied: true,
       managerDecisionLedger: stagedManagerDecisionLedger,
