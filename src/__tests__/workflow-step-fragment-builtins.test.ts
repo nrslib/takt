@@ -273,9 +273,13 @@ describe('builtin workflow step fragment migration', () => {
       const workflow = loadWorkflowFromFile(workflowPath, projectDir);
       const plan = workflow.steps.find((step) => step.name === 'plan');
       const implement = workflow.steps.find((step) => step.name === 'implement');
-      const planFormat = plan?.outputContracts?.find((contract) => contract.name === 'plan.md')?.format;
+      const planContract = plan?.outputContracts?.find((contract) => contract.name === 'plan.md');
 
-      expect(planFormat?.trim().length, workflowName).toBeGreaterThan(0);
+      expect(planContract, workflowName).toMatchObject({
+        formatRef: 'plan',
+        format: expect.any(String),
+      });
+      expect(planContract?.format?.trim().length, workflowName).toBeGreaterThan(0);
       expect(
         implement?.outputContracts?.some((contract) => contract.name === 'implementation-report.md'),
         workflowName,
@@ -300,6 +304,16 @@ describe('builtin workflow step fragment migration', () => {
       format: expect.any(String),
     });
     expect(planContract?.format?.trim().length).toBeGreaterThan(0);
+  });
+
+  it.each(LANGUAGES)('rejects an unknown %s callable plan report format', (lang) => {
+    mkdirSync(join(projectDir, '.takt'), { recursive: true });
+    writeFileSync(join(projectDir, '.takt', 'config.yaml'), 'language: ' + lang + '\n', 'utf-8');
+    invalidateAllResolvedConfigCache();
+
+    expect(() => loadWorkflowFromFile(join(getBuiltinWorkflowsDir(lang), 'mini-core.yaml'), projectDir, {
+      callableArgs: { plan_report_format: 'unknown-plan-format' },
+    })).toThrow();
   });
 
   it.each(LANGUAGES)('composes %s domain reviewer suites without dropping specialist or maintenance facets', (lang) => {
