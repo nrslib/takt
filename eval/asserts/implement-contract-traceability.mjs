@@ -104,7 +104,24 @@ function isTrimReturn(statement, parameterName) {
     && expression.expression.name.text === 'trim';
 }
 
+function hasSyntaxErrors(source) {
+  const result = ts.transpileModule(source, {
+    fileName: 'session-label.js',
+    reportDiagnostics: true,
+    compilerOptions: {
+      allowJs: true,
+      checkJs: false,
+      module: ts.ModuleKind.ESNext,
+      target: ts.ScriptTarget.Latest,
+    },
+  });
+  return result.diagnostics?.some(
+    (diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error,
+  ) ?? false;
+}
+
 function hasObservableNormalizationBehavior(source) {
+  if (hasSyntaxErrors(source)) return false;
   const sourceFile = ts.createSourceFile(
     'session-label.js',
     source,
@@ -112,7 +129,7 @@ function hasObservableNormalizationBehavior(source) {
     true,
     ts.ScriptKind.JS,
   );
-  if (sourceFile.parseDiagnostics.length > 0 || sourceFile.statements.length !== 1) {
+  if (sourceFile.statements.length !== 1) {
     return false;
   }
   const declaration = sourceFile.statements[0];
@@ -167,8 +184,16 @@ function usesCaseNormalization(source) {
 
 export function assertImplementContractTraceabilityIn(candidateDir) {
   const source = readCandidateSource(candidateDir);
-  const observableBehavior = source !== undefined && hasObservableNormalizationBehavior(source);
-  const avoidsCaseNormalization = source !== undefined && !usesCaseNormalization(source);
+  if (source === undefined) {
+    return {
+      pass: false,
+      score: 0,
+      reason: 'Failed checks: candidate-source-readable',
+      failedChecks: ['candidate-source-readable'],
+    };
+  }
+  const observableBehavior = hasObservableNormalizationBehavior(source);
+  const avoidsCaseNormalization = !usesCaseNormalization(source);
   const checks = [observableBehavior, avoidsCaseNormalization];
   const names = ['observable-normalization-behavior', 'case-preservation-implementation'];
   const failed = names.filter((_, index) => !checks[index]);
@@ -178,6 +203,7 @@ export function assertImplementContractTraceabilityIn(candidateDir) {
     reason: failed.length === 0
       ? 'The implementation satisfies the observable normalization behavior.'
       : `Failed checks: ${failed.join(', ')}`,
+    failedChecks: failed,
   };
 }
 

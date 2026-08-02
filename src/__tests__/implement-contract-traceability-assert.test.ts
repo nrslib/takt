@@ -46,6 +46,16 @@ describe('implement contract traceability assertion', () => {
     expect(assertImplementContractTraceabilityIn(candidateDir).pass).toBe(false);
   });
 
+  it('should reject syntactically invalid candidate source', () => {
+    const candidateDir = createCandidate(
+      'export function normalizeSessionLabel(label) {',
+      '',
+      '{}\n',
+    );
+
+    expect(assertImplementContractTraceabilityIn(candidateDir).pass).toBe(false);
+  });
+
   it('should reject a case-normalizing implementation', () => {
     const candidateDir = createCandidate(
       [
@@ -58,7 +68,9 @@ describe('implement contract traceability assertion', () => {
       '{}\n',
     );
 
-    expect(assertImplementContractTraceabilityIn(candidateDir).pass).toBe(false);
+    const result = assertImplementContractTraceabilityIn(candidateDir);
+    expect(result.pass).toBe(false);
+    expect(result.failedChecks).toContain('case-preservation-implementation');
   });
 
   it('should accept a correct implementation despite candidate test and package mutations', () => {
@@ -119,7 +131,9 @@ describe('implement contract traceability assertion', () => {
       process.platform === 'win32' ? 'junction' : 'dir',
     );
 
-    expect(assertImplementContractTraceabilityIn(candidateDir).pass).toBe(false);
+    const result = assertImplementContractTraceabilityIn(candidateDir);
+    expect(result.pass).toBe(false);
+    expect(result.failedChecks).toContain('candidate-source-readable');
   });
 
   it('should inspect candidate source without executing top-level code', () => {
@@ -164,7 +178,7 @@ describe('implement contract traceability assertion', () => {
       'process termination',
       'process.exit(0);',
     ],
-  ])('should reject candidate access to %s', (_capability, attemptedAccess) => {
+  ])('should reject candidate source with an extra top-level %s statement', (_capability, attemptedAccess) => {
     const candidateDir = createCandidate(
       [
         attemptedAccess,
