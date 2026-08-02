@@ -2,9 +2,9 @@
 # Test Creation Report
 
 ## Completion Contract-Test Matrix
-| Contract ID | Observable Contract | Entry / Path | Test | Result | Uncovered Reason |
-|----------------|---------------------|--------------|------|--------|------------------|
-| `{ID}` | {return value, persisted format, config key, CLI output, event, error classification, side effect, etc.} | {CLI / config load / config save / runtime / batch / child / event / persistence, etc.} | `{test name or test file}` | Created / Existing / Not created | {reason only when not created} |
+| Contract ID | Origin | Observable Contract | Entry / Path | Test | Result | Uncovered Reason |
+|-------------|--------|---------------------|--------------|------|--------|------------------|
+| `{ID}` | Plan / Newly discovered | {return value, persisted format, config key, CLI output, event, error classification, side effect, etc.} | {CLI / config load / config save / runtime / batch / child / event / persistence, etc.} | `{test name or test file}` | Created / Existing / Not created | {reason only when not created} |
 
 ## Verification Boundaries (only for contracts with external or environment-dependent boundaries)
 | Contract ID | Mock-Verified Scope | Real-Integration Scope | Test Environment / HOME / Configuration Isolation | Unverified Reason |

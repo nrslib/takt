@@ -76,22 +76,15 @@ workflow_config:
 initial_step: plan
 steps:
   - name: plan
-    tags:
-      - plan
-    edit: false
-    persona: planner
-    policy:
-      $param: plan_policy
-    knowledge:
-      $param: development_knowledge
-    provider_options:
-      extends: review-readonly
-    instruction:
-      $param: plan_instruction
-    output_contracts:
-      report:
-        - name: plan.md
-          format: plan
+    uses: development-core-plan
+    with:
+      plan_policy:
+        $param: plan_policy
+      plan_knowledge:
+        $param: development_knowledge
+      plan_instruction:
+        $param: plan_instruction
+      plan_report_format: plan
     rules:
       - condition: 要件が明確で実装可能
         next: write_tests
@@ -105,24 +98,14 @@ steps:
           - {質問2}
 
   - name: write_tests
-    tags:
-      - coding
-      - test-planning
-    edit: true
-    persona: coder
-    policy:
-      $param: testing_policy
-    knowledge:
-      $param: testing_knowledge
-    provider_options:
-      extends: edit
-    required_permission_mode: edit
-    instruction:
-      $param: testing_instruction
-    output_contracts:
-      report:
-        - name: test-report.md
-          format: test-report
+    uses: development-core-write-tests
+    with:
+      testing_policy:
+        $param: testing_policy
+      testing_knowledge:
+        $param: testing_knowledge
+      testing_instruction:
+        $param: testing_instruction
     rules:
       - condition: テスト作成が完了した
         next: implement
@@ -136,27 +119,14 @@ steps:
         interactive_only: true
 
   - name: implement
-    tags:
-      - coding
-    edit: true
-    persona: coder
-    policy:
-      $param: development_policy
-    knowledge:
-      $param: development_knowledge
-    provider_options:
-      extends: edit
-    required_permission_mode: edit
-    instruction:
-      $param: implement_instruction
-    output_contracts:
-      report:
-        - name: coder-scope.md
-          format: coder-scope
-          use_judge: false
-        - name: coder-decisions.md
-          format: coder-decisions
-          use_judge: false
+    uses: development-core-implement
+    with:
+      development_policy:
+        $param: development_policy
+      development_knowledge:
+        $param: development_knowledge
+      implementation_instruction:
+        $param: implement_instruction
     rules:
       - condition: 実装が完了した
         next: review

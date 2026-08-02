@@ -72,6 +72,7 @@ steps:
         $param: plan_knowledge
       plan_instruction:
         $param: plan_instruction
+      plan_report_format: plan
     rules:
       - condition: Requirements are clear and implementable
         next: write_tests

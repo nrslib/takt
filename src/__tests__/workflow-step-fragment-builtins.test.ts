@@ -46,6 +46,7 @@ const MINI_WORKFLOWS = [
   'backend-cqrs-mini',
   'dual-cqrs-mini',
 ];
+const LIGHTWEIGHT_CORE_WORKFLOWS = ['simple-core', 'mini-core', 'simple-mini'];
 const REMEDIATION_WORKFLOWS = [
   'review-fix-default',
   'review-fix-backend',
@@ -233,6 +234,7 @@ describe('builtin workflow step fragment migration', () => {
       ...FIX_WORKFLOWS,
       ...DEVELOPMENT_CORE_WORKFLOWS,
       ...MINI_WORKFLOWS,
+      ...LIGHTWEIGHT_CORE_WORKFLOWS,
       ...REMEDIATION_WORKFLOWS,
       'peer-review-suite-base',
       'peer-review-suite-frontend',
@@ -258,6 +260,41 @@ describe('builtin workflow step fragment migration', () => {
       expect(develop.kind, workflowName).toBe('workflow_call');
       expect(develop.call, workflowName).toBe('mini-core');
       expect(develop.args, workflowName).toEqual(expect.any(Object));
+    }
+  });
+
+  it.each(LANGUAGES)('composes %s lightweight development routines from shared step fragments', (lang) => {
+    const expectedFragments: Record<string, Record<string, string>> = {
+      'simple-core': {
+        plan: 'development-core-plan',
+        write_tests: 'development-core-write-tests',
+        implement: 'development-core-implement',
+      },
+      'mini-core': {
+        plan: 'development-core-plan',
+        implement: 'development-core-implement',
+      },
+      'simple-mini': {
+        plan: 'development-core-plan',
+        implement: 'development-core-implement',
+      },
+    };
+
+    for (const [workflowName, stepFragments] of Object.entries(expectedFragments)) {
+      const raw = readBuiltinWorkflow(lang, workflowName);
+      const expanded = resolveBuiltinWorkflow(lang, workflowName);
+
+      for (const [stepName, fragmentName] of Object.entries(stepFragments)) {
+        expect(expectFragmentReference(getStep(raw, stepName), stepName), workflowName).toBe(fragmentName);
+        const expandedStep = getStep(expanded, stepName);
+        expect(expandedStep).not.toHaveProperty('uses');
+        expect(expandedStep).not.toHaveProperty('with');
+      }
+
+      const implementReports = (getStep(expanded, 'implement').output_contracts as {
+        report?: Array<{ name?: string }>;
+      } | undefined)?.report ?? [];
+      expect(implementReports.some((report) => report.name === 'implementation-report.md'), workflowName).toBe(true);
     }
   });
 

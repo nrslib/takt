@@ -57,29 +57,15 @@ loop_monitors:
           next: supervise_fix
 steps:
   - name: plan
-    tags:
-      - plan
-    edit: false
-    persona: planner
-    policy:
-      $param: plan_policy
-    knowledge:
-      $param: plan_knowledge
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Bash
-          - WebSearch
-          - WebFetch
-    instruction: plan
-    output_contracts:
-      report:
-        - name: plan.md
-          format:
-            $param: plan_report_format
+    uses: development-core-plan
+    with:
+      plan_policy:
+        $param: plan_policy
+      plan_knowledge:
+        $param: plan_knowledge
+      plan_instruction: plan
+      plan_report_format:
+        $param: plan_report_format
     rules:
       - condition: 要件が明確で実装可能
         next: implement
@@ -89,27 +75,13 @@ steps:
         next: ABORT
 
   - name: implement
-    tags:
-      - coding
-    edit: true
-    persona: coder
-    policy:
-      $param: development_policy
-    knowledge:
-      $param: development_knowledge
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Edit
-          - Write
-          - Bash
-          - WebSearch
-          - WebFetch
-    required_permission_mode: edit
-    instruction: implement
+    uses: development-core-implement
+    with:
+      development_policy:
+        $param: development_policy
+      development_knowledge:
+        $param: development_knowledge
+      implementation_instruction: implement
     rules:
       - condition: 実装が完了した
         next: reviewers
@@ -119,15 +91,6 @@ steps:
         next: implement
         requires_user_input: true
         interactive_only: true
-    output_contracts:
-      report:
-        - name: coder-scope.md
-          format: coder-scope
-          use_judge: false
-        - name: coder-decisions.md
-          format: coder-decisions
-          use_judge: false
-
   - name: reviewers
     tags:
       - review
