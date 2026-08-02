@@ -48,12 +48,20 @@ describe('implement contract traceability assertion', () => {
 
   it('should reject syntactically invalid candidate source', () => {
     const candidateDir = createCandidate(
-      'export function normalizeSessionLabel(label) {',
+      [
+        'export function normalizeSessionLabel(label) {',
+        "  if (typeof label !== 'string') throw new TypeError('label must be a string');",
+        '  return label.trim();',
+        '}',
+        '}',
+      ].join('\n'),
       '',
       '{}\n',
     );
 
-    expect(assertImplementContractTraceabilityIn(candidateDir).pass).toBe(false);
+    const result = assertImplementContractTraceabilityIn(candidateDir);
+    expect(result.pass).toBe(false);
+    expect(result.failedChecks).toEqual(['observable-normalization-behavior']);
   });
 
   it('should reject a case-normalizing implementation', () => {
