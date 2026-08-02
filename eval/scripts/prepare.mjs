@@ -186,6 +186,10 @@ for (const {
   phase: requestedPhase,
   targetFile,
 } of targets) {
+  if (requestedPhase !== undefined && monitorCycle !== undefined) {
+    throw new Error(`Target "${id}" cannot define both phase and monitorCycle`);
+  }
+  const resolvedPhase = requestedPhase ?? (monitorCycle ? 'phase3' : 'phase1');
   const fixtureDir = resolve(repoRoot, fixture);
 
   // Mutable (coder) targets work on a disposable copy.
@@ -284,7 +288,7 @@ for (const {
     language,
   };
 
-  const instruction = requestedPhase === 'phase2'
+  const instruction = resolvedPhase === 'phase2'
     ? new ReportInstructionBuilder(target, {
         cwd: runDir,
         reportDir,
@@ -293,7 +297,7 @@ for (const {
         targetFile,
         lastResponse: PREV_MARKER,
       }).build()
-    : monitorCycle
+    : resolvedPhase === 'phase3'
       ? new StatusJudgmentBuilder(target, {
         language,
         inputSource: 'response',
@@ -312,8 +316,7 @@ for (const {
 
   const outDir = join(repoRoot, 'eval', 'prompts');
   mkdirSync(outDir, { recursive: true });
-  const phase = requestedPhase ?? (monitorCycle ? 'phase3' : 'phase1');
-  const outPath = join(outDir, `${id}.${phase}.md`);
+  const outPath = join(outDir, `${id}.${resolvedPhase}.md`);
   writeFileSync(outPath, assembled);
 
   const targetName = monitorCycle ? `[${monitorCycle.join(' -> ')}] monitor` : stepName;
