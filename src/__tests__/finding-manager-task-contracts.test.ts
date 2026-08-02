@@ -3,7 +3,9 @@ import {
   FindingEntityBindingTaskOutputJsonSchema,
   MainManagerControlTaskOutputJsonSchema,
   MainManagerRawTaskOutputJsonSchema,
+  parseFindingEntityBindingTaskOutput,
 } from '../core/workflow/findings/manager-task-contracts.js';
+import { RAW_FINDING_FIELD_LIMITS } from '../core/models/finding-contract-limits.js';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -43,5 +45,53 @@ describe('finding manager task contracts', () => {
       expect(constrainedSchema.type).toBe('string');
       expect(values.every((value) => typeof value === 'string')).toBe(true);
     }
+  });
+
+  it('allows the empty bind_existing group sentinel without relaxing raw finding ID limits', () => {
+    const taskId = 'a'.repeat(64);
+    const rawFindingId = 'raw-1';
+    const bindExisting = {
+      taskId,
+      decisions: [{
+        rawFindingId,
+        decision: 'bind_existing',
+        findingId: 'F-0001',
+        groupRawFindingId: '',
+        reason: 'Matches the existing semantic entity.',
+      }],
+    };
+
+    expect(parseFindingEntityBindingTaskOutput(bindExisting)).toEqual(bindExisting);
+
+    const maximumGroupRawFindingId = 'x'.repeat(
+      RAW_FINDING_FIELD_LIMITS.maxWireRawFindingIdChars,
+    );
+    const newEntity = {
+      taskId,
+      decisions: [{
+        rawFindingId,
+        decision: 'new_entity',
+        findingId: '',
+        groupRawFindingId: maximumGroupRawFindingId,
+        reason: 'Represents a distinct semantic entity.',
+      }],
+    };
+    expect(parseFindingEntityBindingTaskOutput(newEntity)).toEqual(newEntity);
+    expect(() => parseFindingEntityBindingTaskOutput({
+      ...newEntity,
+      decisions: [{
+        ...newEntity.decisions[0],
+        groupRawFindingId: `${maximumGroupRawFindingId}x`,
+      }],
+    })).toThrow();
+
+    expect(
+      FindingEntityBindingTaskOutputJsonSchema
+        .properties.decisions.items.properties.groupRawFindingId,
+    ).toEqual({
+      type: 'string',
+      minLength: 0,
+      maxLength: RAW_FINDING_FIELD_LIMITS.maxWireRawFindingIdChars,
+    });
   });
 });

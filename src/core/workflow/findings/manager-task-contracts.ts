@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { FINDING_DISMISSAL_BASES } from '../../models/finding-types.js';
+import { RawFindingIdSchema } from '../../models/finding-contract-field-schemas.js';
+import { RAW_FINDING_FIELD_LIMITS } from '../../models/finding-contract-limits.js';
 import {
   RAW_DECISION_KINDS,
   type FindingLifecycleEntityHead,
@@ -16,6 +18,10 @@ export const MAIN_MANAGER_INPUT_MAX_BYTES = 24_000;
 
 const taskIdSchema = z.string().regex(/^[0-9a-f]{64}$/);
 const componentIdSchema = z.string().regex(/^[0-9a-f]{64}$/);
+const rawFindingIdOrEmptySchema = z.union([
+  RawFindingIdSchema,
+  z.literal(''),
+]);
 
 export interface MainManagerRawTask {
   taskId: string;
@@ -48,7 +54,7 @@ export interface MainManagerRawTaskOutput {
 
 const mainManagerRawTaskDecisionSchema = z.object({
   componentId: componentIdSchema,
-  rawFindingId: z.string().min(1),
+  rawFindingId: RawFindingIdSchema,
   decision: z.enum(RAW_DECISION_KINDS),
   anchorRelevance: z.enum(['relevant', 'not_relevant']).optional(),
   findingId: z.string(),
@@ -66,7 +72,11 @@ const mainManagerRawDecisionJsonProperties = {
     type: 'string',
     pattern: '^[0-9a-f]{64}$',
   },
-  rawFindingId: { type: 'string', minLength: 1 },
+  rawFindingId: {
+    type: 'string',
+    minLength: 1,
+    maxLength: RAW_FINDING_FIELD_LIMITS.maxWireRawFindingIdChars,
+  },
   decision: { type: 'string', enum: RAW_DECISION_KINDS },
   findingId: { type: 'string' },
   evidence: { type: 'string', minLength: 1, maxLength: 2_048 },
@@ -141,10 +151,10 @@ export interface FindingEntityBindingTaskOutput {
 const findingEntityBindingTaskOutputSchema = z.object({
   taskId: taskIdSchema,
   decisions: z.array(z.object({
-    rawFindingId: z.string().min(1),
+    rawFindingId: RawFindingIdSchema,
     decision: z.enum(ENTITY_BINDING_DECISION_KINDS),
     findingId: z.string(),
-    groupRawFindingId: z.string(),
+    groupRawFindingId: rawFindingIdOrEmptySchema,
     reason: z.string().min(1).max(2_048),
   }).strict()).max(ENTITY_BINDING_TASK_MAX_ITEMS),
 }).strict();
@@ -172,13 +182,21 @@ export const FindingEntityBindingTaskOutputJsonSchema = {
           'reason',
         ],
         properties: {
-          rawFindingId: { type: 'string', minLength: 1 },
+          rawFindingId: {
+            type: 'string',
+            minLength: 1,
+            maxLength: RAW_FINDING_FIELD_LIMITS.maxWireRawFindingIdChars,
+          },
           decision: {
             type: 'string',
             enum: ENTITY_BINDING_DECISION_KINDS,
           },
           findingId: { type: 'string' },
-          groupRawFindingId: { type: 'string' },
+          groupRawFindingId: {
+            type: 'string',
+            minLength: 0,
+            maxLength: RAW_FINDING_FIELD_LIMITS.maxWireRawFindingIdChars,
+          },
           reason: { type: 'string', minLength: 1, maxLength: 2_048 },
         },
       },

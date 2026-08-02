@@ -18,7 +18,10 @@ import {
   FindingManagerOutputJsonSchema,
   InterpretationAttemptSchema,
   InterpretationBatchReceiptSchema,
+  InterpretationCaseSnapshotSchema,
   InterpretationRawObservationSchema,
+  ProviderRawFindingIdSchema,
+  RawFindingIdSchema,
   FindingSeveritySchema,
   FindingStatusSchema,
   RawFindingSchema,
@@ -165,6 +168,28 @@ function pendingFinding(id: string) {
 }
 
 describe('finding schemas', () => {
+  it('separates provider-local and wire raw finding ID constraints', () => {
+    const maximumProviderId = 'p'.repeat(
+      RAW_FINDING_FIELD_LIMITS.maxProviderRawFindingIdChars,
+    );
+    const maximumWireId = 'w'.repeat(
+      RAW_FINDING_FIELD_LIMITS.maxWireRawFindingIdChars,
+    );
+
+    expect(ProviderRawFindingIdSchema.parse(maximumProviderId)).toBe(maximumProviderId);
+    expect(() => ProviderRawFindingIdSchema.parse(`${maximumProviderId}x`)).toThrow();
+    expect(RawFindingIdSchema.parse(maximumWireId)).toBe(maximumWireId);
+    expect(() => RawFindingIdSchema.parse(`${maximumWireId}x`)).toThrow();
+
+    const rawCandidateSchema = RawFindingsOutputJsonSchema.properties.rawFindings.items
+      .properties.candidate.anyOf[1];
+    expect(rawCandidateSchema.properties.rawFindingId.maxLength)
+      .toBe(RAW_FINDING_FIELD_LIMITS.maxProviderRawFindingIdChars);
+    expect(FindingManagerDecisionsJsonSchema.properties.rawDecisions.items.anyOf[0]
+      .properties.rawFindingId.maxLength)
+      .toBe(RAW_FINDING_FIELD_LIMITS.maxWireRawFindingIdChars);
+  });
+
   it('uses only unversioned schema references for the single Finding Contract format', () => {
     expect([
       FINDING_CONFLICT_ADJUDICATION_SCHEMA_REF,
@@ -179,6 +204,60 @@ describe('finding schemas', () => {
       'takt.findings.manager.raw-task',
       'takt.findings.manager.control-task',
     ]);
+  });
+
+  it('caps local clarification IDs and wire manager audit IDs in persisted reports', () => {
+    const base = pendingLedgerWithCompleted({ nextId: 1, findings: [] });
+    const withReport = (reportFields: Record<string, unknown>) => ({
+      ...base,
+      pendingManagerCommit: {
+        ...base.pendingManagerCommit,
+        publication: {
+          ...base.pendingManagerCommit.publication,
+          report: {
+            ...base.pendingManagerCommit.publication.report,
+            ...reportFields,
+          },
+        },
+      },
+    });
+    const maximumProviderId = 'p'.repeat(
+      RAW_FINDING_FIELD_LIMITS.maxProviderRawFindingIdChars,
+    );
+    const maximumWireId = 'w'.repeat(
+      RAW_FINDING_FIELD_LIMITS.maxWireRawFindingIdChars,
+    );
+
+    expect(() => parseFindingLedger(withReport({
+      relationClarifications: [{
+        reviewer: 'reviewer',
+        flaggedRawFindingIds: [maximumProviderId],
+      }],
+      managerTaskAudits: [{
+        taskId: 'd'.repeat(64),
+        taskKind: 'raw',
+        ownedIds: [maximumWireId],
+        status: 'failed',
+        inputBytes: null,
+        reason: 'Provider failure.',
+      }],
+    }))).not.toThrow();
+    expect(() => parseFindingLedger(withReport({
+      relationClarifications: [{
+        reviewer: 'reviewer',
+        flaggedRawFindingIds: [`${maximumProviderId}x`],
+      }],
+    }))).toThrow();
+    expect(() => parseFindingLedger(withReport({
+      managerTaskAudits: [{
+        taskId: 'd'.repeat(64),
+        taskKind: 'raw',
+        ownedIds: [`${maximumWireId}x`],
+        status: 'failed',
+        inputBytes: null,
+        reason: 'Provider failure.',
+      }],
+    }))).toThrow();
   });
 
   it('accepts a finding ledger in the single root format', () => {
@@ -992,7 +1071,7 @@ describe('finding schemas', () => {
     expect(RAW_FINDING_FIELD_LIMITS.maxProofIdChars).toBe(64);
   });
 
-  it('keeps the provider raw id limit separate from valid engine-namespaced ids', () => {
+  it('accepts a provider-local maximum and a longer engine-namespaced wire ID', () => {
     const evidence = [{
       kind: 'engine_proof' as const,
       proofId: 'a'.repeat(64),
@@ -1007,15 +1086,23 @@ describe('finding schemas', () => {
       suggestion: null,
       evidence,
     };
-    const namespacedId = 'namespace:'.repeat(20);
+    const providerId = 'p'.repeat(
+      RAW_FINDING_FIELD_LIMITS.maxProviderRawFindingIdChars,
+    );
+    const namespacedId = `engine-namespace:${providerId}`;
     const reviewer = reviewerRawExtractionFixture({
       ...fields,
-      rawFindingId: namespacedId,
+      rawFindingId: providerId,
       target: { kind: 'code', paths: ['src/namespaced.ts'] },
       evidenceRequests: [],
     });
 
-    expect(() => ReviewerRawFindingSchema.parse(reviewer)).toThrow();
+    expect(ReviewerRawFindingSchema.parse(reviewer).candidate?.rawFindingId)
+      .toBe(providerId);
+    expect(() => ReviewerRawFindingSchema.parse({
+      ...reviewer,
+      candidate: { ...reviewer.candidate, rawFindingId: `${providerId}x` },
+    })).toThrow();
     expect(RawFindingSchema.parse(canonicalRawFindingFixture({
       ...fields,
       rawFindingId: namespacedId,
@@ -1138,7 +1225,7 @@ describe('finding schemas', () => {
     expect(candidateSchema.properties.targetFindingIds.maxItems)
       .toBe(RAW_FINDING_NORMALIZER_LIMITS.maxTargetFindingIdsPerCandidate);
     expect(candidateSchema.properties.targetFindingIds.items.maxLength)
-      .toBe(RAW_FINDING_FIELD_LIMITS.maxRawFindingIdChars);
+      .toBe(RAW_FINDING_FIELD_LIMITS.maxFindingIdChars);
     expect(candidateSchema.properties.familyTag).toEqual({
       type: ['string', 'null'],
       maxLength: RAW_FINDING_FIELD_LIMITS.maxFamilyTagChars,
@@ -1385,6 +1472,57 @@ describe('interpretation case schemas', () => {
     rawFindingIds: ['raw-schema'],
     providerCallId,
   };
+
+  it('accepts a workflow-stack wire id in observations and case members', () => {
+    const rawFindingId = [
+      '20260802-203347',
+      JSON.stringify({
+        stack: Array.from({ length: 2 }, (_, index) => ({
+          workflow: `parent-workflow-${index}-with-a-descriptive-name`,
+          workflowRef: `workflows/parent-workflow-${index}.yaml`,
+          step: `invoke-child-workflow-${index}-for-review`,
+          kind: 'workflow_call',
+          occurrence: index + 1,
+        })),
+        childWorkflow: 'workflows/review-child.yaml',
+      }),
+      'reviewers',
+      '1',
+      'reviewer',
+      `item-${'a'.repeat(64)}`,
+    ].join(':');
+    const observationDigest = '7'.repeat(64);
+    const rawCanonicalSnapshotId = '8'.repeat(64);
+    const parsedObservation = InterpretationRawObservationSchema.parse({
+      observationDigest,
+      rawFindingId,
+      rawCanonicalSnapshotId,
+      caseId,
+      cohortId,
+      caseSnapshotId,
+      lineageKey,
+      semanticProjectionDigest,
+      originSnapshotDigests: [],
+      recoveryOriginBindingIds: [],
+    });
+    const parsedSnapshot = InterpretationCaseSnapshotSchema.parse({
+      caseSnapshotId,
+      caseId,
+      cohortId,
+      roundIdentity: '9'.repeat(64),
+      lineageKey,
+      policyClass: 'general',
+      semanticProjectionDigest,
+      memberRawFindingIds: [rawFindingId],
+      memberObservationDigests: [observationDigest],
+      originSnapshotSetDigest: 'a'.repeat(64),
+      createdAt: observation,
+    });
+
+    expect(rawFindingId.length).toBeGreaterThan(400);
+    expect(parsedObservation.rawFindingId).toBe(rawFindingId);
+    expect(parsedSnapshot.memberRawFindingIds).toEqual([rawFindingId]);
+  });
 
   it('requires semantic projection identity and stage-specific attempt times', () => {
     expect(() => InterpretationRawObservationSchema.parse({

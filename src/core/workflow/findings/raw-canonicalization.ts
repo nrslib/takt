@@ -45,6 +45,8 @@ import {
   computeTargetIdentityHash,
   normalizeFindingText,
 } from '../../models/finding-claim-identity.js';
+import { RawFindingIdSchema } from '../../models/finding-contract-field-schemas.js';
+import { RAW_FINDING_FIELD_LIMITS } from '../../models/finding-contract-limits.js';
 import {
   captureFindingMutationPrecondition,
 } from './finding-preconditions.js';
@@ -304,7 +306,7 @@ export interface ReviewerRawIntakeContext {
 }
 
 function namespacedRawFindingId(context: ReviewerRawIntakeContext, rawFindingId: string): string {
-  return [
+  const wireId = [
     context.runId,
     ...(context.callNamespace ? [context.callNamespace] : []),
     context.parentStepName,
@@ -312,6 +314,15 @@ function namespacedRawFindingId(context: ReviewerRawIntakeContext, rawFindingId:
     context.reviewerStepName,
     rawFindingId,
   ].join(':');
+  const parsed = RawFindingIdSchema.safeParse(wireId);
+  if (!parsed.success) {
+    throw new Error(
+      'Raw finding wire ID integrity error: composed ID is '
+      + `${wireId.length} characters, exceeding the wire limit of `
+      + RAW_FINDING_FIELD_LIMITS.maxWireRawFindingIdChars,
+    );
+  }
+  return parsed.data;
 }
 
 function pickString(value: unknown): string | undefined {

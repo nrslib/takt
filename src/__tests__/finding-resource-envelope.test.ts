@@ -330,6 +330,19 @@ describe('reviewer raw resource envelope', () => {
       .toThrow(/atomized raw findings/);
   });
 
+  it('rejects a provider raw finding ID above the local limit before intake', () => {
+    const extraction = structuredClone(raw);
+    extraction.candidate!.rawFindingId = 'r'.repeat(
+      RAW_FINDING_LIMITS.maxProviderRawFindingIdChars + 1,
+    );
+
+    expect(() => intakeExtractions([{ name: 'reviewer', extractions: [extraction] }]))
+      .toThrow(
+        `rawFindingId is ${RAW_FINDING_LIMITS.maxProviderRawFindingIdChars + 1} characters, `
+        + `exceeding the limit of ${RAW_FINDING_LIMITS.maxProviderRawFindingIdChars}`,
+      );
+  });
+
   it('deduplicates target ids before enforcing the atomized boundary', () => {
     const extraction = structuredClone(raw);
     extraction.candidate!.relation = 'persists';

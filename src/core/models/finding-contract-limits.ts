@@ -5,7 +5,9 @@
  * provider-facing JSON Schema の全経路でこの正本を共有する。
  */
 export const RAW_FINDING_FIELD_LIMITS = {
-  maxRawFindingIdChars: 128,
+  maxProviderRawFindingIdChars: 256,
+  maxWireRawFindingIdChars: 4096,
+  maxFindingIdChars: 128,
   maxFamilyTagChars: 128,
   maxTitleChars: 512,
   maxEvidencePathChars: 1024,

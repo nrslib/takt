@@ -42,6 +42,7 @@ import { captureFindingMutationPrecondition } from '../core/workflow/findings/fi
 import { createTestFindingLedgerStore } from './helpers/finding-storage.js';
 import type { FindingLedger, FindingLedgerStore } from '../core/workflow/findings/types.js';
 import { executeAgent } from '../agents/agent-usecases.js';
+import { RAW_FINDING_FIELD_LIMITS } from '../core/models/finding-contract-limits.js';
 import { findingReviewPublicationFixture } from './helpers/finding-review-publication.js';
 import {
   applyFindingLedgerFixtureRevision,
@@ -62,6 +63,17 @@ const FINDING_CONTRACT: FindingContractConfig = {
     outputContract: 'Return JSON.',
   },
 };
+
+const WORKFLOW_STACK_CALL_NAMESPACE = JSON.stringify({
+  stack: Array.from({ length: 2 }, (_, index) => ({
+    workflow: `parent-workflow-${index}-with-a-descriptive-name`,
+    workflowRef: `workflows/parent-workflow-${index}.yaml`,
+    step: `invoke-child-workflow-${index}-for-review`,
+    kind: 'workflow_call',
+    occurrence: index + 1,
+  })),
+  childWorkflow: 'workflows/review-child.yaml',
+});
 
 interface DeferredSignal {
   readonly promise: Promise<void>;
@@ -845,8 +857,9 @@ describe('finding manager filesystem error propagation', () => {
           parentStepName: 'reviewers',
           stepIteration: 2,
           reviewerStepName: 'review',
+          callNamespace: WORKFLOW_STACK_CALL_NAMESPACE,
           rawFindings: [reviewerRawExtractionFixture({
-            rawFindingId: 'raw-conflict',
+            rawFindingId: null,
             familyTag: 'source-conflict',
             severity: 'high',
             title: 'Conflicting source observation',
@@ -868,7 +881,7 @@ describe('finding manager filesystem error propagation', () => {
       workflowName: 'peer-review',
       workflowTask: 'Fix the source issue.',
       runId: 'run-1',
-      callNamespace: '',
+      callNamespace: WORKFLOW_STACK_CALL_NAMESPACE,
       timestamp: '2026-07-17T00:00:01.000Z',
     });
 
@@ -877,7 +890,15 @@ describe('finding manager filesystem error propagation', () => {
       throw new Error('Test setup error: manager did not receive the conflict raw finding');
     }
     const rawFindingId = managerRawFindingId;
+    expect(rawFindingId.length).toBeGreaterThan(400);
+    expect(rawFindingId.length).toBeLessThanOrEqual(
+      RAW_FINDING_FIELD_LIMITS.maxWireRawFindingIdChars,
+    );
+    expect(rawFindingId).toMatch(/:item-[a-f0-9]{64}$/u);
     const persisted = ledgerStore.loadLedger();
+    expect(persisted.rawCanonicalSnapshots).toEqual(
+      expect.arrayContaining([expect.objectContaining({ rawFindingId })]),
+    );
     const conflict = persisted.conflicts.find((entry) => (
       entry.rawFindingIds.includes(rawFindingId)
     ));

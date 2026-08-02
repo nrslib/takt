@@ -142,7 +142,11 @@ export function findRawFieldLimitViolation(fields: {
   evidenceRequests?: readonly unknown[];
 }): string | undefined {
   const checks: Array<[string, string | undefined, number]> = [
-    ['rawFindingId', fields.rawFindingId, RAW_FINDING_LIMITS.maxRawFindingIdChars],
+    [
+      'rawFindingId',
+      fields.rawFindingId,
+      RAW_FINDING_LIMITS.maxProviderRawFindingIdChars,
+    ],
     ['familyTag', fields.familyTag, RAW_FINDING_LIMITS.maxFamilyTagChars],
     ['title', fields.title, RAW_FINDING_LIMITS.maxTitleChars],
     ['description', fields.description, RAW_FINDING_LIMITS.maxDescriptionChars],
@@ -161,8 +165,8 @@ export function findRawFieldLimitViolation(fields: {
     return `targetFindingIds has ${fields.targetFindingIdCount} items, exceeding the limit of ${RAW_FINDING_LIMITS.maxTargetFindingIdsPerCandidate}`;
   }
   for (const [index, targetFindingId] of (fields.targetFindingIds ?? []).entries()) {
-    if (targetFindingId.length > RAW_FINDING_LIMITS.maxRawFindingIdChars) {
-      return `targetFindingIds[${index}] is ${targetFindingId.length} characters, exceeding the limit of ${RAW_FINDING_LIMITS.maxRawFindingIdChars}`;
+    if (targetFindingId.length > RAW_FINDING_LIMITS.maxFindingIdChars) {
+      return `targetFindingIds[${index}] is ${targetFindingId.length} characters, exceeding the limit of ${RAW_FINDING_LIMITS.maxFindingIdChars}`;
     }
   }
   for (const [index, evidence] of (

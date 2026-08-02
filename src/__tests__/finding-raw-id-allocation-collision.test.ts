@@ -8,6 +8,7 @@ vi.mock(
 );
 
 import { foldRawFindingEvidence } from '../core/workflow/findings/finding-evidence-fold.js';
+import { RAW_FINDING_FIELD_LIMITS } from '../core/models/finding-contract-limits.js';
 import {
   canonicalizeReviewerRawFinding,
   createReviewerRawFindingCandidates,
@@ -62,12 +63,26 @@ function reviewerExtraction(
   });
 }
 
-function reviewerCandidates(items: readonly unknown[]) {
+type ReviewerCandidateContext = Pick<
+  Parameters<typeof createReviewerRawFindingCandidates>[1],
+  | 'workflowName'
+  | 'callNamespace'
+  | 'parentStepName'
+  | 'stepIteration'
+  | 'runId'
+  | 'reviewerStepName'
+  | 'reviewerPersonaKey'
+>;
+
+function reviewerCandidates(
+  items: readonly unknown[],
+  intakeContext: ReviewerCandidateContext,
+) {
   const extractions = items.map((item, index) => (
     reviewerExtraction(item as Record<string, unknown>, index)
   ));
   return createReviewerRawFindingCandidates(extractions, {
-    ...context,
+    ...intakeContext,
     ledger,
     reviewReport: extractions.map((item) => item.rawExcerpt).join('\n'),
     issueEvidenceRequests: ({ requests }: {
@@ -87,7 +102,7 @@ function reviewerCandidates(items: readonly unknown[]) {
 }
 
 function project(items: readonly unknown[]) {
-  const candidates = reviewerCandidates(items);
+  const candidates = reviewerCandidates(items, context);
   const priorCodesByRawId: Record<string, RawAmbiguityCode[]> = {
     'z-clarification': ['relation-target-mismatch'],
   };
@@ -252,5 +267,40 @@ describe('duplicate rawFindingId allocation under hash collision', () => {
     expect(idsByTitle['Existing suffix']).toBe('duplicate-dup2');
     expect(new Set(candidates.map((candidate) => candidate.reviewerRawFindingId)).size)
       .toBe(3);
+  });
+
+  it('keeps a maximum provider-local ID within the wire limit at workflow-call depth five after deduplication', () => {
+    const maximumProviderId = 'p'.repeat(
+      RAW_FINDING_FIELD_LIMITS.maxProviderRawFindingIdChars,
+    );
+    const callNamespace = JSON.stringify({
+      stack: Array.from({ length: 5 }, (_, index) => ({
+        workflow: `parent-workflow-${index}-with-a-descriptive-name`,
+        workflowRef: `workflows/parent-workflow-${index}.yaml`,
+        step: `invoke-child-workflow-${index}-for-review`,
+        kind: 'workflow_call',
+        occurrence: index + 1,
+      })),
+      childWorkflow: 'workflows/review-child.yaml',
+    });
+    const candidates = reviewerCandidates([
+      { ...first, rawFindingId: maximumProviderId },
+      { ...second, rawFindingId: maximumProviderId },
+    ], { ...context, callNamespace });
+
+    expect(candidates.some((candidate) => (
+      candidate.reviewerRawFindingId === `${maximumProviderId}-dup2`
+    ))).toBe(true);
+    expect(Math.max(...candidates.map((candidate) => candidate.intakeId.length)))
+      .toBeLessThanOrEqual(RAW_FINDING_FIELD_LIMITS.maxWireRawFindingIdChars);
+  });
+
+  it('fails fast with an integrity error when namespacing exceeds the wire limit', () => {
+    expect(() => reviewerCandidates([first], {
+      ...context,
+      callNamespace: 'n'.repeat(RAW_FINDING_FIELD_LIMITS.maxWireRawFindingIdChars),
+    })).toThrow(
+      'Raw finding wire ID integrity error: composed ID is',
+    );
   });
 });

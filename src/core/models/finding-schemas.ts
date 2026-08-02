@@ -9,6 +9,10 @@ import {
   RAW_FINDING_NORMALIZER_LIMITS,
 } from './finding-contract-limits.js';
 import {
+  ProviderRawFindingIdSchema,
+  RawFindingIdSchema,
+} from './finding-contract-field-schemas.js';
+import {
   computeCandidateIdentityHash,
   computeClaimIdentityHash,
   computeSemanticClaimIdentityHash,
@@ -49,9 +53,16 @@ import {
   SEMANTIC_FINDING_DISMISSAL_BASES,
 } from './finding-types.js';
 
+export {
+  ProviderRawFindingIdSchema,
+  RawFindingIdSchema,
+} from './finding-contract-field-schemas.js';
+
 const nonEmptyString = z.string().min(1);
 const Sha256Schema = z.string().regex(SHA256_HEX_PATTERN);
-const rawFindingIdString = nonEmptyString.max(RAW_FINDING_FIELD_LIMITS.maxRawFindingIdChars);
+const rawFindingIdString = RawFindingIdSchema;
+const providerRawFindingIdString = ProviderRawFindingIdSchema;
+const findingIdString = nonEmptyString.max(RAW_FINDING_FIELD_LIMITS.maxFindingIdChars);
 const familyTagString = nonEmptyString.max(RAW_FINDING_FIELD_LIMITS.maxFamilyTagChars);
 const rawFindingTitleString = nonEmptyString.max(RAW_FINDING_FIELD_LIMITS.maxTitleChars);
 
@@ -108,7 +119,11 @@ function validateFindingDismissalAuthority(
 }
 const rawFindingDescriptionString = nonEmptyString.max(RAW_FINDING_FIELD_LIMITS.maxDescriptionChars);
 const rawFindingSuggestionString = nonEmptyString.max(RAW_FINDING_FIELD_LIMITS.maxSuggestionChars);
-const BinarySortedUniqueStringSetSchema = z.array(nonEmptyString).superRefine((values, ctx) => {
+function validateBinarySortedUniqueSet(
+  values: readonly string[],
+  ctx: z.RefinementCtx,
+  label: string,
+): void {
   const canonical = [...new Set(values)].sort(compareBinaryStrings);
   if (
     canonical.length !== values.length
@@ -116,22 +131,16 @@ const BinarySortedUniqueStringSetSchema = z.array(nonEmptyString).superRefine((v
   ) {
     ctx.addIssue({
       code: 'custom',
-      message: 'Expected a binary-sorted unique string set',
+      message: `Expected a binary-sorted unique ${label} set`,
     });
   }
-});
-const BinarySortedUniqueSha256SetSchema = z.array(Sha256Schema).superRefine((values, ctx) => {
-  const canonical = [...new Set(values)].sort(compareBinaryStrings);
-  if (
-    canonical.length !== values.length
-    || canonical.some((value, index) => value !== values[index])
-  ) {
-    ctx.addIssue({
-      code: 'custom',
-      message: 'Expected a binary-sorted unique SHA-256 set',
-    });
-  }
-});
+}
+const BinarySortedUniqueStringSetSchema = z.array(nonEmptyString)
+  .superRefine((values, ctx) => validateBinarySortedUniqueSet(values, ctx, 'string'));
+const BinarySortedUniqueRawFindingIdSetSchema = z.array(rawFindingIdString)
+  .superRefine((values, ctx) => validateBinarySortedUniqueSet(values, ctx, 'raw finding id'));
+const BinarySortedUniqueSha256SetSchema = z.array(Sha256Schema)
+  .superRefine((values, ctx) => validateBinarySortedUniqueSet(values, ctx, 'SHA-256'));
 export const Rfc3339TimestampSchema = z.string().min(1).transform((timestamp, ctx) => {
   try {
     return normalizeRfc3339Timestamp(timestamp);
@@ -204,7 +213,7 @@ export const FindingEvidenceBindingSchema = z.object({
   bindingId: Sha256Schema,
   evidenceId: Sha256Schema,
   claimIdentityHash: Sha256Schema.nullable(),
-  sourceRawFindingId: nonEmptyString.nullable(),
+  sourceRawFindingId: rawFindingIdString.nullable(),
   sourceRawIntegrityDigest: Sha256Schema.nullable(),
   contributionOrigin: z.discriminatedUnion('kind', [
     z.object({ kind: z.literal('external') }).strict(),
@@ -218,7 +227,7 @@ export const FindingEvidenceBindingSchema = z.object({
 }).strict();
 
 const FindingAnchorAuthorityAdjudicationSchema = z.object({
-  rawFindingId: nonEmptyString,
+  rawFindingId: rawFindingIdString,
   decision: z.literal('relevant'),
   managerOutputBinding: Sha256Schema,
 }).strict();
@@ -286,7 +295,7 @@ export const FindingLifecycleAuthoritySchema = z.union([
       'manager-output-discarded',
       'interpretation-interrupted',
     ]),
-    rawFindingIds: BinarySortedUniqueStringSetSchema.min(1),
+    rawFindingIds: BinarySortedUniqueRawFindingIdSetSchema.min(1),
     rawCanonicalSnapshotIds: BinarySortedUniqueSha256SetSchema.min(1),
   }).strict(),
   z.object({
@@ -294,7 +303,7 @@ export const FindingLifecycleAuthoritySchema = z.union([
     caseSnapshotId: Sha256Schema,
     attemptId: Sha256Schema,
     classification: z.enum(['decision_rejected_stale', 'decision_rejected_raw_invalid']),
-    rawFindingIds: BinarySortedUniqueStringSetSchema.min(1),
+    rawFindingIds: BinarySortedUniqueRawFindingIdSetSchema.min(1),
     staleCauseDigests: BinarySortedUniqueSha256SetSchema,
   }).strict(),
   z.object({
@@ -306,7 +315,7 @@ export const FindingLifecycleAuthoritySchema = z.union([
   }).strict(),
   z.object({
     kind: z.literal('rejected_observation'),
-    rawFindingId: nonEmptyString,
+    rawFindingId: rawFindingIdString,
     rawIntegrityDigest: Sha256Schema,
     rejectionCode: z.enum(FINDING_REJECTED_OBSERVATION_CODES),
   }).strict(),
@@ -493,7 +502,7 @@ const LifecycleAuthoritySubjectSchema = z.discriminatedUnion('kind', [
     provisionalLineageKey: Sha256Schema,
     targetIdentityHash: Sha256Schema,
     sourceRawFindings: z.array(z.object({
-      rawFindingId: nonEmptyString,
+      rawFindingId: rawFindingIdString,
       integrityDigest: Sha256Schema,
     }).strict()).min(1).superRefine((values, ctx) => {
       const rawFindingIds = values.map((value) => value.rawFindingId);
@@ -508,7 +517,7 @@ const LifecycleAuthoritySubjectSchema = z.discriminatedUnion('kind', [
         });
       }
     }),
-    expectedProductRawFindingIds: BinarySortedUniqueStringSetSchema.min(1),
+    expectedProductRawFindingIds: BinarySortedUniqueRawFindingIdSetSchema.min(1),
     transitionPreconditionDigest: Sha256Schema,
     expectedIntermediateHead: z.object({
       revision: z.number().int().positive(),
@@ -607,8 +616,8 @@ export const ReviewerAnomalyEntrySchema = z.object({
   kind: z.enum(REVIEWER_ANOMALY_KINDS),
   stableKey: nonEmptyString,
   lineageKey: nonEmptyString,
-  sourceRawFindingIds: z.array(nonEmptyString),
-  sourceIntakeIds: z.array(nonEmptyString),
+  sourceRawFindingIds: z.array(rawFindingIdString),
+  sourceIntakeIds: z.array(rawFindingIdString),
   reviewers: z.array(nonEmptyString),
   title: nonEmptyString,
   claimedLocation: nonEmptyString.optional(),
@@ -675,7 +684,7 @@ export const FindingProvisionalMetadataSchema = z.object({
   kind: z.enum(FINDING_PROVISIONAL_KINDS),
   stableKey: nonEmptyString,
   lineageKey: nonEmptyString,
-  sourceRawFindingIds: z.array(nonEmptyString),
+  sourceRawFindingIds: z.array(rawFindingIdString),
   reason: nonEmptyString,
   firstObservedAt: FindingObservationSchema,
   lastObservedAt: FindingObservationSchema,
@@ -704,7 +713,7 @@ export const FindingLedgerEntrySchema = z.object({
   description: nonEmptyString.optional(),
   suggestion: nonEmptyString.optional(),
   reviewers: z.array(nonEmptyString),
-  rawFindingIds: z.array(nonEmptyString),
+  rawFindingIds: z.array(rawFindingIdString),
   firstSeen: FindingObservationSchema,
   lastSeen: FindingObservationSchema,
   resolvedAt: Rfc3339TimestampSchema.optional(),
@@ -736,7 +745,7 @@ export const FindingLedgerEntrySchema = z.object({
   revision: z.number().int().positive(),
   provisional: FindingProvisionalMetadataSchema.optional(),
   rejectedObservations: z.array(z.object({
-    rawFindingId: nonEmptyString,
+    rawFindingId: rawFindingIdString,
     reason: nonEmptyString,
     observedAt: FindingObservationSchema,
   }).strict()).optional(),
@@ -850,9 +859,7 @@ function validateRawFindingRelation<T extends RawFindingRelationFields>(
 }
 
 const RawFindingFieldsSchema = z.object({
-  // Persisted ids are engine-namespaced and may legitimately exceed the
-  // provider-facing local rawFindingId limit.
-  rawFindingId: nonEmptyString,
+  rawFindingId: rawFindingIdString,
   stepName: nonEmptyString,
   reviewer: nonEmptyString,
   familyTag: familyTagString.nullable(),
@@ -943,7 +950,7 @@ export const FindingEvidenceRequestSchema = z.discriminatedUnion('kind', [
 ]);
 
 const ReviewerCandidatePayloadSchema = z.object({
-  rawFindingId: rawFindingIdString.nullable(),
+  rawFindingId: providerRawFindingIdString.nullable(),
   familyTag: familyTagString.nullable(),
   severity: FindingSeveritySchema.nullable(),
   title: rawFindingTitleString.nullable(),
@@ -951,7 +958,7 @@ const ReviewerCandidatePayloadSchema = z.object({
   suggestion: rawFindingSuggestionString.nullable(),
   relation: z.enum(RAW_FINDING_RELATIONS).nullable(),
   targetFindingIds: z.array(
-    nonEmptyString.max(RAW_FINDING_FIELD_LIMITS.maxRawFindingIdChars),
+    findingIdString,
   ).max(RAW_FINDING_NORMALIZER_LIMITS.maxTargetFindingIdsPerCandidate),
   target: FindingTargetSchema.nullable(),
   evidenceRequests: z.array(FindingEvidenceRequestSchema).max(16),
@@ -966,7 +973,7 @@ export const FindingLedgerConflictSchema = z.object({
   id: nonEmptyString,
   status: z.enum(FINDING_CONFLICT_STATUSES),
   findingIds: z.array(nonEmptyString),
-  rawFindingIds: z.array(nonEmptyString),
+  rawFindingIds: z.array(rawFindingIdString),
   description: nonEmptyString,
   firstSeen: FindingObservationSchema,
   lastSeen: FindingObservationSchema,
@@ -1028,7 +1035,7 @@ export const InterpretationCaseSnapshotSchema = z.object({
   lineageKey: Sha256Schema,
   policyClass: z.enum(['general', 'confirmation', 'provisional_only']),
   semanticProjectionDigest: Sha256Schema,
-  memberRawFindingIds: BinarySortedUniqueStringSetSchema,
+  memberRawFindingIds: BinarySortedUniqueRawFindingIdSetSchema,
   memberObservationDigests: z.array(Sha256Schema),
   originSnapshotSetDigest: Sha256Schema,
   createdAt: FindingObservationSchema,
@@ -1116,7 +1123,7 @@ const InterpretationAttemptApplicationSchema = z.discriminatedUnion('classificat
   }).strict(),
   z.object({
     classification: z.literal('decision_rejected_raw_invalid'),
-    invalidRawFindingIds: BinarySortedUniqueStringSetSchema,
+    invalidRawFindingIds: BinarySortedUniqueRawFindingIdSetSchema,
     originSettlementIds: BinarySortedUniqueStringSetSchema,
   }).strict(),
 ]);
@@ -1130,7 +1137,7 @@ const InterpretationAttemptBaseSchema = z.object({
   semanticProjectionDigest: Sha256Schema,
   attemptOrdinal: z.number().int().positive(),
   retryOrdinal: z.union([z.literal(0), z.literal(1)]),
-  rawFindingIds: BinarySortedUniqueStringSetSchema,
+  rawFindingIds: BinarySortedUniqueRawFindingIdSetSchema,
   providerCallId: Sha256Schema,
 });
 
@@ -1196,7 +1203,7 @@ export const InterpretationAttemptFenceSchema = z.object({
   attemptId: Sha256Schema,
   caseId: Sha256Schema,
   semanticProjectionDigest: Sha256Schema,
-  rawFindingIds: BinarySortedUniqueStringSetSchema,
+  rawFindingIds: BinarySortedUniqueRawFindingIdSetSchema,
 }).strict();
 
 export const InterpretationBatchReceiptSchema = z.object({
@@ -1744,7 +1751,7 @@ const ConflictProductSubjectSchema = z.object({
   claimIdentityHash: Sha256Schema.nullable(),
   semanticClaimIdentityHash: Sha256Schema.nullable(),
   claimSnapshotDigest: Sha256Schema,
-  sourceRawFindingIds: BinarySortedUniqueStringSetSchema,
+  sourceRawFindingIds: BinarySortedUniqueRawFindingIdSetSchema,
   sourceRawPayloadDigests: BinarySortedUniqueStringSetSchema,
   rawClaimLandingIds: z.tuple([]),
   evidenceBindingIds: BinarySortedUniqueStringSetSchema,
@@ -1941,13 +1948,13 @@ const FindingManagerValidationAttemptReportSchema = z.object({
 }).strict();
 
 const RawAdmissionRejectionReportSchema = z.object({
-  rawFindingId: nonEmptyString,
+  rawFindingId: rawFindingIdString,
   location: z.string(),
   reason: nonEmptyString,
 }).strict();
 
 const UnsupportedRawFindingReportSchema = z.object({
-  rawFindingId: nonEmptyString,
+  rawFindingId: rawFindingIdString,
   targetFindingId: nonEmptyString,
   evidence: nonEmptyString,
 }).strict();
@@ -1958,7 +1965,7 @@ const ReviewerOutputOverflowReportSchema = z.object({
 }).strict();
 
 const RawNormalizationAuditRecordSchema = z.object({
-  rawFindingId: nonEmptyString,
+  rawFindingId: rawFindingIdString,
   reviewer: nonEmptyString,
   claimedRelation: z.string().optional(),
   claimedTargetFindingId: z.string().optional(),
@@ -1976,15 +1983,15 @@ const LandingReportSchema = z.object({
   kind: nonEmptyString,
   stableKey: nonEmptyString,
   reason: nonEmptyString,
-  sourceRawFindingIds: z.array(nonEmptyString),
+  sourceRawFindingIds: z.array(rawFindingIdString),
 }).strict();
 
 const ReviewerAnomalyLandingReportSchema = z.object({
   kind: nonEmptyString,
   stableKey: nonEmptyString,
   reason: nonEmptyString,
-  sourceRawFindingIds: z.array(nonEmptyString),
-  sourceIntakeIds: z.array(nonEmptyString),
+  sourceRawFindingIds: z.array(rawFindingIdString),
+  sourceIntakeIds: z.array(rawFindingIdString),
 }).strict();
 
 const InterpretationStatsReportSchema = z.object({
@@ -2014,7 +2021,7 @@ const FindingManagerValidationReportSchema = z.object({
   interpretationStats: InterpretationStatsReportSchema.optional(),
   relationClarifications: z.array(z.object({
     reviewer: nonEmptyString,
-    flaggedRawFindingIds: z.array(nonEmptyString),
+    flaggedRawFindingIds: z.array(providerRawFindingIdString),
   }).strict()).optional(),
   interpretationRecoverySettlements: z.array(
     InterpretationRecoveryOriginSettlementSchema,
@@ -2032,7 +2039,7 @@ const FindingManagerValidationReportSchema = z.object({
         'duplicate',
         'dismiss',
       ]),
-      ownedIds: z.array(nonEmptyString),
+      ownedIds: z.array(rawFindingIdString),
       status: z.literal('succeeded'),
       inputBytes: z.number().int().nonnegative(),
       output: z.unknown(),
@@ -2049,7 +2056,7 @@ const FindingManagerValidationReportSchema = z.object({
         'duplicate',
         'dismiss',
       ]),
-      ownedIds: z.array(nonEmptyString),
+      ownedIds: z.array(rawFindingIdString),
       status: z.enum(['failed', 'input_overflow']),
       inputBytes: z.number().int().nonnegative().nullable(),
       reason: nonEmptyString,
@@ -2237,7 +2244,7 @@ export function parseInterpretationCaseDecisions(
 
 export const FindingManagerOutputSchema = z.object({
   anchorAdjudications: z.array(z.object({
-    rawFindingId: nonEmptyString,
+    rawFindingId: rawFindingIdString,
     rawDecision: z.enum(RAW_DECISION_KINDS),
     findingId: nonEmptyString.nullable(),
     decision: z.enum(['relevant', 'not_relevant', 'not_applicable']),
@@ -2246,27 +2253,27 @@ export const FindingManagerOutputSchema = z.object({
   }).strict()),
   matches: z.array(z.object({
     findingId: nonEmptyString,
-    rawFindingIds: z.array(nonEmptyString),
+    rawFindingIds: z.array(rawFindingIdString),
     evidence: nonEmptyString.nullable().optional().transform((value) => value ?? undefined),
   }).strict()),
   newFindings: z.array(z.object({
-    rawFindingIds: z.array(nonEmptyString),
+    rawFindingIds: z.array(rawFindingIdString),
     title: nonEmptyString,
     severity: FindingSeveritySchema,
   }).strict()),
   resolvedFindings: z.array(z.object({
     findingId: nonEmptyString,
-    rawFindingIds: z.array(nonEmptyString),
+    rawFindingIds: z.array(rawFindingIdString),
     evidence: nonEmptyString,
   }).strict()),
   reopenedFindings: z.array(z.object({
     findingId: nonEmptyString,
-    rawFindingIds: z.array(nonEmptyString),
+    rawFindingIds: z.array(rawFindingIdString),
     evidence: nonEmptyString,
   }).strict()),
   conflicts: z.array(z.object({
     findingIds: z.array(nonEmptyString),
-    rawFindingIds: z.array(nonEmptyString),
+    rawFindingIds: z.array(rawFindingIdString),
     description: nonEmptyString,
   }).strict()),
   resolvedConflicts: z.array(z.object({
@@ -2312,7 +2319,7 @@ export const FindingManagerOutputSchema = z.object({
 // conflict でのみ必須なため、strict 様式の制約上は required に含めつつ、
 // 該当なし（new/unsupported）は空文字で埋めさせて未指定として扱う。
 export const FindingManagerRawDecisionSchema = z.object({
-  rawFindingId: nonEmptyString,
+  rawFindingId: rawFindingIdString,
   decision: z.enum(RAW_DECISION_KINDS),
   anchorRelevance: z.enum(['relevant', 'not_relevant']).optional(),
   findingId: z.string().optional(),
@@ -2405,7 +2412,11 @@ export const FindingManagerOutputJsonSchema = {
         additionalProperties: false,
         required: ['rawFindingId', 'rawDecision', 'findingId', 'decision', 'rationale', 'managerOutputBinding'],
         properties: {
-          rawFindingId: { type: 'string', minLength: 1 },
+          rawFindingId: {
+            type: 'string',
+            minLength: 1,
+            maxLength: RAW_FINDING_FIELD_LIMITS.maxWireRawFindingIdChars,
+          },
           rawDecision: { enum: RAW_DECISION_KINDS },
           findingId: { type: ['string', 'null'], minLength: 1 },
           decision: { enum: ['relevant', 'not_relevant', 'not_applicable'] },
@@ -2422,7 +2433,14 @@ export const FindingManagerOutputJsonSchema = {
         required: ['findingId', 'rawFindingIds', 'evidence'],
         properties: {
           findingId: { type: 'string', minLength: 1 },
-          rawFindingIds: { type: 'array', items: { type: 'string', minLength: 1 } },
+          rawFindingIds: {
+            type: 'array',
+            items: {
+              type: 'string',
+              minLength: 1,
+              maxLength: RAW_FINDING_FIELD_LIMITS.maxWireRawFindingIdChars,
+            },
+          },
           evidence: { type: ['string', 'null'], minLength: 1 },
         },
       },
@@ -2434,7 +2452,14 @@ export const FindingManagerOutputJsonSchema = {
         additionalProperties: false,
         required: ['rawFindingIds', 'title', 'severity'],
         properties: {
-          rawFindingIds: { type: 'array', items: { type: 'string', minLength: 1 } },
+          rawFindingIds: {
+            type: 'array',
+            items: {
+              type: 'string',
+              minLength: 1,
+              maxLength: RAW_FINDING_FIELD_LIMITS.maxWireRawFindingIdChars,
+            },
+          },
           title: { type: 'string', minLength: 1 },
           severity: { enum: FINDING_SEVERITIES },
         },
@@ -2448,7 +2473,14 @@ export const FindingManagerOutputJsonSchema = {
         required: ['findingId', 'rawFindingIds', 'evidence'],
         properties: {
           findingId: { type: 'string', minLength: 1 },
-          rawFindingIds: { type: 'array', items: { type: 'string', minLength: 1 } },
+          rawFindingIds: {
+            type: 'array',
+            items: {
+              type: 'string',
+              minLength: 1,
+              maxLength: RAW_FINDING_FIELD_LIMITS.maxWireRawFindingIdChars,
+            },
+          },
           evidence: { type: 'string', minLength: 1 },
         },
       },
@@ -2461,7 +2493,14 @@ export const FindingManagerOutputJsonSchema = {
         required: ['findingId', 'rawFindingIds', 'evidence'],
         properties: {
           findingId: { type: 'string', minLength: 1 },
-          rawFindingIds: { type: 'array', items: { type: 'string', minLength: 1 } },
+          rawFindingIds: {
+            type: 'array',
+            items: {
+              type: 'string',
+              minLength: 1,
+              maxLength: RAW_FINDING_FIELD_LIMITS.maxWireRawFindingIdChars,
+            },
+          },
           evidence: { type: 'string', minLength: 1 },
         },
       },
@@ -2474,7 +2513,14 @@ export const FindingManagerOutputJsonSchema = {
         required: ['findingIds', 'rawFindingIds', 'description'],
         properties: {
           findingIds: { type: 'array', items: { type: 'string', minLength: 1 } },
-          rawFindingIds: { type: 'array', items: { type: 'string', minLength: 1 } },
+          rawFindingIds: {
+            type: 'array',
+            items: {
+              type: 'string',
+              minLength: 1,
+              maxLength: RAW_FINDING_FIELD_LIMITS.maxWireRawFindingIdChars,
+            },
+          },
           description: { type: 'string', minLength: 1 },
         },
       },
@@ -2573,6 +2619,7 @@ const managerRawDecisionJsonProperties = {
   rawFindingId: {
     type: 'string',
     minLength: 1,
+    maxLength: RAW_FINDING_FIELD_LIMITS.maxWireRawFindingIdChars,
     description: 'Engine-namespaced raw finding id from the manager prompt.',
   },
   decision: {
@@ -2854,7 +2901,7 @@ const RawFindingsOutputIntakeJsonSchema = {
                   rawFindingId: {
                     type: ['string', 'null'],
                     minLength: 1,
-                    maxLength: RAW_FINDING_FIELD_LIMITS.maxRawFindingIdChars,
+                    maxLength: RAW_FINDING_FIELD_LIMITS.maxProviderRawFindingIdChars,
                   },
                   relation: {
                     enum: [...RAW_FINDING_RELATIONS, null],
@@ -2866,7 +2913,7 @@ const RawFindingsOutputIntakeJsonSchema = {
                     items: {
                       type: 'string',
                       minLength: 1,
-                      maxLength: RAW_FINDING_FIELD_LIMITS.maxRawFindingIdChars,
+                      maxLength: RAW_FINDING_FIELD_LIMITS.maxFindingIdChars,
                     },
                     description: 'All explicitly labeled target finding IDs. Use [] for relation "new" or when the report states no target. The engine validates, deduplicates, and atomizes this list into one lifecycle raw finding per target.',
                   },
