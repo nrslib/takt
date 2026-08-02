@@ -358,6 +358,38 @@ describe('executeWorkflow AskUserQuestion deny handler wiring', () => {
     });
   });
 
+  it('should allow the next max steps when a finite workflow reaches the safe integer boundary', async () => {
+    MockWorkflowEngine.triggerIterationLimit = true;
+
+    const result = await executeWorkflow({
+      ...makeConfig(),
+      maxSteps: 51,
+    }, 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+      maxStepsOverride: Number.MAX_SAFE_INTEGER - 51,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.exceeded).toBe(true);
+    expect(result.exceededInfo).toEqual({
+      currentStep: 'implement',
+      newMaxSteps: Number.MAX_SAFE_INTEGER,
+      currentIteration: 1,
+    });
+  });
+
+  it('should reject the next max steps when a finite workflow would exceed the safe integer range', async () => {
+    MockWorkflowEngine.triggerIterationLimit = true;
+
+    await expect(executeWorkflow({
+      ...makeConfig(),
+      maxSteps: 51,
+    }, 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+      maxStepsOverride: Number.MAX_SAFE_INTEGER - 50,
+    })).rejects.toThrow('safe integer range');
+  });
+
   it('should reject the next max steps when an infinite workflow override would exceed the safe integer range', async () => {
     MockWorkflowEngine.triggerIterationLimit = true;
     const maxStepsOverride = Math.floor(Number.MAX_SAFE_INTEGER / 2) + 1;
