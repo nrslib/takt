@@ -349,6 +349,12 @@ describe('bindWorkflowExecutionEvents', () => {
       { iteration: 3 },
       'Workflow aborted by step transition',
       'step_transition',
+      {
+        kind: 'step_transition',
+        step: 'review',
+        reason: 'Workflow aborted by step transition',
+        error: 'Workflow aborted by step transition',
+      },
     );
 
     expect(bridge.state.abortKind).toBe('step_transition');
@@ -374,6 +380,7 @@ describe('bindWorkflowExecutionEvents', () => {
         { iteration: 3 },
         'first abort',
         'step_error',
+        { kind: 'step_error', step: 'reviewers', reason: 'first abort', error: 'first abort' },
       );
     }).not.toThrow();
     expect(() => {
@@ -382,6 +389,7 @@ describe('bindWorkflowExecutionEvents', () => {
         { iteration: 4 },
         'second abort',
         'runtime_error',
+        { kind: 'runtime_error', step: 'reviewers', reason: 'second abort', error: 'second abort' },
       );
     }).not.toThrow();
 
@@ -412,18 +420,27 @@ describe('bindWorkflowExecutionEvents', () => {
     {
       kind: 'interrupt',
       expectedStatus: 'aborted',
+      failureError: 'terminal reason',
     },
     {
       kind: 'step_error',
       expectedStatus: 'failed',
+      failureError: 'NEEDS_ADJUDICATION: finding invariant failed',
     },
   ] as const)('publishes $kind as $expectedStatus', ({
     kind,
     expectedStatus,
+    failureError,
   }) => {
     const { bridge, engine, runMetaManager } = createBridgeHarness();
 
-    engine.emit('workflow:abort', { iteration: 3 }, 'terminal reason', kind);
+    engine.emit(
+      'workflow:abort',
+      { iteration: 3 },
+      'terminal reason',
+      kind,
+      { kind, step: 'reviewers', reason: 'terminal reason', error: failureError },
+    );
     const payload = bridge.prepareTerminalPublicationPayload();
 
     expect(runMetaManager.finalize).not.toHaveBeenCalled();
@@ -431,6 +448,14 @@ describe('bindWorkflowExecutionEvents', () => {
       status: expectedStatus,
       iterations: 3,
       reason: 'terminal reason',
+      failure: {
+        step: 'reviewers',
+        error: failureError,
+      },
+    });
+    expect(bridge.state.failure).toEqual({
+      step: 'reviewers',
+      error: failureError,
     });
   });
 
@@ -485,6 +510,12 @@ describe('bindWorkflowExecutionEvents', () => {
       { iteration: 2 },
       'Step "write_tests" failed',
       'step_error',
+      {
+        kind: 'step_error',
+        step: 'write_tests',
+        reason: 'Step "write_tests" failed',
+        error: 'write tests failed',
+      },
     );
     const payload = bridge.prepareTerminalPublicationPayload();
 
@@ -1631,6 +1662,12 @@ describe('bindWorkflowExecutionEvents', () => {
       { iteration: 3 },
       'Step "review" failed',
       'step_error',
+      {
+        kind: 'step_error',
+        step: 'review',
+        reason: 'Step "review" failed',
+        error: 'review failed',
+      },
     );
     const failurePayload =
       failureHarness.bridge.prepareTerminalPublicationPayload();

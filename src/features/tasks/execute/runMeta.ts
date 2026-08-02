@@ -9,6 +9,7 @@ import { writeFileAtomic, ensureDir } from '../../../infra/config/index.js';
 import {
   readRunMeta,
   type RunMeta,
+  type RunFailure,
   type RunResumeSource,
 } from '../../../core/workflow/run/run-meta.js';
 import { parseWorkflowResumePoint } from '../../../core/workflow/resume-point-codec.js';
@@ -84,6 +85,7 @@ export function finalizeFileRunMeta(input: {
   readonly status: 'completed' | 'aborted' | 'failed';
   readonly iterations: number;
   readonly reason?: string;
+  readonly failure?: RunFailure;
   readonly endTime: string;
 }): void {
   const current = readRunMeta(input.runPaths.metaAbs);
@@ -101,7 +103,11 @@ export function finalizeFileRunMeta(input: {
     endTime: input.endTime,
     iterations: input.iterations,
     ...(input.reason === undefined ? {} : { reason: input.reason }),
+    ...(input.failure === undefined ? {} : { failure: input.failure }),
   };
+  if (input.failure === undefined) {
+    delete finalized.failure;
+  }
   writeFileAtomic(
     input.runPaths.metaAbs,
     JSON.stringify(serializeRunMeta(finalized, input.endTime), null, 2),
@@ -176,6 +182,7 @@ export class RunMetaManager {
     readonly status: 'completed' | 'aborted' | 'failed';
     readonly iterations: number;
     readonly reason?: string;
+    readonly failure?: RunFailure;
     readonly endTime: string;
   }): void {
     if (this.runMeta.status !== 'running') {
@@ -184,6 +191,8 @@ export class RunMetaManager {
         && this.runMeta.endTime === input.endTime
         && this.runMeta.iterations === input.iterations
         && this.runMeta.reason === input.reason
+        && this.runMeta.failure?.step === input.failure?.step
+        && this.runMeta.failure?.error === input.failure?.error
       ) {
         return;
       }
@@ -196,6 +205,11 @@ export class RunMetaManager {
       delete this.runMeta.reason;
     } else {
       this.runMeta.reason = input.reason;
+    }
+    if (input.failure === undefined) {
+      delete this.runMeta.failure;
+    } else {
+      this.runMeta.failure = input.failure;
     }
     this.writeRunMeta(this.runMeta);
   }

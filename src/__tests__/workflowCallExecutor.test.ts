@@ -419,6 +419,12 @@ describe('WorkflowCallExecutor', () => {
       abort: {
         kind: 'runtime_error',
         reason: 'Step execution failed: child exploded',
+        failure: {
+          kind: 'runtime_error',
+          step: 'reviewers',
+          reason: 'Step execution failed: child exploded',
+          error: 'child exploded',
+        },
       },
     });
     const executor = new WorkflowCallExecutor({
@@ -452,11 +458,17 @@ describe('WorkflowCallExecutor', () => {
       childProviderInfo: { provider: 'mock', model: 'test-model' },
       parentProviderOptions: undefined,
       personaProviders: undefined,
-    }, 1, []), { syncParentState: true }) as WorkflowState & { abortKind?: string; abortReason?: string };
+    }, 1, []), { syncParentState: true });
 
     expect(result.status).toBe('aborted');
     expect(result.abortKind).toBe('runtime_error');
     expect(result.abortReason).toBe('Step execution failed: child exploded');
+    expect(result.abortFailure).toEqual({
+      kind: 'runtime_error',
+      step: 'reviewers',
+      reason: 'Step execution failed: child exploded',
+      error: 'child exploded',
+    });
     expect(state.iteration).toBe(4);
     expect(state.personaSessions.get('reviewer')).toBe('child-session');
     expect(setActiveResumePoint).not.toHaveBeenCalled();

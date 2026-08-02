@@ -497,6 +497,9 @@ export class WorkflowCallRunner {
       response,
       instruction: '',
       providerInfo,
+      ...(childResult.abortFailure === undefined
+        ? {}
+        : { workflowCallFailure: childResult.abortFailure }),
     };
   }
 
@@ -529,6 +532,9 @@ export class WorkflowCallRunner {
         response,
         instruction: '',
         providerInfo,
+        ...(childResult.abortFailure === undefined
+          ? {}
+          : { workflowCallFailure: childResult.abortFailure }),
       },
       sessionUpdates: this.requireIsolatedSessionUpdates(step, childResult),
       stateSync: this.requireIsolatedStateSync(step, childResult),

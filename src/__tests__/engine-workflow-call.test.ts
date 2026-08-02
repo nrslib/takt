@@ -27,6 +27,16 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   generateReportDir: vi.fn().mockReturnValue('test-report-dir'),
 }));
 
+vi.mock('../shared/prompt/index.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  selectOptionWithDefault: vi.fn(),
+}));
+
+vi.mock('../features/tasks/list/requeueHelpers.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  selectWorkflowWithOptionalReuse: vi.fn(),
+}));
+
 import { WorkflowEngine } from './helpers/workflow-engine.js';
 import { runAgent } from '../agents/runner.js';
 import {
@@ -74,6 +84,17 @@ import { resetAnalyticsWriter } from '../features/analytics/writer.js';
 import { AnalyticsEmitter } from '../features/tasks/execute/analyticsEmitter.js';
 import type { RoutingDecisionEvent } from '../features/analytics/index.js';
 import type { WorkflowCallResolver } from '../core/workflow/types.js';
+import { TaskRunner } from '../infra/task/runner.js';
+import {
+  buildTaskResult,
+  persistTaskResult,
+} from '../features/tasks/execute/taskResultHandler.js';
+import { executeWorkflow } from '../features/tasks/execute/workflowExecution.js';
+import { requeueFailedTask } from '../features/tasks/list/taskRetryActions.js';
+import { selectWorkflowWithOptionalReuse } from '../features/tasks/list/requeueHelpers.js';
+import { selectOptionWithDefault } from '../shared/prompt/index.js';
+import { buildRunPaths } from '../core/workflow/run/run-paths.js';
+import { readRunMeta } from '../core/workflow/run/run-meta.js';
 
 function writeWorkflow(projectDir: string, relativePath: string, content: string): void {
   const filePath = join(projectDir, '.takt', 'workflows', relativePath);
@@ -113,6 +134,106 @@ function createWorkflowCallOptions(
     }) => resolveWorkflowCallTarget(parentWorkflow, step, resolverProjectCwd, lookupCwd),
     ...overrides,
   };
+}
+
+async function expectFailureToReachTaskAndRequeueNote(
+  projectDir: string,
+  config: WorkflowConfig,
+  expected: { step: string; error: string; lastMessage?: string },
+  sensitiveValues: readonly string[] = [],
+): Promise<void> {
+  const expectedFailure = {
+    step: expected.step,
+    error: expected.error,
+  };
+  const runSlug = 'failure-provenance';
+  const taskContent = `Failure propagation: ${expected.step}`;
+  const events: Array<{ type: string; success?: boolean; reason?: string }> = [];
+  const runResult = await executeWorkflow(config, taskContent, projectDir, {
+    projectCwd: projectDir,
+    provider: 'mock',
+    model: 'parent-model',
+    reportDirName: runSlug,
+    outputMode: 'silent',
+    eventSink: (event) => {
+      events.push(event);
+    },
+  });
+
+  expect(runResult).toMatchObject({
+    success: false,
+    reason: expected.error,
+    lastStep: expected.step,
+  });
+  expect(events.at(-1)).toMatchObject({
+    type: 'completed',
+    success: false,
+  });
+  const runMeta = readRunMeta(buildRunPaths(projectDir, runSlug).metaAbs);
+  expect(runMeta).toMatchObject({
+    failure: expectedFailure,
+  });
+  for (const sensitiveValue of sensitiveValues) {
+    expect(JSON.stringify(runMeta)).not.toContain(sensitiveValue);
+  }
+
+  const retryWorkflow = join(projectDir, '.takt', 'workflows', 'failure-retry.yaml');
+  writeWorkflow(projectDir, 'failure-retry.yaml', `name: failure-retry
+initial_step: retry
+max_steps: 2
+steps:
+  - name: retry
+    persona: coder
+    instruction: "Retry failed task"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+  const taskRunner = new TaskRunner(projectDir);
+  const task = taskRunner.addTask(taskContent, {
+    workflow: retryWorkflow,
+    worktree_path: projectDir,
+  });
+  const claimedTask = taskRunner.claimNextTasks(1)[0];
+  if (claimedTask === undefined || claimedTask.name !== task.name) {
+    throw new Error('Expected failure propagation task to be claimed');
+  }
+  const executionTask = taskRunner.updateRunningTaskExecution(claimedTask.name, {
+    runSlug,
+    worktreePath: projectDir,
+  });
+  persistTaskResult(taskRunner, buildTaskResult({
+    task: executionTask,
+    runResult,
+    startedAt: '2026-08-03T00:00:00.000Z',
+    completedAt: '2026-08-03T00:00:01.000Z',
+  }), { emitStatusLog: false });
+
+  const failedTask = taskRunner.listFailedTasks()[0];
+  if (failedTask?.failure === undefined) {
+    throw new Error('Expected persisted task failure');
+  }
+  expect(failedTask.failure).toMatchObject({
+    ...expectedFailure,
+    ...(expected.lastMessage === undefined ? {} : { last_message: expected.lastMessage }),
+  });
+  for (const sensitiveValue of sensitiveValues) {
+    expect(JSON.stringify(failedTask.failure)).not.toContain(sensitiveValue);
+  }
+  vi.mocked(selectWorkflowWithOptionalReuse).mockResolvedValue(retryWorkflow);
+  vi.mocked(selectOptionWithDefault).mockImplementation(
+    async (_message, _options, defaultValue) => defaultValue,
+  );
+  await expect(requeueFailedTask(failedTask, projectDir)).resolves.toBe(true);
+
+  const requeuedTask = taskRunner.listPendingTaskItems()[0];
+  expect(requeuedTask?.data?.retry_note).toContain(
+    `diagnostic=${JSON.stringify({ failedStep: expected.step, error: expected.error })}`,
+  );
+  for (const sensitiveValue of sensitiveValues) {
+    expect(requeuedTask?.data?.retry_note).not.toContain(sensitiveValue);
+  }
 }
 
 function expectedWorkflowCallNamespace(
@@ -3943,6 +4064,430 @@ steps:
     expect(plannerPrompt).not.toContain('Review done');
   });
 
+  it('子 workflow の step 例外を親 ABORT の failure に最深 step のまま伝播する', async () => {
+    writeWorkflow(tmpDir, 'takt/coding.yaml', `name: takt/coding
+subworkflow:
+  callable: true
+initial_step: reviewers
+max_steps: 5
+steps:
+  - name: reviewers
+    persona: reviewer
+    instruction: "Review child workflow"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parent',
+      initial_step: 'local-review',
+      max_steps: 5,
+      steps: [{
+        name: 'local-review',
+        kind: 'workflow_call',
+        call: 'takt/coding',
+        rules: [
+          { condition: 'COMPLETE', next: 'COMPLETE' },
+          { condition: 'ABORT', next: 'ABORT' },
+        ],
+      }],
+    });
+    vi.mocked(runAgent).mockRejectedValue(
+      new Error('NEEDS_ADJUDICATION: finding invariant failed'),
+    );
+    engine = new WorkflowEngine(
+      config,
+      tmpDir,
+      'Preserve nested failure',
+      createWorkflowCallOptions(tmpDir),
+    );
+    const abortFn = vi.fn();
+    engine.on('workflow:abort', abortFn);
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(abortFn).toHaveBeenCalledWith(
+      expect.anything(),
+      'Step execution failed: NEEDS_ADJUDICATION: finding invariant failed',
+      'runtime_error',
+      {
+        kind: 'runtime_error',
+        step: 'reviewers',
+        reason: 'Step execution failed: NEEDS_ADJUDICATION: finding invariant failed',
+        error: 'NEEDS_ADJUDICATION: finding invariant failed',
+      },
+    );
+  });
+
+  it('直列 step の throw を sanitize して meta・task・requeue note まで伝播する', async () => {
+    const config = createParentWorkflow(tmpDir, {
+      name: 'serial-throw-root',
+      initial_step: 'implement',
+      max_steps: 5,
+      steps: [{
+        name: 'implement',
+        persona: 'coder',
+        instruction: 'Implement task',
+        rules: [{ condition: 'done', next: 'COMPLETE' }],
+      }],
+    });
+    vi.mocked(runAgent).mockRejectedValue(
+      new Error('SerialThrowError: provider failed with api_key=serial-throw-secret'),
+    );
+
+    await expectFailureToReachTaskAndRequeueNote(tmpDir, config, {
+      step: 'implement',
+      error: 'SerialThrowError: provider failed with api_key=[REDACTED]',
+    }, ['serial-throw-secret']);
+  });
+
+  it('直列 step の error response を sanitize して meta・task・requeue note まで伝播する', async () => {
+    const config = createParentWorkflow(tmpDir, {
+      name: 'serial-error-response-root',
+      initial_step: 'verify',
+      max_steps: 5,
+      steps: [{
+        name: 'verify',
+        persona: 'reviewer',
+        instruction: 'Verify task',
+        rules: [{ condition: 'done', next: 'COMPLETE' }],
+      }],
+    });
+    const rawError = 'SerialResponseError: verification failed with api_key=serial-response-secret';
+    vi.mocked(runAgent).mockImplementation(async (persona, prompt, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: prompt,
+      });
+      return makeResponse({
+        persona: 'reviewer',
+        status: 'error',
+        content: 'Provider returned an error response with api_key=serial-response-secret',
+        error: rawError,
+      });
+    });
+
+    await expectFailureToReachTaskAndRequeueNote(tmpDir, config, {
+      step: 'verify',
+      error: 'SerialResponseError: verification failed with api_key=[REDACTED]',
+      lastMessage: 'Provider returned an error response with api_key=[REDACTED]',
+    }, ['serial-response-secret']);
+  });
+
+  it('4段の直列 workflow_call で子の error response を sanitize して最深 failure を伝播する', async () => {
+    writeWorkflow(tmpDir, 'chain/level-3.yaml', `name: chain/level-3
+subworkflow:
+  callable: true
+initial_step: deepest-review
+max_steps: 5
+steps:
+  - name: deepest-review
+    persona: deepest-reviewer
+    instruction: "Run deepest review"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    writeWorkflow(tmpDir, 'chain/level-2.yaml', `name: chain/level-2
+subworkflow:
+  callable: true
+initial_step: call-level-3
+max_steps: 5
+steps:
+  - name: call-level-3
+    kind: workflow_call
+    call: chain/level-3
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+      - condition: ABORT
+        next: ABORT
+`);
+    writeWorkflow(tmpDir, 'chain/level-1.yaml', `name: chain/level-1
+subworkflow:
+  callable: true
+initial_step: call-level-2
+max_steps: 5
+steps:
+  - name: call-level-2
+    kind: workflow_call
+    call: chain/level-2
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+      - condition: ABORT
+        next: ABORT
+`);
+    const config = createParentWorkflow(tmpDir, {
+      name: 'chain-root',
+      initial_step: 'call-level-1',
+      max_steps: 10,
+      steps: [{
+        name: 'call-level-1',
+        kind: 'workflow_call',
+        call: 'chain/level-1',
+        rules: [
+          { condition: 'COMPLETE', next: 'COMPLETE' },
+          { condition: 'ABORT', next: 'ABORT' },
+        ],
+      }],
+    });
+    const rawError = 'NestedWorkflowError: deep chain failed with api_key=nested-workflow-secret';
+    vi.mocked(runAgent).mockImplementation(async (persona, prompt, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: prompt,
+      });
+      return makeResponse({
+        persona: 'deepest-reviewer',
+        status: 'error',
+        content: rawError,
+        error: rawError,
+      });
+    });
+
+    await expectFailureToReachTaskAndRequeueNote(tmpDir, config, {
+      step: 'deepest-review',
+      error: 'NestedWorkflowError: deep chain failed with api_key=[REDACTED]',
+    }, ['nested-workflow-secret']);
+  });
+
+  it('parallel failure を sanitize して meta・task・requeue note まで定義順で伝播する', async () => {
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parallel-root',
+      initial_step: 'reviewers',
+      max_steps: 5,
+      steps: [{
+        name: 'reviewers',
+        instruction: 'Run reviewers',
+        parallel: [
+          {
+            name: 'architecture-review',
+            persona: 'architecture-reviewer',
+            instruction: 'Review architecture',
+            rules: [{ condition: 'done', next: 'COMPLETE' }],
+          },
+          {
+            name: 'security-review',
+            persona: 'security-reviewer',
+            instruction: 'Review security',
+            rules: [{ condition: 'done', next: 'COMPLETE' }],
+          },
+        ],
+        rules: [{ condition: 'all("done")', next: 'COMPLETE' }],
+      }],
+    });
+    vi.mocked(runAgent)
+      .mockRejectedValueOnce(new Error(
+        'ParallelProviderError: architecture review failed with api_key=top-secret and Authorization: Bearer sk-secret123456',
+      ))
+      .mockRejectedValueOnce(new Error('security review failed'));
+
+    await expectFailureToReachTaskAndRequeueNote(tmpDir, config, {
+      step: 'architecture-review',
+      error: 'ParallelProviderError: architecture review failed with api_key=[REDACTED] and Authorization: Bearer [REDACTED]',
+    }, ['top-secret', 'sk-secret123456']);
+  });
+
+  it('parallel 内 workflow_call failure を task と requeue note まで伝播する', async () => {
+    writeWorkflow(tmpDir, 'parallel/child.yaml', `name: parallel/child
+subworkflow:
+  callable: true
+initial_step: child-review
+max_steps: 5
+steps:
+  - name: child-review
+    persona: child-reviewer
+    instruction: "Review in child"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parallel-workflow-call-root',
+      initial_step: 'reviewers',
+      max_steps: 5,
+      steps: [{
+        name: 'reviewers',
+        instruction: 'Run child reviewer',
+        parallel: [{
+          name: 'delegate-review',
+          kind: 'workflow_call',
+          call: 'parallel/child',
+          rules: [
+            { condition: 'COMPLETE', next: 'COMPLETE' },
+            { condition: 'ABORT', next: 'ABORT' },
+          ],
+        }],
+        rules: [{ condition: 'any("ABORT")', next: 'ABORT' }],
+      }],
+    });
+    vi.mocked(runAgent).mockRejectedValue(new Error('parallel child failed'));
+    mockRuleEvaluationSequence([{ index: 0, method: 'aggregate' }]);
+
+    await expectFailureToReachTaskAndRequeueNote(tmpDir, config, {
+      step: 'child-review',
+      error: 'parallel child failed',
+    });
+  });
+
+  it('parallel 内の workflow_call failure と通常 error を定義順で task と requeue note まで伝播する', async () => {
+    writeWorkflow(tmpDir, 'parallel/mixed-child.yaml', `name: parallel/mixed-child
+subworkflow:
+  callable: true
+initial_step: child-review
+max_steps: 5
+steps:
+  - name: child-review
+    persona: child-reviewer
+    instruction: "Review in child"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parallel-mixed-failure-root',
+      initial_step: 'reviewers',
+      max_steps: 5,
+      steps: [{
+        name: 'reviewers',
+        instruction: 'Run mixed reviewers',
+        parallel: [
+          {
+            name: 'delegate-review',
+            kind: 'workflow_call',
+            call: 'parallel/mixed-child',
+            rules: [
+              { condition: 'COMPLETE', next: 'COMPLETE' },
+              { condition: 'ABORT', next: 'ABORT' },
+            ],
+          },
+          {
+            name: 'local-review',
+            persona: 'local-reviewer',
+            instruction: 'Review locally',
+            rules: [{ condition: 'done', next: 'COMPLETE' }],
+          },
+        ],
+        rules: [{ condition: 'all("done")', next: 'COMPLETE' }],
+      }],
+    });
+    vi.mocked(runAgent).mockImplementation(async (persona) => {
+      if (String(persona) === 'child-reviewer') {
+        throw new Error('definition-first child failure');
+      }
+      throw new Error('later local failure');
+    });
+
+    await expectFailureToReachTaskAndRequeueNote(tmpDir, config, {
+      step: 'child-review',
+      error: 'definition-first child failure',
+    });
+  });
+
+  it('parallel 内 workflow_call の rule_no_match を task と requeue note まで伝播する', async () => {
+    writeWorkflow(tmpDir, 'parallel/no-match-child.yaml', `name: parallel/no-match-child
+subworkflow:
+  callable: true
+initial_step: child-review
+max_steps: 5
+steps:
+  - name: child-review
+    persona: child-reviewer
+    instruction: "Review in child"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parallel-rule-no-match-root',
+      initial_step: 'reviewers',
+      max_steps: 5,
+      steps: [{
+        name: 'reviewers',
+        instruction: 'Run delegated reviewer',
+        parallel: [{
+          name: 'delegate-review',
+          kind: 'workflow_call',
+          call: 'parallel/no-match-child',
+          rules: [{
+            condition: 'COMPLETE',
+            next: 'COMPLETE',
+            interactive_only: true,
+          }],
+        }],
+        rules: [{ condition: 'when(true)', next: 'COMPLETE' }],
+      }],
+    });
+    vi.mocked(runAgent).mockResolvedValue(
+      makeResponse({ persona: 'child-reviewer', content: 'done' }),
+    );
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
+
+    await expectFailureToReachTaskAndRequeueNote(tmpDir, config, {
+      step: 'delegate-review',
+      error: 'rule_no_match',
+    });
+  });
+
+  it('workflow_call 内 parallel failure を task と requeue note まで伝播する', async () => {
+    writeWorkflow(tmpDir, 'parallel/reviewers.yaml', `name: parallel/reviewers
+subworkflow:
+  callable: true
+initial_step: child-reviewers
+max_steps: 5
+steps:
+  - name: child-reviewers
+    instruction: "Run child reviewers"
+    parallel:
+      - name: child-architecture
+        persona: child-architecture-reviewer
+        instruction: "Review child architecture"
+        rules:
+          - condition: done
+            next: COMPLETE
+      - name: child-security
+        persona: child-security-reviewer
+        instruction: "Review child security"
+        rules:
+          - condition: done
+            next: COMPLETE
+    rules:
+      - condition: all("done")
+        next: COMPLETE
+`);
+    const config = createParentWorkflow(tmpDir, {
+      name: 'workflow-call-parallel-root',
+      initial_step: 'delegate-reviewers',
+      max_steps: 5,
+      steps: [{
+        name: 'delegate-reviewers',
+        kind: 'workflow_call',
+        call: 'parallel/reviewers',
+        rules: [
+          { condition: 'COMPLETE', next: 'COMPLETE' },
+          { condition: 'ABORT', next: 'ABORT' },
+        ],
+      }],
+    });
+    vi.mocked(runAgent)
+      .mockRejectedValueOnce(new Error('child architecture failed'))
+      .mockImplementationOnce(async (persona, prompt, options) => {
+        options?.onPromptResolved?.({
+          systemPrompt: typeof persona === 'string' ? persona : '',
+          userInstruction: prompt,
+        });
+        return makeResponse({ persona: 'child-security-reviewer', content: 'done' });
+      });
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
+
+    await expectFailureToReachTaskAndRequeueNote(tmpDir, config, {
+      step: 'child-architecture',
+      error: 'child architecture failed',
+    });
+  });
+
   it('子 workflow の step も親 run の max_steps 予算を消費する', async () => {
     writeWorkflow(tmpDir, 'takt/coding.yaml', `name: takt/coding
 subworkflow:
@@ -4651,6 +5196,12 @@ steps:
       abort: {
         kind: 'step_transition',
         reason: 'Abort due to child ABORT rule',
+        failure: {
+          kind: 'step_transition',
+          step: 'review',
+          reason: 'Abort due to child ABORT rule',
+          error: 'Abort due to child ABORT rule',
+        },
       },
     });
     const createEngine = vi.fn().mockReturnValue({
@@ -4696,6 +5247,12 @@ steps:
 
     expect(result.response.content).toBe('child abort output');
     expect(result.response.matchedRuleIndex).toBe(1);
+    expect(result.workflowCallFailure).toEqual({
+      kind: 'step_transition',
+      step: 'review',
+      reason: 'Abort due to child ABORT rule',
+      error: 'Abort due to child ABORT rule',
+    });
   });
 
   it('WorkflowCallRunner は child の rule_no_match abort reason を親の ABORT 応答へ伝播する', async () => {
@@ -4757,6 +5314,12 @@ steps:
         abort: {
           kind: 'rule_no_match',
           reason: 'rule_no_match',
+          failure: {
+            kind: 'rule_no_match',
+            step: 'review',
+            reason: 'rule_no_match',
+            error: 'rule_no_match',
+          },
         },
       }),
     });
@@ -4788,6 +5351,12 @@ steps:
     expect(result.response.content).toBe('rule_no_match');
     expect(result.response.matchedRuleIndex).toBe(1);
     expect(parentState.lastOutput?.content).toBe('rule_no_match');
+    expect(result.workflowCallFailure).toEqual({
+      kind: 'rule_no_match',
+      step: 'review',
+      reason: 'rule_no_match',
+      error: 'rule_no_match',
+    });
   });
 
   it('resume_point は workflow_ref が一致する child workflow にだけ適用する', async () => {
@@ -6152,7 +6721,17 @@ steps:
     const state = await engine.run();
 
     expect(state.status).toBe('aborted');
-    expect(abortFn).toHaveBeenCalledWith(expect.anything(), 'rule_no_match', 'rule_no_match');
+    expect(abortFn).toHaveBeenCalledWith(
+      expect.anything(),
+      'rule_no_match',
+      'rule_no_match',
+      {
+        kind: 'rule_no_match',
+        step: 'delegate-review',
+        reason: 'rule_no_match',
+        error: 'rule_no_match',
+      },
+    );
     expect(vi.mocked(runAgent).mock.calls.map(([persona]) => persona)).toEqual(['child-reviewer']);
   });
 

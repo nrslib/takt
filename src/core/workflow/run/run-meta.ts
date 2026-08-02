@@ -23,6 +23,11 @@ export interface RunResumeSource {
   readonly resumeMode: RunResumeMode;
 }
 
+export interface RunFailure {
+  readonly step: string;
+  readonly error: string;
+}
+
 export interface RunMeta {
   task: string;
   workflow: string;
@@ -33,6 +38,7 @@ export interface RunMeta {
   logsDirectory: string;
   status: 'running' | 'completed' | 'aborted' | 'failed';
   reason?: string;
+  failure?: RunFailure;
   startTime: string;
   endTime?: string;
   iterations?: number;
@@ -175,6 +181,9 @@ function parseRawRunMeta(value: unknown): RawRunMeta {
     status,
     startTime: requiredString(raw.startTime, 'startTime'),
     ...(optionalString(raw.reason, 'reason')),
+    ...(raw.failure === undefined
+      ? {}
+      : { failure: parseRunFailure(raw.failure) }),
     ...(optionalString(raw.endTime, 'endTime')),
     ...(optionalInteger(raw.iterations, 'iterations')),
     ...(optionalString(raw.currentStep, 'currentStep')),
@@ -265,6 +274,20 @@ function requiredResumeMode(value: unknown): RunResumeMode {
     throw new Error('Run metadata resume_mode is invalid');
   }
   return value;
+}
+
+function parseRunFailure(value: unknown): RunFailure {
+  const failure = requireRecord(value, 'failure');
+  const unsupportedKey = Object.keys(failure).find(
+    (key) => key !== 'step' && key !== 'error',
+  );
+  if (unsupportedKey !== undefined) {
+    throw new Error(`Run metadata failure.${unsupportedKey} is not supported`);
+  }
+  return {
+    step: requiredString(failure.step, 'failure.step'),
+    error: requiredString(failure.error, 'failure.error'),
+  };
 }
 
 function parseRunMetaObservability(value: unknown): RunMetaObservability {

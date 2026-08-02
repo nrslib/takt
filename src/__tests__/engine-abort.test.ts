@@ -153,6 +153,12 @@ describe('WorkflowEngine: Abort (SIGINT)', () => {
         state,
         'Workflow interrupted by external AbortSignal',
         'interrupt',
+        {
+          kind: 'interrupt',
+          step: 'step1',
+          reason: 'Workflow interrupted by external AbortSignal',
+          error: 'Workflow interrupted by external AbortSignal',
+        },
       );
       expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);
     });
@@ -182,6 +188,12 @@ describe('WorkflowEngine: Abort (SIGINT)', () => {
         expect.objectContaining({ status: 'aborted' }),
         'Workflow interrupted by external AbortSignal',
         'interrupt',
+        {
+          kind: 'interrupt',
+          step: 'step1',
+          reason: 'Workflow interrupted by external AbortSignal',
+          error: 'Workflow interrupted by external AbortSignal',
+        },
       );
       expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);
     });

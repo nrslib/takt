@@ -120,6 +120,12 @@ const {
           { status: 'aborted', iteration: 1 },
           'user_interrupted',
           'interrupt',
+          {
+            kind: 'interrupt',
+            step: step.name,
+            reason: 'user_interrupted',
+            error: 'user_interrupted',
+          },
         );
         return { status: 'aborted', iteration: 1 };
       }
@@ -178,6 +184,12 @@ const {
           { status: 'aborted', iteration: 1 },
           'user_interrupted',
           'interrupt',
+          {
+            kind: 'interrupt',
+            step: step.name,
+            reason: 'user_interrupted',
+            error: 'user_interrupted',
+          },
         );
         return { status: 'aborted', iteration: shouldRepeatStep ? 2 : 1 };
       }

@@ -36,6 +36,7 @@ import type {
   WorkflowEngineOptions,
   WorkflowEvents,
   WorkflowSharedRuntimeState,
+  WorkflowStepFailureSummary,
 } from '../types.js';
 import { validateFindingContractManagerProviderModel } from './WorkflowValidator.js';
 import { getProviderValidationErrorSource } from '../provider-validation-error.js';
@@ -210,6 +211,7 @@ interface ExecuteWorkflowCallOptions {
 export type WorkflowCallExecutionResult = WorkflowState & {
   abortKind?: WorkflowAbortKind;
   abortReason?: string;
+  abortFailure?: WorkflowStepFailureSummary;
   returnValue?: string;
   sessionUpdates?: WorkflowCallSessionUpdates;
   isolatedStateSync?: WorkflowCallIsolatedStateSync;
@@ -688,6 +690,7 @@ export class WorkflowCallExecutor {
         ? {
             abortKind: childResult.abort.kind,
             abortReason: childResult.abort.reason,
+            abortFailure: childResult.abort.failure,
           }
         : {}),
     };

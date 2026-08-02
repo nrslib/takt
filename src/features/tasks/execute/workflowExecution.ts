@@ -468,8 +468,8 @@ async function executeWorkflowInternal(
       await eventBridge.flushEventSink();
       executionResult = {
         success: finalState.status === 'completed',
-        reason: eventBridge.state.abortReason,
-        lastStep: eventBridge.state.lastStepName,
+        reason: eventBridge.state.failure?.error ?? eventBridge.state.abortReason,
+        lastStep: eventBridge.state.failure?.step ?? eventBridge.state.lastStepName,
         lastMessage: eventBridge.state.lastStepContent,
         runDirectory: bootstrap.runPaths.runRootAbs,
         reportDirectory: bootstrap.runPaths.reportsAbs,

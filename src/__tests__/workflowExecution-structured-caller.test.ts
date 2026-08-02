@@ -847,6 +847,12 @@ steps:
         { status: 'aborted', iteration: 7 },
         'post child failure',
         'runtime_error',
+        {
+          kind: 'runtime_error',
+          step: workflowCallStep.name,
+          reason: 'post child failure',
+          error: 'post child failure',
+        },
       );
       return { status: 'aborted', iteration: 7 };
     };

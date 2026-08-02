@@ -4,6 +4,7 @@ import { formatWorkflowRuleCondition } from '../../../core/models/workflow-rule-
 import type { WorkflowEngine } from '../../../core/workflow/index.js';
 import type { SessionLog } from '../../../infra/fs/index.js';
 import type { StepProviderInfo, WorkflowAbortKind } from '../../../core/workflow/types.js';
+import type { RunFailure } from '../../../core/workflow/run/run-meta.js';
 import { extractBlockedPrompt } from '../../../core/workflow/engine/transitions.js';
 import { CONFIGURED_PROVIDER_OPTION_VALUE } from '../../../core/workflow/providerOptionsRedaction.js';
 import type { ProviderType, StreamEvent } from '../../../shared/types/provider.js';
@@ -43,6 +44,7 @@ import {
 export interface WorkflowExecutionEventState {
   abortReason?: string;
   abortKind?: WorkflowAbortKind;
+  failure?: RunFailure;
   exceededInfo?: ExceededInfo;
   lastStepContent?: string;
   lastStepName?: string;
@@ -116,6 +118,7 @@ type WorkflowTerminalIntent =
       readonly workflowState: WorkflowState;
       readonly reason: string;
       readonly abortKind: WorkflowAbortKind;
+      readonly failure: RunFailure;
       readonly status: 'aborted' | 'failed';
       readonly endTime: string;
     }
@@ -786,15 +789,21 @@ export function bindWorkflowExecutionEvents(
     captureTerminalProjection(syncLatestResumePoint);
   });
 
-  deps.engine.on('workflow:abort', (workflowState, reason, kind) => {
+  deps.engine.on('workflow:abort', (workflowState, reason, kind, failure) => {
     if (terminalIntent === undefined) {
+      const runFailure: RunFailure = {
+        step: failure.step,
+        error: failure.error,
+      };
       state.abortReason = reason;
       state.abortKind = kind;
+      state.failure = runFailure;
       terminalIntent = {
         kind: 'aborted',
         workflowState,
         reason,
         abortKind: kind,
+        failure: runFailure,
         status: resolveWorkflowAbortPublicationStatus(kind),
         endTime: new Date().toISOString(),
       };
@@ -876,10 +885,14 @@ export function bindWorkflowExecutionEvents(
       const reason = terminalIntent.kind === 'completed'
         ? undefined
         : terminalIntent.reason;
+      const failure = terminalIntent.kind === 'aborted'
+        ? terminalIntent.failure
+        : undefined;
       preparedTerminalPublication = deps.terminalPayloads.create({
         status,
         iterations,
         ...(reason === undefined ? {} : { reason }),
+        ...(failure === undefined ? {} : { failure }),
         lastStepContent: state.lastStepContent,
         lastStepName: state.lastStepName,
         sessionLog: state.sessionLog,

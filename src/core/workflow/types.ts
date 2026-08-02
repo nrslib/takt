@@ -157,6 +157,7 @@ export interface StepRunResult {
   response: AgentResponse;
   instruction: string;
   providerInfo?: StepProviderInfo;
+  workflowCallFailure?: WorkflowStepFailureSummary;
   terminalOperation?: {
     readonly origin: FallbackOperationOrigin;
     readonly providerInfo: StepProviderInfo;
@@ -218,12 +219,13 @@ export interface WorkflowStepFailureSummary {
   kind: WorkflowAbortKind;
   step: string;
   reason: string;
+  error: string;
 }
 
 export interface WorkflowAbortResult {
   kind: WorkflowAbortKind;
   reason: string;
-  failure?: WorkflowStepFailureSummary;
+  failure: WorkflowStepFailureSummary;
 }
 
 export interface WorkflowRunResult {
@@ -347,7 +349,12 @@ export interface WorkflowEvents {
     workflowStack: WorkflowResumePointEntry[],
   ) => void;
   'workflow:complete': (state: WorkflowState) => void;
-  'workflow:abort': (state: WorkflowState, reason: string, kind: WorkflowAbortKind) => void;
+  'workflow:abort': (
+    state: WorkflowState,
+    reason: string,
+    kind: WorkflowAbortKind,
+    failure: WorkflowStepFailureSummary,
+  ) => void;
   'iteration:limit': (iteration: number, maxSteps: number) => void;
   'step:loop_detected': (step: WorkflowStep, consecutiveCount: number) => void;
   'step:cycle_detected': (monitor: LoopMonitorConfig, cycleCount: number) => void;

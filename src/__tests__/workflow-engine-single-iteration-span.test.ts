@@ -115,6 +115,7 @@ describe('WorkflowEngine workflow span outcome', () => {
         kind: 'step_error',
         step: 'plan',
         reason: 'Step "plan" failed: request failed',
+        error: 'request failed',
       },
       nextStep: 'ABORT',
       iterations: 1,
@@ -148,6 +149,7 @@ describe('WorkflowEngine workflow span outcome', () => {
         kind: 'runtime_error',
         step: 'plan',
         reason: 'Step execution failed: prepare failed',
+        error: 'prepare failed',
       },
       iterations: 0,
     });
@@ -183,6 +185,7 @@ describe('WorkflowEngine workflow span outcome', () => {
         kind: 'step_error',
         step: 'plan',
         reason: 'Step "plan" failed: request failed',
+        error: 'request failed',
       },
       iterations: 1,
     });
@@ -215,6 +218,7 @@ describe('WorkflowEngine workflow span outcome', () => {
         kind: 'runtime_error',
         step: 'plan',
         reason: 'Step execution failed: limit handler failed',
+        error: 'limit handler failed',
       },
       iterations: 0,
     });

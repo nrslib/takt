@@ -45,7 +45,12 @@ const { disabledObservability, mockInterruptAllQueries, MockWorkflowEngine } = v
       this.abortRequested = true;
       // When abort is called, emit workflow:abort and resolve run()
       const state = { status: 'aborted', iteration: 1 };
-      this.emit('workflow:abort', state, 'user_interrupted', 'interrupt');
+      this.emit('workflow:abort', state, 'user_interrupted', 'interrupt', {
+        kind: 'interrupt',
+        step: 'step1',
+        reason: 'user_interrupted',
+        error: 'user_interrupted',
+      });
       if (this.runResolve) {
         this.runResolve(state);
         this.runResolve = null;

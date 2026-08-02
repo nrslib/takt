@@ -64,7 +64,7 @@ workflow が abort/error で終わった場合、root `workflow.<name>` span に
 | 属性 | 意味 |
 |------|------|
 | `takt.failure.kind` | `step_error`、`runtime_error`、`iteration_limit` などの abort 種別 |
-| `takt.failure.step` | abort 記録時点の current workflow step |
+| `takt.failure.step` | ネストした workflow をまたいで保持される最深の failing step |
 | `takt.failure.reason` | sanitize 済みの abort reason |
 
 OTLP export には base endpoint が必要です。

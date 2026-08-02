@@ -477,6 +477,7 @@ describe('workflow OpenTelemetry spans', () => {
             kind: 'step_error',
             step: 'implement',
             reason: 'Step "implement" failed: secret content',
+            error: 'secret content',
           },
         })),
       ).rejects.toThrow('workflow execution rejected');
@@ -593,6 +594,7 @@ describe('workflow OpenTelemetry spans', () => {
         kind: 'step_error',
         step: 'implement',
         reason: 'Step "implement" failed: secret content',
+        error: 'secret content',
       },
     }));
 

@@ -112,6 +112,12 @@ const {
           { status: 'aborted', iteration: 1 },
           MockWorkflowEngine.runOutcome.reason,
           'step_error',
+          {
+            kind: 'step_error',
+            step: this.config.initialStep,
+            reason: MockWorkflowEngine.runOutcome.reason,
+            error: MockWorkflowEngine.runOutcome.reason,
+          },
         );
         return { status: 'aborted', iteration: 1 };
       }

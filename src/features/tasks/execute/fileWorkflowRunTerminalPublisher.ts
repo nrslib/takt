@@ -47,6 +47,9 @@ export function createFileWorkflowRunTerminalPublisher(input: {
         ...(payload.reason === undefined
           ? {}
           : { reason: payload.reason }),
+        ...(payload.failure === undefined
+          ? {}
+          : { failure: payload.failure }),
         endTime: payload.endTime,
       });
       persistWorkflowSessionState(

@@ -89,8 +89,14 @@ describe('WorkflowEngine Integration: Blocked Handling', () => {
     expect(abortFn).toHaveBeenCalledOnce();
     expect(abortFn).toHaveBeenCalledWith(
       expect.anything(),
-      expect.any(String),
+      'Workflow blocked and no user input provided',
       'blocked',
+      {
+        kind: 'blocked',
+        step: 'plan',
+        reason: 'Workflow blocked and no user input provided',
+        error: 'Workflow blocked and no user input provided',
+      },
     );
   });
 
@@ -115,8 +121,14 @@ describe('WorkflowEngine Integration: Blocked Handling', () => {
     expect(onUserInput).toHaveBeenCalledOnce();
     expect(abortFn).toHaveBeenCalledWith(
       expect.anything(),
-      expect.any(String),
+      'User input cancelled',
       'user_input_cancelled',
+      {
+        kind: 'user_input_cancelled',
+        step: 'plan',
+        reason: 'User input cancelled',
+        error: 'User input cancelled',
+      },
     );
   });
 
@@ -265,8 +277,14 @@ describe('WorkflowEngine Integration: Blocked Handling', () => {
     expect(onUserInput).not.toHaveBeenCalled();
     expect(abortFn).toHaveBeenCalledWith(
       expect.anything(),
-      expect.stringContaining('Transport error'),
+      'Step "plan" failed: Transport error',
       'step_error',
+      {
+        kind: 'step_error',
+        step: 'plan',
+        reason: 'Step "plan" failed: Transport error',
+        error: 'Transport error',
+      },
     );
   });
 

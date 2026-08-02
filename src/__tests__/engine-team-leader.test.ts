@@ -1425,6 +1425,12 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
       state,
       'Workflow interrupted by external AbortSignal',
       'interrupt',
+      {
+        kind: 'interrupt',
+        step: 'implement',
+        reason: 'Workflow interrupted by external AbortSignal',
+        error: 'Workflow interrupted by external AbortSignal',
+      },
     );
 
     const usageRecords = readFileSync(usageLogger.filepath, 'utf-8')

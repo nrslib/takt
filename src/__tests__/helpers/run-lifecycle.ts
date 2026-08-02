@@ -66,6 +66,9 @@ export function createWorkflowRunLifecycleCompositionTestDouble(
               ...(payload.reason === undefined
                 ? {}
                 : { reason: payload.reason }),
+              ...(payload.failure === undefined
+                ? {}
+                : { failure: payload.failure }),
               endTime: payload.endTime,
             });
             if (options.projectTerminalArtifacts) {

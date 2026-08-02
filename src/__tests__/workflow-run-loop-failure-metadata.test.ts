@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AgentResponse, WorkflowConfig, WorkflowState, WorkflowStep } from '../core/models/index.js';
 import { createInitialState } from '../core/workflow/engine/state-manager.js';
 import { runSingleWorkflowIteration, runWorkflowToCompletion } from '../core/workflow/engine/WorkflowRunLoop.js';
+import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDetectionExhaustedError.js';
 import { makeResponse, makeRule, makeStep } from './engine-test-helpers.js';
 import { createWorkflowRunLoopTestContract } from './test-helpers.js';
 
@@ -83,6 +84,7 @@ describe('WorkflowRunLoop failure metadata', () => {
         kind: 'step_error',
         step: 'implement',
         reason: 'Step "implement" failed: provider exploded',
+        error: 'provider exploded',
       },
     });
     expect(deps.emit).toHaveBeenCalledWith(
@@ -90,6 +92,12 @@ describe('WorkflowRunLoop failure metadata', () => {
       result.state,
       'Step "implement" failed: provider exploded',
       'step_error',
+      {
+        kind: 'step_error',
+        step: 'implement',
+        reason: 'Step "implement" failed: provider exploded',
+        error: 'provider exploded',
+      },
     );
   });
 
@@ -125,6 +133,121 @@ describe('WorkflowRunLoop failure metadata', () => {
     );
   });
 
+  it('Given a nested rule detection error, When the parent step catches it, Then it records the error step provenance', async () => {
+    const step = makeStep('reviewers', {
+      rules: [makeRule('Implementation complete', 'COMPLETE')],
+    });
+    const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
+    const response = makeResponse({
+      persona: 'reviewers',
+      status: 'done',
+      content: 'done',
+    });
+    const deps = makeDeps(state, step, response);
+    vi.mocked(deps.runStep).mockRejectedValue(
+      new RuleDetectionExhaustedError('delegate-review'),
+    );
+
+    const result = await runWorkflowToCompletion(deps);
+
+    expect(result.abort).toEqual({
+      kind: 'rule_no_match',
+      reason: 'rule_no_match',
+      failure: {
+        kind: 'rule_no_match',
+        step: 'delegate-review',
+        reason: 'rule_no_match',
+        error: 'rule_no_match',
+      },
+    });
+  });
+
+  it.each([
+    {
+      kind: 'step_error',
+      reason: 'Step "reviewers" failed: NEEDS_ADJUDICATION: finding invariant failed',
+      error: 'NEEDS_ADJUDICATION: finding invariant failed',
+    },
+    {
+      kind: 'rule_no_match',
+      reason: 'rule_no_match',
+      error: 'rule_no_match',
+    },
+  ] as const)(
+    'Given a workflow_call $kind failure, When the parent takes its ABORT transition, Then it preserves the deepest failure',
+    async ({ kind, reason, error }) => {
+      const step = makeStep('local-review', {
+        rules: [makeRule('ABORT', 'ABORT')],
+      });
+      const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
+      const response = makeResponse({
+        persona: 'local-review',
+        status: 'done',
+        content: reason,
+      });
+      const deps = makeDeps(state, step, response);
+      vi.mocked(deps.resolveDoneTransition).mockReturnValue({ nextStep: 'ABORT' });
+      vi.mocked(deps.runStep).mockResolvedValue({
+        response,
+        instruction: '',
+        workflowCallFailure: {
+          kind,
+          step: 'reviewers',
+          reason,
+          error,
+        },
+      });
+
+      const result = await runWorkflowToCompletion(deps);
+
+      expect(result.abort).toEqual({
+        kind,
+        reason,
+        failure: {
+          kind,
+          step: 'reviewers',
+          reason,
+          error,
+        },
+      });
+      expect(deps.emit).toHaveBeenCalledWith(
+        'workflow:abort',
+        result.state,
+        reason,
+        kind,
+        {
+          kind,
+          step: 'reviewers',
+          reason,
+          error,
+        },
+      );
+    },
+  );
+
+  it('Given a regular ABORT transition, When no step failure caused it, Then it records the transition step and reason', async () => {
+    const step = makeStep('review', {
+      rules: [makeRule('ABORT', 'ABORT')],
+    });
+    const state = createInitialState(makeConfig(step), { projectCwd: '/worktree' });
+    const response = makeResponse({ persona: 'review', status: 'done', content: 'stop' });
+    const deps = makeDeps(state, step, response);
+    vi.mocked(deps.resolveDoneTransition).mockReturnValue({ nextStep: 'ABORT' });
+
+    const result = await runWorkflowToCompletion(deps);
+
+    expect(result.abort).toEqual({
+      kind: 'step_transition',
+      reason: 'Workflow aborted by step transition',
+      failure: {
+        kind: 'step_transition',
+        step: 'review',
+        reason: 'Workflow aborted by step transition',
+        error: 'Workflow aborted by step transition',
+      },
+    });
+  });
+
   it('Given a step error in single iteration, When the workflow aborts, Then the result includes step-level failure summary', async () => {
     const step = makeStep('implement', {
       rules: [makeRule('Implementation complete', 'COMPLETE')],
@@ -145,6 +268,7 @@ describe('WorkflowRunLoop failure metadata', () => {
         kind: 'step_error',
         step: 'implement',
         reason: 'Step "implement" failed: provider exploded',
+        error: 'provider exploded',
       },
     });
     expect(deps.emit).toHaveBeenCalledWith(
@@ -152,6 +276,12 @@ describe('WorkflowRunLoop failure metadata', () => {
       state,
       'Step "implement" failed: provider exploded',
       'step_error',
+      {
+        kind: 'step_error',
+        step: 'implement',
+        reason: 'Step "implement" failed: provider exploded',
+        error: 'provider exploded',
+      },
     );
   });
 

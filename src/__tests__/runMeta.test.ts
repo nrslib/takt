@@ -180,6 +180,29 @@ describe('RunMetaManager', () => {
     expect(updatedMeta.observability?.traceDiscovery).toEqual(traceDiscovery);
   });
 
+  it('should persist the deepest workflow failure at terminal projection', () => {
+    const manager = new RunMetaManager(createRunPaths(), 'Force fail task', 'default');
+
+    manager.projectTerminal({
+      status: 'failed',
+      iterations: 4,
+      reason: 'NEEDS_ADJUDICATION: finding invariant failed',
+      failure: {
+        step: 'reviewers',
+        error: 'NEEDS_ADJUDICATION: finding invariant failed',
+      },
+      endTime: '2026-08-02T15:26:51.000Z',
+    });
+
+    const terminalMeta = JSON.parse(String(vi.mocked(writeFileAtomic).mock.calls[1]![1])) as {
+      failure?: { step: string; error: string };
+    };
+    expect(terminalMeta.failure).toEqual({
+      step: 'reviewers',
+      error: 'NEEDS_ADJUDICATION: finding invariant failed',
+    });
+  });
+
   it('should persist direct resume source metadata for resumed runs', () => {
     const manager = new RunMetaManager(
       createRunPaths(),

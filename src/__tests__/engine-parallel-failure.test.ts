@@ -319,6 +319,12 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
     expect(reason).toContain('arch-review');
     expect(reason).toContain('Claude Code process exited with code 1');
     expect(reason).not.toContain('Status not found for step "reviewers"');
+    expect(abortFn.mock.calls[0]![3]).toMatchObject({
+      kind: 'step_error',
+      step: 'arch-review',
+      reason,
+      error: 'Claude Code process exited with code 1',
+    });
 
     const reviewersOutput = state.stepOutputs.get('reviewers');
     expect(reviewersOutput).toBeDefined();
@@ -359,6 +365,12 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
     expect(reason).toContain('arch-review');
     expect(reason).toContain('security-review');
     expect(reason).not.toContain('All parallel sub-steps failed');
+    expect(abortFn.mock.calls[0]![3]).toMatchObject({
+      kind: 'step_error',
+      step: 'arch-review',
+      reason,
+      error: 'Claude Code process exited with code 1',
+    });
 
     const reviewersOutput = state.stepOutputs.get('reviewers');
     expect(reviewersOutput).toBeDefined();
@@ -423,7 +435,7 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
     expect(reviewersOutput!.error).toContain('Session resume failed');
   });
 
-  it('should redact sensitive rejected sub-step error detail from parent abort reason', async () => {
+  it('should redact sensitive rejected sub-step error detail from abort reason and failure metadata', async () => {
     const config = buildParallelOnlyConfig();
     const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
     const debugLogFile = join(tmpDir, 'parallel-debug.log');
@@ -455,6 +467,12 @@ describe('WorkflowEngine Integration: Parallel Step Partial Failure', () => {
     expect(reason).toContain('Authorization: Bearer [REDACTED]');
     expect(reason).not.toContain('top-secret');
     expect(reason).not.toContain('sk-secret123456');
+    expect(abortFn.mock.calls[0]![3]).toMatchObject({
+      kind: 'step_error',
+      step: 'arch-review',
+      reason,
+      error: 'Provider failed with api_key=[REDACTED] and Authorization: Bearer [REDACTED]',
+    });
 
     const reviewersOutput = state.stepOutputs.get('reviewers');
     expect(reviewersOutput?.error).toBe(reviewersOutput?.content);

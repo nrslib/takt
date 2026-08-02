@@ -18,6 +18,7 @@ import type {
   WorkflowAbortResult,
   WorkflowEngineOptions,
   WorkflowRunResult,
+  WorkflowStepFailureSummary,
 } from '../types.js';
 import type { WorkflowRuleTransition } from './transitions.js';
 import { decrementStepIteration } from './state-manager.js';
@@ -32,6 +33,7 @@ import { RuleDetectionExhaustedError } from '../evaluation/RuleDetectionExhauste
 import type { PreparedNormalStepExecution } from './StepExecutor.js';
 import type { WorkflowCallExecutionToken } from './WorkflowCallRunner.js';
 import { requireWorkflowResumeStackSnapshot } from '../run/resume-point.js';
+import { createRunFailure } from '../run/run-failure.js';
 import {
   reviewerOperationOrigin,
   sameFallbackOperationOrigin,
@@ -391,15 +393,22 @@ function advanceActiveStep(deps: WorkflowRunLoopDeps, nextStep: string, iteratio
   deps.setActiveStep(resolvedStep, iteration, nextOccurrence);
 }
 
-function buildWorkflowAbortResult(kind: WorkflowAbortKind, stepName: string, reason: string): WorkflowAbortResult {
+function buildWorkflowAbortResult(
+  kind: WorkflowAbortKind,
+  stepName: string,
+  reason: string,
+  error: string,
+): WorkflowAbortResult {
+  const failure = createRunFailure({
+    kind,
+    step: stepName,
+    reason,
+    error,
+  });
   return {
     kind,
-    reason,
-    failure: {
-      kind,
-      step: stepName,
-      reason,
-    },
+    reason: failure.reason,
+    failure,
   };
 }
 
@@ -407,14 +416,28 @@ function abortWorkflow(
   deps: WorkflowRunLoopDeps,
   kind: WorkflowAbortKind,
   reason: string,
-  options: { clearLastOutput?: boolean } = {},
+  options: {
+    clearLastOutput?: boolean;
+    failureError?: string;
+    failure?: WorkflowStepFailureSummary;
+  } = {},
 ): WorkflowAbortResult {
   deps.state.status = 'aborted';
   if (options.clearLastOutput) {
     deps.state.lastOutput = undefined;
   }
-  deps.emit('workflow:abort', deps.state, reason, kind);
-  return buildWorkflowAbortResult(kind, deps.state.currentStep, reason);
+  const failureError = options.failureError === undefined
+    ? reason
+    : options.failureError;
+  const result = options.failure === undefined
+    ? buildWorkflowAbortResult(kind, deps.state.currentStep, reason, failureError)
+    : {
+        kind: options.failure.kind,
+        reason: options.failure.reason,
+        failure: options.failure,
+      };
+  deps.emit('workflow:abort', deps.state, result.reason, result.kind, result.failure);
+  return result;
 }
 
 function abortWorkflowRuntimeError(deps: WorkflowRunLoopDeps, error: unknown): WorkflowAbortResult {
@@ -422,13 +445,23 @@ function abortWorkflowRuntimeError(deps: WorkflowRunLoopDeps, error: unknown): W
     return abortInterruptedWorkflow(deps);
   }
   if (error instanceof RuleDetectionExhaustedError) {
-    return abortWorkflow(deps, 'rule_no_match', 'rule_no_match', { clearLastOutput: true });
+    const reason = 'rule_no_match';
+    return abortWorkflow(deps, 'rule_no_match', reason, {
+      clearLastOutput: true,
+      failure: createRunFailure({
+        kind: 'rule_no_match',
+        step: error.stepName,
+        reason,
+        error: reason,
+      }),
+    });
   }
+  const errorMessage = getErrorMessage(error);
   return abortWorkflow(
     deps,
     'runtime_error',
-    ERROR_MESSAGES.STEP_EXECUTION_FAILED(getErrorMessage(error)),
-    { clearLastOutput: true },
+    ERROR_MESSAGES.STEP_EXECUTION_FAILED(errorMessage),
+    { clearLastOutput: true, failureError: errorMessage },
   );
 }
 
@@ -508,9 +541,51 @@ type TerminalTransitionResult =
       abort?: WorkflowAbortResult;
     };
 
+function abortStepTransition(
+  deps: WorkflowRunLoopDeps,
+  workflowCallFailure?: WorkflowStepFailureSummary,
+): WorkflowAbortResult {
+  if (workflowCallFailure === undefined) {
+    return abortWorkflow(
+      deps,
+      'step_transition',
+      'Workflow aborted by step transition',
+    );
+  }
+  return abortWorkflow(
+    deps,
+    workflowCallFailure.kind,
+    workflowCallFailure.reason,
+    { failure: workflowCallFailure },
+  );
+}
+
+function abortStepError(
+  deps: WorkflowRunLoopDeps,
+  step: WorkflowStep,
+  result: StepRunResult,
+): WorkflowAbortResult {
+  if (result.workflowCallFailure !== undefined) {
+    return abortWorkflow(
+      deps,
+      result.workflowCallFailure.kind,
+      result.workflowCallFailure.reason,
+      { failure: result.workflowCallFailure },
+    );
+  }
+  const failureError = result.response.error ?? result.response.content;
+  return abortWorkflow(
+    deps,
+    'step_error',
+    `Step "${step.name}" failed: ${failureError}`,
+    { failureError },
+  );
+}
+
 function handleTerminalTransition(
   deps: WorkflowRunLoopDeps,
   nextStep: string,
+  workflowCallFailure?: WorkflowStepFailureSummary,
 ): TerminalTransitionResult {
   if (nextStep === COMPLETE_STEP) {
     const gateAbort = finalizeCompletionOrAbort(deps, deps.checkCompletionGate());
@@ -524,7 +599,7 @@ function handleTerminalTransition(
     return {
       handled: true,
       transitionAccepted: true,
-      abort: abortWorkflow(deps, 'step_transition', 'Workflow aborted by step transition'),
+      abort: abortStepTransition(deps, workflowCallFailure),
     };
   }
   return { handled: false };
@@ -855,11 +930,7 @@ async function runWorkflowToCompletionCore(deps: WorkflowRunLoopDeps): Promise<W
       }
 
       if (response.status === 'error') {
-        abort = abortWorkflow(
-          deps,
-          'step_error',
-          `Step "${step.name}" failed: ${response.error ?? response.content}`,
-        );
+        abort = abortStepError(deps, step, result);
         break;
       }
 
@@ -919,7 +990,11 @@ async function runWorkflowToCompletionCore(deps: WorkflowRunLoopDeps): Promise<W
         nextStep,
       });
 
-      const naturalTerminal = handleTerminalTransition(deps, nextStep);
+      const naturalTerminal = handleTerminalTransition(
+        deps,
+        nextStep,
+        result.workflowCallFailure,
+      );
       if (naturalTerminal.handled) {
         if (naturalTerminal.transitionAccepted) {
           result.commitTransition?.({ kind: 'next_step', nextStep });
@@ -1134,11 +1209,7 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
     };
   }
   if (response.status === 'error') {
-    const abort = abortWorkflow(
-      deps,
-      'step_error',
-      `Step "${step.name}" failed: ${response.error ?? response.content}`,
-    );
+    const abort = abortStepError(deps, step, result);
     return { response, nextStep: ABORT_STEP, isComplete: true, loopDetected: loopCheck.isLoop, abort };
   }
 
@@ -1230,7 +1301,7 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
   }
 
   if (nextStep === ABORT_STEP) {
-    const abort = abortWorkflow(deps, 'step_transition', 'Workflow aborted by step transition');
+    const abort = abortStepTransition(deps, result.workflowCallFailure);
     return { response, nextStep, isComplete, loopDetected: loopCheck.isLoop, abort };
   }
 

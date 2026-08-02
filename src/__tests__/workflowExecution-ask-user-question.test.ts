@@ -64,7 +64,12 @@ const { disabledObservability, MockWorkflowEngine } = vi.hoisted(() => {
         this.emit('workflow:abort', {
           status: 'aborted',
           iteration: MockWorkflowEngine.iterationLimitCurrentIteration,
-        }, 'Reached max steps', 'iteration_limit');
+        }, 'Reached max steps', 'iteration_limit', {
+          kind: 'iteration_limit',
+          step: MockWorkflowEngine.iterationLimitCurrentStep,
+          reason: 'Reached max steps',
+          error: 'Reached max steps',
+        });
         return {
           status: 'aborted',
           iteration: MockWorkflowEngine.iterationLimitCurrentIteration,

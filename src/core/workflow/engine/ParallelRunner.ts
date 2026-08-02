@@ -51,6 +51,7 @@ import { recordAgentUsageEvent } from './agent-usage-event.js';
 import { formatWorkflowRuleCondition } from '../../models/workflow-rule-condition.js';
 import { evaluatePostExecutionRules } from './post-execution-rule-evaluator.js';
 import { buildScopedStepIterationIdentity } from '../step-iteration-identity.js';
+import { createRunFailure } from '../run/run-failure.js';
 import {
   completeObservedPhase1Attempt,
   executeObservedPhase1Attempt,
@@ -87,6 +88,7 @@ type ParallelSubStepResult = {
   qualityGateFailure?: boolean;
   workflowCallSessionUpdates?: WorkflowCallSessionUpdates;
   workflowCallStateSync?: WorkflowCallIsolatedStateSync;
+  workflowCallFailure?: StepRunResult['workflowCallFailure'];
   workflowCallExecutionRejected?: boolean;
   terminalOperation?: StepRunResult['terminalOperation'];
   reviewerRuntime?: RuntimeStepResolution;
@@ -1118,7 +1120,16 @@ export class ParallelRunner {
         providerInfo: parentPm,
       },
     );
-    return { response: aggregatedResponse, instruction: aggregatedInstruction, providerInfo: parentPm };
+    const selectedFailure = this.selectFailureByDefinitionOrder(
+      subResults,
+      `Step "${step.name}" failed`,
+    );
+    return {
+      response: aggregatedResponse,
+      instruction: aggregatedInstruction,
+      providerInfo: parentPm,
+      ...(selectedFailure === undefined ? {} : { workflowCallFailure: selectedFailure }),
+    };
   }
 
   private async runWorkflowCallSubStep(
@@ -1165,6 +1176,9 @@ export class ParallelRunner {
         ...(result.result.terminalOperation !== undefined
           ? { terminalOperation: result.result.terminalOperation }
           : {}),
+        ...(result.result.workflowCallFailure === undefined
+          ? {}
+          : { workflowCallFailure: result.result.workflowCallFailure }),
         durationMs: Math.max(0, result.result.response.timestamp.getTime() - startedAt),
         workflowCallSessionUpdates: result.sessionUpdates,
         workflowCallStateSync: result.stateSync,
@@ -1462,10 +1476,15 @@ export class ParallelRunner {
       );
     }
 
+    const selectedFailure = this.selectFailureByDefinitionOrder(
+      options.subResults,
+      `Step "${options.step.name}" failed: ${content}`,
+    );
     return {
       response,
       instruction: options.subResults.map((result) => result.instruction).join('\n\n'),
       providerInfo: options.providerInfo,
+      ...(selectedFailure === undefined ? {} : { workflowCallFailure: selectedFailure }),
       ...(options.terminalOperation !== undefined
         ? { terminalOperation: options.terminalOperation }
         : {}),
@@ -1479,6 +1498,26 @@ export class ParallelRunner {
         )),
       ],
     };
+  }
+
+  private selectFailureByDefinitionOrder(
+    results: ParallelSubStepResult[],
+    parentReason: string,
+  ): StepRunResult['workflowCallFailure'] {
+    for (const result of results) {
+      if (result.workflowCallFailure !== undefined) {
+        return result.workflowCallFailure;
+      }
+      if (result.response.status === 'error') {
+        return createRunFailure({
+          kind: 'step_error',
+          step: result.subStep.name,
+          reason: parentReason,
+          error: result.response.error ?? result.response.content,
+        });
+      }
+    }
+    return undefined;
   }
 
   private collectTerminalResults(results: ParallelSubStepResult[]): ParallelSubStepResult[] {

@@ -490,7 +490,17 @@ describe('WorkflowEngine Integration: Error Handling', () => {
       expect(result.nextStep).toBe('ABORT');
       expect(result.isComplete).toBe(true);
       expect(engine.getState().status).toBe('aborted');
-      expect(abortFn).toHaveBeenCalledWith(expect.anything(), 'rule_no_match', 'rule_no_match');
+      expect(abortFn).toHaveBeenCalledWith(
+        expect.anything(),
+        'rule_no_match',
+        'rule_no_match',
+        {
+          kind: 'rule_no_match',
+          step: 'plan',
+          reason: 'rule_no_match',
+          error: 'rule_no_match',
+        },
+      );
     });
 
     it('should abort without rule resolution when a step returns blocked', async () => {
@@ -618,6 +628,12 @@ describe('WorkflowEngine Integration: Error Handling', () => {
       expect.anything(),
       'Workflow interrupted by external AbortSignal',
       'interrupt',
+      {
+        kind: 'interrupt',
+        step: 'plan',
+        reason: 'Workflow interrupted by external AbortSignal',
+        error: 'Workflow interrupted by external AbortSignal',
+      },
     );
   });
 

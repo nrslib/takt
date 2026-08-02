@@ -26,6 +26,7 @@ import {
 } from '../workflow-call-invocation-index.js';
 import { restoreWorkflowStepParticipationIndex } from '../workflow-step-participation-index.js';
 import { buildRunPaths, type RunPaths } from '../run/run-paths.js';
+import { createRunFailure } from '../run/run-failure.js';
 import type {
   WorkflowCallChildEngine,
   WorkflowAbortKind,
@@ -936,16 +937,19 @@ export class WorkflowEngine extends EventEmitter {
         ? 'Workflow interrupted by external AbortSignal'
         : undefined;
     const kind: WorkflowAbortKind = interruptReason === undefined ? 'runtime_error' : 'interrupt';
-    const reason = interruptReason ?? ERROR_MESSAGES.STEP_EXECUTION_FAILED(getErrorMessage(error));
+    const errorMessage = getErrorMessage(error);
+    const reason = interruptReason ?? ERROR_MESSAGES.STEP_EXECUTION_FAILED(errorMessage);
+    const failure = createRunFailure({
+      kind,
+      step: this.state.currentStep,
+      reason,
+      error: interruptReason ?? errorMessage,
+    });
     return {
       status: 'error',
       abortKind: kind,
-      abortReason: reason,
-      failure: {
-        kind,
-        step: this.state.currentStep,
-        reason,
-      },
+      abortReason: failure.reason,
+      failure,
       iterations: this.state.iteration,
     };
   }

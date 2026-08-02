@@ -83,6 +83,34 @@ describe('run-meta lookup', () => {
     expect(readRunMeta(newestMetaPath)).toBeNull();
   });
 
+  it('should read the persisted workflow failure record', () => {
+    const slug = '20260802-step-failure';
+    writeMeta(projectDir, slug, {
+      task: 'Review findings',
+      workflow: 'default',
+      runSlug: slug,
+      runRoot: `.takt/runs/${slug}`,
+      reportDirectory: `.takt/runs/${slug}/reports`,
+      contextDirectory: `.takt/runs/${slug}/context`,
+      logsDirectory: `.takt/runs/${slug}/logs`,
+      status: 'failed',
+      startTime: '2026-08-02T15:26:51.000Z',
+      failure: {
+        step: 'reviewers',
+        error: 'NEEDS_ADJUDICATION: finding invariant failed',
+      },
+    });
+
+    const meta = readRunMeta(
+      path.join(projectDir, '.takt', 'runs', slug, 'meta.json'),
+    );
+
+    expect(meta?.failure).toEqual({
+      step: 'reviewers',
+      error: 'NEEDS_ADJUDICATION: finding invariant failed',
+    });
+  });
+
   it('should report broken run metadata with metaPath context', () => {
     const metaPath = path.join(projectDir, '.takt', 'runs', '20260409-run-z', 'meta.json');
     const warnings: string[] = [];
