@@ -36,6 +36,6 @@ tests:
       - type: llm-rubric
         metric: write-tests/impact-path-precision
         value: |
-          Judge the testing work by its executable meaning, not headings or exact wording. Pass if it preserves the plan's LABEL-NORMALIZATION contract, adds focused tests for trimming surrounding whitespace and preserving already-normalized content, leaves production code unchanged, and treats the pre-implementation failure as expected evidence.
+          Judge the testing work by its executable meaning, not headings or exact wording. Pass if it preserves the plan's LABEL-NORMALIZATION contract, adds focused tests for trimming surrounding whitespace, normalizing whitespace-only input to an empty string, and preserving already-normalized content, leaves production code unchanged, and treats the pre-implementation failure as expected evidence.
 
           Fail if it invents persistence, restoration, retry, lifecycle, shared-state aliasing, concurrency, migration, or integration tests for this pure local function, or claims implementation completion.

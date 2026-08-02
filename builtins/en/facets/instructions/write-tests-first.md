@@ -5,6 +5,8 @@ Refer only to files within the Report Directory shown in the Workflow Context. D
 
 {{include:instructions/change-contract-traceability}}
 
+{{include:instructions/test-contract-discrimination}}
+
 **Actions:**
 1. Review the plan report and understand the planned behavior and interfaces
 2. Decompose the plan requirements into observable contracts
@@ -25,7 +27,7 @@ Refer only to files within the Report Directory shown in the Workflow Context. D
 8. When a contract's impact path actually includes persistence, restoration, and re-entry, verify that continuity in one scenario. Only when shared mutable state or concurrency belongs to the contract, include aliasing mutation or execution interleaving as counterexamples
 9. For lifecycle contracts with paired start and terminal outcomes, verify that each relevant failure exit after start produces exactly one matching terminal outcome
 10. When claiming existing coverage, cite the exact scenario and assertion, not only a file. A shared implementation does not prove a different caller or parallel path when ownership or caller contracts differ
-11. Check whether the created tests would still pass with a plausible incorrect implementation
+11. Confirm the created tests discriminate the selected near-miss implementations according to the shared contract-testing guidance
 
 **Test writing guidelines:**
 - Follow the project's existing test patterns (naming conventions, directory structure, helpers)

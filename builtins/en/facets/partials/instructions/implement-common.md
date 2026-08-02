@@ -15,5 +15,6 @@ Before build and tests, audit the implementation against Policy.
 1. Open the Policy Source path and read the full content
 2. List every `##` section without cherry-picking
 3. Match the REJECT criteria in every section against the implementation
-4. Exercise each contract ID's counterexample against the current implementation and observe the expected behavior from an entry point that directly exposes the contract
-5. Do not select implementation complete when a high-risk contract lacks evidence that can still be obtained within the current scope
+4. Exercise each contract ID's applicable counterexample or representative failure path against the current implementation and observe the expected behavior from an entry point that directly exposes the contract
+5. Separately assess whether the targeted tests reject a plausible incorrect implementation by mapping the near-miss to the input or state and assertion that rejects it. If an existing isolated mutation runner operates on a disposable copy, its result may be used as additional evidence; do not modify the task worktree solely for this check
+6. Do not select implementation complete when a high-risk contract lacks evidence that can still be obtained within the current scope

@@ -1,0 +1,5 @@
+**Discriminating contract tests:**
+- For each contract ID, identify the intended behavior and plausible near-miss implementations that preserve part of the behavior while violating another part
+- Choose the smallest applicable set of input or state classes that distinguishes them. Consider unchanged, changed, empty or neutral, boundary-only, mixed or interior, failure, and re-entry classes only when they belong to the contract
+- Treat tests as sufficient only when the intended behavior passes and each selected near-miss fails for the intended reason. Do not invent persistence, lifecycle, integration, or concurrency axes for a local contract
+- Demonstrate discrimination by mapping each selected near-miss to the input or state and assertion that rejects it. Run mutation checks only through an existing isolated runner that operates on a disposable copy; never modify the task worktree's production code for this check

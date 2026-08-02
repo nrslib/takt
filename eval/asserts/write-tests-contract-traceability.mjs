@@ -58,6 +58,9 @@ export default function assertWriteTestsContractTraceability() {
   const internalWhitespaceMutationFails = !passesWithImplementation(
     "export function normalizeSessionLabel(label) { return label.replace(/\\s/g, ''); }\n",
   );
+  const whitespaceOnlyMutationFails = !passesWithImplementation(
+    'export function normalizeSessionLabel(label) { return label.trim() || label; }\n',
+  );
 
   const checks = [
     sourceUnchanged,
@@ -67,6 +70,7 @@ export default function assertWriteTestsContractTraceability() {
     unchangedImplementationFails,
     lowercaseMutationFails,
     internalWhitespaceMutationFails,
+    whitespaceOnlyMutationFails,
   ];
   const names = [
     'source-unchanged',
@@ -76,6 +80,7 @@ export default function assertWriteTestsContractTraceability() {
     'unchanged-implementation-fails',
     'lowercase-mutation-fails',
     'internal-whitespace-mutation-fails',
+    'whitespace-only-mutation-fails',
   ];
   const failed = names.filter((_, index) => !checks[index]);
   return {
