@@ -114,20 +114,36 @@ class AutoRoutingReachTracker {
 }
 
 function resolveMaxStepsForRestoredIteration(
-  maxSteps: WorkflowConfig['maxSteps'],
+  currentMaxSteps: WorkflowConfig['maxSteps'],
+  workflowMaxSteps: WorkflowConfig['maxSteps'],
   initialIteration: number | undefined,
 ): WorkflowConfig['maxSteps'] {
-  if (maxSteps === 'infinite' || initialIteration === undefined || initialIteration < maxSteps) {
-    return maxSteps;
+  if (
+    currentMaxSteps === 'infinite'
+    || initialIteration === undefined
+    || initialIteration < currentMaxSteps
+  ) {
+    return currentMaxSteps;
   }
 
-  let resumedMaxSteps = maxSteps;
-  while (initialIteration >= resumedMaxSteps) {
-    const nextMaxSteps = resumedMaxSteps * 2;
-    if (!Number.isSafeInteger(nextMaxSteps)) {
-      throw new Error('Cannot resume workflow because the next max steps limit exceeds the safe integer range');
+  if (workflowMaxSteps === 'infinite') {
+    let resumedMaxSteps = currentMaxSteps;
+    while (initialIteration >= resumedMaxSteps) {
+      const nextMaxSteps = resumedMaxSteps * 2;
+      if (!Number.isSafeInteger(nextMaxSteps)) {
+        throw new Error('Cannot resume workflow because the next max steps limit exceeds the safe integer range');
+      }
+      resumedMaxSteps = nextMaxSteps;
     }
-    resumedMaxSteps = nextMaxSteps;
+    return resumedMaxSteps;
+  }
+
+  const requiredIncrements = Math.floor(
+    (initialIteration - currentMaxSteps) / workflowMaxSteps,
+  ) + 1;
+  const resumedMaxSteps = currentMaxSteps + requiredIncrements * workflowMaxSteps;
+  if (!Number.isSafeInteger(resumedMaxSteps)) {
+    throw new Error('Cannot resume workflow because the next max steps limit exceeds the safe integer range');
   }
   return resumedMaxSteps;
 }
@@ -140,6 +156,7 @@ export async function createWorkflowExecutionBootstrap(
 ): Promise<WorkflowExecutionBootstrap> {
   const effectiveMaxSteps = resolveMaxStepsForRestoredIteration(
     options.maxStepsOverride ?? workflowConfig.maxSteps,
+    workflowConfig.maxSteps,
     options.initialIterationOverride,
   );
   const { headerPrefix = 'Running Workflow:', interactiveUserInput = false, outputMode = 'terminal' } = options;

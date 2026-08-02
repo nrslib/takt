@@ -172,7 +172,9 @@ async function executeWorkflowInternal(
     bootstrap.displayRef,
     bootstrap.shouldNotifyIterationLimit,
     (request) => {
-      const workflowMaxSteps = requireFiniteWorkflowMaxSteps(bootstrap.effectiveWorkflowConfig);
+      const workflowMaxSteps = workflowConfig.maxSteps === 'infinite'
+        ? requireFiniteWorkflowMaxSteps(bootstrap.effectiveWorkflowConfig)
+        : workflowConfig.maxSteps;
       const resumePoint = getLatestResumePoint()
         ?? buildResumePointForStep(request.currentStep)
         ?? eventBridge?.state.lastResumePoint;
