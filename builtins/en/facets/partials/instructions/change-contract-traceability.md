@@ -1,6 +1,8 @@
 **Change contract traceability (required for implementation tasks):**
 - Derive observable completion obligations from explicit requirements and existing behavior that must be preserved. Give each independently verifiable contract family a stable contract ID; do not assign IDs to files, implementation steps, or individual field edits
-- Preserve each contract ID and its meaning across planning, testing, and implementation. When later investigation discovers a new completion obligation, add a new ID instead of silently changing the meaning of an existing ID
+- Treat the plan's mapping of contract ID, origin, and completion obligation as the immutable base of an append-only contract ledger. Preserve that mapping through testing, implementation, and completion evidence. Do not renumber IDs or reuse them for different obligations according to downstream work order, test order, implementation location, or evidence order
+- Before downstream work begins, inspect every row of the upstream contract ledger. Map both the plan's base rows and rows legitimately appended as newly discovered by a later stage into the downstream work result and artifact without changing their meanings. Do not collapse multiple IDs into range notation alone; leave enough per-ID information for the next stage to recover the original meaning, origin, and status
+- When later investigation discovers a new completion obligation, append a new ID whose origin identifies the discovery stage. If an existing ID's meaning appears to require correction, do not repurpose it; state the conflict and unresolved scope and return it for replanning
 - Map each contract ID to valid behavior, a plausible incorrect implementation, and completion evidence that directly observes the contract. A broad suite pass alone is not evidence for an individual contract
 
 **Impact-path tracing (only for applicable contracts):**

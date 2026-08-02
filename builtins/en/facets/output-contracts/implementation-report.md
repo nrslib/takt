@@ -2,9 +2,9 @@
 # Implementation Completion Evidence
 
 ## Completion Contracts
-| Contract ID | Origin | Completion Obligation | Implementation Location | Counterexample and Observed Result | Evidence | Status |
-|-------------|--------|-----------------------|-------------------------|------------------------------------|----------|--------|
-| `{ID}` | Plan / Newly discovered | {implemented behavior or preservation obligation} | `{file:line, or "not implemented"}` | {rejected incorrect implementation and concrete observed value, effect, record, field, argument, or event; do not infer rejection from string absence alone; or not run with reason} | Valid: {result}; Failure: {result or N/A with basis}; Boundary: {result or N/A with basis}; Assertion: {observation}; Command: `{execution}` | Verified / Incomplete / Environment-limited |
+| Contract ID | Origin | Upstream Completion Obligation | Implementation Result | Implementation Location | Counterexample and Observed Result | Evidence | Status |
+|-------------|--------|-------------------------------|-----------------------|-------------------------|------------------------------------|----------|--------|
+| `{ID}` | Plan / Newly discovered (discovery stage) | {meaning of the same ID in the upstream contract ledger} | {implemented behavior or preservation obligation} | `{file:line, or "not implemented"}` | {rejected incorrect implementation and concrete observed value, effect, record, field, argument, or event; do not infer rejection from string absence alone; or not run with reason} | Valid: {result}; Failure: {result or N/A with basis}; Boundary: {result or N/A with basis}; Assertion: {observation}; Command: `{execution}` | Verified / Incomplete / Environment-limited |
 
 ## Impact-Path Verification (only for applicable contracts)
 | Contract ID | Producers / Equivalent Branches / Auxiliary Entry Points / Consumers Checked | Migrated / Preserved / Obsolete Paths | Applicable Invariants and Continuous Scenario |

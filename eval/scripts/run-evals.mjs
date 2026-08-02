@@ -11,6 +11,8 @@
  *         initial-review-contract-discovery, follow-up-review-repair-regression,
  *         initial-plan-contract-closure,
  *         write-tests-contract-traceability,
+ *         implement-contract-traceability,
+ *         implementation-report-contract-traceability,
  *         review-adjudication,
  *         final-readiness-supervision, final-readiness-precision
  *         (default: all except rescan suites,
@@ -41,6 +43,8 @@ const SUITES = {
   'initial-review-contract-discovery': 'promptfooconfig.initial-review-contract-discovery.yaml',
   'initial-plan-contract-closure': 'promptfooconfig.initial-plan-contract-closure.yaml',
   'write-tests-contract-traceability': 'promptfooconfig.write-tests-contract-traceability.yaml',
+  'implement-contract-traceability': 'promptfooconfig.implement-contract-traceability.yaml',
+  'implementation-report-contract-traceability': 'promptfooconfig.implementation-report-contract-traceability.yaml',
   'follow-up-review-repair-regression': 'promptfooconfig.follow-up-review-repair-regression.yaml',
   'review-adjudication': 'promptfooconfig.review-adjudication.yaml',
   'final-readiness-supervision': 'promptfooconfig.final-readiness-supervision.yaml',
