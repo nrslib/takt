@@ -11,10 +11,10 @@
 |-------------|---------------------|------------------------|---------------------------------------------------|-------------------|
 | `{ID}` | {behavior proved by test doubles} | {real integration verified or remaining scope} | {isolation used} | {reason only when scope remains unverified} |
 
-## Risky Branch Tests
-| Contract ID | Branch | Incorrect Implementation To Catch | Test | Uncovered Reason |
-|-------------|--------|-----------------------------------|------|------------------|
-| `{ID}` | {missing, unknown, invalid value, precedence conflict, override, round-trip, partial failure, etc.} | {incorrect implementation this test should detect} | `{test name or test file}` | {reason only when not created} |
+## Risky Branch and Discrimination Tests
+| Contract ID | Branch | Incorrect Implementation To Catch | Rejecting Input / State and Assertion | Test | Uncovered Reason |
+|-------------|--------|-----------------------------------|---------------------------------------|------|------------------|
+| `{ID}` | {missing, unknown, invalid value, precedence conflict, override, round-trip, partial failure, etc.} | {incorrect implementation this test should detect} | {input or state and the assertion that rejects the incorrect implementation} | `{test name or test file}` | {reason only when not created or not demonstrated} |
 
 ## Impact-Path Tests (only for applicable contracts)
 | Contract ID | Path | Producer | Consumer | Contract Guaranteed | Test | Uncovered Reason |
