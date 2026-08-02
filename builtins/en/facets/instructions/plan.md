@@ -10,6 +10,8 @@ Revise the plan taking that feedback into account.
 
 For small tasks, skip the design section.
 
+{{include:instructions/change-contract-traceability}}
+
 **Actions:**
 1. **Read reference materials (required; do this first)**
    - Actually open and inspect the files or directories listed in the "Reference Materials" section of the task instructions using Read/Glob
@@ -28,6 +30,7 @@ For small tasks, skip the design section.
    - **When adding an implicit requirement, state which explicit requirement it is derived from in the plan report**
 4. Investigate code to resolve unknowns
 5. Identify the impact area
+   - Identify implementation and verification locations for every contract ID. Only for contracts with impact paths, enumerate the relevant path from production to the final consumer
 6. Determine file structure and design patterns (if needed)
 7. Decide on the implementation approach
    - Verify the implementation approach does not violate knowledge/policy constraints

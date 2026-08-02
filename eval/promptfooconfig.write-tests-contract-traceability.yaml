@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'TAKT facet eval: write-tests creates discriminating local tests without inventing impact paths'
+
+prompts:
+  - file://prompts/write-tests-contract-traceability.phase1.md
+
+providers:
+  - id: openai:codex-sdk
+    label: codex
+    config:
+      working_dir: .work/write-tests-contract-traceability
+      sandbox_mode: workspace-write
+      approval_policy: never
+      skip_git_repo_check: true
+      model_reasoning_effort: low
+
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model_reasoning_effort: low
+
+tests:
+  - description: 'write-tests: keep an in-memory normalization contract local'
+    vars:
+      task: file://cases/write-tests-contract-traceability-task.md
+      previous_response: ''
+    assert:
+      - type: javascript
+        metric: write-tests/contract-artifacts
+        value: file://asserts/write-tests-contract-traceability.mjs
+      - type: llm-rubric
+        metric: write-tests/impact-path-precision
+        value: |
+          Judge the testing work by its executable meaning, not headings or exact wording. Pass if it preserves the plan's LABEL-NORMALIZATION contract, adds focused tests for trimming surrounding whitespace and preserving already-normalized content, leaves production code unchanged, and treats the pre-implementation failure as expected evidence.
+
+          Fail if it invents persistence, restoration, retry, lifecycle, shared-state aliasing, concurrency, migration, or integration tests for this pure local function, or claims implementation completion.

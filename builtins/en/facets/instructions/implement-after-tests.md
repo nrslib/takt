@@ -4,12 +4,11 @@ Use reports in the Report Directory as the primary source of truth. If additiona
 
 **Important**: Tests have already been written. Implement production code to make existing tests pass.
 - Review existing test files and understand the expected behavior
-- Implement production code to make tests pass
+- Implement production code to satisfy the plan requirements and contract map, using existing tests as executable evidence rather than as the upper bound of scope
 - Tests are already written so additional tests are generally unnecessary, but may be added if needed
 - If test modifications are needed, document the reasons in the Decisions output contract before modifying
-- Build verification is mandatory. After completing implementation, run the build (type check) and verify there are no type errors
-- Running tests is mandatory. After build succeeds, always run tests and verify all tests pass
-- When introducing new contract strings (file names, config key names, etc.), define them as constants in one place
+
+{{include:instructions/implement-common}}
 
 **Scope output contract (create at the start of implementation):**
 ```markdown
@@ -40,14 +39,6 @@ Small / Medium / Large
 - **Options considered**: {List of options}
 - **Rationale**: {Reason for the choice}
 ```
-
-**Pre-completion self-check (required):**
-
-Before running build and tests, audit your work against Policy with the following procedure.
-
-1. Open the Policy Source path with the Read tool and obtain the full content
-2. List every `##` section (do not cherry-pick)
-3. Match the REJECT criteria in each listed section against your implementation
 
 **Required output (include headings)**
 ## Work results

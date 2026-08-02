@@ -9,6 +9,8 @@
  *         cqrs-coder, fix-closure, fix-plan-fresh-findings,
  *         fix-plan-boundary-preflight, review-family-closure,
  *         initial-review-contract-discovery, follow-up-review-repair-regression,
+ *         initial-plan-contract-closure,
+ *         write-tests-contract-traceability,
  *         review-adjudication,
  *         final-readiness-supervision, final-readiness-precision
  *         (default: all except rescan suites,
@@ -37,6 +39,8 @@ const SUITES = {
   'fix-plan-boundary-preflight': 'promptfooconfig.fix-plan-boundary-preflight.yaml',
   'review-family-closure': 'promptfooconfig.review-family-closure.yaml',
   'initial-review-contract-discovery': 'promptfooconfig.initial-review-contract-discovery.yaml',
+  'initial-plan-contract-closure': 'promptfooconfig.initial-plan-contract-closure.yaml',
+  'write-tests-contract-traceability': 'promptfooconfig.write-tests-contract-traceability.yaml',
   'follow-up-review-repair-regression': 'promptfooconfig.follow-up-review-repair-regression.yaml',
   'review-adjudication': 'promptfooconfig.review-adjudication.yaml',
   'final-readiness-supervision': 'promptfooconfig.final-readiness-supervision.yaml',

@@ -3,6 +3,8 @@ Workflow Contextに示されたReport Directory内のファイルのみ参照し
 
 **重要: プロダクションコードは作成・変更しないでください。テストファイルのみ作成可能です。**
 
+{{include:instructions/change-contract-traceability}}
+
 **やること:**
 1. 計画レポートを確認し、要求で変わる挙動と変えてはいけない既存挙動を分ける
 2. 対象モジュールの既存コードと既存テストを確認し、テストパターンを把握する

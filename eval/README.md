@@ -34,6 +34,8 @@ not the pass/fail summary.
 | `fix-plan-boundary-preflight` | peer-review / fix-plan | fix-plan-boundary-preflight | whether fix-plan rejects a locally valid method that violates its representation and persistence boundary |
 | `review-family-closure` | peer-review-suite-base / coding-review | review-family-closure | whether one review reports every path affected by the same contract defect instead of stopping at a representative example |
 | `initial-review-contract-discovery` | peer-review / initial coding-review | initial-review-contract-discovery | whether the initial review independently discovers multiple blocking families and completes each family sweep |
+| `initial-plan-contract-closure` | default / plan | initial-review-contract-discovery | whether the initial plan traces every completion contract, closes real multi-boundary impact paths, and keeps local changes local |
+| `write-tests-contract-traceability` | default / write_tests | write-tests-contract-traceability | whether generated tests accept the intended local contract, reject plausible mutations, and avoid inventing irrelevant impact paths |
 | `follow-up-review-repair-regression` | peer-review / follow-up coding-review | follow-up-review-repair-regression | whether follow-up review independently falsifies completion claims and distinguishes repair-induced defects from adjacent omissions |
 | `review-adjudication` | peer-review / review-adjudication | review-adjudication | whether real defects remain actionable while duplicates, overreach, false positives, and environment-only gaps are separated by evidence |
 | `final-readiness-supervision` | peer-review / final-gate | final-readiness-supervision | whether the final supervisor catches a merge-blocking unmet requirement without reopening an adjudicated non-actionable finding |
@@ -109,6 +111,8 @@ npm run eval:prompts -- arch --repeat 3  # extra flags pass through to promptfoo
 npm run eval:prompts:prepare     # prepare only (inspect eval/prompts/)
 npm run eval:prompts:review-family-closure
 npm run eval:prompts:initial-review-contract-discovery
+npm run eval:prompts:initial-plan-contract-closure
+npm run eval:prompts:write-tests-contract-traceability
 npm run eval:prompts:review-adjudication
 npm run eval:prompts:fix-plan-fresh-findings
 npm run eval:prompts:fix-plan-boundary-preflight

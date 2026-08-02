@@ -64,6 +64,19 @@ const TARGETS = [
     workflowCallVars: { review_mode: 'initial' },
   },
   {
+    id: 'initial-plan-contract-closure',
+    workflow: 'default',
+    step: 'plan',
+    fixture: 'eval/fixtures/initial-review-contract-discovery',
+  },
+  {
+    id: 'write-tests-contract-traceability',
+    workflow: 'default',
+    step: 'write_tests',
+    fixture: 'eval/fixtures/write-tests-contract-traceability',
+    mutable: true,
+  },
+  {
     id: 'follow-up-review-repair-regression',
     workflow: 'peer-review',
     step: 'coding-review',

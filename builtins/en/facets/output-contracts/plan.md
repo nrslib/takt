@@ -30,6 +30,16 @@
 ### Implementation Approach
 {How to proceed}
 
+### Completion Contracts
+| Contract ID | Requirement / Preservation Obligation | Valid Behavior | Incorrect Implementation to Reject | Implementation Location | Completion Evidence |
+|-------------|---------------------------------------|----------------|------------------------------------|-------------------------|---------------------|
+| `{stable ID}` | {explicit requirement or existing behavior to preserve} | {observable success condition} | {plausible counterexample} | {candidate change location} | {observation method and verification layer} |
+
+### Impact Paths (only for applicable contracts)
+| Contract ID | Definition / Production | Transformation / Persistence / Restore | Consumers / Outputs / Auxiliary Entry Points | State / Ownership / Compatibility |
+|-------------|-------------------------|----------------------------------------|-----------------------------------------------|-----------------------------------|
+| `{same stable ID}` | {definition and producers} | {existing intermediate path} | {all consumers and entry points} | {relevant decision} |
+
 ### Reachability and Launch Conditions (when adding/changing user-facing features)
 | Item | Content |
 |------|---------|
