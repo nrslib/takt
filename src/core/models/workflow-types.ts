@@ -439,6 +439,7 @@ export interface LoopMonitorJudge {
 
 export interface LoopMonitorConfig {
   cycle: string[];
+  ignoreSteps?: string[];
   threshold: number;
   judge: LoopMonitorJudge;
 }

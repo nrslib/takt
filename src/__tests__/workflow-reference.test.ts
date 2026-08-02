@@ -1,10 +1,15 @@
 import { dirname, join } from 'node:path';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
+import { loadWorkflowFileWithResolutionOptions } from '../infra/config/loaders/workflowResolvedLoader.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
-import { attachWorkflowOpaqueRef } from '../infra/config/loaders/workflowSourceMetadata.js';
+import {
+  attachWorkflowOpaqueRef,
+  getAttachedWorkflowTrustInfo,
+  getWorkflowSourcePath,
+} from '../infra/config/loaders/workflowSourceMetadata.js';
 import {
   buildWorkflowResumePointEntry,
   getWorkflowReference,
@@ -195,5 +200,46 @@ steps:
     expect(workflowRef).toMatch(/^project:sha256:[0-9a-f]{64}$/);
     expect(workflowRef).not.toContain(workflowPath);
     expect(entry.workflow_ref).toBe(workflowRef);
+  });
+
+  it('loader は symlink 経路でも実体と同じ workflow 境界を使用する', () => {
+    const projectDir = createProjectDir();
+    const workflowPath = join(projectDir, '.takt', 'workflows', 'child.yaml');
+    const personaPath = join(dirname(workflowPath), 'reviewer.md');
+    const aliasPath = join(projectDir, 'child-alias.yaml');
+    mkdirSync(dirname(workflowPath), { recursive: true });
+    writeFileSync(personaPath, '# Reviewer', 'utf-8');
+    writeFileSync(workflowPath, `name: child
+initial_step: review
+max_steps: 3
+steps:
+  - name: review
+    persona: ./reviewer.md
+    instruction: Review
+    rules:
+      - condition: done
+        next: COMPLETE
+`, 'utf-8');
+    symlinkSync(workflowPath, aliasPath);
+
+    const workflowFromPath = loadWorkflowFromFile(workflowPath, projectDir);
+    const workflowFromAlias = loadWorkflowFromFile(aliasPath, projectDir);
+    const resolvedFromPath = loadWorkflowFileWithResolutionOptions(workflowPath, {
+      lookupCwd: projectDir,
+      projectCwd: projectDir,
+    });
+    const resolvedFromAlias = loadWorkflowFileWithResolutionOptions(aliasPath, {
+      lookupCwd: projectDir,
+      projectCwd: projectDir,
+    });
+
+    expect(getWorkflowReference(workflowFromAlias)).toBe(getWorkflowReference(workflowFromPath));
+    expect(getWorkflowSourcePath(workflowFromAlias)).toBe(getWorkflowSourcePath(workflowFromPath));
+    expect(getAttachedWorkflowTrustInfo(workflowFromAlias)).toEqual(getAttachedWorkflowTrustInfo(workflowFromPath));
+    expect(workflowFromAlias.steps[0]?.personaPath).toBe(workflowFromPath.steps[0]?.personaPath);
+    expect(getWorkflowReference(resolvedFromAlias)).toBe(getWorkflowReference(resolvedFromPath));
+    expect(getWorkflowSourcePath(resolvedFromAlias)).toBe(getWorkflowSourcePath(resolvedFromPath));
+    expect(getAttachedWorkflowTrustInfo(resolvedFromAlias)).toEqual(getAttachedWorkflowTrustInfo(resolvedFromPath));
+    expect(resolvedFromAlias.steps[0]?.personaPath).toBe(resolvedFromPath.steps[0]?.personaPath);
   });
 });

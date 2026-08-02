@@ -3,6 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test tests/*.test.js"
+    "build": "node --check src/*.js tests/*.js",
+    "lint": "eslint --no-config-lookup --rule 'no-undef:error' --rule 'no-unused-vars:error' src tests",
+    "test": "node --test tests/*.test.js",
+    "test:e2e:smoke": "node --test tests/*.test.js"
   }
 }

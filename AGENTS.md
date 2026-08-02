@@ -33,3 +33,10 @@ Recent history uses concise Conventional Commit-style messages such as `fix: ...
 ## Security & Configuration Tips
 
 Never commit API keys or tokens. Use `~/.takt/config.yaml`, project `.takt/config.yaml`, or environment variables for configuration. Review docs before changing provider, sandbox, credential, or runtime behavior.
+
+## Fact Verification and Uncertainty
+
+- Investigate the relevant source, runtime artifact, log, or authoritative documentation before making factual claims that affect decisions.
+- Do not present inference as fact. Except for stable, self-evident facts, verify the claim directly before stating it.
+- When direct verification is unavailable, clearly distinguish confirmed facts from assumptions and state that the result is unknown.
+- Prefer the artifact that records the behavior actually executed over indirect signals such as names, hashes, counters, or expected configuration.

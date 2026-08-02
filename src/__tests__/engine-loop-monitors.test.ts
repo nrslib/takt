@@ -1345,6 +1345,16 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       }).toThrow('nonexistent');
     });
 
+    it('should throw when loop_monitor ignore_steps references nonexistent step', () => {
+      const config = buildConfigWithLoopMonitor(3, {
+        ignoreSteps: ['nonexistent'],
+      });
+
+      expect(() => {
+        new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      }).toThrow('nonexistent');
+    });
+
     it('should throw when loop_monitor judge rule references nonexistent step', () => {
       const config = buildConfigWithLoopMonitor(3);
       config.loopMonitors = [

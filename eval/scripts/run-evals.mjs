@@ -33,6 +33,7 @@ const SUITES = {
   'fix-closure': 'promptfooconfig.fix-closure.yaml',
   'fix-plan-fresh-findings': 'promptfooconfig.fix-plan-fresh-findings.yaml',
   'review-family-closure': 'promptfooconfig.review-family-closure.yaml',
+  'initial-review-contract-discovery': 'promptfooconfig.initial-review-contract-discovery.yaml',
   'review-adjudication': 'promptfooconfig.review-adjudication.yaml',
   'final-readiness-supervision': 'promptfooconfig.final-readiness-supervision.yaml',
   'final-readiness-precision': 'promptfooconfig.final-readiness-precision.yaml',

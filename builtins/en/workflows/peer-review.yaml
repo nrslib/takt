@@ -59,7 +59,9 @@ loop_monitors:
       - review-adjudication
       - fix-plan
       - fix
+    ignore_steps:
       - fix-verifier
+      - fix-retry
     threshold: 5
     judge:
       persona: supervisor
@@ -79,7 +81,9 @@ loop_monitors:
       - final-gate
       - fix-plan
       - fix
+    ignore_steps:
       - fix-verifier
+      - fix-retry
     threshold: 5
     judge:
       persona: supervisor
@@ -96,7 +100,9 @@ loop_monitors:
   - cycle:
       - fix-plan
       - fix
+    ignore_steps:
       - fix-verifier
+      - fix-retry
     threshold: 4
     judge:
       persona: supervisor
@@ -111,7 +117,7 @@ loop_monitors:
         - condition: No feasible action can satisfy the requirements
           next: ABORT
   - cycle:
-      - fix
+      - fix-retry
       - fix-verifier
     threshold: 4
     judge:
@@ -119,9 +125,9 @@ loop_monitors:
       instruction: loop-monitor-reviewers-fix
       rules:
         - condition: Healthy (fixes progressing and report content converging)
-          next: fix
+          next: fix-retry
         - condition: Implementation incomplete or report not converged, but the next fix is actionable
-          next: fix
+          next: fix-retry
         - condition: The remediation assumptions must change and replanning is actionable
           next: fix-plan
         - condition: No feasible action can satisfy the requirements
@@ -210,6 +216,7 @@ steps:
         $param: fix_policy
       fix_knowledge:
         $param: fix_knowledge
+      fix_instruction: apply-fix-plan
     rules:
       - condition: Fix complete
         next: fix-verifier
@@ -229,6 +236,22 @@ steps:
       - condition: verified
         next: reviewers
       - condition: incomplete
-        next: fix
+        next: fix-retry
       - condition: plan_invalid
         next: fix-plan
+
+  - name: fix-retry
+    uses: peer-review-fix
+    with:
+      fix_policy:
+        $param: fix_policy
+      fix_knowledge:
+        $param: fix_knowledge
+      fix_instruction: apply-fix-verification
+    rules:
+      - condition: Fix complete
+        next: fix-verifier
+      - condition: Fix plan must be revised
+        next: fix-plan
+      - condition: Whole-task replanning required
+        return: need_replan

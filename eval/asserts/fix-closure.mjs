@@ -1,11 +1,14 @@
 /**
  * Artifact assertions for the review-remediation fix eval.
  * The scenario passes only when every producer path preserves its own
- * attribution and the emitter rejects the obsolete implicit path.
+ * attribution, the emitter rejects the obsolete implicit path, and every
+ * lifecycle/checkpoint obligation in the finalized plan is closed.
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
 
 const workDir = resolve(dirname(fileURLToPath(import.meta.url)), '../.work/fix-closure');
 
@@ -13,16 +16,170 @@ async function load(path) {
   return import(`${pathToFileURL(join(workDir, path)).href}?eval=${Date.now()}`);
 }
 
+function runFixtureTests() {
+  return spawnSync('npm', ['test'], { cwd: workDir, encoding: 'utf8' });
+}
+
+function fixtureTestsPassWith(replacements) {
+  const originals = new Map();
+  try {
+    for (const [relativePath, source] of Object.entries(replacements)) {
+      const path = join(workDir, relativePath);
+      originals.set(path, readFileSync(path, 'utf8'));
+      writeFileSync(path, source);
+    }
+    return runFixtureTests().status === 0;
+  } finally {
+    for (const [path, source] of originals) {
+      writeFileSync(path, source);
+    }
+  }
+}
+
+const validEmitter = `export class ReportEmitter {
+  emit(report, attribution) {
+    if (attribution?.scope === undefined || attribution.iteration === undefined) {
+      throw new Error('missing execution context');
+    }
+    return { report, scope: attribution.scope, iteration: attribution.iteration };
+  }
+}
+`;
+
+const validDirect = `export function emitDirect(emitter, report, context) {
+  return emitter.emit(report, context);
+}
+`;
+
+const validBatch = `export function emitBatch(emitter, entries) {
+  return entries.map(({ report, context }) => emitter.emit(report, context));
+}
+`;
+
+const validParallel = `export function prepareParallel(emitter, entries) {
+  return entries.map(({ report, context }) => () => emitter.emit(report, context));
+}
+`;
+
+const validRelay = `export function relayChildReport(emitter, _parentContext, childEvent) {
+  return emitter.emit(childEvent.report, childEvent.context);
+}
+`;
+
+const validAttemptState = `export function finishAttempt(state, outcome) {
+  if (outcome.status === 'success') return { ...state, pending: undefined };
+  return { ...state, pending: { ...state.pending }, attempts: [...state.attempts] };
+}
+export function validateCheckpoint(checkpoint) {
+  if (checkpoint.run.id !== checkpoint.judge.runId) throw new Error('run mismatch');
+  if (checkpoint.run.iteration !== checkpoint.judge.iteration) throw new Error('iteration mismatch');
+  if (checkpoint.pending.stepIteration !== checkpoint.judge.stepIteration) throw new Error('step mismatch');
+  if (checkpoint.attempts.at(-1) !== checkpoint.pending.provider) throw new Error('provider mismatch');
+  return checkpoint;
+}
+export function resumeAttempt(checkpoint) {
+  validateCheckpoint(checkpoint);
+  return { provider: checkpoint.pending.provider, iteration: checkpoint.run.iteration };
+}
+`;
+
+function durableTestChecks() {
+  const validSolution = {
+    'src/report-emitter.js': validEmitter,
+    'src/direct.js': validDirect,
+    'src/batch.js': validBatch,
+    'src/parallel.js': validParallel,
+    'src/relay.js': validRelay,
+    'src/attempt-state.js': validAttemptState,
+  };
+  const validAlternativeAccepted = fixtureTestsPassWith(validSolution);
+  const mutants = [
+    ['emitter-fallback', { 'src/report-emitter.js': `export class ReportEmitter {
+  emit(report, attribution) {
+    attribution ??= { scope: 'fallback', iteration: 0 };
+    return { report, scope: attribution.scope, iteration: attribution.iteration };
+  }
+}
+` }],
+    ['direct-context', { 'src/direct.js': `export function emitDirect(emitter, report, _context) {
+  return emitter.emit(report, { scope: 'wrong', iteration: -1 });
+}
+` }],
+    ['batch-context', { 'src/batch.js': `export function emitBatch(emitter, entries) {
+  return entries.map(({ report }) => emitter.emit(report, entries[0].context));
+}
+` }],
+    ['parallel-context', { 'src/parallel.js': `export function prepareParallel(emitter, entries) {
+  const lastContext = entries.at(-1).context;
+  return entries.map(({ report }) => () => emitter.emit(report, lastContext));
+}
+` }],
+    ['relay-context', { 'src/relay.js': `export function relayChildReport(emitter, parentContext, childEvent) {
+  return emitter.emit(childEvent.report, parentContext);
+}
+` }],
+    ['success-clear', { 'src/attempt-state.js': validAttemptState.replace(
+      "if (outcome.status === 'success') return { ...state, pending: undefined };",
+      "if (outcome.status === 'success') return { ...state };",
+    ) }],
+    ['error-preservation', { 'src/attempt-state.js': validAttemptState.replace(
+      "if (outcome.status === 'success') return { ...state, pending: undefined };",
+      "if (outcome.status === 'success' || outcome.status === 'error') return { ...state, pending: undefined };",
+    ) }],
+    ['blocked-preservation', { 'src/attempt-state.js': validAttemptState.replace(
+      "if (outcome.status === 'success') return { ...state, pending: undefined };",
+      "if (outcome.status === 'success' || outcome.status === 'blocked') return { ...state, pending: undefined };",
+    ) }],
+    ['run-id-validation', { 'src/attempt-state.js': validAttemptState.replace(
+      "  if (checkpoint.run.id !== checkpoint.judge.runId) throw new Error('run mismatch');\n",
+      '',
+    ) }],
+    ['iteration-validation', { 'src/attempt-state.js': validAttemptState.replace(
+      "  if (checkpoint.run.iteration !== checkpoint.judge.iteration) throw new Error('iteration mismatch');\n",
+      '',
+    ) }],
+    ['step-validation', { 'src/attempt-state.js': validAttemptState.replace(
+      "  if (checkpoint.pending.stepIteration !== checkpoint.judge.stepIteration) throw new Error('step mismatch');\n",
+      '',
+    ) }],
+    ['provider-validation', { 'src/attempt-state.js': validAttemptState.replace(
+      "  if (checkpoint.attempts.at(-1) !== checkpoint.pending.provider) throw new Error('provider mismatch');\n",
+      '',
+    ) }],
+    ['resume-provider', { 'src/attempt-state.js': validAttemptState.replace(
+      'return { provider: checkpoint.pending.provider, iteration: checkpoint.run.iteration };',
+      'return { provider: checkpoint.originalProvider, iteration: checkpoint.run.iteration };',
+    ) }],
+    ['resume-iteration', { 'src/attempt-state.js': validAttemptState.replace(
+      'return { provider: checkpoint.pending.provider, iteration: checkpoint.run.iteration };',
+      'return { provider: checkpoint.pending.provider, iteration: checkpoint.run.iteration + 1 };',
+    ) }],
+  ];
+  const survivingMutants = mutants
+    .filter(([, replacements]) => fixtureTestsPassWith({ ...validSolution, ...replacements }))
+    .map(([name]) => name);
+  return { validAlternativeAccepted, survivingMutants };
+}
+
 export default async function assertFixClosure() {
   try {
-    const [{ ReportEmitter }, { emitDirect }, { emitBatch }, { prepareParallel }, { relayChildReport }] = await Promise.all([
+    const [
+      { ReportEmitter },
+      { emitDirect },
+      { emitBatch },
+      { prepareParallel },
+      { relayChildReport },
+      { finishAttempt, validateCheckpoint, resumeAttempt },
+      { reportAttributionContract, attemptLifecycleContract },
+    ] = await Promise.all([
       load('src/report-emitter.js'),
       load('src/direct.js'),
       load('src/batch.js'),
       load('src/parallel.js'),
       load('src/relay.js'),
+      load('src/attempt-state.js'),
+      load('src/remediation-contract.js'),
     ]);
-    const source = readFileSync(join(workDir, 'src/report-emitter.js'), 'utf8');
     const emitter = new ReportEmitter({ scope: 'legacy', iteration: 99 });
     const contextA = { scope: 'scope-a', iteration: 1 };
     const contextB = { scope: 'scope-b', iteration: 2 };
@@ -46,21 +203,106 @@ export default async function assertFixClosure() {
       missingAttributionRejected = true;
     }
 
-    const hasAttribution = (event, expected) =>
-      event?.scope === expected.scope && event?.iteration === expected.iteration;
+    const pending = { provider: 'secondary', stepIteration: 3 };
+    const createAttemptState = () => ({ pending: { ...pending }, attempts: ['primary', 'secondary'] });
+    const successInput = createAttemptState();
+    const successSnapshot = structuredClone(successInput);
+    const succeededState = finishAttempt(successInput, { status: 'success' });
+    const failedInput = createAttemptState();
+    const failedSnapshot = structuredClone(failedInput);
+    const failedState = finishAttempt(failedInput, { status: 'error' });
+    const blockedInput = createAttemptState();
+    const blockedSnapshot = structuredClone(blockedInput);
+    const blockedState = finishAttempt(blockedInput, { status: 'blocked' });
+    const validCheckpoint = {
+      run: { id: 'run-1', iteration: 7 },
+      judge: { runId: 'run-1', iteration: 7, stepIteration: 3 },
+      pending,
+      attempts: ['primary', 'secondary'],
+      originalProvider: 'primary',
+    };
+    const rejectsCheckpoint = (override) => {
+      try {
+        validateCheckpoint({
+          ...validCheckpoint,
+          ...override,
+          judge: { ...validCheckpoint.judge, ...override.judge },
+        });
+        return false;
+      } catch {
+        return true;
+      }
+    };
+    const resumed = resumeAttempt(validCheckpoint);
+    const testResult = runFixtureTests();
+    const durable = durableTestChecks();
     const checks = [
-      ['direct', hasAttribution(direct, contextA)],
-      ['batch', hasAttribution(batch[0], contextA) && hasAttribution(batch[1], contextB)],
-      ['parallel', hasAttribution(parallel[0], contextB) && hasAttribution(parallel[1], contextA)],
-      ['relay', hasAttribution(relayed, contextB)],
+      ['attribution-contract-preserved', isDeepStrictEqual(reportAttributionContract, {
+        ambientContext: 'forbidden',
+        missingContext: 'reject',
+        producers: {
+          direct: 'context',
+          batch: 'entry.context',
+          parallel: 'entry.context',
+          relay: 'childEvent.context',
+        },
+        preserveProducerSignatures: true,
+      })],
+      ['attempt-contract-preserved', isDeepStrictEqual(attemptLifecycleContract, {
+        completion: {
+          success: 'clear-pending',
+          error: 'preserve-pending',
+          blocked: 'preserve-pending',
+        },
+        checkpointCorrelations: [
+          ['run.id', 'judge.runId'],
+          ['run.iteration', 'judge.iteration'],
+          ['pending.stepIteration', 'judge.stepIteration'],
+          ['attempts.tail', 'pending.provider'],
+        ],
+        resume: {
+          provider: 'pending.provider',
+          iteration: 'run.iteration',
+        },
+        mutateInput: false,
+      })],
+      ['direct', isDeepStrictEqual(direct, { report: 'direct-a', ...contextA })],
+      ['batch', isDeepStrictEqual(batch, [
+        { report: 'batch-a', ...contextA },
+        { report: 'batch-b', ...contextB },
+      ])],
+      ['parallel', isDeepStrictEqual(parallel, [
+        { report: 'parallel-b', ...contextB },
+        { report: 'parallel-a', ...contextA },
+      ])],
+      ['relay', isDeepStrictEqual(relayed, { report: 'child-b', ...contextB })],
       ['missing-attribution-rejected', missingAttributionRejected],
-      ['mutable-fallback-removed', !/setActiveContext|activeContext|attribution\?\./.test(source)],
+      ['obsolete-context-api-removed', !('setActiveContext' in ReportEmitter.prototype)],
+      ['obsolete-context-state-removed', !Object.hasOwn(emitter, 'activeContext')],
+      ['success-clears-pending', succeededState.pending === undefined],
+      ['success-preserves-attempts', isDeepStrictEqual(succeededState.attempts, successSnapshot.attempts)],
+      ['success-does-not-mutate-input', isDeepStrictEqual(successInput, successSnapshot)],
+      ['error-preserves-state', isDeepStrictEqual(failedState, failedSnapshot)],
+      ['error-does-not-mutate-input', isDeepStrictEqual(failedInput, failedSnapshot)],
+      ['blocked-preserves-state', isDeepStrictEqual(blockedState, blockedSnapshot)],
+      ['blocked-does-not-mutate-input', isDeepStrictEqual(blockedInput, blockedSnapshot)],
+      ['run-id-mismatch-rejected', rejectsCheckpoint({ judge: { runId: 'run-2' } })],
+      ['judge-iteration-mismatch-rejected', rejectsCheckpoint({ judge: { iteration: 8 } })],
+      ['step-iteration-mismatch-rejected', rejectsCheckpoint({ judge: { stepIteration: 4 } })],
+      ['provider-tail-mismatch-rejected', rejectsCheckpoint({ attempts: ['primary', 'other'] })],
+      ['resume-keeps-provider', resumed.provider === pending.provider],
+      ['resume-keeps-iteration', resumed.iteration === validCheckpoint.run.iteration],
+      ['durable-regression-tests-pass', testResult.status === 0],
+      ['tests-accept-valid-alternative', durable.validAlternativeAccepted],
+      ['tests-kill-each-obligation-mutant', durable.survivingMutants.length === 0],
     ];
     const failed = checks.filter(([, pass]) => !pass).map(([name]) => name);
     return {
       pass: failed.length === 0,
       score: (checks.length - failed.length) / checks.length,
-      reason: failed.length === 0 ? 'all defect-family paths are closed' : `failed: ${failed.join(', ')}`,
+      reason: failed.length === 0
+        ? 'all defect-family paths are closed'
+        : `failed: ${failed.join(', ')}; surviving mutants: ${durable.survivingMutants.join(', ') || 'none'}`,
     };
   } catch (error) {
     return {

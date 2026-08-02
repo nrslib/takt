@@ -52,9 +52,16 @@ const TARGETS = [
   { id: 'loop-monitor-reviewers-fix-fc', workflow: 'takt-default-high', monitorCycle: ['fix', 'reviewers'], fixture: 'eval/fixtures/sample-project' },
   { id: 'frontend-implement', workflow: 'frontend', step: 'implement', fixture: 'eval/fixtures/frontend-app', mutable: true },
   { id: 'cqrs-implement', workflow: 'backend-cqrs', step: 'implement', fixture: 'eval/fixtures/backend-cqrs', mutable: true },
-  { id: 'fix-closure', workflow: 'review-remediation', step: 'fix', fixture: 'eval/fixtures/fix-closure', mutable: true },
+  { id: 'fix-closure', workflow: 'review-remediation', step: 'fix-retry', fixture: 'eval/fixtures/fix-closure', mutable: true },
   { id: 'fix-plan-fresh-findings', workflow: 'peer-review', step: 'fix-plan', fixture: 'eval/fixtures/fix-plan-fresh-findings' },
   { id: 'review-family-closure', workflow: 'peer-review-suite-base', step: 'coding-review', fixture: 'eval/fixtures/review-family-closure' },
+  {
+    id: 'initial-review-contract-discovery',
+    workflow: 'peer-review',
+    step: 'coding-review',
+    fixture: 'eval/fixtures/initial-review-contract-discovery',
+    workflowCallVars: { review_mode: 'initial' },
+  },
   { id: 'review-adjudication', workflow: 'peer-review', step: 'review-adjudication', fixture: 'eval/fixtures/review-adjudication' },
   { id: 'final-readiness-supervision', workflow: 'peer-review', step: 'final-gate', fixture: 'eval/fixtures/final-readiness-supervision' },
   { id: 'final-readiness-precision', workflow: 'peer-review', step: 'final-gate', fixture: 'eval/fixtures/final-readiness-precision' },
@@ -128,7 +135,15 @@ function findStepTarget(workflow, stepName, depth = 0) {
   return null;
 }
 
-for (const { id, workflow: workflowName, step: stepName, monitorCycle, fixture, mutable } of targets) {
+for (const {
+  id,
+  workflow: workflowName,
+  step: stepName,
+  monitorCycle,
+  fixture,
+  mutable,
+  workflowCallVars,
+} of targets) {
   const fixtureDir = resolve(repoRoot, fixture);
 
   // Mutable (coder) targets work on a disposable copy.
@@ -223,6 +238,7 @@ for (const { id, workflow: workflowName, step: stepName, monitorCycle, fixture, 
     reportDir,
     policySourcePath,
     knowledgeSourcePath,
+    workflowCallVars,
     language,
   };
 

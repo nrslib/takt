@@ -1,5 +1,5 @@
 import { dirname } from 'node:path';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { parse as parseYaml } from 'yaml';
 import type { WorkflowConfig } from '../../../core/models/index.js';
 import { getRepertoireDir } from '../paths.js';
@@ -41,8 +41,9 @@ function loadWorkflowFromFileInternal(
     throw new Error(`Workflow file not found: ${filePath}`);
   }
 
-  const raw = parseYaml(readFileSync(filePath, 'utf-8'));
-  const workflowDir = dirname(filePath);
+  const canonicalFilePath = realpathSync(filePath);
+  const raw = parseYaml(readFileSync(canonicalFilePath, 'utf-8'));
+  const workflowDir = dirname(canonicalFilePath);
   const context: FacetResolutionContext = {
     lang: resolveWorkflowConfigValue(projectDir, 'language'),
     projectDir,
@@ -53,7 +54,7 @@ function loadWorkflowFromFileInternal(
   const projectConfig = loadProjectConfig(projectDir);
   const globalConfig = loadGlobalConfig();
   const trustInfo = options?.trustInfo ?? resolveWorkflowTrustInfo({
-    filePath,
+    filePath: canonicalFilePath,
     projectCwd: projectDir,
   });
 
@@ -83,12 +84,12 @@ function loadWorkflowFromFileInternal(
         globalConfig.workflowCommandGates,
         projectConfig.workflowCommandGates,
       ),
-      workflowPath: filePath,
+      workflowPath: canonicalFilePath,
       workflowTrustInfo: trustInfo,
     },
   );
-  attachWorkflowOpaqueRef(config, buildOpaqueWorkflowRef(filePath, trustInfo));
-  attachWorkflowSourcePath(config, filePath);
+  attachWorkflowOpaqueRef(config, buildOpaqueWorkflowRef(canonicalFilePath, trustInfo));
+  attachWorkflowSourcePath(config, canonicalFilePath);
   attachWorkflowTrustInfo(config, trustInfo);
   return config;
 }

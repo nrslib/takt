@@ -1,8 +1,8 @@
 # yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
-# TAKT facet eval: review-remediation / fix (coder, codex writes files).
+# TAKT facet eval: review-remediation / fix-retry (coder, codex writes files).
 # Run via npm run eval:prompts:fix-closure
 
-description: 'TAKT facet eval: review-remediation / fix defect-family closure'
+description: 'TAKT facet eval: review-remediation / fix-retry defect-family closure'
 
 prompts:
   - file://prompts/fix-closure.phase1.md
@@ -18,7 +18,7 @@ providers:
       model_reasoning_effort: low
 
 tests:
-  - description: 'fix: close the complete attribution family rather than only the verifier example'
+  - description: 'fix-retry: close every atomic obligation across multiple fix units rather than only the verifier example'
     vars:
       task: file://cases/fix-closure-task.md
       previous_response: ''

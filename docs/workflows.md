@@ -583,6 +583,7 @@ Detect cyclic patterns between steps (e.g. `review` → `fix` → `review` repea
 ```yaml
 loop_monitors:
   - cycle: [review, fix]
+    ignore_steps: [verify]
     threshold: 3
     judge:
       session_key: loop-supervisor
@@ -594,6 +595,8 @@ loop_monitors:
         - condition: "No progress"
           next: ABORT
 ```
+
+`ignore_steps` excludes intermediate steps from cycle matching. Use it when a logical cycle has optional verification or retry steps; an ignored step cannot also appear in `cycle`.
 
 `loop_monitors.judge` supports `provider`, `model`, and `provider_options` with the same provider/model validation as agent steps. When `provider` is omitted, the judge inherits the triggering step provider and model. When `provider` is set without `model`, the inherited model is cleared. Use `model: null` to explicitly use a provider or CLI default even when the triggering step has a resolved model.
 

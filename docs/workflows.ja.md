@@ -582,6 +582,7 @@ step 間の循環パターン（例: `review` → `fix` → `review` の無限�
 ```yaml
 loop_monitors:
   - cycle: [review, fix]
+    ignore_steps: [verify]
     threshold: 3
     judge:
       session_key: loop-supervisor
@@ -593,6 +594,8 @@ loop_monitors:
         - condition: "進捗なし"
           next: ABORT
 ```
+
+`ignore_steps` はサイクル照合から中間 step を除外します。任意回数の検証・再修正 step を含む論理サイクルを監視するときに使用します。`cycle` に含む step と同じ step は指定できません。
 
 `loop_monitors.judge` は agent step と同じ provider/model 検証で `provider`、`model`、`provider_options` を指定できます。`provider` を省略した場合、judge はトリガー元 step の provider と model を継承します。`provider` を指定して `model` を省略した場合、継承 model はクリアされます。トリガー元 step に解決済み model があっても provider または CLI のデフォルトを使わせたい場合は、`model: null` を指定してください。
 

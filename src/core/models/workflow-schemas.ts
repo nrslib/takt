@@ -773,8 +773,20 @@ export const LoopMonitorJudgeSchema = z.object({
 /** Loop monitor configuration schema */
 export const LoopMonitorSchema = z.object({
   cycle: z.array(z.string().min(1)).min(2),
+  ignore_steps: z.array(z.string().min(1)).min(1).optional(),
   threshold: z.number().int().positive().optional().default(3),
   judge: LoopMonitorJudgeSchema,
+}).superRefine((monitor, ctx) => {
+  const cycleSteps = new Set(monitor.cycle);
+  for (const [index, step] of (monitor.ignore_steps ?? []).entries()) {
+    if (cycleSteps.has(step)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['ignore_steps', index],
+        message: `ignored step "${step}" cannot also be part of the monitored cycle`,
+      });
+    }
+  }
 });
 
 /** Interactive mode schema for workflow-level default */
