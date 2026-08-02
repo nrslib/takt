@@ -89,12 +89,35 @@ export function resumeAttempt(checkpoint) {
 }
 `;
 
+const validHierarchyDepth = `export function countDirectWorkflowCalls(entries) {
+  return entries.filter(({ kind }) => kind === 'workflow_call').length;
+}
+export function countWorkflowCalls(entries) {
+  return entries.reduce((total, entry) =>
+    total + (entry.kind === 'workflow_call' ? 1 : 0) + countWorkflowCalls(entry.children ?? []), 0);
+}
+export function maxWorkflowCallDepth(entries, parentDepth = 0) {
+  return entries.reduce((maximum, entry) => {
+    const depth = parentDepth + (entry.kind === 'workflow_call' ? 1 : 0);
+    return Math.max(maximum, depth, maxWorkflowCallDepth(entry.children ?? [], depth));
+  }, parentDepth);
+}
+`;
+
 function mutateAttemptState(search, replacement) {
   const mutated = validAttemptState.replace(search, replacement);
   if (mutated === validAttemptState) {
     throw new Error(`mutation template did not apply: ${search}`);
   }
   return { 'src/attempt-state.js': mutated };
+}
+
+function mutateHierarchyDepth(search, replacement) {
+  const mutated = validHierarchyDepth.replace(search, replacement);
+  if (mutated === validHierarchyDepth) {
+    throw new Error(`hierarchy mutation template did not apply: ${search}`);
+  }
+  return { 'src/hierarchy-depth.js': mutated };
 }
 
 function durableTestChecks() {
@@ -105,6 +128,7 @@ function durableTestChecks() {
     'src/parallel.js': validParallel,
     'src/relay.js': validRelay,
     'src/attempt-state.js': validAttemptState,
+    'src/hierarchy-depth.js': validHierarchyDepth,
   };
   const validAlternativeAccepted = fixtureTestsPassWith(validSolution);
   const successClearLine = "if (outcome.status === 'success') return { ...state, pending: undefined };";
@@ -169,6 +193,28 @@ function durableTestChecks() {
       'return { provider: checkpoint.pending.provider, iteration: checkpoint.run.iteration };',
       'return { provider: checkpoint.pending.provider, iteration: checkpoint.run.iteration + 1 };',
     )],
+    ['recursive-counts-wrappers', mutateHierarchyDepth(
+      "total + (entry.kind === 'workflow_call' ? 1 : 0) + countWorkflowCalls(entry.children ?? [])",
+      'total + 1 + countWorkflowCalls(entry.children ?? [])',
+    )],
+    ['depth-counts-wrappers', mutateHierarchyDepth(
+      "const depth = parentDepth + (entry.kind === 'workflow_call' ? 1 : 0);",
+      'const depth = parentDepth + 1;',
+    )],
+    ['max-depth-skips-siblings', mutateHierarchyDepth(
+      `  return entries.reduce((maximum, entry) => {
+    const depth = parentDepth + (entry.kind === 'workflow_call' ? 1 : 0);
+    return Math.max(maximum, depth, maxWorkflowCallDepth(entry.children ?? [], depth));
+  }, parentDepth);`,
+      `  const entry = entries[0];
+  if (entry === undefined) return parentDepth;
+  const depth = parentDepth + (entry.kind === 'workflow_call' ? 1 : 0);
+  return Math.max(depth, maxWorkflowCallDepth(entry.children ?? [], depth));`,
+    )],
+    ['max-depth-skips-wrapper-descendants', mutateHierarchyDepth(
+      'maxWorkflowCallDepth(entry.children ?? [], depth)',
+      "entry.kind === 'workflow_call' ? maxWorkflowCallDepth(entry.children ?? [], depth) : depth",
+    )],
   ];
   const survivingMutants = mutants
     .filter(([, replacements]) => fixtureTestsPassWith({ ...validSolution, ...replacements }))
@@ -185,7 +231,8 @@ export default async function assertFixClosure() {
       { prepareParallel },
       { relayChildReport },
       { finishAttempt, validateCheckpoint, resumeAttempt },
-      { reportAttributionContract, attemptLifecycleContract },
+      { countDirectWorkflowCalls, countWorkflowCalls, maxWorkflowCallDepth },
+      { reportAttributionContract, attemptLifecycleContract, hierarchyCountContract },
     ] = await Promise.all([
       load('src/report-emitter.js'),
       load('src/direct.js'),
@@ -193,6 +240,7 @@ export default async function assertFixClosure() {
       load('src/parallel.js'),
       load('src/relay.js'),
       load('src/attempt-state.js'),
+      load('src/hierarchy-depth.js'),
       load('src/remediation-contract.js'),
     ]);
     const emitter = new ReportEmitter({ scope: 'legacy', iteration: 99 });
@@ -249,6 +297,28 @@ export default async function assertFixClosure() {
       }
     };
     const resumed = resumeAttempt(validCheckpoint);
+    const hierarchy = [
+      {
+        kind: 'workflow_call',
+        children: [],
+      },
+      {
+        kind: 'system',
+        children: [{
+          kind: 'agent',
+          children: [{
+            kind: 'workflow_call',
+            children: [{
+              kind: 'agent',
+              children: [{
+                kind: 'workflow_call',
+                children: [{ kind: 'workflow_call', children: [] }],
+              }],
+            }],
+          }],
+        }],
+      },
+    ];
     const testResult = runFixtureTests();
     const durable = durableTestChecks();
     const checks = [
@@ -281,6 +351,11 @@ export default async function assertFixClosure() {
         },
         mutateInput: false,
       })],
+      ['hierarchy-contract-preserved', isDeepStrictEqual(hierarchyCountContract, {
+        countedKind: 'workflow_call',
+        paths: ['direct', 'recursive', 'max-depth'],
+        nonCountedKinds: ['agent', 'system'],
+      })],
       ['direct', isDeepStrictEqual(direct, { report: 'direct-a', ...contextA })],
       ['batch', isDeepStrictEqual(batch, [
         { report: 'batch-a', ...contextA },
@@ -307,6 +382,9 @@ export default async function assertFixClosure() {
       ['provider-tail-mismatch-rejected', rejectsCheckpoint({ attempts: ['primary', 'other'] })],
       ['resume-keeps-provider', resumed.provider === pending.provider],
       ['resume-keeps-iteration', resumed.iteration === validCheckpoint.run.iteration],
+      ['direct-call-count', countDirectWorkflowCalls(hierarchy) === 1],
+      ['recursive-call-count', countWorkflowCalls(hierarchy) === 4],
+      ['maximum-call-depth', maxWorkflowCallDepth(hierarchy) === 3],
       ['durable-regression-tests-pass', testResult.status === 0],
       ['tests-accept-valid-alternative', durable.validAlternativeAccepted],
       ['tests-kill-each-obligation-mutant', durable.survivingMutants.length === 0],

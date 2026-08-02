@@ -54,6 +54,7 @@ const TARGETS = [
   { id: 'cqrs-implement', workflow: 'backend-cqrs', step: 'implement', fixture: 'eval/fixtures/backend-cqrs', mutable: true },
   { id: 'fix-closure', workflow: 'review-remediation', step: 'fix-retry', fixture: 'eval/fixtures/fix-closure', mutable: true },
   { id: 'fix-plan-fresh-findings', workflow: 'peer-review', step: 'fix-plan', fixture: 'eval/fixtures/fix-plan-fresh-findings' },
+  { id: 'fix-plan-boundary-preflight', workflow: 'peer-review', step: 'fix-plan', fixture: 'eval/fixtures/fix-plan-boundary-preflight' },
   { id: 'review-family-closure', workflow: 'peer-review-suite-base', step: 'coding-review', fixture: 'eval/fixtures/review-family-closure' },
   {
     id: 'initial-review-contract-discovery',
@@ -61,6 +62,13 @@ const TARGETS = [
     step: 'coding-review',
     fixture: 'eval/fixtures/initial-review-contract-discovery',
     workflowCallVars: { review_mode: 'initial' },
+  },
+  {
+    id: 'follow-up-review-repair-regression',
+    workflow: 'peer-review',
+    step: 'coding-review',
+    fixture: 'eval/fixtures/follow-up-review-repair-regression',
+    workflowCallVars: { review_mode: 'follow_up' },
   },
   { id: 'review-adjudication', workflow: 'peer-review', step: 'review-adjudication', fixture: 'eval/fixtures/review-adjudication' },
   { id: 'final-readiness-supervision', workflow: 'peer-review', step: 'final-gate', fixture: 'eval/fixtures/final-readiness-supervision' },

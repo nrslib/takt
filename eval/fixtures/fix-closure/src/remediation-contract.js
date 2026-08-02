@@ -28,3 +28,9 @@ export const attemptLifecycleContract = Object.freeze({
   }),
   mutateInput: false,
 });
+
+export const hierarchyCountContract = Object.freeze({
+  countedKind: 'workflow_call',
+  paths: Object.freeze(['direct', 'recursive', 'max-depth']),
+  nonCountedKinds: Object.freeze(['agent', 'system']),
+});
