@@ -14,6 +14,7 @@ import {
 } from './workflow-call-invocation-index.js';
 import { getWorkflowReference } from './workflow-reference.js';
 import { buildWorkflowStepParticipationIdentity } from './workflow-step-participation-index.js';
+import { workflowOwnerPathFromStack } from './workflow-execution-scope.js';
 
 export interface ReviewReportParticipationEvidence {
   readonly activeWorkflowReference: string;
@@ -59,7 +60,11 @@ export function resolveReviewReportStepParticipation(
     );
 
   if (step.parallel !== undefined && isDynamicParallelSubSteps(step.parallel)) {
-    const identity = buildDynamicParallelSelectionIdentity(workflow, step.name, resumeStackPrefix);
+    const identity = buildDynamicParallelSelectionIdentity(
+      workflow,
+      step.name,
+      workflowOwnerPathFromStack(resumeStackPrefix),
+    );
     const snapshot = evidence.dynamicParallelSelections.get(identity);
     if (snapshot === undefined) {
       return runtimeParticipation

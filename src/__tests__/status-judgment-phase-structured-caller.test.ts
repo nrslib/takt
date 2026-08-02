@@ -9,6 +9,8 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
+const executionScope = { kind: 'workflow_execution_scope', stack: [] } as const;
+
 describe('runStatusJudgmentPhase with structuredCaller', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -40,6 +42,7 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
     const result = await runStatusJudgmentPhase(step, {
       cwd: '/tmp/project',
       reportDir: '/tmp/project/.takt/reports',
+      executionScope,
       lastResponse: 'response body',
       iteration: 2,
       resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'cursor', model: undefined }),
@@ -97,6 +100,7 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
     await runStatusJudgmentPhase(step, {
       cwd: '/tmp/project',
       reportDir: '/tmp/project/.takt/reports',
+      executionScope,
       lastResponse: 'response body',
       iteration: 2,
       resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'codex', model: 'gpt-5.2-codex' }),
@@ -142,6 +146,7 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
     await runStatusJudgmentPhase(step, {
       cwd: '/tmp/project',
       reportDir: '/tmp/project/.takt/reports',
+      executionScope,
       lastResponse: 'response body',
       iteration: 2,
       childProcessEnv,
@@ -202,6 +207,7 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
     await runStatusJudgmentPhase(step, {
       cwd: '/tmp/project',
       reportDir: '/tmp/project/.takt/reports',
+      executionScope,
       lastResponse: 'response body',
       iteration: 2,
       resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'codex', model: 'gpt-5' }),
@@ -249,6 +255,7 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
     await expect(runStatusJudgmentPhase(step, {
       cwd: '/tmp/project',
       reportDir: '/tmp/project/.takt/reports',
+      executionScope,
       lastResponse: 'response body',
       iteration: 2,
       resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'cursor', model: undefined }),
@@ -298,6 +305,7 @@ describe('runStatusJudgmentPhase with structuredCaller', () => {
     await expect(runStatusJudgmentPhase(step, {
       cwd: '/tmp/project',
       reportDir: '/tmp/project/.takt/reports',
+      executionScope,
       lastResponse: 'response body',
       iteration: 2,
       resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'cursor', model: undefined }),

@@ -34,34 +34,16 @@ const log = createLogger('analytics-emitter');
 
 export class AnalyticsEmitter {
   private readonly runSlug: string;
-  private currentIteration = 0;
-  private currentProvider: string;
-  private currentModel: string;
-  private currentWorkflowName: string;
   private readonly routingRunId: string;
   private readonly findingContractFindingIds = new Set<string>();
 
   constructor(
     runSlug: string,
-    initialProvider: string,
-    initialModel: string,
-    workflowName: string,
     private readonly interactive: boolean,
     routingRunId?: string,
   ) {
     this.runSlug = runSlug;
-    this.currentProvider = initialProvider;
-    this.currentModel = initialModel;
-    this.currentWorkflowName = workflowName;
     this.routingRunId = routingRunId ?? randomUUID();
-  }
-
-  /** step:start 時にプロバイダ/モデル情報を更新する */
-  updateProviderInfo(iteration: number, provider: string, model: string, workflowName: string): void {
-    this.currentIteration = iteration;
-    this.currentProvider = provider;
-    this.currentModel = model;
-    this.currentWorkflowName = workflowName;
   }
 
   seedFindingContractFindingIds(findingIds: readonly string[]): void {
@@ -72,7 +54,15 @@ export class AnalyticsEmitter {
   }
 
   /** step:complete 時に StepResultEvent と FixAction/Rebuttal を発行する */
-  onStepComplete(step: WorkflowStep, response: AgentResponse): void {
+  onStepComplete(
+    step: WorkflowStep,
+    response: AgentResponse,
+    attribution: {
+      iteration: number;
+      provider: string;
+      model: string;
+    },
+  ): void {
     const matchedRule = response.matchedRuleIndex != null && step.rules
       ? step.rules[response.matchedRuleIndex]
       : undefined;
@@ -83,10 +73,10 @@ export class AnalyticsEmitter {
     const stepResultEvent: StepResultEvent = {
       type: 'step_result',
       step: step.name,
-      provider: this.currentProvider,
-      model: this.currentModel,
+      provider: attribution.provider,
+      model: attribution.model,
       decisionTag,
-      iteration: this.currentIteration,
+      iteration: attribution.iteration,
       runId: this.runSlug,
       timestamp: response.timestamp.toISOString(),
     };
@@ -95,7 +85,7 @@ export class AnalyticsEmitter {
     if (step.edit === true && step.name.includes('fix')) {
       emitFixActionEvents(
         response.content,
-        this.currentIteration,
+        attribution.iteration,
         this.runSlug,
         response.timestamp,
         this.findingContractFindingIds,
@@ -105,7 +95,7 @@ export class AnalyticsEmitter {
     if (step.name.includes('no_fix')) {
       emitRebuttalEvents(
         response.content,
-        this.currentIteration,
+        attribution.iteration,
         this.runSlug,
         response.timestamp,
         this.findingContractFindingIds,
@@ -143,7 +133,7 @@ export class AnalyticsEmitter {
     stepType: 'normal' | 'parallel' | 'agent';
     durationMs: number;
     iteration: number;
-    workflowName?: string;
+    workflowName: string;
   }): void {
     const decision = input.providerInfo?.autoRoutingDecision;
     if (!decision || !input.providerInfo?.provider || !input.providerInfo.model) {
@@ -159,7 +149,7 @@ export class AnalyticsEmitter {
       stepName: input.step.name,
       stepTags: input.step.tags ?? [],
       personaKey: input.step.providerRoutingPersonaKey ?? input.step.persona ?? input.step.name,
-      workflowName: input.workflowName ?? this.currentWorkflowName,
+      workflowName: input.workflowName,
       provider: input.providerInfo.provider,
       model: input.providerInfo.model,
       candidateName: decision.candidateName,
@@ -201,7 +191,7 @@ export class AnalyticsEmitter {
   }
 
   /** step:report 時に ReviewFindingEvent を発行する */
-  onStepReport(step: WorkflowStep, filePath: string): void {
+  onStepReport(step: WorkflowStep, filePath: string, iteration: number): void {
     if (step.edit !== false) return;
 
     const content = readFileSync(filePath, 'utf-8');
@@ -219,7 +209,7 @@ export class AnalyticsEmitter {
         decision,
         file: finding.file,
         line: finding.line,
-        iteration: this.currentIteration,
+        iteration,
         runId: this.runSlug,
         timestamp: new Date().toISOString(),
       };
@@ -227,7 +217,7 @@ export class AnalyticsEmitter {
     }
   }
 
-  onFindingLedgerUpdated(ledger: FindingLedger): void {
+  onFindingLedgerUpdated(ledger: FindingLedger, iteration: number): void {
     try {
       this.findingContractFindingIds.clear();
       for (const finding of ledger.findings) {
@@ -235,7 +225,7 @@ export class AnalyticsEmitter {
       }
       const events = buildReviewFindingEventsFromLedger(
         ledger,
-        this.currentIteration,
+        iteration,
         this.runSlug,
         new Date(ledger.updatedAt),
       );

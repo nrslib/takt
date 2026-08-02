@@ -177,6 +177,25 @@ describe('validateWorkflowConfig', () => {
     expect(() => validateWorkflowConfig(createWorkflow(), { projectCwd: process.cwd() })).not.toThrow();
   });
 
+  it('accepts a callable workflow without maxSteps', () => {
+    const workflow = createWorkflow({
+      subworkflow: { callable: true },
+      maxSteps: undefined,
+    });
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).not.toThrow();
+  });
+
+  it.each([3, 'infinite'] as const)('rejects callable workflow maxSteps %s', (maxSteps) => {
+    const workflow = createWorkflow({
+      subworkflow: { callable: true },
+      maxSteps,
+    });
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() }))
+      .toThrow(/callable.*max_steps|max_steps.*callable/i);
+  });
+
   it('requires finding_contract when a Team Leader uses finding_contract_fix mode', () => {
     const workflow = createWorkflow({
       initialStep: 'fix',
@@ -437,6 +456,34 @@ describe('validateWorkflowConfig', () => {
     expect(() => validateWorkflowConfig(workflow, {
       projectCwd: process.cwd(),
       autoRouting: createPoolScopedValidatorAutoRouting(),
+    })).not.toThrow();
+  });
+
+  it('validates a workflow_call-triggered loop judge from judge context instead of wrapper provider fields', () => {
+    const workflow = createWorkflow({
+      initialStep: 'delegate',
+      steps: [{
+        name: 'delegate',
+        kind: 'workflow_call',
+        call: 'shared/review',
+        provider: 'opencode',
+        model: 'sonnet',
+        rules: [normalizeRule({ condition: 'COMPLETE', next: 'COMPLETE' })],
+      } as unknown as WorkflowConfig['steps'][number]],
+      loopMonitors: [{
+        cycle: ['delegate'],
+        threshold: 1,
+        judge: {
+          rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
+        },
+      }],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, {
+      projectCwd: process.cwd(),
+      provider: 'mock',
+      model: 'judge-model',
+      workflowCallResolver: () => undefined,
     })).not.toThrow();
   });
 
@@ -1657,6 +1704,7 @@ describe('validateWorkflowConfig', () => {
       const workflow = createWorkflow({
         name: 'finding-contract-child',
         subworkflow: { callable: true, requiresFindingContract: true },
+        maxSteps: undefined,
       });
 
       expect(() => validateWorkflowConfig(workflow, {
@@ -1670,6 +1718,7 @@ describe('validateWorkflowConfig', () => {
       const workflow = createWorkflow({
         name: 'finding-contract-child',
         subworkflow: { callable: true, requiresFindingContract: true },
+        maxSteps: undefined,
       });
 
       expect(() => validateWorkflowConfig(workflow, {

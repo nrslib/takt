@@ -35,6 +35,7 @@ import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
 import { buildFindingsRuleContext as buildFindingsRuleContextWithCwd } from '../core/workflow/findings/context.js';
 import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
 import { createFindingManagerPublicationDouble, RevisionedFindingLedgerTestRepository } from './helpers/finding-manager-publication.js';
+import { buildWorkflowCallNamespaceFixture } from './helpers/workflow-resume-fixture.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
   executeAgent: vi.fn(),
@@ -118,6 +119,64 @@ describe('computeRoundMarker', () => {
     expect(a).toContain('\0');
     expect(a).not.toBe(differentIteration);
     expect(a).not.toBe(differentRun);
+  });
+
+  it('keeps delimiter-equivalent workflow-call structures in different rounds', () => {
+    const firstNamespace = buildWorkflowCallNamespaceFixture(
+      'parent',
+      'b/c',
+      [{ workflow: 'parent', step: 'a', kind: 'agent' }],
+      'child',
+      1,
+    );
+    const secondNamespace = buildWorkflowCallNamespaceFixture(
+      'parent',
+      'c',
+      [{ workflow: 'parent', step: 'a/b', kind: 'agent' }],
+      'child',
+      1,
+    );
+
+    expect(computeRoundMarker({
+      runId: 'run-1',
+      callNamespace: firstNamespace,
+      parentStepName: 'reviewers',
+      stepIteration: 1,
+    })).not.toBe(computeRoundMarker({
+      runId: 'run-1',
+      callNamespace: secondNamespace,
+      parentStepName: 'reviewers',
+      stepIteration: 1,
+    }));
+  });
+
+  it('keeps case-only workflow-call identities in different rounds', () => {
+    const upperNamespace = buildWorkflowCallNamespaceFixture(
+      'parent',
+      'Delegate',
+      [],
+      'child',
+      1,
+    );
+    const lowerNamespace = buildWorkflowCallNamespaceFixture(
+      'parent',
+      'delegate',
+      [],
+      'child',
+      1,
+    );
+
+    expect(computeRoundMarker({
+      runId: 'run-1',
+      callNamespace: upperNamespace,
+      parentStepName: 'reviewers',
+      stepIteration: 1,
+    })).not.toBe(computeRoundMarker({
+      runId: 'run-1',
+      callNamespace: lowerNamespace,
+      parentStepName: 'reviewers',
+      stepIteration: 1,
+    }));
   });
 });
 

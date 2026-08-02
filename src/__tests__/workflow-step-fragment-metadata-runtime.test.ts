@@ -73,7 +73,6 @@ describe('workflow step fragment metadata runtime contract', () => {
       '  callable: true',
       '  returns: [success]',
       'initial_step: done',
-      'max_steps: 10',
       'steps:',
       '  - name: done',
       '    instruction: done',
@@ -85,7 +84,6 @@ describe('workflow step fragment metadata runtime contract', () => {
     const parentPath = write(projectDir, '.takt/workflows/parent.yaml', [
       'name: parent',
       'initial_step: delegate',
-      'max_steps: 10',
       'steps:',
       '  - name: delegate',
       '    uses: delegate',

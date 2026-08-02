@@ -1,11 +1,14 @@
 import type { PhasePromptParts } from '../../../core/workflow/types.js';
+import type { WorkflowResumePointEntry } from '../../../core/models/types.js';
 import { buildPhaseExecutionId } from '../../../shared/utils/phaseExecutionId.js';
+import { buildWorkflowStepScopeKey } from './workflowStepScope.js';
 
 interface PhaseTrackerOptions {
   stepName: string;
   phase: 1 | 2 | 3;
   phaseExecutionId: string | undefined;
   iteration: number | undefined;
+  workflowStack: readonly WorkflowResumePointEntry[] | undefined;
 }
 
 interface PhaseStartTrackerOptions extends PhaseTrackerOptions {
@@ -17,8 +20,13 @@ interface PhaseCompletionTrackerOptions extends PhaseTrackerOptions {
   requirePrompt: boolean;
 }
 
-function buildExecutionCounterKey(stepName: string, phase: 1 | 2 | 3, iteration: number): string {
-  return JSON.stringify([stepName, iteration, phase]);
+function buildExecutionCounterKey(
+  stepName: string,
+  phase: 1 | 2 | 3,
+  iteration: number,
+  workflowStack: readonly WorkflowResumePointEntry[] | undefined,
+): string {
+  return JSON.stringify([buildWorkflowStepScopeKey(stepName, workflowStack), iteration, phase]);
 }
 
 function requireIteration(stepName: string, phase: 1 | 2 | 3, iteration: number | undefined): number {
@@ -38,6 +46,7 @@ export class SessionLoggerPhaseTracker {
       options.phase,
       options.phaseExecutionId,
       options.iteration,
+      options.workflowStack,
     );
     if (options.capturePrompt) {
       this.promptsByExecutionId.set(phaseExecutionId, options.promptParts);
@@ -53,6 +62,7 @@ export class SessionLoggerPhaseTracker {
       options.phase,
       options.phaseExecutionId,
       options.iteration,
+      options.workflowStack,
     );
     if (!options.requirePrompt) {
       return { phaseExecutionId };
@@ -72,6 +82,7 @@ export class SessionLoggerPhaseTracker {
       options.phase,
       options.phaseExecutionId,
       options.iteration,
+      options.workflowStack,
     );
   }
 
@@ -80,13 +91,14 @@ export class SessionLoggerPhaseTracker {
     phase: 1 | 2 | 3,
     phaseExecutionId: string | undefined,
     iteration: number | undefined,
+    workflowStack: readonly WorkflowResumePointEntry[] | undefined,
   ): string {
     if (phaseExecutionId) {
       return phaseExecutionId;
     }
 
     const resolvedIteration = requireIteration(stepName, phase, iteration);
-    const key = buildExecutionCounterKey(stepName, phase, resolvedIteration);
+    const key = buildExecutionCounterKey(stepName, phase, resolvedIteration, workflowStack);
     const current = this.executionCounters.get(key) ?? 0;
     const next = current + 1;
     this.executionCounters.set(key, next);
@@ -95,6 +107,7 @@ export class SessionLoggerPhaseTracker {
       iteration: resolvedIteration,
       phase,
       sequence: next,
+      workflowStack,
     });
   }
 
@@ -103,13 +116,14 @@ export class SessionLoggerPhaseTracker {
     phase: 1 | 2 | 3,
     phaseExecutionId: string | undefined,
     iteration: number | undefined,
+    workflowStack: readonly WorkflowResumePointEntry[] | undefined,
   ): string {
     if (phaseExecutionId) {
       return phaseExecutionId;
     }
 
     const resolvedIteration = requireIteration(stepName, phase, iteration);
-    const key = buildExecutionCounterKey(stepName, phase, resolvedIteration);
+    const key = buildExecutionCounterKey(stepName, phase, resolvedIteration, workflowStack);
     const current = this.executionCounters.get(key);
     if (current == null) {
       throw new Error(`Missing phase execution id on completion for ${stepName}:${phase}`);
@@ -119,6 +133,7 @@ export class SessionLoggerPhaseTracker {
       iteration: resolvedIteration,
       phase,
       sequence: current,
+      workflowStack,
     });
   }
 }

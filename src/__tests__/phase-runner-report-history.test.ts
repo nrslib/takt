@@ -58,6 +58,7 @@ function createContext(
   const context = {
     cwd: reportDir,
     reportDir,
+    executionScope: { kind: 'workflow_execution_scope', stack: [] },
     lastResponse: currentLastResponse,
     resolveSessionKey: (step) => step.persona ?? step.name,
     getSessionId: (_persona: string) => currentSessionId,

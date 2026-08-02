@@ -1,6 +1,8 @@
 import type {
   NdjsonInteractiveEnd,
   NdjsonInteractiveStart,
+  NdjsonWorkflowCallComplete,
+  NdjsonWorkflowCallStart,
   NdjsonPhaseComplete,
   NdjsonPhaseJudgeStage,
   NdjsonPhaseStart,
@@ -16,20 +18,27 @@ import type {
   WorkflowState,
   WorkflowStep,
 } from '../../../core/models/index.js';
-import type { JudgeStageEntry, PhasePromptParts, StepProviderInfo } from '../../../core/workflow/types.js';
+import type {
+  JudgeStageEntry,
+  PhasePromptParts,
+  StepProviderInfo,
+  WorkflowCallCompleteLifecycle,
+  WorkflowCallLifecycle,
+} from '../../../core/workflow/types.js';
 import { redactProviderOptions } from '../../../core/workflow/providerOptionsRedaction.js';
 import { toJudgmentMatchMethod } from '../../../core/logging/contracts.js';
 import type { InteractiveMetadata } from './types.js';
 
 type SanitizeText = (text: string) => string;
 
-function serializeWorkflowStack(stack: WorkflowResumePointEntry[] | undefined): {
+function serializeWorkflowStack(stack: readonly WorkflowResumePointEntry[] | undefined): {
   workflow?: string;
   stack?: Array<{
     workflow: string;
     workflow_ref?: string;
     step: string;
     kind: 'agent' | 'system' | 'workflow_call';
+    call_instance?: number;
   }>;
 } {
   if (!stack || stack.length === 0) {
@@ -43,7 +52,51 @@ function serializeWorkflowStack(stack: WorkflowResumePointEntry[] | undefined): 
       ...(entry.workflow_ref ? { workflow_ref: entry.workflow_ref } : {}),
       step: entry.step,
       kind: entry.kind,
+      ...(entry.call_instance !== undefined ? { call_instance: entry.call_instance } : {}),
     })),
+  };
+}
+
+export function buildWorkflowCallStartRecord(
+  lifecycle: WorkflowCallLifecycle,
+): NdjsonWorkflowCallStart {
+  const scope = serializeWorkflowStack(lifecycle.stack);
+  if (scope.workflow === undefined || scope.stack === undefined) {
+    throw new Error(`workflow_call "${lifecycle.step}" requires a non-empty call stack`);
+  }
+  return {
+    type: 'workflow_call_start',
+    workflow: lifecycle.parentWorkflow,
+    step: lifecycle.step,
+    childWorkflow: lifecycle.childWorkflow,
+    callInstance: lifecycle.callInstance,
+    stack: scope.stack,
+    timestamp: new Date().toISOString(),
+  };
+}
+
+export function buildWorkflowCallCompleteRecord(
+  lifecycle: WorkflowCallCompleteLifecycle,
+  sanitizeText: SanitizeText,
+): NdjsonWorkflowCallComplete {
+  const start = buildWorkflowCallStartRecord(lifecycle);
+  return {
+    ...start,
+    type: 'workflow_call_complete',
+    status: lifecycle.result.status,
+    ...(lifecycle.result.status === 'completed' && lifecycle.result.returnValue !== undefined
+      ? { returnValue: sanitizeText(lifecycle.result.returnValue) }
+      : {}),
+    ...(lifecycle.result.status === 'aborted' && lifecycle.result.abortKind !== undefined
+      ? { abortKind: lifecycle.result.abortKind }
+      : {}),
+    ...(lifecycle.result.status === 'aborted' && lifecycle.result.abortReason !== undefined
+      ? { abortReason: sanitizeText(lifecycle.result.abortReason) }
+      : {}),
+    ...(lifecycle.result.status === 'failed'
+      ? { reason: sanitizeText(lifecycle.result.reason) }
+      : {}),
+    timestamp: new Date().toISOString(),
   };
 }
 
@@ -68,7 +121,7 @@ export function buildPhaseStartRecord(
   phaseName: 'execute' | 'report' | 'judge',
   instruction: string,
   promptParts: PhasePromptParts,
-  workflowStack: WorkflowResumePointEntry[] | undefined,
+  workflowStack: readonly WorkflowResumePointEntry[] | undefined,
   phaseExecutionId: string,
   iteration: number | undefined,
   sanitizeText: SanitizeText,
@@ -95,7 +148,7 @@ export function buildPhaseCompleteRecord(
   content: string,
   phaseStatus: string,
   phaseError: string | undefined,
-  workflowStack: WorkflowResumePointEntry[] | undefined,
+  workflowStack: readonly WorkflowResumePointEntry[] | undefined,
   phaseExecutionId: string,
   iteration: number | undefined,
   completedAt: string,
@@ -144,7 +197,7 @@ export function buildPhaseJudgeStageRecord(
   phase: 3,
   phaseName: 'judge',
   entry: JudgeStageEntry,
-  workflowStack: WorkflowResumePointEntry[] | undefined,
+  workflowStack: readonly WorkflowResumePointEntry[] | undefined,
   phaseExecutionId: string,
   iteration: number | undefined,
   sanitizeText: SanitizeText,
@@ -170,7 +223,7 @@ export function buildStepStartRecord(
   step: WorkflowStep,
   iteration: number,
   instruction: string | undefined,
-  workflowStack: WorkflowResumePointEntry[] | undefined,
+  workflowStack: readonly WorkflowResumePointEntry[] | undefined,
   sanitizeText: SanitizeText,
   providerInfo?: StepProviderInfo,
 ): NdjsonStepStart {
@@ -196,7 +249,7 @@ export function buildStepCompleteRecord(
   response: AgentResponse,
   instruction: string,
   iteration: number,
-  workflowStack: WorkflowResumePointEntry[] | undefined,
+  workflowStack: readonly WorkflowResumePointEntry[] | undefined,
   sanitizeText: SanitizeText,
 ): NdjsonStepComplete {
   const matchMethod = toJudgmentMatchMethod(response.matchedRuleMethod);

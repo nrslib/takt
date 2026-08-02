@@ -25,6 +25,150 @@ afterEach(() => {
 });
 
 describe('SessionLogger', () => {
+  it('workflow_call lifecycle を iteration や provider のない制御レコードとして書き出す', () => {
+    const logsDir = createTempLogsDir();
+    const ndjsonPath = initNdjsonLog('session-workflow-call', 'task', 'parent', { logsDir });
+    const logger = new SessionLogger(ndjsonPath, true);
+    const lifecycle = {
+      parentWorkflow: 'parent',
+      step: 'delegate',
+      childWorkflow: 'shared/review',
+      callInstance: 2,
+      stack: [
+        {
+          workflow: 'parent',
+          step: 'delegate',
+          kind: 'workflow_call' as const,
+          call_instance: 2,
+        },
+      ],
+    };
+
+    logger.onWorkflowCallStart(lifecycle);
+    logger.onWorkflowCallComplete({
+      ...lifecycle,
+      result: {
+        status: 'completed',
+        returnValue: 'approved',
+      },
+    });
+
+    const records = readFileSync(ndjsonPath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const start = records.find((record) => record.type === 'workflow_call_start');
+    const complete = records.find((record) => record.type === 'workflow_call_complete');
+
+    expect(start).toMatchObject({
+      type: 'workflow_call_start',
+      workflow: 'parent',
+      step: 'delegate',
+      childWorkflow: 'shared/review',
+      callInstance: 2,
+      stack: lifecycle.stack,
+    });
+    expect(complete).toMatchObject({
+      type: 'workflow_call_complete',
+      workflow: 'parent',
+      step: 'delegate',
+      childWorkflow: 'shared/review',
+      callInstance: 2,
+      stack: lifecycle.stack,
+      status: 'completed',
+      returnValue: 'approved',
+    });
+    for (const record of [start, complete]) {
+      expect(record).not.toHaveProperty('iteration');
+      expect(record).not.toHaveProperty('provider');
+      expect(record).not.toHaveProperty('model');
+      expect(record).not.toHaveProperty('persona');
+    }
+  });
+
+  it('failed workflow_call reason を秘匿化して NDJSON から trace へ保持する', () => {
+    const logsDir = createTempLogsDir();
+    const ndjsonPath = initNdjsonLog('session-workflow-call-failed', 'task', 'parent', { logsDir });
+    const logger = new SessionLogger(ndjsonPath, false);
+    const lifecycle = {
+      parentWorkflow: 'parent',
+      step: 'delegate',
+      childWorkflow: 'shared/review',
+      callInstance: 1,
+      stack: [{
+        workflow: 'parent',
+        step: 'delegate',
+        kind: 'workflow_call' as const,
+        call_instance: 1,
+      }],
+    };
+
+    logger.onWorkflowCallStart(lifecycle);
+    logger.onWorkflowCallComplete({
+      ...lifecycle,
+      result: {
+        status: 'failed',
+        reason: 'token=super-secret',
+      },
+    });
+
+    const records = logger.getNdjsonRecords();
+    const trace = buildTraceFromRecords(records, [], '2026-08-01T00:00:00.000Z');
+    expect(records.find((record) => record.type === 'workflow_call_complete')).toMatchObject({
+      status: 'failed',
+      reason: 'token=[REDACTED]',
+    });
+    expect(trace.workflowCalls[0]?.result).toEqual({
+      status: 'failed',
+      reason: 'token=[REDACTED]',
+    });
+  });
+
+  it('aborted workflow_call を iteration なしで NDJSON から trace へ保持する', () => {
+    const logsDir = createTempLogsDir();
+    const ndjsonPath = initNdjsonLog('session-workflow-call-aborted', 'task', 'parent', { logsDir });
+    const logger = new SessionLogger(ndjsonPath, true);
+    const lifecycle = {
+      parentWorkflow: 'parent',
+      step: 'delegate',
+      childWorkflow: 'shared/review',
+      callInstance: 1,
+      stack: [{
+        workflow: 'parent',
+        step: 'delegate',
+        kind: 'workflow_call' as const,
+        call_instance: 1,
+      }],
+    };
+
+    logger.onWorkflowCallStart(lifecycle);
+    logger.onWorkflowCallComplete({
+      ...lifecycle,
+      result: {
+        status: 'aborted',
+        abortKind: 'iteration_limit',
+        abortReason: 'Maximum steps reached',
+      },
+    });
+
+    const records = logger.getNdjsonRecords();
+    const complete = records.find((record) => record.type === 'workflow_call_complete');
+    const trace = buildTraceFromRecords(records, [], '2026-08-01T00:00:00.000Z');
+    expect(complete).toMatchObject({
+      status: 'aborted',
+      abortKind: 'iteration_limit',
+      abortReason: 'Maximum steps reached',
+      stack: lifecycle.stack,
+    });
+    expect(complete).not.toHaveProperty('iteration');
+    expect(trace.steps).toEqual([]);
+    expect(trace.workflowCalls[0]?.result).toEqual({
+      status: 'aborted',
+      abortKind: 'iteration_limit',
+      abortReason: 'Maximum steps reached',
+    });
+  });
+
   it('subworkflow stack を step/phase records にそのまま書き出す', () => {
     const logsDir = createTempLogsDir();
     const ndjsonPath = initNdjsonLog('session-1', 'task', 'parent', { logsDir });

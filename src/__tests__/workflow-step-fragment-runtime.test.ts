@@ -176,7 +176,7 @@ describe('workflow step fragment runtime contract', () => {
       testCwds.push(cwd);
       writeFile(cwd, 'src/reviewed.ts', 'export const reviewed = true;\n');
       initializeGitFixture(cwd, ['src/reviewed.ts']);
-      const engine = new WorkflowEngine(config, cwd, 'test task', { projectCwd: cwd });
+      const engine = new WorkflowEngine(config, cwd, 'test task', { projectCwd: cwd, provider: 'mock' });
       engines.push(engine);
       const transitions: string[] = [];
       const cycleCounts: number[] = [];
@@ -299,7 +299,7 @@ describe('workflow step fragment runtime contract', () => {
       testCwds.push(cwd);
       writeFile(cwd, 'src/reviewed.ts', 'export const reviewed = true;\n');
       initializeGitFixture(cwd, ['src/reviewed.ts']);
-      const engine = new WorkflowEngine(config, cwd, 'test task', { projectCwd: cwd });
+      const engine = new WorkflowEngine(config, cwd, 'test task', { projectCwd: cwd, provider: 'mock' });
       engines.push(engine);
       let resumePoint: ReturnType<WorkflowEngine['getResumePoint']>;
       engine.on('step:start', (step) => {
@@ -329,6 +329,7 @@ describe('workflow step fragment runtime contract', () => {
       initializeGitFixture(cwd, ['src/fixed.ts']);
       const engine = new WorkflowEngine(config, cwd, 'test task', {
         projectCwd: cwd,
+        provider: 'mock',
         startStep: 'fix',
         initialIteration: resumePoint.iteration,
         resumePoint,

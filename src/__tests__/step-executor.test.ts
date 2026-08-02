@@ -2,12 +2,18 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { StepExecutor, type StepExecutorDeps } from '../core/workflow/engine/StepExecutor.js';
+import { StepExecutor, type PreparedNormalStepExecution, type StepExecutorDeps } from '../core/workflow/engine/StepExecutor.js';
 import { createStructuredOutputNormalizerRegistry } from '../core/workflow/engine/structured-output-normalizer.js';
-import type { WorkflowState } from '../core/models/types.js';
+import type { AgentWorkflowStep, WorkflowState, WorkflowStep } from '../core/models/types.js';
 import type { RunPaths } from '../core/workflow/run/run-paths.js';
 import { makeStep } from './test-helpers.js';
 import { createTeamLeaderPlanningStep } from '../core/workflow/engine/team-leader-common.js';
+import { buildPhaseExecutionId } from '../shared/utils/phaseExecutionId.js';
+
+const eventAttribution = {
+  iteration: 1,
+  scope: { kind: 'workflow_execution_scope', stack: [] },
+} as const;
 
 vi.mock('../agents/agent-usecases.js', () => ({
   executeAgent: vi.fn(),
@@ -42,6 +48,18 @@ function makeState(): WorkflowState {
     personaSessions: new Map(),
     stepIterations: new Map(),
     status: 'running',
+  };
+}
+
+function preparedExecution(
+  step: WorkflowStep,
+  phase1Instruction: string,
+): PreparedNormalStepExecution {
+  return {
+    executableStep: step as AgentWorkflowStep,
+    phase1Instruction,
+    stepIteration: 1,
+    rollbackPreparation: vi.fn(),
   };
 }
 
@@ -141,11 +159,10 @@ describe('StepExecutor', () => {
     const { instruction } = await executor.runNormalStep(
       step,
       state,
-      'test task',
-      5,
       vi.fn(),
-      'Plan the next follow-up action.',
       undefined,
+      preparedExecution(step, 'Plan the next follow-up action.'),
+      eventAttribution,
     );
 
     expect(onPhaseStart).toHaveBeenCalledWith(
@@ -157,8 +174,9 @@ describe('StepExecutor', () => {
         systemPrompt: 'system prompt',
         userInstruction: instruction,
       },
-      'implement:3:1:1',
+      buildPhaseExecutionId({ step: 'implement', iteration: 3, phase: 1, sequence: 1 }),
       3,
+      eventAttribution.scope,
     );
     expect(onPhaseStart).not.toHaveBeenCalledWith(
       step,
@@ -279,6 +297,7 @@ describe('StepExecutor', () => {
           reportDir,
           language: 'en',
           lastResponse: 'No findings.',
+          executionScope: eventAttribution.scope,
           getSessionId: () => undefined,
           resolveSessionKey: () => 'reviewer:claude',
           buildResumeOptions: () => ({}),
@@ -337,9 +356,10 @@ describe('StepExecutor', () => {
     await expect(executor.runNormalStep(
       step,
       state,
-      'review task',
-      5,
       vi.fn(),
+      undefined,
+      undefined as never,
+      eventAttribution,
     )).rejects.toThrow('requires prepared execution input');
 
     const preparedExecution = executor.prepareNormalStepExecution(
@@ -357,12 +377,10 @@ describe('StepExecutor', () => {
     await expect(executor.runNormalStep(
       step,
       state,
-      'review task',
-      5,
       vi.fn(),
       undefined,
-      undefined,
       preparedExecutionWithoutFindingContractContext,
+      eventAttribution,
     )).rejects.toThrow(`Prepared reviewer step "${step.name}" is missing finding contract context`);
 
     const {
@@ -372,24 +390,19 @@ describe('StepExecutor', () => {
     await expect(executor.runNormalStep(
       step,
       state,
-      'review task',
-      5,
       vi.fn(),
-      undefined,
       undefined,
       {
         ...preparedExecution,
         findingContractContext: findingContractContextWithoutStructuredOutput,
       },
+      eventAttribution,
     )).rejects.toThrow(`Prepared reviewer step "${step.name}" is missing raw findings structured output`);
 
     await expect(executor.runNormalStep(
       step,
       state,
-      'review task',
-      5,
       vi.fn(),
-      undefined,
       undefined,
       {
         ...preparedExecution,
@@ -398,6 +411,7 @@ describe('StepExecutor', () => {
           structuredOutput: createRawFindingsStructuredOutput(evidence.snapshotId),
         },
       },
+      eventAttribution,
     )).rejects.toThrow(`Prepared reviewer step "${step.name}" has mismatched structured output`);
 
     const actualContractIntake = await vi.importActual<typeof import('../core/workflow/findings/contract-intake.js')>(
@@ -407,12 +421,10 @@ describe('StepExecutor', () => {
     const result = await executor.runNormalStep(
       step,
       state,
-      'review task',
-      5,
       vi.fn(),
       undefined,
-      undefined,
       preparedExecution,
+      eventAttribution,
     );
 
     expect(buildFindingContractInstructionContext).toHaveBeenCalledWith(step, true);
@@ -562,7 +574,14 @@ describe('StepExecutor', () => {
       getFindingCallNamespace: () => '',
     };
 
-    const instruction = new StepExecutor(deps).buildInstruction(step, 1, state, 'implement feature', 5);
+    const instruction = new StepExecutor(deps).buildInstruction(
+      step,
+      1,
+      state,
+      'implement feature',
+      5,
+      { iteration: 1 },
+    );
 
     expect(instruction).toContain(previousTail);
     expect(instruction).toContain('x'.repeat(2500));
@@ -608,8 +627,10 @@ describe('StepExecutor', () => {
       makeState(),
       'task',
       5,
-      undefined,
-      { mode: 'omit' },
+      {
+        iteration: 1,
+        findingContractPolicy: { mode: 'omit' },
+      },
     );
 
     expect(buildFindingContractInstructionContext).not.toHaveBeenCalled();
@@ -680,11 +701,10 @@ describe('StepExecutor', () => {
       executor.runNormalStep(
         step,
         state,
-        'test task',
-        5,
         vi.fn(),
-        'Plan the next follow-up action.',
         undefined,
+        preparedExecution(step, 'Plan the next follow-up action.'),
+        eventAttribution,
       ),
     ).rejects.toThrow('Step "implement" requires structured_output for provider "cursor": $.result is required');
   });
@@ -752,11 +772,10 @@ describe('StepExecutor', () => {
       executor.runNormalStep(
         step,
         state,
-        'test task',
-        5,
         vi.fn(),
-        'Plan the next follow-up action.',
         undefined,
+        preparedExecution(step, 'Plan the next follow-up action.'),
+        eventAttribution,
       ),
     ).rejects.toThrow(
       'Step "implement" requires structured_output for provider "cursor": $.extra is not allowed by the schema',
@@ -830,11 +849,10 @@ describe('StepExecutor', () => {
     const { response } = await executor.runNormalStep(
       step,
       state,
-      'test task',
-      5,
       vi.fn(),
-      'Plan the next follow-up action.',
       undefined,
+      preparedExecution(step, 'Plan the next follow-up action.'),
+      eventAttribution,
     );
 
     expect(response.structuredOutput).toEqual({
@@ -905,11 +923,10 @@ describe('StepExecutor', () => {
       executor.runNormalStep(
         step,
         state,
-        'test task',
-        5,
         vi.fn(),
-        'Plan the next follow-up action.',
         undefined,
+        preparedExecution(step, 'Plan the next follow-up action.'),
+        eventAttribution,
       ),
     ).rejects.toThrow('Step "implement" requires structured_output for provider "claude"');
   });
@@ -978,11 +995,10 @@ describe('StepExecutor', () => {
       executor.runNormalStep(
         step,
         state,
-        'test task',
-        5,
         vi.fn(),
-        'Plan the next follow-up action.',
         undefined,
+        preparedExecution(step, 'Plan the next follow-up action.'),
+        eventAttribution,
       ),
     ).rejects.toThrow('Step "implement" requires structured_output for provider "claude": $.result is required');
   });
@@ -1054,11 +1070,10 @@ describe('StepExecutor', () => {
       executor.runNormalStep(
         step,
         state,
-        'test task',
-        5,
         vi.fn(),
-        'Plan the next follow-up action.',
         undefined,
+        preparedExecution(step, 'Plan the next follow-up action.'),
+        eventAttribution,
       ),
     ).rejects.toThrow(
       'Step "implement" requires structured_output for provider "claude": $.extra is not allowed by the schema',

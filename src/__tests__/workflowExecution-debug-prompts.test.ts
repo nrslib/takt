@@ -4,6 +4,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { WorkflowConfig } from '../core/models/index.js';
+import type { WorkflowExecutionScope } from '../core/workflow/workflow-execution-scope.js';
 import { buildPhaseExecutionId } from '../shared/utils/phaseExecutionId.js';
 
 const {
@@ -21,6 +22,7 @@ const {
   class MockWorkflowEngine extends EE {
     private config: WorkflowConfig;
     private task: string;
+    private readonly executionScope: WorkflowExecutionScope;
 
     constructor(config: WorkflowConfig, _cwd: string, task: string, _options: unknown) {
       super();
@@ -29,9 +31,21 @@ const {
       }
       this.config = config;
       this.task = task;
+      this.executionScope = Object.freeze({
+        kind: 'workflow_execution_scope',
+        stack: Object.freeze([Object.freeze({
+          workflow: this.config.name,
+          step: this.config.steps[0]!.name,
+          kind: 'agent',
+        })]),
+      });
     }
 
     abort(): void {}
+
+    private emitScoped(eventName: string, ...args: unknown[]): boolean {
+      return super.emit(eventName, ...args, this.executionScope);
+    }
 
     async run(): Promise<{ status: string; iteration: number }> {
       const step = this.config.steps[0]!;
@@ -42,7 +56,7 @@ const {
       const shouldEmitSensitive = this.task === 'sensitive-content-task';
       const shouldRepeatStep = this.task === 'repeat-step-task';
       const shouldReversePhaseCompletion = this.task === 'reverse-phase-complete-task';
-      const providerInfo = { provider: undefined, model: undefined };
+      const providerInfo = { provider: 'mock', model: undefined };
       const executePhaseId = buildPhaseExecutionId({
         step: step.name,
         iteration: 1,
@@ -61,34 +75,44 @@ const {
         phase: 3,
         sequence: 1,
       });
-      this.emit('step:start', step, 1, 'step instruction', providerInfo, this.config.name, step.name, 1);
+      this.emitScoped(
+        'step:start',
+        step,
+        1,
+        'step instruction',
+        providerInfo,
+        this.config.name,
+        step.name,
+        1,
+        this.config.maxSteps,
+      );
       if (shouldReversePhaseCompletion) {
-        this.emit('phase:start', step, 1, 'execute', 'phase prompt first', {
+        this.emitScoped('phase:start', step, 1, 'execute', 'phase prompt first', {
           systemPrompt: '../agents/coder.md',
           userInstruction: 'phase prompt first',
         }, executePhaseId, 1);
-        this.emit('phase:start', step, 1, 'execute', 'phase prompt second', {
+        this.emitScoped('phase:start', step, 1, 'execute', 'phase prompt second', {
           systemPrompt: '../agents/coder.md',
           userInstruction: 'phase prompt second',
         }, executePhaseSecondId, 1);
       } else {
-        this.emit('phase:start', step, 1, 'execute', shouldEmitSensitive ? 'token=plain-secret' : 'phase prompt', {
+        this.emitScoped('phase:start', step, 1, 'execute', shouldEmitSensitive ? 'token=plain-secret' : 'phase prompt', {
           systemPrompt: shouldEmitSensitive ? 'Authorization: Bearer super-secret-token' : '../agents/coder.md',
           userInstruction: shouldEmitSensitive ? 'api_key=plain-secret' : 'phase prompt',
         }, executePhaseId, 1);
       }
-      this.emit('phase:start', step, 3, 'judge', 'phase3 prompt', {
+      this.emitScoped('phase:start', step, 3, 'judge', 'phase3 prompt', {
         systemPrompt: 'conductor',
         userInstruction: 'phase3 prompt',
       }, judgePhaseId, 1);
-      this.emit('phase:judge_stage', step, 3, 'judge', {
+      this.emitScoped('phase:judge_stage', step, 3, 'judge', {
         stage: 1,
         method: 'structured_output',
         status: 'done',
         instruction: 'judge stage prompt',
         response: 'judge stage response',
       }, judgePhaseId, 1);
-      this.emit('phase:complete', step, 3, 'judge', '[IMPLEMENT:1]', 'done', undefined, judgePhaseId, 1);
+      this.emitScoped('phase:complete', step, 3, 'judge', '[IMPLEMENT:1]', 'done', undefined, judgePhaseId, 1);
       if (shouldAbortBeforeComplete) {
         this.emit(
           'workflow:abort',
@@ -99,19 +123,19 @@ const {
         return { status: 'aborted', iteration: 1 };
       }
       if (shouldReversePhaseCompletion) {
-        this.emit('phase:complete', step, 1, 'execute', 'phase response second', 'done', undefined, executePhaseSecondId, 1);
-        this.emit('phase:complete', step, 1, 'execute', 'phase response first', 'done', undefined, executePhaseId, 1);
+        this.emitScoped('phase:complete', step, 1, 'execute', 'phase response second', 'done', undefined, executePhaseSecondId, 1);
+        this.emitScoped('phase:complete', step, 1, 'execute', 'phase response first', 'done', undefined, executePhaseId, 1);
       } else {
-        this.emit('phase:complete', step, 1, 'execute', shouldEmitSensitive ? 'password=plain-secret' : 'phase response', 'done', undefined, executePhaseId, 1);
+        this.emitScoped('phase:complete', step, 1, 'execute', shouldEmitSensitive ? 'password=plain-secret' : 'phase response', 'done', undefined, executePhaseId, 1);
       }
       if (shouldDuplicatePhase) {
-        this.emit('phase:start', step, 1, 'execute', 'phase prompt second', {
+        this.emitScoped('phase:start', step, 1, 'execute', 'phase prompt second', {
           systemPrompt: '../agents/coder.md',
           userInstruction: 'phase prompt second',
         }, executePhaseSecondId, 1);
-        this.emit('phase:complete', step, 1, 'execute', 'phase response second', 'done', undefined, executePhaseSecondId, 1);
+        this.emitScoped('phase:complete', step, 1, 'execute', 'phase response second', 'done', undefined, executePhaseSecondId, 1);
       }
-      this.emit(
+      this.emitScoped(
         'step:complete',
         step,
         {
@@ -124,7 +148,7 @@ const {
         step.name,
       );
       if (shouldRepeatStep) {
-        this.emit(
+        this.emitScoped(
           'step:start',
           step,
           2,
@@ -133,8 +157,9 @@ const {
           this.config.name,
           step.name,
           2,
+          this.config.maxSteps,
         );
-        this.emit(
+        this.emitScoped(
           'step:complete',
           step,
           {

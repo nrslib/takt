@@ -825,7 +825,18 @@ describe('OptionsBuilder.buildFallbackReportOptions', () => {
     };
 
     // When
-    const ctx = builder.buildPhaseRunnerContext(step, state, 'Phase 1 response', vi.fn());
+    const ctx = builder.buildPhaseRunnerContext(
+      step,
+      state,
+      'Phase 1 response',
+      vi.fn(),
+      {
+        eventAttribution: {
+          iteration: 1,
+          scope: { kind: 'workflow_execution_scope', stack: [] },
+        },
+      },
+    );
     ctx.onStream?.({ type: 'text', data: { text: 'Phase 2 response' } });
     const options = ctx.buildFallbackReportOptions(step, {
       cwd: '/project',
@@ -1118,23 +1129,12 @@ describe('OptionsBuilder.buildAgentOptions', () => {
     );
   });
 
-  it('fails fast when structured_output is used without a resolved provider', () => {
-    const step = createStep({
-      structuredOutput: {
-        schema: {
-          type: 'object',
-          properties: {
-            result: { type: 'string' },
-          },
-          required: ['result'],
-          additionalProperties: false,
-        },
-      },
-    });
+  it('fails fast before agent option construction when provider is unresolved', () => {
+    const step = createStep();
     const builder = createBuilder(step, { provider: undefined });
 
     expect(() => builder.buildAgentOptions(step)).toThrow(
-      /structured_output.*provider is not resolved/i,
+      'Step "reviewers" has no resolved provider',
     );
   });
 

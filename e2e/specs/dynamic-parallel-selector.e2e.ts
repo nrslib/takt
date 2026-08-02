@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createIsolatedEnv, type IsolatedEnv, updateIsolatedConfig } from '../helpers/isolated-env';
 import { runTakt } from '../helpers/takt-runner';
@@ -9,6 +9,7 @@ import { readSessionRecords } from '../helpers/session-log';
 function writeDynamicParallelFixture(
   repoPath: string,
   selectedIds: readonly string[] = ['frontend'],
+  maxSteps = 1,
 ): { workflowPath: string; scenarioPath: string } {
   const workflowDir = join(repoPath, '.takt', 'workflows');
   const agentsDir = join(workflowDir, 'agents');
@@ -21,7 +22,7 @@ function writeDynamicParallelFixture(
   writeFileSync(workflowPath, [
     'name: dynamic-parallel-selector',
     'initial_step: reviewers',
-    'max_steps: 1',
+    `max_steps: ${maxSteps}`,
     'steps:',
     '  - name: reviewers',
     '    parallel:',
@@ -556,7 +557,7 @@ describe('E2E: dynamic parallel selector (mock)', () => {
   }, 240_000);
 
   it('should resume with the saved selection without invoking the selector again', () => {
-    const { workflowPath } = writeDynamicParallelFixture(testRepo.path);
+    const { workflowPath } = writeDynamicParallelFixture(testRepo.path, ['frontend'], 2);
     const firstScenarioPath = join(testRepo.path, '.takt', 'dynamic-parallel-resume-first.json');
     const resumedScenarioPath = join(testRepo.path, '.takt', 'dynamic-parallel-resume-second.json');
     const resumedCallLogPath = join(testRepo.path, '.takt-mock-resume-calls.ndjson');
@@ -610,6 +611,7 @@ describe('E2E: dynamic parallel selector (mock)', () => {
     });
 
     expect(resumedRun.exitCode, `${resumedRun.stdout}\n${resumedRun.stderr}`).toBe(0);
+    expect(existsSync(resumedCallLogPath), `${resumedRun.stdout}\n${resumedRun.stderr}`).toBe(true);
     const resumedStarts = readJsonl(resumedCallLogPath)
       .filter((record) => record.event === 'start');
     const personaNames = resumedStarts.map((record) => record.personaName);

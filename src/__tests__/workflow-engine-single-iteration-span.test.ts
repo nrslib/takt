@@ -66,9 +66,14 @@ import {
   createTestTmpDir,
   makeResponse,
   makeRule,
-  makeStep,
+  makeStep as makeStepWithoutProvider,
   mockRunAgentSequence,
 } from './engine-test-helpers.js';
+
+const makeStep = (
+  name: string,
+  overrides: Parameters<typeof makeStepWithoutProvider>[1] = {},
+) => makeStepWithoutProvider(name, { provider: 'mock', ...overrides });
 
 describe('WorkflowEngine workflow span outcome', () => {
   let tmpDir: string;
@@ -95,7 +100,7 @@ describe('WorkflowEngine workflow span outcome', () => {
         }),
       ],
     });
-    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock' });
     mockRunAgentSequence([
       makeResponse({
         persona: 'plan',
@@ -136,7 +141,7 @@ describe('WorkflowEngine workflow span outcome', () => {
         throw new Error('prepare failed');
       }
     });
-    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock' });
 
     await expect(engine.runSingleIteration()).rejects.toThrow('prepare failed');
 
@@ -162,7 +167,7 @@ describe('WorkflowEngine workflow span outcome', () => {
         }),
       ],
     });
-    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock' });
     mockRunAgentSequence([
       makeResponse({
         persona: 'plan',
@@ -200,6 +205,7 @@ describe('WorkflowEngine workflow span outcome', () => {
     });
     const engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
+      provider: 'mock',
       onIterationLimit: async () => {
         throw new Error('limit handler failed');
       },

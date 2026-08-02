@@ -301,7 +301,6 @@ steps:
     writeWorkflow(projectDir, '.takt/workflows/child-dynamic.yaml', `name: child-dynamic
 subworkflow:
   callable: true
-max_steps: 1
 initial_step: reviewers
 steps:
   - name: reviewers
@@ -908,7 +907,6 @@ subworkflow:
   callable: true
   returns: [ok]
 initial_step: work
-max_steps: 3
 steps:
   - name: work
     instruction: do the delegated work
@@ -1166,7 +1164,6 @@ steps:
     const filePath = writeWorkflow(projectDir, '.takt/workflows/report-ref-callable.yaml', `name: report-ref-callable
 subworkflow:
   callable: true
-max_steps: 10
 initial_step: step1
 steps:
   - name: step1
@@ -1393,7 +1390,6 @@ subworkflow:
       type: facet_ref
       facet_kind: report_format
       default: summary
-max_steps: 10
 initial_step: review
 knowledge:
   architecture: ./facets/knowledge/architecture.md
@@ -1441,7 +1437,6 @@ subworkflow:
       type: facet_ref
       facet_kind: knowledge
       default: architecture
-max_steps: 10
 initial_step: review
 policies:
   strict-review: ./facets/policies/strict-review.md
@@ -1476,7 +1471,6 @@ subworkflow:
       type: facet_ref
       facet_kind: knowledge
       default: strict-review
-max_steps: 10
 initial_step: review
 policies:
   strict-review: ./facets/policies/strict-review.md
@@ -1513,7 +1507,6 @@ subworkflow:
       type: facet_ref
       facet_kind: instruction
       default: linked
-max_steps: 1
 initial_step: review
 instructions:
   linked: ../facets/instructions/linked.md
@@ -1549,7 +1542,6 @@ subworkflow:
       type: facet_ref
       facet_kind: instruction
       default: linked
-max_steps: 1
 initial_step: review
 instructions:
   linked: ../facets/instructions/linked.md
@@ -1578,7 +1570,6 @@ subworkflow:
     review_knowledge:
       type: facet_ref[]
       facet_kind: knowledge
-max_steps: 10
 initial_step: review
 steps:
   - name: review
@@ -1600,7 +1591,6 @@ subworkflow:
   callable: true
   returns: [ok]
 initial_step: review
-max_steps: 3
 steps:
   - name: review
     persona: reviewer
@@ -1618,7 +1608,6 @@ subworkflow:
       facet_kind: knowledge
   returns: [ok]
 initial_step: review
-max_steps: 3
 steps:
   - name: review
     knowledge:
@@ -1647,7 +1636,6 @@ subworkflow:
   callable: true
   returns: [ok]
 initial_step: review
-max_steps: 3
 steps:
   - name: review
     persona: reviewer
@@ -1681,7 +1669,6 @@ subworkflow:
   callable: true
   returns: [ok]
 initial_step: review
-max_steps: 3
 steps:
   - name: review
     persona: reviewer
@@ -1720,7 +1707,6 @@ subworkflow:
   callable: true
   returns: [ok]
 initial_step: review
-max_steps: 3
 steps:
   - name: review
     persona: reviewer
@@ -1734,7 +1720,6 @@ subworkflow:
   callable: true
   returns: [ok]
 initial_step: delegate-grandchild
-max_steps: 3
 steps:
   - name: delegate-grandchild
     kind: workflow_call
@@ -2212,7 +2197,6 @@ steps:
 subworkflow:
   callable: true
 initial_step: review
-max_steps: 3
 steps:
   - name: review
     rules:
@@ -2298,7 +2282,6 @@ steps:
 subworkflow:
   callable: true
 initial_step: review
-max_steps: 3
 steps:
   - name: review
     rules:

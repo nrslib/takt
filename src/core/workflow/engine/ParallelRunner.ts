@@ -44,7 +44,12 @@ import {
 } from '../findings/contract-intake.js';
 import { clarifyAmbiguousRawRelationsOnce, type ReviewerRelationClarification } from '../findings/relation-coherence.js';
 import type { WorkflowCallRunner } from './WorkflowCallRunner.js';
-import type { WorkflowCallIsolatedStateSync, WorkflowCallSessionUpdates } from './WorkflowCallExecutor.js';
+import {
+  requireWorkflowEventAttribution,
+  type WorkflowExecutionScope,
+  type WorkflowEventAttribution,
+} from '../workflow-execution-scope.js';
+import { getWorkflowCallChildExecutionState, type WorkflowCallIsolatedStateSync, type WorkflowCallSessionUpdates } from './WorkflowCallExecutor.js';
 import { compactSessionBeforePhase1 } from './session-compaction.js';
 import { invalidateExpectedPersonaSession, invalidatePersonaSessionIfExpected } from './session-invalidation.js';
 import { recordAgentUsageEvent } from './agent-usage-event.js';
@@ -52,6 +57,12 @@ import { formatWorkflowRuleCondition } from '../../models/workflow-rule-conditio
 import { evaluatePostExecutionRules } from './post-execution-rule-evaluator.js';
 import type { DynamicParallelSelectorCoordinator } from '../dynamic-parallel/selector-coordinator.js';
 import { validateProviderModelRequirements } from '../provider-model-requirements.js';
+import { workflowCallPathFromStack, workflowOwnerPathFromStack } from '../workflow-execution-scope.js';
+import {
+  appendFallbackAttempt,
+  buildRateLimitFallbackContext,
+  pickNextFallbackProvider,
+} from '../rate-limit-fallback.js';
 
 const log = createLogger('parallel-runner');
 
@@ -66,7 +77,7 @@ type ParallelSubStepResult = {
   qualityGateFailure?: boolean;
   workflowCallSessionUpdates?: WorkflowCallSessionUpdates;
   workflowCallStateSync?: WorkflowCallIsolatedStateSync;
-  workflowCallExecutionRejected?: boolean;
+  workflowCallExecutionNeverStarted?: boolean;
 };
 
 type ParallelTerminalStatus = 'error' | 'blocked' | 'rate_limited';
@@ -131,6 +142,7 @@ export interface ParallelRunnerDeps {
   readonly stepExecutor: StepExecutor;
   readonly engineOptions: WorkflowEngineOptions;
   readonly getCwd: () => string;
+  readonly getReportDir: () => string;
   readonly dynamicParallelSelector: DynamicParallelSelectorCoordinator;
   readonly getWorkflowName: () => string;
   readonly getInteractive: () => boolean;
@@ -146,8 +158,15 @@ export interface ParallelRunnerDeps {
   readonly workflowModel?: WorkflowConfig['model'];
   readonly findingLedgerStore?: FindingLedgerStore;
   readonly getWorkflowCallRunner?: () => WorkflowCallRunner;
-  readonly updateMaxSteps: (maxSteps: WorkflowMaxSteps) => void;
   readonly setActiveResumePoint: (step: WorkflowStep, iteration: number) => void;
+  readonly setActiveResumeStack: (
+    stack: readonly WorkflowResumePointEntry[],
+    iteration: number,
+  ) => void;
+  readonly adoptResumeCheckpoint: (
+    resumePoint: import('../../models/types.js').WorkflowResumePoint,
+    iteration: number,
+  ) => void;
   readonly getRunId: () => string;
   /** raw finding id 衝突対策の呼び出し名前空間。トップレベルでは空文字列。 */
   readonly getFindingCallNamespace: () => string;
@@ -165,6 +184,7 @@ export interface ParallelRunnerDeps {
     promptParts: PhasePromptParts,
     phaseExecutionId?: string,
     iteration?: number,
+    scope?: WorkflowExecutionScope,
   ) => void;
   readonly onPhaseComplete?: (
     step: WorkflowStep,
@@ -175,6 +195,7 @@ export interface ParallelRunnerDeps {
     error?: string,
     phaseExecutionId?: string,
     iteration?: number,
+    scope?: WorkflowExecutionScope,
   ) => void;
   readonly onJudgeStage?: (
     step: WorkflowStep,
@@ -183,6 +204,7 @@ export interface ParallelRunnerDeps {
     entry: JudgeStageEntry,
     phaseExecutionId?: string,
     iteration?: number,
+    scope?: WorkflowExecutionScope,
   ) => void;
 }
 
@@ -201,12 +223,14 @@ export class ParallelRunner {
     task: string,
     maxSteps: WorkflowMaxSteps,
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
-    runtime?: RuntimeStepResolution,
-    activeStepIteration?: number,
+    runtime: RuntimeStepResolution | undefined,
+    activeStepIteration: number | undefined,
+    eventAttribution: WorkflowEventAttribution,
   ): Promise<StepRunResult> {
     if (!step.parallel) {
       throw new Error(`Step "${step.name}" has no parallel sub-steps`);
     }
+    const executionScope = eventAttribution.scope;
     const subSteps = isDynamicParallelSubSteps(step.parallel)
       ? await this.deps.dynamicParallelSelector.selectParticipants(step, state, task)
       : step.parallel;
@@ -215,6 +239,18 @@ export class ParallelRunner {
     // manager に渡すため、サブステップ実行で lastOutput が変わる前に捕捉する。
     const priorStepResponseText = state.lastOutput?.content;
     const stepIteration = activeStepIteration ?? incrementStepIteration(state, step.name);
+    const workflowCallResumeStackPrefix = subSteps.some(isWorkflowCallStep)
+      ? this.deps.getCurrentWorkflowStack?.()
+      : undefined;
+    if (
+      subSteps.some(isWorkflowCallStep)
+      && (
+        workflowCallResumeStackPrefix === undefined
+        || workflowCallResumeStackPrefix.at(-1)?.step !== step.name
+      )
+    ) {
+      throw new Error(`Parallel step "${step.name}" requires an active resume stack`);
+    }
     log.debug('Running parallel step', {
       step: step.name,
       subSteps: subSteps.map(s => s.name),
@@ -255,7 +291,7 @@ export class ParallelRunner {
       : undefined;
     const rawFindingsStructuredOutput = findingContractContext?.rawFindingsStructuredOutput;
     const agentSubSteps = subSteps.filter(isAgentParallelSubStep);
-    const configuredProviderInfoByStep = new Map(subSteps.map((subStep) => {
+    const configuredProviderInfoByStep = new Map(agentSubSteps.map((subStep) => {
       const providerInfo = this.deps.optionsBuilder.resolveStepProviderModelBeforeAutoRouting(subStep, runtime);
       validateProviderModelRequirements(providerInfo.provider, providerInfo.model, {
         modelFieldName: `Configuration error: parallel sub-step "${subStep.name}" model`,
@@ -307,7 +343,7 @@ export class ParallelRunner {
           abortSignal: this.deps.engineOptions.abortSignal,
         })
       : new Map();
-    const providerInfoByStep = new Map(subSteps.map((subStep) => {
+    const providerInfoByStep = new Map(agentSubSteps.map((subStep) => {
       const routedProviderInfo = routedProviderInfoByStep.get(subStep.name);
       const subRuntime = routedProviderInfo === undefined
         ? runtime
@@ -327,8 +363,12 @@ export class ParallelRunner {
     // When semaphore is set, at most `concurrency` sub-steps execute simultaneously.
     const subStepStartedAtByName = new Map<string, number>();
     const subStepInstructionByName = new Map<string, string>();
-    const settled = await Promise.allSettled(
-      subSteps.map(async (subStep, index) => {
+    const executeSubStep = async (
+      subStep: WorkflowStep,
+      index: number,
+      overrideRuntime: RuntimeStepResolution | undefined,
+      attemptSequence: number,
+    ): Promise<ParallelSubStepResult> => {
         if (semaphore) {
           await semaphore.acquire();
         }
@@ -337,7 +377,12 @@ export class ParallelRunner {
         try {
           if (isWorkflowCallStep(subStep)) {
             subStepInstructionByName.set(subStep.name, '');
-            return await this.runWorkflowCallSubStep(subStep, state, runtime, startedAt);
+            return await this.runWorkflowCallSubStep(
+              subStep,
+              state,
+              startedAt,
+              workflowCallResumeStackPrefix!,
+            );
           }
           if (!isAgentParallelSubStep(subStep)) {
             throw new Error(`Unsupported parallel sub-step kind for "${subStep.name}"`);
@@ -346,30 +391,40 @@ export class ParallelRunner {
           const executableSubStep = findingContractContext
             ? withFindingContractStructuredOutput(subStep, findingContractContext)
             : subStep;
-          const subRuntime = routedProviderInfoByStep.has(subStep.name)
+          const subRuntime = overrideRuntime ?? (routedProviderInfoByStep.has(subStep.name)
             ? {
                 ...runtime,
                 providerInfo: routedProviderInfoByStep.get(subStep.name)!,
               }
-            : runtime;
-          const subIteration = incrementStepIteration(state, subStep.name);
+            : runtime);
+          const subIteration = overrideRuntime === undefined
+            ? incrementStepIteration(state, subStep.name)
+            : state.stepIterations.get(subStep.name);
+          if (subIteration === undefined) {
+            throw new Error(`Fallback execution requires an existing step iteration for "${subStep.name}"`);
+          }
           const subInstruction = this.deps.stepExecutor.buildInstruction(
             executableSubStep,
             subIteration,
             state,
             task,
             maxSteps,
-            subRuntime?.fallback,
-            findingContractContext === undefined
-              ? undefined
-              : { mode: 'explicit', context: findingContractContext },
+            {
+              iteration: state.iteration,
+              ...(subRuntime?.fallback === undefined ? {} : { fallbackContext: subRuntime.fallback }),
+              ...(findingContractContext === undefined
+                ? {}
+                : { findingContractPolicy: { mode: 'explicit', context: findingContractContext } }),
+            },
           );
           const phase1Instruction = rawFindingsStructuredOutput
             ? this.deps.stepExecutor.buildPhase1Instruction(subInstruction, executableSubStep, subRuntime)
             : subInstruction;
           subStepInstructionByName.set(subStep.name, phase1Instruction);
           const parentIteration = state.iteration;
-          const subPm = providerInfoByStep.get(subStep.name);
+          const subPm = overrideRuntime === undefined
+            ? providerInfoByStep.get(subStep.name)
+            : this.deps.optionsBuilder.resolveStepProviderModel(subStep, overrideRuntime);
           if (subPm === undefined) {
             throw new Error(`Provider preflight result is missing for parallel sub-step "${subStep.name}"`);
           }
@@ -401,7 +456,8 @@ export class ParallelRunner {
           step: subStep.name,
           iteration: parentIteration,
           phase: 1,
-          sequence: 1,
+          sequence: attemptSequence * 2 - 1,
+          workflowStack: [...executionScope.stack],
         });
         let phase1CompletionExecutionId = phaseExecutionId;
 
@@ -418,7 +474,7 @@ export class ParallelRunner {
             };
         agentOptions.onPromptResolved = (promptParts: PhasePromptParts) => {
           resolvedPromptParts = promptParts;
-          this.deps.onPhaseStart?.(subStep, 1, 'execute', phase1Instruction, promptParts, phaseExecutionId, parentIteration);
+          this.deps.onPhaseStart?.(subStep, 1, 'execute', phase1Instruction, promptParts, phaseExecutionId, parentIteration, executionScope);
           didEmitPhaseStart = true;
         };
         let subRelationClarification: ReviewerRelationClarification | undefined;
@@ -432,7 +488,7 @@ export class ParallelRunner {
           phaseName: 'execute',
           instruction: phase1Instruction,
           phaseExecutionId,
-          workflowStack: this.deps.getCurrentWorkflowStack?.(),
+          workflowStack: [...executionScope.stack],
           sanitizeText: this.deps.sanitizeObservabilityText,
           providerInfo: subPm,
           getPromptParts: () => resolvedPromptParts,
@@ -459,7 +515,8 @@ export class ParallelRunner {
             step: subStep.name,
             iteration: parentIteration,
             phase: 1,
-            sequence: 2,
+            sequence: attemptSequence * 2,
+            workflowStack: [...executionScope.stack],
           });
           // 再試行は専用IDで phase:start を発火する（初回IDの二重発火はしない）。
           // onPromptResolved を再試行自身のものに差し替えることで、初回試行が
@@ -470,7 +527,7 @@ export class ParallelRunner {
             sessionId: undefined,
             onPromptResolved: (promptParts: PhasePromptParts) => {
               resolvedPromptParts = promptParts;
-              this.deps.onPhaseStart?.(subStep, 1, 'execute', phase1Instruction, promptParts, retryPhaseExecutionId, parentIteration);
+              this.deps.onPhaseStart?.(subStep, 1, 'execute', phase1Instruction, promptParts, retryPhaseExecutionId, parentIteration, executionScope);
               phase1CompletionExecutionId = retryPhaseExecutionId;
               didEmitPhaseStart = true;
             },
@@ -485,7 +542,7 @@ export class ParallelRunner {
             phaseName: 'execute',
             instruction: phase1Instruction,
             phaseExecutionId: retryPhaseExecutionId,
-            workflowStack: this.deps.getCurrentWorkflowStack?.(),
+            workflowStack: [...executionScope.stack],
             sanitizeText: this.deps.sanitizeObservabilityText,
             providerInfo: subPm,
           }, () => this.executeSubStepAgent(executableSubStep, subPm, phase1Instruction, retryOptions), (result) => ({
@@ -591,7 +648,7 @@ export class ParallelRunner {
         if (subResponse.sessionId !== undefined) {
           updatePersonaSession(subSessionKey, subResponse.sessionId);
         }
-        this.deps.onPhaseComplete?.(subStep, 1, 'execute', subResponse.content, subResponse.status, subResponse.error, phase1CompletionExecutionId, parentIteration);
+        this.deps.onPhaseComplete?.(subStep, 1, 'execute', subResponse.content, subResponse.status, subResponse.error, phase1CompletionExecutionId, parentIteration, executionScope);
         if (
           subResponse.status === 'done'
           && subResponse.structuredOutput === undefined
@@ -618,24 +675,26 @@ export class ParallelRunner {
           state,
           subResponse.content,
           updatePersonaSession,
-          this.deps.onPhaseStart,
-          this.deps.onPhaseComplete,
-          this.deps.onJudgeStage,
-          parentIteration,
-          subRuntime,
-          (
-            providerInfo: NonNullable<StepRunResult['providerInfo']>,
-            success: boolean,
-            usage: AgentResponse['providerUsage'],
-          ): void => {
-            recordAgentUsageEvent(
-              this.deps.engineOptions,
-              subStep.name,
-              'parallel',
-              providerInfo,
-              success,
-              usage,
-            );
+          {
+            eventAttribution: { iteration: parentIteration, scope: executionScope },
+            runtime: subRuntime,
+            onPhaseStart: this.deps.onPhaseStart,
+            onPhaseComplete: this.deps.onPhaseComplete,
+            onJudgeStage: this.deps.onJudgeStage,
+            onProviderAttempt: (
+              providerInfo: NonNullable<StepRunResult['providerInfo']>,
+              success: boolean,
+              usage: AgentResponse['providerUsage'],
+            ): void => {
+              recordAgentUsageEvent(
+                this.deps.engineOptions,
+                subStep.name,
+                'parallel',
+                providerInfo,
+                success,
+                usage,
+              );
+            },
           },
         );
 
@@ -740,8 +799,79 @@ export class ParallelRunner {
             semaphore.release();
           }
         }
-      }),
+    };
+    let settled = await Promise.allSettled(
+      subSteps.map((subStep, index) => executeSubStep(subStep, index, undefined, 1)),
     );
+    settled = await Promise.all(settled.map(async (initialResult, index) => {
+      const subStep = subSteps[index]!;
+      if (
+        initialResult.status === 'rejected'
+        || initialResult.value.response.status !== 'rate_limited'
+        || !isAgentParallelSubStep(subStep)
+      ) {
+        return initialResult;
+      }
+
+      let result = initialResult.value;
+      if (result.providerInfo === undefined) {
+        return {
+          status: 'rejected',
+          reason: new Error(`Rate-limited parallel sub-step "${subStep.name}" is missing provider information`),
+        } satisfies PromiseRejectedResult;
+      }
+      let attempts = appendFallbackAttempt([], result.providerInfo);
+      let attemptSequence = 2;
+      while (result.response.status === 'rate_limited') {
+        const currentProviderInfo = result.providerInfo;
+        if (currentProviderInfo === undefined) {
+          return {
+            status: 'rejected',
+            reason: new Error(`Rate-limited parallel sub-step "${subStep.name}" is missing provider information`),
+          } satisfies PromiseRejectedResult;
+        }
+        const fallback = pickNextFallbackProvider(
+          this.deps.engineOptions.rateLimitFallback?.switchChain,
+          currentProviderInfo,
+          attempts,
+        );
+        if (fallback === undefined) {
+          return { status: 'fulfilled', value: result } satisfies PromiseFulfilledResult<ParallelSubStepResult>;
+        }
+        const fallbackContext = buildRateLimitFallbackContext({
+          step: subStep,
+          response: result.response,
+          current: currentProviderInfo,
+          fallback,
+          originalIteration: state.iteration,
+          reportDir: this.deps.getReportDir(),
+        });
+        const fallbackRuntime: RuntimeStepResolution = {
+          ...runtime,
+          providerInfo: {
+            provider: fallback.provider,
+            model: fallback.model,
+            providerSource: 'step',
+            ...(fallback.model === undefined ? {} : { modelSource: 'step' }),
+          },
+          fallback: fallbackContext,
+        };
+        try {
+          result = await executeSubStep(subStep, index, fallbackRuntime, attemptSequence);
+        } catch (error) {
+          return { status: 'rejected', reason: error } satisfies PromiseRejectedResult;
+        }
+        if (result.providerInfo === undefined) {
+          return {
+            status: 'rejected',
+            reason: new Error(`Fallback parallel sub-step "${subStep.name}" is missing provider information`),
+          } satisfies PromiseRejectedResult;
+        }
+        attempts = appendFallbackAttempt(attempts, result.providerInfo);
+        attemptSequence += 1;
+      }
+      return { status: 'fulfilled', value: result } satisfies PromiseFulfilledResult<ParallelSubStepResult>;
+    }));
 
     // Map settled results: fulfilled → as-is, rejected → error AgentResponse
     const subResults: ParallelSubStepResult[] = settled.map((result, index) => {
@@ -761,6 +891,7 @@ export class ParallelRunner {
       state.stepOutputs.set(failedStep.name, errorResponse);
       const startedAt = subStepStartedAtByName.get(failedStep.name);
       const instruction = subStepInstructionByName.get(failedStep.name);
+      const childExecutionState = getWorkflowCallChildExecutionState(result.reason);
       return {
         subStep: failedStep,
         response: errorResponse,
@@ -769,19 +900,31 @@ export class ParallelRunner {
         durationMs: startedAt === undefined
           ? 0
           : Math.max(0, errorResponse.timestamp.getTime() - startedAt),
-        ...(isWorkflowCallStep(failedStep) ? { workflowCallExecutionRejected: true } : {}),
+        ...(childExecutionState !== undefined
+          ? {
+              workflowCallSessionUpdates: childExecutionState.sessionUpdates,
+              workflowCallStateSync: childExecutionState.stateSync,
+            }
+          : isWorkflowCallStep(failedStep)
+            ? { workflowCallExecutionNeverStarted: true }
+            : {}),
       };
     });
     this.mergeWorkflowCallSubStepEffects(step, subResults, state, updatePersonaSession);
     this.recordSubStepRoutingResults(step, subResults);
-    this.emitSubStepRoutingDecisionEvents(subResults, state.iteration);
+    this.emitSubStepRoutingDecisionEvents(subResults, state.iteration, executionScope);
 
     const ruleDetectionFailure = settled.find(
       (result): result is PromiseRejectedResult => result.status === 'rejected'
-        && result.reason instanceof RuleDetectionExhaustedError,
+        && (
+          result.reason instanceof RuleDetectionExhaustedError
+          || getWorkflowCallChildExecutionState(result.reason)?.originalError
+            instanceof RuleDetectionExhaustedError
+        ),
     );
     if (ruleDetectionFailure) {
-      throw ruleDetectionFailure.reason;
+      const childExecutionState = getWorkflowCallChildExecutionState(ruleDetectionFailure.reason);
+      throw childExecutionState?.originalError ?? ruleDetectionFailure.reason;
     }
 
     const terminalResults = this.collectTerminalResults(subResults);
@@ -851,7 +994,13 @@ export class ParallelRunner {
 
     // v2 梯子設計: 取り込みは常に 'updated' で完了する（manager の壊れた応答・
     // 予算超過は provisional として台帳へ着地し、run-level の失敗経路は無い）。
-    await this.runFindingContractManager(step, stepIteration, subResults, priorStepResponseText);
+    await this.runFindingContractManager(
+      step,
+      stepIteration,
+      subResults,
+      priorStepResponseText,
+      eventAttribution,
+    );
 
     // Print completion summary
     if (parallelLogger) {
@@ -884,11 +1033,13 @@ export class ParallelRunner {
         state,
         aggregatedContent,
         updatePersonaSession,
-        this.deps.onPhaseStart,
-        this.deps.onPhaseComplete,
-        this.deps.onJudgeStage,
-        state.iteration,
-        runtime,
+        {
+          eventAttribution: { iteration: state.iteration, scope: executionScope },
+          runtime,
+          onPhaseStart: this.deps.onPhaseStart,
+          onPhaseComplete: this.deps.onPhaseComplete,
+          onJudgeStage: this.deps.onJudgeStage,
+        },
       ),
       parentRuleCtx,
     );
@@ -916,27 +1067,26 @@ export class ParallelRunner {
   private async runWorkflowCallSubStep(
     subStep: WorkflowStep,
     state: WorkflowState,
-    runtime: RuntimeStepResolution | undefined,
     startedAt: number,
+    resumeStackPrefix: readonly WorkflowResumePointEntry[],
   ): Promise<ParallelSubStepResult> {
     if (!isWorkflowCallStep(subStep)) {
       throw new Error(`Parallel sub-step "${subStep.name}" is not a workflow_call`);
     }
 
-    incrementStepIteration(state, subStep.name);
     const workflowCallRunner = this.deps.getWorkflowCallRunner?.();
     if (!workflowCallRunner) {
       throw new Error(`Parallel workflow_call sub-step "${subStep.name}" requires workflowCallRunner`);
     }
-    const subRuntime = runtime?.fallback
-      ? runtime
-      : workflowCallRunner.resolveRuntime(subStep);
-    const result = await workflowCallRunner.runIsolated(subStep, subRuntime);
+    const result = await workflowCallRunner.runIsolated(subStep, {
+      resumeStackPrefix,
+      ownerPath: workflowOwnerPathFromStack(resumeStackPrefix),
+      workflowCallPath: workflowCallPathFromStack(resumeStackPrefix),
+    });
     return {
       subStep,
       response: result.result.response,
       instruction: result.result.instruction,
-      providerInfo: result.result.providerInfo,
       durationMs: Math.max(0, result.result.response.timestamp.getTime() - startedAt),
       workflowCallSessionUpdates: result.sessionUpdates,
       workflowCallStateSync: result.stateSync,
@@ -949,13 +1099,13 @@ export class ParallelRunner {
     state: WorkflowState,
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
   ): void {
-    let didSyncWorkflowCallState = false;
+    let mergedIteration = state.iteration;
     for (const result of subResults) {
       if (!isWorkflowCallStep(result.subStep)) {
         continue;
       }
       state.stepOutputs.set(result.subStep.name, result.response);
-      if (result.workflowCallExecutionRejected) {
+      if (result.workflowCallExecutionNeverStarted) {
         continue;
       }
       if (!result.workflowCallSessionUpdates) {
@@ -964,15 +1114,16 @@ export class ParallelRunner {
       if (!result.workflowCallStateSync) {
         throw new Error(`Parallel workflow_call sub-step "${result.subStep.name}" did not return state sync`);
       }
-      state.iteration = Math.max(state.iteration, result.workflowCallStateSync.iteration);
-      if (result.workflowCallStateSync.maxSteps !== undefined) {
-        this.deps.updateMaxSteps(result.workflowCallStateSync.maxSteps);
-      }
-      didSyncWorkflowCallState = true;
+      mergedIteration = Math.max(mergedIteration, result.workflowCallStateSync.iteration);
     }
     this.mergeWorkflowCallSessionUpdates(subResults, state, updatePersonaSession);
-    if (didSyncWorkflowCallState) {
-      this.deps.setActiveResumePoint(step, state.iteration);
+    const interruptedResumePoint = subResults.find(
+      (result) => result.workflowCallStateSync?.interrupted === true,
+    )?.workflowCallStateSync?.resumePoint;
+    if (interruptedResumePoint !== undefined) {
+      this.deps.adoptResumeCheckpoint(interruptedResumePoint, mergedIteration);
+    } else {
+      this.deps.setActiveResumePoint(step, mergedIteration);
     }
   }
 
@@ -983,7 +1134,7 @@ export class ParallelRunner {
   ): void {
     const updatesBySessionKey = new Map<string, Array<{ expectedSessionId: string | undefined; sessionId: string | undefined }>>();
     for (const result of subResults) {
-      if (!result.workflowCallSessionUpdates || result.workflowCallExecutionRejected) {
+      if (!result.workflowCallSessionUpdates || result.workflowCallExecutionNeverStarted) {
         continue;
       }
       for (const [sessionKey, update] of result.workflowCallSessionUpdates) {
@@ -1008,6 +1159,7 @@ export class ParallelRunner {
     stepIteration: number,
     subResults: ParallelSubStepResult[],
     priorStepResponseText: string | undefined,
+    eventAttribution: WorkflowEventAttribution | undefined,
   ): Promise<FindingManagerRunResult | undefined> {
     if (!this.deps.findingContract) {
       return undefined;
@@ -1038,11 +1190,19 @@ export class ParallelRunner {
       timestamp: new Date().toISOString(),
       priorStepResponseText,
       refreshFindingsState: this.deps.refreshFindingsState,
+      eventAttribution: requireWorkflowEventAttribution(
+        eventAttribution,
+        'findings:ledger',
+      ),
       emitEvent: this.deps.emitEvent,
     });
   }
 
-  private emitSubStepRoutingDecisionEvents(subResults: ParallelSubStepResult[], iteration: number): void {
+  private emitSubStepRoutingDecisionEvents(
+    subResults: ParallelSubStepResult[],
+    iteration: number,
+    executionScope: WorkflowEventAttribution['scope'],
+  ): void {
     for (const result of subResults) {
       const providerInfo = result.providerInfo;
       if (providerInfo?.autoRoutingDecision === undefined) {
@@ -1058,6 +1218,7 @@ export class ParallelRunner {
         result.durationMs ?? 0,
         iteration,
         this.deps.getWorkflowName(),
+        executionScope,
       );
     }
   }
@@ -1186,6 +1347,7 @@ export class ParallelRunner {
       response,
       instruction: options.subResults.map((result) => result.instruction).join('\n\n'),
       providerInfo: options.providerInfo,
+      ...(options.status === 'rate_limited' ? { rateLimitFallbackHandled: true } : {}),
       consumedStepIterations: [
         options.step.name,
         ...options.subResults.map((result) => result.subStep.name),

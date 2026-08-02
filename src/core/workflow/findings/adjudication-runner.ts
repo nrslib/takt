@@ -25,6 +25,7 @@ import type {
   FindingObservation,
 } from './types.js';
 import type { FindingAdjudicationStore } from './store.js';
+import type { WorkflowEventAttribution } from '../workflow-execution-scope.js';
 
 const log = createLogger('finding-conflict-adjudication');
 
@@ -85,7 +86,12 @@ const DISPOSITION_RULE_INDEX: Record<FindingConflictAdjudicationDisposition, num
  * the second candidate when resolving the dynamic return-to-origin transition.
  */
 export function createFindingConflictAdjudicationRunner(deps: FindingConflictAdjudicationRunnerDeps): {
-  run: (step: WorkflowStep, state: WorkflowState, runtime?: RuntimeStepResolution) => Promise<StepRunResult>;
+  run: (
+    step: WorkflowStep,
+    state: WorkflowState,
+    runtime: RuntimeStepResolution | undefined,
+    eventAttribution: WorkflowEventAttribution,
+  ) => Promise<StepRunResult>;
   getLastOriginStep: () => string | undefined;
 } {
   let lastOriginStep: string | undefined;
@@ -109,7 +115,12 @@ export function createFindingConflictAdjudicationRunner(deps: FindingConflictAdj
     timestamp: new Date(),
   });
 
-  const run = async (step: WorkflowStep, state: WorkflowState, runtime?: RuntimeStepResolution): Promise<StepRunResult> => {
+  const run = async (
+    step: WorkflowStep,
+    state: WorkflowState,
+    runtime: RuntimeStepResolution | undefined,
+    eventAttribution: WorkflowEventAttribution,
+  ): Promise<StepRunResult> => {
     const providerInfo = deps.optionsBuilder.resolveStepProviderModel(step, runtime);
     const observation: FindingObservation = {
       runId: deps.runId,
@@ -175,7 +186,12 @@ export function createFindingConflictAdjudicationRunner(deps: FindingConflictAdj
       return noTargetResult(ledgerAtAttempt, `conflict "${targetConflict.id}" is already being adjudicated`);
     }
     try {
-      deps.emitEvent('findings:ledger', structuredClone(ledgerAtAttempt));
+      deps.emitEvent(
+        'findings:ledger',
+        structuredClone(ledgerAtAttempt),
+        eventAttribution.iteration,
+        eventAttribution.scope,
+      );
       deps.refreshFindingsState();
       const evidenceSnapshot = attemptMutation.result.evidenceSnapshot;
       const promptConflict = evidenceSnapshot.conflict;
@@ -213,7 +229,12 @@ export function createFindingConflictAdjudicationRunner(deps: FindingConflictAdj
       });
       const nextLedger = applyMutation.ledger;
 
-      deps.emitEvent('findings:ledger', structuredClone(nextLedger));
+      deps.emitEvent(
+        'findings:ledger',
+        structuredClone(nextLedger),
+        eventAttribution.iteration,
+        eventAttribution.scope,
+      );
       deps.refreshFindingsState();
 
       if (!applyMutation.result.applied) {

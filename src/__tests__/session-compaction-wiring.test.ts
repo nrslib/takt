@@ -12,6 +12,11 @@ import { parseFindingLedger } from '../core/workflow/findings/schemas.js';
 import type { FindingLedger } from '../core/workflow/findings/types.js';
 import { makeRule, makeStep } from './test-helpers.js';
 
+const eventAttribution = {
+  iteration: 1,
+  scope: { kind: 'workflow_execution_scope', stack: [] },
+} as const;
+
 const { compactSessionBeforePhase1Mock, ingestFindingContractResultsMock } = vi.hoisted(() => ({
   compactSessionBeforePhase1Mock: vi.fn().mockResolvedValue('reused'),
   ingestFindingContractResultsMock: vi.fn().mockResolvedValue({}),
@@ -49,6 +54,24 @@ import {
   runReportPhase,
   runStatusJudgmentPhase,
 } from '../core/workflow/phase-runner.js';
+
+async function runPreparedNormalStep(
+  deps: StepExecutorDeps,
+  step: WorkflowStep,
+  state: WorkflowState,
+  updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
+) {
+  const executor = new StepExecutor(deps);
+  const prepared = executor.prepareNormalStepExecution(step, state, 'task', 5, 1);
+  return executor.runNormalStep(
+    step,
+    state,
+    updatePersonaSession,
+    undefined,
+    prepared,
+    eventAttribution,
+  );
+}
 
 function makeState(): WorkflowState {
   return {
@@ -152,6 +175,8 @@ function makeParallelDeps(cwd: string): ParallelRunnerDeps {
     structuredCaller: {
       evaluateCondition: vi.fn(), judgeStatus: vi.fn(), decomposeTask: vi.fn(), requestMoreParts: vi.fn(),
     },
+    setActiveResumePoint: vi.fn(),
+    setActiveResumeStack: vi.fn(),
     runQualityGates: vi.fn().mockResolvedValue({ ok: true }),
   };
 }
@@ -216,7 +241,7 @@ describe('session compaction Phase 1 wiring', () => {
     };
     queueAgentResponse(makeDoneResponse());
 
-    await new StepExecutor(deps).runNormalStep(step, makeState(), 'task', 5, vi.fn());
+    await runPreparedNormalStep(deps, step, makeState(), vi.fn());
 
     expect(compactSessionBeforePhase1Mock).toHaveBeenCalledWith(step, phase1Options);
     expect(compactSessionBeforePhase1Mock.mock.invocationCallOrder[0]).toBeLessThan(
@@ -266,7 +291,7 @@ describe('session compaction Phase 1 wiring', () => {
     compactSessionBeforePhase1Mock.mockResolvedValueOnce('fresh');
     queueAgentResponse(makeDoneResponse({ sessionId: 'session-fresh' }));
 
-    await new StepExecutor(deps).runNormalStep(step, state, 'task', 5, updatePersonaSession);
+    await runPreparedNormalStep(deps, step, state, updatePersonaSession);
 
     expect(vi.mocked(executeAgent)).toHaveBeenCalledWith('reviewer', expect.any(String), expect.objectContaining({
       sessionId: undefined,
@@ -391,12 +416,10 @@ describe('session compaction Phase 1 wiring', () => {
     await executor.runNormalStep(
       step,
       state,
-      'task',
-      5,
       vi.fn(),
       undefined,
-      undefined,
       preparedExecution,
+      eventAttribution,
     );
 
     expect(vi.mocked(executeAgent)).toHaveBeenCalledTimes(2);
@@ -448,7 +471,7 @@ describe('session compaction Phase 1 wiring', () => {
     };
     queueAgentResponse(makeDoneResponse());
 
-    await new StepExecutor(deps).runNormalStep(step, makeState(), 'task', 5, vi.fn());
+    await runPreparedNormalStep(deps, step, makeState(), vi.fn());
 
     expect(runReportPhase).toHaveBeenCalledOnce();
     expect(runStatusJudgmentPhase).toHaveBeenCalledOnce();
@@ -501,11 +524,13 @@ describe('session compaction Phase 1 wiring', () => {
         decomposeTask: vi.fn(),
         requestMoreParts: vi.fn(),
       },
+      setActiveResumePoint: vi.fn(),
+      setActiveResumeStack: vi.fn(),
       runQualityGates: vi.fn().mockResolvedValue({ ok: true }),
     };
     queueAgentResponse(makeDoneResponse());
 
-    await new ParallelRunner(deps).runParallelStep(parentStep, makeState(), 'task', 5, vi.fn());
+    await new ParallelRunner(deps).runParallelStep(parentStep, makeState(), 'task', 5, vi.fn(), undefined, undefined, eventAttribution);
 
     expect(compactSessionBeforePhase1Mock).toHaveBeenCalledWith(subStep, phase1Options);
     expect(compactSessionBeforePhase1Mock.mock.invocationCallOrder[0]).toBeLessThan(
@@ -546,6 +571,8 @@ describe('session compaction Phase 1 wiring', () => {
       structuredCaller: {
         evaluateCondition: vi.fn(), judgeStatus: vi.fn(), decomposeTask: vi.fn(), requestMoreParts: vi.fn(),
       },
+      setActiveResumePoint: vi.fn(),
+      setActiveResumeStack: vi.fn(),
       runQualityGates: vi.fn().mockResolvedValue({ ok: true }),
     };
     const state = makeState();
@@ -560,7 +587,7 @@ describe('session compaction Phase 1 wiring', () => {
     compactSessionBeforePhase1Mock.mockResolvedValueOnce('fresh');
     queueAgentResponse(makeDoneResponse({ sessionId: undefined }));
 
-    await new ParallelRunner(deps).runParallelStep(parentStep, state, 'task', 5, updatePersonaSession);
+    await new ParallelRunner(deps).runParallelStep(parentStep, state, 'task', 5, updatePersonaSession, undefined, undefined, eventAttribution);
 
     expect(vi.mocked(executeAgent)).toHaveBeenCalledWith('reviewer', expect.any(String), expect.objectContaining({
       sessionId: undefined,
@@ -596,7 +623,7 @@ describe('session compaction Phase 1 wiring', () => {
       };
     });
 
-    await new ParallelRunner(makeParallelDeps(cwd)).runParallelStep(parentStep, state, 'task', 5, vi.fn());
+    await new ParallelRunner(makeParallelDeps(cwd)).runParallelStep(parentStep, state, 'task', 5, vi.fn(), undefined, undefined, eventAttribution);
 
     expect(sideEffectCount).toBe(1);
     expect(vi.mocked(executeAgent)).toHaveBeenCalledOnce();
@@ -619,7 +646,7 @@ describe('session compaction Phase 1 wiring', () => {
     });
     queueAgentResponse(makeDoneResponse({ sessionId: 'session-recovered' }));
 
-    await new ParallelRunner(makeParallelDeps(cwd)).runParallelStep(parentStep, makeState(), 'task', 5, vi.fn());
+    await new ParallelRunner(makeParallelDeps(cwd)).runParallelStep(parentStep, makeState(), 'task', 5, vi.fn(), undefined, undefined, eventAttribution);
 
     expect(vi.mocked(executeAgent)).toHaveBeenCalledTimes(2);
     expect(vi.mocked(executeAgent).mock.calls.map(([, , options]) => options.sessionId)).toEqual(['session-1', undefined]);

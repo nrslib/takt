@@ -224,9 +224,10 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       state,
       'implement feature',
       5,
-      undefined,
-      undefined,
-      expect.any(Object),
+      expect.objectContaining({
+        iteration: 1,
+        transaction: expect.any(Object),
+      }),
     );
     expect(mockRunWithPhaseSpan).toHaveBeenCalledWith(
       expect.objectContaining({

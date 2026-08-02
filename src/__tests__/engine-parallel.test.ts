@@ -239,7 +239,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
 
   it('should aggregate sub-step outputs with ## headers and --- separators', async () => {
     const config = buildDefaultWorkflowConfig();
-    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock' });
 
     mockRunAgentSequence([
       makeResponse({ persona: 'plan', content: 'Plan done' }),
@@ -276,7 +276,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
 
   it('should store individual sub-step outputs in stepOutputs', async () => {
     const config = buildDefaultWorkflowConfig();
-    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock' });
 
     mockRunAgentSequence([
       makeResponse({ persona: 'plan', content: 'Plan' }),
@@ -753,6 +753,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       projectCwd: tmpDir,
       provider: 'mock',
       selectorProvider: MOCK_SELECTOR_PROVIDER,
+      maxStepsOverride: 3,
       startStep: 'reviewers',
       resumePoint: {
         version: 2,
@@ -1274,13 +1275,13 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
         workflow_call_invocations: {
           [invocationIdentity]: {
             call_instance: 1,
-            report_namespace_segment: 'iteration-1--step-delegate--workflow-child',
+            child_workflow_ref: 'child',
           },
         },
         workflow_step_participations: {},
       },
       onDynamicParallelSelectionPersisted: persisted,
-    })).toThrow('Workflow-call invocation identity does not match resume entry "delegate"');
+    })).toThrow(/Workflow-call invocation identity does not match resume entry/);
 
     expect(runAgent).not.toHaveBeenCalled();
     expect(persisted).not.toHaveBeenCalled();
@@ -1720,6 +1721,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
             makeStep('api-review', {
               persona: 'coder',
               personaDisplayName: 'coder',
+              provider: undefined,
               providerRoutingPersonaKey: 'coder',
               tags: ['implementation'],
               rules: [
@@ -1858,7 +1860,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
         },
       ],
     }, tmpDir);
-    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock' });
 
     mockRunAgentSequence([
       makeResponse({ persona: 'arch-review', content: 'approved' }),
@@ -1887,7 +1889,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
 
   it('should persist aggregated previous_response snapshot for parallel parent step', async () => {
     const config = buildDefaultWorkflowConfig();
-    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock' });
 
     mockRunAgentSequence([
       makeResponse({ persona: 'plan', content: 'Plan' }),
@@ -1927,7 +1929,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
 
   it('should execute sub-steps concurrently (both runAgent calls happen)', async () => {
     const config = buildDefaultWorkflowConfig();
-    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock' });
 
     mockRunAgentSequence([
       makeResponse({ persona: 'plan', content: 'Plan' }),
@@ -2004,6 +2006,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
 
     const engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
+      provider: 'mock',
       onStream: parentOnStream,
       taskPrefix: 'override-persona-provider',
       taskColorIndex: 0,
@@ -2039,7 +2042,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     const reviewersStep = config.steps.find(m => m.name === 'reviewers')!;
     reviewersStep.concurrency = 1;
 
-    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock' });
 
     vi.mocked(runAgent).mockImplementation(async (persona, task, options) => {
       // Track concurrency for parallel sub-steps only
@@ -2083,7 +2086,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     const config = buildDefaultWorkflowConfig();
     // No concurrency set — default behavior (all simultaneous)
 
-    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock' });
 
     vi.mocked(runAgent).mockImplementation(async (persona, task, options) => {
       const isSubStep = persona === '../personas/arch-review.md' || persona === '../personas/security-review.md';

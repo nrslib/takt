@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -33,6 +33,8 @@ import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
 import { parseFindingLedger } from '../core/models/finding-schemas.js';
 import { formatConflictId } from '../core/models/finding-conflict-identity.js';
+import { runReportPhase } from '../core/workflow/phase-runner.js';
+import { buildWorkflowCallNamespaceFixture } from './helpers/workflow-resume-fixture.js';
 
 // raw admission validation（manager-runner.ts の cwd 引数）が実 fs を見るため、
 // このテストファイル全体が引用する raw finding の location に対応する実ファイルを
@@ -128,6 +130,7 @@ describe('WorkflowEngine structured caller defaults', () => {
     cwd = createTestTmpDir();
     vi.clearAllMocks();
     vi.mocked(runAgent).mockReset();
+    vi.mocked(runReportPhase).mockReset().mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -3473,7 +3476,6 @@ describe('WorkflowEngine structured caller defaults', () => {
     const childConfig: WorkflowConfig = {
       name: 'child-inherits-finding-contract',
       subworkflow: { callable: true, requiresFindingContract: true },
-      maxSteps: 3,
       initialStep: 'reviewers',
       steps: [
         makeStep({
@@ -3552,7 +3554,9 @@ describe('WorkflowEngine structured caller defaults', () => {
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2);
   });
 
-  it('親の parallel から同じ子ワークフローを2つ同時に呼ぶと、raw finding id が呼び出し名前空間で区別され、どちらの raw finding も台帳に残る', async () => {
+  it.each(['child-a', 'child-b'] as const)(
+    '親の parallel workflow_call は %s の完了が遅くても共有予算と report/finding 成果物を決定的に統合する',
+    async (delayedChild) => {
     // codex 指摘の再現ケース: WorkflowCallExecutor は子エンジンへ
     // reportDirName（= 親の runPaths.slug）をそのまま渡すため、親の parallel
     // から同じ子ワークフローを2つ同時に呼ぶと、両方の子の runId が完全に
@@ -3563,27 +3567,28 @@ describe('WorkflowEngine structured caller defaults', () => {
     // （mergeRawFindingDetails は rawFindingId をキーにした Map で合成するため）。
     // findingCallNamespace（呼び出し元の workflow_call サブステップ名）を
     // id に混ぜることで区別する。
-    const childConfig: WorkflowConfig = {
+    const createChildConfig = (childName: 'child-a' | 'child-b'): WorkflowConfig => ({
       name: 'child-parallel-collision',
       subworkflow: { callable: true },
-      maxSteps: 3,
       initialStep: 'review',
-      steps: [
-        makeStep({
-          name: 'review',
-          persona: 'reviewer',
-          instruction: 'Review.',
-          outputContracts: [
-            { name: 'review.md', format: 'body', formatRef: 'review-finding-contract' },
-          ],
-          rules: [makeRule('when(true)', 'COMPLETE')],
-        }),
-      ],
+      steps: [makeStep({
+        name: 'review',
+        persona: 'reviewer',
+        instruction: `Review ${childName}.`,
+        outputContracts: [
+          { name: 'review.md', format: 'body', formatRef: 'review-finding-contract' },
+        ],
+        rules: [makeRule('when(true)', 'COMPLETE')],
+      })],
+    });
+    const childConfigs = {
+      'child-a': createChildConfig('child-a'),
+      'child-b': createChildConfig('child-b'),
     };
 
     const parentConfig: WorkflowConfig = {
       name: 'parent-parallel-workflow-call-collision',
-      maxSteps: 3,
+      maxSteps: 1,
       initialStep: 'fanout',
       findingContract: {
         ledgerPath: '.takt/findings/peer-review.json',
@@ -3629,6 +3634,10 @@ describe('WorkflowEngine structured caller defaults', () => {
       ],
     };
 
+    let releaseDelayedChild!: () => void;
+    const delayedChildGate = new Promise<void>((resolve) => {
+      releaseDelayedChild = resolve;
+    });
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
       options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
       if (persona === 'findings-manager') {
@@ -3655,6 +3664,17 @@ describe('WorkflowEngine structured caller defaults', () => {
       }
       const schemaText = options?.outputSchema ? JSON.stringify(options.outputSchema) : '';
       if (schemaText.includes('"rawFindings"')) {
+        let childName: 'child-a' | 'child-b';
+        if (instruction.includes('Review child-a.')) {
+          childName = 'child-a';
+        } else if (instruction.includes('Review child-b.')) {
+          childName = 'child-b';
+        } else {
+          throw new Error(`Unexpected reviewer instruction: ${instruction}`);
+        }
+        if (childName === delayedChild) {
+          await delayedChildGate;
+        }
         // 2子とも同じレビュー内容・同じローカル rawFindingId ("raw-1") を
         // 報告する。衝突の再現条件そのもの。
         return {
@@ -3674,17 +3694,36 @@ describe('WorkflowEngine structured caller defaults', () => {
               ...verifiedSourceQuoteFields(cwd, 'src/dup.ts', 10),
             }],
           },
+          sessionId: `${childName}-session`,
           timestamp: new Date(),
         };
       }
       return { persona: 'agent', status: 'done', content: 'ok', timestamp: new Date() };
     });
+    vi.mocked(runReportPhase).mockImplementation(async (step, _stepIteration, context) => {
+      mkdirSync(context.reportDir, { recursive: true });
+      writeFileSync(join(context.reportDir, 'review.md'), `report:${step.instruction}`, 'utf-8');
+    });
 
+    const onIterationLimit = vi.fn().mockResolvedValue(1);
     const engine = new WorkflowEngine(parentConfig, cwd, 'task', {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
-      workflowCallResolver: () => childConfig,
+      onIterationLimit,
+      workflowCallResolver: ({ step }) => {
+        const childConfig = childConfigs[step.name as keyof typeof childConfigs];
+        if (childConfig === undefined) {
+          throw new Error(`Unexpected workflow_call step: ${step.name}`);
+        }
+        return childConfig;
+      },
+    });
+    const firstChild = delayedChild === 'child-a' ? 'child-b' : 'child-a';
+    engine.on('workflow_call:complete', (event) => {
+      if (event.step === firstChild) {
+        releaseDelayedChild();
+      }
     });
     const abortReasons: string[] = [];
     engine.on('workflow:abort', (_state, reason) => { abortReasons.push(reason); });
@@ -3693,6 +3732,14 @@ describe('WorkflowEngine structured caller defaults', () => {
 
     expect(abortReasons).toEqual([]);
     expect(result.status).toBe('completed');
+    expect(result.iteration).toBe(2);
+    expect(onIterationLimit).toHaveBeenCalledOnce();
+    expect(onIterationLimit).toHaveBeenCalledWith(expect.objectContaining({
+      currentIteration: 1,
+      maxSteps: 1,
+      currentStep: 'review',
+    }));
+    expect([...result.personaSessions.values()]).toEqual(['child-b-session']);
     // 2件目は1件目と内容が完全一致するため機械照合され、manager の再呼び出しを要しない。
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(3);
 
@@ -3701,20 +3748,56 @@ describe('WorkflowEngine structured caller defaults', () => {
       rawFindings: Array<{ rawFindingId: string }>;
     };
     const rawFindingIds = persistedLedger.rawFindings.map((r) => r.rawFindingId);
+    const fanoutOwner = [{
+      workflow: parentConfig.name,
+      step: 'fanout',
+      kind: 'agent' as const,
+    }];
+    const callNamespaces = {
+      'child-a': buildWorkflowCallNamespaceFixture(
+        parentConfig.name,
+        'child-a',
+        fanoutOwner,
+        childConfigs['child-a'].name,
+        1,
+      ),
+      'child-b': buildWorkflowCallNamespaceFixture(
+        parentConfig.name,
+        'child-b',
+        fanoutOwner,
+        childConfigs['child-b'].name,
+        1,
+      ),
+    };
 
-    // 呼び出し名前空間（workflow_call サブステップ名 + 呼び出しイテレーション）
-    // により、2子の raw finding id は別々になる。衝突していれば重複排除で
-    // 1件しか残らない。"#1" は呼び出し時点の親イテレーション（この走行では
-    // fanout ステップが最初の1ステップのため1）。
     expect(new Set(rawFindingIds).size).toBe(2);
-    expect(rawFindingIds).toContain('test-report-dir:child-a#1:review:1:review:raw-1');
-    expect(rawFindingIds).toContain('test-report-dir:child-b#1:review:1:review:raw-1');
+    expect(rawFindingIds).toContain(`test-report-dir:${callNamespaces['child-a']}:review:1:review:raw-1`);
+    expect(rawFindingIds).toContain(`test-report-dir:${callNamespaces['child-b']}:review:1:review:raw-1`);
 
     // 内容（path+title+description）が完全一致するため、保存直前の再照合
     // （openFindingKeyIndex）で1件の finding に畳み込まれる。ただしその finding は両方の raw
     // finding id を参照している（どちらも捨てられていない）。
     expect(persistedLedger.findings).toHaveLength(1);
     expect(persistedLedger.findings[0]?.rawFindingIds).toEqual(expect.arrayContaining(rawFindingIds));
+
+    const reportsRoot = join(cwd, '.takt', 'runs', 'test-report-dir', 'reports', 'subworkflows');
+    const reportFiles = {
+      'child-a': join(reportsRoot, callNamespaces['child-a'], 'review.md'),
+      'child-b': join(reportsRoot, callNamespaces['child-b'], 'review.md'),
+    };
+    expect(readFileSync(reportFiles['child-a'], 'utf-8')).toBe('report:Review child-a.');
+    expect(readFileSync(reportFiles['child-b'], 'utf-8')).toBe('report:Review child-b.');
+
+    const rawFindingsDir = join(cwd, '.takt', 'findings', 'raw');
+    const artifactRawFindingIds = readdirSync(rawFindingsDir)
+      .filter((fileName) => fileName.endsWith('.json'))
+      .flatMap((fileName) => JSON.parse(readFileSync(join(rawFindingsDir, fileName), 'utf-8')) as Array<{ rawFindingId: string }>)
+      .map((finding) => finding.rawFindingId)
+      .sort();
+    expect(artifactRawFindingIds).toEqual([
+      `test-report-dir:${callNamespaces['child-a']}:review:1:review:raw-1`,
+      `test-report-dir:${callNamespaces['child-b']}:review:1:review:raw-1`,
+    ]);
   });
 
   it('同じ workflow_call ステップがループで再実行されても、別イテレーションの raw finding id は衝突せず、台帳に別々の raw finding として残る', async () => {
@@ -3724,12 +3807,10 @@ describe('WorkflowEngine structured caller defaults', () => {
     // 子の最初のレビューは常に stepIteration=1 になる。ローカルの
     // rawFindingId が2回とも同じであれば、正規化後の id も完全に一致し、
     // 2回目が1回目を上書きして台帳から消えていた。
-    // buildWorkflowCallNamespace() と同じ「呼び出し時点の親イテレーション」を
-    // 名前空間に混ぜることで区別する。
+    // invocation identity と call instance を名前空間へ投影して区別する。
     const childConfig: WorkflowConfig = {
       name: 'child-loop-collision',
       subworkflow: { callable: true },
-      maxSteps: 3,
       initialStep: 'review',
       steps: [
         makeStep({

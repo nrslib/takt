@@ -9,6 +9,11 @@ import * as runOrderContent from '../core/workflow/run/order-content.js';
 import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig.js';
 import { invalidateAllResolvedConfigCache } from '../infra/config/resolveConfigValue.js';
 import { generateExecutionReportDir } from '../core/workflow/run/run-slug.js';
+import type { WorkflowResumePointEntry } from '../core/models/index.js';
+import {
+  buildWorkflowCallInvocationFixture,
+  buildWorkflowCallInvocationRecordsFixture,
+} from './helpers/workflow-resume-fixture.js';
 
 const mockGetGitProvider = vi.hoisted(() => vi.fn());
 let originalTaktConfigDir: string | undefined;
@@ -92,6 +97,17 @@ function readTaktFile(baseDir: string, relativePath: string): string {
   return fs.readFileSync(path.join(baseDir, '.takt', relativePath), 'utf-8');
 }
 
+function createResumePoint(stack: WorkflowResumePointEntry[], iteration = 7) {
+  return {
+    version: 2 as const,
+    stack,
+    iteration,
+    elapsed_ms: 183245,
+    workflow_call_invocations: buildWorkflowCallInvocationFixture(stack),
+    workflow_step_participations: {},
+  };
+}
+
 const resolveTaskExecutionStrict = resolveTaskExecution as (task: TaskInfo, projectCwd: string) => ReturnType<typeof resolveTaskExecution>;
 
 describe('resolveTaskExecution', () => {
@@ -172,8 +188,7 @@ describe('resolveTaskExecution', () => {
       '      - condition: approved',
       '        next: COMPLETE',
     ].join('\n'));
-    const identity = '{"workflow":"default","step":"reviewers","calls":[]}' as const;
-    const invocationIdentity = '{"workflow":"default","step":"delegate","calls":[]}' as const;
+    const identity = '{"workflow":"default","step":"reviewers","owners":[]}' as const;
     const resumePoint = {
       version: 2 as const,
       stack: [{ workflow: 'default', step: 'reviewers', kind: 'agent' as const }],
@@ -188,12 +203,13 @@ describe('resolveTaskExecution', () => {
           effective_selection_ids: ['architecture', 'frontend'],
         },
       },
-      workflow_call_invocations: {
-        [invocationIdentity]: {
-          call_instance: 2,
-          report_namespace_segment: 'iteration-30--step-delegate--workflow-child',
-        },
-      },
+      workflow_call_invocations: buildWorkflowCallInvocationRecordsFixture([{
+        workflowReference: 'default',
+        step: 'delegate',
+        ownerPath: [],
+        callInstance: 2,
+        childWorkflowReference: 'child',
+      }]),
       workflow_step_participations: {},
     };
     const runner = new TaskRunner(root);
@@ -237,17 +253,10 @@ describe('resolveTaskExecution', () => {
       data: ({
         task: 'Run task',
         start_movement: 'review',
-        resume_point: {
-          version: 2,
-          stack: [
+        resume_point: createResumePoint([
             { workflow: 'default', step: 'delegate', kind: 'workflow_call', call_instance: 1 },
             { workflow: 'takt/coding', step: 'review', kind: 'agent' },
-          ],
-          iteration: 7,
-          elapsed_ms: 183245,
-          workflow_call_invocations: {},
-          workflow_step_participations: {},
-        },
+          ]),
       } as unknown) as NonNullable<TaskInfo['data']>,
     });
 
@@ -282,7 +291,6 @@ describe('resolveTaskExecution', () => {
       'subworkflow:',
       '  callable: true',
       'initial_step: fix',
-      'max_steps: 5',
       'steps:',
       '  - name: fix',
       '    persona: fixer',
@@ -292,17 +300,10 @@ describe('resolveTaskExecution', () => {
       '        next: COMPLETE',
     ].join('\n'));
 
-    const resumePoint = {
-      version: 2 as const,
-      stack: [
+    const resumePoint = createResumePoint([
         { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },
         { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
-      ],
-      iteration: 7,
-      elapsed_ms: 183245,
-      workflow_call_invocations: {},
-      workflow_step_participations: {},
-    };
+      ]);
     const task = createTask({
       data: ({
         task: 'Run task',
@@ -337,17 +338,10 @@ describe('resolveTaskExecution', () => {
       '        next: COMPLETE',
     ].join('\n'));
 
-    const resumePoint = {
-      version: 2 as const,
-      stack: [
+    const resumePoint = createResumePoint([
         { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },
         { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
-      ],
-      iteration: 7,
-      elapsed_ms: 183245,
-      workflow_call_invocations: {},
-      workflow_step_participations: {},
-    };
+      ]);
     const task = createTask({
       data: ({
         task: 'Run task',
@@ -390,7 +384,6 @@ describe('resolveTaskExecution', () => {
       'subworkflow:',
       '  callable: true',
       'initial_step: review',
-      'max_steps: 5',
       'steps:',
       '  - name: review',
       '    persona: reviewer',
@@ -400,17 +393,10 @@ describe('resolveTaskExecution', () => {
       '        next: COMPLETE',
     ].join('\n'));
 
-    const resumePoint = {
-      version: 2 as const,
-      stack: [
+    const resumePoint = createResumePoint([
         { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },
         { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
-      ],
-      iteration: 7,
-      elapsed_ms: 183245,
-      workflow_call_invocations: {},
-      workflow_step_participations: {},
-    };
+      ]);
     const task = createTask({
       worktreePath,
       data: ({
@@ -450,7 +436,6 @@ describe('resolveTaskExecution', () => {
       'subworkflow:',
       '  callable: true',
       'initial_step: delegate_review',
-      'max_steps: 5',
       'steps:',
       '  - name: delegate_review',
       '    kind: workflow_call',
@@ -464,7 +449,6 @@ describe('resolveTaskExecution', () => {
       'subworkflow:',
       '  callable: true',
       'initial_step: fix',
-      'max_steps: 5',
       'steps:',
       '  - name: fix',
       '    persona: fixer',
@@ -474,9 +458,7 @@ describe('resolveTaskExecution', () => {
       '        next: COMPLETE',
     ].join('\n'));
 
-    const resumePoint = {
-      version: 2 as const,
-      stack: [
+    const resumePoint = createResumePoint([
         { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },
         {
           workflow: 'takt/coding',
@@ -485,12 +467,7 @@ describe('resolveTaskExecution', () => {
           call_instance: 1,
         },
         { workflow: 'takt/review-loop', step: 'review', kind: 'agent' as const },
-      ],
-      iteration: 7,
-      elapsed_ms: 183245,
-      workflow_call_invocations: {},
-      workflow_step_participations: {},
-    };
+      ]);
     const task = createTask({
       data: ({
         task: 'Run task',
@@ -529,17 +506,10 @@ describe('resolveTaskExecution', () => {
       data: ({
         task: 'Run task',
         start_step: 'implement',
-        resume_point: {
-          version: 2,
-          stack: [
+        resume_point: createResumePoint([
             { workflow: 'default', step: 'delegate', kind: 'workflow_call', call_instance: 1 },
             { workflow: 'takt/coding', step: 'review', kind: 'agent' },
-          ],
-          iteration: 7,
-          elapsed_ms: 183245,
-          workflow_call_invocations: {},
-          workflow_step_participations: {},
-        },
+          ]),
       } as unknown) as NonNullable<TaskInfo['data']>,
     });
 

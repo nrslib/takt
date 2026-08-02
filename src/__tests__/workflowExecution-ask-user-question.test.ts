@@ -50,6 +50,22 @@ const { disabledObservability, MockWorkflowEngine } = vi.hoisted(() => {
         if (!firstStep) {
           throw new Error('Test fixture requires at least one step');
         }
+        if (MockWorkflowEngine.activeResumePoint === undefined) {
+          MockWorkflowEngine.activeResumePoint = {
+            version: 2,
+            stack: [{
+              workflow: this.config.name,
+              step: MockWorkflowEngine.iterationLimitCurrentStep,
+              kind: 'agent',
+              step_iterations: { [MockWorkflowEngine.iterationLimitCurrentStep]: 1 },
+            }],
+            iteration: MockWorkflowEngine.iterationLimitCurrentIteration,
+            max_steps: this.config.maxSteps,
+            elapsed_ms: 0,
+            workflow_call_invocations: {},
+            workflow_step_participations: {},
+          };
+        }
         const onIterationLimit = this.receivedOptions.onIterationLimit as
           | ((request: { currentIteration: number; maxSteps: number; currentStep: string }) => Promise<number | null>)
           | undefined;
@@ -70,7 +86,31 @@ const { disabledObservability, MockWorkflowEngine } = vi.hoisted(() => {
         };
       }
       if (firstStep) {
-        this.emit('step:start', firstStep, 1, firstStep.instruction, { provider: undefined, model: undefined });
+        const stepIteration = 1;
+        const executionScope = Object.freeze({
+          kind: 'workflow_execution_scope' as const,
+          stack: Object.freeze([
+            Object.freeze({
+              workflow: this.config.name,
+              step: firstStep.name,
+              kind: firstStep.kind
+                ?? (firstStep.mode === 'system' ? 'system' : firstStep.call ? 'workflow_call' : 'agent'),
+              step_iterations: Object.freeze({ [firstStep.name]: stepIteration }),
+            }),
+          ]),
+        });
+        this.emit(
+          'step:start',
+          firstStep,
+          1,
+          firstStep.instruction,
+          { provider: 'mock', model: undefined },
+          this.config.name,
+          firstStep.name,
+          stepIteration,
+          this.config.maxSteps,
+          executionScope,
+        );
       }
       this.emit('workflow:complete', { status: 'completed', iteration: 1 });
       return { status: 'completed', iteration: 1 };
@@ -195,6 +235,7 @@ import { executeWorkflow } from '../features/tasks/execute/workflowExecution.js'
 import { selectOption } from '../shared/prompt/index.js';
 import { error, info } from '../shared/ui/index.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
+import { buildWorkflowCallInvocationFixture } from './helpers/workflow-resume-fixture.js';
 
 function makeConfig(): WorkflowConfig {
   return {
@@ -287,6 +328,7 @@ describe('executeWorkflow AskUserQuestion deny handler wiring', () => {
       currentStep: 'implement',
       newMaxSteps: 10,
       currentIteration: 1,
+      resumePoint: MockWorkflowEngine.activeResumePoint,
     });
   });
 
@@ -307,6 +349,7 @@ describe('executeWorkflow AskUserQuestion deny handler wiring', () => {
       currentStep: 'implement',
       newMaxSteps: 6,
       currentIteration: 1,
+      resumePoint: MockWorkflowEngine.activeResumePoint,
     });
   });
 
@@ -314,15 +357,22 @@ describe('executeWorkflow AskUserQuestion deny handler wiring', () => {
     MockWorkflowEngine.triggerIterationLimit = true;
     MockWorkflowEngine.iterationLimitCurrentStep = 'fix';
     MockWorkflowEngine.iterationLimitCurrentIteration = 2;
+    const resumeStack = [
+      {
+        workflow: 'parent',
+        step: 'delegate',
+        kind: 'workflow_call' as const,
+        step_iterations: { delegate: 1 },
+        call_instance: 1,
+      },
+      { workflow: 'takt/coding', step: 'fix', kind: 'agent' as const },
+    ];
     MockWorkflowEngine.activeResumePoint = {
       version: 2,
-      stack: [
-        { workflow: 'parent', step: 'delegate', kind: 'workflow_call', call_instance: 1 },
-        { workflow: 'takt/coding', step: 'fix', kind: 'agent' },
-      ],
+      stack: resumeStack,
       iteration: 2,
       elapsed_ms: 183245,
-      workflow_call_invocations: {},
+      workflow_call_invocations: buildWorkflowCallInvocationFixture(resumeStack),
       workflow_step_participations: {},
     };
     MockWorkflowEngine.buildResumePointForCurrentStep = undefined;
@@ -345,15 +395,22 @@ describe('executeWorkflow AskUserQuestion deny handler wiring', () => {
     MockWorkflowEngine.triggerIterationLimit = true;
     MockWorkflowEngine.iterationLimitCurrentStep = 'implement';
     MockWorkflowEngine.iterationLimitCurrentIteration = 3;
+    const resumeStack = [
+      {
+        workflow: 'parent',
+        step: 'delegate',
+        kind: 'workflow_call' as const,
+        step_iterations: { delegate: 1 },
+        call_instance: 1,
+      },
+      { workflow: 'takt/coding', step: 'implement', kind: 'agent' as const },
+    ];
     MockWorkflowEngine.activeResumePoint = {
       version: 2,
-      stack: [
-        { workflow: 'parent', step: 'delegate', kind: 'workflow_call', call_instance: 1 },
-        { workflow: 'takt/coding', step: 'implement', kind: 'agent' },
-      ],
+      stack: resumeStack,
       iteration: 3,
       elapsed_ms: 183246,
-      workflow_call_invocations: {},
+      workflow_call_invocations: buildWorkflowCallInvocationFixture(resumeStack),
       workflow_step_participations: {},
     };
     MockWorkflowEngine.buildResumePointForCurrentStep = {

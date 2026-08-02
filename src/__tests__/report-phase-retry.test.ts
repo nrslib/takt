@@ -22,6 +22,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 import { runReportPhase, type ReportPhaseRunnerContext } from '../core/workflow/phase-runner.js';
 import type { WorkflowStep } from '../core/models/types.js';
 import type { StreamEvent } from '../shared/types/provider.js';
+import { buildPhaseExecutionId } from '../shared/utils/phaseExecutionId.js';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
@@ -61,6 +62,7 @@ function createContext(
   const context = {
     cwd: reportDir,
     reportDir,
+    executionScope: { kind: 'workflow_execution_scope', stack: [] },
     language: 'en',
     lastResponse: currentLastResponse,
     resolveSessionKey: (step) => step.persona ?? step.name,
@@ -580,6 +582,7 @@ describe('runReportPhase retry with new session', () => {
       'Report phase provider returned status "error"',
       undefined,
       undefined,
+      ctx.executionScope,
     );
     expect(infoSpy).toHaveBeenCalledWith(
       'Report phase failed, retrying with new session',
@@ -926,8 +929,9 @@ describe('runReportPhase retry with new session', () => {
       '',
       'error',
       'Report phase does not allow tool results.',
-      'implement:1:2:1',
+      buildPhaseExecutionId({ step: 'implement', iteration: 1, phase: 2, sequence: 1 }),
       1,
+      ctx.executionScope,
     );
     expect(onPhaseComplete).not.toHaveBeenCalledWith(
       expect.anything(),
@@ -1475,6 +1479,7 @@ describe('runReportPhase retry with new session', () => {
     const ctx: ReportPhaseRunnerContext = {
       cwd: reportDir,
       reportDir,
+      executionScope: { kind: 'workflow_execution_scope', stack: [] },
       language: 'en',
       lastResponse: 'Fallback Phase 1 result',
       resolveSessionKey: () => 'coder:codex',

@@ -26,6 +26,7 @@ import {
   type FindingManagerSubStepResult,
 } from './manager-runner.js';
 import type { FindingManagerStore } from './store.js';
+import type { WorkflowEventAttribution } from '../workflow-execution-scope.js';
 
 /**
  * ある単独ステップが Finding Contract の取り込み対象かどうかを判定する。
@@ -82,6 +83,7 @@ export interface FindingContractIntakeInput {
   timestamp: string;
   priorStepResponseText?: string;
   refreshFindingsState: () => void;
+  eventAttribution: WorkflowEventAttribution;
   emitEvent: (event: string, ...args: unknown[]) => void;
 }
 
@@ -113,7 +115,12 @@ export async function ingestFindingContractResults(
   });
   if (result.status === 'updated') {
     input.refreshFindingsState();
-    input.emitEvent('findings:ledger', result.ledger);
+    input.emitEvent(
+      'findings:ledger',
+      result.ledger,
+      input.eventAttribution.iteration,
+      input.eventAttribution.scope,
+    );
   }
   return result;
 }

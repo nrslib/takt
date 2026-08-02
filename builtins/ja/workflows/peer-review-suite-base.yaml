@@ -14,7 +14,6 @@ subworkflow:
       type: facet_ref[]
       facet_kind: knowledge
       default: []
-max_steps: 3
 initial_step: reviewers
 steps:
   - name: reviewers

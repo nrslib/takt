@@ -9,7 +9,6 @@ function makeWorkflowWithFindingContract(findingContract: unknown) {
     name: 'invalid-finding-contract-workflow',
     finding_contract: findingContract,
     initial_step: 'peer-review',
-    max_steps: 2,
     steps: [
       {
         name: 'peer-review',
@@ -35,7 +34,6 @@ describe('workflow finding_contract schema', () => {
         },
       },
       initial_step: 'peer-review',
-      max_steps: 2,
       steps: [
         {
           name: 'peer-review',
@@ -79,7 +77,6 @@ describe('workflow finding_contract schema', () => {
         },
       },
       initial_step: 'peer-review',
-      max_steps: 2,
       steps: [
         {
           name: 'peer-review',
@@ -110,7 +107,6 @@ describe('workflow finding_contract schema', () => {
         },
       },
       initial_step: 'peer-review',
-      max_steps: 2,
       steps: [
         {
           name: 'peer-review',
@@ -140,7 +136,6 @@ describe('workflow finding_contract schema', () => {
         },
       },
       initial_step: 'peer-review',
-      max_steps: 2,
       steps: [
         {
           name: 'peer-review',
@@ -172,7 +167,6 @@ describe('workflow finding_contract schema', () => {
           },
         },
         initial_step: 'peer-review',
-        max_steps: 2,
         steps: [
           {
             name: 'peer-review',
@@ -211,7 +205,6 @@ describe('workflow finding_contract schema', () => {
             stop_budget: stopBudget,
           },
           initial_step: 'peer-review',
-          max_steps: 2,
           steps: [
             {
               name: 'peer-review',
@@ -240,7 +233,6 @@ describe('workflow finding_contract schema', () => {
         },
       },
       initial_step: 'peer-review',
-      max_steps: 2,
       steps: [
         {
           name: 'peer-review',
@@ -286,7 +278,6 @@ describe('workflow finding_contract schema', () => {
           },
         },
         initial_step: 'peer-review',
-        max_steps: 2,
         steps: [
           {
             name: 'peer-review',
@@ -313,7 +304,6 @@ describe('workflow finding_contract schema', () => {
     const workflow = normalizeWorkflowConfig({
       name: 'workflow-without-finding-contract',
       initial_step: 'review',
-      max_steps: 2,
       steps: [
         {
           name: 'review',
@@ -333,7 +323,6 @@ describe('workflow finding_contract schema', () => {
       normalizeWorkflowConfig({
         name: 'invalid-findings-rule-workflow',
         initial_step: 'review',
-        max_steps: 2,
         steps: [
           {
             name: 'review',
@@ -355,7 +344,6 @@ describe('workflow finding_contract schema', () => {
         requires_finding_contract: true,
       },
       initial_step: 'review',
-      max_steps: 2,
       steps: [
         {
           name: 'review',
@@ -391,7 +379,6 @@ describe('workflow finding_contract schema', () => {
         },
       },
       initial_step: 'review',
-      max_steps: 2,
       steps: [
         {
           name: 'review',
@@ -410,7 +397,6 @@ describe('workflow finding_contract schema', () => {
       normalizeWorkflowConfig({
         name: 'invalid-loop-monitor-findings-rule-workflow',
         initial_step: 'review',
-        max_steps: 2,
         steps: [
           {
             name: 'review',
@@ -437,7 +423,6 @@ describe('workflow finding_contract schema', () => {
       normalizeWorkflowConfig({
         name: 'invalid-parallel-findings-rule-workflow',
         initial_step: 'reviewers',
-        max_steps: 2,
         steps: [
           {
             name: 'reviewers',
@@ -463,7 +448,6 @@ describe('workflow finding_contract schema', () => {
       normalizeWorkflowConfig({
         name: 'invalid-aggregate-findings-guard-workflow',
         initial_step: 'reviewers',
-        max_steps: 2,
         steps: [
           {
             name: 'reviewers',
@@ -497,7 +481,6 @@ describe('workflow finding_contract schema', () => {
         },
       },
       initial_step: 'reviewers',
-      max_steps: 2,
       steps: [
         {
           name: 'reviewers',
@@ -536,7 +519,6 @@ describe('workflow finding_contract schema', () => {
         },
       },
       initial_step: 'reviewers',
-      max_steps: 2,
       steps: [
         {
           name: 'reviewers',
@@ -583,7 +565,6 @@ describe('workflow finding_contract schema', () => {
         },
       },
       initial_step: 'review',
-      max_steps: 2,
       steps: [
         {
           name: 'review',
@@ -624,7 +605,6 @@ describe('workflow finding_contract schema', () => {
           },
         },
         initial_step: 'peer-review',
-        max_steps: 2,
         steps: [
           {
             name: 'peer-review',
@@ -652,7 +632,6 @@ describe('workflow finding_contract schema', () => {
           manager_session: 'continue',
         },
         initial_step: 'peer-review',
-        max_steps: 2,
         steps: [
           {
             name: 'peer-review',

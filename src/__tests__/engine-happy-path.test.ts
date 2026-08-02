@@ -12,7 +12,8 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { WorkflowConfig, WorkflowStep } from '../core/models/index.js';
 
 // --- Mock setup (must be before imports that use these modules) ---
@@ -48,6 +49,7 @@ import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDetectionExhaustedError.js';
 import { runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
 import { StructuredOutputSchemaError } from '../core/workflow/engine/structured-output-schema-validator.js';
+import { parsePhaseExecutionId } from '../shared/utils/phaseExecutionId.js';
 import {
   makeResponse,
   makeStep,
@@ -84,6 +86,42 @@ describe('WorkflowEngine Integration: Happy Path', () => {
   // 1. Happy Path
   // =====================================================
   describe('Happy path', () => {
+    it('should attribute report events to the execution plan snapshot', async () => {
+      const config = buildDefaultWorkflowConfig({
+        maxSteps: 1,
+        initialStep: 'review',
+        steps: [makeStep('review', {
+          outputContracts: [{ name: 'review.md', format: '# Review' }],
+          rules: [makeRule('done', 'COMPLETE')],
+        })],
+      });
+      engine = new WorkflowEngine(config, tmpDir, 'test task', {
+        projectCwd: tmpDir,
+        provider: 'mock',
+      });
+      const reportDir = join(tmpDir, '.takt', 'runs', 'test-report-dir', 'reports');
+      mkdirSync(reportDir, { recursive: true });
+      writeFileSync(join(reportDir, 'review.md'), '# Review\n', 'utf-8');
+      mockRunAgentSequence([makeResponse({ persona: 'review', content: 'done' })]);
+      mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
+      const reportEvent = vi.fn();
+      engine.on('step:report', reportEvent);
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('completed');
+      expect(reportEvent).toHaveBeenCalledOnce();
+      expect(reportEvent.mock.calls[0]?.[3]).toBe(1);
+      expect(reportEvent.mock.calls[0]?.[4]).toEqual({
+        kind: 'workflow_execution_scope',
+        stack: [expect.objectContaining({
+          workflow: config.name,
+          step: 'review',
+          kind: 'agent',
+        })],
+      });
+    });
+
     it('should keep an existing normal step session when the response omits sessionId', async () => {
       const config = buildDefaultWorkflowConfig({
         maxSteps: 1,
@@ -163,7 +201,7 @@ describe('WorkflowEngine Integration: Happy Path', () => {
           rules: [makeRule('done', 'COMPLETE'), makeRule('retry', 'implement')],
         })],
       });
-      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock' });
       vi.mocked(runStatusJudgmentPhase).mockRejectedValue(new StructuredOutputSchemaError('Structured output schema is invalid'));
       mockRunAgentSequence([
         makeResponse({ persona: 'coder', content: '[IMPLEMENT:1] done' }),
@@ -179,7 +217,7 @@ describe('WorkflowEngine Integration: Happy Path', () => {
 
     it('should complete: plan → implement → ai_review → reviewers(all approved) → supervise → COMPLETE', async () => {
       const config = buildDefaultWorkflowConfig();
-      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock' });
 
       mockRunAgentSequence([
         makeResponse({ persona: 'plan', content: 'Plan complete' }),
@@ -218,7 +256,7 @@ describe('WorkflowEngine Integration: Happy Path', () => {
   describe('Review reject and fix loop', () => {
     it('should handle: reviewers(needs_fix) → fix → reviewers(all approved) → supervise → COMPLETE', async () => {
       const config = buildDefaultWorkflowConfig();
-      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock' });
 
       mockRunAgentSequence([
         makeResponse({ persona: 'plan', content: 'Plan done' }),
@@ -259,7 +297,7 @@ describe('WorkflowEngine Integration: Happy Path', () => {
 
     it('should inject latest reviewers output as Previous Response for repeated fix steps', async () => {
       const config = buildDefaultWorkflowConfig();
-      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock' });
 
       mockRunAgentSequence([
         makeResponse({ persona: 'plan', content: 'Plan done' }),
@@ -315,7 +353,7 @@ describe('WorkflowEngine Integration: Happy Path', () => {
 
     it('should use the latest step output across different steps for Previous Response', async () => {
       const config = buildDefaultWorkflowConfig();
-      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock' });
 
       mockRunAgentSequence([
         makeResponse({ persona: 'plan', content: 'Plan done' }),
@@ -365,7 +403,7 @@ describe('WorkflowEngine Integration: Happy Path', () => {
   describe('AI review reject and fix', () => {
     it('should handle: ai_review(issues) → ai_fix → reviewers → supervise → COMPLETE', async () => {
       const config = buildDefaultWorkflowConfig();
-      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock' });
 
       mockRunAgentSequence([
         makeResponse({ persona: 'plan', content: 'Plan done' }),
@@ -402,7 +440,7 @@ describe('WorkflowEngine Integration: Happy Path', () => {
   describe('ABORT transition', () => {
     it('should abort when a step transitions to ABORT', async () => {
       const config = buildDefaultWorkflowConfig();
-      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock' });
 
       mockRunAgentSequence([
         makeResponse({ persona: 'plan', content: 'Requirements unclear' }),
@@ -429,7 +467,7 @@ describe('WorkflowEngine Integration: Happy Path', () => {
   describe('Event emissions', () => {
     it('should emit step:start and step:complete for each step', async () => {
       const config = buildDefaultWorkflowConfig();
-      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock' });
 
       mockRunAgentSequence([
         makeResponse({ persona: 'plan', content: 'Plan' }),
@@ -476,7 +514,7 @@ describe('WorkflowEngine Integration: Happy Path', () => {
           }),
         ],
       };
-      engine = new WorkflowEngine(simpleConfig, tmpDir, 'test task', { projectCwd: tmpDir });
+      engine = new WorkflowEngine(simpleConfig, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock' });
 
       mockRunAgentSequence([
         makeResponse({ persona: 'plan', content: 'Plan done' }),
@@ -543,9 +581,9 @@ describe('WorkflowEngine Integration: Happy Path', () => {
       expect(startInstruction).toBe(completeInstruction);
     });
 
-    it('should pass empty instruction to step:start for parallel steps', async () => {
+    it('should attribute instructions to parallel child phases without assigning one to the control parent', async () => {
       const config = buildDefaultWorkflowConfig();
-      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock' });
 
       mockRunAgentSequence([
         makeResponse({ persona: 'plan', content: 'Plan' }),
@@ -567,6 +605,7 @@ describe('WorkflowEngine Integration: Happy Path', () => {
       ]);
 
       const startFn = vi.fn();
+      const phaseStartFn = vi.fn();
       let resumePointAtParallelStart: ReturnType<WorkflowEngine['getResumePoint']>;
       engine.on('step:start', (...args) => {
         startFn(...args);
@@ -574,6 +613,7 @@ describe('WorkflowEngine Integration: Happy Path', () => {
           resumePointAtParallelStart = engine.getResumePoint();
         }
       });
+      engine.on('phase:start', phaseStartFn);
 
       await engine.run();
 
@@ -582,16 +622,23 @@ describe('WorkflowEngine Integration: Happy Path', () => {
         (call) => (call[0] as WorkflowStep).name === 'reviewers'
       );
       expect(reviewersCall).toBeDefined();
-      // Parallel steps emit empty string for instruction
       const [, , instruction] = reviewersCall!;
       expect(instruction).toBe('');
       expect(reviewersCall?.[6]).toBe(1);
       expect(resumePointAtParallelStart?.stack[0]?.step_iterations?.reviewers).toBe(1);
+      const reviewerPhaseInstructions = phaseStartFn.mock.calls
+        .filter((call) => ['arch-review', 'security-review'].includes((call[0] as WorkflowStep).name))
+        .map((call) => call[3]);
+      expect(reviewerPhaseInstructions).toHaveLength(2);
+      expect(reviewerPhaseInstructions).toEqual([
+        expect.stringContaining('test task'),
+        expect.stringContaining('test task'),
+      ]);
     });
 
     it('should emit iteration:limit when max iterations reached', async () => {
       const config = buildDefaultWorkflowConfig({ maxSteps: 1 });
-      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock' });
 
       mockRunAgentSequence([
         makeResponse({ persona: 'plan', content: 'Plan' }),
@@ -605,7 +652,14 @@ describe('WorkflowEngine Integration: Happy Path', () => {
 
       await engine.run();
 
-      expect(limitFn).toHaveBeenCalledWith(1, 1);
+      expect(limitFn).toHaveBeenCalledWith(
+        1,
+        1,
+        'implement',
+        expect.objectContaining({
+          stack: [expect.objectContaining({ step: 'implement' })],
+        }),
+      );
     });
   });
 
@@ -615,7 +669,7 @@ describe('WorkflowEngine Integration: Happy Path', () => {
   describe('Step output tracking', () => {
     it('should store outputs for all executed steps', async () => {
       const config = buildDefaultWorkflowConfig();
-      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock' });
 
       mockRunAgentSequence([
         makeResponse({ persona: 'plan', content: 'Plan output' }),
@@ -660,7 +714,7 @@ describe('WorkflowEngine Integration: Happy Path', () => {
           }),
         ],
       };
-      engine = new WorkflowEngine(simpleConfig, tmpDir, 'test task', { projectCwd: tmpDir });
+      engine = new WorkflowEngine(simpleConfig, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock' });
 
       mockRunAgentSequence([
         makeResponse({ persona: 'plan', content: 'Plan done' }),
@@ -676,24 +730,40 @@ describe('WorkflowEngine Integration: Happy Path', () => {
 
       await engine.run();
 
+      const phaseExecutionId = phaseStartFn.mock.calls[0]?.[5];
+      expect(typeof phaseExecutionId).toBe('string');
+      expect(parsePhaseExecutionId(phaseExecutionId as string)).toEqual(expect.objectContaining({
+        step: 'plan',
+        iteration: 1,
+        phase: 1,
+        sequence: 1,
+        workflowStack: [expect.objectContaining({
+          workflow: 'test',
+          step: 'plan',
+          kind: 'agent',
+        })],
+      }));
+
       expect(phaseStartFn).toHaveBeenCalledWith(
         expect.objectContaining({ name: 'plan' }),
         1, 'execute', expect.any(String), expect.objectContaining({
           systemPrompt: expect.any(String),
           userInstruction: expect.any(String),
         }),
-        'plan:1:1:1',
+        phaseExecutionId,
         1,
+        expect.objectContaining({ kind: 'workflow_execution_scope' }),
       );
       expect(phaseCompleteFn).toHaveBeenCalledWith(
         expect.objectContaining({ name: 'plan' }),
-        1, 'execute', expect.any(String), 'done', undefined, 'plan:1:1:1', 1,
+        1, 'execute', expect.any(String), 'done', undefined, phaseExecutionId, 1,
+        expect.objectContaining({ kind: 'workflow_execution_scope' }),
       );
     });
 
     it('should emit phase events for all steps in happy path', async () => {
       const config = buildDefaultWorkflowConfig();
-      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock' });
 
       mockRunAgentSequence([
         makeResponse({ persona: 'plan', content: 'Plan' }),
@@ -792,6 +862,7 @@ describe('WorkflowEngine Integration: Happy Path', () => {
       });
       engine = new WorkflowEngine(config, tmpDir, 'test task', {
         projectCwd: tmpDir,
+        provider: 'mock',
         startStep: 'implement',
         initialIteration: 10,
         resumePoint: {
@@ -830,6 +901,7 @@ describe('WorkflowEngine Integration: Happy Path', () => {
       // Start from ai_review, skipping plan and implement
       engine = new WorkflowEngine(config, tmpDir, 'test task', {
         projectCwd: tmpDir,
+        provider: 'mock',
         startStep: 'ai_review',
       });
 
@@ -866,7 +938,7 @@ describe('WorkflowEngine Integration: Happy Path', () => {
 
     it('should use initialStep when startStep is not specified', async () => {
       const config = buildDefaultWorkflowConfig();
-      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock' });
 
       mockRunAgentSequence([
         makeResponse({ persona: 'plan', content: 'Plan complete' }),

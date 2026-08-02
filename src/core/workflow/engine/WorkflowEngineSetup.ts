@@ -53,6 +53,13 @@ import {
 } from '../workflow-call-invocation-index.js';
 import { SelectorInputReader } from '../dynamic-parallel/selector-input-reader.js';
 import { restoreWorkflowStepParticipationIndex } from '../workflow-step-participation-index.js';
+import { WorkflowStepBudget } from '../workflow-step-budget.js';
+import {
+  snapshotWorkflowExecutionScope,
+  workflowOwnerPathFromStack,
+} from '../workflow-execution-scope.js';
+import { WorkflowCallProgressTracker } from '../workflow-call-progress-tracker.js';
+import type { WorkflowCallProgressLease } from '../workflow-call-progress-tracker.js';
 
 const log = createLogger('workflow-engine');
 
@@ -64,14 +71,31 @@ interface WorkflowEngineSetupParams {
   getCwd: () => string;
   getReportDir: () => string;
   getRunPaths: () => RunPaths;
-  getMaxSteps: () => WorkflowMaxSteps;
+  stepBudget: WorkflowStepBudget;
+  interruptRequested: () => boolean;
   options: WorkflowEngineOptions & { structuredOutputNormalizers: StructuredOutputNormalizerRegistry };
   structuredCaller: StructuredCaller;
   sharedRuntime: WorkflowSharedRuntimeState;
+  progressLease: WorkflowCallProgressLease;
   resumeStackPrefix: readonly WorkflowResumePointEntry[];
   runPaths: RunPaths;
-  updateMaxSteps: (maxSteps: WorkflowMaxSteps) => void;
   setActiveResumePoint: (step: WorkflowStep, iteration: number) => void;
+  setActiveResumeStack: (stack: readonly WorkflowResumePointEntry[], iteration: number) => void;
+  adoptResumeCheckpoint: (resumePoint: WorkflowResumePoint, iteration: number) => void;
+  getActiveResumePoint: () => import('../../models/types.js').WorkflowResumePoint | undefined;
+  buildStepExecutionScope: (step: WorkflowStep, iteration: number) => import('../workflow-execution-scope.js').WorkflowExecutionScope;
+  setPendingLoopJudge: (
+    triggeringStep: WorkflowStep,
+    pending: import('../../models/types.js').WorkflowPendingLoopJudge,
+    iteration: number,
+  ) => void;
+  startPendingLoopJudge: (
+    judgeStep: WorkflowStep,
+    pending: import('../../models/types.js').WorkflowPendingLoopJudgeStarted,
+    iteration: number,
+  ) => void;
+  clearPendingLoopJudge: (triggeringStep: WorkflowStep, iteration: number) => void;
+  syncMaxSteps: (maxSteps: WorkflowMaxSteps) => void;
   persistDynamicParallelSelection: (
     step: WorkflowStep,
     iteration: number,
@@ -120,7 +144,8 @@ export function createSharedRuntime(
   const now = Date.now();
   return {
     startedAtMs: resumePoint ? now - resumePoint.elapsed_ms : now,
-    maxSteps,
+    stepBudget: new WorkflowStepBudget(maxSteps),
+    workflowCallProgressTracker: new WorkflowCallProgressTracker(),
     dynamicParallelSelectionStore: new DynamicParallelSelectionStore(
       new Map(Object.entries(resumePoint?.dynamic_parallel_selections ?? {})),
     ),
@@ -168,7 +193,7 @@ export function applyRuntimeEnvironment(
 
 export function createWorkflowEngineServices(params: WorkflowEngineSetupParams): WorkflowEngineServices {
   const phaseRelay = createWorkflowPhaseRelay((event, ...args) => params.emitEvent(event, ...args));
-  const getCurrentWorkflowStack = () => params.sharedRuntime.activeResumePoint?.stack;
+  const getCurrentWorkflowStack = () => params.getActiveResumePoint()?.stack;
   const buildFindingContractInstructionContext = (
     _step: WorkflowStep,
     includeRawFindingsSchema: boolean,
@@ -250,17 +275,18 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
 
   const workflowCallRunner = new WorkflowCallRunner({
     getConfig: () => params.config,
-    getMaxSteps: params.getMaxSteps,
-    updateMaxSteps: params.updateMaxSteps,
     state: params.state as never,
     projectCwd: params.projectCwd,
     getCwd: params.getCwd,
     task: params.task,
     getOptions: () => params.options,
     sharedRuntime: params.sharedRuntime,
+    progressLease: params.progressLease,
     resumeStackPrefix: [...params.resumeStackPrefix],
     runPaths: params.runPaths,
     setActiveResumePoint: params.setActiveResumePoint as never,
+    setActiveResumeStack: params.setActiveResumeStack,
+    adoptResumeCheckpoint: params.adoptResumeCheckpoint,
     emit: params.emitEvent,
     resolveWorkflowCall: (request) => params.options.workflowCallResolver!(request),
     createEngine: params.createEngine,
@@ -277,7 +303,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getReportNames: (_step, state) => getSelectorReportNames(
       params.config,
       state,
-      params.resumeStackPrefix,
+      workflowOwnerPathFromStack(params.resumeStackPrefix),
       params.options.workflowCallResolver,
       params.projectCwd,
       params.getCwd(),
@@ -285,7 +311,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
       params.sharedRuntime.workflowStepParticipationIndex!,
     ),
     getWorkflowReference: () => getWorkflowReference(params.config),
-    workflowCallPath: params.resumeStackPrefix,
+    ownerPath: workflowOwnerPathFromStack(params.resumeStackPrefix),
     commitSelection: params.persistDynamicParallelSelection,
     ...(params.options.selectorGitCommandRunner === undefined
       ? {}
@@ -297,6 +323,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     stepExecutor,
     engineOptions: params.options,
     getCwd: params.getCwd,
+    getReportDir: () => params.runPaths.reportsAbs,
     dynamicParallelSelector,
     getWorkflowName: () => params.config.name,
     getInteractive: () => params.options.interactive === true,
@@ -311,8 +338,9 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     workflowModel: params.config.model,
     findingLedgerStore: params.findingLedgerStore,
     getWorkflowCallRunner: () => workflowCallRunner,
-    updateMaxSteps: params.updateMaxSteps,
     setActiveResumePoint: params.setActiveResumePoint,
+    setActiveResumeStack: params.setActiveResumeStack,
+    adoptResumeCheckpoint: params.adoptResumeCheckpoint,
     getRunId: () => params.runPaths.slug,
     getFindingCallNamespace: () => params.options.findingCallNamespace ?? '',
     runQualityGates,
@@ -366,16 +394,18 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
         interactive: params.options.interactive === true,
       };
     },
-    getStatusJudgmentContext: (step, state, lastResponse, runtime) => optionsBuilder.buildPhaseRunnerContext(
+    getStatusJudgmentContext: (step, state, lastResponse, executionScope, runtime) => optionsBuilder.buildPhaseRunnerContext(
       step,
       state,
       lastResponse,
       params.updatePersonaSession,
-      phaseRelay.onPhaseStart,
-      phaseRelay.onPhaseComplete,
-      phaseRelay.onJudgeStage,
-      state.iteration,
-      runtime,
+      {
+        eventAttribution: { iteration: state.iteration, scope: executionScope },
+        runtime,
+        onPhaseStart: phaseRelay.onPhaseStart,
+        onPhaseComplete: phaseRelay.onPhaseComplete,
+        onJudgeStage: phaseRelay.onJudgeStage,
+      },
     ),
     systemStepServicesFactory: params.options.systemStepServicesFactory,
   });
@@ -385,11 +415,24 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     stepExecutor,
     state: params.state as never,
     task: params.task,
-    getMaxSteps: params.getMaxSteps,
+    stepBudget: params.stepBudget,
+    recordCountableProgress: () => params.progressLease.recordCountableProgress(),
+    interruptRequested: params.interruptRequested,
+    ignoreIterationLimit: params.options.ignoreIterationLimit === true,
+    requestIterationLimitExtension: params.options.onIterationLimit,
+    setPendingLoopJudge: params.setPendingLoopJudge,
+    startPendingLoopJudge: params.startPendingLoopJudge,
+    clearPendingLoopJudge: params.clearPendingLoopJudge,
+    syncMaxSteps: params.syncMaxSteps,
+    getExecutionScope: () => snapshotWorkflowExecutionScope(params.getActiveResumePoint()?.stack),
+    getLimitExecutionScope: params.buildStepExecutionScope,
+    emitIterationLimit: (iteration, maxSteps, currentStep, scope) => {
+      params.emitEvent('iteration:limit', iteration, maxSteps, currentStep, scope);
+    },
     language: params.options.language,
     updatePersonaSession: params.updatePersonaSession,
     resolveNextStepFromDone: params.resolveNextStepFromDone as never,
-    onStepStart: (step, iteration, instruction, providerInfo, resumeStepName, stepIteration) => {
+    onStepStart: (step, iteration, instruction, providerInfo, resumeStepName, stepIteration, maxSteps, scope) => {
       params.emitEvent(
         'step:start',
         step,
@@ -399,14 +442,16 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
         params.config.name,
         resumeStepName,
         stepIteration,
+        maxSteps,
+        scope,
       );
     },
-    onStepComplete: (step, response, instruction, resumeStepName) => {
-      params.emitEvent('step:complete', step, response, instruction, resumeStepName);
+    onStepComplete: (step, response, instruction, resumeStepName, scope) => {
+      params.emitEvent('step:complete', step, response, instruction, resumeStepName, scope);
     },
-    emitCollectedReports: () => {
+    emitCollectedReports: (iteration, scope) => {
       for (const { step, filePath, fileName } of stepExecutor.drainReportFiles()) {
-        params.emitEvent('step:report', step, filePath, fileName);
+        params.emitEvent('step:report', step, filePath, fileName, iteration, scope);
       }
     },
     resetCycleDetector: params.resetCycleDetector,

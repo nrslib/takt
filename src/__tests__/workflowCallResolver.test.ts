@@ -80,7 +80,6 @@ subworkflow:
   callable: true
   visibility: internal
 initial_step: implement
-max_steps: 3
 steps:
   - name: implement
     persona: coder
@@ -183,7 +182,6 @@ subworkflow:
   visibility: internal
   requires_finding_contract: true
 initial_step: review
-max_steps: 3
 steps:
   - name: review
     persona: reviewer
@@ -224,7 +222,6 @@ steps:
 subworkflow:
   callable: true
 initial_step: delegate_nested
-max_steps: 3
 steps:
   - name: delegate_nested
     kind: workflow_call
@@ -239,7 +236,6 @@ steps:
 subworkflow:
   callable: true
 initial_step: review
-max_steps: 3
 steps:
   - name: review
     persona: nested-reviewer
@@ -252,7 +248,6 @@ steps:
 subworkflow:
   callable: true
 initial_step: review
-max_steps: 3
 steps:
   - name: review
     persona: wrong-reviewer
@@ -326,7 +321,6 @@ subworkflow:
       type: facet_ref
       facet_kind: report_format
 initial_step: review
-max_steps: 3
 personas:
   delegated-reviewer: |
     Review the delegated change.
@@ -426,7 +420,6 @@ subworkflow:
       facet_kind: knowledge
       default: [architecture]
 initial_step: delegate_child
-max_steps: 3
 knowledge:
   architecture: |
     Architecture reference content.
@@ -453,7 +446,6 @@ subworkflow:
       type: facet_ref[]
       facet_kind: knowledge
 initial_step: review
-max_steps: 3
 knowledge:
   domain: |
     Domain reference content.
@@ -534,7 +526,6 @@ subworkflow:
       type: facet_ref
       facet_kind: policy
 initial_step: review
-max_steps: 3
 policies:
   relaxed-review: |
     Use the relaxed child policy.
@@ -595,7 +586,6 @@ subworkflow:
       type: facet_ref
       facet_kind: knowledge
 initial_step: review
-max_steps: 3
 policies:
   strict-review: |
     Follow the strict child review checklist.
@@ -933,7 +923,6 @@ subworkflow:
       type: facet_ref
       facet_kind: report_format
 initial_step: review
-max_steps: 3
 report_formats:
   summary: |
     # Summary Format
@@ -980,7 +969,6 @@ subworkflow:
       type: facet_ref[]
       facet_kind: knowledge
 initial_step: review
-max_steps: 3
 knowledge:
   architecture: |
     Architecture reference content.
@@ -1029,7 +1017,6 @@ subworkflow:
       type: facet_ref
       facet_kind: policy
 initial_step: review
-max_steps: 3
 policies:
   strict-review: |
     Follow the strict child review checklist.
@@ -1078,7 +1065,6 @@ subworkflow:
       type: facet_ref
       facet_kind: knowledge
 initial_step: review
-max_steps: 3
 knowledge:
   architecture: |
     Architecture reference content.
@@ -1124,7 +1110,6 @@ subworkflow:
       type: facet_ref
       facet_kind: instruction
 initial_step: review
-max_steps: 3
 instructions:
   child-fix: |
     Fix child issues.
@@ -1170,7 +1155,6 @@ subworkflow:
       type: facet_ref
       facet_kind: knowledge
 initial_step: review
-max_steps: 3
 steps:
   - name: review
     persona: reviewer
@@ -1216,7 +1200,6 @@ subworkflow:
       type: facet_ref
       facet_kind: knowledge
 initial_step: review
-max_steps: 3
 policies:
   strict-review: |
     This is a policy, not knowledge.
@@ -1254,7 +1237,6 @@ subworkflow:
       type: facet_ref
       facet_kind: knowledge
 initial_step: review
-max_steps: 3
 knowledge:
   local-review: |
     Project child local knowledge.
@@ -1315,7 +1297,6 @@ subworkflow:
       type: facet_ref
       facet_kind: knowledge
 initial_step: review
-max_steps: 3
 steps:
   - name: review
     persona: reviewer
@@ -1374,7 +1355,6 @@ subworkflow:
       type: facet_ref
       facet_kind: instruction
 initial_step: review
-max_steps: 3
 steps:
   - name: review
     persona: reviewer

@@ -13,14 +13,28 @@ import { executeAndCompleteTask } from '../features/tasks/execute/taskExecution.
 import { invalidateGlobalConfigCache, loadWorkflowByIdentifier } from '../infra/config/index.js';
 import { TaskRunner, type TaskInfo } from '../infra/task/index.js';
 import { parseFindingLedger } from '../core/models/finding-schemas.js';
-import { buildWorkflowResumePointEntry } from '../core/workflow/workflow-reference.js';
+import { buildWorkflowResumePointEntry, getWorkflowReference } from '../core/workflow/workflow-reference.js';
 import { WorkflowCallInvocationIndex } from '../core/workflow/workflow-call-invocation-index.js';
 import { WorkflowStepParticipationIndex } from '../core/workflow/workflow-step-participation-index.js';
+import { buildWorkflowCallNamespaceFixture } from './helpers/workflow-resume-fixture.js';
 
 const sourceRunSlug = '20260717-source-run';
 const resumeModes = ['requeue', 'retry', 'instruct'] as const;
 
 type ResumeMode = typeof resumeModes[number];
+
+function callNamespace(parentWorkflow: string, childWorkflow: string): string {
+  return buildWorkflowCallNamespaceFixture(parentWorkflow, 'delegate', [], childWorkflow, 1);
+}
+
+function loadCallNamespace(projectDir: string): string {
+  const parent = loadWorkflowByIdentifier('parent-fix', projectDir);
+  const child = loadWorkflowByIdentifier('child-fix', projectDir);
+  if (parent === null || child === null) {
+    throw new Error('Expected report inheritance workflows');
+  }
+  return callNamespace(getWorkflowReference(parent), getWorkflowReference(child));
+}
 
 interface TestEnvironment {
   root: string;
@@ -64,7 +78,6 @@ function createEnvironment(withFindingContract: boolean): TestEnvironment {
       '    output_contract: findings-manager',
     ] : []),
     'initial_step: fix',
-    'max_steps: 4',
     'steps:',
     '  - name: reviewers',
     '    parallel:',
@@ -108,11 +121,14 @@ function buildResumePoint(projectDir: string) {
   const invocationIndex = new WorkflowCallInvocationIndex(new Map());
   invocationIndex.record(parent, 'delegate', [], {
     call_instance: 1,
-    report_namespace_segment: 'iteration-1--step-delegate--workflow-child-fix',
+    child_workflow_ref: getWorkflowReference(child),
   });
   const participationIndex = new WorkflowStepParticipationIndex(new Map());
   participationIndex.record(child, 'reviewers', [delegateEntry], []);
-  participationIndex.record(child, 'arch-review', [delegateEntry], ['05-arch-review.md']);
+  participationIndex.record(child, 'arch-review', [
+    delegateEntry,
+    buildWorkflowResumePointEntry(child, 'reviewers', 'agent'),
+  ], ['05-arch-review.md']);
 
   return {
     version: 2 as const,
@@ -186,7 +202,7 @@ function writeSourceReports(projectDir: string, withFindingContract: boolean): {
     sourceRunSlug,
     'reports',
     'subworkflows',
-    'iteration-1--step-delegate--workflow-child-fix',
+    loadCallNamespace(projectDir),
   );
   mkdirSync(sourceReportDir, { recursive: true });
   writeFileSync(join(sourceReportDir, '05-arch-review.md'), 'previous architecture review', 'utf-8');
@@ -275,7 +291,7 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
       resumedRunSlug,
       'reports',
       'subworkflows',
-      'iteration-1--step-delegate--workflow-child-fix',
+      loadCallNamespace(environment.projectDir),
       '05-arch-review.md',
     );
     const diagnosticPath = join(
@@ -285,7 +301,7 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
       resumedRunSlug,
       'reports',
       'subworkflows',
-      'iteration-1--step-delegate--workflow-child-fix',
+      loadCallNamespace(environment.projectDir),
       'review-report-inheritance.json',
     );
 

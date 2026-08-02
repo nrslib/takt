@@ -129,6 +129,68 @@ steps:
     expect(result.stepPreviews).toEqual([]);
   });
 
+  it('should preview workflow calls as provider-independent control nodes', () => {
+    const workflowYaml = `name: workflow-call-preview
+initial_step: delegate
+max_steps: 2
+workflow_config:
+  provider: claude
+  model: claude-model
+
+steps:
+  - name: delegate
+    kind: workflow_call
+    call: shared/review
+    rules:
+      - condition: COMPLETE
+        next: reviewers
+      - condition: ABORT
+        next: ABORT
+  - name: reviewers
+    parallel:
+      - name: delegated-review
+        kind: workflow_call
+        call: shared/review
+        rules:
+          - condition: COMPLETE
+            next: COMPLETE
+          - condition: ABORT
+            next: ABORT
+      - name: direct-review
+        persona: reviewer
+        instruction: Review directly
+        provider_options:
+          claude:
+            allowed_tools: [Read]
+    rules:
+      - condition: all("done")
+        next: COMPLETE
+`;
+    const workflowPath = join(tempDir, 'workflow-call-preview.yaml');
+    writeFileSync(workflowPath, workflowYaml);
+
+    const result = getWorkflowSummary(workflowPath, tempDir, 2);
+
+    expect(result.stepPreviews[0]).toEqual({
+      kind: 'workflow_call',
+      name: 'delegate',
+      call: 'shared/review',
+    });
+    const parallelSubsteps = result.stepPreviews[1]?.substeps;
+    expect(parallelSubsteps?.[0]).toEqual({
+      kind: 'workflow_call',
+      name: 'delegated-review',
+      call: 'shared/review',
+    });
+    expect(parallelSubsteps?.[1]).toMatchObject({
+      name: 'direct-review',
+      provider: 'claude',
+      model: 'claude-model',
+      allowedTools: ['Read'],
+    });
+    expect(result.firstStep).toBeUndefined();
+  });
+
   it('should handle steps without descriptions', () => {
     const workflowYaml = `name: minimal
 initial_step: step1

@@ -10,7 +10,9 @@ import type { WorkflowCallResolver } from './types.js';
 import { getReportFiles } from './output-contract-files.js';
 import { MAX_WORKFLOW_CALL_DEPTH } from './workflow-call-depth.js';
 import { buildWorkflowResumePointEntry, getWorkflowReference } from './workflow-reference.js';
-import { workflowCallNamespaceSegmentMatchesInvocation } from './workflow-call-namespace.js';
+import { buildWorkflowCallNamespaceSegment } from './workflow-call-namespace.js';
+import { getWorkflowStepKind } from './step-kind.js';
+import { buildWorkflowCallInvocationIdentity } from './workflow-call-invocation-index.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
 import {
   resolveReviewReportStepParticipation,
@@ -18,6 +20,10 @@ import {
   type ReviewReportStepParticipation,
   type WorkflowCallReportParticipation,
 } from './review-report-participation.js';
+import {
+  workflowCallPathFromStack,
+  workflowOwnerPathFromStack,
+} from './workflow-execution-scope.js';
 
 const REPORT_PATH_SEPARATOR = '/';
 
@@ -63,7 +69,7 @@ export function createReviewReportDiscoveryContext(
     workflowCallResolver: options.workflowCallResolver,
     projectCwd: options.projectCwd,
     lookupCwd: options.lookupCwd,
-    resumeStackPrefix: options.resumeStackPrefix,
+    resumeStackPrefix: workflowOwnerPathFromStack(options.resumeStackPrefix),
     participation: {
       activeWorkflowReference: getWorkflowReference(options.workflow),
       stepOutputNames: options.stepOutputNames,
@@ -90,7 +96,7 @@ export function resolveInheritedReviewReportNamesWithDiagnostics(
       context,
       [],
       new Set([getWorkflowReference(context.workflow)]),
-      context.resumeStackPrefix.length + 1,
+      workflowCallPathFromStack(context.resumeStackPrefix).length + 1,
     )));
     failures.push(...result.failures);
     if (result.reportNames.length > 0) {
@@ -111,7 +117,7 @@ export function resolveWorkflowStepReportNamesWithDiagnostics(
     context,
     [],
     new Set([getWorkflowReference(context.workflow)]),
-    context.resumeStackPrefix.length + 1,
+    workflowCallPathFromStack(context.resumeStackPrefix).length + 1,
   );
 }
 
@@ -131,7 +137,11 @@ function resolveReviewReportSourceStepGroups(
         .some((parallelStep) => parallelStep.name === step.name),
   );
   if (parallelParent?.parallel) {
-    const participation = resolveParticipation(parallelParent, context);
+    const participation = resolveParticipation(
+      parallelParent,
+      context,
+      context.resumeStackPrefix,
+    );
     if (participation.kind === 'invalid') {
       return {
         groups: [],
@@ -159,7 +169,11 @@ function resolveReviewReportSourceStepGroups(
   const failures: ReviewReportDiscoveryFailure[] = [];
   for (let index = currentIndex - 1; index >= 0; index -= 1) {
     const candidate = workflowSteps[index]!;
-    const participation = resolveParticipation(candidate, context);
+    const participation = resolveParticipation(
+      candidate,
+      context,
+      context.resumeStackPrefix,
+    );
     if (participation.kind === 'not-participated') continue;
     if (participation.kind === 'invalid') {
       failures.push({ kind: 'fatal', reason: participation.reason });
@@ -191,6 +205,7 @@ function resolveWorkflowCallReportNames(
   namespace: readonly string[],
   workflowReferences: ReadonlySet<string>,
   depth: number,
+  ownerPath: readonly WorkflowResumePointEntry[],
 ): InheritedReviewReportNamesResult {
   let childWorkflow: WorkflowConfig | null | undefined;
   try {
@@ -232,11 +247,7 @@ function resolveWorkflowCallReportNames(
       }],
     };
   }
-  if (!workflowCallNamespaceSegmentMatchesInvocation(
-    reportParticipation.invocation.report_namespace_segment,
-    step.name,
-    childWorkflow.name,
-  )) {
+  if (reportParticipation.invocation.child_workflow_ref !== childWorkflowReference) {
     return {
       reportNames: [],
       failures: [{
@@ -245,7 +256,15 @@ function resolveWorkflowCallReportNames(
       }],
     };
   }
-  const namespaceSegment = reportParticipation.invocation.report_namespace_segment;
+  const namespaceSegment = buildWorkflowCallNamespaceSegment(
+    buildWorkflowCallInvocationIdentity(
+      getWorkflowReference(context.workflow),
+      step.name,
+      ownerPath,
+    ),
+    reportParticipation.invocation.child_workflow_ref,
+    reportParticipation.invocation.call_instance,
+  );
   const childNamespace = [
     ...namespace,
     'subworkflows',
@@ -257,7 +276,7 @@ function resolveWorkflowCallReportNames(
       ...context,
       workflow: childWorkflow,
       resumeStackPrefix: [
-        ...context.resumeStackPrefix,
+        ...ownerPath,
         buildWorkflowResumePointEntry(
           context.workflow,
           step.name,
@@ -279,8 +298,10 @@ function resolveWorkflowStepReportNames(
   namespace: readonly string[],
   workflowReferences: ReadonlySet<string>,
   depth: number,
+  ownerPath: readonly WorkflowResumePointEntry[] = context.resumeStackPrefix,
 ): InheritedReviewReportNamesResult {
-  const participation = resolveParticipation(step, context);
+  const effectiveOwnerPath = resolveStepOwnerPath(step, context, ownerPath);
+  const participation = resolveParticipation(step, context, effectiveOwnerPath);
   if (participation.kind === 'not-participated') {
     return { reportNames: [], failures: [] };
   }
@@ -311,6 +332,7 @@ function resolveWorkflowStepReportNames(
         namespace,
         workflowReferences,
         depth,
+        effectiveOwnerPath,
       )
     : { reportNames: [], failures: [] };
   return combineReportNameResults([
@@ -339,13 +361,36 @@ function resolveParticipatedWorkflowStepReportNames(
 function resolveParticipation(
   step: WorkflowStep,
   context: InheritedReportSourceResolverContext,
+  ownerPath: readonly WorkflowResumePointEntry[],
 ): ReviewReportStepParticipation {
   return resolveReviewReportStepParticipation(
     step,
     context.workflow,
-    context.resumeStackPrefix,
+    ownerPath,
     context.participation,
   );
+}
+
+function resolveStepOwnerPath(
+  step: WorkflowStep,
+  context: InheritedReportSourceResolverContext,
+  ownerPath: readonly WorkflowResumePointEntry[],
+): readonly WorkflowResumePointEntry[] {
+  const parallelParent = context.workflow.steps.find((candidate) =>
+    candidate.parallel !== undefined
+      && getAllParallelSubSteps(candidate.parallel).some((subStep) => subStep === step),
+  );
+  if (parallelParent === undefined) {
+    return ownerPath;
+  }
+  return [
+    ...ownerPath,
+    buildWorkflowResumePointEntry(
+      context.workflow,
+      parallelParent.name,
+      getWorkflowStepKind(parallelParent),
+    ),
+  ];
 }
 
 function combineReportNameResults(

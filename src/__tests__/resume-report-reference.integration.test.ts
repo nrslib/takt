@@ -99,6 +99,7 @@ describe('resume boundary: {report:X} references across runs', () => {
 
     const engine = new WorkflowEngine(makeArbitrateConfig(), tmpDir, 'resume the arbitration', {
       projectCwd: tmpDir,
+      provider: 'mock',
       reportDirName: 'test-report-dir',
     });
     const state = await engine.run();
@@ -116,6 +117,7 @@ describe('resume boundary: {report:X} references across runs', () => {
     // 継承なし: 新 run の reports/ は空（createTestTmpDir が作成済み）。
     const engine = new WorkflowEngine(makeArbitrateConfig(), tmpDir, 'resume the arbitration', {
       projectCwd: tmpDir,
+      provider: 'mock',
       reportDirName: 'test-report-dir',
     });
 
@@ -136,6 +138,7 @@ describe('resume boundary: {report:X} references across runs', () => {
 
     const engine = new WorkflowEngine(makeArbitrateConfig(), tmpDir, 'resume the arbitration', {
       projectCwd: tmpDir,
+      provider: 'mock',
       reportDirName: 'test-report-dir',
     });
 

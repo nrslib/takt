@@ -403,6 +403,8 @@ step が別の workflow を名前で呼び出します。子 workflow は同じ 
 
 呼ばれる側の workflow は `subworkflow.params` を宣言することで、親から `impl_knowledge` や `fix_knowledge` などの値を受け取って動作を変えられます。step 定義の重複を避けられます。`subworkflow` の宣言については [Workflow レベルの設定](#workflow-レベルの設定) を参照してください。
 
+`max_steps` はルート workflow が所有し、すべての子孫で共有する予算です。`workflow_call` は制御ノードなので予算を消費せず、自身の provider / model も選択しません。iteration を消費するのは子 workflow 内の実行可能な step だけです。たとえば `plan → workflow_call(implement → review) → supervise` は4 iterationを消費するため、`implement` と `review` を callable workflow へ抽出しても `max_steps` を増やす必要はありません。nested call でも同じです。call lifecycle は invocation 番号と完全な call stack を伴って session log と trace から引き続き確認できます。
+
 ## Output Contracts（レポートファイル）
 
 step はレポートディレクトリ配下にレポートファイルを生成できます。
@@ -622,6 +624,8 @@ subworkflow:
       type: workflow_ref
       default: peer-review-suite-base
 ```
+
+callable workflow に `max_steps` を指定しないでください。call tree 全体にはルート workflow の予算が適用されるため、明示的な指定は loader が拒否します。callable workflow は `workflow_call` からのみ開始できます。同じ実装に直接実行の入口も必要な場合は、callable workflow を呼び出す standalone のルート wrapper を用意します。
 
 callable workflow の facet parameter は `facet_ref` / `facet_ref[]` と、`policy` / `knowledge` / `instruction` / `persona` / `report_format` の5種の `facet_kind` を使います。呼び出す callable workflow を表す `workflow_ref` parameter には `facet_kind` を指定せず、`call: { $param: reviewer_suite }` の形で利用できます。default は省略可能です。`facet_ref[]` の引数と default には空配列を指定でき、任意の追加 facet を表現できます。`policy` / `knowledge` では固定参照と scalar/list parameter を混在でき、list parameter は field の記載順を保ってその位置へ平坦化されます。parameter は `workflow_call.args` を通じてさらに下位へ渡すこともできます。
 

@@ -1,0 +1,26 @@
+name: workflow-call-budget-root
+workflow_config:
+  provider: mock
+max_steps: 4
+initial_step: plan
+steps:
+  - name: plan
+    persona: planner
+    instruction: Plan the task
+    rules:
+      - condition: Done
+        next: delegate
+  - name: delegate
+    kind: workflow_call
+    call: ./child.yaml
+    rules:
+      - condition: COMPLETE
+        next: supervise
+      - condition: ABORT
+        next: ABORT
+  - name: supervise
+    persona: supervisor
+    instruction: Supervise the result
+    rules:
+      - condition: Done
+        next: COMPLETE

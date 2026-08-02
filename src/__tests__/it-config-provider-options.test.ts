@@ -429,7 +429,7 @@ describe('IT: config provider_options reflection', () => {
     expect(JSON.parse(String((selectorLog as { identity?: unknown }).identity))).toEqual({
       workflow: expect.stringMatching(/^project:sha256:[0-9a-f]{64}$/),
       step: 'reviewers',
-      calls: [],
+      owners: [],
     });
     expect(Buffer.byteLength(String((selectorLog as { rationale?: unknown }).rationale), 'utf-8'))
       .toBeLessThanOrEqual(1_024);

@@ -46,18 +46,21 @@ function buildParallelOnlyConfig(): WorkflowConfig {
   return {
     name: 'test-parallel-failure',
     description: 'Test parallel failure handling',
+    provider: 'mock',
     maxSteps: 10,
     initialStep: 'reviewers',
     steps: [
       makeStep('reviewers', {
         parallel: [
           makeStep('arch-review', {
+            provider: 'mock',
             rules: [
               makeRule('approved', 'COMPLETE'),
               makeRule('needs_fix', 'fix'),
             ],
           }),
           makeStep('security-review', {
+            provider: 'mock',
             rules: [
               makeRule('approved', 'COMPLETE'),
               makeRule('needs_fix', 'fix'),
@@ -70,11 +73,13 @@ function buildParallelOnlyConfig(): WorkflowConfig {
         ],
       }),
       makeStep('done', {
+        provider: 'mock',
         rules: [
           makeRule('completed', 'COMPLETE'),
         ],
       }),
       makeStep('fix', {
+        provider: 'mock',
         rules: [
           makeRule('fixed', 'reviewers'),
         ],

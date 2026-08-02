@@ -300,6 +300,23 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     expect(getAttachedWorkflowOpaqueRef(bootstrap.effectiveWorkflowConfig)).toBeUndefined();
   });
 
+  it('root workflow と設定に provider がなくても架空 provider を生成せず bootstrap できる', async () => {
+    const projectDir = createTempProject();
+    mockResolveConfigValueWithSource
+      .mockReturnValueOnce({ value: undefined, source: 'default' })
+      .mockReturnValueOnce({ value: undefined, source: 'default' });
+
+    const bootstrap = await createWorkflowExecutionBootstrap(
+      { ...workflowConfig, provider: undefined, model: undefined },
+      'Run provider-less wrapper',
+      projectDir,
+      { projectCwd: projectDir },
+    );
+
+    expect(bootstrap.currentProvider).toBeUndefined();
+    expect(bootstrap.configuredModel).toBeUndefined();
+  });
+
   it('does not replace metadata already attached to the inheritance target', () => {
     const source = attachWorkflowSourcePath({}, '/source/workflow.yaml');
     const target = attachWorkflowSourcePath({}, '/target/workflow.yaml');

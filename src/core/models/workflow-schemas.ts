@@ -38,6 +38,7 @@ import {
 } from './workflow-session-constraints.js';
 import { WORKFLOW_SESSION_MODES } from './workflow-types.js';
 import { classifyReportRelativePath } from './reserved-report-names.js';
+import { validateCallableWorkflowMaxSteps } from './workflow-config-semantics.js';
 
 const RESERVED_WORKFLOW_CALL_RESULTS = ['COMPLETE', 'ABORT'] as const;
 const WorkflowStepNameSchema = z.string().min(1);
@@ -869,9 +870,21 @@ export const WorkflowConfigRawSchema = z.object({
   report_formats: z.record(z.string(), z.string()).optional(),
   steps: z.array(WorkflowConfigStepRawSchema).min(1),
   initial_step: z.string().optional(),
-  max_steps: z.union([z.number().int().positive(), z.literal('infinite')]).optional().default(10),
+  max_steps: z.union([z.number().int().positive(), z.literal('infinite')]).optional(),
   loop_monitors: z.array(LoopMonitorSchema).optional(),
   interactive_mode: InteractiveModeSchema.optional(),
 }).strict().superRefine((workflow, ctx) => {
+  try {
+    validateCallableWorkflowMaxSteps({
+      callable: workflow.subworkflow?.callable === true,
+      maxSteps: workflow.max_steps,
+    });
+  } catch (error) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['max_steps'],
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
   validateOutputContractIdentities(workflow.steps as readonly OutputContractStep[], ctx);
 });

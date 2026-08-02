@@ -3,6 +3,7 @@ export interface WorkflowStepScopeEntry {
   workflow_ref?: string;
   step: string;
   kind: 'agent' | 'system' | 'workflow_call';
+  call_instance?: number;
 }
 
 function normalizeWorkflowStepScope(
@@ -13,6 +14,7 @@ function normalizeWorkflowStepScope(
     ...(entry.workflow_ref ? { workflow_ref: entry.workflow_ref } : {}),
     step: entry.step,
     kind: entry.kind,
+    ...(entry.call_instance === undefined ? {} : { call_instance: entry.call_instance }),
   }));
 }
 

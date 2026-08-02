@@ -11,7 +11,13 @@ import type { InteractiveMetadata } from './types.js';
 import { isDebugEnabled, writePromptLog } from '../../../shared/utils/index.js';
 import type { PromptLogRecord, NdjsonRecord } from '../../../shared/utils/index.js';
 import type { WorkflowResumePointEntry, WorkflowStep, AgentResponse, WorkflowState } from '../../../core/models/index.js';
-import type { JudgeStageEntry, PhasePromptParts, StepProviderInfo } from '../../../core/workflow/types.js';
+import type {
+  JudgeStageEntry,
+  PhasePromptParts,
+  StepProviderInfo,
+  WorkflowCallCompleteLifecycle,
+  WorkflowCallLifecycle,
+} from '../../../core/workflow/types.js';
 import { sanitizeTextForStorage } from './traceReportRedaction.js';
 import { buildWorkflowStepScopeKey } from './workflowStepScope.js';
 import { SessionLoggerPhaseTracker } from './sessionLoggerPhaseTracker.js';
@@ -23,6 +29,8 @@ import {
   buildPromptLogRecord,
   buildStepCompleteRecord,
   buildStepStartRecord,
+  buildWorkflowCallCompleteRecord,
+  buildWorkflowCallStartRecord,
   buildWorkflowAbortRecord,
   buildWorkflowCompleteRecord,
 } from './sessionLoggerRecordFactory.js';
@@ -57,7 +65,7 @@ export class SessionLogger {
     phaseName: 'execute' | 'report' | 'judge',
     instruction: string,
     promptParts: PhasePromptParts,
-    workflowStack: WorkflowResumePointEntry[] | undefined,
+    workflowStack: readonly WorkflowResumePointEntry[] | undefined,
     phaseExecutionId?: string,
     iteration?: number,
   ): void {
@@ -70,6 +78,7 @@ export class SessionLogger {
       phase,
       phaseExecutionId,
       iteration,
+      workflowStack,
       promptParts,
       capturePrompt: debugEnabled,
     });
@@ -94,7 +103,7 @@ export class SessionLogger {
     content: string,
     phaseStatus: string,
     phaseError: string | undefined,
-    workflowStack: WorkflowResumePointEntry[] | undefined,
+    workflowStack: readonly WorkflowResumePointEntry[] | undefined,
     phaseExecutionId?: string,
     iteration?: number,
   ): void {
@@ -107,6 +116,7 @@ export class SessionLogger {
       phase,
       phaseExecutionId,
       iteration,
+      workflowStack,
       requirePrompt: debugEnabled,
     });
     const completedAt = new Date().toISOString();
@@ -146,7 +156,7 @@ export class SessionLogger {
     phase: 3,
     phaseName: 'judge',
     entry: JudgeStageEntry,
-    workflowStack: WorkflowResumePointEntry[] | undefined,
+    workflowStack: readonly WorkflowResumePointEntry[] | undefined,
     phaseExecutionId?: string,
     iteration?: number,
   ): void {
@@ -155,6 +165,7 @@ export class SessionLogger {
       phase,
       phaseExecutionId,
       iteration,
+      workflowStack,
     });
     const record = buildPhaseJudgeStageRecord(
       step,
@@ -173,7 +184,7 @@ export class SessionLogger {
     step: WorkflowStep,
     iteration: number,
     instruction: string | undefined,
-    workflowStack: WorkflowResumePointEntry[] | undefined,
+    workflowStack: readonly WorkflowResumePointEntry[] | undefined,
     providerInfo?: StepProviderInfo,
   ): void {
     this.currentIteration = iteration;
@@ -189,11 +200,19 @@ export class SessionLogger {
     this.appendRecord(record);
   }
 
+  onWorkflowCallStart(lifecycle: WorkflowCallLifecycle): void {
+    this.appendRecord(buildWorkflowCallStartRecord(lifecycle));
+  }
+
+  onWorkflowCallComplete(lifecycle: WorkflowCallCompleteLifecycle): void {
+    this.appendRecord(buildWorkflowCallCompleteRecord(lifecycle, this.sanitizeText.bind(this)));
+  }
+
   onStepComplete(
     step: WorkflowStep,
     response: AgentResponse,
     instruction: string,
-    workflowStack: WorkflowResumePointEntry[] | undefined,
+    workflowStack: readonly WorkflowResumePointEntry[] | undefined,
   ): void {
     const stepScopeKey = buildWorkflowStepScopeKey(step.name, workflowStack);
     const iteration = this.activeStepIterations.get(stepScopeKey);

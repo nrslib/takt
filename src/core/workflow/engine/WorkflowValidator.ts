@@ -36,6 +36,7 @@ import { withWorkflowConfigErrorPath } from '../workflow-config-error.js';
 import { findWorkflowStepLocation } from '../workflow-step-location.js';
 import { getProviderValidationErrorSource, withProviderValidationErrorSource } from '../provider-validation-error.js';
 import { validateDynamicParallelContracts } from '../dynamic-parallel/validator.js';
+import { validateCallableWorkflowMaxSteps } from '../../models/workflow-config-semantics.js';
 
 type ResolvedProviderInfo = ReturnType<typeof resolveStepProviderModel>;
 const withWorkflowStepErrorPath = withWorkflowConfigErrorPath;
@@ -585,6 +586,10 @@ function findWorkflowCallStep(
 }
 
 export function validateWorkflowConfig(config: WorkflowConfig, options: WorkflowEngineOptions): void {
+  validateCallableWorkflowMaxSteps({
+    callable: config.subworkflow?.callable === true,
+    maxSteps: config.maxSteps,
+  });
   const initialStep = config.steps.find((step) => step.name === config.initialStep);
   if (!initialStep) {
     throw new Error(ERROR_MESSAGES.UNKNOWN_STEP(config.initialStep));
@@ -761,16 +766,6 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
     if (!triggeringStep) {
       continue;
     }
-    const triggeringProviderInfo = resolveStepProviderModel({
-      step: triggeringStep,
-      provider: options.provider,
-      providerSource: options.providerSource,
-      model: options.model,
-      modelSource: options.modelSource,
-      autoRouting: options.autoRouting,
-      providerRouting: options.providerRouting,
-      personaProviders: options.personaProviders,
-    });
     // 実行時（LoopMonitorJudgeRunner）と同じ優先順位で検証するため、judge ステップ自身の
     // 通常解決（provider_routing.* / persona_providers.loop-judge を含む）も同じ
     // resolveStepProviderModel で取ってから合成する。routing キーは実行時に生成される
@@ -791,11 +786,22 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
       providerRouting: options.providerRouting,
       personaProviders: options.personaProviders,
     });
-    for (const validationInfo of expandAutoRoutingProviderInfos(
-      triggeringStep,
-      triggeringProviderInfo,
-      options.autoRouting,
-    )) {
+    const triggeringProviderInfo = isWorkflowCallStep(triggeringStep)
+      ? judgeStepProviderInfo
+      : resolveStepProviderModel({
+          step: triggeringStep,
+          provider: options.provider,
+          providerSource: options.providerSource,
+          model: options.model,
+          modelSource: options.modelSource,
+          autoRouting: options.autoRouting,
+          providerRouting: options.providerRouting,
+          personaProviders: options.personaProviders,
+        });
+    const validationInfos = isWorkflowCallStep(triggeringStep)
+      ? [{ providerInfo: triggeringProviderInfo, autoRouted: false }]
+      : expandAutoRoutingProviderInfos(triggeringStep, triggeringProviderInfo, options.autoRouting);
+    for (const validationInfo of validationInfos) {
       const judgeProviderInfo = resolveLoopMonitorJudgeProviderModel({
         judge: monitor.judge,
         judgeProviderInfo: judgeStepProviderInfo,

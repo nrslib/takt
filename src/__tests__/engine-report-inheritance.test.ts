@@ -30,7 +30,6 @@ import type { WorkflowCallInvocationRecord, WorkflowConfig } from '../core/model
 import { MAX_WORKFLOW_CALL_DEPTH } from '../core/workflow/workflow-call-depth.js';
 import { buildDynamicParallelSelectionIdentity } from '../core/workflow/dynamic-parallel/identity.js';
 import { buildWorkflowResumePointEntry } from '../core/workflow/workflow-reference.js';
-import { buildWorkflowCallInvocationIdentity } from '../core/workflow/workflow-call-invocation-index.js';
 import { WorkflowStepParticipationIndex } from '../core/workflow/workflow-step-participation-index.js';
 import {
   applyDefaultMocks,
@@ -42,6 +41,11 @@ import {
   mockRunAgentSequence,
 } from './engine-test-helpers.js';
 import { makeNormalizedWorkflowCallStep } from './helpers/normalized-workflow-call-step.js';
+import {
+  buildWorkflowCallInvocationRecordsFixture,
+  buildWorkflowCallNamespaceFixture,
+  type WorkflowCallInvocationFixture,
+} from './helpers/workflow-resume-fixture.js';
 
 const sourceRunSlug = '20260717-source-run';
 const diagnosticName = 'review-report-inheritance.json';
@@ -100,7 +104,6 @@ function makeWorkflowCallChain(workflowCount: number): {
       workflows[index] = {
         name: workflowName,
         subworkflow: { callable: true },
-        maxSteps: 1,
         initialStep: 'review',
         steps: [makeStep('review', {
           outputContracts: [{ name: 'review.md', format: '# Review' }],
@@ -114,8 +117,9 @@ function makeWorkflowCallChain(workflowCount: number): {
     const callStepName = `delegate-${index + 1}`;
     workflows[index] = {
       name: workflowName,
-      ...(index === 0 ? {} : { subworkflow: { callable: true } }),
-      maxSteps: 2,
+      ...(index === 0
+        ? { maxSteps: 2 }
+        : { subworkflow: { callable: true } }),
       initialStep: callStepName,
       steps: [
         makeWorkflowCallStep(
@@ -134,39 +138,43 @@ function makeWorkflowCallChain(workflowCount: number): {
     };
   }
 
-  const namespace = Array.from(
-    { length: workflowCount - 1 },
-    (_, index) => [
-      'subworkflows',
-      `iteration-${index + 1}--step-delegate-${index + 1}--workflow-workflow-${index + 2}`,
-    ],
-  ).flat();
-  const reportName = [...namespace, 'review.md'].join('/');
   const workflow = workflows[0]!;
-  const fix = workflow.steps.find((step) => step.name === 'fix')!;
-  fix.instruction = `Inherited report: {report:${reportName}}`;
-  const workflowCallInvocations: Record<string, WorkflowCallInvocationRecord> = {};
+  const workflowCallInvocationFixtures: WorkflowCallInvocationFixture[] = [];
   const workflowCallPath = [];
+  const namespace: string[] = [];
   for (let index = 0; index < workflowCount - 1; index += 1) {
     const parent = workflows[index]!;
     const step = parent.steps[0]!;
-    workflowCallInvocations[
-      buildWorkflowCallInvocationIdentity(parent.name, step.name, workflowCallPath)
-    ] = {
-      call_instance: 1,
-      report_namespace_segment:
-        `iteration-${index + 1}--step-${step.name}--workflow-workflow-${index + 2}`,
-    };
+    const segment = buildWorkflowCallNamespaceFixture(
+      parent.name,
+      step.name,
+      workflowCallPath,
+      workflows[index + 1]!.name,
+      1,
+    );
+    workflowCallInvocationFixtures.push({
+      workflowReference: parent.name,
+      step: step.name,
+      ownerPath: [...workflowCallPath],
+      callInstance: 1,
+      childWorkflowReference: workflows[index + 1]!.name,
+    });
+    namespace.push('subworkflows', segment);
     workflowCallPath.push(
       buildWorkflowResumePointEntry(parent, step.name, 'workflow_call', undefined, 1),
     );
   }
+  const reportName = [...namespace, 'review.md'].join('/');
+  const fix = workflow.steps.find((step) => step.name === 'fix')!;
+  fix.instruction = `Inherited report: {report:${reportName}}`;
 
   return {
     workflow,
     workflowsByName: new Map(workflows.map((entry) => [entry.name, entry])),
     reportName,
-    workflowCallInvocations,
+    workflowCallInvocations: buildWorkflowCallInvocationRecordsFixture(
+      workflowCallInvocationFixtures,
+    ),
   };
 }
 
@@ -233,6 +241,7 @@ describe('WorkflowEngine report inheritance', () => {
 
     engine = new WorkflowEngine(workflow, cwd, 'test task', {
       projectCwd,
+      provider: 'mock',
       startStep: 'fix',
       resumeSource: { sourceRunSlug, resumeMode: 'retry' },
       resumePoint: {
@@ -253,7 +262,6 @@ describe('WorkflowEngine report inheritance', () => {
     const reviewerWorkflow: WorkflowConfig = {
       name: 'nested-review',
       subworkflow: { callable: true },
-      maxSteps: 1,
       initialStep: 'review',
       steps: [makeStep('review', {
         outputContracts: [{ name: 'review.md', format: '# Review' }],
@@ -263,20 +271,34 @@ describe('WorkflowEngine report inheritance', () => {
     const gateWorkflow: WorkflowConfig = {
       name: 'review-gate',
       subworkflow: { callable: true },
-      maxSteps: 1,
       initialStep: 'delegate',
       steps: [makeWorkflowCallStep('delegate', 'nested-review', 'COMPLETE')],
     };
+    const finalGateSegment = buildWorkflowCallNamespaceFixture(
+      'parent', 'final-gate', [], gateWorkflow.name, 1,
+    );
+    const delegateSegment = buildWorkflowCallNamespaceFixture(
+      gateWorkflow.name,
+      'delegate',
+      [{
+        workflow: 'parent',
+        step: 'final-gate',
+        kind: 'workflow_call',
+        call_instance: 1,
+      }],
+      reviewerWorkflow.name,
+      1,
+    );
     const reportName = [
       'subworkflows',
-      'iteration-1--step-final-gate--workflow-review-gate',
+      finalGateSegment,
       'subworkflows',
-      'iteration-1--step-delegate--workflow-nested-review',
+      delegateSegment,
       'review.md',
     ].join('/');
     const workflow: WorkflowConfig = {
       name: 'parent',
-      maxSteps: 2,
+      maxSteps: 3,
       initialStep: 'final-gate',
       steps: [
         makeWorkflowCallStep('final-gate', 'review-gate', 'fix'),
@@ -287,9 +309,6 @@ describe('WorkflowEngine report inheritance', () => {
         }),
       ],
     };
-    const sourceReportPath = join(cwd, '.takt', 'runs', sourceRunSlug, 'reports', ...reportName.split('/'));
-    mkdirSync(join(sourceReportPath, '..'), { recursive: true });
-    writeFileSync(sourceReportPath, 'nested inherited review', 'utf-8');
     const finalGateEntry = buildWorkflowResumePointEntry(
       workflow,
       'final-gate',
@@ -304,6 +323,20 @@ describe('WorkflowEngine report inheritance', () => {
       undefined,
       1,
     );
+    const sourceReportPath = join(
+      cwd,
+      '.takt',
+      'runs',
+      sourceRunSlug,
+      'reports',
+      'subworkflows',
+      'iteration-1--step-final-gate--workflow-review-gate',
+      'subworkflows',
+      'iteration-1--step-delegate--workflow-nested-review',
+      'review.md',
+    );
+    mkdirSync(join(sourceReportPath, '..'), { recursive: true });
+    writeFileSync(sourceReportPath, 'nested inherited review', 'utf-8');
     const stepParticipationIndex = new WorkflowStepParticipationIndex(new Map());
     stepParticipationIndex.record(
       reviewerWorkflow,
@@ -311,38 +344,64 @@ describe('WorkflowEngine report inheritance', () => {
       [finalGateEntry, delegateEntry],
       ['review.md'],
     );
+    const workflowCallInvocations = buildWorkflowCallInvocationRecordsFixture([
+      {
+        workflowReference: workflow.name,
+        step: 'final-gate',
+        ownerPath: [],
+        callInstance: 1,
+        childWorkflowReference: gateWorkflow.name,
+      },
+      {
+        workflowReference: gateWorkflow.name,
+        step: 'delegate',
+        ownerPath: [finalGateEntry],
+        callInstance: 1,
+        childWorkflowReference: reviewerWorkflow.name,
+      },
+    ]);
+    const resumePoint = {
+      version: 2 as const,
+      stack: [{
+        workflow: workflow.name,
+        step: 'fix',
+        kind: 'agent' as const,
+        step_iterations: { 'final-gate': 1 },
+      }],
+      iteration: 1,
+      elapsed_ms: 0,
+      workflow_call_invocations: workflowCallInvocations,
+      workflow_step_participations: Object.fromEntries(stepParticipationIndex.snapshot()),
+    };
+    writeFileSync(
+      join(cwd, '.takt', 'runs', sourceRunSlug, 'meta.json'),
+      JSON.stringify({ resume_point: resumePoint }),
+      'utf-8',
+    );
 
     engine = new WorkflowEngine(workflow, cwd, 'test task', {
       projectCwd,
+      provider: 'mock',
       startStep: 'fix',
       resumeSource: { sourceRunSlug, resumeMode: 'retry' },
-      resumePoint: {
-        version: 2,
-        stack: [{
-          workflow: workflow.name,
-          step: 'fix',
-          kind: 'agent',
-          step_iterations: { 'final-gate': 1 },
-        }],
-        iteration: 1,
-        elapsed_ms: 0,
-        workflow_call_invocations: {
-          [buildWorkflowCallInvocationIdentity(workflow.name, 'final-gate', [])]: {
-            call_instance: 1,
-            report_namespace_segment: 'iteration-1--step-final-gate--workflow-review-gate',
-          },
-          [buildWorkflowCallInvocationIdentity(gateWorkflow.name, 'delegate', [finalGateEntry])]: {
-            call_instance: 1,
-            report_namespace_segment: 'iteration-1--step-delegate--workflow-nested-review',
-          },
-        },
-        workflow_step_participations: Object.fromEntries(stepParticipationIndex.snapshot()),
-      },
+      resumePoint,
       workflowCallResolver: ({ step }) => {
         if (step.call === 'review-gate') return gateWorkflow;
         if (step.call === 'nested-review') return reviewerWorkflow;
         return null;
       },
+    });
+    const inheritanceDiagnostic = JSON.parse(
+      readFileSync(join(reportDir, diagnosticName), 'utf-8'),
+    ) as {
+      status: string;
+      copied: Array<{ reportName: string }>;
+      skipped: Array<{ reportName: string; reason: string }>;
+    };
+    expect(inheritanceDiagnostic).toMatchObject({
+      status: 'copied',
+      copied: [{ reportName }],
+      skipped: [],
     });
     mockRunAgentSequence([makeResponse({ persona: 'fix', content: 'fix complete' })]);
     mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
@@ -385,20 +444,22 @@ describe('WorkflowEngine report inheritance', () => {
     const child: WorkflowConfig = {
       name: 'child-review',
       subworkflow: { callable: true },
-      maxSteps: 1,
       initialStep: 'reviewers',
       steps: [reviewers],
     };
+    const delegateSegment = buildWorkflowCallNamespaceFixture(
+      'parent', 'delegate', [], child.name, 2,
+    );
     const reportPrefix = [
       'subworkflows',
-      'iteration-2--step-delegate--workflow-child-review',
+      delegateSegment,
     ];
     const architectureReport = [...reportPrefix, 'architecture.md'].join('/');
     const frontendReport = [...reportPrefix, 'frontend.md'].join('/');
     const backendReport = [...reportPrefix, 'backend.md'].join('/');
     const workflow: WorkflowConfig = {
       name: 'parent',
-      maxSteps: 2,
+      maxSteps: 3,
       initialStep: 'delegate',
       steps: [
         makeWorkflowCallStep('delegate', 'child-review', 'fix'),
@@ -416,11 +477,26 @@ describe('WorkflowEngine report inheritance', () => {
       undefined,
       2,
     );
+    const reviewersEntry = buildWorkflowResumePointEntry(
+      child,
+      'reviewers',
+      'agent',
+    );
     const identity = buildDynamicParallelSelectionIdentity(child, 'reviewers', [delegateEntry]);
     const stepParticipationIndex = new WorkflowStepParticipationIndex(new Map());
     stepParticipationIndex.record(child, 'reviewers', [delegateEntry], []);
-    stepParticipationIndex.record(child, 'architecture', [delegateEntry], ['architecture.md']);
-    stepParticipationIndex.record(child, 'frontend', [delegateEntry], ['frontend.md']);
+    stepParticipationIndex.record(
+      child,
+      'architecture',
+      [delegateEntry, reviewersEntry],
+      ['architecture.md'],
+    );
+    stepParticipationIndex.record(
+      child,
+      'frontend',
+      [delegateEntry, reviewersEntry],
+      ['frontend.md'],
+    );
     const sourceReportDir = join(cwd, '.takt', 'runs', sourceRunSlug, 'reports');
     for (const [reportName, content] of [
       [architectureReport, 'architecture finding'],
@@ -434,6 +510,7 @@ describe('WorkflowEngine report inheritance', () => {
 
     engine = new WorkflowEngine(workflow, cwd, 'test task', {
       projectCwd,
+      provider: 'mock',
       startStep: 'fix',
       resumeSource: { sourceRunSlug, resumeMode: 'retry' },
       resumePoint: {
@@ -455,12 +532,13 @@ describe('WorkflowEngine report inheritance', () => {
             effective_selection_ids: ['architecture', 'frontend'],
           },
         },
-        workflow_call_invocations: {
-          [buildWorkflowCallInvocationIdentity(workflow.name, 'delegate', [])]: {
-            call_instance: 2,
-            report_namespace_segment: 'iteration-2--step-delegate--workflow-child-review',
-          },
-        },
+        workflow_call_invocations: buildWorkflowCallInvocationRecordsFixture([{
+          workflowReference: workflow.name,
+          step: 'delegate',
+          ownerPath: [],
+          callInstance: 2,
+          childWorkflowReference: child.name,
+        }]),
         workflow_step_participations: Object.fromEntries(stepParticipationIndex.snapshot()),
       },
       workflowCallResolver: ({ step }) => step.call === 'child-review' ? child : null,
@@ -483,7 +561,6 @@ describe('WorkflowEngine report inheritance', () => {
     const child: WorkflowConfig = {
       name: 'child-review',
       subworkflow: { callable: true },
-      maxSteps: 1,
       initialStep: 'review',
       steps: [makeStep('review', {
         outputContracts: [{ name: 'review.md', format: '# Review' }],
@@ -545,7 +622,6 @@ describe('WorkflowEngine report inheritance', () => {
     const child: WorkflowConfig = {
       name: 'child-review',
       subworkflow: { callable: true },
-      maxSteps: 1,
       initialStep: 'reviewers',
       steps: [reviewers],
     };
@@ -585,12 +661,13 @@ describe('WorkflowEngine report inheritance', () => {
         }],
         iteration: 2,
         elapsed_ms: 0,
-        workflow_call_invocations: {
-          [buildWorkflowCallInvocationIdentity(workflow.name, 'delegate', [])]: {
-            call_instance: 2,
-            report_namespace_segment: 'iteration-2--step-delegate--workflow-child-review',
-          },
-        },
+        workflow_call_invocations: buildWorkflowCallInvocationRecordsFixture([{
+          workflowReference: workflow.name,
+          step: 'delegate',
+          ownerPath: [],
+          callInstance: 2,
+          childWorkflowReference: child.name,
+        }]),
         workflow_step_participations: Object.fromEntries(stepParticipationIndex.snapshot()),
       },
       workflowCallResolver: ({ step }) => step.call === 'child-review' ? child : null,
@@ -636,6 +713,7 @@ describe('WorkflowEngine report inheritance', () => {
 
     engine = new WorkflowEngine(workflow, cwd, 'test task', {
       projectCwd,
+      provider: 'mock',
       startStep: 'fix',
       resumeSource: { sourceRunSlug, resumeMode: 'requeue' },
       resumePoint: {
@@ -652,17 +730,22 @@ describe('WorkflowEngine report inheritance', () => {
         }],
         iteration: 3,
         elapsed_ms: 0,
-        workflow_call_invocations: {
-          [buildWorkflowCallInvocationIdentity(workflow.name, 'missing-review', [])]: {
-            call_instance: 1,
-            report_namespace_segment:
-              'iteration-2--step-missing-review--workflow-missing-review-workflow',
+        workflow_call_invocations: buildWorkflowCallInvocationRecordsFixture([
+          {
+            workflowReference: workflow.name,
+            step: 'missing-review',
+            ownerPath: [],
+            callInstance: 1,
+            childWorkflowReference: 'missing-review-workflow',
           },
-          [buildWorkflowCallInvocationIdentity(workflow.name, 'cyclic-review', [])]: {
-            call_instance: 1,
-            report_namespace_segment: 'iteration-3--step-cyclic-review--workflow-parent',
+          {
+            workflowReference: workflow.name,
+            step: 'cyclic-review',
+            ownerPath: [],
+            callInstance: 1,
+            childWorkflowReference: workflow.name,
           },
-        },
+        ]),
         workflow_step_participations: Object.fromEntries(stepParticipationIndex.snapshot()),
       },
       workflowCallResolver: ({ step }) => step.call === 'parent' ? workflow : null,
@@ -768,12 +851,13 @@ describe('WorkflowEngine report inheritance', () => {
         }],
         iteration: 1,
         elapsed_ms: 0,
-        workflow_call_invocations: {
-          [buildWorkflowCallInvocationIdentity(workflow.name, 'review', [])]: {
-            call_instance: 1,
-            report_namespace_segment: 'iteration-1--step-review--workflow-child-review',
-          },
-        },
+        workflow_call_invocations: buildWorkflowCallInvocationRecordsFixture([{
+          workflowReference: workflow.name,
+          step: 'review',
+          ownerPath: [],
+          callInstance: 1,
+          childWorkflowReference: 'child-review',
+        }]),
         workflow_step_participations: {},
       },
       workflowCallResolver: () => {

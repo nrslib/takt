@@ -51,3 +51,20 @@ export interface TraceStep {
     matchMethod?: string;
   };
 }
+
+export interface TraceWorkflowCall {
+  parentWorkflow: string;
+  step: string;
+  childWorkflow: string;
+  callInstance: number;
+  stack: NdjsonWorkflowStackEntry[];
+  startedAt: string;
+  completedAt?: string;
+  result?: {
+    status: 'completed' | 'aborted' | 'failed';
+    returnValue?: string;
+    abortKind?: string;
+    abortReason?: string;
+    reason?: string;
+  };
+}

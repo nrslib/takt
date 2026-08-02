@@ -89,6 +89,7 @@ import { captureReviewScopeSnapshot } from '../core/workflow/findings/snapshot.j
 import type { FindingContractConfig } from '../core/workflow/findings/types.js';
 import type { WorkflowState } from '../core/models/types.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
+import { snapshotWorkflowExecutionScope } from '../core/workflow/workflow-execution-scope.js';
 
 const { executeAgent } = await import('../agents/agent-usecases.js');
 const executeAgentMock = vi.mocked(executeAgent);
@@ -212,7 +213,7 @@ describe('finding-conflict-adjudication runner', () => {
       rawFindingsPath: contract.rawFindingsPath,
     });
     const step = buildFindingConflictAdjudicationStep({ contract, workflowProvider: 'claude' });
-    const runner = createFindingConflictAdjudicationRunner({
+    const adjudicationRunner = createFindingConflictAdjudicationRunner({
       ledgerStore,
       optionsBuilder: {
         buildAgentOptions: () => ({ provider: 'claude', cwd }),
@@ -228,6 +229,20 @@ describe('finding-conflict-adjudication runner', () => {
       refreshFindingsState,
       emitEvent,
     });
+    const eventAttribution = {
+      iteration: 1,
+      scope: snapshotWorkflowExecutionScope([
+        { workflow: 'runner-test', step: step.name, kind: 'agent' },
+      ]),
+    };
+    const runner = {
+      ...adjudicationRunner,
+      run: (
+        runStep: Parameters<typeof adjudicationRunner.run>[0],
+        state: Parameters<typeof adjudicationRunner.run>[1],
+        runtime?: Parameters<typeof adjudicationRunner.run>[2],
+      ) => adjudicationRunner.run(runStep, state, runtime, eventAttribution),
+    };
     return { runner, step, ledgerStore };
   }
 
@@ -606,6 +621,18 @@ describe('finding-conflict-adjudication runner', () => {
 
     expect(result.response.content).toContain('Adjudicated conflict C-FA2947446963');
     expect(emitEvent).toHaveBeenCalledTimes(2);
+    for (const call of emitEvent.mock.calls) {
+      expect(call[0]).toBe('findings:ledger');
+      expect(call[2]).toBe(1);
+      expect(call[3]).toEqual({
+        kind: 'workflow_execution_scope',
+        stack: [expect.objectContaining({
+          workflow: 'runner-test',
+          step: 'finding-conflict-adjudication',
+          kind: 'agent',
+        })],
+      });
+    }
     const ledger = JSON.parse(readFileSync(ledgerPath, 'utf-8')) as {
       findings: Array<{ title: string }>;
       rawFindings: Array<{ description: string }>;

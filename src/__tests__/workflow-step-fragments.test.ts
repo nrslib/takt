@@ -56,7 +56,6 @@ subworkflow:
   callable: true
   returns: [done]
 initial_step: child
-max_steps: 1
 steps:
   - name: child
     instruction: child
@@ -1039,7 +1038,6 @@ model: gpt-5
       '  callable: true',
       '  requires_finding_contract: true',
       'initial_step: child',
-      'max_steps: 1',
       'steps:',
       '  - name: child',
       '    instruction: child',

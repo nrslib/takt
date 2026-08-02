@@ -78,8 +78,12 @@ describe('Workflow Loader IT: builtin workflow loading', () => {
       expect(config!.steps.length).toBeGreaterThan(0);
       expect(config!.initialStep).toBeDefined();
       const maxSteps = (config as Record<string, unknown>).maxSteps;
-      expect(maxSteps === 'infinite' || typeof maxSteps === 'number').toBe(true);
-      if (typeof maxSteps === 'number') {
+      if (config!.subworkflow?.callable === true) {
+        expect(maxSteps).toBeUndefined();
+      } else {
+        expect(maxSteps === 'infinite' || typeof maxSteps === 'number').toBe(true);
+      }
+      if (config!.subworkflow?.callable !== true && typeof maxSteps === 'number') {
         expect(maxSteps).toBeGreaterThan(0);
       }
     });
@@ -658,7 +662,6 @@ description: Callable workflow with a command quality gate timeout
 subworkflow:
   callable: true
   visibility: internal
-max_steps: 5
 initial_step: implement
 
 steps:

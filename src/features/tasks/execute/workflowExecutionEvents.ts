@@ -1,10 +1,10 @@
 import { interruptAllQueries } from '../../../infra/claude/query-manager.js';
-import type { WorkflowResumePointEntry } from '../../../core/models/index.js';
 import { formatWorkflowRuleCondition } from '../../../core/models/workflow-rule-condition.js';
 import type { WorkflowEngine } from '../../../core/workflow/index.js';
 import type { WorkflowTraceDiscovery } from '../../../core/workflow/observability/traceDiscovery.js';
 import type { SessionLog } from '../../../infra/fs/index.js';
 import type { StepProviderInfo, WorkflowAbortKind } from '../../../core/workflow/types.js';
+import type { WorkflowExecutionScope } from '../../../core/workflow/workflow-execution-scope.js';
 import { extractBlockedPrompt } from '../../../core/workflow/engine/transitions.js';
 import { CONFIGURED_PROVIDER_OPTION_VALUE } from '../../../core/workflow/providerOptionsRedaction.js';
 import type { ProviderType, StreamEvent } from '../../../shared/types/provider.js';
@@ -18,6 +18,11 @@ import { isDebugEnabled, isVerboseConsole } from '../../../shared/utils/debug.js
 import { notifyWarning, playWarningSound } from '../../../shared/utils/index.js';
 import type { ExceededInfo, WorkflowExecutionEvent, WorkflowExecutionOptions } from './types.js';
 import { detectStepType, isQuietMode } from './workflowExecutionBootstrap.js';
+import { buildWorkflowStepScopeKey } from './workflowStepScope.js';
+import {
+  isCountableWorkflowStep,
+  isProviderBackedWorkflowStep,
+} from '../../../core/workflow/step-kind.js';
 import {
   finalizeWorkflowAbort,
   finalizeWorkflowSuccess,
@@ -48,7 +53,7 @@ interface WorkflowExecutionEventBridgeDeps {
   };
   task: string;
   projectCwd: string;
-  currentProvider: ProviderType;
+  currentProvider: ProviderType | undefined;
   configuredModel: string | undefined;
   out: ReturnType<typeof import('./outputFns.js').createOutputFns>;
   prefixWriter: import('../../../shared/ui/TaskPrefixWriter.js').TaskPrefixWriter | undefined;
@@ -64,7 +69,6 @@ interface WorkflowExecutionEventBridgeDeps {
   shouldNotifyWorkflowAbort: boolean;
   traceDiscovery?: WorkflowTraceDiscovery;
   writeTraceReportOnce: ReturnType<typeof import('./traceReportWriter.js').createTraceReportWriter>;
-  getCurrentWorkflowStack: () => WorkflowResumePointEntry[] | undefined;
   initialResumePoint: WorkflowExecutionOptions['resumePoint'];
   sessionLog: SessionLog;
   eventSink: WorkflowExecutionOptions['eventSink'];
@@ -78,6 +82,16 @@ export interface WorkflowExecutionEventBridge {
   emitWorkflowFailed: (event: Extract<WorkflowExecutionEvent, { type: 'completed' }>) => void;
   emitProviderOutput: (event: StreamEvent) => void;
   flushEventSink: () => Promise<void>;
+}
+
+function requireEventScope(
+  scope: WorkflowExecutionScope | undefined,
+  event: string,
+): WorkflowExecutionScope {
+  if (scope === undefined) {
+    throw new Error(`${event} event is missing its execution scope snapshot`);
+  }
+  return scope;
 }
 
 type OutInfo = { info: (line: string) => void };
@@ -293,10 +307,33 @@ function emitProviderOptionLines(
   }
 }
 
+function resolveAnalyticsAttribution(
+  iteration: number,
+  providerInfo: StepProviderInfo | undefined,
+  currentProvider: ProviderType | undefined,
+  configuredModel: string | undefined,
+): { iteration: number; provider: string; model: string } {
+  const provider = providerInfo?.provider ?? currentProvider;
+  if (provider === undefined) {
+    return { iteration, provider: '(not applicable)', model: '(not applicable)' };
+  }
+  const model = providerInfo?.modelSource !== undefined
+    ? providerInfo.model ?? '(default)'
+    : providerInfo?.model
+      ?? (provider === currentProvider ? configuredModel : undefined)
+      ?? '(default)';
+  return { iteration, provider, model };
+}
+
 export function bindWorkflowExecutionEvents(
   deps: WorkflowExecutionEventBridgeDeps,
 ): WorkflowExecutionEventBridge {
-  const usageContextByStep = new WeakMap<object, UsageEventLogContext>();
+  const usageContextByStepScope = new Map<string, UsageEventLogContext>();
+  const analyticsContextByStepScope = new Map<string, {
+    iteration: number;
+    provider: string;
+    model: string;
+  }>();
   const canReadResumePoint = (): boolean => typeof deps.engine.getResumePoint === 'function';
   const canReadEngineState = (): boolean => typeof deps.engine.getState === 'function';
   const getResumePoint = (): WorkflowExecutionOptions['resumePoint'] => {
@@ -342,7 +379,7 @@ export function bindWorkflowExecutionEvents(
       : [],
   );
 
-  deps.engine.on('phase:start', (step, phase, phaseName, instruction, promptParts, phaseExecutionId, iteration) => {
+  deps.engine.on('phase:start', (step, phase, phaseName, instruction, promptParts, phaseExecutionId, iteration, scope) => {
     if (state.currentStepName === undefined) {
       throw new Error(`Phase ${phase} started before a resumable step was recorded`);
     }
@@ -353,13 +390,13 @@ export function bindWorkflowExecutionEvents(
       phaseName,
       instruction,
       promptParts,
-      deps.getCurrentWorkflowStack(),
+      requireEventScope(scope, 'phase:start').stack,
       phaseExecutionId,
       iteration,
     );
   });
 
-  deps.engine.on('phase:complete', (step, phase, phaseName, content, phaseStatus, phaseError, phaseExecutionId, iteration) => {
+  deps.engine.on('phase:complete', (step, phase, phaseName, content, phaseStatus, phaseError, phaseExecutionId, iteration, scope) => {
     if (state.currentStepName === undefined) {
       throw new Error(`Phase ${phase} completed before a resumable step was recorded`);
     }
@@ -372,22 +409,30 @@ export function bindWorkflowExecutionEvents(
       content,
       phaseStatus,
       phaseError,
-      deps.getCurrentWorkflowStack(),
+      requireEventScope(scope, 'phase:complete').stack,
       phaseExecutionId,
       iteration,
     );
   });
 
-  deps.engine.on('phase:judge_stage', (step, phase, phaseName, entry, phaseExecutionId, iteration) => {
+  deps.engine.on('phase:judge_stage', (step, phase, phaseName, entry, phaseExecutionId, iteration, scope) => {
     deps.sessionLogger.onJudgeStage(
       step,
       phase,
       phaseName,
       entry,
-      deps.getCurrentWorkflowStack(),
+      requireEventScope(scope, 'phase:judge_stage').stack,
       phaseExecutionId,
       iteration,
     );
+  });
+
+  deps.engine.on('workflow_call:start', (lifecycle) => {
+    deps.sessionLogger.onWorkflowCallStart(lifecycle);
+  });
+
+  deps.engine.on('workflow_call:complete', (lifecycle) => {
+    deps.sessionLogger.onWorkflowCallComplete(lifecycle);
   });
 
   deps.engine.on('step:start', (
@@ -395,10 +440,13 @@ export function bindWorkflowExecutionEvents(
     iteration,
     instruction,
     providerInfo,
-    workflowName,
+    _workflowName,
     resumeStepName,
     stepIteration,
+    maxSteps,
+    scope,
   ) => {
+    const eventScope = requireEventScope(scope, 'step:start');
     state.currentIteration = iteration;
     state.currentStepName = resumeStepName;
     state.lastResumePoint = getResumePoint();
@@ -409,7 +457,7 @@ export function bindWorkflowExecutionEvents(
         type: 'step_started',
         step: step.name,
         iteration,
-        maxSteps: deps.workflowConfig.maxSteps,
+        maxSteps,
       },
       onEventSinkFailure,
       eventSinkDispatchState,
@@ -418,7 +466,7 @@ export function bindWorkflowExecutionEvents(
       deps.eventSink,
       {
         type: 'progress',
-        message: `Starting step "${step.name}" (${iteration}/${deps.workflowConfig.maxSteps})`,
+        message: `Starting step "${step.name}" (${iteration}/${maxSteps})`,
         step: step.name,
       },
       onEventSinkFailure,
@@ -430,48 +478,68 @@ export function bindWorkflowExecutionEvents(
     deps.prefixWriter?.setStepContext({
       stepName: safeStepName,
       iteration,
-      maxSteps: deps.workflowConfig.maxSteps,
+      maxSteps,
       stepIteration,
     });
-    deps.out.info(`[${iteration}/${deps.workflowConfig.maxSteps}] ${safeStepName} (${safePersonaDisplayName})`);
+    deps.out.info(`[${iteration}/${maxSteps}] ${safeStepName} (${safePersonaDisplayName})`);
 
-    const stepProvider = providerInfo.provider ?? deps.currentProvider;
-    const stepModel = providerInfo.modelSource !== undefined
-      ? providerInfo.model ?? '(default)'
-      : providerInfo.model ?? (stepProvider === deps.currentProvider ? deps.configuredModel : undefined) ?? '(default)';
-    usageContextByStep.set(step, {
-      provider: stepProvider,
-      providerModel: stepModel,
-      step: step.name,
-      stepType: detectStepType(step),
-    });
-    const showSource = isDebugEnabled() || isVerboseConsole();
-    const providerSourceSuffix = showSource && providerInfo.providerSource
-      ? ` (source: ${providerInfo.providerSource})`
-      : '';
-    const modelSourceSuffix = showSource && providerInfo.modelSource
-      ? ` (source: ${providerInfo.modelSource})`
-      : '';
-    deps.out.info(`Provider: ${stepProvider}${providerSourceSuffix}`);
-    deps.out.info(`Model: ${stepModel}${modelSourceSuffix}`);
-    emitProviderOptionLines(deps.out, stepProvider, providerInfo, showSource);
-    deps.analyticsEmitter.updateProviderInfo(iteration, stepProvider, stepModel, workflowName ?? deps.workflowConfig.name);
+    if (isProviderBackedWorkflowStep(step)) {
+      const stepProvider = providerInfo?.provider;
+      if (stepProvider === undefined || providerInfo === undefined) {
+        throw new Error(`Step "${step.name}" started without resolved provider information`);
+      }
+      const stepModel = providerInfo.model ?? '(default)';
+      const stepScopeKey = buildWorkflowStepScopeKey(step.name, eventScope.stack);
+      usageContextByStepScope.set(stepScopeKey, {
+        provider: stepProvider,
+        providerModel: stepModel,
+        step: step.name,
+        stepType: detectStepType(step),
+      });
+      const showSource = isDebugEnabled() || isVerboseConsole();
+      const providerSourceSuffix = showSource && providerInfo.providerSource
+        ? ` (source: ${providerInfo.providerSource})`
+        : '';
+      const modelSourceSuffix = showSource && providerInfo.modelSource
+        ? ` (source: ${providerInfo.modelSource})`
+        : '';
+      deps.out.info(`Provider: ${stepProvider}${providerSourceSuffix}`);
+      deps.out.info(`Model: ${stepModel}${modelSourceSuffix}`);
+      emitProviderOptionLines(deps.out, stepProvider, providerInfo, showSource);
+    }
+    if (isCountableWorkflowStep(step)) {
+      const stepScopeKey = buildWorkflowStepScopeKey(step.name, eventScope.stack);
+      analyticsContextByStepScope.set(stepScopeKey, resolveAnalyticsAttribution(
+        iteration,
+        providerInfo,
+        deps.currentProvider,
+        deps.configuredModel,
+      ));
+    }
 
     if (!deps.prefixWriter) {
       const stepIndex = deps.workflowConfig.steps.findIndex((workflowStep) => workflowStep.name === step.name);
       deps.displayRef.current = new StreamDisplay(safePersonaDisplayName, isQuietMode(), {
         iteration,
-        maxSteps: deps.workflowConfig.maxSteps,
+        maxSteps,
         stepIndex: stepIndex >= 0 ? stepIndex : 0,
         totalSteps: deps.workflowConfig.steps.length,
       });
       deps.handlerRef.current = null;
     }
 
-    deps.sessionLogger.onStepStart(step, iteration, instruction, state.lastResumePoint?.stack, providerInfo);
+    deps.sessionLogger.onStepStart(
+      step,
+      iteration,
+      instruction,
+      eventScope.stack,
+      providerInfo,
+    );
   });
 
-  deps.engine.on('step:complete', (step, response, instruction, resumeStepName) => {
+  deps.engine.on('step:complete', (step, response, instruction, resumeStepName, scope) => {
+    const eventScope = requireEventScope(scope, 'step:complete');
+    const stepScopeKey = buildWorkflowStepScopeKey(step.name, eventScope.stack);
     syncLatestResumePoint();
     state.lastStepContent = response.content;
     state.lastStepName = resumeStepName;
@@ -529,21 +597,32 @@ export function bindWorkflowExecutionEvents(
       eventSinkDispatchState,
     );
 
-    const stepType = detectStepType(step);
-    if (stepType !== 'parallel' && stepType !== 'team_leader') {
-      const usageContext = usageContextByStep.get(step);
+    if (isProviderBackedWorkflowStep(step)) {
+      const usageContext = usageContextByStepScope.get(stepScopeKey);
       if (!usageContext) {
         throw new Error(`Usage context is missing for completed step "${step.name}"`);
       }
       updateUsageForStepCompletion(deps.usageEventLogger, usageContext, response);
     }
-    usageContextByStep.delete(step);
-    deps.sessionLogger.onStepComplete(step, response, instruction, deps.getCurrentWorkflowStack());
-    deps.analyticsEmitter.onStepComplete(step, response);
-    state.sessionLog = { ...state.sessionLog, iterations: state.sessionLog.iterations + 1 };
+    if (isCountableWorkflowStep(step)) {
+      const analyticsContext = analyticsContextByStepScope.get(stepScopeKey);
+      if (analyticsContext === undefined) {
+        throw new Error(`Analytics context is missing for completed step "${step.name}"`);
+      }
+      deps.analyticsEmitter.onStepComplete(step, response, analyticsContext);
+    }
+    usageContextByStepScope.delete(stepScopeKey);
+    analyticsContextByStepScope.delete(stepScopeKey);
+    deps.sessionLogger.onStepComplete(
+      step,
+      response,
+      instruction,
+      eventScope.stack,
+    );
   });
 
-  deps.engine.on('routing:decision', (step, response, instruction, providerInfo, stepType, durationMs, iteration, workflowName) => {
+  deps.engine.on('routing:decision', (step, response, instruction, providerInfo, stepType, durationMs, iteration, workflowName, scope) => {
+    requireEventScope(scope, 'routing:decision');
     deps.analyticsEmitter.onRoutingDecision?.(
       step,
       response,
@@ -552,7 +631,7 @@ export function bindWorkflowExecutionEvents(
       stepType,
       durationMs,
       iteration,
-      workflowName ?? deps.workflowConfig.name,
+      workflowName,
     );
   });
 
@@ -615,17 +694,20 @@ export function bindWorkflowExecutionEvents(
     );
   });
 
-  deps.engine.on('step:report', (_step, filePath, fileName) => {
+  deps.engine.on('step:report', (_step, filePath, fileName, iteration, scope) => {
+    requireEventScope(scope, 'step:report');
     reportStepFile(filePath, fileName, deps.out);
-    deps.analyticsEmitter.onStepReport(_step, filePath);
+    deps.analyticsEmitter.onStepReport(_step, filePath, iteration);
   });
 
-  deps.engine.on('findings:ledger', (ledger) => {
-    deps.analyticsEmitter.onFindingLedgerUpdated(ledger);
+  deps.engine.on('findings:ledger', (ledger, iteration, scope) => {
+    requireEventScope(scope, 'findings:ledger');
+    deps.analyticsEmitter.onFindingLedgerUpdated(ledger, iteration);
   });
 
   deps.engine.on('workflow:complete', (workflowState) => {
     syncLatestResumePoint();
+    state.sessionLog = { ...state.sessionLog, iterations: workflowState.iteration };
     state.sessionLog = finalizeWorkflowSuccess(
       state.sessionLog,
       deps.task,
@@ -672,6 +754,7 @@ export function bindWorkflowExecutionEvents(
     deps.prefixWriter?.flush();
     state.abortReason = reason;
     state.abortKind = kind;
+    state.sessionLog = { ...state.sessionLog, iterations: workflowState.iteration };
     state.sessionLog = finalizeWorkflowAbort(
       state.sessionLog,
       reason,

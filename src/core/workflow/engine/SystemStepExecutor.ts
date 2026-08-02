@@ -11,6 +11,7 @@ import { resolveWorkflowStateReference } from '../state/workflow-state-access.js
 import { waitForStepDelay } from './step-delay.js';
 import { evaluatePostExecutionRules } from './post-execution-rule-evaluator.js';
 import type { RuntimeStepResolution } from '../types.js';
+import type { WorkflowExecutionScope } from '../workflow-execution-scope.js';
 
 interface SystemStepExecutorDeps {
   readonly task: string;
@@ -28,6 +29,7 @@ interface SystemStepExecutorDeps {
     step: WorkflowStep,
     state: WorkflowState,
     lastResponse: string,
+    executionScope: WorkflowExecutionScope,
     runtime?: RuntimeStepResolution,
   ) => StatusJudgmentPhaseContext;
   readonly systemStepServicesFactory?: SystemStepServicesFactory;
@@ -120,7 +122,11 @@ export class SystemStepExecutor {
     step: WorkflowStep,
     state: WorkflowState,
     runtime?: RuntimeStepResolution,
+    executionScope?: WorkflowExecutionScope,
   ): Promise<AgentResponse> {
+    if (executionScope === undefined) {
+      throw new Error(`System step "${step.name}" requires an execution scope`);
+    }
     await waitForStepDelay(step);
     const cwd = this.deps.getCwd();
     const ruleContext = this.deps.getRuleContext(step, runtime);
@@ -159,6 +165,7 @@ export class SystemStepExecutor {
       step,
       state,
       responseContent,
+      executionScope,
       runtime,
     ), {
       ...ruleContext,

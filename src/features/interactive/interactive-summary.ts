@@ -48,13 +48,34 @@ function formatPreviewMetadata(p: StepPreview, lang: TaskHistoryLocale): string[
   if (p.requiresUserInput === true) {
     lines.push(`**${userInputLabel}:** ${requiredLabel}`);
   }
-  if (p.substeps && p.substeps.length > 0) {
+  if (p.kind === 'parallel' && p.substeps.length > 0) {
     lines.push(`**${parallelLabel}:** ${p.substeps.length}`);
   }
   return lines;
 }
 
 function formatStepPreview(p: StepPreview, label: string, lang: TaskHistoryLocale): string {
+  if (p.kind === 'workflow_call') {
+    const kindLabel = lang === 'ja' ? '種別' : 'Kind';
+    const callLabel = lang === 'ja' ? '呼び出し先' : 'Child workflow';
+    return [
+      `### ${label}. ${p.name}`,
+      `**${kindLabel}:** workflow_call`,
+      `**${callLabel}:** ${p.call}`,
+    ].join('\n');
+  }
+  if (p.kind === 'parallel') {
+    const kindLabel = lang === 'ja' ? '種別' : 'Kind';
+    const lines = [
+      `### ${label}. ${p.name}`,
+      `**${kindLabel}:** parallel`,
+      ...formatPreviewMetadata(p, lang),
+      ...p.substeps.map((substep, index) =>
+        formatStepPreview(substep, `${label}.${index + 1}`, lang),
+      ),
+    ];
+    return lines.join('\n');
+  }
   const toolsStr = p.allowedTools.length > 0
     ? p.allowedTools.join(', ')
     : (lang === 'ja' ? 'なし' : 'None');
@@ -98,7 +119,7 @@ function formatStepPreview(p: StepPreview, label: string, lang: TaskHistoryLocal
   }
   lines.push(`**${toolsLabel}:** ${toolsStr}`, `**${editLabel}:** ${editStr}`);
 
-  if (p.substeps && p.substeps.length > 0) {
+  if (p.substeps !== undefined) {
     lines.push(
       ...p.substeps.map((substep, index) =>
         formatStepPreview(substep, `${label}.${index + 1}`, lang),

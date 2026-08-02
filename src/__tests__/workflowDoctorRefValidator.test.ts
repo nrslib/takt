@@ -28,7 +28,6 @@ describe('workflowDoctorRefValidator', () => {
           },
         },
       },
-      max_steps: 10,
       initial_step: 'review',
       knowledge: {
         architecture: './facets/knowledge/architecture.md',
@@ -80,7 +79,6 @@ describe('workflowDoctorRefValidator', () => {
   it('reports dynamic parallel resource paths with their fixed and pool branches', () => {
     const raw = WorkflowConfigRawSchema.parse({
       name: 'dynamic-parallel-paths',
-      max_steps: 1,
       initial_step: 'reviewers',
       steps: [{
         name: 'reviewers',

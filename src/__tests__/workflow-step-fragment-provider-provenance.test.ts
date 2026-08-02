@@ -111,7 +111,6 @@ describe('workflow step fragment provider provenance', () => {
     const workflowPath = write(projectDir, '.takt/workflows/default.yaml', [
       'name: default',
       'initial_step: review',
-      'max_steps: 1',
       'steps:',
       '  - name: review',
       '    uses: review',
@@ -153,7 +152,6 @@ describe('workflow step fragment provider provenance', () => {
     const workflowPath = write(projectDir, '.takt/workflows/default.yaml', [
       'name: default',
       'initial_step: review',
-      'max_steps: 1',
       'steps:',
       '  - name: review',
       '    uses: outer',
@@ -189,7 +187,6 @@ describe('workflow step fragment provider provenance', () => {
     const workflowPath = write(projectDir, '.takt/workflows/default.yaml', [
       'name: default',
       'initial_step: review',
-      'max_steps: 1',
       'steps:',
       '  - name: review',
       '    uses: review',
@@ -231,7 +228,6 @@ describe('workflow step fragment provider provenance', () => {
       'subworkflow:',
       '  callable: true',
       'initial_step: review',
-      'max_steps: 1',
       'steps:',
       '  - name: review',
       '    instruction: review',
@@ -243,7 +239,6 @@ describe('workflow step fragment provider provenance', () => {
     const workflowPath = write(projectDir, '.takt/workflows/parent.yaml', [
       'name: parent',
       'initial_step: delegate',
-      'max_steps: 1',
       'steps:',
       '  - name: delegate',
       '    uses: delegate',
@@ -283,7 +278,6 @@ describe('workflow step fragment provider provenance', () => {
       'subworkflow:',
       '  callable: true',
       'initial_step: review',
-      'max_steps: 1',
       'steps:',
       '  - name: review',
       '    instruction: review',
@@ -295,7 +289,6 @@ describe('workflow step fragment provider provenance', () => {
     const workflowPath = write(projectDir, '.takt/workflows/parent.yaml', [
       'name: parent',
       'initial_step: delegate',
-      'max_steps: 1',
       'steps:',
       '  - name: delegate',
       '    uses: delegate',

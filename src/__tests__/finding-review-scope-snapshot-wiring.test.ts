@@ -27,10 +27,8 @@ import { join } from 'node:path';
 import { afterAll, describe, it, expect, beforeEach, vi } from 'vitest';
 import { ParallelRunner, type ParallelRunnerDeps } from '../core/workflow/engine/ParallelRunner.js';
 import type { AgentResponse, FindingContractConfig, WorkflowState, WorkflowStep } from '../core/models/types.js';
-import type {
-  FindingContractInstructionContext,
-  FindingContractInstructionPolicy,
-} from '../core/workflow/instruction/instruction-context.js';
+import type { FindingContractInstructionContext } from '../core/workflow/instruction/instruction-context.js';
+import type { BuildInstructionOptions } from '../core/workflow/engine/StepExecutor.js';
 import { createRawFindingsStructuredOutput } from '../core/workflow/findings/manager-agent.js';
 import type { FindingLedger } from '../core/workflow/findings/types.js';
 import type { FindingManagerValidationReport } from '../core/workflow/findings/store.js';
@@ -38,6 +36,7 @@ import { makeRule, makeStep } from './test-helpers.js';
 import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
 import { createFindingManagerPublicationDouble, RevisionedFindingLedgerTestRepository } from './helpers/finding-manager-publication.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
+import { snapshotWorkflowExecutionScope } from '../core/workflow/workflow-execution-scope.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
   executeAgent: vi.fn(),
@@ -73,6 +72,12 @@ import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 
 const DEFAULT_PROJECT_CWD = mkdtempSync(join(tmpdir(), 'takt-snapshot-wiring-default-'));
 const DEFAULT_REPORT_DIR = mkdtempSync(join(tmpdir(), 'takt-snapshot-wiring-reports-'));
+const TEST_EVENT_ATTRIBUTION = {
+  iteration: 1,
+  scope: snapshotWorkflowExecutionScope([
+    { workflow: 'test-workflow', step: 'reviewers', kind: 'agent' },
+  ]),
+};
 
 afterAll(() => {
   rmSync(DEFAULT_PROJECT_CWD, { recursive: true, force: true });
@@ -252,7 +257,6 @@ function makeRunner(options: {
     ...(withFindingContract ? { findingContract: FINDING_CONTRACT } : {}),
     findingLedgerStore,
     runQualityGates: vi.fn().mockResolvedValue({ ok: true }),
-    updateMaxSteps: vi.fn(),
     setActiveResumePoint: vi.fn(),
     getRunId: () => 'test-run',
     getFindingCallNamespace: () => '',
@@ -283,7 +287,17 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
     queueAgentResponse(makeAgentResponse({ persona: 'ai-antipattern-review' }));
     queueAgentResponse(makeAgentResponse({ persona: 'security-review' }));
 
-    await runner.runParallelStep(step, state, 'test task', 5, vi.fn());
+    const result = await runner.runParallelStep(
+      step,
+      state,
+      'test task',
+      5,
+      vi.fn(),
+      undefined,
+      undefined,
+      TEST_EVENT_ATTRIBUTION,
+    );
+    expect(result.response.status, result.response.error).toBe('done');
 
     // WorkflowEngineSetup と同じヘルパ経由で、ラウンドに1回だけ呼ばれる
     // （sub-step ごとに独立して呼ぶと、間に working tree が変化した場合に
@@ -291,13 +305,15 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
     // 直列化時に特に問題になる）。
     expect(deps.optionsBuilder.buildFindingContractInstructionContext).toHaveBeenCalledTimes(1);
     expect(deps.optionsBuilder.buildFindingContractInstructionContext).toHaveBeenCalledWith(step, true);
+    expect(vi.mocked(ingestFindingContractResults).mock.calls[0]?.[0].eventAttribution)
+      .toEqual(TEST_EVENT_ATTRIBUTION);
 
     const builtContext = vi.mocked(deps.optionsBuilder.buildFindingContractInstructionContext).mock.results[0]?.value;
     expect(builtContext).toBeDefined();
     const buildInstructionCalls = vi.mocked(deps.stepExecutor.buildInstruction).mock.calls;
     expect(buildInstructionCalls).toHaveLength(2);
     for (const call of buildInstructionCalls) {
-      const findingContractPolicy = call[6] as FindingContractInstructionPolicy | undefined;
+      const findingContractPolicy = (call[5] as BuildInstructionOptions).findingContractPolicy;
       expect(findingContractPolicy?.mode).toBe('explicit');
       if (findingContractPolicy?.mode !== 'explicit') throw new Error('Expected explicit Finding Contract context');
       expect(findingContractPolicy.context).toBe(builtContext);
@@ -391,7 +407,17 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
       );
       vi.mocked(ingestFindingContractResults).mockImplementationOnce(actualContractIntake.ingestFindingContractResults);
 
-      await runner.runParallelStep(makeParallelStep(), makeState(), 'test task', 5, vi.fn());
+      const result = await runner.runParallelStep(
+        makeParallelStep(),
+        makeState(),
+        'test task',
+        5,
+        vi.fn(),
+        undefined,
+        undefined,
+        TEST_EVENT_ATTRIBUTION,
+      );
+      expect(result.response.status, result.response.error).toBe('done');
 
       ledger = ledgerStore.loadLedger();
       const reports = vi.mocked(ledgerStore.saveManagerValidationReport).mock.calls
@@ -434,6 +460,9 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
       'test task',
       5,
       vi.fn(),
+      undefined,
+      undefined,
+      TEST_EVENT_ATTRIBUTION,
     );
 
     expect(result.response.status).toBe('error');
@@ -448,13 +477,22 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
     queueAgentResponse(makeAgentResponse({ persona: 'ai-antipattern-review', content: '[STEP:1] approved' }));
     queueAgentResponse(makeAgentResponse({ persona: 'security-review', content: '[STEP:1] approved' }));
 
-    const result = await runner.runParallelStep(step, state, 'test task', 5, vi.fn());
+    const result = await runner.runParallelStep(
+      step,
+      state,
+      'test task',
+      5,
+      vi.fn(),
+      undefined,
+      undefined,
+      TEST_EVENT_ATTRIBUTION,
+    );
 
-    expect(result.response.status).toBe('done');
+    expect(result.response.status, result.response.error).toBe('done');
     expect(deps.optionsBuilder.buildFindingContractInstructionContext).not.toHaveBeenCalled();
     const buildInstructionCalls = vi.mocked(deps.stepExecutor.buildInstruction).mock.calls;
     for (const call of buildInstructionCalls) {
-      expect(call[6]).toBeUndefined();
+      expect((call[5] as BuildInstructionOptions).findingContractPolicy).toBeUndefined();
     }
   });
 });

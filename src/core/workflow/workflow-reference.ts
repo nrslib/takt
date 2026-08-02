@@ -37,7 +37,7 @@ export function getResumePointWorkflowReference(entry: WorkflowResumePointEntry)
 export function normalizeWorkflowResumePointEntry(
   entry: WorkflowResumePointEntry,
 ): WorkflowResumePointEntry {
-  if (entry.call_instance !== undefined) {
+  if (entry.kind !== 'workflow_call' || entry.call_instance !== undefined) {
     return entry;
   }
   const callInstance = entry.step_iterations?.[entry.step];

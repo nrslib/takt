@@ -381,7 +381,9 @@ export function normalizeWorkflowConfig(
     reportFormats: sections.resolvedReportFormats,
     steps,
     initialStep: parsed.initial_step ?? steps[0]!.name,
-    maxSteps: parsed.max_steps,
+    ...(parsed.subworkflow?.callable === true
+      ? {}
+      : { maxSteps: parsed.max_steps ?? 10 }),
     loopMonitors,
     interactiveMode: parsed.interactive_mode,
   };

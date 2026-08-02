@@ -10,21 +10,28 @@ import {
   normalizeWorkflowResumePointEntry,
 } from './workflow-reference.js';
 import {
-  parseWorkflowExecutionIdentity,
-  serializeWorkflowExecutionIdentity,
-} from './workflow-execution-identity-codec.js';
+  parseWorkflowExecutionOwnerIdentity,
+  serializeWorkflowExecutionOwnerIdentity,
+} from '../models/workflow-resume-contract.js';
 
 export function buildWorkflowStepParticipationIdentity(
   workflowReference: string,
   stepName: string,
-  workflowCallPath: readonly WorkflowResumePointEntry[],
+  ownerPath: readonly WorkflowResumePointEntry[],
 ): string {
-  return serializeWorkflowExecutionIdentity({
+  return serializeWorkflowExecutionOwnerIdentity({
     workflow: workflowReference,
     step: stepName,
-    calls: workflowCallPath.map((rawEntry) => {
+    owners: ownerPath.map((rawEntry) => {
       const entry = normalizeWorkflowResumePointEntry(rawEntry);
-      if (entry.kind !== 'workflow_call' || entry.call_instance === undefined) {
+      if (entry.kind !== 'workflow_call') {
+        return {
+          workflow: getResumePointWorkflowReference(entry),
+          step: entry.step,
+          kind: entry.kind,
+        };
+      }
+      if (entry.call_instance === undefined) {
         throw new Error(`Workflow step participation requires an exact workflow-call instance for "${entry.step}"`);
       }
       return {
@@ -42,7 +49,7 @@ export class WorkflowStepParticipationIndex {
 
   constructor(initial: ReadonlyMap<string, WorkflowStepParticipationRecord>) {
     this.records = new Map([...initial].map(([identity, record]) => {
-      if (parseWorkflowExecutionIdentity(identity) === undefined) {
+      if (parseWorkflowExecutionOwnerIdentity(identity) === undefined) {
         throw new Error(`Invalid workflow step participation identity "${identity}"`);
       }
       return [identity, {
@@ -54,13 +61,13 @@ export class WorkflowStepParticipationIndex {
   record(
     workflow: WorkflowConfig,
     stepName: string,
-    workflowCallPath: readonly WorkflowResumePointEntry[],
+    ownerPath: readonly WorkflowResumePointEntry[],
     reportNames: readonly string[],
   ): void {
     const identity = buildWorkflowStepParticipationIdentity(
       getWorkflowReference(workflow),
       stepName,
-      workflowCallPath,
+      ownerPath,
     );
     const previous = this.records.get(identity);
     this.records.set(identity, {
@@ -71,12 +78,12 @@ export class WorkflowStepParticipationIndex {
   get(
     workflow: WorkflowConfig,
     stepName: string,
-    workflowCallPath: readonly WorkflowResumePointEntry[],
+    ownerPath: readonly WorkflowResumePointEntry[],
   ): WorkflowStepParticipationRecord | undefined {
     const record = this.records.get(buildWorkflowStepParticipationIdentity(
       getWorkflowReference(workflow),
       stepName,
-      workflowCallPath,
+      ownerPath,
     ));
     return record === undefined ? undefined : { report_names: [...record.report_names] };
   }

@@ -12,7 +12,6 @@ function createWorkflow(): WorkflowConfig {
       callable: true,
       visibility: 'internal',
     },
-    maxSteps: 3,
     initialStep: 'review',
     steps: [
       makeStep({

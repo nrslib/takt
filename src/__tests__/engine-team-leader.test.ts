@@ -64,6 +64,13 @@ function buildTeamLeaderConfig(): WorkflowConfig {
   };
 }
 
+function allowConfiguredProviderResolution(config: WorkflowConfig): void {
+  for (const step of config.steps) {
+    step.provider = undefined;
+    step.model = undefined;
+  }
+}
+
 function createAutoRoutingConfig(): AutoRoutingConfig {
   return {
     strategy: 'balanced',
@@ -198,6 +205,58 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     expect(output!.content).toContain('Tests done');
   });
 
+  it('team leader parent を1回だけ数え、上限到達後の後続stepを起動しない', async () => {
+    const baseConfig = buildTeamLeaderConfig();
+    const implementStep = baseConfig.steps[0];
+    if (implementStep === undefined) {
+      throw new Error('Expected the team leader implement step');
+    }
+    const config: WorkflowConfig = {
+      ...baseConfig,
+      maxSteps: 1,
+      steps: [
+        {
+          ...implementStep,
+          rules: [makeRule('done', 'finish')],
+        },
+        makeStep('finish', {
+          persona: 'finisher',
+          instruction: 'Finish after team work',
+          rules: [makeRule('done', 'COMPLETE')],
+        }),
+      ],
+    };
+    const engine = new WorkflowEngine(config, tmpDir, 'implement feature', {
+      projectCwd: tmpDir,
+      provider: 'claude',
+    });
+    mockRunAgentWithPrompt(
+      makeResponse({
+        persona: 'team-leader',
+        structuredOutput: {
+          parts: [
+            { id: 'part-1', title: 'API', instruction: 'Implement API' },
+            { id: 'part-2', title: 'Test', instruction: 'Add tests' },
+          ],
+        },
+      }),
+      makeResponse({ persona: 'coder', content: 'API done' }),
+      makeResponse({ persona: 'coder', content: 'Tests done' }),
+      makeResponse({
+        persona: 'team-leader',
+        structuredOutput: { done: true, reasoning: 'enough', parts: [] },
+      }),
+    );
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(state.iteration).toBe(1);
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(4);
+    expect(vi.mocked(runAgent).mock.calls.every(([persona]) => persona !== 'finisher')).toBe(true);
+  });
+
   it('親 AbortSignal を decomposition call に渡し、cancel 後に再試行しない', async () => {
     const config = buildTeamLeaderConfig();
     const abortController = new AbortController();
@@ -217,6 +276,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
 
   it('timeout part 後の feedback call 中に親中断された場合は継続 part を routing しない', async () => {
     const config = buildTeamLeaderConfig();
+    allowConfiguredProviderResolution(config);
     const abortController = new AbortController();
     const autoRouting: AutoRoutingConfig = {
       ...createAutoRoutingConfig(),
@@ -300,6 +360,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
 
   it('team leader と worker の auto routing decision を routing event として発行する', async () => {
     const config = buildTeamLeaderConfig();
+    allowConfiguredProviderResolution(config);
     const step = config.steps[0];
     if (!step?.teamLeader) {
       throw new Error('teamLeader configuration is required');
@@ -368,6 +429,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
 
   it('team leader と worker の実 provider を候補ごとに JSONL へ記録する', async () => {
     const config = buildTeamLeaderConfig();
+    allowConfiguredProviderResolution(config);
     const step = config.steps[0];
     if (!step?.teamLeader) {
       throw new Error('teamLeader configuration is required');
@@ -552,6 +614,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
   it('長大な動的part IDを実AI batch routerでroutingし安全なJSONLを記録する', async () => {
     const debugLogSpy = vi.spyOn(DebugLogger.getInstance(), 'writeLog');
     const config = buildTeamLeaderConfig();
+    allowConfiguredProviderResolution(config);
     const step = config.steps[0];
     if (!step?.teamLeader) {
       throw new Error('teamLeader configuration is required');
@@ -719,6 +782,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
 
   it('team leader の AI routing には raw instruction だけを渡し worker part instruction は渡さない', async () => {
     const config = buildTeamLeaderConfig();
+    allowConfiguredProviderResolution(config);
     const autoRouting: AutoRoutingConfig = {
       ...createAutoRoutingConfig(),
       rules: undefined,
@@ -760,6 +824,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
 
   it('leader routing estimator の中断を fallback に変換せず親 AbortSignal を伝播する', async () => {
     const config = buildTeamLeaderConfig();
+    allowConfiguredProviderResolution(config);
     const abortController = new AbortController();
     const abortReason = new Error('leader routing aborted');
     const estimate = vi.fn().mockImplementation(async (_input, options) => {
@@ -787,6 +852,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
 
   it('team leader worker の auto routing provider が part model と非互換なら worker 実行前に失敗する', async () => {
     const config = buildTeamLeaderConfig();
+    allowConfiguredProviderResolution(config);
     const step = config.steps[0];
     if (!step?.teamLeader) {
       throw new Error('teamLeader configuration is required');
@@ -858,6 +924,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
 
   it('team leader が feedback で追加した part に auto routing を適用する', async () => {
     const config = buildTeamLeaderConfig();
+    allowConfiguredProviderResolution(config);
     const step = config.steps[0];
     if (!step?.teamLeader) {
       throw new Error('teamLeader configuration is required');
@@ -990,6 +1057,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
 
   it('team leader call が reject した場合も失敗 usage を1件だけ記録する', async () => {
     const config = buildTeamLeaderConfig();
+    allowConfiguredProviderResolution(config);
     const step = config.steps[0];
     if (!step?.teamLeader) {
       throw new Error('teamLeader configuration is required');
@@ -1042,6 +1110,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
     vi.useFakeTimers();
     try {
       const config = buildTeamLeaderConfig();
+      allowConfiguredProviderResolution(config);
       const step = config.steps[0];
       if (!step?.teamLeader) {
         throw new Error('teamLeader configuration is required');
@@ -1129,6 +1198,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
 
   it('実際の part timeout でも失敗 usage を呼び出しごとに1件記録し親aggregateを記録しない', async () => {
     const config = buildTeamLeaderConfig();
+    allowConfiguredProviderResolution(config);
     const step = config.steps[0];
     if (!step?.teamLeader) {
       throw new Error('teamLeader configuration is required');
@@ -1372,6 +1442,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
 
   it('実際の親 AbortSignal でも part の失敗 usage を1件だけ記録する', async () => {
     const config = buildTeamLeaderConfig();
+    allowConfiguredProviderResolution(config);
     const step = config.steps[0];
     if (!step?.teamLeader) {
       throw new Error('teamLeader configuration is required');
@@ -1617,6 +1688,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
 
   it('persona_providers で opencode に解決される part でも part_allowed_tools を runtime allowedTools として渡す', async () => {
     const config = buildTeamLeaderConfig();
+    allowConfiguredProviderResolution(config);
     const step = config.steps[0];
     if (!step?.teamLeader) {
       throw new Error('teamLeader configuration is required');
@@ -1689,6 +1761,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
 
   it('Claude part では part_edit false の part_allowed_tools から編集系ツールを除去する', async () => {
     const config = buildTeamLeaderConfig();
+    allowConfiguredProviderResolution(config);
     const step = config.steps[0];
     if (!step?.teamLeader) {
       throw new Error('teamLeader configuration is required');
@@ -1732,6 +1805,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
 
   it('OpenCode part では part_edit false の part_allowed_tools から編集系ツールを除去するが bash は残す', async () => {
     const config = buildTeamLeaderConfig();
+    allowConfiguredProviderResolution(config);
     const step = config.steps[0];
     if (!step?.teamLeader) {
       throw new Error('teamLeader configuration is required');
@@ -1780,6 +1854,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
 
   it('config 層の claude.allowed_tools は opencode part 実行時に再注入されない', async () => {
     const config = buildTeamLeaderConfig();
+    allowConfiguredProviderResolution(config);
     const step = config.steps[0];
     if (!step?.teamLeader) {
       throw new Error('teamLeader configuration is required');
@@ -1852,6 +1927,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
 
   it('persona_providers の provider_options は team leader part に反映されつつ claude.allowed_tools は strip される', async () => {
     const config = buildTeamLeaderConfig();
+    allowConfiguredProviderResolution(config);
     const step = config.steps[0];
     if (!step?.teamLeader) {
       throw new Error('teamLeader configuration is required');
@@ -1924,6 +2000,7 @@ describe('WorkflowEngine Integration: TeamLeaderRunner', () => {
 
   it('Claude part で part_allowed_tools 未指定なら provider_options.claude.allowed_tools を継承する', async () => {
     const config = buildTeamLeaderConfig();
+    allowConfiguredProviderResolution(config);
     const step = config.steps[0];
     if (!step?.teamLeader) {
       throw new Error('teamLeader configuration is required');

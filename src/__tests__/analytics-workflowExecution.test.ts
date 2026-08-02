@@ -123,7 +123,7 @@ describe('routing_decision event assembly', () => {
 
   it('writes normal step routing decisions from explicit routing event data', () => {
     initAnalyticsWriter(true, testDir, { routingEventsDir });
-    const emitter = new AnalyticsEmitter('run-routing', 'mock', 'test-model', 'auto-workflow', false);
+    const emitter = new AnalyticsEmitter('run-routing', false);
     const sentinelInstruction = 'Implement API with SECRET_PROMPT_SENTINEL and /tmp/private-repo';
     const step = {
       name: 'implement',
@@ -198,7 +198,7 @@ describe('routing_decision event assembly', () => {
 
   it('does not duplicate routing decisions when the same step completes', () => {
     initAnalyticsWriter(true, testDir, { routingEventsDir });
-    const emitter = new AnalyticsEmitter('run-routing-single', 'mock', 'test-model', 'auto-workflow', false);
+    const emitter = new AnalyticsEmitter('run-routing-single', false);
     const step = {
       name: 'implement',
       tags: ['implementation'],
@@ -224,9 +224,8 @@ describe('routing_decision event assembly', () => {
       timestamp: new Date('2026-02-18T10:00:04.200Z'),
     } as const;
 
-    emitter.updateProviderInfo(3, 'codex', 'gpt-5', 'auto-workflow');
     emitter.onRoutingDecision(step, response, 'Implement API', providerInfo, 'normal', 4200, 3, 'auto-workflow');
-    emitter.onStepComplete(step, response);
+    emitter.onStepComplete(step, response, { iteration: 3, provider: 'codex', model: 'gpt-5' });
 
     const lines = readFileSync(join(routingEventsDir, '2026-02-18.jsonl'), 'utf-8').trim().split('\n');
     const routingEvents = lines
@@ -237,7 +236,7 @@ describe('routing_decision event assembly', () => {
 
   it('writes team leader worker routing decisions from explicit routing event data', () => {
     initAnalyticsWriter(true, testDir, { routingEventsDir });
-    const emitter = new AnalyticsEmitter('run-worker-routing', 'mock', 'test-model', 'team-workflow', false);
+    const emitter = new AnalyticsEmitter('run-worker-routing', false);
     const partStep = {
       name: 'implement.part-1',
       tags: ['implementation'],
@@ -289,7 +288,7 @@ describe('routing_decision event assembly', () => {
     ['multiple semantic candidates', ['approved', 'needs_fix'], 3],
   ])('writes the executed phaseCount for %s', (_case, conditions, expectedPhaseCount) => {
     initAnalyticsWriter(true, testDir, { routingEventsDir });
-    const emitter = new AnalyticsEmitter('run-phase-count', 'mock', 'test-model', 'auto-workflow', false);
+    const emitter = new AnalyticsEmitter('run-phase-count', false);
     const step = {
       name: 'review',
       tags: ['review'],
@@ -336,7 +335,7 @@ describe('routing_decision event assembly', () => {
 
   it('skips non-auto provider sources while still writing auto routing decisions', () => {
     initAnalyticsWriter(true, testDir, { routingEventsDir });
-    const emitter = new AnalyticsEmitter('run-non-auto-source', 'mock', 'test-model', 'auto-workflow', false);
+    const emitter = new AnalyticsEmitter('run-non-auto-source', false);
     const step = {
       name: 'implement',
       tags: ['implementation'],
@@ -403,14 +402,7 @@ describe('routing_decision event assembly', () => {
 
   it('writes routing decisions when auto routing selects the provider and a higher-priority layer selects the model', () => {
     initAnalyticsWriter(true, testDir, { routingEventsDir });
-    const emitter = new AnalyticsEmitter(
-      'task-derived-slug',
-      'mock',
-      'test-model',
-      'auto-workflow',
-      false,
-      'routing-run-id',
-    );
+    const emitter = new AnalyticsEmitter('task-derived-slug', false, 'routing-run-id');
     const step = {
       name: 'implement',
       tags: ['implementation'],
@@ -520,7 +512,7 @@ describe('AnalyticsEmitter findings ledger integration', () => {
 
   it('writes review_finding events from findings ledger updates to JSONL', () => {
     initAnalyticsWriter(true, testDir);
-    const emitter = new AnalyticsEmitter('run-ledger', 'mock', 'test-model', 'peer-review', false);
+    const emitter = new AnalyticsEmitter('run-ledger', false);
     const ledger: FindingLedger = {
       workflowName: 'peer-review',
       nextId: 2,
@@ -547,8 +539,7 @@ describe('AnalyticsEmitter findings ledger integration', () => {
       interpretations: [],
     };
 
-    emitter.updateProviderInfo(7, 'mock', 'test-model', 'peer-review');
-    emitter.onFindingLedgerUpdated(ledger);
+    emitter.onFindingLedgerUpdated(ledger, 7);
 
     const filePath = join(testDir, '2026-06-13.jsonl');
     const content = readFileSync(filePath, 'utf-8').trim();
@@ -572,7 +563,7 @@ describe('AnalyticsEmitter findings ledger integration', () => {
     const fileInsteadOfDirectory = join(testDir, 'events-file');
     writeFileSync(fileInsteadOfDirectory, 'not a directory', 'utf-8');
     initAnalyticsWriter(true, fileInsteadOfDirectory);
-    const emitter = new AnalyticsEmitter('run-ledger', 'mock', 'test-model', 'peer-review', false);
+    const emitter = new AnalyticsEmitter('run-ledger', false);
     const ledger: FindingLedger = {
       workflowName: 'peer-review',
       nextId: 2,
@@ -596,13 +587,12 @@ describe('AnalyticsEmitter findings ledger integration', () => {
       interpretations: [],
     };
 
-    expect(() => emitter.onFindingLedgerUpdated(ledger)).not.toThrow();
+    expect(() => emitter.onFindingLedgerUpdated(ledger, 7)).not.toThrow();
   });
 
   it('writes fix_action for seeded finding ids before a ledger update event', () => {
     initAnalyticsWriter(true, testDir);
-    const emitter = new AnalyticsEmitter('run-ledger', 'mock', 'test-model', 'peer-review', false);
-    emitter.updateProviderInfo(8, 'mock', 'test-model', 'peer-review');
+    const emitter = new AnalyticsEmitter('run-ledger', false);
     emitter.seedFindingContractFindingIds(['F-0001']);
 
     emitter.onStepComplete(
@@ -613,6 +603,7 @@ describe('AnalyticsEmitter findings ledger integration', () => {
         content: 'Fixed F-0001 and F-9999.',
         timestamp: new Date('2026-06-13T03:00:00.000Z'),
       } as AgentResponse,
+      { iteration: 8, provider: 'mock', model: 'test-model' },
     );
 
     const filePath = join(testDir, '2026-06-13.jsonl');

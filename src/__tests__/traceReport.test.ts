@@ -3,8 +3,88 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { renderTraceReportMarkdown, renderTraceReportFromLogs } from '../features/tasks/execute/traceReport.js';
+import { buildTraceFromRecords } from '../features/tasks/execute/traceReportParser.js';
+import { buildPhaseExecutionId } from '../shared/utils/phaseExecutionId.js';
+import type { NdjsonRecord } from '../shared/utils/types.js';
 
 describe('traceReport', () => {
+  it('should keep parallel workflow-call phase traces independent for identical child step names', () => {
+    const firstStack = [{
+      workflow: 'parent',
+      step: 'delegate',
+      kind: 'workflow_call' as const,
+      call_instance: 1,
+    }];
+    const secondStack = [{
+      workflow: 'parent',
+      step: 'delegate',
+      kind: 'workflow_call' as const,
+      call_instance: 2,
+    }];
+    const firstId = buildPhaseExecutionId({
+      step: 'review', iteration: 2, phase: 1, sequence: 1, workflowStack: firstStack,
+    });
+    const secondId = buildPhaseExecutionId({
+      step: 'review', iteration: 2, phase: 1, sequence: 1, workflowStack: secondStack,
+    });
+    const records = [
+      { type: 'step_start', step: 'review', persona: 'reviewer', iteration: 2, stack: firstStack, timestamp: '2026-03-04T11:59:01.000Z' },
+      { type: 'step_start', step: 'review', persona: 'reviewer', iteration: 2, stack: secondStack, timestamp: '2026-03-04T11:59:02.000Z' },
+      { type: 'phase_start', step: 'review', iteration: 2, phase: 1, phaseName: 'execute', phaseExecutionId: firstId, stack: firstStack, instruction: 'first', timestamp: '2026-03-04T11:59:03.000Z' },
+      { type: 'phase_start', step: 'review', iteration: 2, phase: 1, phaseName: 'execute', phaseExecutionId: secondId, stack: secondStack, instruction: 'second', timestamp: '2026-03-04T11:59:04.000Z' },
+      { type: 'phase_complete', step: 'review', iteration: 2, phase: 1, phaseName: 'execute', phaseExecutionId: secondId, stack: secondStack, status: 'done', content: 'second response', timestamp: '2026-03-04T11:59:05.000Z' },
+      { type: 'phase_complete', step: 'review', iteration: 2, phase: 1, phaseName: 'execute', phaseExecutionId: firstId, stack: firstStack, status: 'done', content: 'first response', timestamp: '2026-03-04T11:59:06.000Z' },
+    ] as NdjsonRecord[];
+
+    const trace = buildTraceFromRecords(records, [], '2026-03-04T12:00:00.000Z');
+
+    expect(firstId).not.toBe(secondId);
+    expect(trace.steps).toHaveLength(2);
+    expect(trace.steps.map((step) => step.phases[0]?.response)).toEqual([
+      'first response',
+      'second response',
+    ]);
+  });
+
+  it('should recover an omitted phase completion iteration from an encoded special-character step id', () => {
+    const phaseExecutionId = buildPhaseExecutionId({
+      step: 'child:review',
+      iteration: 4,
+      phase: 1,
+      sequence: 1,
+    });
+    const records = [
+      {
+        type: 'phase_start',
+        step: 'child:review',
+        iteration: 4,
+        phase: 1,
+        phaseName: 'execute',
+        phaseExecutionId,
+        instruction: 'review',
+        timestamp: '2026-03-04T11:59:03.000Z',
+      },
+      {
+        type: 'phase_complete',
+        step: 'child:review',
+        phase: 1,
+        phaseName: 'execute',
+        phaseExecutionId,
+        status: 'done',
+        content: 'reviewed',
+        timestamp: '2026-03-04T11:59:04.000Z',
+      },
+    ] as NdjsonRecord[];
+
+    const trace = buildTraceFromRecords(records, [], '2026-03-04T12:00:00.000Z');
+
+    expect(trace.steps[0]).toMatchObject({
+      step: 'child:review',
+      iteration: 4,
+      phases: [{ phaseExecutionId, response: 'reviewed' }],
+    });
+  });
+
   it('should render judge stage details and tolerate aborted incomplete step', () => {
     const markdown = renderTraceReportMarkdown(
       {
@@ -46,6 +126,7 @@ describe('traceReport', () => {
           ],
         },
       ],
+      [],
     );
 
     expect(markdown).toContain('- Status: ❌ aborted');
@@ -143,7 +224,7 @@ describe('traceReport', () => {
     expect(markdown).toContain('- Failure Category: provider_error');
   });
 
-  it('should preserve workflow_call and child steps with the same name across different iterations', () => {
+  it('should render a child agent step with its workflow_call stack without a wrapper agent step', () => {
     const dir = mkdtempSync(join(tmpdir(), 'trace-report-stack-'));
     const sessionPath = join(dir, 'session.jsonl');
     writeFileSync(sessionPath, [
@@ -151,22 +232,13 @@ describe('traceReport', () => {
       JSON.stringify({
         type: 'step_start',
         step: 'review',
-        workflow: 'parent',
-        stack: [{ workflow: 'parent', step: 'review', kind: 'workflow_call' }],
-        persona: 'planner',
-        iteration: 3,
-        timestamp: '2026-03-04T11:59:01.000Z',
-      }),
-      JSON.stringify({
-        type: 'step_start',
-        step: 'review',
         workflow: 'child',
         stack: [
-          { workflow: 'parent', step: 'delegate', kind: 'workflow_call' },
+          { workflow: 'parent', step: 'delegate', kind: 'workflow_call', call_instance: 1 },
           { workflow: 'child', step: 'review', kind: 'agent' },
         ],
         persona: 'reviewer',
-        iteration: 4,
+        iteration: 1,
         timestamp: '2026-03-04T11:59:03.000Z',
       }),
       JSON.stringify({
@@ -174,29 +246,17 @@ describe('traceReport', () => {
         step: 'review',
         workflow: 'child',
         stack: [
-          { workflow: 'parent', step: 'delegate', kind: 'workflow_call' },
+          { workflow: 'parent', step: 'delegate', kind: 'workflow_call', call_instance: 1 },
           { workflow: 'child', step: 'review', kind: 'agent' },
         ],
         persona: 'reviewer',
-        iteration: 4,
+        iteration: 1,
         status: 'done',
         content: 'child-ok',
         instruction: 'inst',
         timestamp: '2026-03-04T11:59:04.000Z',
       }),
-      JSON.stringify({
-        type: 'step_complete',
-        step: 'review',
-        workflow: 'parent',
-        stack: [{ workflow: 'parent', step: 'review', kind: 'workflow_call' }],
-        persona: 'planner',
-        iteration: 3,
-        status: 'done',
-        content: 'parent-ok',
-        instruction: 'inst',
-        timestamp: '2026-03-04T11:59:05.000Z',
-      }),
-      JSON.stringify({ type: 'workflow_complete', iterations: 2, endTime: '2026-03-04T12:00:00.000Z' }),
+      JSON.stringify({ type: 'workflow_complete', iterations: 1, endTime: '2026-03-04T12:00:00.000Z' }),
       '',
     ].join('\n'));
 
@@ -207,7 +267,7 @@ describe('traceReport', () => {
         task: 'task',
         runSlug: 'run-1',
         status: 'completed',
-        iterations: 2,
+        iterations: 1,
         endTime: '2026-03-04T12:00:00.000Z',
       },
       sessionPath,
@@ -215,10 +275,96 @@ describe('traceReport', () => {
       'full',
     );
 
-    expect(markdown).toContain('parent-ok');
     expect(markdown).toContain('child-ok');
-    expect(markdown).toContain('## Iteration 3: review');
-    expect(markdown).toContain('## Iteration 4: review');
+    expect(markdown).toContain('## Iteration 1: review');
+  });
+
+  it('should render workflow_call lifecycle without creating a synthetic iteration section', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'trace-report-workflow-call-lifecycle-'));
+    const sessionPath = join(dir, 'session.jsonl');
+    const stack = [
+      { workflow: 'parent', step: 'delegate', kind: 'workflow_call', call_instance: 1 },
+    ];
+    const records = [
+      { type: 'workflow_start', task: 'task', workflowName: 'parent', startTime: '2026-03-04T11:59:00.000Z' },
+      {
+        type: 'workflow_call_start',
+        workflow: 'parent',
+        step: 'delegate',
+        childWorkflow: 'shared/review',
+        callInstance: 1,
+        stack,
+        timestamp: '2026-03-04T11:59:01.000Z',
+      },
+      {
+        type: 'step_start',
+        step: 'review',
+        workflow: 'shared/review',
+        stack: [...stack, { workflow: 'shared/review', step: 'review', kind: 'agent' }],
+        persona: 'reviewer',
+        iteration: 1,
+        timestamp: '2026-03-04T11:59:02.000Z',
+      },
+      {
+        type: 'step_complete',
+        step: 'review',
+        workflow: 'shared/review',
+        stack: [...stack, { workflow: 'shared/review', step: 'review', kind: 'agent' }],
+        persona: 'reviewer',
+        iteration: 1,
+        status: 'done',
+        content: 'reviewed',
+        instruction: 'Review',
+        timestamp: '2026-03-04T11:59:03.000Z',
+      },
+      {
+        type: 'workflow_call_complete',
+        workflow: 'parent',
+        step: 'delegate',
+        childWorkflow: 'shared/review',
+        callInstance: 1,
+        stack,
+        status: 'completed',
+        returnValue: 'child-return-ok',
+        timestamp: '2026-03-04T11:59:04.000Z',
+      },
+      { type: 'workflow_complete', iterations: 1, endTime: '2026-03-04T12:00:00.000Z' },
+    ] as NdjsonRecord[];
+    writeFileSync(sessionPath, [...records.map((record) => JSON.stringify(record)), ''].join('\n'));
+
+    const trace = buildTraceFromRecords(records, [], '2026-03-04T12:00:00.000Z');
+
+    const markdown = renderTraceReportFromLogs(
+      {
+        tracePath: join(dir, 'trace.md'),
+        workflowName: 'parent',
+        task: 'task',
+        runSlug: 'run-1',
+        status: 'completed',
+        iterations: 1,
+        endTime: '2026-03-04T12:00:00.000Z',
+      },
+      sessionPath,
+      undefined,
+      'full',
+    );
+
+    expect(markdown).toContain('delegate#1');
+    expect(markdown).toContain('shared/review');
+    expect(markdown).toContain('Call Stack: parent/delegate#1');
+    expect(markdown).toContain('child-return-ok');
+    expect(markdown).toContain('## Iteration 1: review');
+    expect(trace.steps.map((step) => ({ step: step.step, iteration: step.iteration }))).toEqual([
+      { step: 'review', iteration: 1 },
+    ]);
+    expect(trace.workflowCalls).toEqual([
+      expect.objectContaining({
+        parentWorkflow: 'parent',
+        step: 'delegate',
+        childWorkflow: 'shared/review',
+        callInstance: 1,
+      }),
+    ]);
   });
 
   it('should fail fast when completed trace has missing phase status', () => {
@@ -253,6 +399,7 @@ describe('traceReport', () => {
           ],
         },
       ],
+      [],
     )).toThrow('missing status');
   });
 
@@ -346,6 +493,7 @@ describe('traceReport', () => {
         { step: 'reviewers', persona: 'reviewer', iteration: 3, startedAt: '2026-03-04T11:59:03.000Z', phases: [], result: { status: 'done', content: 'ok' } },
         { step: 'fix', persona: 'coder', iteration: 4, startedAt: '2026-03-04T11:59:04.000Z', phases: [], result: { status: 'done', content: 'ok' } },
       ],
+      [],
     );
 
     expect(markdown).toContain('reviewers ↔ fix loop');

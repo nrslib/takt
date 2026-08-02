@@ -86,7 +86,7 @@ export async function runReportPhase(
         maxTurns: REPORT_PHASE_MAX_TURNS,
       })
       : buildNewSessionRetryOptions(step, ctx);
-    const firstAttemptPhaseExecutionId = nextReportPhaseExecutionId(step.name, ctx.iteration, ++phaseSequence);
+    const firstAttemptPhaseExecutionId = nextReportPhaseExecutionId(step.name, ctx, ++phaseSequence);
 
     const firstAttempt = await runSingleReportAttempt(
       step,
@@ -135,7 +135,7 @@ export async function runReportPhase(
         reason: firstAttempt.failureReason,
       });
 
-      const retryAttemptPhaseExecutionId = nextReportPhaseExecutionId(step.name, ctx.iteration, ++phaseSequence);
+      const retryAttemptPhaseExecutionId = nextReportPhaseExecutionId(step.name, ctx, ++phaseSequence);
 
       const retryAttempt = await runSingleReportAttempt(step, retryInstruction, retryOptions, ctx, retryAttemptPhaseExecutionId);
       if (retryAttempt.kind === 'blocked') {
@@ -168,7 +168,7 @@ export async function runReportPhase(
       provider: fallbackOptions.resolvedProvider,
     });
 
-    const fallbackAttemptPhaseExecutionId = nextReportPhaseExecutionId(step.name, ctx.iteration, ++phaseSequence);
+    const fallbackAttemptPhaseExecutionId = nextReportPhaseExecutionId(step.name, ctx, ++phaseSequence);
     const fallbackAttempt = await runSingleReportAttempt(
       step,
       retryInstruction,
@@ -193,15 +193,20 @@ export async function runReportPhase(
   log.debug('Report phase complete', { step: step.name, filesGenerated: reportFiles.length });
 }
 
-function nextReportPhaseExecutionId(stepName: string, iteration: number | undefined, sequence: number): string | undefined {
-  if (iteration == null) {
+function nextReportPhaseExecutionId(
+  stepName: string,
+  ctx: ReportPhaseRunnerContext,
+  sequence: number,
+): string | undefined {
+  if (ctx.iteration == null) {
     return undefined;
   }
   return buildPhaseExecutionId({
     step: stepName,
-    iteration,
+    iteration: ctx.iteration,
     phase: 2,
     sequence,
+    workflowStack: ctx.executionScope.stack,
   });
 }
 
@@ -270,7 +275,7 @@ async function runSingleReportAttempt(
     ...options,
     onPromptResolved: (promptParts) => {
       resolvedPromptParts = promptParts;
-      ctx.onPhaseStart?.(step, 2, 'report', instruction, promptParts, phaseExecutionId, ctx.iteration);
+      ctx.onPhaseStart?.(step, 2, 'report', instruction, promptParts, phaseExecutionId, ctx.iteration, ctx.executionScope);
       didEmitPhaseStart = true;
     },
     onStream: (event) => {
@@ -302,7 +307,7 @@ async function runSingleReportAttempt(
       phaseName: 'report',
       instruction,
       phaseExecutionId,
-      workflowStack: ctx.getCurrentWorkflowStack?.(),
+      workflowStack: [...ctx.executionScope.stack],
       sanitizeText: ctx.sanitizeObservabilityText,
       providerInfo: attemptProviderInfo,
       getPromptParts: () => resolvedPromptParts,
@@ -324,30 +329,30 @@ async function runSingleReportAttempt(
       ctx.onProviderAttempt?.(attemptProviderInfo, false, undefined);
     }
     if (error instanceof ReportPhaseToolCallError) {
-      ctx.onPhaseComplete?.(step, 2, 'report', '', 'error', error.message, phaseExecutionId, ctx.iteration);
+      ctx.onPhaseComplete?.(step, 2, 'report', '', 'error', error.message, phaseExecutionId, ctx.iteration, ctx.executionScope);
       return { kind: 'retryable_failure', errorMessage: error.message, failureReason: 'tool_call' };
     }
 
     const errorMsg = error instanceof Error ? error.message : String(error);
     if (didEmitPhaseStart) {
-      ctx.onPhaseComplete?.(step, 2, 'report', '', 'error', errorMsg, phaseExecutionId, ctx.iteration);
+      ctx.onPhaseComplete?.(step, 2, 'report', '', 'error', errorMsg, phaseExecutionId, ctx.iteration, ctx.executionScope);
     }
     throw error;
   }
 
   if (reportToolCallError !== undefined) {
-    ctx.onPhaseComplete?.(step, 2, 'report', '', 'error', reportToolCallError.message, phaseExecutionId, ctx.iteration);
+    ctx.onPhaseComplete?.(step, 2, 'report', '', 'error', reportToolCallError.message, phaseExecutionId, ctx.iteration, ctx.executionScope);
     return { kind: 'retryable_failure', errorMessage: reportToolCallError.message, failureReason: 'tool_call' };
   }
 
   if (response.status === 'blocked') {
-    ctx.onPhaseComplete?.(step, 2, 'report', response.content, response.status, undefined, phaseExecutionId, ctx.iteration);
+    ctx.onPhaseComplete?.(step, 2, 'report', response.content, response.status, undefined, phaseExecutionId, ctx.iteration, ctx.executionScope);
     return { kind: 'blocked', response };
   }
 
   if (response.status === 'rate_limited' || response.errorKind === 'rate_limit') {
     const errorMessage = resolveAgentErrorMessage(response.errorKind, response.error || response.content);
-    ctx.onPhaseComplete?.(step, 2, 'report', response.content, response.status, errorMessage, phaseExecutionId, ctx.iteration);
+    ctx.onPhaseComplete?.(step, 2, 'report', response.content, response.status, errorMessage, phaseExecutionId, ctx.iteration, ctx.executionScope);
     return {
       kind: 'rate_limited',
       response: {
@@ -371,6 +376,7 @@ async function runSingleReportAttempt(
       buildRetryableFailureEventError('provider_error', response.status),
       phaseExecutionId,
       ctx.iteration,
+      ctx.executionScope,
     );
     return {
       kind: 'retryable_failure',
@@ -383,11 +389,11 @@ async function runSingleReportAttempt(
   const trimmedContent = response.content.trim();
   if (trimmedContent.length === 0) {
     const errorMessage = 'Report output is empty';
-    ctx.onPhaseComplete?.(step, 2, 'report', '', 'error', errorMessage, phaseExecutionId, ctx.iteration);
+    ctx.onPhaseComplete?.(step, 2, 'report', '', 'error', errorMessage, phaseExecutionId, ctx.iteration, ctx.executionScope);
     return { kind: 'retryable_failure', errorMessage, failureReason: 'empty_output' };
   }
 
-  ctx.onPhaseComplete?.(step, 2, 'report', response.content, response.status, undefined, phaseExecutionId, ctx.iteration);
+  ctx.onPhaseComplete?.(step, 2, 'report', response.content, response.status, undefined, phaseExecutionId, ctx.iteration, ctx.executionScope);
   return { kind: 'success', content: trimmedContent, response };
 }
 

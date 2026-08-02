@@ -158,11 +158,36 @@ export interface WorkflowResumePoint {
   version: 2;
   stack: WorkflowResumePointEntry[];
   iteration: number;
+  max_steps?: WorkflowMaxSteps;
   elapsed_ms: number;
+  pending_loop_judge?: WorkflowPendingLoopJudge;
+  pending_fallback?: WorkflowPendingFallback;
   dynamic_parallel_selections?: Record<string, DynamicParallelSelectionSnapshot>;
   workflow_call_invocations: Record<string, WorkflowCallInvocationRecord>;
   workflow_step_participations: Record<string, WorkflowStepParticipationRecord>;
 }
+
+interface WorkflowPendingLoopJudgeBase {
+  triggering_step: string;
+  cycle: string[];
+  cycle_count: number;
+  fallback_next_step: string;
+}
+
+export interface WorkflowPendingLoopJudgeBudgetWait extends WorkflowPendingLoopJudgeBase {
+  status: 'budget_wait';
+}
+
+export interface WorkflowPendingLoopJudgeStarted extends WorkflowPendingLoopJudgeBase {
+  status: 'started';
+  judge_step: string;
+  iteration: number;
+  step_iteration: number;
+}
+
+export type WorkflowPendingLoopJudge =
+  | WorkflowPendingLoopJudgeBudgetWait
+  | WorkflowPendingLoopJudgeStarted;
 
 export interface WorkflowStepParticipationRecord {
   report_names: string[];
@@ -170,7 +195,7 @@ export interface WorkflowStepParticipationRecord {
 
 export interface WorkflowCallInvocationRecord {
   call_instance: number;
-  report_namespace_segment: string;
+  child_workflow_ref: string;
 }
 
 export interface DynamicParallelSelectionSnapshot {
@@ -458,7 +483,7 @@ export interface WorkflowConfig {
   reportFormats?: Record<string, string>;
   steps: WorkflowStep[];
   initialStep: string;
-  maxSteps: WorkflowMaxSteps;
+  maxSteps?: WorkflowMaxSteps;
   loopDetection?: LoopDetectionConfig;
   loopMonitors?: LoopMonitorConfig[];
   interactiveMode?: InteractiveMode;
@@ -483,6 +508,11 @@ export interface FallbackContext {
   currentModel?: string;
   stepName: string;
   reportDir: string;
+}
+
+export interface WorkflowPendingFallback {
+  context: FallbackContext;
+  attempts: RateLimitFallbackProvider[];
 }
 
 export interface WorkflowState {

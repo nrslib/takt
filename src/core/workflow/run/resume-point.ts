@@ -5,6 +5,7 @@ import type {
   WorkflowResumePointEntry,
 } from '../../models/types.js';
 import { isWorkflowCallStep } from '../step-kind.js';
+import { isDynamicParallelSubSteps } from '../../models/types.js';
 import {
   workflowEntriesMatch,
   workflowEntryMatchesWorkflow,
@@ -50,13 +51,14 @@ function canResolveResumePointSuffix(
   }
 
   let currentWorkflow = workflow;
+  let currentSteps = currentWorkflow.steps;
   for (let index = 0; index < stackSuffix.length; index += 1) {
     const entry = stackSuffix[index]!;
     if (!workflowEntryMatchesWorkflow(entry, currentWorkflow)) {
       return false;
     }
 
-    const step = currentWorkflow.steps.find((candidate) => candidate.name === entry.step);
+    const step = currentSteps.find((candidate) => candidate.name === entry.step);
     if (!step) {
       return false;
     }
@@ -65,15 +67,24 @@ function canResolveResumePointSuffix(
       return true;
     }
 
-    if (!isWorkflowCallStep(step)) {
-      return false;
+    if (isWorkflowCallStep(step)) {
+      const childWorkflow = resolveWorkflowCall(currentWorkflow, step);
+      if (!childWorkflow) {
+        return false;
+      }
+      currentWorkflow = childWorkflow;
+      currentSteps = childWorkflow.steps;
+      continue;
     }
 
-    const childWorkflow = resolveWorkflowCall(currentWorkflow, step);
-    if (!childWorkflow) {
+    if (step.parallel === undefined || isDynamicParallelSubSteps(step.parallel)) {
       return false;
     }
-    currentWorkflow = childWorkflow;
+    const nextEntry = stackSuffix[index + 1]!;
+    if (!workflowEntryMatchesWorkflow(nextEntry, currentWorkflow)) {
+      return false;
+    }
+    currentSteps = step.parallel;
   }
 
   return true;

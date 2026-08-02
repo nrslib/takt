@@ -51,6 +51,7 @@ function createContext(reportDir: string): ReportPhaseRunnerContext {
   return {
     cwd: reportDir,
     reportDir,
+    executionScope: { kind: 'workflow_execution_scope', stack: [] },
     workflowName: 'test-workflow',
     observabilityEnabled: true,
     lastResponse: 'Phase 1 output',

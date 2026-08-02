@@ -106,6 +106,7 @@ describe('WorkflowEngine: worktree reportDir resolution', () => {
     const config = buildSimpleConfig();
     const engine = new WorkflowEngine(config, cloneCwd, 'test task', {
       projectCwd,
+      provider: 'mock',
     });
 
     mockRunAgentSequence([
@@ -151,6 +152,7 @@ describe('WorkflowEngine: worktree reportDir resolution', () => {
     };
     const engine = new WorkflowEngine(config, cloneCwd, 'test task', {
       projectCwd,
+      provider: 'mock',
     });
 
     const { runAgent } = await import('../agents/runner.js');
@@ -182,6 +184,7 @@ describe('WorkflowEngine: worktree reportDir resolution', () => {
     const config = buildSimpleConfig();
     const engine = new WorkflowEngine(config, normalDir, 'test task', {
       projectCwd: normalDir,
+      provider: 'mock',
     });
 
     mockRunAgentSequence([
@@ -208,6 +211,7 @@ describe('WorkflowEngine: worktree reportDir resolution', () => {
     const config = buildSimpleConfig();
     const engine = new WorkflowEngine(config, normalDir, 'test task', {
       projectCwd: normalDir,
+      provider: 'mock',
       reportDirName: '20260201-015714-foptng',
     });
 
@@ -266,6 +270,7 @@ describe('WorkflowEngine: worktree reportDir resolution', () => {
     };
     const engine = new WorkflowEngine(config, normalDir, 'test task', {
       projectCwd: normalDir,
+      provider: 'mock',
       reportDirName: 'test-report-dir',
     });
 

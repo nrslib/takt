@@ -310,9 +310,6 @@ export async function createWorkflowExecutionBootstrap(
         workflowContext: { provider: workflowConfig.provider },
       });
   const currentProvider = resolvedProvider.value;
-  if (!currentProvider) {
-    throw new Error('No provider configured. Set "provider" in ~/.takt/config.yaml');
-  }
   const currentProviderSource = resolvedProvider.source;
   const resolvedModel = options.model !== undefined
     ? {
@@ -370,9 +367,6 @@ export async function createWorkflowExecutionBootstrap(
 
   const analyticsEmitter = new AnalyticsEmitter(
     runSlug,
-    currentProvider,
-    configuredModel ?? '(default)',
-    workflowConfig.name,
     interactiveUserInput,
     workflowSessionId,
   );

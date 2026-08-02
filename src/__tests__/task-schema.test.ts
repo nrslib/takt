@@ -5,6 +5,8 @@ import {
   TaskExecutionConfigSchema,
   serializeTaskRecord,
 } from '../infra/task/schema.js';
+import { buildWorkflowCallInvocationIdentity } from '../core/workflow/workflow-call-invocation-index.js';
+import { buildWorkflowCallInvocationRecordsFixture } from './helpers/workflow-resume-fixture.js';
 
 function makePendingRecord() {
   return {
@@ -182,8 +184,8 @@ describe('TaskExecutionConfigSchema', () => {
         iteration: 3,
         elapsed_ms: 100,
         dynamic_parallel_selections: {
-          '{"workflow":"default","step":"reviewers","calls":[]}': {
-            identity: '{"workflow":"default","step":"reviewers","calls":[]}',
+          '{"workflow":"default","step":"reviewers","owners":[]}': {
+            identity: '{"workflow":"default","step":"reviewers","owners":[]}',
             step_name: 'reviewers',
             round: 1,
             selected_pool_ids: ['frontend'],
@@ -198,8 +200,283 @@ describe('TaskExecutionConfigSchema', () => {
     expect(parsed.resume_point?.dynamic_parallel_selections).toBeDefined();
   });
 
+  it('should round-trip started loop judge and pending fallback checkpoints', () => {
+    const parsedJudge = TaskExecutionConfigSchema.parse({
+      resume_point: {
+        version: 2,
+        stack: [{
+          workflow: 'default',
+          step: '_loop_judge_review_fix',
+          kind: 'agent',
+          step_iterations: { _loop_judge_review_fix: 1 },
+        }],
+        iteration: 4,
+        elapsed_ms: 100,
+        pending_loop_judge: {
+          status: 'started',
+          triggering_step: 'fix',
+          cycle: ['review', 'fix'],
+          cycle_count: 1,
+          fallback_next_step: 'review',
+          judge_step: '_loop_judge_review_fix',
+          iteration: 4,
+          step_iteration: 1,
+        },
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
+      },
+    });
+    const parsedFallback = TaskExecutionConfigSchema.parse({
+      resume_point: {
+        version: 2,
+        stack: [{ workflow: 'default', step: 'plan', kind: 'agent' }],
+        iteration: 0,
+        elapsed_ms: 100,
+        pending_fallback: {
+          context: {
+            reason: 'rate_limited',
+            reasonDetail: 'rate limit',
+            originalIteration: 1,
+            previousProvider: 'claude',
+            previousModel: 'claude-sonnet',
+            currentProvider: 'codex',
+            currentModel: 'gpt-5',
+            stepName: 'plan',
+            reportDir: 'reports',
+          },
+          attempts: [
+            { provider: 'claude', model: 'claude-sonnet' },
+            { provider: 'codex', model: 'gpt-5' },
+          ],
+        },
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
+      },
+    });
+
+    expect(parsedJudge.resume_point?.pending_loop_judge).toMatchObject({ status: 'started' });
+    expect(parsedFallback.resume_point?.pending_fallback?.attempts).toHaveLength(2);
+  });
+
+  it('should reject checkpoint owners that do not match pending execution state', () => {
+    expect(() => TaskExecutionConfigSchema.parse({
+      resume_point: {
+        version: 2,
+        stack: [{ workflow: 'default', step: 'fix', kind: 'agent' }],
+        iteration: 4,
+        elapsed_ms: 100,
+        pending_loop_judge: {
+          status: 'started',
+          triggering_step: 'fix',
+          cycle: ['review', 'fix'],
+          cycle_count: 1,
+          fallback_next_step: 'review',
+          judge_step: '_loop_judge_review_fix',
+          iteration: 4,
+          step_iteration: 1,
+        },
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
+      },
+    })).toThrow('Pending loop judge owner must match terminal resume stack entry');
+  });
+
+  it('should reject a started loop judge whose iteration differs from the resume point', () => {
+    expect(() => TaskExecutionConfigSchema.parse({
+      resume_point: {
+        version: 2,
+        stack: [{
+          workflow: 'default',
+          step: '_loop_judge_review_fix',
+          kind: 'agent',
+          step_iterations: { _loop_judge_review_fix: 1 },
+        }],
+        iteration: 4,
+        elapsed_ms: 100,
+        pending_loop_judge: {
+          status: 'started',
+          triggering_step: 'fix',
+          cycle: ['review', 'fix'],
+          cycle_count: 1,
+          fallback_next_step: 'review',
+          judge_step: '_loop_judge_review_fix',
+          iteration: 5,
+          step_iteration: 1,
+        },
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
+      },
+    })).toThrow('Started loop judge iteration must match resume point iteration');
+  });
+
+  it('should reject a started loop judge whose terminal owner is not an agent step', () => {
+    expect(() => TaskExecutionConfigSchema.parse({
+      resume_point: {
+        version: 2,
+        stack: [{
+          workflow: 'default',
+          step: '_loop_judge_review_fix',
+          kind: 'system',
+          step_iterations: { _loop_judge_review_fix: 1 },
+        }],
+        iteration: 4,
+        elapsed_ms: 100,
+        pending_loop_judge: {
+          status: 'started',
+          triggering_step: 'fix',
+          cycle: ['review', 'fix'],
+          cycle_count: 1,
+          fallback_next_step: 'review',
+          judge_step: '_loop_judge_review_fix',
+          iteration: 4,
+          step_iteration: 1,
+        },
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
+      },
+    })).toThrow('Started loop judge owner must be an agent step');
+  });
+
+  it.each([
+    ['is missing from', undefined],
+    ['differs from', { _loop_judge_review_fix: 1 }],
+  ])('should reject a started loop judge whose step iteration %s the resume stack', (_label, stepIterations) => {
+    expect(() => TaskExecutionConfigSchema.parse({
+      resume_point: {
+        version: 2,
+        stack: [{
+          workflow: 'default',
+          step: '_loop_judge_review_fix',
+          kind: 'agent',
+          ...(stepIterations === undefined ? {} : { step_iterations: stepIterations }),
+        }],
+        iteration: 4,
+        elapsed_ms: 100,
+        pending_loop_judge: {
+          status: 'started',
+          triggering_step: 'fix',
+          cycle: ['review', 'fix'],
+          cycle_count: 1,
+          fallback_next_step: 'review',
+          judge_step: '_loop_judge_review_fix',
+          iteration: 4,
+          step_iteration: 2,
+        },
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
+      },
+    })).toThrow('Started loop judge step iteration must match terminal resume stack entry');
+  });
+
+  it.each([
+    {
+      label: 'previous provider and model',
+      attempts: [
+        { provider: 'claude', model: 'claude-opus' },
+        { provider: 'codex', model: 'gpt-5' },
+      ],
+      message: 'Pending fallback previous attempt must match fallback context',
+    },
+    {
+      label: 'current provider and model',
+      attempts: [
+        { provider: 'claude', model: 'claude-sonnet' },
+        { provider: 'cursor', model: 'cursor-default' },
+      ],
+      message: 'Pending fallback current attempt must match fallback context',
+    },
+  ])('should reject pending fallback attempts whose $label differ from the fallback context', ({ attempts, message }) => {
+    expect(() => TaskExecutionConfigSchema.parse({
+      resume_point: {
+        version: 2,
+        stack: [{ workflow: 'default', step: 'plan', kind: 'agent' }],
+        iteration: 0,
+        elapsed_ms: 100,
+        pending_fallback: {
+          context: {
+            reason: 'rate_limited',
+            reasonDetail: 'rate limit',
+            originalIteration: 1,
+            previousProvider: 'claude',
+            previousModel: 'claude-sonnet',
+            currentProvider: 'codex',
+            currentModel: 'gpt-5',
+            stepName: 'plan',
+            reportDir: 'reports',
+          },
+          attempts,
+        },
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
+      },
+    })).toThrow(message);
+  });
+
+  it('should reject a pending fallback whose terminal owner is not an agent step', () => {
+    expect(() => TaskExecutionConfigSchema.parse({
+      resume_point: {
+        version: 2,
+        stack: [{ workflow: 'default', step: 'plan', kind: 'system' }],
+        iteration: 0,
+        elapsed_ms: 100,
+        pending_fallback: {
+          context: {
+            reason: 'rate_limited',
+            reasonDetail: 'rate limit',
+            originalIteration: 1,
+            previousProvider: 'claude',
+            previousModel: 'claude-sonnet',
+            currentProvider: 'codex',
+            currentModel: 'gpt-5',
+            stepName: 'plan',
+            reportDir: 'reports',
+          },
+          attempts: [
+            { provider: 'claude', model: 'claude-sonnet' },
+            { provider: 'codex', model: 'gpt-5' },
+          ],
+        },
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
+      },
+    })).toThrow('Pending fallback owner must be an agent step');
+  });
+
   it('should round-trip the canonical workflow-call invocation index', () => {
-    const invocationIdentity = '{"workflow":"default","step":"delegate","calls":[]}';
+    const invocationIdentity = buildWorkflowCallInvocationIdentity('default', 'delegate', []);
+    const parsed = TaskExecutionConfigSchema.parse({
+      resume_point: {
+        version: 2,
+        stack: [{
+          workflow: 'default',
+          step: 'delegate',
+          kind: 'workflow_call',
+          call_instance: 2,
+        }],
+        iteration: 3,
+        elapsed_ms: 100,
+        workflow_call_invocations: buildWorkflowCallInvocationRecordsFixture([{
+          workflowReference: 'default',
+          step: 'delegate',
+          ownerPath: [],
+          callInstance: 2,
+          childWorkflowReference: 'child',
+        }]),
+        workflow_step_participations: {},
+      },
+    });
+
+    expect(parsed.resume_point?.workflow_call_invocations).toEqual({
+      [invocationIdentity]: {
+        call_instance: 2,
+        child_workflow_ref: 'child',
+      },
+    });
+  });
+
+  it('should canonicalize a version 2 iteration namespace with its call instance', () => {
+    const invocationIdentity = buildWorkflowCallInvocationIdentity('default', 'delegate', []);
+
     const parsed = TaskExecutionConfigSchema.parse({
       resume_point: {
         version: 2,
@@ -221,12 +498,118 @@ describe('TaskExecutionConfigSchema', () => {
       },
     });
 
-    expect(parsed.resume_point?.workflow_call_invocations).toEqual({
-      [invocationIdentity]: {
-        call_instance: 2,
-        report_namespace_segment: 'iteration-3--step-delegate--workflow-child',
+    expect(parsed.resume_point?.workflow_call_invocations[invocationIdentity]).toEqual({
+      call_instance: 2,
+      child_workflow_ref: 'child',
+    });
+  });
+
+  it('should normalize a legacy call-v1 record to the logical invocation record', () => {
+    const invocationIdentity = buildWorkflowCallInvocationIdentity('default', 'delegate', []);
+
+    const parsed = TaskExecutionConfigSchema.parse({
+      resume_point: {
+        version: 2,
+        stack: [{
+          workflow: 'default',
+          step: 'delegate',
+          kind: 'workflow_call',
+          call_instance: 2,
+        }],
+        iteration: 3,
+        elapsed_ms: 100,
+        workflow_call_invocations: {
+          [invocationIdentity]: {
+            call_instance: 2,
+            report_namespace_segment: 'call-v1-2!default!delegate!0!child',
+          },
+        },
+        workflow_step_participations: {},
       },
     });
+
+    expect(parsed.resume_point?.workflow_call_invocations[invocationIdentity]).toEqual({
+      call_instance: 2,
+      child_workflow_ref: 'child',
+    });
+  });
+
+  it('should reject a non-canonical encoded legacy invocation namespace', () => {
+    const invocationIdentity = buildWorkflowCallInvocationIdentity('default', 'delegate', []);
+
+    expect(() => TaskExecutionConfigSchema.parse({
+      resume_point: {
+        version: 2,
+        stack: [{
+          workflow: 'default',
+          step: 'delegate',
+          kind: 'workflow_call',
+          call_instance: 2,
+        }],
+        iteration: 3,
+        elapsed_ms: 100,
+        workflow_call_invocations: {
+          [invocationIdentity]: {
+            call_instance: 2,
+            report_namespace_segment: 'iteration-3--step-delegate--workflow-child%2finner',
+          },
+        },
+        workflow_step_participations: {},
+      },
+    })).toThrow('Invalid workflow-call report namespace segment');
+  });
+
+  it('should reject a resume stack invocation that differs from its canonical record', () => {
+    const invocationIdentity = buildWorkflowCallInvocationIdentity('default', 'delegate', []);
+
+    expect(() => TaskExecutionConfigSchema.parse({
+      resume_point: {
+        version: 2,
+        stack: [{
+          workflow: 'default',
+          step: 'delegate',
+          kind: 'workflow_call',
+          call_instance: 3,
+        }],
+        iteration: 3,
+        elapsed_ms: 100,
+        workflow_call_invocations: {
+          [invocationIdentity]: {
+            call_instance: 2,
+            child_workflow_ref: 'child',
+          },
+        },
+        workflow_step_participations: {},
+      },
+    })).toThrow('invocation identity does not match resume entry');
+  });
+
+  it('should reject a resume stack child that differs from its logical invocation record', () => {
+    const invocationIdentity = buildWorkflowCallInvocationIdentity('default', 'delegate', []);
+
+    expect(() => TaskExecutionConfigSchema.parse({
+      resume_point: {
+        version: 2,
+        stack: [
+          {
+            workflow: 'default',
+            step: 'delegate',
+            kind: 'workflow_call',
+            call_instance: 2,
+          },
+          { workflow: 'child', step: 'review', kind: 'agent' },
+        ],
+        iteration: 3,
+        elapsed_ms: 100,
+        workflow_call_invocations: {
+          [invocationIdentity]: {
+            call_instance: 2,
+            child_workflow_ref: 'other-child',
+          },
+        },
+        workflow_step_participations: {},
+      },
+    })).toThrow('child reference does not match resume entry');
   });
 
   it.each([

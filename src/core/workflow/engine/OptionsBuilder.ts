@@ -4,7 +4,12 @@ import type { StepProviderOptions } from '../../models/workflow-types.js';
 import type { RunAgentOptions } from '../../../agents/runner.js';
 import type { WorkflowMeta } from '../../../agents/types.js';
 import type { StructuredCaller } from '../../../agents/structured-caller.js';
-import type { ReportPhaseRunnerContext, StatusJudgmentPhaseContext } from '../phase-runner.js';
+import type {
+  BasePhaseRunnerContext,
+  ReportPhaseRunnerContext,
+  StatusJudgmentPhaseContext,
+} from '../phase-runner.js';
+import type { WorkflowEventAttribution } from '../workflow-execution-scope.js';
 import {
   resolveEffectiveProviderOptions,
   resolveEffectiveTeamLeaderPartProviderOptions,
@@ -16,7 +21,6 @@ import {
   type ProviderOptionsLayer,
 } from '../../../infra/config/providerOptions.js';
 import {
-  assertProviderResolvedForCapabilitySensitiveOptions,
   resolveAllowedToolsForProvider,
   resolveMcpServersForProvider,
   resolveSessionMcpServersForProvider,
@@ -29,10 +33,7 @@ import {
 import type { ProviderType, StreamCallback } from '../../../shared/types/provider.js';
 import type {
   WorkflowEngineOptions,
-  PhaseName,
   StepProviderInfo,
-  PhasePromptParts,
-  JudgeStageEntry,
   RuntimeStepResolution,
 } from '../types.js';
 import type { ProviderResolutionSource } from '../provider-options-trace.js';
@@ -46,6 +47,15 @@ import type { FindingContractInstructionContext } from '../instruction/instructi
 type ResolvedRunAgentOptions = RunAgentOptions & {
   resolvedProviderOptions?: StepProviderOptions;
 };
+
+export interface PhaseRunnerContextOptions {
+  readonly eventAttribution: WorkflowEventAttribution;
+  readonly runtime?: RuntimeStepResolution;
+  readonly onPhaseStart?: BasePhaseRunnerContext['onPhaseStart'];
+  readonly onPhaseComplete?: BasePhaseRunnerContext['onPhaseComplete'];
+  readonly onJudgeStage?: StatusJudgmentPhaseContext['onJudgeStage'];
+  readonly onProviderAttempt?: ReportPhaseRunnerContext['onProviderAttempt'];
+}
 
 function isAutoProviderOptionsSource(
   source: ProviderResolutionSource | undefined,
@@ -406,12 +416,10 @@ export class OptionsBuilder {
       provider: resolvedProvider,
       model: resolvedModel,
     } = this.resolveStepProviderModel(step, runtime);
+    if (resolvedProvider === undefined) {
+      throw new Error(`Step "${step.name}" has no resolved provider`);
+    }
     const mergedProviderOptions = this.resolveMergedProviderOptions(step, resolvedProvider, runtime);
-
-    assertProviderResolvedForCapabilitySensitiveOptions(resolvedProvider, {
-      stepName: step.name,
-      usesStructuredOutput: step.structuredOutput !== undefined,
-    });
 
     const hasOutputContracts = step.outputContracts !== undefined && step.outputContracts.length > 0;
     const resolvedPartAllowedTools = resolvePartAllowedToolsForProvider(
@@ -521,37 +529,9 @@ export class OptionsBuilder {
     state: WorkflowState,
     lastResponse: string | undefined,
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
-    onPhaseStart?: (
-      step: WorkflowStep,
-      phase: 1 | 2 | 3,
-      phaseName: PhaseName,
-      instruction: string,
-      promptParts: PhasePromptParts,
-      phaseExecutionId?: string,
-      iteration?: number,
-    ) => void,
-    onPhaseComplete?: (
-      step: WorkflowStep,
-      phase: 1 | 2 | 3,
-      phaseName: PhaseName,
-      content: string,
-      status: string,
-      error?: string,
-      phaseExecutionId?: string,
-      iteration?: number,
-    ) => void,
-    onJudgeStage?: (
-      step: WorkflowStep,
-      phase: 3,
-      phaseName: 'judge',
-      entry: JudgeStageEntry,
-      phaseExecutionId?: string,
-      iteration?: number,
-    ) => void,
-    iteration?: number,
-    runtime?: RuntimeStepResolution,
-    onProviderAttempt?: ReportPhaseRunnerContext['onProviderAttempt'],
+    options: PhaseRunnerContextOptions,
   ): ReportPhaseRunnerContext & StatusJudgmentPhaseContext {
+    const { eventAttribution, runtime } = options;
     const stepProvider = this.resolveStepProviderModel(step, runtime);
     return {
       cwd: this.getCwd(),
@@ -563,7 +543,7 @@ export class OptionsBuilder {
       observabilityRunId: this.engineOptions.observabilityRunId,
       observabilityEnabled: this.engineOptions.observability?.enabled === true,
       sanitizeObservabilityText: this.engineOptions.sanitizeObservabilityText,
-      getCurrentWorkflowStack: this.getCurrentWorkflowStack,
+      executionScope: eventAttribution.scope,
       childProcessEnv: this.engineOptions.childProcessEnv,
       abortSignal: this.engineOptions.abortSignal,
       onStream: this.buildProviderStream(
@@ -587,11 +567,11 @@ export class OptionsBuilder {
         this.buildFallbackReportOptions(step, failedPrimaryOptions, overrides),
       resolveReportFallbackProviderModel: () => this.engineOptions.reportFallbackProvider,
       updatePersonaSession,
-      onPhaseStart,
-      onPhaseComplete,
-      onJudgeStage,
-      onProviderAttempt,
-      iteration,
+      onPhaseStart: options.onPhaseStart,
+      onPhaseComplete: options.onPhaseComplete,
+      onJudgeStage: options.onJudgeStage,
+      onProviderAttempt: options.onProviderAttempt,
+      iteration: eventAttribution.iteration,
     };
   }
 

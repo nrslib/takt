@@ -96,7 +96,31 @@ const {
       const firstStep = this.config.steps[0];
       if (firstStep) {
         const providerInfo = resolveProviderInfo(firstStep, this.receivedOptions);
-        this.emit('step:start', firstStep, 1, firstStep.instruction, providerInfo);
+        const stepIteration = 1;
+        const executionScope = Object.freeze({
+          kind: 'workflow_execution_scope' as const,
+          stack: Object.freeze([
+            Object.freeze({
+              workflow: this.config.name,
+              step: firstStep.name,
+              kind: firstStep.kind
+                ?? (firstStep.mode === 'system' ? 'system' : firstStep.call ? 'workflow_call' : 'agent'),
+              step_iterations: Object.freeze({ [firstStep.name]: stepIteration }),
+            }),
+          ]),
+        });
+        this.emit(
+          'step:start',
+          firstStep,
+          1,
+          firstStep.instruction,
+          providerInfo,
+          this.config.name,
+          firstStep.name,
+          stepIteration,
+          this.config.maxSteps,
+          executionScope,
+        );
         this.emit('step:complete', firstStep, {
           persona: firstStep.personaDisplayName,
           status: 'done',
@@ -104,7 +128,7 @@ const {
           timestamp: new Date('2026-03-04T00:00:00.000Z'),
           sessionId: 'step-session',
           providerUsage: mockStepResponse.providerUsage,
-        }, firstStep.instruction);
+        }, firstStep.instruction, firstStep.name, executionScope);
       }
       if (MockWorkflowEngine.runOutcome.status === 'aborted') {
         this.emit(

@@ -4,7 +4,6 @@ import type {
   FindingLedger,
   PartDefinition,
   PartResult,
-  WorkflowResumePointEntry,
   WorkflowStep,
 } from '../../models/types.js';
 import type {
@@ -27,6 +26,7 @@ import {
 import type { TeamLeaderArtifactReference } from './team-leader-aggregation.js';
 import type { FindingLedgerStore } from '../findings/store.js';
 import type { RunPaths } from '../run/run-paths.js';
+import type { WorkflowExecutionScope } from '../workflow-execution-scope.js';
 import {
   FindingContractOperationJournal,
   type FindingContractOperationBoundary,
@@ -72,7 +72,6 @@ interface FindingContractTeamLeaderCoordinatorDeps {
   readonly operationJournal?: WorkflowOperationJournalContext;
   readonly getWorkflowName: () => string;
   readonly getRunPaths: () => RunPaths;
-  readonly getCurrentWorkflowStack?: () => WorkflowResumePointEntry[] | undefined;
 }
 
 export class FindingContractTeamLeaderCoordinator {
@@ -86,6 +85,7 @@ export class FindingContractTeamLeaderCoordinator {
     private readonly deps: FindingContractTeamLeaderCoordinatorDeps,
     private readonly step: WorkflowStep,
     stepIteration: number,
+    executionScope: WorkflowExecutionScope,
   ) {
     if (deps.operationJournal === undefined) {
       throw new Error(
@@ -100,7 +100,7 @@ export class FindingContractTeamLeaderCoordinator {
       stepIteration,
       executionScope: {
         runPathNamespace: deps.engineOptions.runPathNamespace ?? [],
-        workflowStack: (deps.getCurrentWorkflowStack?.() ?? []).map((entry) => ({
+        workflowStack: executionScope.stack.map((entry) => ({
           workflow: entry.workflow,
           ...(entry.workflow_ref === undefined ? {} : { workflow_ref: entry.workflow_ref }),
           step: entry.step,

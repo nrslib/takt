@@ -2,10 +2,11 @@ import { chmodSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, r
 import { join, relative, resolve, sep } from 'node:path';
 import { getErrorMessage, isPathInside, isValidReportDirName } from '../../shared/utils/index.js';
 import {
-  workflowCallReportRequestPathsMatch,
+  isWorkflowCallNamespaceSegment,
+  proveWorkflowCallRunNamespacePathsCorrespond,
   workflowCallReportRequestSegmentsMatch,
-  workflowCallRunNamespacePathsCorrespond,
 } from './workflow-call-namespace.js';
+import type { WorkflowCallInvocationRecord } from '../models/types.js';
 import { scanReportEntries } from './report-file-index.js';
 import {
   classifyReportRelativePath,
@@ -34,12 +35,18 @@ interface InheritReviewReportsOptions {
   readonly targetReportDirectory: string;
   readonly reviewReportNames: readonly string[];
   readonly discoveryFailures?: readonly string[];
+  readonly sourceWorkflowCallInvocations?: Readonly<Record<string, WorkflowCallInvocationRecord>>;
 }
 
 interface Candidate {
   readonly path: string;
   readonly mtimeMs: number;
   readonly targetRelativePath: string;
+}
+
+interface CandidateSearchResult {
+  readonly candidate?: Candidate;
+  readonly correspondenceFailure?: string;
 }
 
 function reportRoot(cwd: string, runSlug: string): string {
@@ -59,26 +66,58 @@ function candidateFor(
   entries: readonly string[],
   targetNamespace: string[],
   reportName: string,
-): Candidate | undefined {
+  sourceWorkflowCallInvocations: InheritReviewReportsOptions['sourceWorkflowCallInvocations'],
+): CandidateSearchResult {
   const normalizedReportName = normalizeReportPath(reportName);
   const reportSegments = normalizedReportName.split('/');
   const reportPathSegments = reportPathAfterNamespace(reportSegments, targetNamespace);
-  const candidates = entries
-    .filter((path) => {
-      const candidateSegments = relative(root, path).split(sep);
-      if (candidateSegments.length < reportPathSegments.length) return false;
-      const candidateReportSegments = candidateSegments.slice(-reportPathSegments.length);
-      const candidateNamespace = candidateSegments.slice(0, -reportPathSegments.length);
-      return workflowCallReportRequestPathsMatch(candidateReportSegments, reportPathSegments)
-        && workflowCallRunNamespacePathsCorrespond(candidateNamespace, targetNamespace);
-    })
-    .map((path) => ({
+  const correspondenceFailures: string[] = [];
+  const candidates = entries.flatMap((path) => {
+    const candidateSegments = relative(root, path).split(sep);
+    if (candidateSegments.length < reportPathSegments.length) return [];
+    const candidateReportSegments = candidateSegments.slice(-reportPathSegments.length);
+    const candidateNamespace = candidateSegments.slice(0, -reportPathSegments.length);
+    const hasNonNamespaceMismatch = candidateReportSegments.some((segment, index) => {
+      const requested = reportPathSegments[index]!;
+      const candidateIsNamespace = isWorkflowCallNamespaceSegment(segment);
+      const requestedIsNamespace = isWorkflowCallNamespaceSegment(requested);
+      return candidateIsNamespace !== requestedIsNamespace
+        || (!candidateIsNamespace
+          && !workflowCallReportRequestSegmentsMatch(segment, requested));
+    });
+    if (hasNonNamespaceMismatch) return [];
+    const reportPathProof = proveWorkflowCallRunNamespacePathsCorrespond(
+      candidateReportSegments,
+      reportPathSegments,
+      { sourceWorkflowCallInvocations },
+    );
+    if (!reportPathProof.matches) {
+      correspondenceFailures.push(`report_path:${reportPathProof.reason}`);
+      return [];
+    }
+    const namespaceProof = proveWorkflowCallRunNamespacePathsCorrespond(
+      candidateNamespace,
+      targetNamespace,
+      { sourceWorkflowCallInvocations },
+    );
+    if (!namespaceProof.matches) {
+      correspondenceFailures.push(namespaceProof.reason);
+      return [];
+    }
+    return [{
       path,
       mtimeMs: lstatSync(path).mtimeMs,
-      targetRelativePath: relative(root, path).split(sep).slice(targetNamespace.length).join(sep),
-    }))
+      targetRelativePath: reportPathSegments.join(sep),
+    }];
+  })
     .sort((left, right) => right.mtimeMs - left.mtimeMs || relative(root, left.path).localeCompare(relative(root, right.path)));
-  return candidates.find((candidate) => !lstatSync(candidate.path).isDirectory()) ?? candidates[0];
+  const candidate = candidates.find((entry) => !lstatSync(entry.path).isDirectory()) ?? candidates[0];
+  return {
+    ...(candidate === undefined ? {} : { candidate }),
+    ...(candidate !== undefined || correspondenceFailures.length === 0
+      ? {}
+      : { correspondenceFailure: [...new Set(correspondenceFailures)].sort()[0] }),
+  };
 }
 
 function reportPathAfterNamespace(reportSegments: string[], targetNamespace: string[]): string[] {
@@ -178,9 +217,21 @@ export function inheritReviewReports(options: InheritReviewReportsOptions): Revi
     ? scanReportEntries(sourceReportDirectory)
     : { entries: [] };
   for (const reportName of names) {
-    const candidate = candidateFor(sourceReportDirectory, scan.entries, namespace, reportName);
-    if (!candidate) {
-      skipped.push({ reportName, reason: scan.failure ? `scan_failed:${scan.failure}` : 'not_found' });
+    const search = candidateFor(
+      sourceReportDirectory,
+      scan.entries,
+      namespace,
+      reportName,
+      options.sourceWorkflowCallInvocations,
+    );
+    const candidate = search.candidate;
+    if (candidate === undefined) {
+      skipped.push({
+        reportName,
+        reason: scan.failure
+          ? `scan_failed:${scan.failure}`
+          : search.correspondenceFailure ?? 'not_found',
+      });
       continue;
     }
     let invalidReason: string | undefined;

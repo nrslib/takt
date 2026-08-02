@@ -2,6 +2,20 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AutoRoutingConfig } from '../core/models/config-types.js';
 import type { WorkRequirementEstimator } from '../core/workflow/auto-routing/contracts.js';
 import { WorkflowCallExecutor } from '../core/workflow/engine/WorkflowCallExecutor.js';
+import { buildWorkflowCallNamespaceSegment } from '../core/workflow/workflow-call-namespace.js';
+import { buildWorkflowCallInvocationIdentity } from '../core/workflow/workflow-call-invocation-index.js';
+
+function ownedResumePoint() {
+  return {
+    version: 2 as const,
+    stack: [{ workflow: 'child', step: 'review', kind: 'agent' as const, step_iterations: {} }],
+    iteration: 1,
+    max_steps: 4,
+    elapsed_ms: 0,
+    workflow_call_invocations: {},
+    workflow_step_participations: {},
+  };
+}
 
 const { createWorkRequirementEstimatorMock } = vi.hoisted(() => ({
   createWorkRequirementEstimatorMock: vi.fn(),
@@ -21,6 +35,20 @@ function createAutoRoutingConfig(model = 'router-model'): AutoRoutingConfig {
     ],
     defaultPool: 'general',
     candidatePools: { general: { candidates: ['medium', 'high'], fallback: 'high' } },
+  };
+}
+
+function createCallAttempt(stepName: string, childWorkflowName: string) {
+  const identity = buildWorkflowCallInvocationIdentity('parent', stepName, []);
+  return {
+    reportNamespaceSegment: buildWorkflowCallNamespaceSegment(identity, childWorkflowName, 1),
+    callStack: [{
+      workflow: 'parent',
+      step: stepName,
+      kind: 'workflow_call' as const,
+      step_iterations: { [stepName]: 1 },
+      call_instance: 1,
+    }],
   };
 }
 
@@ -54,8 +82,6 @@ describe('WorkflowCallExecutor routing runtime', () => {
         autoRoutingEstimator: parentEstimator,
         autoRoutingEstimatorSource: 'injected',
       }),
-      getMaxSteps: () => 10,
-      updateMaxSteps: vi.fn(),
       getCwd: () => '/project',
       projectCwd: '/project',
       task: 'Complete the task',
@@ -67,6 +93,7 @@ describe('WorkflowCallExecutor routing runtime', () => {
         createdOptions.push(options as Record<string, unknown>);
         return {
           on: vi.fn(),
+          getOwnedResumePoint: vi.fn(ownedResumePoint),
           runWithResult: vi.fn().mockResolvedValue({
             state: {
               iteration: 1,
@@ -84,6 +111,7 @@ describe('WorkflowCallExecutor routing runtime', () => {
     const request = {
       step: { name: 'delegate', kind: 'workflow_call', call: 'child' },
       childWorkflow,
+      ...createCallAttempt('delegate', childWorkflow.name),
       childProviderInfo: { provider: 'mock', model: 'child-model', providerSource: 'workflow_call', modelSource: 'workflow_call' },
       parentProviderOptions: undefined,
       personaProviders: undefined,
@@ -91,7 +119,11 @@ describe('WorkflowCallExecutor routing runtime', () => {
     } as never;
 
     await executor.execute(request, { syncParentState: true });
-    await executor.execute({ ...request, step: { ...request.step, name: 'delegate-other' } }, { syncParentState: true });
+    await executor.execute({
+      ...request,
+      step: { ...request.step, name: 'delegate-other' },
+      ...createCallAttempt('delegate-other', childWorkflow.name),
+    }, { syncParentState: true });
 
     expect(createdOptions[0]?.autoRoutingEstimator).toBe(parentEstimator);
     expect(createdOptions[1]?.autoRoutingEstimator).toBe(parentEstimator);
@@ -119,8 +151,6 @@ describe('WorkflowCallExecutor routing runtime', () => {
         autoRoutingEstimator: parentEstimator,
         autoRoutingEstimatorSource: 'injected',
       }),
-      getMaxSteps: () => 10,
-      updateMaxSteps: vi.fn(),
       getCwd: () => '/project',
       projectCwd: '/project',
       task: 'Complete the task',
@@ -132,6 +162,7 @@ describe('WorkflowCallExecutor routing runtime', () => {
         createdOptions.push(options as Record<string, unknown>);
         return {
           on: vi.fn(),
+          getOwnedResumePoint: vi.fn(ownedResumePoint),
           runWithResult: vi.fn().mockResolvedValue({
             state: {
               iteration: 1,
@@ -155,6 +186,7 @@ describe('WorkflowCallExecutor routing runtime', () => {
     await executor.execute({
       step: { name: 'delegate', kind: 'workflow_call', call: 'child' },
       childWorkflow,
+      ...createCallAttempt('delegate', childWorkflow.name),
       childProviderInfo: { provider: 'mock', model: 'child-model', providerSource: 'workflow_call', modelSource: 'workflow_call' },
       parentProviderOptions: undefined,
       personaProviders: undefined,
@@ -180,8 +212,6 @@ describe('WorkflowCallExecutor routing runtime', () => {
         autoRoutingEstimator: parentEstimator,
         autoRoutingEstimatorSource: 'engine-default',
       }),
-      getMaxSteps: () => 10,
-      updateMaxSteps: vi.fn(),
       getCwd: () => '/project',
       projectCwd: '/project',
       task: 'Complete the task',
@@ -193,6 +223,7 @@ describe('WorkflowCallExecutor routing runtime', () => {
         createdOptions.push(options as Record<string, unknown>);
         return {
           on: vi.fn(),
+          getOwnedResumePoint: vi.fn(ownedResumePoint),
           runWithResult: vi.fn().mockResolvedValue({
             state: { iteration: 1, personaSessions: new Map(), status: 'completed' },
           }),
@@ -207,6 +238,7 @@ describe('WorkflowCallExecutor routing runtime', () => {
     await executor.execute({
       step: { name: 'delegate', kind: 'workflow_call', call: 'child' },
       childWorkflow: { name: 'child', autoRouting: childAutoRouting, steps: [] },
+      ...createCallAttempt('delegate', 'child'),
       childProviderInfo: { provider: 'mock', model: 'child-model', providerSource: 'workflow_call', modelSource: 'workflow_call' },
       parentProviderOptions: undefined,
       personaProviders: undefined,

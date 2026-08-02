@@ -34,6 +34,7 @@ import { redactProviderOptions } from '../../core/workflow/providerOptionsRedact
 import { header, info, error, blankLine } from '../../shared/ui/index.js';
 import { DEFAULT_WORKFLOW_NAME } from '../../shared/constants.js';
 import { sanitizeTerminalText } from '../../shared/utils/text.js';
+import { isWorkflowCallStep } from '../../core/workflow/step-kind.js';
 
 function printStepExecutionMetadata(step: WorkflowStep): void {
   if (step.sessionKey) {
@@ -168,6 +169,9 @@ function buildInstructionContext(
   step: WorkflowStep,
   language: Language,
 ): InstructionContext {
+  if (config.maxSteps === undefined) {
+    throw new Error(`Cannot preview callable workflow "${config.name}" without a root max_steps budget`);
+  }
   return {
     task: '<task content>',
     iteration: 1,
@@ -218,6 +222,22 @@ function previewAgentStep(
   }
 }
 
+function previewControlStep(step: WorkflowStep): void {
+  if (!isWorkflowCallStep(step)) {
+    throw new Error(`Unsupported control step in prompt preview: ${step.name}`);
+  }
+  console.log('Control node: workflow_call');
+  console.log(`Child workflow: ${sanitizeTerminalText(step.call)}`);
+}
+
+function formatStepHeading(label: string, step: WorkflowStep): string {
+  const safeStepName = sanitizeTerminalText(step.name);
+  if (isWorkflowCallStep(step)) {
+    return `${label}: ${safeStepName}`;
+  }
+  return `${label}: ${safeStepName} (persona: ${sanitizeTerminalText(step.personaDisplayName)})`;
+}
+
 /**
  * Preview all prompts for a workflow.
  *
@@ -236,6 +256,9 @@ export async function previewPrompts(
   if (!config) {
     error(`Workflow "${safeIdentifier}" not found.`);
     return;
+  }
+  if (config.subworkflow?.callable === true) {
+    throw new Error(`Cannot preview callable workflow "${config.name}" without a workflow_call context`);
   }
 
   const language = resolveWorkflowConfigValue(cwd, 'language') as Language;
@@ -258,25 +281,27 @@ export async function previewPrompts(
 
   for (const [i, step] of config.steps.entries()) {
     const separator = '='.repeat(60);
-    const safeStepName = sanitizeTerminalText(step.name);
-    const safePersonaDisplayName = sanitizeTerminalText(step.personaDisplayName);
 
     console.log(separator);
-    console.log(`Step ${i + 1}: ${safeStepName} (persona: ${safePersonaDisplayName})`);
+    console.log(formatStepHeading(`Step ${i + 1}`, step));
     console.log(separator);
 
     if (step.parallel && getAllParallelSubSteps(step.parallel).length > 0) {
       printStepExecutionMetadata(step);
       printDynamicSelectorMetadata(step, selectorProvider);
       for (const [subIndex, substep] of getAllParallelSubSteps(step.parallel).entries()) {
-        const safeSubstepName = sanitizeTerminalText(substep.name);
-        const safeSubstepPersonaDisplayName = sanitizeTerminalText(substep.personaDisplayName);
         const role = isDynamicParallelSubSteps(step.parallel)
           ? step.parallel.fixed.some((fixed) => fixed === substep) ? 'fixed' : 'pool candidate'
           : 'parallel';
-        console.log(`\n--- ${role} substep ${subIndex + 1}: ${safeSubstepName} (persona: ${safeSubstepPersonaDisplayName}) ---\n`);
-        previewAgentStep(cwd, config, i, substep, language);
+        console.log(`\n--- ${formatStepHeading(`${role} substep ${subIndex + 1}`, substep)} ---\n`);
+        if (isWorkflowCallStep(substep)) {
+          previewControlStep(substep);
+        } else {
+          previewAgentStep(cwd, config, i, substep, language);
+        }
       }
+    } else if (isWorkflowCallStep(step)) {
+      previewControlStep(step);
     } else {
       previewAgentStep(cwd, config, i, step, language);
     }

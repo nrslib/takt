@@ -1,8 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { WorkflowCallExecutor } from '../core/workflow/engine/WorkflowCallExecutor.js';
-import type { AgentResponse, FindingContractConfig, FindingLedger, WorkflowConfig, WorkflowState, WorkflowCallStep } from '../core/models/index.js';
+import type { AgentResponse, FindingContractConfig, FindingLedger, WorkflowConfig, WorkflowResumePoint, WorkflowResumePointEntry, WorkflowState, WorkflowCallStep } from '../core/models/index.js';
 import type { WorkflowCallChildEngine, WorkflowRunResult } from '../core/workflow/types.js';
 import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
+import { buildWorkflowCallNamespaceSegment } from '../core/workflow/workflow-call-namespace.js';
+import { buildWorkflowCallInvocationIdentity } from '../core/workflow/workflow-call-invocation-index.js';
+import { snapshotWorkflowExecutionScope } from '../core/workflow/workflow-execution-scope.js';
+import { WorkflowStepBudget } from '../core/workflow/workflow-step-budget.js';
 
 function makeResponse(overrides: Partial<AgentResponse> = {}): AgentResponse {
   return {
@@ -32,10 +36,52 @@ function makeState(workflowName: string, status: WorkflowState['status'], iterat
   };
 }
 
+function makeCallAttempt(
+  parentConfig: WorkflowConfig,
+  childConfig: WorkflowConfig,
+  step: WorkflowCallStep,
+  state: WorkflowState,
+) {
+  const callInstance = state.stepIterations.get(step.name);
+  if (callInstance === undefined) {
+    throw new Error(`Missing call instance for ${step.name}`);
+  }
+  const identity = buildWorkflowCallInvocationIdentity(parentConfig.name, step.name, []);
+  return {
+    reportNamespaceSegment: buildWorkflowCallNamespaceSegment(
+      identity,
+      childConfig.name,
+      callInstance,
+    ),
+    callStack: [{
+      workflow: parentConfig.name,
+      step: step.name,
+      kind: 'workflow_call' as const,
+      step_iterations: Object.fromEntries(state.stepIterations),
+      call_instance: callInstance,
+    }],
+  };
+}
+
 function createChildEngine(result: WorkflowRunResult): WorkflowCallChildEngine {
+  const resumePoint: WorkflowResumePoint = {
+    version: 2,
+    stack: [{
+      workflow: result.state.workflowName,
+      step: result.state.currentStep,
+      kind: 'agent',
+      step_iterations: {},
+    }],
+    iteration: result.state.iteration,
+    max_steps: 10,
+    elapsed_ms: 0,
+    workflow_call_invocations: {},
+    workflow_step_participations: {},
+  };
   return {
     on: vi.fn(),
     runWithResult: vi.fn().mockResolvedValue(result),
+    getOwnedResumePoint: vi.fn(() => resumePoint),
   };
 }
 
@@ -115,18 +161,49 @@ describe('WorkflowCallExecutor', () => {
     const childState = makeState(childConfig.name, 'completed', 4);
     childState.lastOutput = makeResponse({ content: 'child complete' });
     childState.personaSessions.set('coder', 'session-2');
+    const attempt = makeCallAttempt(parentConfig, childConfig, step, state);
+    const childStep = childConfig.steps[0];
+    const childProviderInfo = { provider: 'mock', model: 'test-model' } as const;
+    const childScope = snapshotWorkflowExecutionScope(attempt.callStack);
 
     const listeners = new Map<string, (...args: unknown[]) => void>();
     const childEngine: WorkflowCallChildEngine = {
       on: vi.fn((event: string, listener: (...args: unknown[]) => void) => {
         listeners.set(event, listener);
       }),
-      runWithResult: vi.fn().mockResolvedValue({ state: childState }),
+      runWithResult: vi.fn().mockImplementation(async () => {
+        listeners.get('step:start')?.(
+          childStep,
+          3,
+          'child instruction',
+          childProviderInfo,
+          childConfig.name,
+          childStep?.name,
+          5,
+          9,
+          childScope,
+        );
+        return { state: childState };
+      }),
+      getOwnedResumePoint: vi.fn(() => ({
+        version: 2,
+        stack: [{ workflow: childConfig.name, step: 'review', kind: 'agent', step_iterations: {} }],
+        iteration: childState.iteration,
+        max_steps: 10,
+        elapsed_ms: 0,
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
+      })),
     };
     const createEngine = vi.fn().mockReturnValue(childEngine);
     const emit = vi.fn();
-    const setActiveResumePoint = vi.fn();
-    const sharedRuntime = { startedAtMs: Date.now(), maxSteps: 10 };
+    const setActiveResumePoint = vi.fn((_step: WorkflowCallStep, iteration: number) => {
+      state.iteration = iteration;
+    });
+    const setActiveResumeStack = vi.fn((_stack: readonly WorkflowResumePointEntry[], iteration: number) => {
+      state.iteration = iteration;
+    });
+    const sharedRuntime = { startedAtMs: Date.now(), stepBudget: new WorkflowStepBudget(10) };
     const traceTaskMetadata = {
       taskSummary: 'Review PR #827 trace metadata',
       taskSource: 'pr_review',
@@ -143,8 +220,6 @@ describe('WorkflowCallExecutor', () => {
         reportDirName: 'run',
         traceTaskMetadata,
       }),
-      getMaxSteps: () => 10,
-      updateMaxSteps: vi.fn(),
       getCwd: () => '/tmp/project',
       projectCwd: '/tmp/project',
       task: 'task',
@@ -158,15 +233,19 @@ describe('WorkflowCallExecutor', () => {
       emit,
       state,
       setActiveResumePoint,
+      setActiveResumeStack,
+      adoptResumeCheckpoint: vi.fn(),
       refreshFindingsState: vi.fn(),
     });
 
     await executor.execute({
       step,
       childWorkflow: childConfig,
+      ...attempt,
       childProviderInfo: { provider: 'mock', model: 'test-model' },
       parentProviderOptions: undefined,
       personaProviders: undefined,
+      providerRouting: undefined,
     }, { syncParentState: true });
 
     expect(createEngine).toHaveBeenCalledWith(
@@ -177,7 +256,8 @@ describe('WorkflowCallExecutor', () => {
         provider: 'mock',
         model: 'test-model',
         reportDirName: 'run',
-        runPathNamespace: ['subworkflows', expect.stringContaining('step-delegate')],
+        runPathNamespace: ['subworkflows', attempt.reportNamespaceSegment],
+        findingCallNamespace: attempt.reportNamespaceSegment,
         traceTaskMetadata,
       }),
     );
@@ -192,17 +272,6 @@ describe('WorkflowCallExecutor', () => {
       call_instance: 3,
     }]);
     expect(childEngine.on).toHaveBeenCalledWith('step:start', expect.any(Function));
-    const childStep = childConfig.steps[0];
-    const childProviderInfo = { provider: 'mock', model: 'test-model' };
-    listeners.get('step:start')?.(
-      childStep,
-      3,
-      'child instruction',
-      childProviderInfo,
-      childConfig.name,
-      childStep?.name,
-      5,
-    );
     expect(emit).toHaveBeenCalledWith(
       'step:start',
       childStep,
@@ -212,6 +281,8 @@ describe('WorkflowCallExecutor', () => {
       childConfig.name,
       step.name,
       5,
+      9,
+      childScope,
     );
     expect(childEngine.on).toHaveBeenCalledWith('step:complete', expect.any(Function));
     const childResponse = makeResponse({ content: 'relayed response' });
@@ -220,6 +291,7 @@ describe('WorkflowCallExecutor', () => {
       childResponse,
       'child instruction',
       childStep?.name,
+      childScope,
     );
     expect(emit).toHaveBeenCalledWith(
       'step:complete',
@@ -227,6 +299,7 @@ describe('WorkflowCallExecutor', () => {
       childResponse,
       'child instruction',
       step.name,
+      childScope,
     );
     expect(childEngine.on).toHaveBeenCalledWith('findings:ledger', expect.any(Function));
     const ledger: FindingLedger = {
@@ -238,11 +311,12 @@ describe('WorkflowCallExecutor', () => {
       conflicts: [],
       interpretations: [],
     };
-    listeners.get('findings:ledger')?.(ledger);
-    expect(emit).toHaveBeenCalledWith('findings:ledger', ledger);
+    listeners.get('findings:ledger')?.(ledger, 3, childScope);
+    expect(emit).toHaveBeenCalledWith('findings:ledger', ledger, 3, childScope);
     expect(state.iteration).toBe(4);
     expect(state.personaSessions.get('coder')).toBe('session-2');
     expect(setActiveResumePoint).toHaveBeenCalledWith(step, 4);
+    expect(setActiveResumeStack).toHaveBeenCalledWith(attempt.callStack, 3);
   });
 
   it('child workflow が abort した理由を呼び出し元へ返す', async () => {
@@ -281,12 +355,10 @@ describe('WorkflowCallExecutor', () => {
         projectCwd: '/tmp/project',
         reportDirName: 'run',
       }),
-      getMaxSteps: () => 10,
-      updateMaxSteps: vi.fn(),
       getCwd: () => '/tmp/project',
       projectCwd: '/tmp/project',
       task: 'task',
-      sharedRuntime: { startedAtMs: Date.now(), maxSteps: 10 },
+      sharedRuntime: { startedAtMs: Date.now(), stepBudget: new WorkflowStepBudget(10) },
       resumeStackPrefix: [],
       runPaths: {
         slug: 'run',
@@ -296,15 +368,19 @@ describe('WorkflowCallExecutor', () => {
       emit: vi.fn(),
       state,
       setActiveResumePoint: vi.fn(),
+      setActiveResumeStack: vi.fn(),
+      adoptResumeCheckpoint: vi.fn(),
       refreshFindingsState: vi.fn(),
     });
 
     const result = await executor.execute({
       step,
       childWorkflow: childConfig,
+      ...makeCallAttempt(parentConfig, childConfig, step, state),
       childProviderInfo: { provider: 'mock', model: 'test-model' },
       parentProviderOptions: undefined,
       personaProviders: undefined,
+      providerRouting: undefined,
     }, { syncParentState: true }) as WorkflowState & { abortKind?: string; abortReason?: string };
 
     expect(result.status).toBe('aborted');
@@ -342,12 +418,10 @@ describe('WorkflowCallExecutor', () => {
         projectCwd: '/tmp/project',
         reportDirName: 'run',
       }),
-      getMaxSteps: () => 10,
-      updateMaxSteps: vi.fn(),
       getCwd: () => '/tmp/project',
       projectCwd: '/tmp/project',
       task: 'task',
-      sharedRuntime: { startedAtMs: Date.now(), maxSteps: 10 },
+      sharedRuntime: { startedAtMs: Date.now(), stepBudget: new WorkflowStepBudget(10) },
       resumeStackPrefix: [],
       runPaths: {
         slug: 'run',
@@ -357,15 +431,19 @@ describe('WorkflowCallExecutor', () => {
       emit: vi.fn(),
       state,
       setActiveResumePoint: vi.fn(),
+      setActiveResumeStack: vi.fn(),
+      adoptResumeCheckpoint: vi.fn(),
       refreshFindingsState: vi.fn(),
     });
 
     const result = await executor.execute({
       step,
       childWorkflow: childConfig,
+      ...makeCallAttempt(parentConfig, childConfig, step, state),
       childProviderInfo: { provider: 'mock', model: 'test-model' },
       parentProviderOptions: undefined,
       personaProviders: undefined,
+      providerRouting: undefined,
     }, { syncParentState: true });
 
     expect(result.status).toBe('completed');
@@ -405,12 +483,10 @@ describe('WorkflowCallExecutor', () => {
         projectCwd: '/tmp/project',
         reportDirName: 'run',
       }),
-      getMaxSteps: () => 10,
-      updateMaxSteps: vi.fn(),
       getCwd: () => '/tmp/project',
       projectCwd: '/tmp/project',
       task: 'task',
-      sharedRuntime: { startedAtMs: Date.now(), maxSteps: 10 },
+      sharedRuntime: { startedAtMs: Date.now(), stepBudget: new WorkflowStepBudget(10) },
       resumeStackPrefix: [],
       runPaths: {
         slug: 'run',
@@ -420,15 +496,19 @@ describe('WorkflowCallExecutor', () => {
       emit: vi.fn(),
       state,
       setActiveResumePoint: vi.fn(),
+      setActiveResumeStack: vi.fn(),
+      adoptResumeCheckpoint: vi.fn(),
       refreshFindingsState: vi.fn(),
     });
 
     const result = await executor.execute({
       step,
       childWorkflow: childConfig,
+      ...makeCallAttempt(parentConfig, childConfig, step, state),
       childProviderInfo: { provider: 'mock', model: 'test-model' },
       parentProviderOptions: undefined,
       personaProviders: undefined,
+      providerRouting: undefined,
     }, { syncParentState: true }) as WorkflowState & { returnValue?: string };
 
     expect(result.status).toBe('completed');
@@ -467,12 +547,10 @@ describe('WorkflowCallExecutor', () => {
         projectCwd: '/tmp/project',
         reportDirName: 'run',
       }),
-      getMaxSteps: () => 10,
-      updateMaxSteps: vi.fn(),
       getCwd: () => '/tmp/project',
       projectCwd: '/tmp/project',
       task: 'task',
-      sharedRuntime: { startedAtMs: Date.now(), maxSteps: 10 },
+      sharedRuntime: { startedAtMs: Date.now(), stepBudget: new WorkflowStepBudget(10) },
       resumeStackPrefix: [],
       runPaths: {
         slug: 'run',
@@ -482,6 +560,8 @@ describe('WorkflowCallExecutor', () => {
       emit: vi.fn(),
       state,
       setActiveResumePoint: vi.fn(),
+      setActiveResumeStack: vi.fn(),
+      adoptResumeCheckpoint: vi.fn(),
       refreshFindingsState: vi.fn(),
       findingContract: FAKE_FINDING_CONTRACT,
       findingLedgerStore: ledgerStore,
@@ -490,9 +570,11 @@ describe('WorkflowCallExecutor', () => {
     await executor.execute({
       step,
       childWorkflow: childConfig,
+      ...makeCallAttempt(parentConfig, childConfig, step, state),
       childProviderInfo: { provider: 'mock', model: 'test-model' },
       parentProviderOptions: undefined,
       personaProviders: undefined,
+      providerRouting: undefined,
     }, { syncParentState: true });
 
     const childOptions = createEngine.mock.calls[0]?.[3];
@@ -533,12 +615,10 @@ describe('WorkflowCallExecutor', () => {
         projectCwd: '/tmp/project',
         reportDirName: 'run',
       }),
-      getMaxSteps: () => 10,
-      updateMaxSteps: vi.fn(),
       getCwd: () => '/tmp/project',
       projectCwd: '/tmp/project',
       task: 'task',
-      sharedRuntime: { startedAtMs: Date.now(), maxSteps: 10 },
+      sharedRuntime: { startedAtMs: Date.now(), stepBudget: new WorkflowStepBudget(10) },
       resumeStackPrefix: [],
       runPaths: {
         slug: 'run',
@@ -548,15 +628,19 @@ describe('WorkflowCallExecutor', () => {
       emit: vi.fn(),
       state,
       setActiveResumePoint: vi.fn(),
+      setActiveResumeStack: vi.fn(),
+      adoptResumeCheckpoint: vi.fn(),
       refreshFindingsState: vi.fn(),
     });
 
     await executor.execute({
       step,
       childWorkflow: childConfig,
+      ...makeCallAttempt(parentConfig, childConfig, step, state),
       childProviderInfo: { provider: 'mock', model: 'test-model' },
       parentProviderOptions: undefined,
       personaProviders: undefined,
+      providerRouting: undefined,
     }, { syncParentState: true });
 
     const childOptions = createEngine.mock.calls[0]?.[3];
@@ -594,12 +678,10 @@ describe('WorkflowCallExecutor', () => {
         projectCwd: '/tmp/project',
         reportDirName: 'run',
       }),
-      getMaxSteps: () => 10,
-      updateMaxSteps: vi.fn(),
       getCwd: () => '/tmp/project',
       projectCwd: '/tmp/project',
       task: 'task',
-      sharedRuntime: { startedAtMs: Date.now(), maxSteps: 10 },
+      sharedRuntime: { startedAtMs: Date.now(), stepBudget: new WorkflowStepBudget(10) },
       resumeStackPrefix: [],
       runPaths: {
         slug: 'run',
@@ -609,6 +691,8 @@ describe('WorkflowCallExecutor', () => {
       emit: vi.fn(),
       state,
       setActiveResumePoint: vi.fn(),
+      setActiveResumeStack: vi.fn(),
+      adoptResumeCheckpoint: vi.fn(),
       refreshFindingsState,
       findingContract: FAKE_FINDING_CONTRACT,
       findingLedgerStore: createFakeLedgerStore(),
@@ -619,9 +703,11 @@ describe('WorkflowCallExecutor', () => {
     await executor.execute({
       step,
       childWorkflow: childConfig,
+      ...makeCallAttempt(parentConfig, childConfig, step, state),
       childProviderInfo: { provider: 'mock', model: 'test-model' },
       parentProviderOptions: undefined,
       personaProviders: undefined,
+      providerRouting: undefined,
     }, { syncParentState: true });
 
     expect(refreshFindingsState).toHaveBeenCalledTimes(1);
@@ -656,12 +742,10 @@ describe('WorkflowCallExecutor', () => {
         projectCwd: '/tmp/project',
         reportDirName: 'run',
       }),
-      getMaxSteps: () => 10,
-      updateMaxSteps: vi.fn(),
       getCwd: () => '/tmp/project',
       projectCwd: '/tmp/project',
       task: 'task',
-      sharedRuntime: { startedAtMs: Date.now(), maxSteps: 10 },
+      sharedRuntime: { startedAtMs: Date.now(), stepBudget: new WorkflowStepBudget(10) },
       resumeStackPrefix: [],
       runPaths: {
         slug: 'run',
@@ -671,6 +755,8 @@ describe('WorkflowCallExecutor', () => {
       emit: vi.fn(),
       state,
       setActiveResumePoint: vi.fn(),
+      setActiveResumeStack: vi.fn(),
+      adoptResumeCheckpoint: vi.fn(),
       refreshFindingsState: vi.fn(),
       findingContract: FAKE_FINDING_CONTRACT_WITH_INVALID_MANAGER_PROVIDER,
       findingLedgerStore: createFakeLedgerStore(),
@@ -679,9 +765,11 @@ describe('WorkflowCallExecutor', () => {
     await expect(executor.execute({
       step,
       childWorkflow: childConfig,
+      ...makeCallAttempt(parentConfig, childConfig, step, state),
       childProviderInfo: { provider: 'mock', model: 'test-model' },
       parentProviderOptions: undefined,
       personaProviders: undefined,
+      providerRouting: undefined,
     }, { syncParentState: true })).rejects.toThrow(/provider 'opencode' requires model/);
 
     expect(createEngine).not.toHaveBeenCalled();
@@ -718,12 +806,10 @@ describe('WorkflowCallExecutor', () => {
         projectCwd: '/tmp/project',
         reportDirName: 'run',
       }),
-      getMaxSteps: () => 10,
-      updateMaxSteps: vi.fn(),
       getCwd: () => '/tmp/project',
       projectCwd: '/tmp/project',
       task: 'task',
-      sharedRuntime: { startedAtMs: Date.now(), maxSteps: 10 },
+      sharedRuntime: { startedAtMs: Date.now(), stepBudget: new WorkflowStepBudget(10) },
       resumeStackPrefix: [],
       runPaths: {
         slug: 'run',
@@ -733,6 +819,8 @@ describe('WorkflowCallExecutor', () => {
       emit: vi.fn(),
       state,
       setActiveResumePoint: vi.fn(),
+      setActiveResumeStack: vi.fn(),
+      adoptResumeCheckpoint: vi.fn(),
       refreshFindingsState: vi.fn(),
       findingContract: FAKE_FINDING_CONTRACT,
       findingLedgerStore: createFakeLedgerStore(),
@@ -741,9 +829,11 @@ describe('WorkflowCallExecutor', () => {
     const result = await executor.execute({
       step,
       childWorkflow: childConfig,
+      ...makeCallAttempt(parentConfig, childConfig, step, state),
       childProviderInfo: { provider: 'mock', model: 'test-model' },
       parentProviderOptions: undefined,
       personaProviders: undefined,
+      providerRouting: undefined,
     }, { syncParentState: true });
 
     expect(result.status).toBe('completed');

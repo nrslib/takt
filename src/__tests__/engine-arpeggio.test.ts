@@ -41,6 +41,7 @@ import { WorkflowEngine } from '../core/workflow/engine/WorkflowEngine.js';
 import { DefaultStructuredCaller } from '../agents/structured-caller.js';
 import type { WorkflowConfig, WorkflowStep, AgentResponse, ArpeggioStepConfig } from '../core/models/index.js';
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
+import { parsePhaseExecutionId } from '../shared/utils/phaseExecutionId.js';
 import {
   makeResponse,
   makeStep,
@@ -105,6 +106,7 @@ function buildArpeggioWorkflowConfig(arpeggioConfig: ArpeggioStepConfig, tmpDir:
             makeRule('Processing failed', 'ABORT'),
           ],
         }),
+        provider: undefined,
         arpeggio: arpeggioConfig,
       },
     ],
@@ -114,6 +116,7 @@ function buildArpeggioWorkflowConfig(arpeggioConfig: ArpeggioStepConfig, tmpDir:
 function createEngineOptions(tmpDir: string): WorkflowEngineOptions {
   return {
     projectCwd: tmpDir,
+    provider: 'mock',
     reportDirName: 'test-report-dir',
     structuredCaller: new DefaultStructuredCaller(),
   };
@@ -183,6 +186,113 @@ describe('ArpeggioRunner integration', () => {
     expect(state.previousResponseSourcePath).toMatch(/^\.takt\/runs\/test-report-dir\/context\/previous_responses\/process\.1\.\d{8}T\d{6}Z\.md$/);
     expect(previousFiles).toContain('latest.md');
     expect(readFileSync(join(previousDir, 'latest.md'), 'utf-8')).toBe('Processed Alice\nProcessed Bob\nProcessed Charlie');
+  });
+
+  it('aggregates real batch usage under the arpeggio parent identity', async () => {
+    const { tmpDir, csvPath, templatePath } = createArpeggioTestDir();
+    const config = buildArpeggioWorkflowConfig(createArpeggioConfig(csvPath, templatePath), tmpDir);
+    const stepStarts = vi.fn();
+    mockRunAgentWithPrompt(
+      makeResponse({
+        content: 'A',
+        providerUsage: { inputTokens: 2, outputTokens: 3, totalTokens: 5, usageMissing: false },
+      }),
+      makeResponse({
+        content: 'B',
+        providerUsage: { inputTokens: 7, outputTokens: 11, totalTokens: 18, usageMissing: false },
+      }),
+      makeResponse({
+        content: 'C',
+        providerUsage: { inputTokens: 13, outputTokens: 17, totalTokens: 30, usageMissing: false },
+      }),
+    );
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({ index: 0, method: 'phase3_tag' });
+    engine = new WorkflowEngine(config, tmpDir, 'test arpeggio usage', createEngineOptions(tmpDir));
+    engine.on('step:start', stepStarts);
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(state.stepOutputs.get('process')?.providerUsage).toEqual({
+      inputTokens: 22,
+      outputTokens: 31,
+      totalTokens: 53,
+      usageMissing: false,
+    });
+    expect(stepStarts).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'process' }),
+      1,
+      '',
+      expect.objectContaining({ provider: 'mock' }),
+      'test-arpeggio',
+      'process',
+      1,
+      10,
+      expect.objectContaining({ kind: 'workflow_execution_scope' }),
+    );
+  });
+
+  it('rejects an unresolved arpeggio provider before committing the attempt', async () => {
+    const { tmpDir, csvPath, templatePath } = createArpeggioTestDir();
+    const config = buildArpeggioWorkflowConfig(createArpeggioConfig(csvPath, templatePath), tmpDir);
+    const stepStarts = vi.fn();
+    engine = new WorkflowEngine(config, tmpDir, 'test missing provider', {
+      projectCwd: tmpDir,
+      reportDirName: 'test-report-dir',
+      structuredCaller: new DefaultStructuredCaller(),
+    });
+    engine.on('step:start', stepStarts);
+
+    await expect(engine.run()).rejects.toThrow('Step "process" has no resolved provider');
+    const state = engine.getState();
+
+    expect(state.iteration).toBe(0);
+    expect(state.stepIterations.get('process')).toBeUndefined();
+    expect(state.stepOutputs.get('process')).toBeUndefined();
+    expect(stepStarts).not.toHaveBeenCalled();
+    expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
+  });
+
+  it('should count one arpeggio parent and stop the following step at the budget boundary', async () => {
+    const { tmpDir, csvPath, templatePath } = createArpeggioTestDir();
+    const arpeggioConfig = createArpeggioConfig(csvPath, templatePath);
+    const baseConfig = buildArpeggioWorkflowConfig(arpeggioConfig, tmpDir);
+    const processStep = baseConfig.steps[0];
+    if (processStep === undefined) {
+      throw new Error('Expected the arpeggio process step');
+    }
+    const config: WorkflowConfig = {
+      ...baseConfig,
+      maxSteps: 1,
+      steps: [
+        {
+          ...processStep,
+          rules: [makeRule('Processing complete', 'finish')],
+        },
+        makeStep('finish', {
+          persona: 'finisher',
+          instruction: 'Finish after batches',
+          rules: [makeRule('done', 'COMPLETE')],
+        }),
+      ],
+    };
+    mockRunAgentWithPrompt(
+      makeResponse({ content: 'Processed Alice' }),
+      makeResponse({ content: 'Processed Bob' }),
+      makeResponse({ content: 'Processed Charlie' }),
+    );
+    vi.mocked(mockRuleEvaluation).mockReturnValueOnce({
+      index: 0,
+      method: 'phase3_tag',
+    });
+    engine = new WorkflowEngine(config, tmpDir, 'test arpeggio budget', createEngineOptions(tmpDir));
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(state.iteration).toBe(1);
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(runAgent).mock.calls.every(([persona]) => persona !== 'finisher')).toBe(true);
   });
 
   it('Given effective auto_routing on an arpeggio step, When batches run, Then every batch uses the selected concrete candidate', async () => {
@@ -398,13 +508,22 @@ describe('ArpeggioRunner integration', () => {
         && params.phase === 1
         && params.phaseName === 'execute'
         && params.phaseExecutionId !== undefined
-      );
+    );
     expect(batchPhaseSpans).toHaveLength(3);
-    expect(batchPhaseSpans.map((params) => params.phaseExecutionId).sort()).toEqual([
-      'process:1:1:0',
-      'process:1:1:1',
-      'process:1:1:2',
-    ]);
+    const parsedPhaseIds = batchPhaseSpans
+      .map((params) => parsePhaseExecutionId(params.phaseExecutionId!))
+      .sort((left, right) => left!.sequence - right!.sequence);
+    expect(parsedPhaseIds).toEqual([1, 2, 3].map((sequence) => expect.objectContaining({
+      step: 'process',
+      iteration: 1,
+      phase: 1,
+      sequence,
+      workflowStack: [expect.objectContaining({
+        workflow: 'test-arpeggio',
+        step: 'process',
+        kind: 'agent',
+      })],
+    })));
     expect(batchPhaseSpans.every((params) => params.enabled === true)).toBe(true);
     expect(batchPhaseSpans.every((params) => params.runId === 'run-1')).toBe(true);
     expect(batchPhaseSpans.every((params) => params.workflowName === 'test-arpeggio')).toBe(true);

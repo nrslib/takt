@@ -53,13 +53,32 @@ const {
       }
       const step = this.receivedConfig.steps[0];
       if (step) {
-        this.emit('step:start', step, 1, step.instruction, { provider: 'cursor', model: undefined });
+        const scope = Object.freeze({
+          kind: 'workflow_execution_scope' as const,
+          stack: Object.freeze([Object.freeze({
+            workflow: this.receivedConfig.name,
+            step: step.name,
+            kind: 'agent' as const,
+          })]),
+        });
+        this.emit(
+          'step:start',
+          step,
+          1,
+          step.instruction,
+          { provider: 'cursor', model: undefined },
+          this.receivedConfig.name,
+          step.name,
+          1,
+          this.receivedConfig.maxSteps,
+          scope,
+        );
         this.emit('step:complete', step, {
           persona: step.personaDisplayName,
           status: 'done',
           content: 'ok',
           timestamp: new Date('2026-04-01T00:00:00.000Z'),
-        }, step.instruction);
+        }, step.instruction, this.receivedConfig.name, scope);
       }
       this.emit('workflow:complete', { status: 'completed', iteration: 1 });
       return { status: 'completed', iteration: 1 };
@@ -246,7 +265,7 @@ function getInjectedStructuredCaller(): StructuredCaller {
   return structuredCaller as StructuredCaller;
 }
 
-function mockResolvedProviderModel(provider: string, model: string | undefined): void {
+function mockResolvedProviderModel(provider: string | undefined, model: string | undefined): void {
   mockResolveConfigValueWithSource.mockImplementation((_cwd, key) => key === 'provider'
     ? { value: provider, source: 'global' }
     : { value: model, source: model === undefined ? 'default' : 'global' });
@@ -531,6 +550,32 @@ beforeEach(() => {
     expect(MockWorkflowEngine.lastInstance.receivedOptions.model).toBe('cursor-fast');
   });
 
+  it('providerless root workflow を公開実行経路から架空 provider なしで engine へ渡す', async () => {
+    mockResolvedProviderModel(undefined, undefined);
+    MockWorkflowEngine.nextRunImpl = async (instance) => {
+      instance.emit('workflow:complete', { status: 'completed', iteration: 0 });
+      return { status: 'completed', iteration: 0 };
+    };
+    const config: WorkflowConfig = {
+      name: 'providerless-parent',
+      maxSteps: 1,
+      initialStep: 'delegate',
+      steps: [{
+        name: 'delegate',
+        kind: 'workflow_call',
+        call: 'child',
+        rules: [normalizeRule({ condition: 'COMPLETE', next: 'COMPLETE' })],
+      }],
+    };
+
+    await executeWorkflow(config, 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+    });
+
+    expect(MockWorkflowEngine.lastInstance.receivedOptions.provider).toBeUndefined();
+    expect(MockWorkflowEngine.lastInstance.receivedOptions.model).toBeUndefined();
+  });
+
   it('should pass resolved phase 1 process safety to WorkflowEngine', async () => {
     await executeWorkflow({ ...makeConfig(), name: 'takt-default' }, 'task', '/tmp/project', {
       projectCwd: '/tmp/project',
@@ -563,7 +608,6 @@ beforeEach(() => {
 subworkflow:
   callable: true
 initial_step: review
-max_steps: 2
 steps:
   - name: review
     persona: user-reviewer
@@ -576,7 +620,6 @@ steps:
 subworkflow:
   callable: true
 initial_step: review
-max_steps: 2
 steps:
   - name: review
     persona: project-reviewer
@@ -701,7 +744,6 @@ steps:
 subworkflow:
   callable: true
 initial_step: review
-max_steps: 2
 steps:
   - name: review
     persona: external-reviewer
@@ -776,13 +818,18 @@ steps:
 
     MockWorkflowEngine.nextRunImpl = async (instance) => {
       instance.currentResumePoint = childResumePoint;
-      instance.emit('step:start', workflowCallStep, 7, workflowCallStep.instruction, { provider: 'cursor', model: undefined });
-      instance.emit('step:complete', workflowCallStep, {
-        persona: 'delegate',
-        status: 'done',
-        content: 'COMPLETE',
-        timestamp: new Date('2026-04-01T00:00:00.000Z'),
-      }, workflowCallStep.instruction);
+      const lifecycle = {
+        parentWorkflow: 'default',
+        step: 'delegate',
+        childWorkflow: 'takt/coding',
+        callInstance: 1,
+        stack: parentResumePoint.stack,
+      };
+      instance.emit('workflow_call:start', lifecycle);
+      instance.emit('workflow_call:complete', {
+        ...lifecycle,
+        result: { status: 'completed' },
+      });
       instance.currentResumePoint = parentResumePoint;
       instance.emit('workflow:abort', { status: 'aborted', iteration: 7 }, 'post child failure');
       return { status: 'aborted', iteration: 7 };
@@ -842,13 +889,18 @@ steps:
 
     MockWorkflowEngine.nextRunImpl = async (instance) => {
       instance.currentResumePoint = childResumePoint;
-      instance.emit('step:start', workflowCallStep, 7, workflowCallStep.instruction, { provider: 'cursor', model: undefined });
-      instance.emit('step:complete', workflowCallStep, {
-        persona: 'delegate',
-        status: 'done',
-        content: 'COMPLETE',
-        timestamp: new Date('2026-04-01T00:00:00.000Z'),
-      }, workflowCallStep.instruction);
+      const lifecycle = {
+        parentWorkflow: 'default',
+        step: 'delegate',
+        childWorkflow: 'takt/coding',
+        callInstance: 1,
+        stack: parentResumePoint.stack,
+      };
+      instance.emit('workflow_call:start', lifecycle);
+      instance.emit('workflow_call:complete', {
+        ...lifecycle,
+        result: { status: 'completed' },
+      });
       instance.currentResumePoint = parentResumePoint;
       throw new Error('engine crashed after child completion');
     };

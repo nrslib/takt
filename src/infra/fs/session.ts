@@ -19,6 +19,8 @@ import {
 export type {
   SessionLog,
   NdjsonWorkflowStart,
+  NdjsonWorkflowCallStart,
+  NdjsonWorkflowCallComplete,
   NdjsonStepStart,
   NdjsonStepComplete,
   NdjsonWorkflowComplete,
@@ -143,13 +145,14 @@ export class SessionManager {
               ...(record.matchMethod ? { matchMethod: record.matchMethod } : {}),
               ...(record.failureCategory ? { failureCategory: record.failureCategory } : {}),
             });
-            sessionLog.iterations++;
+            sessionLog.iterations = Math.max(sessionLog.iterations, record.iteration);
           }
           break;
 
         case 'workflow_complete':
           if (sessionLog) {
             sessionLog.status = 'completed';
+            sessionLog.iterations = record.iterations;
             sessionLog.endTime = record.endTime;
           }
           break;
@@ -157,6 +160,7 @@ export class SessionManager {
         case 'workflow_abort':
           if (sessionLog) {
             sessionLog.status = 'aborted';
+            sessionLog.iterations = record.iterations;
             sessionLog.endTime = record.endTime;
           }
           break;
@@ -306,7 +310,7 @@ export function extractFailureInfo(filepath: string): FailureInfo | null {
         case 'step_complete':
           // Track the last successfully completed step
           lastCompletedStep = record.step;
-          iterations++;
+          iterations = Math.max(iterations, record.iteration);
           // Reset lastStartedStep since this step completed
           lastStartedStep = null;
           break;
@@ -315,6 +319,11 @@ export function extractFailureInfo(filepath: string): FailureInfo | null {
           // If there was a step_start without a step_complete, that's the failed step
           failedStep = lastStartedStep;
           errorMessage = record.reason;
+          iterations = record.iterations;
+          break;
+
+        case 'workflow_complete':
+          iterations = record.iterations;
           break;
       }
     } catch {

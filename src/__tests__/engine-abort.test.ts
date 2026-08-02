@@ -73,12 +73,14 @@ describe('WorkflowEngine: Abort (SIGINT)', () => {
       initialStep: 'step1',
       steps: [
         makeStep('step1', {
+          provider: 'mock',
           rules: [
             makeRule('done', 'step2'),
             makeRule('fail', 'ABORT'),
           ],
         }),
         makeStep('step2', {
+          provider: 'mock',
           rules: [
             makeRule('done', 'COMPLETE'),
           ],

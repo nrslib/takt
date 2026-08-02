@@ -21,6 +21,21 @@ import {
 } from '../workflow-reference.js';
 import { buildDynamicParallelSelectionIdentity } from '../dynamic-parallel/identity.js';
 import { restoreAndValidateDynamicParallelSelections } from '../dynamic-parallel/resume-state.js';
+import { workflowOwnerPathFromStack } from '../workflow-execution-scope.js';
+
+function resolveInitialIteration(options: WorkflowEngineOptions): number {
+  const resumeIteration = options.resumePoint?.iteration;
+  if (
+    options.initialIteration !== undefined
+    && resumeIteration !== undefined
+    && options.initialIteration !== resumeIteration
+  ) {
+    throw new Error(
+      `Initial iteration ${options.initialIteration} does not match resume iteration ${resumeIteration}`,
+    );
+  }
+  return options.initialIteration ?? resumeIteration ?? 0;
+}
 
 /**
  * Manages workflow execution state.
@@ -46,9 +61,12 @@ export class StateManager {
 
     const currentStep = options.startStep ?? config.initialStep;
     const resumeEntry = options.resumePoint?.stack[options.resumeStackPrefix?.length ?? 0];
-    const stepIterations = resumeEntry !== undefined
-      && resumeEntry.step === currentStep
+    const pendingJudge = options.resumePoint?.pending_loop_judge;
+    const resumeEntryOwnsState = resumeEntry !== undefined
       && workflowEntryMatchesWorkflow(resumeEntry, config)
+      && (resumeEntry.step === currentStep
+        || (pendingJudge?.status === 'started' && resumeEntry.step === pendingJudge.judge_step));
+    const stepIterations = resumeEntryOwnsState
       ? new Map(Object.entries(resumeEntry.step_iterations ?? {}))
       : new Map<string, number>();
     const dynamicParallelSelections = restoreAndValidateDynamicParallelSelections(config, options);
@@ -58,7 +76,11 @@ export class StateManager {
     const currentStepConfig = config.steps.find((step) => step.name === currentStep);
     const dynamicParallelSelectionIdentity = currentStepConfig?.parallel !== undefined
       && isDynamicParallelSubSteps(currentStepConfig.parallel)
-      ? buildDynamicParallelSelectionIdentity(config, currentStep, options.resumeStackPrefix ?? [])
+      ? buildDynamicParallelSelectionIdentity(
+          config,
+          currentStep,
+          workflowOwnerPathFromStack(options.resumeStackPrefix ?? []),
+        )
       : undefined;
     const savedSelectionForCurrentStep = dynamicParallelSelectionIdentity === undefined
       ? undefined
@@ -85,7 +107,7 @@ export class StateManager {
     this.state = {
       workflowName: config.name,
       currentStep,
-      iteration: options.initialIteration ?? 0,
+      iteration: resolveInitialIteration(options),
       stepOutputs: new Map(),
       structuredOutputs: new Map(),
       systemContexts: new Map(),
@@ -107,6 +129,14 @@ export class StateManager {
         || savedSelectionForCurrentStep === undefined
         ? {}
         : { activeDynamicParallelSelectionIdentity: dynamicParallelSelectionIdentity }),
+      ...(options.resumePoint?.pending_fallback === undefined
+        ? {}
+        : {
+            pendingFallback: { ...options.resumePoint.pending_fallback.context },
+            rateLimitFallbackAttempts: options.resumePoint.pending_fallback.attempts.map(
+              (attempt) => ({ ...attempt }),
+            ),
+          }),
       status: 'running',
     };
   }

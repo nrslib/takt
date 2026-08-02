@@ -1,5 +1,5 @@
 import { WorkflowEngine, createDenyAskUserQuestionHandler } from '../../../core/workflow/index.js';
-import type { WorkflowConfig, WorkflowResumePointEntry } from '../../../core/models/index.js';
+import type { WorkflowConfig } from '../../../core/models/index.js';
 import type { WorkflowExecutionResult, WorkflowExecutionOptions } from './types.js';
 import { createDefaultSystemStepServices } from '../../../infra/workflow/system/DefaultSystemStepServices.js';
 import { createDefaultStructuredOutputNormalizers } from '../../../infra/workflow/structured-output/followup-task-normalizer.js';
@@ -23,6 +23,7 @@ import type { GitProvider } from '../../../infra/git/index.js';
 import { USAGE_MISSING_REASONS } from '../../../core/logging/contracts.js';
 import { createPullRequestContext } from '../../../core/workflow/pr-context.js';
 import { GitSelectorCommandRunner } from '../../../infra/task/selector-git-command-runner.js';
+import type { IterationLimitRequest } from '../../../core/workflow/types.js';
 
 export type { WorkflowExecutionResult, WorkflowExecutionOptions };
 
@@ -89,6 +90,15 @@ function requireFiniteWorkflowMaxSteps(workflowConfig: WorkflowConfig): number {
   return workflowConfig.maxSteps;
 }
 
+function requireWorkflowConfigWithMaxSteps(
+  workflowConfig: WorkflowConfig,
+): WorkflowConfig & { maxSteps: NonNullable<WorkflowConfig['maxSteps']> } {
+  if (workflowConfig.maxSteps === undefined) {
+    throw new Error(`Root workflow "${workflowConfig.name}" requires max_steps`);
+  }
+  return { ...workflowConfig, maxSteps: workflowConfig.maxSteps };
+}
+
 function resolvePhase1ProcessSafetyByStep(
   workflowConfig: WorkflowConfig,
   parentRunPid: number,
@@ -149,18 +159,7 @@ async function executeWorkflowInternal(
   const phase1ProcessSafetyByStep = resolvePhase1ProcessSafetyByStep(workflowConfig, parentRunPid);
   let engine: WorkflowEngine | null = null;
   let eventBridge: WorkflowExecutionEventBridge | undefined;
-  const getCurrentWorkflowStack = (): WorkflowResumePointEntry[] | undefined => {
-    if (!engine || typeof engine.getResumePoint !== 'function') {
-      return undefined;
-    }
-    return engine.getResumePoint()?.stack;
-  };
-  const buildResumePointForStep = (stepName: string) => {
-    if (!engine || typeof engine.buildResumePointForStepName !== 'function') {
-      return undefined;
-    }
-    return engine.buildResumePointForStepName(stepName);
-  };
+  let rejectedIterationLimit: IterationLimitRequest | undefined;
   const getLatestResumePoint = () => {
     if (!engine || typeof engine.getResumePoint !== 'function') {
       return undefined;
@@ -172,16 +171,7 @@ async function executeWorkflowInternal(
     bootstrap.displayRef,
     bootstrap.shouldNotifyIterationLimit,
     (request) => {
-      const workflowMaxSteps = requireFiniteWorkflowMaxSteps(bootstrap.effectiveWorkflowConfig);
-      const resumePoint = getLatestResumePoint()
-        ?? buildResumePointForStep(request.currentStep)
-        ?? eventBridge?.state.lastResumePoint;
-      eventBridge!.state.exceededInfo = {
-        currentStep: request.currentStep,
-        newMaxSteps: request.maxSteps + workflowMaxSteps,
-        currentIteration: request.currentIteration,
-        ...(resumePoint ? { resumePoint } : {}),
-      };
+      rejectedIterationLimit = request;
     },
   );
   const onIterationLimit = runContext?.ignoreIterationLimit === true
@@ -263,6 +253,7 @@ async function executeWorkflowInternal(
       taskPrefix: options.taskPrefix,
       taskColorIndex: options.taskColorIndex,
       initialIteration: options.initialIterationOverride,
+      maxStepsOverride: options.maxStepsOverride,
       currentTask: resolveCurrentTaskContext(options, bootstrap.runSlug),
       traceTaskMetadata: options.traceTaskMetadata,
       prContext,
@@ -276,10 +267,10 @@ async function executeWorkflowInternal(
 
     eventBridge = bindWorkflowExecutionEvents({
       engine,
-      workflowConfig: bootstrap.effectiveWorkflowConfig,
+      workflowConfig: requireWorkflowConfigWithMaxSteps(bootstrap.effectiveWorkflowConfig),
       task,
       projectCwd: options.projectCwd,
-      currentProvider: bootstrap.currentProvider!,
+      currentProvider: bootstrap.currentProvider,
       configuredModel: bootstrap.configuredModel,
       out: bootstrap.out,
       prefixWriter: bootstrap.prefixWriter,
@@ -295,7 +286,6 @@ async function executeWorkflowInternal(
       shouldNotifyWorkflowAbort: bootstrap.shouldNotifyWorkflowAbort,
       traceDiscovery: bootstrap.traceDiscovery,
       writeTraceReportOnce: bootstrap.writeTraceReportOnce,
-      getCurrentWorkflowStack,
       initialResumePoint: options.resumePoint,
       sessionLog: bootstrap.sessionLog,
       eventSink: options.eventSink,
@@ -311,6 +301,23 @@ async function executeWorkflowInternal(
 
     abortHandler.install();
     const finalState = await engine.run();
+    if (rejectedIterationLimit !== undefined) {
+      const workflowMaxSteps = requireFiniteWorkflowMaxSteps(bootstrap.effectiveWorkflowConfig);
+      const resumePoint = getLatestResumePoint();
+      if (resumePoint === undefined) {
+        throw new Error('Iteration limit rejection completed without a resume point');
+      }
+      const currentStep = resumePoint.stack.at(-1)?.step;
+      if (currentStep === undefined) {
+        throw new Error('Iteration limit rejection completed with an empty resume stack');
+      }
+      eventBridge.state.exceededInfo = {
+        currentStep,
+        newMaxSteps: rejectedIterationLimit.maxSteps + workflowMaxSteps,
+        currentIteration: finalState.iteration,
+        resumePoint,
+      };
+    }
     await eventBridge.flushEventSink();
     return {
       success: finalState.status === 'completed',

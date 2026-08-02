@@ -6,7 +6,8 @@ import type {
   AgentResponse,
   FindingContractConfig,
   WorkflowConfig,
-  WorkflowMaxSteps,
+  LoopMonitorConfig,
+  WorkflowPendingLoopJudge,
   WorkflowResumePoint,
   WorkflowResumePointEntry,
   WorkflowState,
@@ -68,12 +69,21 @@ import { createFindingConflictAdjudicationRunner } from '../findings/adjudicatio
 import { rebindPendingManagerPublicationAtBootstrap } from '../findings/manager-commit.js';
 import { ERROR_MESSAGES } from '../constants.js';
 import { inheritReviewReports, writeReviewReportInheritanceDiagnostic } from '../report-inheritance.js';
+import { WorkflowStepBudget } from '../workflow-step-budget.js';
 import {
   createReviewReportDiscoveryContext,
   resolveInheritedReviewReportNamesWithDiagnostics,
 } from '../review-report-discovery.js';
 import { getRemoteRepositoryIdentifiers } from '../../../infra/git/detect.js';
 import { inheritWorkflowConfigMetadata, translateWorkflowConfigError } from '../../../shared/workflowConfigMetadata.js';
+import {
+  isWorkflowExecutionScope,
+  snapshotWorkflowEventValue,
+  snapshotWorkflowExecutionScope,
+  workflowOwnerPathFromStack,
+} from '../workflow-execution-scope.js';
+import { WorkflowCallProgressTracker, type WorkflowCallProgressLease } from '../workflow-call-progress-tracker.js';
+import { readRunMetaBySlug } from '../run/run-meta.js';
 const log = createLogger('workflow-engine');
 
 type WorkflowEngineRuntimeOptions = WorkflowEngineOptions & {
@@ -92,7 +102,35 @@ export type {
 export { COMPLETE_STEP, ABORT_STEP } from '../constants.js';
 
 const workflowRunExecutors = new WeakMap<WorkflowEngine, () => Promise<WorkflowRunResult>>();
+const WORKFLOW_CALL_CONTEXT = Symbol('workflow-call-context');
+const WORKFLOW_CALL_PROGRESS_PARENT = Symbol('workflow-call-progress-parent');
 const FIX_STEP_NAME = 'fix';
+const SCOPED_EVENT_ARGUMENT_COUNTS: Readonly<Record<string, number>> = {
+  'step:start': 8,
+  'step:complete': 4,
+  'routing:decision': 8,
+  'step:report': 4,
+  'findings:ledger': 2,
+  'phase:start': 7,
+  'phase:complete': 8,
+  'phase:judge_stage': 6,
+};
+
+type WorkflowCallChildOptions = WorkflowEngineOptions & {
+  readonly [WORKFLOW_CALL_CONTEXT]: true;
+  readonly [WORKFLOW_CALL_PROGRESS_PARENT]: WorkflowCallProgressLease;
+};
+
+function createWorkflowCallChildOptions(
+  options: WorkflowEngineOptions,
+  parentProgressLease: WorkflowCallProgressLease,
+): WorkflowCallChildOptions {
+  return {
+    ...options,
+    [WORKFLOW_CALL_CONTEXT]: true,
+    [WORKFLOW_CALL_PROGRESS_PARENT]: parentProgressLease,
+  };
+}
 
 function snapshotWorkflowState(state: WorkflowState): WorkflowState {
   return {
@@ -117,13 +155,16 @@ export class WorkflowEngine extends EventEmitter {
   private cwd: string;
   private task: string;
   private options: WorkflowEngineRuntimeOptions;
-  private maxSteps: WorkflowMaxSteps;
+  private readonly stepBudget: WorkflowStepBudget;
   private loopDetector: LoopDetector;
   private cycleDetector: CycleDetector;
   private reportDir: string;
   private runPaths: RunPaths;
   private abortRequested = false;
   private readonly sharedRuntime: WorkflowSharedRuntimeState;
+  private readonly progressLease: WorkflowCallProgressLease;
+  private activeResumePoint?: WorkflowResumePoint;
+  private pendingLoopJudge?: WorkflowPendingLoopJudge;
   private readonly resumeStackPrefix: WorkflowResumePointEntry[];
   private readonly findingLedgerStore?: FindingLedgerStore;
   private readonly findingContract?: FindingContractConfig;
@@ -142,6 +183,14 @@ export class WorkflowEngine extends EventEmitter {
 
   constructor(config: WorkflowConfig, cwd: string, task: string, options: WorkflowEngineOptions) {
     super();
+    if (
+      config.subworkflow?.callable === true
+      && (options as Partial<WorkflowCallChildOptions>)[WORKFLOW_CALL_CONTEXT] !== true
+    ) {
+      throw new Error(
+        `Configuration error: callable workflow "${config.name}" must be started from a workflow_call`,
+      );
+    }
     const resumePoint = options.resumePoint === undefined ? undefined : parseWorkflowResumePoint(options.resumePoint);
     assertTaskPrefixPair(options.taskPrefix, options.taskColorIndex);
     this.structuredCaller = options.structuredCaller ?? new CapabilityAwareStructuredCaller();
@@ -218,8 +267,22 @@ export class WorkflowEngine extends EventEmitter {
     this.task = task;
     this.loopDetector = new LoopDetector(this.config.loopDetection);
     this.cycleDetector = new CycleDetector(this.config.loopMonitors ?? []);
-    const initialMaxSteps = this.options.maxStepsOverride ?? this.config.maxSteps;
+    this.runPaths = runPaths;
+    this.reportDir = this.runPaths.reportsRel;
     ensureRunDirsExist(runPaths);
+    applyRuntimeEnvironment(this.cwd, this.config, 'init');
+    try {
+      validateWorkflowConfig(this.config, this.options);
+    } catch (error) {
+      throw translateWorkflowConfigError(this.config, error);
+    }
+    const initialMaxSteps = this.options.maxStepsOverride
+      ?? this.options.resumePoint?.max_steps
+      ?? this.config.maxSteps
+      ?? this.options.sharedRuntime?.stepBudget?.currentMaxSteps();
+    if (initialMaxSteps === undefined) {
+      throw new Error(`Configuration error: root workflow "${this.config.name}" requires max_steps`);
+    }
     this.sharedRuntime = this.options.sharedRuntime ?? createSharedRuntime(
       this.options.resumePoint,
       initialMaxSteps,
@@ -231,19 +294,25 @@ export class WorkflowEngine extends EventEmitter {
       restoreWorkflowCallInvocationEvidence(this.options.resumePoint);
     this.sharedRuntime.workflowStepParticipationIndex ??=
       restoreWorkflowStepParticipationIndex(this.options.resumePoint);
+    this.sharedRuntime.workflowCallProgressTracker ??= new WorkflowCallProgressTracker();
+    const parentProgressLease = (this.options as Partial<WorkflowCallChildOptions>)[WORKFLOW_CALL_PROGRESS_PARENT];
+    this.progressLease = this.sharedRuntime.workflowCallProgressTracker.reserve(parentProgressLease);
     this.sharedRuntime.workflowCallInvocationEvidence.index.validateResumePoint(this.options.resumePoint);
-    this.sharedRuntime.maxSteps ??= initialMaxSteps;
-    this.maxSteps = this.sharedRuntime.maxSteps;
+    this.sharedRuntime.stepBudget ??= new WorkflowStepBudget(initialMaxSteps);
+    this.stepBudget = this.sharedRuntime.stepBudget;
     this.resumeStackPrefix = this.options.resumeStackPrefix ?? [];
-    this.runPaths = runPaths;
-    this.reportDir = this.runPaths.reportsRel;
-    applyRuntimeEnvironment(this.cwd, this.config, 'init');
-    try {
-      validateWorkflowConfig(this.config, this.options);
-    } catch (error) {
-      throw translateWorkflowConfigError(this.config, error);
-    }
-
+    this.pendingLoopJudge = this.options.resumePoint?.pending_loop_judge === undefined
+      ? undefined
+      : {
+          ...this.options.resumePoint.pending_loop_judge,
+          cycle: [...this.options.resumePoint.pending_loop_judge.cycle],
+        };
+    this.activeResumePoint = this.options.resumePoint === undefined
+      ? undefined
+      : {
+          ...this.options.resumePoint,
+          max_steps: this.stepBudget.currentMaxSteps(),
+        };
     this.state = createInitialState(this.config, this.options);
     this.syncStateDynamicParallelSelections();
     this.inheritPreviousReviewReports();
@@ -278,17 +347,24 @@ export class WorkflowEngine extends EventEmitter {
       getCwd: () => this.cwd,
       getReportDir: () => this.reportDir,
       getRunPaths: () => this.runPaths,
-      getMaxSteps: () => this.maxSteps,
+      stepBudget: this.stepBudget,
+      interruptRequested: () => this.abortRequested || this.options.abortSignal?.aborted === true,
       options: this.options,
       structuredCaller: this.structuredCaller,
       sharedRuntime: this.sharedRuntime,
+      progressLease: this.progressLease,
       resumeStackPrefix: this.resumeStackPrefix,
       runPaths: this.runPaths,
-      updateMaxSteps: (maxSteps) => {
-        this.maxSteps = maxSteps;
-        this.sharedRuntime.maxSteps = maxSteps;
-      },
       setActiveResumePoint: this.setActiveResumePoint.bind(this),
+      setActiveResumeStack: this.setActiveResumeStack.bind(this),
+      adoptResumeCheckpoint: this.adoptResumeCheckpoint.bind(this),
+      getActiveResumePoint: () => this.activeResumePoint,
+      buildStepExecutionScope: (step, iteration) =>
+        snapshotWorkflowExecutionScope(this.buildResumePoint(step, iteration).stack),
+      setPendingLoopJudge: this.setPendingLoopJudge.bind(this),
+      startPendingLoopJudge: this.startPendingLoopJudge.bind(this),
+      clearPendingLoopJudge: this.clearPendingLoopJudge.bind(this),
+      syncMaxSteps: this.syncMaxSteps.bind(this),
       persistDynamicParallelSelection: this.persistDynamicParallelSelection.bind(this),
       refreshFindingsState: this.refreshFindingsState.bind(this),
       findingContract: this.findingContract,
@@ -298,10 +374,16 @@ export class WorkflowEngine extends EventEmitter {
       resetCycleDetector: () => this.cycleDetector.reset(),
       emitEvent: (event, ...args) => this.emitEvent(event, ...args),
       createEngine: (nestedConfig, nestedCwd, nestedTask, nestedOptions): WorkflowCallChildEngine => {
-        const nestedEngine = new WorkflowEngine(nestedConfig, nestedCwd, nestedTask, nestedOptions);
+        const nestedEngine = new WorkflowEngine(
+          nestedConfig,
+          nestedCwd,
+          nestedTask,
+          createWorkflowCallChildOptions(nestedOptions, this.progressLease),
+        );
         return {
           on: nestedEngine.on.bind(nestedEngine),
           runWithResult: () => getWorkflowRunExecutor(nestedEngine)(),
+          getOwnedResumePoint: () => nestedEngine.getResumePoint(),
         };
       },
     });
@@ -317,7 +399,7 @@ export class WorkflowEngine extends EventEmitter {
       config: this.config,
       state: this.state,
       task: this.task,
-      getMaxSteps: () => this.maxSteps,
+      stepBudget: this.stepBudget,
       getOptions: () => this.options,
       stepExecutor: this.stepExecutor,
       parallelRunner: this.parallelRunner,
@@ -327,12 +409,20 @@ export class WorkflowEngine extends EventEmitter {
       loopMonitorJudgeRunner: this.loopMonitorJudgeRunner,
       workflowCallRunner: this.workflowCallRunner,
       updatePersonaSession: this.updatePersonaSession.bind(this),
-      emitReport: (step, filePath, fileName) => this.emit('step:report', step, filePath, fileName),
-      recordParticipation: (step, reportNames) => {
+      emitReport: (step, filePath, fileName, eventAttribution) => this.emitEvent(
+        'step:report',
+        step,
+        filePath,
+        fileName,
+        eventAttribution.iteration,
+        eventAttribution.scope,
+      ),
+      getExecutionOwnerPath: () => workflowOwnerPathFromStack(this.resumeStackPrefix),
+      recordParticipation: (step, reportNames, ownerPath) => {
         this.sharedRuntime.workflowStepParticipationIndex!.record(
           this.config,
           step.name,
-          this.resumeStackPrefix,
+          ownerPath,
           reportNames,
         );
       },
@@ -364,9 +454,12 @@ export class WorkflowEngine extends EventEmitter {
           getWorkflowName: () => this.config.name,
           getTask: () => this.task,
           getRoutingFindings: () => buildRoutingFindings(this.findingLedgerStore?.loadLedger()),
-          getCurrentWorkflowStack: () => this.sharedRuntime.activeResumePoint?.stack,
+          getCurrentWorkflowStack: () => this.activeResumePoint?.stack,
+          buildStepExecutionScope: (step, iteration) =>
+            snapshotWorkflowExecutionScope(this.buildResumePoint(step, iteration).stack),
           getCwd: () => this.cwd,
-          getMaxSteps: () => this.maxSteps,
+          stepBudget: this.stepBudget,
+          recordCountableProgress: () => this.progressLease.recordCountableProgress(),
           getReportDir: () => this.runPaths.reportsAbs,
           abortRequested: () => this.abortRequested,
           getStep: this.stepCoordinator.getStep.bind(this.stepCoordinator),
@@ -383,22 +476,17 @@ export class WorkflowEngine extends EventEmitter {
           cycleDetectorRecordAndCheck: (stepName, nextStep) => this.cycleDetector.recordAndCheck(stepName, nextStep),
           resolveDoneTransition: this.stepCoordinator.resolveTransitionFromDone.bind(this.stepCoordinator),
           runLoopMonitorJudge: this.stepCoordinator.runLoopMonitorJudge.bind(this.stepCoordinator),
+          getPendingLoopJudge: this.getPendingLoopJudge.bind(this),
           runStep: this.stepCoordinator.runStep.bind(this.stepCoordinator),
           runQualityGates,
           persistPreviousResponseSnapshot: this.stepExecutor.persistPreviousResponseSnapshot.bind(this.stepExecutor),
-          buildInstruction: this.stepCoordinator.buildInstruction.bind(this.stepCoordinator),
-          buildPhase1Instruction: this.stepCoordinator.buildPhase1Instruction.bind(this.stepCoordinator),
           prepareNormalStepExecution: this.stepCoordinator.prepareNormalStepExecution.bind(this.stepCoordinator),
           resolveStepProviderModel: (step, runtime) => this.optionsBuilder.resolveStepProviderModel(step, runtime),
           resolveStepProviderModelBeforeAutoRouting: (step, runtime) => this.optionsBuilder.resolveStepProviderModelBeforeAutoRouting(step, runtime),
-          resolveRuntimeForStep: this.stepCoordinator.resolveRuntimeForStep.bind(this.stepCoordinator),
           setActiveStep: this.setActiveResumePoint.bind(this),
+          syncMaxSteps: this.syncMaxSteps.bind(this),
           addUserInput: this.addUserInput.bind(this),
           emit: (event, ...args) => this.emitEvent(event, ...args),
-          updateMaxSteps: (maxSteps) => {
-            this.maxSteps = maxSteps;
-            this.sharedRuntime.maxSteps = maxSteps;
-          },
           checkCompletionGate: this.checkCompletionGate.bind(this),
           checkReturnValueGate: this.checkReturnValueGate.bind(this),
         }),
@@ -411,8 +499,8 @@ export class WorkflowEngine extends EventEmitter {
         }),
         (error) => this.buildWorkflowErrorSpanOutcome(error),
       ),
-        () => true,
-      );
+      () => true,
+    );
     });
 
     log.debug('WorkflowEngine initialized', {
@@ -420,7 +508,7 @@ export class WorkflowEngine extends EventEmitter {
       steps: config.steps.map((step) => step.name),
       initialStep: config.initialStep,
       maxSteps: config.maxSteps,
-      effectiveMaxSteps: this.maxSteps,
+      effectiveMaxSteps: this.stepBudget.currentMaxSteps(),
     });
   }
 
@@ -431,6 +519,51 @@ export class WorkflowEngine extends EventEmitter {
   private emitEvent(event: string, ...args: unknown[]): void {
     if (event === 'workflow:complete' || event === 'workflow:abort') {
       this.emit(event, snapshotWorkflowState(this.state), ...args.slice(1));
+      return;
+    }
+    if (event === 'workflow_call:start' || event === 'workflow_call:complete') {
+      const lifecycle = args[0] as { stack: WorkflowResumePointEntry[]; result?: unknown };
+      const scope = snapshotWorkflowExecutionScope(lifecycle.stack);
+      this.emit(event, Object.freeze({
+        ...lifecycle,
+        stack: scope.stack,
+        ...(lifecycle.result === undefined
+          ? {}
+          : { result: snapshotWorkflowEventValue(lifecycle.result) }),
+      }));
+      return;
+    }
+    if (
+      event === 'step:start'
+      || event === 'step:complete'
+      || event === 'routing:decision'
+      || event === 'step:report'
+      || event === 'findings:ledger'
+      || event === 'phase:start'
+      || event === 'phase:complete'
+      || event === 'phase:judge_stage'
+    ) {
+      const incomingScope = args.at(-1);
+      if (!isWorkflowExecutionScope(incomingScope)) {
+        throw new Error(`${event} event requires an explicit execution scope`);
+      }
+      const scope = snapshotWorkflowExecutionScope(incomingScope.stack);
+      const sourceArgs = args.slice(0, -1);
+      if (
+        (event === 'step:report' && typeof sourceArgs[3] !== 'number')
+        || (event === 'findings:ledger' && typeof sourceArgs[1] !== 'number')
+      ) {
+        throw new Error(`${event} event requires an explicit iteration`);
+      }
+      const eventArgs = sourceArgs.map(snapshotWorkflowEventValue);
+      const expectedArgumentCount = SCOPED_EVENT_ARGUMENT_COUNTS[event];
+      if (expectedArgumentCount === undefined) {
+        throw new Error(`Missing scoped event contract for ${event}`);
+      }
+      while (eventArgs.length < expectedArgumentCount) {
+        eventArgs.push(undefined);
+      }
+      this.emit(event, ...eventArgs, scope);
       return;
     }
     this.emit(event, ...args);
@@ -580,23 +713,27 @@ export class WorkflowEngine extends EventEmitter {
       throw new Error(`Invalid review report discovery state: ${fatalFailure.reason}`);
     }
     const recoverableFailures = reportNameResult.failures.map((failure) => failure.reason);
+    const sourceRunMeta = resumeSource.sourceRunSlug === undefined
+      ? null
+      : readRunMetaBySlug(this.cwd, resumeSource.sourceRunSlug, (warning) => {
+          log.warn('Failed to load source run metadata for report inheritance', { warning });
+        });
+    const sourceWorkflowCallInvocations = sourceRunMeta?.resumePoint?.workflow_call_invocations;
+    const inheritanceOptions = {
+      cwd: this.cwd,
+      sourceRunSlug: resumeSource.sourceRunSlug,
+      currentRunSlug: this.runPaths.slug,
+      targetReportDirectory: this.runPaths.reportsAbs,
+      reviewReportNames: reportNameResult.reportNames,
+      discoveryFailures: recoverableFailures,
+      ...(sourceWorkflowCallInvocations === undefined
+        ? {}
+        : { sourceWorkflowCallInvocations }),
+    };
     try {
-      const result = inheritReviewReports({
-        cwd: this.cwd,
-        sourceRunSlug: resumeSource.sourceRunSlug,
-        currentRunSlug: this.runPaths.slug,
-        targetReportDirectory: this.runPaths.reportsAbs,
-        reviewReportNames: reportNameResult.reportNames,
-        discoveryFailures: recoverableFailures,
-      });
+      const result = inheritReviewReports(inheritanceOptions);
       try {
-        writeReviewReportInheritanceDiagnostic({
-          cwd: this.cwd,
-          sourceRunSlug: resumeSource.sourceRunSlug,
-          currentRunSlug: this.runPaths.slug,
-          targetReportDirectory: this.runPaths.reportsAbs,
-          reviewReportNames: reportNameResult.reportNames,
-        }, result);
+        writeReviewReportInheritanceDiagnostic(inheritanceOptions, result);
       } catch (error) {
         log.warn('Failed to write review report inheritance diagnostic', { error: getErrorMessage(error), result });
       }
@@ -653,7 +790,7 @@ export class WorkflowEngine extends EventEmitter {
       ? this.sharedRuntime.workflowCallInvocationEvidence!.index.get(
           this.config,
           step.name,
-          this.resumeStackPrefix,
+          workflowOwnerPathFromStack(this.resumeStackPrefix),
         )?.call_instance
       : undefined;
     const workflowCallInvocations = serializeWorkflowCallInvocationEvidence(
@@ -674,7 +811,19 @@ export class WorkflowEngine extends EventEmitter {
         ),
       ],
       iteration,
+      max_steps: this.stepBudget.currentMaxSteps(),
       elapsed_ms: Date.now() - this.sharedRuntime.startedAtMs,
+      ...(this.pendingLoopJudge === undefined
+        ? {}
+        : { pending_loop_judge: this.clonePendingLoopJudge(this.pendingLoopJudge) }),
+      ...(this.state.pendingFallback === undefined || this.state.rateLimitFallbackAttempts === undefined
+        ? {}
+        : {
+            pending_fallback: {
+              context: { ...this.state.pendingFallback },
+              attempts: this.state.rateLimitFallbackAttempts.map((attempt) => ({ ...attempt })),
+            },
+          }),
       ...(dynamicParallelSelections.size === 0
         ? {}
         : { dynamic_parallel_selections: serializeDynamicParallelSelections(dynamicParallelSelections) }),
@@ -685,7 +834,171 @@ export class WorkflowEngine extends EventEmitter {
 
   private setActiveResumePoint(step: WorkflowStep, iteration: number): void {
     this.syncStateDynamicParallelSelections();
-    this.sharedRuntime.activeResumePoint = this.buildResumePoint(step, iteration);
+    const resumePoint = this.buildResumePoint(step, iteration);
+    this.commitExecutionCheckpoint(resumePoint, iteration);
+  }
+
+  private setActiveResumeStack(
+    stack: readonly WorkflowResumePointEntry[],
+    iteration: number,
+  ): void {
+    if (iteration < this.state.iteration) {
+      throw new Error('Cannot adopt a resume stack at an earlier iteration');
+    }
+    this.syncStateDynamicParallelSelections();
+    const resumePoint: WorkflowResumePoint = {
+      version: 2,
+      stack: stack.map((entry) => ({
+        ...entry,
+        ...(entry.step_iterations === undefined
+          ? {}
+          : { step_iterations: { ...entry.step_iterations } }),
+      })),
+      iteration,
+      max_steps: this.stepBudget.currentMaxSteps(),
+      elapsed_ms: Date.now() - this.sharedRuntime.startedAtMs,
+      ...(this.pendingLoopJudge === undefined
+        ? {}
+        : { pending_loop_judge: this.clonePendingLoopJudge(this.pendingLoopJudge) }),
+      ...(this.state.pendingFallback === undefined || this.state.rateLimitFallbackAttempts === undefined
+        ? {}
+        : {
+            pending_fallback: {
+              context: { ...this.state.pendingFallback },
+              attempts: this.state.rateLimitFallbackAttempts.map((attempt) => ({ ...attempt })),
+            },
+          }),
+      ...(this.sharedRuntime.dynamicParallelSelectionStore!.serialized() === undefined
+        ? {}
+        : {
+            dynamic_parallel_selections:
+              this.sharedRuntime.dynamicParallelSelectionStore!.serialized(),
+          }),
+      workflow_call_invocations: serializeWorkflowCallInvocationEvidence(
+        this.sharedRuntime.workflowCallInvocationEvidence!,
+      ),
+      workflow_step_participations:
+        this.sharedRuntime.workflowStepParticipationIndex!.serialized(),
+    };
+    this.commitExecutionCheckpoint(resumePoint, iteration);
+  }
+
+  private adoptResumeCheckpoint(resumePoint: WorkflowResumePoint, iteration: number): void {
+    if (
+      !Number.isSafeInteger(iteration)
+      || iteration < resumePoint.iteration
+      || iteration < this.state.iteration
+    ) {
+      throw new Error('Cannot adopt a resume checkpoint at an earlier iteration');
+    }
+    this.commitExecutionCheckpoint(cloneWorkflowResumePoint({
+      ...resumePoint,
+      iteration,
+    }), iteration);
+  }
+
+  private commitExecutionCheckpoint(resumePoint: WorkflowResumePoint, iteration: number): void {
+    if (resumePoint.iteration !== iteration) {
+      throw new Error('Execution state and resume checkpoint iterations must match');
+    }
+    this.state.iteration = iteration;
+    this.activeResumePoint = resumePoint;
+  }
+
+  private clonePendingLoopJudge<T extends WorkflowPendingLoopJudge>(pending: T): T {
+    return {
+      ...pending,
+      cycle: [...pending.cycle],
+    } as T;
+  }
+
+  private setPendingLoopJudge(
+    triggeringStep: WorkflowStep,
+    pending: WorkflowPendingLoopJudge,
+    iteration: number,
+  ): void {
+    this.pendingLoopJudge = this.clonePendingLoopJudge(pending);
+    this.setActiveResumePoint(triggeringStep, iteration);
+  }
+
+  private startPendingLoopJudge(
+    judgeStep: WorkflowStep,
+    pending: import('../../models/types.js').WorkflowPendingLoopJudgeStarted,
+    iteration: number,
+  ): void {
+    this.pendingLoopJudge = this.clonePendingLoopJudge(pending);
+    this.setActiveResumePoint(judgeStep, iteration);
+  }
+
+  private clearPendingLoopJudge(triggeringStep: WorkflowStep, iteration: number): void {
+    this.pendingLoopJudge = undefined;
+    this.setActiveResumePoint(triggeringStep, iteration);
+  }
+
+  private getPendingLoopJudge(): {
+    monitor: LoopMonitorConfig;
+    cycleCount: number;
+    triggeringStep: WorkflowStep;
+    fallbackNextStep: string;
+    resumedStart?: import('../../models/types.js').WorkflowPendingLoopJudgeStarted;
+  } | undefined {
+    const pending = this.pendingLoopJudge;
+    if (pending === undefined) {
+      return undefined;
+    }
+    const resumePoint = this.options.resumePoint;
+    if (resumePoint === undefined) {
+      throw new Error('Pending loop judge requires a resume point');
+    }
+    const ownerIndex = resumePoint.stack.length - 1;
+    if (this.resumeStackPrefix.length < ownerIndex) {
+      return undefined;
+    }
+    if (this.resumeStackPrefix.length > ownerIndex) {
+      throw new Error('Pending loop judge owner is outside the current resume stack');
+    }
+    const resumeEntry = resumePoint.stack[ownerIndex]!;
+    const expectedOwner = pending.status === 'started' ? pending.judge_step : pending.triggering_step;
+    const monitors = (this.config.loopMonitors ?? []).filter(
+      (monitor) => monitor.cycle.length === pending.cycle.length
+        && monitor.cycle.every((stepName, index) => stepName === pending.cycle[index]),
+    );
+    if (monitors.length !== 1) {
+      throw new Error(`Pending loop judge cycle must match exactly one loop monitor: ${pending.cycle.join(' -> ')}`);
+    }
+    const triggeringStep = this.config.steps.find((step) => step.name === pending.triggering_step);
+    if (triggeringStep === undefined) {
+      throw new Error(`Pending loop judge references unknown triggering step: ${pending.triggering_step}`);
+    }
+    const expectedOwnerKind = pending.status === 'started'
+      ? 'agent'
+      : getWorkflowStepKind(triggeringStep);
+    if (
+      !workflowEntryMatchesWorkflow(resumeEntry, this.config)
+      || resumeEntry.step !== expectedOwner
+      || resumeEntry.kind !== expectedOwnerKind
+    ) {
+      throw new Error(`Pending loop judge owner does not match workflow "${this.config.name}"`);
+    }
+    return {
+      monitor: monitors[0]!,
+      cycleCount: pending.cycle_count,
+      triggeringStep,
+      fallbackNextStep: pending.fallback_next_step,
+      ...(pending.status === 'started'
+        ? { resumedStart: this.clonePendingLoopJudge(pending) }
+        : {}),
+    };
+  }
+
+  private syncMaxSteps(maxSteps: import('../../models/types.js').WorkflowMaxSteps): void {
+    if (this.activeResumePoint === undefined) {
+      return;
+    }
+    this.activeResumePoint = {
+      ...this.activeResumePoint,
+      max_steps: maxSteps,
+    };
   }
 
   private async persistDynamicParallelSelection(
@@ -697,13 +1010,13 @@ export class WorkflowEngine extends EventEmitter {
     const selections = await this.sharedRuntime.dynamicParallelSelectionStore!.commit(identity, selection, async (selections) => {
       const resumePoint = this.buildResumePoint(step, iteration, selections);
       await this.options.onDynamicParallelSelectionPersisted?.(resumePoint);
-      this.sharedRuntime.activeResumePoint = resumePoint;
+      this.activeResumePoint = resumePoint;
     });
     this.syncStateDynamicParallelSelections(selections);
   }
 
   getResumePoint(): WorkflowResumePoint | undefined {
-    const activeResumePoint = this.sharedRuntime.activeResumePoint;
+    const activeResumePoint = this.activeResumePoint;
     const activeEntry = activeResumePoint?.stack[this.resumeStackPrefix.length];
     if (activeResumePoint === undefined || activeEntry === undefined) {
       return activeResumePoint;
@@ -715,7 +1028,7 @@ export class WorkflowEngine extends EventEmitter {
       ? this.sharedRuntime.workflowCallInvocationEvidence!.index.get(
           this.config,
           activeStep.name,
-          this.resumeStackPrefix,
+          workflowOwnerPathFromStack(this.resumeStackPrefix),
         )?.call_instance
       : undefined;
     stack[this.resumeStackPrefix.length] = buildWorkflowResumePointEntry(
@@ -740,7 +1053,7 @@ export class WorkflowEngine extends EventEmitter {
       workflow_call_invocations: workflowCallInvocations,
       workflow_step_participations: workflowStepParticipations,
     };
-    this.sharedRuntime.activeResumePoint = refreshedResumePoint;
+    this.activeResumePoint = refreshedResumePoint;
     return cloneWorkflowResumePoint(refreshedResumePoint);
   }
 
@@ -804,7 +1117,7 @@ export class WorkflowEngine extends EventEmitter {
       workflowName: this.config.name,
       initialStep: this.config.initialStep,
       stepCount: this.config.steps.length,
-      maxSteps: this.maxSteps,
+      maxSteps: this.stepBudget.currentMaxSteps(),
       runMode,
       resumeDepth: this.resumeStackPrefix.length,
       sanitizeText: this.options.sanitizeObservabilityText,
@@ -841,6 +1154,7 @@ export class WorkflowEngine extends EventEmitter {
     let error: unknown | undefined;
 
     try {
+      this.progressLease.activate();
       result = await execute();
       return result;
     } catch (caughtError) {
@@ -849,6 +1163,7 @@ export class WorkflowEngine extends EventEmitter {
     } finally {
       if (shouldCleanup(result, error)) {
         this.finalizeSystemStepResources();
+        this.progressLease.release();
       }
     }
   }
@@ -868,61 +1183,64 @@ export class WorkflowEngine extends EventEmitter {
     returnValue?: string;
     loopDetected?: boolean;
   }> {
-    await this.initializeFindingContract();
     return this.runWithSystemCleanup(
-      () => runWithWorkflowSpan(
-        this.buildWorkflowSpanParams('single_iteration'),
-        () => runSingleWorkflowIteration({
-          state: this.state,
-          options: this.options,
-          getWorkflowName: () => this.config.name,
-          getTask: () => this.task,
-          getRoutingFindings: () => buildRoutingFindings(this.findingLedgerStore?.loadLedger()),
-          getCurrentWorkflowStack: () => this.sharedRuntime.activeResumePoint?.stack,
-          getCwd: () => this.cwd,
-          getMaxSteps: () => this.maxSteps,
-          getReportDir: () => this.runPaths.reportsAbs,
-          abortRequested: () => this.abortRequested,
-          getStep: this.stepCoordinator.getStep.bind(this.stepCoordinator),
-          applyRuntimeEnvironment: (stage) => applyRuntimeEnvironment(this.cwd, this.config, stage),
-          loopDetectorCheck: (stepName) => {
-            const loopResult = this.loopDetector.check(stepName);
-            return {
-              shouldWarn: loopResult.shouldWarn ?? false,
-              shouldAbort: loopResult.shouldAbort ?? false,
-              count: loopResult.count,
-              isLoop: loopResult.isLoop,
-            };
-          },
-          cycleDetectorRecordAndCheck: (stepName, nextStep) => this.cycleDetector.recordAndCheck(stepName, nextStep),
-          resolveDoneTransition: this.stepCoordinator.resolveTransitionFromDone.bind(this.stepCoordinator),
-          runLoopMonitorJudge: this.stepCoordinator.runLoopMonitorJudge.bind(this.stepCoordinator),
-          runStep: this.stepCoordinator.runStep.bind(this.stepCoordinator),
-          runQualityGates,
-          persistPreviousResponseSnapshot: this.stepExecutor.persistPreviousResponseSnapshot.bind(this.stepExecutor),
-          buildInstruction: this.stepCoordinator.buildInstruction.bind(this.stepCoordinator),
-          buildPhase1Instruction: this.stepCoordinator.buildPhase1Instruction.bind(this.stepCoordinator),
-          prepareNormalStepExecution: this.stepCoordinator.prepareNormalStepExecution.bind(this.stepCoordinator),
-          resolveStepProviderModel: (step, runtime) => this.optionsBuilder.resolveStepProviderModel(step, runtime),
-          resolveStepProviderModelBeforeAutoRouting: (step, runtime) => this.optionsBuilder.resolveStepProviderModelBeforeAutoRouting(step, runtime),
-          resolveRuntimeForStep: this.stepCoordinator.resolveRuntimeForStep.bind(this.stepCoordinator),
-          setActiveStep: this.setActiveResumePoint.bind(this),
-          addUserInput: this.addUserInput.bind(this),
-          emit: (event, ...args) => this.emitEvent(event, ...args),
-          updateMaxSteps: () => {},
-          checkCompletionGate: this.checkCompletionGate.bind(this),
-          checkReturnValueGate: this.checkReturnValueGate.bind(this),
-        }),
-        (result) => ({
-          status: result.isComplete ? this.state.status : 'running',
-          abortKind: result.abort?.kind,
-          abortReason: result.abort?.reason,
-          failure: result.abort?.failure,
-          nextStep: result.nextStep,
-          iterations: this.state.iteration,
-        }),
-        (error) => this.buildWorkflowErrorSpanOutcome(error),
-      ),
+      async () => {
+        await this.initializeFindingContract();
+        return runWithWorkflowSpan(
+          this.buildWorkflowSpanParams('single_iteration'),
+          () => runSingleWorkflowIteration({
+            state: this.state,
+            options: this.options,
+            getWorkflowName: () => this.config.name,
+            getTask: () => this.task,
+            getRoutingFindings: () => buildRoutingFindings(this.findingLedgerStore?.loadLedger()),
+            getCurrentWorkflowStack: () => this.activeResumePoint?.stack,
+            buildStepExecutionScope: (step, iteration) =>
+              snapshotWorkflowExecutionScope(this.buildResumePoint(step, iteration).stack),
+            getCwd: () => this.cwd,
+            stepBudget: this.stepBudget,
+            recordCountableProgress: () => this.progressLease.recordCountableProgress(),
+            getReportDir: () => this.runPaths.reportsAbs,
+            abortRequested: () => this.abortRequested,
+            getStep: this.stepCoordinator.getStep.bind(this.stepCoordinator),
+            applyRuntimeEnvironment: (stage) => applyRuntimeEnvironment(this.cwd, this.config, stage),
+            loopDetectorCheck: (stepName) => {
+              const loopResult = this.loopDetector.check(stepName);
+              return {
+                shouldWarn: loopResult.shouldWarn ?? false,
+                shouldAbort: loopResult.shouldAbort ?? false,
+                count: loopResult.count,
+                isLoop: loopResult.isLoop,
+              };
+            },
+            cycleDetectorRecordAndCheck: (stepName, nextStep) => this.cycleDetector.recordAndCheck(stepName, nextStep),
+            resolveDoneTransition: this.stepCoordinator.resolveTransitionFromDone.bind(this.stepCoordinator),
+            runLoopMonitorJudge: this.stepCoordinator.runLoopMonitorJudge.bind(this.stepCoordinator),
+            getPendingLoopJudge: this.getPendingLoopJudge.bind(this),
+            runStep: this.stepCoordinator.runStep.bind(this.stepCoordinator),
+            runQualityGates,
+            persistPreviousResponseSnapshot: this.stepExecutor.persistPreviousResponseSnapshot.bind(this.stepExecutor),
+            prepareNormalStepExecution: this.stepCoordinator.prepareNormalStepExecution.bind(this.stepCoordinator),
+            resolveStepProviderModel: (step, runtime) => this.optionsBuilder.resolveStepProviderModel(step, runtime),
+            resolveStepProviderModelBeforeAutoRouting: (step, runtime) => this.optionsBuilder.resolveStepProviderModelBeforeAutoRouting(step, runtime),
+            setActiveStep: this.setActiveResumePoint.bind(this),
+            syncMaxSteps: this.syncMaxSteps.bind(this),
+            addUserInput: this.addUserInput.bind(this),
+            emit: (event, ...args) => this.emitEvent(event, ...args),
+            checkCompletionGate: this.checkCompletionGate.bind(this),
+            checkReturnValueGate: this.checkReturnValueGate.bind(this),
+          }),
+          (result) => ({
+            status: result.isComplete ? this.state.status : 'running',
+            abortKind: result.abort?.kind,
+            abortReason: result.abort?.reason,
+            failure: result.abort?.failure,
+            nextStep: result.nextStep,
+            iterations: this.state.iteration,
+          }),
+          (error) => this.buildWorkflowErrorSpanOutcome(error),
+        );
+      },
       (result, error) => error !== undefined || result?.isComplete === true || this.state.status !== 'running',
     );
   }

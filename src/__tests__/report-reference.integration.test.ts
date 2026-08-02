@@ -102,6 +102,7 @@ describe('report reference integration', () => {
 
     const engine = new WorkflowEngine(workflowConfig(), tmpDir, 'consume report', {
       projectCwd: tmpDir,
+      provider: 'mock',
       reportDirName: 'test-report-dir',
       runPathNamespace: [...CHILD_NAMESPACE],
     });
@@ -126,6 +127,7 @@ describe('report reference integration', () => {
 
       const engine = new WorkflowEngine(workflowConfig(), tmpDir, 'consume report', {
         projectCwd: tmpDir,
+        provider: 'mock',
         reportDirName: 'test-report-dir',
         runPathNamespace: [...CHILD_NAMESPACE],
       });

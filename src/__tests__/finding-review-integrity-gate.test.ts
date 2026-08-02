@@ -232,7 +232,6 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
         requiresFindingContract: true,
         returns: ['need_replan'],
       },
-      maxSteps: 3,
       initialStep: 'reviewers',
       provider: 'claude',
       steps: [

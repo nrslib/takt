@@ -1,5 +1,6 @@
 import type { WorkflowStep } from '../../models/types.js';
 import type { JudgeStageEntry, PhaseName, PhasePromptParts } from '../types.js';
+import type { WorkflowExecutionScope } from '../workflow-execution-scope.js';
 
 export interface WorkflowPhaseRelay {
   onPhaseStart: (
@@ -10,6 +11,7 @@ export interface WorkflowPhaseRelay {
     promptParts: PhasePromptParts,
     phaseExecutionId?: string,
     iteration?: number,
+    scope?: WorkflowExecutionScope,
   ) => void;
   onPhaseComplete: (
     step: WorkflowStep,
@@ -20,6 +22,7 @@ export interface WorkflowPhaseRelay {
     error?: string,
     phaseExecutionId?: string,
     iteration?: number,
+    scope?: WorkflowExecutionScope,
   ) => void;
   onJudgeStage: (
     step: WorkflowStep,
@@ -28,6 +31,7 @@ export interface WorkflowPhaseRelay {
     entry: JudgeStageEntry,
     phaseExecutionId?: string,
     iteration?: number,
+    scope?: WorkflowExecutionScope,
   ) => void;
 }
 
@@ -35,26 +39,23 @@ export function createWorkflowPhaseRelay(
   emit: (event: string, ...args: unknown[]) => void,
 ): WorkflowPhaseRelay {
   return {
-    onPhaseStart: (step, phase, phaseName, instruction, promptParts, phaseExecutionId, iteration) => {
-      if (phaseExecutionId == null && iteration == null) {
-        emit('phase:start', step, phase, phaseName, instruction, promptParts);
-        return;
+    onPhaseStart: (step, phase, phaseName, instruction, promptParts, phaseExecutionId, iteration, scope) => {
+      if (scope === undefined) {
+        throw new Error(`phase:start for step "${step.name}" requires an execution scope`);
       }
-      emit('phase:start', step, phase, phaseName, instruction, promptParts, phaseExecutionId, iteration);
+      emit('phase:start', step, phase, phaseName, instruction, promptParts, phaseExecutionId, iteration, scope);
     },
-    onPhaseComplete: (step, phase, phaseName, content, phaseStatus, error, phaseExecutionId, iteration) => {
-      if (phaseExecutionId == null && iteration == null) {
-        emit('phase:complete', step, phase, phaseName, content, phaseStatus, error);
-        return;
+    onPhaseComplete: (step, phase, phaseName, content, phaseStatus, error, phaseExecutionId, iteration, scope) => {
+      if (scope === undefined) {
+        throw new Error(`phase:complete for step "${step.name}" requires an execution scope`);
       }
-      emit('phase:complete', step, phase, phaseName, content, phaseStatus, error, phaseExecutionId, iteration);
+      emit('phase:complete', step, phase, phaseName, content, phaseStatus, error, phaseExecutionId, iteration, scope);
     },
-    onJudgeStage: (step, phase, phaseName, entry, phaseExecutionId, iteration) => {
-      if (phaseExecutionId == null && iteration == null) {
-        emit('phase:judge_stage', step, phase, phaseName, entry);
-        return;
+    onJudgeStage: (step, phase, phaseName, entry, phaseExecutionId, iteration, scope) => {
+      if (scope === undefined) {
+        throw new Error(`phase:judge_stage for step "${step.name}" requires an execution scope`);
       }
-      emit('phase:judge_stage', step, phase, phaseName, entry, phaseExecutionId, iteration);
+      emit('phase:judge_stage', step, phase, phaseName, entry, phaseExecutionId, iteration, scope);
     },
   };
 }

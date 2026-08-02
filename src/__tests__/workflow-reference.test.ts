@@ -8,6 +8,7 @@ import { attachWorkflowOpaqueRef } from '../infra/config/loaders/workflowSourceM
 import {
   buildWorkflowResumePointEntry,
   getWorkflowReference,
+  workflowEntriesMatch,
   workflowEntryMatchesWorkflow,
 } from '../core/workflow/workflow-reference.js';
 import { trimResumePointStackForWorkflow } from '../core/workflow/run/resume-point.js';
@@ -29,6 +30,23 @@ afterEach(() => {
 });
 
 describe('workflow-reference', () => {
+  it('agent entry の step iteration 差分を workflow_call instance として比較しない', () => {
+    expect(workflowEntriesMatch(
+      {
+        workflow: 'parent',
+        step: 'reviewers',
+        kind: 'agent',
+        step_iterations: { reviewers: 1 },
+      },
+      {
+        workflow: 'parent',
+        step: 'reviewers',
+        kind: 'agent',
+        step_iterations: { reviewers: 2 },
+      },
+    )).toBe(true);
+  });
+
   it('core は非公開 metadata の opaque ref で resume_point を解決する', () => {
     const workflow = attachWorkflowOpaqueRef(normalizeWorkflowConfig({
       name: 'shared/workflow',
@@ -87,7 +105,6 @@ describe('workflow-reference', () => {
         name: 'takt/coding',
         subworkflow: { callable: true },
         initial_step: 'review',
-        max_steps: 3,
         steps: [
           {
             name: 'review',
@@ -139,7 +156,6 @@ describe('workflow-reference', () => {
         name: 'takt/coding',
         subworkflow: { callable: true },
         initial_step: 'review',
-        max_steps: 3,
         steps: [
           {
             name: 'review',

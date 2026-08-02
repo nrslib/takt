@@ -122,6 +122,7 @@ describe('WorkflowEngine trace task metadata', () => {
     };
     const options = {
       projectCwd: tmpDir,
+      provider: 'mock' as const,
       observability: {
         enabled: true,
         monitor: false,

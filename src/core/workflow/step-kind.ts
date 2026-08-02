@@ -31,3 +31,15 @@ export function isSystemWorkflowStep(step: WorkflowStep): step is SystemWorkflow
 export function isWorkflowCallStep(step: WorkflowStep): step is WorkflowCallStep {
   return getWorkflowStepKind(step) === 'workflow_call';
 }
+
+export function isCountableWorkflowStep(step: WorkflowStep): boolean {
+  return !isWorkflowCallStep(step);
+}
+
+export function isProviderBackedWorkflowStep(step: WorkflowStep): boolean {
+  if (getWorkflowStepKind(step) !== 'agent') {
+    return false;
+  }
+  return step.arpeggio !== undefined
+    || (step.parallel === undefined && step.teamLeader === undefined);
+}

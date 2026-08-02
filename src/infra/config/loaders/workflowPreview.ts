@@ -36,11 +36,19 @@ import {
   type SelectorProviderOverrides,
 } from '../selectorProviderResolution.js';
 import { resolveWorkflowSelector } from '../workflowSelectorResolution.js';
+import { isWorkflowCallStep } from '../../../core/workflow/step-kind.js';
 
 const log = createLogger('workflow-preview');
 
-export interface StepPreview {
+interface StepPreviewBase {
   name: string;
+  sessionKey?: string;
+  requiresUserInput?: boolean;
+  parallelRole?: 'fixed' | 'pool';
+}
+
+export interface AgentStepPreview extends StepPreviewBase {
+  kind: 'agent';
   personaDisplayName: string;
   personaContent: string;
   instructionContent: string;
@@ -52,12 +60,21 @@ export interface StepPreview {
   modelSource?: ProviderResolutionSource;
   permissionMode?: 'readonly';
   internalAgent?: boolean;
-  sessionKey?: string;
-  requiresUserInput?: boolean;
   substeps?: StepPreview[];
-  parallelRole?: 'fixed' | 'pool';
+}
+
+export interface ParallelStepPreview extends StepPreviewBase {
+  kind: 'parallel';
+  substeps: StepPreview[];
   dynamicSelectionMode?: 'replace' | 'cumulative';
 }
+
+export interface WorkflowCallStepPreview extends StepPreviewBase {
+  kind: 'workflow_call';
+  call: string;
+}
+
+export type StepPreview = AgentStepPreview | ParallelStepPreview | WorkflowCallStepPreview;
 
 export interface FirstStepInfo {
   personaContent: string;
@@ -173,6 +190,7 @@ function buildFindingManagerPreview(
       }) ?? ruleProviderInfo;
 
   return {
+    kind: 'agent',
     name: managerStep.name,
     personaDisplayName: managerStep.personaDisplayName,
     personaContent: readStepPersona(managerStep, projectCwd),
@@ -188,6 +206,7 @@ function buildDynamicSelectorPreview(
   selectorProvider: SelectorProviderInfo,
 ): StepPreview {
   return {
+    kind: 'agent',
     name: 'dynamic-selector',
     personaDisplayName: 'TAKT internal selector',
     personaContent: '',
@@ -219,6 +238,14 @@ function buildStepPreview(
   resolution: PreviewProviderResolution,
   context: { isParallelSubstep: boolean; parallelRole?: 'fixed' | 'pool' } = { isParallelSubstep: false },
 ): StepPreview {
+  if (isWorkflowCallStep(step)) {
+    return {
+      kind: 'workflow_call',
+      name: step.name,
+      call: step.call,
+      ...(context.parallelRole === undefined ? {} : { parallelRole: context.parallelRole }),
+    };
+  }
   const previewStep = resolvePreviewStep(step);
   const parallelSubsteps = previewStep.parallel === undefined
     ? undefined
@@ -264,22 +291,38 @@ function buildStepPreview(
   const substeps = managerPreview ? [...(parallelSubsteps ?? []), managerPreview] : parallelSubsteps;
   const providerInfo = isParallelParent ? undefined : resolvePreviewProviderInfo(previewStep, resolution);
 
+  if (isParallelParent) {
+    return {
+      kind: 'parallel',
+      name: step.name,
+      substeps: substeps ?? [],
+      ...(previewStep.sessionKey === undefined ? {} : { sessionKey: previewStep.sessionKey }),
+      ...(previewStep.requiresUserInput === undefined
+        ? {}
+        : { requiresUserInput: previewStep.requiresUserInput }),
+      ...(context.parallelRole === undefined ? {} : { parallelRole: context.parallelRole }),
+      ...(previewStep.parallel !== undefined && isDynamicParallelSubSteps(previewStep.parallel)
+        ? { dynamicSelectionMode: previewStep.parallel.selection.mode }
+        : {}),
+    };
+  }
+
   return {
+    kind: 'agent',
     name: step.name,
     personaDisplayName: previewStep.personaDisplayName,
-    personaContent: isParallelParent ? '' : readStepPersona(previewStep, projectCwd),
-    instructionContent: isParallelParent ? '' : previewStep.instruction,
-    allowedTools: isParallelParent ? [] : resolvePreviewAllowedTools(previewStep, resolution),
-    canEdit: isParallelParent ? false : resolvePreviewCanEdit(previewStep),
+    personaContent: readStepPersona(previewStep, projectCwd),
+    instructionContent: previewStep.instruction,
+    allowedTools: resolvePreviewAllowedTools(previewStep, resolution),
+    canEdit: resolvePreviewCanEdit(previewStep),
     ...(providerInfo?.provider !== undefined ? { provider: providerInfo.provider } : {}),
     ...(providerInfo?.model !== undefined ? { model: providerInfo.model } : {}),
-    sessionKey: previewStep.sessionKey,
-    requiresUserInput: previewStep.requiresUserInput,
+    ...(previewStep.sessionKey === undefined ? {} : { sessionKey: previewStep.sessionKey }),
+    ...(previewStep.requiresUserInput === undefined
+      ? {}
+      : { requiresUserInput: previewStep.requiresUserInput }),
     ...(context.parallelRole === undefined ? {} : { parallelRole: context.parallelRole }),
-    ...(previewStep.parallel !== undefined && isDynamicParallelSubSteps(previewStep.parallel)
-      ? { dynamicSelectionMode: previewStep.parallel.selection.mode }
-      : {}),
-    ...(substeps ? { substeps } : {}),
+    ...(substeps === undefined ? {} : { substeps }),
   };
 }
 
@@ -404,6 +447,9 @@ function buildFirstStepInfo(
 ): FirstStepInfo | undefined {
   const step = workflow.steps.find((candidate) => candidate.name === workflow.initialStep);
   if (!step) return undefined;
+  if (isWorkflowCallStep(step)) {
+    return undefined;
+  }
   const previewStep = resolvePreviewStep(step);
   return {
     personaContent: readStepPersona(previewStep, projectCwd),

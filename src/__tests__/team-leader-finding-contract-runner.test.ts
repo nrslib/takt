@@ -295,8 +295,8 @@ describe('TeamLeaderRunner finding_contract_fix', () => {
     let postExecutionCalls = 0;
     let workflowStepIterations: Record<string, number> = { fix: 1 };
     const stepExecutor = {
-      buildInstruction: vi.fn((step: WorkflowStep, _iteration, _state, _task, _max, _fallback, context) => {
-        if (!step.name.includes('.')) leaderContext = context;
+      buildInstruction: vi.fn((step: WorkflowStep, _iteration, _state, _task, _max, options) => {
+        if (!step.name.includes('.')) leaderContext = options.findingContractPolicy;
         return step.name.includes('.') ? step.instruction : 'leader instruction';
       }),
       buildPhase1Instruction: vi.fn((instruction: string) => instruction),

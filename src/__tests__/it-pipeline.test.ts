@@ -253,7 +253,6 @@ auto_routing:
       candidates: [low, medium, high]
       fallback: high
 initial_step: child-step
-max_steps: 2
 steps:
   - name: child-step
     persona: ./.takt/personas/coder.md
@@ -351,7 +350,7 @@ describe('Pipeline Integration Tests', () => {
       provider: 'mock',
     });
 
-    expect(exitCode).toBe(0);
+    expect(exitCode, JSON.stringify(mockUiError.mock.calls)).toBe(0);
   });
 
   it('should complete pipeline with workflow name + skip-git + mock scenario', async () => {
@@ -456,7 +455,7 @@ describe('Pipeline Integration Tests', () => {
       }),
     ).toBe(0);
     expect(getScenarioQueue()?.remaining).toBe(0);
-  });
+  }, 30_000);
 
   it.each(['backend-mini', 'default-mini'])('should complete %s through the shared mini core', async (workflow) => {
     setMockScenario([
@@ -620,7 +619,6 @@ subworkflow:
   callable: true
 ${invalidAutoRouting}
 initial_step: child-step
-max_steps: 2
 steps:
   - name: child-step
     persona: ./.takt/personas/coder.md

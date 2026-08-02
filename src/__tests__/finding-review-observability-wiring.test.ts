@@ -311,7 +311,7 @@ describe('finding reviewer observability wiring', () => {
     if (mode === 'full') {
       expect(startedSteps).toHaveLength(1);
       expect(completedSteps).toHaveLength(1);
-      expect(completedSteps[0]).toBe(startedSteps[0]);
+      expect(completedSteps[0]).toStrictEqual(startedSteps[0]);
     } else {
       expect(startedSteps).toHaveLength(0);
       expect(completedSteps).toHaveLength(0);

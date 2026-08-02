@@ -83,6 +83,7 @@ describe('WorkflowEngine agent overrides', () => {
 
   it('uses engine-level provider/model as resolved values when step provider/model is undefined', async () => {
     const step = makeStep('plan', {
+      provider: undefined,
       rules: [makeRule('done', 'COMPLETE')],
     });
     const config: WorkflowConfig = {
@@ -159,6 +160,7 @@ describe('WorkflowEngine agent overrides', () => {
 
     const engine = new WorkflowEngine(config, '/tmp/project', 'child env task', {
       projectCwd: '/tmp/project',
+      provider: 'mock',
       childProcessEnv,
     });
 

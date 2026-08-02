@@ -38,7 +38,9 @@ import type { PullRequestContext } from './pr-context.js';
 import type { DynamicParallelSelectionStore } from './dynamic-parallel/selection-store.js';
 import type { WorkflowCallInvocationEvidence } from './workflow-call-invocation-index.js';
 import type { WorkflowStepParticipationIndex } from './workflow-step-participation-index.js';
+import type { WorkflowExecutionScope } from './workflow-execution-scope.js';
 import type { SelectorGitCommandRunner } from './dynamic-parallel/selector-git-command-runner.js';
+import type { WorkflowStepBudget } from './workflow-step-budget.js';
 
 import type { ProviderType, StreamCallback, StreamEvent } from '../../shared/types/provider.js';
 
@@ -154,6 +156,7 @@ export interface StepRunResult {
   instruction: string;
   providerInfo?: StepProviderInfo;
   consumedStepIterations?: readonly string[];
+  rateLimitFallbackHandled?: true;
   qualityGateFailure?: {
     response: AgentResponse;
     stepIteration: number;
@@ -178,8 +181,8 @@ export interface RuntimeStepResolution {
 
 export interface WorkflowSharedRuntimeState {
   startedAtMs: number;
-  activeResumePoint?: WorkflowResumePoint;
-  maxSteps?: WorkflowMaxSteps;
+  stepBudget?: WorkflowStepBudget;
+  workflowCallProgressTracker?: import('./workflow-call-progress-tracker.js').WorkflowCallProgressTracker;
   dynamicParallelSelectionStore?: DynamicParallelSelectionStore;
   workflowCallInvocationEvidence?: WorkflowCallInvocationEvidence;
   workflowStepParticipationIndex?: WorkflowStepParticipationIndex;
@@ -226,6 +229,7 @@ export interface WorkflowRunResult {
 export interface WorkflowCallChildEngine {
   on: (event: string, listener: (...args: unknown[]) => void) => void;
   runWithResult: () => Promise<WorkflowRunResult>;
+  getOwnedResumePoint: () => WorkflowResumePoint | undefined;
 }
 
 export interface WorkflowCallResolutionRequest {
@@ -237,18 +241,47 @@ export interface WorkflowCallResolutionRequest {
 
 export type WorkflowCallResolver = (request: WorkflowCallResolutionRequest) => WorkflowConfig | null;
 
+export interface WorkflowCallLifecycle {
+  parentWorkflow: string;
+  step: string;
+  childWorkflow: string;
+  callInstance: number;
+  stack: WorkflowResumePointEntry[];
+}
+
+export interface WorkflowCallCompleteLifecycle extends WorkflowCallLifecycle {
+  result:
+    | {
+        status: 'completed';
+        returnValue?: string;
+      }
+      | {
+        status: 'aborted';
+        abortKind?: WorkflowAbortKind;
+        abortReason?: string;
+      }
+      | {
+        status: 'failed';
+        reason: string;
+      };
+}
+
 /** Events emitted by workflow engine */
 export interface WorkflowEvents {
+  'workflow_call:start': (lifecycle: WorkflowCallLifecycle) => void;
+  'workflow_call:complete': (lifecycle: WorkflowCallCompleteLifecycle) => void;
   'step:start': (
     step: WorkflowStep,
     iteration: number,
     instruction: string,
-    providerInfo: StepProviderInfo,
+    providerInfo: StepProviderInfo | undefined,
     workflowName: string,
     resumeStepName: string,
     stepIteration: number,
+    maxSteps: WorkflowMaxSteps,
+    scope: WorkflowExecutionScope,
   ) => void;
-  'step:complete': (step: WorkflowStep, response: AgentResponse, instruction: string, resumeStepName: string) => void;
+  'step:complete': (step: WorkflowStep, response: AgentResponse, instruction: string, resumeStepName: string, scope: WorkflowExecutionScope) => void;
   'routing:decision': (
     step: WorkflowStep,
     response: AgentResponse,
@@ -258,9 +291,16 @@ export interface WorkflowEvents {
     durationMs: number,
     iteration: number,
     workflowName: string,
+    scope: WorkflowExecutionScope,
   ) => void;
-  'step:report': (step: WorkflowStep, filePath: string, fileName: string) => void;
-  'findings:ledger': (ledger: FindingLedger) => void;
+  'step:report': (
+    step: WorkflowStep,
+    filePath: string,
+    fileName: string,
+    iteration: number,
+    scope: WorkflowExecutionScope,
+  ) => void;
+  'findings:ledger': (ledger: FindingLedger, iteration: number, scope: WorkflowExecutionScope) => void;
   'step:blocked': (step: WorkflowStep, response: AgentResponse) => void;
   'step:rate_limited': (step: WorkflowStep, response: AgentResponse, rateLimitInfo: AgentResponse['rateLimitInfo']) => void;
   'step:user_input': (step: WorkflowStep, userInput: string) => void;
@@ -272,6 +312,7 @@ export interface WorkflowEvents {
     promptParts: PhasePromptParts,
     phaseExecutionId?: string,
     iteration?: number,
+    scope?: WorkflowExecutionScope,
   ) => void;
   'phase:complete': (
     step: WorkflowStep,
@@ -282,6 +323,7 @@ export interface WorkflowEvents {
     error?: string,
     phaseExecutionId?: string,
     iteration?: number,
+    scope?: WorkflowExecutionScope,
   ) => void;
   'phase:judge_stage': (
     step: WorkflowStep,
@@ -290,10 +332,16 @@ export interface WorkflowEvents {
     entry: JudgeStageEntry,
     phaseExecutionId?: string,
     iteration?: number,
+    scope?: WorkflowExecutionScope,
   ) => void;
   'workflow:complete': (state: WorkflowState) => void;
   'workflow:abort': (state: WorkflowState, reason: string, kind: WorkflowAbortKind) => void;
-  'iteration:limit': (iteration: number, maxSteps: number) => void;
+  'iteration:limit': (
+    iteration: number,
+    maxSteps: number,
+    currentStep: string,
+    scope: WorkflowExecutionScope,
+  ) => void;
   'step:loop_detected': (step: WorkflowStep, consecutiveCount: number) => void;
   'step:cycle_detected': (monitor: LoopMonitorConfig, cycleCount: number) => void;
 }
@@ -316,6 +364,8 @@ export interface IterationLimitRequest {
   maxSteps: number;
   /** Current step name */
   currentStep: string;
+  /** Immutable workflow call stack for the branch that reached the limit. */
+  scope: WorkflowExecutionScope;
 }
 
 /** Callback for session updates (when persona session IDs change or clear) */

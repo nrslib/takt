@@ -1,7 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { AgentResponse, WorkflowConfig } from '../core/models/index.js';
+import type {
+  AgentResponse,
+  WorkflowConfig,
+  WorkflowResumePoint,
+  WorkflowStep,
+} from '../core/models/index.js';
 import type { ProviderType } from '../shared/types/provider.js';
 import type { WorkflowEngineOptions } from '../core/workflow/index.js';
 
@@ -39,10 +44,20 @@ import {
   createTestTmpDir,
   makeResponse,
   makeRule,
-  makeStep,
+  makeStep as makeEngineStep,
   mockRuleEvaluationSequence,
   mockRunAgentSequence,
 } from './engine-test-helpers.js';
+
+function makeStep(name: string, overrides: Partial<WorkflowStep> = {}): WorkflowStep {
+  const step = makeEngineStep(name, overrides);
+  if (overrides.provider !== undefined) {
+    return step;
+  }
+
+  const { provider: _provider, ...stepWithoutProvider } = step;
+  return stepWithoutProvider;
+}
 
 type RateLimitFallbackEngineOptions = WorkflowEngineOptions & {
   rateLimitFallback?: {
@@ -80,6 +95,68 @@ function makeRateLimitedResponse(
     },
     ...overrides,
   } as Partial<AgentResponse>);
+}
+
+function makeTerminalFallbackResponse(status: 'error' | 'blocked'): AgentResponse {
+  const content = `Fallback ${status}`;
+  return makeResponse({
+    persona: 'plan',
+    status,
+    content,
+    ...(status === 'error' ? { error: content } : {}),
+  });
+}
+
+function expectPendingFallbackCheckpoint(engine: WorkflowEngine): WorkflowResumePoint {
+  const state = engine.getState();
+  expect(state.iteration).toBe(0);
+  expect(state.stepIterations.get('plan')).toBeUndefined();
+  expect(state.pendingFallback).toEqual(expect.objectContaining({
+    stepName: 'plan',
+    originalIteration: 1,
+    currentProvider: 'codex',
+    currentModel: 'gpt-5',
+  }));
+  expect(state.rateLimitFallbackAttempts).toEqual([
+    { provider: 'claude', model: 'claude-sonnet' },
+    { provider: 'codex', model: 'gpt-5' },
+  ]);
+
+  const resumePoint = engine.getResumePoint();
+  if (resumePoint === undefined) {
+    throw new Error('Fallback resume point was not created');
+  }
+  expect(resumePoint).toEqual(expect.objectContaining({
+    iteration: 0,
+    stack: [expect.objectContaining({ step: 'plan' })],
+    pending_fallback: {
+      context: expect.objectContaining({
+        stepName: 'plan',
+        originalIteration: 1,
+        currentProvider: 'codex',
+        currentModel: 'gpt-5',
+      }),
+      attempts: [
+        { provider: 'claude', model: 'claude-sonnet' },
+        { provider: 'codex', model: 'gpt-5' },
+      ],
+    },
+  }));
+  return resumePoint;
+}
+
+function createResumedEngine(
+  config: WorkflowConfig,
+  tmpDir: string,
+  options: RateLimitFallbackEngineOptions,
+  resumePoint: WorkflowResumePoint,
+): WorkflowEngine {
+  return new WorkflowEngine(config, tmpDir, 'test task', {
+    ...options,
+    startStep: 'plan',
+    initialIteration: resumePoint.iteration,
+    resumePoint,
+  });
 }
 
 function singleStepConfig(): WorkflowConfig {
@@ -222,6 +299,138 @@ describe('WorkflowEngine rate limit fallback', () => {
       { resolvedProvider: 'codex', resolvedModel: 'gpt-5', sessionId: undefined },
     ]);
   });
+
+  it('rate-limit fallback の rollback と試行列を resume point から復元する', async () => {
+    const config = singleStepConfig();
+    const options = createEngineOptions(tmpDir, {
+      rateLimitFallback: {
+        switchChain: [{ provider: 'codex', model: 'gpt-5' }],
+      },
+    });
+    const firstEngine = new WorkflowEngine(config, tmpDir, 'test task', options);
+    mockRunAgentSequence([
+      makeRateLimitedResponse('claude'),
+      makeResponse({ persona: 'plan', content: '[STEP:1] continue' }),
+    ]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
+
+    const rateLimited = await firstEngine.runSingleIteration();
+    const resumePoint = firstEngine.getResumePoint();
+
+    expect(rateLimited.nextStep).toBe('plan');
+    expect(resumePoint).toEqual(expect.objectContaining({
+      iteration: 0,
+      stack: [expect.objectContaining({ step: 'plan' })],
+      pending_fallback: {
+        context: expect.objectContaining({
+          stepName: 'plan',
+          originalIteration: 1,
+          currentProvider: 'codex',
+          currentModel: 'gpt-5',
+        }),
+        attempts: [
+          { provider: 'claude', model: 'claude-sonnet' },
+          { provider: 'codex', model: 'gpt-5' },
+        ],
+      },
+    }));
+    if (resumePoint === undefined) throw new Error('Fallback resume point was not created');
+
+    const resumedEngine = new WorkflowEngine(config, tmpDir, 'test task', {
+      ...options,
+      startStep: 'plan',
+      initialIteration: resumePoint.iteration,
+      resumePoint,
+    });
+    const state = await resumedEngine.run();
+
+    expect(state.status).toBe('completed');
+    expect(state.iteration).toBe(1);
+    expect(state.stepIterations.get('plan')).toBe(1);
+    expect(providerCalls().map((call) => call.resolvedProvider)).toEqual(['claude', 'codex']);
+    expect(resumedEngine.getResumePoint()?.pending_fallback).toBeUndefined();
+  });
+
+  it.each(['error', 'blocked'] as const)(
+    '通常実行の fallback が %s の場合は同じ fallback 試行を checkpoint から再開する',
+    async (terminalStatus) => {
+      // Given
+      const config = singleStepConfig();
+      const options = createEngineOptions(tmpDir, {
+        rateLimitFallback: {
+          switchChain: [{ provider: 'codex', model: 'gpt-5' }],
+        },
+      });
+      const firstEngine = new WorkflowEngine(config, tmpDir, 'test task', options);
+      mockRunAgentSequence([
+        makeRateLimitedResponse('claude'),
+        makeTerminalFallbackResponse(terminalStatus),
+        makeResponse({ persona: 'plan', content: '[STEP:1] continue' }),
+      ]);
+      mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
+
+      // When
+      const failedState = await firstEngine.run();
+      const resumePoint = expectPendingFallbackCheckpoint(firstEngine);
+      const resumedEngine = createResumedEngine(config, tmpDir, options, resumePoint);
+      const resumedState = await resumedEngine.run();
+
+      // Then
+      expect(failedState.status).toBe('aborted');
+      expect(resumedState.status).toBe('completed');
+      expect(resumedState.iteration).toBe(1);
+      expect(resumedState.stepIterations.get('plan')).toBe(1);
+      expect(providerCalls()).toEqual([
+        { resolvedProvider: 'claude', resolvedModel: 'claude-sonnet', sessionId: undefined },
+        { resolvedProvider: 'codex', resolvedModel: 'gpt-5', sessionId: undefined },
+        { resolvedProvider: 'codex', resolvedModel: 'gpt-5', sessionId: undefined },
+      ]);
+      expect(resumedEngine.getResumePoint()?.pending_fallback).toBeUndefined();
+    },
+  );
+
+  it.each(['error', 'blocked'] as const)(
+    'runSingleIteration の fallback が %s の場合は同じ fallback 試行を checkpoint から再開する',
+    async (terminalStatus) => {
+      // Given
+      const config = singleStepConfig();
+      const options = createEngineOptions(tmpDir, {
+        rateLimitFallback: {
+          switchChain: [{ provider: 'codex', model: 'gpt-5' }],
+        },
+      });
+      const firstEngine = new WorkflowEngine(config, tmpDir, 'test task', options);
+      mockRunAgentSequence([
+        makeRateLimitedResponse('claude'),
+        makeTerminalFallbackResponse(terminalStatus),
+        makeResponse({ persona: 'plan', content: '[STEP:1] continue' }),
+      ]);
+      mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
+
+      // When
+      const rateLimited = await firstEngine.runSingleIteration();
+      const failed = await firstEngine.runSingleIteration();
+      const resumePoint = expectPendingFallbackCheckpoint(firstEngine);
+      const resumedEngine = createResumedEngine(config, tmpDir, options, resumePoint);
+      const resumed = await resumedEngine.runSingleIteration();
+
+      // Then
+      expect(rateLimited.nextStep).toBe('plan');
+      expect(rateLimited.isComplete).toBe(false);
+      expect(failed.nextStep).toBe('ABORT');
+      expect(failed.isComplete).toBe(true);
+      expect(resumed.nextStep).toBe('COMPLETE');
+      expect(resumed.isComplete).toBe(true);
+      expect(resumedEngine.getState().iteration).toBe(1);
+      expect(resumedEngine.getState().stepIterations.get('plan')).toBe(1);
+      expect(providerCalls()).toEqual([
+        { resolvedProvider: 'claude', resolvedModel: 'claude-sonnet', sessionId: undefined },
+        { resolvedProvider: 'codex', resolvedModel: 'gpt-5', sessionId: undefined },
+        { resolvedProvider: 'codex', resolvedModel: 'gpt-5', sessionId: undefined },
+      ]);
+      expect(resumedEngine.getResumePoint()?.pending_fallback).toBeUndefined();
+    },
+  );
 
   it('fallback provider も rate_limited の場合は switch_chain の次 provider を試す', async () => {
     // Given
@@ -672,26 +881,21 @@ describe('WorkflowEngine rate limit fallback', () => {
     expect(prompts[2]).toContain('claude');
     expect(prompts[2]).toContain('codex');
     expect(prompts[2]).toContain('arch-review');
-    expect(prompts[2]).toContain('security-review');
-    expect(prompts[2]).toContain('Aggregate rules were not evaluated');
+    expect(prompts[2]).not.toContain('security-review');
     expect(prompts[2]).toContain('Rate limit exceeded. Please try again later.');
     expect(prompts[3]).toContain('Fallback Execution');
-    expect(prompts[3]).toContain('claude');
-    expect(prompts[3]).toContain('codex');
-    expect(prompts[3]).toContain('arch-review');
+    expect(prompts[3]).not.toContain('arch-review');
     expect(prompts[3]).toContain('security-review');
-    expect(prompts[3]).toContain('Aggregate rules were not evaluated');
-    expect(prompts[3]).toContain('Rate limit exceeded. Please try again later.');
     expect(runAgent).toHaveBeenCalledTimes(4);
     expect(mockRuleEvaluation).toHaveBeenCalledTimes(3);
   });
 
-  it('parallel sub-step の rate_limited は別 sub-step の command gate failure より優先して fallback provider で再実行する', async () => {
+  it('parallel sub-step の fallback は対象 branch に限定し別 branch の command gate failure を保持する', async () => {
     // Given
     const gateMarkerPath = join(tmpDir, 'quality-gate-failed-once');
     const config = buildDefaultWorkflowConfig({
       initialStep: 'reviewers',
-      maxSteps: 3,
+      maxSteps: 10,
       steps: [
         makeStep('reviewers', {
           parallel: [
@@ -724,7 +928,8 @@ describe('WorkflowEngine rate limit fallback', () => {
       makeRateLimitedResponse('claude', { persona: 'arch-review' }),
       makeResponse({ persona: 'security-review', content: '[STEP:1] done' }),
       makeResponse({ persona: 'arch-review', content: '[STEP:1] done' }),
-      makeResponse({ persona: 'security-review', content: '[STEP:1] done' }),
+      makeResponse({ persona: 'arch-review', content: '[STEP:2] done' }),
+      makeResponse({ persona: 'security-review', content: '[STEP:2] done' }),
     ]);
     mockRuleEvaluationSequence([
       { index: 0, method: 'phase3_tag' },
@@ -737,14 +942,20 @@ describe('WorkflowEngine rate limit fallback', () => {
     const state = await engine.run();
 
     // Then
-    expect(state.status).toBe('completed');
+    expect(state.status).toBe('aborted');
     expect(existsSync(gateMarkerPath)).toBe(true);
-    expect(providerCalls().map((call) => call.resolvedProvider)).toEqual(['claude', 'claude', 'codex', 'codex']);
+    expect(providerCalls().map((call) => call.resolvedProvider)).toEqual([
+      'claude',
+      'claude',
+      'codex',
+      'claude',
+      'claude',
+    ]);
     const prompts = vi.mocked(runAgent).mock.calls.map((call) => call[1]);
     expect(prompts[2]).toContain('Fallback Execution');
-    expect(prompts[3]).toContain('Fallback Execution');
-    expect(prompts[2]).not.toContain('Quality gate failed');
-    expect(prompts[3]).not.toContain('Quality gate failed');
+    expect(prompts[2]).toContain('Quality gate failed');
+    expect(prompts[3]).not.toContain('Fallback Execution');
+    expect(prompts[4]).not.toContain('Fallback Execution');
   });
 
   it('parallel sub-step の report phase が rate_limited の場合も fallback provider で再実行する', async () => {
@@ -805,9 +1016,9 @@ describe('WorkflowEngine rate limit fallback', () => {
     expect(state.stepIterations.get('reviewers')).toBe(1);
     expect(state.stepIterations.get('arch-review')).toBe(1);
     expect(state.stepIterations.get('security-review')).toBe(1);
-    expect(providerCalls().map((call) => call.resolvedProvider)).toEqual(['claude', 'claude', 'codex', 'codex']);
-    expect(runReportPhase).toHaveBeenCalledTimes(4);
-    expect(mockRuleEvaluation).toHaveBeenCalledTimes(4);
+    expect(providerCalls().map((call) => call.resolvedProvider)).toEqual(['claude', 'claude', 'codex']);
+    expect(runReportPhase).toHaveBeenCalledTimes(3);
+    expect(mockRuleEvaluation).toHaveBeenCalledTimes(3);
   });
 
   it('parallel sub-step の provider が親 step と異なる場合は rate limit した sub-step provider を再選択しない', async () => {
@@ -859,12 +1070,12 @@ describe('WorkflowEngine rate limit fallback', () => {
 
     // Then
     expect(state.status).toBe('completed');
-    expect(providerCalls().map((call) => call.resolvedProvider)).toEqual(['codex', 'claude', 'opencode', 'opencode']);
+    expect(providerCalls().map((call) => call.resolvedProvider)).toEqual(['codex', 'claude', 'opencode']);
     const prompts = vi.mocked(runAgent).mock.calls.map((call) => call[1]);
     expect(prompts[2]).toContain('Previous provider/model: codex / gpt-5');
     expect(prompts[2]).toContain('Current provider/model: opencode / opencode/big-pickle');
-    expect(runAgent).toHaveBeenCalledTimes(4);
-    expect(mockRuleEvaluation).toHaveBeenCalledTimes(4);
+    expect(runAgent).toHaveBeenCalledTimes(3);
+    expect(mockRuleEvaluation).toHaveBeenCalledTimes(3);
   });
 
   it('team_leader の report phase が rate_limited の場合は previous response snapshot に保存しない', async () => {

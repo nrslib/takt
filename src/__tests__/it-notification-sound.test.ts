@@ -43,14 +43,17 @@ const {
 
     private runResolve: ((value: { status: string; iteration: number }) => void) | null = null;
     private onIterationLimit: ((req: unknown) => Promise<number | null>) | undefined;
+    private resumePoint: unknown;
+    private readonly workflowName: string;
 
     constructor(
-      _config: unknown,
+      config: { name: string },
       _cwd: string,
       _task: string,
       options: { onIterationLimit?: (req: unknown) => Promise<number | null> },
     ) {
       super();
+      this.workflowName = config.name;
       this.onIterationLimit = options?.onIterationLimit;
       MockWorkflowEngine.latestInstance = this;
     }
@@ -74,6 +77,20 @@ const {
     }
 
     async triggerIterationLimit(): Promise<void> {
+      this.resumePoint = {
+        version: 2,
+        stack: [{
+          workflow: this.workflowName,
+          step: 'step1',
+          kind: 'agent',
+          step_iterations: { step1: 1 },
+        }],
+        iteration: 10,
+        max_steps: 10,
+        elapsed_ms: 0,
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
+      };
       if (this.onIterationLimit) {
         await this.onIterationLimit({
           currentIteration: 10,
@@ -81,6 +98,10 @@ const {
           currentStep: 'step1',
         });
       }
+    }
+
+    getResumePoint(): unknown {
+      return this.resumePoint;
     }
 
     triggerRateLimited(): void {

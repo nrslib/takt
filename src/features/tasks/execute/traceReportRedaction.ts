@@ -2,6 +2,7 @@ import type {
   TraceStep,
   TraceReportMode,
   TraceReportParams,
+  TraceWorkflowCall,
 } from './traceReportTypes.js';
 import { sanitizeSensitiveText } from '../../../shared/utils/sensitiveText.js';
 
@@ -42,6 +43,29 @@ export function cloneStepsForMode(
         response: transformText(stage.response, mode),
       })),
     })),
+  }));
+}
+
+export function cloneWorkflowCallsForMode(
+  workflowCalls: TraceWorkflowCall[],
+  mode: TraceReportMode,
+): TraceWorkflowCall[] {
+  return workflowCalls.map((workflowCall) => ({
+    ...workflowCall,
+    result: workflowCall.result
+      ? {
+          ...workflowCall.result,
+          ...(workflowCall.result.returnValue !== undefined
+            ? { returnValue: transformText(workflowCall.result.returnValue, mode) }
+            : {}),
+          ...(workflowCall.result.abortReason !== undefined
+            ? { abortReason: transformText(workflowCall.result.abortReason, mode) }
+            : {}),
+          ...(workflowCall.result.reason !== undefined
+            ? { reason: transformText(workflowCall.result.reason, mode) }
+            : {}),
+        }
+      : undefined,
   }));
 }
 

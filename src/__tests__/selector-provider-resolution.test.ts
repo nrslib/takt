@@ -313,7 +313,6 @@ describe('workflow selector resolution', () => {
       'subworkflow:',
       '  callable: true',
       'initial_step: reviewers',
-      'max_steps: 1',
       'steps:',
       '  - name: reviewers',
       '    parallel:',
@@ -332,7 +331,6 @@ describe('workflow selector resolution', () => {
     writeFileSync(join(workflowDir, 'parent.yaml'), [
       'name: parent',
       'initial_step: delegate',
-      'max_steps: 1',
       'steps:',
       '  - name: delegate',
       '    kind: workflow_call',
@@ -366,7 +364,6 @@ describe('workflow selector resolution', () => {
       'subworkflow:',
       '  callable: true',
       'initial_step: reviewers',
-      'max_steps: 1',
       'steps:',
       '  - name: reviewers',
       '    parallel:',
@@ -385,7 +382,6 @@ describe('workflow selector resolution', () => {
     writeFileSync(join(workflowDir, 'parent.yaml'), [
       'name: parent',
       'initial_step: delegates',
-      'max_steps: 1',
       'steps:',
       '  - name: delegates',
       '    parallel:',

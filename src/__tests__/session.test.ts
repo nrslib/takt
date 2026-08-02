@@ -210,6 +210,30 @@ describe('NDJSON log', () => {
       expect(log!.history[0]!.matchedRuleMethod).toBe('phase3_tag');
     });
 
+    it('should use terminal iterations instead of the number of parallel step completions', () => {
+      const filepath = initTestNdjsonLog('sess-parallel', 'parallel task', 'wf', projectDir);
+      for (const step of ['review-a', 'review-b', 'reviewers']) {
+        appendNdjsonLine(filepath, {
+          type: 'step_complete',
+          step,
+          persona: step,
+          iteration: 2,
+          status: 'done',
+          content: `${step} done`,
+          instruction: 'Review',
+          timestamp: '2025-01-01T00:00:02.000Z',
+        } satisfies NdjsonStepComplete);
+      }
+      appendNdjsonLine(filepath, {
+        type: 'workflow_complete',
+        iterations: 2,
+        endTime: '2025-01-01T00:00:03.000Z',
+      } satisfies NdjsonWorkflowComplete);
+
+      expect(loadNdjsonLog(filepath)?.iterations).toBe(2);
+      expect(extractFailureInfo(filepath)?.iterations).toBe(2);
+    });
+
     it('should handle aborted workflow', () => {
       const filepath = initTestNdjsonLog('sess-004', 'failing task', 'wf', projectDir);
 

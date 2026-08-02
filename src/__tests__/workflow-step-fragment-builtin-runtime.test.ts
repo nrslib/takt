@@ -473,7 +473,6 @@ describe('builtin step fragment runtime contracts', () => {
       'subworkflow:',
       '  callable: true',
       'initial_step: review',
-      'max_steps: 1',
       'steps:',
       '  - name: review',
       '    persona: reviewer',
@@ -486,6 +485,7 @@ describe('builtin step fragment runtime contracts', () => {
     const workflow = loadWorkflowFromFile(parentPath, projectDir);
     const engine = new WorkflowEngine(workflow, projectDir, 'test task', {
       projectCwd: projectDir,
+      provider: 'mock',
       workflowCallResolver: ({ parentWorkflow, step, projectCwd, lookupCwd }) =>
         resolveWorkflowCallTarget(parentWorkflow, step, projectCwd, lookupCwd),
     });
@@ -543,10 +543,11 @@ describe('builtin step fragment runtime contracts', () => {
     expect(transitions).toEqual([
       'merge-readiness-review',
       'supervise',
-      'final-gate',
       ...(returnValue === 'needs_conflict_adjudication' ? ['finding-conflict-adjudication'] : []),
       ...(nextStep ? [nextStep] : []),
     ]);
-    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(nextStep ? 3 : 2);
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(
+      nextStep || returnValue === 'needs_conflict_adjudication' ? 3 : 2,
+    );
   });
 });
