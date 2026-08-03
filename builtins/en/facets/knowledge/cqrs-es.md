@@ -338,26 +338,16 @@ Event granularity:
 
 ## Event Evolution
 
-Event types affect persistence, so do not change type identifiers or payloads outside the requested change scope. When a requirement replaces the current event format, add replay, migration, or backward compatibility for old events only when the requirement source explicitly calls for it. When required, translate old events in the upcaster / migration layer at the event-store restoration boundary, not in event classes or domain logic.
-
-| Criteria | Judgment |
-|----------|----------|
-| Persisted event type or fields outside the requested change scope are changed | REJECT |
-| A translation path for old events is added or retained without an explicit compatibility or migration requirement | REJECT. Replace with the new format and remove the old path |
-| Current event type keeps old field aliases or compatibility-only properties | REJECT. Move them to an upcaster only under an explicit history-compatibility or migration requirement; otherwise remove them |
-| Aggregate or `apply` directly interprets old event shapes | REJECT. Convert before replay only under an explicit history-compatibility or migration requirement; otherwise remove old-shape interpretation |
-| Event adds "previous value" only for compatibility | REJECT. Events represent the fact after it happened |
-| An upcaster converts old payloads under an explicit migration requirement | OK |
-| Tests verify conversion for the explicitly required migration range | OK |
+Event evolution separates the current event contract, historical-payload translation, and state restoration through replay. Current event types and domain logic represent only current semantics. When historical payload translation is performed, the event-store restoration boundary converts the payloads before replay.
 
 Responsibilities in event evolution:
 
 | Responsibility | Location |
 |----------------|----------|
 | Current event meaning and fields | Event type |
-| Reading old payloads when explicitly required | Upcaster / migration layer |
+| Required historical-payload translation | Upcaster / migration layer |
 | State restoration from event replay | Aggregate `apply` |
-| Guarantee conversion for the explicitly required old-event range | Upcaster tests |
+| Guarantee conversion from historical payloads to current events | Upcaster tests |
 
 ```kotlin
 // NG - Mixing old field compatibility into the current event type
@@ -375,7 +365,7 @@ data class OrderAssignedEvent(
 ```
 
 ```kotlin
-// OK - Under an explicit migration requirement, convert old payloads in an upcaster
+// Example - Convert a historical payload at the restoration-boundary upcaster
 when (eventType) {
     OrderAssignedEvent::class.java.typeName -> {
         event.moveTextFieldToArray("assigneeId", "assigneeIds")
@@ -383,20 +373,19 @@ when (eventType) {
 }
 ```
 
-When the requirement source explicitly requires history migration, whether to keep old event types in application code depends on the framework and stated migration policy. In general, it is better not to treat old types as normal domain events. Instead, test the old serialized type and payload as input contracts for the upcaster, keeping the current model clean.
+When historical translation is designed, whether to keep old event types in application code depends on the framework and migration mechanism. In general, it is better not to treat old types as normal domain events. Instead, test the old serialized type and payload as input contracts for the upcaster, keeping the current model clean.
 
 ### Migration Scope Decomposition
 
 CQRS+ES migration must distinguish DB schema migration, data migration, event upcasters, Read Model rebuilds, and API compatibility work. Do not treat "migrate / do not migrate" as a single decision.
 
-| Criteria | Judgment |
-|----------|----------|
-| The user says migration is unnecessary, but the migration type is not decomposed | REJECT |
-| DB schema migration or data migration is added while the scope is unclear | REJECT |
-| An upcaster is added even though no persisted old events exist | REJECT |
-| Data migration is created even though the Read Model can be rebuilt from events | REJECT. Check whether rebuild is enough |
-| Add an upcaster only when the requirement source explicitly requires event payload migration or compatibility | OK |
-| Treat API compatibility and event compatibility as separate decisions | OK |
+| Migration type | Responsibility boundary |
+|----------------|-------------------------|
+| Database schema migration | Relational schema changes |
+| Data migration / backfill | Relational data transformation |
+| Event upcaster | Historical-payload translation during event-store restoration |
+| Read Model rebuild | Regeneration of projections derivable from events |
+| API compatibility | External consumer contract boundary |
 
 ## Command Handlers
 
@@ -410,16 +399,15 @@ CQRS+ES migration must distinguish DB schema migration, data migration, event up
 
 ### Contract Lifetimes of Commands and Events
 
-Events are long-lived contracts persisted as history, so do not change stored type identifiers and payloads outside the requested change scope. When a requirement changes the format, design replay through an upcaster, alias, or migration only if the requirement source explicitly calls for old-history compatibility, choosing the method from the event store and serialization strategy.
+Events are long-lived contracts persisted as history. When historical payload translation is performed, keep the current event type identifier and payload contract separate from the boundary that translates historical payloads into replayable form, choosing the translation mechanism from the event store and serialization strategy.
 
-Commands are usually short-lived messages created and handled at the application boundary, but some architectures persist them for scheduling, outbox delivery, retries, dead-letter handling, or audit. Inspect persisted references as impact scope, but do not create a compatibility requirement from their existence alone. Domain models should not depend on transport- or framework-specific command types; translate them into domain arguments and value objects at the application or adapter boundary.
+Commands are usually short-lived messages created and handled at the application boundary, but some architectures persist them for scheduling, outbox delivery, retries, dead-letter handling, or audit. Persisted references are impact boundaries to investigate when commands move or are renamed. Domain models should not depend on transport- or framework-specific command types; translate them into domain arguments and value objects at the application or adapter boundary.
 
 | Criteria | Judgment |
 |----------|----------|
 | A domain model directly receives a transport- or framework-specific command type | REJECT. Translate it into domain input at the application or adapter boundary |
 | An application message unused by domain classes sits in the domain package | Move it to the application boundary |
-| A command package is moved or renamed without checking for persisted references | REJECT. Check scheduling, outbox, retry, dead-letter, and audit storage as impact targets. Add compatibility or migration only when the requirement source explicitly calls for it |
-| An event-format replacement adds an unspecified compatibility path | REJECT. Report persisted data as impact evidence and implement only the requested new format |
+| A command package moves or is renamed | Check scheduling, outbox, retry, dead-letter, and audit storage as impact targets |
 
 Good command handler:
 ```

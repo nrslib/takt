@@ -639,6 +639,17 @@ Verification approach:
 2. Check if `/g` regexes are used with `test()`
 3. Check if the same regex is used with both `test()` and `replace()`
 
+## Contract Replacement and Compatibility or Migration
+
+When replacing a contract, migrate current consumers to the new contract and remove the superseded path. Consumer migration is not backward compatibility. Legacy support that accepts, translates, or retains a superseded contract may be added or retained only when the requirement source explicitly requires it, regardless of whether the old and new contracts coexist.
+
+| Criteria | Judgment |
+|----------|----------|
+| Observable existing contract outside the requested change scope | Preserve it |
+| Current consumer of an old contract targeted for replacement | Migrate it to the new contract |
+| Old-format production, reading, alias, fallback, conversion, upcaster, backfill, data migration, or rebuild added or retained as legacy support | REJECT unless the requirement source explicitly requires that support |
+| The requirement source explicitly requires legacy support | Implement only the stated target, period, and end condition, and verify the behavior |
+
 ## Prohibited
 
 - **Fallbacks are prohibited by default** - Do not write fallbacks using `?? 'unknown'`, `|| 'default'`, or swallowing via `try-catch`. Propagate errors upward. If absolutely necessary, add a comment explaining why
@@ -651,7 +662,7 @@ Verification approach:
 - **Sensitive information exposure** - Do not include sensitive data in hardcoded values, logs, error responses, or test output
 - **Scattered hardcoded contract strings** - File names and config key names must be defined as constants in one place. Scattered literals are prohibited
 - **Scattered try-catch** - Centralize error handling at the upper layer
-- **Unsolicited backward compatibility / legacy support** - REJECT. Production, reading, aliases, conversion, or fallback that keeps a replaced format, API, or path alongside the new contract may be added or retained only when explicitly instructed. Current code, existing tests, persisted data, or public or released status are not sufficient authority
+- **Unsolicited backward compatibility / legacy support** - REJECT. Production, reading, aliases, conversion, upcasters, fallback, backfill, data migration, or rebuilds that support a replaced format, API, or path may be added or retained only when the requirement source explicitly requires them. Current code, existing tests, persisted data, or public or released status are not sufficient authority
 - **Internal implementation exported from public API** - Only export domain-level functions and types. Do not export infrastructure functions or internal classes
 - **Replaced code surviving after refactoring** - Remove replaced code and exports. Do not keep unless explicitly told to
 - **Workarounds that bypass safety mechanisms** - If the root fix is correct, no additional bypass is needed

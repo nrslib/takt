@@ -495,7 +495,7 @@ Specific checks:
 
 2. When type definitions or interfaces are modified:
    - Documentation schema descriptions are updated
-   - Config files outside the requested change scope remain valid under the new schema. Check old-format reading only when the requirement source explicitly requires compatibility
+   - Config files outside the requested change scope remain valid under the new schema
 
 REJECT when these patterns are found:
 

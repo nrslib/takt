@@ -200,7 +200,7 @@ AI tends to over-deliver. Check for unnecessary additions.
 | Gold-plating | "Nice-to-have" additions not asked for |
 | Extra changes disguised as related work | Cleanup, renames, or moves justified only because they are near the edited code |
 | Incidental observable contract changes | Changing values observed by users or tests without being asked |
-| Unnecessary legacy support | Adding mapping/normalization logic for old values without explicit instruction |
+| Unnecessary legacy support | Adding old-format acceptance, translation, or retention logic without an explicit requirement-source mandate |
 
 The best code is the minimum code that solves the problem.
 
@@ -244,8 +244,8 @@ Verification approach:
 4. If the contract change is necessary, verify that reason and impact scope are explained
 
 Legacy support criteria:
-- Unless explicitly instructed to "support legacy values", "maintain backward compatibility", or "migrate old data", legacy support is REJECT
-- Do not add `.transform()` normalization, `LEGACY_*_MAP` mappings, or `@deprecated` type definitions
+- Unless the requirement source explicitly requires legacy-value support, backward compatibility, or old-data migration, legacy support is REJECT
+- Do not add `.transform()`, `LEGACY_*_MAP`, `@deprecated`, aliases, upcasters, fallback, backfill, data migration, or rebuilds that support a superseded contract, even when the old and new contracts do not coexist
 - Support only new values and keep it simple
 - Existing uses, persisted data, or public or released status are impact evidence, not authority to add or retain compatibility
 
@@ -372,12 +372,12 @@ Code to remove:
 | Pattern | Example | Verdict |
 |---------|---------|---------|
 | deprecated + no usage | `@deprecated` annotation with no one using it | Remove immediately |
-| Both old and new APIs exist | Old function remains alongside new function | Remove the old function and migrate consumers unless coexistence is explicitly required |
+| Old API or old-format translation path remains | Consumers use the new API, but an old function, alias, conversion, or fallback also remains | Remove it unless the requirement source explicitly requires legacy support |
 | Completed migration wrapper | Wrapper created for compatibility but migration is complete | Remove |
 | Comment says "remove later" | `// TODO: remove after migration` left abandoned | Remove now |
 | Excessive proxy/adapter usage | Complexity added solely for backward compatibility | Replace simply |
 
-Compatibility code to evaluate only when explicitly required:
+Legacy support to evaluate only when the requirement source explicitly requires it:
 
 | Pattern | Example | Verdict |
 |---------|---------|---------|

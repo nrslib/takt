@@ -8,7 +8,7 @@ Success means completing every fix unit and every completion obligation derived 
 **Important:**
 - Before editing, reconcile the plan's root cause, responsibility and source of truth, impact paths, methods, evidence, and completion criteria with the current code, Report Directory, and active constraints
 - Before editing, decompose each invariant into atomic completion obligations that identify the participating path and a counterexample that would fail when the invariant is broken; close behavior correction, consumer migration, obsolete-path removal, and existing-contract preservation separately before declaring completion
-- Preserve public APIs, parameters, return values, events, and persisted formats outside the requested change scope. When the plan replaces an old contract, migrate consumers and remove it instead of keeping it alongside the new contract unless the requirement source explicitly calls for backward compatibility or migration
+- Preserve public APIs, parameters, return values, events, and persisted formats outside the requested change scope. When the plan replaces an old contract, migrate consumers to the new contract and remove the old path. Keep consumer migration separate from legacy support; do not add or retain old-format production, reading, aliases, conversion, upcasters, fallback, backfill, data migration, or rebuilds without an explicit requirement-source mandate
 - If the plan conflicts under the same requirements and design assumptions, do not edit; provide evidence and report "Fix plan requires revision"
 - If task-level requirements or design must change, do not edit; provide evidence and report "Task-level replanning required"
 

@@ -85,4 +85,7 @@ tests:
         value: |
           Judge the plan by its executable meaning, not by exact wording or table shape. Pass only if it plans to replace both write and read paths with the new call-path namespace, migrate current in-repository callers and fixtures, remove the old iteration parser or fallback, and verify the new behavior directly.
 
+          - It plans a positive behavioral scenario that persists a resume record, restores it in a later execution, and proves that the same logical workflow-call instance is restored through the new namespace.
+          - It preserves unrelated resume behavior and plans regression evidence for that unchanged behavior.
+
           Fail if it plans dual-read, aliases, fallback parsing, conversion of old records, deprecation periods, version gates, or any other backward-compatibility or migration mechanism not requested by the task. Also fail if it treats existing code, fixtures, persisted-record risk, public-format status, or general safety as authority for keeping the old namespace.

@@ -12,7 +12,7 @@ In an existing system, contracts are not limited to explicit APIs. Values and st
 | Only file placement or type names change | May still be a maintenance contract change |
 | Closed internal duplication is removed | Internal change if impact is contained |
 
-Preserve observable behavior outside the requested change scope as an existing contract. When the requirement replaces an old format, API, or path, current code, tests, usage sites, and persisted data are evidence of impact, but not authority to keep the old contract alongside the new one. Design backward compatibility or migration only when the requirement source explicitly calls for it.
+Existing-contract preservation and legacy support are separate concerns. When a requirement replaces an old format, API, or path, current code, tests, usage sites, and persisted data provide evidence for impact and consumer migration. Authority to accept, translate, or retain the superseded contract comes from the requirement source, not from that evidence.
 
 ## Diff Classification
 

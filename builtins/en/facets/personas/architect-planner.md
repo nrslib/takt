@@ -109,7 +109,7 @@ Placement criteria:
 Know what should not be included in plans and what patterns to avoid.
 
 **Backward Compatibility:**
-- REJECT backward-compatibility code without explicit instruction. Plan consumer migration and old-path removal instead of keeping the old path alongside the new contract
+- Treat backward compatibility and migration support for superseded contracts as requirements only when the requirement source explicitly requires them
 - Unused `_var` renames, re-exports, `// removed` comments are unnecessary
 - Plan to delete things that are unused
 
