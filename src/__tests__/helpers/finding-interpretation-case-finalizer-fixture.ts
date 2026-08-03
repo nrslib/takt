@@ -194,7 +194,7 @@ export function settlePreparedConflictCase(input: {
   const preparedCase = input.prepared.cases[0];
   if (
     input.prepared.cases.length !== 1
-    || preparedCase?.action.kind !== 'open_conflict'
+    || preparedCase?.action.kind !== 'open_product_conflict'
     || input.prepared.managerOutput.conflicts.length !== 1
     || input.prepared.provisionalFindings.length !== 1
   ) {

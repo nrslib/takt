@@ -1,5 +1,5 @@
 import type { WorkflowConfig } from '../../../core/models/index.js';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { generateSessionId } from '../../../infra/fs/index.js';
 import { join } from 'node:path';
 import type {
@@ -301,15 +301,29 @@ function createFindingStorageResolver(input: {
   readonly cwd: string;
 }): FindingStorageResolver {
   const sourceRunSlug = input.resumeSource?.sourceRunSlug;
+  const sourceDatabasePath = sourceRunSlug === undefined
+    ? undefined
+    : buildRunPaths(input.cwd, sourceRunSlug).findingContractDatabaseAbs;
+  if (
+    input.resumeSource?.resumeMode === 'requeue'
+    && sourceRunSlug !== undefined
+    && sourceDatabasePath !== undefined
+    && !existsSync(sourceDatabasePath)
+  ) {
+    throw new Error(
+      `Requeue source run "${sourceRunSlug}" has no finding contract database: ${sourceDatabasePath}`,
+    );
+  }
   return new FindingStorageResolver({
     databasePath: input.runPaths.findingContractDatabaseAbs,
     runId: input.runPaths.slug,
     ...(sourceRunSlug === undefined
+      || sourceDatabasePath === undefined
+      || !existsSync(sourceDatabasePath)
       ? {}
       : {
           source: {
-            databasePath: buildRunPaths(input.cwd, sourceRunSlug)
-              .findingContractDatabaseAbs,
+            databasePath: sourceDatabasePath,
             runId: sourceRunSlug,
           },
         }),

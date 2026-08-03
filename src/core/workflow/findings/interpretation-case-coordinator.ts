@@ -60,7 +60,7 @@ export interface InterpretationCaseProofFastPathPlan
 export interface InterpretationCaseDirectPlan {
   plannedCase: InterpretationCase;
   items: CanonicalIntakeItem[];
-  decision: InterpretationDecision;
+  decision: Extract<InterpretationDecision, { kind: 'provisional' }>;
   roundIdentity: string;
   unreservedAuthority?: import('../../models/finding-contract-types.js').InterpretationUnreservedLandingAuthority;
 }

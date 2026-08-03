@@ -10,6 +10,7 @@ import {
   normalizeFindingLedgerMutation,
 } from '../../core/workflow/findings/ledger-mutation.js';
 import { FindingDatabase } from './database.js';
+import type { SourceAuthorityRaw } from './inherited-source-parser.js';
 
 interface AuthorityRow {
   readonly authorityKey: string;
@@ -182,13 +183,9 @@ export class FindingAuthorityRepository {
   }
 }
 
-export function readSourceAuthority(
+export function readSourceAuthorityRaw(
   database: DatabaseSync,
   authorityKey: string,
-): FindingLedger | undefined {
-  const row = readAuthorityRow(database, authorityKey);
-  if (row === undefined) {
-    return undefined;
-  }
-  return parseStoredLedger(row, row.workflowName);
+): SourceAuthorityRaw | undefined {
+  return readAuthorityRow(database, authorityKey);
 }

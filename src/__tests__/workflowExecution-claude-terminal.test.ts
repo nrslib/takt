@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkflowConfig } from '../core/models/index.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
+import { FindingDatabase } from '../infra/finding-storage/database.js';
 
 const terminalMocks = vi.hoisted(() => ({
   start: vi.fn().mockResolvedValue({ id: 'tmux-session', name: 'takt-claude-terminal' }),
@@ -267,6 +268,16 @@ describe('executeWorkflow claude-terminal integration', () => {
       operation_journal_run_slug: sourceMeta.operation_journal_run_slug,
       operation_claim_token: expect.any(String),
     });
+    FindingDatabase.openTarget({
+      databasePath: join(
+        projectDir,
+        '.takt',
+        'runs',
+        failedRunSlug,
+        'finding-contract.sqlite',
+      ),
+      runId: failedRunSlug,
+    }).close();
 
     terminalMocks.waitForAssistantResponse
       .mockResolvedValueOnce({
@@ -293,11 +304,11 @@ describe('executeWorkflow claude-terminal integration', () => {
     expect(resumedMeta.workflow).toBe('claude-terminal-workflow-phase3');
   });
 
-  it('source runが欠落したrequeueも新しいrunとして開始する', async () => {
+  it('source runのfinding DBが欠落したrequeueは空台帳へ縮退せず失敗する', async () => {
     const { executeWorkflow } = await import('../features/tasks/execute/workflowExecution.js');
     const targetRunSlug = '20260801-missing-source-resumed';
 
-    const resumed = await executeWorkflow(makeConfig(), 'resumed task', projectDir, {
+    await expect(executeWorkflow(makeConfig(), 'resumed task', projectDir, {
       projectCwd: projectDir,
       provider: 'claude-terminal',
       reportDirName: targetRunSlug,
@@ -305,20 +316,7 @@ describe('executeWorkflow claude-terminal integration', () => {
         sourceRunSlug: '20260801-missing-source',
         resumeMode: 'requeue',
       },
-    });
-
-    expect(resumed.success).toBe(true);
-    const resumedMeta = JSON.parse(await readFile(
-      join(projectDir, '.takt', 'runs', targetRunSlug, 'meta.json'),
-      'utf-8',
-    )) as {
-      source_run_slug?: string;
-      operation_journal_run_slug?: string;
-    };
-    expect(resumedMeta).toMatchObject({
-      source_run_slug: '20260801-missing-source',
-      operation_journal_run_slug: targetRunSlug,
-    });
+    })).rejects.toThrow(/has no finding contract database/);
   });
 
 });

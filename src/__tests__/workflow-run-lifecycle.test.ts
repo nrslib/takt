@@ -278,7 +278,7 @@ describe('workflow run lifecycle composition', () => {
     await finishRun(target);
   });
 
-  it('starts at Finding 0 when resume source has no finding-contract.sqlite', async () => {
+  it('fails before target Finding storage creation when requeue source has no finding-contract.sqlite', async () => {
     const cwd = createRoot();
     const sourcePaths = buildRunPaths(cwd, 'file-only-source');
     const sourceHandle = await createWorkflowRunLifecycle({
@@ -290,28 +290,19 @@ describe('workflow run lifecycle composition', () => {
     });
     expect(existsSync(sourceHandle.runPaths.findingContractDatabaseAbs)).toBe(false);
 
-    const targetWorkflow = workflow('target-workflow', true);
-    const target = await bindRun({
+    const targetRunSlug = 'fresh-target';
+    const targetPaths = buildRunPaths(cwd, targetRunSlug);
+    await expect(bindRun({
       cwd,
-      runSlug: 'fresh-target',
-      workflowConfig: targetWorkflow,
+      runSlug: targetRunSlug,
+      workflowConfig: workflow('target-workflow', true),
       resumeSource: {
         sourceRunSlug: sourcePaths.slug,
         resumeMode: 'requeue',
       },
-    });
-    const store = target.binding.findingAuthorityResolver.resolve({
-      workflowConfig: targetWorkflow,
-      runPaths: target.handle.runPaths,
-      runPathNamespace: [],
-    });
-
-    expect(store.loadLedger()).toMatchObject({
-      workflowName: 'target-workflow',
-      nextId: 1,
-      findings: [],
-    });
-    expect(existsSync(target.handle.runPaths.findingContractDatabaseAbs)).toBe(true);
-    await finishRun(target);
+    })).rejects.toThrow(
+      `Requeue source run "${sourcePaths.slug}" has no finding contract database: ${sourcePaths.findingContractDatabaseAbs}`,
+    );
+    expect(existsSync(targetPaths.findingContractDatabaseAbs)).toBe(false);
   });
 });

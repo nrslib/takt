@@ -45,6 +45,8 @@ import {
   appendRawFindingsWithCanonicalSnapshots,
 } from './raw-canonical-snapshot.js';
 import { captureFindingLifecycleHead } from './lifecycle-mutation.js';
+import { classifyConflictTarget } from './conflict-target.js';
+import { independentProvisionalIdentity } from './independent-provisional-identity.js';
 import type { ProvisionalFindingSpec } from './reconciler.js';
 import type {
   DeterministicSameProof,
@@ -70,9 +72,14 @@ export type PreparedInterpretationCaseAction =
       proofs: DeterministicSameProof[];
     }
   | {
-      kind: 'open_conflict';
+      kind: 'open_product_conflict';
       conflict: FindingManagerOutput['conflicts'][number];
       provisionalFinding: ProvisionalFindingSpec;
+    }
+  | {
+      kind: 'land_provisional_target';
+      rejectedConflictTargetFindingId: string;
+      provisionalFindings: ProvisionalFindingSpec[];
     }
   | {
       kind: 'provisional';
@@ -459,6 +466,49 @@ function prepareDecisionCase(input: {
       reason: 'Conflict target changed after interpretation completion',
     });
   }
+  const targetClassification = classifyConflictTarget({
+    ledger: input.ledger,
+    targetFindingId: validated.targetFindingId,
+  });
+  if (targetClassification.kind === 'provisional_target') {
+    const provisionalFindings = input.resolution.items.map((item): ProvisionalFindingSpec => {
+      const exact = targetClassification.targetIdentityHash === item.wire.targetIdentityHash
+        && targetClassification.claimIdentityHash === item.wire.claimIdentityHash
+        && targetClassification.semanticClaimIdentityHash === item.wire.semanticClaimIdentityHash;
+      const independent = independentProvisionalIdentity(item.wire);
+      return {
+        kind: exact
+          ? targetClassification.provisionalKind
+          : 'raw-adjudication-unresolved',
+        stableKey: exact
+          ? targetClassification.provisionalStableKey
+          : independent.independentStableKey,
+        lineageKey: exact
+          ? targetClassification.provisionalLineageKey
+          : independent.independentLineageKey,
+        sourceRawFindingIds: [item.wire.rawFindingId],
+        reason: exact ? 'attach_exact' : 'identity_unproven',
+        title: item.wire.title,
+        severity: item.wire.severity,
+        ...(item.wire.description === null ? {} : { description: item.wire.description }),
+        ...(item.wire.suggestion === null ? {} : { suggestion: item.wire.suggestion }),
+        reviewers: [item.wire.reviewer],
+        recoveryReviewerStableKey: item.canonical.reviewerStableKey,
+        target: item.wire.target,
+        targetIdentityHash: item.wire.targetIdentityHash,
+        claimIdentityHash: item.wire.claimIdentityHash,
+        semanticClaimIdentityHash: item.wire.semanticClaimIdentityHash,
+      };
+    });
+    return {
+      ...base,
+      action: {
+        kind: 'land_provisional_target',
+        rejectedConflictTargetFindingId: validated.targetFindingId,
+        provisionalFindings,
+      },
+    };
+  }
   const conflict = {
     findingIds: [validated.targetFindingId],
     rawFindingIds: base.rawFindingIds,
@@ -487,7 +537,7 @@ function prepareDecisionCase(input: {
   return {
     ...base,
     action: {
-      kind: 'open_conflict',
+      kind: 'open_product_conflict',
       conflict,
       provisionalFinding: provisionalSpec({
         caseId: input.expected.caseId,
@@ -594,9 +644,12 @@ function actionProjection(cases: readonly PreparedInterpretationCase[]): {
       case 'match_with_proof':
         managerOutput.matches.push(prepared.action.match);
         break;
-      case 'open_conflict':
+      case 'open_product_conflict':
         managerOutput.conflicts.push(prepared.action.conflict);
         provisionalFindings.push(prepared.action.provisionalFinding);
+        break;
+      case 'land_provisional_target':
+        provisionalFindings.push(...prepared.action.provisionalFindings);
         break;
       case 'provisional':
         provisionalFindings.push(...prepared.action.provisionalFindings);
@@ -999,7 +1052,7 @@ function outcomesAndLandingsForCase(input: {
         landings: [],
       };
     }
-    case 'open_conflict': {
+    case 'open_product_conflict': {
       if (productFindings.length > 0) {
         throw new Error(`Interpretation case "${prepared.caseId}" has an ambiguous conflict landing`);
       }
@@ -1046,6 +1099,42 @@ function outcomesAndLandingsForCase(input: {
           };
         }),
         landings,
+      };
+    }
+    case 'land_provisional_target': {
+      if (productFindings.length > 0 || conflicts.length > 0) {
+        throw new Error(`Interpretation case "${prepared.caseId}" has an ambiguous provisional target landing`);
+      }
+      return {
+        outcomes: prepared.rawFindingIds.map((rawFindingId) => {
+          const spec = exactlyOne(
+            action.provisionalFindings.filter((candidate) => (
+              candidate.sourceRawFindingIds.includes(rawFindingId)
+            )),
+            `provisional target landing spec for raw finding "${rawFindingId}"`,
+          );
+          const provisional = exactlyOne(
+            ledger.findings.filter((finding) => (
+              finding.status === 'open'
+              && finding.provisional?.stableKey === spec.stableKey
+              && finding.rawFindingIds.includes(rawFindingId)
+            )),
+            `provisional target landing for raw finding "${rawFindingId}"`,
+          );
+          return {
+            rawFindingId,
+            kind: 'provisional' as const,
+            provisionalFindingId: provisional.id,
+            landingEventId: landingEventId({
+              ledger,
+              entityKind: 'finding',
+              entityId: provisional.id,
+              rawFindingId,
+              caseId: prepared.caseId,
+            }),
+          };
+        }),
+        landings: [],
       };
     }
     case 'provisional': {
@@ -1187,6 +1276,7 @@ function appendOriginSettlements(input: {
           : resolution.application.classification === 'decision_rejected_stale'
             ? 'case_decision_rejected_stale'
             : input.prepared.action.kind === 'provisional'
+              || input.prepared.action.kind === 'land_provisional_target'
               ? 'case_decision_provisional'
               : 'origin_not_targeted',
       },

@@ -6,6 +6,7 @@ import type {
 } from './types.js';
 import type { CanonicalIntakeItem } from './manager-admission.js';
 import { captureFindingLifecycleHead } from './lifecycle-mutation.js';
+import { hasUnsettledActiveConflictOwnership } from './conflict-ownership.js';
 
 const FRESH_SETTLEMENT_KINDS = new Set<FindingProvisionalKind>([
   'raw-meaning-ambiguous',
@@ -99,11 +100,11 @@ export function planInterpretationOriginAttachments(input: {
     throw new Error('Interpretation origin attachment round must be a positive safe integer');
   }
   const activeOrigins = activeBoundOriginIds(input.ledger);
-  const conflictHoldingIds = new Set(
-    input.ledger.conflictRawClaimLandings.map(({ holdingFindingId }) => holdingFindingId),
-  );
   const candidates = input.ledger.findings.flatMap((finding) => {
-    if (activeOrigins.has(finding.id) || conflictHoldingIds.has(finding.id)) {
+    if (
+      activeOrigins.has(finding.id)
+      || hasUnsettledActiveConflictOwnership(input.ledger, finding.id)
+    ) {
       return [];
     }
     const candidate = originCandidate(input.ledger, finding.id, input.currentRound);

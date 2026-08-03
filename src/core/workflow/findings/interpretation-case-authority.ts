@@ -38,8 +38,8 @@ export function issueInterpretationCaseConflictAuthority(input: {
   preparedCase: PreparedInterpretationCase;
   items: readonly CanonicalIntakeItem[];
 }): InterpretationCaseConflictAuthority {
-  if (input.preparedCase.action.kind !== 'open_conflict') {
-    throw new Error('Interpretation case conflict authority requires an open_conflict action');
+  if (input.preparedCase.action.kind !== 'open_product_conflict') {
+    throw new Error('Interpretation case conflict authority requires an open_product_conflict action');
   }
   if (input.preparedCase.attemptId === null) {
     throw new Error('Interpretation case conflict authority requires a completed attempt');

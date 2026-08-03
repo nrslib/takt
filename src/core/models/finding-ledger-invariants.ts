@@ -20,14 +20,35 @@ import {
   computeInterpretationOriginSettlementId,
   computeRawCanonicalSnapshotId,
   computeRawPayloadDigest,
+  binarySortedUnique,
+  computeLegacyProvisionalConflictBatchFingerprintDigest,
+  computeProvisionalConflictDecisionDigest,
+  computeProvisionalConflictFinalIntentDigest,
+  computeProvisionalConflictAssociationId,
+  computeProvisionalConflictNormalizationId,
+  computeProvisionalConflictNormalizationSettlementId,
+  computeProvisionalConflictNormalizationSnapshotId,
+  computeProvisionalConflictNormalizationSubjectId,
+  computeProvisionalConflictProofUniverseDigest,
+  computeProvisionalConflictReleaseWitnessId,
+  computeRawProvisionalExactClaimIdentityDigest,
   computeTerminalAttemptId,
   computeTerminalEpisodeId,
   computeTerminalSelectionId,
   computeTerminalSettlementId,
+  findingContentAddress,
 } from './finding-contract-identity.js';
+import { computeFindingLifecycleProjectionDigest } from './finding-lifecycle-identity.js';
 import { findingScopeBindingDependencyViolation } from './finding-scope-binding-dependencies.js';
 import { hasVerifiedOrdinaryLifecycleCoverage } from './finding-lifecycle-continuity.js';
-import type { FindingContractLedgerRegistries } from './finding-contract-types.js';
+import type {
+  FindingContractLedgerRegistries,
+  ProvisionalConflictNormalizationDecision,
+  ProvisionalConflictNormalizationFinalFindingIntent,
+  ProvisionalConflictNormalizationFinalFindingProjection,
+  ProvisionalConflictNormalizationSnapshot,
+  RawCanonicalSnapshot,
+} from './finding-contract-types.js';
 import { formatConflictId, type ConflictIdentity } from './finding-conflict-identity.js';
 import { computeInterpretationAttemptId } from './finding-interpretation-identity.js';
 import {
@@ -774,6 +795,374 @@ function collectOutcomeViolations(
   });
 }
 
+interface ReconstructedNormalizationSubjectClaim {
+  rawFindingIds: string[];
+  reviewerIds: string[];
+  evidenceIds: string[];
+}
+
+function reconstructNormalizationSubjectClaim(input: {
+  projection: FindingLedgerProjectionInvariantInput;
+  subject: ProvisionalConflictNormalizationSnapshot['subjects'][number];
+}): ReconstructedNormalizationSubjectClaim | null {
+  const { subject } = input;
+  if (
+    subject.targetIdentityHash === null
+    || subject.claimIdentityHash === null
+    || subject.semanticClaimIdentityHash === null
+    || subject.sourceRawFindingIds.length === 0
+    || binarySortedUnique(subject.sourceRawFindingIds).length !== subject.sourceRawFindingIds.length
+  ) {
+    return null;
+  }
+  const raws: RawFinding[] = [];
+  const snapshots: RawCanonicalSnapshot[] = [];
+  for (const rawFindingId of subject.sourceRawFindingIds) {
+    const matchingRaws = input.projection.rawFindings.filter(
+      (raw) => raw.rawFindingId === rawFindingId,
+    );
+    const matchingSnapshots = input.projection.rawCanonicalSnapshots.filter(
+      (snapshot) => snapshot.rawFindingId === rawFindingId,
+    );
+    if (matchingRaws.length !== 1 || matchingSnapshots.length !== 1) {
+      return null;
+    }
+    const raw = matchingRaws[0]!;
+    const snapshot = matchingSnapshots[0]!;
+    if (
+      snapshot.targetIdentityHash !== subject.targetIdentityHash
+      || snapshot.claimIdentityHash !== subject.claimIdentityHash
+      || snapshot.semanticClaimIdentityHash !== subject.semanticClaimIdentityHash
+      || computeConflictRawClaimSnapshotDigest(snapshot) !== subject.claimSnapshotDigest
+    ) {
+      return null;
+    }
+    raws.push(raw);
+    snapshots.push(snapshot);
+  }
+  const payloadDigests = snapshots.map((snapshot) => snapshot.rawPayloadDigest);
+  if (
+    payloadDigests.length !== subject.sourceRawPayloadDigests.length
+    || !sameSet(payloadDigests, subject.sourceRawPayloadDigests)
+  ) {
+    return null;
+  }
+  const bindings = subject.evidenceBindingIds.map((bindingId) => {
+    const matches = input.projection.evidenceBindings.filter(
+      (binding) => binding.bindingId === bindingId,
+    );
+    return matches.length === 1 ? matches[0]! : null;
+  });
+  if (bindings.some((binding) => (
+    binding === null
+    || binding.target.entityKind !== 'finding'
+    || binding.target.entityId !== subject.findingId
+  ))) {
+    return null;
+  }
+  const evidenceIds = binarySortedUnique(bindings.map((binding) => binding!.evidenceId));
+  if (subject.evidenceSetDigest !== findingContentAddress('conflict-subject-evidence-set', {
+    findingId: subject.findingId,
+    evidenceBindingIds: binarySortedUnique(subject.evidenceBindingIds),
+    evidenceIds,
+  })) {
+    return null;
+  }
+  return {
+    rawFindingIds: binarySortedUnique(subject.sourceRawFindingIds),
+    reviewerIds: binarySortedUnique(raws.map((raw) => raw.reviewer)),
+    evidenceIds,
+  };
+}
+
+function reconstructNormalizationFinalIntent(input: {
+  ledgerProjection: FindingLedgerProjectionInvariantInput;
+  snapshot: ProvisionalConflictNormalizationSnapshot;
+  decisions: readonly ProvisionalConflictNormalizationDecision[];
+  projection: ProvisionalConflictNormalizationFinalFindingProjection;
+}): ProvisionalConflictNormalizationFinalFindingIntent | null {
+  const subjects = input.snapshot.subjects.filter(
+    (subject) => subject.findingId === input.projection.findingId,
+  );
+  if (subjects.length !== 1) {
+    return null;
+  }
+  const ownSubject = subjects[0]!;
+  const after = input.projection.after;
+  if (after.status === 'superseded') {
+    if (after.supersededByFindingId === undefined || after.lifecycle !== 'superseded') {
+      return null;
+    }
+    const withoutDigest = {
+      kind: 'superseded' as const,
+      findingId: after.id,
+      expectedHead: ownSubject.expectedHead,
+      sourceSubjectIds: [ownSubject.subjectId],
+      afterRevision: after.revision,
+      afterLifecycle: 'superseded' as const,
+      supersededByFindingId: after.supersededByFindingId,
+      provisionalAfter: null as null,
+    };
+    return {
+      ...withoutDigest,
+      intentDigest: computeProvisionalConflictFinalIntentDigest(withoutDigest),
+    };
+  }
+  if (after.status !== 'open' || after.lifecycle !== 'persists' || after.provisional === undefined) {
+    return null;
+  }
+  const absorbedDecisions = input.decisions.filter((decision) => (
+    decision.outcome === 'bundled_into_provisional'
+    && decision.targetFindingId === after.id
+  ));
+  const sourceSubjectIds = binarySortedUnique([
+    ownSubject.subjectId,
+    ...absorbedDecisions.map((decision) => decision.subjectId),
+  ]);
+  const sourceClaims = sourceSubjectIds.map((subjectId) => {
+    const sourceSubjects = input.snapshot.subjects.filter(
+      (subject) => subject.subjectId === subjectId,
+    );
+    return sourceSubjects.length === 1
+      ? reconstructNormalizationSubjectClaim({
+          projection: input.ledgerProjection,
+          subject: sourceSubjects[0]!,
+        })
+      : null;
+  });
+  if (sourceClaims.some((claim) => claim === null)) {
+    return null;
+  }
+  const withoutDigest = {
+    kind: 'open_provisional' as const,
+    findingId: after.id,
+    expectedHead: ownSubject.expectedHead,
+    sourceSubjectIds,
+    afterRevision: after.revision,
+    afterLifecycle: 'persists' as const,
+    stableKey: after.provisional.stableKey,
+    lineageKey: after.provisional.lineageKey,
+    rawFindingIds: binarySortedUnique([...new Set(
+      sourceClaims.flatMap((claim) => claim!.rawFindingIds),
+    )]),
+    provisionalSourceRawFindingIds: binarySortedUnique(
+      [...new Set(sourceClaims.flatMap((claim) => claim!.rawFindingIds))],
+    ),
+    reviewerIds: binarySortedUnique([...new Set(
+      sourceClaims.flatMap((claim) => claim!.reviewerIds),
+    )]),
+    evidenceIds: binarySortedUnique([...new Set(
+      sourceClaims.flatMap((claim) => claim!.evidenceIds),
+    )]),
+    absorbedFindingIds: binarySortedUnique(
+      absorbedDecisions.map((decision) => decision.findingId),
+    ),
+  };
+  return {
+    ...withoutDigest,
+    intentDigest: computeProvisionalConflictFinalIntentDigest(withoutDigest),
+  };
+}
+
+function normalizationProjectionMatchesIntent(
+  projection: ProvisionalConflictNormalizationFinalFindingProjection,
+  intent: ProvisionalConflictNormalizationFinalFindingIntent,
+): boolean {
+  if (intent.kind === 'superseded') {
+    return true;
+  }
+  const after = projection.after;
+  return after.status === 'open'
+    && after.provisional !== undefined
+    && sameSet(after.rawFindingIds, intent.rawFindingIds)
+    && sameSet(after.provisional.sourceRawFindingIds, intent.provisionalSourceRawFindingIds)
+    && sameSet(after.reviewers, intent.reviewerIds)
+    && sameSet(after.evidenceIds, intent.evidenceIds);
+}
+
+function recomputeNormalizationBatchFingerprint(input: {
+  projection: FindingLedgerProjectionInvariantInput;
+  snapshot: ProvisionalConflictNormalizationSnapshot;
+  finalIntents: readonly ProvisionalConflictNormalizationFinalFindingIntent[];
+}): string | null {
+  const verifiedIdentities = input.snapshot.subjects.map((subject) => {
+    const claim = reconstructNormalizationSubjectClaim({
+      projection: input.projection,
+      subject,
+    });
+    if (claim === null) {
+      return null;
+    }
+    const canonicalSnapshotIds = subject.sourceRawFindingIds.map((rawFindingId) => (
+      input.projection.rawCanonicalSnapshots.find(
+        (snapshot) => snapshot.rawFindingId === rawFindingId,
+      )!.rawCanonicalSnapshotId
+    ));
+    return {
+      findingId: subject.findingId,
+      role: subject.role,
+      targetIdentityHash: subject.targetIdentityHash!,
+      claimIdentityHash: subject.claimIdentityHash!,
+      semanticClaimIdentityHash: subject.semanticClaimIdentityHash!,
+      claimSnapshotDigest: subject.claimSnapshotDigest,
+      rawFindingIds: binarySortedUnique(subject.sourceRawFindingIds),
+      rawCanonicalSnapshotIds: binarySortedUnique(canonicalSnapshotIds as string[]),
+    };
+  });
+  if (verifiedIdentities.some((identity) => identity === null)) {
+    return null;
+  }
+  return computeLegacyProvisionalConflictBatchFingerprintDigest({
+    conflictIds: input.snapshot.conflicts.map((conflict) => conflict.conflictId),
+    provisionalTargetFindingIds: input.snapshot.subjects.flatMap((subject) => (
+      subject.role === 'provisional_target' ? [subject.findingId] : []
+    )),
+    holdingFindingIds: input.snapshot.subjects.flatMap((subject) => (
+      subject.role === 'holding_provisional' ? [subject.findingId] : []
+    )),
+    holdingOwners: input.snapshot.subjects.flatMap((subject) => (
+      subject.role === 'holding_provisional'
+        ? [{
+            holdingFindingId: subject.findingId,
+            conflictId: subject.conflictId,
+            rawClaimLandingIds: binarySortedUnique(subject.rawClaimLandingIds),
+          }]
+        : []
+    )),
+    verifiedIdentities: verifiedIdentities as Array<NonNullable<(typeof verifiedIdentities)[number]>>,
+    finalFindingIntents: input.finalIntents,
+  });
+}
+
+function normalizationSnapshotBindingInvalid(
+  projection: FindingLedgerProjectionInvariantInput,
+  snapshot: ProvisionalConflictNormalizationSnapshot,
+): boolean {
+  const subjectsById = new Map(snapshot.subjects.map((subject) => [subject.subjectId, subject]));
+  if (subjectsById.size !== snapshot.subjects.length) {
+    return true;
+  }
+  for (const conflict of snapshot.conflicts) {
+    const subjects = snapshot.subjects.filter((subject) => subject.conflictId === conflict.conflictId);
+    if (
+      !sameSet(
+        conflict.provisionalTargetSubjectIds,
+        subjects.flatMap((subject) => subject.role === 'provisional_target' ? [subject.subjectId] : []),
+      )
+      || !sameSet(
+        conflict.holdingSubjectIds,
+        subjects.flatMap((subject) => subject.role === 'holding_provisional' ? [subject.subjectId] : []),
+      )
+      || !sameSet(
+        conflict.findingIds,
+        subjects.flatMap((subject) => subject.role === 'provisional_target' ? [subject.findingId] : []),
+      )
+      || !sameSet(
+        conflict.rawClaimLandingIds,
+        subjects.flatMap((subject) => subject.rawClaimLandingIds),
+      )
+    ) {
+      return true;
+    }
+  }
+  const mechanicalAssociationIds: string[] = [];
+  for (const candidate of snapshot.proofUniverse.candidateAssociations) {
+    const source = subjectsById.get(candidate.sourceHoldingSubjectId);
+    const target = subjectsById.get(candidate.targetSubjectId);
+    const { associationId: _associationId, ...associationIdentity } = candidate;
+    void _associationId;
+    if (
+      source?.role !== 'holding_provisional'
+      || target?.role !== candidate.targetSubjectRole
+      || candidate.associationId !== computeProvisionalConflictAssociationId(associationIdentity)
+      || (candidate.basis === 'conflict_target'
+        && (target.role !== 'provisional_target' || source.conflictId !== target.conflictId))
+      || (candidate.basis === 'independent_key_collision'
+        && (
+          target.role !== 'holding_provisional'
+          || source.independentStableKey !== target.independentStableKey
+          || source.subjectId === target.subjectId
+        ))
+    ) {
+      return true;
+    }
+    if (
+      source.targetIdentityHash === target.targetIdentityHash
+      && source.claimIdentityHash === target.claimIdentityHash
+      && source.semanticClaimIdentityHash === target.semanticClaimIdentityHash
+    ) {
+      mechanicalAssociationIds.push(candidate.associationId);
+    }
+  }
+  const proofAssociationIds: string[] = [];
+  for (const proofRecordId of snapshot.proofUniverse.trustedProofRecordIds) {
+    const records = projection.evidenceRecords.filter((record) => (
+      record.kind === 'engine_proof' && record.proofId === proofRecordId
+    ));
+    const record = records[0];
+    if (
+      records.length !== 1
+      || record?.kind !== 'engine_proof'
+      || record.purpose !== 'lifecycle_authority'
+      || record.verifierId !== snapshot.proofUniverse.trustedVerifierId
+      || record.verifierVersion !== snapshot.proofUniverse.trustedVerifierVersion
+      || record.subject.kind !== 'provisional_conflict_association_identical'
+    ) {
+      return true;
+    }
+    const proofSubject = record.subject;
+    const candidate = snapshot.proofUniverse.candidateAssociations.find(
+      (association) => association.associationId === proofSubject.associationId,
+    );
+    const source = candidate === undefined
+      ? undefined
+      : subjectsById.get(candidate.sourceHoldingSubjectId);
+    const target = candidate === undefined
+      ? undefined
+      : subjectsById.get(candidate.targetSubjectId);
+    if (
+      candidate === undefined
+      || source === undefined
+      || target === undefined
+      || proofSubject.sourceHoldingSubjectId !== source.subjectId
+      || proofSubject.targetSubjectId !== target.subjectId
+      || proofSubject.targetSubjectRole !== target.role
+      || !sameValue(proofSubject.sourceExpectedHead, source.expectedHead)
+      || !sameValue(proofSubject.targetExpectedHead, target.expectedHead)
+      || proofSubject.sourceClaimSnapshotDigest !== source.claimSnapshotDigest
+      || proofSubject.targetClaimSnapshotDigest !== target.claimSnapshotDigest
+      || record.targetFindingId !== target.findingId
+      || record.claimIdentityHash !== source.claimIdentityHash
+      || source.targetIdentityHash === null
+      || source.claimIdentityHash === null
+      || source.semanticClaimIdentityHash === null
+      || source.claimIdentityHash !== target.claimIdentityHash
+      || !sameSet(record.dependencyDigests, [
+        source.expectedHead.projectionDigest,
+        target.expectedHead.projectionDigest,
+        source.claimSnapshotDigest,
+        target.claimSnapshotDigest,
+      ].filter((digest, index, digests) => digests.indexOf(digest) === index))
+      || proofSubject.exactClaimIdentityDigest
+        !== computeRawProvisionalExactClaimIdentityDigest({
+          targetIdentityHash: source.targetIdentityHash!,
+          claimIdentityHash: source.claimIdentityHash!,
+          semanticClaimIdentityHash: source.semanticClaimIdentityHash!,
+        })
+    ) {
+      return true;
+    }
+    proofAssociationIds.push(candidate.associationId);
+  }
+  return !sameSet(
+    snapshot.proofUniverse.mechanicalExactAssociationIds,
+    mechanicalAssociationIds,
+  ) || !sameSet(
+    snapshot.proofUniverse.provenAssociationIds,
+    binarySortedUnique([...new Set([...mechanicalAssociationIds, ...proofAssociationIds])]),
+  );
+}
+
 function collectConflictAndTerminalIdentityViolations(
   projection: FindingLedgerProjectionInvariantInput,
   violations: Violation[],
@@ -862,7 +1251,15 @@ function collectConflictAndTerminalIdentityViolations(
     } else {
       allocationByHoldingId.set(landing.holdingFindingId, landing.holdingAllocationId);
     }
+    const landingSettled = projection.conflictClaimSettlements.some((settlement) => (
+      settlement.conflictId === landing.conflictId
+      && settlement.subjectRole === 'holding_provisional'
+      && settlement.rawClaimLandingIds.includes(landing.rawClaimLandingId)
+    ));
     if (
+      conflict?.status === 'active'
+      && !landingSettled
+      &&
       holding?.provisional !== undefined
       && holding.provisional.stableKey !== computeConflictHoldingStableKey({
         conflictId: landing.conflictId,
@@ -876,7 +1273,7 @@ function collectConflictAndTerminalIdentityViolations(
         `Conflict holding "${landing.holdingFindingId}" has an invalid allocation stable key`,
       );
     }
-    if (conflict?.status === 'active') {
+    if (conflict?.status === 'active' && !landingSettled) {
       const owner = activeHoldingOwners.get(landing.holdingFindingId);
       if (owner !== undefined && owner !== landing.conflictId) {
         addViolation(
@@ -901,6 +1298,45 @@ function collectConflictAndTerminalIdentityViolations(
       );
     }
   }
+  projection.lifecycleReservations.forEach((reservation, index) => {
+    if (
+      reservation.operation !== 'reactivate_conflict'
+      || reservation.authority.kind !== 'conflict_reactivation'
+    ) {
+      return;
+    }
+    const authority = reservation.authority;
+    const reactivationEvent = projection.lifecycleEvents.find(
+      (event) => event.reservationId === reservation.reservationId,
+    );
+    const claimsValid = authority.newRawClaims.every((claim) => {
+      const landing = projection.conflictRawClaimLandings.find(
+        (candidate) => candidate.rawClaimLandingId === claim.rawClaimLandingId,
+      );
+      return landing !== undefined
+        && landing.conflictId === authority.conflictId
+        && landing.rawFindingId === claim.rawFindingId
+        && landing.rawCanonicalSnapshotId === claim.rawCanonicalSnapshotId
+        && landing.rawPayloadDigest === claim.rawPayloadDigest
+        && landing.claimSnapshotDigest === claim.claimSnapshotDigest
+        && landing.holdingAllocationId === claim.holdingAllocationId
+        && landing.holdingFindingId === claim.holdingFindingId;
+    });
+    if (
+      reactivationEvent?.operation !== 'reactivate_conflict'
+      || !reactivationEvent.transitions.some((transition) => (
+        transition.after.entityKind === 'conflict'
+        && transition.after.entityId === authority.conflictId
+      ))
+      || !claimsValid
+    ) {
+      addViolation(
+        violations,
+        ['lifecycleReservations', index, 'authority'],
+        `Conflict reactivation "${authority.conflictId}" has incomplete claim landing coverage`,
+      );
+    }
+  });
   projection.conflicts.forEach((conflict, index) => {
     const landingRawIds = projection.conflictRawClaimLandings
       .filter((landing) => landing.conflictId === conflict.id)
@@ -1018,7 +1454,262 @@ function collectConflictAndTerminalIdentityViolations(
       );
     }
   });
+  collectDuplicateIds({
+    values: projection.provisionalConflictNormalizationSnapshots,
+    registry: 'provisionalConflictNormalizationSnapshots',
+    idOf: (snapshot) => snapshot.normalizationSnapshotId,
+    violations,
+  });
+  projection.provisionalConflictNormalizationSnapshots.forEach((snapshot, index) => {
+    const subjectIds = new Set<string>();
+    for (const subject of snapshot.subjects) {
+      if (
+        subjectIds.has(subject.subjectId)
+        || subject.subjectId !== computeProvisionalConflictNormalizationSubjectId(subject)
+      ) {
+        addViolation(
+          violations,
+          ['provisionalConflictNormalizationSnapshots', index, 'subjects'],
+          `Normalization subject "${subject.subjectId}" has invalid identity`,
+        );
+      }
+      subjectIds.add(subject.subjectId);
+    }
+    if (
+      snapshot.proofUniverse.proofUniverseDigest
+        !== computeProvisionalConflictProofUniverseDigest(snapshot.proofUniverse)
+      || snapshot.normalizationSnapshotId
+        !== computeProvisionalConflictNormalizationSnapshotId(snapshot)
+      || normalizationSnapshotBindingInvalid(projection, snapshot)
+    ) {
+      addViolation(
+        violations,
+        ['provisionalConflictNormalizationSnapshots', index],
+        `Normalization snapshot "${snapshot.normalizationSnapshotId}" has invalid identity`,
+      );
+    }
+  });
+  collectDuplicateIds({
+    values: projection.provisionalConflictNormalizations,
+    registry: 'provisionalConflictNormalizations',
+    idOf: (record) => record.normalizationId,
+    violations,
+  });
+  projection.provisionalConflictNormalizations.forEach((record, index) => {
+    const snapshot = projection.provisionalConflictNormalizationSnapshots.find(
+      (candidate) => candidate.normalizationSnapshotId === record.normalizationSnapshotId,
+    );
+    const decisionDigest = computeProvisionalConflictDecisionDigest({
+      normalizationSnapshotId: record.normalizationSnapshotId,
+      decisions: record.decisions,
+      releaseWitnessIds: record.releaseWitnesses.map(({ releaseWitnessId }) => releaseWitnessId),
+    });
+    const invalidWitness = record.releaseWitnesses.some((witness) => (
+      witness.releaseWitnessId !== computeProvisionalConflictReleaseWitnessId(witness)
+      || witness.provenAssociationIds.length !== 0
+      || witness.normalizationSnapshotId !== record.normalizationSnapshotId
+      || witness.proofUniverseDigest !== snapshot?.proofUniverse.proofUniverseDigest
+    ));
+    const projectionsByFindingId = new Map<string, typeof record.finalFindingProjections>();
+    for (const projectionRecord of record.finalFindingProjections) {
+      projectionsByFindingId.set(projectionRecord.findingId, [
+        ...(projectionsByFindingId.get(projectionRecord.findingId) ?? []),
+        projectionRecord,
+      ]);
+    }
+    const subjectFindingIds = new Set(snapshot?.subjects.map((subject) => subject.findingId) ?? []);
+    const finalIntents = snapshot === undefined
+      ? []
+      : record.finalFindingProjections.flatMap((projectionRecord) => {
+          const intent = reconstructNormalizationFinalIntent({
+            ledgerProjection: projection,
+            snapshot,
+            decisions: record.decisions,
+            projection: projectionRecord,
+          });
+          return intent === null ? [] : [intent];
+        });
+    const intentsByFindingId = new Map(finalIntents.map((intent) => [intent.findingId, intent]));
+    const decisionsBySubjectId = new Map<string, typeof record.decisions>();
+    for (const decision of record.decisions) {
+      decisionsBySubjectId.set(decision.subjectId, [
+        ...(decisionsBySubjectId.get(decision.subjectId) ?? []),
+        decision,
+      ]);
+    }
+    const invalidProjection = snapshot === undefined
+      || record.finalFindingProjections.length !== subjectFindingIds.size
+      || finalIntents.length !== record.finalFindingProjections.length
+      || [...subjectFindingIds].some((findingId) => (
+        projectionsByFindingId.get(findingId)?.length !== 1
+      ))
+      || record.finalFindingProjections.some((projectionRecord) => {
+        const intent = intentsByFindingId.get(projectionRecord.findingId);
+        return projectionRecord.after.id !== projectionRecord.findingId
+          || !sameValue(projectionRecord.expectedHead, intent?.expectedHead)
+          || projectionRecord.intentDigest !== intent?.intentDigest
+          || (intent !== undefined
+            && !normalizationProjectionMatchesIntent(projectionRecord, intent))
+          || projectionRecord.projectionDigest
+            !== computeFindingLifecycleProjectionDigest(projectionRecord.after);
+      });
+    const invalidDecision = snapshot === undefined
+      || record.decisions.length !== snapshot.subjects.length
+      || snapshot.subjects.some((subject) => decisionsBySubjectId.get(subject.subjectId)?.length !== 1)
+      || record.decisions.some((decision) => {
+        const subject = snapshot.subjects.find((candidate) => candidate.subjectId === decision.subjectId);
+        const sourceIntent = intentsByFindingId.get(decision.findingId);
+        if (
+          subject === undefined
+          || subject.findingId !== decision.findingId
+          || subject.role !== decision.subjectRole
+          || sourceIntent === undefined
+        ) {
+          return true;
+        }
+        if (decision.outcome === 'retained_provisional') {
+          return sourceIntent.kind !== 'open_provisional'
+            || decision.finalIntentDigest !== sourceIntent.intentDigest;
+        }
+        if (decision.outcome === 'released_independent') {
+          const witness = record.releaseWitnesses.find(
+            (candidate) => candidate.releaseWitnessId === decision.releaseWitnessId,
+          );
+          return sourceIntent.kind !== 'open_provisional'
+            || sourceIntent.stableKey !== decision.independentStableKey
+            || decision.finalIntentDigest !== sourceIntent.intentDigest
+            || witness?.holdingSubjectId !== decision.subjectId;
+        }
+        const association = snapshot.proofUniverse.candidateAssociations.find(
+          (candidate) => candidate.associationId === decision.associationId,
+        );
+        const finalTargetIntent = intentsByFindingId.get(decision.targetFindingId);
+        return sourceIntent.kind !== 'superseded'
+          || sourceIntent.supersededByFindingId !== decision.targetFindingId
+          || association?.sourceHoldingSubjectId !== decision.subjectId
+          || association.targetSubjectId !== decision.targetSubjectId
+          || !sameSet(decision.proofRecordIds, snapshot.proofUniverse.trustedProofRecordIds.filter(
+            (proofRecordId) => projection.evidenceRecords.some((evidence) => (
+              evidence.kind === 'engine_proof'
+              && evidence.proofId === proofRecordId
+              && evidence.subject.kind === 'provisional_conflict_association_identical'
+              && evidence.subject.associationId === decision.associationId
+            )),
+          ))
+          || decision.sourceFinalIntentDigest !== sourceIntent.intentDigest
+          || decision.targetFinalIntentDigest !== finalTargetIntent?.intentDigest;
+      });
+    const batchFingerprintDigest = snapshot === undefined
+      ? null
+      : recomputeNormalizationBatchFingerprint({ projection, snapshot, finalIntents });
+    if (
+      snapshot === undefined
+      || decisionDigest !== record.decisionDigest
+      || record.normalizationId !== computeProvisionalConflictNormalizationId({
+        normalizationSnapshotId: record.normalizationSnapshotId,
+        decisionDigest: record.decisionDigest,
+      })
+      || invalidWitness
+      || invalidProjection
+      || invalidDecision
+      || record.batchFingerprintDigest !== batchFingerprintDigest
+    ) {
+      addViolation(
+        violations,
+        ['provisionalConflictNormalizations', index],
+        `Normalization record "${record.normalizationId}" has invalid identity`,
+      );
+    }
+  });
   projection.conflictClaimSettlements.forEach((settlement, index) => {
+    if (!('attemptId' in settlement)) {
+      const snapshot = projection.provisionalConflictNormalizationSnapshots.find(
+        (candidate) => candidate.normalizationSnapshotId === settlement.normalizationSnapshotId,
+      );
+      const record = projection.provisionalConflictNormalizations.find(
+        (candidate) => candidate.normalizationId === settlement.normalizationId,
+      );
+      const subject = snapshot?.subjects.find(
+        (candidate) => candidate.subjectId === settlement.subjectId,
+      );
+      const events = projection.lifecycleEvents.filter(
+        (candidate) => candidate.eventId === settlement.lifecycleEventIds[0],
+      );
+      const event = events[0];
+      const decisions = record?.decisions.filter(
+        (decision) => decision.subjectId === settlement.subjectId,
+      ) ?? [];
+      const decision = decisions[0];
+      const finalProjections = record?.finalFindingProjections.filter(
+        (candidate) => candidate.findingId === settlement.findingId,
+      ) ?? [];
+      const finalProjection = finalProjections[0];
+      const transitions = event?.transitions.filter((transition) => (
+        transition.after.entityKind === 'finding'
+        && transition.after.entityId === settlement.findingId
+      )) ?? [];
+      const transition = transitions[0];
+      const reservation = event === undefined
+        ? undefined
+        : projection.lifecycleReservations.find(
+            (candidate) => candidate.reservationId === event.reservationId,
+          );
+      let outcomeInvalid = decision === undefined || decision.outcome !== settlement.outcome;
+      if (!outcomeInvalid && decision?.outcome === 'retained_provisional') {
+        outcomeInvalid = settlement.outcome !== 'retained_provisional'
+          || finalProjection?.after.status !== 'open'
+          || finalProjection.after.provisional === undefined;
+      }
+      if (!outcomeInvalid && decision?.outcome === 'bundled_into_provisional') {
+        outcomeInvalid = settlement.outcome !== 'bundled_into_provisional'
+          || settlement.targetFindingId !== decision.targetFindingId
+          || !sameSet(settlement.proofRecordIds, decision.proofRecordIds)
+          || finalProjection?.after.status !== 'superseded'
+          || finalProjection.after.supersededByFindingId !== settlement.targetFindingId
+          || finalProjection.after.provisional !== undefined;
+      }
+      if (!outcomeInvalid && decision?.outcome === 'released_independent') {
+        outcomeInvalid = settlement.outcome !== 'released_independent'
+          || settlement.releaseWitnessId !== decision.releaseWitnessId
+          || settlement.independentStableKey !== decision.independentStableKey
+          || finalProjection?.after.status !== 'open'
+          || finalProjection.after.provisional?.stableKey !== settlement.independentStableKey;
+      }
+      if (
+        settlement.settlementId !== computeProvisionalConflictNormalizationSettlementId({
+          normalizationId: settlement.normalizationId,
+          conflictId: settlement.conflictId,
+          subjectId: settlement.subjectId,
+        })
+        || record === undefined
+        || record.normalizationSnapshotId !== settlement.normalizationSnapshotId
+        || subject === undefined
+        || subject.findingId !== settlement.findingId
+        || subject.role !== settlement.subjectRole
+        || subject.conflictId !== settlement.conflictId
+        || !sameValue(subject.expectedHead, settlement.expectedHead)
+        || !sameSet(subject.rawClaimLandingIds, settlement.rawClaimLandingIds)
+        || decisions.length !== 1
+        || finalProjections.length !== 1
+        || events.length !== 1
+        || event?.operation !== 'normalize_provisional_conflicts'
+        || transitions.length !== 1
+        || transition?.after.projectionDigest !== finalProjection?.projectionDigest
+        || transition?.after.revision !== finalProjection?.after.revision
+        || reservation?.authority.kind !== 'provisional_conflict_normalization'
+        || reservation.authority.normalizationId !== settlement.normalizationId
+        || reservation.authority.normalizationSnapshotId !== settlement.normalizationSnapshotId
+        || reservation.authority.decisionDigest !== record.decisionDigest
+        || outcomeInvalid
+      ) {
+        addViolation(
+          violations,
+          ['conflictClaimSettlements', index, 'settlementId'],
+          `Normalization settlement "${settlement.settlementId}" has invalid identity`,
+        );
+      }
+      return;
+    }
     const snapshot = projection.conflictAdjudicationSnapshots.find(
       (candidate) => candidate.conflictSnapshotId === settlement.conflictSnapshotId,
     );
@@ -1067,9 +1758,13 @@ function collectConflictAndTerminalIdentityViolations(
     ));
     const productCovered = conflict.findingIds.every((findingId) => (
       settlements.some((settlement) => (
-        settlement.subjectRole === 'product_finding'
-        && settlement.findingId === findingId
-        && (settlement.outcome === 'resolved' || settlement.outcome === 'invalidated')
+        settlement.findingId === findingId
+        && (
+          (settlement.subjectRole === 'product_finding'
+            && (settlement.outcome === 'resolved' || settlement.outcome === 'invalidated'))
+          || (settlement.subjectRole === 'provisional_target'
+            && settlement.outcome === 'retained_provisional')
+        )
       ))
       || projection.conflictAdjudicationSnapshots.some((snapshot) => (
         snapshot.conflictId === conflict.id
@@ -1084,12 +1779,7 @@ function collectConflictAndTerminalIdentityViolations(
         ))
       ))
     ));
-    const noOpenHolding = projection.conflictRawClaimLandings
-      .filter((landing) => landing.conflictId === conflict.id)
-      .every((landing) => {
-        const holding = projection.findings.find((finding) => finding.id === landing.holdingFindingId);
-        return holding !== undefined && !(holding.status === 'open' && holding.provisional !== undefined);
-      });
+    const noUnsettledOpenHolding = sameSet(rawLandingIds, settledRawLandingIds);
     const noLiveAttempt = !projection.conflictAdjudicationAttempts.some((attempt) => (
       attempt.conflictId === conflict.id
       && (attempt.stage === 'started' || attempt.stage === 'proposed')
@@ -1100,7 +1790,7 @@ function collectConflictAndTerminalIdentityViolations(
       || !sameSet(rawLandingIds, settledRawLandingIds)
       || settledRawLandingIds.length !== new Set(settledRawLandingIds).size
       || !productCovered
-      || !noOpenHolding
+      || !noUnsettledOpenHolding
       || !noLiveAttempt
     ) {
       addViolation(

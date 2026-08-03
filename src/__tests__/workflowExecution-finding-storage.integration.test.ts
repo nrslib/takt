@@ -273,7 +273,7 @@ steps:
     });
   });
 
-  it('source SQLite欠落でも実engineがresumeしFinding 0から開始する', async () => {
+  it('source SQLite欠落ならtarget storage作成前にfail-fastする', async () => {
     const sourceRunSlug = 'source-with-deleted-sqlite';
     const targetRunSlug = 'target-with-fresh-findings';
     const sourcePaths = buildRunPaths(projectDir, sourceRunSlug);
@@ -297,7 +297,8 @@ steps:
     expect(sourceResult.success).toBe(false);
     unlinkSync(sourcePaths.findingContractDatabaseAbs);
 
-    const targetResult = await executeWorkflow(
+    const expectedError = `Requeue source run "${sourceRunSlug}" has no finding contract database: ${sourcePaths.findingContractDatabaseAbs}`;
+    await expect(executeWorkflow(
       workflow(true),
       'resumed finding task',
       projectDir,
@@ -310,24 +311,9 @@ steps:
           resumeMode: 'requeue',
         },
       },
-    );
+    )).rejects.toThrow(expectedError);
 
-    expect(targetResult.success).toBe(true);
-    expect(existsSync(targetPaths.findingContractDatabaseAbs)).toBe(true);
-    const sqlite = new DatabaseSync(targetPaths.findingContractDatabaseAbs, {
-      readOnly: true,
-    });
-    const row = sqlite.prepare(`
-      SELECT revision, ledger_json AS ledgerJson
-      FROM finding_authorities WHERE authority_key = 'root'
-    `).get() as { revision: number; ledgerJson: string };
-    expect(row.revision).toBe(1);
-    expect(JSON.parse(row.ledgerJson)).toMatchObject({ nextId: 1, findings: [] });
-    sqlite.close();
-    expect(readMeta(projectDir, targetRunSlug)).toMatchObject({
-      status: 'completed',
-      sourceRunSlug,
-    });
+    expect(existsSync(targetPaths.findingContractDatabaseAbs)).toBe(false);
   });
 
   it('workflow変更後もsource authorityを新workflow名でseedする', async () => {
@@ -485,7 +471,7 @@ steps:
 
     expect(result).toMatchObject({
       success: false,
-      reason: 'Step "implement" failed: injected provider failure',
+      reason: 'injected provider failure',
     });
     expect(existsSync(runPaths.findingContractDatabaseAbs)).toBe(true);
     expect(readMeta(projectDir, runSlug)).toMatchObject({

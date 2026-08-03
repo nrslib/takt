@@ -173,6 +173,46 @@ function makeDecisions(overrides: Partial<FindingManagerDecisions> = {}): Findin
 const DISPUTE_CLAIM = '## Disputed Findings\n- findingId: F-0001\n  reason: frozen contract\n  evidence: src/types.ts:94';
 
 describe('assembleManagerOutput raw decisions', () => {
+  it('routes a provisional conflict target to claim landing instead of creating a conflict', () => {
+    const raw = makeRawFinding({ rawFindingId: 'raw-provisional-conflict', familyTag: 'bug' });
+    const ledger = makeLedger({
+      findings: [makeFinding({
+        revision: 1,
+        provisional: {
+          kind: 'raw-adjudication-unresolved',
+          stableKey: '1'.repeat(64),
+          lineageKey: '2'.repeat(64),
+          sourceRawFindingIds: ['raw-existing'],
+          reason: 'Awaiting adjudication.',
+          firstObservedAt: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
+          lastObservedAt: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
+          gateEffect: 'block',
+          firstObservedRound: 1,
+        },
+      })],
+    });
+    const result = assembleManagerOutput({
+      previousLedger: ledger,
+      residualRawFindings: [raw],
+      decisions: makeDecisions({
+        rawDecisions: [{
+          rawFindingId: raw.rawFindingId,
+          decision: 'conflict',
+          findingId: 'F-0001',
+          evidence: 'The claim conflicts with the provisional target.',
+        }],
+      }),
+      managerAuthority: 'manager_policy',
+    });
+
+    expect(result.output.conflicts).toEqual([]);
+    expect(result.provisionalTargetConflicts).toEqual([{
+      rawFindingId: raw.rawFindingId,
+      targetFindingId: 'F-0001',
+      evidence: 'The claim conflicts with the provisional target.',
+    }]);
+  });
+
   it('Given a "same" decision When assembled Then it lands in matches', () => {
     const raw = makeRawFinding({ rawFindingId: 'raw-1', familyTag: 'bug' });
     const result = assembleManagerOutput({

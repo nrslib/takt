@@ -160,18 +160,27 @@ function rawSourcesForRecord(input: {
   }
   const isolationProof = input.record.kind === 'engine_proof'
     && input.record.subject.kind === 'finding_provisional_isolation';
+  const rawProvisionalIdentityProof = input.record.kind === 'engine_proof'
+    && input.record.subject.kind === 'raw_provisional_claim_identical';
   const matches = (raw: RawFinding): boolean => {
     const provisionalIsolationProof = isProvisionalIsolationProofForRawBinding({
       record: input.record,
       raw,
       target: input.target,
     });
+    const rawIdentityProofMatches = input.record.kind === 'engine_proof'
+      && input.record.subject.kind === 'raw_provisional_claim_identical'
+      && input.record.subject.rawFindingId === raw.rawFindingId
+      && input.record.subject.targetFindingId === input.target.entityId
+      && input.record.claimIdentityHash === raw.claimIdentityHash;
     return (
       evidenceRecordMatchesRawClaim(input.record, raw)
       || provisionalIsolationProof
+      || rawIdentityProofMatches
     ) && (
       input.record.kind !== 'engine_proof'
       || provisionalIsolationProof
+      || rawIdentityProofMatches
       || input.record.targetFindingId === raw.targetFindingId
     );
   };
@@ -181,7 +190,7 @@ function rawSourcesForRecord(input: {
   if (preferred.length > 0) {
     return preferred;
   }
-  if (isolationProof) {
+  if (isolationProof || rawProvisionalIdentityProof) {
     return [];
   }
   const fallback = input.rawFindings.find((raw) => matches(raw));

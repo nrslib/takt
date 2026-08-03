@@ -11,6 +11,12 @@ import type {
   InterpretationRawObservation,
   InterpretationRecoveryOriginBinding,
   RawCanonicalSnapshot,
+  ProvisionalConflictAssociationCandidate,
+  ProvisionalConflictNormalizationDecision,
+  ProvisionalConflictNormalizationFinalFindingIntent,
+  ProvisionalConflictNormalizationSnapshot,
+  ProvisionalConflictNormalizationSubject,
+  ProvisionalConflictProofUniverseWitness,
   TerminalAdjudicationSelectionMember,
 } from './finding-contract-types.js';
 import type {
@@ -402,4 +408,191 @@ export function computeConflictClaimSettlementId(
   subjectId: string,
 ): string {
   return findingContentAddress('conflict-claim-settlement', { conflictId, subjectId });
+}
+
+export function computeIndependentProvisionalClaimKey(input: {
+  targetIdentityHash: string;
+  claimIdentityHash: string;
+  semanticClaimIdentityHash: string;
+}): string {
+  return findingContentAddress('independent-provisional-claim', {
+    targetIdentityHash: input.targetIdentityHash,
+    claimIdentityHash: input.claimIdentityHash,
+    semanticClaimIdentityHash: input.semanticClaimIdentityHash,
+  });
+}
+
+export function computeIndependentProvisionalLineageKey(
+  independentClaimKey: string,
+): string {
+  return findingContentAddress('independent-provisional-lineage', {
+    independentClaimKey,
+  });
+}
+
+export function computeIndependentProvisionalStableKey(
+  independentClaimKey: string,
+): string {
+  return findingContentAddress('independent-provisional-stable-key', {
+    provisionalKind: 'raw-adjudication-unresolved',
+    independentClaimKey,
+  });
+}
+
+export function computeRawProvisionalExactClaimIdentityDigest(input: {
+  targetIdentityHash: string;
+  claimIdentityHash: string;
+  semanticClaimIdentityHash: string;
+}): string {
+  return findingContentAddress('raw-provisional-exact-claim-identity', {
+    targetIdentityHash: input.targetIdentityHash,
+    claimIdentityHash: input.claimIdentityHash,
+    semanticClaimIdentityHash: input.semanticClaimIdentityHash,
+  });
+}
+
+export function computeVerifiedRawProvisionalIdentityDigest(input: {
+  proofRecordId: string;
+  rawFindingId: string;
+  rawCanonicalSnapshotId: string;
+  rawPayloadDigest: string;
+  rawClaimSnapshotDigest: string;
+  targetFindingId: string;
+  expectedTargetHead: FindingLifecycleEntityHead;
+  targetClaimSnapshotDigest: string;
+  sourceEvidenceBindingIds: readonly string[];
+  lifecycleEvidenceBindingId: string;
+  exactClaimIdentityDigest: string;
+}): string {
+  return findingContentAddress('verified-raw-provisional-identity', {
+    verifierId: 'takt.finding-lifecycle-policy',
+    verifierVersion: '1',
+    ...input,
+    sourceEvidenceBindingIds: binarySortedUnique(input.sourceEvidenceBindingIds),
+  });
+}
+
+export function computeProvisionalConflictNormalizationSubjectId(
+  subject: Omit<ProvisionalConflictNormalizationSubject, 'subjectId'>,
+): string {
+  const { subjectId: _subjectId, ...identity } = subject as ProvisionalConflictNormalizationSubject;
+  void _subjectId;
+  return findingContentAddress('provisional-conflict-normalization-subject', identity);
+}
+
+export function computeProvisionalConflictAssociationId(
+  association: Omit<ProvisionalConflictAssociationCandidate, 'associationId'>,
+): string {
+  return findingContentAddress('provisional-conflict-normalization-association', association);
+}
+
+export function computeProvisionalConflictProofUniverseDigest(
+  witness: Omit<ProvisionalConflictProofUniverseWitness, 'proofUniverseDigest'>,
+): string {
+  return findingContentAddress('provisional-conflict-normalization-proof-universe', {
+    trustedVerifierId: witness.trustedVerifierId,
+    trustedVerifierVersion: witness.trustedVerifierVersion,
+    candidateAssociations: binarySortedObjects(witness.candidateAssociations),
+    mechanicalExactAssociationIds: binarySortedUnique(witness.mechanicalExactAssociationIds),
+    trustedProofRecordIds: binarySortedUnique(witness.trustedProofRecordIds),
+    provenAssociationIds: binarySortedUnique(witness.provenAssociationIds),
+  });
+}
+
+export function computeProvisionalConflictNormalizationSnapshotId(
+  snapshot: Omit<ProvisionalConflictNormalizationSnapshot, 'normalizationSnapshotId' | 'capturedAt'>,
+): string {
+  return findingContentAddress('provisional-conflict-normalization-snapshot', {
+    sourceProjectionDigest: snapshot.sourceProjectionDigest,
+    workflowName: snapshot.workflowName,
+    conflicts: binarySortedObjects(snapshot.conflicts),
+    subjectIds: binarySortedUnique(snapshot.subjects.map(({ subjectId }) => subjectId)),
+    proofUniverseDigest: snapshot.proofUniverse.proofUniverseDigest,
+  });
+}
+
+export function computeProvisionalConflictReleaseWitnessId(input: {
+  normalizationSnapshotId: string;
+  holdingSubjectId: string;
+  candidateAssociationIds: readonly string[];
+  proofUniverseDigest: string;
+}): string {
+  return findingContentAddress('provisional-conflict-release-witness', {
+    normalizationSnapshotId: input.normalizationSnapshotId,
+    holdingSubjectId: input.holdingSubjectId,
+    candidateAssociationIds: binarySortedUnique(input.candidateAssociationIds),
+    proofUniverseDigest: input.proofUniverseDigest,
+    provenAssociationIds: [],
+  });
+}
+
+export function computeProvisionalConflictFinalIntentDigest(
+  intent: Omit<ProvisionalConflictNormalizationFinalFindingIntent, 'intentDigest'>,
+): string {
+  return findingContentAddress('provisional-conflict-normalization-final-finding-intent', intent);
+}
+
+export function computeProvisionalConflictDecisionDigest(input: {
+  normalizationSnapshotId: string;
+  decisions: readonly ProvisionalConflictNormalizationDecision[];
+  releaseWitnessIds: readonly string[];
+}): string {
+  return findingContentAddress('provisional-conflict-normalization-decisions', {
+    normalizationSnapshotId: input.normalizationSnapshotId,
+    decisions: binarySortedObjects(input.decisions),
+    releaseWitnessIds: binarySortedUnique(input.releaseWitnessIds),
+  });
+}
+
+export function computeProvisionalConflictNormalizationId(input: {
+  normalizationSnapshotId: string;
+  decisionDigest: string;
+}): string {
+  return findingContentAddress('provisional-conflict-normalization', input);
+}
+
+export function computeProvisionalConflictNormalizationSettlementId(input: {
+  normalizationId: string;
+  conflictId: string;
+  subjectId: string;
+}): string {
+  return findingContentAddress('provisional-conflict-normalization-settlement', input);
+}
+
+export function computeProvisionalConflictSourceProjectionDigest(input: {
+  authorityKey: string;
+  sourceWorkflowName: string;
+  sourceRevision: number;
+  ledger: object;
+}): string {
+  return findingContentAddress('provisional-conflict-normalization-source-projection', input);
+}
+
+export function computeLegacyProvisionalConflictBatchFingerprintDigest(input: {
+  conflictIds: readonly string[];
+  provisionalTargetFindingIds: readonly string[];
+  holdingFindingIds: readonly string[];
+  holdingOwners: readonly object[];
+  verifiedIdentities: readonly object[];
+  finalFindingIntents: readonly ProvisionalConflictNormalizationFinalFindingIntent[];
+}): string {
+  return findingContentAddress('legacy-provisional-conflict-batch-fingerprint', {
+    conflictIds: binarySortedUnique(input.conflictIds),
+    provisionalTargetFindingIds: binarySortedUnique(input.provisionalTargetFindingIds),
+    holdingFindingIds: binarySortedUnique(input.holdingFindingIds),
+    holdingOwners: binarySortedObjects(input.holdingOwners),
+    verifiedIdentities: binarySortedObjects(input.verifiedIdentities),
+    finalFindingIntents: binarySortedObjects(input.finalFindingIntents),
+  });
+}
+
+export function computeConflictReactivationDigest(input: {
+  conflictId: string;
+  expectedConflictHead: FindingLifecycleEntityHead;
+  newRawClaims: readonly object[];
+}): string {
+  return findingContentAddress('conflict-reactivation', {
+    ...input,
+    newRawClaims: binarySortedObjects(input.newRawClaims),
+  });
 }

@@ -16,7 +16,6 @@ import type {
   FindingManagerResolvedConflict,
   FindingManagerResolvedFinding,
   FindingManagerWaivedFinding,
-  FindingRecord,
   FindingSeverity,
   RawDecisionKind,
   RawFinding,
@@ -39,6 +38,13 @@ import {
   createEngineDerivedWaiverDisputeNote,
   isEngineDerivedWaiverDisputeNote,
 } from './waiver-conflict.js';
+import { classifyConflictTarget } from './conflict-target.js';
+
+export interface ProvisionalTargetConflictCandidate {
+  rawFindingId: string;
+  targetFindingId: string;
+  evidence: string;
+}
 
 /**
  * findings-manager が最終結果（8配列以上）を自力で組み立てると、台帳の不変条件
@@ -112,6 +118,7 @@ export interface UnsupportedRawDecision {
 
 export interface AssembleManagerOutputResult {
   output: FindingManagerOutput;
+  provisionalTargetConflicts: ProvisionalTargetConflictCandidate[];
   rejectedRawDecisions: Array<RejectedRawDecision | RejectedCanonicalDisputeDecision>;
   rejectedDisputeDecisions: RejectedDisputeDecision[];
   rejectedConflictDecisions: RejectedConflictDecision[];
@@ -297,6 +304,7 @@ function assembleRawDecisions(input: {
   unsupported: UnsupportedRawDecision[];
   rejected: RejectedRawDecision[];
   accepted: FindingManagerDecisions['rawDecisions'];
+  provisionalTargetConflicts: ProvisionalTargetConflictCandidate[];
 } {
   const rawById = new Map(input.residualRawFindings.map((raw) => [raw.rawFindingId, raw]));
   const findingsById = new Map(input.previousLedger.findings.map((finding) => [finding.id, finding]));
@@ -312,6 +320,7 @@ function assembleRawDecisions(input: {
   const rejected: RejectedRawDecision[] = [];
   const accepted: FindingManagerDecisions['rawDecisions'] = [];
   const seenRawFindingIds = new Set<string>();
+  const provisionalTargetConflicts: ProvisionalTargetConflictCandidate[] = [];
 
   const reject = (decision: FindingManagerDecisions['rawDecisions'][number], reason: string): void => {
     rejected.push({ rawFindingId: decision.rawFindingId, decision: decision.decision, reason });
@@ -475,7 +484,18 @@ function assembleRawDecisions(input: {
         accepted.push(decision);
         break;
       case 'conflict':
-        appendGroupedConflict(conflictsByFindingId, findingId, raw.rawFindingId, decision.evidence);
+        if (classifyConflictTarget({
+          ledger: input.previousLedger,
+          targetFindingId: findingId,
+        }).kind === 'provisional_target') {
+          provisionalTargetConflicts.push({
+            rawFindingId: raw.rawFindingId,
+            targetFindingId: findingId,
+            evidence: decision.evidence,
+          });
+        } else {
+          appendGroupedConflict(conflictsByFindingId, findingId, raw.rawFindingId, decision.evidence);
+        }
         accepted.push(decision);
         break;
     }
@@ -513,6 +533,7 @@ function assembleRawDecisions(input: {
     unsupported,
     rejected,
     accepted,
+    provisionalTargetConflicts,
   };
 }
 
@@ -894,7 +915,7 @@ function mergeFindingOnlyConflicts(
  */
 function partitionCarriedConflicts(
   carried: readonly FindingManagerConflict[],
-  previousFindingsById: ReadonlyMap<string, FindingRecord>,
+  previousLedger: FindingLedger,
   existingConflicts: readonly FindingManagerConflict[],
 ): { accepted: FindingManagerConflict[]; rejected: RejectedCarriedConflict[] } {
   const accepted: FindingManagerConflict[] = [];
@@ -905,6 +926,9 @@ function partitionCarriedConflicts(
   // 通し、finding を共有するだけの部分重複は項目単位で不採用にする。
   const existingConflictIds = new Set(existingConflicts.map((conflict) => formatConflictId(conflict)));
   const claimedFindingIds = new Set(existingConflicts.flatMap((conflict) => conflict.findingIds));
+  const previousFindingsById = new Map(
+    previousLedger.findings.map((finding) => [finding.id, finding]),
+  );
   for (const conflict of carried) {
     if (existingConflictIds.has(formatConflictId(conflict))) {
       accepted.push(conflict);
@@ -918,6 +942,12 @@ function partitionCarriedConflicts(
         }
         if (finding.status !== 'open') {
           return `finding "${findingId}" with status "${finding.status}"`;
+        }
+        if (classifyConflictTarget({
+          ledger: previousLedger,
+          targetFindingId: findingId,
+        }).kind === 'provisional_target') {
+          return `provisional finding "${findingId}" has no raw claim to land`;
         }
         return claimedFindingIds.has(findingId)
           ? `finding "${findingId}" already referenced by another conflict in this output`
@@ -1056,7 +1086,7 @@ export function assembleManagerOutput(input: AssembleManagerOutputInput): Assemb
   // 自体が失敗する（RejectedCarriedConflict のコメント参照）。
   const carriedResult = partitionCarriedConflicts(
     input.carriedFindingOnlyConflicts ?? [],
-    new Map(input.previousLedger.findings.map((finding) => [finding.id, finding])),
+    input.previousLedger,
     [...canonicalRaw.conflicts, ...disputeResult.conflicts],
   );
   const conflicts = mergeFindingOnlyConflicts(canonicalRaw.conflicts, [
@@ -1091,6 +1121,7 @@ export function assembleManagerOutput(input: AssembleManagerOutputInput): Assemb
 
   return {
     output: normalized.output,
+    provisionalTargetConflicts: rawResult.provisionalTargetConflicts,
     rejectedRawDecisions: [...rawResult.rejected, ...rejectedCanonicalWaivers],
     rejectedDisputeDecisions: disputeResult.rejected,
     rejectedConflictDecisions: conflictResult.rejected,

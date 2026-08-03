@@ -16,7 +16,7 @@ import {
   resolveWorkflowCallTarget,
 } from '../infra/config/index.js';
 import { TaskRunner, type TaskInfo } from '../infra/task/index.js';
-import { parseFindingLedger } from '../core/models/finding-schemas.js';
+import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import {
   buildWorkflowResumePointEntry,
   getWorkflowReference,
@@ -123,7 +123,7 @@ function loadResumeWorkflows(projectDir: string) {
   return { parent, child };
 }
 
-function buildWorkflowCallNamespace(projectDir: string, occurrence: number): string {
+function buildWorkflowCallSite(projectDir: string, occurrence: number) {
   const { parent, child } = loadResumeWorkflows(projectDir);
   return buildWorkflowCallSiteIdentity({
     stack: [{
@@ -134,7 +134,15 @@ function buildWorkflowCallNamespace(projectDir: string, occurrence: number): str
       occurrence,
     }],
     childWorkflow: child,
-  }).runPathSegment;
+  });
+}
+
+function buildWorkflowCallNamespace(projectDir: string, occurrence: number): string {
+  return buildWorkflowCallSite(projectDir, occurrence).runPathSegment;
+}
+
+function buildWorkflowCallAuthorityKey(projectDir: string, occurrence: number): string {
+  return buildWorkflowCallSite(projectDir, occurrence).key;
 }
 
 function buildResumePoint(projectDir: string) {
@@ -261,29 +269,14 @@ async function writeSourceReports(projectDir: string, withFindingContract: boole
     return { sourceReportDir };
   }
 
-  const sourceLedger = parseFindingLedger({
-    workflowName: 'child-fix',
-    nextId: 1,
-    updatedAt: '2026-07-17T00:00:00.000Z',
-    findings: [],
-    rawFindings: [],
-    conflicts: [],
-    evidenceRecords: [],
-    evidenceBindings: [],
-    lifecycleReservations: [],
-    lifecycleEvents: [],
-  });
   const sourceStore = createTestFindingLedgerStore({
     projectCwd: projectDir,
     runId: sourceRunSlug,
     reportDir: sourceReportDir,
     workflowName: 'child-fix',
-    authorityKey: buildWorkflowCallNamespace(projectDir, 1),
+    authorityKey: buildWorkflowCallAuthorityKey(projectDir, 1),
   });
-  await sourceStore.updateLedger(() => ({
-    ledger: sourceLedger,
-    result: undefined,
-  }));
+  const sourceLedger = sourceStore.loadLedger();
   return { sourceReportDir, sourceLedger, sourceStore };
 }
 
@@ -333,7 +326,7 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
     }
   });
 
-  it.each([false, true])('runs the nested fix with inherited reports (finding contract: %s)', async (withFindingContract) => {
+  it.each([false, true])('honors report inheritance and finding storage contracts (finding contract: %s)', async (withFindingContract) => {
     environment = createEnvironment(withFindingContract);
     process.env.TAKT_CONFIG_DIR = environment.globalDir;
     invalidateGlobalConfigCache();
@@ -365,6 +358,32 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
     const success = await executeAndCompleteTask(resumedTask, runner, environment.projectDir);
 
     const resumedRunSlug = findResumedRunSlug(environment.projectDir);
+    if (mode === 'requeue' && !withFindingContract) {
+      const sourceDatabasePath = buildRunPaths(
+        environment.projectDir,
+        sourceRunSlug,
+      ).findingContractDatabaseAbs;
+      const targetDatabasePath = buildRunPaths(
+        environment.projectDir,
+        resumedRunSlug,
+      ).findingContractDatabaseAbs;
+      const resumedMeta = JSON.parse(readFileSync(join(
+        environment.projectDir,
+        '.takt',
+        'runs',
+        resumedRunSlug,
+        'meta.json',
+      ), 'utf-8')) as { reason?: string };
+
+      expect(success).toBe(false);
+      expect(instructions).toHaveLength(0);
+      expect(resumedMeta.reason).toBe(
+        `Requeue source run "${sourceRunSlug}" has no finding contract database: ${sourceDatabasePath}`,
+      );
+      expect(existsSync(targetDatabasePath)).toBe(false);
+      return;
+    }
+
     const inheritedReportPath = join(
       environment.projectDir,
       '.takt',
@@ -472,7 +491,7 @@ describe('IT: missing report source through task resume', () => {
     const runner = new TaskRunner(environment.projectDir);
     const resumedTask = prepareResumedTask(
       runner,
-      'requeue',
+      'retry',
       environment.projectDir,
     );
 
@@ -521,6 +540,6 @@ describe('IT: missing report source through task resume', () => {
         reason: 'not_found',
       })],
     }));
-    expect(resumedMeta.reason).toContain('source report snapshot does not contain it');
+    expect(resumedMeta.reason).toBe('rule_no_match');
   });
 });

@@ -9,7 +9,10 @@ import type { ProvisionalFindingSpec } from './reconciler.js';
 import type { RawAdmissionEvaluation } from './manager-admission.js';
 import type { classifyRawFindingsMechanically } from './mechanical-classification.js';
 import type { FindingProvisionalKind } from './types.js';
-import { assembleManagerOutput } from './decision-assembly.js';
+import {
+  assembleManagerOutput,
+  type ProvisionalTargetConflictCandidate,
+} from './decision-assembly.js';
 import {
   collectActiveConflictFindingIds,
   normalizeMergedManagerPlan,
@@ -29,6 +32,7 @@ export interface CleanManagerDecisionResult {
   unsupportedRawFindingReports: UnsupportedRawFindingReport[];
   cleanWireById: Map<string, RawAdmissionEvaluation['cleanWire'][number]>;
   cleanCanonicalById: Map<string, RawAdmissionEvaluation['cleanAdmitted'][number]['canonical']>;
+  provisionalTargetConflicts: ProvisionalTargetConflictCandidate[];
 }
 
 export function assembleCleanManagerDecision(input: {
@@ -54,6 +58,7 @@ export function assembleCleanManagerDecision(input: {
   let cleanProvisionalSpecs: ProvisionalFindingSpec[] = [];
   let unsupportedRawFindingReports: UnsupportedRawFindingReport[] = [];
   let wholeOutputDiscarded = false;
+  let provisionalTargetConflicts: ProvisionalTargetConflictCandidate[] = [];
 
   const landRawAsProvisional = (rawFindingId: string, reason: string, kind: FindingProvisionalKind): void => {
     const wire = cleanWireById.get(rawFindingId);
@@ -97,7 +102,13 @@ export function assembleCleanManagerDecision(input: {
       dismissCandidateFindingIds: input.dismissCandidateFindingIds,
       managerAuthority: input.managerAuthority,
     });
-    const landedRawIds = collectLandedRawIds(assembly.output);
+    const provisionalTargetRawIds = new Set(
+      assembly.provisionalTargetConflicts.map(({ rawFindingId }) => rawFindingId),
+    );
+    const landedRawIds = new Set([
+      ...collectLandedRawIds(assembly.output),
+      ...provisionalTargetRawIds,
+    ]);
     for (const rejected of assembly.rejectedRawDecisions) {
       if (!('rawFindingId' in rejected)) {
         continue;
@@ -127,6 +138,7 @@ export function assembleCleanManagerDecision(input: {
       }];
     }
     managerOutput = assembly.output;
+    provisionalTargetConflicts = assembly.provisionalTargetConflicts;
   }
 
   // 保存直前と同じ正規化ビューに対して検証する。保存される計画は未正規化の
@@ -137,7 +149,11 @@ export function assembleCleanManagerDecision(input: {
   }).output;
   const finalValidation = validateFindingManagerOutput({
     previousLedger: input.previousLedger,
-    rawFindings: input.admission.cleanWire,
+    rawFindings: input.admission.cleanWire.filter(
+      (wire) => !provisionalTargetConflicts.some(
+        (candidate) => candidate.rawFindingId === wire.rawFindingId,
+      ),
+    ),
     managerOutput: validationView,
     priorStepResponseText: input.priorStepResponseText,
   });
@@ -170,6 +186,7 @@ export function assembleCleanManagerDecision(input: {
     managerOutput = input.mechanical.output;
     cleanProvisionalSpecs = [];
     unsupportedRawFindingReports = [];
+    provisionalTargetConflicts = [];
     const mechanicallyLandedRawIds = collectLandedRawIds(input.mechanical.output);
     for (const wire of input.admission.cleanWire) {
       if (mechanicallyLandedRawIds.has(wire.rawFindingId)) {
@@ -194,5 +211,6 @@ export function assembleCleanManagerDecision(input: {
     unsupportedRawFindingReports,
     cleanWireById,
     cleanCanonicalById,
+    provisionalTargetConflicts,
   };
 }

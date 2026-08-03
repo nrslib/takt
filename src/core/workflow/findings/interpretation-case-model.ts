@@ -148,6 +148,26 @@ function semanticEngineProofSubject(subject: EngineProofSubject): unknown {
         rawClaimRefIds: sortedUnique(subject.rawClaimRefIds),
         exactClaimIdentityDigest: subject.exactClaimIdentityDigest,
       };
+    case 'raw_provisional_claim_identical':
+      return {
+        kind: subject.kind,
+        rawFindingId: subject.rawFindingId,
+        rawCanonicalSnapshotId: subject.rawCanonicalSnapshotId,
+        targetFindingId: subject.targetFindingId,
+        targetIdentityHash: subject.targetIdentityHash,
+        claimIdentityHash: subject.claimIdentityHash,
+        semanticClaimIdentityHash: subject.semanticClaimIdentityHash,
+        exactClaimIdentityDigest: subject.exactClaimIdentityDigest,
+      };
+    case 'provisional_conflict_association_identical':
+      return {
+        kind: subject.kind,
+        associationId: subject.associationId,
+        sourceHoldingSubjectId: subject.sourceHoldingSubjectId,
+        targetSubjectId: subject.targetSubjectId,
+        targetSubjectRole: subject.targetSubjectRole,
+        exactClaimIdentityDigest: subject.exactClaimIdentityDigest,
+      };
     case 'finding_claim_supported_after_verification':
       return {
         kind: subject.kind,

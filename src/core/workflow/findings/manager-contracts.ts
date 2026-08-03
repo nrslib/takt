@@ -30,6 +30,7 @@ import type {
   InterpretationCaseDirectPlan,
   InterpretationCaseProofFastPathPlan,
 } from './interpretation-case-coordinator.js';
+import type { ProvisionalTargetConflictCandidate } from './decision-assembly.js';
 
 export interface RunFindingManagerForStepInput {
   contract: FindingContractConfig;
@@ -76,6 +77,7 @@ export interface ManagerDecisionStageResult {
   conflictTargetHeads: Map<string, CapturedManagerConflictHead>;
   invalidAttempts: FindingManagerValidationAttemptReport[];
   cleanProvisionalSpecs: ProvisionalFindingSpec[];
+  provisionalTargetConflicts: ProvisionalTargetConflictCandidate[];
   unsupportedRawFindingReports: UnsupportedRawFindingReport[];
   cleanWireById: Map<string, RawFinding>;
   cleanCanonicalById: Map<string, CanonicalRawFinding>;

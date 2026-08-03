@@ -10,10 +10,12 @@ import {
   findingContentAddress,
 } from '../../models/finding-contract-identity.js';
 import type {
+  AdjudicatedConflictClaimSettlement,
   ConflictAdjudicationEpisode,
   ConflictAdjudicationSnapshot,
   ConflictClaimSettlement,
   ConflictClaimSubject,
+  ProvisionalConflictNormalizationSettlement,
 } from '../../models/finding-contract-types.js';
 import type {
   FindingLedger,
@@ -124,7 +126,7 @@ function createHoldingSubject(input: {
 
 function validSettlementForSubject(
   ledger: FindingLedger,
-  settlement: ConflictClaimSettlement,
+  settlement: AdjudicatedConflictClaimSettlement,
 ): boolean {
   const snapshot = ledger.conflictAdjudicationSnapshots.find(
     (candidate) => candidate.conflictSnapshotId === settlement.conflictSnapshotId,
@@ -150,9 +152,64 @@ function validSettlementForSubject(
 export function validConflictClaimSettlements(
   ledger: FindingLedger,
   conflictId: string,
+): AdjudicatedConflictClaimSettlement[] {
+  return ledger.conflictClaimSettlements.filter(
+    (settlement): settlement is AdjudicatedConflictClaimSettlement => (
+    'attemptId' in settlement
+    && settlement.conflictId === conflictId
+    && validSettlementForSubject(ledger, settlement)
+    ),
+  );
+}
+
+function validNormalizationSettlement(
+  ledger: FindingLedger,
+  settlement: ProvisionalConflictNormalizationSettlement,
+): boolean {
+  const snapshot = ledger.provisionalConflictNormalizationSnapshots.find(
+    (candidate) => candidate.normalizationSnapshotId === settlement.normalizationSnapshotId,
+  );
+  const record = ledger.provisionalConflictNormalizations.find(
+    (candidate) => candidate.normalizationId === settlement.normalizationId,
+  );
+  const subject = snapshot?.subjects.find(
+    (candidate) => candidate.subjectId === settlement.subjectId,
+  );
+  const decision = record?.decisions.find(
+    (candidate) => candidate.subjectId === settlement.subjectId,
+  );
+  const event = ledger.lifecycleEvents.find(
+    (candidate) => candidate.eventId === settlement.lifecycleEventIds[0],
+  );
+  const projection = record?.finalFindingProjections.find(
+    (candidate) => candidate.findingId === settlement.findingId,
+  );
+  return subject !== undefined
+    && subject.conflictId === settlement.conflictId
+    && subject.findingId === settlement.findingId
+    && subject.role === settlement.subjectRole
+    && canonicalJson(subject.expectedHead) === canonicalJson(settlement.expectedHead)
+    && decision !== undefined
+    && decision.conflictId === settlement.conflictId
+    && decision.outcome === settlement.outcome
+    && event?.operation === 'normalize_provisional_conflicts'
+    && projection !== undefined
+    && event.transitions.some((transition) => (
+      transition.after.entityKind === 'finding'
+      && transition.after.entityId === projection.findingId
+      && transition.after.projectionDigest === projection.projectionDigest
+    ));
+}
+
+export function validConflictLandingSettlements(
+  ledger: FindingLedger,
+  conflictId: string,
 ): ConflictClaimSettlement[] {
   return ledger.conflictClaimSettlements.filter((settlement) => (
-    settlement.conflictId === conflictId && validSettlementForSubject(ledger, settlement)
+    settlement.conflictId === conflictId
+    && ('attemptId' in settlement
+      ? validSettlementForSubject(ledger, settlement)
+      : validNormalizationSettlement(ledger, settlement))
   ));
 }
 
@@ -180,7 +237,7 @@ export function buildConflictAdjudicationSnapshot(input: {
   if (expectedConflictHead === undefined) {
     throw new Error(`Conflict "${conflict.id}" has no lifecycle head`);
   }
-  const settlements = validConflictClaimSettlements(input.ledger, conflict.id);
+  const settlements = validConflictLandingSettlements(input.ledger, conflict.id);
   const settledLandingIds = new Set(settlements.flatMap((settlement) => settlement.rawClaimLandingIds));
   const unsettledLandings = input.ledger.conflictRawClaimLandings.filter((landing) => (
     landing.conflictId === conflict.id && !settledLandingIds.has(landing.rawClaimLandingId)
@@ -406,12 +463,21 @@ function allProductClaimsDurablyCovered(
 ): boolean {
   const productSettlements = new Set(settlements
     .filter((settlement) => (
-      settlement.subjectRole === 'product_finding'
+      'attemptId' in settlement
+      && settlement.subjectRole === 'product_finding'
       && (settlement.outcome === 'resolved' || settlement.outcome === 'invalidated')
       && settlement.rawClaimLandingIds.length === 0
     ))
     .map((settlement) => settlement.findingId));
   return conflict.findingIds.every((findingId) => {
+    if (settlements.some((settlement) => (
+      !('attemptId' in settlement)
+      && settlement.subjectRole === 'provisional_target'
+      && settlement.findingId === findingId
+      && settlement.outcome === 'retained_provisional'
+    ))) {
+      return true;
+    }
     if (productSettlements.has(findingId)) {
       return true;
     }
@@ -437,8 +503,9 @@ export function hasSubstantiveVerifiedSettlementWitness(
   ledger: FindingLedger,
   conflictId: string,
 ): boolean {
-  return validConflictClaimSettlements(ledger, conflictId).some((settlement) => (
-    settlement.subjectRole === 'holding_provisional'
+  return validConflictLandingSettlements(ledger, conflictId).some((settlement) => (
+    !('attemptId' in settlement)
+    || settlement.subjectRole === 'holding_provisional'
     || (
       settlement.subjectRole === 'product_finding'
       && (settlement.outcome === 'resolved' || settlement.outcome === 'invalidated')
@@ -461,7 +528,7 @@ export function isConflictResolved(
   ) {
     return false;
   }
-  const settlements = validConflictClaimSettlements(ledger, conflict.id);
+  const settlements = validConflictLandingSettlements(ledger, conflict.id);
   const landings = ledger.conflictRawClaimLandings.filter(
     (landing) => landing.conflictId === conflict.id,
   );
@@ -471,17 +538,20 @@ export function isConflictResolved(
   const allRawClaimsSettledExactlyOnce = settledLandingIds.length === landings.length
     && new Set(settledLandingIds).size === settledLandingIds.length
     && landings.every((landing) => settledLandingIds.includes(landing.rawClaimLandingId));
-  const noOpenConflictHoldingProvisional = landings.every((landing) => {
-    const holding = ledger.findings.find((finding) => finding.id === landing.holdingFindingId);
-    return holding !== undefined && !(holding.status === 'open' && holding.provisional !== undefined);
-  });
+  const noOpenConflictHoldingProvisional = landings.every((landing) => (
+    settledLandingIds.includes(landing.rawClaimLandingId)
+  ));
   const latestSnapshot = ledger.conflictAdjudicationSnapshots
     .filter((snapshot) => snapshot.conflictId === conflict.id)
     .sort((left, right) => right.expectedConflictHead.revision - left.expectedConflictHead.revision)[0];
-  const settledSubjectIds = new Set(settlements.map((settlement) => settlement.subjectId));
+  const settledSubjectIds = new Set(settlements
+    .filter((settlement) => 'attemptId' in settlement)
+    .map((settlement) => settlement.subjectId));
   const noUnsettledConflictHoldingSubject = latestSnapshot !== undefined
     && latestSnapshot.subjects.every((subject) => (
-      subject.role !== 'holding_provisional' || settledSubjectIds.has(subject.subjectId)
+      subject.role !== 'holding_provisional'
+      || settledSubjectIds.has(subject.subjectId)
+      || subject.rawClaimLandingIds.every((landingId) => settledLandingIds.includes(landingId))
     ));
   const noLiveConflictAttempt = !ledger.conflictAdjudicationAttempts.some((attempt) => (
     attempt.conflictId === conflict.id

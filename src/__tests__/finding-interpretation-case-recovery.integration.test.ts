@@ -296,7 +296,7 @@ describe('interpretation case pure preparation and finalization', () => {
       proofFastPathPlans: [],
       provisionalOnlyRawFindingIds: new Set(),
     });
-    expect(prepared.cases[0]?.action.kind).toBe('open_conflict');
+    expect(prepared.cases[0]?.action.kind).toBe('open_product_conflict');
     const settled = settlePreparedConflictCase({
       ledger: harness.store.loadLedger(),
       items,

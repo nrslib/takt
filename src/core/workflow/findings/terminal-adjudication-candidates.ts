@@ -14,6 +14,7 @@ import type {
   FindingProvisionalKind,
 } from './types.js';
 import { captureFindingLifecycleHead } from './lifecycle-mutation.js';
+import { hasUnsettledActiveConflictOwnership } from './conflict-ownership.js';
 
 const ENTITY_ADJUDICATION_PROVISIONAL_KINDS = new Set<FindingProvisionalKind>([
   'raw-meaning-ambiguous',
@@ -128,7 +129,7 @@ export function buildTerminalAdjudicationCandidateSnapshot(input: {
     || !ENTITY_ADJUDICATION_PROVISIONAL_KINDS.has(finding.provisional.kind)
     || finding.provisional.firstObservedRound >= input.currentRound
     || finding.provisional.sourceRawFindingIds.length === 0
-    || input.ledger.conflictRawClaimLandings.some((landing) => landing.holdingFindingId === finding.id)
+    || hasUnsettledActiveConflictOwnership(input.ledger, finding.id)
   ) {
     return undefined;
   }

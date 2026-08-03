@@ -13,6 +13,10 @@ import {
   sortFindingLifecycleTargets,
 } from './finding-lifecycle-identity.js';
 import { computeRawFindingIntegrityDigest } from './finding-raw-integrity.js';
+import {
+  computeConflictReactivationDigest,
+  computeVerifiedRawProvisionalIdentityDigest,
+} from './finding-contract-identity.js';
 import { findingScopeBindingDependencyViolation } from './finding-scope-binding-dependencies.js';
 import { findingScopePredicateResult } from './finding-scope-predicate.js';
 import {
@@ -42,6 +46,10 @@ export interface FindingLifecycleAuthorityProjection {
   readonly rawFindings: readonly FindingLedger['rawFindings'][number][];
   readonly conflicts: readonly FindingLedger['conflicts'][number][];
   readonly findingScopeBindings: readonly FindingLedger['findingScopeBindings'][number][];
+  readonly provisionalConflictNormalizationSnapshots:
+    readonly FindingLedger['provisionalConflictNormalizationSnapshots'][number][];
+  readonly provisionalConflictNormalizations:
+    readonly FindingLedger['provisionalConflictNormalizations'][number][];
 }
 
 function targetKey(target: {
@@ -111,6 +119,13 @@ function assertCanonicalTargets(
       if (conflictTargets.length !== 1 || findingTargets.length === 0) {
         throw new Error(
           `Lifecycle operation "${operation}" requires one conflict and at least one finding target`,
+        );
+      }
+      break;
+    case 'one_or_more_conflicts_and_findings':
+      if (conflictTargets.length === 0 || findingTargets.length === 0) {
+        throw new Error(
+          `Lifecycle operation "${operation}" requires at least one conflict and one finding target`,
         );
       }
       break;
@@ -211,15 +226,30 @@ function assertRawEvidenceBinding(input: {
     raw: input.raw,
     target: input.binding.target,
   });
+  const rawProvisionalIdentityProof = input.record.kind === 'engine_proof'
+    && input.record.purpose === 'lifecycle_authority'
+    && input.record.verifierId === 'takt.finding-lifecycle-policy'
+    && input.record.verifierVersion === '1'
+    && input.record.subject.kind === 'raw_provisional_claim_identical'
+    && input.record.subject.rawFindingId === input.raw.rawFindingId
+    && input.record.subject.targetFindingId === input.binding.target.entityId
+    && input.record.claimIdentityHash === input.raw.claimIdentityHash
+    && input.record.targetFindingId === input.binding.target.entityId
+    && sameValue(
+      input.record.subject.targetExpectedHead,
+      input.binding.target.expectedHead,
+    );
   if (
     !rawAuthoredEvidence
     && !provisionalIsolationProof
+    && !rawProvisionalIdentityProof
   ) {
     throw new Error(`Evidence binding "${input.binding.bindingId}" is not present in its raw evidence set`);
   }
   if (
     input.record.kind === 'engine_proof'
     && !provisionalIsolationProof
+    && !rawProvisionalIdentityProof
     && input.record.targetFindingId !== input.raw.targetFindingId
   ) {
     throw new Error(`Evidence binding "${input.binding.bindingId}" has an invalid engine proof target`);
@@ -248,6 +278,9 @@ function assertRawEvidenceBinding(input: {
     }
     if (operation === 'update_provisional') {
       return true;
+    }
+    if (operation === 'attach_raw_to_provisional') {
+      return rawProvisionalIdentityProof;
     }
     if (operation === 'persist_finding' || operation === 'record_rejected_observation') {
       return (
@@ -475,6 +508,20 @@ function assertEngineProofOperation(input: {
         reject();
       }
       return;
+    case 'raw_provisional_claim_identical':
+      if (
+        input.operation !== 'attach_raw_to_provisional'
+        || subject.targetFindingId !== input.target.entityId
+        || input.targets.length !== 1
+      ) {
+        reject();
+      }
+      return;
+    case 'provisional_conflict_association_identical':
+      if (input.operation !== 'normalize_provisional_conflicts') {
+        reject();
+      }
+      return;
     case 'finding_claim_supported_after_verification':
       if (
         input.operation !== 'apply_conflict_adjudication'
@@ -515,6 +562,10 @@ export function assertEligibleEvidenceForLifecycleOperation(input: {
   rawFindings: readonly RawFinding[];
   findings: readonly FindingLedger['findings'][number][];
   findingScopeBindings: readonly FindingLedger['findingScopeBindings'][number][];
+  provisionalConflictNormalizationSnapshots:
+    readonly FindingLedger['provisionalConflictNormalizationSnapshots'][number][];
+  provisionalConflictNormalizations:
+    readonly FindingLedger['provisionalConflictNormalizations'][number][];
 }): void {
   assertCanonicalTargets(input.operation, input.targets);
   assertCanonicalIds(input.evidenceBindingIds, 'Lifecycle evidence binding ids');
@@ -713,6 +764,108 @@ export function assertEligibleEvidenceForLifecycleOperation(input: {
     }
     return;
   }
+  if (input.authority.kind === 'verified_raw_provisional_identity') {
+    const authority = input.authority;
+    const target = input.targets[0];
+    const proof = input.evidenceRecords.find(
+      (record) => record.evidenceId === authority.proofRecordId,
+    );
+    const subject = proof?.kind === 'engine_proof'
+      && proof.subject.kind === 'raw_provisional_claim_identical'
+      ? proof.subject
+      : undefined;
+    const binding = bindingsById.get(input.authority.lifecycleEvidenceBindingId);
+    if (
+      target?.entityKind !== 'finding'
+      || input.targets.length !== 1
+      || target.entityId !== input.authority.targetFindingId
+      || !sameValue(target.expectedHead, input.authority.expectedTargetHead)
+      || input.evidenceBindingIds.length !== 1
+      || input.evidenceBindingIds[0] !== input.authority.lifecycleEvidenceBindingId
+      || binding?.evidenceId !== input.authority.proofRecordId
+      || binding.sourceRawFindingId !== input.authority.rawFindingId
+      || subject === undefined
+      || subject.rawFindingId !== input.authority.rawFindingId
+      || subject.rawCanonicalSnapshotId !== input.authority.rawCanonicalSnapshotId
+      || subject.rawPayloadDigest !== input.authority.rawPayloadDigest
+      || subject.rawClaimSnapshotDigest !== input.authority.rawClaimSnapshotDigest
+      || subject.targetFindingId !== input.authority.targetFindingId
+      || !sameValue(subject.targetExpectedHead, input.authority.expectedTargetHead)
+      || subject.targetClaimSnapshotDigest !== input.authority.targetClaimSnapshotDigest
+      || input.authority.verificationDigest !== computeVerifiedRawProvisionalIdentityDigest({
+        proofRecordId: input.authority.proofRecordId,
+        rawFindingId: input.authority.rawFindingId,
+        rawCanonicalSnapshotId: input.authority.rawCanonicalSnapshotId,
+        rawPayloadDigest: input.authority.rawPayloadDigest,
+        rawClaimSnapshotDigest: input.authority.rawClaimSnapshotDigest,
+        targetFindingId: input.authority.targetFindingId,
+        expectedTargetHead: input.authority.expectedTargetHead,
+        targetClaimSnapshotDigest: input.authority.targetClaimSnapshotDigest,
+        sourceEvidenceBindingIds: subject.sourceEvidenceBindingIds,
+        lifecycleEvidenceBindingId: input.authority.lifecycleEvidenceBindingId,
+        exactClaimIdentityDigest: subject.exactClaimIdentityDigest,
+      })
+    ) {
+      throw new Error('Lifecycle operation has an invalid verified raw provisional identity authority');
+    }
+    return;
+  }
+  if (input.authority.kind === 'provisional_conflict_normalization') {
+    const authority = input.authority;
+    const records = input.provisionalConflictNormalizations.filter(
+      (record) => record.normalizationId === authority.normalizationId,
+    );
+    const snapshots = input.provisionalConflictNormalizationSnapshots.filter(
+      (snapshot) => snapshot.normalizationSnapshotId === authority.normalizationSnapshotId,
+    );
+    const record = records[0];
+    const snapshot = snapshots[0];
+    const expectedTargets = new Map<string, FindingLifecycleEntityHead>([
+      ...(snapshot?.conflicts.map((conflict) => [
+        `conflict\0${conflict.conflictId}`,
+        conflict.expectedConflictHead,
+      ] as const) ?? []),
+      ...(record?.finalFindingProjections.map((projection) => [
+        `finding\0${projection.findingId}`,
+        projection.expectedHead,
+      ] as const) ?? []),
+    ]);
+    if (
+      input.evidenceBindingIds.length !== 0
+      || records.length !== 1
+      || snapshots.length !== 1
+      || record === undefined
+      || snapshot === undefined
+      || record.normalizationSnapshotId !== snapshot.normalizationSnapshotId
+      || record.decisionDigest !== authority.decisionDigest
+      || record.normalizationId !== authority.normalizationId
+      || expectedTargets.size !== input.targets.length
+      || input.targets.some((target) => (
+        !sameValue(expectedTargets.get(targetKey(target)), target.expectedHead)
+      ))
+    ) {
+      throw new Error('Lifecycle operation has an invalid provisional conflict normalization authority');
+    }
+    return;
+  }
+  if (input.authority.kind === 'conflict_reactivation') {
+    const target = input.targets[0];
+    if (
+      input.evidenceBindingIds.length !== 0
+      || input.targets.length !== 1
+      || target?.entityKind !== 'conflict'
+      || target.entityId !== input.authority.conflictId
+      || !sameValue(target.expectedHead, input.authority.expectedConflictHead)
+      || input.authority.reactivationDigest !== computeConflictReactivationDigest({
+        conflictId: input.authority.conflictId,
+        expectedConflictHead: input.authority.expectedConflictHead,
+        newRawClaims: input.authority.newRawClaims,
+      })
+    ) {
+      throw new Error('Lifecycle operation has an invalid conflict reactivation authority');
+    }
+    return;
+  }
   if (input.authority.kind === 'rejected_observation') {
     const raw = rawFindingsById.get(input.authority.rawFindingId);
     if (
@@ -844,6 +997,9 @@ export function assertFindingLifecycleAuthorityInvariant(
       rawFindings: ledger.rawFindings,
       findings: ledger.findings,
       findingScopeBindings: ledger.findingScopeBindings,
+      provisionalConflictNormalizationSnapshots:
+        ledger.provisionalConflictNormalizationSnapshots,
+      provisionalConflictNormalizations: ledger.provisionalConflictNormalizations,
     });
     reservation.evidenceBindingIds.forEach((bindingId) => referencedBindingIds.add(bindingId));
     reservationsById.set(reservation.reservationId, reservation);

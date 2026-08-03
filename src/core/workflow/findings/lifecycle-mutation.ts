@@ -11,6 +11,7 @@ import {
   assertFindingLifecycleAuthorityInvariant,
 } from '../../models/finding-lifecycle-invariants.js';
 import { FINDING_LIFECYCLE_OPERATION_CONTRACTS } from '../../models/finding-lifecycle-contract.js';
+import { computeConflictRawClaimSnapshotDigest } from '../../models/finding-contract-identity.js';
 import type {
   FindingEvidenceBinding,
   FindingLedger,
@@ -164,6 +165,9 @@ export function reserveVerifiedLifecycleMutation(
     rawFindings: ledger.rawFindings,
     findings: ledger.findings,
     findingScopeBindings: ledger.findingScopeBindings,
+    provisionalConflictNormalizationSnapshots:
+      ledger.provisionalConflictNormalizationSnapshots,
+    provisionalConflictNormalizations: ledger.provisionalConflictNormalizations,
   });
   const existing = ledger.lifecycleReservations.find(
     (reservation) => reservation.mutationId === input.reservation.mutationId,
@@ -262,6 +266,15 @@ function assertFindingState(
     ) {
       return;
     }
+  } else if (operation === 'attach_raw_to_provisional') {
+    if (
+      current?.status === 'open'
+      && current.provisional !== undefined
+      && after.status === 'open'
+      && after.provisional !== undefined
+    ) {
+      return;
+    }
   } else {
     return;
   }
@@ -291,6 +304,90 @@ function assertSpecialAuthorityDelta(input: {
         `Rejected observation authority for "${target.entityId}" does not match its append-only projection delta`,
       );
     }
+    return;
+  }
+  if (authority.kind === 'verified_raw_provisional_identity') {
+    const target = input.reservation.targets[0]!;
+    const before = currentEntity(input.ledger, 'finding', target.entityId) as FindingLedgerEntry;
+    const after = input.changes.get(targetKey(target)) as FindingLedgerEntry;
+    const immutableFields = [
+      'id', 'status', 'target', 'targetIdentityHash', 'claimIdentityHash',
+      'semanticClaimIdentityHash', 'severity', 'title',
+    ] as const;
+    if (
+      before.provisional === undefined
+      || after.provisional === undefined
+      || immutableFields.some((field) => !sameOptionalValue(before[field], after[field]))
+      || before.provisional.kind !== after.provisional.kind
+      || before.provisional.stableKey !== after.provisional.stableKey
+      || before.provisional.lineageKey !== after.provisional.lineageKey
+      || before.rawFindingIds.includes(authority.rawFindingId)
+      || before.provisional.sourceRawFindingIds.includes(authority.rawFindingId)
+      || after.rawFindingIds.filter((id) => id === authority.rawFindingId).length !== 1
+      || after.provisional.sourceRawFindingIds.filter(
+        (id) => id === authority.rawFindingId,
+      ).length !== 1
+    ) {
+      throw new Error(
+        `Raw provisional identity authority for "${target.entityId}" does not match its projection delta`,
+      );
+    }
+    return;
+  }
+  if (authority.kind === 'conflict_reactivation') {
+    const target = input.reservation.targets[0]!;
+    const before = currentEntity(input.ledger, 'conflict', target.entityId) as FindingLedgerConflict;
+    const after = input.changes.get(targetKey(target)) as FindingLedgerConflict;
+    const newRawFindingIds = authority.newRawClaims.map(({ rawFindingId }) => rawFindingId);
+    const coveredLandingIds = new Set(input.ledger.conflictClaimSettlements
+      .filter((settlement) => settlement.conflictId === before.id)
+      .flatMap((settlement) => settlement.rawClaimLandingIds));
+    const priorLandings = input.ledger.conflictRawClaimLandings.filter(
+      (landing) => landing.conflictId === before.id
+        && !newRawFindingIds.includes(landing.rawFindingId),
+    );
+    const productTargets = before.findingIds.every((findingId) => {
+      const finding = input.ledger.findings.find((candidate) => candidate.id === findingId);
+      return finding?.status === 'open' && finding.provisional === undefined;
+    });
+    const immutableFields = ['id', 'findingIds', 'description', 'firstSeen'] as const;
+    if (
+      before.status !== 'resolved'
+      || after.status !== 'active'
+      || authority.newRawClaims.length === 0
+      || new Set(newRawFindingIds).size !== newRawFindingIds.length
+      || newRawFindingIds.some((rawFindingId) => before.rawFindingIds.includes(rawFindingId))
+      || authority.newRawClaims.some((claim) => {
+        const raw = input.ledger.rawFindings.filter(
+          (candidate) => candidate.rawFindingId === claim.rawFindingId,
+        );
+        const snapshots = input.ledger.rawCanonicalSnapshots.filter(
+          (snapshot) => snapshot.rawFindingId === claim.rawFindingId,
+        );
+        return raw.length !== 1
+          || snapshots.length !== 1
+          || snapshots[0]!.rawCanonicalSnapshotId !== claim.rawCanonicalSnapshotId
+          || snapshots[0]!.rawPayloadDigest !== claim.rawPayloadDigest
+          || computeConflictRawClaimSnapshotDigest(snapshots[0]!) !== claim.claimSnapshotDigest;
+      })
+      || priorLandings.some((landing) => !coveredLandingIds.has(landing.rawClaimLandingId))
+      || input.ledger.conflictAdjudicationAttempts.some((attempt) => (
+        attempt.conflictId === before.id
+        && (attempt.stage === 'started' || attempt.stage === 'proposed')
+      ))
+      || !productTargets
+      || immutableFields.some((field) => !sameOptionalValue(before[field], after[field]))
+      || !sameValue(
+        after.rawFindingIds,
+        [...new Set([...before.rawFindingIds, ...newRawFindingIds])].sort(compareBinaryStrings),
+      )
+      || Object.prototype.hasOwnProperty.call(after, 'resolvedAt')
+      || Object.prototype.hasOwnProperty.call(after, 'resolvedEvidence')
+    ) {
+      throw new Error(
+        `Conflict reactivation authority for "${target.entityId}" does not match its projection delta`,
+      );
+    }
   }
 }
 
@@ -308,10 +405,14 @@ function assertConflictState(
   if (operation === 'observe_conflict' && current?.status === 'active' && after.status === 'active') {
     return;
   }
+  if (operation === 'reactivate_conflict' && current?.status === 'resolved' && after.status === 'active') {
+    return;
+  }
   if (
     operation !== 'create_conflict'
     && operation !== 'resolve_conflict'
     && operation !== 'observe_conflict'
+    && operation !== 'reactivate_conflict'
   ) {
     return;
   }

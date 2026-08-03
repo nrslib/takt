@@ -146,6 +146,7 @@ export async function runManagerDecisionStage(params: {
       cleanProvisionalSpecs,
       cleanWireById,
       cleanCanonicalById,
+      provisionalTargetConflicts,
     } = cleanDecision;
     let unsupportedRawFindingReports = cleanDecision.unsupportedRawFindingReports;
 
@@ -213,6 +214,7 @@ export async function runManagerDecisionStage(params: {
     unsupportedRawFindingReports,
     cleanWireById,
     cleanCanonicalById,
+    provisionalTargetConflicts,
     interpretation,
     taskAudits: [
       ...preAdmissionTaskAudits,

@@ -43,6 +43,9 @@ export const FINDING_LIFECYCLE_OPERATIONS = [
   'resolve_conflict',
   'apply_conflict_adjudication',
   'apply_resolution_renotification',
+  'normalize_provisional_conflicts',
+  'attach_raw_to_provisional',
+  'reactivate_conflict',
 ] as const;
 
 export type FindingLifecycleEntityKind =
@@ -202,6 +205,46 @@ export type FindingLifecycleAuthority =
       rawFindingId: string;
       rawIntegrityDigest: string;
       rejectionCode: FindingRejectedObservationCode;
+    }
+  | {
+      kind: 'provisional_conflict_normalization';
+      normalizationId: string;
+      normalizationSnapshotId: string;
+      decisionDigest: string;
+    }
+  | VerifiedRawProvisionalIdentityAuthority
+  | ConflictReactivationAuthority;
+
+export interface VerifiedRawProvisionalIdentityAuthority {
+  kind: 'verified_raw_provisional_identity';
+  rawFindingId: string;
+  rawCanonicalSnapshotId: string;
+  rawPayloadDigest: string;
+  rawClaimSnapshotDigest: string;
+  targetFindingId: string;
+  expectedTargetHead: FindingLifecycleEntityHead;
+  targetClaimSnapshotDigest: string;
+  proofRecordId: string;
+  lifecycleEvidenceBindingId: string;
+  verificationDigest: string;
+}
+
+export interface ConflictReactivationRawClaim {
+  rawFindingId: string;
+  rawCanonicalSnapshotId: string;
+  rawPayloadDigest: string;
+  claimSnapshotDigest: string;
+  rawClaimLandingId: string;
+  holdingAllocationId: string;
+  holdingFindingId: string;
+}
+
+export interface ConflictReactivationAuthority {
+  kind: 'conflict_reactivation';
+  conflictId: string;
+  expectedConflictHead: FindingLifecycleEntityHead;
+  newRawClaims: import('./finding-contract-types.js').NonEmptyArray<ConflictReactivationRawClaim>;
+  reactivationDigest: string;
     };
 
 export type FindingLifecycleReservationContext = { kind: 'transaction' };
@@ -1341,6 +1384,33 @@ export type EngineProofSubject =
       expectedHeads: FindingLifecycleEntityHead[];
       claimSnapshotDigests: string[];
       rawClaimRefIds: string[];
+      exactClaimIdentityDigest: string;
+    }
+  | {
+      kind: 'raw_provisional_claim_identical';
+      rawFindingId: string;
+      rawCanonicalSnapshotId: string;
+      rawPayloadDigest: string;
+      rawClaimSnapshotDigest: string;
+      targetFindingId: string;
+      targetExpectedHead: FindingLifecycleEntityHead;
+      targetClaimSnapshotDigest: string;
+      targetIdentityHash: string;
+      claimIdentityHash: string;
+      semanticClaimIdentityHash: string;
+      sourceEvidenceBindingIds: string[];
+      exactClaimIdentityDigest: string;
+    }
+  | {
+      kind: 'provisional_conflict_association_identical';
+      associationId: string;
+      sourceHoldingSubjectId: string;
+      targetSubjectId: string;
+      targetSubjectRole: 'provisional_target' | 'holding_provisional';
+      sourceExpectedHead: FindingLifecycleEntityHead;
+      targetExpectedHead: FindingLifecycleEntityHead;
+      sourceClaimSnapshotDigest: string;
+      targetClaimSnapshotDigest: string;
       exactClaimIdentityDigest: string;
     }
   | {

@@ -124,6 +124,8 @@ export type {
   FindingLifecycleTransition,
   RawDecisionKind,
   RawFinding,
+  RawCanonicalSnapshot,
+  VerifiedRawProvisionalIdentityAuthority,
   RawAdmissionRejectionReport,
   RawFindingEvidence,
   RawFindingEvidenceKind,
