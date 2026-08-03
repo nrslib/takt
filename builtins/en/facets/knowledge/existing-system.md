@@ -12,6 +12,8 @@ In an existing system, contracts are not limited to explicit APIs. Values and st
 | Only file placement or type names change | May still be a maintenance contract change |
 | Closed internal duplication is removed | Internal change if impact is contained |
 
+Preserve observable behavior outside the requested change scope as an existing contract. When the requirement replaces an old format, API, or path, current code, tests, usage sites, and persisted data are evidence of impact, but not authority to keep the old contract alongside the new one. Design backward compatibility or migration only when the requirement source explicitly calls for it.
+
 ## Diff Classification
 
 Changes in existing systems are classified by causal relationship to the request. The question is whether the request requires the change, not whether the change is in a touched file.
@@ -55,7 +57,8 @@ Comments and tests may preserve historical constraints or intent. Even comments 
 | Constraint or workaround comments | Preserve |
 | Comments contradicting code | Correct |
 | Comments that only restate function names | May consider deleting |
-| Existing test expectations | Treat as existing contracts |
+| Existing test expectations outside the change scope | Treat as existing contracts |
+| Existing tests that pin the old contract being replaced | Treat as impact evidence and update to the new contract; do not turn them into a compatibility requirement |
 
 ## Maintenance Change Risk
 

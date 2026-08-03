@@ -74,3 +74,15 @@ tests:
           - It plans direct behavioral evidence for the limit boundary and invalid values through the public exportReport entry point.
 
           Fail if it says grouped output, a new abstraction, a particular internal type or helper, or replacement of the existing presentation is required by the product source. Also fail if it omits a stated obligation, narrows an allowed choice into acceptance criteria, expands into unrelated persistence or concurrency work, or treats a broad suite pass as the only completion evidence.
+
+  - description: 'initial plan: do not invent backward compatibility for a replaced format'
+    vars:
+      task: file://cases/initial-plan-no-implicit-compatibility-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: plan/no-implicit-backward-compatibility
+        value: |
+          Judge the plan by its executable meaning, not by exact wording or table shape. Pass only if it plans to replace both write and read paths with the new call-path namespace, migrate current in-repository callers and fixtures, remove the old iteration parser or fallback, and verify the new behavior directly.
+
+          Fail if it plans dual-read, aliases, fallback parsing, conversion of old records, deprecation periods, version gates, or any other backward-compatibility or migration mechanism not requested by the task. Also fail if it treats existing code, fixtures, persisted-record risk, public-format status, or general safety as authority for keeping the old namespace.

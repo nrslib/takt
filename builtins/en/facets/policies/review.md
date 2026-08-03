@@ -90,6 +90,7 @@ REJECT without exception if any of the following apply.
 - Specific implementation leaking into generic layers (imports and branching for specific implementations in generic layers)
 - Internal implementation exported from public API (infrastructure functions or internal classes exposed publicly)
 - Replaced code/exports surviving after refactoring
+- Production, reading, aliases, conversion, or fallback keeps a replaced format, API, or path alongside the new contract without an explicit compatibility requirement. Public APIs, configuration, persisted data, released status, or isolation at a read boundary do not create an exception by themselves
 - Missing cross-validation of related fields (invariants of semantically coupled config values left unverified)
 - Missing caller, producer, consumer, validator, test data, or derived-entry updates after a contract change
 - Meaningful fields such as IDs, source, trace, or issue/PR numbers are added, forwarded, or persisted while only the storage shape is checked, without verifying downstream interpretation or confusion with existing fields

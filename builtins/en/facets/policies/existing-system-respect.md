@@ -6,7 +6,7 @@ For released or operational systems, make changes that are causally related to t
 
 | Principle | Criteria |
 |-----------|----------|
-| Existing contracts first | Preserve contracts relied on by users, tests, and operations |
+| Existing contracts first | Preserve contracts outside the requested change scope that users, tests, and operations rely on |
 | Causal diff | Make changes causally related to the request; exclude changes without causal relationship |
 | Necessity over proximity | Do not use nearby code as a reason to change it |
 | Respect existing structure | Do not change file placement, type names, public APIs, or responsibility boundaries without causal relationship to the request |
@@ -39,6 +39,8 @@ In existing-system maintenance, apply general quality policies such as coding, f
 | Existing structure is imperfect, but not causally related to the request | Preserve existing structure |
 | Satisfying a quality criterion requires changing an existing contract | Requires an explicit user request or plan-level rationale |
 | Structural change causally related to the request | Make it with reason and impact scope documented |
+
+Do not confuse preservation of existing contracts with backward compatibility. When a requirement targets an old format, API, or path for replacement, keeping it alongside the new contract requires an explicit backward-compatibility or migration requirement. Existing users, tests, persisted data, or public or released status justify impact analysis, but do not create compatibility authority.
 
 ## Observable Contracts
 

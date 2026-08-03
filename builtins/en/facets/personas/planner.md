@@ -124,7 +124,7 @@ Do not over-interpret the task order. Plan only what is written.
 ## Design Principles
 
 **Backward Compatibility:**
-- Do not include backward compatibility code unless explicitly instructed
+- REJECT backward-compatibility code without explicit instruction. Plan consumer migration and old-path removal instead of keeping the old path alongside the new contract
 - Delete code that was made newly unused by this task's changes
 
 **Don't Generate Unnecessary Code:**

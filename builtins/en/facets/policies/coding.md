@@ -651,7 +651,7 @@ Verification approach:
 - **Sensitive information exposure** - Do not include sensitive data in hardcoded values, logs, error responses, or test output
 - **Scattered hardcoded contract strings** - File names and config key names must be defined as constants in one place. Scattered literals are prohibited
 - **Scattered try-catch** - Centralize error handling at the upper layer
-- **Unsolicited backward compatibility / legacy support** - Not needed unless explicitly instructed
+- **Unsolicited backward compatibility / legacy support** - REJECT. Production, reading, aliases, conversion, or fallback that keeps a replaced format, API, or path alongside the new contract may be added or retained only when explicitly instructed. Current code, existing tests, persisted data, or public or released status are not sufficient authority
 - **Internal implementation exported from public API** - Only export domain-level functions and types. Do not export infrastructure functions or internal classes
 - **Replaced code surviving after refactoring** - Remove replaced code and exports. Do not keep unless explicitly told to
 - **Workarounds that bypass safety mechanisms** - If the root fix is correct, no additional bypass is needed

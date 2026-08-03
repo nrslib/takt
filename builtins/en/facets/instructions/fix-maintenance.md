@@ -1,4 +1,4 @@
-Use reports in the Report Directory and fix reviewer findings within the causally related scope while preserving existing contracts.
+Use reports in the Report Directory and fix reviewer findings within the causally related scope while preserving existing contracts outside the requested change scope. Do not keep an old contract targeted for replacement alongside the new contract unless backward compatibility or migration is explicitly required.
 
 **Fix principles:**
 - When a finding includes a "suggested fix", follow it rather than inventing your own workaround

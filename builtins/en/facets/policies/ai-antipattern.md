@@ -10,7 +10,7 @@ Detect assumptions, over-implementation, and superficial fixes that AI-generated
 | Reality check | Do not infer APIs, settings, fields, or wiring paths |
 | Context fit | Match existing naming, structure, error handling, logging, and tests |
 | Minimal diff | Do not mix in unnecessary features, abstractions, settings, or compatibility code |
-| Contract preservation | Do not change UI copy, public APIs, return values, errors, or test expectations out of scope |
+| Contract preservation | Do not change out-of-scope UI copy, public APIs, return values, errors, or test expectations. Do not keep an explicitly replaced old contract alongside the new one without a compatibility requirement |
 | Direct fixes | Do not replace a fix with tests or documentation explaining the issue |
 | Reachability | Confirm that added or retained code is used by current call paths |
 | Verifiability | Check code paths, usage sites, and execution results instead of explanations |
@@ -234,7 +234,7 @@ AI often changes existing contracts under the banner of "improvement", "standard
 | Tests are updated only to follow the new contract | REJECT |
 | New contract required by new functionality | OK |
 | Missing information is added while preserving the existing contract | OK |
-| Reason, impact scope, and migration path for the contract change are explicit | OK |
+| The requirement source calls for the contract change, and its reason and impact scope are clear | OK. Add migration or backward compatibility only when the requirement source explicitly calls for it |
 | Fixing display, accessibility, or test contract breakage newly caused by the requested change | OK. This is change-induced reconciliation, not scope creep |
 
 Verification approach:
@@ -244,9 +244,10 @@ Verification approach:
 4. If the contract change is necessary, verify that reason and impact scope are explained
 
 Legacy support criteria:
-- Unless explicitly instructed to "support legacy values" or "maintain backward compatibility", legacy support is unnecessary
+- Unless explicitly instructed to "support legacy values", "maintain backward compatibility", or "migrate old data", legacy support is REJECT
 - Do not add `.transform()` normalization, `LEGACY_*_MAP` mappings, or `@deprecated` type definitions
 - Support only new values and keep it simple
+- Existing uses, persisted data, or public or released status are impact evidence, not authority to add or retain compatibility
 
 ### Over-Abstracting with Function Objects
 
@@ -371,26 +372,25 @@ Code to remove:
 | Pattern | Example | Verdict |
 |---------|---------|---------|
 | deprecated + no usage | `@deprecated` annotation with no one using it | Remove immediately |
-| Both old and new APIs exist | Old function remains alongside new function | Remove old, unless both have active usage sites |
+| Both old and new APIs exist | Old function remains alongside new function | Remove the old function and migrate consumers unless coexistence is explicitly required |
 | Completed migration wrapper | Wrapper created for compatibility but migration is complete | Remove |
 | Comment says "remove later" | `// TODO: remove after migration` left abandoned | Remove now |
 | Excessive proxy/adapter usage | Complexity added solely for backward compatibility | Replace simply |
 
-Code to keep:
+Compatibility code to evaluate only when explicitly required:
 
 | Pattern | Example | Verdict |
 |---------|---------|---------|
-| Externally published API | npm package exports | Consider carefully |
-| Config file compatibility | Can read old format config | Maintain until major version |
-| During data migration | In the middle of DB schema migration | Maintain until complete |
+| Externally published API | Old npm package export | Retain only when the requirement source defines the supported range |
+| Config file compatibility | Can read old format config | Retain only when the requirement source explicitly requires reading the old format |
+| During data migration | In the middle of DB schema migration | Retain only when the requirement source defines the migration period and old path |
 
 Decision criteria:
-1. Are there usage sites? -> Verify with grep/search. Remove if none
-2. Do both old and new have usage sites? -> If both are currently in use, this may be intentional coexistence rather than backward compatibility. Check callers
-3. Is it externally published? -> Can remove immediately if internal only
-4. Is migration complete? -> Remove if complete
+1. Does the requirement source explicitly require backward compatibility, migration, or coexistence? -> If not, remove the old path and migrate consumers to the new path
+2. What uses, persisted data, and publication scope exist? -> Use them to identify impact and migration targets; do not create a compatibility requirement from them
+3. Does the code match the explicitly required compatibility scope and end condition? -> Remove it when outside the scope or after the condition ends
 
-When AI says "for backward compatibility", be skeptical. Verify if it's truly necessary.
+When AI says "for backward compatibility", require the explicit source location. Do not retain it based only on an implementer's or reviewer's safety judgment.
 
 ## Decision Traceability Review
 
