@@ -67,6 +67,8 @@ tests:
       - type: llm-rubric
         metric: precision/explicit-coexistence
         value: |
-          Judge the review by its decision and reasoning, not by exact wording. Pass only if it does not report the legacy iteration-namespace reader as unauthorized compatibility, because the requirement explicitly requires both old and new resume records to be readable for one release.
+          Judge the review by its decision and reasoning, not by exact wording. Pass only if it verifies that new records are written only with the `call-path:` namespace, the reader restores both `call-path:` and `iteration-<n>--step-<name>` records, and coexistence is limited to the stated release period. Fail if any required behavior is missing or unscoped.
+
+          Do not report the legacy iteration-namespace reader as unauthorized compatibility, because the requirement explicitly requires both old and new resume records to be readable for one release.
 
           The review must keep that authority scoped to resume-record reading. It must not infer a requirement for legacy writes, stored-record rewriting, data migration or backfill, API aliases, event upcasters, or Read Model rebuilds. Fail if it demands removal of the legacy reader solely because it is legacy support, or if it treats the coexistence requirement as authority for any unrequested support target.

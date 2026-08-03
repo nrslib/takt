@@ -110,8 +110,7 @@ Know what should not be included in plans and what patterns to avoid.
 
 **Backward Compatibility:**
 - Treat backward compatibility, legacy support, migration support, or coexistence that accepts, converts, or retains a superseded contract as requirements only for the target and scope explicitly required by the requirement source
-- Unused `_var` renames, re-exports, `// removed` comments are unnecessary
-- Plan to delete things that are unused
+- When non-use is the reason for deletion, treat it as authority only for items made newly unused by this task and not required by the requirement source or an observable existing contract outside the requested change scope. Repository-local non-use alone does not authorize removal of an externally consumed alias or re-export. Apply the same preservation condition to `_var` renames, re-export changes, and `// removed` comments. This does not restrict removals explicitly required by the requirement source
 
 **Don't Generate Unnecessary Code:**
 - Don't plan "just in case" code, future fields, or unused methods
