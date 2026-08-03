@@ -200,7 +200,7 @@ AI tends to over-deliver. Check for unnecessary additions.
 | Gold-plating | "Nice-to-have" additions not asked for |
 | Extra changes disguised as related work | Cleanup, renames, or moves justified only because they are near the edited code |
 | Incidental observable contract changes | Changing values observed by users or tests without being asked |
-| Unnecessary legacy support | Adding old-format acceptance, translation, or retention logic without an explicit requirement-source mandate |
+| Unnecessary legacy support | Adding superseded-contract acceptance, translation, or retention logic without an explicit requirement-source mandate |
 
 The best code is the minimum code that solves the problem.
 
@@ -372,7 +372,7 @@ Code to remove:
 | Pattern | Example | Verdict |
 |---------|---------|---------|
 | deprecated + no usage | `@deprecated` annotation with no one using it | Remove immediately |
-| Old API or old-format translation path remains | Consumers use the new API, but an old function, alias, conversion, or fallback also remains | Remove it unless the requirement source explicitly requires backward compatibility, legacy support, migration support, or coexistence for that target |
+| Superseded-contract translation path remains | Consumers use the new contract, but an old function, alias, conversion, or fallback also remains | Remove it unless the requirement source explicitly requires backward compatibility, legacy support, migration support, or coexistence for that target |
 | Completed migration wrapper | Wrapper created for compatibility but migration is complete | Remove |
 | Comment says "remove later" | `// TODO: remove after migration` left abandoned | Remove now |
 | Excessive proxy/adapter usage | Complexity added solely for backward compatibility | Replace simply |

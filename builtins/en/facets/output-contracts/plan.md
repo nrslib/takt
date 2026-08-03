@@ -18,7 +18,7 @@
 - Put parallel expressions such as `A/B`, `global/project`, `JSON/leaf`, `allow/deny`, and `read/write` on separate rows
 - When the source permits multiple methods, preserve every named alternative and any open-ended equivalent-mechanism allowance here, then record the selected approach under "Approaches Considered"
 - Do not add design decisions or candidate internal structures as requirements
-- A selected design decision may appear in the implementation approach, but do not add it to completion contracts unless it is also an explicit requirement, an indispensable derivation, or an existing observable contract outside the requested change scope to preserve. For a replacement, make migration of current consumers to the new contract a completion obligation. Also require removal of the replaced path except for targets and paths that the requirement source explicitly retains through backward compatibility, legacy support, migration support, or coexistence. Keep consumer migration separate from that support or coexistence; within the stated scope, include in completion contracts only the old-format production, reading, aliases, conversion, upcasters, fallback, backfill, data migration, or rebuilds necessary to satisfy the explicit requirement. Treat API compatibility, event upcasters, data migration or backfill, and Read Model rebuilds as independent support targets; authority for one does not authorize another, and each completion contract records only the mechanisms necessary for its explicitly required target
+- For replacements, use separate Completion Contract rows for current-consumer migration, obsolete-path removal, and each explicitly required support target
 - When selecting one of several permitted alternatives, completion contracts may fix only the permitted set and any explicitly stated preservation scope. Do not create a separate contract that fixes the selected alternative for inputs or paths outside that preservation scope
 - If a preservation obligation applies only to particular inputs, modes, states, or entry paths, split the contracts by scope. Do not extend the current or selected behavior into a scope where the source leaves the choice set open
 - Treat Original Task Context as the authoritative requirement source and Previous Work Context as investigation results and a draft plan. Do not promote precedence, defaults, configuration shapes, identifiers, error behavior, or lifecycle details found only in Previous Work Context into requirements or completion contracts
@@ -44,9 +44,9 @@
 | `{stable ID}` | {explicit requirement, directly implied requirement, or existing behavior outside the requested change scope to preserve} | {Decomposed requirement row and evidence} | {observable success condition} | {plausible counterexample} | {candidate change location} | {observation method and verification layer} |
 
 ### Impact Paths (only for applicable contracts)
-| Contract ID | Definition / Production | Transformation / Persistence / Restore | Consumers / Outputs / Auxiliary Entry Points | State / Ownership / Explicitly Required Migration |
-|-------------|-------------------------|----------------------------------------|-----------------------------------------------|-----------------------------------|
-| `{same stable ID}` | {definition and producers} | {existing intermediate path} | {all consumers and entry points} | {state, ownership, and migration decision only when explicitly required by the source} |
+| Contract ID | Definition / Production | Transformation / Persistence / Restore | Consumers / Outputs / Auxiliary Entry Points | State / Ownership | Current-Consumer Migration | Explicit Support |
+|-------------|-------------------------|----------------------------------------|-----------------------------------------------|-------------------|----------------------------|------------------|
+| `{same stable ID}` | {definition and producers} | {existing intermediate path} | {all consumers and entry points} | {state and ownership} | {for a replacement, consumers moving to the new contract} | {only when required: target, scope, and end condition} |
 
 ### Reachability and Launch Conditions (when adding/changing user-facing features)
 | Item | Content |

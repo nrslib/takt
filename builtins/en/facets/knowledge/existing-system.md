@@ -12,7 +12,7 @@ In an existing system, contracts are not limited to explicit APIs. Values and st
 | Only file placement or type names change | May still be a maintenance contract change |
 | Closed internal duplication is removed | Internal change if impact is contained |
 
-Existing-contract preservation and legacy support are separate concerns. When a requirement replaces an old format, API, or path, current code, existing tests and usage sites, stored or persisted data, published or released status, and placement or isolation at a read boundary provide evidence for impact and consumer migration. Authority to accept, translate, or retain the superseded contract comes from the requirement source, not from that evidence. API compatibility, event upcasters, data migration or backfill, and Read Model rebuilds are independent support targets; authority for one does not authorize another.
+Existing-contract preservation, current-consumer migration, and legacy support affect different boundaries. For a replaced public API, event, command, configuration, path, or persisted format, current code, existing tests and usage sites, stored or persisted data, published or released status, and placement or isolation at a read boundary reveal impact paths. API compatibility, event upcasters, data migration or backfill, and Read Model rebuilds operate on distinct support boundaries and do not imply one another.
 
 ## Diff Classification
 
@@ -58,7 +58,7 @@ Comments and tests may preserve historical constraints or intent. Even comments 
 | Comments contradicting code | Correct |
 | Comments that only restate function names | May consider deleting |
 | Existing test expectations outside the change scope | Treat as existing contracts |
-| Existing tests that pin the old contract being replaced | Treat as impact evidence and update to the new contract; do not turn them into a compatibility requirement |
+| Existing tests that pin the contract being replaced | Evidence of impacted assertions and consumers |
 
 ## Maintenance Change Risk
 
