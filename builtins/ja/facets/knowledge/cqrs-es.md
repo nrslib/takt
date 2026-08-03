@@ -352,9 +352,9 @@ data class OrderCancelledEvent(
 ```kotlin
 // 現行イベント型
 data class OrderAssignedEvent(
-    val orderId: String,
+    override val orderId: String,
     val assigneeIds: List<String>
-)
+) : OrderEvent
 ```
 
 ```kotlin

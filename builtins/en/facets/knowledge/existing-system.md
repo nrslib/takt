@@ -12,7 +12,7 @@ In an existing system, contracts are not limited to explicit APIs. Values and st
 | Only file placement or type names change | May still be a maintenance contract change |
 | Closed internal duplication is removed | Internal change if impact is contained |
 
-Existing-contract preservation and legacy support are separate concerns. When a requirement replaces an old format, API, or path, current code, tests, usage sites, and persisted data provide evidence for impact and consumer migration. Authority to accept, translate, or retain the superseded contract comes from the requirement source, not from that evidence.
+Existing-contract preservation and legacy support are separate concerns. When a requirement replaces an old format, API, or path, current code, existing tests and usage sites, stored or persisted data, published or released status, and placement or isolation at a read boundary provide evidence for impact and consumer migration. Authority to accept, translate, or retain the superseded contract comes from the requirement source, not from that evidence. API compatibility, event upcasters, data migration or backfill, and Read Model rebuilds are independent support targets; authority for one does not authorize another.
 
 ## Diff Classification
 

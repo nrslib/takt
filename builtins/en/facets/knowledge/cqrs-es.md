@@ -352,9 +352,9 @@ Responsibilities in event evolution:
 ```kotlin
 // Current event type
 data class OrderAssignedEvent(
-    val orderId: String,
+    override val orderId: String,
     val assigneeIds: List<String>
-)
+) : OrderEvent
 ```
 
 ```kotlin

@@ -247,7 +247,7 @@ Legacy support criteria:
 - Unless the requirement source explicitly requires backward compatibility, legacy support, migration support, or coexistence for the target, legacy support is REJECT
 - Without that explicit authority, do not add `.transform()`, `LEGACY_*_MAP`, `@deprecated`, aliases, upcasters, fallback, backfill, data migration, or rebuilds that support a superseded contract, even when the old and new contracts do not coexist
 - When none of those forms of support or coexistence is explicitly required for the target, support only new values and keep it simple
-- Existing uses, persisted data, or public or released status are impact evidence, not authority to add or retain compatibility
+- Current code, existing tests and usage sites, stored or persisted data, published or released status, and placement or isolation at a read boundary are impact evidence, not authority to add or retain compatibility
 
 ### Over-Abstracting with Function Objects
 
