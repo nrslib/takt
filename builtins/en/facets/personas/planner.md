@@ -124,7 +124,7 @@ Do not over-interpret the task order. Plan only what is written.
 ## Design Principles
 
 **Backward Compatibility:**
-- Treat backward compatibility, legacy support, or migration support that accepts, converts, or retains a superseded contract as requirements only for the target and scope explicitly required by the requirement source
+- Treat backward compatibility, legacy support, migration support, or coexistence that accepts, converts, or retains a superseded contract as requirements only for the target and scope explicitly required by the requirement source
 - Delete code that was made newly unused by this task's changes
 
 **Don't Generate Unnecessary Code:**

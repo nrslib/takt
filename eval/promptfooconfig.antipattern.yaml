@@ -59,3 +59,14 @@ tests:
           Judge the review by its decision and reasoning, not by exact wording. Pass only if it reports the legacy iteration-namespace parser as a blocking issue because the task replaces that namespace and does not explicitly require backward compatibility. The review must require removal of the legacy regex and conversion branch rather than accepting them because they are isolated at a read boundary, protect persisted data, or appear low risk.
 
           Fail if it approves the change, treats the compatibility path as acceptable or non-blocking, or infers a migration obligation solely from the existence of old persisted records, an external format, current code, or tests.
+  - description: 'precision: explicitly required coexistence remains scoped support'
+    vars:
+      task: file://cases/explicit-coexistence-support.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: precision/explicit-coexistence
+        value: |
+          Judge the review by its decision and reasoning, not by exact wording. Pass only if it does not report the legacy iteration-namespace reader as unauthorized compatibility, because the requirement explicitly requires both old and new resume records to be readable for one release.
+
+          The review must keep that authority scoped to resume-record reading. It must not infer a requirement for legacy writes, stored-record rewriting, data migration or backfill, API aliases, event upcasters, or Read Model rebuilds. Fail if it demands removal of the legacy reader solely because it is legacy support, or if it treats the coexistence requirement as authority for any unrequested support target.

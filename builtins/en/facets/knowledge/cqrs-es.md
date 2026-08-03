@@ -350,14 +350,7 @@ Responsibilities in event evolution:
 | Behavioral evidence for historical-payload translation | Upcaster tests |
 
 ```kotlin
-// Current event type with an old-field alias
-data class OrderAssignedEvent(
-    val orderId: String,
-    @JsonAlias("assigneeId")
-    val assigneeIds: List<String>
-)
-
-// Current-only event type
+// Current event type
 data class OrderAssignedEvent(
     val orderId: String,
     val assigneeIds: List<String>

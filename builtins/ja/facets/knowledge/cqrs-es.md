@@ -350,14 +350,7 @@ data class OrderCancelledEvent(
 | 履歴payload読み替えの振る舞い証跡 | upcaster テスト |
 
 ```kotlin
-// 旧フィールド alias を持つ現行イベント型
-data class OrderAssignedEvent(
-    val orderId: String,
-    @JsonAlias("assigneeId")
-    val assigneeIds: List<String>
-)
-
-// 現行契約だけを表すイベント型
+// 現行イベント型
 data class OrderAssignedEvent(
     val orderId: String,
     val assigneeIds: List<String>

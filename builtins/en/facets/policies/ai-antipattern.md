@@ -244,9 +244,9 @@ Verification approach:
 4. If the contract change is necessary, verify that reason and impact scope are explained
 
 Legacy support criteria:
-- Unless the requirement source explicitly requires backward compatibility, legacy support, or migration support for the target, legacy support is REJECT
+- Unless the requirement source explicitly requires backward compatibility, legacy support, migration support, or coexistence for the target, legacy support is REJECT
 - Without that explicit authority, do not add `.transform()`, `LEGACY_*_MAP`, `@deprecated`, aliases, upcasters, fallback, backfill, data migration, or rebuilds that support a superseded contract, even when the old and new contracts do not coexist
-- When none of those forms of support is explicitly required for the target, support only new values and keep it simple
+- When none of those forms of support or coexistence is explicitly required for the target, support only new values and keep it simple
 - Existing uses, persisted data, or public or released status are impact evidence, not authority to add or retain compatibility
 
 ### Over-Abstracting with Function Objects
@@ -372,7 +372,7 @@ Code to remove:
 | Pattern | Example | Verdict |
 |---------|---------|---------|
 | deprecated + no usage | `@deprecated` annotation with no one using it | Remove immediately |
-| Old API or old-format translation path remains | Consumers use the new API, but an old function, alias, conversion, or fallback also remains | Remove it unless the requirement source explicitly requires backward compatibility, legacy support, or migration support for that target |
+| Old API or old-format translation path remains | Consumers use the new API, but an old function, alias, conversion, or fallback also remains | Remove it unless the requirement source explicitly requires backward compatibility, legacy support, migration support, or coexistence for that target |
 | Completed migration wrapper | Wrapper created for compatibility but migration is complete | Remove |
 | Comment says "remove later" | `// TODO: remove after migration` left abandoned | Remove now |
 | Excessive proxy/adapter usage | Complexity added solely for backward compatibility | Replace simply |

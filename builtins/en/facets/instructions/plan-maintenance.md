@@ -28,7 +28,7 @@ For small tasks, omit the design section. In maintenance work, do not omit exist
 4. Inspect code to resolve unknowns
 5. Identify existing contracts outside the requested change scope that must be preserved
    - Check existing structure, type names, hook return values, UI copy, accessible names, comments, and test expectations
-   - For an old contract targeted by the change, document the reason and impact scope and separate consumer migration from backward compatibility, legacy support, or migration support. Migrate consumers to the new contract and remove the old path except for targets and paths that the requirement source explicitly retains through that support. Within the stated scope, plan only old-format production, reading, aliases, conversion, upcasters, fallback, backfill, data migration, or rebuilds necessary to satisfy the explicit requirement
+   - For an old contract targeted by the change, document the reason and impact scope and separate consumer migration from backward compatibility, legacy support, migration support, or coexistence. Migrate consumers to the new contract and remove the old path except for targets and paths that the requirement source explicitly retains through that support or coexistence. Within the stated scope, plan only old-format production, reading, aliases, conversion, upcasters, fallback, backfill, data migration, or rebuilds necessary to satisfy the explicit requirement
 6. Classify candidate changes as required, related, or unnecessary
    - Same file, nearby responsibility, or common style is not enough to make a change related
    - Do not assign unnecessary changes to the Coder

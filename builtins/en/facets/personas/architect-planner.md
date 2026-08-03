@@ -109,7 +109,7 @@ Placement criteria:
 Know what should not be included in plans and what patterns to avoid.
 
 **Backward Compatibility:**
-- Treat backward compatibility, legacy support, or migration support that accepts, converts, or retains a superseded contract as requirements only for the target and scope explicitly required by the requirement source
+- Treat backward compatibility, legacy support, migration support, or coexistence that accepts, converts, or retains a superseded contract as requirements only for the target and scope explicitly required by the requirement source
 - Unused `_var` renames, re-exports, `// removed` comments are unnecessary
 - Plan to delete things that are unused
 

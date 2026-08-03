@@ -90,3 +90,15 @@ tests:
           - It plans direct behavioral evidence that a legacy iteration record is rejected rather than converted or restored.
 
           Fail if it plans dual-read, aliases, fallback parsing, conversion of old records, deprecation periods, version gates, or any other backward-compatibility or migration mechanism not requested by the task. Also fail if it treats existing code, fixtures, persisted-record risk, public-format status, or general safety as authority for keeping the old namespace.
+
+  - description: 'initial plan: scope explicitly required coexistence to its target'
+    vars:
+      task: file://cases/explicit-coexistence-support.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: plan/explicit-coexistence-scope
+        value: |
+          Judge the plan by its executable meaning, not by exact wording or table shape. Pass only if it plans current-only writes with `call-path:` and dual-read restoration for both new and legacy resume records for the explicitly stated release.
+
+          The plan must treat resume-record reading as the only authorized coexistence target. It must not add stored-record rewriting, data migration or backfill, API aliases, event upcasters, Read Model rebuilds, or legacy writes. It must plan direct behavioral evidence for both accepted record forms and for new records using only the current namespace. Fail if it removes the explicitly required legacy reader or expands coexistence into an unrequested compatibility or migration target.
