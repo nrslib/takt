@@ -9,6 +9,8 @@ Analyze the task as maintenance work for an existing feature and produce a causa
 
 For small tasks, omit the design section. In maintenance work, do not omit existing-contract and unnecessary-change checks even for small tasks.
 
+{{include:instructions/change-contract-traceability}}
+
 **Do:**
 1. **Read reference materials first (required)**
    - Actually open files or directories listed in the task's reference-materials section with Read/Glob

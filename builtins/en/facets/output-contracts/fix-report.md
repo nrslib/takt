@@ -4,20 +4,30 @@
 {Summary of the work result, changes, and evidence}
 
 ## Fix Units
-| Fix Unit | Target Findings | Authoritative Contract and Complete Invariant Set | Implementation and Participating Paths | Happy-Path, Failure-Path, and Boundary Evidence | Status |
-|----------|-----------------|---------------------------------------------------|----------------------------------------|-------------------------------------------------|--------|
-| {Stable ID from the plan} | {IDs} | {Completion conditions beyond the finding examples} | {Boundary change, every consumer migration, removal, or local fix} | {Tests or reproduction results} | {Complete only after every operation / replan / blocker} |
+| Fix Unit | Target Findings | Authoritative Contract | Implementation and Participating Paths | Status |
+|----------|-----------------|------------------------|----------------------------------------|--------|
+| {Stable ID from the plan, or a stable ID assigned by the fixer when there is no plan} | {IDs} | {Responsibility and source of truth} | {Boundary change, every consumer migration, removal, or local fix} | {Complete only after every completion obligation is closed / approach revision / blocker} |
+
+## Completion Obligations
+| Fix Unit | Obligation ID | Type | Target Findings | Invariant and Participating Path | Falsifying Counterexample or Observation | Pre-edit or Returned Result | Implementation Evidence | Post-edit Evidence | Status |
+|----------|---------------|------|-----------------|----------------------------------|----------------------------------------|-----------------------------|-------------------------|--------------------|--------|
+| {Stable fix-unit ID} | {Stable ID within the fix unit} | {behavior correction / consumer migration / obsolete-path removal / existing-contract preservation} | {IDs} | {One invariant and one path} | {Test, reproduction, search, or code path that fails when this condition is broken} | {Pre-edit failure, usage, remaining artifact, or preservation baseline} | {Changed location or preserved implementation} | {Targeted execution or inspection result} | {complete / not applicable / incomplete} |
 
 ## Acceptance Criteria
 | Finding ID | Acceptance Criterion | Evidence | Status |
 |------------|----------------------|----------|--------|
 | {ID} | {Expected behavior} | {Test or reproducible verification result} | {Complete / disputed / blocker} |
 
-## Verification
+## Evidence Corrections After Verifier Return
+| Fix Unit | Obligation ID | Gap Observed by Verifier | Why Previous Evidence Could Not Detect It | Corrected Counterexample or Observation | Obligations Reopened and Rechecked from the Same Proof Method |
+|----------|---------------|--------------------------|------------------------------------------|-----------------------------------------|-------------------------------------------------------------|
+| {When applicable} | {Obligation ID} | {Observed gap} | {Unscanned path, weak observation, false assumption, incomplete migration, unexecuted counterexample, or overstated report} | {Added or corrected evidence} | {Obligation IDs, including obligations in other fix units} |
+
+## Quality Gates
 | Type | Result | Evidence |
 |------|--------|----------|
 | {Build / Test / Other} | {Passed / Failed / Not run} | {Command or verification details} |
 
-## Unresolved Items
-- {None, or unresolved finding, reason, and required next action}
+## Open Obligations
+- {None, or obligation ID, reason, and required next action}
 ```

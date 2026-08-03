@@ -2,13 +2,8 @@ Implement according to the plan within the causally related scope while preservi
 Refer only to files within the Report Directory shown in the Workflow Context. Do not search or reference other report directories.
 Use reports in the Report Directory as the primary source of truth. If additional context is needed, you may consult Previous Response and conversation history as secondary sources (Previous Response may be unavailable). If information conflicts, prioritize reports in the Report Directory and actual file contents.
 
-**Important**: Add unit tests alongside the implementation.
-- Add unit tests for newly created classes and functions
+{{include:instructions/implement-common}}
 - Update relevant tests when modifying existing code, but do not weaken existing expectations for implementation convenience
-- Test file placement: follow the project's conventions
-- Build verification is mandatory. After completing implementation, run the build (type check) and verify there are no type errors
-- Running tests is mandatory. After build succeeds, always run tests and verify results
-- When introducing new contract strings (file names, config key names, etc.), define them as constants in one place
 
 **Additional maintenance constraints:**
 - Before implementation, classify planned changes as required, related, or unnecessary
@@ -22,15 +17,9 @@ Use reports in the Report Directory as the primary source of truth. If additiona
 - At implementation start, organize required changes, related changes, and preserved existing contracts in the shape expected by the `maintenance-scope` output contract.
 - After implementation, only when a non-obvious decision exists, create a decision log following the `coder-decisions` output contract.
 
-**Pre-completion self-check (required):**
-
-Before running build and tests, audit your work against Policy with the following procedure.
-
-1. Open the Policy Source path with the Read tool and obtain the full content
-2. List every `##` section (do not cherry-pick)
-3. Match the REJECT criteria in each listed section against your implementation
-4. Inspect the full diff and check that no out-of-scope rename, move, comment deletion, UI copy change, accessible-name change, or test expectation change remains
-5. If a specification change replaced an old design, check that no code or test remains that only verifies absence of the old design
+**Additional pre-completion checks:**
+1. Inspect the full diff and check that no out-of-scope rename, move, comment deletion, UI copy change, accessible-name change, or test expectation change remains
+2. If a specification change replaced an old design, check that no code or test remains that only verifies absence of the old design
 
 **Required output (include headings)**
 ## Work Results

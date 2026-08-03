@@ -14,8 +14,8 @@ A comprehensive catalog of all builtin workflows and personas included with TAKT
 | `default-mini` | Mini development workflow without tests. A lightweight variant of `default` with `write_tests` removed. plan → implement → AI antipattern review → parallel review → complete. |
 | `default-high` | Full-spec workflow using the shared development core with direct implementation, specialist peer review, convergent remediation, merge-readiness, and supervision. |
 | `frontend` | Frontend-specialized development workflow with React/Next.js focused reviews and knowledge injection. |
-| `backend` | Backend-specialized development workflow with backend, security, and QA expert reviews. |
-| `dual` | Frontend + backend development workflow with direct implementation, architecture, frontend, security, QA reviews with fix loops. |
+| `backend` | Backend-specialized development workflow with backend-aware architecture, security, and testing reviews. |
+| `dual` | Frontend + backend development workflow with architecture, frontend, security, testing reviews, and convergent remediation. |
 
 ## All Builtin Workflows
 
@@ -28,8 +28,8 @@ Organized by category.
 | | `default-mini` | Mini development workflow without tests. A lightweight variant of `default` with `write_tests` removed. plan → implement → AI antipattern review → parallel review → complete. |
 | | `default-high` | Full-spec workflow using the shared development core with direct implementation, specialist peer review, convergent remediation, merge-readiness, and supervision. |
 | | `frontend` | Frontend-specialized development workflow with React/Next.js focused reviews and knowledge injection. |
-| | `backend` | Backend-specialized development workflow with backend, security, and QA expert reviews. |
-| | `dual` | Frontend + backend development workflow: architecture, frontend, security, QA reviews with fix loops. |
+| | `backend` | Backend-specialized development workflow with backend-aware peer review and convergent remediation. |
+| | `dual` | Frontend + backend development workflow with domain-specific peer review and convergent remediation. |
 | ✨ Simple | `simple` | A general workflow that trusts a capable model's judgment. The model selects relevant available skills and develops with minimal orchestration. |
 | | `simple-mini` | A lightweight variant for capable models that omits dedicated test writing and final supervision. |
 | | `simple-frontend` | A concise frontend variant for capable models with frontend, React, security, architecture, and testing knowledge and policies. |
@@ -47,26 +47,26 @@ Organized by category.
 | | `frontend-maintenance` | (Experimental) Frontend workflow for modifying existing products: maintenance-scoped plan/implement/test/fix/supervise that respects current conventions and keeps changes within scope. Can be heavy-handed today — use as a starting point and tune. |
 | ⚙️ Backend | `simple-backend` | For capable models. A simple variant that injects backend knowledge and policies into `simple-core`. |
 | | `simple-cqrs` | For capable models. A simple variant that injects backend and CQRS+ES knowledge and policies into `simple-core`. |
-| | `backend` | Backend-specialized development workflow with backend, security, and QA expert reviews. |
-| | `backend-cqrs` | CQRS+ES-specialized backend development workflow with CQRS+ES, security, and QA expert reviews. |
-| | `backend-maintenance` | Strict backend maintenance workflow with specialist parallel review (architecture, testing, security, QA, coding-review), a merge-readiness gate, loop monitors, and dual-supervisor sign-off. |
+| | `backend` | Backend-specialized development workflow with backend-aware peer review and convergent remediation. |
+| | `backend-cqrs` | CQRS+ES-specialized backend development workflow with CQRS+ES-aware peer review and convergent remediation. |
+| | `backend-maintenance` | Strict backend maintenance workflow with parallel architecture, testing, security, coding, and AI-antipattern reviews, followed by merge-readiness and final supervision. |
 | 🔧 Dual | `simple-dual` | For capable models. A simple variant that injects frontend and backend knowledge and policies into `simple-core`. |
 | | `simple-dual-cqrs` | For capable models. A simple variant that injects frontend, backend, and CQRS+ES knowledge and policies into `simple-core`. |
-| | `dual` | Frontend + backend development workflow: architecture, frontend, security, QA reviews with fix loops. |
-| | `dual-cqrs` | Frontend + backend development workflow (CQRS+ES specialized): CQRS+ES, frontend, security, QA reviews with fix loops. |
+| | `dual` | Frontend + backend development workflow with architecture, frontend, security, testing reviews, and convergent remediation. |
+| | `dual-cqrs` | Frontend + backend development workflow (CQRS+ES specialized) with CQRS+ES, frontend, security, testing reviews, and convergent remediation. |
 | 🏗️ Infrastructure | `terraform` | Terraform IaC development workflow: plan → implement → parallel review → supervisor validation → fix → complete. |
-| 🔍 Review | `review-default` | Multi-perspective code review: auto-detects PR/branch/working diff, runs specialist parallel review for architecture, security, QA, testing, and coding, then runs a merge-readiness gate and outputs consolidated results. |
-| | `review-fix-default` | Multi-perspective review + fix loop (architecture, security, QA, testing, and coding in parallel, followed by merge-readiness review). |
-| | `review-frontend` | Frontend-focused review (structure, modularization, component design, security, QA). |
-| | `review-fix-frontend` | Frontend-focused review + fix loop (structure, modularization, component design, security, QA). |
-| | `review-backend` | Backend-focused review (structure, modularization, hexagonal architecture, security, QA). |
-| | `review-fix-backend` | Backend-focused review + fix loop (structure, modularization, hexagonal architecture, security, QA). |
-| | `review-dual` | Frontend + backend focused review (structure, modularization, component design, security, QA). |
-| | `review-fix-dual` | Frontend + backend focused review + fix loop (structure, modularization, component design, security, QA). |
-| | `review-dual-cqrs` | Frontend + CQRS+ES focused review (structure, modularization, domain model, component design, security, QA). |
-| | `review-fix-dual-cqrs` | Frontend + CQRS+ES focused review + fix loop (structure, modularization, domain model, component design, security, QA). |
-| | `review-backend-cqrs` | CQRS+ES focused review (structure, modularization, domain model, security, QA). |
-| | `review-fix-backend-cqrs` | CQRS+ES focused review + fix loop (structure, modularization, domain model, security, QA). |
+| 🔍 Review | `review-default` | Multi-perspective code review: auto-detects PR/branch/working diff, runs parallel architecture, security, testing, and coding reviews, then runs a merge-readiness gate and outputs consolidated results. |
+| | `review-fix-default` | Multi-perspective review + fix loop with parallel architecture, security, testing, and coding reviews followed by merge-readiness review. |
+| | `review-frontend` | Frontend-focused architecture, frontend, security, and coding review. |
+| | `review-fix-frontend` | Frontend-focused architecture, frontend, security, and coding review with a fix loop. |
+| | `review-backend` | Backend-focused architecture, security, and coding review. |
+| | `review-fix-backend` | Backend-focused architecture, security, and coding review with a fix loop. |
+| | `review-dual` | Frontend + backend focused architecture, frontend, security, and coding review. |
+| | `review-fix-dual` | Frontend + backend focused architecture, frontend, security, and coding review with a fix loop. |
+| | `review-dual-cqrs` | Frontend + CQRS+ES focused architecture, CQRS+ES, frontend, security, and coding review. |
+| | `review-fix-dual-cqrs` | Frontend + CQRS+ES focused architecture, CQRS+ES, frontend, security, and coding review with a fix loop. |
+| | `review-backend-cqrs` | CQRS+ES focused architecture, CQRS+ES, security, and coding review. |
+| | `review-fix-backend-cqrs` | CQRS+ES focused architecture, CQRS+ES, security, and coding review with a fix loop. |
 | | `audit-unit` | Unit test audit. Enumerates behaviors and coverage gaps, produces an issue-ready report without modifying code. |
 | | `audit-e2e` | E2E audit. Enumerates user flows and coverage gaps, produces an issue-ready report without modifying code. |
 | | `audit-security` | Full security audit. Reads every project file for security review. |
@@ -100,7 +100,6 @@ Run `takt` to choose a workflow interactively.
 | **architecture-reviewer** | Architecture and code quality review, spec compliance verification |
 | **frontend-reviewer** | Frontend (React/Next.js) code quality and best practices review |
 | **cqrs-es-reviewer** | CQRS+Event Sourcing architecture and implementation review |
-| **qa-reviewer** | Test coverage and quality assurance review |
 | **security-reviewer** | Security vulnerability assessment |
 | **conductor** | Phase 3 judgment specialist: reads reports/responses and outputs status tags |
 | **supervisor** | Final validation, approval |

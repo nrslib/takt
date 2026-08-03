@@ -85,6 +85,9 @@ Based on investigation and design, determine the implementation direction:
 - File organization (list of files to create/modify)
 - Points to be careful about
 - Spec constraints
+- Keep the stated objective, constraints, and acceptance criteria intact instead of reframing them as an easier problem
+- Do not omit responsibilities or boundary handling required by the request, and do not add abstractions or future-proofing unrelated to it
+- Identify the feature's role, entry points, and owners of state, authority, and side effects, then plan only the boundaries that actually participate
 
 ## Scope Discipline
 

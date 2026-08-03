@@ -121,6 +121,8 @@ export interface InstructionContext {
   knowledgeSourcePath?: string;
   /** Workflow state for context/structured/effect interpolation */
   workflowState?: WorkflowState;
+  /** Scalar context inherited through workflow_call boundaries. */
+  workflowCallVars?: Readonly<Record<string, string | number | boolean>>;
   /** Finding Contract input for reviewer raw finding output. */
   findingContract?: FindingContractInstructionContext;
 }

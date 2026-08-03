@@ -13,18 +13,12 @@ max_steps: 20
 initial_step: plan
 steps:
   - name: plan
-    tags:
-      - plan
-    edit: false
-    persona: planner
-    knowledge: architecture
-    provider_options:
-      extends: review-readonly
-    instruction: simple-plan
-    output_contracts:
-      report:
-        - name: plan.md
-          format: plan
+    uses: development-core-plan
+    with:
+      plan_policy: [design-planning]
+      plan_knowledge: [architecture]
+      plan_instruction: simple-plan
+      plan_report_format: plan
     rules:
       - condition: 要件が明確で実装可能
         next: implement
@@ -38,27 +32,11 @@ steps:
           - {質問2}
 
   - name: implement
-    tags:
-      - coding
-    edit: true
-    persona: coder
-    policy:
-      - coding
-      - testing
-    knowledge:
-      - architecture
-    provider_options:
-      extends: edit
-    required_permission_mode: edit
-    instruction: simple-implement
-    output_contracts:
-      report:
-        - name: coder-scope.md
-          format: coder-scope
-          use_judge: false
-        - name: coder-decisions.md
-          format: coder-decisions
-          use_judge: false
+    uses: development-core-implement
+    with:
+      development_policy: [coding, testing]
+      development_knowledge: [architecture]
+      implementation_instruction: simple-implement
     rules:
       - condition: 実装が完了した
         next: review

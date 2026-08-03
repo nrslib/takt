@@ -3,10 +3,14 @@ Refer only to files within the Report Directory shown in the Workflow Context. D
 
 **Important: Do NOT create or modify production code. Only test files may be created.**
 
+{{include:instructions/change-contract-traceability}}
+
+{{include:instructions/test-contract-discrimination}}
+
 **Actions:**
 1. Review the plan report and understand the planned behavior and interfaces
 2. Decompose the plan requirements into observable contracts
-   - If the plan has no requirement IDs, assign stable IDs for this report
+   - Preserve contract IDs and their meanings from the plan. Only when the plan missed a completion obligation, add a new stable ID and mark it as newly discovered
    - Treat return values, persisted formats, config keys, CLI output, events, logs, error classification, and side effects as contracts
 3. Identify the entry points and paths for each contract
    - Check CLI, config load, config save, runtime resolution, batch processing, child execution, event creation, and persistence boundaries
@@ -20,7 +24,10 @@ Refer only to files within the Report Directory shown in the Workflow Context. D
    - Does a new option propagate through a call chain to the endpoint?
    - Does a saved value need to round-trip through load again?
    - If any apply, create integration tests
-8. Check whether the created tests would still pass with a plausible incorrect implementation
+8. When a contract's impact path actually includes persistence, restoration, and re-entry, verify that continuity in one scenario. Only when shared mutable state or concurrency belongs to the contract, include aliasing mutation or execution interleaving as counterexamples
+9. For lifecycle contracts with paired start and terminal outcomes, verify that each relevant failure exit after start produces exactly one matching terminal outcome
+10. When claiming existing coverage, cite the exact scenario and assertion, not only a file. A shared implementation does not prove a different caller or parallel path when ownership or caller contracts differ
+11. Confirm the created tests discriminate the selected near-miss implementations according to the shared contract-testing guidance
 
 **Test writing guidelines:**
 - Follow the project's existing test patterns (naming conventions, directory structure, helpers)
@@ -42,6 +49,8 @@ Refer only to files within the Report Directory shown in the Workflow Context. D
 - The requirement-to-test matrix exists, and every requirement has a test or an uncovered reason
 - Representative risky branches, negative contracts, and cross-module paths are recorded as tests or uncovered reasons
 - Large changes include integration tests for the main entry points and paths, not only unit tests
+- Every contract ID has a test that rejects its counterexample or a concrete reason why it cannot be demonstrated
+- Only when continuous execution, re-entry, parallel interleaving, or failure terminals exist in a contract's impact path, the relevant scenarios are verified from an appropriate entry point that directly observes the contract
 - Changes to shared contract helpers, normalizers, builders, or adapters include tests that preserve existing equivalent branches
 - Uncovered reasons do not end at "not enough time" or "not checked"
 

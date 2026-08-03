@@ -138,6 +138,41 @@ class AutoRoutingReachTracker {
   }
 }
 
+function resolveMaxStepsForRestoredIteration(
+  currentMaxSteps: WorkflowConfig['maxSteps'],
+  workflowMaxSteps: WorkflowConfig['maxSteps'],
+  initialIteration: number | undefined,
+): WorkflowConfig['maxSteps'] {
+  if (
+    currentMaxSteps === 'infinite'
+    || initialIteration === undefined
+    || initialIteration < currentMaxSteps
+  ) {
+    return currentMaxSteps;
+  }
+
+  if (workflowMaxSteps === 'infinite') {
+    let resumedMaxSteps = currentMaxSteps;
+    while (initialIteration >= resumedMaxSteps) {
+      const nextMaxSteps = resumedMaxSteps * 2;
+      if (!Number.isSafeInteger(nextMaxSteps)) {
+        throw new Error('Cannot resume workflow because the next max steps limit exceeds the safe integer range');
+      }
+      resumedMaxSteps = nextMaxSteps;
+    }
+    return resumedMaxSteps;
+  }
+
+  const requiredIncrements = Math.floor(
+    (initialIteration - currentMaxSteps) / workflowMaxSteps,
+  ) + 1;
+  const resumedMaxSteps = currentMaxSteps + requiredIncrements * workflowMaxSteps;
+  if (!Number.isSafeInteger(resumedMaxSteps)) {
+    throw new Error('Cannot resume workflow because the next max steps limit exceeds the safe integer range');
+  }
+  return resumedMaxSteps;
+}
+
 function resolveOperationJournalSourceClaims(
   cwd: string,
   immediateSourceRunSlug: string,
@@ -269,6 +304,11 @@ export async function createWorkflowExecutionBootstrap(
   runBootstrap: WorkflowRunBootstrap,
   resumeLineage: WorkflowExecutionResumeLineage,
 ): Promise<WorkflowExecutionBootstrap> {
+  const effectiveMaxSteps = resolveMaxStepsForRestoredIteration(
+    options.maxStepsOverride ?? workflowConfig.maxSteps,
+    workflowConfig.maxSteps,
+    options.initialIterationOverride,
+  );
   const { headerPrefix = 'Running Workflow:', interactiveUserInput = false, outputMode = 'terminal' } = options;
   const projectCwd = options.projectCwd;
   const safeWorkflowName = sanitizeTerminalText(workflowConfig.name);
@@ -472,7 +512,7 @@ export async function createWorkflowExecutionBootstrap(
     autoRouting: inheritedAutoRouting,
     rateLimitFallback: workflowConfig.rateLimitFallback ?? globalConfig.rateLimitFallback,
     runtime: resolveRuntimeConfig(globalConfig.runtime, workflowConfig.runtime),
-    ...(options.maxStepsOverride !== undefined ? { maxSteps: options.maxStepsOverride } : {}),
+    maxSteps: effectiveMaxSteps,
   };
   inheritWorkflowConfigMetadata(workflowConfig, effectiveWorkflowConfig);
   const providerEventLogger = createProviderEventLogger({

@@ -141,6 +141,53 @@ describe('ParallelRunner terminal sub-step statuses', () => {
     });
   });
 
+  it('keeps configured provider/model preflight for agent sub-steps', async () => {
+    const { runner, deps } = makeRunner();
+    const failure = new Error('configured provider preflight failed');
+    const resolveBeforeAutoRouting = vi.mocked(
+      deps.optionsBuilder.resolveStepProviderModelBeforeAutoRouting,
+    );
+    resolveBeforeAutoRouting.mockImplementation((step) => {
+      if (step.name === 'security-review') {
+        throw failure;
+      }
+      return { provider: 'claude', model: 'claude-sonnet' };
+    });
+
+    await expect(
+      runner.runParallelStep(makeParallelStep(), makeState(), 'test task', 5, vi.fn()),
+    ).rejects.toBe(failure);
+
+    expect(resolveBeforeAutoRouting.mock.calls.map(([step]) => step.name)).toEqual([
+      'ai-antipattern-review-2nd',
+      'security-review',
+    ]);
+    expect(executeAgent).not.toHaveBeenCalled();
+  });
+
+  it('keeps final provider/model preflight for agent sub-steps', async () => {
+    const { runner, deps } = makeRunner();
+    const failure = new Error('final provider preflight failed');
+    const resolveProviderModel = vi.mocked(deps.optionsBuilder.resolveStepProviderModel);
+    resolveProviderModel.mockImplementation((step) => {
+      if (step.name === 'security-review') {
+        throw failure;
+      }
+      return { provider: 'claude', model: 'claude-sonnet' };
+    });
+
+    await expect(
+      runner.runParallelStep(makeParallelStep(), makeState(), 'test task', 5, vi.fn()),
+    ).rejects.toBe(failure);
+
+    expect(resolveProviderModel.mock.calls.map(([step]) => step.name)).toEqual([
+      'reviewers',
+      'ai-antipattern-review-2nd',
+      'security-review',
+    ]);
+    expect(executeAgent).not.toHaveBeenCalled();
+  });
+
   it('returns parent error when one sub-step returns error and another approves', async () => {
     const { runner } = makeRunner();
     const step = makeParallelStep();

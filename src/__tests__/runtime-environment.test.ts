@@ -251,7 +251,7 @@ describe('prepareRuntimeEnvironment', () => {
 
   it.skipIf(process.platform === 'win32')(
     'should support a tsx socket within the macOS Unix socket path limit when the worktree path is long',
-    async () => {
+    async (context) => {
       const root = mkdtempSync(join(systemTmpDir, 'takt-runtime-env-'));
       const cwd = join(root, 'worktree-with-a-name-long-enough-to-exceed-the-unix-domain-socket-path-limit-when-runtime-isolation-is-used');
       mkdirSync(cwd, { recursive: true });
@@ -266,19 +266,27 @@ describe('prepareRuntimeEnvironment', () => {
       mkdirSync(socketDirectory, { recursive: true });
 
       expect(Buffer.byteLength(socketPath)).toBeLessThanOrEqual(103);
-      await new Promise<void>((resolve, reject) => {
-        const server = createServer();
-        server.once('error', reject);
-        server.listen(socketPath, () => {
-          server.close((error) => {
-            if (error) {
-              reject(error);
-              return;
-            }
-            resolve();
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const server = createServer();
+          server.once('error', reject);
+          server.listen(socketPath, () => {
+            server.close((error) => {
+              if (error) {
+                reject(error);
+                return;
+              }
+              resolve();
+            });
           });
         });
-      });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'EPERM') {
+          context.skip();
+          return;
+        }
+        throw error;
+      }
     },
   );
 

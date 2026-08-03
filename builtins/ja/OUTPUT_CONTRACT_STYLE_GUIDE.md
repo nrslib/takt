@@ -191,7 +191,7 @@ Phase 2 はツール使用不可。エージェントは Phase 1 のセッショ
 ## 確認事項
 ```
 
-### レビュー系（ai-review, architecture-review, qa-review, security-review, frontend-review, cqrs-es-review）
+### レビュー系（ai-review, architecture-review, testing-review, security-review, frontend-review, cqrs-es-review）
 
 - 結果ステータス: APPROVE / REJECT（または APPROVE / IMPROVE / REJECT）
 - セクション構造: 結果 → サマリー → 検証テーブル → 問題テーブル

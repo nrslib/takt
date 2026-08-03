@@ -99,6 +99,8 @@ function createBridgeHarness(options?: {
     onPhaseStart: vi.fn(),
     onPhaseComplete: vi.fn(),
     onJudgeStage: vi.fn(),
+    onWorkflowCallStart: vi.fn(),
+    onWorkflowCallComplete: vi.fn(),
     onStepStart: vi.fn(),
     onStepComplete: vi.fn(),
     onWorkflowComplete: vi.fn(),
@@ -173,6 +175,33 @@ function createBridgeHarness(options?: {
 }
 
 describe('bindWorkflowExecutionEvents', () => {
+  it('workflow_call lifecycle を SessionLogger へ橋渡しする', () => {
+    const { engine, sessionLogger } = createBridgeHarness();
+    const lifecycle = {
+      parentWorkflow: 'project:sha256:parent',
+      step: 'delegate',
+      childWorkflow: 'project:sha256:child',
+      callInstance: 1,
+      stack: [{
+        workflow: 'parent',
+        workflow_ref: 'project:sha256:parent',
+        step: 'delegate',
+        kind: 'workflow_call' as const,
+        occurrence: 1,
+      }],
+    };
+    const complete = {
+      ...lifecycle,
+      result: { status: 'failed' as const, reason: 'child failed' },
+    };
+
+    engine.emit('workflow_call:start', lifecycle);
+    engine.emit('workflow_call:complete', complete);
+
+    expect(sessionLogger.onWorkflowCallStart).toHaveBeenCalledWith(lifecycle);
+    expect(sessionLogger.onWorkflowCallComplete).toHaveBeenCalledWith(complete);
+  });
+
   it('event bridge が run meta と実行結果を同期する', () => {
     const { bridge, engine, runMetaManager, prefixWriter, resumePoint } = createBridgeHarness();
 

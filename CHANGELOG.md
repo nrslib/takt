@@ -6,6 +6,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Changed
+
+- **BREAKING:** `workflow_call` is now a non-counting control node, while the root workflow's `max_steps` is shared by executable steps across the complete descendant call tree (#1133). Callable workflows must no longer define `max_steps`; explicit values fail during loading, and direct root execution of a callable workflow is rejected. Call wrappers no longer resolve or report provider/model data. Session logs and traces expose provider-independent call lifecycle records keyed by call invocation and the complete call stack. Existing runs gain one executable-step slot per call under the same budget, so consumers that parse iteration numbers or wrapper provider data must update.
+
 ## [0.54.1] - 2026-07-29
 
 ### Fixed

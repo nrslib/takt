@@ -18,7 +18,14 @@ import {
 } from './helpers/finding-storage.js';
 
 type RawStep = Record<string, unknown>;
-type RawWorkflow = { steps: RawStep[] };
+type RawWorkflow = {
+  steps: RawStep[];
+  finding_contract?: unknown;
+  subworkflow?: {
+    requires_finding_contract?: unknown;
+    params?: Record<string, { default?: unknown }>;
+  };
+};
 type Language = 'en' | 'ja';
 
 const LANGUAGES: Language[] = ['en', 'ja'];
@@ -56,6 +63,7 @@ const MINI_WORKFLOWS = [
   'backend-cqrs-mini',
   'dual-cqrs-mini',
 ];
+const LIGHTWEIGHT_CORE_WORKFLOWS = ['simple-core', 'mini-core', 'simple-mini'];
 const REMEDIATION_WORKFLOWS = [
   'review-fix-default',
   'review-fix-backend',
@@ -67,6 +75,107 @@ const REMEDIATION_WORKFLOWS = [
 
 function readBuiltinWorkflow(lang: Language, name: string): RawWorkflow {
   return parseYaml(readFileSync(join(getBuiltinWorkflowsDir(lang), name + '.yaml'), 'utf-8')) as RawWorkflow;
+}
+
+function listFindingContractWorkflows(lang: Language): string[] {
+  return readdirSync(getBuiltinWorkflowsDir(lang))
+    .filter((name) => name.endsWith('.yaml'))
+    .map((name) => name.slice(0, -'.yaml'.length))
+    .filter((name) => {
+      const workflow = readBuiltinWorkflow(lang, name);
+      return workflow.finding_contract !== undefined
+        || workflow.subworkflow?.requires_finding_contract === true;
+    })
+    .sort();
+}
+
+function resolveParamValue(value: unknown, params: Readonly<Record<string, unknown>>): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => resolveParamValue(entry, params));
+  }
+  if (typeof value !== 'object' || value === null) {
+    return value;
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.$param === 'string') {
+    if (!Object.hasOwn(params, record.$param)) {
+      throw new Error(`Unresolved callable workflow parameter "${record.$param}"`);
+    }
+    return resolveParamValue(params[record.$param], params);
+  }
+  return Object.fromEntries(
+    Object.entries(record).map(([key, entry]) => [key, resolveParamValue(entry, params)]),
+  );
+}
+
+function workflowParamDefaults(workflow: RawWorkflow): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(workflow.subworkflow?.params ?? {})
+      .filter(([, definition]) => Object.hasOwn(definition, 'default'))
+      .map(([name, definition]) => [name, definition.default]),
+  );
+}
+
+function findWorkflowCallSteps(value: unknown): RawStep[] {
+  if (Array.isArray(value)) {
+    return value.flatMap(findWorkflowCallSteps);
+  }
+  if (typeof value !== 'object' || value === null) {
+    return [];
+  }
+  const record = value as RawStep;
+  const workflowCall = record.workflow_call;
+  const isLegacyCall = typeof workflowCall === 'object'
+    && workflowCall !== null
+    && Object.hasOwn(workflowCall, 'workflow');
+  return [
+    ...(record.kind === 'workflow_call' || isLegacyCall ? [record] : []),
+    ...Object.values(record).flatMap(findWorkflowCallSteps),
+  ];
+}
+
+function workflowCallTarget(step: RawStep): string {
+  const target = step.kind === 'workflow_call'
+    ? step.call
+    : (step.workflow_call as RawStep | undefined)?.workflow;
+  if (typeof target !== 'string') {
+    throw new Error(`workflow_call step "${String(step.name)}" has an unresolved target`);
+  }
+  return target;
+}
+
+function collectWorkflowCallTargets(lang: Language, rootWorkflowName: string): string[] {
+  const targets: string[] = [];
+  const activeWorkflows = new Set<string>();
+
+  const visit = (workflowName: string, callArgs: Readonly<Record<string, unknown>>): void => {
+    if (activeWorkflows.has(workflowName)) {
+      throw new Error(`Recursive builtin workflow_call detected while inspecting "${workflowName}"`);
+    }
+    activeWorkflows.add(workflowName);
+    const workflow = resolveBuiltinWorkflow(lang, workflowName);
+    const params = {
+      ...workflowParamDefaults(workflow),
+      ...callArgs,
+    };
+    const resolvedWorkflow = resolveParamValue(workflow, params);
+    for (const step of findWorkflowCallSteps(resolvedWorkflow)) {
+      const target = workflowCallTarget(step);
+      targets.push(target);
+      const targetPath = join(getBuiltinWorkflowsDir(lang), `${target}.yaml`);
+      if (existsSync(targetPath)) {
+        const args = typeof step.args === 'object' && step.args !== null
+          ? step.args as Record<string, unknown>
+          : {};
+        visit(target, args);
+      }
+    }
+    activeWorkflows.delete(workflowName);
+  };
+
+  const root = resolveBuiltinWorkflow(lang, rootWorkflowName);
+  visit(rootWorkflowName, workflowParamDefaults(root));
+  return targets;
 }
 
 function getStep(raw: RawWorkflow, name: string): RawStep {
@@ -306,6 +415,7 @@ describe('builtin workflow step fragment migration', () => {
       ...FIX_WORKFLOWS,
       ...DEVELOPMENT_CORE_WORKFLOWS,
       ...MINI_WORKFLOWS,
+      ...LIGHTWEIGHT_CORE_WORKFLOWS,
       ...REMEDIATION_WORKFLOWS,
       ...LOCALLLM_COMPOSED_WORKFLOWS,
       'peer-review-suite-base',
@@ -317,6 +427,59 @@ describe('builtin workflow step fragment migration', () => {
     for (const name of workflows) {
       expect(() => loadWorkflowFromFile(join(getBuiltinWorkflowsDir(lang), name + '.yaml'), projectDir)).not.toThrow();
     }
+  });
+
+  it.each(LANGUAGES)('loads %s lightweight development routines with resolved runtime report contracts', (lang) => {
+    mkdirSync(join(projectDir, '.takt'), { recursive: true });
+    writeFileSync(join(projectDir, '.takt', 'config.yaml'), 'language: ' + lang + '\n', 'utf-8');
+    invalidateAllResolvedConfigCache();
+
+    for (const workflowName of LIGHTWEIGHT_CORE_WORKFLOWS) {
+      const workflowPath = join(getBuiltinWorkflowsDir(lang), workflowName + '.yaml');
+      const workflow = loadWorkflowFromFile(workflowPath, projectDir);
+      const plan = workflow.steps.find((step) => step.name === 'plan');
+      const implement = workflow.steps.find((step) => step.name === 'implement');
+      const planContract = plan?.outputContracts?.find((contract) => contract.name === 'plan.md');
+
+      expect(planContract, workflowName).toMatchObject({
+        formatRef: 'plan',
+        format: expect.any(String),
+      });
+      expect(planContract?.format?.trim().length, workflowName).toBeGreaterThan(0);
+      expect(
+        implement?.outputContracts?.some((contract) => contract.name === 'implementation-report.md'),
+        workflowName,
+      ).toBe(true);
+    }
+  });
+
+  it.each(LANGUAGES)('resolves a non-default %s plan report format through callable step composition', (lang) => {
+    mkdirSync(join(projectDir, '.takt'), { recursive: true });
+    writeFileSync(join(projectDir, '.takt', 'config.yaml'), 'language: ' + lang + '\n', 'utf-8');
+    invalidateAllResolvedConfigCache();
+
+    const workflow = loadWorkflowFromFile(join(getBuiltinWorkflowsDir(lang), 'mini-core.yaml'), projectDir, {
+      callableArgs: { plan_report_format: 'plan-frontend' },
+    });
+    const planContract = workflow.steps
+      .find((step) => step.name === 'plan')
+      ?.outputContracts?.find((contract) => contract.name === 'plan.md');
+
+    expect(planContract).toMatchObject({
+      formatRef: 'plan-frontend',
+      format: expect.any(String),
+    });
+    expect(planContract?.format?.trim().length).toBeGreaterThan(0);
+  });
+
+  it.each(LANGUAGES)('rejects an unknown %s callable plan report format', (lang) => {
+    mkdirSync(join(projectDir, '.takt'), { recursive: true });
+    writeFileSync(join(projectDir, '.takt', 'config.yaml'), 'language: ' + lang + '\n', 'utf-8');
+    invalidateAllResolvedConfigCache();
+
+    expect(() => loadWorkflowFromFile(join(getBuiltinWorkflowsDir(lang), 'mini-core.yaml'), projectDir, {
+      callableArgs: { plan_report_format: 'unknown-plan-format' },
+    })).toThrow();
   });
 
   it.each(LANGUAGES)('composes every %s development family through its shared core', (lang) => {
@@ -389,6 +552,69 @@ describe('builtin workflow step fragment migration', () => {
       supervise_knowledge: { $param: 'review_knowledge_additions' },
       supervisor_persona: { $param: 'supervisor_persona' },
     });
+  });
+
+  it.each(LANGUAGES)('keeps %s ordinary peer review adjudication authoritative before remediation', (lang) => {
+    const peerReview = readBuiltinWorkflow(lang, 'peer-review');
+    const initialReviewers = getStep(peerReview, 'initial-reviewers');
+    const reviewers = getStep(peerReview, 'reviewers');
+    const adjudication = getStep(peerReview, 'review-adjudication');
+    const fixPlan = getStep(peerReview, 'fix-plan');
+    const adjudicationFragment = parseYaml(readFileSync(
+      join(getBuiltinLanguageStepsDir(lang), 'peer-review-adjudication.yaml'),
+      'utf-8',
+    )) as RawStep;
+
+    expect(initialReviewers.rules).toEqual([
+      { condition: 'COMPLETE', next: 'review-adjudication' },
+      { condition: 'needs_fix', next: 'review-adjudication' },
+    ]);
+    expect(reviewers.rules).toEqual(initialReviewers.rules);
+    expect(adjudication.uses).toBe('peer-review-adjudication');
+    expect(fixPlan.with).toMatchObject({
+      plan_instruction: 'fix-plan-from-review-resolution',
+    });
+    expect(adjudicationFragment.output_contracts).toEqual({
+      report: [{ name: 'review-resolution.md', format: 'review-decision' }],
+    });
+  });
+
+  it.each(LANGUAGES)('does not mix ordinary %s adjudication into Finding Contract workflows', (lang) => {
+    const findingContractWorkflows = listFindingContractWorkflows(lang);
+    expect(findingContractWorkflows).toHaveLength(9);
+    expect(findingContractWorkflows).toContain('merge-readiness-finding-contract-final-gate');
+
+    for (const workflowName of findingContractWorkflows) {
+      const workflow = readBuiltinWorkflow(lang, workflowName);
+      const serialized = JSON.stringify(workflow);
+      expect(serialized, workflowName).not.toContain('peer-review-adjudication');
+      expect(serialized, workflowName).not.toContain('fix-plan-from-review-resolution');
+      expect(serialized, workflowName).not.toContain('review-resolution.md');
+      for (const target of collectWorkflowCallTargets(lang, workflowName)) {
+        const ordinaryPeerReview = target.startsWith('peer-review')
+          && target !== 'peer-review-finding-contract-localllm';
+        expect(ordinaryPeerReview, `${workflowName} workflow_call target: ${target}`).toBe(false);
+      }
+    }
+  });
+
+  it.each(LANGUAGES)('keeps %s Finding development routes isolated from the ordinary development-core default', (lang) => {
+    const developmentCore = readBuiltinWorkflow(lang, 'development-core');
+    const defaultPeerReview = developmentCore.subworkflow?.params?.peer_review_workflow?.default;
+    const localLlmDevelop = getStep(readBuiltinWorkflow(lang, 'takt-default-localllm'), 'develop');
+
+    expect(defaultPeerReview).toBe('peer-review');
+    expect((localLlmDevelop.args as RawStep).peer_review_workflow).toBe(
+      'peer-review-finding-contract-localllm',
+    );
+    expect(collectWorkflowCallTargets(lang, 'takt-default-localllm')).toContain(
+      'peer-review-finding-contract-localllm',
+    );
+    for (const workflowName of HIGH_WORKFLOWS) {
+      const targets = collectWorkflowCallTargets(lang, workflowName);
+      expect(targets, workflowName).toContain('merge-readiness-finding-contract-final-gate');
+      expect(targets, workflowName).not.toContain('peer-review');
+    }
   });
 
   it.each(LANGUAGES)('keeps %s migrated reviewers on the read-only provider preset', (lang) => {

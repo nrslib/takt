@@ -44,7 +44,11 @@ import {
 import type { ReviewerRelationClarification } from '../findings/relation-coherence.js';
 import type { CanonicalFindingReviewPublication } from '../findings/review-publication.js';
 import type { WorkflowCallRunner } from './WorkflowCallRunner.js';
-import type { WorkflowCallIsolatedStateSync, WorkflowCallSessionUpdates } from './WorkflowCallExecutor.js';
+import {
+  getWorkflowCallChildExecutionState,
+  type WorkflowCallIsolatedStateSync,
+  type WorkflowCallSessionUpdates,
+} from './WorkflowCallExecutor.js';
 import { compactSessionBeforePhase1 } from './session-compaction.js';
 import { invalidateExpectedPersonaSession, invalidatePersonaSessionIfExpected } from './session-invalidation.js';
 import { recordAgentUsageEvent } from './agent-usage-event.js';
@@ -280,7 +284,7 @@ export class ParallelRunner {
       log.debug('Concurrency limit enabled', { step: step.name, concurrency: step.concurrency });
     }
     const agentSubSteps = subSteps.filter(isAgentParallelSubStep);
-    const configuredProviderInfoByStep = new Map(subSteps.map((subStep) => {
+    const configuredProviderInfoByStep = new Map(agentSubSteps.map((subStep) => {
       const providerInfo = this.deps.optionsBuilder.resolveStepProviderModelBeforeAutoRouting(subStep, runtime);
       validateProviderModelRequirements(providerInfo.provider, providerInfo.model, {
         modelFieldName: `Configuration error: parallel sub-step "${subStep.name}" model`,
@@ -360,7 +364,7 @@ export class ParallelRunner {
     const workflowCallResumeStack = subSteps.some(isWorkflowCallStep)
       ? this.requireWorkflowCallResumeStack(step, stepIteration)
       : undefined;
-    const providerInfoByStep = new Map(subSteps.map((subStep) => {
+    const providerInfoByStep = new Map(agentSubSteps.map((subStep) => {
       const routedProviderInfo = routedProviderInfoByStep.get(subStep.name);
       const subRuntime = routedProviderInfo === undefined
         ? runtime
@@ -922,6 +926,7 @@ export class ParallelRunner {
       state.stepOutputs.set(failedStep.name, errorResponse);
       const startedAt = subStepStartedAtByName.get(failedStep.name);
       const instruction = subStepInstructionByName.get(failedStep.name);
+      const childExecutionState = getWorkflowCallChildExecutionState(result.reason);
       return {
         subStep: failedStep,
         response: errorResponse,
@@ -930,7 +935,14 @@ export class ParallelRunner {
         durationMs: startedAt === undefined
           ? 0
           : Math.max(0, errorResponse.timestamp.getTime() - startedAt),
-        ...(isWorkflowCallStep(failedStep) ? { workflowCallExecutionRejected: true } : {}),
+        ...(childExecutionState !== undefined
+          ? {
+              workflowCallSessionUpdates: childExecutionState.sessionUpdates,
+              workflowCallStateSync: childExecutionState.stateSync,
+            }
+          : isWorkflowCallStep(failedStep)
+            ? { workflowCallExecutionRejected: true }
+            : {}),
       };
     });
     this.mergeWorkflowCallSubStepEffects(step, subResults, state, updatePersonaSession);
@@ -939,10 +951,15 @@ export class ParallelRunner {
 
     const ruleDetectionFailure = settled.find(
       (result): result is PromiseRejectedResult => result.status === 'rejected'
-        && result.reason instanceof RuleDetectionExhaustedError,
+        && (
+          result.reason instanceof RuleDetectionExhaustedError
+          || getWorkflowCallChildExecutionState(result.reason)?.originalError
+            instanceof RuleDetectionExhaustedError
+        ),
     );
     if (ruleDetectionFailure) {
-      throw ruleDetectionFailure.reason;
+      const childExecutionState = getWorkflowCallChildExecutionState(ruleDetectionFailure.reason);
+      throw childExecutionState?.originalError ?? ruleDetectionFailure.reason;
     }
 
     const terminalResults = this.collectTerminalResults(subResults);
@@ -1183,6 +1200,9 @@ export class ParallelRunner {
         workflowCallSessionUpdates: result.sessionUpdates,
         workflowCallStateSync: result.stateSync,
       };
+    } catch (error) {
+      workflowCallExecution.fail(error);
+      throw error;
     } finally {
       workflowCallExecution.cancel();
     }

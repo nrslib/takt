@@ -482,6 +482,14 @@ export function bindWorkflowExecutionEvents(
     );
   });
 
+  deps.engine.on('workflow_call:start', (lifecycle) => {
+    deps.sessionLogger.onWorkflowCallStart(lifecycle);
+  });
+
+  deps.engine.on('workflow_call:complete', (lifecycle) => {
+    deps.sessionLogger.onWorkflowCallComplete(lifecycle);
+  });
+
   deps.engine.on('step:start', (
     step,
     iteration,

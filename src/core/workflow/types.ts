@@ -270,8 +270,25 @@ export interface WorkflowStepExecutionEventContext {
   readonly findingIds: readonly string[] | undefined;
 }
 
+export interface WorkflowCallLifecycle {
+  parentWorkflow: string;
+  step: string;
+  childWorkflow: string;
+  callInstance: number;
+  stack: WorkflowResumePointEntry[];
+}
+
+export interface WorkflowCallCompleteLifecycle extends WorkflowCallLifecycle {
+  result:
+    | { status: 'completed'; returnValue?: string }
+    | { status: 'aborted'; abortKind?: WorkflowAbortKind; abortReason?: string }
+    | { status: 'failed'; reason: string };
+}
+
 /** Events emitted by workflow engine */
 export interface WorkflowEvents {
+  'workflow_call:start': (lifecycle: WorkflowCallLifecycle) => void;
+  'workflow_call:complete': (lifecycle: WorkflowCallCompleteLifecycle) => void;
   'step:start': (
     step: WorkflowStep,
     iteration: number,
@@ -511,6 +528,8 @@ export interface WorkflowEngineOptions {
   sharedRuntime?: WorkflowSharedRuntimeState;
   resumeStackPrefix?: WorkflowResumePointEntry[];
   workflowCallResolver?: WorkflowCallResolver;
+  /** Scalar execution context inherited through nested workflow_call boundaries. */
+  workflowCallVars?: Readonly<Record<string, string | number | boolean>>;
   /** Exact verified resource root for the run's workflow execution bundle. */
   workflowBundleResourceRoot?: string;
   /**

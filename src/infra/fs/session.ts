@@ -23,6 +23,8 @@ import {
 export type {
   SessionLog,
   NdjsonWorkflowStart,
+  NdjsonWorkflowCallStart,
+  NdjsonWorkflowCallComplete,
   NdjsonStepStart,
   NdjsonStepComplete,
   NdjsonWorkflowComplete,
@@ -378,6 +380,26 @@ function assertNdjsonRecordShape(
       requireNdjsonString(record.workflowName, 'workflowName');
       requireNdjsonString(record.startTime, 'startTime');
       return;
+    case 'workflow_call_start':
+      requireNdjsonWorkflowCallIdentity(record);
+      return;
+    case 'workflow_call_complete':
+      requireNdjsonWorkflowCallIdentity(record);
+      if (
+        record.status !== 'completed'
+        && record.status !== 'aborted'
+        && record.status !== 'failed'
+      ) {
+        throw new Error('NDJSON workflow_call status is invalid');
+      }
+      requireOptionalNdjsonString(record.returnValue, 'returnValue');
+      requireOptionalNdjsonString(record.abortKind, 'abortKind');
+      requireOptionalNdjsonString(record.abortReason, 'abortReason');
+      requireOptionalNdjsonString(record.reason, 'reason');
+      if (record.status === 'failed') {
+        requireNdjsonString(record.reason, 'reason');
+      }
+      return;
     case 'step_start':
       requireNdjsonString(record.step, 'step');
       requireNdjsonString(record.persona, 'persona');
@@ -451,9 +473,28 @@ function assertNdjsonRecordShape(
   }
 }
 
+function requireNdjsonWorkflowCallIdentity(
+  record: Readonly<Record<string, unknown>>,
+): void {
+  requireNdjsonString(record.workflow, 'workflow');
+  requireNdjsonString(record.step, 'step');
+  requireNdjsonString(record.childWorkflow, 'childWorkflow');
+  requireNdjsonInteger(record.callInstance, 'callInstance');
+  if (!Array.isArray(record.stack) || record.stack.length === 0) {
+    throw new Error('NDJSON workflow_call stack must be a non-empty array');
+  }
+  requireNdjsonString(record.timestamp, 'timestamp');
+}
+
 function requireNdjsonString(value: unknown, field: string): void {
   if (typeof value !== 'string') {
     throw new Error(`NDJSON ${field} must be a string`);
+  }
+}
+
+function requireOptionalNdjsonString(value: unknown, field: string): void {
+  if (value !== undefined) {
+    requireNdjsonString(value, field);
   }
 }
 

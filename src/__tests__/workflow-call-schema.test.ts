@@ -111,6 +111,145 @@ const workflowCallForbiddenFieldCases = [
 ] as const;
 
 describe('workflow_call schema', () => {
+  it('should preserve an explicit max_steps on a root workflow', () => {
+    const workflow = normalizeWorkflowConfig({
+      name: 'root',
+      max_steps: 7,
+      steps: [{
+        name: 'review',
+        persona: 'reviewer',
+        instruction: 'Review',
+        rules: [{ condition: 'done', next: 'COMPLETE' }],
+      }],
+    }, '/tmp');
+
+    expect(workflow.maxSteps).toBe(7);
+  });
+
+  it('should apply the default max_steps only to a root workflow', () => {
+    const workflow = normalizeWorkflowConfig({
+      name: 'root',
+      steps: [{
+        name: 'review',
+        persona: 'reviewer',
+        instruction: 'Review',
+        rules: [{ condition: 'done', next: 'COMPLETE' }],
+      }],
+    }, '/tmp');
+
+    expect(workflow.maxSteps).toBe(10);
+  });
+
+  it.each([3, 'infinite'] as const)('should preserve explicit max_steps %s on a callable workflow', (maxSteps) => {
+    const result = WorkflowConfigRawSchema.safeParse({
+      name: 'shared/review',
+      subworkflow: { callable: true },
+      max_steps: maxSteps,
+      steps: [{
+        name: 'review',
+        persona: 'reviewer',
+        instruction: 'Review',
+        rules: [{ condition: 'done', next: 'COMPLETE' }],
+      }],
+    });
+
+    expect(result.success).toBe(true);
+    expect(normalizeWorkflowConfig(result.data!, '/tmp').maxSteps).toBe(maxSteps);
+  });
+
+  it('should retain the default max_steps when a callable workflow is run directly', () => {
+    const workflow = normalizeWorkflowConfig({
+      name: 'shared/review',
+      subworkflow: { callable: true },
+      steps: [{
+        name: 'review',
+        persona: 'reviewer',
+        instruction: 'Review',
+        rules: [{ condition: 'done', next: 'COMPLETE' }],
+      }],
+    }, '/tmp');
+
+    expect(workflow.maxSteps).toBe(10);
+  });
+
+  it('accepts scalar vars only on workflow_call steps and preserves them after normalization', () => {
+    const raw = {
+      name: 'parent',
+      steps: [createWorkflowCallStep({
+        vars: {
+          review_mode: 'follow_up',
+          attempt: 2,
+          strict: true,
+          disabled: false,
+          offset: 0,
+        },
+      })],
+    };
+
+    expect(WorkflowConfigRawSchema.safeParse(raw).success).toBe(true);
+    expect(normalizeWorkflowConfig(raw, '/tmp').steps[0]).toMatchObject({
+      vars: {
+        review_mode: 'follow_up',
+        attempt: 2,
+        strict: true,
+        disabled: false,
+        offset: 0,
+      },
+    });
+
+    const agentResult = WorkflowStepRawSchema.safeParse({
+      name: 'review',
+      persona: 'reviewer',
+      instruction: 'review',
+      vars: { review_mode: 'initial' },
+      rules: [{ condition: 'done', next: 'COMPLETE' }],
+    });
+    expect(agentResult.success).toBe(false);
+  });
+
+  it.each([
+    ['', 'empty'],
+    ['1mode', 'leading digit'],
+    ['review mode', 'whitespace'],
+  ])('rejects a workflow_call var key at the parser boundary: %s (%s)', (key) => {
+    const result = WorkflowStepRawSchema.safeParse(createWorkflowCallStep({
+      vars: { [key]: 'follow_up' },
+    }));
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((issue) => issue.path.includes('vars'))).toBe(true);
+    }
+  });
+
+  it.each([Number.POSITIVE_INFINITY, Number.NaN])(
+    'rejects a non-finite workflow_call var value: %s',
+    (value) => {
+      const result = WorkflowStepRawSchema.safeParse(createWorkflowCallStep({
+        vars: { attempt: value },
+      }));
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some((issue) => issue.path.includes('vars'))).toBe(true);
+      }
+    },
+  );
+
+  it('rejects vars on system steps', () => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'route',
+      kind: 'system',
+      vars: { review_mode: 'initial' },
+      rules: [{ condition: 'when(true)', next: 'COMPLETE' }],
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((issue) => issue.path[0] === 'vars')).toBe(true);
+    }
+  });
+
   it('accepts workflow_ref params and empty facet_ref array values', () => {
     const result = WorkflowConfigRawSchema.safeParse({
       name: 'composer',
@@ -189,7 +328,6 @@ describe('workflow_call schema', () => {
         },
       },
       initial_step: 'review',
-      max_steps: 3,
       steps: [
         {
           name: 'review',
@@ -268,7 +406,6 @@ describe('workflow_call schema', () => {
         callable: true,
       },
       initial_step: 'delegate',
-      max_steps: 3,
       steps: [
         {
           name: 'delegate',
@@ -325,7 +462,6 @@ describe('workflow_call schema', () => {
         returns: [reservedResult],
       },
       initial_step: 'review',
-      max_steps: 3,
       steps: [
         {
           name: 'review',
@@ -743,7 +879,6 @@ describe('workflow_call schema', () => {
           returns: ['ok'],
         },
         initial_step: 'review',
-        max_steps: 3,
         steps: [
           {
             name: 'review',
@@ -796,7 +931,6 @@ describe('workflow_call schema', () => {
           returns: ['ok'],
         },
         initial_step: 'review',
-        max_steps: 3,
         steps: [
           {
             name: 'review',
@@ -824,7 +958,6 @@ describe('workflow_call schema', () => {
           returns: ['ok'],
         },
         initial_step: 'review',
-        max_steps: 3,
         steps: [
           {
             name: 'review',

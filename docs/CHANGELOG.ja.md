@@ -6,6 +6,12 @@
 
 フォーマットは [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) に基づいています。
 
+## [Unreleased]
+
+### Changed
+
+- **BREAKING:** `workflow_call` をカウントしない制御ノードへ変更し、ルート workflow の `max_steps` をすべての子孫の実 step が共有するようにしました (#1133)。callable workflow は `max_steps` を定義できず、明示するとロード時にエラーになり、callable workflow のルート直接実行も拒否されます。call wrapper 自身は provider / model を解決・記録しません。session log と trace では、call invocation と完全な call stack をキーにした provider 非依存の lifecycle record を確認できます。同じ予算で call 1回につき実 step 1回分の余裕が増えるため、iteration 番号や wrapper の provider 情報を解析する利用者は更新が必要です。
+
 ## [0.54.1] - 2026-07-29
 
 ### Fixed

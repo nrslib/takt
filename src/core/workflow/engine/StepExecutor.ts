@@ -195,6 +195,7 @@ export interface StepExecutorDeps {
   readonly getWorkflowName: () => string;
   readonly getTask: () => string;
   readonly getWorkflowDescription: () => string | undefined;
+  readonly getWorkflowCallVars?: () => Readonly<Record<string, string | number | boolean>> | undefined;
   readonly getRetryNote: () => string | undefined;
   readonly getPrContext?: () => PullRequestContext | undefined;
   readonly getObservabilityRunId?: () => string | undefined;
@@ -1602,6 +1603,7 @@ export class StepExecutor {
       currentStepIndex: workflowSteps.findIndex(s => s.name === step.name),
       workflowName: this.deps.getWorkflowName(),
       workflowDescription: this.deps.getWorkflowDescription(),
+      workflowCallVars: this.deps.getWorkflowCallVars?.(),
       retryNote: this.deps.getRetryNote(),
       prContext: this.deps.getPrContext?.(),
       policyContents: policySnapshot?.content ?? step.policyContents,

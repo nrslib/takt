@@ -30,6 +30,18 @@ not the pass/fail summary.
 | `finding-normalizer` | self-contained review + engine context -> Finding Contract JSON | direct FC assembly cases | schema validity, all 12 required fields, exact output, extra-key count, completion, and duration |
 | `frontend-coder` | frontend / implement | frontend-app (work copy) | artifact checks on the implemented change |
 | `cqrs-coder` | backend-cqrs / implement | backend-cqrs (work copy) | artifact checks on the implemented change |
+| `fix-closure` | review-remediation / fix-retry | fix-closure (work copy) | whether verifier-return remediation closes every falsifiable obligation across multiple fix units and hierarchical projections |
+| `fix-plan-fresh-findings` | peer-review / fix-plan | fix-plan-fresh-findings | whether fix-plan uses the canonical review resolution's actionable families without reviving its non-actionable findings |
+| `fix-plan-boundary-preflight` | peer-review / fix-plan | fix-plan-boundary-preflight | whether fix-plan rejects a locally valid method that violates its representation and persistence boundary |
+| `review-family-closure` | peer-review-suite-base / coding-review | review-family-closure | whether one review reports every path affected by the same contract defect |
+| `initial-review-contract-discovery` | peer-review / initial coding-review | initial-review-contract-discovery | whether the initial review independently discovers and completes multiple blocking families |
+| `initial-plan-contract-closure` | default / plan | initial-review-contract-discovery | whether the initial plan traces every completion contract and closes real multi-boundary impact paths |
+| `replan-contract-closure` | takt-default-high / replan | initial-review-contract-discovery | whether replanning preserves the original task while adding required production boundaries |
+| `write-tests-contract-traceability` | default / write_tests | write-tests-contract-traceability | whether generated tests discriminate the intended local contract from plausible mutations |
+| `implement-contract-traceability` | default / implement | implement-contract-traceability | whether implementation preserves named contract identities from plan and tests |
+| `implementation-report-contract-traceability` | default / implementation report | implement-contract-traceability | whether the report preserves the same contract identities and evidence |
+| `follow-up-review-repair-regression` | peer-review / follow-up coding-review | follow-up-review-repair-regression | whether follow-up review distinguishes repair-induced defects from adjacent omissions |
+| `review-adjudication` | peer-review / review-adjudication | review-adjudication | whether real defects remain actionable while duplicates, overreach, false positives, and environment-only gaps are separated by evidence |
 
 Reviewer suites run read-only against `eval/fixtures/*`. Coder suites run
 with `sandbox_mode: workspace-write` in a disposable copy under `eval/.work/`
@@ -89,7 +101,8 @@ test case — and the case must FAIL before the facet fix is trusted.
    change that addresses the cause.
 5. **Run and confirm PASS (green)**, then run the other affected suites to
    check nothing regressed. Because detection is stochastic, confirm
-   important fixes with `--repeat 3`, not a single lucky pass.
+   important reviewer fixes with `--repeat 3`. For mutable coder suites,
+   rerun the complete prepare-and-eval command so each trial gets a fresh work copy.
 6. Keep the case forever — it is the regression test for that miss.
 
 ## How it works
@@ -130,6 +143,17 @@ npm run eval:prompts             # prepare + ALL suites
 npm run eval:prompts -- arch cqrs        # only selected suites
 npm run eval:prompts -- arch --repeat 3  # extra flags pass through to promptfoo
 npm run eval:prompts:prepare     # prepare only (inspect eval/prompts/)
+npm run eval:prompts:fix-closure
+npm run eval:prompts:fix-plan-fresh-findings
+npm run eval:prompts:fix-plan-boundary-preflight
+npm run eval:prompts:review-family-closure
+npm run eval:prompts:initial-review-contract-discovery
+npm run eval:prompts:initial-plan-contract-closure
+npm run eval:prompts:replan-contract-closure
+npm run eval:prompts:write-tests-contract-traceability
+npm run eval:prompts:implement-contract-traceability
+npm run eval:prompts:follow-up-review-repair-regression
+npm run eval:prompts:review-adjudication
 npm run eval:finding-normalizer -- --models luna --batch-size 1 --repeat 3
 npm run eval:finding-normalizer -- --models sol,opus --reports 1,2,3
 npm run eval:finding-normalizer -- --models terra,sonnet --reports 1,2
@@ -147,6 +171,9 @@ node eval/scripts/run-finding-report-normalizer-eval.mjs \
   --result-set synthetic-comparison
 npx promptfoo view               # browse results in the web UI
 ```
+
+Do not use `--repeat` with mutable coder suites such as `fix-closure`,
+`frontend-coder`, or `cqrs-coder`; independent trials require a fresh work copy.
 
 Run from the repo root. Note: `working_dir` in the configs is resolved
 relative to the config file's directory (`eval/`), not the process cwd.

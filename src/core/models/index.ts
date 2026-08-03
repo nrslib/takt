@@ -28,6 +28,7 @@ export type {
   WorkflowParamType,
   WorkflowParamFacetKind,
   WorkflowCallArgValue,
+  WorkflowCallVariableValue,
   WorkflowSubworkflowParamConfig,
   WorkflowSubworkflowConfig,
   WorkflowResumePointEntry,

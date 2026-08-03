@@ -16,6 +16,18 @@ import {
 import { computeDismissCandidates } from './manager-utils.js';
 import { isOutstandingReviewerAnomaly } from './reviewer-anomalies.js';
 
+function resolveFindingLedgerInstructionProjection(ledger: FindingLedger): FindingLedger {
+  const completed = ledger.pendingManagerCommit?.completed;
+  if (completed === undefined) {
+    return ledger;
+  }
+  return {
+    ...ledger,
+    ...completed,
+    pendingManagerCommit: ledger.pendingManagerCommit,
+  };
+}
+
 function findingLocations(
   ledger: FindingLedger,
   finding: FindingLedgerEntry,
@@ -62,7 +74,8 @@ function deriveFindingFamilyTags(
 export function selectActionableFindingEntries(
   ledger: FindingLedger,
 ): ProductFindingEntry[] {
-  const findings = ledger.findings.filter((finding) => (
+  const projection = resolveFindingLedgerInstructionProjection(ledger);
+  const findings = projection.findings.filter((finding) => (
     finding.status === 'open' && finding.provisional === undefined
   ));
   for (const finding of findings) {
@@ -90,18 +103,19 @@ function buildActionableFindingLedgerInstructionSummary(
     familyTags: string[];
   }>;
 } {
+  const projection = resolveFindingLedgerInstructionProjection(ledger);
   const selectedIds = findingIds === undefined ? undefined : new Set(findingIds);
-  const familyTagsByRawFindingId = indexRawFindingFamilyTags(ledger);
+  const familyTagsByRawFindingId = indexRawFindingFamilyTags(projection);
   return {
-    workflowName: ledger.workflowName,
-    open: selectActionableFindingEntries(ledger)
+    workflowName: projection.workflowName,
+    open: selectActionableFindingEntries(projection)
       .filter((finding) => selectedIds === undefined || selectedIds.has(finding.id))
       .map((finding) => ({
         id: finding.id,
         lifecycle: finding.lifecycle,
         severity: finding.severity,
         title: finding.title,
-        locations: findingLocations(ledger, finding),
+        locations: findingLocations(projection, finding),
         description: finding.description,
         suggestion: finding.suggestion,
         rawFindingIds: finding.rawFindingIds,
@@ -129,10 +143,11 @@ export function renderCompactActionableFindingLedgerInstructionSummary(
 }
 
 export function renderFindingLedgerInstructionSummary(ledger: FindingLedger): string {
-  const familyTagsByRawFindingId = indexRawFindingFamilyTags(ledger);
+  const projection = resolveFindingLedgerInstructionProjection(ledger);
+  const familyTagsByRawFindingId = indexRawFindingFamilyTags(projection);
   return JSON.stringify({
-    workflowName: ledger.workflowName,
-    open: ledger.findings
+    workflowName: projection.workflowName,
+    open: projection.findings
       .filter((finding) => finding.status === 'open')
       .map((finding) => {
         const familyContext = deriveFindingFamilyTags(finding, familyTagsByRawFindingId);
@@ -141,7 +156,7 @@ export function renderFindingLedgerInstructionSummary(ledger: FindingLedger): st
           lifecycle: finding.lifecycle,
           severity: finding.severity,
           title: finding.title,
-          locations: findingLocations(ledger, finding),
+          locations: findingLocations(projection, finding),
           description: finding.description,
           suggestion: finding.suggestion,
           reviewers: finding.reviewers,
@@ -153,7 +168,7 @@ export function renderFindingLedgerInstructionSummary(ledger: FindingLedger): st
             : {}),
         };
       }),
-    resolved: ledger.findings
+    resolved: projection.findings
       .filter((finding) => finding.status === 'resolved')
       .map((finding) => ({
         id: finding.id,
@@ -161,7 +176,7 @@ export function renderFindingLedgerInstructionSummary(ledger: FindingLedger): st
         severity: finding.severity,
         title: finding.title,
       })),
-    waived: ledger.findings
+    waived: projection.findings
       .filter((finding) => finding.status === 'waived')
       .map((finding) => ({
         id: finding.id,
@@ -173,7 +188,7 @@ export function renderFindingLedgerInstructionSummary(ledger: FindingLedger): st
     // エンジンが検証済み）と superseded（重複として canonical へ統合済み）は
     // ブロッキング対象外だが、「消えた」のではなく「こう裁定された」ことが
     // サマリから追えるようにする。既存キーの形式は変えない（追加のみ）。
-    invalidated: ledger.findings
+    invalidated: projection.findings
       .filter((finding) => finding.status === 'invalidated')
       .map((finding) => ({
         id: finding.id,
@@ -181,14 +196,14 @@ export function renderFindingLedgerInstructionSummary(ledger: FindingLedger): st
         title: finding.title,
         evidence: finding.invalidatedEvidence,
       })),
-    superseded: ledger.findings
+    superseded: projection.findings
       .filter((finding) => finding.status === 'superseded')
       .map((finding) => ({
         id: finding.id,
         title: finding.title,
         supersededBy: finding.supersededByFindingId,
       })),
-    dismissed: ledger.findings
+    dismissed: projection.findings
       .filter((finding) => finding.status === 'dismissed')
       .map((finding) => ({
         id: finding.id,
@@ -199,7 +214,7 @@ export function renderFindingLedgerInstructionSummary(ledger: FindingLedger): st
         workflowTaskDigest: finding.dismissal?.workflowTaskDigest,
         adjudicationTaskId: finding.dismissal?.adjudicationTaskId,
       })),
-    conflicts: ledger.conflicts.map((conflict) => ({
+    conflicts: projection.conflicts.map((conflict) => ({
       id: conflict.id,
       status: conflict.status,
       findingIds: conflict.findingIds,
@@ -210,14 +225,15 @@ export function renderFindingLedgerInstructionSummary(ledger: FindingLedger): st
 }
 
 export function renderFindingLedgerReportSummary(ledger: FindingLedger): string {
+  const projection = resolveFindingLedgerInstructionProjection(ledger);
   return JSON.stringify({
-    openFindingIds: ledger.findings
+    openFindingIds: projection.findings
       .filter((finding) => finding.status === 'open')
       .map((finding) => finding.id),
-    resolvedFindingIds: ledger.findings
+    resolvedFindingIds: projection.findings
       .filter((finding) => finding.status === 'resolved')
       .map((finding) => finding.id),
-    waivedFindings: ledger.findings
+    waivedFindings: projection.findings
       .filter((finding) => finding.status === 'waived')
       .map((finding) => ({
         id: finding.id,
@@ -225,39 +241,43 @@ export function renderFindingLedgerReportSummary(ledger: FindingLedger): string 
         reason: finding.waivers?.at(-1)?.reason,
         evidence: finding.waivers?.at(-1)?.evidence,
       })),
-    invalidatedFindingIds: ledger.findings
+    invalidatedFindingIds: projection.findings
       .filter((finding) => finding.status === 'invalidated')
       .map((finding) => finding.id),
-    supersededFindingIds: ledger.findings
+    supersededFindingIds: projection.findings
       .filter((finding) => finding.status === 'superseded')
       .map((finding) => finding.id),
-    dismissedFindingIds: ledger.findings
+    dismissedFindingIds: projection.findings
       .filter((finding) => finding.status === 'dismissed')
       .map((finding) => finding.id),
-    conflictIds: ledger.conflicts.map((conflict) => conflict.id),
+    conflictIds: projection.conflicts.map((conflict) => conflict.id),
   }, null, 2);
 }
 
 /** 台帳に open な指摘が存在するか（異議申告ガイドの注入判定に使う）。 */
 export function ledgerHasOpenFindings(ledger: FindingLedger): boolean {
-  return ledger.findings.some((finding) => finding.status === 'open');
+  return resolveFindingLedgerInstructionProjection(ledger).findings
+    .some((finding) => finding.status === 'open');
 }
 
 /** 台帳に waived な指摘が存在するか（waived 除外指示の注入判定に使う）。 */
 export function ledgerHasWaivedFindings(ledger: FindingLedger): boolean {
-  return ledger.findings.some((finding) => finding.status === 'waived');
+  return resolveFindingLedgerInstructionProjection(ledger).findings
+    .some((finding) => finding.status === 'waived');
 }
 
 export function ledgerHasDismissedFindings(ledger: FindingLedger): boolean {
-  return ledger.findings.some((finding) => finding.status === 'dismissed');
+  return resolveFindingLedgerInstructionProjection(ledger).findings
+    .some((finding) => finding.status === 'dismissed');
 }
 
 export function buildFindingsRuleContext(ledger: FindingLedger, _cwd: string): FindingsRuleContext {
-  const openItems = ledger.findings.filter((finding) => finding.status === 'open');
-  const familyTagsByRawFindingId = indexRawFindingFamilyTags(ledger);
-  const activeConflicts = ledger.conflicts.filter((conflict) => conflict.status === 'active');
+  const projection = resolveFindingLedgerInstructionProjection(ledger);
+  const openItems = projection.findings.filter((finding) => finding.status === 'open');
+  const familyTagsByRawFindingId = indexRawFindingFamilyTags(projection);
+  const activeConflicts = projection.conflicts.filter((conflict) => conflict.status === 'active');
   const unadjudicatedConflictCount = activeConflicts.filter((conflict) => (
-    isActiveConflictUnadjudicated(ledger, conflict.id)
+    isActiveConflictUnadjudicated(projection, conflict.id)
   )).length;
   const bySeverity = Object.fromEntries(
     FINDING_SEVERITIES.map((severity) => [severity, 0]),
@@ -276,7 +296,7 @@ export function buildFindingsRuleContext(ledger: FindingLedger, _cwd: string): F
         id: finding.id,
         severity: finding.severity,
         title: finding.title,
-        locations: findingLocations(ledger, finding),
+        locations: findingLocations(projection, finding),
         description: finding.description,
         suggestion: finding.suggestion,
         reviewers: finding.reviewers,
@@ -290,12 +310,12 @@ export function buildFindingsRuleContext(ledger: FindingLedger, _cwd: string): F
     provisional: {
       count: openItems.filter((finding) => finding.provisional !== undefined).length,
       dismissEligible: {
-        count: computeDismissCandidates(ledger).size,
+        count: computeDismissCandidates(projection).size,
       },
       // 直前の findings-manager ラウンドが fixpoint に達したか
       // （台帳側で計算・永続化済み。ここは読むだけ）。builtin workflow はこれを
       // 見て要件を維持した再計画へルーティングする。
-      fixpoint: ledger.fixpoint?.reached ?? false,
+      fixpoint: projection.fixpoint?.reached ?? false,
       items: openItems
         .filter((finding) => finding.provisional !== undefined)
         .map((finding) => ({
@@ -309,21 +329,21 @@ export function buildFindingsRuleContext(ledger: FindingLedger, _cwd: string): F
     // provisional バケットとは独立 — fixpoint が成立しない churn でも、
     // ラウンド数だけで機械的に判定できる最終防波堤。
     rounds: {
-      budgetExhausted: ledger.stopBudget?.exhausted ?? false,
+      budgetExhausted: projection.stopBudget?.exhausted ?? false,
     },
     resolved: {
-      count: ledger.findings.filter((finding) => finding.status === 'resolved').length,
+      count: projection.findings.filter((finding) => finding.status === 'resolved').length,
     },
     waived: {
-      count: ledger.findings.filter((finding) => finding.status === 'waived').length,
+      count: projection.findings.filter((finding) => finding.status === 'waived').length,
     },
     // 監査可視化のみ。gate 条件は open/conflicts のまま
     // 変えない — count を公開するだけで、既存ルール式の意味は変わらない。
     invalidated: {
-      count: ledger.findings.filter((finding) => finding.status === 'invalidated').length,
+      count: projection.findings.filter((finding) => finding.status === 'invalidated').length,
     },
     superseded: {
-      count: ledger.findings.filter((finding) => finding.status === 'superseded').length,
+      count: projection.findings.filter((finding) => finding.status === 'superseded').length,
     },
     // review-integrity protocol: 二系統台帳の review-integrity 側。未昇格かつ
     // 未settleの anomaly だけを数える — 昇格済みは既に product finding 側
@@ -331,12 +351,12 @@ export function buildFindingsRuleContext(ledger: FindingLedger, _cwd: string): F
     // gate（COMPLETE 判定）はこの count を一切参照しない — reviewerAnomalies は
     // findings 配列と別物なので、参照しなくても構造的に gate を塞げない。
     reviewerAnomalies: {
-      count: (ledger.reviewerAnomalies ?? []).filter(isOutstandingReviewerAnomaly).length,
+      count: (projection.reviewerAnomalies ?? []).filter(isOutstandingReviewerAnomaly).length,
       // review-integrity requirement: review-integrity 予算が尽きたか（台帳側で計算・
       // 永続化済み。ここは読むだけ）。未昇格 anomaly が残る限り COMPLETE は許さず
       // 再レビューへ送るが、有限回で補完できなければ builtin はこれを見て
       // 要件を維持した再計画へルーティングする。
-      budgetExhausted: ledger.reviewIntegrity?.exhausted ?? false,
+      budgetExhausted: projection.reviewIntegrity?.exhausted ?? false,
     },
     conflicts: {
       count: activeConflicts.length,

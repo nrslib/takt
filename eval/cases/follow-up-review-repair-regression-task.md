@@ -1,0 +1,1 @@
+A resource identity consists of both tenant ID and job ID. Review the current remediation without trusting its completion claim, and report every blocking defect within the directly affected public and persisted identity projections.

@@ -4,7 +4,8 @@ Create an executable plan that turns every reviewer finding into one coherent fi
 
 **Reference policy:**
 - When a parseable Finding Contract ledger exists, its open findings are the authoritative target; use individual reports as evidence for causes, reproduction conditions, and acceptance criteria
-- Otherwise, use the latest reviewer reports in the Report Directory as the authoritative target
+- When there is no ledger, use the latest reviewer reports in the Report Directory as the authoritative target; do not compare timestamps across report files or add targets from old history
+- Use individual reviewer and final-gate reports only as evidence for causes, reproduction conditions, and acceptance criteria of findings in the authoritative target; do not independently reopen findings that the target classifies as non-actionable
 - Only for persists / reopened findings or a new structural issue reported after a fix, inspect up to two timestamped predecessors per report and identify the assumption missing from the earlier remediation
 
 {{include:instructions/fix-root-cause-analysis}}

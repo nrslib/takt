@@ -49,6 +49,31 @@ export interface NdjsonWorkflowStart {
 
 export type NdjsonWorkflowStackEntry = CanonicalWorkflowResumeFrame;
 
+export interface NdjsonWorkflowCallStart {
+  type: 'workflow_call_start';
+  workflow: string;
+  step: string;
+  childWorkflow: string;
+  callInstance: number;
+  stack: NdjsonWorkflowStackEntry[];
+  timestamp: string;
+}
+
+export interface NdjsonWorkflowCallComplete {
+  type: 'workflow_call_complete';
+  workflow: string;
+  step: string;
+  childWorkflow: string;
+  callInstance: number;
+  stack: NdjsonWorkflowStackEntry[];
+  status: 'completed' | 'aborted' | 'failed';
+  returnValue?: string;
+  abortKind?: string;
+  abortReason?: string;
+  reason?: string;
+  timestamp: string;
+}
+
 export interface NdjsonStepStart {
   type: 'step_start';
   step: string;
@@ -160,6 +185,8 @@ export interface NdjsonInteractiveEnd {
 
 export type NdjsonRecord =
   | NdjsonWorkflowStart
+  | NdjsonWorkflowCallStart
+  | NdjsonWorkflowCallComplete
   | NdjsonStepStart
   | NdjsonStepComplete
   | NdjsonWorkflowComplete

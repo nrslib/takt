@@ -32,7 +32,6 @@ workflow_config:
       network_access: true
     opencode:
       network_access: true
-max_steps: 5
 initial_step: merge-readiness-review
 steps:
   - name: merge-readiness-review

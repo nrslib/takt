@@ -53,6 +53,7 @@ function normalizeLoopMonitorJudge(
 export function normalizeLoopMonitors(
   raw: Array<{
     cycle: string[];
+    ignore_steps?: string[];
     threshold: number;
     judge: {
       session_key?: string;
@@ -74,6 +75,7 @@ export function normalizeLoopMonitors(
 
   return raw.map((monitor) => ({
     cycle: monitor.cycle,
+    ignoreSteps: monitor.ignore_steps,
     threshold: monitor.threshold,
     judge: normalizeLoopMonitorJudge(monitor.judge, workflowDir, sections, context),
   }));

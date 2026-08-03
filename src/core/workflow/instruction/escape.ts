@@ -25,6 +25,15 @@ export function replaceTemplatePlaceholders(
 ): string {
   let result = template;
 
+  result = result.replace(/\{var:([^}]+)\}/g, (_match, rawName: string) => {
+    const name = rawName.trim();
+    const variables = context.workflowCallVars;
+    if (variables === undefined || !Object.hasOwn(variables, name)) {
+      return 'unspecified';
+    }
+    return escapeTemplateChars(String(variables[name]));
+  });
+
   result = result.replace(/\{(context|structured|effect):([^}]+)\}/g, (_match, root: string, ref: string) => {
     if (!context.workflowState) {
       throw new Error(`Workflow state is required for "{${root}:${ref}}" interpolation`);

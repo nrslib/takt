@@ -3,9 +3,14 @@ import type { LoopMonitorConfig } from '../core/models/index.js';
 import { parseWorkflowRuleCondition } from '../core/models/workflow-rule-condition.js';
 import { CycleDetector } from '../core/workflow/engine/cycle-detector.js';
 
-function makeMonitor(cycle: string[], threshold: number): LoopMonitorConfig {
+function makeMonitor(
+  cycle: string[],
+  threshold: number,
+  ignoreSteps?: string[],
+): LoopMonitorConfig {
   return {
     cycle,
+    ignoreSteps,
     threshold,
     judge: {
       rules: [
@@ -68,6 +73,28 @@ describe('CycleDetector', () => {
 
     expect(detector.getHistory()).toEqual([]);
     expect(detector.recordAndCheck('A', 'B').triggered).toBe(false);
+  });
+
+  it('counts a logical cycle while ignoring configured intermediate steps', () => {
+    const monitor = makeMonitor(['review', 'fix'], 2, ['verify', 'retry']);
+    const detector = new CycleDetector([monitor]);
+
+    detector.recordAndCheck('review', 'fix');
+    detector.recordAndCheck('fix', 'verify');
+    detector.recordAndCheck('verify', 'retry');
+    detector.recordAndCheck('retry', 'verify');
+    expect(detector.recordAndCheck('verify', 'review').triggered).toBe(false);
+
+    detector.recordAndCheck('review', 'fix');
+    detector.recordAndCheck('fix', 'verify');
+    detector.recordAndCheck('verify', 'retry');
+    detector.recordAndCheck('retry', 'verify');
+    detector.recordAndCheck('verify', 'retry');
+    detector.recordAndCheck('retry', 'verify');
+    const result = detector.recordAndCheck('verify', 'review');
+
+    expect(result).toEqual({ triggered: true, cycleCount: 2, monitor });
+    expect(detector.getHistory()).toHaveLength(12);
   });
 
   it('never triggers without configured monitors', () => {

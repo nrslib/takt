@@ -1,0 +1,58 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'TAKT facet eval: initial plan traces completion contracts without over-expanding impact paths'
+
+prompts:
+  - file://prompts/initial-plan-contract-closure.phase1.md
+
+providers:
+  - id: openai:codex-sdk
+    label: codex
+    config:
+      working_dir: fixtures/initial-review-contract-discovery
+      sandbox_mode: read-only
+      approval_policy: never
+      skip_git_repo_check: true
+      model_reasoning_effort: low
+
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model_reasoning_effort: low
+
+tests:
+  - description: 'initial plan: inventory public projections and collision-safe persisted identity'
+    vars:
+      task: file://cases/initial-plan-contract-closure-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: plan/changed-contract-closure
+        value: |
+          Judge the plan by its executable meaning, not by headings, identifier format, table shape, or exact wording. Pass only when all of the following are true:
+
+          - It assigns stable, reusable identifiers to at least two distinct changed-contract families and uses those identifiers to connect requirements, implementation scope, and verification work.
+          - It traces the public projection contract through every relevant producer and consumer in the fixture, including preview, doctor, summary, and their shared test coverage, without assuming that a shared helper alone proves every caller.
+          - It traces execution identity through every relevant creator, derived key, persistence, checkpoint, event, and restore/resume participant in the fixture.
+          - It includes a concrete counterexample where two distinct logical executions could be confused by a non-injective identifier representation, and plans verification that rejects that counterexample.
+          - It includes a continuous persistence-to-restoration or resumption scenario that proves the same logical execution keeps its identity across the lifecycle.
+          - It requires evidence through real production entry paths, not only isolated helpers or a broad test-suite pass.
+          - It preserves the existing ordinary executable-task behavior and plans regression evidence for it.
+
+          Fail if any participant or lifecycle segment is omitted, if the plan lists only local edits without cross-boundary verification, or if it treats planned code or existing tests as sufficient proof without identifying the relevant scenario and assertion.
+
+  - description: 'initial plan: keep a local output-format change local'
+    vars:
+      task: file://cases/initial-plan-local-contract-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: plan/local-contract-precision
+        value: |
+          Judge the plan by its executable meaning, not by headings, identifier format, table shape, or exact wording. Pass only if it assigns a stable contract identifier to the requested formatting behavior, preserves the numeric attempt value, and plans the direct source and unit-test changes needed to reject the old colon-separated result. The plan may mention an explicit no-change obligation for unrelated behavior, but it must keep the implementation local to formatAttempt and its test.
+
+          Fail if it invents persistence, restoration, authorization, concurrency, migration, compatibility layers, new abstractions, or changes to unrelated node, job, checkpoint, event, or projection modules. Also fail if it expands the local function-to-test relationship into a multi-boundary impact path, or if it treats a broad suite pass as the only evidence for the formatting contract.

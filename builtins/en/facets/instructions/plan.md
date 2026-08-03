@@ -10,6 +10,8 @@ Revise the plan taking that feedback into account.
 
 For small tasks, skip the design section.
 
+{{include:instructions/change-contract-traceability}}
+
 **Actions:**
 1. **Read reference materials (required; do this first)**
    - Actually open and inspect the files or directories listed in the "Reference Materials" section of the task instructions using Read/Glob
@@ -20,6 +22,7 @@ For small tasks, skip the design section.
    - If Knowledge / Policy Source Paths are provided, open them with the Read tool and check the `##` sections that affect design decisions for this task
    - Reflect the applied constraints and anti-patterns to avoid in the implementation approach and coder implementation guidelines
 3. Understand the task requirements
+   - **Keep the stated objective, constraints, and acceptance criteria fixed instead of reinterpreting them as an easier implementation problem. Distinguish whether an example method is required by the request or is only a candidate means of satisfying it**
    - Compare the reference materials with the current implementation and identify the differences
    - **When reference material points to an external implementation, determine whether it is a "bug fix clue" or a "design approach to adopt". If narrowing scope beyond the reference material's intent, include the rationale in the plan report**
    - **For each requirement, determine "change needed / not needed". If "not needed", cite the relevant current code location (file:line) as evidence. Claiming "already correct" without evidence is prohibited**
@@ -28,9 +31,13 @@ For small tasks, skip the design section.
    - **When adding an implicit requirement, state which explicit requirement it is derived from in the plan report**
 4. Investigate code to resolve unknowns
 5. Identify the impact area
+   - Identify implementation and verification locations for every contract ID. Only for contracts with impact paths, enumerate the relevant path from production to the final consumer
+   - Identify the feature's role in the system and the owners of its entry points, trust boundaries, state, authority, and side effects
+   - Only when user or external input, authorization, sensitive information, external execution, persistence, retries, or concurrency actually participates, include the relevant validation, rejection, and failure handling. Do not add unrelated concerns mechanically
 6. Determine file structure and design patterns (if needed)
 7. Decide on the implementation approach
    - Verify the implementation approach does not violate knowledge/policy constraints
+   - Do not confuse keeping the diff small with omitting required production behavior. Put validation, authorization, state updates, error handling, and cleanup into the participating execution paths when they are required for the acceptance criteria
    - When adding or changing a user-facing feature, fix the conditions, entry points, and reachability by which users arrive at it
 8. Include the following in coder implementation guidelines:
    - Existing implementation patterns to reference (file:line). Always cite when similar processing already exists

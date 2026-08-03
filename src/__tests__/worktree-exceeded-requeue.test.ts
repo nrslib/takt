@@ -70,6 +70,7 @@ import { executeAndCompleteTask } from '../features/tasks/execute/taskExecution.
 import { TaskRunner } from '../infra/task/runner.js';
 import type { WorkflowConfig } from '../core/models/index.js';
 import type { WorkflowExecutionOptions } from '../features/tasks/execute/types.js';
+import { buildWorkflowCallInvocationRecordsFixture } from './helpers/workflow-resume-fixture.js';
 
 // --- Helpers ---
 
@@ -200,7 +201,13 @@ describe('シナリオ1・2: exceeded status transition via executeAndCompleteTa
       ],
       iteration: 30,
       elapsed_ms: 183245,
-      workflow_call_invocations: {},
+      workflow_call_invocations: buildWorkflowCallInvocationRecordsFixture([{
+        workflowReference: 'test-workflow',
+        step: 'delegate',
+        ownerPath: [],
+        callInstance: 1,
+        childWorkflowReference: 'takt/coding',
+      }]),
       workflow_step_participations: {},
     };
     runner.addTask('Do work', { workflow: 'test-workflow' });
@@ -418,7 +425,13 @@ describe('シナリオ3・4: requeue → re-execution passes exceeded metadata t
         ],
         iteration: 30,
         elapsed_ms: 183245,
-        workflow_call_invocations: {},
+        workflow_call_invocations: buildWorkflowCallInvocationRecordsFixture([{
+          workflowReference: 'test-workflow',
+          step: 'delegate',
+          ownerPath: [],
+          callInstance: 1,
+          childWorkflowReference: 'takt/coding',
+        }]),
         workflow_step_participations: {},
       },
     });
@@ -448,7 +461,13 @@ describe('シナリオ3・4: requeue → re-execution passes exceeded metadata t
       ],
       iteration: 30,
       elapsed_ms: 183245,
-      workflow_call_invocations: {},
+      workflow_call_invocations: buildWorkflowCallInvocationRecordsFixture([{
+        workflowReference: 'test-workflow',
+        step: 'delegate',
+        ownerPath: [],
+        callInstance: 1,
+        childWorkflowReference: 'takt/coding',
+      }]),
       workflow_step_participations: {},
     });
   });
