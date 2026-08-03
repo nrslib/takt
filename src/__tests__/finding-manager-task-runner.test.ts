@@ -891,6 +891,62 @@ describe('main manager bounded task runner', () => {
     expect(new Set(componentIds).size).toBe(17);
   });
 
+  it('processes second-round resolution confirmations that share one ledger lifecycle head', async () => {
+    const finding = ledgerFinding(1);
+    const lifecycleHead = {
+      entityKind: 'finding' as const,
+      entityId: finding.id,
+      revision: finding.revision,
+      eventId: 'event-F-0001-1',
+      projectionDigest: 'projection-F-0001-1',
+    };
+    const previousLedger = emptyLedger({
+      findings: [finding],
+      lifecycleEvents: [{
+        eventId: lifecycleHead.eventId,
+        mutationId: 'mutation-event-F-0001-1',
+        reservationId: 'reservation-event-F-0001-1',
+        operation: 'create_finding',
+        transitions: [{ before: null, after: lifecycleHead }],
+        evidenceBindingIds: [],
+        outcome: { kind: 'projection_applied' },
+        resultDigest: 'result-event-F-0001-1',
+        occurredAt: {
+          runId: 'run',
+          stepName: 'reviewer',
+          timestamp: '2026-07-29T00:00:00.000Z',
+        },
+      }],
+    });
+    const confirmations = [1, 2].map((index) => rawFinding(index, {
+      relation: 'resolution_confirmation',
+      targetFindingId: finding.id,
+      targetPrecondition: {
+        targetFindingId: finding.id,
+        targetRevision: finding.revision,
+        targetStatus: finding.status,
+        targetEvidenceHash: 'finding-evidence-head-1',
+      },
+    }));
+    executeAgentMock.mockImplementation(async (_persona, instruction) => (
+      successfulRawResponse(instruction, 'same')
+    ));
+
+    const result = await run(confirmations, previousLedger);
+
+    expect(result.decisions.rawDecisions).toHaveLength(2);
+    expect(result.rawFailures.size).toBe(0);
+    const manifest = createMainManagerRawTaskManifest({
+      previousLedger,
+      residualRawFindings: confirmations,
+    });
+    const capturedHeads = manifest[0]!.task.ownedRawFindingIds.map((rawFindingId) => (
+      manifest[0]!.task.capturedTargetHeads.get(rawFindingId)
+    ));
+    expect(capturedHeads).toEqual([lifecycleHead, lifecycleHead]);
+    expect(capturedHeads[0]).not.toBe(capturedHeads[1]);
+  });
+
   it('keeps different relation intents separate when one semantic claim spans split tasks', async () => {
     const shared = {
       targetFindingId: 'F-0001',

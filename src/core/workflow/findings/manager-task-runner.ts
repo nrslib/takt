@@ -231,7 +231,9 @@ function createRawTask(
     raw.rawFindingId,
     raw.targetFindingId === null
       ? null
-      : captureFindingLifecycleHead(previousLedger, 'finding', raw.targetFindingId) ?? null,
+      : structuredClone(
+          captureFindingLifecycleHead(previousLedger, 'finding', raw.targetFindingId) ?? null,
+        ),
   ]));
   const rawInputs = sorted.map((raw) => ({
     rawFindingId: raw.rawFindingId,
