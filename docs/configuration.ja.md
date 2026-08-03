@@ -281,7 +281,7 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 
 ### プロジェクト設定フィールドリファレンス
 
-プロジェクト設定はグローバル設定のほとんどのキーを受け付け、グローバル値を上書きします（例: `language`、`logging`、`branch_name_strategy`、`minimal_output`、`task_poll_interval_ms`、`interactive_preview_steps`、`provider_routing`、`persona_providers`、`runtime`、`analytics`、`rate_limit_fallback`、`workflow_overrides`、`disabled_builtins`。意味は[グローバル設定フィールドリファレンス](#グローバル設定フィールドリファレンス)を参照）。次の表はプロジェクト専用キーと、よく使う上書きキーの一覧です。
+プロジェクト設定はグローバル設定のほとんどのキーを受け付け、グローバル値を上書きします（例: `language`、`logging`、`branch_name_strategy`、`minimal_output`、`task_poll_interval_ms`、`interactive_preview_steps`、`provider_routing`、`persona_providers`、`runtime`、`analytics`、`telemetry`、`rate_limit_fallback`、`workflow_overrides`、`disabled_builtins`。意味は[グローバル設定フィールドリファレンス](#グローバル設定フィールドリファレンス)を参照）。次の表はプロジェクト専用キーと、よく使う上書きキーの一覧です。
 
 | フィールド | 型 | デフォルト | 説明 |
 |-----------|------|---------|------|

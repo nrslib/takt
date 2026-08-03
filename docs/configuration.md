@@ -281,7 +281,7 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 
 ### Project Config Field Reference
 
-Project config accepts most global keys and overrides their global values (e.g. `language`, `logging`, `branch_name_strategy`, `minimal_output`, `task_poll_interval_ms`, `interactive_preview_steps`, `provider_routing`, `persona_providers`, `runtime`, `analytics`, `rate_limit_fallback`, `workflow_overrides`, `disabled_builtins` — see the [Global Config Field Reference](#global-config-field-reference) for their meaning). The table below lists project-only keys and the most common overrides.
+Project config accepts most global keys and overrides their global values (e.g. `language`, `logging`, `branch_name_strategy`, `minimal_output`, `task_poll_interval_ms`, `interactive_preview_steps`, `provider_routing`, `persona_providers`, `runtime`, `analytics`, `telemetry`, `rate_limit_fallback`, `workflow_overrides`, `disabled_builtins` — see the [Global Config Field Reference](#global-config-field-reference) for their meaning). The table below lists project-only keys and the most common overrides.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
