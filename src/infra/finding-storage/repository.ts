@@ -189,3 +189,13 @@ export function readSourceAuthorityRaw(
 ): SourceAuthorityRaw | undefined {
   return readAuthorityRow(database, authorityKey);
 }
+
+export function countSourceAuthorities(database: DatabaseSync): number {
+  const row = database.prepare(`
+    SELECT count(*) AS count FROM finding_authorities
+  `).get() as { count: number };
+  if (!Number.isSafeInteger(row.count) || row.count < 0) {
+    throw new Error('Finding authority count is invalid');
+  }
+  return row.count;
+}

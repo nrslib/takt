@@ -5,6 +5,7 @@ import type { FindingLedgerStore } from '../../core/workflow/findings/store.js';
 import { FindingArtifactStore } from './artifacts.js';
 import { FindingDatabase } from './database.js';
 import {
+  countSourceAuthorities,
   FindingAuthorityRepository,
   readSourceAuthorityRaw,
 } from './repository.js';
@@ -29,6 +30,18 @@ export interface FindingAuthorityInput {
 export interface FindingStorageWarning {
   readonly message: string;
   readonly error?: unknown;
+}
+
+export function hasAnyFindingAuthority(
+  source: FindingStorageSource,
+  timeoutMs?: number,
+): boolean {
+  return FindingDatabase.readSource({
+    databasePath: source.databasePath,
+    runId: source.runId,
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    read: (database) => countSourceAuthorities(database) > 0,
+  });
 }
 
 function emptyLedger(workflowName: string, now: string): FindingLedger {
@@ -162,12 +175,19 @@ export class FindingStorageResolver {
     if (this.#sourceMatchesTarget) {
       throw new Error(`Finding authority "${authorityKey}" is missing from the source target`);
     }
-    const source = FindingDatabase.readSource({
+    const sourceSnapshot = FindingDatabase.readSource({
       databasePath: this.#source.databasePath,
       runId: this.#source.runId,
       ...(this.#timeoutMs === undefined ? {} : { timeoutMs: this.#timeoutMs }),
-      read: (database) => readSourceAuthorityRaw(database, authorityKey),
+      read: (database) => ({
+        authorityCount: countSourceAuthorities(database),
+        authority: readSourceAuthorityRaw(database, authorityKey),
+      }),
     });
+    if (sourceSnapshot.authorityCount === 0) {
+      throw new Error(`Finding source run "${this.#source.runId}" has no authority rows`);
+    }
+    const source = sourceSnapshot.authority;
     if (source === undefined) {
       throw new Error(`Finding authority "${authorityKey}" is missing from the source`);
     }

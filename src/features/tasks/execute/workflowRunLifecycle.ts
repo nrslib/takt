@@ -1,5 +1,5 @@
 import type { WorkflowConfig } from '../../../core/models/index.js';
-import { existsSync, mkdirSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { generateSessionId } from '../../../infra/fs/index.js';
 import { join } from 'node:path';
 import type {
@@ -35,6 +35,7 @@ import {
 import type {
   WorkflowTerminalPayloadFactory,
 } from './workflowTerminalPayload.js';
+import { resolveFindingStorageSource } from './findingStorageSource.js';
 export interface WorkflowRunExecutionContext {
   readonly workflowConfig: WorkflowConfig;
   readonly runPaths: RunPaths;
@@ -300,33 +301,11 @@ function createFindingStorageResolver(input: {
   readonly resumeSource?: RunResumeSource;
   readonly cwd: string;
 }): FindingStorageResolver {
-  const sourceRunSlug = input.resumeSource?.sourceRunSlug;
-  const sourceDatabasePath = sourceRunSlug === undefined
-    ? undefined
-    : buildRunPaths(input.cwd, sourceRunSlug).findingContractDatabaseAbs;
-  if (
-    input.resumeSource?.resumeMode === 'requeue'
-    && sourceRunSlug !== undefined
-    && sourceDatabasePath !== undefined
-    && !existsSync(sourceDatabasePath)
-  ) {
-    throw new Error(
-      `Requeue source run "${sourceRunSlug}" has no finding contract database: ${sourceDatabasePath}`,
-    );
-  }
+  const source = resolveFindingStorageSource(input.cwd, input.resumeSource);
   return new FindingStorageResolver({
     databasePath: input.runPaths.findingContractDatabaseAbs,
     runId: input.runPaths.slug,
-    ...(sourceRunSlug === undefined
-      || sourceDatabasePath === undefined
-      || !existsSync(sourceDatabasePath)
-      ? {}
-      : {
-          source: {
-            databasePath: sourceDatabasePath,
-            runId: sourceRunSlug,
-          },
-        }),
+    ...(source === undefined ? {} : { source }),
   });
 }
 

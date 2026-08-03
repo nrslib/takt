@@ -1,5 +1,6 @@
 export {
   FindingStorageResolver,
+  hasAnyFindingAuthority,
   ROOT_FINDING_AUTHORITY_KEY,
   type FindingAuthorityInput,
   type FindingStorageSource,
