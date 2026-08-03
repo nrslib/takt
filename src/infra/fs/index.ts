@@ -5,6 +5,8 @@
 export type {
   SessionLog,
   NdjsonWorkflowStart,
+  NdjsonWorkflowCallStart,
+  NdjsonWorkflowCallComplete,
   NdjsonStepStart,
   NdjsonStepComplete,
   NdjsonWorkflowComplete,

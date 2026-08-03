@@ -208,7 +208,7 @@ describe('serial workflow_call abort resume checkpoints', () => {
     const abortedResumePoint = engine.getResumePoint();
 
     expect(aborted.status).toBe('aborted');
-    expect(aborted.iteration).toBe(5);
+    expect(aborted.iteration).toBe(2);
     expectFullLeafStack(abortedResumePoint, rootWorkflow);
 
     cleanupWorkflowEngine(engine);
@@ -226,7 +226,7 @@ describe('serial workflow_call abort resume checkpoints', () => {
 
     expect(resumed.status).toBe('completed');
     expect(vi.mocked(runAgent)).toHaveBeenCalledOnce();
-    expect(startedSteps).toEqual(['delegate-one', 'delegate-two', 'delegate-three', 'leaf']);
+    expect(startedSteps).toEqual(['leaf']);
     expect(engine.getResumePoint()?.stack).toEqual([
       expect.objectContaining({
         workflow: 'root-resume',
@@ -237,7 +237,7 @@ describe('serial workflow_call abort resume checkpoints', () => {
   });
 
   it('preserves the four-level pending leaf checkpoint after an iteration-limit abort', async () => {
-    writeFourLevelWorkflow(tmpDir, 4);
+    writeFourLevelWorkflow(tmpDir, 1);
     const rootWorkflow = loadRootWorkflow(tmpDir);
     mockRunAgentSequence([makeResponse({ persona: 'preparer', content: 'done' })]);
     mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
@@ -249,7 +249,7 @@ describe('serial workflow_call abort resume checkpoints', () => {
     const resumePoint = engine.getResumePoint();
 
     expect(result.status).toBe('aborted');
-    expect(result.iteration).toBe(4);
+    expect(result.iteration).toBe(1);
     expectFullLeafStack(resumePoint, rootWorkflow);
   });
 

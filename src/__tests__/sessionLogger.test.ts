@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
-import { initNdjsonLog } from '../infra/fs/session.js';
+import { initNdjsonLog, parseNdjsonRecord } from '../infra/fs/session.js';
 import { SessionLogger } from '../features/tasks/execute/sessionLogger.js';
 import { buildTraceFromRecords } from '../features/tasks/execute/traceReportParser.js';
 import { buildWorkflowStepScopeKey } from '../features/tasks/execute/workflowStepScope.js';
@@ -30,6 +30,83 @@ afterEach(() => {
 });
 
 describe('SessionLogger', () => {
+  it.each([
+    {
+      name: 'completed',
+      result: { status: 'completed' as const, returnValue: 'approved' },
+      expected: { status: 'completed', returnValue: 'approved' },
+    },
+    {
+      name: 'aborted',
+      result: {
+        status: 'aborted' as const,
+        abortKind: 'iteration_limit' as const,
+        abortReason: 'Maximum steps reached',
+      },
+      expected: {
+        status: 'aborted',
+        abortKind: 'iteration_limit',
+        abortReason: 'Maximum steps reached',
+      },
+    },
+    {
+      name: 'failed',
+      result: { status: 'failed' as const, reason: 'token=super-secret' },
+      expected: { status: 'failed', reason: 'token=[REDACTED]' },
+    },
+  ])('workflow_call $name lifecycle を NDJSON に永続化する', ({ result, expected }) => {
+    const logsDir = createTempLogsDir();
+    const ndjsonPath = initNdjsonLog('session-workflow-call', 'task', 'parent', { logsDir });
+    const logger = new SessionLogger(ndjsonPath, false);
+    const lifecycle = {
+      parentWorkflow: 'project:sha256:parent',
+      step: 'delegate',
+      childWorkflow: 'project:sha256:child',
+      callInstance: 2,
+      stack: [{
+        workflow: 'parent',
+        workflow_ref: 'project:sha256:parent',
+        step: 'delegate',
+        kind: 'workflow_call' as const,
+        occurrence: 2,
+      }],
+    };
+
+    logger.onWorkflowCallStart(lifecycle);
+    logger.onWorkflowCallComplete({ ...lifecycle, result });
+
+    const records = readFileSync(ndjsonPath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map(parseNdjsonRecord);
+    const start = records.find((record) => record.type === 'workflow_call_start');
+    const complete = records.find((record) => record.type === 'workflow_call_complete');
+
+    expect(start).toMatchObject({
+      type: 'workflow_call_start',
+      workflow: lifecycle.parentWorkflow,
+      step: lifecycle.step,
+      childWorkflow: lifecycle.childWorkflow,
+      callInstance: lifecycle.callInstance,
+      stack: lifecycle.stack,
+    });
+    expect(complete).toMatchObject({
+      type: 'workflow_call_complete',
+      workflow: lifecycle.parentWorkflow,
+      step: lifecycle.step,
+      childWorkflow: lifecycle.childWorkflow,
+      callInstance: lifecycle.callInstance,
+      stack: lifecycle.stack,
+      ...expected,
+    });
+    for (const record of [start, complete]) {
+      expect(record).not.toHaveProperty('iteration');
+      expect(record).not.toHaveProperty('provider');
+      expect(record).not.toHaveProperty('model');
+      expect(record).not.toHaveProperty('persona');
+    }
+  });
+
   it('subworkflow stack を step/phase records にそのまま書き出す', () => {
     const logsDir = createTempLogsDir();
     const ndjsonPath = initNdjsonLog('session-1', 'task', 'parent', { logsDir });

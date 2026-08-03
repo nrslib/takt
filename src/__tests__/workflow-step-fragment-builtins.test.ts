@@ -446,6 +446,49 @@ describe('builtin workflow step fragment migration', () => {
     });
   });
 
+  it.each(LANGUAGES)('keeps %s ordinary peer review adjudication authoritative before remediation', (lang) => {
+    const peerReview = readBuiltinWorkflow(lang, 'peer-review');
+    const initialReviewers = getStep(peerReview, 'initial-reviewers');
+    const reviewers = getStep(peerReview, 'reviewers');
+    const adjudication = getStep(peerReview, 'review-adjudication');
+    const fixPlan = getStep(peerReview, 'fix-plan');
+    const adjudicationFragment = parseYaml(readFileSync(
+      join(getBuiltinLanguageStepsDir(lang), 'peer-review-adjudication.yaml'),
+      'utf-8',
+    )) as RawStep;
+
+    expect(initialReviewers.rules).toEqual([
+      { condition: 'COMPLETE', next: 'review-adjudication' },
+      { condition: 'needs_fix', next: 'review-adjudication' },
+    ]);
+    expect(reviewers.rules).toEqual(initialReviewers.rules);
+    expect(adjudication.uses).toBe('peer-review-adjudication');
+    expect(fixPlan.with).toMatchObject({
+      plan_instruction: 'fix-plan-from-review-resolution',
+    });
+    expect(adjudicationFragment.output_contracts).toEqual({
+      report: [{ name: 'review-resolution.md', format: 'review-decision' }],
+    });
+  });
+
+  it.each(LANGUAGES)('does not mix ordinary %s adjudication into Finding Contract workflows', (lang) => {
+    const findingContractWorkflows = new Set([
+      ...HIGH_WORKFLOWS,
+      'takt-default-localllm',
+      'peer-review-finding-contract-localllm',
+      ...readdirSync(getBuiltinWorkflowsDir(lang))
+        .filter((name) => name.startsWith('finding-contract-') && name.endsWith('.yaml'))
+        .map((name) => name.slice(0, -'.yaml'.length)),
+    ]);
+
+    for (const workflowName of findingContractWorkflows) {
+      const serialized = JSON.stringify(readBuiltinWorkflow(lang, workflowName));
+      expect(serialized, workflowName).not.toContain('peer-review-adjudication');
+      expect(serialized, workflowName).not.toContain('fix-plan-from-review-resolution');
+      expect(serialized, workflowName).not.toContain('review-resolution.md');
+    }
+  });
+
   it.each(LANGUAGES)('keeps %s migrated reviewers on the read-only provider preset', (lang) => {
     mkdirSync(join(projectDir, '.takt'), { recursive: true });
     writeFileSync(join(projectDir, '.takt', 'config.yaml'), 'language: ' + lang + '\n', 'utf-8');

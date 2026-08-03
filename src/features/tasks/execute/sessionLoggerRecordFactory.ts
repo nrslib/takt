@@ -1,6 +1,8 @@
 import type {
   NdjsonInteractiveEnd,
   NdjsonInteractiveStart,
+  NdjsonWorkflowCallComplete,
+  NdjsonWorkflowCallStart,
   NdjsonPhaseComplete,
   NdjsonPhaseJudgeStage,
   NdjsonPhaseStart,
@@ -16,7 +18,13 @@ import type {
   WorkflowState,
   WorkflowStep,
 } from '../../../core/models/index.js';
-import type { JudgeStageEntry, PhasePromptParts, StepProviderInfo } from '../../../core/workflow/types.js';
+import type {
+  JudgeStageEntry,
+  PhasePromptParts,
+  StepProviderInfo,
+  WorkflowCallCompleteLifecycle,
+  WorkflowCallLifecycle,
+} from '../../../core/workflow/types.js';
 import { redactProviderOptions } from '../../../core/workflow/providerOptionsRedaction.js';
 import { toJudgmentMatchMethod } from '../../../core/logging/contracts.js';
 import {
@@ -48,6 +56,49 @@ function serializeWorkflowStack(stack: WorkflowResumePointEntry[] | undefined): 
         `NDJSON workflow stack[${index}]`,
       )
     )),
+  };
+}
+
+export function buildWorkflowCallStartRecord(
+  lifecycle: WorkflowCallLifecycle,
+): NdjsonWorkflowCallStart {
+  const scope = serializeWorkflowStack(lifecycle.stack);
+  if (scope.stack === undefined) {
+    throw new Error(`workflow_call "${lifecycle.step}" requires a non-empty call stack`);
+  }
+  return {
+    type: 'workflow_call_start',
+    workflow: lifecycle.parentWorkflow,
+    step: lifecycle.step,
+    childWorkflow: lifecycle.childWorkflow,
+    callInstance: lifecycle.callInstance,
+    stack: scope.stack,
+    timestamp: new Date().toISOString(),
+  };
+}
+
+export function buildWorkflowCallCompleteRecord(
+  lifecycle: WorkflowCallCompleteLifecycle,
+  sanitizeText: SanitizeText,
+): NdjsonWorkflowCallComplete {
+  const start = buildWorkflowCallStartRecord(lifecycle);
+  return {
+    ...start,
+    type: 'workflow_call_complete',
+    status: lifecycle.result.status,
+    ...(lifecycle.result.status === 'completed' && lifecycle.result.returnValue !== undefined
+      ? { returnValue: sanitizeText(lifecycle.result.returnValue) }
+      : {}),
+    ...(lifecycle.result.status === 'aborted' && lifecycle.result.abortKind !== undefined
+      ? { abortKind: lifecycle.result.abortKind }
+      : {}),
+    ...(lifecycle.result.status === 'aborted' && lifecycle.result.abortReason !== undefined
+      ? { abortReason: sanitizeText(lifecycle.result.abortReason) }
+      : {}),
+    ...(lifecycle.result.status === 'failed'
+      ? { reason: sanitizeText(lifecycle.result.reason) }
+      : {}),
+    timestamp: new Date().toISOString(),
   };
 }
 

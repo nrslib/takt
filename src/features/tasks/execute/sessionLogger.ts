@@ -12,7 +12,13 @@ import type { InteractiveMetadata } from './types.js';
 import { isDebugEnabled, writePromptLog } from '../../../shared/utils/index.js';
 import type { PromptLogRecord, NdjsonRecord } from '../../../shared/utils/index.js';
 import type { WorkflowResumePointEntry, WorkflowStep, AgentResponse, WorkflowState } from '../../../core/models/index.js';
-import type { JudgeStageEntry, PhasePromptParts, StepProviderInfo } from '../../../core/workflow/types.js';
+import type {
+  JudgeStageEntry,
+  PhasePromptParts,
+  StepProviderInfo,
+  WorkflowCallCompleteLifecycle,
+  WorkflowCallLifecycle,
+} from '../../../core/workflow/types.js';
 import { parsePhaseExecutionId } from '../../../shared/utils/phaseExecutionId.js';
 import { sanitizeTextForStorage } from './traceReportRedaction.js';
 import { buildWorkflowStepScopeKey } from './workflowStepScope.js';
@@ -26,6 +32,8 @@ import {
   buildStepCompleteRecord,
   buildStepStartRecord,
   buildWorkflowAbortRecord,
+  buildWorkflowCallCompleteRecord,
+  buildWorkflowCallStartRecord,
   buildWorkflowCompleteRecord,
 } from './sessionLoggerRecordFactory.js';
 import {
@@ -315,6 +323,17 @@ export class SessionLogger {
       providerInfo,
     );
     this.appendRecord(record);
+  }
+
+  onWorkflowCallStart(lifecycle: WorkflowCallLifecycle): void {
+    this.appendRecord(buildWorkflowCallStartRecord(lifecycle));
+  }
+
+  onWorkflowCallComplete(lifecycle: WorkflowCallCompleteLifecycle): void {
+    this.appendRecord(buildWorkflowCallCompleteRecord(
+      lifecycle,
+      this.sanitizeText.bind(this),
+    ));
   }
 
   onStepComplete(

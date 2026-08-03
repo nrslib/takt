@@ -1,5 +1,5 @@
 name: peer-review
-description: Specialist parallel peer reviewers (+ ai-antipattern-review-2nd) -> shared remediation loop, followed by merge-readiness review and supervision.
+description: Specialist parallel peer reviewers (+ ai-antipattern-review-2nd) -> finding adjudication -> shared remediation loop, followed by merge-readiness review and supervision.
 subworkflow:
   callable: true
   visibility: internal
@@ -59,6 +59,7 @@ initial_step: initial-reviewers
 loop_monitors:
   - cycle:
       - reviewers
+      - review-adjudication
       - fix-plan
       - fix
     ignore_steps:
@@ -79,6 +80,7 @@ loop_monitors:
           next: ABORT
   - cycle:
       - reviewers
+      - review-adjudication
       - final-gate
       - fix-plan
       - fix
@@ -147,9 +149,9 @@ steps:
         $param: review_knowledge_additions
     rules:
       - condition: COMPLETE
-        next: final-gate
+        next: review-adjudication
       - condition: needs_fix
-        next: fix-plan
+        next: review-adjudication
   - name: reviewers
     uses: peer-review-suite-call
     vars:
@@ -163,9 +165,23 @@ steps:
         $param: review_knowledge_additions
     rules:
       - condition: COMPLETE
-        next: final-gate
+        next: review-adjudication
       - condition: needs_fix
+        next: review-adjudication
+  - name: review-adjudication
+    uses: peer-review-adjudication
+    with:
+      review_policy_additions:
+        $param: review_policy_additions
+      review_knowledge_additions:
+        $param: review_knowledge_additions
+    rules:
+      - condition: ACTIONABLE FINDINGS
         next: fix-plan
+      - condition: NO ACTIONABLE FINDINGS
+        next: final-gate
+      - condition: REPLAN REQUIRED
+        return: need_replan
   - name: final-gate
     uses: peer-review-final-gate
     with:
@@ -193,7 +209,7 @@ steps:
         $param: plan_policy
       fix_knowledge:
         $param: fix_knowledge
-      plan_instruction: fix-plan
+      plan_instruction: fix-plan-from-review-resolution
     rules:
       - condition: Fix plan finalized
         next: fix
