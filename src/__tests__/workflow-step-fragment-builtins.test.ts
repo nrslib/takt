@@ -23,6 +23,7 @@ type RawWorkflow = {
   finding_contract?: unknown;
   subworkflow?: {
     requires_finding_contract?: unknown;
+    params?: Record<string, { default?: unknown }>;
   };
 };
 type Language = 'en' | 'ja';
@@ -88,28 +89,93 @@ function listFindingContractWorkflows(lang: Language): string[] {
     .sort();
 }
 
-function collectWorkflowCallTargets(value: unknown): string[] {
+function resolveParamValue(value: unknown, params: Readonly<Record<string, unknown>>): unknown {
   if (Array.isArray(value)) {
-    return value.flatMap(collectWorkflowCallTargets);
+    return value.map((entry) => resolveParamValue(entry, params));
+  }
+  if (typeof value !== 'object' || value === null) {
+    return value;
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.$param === 'string') {
+    if (!Object.hasOwn(params, record.$param)) {
+      throw new Error(`Unresolved callable workflow parameter "${record.$param}"`);
+    }
+    return resolveParamValue(params[record.$param], params);
+  }
+  return Object.fromEntries(
+    Object.entries(record).map(([key, entry]) => [key, resolveParamValue(entry, params)]),
+  );
+}
+
+function workflowParamDefaults(workflow: RawWorkflow): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(workflow.subworkflow?.params ?? {})
+      .filter(([, definition]) => Object.hasOwn(definition, 'default'))
+      .map(([name, definition]) => [name, definition.default]),
+  );
+}
+
+function findWorkflowCallSteps(value: unknown): RawStep[] {
+  if (Array.isArray(value)) {
+    return value.flatMap(findWorkflowCallSteps);
   }
   if (typeof value !== 'object' || value === null) {
     return [];
   }
-  const record = value as Record<string, unknown>;
-  const currentTarget = record.kind === 'workflow_call' && typeof record.call === 'string'
-    ? [record.call]
-    : [];
+  const record = value as RawStep;
   const workflowCall = record.workflow_call;
-  const legacyTarget = typeof workflowCall === 'object'
+  const isLegacyCall = typeof workflowCall === 'object'
     && workflowCall !== null
-    && typeof (workflowCall as Record<string, unknown>).workflow === 'string'
-    ? [(workflowCall as Record<string, string>).workflow]
-    : [];
+    && Object.hasOwn(workflowCall, 'workflow');
   return [
-    ...currentTarget,
-    ...legacyTarget,
-    ...Object.values(record).flatMap(collectWorkflowCallTargets),
+    ...(record.kind === 'workflow_call' || isLegacyCall ? [record] : []),
+    ...Object.values(record).flatMap(findWorkflowCallSteps),
   ];
+}
+
+function workflowCallTarget(step: RawStep): string {
+  const target = step.kind === 'workflow_call'
+    ? step.call
+    : (step.workflow_call as RawStep | undefined)?.workflow;
+  if (typeof target !== 'string') {
+    throw new Error(`workflow_call step "${String(step.name)}" has an unresolved target`);
+  }
+  return target;
+}
+
+function collectWorkflowCallTargets(lang: Language, rootWorkflowName: string): string[] {
+  const targets: string[] = [];
+  const activeWorkflows = new Set<string>();
+
+  const visit = (workflowName: string, callArgs: Readonly<Record<string, unknown>>): void => {
+    if (activeWorkflows.has(workflowName)) {
+      throw new Error(`Recursive builtin workflow_call detected while inspecting "${workflowName}"`);
+    }
+    activeWorkflows.add(workflowName);
+    const workflow = resolveBuiltinWorkflow(lang, workflowName);
+    const params = {
+      ...workflowParamDefaults(workflow),
+      ...callArgs,
+    };
+    const resolvedWorkflow = resolveParamValue(workflow, params);
+    for (const step of findWorkflowCallSteps(resolvedWorkflow)) {
+      const target = workflowCallTarget(step);
+      targets.push(target);
+      const targetPath = join(getBuiltinWorkflowsDir(lang), `${target}.yaml`);
+      if (existsSync(targetPath)) {
+        const args = typeof step.args === 'object' && step.args !== null
+          ? step.args as Record<string, unknown>
+          : {};
+        visit(target, args);
+      }
+    }
+    activeWorkflows.delete(workflowName);
+  };
+
+  const root = resolveBuiltinWorkflow(lang, rootWorkflowName);
+  visit(rootWorkflowName, workflowParamDefaults(root));
+  return targets;
 }
 
 function getStep(raw: RawWorkflow, name: string): RawStep {
@@ -524,11 +590,30 @@ describe('builtin workflow step fragment migration', () => {
       expect(serialized, workflowName).not.toContain('peer-review-adjudication');
       expect(serialized, workflowName).not.toContain('fix-plan-from-review-resolution');
       expect(serialized, workflowName).not.toContain('review-resolution.md');
-      for (const target of collectWorkflowCallTargets(workflow)) {
+      for (const target of collectWorkflowCallTargets(lang, workflowName)) {
         const ordinaryPeerReview = target.startsWith('peer-review')
           && target !== 'peer-review-finding-contract-localllm';
         expect(ordinaryPeerReview, `${workflowName} workflow_call target: ${target}`).toBe(false);
       }
+    }
+  });
+
+  it.each(LANGUAGES)('keeps %s Finding development routes isolated from the ordinary development-core default', (lang) => {
+    const developmentCore = readBuiltinWorkflow(lang, 'development-core');
+    const defaultPeerReview = developmentCore.subworkflow?.params?.peer_review_workflow?.default;
+    const localLlmDevelop = getStep(readBuiltinWorkflow(lang, 'takt-default-localllm'), 'develop');
+
+    expect(defaultPeerReview).toBe('peer-review');
+    expect((localLlmDevelop.args as RawStep).peer_review_workflow).toBe(
+      'peer-review-finding-contract-localllm',
+    );
+    expect(collectWorkflowCallTargets(lang, 'takt-default-localllm')).toContain(
+      'peer-review-finding-contract-localllm',
+    );
+    for (const workflowName of HIGH_WORKFLOWS) {
+      const targets = collectWorkflowCallTargets(lang, workflowName);
+      expect(targets, workflowName).toContain('merge-readiness-finding-contract-final-gate');
+      expect(targets, workflowName).not.toContain('peer-review');
     }
   });
 

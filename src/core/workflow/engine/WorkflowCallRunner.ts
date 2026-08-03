@@ -36,6 +36,7 @@ import type {
 } from '../types.js';
 import {
   WorkflowCallExecutor,
+  preserveWorkflowCallChildExecutionState,
   applyWorkflowCallOverridesToProviderRouting,
   applyWorkflowCallOverridesToPersonaProviders,
   type WorkflowCallExecutionResult,
@@ -90,6 +91,7 @@ export interface WorkflowCallExecutionToken {
   readonly stepName: string;
   readonly occurrence: number;
   readonly resumeStackPrefix: readonly WorkflowResumePointEntry[];
+  fail(error: unknown): void;
   cancel(): void;
 }
 
@@ -471,6 +473,23 @@ export class WorkflowCallRunner {
     this.failAttempt(lifecycle, error);
   }
 
+  private terminatePreparedExecution(
+    token: WorkflowCallExecutionToken,
+    error: unknown,
+  ): void {
+    const attempt = this.preparedExecutions.get(token);
+    if (this.pendingExecution?.token === token) {
+      this.pendingExecution = undefined;
+    }
+    if (attempt === undefined) {
+      return;
+    }
+    this.preparedExecutions.delete(token);
+    if (attempt.started) {
+      this.failAttempt(attempt.lifecycle, error);
+    }
+  }
+
   private prepareInvocation(
     step: WorkflowCallStep,
     occurrence: number,
@@ -511,21 +530,11 @@ export class WorkflowCallRunner {
         stepName: step.name,
         occurrence,
         resumeStackPrefix: preparedExecution.resumeStackPrefix,
-        cancel: () => {
-          const attempt = this.preparedExecutions.get(token);
-          if (this.pendingExecution?.token === token) {
-            this.pendingExecution = undefined;
-          }
-          if (attempt !== undefined) {
-            this.preparedExecutions.delete(token);
-            if (attempt.started) {
-              this.failAttempt(
-                attempt.lifecycle,
-                new Error(`workflow_call step "${attempt.lifecycle.step}" execution was cancelled`),
-              );
-            }
-          }
-        },
+        fail: (error: unknown) => this.terminatePreparedExecution(token, error),
+        cancel: () => this.terminatePreparedExecution(
+          token,
+          new Error(`workflow_call step "${step.name}" execution was cancelled`),
+        ),
       });
       this.preparedExecutions.set(token, { lifecycle, preparedExecution, started: false });
       this.pendingExecution = { identity, occurrence, token };
@@ -546,6 +555,16 @@ export class WorkflowCallRunner {
     occurrence: number,
     resumeStackPrefix: readonly WorkflowResumePointEntry[],
   ): WorkflowCallExecutionToken {
+    this.executor.recordPendingInvocation(step, occurrence, resumeStackPrefix);
+    try {
+      this.deps.setActiveResumePoint(step, iteration, occurrence, resumeStackPrefix);
+    } catch (error) {
+      this.emitFailedAttempt(
+        this.buildAttemptLifecycle(step, occurrence, resumeStackPrefix),
+        error,
+      );
+      throw error;
+    }
     const token = this.prepareInvocation(step, occurrence, resumeStackPrefix);
     try {
       this.deps.setActiveResumePoint(step, iteration, occurrence, token.resumeStackPrefix);
@@ -711,13 +730,22 @@ export class WorkflowCallRunner {
         false,
         attempt.preparedExecution,
       );
-      const response = this.buildWorkflowCallResponse(
-        step,
-        childResult,
-        childResult.abortKind,
-        childResult.abortReason,
-        childResult.returnValue,
-      );
+      let response: AgentResponse;
+      try {
+        response = this.buildWorkflowCallResponse(
+          step,
+          childResult,
+          childResult.abortKind,
+          childResult.abortReason,
+          childResult.returnValue,
+        );
+      } catch (error) {
+        throw preserveWorkflowCallChildExecutionState(
+          error,
+          this.requireIsolatedSessionUpdates(step, childResult),
+          this.requireIsolatedStateSync(step, childResult),
+        );
+      }
       return {
         childResult,
         value: {

@@ -106,6 +106,38 @@ export class WorkflowCallInvocationIndex {
     );
   }
 
+  replace(
+    workflow: WorkflowConfig,
+    stepName: string,
+    workflowCallPath: readonly WorkflowResumePointEntry[],
+    record: WorkflowCallInvocationRecord,
+  ): void {
+    const identity = buildWorkflowCallInvocationIdentity(
+      getWorkflowReference(workflow),
+      stepName,
+      workflowCallPath,
+    );
+    if (!this.records.has(identity)) {
+      throw new Error(`Workflow-call step "${stepName}" has no invocation record to replace`);
+    }
+    if (!Number.isInteger(record.call_instance) || record.call_instance < 1) {
+      throw new Error(`Workflow-call step "${stepName}" requires a positive invocation instance`);
+    }
+    const namespace = parseWorkflowCallNamespaceSegment(record.report_namespace_segment);
+    if (
+      namespace === undefined
+      || namespace.iteration === '*'
+      || !workflowCallNamespaceSegmentMatchesInvocation(
+        record.report_namespace_segment,
+        stepName,
+        namespace.workflowName,
+      )
+    ) {
+      throw new Error(`Workflow-call step "${stepName}" requires a valid report namespace segment`);
+    }
+    this.records.set(identity, { ...record });
+  }
+
   get(
     workflow: WorkflowConfig,
     stepName: string,

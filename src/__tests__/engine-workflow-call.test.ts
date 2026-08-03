@@ -6733,6 +6733,77 @@ steps:
     expect(vi.mocked(runAgent).mock.calls.map(([persona]) => persona)).toEqual(['child-reviewer']);
   });
 
+  it('parallel workflow_call の応答構築失敗後も child session と iteration を同期する', async () => {
+    writeWorkflow(tmpDir, 'shared/session-review.yaml', `name: shared/session-review
+subworkflow:
+  callable: true
+initial_step: child-review
+max_steps: 3
+steps:
+  - name: child-review
+    persona: child-reviewer
+    instruction: "Review and update the child session"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parent',
+      initial_step: 'reviewers',
+      max_steps: 3,
+      steps: [{
+        name: 'reviewers',
+        instruction: 'Run delegated review',
+        parallel: [{
+          name: 'delegate-review',
+          kind: 'workflow_call',
+          call: 'shared/session-review',
+          rules: [{ condition: 'COMPLETE', next: 'COMPLETE', interactive_only: true }],
+        }],
+        rules: [{ condition: 'all("COMPLETE")', next: 'COMPLETE' }],
+      }],
+    });
+    const sessionUpdates = vi.fn();
+    vi.mocked(runAgent).mockImplementation(async (persona, prompt, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: prompt,
+      });
+      return makeResponse({
+        persona: String(persona),
+        content: 'done',
+        sessionId: 'child-session-after-response-failure',
+      });
+    });
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
+    engine = new WorkflowEngine(
+      config,
+      tmpDir,
+      'Preserve child state after response failure',
+      createWorkflowCallOptions(tmpDir, { onSessionUpdate: sessionUpdates }),
+    );
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect({
+      delegateError: state.stepOutputs.get('delegate-review')?.error,
+      iteration: state.iteration,
+      sessions: [...state.personaSessions.entries()],
+    }).toEqual({
+      delegateError: expect.stringContaining('no rule matched'),
+      iteration: 2,
+      sessions: [[
+        '["child-reviewer","mock","parent-model"]',
+        'child-session-after-response-failure',
+      ]],
+    });
+    expect(sessionUpdates).toHaveBeenCalledWith(
+      '["child-reviewer","mock","parent-model"]',
+      'child-session-after-response-failure',
+    );
+  });
+
   it('parallel 内 workflow_call 後は親 parallel step の resume point に戻す', async () => {
     writeWorkflow(tmpDir, 'shared/review.yaml', `name: shared/review
 subworkflow:

@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type {
   WorkflowConfig,
   WorkflowResumePointEntry,
@@ -6,6 +9,7 @@ import type {
 } from '../core/models/index.js';
 import { createInitialState } from '../core/workflow/engine/state-manager.js';
 import { WorkflowCallRunner } from '../core/workflow/engine/WorkflowCallRunner.js';
+import { WorkflowEngine } from '../core/workflow/engine/WorkflowEngine.js';
 import { MAX_WORKFLOW_CALL_DEPTH } from '../core/workflow/workflow-call-depth.js';
 import type {
   RuntimeStepResolution,
@@ -37,7 +41,6 @@ interface HarnessOptions {
   resolverReturnsNull?: boolean;
   createEngineError?: Error;
   runError?: Error;
-  providerContextError?: Error;
   setActiveResumePointError?: Error;
   terminalListenerError?: Error;
   rules?: WorkflowConfig['steps'][number]['rules'];
@@ -116,13 +119,6 @@ function createLifecycleHarness(options: HarnessOptions = {}): LifecycleHarness 
     model: 'parent-model',
     initialIteration: 1,
   };
-  let failProviderContext = false;
-  const getOptions = () => {
-    if (failProviderContext && options.providerContextError !== undefined) {
-      throw options.providerContextError;
-    }
-    return engineOptions;
-  };
   const state = createInitialState(parentWorkflow, engineOptions);
   state.stepIterations.set(stepName, callInstance);
   const sharedRuntime: WorkflowSharedRuntimeState = { startedAtMs: 0 };
@@ -167,7 +163,7 @@ function createLifecycleHarness(options: HarnessOptions = {}): LifecycleHarness 
     projectCwd: '/project',
     getCwd: () => '/project',
     task: 'Review the change',
-    getOptions,
+    getOptions: () => engineOptions,
     sharedRuntime,
     resumeStackPrefix,
     consumeWorkflowCallContinuation: vi.fn(),
@@ -208,12 +204,10 @@ function createLifecycleHarness(options: HarnessOptions = {}): LifecycleHarness 
     state,
     execute: async () => {
       const token = activate();
-      failProviderContext = true;
       return runner.run(workflowStep, token, runtime);
     },
     executeIsolated: async () => {
       const token = activate();
-      failProviderContext = true;
       return runner.runIsolated(workflowStep, runtime, resumeStackPrefix, token);
     },
   };
@@ -250,6 +244,87 @@ function expectFailedLifecycle(
     stack: (start as WorkflowCallCompleteLifecycle).stack,
   });
   return complete as WorkflowCallCompleteLifecycle;
+}
+
+function createProviderResolutionFailureWorkflows(parallel: boolean): {
+  parent: WorkflowConfig;
+  child: WorkflowConfig;
+} {
+  const workflowCall = {
+    name: 'delegate',
+    kind: 'workflow_call' as const,
+    call: 'child',
+    rules: [normalizeRule({ condition: 'COMPLETE', next: 'COMPLETE' })],
+  };
+  const parent: WorkflowConfig = {
+    name: parallel ? 'parallel-parent' : 'serial-parent',
+    initialStep: parallel ? 'reviewers' : 'delegate',
+    maxSteps: 3,
+    providerOptions: { codex: { networkAccess: false } },
+    steps: parallel
+      ? [{
+          name: 'reviewers',
+          instruction: 'Run delegated review',
+          parallel: [workflowCall],
+          rules: [normalizeRule({ condition: 'all("COMPLETE")', next: 'COMPLETE' })],
+        }]
+      : [workflowCall],
+  };
+  const child: WorkflowConfig = {
+    name: 'child',
+    subworkflow: { callable: true },
+    initialStep: 'child-review',
+    maxSteps: 2,
+    steps: [{
+      name: 'child-review',
+      persona: 'child-reviewer',
+      instruction: 'Review child workflow',
+      rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
+    }],
+  };
+  return { parent, child };
+}
+
+async function runProviderResolutionFailureThroughEngine(parallel: boolean): Promise<{
+  emit: ReturnType<typeof vi.fn>;
+  resumePointAtStart: ReturnType<WorkflowEngine['getResumePoint']>;
+  state: WorkflowState;
+}> {
+  const projectDir = mkdtempSync(join(tmpdir(), 'takt-workflow-call-lifecycle-'));
+  const failure = new Error(`${parallel ? 'parallel' : 'serial'} provider resolution failed`);
+  const { parent, child } = createProviderResolutionFailureWorkflows(parallel);
+  const emit = vi.fn();
+  let runStarted = false;
+  let workflowCallStarted = false;
+  let resumePointAtStart: ReturnType<WorkflowEngine['getResumePoint']>;
+  try {
+    const engine = new WorkflowEngine(parent, projectDir, 'Resolve provider context', {
+      projectCwd: projectDir,
+      provider: 'mock',
+      model: 'parent-model',
+      providerOptions: { codex: { networkAccess: true } },
+      providerOptionsOriginResolver: () => {
+        if (runStarted && (!parallel || workflowCallStarted)) {
+          throw failure;
+        }
+        return 'default';
+      },
+      workflowCallResolver: () => child,
+    });
+    engine.on('workflow_call:start', (lifecycle) => {
+      workflowCallStarted = true;
+      resumePointAtStart = engine.getResumePoint();
+      emit('workflow_call:start', lifecycle);
+    });
+    engine.on('workflow_call:complete', (lifecycle) => {
+      emit('workflow_call:complete', lifecycle);
+    });
+    runStarted = true;
+    const state = await engine.run();
+    return { emit, resumePointAtStart, state };
+  } finally {
+    rmSync(projectDir, { recursive: true, force: true });
+  }
 }
 
 describe('WorkflowCallRunner lifecycle events', () => {
@@ -417,15 +492,6 @@ describe('WorkflowCallRunner lifecycle events', () => {
     expectFailedLifecycle(harness.emit, 'resume point publication failed');
   });
 
-  it('records start then failed when provider context resolution fails', async () => {
-    const failure = new Error('provider context failed');
-    const harness = createLifecycleHarness({ providerContextError: failure });
-
-    await expect(harness.execute()).rejects.toBe(failure);
-
-    expectFailedLifecycle(harness.emit, 'provider context failed');
-  });
-
   it('records start then failed when child engine construction fails', async () => {
     const failure = new Error('child engine construction failed');
     const harness = createLifecycleHarness({ createEngineError: failure });
@@ -433,6 +499,28 @@ describe('WorkflowCallRunner lifecycle events', () => {
     await expect(harness.execute()).rejects.toBe(failure);
 
     expectFailedLifecycle(harness.emit, 'child engine construction failed');
+  });
+
+  it.each([
+    { name: 'serial RunLoop', parallel: false },
+    { name: 'ParallelRunner', parallel: true },
+  ])('records the original provider failure through the real $name wiring', async ({ parallel }) => {
+    const result = await runProviderResolutionFailureThroughEngine(parallel);
+    const reason = `${parallel ? 'parallel' : 'serial'} provider resolution failed`;
+
+    expect(result.state.status).toBe('aborted');
+    const complete = expectFailedLifecycle(result.emit, reason);
+    expect(complete.result).toEqual({ status: 'failed', reason });
+    expect(result.resumePointAtStart?.stack.at(-1)).toMatchObject({
+      step: 'delegate',
+      kind: 'workflow_call',
+      occurrence: 1,
+      call_instance: 1,
+    });
+    expect(Object.values(result.resumePointAtStart?.workflow_call_invocations ?? {})).toContainEqual({
+      call_instance: 1,
+      report_namespace_segment: expect.any(String),
+    });
   });
 
   it.each([

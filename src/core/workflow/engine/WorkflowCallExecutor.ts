@@ -26,6 +26,10 @@ import {
   workflowEntryMatchesWorkflow,
 } from '../workflow-reference.js';
 import { buildWorkflowCallSiteIdentity } from '../workflow-call-site-identity.js';
+import {
+  buildWorkflowCallNamespaceSegment,
+  parseWorkflowCallNamespaceSegment,
+} from '../workflow-call-namespace.js';
 import { buildWorkflowStackStepIterationIdentity } from '../step-iteration-identity.js';
 import type {
   StepProviderInfo,
@@ -45,6 +49,8 @@ import { findWorkflowStepLocation } from '../workflow-step-location.js';
 import { translateWorkflowConfigError } from '../../../shared/workflowConfigMetadata.js';
 import { restoreWorkflowCallInvocationEvidence } from '../workflow-call-invocation-index.js';
 
+const PENDING_WORKFLOW_CALL_SITE_DIGEST = '0'.repeat(64);
+
 export interface WorkflowCallSessionUpdate {
   expectedSessionId: string | undefined;
   sessionId: string | undefined;
@@ -54,6 +60,49 @@ export type WorkflowCallSessionUpdates = ReadonlyMap<string, WorkflowCallSession
 export interface WorkflowCallIsolatedStateSync {
   iteration: number;
   maxSteps?: WorkflowMaxSteps;
+}
+
+class WorkflowCallChildExecutionError extends Error {
+  constructor(
+    readonly originalError: unknown,
+    readonly sessionUpdates: WorkflowCallSessionUpdates,
+    readonly stateSync: WorkflowCallIsolatedStateSync,
+  ) {
+    super(originalError instanceof Error ? originalError.message : String(originalError), { cause: originalError });
+    this.name = 'WorkflowCallChildExecutionError';
+  }
+}
+
+export interface WorkflowCallChildExecutionState {
+  readonly originalError: unknown;
+  readonly sessionUpdates: WorkflowCallSessionUpdates;
+  readonly stateSync: WorkflowCallIsolatedStateSync;
+}
+
+const childExecutionStateByError = new WeakMap<object, WorkflowCallChildExecutionState>();
+
+export function preserveWorkflowCallChildExecutionState(
+  error: unknown,
+  sessionUpdates: WorkflowCallSessionUpdates,
+  stateSync: WorkflowCallIsolatedStateSync,
+): unknown {
+  if ((typeof error === 'object' && error !== null) || typeof error === 'function') {
+    childExecutionStateByError.set(error, { originalError: error, sessionUpdates, stateSync });
+    return error;
+  }
+  return new WorkflowCallChildExecutionError(error, sessionUpdates, stateSync);
+}
+
+export function getWorkflowCallChildExecutionState(
+  error: unknown,
+): WorkflowCallChildExecutionState | undefined {
+  if (error instanceof WorkflowCallChildExecutionError) {
+    return error;
+  }
+  if ((typeof error === 'object' && error !== null) || typeof error === 'function') {
+    return childExecutionStateByError.get(error);
+  }
+  return undefined;
 }
 
 interface ChildRoutingRuntime {
@@ -372,6 +421,27 @@ export class WorkflowCallExecutor {
     };
   }
 
+  recordPendingInvocation(
+    step: WorkflowCallStep,
+    occurrence: number,
+    resumeStackPrefix: readonly WorkflowResumePointEntry[],
+  ): void {
+    const parentConfig = this.deps.getConfig();
+    const index = this.deps.sharedRuntime.workflowCallInvocationEvidence!.index;
+    const existing = index.get(parentConfig, step.name, resumeStackPrefix);
+    if (existing?.call_instance === occurrence) {
+      return;
+    }
+    index.record(parentConfig, step.name, resumeStackPrefix, {
+      call_instance: occurrence,
+      report_namespace_segment: `${buildWorkflowCallNamespaceSegment(
+        step.name,
+        step.call,
+        occurrence,
+      )}--site-${PENDING_WORKFLOW_CALL_SITE_DIGEST}`,
+    });
+  }
+
   prepare(
     step: WorkflowCallStep,
     childWorkflow: WorkflowConfig,
@@ -409,7 +479,22 @@ export class WorkflowCallExecutor {
     );
     if (existing?.call_instance === occurrence) {
       if (existing.report_namespace_segment !== expectedInvocation.report_namespace_segment) {
-        throw new Error(`workflow_call step "${step.name}" invocation record does not match the canonical call site`);
+        const existingNamespace = parseWorkflowCallNamespaceSegment(
+          existing.report_namespace_segment,
+        );
+        if (
+          existingNamespace?.siteDigest === PENDING_WORKFLOW_CALL_SITE_DIGEST
+          && existingNamespace?.workflowName === step.call
+        ) {
+          this.deps.sharedRuntime.workflowCallInvocationEvidence!.index.replace(
+            parentConfig,
+            step.name,
+            resumeStackSnapshot,
+            expectedInvocation,
+          );
+        } else {
+          throw new Error(`workflow_call step "${step.name}" invocation record does not match the canonical call site`);
+        }
       }
     } else {
       this.deps.sharedRuntime.workflowCallInvocationEvidence!.index.record(
