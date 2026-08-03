@@ -90,7 +90,7 @@ REJECT without exception if any of the following apply.
 - Specific implementation leaking into generic layers (imports and branching for specific implementations in generic layers)
 - Internal implementation exported from public API (infrastructure functions or internal classes exposed publicly)
 - Replaced code/exports surviving after refactoring
-- Consumer migration is confused with legacy support, and old-format production, reading, aliases, conversion, upcasters, fallback, backfill, data migration, or rebuilds support a replaced format, API, or path without an explicit requirement-source mandate. This applies even when the old and new contracts do not coexist; public APIs, configuration, persisted data, released status, or isolation at a read boundary do not create an exception by themselves
+- Consumer migration is confused with backward compatibility, legacy support, or migration support, or old-format production, reading, aliases, conversion, upcasters, fallback, backfill, data migration, or rebuilds exceed the target and scope explicitly required by the requirement source. This applies even when the old and new contracts do not coexist; public APIs, configuration, persisted data, released status, or isolation at a read boundary do not create an exception by themselves
 - Missing cross-validation of related fields (invariants of semantically coupled config values left unverified)
 - Missing caller, producer, consumer, validator, test data, or derived-entry updates after a contract change
 - Meaningful fields such as IDs, source, trace, or issue/PR numbers are added, forwarded, or persisted while only the storage shape is checked, without verifying downstream interpretation or confusion with existing fields

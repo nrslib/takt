@@ -345,19 +345,19 @@ Responsibilities in event evolution:
 | Responsibility | Location |
 |----------------|----------|
 | Current event meaning and fields | Event type |
-| Required historical-payload translation | Upcaster at the event-store restoration boundary |
+| Historical-payload translation, when part of the design | Upcaster at the event-store restoration boundary |
 | State restoration from event replay | Aggregate `apply` |
-| Guarantee conversion from historical payloads to current events | Upcaster tests |
+| Behavioral evidence for historical-payload translation | Upcaster tests |
 
 ```kotlin
-// NG - Mixing old field compatibility into the current event type
+// Current event type with an old-field alias
 data class OrderAssignedEvent(
     val orderId: String,
     @JsonAlias("assigneeId")
     val assigneeIds: List<String>
 )
 
-// OK - Current event type represents only the current contract
+// Current-only event type
 data class OrderAssignedEvent(
     val orderId: String,
     val assigneeIds: List<String>
@@ -373,11 +373,11 @@ when (eventType) {
 }
 ```
 
-When historical translation is designed, whether to keep old event types in application code depends on the framework and migration mechanism. In general, it is better not to treat old types as normal domain events. Instead, test the old serialized type and payload as input contracts for the upcaster, keeping the current model clean.
+When historical translation is part of the design, whether old event types remain in application code depends on the framework and migration mechanism. Historical serialized types and payloads can serve as upcaster input contracts without becoming current domain events.
 
-### Migration Scope Decomposition
+### Migration Responsibility Boundaries
 
-CQRS+ES migration must distinguish DB schema migration, data migration, event upcasters, Read Model rebuilds, and API compatibility work. Do not treat "migrate / do not migrate" as a single decision.
+CQRS+ES has distinct responsibility boundaries for DB schema migration, data migration, event upcasters, Read Model rebuilds, and API compatibility work. Each changes a different contract and uses a different execution boundary.
 
 | Migration type | Responsibility boundary |
 |----------------|-------------------------|

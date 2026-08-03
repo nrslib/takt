@@ -40,7 +40,7 @@ In existing-system maintenance, apply general quality policies such as coding, f
 | Satisfying a quality criterion requires changing an existing contract | Requires an explicit user request or plan-level rationale |
 | Structural change causally related to the request | Make it with reason and impact scope documented |
 
-Do not confuse existing-contract preservation, consumer migration, and legacy support. When a requirement targets an old format, API, or path for replacement, migrate current consumers to the new contract. Do not add or retain old-format production, reading, aliases, conversion, upcasters, fallback, backfill, data migration, or rebuilds without an explicit requirement-source mandate, even when the old and new contracts do not coexist. Existing users, tests, persisted data, or public or released status justify impact analysis, but do not create legacy-support authority.
+Do not confuse existing-contract preservation, consumer migration, and backward compatibility, legacy support, or migration support. When a requirement targets an old format, API, or path for replacement, migrate current consumers to the new contract. Add or retain only old-format production, reading, aliases, conversion, upcasters, fallback, backfill, data migration, or rebuilds necessary for the target and scope explicitly required by the requirement source, even when the old and new contracts do not coexist. Existing users, tests, persisted data, or public or released status justify impact analysis, but do not create authority for that support.
 
 ## Observable Contracts
 

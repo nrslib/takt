@@ -345,19 +345,19 @@ data class OrderCancelledEvent(
 | 責務 | 置き場所 |
 |------|----------|
 | 現行イベントの意味とフィールド | イベント型 |
-| 要求された履歴payloadの読み替え | event-store 復元境界の upcaster |
+| 設計対象となる場合の履歴payloadの読み替え | event-store 復元境界の upcaster |
 | イベント再生による状態復元 | Aggregate の `apply` |
-| 履歴payloadから現行イベントへ変換できることの保証 | upcaster テスト |
+| 履歴payload読み替えの振る舞い証跡 | upcaster テスト |
 
 ```kotlin
-// NG - 現行イベント型に旧フィールド互換を混ぜる
+// 旧フィールド alias を持つ現行イベント型
 data class OrderAssignedEvent(
     val orderId: String,
     @JsonAlias("assigneeId")
     val assigneeIds: List<String>
 )
 
-// OK - 現行イベント型は現行契約だけを表す
+// 現行契約だけを表すイベント型
 data class OrderAssignedEvent(
     val orderId: String,
     val assigneeIds: List<String>
@@ -373,11 +373,11 @@ when (eventType) {
 }
 ```
 
-履歴変換を設計する場合、旧イベント型そのものをアプリケーションコードに残すかは、利用フレームワークと移行方式で決まる。一般には「旧型を通常のドメインイベントとして扱う」のではなく、「旧 serialized type と payload を upcaster の入力契約としてテストする」方が、現行モデルを汚さずに済む。
+履歴変換が設計対象となる場合、旧イベント型そのものをアプリケーションコードに残すかは、利用フレームワークと移行方式で決まる。旧 serialized type と payload は、現行ドメインイベントに含めずに upcaster の入力契約として扱える。
 
-### migration 指示の分解
+### migration の責務境界
 
-CQRS+ES の migration は、DB schema migration、data migration、event upcaster、Read Model rebuild、API互換対応を分けて扱う。単に「migration する / しない」と捉えない。
+CQRS+ES では、DB schema migration、data migration、event upcaster、Read Model rebuild、API互換対応がそれぞれ異なる契約と実行境界を持つ。
 
 | migration 種別 | 責務境界 |
 |----------------|----------|
