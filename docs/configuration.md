@@ -173,6 +173,9 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 | `logging.level` | `"debug"` \| `"info"` \| `"warn"` \| `"error"` | `"info"` | Log level |
 | `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | `"claude"` | Default concrete AI provider (`claude` = headless CLI mode, `claude-sdk` = SDK/API mode, `claude-terminal` = experimental interactive terminal mode) |
 | `logging.trace` | boolean | `false` | Enable trace-level logging (suppresses high-frequency debug noise) |
+| `logging.debug` | boolean | `false` | Enable debug logging (`debug.log` + `prompts.jsonl`) |
+| `logging.provider_events` | boolean | `false` | Persist provider stream events |
+| `logging.usage_events` | boolean | `false` | Persist usage event logs |
 | `model` | string | - | Default model name (passed to provider as-is) |
 | `branch_name_strategy` | `"romaji"` \| `"ai"` | `"romaji"` | Branch name generation strategy |
 | `prevent_sleep` | boolean | `false` | Prevent macOS idle sleep (caffeinate) |
@@ -183,23 +186,32 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 | `interactive_preview_steps` | number (0-10) | `3` | Step previews in interactive mode |
 | `auto_requeue_max_attempts` | non-negative integer | `0` | Maximum automatic requeue attempts for failed workflow tasks during `takt run`; `0` disables automatic requeue |
 | `ignore_exceed` | boolean | `false` | Configures iteration-limit bypass for `takt run` and `takt watch`; a CLI `--ignore-exceed` flag takes precedence when specified |
+| `sync_project_local_takt_on_retry` | boolean | `true` | Sync the root project-local `.takt` into the worktree before retry / re-execution; set `false` to keep the worktree copy |
 | `worktree_dir` | string | - | Directory for shared clones (defaults to `../{clone-name}`) |
 | `allow_git_hooks` | boolean | `false` | Allow git hooks during TAKT-managed auto-commit |
 | `allow_git_filters` | boolean | `false` | Allow git filters during TAKT-managed auto-commit |
 | `auto_pr` | boolean | - | Auto-create PR after worktree execution |
+| `draft_pr` | boolean | `false` | Create the auto-created PR as a draft |
 | `minimal_output` | boolean | `false` | Suppress AI output (for CI) |
 | `runtime` | object | - | Runtime environment defaults (e.g., `prepare: [gradle, node]`) |
 | `provider_routing` | object | - | Recommended workflow-step provider/model/provider_options routing by raw persona key, step tag, and step name |
+| `auto_routing` | object | - | Automatic provider/model selection from candidate pools (see [Auto Routing](#auto-routing)) |
 | `persona_providers` | object | - | Deprecated legacy per-display-name provider/model/provider_options overrides. Prefer `provider_routing` for new settings |
 | `provider_options` | object | - | Global provider-specific options |
 | `provider_profiles` | object | - | Provider-specific permission profiles |
+| `rate_limit_fallback` | object | - | Rate-limit fallback; `switch_chain` lists `{provider, model}` entries switched to in order when a provider is rate limited |
 | `anthropic_api_key` | string | - | Anthropic API key for Claude |
 | `openai_api_key` | string | - | OpenAI API key for Codex |
+| `gemini_api_key` | string | - | Gemini API key |
+| `google_api_key` | string | - | Google API key |
+| `groq_api_key` | string | - | Groq API key |
+| `openrouter_api_key` | string | - | OpenRouter API key |
 | `opencode_api_key` | string | - | OpenCode API key |
 | `cursor_api_key` | string | - | Cursor API key (optional; login session fallback supported) |
 | `copilot_github_token` | string | - | GitHub token for Copilot CLI authentication |
 | `kiro_api_key` | string | - | Kiro API key |
 | `codex_cli_path` | string | - | Codex CLI binary path override (absolute) |
+| `claude_cli_path` | string | - | Claude Code CLI binary path override (absolute) |
 | `cursor_cli_path` | string | - | Cursor Agent CLI binary path override (absolute) |
 | `copilot_cli_path` | string | - | Copilot CLI binary path override (absolute) |
 | `kiro_cli_path` | string | - | Kiro CLI binary path override (absolute) |
@@ -213,10 +225,12 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 | `vcs_provider` | `"github"` \| `"gitlab"` | auto-detect | VCS provider (auto-detected from git remote URL) |
 | `takt_providers` | object | - | TAKT internal provider overrides. `assistant` routes assistant conversations (interactive planning, instruct on existing tasks, and retry dialogue) and is also used as the Report phase fallback provider after an OpenCode report retry fails. Project `takt_providers.assistant` overrides global `takt_providers.assistant`; if neither is set, Report phase fallback is disabled and top-level `provider` / `model` are not used as an implicit fallback. |
 | `telemetry` | object | `{ routing_decisions: true }` | Local-only routing decision recording. `telemetry.routing_decisions` controls whether auto-routing decisions are written as NDJSON under the project `.takt/events/` directory. TAKT does not upload routing decisions. |
+| `analytics` | object | disabled | Local-only analytics collection. `enabled` turns it on, `events_path` sets a custom events directory (default `~/.takt/analytics/events`), `retention_days` sets the retention period for event files. TAKT does not upload analytics events. |
 | `workflow_mcp_servers` | object | all `false` | MCP server transport policy (`stdio`, `sse`, `http` toggles) |
 | `workflow_arpeggio` | object | all `false` | Arpeggio custom code policy (`custom_data_source_modules`, `custom_merge_inline_js`, `custom_merge_files`) |
 | `workflow_runtime_prepare` | object | `{ custom_scripts: false }` | Runtime prepare policy (builtin presets always allowed) |
 | `workflow_command_gates` | object | `{ custom_scripts: false }` | Workflow YAML command quality gate policy |
+| `workflow_overrides` | object | - | Workflow-level overrides: top-level / per-step / per-persona `quality_gates` (AI directives or `type: command` gates) and `quality_gates_edit_only` |
 | `sync_conflict_resolver` | object | `{ auto_approve_tools: false }` | Sync conflict resolver policy |
 | `observability` | object | disabled | Opt-in OpenTelemetry foundation. `enabled` initializes the SDK, `monitor` writes workflow metrics to `.takt/runs/<run>/monitor.json`, `session_log_exporter` writes a shadow session log from spans, and `usage_events_phase` writes phase-level usage events to `.takt/runs/<run>/logs/<session>-usage-events.phase.jsonl`. With `enabled: true` and `OTEL_EXPORTER_OTLP_ENDPOINT`, TAKT also sends spans and metrics through OTLP using standard `OTEL_EXPORTER_OTLP_*` environment variables; TAKT does not add an OTLP config key. |
 
@@ -267,13 +281,18 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 
 ### Project Config Field Reference
 
+Project config accepts most global keys and overrides their global values (e.g. `language`, `logging`, `branch_name_strategy`, `minimal_output`, `task_poll_interval_ms`, `interactive_preview_steps`, `provider_routing`, `persona_providers`, `runtime`, `analytics`, `rate_limit_fallback`, `workflow_overrides`, `disabled_builtins` — see the [Global Config Field Reference](#global-config-field-reference) for their meaning). The table below lists project-only keys and the most common overrides.
+
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | - | Override concrete provider |
 | `model` | string | - | Override model name (passed to provider as-is) |
+| `submodules` | `"all"` \| string[] | - | Project-only. Submodules to initialize in shared clones: `"all"` or an explicit path list (wildcards not supported) |
+| `with_submodules` | boolean | - | Project-only. Legacy boolean equivalent of `submodules: "all"`; prefer `submodules` |
 | `allow_git_hooks` | boolean | `false` | Allow git hooks during TAKT-managed auto-commit |
 | `allow_git_filters` | boolean | `false` | Allow git filters during TAKT-managed auto-commit |
 | `auto_pr` | boolean | - | Auto-create PR after worktree execution |
+| `draft_pr` | boolean | `false` (from global) | Create the auto-created PR as a draft |
 | `concurrency` | number (1-10) | `1` (from global) | Parallel task count for `takt run` |
 | `auto_requeue_max_attempts` | non-negative integer | `0` (from global/default) | Maximum automatic requeue attempts for failed workflow tasks during `takt run`; `0` disables automatic requeue |
 | `ignore_exceed` | boolean | `false` (from global/default) | Configures iteration-limit bypass for `takt run` and `takt watch`; a CLI `--ignore-exceed` flag takes precedence when specified |

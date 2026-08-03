@@ -41,6 +41,10 @@ E2Eテストを追加・変更した場合は、このドキュメントも更�
 - `npm run test:e2e:opencode`: `test:e2e:provider:opencode` の別名。
 - `npx vitest run e2e/specs/add-and-run.e2e.ts`: 単体実行の例。
 
+provider E2E スクリプトの対象は `claude` / `claude-sdk` / `codex` / `cursor` / `opencode`。`copilot` と `kiro` には provider E2E 経路がなく、単体テスト（`src/__tests__/copilot-*.test.ts` / `kiro-*.test.ts`）のみで検証している。
+
+GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` のみ。provider E2E は API 課金を伴うため CI には含めず、メンテナーが PR コメントコマンド `/ci`（OWNER 限定）で必要時にのみ実行する。
+
 ## シナリオ一覧
 - Add task and run（`e2e/specs/add-and-run.e2e.ts`）
   - 目的: `.takt/tasks.yaml` に pending タスクを配置し、`takt run` が実行できることを確認。

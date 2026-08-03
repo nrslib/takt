@@ -71,6 +71,19 @@ takt -t "review current changes" -w review-takt-default
 
 CodeRabbit が PR をレビューした場合は、各コメントについて対応すべきかどうかを判断し、対応すべきものに対応してください。**すべてのスレッドを Resolve してください** — 変更を加えた場合も、対応しないと判断した場合も（その場合は理由を一言残す）Resolve します。未対応・未 Resolve のまま放置しないでください。
 
+## PR コメントコマンド（権限制限あり）
+
+このリポジトリの PR にはコメント起動の自動化があります（`.github/workflows/pr-comment-commands.yml`）。これらは有料の AI API クレジットを消費するため、起動できるロールを意図的に制限しています。
+
+| コマンド | 動作 | 起動できるロール |
+|---------|------|------------------|
+| `/review` | PR に対して TAKT レビューを実行 | OWNER / MEMBER / COLLABORATOR |
+| `/resolve` | マージコンフリクトを AI 支援で解決 | OWNER のみ |
+| `/ci` | provider E2E スイートを実行（実 API 呼び出し） | OWNER のみ |
+| `@takt` | コメント内容を TAKT タスクとして実行 | OWNER のみ |
+
+必要なロールを持たない状態でこれらのコマンドをコメントしても、**何も起きません（ワークフローが起動しない）**。これはバグではなく想定どおりの挙動です。通常の CI（build / lint / unit / integration / mock E2E）はすべての PR で自動実行されます。provider E2E は必要に応じてメンテナーが `/ci` で実行します。provider E2E や TAKT レビューが必要だと思う場合は、コメントでメンテナーに依頼してください。
+
 ## コードスタイル
 
 - TypeScript strict mode

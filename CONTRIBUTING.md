@@ -69,6 +69,19 @@ Check the summary in `.takt/runs/*/reports/review-summary.md`. If the result is 
 
 If CodeRabbit reviews your PR, go through each comment, decide whether it should be addressed, and act on the ones that should be. **Resolve every thread** — whether you applied a change or consciously decided not to (in which case leave a short note explaining why). Don't leave comments unaddressed and unresolved.
 
+## PR Comment Commands (restricted)
+
+This repository has comment-driven automations on PRs (`.github/workflows/pr-comment-commands.yml`). They consume paid AI API credits, so who can trigger them is intentionally restricted:
+
+| Command | What it does | Who can trigger it |
+|---------|--------------|--------------------|
+| `/review` | Runs a TAKT review on the PR | OWNER / MEMBER / COLLABORATOR |
+| `/resolve` | Resolves merge conflicts with AI assistance | OWNER only |
+| `/ci` | Runs provider E2E suites (real API calls) | OWNER only |
+| `@takt` | Runs a TAKT task from the comment | OWNER only |
+
+If you comment one of these on your PR without the required role, **nothing happens — the workflow simply does not start**. This is expected, not a bug. Regular CI (build / lint / unit / integration / mock E2E) runs automatically on every PR; provider E2E is triggered by a maintainer via `/ci` when needed. If you think a provider E2E run or a TAKT review would help your PR, just ask a maintainer in a comment.
+
 ## Code Style
 
 - TypeScript strict mode
