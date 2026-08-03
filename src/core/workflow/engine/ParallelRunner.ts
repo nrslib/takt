@@ -284,7 +284,7 @@ export class ParallelRunner {
       log.debug('Concurrency limit enabled', { step: step.name, concurrency: step.concurrency });
     }
     const agentSubSteps = subSteps.filter(isAgentParallelSubStep);
-    const configuredProviderInfoByStep = new Map(subSteps.map((subStep) => {
+    const configuredProviderInfoByStep = new Map(agentSubSteps.map((subStep) => {
       const providerInfo = this.deps.optionsBuilder.resolveStepProviderModelBeforeAutoRouting(subStep, runtime);
       validateProviderModelRequirements(providerInfo.provider, providerInfo.model, {
         modelFieldName: `Configuration error: parallel sub-step "${subStep.name}" model`,
@@ -364,7 +364,7 @@ export class ParallelRunner {
     const workflowCallResumeStack = subSteps.some(isWorkflowCallStep)
       ? this.requireWorkflowCallResumeStack(step, stepIteration)
       : undefined;
-    const providerInfoByStep = new Map(subSteps.map((subStep) => {
+    const providerInfoByStep = new Map(agentSubSteps.map((subStep) => {
       const routedProviderInfo = routedProviderInfoByStep.get(subStep.name);
       const subRuntime = routedProviderInfo === undefined
         ? runtime

@@ -48,6 +48,7 @@ interface HarnessOptions {
 
 interface LifecycleHarness {
   emit: ReturnType<typeof vi.fn>;
+  order: string[];
   state: WorkflowState;
   execute: () => Promise<unknown>;
   executeIsolated: () => Promise<unknown>;
@@ -104,7 +105,13 @@ function createLifecycleHarness(options: HarnessOptions = {}): LifecycleHarness 
   attachWorkflowReference(parentWorkflow, options.parentWorkflowReference);
   attachWorkflowReference(childWorkflow, options.childWorkflowReference);
 
+  const order: string[] = [];
   const emit = vi.fn((event: string, lifecycle: WorkflowCallCompleteLifecycle) => {
+    if (event === 'workflow_call:start') {
+      order.push('start');
+    } else if (event === 'workflow_call:complete') {
+      order.push('complete');
+    }
     if (
       options.terminalListenerError !== undefined
       && event === 'workflow_call:complete'
@@ -122,6 +129,7 @@ function createLifecycleHarness(options: HarnessOptions = {}): LifecycleHarness 
   const state = createInitialState(parentWorkflow, engineOptions);
   state.stepIterations.set(stepName, callInstance);
   const sharedRuntime: WorkflowSharedRuntimeState = { startedAtMs: 0 };
+  let setActiveResumePointCalls = 0;
   const childState = createChildState(
     childWorkflow,
     options.childStatus ?? 'completed',
@@ -169,12 +177,17 @@ function createLifecycleHarness(options: HarnessOptions = {}): LifecycleHarness 
     consumeWorkflowCallContinuation: vi.fn(),
     runPaths: { slug: 'run' } as never,
     setActiveResumePoint: vi.fn(() => {
-      if (options.setActiveResumePointError !== undefined) {
+      setActiveResumePointCalls++;
+      if (
+        options.setActiveResumePointError !== undefined
+        && setActiveResumePointCalls === 2
+      ) {
         throw options.setActiveResumePointError;
       }
     }),
     emit,
     resolveWorkflowCall: vi.fn(() => {
+      order.push('resolve');
       if (options.resolverError !== undefined) {
         throw options.resolverError;
       }
@@ -201,6 +214,7 @@ function createLifecycleHarness(options: HarnessOptions = {}): LifecycleHarness 
   );
   return {
     emit,
+    order,
     state,
     execute: async () => {
       const token = activate();
@@ -295,7 +309,9 @@ async function runProviderResolutionFailureThroughEngine(parallel: boolean): Pro
   const { parent, child } = createProviderResolutionFailureWorkflows(parallel);
   const emit = vi.fn();
   let runStarted = false;
-  let workflowCallStarted = false;
+  let parallelStepStarted = false;
+  let providerOriginCalls = 0;
+  const parentParallelProviderResolutionCalls = parallel ? 2 : 0;
   let resumePointAtStart: ReturnType<WorkflowEngine['getResumePoint']>;
   try {
     const engine = new WorkflowEngine(parent, projectDir, 'Resolve provider context', {
@@ -303,16 +319,27 @@ async function runProviderResolutionFailureThroughEngine(parallel: boolean): Pro
       provider: 'mock',
       model: 'parent-model',
       providerOptions: { codex: { networkAccess: true } },
-      providerOptionsOriginResolver: () => {
-        if (runStarted && (!parallel || workflowCallStarted)) {
-          throw failure;
+      providerOptionsOriginResolver: (path) => {
+        if (
+          runStarted
+          && (!parallel || parallelStepStarted)
+          && path === 'codex.networkAccess'
+        ) {
+          providerOriginCalls++;
+          if (providerOriginCalls === parentParallelProviderResolutionCalls + 1) {
+            throw failure;
+          }
         }
         return 'default';
       },
       workflowCallResolver: () => child,
     });
+    engine.on('step:start', (step) => {
+      if (step.name === 'reviewers') {
+        parallelStepStarted = true;
+      }
+    });
     engine.on('workflow_call:start', (lifecycle) => {
-      workflowCallStarted = true;
       resumePointAtStart = engine.getResumePoint();
       emit('workflow_call:start', lifecycle);
     });
@@ -328,7 +355,7 @@ async function runProviderResolutionFailureThroughEngine(parallel: boolean): Pro
 }
 
 describe('WorkflowCallRunner lifecycle events', () => {
-  it('uses canonical workflow references and occurrences for a completed invocation', async () => {
+  it('records the requested child at start and the canonical child at completion', async () => {
     const harness = createLifecycleHarness({
       parentWorkflowReference: 'project:sha256:parent',
       childWorkflowReference: 'builtin:sha256:child',
@@ -342,7 +369,7 @@ describe('WorkflowCallRunner lifecycle events', () => {
         {
           parentWorkflow: 'project:sha256:parent',
           step: 'delegate',
-          childWorkflow: 'builtin:sha256:child',
+          childWorkflow: 'shared/review',
           callInstance: 1,
           stack: [{
             workflow: 'parent',
@@ -434,6 +461,7 @@ describe('WorkflowCallRunner lifecycle events', () => {
 
     await expect(harness.execute()).rejects.toBe(failure);
 
+    expect(harness.order).toEqual(['start', 'resolve', 'complete']);
     expectFailedLifecycle(harness.emit, 'resolver failed');
   });
 
@@ -444,6 +472,7 @@ describe('WorkflowCallRunner lifecycle events', () => {
       'references unknown workflow "shared/review"',
     );
 
+    expect(harness.order).toEqual(['start', 'resolve', 'complete']);
     expectFailedLifecycle(harness.emit, 'references unknown workflow "shared/review"');
   });
 
@@ -480,6 +509,7 @@ describe('WorkflowCallRunner lifecycle events', () => {
 
     await expect(harness.execute()).rejects.toThrow(reason);
 
+    expect(harness.order).toEqual(['start', 'resolve', 'complete']);
     expectFailedLifecycle(harness.emit, reason);
   });
 

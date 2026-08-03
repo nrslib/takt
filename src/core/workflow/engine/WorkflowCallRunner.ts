@@ -104,7 +104,6 @@ interface PendingWorkflowCallExecution {
 interface WorkflowCallAttempt {
   readonly lifecycle: WorkflowCallLifecycle;
   readonly preparedExecution: PreparedWorkflowCallExecution;
-  started: boolean;
 }
 
 interface WorkflowCallAttemptValue<T> {
@@ -387,12 +386,6 @@ export class WorkflowCallRunner {
     return lifecycle;
   }
 
-  private emitAttemptStart(attempt: WorkflowCallAttempt): void {
-    if (attempt.started) return;
-    attempt.started = true;
-    this.deps.emit('workflow_call:start', attempt.lifecycle);
-  }
-
   private buildTerminalLifecycle(
     attempt: WorkflowCallAttempt,
     result: WorkflowCallExecutionResult,
@@ -466,13 +459,6 @@ export class WorkflowCallRunner {
     this.deps.emit('workflow_call:complete', this.buildFailedLifecycle(lifecycle, error));
   }
 
-  private emitFailedAttempt(lifecycle: WorkflowCallLifecycle, error: unknown): void {
-    // canonical invocation は start listener が再開点を保存する前に確定必須なため、
-    // その事前確定が失敗した場合だけ lifecycle pair をここで同時に閉じる。
-    this.deps.emit('workflow_call:start', lifecycle);
-    this.failAttempt(lifecycle, error);
-  }
-
   private terminatePreparedExecution(
     token: WorkflowCallExecutionToken,
     error: unknown,
@@ -485,38 +471,25 @@ export class WorkflowCallRunner {
       return;
     }
     this.preparedExecutions.delete(token);
-    if (attempt.started) {
-      this.failAttempt(attempt.lifecycle, error);
-    }
+    this.failAttempt(attempt.lifecycle, error);
   }
 
   private prepareInvocation(
     step: WorkflowCallStep,
     occurrence: number,
     resumeStackPrefix: readonly WorkflowResumePointEntry[],
+    identity: string,
+    lifecycleAtStart: WorkflowCallLifecycle,
   ): WorkflowCallExecutionToken {
-    const identity = buildWorkflowCallInvocationIdentity(
-      getWorkflowReference(this.deps.getConfig()),
-      step.name,
-      resumeStackPrefix,
-    );
-    if (
-      this.pendingExecution?.identity === identity
-      && this.pendingExecution.occurrence === occurrence
-    ) {
-      return this.pendingExecution.token;
-    }
-    this.cancelPendingInvocation();
-    const unresolvedLifecycle = this.buildAttemptLifecycle(step, occurrence, resumeStackPrefix);
     let childWorkflow: WorkflowConfig;
     try {
       childWorkflow = this.resolveCallableChildWorkflow(step, resumeStackPrefix);
     } catch (error) {
-      this.emitFailedAttempt(unresolvedLifecycle, error);
+      this.failAttempt(lifecycleAtStart, error);
       throw error;
     }
     const lifecycle = {
-      ...unresolvedLifecycle,
+      ...lifecycleAtStart,
       childWorkflow: getWorkflowReference(childWorkflow),
     };
     try {
@@ -536,11 +509,11 @@ export class WorkflowCallRunner {
           new Error(`workflow_call step "${step.name}" execution was cancelled`),
         ),
       });
-      this.preparedExecutions.set(token, { lifecycle, preparedExecution, started: false });
+      this.preparedExecutions.set(token, { lifecycle, preparedExecution });
       this.pendingExecution = { identity, occurrence, token };
       return token;
     } catch (error) {
-      this.emitFailedAttempt(lifecycle, error);
+      this.failAttempt(lifecycle, error);
       throw error;
     }
   }
@@ -555,24 +528,46 @@ export class WorkflowCallRunner {
     occurrence: number,
     resumeStackPrefix: readonly WorkflowResumePointEntry[],
   ): WorkflowCallExecutionToken {
-    this.executor.recordPendingInvocation(step, occurrence, resumeStackPrefix);
-    try {
+    const identity = buildWorkflowCallInvocationIdentity(
+      getWorkflowReference(this.deps.getConfig()),
+      step.name,
+      resumeStackPrefix,
+    );
+    let token: WorkflowCallExecutionToken;
+    if (
+      this.pendingExecution?.identity === identity
+      && this.pendingExecution.occurrence === occurrence
+    ) {
+      token = this.pendingExecution.token;
+    } else {
+      this.cancelPendingInvocation();
+      this.executor.recordPendingInvocation(step, occurrence, resumeStackPrefix);
       this.deps.setActiveResumePoint(step, iteration, occurrence, resumeStackPrefix);
-    } catch (error) {
-      this.emitFailedAttempt(
-        this.buildAttemptLifecycle(step, occurrence, resumeStackPrefix),
-        error,
+      const lifecycleAtStart = this.buildAttemptLifecycle(
+        step,
+        occurrence,
+        resumeStackPrefix,
       );
-      throw error;
+      try {
+        this.deps.emit('workflow_call:start', lifecycleAtStart);
+      } catch (error) {
+        this.failAttempt(lifecycleAtStart, error);
+        throw error;
+      }
+      token = this.prepareInvocation(
+        step,
+        occurrence,
+        resumeStackPrefix,
+        identity,
+        lifecycleAtStart,
+      );
     }
-    const token = this.prepareInvocation(step, occurrence, resumeStackPrefix);
     try {
       this.deps.setActiveResumePoint(step, iteration, occurrence, token.resumeStackPrefix);
       const attempt = this.preparedExecutions.get(token);
       if (attempt === undefined) {
         throw new Error(`workflow_call step "${step.name}" execution was not prepared`);
       }
-      this.emitAttemptStart(attempt);
       return token;
     } catch (error) {
       const attempt = this.preparedExecutions.get(token);
@@ -581,11 +576,7 @@ export class WorkflowCallRunner {
         this.pendingExecution = undefined;
       }
       if (attempt !== undefined) {
-        if (attempt.started) {
-          this.failAttempt(attempt.lifecycle, error);
-        } else {
-          this.emitFailedAttempt(attempt.lifecycle, error);
-        }
+        this.failAttempt(attempt.lifecycle, error);
       }
       throw error;
     }
