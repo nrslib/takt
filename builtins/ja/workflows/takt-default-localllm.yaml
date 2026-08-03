@@ -22,7 +22,6 @@ steps:
       peer_review_workflow: peer-review-finding-contract-localllm
       review_policy: [coding, testing, review]
       review_knowledge: [takt, architecture, implementation-semantics, unit-testing, e2e-testing]
-      supervisor_persona: supervisor
     rules:
       - condition: COMPLETE
         next: COMPLETE

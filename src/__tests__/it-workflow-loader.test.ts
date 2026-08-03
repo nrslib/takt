@@ -40,7 +40,10 @@ vi.mock('../infra/config/resolveConfigValue.js', () => ({
 
 // --- Imports (after mocks) ---
 
-import { loadWorkflow } from '../infra/config/loaders/index.js';
+import {
+  loadAllStandaloneWorkflowsWithSources,
+  loadWorkflow,
+} from '../infra/config/loaders/index.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
 import { listBuiltinWorkflowNames } from '../infra/config/loaders/workflowResolver.js';
 import { loadGlobalConfig } from '../infra/config/global/globalConfig.js';
@@ -84,6 +87,18 @@ describe('Workflow Loader IT: builtin workflow loading', () => {
       }
     });
   }
+
+  it.each(['en', 'ja'] as const)('should load every %s builtin standalone workflow without warnings', (language) => {
+    languageState.value = language;
+    const onWarning = vi.fn();
+
+    const workflows = loadAllStandaloneWorkflowsWithSources(testDir, { onWarning });
+
+    expect(workflows.size).toBeGreaterThan(0);
+    expect(workflows.get('takt-default-localllm')?.source).toBe('builtin');
+    expect(Array.from(workflows.values()).every(({ source }) => source === 'builtin')).toBe(true);
+    expect(onWarning).not.toHaveBeenCalled();
+  });
 
   it('should return null for non-existent workflow', () => {
     const config = loadWorkflow('non-existent-workflow-xyz', testDir);
