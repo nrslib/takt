@@ -100,16 +100,16 @@ export function buildRetryTaskRecord(
   if (options.startStep !== undefined && options.restartPoint !== undefined) {
     throw new Error('Retry task cannot own both start_step and restart_point');
   }
-  const taskWithoutSourceRunSlug = options.resumePoint === undefined
+  const baseTask = options.resumePoint === undefined
     ? clearRetryMetadata(task)
     : { ...task, [TASK_RESTART_POINT_KEY]: undefined };
-  delete taskWithoutSourceRunSlug.source_run_slug;
+  delete baseTask.source_run_slug;
   const taskSpecSource = options.taskDir
     ? { content: undefined, content_file: undefined, task_dir: options.taskDir }
     : {};
 
   return {
-    ...taskWithoutSourceRunSlug,
+    ...baseTask,
     ...(options.workflow ? { workflow: options.workflow } : {}),
     ...taskSpecSource,
     status,
