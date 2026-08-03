@@ -9,6 +9,8 @@ import type {
 } from '../core/models/index.js';
 import { WorkflowCallExecutor } from '../core/workflow/engine/WorkflowCallExecutor.js';
 import { WorkflowRestartNavigator } from '../core/workflow/engine/WorkflowRestartNavigator.js';
+import { buildWorkflowCallNamespaceSegment } from '../core/workflow/workflow-call-namespace.js';
+import { buildWorkflowCallInvocationIdentity } from '../core/workflow/workflow-call-invocation-index.js';
 import type {
   WorkflowCallChildEngine,
   WorkflowEngineOptions,
@@ -125,7 +127,11 @@ function makeRequest(options: {
   return {
     step: options.step,
     childWorkflow: options.child,
-    reportNamespaceSegment: 'call-test',
+    reportNamespaceSegment: buildWorkflowCallNamespaceSegment(
+      buildWorkflowCallInvocationIdentity('default', 'delegate', []),
+      'coding',
+      1,
+    ),
     callStack: options.callStack,
     childProviderInfo: { provider: 'mock' as const, model: 'test-model' },
     parentProviderOptions: undefined,
