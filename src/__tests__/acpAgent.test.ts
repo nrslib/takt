@@ -2557,6 +2557,68 @@ describe('TAKT ACP agent adapter', () => {
     });
   });
 
+  it.each([
+    {
+      title: 'accept response with a malformed payload',
+      response: { action: 'accept', content: 'not-an-object' },
+      error: /invalid or unsupported response: accept/i,
+      message: 'ACP elicitation returned an invalid or unsupported response: accept',
+    },
+    {
+      title: 'custom elicitation action',
+      response: { action: '_defer' },
+      error: /invalid or unsupported response: _defer/i,
+      message: 'ACP elicitation returned an invalid or unsupported response: _defer',
+    },
+  ])('should surface an error for ACP elicitation $title instead of a denial', async ({ response, error, message }) => {
+    const sendSessionUpdate = vi.fn();
+    const createElicitation = vi.fn().mockResolvedValue(response);
+    const runWorkflowExecution = vi.fn(async (request) => {
+      await expect(request.onAskUserQuestion?.({
+        questions: [{ question: 'Proceed?' }],
+      })).rejects.toThrow(error);
+      return {
+        success: false,
+        reason: 'invalid elicitation response',
+      };
+    });
+    const agent = createTaktAcpAgent({
+      createConversationSession: vi.fn(() => ({
+        handleUserMessage: vi.fn().mockResolvedValue({
+          kind: 'workflow_execution_requested',
+          task: 'Implement ACP support',
+        }),
+      })),
+      runWorkflowExecution,
+      sendSessionUpdate,
+      createElicitation,
+    });
+    await agent.handleInitialize({
+      protocolVersion: 1,
+      clientCapabilities: {
+        elicitation: {
+          form: {},
+        },
+      },
+    });
+    const { sessionId } = await agent.handleSessionNew(newSessionParams());
+
+    await agent.handleSessionPrompt({
+      sessionId,
+      prompt: [{ type: 'text', text: '/play Implement ACP support' }],
+    });
+
+    expect(sendSessionUpdate).toHaveBeenCalledWith(sessionId, {
+      kind: 'workflow_event',
+      event: {
+        type: 'tool_completed',
+        toolCallId: 'confirmation-1',
+        message,
+        isError: true,
+      },
+    });
+  });
+
   it('should deny AskUserQuestion without sending elicitation when client lacks form capability', async () => {
     const sendSessionUpdate = vi.fn();
     const createElicitation = vi.fn();

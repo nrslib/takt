@@ -1,4 +1,4 @@
-import { methods, type ElicitationSchema } from '@agentclientprotocol/sdk';
+import { CreateElicitationResponse, methods, type ElicitationSchema } from '@agentclientprotocol/sdk';
 import { AskUserQuestionDeniedError } from '../../core/workflow/ask-user-question-error.js';
 import type { AskUserQuestionInput } from '../../core/workflow/types.js';
 import type {
@@ -185,7 +185,7 @@ export async function askUserQuestionViaAcp(
         requestedSchema: buildQuestionSchema(question),
       });
       const response = await waitForElicitationResponse(elicitation, abortSignal);
-      if (response.action !== 'accept') {
+      if (CreateElicitationResponse.isDecline(response) || CreateElicitationResponse.isCancel(response)) {
         await sendSessionUpdate?.(sessionId, {
           kind: 'workflow_event',
           event: {
@@ -196,6 +196,9 @@ export async function askUserQuestionViaAcp(
           },
         });
         throw new AskUserQuestionDeniedError();
+      }
+      if (!CreateElicitationResponse.isAccept(response)) {
+        throw new Error(`ACP elicitation returned an invalid or unsupported response: ${response.action}`);
       }
       answers[question.question] = formatElicitationAnswer(question, response.content?.[ANSWER_FIELD]);
       await sendSessionUpdate?.(sessionId, {

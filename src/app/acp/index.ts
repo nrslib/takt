@@ -58,7 +58,7 @@ const acpMcpServerSchema = z.union([
   z.object({
     type: z.literal('acp'),
     name: z.string(),
-    id: z.string(),
+    serverId: z.string(),
     _meta: acpMetadataSchema,
   }),
   z.object({

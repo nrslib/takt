@@ -600,6 +600,62 @@ describe('ACP package entrypoint', () => {
     expect(saveTaskFile).not.toHaveBeenCalled();
   });
 
+  it('should route ACP-transport MCP servers with serverId to the transport rejection over the SDK stream transport', async () => {
+    const clientToAgent = new TransformStream<Uint8Array>();
+    const agentToClient = new TransformStream<Uint8Array>();
+    const createConversationSession = vi.fn();
+    const app = createTaktAcpAgentApp({
+      createConversationSession,
+    });
+    app.connect(ndJsonStream(agentToClient.writable, clientToAgent.readable));
+
+    await expect(client({ name: 'takt-acp-transport-server-id-test-client' })
+      .connectWith(ndJsonStream(clientToAgent.writable, agentToClient.readable), async (agent) => {
+        await agent.request(methods.agent.initialize, {
+          protocolVersion: PROTOCOL_VERSION,
+          clientCapabilities: {},
+        });
+        return agent.request(methods.agent.session.new, {
+          cwd: '/repo',
+          mcpServers: [{
+            type: 'acp',
+            name: 'proxy',
+            serverId: 'srv-1',
+          }],
+        });
+      })).rejects.toMatchObject({
+        data: { details: 'Unsupported ACP MCP server transport: acp' },
+      });
+    expect(createConversationSession).not.toHaveBeenCalled();
+  });
+
+  it('should reject legacy id on ACP-transport MCP servers as invalid params over the SDK stream transport', async () => {
+    const clientToAgent = new TransformStream<Uint8Array>();
+    const agentToClient = new TransformStream<Uint8Array>();
+    const createConversationSession = vi.fn();
+    const app = createTaktAcpAgentApp({
+      createConversationSession,
+    });
+    app.connect(ndJsonStream(agentToClient.writable, clientToAgent.readable));
+
+    await expect(client({ name: 'takt-acp-transport-legacy-id-test-client' })
+      .connectWith(ndJsonStream(clientToAgent.writable, agentToClient.readable), async (agent) => {
+        await agent.request(methods.agent.initialize, {
+          protocolVersion: PROTOCOL_VERSION,
+          clientCapabilities: {},
+        });
+        return agent.request(methods.agent.session.new, {
+          cwd: '/repo',
+          mcpServers: [{
+            type: 'acp',
+            name: 'proxy',
+            id: 'srv-1',
+          }],
+        });
+      })).rejects.toThrow('Invalid params');
+    expect(createConversationSession).not.toHaveBeenCalled();
+  });
+
   it('should reject Git option session/new taskContext branch over the SDK stream transport', async () => {
     const clientToAgent = new TransformStream<Uint8Array>();
     const agentToClient = new TransformStream<Uint8Array>();
