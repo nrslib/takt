@@ -59,32 +59,13 @@ function writeSourceReport(
   return reportPath;
 }
 
-function invocationEvidence(
-  step: string,
-  childWorkflow: string,
-  callInstance: number,
-  ownerPath: Parameters<typeof buildWorkflowCallInvocationIdentity>[2] = [],
-) {
-  const identity = buildWorkflowCallInvocationIdentity('parent', step, ownerPath);
-  return {
-    [identity]: {
-      call_instance: callInstance,
-      child_workflow_ref: childWorkflow,
-    },
-  };
-}
-
-function inherit(
-  projectDirectory: string,
-  sourceWorkflowCallInvocations?: ReturnType<typeof invocationEvidence>,
-) {
+function inherit(projectDirectory: string) {
   return inheritReviewReports({
     cwd: projectDirectory,
     sourceRunSlug,
     currentRunSlug,
     targetReportDirectory: targetReportDirectory(projectDirectory),
     reviewReportNames,
-    ...(sourceWorkflowCallInvocations === undefined ? {} : { sourceWorkflowCallInvocations }),
   });
 }
 
@@ -134,105 +115,7 @@ describe('inheritReviewReports', () => {
     expect(proveWorkflowCallRunNamespacePathsCorrespond(
       [callNamespace('peer-review', 'reviewers', 1)],
       [callNamespace('peer-review', 'reviewers', 2)],
-      {},
     )).toEqual({ matches: true });
-    expect(proveWorkflowCallRunNamespacePathsCorrespond(
-      ['iteration-8--step-peer-review--workflow-reviewers'],
-      [callNamespace('peer-review', 'reviewers', 2)],
-      { sourceWorkflowCallInvocations: invocationEvidence('peer-review', 'reviewers', 8) },
-    )).toEqual({ matches: true });
-    expect(proveWorkflowCallRunNamespacePathsCorrespond(
-      ['iteration-8--step-peer-review--workflow-reviewers'],
-      ['iteration-9--step-peer-review--workflow-reviewers'],
-      { sourceWorkflowCallInvocations: invocationEvidence('peer-review', 'reviewers', 8) },
-    )).toMatchObject({ matches: false });
-    expect(proveWorkflowCallRunNamespacePathsCorrespond(
-      [callNamespace('peer-review', 'reviewers', 1)],
-      ['iteration-9--step-peer-review--workflow-reviewers'],
-      {},
-    )).toMatchObject({ matches: false });
-  });
-
-  it('should reconnect a canonical call namespace to a legacy iteration report path', () => {
-    const projectDirectory = createProjectDirectory();
-    writeSourceReport(
-      projectDirectory,
-      ['subworkflows', 'iteration-8--step-peer-review--workflow-peer-review'],
-      '05-arch-review.md',
-      'legacy review',
-      new Date('2026-07-17T00:00:00.000Z'),
-    );
-
-    const result = inherit(
-      projectDirectory,
-      invocationEvidence('peer-review', 'peer-review', 8),
-    );
-
-    expect(result.status).toBe('partial');
-    expect(readFileSync(join(targetReportDirectory(projectDirectory), '05-arch-review.md'), 'utf-8'))
-      .toBe('legacy review');
-  });
-
-  it('should fail closed when a legacy namespace has no invocation metadata', () => {
-    const projectDirectory = createProjectDirectory();
-    writeSourceReport(
-      projectDirectory,
-      ['subworkflows', 'iteration-8--step-peer-review--workflow-peer-review'],
-      '05-arch-review.md',
-      'legacy review',
-      new Date('2026-07-17T00:00:00.000Z'),
-    );
-
-    const result = inherit(projectDirectory);
-
-    expect(result.copied).toEqual([]);
-    expect(result.skipped).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        reportName: '05-arch-review.md',
-        reason: 'namespace_segment_1:legacy_correspondence_metadata_missing',
-      }),
-    ]));
-  });
-
-  it('should fail closed when multiple invocation records project to the same legacy namespace', () => {
-    const projectDirectory = createProjectDirectory();
-    const firstOwner = [{ workflow: 'parent', step: 'a', kind: 'agent' as const }];
-    const secondOwner = [{ workflow: 'parent', step: 'a/b', kind: 'agent' as const }];
-    const firstIdentity = buildWorkflowCallInvocationIdentity('parent', 'b/c', firstOwner);
-    const secondIdentity = buildWorkflowCallInvocationIdentity('parent', 'c', secondOwner);
-    const targetDirectory = join(
-      projectDirectory,
-      '.takt',
-      'runs',
-      currentRunSlug,
-      'reports',
-      'subworkflows',
-      buildWorkflowCallNamespaceSegment(firstIdentity, 'child', 2),
-    );
-    writeSourceReport(
-      projectDirectory,
-      ['subworkflows', 'iteration-1--step-a%2Fb%2Fc--workflow-child'],
-      '05-arch-review.md',
-      'ambiguous review',
-      new Date('2026-07-17T00:00:00.000Z'),
-    );
-
-    const result = inheritReviewReports({
-      cwd: projectDirectory,
-      sourceRunSlug,
-      currentRunSlug,
-      targetReportDirectory: targetDirectory,
-      reviewReportNames: ['05-arch-review.md'],
-      sourceWorkflowCallInvocations: {
-        [firstIdentity]: { call_instance: 1, child_workflow_ref: 'child' },
-        [secondIdentity]: { call_instance: 1, child_workflow_ref: 'child' },
-      },
-    });
-
-    expect(result.copied).toEqual([]);
-    expect(result.skipped).toEqual([expect.objectContaining({
-      reason: 'namespace_segment_1:legacy_correspondence_candidate_ambiguous',
-    })]);
   });
 
   it('should copy the newest review report from a previous nested workflow into the current report directory', () => {

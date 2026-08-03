@@ -84,7 +84,6 @@ import {
   workflowOwnerPathFromStack,
 } from '../workflow-execution-scope.js';
 import { WorkflowCallProgressTracker, type WorkflowCallProgressLease } from '../workflow-call-progress-tracker.js';
-import { readRunMetaBySlug } from '../run/run-meta.js';
 import { WorkflowRestartNavigator } from './WorkflowRestartNavigator.js';
 const log = createLogger('workflow-engine');
 
@@ -735,12 +734,6 @@ export class WorkflowEngine extends EventEmitter {
       throw new Error(`Invalid review report discovery state: ${fatalFailure.reason}`);
     }
     const recoverableFailures = reportNameResult.failures.map((failure) => failure.reason);
-    const sourceRunMeta = resumeSource.sourceRunSlug === undefined
-      ? null
-      : readRunMetaBySlug(this.cwd, resumeSource.sourceRunSlug, (warning) => {
-          log.warn('Failed to load source run metadata for report inheritance', { warning });
-        });
-    const sourceWorkflowCallInvocations = sourceRunMeta?.resumePoint?.workflow_call_invocations;
     const inheritanceOptions = {
       cwd: this.cwd,
       sourceRunSlug: resumeSource.sourceRunSlug,
@@ -748,9 +741,6 @@ export class WorkflowEngine extends EventEmitter {
       targetReportDirectory: this.runPaths.reportsAbs,
       reviewReportNames: reportNameResult.reportNames,
       discoveryFailures: recoverableFailures,
-      ...(sourceWorkflowCallInvocations === undefined
-        ? {}
-        : { sourceWorkflowCallInvocations }),
     };
     try {
       const result = inheritReviewReports(inheritanceOptions);

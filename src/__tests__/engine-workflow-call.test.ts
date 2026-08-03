@@ -5571,7 +5571,7 @@ steps:
         workflow_call_invocations: {
           [buildWorkflowCallInvocationIdentity('parent', 'delegate', [])]: {
             call_instance: 1,
-            report_namespace_segment: 'iteration-7--step-delegate--workflow-takt%2Fcoding',
+            child_workflow_ref: 'takt/coding',
           },
         },
         workflow_step_participations: {},

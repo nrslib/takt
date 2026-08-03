@@ -474,67 +474,7 @@ describe('TaskExecutionConfigSchema', () => {
     });
   });
 
-  it('should canonicalize a version 2 iteration namespace with its call instance', () => {
-    const invocationIdentity = buildWorkflowCallInvocationIdentity('default', 'delegate', []);
-
-    const parsed = TaskExecutionConfigSchema.parse({
-      resume_point: {
-        version: 2,
-        stack: [{
-          workflow: 'default',
-          step: 'delegate',
-          kind: 'workflow_call',
-          call_instance: 2,
-        }],
-        iteration: 3,
-        elapsed_ms: 100,
-        workflow_call_invocations: {
-          [invocationIdentity]: {
-            call_instance: 2,
-            report_namespace_segment: 'iteration-3--step-delegate--workflow-child',
-          },
-        },
-        workflow_step_participations: {},
-      },
-    });
-
-    expect(parsed.resume_point?.workflow_call_invocations[invocationIdentity]).toEqual({
-      call_instance: 2,
-      child_workflow_ref: 'child',
-    });
-  });
-
-  it('should normalize a legacy call-v1 record to the logical invocation record', () => {
-    const invocationIdentity = buildWorkflowCallInvocationIdentity('default', 'delegate', []);
-
-    const parsed = TaskExecutionConfigSchema.parse({
-      resume_point: {
-        version: 2,
-        stack: [{
-          workflow: 'default',
-          step: 'delegate',
-          kind: 'workflow_call',
-          call_instance: 2,
-        }],
-        iteration: 3,
-        elapsed_ms: 100,
-        workflow_call_invocations: {
-          [invocationIdentity]: {
-            call_instance: 2,
-            report_namespace_segment: 'call-v1-2!default!delegate!0!child',
-          },
-        },
-        workflow_step_participations: {},
-      },
-    });
-
-    expect(parsed.resume_point?.workflow_call_invocations[invocationIdentity]).toEqual({
-      call_instance: 2,
-      child_workflow_ref: 'child',
-    });
-  });
-
-  it('should reject a non-canonical encoded legacy invocation namespace', () => {
+  it('should reject the removed report namespace invocation record shape', () => {
     const invocationIdentity = buildWorkflowCallInvocationIdentity('default', 'delegate', []);
 
     expect(() => TaskExecutionConfigSchema.parse({
@@ -551,12 +491,12 @@ describe('TaskExecutionConfigSchema', () => {
         workflow_call_invocations: {
           [invocationIdentity]: {
             call_instance: 2,
-            report_namespace_segment: 'iteration-3--step-delegate--workflow-child%2finner',
+            report_namespace_segment: ['iteration-3', 'step-delegate', 'workflow-child'].join('--'),
           },
         },
         workflow_step_participations: {},
       },
-    })).toThrow('Invalid workflow-call report namespace segment');
+    })).toThrow();
   });
 
   it('should reject a resume stack invocation that differs from its canonical record', () => {

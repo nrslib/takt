@@ -330,9 +330,9 @@ describe('WorkflowEngine report inheritance', () => {
       sourceRunSlug,
       'reports',
       'subworkflows',
-      'iteration-1--step-final-gate--workflow-review-gate',
+      finalGateSegment,
       'subworkflows',
-      'iteration-1--step-delegate--workflow-nested-review',
+      delegateSegment,
       'review.md',
     );
     mkdirSync(join(sourceReportPath, '..'), { recursive: true });

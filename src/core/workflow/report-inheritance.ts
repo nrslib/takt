@@ -6,7 +6,6 @@ import {
   proveWorkflowCallRunNamespacePathsCorrespond,
   workflowCallReportRequestSegmentsMatch,
 } from './workflow-call-namespace.js';
-import type { WorkflowCallInvocationRecord } from '../models/types.js';
 import { scanReportEntries } from './report-file-index.js';
 import {
   classifyReportRelativePath,
@@ -35,7 +34,6 @@ interface InheritReviewReportsOptions {
   readonly targetReportDirectory: string;
   readonly reviewReportNames: readonly string[];
   readonly discoveryFailures?: readonly string[];
-  readonly sourceWorkflowCallInvocations?: Readonly<Record<string, WorkflowCallInvocationRecord>>;
 }
 
 interface Candidate {
@@ -66,7 +64,6 @@ function candidateFor(
   entries: readonly string[],
   targetNamespace: string[],
   reportName: string,
-  sourceWorkflowCallInvocations: InheritReviewReportsOptions['sourceWorkflowCallInvocations'],
 ): CandidateSearchResult {
   const normalizedReportName = normalizeReportPath(reportName);
   const reportSegments = normalizedReportName.split('/');
@@ -89,7 +86,6 @@ function candidateFor(
     const reportPathProof = proveWorkflowCallRunNamespacePathsCorrespond(
       candidateReportSegments,
       reportPathSegments,
-      { sourceWorkflowCallInvocations },
     );
     if (!reportPathProof.matches) {
       correspondenceFailures.push(`report_path:${reportPathProof.reason}`);
@@ -98,7 +94,6 @@ function candidateFor(
     const namespaceProof = proveWorkflowCallRunNamespacePathsCorrespond(
       candidateNamespace,
       targetNamespace,
-      { sourceWorkflowCallInvocations },
     );
     if (!namespaceProof.matches) {
       correspondenceFailures.push(namespaceProof.reason);
@@ -222,7 +217,6 @@ export function inheritReviewReports(options: InheritReviewReportsOptions): Revi
       scan.entries,
       namespace,
       reportName,
-      options.sourceWorkflowCallInvocations,
     );
     const candidate = search.candidate;
     if (candidate === undefined) {

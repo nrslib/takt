@@ -125,7 +125,7 @@ function makeRequest(options: {
   return {
     step: options.step,
     childWorkflow: options.child,
-    reportNamespaceSegment: 'call-v2-test',
+    reportNamespaceSegment: 'call-test',
     callStack: options.callStack,
     childProviderInfo: { provider: 'mock' as const, model: 'test-model' },
     parentProviderOptions: undefined,

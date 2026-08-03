@@ -4,7 +4,7 @@ import type { WorkflowConfig } from '../core/models/types.js';
 vi.mock('../core/workflow/workflow-call-namespace.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   buildWorkflowCallNamespaceSegment: vi.fn(() => (
-    `call-v2-${'0'.repeat(64)}-${'1'.repeat(64)}-1`
+    `call-${'0'.repeat(64)}-1`
   )),
 }));
 

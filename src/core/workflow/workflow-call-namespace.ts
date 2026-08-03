@@ -3,48 +3,18 @@ import {
   parseWorkflowExecutionOwnerIdentity,
   type WorkflowExecutionOwnerIdentity,
 } from '../models/workflow-resume-contract.js';
-import type { WorkflowCallInvocationRecord } from '../models/types.js';
 
 interface WorkflowCallStorageKey {
   readonly scopeDigest: string;
   readonly callInstance: number | '*';
 }
 
-interface LegacyWorkflowCallNamespace {
-  readonly callInstance: number | '*';
-  readonly stepName: string;
-  readonly childWorkflow: string;
-}
-
-const WORKFLOW_CALL_STORAGE_KEY_PATTERN = /^call-v2-([0-9a-f]{64})-([1-9]\d*|\*)$/;
-const LEGACY_WORKFLOW_CALL_NAMESPACE_PATTERN = /^iteration-([1-9]\d*|\*)--step-([^/]+)--workflow-([^/]+)$/;
-const STORAGE_SCOPE_DOMAIN = 'takt.workflow-call.storage-scope.v2';
-export const MAX_WORKFLOW_CALL_STORAGE_KEY_BYTES = 89;
-
-function encodeLegacyValue(value: string): string {
-  return encodeURIComponent(value).replace(/[!'()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
-}
-
-function parseLegacyReportNamespaceSegment(segment: string): LegacyWorkflowCallNamespace | undefined {
-  const match = LEGACY_WORKFLOW_CALL_NAMESPACE_PATTERN.exec(segment);
-  if (match === null) {
-    return undefined;
-  }
-  try {
-    const callInstance = match[1] === '*' ? '*' : Number(match[1]);
-    const stepName = decodeURIComponent(match[2]!);
-    const childWorkflow = decodeURIComponent(match[3]!);
-    const rebuilt = `iteration-${callInstance}--step-${encodeLegacyValue(stepName)}`
-      + `--workflow-${encodeLegacyValue(childWorkflow)}`;
-    return rebuilt === segment ? { callInstance, stepName, childWorkflow } : undefined;
-  } catch {
-    return undefined;
-  }
-}
+const WORKFLOW_CALL_STORAGE_KEY_PATTERN = /^call-([0-9a-f]{64})-([1-9]\d*|\*)$/;
+const STORAGE_SCOPE_DOMAIN = 'takt.workflow-call.storage-scope';
+export const MAX_WORKFLOW_CALL_STORAGE_KEY_BYTES = 86;
 
 export function isWorkflowCallNamespaceSegment(segment: string): boolean {
-  return parseWorkflowCallNamespaceSegment(segment) !== undefined
-    || parseLegacyReportNamespaceSegment(segment) !== undefined;
+  return parseWorkflowCallNamespaceSegment(segment) !== undefined;
 }
 
 function canonicalOwnerIdentity(identity: WorkflowExecutionOwnerIdentity): object {
@@ -70,19 +40,6 @@ function digestCanonicalJson(domain: string, payload: object): string {
   return createHash('sha256').update(JSON.stringify({ domain, payload })).digest('hex');
 }
 
-function legacyStepName(identity: WorkflowExecutionOwnerIdentity): string {
-  let lastCallIndex = -1;
-  identity.owners.forEach((owner, index) => {
-    if (owner.kind === 'workflow_call') {
-      lastCallIndex = index;
-    }
-  });
-  return [
-    ...identity.owners.slice(lastCallIndex + 1).map((owner) => owner.step),
-    identity.step,
-  ].join('/');
-}
-
 function buildStorageKey(
   invocation: WorkflowExecutionOwnerIdentity,
   childWorkflow: string,
@@ -98,7 +55,7 @@ function buildStorageKey(
 }
 
 function serializeStorageKey(key: WorkflowCallStorageKey): string {
-  const segment = `call-v2-${key.scopeDigest}-${key.callInstance}`;
+  const segment = `call-${key.scopeDigest}-${key.callInstance}`;
   if (Buffer.byteLength(segment) > MAX_WORKFLOW_CALL_STORAGE_KEY_BYTES) {
     throw new Error('Workflow-call storage key exceeds its fixed byte limit');
   }
@@ -153,12 +110,7 @@ export function workflowCallReportRequestSegmentsMatch(
     return requestedStorageKey.callInstance === '*'
       && requestedStorageKey.scopeDigest === actualStorageKey.scopeDigest;
   }
-  const requestedLegacy = parseLegacyReportNamespaceSegment(requested);
-  const actualLegacy = parseLegacyReportNamespaceSegment(actual);
-  return requestedLegacy?.callInstance === '*'
-    && actualLegacy !== undefined
-    && requestedLegacy.stepName === actualLegacy.stepName
-    && requestedLegacy.childWorkflow === actualLegacy.childWorkflow;
+  return false;
 }
 
 export function workflowCallReportRequestPathsMatch(
@@ -169,77 +121,15 @@ export function workflowCallReportRequestPathsMatch(
     && actual.every((segment, index) => workflowCallReportRequestSegmentsMatch(segment, requested[index]!));
 }
 
-export interface WorkflowCallNamespaceCorrespondenceEvidence {
-  readonly sourceWorkflowCallInvocations?: Readonly<Record<string, WorkflowCallInvocationRecord>>;
-}
-
 export type WorkflowCallNamespaceCorrespondenceProof =
   | { readonly matches: true }
   | { readonly matches: false; readonly reason: string };
 
-function buildLegacyNamespace(
-  invocation: WorkflowExecutionOwnerIdentity,
-  record: WorkflowCallInvocationRecord,
-): string {
-  return `iteration-${record.call_instance}--step-${encodeLegacyValue(legacyStepName(invocation))}`
-    + `--workflow-${encodeLegacyValue(record.child_workflow_ref)}`;
-}
-
-function proveLegacyToV2Correspondence(
-  source: string,
-  target: string,
-  evidence: WorkflowCallNamespaceCorrespondenceEvidence,
-): WorkflowCallNamespaceCorrespondenceProof {
-  const sourceLegacy = parseLegacyReportNamespaceSegment(source);
-  const targetStorageKey = parseWorkflowCallNamespaceSegment(target);
-  if (sourceLegacy === undefined || targetStorageKey === undefined) {
-    return { matches: false, reason: 'unsupported_namespace_format' };
-  }
-  const records = evidence.sourceWorkflowCallInvocations;
-  if (records === undefined) {
-    return { matches: false, reason: 'legacy_correspondence_metadata_missing' };
-  }
-  const candidates: Array<{
-    readonly invocation: WorkflowExecutionOwnerIdentity;
-    readonly record: WorkflowCallInvocationRecord;
-  }> = [];
-  for (const [identity, record] of Object.entries(records)) {
-    const invocation = parseWorkflowExecutionOwnerIdentity(identity);
-    if (
-      invocation === undefined
-      || !Number.isSafeInteger(record.call_instance)
-      || record.call_instance < 1
-      || record.child_workflow_ref.length === 0
-    ) {
-      return { matches: false, reason: 'legacy_correspondence_metadata_invalid' };
-    }
-    if (buildLegacyNamespace(invocation, record) === source) {
-      candidates.push({ invocation, record });
-    }
-  }
-  if (candidates.length === 0) {
-    return { matches: false, reason: 'legacy_correspondence_candidate_missing' };
-  }
-  if (candidates.length > 1) {
-    return { matches: false, reason: 'legacy_correspondence_candidate_ambiguous' };
-  }
-  const candidate = candidates[0]!;
-  const candidateStorageKey = buildStorageKey(
-    candidate.invocation,
-    candidate.record.child_workflow_ref,
-    candidate.record.call_instance,
-  );
-  return candidateStorageKey.scopeDigest === targetStorageKey.scopeDigest
-    ? { matches: true }
-    : { matches: false, reason: 'legacy_correspondence_target_mismatch' };
-}
-
 function proveWorkflowCallRunNamespaceSegmentsCorrespond(
   source: string,
   target: string,
-  evidence: WorkflowCallNamespaceCorrespondenceEvidence,
 ): WorkflowCallNamespaceCorrespondenceProof {
-  if (source === target && parseLegacyReportNamespaceSegment(source) === undefined) {
+  if (source === target) {
     return { matches: true };
   }
   const sourceStorageKey = parseWorkflowCallNamespaceSegment(source);
@@ -247,15 +137,14 @@ function proveWorkflowCallRunNamespaceSegmentsCorrespond(
   if (sourceStorageKey !== undefined && targetStorageKey !== undefined) {
     return sourceStorageKey.scopeDigest === targetStorageKey.scopeDigest
       ? { matches: true }
-      : { matches: false, reason: 'v2_scope_mismatch' };
+      : { matches: false, reason: 'scope_mismatch' };
   }
-  return proveLegacyToV2Correspondence(source, target, evidence);
+  return { matches: false, reason: 'unsupported_namespace_format' };
 }
 
 export function proveWorkflowCallRunNamespacePathsCorrespond(
   source: readonly string[],
   target: readonly string[],
-  evidence: WorkflowCallNamespaceCorrespondenceEvidence,
 ): WorkflowCallNamespaceCorrespondenceProof {
   if (source.length !== target.length) {
     return { matches: false, reason: 'namespace_depth_mismatch' };
@@ -264,7 +153,6 @@ export function proveWorkflowCallRunNamespacePathsCorrespond(
     const proof = proveWorkflowCallRunNamespaceSegmentsCorrespond(
       source[index]!,
       target[index]!,
-      evidence,
     );
     if (!proof.matches) {
       return { matches: false, reason: `namespace_segment_${index}:${proof.reason}` };

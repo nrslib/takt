@@ -227,8 +227,11 @@ describe('WorkflowCallInvocationIndex', () => {
     const ownerPath = [{ workflow: longValue, step: `${longValue}owner`, kind: 'agent' as const }];
     const segment = storageKey(longValue, `${longValue}step`, ownerPath, `${longValue}child`, 7);
 
-    expect(segment).toMatch(/^call-v2-[0-9a-f]{64}-7$/);
+    expect(segment).toMatch(/^call-[0-9a-f]{64}-7$/);
     expect(Buffer.byteLength(segment)).toBeLessThanOrEqual(MAX_WORKFLOW_CALL_STORAGE_KEY_BYTES);
+    expect(Buffer.byteLength(storageKey(longValue, `${longValue}step`, ownerPath, `${longValue}child`, Number.MAX_SAFE_INTEGER)))
+      .toBe(MAX_WORKFLOW_CALL_STORAGE_KEY_BYTES);
+    expect(MAX_WORKFLOW_CALL_STORAGE_KEY_BYTES).toBe(86);
     expect(parseWorkflowCallNamespaceSegment(segment)?.callInstance).toBe(7);
     expect(segment).toBe(segment.toLowerCase());
   });
@@ -320,14 +323,14 @@ describe('WorkflowCallInvocationIndex', () => {
     const canonical = storageKey('parent', 'delegate', [], 'child', 1);
 
     expect(parseWorkflowCallNamespaceSegment(canonical.toUpperCase())).toBeUndefined();
-    expect(parseWorkflowCallNamespaceSegment('call-v2-deadbeef-deadbeef-1')).toBeUndefined();
+    expect(parseWorkflowCallNamespaceSegment('call-deadbeef-deadbeef-1')).toBeUndefined();
     expect(parseWorkflowCallNamespaceSegment(canonical.replace(/-1$/, '-0'))).toBeUndefined();
   });
 
   it('should not match a request whose storage scope digest was modified', () => {
     const exact = storageKey('parent', 'delegate', [], 'child', 1);
     const wildcard = storageKey('parent', 'delegate', [], 'child', '*');
-    const digestOffset = 'call-v2-'.length;
+    const digestOffset = 'call-'.length;
     const replacement = wildcard[digestOffset] === '0' ? '1' : '0';
     const modifiedWildcard = wildcard.slice(0, digestOffset)
       + replacement

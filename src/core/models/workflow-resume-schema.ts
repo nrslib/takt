@@ -64,17 +64,6 @@ export const WorkflowCallInvocationRecordSchema = z.object({
   child_workflow_ref: z.string().min(1),
 }).strict();
 
-export const RawWorkflowCallInvocationRecordSchema = z.union([
-  WorkflowCallInvocationRecordSchema,
-  z.object({
-    call_instance: z.number().int().positive(),
-    report_namespace_segment: z.string().regex(
-      /^(?:call-v1-[^/]+|iteration-[1-9]\d*--step-[^/]+--workflow-[^/]+)$/,
-      'Invalid legacy workflow-call report namespace segment',
-    ),
-  }).strict(),
-]);
-
 export const WorkflowStepParticipationRecordSchema = z.object({
   report_names: z.array(z.string().min(1)),
 }).strict();
@@ -253,14 +242,4 @@ export const WorkflowResumePointSchema = WorkflowResumePointObjectSchema.superRe
       message: error instanceof Error ? error.message : String(error),
     });
   }
-});
-
-export const RawWorkflowResumePointSchema = WorkflowResumePointObjectSchema.extend({
-  workflow_call_invocations: z.record(
-    z.string().min(1),
-    RawWorkflowCallInvocationRecordSchema,
-  ),
-}).strict().superRefine((resumePoint, ctx) => {
-  validatePendingLoopJudgeSemantics(resumePoint, ctx);
-  validatePendingFallbackSemantics(resumePoint, ctx);
 });
