@@ -41,7 +41,7 @@
 ### Completion Contracts
 | Contract ID | Requirement / Preservation Obligation | Origin | Valid Behavior | Incorrect Implementation to Reject | Implementation Location | Completion Evidence |
 |-------------|---------------------------------------|--------|----------------|------------------------------------|-------------------------|---------------------|
-| `{stable ID}` | {explicit requirement, directly implied requirement, or existing behavior outside the requested change scope to preserve} | {Decomposed requirement row and evidence} | {observable success condition} | {plausible counterexample} | {candidate change location} | {observation method and verification layer} |
+| `{stable ID}` | {explicit requirement, directly implied requirement, or observable existing contract outside the requested change scope to preserve} | {Decomposed requirement row and evidence} | {observable success condition} | {plausible counterexample} | {candidate change location} | {observation method and verification layer} |
 
 ### Impact Paths (only for applicable contracts)
 | Contract ID | Definition / Production | Transformation / Persistence / Restore | Consumers / Outputs / Auxiliary Entry Points | State / Ownership | Current-Consumer Migration | Explicit Support |

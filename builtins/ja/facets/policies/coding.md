@@ -648,7 +648,7 @@ function replaceFacetRefs(text: string): string {
 |------|------|
 | 変更対象外にある観測可能な既存契約 | 維持する |
 | 変更対象の旧契約を使う現行利用側 | 新契約へ移行する |
-| 置換対象の旧契約の生成・読込・alias・fallback・変換・upcaster・backfill・data migration・rebuild を追加・維持する | 要求ソースがその対象・範囲と、時限付きなら期間・終了条件を後方互換、legacy support、移行支援、または並存として明示し、その制約内で方式が必要でない限り REJECT |
+| 置換対象の旧契約の生成・読込・alias・fallback・変換・upcaster・backfill・data migration・rebuild を追加・維持する | 要求ソースがその対象・範囲と、時限付きなら期間・終了条件を後方互換、legacy support、移行支援、または並存として明示し、その制約内で方式が必要な場合だけ許可。それ以外は REJECT |
 | 要求ソースが後方互換、legacy support、移行支援、または並存を明示する | 明示された対象・範囲、時限付きなら期間・終了条件、必要な方式だけを実装し、振る舞いを検証する |
 
 ## 禁止事項

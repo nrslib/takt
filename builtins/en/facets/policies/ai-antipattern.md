@@ -245,6 +245,7 @@ Verification approach:
 
 Legacy support criteria:
 - Unless the requirement source explicitly requires backward compatibility, legacy support, migration support, or coexistence for the target, legacy support is REJECT
+- Even with explicit authority, add or retain each alias, conversion, upcaster, fallback, backfill, data migration, rebuild, or other mechanism only when it is necessary for the stated target and scope and, when time-bounded, stays within the stated period and end condition
 - Without that explicit authority, do not add `.transform()`, `LEGACY_*_MAP`, `@deprecated`, aliases, upcasters, fallback, backfill, data migration, or rebuilds that support a superseded contract, even when the old and new contracts do not coexist
 - When none of those forms of support or coexistence is explicitly required for the target, support only new values and keep it simple
 - Current code, existing tests and usage sites, stored or persisted data, published or released status, and placement or isolation at a read boundary are impact evidence, not authority to add or retain compatibility
@@ -388,7 +389,8 @@ Legacy support to evaluate only for the target and scope explicitly required by 
 Decision criteria:
 1. Does the requirement source explicitly require backward compatibility, legacy support, migration support, or coexistence? -> If not, remove the old path and migrate consumers to the new path
 2. What uses, persisted data, and publication scope exist? -> Use them to identify impact and current-consumer migration targets. Treat persisted-data backfill, data migration, and other legacy support as targets only when the requirement source explicitly requires them, and only within the stated scope and, when time-bounded, period and end condition
-3. Does the code match the explicitly required compatibility scope and, when time-bounded, period and end condition? -> Remove it when outside the scope or period, or after the condition ends
+3. Is each alias, conversion, upcaster, fallback, backfill, data migration, rebuild, or other mechanism necessary for the explicitly required target and scope? -> Remove unnecessary mechanisms even when that support family is authorized
+4. Does the code match the explicitly required compatibility scope and, when time-bounded, period and end condition? -> Remove it when outside the scope or period, or after the condition ends
 
 When AI says "for backward compatibility", require the explicit source location. Do not retain it based only on an implementer's or reviewer's safety judgment.
 
