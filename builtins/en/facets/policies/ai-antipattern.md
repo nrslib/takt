@@ -234,7 +234,7 @@ AI often changes existing contracts under the banner of "improvement", "standard
 | Tests are updated only to follow the new contract | REJECT |
 | New contract required by new functionality | OK |
 | Missing information is added while preserving the existing contract | OK |
-| The requirement source calls for the contract change, and its reason and impact scope are clear | OK. Add only migration or compatibility mechanisms necessary for the target and scope explicitly required by the source |
+| The requirement source calls for the contract change, and its reason and impact scope are clear | OK. Add only migration or compatibility mechanisms necessary for the target and scope explicitly required by the source and, when time-bounded, its period and end condition |
 | Fixing display, accessibility, or test contract breakage newly caused by the requested change | OK. This is change-induced reconciliation, not scope creep |
 
 Verification approach:
@@ -377,7 +377,7 @@ Code to remove:
 | Comment says "remove later" | `// TODO: remove after migration` left abandoned | Remove now |
 | Excessive proxy/adapter usage | Complexity added solely for backward compatibility | Replace simply |
 
-Legacy support to evaluate only for the target and scope explicitly required by the requirement source:
+Legacy support to evaluate only for the target and scope explicitly required by the requirement source and, when time-bounded, its period and end condition:
 
 | Pattern | Example | Verdict |
 |---------|---------|---------|
@@ -387,8 +387,8 @@ Legacy support to evaluate only for the target and scope explicitly required by 
 
 Decision criteria:
 1. Does the requirement source explicitly require backward compatibility, legacy support, migration support, or coexistence? -> If not, remove the old path and migrate consumers to the new path
-2. What uses, persisted data, and publication scope exist? -> Use them to identify impact and current-consumer migration targets. Treat persisted-data backfill, data migration, and other legacy support as targets only when the requirement source explicitly requires them, and only within the stated scope
-3. Does the code match the explicitly required compatibility scope and end condition? -> Remove it when outside the scope or after the condition ends
+2. What uses, persisted data, and publication scope exist? -> Use them to identify impact and current-consumer migration targets. Treat persisted-data backfill, data migration, and other legacy support as targets only when the requirement source explicitly requires them, and only within the stated scope and, when time-bounded, period and end condition
+3. Does the code match the explicitly required compatibility scope and, when time-bounded, period and end condition? -> Remove it when outside the scope or period, or after the condition ends
 
 When AI says "for backward compatibility", require the explicit source location. Do not retain it based only on an implementer's or reviewer's safety judgment.
 

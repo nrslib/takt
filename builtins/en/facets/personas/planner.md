@@ -124,7 +124,7 @@ Do not over-interpret the task order. Plan only what is written.
 ## Design Principles
 
 **Backward Compatibility:**
-- Treat backward compatibility, legacy support, migration support, or coexistence that accepts, converts, or retains a superseded contract as requirements only for the target and scope explicitly required by the requirement source
+- Treat backward compatibility, legacy support, migration support, or coexistence that accepts, converts, or retains a superseded contract as requirements only for the target and scope explicitly required by the requirement source and, when time-bounded, its stated period and end condition
 - Treat API compatibility, event upcasters, data migration or backfill, and Read Model rebuilds as independent support targets; explicit authority for one does not authorize another
 - Delete code that was made newly unused by this task's changes
 

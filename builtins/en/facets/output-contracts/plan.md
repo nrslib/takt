@@ -46,7 +46,7 @@
 ### Impact Paths (only for applicable contracts)
 | Contract ID | Definition / Production | Transformation / Persistence / Restore | Consumers / Outputs / Auxiliary Entry Points | State / Ownership | Current-Consumer Migration | Explicit Support |
 |-------------|-------------------------|----------------------------------------|-----------------------------------------------|-------------------|----------------------------|------------------|
-| `{same stable ID}` | {definition and producers} | {existing intermediate path} | {all consumers and entry points} | {state and ownership} | {for a replacement, consumers moving to the new contract} | {only when required: target, scope, and end condition} |
+| `{same stable ID}` | {definition and producers} | {existing intermediate path} | {all consumers and entry points} | {state and ownership} | {for a replacement, consumers moving to the new contract} | {only when required: target and scope; for time-bounded support, period and end condition} |
 
 ### Reachability and Launch Conditions (when adding/changing user-facing features)
 | Item | Content |
