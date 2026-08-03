@@ -25,8 +25,10 @@ import {
 } from '../core/workflow/findings/conflict-adjudication-model.js';
 import { landUnownedConflictRawClaims } from '../core/workflow/findings/conflict-claim-landing.js';
 import { hasUnsettledActiveConflictOwnership } from '../core/workflow/findings/conflict-ownership.js';
+import { applyRejectedObservationAttachments } from '../core/workflow/findings/manager-provisional-settlement.js';
 import { normalizeInheritedProvisionalTargetConflicts } from '../core/workflow/findings/provisional-conflict-normalization.js';
 import { normalizeFindingLedger } from '../core/workflow/findings/ledger-mutation.js';
+import { captureFindingLifecycleHead } from '../core/workflow/findings/lifecycle-mutation.js';
 import { isTerminalAdjudicationCandidate } from '../core/workflow/findings/terminal-adjudication-candidates.js';
 import type { ParsedLegacyFindingLedger } from '../infra/finding-storage/inherited-source-parser.js';
 import { FindingDatabase } from '../infra/finding-storage/database.js';
@@ -35,6 +37,7 @@ import { FindingStorageResolver } from '../infra/finding-storage/resolver.js';
 import {
   authorizeFindingLedgerFixture,
   canonicalRawFindingFixture,
+  rawCanonicalSnapshotFixture,
 } from './helpers/finding-lifecycle-fixture.js';
 
 const OBSERVATION = {
@@ -166,6 +169,65 @@ function legacyConflictLedger(input?: {
 
 function legacyThreeConflictLedger(): ParsedLegacyFindingLedger {
   return legacyConflictLedger();
+}
+
+function reducedRun6Ledger(): ParsedLegacyFindingLedger {
+  let ledger: FindingLedger = {
+    ...legacyConflictLedger(),
+    provisionalConflictNormalizationSnapshots: [],
+    provisionalConflictNormalizations: [],
+  };
+  const landing = ledger.conflictRawClaimLandings[0]!;
+  const holding = ledger.findings.find(
+    (finding) => finding.id === landing.holdingFindingId,
+  )!;
+  if (holding.target === null) {
+    throw new Error('Expected the reduced run 6 holding to have a target');
+  }
+  const observedAt = {
+    runId: 'source-run-2',
+    stepName: 'reviewers',
+    timestamp: '2026-08-03T01:00:00.000Z',
+  };
+  const rejectedRaw = canonicalRawFindingFixture({
+    rawFindingId: 'raw-rejected-observation',
+    stepName: observedAt.stepName,
+    reviewer: 'reviewer-holding-1',
+    familyTag: 'bug',
+    severity: 'high',
+    title: 'rejected persists observation',
+    description: 'A later observation failed deterministic evidence admission.',
+    suggestion: null,
+    relation: 'persists',
+    targetFindingId: holding.id,
+    target: holding.target,
+    evidence: [],
+  });
+  ledger = applyRejectedObservationAttachments({
+    ...ledger,
+    rawFindings: [...ledger.rawFindings, rejectedRaw],
+    rawCanonicalSnapshots: [
+      ...ledger.rawCanonicalSnapshots,
+      rawCanonicalSnapshotFixture(rejectedRaw, observedAt),
+    ],
+  }, [{
+    targetFindingId: holding.id,
+    rawFindingId: rejectedRaw.rawFindingId,
+    reason: 'Evidence failed deterministic admission.',
+    rejectionCode: 'evidence_admission_failed',
+  }], observedAt);
+  ledger = appendFreshConflictAdjudicationSnapshot({
+    ledger,
+    conflictId: landing.conflictId,
+    originStep: observedAt.stepName,
+    createdAt: observedAt,
+  }).ledger;
+  const {
+    provisionalConflictNormalizationSnapshots: _snapshots,
+    provisionalConflictNormalizations: _records,
+    ...legacy
+  } = ledger;
+  return legacy;
 }
 
 function readdressNormalizationLifecycle(
@@ -529,6 +591,65 @@ function expectDatabaseLoadAndRequeueToReject(input: {
 }
 
 describe('provisional conflict normalization', () => {
+  it('normalizes the reduced run 6 shape with an authorized rejected observation after landing', () => {
+    const legacyLedger = reducedRun6Ledger();
+    const landing = legacyLedger.conflictRawClaimLandings[0]!;
+    const currentHead = captureFindingLifecycleHead(
+      {
+        ...legacyLedger,
+        provisionalConflictNormalizationSnapshots: [],
+        provisionalConflictNormalizations: [],
+      },
+      'finding',
+      landing.holdingFindingId,
+    );
+    expect(currentHead).toMatchObject({ revision: landing.holdingHeadAfterLanding.revision + 1 });
+    const snapshots = legacyLedger.conflictAdjudicationSnapshots.filter(
+      (snapshot) => snapshot.conflictId === landing.conflictId,
+    );
+    expect(snapshots).toHaveLength(2);
+    expect(new Set(snapshots.map(
+      (snapshot) => snapshot.expectedConflictHead.projectionDigest,
+    ))).toHaveLength(1);
+    expect(snapshots.map((snapshot) => snapshot.subjects[0]!.expectedHead.revision)).toEqual([1, 2]);
+
+    const result = normalizeInheritedProvisionalTargetConflicts({
+      source: {
+        authorityKey: 'root',
+        workflowName: 'review',
+        revision: 13,
+        ledgerJson: JSON.stringify(legacyLedger),
+      },
+      legacyLedger,
+      destinationRunId: OBSERVATION.runId,
+      recordedAt: OBSERVATION,
+    });
+
+    expect(result.record.decisions).toHaveLength(6);
+    expect(result.ledger.conflicts.every(({ status }) => status === 'resolved')).toBe(true);
+  });
+
+  it('rejects the reduced run 6 shape when the landing head anchor is inconsistent', () => {
+    const legacyLedger = reducedRun6Ledger();
+    const landing = legacyLedger.conflictRawClaimLandings[0]!;
+    landing.holdingHeadAfterLanding = {
+      ...landing.holdingHeadAfterLanding,
+      projectionDigest: '0'.repeat(64),
+    };
+
+    expect(() => normalizeInheritedProvisionalTargetConflicts({
+      source: {
+        authorityKey: 'root',
+        workflowName: 'review',
+        revision: 13,
+        ledgerJson: JSON.stringify(legacyLedger),
+      },
+      legacyLedger,
+      destinationRunId: OBSERVATION.runId,
+      recordedAt: OBSERVATION,
+    })).toThrow(/Legacy conflict landing .* is inconsistent/);
+  });
+
   it('normalizes a three-conflict legacy batch into retained targets and released independent holdings', () => {
     const legacyLedger = legacyThreeConflictLedger();
     const result = normalizeInheritedProvisionalTargetConflicts({

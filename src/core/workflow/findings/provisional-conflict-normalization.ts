@@ -23,7 +23,9 @@ import {
 } from '../../models/finding-contract-identity.js';
 import { createEngineProofRecord } from '../../models/finding-evidence-record.js';
 import { computeFindingLifecycleProjectionDigest } from '../../models/finding-lifecycle-identity.js';
+import { assertFindingLifecycleAuthorityInvariant } from '../../models/finding-lifecycle-invariants.js';
 import type {
+  ConflictRawClaimLanding,
   LegacyHoldingConflictOwner,
   LegacyProvisionalConflictBatchFingerprint,
   ProvisionalConflictAssociationCandidate,
@@ -52,6 +54,47 @@ interface NormalizationSubjectState {
   subject: ProvisionalConflictNormalizationSubject;
   finding: ProvisionalFindingEntry;
   identity: VerifiedLegacyProvisionalIdentity;
+}
+
+function hasPermittedLandingHeadEvolution(input: {
+  ledger: FindingLedger;
+  landing: ConflictRawClaimLanding;
+  currentHead: ConflictRawClaimLanding['holdingHeadAfterLanding'];
+}): boolean {
+  let head = input.landing.holdingHeadAfterLanding;
+  if (canonicalJson(head) !== canonicalJson(input.currentHead)) {
+    assertFindingLifecycleAuthorityInvariant(input.ledger);
+  }
+  let foundLandingEvent = false;
+  for (const event of input.ledger.lifecycleEvents) {
+    const transition = event.transitions.find((candidate) => (
+      candidate.after.entityKind === 'finding'
+      && candidate.after.entityId === input.landing.holdingFindingId
+    ));
+    if (event.eventId === input.landing.landingEventId) {
+      if (
+        event.operation !== 'update_provisional'
+        || transition === undefined
+        || canonicalJson(transition.after) !== canonicalJson(head)
+      ) {
+        return false;
+      }
+      foundLandingEvent = true;
+      continue;
+    }
+    if (!foundLandingEvent || transition === undefined) {
+      continue;
+    }
+    if (
+      event.operation !== 'record_rejected_observation'
+      || canonicalJson(transition.before) !== canonicalJson(head)
+    ) {
+      return false;
+    }
+    head = transition.after;
+  }
+  return foundLandingEvent
+    && canonicalJson(head) === canonicalJson(input.currentHead);
 }
 
 function exactOne<Value>(values: readonly Value[], label: string): Value {
@@ -335,8 +378,11 @@ function collectLegacyBatch(input: {
             snapshot.rawFindingId !== landing.rawFindingId
             || snapshot.rawPayloadDigest !== landing.rawPayloadDigest
             || computeConflictRawClaimSnapshotDigest(snapshot) !== landing.claimSnapshotDigest
-            || canonicalJson(landing.holdingHeadAfterLanding)
-              !== canonicalJson(currentHead(input.ledger, 'finding', findingId))
+            || !hasPermittedLandingHeadEvolution({
+              ledger: input.ledger,
+              landing,
+              currentHead: currentHead(input.ledger, 'finding', findingId),
+            })
           ) {
             throw new Error(`Legacy conflict landing "${landing.rawClaimLandingId}" is inconsistent`);
           }
@@ -354,6 +400,16 @@ function collectLegacyBatch(input: {
       input.ledger.conflictAdjudicationSnapshots.filter((snapshot) => (
         snapshot.conflictId === conflict.id
         && canonicalJson(snapshot.expectedConflictHead) === canonicalJson(expectedConflictHead)
+        && snapshot.subjects.length === holdingStates.length
+        && snapshot.subjects.every((subject) => {
+          const state = holdingStates.find(
+            (candidate) => candidate.finding.id === subject.findingId,
+          );
+          return subject.role === 'holding_provisional'
+            && state !== undefined
+            && canonicalJson(subject.expectedHead)
+              === canonicalJson(state.subject.expectedHead);
+        })
       )),
       `fresh legacy snapshot for conflict "${conflict.id}"`,
     );
