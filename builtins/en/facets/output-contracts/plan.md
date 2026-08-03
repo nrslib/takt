@@ -10,13 +10,13 @@
 {What needs to be achieved}
 
 ### Decomposed Requirements
-| # | Requirement | Type | Origin / Derivation | Notes |
-|---|-------------|------|---------------------|-------|
-| 1 | {requirement 1} | Explicit / Directly implied / Preservation | {Source location / explicit requirement that cannot hold without this and why / evidence of an observable existing contract} | {Notes when a composite requirement was split} |
+| # | Requirement | Change Needed | Type | Origin / Derivation | Notes |
+|---|-------------|---------------|------|---------------------|-------|
+| 1 | {requirement 1} | Needed / Not needed — when not needed, cite current code evidence as `file:line` | Explicit / Directly implied / Preservation | {Source location / explicit requirement that cannot hold without this and why / evidence of an observable existing contract} | {Notes when a composite requirement was split} |
 
 - If a sentence contains multiple conditions, split it into the smallest independently verifiable rows
 - Put parallel expressions such as `A/B`, `global/project`, `JSON/leaf`, `allow/deny`, and `read/write` on separate rows
-- When the source permits multiple methods, preserve the alternatives here and record the selected approach under "Approaches Considered"
+- When the source permits multiple methods, preserve every named alternative and any open-ended equivalent-mechanism allowance here, then record the selected approach under "Approaches Considered"
 - Do not add design decisions or candidate internal structures as requirements
 - A selected design decision may appear in the implementation approach, but do not add it to completion contracts unless it is also an explicit requirement, an indispensable derivation, or an existing observable contract to preserve
 - When selecting one of several permitted alternatives, completion contracts may fix only the permitted set and any explicitly stated preservation scope. Do not create a separate contract that fixes the selected alternative for inputs or paths outside that preservation scope

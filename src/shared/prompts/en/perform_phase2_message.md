@@ -23,6 +23,7 @@ Note: This section is metadata. Follow the language used in the rest of the prom
 {{#if hasTask}}
 
 ## Original Task Context
+
 The following is the original task given to this workflow. Treat it as the authoritative source of requirements:
 
 {{task}}

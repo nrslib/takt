@@ -49,6 +49,14 @@ with `sandbox_mode: workspace-write` in a disposable copy under `eval/.work/`
 (recreated by prepare on every run) and are scored by Node assertion scripts
 in `eval/asserts/` that inspect the files the agent actually wrote.
 
+The `issue-plan-samples` and `plan-report-source-authority` suites are the
+exceptions to the reviewer fixture rule: `eval/scripts/prepare.mjs` uses
+`fixture: '.'` and their promptfoo configurations use `working_dir: ..`
+(resolved from `eval/`), so their repository context and provider working
+directory both point at the checked-out repository root. The former reads it in
+read-only mode; the latter is a tool-less report phase. Reproduce either suite
+from the repository root after preparing it.
+
 ## Improvement workflow (red -> green)
 
 This suite is used like TDD for prompts. When a reviewer misses something

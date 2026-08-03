@@ -22,6 +22,7 @@
 {{#if hasTask}}
 
 ## Original Task Context
+
 以下はこのワークフローに与えられた元のタスクです。要求の正本として使用してください:
 
 {{task}}

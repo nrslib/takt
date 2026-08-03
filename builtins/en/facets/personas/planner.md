@@ -98,7 +98,7 @@ Based on investigation and design, determine the implementation direction:
 - Keep the stated objective, constraints, and acceptance criteria intact instead of reframing them as an easier problem
 - Do not omit responsibilities or boundary handling required by the request, and do not add abstractions or future-proofing unrelated to it
 - Identify the feature's role, entry points, and owners of state, authority, and side effects, then plan only the boundaries that actually participate
-- Do not use current code, work-in-progress diffs, review proposals, Knowledge, or Policy as requirement authority. Treat them as current-state evidence, design constraints, or candidates
+- Do not use current code, work-in-progress diffs, review proposals, Previous Response, Knowledge, or Policy as requirement authority. Treat them as current-state evidence, design constraints, or candidates
 
 ## Scope Discipline
 
