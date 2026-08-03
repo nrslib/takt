@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import { createEngineProofRecord } from '../../models/finding-evidence-record.js';
+import { computeFindingLifecycleProjectionDigest } from '../../models/finding-lifecycle-identity.js';
 import { canonicalJson } from '../../../shared/utils/canonical-json.js';
 import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
-import { captureFindingLifecycleHead } from './lifecycle-mutation.js';
 import { FindingLedgerEntrySchema } from '../../models/finding-schemas.js';
 import type { ManagerDecisionStageResult } from './manager-contracts.js';
 import { computeInvalidLocationCandidates } from './manager-utils.js';
@@ -13,15 +13,38 @@ import {
 import {
   issueProvisionalProductTransitionAuthorityProof,
 } from './provisional-product-transition-proof.js';
+import {
+  assertProvisionalClaimBindingAuthorization,
+} from './pre-admission-entity-binding-commit.js';
+import {
+  provisionalClaimBindingAuthorizationReference,
+} from '../../models/finding-provisional-claim-authorization.js';
 import type {
   FindingLedger,
   FindingObservation,
+  FindingProvisionalClaimBindingAuthorization,
+  FindingProvisionalClaimBindingAuthorizationReference,
   LifecycleAuthoritySubject,
 } from './types.js';
-import type { FindingLifecycleCommand } from './lifecycle-transaction.js';
+import {
+  projectFindingLifecycleCommand,
+  type FindingLifecycleCommand,
+} from './lifecycle-transaction.js';
 
 function sha256(value: unknown): string {
   return createHash('sha256').update(canonicalJson(value)).digest('hex');
+}
+
+function claimBindingAuthorizationReferences(
+  authorizations: readonly FindingProvisionalClaimBindingAuthorization[],
+): FindingProvisionalClaimBindingAuthorizationReference[] {
+  const references: FindingProvisionalClaimBindingAuthorizationReference[] = [];
+  for (let index = 0; index < authorizations.length; index += 1) {
+    const authorization = authorizations[index];
+    assertProvisionalClaimBindingAuthorization(authorization);
+    references.push(provisionalClaimBindingAuthorizationReference(authorization));
+  }
+  return references;
 }
 
 export function managerDuplicateLifecycleCommandKey(
@@ -90,6 +113,33 @@ function findingClaimIdentitySet(
   return [...new Set(claims)].sort(compareBinaryStrings);
 }
 
+function provisionalIsolationClaimGroups(
+  ledger: FindingLedger,
+  rawFindingIds: readonly string[],
+): Array<{ claimIdentityHash: string; sourceRawFindingIds: string[] }> {
+  const rawFindingIdsByClaim = new Map<string, string[]>();
+  for (const rawFindingId of [...new Set(rawFindingIds)].sort(compareBinaryStrings)) {
+    const rawFinding = ledger.rawFindings.find(
+      (candidate) => candidate.rawFindingId === rawFindingId,
+    );
+    if (rawFinding === undefined) {
+      throw new Error(
+        `Provisional isolation proof references missing raw finding "${rawFindingId}"`,
+      );
+    }
+    rawFindingIdsByClaim.set(
+      rawFinding.claimIdentityHash,
+      [...(rawFindingIdsByClaim.get(rawFinding.claimIdentityHash) ?? []), rawFindingId],
+    );
+  }
+  return [...rawFindingIdsByClaim]
+    .sort(([left], [right]) => compareBinaryStrings(left, right))
+    .map(([claimIdentityHash, sourceRawFindingIds]) => ({
+      claimIdentityHash,
+      sourceRawFindingIds,
+    }));
+}
+
 /**
  * Issues deterministic proofs that permit lifecycle operations without
  * reviewer-authored raw evidence. The checks run against the current ledger
@@ -143,7 +193,7 @@ export function issueManagerLifecycleAuthority(input: {
     findingId: string,
     subject: LifecycleAuthoritySubject,
     result: unknown,
-    claimSource?: FindingLedger['findings'][number],
+    claimSource?: Pick<FindingLedger['findings'][number], 'claimIdentityHash'>,
     authorityBase: FindingLedger = input.current,
   ): string => {
     const currentFinding = authorityBase.findings.find(
@@ -169,8 +219,9 @@ export function issueManagerLifecycleAuthority(input: {
       targetFindingId,
       subject,
       dependencyDigests: [
-        captureFindingLifecycleHead(authorityBase, 'finding', findingId)?.projectionDigest
-          ?? sha256({ findingId, absentHead: true }),
+        currentFinding === undefined
+          ? sha256({ findingId, absentHead: true })
+          : computeFindingLifecycleProjectionDigest(currentFinding),
       ].sort(compareBinaryStrings),
       resultDigest: sha256(result),
       issuedAt: input.observation.timestamp,
@@ -187,46 +238,95 @@ export function issueManagerLifecycleAuthority(input: {
   // intermediate projection. A later settlement may promote the same finding
   // in the same transaction, so the final proposed ledger is not an authority
   // source for update_provisional.
-  for (const proposal of input.managerDecisionProposed.findings) {
-    const finding = FindingLedgerEntrySchema.parse(proposal);
-    const current = input.current.findings.find(
-      (candidate) => candidate.id === finding.id,
+  let managerDecisionIntermediate = input.current;
+  for (const command of input.managerDecisionCommands) {
+    const authorityBase = managerDecisionIntermediate;
+    managerDecisionIntermediate = projectFindingLifecycleCommand(
+      authorityBase,
+      command,
     );
-    if (
-      finding.provisional === undefined
-      || finding.status !== 'open'
-      || !input.managerDecisionCommands.some((command) => (
-        command.operation === 'update_provisional'
-        && command.changes.findings.some((candidate) => candidate.id === finding.id)
-      ))
-      || (
-        current !== undefined
-        && canonicalJson(JSON.parse(JSON.stringify(current)))
-          === canonicalJson(JSON.parse(JSON.stringify(finding)))
-      )
-    ) {
+    if (command.operation !== 'update_provisional') {
       continue;
     }
-    const proofId = addProof(
-      finding.id,
-      {
-        kind: 'finding_provisional_isolation',
-        findingId: finding.id,
-        provisionalKind: finding.provisional.kind,
-        stableKey: finding.provisional.stableKey,
-      },
-      {
-        findingId: finding.id,
-        provisionalKind: finding.provisional.kind,
-        sourceRawFindingIds: finding.provisional.sourceRawFindingIds,
-        isolated: true,
-      },
-      finding,
-    );
-    provisionalProofIdsByFinding.set(
-      finding.id,
-      [...(provisionalProofIdsByFinding.get(finding.id) ?? []), proofId],
-    );
+    for (const change of command.changes.findings) {
+      const finding = FindingLedgerEntrySchema.parse(
+        managerDecisionIntermediate.findings.find(
+          (candidate) => candidate.id === change.id,
+        ),
+      );
+      const current = authorityBase.findings.find(
+        (candidate) => candidate.id === finding.id,
+      );
+      if (
+        finding.provisional === undefined
+        || finding.status !== 'open'
+        || (
+          current !== undefined
+          && canonicalJson(JSON.parse(JSON.stringify(current)))
+            === canonicalJson(JSON.parse(JSON.stringify(finding)))
+        )
+      ) {
+        continue;
+      }
+      const provisional = finding.provisional;
+      const currentRawFindingIds = new Set(
+        current?.provisional?.sourceRawFindingIds ?? [],
+      );
+      const evidenceSourceRawFindingIds = command.evidenceSourcesByTarget
+        .get(`finding\0${finding.id}`)?.sourceRawFindingIds ?? [];
+      const requiredRawFindingIds = [
+        ...evidenceSourceRawFindingIds,
+        ...provisional.sourceRawFindingIds.filter(
+          (rawFindingId) => !currentRawFindingIds.has(rawFindingId),
+        ),
+      ];
+      const claimGroups: Array<{
+        claimIdentityHash: string | null;
+        sourceRawFindingIds: string[];
+      }> = requiredRawFindingIds.length === 0
+        ? [{
+            claimIdentityHash: finding.claimIdentityHash,
+            sourceRawFindingIds: [],
+          }]
+        : provisionalIsolationClaimGroups(input.proposed, requiredRawFindingIds);
+      const proofIds = claimGroups.map((claimGroup) => addProof(
+        finding.id,
+        {
+          kind: 'finding_provisional_isolation',
+          findingId: finding.id,
+          provisionalKind: provisional.kind,
+          stableKey: provisional.stableKey,
+          claimBindingAuthorizationReferences: claimBindingAuthorizationReferences(
+            command.provisionalClaimBindingAuthorizationsByTarget
+              ?.get(`finding\0${finding.id}`) ?? []
+          ),
+        },
+        {
+          findingId: finding.id,
+          provisionalKind: provisional.kind,
+          sourceRawFindingIds: claimGroup.sourceRawFindingIds,
+          isolated: true,
+        },
+        { claimIdentityHash: claimGroup.claimIdentityHash },
+        authorityBase,
+      ));
+      provisionalProofIdsByFinding.set(
+        finding.id,
+        [...(provisionalProofIdsByFinding.get(finding.id) ?? []), ...proofIds],
+      );
+      managerDecisionIntermediate = {
+        ...managerDecisionIntermediate,
+        findings: managerDecisionIntermediate.findings.map((candidate) => (
+          candidate.id === finding.id
+            ? {
+                ...candidate,
+                evidenceIds: [...new Set([...candidate.evidenceIds, ...proofIds])]
+                  .sort(compareBinaryStrings),
+              }
+            : candidate
+        )),
+      };
+    }
   }
 
   const invalidCandidates = computeInvalidLocationCandidates(input.cwd, input.current);

@@ -21,8 +21,12 @@ import type {
   FindingLifecycleOperation,
   FindingLifecycleReservation,
   FindingObservation,
+  FindingProvisionalClaimBindingAuthorization,
   RawFinding,
 } from './types.js';
+import {
+  assertProvisionalClaimBindingAuthorization,
+} from './pre-admission-entity-binding-commit.js';
 import {
   createProductFindingEntry,
   isProvisionalFindingEntry,
@@ -41,6 +45,10 @@ export interface VerifiedLifecycleMutation {
   findings: FindingLedgerEntry[];
   conflicts: FindingLedgerConflict[];
   occurredAt: FindingObservation;
+  provisionalClaimBindingAuthorizationsByTarget?: ReadonlyMap<
+    string,
+    readonly FindingProvisionalClaimBindingAuthorization[]
+  >;
 }
 
 function targetKey(target: {
@@ -610,9 +618,73 @@ function assertFormalProductTransition(input: {
   });
 }
 
+function hasProvisionalClaimBindingAuthorization(input: {
+  authorizations: readonly FindingProvisionalClaimBindingAuthorization[];
+  ledger: FindingLedger;
+  target: FindingEvidenceBinding['target'];
+  after: FindingLedgerEntry;
+  sourceRawFindingId: string;
+}): boolean {
+  for (let index = 0; index < input.authorizations.length; index += 1) {
+    const authorization = input.authorizations[index];
+    assertProvisionalClaimBindingAuthorization(authorization);
+    const reference = authorization.reference;
+    if (!reference.sourceRawFindingIds.includes(input.sourceRawFindingId)) {
+      continue;
+    }
+    if (reference.kind === 'new_provisional_bundle') {
+      if (
+        input.target.expectedHead === null
+        && reference.expectedHead === null
+        && input.after.provisional !== undefined
+        && sameValue(
+          reference.sourceRawFindingIds,
+          input.after.provisional.sourceRawFindingIds,
+        )
+      ) {
+        return true;
+      }
+      continue;
+    }
+    if (
+      input.target.expectedHead === null
+      || reference.findingId !== input.target.entityId
+      || reference.expectedTargetHead.revision !== input.target.expectedHead.revision
+      || reference.expectedTargetHead.projectionDigest
+        !== input.target.expectedHead.projectionDigest
+    ) {
+      continue;
+    }
+    const before = input.ledger.findings.find(
+      (finding) => finding.id === input.target.entityId,
+    );
+    if (before?.status === 'open'
+      && before.provisional?.kind === reference.expectedProvisionalKind
+      && before.provisional.stableKey === reference.expectedStableKey
+      && before.provisional.lineageKey === reference.expectedLineageKey
+      && input.after.status === 'open'
+      && input.after.provisional?.kind === reference.expectedProvisionalKind
+      && input.after.provisional.stableKey === reference.expectedStableKey
+      && input.after.provisional.lineageKey === reference.expectedLineageKey
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function claimBindingAuthorizationsForTarget(
+  mutation: VerifiedLifecycleMutation,
+  target: FindingEvidenceBinding['target'],
+): readonly FindingProvisionalClaimBindingAuthorization[] {
+  return mutation.provisionalClaimBindingAuthorizationsByTarget
+    ?.get(targetKey(target)) ?? [];
+}
+
 function assertManagerProofConditions(input: {
   ledger: FindingLedger;
   reservation: FindingLifecycleReservation;
+  mutation: VerifiedLifecycleMutation;
   changes: ReadonlyMap<string, FindingLedgerEntry | FindingLedgerConflict>;
 }): void {
   for (const bindingId of input.reservation.evidenceBindingIds) {
@@ -635,12 +707,48 @@ function assertManagerProofConditions(input: {
     }
     const subject = record.subject;
     if (subject.kind === 'finding_provisional_isolation') {
+      const claimBindingAuthorizations = claimBindingAuthorizationsForTarget(
+        input.mutation,
+        binding.target,
+      );
+      const sourceRaw = binding.sourceRawFindingId === null
+        ? undefined
+        : input.ledger.rawFindings.find(
+            (raw) => raw.rawFindingId === binding.sourceRawFindingId,
+          );
+      const priorFinding = binding.target.expectedHead === null
+        ? undefined
+        : input.ledger.findings.find((finding) => finding.id === after.id);
+      const admittedClaimIdentityHash = priorFinding === undefined
+        ? after.claimIdentityHash
+        : priorFinding.claimIdentityHash;
+      const bindingRetainsPreviouslyAdmittedRaw = sourceRaw !== undefined
+        && priorFinding?.provisional?.sourceRawFindingIds.includes(
+          sourceRaw.rawFindingId,
+        ) === true
+        && after.provisional?.sourceRawFindingIds.includes(
+          sourceRaw.rawFindingId,
+        ) === true;
+      const proofMatchesProvisionalClaim = record.claimIdentityHash === admittedClaimIdentityHash
+        || bindingRetainsPreviouslyAdmittedRaw
+        || (
+          sourceRaw !== undefined
+          && record.claimIdentityHash === sourceRaw.claimIdentityHash
+          && after.provisional?.sourceRawFindingIds.includes(sourceRaw.rawFindingId) === true
+          && hasProvisionalClaimBindingAuthorization({
+            authorizations: claimBindingAuthorizations,
+            ledger: input.ledger,
+            target: binding.target,
+            after,
+            sourceRawFindingId: sourceRaw.rawFindingId,
+          })
+        );
       if (
         after.provisional === undefined
         || subject.findingId !== after.id
         || subject.provisionalKind !== after.provisional.kind
         || subject.stableKey !== after.provisional.stableKey
-        || record.claimIdentityHash !== after.claimIdentityHash
+        || !proofMatchesProvisionalClaim
       ) {
         throw new Error(`Lifecycle manager proof "${record.proofId}" does not match the provisional projection delta`);
       }
@@ -659,6 +767,98 @@ function assertManagerProofConditions(input: {
       }
     }
   }
+}
+
+function assertExistingProvisionalClaimBindings(input: {
+  ledger: FindingLedger;
+  reservation: FindingLifecycleReservation;
+  mutation: VerifiedLifecycleMutation;
+  changes: ReadonlyMap<string, FindingLedgerEntry | FindingLedgerConflict>;
+}): void {
+  if (input.reservation.operation !== 'update_provisional') {
+    return;
+  }
+  const reservationBindingIds = new Set(input.reservation.evidenceBindingIds);
+  for (const target of input.reservation.targets) {
+    if (target.entityKind !== 'finding' || target.expectedHead === null) {
+      continue;
+    }
+    const before = input.ledger.findings.find((finding) => finding.id === target.entityId);
+    const after = input.changes.get(targetKey(target));
+    if (before === undefined || after === undefined || !('lifecycle' in after)) {
+      continue;
+    }
+    for (const raw of introducedDistinctRawClaims(input.ledger, before, after)) {
+      if (!hasAuthorizedIsolationProofForRaw({
+        ledger: input.ledger,
+        reservationBindingIds,
+        target,
+        after,
+        rawFindingId: raw.rawFindingId,
+        authorizations: claimBindingAuthorizationsForTarget(
+          input.mutation,
+          target,
+        ),
+      })) {
+        throw new Error(
+          `Lifecycle target "${target.entityId}" has no pre-admission authorization for distinct raw claim "${raw.rawFindingId}"`,
+        );
+      }
+    }
+  }
+}
+
+function introducedDistinctRawClaims(
+  ledger: FindingLedger,
+  before: FindingLedgerEntry,
+  after: FindingLedgerEntry,
+): RawFinding[] {
+  const existingRawFindingIds = new Set(
+    before.provisional?.sourceRawFindingIds ?? [],
+  );
+  return (after.provisional?.sourceRawFindingIds ?? []).flatMap((rawFindingId) => {
+    if (existingRawFindingIds.has(rawFindingId)) {
+      return [];
+    }
+    const raw = ledger.rawFindings.find(
+      (candidate) => candidate.rawFindingId === rawFindingId,
+    );
+    if (raw === undefined) {
+      throw new Error(`Lifecycle projection references missing raw finding "${rawFindingId}"`);
+    }
+    return raw.claimIdentityHash === before.claimIdentityHash ? [] : [raw];
+  });
+}
+
+function hasAuthorizedIsolationProofForRaw(input: {
+  ledger: FindingLedger;
+  reservationBindingIds: ReadonlySet<string>;
+  target: FindingEvidenceBinding['target'];
+  after: FindingLedgerEntry;
+  rawFindingId: string;
+  authorizations: readonly FindingProvisionalClaimBindingAuthorization[];
+}): boolean {
+  return input.ledger.evidenceBindings.some((binding) => {
+    if (
+      !input.reservationBindingIds.has(binding.bindingId)
+      || binding.sourceRawFindingId !== input.rawFindingId
+      || !sameValue(binding.target, input.target)
+    ) {
+      return false;
+    }
+    const record = input.ledger.evidenceRecords.find(
+      (candidate) => candidate.evidenceId === binding.evidenceId,
+    );
+    return record?.kind === 'engine_proof'
+      && record.subject.kind === 'finding_provisional_isolation'
+      && hasProvisionalClaimBindingAuthorization({
+        authorizations: input.authorizations,
+        ledger: input.ledger,
+        target: input.target,
+        after: input.after,
+        sourceRawFindingId: input.rawFindingId,
+      });
+  });
 }
 
 function assertCreateClaimBindings(input: {
@@ -696,11 +896,16 @@ function assertCreateClaimBindings(input: {
           && sourceRaw.semanticClaimIdentityHash === after.semanticClaimIdentityHash
         )
       );
+    const sourceBelongsToCreatedProvisional = sourceRaw !== undefined
+      && input.reservation.operation === 'update_provisional'
+      && binding.claimIdentityHash === sourceRaw.claimIdentityHash
+      && after.provisional?.sourceRawFindingIds.includes(sourceRaw.rawFindingId) === true;
     if (
       after.claimIdentityHash === null
       || (
         after.claimIdentityHash !== binding.claimIdentityHash
         && !sourceMatchesCreatedFinding
+        && !sourceBelongsToCreatedProvisional
       )
     ) {
       throw new Error(`Evidence binding "${binding.bindingId}" does not match the created finding claim`);
@@ -769,7 +974,8 @@ export function applyVerifiedLifecycleMutation(
     changes,
   });
   assertFormalProductTransition({ ledger, reservation, changes });
-  assertManagerProofConditions({ ledger, reservation, changes });
+  assertManagerProofConditions({ ledger, reservation, mutation, changes });
+  assertExistingProvisionalClaimBindings({ ledger, reservation, mutation, changes });
   assertSpecialAuthorityDelta({ ledger, reservation, changes });
   const transitions = casPremiseTargets.flatMap((target) => {
     const after = changes.get(targetKey(target));

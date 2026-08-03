@@ -203,6 +203,31 @@ export const FindingLifecycleEntityHeadSchema = z.object({
   projectionDigest: Sha256Schema,
 }).strict();
 
+export const FindingProvisionalClaimBindingAuthorizationReferenceSchema = z.discriminatedUnion('kind', [
+  z.object({
+    authorizationId: Sha256Schema,
+    kind: z.literal('new_provisional_bundle'),
+    bindingDecisionId: Sha256Schema,
+    creationRequestKey: Sha256Schema,
+    expectedHead: z.null(),
+    sourceRawFindingIds: BinarySortedUniqueRawFindingIdSetSchema.min(1),
+  }).strict(),
+  z.object({
+    authorizationId: Sha256Schema,
+    kind: z.literal('pre_admission_attach_existing'),
+    bindingDecisionId: Sha256Schema,
+    findingId: nonEmptyString,
+    expectedTargetHead: z.object({
+      revision: z.number().int().positive(),
+      projectionDigest: Sha256Schema,
+    }).strict(),
+    expectedProvisionalKind: z.literal('raw-meaning-ambiguous'),
+    expectedStableKey: nonEmptyString,
+    expectedLineageKey: nonEmptyString,
+    sourceRawFindingIds: BinarySortedUniqueRawFindingIdSetSchema.min(1),
+  }).strict(),
+]);
+
 export const FindingLifecycleMutationTargetSchema = z.object({
   entityKind: z.enum(FINDING_LIFECYCLE_ENTITY_KINDS),
   entityId: nonEmptyString,
@@ -483,6 +508,9 @@ const LifecycleAuthoritySubjectSchema = z.discriminatedUnion('kind', [
     findingId: nonEmptyString,
     provisionalKind: z.enum(FINDING_PROVISIONAL_KINDS),
     stableKey: nonEmptyString,
+    claimBindingAuthorizationReferences: z.array(
+      FindingProvisionalClaimBindingAuthorizationReferenceSchema,
+    ),
   }).strict(),
   z.object({
     kind: z.literal('finding_target_invalid'),

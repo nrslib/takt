@@ -482,8 +482,11 @@ export function applyFindingLedgerFixtureRevision(input: {
               findingId: input.entity.id,
               provisionalKind: finding!.provisional!.kind,
               stableKey: finding!.provisional!.stableKey,
+              claimBindingAuthorizationReferences: [],
             },
-        dependencyDigests: [],
+        dependencyDigests: expectedHead === null
+          ? []
+          : [expectedHead.projectionDigest],
         resultDigest: sha256(
           `fixture-result:${input.entityKind}:${input.entity.id}:${input.entity.revision}`,
         ),

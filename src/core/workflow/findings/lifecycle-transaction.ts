@@ -14,6 +14,10 @@ import {
   FindingLedgerConflictSchema,
   FindingLedgerEntrySchema,
 } from '../../models/finding-schemas.js';
+import {
+  assertProvisionalIsolationProofExpectedHead,
+  isProvisionalIsolationProofForRawBinding,
+} from '../../models/finding-lifecycle-invariants.js';
 import type {
   FindingEvidenceBinding,
   FindingEvidenceRecord,
@@ -26,6 +30,7 @@ import type {
   FindingLifecycleAuthority,
   FindingLifecycleReservationContext,
   FindingObservation,
+  FindingProvisionalClaimBindingAuthorization,
   RawFinding,
 } from './types.js';
 import {
@@ -144,6 +149,7 @@ function rawSourcesForRecord(input: {
   rawFindings: readonly RawFinding[];
   preferredRawFindingIds: ReadonlySet<string>;
   record: FindingEvidenceRecord;
+  target: FindingLifecycleMutationTarget;
 }): RawFinding[] {
   if (
     input.preferredRawFindingIds.size === 0
@@ -152,18 +158,31 @@ function rawSourcesForRecord(input: {
   ) {
     return [];
   }
-  const matches = (raw: RawFinding): boolean => (
-    evidenceRecordMatchesRawClaim(input.record, raw)
-    && (
+  const isolationProof = input.record.kind === 'engine_proof'
+    && input.record.subject.kind === 'finding_provisional_isolation';
+  const matches = (raw: RawFinding): boolean => {
+    const provisionalIsolationProof = isProvisionalIsolationProofForRawBinding({
+      record: input.record,
+      raw,
+      target: input.target,
+    });
+    return (
+      evidenceRecordMatchesRawClaim(input.record, raw)
+      || provisionalIsolationProof
+    ) && (
       input.record.kind !== 'engine_proof'
+      || provisionalIsolationProof
       || input.record.targetFindingId === raw.targetFindingId
-    )
-  );
+    );
+  };
   const preferred = input.rawFindings.filter((raw) => (
     input.preferredRawFindingIds.has(raw.rawFindingId) && matches(raw)
   ));
   if (preferred.length > 0) {
     return preferred;
+  }
+  if (isolationProof) {
+    return [];
   }
   const fallback = input.rawFindings.find((raw) => matches(raw));
   return fallback === undefined ? [] : [fallback];
@@ -208,6 +227,10 @@ export interface FindingLifecycleCommand {
   };
   authority: FindingLifecycleAuthority;
   evidenceSourcesByTarget: ReadonlyMap<string, LifecycleEvidenceSource>;
+  provisionalClaimBindingAuthorizationsByTarget?: ReadonlyMap<
+    string,
+    readonly FindingProvisionalClaimBindingAuthorization[]
+  >;
   interpretationCaseIdsByRawFindingId?: ReadonlyMap<string, string>;
   expectedHeadsByTarget?: ReadonlyMap<string, FindingLifecycleEntityHead | null>;
   reservedMutationId?: string;
@@ -268,10 +291,12 @@ function evidenceBindings(input: {
       if (record === undefined) {
         throw new Error(`Lifecycle transaction references unknown evidence "${evidenceId}"`);
       }
+      assertProvisionalIsolationProofExpectedHead({ record, target });
       const raws = rawSourcesForRecord({
         rawFindings: input.ledger.rawFindings,
         preferredRawFindingIds: evidence.preferredRawFindingIds,
         record,
+        target,
       });
       if (raws.length === 0 && record.kind !== 'engine_proof') {
         return [];
@@ -298,6 +323,58 @@ function evidenceBindings(input: {
     .sort((left, right) => compareBinaryStrings(left.bindingId, right.bindingId));
 }
 
+function assertProvisionalRawBindingCoverage(input: {
+  ledger: FindingLedger;
+  operation: FindingLifecycleOperation;
+  targets: readonly FindingLifecycleMutationTarget[];
+  findings: readonly FindingLedgerEntry[];
+  evidenceSourcesByTarget: ReadonlyMap<string, LifecycleEvidenceSource>;
+  bindings: readonly FindingEvidenceBinding[];
+}): void {
+  if (input.operation !== 'update_provisional') {
+    return;
+  }
+  for (const target of input.targets) {
+    const source = input.evidenceSourcesByTarget.get(targetKey(target));
+    const beforeRawFindingIds = new Set(
+      input.ledger.findings.find((finding) => finding.id === target.entityId)
+        ?.provisional?.sourceRawFindingIds ?? [],
+    );
+    const after = input.findings.find((finding) => finding.id === target.entityId);
+    if (after?.provisional === undefined) {
+      throw new Error(
+        `Provisional lifecycle target "${target.entityId}" has no provisional projection`,
+      );
+    }
+    const afterRawFindingIds = new Set(after.provisional.sourceRawFindingIds);
+    for (const rawFindingId of source?.sourceRawFindingIds ?? []) {
+      if (!afterRawFindingIds.has(rawFindingId)) {
+        throw new Error(
+          `Provisional lifecycle target "${target.entityId}" has evidence source raw finding "${rawFindingId}" outside its provisional projection`,
+        );
+      }
+    }
+    const introducedRawFindingIds = after.provisional.sourceRawFindingIds.filter(
+      (rawFindingId) => !beforeRawFindingIds.has(rawFindingId),
+    );
+    const requiredRawFindingIds = new Set([
+      ...(source === undefined ? [] : source.sourceRawFindingIds),
+      ...introducedRawFindingIds,
+    ]);
+    for (const rawFindingId of requiredRawFindingIds) {
+      if (!input.bindings.some((binding) => (
+        binding.target.entityKind === target.entityKind
+        && binding.target.entityId === target.entityId
+        && binding.sourceRawFindingId === rawFindingId
+      ))) {
+        throw new Error(
+          `Provisional lifecycle target "${target.entityId}" has no evidence binding for raw finding "${rawFindingId}"`,
+        );
+      }
+    }
+  }
+}
+
 function commandContext(
   _authority: FindingLifecycleAuthority,
 ): FindingLifecycleReservationContext {
@@ -313,7 +390,6 @@ function commandChanges(
 } {
   return {
     findings: command.changes.findings.map((finding) => {
-      const head = captureFindingLifecycleHead(ledger, 'finding', finding.id);
       const current = ledger.findings.find((candidate) => candidate.id === finding.id);
       return FindingLedgerEntrySchema.parse(JSON.parse(JSON.stringify({
         ...finding,
@@ -326,16 +402,36 @@ function commandChanges(
           ...(current?.evidenceIds ?? []),
           ...finding.evidenceIds,
         ])].sort(compareBinaryStrings),
-        revision: head === undefined ? 1 : head.revision + 1,
+        revision: current === undefined ? 1 : current.revision + 1,
       })));
     }),
     conflicts: command.changes.conflicts.map((conflict) => {
-      const head = captureFindingLifecycleHead(ledger, 'conflict', conflict.id);
+      const current = ledger.conflicts.find((candidate) => candidate.id === conflict.id);
       return FindingLedgerConflictSchema.parse(JSON.parse(JSON.stringify({
         ...conflict,
-        revision: head === undefined ? 1 : head.revision + 1,
+        revision: current === undefined ? 1 : current.revision + 1,
       })));
     }),
+  };
+}
+
+export function projectFindingLifecycleCommand(
+  ledger: FindingLedger,
+  command: FindingLifecycleCommand,
+): FindingLedger {
+  const changes = commandChanges(ledger, command);
+  const findingIds = new Set(changes.findings.map((finding) => finding.id));
+  const conflictIds = new Set(changes.conflicts.map((conflict) => conflict.id));
+  return {
+    ...ledger,
+    findings: [
+      ...ledger.findings.filter((finding) => !findingIds.has(finding.id)),
+      ...changes.findings,
+    ].sort((left, right) => compareBinaryStrings(left.id, right.id)),
+    conflicts: [
+      ...ledger.conflicts.filter((conflict) => !conflictIds.has(conflict.id)),
+      ...changes.conflicts,
+    ].sort((left, right) => compareBinaryStrings(left.id, right.id)),
   };
 }
 
@@ -369,6 +465,8 @@ export function applyFindingLifecycleCommands(input: {
         findings: changes.findings,
         conflicts: changes.conflicts,
         occurredAt: input.occurredAt,
+        provisionalClaimBindingAuthorizationsByTarget:
+          command.provisionalClaimBindingAuthorizationsByTarget,
       });
       continue;
     }
@@ -384,6 +482,14 @@ export function applyFindingLifecycleCommands(input: {
       targets,
       evidenceSourcesByTarget: command.evidenceSourcesByTarget,
       interpretationCaseIdsByRawFindingId: command.interpretationCaseIdsByRawFindingId,
+    });
+    assertProvisionalRawBindingCoverage({
+      ledger,
+      operation: command.operation,
+      targets,
+      findings: changes.findings,
+      evidenceSourcesByTarget: command.evidenceSourcesByTarget,
+      bindings,
     });
     const reservation = createFindingLifecycleReservation({
       operation: command.operation,
@@ -402,6 +508,8 @@ export function applyFindingLifecycleCommands(input: {
       findings: changes.findings,
       conflicts: changes.conflicts,
       occurredAt: input.occurredAt,
+      provisionalClaimBindingAuthorizationsByTarget:
+        command.provisionalClaimBindingAuthorizationsByTarget,
     });
   }
   return ledger;

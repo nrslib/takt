@@ -27,6 +27,7 @@ import type {
   FindingLifecycleMutationTarget,
   FindingLifecycleOperation,
   FindingObservation,
+  FindingProvisionalClaimBindingAuthorization,
   RawFinding,
 } from '../core/workflow/findings/types.js';
 import {
@@ -55,9 +56,13 @@ import { assertFindingLedgerAppendOnlyTransition } from '../core/workflow/findin
 import { createTestFindingLedgerStore } from './helpers/finding-storage.js';
 import {
   canonicalRawFindingFixture,
+  authorizeFindingLedgerFixture,
   emptyFindingAuthorityProjection,
   rawCanonicalSnapshotFixture,
 } from './helpers/finding-lifecycle-fixture.js';
+import {
+  createProvisionalClaimBindingAuthorizationReference,
+} from '../core/models/finding-provisional-claim-authorization.js';
 import { createAnchorAdjudication } from '../core/models/finding-anchor-relevance.js';
 import {
   captureFindingMutationPrecondition,
@@ -1766,6 +1771,7 @@ describe('verified finding lifecycle mutation', () => {
         findingId: 'F-unrelated',
         provisionalKind: 'interpretation-interrupted',
         stableKey: 'unrelated',
+        claimBindingAuthorizationReferences: [],
       },
       dependencyDigests: [sha256('generic-proof-dependency')],
       resultDigest: sha256('generic-proof-result'),
@@ -2515,6 +2521,187 @@ describe('verified finding lifecycle mutation', () => {
         }),
       }],
     }))).toThrow(/does not match the created finding claim/);
+  });
+
+  it('rejects distinct-claim additions to existing non-attachment targets', () => {
+    const initialSource = evidenceSource({
+      rawFindingId: 'raw-existing',
+      targetFindingId: null,
+      title: 'Existing claim',
+      description: 'The target starts with an unrelated claim.',
+      targetPath: 'src/claim-binding.ts',
+    });
+    const productLedger = authorizeFindingLedgerFixture({
+      ...emptyLedger([initialSource]),
+      findings: [finding({
+        id: 'F-0001',
+        source: initialSource,
+        revision: 1,
+      })],
+      nextId: 2,
+    });
+    const unrelatedProvisional = {
+      ...finding({
+        id: 'F-0001',
+        source: initialSource,
+        revision: 1,
+      }),
+      provisional: {
+        kind: 'raw-adjudication-unresolved' as const,
+        stableKey: sha256('unrelated-provisional-stable'),
+        lineageKey: sha256('unrelated-provisional-lineage'),
+        sourceRawFindingIds: [initialSource.raw.rawFindingId],
+        reason: 'This provisional kind does not admit later distinct claims.',
+        firstObservedAt: { ...OBSERVATION },
+        lastObservedAt: { ...OBSERVATION },
+        gateEffect: 'block' as const,
+        firstObservedRound: 1,
+      },
+    };
+    const unrelatedProvisionalLedger = authorizeFindingLedgerFixture({
+      ...emptyLedger([initialSource]),
+      findings: [unrelatedProvisional],
+      nextId: 2,
+    });
+
+    const attemptDistinctClaimUpdate = (input: {
+      ledger: FindingLedger;
+      forgedAttachmentAuthorization: boolean;
+    }): void => {
+      const target = {
+        entityKind: 'finding' as const,
+        entityId: 'F-0001',
+        expectedHead: latestHead(input.ledger, 'F-0001'),
+      };
+      const source = evidenceSource({
+        rawFindingId: input.forgedAttachmentAuthorization
+          ? 'raw-forged-authorization'
+          : 'raw-without-authorization',
+        targetFindingId: null,
+        title: 'Introduced distinct claim',
+        description: 'This claim must not attach to the existing target.',
+        targetPath: 'src/claim-binding.ts',
+      });
+      const before = input.ledger.findings[0]!;
+      const stableKey = before.provisional?.stableKey ?? sha256('forged-product-stable');
+      const lineageKey = before.provisional?.lineageKey ?? sha256('forged-product-lineage');
+      const authorizations = input.forgedAttachmentAuthorization
+        ? [createProvisionalClaimBindingAuthorizationReference({
+            kind: 'pre_admission_attach_existing',
+            bindingDecisionId: sha256('forged-binding-decision'),
+            findingId: before.id,
+            expectedTargetHead: {
+              revision: target.expectedHead.revision,
+              projectionDigest: target.expectedHead.projectionDigest,
+            },
+            expectedProvisionalKind: 'raw-meaning-ambiguous',
+            expectedStableKey: stableKey,
+            expectedLineageKey: lineageKey,
+            sourceRawFindingIds: [source.raw.rawFindingId],
+          })]
+        : [];
+      const proof = createEngineProofRecord({
+        kind: 'engine_proof',
+        verifierId: 'takt.finding-lifecycle-policy',
+        verifierVersion: '1',
+        workflowName: input.ledger.workflowName,
+        runId: OBSERVATION.runId,
+        scopeIdentity: 'lifecycle-test-scope',
+        snapshotId: sha256('claim-binding-snapshot'),
+        purpose: 'lifecycle_authority',
+        claimIdentityHash: source.raw.claimIdentityHash,
+        targetFindingId: before.id,
+        subject: {
+          kind: 'finding_provisional_isolation',
+          findingId: before.id,
+          provisionalKind: before.provisional?.kind ?? 'raw-meaning-ambiguous',
+          stableKey,
+          claimBindingAuthorizationReferences: authorizations,
+        },
+        dependencyDigests: [target.expectedHead.projectionDigest],
+        resultDigest: sha256('claim-binding-result'),
+        issuedAt: OBSERVATION.timestamp,
+      });
+      const binding = createFindingEvidenceBinding({
+        evidenceId: proof.evidenceId,
+        claimIdentityHash: source.raw.claimIdentityHash,
+        sourceRawFindingId: source.raw.rawFindingId,
+        sourceRawIntegrityDigest: computeRawFindingIntegrityDigest(source.raw),
+        contributionOrigin: { kind: 'external' },
+        operation: 'update_provisional',
+        target,
+      });
+      const verifiedReservation: VerifiedLifecycleReservation = {
+        reservation: createFindingLifecycleReservation({
+          operation: 'update_provisional',
+          targets: [target],
+          evidenceBindingIds: [binding.bindingId],
+          authority: { kind: 'verified_evidence' },
+          context: { kind: 'transaction' },
+          reservedAt: OBSERVATION,
+        }),
+        evidenceBindings: [binding],
+      };
+      const after: FindingLedgerEntry = {
+        ...before,
+        lifecycle: 'persists',
+        revision: before.revision + 1,
+        rawFindingIds: [...before.rawFindingIds, source.raw.rawFindingId].sort(),
+        provisional: {
+          ...(before.provisional ?? {
+            kind: 'raw-meaning-ambiguous',
+            stableKey,
+            lineageKey,
+            sourceRawFindingIds: [],
+            reason: 'Forged product attachment.',
+            firstObservedAt: { ...OBSERVATION },
+            lastObservedAt: { ...OBSERVATION },
+            gateEffect: 'block',
+            firstObservedRound: 1,
+          }),
+          sourceRawFindingIds: [
+            ...(before.provisional?.sourceRawFindingIds ?? []),
+            source.raw.rawFindingId,
+          ].sort(),
+        },
+      };
+      const ledger = {
+        ...input.ledger,
+        evidenceRecords: [...input.ledger.evidenceRecords, proof],
+        rawFindings: [...input.ledger.rawFindings, source.raw],
+        rawCanonicalSnapshots: [
+          ...input.ledger.rawCanonicalSnapshots,
+          rawCanonicalSnapshotFixture(source.raw, OBSERVATION),
+        ],
+      };
+      const pending = reserveVerifiedLifecycleMutation(ledger, verifiedReservation);
+      const lifecycleMutation = mutation({
+        reservation: verifiedReservation,
+        findings: [after],
+      });
+      const mutationWithAuthorization = input.forgedAttachmentAuthorization
+        ? {
+            ...lifecycleMutation,
+            provisionalClaimBindingAuthorizationsByTarget: new Map([[
+              `finding\0${before.id}`,
+              authorizations as unknown as FindingProvisionalClaimBindingAuthorization[],
+            ]]),
+          }
+        : lifecycleMutation;
+      expect(() => applyVerifiedLifecycleMutation(pending, mutationWithAuthorization))
+        .toThrow(input.forgedAttachmentAuthorization
+          ? /was not issued by pre-admission commit/
+          : /does not match the provisional projection delta/);
+    };
+
+    attemptDistinctClaimUpdate({
+      ledger: productLedger,
+      forgedAttachmentAuthorization: false,
+    });
+    attemptDistinctClaimUpdate({
+      ledger: unrelatedProvisionalLedger,
+      forgedAttachmentAuthorization: true,
+    });
   });
 
   it('enforces the closed operation-authority allowlist and empty policy bindings', () => {

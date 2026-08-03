@@ -145,6 +145,51 @@ function assertReservationContext(
   }
 }
 
+export function isProvisionalIsolationProofForRawBinding(input: {
+  record: FindingEvidenceRecord;
+  raw: RawFinding;
+  target: FindingLifecycleMutationTarget;
+}): boolean {
+  const lifecycleTargetFindingId = input.target.entityKind === 'finding'
+    && input.target.expectedHead !== null
+    ? input.target.entityId
+    : null;
+  return input.record.kind === 'engine_proof'
+    && input.record.purpose === 'lifecycle_authority'
+    && input.record.verifierId === 'takt.finding-lifecycle-policy'
+    && input.record.verifierVersion === '1'
+    && input.record.subject.kind === 'finding_provisional_isolation'
+    && input.target.entityKind === 'finding'
+    && input.record.subject.findingId === input.target.entityId
+    && input.record.claimIdentityHash === input.raw.claimIdentityHash
+    && input.record.targetFindingId === lifecycleTargetFindingId
+    && provisionalIsolationProofMatchesExpectedHead(input.record, input.target);
+}
+
+function provisionalIsolationProofMatchesExpectedHead(
+  record: Extract<FindingEvidenceRecord, { kind: 'engine_proof' }>,
+  target: FindingLifecycleMutationTarget,
+): boolean {
+  return target.expectedHead === null
+    || record.dependencyDigests.includes(target.expectedHead.projectionDigest);
+}
+
+export function assertProvisionalIsolationProofExpectedHead(input: {
+  record: FindingEvidenceRecord;
+  target: FindingLifecycleMutationTarget;
+}): void {
+  if (
+    input.record.kind !== 'engine_proof'
+    || input.record.subject.kind !== 'finding_provisional_isolation'
+    || provisionalIsolationProofMatchesExpectedHead(input.record, input.target)
+  ) {
+    return;
+  }
+  throw new Error(
+    `Provisional isolation proof "${input.record.proofId}" has a stale expected head for "${input.target.entityId}"`,
+  );
+}
+
 function assertRawEvidenceBinding(input: {
   binding: FindingEvidenceBinding;
   record: FindingEvidenceRecord;
@@ -158,13 +203,23 @@ function assertRawEvidenceBinding(input: {
   if (input.binding.claimIdentityHash !== claimIdentityHash) {
     throw new Error(`Evidence binding "${input.binding.bindingId}" does not match its raw claim identity`);
   }
-  if (!input.raw.evidence.some((evidence) => (
+  const rawAuthoredEvidence = input.raw.evidence.some((evidence) => (
     evidenceRecordMatchesRawEvidence(input.record, evidence)
-  ))) {
+  ));
+  const provisionalIsolationProof = isProvisionalIsolationProofForRawBinding({
+    record: input.record,
+    raw: input.raw,
+    target: input.binding.target,
+  });
+  if (
+    !rawAuthoredEvidence
+    && !provisionalIsolationProof
+  ) {
     throw new Error(`Evidence binding "${input.binding.bindingId}" is not present in its raw evidence set`);
   }
   if (
     input.record.kind === 'engine_proof'
+    && !provisionalIsolationProof
     && input.record.targetFindingId !== input.raw.targetFindingId
   ) {
     throw new Error(`Evidence binding "${input.binding.bindingId}" has an invalid engine proof target`);
@@ -290,6 +345,10 @@ function assertBindingSemantics(input: {
   if (record.claimIdentityHash !== input.binding.claimIdentityHash) {
     throw new Error(`Evidence binding "${input.binding.bindingId}" has a mismatched claim identity`);
   }
+  assertProvisionalIsolationProofExpectedHead({
+    record,
+    target: input.binding.target,
+  });
   if (input.binding.sourceRawFindingId === null) {
     if (input.binding.sourceRawIntegrityDigest !== null) {
       throw new Error(`Evidence binding "${input.binding.bindingId}" has raw integrity without a raw finding`);

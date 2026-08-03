@@ -71,6 +71,45 @@ export interface FindingLifecycleMutationTarget {
   expectedHead: FindingLifecycleEntityHead | null;
 }
 
+export type FindingProvisionalClaimBindingAuthorizationReference =
+  | {
+      authorizationId: string;
+      kind: 'new_provisional_bundle';
+      bindingDecisionId: string;
+      creationRequestKey: string;
+      expectedHead: null;
+      sourceRawFindingIds: string[];
+    }
+  | {
+      authorizationId: string;
+      kind: 'pre_admission_attach_existing';
+      bindingDecisionId: string;
+      findingId: string;
+      expectedTargetHead: {
+        revision: number;
+        projectionDigest: string;
+      };
+      expectedProvisionalKind: 'raw-meaning-ambiguous';
+      expectedStableKey: string;
+      expectedLineageKey: string;
+      sourceRawFindingIds: string[];
+    };
+
+export class FindingProvisionalClaimBindingAuthorization<
+  Authorization extends FindingProvisionalClaimBindingAuthorizationReference =
+    FindingProvisionalClaimBindingAuthorizationReference,
+> {
+  readonly #reference: Readonly<Authorization>;
+
+  constructor(reference: Readonly<Authorization>) {
+    this.#reference = reference;
+  }
+
+  get reference(): Readonly<Authorization> {
+    return this.#reference;
+  }
+}
+
 export type FindingEvidenceContributionOrigin =
   | { kind: 'external' }
   | {
@@ -1262,6 +1301,8 @@ export type EngineProofSubject =
       findingId: string;
       provisionalKind: FindingProvisionalKind;
       stableKey: string;
+      claimBindingAuthorizationReferences:
+        FindingProvisionalClaimBindingAuthorizationReference[];
     }
   | {
       kind: 'finding_target_invalid';

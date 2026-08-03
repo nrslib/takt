@@ -14,6 +14,73 @@ import {
 } from './pre-admission-entity-binding-identity.js';
 import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
 import { canonicalJson } from '../../../shared/utils/canonical-json.js';
+import {
+  createProvisionalClaimBindingAuthorizationReference,
+  provisionalClaimBindingAuthorizationViolation,
+  type ProvisionalClaimBindingAuthorizationPayload,
+} from '../../models/finding-provisional-claim-authorization.js';
+import { computeFindingLifecycleProjectionDigest } from '../../models/finding-lifecycle-identity.js';
+import {
+  FindingProvisionalClaimBindingAuthorization,
+  type FindingProvisionalClaimBindingAuthorizationReference,
+} from '../../models/finding-types.js';
+
+const provisionalClaimBindingAuthorizationBrand: unique symbol = Symbol(
+  'FindingProvisionalClaimBindingAuthorization',
+);
+const issuedProvisionalClaimBindingAuthorizations = new WeakSet<object>();
+
+type AuthorizationReferenceFor<
+  Authorization extends ProvisionalClaimBindingAuthorizationPayload,
+> = Extract<
+  FindingProvisionalClaimBindingAuthorizationReference,
+  { kind: Authorization['kind'] }
+>;
+
+function issueProvisionalClaimBindingAuthorization<
+  Authorization extends ProvisionalClaimBindingAuthorizationPayload,
+>(authorization: Authorization): FindingProvisionalClaimBindingAuthorization<
+  AuthorizationReferenceFor<Authorization>
+> {
+  const reference = createProvisionalClaimBindingAuthorizationReference(
+    authorization,
+  ) as unknown as AuthorizationReferenceFor<Authorization>;
+  const violation = provisionalClaimBindingAuthorizationViolation(reference);
+  if (violation !== undefined) {
+    throw new Error(violation);
+  }
+  const issued = new FindingProvisionalClaimBindingAuthorization<
+    AuthorizationReferenceFor<Authorization>
+  >(reference);
+  Object.defineProperty(issued, provisionalClaimBindingAuthorizationBrand, {
+    value: true,
+  });
+  Object.freeze(reference.sourceRawFindingIds);
+  if ('expectedTargetHead' in reference) {
+    Object.freeze(reference.expectedTargetHead);
+  }
+  Object.freeze(reference);
+  issuedProvisionalClaimBindingAuthorizations.add(issued);
+  Object.freeze(issued);
+  return issued;
+}
+
+export function isProvisionalClaimBindingAuthorization(
+  value: unknown,
+): value is FindingProvisionalClaimBindingAuthorization {
+  return typeof value === 'object'
+    && value !== null
+    && provisionalClaimBindingAuthorizationBrand in value
+    && issuedProvisionalClaimBindingAuthorizations.has(value);
+}
+
+export function assertProvisionalClaimBindingAuthorization(
+  value: unknown,
+): asserts value is FindingProvisionalClaimBindingAuthorization {
+  if (!isProvisionalClaimBindingAuthorization(value)) {
+    throw new Error('Provisional claim binding authorization was not issued by pre-admission commit');
+  }
+}
 
 export interface EntityBindingAuditAttachment {
   rawFindingId: string;
@@ -24,6 +91,10 @@ export interface EntityBindingAuditAttachment {
 export interface ResolvedPreAdmissionEntityBindings {
   mutations: PreAdmissionEntityProvisionalMutation[];
   auditAttachments: EntityBindingAuditAttachment[];
+}
+
+function bindingDecisionId(binding: PreAdmissionEntityBinding): string {
+  return entityBindingDigest('finding-pre-admission-entity-binding-decision-v1', binding);
 }
 
 function bindingCandidates(
@@ -54,6 +125,7 @@ function claimMutation(input: {
     PreAdmissionEntityProvisionalMutation,
     { operation: 'create_new' }
   >['provisionalKind'];
+  bindingDecisionId: string;
   creationRequestKey?: string;
 }): PreAdmissionEntityProvisionalMutation {
   const ordered = [...input.candidates].sort((left, right) => compareBinaryStrings(
@@ -91,11 +163,15 @@ function claimMutation(input: {
   if (representative === undefined) {
     throw new Error('Pre-admission entity creation requires at least one raw finding');
   }
+  const creationRequestKey = input.creationRequestKey ?? input.binding.creationRequestKey;
+  const sourceRawFindingIds = ordered.map(
+    (candidate) => candidate.item.wire.rawFindingId,
+  );
   return {
     operation: 'create_new',
-    creationRequestKey: input.creationRequestKey ?? input.binding.creationRequestKey,
+    creationRequestKey,
     provisionalKind: input.provisionalKind,
-    sourceRawFindingIds: ordered.map((candidate) => candidate.item.wire.rawFindingId),
+    sourceRawFindingIds,
     reason: input.binding.reason,
     title: representative.item.wire.title,
     severity: representative.item.wire.severity,
@@ -110,6 +186,13 @@ function claimMutation(input: {
     targetIdentityHash: representative.item.wire.targetIdentityHash,
     claimIdentityHash: representative.item.wire.claimIdentityHash,
     semanticClaimIdentityHash: representative.item.wire.semanticClaimIdentityHash,
+    claimBindingAuthorization: issueProvisionalClaimBindingAuthorization({
+      kind: 'new_provisional_bundle',
+      bindingDecisionId: input.bindingDecisionId,
+      creationRequestKey,
+      expectedHead: null,
+      sourceRawFindingIds,
+    }),
   };
 }
 
@@ -117,25 +200,40 @@ function attachMutation(input: {
   component: EntityBindingComponent;
   candidates: readonly BindingCandidate[];
   reason: string;
+  bindingDecisionId: string;
 }): PreAdmissionEntityProvisionalMutation | undefined {
   const canonical = [...input.component.openAmbiguityEpisodes]
     .sort((left, right) => compareBinaryStrings(left.id, right.id))[0];
   if (canonical?.provisional === undefined) {
     return undefined;
   }
+  const sourceRawFindingIds = input.candidates
+    .map((candidate) => candidate.item.wire.rawFindingId)
+    .sort(compareBinaryStrings);
   return {
     operation: 'attach_existing',
     findingId: canonical.id,
     expectedKind: 'raw-meaning-ambiguous',
     expectedStableKey: canonical.provisional.stableKey,
     expectedLineageKey: canonical.provisional.lineageKey,
-    sourceRawFindingIds: input.candidates
-      .map((candidate) => candidate.item.wire.rawFindingId)
-      .sort(compareBinaryStrings),
+    sourceRawFindingIds,
     reviewers: [...new Set(input.candidates.map(
       (candidate) => candidate.item.wire.reviewer,
     ))],
     reason: input.reason,
+    claimBindingAuthorizations: [issueProvisionalClaimBindingAuthorization({
+      kind: 'pre_admission_attach_existing',
+      bindingDecisionId: input.bindingDecisionId,
+      findingId: canonical.id,
+      expectedTargetHead: {
+        revision: canonical.revision,
+        projectionDigest: computeFindingLifecycleProjectionDigest(canonical),
+      },
+      expectedProvisionalKind: 'raw-meaning-ambiguous',
+      expectedStableKey: canonical.provisional.stableKey,
+      expectedLineageKey: canonical.provisional.lineageKey,
+      sourceRawFindingIds,
+    })],
   };
 }
 
@@ -144,6 +242,7 @@ function resolveUncertainty(input: {
     Extract<PreAdmissionEntityBinding, { kind: 'entity_group' }>,
     'creationRequestKey' | 'reason'
   >;
+  bindingDecisionId: string;
   candidates: readonly BindingCandidate[];
   ledger: FindingLedger;
 }): PreAdmissionEntityProvisionalMutation[] {
@@ -153,6 +252,7 @@ function resolveUncertainty(input: {
       component,
       candidates: component.candidates,
       reason: input.binding.reason,
+      bindingDecisionId: input.bindingDecisionId,
     });
     if (attach !== undefined) {
       return attach;
@@ -161,6 +261,7 @@ function resolveUncertainty(input: {
       binding: input.binding,
       candidates: component.candidates,
       provisionalKind: 'raw-meaning-ambiguous',
+      bindingDecisionId: input.bindingDecisionId,
       creationRequestKey: componentOrdinal === 0
         ? input.binding.creationRequestKey
         : entityBindingDigest('finding-provisional-split-creation-request-v1', {
@@ -199,6 +300,7 @@ export function resolvePreAdmissionEntityBindings(input: {
 
   for (const binding of groupedBindings(input.intake)) {
     const candidates = bindingCandidates(input.intake, binding.groupRawFindingIds);
+    const decisionId = bindingDecisionId(binding);
     for (const candidate of candidates) {
       boundRawIds.add(candidate.item.wire.rawFindingId);
     }
@@ -223,11 +325,13 @@ export function resolvePreAdmissionEntityBindings(input: {
         binding,
         candidates,
         provisionalKind: 'raw-adjudication-unresolved',
+        bindingDecisionId: decisionId,
       }));
       continue;
     }
     mutations.push(...resolveUncertainty({
       binding,
+      bindingDecisionId: decisionId,
       candidates,
       ledger: input.ledger,
     }));
@@ -258,6 +362,7 @@ export function resolvePreAdmissionEntityBindings(input: {
     };
     mutations.push(...resolveUncertainty({
       binding: fallbackBinding,
+      bindingDecisionId: bindingDecisionId(binding),
       candidates,
       ledger: input.ledger,
     }));

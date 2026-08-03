@@ -2,6 +2,8 @@ import type {
   FindingProvisionalKind,
   FindingSeverity,
   FindingTarget,
+  FindingProvisionalClaimBindingAuthorization,
+  FindingProvisionalClaimBindingAuthorizationReference,
 } from './types.js';
 
 export type PreAdmissionEntityBinding =
@@ -34,7 +36,11 @@ interface EntityProvisionalMutationClaim {
   target: FindingTarget;
   targetIdentityHash: string;
   claimIdentityHash: string;
-  semanticClaimIdentityHash: string;
+      semanticClaimIdentityHash: string;
+      claimBindingAuthorization: FindingProvisionalClaimBindingAuthorization<Extract<
+        FindingProvisionalClaimBindingAuthorizationReference,
+        { kind: 'new_provisional_bundle' }
+      >>;
 }
 
 export type PreAdmissionEntityProvisionalMutation =
@@ -55,6 +61,10 @@ export type PreAdmissionEntityProvisionalMutation =
       sourceRawFindingIds: string[];
       reviewers: string[];
       reason: string;
+      claimBindingAuthorizations: Array<FindingProvisionalClaimBindingAuthorization<Extract<
+        FindingProvisionalClaimBindingAuthorizationReference,
+        { kind: 'pre_admission_attach_existing' }
+      >>>;
     };
 
 export type PreAdmissionEntityMutationResult =

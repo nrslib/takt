@@ -117,6 +117,8 @@ export type {
   FindingLifecycleEntityHead,
   FindingLifecycleEvent,
   FindingLifecycleMutationTarget,
+  FindingProvisionalClaimBindingAuthorization,
+  FindingProvisionalClaimBindingAuthorizationReference,
   FindingLifecycleOperation,
   FindingLifecycleReservation,
   FindingLifecycleTransition,

@@ -8,6 +8,7 @@ import type {
 import type {
   FindingLedger,
   FindingLedgerEntry,
+  FindingProvisionalClaimBindingAuthorization,
   FindingTarget,
   RawFinding,
 } from '../core/workflow/findings/types.js';
@@ -34,6 +35,9 @@ import {
 } from '../core/workflow/findings/raw-canonicalization.js';
 import { captureFindingPreconditions } from '../core/workflow/findings/finding-preconditions.js';
 import { createAnchorAdjudication } from '../core/models/finding-anchor-relevance.js';
+import {
+  provisionalClaimBindingAuthorizationReference,
+} from '../core/models/finding-provisional-claim-authorization.js';
 import type { ReviewScopeProofSnapshot } from '../core/workflow/findings/snapshot.js';
 import {
   authorizeFindingLedgerFixture,
@@ -43,6 +47,10 @@ import {
 } from './helpers/finding-lifecycle-fixture.js';
 import { storedRawReconcileProvenance } from './helpers/finding-integrity.js';
 import { MAIN_MANAGER_INPUT_MAX_BYTES } from '../core/workflow/findings/manager-task-contracts.js';
+import { issueManagerLifecycleAuthority } from '../core/workflow/findings/manager-lifecycle-authority.js';
+import {
+  assembleAndApplyManagerLifecycleTransactions,
+} from '../core/workflow/findings/manager-lifecycle-assembly.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({ executeAgent: vi.fn() }));
 
@@ -311,6 +319,87 @@ function reconcileEntityCommit(input: {
   });
 }
 
+function issueAndAssembleEntityPlan(input: {
+  current: FindingLedger;
+  plan: ReturnType<typeof reconcileEntityCommit>;
+  commands?: ReturnType<typeof reconcileEntityCommit>['managerDecisionCommands'];
+}) {
+  const observation = {
+    runId: 'run-1',
+    stepName: managerStep.name,
+    timestamp: '2026-07-30T00:00:00.000Z',
+  };
+  const commands = input.commands ?? input.plan.managerDecisionCommands;
+  const proofed = issueManagerLifecycleAuthority({
+    current: input.current,
+    managerDecisionProposed: input.plan.managerDecisionLedger,
+    proposed: input.plan.ledger,
+    managerDecisionCommands: commands,
+    settlementCommands: input.plan.settlementCommands,
+    managerOutput: input.plan.managerOutput,
+    cwd: process.cwd(),
+    workflowName: input.current.workflowName,
+    runId: observation.runId,
+    scopeIdentity: 'finding-storage:test:entity-binding',
+    reviewScopeSnapshotId: 'a'.repeat(64),
+    observation,
+  });
+  const committed = assembleAndApplyManagerLifecycleTransactions({
+    current: input.current,
+    managerDecisionProposed: input.plan.managerDecisionLedger,
+    managerDecisionCommands: commands,
+    proposed: proofed.ledger,
+    managerOutput: input.plan.managerOutput,
+    provisionalProofIdsByFinding: proofed.provisionalProofIdsByFinding,
+    invalidationProofIdsByFinding: proofed.invalidationProofIdsByFinding,
+    duplicateProofIdsByCommandKey: proofed.duplicateProofIdsByCommandKey,
+    managerDecisionProvisionalTransitionProofIdsByCommandKey:
+      proofed.managerDecisionProvisionalTransitionProofIdsByCommandKey,
+    provisionalTransitionProofIdsByCommandKey:
+      proofed.provisionalTransitionProofIdsByCommandKey,
+    invalidationReasonsByFinding: proofed.invalidationReasonsByFinding,
+    resolutionRenotifications: [],
+    settlementCommands: input.plan.settlementCommands,
+    actionRecoveryPlan: null,
+    occurredAt: observation,
+  });
+  return { committed, proofed };
+}
+
+async function existingAmbiguityAttachmentPlan() {
+  const priorRaw = rawFinding({
+    rawFindingId: 'raw-prior',
+    title: 'Existing ambiguity claim',
+    description: 'The existing ambiguity episode has its original claim.',
+  });
+  const initial = emptyLedger({
+    findings: [provisionalFinding({
+      id: 'F-0001',
+      raw: priorRaw,
+      kind: 'raw-meaning-ambiguous',
+    })],
+    rawFindings: [priorRaw],
+    nextId: 2,
+  });
+  const ledger = authorizeFindingLedgerFixture(initial);
+  const attachedRaw = rawFinding({
+    rawFindingId: 'raw-attached',
+    reviewer: 'later-reviewer',
+    title: 'Different ambiguity claim',
+    description: 'A different claim shares the unresolved target locus.',
+  });
+  const intake = intakeFor(ledger, [attachedRaw]);
+  executeAgentMock.mockRejectedValue(new Error('provider unavailable'));
+  const bound = await bind({ ledger, intake, roundMarker: 'round-2' });
+  const evaluation = evaluate(ledger, bound.intake);
+  const plan = reconcileEntityCommit({
+    ledger,
+    rawFindings: [intake.items[0]!.wire],
+    mutations: evaluation.preAdmissionEntityMutations,
+  });
+  return { ledger, plan };
+}
+
 function provisionalFinding(input: {
   id: string;
   raw: RawFinding;
@@ -411,6 +500,313 @@ describe('pre-admission semantic entity binding', () => {
       stableKey: entityBindingDigest('finding-provisional-entity-v1', 'F-0001'),
       lineageKey: entityBindingDigest('finding-provisional-lineage-v1', 'F-0001'),
     });
+  });
+
+  it('commits one provisional for distinct claims with binding provenance for every raw', async () => {
+    const ledger = emptyLedger();
+    const intake = intakeFor(ledger, [
+      rawFinding({
+        rawFindingId: 'raw-a',
+        reviewer: 'reviewer-a',
+        title: 'Cache invalidation skips renamed files',
+        description: 'A renamed source file keeps stale cache state.',
+      }),
+      rawFinding({
+        rawFindingId: 'raw-b',
+        reviewer: 'reviewer-b',
+        title: 'Cache invalidation skips deleted files',
+        description: 'A deleted source file keeps stale cache state.',
+      }),
+    ]);
+    mockGroupedDecision((_rawFindingId, owned) => ({
+      decision: 'ambiguous',
+      groupRawFindingId: owned[0],
+    }));
+    const bound = await bind({ ledger, intake });
+    const evaluation = evaluate(ledger, bound.intake);
+    const plan = reconcileEntityCommit({
+      ledger,
+      rawFindings: intake.items.map((item) => item.wire),
+      mutations: evaluation.preAdmissionEntityMutations,
+    });
+    const observation = {
+      runId: 'run-1',
+      stepName: managerStep.name,
+      timestamp: '2026-07-30T00:00:00.000Z',
+    };
+    const proofed = issueManagerLifecycleAuthority({
+      current: ledger,
+      managerDecisionProposed: plan.managerDecisionLedger,
+      proposed: plan.ledger,
+      managerDecisionCommands: plan.managerDecisionCommands,
+      settlementCommands: plan.settlementCommands,
+      managerOutput: plan.managerOutput,
+      cwd: process.cwd(),
+      workflowName: ledger.workflowName,
+      runId: observation.runId,
+      scopeIdentity: 'finding-storage:test:multi-claim-provisional',
+      reviewScopeSnapshotId: 'a'.repeat(64),
+      observation,
+    });
+    const committed = assembleAndApplyManagerLifecycleTransactions({
+      current: ledger,
+      managerDecisionProposed: plan.managerDecisionLedger,
+      managerDecisionCommands: plan.managerDecisionCommands,
+      proposed: proofed.ledger,
+      managerOutput: plan.managerOutput,
+      provisionalProofIdsByFinding: proofed.provisionalProofIdsByFinding,
+      invalidationProofIdsByFinding: proofed.invalidationProofIdsByFinding,
+      duplicateProofIdsByCommandKey: proofed.duplicateProofIdsByCommandKey,
+      managerDecisionProvisionalTransitionProofIdsByCommandKey:
+        proofed.managerDecisionProvisionalTransitionProofIdsByCommandKey,
+      provisionalTransitionProofIdsByCommandKey:
+        proofed.provisionalTransitionProofIdsByCommandKey,
+      invalidationReasonsByFinding: proofed.invalidationReasonsByFinding,
+      resolutionRenotifications: [],
+      settlementCommands: plan.settlementCommands,
+      actionRecoveryPlan: null,
+      occurredAt: observation,
+    });
+    const finding = committed.findings[0]!;
+    const proofIds = proofed.provisionalProofIdsByFinding.get(finding.id) ?? [];
+    const event = committed.lifecycleEvents.find(
+      (candidate) => candidate.operation === 'update_provisional',
+    )!;
+    const eventRawFindingIds = event.evidenceBindingIds.flatMap((bindingId) => {
+      const binding = committed.evidenceBindings.find(
+        (candidate) => candidate.bindingId === bindingId,
+      );
+      return binding?.sourceRawFindingId === null || binding === undefined
+        ? []
+        : [binding.sourceRawFindingId];
+    });
+    const proofClaimIdentityHashes = proofIds.map((proofId) => (
+      proofed.ledger.evidenceRecords.find((record) => record.evidenceId === proofId)!
+        .claimIdentityHash
+    ));
+    const bundleAuthorization = plan.managerDecisionCommands[0]
+      ?.provisionalClaimBindingAuthorizationsByTarget
+      ?.get(`finding\0${finding.id}`)?.[0];
+    const proofAuthorizationIds = proofIds.map((proofId) => {
+      const proof = proofed.ledger.evidenceRecords.find(
+        (record) => record.evidenceId === proofId,
+      );
+      return proof?.kind === 'engine_proof'
+        && proof.subject.kind === 'finding_provisional_isolation'
+        ? proof.subject.claimBindingAuthorizationReferences.map(
+            (authorization) => authorization.authorizationId,
+          )
+        : [];
+    });
+
+    expect(finding.provisional?.sourceRawFindingIds).toEqual(['raw-a', 'raw-b']);
+    expect(bundleAuthorization?.reference).toMatchObject({
+      kind: 'new_provisional_bundle',
+      expectedHead: null,
+      sourceRawFindingIds: ['raw-a', 'raw-b'],
+    });
+    expect(proofAuthorizationIds).toEqual([
+      [bundleAuthorization?.reference.authorizationId],
+      [bundleAuthorization?.reference.authorizationId],
+    ]);
+    expect(proofClaimIdentityHashes.sort()).toEqual(
+      intake.items.map((item) => item.wire.claimIdentityHash).sort(),
+    );
+    expect(eventRawFindingIds.sort()).toEqual(['raw-a', 'raw-b']);
+  });
+
+  it('commits a distinct-claim attach_existing through proof issuance and lifecycle assembly', async () => {
+    const { ledger, plan } = await existingAmbiguityAttachmentPlan();
+    const { committed, proofed } = issueAndAssembleEntityPlan({ current: ledger, plan });
+    const command = plan.managerDecisionCommands[0]!;
+    const authorization = command.provisionalClaimBindingAuthorizationsByTarget
+      ?.get('finding\0F-0001')?.[0];
+    const proof = proofed.ledger.evidenceRecords.find((record) => (
+      record.kind === 'engine_proof'
+      && record.subject.kind === 'finding_provisional_isolation'
+      && record.claimIdentityHash === plan.ledger.rawFindings.find(
+        (raw) => raw.rawFindingId === 'raw-attached',
+      )?.claimIdentityHash
+    ));
+    const event = committed.lifecycleEvents.at(-1)!;
+
+    expect(authorization?.reference).toMatchObject({
+      kind: 'pre_admission_attach_existing',
+      findingId: 'F-0001',
+      expectedProvisionalKind: 'raw-meaning-ambiguous',
+      sourceRawFindingIds: ['raw-attached'],
+    });
+    expect(proof).toMatchObject({
+      subject: {
+        claimBindingAuthorizationReferences: [{
+          authorizationId: authorization?.reference.authorizationId,
+        }],
+      },
+    });
+    expect(committed.findings[0]?.provisional?.sourceRawFindingIds)
+      .toEqual(['raw-attached', 'raw-prior']);
+    expect(event.operation).toBe('update_provisional');
+    expect(event.evidenceBindingIds.some((bindingId) => (
+      committed.evidenceBindings.find((binding) => binding.bindingId === bindingId)
+        ?.sourceRawFindingId === 'raw-attached'
+    ))).toBe(true);
+
+    const laterRaw = rawFinding({
+      rawFindingId: 'raw-later-attachment',
+      title: 'Third ambiguity claim',
+      description: 'A later round attaches after the episode already contains distinct claims.',
+    });
+    const committedWithSnapshots = {
+      ...committed,
+      rawCanonicalSnapshots: committed.rawFindings.map((raw) => (
+        committed.rawCanonicalSnapshots.find(
+          (snapshot) => snapshot.rawFindingId === raw.rawFindingId,
+        ) ?? rawCanonicalSnapshotFixture(raw, {
+          runId: 'run-1',
+          stepName: raw.stepName,
+          timestamp: committed.updatedAt,
+        })
+      )),
+    };
+    const laterIntake = intakeFor(committedWithSnapshots, [laterRaw]);
+    const laterBound = await bind({
+      ledger: committedWithSnapshots,
+      intake: laterIntake,
+      roundMarker: 'round-3',
+    });
+    const laterEvaluation = evaluate(committedWithSnapshots, laterBound.intake);
+    const laterPlan = reconcileEntityCommit({
+      ledger: committedWithSnapshots,
+      rawFindings: [laterIntake.items[0]!.wire],
+      mutations: laterEvaluation.preAdmissionEntityMutations,
+    });
+    const laterCommitted = issueAndAssembleEntityPlan({
+      current: committedWithSnapshots,
+      plan: laterPlan,
+    }).committed;
+
+    expect(laterCommitted.findings[0]?.provisional?.sourceRawFindingIds)
+      .toEqual(['raw-attached', 'raw-later-attachment', 'raw-prior']);
+  });
+
+  it('rejects a distinct-claim existing attachment without pre-admission authorization', async () => {
+    const { ledger, plan } = await existingAmbiguityAttachmentPlan();
+    const commands = plan.managerDecisionCommands.map((command) => {
+      const {
+        provisionalClaimBindingAuthorizationsByTarget: _authorization,
+        ...withoutAuthorization
+      } = command;
+      void _authorization;
+      return withoutAuthorization;
+    });
+
+    expect(() => issueAndAssembleEntityPlan({ current: ledger, plan, commands }))
+      .toThrow(/does not match the provisional projection delta/);
+  });
+
+  it('rejects a content-addressed plain object without the pre-admission brand', async () => {
+    const { ledger, plan } = await existingAmbiguityAttachmentPlan();
+    const command = plan.managerDecisionCommands[0]!;
+    const key = 'finding\0F-0001';
+    const authorization = command.provisionalClaimBindingAuthorizationsByTarget
+      ?.get(key)?.[0];
+    expect(authorization).toBeDefined();
+    const forgedReference = provisionalClaimBindingAuthorizationReference(authorization!);
+    const commands = [{
+      ...command,
+      provisionalClaimBindingAuthorizationsByTarget: new Map([[
+        key,
+        [forgedReference as unknown as typeof authorization],
+      ]]),
+    }];
+
+    expect(() => issueAndAssembleEntityPlan({ current: ledger, plan, commands }))
+      .toThrow(/was not issued by pre-admission commit/);
+  });
+
+  it.each([
+    ['structured clone', (authorization: FindingProvisionalClaimBindingAuthorization) => (
+      structuredClone(authorization)
+    )],
+    ['spread', (authorization: FindingProvisionalClaimBindingAuthorization) => ({
+      ...authorization,
+    })],
+  ])('rejects a %s of a pre-admission authorization at runtime', async (_, copy) => {
+    const { ledger, plan } = await existingAmbiguityAttachmentPlan();
+    const command = plan.managerDecisionCommands[0]!;
+    const key = 'finding\0F-0001';
+    const authorization = command.provisionalClaimBindingAuthorizationsByTarget
+      ?.get(key)?.[0];
+    expect(authorization).toBeDefined();
+    const commands = [{
+      ...command,
+      provisionalClaimBindingAuthorizationsByTarget: new Map([[
+        key,
+        [copy(authorization!) as unknown as typeof authorization],
+      ]]),
+    }];
+
+    expect(() => issueAndAssembleEntityPlan({ current: ledger, plan, commands }))
+      .toThrow(/was not issued by pre-admission commit/);
+  });
+
+  it('rejects a forged authorization hidden from the caller-owned array iterator', async () => {
+    const { ledger, plan } = await existingAmbiguityAttachmentPlan();
+    const command = plan.managerDecisionCommands[0]!;
+    const key = 'finding\0F-0001';
+    const authorization = command.provisionalClaimBindingAuthorizationsByTarget
+      ?.get(key)?.[0];
+    expect(authorization).toBeDefined();
+    const forgedReference = provisionalClaimBindingAuthorizationReference(authorization!);
+    const forgedAuthorizations = [
+      forgedReference as unknown as NonNullable<typeof authorization>,
+    ];
+    Object.defineProperty(forgedAuthorizations, Symbol.iterator, {
+      value: () => [][Symbol.iterator](),
+    });
+    const commands = [{
+      ...command,
+      provisionalClaimBindingAuthorizationsByTarget: new Map([[
+        key,
+        forgedAuthorizations,
+      ]]),
+    }];
+
+    expect(() => issueAndAssembleEntityPlan({ current: ledger, plan, commands }))
+      .toThrow(/was not issued by pre-admission commit/);
+  });
+
+  it('rejects a forged new provisional bundle without the pre-admission brand', async () => {
+    const ledger = emptyLedger();
+    const intake = intakeFor(ledger, [
+      rawFinding({ rawFindingId: 'raw-a', title: 'Claim A' }),
+      rawFinding({ rawFindingId: 'raw-b', title: 'Claim B' }),
+    ]);
+    mockGroupedDecision(() => ({
+      decision: 'ambiguous',
+      groupRawFindingId: 'raw-a',
+    }));
+    const bound = await bind({ ledger, intake });
+    const evaluation = evaluate(ledger, bound.intake);
+    const plan = reconcileEntityCommit({
+      ledger,
+      rawFindings: intake.items.map((item) => item.wire),
+      mutations: evaluation.preAdmissionEntityMutations,
+    });
+    const command = plan.managerDecisionCommands[0]!;
+    const key = [...command.provisionalClaimBindingAuthorizationsByTarget!.keys()][0]!;
+    const authorization = command.provisionalClaimBindingAuthorizationsByTarget!.get(key)![0]!;
+    const forgedReference = provisionalClaimBindingAuthorizationReference(authorization);
+    const commands = [{
+      ...command,
+      provisionalClaimBindingAuthorizationsByTarget: new Map([[
+        key,
+        [forgedReference as unknown as typeof authorization],
+      ]]),
+    }];
+
+    expect(() => issueAndAssembleEntityPlan({ current: ledger, plan, commands }))
+      .toThrow(/was not issued by pre-admission commit/);
   });
 
   it('routes a relation- and claim-incomplete evidence-less raw through binding', async () => {
@@ -828,6 +1224,7 @@ describe('pre-admission semantic entity binding', () => {
         sourceRawFindingIds: ['raw-new'],
         reviewers: ['reviewer'],
         reason: 'Stale attachment.',
+        claimBindingAuthorizations: [],
       }],
       {
         workflowName: ledger.workflowName,

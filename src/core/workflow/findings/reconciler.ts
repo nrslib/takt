@@ -5,6 +5,7 @@ import type {
   FindingLedgerConflict,
   FindingManagerOutput,
   FindingObservation,
+  FindingProvisionalClaimBindingAuthorization,
   FindingProvisionalKind,
   FindingProvisionalMetadata,
   FindingReconcileContext,
@@ -979,6 +980,7 @@ function reconcileFindingLedgerWithValidator(
     findings: readonly FindingRecord[],
     authority: FindingLifecycleCommand['authority'],
     sources: ReadonlyMap<string, LifecycleEvidenceSource>,
+    claimBindingAuthorizations: readonly FindingProvisionalClaimBindingAuthorization[] = [],
   ): void => {
     lifecycleCommands.push({
       operation,
@@ -992,6 +994,16 @@ function reconcileFindingLedgerWithValidator(
       },
       authority,
       evidenceSourcesByTarget: sources,
+      ...(claimBindingAuthorizations.length === 0
+        ? {}
+        : {
+            provisionalClaimBindingAuthorizationsByTarget: new Map(findings.map(
+              (finding) => [
+                `finding\0${finding.id}`,
+                claimBindingAuthorizations,
+              ],
+            )),
+          }),
     });
   };
   const verifiedFindingSources = (
@@ -1407,6 +1419,17 @@ function reconcileFindingLedgerWithValidator(
     [...provisionalChanges, ...entityMutationApplication.changes]
       .map((finding) => [finding.id, finding]),
   );
+  const claimBindingAuthorizationsByFindingId = new Map(
+    entityMutationApplication.results.flatMap((result) => {
+      if (result.outcome !== 'applied_provisional') {
+        return [];
+      }
+      const authorizations = result.mutation.operation === 'create_new'
+        ? [result.mutation.claimBindingAuthorization]
+        : result.mutation.claimBindingAuthorizations;
+      return [[result.findingId, authorizations] as const];
+    }),
+  );
   for (const finding of [...provisionalChangesById.values()]
     .sort((left, right) => compareBinaryStrings(left.id, right.id))) {
     if (finding.provisional === undefined) {
@@ -1428,6 +1451,7 @@ function reconcileFindingLedgerWithValidator(
         [finding.id],
         finding.provisional.sourceRawFindingIds,
       ),
+      claimBindingAuthorizationsByFindingId.get(finding.id) ?? [],
     );
   }
 
@@ -1548,6 +1572,17 @@ function normalizeEntityAttachMutations(
         reason: [...new Set(grouped.map((mutation) => mutation.reason))]
           .sort(compareBinaryStrings)
           .join('; '),
+        claimBindingAuthorizations: [
+          ...new Map(grouped.flatMap(
+            (mutation) => mutation.claimBindingAuthorizations,
+          ).map((authorization) => [
+            authorization.reference.authorizationId,
+            authorization,
+          ])).values(),
+        ].sort((left, right) => compareBinaryStrings(
+          left.reference.authorizationId,
+          right.reference.authorizationId,
+        )),
       };
     });
 }
