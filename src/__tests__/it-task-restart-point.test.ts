@@ -464,16 +464,13 @@ describe('WorkflowRestartPoint schema', () => {
     ['elapsed_ms', 10_000],
     ['step_iterations', { review: 3 }],
   ])('should reject checkpoint state field %s inside restart_point', (field, value) => {
-    const restartPoint = makeRestartPoint() as Record<string, unknown>;
+    const restartPoint = makeRestartPoint();
     const invalidRestartPoint = field === 'step_iterations'
       ? {
           ...restartPoint,
           stack: [
-            restartPoint.stack instanceof Array ? restartPoint.stack[0] : undefined,
-            {
-              ...(restartPoint.stack instanceof Array ? restartPoint.stack[1] : {}),
-              [field]: value,
-            },
+            restartPoint.stack[0],
+            { ...restartPoint.stack[1], [field]: value },
           ],
         }
       : { ...restartPoint, [field]: value };
@@ -590,13 +587,15 @@ describe('task restart persistence and execution resolution', () => {
     expect(() => runner.requeueTask(
       'nested-retry',
       ['failed'],
-      undefined,
-      undefined,
-      makeResumePoint(),
-      undefined,
-      undefined,
-      undefined,
-      makeRestartPoint(),
+      {
+        startStep: undefined,
+        retryNote: undefined,
+        resumePoint: makeResumePoint(),
+        workflow: undefined,
+        taskDir: undefined,
+        sourceRunSlug: undefined,
+        restartPoint: makeRestartPoint(),
+      },
     )).toThrow('Retry task cannot own both resume_point and restart_point');
     expect(fs.readFileSync(tasksFile, 'utf-8')).toBe(rawTasksYaml);
   });
@@ -611,9 +610,11 @@ describe('task restart persistence and execution resolution', () => {
     runner.requeueTask(
       'nested-retry',
       ['failed'],
-      undefined,
-      undefined,
-      resumePoint,
+      {
+        startStep: undefined,
+        retryNote: undefined,
+        resumePoint: resumePoint,
+      },
     );
     const pending = runner.listPendingTaskItems()[0];
 
@@ -639,9 +640,11 @@ describe('task restart persistence and execution resolution', () => {
     runner.requeueTask(
       'nested-retry',
       ['failed'],
-      undefined,
-      undefined,
-      resumePoint,
+      {
+        startStep: undefined,
+        retryNote: undefined,
+        resumePoint: resumePoint,
+      },
     );
 
     const persisted = parseYaml(fs.readFileSync(tasksFile, 'utf-8')) as {
@@ -685,13 +688,15 @@ describe('task restart persistence and execution resolution', () => {
     expect(() => runner.requeueTask(
       'nested-retry',
       ['failed'],
-      'finalize',
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      makeRestartPoint(),
+      {
+        startStep: 'finalize',
+        retryNote: undefined,
+        resumePoint: undefined,
+        workflow: undefined,
+        taskDir: undefined,
+        sourceRunSlug: undefined,
+        restartPoint: makeRestartPoint(),
+      },
     )).toThrow(/start_step.*restart_point|restart_point.*start_step/i);
   });
 
@@ -701,7 +706,13 @@ describe('task restart persistence and execution resolution', () => {
     writeFailedTask(projectDir);
     const runner = new TaskRunner(projectDir);
 
-    runner.requeueTask('nested-retry', ['failed'], 'finalize');
+    runner.requeueTask(
+      'nested-retry',
+      ['failed'],
+      {
+        startStep: 'finalize',
+      },
+    );
     const pending = runner.listPendingTaskItems()[0];
     const tasksYaml = parseYaml(
       fs.readFileSync(path.join(projectDir, '.takt', 'tasks.yaml'), 'utf-8'),
@@ -731,13 +742,15 @@ describe('task restart persistence and execution resolution', () => {
     runner.requeueTask(
       'nested-retry',
       ['failed'],
-      undefined,
-      'restart selected root step',
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      restartPoint,
+      {
+        startStep: undefined,
+        retryNote: 'restart selected root step',
+        resumePoint: undefined,
+        workflow: undefined,
+        taskDir: undefined,
+        sourceRunSlug: undefined,
+        restartPoint: restartPoint,
+      },
     );
     const pending = runner.listPendingTaskItems()[0]!;
     const resolved = await resolveTaskExecution(pending, projectDir);
@@ -767,8 +780,17 @@ describe('task restart persistence and execution resolution', () => {
     };
     const runner = new TaskRunner(projectDir);
     runner.requeueTask(
-      'nested-retry', ['failed'], undefined, undefined, undefined,
-      undefined, undefined, undefined, restartPoint,
+      'nested-retry',
+      ['failed'],
+      {
+        startStep: undefined,
+        retryNote: undefined,
+        resumePoint: undefined,
+        workflow: undefined,
+        taskDir: undefined,
+        sourceRunSlug: undefined,
+        restartPoint: restartPoint,
+      },
     );
     const pending = runner.listPendingTaskItems()[0]!;
     const workflowPath = path.join(projectDir, '.takt', 'workflows', 'default.yaml');
@@ -797,8 +819,17 @@ describe('task restart persistence and execution resolution', () => {
     };
     const runner = new TaskRunner(projectDir);
     runner.requeueTask(
-      'nested-retry', ['failed'], undefined, undefined, undefined,
-      undefined, undefined, undefined, restartPoint,
+      'nested-retry',
+      ['failed'],
+      {
+        startStep: undefined,
+        retryNote: undefined,
+        resumePoint: undefined,
+        workflow: undefined,
+        taskDir: undefined,
+        sourceRunSlug: undefined,
+        restartPoint: restartPoint,
+      },
     );
     const pending = runner.listPendingTaskItems()[0]!;
     const workflowPath = path.join(projectDir, '.takt', 'workflows', 'default.yaml');
@@ -823,13 +854,15 @@ describe('task restart persistence and execution resolution', () => {
     runner.requeueTask(
       'nested-retry',
       ['failed'],
-      undefined,
-      'restart child review',
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      restartPoint,
+      {
+        startStep: undefined,
+        retryNote: 'restart child review',
+        resumePoint: undefined,
+        workflow: undefined,
+        taskDir: undefined,
+        sourceRunSlug: undefined,
+        restartPoint: restartPoint,
+      },
     );
     const pending = runner.listPendingTaskItems()[0]!;
     const resolved = await resolveTaskExecution(pending, projectDir);
@@ -859,13 +892,15 @@ describe('task restart persistence and execution resolution', () => {
       'nested-retry',
       ['failed'],
       'retry',
-      undefined,
-      'restart child review',
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      restartPoint,
+      {
+        startStep: undefined,
+        retryNote: 'restart child review',
+        resumePoint: undefined,
+        workflow: undefined,
+        taskDir: undefined,
+        sourceRunSlug: undefined,
+        restartPoint: restartPoint,
+      },
     );
     const resolved = await resolveTaskExecution(running, projectDir);
 
@@ -886,8 +921,17 @@ describe('task restart persistence and execution resolution', () => {
     const restartPoint = buildNestedRestartPoint(projectDir);
     const runner = new TaskRunner(projectDir);
     runner.requeueTask(
-      'nested-retry', ['failed'], undefined, undefined, undefined,
-      undefined, undefined, undefined, restartPoint,
+      'nested-retry',
+      ['failed'],
+      {
+        startStep: undefined,
+        retryNote: undefined,
+        resumePoint: undefined,
+        workflow: undefined,
+        taskDir: undefined,
+        sourceRunSlug: undefined,
+        restartPoint: restartPoint,
+      },
     );
     const running = runner.claimNextTasks(1)[0];
     if (running === undefined) {
@@ -928,13 +972,15 @@ describe('task restart persistence and execution resolution', () => {
     runner.requeueTask(
       'nested-retry',
       ['failed'],
-      undefined,
-      'restart child review',
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      restartPoint,
+      {
+        startStep: undefined,
+        retryNote: 'restart child review',
+        resumePoint: undefined,
+        workflow: undefined,
+        taskDir: undefined,
+        sourceRunSlug: undefined,
+        restartPoint: restartPoint,
+      },
     );
     const pending = runner.listPendingTaskItems()[0]!;
     writeNestedWorkflows(projectDir, 'fix');
@@ -952,13 +998,15 @@ describe('task restart persistence and execution resolution', () => {
     runner.requeueTask(
       'nested-retry',
       ['failed'],
-      undefined,
-      'restart child review',
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      restartPoint,
+      {
+        startStep: undefined,
+        retryNote: 'restart child review',
+        resumePoint: undefined,
+        workflow: undefined,
+        taskDir: undefined,
+        sourceRunSlug: undefined,
+        restartPoint: restartPoint,
+      },
     );
     const pending = runner.listPendingTaskItems()[0]!;
     writeNestedSystemWorkflow(projectDir, 'review', false);
@@ -986,13 +1034,15 @@ describe('task restart persistence and execution resolution', () => {
     runner.requeueTask(
       'nested-retry',
       ['failed'],
-      undefined,
-      'tampered system restart',
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      restartPoint,
+      {
+        startStep: undefined,
+        retryNote: 'tampered system restart',
+        resumePoint: undefined,
+        workflow: undefined,
+        taskDir: undefined,
+        sourceRunSlug: undefined,
+        restartPoint: restartPoint,
+      },
     );
     const pending = runner.listPendingTaskItems()[0]!;
 
@@ -1014,13 +1064,15 @@ describe('task restart persistence and execution resolution', () => {
     runner.requeueTask(
       'nested-retry',
       ['failed'],
-      undefined,
-      'restart terminal call',
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      restartPoint,
+      {
+        startStep: undefined,
+        retryNote: 'restart terminal call',
+        resumePoint: undefined,
+        workflow: undefined,
+        taskDir: undefined,
+        sourceRunSlug: undefined,
+        restartPoint: restartPoint,
+      },
     );
     const pending = runner.listPendingTaskItems()[0]!;
     fs.rmSync(path.join(projectDir, '.takt', 'workflows', 'coding.yaml'));
@@ -1044,13 +1096,15 @@ describe('task restart persistence and execution resolution', () => {
     runner.requeueTask(
       'nested-retry',
       ['failed'],
-      undefined,
-      'restart terminal call',
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      restartPoint,
+      {
+        startStep: undefined,
+        retryNote: 'restart terminal call',
+        resumePoint: undefined,
+        workflow: undefined,
+        taskDir: undefined,
+        sourceRunSlug: undefined,
+        restartPoint: restartPoint,
+      },
     );
     const pending = runner.listPendingTaskItems()[0]!;
     const childPath = path.join(projectDir, '.takt', 'workflows', 'coding.yaml');
@@ -1174,13 +1228,15 @@ describe('task restart persistence and execution resolution', () => {
     runner.requeueTask(
       'nested-retry',
       ['failed'],
-      undefined,
-      undefined,
-      undefined,
-      'identity-root',
-      undefined,
-      undefined,
-      rightRestartPoint,
+      {
+        startStep: undefined,
+        retryNote: undefined,
+        resumePoint: undefined,
+        workflow: 'identity-root',
+        taskDir: undefined,
+        sourceRunSlug: undefined,
+        restartPoint: rightRestartPoint,
+      },
     );
     const persisted = runner.listPendingTaskItems()[0]?.data?.restart_point;
     if (persisted === undefined) {
@@ -1247,13 +1303,15 @@ describe('task restart persistence and execution resolution', () => {
     runner.requeueTask(
       'nested-retry',
       ['failed'],
-      undefined,
-      'restart root agent',
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      restartPoint,
+      {
+        startStep: undefined,
+        retryNote: 'restart root agent',
+        resumePoint: undefined,
+        workflow: undefined,
+        taskDir: undefined,
+        sourceRunSlug: undefined,
+        restartPoint: restartPoint,
+      },
     );
     const running = runner.claimNextTasks(1)[0];
     if (running === undefined) {
@@ -1298,13 +1356,15 @@ describe('task restart persistence and execution resolution', () => {
     runner.requeueTask(
       'nested-retry',
       ['failed'],
-      undefined,
-      'restart root call',
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      restartPoint,
+      {
+        startStep: undefined,
+        retryNote: 'restart root call',
+        resumePoint: undefined,
+        workflow: undefined,
+        taskDir: undefined,
+        sourceRunSlug: undefined,
+        restartPoint: restartPoint,
+      },
     );
     const running = runner.claimNextTasks(1)[0];
     if (running === undefined) {
@@ -1342,13 +1402,15 @@ describe('task restart persistence and execution resolution', () => {
     runner.requeueTask(
       'nested-retry',
       ['failed'],
-      undefined,
-      'restart selected grandchild target',
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      restartPoint,
+      {
+        startStep: undefined,
+        retryNote: 'restart selected grandchild target',
+        resumePoint: undefined,
+        workflow: undefined,
+        taskDir: undefined,
+        sourceRunSlug: undefined,
+        restartPoint: restartPoint,
+      },
     );
     const persistedYaml = parseYaml(
       fs.readFileSync(path.join(projectDir, '.takt', 'tasks.yaml'), 'utf-8'),

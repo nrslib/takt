@@ -278,8 +278,10 @@ describe('executeAndCompleteTask', () => {
 
     const workflowExecutionOptions = mockExecuteWorkflow.mock.calls[0]?.[3] as {
       restartPoint?: typeof restartPoint;
+      startStep?: string;
     };
     expect(workflowExecutionOptions.restartPoint).toEqual(restartPoint);
+    expect(workflowExecutionOptions.startStep).toBe('delegate');
   });
 
   it('Given silent task adapter options, When a task is executed, Then outputMode reaches executeWorkflow', async () => {

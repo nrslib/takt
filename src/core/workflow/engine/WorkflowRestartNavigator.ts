@@ -7,6 +7,7 @@ import type {
 } from '../../models/types.js';
 import { getWorkflowStepKind, isWorkflowCallStep } from '../step-kind.js';
 import {
+  getWorkflowReference,
   workflowEntriesMatch,
   workflowRestartEntryMatchesWorkflow,
 } from '../workflow-reference.js';
@@ -72,7 +73,7 @@ export class WorkflowRestartNavigator {
   ): WorkflowStep {
     if (!workflowRestartEntryMatchesWorkflow(entry, workflow)) {
       throw new Error(
-        `Restart path workflow "${entry.workflow}" does not match ${relationship} workflow "${workflow.name}"`,
+        `Restart path workflow "${entry.workflow}" (ref "${entry.workflow_ref}") does not match ${relationship} workflow "${workflow.name}" (ref "${getWorkflowReference(workflow)}")`,
       );
     }
     const targetStep = workflow.steps.find((step) => step.name === entry.step);

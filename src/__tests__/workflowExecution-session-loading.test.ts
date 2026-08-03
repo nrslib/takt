@@ -2,7 +2,8 @@
  * Tests: session loading behavior in executeWorkflow().
  *
  * Normal runs pass empty sessions to WorkflowEngine;
- * retry runs (startStep / retryNote / restartPoint) load persisted sessions.
+ * retry runs (startStep / retryNote / resumePoint) load persisted sessions,
+ * while stateless restartPoint runs start with empty sessions.
  */
 
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -481,7 +482,7 @@ describe('executeWorkflow session loading', () => {
     expect(mockLoadPersonaSessions).toHaveBeenCalledWith('/tmp/project', 'claude');
   });
 
-  it('should load persisted sessions when restartPoint is set (retry)', async () => {
+  it('should start with empty sessions when restartPoint requests a stateless retry', async () => {
     const restartPoint = {
       stack: [
         {
@@ -498,7 +499,9 @@ describe('executeWorkflow session loading', () => {
       restartPoint,
     });
 
-    expect(mockLoadPersonaSessions).toHaveBeenCalledWith('/tmp/project', 'claude');
+    expect(mockLoadPersonaSessions).not.toHaveBeenCalled();
+    expect(mockLoadWorktreeSessions).not.toHaveBeenCalled();
+    expect(MockWorkflowEngine.lastInstance.receivedOptions.initialSessions).toEqual({});
   });
 
   it('should load worktree sessions on retry when cwd differs from projectCwd', async () => {

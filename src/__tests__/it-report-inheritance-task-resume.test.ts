@@ -185,9 +185,11 @@ function prepareResumedTask(runner: TaskRunner, projectDir: string, mode: Resume
     taskWithSourceRun.name,
     ['completed'],
     mode,
-    undefined,
-    undefined,
-    resumePoint,
+    {
+      startStep: undefined,
+      retryNote: undefined,
+      resumePoint: resumePoint,
+    },
   );
 }
 

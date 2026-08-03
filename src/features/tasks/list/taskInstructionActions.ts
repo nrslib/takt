@@ -204,12 +204,15 @@ export async function instructBranch(
         target.name,
         ['completed', 'failed'],
         'instruct',
-        undefined,
-        executionRetryNote,
-        undefined,
-        undefined,
-        taskDir,
-        matchedSlug ?? undefined,
+        {
+          startStep: undefined,
+          retryNote: executionRetryNote,
+          resumePoint: undefined,
+          workflow: undefined,
+          taskDir,
+          sourceRunSlug: matchedSlug ?? undefined,
+          restartPoint: undefined,
+        },
       );
     } catch (error) {
       cleanupPreparedRetryTaskSpec(preparedSpec);
@@ -244,12 +247,15 @@ export async function instructBranch(
           runner.requeueTask(
             target.name,
             ['completed', 'failed'],
-            undefined,
-            executionRetryNote,
-            undefined,
-            resolveSelectedWorkflowOverride(target.data?.workflow, selectedWorkflow),
-            taskDir,
-            matchedSlug ?? undefined,
+            {
+              startStep: undefined,
+              retryNote: executionRetryNote,
+              resumePoint: undefined,
+              workflow: resolveSelectedWorkflowOverride(target.data?.workflow, selectedWorkflow),
+              taskDir,
+              sourceRunSlug: matchedSlug ?? undefined,
+              restartPoint: undefined,
+            },
           );
         } catch (error) {
           cleanupPreparedRetryTaskSpec(preparedSpec);

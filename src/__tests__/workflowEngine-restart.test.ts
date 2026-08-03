@@ -272,7 +272,9 @@ describe('WorkflowEngine root restart contract', () => {
     expect(() => new WorkflowEngine(root, tmpDir, 'mismatched root', {
       projectCwd: tmpDir,
       restartPoint,
-    })).toThrow();
+    })).toThrow(
+      'Restart path workflow "root" (ref "project:other") does not match root workflow "root" (ref "project:root")',
+    );
   });
 
   it('should reject a missing root step during construction', () => {
@@ -285,7 +287,7 @@ describe('WorkflowEngine root restart contract', () => {
     expect(() => new WorkflowEngine(makeRoot(), tmpDir, 'missing root step', {
       projectCwd: tmpDir,
       restartPoint,
-    })).toThrow();
+    })).toThrow('Restart path step "missing" does not match workflow "root"');
   });
 
   it('should reject a root step kind mismatch during construction', () => {
@@ -298,7 +300,7 @@ describe('WorkflowEngine root restart contract', () => {
     expect(() => new WorkflowEngine(makeRoot(), tmpDir, 'mismatched root kind', {
       projectCwd: tmpDir,
       restartPoint,
-    })).toThrow();
+    })).toThrow('Restart path step "selected" does not match workflow "root"');
   });
 
   it('should reject an explicit start step that differs from the restart root', () => {
@@ -312,7 +314,7 @@ describe('WorkflowEngine root restart contract', () => {
       projectCwd: tmpDir,
       startStep: 'before',
       restartPoint,
-    })).toThrow();
+    })).toThrow('Workflow start step "before" does not match restart path step "selected"');
   });
 
   it('should reject a restart path that continues after a root non-call step', () => {
@@ -324,6 +326,6 @@ describe('WorkflowEngine root restart contract', () => {
     expect(() => new WorkflowEngine(makeRoot(), tmpDir, 'invalid continuation', {
       projectCwd: tmpDir,
       restartPoint,
-    })).toThrow();
+    })).toThrow('Restart path cannot continue after non-call step "selected"');
   });
 });

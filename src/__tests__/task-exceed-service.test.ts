@@ -256,7 +256,7 @@ describe('TaskRunner - exceedTask', () => {
     expect(exceededTask.resume_point).toEqual(resumePoint);
   });
 
-  it('should replace a consumed restart point with the current exceeded checkpoint', () => {
+  it('should replace a consumed restart point when the task exceeds again', () => {
     writeRunningRestartRecord(testDir, {
       worktree_path: '/tmp/restart-worktree',
       branch: 'takt/restart-task',
@@ -313,7 +313,7 @@ describe('TaskRunner - exceedTask', () => {
     expect(exceededTask.exceeded_max_steps).toBe(1);
   });
 
-  it('should preserve the current exceeded checkpoint through requeue and claim', () => {
+  it('should preserve the current exceeded checkpoint when the task is requeued and claimed', () => {
     writeRunningRestartRecord(testDir);
     const stack = [
       { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },

@@ -31,6 +31,16 @@ type ClearedRetryTaskRecord = Omit<
   'start_step' | 'resume_point' | typeof TASK_RESTART_POINT_KEY | 'exceeded_current_iteration' | 'exceeded_max_steps'
 >;
 
+interface RetryTaskRecordOptions {
+  startStep?: string;
+  retryNote?: string;
+  resumePoint?: WorkflowResumePoint;
+  workflow?: string;
+  taskDir?: string;
+  resumeSource: RunResumeSource;
+  restartPoint?: WorkflowRestartPoint;
+}
+
 export function buildClaimedTaskRecord(task: TaskRecord): TaskRecord {
   return {
     ...task,
@@ -82,44 +92,42 @@ export function buildExceededTaskRecord(
 export function buildRetryTaskRecord(
   task: TaskRecord,
   status: Extract<TaskStatus, 'pending' | 'running'>,
-  startStep: string | undefined,
-  retryNote: string | undefined,
-  resumePoint: WorkflowResumePoint | undefined,
-  workflow: string | undefined,
-  taskDir: string | undefined,
-  resumeSource: RunResumeSource,
-  restartPoint?: WorkflowRestartPoint,
+  options: RetryTaskRecordOptions,
 ): TaskRecord {
-  if (resumePoint !== undefined && restartPoint !== undefined) {
+  if (options.resumePoint !== undefined && options.restartPoint !== undefined) {
     throw new Error('Retry task cannot own both resume_point and restart_point');
   }
-  if (startStep !== undefined && restartPoint !== undefined) {
+  if (options.startStep !== undefined && options.restartPoint !== undefined) {
     throw new Error('Retry task cannot own both start_step and restart_point');
   }
-  const taskWithoutSourceRunSlug = resumePoint === undefined
+  const taskWithoutSourceRunSlug = options.resumePoint === undefined
     ? clearRetryMetadata(task)
     : { ...task, [TASK_RESTART_POINT_KEY]: undefined };
   delete taskWithoutSourceRunSlug.source_run_slug;
-  const taskSpecSource = taskDir
-    ? { content: undefined, content_file: undefined, task_dir: taskDir }
+  const taskSpecSource = options.taskDir
+    ? { content: undefined, content_file: undefined, task_dir: options.taskDir }
     : {};
 
   return {
     ...taskWithoutSourceRunSlug,
-    ...(workflow ? { workflow } : {}),
+    ...(options.workflow ? { workflow: options.workflow } : {}),
     ...taskSpecSource,
     status,
     started_at: status === 'running' ? nowIso() : null,
     completed_at: null,
     owner_pid: status === 'running' ? process.pid : null,
     run_slug: undefined,
-    ...(resumeSource.sourceRunSlug ? { source_run_slug: resumeSource.sourceRunSlug } : {}),
-    resume_mode: resumeSource.resumeMode,
+    ...(options.resumeSource.sourceRunSlug
+      ? { source_run_slug: options.resumeSource.sourceRunSlug }
+      : {}),
+    resume_mode: options.resumeSource.resumeMode,
     failure: undefined,
-    start_step: startStep,
-    retry_note: retryNote,
-    resume_point: resumePoint,
-    ...(restartPoint === undefined ? {} : { [TASK_RESTART_POINT_KEY]: restartPoint }),
+    start_step: options.startStep,
+    retry_note: options.retryNote,
+    resume_point: options.resumePoint,
+    ...(options.restartPoint === undefined
+      ? {}
+      : { [TASK_RESTART_POINT_KEY]: options.restartPoint }),
   };
 }
 

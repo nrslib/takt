@@ -109,11 +109,7 @@ function createRestartEntry(
 }
 
 function serializeTaskRetryPathSegment(segment: string): string {
-  const serialized = JSON.stringify(segment);
-  if (serialized === undefined) {
-    throw new Error('Task retry path segment could not be serialized');
-  }
-  return sanitizeTerminalText(serialized);
+  return sanitizeTerminalText(JSON.stringify(segment));
 }
 
 export function formatTaskRetryPath(segments: readonly string[]): string {

@@ -1774,7 +1774,7 @@ describe('resolveTaskExecution', () => {
     branchExistsSpy.mockRestore();
   });
 
-  it('should sync project-local .takt resources for a reused worktree re-execution with only restart_point', async () => {
+  it('should sync project-local .takt resources when a reused worktree re-executes with only restart_point', async () => {
     const root = createTempProjectDir();
     configureIsolatedGlobalConfig(root);
     const worktreePath = path.join(root, '.takt', 'worktrees', 'existing-safe-worktree');

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
+  WorkflowCallStep,
   WorkflowConfig,
   WorkflowRestartPoint,
   WorkflowResumePoint,
@@ -40,13 +41,13 @@ function synthesizedAgentStep(name: string): WorkflowStep {
   return { ...agentStep(name), engineSynthesized: true };
 }
 
-function callStep(name: string, call: string): WorkflowStep {
+function callStep(name: string, call: string): WorkflowCallStep {
   return {
     name,
     kind: 'workflow_call',
     call,
     instruction: `${name} instruction`,
-  } as WorkflowStep;
+  };
 }
 
 function systemStep(name: string, effects?: WorkflowStep['effects']): WorkflowStep {
@@ -115,10 +116,11 @@ function rootResumePoint(step: string, kind: 'agent' | 'system'): WorkflowResume
   };
 }
 
+beforeEach(() => {
+  mockResolveWorkflowCallTarget.mockReset();
+});
+
 describe('task retry start browser contracts', () => {
-  beforeEach(() => {
-    mockResolveWorkflowCallTarget.mockReset();
-  });
 
   it('should select a grandchild restart with a complete stateless path', async () => {
     const grandchild = makeWorkflow({
@@ -328,6 +330,38 @@ describe('task retry start browser contracts', () => {
       'Restart from: "default" > "delegate" > "coding" > "child-agent-middle"',
       'Back to parent workflow',
     ]);
+  });
+
+  it('should default to the child initial step when the root preferred step has the same name', async () => {
+    const child = makeWorkflow({
+      name: 'coding',
+      ref: 'project:child',
+      callable: true,
+      initialStep: 'implement',
+      steps: [agentStep('review'), agentStep('implement')],
+    });
+    const root = makeWorkflow({
+      name: 'default',
+      ref: 'project:root',
+      steps: [callStep('delegate', 'coding'), agentStep('review')],
+    });
+    mockResolveWorkflowCallTarget.mockReturnValue(child);
+    let promptCount = 0;
+
+    const result = await selectTaskRetryStart(root, {
+      ...pathContext,
+      preferredRootStep: 'review',
+    }, async (_message, options, defaultValue) => {
+      promptCount += 1;
+      if (promptCount === 1) {
+        return options.find((option) => option.value.startsWith('open-child-'))!.value;
+      }
+      return defaultValue;
+    });
+
+    expect(result?.label).toBe(
+      'Restart from: "default" > "delegate" > "coding" > "implement"',
+    );
   });
 
   it('should bound a 250,000-step prompt to the current page', async () => {
@@ -678,5 +712,81 @@ describe('persisted task retry restart validation', () => {
 
     expect(() => validateTaskRetryRestartPoint(root, rootRestartPoint('plan'), pathContext))
       .toThrow();
+  });
+
+  it('should reject a restart path when a non-call middle step cannot lead to the terminal entry', () => {
+    const root = makeWorkflow({
+      name: 'default',
+      ref: 'project:root',
+      steps: [agentStep('plan')],
+    });
+    const restartPoint: WorkflowRestartPoint = {
+      stack: [
+        { workflow: 'default', workflow_ref: 'project:root', step: 'plan', kind: 'agent' },
+        { workflow: 'child', workflow_ref: 'project:child', step: 'finish', kind: 'agent' },
+      ],
+    };
+
+    expect(() => validateTaskRetryRestartPoint(root, restartPoint, pathContext))
+      .toThrow('Restart path cannot continue after non-call step "plan"');
+  });
+
+  it('should reject a nested restart path when the resolved child workflow is not callable', () => {
+    const root = makeWorkflow({
+      name: 'default',
+      ref: 'project:root',
+      steps: [callStep('delegate', 'coding')],
+    });
+    const child = makeWorkflow({
+      name: 'coding',
+      ref: 'project:child',
+      steps: [agentStep('finish')],
+    });
+    const restartPoint: WorkflowRestartPoint = {
+      stack: [
+        {
+          workflow: 'default',
+          workflow_ref: 'project:root',
+          step: 'delegate',
+          kind: 'workflow_call',
+          call_instance: 1,
+        },
+        { workflow: 'coding', workflow_ref: 'project:child', step: 'finish', kind: 'agent' },
+      ],
+    };
+    mockResolveWorkflowCallTarget.mockReturnValue(child);
+
+    expect(() => validateTaskRetryRestartPoint(root, restartPoint, pathContext))
+      .toThrow('workflow "coding" referenced by step "delegate" is not callable');
+  });
+
+  it('should reject a nested restart path when the child workflow_ref no longer matches', () => {
+    const root = makeWorkflow({
+      name: 'default',
+      ref: 'project:root',
+      steps: [callStep('delegate', 'coding')],
+    });
+    const child = makeWorkflow({
+      name: 'coding',
+      ref: 'project:child',
+      callable: true,
+      steps: [agentStep('finish')],
+    });
+    const restartPoint: WorkflowRestartPoint = {
+      stack: [
+        {
+          workflow: 'default',
+          workflow_ref: 'project:root',
+          step: 'delegate',
+          kind: 'workflow_call',
+          call_instance: 1,
+        },
+        { workflow: 'coding', workflow_ref: 'project:other-child', step: 'finish', kind: 'agent' },
+      ],
+    };
+    mockResolveWorkflowCallTarget.mockReturnValue(child);
+
+    expect(() => validateTaskRetryRestartPoint(root, restartPoint, pathContext))
+      .toThrow('Task retry restart path cannot be resolved at step "finish"');
   });
 });

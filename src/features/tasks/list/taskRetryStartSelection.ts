@@ -245,10 +245,13 @@ export async function selectTaskRetryStart(
         ? { description: 'Initial step' }
         : {}),
     }));
+    const preferredStep = frames.length === 1
+      ? options.preferredRootStep
+      : frame.level.workflow.initialStep;
     const selectedValue = await selectOption(
       `Start position — ${formatTaskRetryPath(frame.level.segments)} (page ${page.pageNumber}/${page.pageCount}):`,
       promptOptions,
-      getDefaultValue(actions, frames.length === 1 ? resumeAction : undefined, options.preferredRootStep),
+      getDefaultValue(actions, frames.length === 1 ? resumeAction : undefined, preferredStep),
     );
     if (selectedValue === null) {
       return null;

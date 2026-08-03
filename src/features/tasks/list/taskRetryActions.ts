@@ -78,10 +78,8 @@ function resolveRetryStartOwnership(
   selectedStart: TaskRetryStartSelection,
   workflowConfig: WorkflowConfig,
 ): RetryStartOwnership {
-  const rootEntry = selectedStart.kind === 'resume'
-    ? selectedStart.resumePoint.stack[0]!
-    : selectedStart.restartPoint.stack[0]!;
   if (selectedStart.kind === 'resume') {
+    const rootEntry = selectedStart.resumePoint.stack[0]!;
     return {
       startStep: rootEntry.step === workflowConfig.initialStep ? undefined : rootEntry.step,
       selectedResumePoint: selectedStart.resumePoint,
@@ -374,13 +372,15 @@ export async function requeueFailedTask(
   runner.requeueTask(
     task.name,
     ['failed'],
-    selection.startStep,
-    retryNote,
-    selection.selectedResumePoint,
-    selection.selectedWorkflowOverride,
-    undefined,
-    selection.matchedSlug ?? undefined,
-    selection.selectedRestartPoint,
+    {
+      startStep: selection.startStep,
+      retryNote,
+      resumePoint: selection.selectedResumePoint,
+      workflow: selection.selectedWorkflowOverride,
+      taskDir: undefined,
+      sourceRunSlug: selection.matchedSlug ?? undefined,
+      restartPoint: selection.selectedRestartPoint,
+    },
   );
 
   info(`Task "${sanitizeTerminalText(task.name)}" has been requeued.`);
@@ -452,13 +452,15 @@ export async function retryFailedTask(
         runner.requeueTask(
           task.name,
           ['failed'],
-          selection.startStep,
-          executionRetryNote,
-          selection.selectedResumePoint,
-          selection.selectedWorkflowOverride,
-          taskDir,
-          selection.matchedSlug ?? undefined,
-          selection.selectedRestartPoint,
+          {
+            startStep: selection.startStep,
+            retryNote: executionRetryNote,
+            resumePoint: selection.selectedResumePoint,
+            workflow: selection.selectedWorkflowOverride,
+            taskDir,
+            sourceRunSlug: selection.matchedSlug ?? undefined,
+            restartPoint: selection.selectedRestartPoint,
+          },
         );
       } catch (error) {
         cleanupPreparedRetryTaskSpec(preparedSpec);
@@ -474,13 +476,15 @@ export async function retryFailedTask(
         task.name,
         ['failed'],
         'retry',
-        selection.startStep,
-        executionRetryNote,
-        selection.selectedResumePoint,
-        selection.selectedWorkflowOverride,
-        taskDir,
-        selection.matchedSlug ?? undefined,
-        selection.selectedRestartPoint,
+        {
+          startStep: selection.startStep,
+          retryNote: executionRetryNote,
+          resumePoint: selection.selectedResumePoint,
+          workflow: selection.selectedWorkflowOverride,
+          taskDir,
+          sourceRunSlug: selection.matchedSlug ?? undefined,
+          restartPoint: selection.selectedRestartPoint,
+        },
       );
     } catch (error) {
       cleanupPreparedRetryTaskSpec(preparedSpec);
@@ -492,6 +496,7 @@ export async function retryFailedTask(
       name: task.name,
       worktreePath: selection.worktreePath,
       startStep: selection.startStep,
+      restartPoint: selection.selectedRestartPoint,
     });
 
     return executeAndCompleteTask(taskForExecution, runner, projectDir, agentOverrides);

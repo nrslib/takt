@@ -925,7 +925,7 @@ describe('TaskRunner (tasks.yaml)', () => {
     expect(file.tasks[0]?.retry_note).toEqual(expect.stringContaining('1/2'));
   });
 
-  it('should preserve an inherited nested restart path during auto-requeue', () => {
+  it('should preserve an inherited nested restart path when auto-requeue runs', () => {
     const restartPoint: WorkflowRestartPoint = {
       stack: [
         {
@@ -1211,7 +1211,14 @@ describe('TaskRunner (tasks.yaml)', () => {
   it('should keep manual requeue from incrementing auto_requeue_count', () => {
     writeTasksFile(testDir, [createFailedRecord({ auto_requeue_count: 1 })]);
 
-    runner.requeueTask('task-a', ['failed'], 'implement', 'manual retry note');
+    runner.requeueTask(
+      'task-a',
+      ['failed'],
+      {
+        startStep: 'implement',
+        retryNote: 'manual retry note',
+      },
+    );
 
     const file = loadTasksFile(testDir);
     expect(file.tasks[0]?.status).toBe('pending');
@@ -1222,7 +1229,14 @@ describe('TaskRunner (tasks.yaml)', () => {
   it('should persist source run provenance for manual requeue', () => {
     writeTasksFile(testDir, [createFailedRecord({ run_slug: '20260717-source-run' })]);
 
-    runner.requeueTask('task-a', ['failed'], 'fix', 'manual retry note');
+    runner.requeueTask(
+      'task-a',
+      ['failed'],
+      {
+        startStep: 'fix',
+        retryNote: 'manual retry note',
+      },
+    );
 
     const file = loadTasksFile(testDir);
     expect(file.tasks[0]?.source_run_slug).toBe('20260717-source-run');
@@ -1238,12 +1252,14 @@ describe('TaskRunner (tasks.yaml)', () => {
       execute: (service: TaskRetryService) => service.requeueTask(
         'task-a',
         ['failed'],
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        '20260717-explicit-run',
+        {
+          startStep: undefined,
+          retryNote: undefined,
+          resumePoint: undefined,
+          workflow: undefined,
+          taskDir: undefined,
+          sourceRunSlug: '20260717-explicit-run',
+        },
       ),
     },
     {
@@ -1255,12 +1271,14 @@ describe('TaskRunner (tasks.yaml)', () => {
         'task-a',
         ['failed'],
         'retry',
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        '20260717-explicit-run',
+        {
+          startStep: undefined,
+          retryNote: undefined,
+          resumePoint: undefined,
+          workflow: undefined,
+          taskDir: undefined,
+          sourceRunSlug: '20260717-explicit-run',
+        },
       ),
     },
     {
@@ -1361,21 +1379,37 @@ describe('TaskRunner (tasks.yaml)', () => {
       completedAt: new Date().toISOString(),
     });
 
-    runner.requeueTask(task.name, ['failed'], undefined, 'retry note', undefined, 'selected-workflow');
+    runner.requeueTask(
+      task.name,
+      ['failed'],
+      {
+        startStep: undefined,
+        retryNote: 'retry note',
+        resumePoint: undefined,
+        workflow: 'selected-workflow',
+      },
+    );
 
     const file = loadTasksFile(testDir);
     expect(file.tasks[0]?.workflow).toBe('selected-workflow');
     expect(file.tasks[0]?.retry_note).toBe('retry note');
   });
 
-  it('should replace an old restart path with a new top-level retry position', () => {
+  it('should replace an old restart path when a new top-level retry position is selected', () => {
     writeTasksFile(testDir, [createFailedRecord({
       workflow: 'default',
       restart_point: createRestartPoint('old-review'),
       resume_mode: 'retry',
     })]);
 
-    runner.requeueTask('task-a', ['failed'], 'implement', 'retry note');
+    runner.requeueTask(
+      'task-a',
+      ['failed'],
+      {
+        startStep: 'implement',
+        retryNote: 'retry note',
+      },
+    );
 
     const retriedTask = loadTasksFile(testDir).tasks[0];
     expect(retriedTask?.start_movement).toBe('implement');
@@ -1384,7 +1418,7 @@ describe('TaskRunner (tasks.yaml)', () => {
     expect(retriedTask?.resume_point).toBeUndefined();
   });
 
-  it('should replace an old restart path with a new nested retry position', () => {
+  it('should replace an old restart path when a new nested retry position is selected', () => {
     const nextRestartPoint = createRestartPoint('new-review');
     writeTasksFile(testDir, [createFailedRecord({
       workflow: 'default',
@@ -1395,13 +1429,15 @@ describe('TaskRunner (tasks.yaml)', () => {
     runner.requeueTask(
       'task-a',
       ['failed'],
-      undefined,
-      'retry note',
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      nextRestartPoint,
+      {
+        startStep: undefined,
+        retryNote: 'retry note',
+        resumePoint: undefined,
+        workflow: undefined,
+        taskDir: undefined,
+        sourceRunSlug: undefined,
+        restartPoint: nextRestartPoint,
+      },
     );
 
     const retriedTask = loadTasksFile(testDir).tasks[0];
@@ -1423,7 +1459,17 @@ describe('TaskRunner (tasks.yaml)', () => {
       completedAt: new Date().toISOString(),
     });
 
-    runner.requeueTask(task.name, ['failed'], undefined, 'retry note', undefined, undefined, '.takt/tasks/retry-task');
+    runner.requeueTask(
+      task.name,
+      ['failed'],
+      {
+        startStep: undefined,
+        retryNote: 'retry note',
+        resumePoint: undefined,
+        workflow: undefined,
+        taskDir: '.takt/tasks/retry-task',
+      },
+    );
 
     const file = loadTasksFile(testDir);
     expect(file.tasks[0]?.task_dir).toBe('.takt/tasks/retry-task');
@@ -1443,7 +1489,15 @@ describe('TaskRunner (tasks.yaml)', () => {
       completedAt: new Date().toISOString(),
     });
 
-    const restarted = runner.startReExecution(task.name, ['failed'], 'retry', 'implement', 'retry note');
+    const restarted = runner.startReExecution(
+      task.name,
+      ['failed'],
+      'retry',
+      {
+        startStep: 'implement',
+        retryNote: 'retry note',
+      },
+    );
 
     expect(restarted.status).toBe('running');
     expect(restarted.data?.workflow).toBe('default');
@@ -1476,11 +1530,13 @@ describe('TaskRunner (tasks.yaml)', () => {
       task.name,
       ['failed'],
       'retry',
-      undefined,
-      'retry note',
-      undefined,
-      undefined,
-      '.takt/tasks/retry-task',
+      {
+        startStep: undefined,
+        retryNote: 'retry note',
+        resumePoint: undefined,
+        workflow: undefined,
+        taskDir: '.takt/tasks/retry-task',
+      },
     );
 
     expect(restarted.status).toBe('running');
@@ -1507,11 +1563,13 @@ describe('TaskRunner (tasks.yaml)', () => {
       task.name,
       ['failed'],
       'retry',
-      undefined,
-      'retry note',
-      undefined,
-      'selected-workflow',
-      undefined,
+      {
+        startStep: undefined,
+        retryNote: 'retry note',
+        resumePoint: undefined,
+        workflow: 'selected-workflow',
+        taskDir: undefined,
+      },
     );
 
     expect(restarted.status).toBe('running');
@@ -1568,12 +1626,29 @@ describe('TaskRunner (tasks.yaml)', () => {
       completedAt: new Date().toISOString(),
     });
 
-    runner.requeueTask(task.name, ['failed'], 'implement', 'retry note', resumePoint);
+    runner.requeueTask(
+      task.name,
+      ['failed'],
+      {
+        startStep: 'implement',
+        retryNote: 'retry note',
+        resumePoint: resumePoint,
+      },
+    );
     let file = loadTasksFile(testDir);
     expect(file.tasks[0]?.start_movement).toBe('implement');
     expect(file.tasks[0]?.resume_point).toEqual(resumePoint);
 
-    const restarted = runner.startReExecution(task.name, ['pending'], 'retry', 'implement', 'retry note', resumePoint);
+    const restarted = runner.startReExecution(
+      task.name,
+      ['pending'],
+      'retry',
+      {
+        startStep: 'implement',
+        retryNote: 'retry note',
+        resumePoint: resumePoint,
+      },
+    );
     expect(restarted.data?.start_step).toBe('implement');
     expect(restarted.data?.resume_point).toEqual(resumePoint);
 
@@ -1594,9 +1669,11 @@ describe('TaskRunner (tasks.yaml)', () => {
     runner.requeueTask(
       'task-a',
       ['failed'],
-      undefined,
-      'retry note',
-      resumePoint,
+      {
+        startStep: undefined,
+        retryNote: 'retry note',
+        resumePoint: resumePoint,
+      },
     );
 
     const pending = runner.listPendingTaskItems()[0];
@@ -1623,9 +1700,11 @@ describe('TaskRunner (tasks.yaml)', () => {
       'task-a',
       ['failed'],
       'retry',
-      undefined,
-      'retry note',
-      resumePoint,
+      {
+        startStep: undefined,
+        retryNote: 'retry note',
+        resumePoint: resumePoint,
+      },
     );
 
     const persisted = loadTasksFile(testDir).tasks[0];

@@ -238,12 +238,15 @@ describe('instructBranch direct execution flow', () => {
       'done-task',
       ['completed', 'failed'],
       'instruct',
-      undefined,
-      '既存ノート\n\n追加指示A',
-      undefined,
-      undefined,
-      undefined,
-      undefined,
+      {
+        startStep: undefined,
+        retryNote: '既存ノート\n\n追加指示A',
+        resumePoint: undefined,
+        workflow: undefined,
+        taskDir: undefined,
+        sourceRunSlug: undefined,
+        restartPoint: undefined,
+      },
     );
     expect(mockExecuteAndCompleteTask).toHaveBeenCalled();
   });
@@ -267,12 +270,15 @@ describe('instructBranch direct execution flow', () => {
       'done-task',
       ['completed', 'failed'],
       'instruct',
-      undefined,
-      '追加指示A',
-      undefined,
-      undefined,
-      undefined,
-      '20260717-source-run',
+      {
+        startStep: undefined,
+        retryNote: '追加指示A',
+        resumePoint: undefined,
+        workflow: undefined,
+        taskDir: undefined,
+        sourceRunSlug: '20260717-source-run',
+        restartPoint: undefined,
+      },
     );
   });
 
@@ -306,12 +312,15 @@ describe('instructBranch direct execution flow', () => {
       'done-task',
       ['completed', 'failed'],
       'instruct',
-      undefined,
-      'Use [Image #1].',
-      undefined,
-      undefined,
-      '.takt/tasks/done-task',
-      undefined,
+      {
+        startStep: undefined,
+        retryNote: 'Use [Image #1].',
+        resumePoint: undefined,
+        workflow: undefined,
+        taskDir: '.takt/tasks/done-task',
+        sourceRunSlug: undefined,
+        restartPoint: undefined,
+      },
     );
     expect(cleanupAttachments).toHaveBeenCalledTimes(1);
   });
@@ -362,12 +371,15 @@ describe('instructBranch direct execution flow', () => {
     expect(mockRequeueTask).toHaveBeenCalledWith(
       'done-task',
       ['completed', 'failed'],
-      undefined,
-      'Use [Image #1].',
-      undefined,
-      'default',
-      '.takt/tasks/done-task',
-      undefined,
+      {
+        startStep: undefined,
+        retryNote: 'Use [Image #1].',
+        resumePoint: undefined,
+        workflow: 'default',
+        taskDir: '.takt/tasks/done-task',
+        sourceRunSlug: undefined,
+        restartPoint: undefined,
+      },
     );
     expect(mockPrepareTaskSpecDirectory).toHaveBeenCalledWith(
       '/project',
@@ -438,12 +450,15 @@ describe('instructBranch direct execution flow', () => {
     expect(mockRequeueTask).toHaveBeenCalledWith(
       'done-task',
       ['completed', 'failed'],
-      undefined,
-      'Use [Image #2].',
-      undefined,
-      'default',
-      '.takt/tasks/done-task',
-      undefined,
+      {
+        startStep: undefined,
+        retryNote: 'Use [Image #2].',
+        resumePoint: undefined,
+        workflow: 'default',
+        taskDir: '.takt/tasks/done-task',
+        sourceRunSlug: undefined,
+        restartPoint: undefined,
+      },
     );
     expect(mockPrepareTaskSpecDirectory).toHaveBeenCalledWith(
       '/project',
@@ -499,12 +514,15 @@ describe('instructBranch direct execution flow', () => {
       'done-task',
       ['completed', 'failed'],
       'instruct',
-      undefined,
-      'Use [Image #2].',
-      undefined,
-      undefined,
-      '.takt/tasks/done-task',
-      undefined,
+      {
+        startStep: undefined,
+        retryNote: 'Use [Image #2].',
+        resumePoint: undefined,
+        workflow: undefined,
+        taskDir: '.takt/tasks/done-task',
+        sourceRunSlug: undefined,
+        restartPoint: undefined,
+      },
     );
   });
 
@@ -859,12 +877,15 @@ describe('instructBranch direct execution flow', () => {
       'done-task',
       ['completed', 'failed'],
       'instruct',
-      undefined,
-      '追加指示A',
-      undefined,
-      undefined,
-      undefined,
-      undefined,
+      {
+        startStep: undefined,
+        retryNote: '追加指示A',
+        resumePoint: undefined,
+        workflow: undefined,
+        taskDir: undefined,
+        sourceRunSlug: undefined,
+        restartPoint: undefined,
+      },
     );
   });
 
@@ -1054,12 +1075,15 @@ describe('instructBranch direct execution flow', () => {
     expect(mockRequeueTask).toHaveBeenCalledWith(
       'done-task',
       ['completed', 'failed'],
-      undefined,
-      '追加指示A',
-      undefined,
-      'default',
-      undefined,
-      undefined,
+      {
+        startStep: undefined,
+        retryNote: '追加指示A',
+        resumePoint: undefined,
+        workflow: 'default',
+        taskDir: undefined,
+        sourceRunSlug: undefined,
+        restartPoint: undefined,
+      },
     );
     expect(mockStartReExecution).not.toHaveBeenCalled();
     expect(mockExecuteAndCompleteTask).not.toHaveBeenCalled();
@@ -1086,12 +1110,15 @@ describe('instructBranch direct execution flow', () => {
     expect(mockRequeueTask).toHaveBeenCalledWith(
       'done-task',
       ['completed', 'failed'],
-      undefined,
-      '追加指示A',
-      undefined,
-      'selected-workflow',
-      undefined,
-      undefined,
+      {
+        startStep: undefined,
+        retryNote: '追加指示A',
+        resumePoint: undefined,
+        workflow: 'selected-workflow',
+        taskDir: undefined,
+        sourceRunSlug: undefined,
+        restartPoint: undefined,
+      },
     );
   });
 
@@ -1116,12 +1143,15 @@ describe('instructBranch direct execution flow', () => {
     expect(mockRequeueTask).toHaveBeenCalledWith(
       'done-task',
       ['completed', 'failed'],
-      undefined,
-      '追加指示A',
-      undefined,
-      undefined,
-      undefined,
-      undefined,
+      {
+        startStep: undefined,
+        retryNote: '追加指示A',
+        resumePoint: undefined,
+        workflow: undefined,
+        taskDir: undefined,
+        sourceRunSlug: undefined,
+        restartPoint: undefined,
+      },
     );
   });
 
@@ -1143,12 +1173,15 @@ describe('instructBranch direct execution flow', () => {
     expect(mockRequeueTask).toHaveBeenCalledWith(
       'done-task',
       ['completed', 'failed'],
-      undefined,
-      '既存ノート\n\n追加指示A',
-      undefined,
-      'default',
-      undefined,
-      undefined,
+      {
+        startStep: undefined,
+        retryNote: '既存ノート\n\n追加指示A',
+        resumePoint: undefined,
+        workflow: 'default',
+        taskDir: undefined,
+        sourceRunSlug: undefined,
+        restartPoint: undefined,
+      },
     );
   });
 });

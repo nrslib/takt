@@ -38,7 +38,7 @@ afterEach(() => {
 });
 
 describe('workflow-reference', () => {
-  it('Restart entry は workflow 名と同じ canonical ref も明示して保存する', () => {
+  it('should store the canonical ref when a restart entry uses the workflow name', () => {
     const workflow = normalizeWorkflowConfig({
       name: 'default',
       initial_step: 'review',
@@ -53,7 +53,7 @@ describe('workflow-reference', () => {
     });
   });
 
-  it('Restart identity は workflow 名が同じでも別 opaque ref を拒否する', () => {
+  it('should distinguish restart identity when opaque refs differ for the same workflow name', () => {
     const workflow = attachWorkflowOpaqueRef(normalizeWorkflowConfig({
       name: 'shared',
       initial_step: 'review',
@@ -62,13 +62,19 @@ describe('workflow-reference', () => {
 
     expect(workflowRestartEntryMatchesWorkflow({
       workflow: 'shared',
+      workflow_ref: 'project:shared-a',
+      step: 'review',
+      kind: 'agent',
+    }, workflow)).toBe(true);
+    expect(workflowRestartEntryMatchesWorkflow({
+      workflow: 'shared',
       workflow_ref: 'project:shared-b',
       step: 'review',
       kind: 'agent',
     }, workflow)).toBe(false);
   });
 
-  it('Resume entry は旧データの workflow_ref 欠落時に workflow 名で照合する', () => {
+  it('should match by workflow name when a legacy resume entry lacks workflow_ref', () => {
     const workflow = attachWorkflowOpaqueRef(normalizeWorkflowConfig({
       name: 'shared',
       initial_step: 'review',
