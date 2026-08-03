@@ -2507,9 +2507,12 @@ describe('TAKT ACP agent adapter', () => {
     });
   });
 
-  it('should deny workflow AskUserQuestion when ACP elicitation is cancelled', async () => {
+  it.each([
+    { action: 'cancel' },
+    { action: 'decline' },
+  ])('should deny workflow AskUserQuestion when ACP elicitation responds with $action', async ({ action }) => {
     const sendSessionUpdate = vi.fn();
-    const createElicitation = vi.fn().mockResolvedValue({ action: 'cancel' });
+    const createElicitation = vi.fn().mockResolvedValue({ action });
     const runWorkflowExecution = vi.fn(async (request) => {
       await expect(request.onAskUserQuestion?.({
         questions: [{ question: 'Proceed?' }],
@@ -2551,7 +2554,7 @@ describe('TAKT ACP agent adapter', () => {
       event: {
         type: 'tool_completed',
         toolCallId: 'confirmation-1',
-        message: 'Confirmation cancel',
+        message: `Confirmation ${action}`,
         isError: true,
       },
     });
