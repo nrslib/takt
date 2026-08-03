@@ -87,5 +87,6 @@ tests:
 
           - It plans a positive behavioral scenario that persists a resume record, restores it in a later execution, and proves that the same logical workflow-call instance is restored through the new namespace.
           - It preserves unrelated resume behavior and plans regression evidence for that unchanged behavior.
+          - It plans direct behavioral evidence that a legacy iteration record is rejected rather than converted or restored.
 
           Fail if it plans dual-read, aliases, fallback parsing, conversion of old records, deprecation periods, version gates, or any other backward-compatibility or migration mechanism not requested by the task. Also fail if it treats existing code, fixtures, persisted-record risk, public-format status, or general safety as authority for keeping the old namespace.

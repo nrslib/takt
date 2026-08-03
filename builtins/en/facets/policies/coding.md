@@ -641,7 +641,7 @@ Verification approach:
 
 ## Contract Replacement and Compatibility or Migration
 
-When replacing a contract, migrate current consumers to the new contract and remove the superseded path. Consumer migration is not backward compatibility. Legacy support that accepts, translates, or retains a superseded contract may be added or retained only when the requirement source explicitly requires it, regardless of whether the old and new contracts coexist.
+When replacing a contract, migrate current consumers to the new contract and remove the superseded path except for portions the requirement source explicitly retains as legacy support. Consumer migration is not backward compatibility. Legacy support that accepts, translates, or retains a superseded contract may be added or retained only when the requirement source explicitly requires it, regardless of whether the old and new contracts coexist.
 
 | Criteria | Judgment |
 |----------|----------|

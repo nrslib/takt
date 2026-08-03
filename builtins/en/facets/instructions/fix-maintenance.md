@@ -1,4 +1,4 @@
-Use reports in the Report Directory and fix reviewer findings within the causally related scope while preserving existing contracts outside the requested change scope. Migrate consumers of a replaced contract to the new contract and remove the old path; do not add or retain old-format production, reading, aliases, conversion, upcasters, fallback, backfill, data migration, or rebuilds without an explicit requirement-source mandate.
+Use reports in the Report Directory and fix reviewer findings within the causally related scope while preserving existing contracts outside the requested change scope. Migrate consumers of a replaced contract to the new contract and remove the old path except for portions the requirement source explicitly retains as legacy support. Do not add or retain old-format production, reading, aliases, conversion, upcasters, fallback, backfill, data migration, or rebuilds without an explicit requirement-source mandate.
 
 **Fix principles:**
 - When a finding includes a "suggested fix", follow it rather than inventing your own workaround

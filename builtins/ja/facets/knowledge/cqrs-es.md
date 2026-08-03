@@ -345,7 +345,7 @@ data class OrderCancelledEvent(
 | 責務 | 置き場所 |
 |------|----------|
 | 現行イベントの意味とフィールド | イベント型 |
-| 要求された履歴payloadの読み替え | upcaster / migration 層 |
+| 要求された履歴payloadの読み替え | event-store 復元境界の upcaster |
 | イベント再生による状態復元 | Aggregate の `apply` |
 | 履歴payloadから現行イベントへ変換できることの保証 | upcaster テスト |
 

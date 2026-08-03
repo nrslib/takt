@@ -345,7 +345,7 @@ Responsibilities in event evolution:
 | Responsibility | Location |
 |----------------|----------|
 | Current event meaning and fields | Event type |
-| Required historical-payload translation | Upcaster / migration layer |
+| Required historical-payload translation | Upcaster at the event-store restoration boundary |
 | State restoration from event replay | Aggregate `apply` |
 | Guarantee conversion from historical payloads to current events | Upcaster tests |
 

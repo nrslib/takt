@@ -246,7 +246,7 @@ Verification approach:
 Legacy support criteria:
 - Unless the requirement source explicitly requires legacy-value support, backward compatibility, or old-data migration, legacy support is REJECT
 - Do not add `.transform()`, `LEGACY_*_MAP`, `@deprecated`, aliases, upcasters, fallback, backfill, data migration, or rebuilds that support a superseded contract, even when the old and new contracts do not coexist
-- Support only new values and keep it simple
+- When the requirement source does not explicitly require legacy support, support only new values and keep it simple
 - Existing uses, persisted data, or public or released status are impact evidence, not authority to add or retain compatibility
 
 ### Over-Abstracting with Function Objects
@@ -386,8 +386,8 @@ Legacy support to evaluate only when the requirement source explicitly requires 
 | During data migration | In the middle of DB schema migration | Retain only when the requirement source defines the migration period and old path |
 
 Decision criteria:
-1. Does the requirement source explicitly require backward compatibility, migration, or coexistence? -> If not, remove the old path and migrate consumers to the new path
-2. What uses, persisted data, and publication scope exist? -> Use them to identify impact and migration targets; do not create a compatibility requirement from them
+1. Does the requirement source explicitly require backward compatibility, legacy support, migration support, or coexistence? -> If not, remove the old path and migrate consumers to the new path
+2. What uses, persisted data, and publication scope exist? -> Use them to identify impact and current-consumer migration targets. Treat persisted-data backfill, data migration, and other legacy support as targets only when the requirement source explicitly requires them
 3. Does the code match the explicitly required compatibility scope and end condition? -> Remove it when outside the scope or after the condition ends
 
 When AI says "for backward compatibility", require the explicit source location. Do not retain it based only on an implementer's or reviewer's safety judgment.
