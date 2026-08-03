@@ -64,6 +64,10 @@ const WorkflowCallArgsRawSchema = z.record(
   z.string().min(1),
   z.union([WorkflowFacetRefValueSchema, WorkflowParamReferenceRawSchema]),
 );
+const WorkflowCallVarsRawSchema = z.record(
+  z.string().regex(/^[A-Za-z_][A-Za-z0-9_.-]*$/),
+  z.union([z.string(), z.number().finite(), z.boolean()]),
+);
 const WorkflowCallFindingContractAuthoritySchema = z.literal('terminal_adjudication');
 
 const WorkflowStepProviderOptionsSchema = StepProviderOptionsObjectSchema.extend({
@@ -417,6 +421,7 @@ const WorkflowCallParallelSubStepRawSchema = z.object({
   call: WorkflowReferenceOrParamSchema,
   overrides: WorkflowCallOverridesRawSchema.optional(),
   args: WorkflowCallArgsRawSchema.optional(),
+  vars: WorkflowCallVarsRawSchema.optional(),
   finding_contract_authority: WorkflowCallFindingContractAuthoritySchema.optional(),
   description: z.string().optional(),
   session_key: z.never().optional(),
@@ -523,6 +528,7 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
     call: WorkflowReferenceOrParamSchema.optional(),
     overrides: WorkflowCallOverridesRawSchema.optional(),
     args: WorkflowCallArgsRawSchema.optional(),
+    vars: WorkflowCallVarsRawSchema.optional(),
     finding_contract_authority: WorkflowCallFindingContractAuthoritySchema.optional(),
     session: z.enum(WORKFLOW_SESSION_MODES).optional(),
     persona: WorkflowPersonaRefOrParamSchema.optional(),
@@ -652,6 +658,14 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
       });
     }
 
+    if (data.vars !== undefined && stepKind !== 'workflow_call') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['vars'],
+        message: 'Only workflow_call steps can declare "vars"',
+      });
+    }
+
     if (data.finding_contract_authority !== undefined && stepKind !== 'workflow_call') {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -769,8 +783,20 @@ export const LoopMonitorJudgeSchema = z.object({
 /** Loop monitor configuration schema */
 export const LoopMonitorSchema = z.object({
   cycle: z.array(z.string().min(1)).min(2),
+  ignore_steps: z.array(z.string().min(1)).min(1).optional(),
   threshold: z.number().int().positive().optional().default(3),
   judge: LoopMonitorJudgeSchema,
+}).superRefine((monitor, ctx) => {
+  const cycleSteps = new Set(monitor.cycle);
+  for (const [index, step] of (monitor.ignore_steps ?? []).entries()) {
+    if (cycleSteps.has(step)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['ignore_steps', index],
+        message: `ignored step "${step}" cannot also be part of the monitored cycle`,
+      });
+    }
+  }
 });
 
 /** Interactive mode schema for workflow-level default */

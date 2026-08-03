@@ -103,6 +103,7 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
+      provider: 'mock',
       onIterationLimit,
     });
 
@@ -145,6 +146,7 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
+      provider: 'mock',
       onIterationLimit,
     });
 
@@ -154,6 +156,58 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
     // Then: engine completed because limit was extended (plan+limit check+implement → COMPLETE)
     expect(state.status).toBe('completed');
     expect(onIterationLimit).toHaveBeenCalledOnce();
+  });
+
+  it('should apply an extended task limit before executing the resumed step', async () => {
+    const config: WorkflowConfig = {
+      name: 'test',
+      maxSteps: 1,
+      initialStep: 'implement',
+      steps: [makeStep('implement', {
+        provider: undefined,
+        rules: [makeRule('done', 'COMPLETE')],
+      })],
+    };
+    const onIterationLimit = vi.fn().mockResolvedValueOnce(1);
+    engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      startStep: 'implement',
+      initialIteration: 1,
+      onIterationLimit,
+    });
+
+    const state = await engine.run();
+
+    expect(onIterationLimit).toHaveBeenCalledWith(expect.objectContaining({
+      maxSteps: 1,
+      currentIteration: 1,
+    }));
+    expect(state.iteration).toBe(2);
+  });
+
+  it('should prefer the task maxStepsOverride when resuming', async () => {
+    const config: WorkflowConfig = {
+      name: 'test',
+      maxSteps: 1,
+      initialStep: 'implement',
+      steps: [makeStep('implement', {
+        provider: undefined,
+        rules: [makeRule('done', 'COMPLETE')],
+      })],
+    };
+    const onIterationLimit = vi.fn();
+    engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      startStep: 'implement',
+      initialIteration: 1,
+      maxStepsOverride: 3,
+      onIterationLimit,
+    });
+
+    const state = await engine.run();
+
+    expect(onIterationLimit).not.toHaveBeenCalled();
+    expect(state.iteration).toBe(2);
   });
 
   it('should continue without calling onIterationLimit when iteration limit is ignored', async () => {
@@ -185,6 +239,7 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
+      provider: 'mock',
       onIterationLimit,
       ignoreIterationLimit: true,
     } as never);
@@ -236,6 +291,7 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
+      provider: 'mock',
       onIterationLimit,
     });
     engine.on('iteration:limit', (iteration, maxSteps) => {
@@ -283,6 +339,7 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
+      provider: 'mock',
       onIterationLimit,
     });
 
@@ -319,6 +376,7 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
 
     const loopEngine = new WorkflowEngine(loopConfig, tmpDir, 'loop task', {
       projectCwd: tmpDir,
+      provider: 'mock',
       ignoreIterationLimit: true,
     });
     const loopAbort = vi.fn();
@@ -349,6 +407,7 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
 
     const blockedEngine = new WorkflowEngine(blockedConfig, tmpDir, 'blocked task', {
       projectCwd: tmpDir,
+      provider: 'mock',
       ignoreIterationLimit: true,
     });
     const blockedAbort = vi.fn();
@@ -368,6 +427,7 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
 
     const errorEngine = new WorkflowEngine(blockedConfig, tmpDir, 'error task', {
       projectCwd: tmpDir,
+      provider: 'mock',
       ignoreIterationLimit: true,
     });
     const errorAbort = vi.fn();
@@ -384,6 +444,7 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
     vi.mocked(runAgent).mockRejectedValueOnce(new Error('runtime exploded'));
     const runtimeEngine = new WorkflowEngine(blockedConfig, tmpDir, 'runtime task', {
       projectCwd: tmpDir,
+      provider: 'mock',
       ignoreIterationLimit: true,
     });
     const runtimeAbort = vi.fn();
@@ -398,6 +459,7 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
 
     const interruptEngine = new WorkflowEngine(blockedConfig, tmpDir, 'interrupt task', {
       projectCwd: tmpDir,
+      provider: 'mock',
       ignoreIterationLimit: true,
     });
     const interruptAbort = vi.fn();
@@ -442,6 +504,7 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
+      provider: 'mock',
       onIterationLimit,
     });
 
@@ -488,6 +551,7 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
+      provider: 'mock',
       onIterationLimit,
     });
 
@@ -527,6 +591,7 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
+      provider: 'mock',
       onIterationLimit: async (request) => {
         eventOrder.push('onIterationLimit');
         return onIterationLimit(request);
@@ -587,6 +652,7 @@ describe('WorkflowEngine: initialIteration option', () => {
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
+      provider: 'mock',
       initialIteration: 30,
     });
 
@@ -620,6 +686,7 @@ describe('WorkflowEngine: initialIteration option', () => {
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
+      provider: 'mock',
     });
 
     // When: engine runs one step
@@ -647,6 +714,7 @@ describe('WorkflowEngine: initialIteration option', () => {
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
+      provider: 'mock',
       initialIteration: 30,
       onIterationLimit,
     });
@@ -693,6 +761,7 @@ describe('WorkflowEngine: initialIteration option', () => {
 
     engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
+      provider: 'mock',
       initialIteration: 30,
       onIterationLimit,
     });

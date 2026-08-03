@@ -74,6 +74,10 @@ export class CycleDetector {
   private checkMonitor(monitor: LoopMonitorConfig, nextStep: string): CycleCheckResult {
     const { cycle, threshold } = monitor;
     const cycleLen = cycle.length;
+    const ignoredSteps = new Set(monitor.ignoreSteps ?? []);
+    const relevantHistory = ignoredSteps.size === 0
+      ? this.history
+      : this.history.filter((step) => !ignoredSteps.has(step));
 
     // A completed cycle is only a loop when the natural transition is about
     // to enter the same cycle again. If the workflow is already leaving the
@@ -84,25 +88,25 @@ export class CycleDetector {
 
     // The cycle's last step must match the most recent step
     const lastStep = cycle[cycleLen - 1];
-    if (this.history[this.history.length - 1] !== lastStep) {
+    if (relevantHistory[relevantHistory.length - 1] !== lastStep) {
       return { triggered: false, cycleCount: 0 };
     }
 
     // Need at least threshold * cycleLen entries to check
     const requiredLen = threshold * cycleLen;
-    if (this.history.length < requiredLen) {
+    if (relevantHistory.length < requiredLen) {
       return { triggered: false, cycleCount: 0 };
     }
 
     // Count complete cycles from the end of history backwards
     let cycleCount = 0;
-    let pos = this.history.length;
+    let pos = relevantHistory.length;
 
     while (pos >= cycleLen) {
       // Check if the last cycleLen entries match the cycle pattern
       let matches = true;
       for (let i = 0; i < cycleLen; i++) {
-        if (this.history[pos - cycleLen + i] !== cycle[i]) {
+        if (relevantHistory[pos - cycleLen + i] !== cycle[i]) {
           matches = false;
           break;
         }

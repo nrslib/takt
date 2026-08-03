@@ -17,6 +17,11 @@
 | Test strategy (unit/integration/E2E) | ✅ | - |
 | Contract input location (body/query/path) | ✅ | - |
 
+## Problem-Family Completion Sweep
+| family_tag / changed contract | Invariant or root cause | Definition, production, validation | Consumption, persistence, reinjection | Failure, interruption, retry, resume, parallel, auxiliary entries | Mocks, fixtures, test doubles | Unchecked paths | Result |
+|-------------------------------|-------------------------|------------------------------------|---------------------------------------|--------------------------------------------------------------------------|------------------------------|-----------------|--------|
+| {problem family or contract reviewed} | {condition to preserve} | {locations checked} | {locations checked} | {paths checked} | {test assets checked} | {none or reason unchecked} | {no issue / finding number} |
+
 ## Current Iteration Findings (new)
 | # | finding_id | family_tag | Category | Location | Issue | Fix Suggestion |
 |---|------------|------------|----------|----------|-------|----------------|
@@ -53,5 +58,6 @@
 ```
 
 **Cognitive load reduction rules:**
-- APPROVE: Summary and unverified scope only (8 lines or fewer)
+- APPROVE with no resolved findings: Summary, unverified scope, and only the checked criteria and verification evidence required for a follow-up review (concisely aggregated)
+- APPROVE with resolved findings: Summary, Resolved Findings, unverified scope, and only the checked criteria and verification evidence required for a follow-up review (concisely aggregated)
 - REJECT: Include every verified finding in tables and aggregate locations with the same cause

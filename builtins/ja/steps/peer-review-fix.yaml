@@ -5,6 +5,9 @@ params:
   fix_knowledge:
     type: facet_ref[]
     facet_kind: knowledge
+  fix_instruction:
+    type: facet_ref
+    facet_kind: instruction
 name: fix
 tags:
   - coding
@@ -18,7 +21,8 @@ provider_options:
   extends: edit
 required_permission_mode: edit
 pass_previous_response: false
-instruction: apply-fix-plan
+instruction:
+  $param: fix_instruction
 output_contracts:
   report:
     - name: fix-report.md

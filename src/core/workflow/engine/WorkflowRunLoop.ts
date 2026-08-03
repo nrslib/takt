@@ -729,8 +729,12 @@ async function runWorkflowToCompletionCore(deps: WorkflowRunLoopDeps): Promise<W
       break;
     }
 
+    const step = deps.getStep(deps.state.currentStep);
+    const consumesIterationBudget = getWorkflowStepKind(step) !== 'workflow_call';
     const maxSteps = deps.getMaxSteps();
     if (
+      consumesIterationBudget
+      &&
       deps.options.ignoreIterationLimit !== true
       && typeof maxSteps === 'number'
       && deps.state.iteration >= maxSteps
@@ -753,7 +757,6 @@ async function runWorkflowToCompletionCore(deps: WorkflowRunLoopDeps): Promise<W
       break;
     }
 
-    const step = deps.getStep(deps.state.currentStep);
     const userInputRuntimeAbort = validateUserInputRuntime(deps, step);
     if (userInputRuntimeAbort) {
       abort = userInputRuntimeAbort;
@@ -770,7 +773,9 @@ async function runWorkflowToCompletionCore(deps: WorkflowRunLoopDeps): Promise<W
       break;
     }
 
-    deps.state.iteration++;
+    if (consumesIterationBudget) {
+      deps.state.iteration++;
+    }
     const isDelegated = isDelegatedWorkflowStep(step);
     const activeIteration = deps.state.iteration;
     const baseStepRuntime = deps.resolveRuntimeForStep(step);
@@ -816,68 +821,75 @@ async function runWorkflowToCompletionCore(deps: WorkflowRunLoopDeps): Promise<W
       deps.getCurrentWorkflowStack(),
     );
     const providerInfo = deps.resolveStepProviderModel(executionStep, stepRuntime);
-    deps.emit(
-      'step:start',
-      executionStep,
-      activeIteration,
-      stepInstruction,
-      providerInfo,
-      deps.getWorkflowName(),
-      step.name,
-      stepIteration,
-      stepEventWorkflowStack,
-      deps.getFindingScopeIdentity(),
-      deps.getFindingIds(),
-    );
+    if (consumesIterationBudget) {
+      deps.emit(
+        'step:start',
+        executionStep,
+        activeIteration,
+        stepInstruction,
+        providerInfo,
+        deps.getWorkflowName(),
+        step.name,
+        stepIteration,
+        stepEventWorkflowStack,
+        deps.getFindingScopeIdentity(),
+        deps.getFindingIds(),
+      );
+    }
 
     try {
       const startedAt = Date.now();
-      const result = await runWithStepSpan({
-        enabled: deps.options.observability?.enabled === true,
-        runId: deps.options.observabilityRunId,
-        workflowName: deps.getWorkflowName(),
-        step: executionStep,
-        iteration: activeIteration,
-        stepIteration,
-        instruction: stepInstruction,
-        workflowStack: stepEventWorkflowStack,
-        sanitizeText: deps.options.sanitizeObservabilityText,
-        providerInfo,
-        getFinalStepIteration: () => deps.state.stepIterations.get(step.name),
-        traceTaskMetadata: deps.options.traceTaskMetadata,
-      }, () => deps.runStep(
+      const executeStep = () => deps.runStep(
         step,
         prebuiltInstruction,
         stepRuntime,
         stepIteration,
         preparedExecution,
         workflowCallExecution,
-      ));
+      );
+      const result = consumesIterationBudget
+        ? await runWithStepSpan({
+            enabled: deps.options.observability?.enabled === true,
+            runId: deps.options.observabilityRunId,
+            workflowName: deps.getWorkflowName(),
+            step: executionStep,
+            iteration: activeIteration,
+            stepIteration,
+            instruction: stepInstruction,
+            workflowStack: stepEventWorkflowStack,
+            sanitizeText: deps.options.sanitizeObservabilityText,
+            providerInfo,
+            getFinalStepIteration: () => deps.state.stepIterations.get(step.name),
+            traceTaskMetadata: deps.options.traceTaskMetadata,
+          }, executeStep)
+        : await executeStep();
       if (workflowInterruptRequested(deps)) {
         abort = abortInterruptedWorkflow(deps);
         break;
       }
       const { response, instruction, providerInfo: resultProviderInfo } = result;
       const completedProviderInfo = resultProviderInfo ?? providerInfo;
-      recordNormalRoutingResult(deps, step, completedProviderInfo, response);
-      emitNormalRoutingDecision(
-        deps,
-        step,
-        response,
-        instruction,
-        completedProviderInfo,
-        Math.max(0, Date.now() - startedAt),
-        activeIteration,
-      );
-      settleFallbackAttempt(deps.state, stepRuntime, response.status);
-      deps.emit(
-        'step:complete',
-        executionStep,
-        response,
-        instruction,
-        step.name,
-        stepEventWorkflowStack,
-      );
+      if (consumesIterationBudget) {
+        recordNormalRoutingResult(deps, step, completedProviderInfo, response);
+        emitNormalRoutingDecision(
+          deps,
+          step,
+          response,
+          instruction,
+          completedProviderInfo,
+          Math.max(0, Date.now() - startedAt),
+          activeIteration,
+        );
+        settleFallbackAttempt(deps.state, stepRuntime, response.status);
+        deps.emit(
+          'step:complete',
+          executionStep,
+          response,
+          instruction,
+          step.name,
+          stepEventWorkflowStack,
+        );
+      }
 
       if (response.status === 'rate_limited') {
         const terminalOperation = result.terminalOperation ?? {
@@ -1103,7 +1115,9 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
     };
   }
 
-  deps.state.iteration++;
+  if (getWorkflowStepKind(step) !== 'workflow_call') {
+    deps.state.iteration++;
+  }
   const activeIteration = deps.state.iteration;
   const isDelegated = isDelegatedWorkflowStep(step);
   const baseStepRuntime = deps.resolveRuntimeForStep(step);
@@ -1140,43 +1154,48 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
       : '');
   const providerInfo = deps.resolveStepProviderModel(executionStep, stepRuntime);
   const startedAt = Date.now();
-  const result = await runWithStepSpan({
-    enabled: deps.options.observability?.enabled === true,
-    runId: deps.options.observabilityRunId,
-    workflowName: deps.getWorkflowName(),
-    step: executionStep,
-    iteration: activeIteration,
-    stepIteration,
-    instruction: stepInstruction,
-    workflowStack: deps.getCurrentWorkflowStack(),
-    sanitizeText: deps.options.sanitizeObservabilityText,
-    providerInfo,
-    getFinalStepIteration: () => deps.state.stepIterations.get(step.name),
-    traceTaskMetadata: deps.options.traceTaskMetadata,
-  }, () => deps.runStep(
+  const executeStep = () => deps.runStep(
     step,
     prebuiltInstruction,
     stepRuntime,
     stepIteration,
     preparedExecution,
     workflowCallExecution,
-  ));
+  );
+  const result = getWorkflowStepKind(step) === 'workflow_call'
+    ? await executeStep()
+    : await runWithStepSpan({
+        enabled: deps.options.observability?.enabled === true,
+        runId: deps.options.observabilityRunId,
+        workflowName: deps.getWorkflowName(),
+        step: executionStep,
+        iteration: activeIteration,
+        stepIteration,
+        instruction: stepInstruction,
+        workflowStack: deps.getCurrentWorkflowStack(),
+        sanitizeText: deps.options.sanitizeObservabilityText,
+        providerInfo,
+        getFinalStepIteration: () => deps.state.stepIterations.get(step.name),
+        traceTaskMetadata: deps.options.traceTaskMetadata,
+      }, executeStep);
   if (workflowInterruptRequested(deps)) {
     return buildInterruptedIterationResult(deps, step, loopCheck.isLoop);
   }
   const { response, providerInfo: resultProviderInfo } = result;
   const completedProviderInfo = resultProviderInfo ?? providerInfo;
-  recordNormalRoutingResult(deps, step, completedProviderInfo, response);
-  emitNormalRoutingDecision(
-    deps,
-    step,
-    response,
-    result.instruction,
-    completedProviderInfo,
-    Math.max(0, Date.now() - startedAt),
-    activeIteration,
-  );
-  settleFallbackAttempt(deps.state, stepRuntime, response.status);
+  if (getWorkflowStepKind(step) !== 'workflow_call') {
+    recordNormalRoutingResult(deps, step, completedProviderInfo, response);
+    emitNormalRoutingDecision(
+      deps,
+      step,
+      response,
+      result.instruction,
+      completedProviderInfo,
+      Math.max(0, Date.now() - startedAt),
+      activeIteration,
+    );
+    settleFallbackAttempt(deps.state, stepRuntime, response.status);
+  }
 
   if (response.status === 'blocked') {
     const abort = abortWorkflow(deps, 'blocked', 'Workflow blocked and no user input provided');

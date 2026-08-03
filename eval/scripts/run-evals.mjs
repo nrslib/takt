@@ -6,7 +6,13 @@
  * Usage: node eval/scripts/run-evals.mjs [suite...] [--promptfoo-flags...]
  * Suites: coding, arch, antipattern, frontend, cqrs, rescan, rescan-coding,
  *         rescan-semantics, rescan-precision, loop-monitor-fc, frontend-coder,
- *         cqrs-coder
+ *         cqrs-coder, fix-closure,
+ *         fix-plan-boundary-preflight, review-family-closure,
+ *         initial-review-contract-discovery, follow-up-review-repair-regression,
+ *         initial-plan-contract-closure, replan-contract-closure,
+ *         write-tests-contract-traceability,
+ *         implement-contract-traceability,
+ *         implementation-report-contract-traceability
  *         (default: all except rescan suites,
  *         which need opencode auth)
  * Example: npm run eval:prompts -- arch --repeat 3
@@ -28,6 +34,16 @@ const SUITES = {
   'loop-monitor-fc': 'promptfooconfig.loop-monitor-fc.yaml',
   'frontend-coder': 'promptfooconfig.frontend-coder.yaml',
   'cqrs-coder': 'promptfooconfig.cqrs-coder.yaml',
+  'fix-closure': 'promptfooconfig.fix-closure.yaml',
+  'fix-plan-boundary-preflight': 'promptfooconfig.fix-plan-boundary-preflight.yaml',
+  'review-family-closure': 'promptfooconfig.review-family-closure.yaml',
+  'initial-review-contract-discovery': 'promptfooconfig.initial-review-contract-discovery.yaml',
+  'initial-plan-contract-closure': 'promptfooconfig.initial-plan-contract-closure.yaml',
+  'replan-contract-closure': 'promptfooconfig.replan-contract-closure.yaml',
+  'write-tests-contract-traceability': 'promptfooconfig.write-tests-contract-traceability.yaml',
+  'implement-contract-traceability': 'promptfooconfig.implement-contract-traceability.yaml',
+  'implementation-report-contract-traceability': 'promptfooconfig.implementation-report-contract-traceability.yaml',
+  'follow-up-review-repair-regression': 'promptfooconfig.follow-up-review-repair-regression.yaml',
 };
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));

@@ -58,17 +58,12 @@ subworkflow:
       type: facet_ref[]
       facet_kind: knowledge
       default: [architecture, unit-testing, e2e-testing]
-    supervisor_persona:
-      type: facet_ref
-      facet_kind: persona
-      default: dual-supervisor
 workflow_config:
   provider_options:
     codex:
       network_access: true
     opencode:
       network_access: true
-max_steps: 50
 initial_step: plan
 steps:
   - name: plan
@@ -80,6 +75,7 @@ steps:
         $param: plan_knowledge
       plan_instruction:
         $param: plan_instruction
+      plan_report_format: plan
     rules:
       - condition: Requirements are clear and implementable
         next: write_tests
@@ -149,8 +145,6 @@ steps:
         $param: development_policy
       verification_policy:
         $param: review_policy
-      supervisor_persona:
-        $param: supervisor_persona
     rules:
       - condition: COMPLETE
         next: COMPLETE

@@ -1,5 +1,5 @@
 name: review-dual
-description: フロントエンド＋バックエンド特化レビュー（構造・モジュール化・コンポーネント設計・セキュリティ・QA）
+description: フロントエンド＋バックエンド特化レビュー（構造・モジュール化・コンポーネント設計・セキュリティ・コーディング）
 workflow_config:
   provider_options:
     codex:
@@ -95,31 +95,6 @@ steps:
           report:
             - name: security-review.md
               format: security-review
-        rules:
-          - condition: approved
-          - condition: needs_fix
-
-      - name: qa-review
-        tags:
-          - review
-        edit: false
-        persona: qa-reviewer
-        policy:
-          - review
-          - qa
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - WebSearch
-              - WebFetch
-        instruction: review-qa
-        output_contracts:
-          report:
-            - name: qa-review.md
-              format: qa-review
         rules:
           - condition: approved
           - condition: needs_fix

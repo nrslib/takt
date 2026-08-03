@@ -1,0 +1,25 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'TAKT facet eval: initial review changed-contract discovery'
+
+prompts:
+  - file://prompts/initial-review-contract-discovery.phase1.md
+
+providers:
+  - id: openai:codex-sdk
+    label: codex
+    config:
+      working_dir: fixtures/initial-review-contract-discovery
+      sandbox_mode: read-only
+      approval_policy: never
+      skip_git_repo_check: true
+      model_reasoning_effort: low
+
+tests:
+  - description: 'initial review: independently discover projection and identity contract families'
+    vars:
+      task: file://cases/initial-review-contract-discovery-task.md
+      previous_response: ''
+    assert:
+      - type: javascript
+        metric: review/initial-contract-discovery
+        value: file://asserts/initial-review-contract-discovery.mjs

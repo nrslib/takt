@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import type { WorkflowConfig } from '../../../core/models/index.js';
 import type { WorkflowCallArgResolutionPolicy } from './workflowCallableArgResolver.js';
 import { loadWorkflowFromFile, loadWorkflowFromFileForDiscovery } from './workflowFileLoader.js';
@@ -35,8 +36,9 @@ export function loadWorkflowFileWithResolutionOptions(
   filePath: string,
   options: WorkflowResolvedLoaderOptions,
 ): WorkflowConfig {
+  const canonicalFilePath = realpathSync(filePath);
   const trustInfo = resolveWorkflowTrustInfo({
-    filePath,
+    filePath: canonicalFilePath,
     projectCwd: options.projectCwd,
     lookupCwd: options.lookupCwd,
     source: options.source,

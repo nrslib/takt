@@ -1,8 +1,4 @@
-**これは {step_iteration} 回目の AI Review です。**
-
-初回は網羅的にレビューし、指摘すべき問題をすべて出し切ってください。
-新しい問題を検出したら、同じfamilyに該当する箇所をレビュー対象内で検索し、同じ回で出し切ってください。
-2回目以降は、前回のopen findings、その修正箇所、修正から直接影響を受けるadapter・normalizer・builder・外部通知・中断経路を全基準で確認し、未変更領域を毎回ゼロから再探索しないでください。重点確認でblocking findingがなくAPPROVEを出す場合は、その直前に累積差分全体を最終レビューしてください。
+{{include:instructions/review-round-scope}}
 
 AI 特有の問題のレビューを行ってください。
 
@@ -12,5 +8,5 @@ AI 特有の問題のレビューを行ってください。
 3. 列挙した各セクションの判定基準を変更差分と照合し、該当する問題を検出する
 4. 本文で懸念に触れた場合は、finding table に入れるか、非 finding として分類と根拠を記録する
 
-2回目以降は、再走査で照合した章と根拠をレポートの「再走査証跡」セクションに必ず記録してください（APPROVE でも省略不可）。
+{{include:instructions/review-family-completion}}
 {{include:instructions/review-pr-context}}

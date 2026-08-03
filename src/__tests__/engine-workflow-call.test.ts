@@ -409,7 +409,7 @@ describe('WorkflowEngine workflow_call integration', () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('fresh な先頭 workflow_call の step:start 時点で task run meta に保存可能な resume point を公開する', async () => {
+  it('fresh な先頭 workflow_call の lifecycle start 時点で保存可能な resume point を公開する', async () => {
     const childConfig = writeSingleStepCallableWorkflow(tmpDir);
     const config = createParentWorkflow(tmpDir, {
       name: 'parent',
@@ -424,8 +424,8 @@ describe('WorkflowEngine workflow_call integration', () => {
     });
     let resumePointAtParentStart: WorkflowResumePoint | undefined;
     engine = new WorkflowEngine(config, tmpDir, 'Persist fresh workflow call', createWorkflowCallOptions(tmpDir));
-    engine.on('step:start', (step, _iteration, _instruction, _providerInfo, workflowName) => {
-      if (step.name === 'delegate' && workflowName === config.name) {
+    engine.on('workflow_call:start', ({ step, parentWorkflow }) => {
+      if (step === 'delegate' && parentWorkflow === getWorkflowReference(config)) {
         resumePointAtParentStart = parseWorkflowResumePoint(engine?.getResumePoint());
       }
     });
@@ -1629,18 +1629,20 @@ steps:
     );
     const abortReasons: string[] = [];
     const startedSteps: string[] = [];
+    const workflowCalls: string[] = [];
     engine.on('workflow:abort', (_state, reason) => abortReasons.push(reason));
     engine.on('step:start', (step) => startedSteps.push(step.name));
+    engine.on('workflow_call:start', ({ step }) => workflowCalls.push(step));
 
     const state = await engine.run();
     const childCalls = vi.mocked(runAgent).mock.calls;
 
     expect(abortReasons).toEqual([]);
     expect(startedSteps).toEqual([
-      'final-gate',
       'merge-readiness-review',
       'supervise',
     ]);
+    expect(workflowCalls).toEqual(['final-gate']);
     expect(state.status).toBe('completed');
     expect(childCalls).toHaveLength(2);
     for (const call of childCalls) {
@@ -2252,7 +2254,7 @@ steps:
     expect(options?.resolvedModel).toBe('parent-model');
   });
 
-  it('workflow_call の step:start と loop monitor judge は child 実行と同じ provider context を使う', async () => {
+  it('workflow_call の child と loop monitor judge は同じ provider context を使う', async () => {
     writeWorkflow(tmpDir, 'takt/coding.yaml', `name: takt/coding
 subworkflow:
   callable: true
@@ -2309,7 +2311,6 @@ steps:
       { index: 1, method: 'ai_judge' },
     ]);
 
-    const startedProviderInfo: Array<{ provider: string | undefined; model: string | undefined }> = [];
     const resumeSteps: Array<{ observedStep: string; resumeStep: string }> = [];
     engine = new WorkflowEngine(config, tmpDir, 'Align workflow_call runtime context', createWorkflowCallOptions(tmpDir, {
       provider: 'claude',
@@ -2321,20 +2322,13 @@ steps:
         },
       },
     }));
-    engine.on('step:start', (step, _iteration, _instruction, providerInfo, _workflowName, resumeStepName) => {
+    engine.on('step:start', (step, _iteration, _instruction, _providerInfo, _workflowName, resumeStepName) => {
       resumeSteps.push({ observedStep: step.name, resumeStep: resumeStepName });
-      if (step.name === 'delegate') {
-        startedProviderInfo.push(providerInfo);
-      }
     });
 
     const state = await engine.run();
 
     expect(state.status).toBe('completed');
-    expect(startedProviderInfo).toEqual([
-      { provider: 'claude', model: 'parent-model' },
-      { provider: 'claude', model: 'parent-model' },
-    ]);
     expect(resumeSteps).toContainEqual({ observedStep: 'review', resumeStep: 'delegate' });
     expect(resumeSteps).toContainEqual({
       observedStep: '_loop_judge_delegate_delegate',
@@ -4488,7 +4482,7 @@ steps:
     });
   });
 
-  it('子 workflow の step も親 run の max_steps 予算を消費する', async () => {
+  it('workflow_call 自体は親 run の max_steps 予算を消費しない', async () => {
     writeWorkflow(tmpDir, 'takt/coding.yaml', `name: takt/coding
 subworkflow:
   callable: true
@@ -4555,9 +4549,14 @@ steps:
     ]);
 
     const startedIterations: Array<{ step: string; iteration: number }> = [];
+    const workflowCallLifecycle: string[] = [];
     engine = new WorkflowEngine(config, tmpDir, 'Budget test', createWorkflowCallOptions(tmpDir));
     engine.on('step:start', (step, iteration) => {
       startedIterations.push({ step: step.name, iteration });
+    });
+    engine.on('workflow_call:start', () => workflowCallLifecycle.push('start'));
+    engine.on('workflow_call:complete', ({ result }) => {
+      workflowCallLifecycle.push(`complete:${result.status}`);
     });
 
     const state = await engine.run();
@@ -4567,10 +4566,11 @@ steps:
     expect(state.status).toBe('aborted');
     expect(state.iteration).toBe(2);
     expect(startedIterations).toEqual([
-      { step: 'delegate', iteration: 1 },
-      { step: 'review', iteration: 2 },
+      { step: 'review', iteration: 1 },
+      { step: 'fix', iteration: 2 },
     ]);
-    expect(calledPersonas.some((persona) => persona.includes('fixer'))).toBe(false);
+    expect(workflowCallLifecycle).toEqual(['start', 'complete:completed']);
+    expect(calledPersonas.some((persona) => persona.includes('fixer'))).toBe(true);
     expect(calledPersonas.some((persona) => persona.includes('supervisor'))).toBe(false);
   });
 
@@ -4653,13 +4653,12 @@ steps:
     const state = await engine.run();
 
     expect(state.status).toBe('completed');
-    expect(state.iteration).toBe(4);
+    expect(state.iteration).toBe(3);
     expect(onIterationLimit).toHaveBeenCalledOnce();
     expect(startedIterations).toEqual([
-      { step: 'delegate', iteration: 1 },
-      { step: 'review', iteration: 2 },
-      { step: 'fix', iteration: 3 },
-      { step: 'final_review', iteration: 4 },
+      { step: 'review', iteration: 1 },
+      { step: 'fix', iteration: 2 },
+      { step: 'final_review', iteration: 3 },
     ]);
   });
 
@@ -4743,13 +4742,12 @@ steps:
     const state = await engine.run();
 
     expect(state.status).toBe('completed');
-    expect(state.iteration).toBe(4);
+    expect(state.iteration).toBe(3);
     expect(onIterationLimit).not.toHaveBeenCalled();
     expect(startedIterations).toEqual([
-      { step: 'delegate', iteration: 1 },
-      { step: 'review', iteration: 2 },
-      { step: 'fix', iteration: 3 },
-      { step: 'final_review', iteration: 4 },
+      { step: 'review', iteration: 1 },
+      { step: 'fix', iteration: 2 },
+      { step: 'final_review', iteration: 3 },
     ]);
   });
 
@@ -4778,7 +4776,7 @@ steps:
     const config = createParentWorkflow(tmpDir, {
       name: 'parent',
       initial_step: 'delegate',
-      max_steps: 2,
+      max_steps: 1,
       steps: [
         {
           name: 'delegate',
@@ -4838,7 +4836,7 @@ steps:
       kind: 'agent',
       occurrence: 1,
     }));
-    expect(capturedResumePoint?.iteration).toBe(2);
+    expect(capturedResumePoint?.iteration).toBe(1);
   });
 
   it('resolveWorkflowCallTarget は child workflow の max_steps を書き換えない', () => {

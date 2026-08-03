@@ -30,3 +30,7 @@ output_contracts:
     - name: coder-decisions.md
       format: coder-decisions
       use_judge: false
+    - name: implementation-report.md
+      format: implementation-report
+      order: implementation-report-order
+      use_judge: false

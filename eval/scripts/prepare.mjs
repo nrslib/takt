@@ -52,19 +52,85 @@ const TARGETS = [
   { id: 'loop-monitor-reviewers-fix-fc', workflow: 'takt-default-high', monitorCycle: ['fix', 'reviewers'], fixture: 'eval/fixtures/sample-project' },
   { id: 'frontend-implement', workflow: 'frontend', step: 'implement', fixture: 'eval/fixtures/frontend-app', mutable: true },
   { id: 'cqrs-implement', workflow: 'backend-cqrs', step: 'implement', fixture: 'eval/fixtures/backend-cqrs', mutable: true },
+  { id: 'fix-closure', workflow: 'review-remediation', step: 'fix-retry', fixture: 'eval/fixtures/fix-closure', mutable: true },
+  { id: 'fix-plan-boundary-preflight', workflow: 'peer-review', step: 'fix-plan', fixture: 'eval/fixtures/fix-plan-boundary-preflight' },
+  { id: 'review-family-closure', workflow: 'peer-review-suite-base', step: 'coding-review', fixture: 'eval/fixtures/review-family-closure' },
+  {
+    id: 'initial-review-contract-discovery',
+    workflow: 'peer-review',
+    step: 'coding-review',
+    fixture: 'eval/fixtures/initial-review-contract-discovery',
+    workflowCallVars: { review_mode: 'initial' },
+  },
+  {
+    id: 'initial-plan-contract-closure',
+    workflow: 'default',
+    step: 'plan',
+    fixture: 'eval/fixtures/initial-review-contract-discovery',
+  },
+  {
+    id: 'replan-contract-closure',
+    workflow: 'takt-default-high',
+    step: 'replan',
+    fixture: 'eval/fixtures/initial-review-contract-discovery',
+  },
+  {
+    id: 'write-tests-contract-traceability',
+    workflow: 'default',
+    step: 'write_tests',
+    fixture: 'eval/fixtures/write-tests-contract-traceability',
+    mutable: true,
+  },
+  {
+    id: 'implement-contract-traceability',
+    workflow: 'default',
+    step: 'implement',
+    fixture: 'eval/fixtures/implement-contract-traceability',
+    mutable: true,
+  },
+  {
+    id: 'implementation-report-contract-traceability',
+    workflow: 'default',
+    step: 'implement',
+    fixture: 'eval/fixtures/implement-contract-traceability',
+    mutable: true,
+    phase: 'phase2',
+    targetFile: 'implementation-report.md',
+  },
+  {
+    id: 'follow-up-review-repair-regression',
+    workflow: 'peer-review',
+    step: 'coding-review',
+    fixture: 'eval/fixtures/follow-up-review-repair-regression',
+    workflowCallVars: { review_mode: 'follow_up' },
+  },
 ];
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, '../..');
 
-const { loadWorkflowByIdentifier, resolveWorkflowConfigValue, loadPersonaPromptFromPath } = await import(
+const {
+  loadWorkflowByIdentifier,
+  resolveWorkflowCallTarget,
+  resolveWorkflowConfigValue,
+  loadPersonaPromptFromPath,
+} = await import(
   pathToFileURL(join(repoRoot, 'dist/infra/config/index.js')).href
 );
 const { InstructionBuilder } = await import(
   pathToFileURL(join(repoRoot, 'dist/core/workflow/instruction/InstructionBuilder.js')).href
 );
+const { ReportInstructionBuilder } = await import(
+  pathToFileURL(join(repoRoot, 'dist/core/workflow/instruction/ReportInstructionBuilder.js')).href
+);
 const { StatusJudgmentBuilder } = await import(
   pathToFileURL(join(repoRoot, 'dist/core/workflow/instruction/StatusJudgmentBuilder.js')).href
+);
+const { getAllParallelSubSteps } = await import(
+  pathToFileURL(join(repoRoot, 'dist/core/models/types.js')).href
+);
+const { MAX_WORKFLOW_CALL_DEPTH } = await import(
+  pathToFileURL(join(repoRoot, 'dist/core/workflow/workflow-call-depth.js')).href
 );
 
 const requested = process.argv.slice(2);
@@ -78,7 +144,54 @@ const targets = requested.length > 0 ? TARGETS.filter((t) => requested.includes(
 const language = resolveWorkflowConfigValue(repoRoot, 'language');
 const preparedDirs = new Set();
 
-for (const { id, workflow: workflowName, step: stepName, monitorCycle, fixture, mutable } of targets) {
+function findStepTarget(workflow, stepName, depth = 0) {
+  if (depth > MAX_WORKFLOW_CALL_DEPTH) {
+    throw new Error(`Workflow-call nesting exceeded while resolving step "${stepName}"`);
+  }
+
+  for (const [stepIndex, step] of workflow.steps.entries()) {
+    if (step.name === stepName) {
+      return { workflow, target: step, stepIndex };
+    }
+    const substep = (step.parallel === undefined ? [] : getAllParallelSubSteps(step.parallel))
+      .find((candidate) => candidate.name === stepName);
+    if (substep) {
+      return { workflow, target: substep, stepIndex };
+    }
+  }
+
+  for (const step of workflow.steps) {
+    const candidates = [
+      step,
+      ...(step.parallel === undefined ? [] : getAllParallelSubSteps(step.parallel)),
+    ];
+    for (const candidate of candidates) {
+      if (candidate.kind !== 'workflow_call') continue;
+      const child = resolveWorkflowCallTarget(workflow, candidate, repoRoot);
+      if (!child) continue;
+      const found = findStepTarget(child, stepName, depth + 1);
+      if (found) return found;
+    }
+  }
+
+  return null;
+}
+
+for (const {
+  id,
+  workflow: workflowName,
+  step: stepName,
+  monitorCycle,
+  fixture,
+  mutable,
+  workflowCallVars,
+  phase: requestedPhase,
+  targetFile,
+} of targets) {
+  if (requestedPhase !== undefined && monitorCycle !== undefined) {
+    throw new Error(`Target "${id}" cannot define both phase and monitorCycle`);
+  }
+  const resolvedPhase = requestedPhase ?? (monitorCycle ? 'phase3' : 'phase1');
   const fixtureDir = resolve(repoRoot, fixture);
 
   // Mutable (coder) targets work on a disposable copy.
@@ -90,7 +203,7 @@ for (const { id, workflow: workflowName, step: stepName, monitorCycle, fixture, 
     cpSync(fixtureDir, runDir, { recursive: true });
   }
 
-  const config = loadWorkflowByIdentifier(workflowName, repoRoot);
+  let config = loadWorkflowByIdentifier(workflowName, repoRoot);
   if (!config) {
     throw new Error(`Workflow not found: ${workflowName}`);
   }
@@ -116,22 +229,19 @@ for (const { id, workflow: workflowName, step: stepName, monitorCycle, fixture, 
     };
     stepIndex = config.steps.findIndex(({ name }) => name === monitor.cycle.at(-1));
   } else {
-    for (const [i, step] of config.steps.entries()) {
-      if (step.name === stepName) {
-        target = step;
-        stepIndex = i;
-        break;
-      }
-      const substep = (step.parallel ?? []).find((s) => s.name === stepName);
-      if (substep) {
-        target = substep;
-        stepIndex = i;
-        break;
-      }
+    const found = findStepTarget(config, stepName);
+    if (found) {
+      config = found.workflow;
+      target = found.target;
+      stepIndex = found.stepIndex;
     }
   }
   if (!target) {
-    const names = config.steps.flatMap((s) => [s.name, ...(s.parallel ?? []).map((p) => p.name)]);
+    const names = config.steps.flatMap((step) => [
+      step.name,
+      ...(step.parallel === undefined ? [] : getAllParallelSubSteps(step.parallel))
+        .map((substep) => substep.name),
+    ]);
     throw new Error(`Step "${stepName}" not found in ${workflowName}. Available: ${names.join(', ')}`);
   }
 
@@ -176,16 +286,26 @@ for (const { id, workflow: workflowName, step: stepName, monitorCycle, fixture, 
     reportDir,
     policySourcePath,
     knowledgeSourcePath,
+    workflowCallVars,
     language,
   };
 
-  const instruction = monitorCycle
-    ? new StatusJudgmentBuilder(target, {
+  const instruction = resolvedPhase === 'phase2'
+    ? new ReportInstructionBuilder(target, {
+        cwd: runDir,
+        reportDir,
+        stepIteration: 1,
+        language,
+        targetFile,
+        lastResponse: PREV_MARKER,
+      }).build()
+    : resolvedPhase === 'phase3'
+      ? new StatusJudgmentBuilder(target, {
         language,
         inputSource: 'response',
         lastResponse: `${target.instruction}\n\n## Scenario evidence\n${SCENARIO_MARKER}`,
-      }).build()
-    : new InstructionBuilder(target, context).build();
+        }).build()
+      : new InstructionBuilder(target, context).build();
 
   // The codex provider concatenates system prompt (persona) and instruction.
   const persona = target.personaPath
@@ -198,8 +318,7 @@ for (const { id, workflow: workflowName, step: stepName, monitorCycle, fixture, 
 
   const outDir = join(repoRoot, 'eval', 'prompts');
   mkdirSync(outDir, { recursive: true });
-  const phase = monitorCycle ? 'phase3' : 'phase1';
-  const outPath = join(outDir, `${id}.${phase}.md`);
+  const outPath = join(outDir, `${id}.${resolvedPhase}.md`);
   writeFileSync(outPath, assembled);
 
   const targetName = monitorCycle ? `[${monitorCycle.join(' -> ')}] monitor` : stepName;

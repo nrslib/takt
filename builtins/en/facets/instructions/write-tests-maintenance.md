@@ -3,6 +3,10 @@ Refer only to files within the Report Directory shown in the Workflow Context. D
 
 **Important: Do NOT create or modify production code. Only test files may be created.**
 
+{{include:instructions/change-contract-traceability}}
+
+{{include:instructions/test-contract-discrimination}}
+
 **Actions:**
 1. Review the plan report and separate behavior changed by the request from existing behavior that must not change
 2. Examine existing code and tests to learn the project's test patterns

@@ -15,6 +15,7 @@ import {
   resolveWorkflowCallProviderModel,
 } from '../provider-resolution.js';
 import {
+  buildWorkflowResumePointEntry,
   getResumePointWorkflowReference,
   getWorkflowReference,
 } from '../workflow-reference.js';
@@ -27,6 +28,8 @@ import type {
   StepProviderInfo,
   StepRunResult,
   WorkflowCallChildEngine,
+  WorkflowCallCompleteLifecycle,
+  WorkflowCallLifecycle,
   WorkflowCallResolver,
   WorkflowEngineOptions,
   WorkflowSharedRuntimeState,
@@ -439,6 +442,24 @@ export class WorkflowCallRunner {
     const parentConfig = this.deps.getConfig();
     const prepared = this.consumePreparedExecution(step, resumeStackPrefix, token);
     const childWorkflow = prepared.childWorkflow;
+    const lifecycle: WorkflowCallLifecycle = {
+      parentWorkflow: getWorkflowReference(parentConfig),
+      step: step.name,
+      childWorkflow: getWorkflowReference(childWorkflow),
+      callInstance: prepared.occurrence,
+      stack: [
+        ...prepared.resumeStackPrefix,
+        buildWorkflowResumePointEntry(
+          parentConfig,
+          step.name,
+          'workflow_call',
+          prepared.occurrence,
+          this.deps.state.stepIterations,
+          prepared.occurrence,
+        ),
+      ],
+    };
+    this.deps.emit('workflow_call:start', lifecycle);
 
     const runtimeProviderInfo = runtime.providerInfo ?? this.resolveRuntime(step).providerInfo;
     if (!runtimeProviderInfo) {
@@ -453,16 +474,47 @@ export class WorkflowCallRunner {
       ? runtimeProviderInfo
       : this.resolveChildProviderModel(step, childWorkflow);
     const parentProviderContext = this.resolveParentWorkflowProviderContext();
-    const childResult = await this.executor.execute({
-      step,
-      preparedExecution: prepared,
-      childProviderInfo,
-      parentProviderOptions: parentProviderContext.providerOptions,
-      personaProviders: this.buildChildPersonaProviders(step),
-      providerRouting: this.buildChildProviderRouting(step),
-    }, {
-      syncParentState,
-    });
+    let childResult: WorkflowCallExecutionResult;
+    try {
+      childResult = await this.executor.execute({
+        step,
+        preparedExecution: prepared,
+        childProviderInfo,
+        parentProviderOptions: parentProviderContext.providerOptions,
+        personaProviders: this.buildChildPersonaProviders(step),
+        providerRouting: this.buildChildProviderRouting(step),
+      }, {
+        syncParentState,
+      });
+    } catch (error) {
+      const complete: WorkflowCallCompleteLifecycle = {
+        ...lifecycle,
+        result: {
+          status: 'failed',
+          reason: error instanceof Error ? error.message : String(error),
+        },
+      };
+      this.deps.emit('workflow_call:complete', complete);
+      throw error;
+    }
+
+    const complete: WorkflowCallCompleteLifecycle = childResult.status === 'completed'
+      ? {
+          ...lifecycle,
+          result: {
+            status: 'completed',
+            ...(childResult.returnValue === undefined ? {} : { returnValue: childResult.returnValue }),
+          },
+        }
+      : {
+          ...lifecycle,
+          result: {
+            status: 'aborted',
+            ...(childResult.abortKind === undefined ? {} : { abortKind: childResult.abortKind }),
+            ...(childResult.abortReason === undefined ? {} : { abortReason: childResult.abortReason }),
+          },
+        };
+    this.deps.emit('workflow_call:complete', complete);
 
     return {
       childResult,

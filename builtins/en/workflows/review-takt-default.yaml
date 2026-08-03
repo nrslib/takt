@@ -1,5 +1,5 @@
 name: review-takt-default
-description: "TAKT-focused multi-perspective review (7 reviewers including AI antipattern and coding review)"
+description: "TAKT-focused multi-perspective review (5 reviewers including AI antipattern and coding review)"
 workflow_config:
   provider_options:
     codex:
@@ -74,32 +74,6 @@ steps:
           report:
             - name: security-review.md
               format: security-review
-        rules:
-          - condition: approved
-          - condition: needs_fix
-
-      - name: qa-review
-        tags:
-          - review
-        edit: false
-        persona: qa-reviewer
-        policy:
-          - review
-          - qa
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
-        instruction: review-qa
-        output_contracts:
-          report:
-            - name: qa-review.md
-              format: qa-review
         rules:
           - condition: approved
           - condition: needs_fix
@@ -228,14 +202,13 @@ steps:
 
       **Tasks:**
       1. Read all review reports in the Report Directory
-         - `00-review-target.md` (Review target information)
-         - `01-architecture-review.md` (Architecture review)
-         - `02-security-review.md` (Security review)
-         - `03-qa-review.md` (QA review)
-         - `04-testing-review.md` (Testing review)
-         - `05-ai-antipattern-review.md` (AI antipattern review)
-         - `06-coding-review.md` (Coding review)
-      2. Synthesize the 6 review results
+         - `review-target.md` (Review target information)
+         - `architecture-review.md` (Architecture review)
+         - `security-review.md` (Security review)
+         - `testing-review.md` (Testing review)
+         - `ai-antipattern-review.md` (AI antipattern review)
+         - `coding-review.md` (Coding review)
+      2. Synthesize the 5 review results
       3. Produce a consolidated review summary with overall verdict
 
       **Review Summary output contract:**
@@ -252,7 +225,6 @@ steps:
       |--------|--------|--------------|
       | Architecture | APPROVE/REJECT | {Brief finding} |
       | Security | APPROVE/REJECT | {Brief finding} |
-      | QA | APPROVE/REJECT | {Brief finding} |
       | Testing | APPROVE/REJECT | {Brief finding} |
       | AI Antipattern | APPROVE/REJECT | {Brief finding} |
       | Coding | APPROVE/REJECT | {Brief finding} |
@@ -282,7 +254,6 @@ steps:
             |--------|--------|--------------|
             | Architecture | APPROVE/REJECT | {Overview} |
             | Security | APPROVE/REJECT | {Overview} |
-            | QA | APPROVE/REJECT | {Overview} |
             | Testing | APPROVE/REJECT | {Overview} |
             | AI Antipattern | APPROVE/REJECT | {Overview} |
             | Coding | APPROVE/REJECT | {Overview} |
@@ -300,7 +271,7 @@ steps:
             ## Resolved Findings (resolved)
             | finding_id | Source | Resolution Evidence |
             |------------|--------|---------------------|
-            | SUM-RESOLVED-src-file-L10 | QA | `file:line` |
+            | SUM-RESOLVED-src-file-L10 | Testing | `file:line` |
 
             ## Improvement Suggestions
             - {Consolidated suggestions from all reviews}

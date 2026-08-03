@@ -3,8 +3,9 @@ The review → fix loop has repeated {cycle_count} times.
 Review the latest review and fix reports in the Report Directory and determine whether this loop is healthy (converging) or unproductive (diverging, oscillating, or stalled).
 
 **First establish the observation point:**
-- This monitor can run immediately after a fix completes, before any post-fix review exists. When a fix reports addressing an issue after its latest review and no later review evidence exists, that issue is awaiting post-fix verification, not repeating or stalled. Include this state under the healthy / progress option.
-- When no fix reports addressing the issue, do not infer that the loop is healthy merely because no post-fix review exists.
+- Use report chronology to determine whether a verifier or review ran after the latest fix. If one did, treat that latest report as authoritative evidence and compare its `incomplete` reasons, unmet acceptance criteria, and evidence changed by each retry. Repeated verifier results with the same reason and evidence indicate a stall.
+- If a fix just completed and neither a verifier nor a post-fix review exists yet, an issue reported as addressed after its latest review is awaiting post-fix verification rather than repeating or stalled. Include this state under the healthy / progress option.
+- When no fix reports addressing the issue, do not infer that the loop is healthy merely because no later verification report exists.
 
 **Judgment criteria:**
 - **Fix progress:** Use fix reports, current code, and post-fix reviews to verify that each prior open finding's acceptance criteria are satisfied. Repetition of the same `finding_id`, root cause, or acceptance criterion after a fix means implementation is incomplete.

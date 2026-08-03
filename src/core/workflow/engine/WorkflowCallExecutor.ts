@@ -475,6 +475,8 @@ export class WorkflowCallExecutor {
       );
     });
     for (const eventName of [
+      'workflow_call:start',
+      'workflow_call:complete',
       'routing:decision',
       'step:report',
       'findings:ledger',
@@ -619,6 +621,10 @@ export class WorkflowCallExecutor {
       runPathNamespace: this.buildWorkflowCallNamespace(invocation),
       findingCallNamespace: workflowCallSite.key,
       workflowCallSiteIdentity: workflowCallSite.key,
+      workflowCallVars: {
+        ...options.workflowCallVars,
+        ...request.step.vars,
+      },
       sharedRuntime: this.deps.sharedRuntime,
       resumeStackPrefix: [
         ...resumeStackPrefix,

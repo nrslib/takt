@@ -4,7 +4,8 @@
 
 **参照方針:**
 - parse 可能な Finding Contract ledger がある場合は、open findings を対象の正本とし、個別レポートは原因・再現条件・受入条件の根拠として使う
-- ledger がない場合は、Report Directory の最新レビューレポートを対象の正本とする
+- ledger がない場合は、Report Directory の最新レビューレポートを対象の正本とし、別レポートとの時刻比較や古い履歴からの対象追加を行わない
+- 個別の reviewer / final gate レポートは、正本に含まれる finding の原因・再現条件・受入条件を確認する根拠として使い、正本が非修正対象とした finding を独自に再開しない
 - persists / reopened、または修正後に新しい構造問題が報告された場合のみ、各レポートの履歴を新しい順に2件まで確認し、以前の修正方針で不足していた前提を特定する
 
 {{include:instructions/fix-root-cause-analysis}}

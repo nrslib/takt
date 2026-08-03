@@ -411,6 +411,21 @@ A step invokes another workflow by name. The child workflow runs in the same run
 
 The called workflow can declare `subworkflow.params` so the parent passes values (e.g. `impl_knowledge` or `fix_knowledge`) to customize the child without duplicating step definitions. See [Workflow-level Configuration](#workflow-level-configuration) for `subworkflow` declaration.
 
+`max_steps` is a budget owned by the root workflow and shared by every descendant. A `workflow_call` is a control node and does not consume that budget or select a provider/model of its own; only executable steps in the child consume iterations. For example, `plan → workflow_call(implement → review) → supervise` consumes four iterations, so extracting `implement` and `review` into a callable workflow does not require increasing `max_steps`. Nested calls follow the same rule. The call lifecycle remains visible in session logs and traces with a call invocation number and the complete call stack.
+
+A `workflow_call` step may also declare scalar `vars` for execution context that is not a facet reference. Strings, finite numbers, and booleans are inherited through nested workflow calls; a nested call overrides a key by declaring it again. Agent instruction facets read a value with `{var:name}`. A missing value renders as `unspecified`, so an instruction can define a safe fallback explicitly.
+
+```yaml
+- name: follow-up-review
+  kind: workflow_call
+  call: peer-review-suite
+  vars:
+    review_mode: follow_up
+  rules:
+    - condition: COMPLETE
+      next: COMPLETE
+```
+
 ## Output Contracts (Report Files)
 
 Steps can generate report files in the report directory:
@@ -577,6 +592,7 @@ Detect cyclic patterns between steps (e.g. `review` → `fix` → `review` repea
 ```yaml
 loop_monitors:
   - cycle: [review, fix]
+    ignore_steps: [verify]
     threshold: 3
     judge:
       session_key: loop-supervisor
@@ -588,6 +604,8 @@ loop_monitors:
         - condition: "No progress"
           next: ABORT
 ```
+
+`ignore_steps` excludes intermediate steps from cycle matching. Use it when a logical cycle has optional verification or retry steps; an ignored step cannot also appear in `cycle`.
 
 `loop_monitors.judge` supports `provider`, `model`, and `provider_options` with the same provider/model validation as agent steps. When `provider` is omitted, the judge inherits the triggering step provider and model. When `provider` is set without `model`, the inherited model is cleared. Use `model: null` to explicitly use a provider or CLI default even when the triggering step has a resolved model.
 
@@ -630,6 +648,8 @@ subworkflow:
       type: workflow_ref
       default: peer-review-suite-base
 ```
+
+Do not set `max_steps` on a callable workflow. The loader rejects an explicit value because the root workflow's budget applies to the complete call tree. A callable workflow must be entered through `workflow_call`; use a standalone root wrapper when the same implementation also needs a direct entry point.
 
 Callable workflow facet parameters use `facet_ref` or `facet_ref[]` and one of the five `facet_kind` values: `policy`, `knowledge`, `instruction`, `persona`, or `report_format`. A `workflow_ref` parameter identifies a callable workflow and omits `facet_kind`; it may be used as `call: { $param: reviewer_suite }`. Defaults are optional. A `facet_ref[]` argument or default may be empty, which is useful for optional additions. In `policy` and `knowledge`, scalar or list parameters can be mixed with fixed references; list values are flattened at their position while preserving the field's written order. Parameters can also be forwarded through `workflow_call.args`.
 

@@ -76,6 +76,22 @@ describe('replaceTemplatePlaceholders', () => {
     expect(result).toBe('Step run #5');
   });
 
+  it('should replace inherited workflow-call vars and use the explicit fallback when absent', () => {
+    const step = makeStep();
+    const inherited = makeInstructionContext({
+      workflowCallVars: { review_mode: 'follow_up' },
+    });
+
+    expect(replaceTemplatePlaceholders('{var:review_mode}', step, inherited)).toBe('follow_up');
+    expect(replaceTemplatePlaceholders('{var:review_mode}', step, makeInstructionContext())).toBe('unspecified');
+    expect(replaceTemplatePlaceholders('{var:constructor}', step, makeInstructionContext({
+      workflowCallVars: {},
+    }))).toBe('unspecified');
+    expect(replaceTemplatePlaceholders('{var:constructor}', step, makeInstructionContext({
+      workflowCallVars: { constructor: 'explicit' },
+    }))).toBe('explicit');
+  });
+
   it('should replace {previous_response} when passPreviousResponse is true', () => {
     const step = makeStep({ passPreviousResponse: true });
     const ctx = makeInstructionContext({
