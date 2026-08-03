@@ -14,7 +14,8 @@ import {
   FindingProvisionalMetadataSchema,
   FindingObservationSchema,
   FindingManagerDecisionsJsonSchema,
-  ConflictAdjudicationProviderProposalJsonSchema,
+  ConflictAdjudicationProviderOutputJsonSchema,
+  TerminalAdjudicationProviderOutputJsonSchema,
   FindingManagerOutputJsonSchema,
   InterpretationAttemptSchema,
   InterpretationBatchReceiptSchema,
@@ -30,7 +31,9 @@ import {
   ReviewerRawFindingSchema,
   createRawFindingsOutputJsonSchema,
   parseFindingLedger,
+  parseConflictAdjudicationProviderOutput,
   parseConflictAdjudicationProposal,
+  parseTerminalAdjudicationProviderOutput,
   parseFindingManagerDecisions,
   parseFindingManagerOutput,
 } from '../core/models/finding-schemas.js';
@@ -60,6 +63,24 @@ import {
   emptyFindingAuthorityProjection,
   reviewerRawExtractionFixture,
 } from './helpers/finding-lifecycle-fixture.js';
+
+interface ProviderProposalAlternativeSchema {
+  readonly additionalProperties: false;
+  readonly required: readonly string[];
+  readonly properties: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
+}
+
+function providerProposalAlternatives(
+  schema: {
+    readonly properties: {
+      readonly proposal: {
+        readonly anyOf: readonly ProviderProposalAlternativeSchema[];
+      };
+    };
+  },
+): readonly ProviderProposalAlternativeSchema[] {
+  return schema.properties.proposal.anyOf;
+}
 
 import { FINDING_CONFLICT_ADJUDICATION_SCHEMA_REF } from '../core/workflow/findings/adjudication-step.js';
 import { RAW_FINDINGS_SCHEMA_REF } from '../core/workflow/findings/manager-agent.js';
@@ -845,13 +866,18 @@ describe('finding schemas', () => {
     expect(managerProperties.conflicts.items.required).toEqual(Object.keys(managerProperties.conflicts.items.properties));
     expect(managerProperties.resolvedConflicts.items.required).toEqual(Object.keys(managerProperties.resolvedConflicts.items.properties));
 
-    for (const alternative of ConflictAdjudicationProviderProposalJsonSchema.oneOf) {
+    for (const alternative of providerProposalAlternatives(
+      ConflictAdjudicationProviderOutputJsonSchema,
+    )) {
+      expect(alternative.additionalProperties).toBe(false);
       expect(alternative.required).toEqual(Object.keys(alternative.properties));
     }
   });
 
   it('requires nullable adjudication fields and normalizes null to undefined', () => {
-    const mergeSchema = ConflictAdjudicationProviderProposalJsonSchema.oneOf[0];
+    const mergeSchema = providerProposalAlternatives(
+      ConflictAdjudicationProviderOutputJsonSchema,
+    )[0]!;
     expect(mergeSchema.properties.actionableFix.type)
       .toEqual(['string', 'null']);
     expect(mergeSchema.properties.rationale.type)
@@ -872,6 +898,106 @@ describe('finding schemas', () => {
       kind: 'undetermined',
       subjectIds: ['subject-1'],
     });
+  });
+
+  it('uses a Codex-compatible nested anyOf for provider adjudication unions', () => {
+    for (const schema of [
+      ConflictAdjudicationProviderOutputJsonSchema,
+      TerminalAdjudicationProviderOutputJsonSchema,
+    ]) {
+      expect(schema).toMatchObject({
+        type: 'object',
+        additionalProperties: false,
+        required: ['proposal'],
+      });
+      expect(schema).not.toHaveProperty('anyOf');
+      expect(JSON.stringify(schema)).not.toContain('"oneOf"');
+      expect(providerProposalAlternatives(schema)).toHaveLength(4);
+    }
+    expect(parseTerminalAdjudicationProviderOutput({
+      proposal: { kind: 'undetermined', rationale: null },
+    })).toEqual({ kind: 'undetermined', rationale: undefined });
+  });
+
+  it('parses every conflict adjudication proposal variant', () => {
+    const proposedProduct = {
+      target: { kind: 'review_scope' as const },
+      targetIdentityHash: '1'.repeat(64),
+      familyTag: 'correctness',
+      severity: 'high' as const,
+      title: 'Verified issue',
+      description: 'The issue remains actionable.',
+      suggestion: null,
+      claimIdentityHash: '2'.repeat(64),
+      semanticClaimIdentityHash: '3'.repeat(64),
+      evidenceRecordIds: [],
+    };
+    const proposals = [
+      {
+        kind: 'merge_holding' as const,
+        holdingSubjectId: 'holding-1',
+        targetProductSubjectId: 'product-1',
+        authorityRefIds: ['authority-1'],
+        actionableFix: 'Apply the verified fix.',
+        rationale: 'Both subjects describe the same issue.',
+      },
+      {
+        kind: 'promote_holding' as const,
+        holdingSubjectId: 'holding-1',
+        proposedProduct,
+        authorityRefIds: ['authority-1'],
+        actionableFix: 'Apply the verified fix.',
+        rationale: 'The held claim is independently verified.',
+      },
+      {
+        kind: 'terminate_subject' as const,
+        subjectId: 'holding-1',
+        basis: 'finding_claim_refuted' as const,
+        authorityRefIds: ['authority-1'],
+        rationale: 'The claim-specific proof refutes the subject.',
+      },
+      {
+        kind: 'undetermined' as const,
+        subjectIds: ['holding-1'],
+        rationale: 'No exact authority resolves the conflict.',
+      },
+    ];
+
+    expect(proposals.map((proposal) => parseConflictAdjudicationProposal(proposal)))
+      .toEqual(proposals);
+    expect(parseConflictAdjudicationProviderOutput({ proposal: proposals[0] }))
+      .toEqual(proposals[0]);
+  });
+
+  it('rejects malformed conflict adjudication proposals and provider envelopes', () => {
+    expect(() => parseConflictAdjudicationProposal({
+      kind: 'merge_holding',
+      holdingSubjectId: 'holding-1',
+      authorityRefIds: ['authority-1'],
+      actionableFix: null,
+      rationale: null,
+    })).toThrow();
+    expect(() => parseConflictAdjudicationProposal({
+      kind: 'undetermined',
+      subjectIds: ['holding-1'],
+      rationale: null,
+      subjectId: 'unexpected',
+    })).toThrow();
+    expect(() => parseConflictAdjudicationProposal({
+      kind: 'terminate_subject',
+      subjectId: 'holding-1',
+      basis: 'finding_claim_refuted',
+      authorityRefIds: [],
+      rationale: null,
+    })).toThrow();
+    expect(() => parseConflictAdjudicationProviderOutput({
+      proposal: {
+        kind: 'undetermined',
+        subjectIds: ['holding-1'],
+        rationale: null,
+      },
+      extra: true,
+    })).toThrow();
   });
 
   it('keeps strict JSON Schema object properties listed in required for the manager decisions schema', () => {

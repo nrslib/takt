@@ -4,20 +4,23 @@ import {
   computeTerminalSettlementId,
   findingContentAddress,
 } from '../core/models/finding-contract-identity.js';
+import { createEmptyFindingContractRegistries } from '../core/models/finding-contract-seed.js';
+import { createEngineProofRecord } from '../core/models/finding-evidence-record.js';
 import { parseFindingLedger } from '../core/models/finding-schemas.js';
 import {
   dispatchFindingManagerProviderCall,
   reserveFindingManagerProviderCall,
   settleFindingManagerProviderCall,
 } from '../core/workflow/findings/finding-manager-provider-call.js';
+import { applyFindingLifecycleCommands } from '../core/workflow/findings/lifecycle-transaction.js';
 import { buildTerminalAdjudicationCandidateSnapshot } from '../core/workflow/findings/terminal-adjudication-candidates.js';
 import { createTerminalAdjudicationRound } from '../core/workflow/findings/terminal-adjudication-model.js';
 import { selectReconstructableTerminalEpisode } from '../core/workflow/findings/terminal-adjudication-runner.js';
 import type { FindingLedger, FindingLedgerEntry } from '../core/workflow/findings/types.js';
 import {
   applyFindingLedgerFixtureRevision,
-  authorizeFindingLedgerFixture,
   canonicalRawFindingFixture,
+  rawCanonicalSnapshotFixture,
 } from './helpers/finding-lifecycle-fixture.js';
 
 const OBSERVATION = {
@@ -26,17 +29,24 @@ const OBSERVATION = {
   timestamp: '2026-08-02T00:00:00.000Z',
 };
 
-function provisional(id: string, rawFindingId: string, path: string): FindingLedgerEntry {
+function provisional(
+  id: string,
+  raw: ReturnType<typeof canonicalRawFindingFixture>,
+): FindingLedgerEntry {
   return {
     id,
     status: 'open',
     lifecycle: 'new',
-    severity: 'medium',
-    title: `Provisional ${id}`,
-    description: `Claim for ${path}`,
+    target: raw.target,
+    targetIdentityHash: raw.targetIdentityHash,
+    claimIdentityHash: raw.claimIdentityHash,
+    semanticClaimIdentityHash: raw.semanticClaimIdentityHash,
+    severity: raw.severity,
+    title: raw.title ?? `Provisional ${id}`,
+    description: raw.description ?? undefined,
     evidenceIds: [],
     reviewers: ['reviewer'],
-    rawFindingIds: [rawFindingId],
+    rawFindingIds: [raw.rawFindingId],
     firstSeen: OBSERVATION,
     lastSeen: OBSERVATION,
     revision: 1,
@@ -44,7 +54,7 @@ function provisional(id: string, rawFindingId: string, path: string): FindingLed
       kind: 'raw-meaning-ambiguous',
       stableKey: `stable-${id}`,
       lineageKey: `lineage-${id}`,
-      sourceRawFindingIds: [rawFindingId],
+      sourceRawFindingIds: [raw.rawFindingId],
       reason: 'Requires terminal adjudication.',
       firstObservedAt: OBSERVATION,
       lastObservedAt: OBSERVATION,
@@ -54,22 +64,68 @@ function provisional(id: string, rawFindingId: string, path: string): FindingLed
   };
 }
 
-function withProvenance(ledger: FindingLedger, findingId: string): FindingLedger {
-  const finding = ledger.findings.find(({ id }) => id === findingId)!;
-  const sourceRawFindingId = `fixture-raw:finding:${finding.id}:${finding.revision + 1}:${ledger.rawFindings.length}`;
-  return applyFindingLedgerFixtureRevision({
-    ledger,
-    entityKind: 'finding',
-    contributionOrigin: { kind: 'external' },
-    entity: {
-      ...finding,
-      revision: finding.revision + 1,
-      rawFindingIds: [sourceRawFindingId],
-      provisional: {
-        ...finding.provisional!,
-        sourceRawFindingIds: [sourceRawFindingId],
-      },
+function withoutRevision(
+  finding: FindingLedgerEntry,
+): Omit<FindingLedgerEntry, 'revision'> {
+  const { revision: _revision, ...change } = finding;
+  void _revision;
+  return change;
+}
+
+function landProvisional(
+  ledger: FindingLedger,
+  finding: FindingLedgerEntry,
+): FindingLedger {
+  const proof = createEngineProofRecord({
+    kind: 'engine_proof',
+    purpose: 'lifecycle_authority',
+    verifierId: 'takt.finding-lifecycle-policy',
+    verifierVersion: '1',
+    workflowName: ledger.workflowName,
+    runId: OBSERVATION.runId,
+    scopeIdentity: 'finding-storage:test:root',
+    snapshotId: findingContentAddress('stale-terminal-scope', {}),
+    claimIdentityHash: finding.claimIdentityHash,
+    targetFindingId: null,
+    subject: {
+      kind: 'finding_provisional_isolation',
+      findingId: finding.id,
+      provisionalKind: finding.provisional!.kind,
+      stableKey: finding.provisional!.stableKey,
+      claimBindingAuthorizationReferences: [],
     },
+    dependencyDigests: [findingContentAddress('stale-terminal-absent-head', {
+      findingId: finding.id,
+    })],
+    resultDigest: findingContentAddress('stale-terminal-isolation', {
+      findingId: finding.id,
+    }),
+    issuedAt: OBSERVATION.timestamp,
+  });
+  return applyFindingLifecycleCommands({
+    ledger: {
+      ...ledger,
+      evidenceRecords: [...ledger.evidenceRecords, proof],
+    },
+    commands: [{
+      operation: 'update_provisional',
+      changes: {
+        findings: [{
+          ...withoutRevision(finding),
+          evidenceIds: [proof.evidenceId],
+        }],
+        conflicts: [],
+      },
+      authority: { kind: 'verified_evidence' },
+      evidenceSourcesByTarget: new Map([[
+        `finding\0${finding.id}`,
+        {
+          sourceRawFindingIds: [...finding.provisional!.sourceRawFindingIds],
+          authorityEvidenceIds: [proof.evidenceId],
+        },
+      ]]),
+    }],
+    occurredAt: OBSERVATION,
   });
 }
 
@@ -95,28 +151,30 @@ function initialLedger(options: { onlyB?: boolean } = {}): FindingLedger {
     description: 'B',
     target: { kind: 'code', paths: ['src/b.ts'] },
   });
-  let ledger = authorizeFindingLedgerFixture({
+  const rawFindings = options.onlyB === true ? [rawB] : [rawA, rawB];
+  const findings = options.onlyB === true
+    ? [provisional('F-0002', rawB)]
+    : [provisional('F-0001', rawA), provisional('F-0002', rawB)];
+  let ledger: FindingLedger = {
     workflowName: 'stale-terminal-episode',
     nextId: 3,
     updatedAt: OBSERVATION.timestamp,
-    findings: options.onlyB === true
-      ? [provisional('F-0002', rawB.rawFindingId, 'src/b.ts')]
-      : [
-          provisional('F-0001', rawA.rawFindingId, 'src/a.ts'),
-          provisional('F-0002', rawB.rawFindingId, 'src/b.ts'),
-        ],
+    findings: [],
     evidenceRecords: [],
-    rawFindings: options.onlyB === true ? [rawB] : [rawA, rawB],
+    rawFindings,
     conflicts: [],
     evidenceBindings: [],
     lifecycleReservations: [],
     lifecycleEvents: [],
-  });
-  if (options.onlyB === true) {
-    return withProvenance(ledger, 'F-0002');
+    ...createEmptyFindingContractRegistries(),
+    rawCanonicalSnapshots: rawFindings.map((rawFinding) => (
+      rawCanonicalSnapshotFixture(rawFinding, OBSERVATION)
+    )),
+  };
+  for (const finding of findings) {
+    ledger = landProvisional(ledger, finding);
   }
-  ledger = withProvenance(ledger, 'F-0001');
-  return withProvenance(ledger, 'F-0002');
+  return ledger;
 }
 
 function addInterruptedAttempt(input: {

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { FINDING_DISMISSAL_BASES } from '../../models/finding-types.js';
 import { RawFindingIdSchema } from '../../models/finding-contract-field-schemas.js';
 import { RAW_FINDING_FIELD_LIMITS } from '../../models/finding-contract-limits.js';
+import { projectNativeStructuredOutputSchema } from '../../models/native-structured-output-schema.js';
 import {
   RAW_DECISION_KINDS,
   type FindingLifecycleEntityHead,
@@ -82,7 +83,7 @@ const mainManagerRawDecisionJsonProperties = {
   evidence: { type: 'string', minLength: 1, maxLength: 2_048 },
 } as const;
 
-export const MainManagerRawTaskOutputJsonSchema = {
+const MainManagerRawTaskOutputIntakeJsonSchema = {
   type: 'object',
   additionalProperties: false,
   required: ['taskId', 'decisions'],
@@ -124,6 +125,10 @@ export const MainManagerRawTaskOutputJsonSchema = {
   },
 } as const;
 
+export const MainManagerRawTaskOutputJsonSchema = projectNativeStructuredOutputSchema(
+  MainManagerRawTaskOutputIntakeJsonSchema,
+);
+
 export function parseMainManagerRawTaskOutput(value: unknown): MainManagerRawTaskOutput {
   return mainManagerRawTaskOutputSchema.parse(value);
 }
@@ -159,7 +164,7 @@ const findingEntityBindingTaskOutputSchema = z.object({
   }).strict()).max(ENTITY_BINDING_TASK_MAX_ITEMS),
 }).strict();
 
-export const FindingEntityBindingTaskOutputJsonSchema = {
+const FindingEntityBindingTaskOutputIntakeJsonSchema = {
   type: 'object',
   additionalProperties: false,
   required: ['taskId', 'decisions'],
@@ -203,6 +208,10 @@ export const FindingEntityBindingTaskOutputJsonSchema = {
     },
   },
 } as const;
+
+export const FindingEntityBindingTaskOutputJsonSchema = projectNativeStructuredOutputSchema(
+  FindingEntityBindingTaskOutputIntakeJsonSchema,
+);
 
 export function parseFindingEntityBindingTaskOutput(
   value: unknown,
@@ -406,7 +415,7 @@ const controlResultJsonSchemas = [
   },
 ] as const;
 
-export const MainManagerControlTaskOutputJsonSchema = {
+const MainManagerControlTaskOutputIntakeJsonSchema = {
   type: 'object',
   additionalProperties: false,
   required: ['taskId', 'evaluations', 'selectedIntentId'],
@@ -439,6 +448,10 @@ export const MainManagerControlTaskOutputJsonSchema = {
     },
   },
 } as const;
+
+export const MainManagerControlTaskOutputJsonSchema = projectNativeStructuredOutputSchema(
+  MainManagerControlTaskOutputIntakeJsonSchema,
+);
 
 export function parseMainManagerControlTaskOutput(
   value: unknown,

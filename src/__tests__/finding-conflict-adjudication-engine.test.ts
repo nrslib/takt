@@ -195,9 +195,11 @@ describe('finding-conflict-adjudication engine registry contract', () => {
             status: 'done',
             content: '{}',
             structuredOutput: {
-              kind: 'undetermined',
-              subjectIds: snapshot.subjects.map(({ subjectId }) => subjectId).sort(),
-              rationale: 'No verified terminal authority is available.',
+              proposal: {
+                kind: 'undetermined',
+                subjectIds: snapshot.subjects.map(({ subjectId }) => subjectId).sort(),
+                rationale: 'No verified terminal authority is available.',
+              },
             },
             timestamp: new Date('2026-06-13T02:00:00.000Z'),
           }

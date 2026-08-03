@@ -26,7 +26,10 @@ import {
 } from './finding-manager-provider-call.js';
 import type { RunFindingManagerForStepInput } from './manager-contracts.js';
 import { MANAGER_INTERPRETATION_LIMITS } from './raw-finding-limits.js';
-import { TerminalAdjudicationProposalJsonSchema, parseTerminalAdjudicationProposal } from './schemas.js';
+import {
+  parseTerminalAdjudicationProviderOutput,
+  TerminalAdjudicationProviderOutputJsonSchema,
+} from './schemas.js';
 import { applyResolvedTerminalAdjudication } from './terminal-adjudication-commit.js';
 import {
   buildTerminalAdjudicationCandidateSnapshot,
@@ -37,7 +40,11 @@ import {
   selectActiveTerminalAdjudicationEpisode,
 } from './terminal-adjudication-model.js';
 import { resolveTerminalAdjudicationPlan } from './terminal-adjudication-verifier.js';
-import type { FindingLedger, FindingObservation } from './types.js';
+import type {
+  FindingLedger,
+  FindingLifecycleEntityHead,
+  FindingObservation,
+} from './types.js';
 import { issueFindingScopeBindings } from './finding-scope-binding.js';
 import type { ReviewScopeProofSnapshot } from './snapshot.js';
 
@@ -63,7 +70,7 @@ function terminalStep(input: RunFindingManagerForStepInput): AgentWorkflowStep {
     edit: false,
     structuredOutput: {
       schemaRef: 'takt.findings.terminal-adjudication',
-      schema: TerminalAdjudicationProposalJsonSchema,
+      schema: TerminalAdjudicationProviderOutputJsonSchema,
     },
     rules: [],
   };
@@ -289,16 +296,7 @@ async function finalizeProposed(input: {
           ...ledger,
           terminalAdjudicationAttempts: ledger.terminalAdjudicationAttempts.map((entry) => (
             entry.attemptId === attempt.attemptId
-              ? {
-                  ...attempt,
-                  stage: 'completed' as const,
-                  result: {
-                    kind: 'stale_precondition' as const,
-                    proposal: structuredClone(attempt.proposal),
-                    proposalDigest: attempt.proposalDigest,
-                    actualHead,
-                  },
-                }
+              ? completeStaleProposedAttempt(attempt, actualHead)
               : entry
           )),
         },
@@ -327,6 +325,23 @@ async function finalizeProposed(input: {
     return { ledger: applied.ledger, result: applied.applied };
   });
   return mutation.result;
+}
+
+function completeStaleProposedAttempt(
+  attempt: Extract<TerminalAdjudicationAttempt, { stage: 'proposed' }>,
+  actualHead: FindingLifecycleEntityHead | null,
+): Extract<TerminalAdjudicationAttempt, { stage: 'completed' }> {
+  const { proposal, proposalDigest, ...base } = attempt;
+  return {
+    ...base,
+    stage: 'completed',
+    result: {
+      kind: 'stale_precondition',
+      proposal: structuredClone(proposal),
+      proposalDigest,
+      actualHead,
+    },
+  };
 }
 
 function diagnosticAttempt(input: {
@@ -608,7 +623,7 @@ export async function runTerminalAdjudication(input: {
         failure = 'output_oversize';
       } else {
         try {
-          proposal = parseTerminalAdjudicationProposal(providerResponse.structuredOutput);
+          proposal = parseTerminalAdjudicationProviderOutput(providerResponse.structuredOutput);
         } catch {
           failure = 'parse_failed';
         }

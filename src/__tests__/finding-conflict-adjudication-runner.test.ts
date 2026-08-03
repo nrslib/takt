@@ -193,9 +193,11 @@ describe('finding-conflict-adjudication runner registry contract', () => {
       status: 'done',
       content: '{}',
       structuredOutput: {
-        kind: 'undetermined',
-        subjectIds: snapshot.subjects.map(({ subjectId }) => subjectId).sort(),
-        rationale: 'No verified terminal authority is available.',
+        proposal: {
+          kind: 'undetermined',
+          subjectIds: snapshot.subjects.map(({ subjectId }) => subjectId).sort(),
+          rationale: 'No verified terminal authority is available.',
+        },
       },
       timestamp: new Date(),
     });
@@ -280,11 +282,13 @@ describe('finding-conflict-adjudication runner registry contract', () => {
       status: 'done',
       content: '{}',
       structuredOutput: {
-        kind: 'terminate_subject',
-        subjectId: holding.subjectId,
-        basis: 'finding_no_issue_after_verification',
-        authorityRefIds: [proof.evidenceId],
-        rationale: 'The held raw claim was refuted by an exact verifier.',
+        proposal: {
+          kind: 'terminate_subject',
+          subjectId: holding.subjectId,
+          basis: 'finding_no_issue_after_verification',
+          authorityRefIds: [proof.evidenceId],
+          rationale: 'The held raw claim was refuted by an exact verifier.',
+        },
       },
       timestamp: new Date(),
     });

@@ -2,6 +2,7 @@ import { compareBinaryStrings } from '../../../shared/utils/binary-string-compar
 import { computeTerminalSettlementId } from '../../models/finding-contract-identity.js';
 import type {
   ResolvedTerminalAdjudicationPlan,
+  TerminalAdjudicationAttempt,
   TerminalAdjudicationSettlement,
 } from '../../models/finding-contract-types.js';
 import { createFindingLedgerEntry } from './finding-entry.js';
@@ -20,6 +21,23 @@ function requiredFinding(ledger: FindingLedger, findingId: string): FindingLedge
     throw new Error(`Terminal adjudication references unknown finding "${findingId}"`);
   }
   return finding;
+}
+
+function completeVerificationUndetermined(
+  attempt: Extract<TerminalAdjudicationAttempt, { stage: 'proposed' }>,
+  reasonCodes: string[],
+): Extract<TerminalAdjudicationAttempt, { stage: 'completed' }> {
+  const { proposal, proposalDigest, ...base } = attempt;
+  return {
+    ...base,
+    stage: 'completed',
+    result: {
+      kind: 'verification_undetermined',
+      proposal: structuredClone(proposal),
+      proposalDigest,
+      reasonCodes,
+    },
+  };
 }
 
 export function applyResolvedTerminalAdjudication(input: {
@@ -41,16 +59,7 @@ export function applyResolvedTerminalAdjudication(input: {
         ...input.ledger,
         terminalAdjudicationAttempts: input.ledger.terminalAdjudicationAttempts.map((candidate) => (
           candidate.attemptId === attempt.attemptId
-            ? {
-                ...attempt,
-                stage: 'completed' as const,
-                result: {
-                  kind: 'verification_undetermined' as const,
-                  proposal: structuredClone(attempt.proposal),
-                  proposalDigest: attempt.proposalDigest,
-                  reasonCodes,
-                },
-              }
+            ? completeVerificationUndetermined(attempt, reasonCodes)
             : candidate
         )),
       },

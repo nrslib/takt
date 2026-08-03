@@ -52,6 +52,7 @@ import {
   REVIEWER_ANOMALY_KINDS,
   SEMANTIC_FINDING_DISMISSAL_BASES,
 } from './finding-types.js';
+import { projectNativeStructuredOutputSchema } from './native-structured-output-schema.js';
 
 export {
   ProviderRawFindingIdSchema,
@@ -1591,7 +1592,7 @@ export const TerminalAdjudicationProposalSchema = z.discriminatedUnion('kind', [
   }).strict(),
 ]);
 
-export const TerminalAdjudicationProposalJsonSchema = {
+const TerminalAdjudicationProposalIntakeJsonSchema = {
   oneOf: [
     {
       type: 'object', additionalProperties: false,
@@ -1629,8 +1630,33 @@ export const TerminalAdjudicationProposalJsonSchema = {
   ],
 } as const;
 
+const TerminalAdjudicationProviderOutputIntakeJsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['proposal'],
+  properties: {
+    proposal: TerminalAdjudicationProposalIntakeJsonSchema,
+  },
+} as const;
+
+export const TerminalAdjudicationProviderOutputJsonSchema =
+  projectNativeStructuredOutputSchema(
+    TerminalAdjudicationProviderOutputIntakeJsonSchema,
+  );
+
 export function parseTerminalAdjudicationProposal(value: unknown): TerminalAdjudicationProposal {
   return TerminalAdjudicationProposalSchema.parse(value);
+}
+
+const TerminalAdjudicationProviderOutputSchema = z.object({
+  proposal: z.unknown(),
+}).strict();
+
+export function parseTerminalAdjudicationProviderOutput(
+  value: unknown,
+): TerminalAdjudicationProposal {
+  const output = TerminalAdjudicationProviderOutputSchema.parse(value);
+  return parseTerminalAdjudicationProposal(output.proposal);
 }
 const AppliedTerminalAdjudicationProposalSchema = z.discriminatedUnion('kind', [
   TerminalAdjudicationProposalSchema.options[0],
@@ -2843,7 +2869,7 @@ const authorityRefsJsonSchema = {
   items: { type: 'string', minLength: 1 },
 } as const;
 
-export const ConflictAdjudicationProviderProposalJsonSchema = {
+const ConflictAdjudicationProviderProposalIntakeJsonSchema = {
   oneOf: [
     {
       type: 'object', additionalProperties: false,
@@ -2886,8 +2912,33 @@ export const ConflictAdjudicationProviderProposalJsonSchema = {
   ],
 } as const;
 
+const ConflictAdjudicationProviderOutputIntakeJsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['proposal'],
+  properties: {
+    proposal: ConflictAdjudicationProviderProposalIntakeJsonSchema,
+  },
+} as const;
+
+export const ConflictAdjudicationProviderOutputJsonSchema =
+  projectNativeStructuredOutputSchema(
+    ConflictAdjudicationProviderOutputIntakeJsonSchema,
+  );
+
 export function parseConflictAdjudicationProposal(value: unknown): ConflictAdjudicationProposal {
   return ConflictAdjudicationProviderProposalSchema.parse(value);
+}
+
+const ConflictAdjudicationProviderOutputSchema = z.object({
+  proposal: z.unknown(),
+}).strict();
+
+export function parseConflictAdjudicationProviderOutput(
+  value: unknown,
+): ConflictAdjudicationProposal {
+  const output = ConflictAdjudicationProviderOutputSchema.parse(value);
+  return parseConflictAdjudicationProposal(output.proposal);
 }
 
 const RawFindingsOutputIntakeJsonSchema = {
@@ -3114,65 +3165,14 @@ const RawFindingsOutputIntakeJsonSchema = {
   },
 } as const;
 
-const NATIVE_STRUCTURED_OUTPUT_SCHEMA_KEYWORDS = new Set([
-  '$defs',
-  '$ref',
-  'type',
-  'description',
-  'properties',
-  'required',
-  'additionalProperties',
-  'enum',
-  'anyOf',
-  'items',
-  'minLength',
-  'maxLength',
-  'minItems',
-  'maxItems',
-]);
-
-function projectNativeStructuredOutputSchema(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(projectNativeStructuredOutputSchema);
-  }
-  if (typeof value !== 'object' || value === null) {
-    return value;
-  }
-  const schema = value as Record<string, unknown>;
-  const projected: Record<string, unknown> = {};
-  for (const [keyword, keywordValue] of Object.entries(schema)) {
-    const projectedKeyword = keyword === 'oneOf'
-      ? 'anyOf'
-      : keyword === 'const'
-        ? 'enum'
-        : keyword;
-    if (!NATIVE_STRUCTURED_OUTPUT_SCHEMA_KEYWORDS.has(projectedKeyword)) {
-      continue;
-    }
-    if (projectedKeyword === 'properties' || projectedKeyword === '$defs') {
-      projected[projectedKeyword] = Object.fromEntries(
-        Object.entries(keywordValue as Record<string, unknown>).map(([name, propertySchema]) => [
-          name,
-          projectNativeStructuredOutputSchema(propertySchema),
-        ]),
-      );
-      continue;
-    }
-    projected[projectedKeyword] = keyword === 'const'
-      ? [keywordValue]
-      : projectNativeStructuredOutputSchema(keywordValue);
-  }
-  return projected;
-}
-
 export const RawFindingsOutputJsonSchema = projectNativeStructuredOutputSchema(
   RawFindingsOutputIntakeJsonSchema,
-) as typeof RawFindingsOutputIntakeJsonSchema;
+);
 
 export const InterpretationCaseDecisionsOutputJsonSchema =
   projectNativeStructuredOutputSchema(
     InterpretationCaseDecisionsOutputIntakeJsonSchema,
-  ) as typeof InterpretationCaseDecisionsOutputIntakeJsonSchema;
+  );
 
 /** normalizer schema は snapshot/run/proof へ束縛せず、抽出だけを許可する。 */
 export function createRawFindingsOutputJsonSchema() {

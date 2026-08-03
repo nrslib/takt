@@ -23,7 +23,7 @@ import {
 } from './finding-manager-provider-call.js';
 import { reserveFindingConflictAdjudication } from './adjudication-reservation.js';
 import { FINDING_CONFLICT_ADJUDICATION_RULE_INDEX } from './adjudication-step.js';
-import { parseConflictAdjudicationProposal } from './schemas.js';
+import { parseConflictAdjudicationProviderOutput } from './schemas.js';
 import type { FindingAdjudicationStore } from './store.js';
 import type { FindingLedger, FindingObservation } from './types.js';
 
@@ -218,7 +218,7 @@ export function createFindingConflictAdjudicationRunner(deps: FindingConflictAdj
     }
     let proposal: ConflictAdjudicationProposal;
     try {
-      proposal = parseConflictAdjudicationProposal(agentResponse.structuredOutput);
+      proposal = parseConflictAdjudicationProviderOutput(agentResponse.structuredOutput);
     } catch {
       await completeFailedConflictAdjudication({
         ledgerStore: deps.ledgerStore,
