@@ -12,6 +12,8 @@ For small tasks, skip the design section.
 
 {{include:instructions/change-contract-traceability}}
 
+{{include:instructions/requirement-source-discipline}}
+
 **Actions:**
 1. **Read reference materials (required; do this first)**
    - Actually open and inspect the files or directories listed in the "Reference Materials" section of the task instructions using Read/Glob
@@ -26,10 +28,8 @@ For small tasks, skip the design section.
    - Compare the reference materials with the current implementation and identify the differences
    - **When reference material points to an external implementation, determine whether it is a "bug fix clue" or a "design approach to adopt". If narrowing scope beyond the reference material's intent, include the rationale in the plan report**
    - **For each requirement, determine "change needed / not needed". If "not needed", cite the relevant current code location (file:line) as evidence. Claiming "already correct" without evidence is prohibited**
-   - **Limit requirements to explicit requirements and implicit requirements that follow directly from them. Do not turn general best practices or future extensions into requirements**
-   - **When decomposing requirements, split only as far as needed to make them independently verifiable. Do not jump from decomposition into new requirements**
-   - **When adding an implicit requirement, state which explicit requirement it is derived from in the plan report**
 4. Investigate code to resolve unknowns
+   - Write file references relative to the working directory. Do not include absolute home-directory or worktree paths in responses or reports
 5. Identify the impact area
    - Identify implementation and verification locations for every contract ID. Only for contracts with impact paths, enumerate the relevant path from production to the final consumer
    - Identify the feature's role in the system and the owners of its entry points, trust boundaries, state, authority, and side effects

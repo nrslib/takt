@@ -40,6 +40,17 @@ When the task has unknowns or Open Questions, resolve them by reading code inste
 **Don't guess.** Verify names, values, and behavior in the code.
 **Don't stop at "unknown."** If the code can tell you, investigate and resolve it.
 
+### Information Source Roles
+
+Use each source for its own purpose. Do not confuse implementation evidence or design constraints with requirements.
+
+| Role | Sources |
+|------|---------|
+| Requirement authority | User instructions, the task order, and files it designates as requirement material |
+| Current-state and existing-contract evidence | Source code, types and schemas, execution results, and existing tests |
+| Design constraints | Knowledge, Policy, and project conventions |
+| Supporting evidence or proposals | Review reports, Previous Response, and other documentation |
+
 ### 3. Impact Scope Identification
 
 Identify the scope of changes:
@@ -63,13 +74,12 @@ Identify the scope of changes:
 
 ### 5. Structural Design
 
-Always choose the optimal structure. Do not follow poor existing code structure.
+Choose the smallest structure sufficient to satisfy and verify the requirements. Change existing structure only when it blocks a requirement, becomes unused because of the change, or would otherwise duplicate work driven by the same change reason.
 
 **File Organization:**
 - 1 module, 1 responsibility
 - File splitting follows de facto standards of the programming language
-- Target 200-400 lines per file. If exceeding, include splitting in the plan
-- If existing code has structural problems, include refactoring within the task scope
+- Treat file length and general design improvements as investigation signals. Plan splitting or refactoring only when it has a causal relationship to the requirements
 
 **Module Design:**
 - High cohesion, low coupling
@@ -88,6 +98,7 @@ Based on investigation and design, determine the implementation direction:
 - Keep the stated objective, constraints, and acceptance criteria intact instead of reframing them as an easier problem
 - Do not omit responsibilities or boundary handling required by the request, and do not add abstractions or future-proofing unrelated to it
 - Identify the feature's role, entry points, and owners of state, authority, and side effects, then plan only the boundaries that actually participate
+- Do not use current code, work-in-progress diffs, review proposals, Knowledge, or Policy as requirement authority. Treat them as current-state evidence, design constraints, or candidates
 
 ## Scope Discipline
 

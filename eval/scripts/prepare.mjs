@@ -76,6 +76,22 @@ const TARGETS = [
     fixture: 'eval/fixtures/initial-review-contract-discovery',
   },
   {
+    id: 'issue-plan-samples',
+    workflow: 'default',
+    step: 'plan',
+    fixture: '.',
+    artifacts: 'eval/.work/issue-plan-samples-context',
+  },
+  {
+    id: 'plan-report-source-authority',
+    workflow: 'default',
+    step: 'plan',
+    fixture: '.',
+    artifacts: 'eval/.work/plan-report-source-authority-context',
+    phase: 'phase2',
+    targetFile: 'plan.md',
+  },
+  {
     id: 'write-tests-contract-traceability',
     workflow: 'default',
     step: 'write_tests',
@@ -189,6 +205,7 @@ for (const {
   fixture,
   mutable,
   workflowCallVars,
+  artifacts,
   phase: requestedPhase,
   targetFile,
 } of targets) {
@@ -206,6 +223,7 @@ for (const {
     mkdirSync(dirname(runDir), { recursive: true });
     cpSync(fixtureDir, runDir, { recursive: true });
   }
+  const artifactDir = artifacts === undefined ? runDir : resolve(repoRoot, artifacts);
 
   let config = loadWorkflowByIdentifier(workflowName, repoRoot);
   if (!config) {
@@ -250,10 +268,10 @@ for (const {
   }
 
   // --- Facet snapshots + seeded reports (once per run directory) -----------
-  const snapshotDir = join(runDir, '.takt', 'eval-snapshots');
-  const reportDir = join(runDir, '.takt', 'runs', 'eval', 'reports');
-  if (!preparedDirs.has(runDir)) {
-    preparedDirs.add(runDir);
+  const snapshotDir = join(artifactDir, '.takt', 'eval-snapshots');
+  const reportDir = join(artifactDir, '.takt', 'runs', 'eval', 'reports');
+  if (!preparedDirs.has(artifactDir)) {
+    preparedDirs.add(artifactDir);
     rmSync(snapshotDir, { recursive: true, force: true });
     mkdirSync(snapshotDir, { recursive: true });
     rmSync(reportDir, { recursive: true, force: true });
@@ -297,6 +315,7 @@ for (const {
   const instruction = resolvedPhase === 'phase2'
     ? new ReportInstructionBuilder(target, {
         cwd: runDir,
+        task: TASK_MARKER,
         reportDir,
         stepIteration: 1,
         language,

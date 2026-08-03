@@ -74,6 +74,7 @@ export async function runReportPhase(
 
     const firstAttemptInstruction = new ReportInstructionBuilder(step, {
       cwd: ctx.cwd,
+      task: ctx.task,
       reportDir: ctx.reportDir,
       stepIteration,
       language: ctx.language,
@@ -117,6 +118,7 @@ export async function runReportPhase(
 
     const retryInstruction = new ReportInstructionBuilder(step, {
       cwd: ctx.cwd,
+      task: ctx.task,
       reportDir: ctx.reportDir,
       stepIteration,
       language: ctx.language,

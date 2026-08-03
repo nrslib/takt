@@ -56,3 +56,21 @@ tests:
           Judge the plan by its executable meaning, not by headings, identifier format, table shape, or exact wording. Pass only if it assigns a stable contract identifier to the requested formatting behavior, preserves the numeric attempt value, and plans the direct source and unit-test changes needed to reject the old colon-separated result. The plan may mention an explicit no-change obligation for unrelated behavior, but it must keep the implementation local to formatAttempt and its test.
 
           Fail if it invents persistence, restoration, authorization, concurrency, migration, compatibility layers, new abstractions, or changes to unrelated node, job, checkpoint, event, or projection modules. Also fail if it expands the local function-to-test relationship into a multi-boundary impact path, or if it treats a broad suite pass as the only evidence for the formatting contract.
+
+  - description: 'initial plan: preserve requirement authority and allowed implementation choices'
+    vars:
+      task: file://cases/initial-plan-requirement-provenance-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: plan/requirement-provenance
+        value: |
+          Judge the plan by its executable meaning rather than exact wording or table shape. Pass only when all of the following are true:
+
+          - It preserves every product obligation from requirements/export-limit.md: optional limiting, unchanged no-limit behavior, input order, and rejection of negative and non-integer limits.
+          - It preserves line-based and grouped presentation as allowed alternatives. The plan may select either after inspecting the code, but it must treat that selection as an implementation decision rather than an explicit or implied product requirement.
+          - It treats the existing grouped-export module, current implementation, tests, and architecture guidance as implementation evidence or constraints, not as authority for new product requirements.
+          - Every completion obligation can be traced to the product requirement or to an existing observable behavior that the product requirement says to preserve.
+          - It plans direct behavioral evidence for the limit boundary and invalid values through the public exportReport entry point.
+
+          Fail if it says grouped output, a new abstraction, a particular internal type or helper, or replacement of the existing presentation is required by the product source. Also fail if it omits a stated obligation, narrows an allowed choice into acceptance criteria, expands into unrelated persistence or concurrency work, or treats a broad suite pass as the only completion evidence.

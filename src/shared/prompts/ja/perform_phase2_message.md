@@ -2,7 +2,7 @@
 <!--
   template: perform_phase2_message
   phase: 2 (report output)
-  vars: workingDirectory, hasGitRules, gitRules, reportContext, hasLastResponse, lastResponse,
+  vars: workingDirectory, hasTask, task, hasGitRules, gitRules, reportContext, hasLastResponse, lastResponse,
         hasReportOutput, reportOutput, hasOutputContract, outputContract
   builder: ReportInstructionBuilder
 -->
@@ -19,6 +19,13 @@
 
 ## Workflow Context
 {{reportContext}}
+{{#if hasTask}}
+
+## Original Task Context
+以下はこのワークフローに与えられた元のタスクです。要求の正本として使用してください:
+
+{{task}}
+{{/if}}
 {{#if hasLastResponse}}
 
 ## Previous Work Context

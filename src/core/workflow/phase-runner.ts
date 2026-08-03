@@ -18,6 +18,8 @@ export { runStatusJudgmentPhase, type StatusJudgmentPhaseResult } from './status
 export interface BasePhaseRunnerContext {
   /** Working directory (agent work dir, may be a clone) */
   cwd: string;
+  /** Original workflow task. Phase 2 needs this even after a new-session retry. */
+  task?: string;
   /** Report directory path */
   reportDir: string;
   /** Language for instructions */

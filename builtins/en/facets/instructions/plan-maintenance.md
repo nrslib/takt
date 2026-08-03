@@ -11,6 +11,8 @@ For small tasks, omit the design section. In maintenance work, do not omit exist
 
 {{include:instructions/change-contract-traceability}}
 
+{{include:instructions/requirement-source-discipline}}
+
 **Do:**
 1. **Read reference materials first (required)**
    - Actually open files or directories listed in the task's reference-materials section with Read/Glob
@@ -23,9 +25,6 @@ For small tasks, omit the design section. In maintenance work, do not omit exist
 3. Understand the task requirements
    - Compare reference materials with the current implementation to identify the delta
    - **For each requirement, decide whether a change is needed. If no change is needed, cite the current code location (file:line). Do not say "already correct" without evidence**
-   - **Limit requirements to explicit requirements and directly implied requirements. Do not turn general best practices or future extensibility into requirements**
-   - **Break requirements down only to make them verifiable. Do not let decomposition create new requirements**
-   - **When using an implied requirement, identify the explicit requirement that supports it in the plan report**
 4. Inspect code to resolve unknowns
 5. Identify existing contracts that must be preserved
    - Check existing structure, type names, hook return values, UI copy, accessible names, comments, and test expectations

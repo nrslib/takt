@@ -46,6 +46,9 @@ function createBuilder(step: WorkflowStep, engineOverrides: BuilderEngineOverrid
     () => [{ name: step.name }],
     () => engineOverrides.workflowName ?? 'default',
     () => 'test workflow',
+    undefined,
+    undefined,
+    () => 'Original workflow task',
   );
 }
 
@@ -848,6 +851,7 @@ describe('OptionsBuilder.buildFallbackReportOptions', () => {
     });
 
     // Then
+    expect(ctx.task).toBe('Original workflow task');
     expect(ctx.lastResponse).toBe('Phase 1 response');
     expect(ctx.getSessionId('reviewers:opencode')).toBe('opencode-session');
     expect(ctx.resolveStepProviderModel(step)).toMatchObject({

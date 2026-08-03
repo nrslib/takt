@@ -1,0 +1,38 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'TAKT facet eval: Phase 2 plan report preserves requirement provenance'
+
+prompts:
+  - file://prompts/plan-report-source-authority.phase2.md
+
+providers:
+  - id: openai:codex-sdk
+    label: codex
+    config:
+      working_dir: .
+      sandbox_mode: read-only
+      approval_policy: never
+      skip_git_repo_check: true
+      model_reasoning_effort: low
+
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model_reasoning_effort: low
+
+tests:
+  - description: 'plan report: original task remains authoritative over a detailed Phase 1 draft'
+    vars:
+      task: file://cases/plan-report-source-authority-task.md
+      previous_response: file://cases/plan-report-source-authority-phase1-draft.md
+    assert:
+      - type: llm-rubric
+        metric: plan-report/requirement-provenance
+        value: |
+          Judge the actual final plan report, not merely whether headings exist. Pass only if it treats the Original Task Context as authoritative and the Phase 1 response as a draft rather than a requirement source. It must retain optional limiting, unchanged no-limit output, input order, rejection of negative/non-integer limits, and line-based/grouped presentation as allowed alternatives.
+
+          Grouped output as the only required presentation, a new class/type, a default of 100, and warning behavior appear only in the draft. They must not become explicit/directly-derived requirements or completion contracts. A completion contract may preserve the original allowed set of line-based or grouped presentation, and the implementation approach may select one with reasons. Fail only if a completion contract narrows acceptance to the selected presentation or gives a selected helper its own requirement-derived contract. File references must be repository-relative and must not expose an absolute home-directory or worktree path.

@@ -1,5 +1,7 @@
 Keep the existing requirements and acceptance criteria unchanged. Review the latest plan, implementation, tests, review reports, and Finding Contract state, then redefine the implementation approach.
 
+{{include:instructions/requirement-source-discipline}}
+
 Meet these requirements:
 
 - Address recurring branches of the same unresolved `family_tag` together

@@ -2,7 +2,7 @@
 # Task Plan
 
 ## Original Request
-{User's request as-is}
+{User's request verbatim. Do not add analysis, current implementation details, review proposals, or design decisions}
 
 ## Analysis
 
@@ -10,12 +10,19 @@
 {What needs to be achieved}
 
 ### Decomposed Requirements
-| # | Requirement | Type | Notes |
-|---|-------------|------|-------|
-| 1 | {requirement 1} | Explicit / Implicit | {Notes when a composite requirement was split} |
+| # | Requirement | Type | Origin / Derivation | Notes |
+|---|-------------|------|---------------------|-------|
+| 1 | {requirement 1} | Explicit / Directly implied / Preservation | {Source location / explicit requirement that cannot hold without this and why / evidence of an observable existing contract} | {Notes when a composite requirement was split} |
 
 - If a sentence contains multiple conditions, split it into the smallest independently verifiable rows
 - Put parallel expressions such as `A/B`, `global/project`, `JSON/leaf`, `allow/deny`, and `read/write` on separate rows
+- When the source permits multiple methods, preserve the alternatives here and record the selected approach under "Approaches Considered"
+- Do not add design decisions or candidate internal structures as requirements
+- A selected design decision may appear in the implementation approach, but do not add it to completion contracts unless it is also an explicit requirement, an indispensable derivation, or an existing observable contract to preserve
+- When selecting one of several permitted alternatives, completion contracts may fix only the permitted set and any explicitly stated preservation scope. Do not create a separate contract that fixes the selected alternative for inputs or paths outside that preservation scope
+- Treat Original Task Context as the authoritative requirement source and Previous Work Context as investigation results and a draft plan. Do not promote precedence, defaults, configuration shapes, identifiers, error behavior, or lifecycle details found only in Previous Work Context into requirements or completion contracts
+- Before finalizing, recheck the origin of every requirement and completion contract. Move anything that is neither explicit, indispensably derived, nor an observable existing contract to preserve into "Approaches Considered" or "Open Questions"
+- Write file references relative to the working directory and do not include absolute home-directory or worktree paths
 
 ### Reference Material Findings (when reference material exists)
 {Overview of reference implementation's approach and key differences from current implementation}
@@ -31,9 +38,9 @@
 {How to proceed}
 
 ### Completion Contracts
-| Contract ID | Requirement / Preservation Obligation | Valid Behavior | Incorrect Implementation to Reject | Implementation Location | Completion Evidence |
-|-------------|---------------------------------------|----------------|------------------------------------|-------------------------|---------------------|
-| `{stable ID}` | {explicit requirement or existing behavior to preserve} | {observable success condition} | {plausible counterexample} | {candidate change location} | {observation method and verification layer} |
+| Contract ID | Requirement / Preservation Obligation | Origin | Valid Behavior | Incorrect Implementation to Reject | Implementation Location | Completion Evidence |
+|-------------|---------------------------------------|--------|----------------|------------------------------------|-------------------------|---------------------|
+| `{stable ID}` | {explicit requirement, directly implied requirement, or existing behavior to preserve} | {Decomposed requirement row and evidence} | {observable success condition} | {plausible counterexample} | {candidate change location} | {observation method and verification layer} |
 
 ### Impact Paths (only for applicable contracts)
 | Contract ID | Definition / Production | Transformation / Persistence / Restore | Consumers / Outputs / Auxiliary Entry Points | State / Ownership / Compatibility |
