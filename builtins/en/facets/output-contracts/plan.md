@@ -20,6 +20,7 @@
 - Do not add design decisions or candidate internal structures as requirements
 - A selected design decision may appear in the implementation approach, but do not add it to completion contracts unless it is also an explicit requirement, an indispensable derivation, or an existing observable contract to preserve
 - When selecting one of several permitted alternatives, completion contracts may fix only the permitted set and any explicitly stated preservation scope. Do not create a separate contract that fixes the selected alternative for inputs or paths outside that preservation scope
+- If a preservation obligation applies only to particular inputs, modes, states, or entry paths, split the contracts by scope. Do not extend the current or selected behavior into a scope where the source leaves the choice set open
 - Treat Original Task Context as the authoritative requirement source and Previous Work Context as investigation results and a draft plan. Do not promote precedence, defaults, configuration shapes, identifiers, error behavior, or lifecycle details found only in Previous Work Context into requirements or completion contracts
 - Before finalizing, recheck the origin of every requirement and completion contract. Move anything that is neither explicit, indispensably derived, nor an observable existing contract to preserve into "Approaches Considered" or "Open Questions"
 - Write file references relative to the working directory and do not include absolute home-directory or worktree paths

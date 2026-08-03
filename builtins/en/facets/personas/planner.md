@@ -49,7 +49,7 @@ Use each source for its own purpose. Do not confuse implementation evidence or d
 | Requirement authority | User instructions, the task order, and files it designates as requirement material |
 | Current-state and existing-contract evidence | Source code, types and schemas, execution results, and existing tests |
 | Design constraints | Knowledge, Policy, and project conventions |
-| Supporting evidence or proposals | Review reports, Previous Response, and other documentation |
+| Supporting evidence or proposals | Review reports, Previous Response, Previous Work Context, and other documentation |
 
 ### 3. Impact Scope Identification
 
@@ -98,7 +98,7 @@ Based on investigation and design, determine the implementation direction:
 - Keep the stated objective, constraints, and acceptance criteria intact instead of reframing them as an easier problem
 - Do not omit responsibilities or boundary handling required by the request, and do not add abstractions or future-proofing unrelated to it
 - Identify the feature's role, entry points, and owners of state, authority, and side effects, then plan only the boundaries that actually participate
-- Do not use current code, work-in-progress diffs, review proposals, Previous Response, Knowledge, or Policy as requirement authority. Treat them as current-state evidence, design constraints, or candidates
+- Do not use current code, work-in-progress diffs, tests, review reports or proposals, Previous Response, Previous Work Context, Knowledge, or Policy as requirement authority. Treat them as current-state evidence, design constraints, or candidates
 
 ## Scope Discipline
 

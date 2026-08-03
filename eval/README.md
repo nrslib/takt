@@ -54,8 +54,15 @@ exceptions to the reviewer fixture rule: `eval/scripts/prepare.mjs` uses
 `fixture: '.'` and their promptfoo configurations use `working_dir: ..`
 (resolved from `eval/`), so their repository context and provider working
 directory both point at the checked-out repository root. The former reads it in
-read-only mode; the latter is a tool-less report phase. Reproduce either suite
-from the repository root after preparing it.
+read-only mode; the latter renders the report-phase prompt. Reproduce either
+suite from the repository root after preparing it.
+
+`plan-report-source-authority` measures the rendered Phase 2 instruction and
+report content, not TAKT's runtime tool suppression. The promptfoo Codex SDK
+provider does not expose TAKT's `permissionMode` or `allowedTools` options; its
+strict config schema rejects those fields. Runtime tests for `OptionsBuilder`
+and the report phase separately verify `permissionMode: readonly`, an empty
+tool allowance, and rejection of emitted tool events.
 
 ## Improvement workflow (red -> green)
 
