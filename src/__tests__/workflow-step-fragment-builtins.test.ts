@@ -18,7 +18,13 @@ import {
 } from './helpers/finding-storage.js';
 
 type RawStep = Record<string, unknown>;
-type RawWorkflow = { steps: RawStep[] };
+type RawWorkflow = {
+  steps: RawStep[];
+  finding_contract?: unknown;
+  subworkflow?: {
+    requires_finding_contract?: unknown;
+  };
+};
 type Language = 'en' | 'ja';
 
 const LANGUAGES: Language[] = ['en', 'ja'];
@@ -68,6 +74,42 @@ const REMEDIATION_WORKFLOWS = [
 
 function readBuiltinWorkflow(lang: Language, name: string): RawWorkflow {
   return parseYaml(readFileSync(join(getBuiltinWorkflowsDir(lang), name + '.yaml'), 'utf-8')) as RawWorkflow;
+}
+
+function listFindingContractWorkflows(lang: Language): string[] {
+  return readdirSync(getBuiltinWorkflowsDir(lang))
+    .filter((name) => name.endsWith('.yaml'))
+    .map((name) => name.slice(0, -'.yaml'.length))
+    .filter((name) => {
+      const workflow = readBuiltinWorkflow(lang, name);
+      return workflow.finding_contract !== undefined
+        || workflow.subworkflow?.requires_finding_contract === true;
+    })
+    .sort();
+}
+
+function collectWorkflowCallTargets(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.flatMap(collectWorkflowCallTargets);
+  }
+  if (typeof value !== 'object' || value === null) {
+    return [];
+  }
+  const record = value as Record<string, unknown>;
+  const currentTarget = record.kind === 'workflow_call' && typeof record.call === 'string'
+    ? [record.call]
+    : [];
+  const workflowCall = record.workflow_call;
+  const legacyTarget = typeof workflowCall === 'object'
+    && workflowCall !== null
+    && typeof (workflowCall as Record<string, unknown>).workflow === 'string'
+    ? [(workflowCall as Record<string, string>).workflow]
+    : [];
+  return [
+    ...currentTarget,
+    ...legacyTarget,
+    ...Object.values(record).flatMap(collectWorkflowCallTargets),
+  ];
 }
 
 function getStep(raw: RawWorkflow, name: string): RawStep {
@@ -472,20 +514,21 @@ describe('builtin workflow step fragment migration', () => {
   });
 
   it.each(LANGUAGES)('does not mix ordinary %s adjudication into Finding Contract workflows', (lang) => {
-    const findingContractWorkflows = new Set([
-      ...HIGH_WORKFLOWS,
-      'takt-default-localllm',
-      'peer-review-finding-contract-localllm',
-      ...readdirSync(getBuiltinWorkflowsDir(lang))
-        .filter((name) => name.startsWith('finding-contract-') && name.endsWith('.yaml'))
-        .map((name) => name.slice(0, -'.yaml'.length)),
-    ]);
+    const findingContractWorkflows = listFindingContractWorkflows(lang);
+    expect(findingContractWorkflows).toHaveLength(9);
+    expect(findingContractWorkflows).toContain('merge-readiness-finding-contract-final-gate');
 
     for (const workflowName of findingContractWorkflows) {
-      const serialized = JSON.stringify(readBuiltinWorkflow(lang, workflowName));
+      const workflow = readBuiltinWorkflow(lang, workflowName);
+      const serialized = JSON.stringify(workflow);
       expect(serialized, workflowName).not.toContain('peer-review-adjudication');
       expect(serialized, workflowName).not.toContain('fix-plan-from-review-resolution');
       expect(serialized, workflowName).not.toContain('review-resolution.md');
+      for (const target of collectWorkflowCallTargets(workflow)) {
+        const ordinaryPeerReview = target.startsWith('peer-review')
+          && target !== 'peer-review-finding-contract-localllm';
+        expect(ordinaryPeerReview, `${workflowName} workflow_call target: ${target}`).toBe(false);
+      }
     }
   });
 
