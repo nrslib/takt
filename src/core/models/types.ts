@@ -71,6 +71,8 @@ export type {
   WorkflowSubworkflowParamConfig,
   WorkflowSubworkflowConfig,
   WorkflowResumePointEntry,
+  WorkflowRestartPointEntry,
+  WorkflowRestartPoint,
   WorkflowResumePoint,
   WorkflowPendingLoopJudge,
   WorkflowPendingLoopJudgeBudgetWait,

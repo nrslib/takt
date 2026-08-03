@@ -2,6 +2,7 @@ import { z } from 'zod/v4';
 import { buildTaskSchema } from './taskConfigSerialization.js';
 import { getLocalBranchNameError } from '../../shared/utils/gitBranchValidation.js';
 import { parseWorkflowResumePoint } from '../../core/workflow/resume-point-codec.js';
+import { WorkflowRestartPointSchema } from '../../core/models/workflow-resume-schema.js';
 
 const WorkflowResumePointCodecSchema = z.unknown().transform((value, ctx) => {
   try {
@@ -19,6 +20,8 @@ const positiveSafeIntegerSchema = z.number().refine(
   (value) => Number.isSafeInteger(value) && value > 0,
   { message: 'Expected a positive safe integer' },
 );
+
+export const TASK_RESTART_POINT_KEY = 'restart_point' as const;
 
 export const TaskExecutionConfigObjectSchema = z.object({
   worktree: z.union([z.boolean(), z.string()]).optional(),
@@ -38,7 +41,36 @@ export const TaskExecutionConfigObjectSchema = z.object({
   pr_number: positiveSafeIntegerSchema.optional(),
   context_pr_number: positiveSafeIntegerSchema.optional(),
   resume_point: WorkflowResumePointCodecSchema.optional(),
+  [TASK_RESTART_POINT_KEY]: WorkflowRestartPointSchema.optional(),
 }).superRefine((data, ctx) => {
+  if (data.resume_point !== undefined && data[TASK_RESTART_POINT_KEY] !== undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'resume_point and restart_point cannot be specified together',
+      path: [TASK_RESTART_POINT_KEY],
+    });
+  }
+  if (data.start_step !== undefined && data[TASK_RESTART_POINT_KEY] !== undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'start_step and restart_point cannot be specified together',
+      path: [TASK_RESTART_POINT_KEY],
+    });
+  }
+  if (data.exceeded_current_iteration !== undefined && data[TASK_RESTART_POINT_KEY] !== undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'exceeded_current_iteration and restart_point cannot be specified together',
+      path: [TASK_RESTART_POINT_KEY],
+    });
+  }
+  if (data.exceeded_max_steps !== undefined && data[TASK_RESTART_POINT_KEY] !== undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'exceeded_max_steps and restart_point cannot be specified together',
+      path: [TASK_RESTART_POINT_KEY],
+    });
+  }
   if (data.source === 'pr_review' && data.pr_number === undefined) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,

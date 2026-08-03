@@ -13,6 +13,7 @@ import type {
   WorkflowState,
   WorkflowStep,
 } from '../../models/types.js';
+import { WorkflowRestartPointSchema } from '../../models/workflow-resume-schema.js';
 import {
   cloneDynamicParallelSelections,
   serializeDynamicParallelSelections,
@@ -84,6 +85,7 @@ import {
 } from '../workflow-execution-scope.js';
 import { WorkflowCallProgressTracker, type WorkflowCallProgressLease } from '../workflow-call-progress-tracker.js';
 import { readRunMetaBySlug } from '../run/run-meta.js';
+import { WorkflowRestartNavigator } from './WorkflowRestartNavigator.js';
 const log = createLogger('workflow-engine');
 
 type WorkflowEngineRuntimeOptions = WorkflowEngineOptions & {
@@ -192,6 +194,29 @@ export class WorkflowEngine extends EventEmitter {
       );
     }
     const resumePoint = options.resumePoint === undefined ? undefined : parseWorkflowResumePoint(options.resumePoint);
+    const restartPoint = options.restartPoint === undefined
+      ? undefined
+      : WorkflowRestartPointSchema.parse(options.restartPoint);
+    if (resumePoint !== undefined && restartPoint !== undefined) {
+      throw new Error('Workflow engine cannot own both resumePoint and restartPoint');
+    }
+    if (restartPoint !== undefined && options.initialIteration !== undefined) {
+      throw new Error('Workflow engine cannot own both restartPoint and initialIteration');
+    }
+    // The adjudication target must participate in normal step validation and execution,
+    // so it is injected before restart validation and before services capture config.steps.
+    this.config = injectFindingConflictAdjudicationStep(
+      config,
+      options.inheritedFindingContract?.contract ?? config.findingContract,
+    );
+    inheritWorkflowConfigMetadata(config, this.config);
+    const restartNavigator = restartPoint === undefined
+      ? undefined
+      : new WorkflowRestartNavigator(restartPoint);
+    const restartStartStep = restartNavigator?.resolveRootStartStep(
+      this.config,
+      options.startStep,
+    );
     assertTaskPrefixPair(options.taskPrefix, options.taskColorIndex);
     this.structuredCaller = options.structuredCaller ?? new CapabilityAwareStructuredCaller();
     if (options.reportDirName !== undefined && !isValidReportDirName(options.reportDirName)) {
@@ -238,20 +263,11 @@ export class WorkflowEngine extends EventEmitter {
         autoRouting: effectiveAutoRouting,
         estimator: autoRoutingEstimator,
       });
-    // The adjudication target must participate in normal step validation and execution,
-    // so it is injected into config.steps whenever the workflow (or a
-    // loop monitor judge) wires a rule to it and a finding contract is in
-    // effect. Injection happens before validateWorkflowConfig so the injected
-    // step is validated exactly like an authored step (session, provider,
-    // model), and before any service captures config.steps.
-    this.config = injectFindingConflictAdjudicationStep(
-      config,
-      options.inheritedFindingContract?.contract ?? config.findingContract,
-    );
-    inheritWorkflowConfigMetadata(config, this.config);
     this.options = {
       ...options,
       ...(resumePoint === undefined ? {} : { resumePoint }),
+      ...(restartPoint === undefined ? {} : { restartPoint }),
+      ...(restartStartStep === undefined ? {} : { startStep: restartStartStep }),
       rateLimitFallback: config.rateLimitFallback ?? options.rateLimitFallback,
       structuredCaller: this.structuredCaller,
       structuredOutputNormalizers: options.structuredOutputNormalizers ?? createStructuredOutputNormalizerRegistry([]),
@@ -287,6 +303,12 @@ export class WorkflowEngine extends EventEmitter {
       this.options.resumePoint,
       initialMaxSteps,
     );
+    if (restartNavigator !== undefined) {
+      if (this.sharedRuntime.restartNavigator !== undefined) {
+        throw new Error('Workflow restart navigator is already initialized');
+      }
+      this.sharedRuntime.restartNavigator = restartNavigator;
+    }
     this.sharedRuntime.dynamicParallelSelectionStore ??= new DynamicParallelSelectionStore(
       new Map(Object.entries(this.options.resumePoint?.dynamic_parallel_selections ?? {})),
     );

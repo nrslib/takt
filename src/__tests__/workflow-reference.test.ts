@@ -12,9 +12,11 @@ import {
 } from '../infra/config/loaders/workflowSourceMetadata.js';
 import {
   buildWorkflowResumePointEntry,
+  buildWorkflowRestartPointEntry,
   getWorkflowReference,
   workflowEntriesMatch,
   workflowEntryMatchesWorkflow,
+  workflowRestartEntryMatchesWorkflow,
 } from '../core/workflow/workflow-reference.js';
 import { trimResumePointStackForWorkflow } from '../core/workflow/run/resume-point.js';
 import { invalidateAllResolvedConfigCache, invalidateGlobalConfigCache } from '../infra/config/index.js';
@@ -36,6 +38,50 @@ afterEach(() => {
 });
 
 describe('workflow-reference', () => {
+  it('Restart entry は workflow 名と同じ canonical ref も明示して保存する', () => {
+    const workflow = normalizeWorkflowConfig({
+      name: 'default',
+      initial_step: 'review',
+      steps: [{ name: 'review', persona: 'reviewer', instruction: 'Review' }],
+    }, '/tmp/project');
+
+    expect(buildWorkflowRestartPointEntry(workflow, 'review', 'agent')).toEqual({
+      workflow: 'default',
+      workflow_ref: 'default',
+      step: 'review',
+      kind: 'agent',
+    });
+  });
+
+  it('Restart identity は workflow 名が同じでも別 opaque ref を拒否する', () => {
+    const workflow = attachWorkflowOpaqueRef(normalizeWorkflowConfig({
+      name: 'shared',
+      initial_step: 'review',
+      steps: [{ name: 'review', persona: 'reviewer', instruction: 'Review' }],
+    }, '/tmp/project'), 'project:shared-a');
+
+    expect(workflowRestartEntryMatchesWorkflow({
+      workflow: 'shared',
+      workflow_ref: 'project:shared-b',
+      step: 'review',
+      kind: 'agent',
+    }, workflow)).toBe(false);
+  });
+
+  it('Resume entry は旧データの workflow_ref 欠落時に workflow 名で照合する', () => {
+    const workflow = attachWorkflowOpaqueRef(normalizeWorkflowConfig({
+      name: 'shared',
+      initial_step: 'review',
+      steps: [{ name: 'review', persona: 'reviewer', instruction: 'Review' }],
+    }, '/tmp/project'), 'project:shared-a');
+
+    expect(workflowEntryMatchesWorkflow({
+      workflow: 'shared',
+      step: 'review',
+      kind: 'agent',
+    }, workflow)).toBe(true);
+  });
+
   it('agent entry の step iteration 差分を workflow_call instance として比較しない', () => {
     expect(workflowEntriesMatch(
       {

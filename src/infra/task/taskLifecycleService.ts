@@ -13,6 +13,7 @@ import {
   generateTaskName,
 } from './taskRecordMutations.js';
 import { findActiveTaskTargetConflict } from './activeTaskTarget.js';
+import { TASK_RESTART_POINT_KEY } from './taskExecutionSchemas.js';
 
 export class TaskLifecycleService {
   constructor(
@@ -303,5 +304,6 @@ function hasInheritedRetryCheckpoint(task: TaskRecord): boolean {
     && (
       task.start_step !== undefined
       || task.resume_point !== undefined
+      || task[TASK_RESTART_POINT_KEY] !== undefined
     );
 }

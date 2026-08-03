@@ -1,8 +1,9 @@
 import * as path from 'node:path';
-import type { WorkflowResumePoint } from '../../core/models/index.js';
+import type { WorkflowRestartPoint, WorkflowResumePoint } from '../../core/models/index.js';
 import type { RunResumeSource } from '../../core/workflow/run/run-meta.js';
 import { nowIso } from './naming.js';
 import type { TaskRecord, TaskStatus } from './schema.js';
+import { TASK_RESTART_POINT_KEY } from './taskExecutionSchemas.js';
 
 export interface ResolvedTaskRetryMetadata {
   startStep?: string;
@@ -11,14 +12,23 @@ export interface ResolvedTaskRetryMetadata {
   preserveExisting?: boolean;
 }
 
+export interface ExceededTaskRecordUpdates {
+  currentStep: string;
+  newMaxSteps: number;
+  currentIteration: number;
+  resumePoint?: WorkflowResumePoint;
+  worktreePath?: string;
+  branch?: string;
+}
+
 type TerminalTaskUpdates = Omit<
   Partial<TaskRecord>,
-  'start_step' | 'resume_point' | 'exceeded_current_iteration' | 'exceeded_max_steps'
+  'start_step' | 'resume_point' | typeof TASK_RESTART_POINT_KEY | 'exceeded_current_iteration' | 'exceeded_max_steps'
 >;
 
 type ClearedRetryTaskRecord = Omit<
   TaskRecord,
-  'start_step' | 'resume_point' | 'exceeded_current_iteration' | 'exceeded_max_steps'
+  'start_step' | 'resume_point' | typeof TASK_RESTART_POINT_KEY | 'exceeded_current_iteration' | 'exceeded_max_steps'
 >;
 
 export function buildClaimedTaskRecord(task: TaskRecord): TaskRecord {
@@ -50,6 +60,25 @@ export function buildTerminalTaskRecord(
   };
 }
 
+export function buildExceededTaskRecord(
+  task: TaskRecord,
+  updates: ExceededTaskRecordUpdates,
+): TaskRecord {
+  return {
+    ...clearRetryMetadata(task),
+    status: 'exceeded',
+    completed_at: nowIso(),
+    owner_pid: null,
+    failure: undefined,
+    start_step: updates.currentStep,
+    exceeded_max_steps: updates.newMaxSteps,
+    exceeded_current_iteration: updates.currentIteration,
+    ...(updates.resumePoint === undefined ? {} : { resume_point: updates.resumePoint }),
+    ...(updates.worktreePath ? { worktree_path: updates.worktreePath } : {}),
+    ...(updates.branch ? { branch: updates.branch } : {}),
+  };
+}
+
 export function buildRetryTaskRecord(
   task: TaskRecord,
   status: Extract<TaskStatus, 'pending' | 'running'>,
@@ -59,8 +88,17 @@ export function buildRetryTaskRecord(
   workflow: string | undefined,
   taskDir: string | undefined,
   resumeSource: RunResumeSource,
+  restartPoint?: WorkflowRestartPoint,
 ): TaskRecord {
-  const taskWithoutSourceRunSlug = { ...task };
+  if (resumePoint !== undefined && restartPoint !== undefined) {
+    throw new Error('Retry task cannot own both resume_point and restart_point');
+  }
+  if (startStep !== undefined && restartPoint !== undefined) {
+    throw new Error('Retry task cannot own both start_step and restart_point');
+  }
+  const taskWithoutSourceRunSlug = resumePoint === undefined
+    ? clearRetryMetadata(task)
+    : { ...task, [TASK_RESTART_POINT_KEY]: undefined };
   delete taskWithoutSourceRunSlug.source_run_slug;
   const taskSpecSource = taskDir
     ? { content: undefined, content_file: undefined, task_dir: taskDir }
@@ -81,6 +119,7 @@ export function buildRetryTaskRecord(
     start_step: startStep,
     retry_note: retryNote,
     resume_point: resumePoint,
+    ...(restartPoint === undefined ? {} : { [TASK_RESTART_POINT_KEY]: restartPoint }),
   };
 }
 
@@ -112,6 +151,7 @@ function clearRetryMetadata(task: TaskRecord): ClearedRetryTaskRecord {
   const retryMetadataKeys = new Set<string>([
     'start_step',
     'resume_point',
+    TASK_RESTART_POINT_KEY,
     'exceeded_current_iteration',
     'exceeded_max_steps',
   ]);

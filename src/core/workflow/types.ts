@@ -8,6 +8,7 @@ import type {
   WorkflowConfig,
   WorkflowCallStep,
   WorkflowMaxSteps,
+  WorkflowRestartPoint,
   WorkflowResumePoint,
   WorkflowResumePointEntry,
   RateLimitFallbackConfig,
@@ -181,6 +182,7 @@ export interface RuntimeStepResolution {
 
 export interface WorkflowSharedRuntimeState {
   startedAtMs: number;
+  restartNavigator?: import('./engine/WorkflowRestartNavigator.js').WorkflowRestartNavigator;
   stepBudget?: WorkflowStepBudget;
   workflowCallProgressTracker?: import('./workflow-call-progress-tracker.js').WorkflowCallProgressTracker;
   dynamicParallelSelectionStore?: DynamicParallelSelectionStore;
@@ -468,6 +470,8 @@ export interface WorkflowEngineOptions {
   retryNote?: string;
   /** Resume point for workflow_call-aware retries */
   resumePoint?: WorkflowResumePoint;
+  /** Stateless authored path for retrying from a new nested position. */
+  restartPoint?: WorkflowRestartPoint;
   resumeSource?: RunResumeSource;
   onDynamicParallelSelectionPersisted?: (resumePoint: WorkflowResumePoint) => Promise<void> | void;
   operationJournal?: WorkflowOperationJournalContext;

@@ -2,7 +2,7 @@
  * Tests: session loading behavior in executeWorkflow().
  *
  * Normal runs pass empty sessions to WorkflowEngine;
- * retry runs (startStep / retryNote) load persisted sessions.
+ * retry runs (startStep / retryNote / restartPoint) load persisted sessions.
  */
 
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { USAGE_MISSING_REASONS } from '../core/logging/contracts.js';
-import type { WorkflowConfig } from '../core/models/index.js';
+import type { WorkflowConfig, WorkflowRestartPoint } from '../core/models/index.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 
 const {
@@ -478,6 +478,26 @@ describe('executeWorkflow session loading', () => {
     });
 
     // Then: loadPersonaSessions is called to load saved sessions
+    expect(mockLoadPersonaSessions).toHaveBeenCalledWith('/tmp/project', 'claude');
+  });
+
+  it('should load persisted sessions when restartPoint is set (retry)', async () => {
+    const restartPoint = {
+      stack: [
+        {
+          workflow: 'test-workflow',
+          workflow_ref: 'test-workflow',
+          step: 'implement',
+          kind: 'agent',
+        },
+      ],
+    } satisfies WorkflowRestartPoint;
+
+    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+      restartPoint,
+    });
+
     expect(mockLoadPersonaSessions).toHaveBeenCalledWith('/tmp/project', 'claude');
   });
 

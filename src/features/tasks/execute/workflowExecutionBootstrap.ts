@@ -195,7 +195,7 @@ export async function createWorkflowExecutionBootstrap(
         handlerRef.current(event);
       };
 
-  const isRetry = Boolean(options.startStep || options.retryNote || options.resumePoint);
+  const isRetry = Boolean(options.startStep || options.retryNote || options.resumePoint || options.restartPoint);
   const isWorktree = cwd !== projectCwd;
   log.debug('Session mode', { isRetry, isWorktree });
 

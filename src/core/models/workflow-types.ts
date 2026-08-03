@@ -155,6 +155,18 @@ export interface WorkflowResumePointEntry {
   call_instance?: number;
 }
 
+export type WorkflowRestartPointEntry = Omit<
+  WorkflowResumePointEntry,
+  'workflow_ref' | 'step_iterations' | 'call_instance'
+> & {
+  workflow_ref: string;
+  call_instance?: 1;
+};
+
+export interface WorkflowRestartPoint {
+  stack: WorkflowRestartPointEntry[];
+}
+
 export interface WorkflowResumePoint {
   version: 2;
   stack: WorkflowResumePointEntry[];

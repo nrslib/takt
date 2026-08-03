@@ -1,4 +1,9 @@
-import type { WorkflowConfig, WorkflowResumePointEntry, WorkflowStepKind } from '../models/types.js';
+import type {
+  WorkflowConfig,
+  WorkflowRestartPointEntry,
+  WorkflowResumePointEntry,
+  WorkflowStepKind,
+} from '../models/types.js';
 
 const WORKFLOW_OPAQUE_REF = Symbol.for('takt.workflowOpaqueRef');
 
@@ -30,6 +35,21 @@ export function buildWorkflowResumePointEntry(
   };
 }
 
+export function buildWorkflowRestartPointEntry(
+  workflow: WorkflowConfig,
+  step: string,
+  kind: WorkflowStepKind,
+  callInstance?: 1,
+): WorkflowRestartPointEntry {
+  return {
+    workflow: workflow.name,
+    workflow_ref: getWorkflowReference(workflow),
+    step,
+    kind,
+    ...(callInstance === undefined ? {} : { call_instance: callInstance }),
+  };
+}
+
 export function getResumePointWorkflowReference(entry: WorkflowResumePointEntry): string {
   return entry.workflow_ref ?? entry.workflow;
 }
@@ -55,6 +75,13 @@ export function workflowEntryMatchesWorkflow(
     return entry.workflow_ref === getWorkflowReference(workflow);
   }
   return entry.workflow === workflow.name;
+}
+
+export function workflowRestartEntryMatchesWorkflow(
+  entry: WorkflowRestartPointEntry,
+  workflow: WorkflowConfig,
+): boolean {
+  return entry.workflow_ref === getWorkflowReference(workflow);
 }
 
 export function workflowEntriesMatch(

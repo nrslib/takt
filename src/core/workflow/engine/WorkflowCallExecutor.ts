@@ -436,6 +436,7 @@ export class WorkflowCallExecutor {
     const options = this.deps.getOptions();
     const inheritedOptions = { ...options };
     delete inheritedOptions.maxStepsOverride;
+    delete inheritedOptions.restartPoint;
     const parentConfig = this.deps.getConfig();
     const resolvedChildResumePoint = this.resolveChildResumePoint(
       request.childWorkflow,
@@ -502,11 +503,16 @@ export class WorkflowCallExecutor {
       providerRouting: request.providerRouting === undefined
         ? undefined
         : structuredClone(request.providerRouting),
-      startStep: this.resolveChildResumeStartStep(
-        request.childWorkflow,
-        childResumePoint,
-        request.callStack.length,
-      ),
+      startStep: this.deps.sharedRuntime.restartNavigator === undefined
+        ? this.resolveChildResumeStartStep(
+            request.childWorkflow,
+            childResumePoint,
+            request.callStack.length,
+          )
+        : this.deps.sharedRuntime.restartNavigator.resolveChildStartStep(
+            request.childWorkflow,
+            request.callStack,
+          ),
       resumePoint: childResumePoint,
       initialIteration: this.deps.state.iteration,
       reportDirName: this.deps.runPaths.slug,

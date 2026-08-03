@@ -249,6 +249,39 @@ describe('executeAndCompleteTask', () => {
     });
   });
 
+  it('should pass the resolved nested restart path into workflow execution', async () => {
+    const task = createTask('task-with-nested-restart');
+    const restartPoint = {
+      stack: [
+        { workflow: 'default', workflow_ref: 'default', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 as const },
+        { workflow: 'coding', workflow_ref: 'coding', step: 'review', kind: 'agent' as const },
+      ],
+    };
+    mockResolveTaskExecution.mockResolvedValueOnce({
+      execCwd: '/project',
+      workflowIdentifier: 'default',
+      isWorktree: false,
+      autoPr: false,
+      draftPr: false,
+      managedPr: false,
+      shouldPublishBranchToOrigin: false,
+      reportDirName: '20260216-task-with-nested-restart',
+      startStep: 'delegate',
+      restartPoint,
+    });
+
+    await executeAndCompleteTaskWithoutWorkflow(
+      task,
+      createTaskRunnerMock() as never,
+      '/project',
+    );
+
+    const workflowExecutionOptions = mockExecuteWorkflow.mock.calls[0]?.[3] as {
+      restartPoint?: typeof restartPoint;
+    };
+    expect(workflowExecutionOptions.restartPoint).toEqual(restartPoint);
+  });
+
   it('Given silent task adapter options, When a task is executed, Then outputMode reaches executeWorkflow', async () => {
     const task = createTask('task-silent-output');
 

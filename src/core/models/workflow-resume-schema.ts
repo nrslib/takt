@@ -2,6 +2,8 @@ import { z } from 'zod/v4';
 import { validateWorkflowResumePointInvocationSemantics } from './workflow-resume-contract.js';
 import { ProviderTypeSchema } from './schema-base.js';
 
+const nonBlankStringSchema = z.string().min(1).refine((value) => value.trim().length > 0);
+
 export const WorkflowResumePointEntrySchema = z.object({
   workflow: z.string().min(1),
   workflow_ref: z.string().min(1).optional(),
@@ -18,6 +20,36 @@ export const WorkflowResumePointEntrySchema = z.object({
     });
   }
 });
+
+export const WorkflowRestartPointEntrySchema = z.object({
+  workflow: nonBlankStringSchema,
+  workflow_ref: nonBlankStringSchema,
+  step: nonBlankStringSchema,
+  kind: z.enum(['agent', 'system', 'workflow_call']),
+  call_instance: z.literal(1).optional(),
+  step_iterations: z.never().optional(),
+}).strict().superRefine((entry, ctx) => {
+  if (entry.kind === 'workflow_call' && entry.call_instance === undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['call_instance'],
+      message: 'workflow_call restart entry requires call_instance',
+    });
+  }
+  if (entry.kind !== 'workflow_call' && entry.call_instance !== undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['call_instance'],
+      message: 'Only workflow_call restart entries may define call_instance',
+    });
+  }
+});
+
+export const WorkflowRestartPointSchema = z.object({
+  stack: z.array(WorkflowRestartPointEntrySchema).min(1),
+  iteration: z.never().optional(),
+  elapsed_ms: z.never().optional(),
+}).strict();
 
 export const DynamicParallelSelectionSnapshotSchema = z.object({
   identity: z.string().min(1),

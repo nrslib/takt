@@ -8,6 +8,8 @@ import { TaskRunner } from '../infra/task/runner.js';
 import * as runOrderContent from '../core/workflow/run/order-content.js';
 import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig.js';
 import { invalidateAllResolvedConfigCache } from '../infra/config/resolveConfigValue.js';
+import { loadWorkflowByIdentifier } from '../infra/config/loaders/workflowLoader.js';
+import { buildWorkflowRestartPointEntry } from '../core/workflow/workflow-reference.js';
 import { generateExecutionReportDir } from '../core/workflow/run/run-slug.js';
 import type { WorkflowResumePointEntry } from '../core/models/index.js';
 import {
@@ -1768,6 +1770,54 @@ describe('resolveTaskExecution', () => {
     expect(readTaktFile(worktreePath, 'runs/existing/log.md')).toBe('keep run history\n');
     expect(readTaktFile(worktreePath, 'tasks/existing.yaml')).toBe('keep queued task\n');
     expect(readTaktFile(worktreePath, 'worktree-sessions/existing.json')).toBe('{"session":"keep"}\n');
+
+    branchExistsSpy.mockRestore();
+  });
+
+  it('should sync project-local .takt resources for a reused worktree re-execution with only restart_point', async () => {
+    const root = createTempProjectDir();
+    configureIsolatedGlobalConfig(root);
+    const worktreePath = path.join(root, '.takt', 'worktrees', 'existing-safe-worktree');
+    fs.mkdirSync(worktreePath, { recursive: true });
+    const rootWorkflow = [
+      'name: root-default',
+      'initial_step: implement',
+      'max_steps: 3',
+      'steps:',
+      '  - name: implement',
+      '    persona: coder',
+      '    instruction: Implement',
+    ].join('\n');
+    const staleWorkflow = rootWorkflow.replace('instruction: Implement', 'instruction: Stale');
+
+    writeTaktFile(root, 'config.yaml', 'language: ja\n');
+    writeTaktFile(root, 'workflows/default.yaml', rootWorkflow);
+    writeTaktFile(worktreePath, 'config.yaml', 'language: en\n');
+    writeTaktFile(worktreePath, 'workflows/default.yaml', staleWorkflow);
+    const workflow = loadWorkflowByIdentifier('default', root);
+    if (workflow === null) {
+      throw new Error('Expected root workflow');
+    }
+
+    const branchExistsSpy = vi.spyOn(infraTask, 'branchExists').mockReturnValue(true);
+    const task = createTask({
+      data: ({
+        task: 'Run task with restart_point retry',
+        worktree: true,
+        branch: 'feature/retry-sync',
+        workflow: 'default',
+        restart_point: {
+          stack: [buildWorkflowRestartPointEntry(workflow, 'implement', 'agent')],
+        },
+      } as unknown) as NonNullable<TaskInfo['data']>,
+      worktreePath,
+      status: 'pending',
+    });
+
+    await resolveTaskExecutionStrict(task, root);
+
+    expect(readTaktFile(worktreePath, 'config.yaml')).toBe('language: ja\n');
+    expect(readTaktFile(worktreePath, 'workflows/default.yaml')).toBe(rootWorkflow);
 
     branchExistsSpy.mockRestore();
   });

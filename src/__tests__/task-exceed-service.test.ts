@@ -33,6 +33,32 @@ function writeExceededRecord(testDir: string, overrides: Record<string, unknown>
   );
 }
 
+function writeRunningRestartRecord(testDir: string, overrides: Record<string, unknown> = {}): void {
+  mkdirSync(join(testDir, '.takt'), { recursive: true });
+  const record = {
+    name: 'restart-task',
+    status: 'running',
+    content: 'Do restarted work',
+    created_at: '2026-02-09T00:00:00.000Z',
+    started_at: '2026-02-09T00:01:00.000Z',
+    completed_at: null,
+    owner_pid: 12345,
+    workflow: 'default',
+    restart_point: {
+      stack: [
+        { workflow: 'default', workflow_ref: 'default', step: 'delegate', kind: 'workflow_call', call_instance: 1 },
+        { workflow: 'coding', workflow_ref: 'coding', step: 'review', kind: 'agent' },
+      ],
+    },
+    ...overrides,
+  };
+  writeFileSync(
+    join(testDir, '.takt', 'tasks.yaml'),
+    stringifyYaml({ tasks: [record] }),
+    'utf-8',
+  );
+}
+
 describe('TaskRunner - exceedTask', () => {
   let testDir: string;
   let runner: TaskRunner;
@@ -228,6 +254,94 @@ describe('TaskRunner - exceedTask', () => {
     const afterFile = loadTasksFile(testDir);
     const exceededTask = afterFile.tasks[0]!;
     expect(exceededTask.resume_point).toEqual(resumePoint);
+  });
+
+  it('should replace a consumed restart point with the current exceeded checkpoint', () => {
+    writeRunningRestartRecord(testDir, {
+      worktree_path: '/tmp/restart-worktree',
+      branch: 'takt/restart-task',
+    });
+    const stack = [
+      { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },
+      { workflow: 'coding', step: 'fix', kind: 'agent' as const },
+    ];
+    const resumePoint = {
+      version: 2 as const,
+      stack,
+      iteration: 37,
+      elapsed_ms: 240_000,
+      workflow_call_invocations: buildWorkflowCallInvocationFixture(stack),
+      workflow_step_participations: {},
+    };
+
+    runner.exceedTask('restart-task', {
+      currentStep: 'delegate',
+      newMaxSteps: 80,
+      currentIteration: 37,
+      resumePoint,
+    });
+
+    const exceededTask = loadTasksFile(testDir).tasks[0]!;
+    expect(exceededTask).toEqual(expect.objectContaining({
+      status: 'exceeded',
+      start_movement: 'delegate',
+      exceeded_max_steps: 80,
+      exceeded_current_iteration: 37,
+      resume_point: resumePoint,
+      owner_pid: null,
+      worktree_path: '/tmp/restart-worktree',
+      branch: 'takt/restart-task',
+    }));
+    expect(exceededTask.restart_point).toBeUndefined();
+    expect(exceededTask.failure).toBeUndefined();
+  });
+
+  it('should remove a consumed restart point when no current resume point exists', () => {
+    writeRunningRestartRecord(testDir);
+
+    runner.exceedTask('restart-task', {
+      currentStep: 'delegate',
+      newMaxSteps: 1,
+      currentIteration: 0,
+    });
+
+    const exceededTask = loadTasksFile(testDir).tasks[0]!;
+    expect(exceededTask.status).toBe('exceeded');
+    expect(exceededTask.restart_point).toBeUndefined();
+    expect(exceededTask.resume_point).toBeUndefined();
+    expect(exceededTask.exceeded_current_iteration).toBe(0);
+    expect(exceededTask.exceeded_max_steps).toBe(1);
+  });
+
+  it('should preserve the current exceeded checkpoint through requeue and claim', () => {
+    writeRunningRestartRecord(testDir);
+    const stack = [
+      { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },
+      { workflow: 'coding', step: 'fix', kind: 'agent' as const },
+    ];
+    const resumePoint = {
+      version: 2 as const,
+      stack,
+      iteration: 12,
+      elapsed_ms: 90_000,
+      workflow_call_invocations: buildWorkflowCallInvocationFixture(stack),
+      workflow_step_participations: {},
+    };
+    runner.exceedTask('restart-task', {
+      currentStep: 'delegate',
+      newMaxSteps: 40,
+      currentIteration: 12,
+      resumePoint,
+    });
+
+    runner.requeueExceededTask('restart-task');
+    const claimed = runner.claimNextTasks(1)[0]!;
+
+    expect(claimed.data?.resume_point).toEqual(resumePoint);
+    expect(claimed.data?.start_step).toBe('delegate');
+    expect(claimed.data?.exceeded_current_iteration).toBe(12);
+    expect(claimed.data?.exceeded_max_steps).toBe(40);
+    expect(claimed.data?.restart_point).toBeUndefined();
   });
 
   it('should throw when task is not found', () => {
