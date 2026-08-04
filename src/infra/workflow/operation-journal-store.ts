@@ -44,7 +44,7 @@ import {
 
 const PRIVATE_FILE_MODE = 0o600;
 const LOCK_RETRY_DELAY_MS = 25;
-const LOCK_TIMEOUT_MS = 5_000;
+const DEFAULT_LOCK_TIMEOUT_MS = 5_000;
 const MALFORMED_LOCK_GRACE_MS = 250;
 const RECOVERY_ELECTION_RECORD_LIMIT = 256;
 const RECOVERY_ELECTION_LOG_BYTE_LIMIT = 256 * 1024;
@@ -290,7 +290,7 @@ function publishOperationLock(
       cwd: parentPath,
       encoding: 'utf-8',
       env: {},
-      timeout: LOCK_TIMEOUT_MS,
+      timeout: DEFAULT_LOCK_TIMEOUT_MS,
       maxBuffer: 64 * 1024,
       windowsHide: true,
     },
@@ -454,13 +454,21 @@ class FileOperationJournalStore implements OperationJournalStore {
   private readonly lockPath: string;
   private readonly recoveryElectionPath: string;
   private readonly recoveryElectionMutexPath: string;
+  private readonly lockTimeoutMs: number;
   private locked = false;
 
-  constructor(journalPath: string) {
+  constructor(journalPath: string, options: OperationJournalStoreOptions = {}) {
+    const lockTimeoutMs = options.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS;
+    if (!Number.isFinite(lockTimeoutMs) || lockTimeoutMs <= 0) {
+      throw new Error(
+        `Operation journal lock timeout must be a positive number of milliseconds: ${lockTimeoutMs}`,
+      );
+    }
     this.journalPath = resolve(journalPath);
     this.lockPath = `${this.journalPath}.lock`;
     this.recoveryElectionPath = `${this.lockPath}.recovery`;
     this.recoveryElectionMutexPath = `${this.recoveryElectionPath}.mutex`;
+    this.lockTimeoutMs = lockTimeoutMs;
   }
 
   createParent(input: CreateOperationParentInput): OperationJournalParent {
@@ -794,7 +802,7 @@ class FileOperationJournalStore implements OperationJournalStore {
     lockPath: string,
     recover: (existing: LockSnapshot, deadline: number) => void,
   ): LockSnapshot {
-    const deadline = Date.now() + LOCK_TIMEOUT_MS;
+    const deadline = Date.now() + this.lockTimeoutMs;
     while (true) {
       const acquired = this.tryAcquireLock(lockPath);
       if (acquired !== undefined) {
@@ -1086,6 +1094,14 @@ class FileOperationJournalStore implements OperationJournalStore {
   }
 }
 
-export function createOperationJournalStore(journalPath: string): OperationJournalStore {
-  return new FileOperationJournalStore(journalPath);
+export interface OperationJournalStoreOptions {
+  /** Maximum time to wait for the journal file lock. Defaults to 5000ms. */
+  readonly lockTimeoutMs?: number;
+}
+
+export function createOperationJournalStore(
+  journalPath: string,
+  options: OperationJournalStoreOptions = {},
+): OperationJournalStore {
+  return new FileOperationJournalStore(journalPath, options);
 }
