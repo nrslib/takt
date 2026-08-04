@@ -3,7 +3,8 @@ import { join } from 'node:path';
 import { buildRunPaths } from '../../src/core/workflow/run/run-paths.js';
 import type { FindingLedger } from '../../src/core/workflow/findings/types.js';
 import { FindingDatabase } from '../../src/infra/finding-storage/database.js';
-import { readSourceAuthority } from '../../src/infra/finding-storage/repository.js';
+import { parseInheritedSourceAuthority } from '../../src/infra/finding-storage/inherited-source-parser.js';
+import { readSourceAuthorityRaw } from '../../src/infra/finding-storage/repository.js';
 import { ROOT_FINDING_AUTHORITY_KEY } from '../../src/infra/finding-storage/resolver.js';
 
 export function readOnlyRunFindingLedger(repoPath: string): FindingLedger {
@@ -19,13 +20,17 @@ export function readOnlyRunFindingLedger(repoPath: string): FindingLedger {
   if (!existsSync(databasePath)) {
     throw new Error(`Finding Contract database is missing for run "${runSlug}"`);
   }
-  const ledger = FindingDatabase.readSource({
+  const source = FindingDatabase.readSource({
     databasePath,
     runId: runSlug,
-    read: (database) => readSourceAuthority(database, ROOT_FINDING_AUTHORITY_KEY),
+    read: (database) => readSourceAuthorityRaw(database, ROOT_FINDING_AUTHORITY_KEY),
   });
-  if (ledger === undefined) {
+  if (source === undefined) {
     throw new Error(`Root Finding Contract authority is missing for run "${runSlug}"`);
   }
-  return ledger;
+  const parsed = parseInheritedSourceAuthority(source);
+  if (parsed.kind !== 'current') {
+    throw new Error(`Root Finding Contract authority is legacy for run "${runSlug}"`);
+  }
+  return parsed.ledger;
 }
