@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -311,19 +312,38 @@ describe('executeWorkflow claude-terminal integration', () => {
     expect(resumedMeta.workflow).toBe('claude-terminal-workflow-phase3');
   });
 
-  it('source runのfinding DBが欠落したrequeueは空台帳へ縮退せず失敗する', async () => {
+  it('FC非使用workflowのrequeueはsource finding DBを検証せず成功する', async () => {
     const { executeWorkflow } = await import('../features/tasks/execute/workflowExecution.js');
-    const targetRunSlug = '20260801-missing-source-resumed';
+    const sourceRunSlug = '20260801-non-finding-source';
+    const targetRunSlug = '20260801-non-finding-target';
 
-    await expect(executeWorkflow(makeConfig(), 'resumed task', projectDir, {
+    const sourceResult = await executeWorkflow(makeConfig(), 'source task', projectDir, {
+      projectCwd: projectDir,
+      provider: 'claude-terminal',
+      reportDirName: sourceRunSlug,
+    });
+    expect(sourceResult.success).toBe(true);
+    await writeFile(
+      join(projectDir, '.takt', 'runs', sourceRunSlug, 'finding-contract.sqlite'),
+      'not sqlite',
+    );
+    const readSource = vi.spyOn(FindingDatabase, 'readSource');
+
+    const resumedResult = await executeWorkflow(makeConfig(), 'resumed task', projectDir, {
       projectCwd: projectDir,
       provider: 'claude-terminal',
       reportDirName: targetRunSlug,
       resumeSource: {
-        sourceRunSlug: '20260801-missing-source',
+        sourceRunSlug,
         resumeMode: 'requeue',
       },
-    })).rejects.toThrow(/has no finding contract database/);
+    });
+
+    expect(resumedResult.success).toBe(true);
+    expect(readSource).not.toHaveBeenCalled();
+    expect(existsSync(
+      join(projectDir, '.takt', 'runs', targetRunSlug, 'finding-contract.sqlite'),
+    )).toBe(false);
   });
 
 });
