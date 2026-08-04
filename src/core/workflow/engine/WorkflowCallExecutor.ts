@@ -9,15 +9,13 @@ import type {
   WorkflowResumePointEntry,
   WorkflowState,
 } from '../../models/types.js';
-import type {
-  PersonaProviderEntry,
-  ProviderRoutingConfig,
-  ProviderRoutingEntry,
-} from '../../models/config-types.js';
 import type { FindingLedgerStore } from '../findings/store.js';
 import type { RunPaths } from '../run/run-paths.js';
 import { trimResumePointStackForWorkflow } from '../run/resume-point.js';
-import { resolveEffectiveAutoRouting } from '../auto-routing/effective-auto-routing.js';
+import {
+  getWorkflowCallOverrideErrorPath,
+  resolveWorkflowCallChildAutoRouting,
+} from '../workflow-call-provider-context.js';
 import type { WorkRequirementEstimator } from '../auto-routing/contracts.js';
 import { RoutingRuntime } from '../auto-routing/runtime.js';
 import {
@@ -42,8 +40,7 @@ import type {
   WorkflowSharedRuntimeState,
   WorkflowStepFailureSummary,
 } from '../types.js';
-import { validateFindingContractManagerProviderModel } from './WorkflowValidator.js';
-import { getProviderValidationErrorSource } from '../provider-validation-error.js';
+import { validateFindingContractSyntheticProviderModels } from './WorkflowValidator.js';
 import { withWorkflowConfigErrorPath } from '../workflow-config-error.js';
 import { findWorkflowStepLocation } from '../workflow-step-location.js';
 import { translateWorkflowConfigError } from '../../../shared/workflowConfigMetadata.js';
@@ -109,87 +106,6 @@ interface ChildRoutingRuntime {
   estimator: WorkRequirementEstimator;
   runtime: RoutingRuntime;
   estimatorSource: Exclude<AutoRoutingEstimatorSource, 'absent'>;
-}
-
-function workflowCallOverrideErrorPath(
-  step: WorkflowCallStep,
-  error: unknown,
-): readonly PropertyKey[] | undefined {
-  if (!step.overrides) {
-    return undefined;
-  }
-  const validationSource = getProviderValidationErrorSource(error);
-  if (validationSource?.source !== 'workflow_call') {
-    return undefined;
-  }
-  if (validationSource.field === 'model' && step.overrides.model !== undefined) {
-    return ['overrides', 'model'];
-  }
-  if (validationSource.field === 'provider' && step.overrides.provider !== undefined) {
-    return ['overrides', 'provider'];
-  }
-  return undefined;
-}
-
-function applyWorkflowCallOverridesToProviderEntries<T extends PersonaProviderEntry>(
-  entries: Record<string, T> | undefined,
-  overrides: WorkflowCallStep['overrides'],
-): Record<string, T> | undefined {
-  if (!entries) {
-    return undefined;
-  }
-  if (overrides?.provider === undefined && overrides?.model === undefined) {
-    return entries;
-  }
-
-  const overrideProvider = overrides.provider;
-  return Object.fromEntries(
-    Object.entries(entries).map(([key, entry]) => {
-      const nextEntry: T = {
-        ...(overrideProvider !== undefined
-          ? { provider: overrideProvider }
-          : entry.provider !== undefined
-            ? { provider: entry.provider }
-            : {}),
-      } as T;
-
-      if (overrides.model !== undefined) {
-        nextEntry.model = overrides.model;
-      } else if (overrideProvider === undefined && entry.model !== undefined) {
-        nextEntry.model = entry.model;
-      }
-      if (entry.providerOptions !== undefined) {
-        nextEntry.providerOptions = entry.providerOptions;
-      }
-
-      return [key, nextEntry];
-    }),
-  );
-}
-
-export function applyWorkflowCallOverridesToPersonaProviders(
-  personaProviders: Record<string, PersonaProviderEntry> | undefined,
-  overrides: WorkflowCallStep['overrides'],
-): Record<string, PersonaProviderEntry> | undefined {
-  return applyWorkflowCallOverridesToProviderEntries(personaProviders, overrides);
-}
-
-export function applyWorkflowCallOverridesToProviderRouting(
-  providerRouting: ProviderRoutingConfig | undefined,
-  overrides: WorkflowCallStep['overrides'],
-): ProviderRoutingConfig | undefined {
-  if (!providerRouting) {
-    return undefined;
-  }
-  if (overrides?.provider === undefined && overrides?.model === undefined) {
-    return providerRouting;
-  }
-
-  return {
-    personas: applyWorkflowCallOverridesToProviderEntries<ProviderRoutingEntry>(providerRouting.personas, overrides),
-    tags: applyWorkflowCallOverridesToProviderEntries<ProviderRoutingEntry>(providerRouting.tags, overrides),
-    steps: applyWorkflowCallOverridesToProviderEntries<ProviderRoutingEntry>(providerRouting.steps, overrides),
-  };
 }
 
 interface WorkflowCallExecutorDeps {
@@ -276,7 +192,7 @@ export class WorkflowCallExecutor {
 
   private getChildRoutingRuntime(
     childWorkflow: WorkflowConfig,
-    childAutoRouting: NonNullable<ReturnType<typeof resolveEffectiveAutoRouting>>,
+    childAutoRouting: NonNullable<ReturnType<typeof resolveWorkflowCallChildAutoRouting>>,
     options: WorkflowEngineOptions,
     workflowCallStep: WorkflowCallStep,
   ): ChildRoutingRuntime {
@@ -662,7 +578,7 @@ export class WorkflowCallExecutor {
     });
     const inheritedSessions = new Map(this.deps.state.personaSessions);
     const sessionUpdates = new Map<string, WorkflowCallSessionUpdate>();
-    const childAutoRouting = resolveEffectiveAutoRouting(childWorkflow, options.autoRouting);
+    const childAutoRouting = resolveWorkflowCallChildAutoRouting(childWorkflow, options.autoRouting);
     const childRoutingRuntime = childAutoRouting === undefined
       ? undefined
       : this.getChildRoutingRuntime(childWorkflow, childAutoRouting, options, request.step);
@@ -749,10 +665,10 @@ export class WorkflowCallExecutor {
     // 検証済みの childOptions を再利用する）。
     let childEngine: WorkflowCallChildEngine;
     try {
-      validateFindingContractManagerProviderModel(childWorkflow, childOptions);
+      validateFindingContractSyntheticProviderModels(childWorkflow, childOptions);
       childEngine = this.deps.createEngine(childWorkflow, this.deps.getCwd(), this.deps.task, childOptions);
     } catch (error) {
-      const overridePath = workflowCallOverrideErrorPath(request.step, error);
+      const overridePath = getWorkflowCallOverrideErrorPath(request.step, error);
       const parentStepPath = findWorkflowStepLocation(parentConfig, request.step);
       if (!overridePath || !parentStepPath) {
         throw error;

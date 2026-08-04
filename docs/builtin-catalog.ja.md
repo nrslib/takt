@@ -133,6 +133,25 @@ provider_routing:
 
 `final-gate` タグは `review` より後に適用されるため、通常レビューをローカルに保ったまま final gate を強いモデルへ戻せます。Finding Manager は `findings-manager`、loop judge は judge の persona 設定にかかわらず固定キー `loop-judge`、現行エンジンが自動導出する adjudicator は `supervisor` の persona routing を使います。`loop-judge` の routing がない場合、loop judge は cycle を発火させた step の解決済み provider/model を引き継ぎます。
 
+特定の custom workflow で Finding Manager と adjudicator を完全に固定する場合は、workflow YAML に直接指定できます。
+
+```yaml
+finding_contract:
+  manager:
+    persona: findings-manager
+    instruction: findings-manager
+    output_contract: findings-manager
+    provider: codex
+    model: <strong-model>
+  adjudicator:
+    persona: supervisor
+    instruction: adjudicate-finding-contract
+    provider: codex
+    model: <strong-model>
+```
+
+直接指定は `provider_routing`、deprecated の `persona_providers`、auto routing、workflow/project/global fallback より優先されます。CLI と環境変数の明示 override はさらに優先されます。`provider` だけを直接指定すると、下位優先度の model fallback は停止します。
+
 `takt` を実行すると workflow をインタラクティブに選択できます。
 
 ## ビルトイン Persona 一覧

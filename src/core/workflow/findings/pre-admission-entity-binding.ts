@@ -33,6 +33,7 @@ import {
   createReviewerAnomalySpec,
   type ReviewerAnomalySpec,
 } from './reviewer-anomalies.js';
+import { composeFindingManagerInstruction } from './manager-instruction-composer.js';
 
 export interface PreAdmissionEntityBindingResult {
   intake: ReviewerIntakeResult;
@@ -156,7 +157,7 @@ function prepareBindingTask(input: {
     input.components,
   );
   const taskId = taskIdForCandidates(candidates, ledgerContext.projectionDigest);
-  const instruction = taskInstruction({
+  const baseInstruction = taskInstruction({
     contract: input.contract,
     taskId,
     candidates,
@@ -164,7 +165,11 @@ function prepareBindingTask(input: {
   });
   const bindingStep = buildFindingEntityBindingTaskStep(input.managerStep);
   const phase1Instruction = input.runInput.stepExecutor.buildPhase1Instruction(
-    instruction,
+    composeFindingManagerInstruction({
+      baseInstruction,
+      policyContents: bindingStep.policyContents,
+      knowledgeContents: bindingStep.knowledgeContents,
+    }),
     bindingStep,
   );
   return {

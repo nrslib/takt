@@ -215,14 +215,26 @@ async function bind(input: {
   intake: ReviewerIntakeResult;
   roundMarker?: string;
   options?: Record<string, unknown>;
+  exactInputBytes?: number;
 }) {
+  const executionInput = runInput(input.options);
+  if (input.exactInputBytes !== undefined) {
+    const targetBytes = input.exactInputBytes;
+    executionInput.stepExecutor.buildPhase1Instruction = (instruction: string) => {
+      const bytes = Buffer.byteLength(instruction, 'utf8');
+      if (bytes > targetBytes) {
+        throw new Error(`Test fixture base instruction ${bytes} exceeds target ${targetBytes}`);
+      }
+      return `${instruction}${'x'.repeat(targetBytes - bytes)}`;
+    };
+  }
   return bindPreAdmissionEntities({
     contract,
     previousLedger: input.ledger,
     intake: input.intake,
     managerStep,
     roundMarker: input.roundMarker ?? 'round-1',
-    runInput: runInput(input.options),
+    runInput: executionInput,
   });
 }
 
@@ -1600,6 +1612,52 @@ describe('pre-admission semantic entity binding', () => {
     expect(ledger.findings).toEqual([]);
     expect(ledger.nextId).toBe(1);
   });
+
+  it.each([23_999, 24_000, 24_001])(
+    'enforces entity binding at the exact %i-byte boundary without partial mutation',
+    async (targetBytes) => {
+      const ledger = emptyLedger();
+      const raws = [rawFinding({
+        rawFindingId: 'raw-exact-boundary',
+        title: 'Exact boundary entity',
+        description: 'Exercise the fully rendered entity-binding request.',
+      })];
+      mockGroupedDecision((rawFindingId) => ({
+        decision: 'new_entity',
+        groupRawFindingId: rawFindingId,
+      }));
+
+      const bound = await bind({
+        ledger,
+        intake: intakeFor(ledger, raws),
+        exactInputBytes: targetBytes,
+      });
+      const evaluation = evaluate(ledger, bound.intake);
+
+      expect(bound.taskAudits).toEqual([
+        expect.objectContaining({
+          status: targetBytes <= MAIN_MANAGER_INPUT_MAX_BYTES
+            ? 'succeeded'
+            : 'input_overflow',
+          inputBytes: targetBytes,
+        }),
+      ]);
+      expect(executeAgentMock).toHaveBeenCalledTimes(
+        targetBytes <= MAIN_MANAGER_INPUT_MAX_BYTES ? 1 : 0,
+      );
+      if (targetBytes <= MAIN_MANAGER_INPUT_MAX_BYTES) {
+        expect(bound.intake.overflowRawFindingIds).toEqual(new Set());
+        expect(evaluation.preAdmissionEntityMutations).toHaveLength(1);
+      } else {
+        expect(bound.intake.overflowRawFindingIds).toEqual(new Set(['raw-exact-boundary']));
+        expect(bound.intake.intakeAnomalySpecs).toHaveLength(1);
+        expect(evaluation.preAdmissionEntityMutations).toEqual([]);
+        expect(evaluation.admissionProvisionalSpecs).toEqual([]);
+        expect(ledger.findings).toEqual([]);
+        expect(ledger.nextId).toBe(1);
+      }
+    },
+  );
 
   it('scans every disjoint component across deterministic budget pages', async () => {
     const ledger = emptyLedger();

@@ -31,6 +31,7 @@ import type { WorkflowConfig, WorkflowRule, WorkflowState, WorkflowStep } from '
 import { getAllParallelSubSteps } from '../../core/models/types.js';
 import type { WorkflowDoctorReport, WorkflowDoctorTarget } from '../../infra/config/loaders/workflowDoctor.js';
 import { translateWorkflowConfigError } from '../../shared/workflowConfigMetadata.js';
+import { validateWorkflowCallContracts } from '../../infra/config/loaders/workflowResolver.js';
 
 function reportHasErrors(report: WorkflowDoctorReport): boolean {
   return report.diagnostics.some((diagnostic) => diagnostic.level === 'error');
@@ -84,6 +85,18 @@ function validateWorkflowRuntimeContract(
     // findingContract is not a provider setting, so it keeps the plain config resolution.
     const env = resolveAuxiliaryProviderEnvironment(projectDir, workflow);
     const config = resolveWorkflowConfigValues(projectDir, ['findingContract']);
+    validateWorkflowCallContracts(workflow, projectDir, target.lookupCwd ?? projectDir, {
+      providerValidationOptions: {
+        provider: env.provider,
+        providerSource: env.providerSource,
+        model: env.model,
+        modelSource: env.modelSource,
+        personaProviders: env.personaProviders,
+        providerRouting: env.providerRouting,
+        autoRouting: env.autoRouting,
+        providerRoutingTagConflictPolicy: env.tagConflictPolicy,
+      },
+    });
     validateWorkflowConfig(workflow, {
       projectCwd: projectDir,
       provider: env.provider,

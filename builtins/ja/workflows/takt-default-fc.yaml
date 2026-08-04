@@ -5,6 +5,9 @@ finding_contract:
     persona: findings-manager
     instruction: findings-manager
     output_contract: findings-manager
+  adjudicator:
+    persona: supervisor
+    instruction: adjudicate-finding-contract
   stop_budget:
     max_rounds: 40
   review_budget:

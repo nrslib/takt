@@ -36,6 +36,7 @@ import {
 } from '../../../shared/utils/canonical-json.js';
 import { computeFindingLifecycleProjectionDigest } from '../../models/finding-lifecycle-identity.js';
 import { selectActionableFindingEntries } from './context.js';
+import { composeFindingManagerInstruction } from './manager-instruction-composer.js';
 
 export { RAW_FINDINGS_SCHEMA_REF };
 export { FINDING_MANAGER_SCHEMA_REF } from './manager-step.js';
@@ -438,7 +439,7 @@ export function buildManagerInstruction(input: {
       ...findings.map((finding) => `  - ${finding.id} [${finding.severity}] ${finding.title}`),
     ].join('\n'))
     .join('\n');
-  return loadTemplate('finding_manager_instruction', 'en', {
+  const baseInstruction = loadTemplate('finding_manager_instruction', 'en', {
     managerInstruction,
     outputContract: input.contract.manager.outputContract,
     anchorRelevanceInstruction: PROVIDER_ANCHOR_RELEVANCE_INSTRUCTION,
@@ -456,6 +457,11 @@ export function buildManagerInstruction(input: {
     hasDuplicateLocusGroups: duplicateLocusGroups.size > 0,
     duplicateLocusGroupsBlock,
     coderResponse: renderFencedTextBlock(input.priorStepResponseText ?? '(no prior step response)'),
+  });
+  return composeFindingManagerInstruction({
+    baseInstruction,
+    policyContents: input.contract.manager.policyContents,
+    knowledgeContents: input.contract.manager.knowledgeContents,
   });
 }
 

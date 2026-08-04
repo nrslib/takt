@@ -286,23 +286,26 @@ export interface FindingContractManagerConfig {
   providerRoutingPersonaKey?: string;
   instruction: string;
   outputContract: string;
+  policyContents?: string[];
+  knowledgeContents?: string[];
   provider?: ProviderType;
   model?: string;
 }
 
 /**
- * The persona the engine-synthesized finding-conflict-adjudication step runs
- * as. Fixed to the "supervisor" facet — not user-selectable
- * like finding_contract.manager — but the loader must still resolve the facet
- * to a real file so its body reaches the system prompt (workflowParser
- * resolves it whenever the workflow wires `next: finding-conflict-adjudication`
- * and fails fast when the persona cannot be found).
+ * The persona and optional guidance/provider routing used by engine-synthesized
+ * conflict and terminal adjudication steps. The loader resolves explicit
+ * configuration eagerly; omitted configuration preserves the supervisor
+ * derivation used by existing workflows.
  */
 export interface FindingContractAdjudicatorConfig {
   persona: string;
   personaPath?: string;
   personaDisplayName?: string;
   providerRoutingPersonaKey?: string;
+  instruction?: string;
+  provider?: ProviderType;
+  model?: string;
 }
 
 /**

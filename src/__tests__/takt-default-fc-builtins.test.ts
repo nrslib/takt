@@ -321,7 +321,10 @@ describe('takt-default-fc builtins', () => {
     const loaded = loadWorkflow(language, 'takt-default-fc');
     expect(loaded.findingContract).toMatchObject({
       manager: { providerRoutingPersonaKey: 'findings-manager' },
-      adjudicator: { providerRoutingPersonaKey: 'supervisor' },
+      adjudicator: {
+        providerRoutingPersonaKey: 'supervisor',
+        instruction: expect.stringContaining('ledger subject'),
+      },
       stopBudget: { maxRounds: 40 },
       reviewBudget: { maxReviewRounds: 6 },
     });

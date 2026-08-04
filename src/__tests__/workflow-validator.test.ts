@@ -33,6 +33,12 @@ function createFakeLedgerStore(): FindingLedgerStore {
 }
 
 function createWorkflow(overrides: Partial<WorkflowConfig> = {}): WorkflowConfig {
+  const findingContract = overrides.findingContract === undefined
+    ? undefined
+    : {
+        ...overrides.findingContract,
+        adjudicator: overrides.findingContract.adjudicator ?? { persona: 'supervisor' },
+      };
   return {
     name: 'validator-test',
     description: 'validator test workflow',
@@ -50,6 +56,7 @@ function createWorkflow(overrides: Partial<WorkflowConfig> = {}): WorkflowConfig
       },
     ],
     ...overrides,
+    ...(findingContract === undefined ? {} : { findingContract }),
   };
 }
 
@@ -720,6 +727,78 @@ describe('validateWorkflowConfig', () => {
         'findings-manager': { provider: 'opencode' },
       },
     })).not.toThrow();
+  });
+
+  it.each(['standard', 'terminal_adjudication'] as const)(
+    'validates an inherited terminal adjudicator for %s authority',
+    (managerAuthority) => {
+      const workflow = createWorkflow();
+
+      expect(() => validateWorkflowConfig(workflow, {
+        projectCwd: process.cwd(),
+        provider: 'claude',
+        inheritedFindingContract: {
+          contract: {
+            manager: {
+              persona: 'findings-manager',
+              instruction: 'findings-manager',
+              outputContract: 'findings-manager',
+              provider: 'codex',
+              model: 'strong-manager',
+            },
+            adjudicator: {
+              persona: 'supervisor',
+              provider: 'opencode',
+            },
+          },
+          ledgerStore: createFakeLedgerStore(),
+          managerAuthority,
+        },
+      })).toThrow(/provider 'opencode' requires model/);
+    },
+  );
+
+  it.each(['standard', 'terminal_adjudication'] as const)(
+    'rejects an unresolved inherited adjudicator before execution for %s authority',
+    (managerAuthority) => {
+      const workflow = createWorkflow();
+
+      expect(() => validateWorkflowConfig(workflow, {
+        projectCwd: process.cwd(),
+        provider: 'claude',
+        inheritedFindingContract: {
+          contract: {
+            manager: {
+              persona: 'findings-manager',
+              instruction: 'findings-manager',
+              outputContract: 'findings-manager',
+              provider: 'codex',
+              model: 'strong-manager',
+            },
+          },
+          ledgerStore: createFakeLedgerStore(),
+          managerAuthority,
+        },
+      })).toThrow('Finding adjudication requires finding_contract.adjudicator');
+    },
+  );
+
+  it('rejects an unresolved programmatic root adjudicator before execution', () => {
+    const workflow = {
+      ...createWorkflow(),
+      findingContract: {
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
+    } satisfies WorkflowConfig;
+
+    expect(() => validateWorkflowConfig(workflow, {
+      projectCwd: process.cwd(),
+      provider: 'claude',
+    })).toThrow('Finding adjudication requires finding_contract.adjudicator');
   });
 
   it('findingContract の parallel parent に迂回ルール（invalid manager output rule）は要求しない', () => {
@@ -1702,6 +1781,7 @@ describe('validateWorkflowConfig', () => {
               instruction: 'findings-manager',
               outputContract: 'findings-manager',
             },
+            adjudicator: { persona: 'supervisor' },
           },
           ledgerStore: createFakeLedgerStore(),
           managerAuthority: 'standard',
@@ -1733,6 +1813,7 @@ describe('validateWorkflowConfig', () => {
               instruction: 'findings-manager',
               outputContract: 'findings-manager',
             },
+            adjudicator: { persona: 'supervisor' },
           },
           ledgerStore: createFakeLedgerStore(),
           managerAuthority: 'standard',
@@ -1768,6 +1849,7 @@ describe('validateWorkflowConfig', () => {
               instruction: 'findings-manager',
               outputContract: 'findings-manager',
             },
+            adjudicator: { persona: 'supervisor' },
           },
           ledgerStore: createFakeLedgerStore(),
           managerAuthority: 'standard',
@@ -1795,6 +1877,7 @@ describe('validateWorkflowConfig', () => {
               instruction: 'findings-manager',
               outputContract: 'findings-manager',
             },
+            adjudicator: { persona: 'supervisor' },
           },
           ledgerStore: createFakeLedgerStore(),
           managerAuthority: 'standard',
@@ -1816,6 +1899,7 @@ describe('validateWorkflowConfig', () => {
               outputContract: 'findings-manager',
               provider: 'opencode',
             },
+            adjudicator: { persona: 'supervisor' },
           },
           ledgerStore: createFakeLedgerStore(),
           managerAuthority: 'standard',
@@ -1838,6 +1922,7 @@ describe('validateWorkflowConfig', () => {
               provider: 'codex',
               model: 'gpt-5.5',
             },
+            adjudicator: { persona: 'supervisor' },
           },
           ledgerStore: createFakeLedgerStore(),
           managerAuthority: 'standard',

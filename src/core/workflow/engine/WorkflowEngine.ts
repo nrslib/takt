@@ -421,6 +421,7 @@ export class WorkflowEngine extends EventEmitter {
           runId: this.runPaths.slug,
           refreshFindingsState: this.refreshFindingsState.bind(this),
           emitEvent: (event, ...args) => this.emitEvent(event, ...args),
+          guidance: this.findingContract.adjudicator?.instruction,
         })
         : undefined,
     });

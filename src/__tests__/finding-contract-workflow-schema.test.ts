@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -627,6 +627,393 @@ describe('workflow finding_contract schema', () => {
         ],
       }, '/tmp/project'),
     ).toThrow();
+  });
+
+  it('should resolve manager additions and an explicit adjudicator through normal facet lookup', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'takt-finding-contract-additions-'));
+    try {
+      const projectDir = join(tempDir, 'project');
+      const workflowDir = join(projectDir, '.takt', 'workflows');
+      for (const kind of ['personas', 'instructions', 'output-contracts', 'policies', 'knowledge']) {
+        mkdirSync(join(projectDir, '.takt', 'facets', kind), { recursive: true });
+      }
+      mkdirSync(workflowDir, { recursive: true });
+      writeFileSync(join(projectDir, '.takt', 'facets', 'personas', 'findings-manager.md'), 'Manager persona');
+      writeFileSync(join(projectDir, '.takt', 'facets', 'personas', 'terminal-supervisor.md'), 'Supervisor persona');
+      writeFileSync(join(projectDir, '.takt', 'facets', 'instructions', 'findings-manager.md'), 'Manager instruction');
+      writeFileSync(join(projectDir, '.takt', 'facets', 'instructions', 'adjudicate.md'), 'Adjudication guidance');
+      writeFileSync(join(projectDir, '.takt', 'facets', 'output-contracts', 'findings-manager.md'), 'Manager output');
+      writeFileSync(join(projectDir, '.takt', 'facets', 'policies', 'first.md'), 'First policy');
+      writeFileSync(join(projectDir, '.takt', 'facets', 'policies', 'second.md'), 'Second policy');
+      writeFileSync(join(projectDir, '.takt', 'facets', 'knowledge', 'domain.md'), 'Domain knowledge');
+
+      const workflow = normalizeWorkflowConfig({
+        name: 'finding-contract-additions',
+        finding_contract: {
+          manager: {
+            persona: 'findings-manager',
+            instruction: 'findings-manager',
+            output_contract: 'findings-manager',
+            policy: ['first', 'second'],
+            knowledge: ['domain'],
+          },
+          adjudicator: {
+            persona: 'terminal-supervisor',
+            instruction: 'adjudicate',
+            provider: 'codex',
+            model: 'gpt-test',
+          },
+        },
+        initial_step: 'review',
+        max_steps: 2,
+        steps: [{
+          name: 'review',
+          persona: 'reviewer',
+          instruction: 'Review.',
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        }],
+      }, workflowDir, { projectDir, workflowDir, lang: 'ja' });
+
+      expect(workflow.findingContract?.manager.policyContents).toEqual(['First policy', 'Second policy']);
+      expect(workflow.findingContract?.manager.knowledgeContents).toEqual(['Domain knowledge']);
+      expect(workflow.findingContract?.adjudicator).toMatchObject({
+        persona: 'terminal-supervisor',
+        providerRoutingPersonaKey: 'terminal-supervisor',
+        instruction: 'Adjudication guidance',
+        provider: 'codex',
+        model: 'gpt-test',
+      });
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('uses the same project facet override layer for ordinary steps and both finding-contract roles', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'takt-finding-contract-project-override-'));
+    try {
+      const projectDir = join(tempDir, 'project');
+      const workflowDir = join(projectDir, '.takt', 'workflows');
+      for (const kind of ['personas', 'instructions', 'output-contracts', 'policies', 'knowledge']) {
+        mkdirSync(join(projectDir, '.takt', 'facets', kind), { recursive: true });
+      }
+      mkdirSync(workflowDir, { recursive: true });
+      writeFileSync(join(projectDir, '.takt', 'facets', 'personas', 'shared.md'), 'Project persona override');
+      writeFileSync(join(projectDir, '.takt', 'facets', 'instructions', 'shared.md'), 'Project instruction override');
+      writeFileSync(join(projectDir, '.takt', 'facets', 'output-contracts', 'shared.md'), 'Project output override');
+      writeFileSync(join(projectDir, '.takt', 'facets', 'policies', 'shared.md'), 'Project policy override');
+      writeFileSync(join(projectDir, '.takt', 'facets', 'knowledge', 'shared.md'), 'Project knowledge override');
+
+      const workflow = normalizeWorkflowConfig({
+        name: 'shared-project-overrides',
+        finding_contract: {
+          manager: {
+            persona: 'shared',
+            instruction: 'shared',
+            output_contract: 'shared',
+            policy: ['shared'],
+            knowledge: ['shared'],
+          },
+          adjudicator: { persona: 'shared', instruction: 'shared' },
+        },
+        initial_step: 'review',
+        max_steps: 2,
+        steps: [{
+          name: 'review',
+          persona: 'shared',
+          instruction: 'shared',
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        }],
+      }, workflowDir, { projectDir, workflowDir, lang: 'ja' });
+
+      const expectedPersonaPath = join(projectDir, '.takt', 'facets', 'personas', 'shared.md');
+      expect(workflow.steps[0]).toMatchObject({
+        personaPath: expectedPersonaPath,
+        instruction: 'Project instruction override',
+      });
+      expect(workflow.findingContract?.manager).toMatchObject({
+        personaPath: expectedPersonaPath,
+        instruction: 'Project instruction override',
+        outputContract: 'Project output override',
+        policyContents: ['Project policy override'],
+        knowledgeContents: ['Project knowledge override'],
+      });
+      expect(workflow.findingContract?.adjudicator).toMatchObject({
+        personaPath: expectedPersonaPath,
+        instruction: 'Project instruction override',
+      });
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('gives package facets the same priority for ordinary steps and finding-contract roles', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'takt-finding-contract-package-override-'));
+    try {
+      const projectDir = join(tempDir, 'project');
+      const repertoireDir = join(tempDir, 'repertoire');
+      const packageRoot = join(repertoireDir, '@owner', 'repo');
+      const workflowDir = join(packageRoot, 'workflows');
+      for (const base of [join(projectDir, '.takt', 'facets'), join(packageRoot, 'facets')]) {
+        for (const kind of ['personas', 'instructions', 'output-contracts']) {
+          mkdirSync(join(base, kind), { recursive: true });
+          writeFileSync(join(base, kind, 'shared.md'), `${base === join(packageRoot, 'facets') ? 'Package' : 'Project'} ${kind}`);
+        }
+      }
+      mkdirSync(workflowDir, { recursive: true });
+
+      const workflow = normalizeWorkflowConfig({
+        name: 'shared-package-overrides',
+        finding_contract: {
+          manager: { persona: 'shared', instruction: 'shared', output_contract: 'shared' },
+          adjudicator: { persona: 'shared', instruction: 'shared' },
+        },
+        initial_step: 'review',
+        max_steps: 2,
+        steps: [{
+          name: 'review',
+          persona: 'shared',
+          instruction: 'shared',
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        }],
+      }, workflowDir, { projectDir, workflowDir, repertoireDir, lang: 'ja' });
+
+      const packagePersonaPath = join(packageRoot, 'facets', 'personas', 'shared.md');
+      expect(workflow.steps[0]).toMatchObject({
+        personaPath: packagePersonaPath,
+        instruction: 'Package instructions',
+      });
+      expect(workflow.findingContract?.manager).toMatchObject({
+        personaPath: packagePersonaPath,
+        instruction: 'Package instructions',
+        outputContract: 'Package output-contracts',
+      });
+      expect(workflow.findingContract?.adjudicator).toMatchObject({
+        personaPath: packagePersonaPath,
+        instruction: 'Package instructions',
+      });
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['step', 'manager', 'adjudicator'] as const)(
+    'applies the same project symlink safety boundary to %s persona resolution',
+    (owner) => {
+      const tempDir = mkdtempSync(join(tmpdir(), 'takt-finding-contract-symlink-safety-'));
+      try {
+        const projectDir = join(tempDir, 'project');
+        const workflowDir = join(projectDir, '.takt', 'workflows');
+        const personaDir = join(projectDir, '.takt', 'facets', 'personas');
+        mkdirSync(workflowDir, { recursive: true });
+        mkdirSync(personaDir, { recursive: true });
+        const outside = join(tempDir, 'outside.md');
+        writeFileSync(outside, 'Outside persona');
+        symlinkSync(outside, join(personaDir, 'unsafe.md'));
+        const personaFor = (candidate: typeof owner) => candidate === owner ? 'unsafe' : 'inline-safe-persona';
+
+        let thrown: unknown;
+        try {
+          normalizeWorkflowConfig({
+            name: `symlink-safety-${owner}`,
+            finding_contract: {
+              manager: {
+                persona: personaFor('manager'),
+                instruction: 'Inline manager instruction.',
+                output_contract: 'Inline output contract.',
+              },
+              adjudicator: {
+                persona: personaFor('adjudicator'),
+                instruction: 'Inline adjudicator instruction.',
+              },
+            },
+            initial_step: 'review',
+            max_steps: 2,
+            steps: [{
+              name: 'review',
+              persona: personaFor('step'),
+              instruction: 'Inline review instruction.',
+              rules: [{ condition: 'done', next: 'COMPLETE' }],
+            }],
+          }, workflowDir, { projectDir, workflowDir, lang: 'ja' });
+        } catch (error) {
+          thrown = error;
+        }
+        expect(thrown).toBeInstanceOf(Error);
+        const error = thrown as Error & { cause?: unknown };
+        const causeMessage = error.cause instanceof Error ? error.cause.message : '';
+        expect(`${error.message}\n${causeMessage}`).toMatch(
+          /Project facet file must stay inside the project|must not use symlinks/,
+        );
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each([
+    { field: 'ordinary step policy', facetKind: 'policies', target: 'step_policy' },
+    { field: 'manager policy', facetKind: 'policies', target: 'manager_policy' },
+    { field: 'manager knowledge', facetKind: 'knowledge', target: 'manager_knowledge' },
+    { field: 'adjudicator instruction', facetKind: 'instructions', target: 'adjudicator_instruction' },
+  ] as const)(
+    'applies facet symlink safety to $field',
+    ({ facetKind, target }) => {
+      const tempDir = mkdtempSync(join(tmpdir(), 'takt-finding-contract-field-safety-'));
+      try {
+        const projectDir = join(tempDir, 'project');
+        const workflowDir = join(projectDir, '.takt', 'workflows');
+        const facetDir = join(projectDir, '.takt', 'facets', facetKind);
+        mkdirSync(workflowDir, { recursive: true });
+        mkdirSync(facetDir, { recursive: true });
+        const outside = join(tempDir, 'outside.md');
+        writeFileSync(outside, 'Outside facet');
+        symlinkSync(outside, join(facetDir, 'unsafe.md'));
+        let thrown: unknown;
+        try {
+          normalizeWorkflowConfig({
+            name: `field-safety-${target}`,
+            finding_contract: {
+              manager: {
+                persona: 'inline-manager',
+                instruction: 'Inline manager instruction.',
+                output_contract: 'Inline manager output.',
+                ...(target === 'manager_policy' ? { policy: ['unsafe'] } : {}),
+                ...(target === 'manager_knowledge' ? { knowledge: ['unsafe'] } : {}),
+              },
+              adjudicator: {
+                persona: 'inline-supervisor',
+                instruction: target === 'adjudicator_instruction'
+                  ? 'unsafe'
+                  : 'Inline adjudicator instruction.',
+              },
+            },
+            initial_step: 'review',
+            max_steps: 2,
+            steps: [{
+              name: 'review',
+              persona: 'inline-reviewer',
+              instruction: 'Inline review instruction.',
+              ...(target === 'step_policy' ? { policy: ['unsafe'] } : {}),
+              rules: [{ condition: 'done', next: 'COMPLETE' }],
+            }],
+          }, workflowDir, { projectDir, workflowDir, lang: 'ja' });
+        } catch (error) {
+          thrown = error;
+        }
+        expect(thrown).toBeInstanceOf(Error);
+        const messages: string[] = [];
+        let current: unknown = thrown;
+        while (current instanceof Error) {
+          messages.push(current.message);
+          current = (current as Error & { cause?: unknown }).cause;
+        }
+        expect(messages.join('\n')).toMatch(
+          /Project facet file must stay inside the project|must not use symlinks/,
+        );
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it('should preserve omitted manager additions and reject invalid addition/adjudicator shapes', () => {
+    const normalized = normalizeWorkflowConfig(
+      makeWorkflowWithFindingContract({
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          output_contract: 'findings-manager',
+        },
+      }),
+      '/tmp/project',
+    );
+    expect(normalized.findingContract?.manager).not.toHaveProperty('policyContents');
+    expect(normalized.findingContract?.manager).not.toHaveProperty('knowledgeContents');
+
+    const manager = {
+      persona: 'findings-manager',
+      instruction: 'findings-manager',
+      output_contract: 'findings-manager',
+    };
+    const invalidContracts = [
+      { manager: { ...manager, policy: [] } },
+      { manager: { ...manager, policy: [''] } },
+      { manager: { ...manager, knowledge: [] } },
+      { manager: { ...manager, knowledge: [''] } },
+      { manager, adjudicator: {} },
+      { manager, adjudicator: { persona: 'supervisor' } },
+      { manager, adjudicator: { instruction: 'adjudicate' } },
+      { manager, adjudicator: { persona: '', instruction: 'adjudicate' } },
+      { manager, adjudicator: { persona: 'supervisor', instruction: '' } },
+      { manager, adjudicator: { persona: 'supervisor', instruction: 'adjudicate', provider: 'auto' } },
+      { manager, adjudicator: { persona: 'supervisor', instruction: 'adjudicate', output_contract: 'forbidden' } },
+    ];
+    for (const findingContract of invalidContracts) {
+      expect(() => normalizeWorkflowConfig(
+        makeWorkflowWithFindingContract(findingContract),
+        '/tmp/project',
+      )).toThrow();
+    }
+  });
+
+  it('should reject unresolved additions and explicit adjudicator facets with field paths', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'takt-finding-contract-missing-facets-'));
+    try {
+      const projectDir = join(tempDir, 'project');
+      const workflowDir = join(projectDir, '.takt', 'workflows');
+      for (const kind of ['personas', 'instructions', 'output-contracts', 'policies']) {
+        mkdirSync(join(projectDir, '.takt', 'facets', kind), { recursive: true });
+      }
+      mkdirSync(workflowDir, { recursive: true });
+      writeFileSync(join(projectDir, '.takt', 'facets', 'personas', 'findings-manager.md'), 'Manager persona');
+      writeFileSync(join(projectDir, '.takt', 'facets', 'personas', 'supervisor.md'), 'Supervisor persona');
+      writeFileSync(join(projectDir, '.takt', 'facets', 'instructions', 'findings-manager.md'), 'Manager instruction');
+      writeFileSync(join(projectDir, '.takt', 'facets', 'output-contracts', 'findings-manager.md'), 'Manager output');
+      const context = {
+        projectDir,
+        workflowDir,
+        repertoireDir: join(tempDir, 'repertoire'),
+        lang: 'ja' as const,
+      };
+      const base = {
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          output_contract: 'findings-manager',
+        },
+      };
+      expect(() => normalizeWorkflowConfig(
+        makeWorkflowWithFindingContract({
+          manager: { ...base.manager, policy: ['@missing/package/policy'] },
+        }),
+        workflowDir,
+        context,
+      )).toThrow(/finding_contract\.manager\.policy\[0\].*@missing\/package\/policy/);
+      expect(() => normalizeWorkflowConfig(
+        makeWorkflowWithFindingContract({
+          ...base,
+          adjudicator: {
+            persona: '@missing/package/adjudicator',
+            instruction: 'findings-manager',
+          },
+        }),
+        workflowDir,
+        context,
+      )).toThrow(/finding_contract\.adjudicator\.persona.*@missing\/package\/adjudicator/);
+      expect(() => normalizeWorkflowConfig(
+        makeWorkflowWithFindingContract({
+          ...base,
+          adjudicator: {
+            persona: 'supervisor',
+            instruction: '@missing/package/adjudication-guidance',
+          },
+        }),
+        workflowDir,
+        context,
+      )).toThrow(/finding_contract\.adjudicator\.instruction.*@missing\/package\/adjudication-guidance/);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it('should reject invalid finding_contract raw shapes', () => {

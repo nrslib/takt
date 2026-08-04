@@ -28,7 +28,6 @@ import type { RunFindingManagerForStepInput } from './manager-contracts.js';
 import { MANAGER_INTERPRETATION_LIMITS } from './raw-finding-limits.js';
 import {
   parseTerminalAdjudicationProviderOutput,
-  TerminalAdjudicationProviderOutputJsonSchema,
 } from './schemas.js';
 import { applyResolvedTerminalAdjudication } from './terminal-adjudication-commit.js';
 import {
@@ -47,33 +46,15 @@ import type {
 } from './types.js';
 import { issueFindingScopeBindings } from './finding-scope-binding.js';
 import type { ReviewScopeProofSnapshot } from './snapshot.js';
+import { buildFindingTerminalAdjudicationStep } from './adjudication-step.js';
+import { composeFindingAdjudicationInstruction } from './adjudication-instruction.js';
 
 function terminalStep(input: RunFindingManagerForStepInput): AgentWorkflowStep {
-  const adjudicator = input.contract.adjudicator;
-  if (adjudicator === undefined) {
-    throw new Error('Terminal adjudication requires finding_contract.adjudicator');
-  }
-  return {
-    kind: 'agent',
-    name: 'findings-terminal-adjudication',
-    engineSynthesized: true,
-    persona: adjudicator.persona,
-    personaDisplayName: adjudicator.personaDisplayName ?? 'supervisor',
-    providerRoutingPersonaKey: adjudicator.providerRoutingPersonaKey ?? 'supervisor',
-    ...(adjudicator.personaPath === undefined ? {} : { personaPath: adjudicator.personaPath }),
-    provider: input.workflowProvider,
-    providerSpecified: false,
-    model: input.workflowModel,
-    modelSpecified: false,
-    instruction: 'Adjudicate one durable provisional finding entity.',
-    session: 'refresh',
-    edit: false,
-    structuredOutput: {
-      schemaRef: 'takt.findings.terminal-adjudication',
-      schema: TerminalAdjudicationProviderOutputJsonSchema,
-    },
-    rules: [],
-  };
+  return buildFindingTerminalAdjudicationStep({
+    contract: input.contract,
+    workflowProvider: input.workflowProvider,
+    workflowModel: input.workflowModel,
+  });
 }
 
 function instruction(
@@ -501,7 +482,10 @@ export async function runTerminalAdjudication(input: {
   );
   const step = terminalStep(input.runInput);
   const phase1Instruction = input.runInput.stepExecutor.buildPhase1Instruction(
-    instruction(candidate, candidateScopeBindings),
+    composeFindingAdjudicationInstruction(
+      input.runInput.contract.adjudicator?.instruction,
+      instruction(candidate, candidateScopeBindings),
+    ),
     step,
   );
   const agentOptions = buildManagerAgentOptions(input.runInput.optionsBuilder, step);

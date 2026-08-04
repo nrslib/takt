@@ -37,7 +37,7 @@ import { WorkflowCallRunner } from '../core/workflow/engine/WorkflowCallRunner.j
 import {
   applyWorkflowCallOverridesToPersonaProviders,
   applyWorkflowCallOverridesToProviderRouting,
-} from '../core/workflow/engine/WorkflowCallExecutor.js';
+} from '../core/workflow/workflow-call-provider-context.js';
 import {
   applyDefaultMocks,
   cleanupWorkflowEngine,

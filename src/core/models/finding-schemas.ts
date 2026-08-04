@@ -154,10 +154,21 @@ export const Rfc3339TimestampSchema = z.string().min(1).transform((timestamp, ct
   }
 });
 
+const FindingFacetRefListRawSchema = z.array(nonEmptyString).min(1);
+
 export const FindingContractManagerConfigRawSchema = z.object({
   persona: nonEmptyString,
   instruction: nonEmptyString,
   output_contract: nonEmptyString,
+  policy: FindingFacetRefListRawSchema.optional(),
+  knowledge: FindingFacetRefListRawSchema.optional(),
+  provider: z.enum(PROVIDER_TYPES).optional(),
+  model: nonEmptyString.optional(),
+}).strict();
+
+export const FindingContractAdjudicatorConfigRawSchema = z.object({
+  persona: nonEmptyString,
+  instruction: nonEmptyString,
   provider: z.enum(PROVIDER_TYPES).optional(),
   model: nonEmptyString.optional(),
 }).strict();
@@ -175,6 +186,7 @@ export const FindingContractReviewBudgetRawSchema = z.object({
 
 export const FindingContractConfigRawSchema = z.object({
   manager: FindingContractManagerConfigRawSchema,
+  adjudicator: FindingContractAdjudicatorConfigRawSchema.optional(),
   stop_budget: FindingContractStopBudgetRawSchema.optional(),
   review_budget: FindingContractReviewBudgetRawSchema.optional(),
 }).strict();

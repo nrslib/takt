@@ -26,6 +26,7 @@ import { FINDING_CONFLICT_ADJUDICATION_RULE_INDEX } from './adjudication-step.js
 import { parseConflictAdjudicationProviderOutput } from './schemas.js';
 import type { FindingAdjudicationStore } from './store.js';
 import type { FindingLedger, FindingObservation } from './types.js';
+import { composeFindingAdjudicationInstruction } from './adjudication-instruction.js';
 
 export interface FindingConflictAdjudicationRunnerDeps {
   ledgerStore: FindingAdjudicationStore;
@@ -38,6 +39,7 @@ export interface FindingConflictAdjudicationRunnerDeps {
   runId: string;
   refreshFindingsState: () => void;
   emitEvent: (event: string, ...args: unknown[]) => void;
+  guidance?: string;
 }
 
 const DISPOSITION_RULE_INDEX: Record<FindingConflictAdjudicationDisposition, number> = {
@@ -87,6 +89,19 @@ function requestBytes(input: {
   });
 }
 
+function hasReservedConflictAttempt(ledger: FindingLedger, conflictId: string): boolean {
+  return ledger.conflictAdjudicationAttempts.some((attempt) => (
+    attempt.conflictId === conflictId
+    && attempt.stage === 'started'
+    && ledger.findingManagerProviderCalls.some((call) => (
+      call.providerCallId === attempt.providerCallId
+      && call.ownerAttemptId === attempt.attemptId
+      && call.purpose === 'conflict_adjudication'
+      && call.state === 'reserved'
+    ))
+  ));
+}
+
 export function createFindingConflictAdjudicationRunner(deps: FindingConflictAdjudicationRunnerDeps): {
   run: (step: WorkflowStep, state: WorkflowState, runtime?: RuntimeStepResolution) => Promise<StepRunResult>;
   getLastOriginStep: () => string | undefined;
@@ -114,7 +129,10 @@ export function createFindingConflictAdjudicationRunner(deps: FindingConflictAdj
     const initial = deps.ledgerStore.loadLedger();
     const conflict = selectConflictForAdjudication(
       initial,
-      (candidate) => isActiveConflictUnadjudicated(initial, candidate.id),
+      (candidate) => (
+        hasReservedConflictAttempt(initial, candidate.id)
+        || isActiveConflictUnadjudicated(initial, candidate.id)
+      ),
     );
     const noTarget = (ledger: FindingLedger, reason: string): StepRunResult => {
       const active = ledger.conflicts.some((candidate) => candidate.status === 'active');
@@ -133,7 +151,10 @@ export function createFindingConflictAdjudicationRunner(deps: FindingConflictAdj
     }
     const snapshot = freshConflictAdjudicationSnapshot(initial, conflict.id);
     const instruction = deps.stepExecutor.buildPhase1Instruction(
-      renderConflictAdjudicationInstruction(snapshot),
+      composeFindingAdjudicationInstruction(
+        deps.guidance,
+        renderConflictAdjudicationInstruction(snapshot),
+      ),
       step,
       runtime,
     );

@@ -473,7 +473,22 @@ Paths must be absolute paths to executable files. Environment variables take pre
 
 Provider and model selection uses the single, field-by-field precedence contract documented under [Provider Routing](#provider-routing). The same contract applies to normal steps, parallel sub-steps, synthetic steps, and workflow calls.
 
-For Finding Contract workflows, `finding_contract.manager.provider` and `finding_contract.manager.model` are treated as step-level provider/model values for the synthetic `findings-manager` step. They override `provider_routing`, deprecated `persona_providers.findings-manager`, auto routing, and workflow/project/global defaults, while explicit CLI and environment overrides remain higher priority. When neither field is set, the manager uses the same fallback chain as any other workflow step. Setting only `provider` stops lower-priority model fallback, so the selected provider uses its own default; providers that require an explicit model fail validation.
+For Finding Contract workflows, `finding_contract.manager.provider` / `model` and `finding_contract.adjudicator.provider` / `model` are treated as step-level values for their synthetic steps. They override `provider_routing`, deprecated `persona_providers`, auto routing, and workflow/project/global defaults, while explicit CLI and environment overrides remain higher priority. When neither field is set, the role uses the normal workflow-step fallback chain. Setting only `provider` stops lower-priority model fallback; providers that require an explicit model fail validation.
+
+```yaml
+finding_contract:
+  manager:
+    persona: findings-manager
+    instruction: findings-manager
+    output_contract: findings-manager
+    provider: codex
+    model: <strong-model>
+  adjudicator:
+    persona: supervisor
+    instruction: adjudicate-finding-contract
+    provider: codex
+    model: <strong-model>
+```
 
 In workflow YAML, `model: null` is an explicit model omission for a normal step, parallel sub-step, or `loop_monitors.judge`. It differs from leaving `model` unspecified: an unspecified model continues to applicable lower-priority sources such as routing, workflow, the triggering step for loop monitor judges, and input sources, while `model: null` stops model resolution at that entry and leaves the effective model undefined. Use it when the resolved provider should use its own CLI or provider default instead of inheriting another model source. Providers that require an explicit model still fail validation when no model is supplied.
 

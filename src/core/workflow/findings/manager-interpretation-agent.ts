@@ -12,6 +12,7 @@ import {
   runPreparedManagerAttempt,
 } from './manager-agent.js';
 import type { FindingLedger, InterpretationCase, InterpretationDecision } from './types.js';
+import { composeFindingManagerInstruction } from './manager-instruction-composer.js';
 
 export interface InterpretationCaseProviderResult {
   responses: Array<{ caseId: string; decision: InterpretationDecision }>;
@@ -68,7 +69,7 @@ export function prepareInterpretationCaseProviderRequest(input: {
   stepExecutor: Pick<StepExecutor, 'buildPhase1Instruction'>;
   ledger: FindingLedger;
 }): PreparedInterpretationCaseProviderRequest {
-  const instruction = buildInterpretationCaseInstruction({
+  const baseInstruction = buildInterpretationCaseInstruction({
     ledger: input.ledger,
     cases: input.cases,
   }).instruction;
@@ -77,7 +78,14 @@ export function prepareInterpretationCaseProviderRequest(input: {
     workflowProvider: input.workflowProvider,
     workflowModel: input.workflowModel,
   });
-  const phase1Instruction = input.stepExecutor.buildPhase1Instruction(instruction, managerStep);
+  const phase1Instruction = input.stepExecutor.buildPhase1Instruction(
+    composeFindingManagerInstruction({
+      baseInstruction,
+      policyContents: managerStep.policyContents,
+      knowledgeContents: managerStep.knowledgeContents,
+    }),
+    managerStep,
+  );
   const agentOptions = buildManagerAgentOptions(input.optionsBuilder, managerStep);
   return {
     managerStep,

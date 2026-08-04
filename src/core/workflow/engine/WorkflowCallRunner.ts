@@ -15,6 +15,11 @@ import {
   resolveWorkflowCallProviderModel,
 } from '../provider-resolution.js';
 import {
+  applyWorkflowCallOverridesToPersonaProviders,
+  applyWorkflowCallOverridesToProviderRouting,
+  resolveWorkflowCallChildProviderModel,
+} from '../workflow-call-provider-context.js';
+import {
   buildWorkflowResumePointEntry,
   getResumePointWorkflowReference,
   getWorkflowReference,
@@ -37,8 +42,6 @@ import type {
 import {
   WorkflowCallExecutor,
   preserveWorkflowCallChildExecutionState,
-  applyWorkflowCallOverridesToProviderRouting,
-  applyWorkflowCallOverridesToPersonaProviders,
   type WorkflowCallExecutionResult,
   type WorkflowCallIsolatedStateSync,
   type WorkflowCallSessionUpdates,
@@ -160,30 +163,11 @@ export class WorkflowCallRunner {
     step: WorkflowCallStep,
     childWorkflow: WorkflowConfig,
   ): StepProviderInfo {
-    const parentProviderInfo = this.resolveParentWorkflowProviderContext();
-    const childProviderInfo = resolveWorkflowCallProviderModel({
-      workflow: childWorkflow,
-      provider: parentProviderInfo.provider,
-      providerSource: parentProviderInfo.providerSource,
-      model: parentProviderInfo.model,
-      modelSource: parentProviderInfo.modelSource,
-    });
-    if (!step.overrides) {
-      return {
-        provider: childProviderInfo.provider,
-        providerSource: childProviderInfo.providerSource,
-        model: childProviderInfo.model,
-        modelSource: childProviderInfo.modelSource,
-      };
-    }
-
-    return applyProviderModelOverride(childProviderInfo, {
-      provider: step.overrides.provider,
-      providerSpecified: step.overrides.provider !== undefined,
-      model: step.overrides.model,
-      modelSpecified: step.overrides.model !== undefined,
-      source: 'workflow_call',
-    });
+    return resolveWorkflowCallChildProviderModel(
+      childWorkflow,
+      step.overrides,
+      this.resolveParentWorkflowProviderContext(),
+    );
   }
 
   resolveRuntime(step: WorkflowCallStep): RuntimeStepResolution {

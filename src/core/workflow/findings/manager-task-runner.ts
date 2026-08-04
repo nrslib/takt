@@ -46,6 +46,7 @@ import {
   PROVIDER_ANCHOR_RELEVANCE_INSTRUCTION,
 } from './manager-raw-decision-adapter.js';
 import { computeConflictEvidenceHash } from './adjudication-evidence.js';
+import { composeFindingManagerInstruction } from './manager-instruction-composer.js';
 import type {
   FindingEvidenceRecord,
   FindingLedger,
@@ -655,13 +656,14 @@ async function executeRawTasks(input: {
     let prepared:
       | { phase1Instruction: string; inputBytes: number }
       | undefined;
+    let renderedInputBytes: number | undefined;
     for (const candidateLimit of CONTEXT_CANDIDATE_LIMITS) {
       const context = rawTaskContext(
         input.previousLedger,
         item.rawFindings,
         candidateLimit,
       );
-      const instruction = buildRawTaskInstruction({
+      const baseInstruction = buildRawTaskInstruction({
         contract: input.contract,
         task: item.task,
         rawFindings: item.rawFindings,
@@ -670,10 +672,15 @@ async function executeRawTasks(input: {
         evidenceRecordsByRawFindingId: input.evidenceRecordsByRawFindingId,
       });
       const phase1Instruction = input.runInput.stepExecutor.buildPhase1Instruction(
-        instruction,
+        composeFindingManagerInstruction({
+          baseInstruction,
+          policyContents: input.managerStep.policyContents,
+          knowledgeContents: input.managerStep.knowledgeContents,
+        }),
         input.managerStep,
       );
       const inputBytes = Buffer.byteLength(phase1Instruction, 'utf8');
+      renderedInputBytes = inputBytes;
       if (inputBytes <= MAIN_MANAGER_INPUT_MAX_BYTES) {
         prepared = { phase1Instruction, inputBytes };
         break;
@@ -704,7 +711,7 @@ async function executeRawTasks(input: {
         taskKind: 'raw',
         ownedIds: [rawFindingId],
         status: 'input_overflow',
-        inputBytes: null,
+        inputBytes: renderedInputBytes ?? null,
         reason,
       });
       continue;
@@ -1243,13 +1250,17 @@ async function executeControlTasks(input: {
   const controlStep = buildFindingManagerControlTaskStep(input.managerStep);
   const tasks = createMainManagerControlTaskManifest(input);
   for (const item of tasks) {
-    const instruction = buildControlTaskInstruction({
+    const baseInstruction = buildControlTaskInstruction({
       contract: input.contract,
       previousLedger: input.previousLedger,
       task: item.task,
     });
     const phase1Instruction = input.runInput.stepExecutor.buildPhase1Instruction(
-      instruction,
+      composeFindingManagerInstruction({
+        baseInstruction,
+        policyContents: controlStep.policyContents,
+        knowledgeContents: controlStep.knowledgeContents,
+      }),
       controlStep,
     );
     const inputBytes = Buffer.byteLength(phase1Instruction, 'utf8');
@@ -1338,7 +1349,7 @@ function assertFixedPrefixFits(input: {
     rawFindings: [],
     conflicts: [],
   }, [], new Map(), []);
-  const instruction = buildRawTaskInstruction({
+  const baseInstruction = buildRawTaskInstruction({
     contract: input.contract,
     task: emptyTask.task,
     rawFindings: [],
@@ -1362,7 +1373,14 @@ function assertFixedPrefixFits(input: {
     mechanicallyClassifiedCount: 0,
     evidenceRecordsByRawFindingId: new Map(),
   });
-  const phase1 = input.stepExecutor.buildPhase1Instruction(instruction, input.managerStep);
+  const phase1 = input.stepExecutor.buildPhase1Instruction(
+    composeFindingManagerInstruction({
+      baseInstruction,
+      policyContents: input.managerStep.policyContents,
+      knowledgeContents: input.managerStep.knowledgeContents,
+    }),
+    input.managerStep,
+  );
   const bytes = Buffer.byteLength(phase1, 'utf8');
   if (bytes > MAIN_MANAGER_INPUT_MAX_BYTES) {
     throw new Error(

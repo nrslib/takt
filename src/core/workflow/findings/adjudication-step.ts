@@ -3,12 +3,16 @@ import type {
   FindingContractConfig,
   LoopMonitorConfig,
   WorkflowConfig,
+  WorkflowStructuredOutput,
   WorkflowStep,
 } from '../../models/types.js';
 import { getAllParallelSubSteps } from '../../models/types.js';
 import { parseWorkflowRuleCondition } from '../../models/workflow-rule-condition.js';
 import { FINDING_CONFLICT_ADJUDICATION_STEP } from '../constants.js';
-import { ConflictAdjudicationProviderOutputJsonSchema } from './schemas.js';
+import {
+  ConflictAdjudicationProviderOutputJsonSchema,
+  TerminalAdjudicationProviderOutputJsonSchema,
+} from './schemas.js';
 
 // Current output is a closed outcome plus optional actionableFix/rationale.
 // Finding transitions are engine-owned and derived from the outcome.
@@ -44,6 +48,58 @@ export const FINDING_CONFLICT_ADJUDICATION_RULE_INDEX = {
   UNRESOLVED: 2,
 } as const;
 
+function buildFindingAdjudicatorStep(input: {
+  contract: FindingContractConfig;
+  workflowProvider?: WorkflowConfig['provider'];
+  workflowModel?: WorkflowConfig['model'];
+  name: string;
+  instruction: string;
+  schemaRef: string;
+  schema: WorkflowStructuredOutput['schema'];
+}): AgentWorkflowStep {
+  const adjudicator = input.contract.adjudicator;
+  if (adjudicator === undefined) {
+    throw new Error('Finding adjudication requires finding_contract.adjudicator');
+  }
+  const providerIsDirect = adjudicator.provider !== undefined;
+  const modelIsDirect = adjudicator.model !== undefined;
+  return {
+    kind: 'agent',
+    name: input.name,
+    engineSynthesized: true,
+    persona: adjudicator.persona,
+    personaDisplayName: adjudicator.personaDisplayName ?? FINDING_CONFLICT_ADJUDICATION_PERSONA,
+    providerRoutingPersonaKey: adjudicator.providerRoutingPersonaKey ?? FINDING_CONFLICT_ADJUDICATION_PERSONA,
+    ...(adjudicator.personaPath !== undefined ? { personaPath: adjudicator.personaPath } : {}),
+    provider: providerIsDirect ? adjudicator.provider : input.workflowProvider,
+    providerSpecified: providerIsDirect,
+    model: modelIsDirect ? adjudicator.model : providerIsDirect ? undefined : input.workflowModel,
+    modelSpecified: modelIsDirect || providerIsDirect,
+    instruction: input.instruction,
+    session: 'refresh',
+    edit: false,
+    structuredOutput: {
+      schemaRef: input.schemaRef,
+      schema: input.schema,
+    },
+    rules: [],
+  };
+}
+
+export function buildFindingTerminalAdjudicationStep(input: {
+  contract: FindingContractConfig;
+  workflowProvider?: WorkflowConfig['provider'];
+  workflowModel?: WorkflowConfig['model'];
+}): AgentWorkflowStep {
+  return buildFindingAdjudicatorStep({
+    ...input,
+    name: 'findings-terminal-adjudication',
+    instruction: 'Adjudicate one durable provisional finding entity.',
+    schemaRef: 'takt.findings.terminal-adjudication',
+    schema: TerminalAdjudicationProviderOutputJsonSchema,
+  });
+}
+
 /**
  * Builds the finding-conflict-adjudication synthetic step. Unlike
  * findings-manager (which runs outside the step state machine), this is a REAL
@@ -62,33 +118,22 @@ export function buildFindingConflictAdjudicationStep(input: {
   workflowProvider?: WorkflowConfig['provider'];
   workflowModel?: WorkflowConfig['model'];
 }): AgentWorkflowStep {
-  const adjudicator = input.contract.adjudicator;
-  if (!adjudicator) {
+  if (!input.contract.adjudicator) {
     throw new Error(
       `Configuration error: persona "${FINDING_CONFLICT_ADJUDICATION_PERSONA}" is required for `
       + `next: ${FINDING_CONFLICT_ADJUDICATION_STEP} but finding_contract.adjudicator was not resolved `
       + '(the supervisor persona facet could not be found)',
     );
   }
-  return {
-    kind: 'agent',
+  const step = buildFindingAdjudicatorStep({
+    ...input,
     name: FINDING_CONFLICT_ADJUDICATION_STEP,
-    engineSynthesized: true,
-    persona: adjudicator.persona,
-    personaDisplayName: adjudicator.personaDisplayName ?? FINDING_CONFLICT_ADJUDICATION_PERSONA,
-    providerRoutingPersonaKey: adjudicator.providerRoutingPersonaKey ?? FINDING_CONFLICT_ADJUDICATION_PERSONA,
-    ...(adjudicator.personaPath !== undefined ? { personaPath: adjudicator.personaPath } : {}),
-    provider: input.workflowProvider,
-    providerSpecified: false,
-    model: input.workflowModel,
-    modelSpecified: false,
     instruction: 'Adjudicate one unresolved finding-contract conflict (engine-synthesized step; the conflict payload is assembled at execution time).',
-    session: 'refresh',
-    edit: false,
-    structuredOutput: {
-      schemaRef: FINDING_CONFLICT_ADJUDICATION_SCHEMA_REF,
-      schema: ConflictAdjudicationProviderOutputJsonSchema,
-    },
+    schemaRef: FINDING_CONFLICT_ADJUDICATION_SCHEMA_REF,
+    schema: ConflictAdjudicationProviderOutputJsonSchema,
+  });
+  return {
+    ...step,
     rules: [
       // Dynamic next (resolved from WorkflowState.previousStep) — see
       // FINDING_CONFLICT_ADJUDICATION_RULE_INDEX and

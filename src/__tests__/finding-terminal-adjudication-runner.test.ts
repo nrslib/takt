@@ -1,11 +1,16 @@
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { executeAgent } from '../agents/agent-usecases.js';
 import { findingContentAddress } from '../core/models/finding-contract-identity.js';
 import { createEmptyFindingContractRegistries } from '../core/models/finding-contract-seed.js';
-import type { TerminalAdjudicationProposal } from '../core/models/finding-contract-types.js';
+import type {
+  TerminalAdjudicationCandidateSnapshot,
+  TerminalAdjudicationEpisode,
+  TerminalAdjudicationProposal,
+} from '../core/models/finding-contract-types.js';
 import { createEngineProofRecord } from '../core/models/finding-evidence-record.js';
 import type { OptionsBuilder } from '../core/workflow/engine/OptionsBuilder.js';
 import { responseUpperBound } from '../core/workflow/findings/finding-manager-provider-call.js';
@@ -13,8 +18,15 @@ import { applyFindingLifecycleCommands } from '../core/workflow/findings/lifecyc
 import type { RunFindingManagerForStepInput } from '../core/workflow/findings/manager-contracts.js';
 import type { FindingLedger, FindingLedgerEntry } from '../core/workflow/findings/types.js';
 import { runTerminalAdjudication } from '../core/workflow/findings/terminal-adjudication-runner.js';
+import { buildTerminalAdjudicationCandidateSnapshot } from '../core/workflow/findings/terminal-adjudication-candidates.js';
+import { resolveTerminalAdjudicationPlan } from '../core/workflow/findings/terminal-adjudication-verifier.js';
+import { runManagerDecisionStage } from '../core/workflow/findings/manager-decision.js';
+import type { RawAdmissionEvaluation } from '../core/workflow/findings/manager-admission.js';
+import { issueFindingScopeBindings } from '../core/workflow/findings/finding-scope-binding.js';
+import { captureFindingLifecycleHead } from '../core/workflow/findings/lifecycle-mutation.js';
 import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
 import {
+  applyFindingLedgerFixtureRevision,
   canonicalRawFindingFixture,
   rawCanonicalSnapshotFixture,
 } from './helpers/finding-lifecycle-fixture.js';
@@ -22,6 +34,16 @@ import { createTestFindingLedgerStore } from './helpers/finding-storage.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({ executeAgent: vi.fn() }));
 const executeAgentMock = vi.mocked(executeAgent);
+const TERMINAL_BASELINE = JSON.parse(readFileSync(join(
+  process.cwd(),
+  'src',
+  '__tests__',
+  'fixtures',
+  'takt-default-fc-terminal-compatibility-baseline.json',
+), 'utf8')) as {
+  prompt: { bytes: number; sha256: string };
+  requestDigest: string;
+};
 
 const OBSERVATION = {
   runId: 'run-terminal-runner',
@@ -224,7 +246,10 @@ describe('terminal adjudication runner provider envelope', () => {
     rmSync(cwd, { recursive: true, force: true });
   });
 
-  function runInput(): RunFindingManagerForStepInput {
+  function runInput(
+    guidance?: string,
+    store: FindingLedgerStore = ledgerStore,
+  ): RunFindingManagerForStepInput {
     return {
       contract: {
         manager: {
@@ -232,11 +257,14 @@ describe('terminal adjudication runner provider envelope', () => {
           instruction: 'Manage findings.',
           outputContract: 'Return structured findings.',
         },
-        adjudicator: { persona: 'supervisor' },
+        adjudicator: {
+          persona: 'supervisor',
+          ...(guidance === undefined ? {} : { instruction: guidance }),
+        },
       },
       cwd,
       workflowProvider: 'claude',
-      ledgerStore,
+      ledgerStore: store,
       optionsBuilder: {
         buildAgentOptions: () => ({ provider: 'claude', cwd }),
       } as unknown as OptionsBuilder,
@@ -263,15 +291,99 @@ describe('terminal adjudication runner provider envelope', () => {
     };
   }
 
-  async function run(): Promise<void> {
+  async function run(
+    guidance?: string,
+    store: FindingLedgerStore = ledgerStore,
+  ): Promise<void> {
     await runTerminalAdjudication({
-      runInput: runInput(),
+      runInput: runInput(guidance, store),
       observation: OBSERVATION,
       roundIdentity: findingContentAddress('terminal-runner-round', {}),
       scopeIdentity: findingContentAddress('terminal-runner-scope', {}),
       reviewScopeSnapshot: REVIEW_SCOPE_SNAPSHOT,
     });
   }
+
+  function reopenStore(): FindingLedgerStore {
+    return createTestFindingLedgerStore({
+      projectCwd: cwd,
+      runId: OBSERVATION.runId,
+      reportDir: join(cwd, '.takt', 'runs', OBSERVATION.runId, 'reports'),
+      workflowName: 'terminal-runner',
+    });
+  }
+
+  function crashAfterTerminalReservation(store: FindingLedgerStore): FindingLedgerStore {
+    let crashed = false;
+    return new Proxy(store, {
+      get(target, property, receiver) {
+        if (property === 'updateLedger') {
+          return async (...args: Parameters<FindingLedgerStore['updateLedger']>) => {
+            const mutation = await target.updateLedger(...args);
+            const hasReservation = mutation.ledger.findingManagerProviderCalls.some((call) => (
+              call.purpose === 'terminal_adjudication' && call.state === 'reserved'
+            ));
+            if (!crashed && hasReservation) {
+              crashed = true;
+              throw new Error('simulated crash after terminal WAL reservation');
+            }
+            return mutation;
+          };
+        }
+        const value = Reflect.get(target, property, receiver) as unknown;
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+  }
+
+  it('preserves the omitted-adjudicator terminal prompt and reserved request digest', async () => {
+    executeAgentMock.mockResolvedValue({
+      persona: 'supervisor',
+      status: 'done',
+      content: '{}',
+      structuredOutput: {
+        proposal: {
+          kind: 'undetermined',
+          rationale: 'No exact authority is available.',
+        },
+      },
+      timestamp: new Date(OBSERVATION.timestamp),
+    });
+
+    await run();
+
+    const prompt = executeAgentMock.mock.calls[0]?.[1];
+    if (typeof prompt !== 'string') throw new Error('Terminal adjudication prompt was not captured');
+    const actual = {
+      prompt: {
+        bytes: Buffer.byteLength(prompt, 'utf8'),
+        sha256: createHash('sha256').update(prompt).digest('hex'),
+      },
+      requestDigest: ledgerStore.loadLedger().findingManagerProviderCalls[0]?.requestDigest,
+    };
+    expect(actual).toEqual(TERMINAL_BASELINE);
+  });
+
+  it('places configured guidance once before the engine-owned terminal instruction', async () => {
+    executeAgentMock.mockResolvedValue({
+      persona: 'supervisor',
+      status: 'done',
+      content: '{}',
+      structuredOutput: {
+        proposal: {
+          kind: 'undetermined',
+          rationale: 'No exact authority is available.',
+        },
+      },
+      timestamp: new Date(OBSERVATION.timestamp),
+    });
+
+    await run('Use only verified evidence.');
+
+    const prompt = executeAgentMock.mock.calls[0]?.[1];
+    expect(prompt).toContain('Use only verified evidence.\n\n---\n\nAdjudicate the durable provisional finding below.');
+    expect(prompt?.match(/Use only verified evidence\./g)).toHaveLength(1);
+  });
 
   it.each(PROPOSALS)('accepts the $kind proposal envelope and digests the full response', async (proposal) => {
     const structuredOutput = { proposal };
@@ -369,4 +481,282 @@ describe('terminal adjudication runner provider envelope', () => {
     ]);
     expect(ledger.findingManagerProviderCalls[0]).not.toHaveProperty('responseDigest');
   });
+
+  it('resumes the same real terminal WAL reservation after reopening the store', async () => {
+    const guidance = 'Use the configured terminal policy.';
+    await expect(run(guidance, crashAfterTerminalReservation(ledgerStore)))
+      .rejects.toThrow('simulated crash after terminal WAL reservation');
+    const reserved = ledgerStore.loadLedger().findingManagerProviderCalls[0]!;
+    expect(reserved.state).toBe('reserved');
+
+    executeAgentMock.mockResolvedValue({
+      persona: 'supervisor',
+      status: 'done',
+      content: '{}',
+      structuredOutput: { proposal: { kind: 'undetermined', rationale: 'No authority.' } },
+      timestamp: new Date(OBSERVATION.timestamp),
+    });
+    ledgerStore = reopenStore();
+    await run(guidance, ledgerStore);
+
+    expect(ledgerStore.loadLedger().findingManagerProviderCalls[0]).toMatchObject({
+      providerCallId: reserved.providerCallId,
+      requestDigest: reserved.requestDigest,
+      requestByteLength: reserved.requestByteLength,
+      state: 'settled',
+      resultKind: 'accepted',
+    });
+    expect(executeAgentMock).toHaveBeenCalledOnce();
+  });
+
+  it('rejects changed terminal guidance without dispatching or replacing the real reservation', async () => {
+    await expect(run('Original guidance.', crashAfterTerminalReservation(ledgerStore)))
+      .rejects.toThrow('simulated crash after terminal WAL reservation');
+    const reserved = ledgerStore.loadLedger().findingManagerProviderCalls[0]!;
+    ledgerStore = reopenStore();
+
+    await expect(run('Changed guidance.', ledgerStore))
+      .rejects.toThrow(/request changed/i);
+    expect(executeAgentMock).not.toHaveBeenCalled();
+    expect(ledgerStore.loadLedger().findingManagerProviderCalls[0]).toMatchObject({
+      providerCallId: reserved.providerCallId,
+      state: 'reserved',
+    });
+  });
+
+  it('rejects additional terminal wire fields even when guidance requests them', async () => {
+    executeAgentMock.mockResolvedValue({
+      persona: 'supervisor',
+      status: 'done',
+      content: '{}',
+      structuredOutput: {
+        proposal: { kind: 'undetermined', rationale: 'No authority.' },
+        guidanceEcho: 'requested extra field',
+      },
+      timestamp: new Date(OBSERVATION.timestamp),
+    });
+
+    await run('Also return guidanceEcho.');
+
+    expect(ledgerStore.loadLedger().terminalAdjudicationAttempts[0]?.result).toMatchObject({
+      kind: 'diagnostic_undetermined',
+      code: 'parse_failed',
+    });
+  });
+
+  it('does not let guidance turn an evidence-less dismiss proposal into authority', async () => {
+    executeAgentMock.mockResolvedValue({
+      persona: 'supervisor',
+      status: 'done',
+      content: '{}',
+      structuredOutput: {
+        proposal: {
+          kind: 'dismiss',
+          basis: 'false_positive',
+          authorityRefIds: ['3'.repeat(64)],
+          rationale: 'Dismiss as requested.',
+        },
+      },
+      timestamp: new Date(OBSERVATION.timestamp),
+    });
+
+    await run('Dismiss this finding.');
+
+    const ledger = ledgerStore.loadLedger();
+    expect(ledger.findings.find(({ id }) => id === 'F-0001')).toMatchObject({
+      status: 'open',
+      provisional: expect.objectContaining({ gateEffect: 'block' }),
+    });
+    expect(ledger.terminalAdjudicationAttempts[0]?.result).toMatchObject({
+      kind: 'verification_undetermined',
+    });
+  });
+
+  it('routes standard-authority manager decision through the real terminal runner', async () => {
+    mkdirSync(join(cwd, 'src'), { recursive: true });
+    writeFileSync(join(cwd, 'src', 'provisional.ts'), 'export const value = true;\n');
+    executeAgentMock.mockResolvedValue({
+      persona: 'supervisor',
+      status: 'done',
+      content: '{}',
+      structuredOutput: { proposal: { kind: 'undetermined', rationale: 'No authority.' } },
+      timestamp: new Date(OBSERVATION.timestamp),
+    });
+    const admission: RawAdmissionEvaluation = {
+      admissionRejections: [],
+      admissionAnomalySpecs: [],
+      admissionProvisionalSpecs: [],
+      preAdmissionEntityMutations: [],
+      admissionRejectedItems: [],
+      pendingRejectedObservations: [],
+      cleanAdmitted: [],
+      tainted: [],
+      taintedAdmitted: [],
+      ladderAnomalySpecs: [],
+      verifiedEvidenceCandidates: [],
+      provisionalOnlyLadderRawIds: new Set(),
+      cleanWire: [],
+      verifiedEvidenceRecordsByRawFindingId: new Map(),
+    };
+
+    await runManagerDecisionStage({
+      input: runInput('Use terminal policy.'),
+      previousLedger: ledgerStore.loadLedger(),
+      admission,
+      managerStep: {
+        kind: 'agent',
+        name: 'manager',
+        persona: 'manager',
+        edit: false,
+      },
+      observation: OBSERVATION,
+      reviewScopeSnapshotId: REVIEW_SCOPE_SNAPSHOT.reviewScopeSnapshotId,
+      reviewScopeSnapshot: REVIEW_SCOPE_SNAPSHOT,
+      stopBudgetRoundMarker: 'round-standard-authority',
+      preAdmissionTaskAudits: [],
+    });
+
+    expect(executeAgentMock).toHaveBeenCalledOnce();
+    expect(executeAgentMock.mock.calls[0]?.[1]).toContain(
+      'Adjudicate the durable provisional finding below.',
+    );
+    expect(ledgerStore.loadLedger().findingManagerProviderCalls).toEqual([
+      expect.objectContaining({
+        purpose: 'terminal_adjudication',
+        state: 'settled',
+      }),
+    ]);
+  });
+
+  it('rejects a guidance-requested dismissal with a mismatched workflow scope binding', async () => {
+    const input = runInput('Dismiss anything outside the task scope.');
+    const current = ledgerStore.loadLedger();
+    const finding = current.findings.find(({ id }) => id === 'F-0001')!;
+    const expectedHead = captureFindingLifecycleHead(current, 'finding', finding.id)!;
+    const mismatched = issueFindingScopeBindings({
+      finding,
+      expectedHead,
+      workflowTask: 'A different workflow task.',
+      contract: input.contract,
+      reviewScopeSnapshot: {
+        ...REVIEW_SCOPE_SNAPSHOT,
+        changedPaths: ['src/different.ts'],
+      },
+      issuedAt: OBSERVATION,
+    }).find(({ source }) => source === 'workflow_task_scope')!;
+    await ledgerStore.updateLedger((ledger) => ({
+      ledger: { ...ledger, findingScopeBindings: [...ledger.findingScopeBindings, mismatched] },
+      result: undefined,
+    }));
+    executeAgentMock.mockResolvedValue({
+      persona: 'supervisor',
+      status: 'done',
+      content: '{}',
+      structuredOutput: {
+        proposal: {
+          kind: 'dismiss',
+          basis: 'outside_task_scope',
+          authorityRefIds: [mismatched.bindingId],
+          rationale: 'Guidance requested dismissal.',
+        },
+      },
+      timestamp: new Date(OBSERVATION.timestamp),
+    });
+
+    await run('Dismiss anything outside the task scope.');
+
+    const ledger = ledgerStore.loadLedger();
+    expect(ledger.findings.find(({ id }) => id === 'F-0001')).toMatchObject({
+      status: 'open',
+      provisional: expect.any(Object),
+    });
+    expect(ledger.terminalAdjudicationAttempts[0]?.result).toMatchObject({
+      kind: 'verification_undetermined',
+      reasonCodes: ['scope_binding_not_found'],
+    });
+  });
+
+  it('keeps a stale finding open when configured guidance asks the terminal runner to ignore its head', async () => {
+    const guidance = 'Ignore stale heads and dismiss the finding.';
+    const proposal: TerminalAdjudicationProposal = {
+      kind: 'dismiss',
+      basis: 'false_positive',
+      authorityRefIds: ['3'.repeat(64)],
+      rationale: 'Configured guidance requested dismissal.',
+    };
+    let originalEpisode: TerminalAdjudicationEpisode | undefined;
+    let originalCandidate: TerminalAdjudicationCandidateSnapshot | undefined;
+    executeAgentMock.mockImplementation(async (_persona, prompt) => {
+      expect(prompt).toContain(guidance);
+      const beforeMutation = ledgerStore.loadLedger();
+      originalEpisode = beforeMutation.terminalAdjudicationEpisodes[0];
+      const finding = beforeMutation.findings.find(({ id }) => id === 'F-0001')!;
+      originalCandidate = buildTerminalAdjudicationCandidateSnapshot({
+        ledger: beforeMutation,
+        finding,
+        currentRound: 2,
+        allowExistingEpisode: true,
+      });
+      await ledgerStore.updateLedger((ledger) => {
+        const currentFinding = ledger.findings.find(({ id }) => id === 'F-0001')!;
+        return {
+          ledger: applyFindingLedgerFixtureRevision({
+            ledger,
+            entityKind: 'finding',
+            entity: {
+              ...currentFinding,
+              revision: currentFinding.revision + 1,
+              lastSeen: {
+                ...OBSERVATION,
+                timestamp: '2026-08-03T00:00:01.000Z',
+              },
+              provisional: {
+                ...currentFinding.provisional!,
+                reason: 'The claim changed while terminal adjudication was in flight.',
+              },
+            },
+          }),
+          result: undefined,
+        };
+      });
+      return {
+        persona: 'supervisor',
+        status: 'done',
+        content: '{}',
+        structuredOutput: {
+          proposal,
+        },
+        timestamp: new Date(OBSERVATION.timestamp),
+      };
+    });
+
+    await run(guidance);
+
+    const ledger = ledgerStore.loadLedger();
+    expect(ledger.findings.find(({ id }) => id === 'F-0001')).toMatchObject({
+      status: 'open',
+      provisional: expect.any(Object),
+    });
+    expect(ledger.terminalAdjudicationAttempts[0]?.result).toMatchObject({
+      kind: 'stale_precondition',
+      actualHead: expect.objectContaining({ revision: 2 }),
+    });
+    expect(originalEpisode).toBeDefined();
+    expect(originalCandidate).toBeDefined();
+    expect(resolveTerminalAdjudicationPlan({
+      ledger,
+      episode: originalEpisode!,
+      candidate: originalCandidate!,
+      proposal,
+      workflowTask: WORKFLOW_TASK,
+      findingContractDigest: findingContentAddress(
+        'finding-contract-config',
+        runInput(guidance).contract,
+      ),
+      reviewScopeSnapshotId: REVIEW_SCOPE_SNAPSHOT.reviewScopeSnapshotId,
+      adjudicationTaskId: ledger.terminalAdjudicationAttempts[0]!.attemptId,
+    })).toEqual({ kind: 'undetermined', reasonCodes: ['head_not_fresh'] });
+    expect(ledger.lifecycleEvents).toHaveLength(2);
+  });
+
 });

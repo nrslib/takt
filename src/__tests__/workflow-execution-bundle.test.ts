@@ -15,6 +15,7 @@ import {
   publishWorkflowExecutionBundle,
 } from '../features/tasks/execute/workflowExecutionBundle.js';
 import { attachLegacyWorkflowExecutionBundle } from '../features/workflowAuthoring/attachExecutionBundle.js';
+import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 
 const roots: string[] = [];
 
@@ -147,6 +148,85 @@ describe('workflow execution bundle', () => {
       instruction: 'Implement part 1',
     });
     expect(partStep.personaPath).toBe(partPersonaPath);
+  });
+
+  it('materializes and rebinds real facet personas for root-owned and inherited finding contracts', () => {
+    const root = mkdtempSync(join(tmpdir(), 'takt-workflow-bundle-finding-contract-'));
+    roots.push(root);
+    const workflowDir = join(root, '.takt', 'workflows');
+    for (const kind of ['personas', 'instructions', 'output-contracts']) {
+      mkdirSync(join(root, '.takt', 'facets', kind), { recursive: true });
+    }
+    mkdirSync(workflowDir, { recursive: true });
+    writeFileSync(join(root, '.takt', 'facets', 'personas', 'manager.md'), 'Resolved manager persona');
+    writeFileSync(join(root, '.takt', 'facets', 'personas', 'supervisor.md'), 'Resolved adjudicator persona');
+    writeFileSync(join(root, '.takt', 'facets', 'instructions', 'manager.md'), 'Resolved manager instruction');
+    writeFileSync(join(root, '.takt', 'facets', 'instructions', 'adjudicate.md'), 'Resolved adjudication guidance');
+    writeFileSync(join(root, '.takt', 'facets', 'output-contracts', 'manager.md'), 'Resolved manager output');
+    const rawFindingContract = {
+      manager: { persona: 'manager', instruction: 'manager', output_contract: 'manager' },
+      adjudicator: { persona: 'supervisor', instruction: 'adjudicate' },
+    };
+    const context = { projectDir: root, workflowDir, lang: 'en' as const };
+    const child = attachWorkflowOpaqueRef(normalizeWorkflowConfig({
+      name: 'facet-child',
+      subworkflow: { callable: true, requires_finding_contract: true },
+      finding_contract: rawFindingContract,
+      initial_step: 'review',
+      max_steps: 2,
+      steps: [{
+        name: 'review',
+        persona: 'reviewer',
+        instruction: 'Review.',
+        rules: [{ condition: 'done', next: 'COMPLETE' }],
+      }],
+    }, workflowDir, context), `project:sha256:${'c'.repeat(64)}`);
+    const parent = attachWorkflowOpaqueRef(normalizeWorkflowConfig({
+      name: 'facet-parent',
+      finding_contract: rawFindingContract,
+      initial_step: 'delegate',
+      max_steps: 2,
+      steps: [{
+        name: 'delegate',
+        kind: 'workflow_call',
+        call: 'facet-child',
+        rules: [{ condition: 'done', next: 'COMPLETE' }],
+      }],
+    }, workflowDir, context), `project:sha256:${'p'.repeat(64)}`);
+    const paths = buildRunPaths(root, 'finding-contract-bundle-run');
+    const prepared = prepareWorkflowExecutionBundle({
+      rootWorkflow: parent,
+      workflowCallResolver: () => child,
+      projectCwd: root,
+      lookupCwd: root,
+    });
+    publishWorkflowExecutionBundle(paths, prepared);
+
+    const loaded = loadWorkflowExecutionBundle(paths);
+    const loadedChild = loaded.workflowCallResolver({
+      parentWorkflow: loaded.rootWorkflow,
+      step: loaded.rootWorkflow.steps[0] as never,
+      projectCwd: root,
+      lookupCwd: root,
+    });
+    for (const config of [loaded.rootWorkflow, loadedChild]) {
+      const managerPath = config?.findingContract?.manager.personaPath;
+      const adjudicatorPath = config?.findingContract?.adjudicator?.personaPath;
+      expect(dirname(managerPath!)).toBe(loaded.resourceRoot);
+      expect(dirname(adjudicatorPath!)).toBe(loaded.resourceRoot);
+      expect(readFileSync(managerPath!, 'utf8')).toBe('Resolved manager persona');
+      expect(readFileSync(adjudicatorPath!, 'utf8')).toBe('Resolved adjudicator persona');
+    }
+    expect(prepared.manifest.resources).toEqual(expect.objectContaining({
+      [createHash('sha256').update('Resolved manager persona').digest('hex')]: {
+        kind: 'prompt',
+        size: Buffer.byteLength('Resolved manager persona'),
+      },
+      [createHash('sha256').update('Resolved adjudicator persona').digest('hex')]: {
+        kind: 'prompt',
+        size: Buffer.byteLength('Resolved adjudicator persona'),
+      },
+    }));
   });
 
   it('attaches once without changing run metadata or Finding Contract SQLite bytes', () => {

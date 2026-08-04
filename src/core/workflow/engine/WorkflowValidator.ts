@@ -23,6 +23,11 @@ import {
   hasFindingsReference,
 } from '../../models/workflow-rule-condition.js';
 import { buildFindingInterpretationStep, buildFindingManagerStep } from '../findings/manager-step.js';
+import {
+  buildFindingConflictAdjudicationStep,
+  buildFindingTerminalAdjudicationStep,
+  workflowWiresFindingConflictAdjudication,
+} from '../findings/adjudication-step.js';
 import { findFindingContractFormat, hasFindingContractFormat } from '../findings/finding-contract-format.js';
 import {
   resolveAutoRoutingCandidateProviderInfo,
@@ -39,6 +44,22 @@ import { resolveFindingIntakeNormalizeConfig } from '../findings/intake-normaliz
 import { validateDynamicParallelContracts } from '../dynamic-parallel/validator.js';
 
 type ResolvedProviderInfo = ReturnType<typeof resolveStepProviderModel>;
+export type FindingContractSyntheticProviderValidationOptions = Pick<
+  WorkflowEngineOptions,
+  | 'provider'
+  | 'providerSource'
+  | 'model'
+  | 'modelSource'
+  | 'autoRouting'
+  | 'providerRouting'
+  | 'providerRoutingTagConflictPolicy'
+  | 'personaProviders'
+> & {
+  inheritedFindingContract?: Pick<
+    NonNullable<WorkflowEngineOptions['inheritedFindingContract']>,
+    'contract' | 'managerAuthority'
+  >;
+};
 const withWorkflowStepErrorPath = withWorkflowConfigErrorPath;
 
 function providerValidationField(error: unknown, fallback: 'provider' | 'model'): 'provider' | 'model' {
@@ -235,25 +256,27 @@ function validateFindingContractStructuredOutput(config: WorkflowConfig, finding
 }
 
 /**
- * findings-manager は実行時に合成されるステップで、config.steps の走査
- * （validateAgentStepProviderModel）に現れない。実行時（manager-runner.ts）と
- * 同じ buildFindingManagerStep で合成した形を同じ resolveStepProviderModel で
- * 解決し、provider/model の要件（例: opencode は model 必須）を実行前に検証する。
- * ここで検証しないと、validate は素通りしたのに manager 起動時に初めて落ちる。
+ * Finding Contract の manager / interpreter / adjudicator は実行時に合成される
+ * ステップで、config.steps の通常走査（validateAgentStepProviderModel）だけでは
+ * 網羅できない。各 runner と共通の builder で合成し、同じ
+ * resolveStepProviderModel で provider/model 要件を実行前に検証する。
  *
  * 対象の finding_contract は自前（config.findingContract）だけでなく
  * workflow_call 親からの継承（options.inheritedFindingContract）も含む
  * （WorkflowEngine が実際に使う有効な契約と同じ判定基準。findingContractEnabled
  * と同じ式）。継承分をここで見ないと、子の workflow provider/model では
- * manager が成立しない構成が validate を素通りし、manager 起動時に初めて落ちる。
+ * synthetic role が成立しない構成が validate を素通りし、起動時に初めて落ちる。
  *
  * WorkflowCallExecutor が子 engine を組み立てる際、この関数を子の config と
  * 継承契約入り options に対して明示的に呼び、子の実行前に fail-fast する
  * （createEngine は単体テストではモックされるため、子 WorkflowEngine の
  * コンストラクタが暗黙に行う検証には頼れない）。
  */
-export function validateFindingContractManagerProviderModel(config: WorkflowConfig, options: WorkflowEngineOptions): void {
-  const findingContract = config.findingContract ?? options.inheritedFindingContract?.contract;
+export function validateFindingContractSyntheticProviderModels(
+  config: WorkflowConfig,
+  options: FindingContractSyntheticProviderValidationOptions,
+): void {
+  const findingContract = options.inheritedFindingContract?.contract ?? config.findingContract;
   if (!findingContract) {
     return;
   }
@@ -262,7 +285,7 @@ export function validateFindingContractManagerProviderModel(config: WorkflowConf
     workflowProvider: config.provider,
     workflowModel: config.model,
   };
-  // findings-manager と findings-interpreter は実行ループの AI ルーターを
+  // synthetic roles は実行ループの AI ルーターを
   // 通らず、実行時は OptionsBuilder.resolveStepProviderModel が rules →
   // strategy デフォルトへ決定的に補完する。validator も同じ解決で検証しないと、
   // 実行時には到達しない候補の組み合わせを検証して有効な構成を拒否する
@@ -271,7 +294,18 @@ export function validateFindingContractManagerProviderModel(config: WorkflowConf
   // され得る — 片方だけの検証では他方の実行時エラーを素通しする。全候補を
   // 検証する expandAutoRoutingProviderInfos は AI ルーターがどの候補も選び得る
   // 通常ステップ専用。
-  for (const step of [buildFindingManagerStep(stepInput), buildFindingInterpretationStep(stepInput)]) {
+  const adjudicationSteps = [
+    buildFindingTerminalAdjudicationStep(stepInput),
+    ...(workflowWiresFindingConflictAdjudication(config.steps, config.loopMonitors)
+      ? [buildFindingConflictAdjudicationStep(stepInput)]
+      : []),
+  ];
+  const syntheticSteps = [
+    buildFindingManagerStep(stepInput),
+    buildFindingInterpretationStep(stepInput),
+    ...adjudicationSteps,
+  ];
+  for (const step of syntheticSteps) {
     const providerInfo = resolveStepProviderModel({
       step,
       provider: options.provider,
@@ -290,9 +324,12 @@ export function validateFindingContractManagerProviderModel(config: WorkflowConf
           currentProviderInfo: providerInfo,
         })
       : undefined;
+    const configurationPath = step.name === 'findings-manager' || step.name === 'findings-interpreter'
+      ? 'Configuration error: finding_contract.manager.model'
+      : 'Configuration error: finding_contract.adjudicator.model';
     validateResolvedProviderInfo(
       deterministicInfo ?? providerInfo,
-      'Configuration error: finding_contract.manager.model',
+      configurationPath,
       deterministicInfo !== undefined,
     );
   }
@@ -648,7 +685,7 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
     config.findingContract ?? options.inheritedFindingContract?.contract,
   );
   validateFindingContractStructuredOutput(config, findingContractEnabled);
-  validateFindingContractManagerProviderModel(config, options);
+  validateFindingContractSyntheticProviderModels(config, options);
   validateFindingConflictAdjudicationReservedName(config);
   validateWorkflowStepNamesUnique(config);
   validateRequiredInheritedFindingContract(config, options);

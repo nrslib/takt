@@ -2480,6 +2480,17 @@ steps:
         worktreeDir,
         { allowPathBasedCalls: false },
       );
+      expect(validateContractsSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'parent' }),
+        projectDir,
+        worktreeDir,
+        expect.objectContaining({
+          providerValidationOptions: expect.objectContaining({
+            providerSource: expect.any(String),
+            modelSource: expect.any(String),
+          }),
+        }),
+      );
     } finally {
       validateContractsSpy.mockRestore();
       rmSync(configuredRoot, { recursive: true, force: true });

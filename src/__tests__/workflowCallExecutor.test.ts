@@ -88,6 +88,11 @@ const FAKE_FINDING_CONTRACT: FindingContractConfig = {
     instruction: 'findings-manager',
     outputContract: 'findings-manager',
   },
+  adjudicator: {
+    persona: 'supervisor',
+    provider: 'codex',
+    model: 'strong-adjudicator',
+  },
 };
 
 const FAKE_FINDING_CONTRACT_WITH_INVALID_MANAGER_PROVIDER: FindingContractConfig = {
@@ -98,6 +103,25 @@ const FAKE_FINDING_CONTRACT_WITH_INVALID_MANAGER_PROVIDER: FindingContractConfig
     // opencode は model 必須。manager.provider を直接指定すると workflow の
     // provider/model フォールバックが働かなくなる（buildFindingManagerStep 参照）
     // ため、この組み合わせは常に不正になる。
+    provider: 'opencode',
+  },
+  adjudicator: {
+    persona: 'supervisor',
+    provider: 'codex',
+    model: 'strong-adjudicator',
+  },
+};
+
+const FAKE_FINDING_CONTRACT_WITH_INVALID_ADJUDICATOR_PROVIDER: FindingContractConfig = {
+  manager: {
+    persona: 'findings-manager',
+    instruction: 'findings-manager',
+    outputContract: 'findings-manager',
+    provider: 'codex',
+    model: 'strong-manager',
+  },
+  adjudicator: {
+    persona: 'supervisor',
     provider: 'opencode',
   },
 };
@@ -797,7 +821,10 @@ describe('WorkflowCallExecutor', () => {
     expect(refreshFindingsState).toHaveBeenCalledTimes(1);
   });
 
-  it('子が継承した finding_contract.manager の provider/model が不正なとき、子 engine を作る前に fail-fast する', async () => {
+  it.each([
+    ['manager', FAKE_FINDING_CONTRACT_WITH_INVALID_MANAGER_PROVIDER],
+    ['adjudicator', FAKE_FINDING_CONTRACT_WITH_INVALID_ADJUDICATOR_PROVIDER],
+  ] as const)('子が継承した finding_contract.%s の provider/model が不正なとき、子 engine を作る前に fail-fast する', async (_role, findingContract) => {
     const parentConfig = {
       name: 'parent',
       initialStep: 'delegate',
@@ -843,7 +870,7 @@ describe('WorkflowCallExecutor', () => {
       state,
       setActiveResumePoint: vi.fn(),
       refreshFindingsState: vi.fn(),
-      findingContract: FAKE_FINDING_CONTRACT_WITH_INVALID_MANAGER_PROVIDER,
+      findingContract,
       findingLedgerStore: createFakeLedgerStore(),
     });
 
@@ -920,5 +947,9 @@ describe('WorkflowCallExecutor', () => {
 
     expect(result.status).toBe('completed');
     expect(createEngine).toHaveBeenCalledTimes(1);
+    expect(createEngine.mock.calls[0]?.[3]?.inheritedFindingContract).toMatchObject({
+      contract: FAKE_FINDING_CONTRACT,
+      managerAuthority: 'standard',
+    });
   });
 });

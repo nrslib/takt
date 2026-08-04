@@ -1,12 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MockInstance } from 'vitest';
 import type { CompiledProviderEnvironment } from '../infra/config/runtime-provider/environment.js';
+import { getProviderValidationErrorSource } from '../core/workflow/provider-validation-error.js';
+
+const VALID_ADJUDICATOR = {
+  persona: 'supervisor',
+  provider: 'codex' as const,
+  model: 'gpt-5',
+};
 
 const {
   mockLoadWorkflowByIdentifier,
   mockResolveWorkflowConfigValue,
   mockResolveWorkflowSelector,
   mockResolveAuxiliaryProviderEnvironment,
+  mockValidateWorkflowCallContracts,
   mockHeader,
   mockInfo,
   mockError,
@@ -20,6 +28,7 @@ const {
   mockResolveWorkflowConfigValue: vi.fn(),
   mockResolveWorkflowSelector: vi.fn(),
   mockResolveAuxiliaryProviderEnvironment: vi.fn(),
+  mockValidateWorkflowCallContracts: vi.fn(),
   mockHeader: vi.fn(),
   mockInfo: vi.fn(),
   mockError: vi.fn(),
@@ -41,6 +50,10 @@ vi.mock('../infra/config/index.js', () => ({
 // resolveAuxiliaryProviderEnvironment; here we drive its resolved output directly.
 vi.mock('../infra/config/runtime-provider/provider-environment.js', () => ({
   resolveAuxiliaryProviderEnvironment: mockResolveAuxiliaryProviderEnvironment,
+}));
+
+vi.mock('../infra/config/loaders/workflowResolver.js', () => ({
+  validateWorkflowCallContracts: mockValidateWorkflowCallContracts,
 }));
 
 function compiledEnvironment(
@@ -371,6 +384,12 @@ describe('previewPrompts', () => {
   });
 
   it('finding manager の設定済み provider/model を表示する', async () => {
+    mockResolveAuxiliaryProviderEnvironment.mockReturnValueOnce(compiledEnvironment({
+      provider: 'codex',
+      providerSource: 'project',
+      model: 'gpt-5.5',
+      modelSource: 'project',
+    }));
     mockLoadWorkflowByIdentifier.mockReturnValueOnce({
       name: 'finding-contract-preview',
       maxSteps: 1,
@@ -380,6 +399,12 @@ describe('previewPrompts', () => {
           personaDisplayName: 'Findings Manager',
           instruction: 'manager instruction',
           outputContract: 'manager output contract',
+          provider: 'codex',
+          model: 'gpt-5.5',
+        },
+        adjudicator: {
+          persona: 'supervisor',
+          personaDisplayName: 'Finding Adjudicator',
           provider: 'codex',
           model: 'gpt-5.5',
         },
@@ -398,6 +423,22 @@ describe('previewPrompts', () => {
     expect(mockInfo).toHaveBeenCalledWith('Finding manager: Findings Manager');
     expect(mockInfo).toHaveBeenCalledWith('Finding manager provider: codex');
     expect(mockInfo).toHaveBeenCalledWith('Finding manager model: gpt-5.5');
+    expect(mockInfo).toHaveBeenCalledWith('Finding adjudicator: Finding Adjudicator');
+    expect(mockInfo).toHaveBeenCalledWith('Finding adjudicator provider: codex');
+    expect(mockInfo).toHaveBeenCalledWith('Finding adjudicator model: gpt-5.5');
+    expect(mockValidateWorkflowCallContracts).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'finding-contract-preview' }),
+      '/project',
+      '/project',
+      {
+        providerValidationOptions: expect.objectContaining({
+          provider: 'codex',
+          providerSource: 'project',
+          model: 'gpt-5.5',
+          modelSource: 'project',
+        }),
+      },
+    );
   });
 
   it('finding manager の未設定 provider/model は未設定として表示する', async () => {
@@ -410,6 +451,7 @@ describe('previewPrompts', () => {
           instruction: 'manager instruction',
           outputContract: 'manager output contract',
         },
+        adjudicator: VALID_ADJUDICATOR,
       },
       steps: [
         {
@@ -446,6 +488,7 @@ describe('previewPrompts', () => {
           instruction: 'manager instruction',
           outputContract: 'manager output contract',
         },
+        adjudicator: VALID_ADJUDICATOR,
       },
       steps: [
         {
@@ -480,6 +523,7 @@ describe('previewPrompts', () => {
           provider: 'codex',
           model: 'step-model',
         },
+        adjudicator: VALID_ADJUDICATOR,
       },
       steps: [{ name: 'review', personaDisplayName: 'reviewer', outputContracts: [] }],
     });
@@ -510,6 +554,7 @@ describe('previewPrompts', () => {
           outputContract: 'manager output contract',
           provider: 'codex',
         },
+        adjudicator: VALID_ADJUDICATOR,
       },
       steps: [
         {
@@ -552,6 +597,7 @@ describe('previewPrompts', () => {
           instruction: 'manager instruction',
           outputContract: 'manager output contract',
         },
+        adjudicator: VALID_ADJUDICATOR,
       },
       steps: [{ name: 'review', personaDisplayName: 'reviewer', outputContracts: [] }],
     });
@@ -588,6 +634,7 @@ describe('previewPrompts', () => {
           instruction: 'manager instruction',
           outputContract: 'manager output contract',
         },
+        adjudicator: VALID_ADJUDICATOR,
       },
       steps: [{ name: 'review', personaDisplayName: 'reviewer', outputContracts: [] }],
     });
@@ -598,5 +645,72 @@ describe('previewPrompts', () => {
     // 候補へ決定的に解決される。preview も同じ値を表示する。
     expect(mockInfo).toHaveBeenCalledWith('Finding manager provider: codex');
     expect(mockInfo).toHaveBeenCalledWith('Finding manager model: gpt-5.5');
+  });
+
+  it.each([
+    {
+      role: 'manager',
+      environment: compiledEnvironment({
+        personaProviders: {
+          'Findings Manager': { provider: 'opencode' },
+        },
+      }),
+      contract: {
+        manager: {
+          persona: 'findings-manager',
+          personaDisplayName: 'Findings Manager',
+          instruction: 'manager instruction',
+          outputContract: 'manager output contract',
+        },
+        adjudicator: VALID_ADJUDICATOR,
+      },
+      source: 'persona_providers',
+    },
+    {
+      role: 'adjudicator',
+      environment: compiledEnvironment({
+        providerRouting: {
+          personas: { supervisor: { provider: 'opencode' } },
+        },
+      }),
+      contract: {
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'manager instruction',
+          outputContract: 'manager output contract',
+          provider: 'codex' as const,
+          model: 'gpt-5',
+        },
+        adjudicator: { persona: 'supervisor' },
+      },
+      source: 'provider_routing.personas',
+    },
+  ])('workflow_call のない root でも不正な finding $role provider を拒否する', async ({
+    environment,
+    contract,
+    source,
+  }) => {
+    mockResolveAuxiliaryProviderEnvironment.mockReturnValueOnce(environment);
+    mockLoadWorkflowByIdentifier.mockReturnValueOnce({
+      name: 'finding-contract-preview',
+      maxSteps: 1,
+      findingContract: contract,
+      steps: [{ name: 'review', personaDisplayName: 'reviewer', outputContracts: [] }],
+    });
+
+    let validationError: unknown;
+    try {
+      await previewPrompts('/project');
+    } catch (error) {
+      validationError = error;
+    }
+
+    expect(validationError).toBeInstanceOf(Error);
+    expect((validationError as Error).message).toContain("provider 'opencode' requires model");
+    expect(getProviderValidationErrorSource(validationError)).toMatchObject({
+      field: 'provider',
+      source,
+    });
+    expect(mockValidateWorkflowCallContracts).not.toHaveBeenCalled();
   });
 });

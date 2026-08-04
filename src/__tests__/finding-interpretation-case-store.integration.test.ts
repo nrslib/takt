@@ -1,4 +1,6 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { executeAgent } from '../agents/agent-usecases.js';
+import type { AgentResponse, WorkflowStep } from '../core/models/types.js';
 import { compareBinaryStrings } from '../shared/utils/binary-string-comparator.js';
 import { computeFindingManagerProviderCallId } from '../core/models/finding-contract-identity.js';
 import { computeInterpretationAttemptId } from '../core/models/finding-interpretation-identity.js';
@@ -9,6 +11,8 @@ import type {
 } from '../core/workflow/findings/types.js';
 import { parseFindingLedger } from '../core/workflow/findings/schemas.js';
 import { dispatchFindingManagerProviderCall } from '../core/workflow/findings/finding-manager-provider-call.js';
+import { runInterpretationCases } from '../core/workflow/findings/interpretation-case-runner.js';
+import { prepareInterpretationCaseProviderRequest } from '../core/workflow/findings/manager-interpretation-agent.js';
 import {
   baseLedger,
   addExactProductFinding,
@@ -21,8 +25,33 @@ import {
   response,
   seed,
   taintedItems,
+  verifiedEvidenceRecords,
 } from './helpers/finding-interpretation-case-store-fixture.js';
 import { applyFindingLedgerFixtureRevision } from './helpers/finding-lifecycle-fixture.js';
+
+vi.mock('../agents/agent-usecases.js', () => ({ executeAgent: vi.fn() }));
+
+const executeAgentMock = vi.mocked(executeAgent);
+
+function interpretationDependencies() {
+  return {
+    optionsBuilder: { buildAgentOptions: () => ({}) } as never,
+    stepExecutor: {
+      buildPhase1Instruction: (instruction: string) => instruction,
+      normalizeStructuredOutput: (_step: WorkflowStep, response: AgentResponse) => response,
+      recordSynthesizedAgentUsage: () => {},
+    },
+  };
+}
+
+function interpretationCasesFromInstruction(instruction: string): Array<{ caseId: string }> {
+  const section = instruction.split('## Cases\n')[1];
+  const match = section === undefined ? undefined : /^(`{3,})json\n([\s\S]*?)\n\1/m.exec(section);
+  if (match?.[2] === undefined) {
+    throw new Error('Expected interpretation cases in provider instruction');
+  }
+  return JSON.parse(match[2]) as Array<{ caseId: string }>;
+}
 
 afterEach(cleanupInterpretationCaseRoots);
 
@@ -649,6 +678,228 @@ describe('interpretation case SQLite begin transaction', () => {
     ]));
     harness.resolver.close();
   });
+
+  it.each([
+    { label: 'omitted additions', policyContents: undefined, knowledgeContents: undefined },
+    { label: 'configured additions', policyContents: ['Manager policy'], knowledgeContents: ['Manager knowledge'] },
+  ])('reconstructs and dispatches the persisted real provider request after reopen: $label', async ({
+    policyContents,
+    knowledgeContents,
+  }) => {
+    executeAgentMock.mockReset();
+    const dependencies = interpretationDependencies();
+    const contract = {
+      manager: {
+        persona: 'findings-manager',
+        ...(policyContents === undefined ? {} : { policyContents }),
+        ...(knowledgeContents === undefined ? {} : { knowledgeContents }),
+      },
+    };
+    const prepareProviderRequest = (current: FindingLedger, cases: Parameters<
+      NonNullable<Parameters<typeof openHarness>[0]['prepareProviderRequest']>
+    >[1]) => ({
+      requestBytes: prepareInterpretationCaseProviderRequest({
+        cases,
+        contract,
+        optionsBuilder: dependencies.optionsBuilder,
+        stepExecutor: dependencies.stepExecutor,
+        ledger: current,
+      }).requestBytes,
+      adapterSupportsUtf8ByteUpperBound: true,
+    });
+    let harness = openHarness({ prepareProviderRequest });
+    const ledger = baseLedger();
+    await seed(harness, ledger);
+    const items = taintedItems({ rawFindingIds: [`raw-real-wal-${policyContents?.length ?? 0}`], ledger });
+    await harness.beginInterpretationCases({
+      items,
+      provisionalOnlyRawFindingIds: new Set(),
+    });
+    const reserved = harness.store.loadLedger().findingManagerProviderCalls[0]!;
+    expect(reserved.state).toBe('reserved');
+    harness.resolver.close();
+
+    executeAgentMock.mockImplementation(async (_persona, instruction) => ({
+      persona: 'findings-manager',
+      status: 'done',
+      content: '',
+      timestamp: new Date(OBSERVATION.timestamp),
+      structuredOutput: {
+        decisions: interpretationCasesFromInstruction(instruction).map(({ caseId }) => ({
+          caseId,
+          decision: { kind: 'provisional', reason: 'WAL resume fixture' },
+        })),
+      },
+    }));
+    harness = openHarness({ root: harness.root, prepareProviderRequest });
+    await runInterpretationCases({
+      items,
+      provisionalOnlyRawFindingIds: new Set(),
+      ledgerStore: harness.store,
+      contract,
+      ...dependencies,
+      observation: OBSERVATION,
+      roundMarker: 'round-case-store',
+      scopeIdentity: '2'.repeat(64),
+      verifiedEvidenceRecordsByRawFindingId: verifiedEvidenceRecords(items),
+    });
+
+    const settled = harness.store.loadLedger().findingManagerProviderCalls[0]!;
+    expect(settled).toMatchObject({
+      providerCallId: reserved.providerCallId,
+      requestDigest: reserved.requestDigest,
+      requestByteLength: reserved.requestByteLength,
+      state: 'settled',
+      resultKind: 'accepted',
+    });
+    expect(executeAgentMock).toHaveBeenCalledOnce();
+    harness.resolver.close();
+  });
+
+  it('keeps a real reserved interpretation call untouched when manager guidance changes after reopen', async () => {
+    executeAgentMock.mockReset();
+    const dependencies = interpretationDependencies();
+    const originalContract = { manager: { persona: 'findings-manager', policyContents: ['Original policy'] } };
+    const prepareProviderRequest = (current: FindingLedger, cases: Parameters<
+      NonNullable<Parameters<typeof openHarness>[0]['prepareProviderRequest']>
+    >[1]) => ({
+      requestBytes: prepareInterpretationCaseProviderRequest({
+        cases,
+        contract: originalContract,
+        optionsBuilder: dependencies.optionsBuilder,
+        stepExecutor: dependencies.stepExecutor,
+        ledger: current,
+      }).requestBytes,
+      adapterSupportsUtf8ByteUpperBound: true,
+    });
+    let harness = openHarness({ prepareProviderRequest });
+    const ledger = baseLedger();
+    await seed(harness, ledger);
+    const items = taintedItems({ rawFindingIds: ['raw-real-wal-guidance-change'], ledger });
+    await harness.beginInterpretationCases({ items, provisionalOnlyRawFindingIds: new Set() });
+    const reserved = harness.store.loadLedger().findingManagerProviderCalls[0]!;
+    harness.resolver.close();
+
+    harness = openHarness({ root: harness.root, prepareProviderRequest });
+    await expect(runInterpretationCases({
+      items,
+      provisionalOnlyRawFindingIds: new Set(),
+      ledgerStore: harness.store,
+      contract: { manager: { persona: 'findings-manager', policyContents: ['Changed policy'] } },
+      ...dependencies,
+      observation: OBSERVATION,
+      roundMarker: 'round-case-store',
+      scopeIdentity: '2'.repeat(64),
+      verifiedEvidenceRecordsByRawFindingId: verifiedEvidenceRecords(items),
+    })).rejects.toThrow(/request changed after (lease )?reservation/i);
+    expect(executeAgentMock).not.toHaveBeenCalled();
+    expect(harness.store.loadLedger().findingManagerProviderCalls[0]).toMatchObject({
+      providerCallId: reserved.providerCallId,
+      state: 'reserved',
+    });
+    harness.resolver.close();
+  });
+
+  it.each([23_999, 24_000, 24_001])(
+    'enforces the fully serialized interpretation request at the exact %i-byte boundary',
+    async (targetBytes) => {
+      let padding = 0;
+      const dependencies = {
+        optionsBuilder: { buildAgentOptions: () => ({}) } as never,
+        stepExecutor: {
+          buildPhase1Instruction: (instruction: string) => `${instruction}${'x'.repeat(padding)}`,
+          normalizeStructuredOutput: (_step: WorkflowStep, response: AgentResponse) => response,
+          recordSynthesizedAgentUsage: () => {},
+        },
+      };
+      const contract = {
+        manager: {
+          persona: 'findings-manager',
+          policyContents: ['Boundary policy'],
+          knowledgeContents: ['Boundary knowledge'],
+        },
+      };
+      const prepareProviderRequest = (current: FindingLedger, cases: Parameters<
+        NonNullable<Parameters<typeof openHarness>[0]['prepareProviderRequest']>
+      >[1]) => {
+        padding = 0;
+        const base = prepareInterpretationCaseProviderRequest({
+          cases,
+          contract,
+          optionsBuilder: dependencies.optionsBuilder,
+          stepExecutor: dependencies.stepExecutor,
+          ledger: current,
+        });
+        padding = targetBytes - Buffer.byteLength(base.requestBytes, 'utf8');
+        if (padding < 0) {
+          throw new Error('Interpretation boundary fixture base request is too large');
+        }
+        const prepared = prepareInterpretationCaseProviderRequest({
+          cases,
+          contract,
+          optionsBuilder: dependencies.optionsBuilder,
+          stepExecutor: dependencies.stepExecutor,
+          ledger: current,
+        });
+        expect(Buffer.byteLength(prepared.requestBytes, 'utf8')).toBe(targetBytes);
+        return {
+          requestBytes: prepared.requestBytes,
+          adapterSupportsUtf8ByteUpperBound: true,
+        };
+      };
+      const harness = openHarness({
+        prepareProviderRequest,
+        budgetLimits: {
+          maxCallsPerRound: 4,
+          maxAdapterVisibleInputTokensPerCall: 24_000,
+          maxOutputTokensPerCall: 10_000,
+          maxChargedInputTokensPerRound: 96_000,
+          maxChargedOutputTokensPerRound: 40_000,
+        },
+      });
+      const ledger = baseLedger();
+      await seed(harness, ledger);
+      const items = taintedItems({ rawFindingIds: [`raw-interpretation-boundary-${targetBytes}`], ledger });
+
+      const begun = await harness.beginInterpretationCases({
+        items,
+        provisionalOnlyRawFindingIds: new Set(),
+      });
+      const stored = harness.store.loadLedger();
+
+      if (targetBytes <= 24_000) {
+        expect(begun.providerCases).toHaveLength(1);
+        expect(stored.interpretationAttempts).toHaveLength(1);
+        expect(stored.findingManagerProviderBudgetScopes).toHaveLength(1);
+        expect(stored.findingManagerProviderCalls).toEqual([
+          expect.objectContaining({
+            state: 'reserved',
+            requestByteLength: targetBytes,
+            inputMeasurementBasis: 'utf8_byte_upper_bound',
+          }),
+        ]);
+      } else {
+        expect(begun.providerCases).toEqual([]);
+        expect(begun.attempts).toEqual([]);
+        expect(begun.directPlans).toEqual([
+          expect.objectContaining({
+            decision: expect.objectContaining({
+              kind: 'provisional',
+              reason: expect.stringMatching(/input exceeded/i),
+            }),
+            unreservedAuthority: expect.objectContaining({
+              reason: 'manager-input-overflow',
+            }),
+          }),
+        ]);
+        expect(stored.interpretationAttempts).toEqual([]);
+        expect(stored.findingManagerProviderBudgetScopes).toEqual([]);
+        expect(stored.findingManagerProviderCalls).toEqual([]);
+      }
+      expect(executeAgentMock).not.toHaveBeenCalled();
+      harness.resolver.close();
+    },
+  );
 
   it('keeps persisted pending ownership ahead of a proof that becomes available later', async () => {
     let harness = openHarness();

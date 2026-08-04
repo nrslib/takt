@@ -7,6 +7,7 @@ import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { isScopeRef, parseScopeRef } from 'faceted-prompting';
 import type { WorkflowConfig } from '../../../core/models/index.js';
+import type { FindingContractSyntheticProviderValidationOptions } from '../../../core/workflow/engine/WorkflowValidator.js';
 import { validateWorkflowCallContracts as validateWorkflowCallContractsImpl } from './workflowCallContractValidator.js';
 import { buildWorkflowDiscoveryConfig, loadValidatedWorkflowDiscoveryEntry } from './workflowDiscoveryLoader.js';
 import {
@@ -247,7 +248,10 @@ export function validateWorkflowCallContracts(
   workflow: WorkflowConfig,
   projectCwd: string,
   lookupCwd = projectCwd,
-  options?: { allowPathBasedCalls?: boolean },
+  options?: {
+    allowPathBasedCalls?: boolean;
+    providerValidationOptions?: FindingContractSyntheticProviderValidationOptions;
+  },
 ): void {
   validateWorkflowCallContractsImpl(workflow, projectCwd, {
     isWorkflowPath,
@@ -255,6 +259,7 @@ export function validateWorkflowCallContracts(
   }, {
     lookupCwd,
     allowPathBasedCalls: options?.allowPathBasedCalls,
+    providerValidationOptions: options?.providerValidationOptions,
   });
 }
 

@@ -16,6 +16,7 @@ const {
   mockEnsureWorktreeTaktRuntimeProtection,
   mockIsValidReportDirName,
   mockLogWarn,
+  mockValidateWorkflowCallContracts,
 } = vi.hoisted(() => ({
   mockWriteFileAtomic: vi.fn(),
   mockResolveWorkflowConfigValues: vi.fn(),
@@ -25,6 +26,7 @@ const {
   mockEnsureWorktreeTaktRuntimeProtection: vi.fn(),
   mockIsValidReportDirName: vi.fn((_slug: string) => true),
   mockLogWarn: vi.fn(),
+  mockValidateWorkflowCallContracts: vi.fn(),
 }));
 
 vi.mock('../infra/config/index.js', () => ({
@@ -136,6 +138,10 @@ vi.mock('../features/tasks/execute/sessionLogger.js', () => ({
 
 vi.mock('../core/runtime/runtime-environment.js', () => ({
   resolveRuntimeConfig: vi.fn(() => undefined),
+}));
+
+vi.mock('../infra/config/loaders/workflowResolver.js', () => ({
+  validateWorkflowCallContracts: mockValidateWorkflowCallContracts,
 }));
 
 import {
@@ -676,6 +682,20 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     expect(bootstrap.currentProviderSource).toBe('project');
     expect(bootstrap.configuredModel).toBe('project-model');
     expect(bootstrap.configuredModelSource).toBe('project');
+    expect(mockValidateWorkflowCallContracts).toHaveBeenCalledWith(
+      expect.objectContaining({ name: workflowConfig.name }),
+      '/project',
+      '/project',
+      {
+        providerValidationOptions: expect.objectContaining({
+          provider: 'codex',
+          providerSource: 'project',
+          model: 'project-model',
+          modelSource: 'project',
+          personaProviders: undefined,
+        }),
+      },
+    );
   });
 
   it('traced provider resolution の設定エラーを握りつぶさない', async () => {

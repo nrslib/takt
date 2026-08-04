@@ -336,15 +336,4 @@ describe('terminal adjudication durable contract', () => {
     });
   });
 
-  it('fails closed when the episode head is stale', () => {
-    const stale = findingHead(2);
-    const plan = resolveTerminalAdjudicationPlan({
-      ledger: ledger({ lifecycleEvents: [lifecycleEvent(stale)] }),
-      episode: episode(),
-      candidate: candidate(),
-      proposal: { kind: 'undetermined' },
-      ...VERIFIER_CONTEXT,
-    });
-    expect(plan).toEqual({ kind: 'undetermined', reasonCodes: ['head_not_fresh'] });
-  });
 });

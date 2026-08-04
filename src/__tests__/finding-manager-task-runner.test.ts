@@ -204,7 +204,11 @@ function successfulRawResponse(
   });
 }
 
-async function run(rawFindings: RawFinding[], previousLedger = emptyLedger()) {
+async function run(
+  rawFindings: RawFinding[],
+  previousLedger = emptyLedger(),
+  executionInput = runInput,
+) {
   return runMainManagerTasks({
     contract,
     previousLedger,
@@ -216,11 +220,33 @@ async function run(rawFindings: RawFinding[], previousLedger = emptyLedger()) {
     dismissCandidates: new Map(),
     evidenceRecordsByRawFindingId: new Map(),
     managerStep,
-    runInput,
+    runInput: executionInput,
     managerAuthority: 'standard',
     workflowTask: 'Review the requested implementation.',
     subResults: [],
   });
+}
+
+function exactRenderedBytesInput(
+  targetBytes: number,
+  includeFixedPrefix: boolean,
+): typeof runInput {
+  return {
+    ...runInput,
+    stepExecutor: {
+      ...runInput.stepExecutor,
+      buildPhase1Instruction: (instruction: string) => {
+        if (!includeFixedPrefix && instruction.includes('__manager-prefix-check__')) {
+          return instruction;
+        }
+        const bytes = Buffer.byteLength(instruction, 'utf8');
+        if (bytes > targetBytes) {
+          throw new Error(`Test fixture base instruction ${bytes} exceeds target ${targetBytes}`);
+        }
+        return `${instruction}${'x'.repeat(targetBytes - bytes)}`;
+      },
+    },
+  };
 }
 
 beforeEach(() => {
@@ -850,6 +876,54 @@ describe('main manager bounded task runner', () => {
     expect(result.taskAudits).toMatchObject([{ status: 'input_overflow' }]);
   });
 
+  it.each([23_999, 24_000, 24_001])(
+    'enforces the fixed manager prefix at the exact %i-byte boundary',
+    async (targetBytes) => {
+      const executionInput = exactRenderedBytesInput(targetBytes, true);
+      if (targetBytes <= MAIN_MANAGER_INPUT_MAX_BYTES) {
+        await expect(run([], emptyLedger(), executionInput)).resolves.toMatchObject({
+          taskAudits: [],
+        });
+      } else {
+        await expect(run([], emptyLedger(), executionInput)).rejects.toThrow(
+          `(${targetBytes})`,
+        );
+      }
+      expect(executeAgentMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([23_999, 24_000, 24_001])(
+    'enforces a single raw task at the exact %i-byte boundary',
+    async (targetBytes) => {
+      executeAgentMock.mockImplementation(async (_persona, instruction) => (
+        successfulRawResponse(instruction)
+      ));
+      const raw = rawFinding(1);
+      const result = await run(
+        [raw],
+        emptyLedger(),
+        exactRenderedBytesInput(targetBytes, false),
+      );
+
+      expect(result.taskAudits).toEqual([
+        expect.objectContaining({
+          taskKind: 'raw',
+          status: targetBytes <= MAIN_MANAGER_INPUT_MAX_BYTES
+            ? 'succeeded'
+            : 'input_overflow',
+          inputBytes: targetBytes,
+        }),
+      ]);
+      expect(executeAgentMock).toHaveBeenCalledTimes(
+        targetBytes <= MAIN_MANAGER_INPUT_MAX_BYTES ? 1 : 0,
+      );
+      expect(result.rawFailures.has(raw.rawFindingId)).toBe(
+        targetBytes > MAIN_MANAGER_INPUT_MAX_BYTES,
+      );
+    },
+  );
+
   it('creates the same finite manifest regardless of input order', () => {
     const raws = Array.from({ length: 20 }, (_, index) => rawFinding(index + 1));
     const forward = createMainManagerRawTaskManifest({
@@ -1252,6 +1326,53 @@ describe('main manager bounded task runner', () => {
       status: 'input_overflow',
     }]);
   });
+
+  it.each([23_999, 24_000, 24_001])(
+    'enforces a control task at the exact %i-byte boundary',
+    async (targetBytes) => {
+      executeAgentMock.mockImplementation(async (_persona, instruction) => {
+        const manifest = sectionJson<ControlManifestView>(instruction, '## Task manifest');
+        return response({
+          taskId: manifest.taskId,
+          evaluations: manifest.candidateIntents.map((intent) => ({
+            intentId: intent.intentId,
+            result: { kind: 'no_action', reason: 'No verified action.' },
+          })),
+          selectedIntentId: null,
+        });
+      });
+      const finding = ledgerFinding(1);
+      const result = await runMainManagerTasks({
+        contract,
+        previousLedger: emptyLedger({ findings: [finding] }),
+        reviewScopeSnapshotId: 'scope-test',
+        residualRawFindings: [],
+        mechanicallyClassifiedCount: 0,
+        priorStepResponseText: undefined,
+        invalidLocationCandidates: new Map([['F-0001', 'missing location']]),
+        dismissCandidates: new Map(),
+        evidenceRecordsByRawFindingId: new Map(),
+        managerStep,
+        runInput: exactRenderedBytesInput(targetBytes, false),
+        managerAuthority: 'standard',
+        workflowTask: 'Review the requested implementation.',
+        subResults: [],
+      });
+
+      expect(result.taskAudits).toEqual([
+        expect.objectContaining({
+          status: targetBytes <= MAIN_MANAGER_INPUT_MAX_BYTES
+            ? 'succeeded'
+            : 'input_overflow',
+          inputBytes: targetBytes,
+        }),
+      ]);
+      expect(executeAgentMock).toHaveBeenCalledTimes(
+        targetBytes <= MAIN_MANAGER_INPUT_MAX_BYTES ? 1 : 0,
+      );
+      expect(result.decisions.invalidateDecisions).toEqual([]);
+    },
+  );
 
   it('does not create fuzzy same-locus duplicate control tasks', () => {
     const findings = Array.from({ length: 17 }, (_, index) => ({

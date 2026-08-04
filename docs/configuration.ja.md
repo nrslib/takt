@@ -471,7 +471,22 @@ kiro_cli_path: /usr/local/bin/kiro-cli
 
 provider と model の選択には、[Provider Routing](#provider-routing) に記載した単一のフィールド別優先順位を使用します。同じ契約が通常 step、parallel sub-step、合成 step、workflow call に適用されます。
 
-Finding Contract workflow では、`finding_contract.manager.provider` と `finding_contract.manager.model` は合成 `findings-manager` step の step レベル provider/model として扱われます。`provider_routing`、deprecated の `persona_providers.findings-manager`、auto routing、workflow/project/global の既定値より優先されますが、CLI と環境変数の明示 override はさらに高い優先順位を維持します。両方とも未指定の場合、manager は通常の workflow step と同じ fallback chain を使います。`provider` だけを指定すると、下位優先度の model fallback は停止し、選択した provider 自身のデフォルトを使います。明示 model が必須の provider では検証エラーになります。
+Finding Contract workflow では、`finding_contract.manager.provider` / `model` と `finding_contract.adjudicator.provider` / `model` は、それぞれの合成 step の step レベル provider/model として扱われます。`provider_routing`、deprecated の `persona_providers`、auto routing、workflow/project/global の既定値より優先されますが、CLI と環境変数の明示 override はさらに高い優先順位を維持します。両方とも未指定の場合は通常の workflow step と同じ fallback chain を使います。`provider` だけを指定すると下位優先度の model fallback は停止し、明示 model が必須の provider では検証エラーになります。
+
+```yaml
+finding_contract:
+  manager:
+    persona: findings-manager
+    instruction: findings-manager
+    output_contract: findings-manager
+    provider: codex
+    model: <strong-model>
+  adjudicator:
+    persona: supervisor
+    instruction: adjudicate-finding-contract
+    provider: codex
+    model: <strong-model>
+```
 
 workflow YAML では、通常 step、parallel sub-step、`loop_monitors.judge` の `model: null` は model の明示的な省略を表します。`model` 未指定とは異なります。未指定の場合は routing、workflow、loop monitor judge のトリガー元 step、入力由来の値など、適用可能な下位優先度のソースへフォールバックしますが、`model: null` はその entry で model 解決を止め、実効 model を未定義のままにします。解決済み provider に CLI または provider 側のデフォルトを使わせたい場合に指定します。明示 model が必須の provider では、model が供給されないため検証エラーになります。
 

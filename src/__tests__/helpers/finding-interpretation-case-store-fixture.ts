@@ -21,6 +21,7 @@ import type {
   FindingObservation,
   FindingEvidenceRecord,
   InterpretationBatchReceipt,
+  InterpretationCase,
   InterpretationDecision,
 } from '../../core/workflow/findings/types.js';
 import {
@@ -183,7 +184,7 @@ export interface Harness {
   }) => ReturnType<typeof completeInterpretationCases>;
 }
 
-function verifiedEvidenceRecords(
+export function verifiedEvidenceRecords(
   items: readonly CanonicalIntakeItem[],
 ): ReadonlyMap<string, readonly FindingEvidenceRecord[]> {
   return new Map(items.map((item) => [
@@ -220,6 +221,13 @@ export function openHarness(input: {
   root?: string;
   maxEpochsPerLineage?: number;
   budgetLimits?: FindingManagerProviderBudgetLimits;
+  prepareProviderRequest?: (
+    ledger: FindingLedger,
+    cases: readonly Extract<InterpretationCase, { kind: 'provider_case' }>[],
+  ) => {
+    requestBytes: string;
+    adapterSupportsUtf8ByteUpperBound: boolean;
+  };
 } = {}): Harness {
   const root = input.root ?? tempRoot();
   const resolver = new FindingStorageResolver({
@@ -253,12 +261,12 @@ export function openHarness(input: {
         maxChargedOutputTokensPerRound: 40_000,
       },
       maxCasesPerProviderCall: 16,
-      prepareProviderRequest: (_ledger, cases) => ({
-        requestBytes: JSON.stringify(cases
-          .map((plannedCase) => plannedCase.caseId)
-          .sort()),
-        adapterSupportsUtf8ByteUpperBound: true,
-      }),
+      prepareProviderRequest: input.prepareProviderRequest ?? ((_ledger, cases) => ({
+          requestBytes: JSON.stringify(cases
+            .map((plannedCase) => plannedCase.caseId)
+            .sort()),
+          adapterSupportsUtf8ByteUpperBound: true,
+        })),
       verifiedEvidenceRecordsByRawFindingId: verifiedEvidenceRecords(request.items),
       ...request,
     }),

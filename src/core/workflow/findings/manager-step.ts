@@ -49,6 +49,8 @@ export function buildFindingManagerStep(input: {
     model: modelIsDirect ? manager.model : providerIsDirect ? undefined : input.workflowModel,
     modelSpecified: modelIsDirect || providerIsDirect,
     instruction: manager.instruction,
+    ...(manager.policyContents === undefined ? {} : { policyContents: manager.policyContents }),
+    ...(manager.knowledgeContents === undefined ? {} : { knowledgeContents: manager.knowledgeContents }),
     session: 'refresh',
     edit: false,
     structuredOutput: {

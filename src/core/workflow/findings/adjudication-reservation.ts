@@ -72,9 +72,6 @@ export async function reserveFindingConflictAdjudication(input: {
     if (snapshot.conflictSnapshotId !== input.expectedSnapshotId) {
       return { ledger: fresh, result: { started: false } };
     }
-    if (isConflictSnapshotAdjudicated(fresh, snapshot)) {
-      return { ledger: fresh, result: { started: false } };
-    }
     const ensured = exactEpisode(
       fresh.conflictAdjudicationEpisodes,
       snapshot,
@@ -125,6 +122,9 @@ export async function reserveFindingConflictAdjudication(input: {
             : attempt
         )),
       };
+    }
+    if (isConflictSnapshotAdjudicated(fresh, snapshot)) {
+      return { ledger: fresh, result: { started: false } };
     }
     const used = fresh.conflictAdjudicationAttempts.filter(
       (attempt) => attempt.episodeId === ensured.episode.episodeId,

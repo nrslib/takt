@@ -79,6 +79,7 @@ import type { LegacyProviderEnvironmentInput } from '../../../infra/config/runti
 import { assertTaskPrefixPair, detectStepType } from './workflowExecutionUtils.js';
 import type { WorkflowRunBootstrap } from './workflowRunLifecycle.js';
 import { inheritWorkflowConfigMetadata } from '../../../shared/workflowConfigMetadata.js';
+import { validateWorkflowCallContracts } from '../../../infra/config/loaders/workflowResolver.js';
 
 const log = createLogger('workflow');
 
@@ -572,6 +573,18 @@ export async function createWorkflowExecutionBootstrap(
     maxSteps: effectiveMaxSteps,
   };
   inheritWorkflowConfigMetadata(workflowConfig, effectiveWorkflowConfig);
+  validateWorkflowCallContracts(effectiveWorkflowConfig, projectCwd, cwd, {
+    providerValidationOptions: {
+      provider: currentProvider,
+      providerSource: currentProviderSource,
+      model: configuredModel,
+      modelSource: configuredModelSource,
+      autoRouting: providerEnvironment.autoRouting,
+      personaProviders: effectivePersonaProviders,
+      providerRouting: effectiveProviderRouting,
+      providerRoutingTagConflictPolicy,
+    },
+  });
   const providerEventLogger = createProviderEventLogger({
     logsDir: runPaths.logsAbs,
     sessionId: workflowSessionId,
