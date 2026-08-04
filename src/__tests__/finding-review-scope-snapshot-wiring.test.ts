@@ -13,7 +13,7 @@
  * また、実 intake を通す回帰ケースは一時 Git fixture 上で独立して検証し、
  * 配線検証を共有 checkout や manager の詳細へ依存させない。
  * その reviewScopeSnapshotId が実際に admission の結果を左右することは
- * finding-review-scope-snapshot-admission.test.ts で別途確認する。
+ * finding-evidence-protocol-units.test.ts で別途確認する。
  */
 import {
   existsSync,

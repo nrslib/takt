@@ -6,7 +6,11 @@ import {
   serializeTaskRecord,
 } from '../infra/task/schema.js';
 import { buildWorkflowCallInvocationIdentity } from '../core/workflow/workflow-call-invocation-index.js';
-import { buildWorkflowCallInvocationRecordsFixture } from './helpers/workflow-resume-fixture.js';
+import {
+  buildWorkflowCallInvocationFixture,
+  buildWorkflowCallInvocationRecordsFixture,
+} from './helpers/workflow-resume-fixture.js';
+import type { WorkflowRestartPoint } from '../core/models/index.js';
 
 function makePendingRecord() {
   return {
@@ -965,5 +969,183 @@ describe('TaskRecordSchema', () => {
         expect(() => TaskRecordSchema.parse({ ...makePendingRecord(), [field]: value })).toThrow();
       }
     }
+  });
+});
+
+// --- WorkflowRestartPoint schema (moved from it-task-restart-point.test.ts) ---
+
+function makeSchemaRestartPoint(): WorkflowRestartPoint {
+  return {
+    stack: [
+      {
+        workflow: 'default',
+        workflow_ref: 'default',
+        step: 'delegate',
+        kind: 'workflow_call' as const,
+        call_instance: 1,
+      },
+      {
+        workflow: 'coding',
+        workflow_ref: 'coding',
+        step: 'review',
+        kind: 'agent' as const,
+      },
+      {
+        workflow: 'review-loop',
+        workflow_ref: 'review-loop',
+        step: 'approve',
+        kind: 'agent' as const,
+      },
+    ],
+  };
+}
+
+function makeSchemaResumePoint() {
+  const stack = [
+    {
+      workflow: 'default',
+      step: 'delegate',
+      kind: 'workflow_call' as const,
+      call_instance: 8,
+      step_iterations: { delegate: 8 },
+    },
+    {
+      workflow: 'coding',
+      step: 'old-review',
+      kind: 'agent' as const,
+      step_iterations: { 'old-review': 5 },
+    },
+  ];
+  return {
+    version: 2 as const,
+    stack,
+    iteration: 23,
+    elapsed_ms: 987_654,
+    workflow_call_invocations: buildWorkflowCallInvocationFixture(stack),
+    workflow_step_participations: {},
+  };
+}
+
+describe('WorkflowRestartPoint schema', () => {
+  it('should accept a stateless restart path at the task input boundary', () => {
+    const restartPoint = makeSchemaRestartPoint();
+
+    const parsed = TaskExecutionConfigSchema.parse({
+      workflow: 'default',
+      restart_point: restartPoint,
+    });
+
+    expect(parsed.restart_point).toEqual(restartPoint);
+    expect(parsed.restart_point).not.toHaveProperty('iteration');
+    expect(parsed.restart_point).not.toHaveProperty('elapsed_ms');
+  });
+
+  it.each([0, 1, 2])('should reject a restart path without workflow_ref at stack index %s', (index) => {
+    const restartPoint = makeSchemaRestartPoint();
+    const stack = restartPoint.stack.map((entry, entryIndex) => {
+      if (entryIndex !== index) {
+        return entry;
+      }
+      const { workflow_ref: _workflowRef, ...entryWithoutRef } = entry;
+      return entryWithoutRef;
+    });
+
+    const result = TaskExecutionConfigSchema.safeParse({
+      workflow: 'default',
+      restart_point: { ...restartPoint, stack },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it.each([
+    ['iteration', 7],
+    ['elapsed_ms', 10_000],
+    ['step_iterations', { review: 3 }],
+  ])('should reject checkpoint state field %s inside restart_point', (field, value) => {
+    const restartPoint = makeSchemaRestartPoint();
+    const invalidRestartPoint = field === 'step_iterations'
+      ? {
+          ...restartPoint,
+          stack: [
+            restartPoint.stack[0],
+            { ...restartPoint.stack[1], [field]: value },
+          ],
+        }
+      : { ...restartPoint, [field]: value };
+
+    const result = TaskExecutionConfigSchema.safeParse({
+      workflow: 'default',
+      restart_point: invalidRestartPoint,
+    });
+
+    expect(result.success).toBe(false);
+    if (result.success) {
+      throw new Error('Expected invalid restart point to be rejected');
+    }
+    expect(result.error.issues.some((issue) => issue.path.includes(field))).toBe(true);
+  });
+
+  it('should reject simultaneous checkpoint resume and stateless restart ownership', () => {
+    expect(() => TaskExecutionConfigSchema.parse({
+      workflow: 'default',
+      resume_point: makeSchemaResumePoint(),
+      restart_point: makeSchemaRestartPoint(),
+    })).toThrow(/resume_point.*restart_point|restart_point.*resume_point/i);
+  });
+
+  it('should reject simultaneous root start and nested restart ownership', () => {
+    const result = TaskExecutionConfigSchema.safeParse({
+      workflow: 'default',
+      start_step: 'finalize',
+      restart_point: makeSchemaRestartPoint(),
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it.each([
+    ['object stack', { stack: {} }],
+    ['null stack', { stack: null }],
+    ['missing stack', {}],
+    ['empty stack', { stack: [] }],
+    ['empty workflow', { stack: [{ workflow: '', workflow_ref: 'coding', step: 'review', kind: 'agent' }] }],
+    ['blank workflow', { stack: [{ workflow: '   ', workflow_ref: 'coding', step: 'review', kind: 'agent' }] }],
+    ['empty workflow_ref', { stack: [{ workflow: 'coding', workflow_ref: '', step: 'review', kind: 'agent' }] }],
+    ['blank workflow_ref', { stack: [{ workflow: 'coding', workflow_ref: '  ', step: 'review', kind: 'agent' }] }],
+    ['empty step', { stack: [{ workflow: 'coding', workflow_ref: 'coding', step: '', kind: 'agent' }] }],
+    ['blank step', { stack: [{ workflow: 'coding', workflow_ref: 'coding', step: '\t', kind: 'agent' }] }],
+    ['missing call instance', { stack: [{ workflow: 'coding', workflow_ref: 'coding', step: 'delegate', kind: 'workflow_call' }] }],
+    ['agent call instance', { stack: [{ workflow: 'coding', workflow_ref: 'coding', step: 'review', kind: 'agent', call_instance: 1 }] }],
+    ['system call instance', { stack: [{ workflow: 'coding', workflow_ref: 'coding', step: 'sync', kind: 'system', call_instance: 1 }] }],
+  ])('should reject restart point with %s', (_name, restartPoint) => {
+    const result = TaskExecutionConfigSchema.safeParse({
+      workflow: 'default',
+      restart_point: restartPoint,
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it.each([0, 2, -1])('should reject workflow_call instance %s from outside the new execution', (callInstance) => {
+    const currentRestartPoint = makeSchemaRestartPoint();
+    const restartPoint = {
+      ...currentRestartPoint,
+      stack: [
+        { ...currentRestartPoint.stack[0]!, call_instance: callInstance },
+        ...currentRestartPoint.stack.slice(1),
+      ],
+    };
+
+    const result = TaskExecutionConfigSchema.safeParse({
+      workflow: 'default',
+      restart_point: restartPoint,
+    });
+
+    expect(result.success).toBe(false);
+    if (result.success) {
+      throw new Error('Expected stale workflow_call instance to be rejected');
+    }
+    expect(result.error.issues.some((issue) => issue.path.includes('call_instance'))).toBe(true);
   });
 });

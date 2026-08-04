@@ -3,6 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
+import { validateWorkflowConfig } from '../core/workflow/engine/WorkflowValidator.js';
+import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
+import type { WorkflowConfig } from '../core/models/index.js';
 
 function makeWorkflowWithFindingContract(findingContract: unknown) {
   return {
@@ -678,5 +681,28 @@ describe('workflow finding_contract schema', () => {
         ),
       ).toThrow();
     }
+  });
+});
+
+describe('finding-conflict-adjudication reserved step name (WorkflowValidator)', () => {
+  it('予約名: ユーザー定義の finding-conflict-adjudication ステップは設定エラー (codex B7)', () => {
+    const workflow: WorkflowConfig = {
+      name: 'reserved-name-test',
+      maxSteps: 3,
+      initialStep: 'finding-conflict-adjudication',
+      steps: [
+        {
+          name: 'finding-conflict-adjudication',
+          persona: 'someone',
+          personaDisplayName: 'someone',
+          edit: false,
+          instruction: 'Impersonate the synthetic step.',
+          passPreviousResponse: true,
+          rules: [normalizeRule({ condition: 'when(true)', next: 'COMPLETE' })],
+        },
+      ],
+    };
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: '/tmp/project' })).toThrow(/reserved/);
   });
 });

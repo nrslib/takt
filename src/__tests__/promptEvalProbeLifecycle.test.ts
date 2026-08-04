@@ -498,9 +498,9 @@ describe('prompt eval probe lifecycle', () => {
             'setInterval(() => {}, 1000)',
           ].join(';'),
         ], {
-          startupTimeout: 1_000,
-          executionTimeout: 1_000,
-          cleanupTimeout: 1_000,
+          startupTimeout: 500,
+          executionTimeout: 500,
+          cleanupTimeout: 500,
           env: process.env,
         });
       } catch (error) {
@@ -754,16 +754,18 @@ describe('prompt eval probe lifecycle', () => {
   });
 
   it('should apply independent startup, execution, and cleanup timeouts', async () => {
+    // Each phase takes 500ms (below the 1000ms per-phase budget) while the
+    // 1500ms total exceeds any single budget, proving the timeouts are independent.
     const result = await runProbeProcess('-e', [
       [
-        "setTimeout(() => console.log('PROBE_READY'), 1750)",
-        "setTimeout(() => console.log('PROBE_CLEANUP_START'), 3500)",
-        "setTimeout(() => console.log('PROBE_RESULT {}'), 5250)",
+        "setTimeout(() => console.log('PROBE_READY'), 500)",
+        "setTimeout(() => console.log('PROBE_CLEANUP_START'), 1000)",
+        "setTimeout(() => console.log('PROBE_RESULT {}'), 1500)",
       ].join(';'),
     ], {
-      startupTimeout: 3000,
-      executionTimeout: 3000,
-      cleanupTimeout: 3000,
+      startupTimeout: 1000,
+      executionTimeout: 1000,
+      cleanupTimeout: 1000,
       env: process.env,
     });
 
@@ -778,9 +780,9 @@ describe('prompt eval probe lifecycle', () => {
     ['cleanup', "console.log('PROBE_READY'); console.log('PROBE_CLEANUP_START'); setInterval(() => {}, 1000)"],
   ])('should report a %s phase timeout independently', async (phase, source) => {
     const execution = runProbeProcess('-e', [source], {
-      startupTimeout: 1_000,
-      executionTimeout: 1_000,
-      cleanupTimeout: 1_000,
+      startupTimeout: 500,
+      executionTimeout: 500,
+      cleanupTimeout: 500,
       env: process.env,
     });
 
@@ -881,7 +883,9 @@ describe('prompt eval probe lifecycle', () => {
       'setInterval(() => {}, 1000)',
     ].join('\n'), 'utf8');
 
-    const execution = runSmokeScript(script, [], process.env, { timeoutMs: 150 });
+    // 500ms keeps the timeout fast while leaving the worker enough headroom to
+    // print its PID line first even when the host is under parallel-test load.
+    const execution = runSmokeScript(script, [], process.env, { timeoutMs: 500 });
 
     await expect(execution).rejects.toMatchObject({
       code: 'ETIMEDOUT',

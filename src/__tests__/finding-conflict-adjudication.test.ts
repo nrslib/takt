@@ -10,16 +10,18 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   FINDING_CONFLICT_ADJUDICATION_OUTCOME_TRANSITION,
   applyFindingConflictAdjudication,
   resolveAdjudicationDisposition,
   selectConflictForAdjudication,
 } from '../core/workflow/findings/adjudication-apply.js';
+import { MAX_EVIDENCE_SOURCE_FILE_BYTES } from '../core/workflow/findings/admission-validation.js';
 import { computeConflictEvidenceHash as computeConflictEvidenceHashWithScope, isConflictUnadjudicated } from '../core/workflow/findings/adjudication-evidence.js';
 import { buildFindingsRuleContext as buildFindingsRuleContextWithScope } from '../core/workflow/findings/context.js';
 import { computeReviewScopeSnapshotId } from '../core/workflow/findings/snapshot.js';
+import { initializeGitFixture } from './helpers/git-fixture.js';
 import type {
   FindingConflictAdjudicationOutput,
   FindingLedger,
@@ -28,15 +30,45 @@ import type {
   RawFinding,
 } from '../core/workflow/findings/types.js';
 
+// computeReviewScopeSnapshotId は cwd の git 作業ツリー全体を走査するため、
+// リポジトリ本体（process.cwd()）を渡すと1回あたり数秒かかっていた。ここでの
+// snapshot は「両ラッパーが同一のスコープ定数を共有する」ことだけが要件で、
+// 実リポジトリである必要はないため、小さな共有 git fixture を1度だけ作る。
+let sharedScopeCwd: string | undefined;
+
+function scopeCwd(): string {
+  if (sharedScopeCwd === undefined) {
+    const dir = mkdtempSync(join(tmpdir(), 'takt-adjudication-scope-'));
+    writeFileSync(join(dir, 'scope.ts'), 'export const scope = true;\n');
+    initializeGitFixture(dir, ['scope.ts']);
+    sharedScopeCwd = dir;
+  }
+  return sharedScopeCwd;
+}
+
+let cachedScopeSnapshotId: string | undefined;
+
+function scopeSnapshotId(): string {
+  cachedScopeSnapshotId ??= computeReviewScopeSnapshotId(scopeCwd());
+  return cachedScopeSnapshotId;
+}
+
+afterAll(() => {
+  if (sharedScopeCwd !== undefined) {
+    rmSync(sharedScopeCwd, { recursive: true, force: true });
+    sharedScopeCwd = undefined;
+  }
+});
+
 function computeConflictEvidenceHash(
   conflict: FindingLedgerConflict,
   ledger: FindingLedger,
 ): string {
-  return computeConflictEvidenceHashWithScope(conflict, ledger, computeReviewScopeSnapshotId(process.cwd()));
+  return computeConflictEvidenceHashWithScope(conflict, ledger, scopeSnapshotId());
 }
 
 function buildFindingsRuleContext(ledger: FindingLedger) {
-  return buildFindingsRuleContextWithScope(ledger, process.cwd());
+  return buildFindingsRuleContextWithScope(ledger, scopeCwd());
 }
 
 function makeFinding(
@@ -521,6 +553,44 @@ describe('applyFindingConflictAdjudication', () => {
     expect(() => applyFindingConflictAdjudication({
       ledger, output, evidenceHash: 'hash-8', cwd, context,
     })).toThrow(/Unknown conflict/);
+  });
+
+  it('adjudication は location 検証不能時に invalidated へ遷移しない（unverifiable の理由を保持して停止する）', () => {
+    writeFileSync(
+      join(cwd, 'src', 'oversized.ts'),
+      Buffer.alloc(MAX_EVIDENCE_SOURCE_FILE_BYTES + 1, 0x61),
+    );
+    const ledger = makeLedger({ findings: [makeFinding({ revision: 1, location: 'src/oversized.ts:1' })] });
+    const output = makeOutput({
+      outcome: 'evidence_invalid',
+      findingTransition: 'invalidated',
+      evidence: ['invalid premise'],
+    });
+
+    expect(() => applyFindingConflictAdjudication({
+      ledger, output, evidenceHash: 'hash-unverifiable-location', cwd, context,
+    })).toThrow(/could not be verified: .*evidence inspection limit/);
+    expect(ledger.findings[0]?.status).toBe('open');
+    expect(ledger.conflicts[0]?.status).toBe('active');
+  });
+
+  it('adjudication は resolved evidence の検証不能理由を保持して状態を変更しない', () => {
+    writeFileSync(
+      join(cwd, 'src', 'oversized.ts'),
+      Buffer.alloc(MAX_EVIDENCE_SOURCE_FILE_BYTES + 1, 0x61),
+    );
+    const ledger = makeLedger();
+    const output = makeOutput({
+      outcome: 'finding_stale',
+      findingTransition: 'resolved',
+      evidence: ['src/oversized.ts:1'],
+    });
+
+    expect(() => applyFindingConflictAdjudication({
+      ledger, output, evidenceHash: 'hash-unverifiable-evidence', cwd, context,
+    })).toThrow(/could not be verified: .*evidence inspection limit/);
+    expect(ledger.findings[0]?.status).toBe('open');
+    expect(ledger.conflicts[0]?.status).toBe('active');
   });
 
   it('every declared outcome maps to exactly the documented findingTransition', () => {

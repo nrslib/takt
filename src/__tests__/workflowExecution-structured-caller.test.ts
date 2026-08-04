@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { WorkflowCallStep, WorkflowConfig } from '../core/models/index.js';
@@ -10,6 +11,21 @@ import {
 } from '../agents/structured-caller.js';
 import { getWorkflowSourcePath } from '../infra/config/loaders/workflowSourceMetadata.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
+
+const realEngineSwitch = vi.hoisted(() => ({ enabled: false }));
+
+const terminalMocks = vi.hoisted(() => ({
+  start: vi.fn().mockResolvedValue({ id: 'tmux-session', name: 'takt-claude-terminal' }),
+  pasteText: vi.fn().mockResolvedValue(undefined),
+  stop: vi.fn().mockResolvedValue(undefined),
+  readBaseline: vi.fn().mockResolvedValue({ byteOffset: 0, lineNumberOffset: 0 }),
+  findSession: vi.fn().mockResolvedValue({ sessionId: 'claude-session-1' }),
+  waitForAssistantResponse: vi.fn().mockResolvedValue({
+    sessionId: 'claude-session-1',
+    assistantText: 'done',
+    events: [],
+  }),
+}));
 
 const {
   MockWorkflowEngine,
@@ -100,21 +116,64 @@ const {
   };
 });
 
-vi.mock('../core/workflow/index.js', async () => {
+vi.mock('../core/workflow/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/index.js')>();
   const errorModule = await import('../core/workflow/ask-user-question-error.js');
+  class SwitchableWorkflowEngine {
+    constructor(...args: unknown[]) {
+      const Ctor = (realEngineSwitch.enabled ? actual.WorkflowEngine : MockWorkflowEngine) as
+        new (...ctorArgs: unknown[]) => object;
+      return new Ctor(...args);
+    }
+  }
   return {
-    WorkflowEngine: MockWorkflowEngine,
+    ...actual,
+    WorkflowEngine: SwitchableWorkflowEngine,
     createDenyAskUserQuestionHandler: errorModule.createDenyAskUserQuestionHandler,
   };
 });
 
-vi.mock('../infra/providers/index.js', () => ({
-  getProvider: mockGetProvider,
+vi.mock('../infra/providers/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../infra/providers/index.js')>();
+  return {
+    ...actual,
+    getProvider: (...args: Parameters<typeof actual.getProvider>) =>
+      realEngineSwitch.enabled ? actual.getProvider(...args) : mockGetProvider(...args),
+  };
+});
+
+vi.mock('../agents/runner.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../agents/runner.js')>();
+  return {
+    ...actual,
+    runAgent: (...args: Parameters<typeof actual.runAgent>) =>
+      realEngineSwitch.enabled ? actual.runAgent(...args) : mockRunAgent(...args),
+  };
+});
+
+vi.mock('../infra/claude/cli-capability.js', () => ({
+  assertClaudeSkillsDisableSupported: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('../agents/runner.js', () => ({
-  runAgent: mockRunAgent,
+vi.mock('../infra/claude-terminal/tmux-backend.js', () => ({
+  TmuxTerminalBackend: vi.fn().mockImplementation(() => ({
+    start: terminalMocks.start,
+    pasteText: terminalMocks.pasteText,
+    stop: terminalMocks.stop,
+  })),
 }));
+
+vi.mock('../infra/claude-terminal/transcript-reader.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../infra/claude-terminal/transcript-reader.js')>();
+  return {
+    ...actual,
+    ProjectClaudeTranscriptReader: vi.fn().mockImplementation(() => ({
+      readBaseline: terminalMocks.readBaseline,
+      findSession: terminalMocks.findSession,
+      waitForAssistantResponse: terminalMocks.waitForAssistantResponse,
+    })),
+  };
+});
 
 vi.mock('../infra/claude/query-manager.js', () => ({
   interruptAllQueries: vi.fn(),
@@ -180,7 +239,8 @@ vi.mock('../infra/fs/index.js', () => ({
   appendNdjsonLine: vi.fn(),
 }));
 
-vi.mock('../shared/utils/index.js', () => ({
+vi.mock('../shared/utils/index.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   createLogger: vi.fn().mockReturnValue({
     debug: vi.fn(),
     info: vi.fn(),
@@ -1324,5 +1384,192 @@ steps:
       resolvedModel: 'sonnet',
     }));
     expect(runOptions).toHaveProperty('outputSchema');
+  });
+});
+
+function makeTerminalConfig(): WorkflowConfig {
+  return {
+    name: 'claude-terminal-workflow',
+    maxSteps: 3,
+    initialStep: 'implement',
+    steps: [
+      {
+        name: 'implement',
+        personaDisplayName: 'implement',
+        instruction: 'Implement {task}',
+        provider: 'claude-terminal',
+        rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
+      },
+    ],
+  };
+}
+
+function makeTerminalReportConfig(): WorkflowConfig {
+  return {
+    name: 'claude-terminal-workflow-report',
+    maxSteps: 3,
+    initialStep: 'implement',
+    steps: [
+      {
+        name: 'implement',
+        personaDisplayName: 'implement',
+        instruction: 'Implement {task}',
+        provider: 'claude-terminal',
+        outputContracts: [{ name: 'report.md', format: '# Report' }],
+        rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
+      },
+    ],
+  };
+}
+
+function makeTerminalMultiRuleConfig(): WorkflowConfig {
+  return {
+    name: 'claude-terminal-workflow-phase3',
+    maxSteps: 3,
+    initialStep: 'implement',
+    steps: [
+      {
+        name: 'implement',
+        personaDisplayName: 'implement',
+        instruction: 'Implement {task}',
+        provider: 'claude-terminal',
+        rules: [
+          normalizeRule({ condition: 'done', next: 'COMPLETE' }),
+          normalizeRule({ condition: 'fix', next: 'implement' }),
+        ],
+      },
+    ],
+  };
+}
+
+describe('executeWorkflow claude-terminal integration', () => {
+  let projectDir: string;
+  let globalConfigDir: string;
+  let originalTaktConfigDir: string | undefined;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    realEngineSwitch.enabled = true;
+    terminalMocks.start.mockResolvedValue({ id: 'tmux-session', name: 'takt-claude-terminal' });
+    terminalMocks.pasteText.mockResolvedValue(undefined);
+    terminalMocks.stop.mockResolvedValue(undefined);
+    terminalMocks.readBaseline.mockResolvedValue({ byteOffset: 0, lineNumberOffset: 0 });
+    terminalMocks.findSession.mockResolvedValue({ sessionId: 'claude-session-1' });
+    terminalMocks.waitForAssistantResponse.mockResolvedValue({
+      sessionId: 'claude-session-1',
+      assistantText: 'done',
+      events: [],
+    });
+    const { resolveWorkflowConfigValues } = await import('../infra/config/index.js');
+    vi.mocked(resolveWorkflowConfigValues).mockReturnValue({
+      notificationSound: true,
+      notificationSoundEvents: {},
+      provider: 'claude-terminal',
+      runtime: undefined,
+      preventSleep: false,
+      model: undefined,
+      logging: undefined,
+      analytics: undefined,
+      observability: disabledObservability,
+    });
+    mockResolvedProviderModel(undefined, undefined);
+    projectDir = await mkdtemp(join(tmpdir(), 'takt-claude-terminal-workflow-'));
+    globalConfigDir = await mkdtemp(join(tmpdir(), 'takt-claude-terminal-global-'));
+    originalTaktConfigDir = process.env.TAKT_CONFIG_DIR;
+    process.env.TAKT_CONFIG_DIR = globalConfigDir;
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+  });
+
+  afterEach(async () => {
+    realEngineSwitch.enabled = false;
+    if (originalTaktConfigDir === undefined) {
+      delete process.env.TAKT_CONFIG_DIR;
+    } else {
+      process.env.TAKT_CONFIG_DIR = originalTaktConfigDir;
+    }
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+    await rm(projectDir, { recursive: true, force: true });
+    await rm(globalConfigDir, { recursive: true, force: true });
+  });
+
+  it('Given workflow root deny ask handler, When claude-terminal runs through executeWorkflow, Then terminal startup is not blocked', async () => {
+    const result = await executeWorkflow(makeTerminalConfig(), 'task', projectDir, {
+      projectCwd: projectDir,
+      provider: 'claude-terminal',
+    });
+
+    expect(result.success).toBe(true);
+    expect(terminalMocks.start).toHaveBeenCalledOnce();
+    expect(terminalMocks.pasteText).toHaveBeenCalledOnce();
+    expect(terminalMocks.waitForAssistantResponse).toHaveBeenCalledOnce();
+    expect(terminalMocks.start).toHaveBeenCalledWith(expect.objectContaining({
+      cwd: projectDir,
+      backend: 'tmux',
+    }));
+  });
+
+  it('Given global claude sandbox option, When claude-terminal runs, Then sandbox option does not abort the workflow', async () => {
+    const result = await executeWorkflow(makeTerminalConfig(), 'task', projectDir, {
+      projectCwd: projectDir,
+      provider: 'claude-terminal',
+      providerOptions: {
+        claude: {
+          sandbox: {
+            allowUnsandboxedCommands: true,
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+    expect(terminalMocks.start).toHaveBeenCalledOnce();
+  });
+
+  it('Given claude-terminal step with outputContracts, When report phase runs, Then internal maxTurns does not fail the provider', async () => {
+    terminalMocks.waitForAssistantResponse
+      .mockResolvedValueOnce({
+        sessionId: 'claude-session-1',
+        assistantText: 'done',
+        events: [],
+      })
+      .mockResolvedValueOnce({
+        sessionId: 'claude-session-1',
+        assistantText: '# report',
+        events: [],
+      });
+
+    const result = await executeWorkflow(makeTerminalReportConfig(), 'task', projectDir, {
+      projectCwd: projectDir,
+      provider: 'claude-terminal',
+    });
+
+    expect(result.success).toBe(true);
+    expect(terminalMocks.start).toHaveBeenCalledTimes(2);
+    expect(terminalMocks.waitForAssistantResponse).toHaveBeenCalledTimes(2);
+  });
+
+  it('Given claude-terminal step with multiple rules, When phase 3 judgment runs, Then internal maxTurns does not fail the provider', async () => {
+    terminalMocks.waitForAssistantResponse
+      .mockResolvedValueOnce({
+        sessionId: 'claude-session-1',
+        assistantText: 'work complete',
+        events: [],
+      })
+      .mockResolvedValueOnce({
+        sessionId: 'claude-session-1',
+        assistantText: '{"step":1,"reason":"done"}',
+        events: [],
+      });
+
+    const result = await executeWorkflow(makeTerminalMultiRuleConfig(), 'task', projectDir, {
+      projectCwd: projectDir,
+      provider: 'claude-terminal',
+    });
+
+    expect(result.success).toBe(true);
+    expect(terminalMocks.start).toHaveBeenCalledTimes(2);
+    expect(terminalMocks.waitForAssistantResponse).toHaveBeenCalledTimes(2);
   });
 });

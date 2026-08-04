@@ -3,14 +3,15 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-const { infoSpy } = vi.hoisted(() => ({
+const { infoSpy, debugSpy } = vi.hoisted(() => ({
   infoSpy: vi.fn(),
+  debugSpy: vi.fn(),
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   createLogger: vi.fn(() => ({
-    debug: vi.fn(),
+    debug: debugSpy,
     info: infoSpy,
     error: vi.fn(),
     trace: vi.fn(),
@@ -18,6 +19,37 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
     exit: vi.fn(),
   })),
 }));
+
+type CapturedProviderInfo = {
+  provider?: string;
+  model?: string;
+  providerSource?: string;
+  modelSource?: string;
+};
+
+// Phase span recorder for the provider info tests. Plain pass-through function
+// (not vi.fn) so vi.resetAllMocks() cannot break the other describes.
+const { capturedProviderInfo, capturedOutcomes } = vi.hoisted(() => ({
+  capturedProviderInfo: [] as CapturedProviderInfo[],
+  capturedOutcomes: [] as unknown[],
+}));
+
+vi.mock('../core/workflow/observability/workflowSpans.js', async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    runWithPhaseSpan: async (
+      params: { providerInfo?: CapturedProviderInfo },
+      execute: () => Promise<unknown>,
+      getOutcome: (response: unknown) => unknown,
+    ) => {
+      capturedProviderInfo.push(params.providerInfo ?? {});
+      const response = await execute();
+      capturedOutcomes.push(getOutcome(response));
+      return response;
+    },
+  };
+});
 
 import { runReportPhase, type ReportPhaseRunnerContext } from '../core/workflow/phase-runner.js';
 import type { WorkflowStep } from '../core/models/types.js';
@@ -1538,5 +1570,300 @@ describe('runReportPhase retry with new session', () => {
     expect(updates).toEqual([{ key: 'coder:codex', sessionId: 'codex-report-session' }]);
     expect(sessions.get('coder')).toBe('claude-session');
     expect(readFileSync(join(reportDir, '08-provider-aware.md'), 'utf-8')).toBe('fallback provider report');
+  });
+});
+
+describe('runReportPhase provider info', () => {
+  let tmpRoot: string;
+
+  function createProviderInfoStep(fileName: string): WorkflowStep {
+    return {
+      name: 'review',
+      persona: 'reviewer',
+      personaDisplayName: 'Reviewer',
+      instruction: 'Review task',
+      passPreviousResponse: false,
+      outputContracts: [{ name: fileName }],
+    };
+  }
+
+  function createProviderInfoContext(reportDir: string): ReportPhaseRunnerContext {
+    return {
+      cwd: reportDir,
+      reportDir,
+      executionScope: { kind: 'workflow_execution_scope', stack: [] },
+      workflowName: 'test-workflow',
+      observabilityEnabled: true,
+      lastResponse: 'Phase 1 output',
+      resolveSessionKey: (step) => step.persona ?? step.name,
+      getSessionId: () => 'session-resume-1',
+      buildResumeOptions: (_step, sessionId, overrides) => ({
+        cwd: reportDir,
+        resolvedProvider: 'opencode',
+        resolvedModel: 'qwen3-coder-next',
+        sessionId,
+        maxTurns: overrides.maxTurns,
+      }),
+      buildNewSessionReportOptions: (_step, overrides) => ({
+        cwd: reportDir,
+        resolvedProvider: 'opencode',
+        resolvedModel: 'qwen3-coder-next',
+        allowedTools: overrides.allowedTools,
+        maxTurns: overrides.maxTurns,
+      }),
+      buildFallbackReportOptions: (_step, _failedPrimaryOptions, overrides) => ({
+        cwd: reportDir,
+        resolvedProvider: 'codex',
+        resolvedModel: 'gpt-5.1-mini',
+        allowedTools: overrides.allowedTools,
+        maxTurns: overrides.maxTurns,
+      }),
+      resolveReportFallbackProviderModel: () => ({
+        provider: 'codex',
+        model: 'gpt-5.1-mini',
+      }),
+      updatePersonaSession: () => {},
+      resolveStepProviderModel: () => ({
+        provider: 'opencode',
+        model: 'qwen3-coder-next',
+        providerSource: 'step',
+        modelSource: 'step',
+      }),
+    };
+  }
+
+  beforeEach(() => {
+    tmpRoot = mkdtempSync(join(tmpdir(), 'takt-report-provider-info-'));
+    capturedProviderInfo.length = 0;
+    capturedOutcomes.length = 0;
+    vi.resetAllMocks();
+  });
+
+  afterEach(() => {
+    if (existsSync(tmpRoot)) {
+      rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves provider and model source attributes for normal report attempts', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createProviderInfoStep('review.md');
+    const ctx = createProviderInfoContext(reportDir);
+    queueRunAgentResponses([{
+      persona: 'reviewer',
+      status: 'done',
+      content: '# Report\nOK',
+      timestamp: new Date('2026-06-28T00:00:00Z'),
+      sessionId: 'session-resume-2',
+    }]);
+
+    await runReportPhase(step, 1, ctx);
+
+    expect(readFileSync(join(reportDir, 'review.md'), 'utf-8')).toBe('# Report\nOK');
+    expect(capturedProviderInfo[0]).toEqual({
+      provider: 'opencode',
+      model: 'qwen3-coder-next',
+      providerSource: 'step',
+      modelSource: 'step',
+    });
+  });
+
+  it('records the configured fallback provider for fallback attempts', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createProviderInfoStep('fallback.md');
+    const ctx = createProviderInfoContext(reportDir);
+    queueRunAgentResponses([
+      {
+        persona: 'reviewer',
+        status: 'done',
+        content: ' ',
+        timestamp: new Date('2026-06-28T00:00:00Z'),
+      },
+      {
+        persona: 'reviewer',
+        status: 'done',
+        content: '\n',
+        timestamp: new Date('2026-06-28T00:00:01Z'),
+      },
+      {
+        persona: 'reviewer',
+        status: 'done',
+        content: '# Report\nFallback OK',
+        timestamp: new Date('2026-06-28T00:00:02Z'),
+      },
+    ]);
+
+    await runReportPhase(step, 1, ctx);
+
+    expect(readFileSync(join(reportDir, 'fallback.md'), 'utf-8')).toBe('# Report\nFallback OK');
+    expect(capturedProviderInfo[2]).toEqual({
+      provider: 'codex',
+      model: 'gpt-5.1-mini',
+    });
+  });
+
+  it('records empty report output as an error outcome before fallback succeeds', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createProviderInfoStep('fallback-empty-outcome.md');
+    const ctx = createProviderInfoContext(reportDir);
+    queueRunAgentResponses([
+      {
+        persona: 'reviewer',
+        status: 'done',
+        content: '',
+        timestamp: new Date('2026-06-28T00:00:00Z'),
+      },
+      {
+        persona: 'reviewer',
+        status: 'done',
+        content: '# Report\nFallback OK',
+        timestamp: new Date('2026-06-28T00:00:01Z'),
+      },
+    ]);
+
+    await runReportPhase(step, 1, ctx);
+
+    expect(readFileSync(join(reportDir, 'fallback-empty-outcome.md'), 'utf-8')).toBe('# Report\nFallback OK');
+    expect(capturedOutcomes[0]).toMatchObject({
+      status: 'error',
+      content: '',
+      error: 'Report output is empty',
+    });
+  });
+
+  it('does not attach raw retry failure content to observability outcomes before fallback succeeds', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createProviderInfoStep('fallback-redacted.md');
+    const ctx = createProviderInfoContext(reportDir);
+    queueRunAgentResponses([
+      {
+        persona: 'reviewer',
+        status: 'done',
+        content: ' ',
+        timestamp: new Date('2026-06-28T00:00:00Z'),
+      },
+      {
+        persona: 'reviewer',
+        status: 'error',
+        content: 'SECRET_TOKEN=retry-content',
+        error: 'SECRET_TOKEN=retry-error',
+        timestamp: new Date('2026-06-28T00:00:01Z'),
+      },
+      {
+        persona: 'reviewer',
+        status: 'done',
+        content: '# Report\nFallback OK',
+        timestamp: new Date('2026-06-28T00:00:02Z'),
+      },
+    ]);
+
+    await runReportPhase(step, 1, ctx);
+
+    expect(readFileSync(join(reportDir, 'fallback-redacted.md'), 'utf-8')).toBe('# Report\nFallback OK');
+    expect(JSON.stringify(capturedOutcomes)).not.toContain('SECRET_TOKEN');
+    expect(capturedOutcomes[1]).toMatchObject({
+      status: 'error',
+      content: '',
+      error: 'Report phase provider returned status "error"',
+    });
+  });
+
+  it('keeps normal report source attributes when the step provider matches the configured fallback provider', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createProviderInfoStep('same-provider.md');
+    const ctx = createProviderInfoContext(reportDir);
+    ctx.buildResumeOptions = (_step, sessionId, overrides) => ({
+      cwd: reportDir,
+      resolvedProvider: 'claude',
+      resolvedModel: 'claude-opus-4',
+      sessionId,
+      maxTurns: overrides.maxTurns,
+    });
+    ctx.resolveStepProviderModel = () => ({
+      provider: 'claude',
+      model: 'claude-opus-4',
+      providerSource: 'step',
+      modelSource: 'step',
+    });
+    queueRunAgentResponses([{
+      persona: 'reviewer',
+      status: 'done',
+      content: '# Report\nSame provider OK',
+      timestamp: new Date('2026-06-28T00:00:00Z'),
+    }]);
+
+    await runReportPhase(step, 1, ctx);
+
+    expect(readFileSync(join(reportDir, 'same-provider.md'), 'utf-8')).toBe('# Report\nSame provider OK');
+    expect(capturedProviderInfo[0]).toEqual({
+      provider: 'claude',
+      model: 'claude-opus-4',
+      providerSource: 'step',
+      modelSource: 'step',
+    });
+  });
+});
+
+describe('runReportPhase logging', () => {
+  function createLoggingStep(): WorkflowStep {
+    return {
+      name: 'audit',
+      persona: 'testing-reviewer',
+      personaDisplayName: 'Testing Reviewer',
+      instruction: 'Audit task',
+      passPreviousResponse: false,
+      outputContracts: [],
+    };
+  }
+
+  function createLoggingContext(): ReportPhaseRunnerContext {
+    const context = {
+      cwd: '/tmp/report-phase-logging',
+      reportDir: '/tmp/report-phase-logging/reports',
+      lastResponse: 'Phase 1 result',
+      resolveSessionKey: (step) => step.persona ?? step.name,
+      getSessionId: () => 'sensitive-session-token',
+      buildResumeOptions: () => ({ cwd: '/tmp/report-phase-logging' }),
+      buildNewSessionReportOptions: () => ({ cwd: '/tmp/report-phase-logging' }),
+      buildFallbackReportOptions: () => ({
+        cwd: '/tmp/report-phase-logging',
+        resolvedProvider: 'claude',
+        allowedTools: [],
+        sessionId: undefined,
+      }),
+      resolveReportFallbackProviderModel: () => ({
+        provider: 'claude',
+      }),
+      resolveStepProviderModel: () => ({
+        provider: 'opencode',
+      }),
+      updatePersonaSession: () => {},
+    };
+    return context;
+  }
+
+  beforeEach(() => {
+    debugSpy.mockClear();
+  });
+
+  it('should log report phase startup without exposing the raw sessionId', async () => {
+    // Given
+    const step = createLoggingStep();
+    const ctx = createLoggingContext();
+
+    // When
+    await runReportPhase(step, 1, ctx);
+
+    // Then
+    const runningLog = debugSpy.mock.calls.find(([message]) => message === 'Running report phase');
+    expect(runningLog).toBeDefined();
+
+    const metadata = runningLog?.[1] as Record<string, unknown>;
+    expect(metadata).toEqual({
+      step: 'audit',
+      hasSession: true,
+      hasLastResponse: true,
+    });
+    expect(JSON.stringify(metadata)).not.toContain('sensitive-session-token');
   });
 });

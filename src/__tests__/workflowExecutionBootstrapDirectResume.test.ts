@@ -73,7 +73,8 @@ vi.mock('../shared/ui/TaskPrefixWriter.js', () => ({
   })),
 }));
 
-vi.mock('../shared/utils/index.js', () => ({
+vi.mock('../shared/utils/index.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   createLogger: vi.fn(() => ({
     debug: vi.fn(),
     info: vi.fn(),
@@ -1253,5 +1254,43 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
     });
 
     expect(mockEnsureWorktreeTaktRuntimeProtection).not.toHaveBeenCalled();
+  });
+
+  it('Given cwd differs from projectCwd, When bootstrap runs, Then worktree .takt/.gitignore is created from built-in template', async () => {
+    const actualProtection = await vi.importActual<typeof import('../infra/task/projectLocalTaktSync.js')>(
+      '../infra/task/projectLocalTaktSync.js',
+    );
+    mockEnsureWorktreeTaktRuntimeProtection.mockImplementation(actualProtection.ensureWorktreeTaktRuntimeProtection);
+    const projectDir = createTempProject();
+    const worktreeDir = createTempProject();
+
+    await createWorkflowExecutionBootstrap(workflowConfig, 'Run in worktree', worktreeDir, {
+      projectCwd: projectDir,
+      provider: 'mock',
+      reportDirName: 'worktree-run',
+    });
+
+    expect(readFileSync(join(worktreeDir, '.takt', '.gitignore'), 'utf-8')).toBe(
+      readFileSync(join(__dirname, '..', '..', 'builtins', 'project', 'dotgitignore'), 'utf-8'),
+    );
+  });
+
+  it('Given worktree cwd and invalid reportDirName, When bootstrap rejects, Then worktree .takt is not created', async () => {
+    const actualProtection = await vi.importActual<typeof import('../infra/task/projectLocalTaktSync.js')>(
+      '../infra/task/projectLocalTaktSync.js',
+    );
+    mockEnsureWorktreeTaktRuntimeProtection.mockImplementation(actualProtection.ensureWorktreeTaktRuntimeProtection);
+    mockIsValidReportDirName.mockReturnValue(false);
+    const projectDir = createTempProject();
+    const worktreeDir = createTempProject();
+
+    await expect(createWorkflowExecutionBootstrap(workflowConfig, 'Run in worktree', worktreeDir, {
+      projectCwd: projectDir,
+      provider: 'mock',
+      reportDirName: '../invalid',
+    })).rejects.toThrow('Invalid reportDirName: ../invalid');
+
+    expect(mockEnsureWorktreeTaktRuntimeProtection).not.toHaveBeenCalled();
+    expect(existsSync(join(worktreeDir, '.takt'))).toBe(false);
   });
 });

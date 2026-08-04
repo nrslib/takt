@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { validateFindingManagerOutput } from '../core/workflow/findings/manager-output-validation.js';
-import { parseRawFindings, parseReviewerRawFindings } from '../core/models/finding-schemas.js';
 import type {
   FindingLedger,
   FindingManagerOutput,
@@ -853,57 +852,5 @@ describe('validateFindingManagerOutput', () => {
     });
 
     expect(result).toEqual({ ok: true });
-  });
-});
-
-describe('finding raw schemas', () => {
-  it('should require relation', () => {
-    expect(() => parseRawFindings([
-      {
-        rawFindingId: 'raw-invalid',
-        stepName: 'arch-review',
-        reviewer: 'arch-review',
-        familyTag: 'bug',
-        severity: 'high',
-        title: 'Missing relation',
-        description: 'The current contract requires relation.',
-      },
-    ])).toThrow();
-  });
-
-  it('should treat empty location and suggestion from structured output as unset', () => {
-    const parsed = parseReviewerRawFindings([
-      {
-        rawFindingId: 'raw-confirm',
-        familyTag: 'bug',
-        severity: 'low',
-        title: 'Confirmed fixed',
-        description: 'Verified at src/index.ts:42.',
-        relation: 'resolution_confirmation',
-        targetFindingId: 'F-0001',
-        location: '',
-        suggestion: '',
-      },
-    ]);
-
-    expect(parsed[0]?.location).toBeUndefined();
-    expect(parsed[0]?.suggestion).toBeUndefined();
-  });
-
-  it('should treat an empty targetFindingId from structured output as unset', () => {
-    const parsed = parseReviewerRawFindings([
-      {
-        rawFindingId: 'raw-1',
-        familyTag: 'bug',
-        severity: 'low',
-        title: 'Issue entry',
-        description: 'Strict structured output fills every field.',
-        relation: 'new',
-        targetFindingId: '',
-      },
-    ]);
-
-    expect(parsed[0]?.relation).toBe('new');
-    expect(parsed[0]?.targetFindingId).toBeUndefined();
   });
 });

@@ -730,3 +730,69 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
     expect(buildFindingsRuleContext(harness.currentLedger()).provisional.fixpoint).toBe(false);
   });
 });
+
+describe('fixpoint snapshot with dismissed provisionals (finding-dismiss 由来)', () => {
+  function provisionalEntry(
+    overrides: Pick<FindingLedgerEntry, 'revision'> & Partial<Omit<FindingLedgerEntry, 'revision'>>,
+  ): FindingLedgerEntry {
+    return {
+      id: 'F-0001',
+      status: 'open',
+      lifecycle: 'new',
+      severity: 'medium',
+      title: '必須品質ゲートの実行証跡がない',
+      reviewers: ['coding-review'],
+      rawFindingIds: ['raw-1'],
+      firstSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
+      lastSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
+      provisional: {
+        kind: 'unverified-locationless',
+        stableKey: 'stable-1',
+        lineageKey: 'lineage-1',
+        sourceRawFindingIds: ['raw-1'],
+        reason: 'a new locationless claim has no mechanically verifiable source_quote evidence',
+        firstObservedAt: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
+        lastObservedAt: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
+        interpretationEpochs: 0,
+        gateEffect: 'block',
+        firstObservedRound: 1,
+      },
+      ...overrides,
+    };
+  }
+
+  function makeLedger(findings: FindingLedgerEntry[], overrides: Partial<FindingLedger> = {}): FindingLedger {
+    return {
+      workflowName: 'peer-review',
+      nextId: findings.length + 1,
+      updatedAt: '2026-07-01T00:00:00.000Z',
+      rawFindings: [],
+      conflicts: [],
+      interpretations: [],
+      findings,
+      ...overrides,
+    };
+  }
+
+  describe('fixpoint snapshot with dismissed provisionals', () => {
+    it('dismissed になった provisional は provisionalKeys から消え、id:status として substantiveEntries に現れる', () => {
+      const before = computeFixpointSnapshot(makeLedger([provisionalEntry({ revision: 1 })]));
+      expect(before.provisionalKeys).toEqual(['stable-1']);
+      expect(before.substantiveEntries).toEqual([]);
+
+      const after = computeFixpointSnapshot(
+        makeLedger([provisionalEntry({ revision: 1,
+          status: 'dismissed',
+          lifecycle: 'dismissed',
+          dismissal: {
+            basis: 'out_of_scope',
+            reason: 'final gate の職掌',
+            decidedAt: { runId: 'run-2', stepName: 'reviewers', timestamp: '2026-07-02T00:00:00.000Z' },
+          },
+        })]),
+      );
+      expect(after.provisionalKeys).toEqual([]);
+      expect(after.substantiveEntries).toEqual(['F-0001:dismissed']);
+    });
+  });
+});

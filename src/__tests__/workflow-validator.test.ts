@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import type { AutoRoutingConfig } from '../core/models/config-types.js';
-import type { NormalAgentWorkflowStep, WorkflowConfig, WorkflowRule } from '../core/models/index.js';
+import type { NormalAgentWorkflowStep, WorkflowConfig, WorkflowRule, WorkflowStep } from '../core/models/index.js';
 import { validateWorkflowConfig } from '../core/workflow/engine/WorkflowValidator.js';
 import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
 import { getProviderValidationErrorSource } from '../core/workflow/provider-validation-error.js';
-import { getWorkflowConfigErrorPath } from '../core/workflow/workflow-config-error.js';
+import {
+  WorkflowConfigError,
+  getWorkflowConfigErrorPath,
+  withWorkflowConfigErrorPath,
+} from '../core/workflow/workflow-config-error.js';
+import { findWorkflowStepLocation } from '../core/workflow/workflow-step-location.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 
 function createFakeLedgerStore(): FindingLedgerStore {
@@ -184,16 +189,6 @@ describe('validateWorkflowConfig', () => {
     });
 
     expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).not.toThrow();
-  });
-
-  it.each([3, 'infinite'] as const)('rejects callable workflow maxSteps %s', (maxSteps) => {
-    const workflow = createWorkflow({
-      subworkflow: { callable: true },
-      maxSteps,
-    });
-
-    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() }))
-      .toThrow(/callable.*max_steps|max_steps.*callable/i);
   });
 
   it('requires finding_contract when a Team Leader uses finding_contract_fix mode', () => {
@@ -1814,5 +1809,104 @@ describe('validateWorkflowConfig', () => {
         },
       })).not.toThrow();
     });
+  });
+});
+
+describe('workflow configuration error boundaries', () => {
+  it('retains an immutable normalized path and the original cause', () => {
+    const cause = new Error('invalid provider');
+    const sourcePath = ['steps', 0, 'provider'] as PropertyKey[];
+
+    const error = new WorkflowConfigError(cause, sourcePath);
+    sourcePath.push('model');
+
+    expect(error.cause).toBe(cause);
+    expect(error.path).toEqual(['steps', 0, 'provider']);
+    expect(Object.isFrozen(error.path)).toBe(true);
+    expect(() => (error.path as PropertyKey[]).push('model')).toThrow();
+  });
+
+  it('wraps a more specific normalized path without mutating the original error', () => {
+    const error = new WorkflowConfigError(new Error('invalid provider'), ['steps', 0]);
+
+    const annotated = withWorkflowConfigErrorPath(error, ['steps', 0, 'overrides', 'provider']);
+
+    expect(annotated).not.toBe(error);
+    expect(annotated.cause).toBe(error);
+    expect(error.path).toEqual(['steps', 0]);
+    expect(annotated.path).toEqual(['steps', 0, 'overrides', 'provider']);
+  });
+
+  it('does not replace a specific normalized path with a less specific path', () => {
+    const error = new WorkflowConfigError(new Error('invalid provider'), ['steps', 0, 'overrides', 'provider']);
+
+    withWorkflowConfigErrorPath(error, ['steps', 0]);
+
+    expect(error.path).toEqual(['steps', 0, 'overrides', 'provider']);
+  });
+
+  it('does not reuse an unrelated path solely because it is equally specific', () => {
+    const error = new WorkflowConfigError(
+      new Error('invalid order'),
+      ['steps', 0, 'output_contracts', 'report', 0, 'order'],
+    );
+
+    const annotated = withWorkflowConfigErrorPath(
+      error,
+      ['steps', 0, 'output_contracts', 'report', 0, 'format'],
+    );
+
+    expect(annotated).not.toBe(error);
+    expect(annotated.path).toEqual(['steps', 0, 'output_contracts', 'report', 0, 'format']);
+  });
+
+  it('locates a parallel sub-step without reading raw workflow metadata', () => {
+    const subStep: WorkflowStep = {
+      name: 'review',
+      personaDisplayName: 'review',
+      instruction: 'review',
+    };
+    const config: WorkflowConfig = {
+      name: 'location-test',
+      initialStep: 'reviewers',
+      maxSteps: 1,
+      steps: [{
+        name: 'reviewers',
+        personaDisplayName: 'reviewers',
+        instruction: 'reviewers',
+        parallel: [subStep],
+      }],
+    };
+
+    expect(findWorkflowStepLocation(config, subStep)).toEqual(['steps', 0, 'parallel', 0]);
+  });
+
+  it('retains the fixed and pool branches in dynamic parallel locations', () => {
+    const fixed: NormalAgentWorkflowStep = { name: 'architecture', personaDisplayName: 'architecture', instruction: 'review' };
+    const pool: NormalAgentWorkflowStep & { description: string } = {
+      name: 'frontend',
+      description: 'review frontend',
+      personaDisplayName: 'frontend',
+      instruction: 'review',
+    };
+    const config: WorkflowConfig = {
+      name: 'dynamic-location-test',
+      initialStep: 'reviewers',
+      maxSteps: 1,
+      steps: [{
+        name: 'reviewers',
+        personaDisplayName: 'reviewers',
+        instruction: 'reviewers',
+        parallel: {
+          kind: 'dynamic',
+          fixed: [fixed],
+          pool: [pool],
+          selection: { mode: 'replace' as const },
+        },
+      }],
+    };
+
+    expect(findWorkflowStepLocation(config, fixed)).toEqual(['steps', 0, 'parallel', 'fixed', 0]);
+    expect(findWorkflowStepLocation(config, pool)).toEqual(['steps', 0, 'parallel', 'pool', 0]);
   });
 });

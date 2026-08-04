@@ -4,8 +4,20 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { invalidateAllResolvedConfigCache, invalidateGlobalConfigCache } from '../infra/config/index.js';
 import { WorkflowEngine } from '../core/workflow/index.js';
+import type { WorkflowConfig } from '../core/models/index.js';
+import type { ProviderResolutionSource } from '../core/workflow/provider-options-trace.js';
+import {
+  getProviderValidationErrorSource,
+  withProviderValidationErrorSource,
+} from '../core/workflow/provider-validation-error.js';
+import { withWorkflowConfigErrorPath } from '../core/workflow/workflow-config-error.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
 import { resolveWorkflowCallTarget } from '../infra/config/loaders/workflowCallResolver.js';
+import {
+  registerWorkflowStepFragmentErrorContext,
+  translateWorkflowStepFragmentError,
+} from '../infra/config/loaders/workflowStepFragmentErrorTranslator.js';
+import { captureConfigErrorMessage as configErrorMessage } from './helpers/step-fragment-test-helpers.js';
 
 function writeFile(root: string, relativePath: string, content: string): string {
   const filePath = join(root, relativePath);
@@ -26,6 +38,30 @@ function errorMessage(action: () => unknown): string {
 function engineValidationError(workflowPath: string, projectDir: string): string {
   const workflow = loadWorkflowFromFile(workflowPath, projectDir);
   return errorMessage(() => new WorkflowEngine(workflow, projectDir, 'test task', { projectCwd: projectDir }));
+}
+
+function configEngineError(workflowPath: string, projectDir: string): string {
+  return configErrorMessage(() => new WorkflowEngine(
+    loadWorkflowFromFile(workflowPath, projectDir),
+    projectDir,
+    'test task',
+    { projectCwd: projectDir },
+  ));
+}
+
+function standardWorkflowYaml(uses: string): string {
+  return [
+    'name: default',
+    'initial_step: review',
+    'max_steps: 1',
+    'steps:',
+    '  - name: review',
+    `    uses: ${uses}`,
+    '    rules:',
+    '      - condition: done',
+    '        next: COMPLETE',
+    '',
+  ].join('\n');
 }
 
 describe('workflow step fragment provenance', () => {
@@ -1199,5 +1235,535 @@ describe('workflow step fragment provenance', () => {
     expect(message).toContain('reserved for the engine-synthesized conflict adjudication step');
     expect(message).toContain('step fragment "adjudication"');
     expect(message).toContain(fragmentPath);
+  });
+
+  const fragmentPolicyCases: Array<{
+    title: string;
+    fragment: string[];
+    expected: string[];
+    extraFiles?: Array<[string, string]>;
+  }> = [
+    {
+      title: 'an Arpeggio source policy error to the fragment source field',
+      fragment: [
+        'instruction: review',
+        'arpeggio:',
+        '  source: custom-module',
+        '  source_path: input.csv',
+        '  template: prompt.md',
+        '',
+      ],
+      expected: ['uses Arpeggio source "custom-module"'],
+    },
+    {
+      title: 'an Arpeggio merge file policy error to the fragment merge file field',
+      fragment: [
+        'instruction: review',
+        'arpeggio:',
+        '  source: csv',
+        '  source_path: input.csv',
+        '  template: prompt.md',
+        '  merge:',
+        '    strategy: custom',
+        '    file: merge.js',
+        '',
+      ],
+      expected: ['uses Arpeggio merge.file'],
+    },
+    {
+      title: 'an empty fragment tag to the tag entry that defines it',
+      fragment: ['instruction: review', 'tags: ["   "]', ''],
+      expected: ['empty tags entry'],
+    },
+    {
+      title: 'an implicit stdio MCP policy error to the fragment server object',
+      fragment: [
+        'instruction: review',
+        'mcp_servers:',
+        '  local:',
+        '    command: local-mcp',
+        '',
+      ],
+      expected: ['uses MCP server "local" with transport "stdio"'],
+    },
+    {
+      title: 'an explicit MCP transport policy error to the fragment transport field',
+      fragment: [
+        'instruction: review',
+        'mcp_servers:',
+        '  remote:',
+        '    type: sse',
+        '    url: https://example.invalid/mcp',
+        '',
+      ],
+      expected: ['uses MCP server "remote" with transport "sse"'],
+    },
+    {
+      title: 'an invalid team leader inspect tool to the fragment entry',
+      fragment: [
+        'instruction: review',
+        'team_leader:',
+        '  inspect_tools: [bash]',
+        '',
+      ],
+      expected: ['team_leader.inspect_tools contains non-read-only tool "bash"'],
+    },
+    {
+      title: 'an unresolved output contract order to the fragment order field',
+      extraFiles: [['.takt/facets/output-contracts/empty-order.md', '']],
+      fragment: [
+        'instruction: review',
+        'output_contracts:',
+        '  report:',
+        '    - name: review.md',
+        '      format: review format',
+        '      order: ../facets/output-contracts/empty-order.md',
+        '',
+      ],
+      expected: ['Failed to resolve output contract order "../facets/output-contracts/empty-order.md"'],
+    },
+  ];
+
+  it.each(fragmentPolicyCases)('attributes $title', ({ fragment, expected, extraFiles }) => {
+    for (const [relativePath, content] of extraFiles ?? []) {
+      writeFile(projectDir, relativePath, content);
+    }
+    const fragmentPath = writeFile(projectDir, '.takt/steps/review.yaml', fragment.join('\n'));
+    const workflowPath = writeFile(projectDir, '.takt/workflows/default.yaml', standardWorkflowYaml('review'));
+
+    const message = configErrorMessage(() => loadWorkflowFromFile(workflowPath, projectDir));
+
+    for (const text of expected) {
+      expect(message).toContain(text);
+    }
+    expect(message).toContain('step fragment "review"');
+    expect(message).toContain(fragmentPath);
+  });
+
+  const nestedFragmentAttributionCases: Array<{
+    title: string;
+    files: Array<[string, string]>;
+    attributed: string;
+    unattributed: string;
+    expected: string[];
+  }> = [
+    {
+      title: 'an Arpeggio inline JavaScript policy error to the fragment that provides inline_js',
+      files: [
+        ['.takt/steps/inner.yaml', [
+          'instruction: review',
+          'arpeggio:',
+          '  source: csv',
+          '  source_path: input.csv',
+          '  template: prompt.md',
+          '  merge:',
+          '    strategy: custom',
+          '    inline_js: return items',
+          '',
+        ].join('\n')],
+        ['.takt/steps/outer.yaml', 'uses: inner\narpeggio:\n  source: csv\n'],
+      ],
+      attributed: 'inner',
+      unattributed: 'outer',
+      expected: [],
+    },
+    {
+      title: 'an overridden team leader persona error to the outer fragment',
+      files: [
+        ['.takt/outside.md', 'outside persona\n'],
+        ['.takt/steps/inner.yaml', [
+          'instruction: review',
+          'team_leader:',
+          '  persona: inner.md',
+          '  part_tags: [review]',
+          '',
+        ].join('\n')],
+        ['.takt/steps/outer.yaml', [
+          'uses: inner',
+          'team_leader:',
+          '  persona: ../outside.md',
+          '',
+        ].join('\n')],
+      ],
+      attributed: 'outer',
+      unattributed: 'inner',
+      expected: [],
+    },
+    {
+      title: 'overridden team leader part tags to the outer fragment',
+      files: [
+        ['.takt/steps/inner.yaml', [
+          'instruction: review',
+          'team_leader:',
+          '  part_tags: [review]',
+          '',
+        ].join('\n')],
+        ['.takt/steps/outer.yaml', [
+          'uses: inner',
+          'team_leader:',
+          '  part_tags: ["   "]',
+          '',
+        ].join('\n')],
+      ],
+      attributed: 'outer',
+      unattributed: 'inner',
+      expected: ['team_leader.part_tags contains an empty entry'],
+    },
+  ];
+
+  it.each(nestedFragmentAttributionCases)('attributes $title', ({ files, attributed, unattributed, expected }) => {
+    const written = new Map<string, string>();
+    for (const [relativePath, content] of files) {
+      written.set(relativePath, writeFile(projectDir, relativePath, content));
+    }
+    const workflowPath = writeFile(projectDir, '.takt/workflows/default.yaml', standardWorkflowYaml('outer'));
+    const attributedPath = written.get(`.takt/steps/${attributed}.yaml`);
+    if (!attributedPath) throw new Error(`Missing fragment file for "${attributed}"`);
+
+    const message = configErrorMessage(() => loadWorkflowFromFile(workflowPath, projectDir));
+
+    for (const text of expected) {
+      expect(message).toContain(text);
+    }
+    expect(message).toContain(`step fragment "${attributed}"`);
+    expect(message).toContain(attributedPath);
+    expect(message).not.toContain(`step fragment "${unattributed}"`);
+  });
+
+  it('retains fragment context while identifying a caller-provided provider option reference error as workflow-defined', () => {
+    writeFile(projectDir, '.takt/steps/review.yaml', [
+      'instruction: review',
+      '',
+    ].join('\n'));
+    const workflowPath = writeFile(projectDir, '.takt/workflows/default.yaml', [
+      'name: default',
+      'initial_step: review',
+      'max_steps: 1',
+      'steps:',
+      '  - name: review',
+      '    uses: review',
+      '    provider_options:',
+      '      extends: missing-options',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
+      '',
+    ].join('\n'));
+
+    const message = configErrorMessage(() => loadWorkflowFromFile(workflowPath, projectDir));
+
+    expect(message).toContain('provider_options.extends not found: missing-options');
+    expect(message).toContain('step uses fragment "review"');
+    expect(message).toContain('defined by the workflow');
+  });
+
+  it('does not associate a fragment when engine provider metadata has no source', () => {
+    writeFile(projectDir, '.takt/steps/review.yaml', [
+      'instruction: review',
+      '',
+    ].join('\n'));
+    const workflowPath = writeFile(projectDir, '.takt/workflows/default.yaml', [
+      'name: default',
+      'initial_step: review',
+      'steps:',
+      '  - name: review',
+      '    uses: review',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
+      '',
+    ].join('\n'));
+
+    const message = configErrorMessage(() => new WorkflowEngine(
+      loadWorkflowFromFile(workflowPath, projectDir),
+      projectDir,
+      'test task',
+      {
+        projectCwd: projectDir,
+        provider: 'opencode',
+      },
+    ));
+
+    expect(message).toContain("provider 'opencode' requires model");
+    expect(message).not.toContain('step fragment "review"');
+  });
+
+  it('attributes a missing OpenCode promotion model to the outer fragment that provides the provider', () => {
+    writeFile(projectDir, '.takt/steps/inner.yaml', [
+      'instruction: review',
+      'promotion:',
+      '  - at: 2',
+      '    provider: claude',
+      '',
+    ].join('\n'));
+    const outerPath = writeFile(projectDir, '.takt/steps/outer.yaml', [
+      'uses: inner',
+      'promotion:',
+      '  - at: 2',
+      '    provider: opencode',
+      '',
+    ].join('\n'));
+    const workflowPath = writeFile(projectDir, '.takt/workflows/default.yaml', [
+      'name: default',
+      'initial_step: review',
+      'steps:',
+      '  - name: review',
+      '    uses: outer',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
+      '',
+    ].join('\n'));
+
+    const message = configEngineError(workflowPath, projectDir);
+
+    expect(message).toContain("provider 'opencode' requires model");
+    expect(message).toContain('step fragment "outer"');
+    expect(message).toContain(outerPath);
+    expect(message).not.toContain('step fragment "inner"');
+  });
+
+  it('retains fragment context while identifying a caller replacement promotion as workflow-defined', () => {
+    const fragmentPath = writeFile(projectDir, '.takt/steps/review.yaml', [
+      'instruction: review',
+      'promotion:',
+      '  - at: 2',
+      '    provider: claude',
+      '',
+    ].join('\n'));
+    const workflowPath = writeFile(projectDir, '.takt/workflows/default.yaml', [
+      'name: default',
+      'initial_step: review',
+      'steps:',
+      '  - name: review',
+      '    uses: review',
+      '    promotion:',
+      '      - at: 2',
+      '        provider: opencode',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
+      '',
+    ].join('\n'));
+
+    const message = configEngineError(workflowPath, projectDir);
+
+    expect(message).toContain("provider 'opencode' requires model");
+    expect(message).toContain(workflowPath);
+    expect(message).toContain('step uses fragment "review"');
+    expect(message).toContain(fragmentPath);
+    expect(message).toContain('defined by the workflow');
+  });
+
+  it('retains fragment context while identifying a caller workflow call override as workflow-defined', async () => {
+    const fragmentPath = writeFile(projectDir, '.takt/steps/delegate.yaml', [
+      'kind: workflow_call',
+      'call: child',
+      'overrides:',
+      '  provider: claude',
+      '',
+    ].join('\n'));
+    const childPath = writeFile(projectDir, '.takt/workflows/child.yaml', [
+      'name: child',
+      'subworkflow:',
+      '  callable: true',
+      'initial_step: review',
+      'steps:',
+      '  - name: review',
+      '    instruction: review',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
+      '',
+    ].join('\n'));
+    const workflowPath = writeFile(projectDir, '.takt/workflows/parent-caller-override.yaml', [
+      'name: parent-caller-override',
+      'initial_step: delegate',
+      'steps:',
+      '  - name: delegate',
+      '    uses: delegate',
+      '    overrides:',
+      '      provider: opencode',
+      '    rules:',
+      '      - condition: COMPLETE',
+      '        next: COMPLETE',
+      '',
+    ].join('\n'));
+    const engine = new WorkflowEngine(loadWorkflowFromFile(workflowPath, projectDir), projectDir, 'test task', {
+      projectCwd: projectDir,
+      provider: 'mock',
+      model: 'mock-model',
+      workflowCallResolver: () => loadWorkflowFromFile(childPath, projectDir),
+    });
+    const abortReasons: string[] = [];
+    engine.on('workflow:abort', (_state, reason) => abortReasons.push(reason));
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(abortReasons).toHaveLength(1);
+    expect(abortReasons[0]).toContain("provider 'opencode' requires model");
+    expect(abortReasons[0]).toContain(workflowPath);
+    expect(abortReasons[0]).toContain('step uses fragment "delegate"');
+    expect(abortReasons[0]).toContain(fragmentPath);
+    expect(abortReasons[0]).toContain('defined by the workflow');
+  });
+
+  it('keeps an aggregate rule placement error owned by the workflow caller', () => {
+    const rulePath = writeFile(projectDir, '.takt/steps/rules.yaml', [
+      'instruction: review',
+      '',
+    ].join('\n'));
+    writeFile(projectDir, '.takt/steps/outer.yaml', 'uses: rules\npersona: reviewer\n');
+    const workflowPath = writeFile(projectDir, '.takt/workflows/default.yaml', [
+      'name: default',
+      'initial_step: review',
+      'max_steps: 1',
+      'steps:',
+      '  - name: review',
+      '    uses: outer',
+      '    rules:',
+      '      - condition: all("approved")',
+      '        next: COMPLETE',
+      '',
+    ].join('\n'));
+
+    const message = configEngineError(workflowPath, projectDir);
+
+    expect(message).toContain('aggregate conditions');
+    expect(message).not.toContain(rulePath);
+    expect(message).not.toContain('step fragment');
+  });
+
+  it.each([
+    {
+      name: 'top-level step',
+      step: '  - name: review\n    uses: outer\n    rules:\n      - condition: approved\n        appendix: first\n        next: COMPLETE\n      - condition: approved\n        appendix: second\n        next: COMPLETE',
+      fragment: 'instruction: review\n',
+    },
+    {
+      name: 'parallel sub-step',
+      step: '  - name: reviewers\n    parallel:\n      - name: review\n        uses: outer\n        rules:\n          - condition: approved\n            appendix: first\n            next: COMPLETE\n          - condition: approved\n            appendix: second\n            next: COMPLETE\n    rules:\n      - condition: all("approved")\n        next: COMPLETE',
+      fragment: 'instruction: review\n',
+    },
+  ])('keeps a semantic appendix conflict in a $name owned by the workflow caller', ({ step, fragment }) => {
+    const rulePath = writeFile(projectDir, '.takt/steps/rules.yaml', fragment);
+    writeFile(projectDir, '.takt/steps/outer.yaml', 'uses: rules\npersona: reviewer\n');
+    const workflowPath = writeFile(projectDir, '.takt/workflows/default.yaml', [
+      'name: default',
+      'initial_step: review',
+      'max_steps: 1',
+      'steps:',
+      step,
+      '',
+    ].join('\n'));
+
+    const message = configEngineError(workflowPath, projectDir);
+
+    expect(message).toContain('Rules sharing semantic label "approved" must use the same appendix');
+    expect(message).not.toContain(rulePath);
+    expect(message).not.toContain('step fragment');
+  });
+
+  it.each([
+    {
+      name: 'top-level step',
+      initialStep: 'review',
+      step: '  - uses: review\n    name: review\n    rules:\n      - condition: all("approved")\n        next: COMPLETE',
+    },
+    {
+      name: 'parallel sub-step',
+      initialStep: 'reviewers',
+      step: '  - name: reviewers\n    parallel:\n      - uses: review\n        name: review\n        rules:\n          - condition: all("approved")\n            next: COMPLETE',
+    },
+  ])('retains fragment context while identifying a caller rule override as workflow-defined in a $name', ({ initialStep, step }) => {
+    const fragmentPath = writeFile(projectDir, '.takt/steps/review.yaml', [
+      'instruction: review',
+      '',
+    ].join('\n'));
+    const workflowPath = writeFile(projectDir, '.takt/workflows/default.yaml', [
+      'name: default',
+      `initial_step: ${initialStep}`,
+      'max_steps: 1',
+      'steps:',
+      step,
+      '',
+    ].join('\n'));
+
+    const message = configEngineError(workflowPath, projectDir);
+
+    expect(message).toContain('aggregate conditions');
+    expect(message).not.toContain('step uses fragment "review"');
+    expect(message).not.toContain(fragmentPath);
+  });
+});
+
+describe('workflow step fragment provider provenance translation', () => {
+  it.each([
+    'cli',
+    'env',
+    'auto.rules',
+    'auto.dynamic',
+    'auto.fallback',
+    'workflow',
+    'project',
+    'global',
+    'default',
+  ] as const satisfies readonly ProviderResolutionSource[])('does not associate a fragment with a %s provider validation error', (providerSource) => {
+    const raw = { steps: [{ provider: 'claude' }] };
+    const workflow = {} as WorkflowConfig;
+    registerWorkflowStepFragmentErrorContext(
+      workflow,
+      [{ stepPath: ['steps', 0, 'provider'], ref: 'review', sourcePath: '/fragments/review.yaml' }],
+      raw,
+      '/workflows/default.yaml',
+    );
+    const validationError = withProviderValidationErrorSource(
+      withWorkflowConfigErrorPath(new Error("provider 'opencode' requires model"), ['steps', 0, 'provider']),
+      {
+        provider: 'opencode',
+        model: undefined,
+        providerSource,
+        modelSource: undefined,
+      },
+    );
+
+    const translated = translateWorkflowStepFragmentError(workflow, validationError);
+
+    expect(translated).toBe(validationError);
+  });
+
+  it('attributes a fragment field when a configuration error has no provider metadata', () => {
+    const raw = { steps: [{ instruction: 'review' }] };
+    const workflow = {} as WorkflowConfig;
+    registerWorkflowStepFragmentErrorContext(
+      workflow,
+      [{ stepPath: ['steps', 0, 'instruction'], ref: 'review', sourcePath: '/fragments/review.yaml' }],
+      raw,
+      '/workflows/default.yaml',
+    );
+    const configurationError = withWorkflowConfigErrorPath(
+      new Error('invalid instruction'),
+      ['steps', 0, 'instruction'],
+    );
+
+    const translated = translateWorkflowStepFragmentError(workflow, configurationError);
+
+    expect(translated).not.toBe(configurationError);
+    expect(translated.message).toContain('from step fragment "review" at /fragments/review.yaml');
+  });
+
+  it('associates a missing provider with the provider field even when a model is present', () => {
+    const error = withProviderValidationErrorSource(new Error('provider is required'), {
+      provider: undefined,
+      model: 'model-without-provider',
+      providerSource: undefined,
+      modelSource: 'step',
+    });
+
+    expect(getProviderValidationErrorSource(error)).toMatchObject({
+      field: 'provider',
+      source: undefined,
+    });
   });
 });

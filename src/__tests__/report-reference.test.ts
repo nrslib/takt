@@ -1,7 +1,9 @@
 import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { replaceTemplatePlaceholders } from '../core/workflow/instruction/escape.js';
+import { makeInstructionContext, makeStep } from './test-helpers.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const injectedFsError = vi.hoisted(() => ({
   operation: '' as '' | 'lstat' | 'realpath' | 'readFile',
@@ -410,5 +412,42 @@ describe('resolveReportReferenceDetailed', () => {
     expect(resolveReportReferenceDetailed(reports, 'review.md', {
       stepName: 'consumer',
     })).toEqual({ content: 'inside report', scope: 'step' });
+  });
+});
+
+describe('report handle removal', () => {
+  const REMOVED_PLACEHOLDERS = [
+    '{current_report}',
+    '{previous_report}',
+    '{peer_reports}',
+    '{report_history}',
+  ] as const;
+
+  let reportDir: string;
+
+  beforeEach(() => {
+    reportDir = mkdtempSync(join(tmpdir(), 'takt-report-handle-removal-'));
+  });
+
+  afterEach(() => {
+    rmSync(reportDir, { recursive: true, force: true });
+  });
+
+  it('removes legacy instruction variables while retaining report content interpolation', () => {
+    writeFileSync(join(reportDir, 'review.md'), 'inherited review body', 'utf-8');
+    const template = REMOVED_PLACEHOLDERS.join('|');
+    const legacyRendered = replaceTemplatePlaceholders(
+      template,
+      makeStep(),
+      makeInstructionContext({ reportDir }),
+    );
+    const reportRendered = replaceTemplatePlaceholders(
+      'Inherited report: {report:review.md}',
+      makeStep(),
+      makeInstructionContext({ reportDir }),
+    );
+
+    expect(legacyRendered).toBe(template);
+    expect(reportRendered).toBe('Inherited report: inherited review body');
   });
 });

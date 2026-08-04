@@ -1,4 +1,16 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// assembleCleanManagerDecision フォールバック describe 用: 正規化で既知の排他
+// 違反は assembly 段で解消されるため、最終検証の失敗は「未知の違反経路」でしか
+// 起きない。検証を部分モック（既定はパススルー = 実装へ委譲）してその経路を
+// 再現する。他の describe への影響はない。
+vi.mock('../core/workflow/findings/manager-output-validation.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/findings/manager-output-validation.js')>();
+  return {
+    ...actual,
+    validateFindingManagerOutput: vi.fn(actual.validateFindingManagerOutput),
+  };
+});
 import { assembleManagerOutput, flattenManagerOutputToDecisions } from '../core/workflow/findings/decision-assembly.js';
 import {
   classifyRawFindingsMechanically,
@@ -16,9 +28,31 @@ import type {
   FindingLedgerConflict,
   FindingLedgerEntry,
   FindingManagerDecisions,
+  FindingManagerOutput,
   RawFinding,
 } from '../core/workflow/findings/types.js';
+import { assembleCleanManagerDecision } from '../core/workflow/findings/manager-clean-decision.js';
+import { computeDismissCandidates } from '../core/workflow/findings/manager-utils.js';
+import { createEmptyManagerOutput } from '../core/workflow/findings/manager-output.js';
+import {
+  normalizeMergedManagerPlan,
+  rejectConflictTouchedDuplicates,
+  transferSupersededMatches,
+} from '../core/workflow/findings/manager-plan-normalization.js';
+import { reconcileCommitPlan } from '../core/workflow/findings/manager-commit-finalization.js';
+import { buildFindingsRuleContext as buildFindingsRuleContextWithCwd } from '../core/workflow/findings/context.js';
+import { parseFindingLedger } from '../core/models/finding-schemas.js';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
+import type { RawAdmissionEvaluation } from '../core/workflow/findings/manager-admission.js';
 import { storedRawReconcileProvenance } from './helpers/finding-integrity.js';
+
+const validateMock = vi.mocked(validateFindingManagerOutput);
+
+function buildFindingsRuleContext(ledger: FindingLedger) {
+  return buildFindingsRuleContextWithCwd(ledger, process.cwd());
+}
 
 const DEFAULT_CONFLICT_ID = formatConflictId({
   findingIds: ['F-0001'],
@@ -1758,3 +1792,1501 @@ describe('assembleManagerOutput carried conflicts', () => {
     }).ok).toBe(true);
   });
 });
+
+describe('mechanical classification (mechanical-classification.ts)', () => {
+  function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
+    return {
+      workflowName: 'peer-review',
+      nextId: 2,
+      updatedAt: '2026-06-13T00:00:00.000Z',
+      rawFindings: [makeRawFinding({ rawFindingId: 'raw-existing', location: 'src/a.ts:10' })],
+      conflicts: [],
+      interpretations: [],
+      findings: [makeFinding({ revision: 1 })],
+      ...overrides,
+    };
+  }
+
+  describe('classifyRawFindingsMechanically resolution confirmations (case 3)', () => {
+    it('Given a resolution confirmation targeting an open finding When classified Then it lands in resolvedFindings without residual', () => {
+      const raw = makeRawFinding({
+        rawFindingId: 'raw-confirm',
+        relation: 'resolution_confirmation',
+        targetFindingId: 'F-0001',
+        description: 'Verified fixed at src/a.ts:10.',
+      });
+      const result = classifyRawFindingsMechanically({ previousLedger: makeLedger(), rawFindings: [raw] });
+      expect(result.residualRawFindings).toEqual([]);
+      expect(result.output.resolvedFindings).toEqual([
+        { findingId: 'F-0001', rawFindingIds: ['raw-confirm'], evidence: 'Verified fixed at src/a.ts:10.' },
+      ]);
+    });
+
+    it('Given multiple confirmations for the same finding When classified Then rawFindingIds are merged into one entry', () => {
+      const raws = [
+        makeRawFinding({ rawFindingId: 'raw-c1', relation: 'resolution_confirmation', targetFindingId: 'F-0001' }),
+        makeRawFinding({ rawFindingId: 'raw-c2', relation: 'resolution_confirmation', targetFindingId: 'F-0001' }),
+      ];
+      const result = classifyRawFindingsMechanically({ previousLedger: makeLedger(), rawFindings: raws });
+      expect(result.output.resolvedFindings).toHaveLength(1);
+      expect(result.output.resolvedFindings[0]?.rawFindingIds).toEqual(['raw-c1', 'raw-c2']);
+    });
+
+    it('Given a confirmation targeting a missing finding When classified Then it goes to residual', () => {
+      const raw = makeRawFinding({ rawFindingId: 'raw-confirm', relation: 'resolution_confirmation', targetFindingId: 'F-9999' });
+      const result = classifyRawFindingsMechanically({ previousLedger: makeLedger(), rawFindings: [raw] });
+      expect(result.output.resolvedFindings).toEqual([]);
+      expect(result.residualRawFindings).toEqual([raw]);
+    });
+
+    it('Given a confirmation targeting an already resolved finding When classified Then it goes to residual', () => {
+      const ledger = makeLedger({ findings: [makeFinding({ revision: 1, status: 'resolved' })] });
+      const raw = makeRawFinding({ rawFindingId: 'raw-confirm', relation: 'resolution_confirmation', targetFindingId: 'F-0001' });
+      const result = classifyRawFindingsMechanically({ previousLedger: ledger, rawFindings: [raw] });
+      expect(result.residualRawFindings).toEqual([raw]);
+    });
+  });
+
+  // item 4 case 2: explicit reference (relation=persists/reopened + targetFindingId).
+  describe('classifyRawFindingsMechanically explicit reference (case 2)', () => {
+    it('Given relation "persists" with targetFindingId pointing at an open finding When classified Then it lands in matches without residual (F-0017-style)', () => {
+      // familyTag と行番号は識別に使わない設計の確認: familyTag もタイトルも
+      // 台帳の finding と異なるが、明示参照だけで機械 same になる。
+      const raw = makeRawFinding({
+        rawFindingId: 'raw-persist',
+        relation: 'persists',
+        targetFindingId: 'F-0001',
+        familyTag: 'race-condition',
+        location: 'src/a.ts:99',
+        title: 'A totally different-sounding title',
+        description: 'Still seeing the distributed lock cleanup gap, now at a different line.',
+      });
+      const result = classifyRawFindingsMechanically({ previousLedger: makeLedger(), rawFindings: [raw] });
+      expect(result.residualRawFindings).toEqual([]);
+      expect(result.output.matches).toEqual([{ findingId: 'F-0001', rawFindingIds: ['raw-persist'] }]);
+    });
+
+    it('Given relation "persists" with targetFindingId pointing at a non-open finding When classified Then it goes to residual', () => {
+      const ledger = makeLedger({ findings: [makeFinding({ revision: 1, status: 'resolved' })] });
+      const raw = makeRawFinding({ rawFindingId: 'raw-persist', relation: 'persists', targetFindingId: 'F-0001' });
+      const result = classifyRawFindingsMechanically({ previousLedger: ledger, rawFindings: [raw] });
+      expect(result.output.matches).toEqual([]);
+      expect(result.residualRawFindings).toEqual([raw]);
+    });
+
+    it('Given relation "persists" with targetFindingId pointing at an unknown finding When classified Then it goes to residual', () => {
+      const raw = makeRawFinding({ rawFindingId: 'raw-persist', relation: 'persists', targetFindingId: 'F-9999' });
+      const result = classifyRawFindingsMechanically({ previousLedger: makeLedger(), rawFindings: [raw] });
+      expect(result.residualRawFindings).toEqual([raw]);
+    });
+
+    it('Given relation "reopened" with targetFindingId pointing at a resolved finding When classified Then it still goes to residual (reopen always needs manager judgment)', () => {
+      // reopen はより重い状態遷移のため、対象状態が「正しく」resolved/waived で
+      // あっても機械では確定させない（保守的な原則）。
+      const ledger = makeLedger({ findings: [makeFinding({ revision: 1, status: 'resolved', lifecycle: 'resolved' })] });
+      const raw = makeRawFinding({ rawFindingId: 'raw-reopen', relation: 'reopened', targetFindingId: 'F-0001' });
+      const result = classifyRawFindingsMechanically({ previousLedger: ledger, rawFindings: [raw] });
+      expect(result.residualRawFindings).toEqual([raw]);
+    });
+  });
+
+  // item 4 case 1: exact duplicate raw content (normalized title/description/path/suggestion).
+  describe('classifyRawFindingsMechanically exact duplicate content (case 1)', () => {
+    it('Given a relation "new" raw whose title/description/path/suggestion exactly match an open finding\'s existing raw When classified Then it lands in matches', () => {
+      const existingRaw = makeRawFinding({
+        rawFindingId: 'raw-existing',
+        location: 'src/a.ts:10',
+        title: 'Handle is never closed',
+        description: 'The file handle opened at line 10 is never released.',
+        suggestion: 'Add a finally block that calls close().',
+      });
+      const ledger = makeLedger({ rawFindings: [existingRaw] });
+      const raw = makeRawFinding({
+        rawFindingId: 'raw-dup',
+        relation: 'new',
+        familyTag: 'style', // familyTag differs — not part of the identity key.
+        location: 'src/a.ts:10',
+        title: 'Handle is never closed',
+        description: 'The file handle opened at line 10 is never released.',
+        suggestion: 'Add a finally block that calls close().',
+      });
+      const result = classifyRawFindingsMechanically({ previousLedger: ledger, rawFindings: [raw] });
+      expect(result.residualRawFindings).toEqual([]);
+      expect(result.output.matches).toEqual([{ findingId: 'F-0001', rawFindingIds: ['raw-dup'] }]);
+    });
+
+    // F-0016 の再現: 同じ familyTag・同じ行だが意味の異なる raw は、旧設計
+    // （familyTag + exact location の自動 same）では壊れた混成 finding に畳まれて
+    // いた。新設計は内容の完全一致でしか機械 same にしないため、意味が違う
+    // （description が異なる）raw は residual に落ちて manager へ送られる。
+    it('Given two raws with the same familyTag and location but different meaning When classified Then neither auto-merges and both go to residual (F-0016 regression guard)', () => {
+      const existingRaw = makeRawFinding({
+        rawFindingId: 'raw-existing',
+        familyTag: 'resource-leak',
+        location: 'src/a.ts:10',
+        title: 'Handle is never closed',
+        description: 'A specific file descriptor leak on the error path.',
+      });
+      const ledger = makeLedger({ rawFindings: [existingRaw] });
+      const raw = makeRawFinding({
+        rawFindingId: 'raw-different-meaning',
+        relation: 'new',
+        familyTag: 'resource-leak',
+        location: 'src/a.ts:10',
+        title: 'Handle is never closed',
+        description: 'A distinct concern about goroutine cleanup, unrelated to the file descriptor leak.',
+      });
+      const result = classifyRawFindingsMechanically({ previousLedger: ledger, rawFindings: [raw] });
+      expect(result.output.matches).toEqual([]);
+      expect(result.output.newFindings).toEqual([]);
+      expect(result.residualRawFindings).toEqual([raw]);
+    });
+
+    it('Given a raw whose content matches a RESOLVED finding\'s raw (not open) When classified Then it goes to residual as a reopen candidate', () => {
+      const existingRaw = makeRawFinding({ rawFindingId: 'raw-existing', location: 'src/a.ts:10' });
+      const ledger = makeLedger({ rawFindings: [existingRaw], findings: [makeFinding({ revision: 1, status: 'resolved' })] });
+      const raw = makeRawFinding({ rawFindingId: 'raw-issue', relation: 'new', location: 'src/a.ts:10' });
+      const result = classifyRawFindingsMechanically({ previousLedger: ledger, rawFindings: [raw] });
+      expect(result.output.matches).toEqual([]);
+      expect(result.residualRawFindings).toEqual([raw]);
+    });
+
+    it('Given an issue without location When classified Then it goes to residual', () => {
+      const raw = makeRawFinding({ rawFindingId: 'raw-issue', relation: 'new', location: undefined });
+      const result = classifyRawFindingsMechanically({ previousLedger: makeLedger(), rawFindings: [raw] });
+      expect(result.residualRawFindings).toEqual([raw]);
+    });
+
+    it('Given a fully mechanical round When validated with the real validator Then the output passes', () => {
+      const raws = [
+        makeRawFinding({ rawFindingId: 'raw-confirm', relation: 'resolution_confirmation', targetFindingId: 'F-0001', description: 'Verified.' }),
+      ];
+      const result = classifyRawFindingsMechanically({ previousLedger: makeLedger(), rawFindings: raws });
+      const validation = validateFindingManagerOutput({
+        previousLedger: makeLedger(),
+        rawFindings: raws,
+        managerOutput: result.output,
+      });
+      expect(validation.ok).toBe(true);
+    });
+  });
+
+  describe('mergeFindingManagerOutputs', () => {
+    function makeOutput(overrides: Partial<FindingManagerOutput> = {}): FindingManagerOutput {
+      return {
+        matches: [],
+        newFindings: [],
+        resolvedFindings: [],
+        reopenedFindings: [],
+        conflicts: [],
+        resolvedConflicts: [],
+        waivedFindings: [],
+        disputeNotes: [],
+        invalidatedFindings: [],
+        duplicateFindings: [],
+        dismissedFindings: [],
+        ...overrides,
+      };
+    }
+
+    it('Given both sides matched the same finding When merged Then rawFindingIds are unioned without duplicates', () => {
+      const base = makeOutput({ matches: [{ findingId: 'F-0001', rawFindingIds: ['raw-a', 'raw-b'] }] });
+      const extra = makeOutput({ matches: [{ findingId: 'F-0001', rawFindingIds: ['raw-b', 'raw-c'] }] });
+      const merged = mergeFindingManagerOutputs(base, extra);
+      expect(merged.matches).toEqual([{ findingId: 'F-0001', rawFindingIds: ['raw-a', 'raw-b', 'raw-c'] }]);
+    });
+
+    it('Given disjoint categories When merged Then all entries are preserved', () => {
+      const base = makeOutput({ resolvedFindings: [{ findingId: 'F-0001', rawFindingIds: ['raw-c1'], evidence: 'e1' }] });
+      const extra = makeOutput({
+        newFindings: [{ rawFindingIds: ['raw-n'], title: 'New issue', severity: 'low' }],
+        disputeNotes: [{ findingId: 'F-0002', reason: 'r', evidence: 'e' }],
+      });
+      const merged = mergeFindingManagerOutputs(base, extra);
+      expect(merged.resolvedFindings).toHaveLength(1);
+      expect(merged.newFindings).toHaveLength(1);
+      expect(merged.disputeNotes).toHaveLength(1);
+    });
+
+    it('Given the base output When merged Then the base arrays are not mutated', () => {
+      const base = makeOutput({ matches: [{ findingId: 'F-0001', rawFindingIds: ['raw-a'] }] });
+      const extra = makeOutput({ matches: [{ findingId: 'F-0001', rawFindingIds: ['raw-b'] }] });
+      mergeFindingManagerOutputs(base, extra);
+      expect(base.matches[0]?.rawFindingIds).toEqual(['raw-a']);
+    });
+  });
+
+  describe('classifyRawFindingsMechanically conflicting signals', () => {
+    it('Given a confirmation and a re-reported issue for the same finding When classified Then all related raws fall to residual', () => {
+      const confirmation = makeRawFinding({
+        rawFindingId: 'raw-confirm',
+        relation: 'resolution_confirmation',
+        targetFindingId: 'F-0001',
+      });
+      const reReport = makeRawFinding({
+        rawFindingId: 'raw-issue',
+        relation: 'persists',
+        targetFindingId: 'F-0001',
+      });
+      const result = classifyRawFindingsMechanically({
+        previousLedger: makeLedger(),
+        rawFindings: [confirmation, reReport],
+      });
+      expect(result.output.resolvedFindings).toEqual([]);
+      expect(result.output.matches).toEqual([]);
+      expect(new Set(result.residualRawFindings.map((raw) => raw.rawFindingId)))
+        .toEqual(new Set(['raw-confirm', 'raw-issue']));
+    });
+  });
+});
+
+describe('assembleCleanManagerDecision (manager-clean-decision.ts)', () => {
+  function makeFinding(
+    overrides: Pick<FindingLedgerEntry, 'revision'> & Partial<Omit<FindingLedgerEntry, 'revision'>>,
+  ): FindingLedgerEntry {
+    return {
+      id: 'F-0001',
+      status: 'open',
+      lifecycle: 'new',
+      severity: 'medium',
+      title: '既存の指摘',
+      location: 'src/a.ts:10',
+      reviewers: ['arch-review'],
+      rawFindingIds: ['raw-old-1'],
+      firstSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
+      lastSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
+      ...overrides,
+    };
+  }
+
+  function makeLedger(findings: FindingLedgerEntry[]): FindingLedger {
+    return {
+      workflowName: 'peer-review',
+      nextId: findings.length + 1,
+      updatedAt: '2026-07-01T00:00:00.000Z',
+      rawFindings: [],
+      conflicts: [],
+      interpretations: [],
+      findings,
+    };
+  }
+
+  const CONFIRMATION_RAW: RawFinding = {
+    rawFindingId: 'raw-confirm',
+    stepName: 'arch-review',
+    reviewer: 'arch-review',
+    familyTag: 'bug',
+    severity: 'medium',
+    title: '解消を確認',
+    description: '修正を確認した。',
+    relation: 'resolution_confirmation',
+    targetFindingId: 'F-0001',
+  };
+
+  const ISSUE_RAW: RawFinding = {
+    rawFindingId: 'raw-issue',
+    stepName: 'arch-review',
+    reviewer: 'arch-review',
+    familyTag: 'bug',
+    severity: 'medium',
+    title: '新しい指摘',
+    location: 'src/b.ts:5',
+    description: '別の問題。',
+    suggestion: '直す。',
+    relation: 'new',
+  };
+
+  function makeAdmission(cleanWire: RawFinding[]): RawAdmissionEvaluation {
+    return {
+      admissionRejections: [],
+      admissionAnomalySpecs: [],
+      admissionRejectedItems: [],
+      locationlessProvisionalItems: [],
+      pendingRejectedObservations: [],
+      cleanAdmitted: cleanWire.map((wire) => ({
+        wire,
+        canonical: {
+          rawFindingId: wire.rawFindingId,
+          reviewerStableKey: 'reviewer-stable',
+          lineageKey: `lineage-${wire.rawFindingId}`,
+        },
+      })) as never,
+      tainted: [],
+      taintedAdmitted: [],
+      ladderAnomalySpecs: [],
+      verifiedEvidenceCandidates: [],
+      provisionalOnlyLadderRawIds: new Set(),
+      cleanWire,
+    };
+  }
+
+  function makeActiveConflictDuplicateScenario() {
+    const observedAt = { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' };
+    const previousLedger = makeLedger([
+      makeFinding({ revision: 1 }),
+      makeFinding({ revision: 1, id: 'F-0002', rawFindingIds: ['raw-old-2'] }),
+    ]);
+    previousLedger.conflicts = [{
+      id: 'C-2BF240CC0BEC',
+      status: 'active',
+      findingIds: ['F-0002'],
+      rawFindingIds: ['raw-conflict'],
+      description: 'F-0002 is disputed.',
+      firstSeen: observedAt,
+      lastSeen: observedAt,
+    }];
+    return {
+      previousLedger,
+      output: {
+        matches: [],
+        newFindings: [],
+        resolvedFindings: [],
+        reopenedFindings: [],
+        conflicts: [],
+        resolvedConflicts: [],
+        waivedFindings: [],
+        disputeNotes: [],
+        invalidatedFindings: [],
+        duplicateFindings: [{
+          canonicalFindingId: 'F-0001',
+          duplicateFindingIds: ['F-0002'],
+          evidence: 'Same underlying issue.',
+        }],
+        dismissedFindings: [],
+      },
+    };
+  }
+
+  afterEach(() => {
+    validateMock.mockReset();
+  });
+
+  describe('assembleCleanManagerDecision の mechanical フォールバック', () => {
+    beforeEach(() => {
+      validateMock.mockReset();
+    });
+
+    it('最終検証は active conflict に触れる duplicate を除いた保存時ビューを使う', () => {
+      const { previousLedger, output } = makeActiveConflictDuplicateScenario();
+      validateMock.mockReturnValue({ ok: true });
+
+      const result = assembleCleanManagerDecision({
+        previousLedger,
+        admission: makeAdmission([]),
+        mechanical: {
+          output,
+          residualRawFindings: [],
+        } as ReturnType<typeof classifyRawFindingsMechanically>,
+        decisions: undefined,
+        initialInvalidAttempts: [],
+        invalidLocationCandidateFindingIds: new Set(),
+        dismissCandidateFindingIds: new Set(),
+        priorStepResponseText: undefined,
+      });
+
+      expect(result.managerOutput.duplicateFindings).toHaveLength(1);
+      expect(validateMock).toHaveBeenCalledWith(expect.objectContaining({
+        managerOutput: expect.objectContaining({ duplicateFindings: [] }),
+      }));
+    });
+
+    it('mechanical フォールバックも active conflict に触れる duplicate を除いた保存時ビューで検証する', () => {
+      const { previousLedger, output } = makeActiveConflictDuplicateScenario();
+      validateMock
+        .mockReturnValueOnce({ ok: false, errors: ['synthetic invariant violation'] })
+        .mockReturnValueOnce({ ok: true });
+
+      const result = assembleCleanManagerDecision({
+        previousLedger,
+        admission: makeAdmission([]),
+        mechanical: {
+          output,
+          residualRawFindings: [],
+        } as ReturnType<typeof classifyRawFindingsMechanically>,
+        decisions: undefined,
+        initialInvalidAttempts: [],
+        invalidLocationCandidateFindingIds: new Set(),
+        dismissCandidateFindingIds: new Set(),
+        priorStepResponseText: undefined,
+      });
+
+      expect(result.managerOutput.duplicateFindings).toEqual(output.duplicateFindings);
+      expect(validateMock).toHaveBeenCalledTimes(2);
+      for (const call of validateMock.mock.calls) {
+        expect(call[0].managerOutput.duplicateFindings).toEqual([]);
+      }
+    });
+
+    it('最終検証に落ちたら empty ではなく mechanical 出力へ縮退し、残余 raw を manager-output-discarded で保持する', () => {
+      const previousLedger = makeLedger([makeFinding({ revision: 1 })]);
+      const cleanWire = [CONFIRMATION_RAW, ISSUE_RAW];
+      const mechanical = classifyRawFindingsMechanically({ previousLedger, rawFindings: cleanWire });
+      expect(mechanical.output.resolvedFindings.map((resolved) => resolved.findingId)).toEqual(['F-0001']);
+      expect(mechanical.residualRawFindings.map((raw) => raw.rawFindingId)).toEqual(['raw-issue']);
+
+      // 未知の違反経路の再現: マージ済み出力への最終検証だけを落とす
+      validateMock.mockReturnValueOnce({ ok: false, errors: ['synthetic invariant violation'] });
+
+      const result = assembleCleanManagerDecision({
+        previousLedger,
+        admission: makeAdmission(cleanWire),
+        mechanical,
+        decisions: makeDecisions({
+          rawDecisions: [{ rawFindingId: 'raw-issue', decision: 'new', evidence: '' }],
+        }),
+        initialInvalidAttempts: [],
+        invalidLocationCandidateFindingIds: new Set(),
+        dismissCandidateFindingIds: new Set(),
+        priorStepResponseText: undefined,
+      });
+
+      // mechanical 確定分（resolution confirmation）は失われない
+      expect(result.managerOutput).toEqual(mechanical.output);
+      // LLM 判断の残余 raw は discarded kind の provisional として保持
+      expect(result.cleanProvisionalSpecs).toHaveLength(1);
+      expect(result.cleanProvisionalSpecs[0]).toMatchObject({
+        kind: 'manager-output-discarded',
+        sourceRawFindingIds: ['raw-issue'],
+      });
+      // 破棄された LLM 出力の unsupported を採用済み判断として残さない
+      expect(result.unsupportedRawFindingReports).toEqual([]);
+      // invalid attempt は監査記録として残る
+      expect(result.invalidAttempts).toHaveLength(1);
+      expect(result.invalidAttempts[0]!.validationErrors).toEqual(['synthetic invariant violation']);
+    });
+
+    it('mechanical 出力自体が最終検証に落ちる場合は fail fast（engine バグ）', () => {
+      const previousLedger = makeLedger([makeFinding({ revision: 1 })]);
+      const cleanWire = [CONFIRMATION_RAW];
+      const mechanical = classifyRawFindingsMechanically({ previousLedger, rawFindings: cleanWire });
+
+      validateMock.mockReturnValue({ ok: false, errors: ['synthetic invariant violation'] });
+
+      expect(() => assembleCleanManagerDecision({
+        previousLedger,
+        admission: makeAdmission(cleanWire),
+        mechanical,
+        decisions: undefined,
+        initialInvalidAttempts: [],
+        invalidLocationCandidateFindingIds: new Set(),
+        dismissCandidateFindingIds: new Set(),
+        priorStepResponseText: undefined,
+      })).toThrow(/engine bug/);
+    });
+  });
+});
+
+describe('dismiss decisions (manager-utils.ts / decision-assembly.ts)', () => {
+  function provisionalEntry(
+    overrides: Pick<FindingLedgerEntry, 'revision'> & Partial<Omit<FindingLedgerEntry, 'revision'>>,
+  ): FindingLedgerEntry {
+    return {
+      id: 'F-0001',
+      status: 'open',
+      lifecycle: 'new',
+      severity: 'medium',
+      title: '必須品質ゲートの実行証跡がない',
+      reviewers: ['coding-review'],
+      rawFindingIds: ['raw-1'],
+      firstSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
+      lastSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
+      provisional: {
+        kind: 'unverified-locationless',
+        stableKey: 'stable-1',
+        lineageKey: 'lineage-1',
+        sourceRawFindingIds: ['raw-1'],
+        reason: 'a new locationless claim has no mechanically verifiable source_quote evidence',
+        firstObservedAt: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
+        lastObservedAt: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
+        interpretationEpochs: 0,
+        gateEffect: 'block',
+        firstObservedRound: 1,
+      },
+      ...overrides,
+    };
+  }
+
+  function makeLedger(findings: FindingLedgerEntry[], overrides: Partial<FindingLedger> = {}): FindingLedger {
+    return {
+      workflowName: 'peer-review',
+      nextId: findings.length + 1,
+      updatedAt: '2026-07-01T00:00:00.000Z',
+      rawFindings: [],
+      conflicts: [],
+      interpretations: [],
+      findings,
+      ...overrides,
+    };
+  }
+
+  describe('computeDismissCandidates', () => {
+    it('open な provisional のうち裁定可能な kind だけを候補にする', () => {
+      const findings = [
+        provisionalEntry({ revision: 1, id: 'F-0001' }),
+        // 解釈 epoch を使い切った ambiguous — 解釈ラダーの所有権が切れたので候補
+        provisionalEntry({ revision: 1,
+          id: 'F-0002',
+          provisional: { ...provisionalEntry({ revision: 1 }).provisional!, kind: 'raw-meaning-ambiguous', stableKey: 'stable-2', interpretationEpochs: 2 },
+        }),
+        // 解釈 epoch が残る ambiguous — 解釈ラダーが所有権を持つ間は候補にしない
+        provisionalEntry({ revision: 1,
+          id: 'F-0007',
+          provisional: { ...provisionalEntry({ revision: 1 }).provisional!, kind: 'raw-meaning-ambiguous', stableKey: 'stable-7', interpretationEpochs: 1 },
+        }),
+        // 処理失敗の証跡 — 候補にしない
+        provisionalEntry({ revision: 1,
+          id: 'F-0003',
+          provisional: { ...provisionalEntry({ revision: 1 }).provisional!, kind: 'reviewer-output-overflow', stableKey: 'stable-3' },
+        }),
+        provisionalEntry({ revision: 1,
+          id: 'F-0004',
+          provisional: { ...provisionalEntry({ revision: 1 }).provisional!, kind: 'manager-budget-exhausted', stableKey: 'stable-4' },
+        }),
+        provisionalEntry({ revision: 1,
+          id: 'F-0008',
+          provisional: { ...provisionalEntry({ revision: 1 }).provisional!, kind: 'invalid-location-evidence', stableKey: 'stable-8' },
+        }),
+        provisionalEntry({ revision: 1,
+          id: 'F-0009',
+          provisional: {
+            ...provisionalEntry({ revision: 1 }).provisional!,
+            kind: 'raw-adjudication-unresolved',
+            stableKey: 'stable-9',
+            adjudicationAttempts: [1, 2].map((attempt) => ({
+              attempt,
+              replayRawFindingId: `replay-${attempt}`,
+              reason: 'no substantive outcome',
+              at: provisionalEntry({ revision: 1 }).lastSeen,
+            })),
+          },
+        }),
+        // provisional でない open finding — 候補にしない
+        provisionalEntry({ revision: 1, id: 'F-0005', provisional: undefined }),
+        // open でない provisional — 候補にしない
+        provisionalEntry({ revision: 1, id: 'F-0006', status: 'resolved' }),
+      ];
+
+      const candidates = computeDismissCandidates({
+        workflowName: 'test',
+        nextId: 11,
+        updatedAt: '2026-01-01T00:00:00.000Z',
+        findings,
+        rawFindings: [],
+        conflicts: [],
+        interpretations: [],
+      });
+
+      expect([...candidates.keys()].sort()).toEqual(['F-0001', 'F-0002', 'F-0009']);
+      expect(candidates.get('F-0001')).toContain('unverified-locationless');
+    });
+  });
+
+  describe('assembleManagerOutput dismissDecisions', () => {
+    const dismissal = { findingId: 'F-0001', basis: 'out_of_scope' as const, reason: '検証結果の評価は final gate の職掌' };
+
+    it('候補集合にある open provisional への dismiss を採用する', () => {
+      const ledger = makeLedger([provisionalEntry({ revision: 1 })]);
+      const assembly = assembleManagerOutput({
+        previousLedger: ledger,
+        residualRawFindings: [],
+        decisions: makeDecisions({ dismissDecisions: [dismissal] }),
+        dismissCandidateFindingIds: new Set(['F-0001']),
+      });
+
+      expect(assembly.output.dismissedFindings).toEqual([dismissal]);
+      expect(assembly.rejectedDismissDecisions).toEqual([]);
+    });
+
+    it('エンジンが候補として提示していない finding への dismiss は不採用にする', () => {
+      const ledger = makeLedger([provisionalEntry({ revision: 1 })]);
+      const assembly = assembleManagerOutput({
+        previousLedger: ledger,
+        residualRawFindings: [],
+        decisions: makeDecisions({ dismissDecisions: [dismissal] }),
+        // 候補集合を渡さない = LLM の reason だけでは権限が生まれない
+      });
+
+      expect(assembly.output.dismissedFindings).toEqual([]);
+      expect(assembly.rejectedDismissDecisions[0]?.reason).toContain('did not offer it as a dismissal candidate');
+    });
+
+    it('同ラウンドの clean 証拠による settlement を dismiss より優先する', () => {
+      const resolvedTarget = provisionalEntry({ revision: 1, id: 'F-0001' });
+      const ledger = makeLedger([resolvedTarget], {
+        rawFindings: [{
+          rawFindingId: 'confirm-1',
+          stepName: 'reviewers',
+          reviewer: 'coding-review',
+          familyTag: 'gate',
+          severity: 'medium',
+          title: '解消確認',
+          description: 'fixed',
+        }],
+      });
+      const mechanicalOutput = {
+        ...createEmptyManagerOutput(),
+        resolvedFindings: [{ findingId: 'F-0001', rawFindingIds: ['confirm-1'], evidence: 'clean confirmation' }],
+      };
+      const assembly = assembleManagerOutput({
+        previousLedger: ledger,
+        residualRawFindings: [],
+        decisions: makeDecisions({ dismissDecisions: [dismissal] }),
+        mechanicalOutput,
+        dismissCandidateFindingIds: new Set(['F-0001']),
+      });
+
+      expect(assembly.output.dismissedFindings).toEqual([]);
+      expect(assembly.rejectedDismissDecisions[0]?.reason).toContain('clean evidence settles it');
+      expect(assembly.output.resolvedFindings.map((resolved) => resolved.findingId)).toEqual(['F-0001']);
+    });
+
+    it('active conflict が参照する finding への dismiss は拒否する（裁定経路を迂回させない）', () => {
+      const ledger = makeLedger([provisionalEntry({ revision: 1 })], {
+        conflicts: [{
+          id: 'C-FA2947446963',
+          status: 'active',
+          findingIds: ['F-0001'],
+          rawFindingIds: [],
+          description: 'contradiction',
+          firstSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
+          lastSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
+        }],
+      });
+      const assembly = assembleManagerOutput({
+        previousLedger: ledger,
+        residualRawFindings: [],
+        decisions: makeDecisions({ dismissDecisions: [dismissal] }),
+        dismissCandidateFindingIds: new Set(['F-0001']),
+      });
+
+      expect(assembly.output.dismissedFindings).toEqual([]);
+      expect(assembly.rejectedDismissDecisions[0]?.reason).toContain('active conflict');
+    });
+  });
+});
+
+describe('manager plan normalization (manager-plan-normalization.ts / manager-commit-finalization.ts)', () => {
+  function makeFinding(
+    overrides: Pick<FindingLedgerEntry, 'revision'> & Partial<Omit<FindingLedgerEntry, 'revision'>>,
+  ): FindingLedgerEntry {
+    return {
+      id: 'F-0001',
+      status: 'open',
+      lifecycle: 'new',
+      severity: 'medium',
+      title: '候補にない初期値が確定結果へ混入する',
+      location: 'src/multi-select.ts:34',
+      reviewers: ['arch-review'],
+      rawFindingIds: ['raw-old-1'],
+      firstSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
+      lastSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
+      ...overrides,
+    };
+  }
+
+  function makeLedger(findings: FindingLedgerEntry[], overrides: Partial<FindingLedger> = {}): FindingLedger {
+    return {
+      workflowName: 'peer-review',
+      nextId: 100,
+      updatedAt: '2026-07-01T00:00:00.000Z',
+      rawFindings: [],
+      conflicts: [],
+      interpretations: [],
+      findings,
+      ...overrides,
+    };
+  }
+
+  function makeConflict(overrides: Partial<FindingLedgerConflict> = {}): FindingLedgerConflict {
+    return {
+      id: 'C-FA2947446963',
+      status: 'active',
+      findingIds: ['F-0001'],
+      rawFindingIds: [],
+      description: 'Reviewers disagree.',
+      firstSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
+      lastSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
+      ...overrides,
+    };
+  }
+
+  function makeRaw(overrides: Partial<RawFinding> = {}): RawFinding {
+    return {
+      rawFindingId: 'raw-1',
+      stepName: 'arch-review',
+      reviewer: 'arch-review',
+      familyTag: 'bug',
+      severity: 'medium',
+      title: '候補にない初期値が確定結果へ混入する',
+      location: 'src/multi-select.ts:34',
+      description: '初期値が候補と照合されないまま確定される。',
+      ...overrides,
+    };
+  }
+
+  function outputWith(overrides: Partial<FindingManagerOutput>): FindingManagerOutput {
+    return { ...createEmptyManagerOutput(), ...overrides };
+  }
+
+  describe('transferSupersededMatches', () => {
+    it('superseded 対象への match を canonical へ付け替え、既存の canonical match と統合する', () => {
+      const transferred = transferSupersededMatches(outputWith({
+        matches: [
+          { findingId: 'F-0001', rawFindingIds: ['raw-1'] },
+          { findingId: 'F-0006', rawFindingIds: ['raw-6'] },
+          { findingId: 'F-0008', rawFindingIds: ['raw-8', 'raw-1'] },
+        ],
+        duplicateFindings: [
+          { canonicalFindingId: 'F-0001', duplicateFindingIds: ['F-0006', 'F-0008'], evidence: '同一問題の言い換え' },
+        ],
+      }));
+
+      expect(transferred.matches).toEqual([
+        { findingId: 'F-0001', rawFindingIds: ['raw-1', 'raw-6', 'raw-8'] },
+      ]);
+      // 冪等: 再適用しても変化しない
+      expect(transferSupersededMatches(transferred)).toEqual(transferred);
+    });
+  });
+
+  describe('rejectConflictTouchedDuplicates', () => {
+    it('出力内の conflict が duplicate に触れる統合は不採用にする', () => {
+      const result = rejectConflictTouchedDuplicates({
+        output: outputWith({
+          matches: [{ findingId: 'F-0006', rawFindingIds: ['raw-6'] }],
+          conflicts: [{
+            findingIds: ['F-0006'],
+            rawFindingIds: ['raw-6'],
+            description: 'Reviewers disagree about F-0006.',
+          }],
+          duplicateFindings: [
+            { canonicalFindingId: 'F-0001', duplicateFindingIds: ['F-0006'], evidence: '言い換え' },
+          ],
+        }),
+        activeConflictFindingIds: new Set(),
+      });
+
+      expect(result.output.duplicateFindings).toEqual([]);
+      // 転写はしない — match は元の finding のまま
+      expect(result.output.matches).toEqual([{ findingId: 'F-0006', rawFindingIds: ['raw-6'] }]);
+      expect(result.rejectedDuplicateDecisions).toHaveLength(1);
+    });
+
+    it('台帳の active conflict が canonical に触れる統合も不採用にする', () => {
+      const result = rejectConflictTouchedDuplicates({
+        output: outputWith({
+          duplicateFindings: [
+            { canonicalFindingId: 'F-0001', duplicateFindingIds: ['F-0006'], evidence: '言い換え' },
+          ],
+        }),
+        activeConflictFindingIds: new Set(['F-0001']),
+      });
+
+      expect(result.output.duplicateFindings).toEqual([]);
+      expect(result.rejectedDuplicateDecisions).toHaveLength(1);
+    });
+  });
+
+  describe('normalizeMergedManagerPlan（保存直前のフル正規化）', () => {
+    it('後着 conflict が duplicate に触れたら統合を不採用にし、match は元の finding に残す', () => {
+      // codex #3 のケース: assembly 段では conflict なし → 統合受理（未転写）、
+      // ladder マージが F-0006 への conflict を後着させる。
+      const result = normalizeMergedManagerPlan({
+        output: outputWith({
+          matches: [{ findingId: 'F-0006', rawFindingIds: ['raw-6'] }],
+          conflicts: [{
+            findingIds: ['F-0006'],
+            rawFindingIds: ['raw-ladder'],
+            description: 'Ladder interpretation conflicts with F-0006.',
+          }],
+          duplicateFindings: [
+            { canonicalFindingId: 'F-0001', duplicateFindingIds: ['F-0006'], evidence: '言い換え' },
+          ],
+        }),
+        activeConflictFindingIds: new Set(),
+      });
+
+      expect(result.output.duplicateFindings).toEqual([]);
+      // 転写されていない: F-0006 の観測は F-0006 に残り、F-0001 は汚れない
+      expect(result.output.matches).toEqual([{ findingId: 'F-0006', rawFindingIds: ['raw-6'] }]);
+      expect(result.rejections.some((rejection) => rejection.includes('duplicateDecisions'))).toBe(true);
+    });
+
+    it('conflict が無ければ統合を受理し、match をこの1回で canonical へ転写する', () => {
+      const result = normalizeMergedManagerPlan({
+        output: outputWith({
+          matches: [{ findingId: 'F-0006', rawFindingIds: ['raw-6'] }],
+          duplicateFindings: [
+            { canonicalFindingId: 'F-0001', duplicateFindingIds: ['F-0006'], evidence: '言い換え' },
+          ],
+        }),
+        activeConflictFindingIds: new Set(),
+      });
+
+      expect(result.output.duplicateFindings).toHaveLength(1);
+      expect(result.output.matches).toEqual([{ findingId: 'F-0001', rawFindingIds: ['raw-6'] }]);
+      expect(result.rejections).toEqual([]);
+    });
+
+    it('resolved と後着 conflict の併存は canonicalize 規則で conflict へ畳む', () => {
+      // codex #1 のケース: clean confirmation が resolvedFindings、ladder が同じ
+      // finding へ conflict — 排他違反のまま reconciler へ渡すと保存が throw する。
+      const result = normalizeMergedManagerPlan({
+        output: outputWith({
+          resolvedFindings: [{ findingId: 'F-0001', rawFindingIds: ['raw-confirm'], evidence: 'fixed' }],
+          conflicts: [{
+            findingIds: ['F-0001'],
+            rawFindingIds: ['raw-ladder'],
+            description: 'Ladder evidence says it persists.',
+          }],
+        }),
+        activeConflictFindingIds: new Set(),
+      });
+
+      expect(result.output.resolvedFindings).toEqual([]);
+      expect(result.output.conflicts).toHaveLength(1);
+      expect(result.output.conflicts[0]!.rawFindingIds).toEqual(
+        expect.arrayContaining(['raw-ladder', 'raw-confirm']),
+      );
+    });
+
+    it('後着 match が触れた invalidate / dismiss は項目単位で不採用にする', () => {
+      const result = normalizeMergedManagerPlan({
+        output: outputWith({
+          matches: [
+            { findingId: 'F-0001', rawFindingIds: ['raw-ladder-1'] },
+            { findingId: 'F-0002', rawFindingIds: ['raw-ladder-2'] },
+          ],
+          invalidatedFindings: [{ findingId: 'F-0001', evidence: 'location unresolvable' }],
+          dismissedFindings: [{ findingId: 'F-0002', basis: 'out_of_scope', reason: '管轄外' }],
+        }),
+        activeConflictFindingIds: new Set(),
+      });
+
+      expect(result.output.invalidatedFindings).toEqual([]);
+      expect(result.output.dismissedFindings).toEqual([]);
+      expect(result.rejections).toHaveLength(2);
+    });
+
+    it('後着証拠が触れた waive は disputeNote へ降格し finding を open に保つ', () => {
+      const result = normalizeMergedManagerPlan({
+        output: outputWith({
+          matches: [{ findingId: 'F-0001', rawFindingIds: ['raw-ladder'] }],
+          waivedFindings: [{ findingId: 'F-0001', reason: '修正不能', evidence: 'src/a.ts:10' }],
+        }),
+        activeConflictFindingIds: new Set(),
+      });
+
+      expect(result.output.waivedFindings).toEqual([]);
+      expect(result.output.disputeNotes).toEqual([
+        { findingId: 'F-0001', reason: '修正不能', evidence: 'src/a.ts:10' },
+      ]);
+    });
+
+    it('同一 finding 集合の conflict は統合し、部分重複する後着 conflict は不採用にする', () => {
+      const result = normalizeMergedManagerPlan({
+        output: outputWith({
+          conflicts: [
+            { findingIds: ['F-0001'], rawFindingIds: ['raw-a'], description: 'Disagreement A.' },
+            { findingIds: ['F-0001'], rawFindingIds: ['raw-b'], description: 'Disagreement A again.' },
+            { findingIds: ['F-0001', 'F-0002'], rawFindingIds: [], description: 'Partial overlap.' },
+          ],
+        }),
+        activeConflictFindingIds: new Set(),
+      });
+
+      expect(result.output.conflicts).toHaveLength(1);
+      expect(result.output.conflicts[0]!.rawFindingIds.sort()).toEqual(['raw-a', 'raw-b']);
+      expect(result.rejections.some((rejection) => rejection.includes('already referenced by another conflict'))).toBe(true);
+    });
+
+    it('reopened と同じ finding への後着 match は reopened の観測へ畳む', () => {
+      const result = normalizeMergedManagerPlan({
+        output: outputWith({
+          matches: [{ findingId: 'F-0001', rawFindingIds: ['raw-ladder'] }],
+          reopenedFindings: [{ findingId: 'F-0001', rawFindingIds: ['raw-reopen'], evidence: 'waive 前提が崩れた' }],
+        }),
+        activeConflictFindingIds: new Set(),
+      });
+
+      expect(result.output.matches).toEqual([]);
+      expect(result.output.reopenedFindings).toEqual([
+        { findingId: 'F-0001', rawFindingIds: ['raw-reopen', 'raw-ladder'], evidence: 'waive 前提が崩れた' },
+      ]);
+    });
+  });
+
+  describe('reconcileCommitPlan の resolvedConflicts 再生成不採用', () => {
+    it('後着証拠が同じ conflict を再生成する場合、その resolve を不採用にして active を保つ', () => {
+      const conflictId = formatConflictId({ findingIds: ['F-0001'], rawFindingIds: ['raw-old'] });
+      const conflict = makeConflict({ id: conflictId, findingIds: ['F-0001'], rawFindingIds: ['raw-old'] });
+      const freshLedger = makeLedger(
+        [makeFinding({ revision: 1, id: 'F-0001' })],
+        { conflicts: [conflict] },
+      );
+      const ladderRaw = makeRaw({ rawFindingId: 'raw-ladder' });
+
+      const result = reconcileCommitPlan({
+        runInput: {
+          workflowName: 'peer-review',
+          callNamespace: '',
+          runId: 'run-2',
+          timestamp: '2026-07-02T00:00:00.000Z',
+          cwd: process.cwd(),
+          parentStep: { kind: 'agent', name: 'reviewers', persona: 'reviewer', edit: false },
+        } as never,
+        freshLedger,
+        rawFindings: [ladderRaw],
+        managerOutput: outputWith({
+          // manager は canonical conflict を resolve したが、ladder マージが同じ署名の
+          // conflict（F-0001）を後着させた
+          resolvedConflicts: [{ conflictId, evidence: 'adjudicated' }],
+          conflicts: [{
+            findingIds: ['F-0001'],
+            rawFindingIds: ['raw-ladder'],
+            description: 'Ladder evidence disagrees again.',
+          }],
+        }),
+        provisionalSpecs: [],
+        anomalySpecs: [],
+        pendingRejectedObservations: [],
+        rawProvenanceByRawFindingId: new Map([[ladderRaw.rawFindingId,
+          storedRawReconcileProvenance(
+            ladderRaw,
+            computeReviewerStableKey({
+            workflowName: 'peer-review',
+            callNamespace: '',
+            parentStepName: 'reviewers',
+            reviewerPersonaKey: ladderRaw.reviewer,
+            }),
+            computeLineageKey({
+            location: ladderRaw.location!,
+            title: ladderRaw.title,
+            familyTag: ladderRaw.familyTag,
+            }),
+          ),
+        ]]),
+        cleanWire: [],
+        explicitResolvedByMapping: new Map(),
+        explicitPromotedFindingIds: new Set(),
+        recoveryProvisionalRawFindingIds: new Set(),
+        staleRawFindingIds: new Set(),
+        deferredRawFindingIds: new Set(),
+        resolutionRenotifications: [],
+        unsupportedRawFindingReports: [],
+        healthyReviewerStableKeys: new Set(),
+      });
+
+      expect(result.normalizationRejections.some((rejection) => (
+        rejection.includes('C-FA2947446963') && rejection.includes('regenerated')
+      ))).toBe(true);
+      const savedConflict = result.ledger.conflicts.find((entry) => entry.id === 'C-FA2947446963')!;
+      expect(savedConflict.status).toBe('active');
+    });
+  });
+
+  describe('assembleManagerOutput → 保存正規化 → reconciler（ラウンド2事故の再現形）', () => {
+    const ledger = makeLedger([
+      makeFinding({ revision: 1, id: 'F-0001', rawFindingIds: ['raw-old-1'] }),
+      makeFinding({ revision: 1, id: 'F-0006', rawFindingIds: ['raw-old-6'], title: '候補に存在しない初期値が非表示のまま確定結果へ混入する' }),
+      makeFinding({ revision: 1, id: 'F-0008', rawFindingIds: ['raw-old-8'], title: '候補にない初期選択が非表示のまま確定・実行される' }),
+    ]);
+    const persistsRaws = [
+      makeRaw({ rawFindingId: 'raw-6', relation: 'persists', targetFindingId: 'F-0006' }),
+      makeRaw({ rawFindingId: 'raw-8', relation: 'persists', targetFindingId: 'F-0008' }),
+    ];
+
+    it('same + duplicateDecisions の併記が全経路を通って superseded と観測統合に着地する', () => {
+      const assembly = assembleManagerOutput({
+        previousLedger: ledger,
+        residualRawFindings: persistsRaws,
+        decisions: makeDecisions({
+          rawDecisions: [
+            { rawFindingId: 'raw-6', decision: 'same', findingId: 'F-0006', evidence: '同一問題' },
+            { rawFindingId: 'raw-8', decision: 'same', findingId: 'F-0008', evidence: '同一問題' },
+          ],
+          duplicateDecisions: [
+            { canonicalFindingId: 'F-0001', duplicateFindingIds: ['F-0006', 'F-0008'], evidence: '同一問題の言い換え' },
+          ],
+        }),
+        checkMissingDecisions: true,
+      });
+
+      expect(assembly.rejectedDuplicateDecisions).toEqual([]);
+      // assembly 段では未転写（保存直前の1回だけ転写する）
+      expect(assembly.output.matches.map((match) => match.findingId).sort()).toEqual(['F-0006', 'F-0008']);
+      // 決定段の最終検証は転写ビューで通る
+      expect(validateFindingManagerOutput({
+        previousLedger: ledger,
+        rawFindings: persistsRaws,
+        managerOutput: transferSupersededMatches(assembly.output),
+      }).ok).toBe(true);
+
+      const normalized = normalizeMergedManagerPlan({
+        output: assembly.output,
+        activeConflictFindingIds: new Set(),
+      });
+      expect(normalized.output.matches.map((match) => match.findingId)).toEqual(['F-0001']);
+
+      const reconciled = reconcileFindingLedgerStrict({
+        previousLedger: ledger,
+        rawFindings: persistsRaws,
+        managerOutput: normalized.output,
+        provisionalFindings: [],
+        rawFindingDispositions: [],
+        rawProvenanceByRawFindingId: new Map(persistsRaws.map((rawFinding) => [
+          rawFinding.rawFindingId,
+          storedRawReconcileProvenance(
+            rawFinding,
+            computeReviewerStableKey({
+              workflowName: 'peer-review',
+              callNamespace: '',
+              parentStepName: 'reviewers',
+              reviewerPersonaKey: rawFinding.reviewer,
+            }),
+            computeLineageKey({
+              targetFindingId: rawFinding.targetFindingId!,
+              location: rawFinding.location!,
+              title: rawFinding.title,
+              familyTag: rawFinding.familyTag,
+            }),
+          ),
+        ])),
+        context: { workflowName: 'peer-review', stepName: 'reviewers', runId: 'run-2', timestamp: '2026-07-02T00:00:00.000Z' },
+      });
+      const statusById = new Map(reconciled.findings.map((finding) => [finding.id, finding.status]));
+      expect(statusById.get('F-0001')).toBe('open');
+      expect(statusById.get('F-0006')).toBe('superseded');
+      expect(statusById.get('F-0008')).toBe('superseded');
+      const canonical = reconciled.findings.find((finding) => finding.id === 'F-0001')!;
+      expect(canonical.rawFindingIds).toEqual(
+        expect.arrayContaining(['raw-old-1', 'raw-old-6', 'raw-old-8', 'raw-6', 'raw-8']),
+      );
+    });
+
+    it('conflict 判断が duplicate に触れる場合は統合だけを不採用にし、出力全体は有効に保つ', () => {
+      const result = assembleManagerOutput({
+        previousLedger: ledger,
+        residualRawFindings: persistsRaws,
+        decisions: makeDecisions({
+          rawDecisions: [
+            { rawFindingId: 'raw-6', decision: 'conflict', findingId: 'F-0006', evidence: '解消済みとの主張と矛盾' },
+            { rawFindingId: 'raw-8', decision: 'same', findingId: 'F-0008', evidence: '同一問題' },
+          ],
+          duplicateDecisions: [
+            { canonicalFindingId: 'F-0001', duplicateFindingIds: ['F-0006', 'F-0008'], evidence: '同一問題の言い換え' },
+          ],
+        }),
+        checkMissingDecisions: true,
+      });
+
+      expect(result.output.duplicateFindings).toEqual([]);
+      expect(result.rejectedDuplicateDecisions).toHaveLength(1);
+      expect(validateFindingManagerOutput({
+        previousLedger: ledger,
+        rawFindings: persistsRaws,
+        managerOutput: transferSupersededMatches(result.output),
+      }).ok).toBe(true);
+    });
+  });
+
+  describe('invalidate と同ラウンド証拠の衝突', () => {
+    it('このラウンドに match された finding への invalidate は不採用にする', () => {
+      const ledger = makeLedger([makeFinding({ revision: 1, id: 'F-0001' })]);
+      const raw = makeRaw({ rawFindingId: 'raw-1', relation: 'persists', targetFindingId: 'F-0001' });
+      const result = assembleManagerOutput({
+        previousLedger: ledger,
+        residualRawFindings: [raw],
+        decisions: makeDecisions({
+          rawDecisions: [{ rawFindingId: 'raw-1', decision: 'same', findingId: 'F-0001', evidence: '再観測' }],
+          invalidateDecisions: [{ findingId: 'F-0001', evidence: 'location が現行コードに無い' }],
+        }),
+        checkMissingDecisions: true,
+        invalidLocationCandidateFindingIds: new Set(['F-0001']),
+      });
+
+      expect(result.output.invalidatedFindings).toEqual([]);
+      expect(result.rejectedInvalidateDecisions).toHaveLength(1);
+    });
+
+    it('active conflict が参照する finding への invalidate は不採用にする', () => {
+      const ledger = makeLedger(
+        [makeFinding({ revision: 1, id: 'F-0001' })],
+        { conflicts: [makeConflict({ findingIds: ['F-0001'] })] },
+      );
+      const result = assembleManagerOutput({
+        previousLedger: ledger,
+        residualRawFindings: [],
+        decisions: makeDecisions({
+          invalidateDecisions: [{ findingId: 'F-0001', evidence: 'location が現行コードに無い' }],
+        }),
+        checkMissingDecisions: true,
+        invalidLocationCandidateFindingIds: new Set(['F-0001']),
+      });
+
+      expect(result.output.invalidatedFindings).toEqual([]);
+      expect(result.rejectedInvalidateDecisions).toHaveLength(1);
+    });
+  });
+});
+
+describe('item 3/6: duplicateDecisions merges duplicates into a canonical finding', () => {
+  it('Given F-0011/F-0017/F-0018-style duplicates When the manager issues duplicateDecisions Then the canonical absorbs raw/reviewer evidence and duplicates become superseded, reducing the open count', () => {
+    const canonical = makeFinding({ revision: 1,
+      id: 'F-0011',
+      title: 'Distributed lock cleanup gap',
+      location: 'src/lock/manager.ts:80',
+      reviewers: ['robustness-review'],
+      rawFindingIds: ['raw-f11'],
+    });
+    const dupA = makeFinding({ revision: 1,
+      id: 'F-0017',
+      title: 'Lock handle not released under contention',
+      location: 'src/lock/manager.ts:140',
+      reviewers: ['concurrency-review'],
+      rawFindingIds: ['raw-f17'],
+    });
+    const dupB = makeFinding({ revision: 1,
+      id: 'F-0018',
+      title: 'Distributed lock leak on cleanup failure',
+      location: 'src/lock/cleanup.ts:12',
+      reviewers: ['reliability-review'],
+      rawFindingIds: ['raw-f18'],
+    });
+    const otherOpen = makeFinding({ revision: 1, id: 'F-0002', title: 'Unrelated issue', location: 'src/other.ts:1', rawFindingIds: [] });
+    const ledger = makeLedger({
+      nextId: 19,
+      rawFindings: [
+        makeRawFinding({ rawFindingId: 'raw-f11', familyTag: 'concurrency' }),
+        makeRawFinding({ rawFindingId: 'raw-f17', familyTag: 'race-condition' }),
+        makeRawFinding({ rawFindingId: 'raw-f18', familyTag: 'resource-leak' }),
+      ],
+      findings: [canonical, dupA, dupB, otherOpen],
+    });
+
+    const before = buildFindingsRuleContext(ledger);
+    expect(before.open.count).toBe(4);
+
+    const assembly = assembleManagerOutput({
+      previousLedger: ledger,
+      residualRawFindings: [],
+      decisions: makeDecisions({
+        duplicateDecisions: [{
+          canonicalFindingId: 'F-0011',
+          duplicateFindingIds: ['F-0017', 'F-0018'],
+          evidence: 'All three describe the same distributed lock cleanup gap; reviewers used different familyTag values and lines.',
+        }],
+      }),
+    });
+    expect(assembly.rejectedDuplicateDecisions).toEqual([]);
+    expect(assembly.output.duplicateFindings).toEqual([{
+      canonicalFindingId: 'F-0011',
+      duplicateFindingIds: ['F-0017', 'F-0018'],
+      evidence: 'All three describe the same distributed lock cleanup gap; reviewers used different familyTag values and lines.',
+    }]);
+
+    const next = reconcileFindingLedger({
+      previousLedger: ledger,
+      rawFindings: [],
+      managerOutput: assembly.output,
+      context: { workflowName: 'peer-review', stepName: 'reviewers', runId: 'run-2', timestamp: '2026-07-10T00:00:00.000Z' },
+    });
+
+    const nextCanonical = next.findings.find((f) => f.id === 'F-0011');
+    const nextDupA = next.findings.find((f) => f.id === 'F-0017');
+    const nextDupB = next.findings.find((f) => f.id === 'F-0018');
+    expect(nextCanonical?.status).toBe('open');
+    expect(nextCanonical?.rawFindingIds.sort()).toEqual(['raw-f11', 'raw-f17', 'raw-f18']);
+    expect(nextCanonical?.reviewers.sort()).toEqual(['concurrency-review', 'reliability-review', 'robustness-review']);
+    expect(nextDupA?.status).toBe('superseded');
+    expect(nextDupA?.lifecycle).toBe('superseded');
+    expect(nextDupA?.supersededByFindingId).toBe('F-0011');
+    expect(nextDupB?.status).toBe('superseded');
+    expect(nextDupB?.supersededByFindingId).toBe('F-0011');
+
+    const after = buildFindingsRuleContext(next);
+    expect(after.open.count).toBe(2); // F-0011 (merged) + F-0002; F-0017/F-0018 dropped out of open.
+  });
+
+  it('Given a duplicateDecisions entry with an unknown duplicate finding id When assembled Then it is rejected and nothing is applied', () => {
+    const ledger = makeLedger({ findings: [makeFinding({ revision: 1, id: 'F-0011' })] });
+    const result = assembleManagerOutput({
+      previousLedger: ledger,
+      residualRawFindings: [],
+      decisions: makeDecisions({
+        duplicateDecisions: [{ canonicalFindingId: 'F-0011', duplicateFindingIds: ['F-9999'], evidence: 'x' }],
+      }),
+    });
+    expect(result.output.duplicateFindings).toEqual([]);
+    expect(result.rejectedDuplicateDecisions).toHaveLength(1);
+  });
+
+  // duplicate 統合の受け皿（canonical）を同じ出力で waive すると、統合された
+  // 指摘ごとゲートから消える。canonical も waive/note 併存禁止集合
+  // （transitionedFindingIds）に載せて不採用にする。
+  it('Given a duplicateDecisions canonical that is also waived in the same output When assembled Then the waive is rejected', () => {
+    const ledger = makeLedger({
+      findings: [makeFinding({ revision: 1, id: 'F-0001' }), makeFinding({ revision: 1, id: 'F-0002', location: 'src/b.ts:1' })],
+    });
+    const claim = '## Disputed Findings\n- findingId: F-0001\n  reason: frozen contract\n  evidence: src/a.ts:10';
+    const result = assembleManagerOutput({
+      previousLedger: ledger,
+      residualRawFindings: [],
+      decisions: makeDecisions({
+        duplicateDecisions: [{ canonicalFindingId: 'F-0001', duplicateFindingIds: ['F-0002'], evidence: 'same issue' }],
+        disputeDecisions: [{ findingId: 'F-0001', decision: 'waive', reason: 'frozen contract', evidence: 'src/a.ts:10' }],
+      }),
+      priorStepResponseText: claim,
+    });
+
+    expect(result.output.duplicateFindings).toHaveLength(1);
+    expect(result.output.waivedFindings).toEqual([]);
+    expect(result.rejectedDisputeDecisions).toHaveLength(1);
+    expect(result.rejectedDisputeDecisions[0]?.reason).toContain('state transition');
+    expect(result.rejectedRawDecisions).toEqual([expect.objectContaining({
+      findingId: 'F-0001',
+      decision: 'waive',
+    })]);
+  });
+
+  it('Given a duplicateDecisions entry where the canonical is also a duplicate of another entry When assembled Then the cyclic entry is rejected', () => {
+    const ledger = makeLedger({
+      findings: [makeFinding({ revision: 1, id: 'F-0001' }), makeFinding({ revision: 1, id: 'F-0002', location: 'src/b.ts:1' }), makeFinding({ revision: 1, id: 'F-0003', location: 'src/c.ts:1' })],
+    });
+    const result = assembleManagerOutput({
+      previousLedger: ledger,
+      residualRawFindings: [],
+      decisions: makeDecisions({
+        duplicateDecisions: [
+          { canonicalFindingId: 'F-0001', duplicateFindingIds: ['F-0002'], evidence: 'a' },
+          { canonicalFindingId: 'F-0002', duplicateFindingIds: ['F-0003'], evidence: 'b' },
+        ],
+      }),
+    });
+    expect(result.output.duplicateFindings).toHaveLength(1);
+    expect(result.output.duplicateFindings[0]?.canonicalFindingId).toBe('F-0001');
+    expect(result.rejectedDuplicateDecisions).toHaveLength(1);
+    expect(result.rejectedDuplicateDecisions[0]?.reason).toContain('cycle');
+  });
+});
+
+// B4: 収束回帰用の F-0016 raw 群（AI-PERSIST-F-0011-ROUTING /
+// AI-PERSIST-F-0006-ROUTING / AI-PERSIST-F-0017-ROUTING）の replay。旧エンジンの
+// familyTag + exact location 機械マージは、この3件（同じ familyTag=resource-leak、
+// 同じ routing.ts:302、意味は F-0006 系のリーク主張と F-0011/F-0017 系の分散
+// cleanup 懸念の2系統）を壊れた混成 finding F-0016 に畳んだ。新エンジンでは
+// 機械分類 → assembly → reconcile を通しても1つの finding に再マージされない。
+describe('B4: F-0016 raw-group replay against a coherent synthetic ledger', () => {
+  const fixturePath = fileURLToPath(new URL('./fixtures/finding-convergence-replay-ledger.json', import.meta.url));
+
+  function loadFixtureLedger(): FindingLedger {
+    return parseFindingLedger(JSON.parse(readFileSync(fixturePath, 'utf-8')));
+  }
+
+  function pickRaw(ledger: FindingLedger, idSuffix: string): RawFinding {
+    const raw = ledger.rawFindings.find((r) => r.rawFindingId.endsWith(idSuffix));
+    expect(raw, `fixture raw ${idSuffix}`).toBeDefined();
+    return raw!;
+  }
+
+  const RAW_SUFFIXES = ['AI-PERSIST-F-0011-ROUTING', 'AI-PERSIST-F-0006-ROUTING', 'AI-PERSIST-F-0017-ROUTING'] as const;
+  const HISTORICAL_REVISION_EVENTS = {
+    'F-0006': ['created'],
+    'F-0011': ['created', 'persisted-1', 'persisted-2', 'persisted-3', 'dispute-1', 'dispute-2', 'dispute-3'],
+    'F-0016': ['created', 'persisted-with-three-raws', 'dispute-1'],
+    'F-0017': ['created', 'dispute-1'],
+  } as const;
+
+  it('preserves the historical finding meanings and exact revision counts in the reduced replay fixture', () => {
+    const ledger = loadFixtureLedger();
+
+    expect(Object.fromEntries(ledger.findings.map((finding) => [finding.id, finding.revision]))).toEqual(
+      Object.fromEntries(
+        Object.entries(HISTORICAL_REVISION_EVENTS).map(([findingId, events]) => [
+          findingId,
+          events.length,
+        ]),
+      ),
+    );
+    expect(ledger.findings.find((finding) => finding.id === 'F-0006')).toMatchObject({
+      title: 'interactive --pr で PR 画像の一時ディレクトリが解放されない',
+      location: 'src/app/cli/routing.ts:296',
+      reviewers: ['merge-readiness-review'],
+    });
+    expect(ledger.findings.find((finding) => finding.id === 'F-0011')).toMatchObject({
+      title: 'Fragile distributed cleanup pattern for image attachments',
+      location: 'src/app/cli/routing.ts:299',
+      reviewers: ['ai-antipattern-review'],
+    });
+    expect(ledger.findings.find((finding) => finding.id === 'F-0016')?.rawFindingIds).toEqual([
+      '20260710-145911-pr-task-attachments-takt-add-p:reviewers:9:ai-antipattern-review:F-0006-REVISITED',
+      '20260710-145911-pr-task-attachments-takt-add-p:reviewers:10:ai-antipattern-review:AI-PERSIST-F-0011-ROUTING',
+      '20260710-145911-pr-task-attachments-takt-add-p:reviewers:10:ai-antipattern-review:AI-PERSIST-F-0006-ROUTING',
+      '20260710-145911-pr-task-attachments-takt-add-p:reviewers:10:ai-antipattern-review:AI-PERSIST-F-0017-ROUTING',
+    ]);
+    expect(ledger.conflicts).toHaveLength(1);
+    expect(ledger.conflicts[0]?.id).toBe(formatConflictId(ledger.conflicts[0]!));
+  });
+
+  it('preserves the three historical raw claims verbatim except for final-contract fields', () => {
+    const ledger = loadFixtureLedger();
+    const raws = RAW_SUFFIXES.map((suffix) => pickRaw(ledger, suffix));
+
+    expect(raws.map((raw) => raw.rawFindingId)).toEqual([
+      '20260710-145911-pr-task-attachments-takt-add-p:reviewers:10:ai-antipattern-review:AI-PERSIST-F-0011-ROUTING',
+      '20260710-145911-pr-task-attachments-takt-add-p:reviewers:10:ai-antipattern-review:AI-PERSIST-F-0006-ROUTING',
+      '20260710-145911-pr-task-attachments-takt-add-p:reviewers:10:ai-antipattern-review:AI-PERSIST-F-0017-ROUTING',
+    ]);
+    expect(raws.map((raw) => raw.targetFindingId)).toEqual(['F-0011', 'F-0006', 'F-0017']);
+    expect(raws.map((raw) => raw.reviewer)).toEqual([
+      'ai-antipattern-review',
+      'ai-antipattern-review',
+      'ai-antipattern-review',
+    ]);
+    expect(raws[1]).toMatchObject({
+      familyTag: 'resource-leak',
+      location: 'src/app/cli/routing.ts:302',
+      title: 'interactive --pr mode cleanup consistency risk persists',
+      suggestion: 'PR添付のリソース管理をセッション添付とは明確に分離し、`dispatchConversationAction` の完了後、結果に関わらず `prCleanupAttachments` が確実に一度だけ呼ばれることを保証する構造にしてください。',
+    });
+    const historicalMeaning = raws.map(({
+      rawFindingId,
+      relation,
+      targetFindingId,
+      familyTag,
+      location,
+      title,
+      description,
+      suggestion,
+      reviewer,
+    }) => ({
+      rawFindingId,
+      relation,
+      targetFindingId,
+      familyTag,
+      location,
+      title,
+      description,
+      suggestion,
+      reviewer,
+    }));
+    expect(createHash('sha256').update(JSON.stringify(historicalMeaning)).digest('hex')).toBe(
+      'd9981ca6efa9e46bf7d8636a804c3a2125cb49fb68b9e56d7af7c1384c0126bd',
+    );
+  });
+
+  it('Given the three F-0016 replay raws with explicit targets When classified, assembled and reconciled Then each lands on its own target finding and no single finding re-merges them', () => {
+    const ledger = loadFixtureLedger();
+    // 現行 relation/targetFindingId を持つ実データ。
+    // rawFindingId だけ replay 用に付け替える（台帳内の既存 id と衝突するため）。
+    const replayRaws = RAW_SUFFIXES.map((suffix) => ({
+      ...pickRaw(ledger, suffix),
+      rawFindingId: `${pickRaw(ledger, suffix).rawFindingId}:replay`,
+    }));
+    expect(replayRaws.map((raw) => raw.relation)).toEqual(['persists', 'persists', 'persists']);
+    // 3件とも同じ familyTag・同じ location だが、対象は3つの別 finding。
+    expect(new Set(replayRaws.map((raw) => raw.familyTag)).size).toBe(1);
+    expect(new Set(replayRaws.map((raw) => raw.location)).size).toBe(1);
+
+    const mechanical = classifyRawFindingsMechanically({ previousLedger: ledger, rawFindings: replayRaws });
+    // 明示参照（persists × open target）はすべて機械 same。ただし対象は別々。
+    expect(mechanical.residualRawFindings).toEqual([]);
+    expect(new Set(mechanical.output.matches.map((match) => match.findingId)))
+      .toEqual(new Set(['F-0011', 'F-0006', 'F-0017']));
+
+    const assembly = assembleManagerOutput({
+      previousLedger: ledger,
+      residualRawFindings: [],
+      decisions: makeDecisions(),
+      mechanicalOutput: mechanical.output,
+    });
+    expect(assembly.output.matches).toHaveLength(3);
+
+    const next = reconcileFindingLedger({
+      previousLedger: ledger,
+      rawFindings: replayRaws,
+      managerOutput: assembly.output,
+      context: { workflowName: ledger.workflowName, stepName: 'reviewers', runId: 'run-replay', timestamp: '2026-07-11T00:00:00.000Z' },
+    });
+
+    // 新しい混成 finding は作られない。
+    expect(next.findings).toHaveLength(ledger.findings.length);
+    // 各 replay raw はそれぞれの対象 finding に付く。
+    const findingFor = (id: string) => next.findings.find((f) => f.id === id)!;
+    expect(findingFor('F-0011').rawFindingIds).toContain(replayRaws[0]!.rawFindingId);
+    expect(findingFor('F-0006').rawFindingIds).toContain(replayRaws[1]!.rawFindingId);
+    expect(findingFor('F-0017').rawFindingIds).toContain(replayRaws[2]!.rawFindingId);
+    // どの finding も replay raw を2件以上抱えない（単一 finding への再マージなし）。
+    const replayIds = new Set(replayRaws.map((raw) => raw.rawFindingId));
+    for (const finding of next.findings) {
+      const held = finding.rawFindingIds.filter((id) => replayIds.has(id));
+      expect(held.length, `finding ${finding.id} must not absorb multiple replay raws`).toBeLessThanOrEqual(1);
+    }
+    // 元凶だった F-0016 には1件も付かない。
+    expect(findingFor('F-0016').rawFindingIds.filter((id) => replayIds.has(id))).toEqual([]);
+  });
+
+  it('Given the same real raws without explicit targets (the round that created F-0016) When the manager judges them as distinct findings Then assembly and reconcile do not re-merge them into one finding', () => {
+    // F-0016 が立つ前のラウンドを再現: F-0016（と F-0016 を参照する conflict）を
+    // 除いた実台帳に対し、3件の raw が target 引用なし（relation new）で届く。
+    const base = loadFixtureLedger();
+    const ledger: FindingLedger = {
+      ...base,
+      findings: base.findings.filter((finding) => finding.id !== 'F-0016'),
+      conflicts: base.conflicts.filter((conflict) => !conflict.findingIds.includes('F-0016')),
+    };
+    const replayRaws = RAW_SUFFIXES.map((suffix) => {
+      const original = pickRaw(base, suffix);
+      const { targetFindingId: _dropped, ...rest } = original;
+      return {
+        ...rest,
+        rawFindingId: `${original.rawFindingId}:no-target`,
+        relation: 'new' as const,
+      };
+    });
+
+    // 同じ familyTag・同じ行でも、内容（title/description）が違うため機械分類は
+    // 畳まず、全件 manager 送りになる（F-0016 の再現条件）。
+    const mechanical = classifyRawFindingsMechanically({ previousLedger: ledger, rawFindings: replayRaws });
+    expect(mechanical.output.matches).toEqual([]);
+    expect(mechanical.residualRawFindings).toHaveLength(3);
+
+    // manager の意味判断: F-0011 系は F-0011 へ same、F-0006 系は F-0006 へ same、
+    // F-0017 系は新規（別問題）と判断。
+    const assembly = assembleManagerOutput({
+      previousLedger: ledger,
+      residualRawFindings: replayRaws,
+      decisions: makeDecisions({
+        rawDecisions: [
+          { rawFindingId: replayRaws[0]!.rawFindingId, decision: 'same', findingId: 'F-0011', evidence: 'Same distributed-cleanup concern as F-0011.' },
+          { rawFindingId: replayRaws[1]!.rawFindingId, decision: 'same', findingId: 'F-0006', evidence: 'Same temp-dir leak claim as F-0006.' },
+          { rawFindingId: replayRaws[2]!.rawFindingId, decision: 'new', evidence: 'Release-timing opacity is a distinct problem.' },
+        ],
+      }),
+      mechanicalOutput: mechanical.output,
+      checkMissingDecisions: true,
+    });
+    expect(assembly.rejectedRawDecisions).toEqual([]);
+    // manager の判断が post-assembly で覆されない: 2つの別 finding への match +
+    // 1つの新規（path+title の自動リダイレクトが復活していれば new が same に
+    // 付け替えられてここが崩れる — codex ブロッカー B3 の回帰ガード）。
+    expect(new Set(assembly.output.matches.map((match) => match.findingId))).toEqual(new Set(['F-0011', 'F-0006']));
+    expect(assembly.output.newFindings).toHaveLength(1);
+
+    const next = reconcileFindingLedger({
+      previousLedger: ledger,
+      rawFindings: replayRaws,
+      managerOutput: assembly.output,
+      context: { workflowName: ledger.workflowName, stepName: 'reviewers', runId: 'run-replay-2', timestamp: '2026-07-11T00:00:00.000Z' },
+    });
+
+    // 新規1件だけ増える（混成 finding は生まれない）。
+    expect(next.findings).toHaveLength(ledger.findings.length + 1);
+    const replayIds = new Set(replayRaws.map((raw) => raw.rawFindingId));
+    for (const finding of next.findings) {
+      const held = finding.rawFindingIds.filter((id) => replayIds.has(id));
+      expect(held.length, `finding ${finding.id} must not absorb multiple replay raws`).toBeLessThanOrEqual(1);
+    }
+  });
+});
+

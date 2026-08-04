@@ -37,8 +37,9 @@ vi.mock('../shared/ui/index.js', () => ({
 }));
 
 import { autoCommitAndPush } from '../infra/task/autoCommit.js';
-import { mergeBranch, tryMergeBranch } from '../features/tasks/list/taskBranchLifecycleActions.js';
+import { deleteBranch, mergeBranch, tryMergeBranch } from '../features/tasks/list/taskBranchLifecycleActions.js';
 import { showDiffAndPromptActionForTask } from '../features/tasks/list/taskDiffActions.js';
+import { listTaktBranches } from '../infra/task/branchList.js';
 
 interface RepoFixture {
   rootDir: string;
@@ -163,5 +164,58 @@ describe('completed task actions with root branch materialized on completion', (
     expect(git(fixture.rootDir, ['status', '--porcelain'])).toBe('');
     expect(git(fixture.rootDir, ['show', 'HEAD:slides/deck.md'])).toContain('# slides');
     expect(git(fixture.rootDir, ['branch', '--list', fixture.branch])).toBe('');
+  });
+});
+
+describe('branch deletion', () => {
+  let fixture: RepoFixture;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSelectOption.mockResolvedValue(null);
+    fixture = setupRepoFixture();
+  });
+
+  afterEach(() => {
+    fixture.cleanup();
+  });
+
+  it('should delete regular branches normally', () => {
+    const repoDir = fixture.rootDir;
+    const defaultBranch = git(repoDir, ['branch', '--show-current']);
+
+    // Create a regular local branch
+    const branchName = 'takt/20260203T1002-regular-branch';
+    execFileSync('git', ['checkout', '-b', branchName], { cwd: repoDir, stdio: 'pipe' });
+
+    // Make a change
+    writeFileSync(join(repoDir, 'test.txt'), 'test content');
+    execFileSync('git', ['add', 'test.txt'], { cwd: repoDir, stdio: 'pipe' });
+    execFileSync('git', ['commit', '-m', 'Test change'], { cwd: repoDir, stdio: 'pipe' });
+
+    // Switch back to main
+    execFileSync('git', ['checkout', defaultBranch || 'main'], { cwd: repoDir, stdio: 'pipe' });
+
+    // Verify branch exists
+    const branchesBefore = listTaktBranches(repoDir);
+    const foundBefore = branchesBefore.find(b => b.branch === branchName);
+    expect(foundBefore).toBeDefined();
+    expect(foundBefore?.worktreePath).toBeUndefined();
+
+    // Delete branch
+    const result = deleteBranch(repoDir, {
+      info: foundBefore!,
+      filesChanged: 1,
+      taskSlug: '20260203T1002-regular-branch',
+      originalInstruction: 'Test instruction',
+    });
+
+    // Verify deletion succeeded
+    expect(result).toBe(true);
+
+    // Verify branch is no longer listed
+    const branchesAfter = listTaktBranches(repoDir);
+    const foundAfter = branchesAfter.find(b => b.branch === branchName);
+    expect(foundAfter).toBeUndefined();
   });
 });

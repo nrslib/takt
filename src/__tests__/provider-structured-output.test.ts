@@ -587,3 +587,25 @@ describe('MockProvider — structured output', () => {
     expect(mockLogger.info).not.toHaveBeenCalledWith('Mock provider does not support imageAttachments; ignoring');
   });
 });
+
+describe('ClaudeProvider abortSignal wiring', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockCallClaude.mockResolvedValue(doneResponse('coder'));
+  });
+
+  it('ProviderCallOptions.abortSignal を Claude call options に渡す', async () => {
+    const provider = new ClaudeProvider();
+    const agent = provider.setup({ name: 'coder' });
+    const controller = new AbortController();
+
+    await agent.call('test prompt', {
+      cwd: '/tmp/project',
+      abortSignal: controller.signal,
+    });
+
+    expect(mockCallClaude).toHaveBeenCalledTimes(1);
+    const callOptions = mockCallClaude.mock.calls[0]?.[2];
+    expect(callOptions).toHaveProperty('abortSignal', controller.signal);
+  });
+});

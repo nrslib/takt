@@ -14,7 +14,14 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { WorkflowConfig, WorkflowStep } from '../core/models/index.js';
+import { tmpdir } from 'node:os';
+import { EventEmitter } from 'node:events';
+import type { WorkflowConfig, WorkflowStep, OutputContractEntry } from '../core/models/index.js';
+import type {
+  StepSpanParams,
+  WorkflowSpanParams,
+} from '../core/workflow/observability/workflowSpans.js';
+import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 
 // --- Mock setup (must be before imports that use these modules) ---
 
@@ -41,13 +48,35 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   generateReportDir: vi.fn().mockReturnValue('test-report-dir'),
 }));
 
+// Span recorder for the trace task metadata tests. Plain pass-through functions
+// (not vi.fn) so vi.resetAllMocks() in other describes cannot break them.
+const { workflowSpanParams, stepSpanParams } = vi.hoisted(() => ({
+  workflowSpanParams: [] as WorkflowSpanParams[],
+  stepSpanParams: [] as StepSpanParams[],
+}));
+
+vi.mock('../core/workflow/observability/workflowSpans.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/observability/workflowSpans.js')>();
+  return {
+    ...actual,
+    runWithWorkflowSpan: async (params: WorkflowSpanParams, execute: () => Promise<unknown>) => {
+      workflowSpanParams.push(params);
+      return execute();
+    },
+    runWithStepSpan: async (params: StepSpanParams, execute: () => Promise<unknown>) => {
+      stepSpanParams.push(params);
+      return execute();
+    },
+  };
+});
+
 // --- Imports (after mocks) ---
 
-import { WorkflowEngine } from '../core/workflow/index.js';
+import { WorkflowEngine, isOutputContractItem } from '../core/workflow/index.js';
 import { runAgent } from '../agents/runner.js';
 import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDetectionExhaustedError.js';
-import { runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
+import { runReportPhase, runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
 import { StructuredOutputSchemaError } from '../core/workflow/engine/structured-output-schema-validator.js';
 import { parsePhaseExecutionId } from '../shared/utils/phaseExecutionId.js';
 import {
@@ -801,6 +830,135 @@ describe('WorkflowEngine Integration: Happy Path', () => {
         expect(call[2]).toBe('execute');
       }
     });
+
+    it('should only run Phase 1 when step has no report and no tag rules', async () => {
+      const config: WorkflowConfig = {
+        name: 'phase1-only',
+        maxSteps: 5,
+        initialStep: 'step',
+        steps: [
+          makeStep('step', {
+            rules: [
+              makeRule('when(true)', 'COMPLETE'),
+              makeRule('when(false)', 'ABORT'),
+            ],
+          }),
+        ],
+      };
+      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock' });
+
+      mockRunAgentSequence([
+        makeResponse({ persona: 'step', content: 'Done.' }),
+      ]);
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'ai_judge' },
+      ]);
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('completed');
+      expect(runReportPhase).not.toHaveBeenCalled();
+      expect(runStatusJudgmentPhase).not.toHaveBeenCalled();
+    });
+
+    it('should run Phase 1 + Phase 2 when step has report but no tag rules', async () => {
+      const config: WorkflowConfig = {
+        name: 'phase1-2',
+        maxSteps: 5,
+        initialStep: 'step',
+        steps: [
+          makeStep('step', {
+            outputContracts: [{ name: 'test-report.md', format: 'test-report', useJudge: true }],
+            rules: [
+              makeRule('when(true)', 'COMPLETE'),
+              makeRule('when(false)', 'ABORT'),
+            ],
+          }),
+        ],
+      };
+      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock' });
+
+      mockRunAgentSequence([
+        makeResponse({ persona: 'step', content: 'Done.' }),
+      ]);
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'ai_judge' },
+      ]);
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('completed');
+      expect(runReportPhase).toHaveBeenCalledTimes(1);
+      expect(runStatusJudgmentPhase).not.toHaveBeenCalled();
+    });
+
+    it('should run Phase 1 + Phase 3 when step has tag-based rules but no report', async () => {
+      const config: WorkflowConfig = {
+        name: 'phase1-3',
+        maxSteps: 5,
+        initialStep: 'step',
+        steps: [
+          makeStep('step', {
+            rules: [
+              makeRule('Done', 'COMPLETE'),
+              makeRule('Not done', 'ABORT'),
+            ],
+          }),
+        ],
+      };
+      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock' });
+
+      vi.mocked(runStatusJudgmentPhase).mockResolvedValue({ label: 'Done', method: 'structured_output' });
+      mockRunAgentSequence([
+        makeResponse({ persona: 'step', content: 'Agent completed the work.' }),
+      ]);
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+      ]);
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('completed');
+      expect(runReportPhase).not.toHaveBeenCalled();
+      expect(runStatusJudgmentPhase).toHaveBeenCalledTimes(1);
+    });
+
+    it('should run Phase 1 → Phase 2 → Phase 3 in order when step has report and tag rules', async () => {
+      const config: WorkflowConfig = {
+        name: 'all-phases',
+        maxSteps: 5,
+        initialStep: 'step',
+        steps: [
+          makeStep('step', {
+            outputContracts: [{ name: 'test-report.md', format: 'test-report', useJudge: true }],
+            rules: [
+              makeRule('Done', 'COMPLETE'),
+              makeRule('Not done', 'ABORT'),
+            ],
+          }),
+        ],
+      };
+      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock' });
+
+      vi.mocked(runStatusJudgmentPhase).mockResolvedValue({ label: 'Done', method: 'structured_output' });
+      mockRunAgentSequence([
+        makeResponse({ persona: 'step', content: 'Agent completed the work.' }),
+      ]);
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+      ]);
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('completed');
+      expect(runReportPhase).toHaveBeenCalledTimes(1);
+      expect(runStatusJudgmentPhase).toHaveBeenCalledTimes(1);
+
+      // Verify ordering: report phase is called before status judgment
+      const reportCallOrder = vi.mocked(runReportPhase).mock.invocationCallOrder[0]!;
+      const judgmentCallOrder = vi.mocked(runStatusJudgmentPhase).mock.invocationCallOrder[0]!;
+      expect(reportCallOrder).toBeLessThan(judgmentCallOrder);
+    });
   });
 
   // =====================================================
@@ -968,5 +1126,253 @@ describe('WorkflowEngine Integration: Happy Path', () => {
       const startedSteps = startFn.mock.calls.map(call => (call[0] as WorkflowStep).name);
       expect(startedSteps[0]).toBe('plan');
     });
+  });
+});
+
+describe('WorkflowEngine trace task metadata', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    applyDefaultMocks();
+    workflowSpanParams.length = 0;
+    stepSpanParams.length = 0;
+    tmpDir = createTestTmpDir();
+    vi.mocked(runAgent).mockResolvedValue({
+      persona: 'coder',
+      status: 'done',
+      content: 'done',
+      timestamp: new Date('2026-06-14T00:00:00.000Z'),
+    });
+    vi.mocked(mockRuleEvaluation).mockReturnValue({ index: 0, method: 'auto_select' });
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('passes trace task metadata and resolved run directory to workflow and step spans', async () => {
+    const config: WorkflowConfig = {
+      name: 'trace-metadata-workflow',
+      initialStep: 'implement',
+      maxSteps: 3,
+      steps: [{
+        name: 'implement',
+        persona: 'coder',
+        instruction: 'Implement',
+        rules: [makeRule('done', 'COMPLETE')],
+      }],
+    };
+    const traceTaskMetadata = {
+      taskName: 'task-827',
+      taskSlug: 'add-trace-task-metadata',
+      taskSummary: 'Add trace task metadata',
+      taskSource: 'issue',
+      issueNumber: 827,
+      gitBranch: 'takt/827/add-trace-task-metadata',
+      gitBaseBranch: 'main',
+      worktreePath: join(tmpDir, 'worktree'),
+    };
+    const options = {
+      projectCwd: tmpDir,
+      provider: 'mock' as const,
+      observability: {
+        enabled: true,
+        monitor: false,
+        sessionLogExporter: false,
+        usageEventsPhase: false,
+      },
+      observabilityRunId: 'test-report-dir',
+      reportDirName: 'test-report-dir',
+      traceTaskMetadata,
+    } satisfies WorkflowEngineOptions & {
+      traceTaskMetadata: typeof traceTaskMetadata;
+    };
+
+    const engine = new WorkflowEngine(config, tmpDir, 'Task body', options);
+    await engine.run();
+
+    const expectedMetadata = {
+      ...traceTaskMetadata,
+      runDir: join(tmpDir, '.takt', 'runs', 'test-report-dir'),
+    };
+    expect(workflowSpanParams[0]).toMatchObject({
+      enabled: true,
+      runId: 'test-report-dir',
+      traceTaskMetadata: expectedMetadata,
+    });
+    expect(stepSpanParams[0]).toMatchObject({
+      enabled: true,
+      runId: 'test-report-dir',
+      traceTaskMetadata: expectedMetadata,
+    });
+  });
+});
+
+// =====================================================
+// emitStepReports (extracted step:report emission logic)
+// =====================================================
+
+/**
+ * Extracted emitStepReports logic for unit testing.
+ * Mirrors engine.ts emitStepReports + emitIfReportExists.
+ *
+ * reportDir already includes the `.takt/runs/{slug}/reports` path (set by engine constructor).
+ */
+function emitStepReports(
+  emitter: EventEmitter,
+  step: WorkflowStep,
+  reportDir: string,
+  projectCwd: string,
+): void {
+  if (!step.outputContracts || step.outputContracts.length === 0 || !reportDir) return;
+  const baseDir = join(projectCwd, reportDir);
+
+  for (const entry of step.outputContracts) {
+    const fileName = isOutputContractItem(entry) ? entry.name : entry.path;
+    emitIfReportExists(emitter, step, baseDir, fileName);
+  }
+}
+
+function emitIfReportExists(
+  emitter: EventEmitter,
+  step: WorkflowStep,
+  baseDir: string,
+  fileName: string,
+): void {
+  const filePath = join(baseDir, fileName);
+  if (existsSync(filePath)) {
+    emitter.emit('step:report', step, filePath, fileName);
+  }
+}
+
+/** Create a minimal WorkflowStep for testing */
+function createReportStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
+  return {
+    name: 'test-step',
+    persona: 'coder',
+    personaDisplayName: 'Coder',
+    instruction: '',
+    passPreviousResponse: false,
+    ...overrides,
+  };
+}
+
+describe('emitStepReports', () => {
+  let tmpDir: string;
+  let reportBaseDir: string;
+  // reportDir now includes .takt/runs/{slug}/reports path (matches engine constructor behavior)
+  const reportDirName = '.takt/runs/test-report-dir/reports';
+
+  beforeEach(() => {
+    tmpDir = join(tmpdir(), `takt-report-test-${Date.now()}`);
+    reportBaseDir = join(tmpDir, reportDirName);
+    mkdirSync(reportBaseDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('should emit step:report when output contract file exists', () => {
+    // Given: a step with output contract and the file exists
+    const outputContracts: OutputContractEntry[] = [{ name: 'plan.md', format: 'plan', useJudge: true }];
+    const step = createReportStep({ outputContracts });
+    writeFileSync(join(reportBaseDir, 'plan.md'), '# Plan', 'utf-8');
+    const emitter = new EventEmitter();
+    const handler = vi.fn();
+    emitter.on('step:report', handler);
+
+    // When
+    emitStepReports(emitter, step, reportDirName, tmpDir);
+
+    // Then
+    expect(handler).toHaveBeenCalledOnce();
+    expect(handler).toHaveBeenCalledWith(step, join(reportBaseDir, 'plan.md'), 'plan.md');
+  });
+
+  it('should not emit when output contract file does not exist', () => {
+    // Given: a step with output contract but file doesn't exist
+    const outputContracts: OutputContractEntry[] = [{ name: 'missing.md', format: 'missing', useJudge: true }];
+    const step = createReportStep({ outputContracts });
+    const emitter = new EventEmitter();
+    const handler = vi.fn();
+    emitter.on('step:report', handler);
+
+    // When
+    emitStepReports(emitter, step, reportDirName, tmpDir);
+
+    // Then
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('should emit step:report when OutputContractItem file exists', () => {
+    // Given: a step with OutputContractItem and the file exists
+    const outputContracts: OutputContractEntry[] = [{ name: '03-review.md', format: '# Review', useJudge: true }];
+    const step = createReportStep({ outputContracts });
+    writeFileSync(join(reportBaseDir, '03-review.md'), '# Review\nOK', 'utf-8');
+    const emitter = new EventEmitter();
+    const handler = vi.fn();
+    emitter.on('step:report', handler);
+
+    // When
+    emitStepReports(emitter, step, reportDirName, tmpDir);
+
+    // Then
+    expect(handler).toHaveBeenCalledOnce();
+    expect(handler).toHaveBeenCalledWith(step, join(reportBaseDir, '03-review.md'), '03-review.md');
+  });
+
+  it('should emit for each existing file in output contracts array', () => {
+    // Given: a step with array output contracts, two files exist, one missing
+    const outputContracts: OutputContractEntry[] = [
+      { name: '01-scope.md', format: '01-scope', useJudge: true },
+      { name: '02-decisions.md', format: '02-decisions', useJudge: true },
+      { name: '03-missing.md', format: '03-missing', useJudge: true },
+    ];
+    const step = createReportStep({ outputContracts });
+    writeFileSync(join(reportBaseDir, '01-scope.md'), '# Scope', 'utf-8');
+    writeFileSync(join(reportBaseDir, '02-decisions.md'), '# Decisions', 'utf-8');
+    const emitter = new EventEmitter();
+    const handler = vi.fn();
+    emitter.on('step:report', handler);
+
+    // When
+    emitStepReports(emitter, step, reportDirName, tmpDir);
+
+    // Then: emitted for scope and decisions, not for missing
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(handler).toHaveBeenCalledWith(step, join(reportBaseDir, '01-scope.md'), '01-scope.md');
+    expect(handler).toHaveBeenCalledWith(step, join(reportBaseDir, '02-decisions.md'), '02-decisions.md');
+  });
+
+  it('should not emit when step has no output contracts', () => {
+    // Given: a step without output contracts
+    const step = createReportStep({ outputContracts: undefined });
+    const emitter = new EventEmitter();
+    const handler = vi.fn();
+    emitter.on('step:report', handler);
+
+    // When
+    emitStepReports(emitter, step, reportDirName, tmpDir);
+
+    // Then
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('should not emit when reportDir is empty', () => {
+    // Given: a step with output contracts but empty reportDir
+    const outputContracts: OutputContractEntry[] = [{ name: 'plan.md', format: 'plan', useJudge: true }];
+    const step = createReportStep({ outputContracts });
+    writeFileSync(join(reportBaseDir, 'plan.md'), '# Plan', 'utf-8');
+    const emitter = new EventEmitter();
+    const handler = vi.fn();
+    emitter.on('step:report', handler);
+
+    // When: empty reportDir
+    emitStepReports(emitter, step, '', tmpDir);
+
+    // Then
+    expect(handler).not.toHaveBeenCalled();
   });
 });

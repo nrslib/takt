@@ -17,11 +17,11 @@ TAKT (TAKT Agent Koordination Topology) is a multi-agent orchestration CLI. It r
 | `npm run lint` | ESLint on `src/`. `no-explicit-any` is error; unused vars must be prefixed `_`. |
 | `npm test` | Fast unit gate. Excludes integration/regression/performance tests. |
 | `npm run test:unit:parallel` | Parallel unit slice (`vitest.config.unit.parallel.ts`). |
-| `npm run test:it` | Integration/regression/performance gate. Runs the parallel IT slice, then the audited serial Git and workflow-loader groups sequentially. |
-| `npm run test:it:parallel` | Parallel IT slice (`vitest.config.it.parallel.ts`). Excludes the audited serial groups. |
-| `npm run test:it:serial` | Runs serial Git and workflow-loader groups sequentially, attempts both groups, and returns the first failing child exit code. Use `test:it:serial:git` or `test:it:serial:workflow` for one group. |
+| `npm run test:it` | Integration/regression/performance gate. Runs the parallel IT slice, then the serial group of fsync/spawnSync-storm tests. |
+| `npm run test:it:parallel` | Parallel IT slice (`vitest.config.it.parallel.ts`). Excludes files listed in the serial escape-hatch groups. |
+| `npm run test:it:serial` | Serial group (`scripts/test-classification.mjs`). Membership is about measured IO behavior, not correctness: a 2026-08 audit found every file mkdtemp-isolated, but fsync/spawnSync-storm tests serialize at the device level and can block a parallel worker past the 60s vitest RPC timeout. Add files only with a measured interference reason. |
 | `npm run test:prompt-evals` | Deterministic OpenCode prompt-eval smoke gate. Included in `check:release`. |
-| `npm test -- src/__tests__/<file>.test.ts` | Route a single file to exactly one unit, parallel-IT, serial-Git, or serial-workflow runner. Multiple routed runners execute sequentially and return the first failing child exit code. |
+| `npm test -- src/__tests__/<file>.test.ts` | Route a single file to the unit or parallel-IT runner (or a serial runner if listed). Multiple routed runners execute sequentially and return the first failing child exit code. |
 | `npm test -- -t "<pattern>"` | Run unit tests whose name matches `<pattern>`. |
 | `npm run test:e2e:smoke` | Fast mock-provider E2E smoke check for targeted local iteration. |
 | `npm run test:e2e:mock` | Full mock-provider E2E suite split into parallel shards. This is the TAKT quality gate. Use `test:e2e:mock:serial` for the legacy single-process run. |
@@ -185,7 +185,7 @@ builtins/               Bundled defaults (read from dist/ at runtime)
 - ESM (`"type": "module"`). Import paths use `.js` extensions in `.ts` sources.
 - Strict TS with `noUncheckedIndexedAccess`. Node ≥ 18.19.
 - Zod v4 for runtime schemas (`src/core/models/schemas.ts`).
-- Unit and integration tests live under `src/__tests__/` (Vitest). The default `npm test` is the fast unit gate; `npm run test:it` runs `it-*`, `*.integration.test.ts`, `*.regression.test.ts`, and `*.performance.test.ts`, with the audited Git and workflow-loader groups kept serial internally. E2E specs live under `e2e/`, with a smoke config plus one config per provider (`vitest.config.e2e.*.ts`).
+- Unit and integration tests live under `src/__tests__/` (Vitest). The default `npm test` is the fast unit gate; `npm run test:it` runs `it-*`, `*.integration.test.ts`, `*.regression.test.ts`, and `*.performance.test.ts`, mostly in one parallel slice; only measured fsync/spawnSync-storm files stay serial. E2E specs live under `e2e/`, with a smoke config plus one config per provider (`vitest.config.e2e.*.ts`).
 - `src/__tests__/test-setup.ts` clears `TAKT_CONFIG_DIR` and `TAKT_NOTIFY_WEBHOOK` per test — don't rely on inherited env in tests.
 
 ## Debugging

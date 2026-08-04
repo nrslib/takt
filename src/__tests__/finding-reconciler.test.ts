@@ -16,9 +16,14 @@ import {
   toLedgerRawFinding,
 } from '../core/workflow/findings/raw-canonicalization.js';
 import { issueOpenConflictOutcomeAuthority } from '../core/workflow/findings/raw-capabilities.js';
+import { createEmptyManagerOutput } from '../core/workflow/findings/manager-output.js';
+import { buildFindingsRuleContext as buildFindingsRuleContextWithCwd } from '../core/workflow/findings/context.js';
+import { reconcileCommitPlan } from '../core/workflow/findings/manager-commit-finalization.js';
 import { storedRawReconcileProvenance } from './helpers/finding-integrity.js';
 import type {
   FindingLedger,
+  FindingLedgerEntry,
+  FindingManagerDecisions,
   FindingManagerOutput,
   RawFinding,
   ReviewerAnomalyEntry,
@@ -1932,4 +1937,463 @@ describe('reconcileFindingLedger', () => {
       .not.toBe(computeRawEvidenceHash({ targetFindingId: 't', location: 'x\0p:1', title: 'same' }));
   });
 
+});
+
+describe('reconcile dismissed provisionals (finding-dismiss 由来)', () => {
+  function provisionalEntry(
+    overrides: Pick<FindingLedgerEntry, 'revision'> & Partial<Omit<FindingLedgerEntry, 'revision'>>,
+  ): FindingLedgerEntry {
+    return {
+      id: 'F-0001',
+      status: 'open',
+      lifecycle: 'new',
+      severity: 'medium',
+      title: '必須品質ゲートの実行証跡がない',
+      reviewers: ['coding-review'],
+      rawFindingIds: ['raw-1'],
+      firstSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
+      lastSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
+      provisional: {
+        kind: 'unverified-locationless',
+        stableKey: 'stable-1',
+        lineageKey: 'lineage-1',
+        sourceRawFindingIds: ['raw-1'],
+        reason: 'a new locationless claim has no mechanically verifiable source_quote evidence',
+        firstObservedAt: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
+        lastObservedAt: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
+        interpretationEpochs: 0,
+        gateEffect: 'block',
+        firstObservedRound: 1,
+      },
+      ...overrides,
+    };
+  }
+
+  function makeLedger(findings: FindingLedgerEntry[], overrides: Partial<FindingLedger> = {}): FindingLedger {
+    return {
+      workflowName: 'peer-review',
+      nextId: findings.length + 1,
+      updatedAt: '2026-07-01T00:00:00.000Z',
+      rawFindings: [],
+      conflicts: [],
+      interpretations: [],
+      findings,
+      ...overrides,
+    };
+  }
+
+  describe('reconcileFindingLedger dismissedFindings', () => {
+    it('dismiss を status/lifecycle=dismissed + 監査記録 + revision 加算で適用する', () => {
+      const ledger = makeLedger([provisionalEntry({ revision: 3 })]);
+      const next = reconcileFindingLedger({
+        previousLedger: ledger,
+        rawFindings: [],
+        managerOutput: {
+          ...createEmptyManagerOutput(),
+          dismissedFindings: [{ findingId: 'F-0001', basis: 'out_of_scope', reason: 'final gate の職掌' }],
+        },
+        context: { workflowName: 'peer-review', stepName: 'reviewers', runId: 'run-2', timestamp: '2026-07-02T00:00:00.000Z' },
+      });
+
+      const dismissed = next.findings.find((finding) => finding.id === 'F-0001')!;
+      expect(dismissed.status).toBe('dismissed');
+      expect(dismissed.lifecycle).toBe('dismissed');
+      expect(dismissed.revision).toBe(4);
+      expect(dismissed.dismissal).toMatchObject({
+        basis: 'out_of_scope',
+        reason: 'final gate の職掌',
+        decidedAt: { runId: 'run-2', stepName: 'reviewers' },
+      });
+    });
+
+    it('dismiss と同一ラウンドの監査観測を別の実変更として revision に反映する', () => {
+      const current = provisionalEntry({ revision: 3 });
+      const currentLedger = makeLedger([current]);
+      const rawFinding: RawFinding = {
+        rawFindingId: 'raw-same-claim',
+        stepName: 'reviewers',
+        reviewer: 'coding-review',
+        familyTag: 'quality-gate',
+        severity: 'medium',
+        title: current.title,
+        description: current.description ?? 'same claim',
+        relation: 'new',
+        evidence: { kind: 'locationless', explanation: 'same claim' },
+      };
+
+      const result = reconcileCommitPlan({
+        runInput: {
+          cwd: process.cwd(),
+          workflowName: currentLedger.workflowName,
+          parentStep: { kind: 'agent', name: 'reviewers', persona: 'reviewer', edit: false },
+          runId: 'run-2',
+          timestamp: '2026-07-02T00:00:00.000Z',
+        } as never,
+        freshLedger: currentLedger,
+        rawFindings: [rawFinding],
+        managerOutput: {
+          ...createEmptyManagerOutput(),
+          dismissedFindings: [{
+            findingId: current.id,
+            basis: 'out_of_scope',
+            reason: 'final gate の職掌',
+          }],
+        },
+        provisionalSpecs: [{
+          ...current.provisional!,
+          sourceRawFindingIds: [rawFinding.rawFindingId],
+          title: current.title,
+          severity: current.severity,
+          description: rawFinding.description,
+          reviewers: [rawFinding.reviewer],
+        }],
+        anomalySpecs: [],
+        pendingRejectedObservations: [],
+        rawProvenanceByRawFindingId: new Map([[
+          rawFinding.rawFindingId,
+          storedRawReconcileProvenance(
+            rawFinding,
+            computeReviewerStableKey({
+              workflowName: currentLedger.workflowName,
+              callNamespace: '',
+              parentStepName: 'reviewers',
+              reviewerPersonaKey: rawFinding.reviewer,
+            }),
+            current.provisional!.lineageKey,
+          ),
+        ]]),
+        cleanWire: [],
+        explicitResolvedByMapping: new Map(),
+        explicitPromotedFindingIds: new Set(),
+        recoveryProvisionalRawFindingIds: new Set(),
+        staleRawFindingIds: new Set(),
+        deferredRawFindingIds: new Set(),
+        resolutionRenotifications: [],
+        unsupportedRawFindingReports: [],
+        healthyReviewerStableKeys: new Set(),
+      });
+
+      const dismissed = result.ledger.findings[0]!;
+      expect(dismissed.status).toBe('dismissed');
+      expect(dismissed.revision).toBe(5);
+      expect(dismissed.rejectedObservations).toEqual([
+        expect.objectContaining({ rawFindingId: rawFinding.rawFindingId }),
+      ]);
+    });
+
+    it('provisional でない finding への dismiss 適用は例外にする（防衛線）', () => {
+      const ledger = makeLedger([provisionalEntry({ revision: 1, provisional: undefined })]);
+      expect(() => reconcileFindingLedger({
+        previousLedger: ledger,
+        rawFindings: [],
+        managerOutput: {
+          ...createEmptyManagerOutput(),
+          dismissedFindings: [{ findingId: 'F-0001', basis: 'unverifiable_claim', reason: 'x' }],
+        },
+        context: { workflowName: 'peer-review', stepName: 'reviewers', runId: 'run-2', timestamp: '2026-07-02T00:00:00.000Z' },
+      })).toThrow(/not provisional/);
+    });
+  });
+});
+
+describe('finding context visibility (finding-convergence 由来)', () => {
+  function makeRawFinding(overrides: Partial<RawFinding> = {}): RawFinding {
+    return {
+      rawFindingId: 'raw-current',
+      stepName: 'architecture-review',
+      reviewer: 'architecture-review',
+      familyTag: 'bug',
+      severity: 'high',
+      title: 'Current issue',
+      description: 'The issue is present in the current review.',
+      relation: 'new',
+      ...overrides,
+    };
+  }
+
+  function makeFinding(
+    overrides: Pick<FindingLedgerEntry, 'revision'> & Partial<Omit<FindingLedgerEntry, 'revision'>>,
+  ): FindingLedgerEntry {
+    return {
+      id: 'F-0001',
+      status: 'open',
+      lifecycle: 'new',
+      severity: 'high',
+      title: 'Existing issue',
+      location: 'src/a.ts:10',
+      reviewers: ['architecture-review'],
+      rawFindingIds: ['raw-existing'],
+      firstSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
+      lastSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' },
+      ...overrides,
+    };
+  }
+
+  function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
+    return {
+      workflowName: 'peer-review',
+      nextId: 2,
+      updatedAt: '2026-06-13T00:00:00.000Z',
+      rawFindings: [makeRawFinding({ rawFindingId: 'raw-existing' })],
+      conflicts: [],
+      interpretations: [],
+      findings: [makeFinding({ revision: 1 })],
+      ...overrides,
+    };
+  }
+
+  type TestReconcileInput = Omit<
+    Parameters<typeof reconcileFindingLedgerStrict>[0],
+    'provisionalFindings' | 'rawFindingDispositions' | 'rawProvenanceByRawFindingId'
+  >;
+
+  function reconcileFindingLedger(input: TestReconcileInput): FindingLedger {
+    return reconcileFindingLedgerStrict({
+      ...input,
+      provisionalFindings: [],
+      rawFindingDispositions: [],
+      rawProvenanceByRawFindingId: new Map(input.rawFindings.map((rawFinding) => [
+        rawFinding.rawFindingId,
+        storedRawReconcileProvenance(
+          rawFinding,
+          computeReviewerStableKey({
+            workflowName: input.context.workflowName,
+            callNamespace: '',
+            parentStepName: input.context.stepName,
+            reviewerPersonaKey: rawFinding.reviewer,
+          }),
+          computeLineageKey({
+            ...(rawFinding.targetFindingId !== undefined
+              ? { targetFindingId: rawFinding.targetFindingId }
+              : {}),
+            ...(rawFinding.location !== undefined ? { location: rawFinding.location } : {}),
+            title: rawFinding.title,
+            familyTag: rawFinding.familyTag,
+          }),
+        ),
+      ])),
+    });
+  }
+
+  function makeDecisions(overrides: Partial<FindingManagerDecisions> = {}): FindingManagerDecisions {
+    return {
+      rawDecisions: [],
+      disputeDecisions: [],
+      conflictDecisions: [],
+      invalidateDecisions: [],
+      duplicateDecisions: [],
+      dismissDecisions: [],
+      ...overrides,
+    };
+  }
+
+  function buildFindingsRuleContext(ledger: FindingLedger) {
+    return buildFindingsRuleContextWithCwd(ledger, process.cwd());
+  }
+
+  // B5: invalidated / superseded の監査可視化。ブロッキング集合（open/conflicts）の
+  // 意味は変えず、サマリとルールコンテキストから「こう裁定された」ことを追える。
+  describe('B5: invalidated / superseded audit visibility', () => {
+    function makeAuditLedger(): FindingLedger {
+      return makeLedger({
+        nextId: 4,
+        findings: [
+          makeFinding({ revision: 1, id: 'F-0001' }),
+          makeFinding({ revision: 1,
+            id: 'F-0002',
+            status: 'invalidated',
+            lifecycle: 'invalidated',
+            title: 'Hallucinated finding',
+            location: 'src/ghost.ts:1',
+            rawFindingIds: [],
+            invalidatedAt: '2026-07-11T00:00:00.000Z',
+            invalidatedEvidence: 'src/ghost.ts does not exist in the reviewed code',
+          }),
+          makeFinding({ revision: 1,
+            id: 'F-0003',
+            status: 'superseded',
+            lifecycle: 'superseded',
+            title: 'Duplicate of F-0001',
+            location: 'src/a.ts:20',
+            rawFindingIds: [],
+            supersededByFindingId: 'F-0001',
+          }),
+        ],
+      });
+    }
+
+    it('Given a ledger with invalidated and superseded findings When rule context is built Then their counts are exposed without changing the open set', () => {
+      const context = buildFindingsRuleContext(makeAuditLedger());
+      expect(context.open.count).toBe(1);
+      expect(context.invalidated.count).toBe(1);
+      expect(context.superseded.count).toBe(1);
+    });
+
+    it('Given a ledger with invalidated and superseded findings When summaries are rendered Then both appear with minimal item info', async () => {
+      const { renderFindingLedgerInstructionSummary, renderFindingLedgerReportSummary } = await import('../core/workflow/findings/context.js');
+      const ledger = makeAuditLedger();
+
+      const instructionSummary = JSON.parse(renderFindingLedgerInstructionSummary(ledger)) as Record<string, unknown>;
+      expect(Object.keys(instructionSummary)).toEqual(
+        expect.arrayContaining(['workflowName', 'open', 'resolved', 'waived', 'invalidated', 'superseded', 'conflicts']),
+      );
+      expect(instructionSummary.invalidated).toEqual([
+        { id: 'F-0002', severity: 'high', title: 'Hallucinated finding', evidence: 'src/ghost.ts does not exist in the reviewed code' },
+      ]);
+      expect(instructionSummary.superseded).toEqual([
+        { id: 'F-0003', title: 'Duplicate of F-0001', supersededBy: 'F-0001' },
+      ]);
+
+      const reportSummary = JSON.parse(renderFindingLedgerReportSummary(ledger)) as Record<string, unknown>;
+      expect(reportSummary.openFindingIds).toEqual(['F-0001']);
+      expect(reportSummary.invalidatedFindingIds).toEqual(['F-0002']);
+      expect(reportSummary.supersededFindingIds).toEqual(['F-0003']);
+      expect(reportSummary.conflictIds).toEqual([]);
+    });
+  });
+
+  describe('finding family visibility', () => {
+    it('derives review mode from durable ledger history instead of workflow-local step iterations', async () => {
+      const {
+        ledgerHasOpenFindings,
+        renderFindingLedgerInstructionSummary,
+        renderFindingLedgerReportSummary,
+      } = await import('../core/workflow/findings/context.js');
+      const renderMode = (ledger: FindingLedger): unknown => (
+        JSON.parse(renderFindingLedgerInstructionSummary(ledger)) as Record<string, unknown>
+      ).reviewMode;
+
+      expect(renderMode(makeLedger({ rawFindings: [], findings: [] }))).toBe('initial');
+      expect(renderMode(makeLedger({ rawFindings: [makeRawFinding()] }))).toBe('follow_up');
+      expect(renderMode(makeLedger({ findings: [makeFinding({ revision: 1 })] }))).toBe('follow_up');
+      expect(renderMode(makeLedger({
+        rawFindings: [],
+        findings: [],
+        stopBudget: {
+          roundMarkers: ['run-1:reviewers:1'],
+          firstRoundAt: '2026-07-01T00:00:00.000Z',
+          exhausted: false,
+        },
+      }))).toBe('follow_up');
+      expect(renderMode(makeLedger({
+        rawFindings: [],
+        findings: [],
+        reviewerAnomalies: [{
+          id: 'RA-0001',
+          stableKey: 'reviewer:raw-1',
+          kind: 'source_quote_mismatch',
+          reviewer: 'reviewer',
+          stepName: 'review',
+          rawFindingId: 'raw-1',
+          title: 'Unverified review claim',
+          mismatchReason: 'quoted source does not match',
+          firstObservedAt: '2026-07-01T00:00:00.000Z',
+          lastObservedAt: '2026-07-01T00:00:00.000Z',
+        }],
+      }))).toBe('follow_up');
+      const pendingLedger = makeLedger({
+        rawFindings: [],
+        findings: [],
+        pendingManagerCommit: {
+          roundMarker: 'round-pending',
+          publication: {
+            publicationId: 'a'.repeat(64),
+            domainId: 'b'.repeat(64),
+            originRunId: 'run-1',
+            destinationRunId: 'run-1',
+            fileName: 'findings-manager-validation.reviewers.json',
+            contentSha256: 'c'.repeat(64),
+            report: {
+              version: 1,
+              runId: 'run-1',
+              stepName: 'reviewers',
+              retryCount: 0,
+              ledgerUpdated: true,
+              finalErrors: [],
+              attempts: [],
+            },
+          },
+          completed: {
+            nextId: 2,
+            updatedAt: '2026-07-01T00:01:00.000Z',
+            findings: [makeFinding({
+              revision: 1,
+              rawFindingIds: ['raw-pending'],
+            })],
+            rawFindings: [makeRawFinding({ rawFindingId: 'raw-pending' })],
+            conflicts: [],
+            interpretations: [],
+            stopBudget: {
+              roundMarkers: ['round-pending'],
+              firstRoundAt: '2026-07-01T00:01:00.000Z',
+              exhausted: false,
+            },
+          },
+        },
+      });
+      expect(renderMode(pendingLedger)).toBe('follow_up');
+      const pendingSummary = JSON.parse(
+        renderFindingLedgerInstructionSummary(pendingLedger),
+      ) as { reviewMode: string; open: Array<{ id: string }> };
+      expect(pendingSummary.reviewMode).toBe('follow_up');
+      expect(pendingSummary.open.map(({ id }) => id)).toEqual(['F-0001']);
+      const pendingReportSummary = JSON.parse(
+        renderFindingLedgerReportSummary(pendingLedger),
+      ) as { openFindingIds: string[] };
+      expect(ledgerHasOpenFindings(pendingLedger)).toBe(true);
+      expect(pendingReportSummary.openFindingIds).toEqual(['F-0001']);
+    });
+
+    it('Given one canonical finding backed by multiple raw families When fixer contexts are built Then all family tags are exposed once in stable order', async () => {
+      const ledger = makeLedger({
+        rawFindings: [
+          makeRawFinding({ rawFindingId: 'raw-b', familyTag: 'testing' }),
+          makeRawFinding({ rawFindingId: 'raw-a', familyTag: 'architecture' }),
+          makeRawFinding({ rawFindingId: 'raw-c', familyTag: 'testing' }),
+        ],
+        findings: [makeFinding({ revision: 1, rawFindingIds: ['raw-b', 'raw-a', 'raw-c'] })],
+      });
+
+      const ruleContext = buildFindingsRuleContext(ledger);
+      expect(ruleContext.open.items[0]?.familyTags).toEqual(['architecture', 'testing']);
+      expect(ruleContext.open.items[0]?.unknownRawFindingIds).toEqual([]);
+
+      const { renderFindingLedgerInstructionSummary } = await import('../core/workflow/findings/context.js');
+      const instructionSummary = JSON.parse(renderFindingLedgerInstructionSummary(ledger)) as {
+        open: Array<{ familyTags: string[]; unknownRawFindingIds: string[] }>;
+      };
+      expect(instructionSummary.open[0]?.familyTags).toEqual(['architecture', 'testing']);
+      expect(instructionSummary.open[0]?.unknownRawFindingIds).toEqual([]);
+    });
+
+    it('Given a canonical finding with an unknown raw reference When contexts are built Then the missing reference stays visible', async () => {
+      const ledger = makeLedger({
+        findings: [makeFinding({ revision: 1, rawFindingIds: ['raw-missing'] })],
+      });
+
+      const ruleContext = buildFindingsRuleContext(ledger);
+      expect(ruleContext.open.items[0]?.familyTags).toEqual([]);
+      expect(ruleContext.open.items[0]?.unknownRawFindingIds).toEqual(['raw-missing']);
+
+      const { renderFindingLedgerInstructionSummary } = await import('../core/workflow/findings/context.js');
+      const instructionSummary = JSON.parse(renderFindingLedgerInstructionSummary(ledger)) as {
+        open: Array<{ familyTags: string[]; unknownRawFindingIds: string[] }>;
+      };
+      expect(instructionSummary.open[0]?.unknownRawFindingIds).toEqual(['raw-missing']);
+    });
+
+    it('Given duplicate raw IDs with different families When context is built Then the ambiguous family is rejected', () => {
+      const ledger = makeLedger({
+        rawFindings: [
+          makeRawFinding({ rawFindingId: 'raw-1', familyTag: 'architecture' }),
+          makeRawFinding({ rawFindingId: 'raw-1', familyTag: 'testing' }),
+        ],
+        findings: [makeFinding({ revision: 1, rawFindingIds: ['raw-1'] })],
+      });
+
+      expect(() => buildFindingsRuleContext(ledger)).toThrow(
+        'Raw finding "raw-1" has conflicting family tags: "architecture" and "testing"',
+      );
+    });
+  });
 });

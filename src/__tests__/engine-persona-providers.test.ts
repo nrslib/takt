@@ -378,3 +378,104 @@ describe('WorkflowEngine persona_providers override', () => {
     expect(providerInfo).toMatchObject({ provider: 'claude', model: 'sonnet' });
   });
 });
+
+describe('WorkflowEngine agent overrides', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    applyDefaultMocks();
+  });
+
+  it('passes resolved step provider/model to AgentRunner without reusing CLI override fields', async () => {
+    const step = makeStep('plan', {
+      provider: 'claude',
+      model: 'claude-step',
+      rules: [makeRule('done', 'COMPLETE')],
+    });
+    const config: WorkflowConfig = {
+      name: 'override-test',
+      steps: [step],
+      initialStep: 'plan',
+      maxSteps: 1,
+    };
+
+    mockRunAgentSequence([
+      makeResponse({ persona: step.persona, content: 'done' }),
+    ]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
+
+    const engine = new WorkflowEngine(config, '/tmp/project', 'override task', {
+      projectCwd: '/tmp/project',
+      provider: 'codex',
+      model: 'cli-model',
+    });
+
+    await engine.run();
+
+    const options = vi.mocked(runAgent).mock.calls[0][2];
+    expect(options.provider).toBeUndefined();
+    expect(options.model).toBeUndefined();
+    expect(options.resolvedProvider).toBe('claude');
+    expect(options.resolvedModel).toBe('claude-step');
+  });
+
+  it('uses engine-level provider/model as resolved values when step provider/model is undefined', async () => {
+    const step = makeStep('plan', {
+      provider: undefined,
+      rules: [makeRule('done', 'COMPLETE')],
+    });
+    const config: WorkflowConfig = {
+      name: 'override-fallback',
+      steps: [step],
+      initialStep: 'plan',
+      maxSteps: 1,
+    };
+
+    mockRunAgentSequence([
+      makeResponse({ persona: step.persona, content: 'done' }),
+    ]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
+
+    const engine = new WorkflowEngine(config, '/tmp/project', 'override task', {
+      projectCwd: '/tmp/project',
+      provider: 'codex',
+      model: 'cli-model',
+    });
+
+    await engine.run();
+
+    const options = vi.mocked(runAgent).mock.calls[0][2];
+    expect(options.provider).toBeUndefined();
+    expect(options.model).toBeUndefined();
+    expect(options.resolvedProvider).toBe('codex');
+    expect(options.resolvedModel).toBe('cli-model');
+  });
+
+  it('passes engine childProcessEnv to normal step AgentRunner options', async () => {
+    const step = makeStep('plan', {
+      rules: [makeRule('done', 'COMPLETE')],
+    });
+    const config: WorkflowConfig = {
+      name: 'child-env-test',
+      steps: [step],
+      initialStep: 'plan',
+      maxSteps: 1,
+    };
+    const childProcessEnv = { TAKT_OBSERVABILITY: '{"enabled":true}' };
+
+    mockRunAgentSequence([
+      makeResponse({ persona: step.persona, content: 'done' }),
+    ]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
+
+    const engine = new WorkflowEngine(config, '/tmp/project', 'child env task', {
+      projectCwd: '/tmp/project',
+      provider: 'mock',
+      childProcessEnv,
+    });
+
+    await engine.run();
+
+    const options = vi.mocked(runAgent).mock.calls[0][2];
+    expect(options.childProcessEnv).toEqual(childProcessEnv);
+  });
+});

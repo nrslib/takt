@@ -548,56 +548,6 @@ describe('Pipeline Integration Tests', () => {
     expect(getScenarioQueue()?.remaining).toBe(0);
   });
 
-  it('should return EXIT_WORKFLOW_FAILED for non-existent workflow', async () => {
-    const exitCode = await executePipeline({
-      task: 'Test task',
-      workflow: 'non-existent-workflow-xyz',
-      autoPr: false,
-      skipGit: true,
-      cwd: testDir,
-      provider: 'mock',
-    });
-
-    // executeTask returns false when workflow not found → executePipeline returns EXIT_WORKFLOW_FAILED (3)
-    expect(exitCode).toBe(3);
-  });
-
-  it('should handle ABORT transition from workflow', async () => {
-    // Scenario: plan returns second rule -> ABORT
-    setMockScenario([
-      { persona: 'planner', status: 'done', content: '[PLAN:2]\n\nRequirements unclear, insufficient info.' },
-    ]);
-
-    const exitCode = await executePipeline({
-      task: 'Vague task with no details',
-      workflow: workflowPath,
-      autoPr: false,
-      skipGit: true,
-      cwd: testDir,
-      provider: 'mock',
-    });
-
-    // ABORT means workflow failed -> EXIT_WORKFLOW_FAILED (3)
-    expect(exitCode).toBe(3);
-  });
-
-  it('should fail the pipeline when the semantic tag is missing', async () => {
-    setMockScenario([
-      { persona: 'planner', status: 'done', content: 'Requirements are clear.' },
-    ]);
-
-    const exitCode = await executePipeline({
-      task: 'Task without a status tag',
-      workflow: workflowPath,
-      autoPr: false,
-      skipGit: true,
-      cwd: testDir,
-      provider: 'mock',
-    });
-
-    expect(exitCode).toBe(3);
-  });
-
   it('should handle review reject → implement → review loop', async () => {
     setMockScenario([
       // First pass

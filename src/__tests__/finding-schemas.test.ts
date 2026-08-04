@@ -21,6 +21,8 @@ import {
   parseFindingLedger,
   parseFindingManagerDecisions,
   parseFindingManagerOutput,
+  parseRawFindings,
+  parseReviewerRawFindings,
 } from '../core/models/finding-schemas.js';
 import { compareRfc3339Timestamps } from '../core/models/rfc3339.js';
 import { formatConflictId } from '../core/models/finding-conflict-identity.js';
@@ -780,5 +782,99 @@ describe('finding schemas', () => {
         description: 'Conflicting evidence.',
       }],
     })).toThrow();
+  });
+});
+
+describe('item 7: relation schema invariants', () => {
+  it('Given relation "new" with a non-empty targetFindingId When parsed Then it is rejected', () => {
+    expect(() => parseRawFindings([{
+      rawFindingId: 'raw-1',
+      stepName: 's',
+      reviewer: 'r',
+      familyTag: 'bug',
+      severity: 'high',
+      title: 't',
+      description: 'd',
+      relation: 'new',
+      targetFindingId: 'F-0001',
+    }])).toThrow();
+  });
+
+  it('Given relation "persists" with no targetFindingId When parsed Then it is rejected', () => {
+    expect(() => parseRawFindings([{
+      rawFindingId: 'raw-1',
+      stepName: 's',
+      reviewer: 'r',
+      familyTag: 'bug',
+      severity: 'high',
+      title: 't',
+      description: 'd',
+      relation: 'persists',
+    }])).toThrow();
+  });
+
+  it('Given an unknown field instead of relation When parsed Then normal strict validation rejects it', () => {
+    expect(() => parseRawFindings([{
+      rawFindingId: 'raw-1',
+      stepName: 's',
+      reviewer: 'r',
+      familyTag: 'bug',
+      severity: 'high',
+      title: 't',
+      description: 'd',
+      kind: 'issue',
+    }])).toThrow(/Unrecognized key/);
+  });
+});
+
+describe('finding raw schemas', () => {
+  it('should require relation', () => {
+    expect(() => parseRawFindings([
+      {
+        rawFindingId: 'raw-invalid',
+        stepName: 'arch-review',
+        reviewer: 'arch-review',
+        familyTag: 'bug',
+        severity: 'high',
+        title: 'Missing relation',
+        description: 'The current contract requires relation.',
+      },
+    ])).toThrow();
+  });
+
+  it('should treat empty location and suggestion from structured output as unset', () => {
+    const parsed = parseReviewerRawFindings([
+      {
+        rawFindingId: 'raw-confirm',
+        familyTag: 'bug',
+        severity: 'low',
+        title: 'Confirmed fixed',
+        description: 'Verified at src/index.ts:42.',
+        relation: 'resolution_confirmation',
+        targetFindingId: 'F-0001',
+        location: '',
+        suggestion: '',
+      },
+    ]);
+
+    expect(parsed[0]?.location).toBeUndefined();
+    expect(parsed[0]?.suggestion).toBeUndefined();
+  });
+
+  it('should treat an empty targetFindingId from structured output as unset', () => {
+    const parsed = parseReviewerRawFindings([
+      {
+        rawFindingId: 'raw-1',
+        familyTag: 'bug',
+        severity: 'low',
+        title: 'Issue entry',
+        description: 'Strict structured output fills every field.',
+        relation: 'new',
+        targetFindingId: '',
+      },
+    ]);
+
+    expect(parsed[0]?.relation).toBe('new');
+    expect(parsed[0]?.targetFindingId).toBeUndefined();
   });
 });

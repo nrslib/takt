@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import type {
   AgentResponse,
   WorkflowConfig,
@@ -37,7 +38,7 @@ import { WorkflowEngine } from '../core/workflow/index.js';
 import { InstructionBuildTransaction } from '../core/workflow/engine/instruction-build-transaction.js';
 import { runAgent } from '../agents/runner.js';
 import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
-import { runReportPhase } from '../core/workflow/phase-runner.js';
+import { runReportPhase, runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
 import {
   applyDefaultMocks,
   buildDefaultWorkflowConfig,
@@ -1506,5 +1507,152 @@ describe('WorkflowEngine rate limit fallback', () => {
     const prompts = vi.mocked(runAgent).mock.calls.map((call) => call[1]);
     expect(prompts[3]).toContain('Previous provider/model: opencode / opencode/big-pickle');
     expect(prompts[3]).toContain('Current provider/model: codex / gpt-5');
+  });
+});
+
+describe('WorkflowEngine rate limit fallback report session continuity', () => {
+  let tmpDir: string;
+
+  function makeSessionStep(name: string, overrides: Partial<WorkflowStep> = {}): WorkflowStep {
+    return {
+      name,
+      persona: 'coder',
+      personaDisplayName: 'Coder',
+      instruction: `Run ${name}`,
+      passPreviousResponse: false,
+      rules: [makeRule('when(true)', 'COMPLETE')],
+      ...overrides,
+    };
+  }
+
+  function buildReportSessionConfig(): WorkflowConfig {
+    return {
+      name: 'rate-limit-report-session',
+      maxSteps: 5,
+      initialStep: 'plan',
+      steps: [
+        makeSessionStep('plan', {
+          outputContracts: [{ name: 'plan.md', useJudge: false }],
+          rules: [makeRule('when(true)', 'verify')],
+        }),
+        makeSessionStep('verify', {
+          rules: [makeRule('when(true)', 'COMPLETE')],
+        }),
+      ],
+    };
+  }
+
+  function buildTeamLeaderReportConfig(): WorkflowConfig {
+    return {
+      name: 'team-leader-rate-limit-report-session',
+      maxSteps: 5,
+      initialStep: 'implement',
+      steps: [
+        makeSessionStep('implement', {
+          outputContracts: [{ name: 'implement.md', useJudge: false }],
+          teamLeader: {
+            persona: '../personas/team-leader.md',
+            maxConcurrency: 1,
+            timeoutMs: 10000,
+            partPersona: '../personas/coder.md',
+            partAllowedTools: ['Read', 'Edit'],
+            partEdit: true,
+            partPermissionMode: 'edit',
+          },
+          rules: [makeRule('when(true)', 'COMPLETE')],
+        }),
+      ],
+    };
+  }
+
+  function buildReportSessionOptions(): RateLimitFallbackEngineOptions {
+    return createEngineOptions(tmpDir, {
+      reportDirName: 'test-report-dir',
+      rateLimitFallback: {
+        switchChain: [{ provider: 'codex', model: 'gpt-5' }],
+      },
+    });
+  }
+
+  function sessionCalls(): Array<{ resolvedProvider?: string; sessionId?: string }> {
+    return providerCalls().map(({ resolvedProvider, sessionId }) => ({ resolvedProvider, sessionId }));
+  }
+
+  beforeEach(async () => {
+    vi.resetAllMocks();
+    applyDefaultMocks();
+    // These tests exercise the real report phase, status judgment, and rule
+    // evaluation (file-wide mocks are delegated back to the actual modules).
+    const actualPhaseRunner = await vi.importActual<typeof import('../core/workflow/phase-runner.js')>(
+      '../core/workflow/phase-runner.js',
+    );
+    vi.mocked(runReportPhase).mockImplementation(actualPhaseRunner.runReportPhase);
+    vi.mocked(runStatusJudgmentPhase).mockImplementation(actualPhaseRunner.runStatusJudgmentPhase);
+    const actualEvaluation = await vi.importActual<typeof import('../core/workflow/evaluation/index.js')>(
+      '../core/workflow/evaluation/index.js',
+    );
+    vi.mocked(mockRuleEvaluation).mockImplementation((step, selection, context) =>
+      new actualEvaluation.RuleEvaluator(step, context).evaluate(selection));
+    tmpDir = mkdtempSync(join(tmpdir(), 'takt-rate-limit-report-session-'));
+  });
+
+  afterEach(() => {
+    if (existsSync(tmpDir)) {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('fallback 後の report phase は fallback provider の Phase 1 session を resume し、次 step の claude に codex session を渡さない', async () => {
+    // Given
+    const engine = new WorkflowEngine(buildReportSessionConfig(), tmpDir, 'test task', buildReportSessionOptions());
+    mockRunAgentSequence([
+      makeResponse({ persona: 'coder', content: '[STEP:1] plan done', sessionId: 'claude-session' }),
+      makeRateLimitedResponse('claude', { sessionId: undefined }),
+      makeResponse({ persona: 'coder', content: '[STEP:1] plan done', sessionId: 'codex-session' }),
+      makeResponse({ persona: 'coder', content: 'report from codex', sessionId: 'codex-report-session' }),
+      makeResponse({ persona: 'coder', content: '[STEP:1] verify done', sessionId: 'verify-claude-session' }),
+    ]);
+
+    // When
+    const state = await engine.run();
+
+    // Then
+    expect(state.status).toBe('completed');
+    expect(sessionCalls()).toEqual([
+      { resolvedProvider: 'claude', sessionId: undefined },
+      { resolvedProvider: 'claude', sessionId: 'claude-session' },
+      { resolvedProvider: 'codex', sessionId: undefined },
+      { resolvedProvider: 'codex', sessionId: 'codex-session' },
+      { resolvedProvider: 'claude', sessionId: 'claude-session' },
+    ]);
+  });
+
+  it('team_leader fallback 後の report phase は fallback provider runtime を使う', async () => {
+    // Given
+    const engine = new WorkflowEngine(buildTeamLeaderReportConfig(), tmpDir, 'test task', buildReportSessionOptions());
+    const parts = [{ id: 'part-1', title: 'API', instruction: 'Implement API' }];
+    const doneFeedback = { done: true, reasoning: 'enough', parts: [] };
+    mockRunAgentSequence([
+      makeResponse({ persona: 'team-leader', content: 'decompose', structuredOutput: { parts }, sessionId: 'leader-claude-session' }),
+      makeRateLimitedResponse('claude', { sessionId: undefined }),
+      makeResponse({ persona: 'team-leader', content: 'decompose', structuredOutput: { parts }, sessionId: 'leader-codex-session' }),
+      makeResponse({ persona: 'coder', content: '[STEP:1] done', sessionId: 'part-codex-session' }),
+      makeResponse({ persona: 'team-leader', content: 'feedback', structuredOutput: doneFeedback, sessionId: 'feedback-codex-session' }),
+      makeResponse({ persona: 'coder', content: 'report from codex', sessionId: 'report-codex-session' }),
+    ]);
+
+    // When
+    const state = await engine.run();
+
+    // Then
+    expect(state.status).toBe('completed');
+    expect(sessionCalls()).toEqual([
+      { resolvedProvider: 'claude', sessionId: undefined },
+      { resolvedProvider: 'claude', sessionId: undefined },
+      { resolvedProvider: 'codex', sessionId: undefined },
+      { resolvedProvider: 'codex', sessionId: undefined },
+      { resolvedProvider: 'codex', sessionId: undefined },
+      { resolvedProvider: 'codex', sessionId: undefined },
+    ]);
   });
 });

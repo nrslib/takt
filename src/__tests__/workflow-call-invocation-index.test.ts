@@ -1,7 +1,19 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, readdirSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+const forcedNamespaceSegment = vi.hoisted(() => ({ value: undefined as string | undefined }));
+
+vi.mock('../core/workflow/workflow-call-namespace.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/workflow-call-namespace.js')>();
+  return {
+    ...actual,
+    buildWorkflowCallNamespaceSegment: (
+      ...args: Parameters<typeof actual.buildWorkflowCallNamespaceSegment>
+    ) => forcedNamespaceSegment.value ?? actual.buildWorkflowCallNamespaceSegment(...args),
+  };
+});
 import type { WorkflowConfig, WorkflowResumePointEntry } from '../core/models/types.js';
 import { buildWorkflowResumePointEntry } from '../core/workflow/workflow-reference.js';
 import {
@@ -338,5 +350,26 @@ describe('WorkflowCallInvocationIndex', () => {
 
     expect(parseWorkflowCallNamespaceSegment(modifiedWildcard)).toBeDefined();
     expect(workflowCallReportRequestSegmentsMatch(exact, modifiedWildcard)).toBe(false);
+  });
+
+  describe('storage collision handling', () => {
+    afterEach(() => {
+      forcedNamespaceSegment.value = undefined;
+    });
+
+    it('should reject one storage key assigned to different logical identities', () => {
+      forcedNamespaceSegment.value = `call-${'0'.repeat(64)}-1`;
+      const index = new WorkflowCallInvocationIndex(new Map());
+
+      index.record(makeWorkflow('first'), 'delegate', [], {
+        call_instance: 1,
+        child_workflow_ref: 'child',
+      });
+
+      expect(() => index.record(makeWorkflow('second'), 'delegate', [], {
+        call_instance: 1,
+        child_workflow_ref: 'child',
+      })).toThrow('Workflow-call storage key is already assigned to invocation');
+    });
   });
 });
