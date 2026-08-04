@@ -600,7 +600,7 @@ describe('ACP package entrypoint', () => {
     expect(saveTaskFile).not.toHaveBeenCalled();
   });
 
-  it('should route ACP-transport MCP servers with id to the transport rejection over the SDK stream transport', async () => {
+  it('should route ACP-transport MCP servers with serverId to the transport rejection over the SDK stream transport', async () => {
     const clientToAgent = new TransformStream<Uint8Array>();
     const agentToClient = new TransformStream<Uint8Array>();
     const createConversationSession = vi.fn();
@@ -620,7 +620,7 @@ describe('ACP package entrypoint', () => {
           mcpServers: [{
             type: 'acp',
             name: 'proxy',
-            id: 'srv-1',
+            serverId: 'srv-1',
           }],
         });
       })).rejects.toMatchObject({
@@ -629,7 +629,7 @@ describe('ACP package entrypoint', () => {
     expect(createConversationSession).not.toHaveBeenCalled();
   });
 
-  it('should reject legacy serverId on ACP-transport MCP servers as invalid params over the SDK stream transport', async () => {
+  it('should reject legacy id on ACP-transport MCP servers as invalid params over the SDK stream transport', async () => {
     const clientToAgent = new TransformStream<Uint8Array>();
     const agentToClient = new TransformStream<Uint8Array>();
     const createConversationSession = vi.fn();
@@ -649,7 +649,7 @@ describe('ACP package entrypoint', () => {
           mcpServers: [{
             type: 'acp',
             name: 'proxy',
-            serverId: 'srv-1',
+            id: 'srv-1',
           }],
         });
       })).rejects.toThrow('Invalid params');

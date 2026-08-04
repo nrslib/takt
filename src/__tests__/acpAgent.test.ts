@@ -2564,14 +2564,14 @@ describe('TAKT ACP agent adapter', () => {
     {
       title: 'accept response with a malformed payload',
       response: { action: 'accept', content: 'not-an-object' },
-      error: /did not include a valid answer/i,
-      message: 'ACP elicitation response did not include a valid answer',
+      error: /invalid or unsupported response: accept/i,
+      message: 'ACP elicitation returned an invalid or unsupported response: accept',
     },
     {
       title: 'custom elicitation action',
       response: { action: '_defer' },
-      error: /did not include a valid answer/i,
-      message: 'ACP elicitation response did not include a valid answer',
+      error: /invalid or unsupported response: _defer/i,
+      message: 'ACP elicitation returned an invalid or unsupported response: _defer',
     },
   ])('should surface an error for ACP elicitation $title instead of a denial', async ({ response, error, message }) => {
     const sendSessionUpdate = vi.fn();
