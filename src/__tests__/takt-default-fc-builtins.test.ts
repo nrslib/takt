@@ -1,14 +1,11 @@
 import {
   mkdirSync,
-  mkdtempSync,
   readFileSync,
-  rmSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type {
   FindingsRuleContext,
   WorkflowConfig,
@@ -21,7 +18,10 @@ import {
   invalidateAllResolvedConfigCache,
   invalidateGlobalConfigCache,
 } from '../infra/config/index.js';
-import { loadAllWorkflowsWithSourcesFromDirs } from '../infra/config/loaders/workflowDiscovery.js';
+import {
+  iterateWorkflowDir,
+  loadAllWorkflowsWithSourcesFromDirs,
+} from '../infra/config/loaders/workflowDiscovery.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
 import { resolveRefToContent } from '../infra/config/loaders/resource-resolver.js';
 import { buildStepFragmentLookupDirs } from '../infra/config/loaders/stepFragmentLookupDirectories.js';
@@ -106,9 +106,25 @@ const FORBIDDEN_FC_REFS = [
   'fix-plan-from-review-resolution',
   'apply-fix-plan',
 ] as const;
+const LOOP_MONITOR_TRANSITIONS = [
+  ['reviewers', 'fix-plan', 'ABORT'],
+  ['reviewers', 'fix-plan', 'ABORT'],
+  ['fix-plan', 'ABORT'],
+  ['fix-retry', 'fix-plan', 'ABORT'],
+] as const;
+const EMPTY_FINDING_COUNTS: FindingCounts = {
+  open: 0,
+  provisional: 0,
+  dismissEligible: 0,
+  provisionalFixpoint: false,
+  roundBudgetExhausted: false,
+  anomalies: 0,
+  anomalyBudgetExhausted: false,
+  conflicts: 0,
+  unadjudicated: 0,
+};
 
 let testRoot: string;
-let previousTaktConfigDir: string | undefined;
 
 function builtinPath(language: Language, ...parts: string[]): string {
   return join(process.cwd(), 'builtins', language, ...parts);
@@ -274,13 +290,10 @@ function enumerateFindingCounts(): FindingCounts[] {
   return states;
 }
 
-beforeAll(() => {
-  previousTaktConfigDir = process.env.TAKT_CONFIG_DIR;
-  testRoot = mkdtempSync(join(tmpdir(), 'takt-default-fc-builtins-'));
-  const globalConfigDir = join(testRoot, 'global');
-  mkdirSync(globalConfigDir, { recursive: true });
-  writeFileSync(join(globalConfigDir, 'config.yaml'), 'language: en\n');
-  process.env.TAKT_CONFIG_DIR = globalConfigDir;
+beforeEach(() => {
+  const configDir = process.env.TAKT_CONFIG_DIR;
+  if (configDir === undefined) throw new Error('TAKT_CONFIG_DIR must be set by test-setup.ts');
+  testRoot = dirname(configDir);
   for (const language of LANGUAGES) {
     const projectConfigDir = join(testRoot, `project-${language}`, '.takt');
     mkdirSync(projectConfigDir, { recursive: true });
@@ -290,12 +303,9 @@ beforeAll(() => {
   invalidateAllResolvedConfigCache();
 });
 
-afterAll(() => {
-  if (previousTaktConfigDir === undefined) delete process.env.TAKT_CONFIG_DIR;
-  else process.env.TAKT_CONFIG_DIR = previousTaktConfigDir;
+afterEach(() => {
   invalidateGlobalConfigCache();
   invalidateAllResolvedConfigCache();
-  rmSync(testRoot, { recursive: true, force: true });
 });
 
 describe('takt-default-fc builtins', () => {
@@ -440,6 +450,36 @@ describe('takt-default-fc builtins', () => {
       expect(instruction).not.toMatch(/as supporting evidence|Use the latest reports|latest plan/iu);
       expect(instruction).not.toMatch(/補助証拠として|最新レビュー報告|直近の計画/u);
     }
+
+    expect(loaded).toHaveLength(LOOP_MONITOR_TRANSITIONS.length);
+    for (const [monitorIndex, monitor] of loaded.entries()) {
+      const expectedTransitions = LOOP_MONITOR_TRANSITIONS[monitorIndex];
+      if (expectedTransitions === undefined) throw new Error(`Unexpected monitor: ${monitorIndex}`);
+      expect(monitor.judge.rules).toHaveLength(expectedTransitions.length);
+      const instruction = monitor.judge.instruction;
+      if (instruction === undefined) throw new Error(`Missing monitor instruction: ${monitorIndex}`);
+
+      const judgeStep: WorkflowStep = {
+        name: `_loop_judge_test_${monitorIndex}`,
+        personaDisplayName: 'loop-judge',
+        instruction,
+        rules: monitor.judge.rules,
+      };
+      for (const [ruleIndex, expectedNextStep] of expectedTransitions.entries()) {
+        const condition = monitor.judge.rules[ruleIndex]?.condition;
+        if (condition?.kind !== 'semantic') {
+          throw new Error(`Expected semantic monitor rule: ${monitorIndex}:${ruleIndex}`);
+        }
+        const match = new RuleEvaluator(judgeStep, {
+          state: workflowState(judgeStep, EMPTY_FINDING_COUNTS),
+        }).evaluate({ label: condition.label, method: 'ai_judge' });
+        expect(match?.index).toBe(ruleIndex);
+        if (match === undefined) throw new Error(`Missing monitor rule match: ${monitorIndex}:${ruleIndex}`);
+        expect(determineRuleTransition(judgeStep, match.index)).toEqual({
+          nextStep: expectedNextStep,
+        });
+      }
+    }
   });
 
   it.each(LANGUAGES)('%s suite when() rules partition every valid 0/1/2 state', (language) => {
@@ -487,7 +527,9 @@ describe('takt-default-fc builtins', () => {
       undefined,
       true,
     );
-    expect([...workflows.keys()].filter((name) => name === 'takt-default-fc')).toHaveLength(1);
+    expect([...iterateWorkflowDir(builtinPath(language, 'workflows'), 'builtin')]
+      .filter(({ name }) => name === 'takt-default-fc')).toHaveLength(1);
+    expect(workflows.get('takt-default-fc')).toMatchObject({ source: 'builtin' });
 
     const catalogPath = join(process.cwd(), 'docs', language === 'ja'
       ? 'builtin-catalog.ja.md'
