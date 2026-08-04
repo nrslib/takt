@@ -63,13 +63,16 @@ ProviderAgent.call(prompt, options) → AgentResponse
 
 ### Model Resolution
 
-Models resolve through 5-level priority. Higher takes precedence.
+Provider and model resolve independently per field. Higher takes precedence.
 
-1. persona_providers model specification
-2. Step model field
-3. CLI `--model` override
-4. config.yaml (when resolved provider matches)
-5. Provider default
+1. CLI / environment explicit override
+2. Matching promotion (normal agent steps only; parallel sub-steps reject `promotion` at the schema level)
+3. Step / parallel sub-step direct provider / model
+4. workflow_call override
+5. provider_routing (steps → tags → personas)
+6. persona_providers (deprecated)
+7. Auto routing
+8. Workflow → project config.yaml → global config.yaml → provider default
 
 ## Auxiliary Entry Contracts
 

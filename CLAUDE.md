@@ -40,7 +40,7 @@ Two execution modes share the same engine: **Interactive** (`src/features/intera
 
 ### Layered layout (`src/`)
 
-```
+```text
 app/cli/       CLI entrypoint, command wiring, routing
 core/          Engine internals — no IO providers here
   workflow/    Engine, step executors, rule evaluation, instruction builder,
@@ -97,7 +97,7 @@ Optional per-run SQLite ledger (`finding-contract.sqlite`) that makes review fin
 - Reviewers emit structured raw findings via `*-finding-contract` output contracts; the engine verifies quotes/anchors byte-exact against files.
 - The **manager** (persona `findings-manager`) runs after each FC review step: admission, same/new identity judgment (dedup merge), rejected-observation recording. It **cannot** dismiss findings.
 - **Terminal/conflict adjudication** (adjudicator, default derived from `supervisor` persona) dismisses or settles findings — every dismissal basis requires machine-verifiable evidence (byte-exact quotes or task-scope quotes). Terminal authority is granted only via `finding_contract_authority: terminal_adjudication` on a workflow call, never by configuration alone.
-- Lifecycle identity across rounds: `new` / `persists` / `reopened` / `resolved`; resolution is lifecycle-continuity based and needs verified confirmation — "I fixed it" alone never resolves.
+- Lifecycle identity across rounds: `new` / `persists` / `reopened` / `resolved`; resolution is lifecycle-continuity based and requires verified confirmation — "I fixed it" alone never resolves.
 - Provider calls run under persistent leases (reserved→dispatched→settled) with input/output/call budgets in the ledger; `stop_budget.max_rounds` guarantees finite termination.
 - `finding_contract.manager` accepts `persona/instruction/output_contract`, optional `policy`/`knowledge` additions, and `provider`/`model`. `finding_contract.adjudicator` (optional) accepts `persona/instruction/provider/model`; when omitted the supervisor auto-derivation keeps prompts byte-identical (guarded by golden-baseline tests — do not regenerate goldens to make a change pass).
 - Manager/adjudicator prompt wire formats (structured output schemas, allowed actions, evidence requirements) are **engine-owned**; facets add judgment guidance only.
@@ -130,7 +130,7 @@ Output contracts live under `facets/output-contracts/`. User overrides: `~/.takt
 
 ## Runtime directory layout
 
-```
+```text
 ~/.takt/                Global user config (config.yaml, workflows/, facets/, repertoire/)
 .takt/                  Project config (highest priority)
   config.yaml           provider / provider_routing / quality gates / overrides

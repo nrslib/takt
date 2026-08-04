@@ -63,13 +63,16 @@ ProviderAgent.call(prompt, options) → AgentResponse
 
 ### モデル解決
 
-5段階の優先順位でモデルを解決する。上位が優先。
+provider と model はフィールドごとに独立して解決される。上位が優先。
 
-1. persona_providers のモデル指定
-2. step の model フィールド
-3. CLI `--model` オーバーライド
-4. config.yaml（プロバイダー一致時）
-5. プロバイダーデフォルト
+1. CLI / 環境変数の明示オーバーライド
+2. 現在の実行にマッチした promotion（通常の agent step のみ。parallel sub-step では指定自体がスキーマで拒否される）
+3. step / parallel sub-step の直接 provider / model
+4. workflow_call のオーバーライド
+5. provider_routing（steps → tags → personas の順）
+6. persona_providers（非推奨）
+7. auto routing
+8. workflow → プロジェクト config.yaml → グローバル config.yaml → プロバイダーデフォルト
 
 ## 補助入口の契約
 
