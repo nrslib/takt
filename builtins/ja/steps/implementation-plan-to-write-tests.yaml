@@ -3,6 +3,7 @@ tags:
   - plan
 edit: false
 persona: planner
+policy: contract-change
 knowledge: architecture
 provider_options:
   extends: review-readonly

@@ -71,11 +71,26 @@ takt -t "review current changes" -w review-takt-default
 
 CodeRabbit が PR をレビューした場合は、各コメントについて対応すべきかどうかを判断し、対応すべきものに対応してください。**すべてのスレッドを Resolve してください** — 変更を加えた場合も、対応しないと判断した場合も（その場合は理由を一言残す）Resolve します。未対応・未 Resolve のまま放置しないでください。
 
+## PR コメントコマンド（権限制限あり）
+
+コメントコマンドは有料の AI API クレジットを消費するため、権限で制限しています。`/review` はリポジトリオーナー・組織メンバー・コラボレーターのコメントに反応し、`/resolve`・`/ci`・`@takt` はオーナーのみに反応します。外部コントリビューターの PR ではこれらのコマンドは反応しません（ワークフローが起動しません）が、バグではなく想定どおりの挙動です。通常の CI はすべての PR で自動実行されます。追加の実行が必要だと思う場合は、コメントで依頼してください。
+
 ## コードスタイル
 
 - TypeScript strict mode
 - ESLint によるリンティング
 - 巧妙なコードより、シンプルで読みやすいコードを優先
+
+## Instruction / facet 変更時の canary
+
+`InstructionBuilder` や `builtins/{lang}/facets/instructions` などプロンプト組み立てに影響する変更は、ユニットテストでは捕まらない「弱いモデルのツール呼び出し不安定化」を引き起こすことがある（実例: 台帳が空の段階への異議申告ガイド注入で implement が連続失敗）。変更時は実プロバイダでの canary 実行を推奨する。
+
+```bash
+npm run build
+npm run canary:coder -- --provider opencode --model ollama-cloud/qwen3-coder-next
+```
+
+小さな implement 1走を現行の指示組み立てで実行し、完走とツールエラー数を確認する。PR の必須ゲートではない（実プロバイダのコストがかかるため）。
 
 ## ライセンス
 

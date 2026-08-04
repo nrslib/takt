@@ -4,19 +4,37 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { WorkflowConfig } from '../core/models/types.js';
 import { runStatusJudgmentPhase } from '../core/workflow/status-judgment-phase.js';
-import { loadAllWorkflowsWithSourcesFromDirs } from '../infra/config/loaders/workflowDiscovery.js';
+import {
+  collectValidatedWorkflowEntries,
+  iterateWorkflowDir,
+} from '../infra/config/loaders/workflowDiscovery.js';
+
+// The tests only inspect these implementation workflows. Loading all ~66
+// builtin workflows takes ~3s per call, so load just the needed entries once
+// per language through the same entry loader the full discovery path uses.
+const NEEDED_WORKFLOWS = new Set(['mini-core', 'development-core']);
+const builtinWorkflowsCache = new Map<'en' | 'ja', Map<string, { config: WorkflowConfig }>>();
 
 function loadBuiltinWorkflows(language: 'en' | 'ja') {
-  return loadAllWorkflowsWithSourcesFromDirs<WorkflowConfig>(
-    process.cwd(),
-    [{
-      dir: join(process.cwd(), 'builtins', language, 'workflows'),
-      source: 'builtin',
-    }],
-    undefined,
-    undefined,
-    true,
+  const cached = builtinWorkflowsCache.get(language);
+  if (cached) {
+    return cached;
+  }
+  const entries = Array.from(iterateWorkflowDir(
+    join(process.cwd(), 'builtins', language, 'workflows'),
+    'builtin',
+  )).filter((entry) => NEEDED_WORKFLOWS.has(entry.name));
+  const workflows = new Map(
+    collectValidatedWorkflowEntries<WorkflowConfig>(
+      entries,
+      process.cwd(),
+      undefined,
+      undefined,
+      true,
+    ).map(({ entry, config }) => [entry.name, { config }]),
   );
+  builtinWorkflowsCache.set(language, workflows);
+  return workflows;
 }
 
 describe('builtin implementation status judgment input', () => {
@@ -67,7 +85,6 @@ describe('builtin implementation status judgment input', () => {
             lastResponse: implementationResult,
             workflowName: workflow.name,
             iteration: 1,
-            executionScope: { kind: 'workflow_execution_scope', stack: [] },
             resolveStepProviderModel: vi.fn().mockReturnValue({
               provider: 'cursor',
               model: undefined,

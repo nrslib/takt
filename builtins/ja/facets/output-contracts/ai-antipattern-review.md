@@ -17,7 +17,7 @@
 ## 非finding化した懸念
 | 項目 | 場所 | 分類 | finding化しない根拠 |
 |------|------|------|---------------------|
-| {懸念。なければ「なし」} | `src/file.ts:42` | false_positive / overreach / out_of_scope / no_issue_after_verification | {根拠} |
+| {懸念。なければ「なし」} | `src/file.ts:42` | false_positive / overreach / outside_contract_jurisdiction / no_issue_after_verification | {根拠} |
 
 ## 問題系列の完了走査
 | family_tag / 変更契約 | 不変条件・根本原因 | 定義・生成・検証 | 利用・永続化・再注入 | 失敗・中断・再試行・再開・並列・補助入口 | mock・fixture・test double | 未確認経路 | 判定 |

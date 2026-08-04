@@ -308,6 +308,7 @@ instruction:
 `);
     const path = write(projectDir, '.takt/workflows/callable.yaml', `name: callable
 initial_step: run
+max_steps: 1
 subworkflow:
   callable: true
   params:
@@ -389,6 +390,7 @@ args:
 `);
     const path = write(projectDir, '.takt/workflows/callable.yaml', `name: callable
 initial_step: delegate
+max_steps: 1
 subworkflow:
   callable: true
   params:

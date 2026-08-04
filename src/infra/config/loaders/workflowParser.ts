@@ -119,8 +119,6 @@ function normalizeFindingContractConfig(
   const providerRoutingPersonaKey = raw.manager.persona.trim();
 
   return {
-    ledgerPath: raw.ledger_path,
-    rawFindingsPath: raw.raw_findings_path,
     manager: {
       persona: personaSpec,
       personaDisplayName: personaPath ? extractPersonaDisplayName(personaPath) : personaSpec,
@@ -282,14 +280,6 @@ export function normalizeWorkflowConfig(
     trustInfo: workflowTrustInfo,
   });
   try {
-  if (
-    parsedRaw.finding_contract !== undefined
-    && parsedRaw.subworkflow?.requires_finding_contract === true
-  ) {
-    throw new Error(
-      'Configuration error: subworkflow.requires_finding_contract cannot be combined with a local finding_contract',
-    );
-  }
   const callableDiscovery = callableArgMode === 'discovery'
     ? prepareCallableSubworkflowDiscoveryArgs(parsedRaw)
     : { raw: parsedRaw, callableArgs };
@@ -381,9 +371,7 @@ export function normalizeWorkflowConfig(
     reportFormats: sections.resolvedReportFormats,
     steps,
     initialStep: parsed.initial_step ?? steps[0]!.name,
-    ...(parsed.subworkflow?.callable === true
-      ? {}
-      : { maxSteps: parsed.max_steps ?? 10 }),
+    maxSteps: parsed.max_steps,
     loopMonitors,
     interactiveMode: parsed.interactive_mode,
   };

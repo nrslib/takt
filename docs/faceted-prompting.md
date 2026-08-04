@@ -1,5 +1,7 @@
 # Faceted Prompting: Separation of Concerns for AI Prompts
 
+[日本語](./faceted-prompting.ja.md)
+
 ## The Problem
 
 As multi-agent systems grow complex, prompts become monolithic. A single prompt file contains the agent's role, behavioral rules, task-specific instructions, domain knowledge, and output format — all tangled together. This creates three problems:
@@ -29,12 +31,18 @@ Faceted Prompting decomposes prompts into five orthogonal concerns:
 Each concern is a standalone file (Markdown or template) stored in its own directory:
 
 ```
-workflows/       # Workflow definitions
-personas/        # WHO — role definitions
-policies/        # RULES — prohibitions, quality standards
-instructions/    # WHAT — step procedures
-knowledge/       # CONTEXT — reference materials
-output-contracts/ # OUTPUT — output contract templates
+builtins/{lang}/
+  workflows/           # Workflow definitions
+  facets/
+    personas/          # WHO — role definitions
+    policies/          # RULES — prohibitions, quality standards
+    instructions/      # WHAT — step procedures
+    knowledge/         # CONTEXT — reference materials
+    output-contracts/  # OUTPUT — output contract templates
+    partials/          # Shared fragments referenced by other facets
+
+~/.takt/facets/<type>/   # User overrides (same facet types)
+.takt/facets/<type>/     # Project overrides (highest priority)
 ```
 
 ### Placement and Typical Examples
@@ -332,14 +340,14 @@ Key properties:
 ```yaml
 name: my-workflow
 max_steps: 10
-initial_step: plan
+initial_step: implement
 
 steps:
   - name: implement
-    persona: coder            # WHO — builtins/{lang}/personas/coder.md
-    policy: coding            # RULES — builtins/{lang}/policies/coding.md
-    instruction: implement    # WHAT — builtins/{lang}/instructions/implement.md
-    knowledge: architecture   # CONTEXT — builtins/{lang}/knowledge/architecture.md
+    persona: coder            # WHO — builtins/{lang}/facets/personas/coder.md
+    policy: coding            # RULES — builtins/{lang}/facets/policies/coding.md
+    instruction: implement    # WHAT — builtins/{lang}/facets/instructions/implement.md
+    knowledge: architecture   # CONTEXT — builtins/{lang}/facets/knowledge/architecture.md
     edit: true
     rules:
       - condition: Implementation complete
@@ -348,12 +356,12 @@ steps:
   - name: review
     persona: architecture-reviewer   # Different WHO
     policy: review            # Different RULES
-    instruction: review       # Different WHAT (but could share)
+    instruction: review-arch  # Different WHAT (but could share)
     knowledge: architecture   # Same CONTEXT — reused
     output_contracts:
       report:
         - name: review.md
-          format: architecture-review # OUTPUT — builtins/{lang}/output-contracts/architecture-review.md
+          format: architecture-review # OUTPUT — builtins/{lang}/facets/output-contracts/architecture-review.md
     edit: false
     rules:
       - condition: Approved

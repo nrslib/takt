@@ -1,0 +1,186 @@
+{
+  "reports": {
+    "1": {
+      "verdictExcerpt": "**APPROVE**",
+      "candidates": []
+    },
+    "2": {
+      "verdictExcerpt": "**REJECT**",
+      "candidates": [
+        {
+          "rawExcerptAnchor": "#### 1. `SoredImageAttachment` と `TaskAttachment` の型不整合によるランタイムリスク",
+          "rawExcerptEndMarker": "#### 2. 非同期処理における `cleanupAttachments` の呼び出し漏れリスク",
+          "candidate": {
+            "rawFindingId": null,
+            "relation": null,
+            "targetFindingId": null,
+            "familyTag": null,
+            "severity": null,
+            "title": "`SoredImageAttachment` と `TaskAttachment` の型不整合によるランタイムリスク",
+            "description": null,
+            "suggestion": "`StoredImageAttachment` から `TaskAttachment` への明示的な変換ロジックを導入し、一時パスではなくファイルの内容（Buffer）を渡す構造にするか、`TaskAttachment` 型の定義に合わせて `StoredImageAttachment` を修正してください。",
+            "target": {
+              "kind": "code",
+              "paths": [
+                "src/infra/github/prAttachments.ts",
+                "src/features/tasks/add/index.ts",
+                "src/features/tasks/attachments.ts"
+              ]
+            },
+            "evidenceRequests": []
+          }
+        },
+        {
+          "rawExcerptAnchor": "#### 2. 非同期処理における `cleanupAttachments` の呼び出し漏れリスク",
+          "rawExcerptEndMarker": "#### 3. `SoredImageAttachment` のタイポ（軽微）",
+          "candidate": {
+            "rawFindingId": null,
+            "relation": null,
+            "targetFindingId": null,
+            "familyTag": null,
+            "severity": null,
+            "title": "非同期処理における `cleanupAttachments` の呼び出し漏れリスク",
+            "description": null,
+            "suggestion": "`prReview` を完全に `await` してから `finally` ブロックでクリーンアップを呼び出すように修正してください。",
+            "target": {
+              "kind": "code",
+              "paths": [
+                "src/features/tasks/add/index.ts"
+              ]
+            },
+            "evidenceRequests": []
+          }
+        },
+        {
+          "rawExcerptAnchor": "#### 3. `SoredImageAttachment` のタイポ（軽微）",
+          "rawExcerptEndMarker": "### 判定",
+          "candidate": {
+            "rawFindingId": null,
+            "relation": null,
+            "targetFindingId": null,
+            "familyTag": null,
+            "severity": null,
+            "title": "`SoredImageAttachment` のタイポ（軽微）",
+            "description": null,
+            "suggestion": null,
+            "target": {
+              "kind": "code",
+              "paths": [
+                "src/infra/github/prAttachments.ts"
+              ]
+            },
+            "evidenceRequests": []
+          }
+        }
+      ]
+    },
+    "3": {
+      "verdictExcerpt": "**Verdict: REJECT**",
+      "candidates": [
+        {
+          "rawExcerptAnchor": "**1. Missing Unit/Integration Tests for `prAttachments.ts`**",
+          "rawExcerptEndMarker": "**2. Potential Performance Issue: Redundant Regex Execution**",
+          "candidate": {
+            "rawFindingId": null,
+            "relation": null,
+            "targetFindingId": null,
+            "familyTag": null,
+            "severity": null,
+            "title": "Missing Unit/Integration Tests for `prAttachments.ts`",
+            "description": null,
+            "suggestion": "Add comprehensive tests for `extractImageUrls`, `isAllowedGitHubAttachmentUrl`, and `downloadAndAttachPrReviewImages` (using mocks for `fetch` and `execFileSync`).",
+            "target": {
+              "kind": "structure",
+              "scope": {
+                "kind": "review_scope",
+                "roots": [
+                  "src/__tests__/"
+                ]
+              },
+              "manifestTargets": [
+                "src/infra/github/prAttachments.ts"
+              ]
+            },
+            "evidenceRequests": []
+          }
+        },
+        {
+          "rawExcerptAnchor": "**2. Potential Performance Issue: Redundant Regex Execution**",
+          "rawExcerptEndMarker": "### Summary",
+          "candidate": {
+            "rawFindingId": null,
+            "relation": null,
+            "targetFindingId": null,
+            "familyTag": null,
+            "severity": null,
+            "title": "Potential Performance Issue: Redundant Regex Execution",
+            "description": null,
+            "suggestion": "Use a single pass with a replacement function that looks up the matched URL in the `urlToAttachment` map.",
+            "target": {
+              "kind": "code",
+              "paths": [
+                "src/infra/github/prAttachments.ts"
+              ]
+            },
+            "evidenceRequests": []
+          }
+        }
+      ]
+    },
+    "4": {
+      "verdictExcerpt": "**Status: REJECT** (due to the $O(N \\times M)$ replacement logic which can be optimized to $O(N)$).",
+      "candidates": [
+        {
+          "rawExcerptAnchor": "#### 1. Inefficient Text Replacement Complexity (O(N*M))",
+          "rawExcerptEndMarker": "#### 2. Potential Leak of Temporary Directory on Success",
+          "candidate": {
+            "rawFindingId": null,
+            "relation": null,
+            "targetFindingId": null,
+            "familyTag": null,
+            "severity": null,
+            "title": "Inefficient Text Replacement Complexity (O(N*M))",
+            "description": "The `replaceUrlsInText` function iterates over all discovered attachments for every piece of text, and for each attachment, it performs two full-text regex replacements. If a PR has many images and long comments, this becomes $O(\\text{attachments} \\times \\text{text length})$.",
+            "suggestion": "Perform a single pass over the text using a regex and a lookup table (Map) to replace URLs with their corresponding placeholders.",
+            "target": {
+              "kind": "code",
+              "paths": [
+                "src/infra/github/prAttachments.ts"
+              ]
+            },
+            "evidenceRequests": []
+          }
+        },
+        {
+          "rawExcerptAnchor": "#### 2. Potential Leak of Temporary Directory on Success",
+          "rawExcerptEndMarker": "### Summary",
+          "candidate": {
+            "rawFindingId": null,
+            "relation": null,
+            "targetFindingId": null,
+            "familyTag": null,
+            "severity": null,
+            "title": "Potential Leak of Temporary Directory on Success",
+            "description": "While `cleanupAttachments` is provided in the return object, the responsibility for calling it is passed to the caller. If the caller fails to invoke this cleanup after moving the files to the final task directory, the `os.tmpdir()` will accumulate garbage.",
+            "suggestion": "Ensure the higher-level orchestration (where `attachPrReviewImages` is called) has a guaranteed `try-finally` block to call `cleanupAttachments()`. (Note: This is a structural concern; verify the caller's implementation).",
+            "target": {
+              "kind": "code",
+              "paths": [
+                "src/infra/github/prAttachments.ts"
+              ]
+            },
+            "evidenceRequests": []
+          }
+        }
+      ]
+    },
+    "5": {
+      "verdictExcerpt": "",
+      "candidates": []
+    },
+    "6": {
+      "verdictExcerpt": "**APPROVE**",
+      "candidates": []
+    }
+  }
+}

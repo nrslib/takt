@@ -36,7 +36,8 @@ tests:
           Judge the plan by its executable meaning, not by headings, identifier format, table shape, or exact wording. Pass only when all of the following are true:
 
           - It assigns stable, reusable identifiers to at least two distinct changed-contract families and uses those identifiers to connect requirements, implementation scope, and verification work.
-          - It traces the public projection contract through every relevant producer and consumer in the fixture, including preview, doctor, summary, and their shared test coverage, without assuming that a shared helper alone proves every caller.
+          - It traces the public projection contract through every relevant producer and consumer in the fixture, including preview, doctor, summary, the list-command entry point and its separately named catalog-row projection, and their shared test coverage, without assuming that a shared helper alone proves every caller.
+          - It identifies same-responsibility paths from definitions, references, and actual callers rather than relying only on familiar file names, and classifies each existing projection path as requiring an update, contractually out of scope, or unchanged with evidence.
           - It traces execution identity through every relevant creator, derived key, persistence, checkpoint, event, and restore/resume participant in the fixture.
           - It includes a concrete counterexample where two distinct logical executions could be confused by a non-injective identifier representation, and plans verification that rejects that counterexample.
           - It includes a continuous persistence-to-restoration or resumption scenario that proves the same logical execution keeps its identity across the lifecycle.
@@ -99,6 +100,6 @@ tests:
       - type: llm-rubric
         metric: plan/explicit-coexistence-scope
         value: |
-          Judge the plan by its executable meaning, not by exact wording or table shape. Pass only if it plans current-only writes with `call-path:` and dual-read restoration for both new and legacy resume records for the explicitly stated release.
+          Judge the plan by its executable meaning, not by exact wording or table shape. Pass only if it plans current-only writes with `call-path:` and dual-read restoration for both new and legacy resume records for the explicitly stated reading scope.
 
-          The plan must treat resume-record reading as the only authorized coexistence target. It must not add stored-record rewriting, data migration or backfill, API aliases, event upcasters, Read Model rebuilds, or legacy writes. It must plan direct behavioral evidence for both accepted record forms and for new records using only the current namespace. Fail if it removes the explicitly required legacy reader or expands coexistence into an unrequested compatibility or migration target.
+          The plan must treat resume-record reading as the only authorized coexistence target. It must not add stored-record rewriting, data migration or backfill, API aliases, event upcasters, Read Model rebuilds, or legacy writes. It must plan direct behavioral evidence for both accepted record forms and for new records using only the current namespace. Fail if it removes the explicitly required legacy reader, expands coexistence into an unrequested compatibility or migration target, or requires a deadline, deprecation period, removal condition, or migration schedule that the requirement source does not request.

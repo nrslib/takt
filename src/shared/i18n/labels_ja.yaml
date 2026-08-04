@@ -206,6 +206,7 @@ workflow:
     userInputPrompt: "追加の指示を入力してください（空で中止）"
   notifyComplete: "ワークフロー完了 ({iteration} iterations)"
   notifyAbort: "中断: {reason}"
+  notifyFailed: "失敗: {reason}"
   sigintGraceful: "Ctrl+C: ワークフローを中断しています..."
   sigintTimeout: "graceful停止がタイムアウトしました ({timeoutMs}ms)"
   sigintForce: "Ctrl+C: 強制終了します"

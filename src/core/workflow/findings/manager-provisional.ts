@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { ProvisionalFindingSpec } from './reconciler.js';
 import type {
   CanonicalRawFinding,
@@ -10,27 +11,12 @@ import {
   computeProvisionalStableKey,
   computeReviewerStableKey,
 } from './raw-canonicalization.js';
-import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
+import { canonicalJson } from '../../../shared/utils/canonical-json.js';
 
 interface RawProvisionalSpecInput {
   wire: RawFinding;
   canonical: Pick<CanonicalRawFinding, 'reviewerStableKey' | 'lineageKey'>;
   reason: string;
-}
-
-function actionRecoveryLineageTag(action: FindingActionRecovery): string {
-  switch (action.action) {
-    case 'invalidate':
-    case 'waive':
-    case 'dismiss':
-      return `${action.action}:${action.findingId}`;
-    case 'duplicate':
-      return [
-        action.action,
-        action.canonicalFindingId,
-        ...[...action.duplicateFindingIds].sort(compareBinaryStrings),
-      ].join(':');
-  }
 }
 
 export function provisionalSpecForRaw(input: RawProvisionalSpecInput): ProvisionalFindingSpec {
@@ -53,11 +39,14 @@ export function provisionalSpecForRawKind(
     reason: input.reason,
     title: input.wire.title,
     severity: input.wire.severity,
-    ...(input.wire.location !== undefined ? { location: input.wire.location } : {}),
-    description: input.wire.description,
-    ...(input.wire.suggestion !== undefined ? { suggestion: input.wire.suggestion } : {}),
+    ...(input.wire.description !== null ? { description: input.wire.description } : {}),
+    ...(input.wire.suggestion !== null ? { suggestion: input.wire.suggestion } : {}),
     reviewers: [input.wire.reviewer],
     recoveryReviewerStableKey: input.canonical.reviewerStableKey,
+    target: input.wire.target,
+    targetIdentityHash: input.wire.targetIdentityHash,
+    claimIdentityHash: input.wire.claimIdentityHash,
+    semanticClaimIdentityHash: input.wire.semanticClaimIdentityHash,
   };
 }
 
@@ -67,7 +56,6 @@ export function stalePreconditionSpec(input: {
   parentStepName: string;
   targetFindingId: string;
   targetTitle: string;
-  targetLocation?: string;
   sourceRawFindingIds: string[];
   reason: string;
   actionRecovery?: FindingActionRecovery;
@@ -79,12 +67,12 @@ export function stalePreconditionSpec(input: {
     reviewerPersonaKey: 'findings-manager',
   });
   const lineageKey = computeLineageKey({
+    claimIdentityHash: createHash('sha256').update(canonicalJson({
+      domain: 'finding-stale-precondition-event',
+      targetFindingId: input.targetFindingId,
+      reason: input.reason,
+    })).digest('hex'),
     targetFindingId: input.targetFindingId,
-    ...(input.targetLocation !== undefined ? { location: input.targetLocation } : {}),
-    title: input.targetTitle,
-    ...(input.actionRecovery !== undefined
-      ? { familyTag: actionRecoveryLineageTag(input.actionRecovery) }
-      : {}),
   });
   return {
     kind: 'stale-precondition',

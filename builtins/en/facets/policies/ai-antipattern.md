@@ -10,7 +10,7 @@ Detect assumptions, over-implementation, and superficial fixes that AI-generated
 | Reality check | Do not infer APIs, settings, fields, or wiring paths |
 | Context fit | Match existing naming, structure, error handling, logging, and tests |
 | Minimal diff | Do not mix in unnecessary features, abstractions, settings, or compatibility code |
-| Contract preservation | Do not change out-of-scope UI copy, public APIs, return values, errors, or test expectations. Do not keep an explicitly replaced old contract alongside the new one without a compatibility requirement |
+| Contract preservation | Do not change out-of-scope UI copy, public APIs, return values, errors, or test expectations |
 | Direct fixes | Do not replace a fix with tests or documentation explaining the issue |
 | Reachability | Confirm that added or retained code is used by current call paths |
 | Verifiability | Check code paths, usage sites, and execution results instead of explanations |
@@ -200,7 +200,7 @@ AI tends to over-deliver. Check for unnecessary additions.
 | Gold-plating | "Nice-to-have" additions not asked for |
 | Extra changes disguised as related work | Cleanup, renames, or moves justified only because they are near the edited code |
 | Incidental observable contract changes | Changing values observed by users or tests without being asked |
-| Unnecessary legacy support | Adding superseded-contract acceptance, translation, or retention logic without an explicit requirement-source mandate |
+| Contract-replacement violation | Adding or retaining an old path contrary to the contract replacement policy |
 
 The best code is the minimum code that solves the problem.
 
@@ -234,7 +234,7 @@ AI often changes existing contracts under the banner of "improvement", "standard
 | Tests are updated only to follow the new contract | REJECT |
 | New contract required by new functionality | OK |
 | Missing information is added while preserving the existing contract | OK |
-| The requirement source calls for the contract change, and its reason and impact scope are clear | OK. Add only migration or compatibility mechanisms necessary for the target and scope explicitly required by the source and, when time-bounded, its period and end condition |
+| The requirement source calls for the contract change, and its reason and impact scope are clear | OK. Apply the contract replacement policy |
 | Fixing display, accessibility, or test contract breakage newly caused by the requested change | OK. This is change-induced reconciliation, not scope creep |
 
 Verification approach:
@@ -242,13 +242,6 @@ Verification approach:
 2. Check whether each one is directly required by the task
 3. If test expectations merely follow implementation changes, check whether the original contract can be preserved
 4. If the contract change is necessary, verify that reason and impact scope are explained
-
-Legacy support criteria:
-- Unless the requirement source explicitly requires backward compatibility, legacy support, migration support, or coexistence for the target, legacy support is REJECT
-- Even with explicit authority, add or retain each alias, conversion, upcaster, fallback, backfill, data migration, rebuild, or other mechanism only when it is necessary for the stated target and scope and, when time-bounded, stays within the stated period and end condition
-- Without that explicit authority, do not add `.transform()`, `LEGACY_*_MAP`, `@deprecated`, aliases, upcasters, fallback, backfill, data migration, or rebuilds that support a superseded contract, even when the old and new contracts do not coexist
-- When none of those forms of support or coexistence is explicitly required for the target, support only new values and keep it simple
-- Current code, existing tests and usage sites, stored or persisted data, published or released status, and placement or isolation at a read boundary are impact evidence, not authority to add or retain compatibility
 
 ### Over-Abstracting with Function Objects
 
@@ -363,36 +356,6 @@ Verification approach:
 1. Grep to confirm no references to changed/deleted code remain
 2. Verify that public module (index files, etc.) export lists match actual implementations
 3. Check that no old code remains corresponding to newly added code
-
-## Unnecessary Backward Compatibility Code Detection
-
-AI tends to leave unnecessary code "for backward compatibility". Don't miss this.
-
-Code to remove:
-
-| Pattern | Example | Verdict |
-|---------|---------|---------|
-| deprecated + no usage | `@deprecated` annotation with no one using it | Remove immediately |
-| Superseded-contract translation path remains | Consumers use the new contract, but an old function, alias, conversion, or fallback also remains | Remove it unless the requirement source explicitly requires backward compatibility, legacy support, migration support, or coexistence for that target |
-| Completed migration wrapper | Wrapper created for compatibility but migration is complete | Remove |
-| Comment says "remove later" | `// TODO: remove after migration` left abandoned | Remove now |
-| Excessive proxy/adapter usage | Complexity added solely for backward compatibility | Replace simply |
-
-Legacy support to evaluate only for the target and scope explicitly required by the requirement source and, when time-bounded, its period and end condition:
-
-| Pattern | Example | Verdict |
-|---------|---------|---------|
-| Externally published API | Old npm package export | Retain only when the requirement source defines the supported range |
-| Config file compatibility | Can read old format config | Retain only when the requirement source explicitly requires reading the old format |
-| During data migration | In the middle of DB schema migration | Retain only when the requirement source defines the migration period and old path |
-
-Decision criteria:
-1. Does the requirement source explicitly require backward compatibility, legacy support, migration support, or coexistence? -> If not, remove the old path and migrate consumers to the new path
-2. What uses, persisted data, and publication scope exist? -> Use them to identify impact and current-consumer migration targets. Treat persisted-data backfill, data migration, and other legacy support as targets only when the requirement source explicitly requires them, and only within the stated scope and, when time-bounded, period and end condition
-3. Is each alias, conversion, upcaster, fallback, backfill, data migration, rebuild, or other mechanism necessary for the explicitly required target and scope? -> Remove unnecessary mechanisms even when that support family is authorized
-4. Does the code match the explicitly required compatibility scope and, when time-bounded, period and end condition? -> Remove it when outside the scope or period, or after the condition ends
-
-When AI says "for backward compatibility", require the explicit source location. Do not retain it based only on an implementer's or reviewer's safety judgment.
 
 ## Decision Traceability Review
 

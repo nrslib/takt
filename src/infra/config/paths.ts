@@ -10,7 +10,7 @@ import { isAbsolute, join, relative, resolve } from 'node:path';
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import type { Language } from '../../core/models/index.js';
 import { LanguageSchema } from '../../core/models/schema-base.js';
-import { getLanguageResourcesDir } from '../resources/index.js';
+import { getLanguageResourcesDir, getResourcesDir } from '../resources/index.js';
 
 import type { FacetKind } from 'faceted-prompting';
 import { REPERTOIRE_DIR_NAME } from './constants.js';
@@ -24,8 +24,24 @@ export type { FacetKind as FacetType } from 'faceted-prompting';
 
 type FacetType = FacetKind;
 
+let globalConfigDirOverride: string | undefined;
+
+/** Run a synchronous historical-source load without consulting current global config. */
+export function withGlobalConfigDirOverride<T>(configDir: string, action: () => T): T {
+  if (globalConfigDirOverride !== undefined) {
+    throw new Error('Nested global config directory overrides are not supported');
+  }
+  globalConfigDirOverride = configDir;
+  try {
+    return action();
+  } finally {
+    globalConfigDirOverride = undefined;
+  }
+}
+
 /** Get takt global config directory (~/.takt or TAKT_CONFIG_DIR) */
 export function getGlobalConfigDir(): string {
+  if (globalConfigDirOverride !== undefined) return globalConfigDirOverride;
   return process.env.TAKT_CONFIG_DIR || join(homedir(), '.takt');
 }
 
@@ -73,6 +89,11 @@ export function getBuiltinProviderOptionsDir(lang: Language): string {
 
 export function getBuiltinLanguageStepsDir(lang: Language): string {
   return join(getLanguageResourcesDir(lang), 'steps');
+}
+
+/** Legacy shared step-fragment root used before fragments became language-scoped. */
+export function getBuiltinSharedStepsDir(): string {
+  return join(getResourcesDir(), 'steps');
 }
 
 export function isBuiltinWorkflowPath(filePath: string): boolean {

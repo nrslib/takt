@@ -20,7 +20,6 @@ language: en        # UI language: en | ja
 # auto_requeue_max_attempts: 0     # Auto-requeue failed workflow tasks during takt run (non-negative integer; 0 disables)
 # ignore_exceed: false             # Applies to takt run and takt watch like --ignore-exceed
 # sync_project_local_takt_on_retry: true # Sync root project-local .takt before retry / re-execution. Set false to keep the worktree copy
-
 # PR / branch
 # auto_pr: false                   # Auto-create PR after worktree execution
 # draft_pr: false                  # Create PR as draft

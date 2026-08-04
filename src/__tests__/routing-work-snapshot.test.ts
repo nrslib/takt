@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { createRoutingWorkFingerprint, normalizeRoutingWorkSnapshot } from '../core/workflow/auto-routing/normalizer.js';
 import { ROUTING_WORK_SNAPSHOT_LOCAL_IDENTITY } from '../core/workflow/auto-routing/contracts.js';
-import { buildRoutingWorkSnapshot } from '../core/workflow/auto-routing/snapshot.js';
+import {
+  buildRoutingFindings,
+  buildRoutingWorkSnapshot,
+} from '../core/workflow/auto-routing/snapshot.js';
+import {
+  authorizeFindingLedgerFixture,
+  emptyFindingAuthorityProjection,
+} from './helpers/finding-lifecycle-fixture.js';
 
 describe('buildRoutingWorkSnapshot', () => {
   it('Given active task context, a team part, and finding contract entries, When building a routing snapshot, Then only routing work fields are projected', () => {
@@ -138,7 +145,7 @@ describe('buildRoutingWorkSnapshot', () => {
             lifecycle: 'provisional',
             title: 'Recovery boundary is incomplete',
             description: 'The recovery boundary has an unresolved observation.',
-            provisional: { kind: 'unverified-locationless' },
+            provisional: { kind: 'raw-meaning-ambiguous' },
           },
         ],
         conflicts: [],
@@ -155,6 +162,58 @@ describe('buildRoutingWorkSnapshot', () => {
         provisional: true,
       },
     ]);
+  });
+
+  it('projects a nullable provisional from the ledger using only its engine-issued reason', () => {
+    const observedAt = {
+      runId: 'run-1',
+      stepName: 'reviewers',
+      timestamp: '2026-07-30T00:00:00.000Z',
+    };
+    const ledger = authorizeFindingLedgerFixture({
+      workflowName: 'peer-review',
+      nextId: 2,
+      updatedAt: observedAt.timestamp,
+      findings: [{
+        id: 'F-0001',
+        status: 'open',
+        lifecycle: 'new',
+        target: null,
+        targetIdentityHash: null,
+        claimIdentityHash: null,
+        semanticClaimIdentityHash: null,
+        severity: null,
+        title: null,
+        evidenceIds: [],
+        reviewers: ['reviewer-a'],
+        rawFindingIds: [],
+        firstSeen: observedAt,
+        lastSeen: observedAt,
+        revision: 1,
+        provisional: {
+          kind: 'raw-meaning-ambiguous',
+          stableKey: 'stable-nullable-routing',
+          lineageKey: 'lineage-nullable-routing',
+          sourceRawFindingIds: [],
+          reason: 'The reviewer observation does not yet contain a complete claim.',
+          firstObservedAt: observedAt,
+          lastObservedAt: observedAt,
+          gateEffect: 'block',
+          firstObservedRound: 1,
+        },
+      }],
+      evidenceRecords: [],
+      rawFindings: [],
+      conflicts: [],
+      ...emptyFindingAuthorityProjection(),
+    });
+
+    expect([...buildRoutingFindings(ledger).open]).toEqual([{
+      id: 'F-0001',
+      lifecycle: 'new',
+      description: 'The reviewer observation does not yet contain a complete claim.',
+      provisional: true,
+    }]);
   });
 
   it('Given identical current work, When building routing snapshots, Then the public builder input has no iteration values', () => {

@@ -255,9 +255,11 @@ See the [Builtin Catalog](./docs/builtin-catalog.md) for all workflows and perso
 |---------|-------------|
 | `takt` | Talk to AI, refine requirements, execute or queue tasks |
 | `takt exec` | Start instant Assistant/Worker/Review agent mode without writing workflow YAML |
+| `takt add` | Refine a task through AI conversation and queue it (also from GitHub Issues) |
 | `takt run` | Execute all pending tasks |
+| `takt watch` | Monitor the task queue and auto-execute pending tasks (resident process) |
 | `takt list` | Manage task branches (merge, retry, requeue, force-fail, instruct, delete) |
-| `takt #N` | Execute GitHub Issue as task |
+| `takt #N` | Use a GitHub Issue as the initial input for a task |
 | `takt eject` | Copy builtin workflows/facets for customization |
 | `takt workflow init` | Create a new workflow scaffold |
 | `takt workflow doctor` | Validate workflow definitions |
@@ -290,6 +292,12 @@ provider: claude    # claude, claude-sdk, claude-terminal, codex, opencode, curs
 model: sonnet       # passed directly to provider
 language: en        # en or ja
 ```
+
+Run metadata, sessions, traces, reports, and other run artifacts remain ordinary
+files under `.takt/runs/<run>/`. A workflow that uses Finding Contract lazily
+creates `.takt/runs/<run>/finding-contract.sqlite` for Finding authority state
+only. Resume and requeue can seed that state from another run; when the source
+has no Finding database, the target starts with an empty Finding ledger.
 
 To let TAKT choose provider/model per workflow step, keep a concrete top-level provider and define `auto_routing` candidates. The presence of effective `auto_routing` enables automatic routing:
 
@@ -366,14 +374,16 @@ takt eject default           # Copy builtin workflow to ~/.takt/workflows/ and e
 
 ### Custom personas
 
-Create a Markdown file in `~/.takt/personas/`:
+Create a Markdown file in `~/.takt/facets/personas/`:
 
 ```markdown
-# ~/.takt/personas/my-reviewer.md
+# ~/.takt/facets/personas/my-reviewer.md
 You are a code reviewer specialized in security.
 ```
 
 Reference it in your workflow: `persona: my-reviewer`
+
+`~/.takt/personas/` still works as a compatibility path, but `takt catalog` only scans the `facets/` directories.
 
 See the [Workflow Guide](./docs/workflows.md) for details. The list of builtin personas is in the [Builtin Catalog](./docs/builtin-catalog.md).
 
@@ -440,6 +450,7 @@ See [External Integrations](./docs/external-integrations.md) for other community
 | [Workflow Guide](./docs/workflows.md) | Creating and customizing workflows |
 | [Builtin Catalog](./docs/builtin-catalog.md) | All builtin workflows and personas |
 | [Faceted Prompting](./docs/faceted-prompting.md) | Prompt design methodology |
+| [Token Saving](./docs/token-saving.md) | Measuring and reducing token consumption |
 | [Repertoire Packages](./docs/repertoire.md) | Installing and sharing packages |
 | [Task Management](./docs/task-management.md) | Task queuing, execution, isolation |
 | [CI/CD Integration](./docs/ci-cd.md) | GitHub Actions and pipeline mode |

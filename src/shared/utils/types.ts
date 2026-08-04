@@ -1,4 +1,5 @@
 import type { AgentFailureCategory } from '../types/agent-failure.js';
+import type { CanonicalWorkflowResumeFrame } from '../types/workflow-resume.js';
 
 /**
  * Type definitions for utils module.
@@ -46,13 +47,7 @@ export interface NdjsonWorkflowStart {
   startTime: string;
 }
 
-export interface NdjsonWorkflowStackEntry {
-  workflow: string;
-  workflow_ref?: string;
-  step: string;
-  kind: 'agent' | 'system' | 'workflow_call';
-  call_instance?: number;
-}
+export type NdjsonWorkflowStackEntry = CanonicalWorkflowResumeFrame;
 
 export interface NdjsonWorkflowCallStart {
   type: 'workflow_call_start';
@@ -118,6 +113,7 @@ export interface NdjsonWorkflowComplete {
   type: 'workflow_complete';
   iterations: number;
   endTime: string;
+  publicationId?: string;
 }
 
 export interface NdjsonWorkflowAbort {
@@ -125,6 +121,7 @@ export interface NdjsonWorkflowAbort {
   iterations: number;
   reason: string;
   endTime: string;
+  publicationId?: string;
 }
 
 export interface NdjsonPhaseStart {
@@ -205,7 +202,8 @@ export interface PromptLogRecord {
   step: string;
   phase: 1 | 2 | 3;
   iteration: number;
-  phaseExecutionId?: string;
+  scope: string;
+  phaseExecutionId: string;
   prompt: string;
   systemPrompt: string;
   userInstruction: string;

@@ -14,8 +14,7 @@
  *         write-tests-contract-traceability,
  *         implement-contract-traceability,
  *         implementation-report-contract-traceability,
- *         review-adjudication,
- *         final-readiness-supervision, final-readiness-precision
+ *         review-adjudication
  *         (default: all except rescan suites,
  *         which need opencode auth)
  * Example: npm run eval:prompts -- arch --repeat 3
@@ -51,8 +50,6 @@ const SUITES = {
   'implementation-report-contract-traceability': 'promptfooconfig.implementation-report-contract-traceability.yaml',
   'follow-up-review-repair-regression': 'promptfooconfig.follow-up-review-repair-regression.yaml',
   'review-adjudication': 'promptfooconfig.review-adjudication.yaml',
-  'final-readiness-supervision': 'promptfooconfig.final-readiness-supervision.yaml',
-  'final-readiness-precision': 'promptfooconfig.final-readiness-precision.yaml',
 };
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));

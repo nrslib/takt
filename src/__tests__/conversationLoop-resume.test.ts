@@ -40,8 +40,7 @@ vi.mock('../infra/config/index.js', () => ({
   resolveNonWorkflowProviderOptions: vi.fn(() => ({
     codex: { skills: { repo: false, user: false } },
   })),
-  loadSessionState: vi.fn(() => null),
-  clearSessionState: vi.fn(),
+  takeSessionState: vi.fn(() => null),
 }));
 
 vi.mock('../features/interactive/assistantConfig.js', () => ({
@@ -79,8 +78,7 @@ vi.mock('../infra/config/paths.js', async (importOriginal) => ({
   loadPersonaSessions: vi.fn(() => ({})),
   updatePersonaSession: vi.fn(),
   getProjectConfigDir: vi.fn(() => '/tmp'),
-  loadSessionState: vi.fn(() => null),
-  clearSessionState: vi.fn(),
+  takeSessionState: vi.fn(() => null),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({

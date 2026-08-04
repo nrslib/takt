@@ -257,7 +257,7 @@ describe('WorkflowConfigRawSchema', () => {
         allowed_tools: ['Read', 'Grep'],
       },
     });
-    expect(result.max_steps).toBeUndefined();
+    expect(result.max_steps).toBe(10);
   });
 
   it.each([

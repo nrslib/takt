@@ -7,7 +7,9 @@ tags: [review, final-gate, supervise]
 edit: false
 session: compact
 persona: supervisor
-policy: review
+policy:
+  - contract-change
+  - review
 knowledge:
   $param: supervise_knowledge
 instruction: supervise-finding-contract
@@ -15,6 +17,3 @@ output_contracts:
   report:
     - name: supervisor-validation.md
       format: supervisor-validation-finding-contract
-    - name: supervisor-gate-summary.md
-      format: supervisor-gate-summary-finding-contract
-      use_judge: false

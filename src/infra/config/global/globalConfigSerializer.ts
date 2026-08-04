@@ -8,6 +8,7 @@ import {
   denormalizeRateLimitFallback,
   denormalizeTelemetryConfig,
   denormalizeAutoRoutingConfig,
+  denormalizeFindingIntakeNormalize,
 } from '../configNormalizers.js';
 import { denormalizeObservabilityConfig } from '../observabilityConfig.js';
 
@@ -50,6 +51,12 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
   const rawAutoRouting = denormalizeAutoRoutingConfig(config.autoRouting);
   if (rawAutoRouting) {
     raw.auto_routing = rawAutoRouting;
+  }
+  const rawIntakeNormalize = denormalizeFindingIntakeNormalize(
+    config.findingContract?.intakeNormalize,
+  );
+  if (rawIntakeNormalize) {
+    raw.finding_contract = { intake_normalize: rawIntakeNormalize };
   }
   const rawObservability = denormalizeObservabilityConfig(config.observability);
   if (rawObservability) {

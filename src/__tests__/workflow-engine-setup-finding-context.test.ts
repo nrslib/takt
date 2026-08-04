@@ -7,6 +7,7 @@ import {
 } from '../core/workflow/engine/WorkflowEngineSetup.js';
 import { createStructuredOutputNormalizerRegistry } from '../core/workflow/engine/structured-output-normalizer.js';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
+import { createEmptyFindingContractRegistries } from '../core/models/finding-contract-seed.js';
 
 function makeFinding(
   id: string,
@@ -16,8 +17,13 @@ function makeFinding(
     id,
     status,
     lifecycle: status === 'open' ? 'new' : status,
+    target: null,
+    targetIdentityHash: null,
+    claimIdentityHash: null,
+    semanticClaimIdentityHash: null,
     severity: 'high',
     title: `${status} finding`,
+    evidenceIds: [],
     reviewers: ['reviewer'],
     rawFindingIds: [],
     firstSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-08-01T00:00:00.000Z' },
@@ -32,9 +38,13 @@ function makePendingLedger(): FindingLedger {
     nextId: 1,
     updatedAt: '2026-08-01T00:00:00.000Z',
     findings: [],
+    evidenceRecords: [],
+    evidenceBindings: [],
+    lifecycleReservations: [],
+    lifecycleEvents: [],
     rawFindings: [],
     conflicts: [],
-    interpretations: [],
+    ...createEmptyFindingContractRegistries(),
     pendingManagerCommit: {
       roundMarker: 'round-1',
       publication: {
@@ -62,9 +72,13 @@ function makePendingLedger(): FindingLedger {
           makeFinding('F-0002', 'waived'),
           makeFinding('F-0003', 'dismissed'),
         ],
+        evidenceRecords: [],
+        evidenceBindings: [],
+        lifecycleReservations: [],
+        lifecycleEvents: [],
         rawFindings: [],
         conflicts: [],
-        interpretations: [],
+        ...createEmptyFindingContractRegistries(),
       },
     },
   };

@@ -1,18 +1,25 @@
-import type { AgentResponse, LoopMonitorConfig, WorkflowMaxSteps, WorkflowState, WorkflowStep } from '../../models/types.js';
+import type {
+  AgentResponse,
+  FallbackContext,
+  LoopMonitorConfig,
+  WorkflowMaxSteps,
+  WorkflowState,
+  WorkflowStep,
+} from '../../models/types.js';
+import { getAllParallelSubSteps } from '../../models/types.js';
 import { ABORT_STEP, FINDING_CONFLICT_ADJUDICATION_STEP } from '../constants.js';
 import { FINDING_CONFLICT_ADJUDICATION_RULE_INDEX } from '../findings/adjudication-step.js';
 import { isDelegatedWorkflowStep, isSystemWorkflowStep, isWorkflowCallStep } from '../step-kind.js';
-import type { RuntimeStepResolution, StepRunResult, WorkflowEngineOptions } from '../types.js';
+import type {
+  RuntimeStepResolution,
+  StepRunResult,
+  WorkflowEngineOptions,
+  WorkflowStepExecutionEventContext,
+} from '../types.js';
 import type { PreparedNormalStepExecution } from './StepExecutor.js';
+import type { WorkflowCallExecutionToken } from './WorkflowCallRunner.js';
 import { determineRuleTransition, type WorkflowRuleTransition } from './transitions.js';
 import { RuleDetectionExhaustedError } from '../evaluation/RuleDetectionExhaustedError.js';
-import type { WorkflowStepBudget } from '../workflow-step-budget.js';
-import type { LoopMonitorJudgeRunResult } from './LoopMonitorJudgeRunner.js';
-import {
-  requireWorkflowEventAttribution,
-  type WorkflowExecutionScope,
-  type WorkflowEventAttribution,
-} from '../workflow-execution-scope.js';
 
 interface WorkflowEngineStepCoordinatorDeps {
   config: {
@@ -20,16 +27,18 @@ interface WorkflowEngineStepCoordinatorDeps {
   };
   state: WorkflowState;
   task: string;
-  stepBudget: WorkflowStepBudget;
+  getMaxSteps: () => WorkflowMaxSteps;
   getOptions: () => WorkflowEngineOptions;
   stepExecutor: {
     runNormalStep: (
       step: WorkflowStep,
       state: WorkflowState,
+      task: string,
+      maxSteps: WorkflowMaxSteps,
       updateSession: (persona: string, sessionId: string | undefined) => void,
-      runtime: RuntimeStepResolution | undefined,
-      preparedExecution: PreparedNormalStepExecution,
-      eventAttribution: WorkflowEventAttribution,
+      prebuiltInstruction?: string,
+      runtime?: RuntimeStepResolution,
+      preparedExecution?: PreparedNormalStepExecution,
     ) => Promise<StepRunResult>;
     prepareNormalStepExecution: (
       step: WorkflowStep,
@@ -39,7 +48,21 @@ interface WorkflowEngineStepCoordinatorDeps {
       stepIteration: number,
       runtime?: RuntimeStepResolution,
     ) => PreparedNormalStepExecution;
-    drainReportFiles: () => Array<{ step: WorkflowStep; filePath: string; fileName: string }>;
+    buildInstruction: (
+      step: WorkflowStep,
+      stepIteration: number,
+      state: WorkflowState,
+      task: string,
+      maxSteps: WorkflowMaxSteps,
+      fallbackContext?: FallbackContext,
+    ) => string;
+    buildPhase1Instruction: (instruction: string, step: WorkflowStep, runtime?: RuntimeStepResolution) => string;
+    drainReportFiles: () => Array<{
+      step: WorkflowStep;
+      filePath: string;
+      fileName: string;
+      context: WorkflowStepExecutionEventContext;
+    }>;
   };
   parallelRunner: {
     runParallelStep: (
@@ -48,9 +71,8 @@ interface WorkflowEngineStepCoordinatorDeps {
       task: string,
       maxSteps: WorkflowMaxSteps,
       updateSession: (persona: string, sessionId: string | undefined) => void,
-      runtime: RuntimeStepResolution | undefined,
-      activeStepIteration: number | undefined,
-      eventAttribution: WorkflowEventAttribution,
+      runtime?: RuntimeStepResolution,
+      activeStepIteration?: number,
     ) => Promise<StepRunResult>;
   };
   arpeggioRunner: {
@@ -77,7 +99,6 @@ interface WorkflowEngineStepCoordinatorDeps {
       step: WorkflowStep,
       state: WorkflowState,
       runtime?: RuntimeStepResolution,
-      executionScope?: WorkflowExecutionScope,
     ) => Promise<AgentResponse>;
   };
   loopMonitorJudgeRunner: {
@@ -87,58 +108,31 @@ interface WorkflowEngineStepCoordinatorDeps {
       triggeringStep: WorkflowStep,
       triggeringRuntime: RuntimeStepResolution | undefined,
       fallbackNextStep: string,
-      resumedStart?: import('../../models/types.js').WorkflowPendingLoopJudgeStarted,
-    ) => Promise<LoopMonitorJudgeRunResult>;
+    ) => Promise<string>;
   };
   workflowCallRunner: {
     run: (
       step: WorkflowStep & { call: string },
+      execution: WorkflowCallExecutionToken,
       runtime?: RuntimeStepResolution,
     ) => Promise<StepRunResult>;
+    resolveRuntime: (step: WorkflowStep & { call: string }) => RuntimeStepResolution;
   };
   updatePersonaSession: (persona: string, sessionId: string | undefined) => void;
   emitReport: (
     step: WorkflowStep,
     filePath: string,
     fileName: string,
-    eventAttribution: WorkflowEventAttribution,
+    context: WorkflowStepExecutionEventContext,
   ) => void;
-  getExecutionOwnerPath: () => readonly import('../../models/types.js').WorkflowResumePointEntry[];
-  recordParticipation: (
-    step: WorkflowStep,
-    reportNames: readonly string[],
-    ownerPath: readonly import('../../models/types.js').WorkflowResumePointEntry[],
-  ) => void;
+  recordParticipation: (step: WorkflowStep, reportNames: readonly string[]) => void;
   /** Present only when the workflow has an effective finding_contract and the finding-conflict-adjudication step was injected (see WorkflowEngine). */
   findingConflictAdjudicationRunner?: {
-    run: (
-      step: WorkflowStep,
-      state: WorkflowState,
-      runtime: RuntimeStepResolution | undefined,
-      eventAttribution: WorkflowEventAttribution,
-    ) => Promise<StepRunResult>;
+    run: (step: WorkflowStep, state: WorkflowState, runtime?: RuntimeStepResolution) => Promise<StepRunResult>;
     /** Origin the runner last resolved (state.previousStep or the pending attempt's durable originStep — origin-step requirement). */
     getLastOriginStep: () => string | undefined;
   };
 }
-
-interface CountableStepPlanBase {
-  readonly runtime: RuntimeStepResolution | undefined;
-  readonly stepIteration: number;
-  readonly eventAttribution: WorkflowEventAttribution;
-}
-
-export type WorkflowStepExecutionPlan =
-  | {
-      readonly kind: 'workflow_call';
-    }
-  | (CountableStepPlanBase & {
-      readonly kind: 'normal';
-      readonly preparedExecution: PreparedNormalStepExecution;
-    })
-  | (CountableStepPlanBase & {
-      readonly kind: 'engine_synthesized' | 'parallel' | 'arpeggio' | 'team_leader' | 'system';
-    });
 
 export class WorkflowEngineStepCoordinator {
   constructor(private readonly deps: WorkflowEngineStepCoordinatorDeps) {}
@@ -151,106 +145,97 @@ export class WorkflowEngineStepCoordinator {
     return step;
   }
 
+  resolveRuntimeForStep(step: WorkflowStep): RuntimeStepResolution | undefined {
+    if (isWorkflowCallStep(step)) {
+      return this.deps.workflowCallRunner.resolveRuntime(step);
+    }
+    return undefined;
+  }
+
   async runStep(
     step: WorkflowStep,
-    plan: WorkflowStepExecutionPlan,
+    prebuiltInstruction?: string,
+    runtime?: RuntimeStepResolution,
+    stepIteration?: number,
+    preparedExecution?: PreparedNormalStepExecution,
+    workflowCallExecution?: WorkflowCallExecutionToken,
   ): Promise<StepRunResult> {
     const updateSession = this.deps.updatePersonaSession;
     let result: StepRunResult;
 
-    if (plan.kind === 'engine_synthesized') {
+    if (step.name === FINDING_CONFLICT_ADJUDICATION_STEP && step.engineSynthesized === true) {
       const runner = this.deps.findingConflictAdjudicationRunner;
       if (!runner) {
         throw new Error(
           `Step "${step.name}" is the engine-synthesized conflict adjudication step but no adjudication runner is configured`,
         );
       }
-      result = await runner.run(
-        step,
-        this.deps.state,
-        plan.runtime,
-        plan.eventAttribution,
-      );
-    } else if (plan.kind === 'parallel') {
+      result = await runner.run(step, this.deps.state, runtime);
+    } else if (step.parallel && getAllParallelSubSteps(step.parallel).length > 0) {
       result = await this.deps.parallelRunner.runParallelStep(
         step,
         this.deps.state,
         this.deps.task,
-        this.deps.stepBudget.currentMaxSteps(),
+        this.deps.getMaxSteps(),
         updateSession,
-        plan.runtime,
-        plan.stepIteration,
-        plan.eventAttribution,
+        runtime,
+        stepIteration,
       );
-    } else if (plan.kind === 'arpeggio') {
+    } else if (step.arpeggio) {
       result = await this.deps.arpeggioRunner.runArpeggioStep(
         step,
         this.deps.state,
-        plan.runtime,
-        plan.stepIteration,
+        runtime,
+        stepIteration,
       );
-    } else if (plan.kind === 'team_leader') {
+    } else if (step.teamLeader) {
       result = await this.deps.teamLeaderRunner.runTeamLeaderStep(
         step,
         this.deps.state,
         this.deps.task,
-        this.deps.stepBudget.currentMaxSteps(),
+        this.deps.getMaxSteps(),
         updateSession,
-        plan.runtime,
-        plan.stepIteration,
+        runtime,
+        stepIteration,
       );
-    } else if (plan.kind === 'system') {
+    } else if (isSystemWorkflowStep(step)) {
       result = {
-        response: await this.deps.systemStepExecutor.run(step, this.deps.state, plan.runtime, plan.eventAttribution.scope),
+        response: await this.deps.systemStepExecutor.run(step, this.deps.state, runtime),
         instruction: '',
       };
-    } else if (plan.kind === 'workflow_call') {
-      if (!isWorkflowCallStep(step)) {
-        throw new Error(`Step "${step.name}" cannot use a workflow_call execution plan`);
+    } else if (isWorkflowCallStep(step)) {
+      if (workflowCallExecution === undefined) {
+        throw new Error(`workflow_call step "${step.name}" execution was not activated`);
       }
-      result = await this.deps.workflowCallRunner.run(step);
+      result = await this.deps.workflowCallRunner.run(step, workflowCallExecution, runtime);
     } else {
-      if (plan.kind !== 'normal') {
-        throw new Error(`Step "${step.name}" has an unsupported execution plan: ${plan.kind}`);
-      }
       result = await this.deps.stepExecutor.runNormalStep(
         step,
         this.deps.state,
+        this.deps.task,
+        this.deps.getMaxSteps(),
         updateSession,
-        plan.runtime,
-        plan.preparedExecution,
-        plan.eventAttribution,
+        prebuiltInstruction,
+        runtime,
+        preparedExecution,
       );
     }
 
     const reports = this.deps.stepExecutor.drainReportFiles();
-    if (reports.length > 0) {
-      const reportAttribution = requireWorkflowEventAttribution(
-        plan.kind === 'workflow_call' ? undefined : plan.eventAttribution,
-        'step:report',
-      );
-      for (const { step: reportedStep, filePath, fileName } of reports) {
-        this.deps.emitReport(reportedStep, filePath, fileName, reportAttribution);
-      }
+    for (const { step: reportedStep, filePath, fileName, context } of reports) {
+      this.deps.emitReport(reportedStep, filePath, fileName, context);
     }
     const reportedSteps = new Map<string, WorkflowStep>();
     for (const report of reports) {
       reportedSteps.set(report.step.name, report.step);
     }
     reportedSteps.set(step.name, step);
-    const executionOwnerPath = plan.kind === 'workflow_call'
-      ? this.deps.getExecutionOwnerPath()
-      : plan.eventAttribution.scope.stack.slice(0, -1);
-    const nestedOwnerPath = plan.kind === 'workflow_call'
-      ? executionOwnerPath
-      : plan.eventAttribution.scope.stack;
     for (const [stepName, participatedStep] of reportedSteps) {
       this.deps.recordParticipation(
         participatedStep,
         reports
           .filter((report) => report.step.name === stepName)
           .map((report) => report.fileName),
-        participatedStep.name === step.name ? executionOwnerPath : nestedOwnerPath,
       );
     }
     return result;
@@ -352,27 +337,46 @@ export class WorkflowEngineStepCoordinator {
     return wiringSteps.length === 1 ? wiringSteps[0]!.name : undefined;
   }
 
+  buildInstruction(
+    step: WorkflowStep,
+    stepIteration: number,
+    fallbackContext?: FallbackContext,
+  ): string {
+    return this.deps.stepExecutor.buildInstruction(
+      step,
+      stepIteration,
+      this.deps.state,
+      this.deps.task,
+      this.deps.getMaxSteps(),
+      fallbackContext,
+    );
+  }
+
   prepareNormalStepExecution(
     step: WorkflowStep,
     stepIteration: number,
     runtime?: RuntimeStepResolution,
-  ): PreparedNormalStepExecution {
+  ): PreparedNormalStepExecution | undefined {
     if (
       (step.name === FINDING_CONFLICT_ADJUDICATION_STEP && step.engineSynthesized === true)
       || isDelegatedWorkflowStep(step)
       || isSystemWorkflowStep(step)
       || isWorkflowCallStep(step)
     ) {
-      throw new Error(`Step "${step.name}" cannot be prepared as a normal agent step`);
+      return undefined;
     }
     return this.deps.stepExecutor.prepareNormalStepExecution(
       step,
       this.deps.state,
       this.deps.task,
-      this.deps.stepBudget.currentMaxSteps(),
+      this.deps.getMaxSteps(),
       stepIteration,
       runtime,
     );
+  }
+
+  buildPhase1Instruction(step: WorkflowStep, instruction: string, runtime?: RuntimeStepResolution): string {
+    return this.deps.stepExecutor.buildPhase1Instruction(instruction, step, runtime);
   }
 
   runLoopMonitorJudge(
@@ -381,15 +385,7 @@ export class WorkflowEngineStepCoordinator {
     triggeringStep: WorkflowStep,
     triggeringRuntime: RuntimeStepResolution | undefined,
     fallbackNextStep: string,
-    resumedStart?: import('../../models/types.js').WorkflowPendingLoopJudgeStarted,
-  ): Promise<LoopMonitorJudgeRunResult> {
-    return this.deps.loopMonitorJudgeRunner.run(
-      monitor,
-      cycleCount,
-      triggeringStep,
-      triggeringRuntime,
-      fallbackNextStep,
-      resumedStart,
-    );
+  ): Promise<string> {
+    return this.deps.loopMonitorJudgeRunner.run(monitor, cycleCount, triggeringStep, triggeringRuntime, fallbackNextStep);
   }
 }

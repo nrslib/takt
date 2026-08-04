@@ -35,8 +35,8 @@ import { findDuplicateWorkflowStepName } from '../../../shared/workflowStepNameV
 import { withWorkflowConfigErrorPath } from '../workflow-config-error.js';
 import { findWorkflowStepLocation } from '../workflow-step-location.js';
 import { getProviderValidationErrorSource, withProviderValidationErrorSource } from '../provider-validation-error.js';
+import { resolveFindingIntakeNormalizeConfig } from '../findings/intake-normalize-policy.js';
 import { validateDynamicParallelContracts } from '../dynamic-parallel/validator.js';
-import { validateCallableWorkflowMaxSteps } from '../../models/workflow-config-semantics.js';
 
 type ResolvedProviderInfo = ReturnType<typeof resolveStepProviderModel>;
 const withWorkflowStepErrorPath = withWorkflowConfigErrorPath;
@@ -358,6 +358,69 @@ function validateFindingContractOutputFormatRequiresContract(
   );
 }
 
+function validateFindingContractReviewerReports(
+  config: WorkflowConfig,
+  findingContractEnabled: boolean,
+): void {
+  if (!findingContractEnabled) {
+    return;
+  }
+  const visit = (
+    step: WorkflowStep,
+    fallbackPath: readonly PropertyKey[],
+    parallelReviewer: boolean,
+  ): void => {
+    const reviewer = parallelReviewer || hasFindingContractFormat(step);
+    if (reviewer && getWorkflowStepKind(step) === 'agent') {
+      const reports = step.outputContracts ?? [];
+      if (reports.length !== 1 || !hasFindingContractFormat(step)) {
+        throw withConfigStepErrorPath(
+          config,
+          step,
+          fallbackPath,
+          ['output_contracts', 'report'],
+          new Error(
+            `Configuration error: Finding Contract reviewer "${step.name}" requires exactly one Finding Contract report`,
+          ),
+        );
+      }
+    }
+    const siblingReportOwnerByName = new Map<string, WorkflowStep>();
+    const parallelEntries = step.parallel === undefined
+      ? []
+      : isDynamicParallelSubSteps(step.parallel)
+        ? [
+            ...step.parallel.fixed.map((subStep, index) => ({ subStep, path: ['fixed', index] as const })),
+            ...step.parallel.pool.map((subStep, index) => ({ subStep, path: ['pool', index] as const })),
+          ]
+        : step.parallel.map((subStep, index) => ({ subStep, path: [index] as const }));
+    for (const { subStep, path } of parallelEntries) {
+      const subStepPath = [...fallbackPath, 'parallel', ...path];
+      visit(subStep, subStepPath, true);
+      if (getWorkflowStepKind(subStep) !== 'agent') {
+        continue;
+      }
+      const reportName = subStep.outputContracts![0]!.name;
+      const existingOwner = siblingReportOwnerByName.get(reportName);
+      if (existingOwner !== undefined) {
+        throw withConfigStepErrorPath(
+          config,
+          subStep,
+          subStepPath,
+          ['output_contracts', 'report', 0, 'name'],
+          new Error(
+            `Configuration error: Finding Contract reviewers "${existingOwner.name}" and "${subStep.name}" under parallel step "${step.name}" use duplicate report name "${reportName}"`,
+          ),
+        );
+      }
+      siblingReportOwnerByName.set(reportName, subStep);
+    }
+  };
+  for (const [index, step] of config.steps.entries()) {
+    visit(step, ['steps', index], false);
+  }
+}
+
 function delegatedExecutionFieldPath(step: WorkflowStep): readonly PropertyKey[] {
   if (step.teamLeader !== undefined) {
     return ['team_leader'];
@@ -407,26 +470,6 @@ function validateFindingContractTeamLeaderMode(config: WorkflowConfig, findingCo
     ['team_leader', 'mode'],
     new Error(`Configuration error: team_leader.mode "finding_contract_fix" on step "${violation.name}" requires finding_contract`),
   );
-}
-
-/**
- * 子ワークフローが自前の finding_contract を持ちながら、workflow_call の親からも
- * 継承している場合を設定エラーで落とす。ledger_path / raw_findings_path は
- * ワークフロー名に紐づくため、暗黙に両方を許すと子は自分の台帳へ、親の
- * when(findings.open.count == 0) 等は親の台帳へ、と別々の台帳を見てしまう。
- */
-function validateFindingContractInheritanceConflict(
-  config: WorkflowConfig,
-  options: WorkflowEngineOptions,
-): void {
-  if (config.findingContract !== undefined && options.inheritedFindingContract !== undefined) {
-    throw new Error(
-      `Configuration error: workflow "${config.name}" declares its own finding_contract while also being called `
-      + 'as a workflow_call subworkflow that inherits a finding_contract from its parent; a workflow cannot combine '
-      + 'both because ledger_path/raw_findings_path are keyed by workflow name and the parent\'s when(findings.*) '
-      + 'rules would end up observing a different ledger than the child writes to',
-    );
-  }
 }
 
 function validateRequiredInheritedFindingContract(
@@ -588,10 +631,6 @@ function findWorkflowCallStep(
 }
 
 export function validateWorkflowConfig(config: WorkflowConfig, options: WorkflowEngineOptions): void {
-  validateCallableWorkflowMaxSteps({
-    callable: config.subworkflow?.callable === true,
-    maxSteps: config.maxSteps,
-  });
   const initialStep = config.steps.find((step) => step.name === config.initialStep);
   if (!initialStep) {
     throw new Error(ERROR_MESSAGES.UNKNOWN_STEP(config.initialStep));
@@ -604,13 +643,17 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
   // ここでの検証もランタイムと同じ判定基準を使わないと validate 時は素通り
   // したのに実行時に落ちる、という食い違いが生まれる。
   const findingContractEnabled = config.findingContract !== undefined || options.inheritedFindingContract !== undefined;
+  resolveFindingIntakeNormalizeConfig(
+    options.findingContractConfig?.intakeNormalize,
+    config.findingContract ?? options.inheritedFindingContract?.contract,
+  );
   validateFindingContractStructuredOutput(config, findingContractEnabled);
   validateFindingContractManagerProviderModel(config, options);
   validateFindingConflictAdjudicationReservedName(config);
   validateWorkflowStepNamesUnique(config);
   validateRequiredInheritedFindingContract(config, options);
-  validateFindingContractInheritanceConflict(config, options);
   validateFindingContractOutputFormatRequiresContract(config, findingContractEnabled);
+  validateFindingContractReviewerReports(config, findingContractEnabled);
   validateFindingContractDelegatedIntake(config, findingContractEnabled);
   validateFindingContractTeamLeaderMode(config, findingContractEnabled);
 
@@ -776,6 +819,17 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
     if (!triggeringStep) {
       continue;
     }
+    const triggeringProviderInfo = resolveStepProviderModel({
+      step: triggeringStep,
+      provider: options.provider,
+      providerSource: options.providerSource,
+      model: options.model,
+      modelSource: options.modelSource,
+      autoRouting: options.autoRouting,
+      providerRouting: options.providerRouting,
+      tagConflictPolicy: options.providerRoutingTagConflictPolicy,
+      personaProviders: options.personaProviders,
+    });
     // 実行時（LoopMonitorJudgeRunner）と同じ優先順位で検証するため、judge ステップ自身の
     // 通常解決（provider_routing.* / persona_providers.loop-judge を含む）も同じ
     // resolveStepProviderModel で取ってから合成する。routing キーは実行時に生成される
@@ -797,23 +851,11 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
       tagConflictPolicy: options.providerRoutingTagConflictPolicy,
       personaProviders: options.personaProviders,
     });
-    const triggeringProviderInfo = isWorkflowCallStep(triggeringStep)
-      ? judgeStepProviderInfo
-      : resolveStepProviderModel({
-          step: triggeringStep,
-          provider: options.provider,
-          providerSource: options.providerSource,
-          model: options.model,
-          modelSource: options.modelSource,
-          autoRouting: options.autoRouting,
-          providerRouting: options.providerRouting,
-          tagConflictPolicy: options.providerRoutingTagConflictPolicy,
-          personaProviders: options.personaProviders,
-        });
-    const validationInfos = isWorkflowCallStep(triggeringStep)
-      ? [{ providerInfo: triggeringProviderInfo, autoRouted: false }]
-      : expandAutoRoutingProviderInfos(triggeringStep, triggeringProviderInfo, options.autoRouting);
-    for (const validationInfo of validationInfos) {
+    for (const validationInfo of expandAutoRoutingProviderInfos(
+      triggeringStep,
+      triggeringProviderInfo,
+      options.autoRouting,
+    )) {
       const judgeProviderInfo = resolveLoopMonitorJudgeProviderModel({
         judge: monitor.judge,
         judgeProviderInfo: judgeStepProviderInfo,

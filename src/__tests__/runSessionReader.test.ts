@@ -38,7 +38,14 @@ function createRunDir(
   const runDir = join(cwd, '.takt', 'runs', slug);
   mkdirSync(join(runDir, 'logs'), { recursive: true });
   mkdirSync(join(runDir, 'reports'), { recursive: true });
-  writeFileSync(join(runDir, 'meta.json'), JSON.stringify(meta), 'utf-8');
+  writeFileSync(join(runDir, 'meta.json'), JSON.stringify({
+    runSlug: slug,
+    runRoot: `.takt/runs/${slug}`,
+    reportDirectory: `.takt/runs/${slug}/reports`,
+    contextDirectory: `.takt/runs/${slug}/context`,
+    logsDirectory: `.takt/runs/${slug}/logs`,
+    ...meta,
+  }), 'utf-8');
   return runDir;
 }
 
@@ -229,7 +236,13 @@ describe('loadRunSessionContext', () => {
           content: 'Implementation done',
           workflow: 'default',
           stack: [
-            { workflow: 'default', step: 'implement', kind: 'agent' },
+            {
+              workflow: 'default',
+              workflow_ref: 'default',
+              step: 'implement',
+              kind: 'agent',
+              occurrence: 1,
+            },
           ],
         },
       ],
@@ -245,7 +258,13 @@ describe('loadRunSessionContext', () => {
     expect(context.stepLogs[0].content).toBe('Implementation done');
     expect(context.stepLogs[0].workflow).toBe('default');
     expect(context.stepLogs[0].stack).toEqual([
-      { workflow: 'default', step: 'implement', kind: 'agent' },
+      {
+        workflow: 'default',
+        workflow_ref: 'default',
+        step: 'implement',
+        kind: 'agent',
+        occurrence: 1,
+      },
     ]);
     expect(context.reports).toHaveLength(1);
     expect(context.reports[0].filename).toBe('00-plan.md');
@@ -621,7 +640,13 @@ describe('formatRunSessionForPrompt', () => {
           status: 'completed',
           content: 'Plan content',
           workflow: 'default',
-          stack: [{ workflow: 'default', step: 'plan', kind: 'agent' }],
+          stack: [{
+            workflow: 'default',
+            workflow_ref: 'default',
+            step: 'plan',
+            kind: 'agent',
+            occurrence: 1,
+          }],
         },
         {
           step: 'implement',
@@ -629,7 +654,13 @@ describe('formatRunSessionForPrompt', () => {
           status: 'completed',
           content: 'Code content',
           workflow: 'default',
-          stack: [{ workflow: 'default', step: 'implement', kind: 'agent' }],
+          stack: [{
+            workflow: 'default',
+            workflow_ref: 'default',
+            step: 'implement',
+            kind: 'agent',
+            occurrence: 1,
+          }],
         },
       ],
       reports: [
@@ -666,8 +697,20 @@ describe('formatRunSessionForPrompt', () => {
           content: 'Child review content',
           workflow: 'takt/coding',
           stack: [
-            { workflow: 'parent', step: 'delegate', kind: 'workflow_call' },
-            { workflow: 'takt/coding', step: 'review', kind: 'agent' },
+            {
+              workflow: 'parent',
+              workflow_ref: 'parent',
+              step: 'delegate',
+              kind: 'workflow_call',
+              occurrence: 1,
+            },
+            {
+              workflow: 'takt/coding',
+              workflow_ref: 'takt/coding',
+              step: 'review',
+              kind: 'agent',
+              occurrence: 1,
+            },
           ],
         },
       ],

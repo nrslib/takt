@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { invalidateAllResolvedConfigCache, invalidateGlobalConfigCache } from '../infra/config/index.js';
-import { WorkflowEngine } from '../core/workflow/index.js';
+import { WorkflowEngine } from './helpers/workflow-engine.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
 import { resolveWorkflowCallTarget } from '../infra/config/loaders/workflowCallResolver.js';
 
@@ -65,6 +65,7 @@ describe('workflow step fragment provenance', () => {
     const workflowPath = writeFile(projectDir, '.takt/workflows/nested.yaml', [
       'name: nested',
       'initial_step: outer',
+      'max_steps: 1',
       'steps:',
       '  - name: review',
       '    uses: outer',
@@ -97,6 +98,7 @@ describe('workflow step fragment provenance', () => {
     const workflowPath = writeFile(projectDir, '.takt/workflows/nested-provider-options.yaml', [
       'name: nested-provider-options',
       'initial_step: outer',
+      'max_steps: 1',
       'steps:',
       '  - name: review',
       '    uses: outer',
@@ -125,6 +127,7 @@ describe('workflow step fragment provenance', () => {
     const workflowPath = writeFile(projectDir, '.takt/workflows/finding-contract-format.yaml', [
       'name: finding-contract-format',
       'initial_step: review',
+      'max_steps: 1',
       'steps:',
       '  - name: review',
       '    uses: review',
@@ -151,6 +154,7 @@ describe('workflow step fragment provenance', () => {
     const workflowPath = writeFile(projectDir, '.takt/workflows/team-leader-mode.yaml', [
       'name: team-leader-mode',
       'initial_step: fix',
+      'max_steps: 1',
       'steps:',
       '  - name: fix',
       '    uses: fix',
@@ -182,9 +186,8 @@ describe('workflow step fragment provenance', () => {
     const workflowPath = writeFile(projectDir, '.takt/workflows/structured-output.yaml', [
       'name: structured-output',
       'initial_step: review',
+      'max_steps: 1',
       'finding_contract:',
-      '  ledger_path: .takt/findings/ledger.json',
-      '  raw_findings_path: .takt/findings/raw',
       '  manager:',
       '    persona: findings-manager',
       '    instruction: findings-manager',
@@ -218,9 +221,8 @@ describe('workflow step fragment provenance', () => {
     const workflowPath = writeFile(projectDir, '.takt/workflows/caller-structured-output.yaml', [
       'name: caller-structured-output',
       'initial_step: review',
+      'max_steps: 1',
       'finding_contract:',
-      '  ledger_path: .takt/findings/ledger.json',
-      '  raw_findings_path: .takt/findings/raw',
       '  manager:',
       '    persona: findings-manager',
       '    instruction: findings-manager',
@@ -253,6 +255,7 @@ describe('workflow step fragment provenance', () => {
     const workflowPath = writeFile(projectDir, '.takt/workflows/without-resolver.yaml', [
       'name: without-resolver',
       'initial_step: delegate',
+      'max_steps: 1',
       'steps:',
       '  - name: delegate',
       '    uses: delegate',
@@ -280,9 +283,8 @@ describe('workflow step fragment provenance', () => {
     const workflowPath = writeFile(projectDir, '.takt/workflows/parallel-structured-output.yaml', [
       'name: parallel-structured-output',
       'initial_step: review',
+      'max_steps: 1',
       'finding_contract:',
-      '  ledger_path: .takt/findings/ledger.json',
-      '  raw_findings_path: .takt/findings/raw',
       '  manager:',
       '    persona: findings-manager',
       '    instruction: findings-manager',
@@ -319,6 +321,7 @@ describe('workflow step fragment provenance', () => {
     const workflowPath = writeFile(projectDir, '.takt/workflows/array-root.yaml', [
       'name: array-root',
       'initial_step: review',
+      'max_steps: 1',
       'steps:',
       '  - name: review',
       '    uses: review',
@@ -344,9 +347,8 @@ describe('workflow step fragment provenance', () => {
     const workflowPath = writeFile(projectDir, '.takt/workflows/caller-parallel-structured-output.yaml', [
       'name: caller-parallel-structured-output',
       'initial_step: review',
+      'max_steps: 1',
       'finding_contract:',
-      '  ledger_path: .takt/findings/ledger.json',
-      '  raw_findings_path: .takt/findings/raw',
       '  manager:',
       '    persona: findings-manager',
       '    instruction: findings-manager',
@@ -388,9 +390,8 @@ describe('workflow step fragment provenance', () => {
     const workflowPath = writeFile(projectDir, '.takt/workflows/delegated-intake.yaml', [
       'name: delegated-intake',
       'initial_step: review',
+      'max_steps: 1',
       'finding_contract:',
-      '  ledger_path: .takt/findings/ledger.json',
-      '  raw_findings_path: .takt/findings/raw',
       '  manager:',
       '    persona: findings-manager',
       '    instruction: findings-manager',
@@ -423,9 +424,8 @@ describe('workflow step fragment provenance', () => {
     const workflowPath = writeFile(projectDir, '.takt/workflows/caller-delegated-intake.yaml', [
       'name: caller-delegated-intake',
       'initial_step: review',
+      'max_steps: 1',
       'finding_contract:',
-      '  ledger_path: .takt/findings/ledger.json',
-      '  raw_findings_path: .takt/findings/raw',
       '  manager:',
       '    persona: findings-manager',
       '    instruction: findings-manager',
@@ -464,9 +464,8 @@ describe('workflow step fragment provenance', () => {
     const workflowPath = writeFile(projectDir, '.takt/workflows/arpeggio-intake.yaml', [
       'name: arpeggio-intake',
       'initial_step: review',
+      'max_steps: 1',
       'finding_contract:',
-      '  ledger_path: .takt/findings/ledger.json',
-      '  raw_findings_path: .takt/findings/raw',
       '  manager:',
       '    persona: findings-manager',
       '    instruction: findings-manager',
@@ -499,9 +498,8 @@ describe('workflow step fragment provenance', () => {
     const workflowPath = writeFile(projectDir, '.takt/workflows/caller-arpeggio-intake.yaml', [
       'name: caller-arpeggio-intake',
       'initial_step: review',
+      'max_steps: 1',
       'finding_contract:',
-      '  ledger_path: .takt/findings/ledger.json',
-      '  raw_findings_path: .takt/findings/raw',
       '  manager:',
       '    persona: findings-manager',
       '    instruction: findings-manager',
@@ -543,6 +541,7 @@ describe('workflow step fragment provenance', () => {
     const workflowPath = writeFile(projectDir, '.takt/workflows/promotion-provider.yaml', [
       'name: promotion-provider',
       'initial_step: review',
+      'max_steps: 1',
       'steps:',
       '  - name: review',
       '    uses: outer',
@@ -571,6 +570,7 @@ describe('workflow step fragment provenance', () => {
     const workflowPath = writeFile(projectDir, '.takt/workflows/nested-provider-model.yaml', [
       'name: nested-provider-model',
       'initial_step: review',
+      'max_steps: 1',
       'steps:',
       '  - name: review',
       '    uses: review',
@@ -599,6 +599,7 @@ describe('workflow step fragment provenance', () => {
     const workflowPath = writeFile(projectDir, '.takt/workflows/opencode-provider.yaml', [
       'name: opencode-provider',
       `initial_step: ${initialStep}`,
+      'max_steps: 1',
       'steps:',
       steps,
       '',
@@ -622,6 +623,7 @@ describe('workflow step fragment provenance', () => {
     const workflowPath = writeFile(projectDir, '.takt/workflows/parallel-provider-model.yaml', [
       'name: parallel-provider-model',
       'initial_step: review',
+      'max_steps: 1',
       'steps:',
       '  - name: review',
       '    instruction: review',
@@ -657,6 +659,7 @@ describe('workflow step fragment provenance', () => {
     const workflowPath = writeFile(projectDir, '.takt/workflows/parallel-parent-provider-model.yaml', [
       'name: parallel-parent-provider-model',
       'initial_step: review',
+      'max_steps: 1',
       'steps:',
       '  - name: review',
       '    uses: review',
@@ -686,6 +689,7 @@ describe('workflow step fragment provenance', () => {
     const workflowPath = writeFile(projectDir, '.takt/workflows/auto-routing-fragment.yaml', [
       'name: auto-routing-fragment',
       'initial_step: review',
+      'max_steps: 1',
       'auto_routing:',
       '  strategy: balanced',
       '  router:',
@@ -730,6 +734,7 @@ describe('workflow step fragment provenance', () => {
     const workflowPath = writeFile(projectDir, '.takt/workflows/parallel-auto-routing-fragment.yaml', [
       'name: parallel-auto-routing-fragment',
       'initial_step: review',
+      'max_steps: 1',
       'auto_routing:',
       '  strategy: balanced',
       '  router:',
@@ -784,6 +789,7 @@ describe('workflow step fragment provenance', () => {
       '  returns:',
       '    - done',
       'initial_step: review',
+      'max_steps: 1',
       'steps:',
       '  - name: review',
       '    instruction: review',
@@ -795,9 +801,8 @@ describe('workflow step fragment provenance', () => {
     const workflowPath = writeFile(projectDir, '.takt/workflows/parent-manager.yaml', [
       'name: parent-manager',
       'initial_step: delegate',
+      'max_steps: 1',
       'finding_contract:',
-      '  ledger_path: .takt/findings/ledger.json',
-      '  raw_findings_path: .takt/findings/raw',
       '  manager:',
       '    persona: findings-manager',
       '    instruction: findings-manager',
@@ -838,6 +843,7 @@ describe('workflow step fragment provenance', () => {
     const workflowPath = writeFile(projectDir, '.takt/workflows/parent-missing-child.yaml', [
       'name: parent-missing-child',
       'initial_step: delegate',
+      'max_steps: 1',
       'steps:',
       '  - name: delegate',
       '    uses: delegate',
@@ -885,6 +891,7 @@ describe('workflow step fragment provenance', () => {
       '  returns:',
       '    - done',
       'initial_step: review',
+      'max_steps: 1',
       'steps:',
       '  - name: review',
       '    instruction: review',
@@ -899,6 +906,7 @@ describe('workflow step fragment provenance', () => {
     const workflowPath = writeFile(projectDir, '.takt/workflows/parent-child-provider.yaml', [
       'name: parent-child-provider',
       'initial_step: delegate',
+      'max_steps: 1',
       'steps:',
       '  - name: delegate',
       '    uses: delegate',
@@ -938,6 +946,7 @@ describe('workflow step fragment provenance', () => {
       '  returns:',
       '    - done',
       'initial_step: review',
+      'max_steps: 1',
       'steps:',
       '  - name: review',
       '    uses: review',
@@ -949,6 +958,7 @@ describe('workflow step fragment provenance', () => {
     const workflowPath = writeFile(projectDir, '.takt/workflows/parent-inline-override.yaml', [
       'name: parent-inline-override',
       'initial_step: delegate',
+      'max_steps: 1',
       'steps:',
       '  - name: delegate',
       '    kind: workflow_call',
@@ -998,6 +1008,7 @@ describe('workflow step fragment provenance', () => {
       '  returns:',
       '    - done',
       'initial_step: review',
+      'max_steps: 1',
       'steps:',
       '  - name: review',
       '    uses: review',
@@ -1009,6 +1020,7 @@ describe('workflow step fragment provenance', () => {
     const workflowPath = writeFile(projectDir, '.takt/workflows/parent-fragment-override.yaml', [
       'name: parent-fragment-override',
       'initial_step: delegate',
+      'max_steps: 1',
       'steps:',
       '  - name: delegate',
       '    uses: delegate',
@@ -1063,6 +1075,7 @@ describe('workflow step fragment provenance', () => {
     const workflowPath = writeFile(projectDir, '.takt/workflows/parent-child-load.yaml', [
       'name: parent-child-load',
       'initial_step: delegate',
+      'max_steps: 1',
       'steps:',
       '  - name: delegate',
       '    uses: delegate',
@@ -1101,6 +1114,7 @@ describe('workflow step fragment provenance', () => {
       '  returns:',
       '    - done',
       'initial_step: review',
+      'max_steps: 1',
       'steps:',
       '  - name: review',
       '    instruction: review',
@@ -1112,6 +1126,7 @@ describe('workflow step fragment provenance', () => {
     const workflowPath = writeFile(projectDir, '.takt/workflows/parent.yaml', [
       'name: parent',
       'initial_step: delegate',
+      'max_steps: 1',
       'steps:',
       '  - name: delegate',
       '    uses: delegate',
@@ -1147,6 +1162,7 @@ describe('workflow step fragment provenance', () => {
     const workflowPath = writeFile(projectDir, '.takt/workflows/caller-override.yaml', [
       'name: caller-override',
       'initial_step: review',
+      'max_steps: 1',
       'steps:',
       '  - name: review',
       '    uses: review',
@@ -1174,9 +1190,8 @@ describe('workflow step fragment provenance', () => {
     const workflowPath = writeFile(projectDir, '.takt/workflows/reserved-name.yaml', [
       'name: reserved-name',
       'initial_step: review',
+      'max_steps: 1',
       'finding_contract:',
-      '  ledger_path: .takt/findings/ledger.json',
-      '  raw_findings_path: .takt/findings/raw',
       '  manager:',
       '    persona: findings-manager',
       '    instruction: findings-manager',

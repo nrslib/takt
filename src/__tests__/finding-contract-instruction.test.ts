@@ -4,6 +4,14 @@ import {
   buildFindingContractReportInstruction,
 } from '../core/workflow/instruction/finding-contract-instruction.js';
 import type { FindingContractInstructionContext } from '../core/workflow/instruction/instruction-context.js';
+import {
+  buildManagerInstruction,
+  collectDuplicateLocusGroups,
+} from '../core/workflow/findings/manager-agent.js';
+import {
+  PROVIDER_ANCHOR_RELEVANCE_INSTRUCTION,
+} from '../core/workflow/findings/manager-raw-decision-adapter.js';
+import type { FindingLedger, FindingLedgerEntry } from '../core/workflow/findings/types.js';
 
 const renderFencedJsonBlock = (value: unknown): string => `\`\`\`json\n${JSON.stringify(value)}\n\`\`\``;
 
@@ -28,12 +36,32 @@ function build(overrides: {
   });
 }
 
+function buildReport(overrides: {
+  contract?: Partial<FindingContractInstructionContext>;
+  language?: 'ja' | 'en';
+} = {}): string {
+  return buildFindingContractReportInstruction({
+    contract: makeContract(overrides.contract),
+    language: overrides.language ?? 'en',
+    renderFencedJsonBlock,
+  });
+}
+
 const REVIEWER_STRUCTURED_OUTPUT = { schemaRef: 'test.raw-findings', schema: { type: 'object' } };
 // codex 対策#4: 本物の reviewer context では WorkflowEngineSetup が
 // rawFindingsStructuredOutput と同時に必ず設定する（snapshot.ts の
 // computeReviewScopeSnapshotId）。ここでは実際のハッシュ形状は問わないため
 // 固定文字列を使う。
 const REVIEWER_SNAPSHOT_ID = 'snap-test-0000000000000000000000000000000000000000000000000000000000000000';
+const REVIEWER = {
+  mode: 'structured' as const,
+  rawFindingsStructuredOutput: REVIEWER_STRUCTURED_OUTPUT,
+  reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID,
+};
+const PLAIN_TEXT_NORMALIZED_REVIEWER = {
+  mode: 'plain_text_normalized' as const,
+  reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID,
+};
 
 describe('buildFindingContractInstruction', () => {
   it('never emits blank-line runs left behind by unused conditional blocks', () => {
@@ -41,10 +69,10 @@ describe('buildFindingContractInstruction', () => {
       for (const contract of [
         {},
         { hasOpenFindings: true },
-        { rawFindingsStructuredOutput: REVIEWER_STRUCTURED_OUTPUT, reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID },
+        { reviewer: REVIEWER },
+        { reviewer: PLAIN_TEXT_NORMALIZED_REVIEWER },
         {
-          rawFindingsStructuredOutput: REVIEWER_STRUCTURED_OUTPUT,
-          reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID,
+          reviewer: REVIEWER,
           hasOpenFindings: true,
           hasWaivedFindings: true,
           hasDismissedFindings: true,
@@ -60,16 +88,52 @@ describe('buildFindingContractInstruction', () => {
   describe('reviewer instruction', () => {
     it('localizes the reviewer prose for ja', () => {
       const rendered = build({
-        contract: { rawFindingsStructuredOutput: REVIEWER_STRUCTURED_OUTPUT, reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID },
+        contract: { reviewer: REVIEWER },
         language: 'ja',
       });
       expect(rendered).not.toContain('統合台帳のコピー');
       expect(rendered).toContain('構造化 raw finding として報告してください');
     });
 
+    it('injects the structured finding protocol in both languages', () => {
+      for (const language of ['en', 'ja'] as const) {
+        for (const render of [build, buildReport]) {
+          const structured = render({
+            contract: { reviewer: REVIEWER, hasOpenFindings: true },
+            language,
+          });
+          expect(structured).not.toContain('typed evidence matrix');
+          expect(structured).toContain('structured output');
+          expect(structured).toContain('resolution_confirmation');
+          expect(structured).toContain('targetFindingIds');
+          expect(structured).toMatch(/one-to-one|1対1/u);
+        }
+      }
+    });
+
+    it('asks plain-text-normalized reviewers for ordinary explicit prose without output schemas', () => {
+      for (const language of ['en', 'ja'] as const) {
+        for (const render of [build, buildReport]) {
+          const rendered = render({
+            contract: {
+              reviewer: PLAIN_TEXT_NORMALIZED_REVIEWER,
+              hasOpenFindings: true,
+            },
+            language,
+          });
+          expect(rendered).toMatch(/ordinary Markdown|通常の Markdown/u);
+          expect(rendered).toMatch(/isolated extractor|隔離された抽出器/u);
+          expect(rendered).toContain('resolution_confirmation');
+          expect(rendered).toMatch(/architectural|アーキテクチャ上/u);
+          expect(rendered).not.toContain('raw findings schema');
+          expect(rendered).not.toContain('structured output matching');
+        }
+      }
+    });
+
     it('does not inject the dispute guide into reviewers', () => {
       const rendered = build({
-        contract: { rawFindingsStructuredOutput: REVIEWER_STRUCTURED_OUTPUT, reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID, hasOpenFindings: true },
+        contract: { reviewer: REVIEWER, hasOpenFindings: true },
       });
       expect(rendered).not.toContain('Disputed Findings');
     });
@@ -92,8 +156,7 @@ describe('buildFindingContractInstruction', () => {
     it('keeps raw finding protocol field names in English for ja', () => {
       const rendered = build({
         contract: {
-          rawFindingsStructuredOutput: REVIEWER_STRUCTURED_OUTPUT,
-          reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID,
+          reviewer: REVIEWER,
           hasOpenFindings: true,
           hasWaivedFindings: true,
         },
@@ -108,15 +171,13 @@ describe('buildFindingContractInstruction', () => {
     it('instructs reviewers to reopen dismissed findings in both languages', () => {
       const en = build({
         contract: {
-          rawFindingsStructuredOutput: REVIEWER_STRUCTURED_OUTPUT,
-          reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID,
+          reviewer: REVIEWER,
           hasDismissedFindings: true,
         },
       });
       const ja = build({
         contract: {
-          rawFindingsStructuredOutput: REVIEWER_STRUCTURED_OUTPUT,
-          reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID,
+          reviewer: REVIEWER,
           hasDismissedFindings: true,
         },
         language: 'ja',
@@ -128,39 +189,50 @@ describe('buildFindingContractInstruction', () => {
       expect(ja).toContain('relation を "reopened"');
     });
 
-    it('requires current exact single-range evidence for resolution confirmations in both languages', () => {
-      const contract = {
-        rawFindingsStructuredOutput: REVIEWER_STRUCTURED_OUTPUT,
-        reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID,
-        hasOpenFindings: true,
-      };
-      const en = build({ contract });
-      const ja = build({ contract, language: 'ja' });
+    it('requires current exact evidence requests without reviewer-issued proof fields in both languages', () => {
+      const structuredEn = build({
+        contract: { reviewer: REVIEWER, hasOpenFindings: true },
+      });
+      const structuredJa = build({
+        contract: { reviewer: REVIEWER, hasOpenFindings: true },
+        language: 'ja',
+      });
+      expect(structuredEn).toContain('code confirmation needs `file_quote`');
+      expect(structuredEn).toContain('structure confirmation needs `repository_manifest`');
+      expect(structuredEn).toContain('absence confirmation needs `repository_query` plus `authoritative_quote`');
+      expect(structuredJa).toContain('code の確認は `file_quote`');
+      expect(structuredJa).toContain('structure の確認は `repository_manifest`');
+      expect(structuredJa).toContain('absence の確認は `repository_query` と `authoritative_quote`');
+      expect(structuredEn).toContain('path and bounded 1-based startLine/endLine only');
+      expect(structuredEn).toContain('do not provide source text or verbatimExcerpt');
+      expect(structuredJa).toContain('path と有界な1始まりの startLine/endLine だけ');
+      expect(structuredJa).toContain('source text や verbatimExcerpt は出力しない');
 
-      expect(en).toContain('exactly one contiguous location');
-      expect(en).toContain('exactly matches the complete current text');
-      expect(en).toContain(REVIEWER_SNAPSHOT_ID);
-      expect(ja).toContain('単一連続範囲');
-      expect(ja).toContain('現在の全文と完全一致');
-      expect(ja).toContain(REVIEWER_SNAPSHOT_ID);
+      for (const rendered of [
+        structuredEn,
+        structuredJa,
+      ]) {
+        expect(rendered).toMatch(/Do not output snapshotId|snapshotId・runId・proofId/u);
+        expect(rendered).not.toContain(REVIEWER_SNAPSHOT_ID);
+      }
     });
   });
 
   // codex 対策#4 の配線バグ回帰: rawFindingsStructuredOutput（reviewer step の目印）が
   // 立っているのに reviewScopeSnapshotId が欠落したまま `?? ''` でサイレントに
-  // 空文字へ落ちると、reviewer は空の snapshotId を source_quote evidence に
-  // echo し、manager 側の決定的検証（verifySourceQuoteEvidence）が必ず
+  // 空文字へ落ちると、reviewer は空の snapshotId を file_quote evidence に
+  // echo し、manager 側の決定的検証（verifyFileQuoteEvidence）が必ず
   // stale-snapshot で弾く。ParallelRunner が instruction context を inline で
   // 複製していたために実際に発生した配線バグであり、このガードはその再発を防ぐ。
   describe('reviewScopeSnapshotId wiring guard', () => {
     it('throws when a reviewer contract is missing reviewScopeSnapshotId entirely', () => {
-      expect(() => build({ contract: { rawFindingsStructuredOutput: REVIEWER_STRUCTURED_OUTPUT } }))
+      expect(() => build({ contract: { reviewer: { ...REVIEWER, reviewScopeSnapshotId: undefined as never } } }))
         .toThrow(/reviewScopeSnapshotId/);
     });
 
     it("throws when a reviewer contract has an empty-string reviewScopeSnapshotId (the pre-fix `?? ''` fallback shape)", () => {
       expect(() => build({
-        contract: { rawFindingsStructuredOutput: REVIEWER_STRUCTURED_OUTPUT, reviewScopeSnapshotId: '' },
+        contract: { reviewer: { ...REVIEWER, reviewScopeSnapshotId: '' } },
       })).toThrow(/reviewScopeSnapshotId/);
     });
 
@@ -171,7 +243,7 @@ describe('buildFindingContractInstruction', () => {
 
     it('does not throw for a correctly wired reviewer contract', () => {
       expect(() => build({
-        contract: { rawFindingsStructuredOutput: REVIEWER_STRUCTURED_OUTPUT, reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID },
+        contract: { reviewer: REVIEWER },
       })).not.toThrow();
     });
   });
@@ -204,7 +276,13 @@ describe('buildFindingContractInstruction', () => {
 describe('buildFindingContractReportInstruction', () => {
   function buildReport(language: 'ja' | 'en'): string {
     return buildFindingContractReportInstruction({
-      reportLedgerSummary: { ids: ['F-0001'] },
+      contract: {
+        ledgerSummary: { findings: [] },
+        reportLedgerSummary: { ids: ['F-0001'] },
+        hasOpenFindings: false,
+        hasWaivedFindings: false,
+        hasDismissedFindings: false,
+      },
       language,
       renderFencedJsonBlock,
     });
@@ -235,5 +313,121 @@ describe('buildFindingContractReportInstruction', () => {
     const ja = buildReport('ja');
     expect(ja).toContain('インラインの台帳サマリ');
     expect(ja).toContain('現在の台帳 finding ID:');
+  });
+});
+
+describe('manager instruction dedup (manager-agent.ts)', () => {
+  const locationsByFindingId = new Map<string, string>();
+
+  function openFinding(id: string, title: string, location?: string): FindingLedgerEntry {
+    if (location !== undefined) locationsByFindingId.set(id, location);
+    return {
+      id,
+      status: 'open',
+      lifecycle: 'new',
+      revision: 1,
+      severity: 'medium',
+      title,
+      evidenceIds: location === undefined ? [] : [`evidence-${id}`],
+      reviewers: ['coding-review'],
+      rawFindingIds: [`raw-${id}`],
+      firstSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
+      lastSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
+    };
+  }
+
+  function ledgerWith(findings: FindingLedgerEntry[]): FindingLedger {
+    const evidenceRecords = findings.flatMap((finding) => {
+      const location = locationsByFindingId.get(finding.id);
+      const match = location === undefined ? null : /^(.*):(\d+)(?:-(\d+))?$/.exec(location);
+      if (match === null) return [];
+      return [{
+        evidenceId: `evidence-${finding.id}`,
+        kind: 'file_quote' as const,
+        path: match[1]!,
+        startLine: Number(match[2]),
+        endLine: Number(match[3] ?? match[2]),
+        verbatimExcerpt: 'fixture',
+        snapshotId: 'a'.repeat(64),
+        claimIdentityHash: 'b'.repeat(64),
+        fileHash: 'c'.repeat(64),
+      }];
+    });
+    return {
+      workflowName: 'peer-review',
+      nextId: findings.length + 1,
+      updatedAt: '2026-07-01T00:00:00.000Z',
+      evidenceRecords,
+      rawFindings: [],
+      conflicts: [],
+      findings,
+    };
+  }
+
+  describe('collectDuplicateLocusGroups', () => {
+    it('同一ファイルを引用する open finding が2件以上あるときグループとして抽出する（行範囲形式も同一ファイル扱い）', () => {
+      const groups = collectDuplicateLocusGroups(ledgerWith([
+        openFinding('F-0001', 'RFC 3339 の小数秒をミリ秒へ丸めて履歴順を逆転させる', 'src/core/models/rfc3339.ts:40'),
+        openFinding('F-0002', 'RFC 3339 のミリ秒未満を失い裁定履歴の実時間順が逆転する', 'src/core/models/rfc3339.ts:55-60'),
+        openFinding('F-0003', '別ファイルの単独指摘', 'src/core/workflow/findings/store.ts:10'),
+      ]));
+
+      expect([...groups.keys()]).toEqual(['src/core/models/rfc3339.ts']);
+      expect(groups.get('src/core/models/rfc3339.ts')?.map((finding) => finding.id)).toEqual(['F-0001', 'F-0002']);
+    });
+
+    it('グループが無いときは抽出結果が空になる', () => {
+      expect(collectDuplicateLocusGroups(ledgerWith([
+        openFinding('F-0001', 'a', 'src/a.ts:1'),
+        openFinding('F-0002', 'b', 'src/b.ts:1'),
+      ])).size).toBe(0);
+    });
+
+    it('provisional と closed の finding はグループ対象にしない', () => {
+      const provisional = {
+        ...openFinding('F-0001', '暫定', 'src/a.ts:1'),
+        provisional: {
+          kind: 'unverified-locationless' as const,
+          stableKey: 's1',
+          lineageKey: 'l1',
+          sourceRawFindingIds: ['raw-F-0001'],
+          reason: 'r',
+          firstObservedAt: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
+          lastObservedAt: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
+          interpretationEpochs: 0,
+          gateEffect: 'block' as const,
+        },
+      };
+      const resolved = { ...openFinding('F-0002', '解消済み', 'src/a.ts:2'), status: 'resolved' as const };
+      const open = openFinding('F-0003', 'open 単独', 'src/a.ts:3');
+
+      expect(collectDuplicateLocusGroups(ledgerWith([provisional, resolved, open])).size).toBe(0);
+    });
+  });
+
+  describe('buildManagerInstruction', () => {
+    it('inlines ledger and raw findings without presenting storage references as file paths', () => {
+      const instruction = buildManagerInstruction({
+        contract: {
+          manager: {
+            persona: 'findings-manager',
+            instruction: 'Reconcile findings.',
+            outputContract: 'Return structured output.',
+          },
+        },
+        previousLedger: ledgerWith([]),
+        residualRawFindings: [],
+        mechanicallyClassifiedCount: 0,
+        invalidLocationCandidates: new Map(),
+        dismissCandidates: new Map(),
+      });
+
+      expect(instruction).toContain('Previous ledger metadata:');
+      expect(instruction).toContain('Raw findings:');
+      expect(instruction).toContain(PROVIDER_ANCHOR_RELEVANCE_INSTRUCTION);
+      expect(instruction).not.toContain('ledger copy path');
+      expect(instruction).not.toContain('Raw findings path');
+      expect(instruction).not.toContain('sqlite-run://');
+    });
   });
 });

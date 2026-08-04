@@ -170,7 +170,17 @@ describe('Error Recovery IT: agent blocked response', () => {
     const state = await engine.run();
 
     expect(state.status).toBe('aborted');
-    expect(abortFn).toHaveBeenCalledWith(expect.anything(), 'rule_no_match', 'rule_no_match');
+    expect(abortFn).toHaveBeenCalledWith(
+      expect.anything(),
+      'rule_no_match',
+      'rule_no_match',
+      {
+        kind: 'rule_no_match',
+        step: 'plan',
+        reason: 'rule_no_match',
+        error: 'rule_no_match',
+      },
+    );
   });
 });
 

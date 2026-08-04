@@ -4,12 +4,7 @@ import type { StepProviderOptions } from '../../models/workflow-types.js';
 import type { RunAgentOptions } from '../../../agents/runner.js';
 import type { WorkflowMeta } from '../../../agents/types.js';
 import type { StructuredCaller } from '../../../agents/structured-caller.js';
-import type {
-  BasePhaseRunnerContext,
-  ReportPhaseRunnerContext,
-  StatusJudgmentPhaseContext,
-} from '../phase-runner.js';
-import type { WorkflowEventAttribution } from '../workflow-execution-scope.js';
+import type { ReportPhaseRunnerContext, StatusJudgmentPhaseContext } from '../phase-runner.js';
 import {
   resolveEffectiveProviderOptions,
   resolveEffectiveTeamLeaderPartProviderOptions,
@@ -21,6 +16,7 @@ import {
   type ProviderOptionsLayer,
 } from '../../../infra/config/providerOptions.js';
 import {
+  assertProviderResolvedForCapabilitySensitiveOptions,
   resolveAllowedToolsForProvider,
   resolveMcpServersForProvider,
   resolveSessionMcpServersForProvider,
@@ -33,7 +29,10 @@ import {
 import type { ProviderType, StreamCallback } from '../../../shared/types/provider.js';
 import type {
   WorkflowEngineOptions,
+  PhaseName,
   StepProviderInfo,
+  PhasePromptParts,
+  JudgeStageEntry,
   RuntimeStepResolution,
 } from '../types.js';
 import type { ProviderResolutionSource } from '../provider-options-trace.js';
@@ -42,20 +41,14 @@ import { getWorkflowStepKind } from '../step-kind.js';
 import { resolveStepProviderModel } from '../provider-resolution.js';
 import { resolveDeterministicAutoRoutingProviderInfo, toAutoRoutingStepMetadata } from '../auto-routing/resolver.js';
 import { buildPhase1WorkflowMeta } from './workflow-meta.js';
-import type { FindingContractInstructionContext } from '../instruction/instruction-context.js';
+import type {
+  FindingContractInstructionContext,
+  FindingContractReviewerOutputStrategy,
+} from '../instruction/instruction-context.js';
 
 type ResolvedRunAgentOptions = RunAgentOptions & {
   resolvedProviderOptions?: StepProviderOptions;
 };
-
-export interface PhaseRunnerContextOptions {
-  readonly eventAttribution: WorkflowEventAttribution;
-  readonly runtime?: RuntimeStepResolution;
-  readonly onPhaseStart?: BasePhaseRunnerContext['onPhaseStart'];
-  readonly onPhaseComplete?: BasePhaseRunnerContext['onPhaseComplete'];
-  readonly onJudgeStage?: StatusJudgmentPhaseContext['onJudgeStage'];
-  readonly onProviderAttempt?: ReportPhaseRunnerContext['onProviderAttempt'];
-}
 
 function isAutoProviderOptionsSource(
   source: ProviderResolutionSource | undefined,
@@ -90,7 +83,8 @@ export class OptionsBuilder {
     private readonly getCurrentWorkflowStack: () => WorkflowResumePointEntry[] | undefined = () => undefined,
     private readonly getFindingContractInstructionContext?: (
       step: WorkflowStep,
-      includeRawFindingsSchema: boolean,
+      reviewerOutputStrategy: FindingContractReviewerOutputStrategy | undefined,
+      reviewScopeSnapshotId?: string,
     ) => FindingContractInstructionContext | undefined,
     private readonly getTask?: () => string,
   ) {}
@@ -131,6 +125,9 @@ export class OptionsBuilder {
    */
   resolveStepProviderModelBeforeAutoRouting(step: WorkflowStep, runtime?: RuntimeStepResolution): StepProviderInfo {
     if (runtime?.providerInfo) {
+      if (runtime.providerInfoResolution === 'fully_resolved') {
+        return runtime.providerInfo;
+      }
       const providerOptions = this.resolveMergedProviderOptions(step, runtime.providerInfo.provider, runtime);
       const providerOptionsSources = this.resolveProviderOptionsSourcesForRuntime(step, runtime)
         ?? runtime.providerInfo.providerOptionsSources
@@ -235,6 +232,9 @@ export class OptionsBuilder {
     resolvedProvider: StepProviderInfo['provider'],
     runtime?: RuntimeStepResolution,
   ): StepProviderOptions | undefined {
+    if (runtime?.providerInfoResolution === 'fully_resolved') {
+      return runtime.providerInfo?.providerOptions;
+    }
     const middleProviderOptions = mergeStepProviderOptionsLayers(step, {
       providerRouting: this.engineOptions.providerRouting,
       personaProviders: this.engineOptions.personaProviders,
@@ -308,6 +308,7 @@ export class OptionsBuilder {
       projectCwd: this.getProjectCwd(),
       abortSignal: this.engineOptions.abortSignal,
       personaPath: step.personaPath,
+      workflowBundleResourceRoot: this.engineOptions.workflowBundleResourceRoot,
       resolvedProvider,
       resolvedModel,
       permissionResolution: {
@@ -343,6 +344,7 @@ export class OptionsBuilder {
       projectCwd: baseOptions.projectCwd,
       abortSignal: baseOptions.abortSignal,
       personaPath: baseOptions.personaPath,
+      workflowBundleResourceRoot: baseOptions.workflowBundleResourceRoot,
       resolvedProvider: baseOptions.resolvedProvider,
       resolvedModel: baseOptions.resolvedModel,
       providerOptions: baseOptions.providerOptions,
@@ -354,6 +356,19 @@ export class OptionsBuilder {
       workflowMeta: baseOptions.workflowMeta,
       childProcessEnv: baseOptions.childProcessEnv,
     };
+  }
+
+  private resolveReportPhaseOutputSchema(
+    step: WorkflowStep,
+    provider: ProviderType | undefined,
+  ): RunAgentOptions['outputSchema'] {
+    assertProviderResolvedForCapabilitySensitiveOptions(provider, {
+      stepName: step.name,
+      usesStructuredOutput: step.structuredOutput !== undefined,
+    });
+    return providerSupportsStructuredOutput(provider) === false
+      ? undefined
+      : step.structuredOutput?.schema;
   }
 
   buildPhase1WorkflowMeta(
@@ -371,9 +386,14 @@ export class OptionsBuilder {
 
   buildFindingContractInstructionContext(
     step: WorkflowStep,
-    includeRawFindingsSchema: boolean,
+    reviewerOutputStrategy: FindingContractReviewerOutputStrategy | undefined,
+    reviewScopeSnapshotId?: string,
   ): FindingContractInstructionContext | undefined {
-    return this.getFindingContractInstructionContext?.(step, includeRawFindingsSchema);
+    return this.getFindingContractInstructionContext?.(
+      step,
+      reviewerOutputStrategy,
+      reviewScopeSnapshotId,
+    );
   }
 
   private resolveSupportedMaxTurns(
@@ -418,10 +438,12 @@ export class OptionsBuilder {
       provider: resolvedProvider,
       model: resolvedModel,
     } = this.resolveStepProviderModel(step, runtime);
-    if (resolvedProvider === undefined) {
-      throw new Error(`Step "${step.name}" has no resolved provider`);
-    }
     const mergedProviderOptions = this.resolveMergedProviderOptions(step, resolvedProvider, runtime);
+
+    assertProviderResolvedForCapabilitySensitiveOptions(resolvedProvider, {
+      stepName: step.name,
+      usesStructuredOutput: step.structuredOutput !== undefined,
+    });
 
     const hasOutputContracts = step.outputContracts !== undefined && step.outputContracts.length > 0;
     const resolvedPartAllowedTools = resolvePartAllowedToolsForProvider(
@@ -463,12 +485,14 @@ export class OptionsBuilder {
     runtime?: RuntimeStepResolution,
   ): RunAgentOptions {
     const maxTurns = this.resolveSupportedMaxTurns(step, overrides.maxTurns, runtime);
+    const baseOptions = this.buildReadonlyPhaseBaseOptions(step, undefined, runtime);
     return {
-      ...this.buildReadonlyPhaseBaseOptions(step, undefined, runtime),
+      ...baseOptions,
       // Report/status phases are read-only regardless of step settings.
       permissionMode: 'readonly',
       sessionId,
       allowedTools: [],
+      outputSchema: this.resolveReportPhaseOutputSchema(step, baseOptions.resolvedProvider),
       ...(maxTurns !== undefined ? { maxTurns } : {}),
     };
   }
@@ -480,10 +504,12 @@ export class OptionsBuilder {
     runtime?: RuntimeStepResolution,
   ): RunAgentOptions {
     const maxTurns = this.resolveSupportedMaxTurns(step, overrides.maxTurns, runtime);
+    const baseOptions = this.buildReadonlyPhaseBaseOptions(step, undefined, runtime);
     return {
-      ...this.buildReadonlyPhaseBaseOptions(step, undefined, runtime),
+      ...baseOptions,
       permissionMode: 'readonly',
       allowedTools: overrides.allowedTools,
+      outputSchema: this.resolveReportPhaseOutputSchema(step, baseOptions.resolvedProvider),
       ...(maxTurns !== undefined ? { maxTurns } : {}),
     };
   }
@@ -501,11 +527,13 @@ export class OptionsBuilder {
       providerInfo: this.engineOptions.reportFallbackProvider,
     };
     const maxTurns = this.resolveSupportedMaxTurns(step, overrides.maxTurns, fallbackRuntime);
+    const baseOptions = this.buildReadonlyPhaseBaseOptions(step, undefined, fallbackRuntime);
     const options: RunAgentOptions = {
-      ...this.buildReadonlyPhaseBaseOptions(step, undefined, fallbackRuntime),
+      ...baseOptions,
       permissionMode: 'readonly',
       sessionId: undefined,
       allowedTools: overrides.allowedTools,
+      outputSchema: this.resolveReportPhaseOutputSchema(step, baseOptions.resolvedProvider),
       ...(maxTurns !== undefined ? { maxTurns } : {}),
     };
 
@@ -531,9 +559,37 @@ export class OptionsBuilder {
     state: WorkflowState,
     lastResponse: string | undefined,
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void,
-    options: PhaseRunnerContextOptions,
+    onPhaseStart?: (
+      step: WorkflowStep,
+      phase: 1 | 2 | 3,
+      phaseName: PhaseName,
+      instruction: string,
+      promptParts: PhasePromptParts,
+      phaseExecutionId?: string,
+      iteration?: number,
+    ) => void,
+    onPhaseComplete?: (
+      step: WorkflowStep,
+      phase: 1 | 2 | 3,
+      phaseName: PhaseName,
+      content: string,
+      status: string,
+      error?: string,
+      phaseExecutionId?: string,
+      iteration?: number,
+    ) => void,
+    onJudgeStage?: (
+      step: WorkflowStep,
+      phase: 3,
+      phaseName: 'judge',
+      entry: JudgeStageEntry,
+      phaseExecutionId?: string,
+      iteration?: number,
+    ) => void,
+    iteration?: number,
+    runtime?: RuntimeStepResolution,
+    onProviderAttempt?: ReportPhaseRunnerContext['onProviderAttempt'],
   ): ReportPhaseRunnerContext & StatusJudgmentPhaseContext {
-    const { eventAttribution, runtime } = options;
     const stepProvider = this.resolveStepProviderModel(step, runtime);
     return {
       cwd: this.getCwd(),
@@ -546,7 +602,7 @@ export class OptionsBuilder {
       observabilityRunId: this.engineOptions.observabilityRunId,
       observabilityEnabled: this.engineOptions.observability?.enabled === true,
       sanitizeObservabilityText: this.engineOptions.sanitizeObservabilityText,
-      executionScope: eventAttribution.scope,
+      getCurrentWorkflowStack: this.getCurrentWorkflowStack,
       childProcessEnv: this.engineOptions.childProcessEnv,
       abortSignal: this.engineOptions.abortSignal,
       onStream: this.buildProviderStream(
@@ -557,8 +613,11 @@ export class OptionsBuilder {
       ),
       structuredCaller: this.requireStructuredCaller(),
       resolveStepProviderModel: (step) => this.resolveStepProviderModel(step, runtime),
-      buildFindingContractInstructionContext: (step, includeRawFindingsSchema) =>
-        this.buildFindingContractInstructionContext(step, includeRawFindingsSchema),
+      buildFindingContractInstructionContext: (step, reviewerOutputStrategy) =>
+        this.buildFindingContractInstructionContext(
+          step,
+          reviewerOutputStrategy,
+        ),
       getSessionId: (persona: string) => state.personaSessions.get(persona),
       resolveSessionKey: (step) => {
         const providerInfo = this.resolveStepProviderModel(step, runtime);
@@ -570,11 +629,11 @@ export class OptionsBuilder {
         this.buildFallbackReportOptions(step, failedPrimaryOptions, overrides),
       resolveReportFallbackProviderModel: () => this.engineOptions.reportFallbackProvider,
       updatePersonaSession,
-      onPhaseStart: options.onPhaseStart,
-      onPhaseComplete: options.onPhaseComplete,
-      onJudgeStage: options.onJudgeStage,
-      onProviderAttempt: options.onProviderAttempt,
-      iteration: eventAttribution.iteration,
+      onPhaseStart,
+      onPhaseComplete,
+      onJudgeStage,
+      onProviderAttempt,
+      iteration,
     };
   }
 

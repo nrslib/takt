@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'nod
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import type { WorkflowResumePointEntry } from '../core/models/index.js';
 import { TaskRunner } from '../infra/task/runner.js';
 import { buildWorkflowCallInvocationFixture } from './helpers/workflow-resume-fixture.js';
 
@@ -57,6 +58,26 @@ function writeRunningRestartRecord(testDir: string, overrides: Record<string, un
     stringifyYaml({ tasks: [record] }),
     'utf-8',
   );
+}
+
+function makeWorkflowCallResumeStack(): WorkflowResumePointEntry[] {
+  return [
+    {
+      workflow: 'default',
+      workflow_ref: 'default',
+      step: 'delegate',
+      kind: 'workflow_call' as const,
+      occurrence: 1,
+      call_instance: 1,
+    },
+    {
+      workflow: 'coding',
+      workflow_ref: 'coding',
+      step: 'fix',
+      kind: 'agent' as const,
+      occurrence: 1,
+    },
+  ];
 }
 
 describe('TaskRunner - exceedTask', () => {
@@ -145,10 +166,16 @@ describe('TaskRunner - exceedTask', () => {
   });
 
   it('should preserve dynamic selection snapshots through exceed, requeue, and claim', () => {
-    const identity = '{"workflow":"default","step":"reviewers","owners":[]}' as const;
+    const identity = '{"workflow":"default","step":"reviewers","calls":[]}' as const;
     const resumePoint = {
       version: 2 as const,
-      stack: [{ workflow: 'default', step: 'reviewers', kind: 'agent' as const }],
+      stack: [{
+        workflow: 'default',
+        workflow_ref: 'default',
+        step: 'reviewers',
+        kind: 'parallel' as const,
+        occurrence: 1,
+      }],
       iteration: 30,
       elapsed_ms: 183245,
       dynamic_parallel_selections: {
@@ -231,16 +258,28 @@ describe('TaskRunner - exceedTask', () => {
     runner.addTask('Task A');
     runner.claimNextTasks(1);
     const taskName = (loadTasksFile(testDir).tasks[0] as Record<string, unknown>).name as string;
-    const stack = [
-      { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },
-      { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
-    ];
     const resumePoint = {
       version: 2,
-      stack,
+      stack: [
+        {
+          workflow: 'default',
+          workflow_ref: 'default',
+          step: 'delegate',
+          kind: 'workflow_call',
+          occurrence: 1,
+          call_instance: 1,
+        },
+        {
+          workflow: 'takt/coding',
+          workflow_ref: 'takt/coding',
+          step: 'review',
+          kind: 'agent',
+          occurrence: 1,
+        },
+      ],
       iteration: 30,
       elapsed_ms: 183245,
-      workflow_call_invocations: buildWorkflowCallInvocationFixture(stack),
+      workflow_call_invocations: {},
       workflow_step_participations: {},
     };
 
@@ -261,10 +300,7 @@ describe('TaskRunner - exceedTask', () => {
       worktree_path: '/tmp/restart-worktree',
       branch: 'takt/restart-task',
     });
-    const stack = [
-      { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },
-      { workflow: 'coding', step: 'fix', kind: 'agent' as const },
-    ];
+    const stack = makeWorkflowCallResumeStack();
     const resumePoint = {
       version: 2 as const,
       stack,
@@ -315,10 +351,7 @@ describe('TaskRunner - exceedTask', () => {
 
   it('should preserve the current exceeded checkpoint when the task is requeued and claimed', () => {
     writeRunningRestartRecord(testDir);
-    const stack = [
-      { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },
-      { workflow: 'coding', step: 'fix', kind: 'agent' as const },
-    ];
+    const stack = makeWorkflowCallResumeStack();
     const resumePoint = {
       version: 2 as const,
       stack,
@@ -524,16 +557,28 @@ describe('TaskRunner - requeueExceededTask', () => {
   });
 
   it('should preserve resume_point through requeue for workflow_call retry', () => {
-    const stack = [
-      { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },
-      { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
-    ];
     const resumePoint = {
       version: 2,
-      stack,
+      stack: [
+        {
+          workflow: 'default',
+          workflow_ref: 'default',
+          step: 'delegate',
+          kind: 'workflow_call',
+          occurrence: 1,
+          call_instance: 1,
+        },
+        {
+          workflow: 'takt/coding',
+          workflow_ref: 'takt/coding',
+          step: 'review',
+          kind: 'agent',
+          occurrence: 1,
+        },
+      ],
       iteration: 30,
       elapsed_ms: 183245,
-      workflow_call_invocations: buildWorkflowCallInvocationFixture(stack),
+      workflow_call_invocations: {},
       workflow_step_participations: {},
     };
     writeExceededRecord(testDir, {

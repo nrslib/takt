@@ -547,9 +547,8 @@ describe('system workflow PR sync integration', () => {
       return '';
     });
 
-    const { max_steps: _rootMaxSteps, ...childWorkflowConfig } = createConflictCleanupWorkflowConfig();
     const childConfig = normalizeWorkflowConfig({
-      ...childWorkflowConfig,
+      ...createConflictCleanupWorkflowConfig(),
       name: 'prepare-merge-child',
       subworkflow: {
         callable: true,

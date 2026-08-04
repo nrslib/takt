@@ -35,6 +35,10 @@ import {
   findingManagerValidationReportFileName,
   serializeFindingManagerValidationReport,
 } from '../../core/workflow/findings/manager-report-content.js';
+import {
+  authorizeFindingLedgerFixture,
+  emptyFindingAuthorityProjection,
+} from './finding-lifecycle-fixture.js';
 
 type PublicationMethods = FindingManagerCommitRebinder
   & FindingManagerCommitFinalizer
@@ -56,8 +60,20 @@ export class RevisionedFindingLedgerTestRepository {
     | undefined;
 
   constructor(initialLedger: FindingLedger) {
+    const completeProjection = {
+      ...emptyFindingAuthorityProjection(),
+      ...initialLedger,
+      evidenceBindings: initialLedger.evidenceBindings ?? [],
+      lifecycleReservations: initialLedger.lifecycleReservations ?? [],
+      lifecycleEvents: initialLedger.lifecycleEvents ?? [],
+    };
+    const authorized = completeProjection.lifecycleEvents.length > 0
+      || (completeProjection.findings.length === 0
+        && completeProjection.conflicts.length === 0)
+      ? completeProjection
+      : authorizeFindingLedgerFixture(completeProjection);
     this.ledger = structuredClone(
-      normalizeFindingLedger(initialLedger, initialLedger.workflowName),
+      normalizeFindingLedger(authorized, initialLedger.workflowName),
     );
   }
 
@@ -197,7 +213,9 @@ export class RevisionedFindingLedgerTestRepository {
     this.nextExclusiveMutation = undefined;
     if (concurrentMutation !== undefined) {
       this.ledger = structuredClone(normalizeFindingLedger(
-        concurrentMutation(structuredClone(this.ledger)),
+        authorizeFindingLedgerFixture(
+          concurrentMutation(structuredClone(this.ledger)),
+        ),
         this.ledger.workflowName,
       ));
       this.revision += 1;

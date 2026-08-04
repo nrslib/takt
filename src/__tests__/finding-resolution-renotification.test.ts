@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createEmptyFindingContractRegistries } from '../core/models/finding-contract-seed.js';
 import type {
   FindingLedger,
   FindingManagerOutput,
@@ -13,6 +14,18 @@ import {
   type ResolutionRenotificationTransition,
 } from '../core/workflow/findings/resolution-renotification.js';
 import { storedRawReconcileProvenance } from './helpers/finding-integrity.js';
+import {
+  authorizeFindingLedgerFixture,
+  canonicalRawFindingFixture,
+  rawCanonicalSnapshotFixture,
+} from './helpers/finding-lifecycle-fixture.js';
+import { createAnchorAdjudication } from '../core/models/finding-anchor-relevance.js';
+import type { FindingManagerRawDecision } from '../core/models/finding-types.js';
+import { captureFindingLifecycleHead } from '../core/workflow/findings/lifecycle-mutation.js';
+import { applyFindingLifecycleCommands } from '../core/workflow/findings/lifecycle-transaction.js';
+import { attachCapturedConflictHeads } from '../core/workflow/findings/manager-commit-plan.js';
+import { computeConflictEvidenceHash } from '../core/workflow/findings/adjudication-evidence.js';
+import type { ManagerDecisionStageResult } from '../core/workflow/findings/manager-contracts.js';
 
 const OBSERVATION = {
   runId: 'run-1',
@@ -21,22 +34,35 @@ const OBSERVATION = {
 };
 
 function raw(overrides: Partial<RawFinding> & Pick<RawFinding, 'rawFindingId'>): RawFinding {
-  return {
+  const base = canonicalRawFindingFixture({
     rawFindingId: overrides.rawFindingId,
     stepName: 'reviewers',
     reviewer: 'reviewer',
     familyTag: 'bug',
     severity: 'high',
     title: 'Issue',
-    location: 'src/a.ts:1',
     description: 'Issue evidence.',
+    suggestion: null,
     relation: 'new',
-    ...overrides,
-  };
+    targetFindingId: null,
+    evidence: [],
+  });
+  const {
+    target,
+    sourceBinding,
+    targetIdentityHash: _targetIdentityHash,
+    claimIdentityHash: _claimIdentityHash,
+    semanticClaimIdentityHash: _semanticClaimIdentityHash,
+    candidateIdentityHash: _candidateIdentityHash,
+    ...input
+  } = { ...base, ...overrides };
+  return canonicalRawFindingFixture({ ...input, target, sourceBinding });
 }
 
 function ledger(overrides: Partial<FindingLedger> = {}): FindingLedger {
+  const originalRaw = raw({ rawFindingId: 'raw-original' });
   return {
+    ...createEmptyFindingContractRegistries(),
     workflowName: 'test',
     nextId: 2,
     updatedAt: OBSERVATION.timestamp,
@@ -44,9 +70,13 @@ function ledger(overrides: Partial<FindingLedger> = {}): FindingLedger {
       id: 'F-0001',
       status: 'open',
       lifecycle: 'new',
+      target: originalRaw.target,
+      targetIdentityHash: originalRaw.targetIdentityHash,
+      claimIdentityHash: originalRaw.claimIdentityHash,
+      semanticClaimIdentityHash: originalRaw.semanticClaimIdentityHash,
       severity: 'high',
       title: 'Issue',
-      location: 'src/a.ts:1',
+      evidenceIds: [],
       description: 'Issue evidence.',
       reviewers: ['reviewer'],
       rawFindingIds: ['raw-original'],
@@ -54,10 +84,52 @@ function ledger(overrides: Partial<FindingLedger> = {}): FindingLedger {
       lastSeen: OBSERVATION,
       revision: 1,
     }],
-    rawFindings: [raw({ rawFindingId: 'raw-original' })],
+    evidenceRecords: [],
+    evidenceBindings: [],
+    lifecycleReservations: [],
+    lifecycleEvents: [],
+    rawFindings: [originalRaw],
+    rawCanonicalSnapshots: [rawCanonicalSnapshotFixture(originalRaw, OBSERVATION)],
     conflicts: [],
-    interpretations: [],
+    interpretationRawObservations: [],
+    interpretationAttempts: [],
+    rawInterpretationOutcomes: [],
     ...overrides,
+  };
+}
+
+function withAnchorAdjudications(
+  output: FindingManagerOutput,
+): FindingManagerOutput {
+  if (output.anchorAdjudications.length > 0) {
+    return output;
+  }
+  const decisions: FindingManagerRawDecision[] = [
+    ...output.matches.flatMap((match) => match.rawFindingIds.map((rawFindingId) => ({
+      rawFindingId,
+      decision: 'same' as const,
+      findingId: match.findingId,
+      anchorRelevance: 'not_applicable' as const,
+      evidence: match.evidence ?? 'Fixture match decision.',
+    }))),
+    ...output.resolvedFindings.flatMap((finding) => finding.rawFindingIds.map((rawFindingId) => ({
+      rawFindingId,
+      decision: 'resolved' as const,
+      findingId: finding.findingId,
+      anchorRelevance: 'not_applicable' as const,
+      evidence: finding.evidence,
+    }))),
+    ...output.reopenedFindings.flatMap((finding) => finding.rawFindingIds.map((rawFindingId) => ({
+      rawFindingId,
+      decision: 'reopened' as const,
+      findingId: finding.findingId,
+      anchorRelevance: 'not_applicable' as const,
+      evidence: finding.evidence,
+    }))),
+  ];
+  return {
+    ...output,
+    anchorAdjudications: decisions.map(createAnchorAdjudication),
   };
 }
 
@@ -66,14 +138,18 @@ function revalidate(input: {
   capturedLedger: FindingLedger;
   freshLedger: FindingLedger;
   cleanWire: RawFinding[];
+  capturedConflictHeads?: ManagerDecisionStageResult['conflictTargetHeads'];
+  reviewScopeSnapshotId?: string;
 }) {
   return revalidateManagerPlan({
-    managerOutput: input.managerOutput,
+    managerOutput: withAnchorAdjudications(input.managerOutput),
     freshLedger: input.freshLedger,
     cleanWire: input.cleanWire,
     cleanWireById: new Map(input.cleanWire.map((item) => [item.rawFindingId, item])),
     cleanCanonicalById: new Map(),
     capturedPreconditions: captureFindingPreconditions(input.capturedLedger),
+    capturedConflictHeads: input.capturedConflictHeads,
+    reviewScopeSnapshotId: input.reviewScopeSnapshotId ?? 'scope-test',
     runInput: {
       workflowName: 'test',
       cwd: process.cwd(),
@@ -84,6 +160,226 @@ function revalidate(input: {
 }
 
 describe('resolution/renotification exact authority', () => {
+  it('rejects only a stale conflict resolve and retains an independent manager decision', () => {
+    const base = ledger();
+    const conflict = {
+      id: 'C-0001',
+      status: 'active' as const,
+      findingIds: ['F-0001'],
+      rawFindingIds: [],
+      description: 'Captured conflict evidence.',
+      firstSeen: OBSERVATION,
+      lastSeen: OBSERVATION,
+      revision: 1,
+    };
+    const capturedLedger = authorizeFindingLedgerFixture(ledger({ conflicts: [conflict] }));
+    const freshLedger = authorizeFindingLedgerFixture(ledger({
+      conflicts: [{
+        ...conflict,
+        description: 'Fresh evidence changed the conflict.',
+        revision: 2,
+        lastSeen: { ...OBSERVATION, timestamp: '2026-07-26T00:01:00.000Z' },
+      }],
+    }));
+    const managerOutput = {
+      ...createEmptyManagerOutput(),
+      resolvedConflicts: [{
+        conflictId: conflict.id,
+        evidence: 'Resolve using the captured evidence.',
+      }],
+      disputeNotes: [{
+        findingId: base.findings[0]!.id,
+        reason: 'Keep the independent note.',
+        evidence: 'Independent manager decision.',
+      }],
+    };
+
+    const result = revalidate({
+      managerOutput,
+      capturedLedger,
+      freshLedger,
+      cleanWire: [],
+      capturedConflictHeads: new Map([[
+        conflict.id,
+        {
+          lifecycleHead:
+            captureFindingLifecycleHead(capturedLedger, 'conflict', conflict.id) ?? null,
+          evidenceSetHash: computeConflictEvidenceHash(
+            capturedLedger.conflicts[0]!,
+            capturedLedger,
+            'scope-test',
+          ),
+          reviewScopeSnapshotId: 'scope-test',
+        },
+      ]]),
+    });
+
+    expect(result.output.resolvedConflicts).toEqual([]);
+    expect(result.output.disputeNotes).toEqual(managerOutput.disputeNotes);
+    expect(result.staleRejections).toContain(
+      'conflictDecisions: conflict "C-0001" (resolve) rejected at commit: captured lifecycle head no longer matches the fresh ledger',
+    );
+  });
+
+  it.each([
+    'referenced raw',
+    'referenced finding',
+    'review scope',
+  ] as const)(
+    'rejects a resolve when only the %s dependency changes and retains another decision',
+    (changedDependency) => {
+      const conflict = {
+        id: 'C-0001',
+        status: 'active' as const,
+        findingIds: ['F-0001'],
+        rawFindingIds: [],
+        description: 'Stable conflict projection.',
+        firstSeen: OBSERVATION,
+        lastSeen: OBSERVATION,
+        revision: 1,
+      };
+      const capturedLedger = authorizeFindingLedgerFixture(ledger({ conflicts: [conflict] }));
+      const freshLedger = (() => {
+        if (changedDependency === 'referenced raw') {
+          return {
+            ...capturedLedger,
+            rawFindings: capturedLedger.rawFindings.map((item) => (
+              item.rawFindingId === 'raw-original'
+                ? { ...item, description: 'Later raw evidence changed.' }
+                : item
+            )),
+          };
+        }
+        if (changedDependency === 'referenced finding') {
+          return {
+            ...capturedLedger,
+            findings: capturedLedger.findings.map((finding) => (
+              finding.id === 'F-0001'
+                ? { ...finding, description: 'Later finding evidence changed.' }
+                : finding
+            )),
+          };
+        }
+        return capturedLedger;
+      })();
+      const captured = {
+        lifecycleHead:
+          captureFindingLifecycleHead(capturedLedger, 'conflict', conflict.id) ?? null,
+        evidenceSetHash: computeConflictEvidenceHash(
+          capturedLedger.conflicts[0]!,
+          capturedLedger,
+          'scope-test',
+        ),
+        reviewScopeSnapshotId: 'scope-test',
+      };
+      const managerOutput = {
+        ...createEmptyManagerOutput(),
+        resolvedConflicts: [{
+          conflictId: conflict.id,
+          evidence: 'Resolve using the captured dependency set.',
+        }],
+        disputeNotes: [{
+          findingId: 'F-0001',
+          reason: 'Independent note remains valid.',
+          evidence: 'Independent manager decision.',
+        }],
+      };
+
+      expect(captureFindingLifecycleHead(freshLedger, 'conflict', conflict.id))
+        .toEqual(captured.lifecycleHead);
+      const result = revalidate({
+        managerOutput,
+        capturedLedger,
+        freshLedger,
+        cleanWire: [],
+        capturedConflictHeads: new Map([[conflict.id, captured]]),
+        reviewScopeSnapshotId: changedDependency === 'review scope'
+          ? 'scope-fresh'
+          : 'scope-test',
+      });
+
+      expect(result.output.resolvedConflicts).toEqual([]);
+      expect(result.output.disputeNotes).toEqual(managerOutput.disputeNotes);
+      expect(result.staleRejections).toContain(
+        'conflictDecisions: conflict "C-0001" (resolve) rejected at commit: captured lifecycle head no longer matches the fresh ledger',
+      );
+    },
+  );
+
+  it('uses the captured conflict head as lifecycle expectedBefore', () => {
+    const conflict = {
+      id: 'C-0001',
+      status: 'active' as const,
+      findingIds: ['F-0001'],
+      rawFindingIds: [],
+      description: 'Captured conflict evidence.',
+      firstSeen: OBSERVATION,
+      lastSeen: OBSERVATION,
+      revision: 1,
+    };
+    const capturedLedger = authorizeFindingLedgerFixture(ledger({ conflicts: [conflict] }));
+    const freshLedger = authorizeFindingLedgerFixture(ledger({
+      conflicts: [{
+        ...conflict,
+        description: 'Fresh evidence changed the conflict.',
+        revision: 2,
+      }],
+    }));
+    const freshConflict = freshLedger.conflicts[0]!;
+    const { revision: _revision, ...resolvedConflict } = {
+      ...freshConflict,
+      status: 'resolved' as const,
+      resolvedAt: OBSERVATION.timestamp,
+      resolvedEvidence: 'Captured manager decision.',
+    };
+    void _revision;
+
+    const capturedHead = captureFindingLifecycleHead(
+      capturedLedger,
+      'conflict',
+      conflict.id,
+    ) ?? null;
+    const capturedConflictHead = {
+      lifecycleHead: capturedHead,
+      evidenceSetHash: computeConflictEvidenceHash(
+        capturedLedger.conflicts[0]!,
+        capturedLedger,
+        'scope-test',
+      ),
+      reviewScopeSnapshotId: 'scope-test',
+    };
+    const proofRecordId = freshLedger.evidenceRecords[0]?.evidenceId;
+    if (proofRecordId === undefined) {
+      throw new Error('Expected authorized fixture evidence for conflict adjudication');
+    }
+    const commands = attachCapturedConflictHeads({
+      commands: [{
+        operation: 'resolve_conflict',
+        changes: { findings: [], conflicts: [resolvedConflict] },
+        authority: {
+          kind: 'verified_conflict_adjudication',
+          conflictId: conflict.id,
+          conflictSnapshotId: 'a'.repeat(64),
+          attemptId: 'b'.repeat(64),
+          verificationDigest: 'c'.repeat(64),
+          proofRecordIds: [proofRecordId],
+        },
+        evidenceSourcesByTarget: new Map(),
+      }],
+      resolvedConflictIds: new Set([conflict.id]),
+      capturedConflictHeads: new Map([[conflict.id, capturedConflictHead]]),
+      cwd: process.cwd(),
+    });
+
+    expect(commands[0]?.expectedHeadsByTarget?.get(`conflict\0${conflict.id}`))
+      .toEqual(capturedHead);
+    expect(() => applyFindingLifecycleCommands({
+      ledger: freshLedger,
+      commands,
+      occurredAt: OBSERVATION,
+    })).toThrow('Lifecycle reservation has a stale full head for "C-0001"');
+  });
+
   it.each(['match', 'reopen'] as const)(
     'folds normal %s evidence independently of manager and raw input order',
     (mode) => {
@@ -109,7 +405,6 @@ describe('resolution/renotification exact authority', () => {
         targetFindingId: 'F-0001',
         targetPrecondition: observed,
         reviewer: 'reviewer-a',
-        location: 'src/a.ts:10',
         description: 'Canonical primary evidence.',
         suggestion: 'Apply the canonical fix.',
       });
@@ -119,7 +414,6 @@ describe('resolution/renotification exact authority', () => {
         targetFindingId: 'F-0001',
         targetPrecondition: observed,
         reviewer: 'reviewer-z',
-        location: 'src/z.ts:20',
         description: 'Lexically later evidence.',
         suggestion: 'Apply another fix.',
       });
@@ -127,7 +421,7 @@ describe('resolution/renotification exact authority', () => {
         reconcileFindingLedger({
           previousLedger,
           rawFindings,
-          managerOutput: {
+          managerOutput: withAnchorAdjudications({
             ...createEmptyManagerOutput(),
             ...(mode === 'match'
               ? { matches: [{ findingId: 'F-0001', rawFindingIds }] }
@@ -138,15 +432,17 @@ describe('resolution/renotification exact authority', () => {
                     evidence: 'The issue is present again.',
                   }],
                 }),
-          },
+          }),
           context: {
             workflowName: 'test',
             stepName: OBSERVATION.stepName,
             runId: OBSERVATION.runId,
             timestamp: OBSERVATION.timestamp,
           },
+          entityProvisionalMutations: [],
+          terminalEntityAttachmentFindingIds: new Set(),
           provisionalFindings: [],
-          rawFindingDispositions: [],
+          verifiedEvidenceRecordsByRawFindingId: new Map(),
           rawProvenanceByRawFindingId: new Map([
             [
               rawA.rawFindingId,
@@ -167,7 +463,6 @@ describe('resolution/renotification exact authority', () => {
       expect(forward.findings[0]).toMatchObject({
         status: 'open',
         lifecycle: mode === 'match' ? 'persists' : 'reopened',
-        location: rawA.location,
         description: rawA.description,
         suggestion: rawA.suggestion,
         reviewers: ['reviewer', 'reviewer-a', 'reviewer-z'],
@@ -178,7 +473,7 @@ describe('resolution/renotification exact authority', () => {
 
   it.each([
     {
-      name: 'B→A does not treat a locationless anomaly raw outside canonical finding evidence as a resolution',
+      name: 'B→A does not treat an evidence-free anomaly raw outside canonical finding evidence as a resolution',
       managerOutput: {
         ...createEmptyManagerOutput(),
         matches: [{ findingId: 'F-0001', rawFindingIds: ['raw-persists'] }],
@@ -192,7 +487,7 @@ describe('resolution/renotification exact authority', () => {
         rawFindingId: 'raw-anomaly-confirmation',
         relation: 'resolution_confirmation',
         targetFindingId: 'F-0001',
-        evidence: { kind: 'locationless', explanation: 'Unverified.' },
+        evidence: [],
       }),
       freshStatus: 'resolved' as const,
       freshLifecycle: 'resolved' as const,
@@ -217,7 +512,7 @@ describe('resolution/renotification exact authority', () => {
         rawFindingId: 'raw-anomaly-persists',
         relation: 'persists',
         targetFindingId: 'F-0001',
-        evidence: { kind: 'locationless', explanation: 'Unverified.' },
+        evidence: [],
       }),
       freshStatus: 'open' as const,
       freshLifecycle: 'persists' as const,
@@ -322,7 +617,6 @@ describe('resolution/renotification exact authority', () => {
       targetFindingId: 'F-0001',
       targetPrecondition: observed,
       reviewer: 'reviewer-a',
-      location: 'src/a.ts:10',
       description: 'Deterministic primary evidence.',
       suggestion: 'Apply the deterministic fix.',
     });
@@ -332,7 +626,6 @@ describe('resolution/renotification exact authority', () => {
       targetFindingId: 'F-0001',
       targetPrecondition: observed,
       reviewer: 'reviewer-z',
-      location: 'src/z.ts:20',
       description: 'Later lexical evidence.',
       suggestion: 'Apply another fix.',
     });
@@ -386,7 +679,6 @@ describe('resolution/renotification exact authority', () => {
       status: 'open',
       lifecycle: 'reopened',
       revision: 3,
-      location: persistsA.location,
       description: persistsA.description,
       suggestion: persistsA.suggestion,
       reviewers: ['reviewer', 'reviewer-a', 'reviewer-z'],

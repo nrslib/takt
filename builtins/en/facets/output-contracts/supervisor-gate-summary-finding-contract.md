@@ -9,19 +9,12 @@
 ## Next Action or Unfinished Reason
 {For APPROVE, the next progression; for REJECT, the required fix; for NEED_REPLAN, the unverified item and reason to replan}
 
-## Observed Findings
-| # | family_tag | Severity | Location | Issue | Required Action |
-|---|------------|----------|----------|-------|-----------------|
-| 1 | validation | high / medium / low | `file:line` | {current observed defect} | {fix} |
-
-## Resolution Confirmations
-| Ledger Reference | Original Acceptance Criteria | Confirmation Evidence |
-|------------------|------------------------------|-----------------------|
-| {existing finding} | {expected result} | `file:line` |
+## Finding Contract Claims
+{Describe every observed defect or explicit ledger lifecycle claim here separately. If the injected instructions require structured output, use that schema as the machine format; otherwise return only the Markdown report. Do not use a findings table. If there are no claims, write `None`.}
 
 ## Output Consistency
-- Markdown Observed Findings and structured issues, and Markdown Resolution Confirmations and structured confirmations, must each be the same set.
+- When an injected structured-output schema is present, every issue described in the report must also appear in that structured output. Otherwise use ordinary report prose only. Do not assign final finding IDs.
 - APPROVE means zero issues; REJECT means one or more issues. NEED_REPLAN keeps zero issues and records the unverified item in Next Action or Unfinished Reason. Do not make approvals or summaries issues.
 ```
 
-**Cognitive-load rule:** Always state the actual verdict, key points, and next action or unfinished reason; include only relevant rows within 20 lines.
+**Cognitive-load rule:** Always state the actual verdict, key points, and next action or unfinished reason; include every required machine claim without truncation.

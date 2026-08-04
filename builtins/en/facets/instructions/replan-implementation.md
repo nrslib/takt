@@ -11,7 +11,9 @@ Meet these requirements:
 - Do not repeat a failed fix or a substantively identical plan
 - Explicitly determine whether the next implementation step can perform work within the project
 - If an untried code change, test change, or investigation can still be performed within the project, define that work and its verification steps concretely
+- If concrete evidence shows that the current implementation meets the requirements and acceptance criteria, all required project-scoped verification is complete, and no untried change or investigation remains, route directly to independent review
 - Do not edit code or tests in this step
 - If project-scoped changes or investigation cannot resolve the issue and only an external environment change or user action remains, state the evidence and the required external action
 - If the attempted approaches and confirmed constraints establish that the requirements are mutually unsatisfiable, state that evidence
 - Do not conclude that the issue is unresolvable merely because it is uncertain, uninvestigated, or tests cannot be run
+- Do not complete, dismiss, resolve, or otherwise adjudicate findings in this planning step; independent reviewers and the configured Finding Contract authorities retain those decisions

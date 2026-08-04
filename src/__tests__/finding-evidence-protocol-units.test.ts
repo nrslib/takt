@@ -11,11 +11,12 @@ import {
   MAX_EVIDENCE_SOURCE_FILE_BYTES,
   MAX_SOURCE_QUOTE_LINES,
   validateLocationAdmission,
-  verifySourceQuoteEvidence,
+  verifyFileQuoteEvidence,
 } from '../core/workflow/findings/admission-validation.js';
-import { resolveRawFindingEvidence } from '../core/workflow/findings/raw-canonicalization.js';
+import { FINDING_EVIDENCE_ISSUANCE_LIMITS } from '../core/models/finding-contract-limits.js';
 import {
   applyReviewerAnomalySpecsToLedger,
+  isOutstandingReviewerAnomaly,
   linkPromotedReviewerAnomalies,
   type ReviewerAnomalySpec,
 } from '../core/workflow/findings/reviewer-anomalies.js';
@@ -36,7 +37,7 @@ function makeFinding(
     lifecycle: 'new',
     severity: 'high',
     title: 'Existing issue',
-    location: 'src/a.ts:10',
+    evidenceIds: [],
     description: 'Existing issue body.',
     reviewers: ['arch-review'],
     rawFindingIds: ['raw-existing'],
@@ -52,14 +53,14 @@ function makeLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
     nextId: 2,
     updatedAt: '2026-06-13T00:00:00.000Z',
     findings: [],
+    evidenceRecords: [],
     rawFindings: [],
     conflicts: [],
-    interpretations: [],
     ...overrides,
   };
 }
 
-describe('verifySourceQuoteEvidence (admission-validation.ts)', () => {
+describe('verifyFileQuoteEvidence (admission-validation.ts)', () => {
   let cwd: string;
   const snapshotId = 'snap-1';
 
@@ -74,8 +75,8 @@ describe('verifySourceQuoteEvidence (admission-validation.ts)', () => {
   });
 
   it('path・行範囲・verbatimExcerpt・snapshotId が全て正しく一致すると match し、fileHash を返す', () => {
-    const result = verifySourceQuoteEvidence(cwd, {
-      kind: 'source_quote',
+    const result = verifyFileQuoteEvidence(cwd, {
+      kind: 'file_quote',
       path: 'src/a.ts',
       startLine: 2,
       endLine: 3,
@@ -87,8 +88,8 @@ describe('verifySourceQuoteEvidence (admission-validation.ts)', () => {
   });
 
   it('snapshotId が食い違うと内容の一致/不一致を判定する前に stale-snapshot になる（幻覚した引用が偶然一致しても match と誤判定しない）', () => {
-    const result = verifySourceQuoteEvidence(cwd, {
-      kind: 'source_quote',
+    const result = verifyFileQuoteEvidence(cwd, {
+      kind: 'file_quote',
       path: 'src/a.ts',
       startLine: 2,
       endLine: 2,
@@ -99,8 +100,8 @@ describe('verifySourceQuoteEvidence (admission-validation.ts)', () => {
   });
 
   it('verbatimExcerpt が空文字なら quote-mismatch（空引用は不採用）', () => {
-    const result = verifySourceQuoteEvidence(cwd, {
-      kind: 'source_quote',
+    const result = verifyFileQuoteEvidence(cwd, {
+      kind: 'file_quote',
       path: 'src/a.ts',
       startLine: 1,
       endLine: 1,
@@ -111,8 +112,8 @@ describe('verifySourceQuoteEvidence (admission-validation.ts)', () => {
   });
 
   it('startLine が endLine より後ろなら quote-mismatch（逆順の範囲は不採用）', () => {
-    const result = verifySourceQuoteEvidence(cwd, {
-      kind: 'source_quote',
+    const result = verifyFileQuoteEvidence(cwd, {
+      kind: 'file_quote',
       path: 'src/a.ts',
       startLine: 5,
       endLine: 2,
@@ -122,21 +123,40 @@ describe('verifySourceQuoteEvidence (admission-validation.ts)', () => {
     expect(result.outcome).toBe('quote-mismatch');
   });
 
-  it(`引用範囲が ${MAX_SOURCE_QUOTE_LINES} 行を超えると quote-mismatch（過度に広い引用は不採用）`, () => {
-    const result = verifySourceQuoteEvidence(cwd, {
-      kind: 'source_quote',
-      path: 'src/a.ts',
+  it(`正しい引用範囲が ${MAX_SOURCE_QUOTE_LINES} 行を超えると resource_exhausted`, () => {
+    const excerpt = Array.from(
+      { length: MAX_SOURCE_QUOTE_LINES + 1 },
+      (_, index) => `// wide line ${index + 1}`,
+    ).join('\n');
+    writeFileSync(join(cwd, 'src', 'wide.ts'), `${excerpt}\n`);
+    const result = verifyFileQuoteEvidence(cwd, {
+      kind: 'file_quote',
+      path: 'src/wide.ts',
       startLine: 1,
-      endLine: MAX_SOURCE_QUOTE_LINES + 2,
-      verbatimExcerpt: 'anything',
+      endLine: MAX_SOURCE_QUOTE_LINES + 1,
+      verbatimExcerpt: excerpt,
       snapshotId,
     }, snapshotId);
-    expect(result.outcome).toBe('quote-mismatch');
+    expect(result.outcome).toBe('resource_exhausted');
+  });
+
+  it('正しい1行引用が quote byte 上限のみを超えると resource_exhausted', () => {
+    const excerpt = 'x'.repeat(FINDING_EVIDENCE_ISSUANCE_LIMITS.maxFileQuoteBytes + 1);
+    writeFileSync(join(cwd, 'src', 'wide-line.ts'), `${excerpt}\n`);
+    const result = verifyFileQuoteEvidence(cwd, {
+      kind: 'file_quote',
+      path: 'src/wide-line.ts',
+      startLine: 1,
+      endLine: 1,
+      verbatimExcerpt: excerpt,
+      snapshotId,
+    }, snapshotId);
+    expect(result.outcome).toBe('resource_exhausted');
   });
 
   it('path がプロジェクト外を指す（相対パスでの脱出）なら quote-mismatch', () => {
-    const result = verifySourceQuoteEvidence(cwd, {
-      kind: 'source_quote',
+    const result = verifyFileQuoteEvidence(cwd, {
+      kind: 'file_quote',
       path: '../outside.ts',
       startLine: 1,
       endLine: 1,
@@ -147,8 +167,8 @@ describe('verifySourceQuoteEvidence (admission-validation.ts)', () => {
   });
 
   it('行範囲がファイルの実際の行数を超えると quote-mismatch', () => {
-    const result = verifySourceQuoteEvidence(cwd, {
-      kind: 'source_quote',
+    const result = verifyFileQuoteEvidence(cwd, {
+      kind: 'file_quote',
       path: 'src/a.ts',
       startLine: 9,
       endLine: 999,
@@ -159,8 +179,8 @@ describe('verifySourceQuoteEvidence (admission-validation.ts)', () => {
   });
 
   it('verbatimExcerpt が該当行の一部分だけを恣意的に切り取ったものだと quote-mismatch（部分行の引用は構造的に排除される）', () => {
-    const result = verifySourceQuoteEvidence(cwd, {
-      kind: 'source_quote',
+    const result = verifyFileQuoteEvidence(cwd, {
+      kind: 'file_quote',
       path: 'src/a.ts',
       startLine: 2,
       endLine: 2,
@@ -171,8 +191,8 @@ describe('verifySourceQuoteEvidence (admission-validation.ts)', () => {
   });
 
   it('存在しない path なら quote-mismatch', () => {
-    const result = verifySourceQuoteEvidence(cwd, {
-      kind: 'source_quote',
+    const result = verifyFileQuoteEvidence(cwd, {
+      kind: 'file_quote',
       path: 'src/does-not-exist.ts',
       startLine: 1,
       endLine: 1,
@@ -188,8 +208,8 @@ describe('verifySourceQuoteEvidence (admission-validation.ts)', () => {
       Buffer.alloc(MAX_EVIDENCE_SOURCE_FILE_BYTES + 1, 0x61),
     );
 
-    const result = verifySourceQuoteEvidence(cwd, {
-      kind: 'source_quote',
+    const result = verifyFileQuoteEvidence(cwd, {
+      kind: 'file_quote',
       path: 'src/oversized.ts',
       startLine: 1,
       endLine: 1,
@@ -208,106 +228,6 @@ describe('verifySourceQuoteEvidence (admission-validation.ts)', () => {
     });
   });
 });
-describe('resolveRawFindingEvidence (raw-canonicalization.ts)', () => {
-  it('evidenceKind が locationless なら description を explanation として使う', () => {
-    const evidence = resolveRawFindingEvidence({
-      evidenceKind: 'locationless',
-      description: 'No single site; this is an architectural observation.',
-    });
-    expect(evidence).toEqual({ kind: 'locationless', explanation: 'No single site; this is an architectural observation.' });
-  });
-
-  it('evidenceKind が locationless で description も無ければ固定文言にフォールバックする（弱いモデルへ必須フィールドを増やさない設計判断）', () => {
-    const evidence = resolveRawFindingEvidence({ evidenceKind: 'locationless' });
-    expect(evidence).toEqual({ kind: 'locationless', explanation: '(no description)' });
-  });
-
-  it('evidenceKind が source_quote で verbatimExcerpt・snapshotId・単一行 location が揃っていれば組み立てる', () => {
-    const evidence = resolveRawFindingEvidence({
-      evidenceKind: 'source_quote',
-      verbatimExcerpt: 'const x = 1;',
-      snapshotId: 'snap-1',
-      location: 'src/a.ts:7',
-    });
-    expect(evidence).toEqual({
-      kind: 'source_quote',
-      path: 'src/a.ts',
-      startLine: 7,
-      endLine: 7,
-      verbatimExcerpt: 'const x = 1;',
-      snapshotId: 'snap-1',
-    });
-  });
-
-  it('evidenceKind が source_quote で行範囲 location（path:start-end）でも組み立てる', () => {
-    const evidence = resolveRawFindingEvidence({
-      evidenceKind: 'source_quote',
-      verbatimExcerpt: 'line 5\nline 6',
-      snapshotId: 'snap-1',
-      location: 'src/a.ts:5-6',
-    });
-    expect(evidence).toEqual({
-      kind: 'source_quote',
-      path: 'src/a.ts',
-      startLine: 5,
-      endLine: 6,
-      verbatimExcerpt: 'line 5\nline 6',
-      snapshotId: 'snap-1',
-    });
-  });
-
-  it('evidenceKind が source_quote でも verbatimExcerpt が無ければ undefined を返す（欠損を有利に解釈しない）', () => {
-    const evidence = resolveRawFindingEvidence({
-      evidenceKind: 'source_quote',
-      snapshotId: 'snap-1',
-      location: 'src/a.ts:7',
-    });
-    expect(evidence).toBeUndefined();
-  });
-
-  it('evidenceKind が source_quote でも snapshotId が無ければ undefined を返す', () => {
-    const evidence = resolveRawFindingEvidence({
-      evidenceKind: 'source_quote',
-      verbatimExcerpt: 'const x = 1;',
-      location: 'src/a.ts:7',
-    });
-    expect(evidence).toBeUndefined();
-  });
-
-  it('evidenceKind が source_quote でも location が解釈できない形（N/A・空）なら undefined を返す', () => {
-    for (const location of ['N/A', '']) {
-      const evidence = resolveRawFindingEvidence({
-        evidenceKind: 'source_quote',
-        verbatimExcerpt: 'const x = 1;',
-        snapshotId: 'snap-1',
-        location,
-      });
-      expect(evidence).toBeUndefined();
-    }
-  });
-
-  it('カンマ区切りの複数 location は「末尾の :digits より前の全て」を1つの path として緩く解釈する（曖昧だが構造的には parse できてしまう） — 安全性は下流の verifySourceQuoteEvidence の path 実在チェックが担保する（本テストは curent 挙動の固定であって、この解釈を admission が admit することを意味しない）', () => {
-    const evidence = resolveRawFindingEvidence({
-      evidenceKind: 'source_quote',
-      verbatimExcerpt: 'const x = 1;',
-      snapshotId: 'snap-1',
-      location: 'src/a.ts:5, src/b.ts:9',
-    });
-    expect(evidence).toEqual({
-      kind: 'source_quote',
-      path: 'src/a.ts:5, src/b.ts',
-      startLine: 9,
-      endLine: 9,
-      verbatimExcerpt: 'const x = 1;',
-      snapshotId: 'snap-1',
-    });
-  });
-
-  it('evidenceKind が未指定・不明値なら undefined を返す（旧来の bare location raw は evidence なし扱い）', () => {
-    expect(resolveRawFindingEvidence({ location: 'src/a.ts:7' })).toBeUndefined();
-    expect(resolveRawFindingEvidence({ evidenceKind: 'bogus' as never, location: 'src/a.ts:7' })).toBeUndefined();
-  });
-});
 
 describe('applyReviewerAnomalySpecsToLedger / linkPromotedReviewerAnomalies (reviewer-anomalies.ts, 設計書 D の安全不変条件)', () => {
   const context = { workflowName: 'peer-review', stepName: 'reviewers', runId: 'run-1', timestamp: '2026-07-12T00:00:00.000Z' };
@@ -318,6 +238,7 @@ describe('applyReviewerAnomalySpecsToLedger / linkPromotedReviewerAnomalies (rev
       stableKey: 'sk-anomaly-1',
       lineageKey: 'lk-anomaly-1',
       sourceRawFindingIds: ['raw-1'],
+      sourceIntakeIds: [],
       reviewers: ['ai-antipattern-reviewer'],
       title: 'Hallucinated finding',
       mismatchReason: 'the location does not exist',
@@ -355,6 +276,40 @@ describe('applyReviewerAnomalySpecsToLedger / linkPromotedReviewerAnomalies (rev
     expect(anomaly.lastObserved).toEqual({ runId: 'run-2', stepName: 'reviewers', timestamp: '2026-07-12T01:00:00.000Z' });
   });
 
+  it('settle済みstableKeyの新観測はsettlementを継承せず別episodeへ保存する', () => {
+    const first = applyReviewerAnomalySpecsToLedger(makeLedger(), [makeSpec()], context);
+    const settled = {
+      ...first,
+      reviewerAnomalies: [{
+        ...first.reviewerAnomalies![0]!,
+        settlement: {
+          kind: 'target_resolved_by_verified_evidence' as const,
+          findingId: 'F-0001',
+          lifecycleEventId: 'event-resolved',
+        },
+      }],
+    };
+    const nextSpec = makeSpec({ sourceRawFindingIds: ['raw-2'] });
+    const observed = applyReviewerAnomalySpecsToLedger(settled, [nextSpec], {
+      ...context,
+      runId: 'run-2',
+    });
+    const replayed = applyReviewerAnomalySpecsToLedger(observed, [nextSpec], context);
+
+    expect(observed.reviewerAnomalies).toHaveLength(2);
+    expect(observed.reviewerAnomalies?.[0]).toEqual(settled.reviewerAnomalies[0]);
+    expect(observed.reviewerAnomalies?.[1]).toMatchObject({
+      stableKey: 'sk-anomaly-1',
+      sourceRawFindingIds: ['raw-2'],
+      occurrences: 1,
+    });
+    expect(observed.reviewerAnomalies?.[1]?.id)
+      .not.toBe(observed.reviewerAnomalies?.[0]?.id);
+    expect(observed.reviewerAnomalies?.[1]?.settlement).toBeUndefined();
+    expect(isOutstandingReviewerAnomaly(observed.reviewerAnomalies![1]!)).toBe(true);
+    expect(replayed.reviewerAnomalies).toEqual(observed.reviewerAnomalies);
+  });
+
   it('crash/replay 冪等（codex 検証ブロッカー#3）: 同一 stableKey・同一 sourceRawFindingIds の再適用は occurrences を二重計上せず完全な no-op になる', () => {
     const first = applyReviewerAnomalySpecsToLedger(makeLedger(), [makeSpec()], context);
     expect(first.reviewerAnomalies![0]!.occurrences).toBe(1);
@@ -373,6 +328,33 @@ describe('applyReviewerAnomalySpecsToLedger / linkPromotedReviewerAnomalies (rev
     // ただし新しい raw finding id を持ち込む別ラウンドはちゃんと +1 される。
     const nextRound = applyReviewerAnomalySpecsToLedger(replayedAgain, [makeSpec({ sourceRawFindingIds: ['raw-next-round'] })], context);
     expect(nextRound.reviewerAnomalies![0]!.occurrences).toBe(2);
+  });
+
+  it('rawを生成できない観測はsourceIntakeIdsを冪等キーとしてupsertする', () => {
+    const spec = makeSpec({
+      sourceRawFindingIds: [],
+      sourceIntakeIds: ['intake-1'],
+    });
+    const first = applyReviewerAnomalySpecsToLedger(makeLedger(), [spec], context);
+    const replay = applyReviewerAnomalySpecsToLedger(first, [spec], {
+      ...context,
+      timestamp: '2026-07-12T02:00:00.000Z',
+    });
+    const next = applyReviewerAnomalySpecsToLedger(replay, [{
+      ...spec,
+      sourceIntakeIds: ['intake-2'],
+    }], context);
+
+    expect(replay.reviewerAnomalies?.[0]).toMatchObject({
+      occurrences: 1,
+      sourceRawFindingIds: [],
+      sourceIntakeIds: ['intake-1'],
+    });
+    expect(next.reviewerAnomalies?.[0]).toMatchObject({
+      occurrences: 2,
+      sourceRawFindingIds: [],
+      sourceIntakeIds: ['intake-1', 'intake-2'],
+    });
   });
 
   it('異なる stableKey は別レコードとして共存する', () => {
@@ -440,6 +422,40 @@ describe('applyReviewerAnomalySpecsToLedger / linkPromotedReviewerAnomalies (rev
     expect(reattempted.reviewerAnomalies![0]!.promotedFindingId).toBe('F-0001');
   });
 
+  it('linkPromotedReviewerAnomalies: settlement済みの同lineage anomalyはclean候補で昇格しない', () => {
+    const withAnomaly = applyReviewerAnomalySpecsToLedger(
+      makeLedger(),
+      [makeSpec({ lineageKey: 'lk-settled' })],
+      context,
+    );
+    const settledAnomaly = {
+      ...withAnomaly.reviewerAnomalies![0]!,
+      settlement: {
+        kind: 'target_resolved_by_verified_evidence' as const,
+        findingId: 'F-0001',
+        lifecycleEventId: 'a'.repeat(64),
+      },
+    };
+    const finding = makeFinding({
+      revision: 1,
+      id: 'F-0042',
+      rawFindingIds: ['raw-clean'],
+    });
+    const settledLedger: FindingLedger = {
+      ...withAnomaly,
+      findings: [finding],
+      reviewerAnomalies: [settledAnomaly],
+    };
+
+    const linked = linkPromotedReviewerAnomalies(settledLedger, [
+      { lineageKey: 'lk-settled', rawFindingId: 'raw-clean' },
+    ]);
+
+    expect(linked).toBe(settledLedger);
+    expect(linked.reviewerAnomalies![0]).toBe(settledAnomaly);
+    expect(linked.reviewerAnomalies![0]!.promotedFindingId).toBeUndefined();
+  });
+
   it('linkPromotedReviewerAnomalies: reviewerAnomalies が無い/候補が空なら ledger をそのまま返す（no-op）', () => {
     const ledger = makeLedger({ findings: [makeFinding({ revision: 1 })] });
     expect(linkPromotedReviewerAnomalies(ledger, [{ lineageKey: 'lk-x', rawFindingId: 'raw-existing' }])).toBe(ledger);
@@ -461,6 +477,7 @@ describe('review-integrity budget (review-integrity.ts, codex 検証ブロッカ
       stableKey: 'sk',
       lineageKey: 'lk',
       sourceRawFindingIds: ['raw-1'],
+      sourceIntakeIds: [],
       reviewers: ['reviewer'],
       title: 'Unverifiable claim',
       mismatchReason: 'no verifiable evidence',

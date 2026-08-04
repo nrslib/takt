@@ -791,14 +791,19 @@ describe('option resolution order', () => {
       taskPollIntervalMs: 500,
     });
 
+    const onDispatch = vi.fn(() => {
+      expect(providerCallMock).not.toHaveBeenCalled();
+    });
     await runAgent(undefined, 'task', {
       cwd: '/repo',
       permissionResolution: {
         stepName: 'supervise',
       },
+      onDispatch,
     });
 
     expect(getProviderMock).toHaveBeenLastCalledWith('codex');
+    expect(onDispatch).toHaveBeenCalledExactlyOnceWith('full');
     expect(providerCallMock).toHaveBeenLastCalledWith(
       'task',
       expect.objectContaining({ permissionMode: 'full' }),

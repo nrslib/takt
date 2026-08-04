@@ -5,10 +5,17 @@ export interface RoundIdentity {
   callNamespace: string;
   parentStepName: string;
   stepIteration: number;
+  publicationIds: readonly string[];
 }
 
 export function computeRoundMarker(identity: RoundIdentity): string {
-  return [identity.runId, identity.callNamespace, identity.parentStepName, identity.stepIteration].join('\0');
+  return [
+    identity.runId,
+    identity.callNamespace,
+    identity.parentStepName,
+    identity.stepIteration,
+    ...[...identity.publicationIds].sort(compareBinaryStrings),
+  ].join('\0');
 }
 
 export function addRoundMarker(existing: readonly string[] | undefined, marker: string): string[] {

@@ -13,6 +13,9 @@ import {
 } from './finding-preconditions.js';
 import { foldFindingObservation } from './finding-evidence-fold.js';
 import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
+import { applyFindingLifecycleCommands } from './lifecycle-transaction.js';
+import { computeClaimIdentityHash } from '../../models/finding-claim-identity.js';
+import { evidenceRecordMatchesRawEvidence } from '../../models/finding-evidence-record.js';
 
 export interface ResolutionRenotificationTransition {
   readonly findingId: string;
@@ -197,6 +200,10 @@ export function applyResolutionRenotificationTransitions(input: {
       rawFindings: renotificationRawFindings,
       observation: input.observation,
     });
+    const sourceRawFindingIds = mergeIds(
+      transition.resolutionRawFindingIds,
+      transition.renotificationRawFindingIds,
+    );
     findingsById.set(transition.findingId, {
       ...withoutResolutionFields(finding),
       status: 'open',
@@ -207,15 +214,16 @@ export function applyResolutionRenotificationTransitions(input: {
         foldedObservation.rawFindingIds,
         transition.resolutionRawFindingIds,
       ),
+      evidenceIds: mergeIds(
+        finding.evidenceIds,
+        evidenceIdsForRawFindings(input.ledger, sourceRawFindingIds),
+      ),
       reopenedEvidence: description,
     });
 
     const conflictShape = {
       findingIds: [transition.findingId],
-      rawFindingIds: mergeIds(
-        transition.resolutionRawFindingIds,
-        transition.renotificationRawFindingIds,
-      ),
+        rawFindingIds: sourceRawFindingIds,
     };
     const conflictId = formatConflictId(conflictShape);
     const existingConflict = conflictsById.get(conflictId);
@@ -228,6 +236,7 @@ export function applyResolutionRenotificationTransitions(input: {
           description,
           firstSeen: input.observation,
           lastSeen: input.observation,
+          revision: 1,
         }
       : withoutConflictResolutionFields(existingConflict);
     conflictsById.set(conflictId, {
@@ -239,6 +248,7 @@ export function applyResolutionRenotificationTransitions(input: {
       ),
       description,
       lastSeen: input.observation,
+      revision: existingConflict === undefined ? 1 : existingConflict.revision + 1,
     });
   }
 
@@ -249,4 +259,112 @@ export function applyResolutionRenotificationTransitions(input: {
     conflicts: [...conflictsById.values()]
       .sort((left, right) => compareBinaryStrings(left.id, right.id)),
   };
+}
+
+function withoutRevision<T extends { revision: number }>(
+  projection: T,
+): Omit<T, 'revision'> {
+  const change: Partial<T> = { ...projection };
+  delete change.revision;
+  return change as Omit<T, 'revision'>;
+}
+
+function evidenceIdsForRawFindings(
+  ledger: FindingLedger,
+  rawFindingIds: readonly string[],
+): string[] {
+  const rawFindings = rawFindingIds.map((rawFindingId) => {
+    const raw = ledger.rawFindings.find(
+      (candidate) => candidate.rawFindingId === rawFindingId,
+    );
+    if (raw === undefined) {
+      throw new Error(`Resolution/renotification references unknown raw finding "${rawFindingId}"`);
+    }
+    return raw;
+  });
+  return ledger.evidenceRecords.flatMap((record) => (
+    rawFindings.some((raw) => (
+      record.claimIdentityHash === computeClaimIdentityHash(raw)
+      && raw.evidence.some((evidence) => evidenceRecordMatchesRawEvidence(record, evidence))
+    ))
+      ? [record.evidenceId]
+      : []
+  ));
+}
+
+/**
+ * Applies each merged resolution/renotification decision as one causal
+ * two-target lifecycle command. The two raw observation systems remain
+ * separately attributable in their target bindings.
+ */
+export function applyResolutionRenotificationLifecycleCommands(input: {
+  readonly ledger: FindingLedger;
+  readonly transitions: readonly ResolutionRenotificationTransition[];
+  readonly observation: FindingObservation;
+}): FindingLedger {
+  let ledger = input.ledger;
+  for (const transition of mergeResolutionRenotificationTransitions(input.transitions)) {
+    const sourceRawFindingIds = mergeIds(
+      transition.resolutionRawFindingIds,
+      transition.renotificationRawFindingIds,
+    );
+    const projected = applyResolutionRenotificationTransitions({
+      ledger,
+      transitions: [transition],
+      observation: input.observation,
+    });
+    const finding = projected.findings.find(
+      (candidate) => candidate.id === transition.findingId,
+    );
+    const conflictId = formatConflictId({
+      findingIds: [transition.findingId],
+      rawFindingIds: [
+        ...transition.resolutionRawFindingIds,
+        ...transition.renotificationRawFindingIds,
+      ],
+    });
+    const conflict = projected.conflicts.find(
+      (candidate) => candidate.id === conflictId,
+    );
+    if (finding === undefined || conflict === undefined) {
+      throw new Error(
+        `Resolution/renotification command for "${transition.findingId}" has incomplete projections`,
+      );
+    }
+    ledger = applyFindingLifecycleCommands({
+      ledger,
+      commands: [{
+        operation: 'apply_resolution_renotification',
+        changes: {
+          findings: [withoutRevision(finding)],
+          conflicts: [withoutRevision(conflict)],
+        },
+        authority: { kind: 'verified_evidence' },
+        evidenceSourcesByTarget: new Map([
+          [
+            `finding\0${finding.id}`,
+            {
+              sourceRawFindingIds: mergeIds(
+                [],
+                sourceRawFindingIds,
+              ),
+              authorityEvidenceIds: [],
+            },
+          ],
+          [
+            `conflict\0${conflict.id}`,
+            {
+              sourceRawFindingIds: mergeIds(
+                [],
+                sourceRawFindingIds,
+              ),
+              authorityEvidenceIds: [],
+            },
+          ],
+        ]),
+      }],
+      occurredAt: input.observation,
+    });
+  }
+  return ledger;
 }

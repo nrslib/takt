@@ -1,0 +1,65 @@
+{
+  "reports": {
+    "1": {
+      "output": {
+        "rawFindings": [{
+          "rawExcerpt": "Attachment cleanup is not guaranteed. `cleanupAttachments` must be awaited\nbefore returning the task.",
+          "candidate": {
+            "rawFindingId": "raw-review-1",
+            "relation": "new",
+            "targetFindingId": null,
+            "familyTag": "resource-lifecycle",
+            "severity": "high",
+            "title": "Attachment cleanup is not guaranteed",
+            "description": "`cleanupAttachments` must be awaited before returning the task.",
+            "suggestion": "Await `cleanupAttachments()` before returning.",
+            "target": {
+              "kind": "code",
+              "paths": ["src/services/task-cleanup.ts"]
+            },
+            "evidenceRequests": [{
+              "kind": "file_quote",
+              "path": "src/services/task-cleanup.ts",
+              "startLine": 42,
+              "endLine": 43,
+              "verbatimExcerpt": "await cleanupAttachments();\nreturn task;"
+            }]
+          }
+        }]
+      }
+    },
+    "2": {
+      "output": {
+        "rawFindings": [{
+          "rawExcerpt": "Session cache invalidation still runs too early. Cache invalidation still occurs\nbefore the durable session write.",
+          "candidate": {
+            "rawFindingId": "raw-review-2",
+            "relation": "persists",
+            "targetFindingId": "F-0042",
+            "familyTag": "state-consistency",
+            "severity": "medium",
+            "title": "Session cache invalidation still runs too early",
+            "description": "Cache invalidation still occurs before the durable session write.",
+            "suggestion": "Move cache invalidation after the durable write succeeds.",
+            "target": {
+              "kind": "code",
+              "paths": ["src/cache/session-cache.ts"]
+            },
+            "evidenceRequests": [{
+              "kind": "file_quote",
+              "path": "src/cache/session-cache.ts",
+              "startLine": 80,
+              "endLine": 80,
+              "verbatimExcerpt": "sessionCache.delete(sessionId);"
+            }]
+          }
+        }]
+      }
+    },
+    "3": {
+      "output": {
+        "rawFindings": []
+      }
+    }
+  }
+}

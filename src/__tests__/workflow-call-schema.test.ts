@@ -140,7 +140,7 @@ describe('workflow_call schema', () => {
     expect(workflow.maxSteps).toBe(10);
   });
 
-  it.each([3, 'infinite'] as const)('should reject explicit max_steps %s on a callable subworkflow', (maxSteps) => {
+  it.each([3, 'infinite'] as const)('should preserve explicit max_steps %s on a callable workflow', (maxSteps) => {
     const result = WorkflowConfigRawSchema.safeParse({
       name: 'shared/review',
       subworkflow: { callable: true },
@@ -153,16 +153,11 @@ describe('workflow_call schema', () => {
       }],
     });
 
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.issues).toContainEqual(expect.objectContaining({
-        path: ['max_steps'],
-        message: expect.stringMatching(/callable.*max_steps|max_steps.*callable/i),
-      }));
-    }
+    expect(result.success).toBe(true);
+    expect(normalizeWorkflowConfig(result.data!, '/tmp').maxSteps).toBe(maxSteps);
   });
 
-  it('should not inject max_steps into a callable subworkflow', () => {
+  it('should retain the default max_steps when a callable workflow is run directly', () => {
     const workflow = normalizeWorkflowConfig({
       name: 'shared/review',
       subworkflow: { callable: true },
@@ -174,7 +169,7 @@ describe('workflow_call schema', () => {
       }],
     }, '/tmp');
 
-    expect(workflow.maxSteps).toBeUndefined();
+    expect(workflow.maxSteps).toBe(10);
   });
 
   it('accepts scalar vars only on workflow_call steps and preserves them after normalization', () => {
@@ -602,6 +597,52 @@ describe('workflow_call schema', () => {
     }));
 
     expect(result.success).toBe(true);
+  });
+
+  it('workflow_call step で terminal adjudication authority を保持する', () => {
+    const result = WorkflowStepRawSchema.safeParse(createWorkflowCallStep({
+      finding_contract_authority: 'terminal_adjudication',
+    }));
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).toMatchObject({
+        finding_contract_authority: 'terminal_adjudication',
+      });
+    }
+  });
+
+  it.each(['standard', 'provider_trusted'])(
+    'workflow_call step で未許可の finding contract authority %s を reject する',
+    (authority) => {
+      const result = WorkflowStepRawSchema.safeParse(createWorkflowCallStep({
+        finding_contract_authority: authority,
+      }));
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues).toContainEqual(expect.objectContaining({
+          path: ['finding_contract_authority'],
+        }));
+      }
+    },
+  );
+
+  it('agent step で finding contract authority を reject する', () => {
+    const result = WorkflowStepRawSchema.safeParse({
+      name: 'review',
+      persona: 'reviewer',
+      instruction: 'Review the code',
+      finding_contract_authority: 'terminal_adjudication',
+      rules: [{ condition: 'done', next: 'COMPLETE' }],
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toContainEqual(expect.objectContaining({
+        path: ['finding_contract_authority'],
+      }));
+    }
   });
 
   it('workflow_call step で when rule を reject する', () => {
@@ -1131,6 +1172,7 @@ describe('workflow_call schema', () => {
           {
             name: 'delegate',
             call: 'takt/review-loop',
+            finding_contract_authority: 'terminal_adjudication',
             rules: [
               {
                 condition: 'COMPLETE',
@@ -1160,6 +1202,7 @@ describe('workflow_call schema', () => {
     expect(plan.kind).toBe('agent');
     expect(delegate.kind).toBe('workflow_call');
     expect(delegate.call).toBe('takt/review-loop');
+    expect(delegate.findingContractAuthority).toBe('terminal_adjudication');
     expect(routeContext.kind).toBe('system');
     expect('provider' in delegate).toBe(false);
     expect('persona' in routeContext).toBe(false);

@@ -7,6 +7,7 @@ describe('finding manager output construction', () => {
     const second = createEmptyManagerOutput();
 
     expect(first).toEqual({
+      anchorAdjudications: [],
       matches: [],
       newFindings: [],
       resolvedFindings: [],

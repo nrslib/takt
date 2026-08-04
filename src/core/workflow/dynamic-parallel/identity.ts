@@ -1,45 +1,66 @@
 import type { WorkflowConfig, WorkflowResumePointEntry } from '../../models/types.js';
 import {
+  getResumePointWorkflowReference,
   getWorkflowReference,
+  normalizeWorkflowResumePointEntry,
 } from '../workflow-reference.js';
 import {
-  buildWorkflowExecutionOwnerIdentity,
-  parseWorkflowExecutionOwnerIdentity,
-  serializeWorkflowExecutionOwnerIdentity,
-  type WorkflowExecutionOwnerIdentity,
-} from '../../models/workflow-resume-contract.js';
+  parseWorkflowExecutionIdentity,
+  serializeWorkflowExecutionIdentity,
+  type WorkflowExecutionIdentity,
+} from '../workflow-execution-identity-codec.js';
 
-export type DynamicParallelSelectionIdentity = WorkflowExecutionOwnerIdentity;
+export type DynamicParallelSelectionIdentity = WorkflowExecutionIdentity;
 
 export function buildDynamicParallelSelectionIdentity(
   workflow: WorkflowConfig,
   stepName: string,
-  ownerPath: readonly WorkflowResumePointEntry[],
+  workflowCallPath: readonly WorkflowResumePointEntry[],
 ): string {
   return buildDynamicParallelSelectionIdentityFromPath(
     getWorkflowReference(workflow),
     stepName,
-    ownerPath,
+    workflowCallPath,
   );
 }
 
 export function buildDynamicParallelSelectionIdentityFromPath(
   workflowReference: string,
   stepName: string,
-  ownerPath: readonly WorkflowResumePointEntry[],
+  workflowCallPath: readonly WorkflowResumePointEntry[],
 ): string {
   if (workflowReference.length === 0 || stepName.length === 0) {
     throw new Error('Dynamic parallel identity requires non-empty workflow and step values');
   }
-  return serializeWorkflowExecutionOwnerIdentity(
-    buildWorkflowExecutionOwnerIdentity(workflowReference, stepName, ownerPath),
-  );
+  return serializeWorkflowExecutionIdentity({
+    workflow: workflowReference,
+    step: stepName,
+    calls: workflowCallPath.map((rawEntry) => {
+      const entry = normalizeWorkflowResumePointEntry(rawEntry);
+      const instance = entry.kind === 'workflow_call'
+        ? entry.call_instance
+        : entry.occurrence;
+      if (instance === undefined || instance < 1) {
+        throw new Error(`Dynamic parallel identity requires a positive frame instance for "${entry.step}"`);
+      }
+      const entryWorkflow = getResumePointWorkflowReference(entry);
+      if (entryWorkflow.length === 0 || entry.step.length === 0) {
+        throw new Error('Dynamic parallel identity requires non-empty workflow-call path values');
+      }
+      return {
+        workflow: entryWorkflow,
+        step: entry.step,
+        kind: entry.kind,
+        instance,
+      };
+    }),
+  });
 }
 
 export function parseDynamicParallelSelectionIdentity(
   identity: string,
 ): DynamicParallelSelectionIdentity | undefined {
-  return parseWorkflowExecutionOwnerIdentity(identity);
+  return parseWorkflowExecutionIdentity(identity);
 }
 
 export function isWithinDynamicParallelSelectionScope(
@@ -47,19 +68,13 @@ export function isWithinDynamicParallelSelectionScope(
   prefix: readonly WorkflowResumePointEntry[],
 ): boolean {
   const parsed = parseDynamicParallelSelectionIdentity(identity);
-  if (!parsed || parsed.owners.length < prefix.length) return false;
-  const prefixOwners = buildWorkflowExecutionOwnerIdentity(
-    parsed.workflow,
-    parsed.step,
-    prefix,
-  ).owners;
-  return prefixOwners.every((owner, index) => {
-    const actual = parsed.owners[index];
-    return actual !== undefined
-      && actual.workflow === owner.workflow
-      && actual.step === owner.step
-      && actual.kind === owner.kind
-      && (actual.kind !== 'workflow_call'
-        || owner.kind === 'workflow_call' && actual.instance === owner.instance);
+  if (!parsed || parsed.calls.length < prefix.length) return false;
+  return prefix.every((entry, index) => {
+    const call = parsed.calls[index];
+    return call !== undefined
+      && call.workflow === getResumePointWorkflowReference(entry)
+      && call.step === entry.step
+      && call.kind === entry.kind
+      && call.instance === (entry.kind === 'workflow_call' ? entry.call_instance : entry.occurrence);
   });
 }

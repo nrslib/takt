@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   getAllParallelSubSteps,
   type WorkflowConfig,
-  type WorkflowResumePointEntry,
   type WorkflowStep,
 } from '../core/models/types.js';
 import {
@@ -15,15 +14,11 @@ import { makeNormalizedWorkflowCallStep } from './helpers/normalized-workflow-ca
 import { makeStep } from './test-helpers.js';
 import { buildWorkflowResumePointEntry } from '../core/workflow/workflow-reference.js';
 import { buildDynamicParallelSelectionIdentity } from '../core/workflow/dynamic-parallel/identity.js';
-import {
-  buildWorkflowCallInvocationIdentity,
-  WorkflowCallInvocationIndex,
-} from '../core/workflow/workflow-call-invocation-index.js';
+import { WorkflowCallInvocationIndex } from '../core/workflow/workflow-call-invocation-index.js';
 import { getWorkflowReference } from '../core/workflow/workflow-reference.js';
 import type { ReviewReportParticipationEvidence } from '../core/workflow/review-report-participation.js';
 import { WorkflowStepParticipationIndex } from '../core/workflow/workflow-step-participation-index.js';
 import { getReportFiles } from '../core/workflow/output-contract-files.js';
-import { buildWorkflowCallNamespaceSegment } from '../core/workflow/workflow-call-namespace.js';
 
 function makeWorkflow(
   name: string,
@@ -38,20 +33,6 @@ function makeWorkflow(
   };
 }
 
-function callNamespace(
-  workflow: WorkflowConfig,
-  step: string,
-  ownerPath: readonly WorkflowResumePointEntry[],
-  childWorkflow: WorkflowConfig | string,
-  callInstance: number,
-): string {
-  return buildWorkflowCallNamespaceSegment(
-    buildWorkflowCallInvocationIdentity(getWorkflowReference(workflow), step, ownerPath),
-    typeof childWorkflow === 'string' ? childWorkflow : getWorkflowReference(childWorkflow),
-    callInstance,
-  );
-}
-
 function participation(
   workflow: WorkflowConfig,
   stepOutputNames: readonly string[],
@@ -60,19 +41,14 @@ function participation(
   workflowStepParticipations = new Map(),
 ): ReviewReportParticipationEvidence {
   const stepIndex = new WorkflowStepParticipationIndex(workflowStepParticipations);
+  const workflowSteps = workflow.steps.flatMap((step) => [
+    step,
+    ...(step.parallel === undefined ? [] : getAllParallelSubSteps(step.parallel)),
+  ]);
   for (const stepName of stepOutputNames) {
-    const step = workflow.steps.find((candidate) => candidate.name === stepName)
-      ?? workflow.steps.flatMap((candidate) => candidate.parallel === undefined
-        ? []
-        : getAllParallelSubSteps(candidate.parallel))
-        .find((candidate) => candidate.name === stepName);
+    const step = workflowSteps.find((candidate) => candidate.name === stepName);
     if (step !== undefined) {
-      const parallelParent = workflow.steps.find((candidate) => candidate.parallel !== undefined
-        && getAllParallelSubSteps(candidate.parallel).some((subStep) => subStep === step));
-      const ownerPath = parallelParent === undefined
-        ? []
-        : [buildWorkflowResumePointEntry(workflow, parallelParent.name, 'agent')];
-      stepIndex.record(workflow, step.name, ownerPath, getReportFiles(step.outputContracts));
+      stepIndex.record(workflow, step.name, [], getReportFiles(step.outputContracts));
     }
   }
   return {
@@ -120,20 +96,25 @@ function makeWorkflowCallChain(workflowCount: number): {
     ]);
   }
 
+  const namespace = Array.from(
+    { length: workflowCount - 1 },
+    (_, index) => [
+      'subworkflows',
+      `iteration-${index + 1}--step-delegate-${index + 1}--workflow-workflow-${index + 2}`,
+    ],
+  ).flat();
   const invocationIndex = new WorkflowCallInvocationIndex(new Map());
   const workflowCallPath = [];
-  const namespace: string[] = [];
   for (let index = 0; index < workflowCount - 1; index += 1) {
     const parent = workflows[index]!;
     const step = parent.steps[0]!;
-    const segment = callNamespace(parent, step.name, workflowCallPath, workflows[index + 1]!, 1);
     invocationIndex.record(parent, step.name, workflowCallPath, {
       call_instance: 1,
-      child_workflow_ref: getWorkflowReference(workflows[index + 1]!),
+      report_namespace_segment:
+        `iteration-${index + 1}--step-${step.name}--workflow-workflow-${index + 2}`,
     });
-    namespace.push('subworkflows', segment);
     workflowCallPath.push(
-      buildWorkflowResumePointEntry(parent, step.name, 'workflow_call', undefined, 1),
+      buildWorkflowResumePointEntry(parent, step.name, 'workflow_call', 1, undefined, 1),
     );
   }
   const stepParticipationIndex = new WorkflowStepParticipationIndex(new Map());
@@ -152,76 +133,6 @@ function makeWorkflowCallChain(workflowCount: number): {
   };
 }
 
-function makeDepthBoundaryFixture(workflowCallCount: number) {
-  const call = makeNormalizedWorkflowCallStep({
-    name: 'review',
-    call: 'child',
-  });
-  const fix = makeStep({ name: 'fix' });
-  const workflow = makeWorkflow('parent', [call, fix]);
-  const child = makeWorkflow('child', [
-    makeStep({
-      name: 'review',
-      outputContracts: [{ name: 'review.md', format: '# Review' }],
-    }),
-  ]);
-  const workflowCallPrefix = Array.from(
-    { length: workflowCallCount },
-    (_, index): WorkflowResumePointEntry => ({
-      workflow: `ancestor-${index}`,
-      step: `call-${index}`,
-      kind: 'workflow_call',
-      call_instance: 1,
-    }),
-  );
-  const resumeStackPrefix: WorkflowResumePointEntry[] = [
-    {
-      workflow: 'parallel-owner',
-      step: 'fanout',
-      kind: 'agent',
-    },
-    workflowCallPrefix[0]!,
-    {
-      workflow: 'system-owner',
-      step: 'gate',
-      kind: 'system',
-    },
-    ...workflowCallPrefix.slice(1),
-  ];
-  const invocationIndex = new WorkflowCallInvocationIndex(new Map());
-  const segment = callNamespace(workflow, 'review', resumeStackPrefix, child, 1);
-  invocationIndex.record(workflow, 'review', resumeStackPrefix, {
-    call_instance: 1,
-    child_workflow_ref: getWorkflowReference(child),
-  });
-  const childCallPath = [
-    ...resumeStackPrefix,
-    buildWorkflowResumePointEntry(workflow, 'review', 'workflow_call', undefined, 1),
-  ];
-  const stepIndex = new WorkflowStepParticipationIndex(new Map());
-  stepIndex.record(child, 'review', childCallPath, ['review.md']);
-
-  return {
-    call,
-    context: {
-      step: fix,
-      workflow,
-      workflowCallResolver: () => child,
-      projectCwd: '/project',
-      lookupCwd: '/worktree',
-      resumeStackPrefix,
-      participation: participation(
-        workflow,
-        [],
-        new Map(),
-        invocationIndex.snapshot(),
-        stepIndex.snapshot(),
-      ),
-    },
-    reportName: `subworkflows/${segment}/review.md`,
-  };
-}
-
 describe('review report discovery', () => {
   it('discovers a non-initial report from exact child workflow participation evidence', () => {
     const delegate = makeNormalizedWorkflowCallStep({ name: 'delegate', call: 'child' });
@@ -234,13 +145,12 @@ describe('review report discovery', () => {
     });
     const child = makeWorkflow('child', [prepare, review], 'prepare');
     const invocationIndex = new WorkflowCallInvocationIndex(new Map());
-    const segment = callNamespace(parent, 'delegate', [], child, 4);
     invocationIndex.record(parent, 'delegate', [], {
       call_instance: 4,
-      child_workflow_ref: getWorkflowReference(child),
+      report_namespace_segment: 'iteration-9--step-delegate--workflow-child',
     });
     const callPath = [
-      buildWorkflowResumePointEntry(parent, 'delegate', 'workflow_call', undefined, 4),
+      buildWorkflowResumePointEntry(parent, 'delegate', 'workflow_call', 1, undefined, 4),
     ];
     const stepIndex = new WorkflowStepParticipationIndex(new Map());
     stepIndex.record(child, 'prepare', callPath, []);
@@ -262,43 +172,9 @@ describe('review report discovery', () => {
       ),
     })).toEqual({
       reportNames: [
-        `subworkflows/${segment}/review.md`,
+        'subworkflows/iteration-9--step-delegate--workflow-child/review.md',
       ],
       failures: [],
-    });
-  });
-
-  it('fails fast when a saved call namespace references a different child workflow', () => {
-    const delegate = makeNormalizedWorkflowCallStep({ name: 'delegate', call: 'child' });
-    const fix = makeStep({ name: 'fix' });
-    const parent = makeWorkflow('parent', [delegate, fix]);
-    const child = makeWorkflow('child', [makeStep({ name: 'review' })]);
-    const invocationIndex = new WorkflowCallInvocationIndex(new Map());
-    invocationIndex.record(parent, 'delegate', [], {
-      call_instance: 1,
-      child_workflow_ref: 'other-child',
-    });
-
-    expect(resolveInheritedReviewReportNamesWithDiagnostics({
-      step: fix,
-      workflow: parent,
-      workflowCallResolver: () => child,
-      projectCwd: '/project',
-      lookupCwd: '/worktree',
-      resumeStackPrefix: [],
-      participation: participation(
-        parent,
-        [],
-        new Map(),
-        invocationIndex.snapshot(),
-        new Map(),
-      ),
-    })).toEqual({
-      reportNames: [],
-      failures: [{
-        kind: 'fatal',
-        reason: 'workflow_call_invocation_namespace_mismatch:delegate',
-      }],
     });
   });
 
@@ -321,11 +197,10 @@ describe('review report discovery', () => {
       }),
     ]);
     const childCallPath = [
-      buildWorkflowResumePointEntry(workflow, 'delegate', 'workflow_call', undefined, 1),
+      buildWorkflowResumePointEntry(workflow, 'delegate', 'workflow_call', 1, undefined, 1),
     ];
     const stepIndex = new WorkflowStepParticipationIndex(new Map());
     stepIndex.record(child, 'security', childCallPath, ['security.md']);
-    const segment = callNamespace(workflow, 'delegate', [], child, 1);
     const context = {
       step: workflow.steps[2]!,
       workflow,
@@ -338,10 +213,10 @@ describe('review report discovery', () => {
         ['parallel-review', 'architecture', 'delegate'],
         new Map(),
         new Map([[
-          buildWorkflowCallInvocationIdentity('parent', 'delegate', []),
+          '{"workflow":"parent","step":"delegate","calls":[]}',
           {
             call_instance: 1,
-            child_workflow_ref: getWorkflowReference(child),
+            report_namespace_segment: 'iteration-9--step-delegate--workflow-child-review',
           },
         ]]),
         stepIndex.snapshot(),
@@ -353,90 +228,7 @@ describe('review report discovery', () => {
       failures: [],
     });
     expect(resolveWorkflowStepReportNamesWithDiagnostics(call, context)).toEqual({
-      reportNames: [`subworkflows/${segment}/security.md`],
-      failures: [],
-    });
-  });
-
-  it('keeps an earlier parallel call report distinct after a same-named later call to another child', () => {
-    const firstCall = makeNormalizedWorkflowCallStep({ name: 'delegate', call: 'first-child' });
-    const secondCall = makeNormalizedWorkflowCallStep({ name: 'delegate', call: 'second-child' });
-    const firstFanout = {
-      ...makeStep({ name: 'fanout_a' }),
-      parallel: [firstCall],
-    } as WorkflowStep;
-    const secondFanout = {
-      ...makeStep({ name: 'fanout_b' }),
-      parallel: [secondCall],
-    } as WorkflowStep;
-    const parent = makeWorkflow('parent', [firstFanout, secondFanout]);
-    const firstChild = makeWorkflow('first-child', [
-      makeStep({
-        name: 'review',
-        outputContracts: [{ name: 'first-review.md', format: '# First review' }],
-      }),
-    ]);
-    const secondChild = makeWorkflow('second-child', [
-      makeStep({
-        name: 'review',
-        outputContracts: [{ name: 'second-review.md', format: '# Second review' }],
-      }),
-    ]);
-    const firstOwner = buildWorkflowResumePointEntry(parent, 'fanout_a', 'agent');
-    const secondOwner = buildWorkflowResumePointEntry(parent, 'fanout_b', 'agent');
-    const firstCallEntry = buildWorkflowResumePointEntry(
-      parent,
-      'delegate',
-      'workflow_call',
-      undefined,
-      1,
-    );
-    const secondCallEntry = buildWorkflowResumePointEntry(
-      parent,
-      'delegate',
-      'workflow_call',
-      undefined,
-      1,
-    );
-    const invocationIndex = new WorkflowCallInvocationIndex(new Map());
-    const stepIndex = new WorkflowStepParticipationIndex(new Map());
-    const firstSegment = callNamespace(parent, 'delegate', [firstOwner], firstChild, 1);
-    const secondSegment = callNamespace(parent, 'delegate', [secondOwner], secondChild, 1);
-
-    invocationIndex.record(parent, 'delegate', [firstOwner], {
-      call_instance: 1,
-      child_workflow_ref: getWorkflowReference(firstChild),
-    });
-    stepIndex.record(parent, 'delegate', [firstOwner], []);
-    stepIndex.record(firstChild, 'review', [firstOwner, firstCallEntry], ['first-review.md']);
-
-    invocationIndex.record(parent, 'delegate', [secondOwner], {
-      call_instance: 1,
-      child_workflow_ref: getWorkflowReference(secondChild),
-    });
-    stepIndex.record(parent, 'delegate', [secondOwner], []);
-    stepIndex.record(secondChild, 'review', [secondOwner, secondCallEntry], ['second-review.md']);
-
-    const result = resolveWorkflowStepReportNamesWithDiagnostics(firstCall, {
-      step: firstCall,
-      workflow: parent,
-      workflowCallResolver: ({ step }) => step.call === 'first-child' ? firstChild : secondChild,
-      projectCwd: '/project',
-      lookupCwd: '/worktree',
-      resumeStackPrefix: [],
-      participation: participation(
-        parent,
-        [],
-        new Map(),
-        invocationIndex.snapshot(),
-        stepIndex.snapshot(),
-      ),
-    });
-
-    expect(result).toEqual({
-      reportNames: [
-        `subworkflows/${firstSegment}/first-review.md`,
-      ],
+      reportNames: ['subworkflows/iteration-9--step-delegate--workflow-child-review/security.md'],
       failures: [],
     });
   });
@@ -635,13 +427,12 @@ describe('review report discovery', () => {
     ]);
     const resolver = vi.fn(() => child);
     const invocationIndex = new WorkflowCallInvocationIndex(new Map());
-    const segment = callNamespace(workflow, 'final-gate', [], child, 2);
     invocationIndex.record(workflow, 'final-gate', [], {
       call_instance: 2,
-      child_workflow_ref: getWorkflowReference(child),
+      report_namespace_segment: 'iteration-12--step-final-gate--workflow-child-review',
     });
     const callPath = [
-      buildWorkflowResumePointEntry(workflow, 'final-gate', 'workflow_call', undefined, 2),
+      buildWorkflowResumePointEntry(workflow, 'final-gate', 'workflow_call', 1, undefined, 2),
     ];
     const stepIndex = new WorkflowStepParticipationIndex(new Map());
     stepIndex.record(child, 'review', callPath, ['nested-review.md']);
@@ -662,7 +453,7 @@ describe('review report discovery', () => {
       ),
     })).toEqual({
       reportNames: [
-        `subworkflows/${segment}/nested-review.md`,
+        'subworkflows/iteration-12--step-final-gate--workflow-child-review/nested-review.md',
       ],
       failures: [],
     });
@@ -699,28 +490,23 @@ describe('review report discovery', () => {
     ]);
     const child = makeWorkflow('child', [reviewers]);
     const invocationIndex = new WorkflowCallInvocationIndex(new Map());
-    const segment = callNamespace(parent, 'delegate', [], child, 2);
     invocationIndex.record(parent, 'delegate', [], {
       call_instance: 2,
-      child_workflow_ref: getWorkflowReference(child),
+      report_namespace_segment: 'iteration-17--step-delegate--workflow-child',
     });
     const firstIdentity = buildDynamicParallelSelectionIdentity(child, 'reviewers', [
-      buildWorkflowResumePointEntry(parent, 'delegate', 'workflow_call', undefined, 1),
+      buildWorkflowResumePointEntry(parent, 'delegate', 'workflow_call', 1, undefined, 1),
     ]);
     const currentIdentity = buildDynamicParallelSelectionIdentity(child, 'reviewers', [
-      buildWorkflowResumePointEntry(parent, 'delegate', 'workflow_call', undefined, 2),
+      buildWorkflowResumePointEntry(parent, 'delegate', 'workflow_call', 1, undefined, 2),
     ]);
     const currentCallPath = [
-      buildWorkflowResumePointEntry(parent, 'delegate', 'workflow_call', undefined, 2),
+      buildWorkflowResumePointEntry(parent, 'delegate', 'workflow_call', 1, undefined, 2),
     ];
     const stepIndex = new WorkflowStepParticipationIndex(new Map());
     stepIndex.record(child, 'reviewers', currentCallPath, []);
-    const reviewerOwnerPath = [
-      ...currentCallPath,
-      buildWorkflowResumePointEntry(child, 'reviewers', 'agent'),
-    ];
-    stepIndex.record(child, 'architecture', reviewerOwnerPath, ['architecture.md']);
-    stepIndex.record(child, 'frontend', reviewerOwnerPath, ['frontend.md']);
+    stepIndex.record(child, 'architecture', currentCallPath, ['architecture.md']);
+    stepIndex.record(child, 'frontend', currentCallPath, ['frontend.md']);
 
     expect(resolveInheritedReviewReportNamesWithDiagnostics({
       step: parent.steps[1]!,
@@ -747,8 +533,8 @@ describe('review report discovery', () => {
       ]), invocationIndex.snapshot(), stepIndex.snapshot()),
     })).toEqual({
       reportNames: [
-        `subworkflows/${segment}/architecture.md`,
-        `subworkflows/${segment}/frontend.md`,
+        'subworkflows/iteration-17--step-delegate--workflow-child/architecture.md',
+        'subworkflows/iteration-17--step-delegate--workflow-child/frontend.md',
       ],
       failures: [],
     });
@@ -782,20 +568,18 @@ describe('review report discovery', () => {
     const rootCall = makeNormalizedWorkflowCallStep({ name: 'delegate', call: 'child' });
     const parent = makeWorkflow('parent', [rootCall]);
     const callPath = [
-      buildWorkflowResumePointEntry(parent, 'delegate', 'workflow_call', new Map(), 2),
-      buildWorkflowResumePointEntry(child, 'nested', 'workflow_call', new Map(), 3),
+      buildWorkflowResumePointEntry(parent, 'delegate', 'workflow_call', 1, new Map(), 2),
+      buildWorkflowResumePointEntry(child, 'nested', 'workflow_call', 1, new Map(), 3),
     ];
     const identity = buildDynamicParallelSelectionIdentity(grandchild, 'reviewers', callPath);
     const invocationIndex = new WorkflowCallInvocationIndex(new Map());
-    const rootSegment = callNamespace(parent, 'delegate', [], child, 2);
-    const nestedSegment = callNamespace(child, 'nested', callPath.slice(0, 1), grandchild, 3);
     invocationIndex.record(parent, 'delegate', [], {
       call_instance: 2,
-      child_workflow_ref: getWorkflowReference(child),
+      report_namespace_segment: 'iteration-11--step-delegate--workflow-child',
     });
     invocationIndex.record(child, 'nested', callPath.slice(0, 1), {
       call_instance: 3,
-      child_workflow_ref: getWorkflowReference(grandchild),
+      report_namespace_segment: 'iteration-14--step-nested--workflow-grandchild',
     });
     const workflows = new Map([
       ['child', child],
@@ -803,10 +587,7 @@ describe('review report discovery', () => {
     ]);
     const stepIndex = new WorkflowStepParticipationIndex(new Map());
     stepIndex.record(grandchild, 'reviewers', callPath, []);
-    stepIndex.record(grandchild, 'frontend', [
-      ...callPath,
-      buildWorkflowResumePointEntry(grandchild, 'reviewers', 'agent'),
-    ], ['frontend.md']);
+    stepIndex.record(grandchild, 'frontend', callPath, ['frontend.md']);
 
     expect(resolveWorkflowStepReportNamesWithDiagnostics(rootCall, {
       step: rootCall,
@@ -824,7 +605,8 @@ describe('review report discovery', () => {
       }]]), invocationIndex.snapshot(), stepIndex.snapshot()),
     })).toEqual({
       reportNames: [
-        `subworkflows/${rootSegment}/subworkflows/${nestedSegment}/frontend.md`,
+        'subworkflows/iteration-11--step-delegate--workflow-child/'
+        + 'subworkflows/iteration-14--step-nested--workflow-grandchild/frontend.md',
       ],
       failures: [],
     });
@@ -846,7 +628,7 @@ describe('review report discovery', () => {
     const invocationIndex = new WorkflowCallInvocationIndex(new Map());
     invocationIndex.record(workflow, 'unavailable-review', [], {
       call_instance: 1,
-      child_workflow_ref: 'missing-review',
+      report_namespace_segment: 'iteration-2--step-unavailable-review--workflow-missing-review',
     });
 
     expect(resolveInheritedReviewReportNamesWithDiagnostics({
@@ -887,7 +669,7 @@ describe('review report discovery', () => {
     const invocationIndex = new WorkflowCallInvocationIndex(new Map());
     invocationIndex.record(workflow, 'reportless-review', [], {
       call_instance: 1,
-      child_workflow_ref: getWorkflowReference(reportlessChild),
+      report_namespace_segment: 'iteration-4--step-reportless-review--workflow-reportless-child',
     });
 
     expect(resolveInheritedReviewReportNamesWithDiagnostics({
@@ -914,7 +696,7 @@ describe('review report discovery', () => {
     const invocationIndex = new WorkflowCallInvocationIndex(new Map());
     invocationIndex.record(workflow, 'review', [], {
       call_instance: 1,
-      child_workflow_ref: getWorkflowReference(workflow),
+      report_namespace_segment: 'iteration-1--step-review--workflow-parent',
     });
 
     expect(resolveInheritedReviewReportNamesWithDiagnostics({
@@ -951,13 +733,12 @@ describe('review report discovery', () => {
       'project:sha256:child',
     );
     const invocationIndex = new WorkflowCallInvocationIndex(new Map());
-    const segment = callNamespace(workflow, 'review', [], child, 1);
     invocationIndex.record(workflow, 'review', [], {
       call_instance: 1,
-      child_workflow_ref: getWorkflowReference(child),
+      report_namespace_segment: 'iteration-5--step-review--workflow-shared-review',
     });
     const callPath = [
-      buildWorkflowResumePointEntry(workflow, 'review', 'workflow_call', undefined, 1),
+      buildWorkflowResumePointEntry(workflow, 'review', 'workflow_call', 1, undefined, 1),
     ];
     const stepIndex = new WorkflowStepParticipationIndex(new Map());
     stepIndex.record(child, 'review', callPath, ['review.md']);
@@ -978,7 +759,7 @@ describe('review report discovery', () => {
       ),
     })).toEqual({
       reportNames: [
-        `subworkflows/${segment}/review.md`,
+        'subworkflows/iteration-5--step-review--workflow-shared-review/review.md',
       ],
       failures: [],
     });
@@ -1008,46 +789,103 @@ describe('review report discovery', () => {
     });
   });
 
-  it('should discover an inherited report at the remaining maximum depth with mixed owners', () => {
-    const fixture = makeDepthBoundaryFixture(MAX_WORKFLOW_CALL_DEPTH - 2);
+  it('discovers a report at the remaining maximum depth after a resume prefix', () => {
+    const call = makeNormalizedWorkflowCallStep({
+      name: 'review',
+      call: 'child',
+    });
+    const fix = makeStep({ name: 'fix' });
+    const workflow = makeWorkflow('parent', [call, fix]);
+    const child = makeWorkflow('child', [
+      makeStep({
+        name: 'review',
+        outputContracts: [{ name: 'review.md', format: '# Review' }],
+      }),
+    ]);
+    const resumeStackPrefix = Array.from(
+      { length: MAX_WORKFLOW_CALL_DEPTH - 2 },
+      (_, index) => ({
+        workflow: `ancestor-${index}`,
+        workflow_ref: `ancestor-${index}`,
+        step: `call-${index}`,
+        kind: 'workflow_call' as const,
+        occurrence: 1,
+        call_instance: 1,
+      }),
+    );
+    const invocationIndex = new WorkflowCallInvocationIndex(new Map());
+    invocationIndex.record(workflow, 'review', resumeStackPrefix, {
+      call_instance: 1,
+      report_namespace_segment: 'iteration-7--step-review--workflow-child',
+    });
+    const childCallPath = [
+      ...resumeStackPrefix,
+      buildWorkflowResumePointEntry(workflow, 'review', 'workflow_call', 1, undefined, 1),
+    ];
+    const stepIndex = new WorkflowStepParticipationIndex(new Map());
+    stepIndex.record(child, 'review', childCallPath, ['review.md']);
 
-    expect(resolveInheritedReviewReportNamesWithDiagnostics(fixture.context)).toEqual({
-      reportNames: [fixture.reportName],
+    expect(resolveInheritedReviewReportNamesWithDiagnostics({
+      step: fix,
+      workflow,
+      workflowCallResolver: () => child,
+      projectCwd: '/project',
+      lookupCwd: '/worktree',
+      resumeStackPrefix,
+      participation: participation(
+        workflow,
+        [],
+        new Map(),
+        invocationIndex.snapshot(),
+        stepIndex.snapshot(),
+      ),
+    })).toEqual({
+      reportNames: [
+        'subworkflows/iteration-7--step-review--workflow-child/review.md',
+      ],
       failures: [],
     });
   });
 
-  it('should discover a direct workflow-step report at the remaining maximum depth with mixed owners', () => {
-    const fixture = makeDepthBoundaryFixture(MAX_WORKFLOW_CALL_DEPTH - 2);
-
-    expect(resolveWorkflowStepReportNamesWithDiagnostics(
-      fixture.call,
-      fixture.context,
-    )).toEqual({
-      reportNames: [fixture.reportName],
-      failures: [],
+  it('rejects one workflow call beyond the remaining depth after a resume prefix', () => {
+    const call = makeNormalizedWorkflowCallStep({
+      name: 'review',
+      call: 'child',
     });
-  });
-
-  it('should reject an inherited report one workflow call beyond the remaining depth', () => {
-    const fixture = makeDepthBoundaryFixture(MAX_WORKFLOW_CALL_DEPTH - 1);
-
-    expect(resolveInheritedReviewReportNamesWithDiagnostics(fixture.context)).toEqual({
-      reportNames: [],
-      failures: [{
-        kind: 'recoverable',
-        reason: `workflow_call_report_depth_exceeded:${MAX_WORKFLOW_CALL_DEPTH}`,
-      }],
+    const fix = makeStep({ name: 'fix' });
+    const workflow = makeWorkflow('parent', [call, fix]);
+    const child = makeWorkflow('child', [
+      makeStep({
+        name: 'review',
+        outputContracts: [{ name: 'review.md', format: '# Review' }],
+      }),
+    ]);
+    const resumeStackPrefix = Array.from(
+      { length: MAX_WORKFLOW_CALL_DEPTH - 1 },
+      (_, index) => ({
+        workflow: `ancestor-${index}`,
+        workflow_ref: `ancestor-${index}`,
+        step: `call-${index}`,
+        kind: 'workflow_call' as const,
+        occurrence: 1,
+        call_instance: 1,
+      }),
+    );
+    const invocationIndex = new WorkflowCallInvocationIndex(new Map());
+    invocationIndex.record(workflow, 'review', resumeStackPrefix, {
+      call_instance: 1,
+      report_namespace_segment: 'iteration-8--step-review--workflow-child',
     });
-  });
 
-  it('should reject a direct workflow-step report one workflow call beyond the remaining depth', () => {
-    const fixture = makeDepthBoundaryFixture(MAX_WORKFLOW_CALL_DEPTH - 1);
-
-    expect(resolveWorkflowStepReportNamesWithDiagnostics(
-      fixture.call,
-      fixture.context,
-    )).toEqual({
+    expect(resolveInheritedReviewReportNamesWithDiagnostics({
+      step: fix,
+      workflow,
+      workflowCallResolver: () => child,
+      projectCwd: '/project',
+      lookupCwd: '/worktree',
+      resumeStackPrefix,
+      participation: participation(workflow, [], new Map(), invocationIndex.snapshot()),
+    })).toEqual({
       reportNames: [],
       failures: [{
         kind: 'recoverable',

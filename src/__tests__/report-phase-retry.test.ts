@@ -7,6 +7,18 @@ const { infoSpy } = vi.hoisted(() => ({
   infoSpy: vi.fn(),
 }));
 
+type CapturedProviderInfo = {
+  provider?: string;
+  model?: string;
+  providerSource?: string;
+  modelSource?: string;
+};
+
+const { capturedProviderInfo, capturedOutcomes } = vi.hoisted(() => ({
+  capturedProviderInfo: [] as CapturedProviderInfo[],
+  capturedOutcomes: [] as unknown[],
+}));
+
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   createLogger: vi.fn(() => ({
@@ -19,10 +31,28 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   })),
 }));
 
-import { runReportPhase, type ReportPhaseRunnerContext } from '../core/workflow/phase-runner.js';
+vi.mock('../core/workflow/observability/workflowSpans.js', () => ({
+  runWithPhaseSpan: vi.fn(async (
+    params: { providerInfo?: CapturedProviderInfo },
+    execute: () => Promise<AgentResponse>,
+    getOutcome: (response: AgentResponse) => unknown,
+  ) => {
+    capturedProviderInfo.push(params.providerInfo ?? {});
+    const response = await execute();
+    capturedOutcomes.push(getOutcome(response));
+    return response;
+  }),
+}));
+
+import {
+  generateReportPhase,
+  ReportPhaseGenerationError,
+  runReportPhase,
+  type ReportPhaseRunnerContext,
+} from '../core/workflow/phase-runner.js';
 import type { WorkflowStep } from '../core/models/types.js';
 import type { StreamEvent } from '../shared/types/provider.js';
-import { buildPhaseExecutionId } from '../shared/utils/phaseExecutionId.js';
+import { createFindingReviewPublicationStructuredOutput } from '../core/workflow/findings/review-publication-structured-output.js';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
@@ -44,6 +74,13 @@ function createStep(fileName: string): WorkflowStep {
   };
 }
 
+function createFindingReviewStep(fileName: string): WorkflowStep {
+  return {
+    ...createStep(fileName),
+    structuredOutput: createFindingReviewPublicationStructuredOutput(),
+  };
+}
+
 function createContext(
   reportDir: string,
   lastResponse?: string,
@@ -62,7 +99,6 @@ function createContext(
   const context = {
     cwd: reportDir,
     reportDir,
-    executionScope: { kind: 'workflow_execution_scope', stack: [] },
     language: 'en',
     lastResponse: currentLastResponse,
     resolveSessionKey: (step) => step.persona ?? step.name,
@@ -80,8 +116,11 @@ function createContext(
       allowedTools: overrides.allowedTools,
       maxTurns: overrides.maxTurns,
     }),
-    buildFallbackReportOptions: (_step, failedPrimaryOptions, overrides) => {
-      if (failedPrimaryOptions.resolvedProvider !== 'opencode' || fallbackProvider === failedPrimaryOptions.resolvedProvider) {
+    buildFallbackReportOptions: (step, failedPrimaryOptions, overrides) => {
+      if (
+        failedPrimaryOptions.resolvedProvider !== 'opencode'
+        || fallbackProvider === failedPrimaryOptions.resolvedProvider
+      ) {
         return undefined;
       }
 
@@ -90,9 +129,13 @@ function createContext(
         permissionMode: 'readonly',
         resolvedProvider: fallbackProvider,
         resolvedModel: providers.fallbackModel,
+        resolvedProviderOptions: fallbackProvider === 'codex'
+          ? { codex: { reasoningEffort: 'high' } }
+          : undefined,
         sessionId: undefined,
         allowedTools: overrides.allowedTools,
         maxTurns: overrides.maxTurns,
+        outputSchema: step.structuredOutput?.schema,
       };
     },
     updatePersonaSession: (_persona, sessionId) => {
@@ -212,7 +255,393 @@ describe('runReportPhase retry with new session', () => {
 
     const secondCallOptions = runAgentMock.mock.calls[1]?.[2] as { sessionId?: string };
     expect(secondCallOptions.sessionId).toBeUndefined();
+    expect(runAgentMock.mock.calls[0]?.[1]).toContain(
+      'Respond with the report content directly as text.',
+    );
 
+  });
+
+  it('plain-text-normalized Finding Contract Phase 2 は本文テキストだけを要求する', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('freeform-review.md');
+    const ctx = createContext(reportDir);
+    ctx.buildFindingContractInstructionContext = () => ({
+      ledgerSummary: '{"findings":[]}',
+      reportLedgerSummary: '{"findingIds":[]}',
+      hasOpenFindings: false,
+      hasWaivedFindings: false,
+      hasDismissedFindings: false,
+      reviewer: {
+        mode: 'plain_text_normalized',
+        reviewScopeSnapshotId: '1'.repeat(64),
+      },
+    });
+    queueRunAgentResponses([{
+      persona: 'reviewer',
+      status: 'done',
+      content: '# Freeform review',
+      timestamp: new Date('2026-02-11T00:00:02Z'),
+    }]);
+
+    await generateReportPhase(step, 1, ctx, {
+      reviewerOutputStrategy: {
+        kind: 'plain_text_normalized',
+        reportGeneration: 'plain_text',
+        intake: 'isolated_normalizer',
+      },
+    });
+
+    const prompt = vi.mocked(runAgent).mock.calls[0]?.[1] as string;
+    expect(prompt).toContain('Respond with the report content directly as text.');
+    expect(prompt).not.toContain('combined Finding Contract publication schema');
+  });
+
+  it('deterministic validatorが不正reportをfresh sessionで全文再生成する', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('freeform-review.md');
+    const ctx = createContext(reportDir, 'Authoritative Phase 1 result', 'phase1-session');
+    ctx.iteration = 7;
+    ctx.onPhaseStart = vi.fn();
+    ctx.onPhaseComplete = vi.fn();
+    ctx.onProviderAttempt = vi.fn();
+    queueRunAgentResponses([
+      {
+        persona: 'reviewer',
+        status: 'done',
+        content: 'REJECTED_REPORT_BODY',
+        sessionId: 'invalid-report-session',
+        timestamp: new Date('2026-02-11T00:00:10Z'),
+      },
+      {
+        persona: 'reviewer',
+        status: 'done',
+        content: 'VALID_REPORT_BODY',
+        sessionId: 'valid-report-session',
+        timestamp: new Date('2026-02-11T00:00:11Z'),
+      },
+    ]);
+
+    const result = await generateReportPhase(step, 1, ctx, {
+      validateReportContent: (content) => (
+        content === 'VALID_REPORT_BODY'
+          ? { valid: true }
+          : { valid: false }
+      ),
+    });
+
+    expect('reports' in result && result.reports[0]?.reportContent)
+      .toBe('VALID_REPORT_BODY');
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2);
+    const retryPrompt = vi.mocked(runAgent).mock.calls[1]?.[1] as string;
+    expect(retryPrompt).toContain('Authoritative Phase 1 result');
+    expect(retryPrompt).toContain('rejected by deterministic output validation');
+    expect(retryPrompt).not.toContain('REJECTED_REPORT_BODY');
+    expect(ctx.onProviderAttempt).toHaveBeenNthCalledWith(
+      1,
+      expect.anything(),
+      false,
+      undefined,
+    );
+    expect(ctx.onProviderAttempt).toHaveBeenNthCalledWith(
+      2,
+      expect.anything(),
+      true,
+      undefined,
+    );
+    expect(vi.mocked(ctx.onPhaseComplete!).mock.calls[0]).toEqual([
+      step,
+      2,
+      'report',
+      '',
+      'error',
+      'Report output failed deterministic validation',
+      'implement:7:2:1',
+      7,
+    ]);
+    expect(vi.mocked(ctx.onPhaseStart!).mock.calls.map((call) => call[5]))
+      .toEqual(['implement:7:2:1', 'implement:7:2:2']);
+  });
+
+  it('provider response後のvalidator例外でもusageを失敗attemptへ一度だけ記録する', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('freeform-review.md');
+    const ctx = createContext(reportDir, 'Authoritative Phase 1 result');
+    const usage = {
+      inputTokens: 19,
+      outputTokens: 5,
+      totalTokens: 24,
+      usageMissing: false,
+    };
+    ctx.observabilityEnabled = true;
+    ctx.onProviderAttempt = vi.fn();
+    queueRunAgentResponses([{
+      persona: 'reviewer',
+      status: 'done',
+      content: 'Report body',
+      providerUsage: usage,
+      timestamp: new Date('2026-02-11T00:00:12Z'),
+    }]);
+
+    await expect(generateReportPhase(step, 1, ctx, {
+      validateReportContent: () => {
+        throw new Error('validator crashed');
+      },
+    })).rejects.toThrow('validator crashed');
+
+    expect(ctx.onProviderAttempt).toHaveBeenCalledOnce();
+    expect(ctx.onProviderAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: 'opencode' }),
+      false,
+      usage,
+    );
+  });
+
+  it('provider response取得前の例外はundefined usageで失敗attemptを一度だけ記録する', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('freeform-review.md');
+    const ctx = createContext(reportDir, 'Authoritative Phase 1 result');
+    ctx.onProviderAttempt = vi.fn();
+    vi.mocked(runAgent).mockRejectedValueOnce(new Error('provider crashed'));
+
+    await expect(generateReportPhase(step, 1, ctx))
+      .rejects.toThrow('provider crashed');
+
+    expect(ctx.onProviderAttempt).toHaveBeenCalledOnce();
+    expect(ctx.onProviderAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: 'opencode' }),
+      false,
+      undefined,
+    );
+  });
+
+  it('fresh reportも不正なら設定済みfallbackを一度だけ使う', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('freeform-review.md');
+    const ctx = createContext(
+      reportDir,
+      'Authoritative Phase 1 result',
+      'phase1-session',
+      { primaryProvider: 'opencode', fallbackProvider: 'claude' },
+    );
+    ctx.iteration = 8;
+    ctx.onPhaseStart = vi.fn();
+    ctx.onProviderAttempt = vi.fn();
+    queueRunAgentResponses([
+      {
+        persona: 'reviewer',
+        status: 'done',
+        content: 'INVALID_ONE',
+        timestamp: new Date('2026-02-11T00:00:20Z'),
+      },
+      {
+        persona: 'reviewer',
+        status: 'done',
+        content: 'INVALID_TWO',
+        timestamp: new Date('2026-02-11T00:00:21Z'),
+      },
+      {
+        persona: 'reviewer',
+        status: 'done',
+        content: 'VALID_FALLBACK',
+        timestamp: new Date('2026-02-11T00:00:22Z'),
+      },
+    ]);
+
+    const result = await generateReportPhase(step, 1, ctx, {
+      validateReportContent: (content) => (
+        content === 'VALID_FALLBACK'
+          ? { valid: true }
+          : { valid: false }
+      ),
+    });
+
+    expect('reports' in result && result.reports[0]?.reportContent)
+      .toBe('VALID_FALLBACK');
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(runAgent).mock.calls[2]?.[2]?.resolvedProvider).toBe('claude');
+    expect(ctx.onProviderAttempt).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({ provider: 'claude' }),
+      true,
+      undefined,
+    );
+    expect(vi.mocked(ctx.onPhaseStart!).mock.calls.map((call) => call[5]))
+      .toEqual(['implement:8:2:1', 'implement:8:2:2', 'implement:8:2:3']);
+  });
+
+  it('single-attempt modeはvalidator失敗後に追加report retryを行わない', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('freeform-review.md');
+    const ctx = createContext(reportDir, 'Fresh Phase 1 result', 'fresh-phase1-session');
+    ctx.iteration = 9;
+    const sequences = [4];
+    queueRunAgentResponses([{
+      persona: 'reviewer',
+      status: 'done',
+      content: 'INVALID_FINAL',
+      timestamp: new Date('2026-02-11T00:00:30Z'),
+    }]);
+
+    const error = await generateReportPhase(step, 1, ctx, {
+      validateReportContent: () => ({ valid: false }),
+      retryMode: 'single-attempt',
+      nextPhaseSequence: () => sequences.shift()!,
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ReportPhaseGenerationError);
+    expect((error as ReportPhaseGenerationError).failureReason).toBe('invalid_output');
+    expect((error as ReportPhaseGenerationError).recovery).toEqual({
+      requiresFreshPhase1: true,
+      failureReasons: ['invalid_output'],
+    });
+    expect(vi.mocked(runAgent)).toHaveBeenCalledOnce();
+  });
+
+  it('先行invalidの回復要否を最終fallback provider errorでも保持する', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('freeform-review.md');
+    const ctx = createContext(
+      reportDir,
+      'Authoritative Phase 1 result',
+      'phase1-session',
+      { primaryProvider: 'opencode', fallbackProvider: 'claude' },
+    );
+    queueRunAgentResponses([
+      {
+        persona: 'reviewer',
+        status: 'done',
+        content: 'INVALID_ONE',
+        timestamp: new Date('2026-02-11T00:00:40Z'),
+      },
+      {
+        persona: 'reviewer',
+        status: 'done',
+        content: 'INVALID_TWO',
+        timestamp: new Date('2026-02-11T00:00:41Z'),
+      },
+      {
+        persona: 'reviewer',
+        status: 'error',
+        content: '',
+        error: 'fallback transport failed',
+        timestamp: new Date('2026-02-11T00:00:42Z'),
+      },
+    ]);
+
+    const error = await generateReportPhase(step, 1, ctx, {
+      validateReportContent: () => ({ valid: false }),
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ReportPhaseGenerationError);
+    expect(error).toMatchObject({
+      failureReason: 'provider_error',
+      recovery: {
+        requiresFreshPhase1: true,
+        failureReasons: ['invalid_output', 'provider_error'],
+      },
+    });
+  });
+
+  it('pure provider error列だけならfresh Phase 1回復を要求しない', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('freeform-review.md');
+    const ctx = createContext(
+      reportDir,
+      'Authoritative Phase 1 result',
+      'phase1-session',
+      { primaryProvider: 'opencode', fallbackProvider: 'claude' },
+    );
+    queueRunAgentResponses([
+      {
+        persona: 'reviewer',
+        status: 'error',
+        content: '',
+        error: 'primary transport failed',
+        timestamp: new Date('2026-02-11T00:00:50Z'),
+      },
+      {
+        persona: 'reviewer',
+        status: 'error',
+        content: '',
+        error: 'retry transport failed',
+        timestamp: new Date('2026-02-11T00:00:51Z'),
+      },
+      {
+        persona: 'reviewer',
+        status: 'error',
+        content: '',
+        error: 'fallback transport failed',
+        timestamp: new Date('2026-02-11T00:00:52Z'),
+      },
+    ]);
+
+    const error = await generateReportPhase(step, 1, ctx, {
+      validateReportContent: () => ({ valid: true }),
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ReportPhaseGenerationError);
+    expect(error).toMatchObject({
+      failureReason: 'provider_error',
+      recovery: {
+        requiresFreshPhase1: false,
+        failureReasons: ['provider_error'],
+      },
+    });
+  });
+
+  it('先行tool callの回復要否を後続provider errorでも保持する', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('freeform-review.md');
+    const ctx = createContext(
+      reportDir,
+      'Authoritative Phase 1 result',
+      'phase1-session',
+      { primaryProvider: 'opencode', fallbackProvider: 'claude' },
+    );
+    queueRunAgentAttempts([
+      {
+        streamEvents: [{
+          type: 'tool_use',
+          data: { tool: 'run', input: {}, id: 'tool-run-recovery' },
+        }],
+        response: {
+          persona: 'reviewer',
+          status: 'done',
+          content: 'discarded',
+          timestamp: new Date('2026-02-11T00:01:00Z'),
+        },
+      },
+      {
+        response: {
+          persona: 'reviewer',
+          status: 'error',
+          content: '',
+          error: 'retry transport failed',
+          timestamp: new Date('2026-02-11T00:01:01Z'),
+        },
+      },
+      {
+        response: {
+          persona: 'reviewer',
+          status: 'error',
+          content: '',
+          error: 'fallback transport failed',
+          timestamp: new Date('2026-02-11T00:01:02Z'),
+        },
+      },
+    ]);
+
+    const error = await generateReportPhase(step, 1, ctx)
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ReportPhaseGenerationError);
+    expect(error).toMatchObject({
+      failureReason: 'provider_error',
+      recovery: {
+        requiresFreshPhase1: true,
+        failureReasons: ['tool_call', 'provider_error'],
+      },
+    });
   });
 
   it('should start report phase with a new session when no existing session is available', async () => {
@@ -375,7 +804,10 @@ describe('runReportPhase retry with new session', () => {
     await runReportPhase(step, 1, ctx);
 
     // Then
-    expect(sessionUpdates).toEqual([{ key: 'coder', sessionId: undefined }]);
+    expect(sessionUpdates).toEqual([
+      { key: 'coder', sessionId: undefined },
+      { key: 'coder', sessionId: undefined },
+    ]);
     expect(freshAttempts).toEqual(['implement', 'implement']);
     expect(readFileSync(join(reportDir, '03-retry-clear-first.md'), 'utf-8')).toBe('# Report\nRetry report without session id');
     expect(readFileSync(join(reportDir, '03-retry-clear-second.md'), 'utf-8')).toBe('# Report\nSecond report from fresh session');
@@ -437,7 +869,9 @@ describe('runReportPhase retry with new session', () => {
     expect(result).toBeUndefined();
     expect(readFileSync(join(reportDir, '03-opencode-loop.md'), 'utf-8')).toBe('# Report\nRecovered by Claude fallback');
     expect(runAgentMock).toHaveBeenCalledTimes(3);
-    expect(sessionUpdates).toEqual([]);
+    expect(sessionUpdates).toEqual([
+      { key: '["coder","claude"]', sessionId: 'claude-fallback-session' },
+    ]);
 
     const fallbackInstruction = runAgentMock.mock.calls[2]?.[1] as string;
     expect(fallbackInstruction).toContain('Implemented feature X');
@@ -458,6 +892,200 @@ describe('runReportPhase retry with new session', () => {
       sessionId: undefined,
     });
     expect(fallbackOptions.resolvedModel).toBeUndefined();
+  });
+
+  it('Finding Contract Phase 2 は全試行へpublication schemaを渡し、異なるcapabilityのfallback実行identityを保持する', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createFindingReviewStep('finding-review.md');
+    const ctx = createContext(
+      reportDir,
+      'Phase 1 review draft',
+      'primary-review-session',
+      {
+        primaryProvider: 'mock',
+        fallbackProvider: 'codex',
+        fallbackModel: 'fallback-capability-model',
+      },
+    );
+    const sessionUpdates: Array<{ key: string; sessionId: string | undefined }> = [];
+    ctx.buildFallbackReportOptions = (reportStep, _failedOptions, overrides) => ({
+      cwd: reportDir,
+      permissionMode: 'readonly',
+      resolvedProvider: 'codex',
+      resolvedModel: 'fallback-capability-model',
+      resolvedProviderOptions: { codex: { reasoningEffort: 'high' } },
+      sessionId: undefined,
+      allowedTools: overrides.allowedTools,
+      maxTurns: overrides.maxTurns,
+      outputSchema: reportStep.structuredOutput?.schema,
+    });
+    ctx.updatePersonaSession = (key, sessionId) => {
+      sessionUpdates.push({ key, sessionId });
+    };
+    ctx.buildFindingContractInstructionContext = () => ({
+      ledgerSummary: '{"findings":[]}',
+      reportLedgerSummary: '{"findingIds":[]}',
+      hasOpenFindings: false,
+      hasWaivedFindings: false,
+      hasDismissedFindings: false,
+      reviewer: {
+        mode: 'structured',
+        rawFindingsStructuredOutput: step.structuredOutput!,
+        reviewScopeSnapshotId: '1'.repeat(64),
+      },
+    });
+    queueRunAgentResponses([
+      {
+        persona: 'reviewer',
+        status: 'error',
+        content: 'primary unavailable',
+        error: 'primary unavailable',
+        timestamp: new Date('2026-02-11T00:01:20Z'),
+      },
+      {
+        persona: 'reviewer',
+        status: 'error',
+        content: 'retry unavailable',
+        error: 'retry unavailable',
+        timestamp: new Date('2026-02-11T00:01:21Z'),
+      },
+      {
+        persona: 'reviewer',
+        status: 'done',
+        content: '',
+        structuredOutput: {
+          reportContent: '# Review\nNo findings.',
+          rawFindings: [],
+        },
+        sessionId: 'fallback-review-session',
+        timestamp: new Date('2026-02-11T00:01:22Z'),
+      },
+    ]);
+
+    const result = await generateReportPhase(step, 1, ctx, {
+      reviewerOutputStrategy: { kind: 'structured', reportGeneration: 'structured', intake: 'reviewer_structured' },
+    });
+
+    expect('reports' in result).toBe(true);
+    if (!('reports' in result)) {
+      throw new Error('Expected generated reports');
+    }
+    expect(result.reports).toHaveLength(1);
+    expect(result.reports[0]).toMatchObject({
+      reportName: 'finding-review.md',
+      reportContent: '# Review\nNo findings.',
+      attemptIdentity: {
+        providerInfo: { provider: 'codex', model: 'fallback-capability-model' },
+        sessionKey: '["coder","codex","fallback-capability-model"]',
+        sessionId: 'fallback-review-session',
+        agentOptions: {
+          resolvedProvider: 'codex',
+          resolvedModel: 'fallback-capability-model',
+          resolvedProviderOptions: { codex: { reasoningEffort: 'high' } },
+          outputSchema: step.structuredOutput?.schema,
+        },
+      },
+    });
+    expect(sessionUpdates).toEqual([
+      {
+        key: '["coder","codex","fallback-capability-model"]',
+        sessionId: 'fallback-review-session',
+      },
+    ]);
+
+    const prompts = vi.mocked(runAgent).mock.calls.map(([, instruction]) => instruction);
+    expect(prompts).toHaveLength(3);
+    for (const prompt of prompts) {
+      expect(prompt).toContain('"reportContent"');
+      expect(prompt).toContain('First write the review report. Then extract each structured entry');
+      expect(prompt).not.toContain('Respond with the report content directly as text.');
+      expect(prompt).not.toContain('Respond with only the report content');
+    }
+  });
+
+  it('structured Finding Contract Phase 2 の日本語promptもpublication objectだけを要求する', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createFindingReviewStep('finding-review-ja.md');
+    const ctx = createContext(reportDir);
+    ctx.language = 'ja';
+    ctx.buildFindingContractInstructionContext = () => ({
+      ledgerSummary: '{"findings":[]}',
+      reportLedgerSummary: '{"findingIds":[]}',
+      hasOpenFindings: false,
+      hasWaivedFindings: false,
+      hasDismissedFindings: false,
+      reviewer: {
+        mode: 'structured',
+        rawFindingsStructuredOutput: step.structuredOutput!,
+        reviewScopeSnapshotId: '1'.repeat(64),
+      },
+    });
+    queueRunAgentResponses([{
+      persona: 'reviewer',
+      status: 'done',
+      content: '',
+      structuredOutput: {
+        reportContent: '# レビュー\n指摘なし。',
+        rawFindings: [],
+      },
+      timestamp: new Date('2026-02-11T00:01:22Z'),
+    }]);
+
+    await generateReportPhase(step, 1, ctx, {
+      reviewerOutputStrategy: { kind: 'structured', reportGeneration: 'structured', intake: 'reviewer_structured' },
+    });
+
+    const prompt = vi.mocked(runAgent).mock.calls[0]?.[1] as string;
+    expect(prompt).toContain('結合 publication schema に一致する構造化オブジェクト');
+    expect(prompt).not.toContain('レポート内容をテキストとして直接回答してください');
+    expect(prompt).not.toContain('レポート本文のみを回答してください');
+  });
+
+  it('Finding Contract Phase 2 は非native structured応答の完全JSONからreportContentだけを抽出する', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createFindingReviewStep('finding-review-json.md');
+    const ctx = createContext(reportDir);
+    const wireJson = JSON.stringify({
+      reportContent: '# Canonical report',
+      rawFindings: [],
+    });
+    queueRunAgentResponses([{
+      persona: 'reviewer',
+      status: 'done',
+      content: wireJson,
+      timestamp: new Date('2026-02-11T00:01:23Z'),
+      sessionId: 'opencode-review-session',
+    }]);
+
+    const result = await generateReportPhase(step, 1, ctx, {
+      reviewerOutputStrategy: { kind: 'structured', reportGeneration: 'structured', intake: 'reviewer_structured' },
+    });
+
+    expect('reports' in result).toBe(true);
+    if (!('reports' in result)) {
+      throw new Error('Expected generated reports');
+    }
+    expect(result.reports[0]?.reportContent).toBe('# Canonical report');
+    expect(result.reports[0]?.response.content).toBe(wireJson);
+  });
+
+  it('Finding Contract Phase 2 はreportContent欠落時にPhase 1本文へ縮退せずfail-loudする', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createFindingReviewStep('finding-review-missing-content.md');
+    const ctx = createContext(reportDir, 'This Phase 1 text must not become the report.');
+    queueRunAgentResponses([{
+      persona: 'reviewer',
+      status: 'done',
+      content: JSON.stringify({ rawFindings: [] }),
+      timestamp: new Date('2026-02-11T00:01:24Z'),
+    }]);
+
+    await expect(generateReportPhase(step, 1, ctx, {
+      reviewerOutputStrategy: { kind: 'structured', reportGeneration: 'structured', intake: 'reviewer_structured' },
+    })).rejects.toThrow(
+      'Finding review publication reportContent is missing',
+    );
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);
   });
 
   it('should resume the next report file with the primary session after a fallback report succeeds', async () => {
@@ -526,6 +1154,7 @@ describe('runReportPhase retry with new session', () => {
     expect(readFileSync(join(reportDir, '03-second.md'), 'utf-8')).toBe('# Report\nSecond file from primary session');
     expect(runAgentMock).toHaveBeenCalledTimes(4);
     expect(sessionUpdates).toEqual([
+      { key: '["coder","claude"]', sessionId: 'claude-fallback-session' },
       { key: 'coder', sessionId: 'opencode-session-after-second-file' },
     ]);
 
@@ -585,7 +1214,6 @@ describe('runReportPhase retry with new session', () => {
       'Report phase provider returned status "error"',
       undefined,
       undefined,
-      ctx.executionScope,
     );
     expect(infoSpy).toHaveBeenCalledWith(
       'Report phase failed, retrying with new session',
@@ -670,7 +1298,14 @@ describe('runReportPhase retry with new session', () => {
     const result = await runReportPhase(step, 1, ctx);
 
     // Then
-    expect(result).toEqual({ blocked: true, response: blockedResponse });
+    expect(result).toEqual({
+      blocked: true,
+      response: blockedResponse,
+      providerInfo: {
+        provider: 'claude',
+        model: undefined,
+      },
+    });
     expect(runAgentMock).toHaveBeenCalledTimes(3);
     expect(existsSync(join(reportDir, '03-fallback-blocked.md'))).toBe(false);
     expect(sessionUpdates).toEqual([]);
@@ -721,7 +1356,14 @@ describe('runReportPhase retry with new session', () => {
     const result = await runReportPhase(step, 1, ctx);
 
     // Then
-    expect(result).toEqual({ rateLimited: true, response: rateLimitedResponse });
+    expect(result).toEqual({
+      rateLimited: true,
+      response: rateLimitedResponse,
+      providerInfo: {
+        provider: 'claude',
+        model: undefined,
+      },
+    });
     expect(runAgentMock).toHaveBeenCalledTimes(3);
     expect(existsSync(join(reportDir, '03-fallback-rate-limited.md'))).toBe(false);
     expect(sessionUpdates).toEqual([]);
@@ -932,9 +1574,8 @@ describe('runReportPhase retry with new session', () => {
       '',
       'error',
       'Report phase does not allow tool results.',
-      buildPhaseExecutionId({ step: 'implement', iteration: 1, phase: 2, sequence: 1 }),
+      'implement:1:2:1',
       1,
-      ctx.executionScope,
     );
     expect(onPhaseComplete).not.toHaveBeenCalledWith(
       expect.anything(),
@@ -1427,6 +2068,10 @@ describe('runReportPhase retry with new session', () => {
     // Then
     expect(result).toEqual({
       blocked: true,
+      providerInfo: {
+        provider: 'opencode',
+        model: undefined,
+      },
       response: {
         persona: 'coder',
         status: 'blocked',
@@ -1464,6 +2109,10 @@ describe('runReportPhase retry with new session', () => {
     // Then
     expect(result).toEqual({
       rateLimited: true,
+      providerInfo: {
+        provider: 'opencode',
+        model: undefined,
+      },
       response,
     });
     expect(runAgentMock).toHaveBeenCalledTimes(1);
@@ -1482,7 +2131,6 @@ describe('runReportPhase retry with new session', () => {
     const ctx: ReportPhaseRunnerContext = {
       cwd: reportDir,
       reportDir,
-      executionScope: { kind: 'workflow_execution_scope', stack: [] },
       language: 'en',
       lastResponse: 'Fallback Phase 1 result',
       resolveSessionKey: () => 'coder:codex',
@@ -1538,5 +2186,239 @@ describe('runReportPhase retry with new session', () => {
     expect(updates).toEqual([{ key: 'coder:codex', sessionId: 'codex-report-session' }]);
     expect(sessions.get('coder')).toBe('claude-session');
     expect(readFileSync(join(reportDir, '08-provider-aware.md'), 'utf-8')).toBe('fallback provider report');
+  });
+});
+
+describe('runReportPhase provider info', () => {
+  let tmpRoot: string;
+
+  function createProviderInfoStep(fileName: string): WorkflowStep {
+    return {
+      name: 'review',
+      persona: 'reviewer',
+      personaDisplayName: 'Reviewer',
+      instruction: 'Review task',
+      passPreviousResponse: false,
+      outputContracts: [{ name: fileName }],
+    };
+  }
+
+  function createProviderInfoContext(reportDir: string): ReportPhaseRunnerContext {
+    return {
+      cwd: reportDir,
+      reportDir,
+      executionScope: { kind: 'workflow_execution_scope', stack: [] },
+      workflowName: 'test-workflow',
+      observabilityEnabled: true,
+      lastResponse: 'Phase 1 output',
+      resolveSessionKey: (step) => step.persona ?? step.name,
+      getSessionId: () => 'session-resume-1',
+      buildResumeOptions: (_step, sessionId, overrides) => ({
+        cwd: reportDir,
+        resolvedProvider: 'opencode',
+        resolvedModel: 'qwen3-coder-next',
+        sessionId,
+        maxTurns: overrides.maxTurns,
+      }),
+      buildNewSessionReportOptions: (_step, overrides) => ({
+        cwd: reportDir,
+        resolvedProvider: 'opencode',
+        resolvedModel: 'qwen3-coder-next',
+        allowedTools: overrides.allowedTools,
+        maxTurns: overrides.maxTurns,
+      }),
+      buildFallbackReportOptions: (_step, _failedPrimaryOptions, overrides) => ({
+        cwd: reportDir,
+        resolvedProvider: 'codex',
+        resolvedModel: 'gpt-5.1-mini',
+        allowedTools: overrides.allowedTools,
+        maxTurns: overrides.maxTurns,
+      }),
+      resolveReportFallbackProviderModel: () => ({
+        provider: 'codex',
+        model: 'gpt-5.1-mini',
+      }),
+      updatePersonaSession: () => {},
+      resolveStepProviderModel: () => ({
+        provider: 'opencode',
+        model: 'qwen3-coder-next',
+        providerSource: 'step',
+        modelSource: 'step',
+      }),
+    };
+  }
+
+  beforeEach(() => {
+    tmpRoot = mkdtempSync(join(tmpdir(), 'takt-report-provider-info-'));
+    capturedProviderInfo.length = 0;
+    capturedOutcomes.length = 0;
+    vi.resetAllMocks();
+  });
+
+  afterEach(() => {
+    if (existsSync(tmpRoot)) {
+      rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves provider and model source attributes for normal report attempts', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createProviderInfoStep('review.md');
+    const ctx = createProviderInfoContext(reportDir);
+    queueRunAgentResponses([{
+      persona: 'reviewer',
+      status: 'done',
+      content: '# Report\nOK',
+      timestamp: new Date('2026-06-28T00:00:00Z'),
+      sessionId: 'session-resume-2',
+    }]);
+
+    await runReportPhase(step, 1, ctx);
+
+    expect(readFileSync(join(reportDir, 'review.md'), 'utf-8')).toBe('# Report\nOK');
+    expect(capturedProviderInfo[0]).toEqual({
+      provider: 'opencode',
+      model: 'qwen3-coder-next',
+      providerSource: 'step',
+      modelSource: 'step',
+    });
+  });
+
+  it('records the configured fallback provider for fallback attempts', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createProviderInfoStep('fallback.md');
+    const ctx = createProviderInfoContext(reportDir);
+    queueRunAgentResponses([
+      {
+        persona: 'reviewer',
+        status: 'done',
+        content: ' ',
+        timestamp: new Date('2026-06-28T00:00:00Z'),
+      },
+      {
+        persona: 'reviewer',
+        status: 'done',
+        content: '\n',
+        timestamp: new Date('2026-06-28T00:00:01Z'),
+      },
+      {
+        persona: 'reviewer',
+        status: 'done',
+        content: '# Report\nFallback OK',
+        timestamp: new Date('2026-06-28T00:00:02Z'),
+      },
+    ]);
+
+    await runReportPhase(step, 1, ctx);
+
+    expect(readFileSync(join(reportDir, 'fallback.md'), 'utf-8')).toBe('# Report\nFallback OK');
+    expect(capturedProviderInfo[2]).toEqual({
+      provider: 'codex',
+      model: 'gpt-5.1-mini',
+    });
+  });
+
+  it('records empty report output as an error outcome before fallback succeeds', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createProviderInfoStep('fallback-empty-outcome.md');
+    const ctx = createProviderInfoContext(reportDir);
+    queueRunAgentResponses([
+      {
+        persona: 'reviewer',
+        status: 'done',
+        content: '',
+        timestamp: new Date('2026-06-28T00:00:00Z'),
+      },
+      {
+        persona: 'reviewer',
+        status: 'done',
+        content: '# Report\nFallback OK',
+        timestamp: new Date('2026-06-28T00:00:01Z'),
+      },
+    ]);
+
+    await runReportPhase(step, 1, ctx);
+
+    expect(readFileSync(join(reportDir, 'fallback-empty-outcome.md'), 'utf-8'))
+      .toBe('# Report\nFallback OK');
+    expect(capturedOutcomes[0]).toMatchObject({
+      status: 'error',
+      content: '',
+      error: 'Report output is empty',
+    });
+  });
+
+  it('does not attach raw retry failure content to observability outcomes before fallback succeeds', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createProviderInfoStep('fallback-redacted.md');
+    const ctx = createProviderInfoContext(reportDir);
+    queueRunAgentResponses([
+      {
+        persona: 'reviewer',
+        status: 'done',
+        content: ' ',
+        timestamp: new Date('2026-06-28T00:00:00Z'),
+      },
+      {
+        persona: 'reviewer',
+        status: 'error',
+        content: 'SECRET_TOKEN=retry-content',
+        error: 'SECRET_TOKEN=retry-error',
+        timestamp: new Date('2026-06-28T00:00:01Z'),
+      },
+      {
+        persona: 'reviewer',
+        status: 'done',
+        content: '# Report\nFallback OK',
+        timestamp: new Date('2026-06-28T00:00:02Z'),
+      },
+    ]);
+
+    await runReportPhase(step, 1, ctx);
+
+    expect(readFileSync(join(reportDir, 'fallback-redacted.md'), 'utf-8'))
+      .toBe('# Report\nFallback OK');
+    expect(JSON.stringify(capturedOutcomes)).not.toContain('SECRET_TOKEN');
+    expect(capturedOutcomes[1]).toMatchObject({
+      status: 'error',
+      content: '',
+      error: 'Report phase provider returned status "error"',
+    });
+  });
+
+  it('keeps normal report source attributes when the step provider matches the configured fallback provider', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createProviderInfoStep('same-provider.md');
+    const ctx = createProviderInfoContext(reportDir);
+    ctx.buildResumeOptions = (_step, sessionId, overrides) => ({
+      cwd: reportDir,
+      resolvedProvider: 'claude',
+      resolvedModel: 'claude-opus-4',
+      sessionId,
+      maxTurns: overrides.maxTurns,
+    });
+    ctx.resolveStepProviderModel = () => ({
+      provider: 'claude',
+      model: 'claude-opus-4',
+      providerSource: 'step',
+      modelSource: 'step',
+    });
+    queueRunAgentResponses([{
+      persona: 'reviewer',
+      status: 'done',
+      content: '# Report\nSame provider OK',
+      timestamp: new Date('2026-06-28T00:00:00Z'),
+    }]);
+
+    await runReportPhase(step, 1, ctx);
+
+    expect(readFileSync(join(reportDir, 'same-provider.md'), 'utf-8'))
+      .toBe('# Report\nSame provider OK');
+    expect(capturedProviderInfo[0]).toEqual({
+      provider: 'claude',
+      model: 'claude-opus-4',
+      providerSource: 'step',
+      modelSource: 'step',
+    });
   });
 });

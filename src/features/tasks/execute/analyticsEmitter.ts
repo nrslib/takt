@@ -35,7 +35,8 @@ const log = createLogger('analytics-emitter');
 export class AnalyticsEmitter {
   private readonly runSlug: string;
   private readonly routingRunId: string;
-  private readonly findingContractFindingIds = new Set<string>();
+  private readonly findingContractFindingIdsByScope =
+    new Map<string, Set<string>>();
 
   constructor(
     runSlug: string,
@@ -46,22 +47,22 @@ export class AnalyticsEmitter {
     this.routingRunId = routingRunId ?? randomUUID();
   }
 
-  seedFindingContractFindingIds(findingIds: readonly string[]): void {
-    this.findingContractFindingIds.clear();
+  setFindingContractFindingIds(
+    scopeIdentity: string,
+    findingIds: readonly string[],
+  ): void {
+    const scopedIds = new Set<string>();
     for (const findingId of findingIds) {
-      this.findingContractFindingIds.add(findingId);
+      scopedIds.add(findingId);
     }
+    this.findingContractFindingIdsByScope.set(scopeIdentity, scopedIds);
   }
 
   /** step:complete 時に StepResultEvent と FixAction/Rebuttal を発行する */
   onStepComplete(
     step: WorkflowStep,
     response: AgentResponse,
-    attribution: {
-      iteration: number;
-      provider: string;
-      model: string;
-    },
+    context: AnalyticsStepContext,
   ): void {
     const matchedRule = response.matchedRuleIndex != null && step.rules
       ? step.rules[response.matchedRuleIndex]
@@ -73,10 +74,12 @@ export class AnalyticsEmitter {
     const stepResultEvent: StepResultEvent = {
       type: 'step_result',
       step: step.name,
-      provider: attribution.provider,
-      model: attribution.model,
+      provider: context.provider,
+      model: context.model,
       decisionTag,
-      iteration: attribution.iteration,
+      iteration: context.iteration,
+      workflowName: context.workflowName,
+      scopeIdentity: context.scopeIdentity,
       runId: this.runSlug,
       timestamp: response.timestamp.toISOString(),
     };
@@ -85,20 +88,24 @@ export class AnalyticsEmitter {
     if (step.edit === true && step.name.includes('fix')) {
       emitFixActionEvents(
         response.content,
-        attribution.iteration,
+        context.iteration,
         this.runSlug,
         response.timestamp,
-        this.findingContractFindingIds,
+        context.workflowName,
+        context.scopeIdentity,
+        this.findingContractFindingIdsByScope.get(context.scopeIdentity),
       );
     }
 
     if (step.name.includes('no_fix')) {
       emitRebuttalEvents(
         response.content,
-        attribution.iteration,
+        context.iteration,
         this.runSlug,
         response.timestamp,
-        this.findingContractFindingIds,
+        context.workflowName,
+        context.scopeIdentity,
+        this.findingContractFindingIdsByScope.get(context.scopeIdentity),
       );
     }
   }
@@ -191,7 +198,11 @@ export class AnalyticsEmitter {
   }
 
   /** step:report 時に ReviewFindingEvent を発行する */
-  onStepReport(step: WorkflowStep, filePath: string, iteration: number): void {
+  onStepReport(
+    step: WorkflowStep,
+    filePath: string,
+    context: AnalyticsStepContext,
+  ): void {
     if (step.edit !== false) return;
 
     const content = readFileSync(filePath, 'utf-8');
@@ -209,7 +220,9 @@ export class AnalyticsEmitter {
         decision,
         file: finding.file,
         line: finding.line,
-        iteration,
+        iteration: context.iteration,
+        workflowName: context.workflowName,
+        scopeIdentity: context.scopeIdentity,
         runId: this.runSlug,
         timestamp: new Date().toISOString(),
       };
@@ -217,15 +230,28 @@ export class AnalyticsEmitter {
     }
   }
 
-  onFindingLedgerUpdated(ledger: FindingLedger, iteration: number): void {
+  onFindingLedgerUpdated(
+    ledger: FindingLedger,
+    context: {
+      readonly iteration: number;
+      readonly workflowName: string;
+      readonly scopeIdentity: string;
+    },
+  ): void {
     try {
-      this.findingContractFindingIds.clear();
+      const findingIds = new Set<string>();
       for (const finding of ledger.findings) {
-        this.findingContractFindingIds.add(finding.id);
+        findingIds.add(finding.id);
       }
+      this.findingContractFindingIdsByScope.set(
+        context.scopeIdentity,
+        findingIds,
+      );
       const events = buildReviewFindingEventsFromLedger(
         ledger,
-        iteration,
+        context.iteration,
+        context.workflowName,
+        context.scopeIdentity,
         this.runSlug,
         new Date(ledger.updatedAt),
       );
@@ -239,6 +265,14 @@ export class AnalyticsEmitter {
       });
     }
   }
+}
+
+export interface AnalyticsStepContext {
+  readonly iteration: number;
+  readonly workflowName: string;
+  readonly scopeIdentity: string;
+  readonly provider: string;
+  readonly model: string;
 }
 
 function countExpectedPhases(step: WorkflowStep, interactive: boolean): number {

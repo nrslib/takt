@@ -27,9 +27,9 @@ vi.mock('node:fs', async () => {
   };
 });
 
-import { verifySourceQuoteEvidence } from '../core/workflow/findings/admission-validation.js';
+import { verifyFileQuoteEvidence } from '../core/workflow/findings/admission-validation.js';
 
-describe('source quote filesystem failures', () => {
+describe('file quote filesystem failures', () => {
   let cwd: string;
 
   afterEach(() => {
@@ -44,8 +44,8 @@ describe('source quote filesystem failures', () => {
     writeFileSync(join(cwd, 'src', 'a.ts'), 'const value = 1;\n');
     failingPath.suffix = join('src', 'a.ts');
 
-    expect(verifySourceQuoteEvidence(cwd, {
-      kind: 'source_quote',
+    expect(verifyFileQuoteEvidence(cwd, {
+      kind: 'file_quote',
       path: 'src/a.ts',
       startLine: 1,
       endLine: 1,
@@ -71,8 +71,8 @@ describe('source quote filesystem failures', () => {
       symlinkSync(outsideDir, sourceDir, 'dir');
     };
 
-    const result = verifySourceQuoteEvidence(cwd, {
-      kind: 'source_quote',
+    const result = verifyFileQuoteEvidence(cwd, {
+      kind: 'file_quote',
       path: 'src/a.ts',
       startLine: 1,
       endLine: 1,

@@ -49,6 +49,30 @@ const {
   };
 });
 
+// The traced-config runtime bridge spawns a synchronous node subprocess per
+// (uncached) config load, which dominated this file's runtime (~30s of spawnSync).
+// Trace entries depend only on schema + parsed file content (env/cli sources are
+// disabled in the bridge), so memoizing identical inputs is behavior-preserving.
+vi.mock('../infra/config/traced/tracedConfigRuntimeBridge.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../infra/config/traced/tracedConfigRuntimeBridge.js')>();
+  const cache = new Map<string, Map<string, unknown>>();
+  const loadTraceEntriesViaRuntime: typeof actual.loadTraceEntriesViaRuntime = (schema, fileOrigin, parsedConfig) => {
+    const key = JSON.stringify([
+      fileOrigin,
+      parsedConfig,
+      Object.entries(schema).map(([name, entry]) => [name, String(entry.format), entry.env, entry.default, entry.sources]),
+    ]);
+    const hit = cache.get(key);
+    if (hit) {
+      return new Map(hit) as ReturnType<typeof actual.loadTraceEntriesViaRuntime>;
+    }
+    const result = actual.loadTraceEntriesViaRuntime(schema, fileOrigin, parsedConfig);
+    cache.set(key, new Map(result));
+    return result;
+  };
+  return { ...actual, loadTraceEntriesViaRuntime };
+});
+
 vi.mock('../app/cli/program.js', () => ({
   program: rootCommand,
 }));

@@ -16,7 +16,7 @@ Fill this when the diff adds or changes IDs, names, metadata, config, environmen
 ## Non-Finding Concerns
 | Item | Location | Classification | Evidence for Not Making a Finding |
 |------|----------|----------------|-----------------------------------|
-| {Concern, or "none"} | `src/file.ts:42` | false_positive / overreach / out_of_scope / no_issue_after_verification | {Evidence} |
+| {Concern, or "none"} | `src/file.ts:42` | false_positive / overreach / outside_contract_jurisdiction / no_issue_after_verification | {Evidence} |
 
 ## Problem-Family Completion Sweep
 | family_tag / changed contract | Invariant or root cause | Definition, production, validation | Consumption, persistence, reinjection | Failure, interruption, retry, resume, parallel, auxiliary entries | Mocks, fixtures, test doubles | Unchecked paths | Result |

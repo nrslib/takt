@@ -20,6 +20,8 @@ takt repertoire list
 takt repertoire remove @nrslib/takt-fullstack
 ```
 
+`{owner}/{repo}` はインストール時に小文字化されて保存されるため、`takt repertoire remove` には `takt repertoire list` の表示どおり小文字で指定してください。
+
 [GitHub CLI](https://cli.github.com/) (`gh`) のインストールと認証が必要です。
 
 ## パッケージ構造
@@ -163,7 +165,7 @@ takt repertoire list
 takt repertoire remove @{owner}/{repo}
 ```
 
-削除前に、ユーザーやプロジェクトの workflow、provider-options preset、step fragment がパッケージを参照していないかチェックし、影響がある場合は警告します。
+`{owner}/{repo}` はインストール時に小文字化されるため、`takt repertoire list` の表示どおり小文字で指定します。削除前に、ユーザーやプロジェクトの workflow、provider-options preset、step fragment がパッケージを参照していないかチェックし、影響がある場合は警告します。
 
 ## ディレクトリ構造
 

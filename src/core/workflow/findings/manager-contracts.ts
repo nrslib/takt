@@ -16,19 +16,21 @@ import type {
 } from './store.js';
 import type {
   CanonicalRawFinding,
-  DeterministicSameProof,
   FindingLedger,
+  FindingLifecycleEntityHead,
   FindingManagerOutput,
+  FindingManagerAuthority,
+  FindingManagerTaskAudit,
   RawFinding,
-  RawFindingDispositionOutcome,
 } from './types.js';
 import type {
   CanonicalIntakeItem,
-  ProvisionalRecoveryOrigins,
-  ReviewerIntakeResult,
 } from './manager-admission.js';
-import type { CapturedFindingPrecondition } from './finding-preconditions.js';
-import type { ProvisionalRecoveryOrigin } from './provisional-recovery-origin.js';
+import type {
+  InterpretationCaseDirectPlan,
+  InterpretationCaseProofFastPathPlan,
+} from './interpretation-case-coordinator.js';
+import type { ProvisionalTargetConflictCandidate } from './decision-assembly.js';
 
 export interface RunFindingManagerForStepInput {
   contract: FindingContractConfig;
@@ -42,10 +44,12 @@ export interface RunFindingManagerForStepInput {
   stepIteration: number;
   subResults: FindingManagerSubStepResult[];
   workflowName: string;
+  workflowTask: string;
   runId: string;
   callNamespace: string;
   timestamp: string;
   priorStepResponseText?: string;
+  managerAuthority: FindingManagerAuthority;
 }
 
 export type FindingManagerRunResult =
@@ -59,127 +63,30 @@ export type FindingManagerRunResult =
       ledger: FindingLedger;
     };
 
-interface LadderTargetBase {
-  canonical: CanonicalRawFinding;
-  wire: RawFinding;
-  baseInterpretationKey: string;
-  interpretationKey: string;
-  attemptOrdinal: number;
-}
-
-export type LadderTarget =
-  | (LadderTargetBase & {
-      interpretationRecoveryAttempt?: never;
-      recoveryOrigins?: never;
-    })
-  | (LadderTargetBase & {
-      interpretationRecoveryAttempt: true;
-      recoveryOrigins: ProvisionalRecoveryOrigins;
-    });
-
-type PendingIndependentNew =
-  | {
-      wire: RawFinding;
-      canonical: CanonicalRawFinding;
-      viaInterpretationKey?: string;
-      interpretationRecoveryAttempt?: never;
-      recoveryOrigins?: never;
-    }
-  | {
-      wire: RawFinding;
-      canonical: CanonicalRawFinding;
-      viaInterpretationKey?: string;
-      interpretationRecoveryAttempt: true;
-      recoveryOrigins: ProvisionalRecoveryOrigins;
-    };
-
-export interface LadderResult {
-  interpretationReservations: Map<string, string>;
-  interpretationIntegrityDigests: Map<string, string>;
-  integrityStaleInterpretationKeys: Set<string>;
-  deferredRawFindingIds: Set<string>;
-  pendingSameWithProof: Array<{
-    target: LadderTarget;
-    proof: DeterministicSameProof;
-    viaInterpretationKey?: string;
-  }>;
-  pendingIndependentNew: PendingIndependentNew[];
-  pendingConflicts: Array<{
-    target: LadderTarget;
-    targetFindingId: string;
-    viaInterpretationKey: string;
-  }>;
-  provisionalSpecs: ProvisionalFindingSpec[];
-  provisionalByInterpretationKey: Map<string, ProvisionalFindingSpec>;
-  pendingAppliedReattach: Array<{
-    target: LadderTarget;
-    applicationResult: 'created' | 'matched_with_proof' | 'conflict_created';
-  }>;
-  recoveryProvisionalOrigins: Map<string, ProvisionalRecoveryOrigins>;
+export interface InterpretationCaseRunResult {
+  items: CanonicalIntakeItem[];
+  completedAttemptIdsForCommit: string[];
+  directPlans: InterpretationCaseDirectPlan[];
+  proofFastPathPlans: InterpretationCaseProofFastPathPlan[];
+  provisionalOnlyRawFindingIds: Set<string>;
   stats: InterpretationStatsReport;
 }
 
 export interface ManagerDecisionStageResult {
   managerOutput: FindingManagerOutput;
+  conflictTargetHeads: Map<string, CapturedManagerConflictHead>;
   invalidAttempts: FindingManagerValidationAttemptReport[];
   cleanProvisionalSpecs: ProvisionalFindingSpec[];
+  provisionalTargetConflicts: ProvisionalTargetConflictCandidate[];
   unsupportedRawFindingReports: UnsupportedRawFindingReport[];
   cleanWireById: Map<string, RawFinding>;
   cleanCanonicalById: Map<string, CanonicalRawFinding>;
-  ladder: LadderResult;
-  rawRecovery: RawAdjudicationRecoveryResult;
+  interpretation: InterpretationCaseRunResult;
+  taskAudits: FindingManagerTaskAudit[];
 }
 
-export interface RawAdjudicationReplayOrigin {
-  provisionalFindingId: string;
-  sourceRawFindingId: string;
-  expectedProvisionalRevision: number;
-  attempt: number;
-  recoveryOrigin: ProvisionalRecoveryOrigin;
-}
-
-type AuditOnlyRawAdjudicationFailureKind =
-  | 'source_missing'
-  | 'reviewer_provenance_missing'
-  | 'recovery_contract_mismatch'
-  | 'admission_rejected'
-  | 'input_budget_exceeded'
-  | 'manager_output_rejected'
-  | 'agent_failed'
-  | 'provisional_landing'
-  | 'unlanded';
-
-type StaleRawAdjudicationFailureKind =
-  | 'target_missing'
-  | 'precondition_stale'
-  | 'reviewer_provenance_mismatch';
-
-export type RawAdjudicationFailure =
-  | {
-      kind: AuditOnlyRawAdjudicationFailureKind;
-      outcome: Extract<RawFindingDispositionOutcome, 'audit_only'>;
-      reason: string;
-    }
-  | {
-      kind: StaleRawAdjudicationFailureKind;
-      outcome: Extract<RawFindingDispositionOutcome, 'stale'>;
-      reason: string;
-    }
-  | {
-      kind: 'manager_unsupported';
-      outcome: Extract<RawFindingDispositionOutcome, 'unsupported'>;
-      reason: string;
-    };
-
-export interface RawAdjudicationRecoveryResult {
-  intake: ReviewerIntakeResult;
-  output: FindingManagerOutput;
-  origins: Map<string, RawAdjudicationReplayOrigin>;
-  failures: Map<string, RawAdjudicationFailure>;
-  capturedPreconditions: Map<string, CapturedFindingPrecondition>;
-  invalidAttempts: FindingManagerValidationAttemptReport[];
-  unsupportedRawFindingReports: UnsupportedRawFindingReport[];
-  cleanWireById: Map<string, RawFinding>;
-  cleanCanonicalById: Map<string, CanonicalIntakeItem['canonical']>;
-  reservationTokens: Set<string>;
+export interface CapturedManagerConflictHead {
+  lifecycleHead: FindingLifecycleEntityHead | null;
+  evidenceSetHash: string;
+  reviewScopeSnapshotId: string;
 }

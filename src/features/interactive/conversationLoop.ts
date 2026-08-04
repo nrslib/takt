@@ -9,8 +9,7 @@
 
 import chalk from 'chalk';
 import {
-  loadSessionState,
-  clearSessionState,
+  takeSessionState,
 } from '../../infra/config/index.js';
 import { createLogger, sanitizeTerminalText } from '../../shared/utils/index.js';
 import { info, error, blankLine } from '../../shared/ui/index.js';
@@ -82,12 +81,11 @@ function findLatestAssistantMessage(history: ConversationMessage[]): Conversatio
  * Display and clear previous session state if present.
  */
 export function displayAndClearSessionState(cwd: string, lang: 'en' | 'ja'): void {
-  const sessionState = loadSessionState(cwd);
+  const sessionState = takeSessionState(cwd);
   if (sessionState) {
     const statusLabel = formatSessionStatus(sessionState, lang);
     info(statusLabel);
     blankLine();
-    clearSessionState(cwd);
   }
 }
 

@@ -1,25 +1,20 @@
 import { createLogger } from '../../../shared/utils/index.js';
 import type {
   AgentResponse,
-  AgentWorkflowStep,
   LoopMonitorConfig,
-  WorkflowPendingLoopJudge,
-  WorkflowPendingLoopJudgeStarted,
+  WorkflowMaxSteps,
+  WorkflowResumePointEntry,
   WorkflowState,
   WorkflowStep,
 } from '../../models/types.js';
 import { mergeProviderOptions } from '../../../infra/config/providerOptions.js';
 import { providerSupportsClaudeAllowedTools } from '../../../infra/providers/provider-capabilities.js';
 import { resolveLoopMonitorJudgeProviderModel } from '../provider-resolution.js';
-import type { RuntimeStepResolution, StepProviderInfo, WorkflowEngineOptions } from '../types.js';
+import type { RuntimeStepResolution, StepProviderInfo } from '../types.js';
+import { incrementStepIteration } from './state-manager.js';
 import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { StepExecutor } from './StepExecutor.js';
 import { formatWorkflowRuleCondition } from '../../models/workflow-rule-condition.js';
-import { isWorkflowCallStep } from '../step-kind.js';
-import type { WorkflowStepBudget } from '../workflow-step-budget.js';
-import type { WorkflowExecutionScope } from '../workflow-execution-scope.js';
-import { InstructionBuildTransaction } from './instruction-build-transaction.js';
-import { commitCountableStepStart } from './execution-checkpoint.js';
 
 const log = createLogger('loop-monitor-judge-runner');
 
@@ -28,31 +23,7 @@ interface LoopMonitorJudgeRunnerDeps {
   stepExecutor: StepExecutor;
   state: WorkflowState;
   task: string;
-  stepBudget: WorkflowStepBudget;
-  recordCountableProgress: () => void;
-  interruptRequested: () => boolean;
-  ignoreIterationLimit: boolean;
-  requestIterationLimitExtension?: WorkflowEngineOptions['onIterationLimit'];
-  setPendingLoopJudge: (
-    triggeringStep: WorkflowStep,
-    pending: WorkflowPendingLoopJudge,
-    iteration: number,
-  ) => void;
-  startPendingLoopJudge: (
-    judgeStep: WorkflowStep,
-    pending: WorkflowPendingLoopJudgeStarted,
-    iteration: number,
-  ) => void;
-  clearPendingLoopJudge: (triggeringStep: WorkflowStep, iteration: number) => void;
-  syncMaxSteps: (maxSteps: import('../../models/types.js').WorkflowMaxSteps) => void;
-  getExecutionScope: () => WorkflowExecutionScope;
-  getLimitExecutionScope: (step: WorkflowStep, iteration: number) => WorkflowExecutionScope;
-  emitIterationLimit: (
-    iteration: number,
-    maxSteps: number,
-    currentStep: string,
-    scope: WorkflowExecutionScope,
-  ) => void;
+  getMaxSteps: () => WorkflowMaxSteps;
   language?: string;
   updatePersonaSession: (persona: string, sessionId: string | undefined) => void;
   resolveNextStepFromDone: (step: WorkflowStep, response: AgentResponse) => string;
@@ -63,17 +34,15 @@ interface LoopMonitorJudgeRunnerDeps {
     providerInfo: StepProviderInfo | undefined,
     resumeStepName: string,
     stepIteration: number,
-    maxSteps: import('../../models/types.js').WorkflowMaxSteps,
-    scope: WorkflowExecutionScope,
-  ) => void;
+  ) => WorkflowResumePointEntry[];
   onStepComplete: (
     step: WorkflowStep,
     response: AgentResponse,
     instruction: string,
     resumeStepName: string,
-    scope: WorkflowExecutionScope,
+    workflowStack: WorkflowResumePointEntry[],
   ) => void;
-  emitCollectedReports: (iteration: number, scope: WorkflowExecutionScope) => void;
+  emitCollectedReports: () => void;
   resetCycleDetector: () => void;
   /**
    * finding contract 有効時のみ。エンジン計算済みの findings 状態
@@ -84,10 +53,6 @@ interface LoopMonitorJudgeRunnerDeps {
   getFindingsSummaryForJudge?: () => string | undefined;
 }
 
-export type LoopMonitorJudgeRunResult =
-  | { readonly nextStep: string; readonly response: AgentResponse }
-  | { readonly iterationLimitReached: true };
-
 export class LoopMonitorJudgeRunner {
   constructor(private readonly deps: LoopMonitorJudgeRunnerDeps) {}
 
@@ -97,131 +62,58 @@ export class LoopMonitorJudgeRunner {
     triggeringStep: WorkflowStep,
     triggeringRuntime: RuntimeStepResolution | undefined,
     fallbackNextStep: string,
-    resumedStart?: WorkflowPendingLoopJudgeStarted,
-  ): Promise<LoopMonitorJudgeRunResult> {
-    this.throwIfInterrupted();
-    const draftJudgeStep = this.createJudgeStep(monitor, cycleCount, undefined);
-    const maxSteps = resumedStart === undefined
-      ? await this.reserveJudgeBudget(draftJudgeStep, triggeringStep, monitor, cycleCount, fallbackNextStep)
-      : this.deps.stepBudget.currentMaxSteps();
-    if (maxSteps === undefined) return { iterationLimitReached: true };
-
+  ): Promise<string> {
     const resolvedRuntime = this.resolveJudgeRuntime(monitor, cycleCount, triggeringStep, triggeringRuntime);
     const judgeStep = this.createJudgeStep(monitor, cycleCount, resolvedRuntime.providerInfo);
-    const providerInfo = this.deps.optionsBuilder.resolveStepProviderModel(judgeStep, resolvedRuntime);
-    if (providerInfo.provider === undefined) {
-      throw new Error(`Loop monitor judge "${judgeStep.name}" has no resolved provider`);
-    }
-    this.throwIfInterrupted();
-    const executionRuntime = { ...resolvedRuntime, providerInfo };
     log.info('Running loop monitor judge', {
       cycle: monitor.cycle,
       cycleCount,
       threshold: monitor.threshold,
     });
 
-    const pendingIteration = resumedStart?.iteration ?? this.deps.state.iteration + 1;
-    const pendingStepIteration = resumedStart?.step_iteration
-      ?? (this.deps.state.stepIterations.get(judgeStep.name) ?? 0) + 1;
-    const transaction = new InstructionBuildTransaction();
-    const previousResponseSourcePath = this.deps.state.previousResponseSourcePath;
-    const pendingFallback = this.deps.state.pendingFallback;
-    const rollbackPreparation = () => {
-      transaction.rollback();
-      this.deps.state.previousResponseSourcePath = previousResponseSourcePath;
-      this.deps.state.pendingFallback = pendingFallback;
-    };
-    let prebuiltInstruction: string;
-    try {
-      const baseInstruction = this.deps.stepExecutor.buildInstruction(
-        judgeStep,
-        pendingStepIteration,
-        this.deps.state,
-        this.deps.task,
-        maxSteps,
-        {
-          iteration: pendingIteration,
-          transaction,
-        },
-      );
-      const findingsSummary = this.deps.getFindingsSummaryForJudge?.();
-      prebuiltInstruction = findingsSummary !== undefined
-        ? `${baseInstruction}\n\n## Findings state (engine-computed)\n${findingsSummary}`
-        : baseInstruction;
-    } catch (error) {
-      rollbackPreparation();
-      throw error;
-    }
-    if (this.deps.interruptRequested()) {
-      rollbackPreparation();
-      this.throwIfInterrupted();
-    }
-    let stepIteration: number;
-    if (resumedStart === undefined) {
-      const startedPending: WorkflowPendingLoopJudgeStarted = {
-        status: 'started',
-        triggering_step: triggeringStep.name,
-        cycle: [...monitor.cycle],
-        cycle_count: cycleCount,
-        fallback_next_step: fallbackNextStep,
-        judge_step: judgeStep.name,
-        iteration: pendingIteration,
-        step_iteration: pendingStepIteration,
-      };
-      stepIteration = commitCountableStepStart({
-        state: this.deps.state,
-        stepName: judgeStep.name,
-        iteration: pendingIteration,
-        expectedStepIteration: pendingStepIteration,
-        recordProgress: this.deps.recordCountableProgress,
-        persist: () => this.deps.startPendingLoopJudge(judgeStep, startedPending, pendingIteration),
-      });
-    } else {
-      if (resumedStart.judge_step !== judgeStep.name
-        || this.deps.state.iteration !== resumedStart.iteration
-        || this.deps.state.stepIterations.get(judgeStep.name) !== resumedStart.step_iteration) {
-        rollbackPreparation();
-        throw new Error(`Started loop monitor judge "${judgeStep.name}" has inconsistent resume state`);
-      }
-      stepIteration = resumedStart.step_iteration;
-    }
-    const scope = this.deps.getExecutionScope();
-    this.deps.onStepStart(
+    const maxSteps = this.deps.getMaxSteps();
+    this.deps.state.iteration++;
+    const stepIteration = incrementStepIteration(this.deps.state, judgeStep.name);
+    const baseInstruction = this.deps.stepExecutor.buildInstruction(
+      judgeStep,
+      stepIteration,
+      this.deps.state,
+      this.deps.task,
+      maxSteps,
+    );
+    const findingsSummary = this.deps.getFindingsSummaryForJudge?.();
+    const prebuiltInstruction = findingsSummary !== undefined
+      ? `${baseInstruction}\n\n## Findings state (engine-computed)\n${findingsSummary}`
+      : baseInstruction;
+
+    const providerInfo = this.deps.optionsBuilder.resolveStepProviderModel(judgeStep, resolvedRuntime);
+    const stepEventWorkflowStack = this.deps.onStepStart(
       judgeStep,
       this.deps.state.iteration,
       prebuiltInstruction,
       providerInfo,
       triggeringStep.name,
       stepIteration,
-      maxSteps,
-      scope,
     );
 
-    const phase1Instruction = this.deps.stepExecutor.buildPhase1Instruction(
-      prebuiltInstruction,
-      judgeStep,
-      executionRuntime,
-    );
     const { response, instruction } = await this.deps.stepExecutor.runNormalStep(
       judgeStep,
       this.deps.state,
+      this.deps.task,
+      maxSteps,
       this.deps.updatePersonaSession,
-      executionRuntime,
-      {
-        executableStep: judgeStep,
-        phase1Instruction,
-        ...(this.deps.state.lastOutput?.content !== undefined
-          ? { priorStepResponseText: this.deps.state.lastOutput.content }
-          : {}),
-        stepIteration,
-        rollbackPreparation,
-      },
-      { iteration: this.deps.state.iteration, scope },
+      prebuiltInstruction,
+      resolvedRuntime,
     );
 
-    this.deps.emitCollectedReports(this.deps.state.iteration, scope);
-    this.deps.onStepComplete(judgeStep, response, instruction, triggeringStep.name, scope);
-    this.deps.clearPendingLoopJudge(triggeringStep, this.deps.state.iteration);
+    this.deps.emitCollectedReports();
+    this.deps.onStepComplete(
+      judgeStep,
+      response,
+      instruction,
+      triggeringStep.name,
+      stepEventWorkflowStack,
+    );
 
     if (response.status !== 'done') {
       // 監視は衛生装置であり、判定役自身の障害（プロバイダエラー等）で
@@ -235,7 +127,7 @@ export class LoopMonitorJudgeRunner {
         fallbackNextStep,
       });
       this.deps.resetCycleDetector();
-      return { nextStep: fallbackNextStep, response };
+      return fallbackNextStep;
     }
     const nextStep = this.deps.resolveNextStepFromDone(judgeStep, response);
     log.info('Loop monitor judge decision', {
@@ -244,57 +136,14 @@ export class LoopMonitorJudgeRunner {
       matchedRuleIndex: response.matchedRuleIndex,
     });
     this.deps.resetCycleDetector();
-    return { nextStep, response };
-  }
-
-  private throwIfInterrupted(): void {
-    if (this.deps.interruptRequested()) {
-      throw new Error('Loop monitor judge interrupted before start');
-    }
-  }
-
-  private async reserveJudgeBudget(
-    judgeStep: WorkflowStep,
-    triggeringStep: WorkflowStep,
-    monitor: LoopMonitorConfig,
-    cycleCount: number,
-    fallbackNextStep: string,
-  ): Promise<import('../../models/types.js').WorkflowMaxSteps | undefined> {
-    const limitScope = this.deps.getLimitExecutionScope(judgeStep, this.deps.state.iteration);
-    const budgetCheck = await this.deps.stepBudget.check({
-      request: {
-        currentIteration: this.deps.state.iteration,
-        currentStep: judgeStep.name,
-        scope: limitScope,
-      },
-      ignoreLimit: this.deps.ignoreIterationLimit,
-      onLimitReached: (maxSteps) => {
-        this.deps.setPendingLoopJudge(triggeringStep, {
-          status: 'budget_wait',
-          triggering_step: triggeringStep.name,
-          cycle: [...monitor.cycle],
-          cycle_count: cycleCount,
-          fallback_next_step: fallbackNextStep,
-        }, this.deps.state.iteration);
-        this.deps.emitIterationLimit(
-          this.deps.state.iteration,
-          maxSteps,
-          judgeStep.name,
-          limitScope,
-        );
-      },
-      onMaxStepsExtended: this.deps.syncMaxSteps,
-      requestExtension: this.deps.requestIterationLimitExtension,
-    });
-    this.throwIfInterrupted();
-    return budgetCheck.allowed ? budgetCheck.maxSteps : undefined;
+    return nextStep;
   }
 
   private createJudgeStep(
     monitor: LoopMonitorConfig,
     cycleCount: number,
     providerInfo: StepProviderInfo | undefined,
-  ): AgentWorkflowStep {
+  ): WorkflowStep {
     const instruction = (monitor.judge.instruction ?? this.buildDefaultInstruction(monitor, cycleCount))
       .replace(/\{cycle_count\}/g, String(cycleCount));
     const defaultProviderOptions = this.buildDefaultProviderOptions(providerInfo?.provider);
@@ -348,9 +197,10 @@ export class LoopMonitorJudgeRunner {
   ): RuntimeStepResolution {
     const draftJudgeStep = this.createJudgeStep(monitor, cycleCount, undefined);
     const judgeProviderInfo = this.deps.optionsBuilder.resolveStepProviderModelBeforeAutoRouting(draftJudgeStep);
-    const triggeringProviderInfo = isWorkflowCallStep(triggeringStep)
-      ? judgeProviderInfo
-      : this.deps.optionsBuilder.resolveStepProviderModel(triggeringStep, triggeringRuntime);
+    const triggeringProviderInfo = this.deps.optionsBuilder.resolveStepProviderModel(
+      triggeringStep,
+      triggeringRuntime,
+    );
     const providerInfo = resolveLoopMonitorJudgeProviderModel({
       judge: monitor.judge,
       judgeProviderInfo,

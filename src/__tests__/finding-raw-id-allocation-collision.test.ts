@@ -8,6 +8,7 @@ vi.mock(
 );
 
 import { foldRawFindingEvidence } from '../core/workflow/findings/finding-evidence-fold.js';
+import { RAW_FINDING_FIELD_LIMITS } from '../core/models/finding-contract-limits.js';
 import {
   canonicalizeReviewerRawFinding,
   createReviewerRawFindingCandidates,
@@ -15,8 +16,10 @@ import {
 } from '../core/workflow/findings/raw-canonicalization.js';
 import type {
   FindingLedger,
+  RawFinding,
   RawAmbiguityCode,
 } from '../core/workflow/findings/types.js';
+import { reviewerRawExtractionFixture } from './helpers/finding-lifecycle-fixture.js';
 
 const context = {
   workflowName: 'peer-review',
@@ -34,12 +37,72 @@ const ledger: FindingLedger = {
   updatedAt: '2026-07-26T00:00:00.000Z',
   rawFindings: [],
   conflicts: [],
-  interpretations: [],
   findings: [],
+  evidenceRecords: [],
 };
 
+function reviewerExtraction(
+  raw: Record<string, unknown>,
+  index: number,
+): ReturnType<typeof reviewerRawExtractionFixture> {
+  const finding = raw as Partial<RawFinding>;
+  return reviewerRawExtractionFixture({
+    rawFindingId: typeof finding.rawFindingId === 'string' ? finding.rawFindingId : null,
+    familyTag: typeof finding.familyTag === 'string' ? finding.familyTag : null,
+    severity: finding.severity ?? null,
+    title: typeof finding.title === 'string' ? finding.title : null,
+    description: typeof finding.description === 'string' ? finding.description : null,
+    suggestion: typeof finding.suggestion === 'string' ? finding.suggestion : null,
+    relation: finding.relation ?? 'new',
+    targetFindingId: typeof finding.targetFindingId === 'string'
+      ? finding.targetFindingId
+      : null,
+    target: finding.target,
+    evidence: finding.evidence,
+    rawExcerpt: `[item ${index}] ${finding.description ?? finding.title ?? 'observation'}`,
+  });
+}
+
+type ReviewerCandidateContext = Pick<
+  Parameters<typeof createReviewerRawFindingCandidates>[1],
+  | 'workflowName'
+  | 'callNamespace'
+  | 'parentStepName'
+  | 'stepIteration'
+  | 'runId'
+  | 'reviewerStepName'
+  | 'reviewerPersonaKey'
+>;
+
+function reviewerCandidates(
+  items: readonly unknown[],
+  intakeContext: ReviewerCandidateContext,
+) {
+  const extractions = items.map((item, index) => (
+    reviewerExtraction(item as Record<string, unknown>, index)
+  ));
+  return createReviewerRawFindingCandidates(extractions, {
+    ...intakeContext,
+    ledger,
+    reviewReport: extractions.map((item) => item.rawExcerpt).join('\n'),
+    issueEvidenceRequests: ({ requests }: {
+      requests: Array<Record<string, unknown>>;
+    }) => ({
+      evidence: requests.flatMap((request) => (
+        request.kind === 'file_quote'
+          ? [{ ...request, snapshotId: '1'.repeat(64) }]
+          : []
+      )),
+      engineProofRecords: [],
+      coverageGaps: [],
+      materializedQuoteBytes: 0,
+    }),
+    commitEvidenceIssuance: () => {},
+  } as never).candidates;
+}
+
 function project(items: readonly unknown[]) {
-  const candidates = createReviewerRawFindingCandidates(items, context);
+  const candidates = reviewerCandidates(items, context);
   const priorCodesByRawId: Record<string, RawAmbiguityCode[]> = {
     'z-clarification': ['relation-target-mismatch'],
   };
@@ -79,26 +142,36 @@ describe('duplicate rawFindingId allocation under hash collision', () => {
     familyTag: 'correctness',
     severity: 'high',
     title: 'Alpha',
-    location: 'src/alpha.ts:1',
     description: 'Alpha evidence',
     suggestion: 'Fix alpha',
     relation: 'new',
-    evidenceKind: 'source_quote',
-    verbatimExcerpt: 'const alpha = true;',
-    snapshotId: 'snapshot-1',
+    targetFindingId: null,
+    evidence: [{
+      kind: 'file_quote',
+      path: 'src/alpha.ts',
+      startLine: 1,
+      endLine: 1,
+      verbatimExcerpt: 'const alpha = true;',
+      snapshotId: '1'.repeat(64),
+    }],
   };
   const second = {
     rawFindingId: 'duplicate',
     familyTag: 'correctness',
     severity: 'medium',
     title: 'Beta',
-    location: 'src/beta.ts:2',
     description: 'Beta evidence',
     suggestion: 'Fix beta',
     relation: 'new',
-    evidenceKind: 'source_quote',
-    verbatimExcerpt: 'const beta = true;',
-    snapshotId: 'snapshot-1',
+    targetFindingId: null,
+    evidence: [{
+      kind: 'file_quote',
+      path: 'src/beta.ts',
+      startLine: 2,
+      endLine: 2,
+      verbatimExcerpt: 'const beta = true;',
+      snapshotId: '1'.repeat(64),
+    }],
   };
   const clarification = {
     rawFindingId: 'z-clarification',
@@ -106,8 +179,10 @@ describe('duplicate rawFindingId allocation under hash collision', () => {
     severity: 'low',
     title: 'Clarification',
     description: 'Clarification evidence',
+    suggestion: null,
     relation: 'new',
-    evidenceKind: 'locationless',
+    targetFindingId: null,
+    evidence: [],
   };
 
   it('uses complete normalized content after the hash before input index', () => {
@@ -141,7 +216,7 @@ describe('duplicate rawFindingId allocation under hash collision', () => {
   });
 
   it('uses input index only when normalized contents are identical', () => {
-    const candidates = createReviewerRawFindingCandidates([
+    const candidates = reviewerCandidates([
       { ...first },
       { ...first },
     ], context);
@@ -164,7 +239,7 @@ describe('duplicate rawFindingId allocation under hash collision', () => {
 
   it('uniquifies completely identical missing-ID candidates with the final input-position tie break', () => {
     const identicalWithoutId = { ...first, rawFindingId: undefined };
-    const candidates = createReviewerRawFindingCandidates([
+    const candidates = reviewerCandidates([
       { ...identicalWithoutId },
       { ...identicalWithoutId },
     ], context);
@@ -175,7 +250,7 @@ describe('duplicate rawFindingId allocation under hash collision', () => {
   });
 
   it('preserves an existing explicit suffixed ID while allocating duplicates', () => {
-    const candidates = createReviewerRawFindingCandidates([
+    const candidates = reviewerCandidates([
       first,
       {
         ...second,
@@ -192,5 +267,40 @@ describe('duplicate rawFindingId allocation under hash collision', () => {
     expect(idsByTitle['Existing suffix']).toBe('duplicate-dup2');
     expect(new Set(candidates.map((candidate) => candidate.reviewerRawFindingId)).size)
       .toBe(3);
+  });
+
+  it('keeps a maximum provider-local ID within the wire limit at workflow-call depth five after deduplication', () => {
+    const maximumProviderId = 'p'.repeat(
+      RAW_FINDING_FIELD_LIMITS.maxProviderRawFindingIdChars,
+    );
+    const callNamespace = JSON.stringify({
+      stack: Array.from({ length: 5 }, (_, index) => ({
+        workflow: `parent-workflow-${index}-with-a-descriptive-name`,
+        workflowRef: `workflows/parent-workflow-${index}.yaml`,
+        step: `invoke-child-workflow-${index}-for-review`,
+        kind: 'workflow_call',
+        occurrence: index + 1,
+      })),
+      childWorkflow: 'workflows/review-child.yaml',
+    });
+    const candidates = reviewerCandidates([
+      { ...first, rawFindingId: maximumProviderId },
+      { ...second, rawFindingId: maximumProviderId },
+    ], { ...context, callNamespace });
+
+    expect(candidates.some((candidate) => (
+      candidate.reviewerRawFindingId === `${maximumProviderId}-dup2`
+    ))).toBe(true);
+    expect(Math.max(...candidates.map((candidate) => candidate.intakeId.length)))
+      .toBeLessThanOrEqual(RAW_FINDING_FIELD_LIMITS.maxWireRawFindingIdChars);
+  });
+
+  it('fails fast with an integrity error when namespacing exceeds the wire limit', () => {
+    expect(() => reviewerCandidates([first], {
+      ...context,
+      callNamespace: 'n'.repeat(RAW_FINDING_FIELD_LIMITS.maxWireRawFindingIdChars),
+    })).toThrow(
+      'Raw finding wire ID integrity error: composed ID is',
+    );
   });
 });

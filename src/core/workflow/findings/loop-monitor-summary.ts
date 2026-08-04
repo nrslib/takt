@@ -4,11 +4,12 @@ import { isDismissCandidate } from './manager-utils.js';
 import { stopBudgetRoundsCompleted } from './stop-budget.js';
 import { resolveStopBudgetLimits } from './stop-budget.js';
 import type { FindingContractConfig } from './types.js';
+import { isOutstandingReviewerAnomaly } from './reviewer-anomalies.js';
 
 export interface LoopMonitorProvisionalSummary {
   id: string;
   kind: FindingProvisionalKind;
-  title: string;
+  title: string | null;
   stalledRounds: number;
   /** manager の dismissDecisions で裁定可能か（isDismissCandidate 参照）。 */
   dismissable: boolean;
@@ -52,7 +53,7 @@ export function buildLoopMonitorFindingsSummaryData(
         kind: provisional.kind,
         title: finding.title,
         stalledRounds: roundsCompleted - provisional.firstObservedRound + 1,
-        dismissable: isDismissCandidate(finding, roundsCompleted),
+        dismissable: isDismissCandidate(ledger, finding, roundsCompleted),
       };
     }),
     activeConflictCount: ledger.conflicts.filter((conflict) => conflict.status === 'active').length,
@@ -60,7 +61,7 @@ export function buildLoopMonitorFindingsSummaryData(
     maxRounds: limits.maxRounds,
     reviewerAnomalies: {
       count: (ledger.reviewerAnomalies ?? [])
-        .filter((anomaly) => anomaly.promotedFindingId === undefined).length,
+        .filter(isOutstandingReviewerAnomaly).length,
       budgetExhausted: ledger.reviewIntegrity?.exhausted ?? false,
     },
   };
@@ -75,7 +76,7 @@ export function renderLoopMonitorFindingsSummary(
     const settlement = provisional.dismissable
       ? 'settlement: later clean evidence OR manager dismissDecisions'
       : 'settlement: later clean evidence only';
-    return `- ${provisional.id} [${provisional.kind}] ${provisional.title} — stalled for ${provisional.stalledRounds} manager round(s); ${settlement}`;
+    return `- ${provisional.id} [${provisional.kind}] title=${JSON.stringify(provisional.title)} — stalled for ${provisional.stalledRounds} manager round(s); ${settlement}`;
   });
 
   return [

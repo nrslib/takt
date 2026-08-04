@@ -41,6 +41,7 @@ describe('workflowTrustBoundary', () => {
 subworkflow:
   callable: true
 initial_step: route_context
+max_steps: 3
 steps:
   - name: route_context
     kind: system
@@ -123,6 +124,7 @@ workflow_config:
     prepare:
       - node
 initial_step: review
+max_steps: 3
 steps:
   - name: review
     persona: reviewer

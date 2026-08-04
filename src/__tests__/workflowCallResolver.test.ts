@@ -80,6 +80,7 @@ subworkflow:
   callable: true
   visibility: internal
 initial_step: implement
+max_steps: 3
 steps:
   - name: implement
     persona: coder
@@ -182,6 +183,7 @@ subworkflow:
   visibility: internal
   requires_finding_contract: true
 initial_step: review
+max_steps: 3
 steps:
   - name: review
     persona: reviewer
@@ -222,6 +224,7 @@ steps:
 subworkflow:
   callable: true
 initial_step: delegate_nested
+max_steps: 3
 steps:
   - name: delegate_nested
     kind: workflow_call
@@ -236,6 +239,7 @@ steps:
 subworkflow:
   callable: true
 initial_step: review
+max_steps: 3
 steps:
   - name: review
     persona: nested-reviewer
@@ -248,6 +252,7 @@ steps:
 subworkflow:
   callable: true
 initial_step: review
+max_steps: 3
 steps:
   - name: review
     persona: wrong-reviewer
@@ -321,6 +326,7 @@ subworkflow:
       type: facet_ref
       facet_kind: report_format
 initial_step: review
+max_steps: 3
 personas:
   delegated-reviewer: |
     Review the delegated change.
@@ -420,6 +426,7 @@ subworkflow:
       facet_kind: knowledge
       default: [architecture]
 initial_step: delegate_child
+max_steps: 3
 knowledge:
   architecture: |
     Architecture reference content.
@@ -446,6 +453,7 @@ subworkflow:
       type: facet_ref[]
       facet_kind: knowledge
 initial_step: review
+max_steps: 3
 knowledge:
   domain: |
     Domain reference content.
@@ -526,6 +534,7 @@ subworkflow:
       type: facet_ref
       facet_kind: policy
 initial_step: review
+max_steps: 3
 policies:
   relaxed-review: |
     Use the relaxed child policy.
@@ -586,6 +595,7 @@ subworkflow:
       type: facet_ref
       facet_kind: knowledge
 initial_step: review
+max_steps: 3
 policies:
   strict-review: |
     Follow the strict child review checklist.
@@ -810,6 +820,171 @@ steps:
     expect(implementation?.name).toBe('implementation');
   });
 
+  it('validates required Finding Contracts for each expanded workflow_ref invocation', () => {
+    writeProjectWorkflow('root.yaml', `name: root
+initial_step: compose-safe
+steps:
+  - name: compose-safe
+    kind: workflow_call
+    call: composer
+    args:
+      target: safe-review
+    rules:
+      - condition: COMPLETE
+        next: compose-required
+  - name: compose-required
+    kind: workflow_call
+    call: composer
+    args:
+      target: required-review
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+    writeProjectWorkflow('composer.yaml', `name: composer
+subworkflow:
+  callable: true
+  params:
+    target:
+      type: workflow_ref
+steps:
+  - name: delegate
+    kind: workflow_call
+    call:
+      $param: target
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+    writeProjectWorkflow('safe-review.yaml', `name: safe-review
+subworkflow:
+  callable: true
+steps:
+  - name: review
+    persona: reviewer
+    instruction: Review without a Finding Contract
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    writeProjectWorkflow('required-review.yaml', `name: required-review
+subworkflow:
+  callable: true
+  requires_finding_contract: true
+steps:
+  - name: review
+    persona: reviewer
+    instruction: Review with the inherited Finding Contract
+    rules:
+      - condition: when(findings.open.count == 0)
+        next: COMPLETE
+`);
+
+    const root = loadProjectWorkflow('root.yaml');
+
+    expect(() => workflowResolver.validateWorkflowCallContracts(root, projectDir)).toThrow(
+      /workflow "required-review".*requires a finding_contract inherited from its caller/s,
+    );
+  });
+
+  it('validates nested return routes for each expanded workflow_ref invocation', () => {
+    writeProjectWorkflow('root.yaml', `name: root
+initial_step: compose-accepted
+steps:
+  - name: compose-accepted
+    kind: workflow_call
+    call: composer
+    args:
+      target: accepted-review
+    rules:
+      - condition: COMPLETE
+        next: compose-rejected
+  - name: compose-rejected
+    kind: workflow_call
+    call: composer
+    args:
+      target: rejected-review
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+    writeProjectWorkflow('composer.yaml', `name: composer
+subworkflow:
+  callable: true
+  params:
+    target:
+      type: workflow_ref
+steps:
+  - name: delegate
+    kind: workflow_call
+    call:
+      $param: target
+    rules:
+      - condition: accepted
+        next: COMPLETE
+`);
+    writeProjectWorkflow('accepted-review.yaml', `name: accepted-review
+subworkflow:
+  callable: true
+  returns: [accepted]
+steps:
+  - name: review
+    persona: reviewer
+    instruction: Review and accept
+    rules:
+      - condition: done
+        return: accepted
+`);
+    writeProjectWorkflow('rejected-review.yaml', `name: rejected-review
+subworkflow:
+  callable: true
+  returns: [rejected]
+steps:
+  - name: review
+    persona: reviewer
+    instruction: Review and reject
+    rules:
+      - condition: done
+        return: rejected
+`);
+
+    const root = loadProjectWorkflow('root.yaml');
+
+    expect(() => workflowResolver.validateWorkflowCallContracts(root, projectDir)).toThrow(
+      'workflow_call step "delegate" cannot route on unsupported child result "accepted"',
+    );
+  });
+
+  it('rejects recursive workflow_call validation cycles without unbounded recursion', () => {
+    writeProjectWorkflow('root.yaml', `name: root
+initial_step: delegate
+steps:
+  - name: delegate
+    kind: workflow_call
+    call: recursive-review
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+    writeProjectWorkflow('recursive-review.yaml', `name: recursive-review
+subworkflow:
+  callable: true
+steps:
+  - name: recurse
+    kind: workflow_call
+    call: recursive-review
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+
+    const root = loadProjectWorkflow('root.yaml');
+
+    expect(() => workflowResolver.validateWorkflowCallContracts(root, projectDir)).toThrow(
+      'Configuration error: recursive workflow_call cycle detected at workflow "recursive-review"',
+    );
+  });
+
   it.each([
     {
       name: 'array value',
@@ -923,6 +1098,7 @@ subworkflow:
       type: facet_ref
       facet_kind: report_format
 initial_step: review
+max_steps: 3
 report_formats:
   summary: |
     # Summary Format
@@ -969,6 +1145,7 @@ subworkflow:
       type: facet_ref[]
       facet_kind: knowledge
 initial_step: review
+max_steps: 3
 knowledge:
   architecture: |
     Architecture reference content.
@@ -1017,6 +1194,7 @@ subworkflow:
       type: facet_ref
       facet_kind: policy
 initial_step: review
+max_steps: 3
 policies:
   strict-review: |
     Follow the strict child review checklist.
@@ -1065,6 +1243,7 @@ subworkflow:
       type: facet_ref
       facet_kind: knowledge
 initial_step: review
+max_steps: 3
 knowledge:
   architecture: |
     Architecture reference content.
@@ -1110,6 +1289,7 @@ subworkflow:
       type: facet_ref
       facet_kind: instruction
 initial_step: review
+max_steps: 3
 instructions:
   child-fix: |
     Fix child issues.
@@ -1155,6 +1335,7 @@ subworkflow:
       type: facet_ref
       facet_kind: knowledge
 initial_step: review
+max_steps: 3
 steps:
   - name: review
     persona: reviewer
@@ -1200,6 +1381,7 @@ subworkflow:
       type: facet_ref
       facet_kind: knowledge
 initial_step: review
+max_steps: 3
 policies:
   strict-review: |
     This is a policy, not knowledge.
@@ -1237,6 +1419,7 @@ subworkflow:
       type: facet_ref
       facet_kind: knowledge
 initial_step: review
+max_steps: 3
 knowledge:
   local-review: |
     Project child local knowledge.
@@ -1297,6 +1480,7 @@ subworkflow:
       type: facet_ref
       facet_kind: knowledge
 initial_step: review
+max_steps: 3
 steps:
   - name: review
     persona: reviewer
@@ -1355,6 +1539,7 @@ subworkflow:
       type: facet_ref
       facet_kind: instruction
 initial_step: review
+max_steps: 3
 steps:
   - name: review
     persona: reviewer

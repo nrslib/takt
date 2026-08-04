@@ -11,6 +11,7 @@ import type {
   ProviderPermissionProfiles,
 } from '../core/models/index.js';
 import type { InternalAgentIsolation, ProviderType } from '../shared/types/provider.js';
+import type { ProviderExecutionProfile } from '../infra/providers/types.js';
 
 export type { StreamCallback };
 
@@ -37,6 +38,7 @@ export interface ResolvedAgentExecution {
 /** Common options for running agents */
 export interface RunAgentOptions {
   cwd: string;
+  executionProfile?: ProviderExecutionProfile;
   projectCwd?: string;
   abortSignal?: AbortSignal;
   sessionId?: string;
@@ -45,6 +47,7 @@ export interface RunAgentOptions {
   resolvedModel?: string;
   resolvedProvider?: ProviderType;
   personaPath?: string;
+  workflowBundleResourceRoot?: string;
   internalSystemPrompt?: string;
   internalAgentIsolation?: InternalAgentIsolation;
   allowedTools?: string[];
@@ -57,11 +60,13 @@ export interface RunAgentOptions {
     providerProfiles?: ProviderPermissionProfiles;
   };
   providerOptions?: StepProviderOptions;
-  resolvedProviderOptions?: StepProviderOptions;
+  /** Fully resolved provider options; bypasses project/global/persona option inheritance. */
+  resolvedProviderOptions?: StepProviderOptions | null;
   resolvedExecution?: ResolvedAgentExecution;
   onStream?: StreamCallback;
   onPermissionRequest?: PermissionHandler;
   onAskUserQuestion?: AskUserQuestionHandler;
+  onDispatch?: (permissionMode: PermissionMode | undefined) => void;
   bypassPermissions?: boolean;
   language?: Language;
   workflowMeta?: WorkflowMeta;

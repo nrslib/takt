@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { setMockScenario, resetScenario } from '../infra/mock/index.js';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
@@ -39,7 +40,7 @@ import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDet
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 import {
   makeResponse,
-  makeStep as makeStepWithoutProvider,
+  makeStep,
   makeRule,
   buildDefaultWorkflowConfig,
   mockRunAgentSequence,
@@ -47,11 +48,6 @@ import {
   createTestTmpDir,
   applyDefaultMocks,
 } from './engine-test-helpers.js';
-
-const makeStep = (
-  name: string,
-  overrides: Parameters<typeof makeStepWithoutProvider>[1] = {},
-) => makeStepWithoutProvider(name, { provider: 'mock', ...overrides });
 
 describe('WorkflowEngine Integration: Error Handling', () => {
   let tmpDir: string;
@@ -63,6 +59,7 @@ describe('WorkflowEngine Integration: Error Handling', () => {
   });
 
   afterEach(() => {
+    resetScenario();
     if (existsSync(tmpDir)) {
       rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -79,7 +76,6 @@ describe('WorkflowEngine Integration: Error Handling', () => {
 
     expect(() => new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
-      provider: 'mock',
       reportDirName: 'invalid-workflow',
     }))
       .toThrow('target step "missing-step" does not exist');
@@ -91,7 +87,7 @@ describe('WorkflowEngine Integration: Error Handling', () => {
   describe('No rule matched', () => {
     it('should abort when mockRuleEvaluation returns undefined', async () => {
       const config = buildDefaultWorkflowConfig();
-      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock' });
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({ persona: 'plan', content: 'Unclear output' }),
@@ -122,7 +118,7 @@ describe('WorkflowEngine Integration: Error Handling', () => {
           }),
         ],
       });
-      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock' });
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       const abortFn = vi.fn();
       engine.on('workflow:abort', abortFn);
@@ -151,7 +147,6 @@ describe('WorkflowEngine Integration: Error Handling', () => {
       });
       const engine = new WorkflowEngine(config, tmpDir, 'test task', {
         projectCwd: tmpDir,
-        provider: 'mock',
         interactive: true,
       });
 
@@ -183,7 +178,6 @@ describe('WorkflowEngine Integration: Error Handling', () => {
       const onUserInput = vi.fn();
       const engine = new WorkflowEngine(config, tmpDir, 'test task', {
         projectCwd: tmpDir,
-        provider: 'mock',
         interactive: true,
         onUserInput,
       });
@@ -243,7 +237,6 @@ describe('WorkflowEngine Integration: Error Handling', () => {
       const onUserInput = vi.fn().mockResolvedValueOnce('Refine the implementation plan');
       const engine = new WorkflowEngine(config, tmpDir, 'test task', {
         projectCwd: tmpDir,
-        provider: 'mock',
         interactive: true,
         onUserInput,
       });
@@ -334,7 +327,6 @@ describe('WorkflowEngine Integration: Error Handling', () => {
       const onUserInput = vi.fn().mockResolvedValueOnce(null);
       const engine = new WorkflowEngine(config, tmpDir, 'test task', {
         projectCwd: tmpDir,
-        provider: 'mock',
         interactive: true,
         onUserInput,
       });
@@ -365,7 +357,7 @@ describe('WorkflowEngine Integration: Error Handling', () => {
   describe('runAgent throws', () => {
     it('should abort when runAgent throws an error', async () => {
       const config = buildDefaultWorkflowConfig();
-      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock' });
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       vi.mocked(runAgent).mockRejectedValueOnce(new Error('API connection failed'));
 
@@ -395,7 +387,7 @@ describe('WorkflowEngine Integration: Error Handling', () => {
           }),
         ],
       });
-      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock' });
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       vi.mocked(runStatusJudgmentPhase).mockRejectedValueOnce(new Error('Phase 3 failed'));
 
@@ -422,7 +414,7 @@ describe('WorkflowEngine Integration: Error Handling', () => {
           }),
         ],
       });
-      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock' });
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({
@@ -448,12 +440,13 @@ describe('WorkflowEngine Integration: Error Handling', () => {
         initialStep: 'plan',
         steps: [
           makeStep('plan', {
+            provider: 'claude',
             outputContracts: [{ name: '01-plan.md', format: '# Plan' }],
             rules: [makeRule('continue', 'COMPLETE')],
           }),
         ],
       });
-      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock' });
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({
@@ -486,7 +479,7 @@ describe('WorkflowEngine Integration: Error Handling', () => {
           }),
         ],
       });
-      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock' });
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
       mockRunAgentSequence([makeResponse({ persona: 'plan', content: 'no matching label' })]);
       vi.mocked(mockRuleEvaluation).mockImplementationOnce(() => {
         throw new RuleDetectionExhaustedError('plan');
@@ -499,7 +492,17 @@ describe('WorkflowEngine Integration: Error Handling', () => {
       expect(result.nextStep).toBe('ABORT');
       expect(result.isComplete).toBe(true);
       expect(engine.getState().status).toBe('aborted');
-      expect(abortFn).toHaveBeenCalledWith(expect.anything(), 'rule_no_match', 'rule_no_match');
+      expect(abortFn).toHaveBeenCalledWith(
+        expect.anything(),
+        'rule_no_match',
+        'rule_no_match',
+        {
+          kind: 'rule_no_match',
+          step: 'plan',
+          reason: 'rule_no_match',
+          error: 'rule_no_match',
+        },
+      );
     });
 
     it('should abort without rule resolution when a step returns blocked', async () => {
@@ -511,7 +514,7 @@ describe('WorkflowEngine Integration: Error Handling', () => {
           }),
         ],
       });
-      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock' });
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({
@@ -541,7 +544,7 @@ describe('WorkflowEngine Integration: Error Handling', () => {
           }),
         ],
       });
-      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock' });
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({
@@ -576,7 +579,7 @@ describe('WorkflowEngine Integration: Error Handling', () => {
           }),
         ],
       });
-      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock' });
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({
@@ -610,7 +613,6 @@ describe('WorkflowEngine Integration: Error Handling', () => {
     });
     const engine = new WorkflowEngine(config, tmpDir, 'test task', {
       projectCwd: tmpDir,
-        provider: 'mock',
       abortSignal: abortController.signal,
     });
     mockRunAgentSequence([makeResponse({ persona: 'plan', content: 'no matching label' })]);
@@ -628,6 +630,12 @@ describe('WorkflowEngine Integration: Error Handling', () => {
       expect.anything(),
       'Workflow interrupted by external AbortSignal',
       'interrupt',
+      {
+        kind: 'interrupt',
+        step: 'plan',
+        reason: 'Workflow interrupted by external AbortSignal',
+        error: 'Workflow interrupted by external AbortSignal',
+      },
     );
   });
 
@@ -644,7 +652,7 @@ describe('WorkflowEngine Integration: Error Handling', () => {
         ],
       });
 
-      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock' });
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       for (let i = 0; i < 5; i++) {
         vi.mocked(runAgent).mockImplementationOnce(async (persona, task, options) => {
@@ -672,10 +680,64 @@ describe('WorkflowEngine Integration: Error Handling', () => {
     });
   });
 
+  describe('Scenario queue exhaustion', () => {
+    it('should handle scenario queue exhaustion mid-workflow', async () => {
+      // Delegate the mocked runAgent to the real implementation so the mock
+      // provider's scenario queue (and its empty-queue fallback) is exercised.
+      const actualRunner = await vi.importActual<typeof import('../agents/runner.js')>('../agents/runner.js');
+      vi.mocked(runAgent).mockImplementation(actualRunner.runAgent);
+
+      const personasDir = join(tmpDir, '.takt', 'personas');
+      mkdirSync(personasDir, { recursive: true });
+      for (const name of ['plan', 'implement']) {
+        writeFileSync(join(personasDir, `${name}.md`), `You are a ${name} agent.`);
+      }
+
+      // Only 1 scenario entry, but the workflow needs 2 steps
+      setMockScenario([
+        { persona: 'plan', status: 'done', content: '[PLAN:1]\n\nClear.' },
+      ]);
+
+      const config = buildDefaultWorkflowConfig({
+        steps: [
+          makeStep('plan', {
+            persona: './.takt/personas/plan.md',
+            personaPath: join(personasDir, 'plan.md'),
+            rules: [
+              makeRule('Requirements are clear', 'implement'),
+              makeRule('Requirements unclear', 'ABORT'),
+            ],
+          }),
+          makeStep('implement', {
+            persona: './.takt/personas/implement.md',
+            personaPath: join(personasDir, 'implement.md'),
+            rules: [
+              makeRule('Implementation complete', 'COMPLETE'),
+              makeRule('Cannot proceed', 'plan'),
+            ],
+          }),
+        ],
+      });
+      const engine = new WorkflowEngine(config, tmpDir, 'Task', { projectCwd: tmpDir, provider: 'mock' });
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+      ]);
+
+      // Should not throw; mock client falls back to generic response when queue is empty
+      const state = await engine.run();
+
+      // Even with queue exhaustion, engine should reach some terminal state
+      expect(['completed', 'aborted']).toContain(state.status);
+      // The step after exhaustion still received a provider response
+      expect(vi.mocked(runAgent).mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
   describe('Iteration limit', () => {
     it('should abort when max iterations reached without onIterationLimit callback', async () => {
       const config = buildDefaultWorkflowConfig({ maxSteps: 2 });
-      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock' });
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({ persona: 'plan', content: 'Plan done' }),
@@ -697,15 +759,7 @@ describe('WorkflowEngine Integration: Error Handling', () => {
       const state = await engine.run();
 
       expect(state.status).toBe('aborted');
-      expect(limitFn).toHaveBeenCalledWith(
-        2,
-        2,
-        'ai_review',
-        expect.objectContaining({
-          kind: 'workflow_execution_scope',
-          stack: [expect.objectContaining({ step: 'ai_review' })],
-        }),
-      );
+      expect(limitFn).toHaveBeenCalledWith(2, 2);
       expect(abortFn).toHaveBeenCalledOnce();
       const reason = abortFn.mock.calls[0]![1] as string;
       expect(reason).toContain('Max steps');
@@ -718,7 +772,6 @@ describe('WorkflowEngine Integration: Error Handling', () => {
 
       const engine = new WorkflowEngine(config, tmpDir, 'test task', {
         projectCwd: tmpDir,
-        provider: 'mock',
         onIterationLimit,
       });
 

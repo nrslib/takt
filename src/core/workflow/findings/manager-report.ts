@@ -10,9 +10,9 @@ import type {
 } from './store.js';
 import type {
   FindingManagerOutput,
+  FindingManagerTaskAudit,
   FindingManagerValidationReport,
   InterpretationRecoveryOriginSettlement,
-  RawFindingDisposition,
 } from './types.js';
 
 interface ManagerCommitReportInput {
@@ -29,8 +29,8 @@ interface ManagerCommitReportInput {
   rawNormalizations: RawNormalizationAuditRecord[];
   clarifications: Array<{ reviewer: string; flaggedRawFindingIds: string[] }>;
   interpretationStats: InterpretationStatsReport;
-  rawFindingDispositions: RawFindingDisposition[];
   interpretationRecoverySettlements: InterpretationRecoveryOriginSettlement[];
+  managerTaskAudits: FindingManagerTaskAudit[];
 }
 
 export function buildManagerCommitReport(
@@ -45,8 +45,8 @@ export function buildManagerCommitReport(
     || input.reviewerAnomalyLandings.length > 0
     || input.clarifications.length > 0
     || input.rawNormalizations.length > 0
-    || input.rawFindingDispositions.length > 0
-    || input.interpretationRecoverySettlements.length > 0;
+    || input.interpretationRecoverySettlements.length > 0
+    || input.managerTaskAudits.length > 0;
   if (!reportNeeded) {
     return undefined;
   }
@@ -69,11 +69,11 @@ export function buildManagerCommitReport(
       : {}),
     ...(input.rawNormalizations.length > 0 ? { rawNormalizations: input.rawNormalizations } : {}),
     ...(input.clarifications.length > 0 ? { relationClarifications: input.clarifications } : {}),
-    ...(input.rawFindingDispositions.length > 0
-      ? { rawFindingDispositions: input.rawFindingDispositions }
-      : {}),
     ...(input.interpretationRecoverySettlements.length > 0
       ? { interpretationRecoverySettlements: input.interpretationRecoverySettlements }
+      : {}),
+    ...(input.managerTaskAudits.length > 0
+      ? { managerTaskAudits: input.managerTaskAudits }
       : {}),
     interpretationStats: input.interpretationStats,
     attempts: input.staleRejections.length > 0

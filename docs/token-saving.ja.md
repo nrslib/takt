@@ -26,7 +26,7 @@ npm run analyze:usage -- .takt/runs/<run>
 ## Workflow のコストを下げる
 
 - フルの plan/review loop が不要な task では、`*-mini` など軽量な builtin workflow を選びます。
-- `provider_routing` で低リスクな step を安価または高速な provider/model に振り分けます。
+- [`provider_routing`](./configuration.ja.md) で低リスクな step を安価または高速な provider/model に振り分けます。
 - 高価な model は final review や難しい implementation step など、必要な step だけに使います。
 - 大きすぎる task は TAKT 実行前に分割し、planning/review context を小さくします。
 - 詳細な文章が不要な report では output contract を短くします。

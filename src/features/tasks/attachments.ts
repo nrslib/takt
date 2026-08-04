@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { StoredImageAttachment } from '../../shared/types/image-attachments.js';
@@ -14,6 +15,14 @@ import {
 export type TaskAttachment = StoredImageAttachment;
 
 export type PreparedTaskSpec = PreparedTaskSpecDirectory;
+
+export interface TaskAttachmentManifestEntry {
+  readonly relativePath: string;
+  readonly kind: 'directory' | 'file';
+  readonly contentSha256: string;
+}
+
+export type TaskAttachmentManifest = readonly TaskAttachmentManifestEntry[];
 
 export interface PrepareTaskSpecOptions {
   sourceTaskDir?: string;
@@ -121,6 +130,125 @@ function copyAttachmentEntry(sourcePath: string, destinationPath: string): void 
   fs.copyFileSync(sourcePath, destinationPath);
 }
 
+interface AttachmentTreeManifest {
+  readonly root: TaskAttachmentManifestEntry;
+  readonly entries: readonly TaskAttachmentManifestEntry[];
+}
+
+function hashAttachmentContent(content: string | Buffer): string {
+  return createHash('sha256').update(content).digest('hex');
+}
+
+function readAttachmentTreeManifest(
+  absolutePath: string,
+  relativePath: string,
+): AttachmentTreeManifest {
+  const stats = fs.lstatSync(absolutePath);
+  if (stats.isSymbolicLink()) {
+    throw new Error(`Task attachments must not contain symlinks: ${absolutePath}`);
+  }
+  if (stats.isFile()) {
+    const root = Object.freeze({
+      relativePath,
+      kind: 'file' as const,
+      contentSha256: hashAttachmentContent(fs.readFileSync(absolutePath)),
+    });
+    return Object.freeze({ root, entries: Object.freeze([root]) });
+  }
+  if (!stats.isDirectory()) {
+    throw new Error(`Task attachments must be regular files or directories: ${absolutePath}`);
+  }
+
+  const children = fs.readdirSync(absolutePath)
+    .sort()
+    .map((entry) => readAttachmentTreeManifest(
+      path.join(absolutePath, entry),
+      path.posix.join(relativePath, entry),
+    ));
+  const root = Object.freeze({
+    relativePath,
+    kind: 'directory' as const,
+    contentSha256: hashAttachmentContent(JSON.stringify(
+      children.map((child) => child.root),
+    )),
+  });
+  return Object.freeze({
+    root,
+    entries: Object.freeze([
+      root,
+      ...children.flatMap((child) => child.entries),
+    ]),
+  });
+}
+
+export function resolveTaskAttachmentManifest(
+  taskDir: string,
+): TaskAttachmentManifest {
+  const attachmentsDir = path.join(taskDir, 'attachments');
+  if (!fs.existsSync(attachmentsDir)) {
+    return Object.freeze([]);
+  }
+
+  const stats = fs.lstatSync(attachmentsDir);
+  if (stats.isSymbolicLink() || !stats.isDirectory()) {
+    throw new Error(`Task attachments must be a regular directory: ${attachmentsDir}`);
+  }
+
+  return readAttachmentTreeManifest(attachmentsDir, 'attachments').entries;
+}
+
+function assertTaskAttachmentManifestEntry(
+  taskDir: string,
+  expected: TaskAttachmentManifestEntry,
+  actual: TaskAttachmentManifestEntry | undefined,
+): void {
+  const entryPath = path.join(taskDir, expected.relativePath);
+  if (actual === undefined) {
+    throw new Error(`Task attachment is missing: ${entryPath}`);
+  }
+  if (actual.kind !== expected.kind) {
+    throw new Error(`Task attachment type changed: ${entryPath}`);
+  }
+  if (actual.contentSha256 !== expected.contentSha256) {
+    throw new Error(`Task attachment content changed: ${entryPath}`);
+  }
+}
+
+function assertTaskAttachmentsMatchManifest(
+  taskDir: string,
+  expectedManifest: TaskAttachmentManifest,
+): void {
+  const actualManifest = resolveTaskAttachmentManifest(taskDir);
+  const expectedByPath = new Map(
+    expectedManifest.map((entry) => [entry.relativePath, entry]),
+  );
+  const actualByPath = new Map(
+    actualManifest.map((entry) => [entry.relativePath, entry]),
+  );
+
+  for (const expected of expectedManifest) {
+    if (!actualByPath.has(expected.relativePath)) {
+      throw new Error(
+        `Task attachment is missing: ${path.join(taskDir, expected.relativePath)}`,
+      );
+    }
+  }
+  for (const actual of actualManifest) {
+    if (!expectedByPath.has(actual.relativePath)) {
+      throw new Error(
+        `Task attachment was added after resolution: ${path.join(taskDir, actual.relativePath)}`,
+      );
+    }
+  }
+  for (const expected of expectedManifest) {
+    assertTaskAttachmentManifestEntry(
+      taskDir,
+      expected,
+      actualByPath.get(expected.relativePath),
+    );
+  }
+}
+
 function copyExistingTaskAttachments(sourceTaskDir: string, taskDir: string): void {
   const sourceAttachmentsDir = path.join(sourceTaskDir, 'attachments');
   if (!fs.existsSync(sourceAttachmentsDir)) {
@@ -153,16 +281,16 @@ export function prepareTaskSpecDirectory(
   });
 }
 
-export function copyTaskAttachmentsToRunContext(sourceTaskDir: string, runContextTaskDir: string): void {
+export function copyTaskAttachmentsToRunContext(
+  sourceTaskDir: string,
+  runContextTaskDir: string,
+  expectedManifest: TaskAttachmentManifest,
+): void {
+  assertTaskAttachmentsMatchManifest(sourceTaskDir, expectedManifest);
   const sourceAttachmentsDir = path.join(sourceTaskDir, 'attachments');
-  if (!fs.existsSync(sourceAttachmentsDir)) {
-    return;
+  if (expectedManifest.length !== 0) {
+    copyAttachmentEntry(sourceAttachmentsDir, path.join(runContextTaskDir, 'attachments'));
   }
-
-  const stats = fs.lstatSync(sourceAttachmentsDir);
-  if (stats.isSymbolicLink() || !stats.isDirectory()) {
-    throw new Error(`Task attachments must be a regular directory: ${sourceAttachmentsDir}`);
-  }
-
-  copyAttachmentEntry(sourceAttachmentsDir, path.join(runContextTaskDir, 'attachments'));
+  assertTaskAttachmentsMatchManifest(sourceTaskDir, expectedManifest);
+  assertTaskAttachmentsMatchManifest(runContextTaskDir, expectedManifest);
 }

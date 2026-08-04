@@ -13,17 +13,12 @@
 | Target | Check or Unverified Reason | Result | Next Required Verification |
 |--------|----------------------------|--------|----------------------------|
 | {test, build, or functional check} | {current-code-matched log/report or reason} | ✅ / ❌ / unverified | {verification for NEED_REPLAN or none} |
-## Observed Findings
-| # | family_tag | Severity | Location | Issue | Impact or Failure Condition | Required Action |
-|---|------------|----------|----------|-------|-----------------------------|-----------------|
-| 1 | validation | high / medium / low | `file:line` | {current observed defect} | {impact or condition} | {fix} |
-## Resolution Confirmations
-| Ledger Reference | Original Acceptance Criteria | Confirmation Evidence |
-|------------------|------------------------------|-----------------------|
-| {existing finding} | {expected result} | `file:line` |
+## Finding Contract Claims
+{Describe every observed defect or explicit ledger lifecycle claim here separately. If the injected instructions require structured output, use that schema as the machine format; otherwise return only the Markdown report. Do not use a findings table. If there are no claims, write `None`.}
+
 ## Output Consistency
-- Markdown Observed Findings and structured issues, and Markdown Resolution Confirmations and structured confirmations, must each be the same set. Do not assign final finding IDs.
+- When an injected structured-output schema is present, every issue described in the report must also appear in that structured output. Otherwise use ordinary report prose only. Do not assign final finding IDs.
 - APPROVE means zero issues and required evidence is confirmed; REJECT means one or more currently observed defect issues; NEED_REPLAN means zero issues but approval is impossible because a major requirement or required evidence is unverified. Auxiliary unverified items may still APPROVE when other confirmed evidence is sufficient.
 ```
 
-**Cognitive-load rule:** For APPROVE, include only requirement fulfillment and necessary evidence; for REJECT, include every verified finding and aggregate locations with the same cause.
+**Cognitive-load rule:** For APPROVE, include only requirement fulfillment and necessary evidence; for REJECT, keep supporting prose concise, include every verified finding and required machine claim, and aggregate locations with the same cause.

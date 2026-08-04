@@ -1,6 +1,6 @@
 An implementation and review loop involving replanning has repeated {cycle_count} times.
 
-This monitor runs only when the natural transition returns to replan and would actually re-enter the same cycle. Use the Finding Contract ledger summary / `findings-ledger.json` as primary evidence and any latest plan, review, and fix reports available in the Report Directory as supporting evidence.
+This monitor runs only when the natural transition returns to replan and would actually re-enter the same cycle. Treat the engine-provided live Finding Contract ledger summary / current Finding state as authoritative. A `findings-ledger.json` file, when present, is only an auxiliary snapshot. Use the latest plan, review, and fix reports available in the Report Directory as supporting evidence.
 
 **Decision order:**
 1. Check whether the latest plan introduces a new decomposition, a different implementation approach, or verifiable acceptance criteria for the previous blocker.

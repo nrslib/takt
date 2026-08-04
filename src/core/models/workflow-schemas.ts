@@ -38,7 +38,6 @@ import {
 } from './workflow-session-constraints.js';
 import { WORKFLOW_SESSION_MODES } from './workflow-types.js';
 import { classifyReportRelativePath } from './reserved-report-names.js';
-import { validateCallableWorkflowMaxSteps } from './workflow-config-semantics.js';
 
 const RESERVED_WORKFLOW_CALL_RESULTS = ['COMPLETE', 'ABORT'] as const;
 const WorkflowStepNameSchema = z.string().min(1);
@@ -65,11 +64,11 @@ const WorkflowCallArgsRawSchema = z.record(
   z.string().min(1),
   z.union([WorkflowFacetRefValueSchema, WorkflowParamReferenceRawSchema]),
 );
-
 const WorkflowCallVarsRawSchema = z.record(
   z.string().regex(/^[A-Za-z_][A-Za-z0-9_.-]*$/),
   z.union([z.string(), z.number().finite(), z.boolean()]),
 );
+const WorkflowCallFindingContractAuthoritySchema = z.literal('terminal_adjudication');
 
 const WorkflowStepProviderOptionsSchema = StepProviderOptionsObjectSchema.extend({
   extends: z.string().min(1).optional(),
@@ -423,6 +422,7 @@ const WorkflowCallParallelSubStepRawSchema = z.object({
   overrides: WorkflowCallOverridesRawSchema.optional(),
   args: WorkflowCallArgsRawSchema.optional(),
   vars: WorkflowCallVarsRawSchema.optional(),
+  finding_contract_authority: WorkflowCallFindingContractAuthoritySchema.optional(),
   description: z.string().optional(),
   session_key: z.never().optional(),
   session: z.never().optional(),
@@ -529,6 +529,7 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
     overrides: WorkflowCallOverridesRawSchema.optional(),
     args: WorkflowCallArgsRawSchema.optional(),
     vars: WorkflowCallVarsRawSchema.optional(),
+    finding_contract_authority: WorkflowCallFindingContractAuthoritySchema.optional(),
     session: z.enum(WORKFLOW_SESSION_MODES).optional(),
     persona: WorkflowPersonaRefOrParamSchema.optional(),
     persona_name: z.string().optional(),
@@ -662,6 +663,14 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
         code: z.ZodIssueCode.custom,
         path: ['vars'],
         message: 'Only workflow_call steps can declare "vars"',
+      });
+    }
+
+    if (data.finding_contract_authority !== undefined && stepKind !== 'workflow_call') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['finding_contract_authority'],
+        message: 'Only workflow_call steps can declare "finding_contract_authority"',
       });
     }
 
@@ -897,21 +906,9 @@ export const WorkflowConfigRawSchema = z.object({
   report_formats: z.record(z.string(), z.string()).optional(),
   steps: z.array(WorkflowConfigStepRawSchema).min(1),
   initial_step: z.string().optional(),
-  max_steps: z.union([z.number().int().positive(), z.literal('infinite')]).optional(),
+  max_steps: z.union([z.number().int().positive(), z.literal('infinite')]).optional().default(10),
   loop_monitors: z.array(LoopMonitorSchema).optional(),
   interactive_mode: InteractiveModeSchema.optional(),
 }).strict().superRefine((workflow, ctx) => {
-  try {
-    validateCallableWorkflowMaxSteps({
-      callable: workflow.subworkflow?.callable === true,
-      maxSteps: workflow.max_steps,
-    });
-  } catch (error) {
-    ctx.addIssue({
-      code: 'custom',
-      path: ['max_steps'],
-      message: error instanceof Error ? error.message : String(error),
-    });
-  }
   validateOutputContractIdentities(workflow.steps as readonly OutputContractStep[], ctx);
 });

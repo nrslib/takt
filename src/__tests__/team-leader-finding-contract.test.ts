@@ -31,6 +31,25 @@ import {
   FindingContractDecompositionValidationError,
   validateFindingContractDecomposition,
 } from '../core/workflow/team-leader-finding-contract-decomposition-validation.js';
+import { computeFileQuoteEvidenceRecordId } from '../core/models/finding-evidence-record.js';
+import type { FindingEvidenceRecord } from '../core/models/finding-types.js';
+
+function fileQuoteEvidenceRecord(path: string, line: number): FindingEvidenceRecord {
+  const payload = {
+    kind: 'file_quote' as const,
+    path,
+    startLine: line,
+    endLine: line,
+    verbatimExcerpt: 'fixture evidence',
+    snapshotId: 'a'.repeat(64),
+    claimIdentityHash: 'b'.repeat(64),
+    fileHash: 'c'.repeat(64),
+  };
+  return {
+    evidenceId: computeFileQuoteEvidenceRecordId(payload),
+    ...payload,
+  };
+}
 
 function makePart(
   id: string,
@@ -117,6 +136,7 @@ describe('Finding Contract Team Leader contract', () => {
       stepName: 'reviewers',
       timestamp: '2026-07-23T00:00:00.000Z',
     };
+    const evidenceRecord = fileQuoteEvidenceRecord('src/defect.ts', 10);
     const ledger: FindingLedger = {
       workflowName: 'workflow',
       nextId: 2,
@@ -128,7 +148,7 @@ describe('Finding Contract Team Leader contract', () => {
         revision: 1,
         severity: 'high',
         title: 'Defect',
-        location: 'src/defect.ts:10',
+        evidenceIds: [evidenceRecord.evidenceId],
         description: 'The defect persists.',
         suggestion: 'Repair the defect class.',
         reviewers: ['architecture-review', 'testing-review'],
@@ -136,6 +156,7 @@ describe('Finding Contract Team Leader contract', () => {
         firstSeen: observedAt,
         lastSeen: observedAt,
       }],
+      evidenceRecords: [evidenceRecord],
       rawFindings: [
         {
           rawFindingId: 'raw-architecture',
@@ -144,10 +165,18 @@ describe('Finding Contract Team Leader contract', () => {
           familyTag: 'architecture',
           severity: 'high',
           title: 'Defect',
-          location: 'src/defect.ts:10',
           description: 'The defect persists.',
           suggestion: 'Repair the defect class.',
           relation: 'new',
+          targetFindingId: null,
+          evidence: [{
+            kind: 'file_quote',
+            path: 'src/defect.ts',
+            startLine: 10,
+            endLine: 10,
+            verbatimExcerpt: 'fixture evidence',
+            snapshotId: 'a'.repeat(64),
+          }],
         },
         {
           rawFindingId: 'raw-testing',
@@ -156,14 +185,21 @@ describe('Finding Contract Team Leader contract', () => {
           familyTag: 'testing',
           severity: 'high',
           title: 'Defect',
-          location: 'src/defect.ts:10',
           description: 'The defect persists.',
           suggestion: 'Repair the defect class.',
           relation: 'new',
+          targetFindingId: null,
+          evidence: [{
+            kind: 'file_quote',
+            path: 'src/defect.ts',
+            startLine: 10,
+            endLine: 10,
+            verbatimExcerpt: 'fixture evidence',
+            snapshotId: 'a'.repeat(64),
+          }],
         },
       ],
       conflicts: [],
-      interpretations: [],
     };
 
     const summary = JSON.parse(renderCompactActionableFindingContractSummary(ledger)) as {
@@ -177,7 +213,7 @@ describe('Finding Contract Team Leader contract', () => {
       id: 'F-0001',
       lifecycle: 'persists',
       severity: 'high',
-      location: 'src/defect.ts:10',
+      locations: ['src/defect.ts:10'],
       description: 'The defect persists.',
       suggestion: 'Repair the defect class.',
       familyTags: ['architecture', 'testing'],

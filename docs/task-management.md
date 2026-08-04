@@ -11,7 +11,7 @@ TAKT provides a task management workflow for accumulating multiple tasks and exe
 3. **`takt run`** -- Execute all pending tasks at once (sequential or parallel)
 4. **`takt list`** -- Review results, merge branches, retry failures, or add instructions
 
-Each task executes in an isolated shared clone (optional), produces reports, and creates a branch that can be merged or discarded via `takt list`.
+Each task executes in an isolated clone (optional), produces reports, and creates a branch that can be merged or discarded via `takt list`.
 
 ## Adding Tasks (`takt add`)
 
@@ -28,9 +28,11 @@ takt add #28
 When adding a task, you are prompted for:
 
 - **Workflow** -- Which workflow to use for execution
+- **Base branch** -- When the current branch is not `main`/`master`, whether to use it as the base branch
 - **Worktree path** -- Where to create the isolated clone (Enter for auto, or specify a path)
 - **Branch name** -- Custom branch name (Enter for auto-generated `takt/{timestamp}-{slug}`)
-- **Auto-PR** -- Whether to automatically create a pull request after successful execution
+- **Auto-PR** -- Whether to automatically create a pull request after successful execution (default: Yes)
+- **Draft PR** -- When Auto-PR is enabled, whether to create the PR as a draft (`Create as draft?`)
 
 ### GitHub Issue Integration
 
@@ -56,7 +58,7 @@ TAKT stores task metadata in `.takt/tasks.yaml` and each task's detailed specifi
 tasks:
   - name: add-auth-feature
     status: pending
-    task_dir: .takt/tasks/20260201-015714-foptng
+    task_dir: .takt/tasks/20260201-015714-implement-user-authentication
     workflow: default
     created_at: "2026-02-01T01:57:14.000Z"
     started_at: null
@@ -68,34 +70,43 @@ Fields:
 | Field | Description |
 |-------|-------------|
 | `name` | AI-generated task slug |
-| `status` | `pending`, `running`, `completed`, `failed`, or `exceeded` |
+| `status` | `pending`, `running`, `completed`, `failed`, `exceeded`, or `pr_failed` (workflow succeeded but PR creation/push failed) |
 | `task_dir` | Path to the task directory containing `order.md` |
 | `workflow` | Workflow name to use for execution |
 | `worktree` | `true` (auto), a path string, or omitted (run in current directory) |
 | `branch` | Branch name (auto-generated if omitted) |
+| `base_branch` | Base branch for the clone and PR (set when chosen at `takt add`) |
 | `auto_pr` | Whether to auto-create a PR after execution |
+| `draft_pr` | Whether the auto-created PR is opened as a draft |
 | `issue` | Issue number from the configured issue provider (if applicable) |
+| `run_slug` | Slug of the latest run directory under `.takt/runs/` |
+| `failure` | Failure details (`step`, `error`, `last_message`) recorded for failed tasks |
 | `created_at` | ISO 8601 timestamp |
 | `started_at` | ISO 8601 timestamp (set when execution begins) |
 | `completed_at` | ISO 8601 timestamp (set when execution finishes) |
+
+`tasks.yaml` may also contain additional fields (`slug`, `source_run_slug`, `resume_mode`, `owner_pid`, `auto_requeue_count`, `exceeded_*`, etc.) that TAKT manages internally.
 
 ### Task Directory Layout
 
 ```text
 .takt/
   tasks/
-    20260201-015714-foptng/
+    20260201-015714-implement-user-authentication/
       order.md          # Task specification (auto-generated, editable)
       schema.sql        # Attached reference materials (optional)
       wireframe.png     # Attached reference materials (optional)
   tasks.yaml            # Task metadata records
   runs/
-    20260201-015714-foptng/
+    20260201-020152-implement-user-authentication-x7k2pq/
       reports/           # Execution reports (auto-generated)
       logs/              # NDJSON session logs
       context/           # Snapshots (previous_responses, etc.)
+      operations/        # Operation journal (journal.json)
       meta.json          # Run metadata
 ```
+
+The run directory slug is generated separately for each execution by appending a random 6-character suffix, so it differs from the task directory slug. To locate a task's run directory, check the `run_slug` field in `tasks.yaml` or the newest directory under `.takt/runs/`.
 
 `takt add` creates `.takt/tasks/{slug}/order.md` automatically and saves the `task_dir` reference to `tasks.yaml`. You can freely edit `order.md` and add supplementary files (SQL schemas, wireframes, API specs, etc.) to the task directory before execution.
 
@@ -143,12 +154,19 @@ When concurrency is greater than 1, TAKT uses a worker pool that:
 
 If `takt run` is interrupted (e.g., process crash, Ctrl+C), tasks left in `running` status are automatically marked as `failed` on the next `takt run` or `takt watch` invocation. Requeue them explicitly to run them again.
 
+### Automatic Requeue
+
+When `auto_requeue_max_attempts` is set in the configuration, failed workflow tasks are automatically requeued when `takt run` starts, up to the configured number of attempts. The default is `0` (manual requeue only). See the [Configuration Guide](./configuration.md) for details.
+
 ## Watching Tasks (`takt watch`)
 
 Run a resident process that monitors `.takt/tasks.yaml` and auto-executes tasks as they appear:
 
 ```bash
 takt watch
+
+# Ignore workflow max_steps and continue until another stop condition occurs
+takt watch --ignore-exceed
 ```
 
 The watch command:
@@ -169,7 +187,7 @@ List and manage task branches interactively:
 takt list
 ```
 
-The list view shows all tasks organized by status (pending, running, completed, failed) with creation dates and summaries. Selecting a task shows available actions depending on its status.
+The list view shows all tasks organized by status (pending, running, completed, failed, exceeded, pr_failed) with creation dates and summaries. Selecting a task shows available actions depending on its status. The bottom of the list also has an **All Delete** entry that deletes all tasks at once.
 
 ### Actions for Completed Tasks
 
@@ -177,6 +195,8 @@ The list view shows all tasks organized by status (pending, running, completed, 
 |--------|-------------|
 | **View diff** | Show full diff against the default branch in a pager |
 | **Instruct** | Open an AI conversation to craft additional instructions, then re-execute |
+| **Merge from root** | Merge the root branch HEAD into the task branch; conflicts are auto-resolved with AI |
+| **Pull from remote** | Pull the latest changes from remote origin (fast-forward only) |
 | **Try merge** | Squash merge (stages changes without committing, for manual review) |
 | **Merge & cleanup** | Squash merge and delete the branch |
 | **Delete** | Discard all changes and delete the branch |
@@ -195,6 +215,23 @@ The list view shows all tasks organized by status (pending, running, completed, 
 |--------|-------------|
 | **Delete** | Remove the pending task from `tasks.yaml` |
 
+### Actions for Running Tasks
+
+| Action | Description |
+|--------|-------------|
+| **Mark as failed** | Mark a stuck `running` task as `failed` |
+
+### Actions for Exceeded Tasks
+
+| Action | Description |
+|--------|-------------|
+| **Requeue** | Return the task to `pending`, resuming from where it stopped |
+| **Delete** | Remove the task permanently |
+
+### Actions for PR-Failed Tasks
+
+Tasks with `pr_failed` status (workflow succeeded but PR creation or push failed) show the PR error message and offer the same actions as completed tasks.
+
 ### Instruct Mode
 
 When you select **Instruct** on a completed task, TAKT opens an interactive conversation loop with the AI. The conversation is pre-loaded with:
@@ -204,11 +241,12 @@ When you select **Instruct** on a completed task, TAKT opens an interactive conv
 - Workflow structure and step previews
 - Previous order content
 
-You can discuss what additional changes are needed, and the AI helps refine the instructions. When ready, choose:
+You can discuss what additional changes are needed, and the AI helps refine the instructions. When ready, use `/go`; after the instruction is generated, choose:
 
-- **Execute** -- Re-execute the task immediately with the new instructions
-- **Save task** -- Requeue the task as `pending` with the new instructions for later execution
-- **Cancel** -- Discard and return to the list
+- **Save as Task** -- Requeue the task as `pending` with the new instructions for later execution
+- **Continue editing** -- Keep refining the instructions in the conversation
+
+To re-execute immediately, use `/accept` (use the latest assistant response) or `/replay` (resubmit the previous order). Use `/cancel` to discard and return to the list.
 
 ### Retry Mode
 
@@ -216,17 +254,13 @@ When you select **Retry** on a failed task, TAKT:
 
 1. Displays failure details (failed step, error message, last agent message)
 2. Prompts you to select a workflow
-3. Prompts you to choose **Resume failed position** or browse paginated workflow levels to select **Restart from**
+3. Prompts you to choose a start position: **Resume failed position** or **Restart from**
 4. Opens a retry conversation pre-loaded with failure context, run session data, and workflow structure
 5. Lets you refine instructions with AI assistance
 
-**Requeue** uses the same workflow and start-position selection, but saves the task as `pending` without opening a conversation. **Resume failed position** is available when the saved checkpoint path can be resolved and preserves the checkpoint's call stack, iteration counters, and other execution state. **Restart from** starts a new logical execution from the selected fully qualified path without carrying over the old checkpoint's iteration, elapsed time, or step-iteration state.
+**Requeue** uses the same workflow and start-position selection, but saves the task as `pending` without opening a conversation. With Retry and Requeue you choose between **Resume** (continue from the failure point, preserving execution state) and **Restart** (start a new execution from any step of your choice). Steps nested under `workflow_call` sub-workflows can also be selected as the start position.
 
-Restart choices are paginated at the current workflow level. Use **Next page** and **Previous page** to reach every authored step, **Browse child workflow from** to open only the selected `workflow_call`, and **Back to parent workflow** to move up. The `workflow_call` itself remains a separate **Restart from** choice: selecting it runs the call and starts its child workflow at the child's `initial_step`, while browsing it exposes the child's authored steps.
-
-The confirmed Restart position shows the full path, including every parent workflow, `workflow_call` step, child workflow, and selected child step, so nested positions with duplicate names remain distinguishable. Root and nested Restart paths are saved in the same structured form and validated again immediately before execution; changes to the selected step, workflow identity, or step kind are rejected instead of silently changing the start position. Changing which step is currently initial does not invalidate a still-existing selected step.
-
-The retry conversation supports the same actions as Instruct mode (execute, save task, cancel). Immediate **Execute** and **Save task** (`save_task`) use the same selected Resume or Restart contract. Retry notes are appended to the task record, accumulating across multiple retry attempts.
+After `/go`, the retry conversation offers the same choices as Instruct mode (**Save as Task** / **Continue editing**), with `/accept` and `/replay` for immediate re-execution and `/cancel` to abort. Both saving and immediate re-execution use the selected Resume or Restart position. Retry notes are appended to the task record, accumulating across multiple retry attempts.
 
 ### Non-Interactive Mode (`--non-interactive`)
 
@@ -252,7 +286,7 @@ takt list --non-interactive --action delete --branch takt/my-branch --yes
 takt list --non-interactive --action try --branch takt/my-branch
 ```
 
-Available actions: `diff`, `try`, `merge`, `delete`.
+Available actions: `diff`, `sync`, `try`, `merge`, `delete`.
 
 ## Task Directory Workflow
 
@@ -261,30 +295,30 @@ The recommended end-to-end workflow:
 1. **`takt add`** -- Create a task. A pending record is added to `.takt/tasks.yaml` and `order.md` is generated in `.takt/tasks/{slug}/`.
 2. **Edit `order.md`** -- Open the generated file and add detailed specifications, reference materials, or supplementary files as needed.
 3. **`takt run`** (or `takt watch`) -- Execute pending tasks from `tasks.yaml`. Each task runs through the configured workflow.
-4. **Verify outputs** -- Check execution reports in `.takt/runs/{slug}/reports/` (the slug matches the task directory).
+4. **Verify outputs** -- Check execution reports in `.takt/runs/{run_slug}/reports/`. The run slug is assigned per execution; find it via the `run_slug` field in `tasks.yaml` or the newest directory under `.takt/runs/`.
 5. **`takt list`** -- Review results, merge successful branches, retry failures, or add further instructions.
 
-## Isolated Execution (Shared Clone)
+## Isolated Execution (Isolated Clone)
 
-Specifying `worktree` in task configuration executes each task in an isolated clone created with `git clone --shared`, keeping your main working directory clean.
+Specifying `worktree` in task configuration executes each task in an isolated clone created with `git clone`, keeping your main working directory clean.
 
 ### Configuration Options
 
 | Setting | Description |
 |---------|-------------|
-| `worktree: true` | Auto-create shared clone in adjacent directory (or location specified by `worktree_dir` config) |
+| `worktree: true` | Auto-create clone under `{project}/../takt-worktrees` (or the location specified by `worktree_dir` config; falls back to `.takt/worktrees` inside the project when the parent directory is not writable) |
 | `worktree: "/path/to/dir"` | Create clone at the specified path |
 | `branch: "feat/xxx"` | Use specified branch (auto-generated as `takt/{timestamp}-{slug}` if omitted) |
 | *(omit `worktree`)* | Execute in current directory (default) |
 
 ### How It Works
 
-TAKT uses `git clone --shared` instead of `git worktree` to create lightweight clones with an independent `.git` directory. This is important because:
+TAKT uses `git clone --reference <main-repo> --dissociate` instead of `git worktree` to create clones with an independent `.git` directory (when the reference repository is shallow, it falls back to a plain `git clone`). This is important because:
 
-- **Independent `.git`**: Shared clones have their own `.git` directory, preventing agent tools from traversing `gitdir:` references back to the main repository.
+- **Independent `.git`**: Clones have their own `.git` directory, preventing agent tools from traversing `gitdir:` references back to the main repository.
 - **Full isolation**: Agents work entirely within the clone directory, unaware of the main repository.
 
-> **Note**: The YAML field name remains `worktree` for backward compatibility. Internally, it uses `git clone --shared` instead of `git worktree`.
+> **Note**: The YAML field name remains `worktree` for backward compatibility. Internally, it uses `git clone` instead of `git worktree`.
 
 ### Ephemeral Lifecycle
 
@@ -292,7 +326,7 @@ Clones follow an ephemeral lifecycle:
 
 1. **Create** -- Clone is created before task execution
 2. **Execute** -- Task runs inside the clone directory
-3. **Commit & Push** -- On success, changes are auto-committed and pushed to the branch
+3. **Commit & Push** -- On success, changes are auto-committed and pushed to the main repository (pushing to `origin` happens only when `auto_pr` or similar publishing options are set)
 4. **Preserve** -- Clone is preserved after execution (for instruct/retry operations)
 5. **Cleanup** -- Branches are the persistent artifacts; use `takt list` to merge or delete
 
@@ -317,6 +351,8 @@ TAKT writes session logs in NDJSON (Newline-Delimited JSON, `.jsonl`) format. Ea
 .takt/runs/{slug}/
   logs/{sessionId}.jsonl   # NDJSON session log per workflow execution
   meta.json                # Run metadata (task, workflow, start/end, status, etc.)
+  operations/
+    journal.json           # Operation journal (internal execution records)
   context/
     previous_responses/
       latest.md            # Latest previous response (inherited automatically)

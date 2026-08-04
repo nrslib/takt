@@ -69,6 +69,7 @@ subworkflow:
   callable: true
   returns: [ok]
 initial_step: review
+max_steps: 3
 steps:
   - name: review
     persona: reviewer
@@ -229,6 +230,7 @@ subworkflow:
       type: facet_ref
       facet_kind: instruction
       default: linked
+max_steps: 1
 initial_step: review
 instructions:
   linked: ../facets/instructions/linked.md
@@ -406,6 +408,7 @@ workflow_config:
     codex:
       network_access: true
 initial_step: review
+max_steps: 2
 loop_monitors:
   - cycle: [review, review]
     threshold: 2
@@ -499,6 +502,7 @@ subworkflow:
   callable: true
   returns: [ok]
 initial_step: review
+max_steps: 3
 steps:
   - name: review
     persona: reviewer
@@ -532,6 +536,7 @@ subworkflow:
   callable: true
   returns: [ABORT]
 initial_step: review
+max_steps: 3
 steps:
   - name: review
     persona: reviewer
@@ -569,6 +574,7 @@ subworkflow:
   callable: true
   returns: [ok]
 initial_step: review
+max_steps: 3
 steps:
   - name: review
     persona: reviewer
@@ -582,6 +588,7 @@ subworkflow:
   callable: true
   returns: [ok]
 initial_step: delegate-grandchild
+max_steps: 3
 steps:
   - name: delegate-grandchild
     kind: workflow_call
@@ -1039,6 +1046,7 @@ subworkflow:
       type: facet_ref[]
       facet_kind: knowledge
 initial_step: review
+max_steps: 1
 steps:
   - name: review
     knowledge:
@@ -1089,6 +1097,7 @@ subworkflow:
       type: facet_ref[]
       facet_kind: knowledge
 initial_step: review
+max_steps: 1
 
 steps:
   - name: review
@@ -1182,6 +1191,7 @@ subworkflow:
   callable: true
   returns: [ok]
 initial_step: review
+max_steps: 3
 steps:
   - name: review
     persona: reviewer
@@ -1244,6 +1254,7 @@ subworkflow:
   callable: true
   visibility: internal
 initial_step: review
+max_steps: 1
 
 steps:
   - name: review
@@ -1456,6 +1467,7 @@ subworkflow:
       type: facet_ref
       facet_kind: instruction
       default: linked
+max_steps: 1
 initial_step: review
 instructions:
   linked: ../facets/instructions/linked.md

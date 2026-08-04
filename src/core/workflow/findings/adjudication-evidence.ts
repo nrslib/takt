@@ -5,8 +5,8 @@ import {
   renderFencedTextBlock,
 } from '../instruction/fenced-block.js';
 import type { ReviewScopeSnapshot, ReviewScopeUntrackedEvidence } from './snapshot.js';
+import type { ConflictAdjudicationSnapshot } from '../../models/finding-contract-types.js';
 import type {
-  FindingConflictAdjudicationAttempt,
   FindingLedger,
   FindingLedgerConflict,
   FindingLedgerEntry,
@@ -25,14 +25,20 @@ interface AdjudicationConflictEvidence {
   lastSeen: FindingLedgerConflict['lastSeen'];
 }
 
-function snapshotFinding(finding: FindingLedgerEntry): FindingLedgerEntry {
+type AdjudicationFindingEvidence = Omit<FindingLedgerEntry, 'revision'>;
+
+function snapshotFinding(finding: FindingLedgerEntry): AdjudicationFindingEvidence {
   return structuredClone({
     id: finding.id,
     status: finding.status,
     lifecycle: finding.lifecycle,
+    target: finding.target,
+    targetIdentityHash: finding.targetIdentityHash,
+    claimIdentityHash: finding.claimIdentityHash,
+    semanticClaimIdentityHash: finding.semanticClaimIdentityHash,
     severity: finding.severity,
     title: finding.title,
-    ...(finding.location !== undefined ? { location: finding.location } : {}),
+    evidenceIds: [...finding.evidenceIds],
     ...(finding.description !== undefined ? { description: finding.description } : {}),
     ...(finding.suggestion !== undefined ? { suggestion: finding.suggestion } : {}),
     reviewers: [...finding.reviewers].sort(compareBinaryStrings),
@@ -52,11 +58,7 @@ function snapshotFinding(finding: FindingLedgerEntry): FindingLedgerEntry {
       ? { supersededByFindingId: finding.supersededByFindingId }
       : {}),
     ...(finding.dismissal !== undefined ? { dismissal: finding.dismissal } : {}),
-    revision: finding.revision,
     ...(finding.provisional !== undefined ? { provisional: finding.provisional } : {}),
-    ...(finding.rejectedObservations !== undefined
-      ? { rejectedObservations: finding.rejectedObservations }
-      : {}),
   });
 }
 
@@ -68,23 +70,26 @@ function snapshotRawFinding(rawFinding: RawFinding): RawFinding {
     familyTag: rawFinding.familyTag,
     severity: rawFinding.severity,
     title: rawFinding.title,
-    ...(rawFinding.location !== undefined ? { location: rawFinding.location } : {}),
     description: rawFinding.description,
-    ...(rawFinding.suggestion !== undefined ? { suggestion: rawFinding.suggestion } : {}),
+    suggestion: rawFinding.suggestion,
+    target: rawFinding.target,
+    targetIdentityHash: rawFinding.targetIdentityHash,
+    claimIdentityHash: rawFinding.claimIdentityHash,
+    semanticClaimIdentityHash: rawFinding.semanticClaimIdentityHash,
+    candidateIdentityHash: rawFinding.candidateIdentityHash,
+    sourceBinding: rawFinding.sourceBinding,
     relation: rawFinding.relation,
-    ...(rawFinding.targetFindingId !== undefined
-      ? { targetFindingId: rawFinding.targetFindingId }
-      : {}),
+    targetFindingId: rawFinding.targetFindingId,
     ...(rawFinding.targetPrecondition !== undefined
       ? { targetPrecondition: rawFinding.targetPrecondition }
       : {}),
-    ...(rawFinding.evidence !== undefined ? { evidence: rawFinding.evidence } : {}),
+    evidence: rawFinding.evidence,
   });
 }
 
 export interface AdjudicationEvidenceSnapshot {
   conflict: AdjudicationConflictEvidence;
-  findings: FindingLedgerEntry[];
+  findings: AdjudicationFindingEvidence[];
   rawFindings: RawFinding[];
   reviewScopeSnapshotId: string;
   trackedDiffDigest: string;
@@ -209,36 +214,15 @@ export function renderAdjudicationInstruction(snapshot: AdjudicationEvidenceSnap
   });
 }
 
-export function isConflictUnadjudicated(
-  conflict: Pick<FindingLedgerConflict, 'adjudications' | 'adjudicationAttempts'>,
-  currentEvidenceHash: string,
-): boolean {
-  const seen = (conflict.adjudications ?? []).some((record) => record.evidenceHash === currentEvidenceHash)
-    || (conflict.adjudicationAttempts ?? []).some((attempt) => attempt.evidenceHash === currentEvidenceHash);
-  return !seen;
-}
-
-export function isLedgerConflictUnadjudicated(
-  conflict: FindingLedgerConflict,
-  ledger: FindingLedger,
-  reviewScopeSnapshotId: string,
-): boolean {
-  return isConflictUnadjudicated(
-    conflict,
-    computeConflictEvidenceHash(conflict, ledger, reviewScopeSnapshotId),
-  );
-}
-
-export function findReusablePendingAttempt(
-  conflict: Pick<FindingLedgerConflict, 'adjudications' | 'adjudicationAttempts'>,
-  currentEvidenceHash: string,
-  runId: string,
-): FindingConflictAdjudicationAttempt | undefined {
-  const completed = (conflict.adjudications ?? []).some((record) => record.evidenceHash === currentEvidenceHash);
-  if (completed) {
-    return undefined;
-  }
-  return (conflict.adjudicationAttempts ?? []).find((attempt) => (
-    attempt.evidenceHash === currentEvidenceHash && attempt.startedAt.runId === runId
-  ));
+export function renderConflictAdjudicationInstruction(
+  snapshot: ConflictAdjudicationSnapshot,
+): string {
+  return [
+    'Adjudicate the durable finding conflict snapshot below. You are read-only.',
+    'Return exactly one configured proposal. References must use subjectId values from the snapshot and authorityRefIds must identify exact engine-proof records.',
+    'Use merge_holding only for a verified identical claim, promote_holding only with verification supporting the complete product projection, terminate_subject only with verification supporting no-issue or refutation, and undetermined otherwise.',
+    '',
+    '## Durable conflict snapshot',
+    renderFencedJsonBlock(snapshot),
+  ].join('\n');
 }

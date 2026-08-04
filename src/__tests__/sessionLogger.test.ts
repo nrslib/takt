@@ -2,12 +2,16 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
-import { initNdjsonLog } from '../infra/fs/session.js';
+import { initNdjsonLog, parseNdjsonRecord } from '../infra/fs/session.js';
 import { SessionLogger } from '../features/tasks/execute/sessionLogger.js';
 import { buildTraceFromRecords } from '../features/tasks/execute/traceReportParser.js';
 import { buildWorkflowStepScopeKey } from '../features/tasks/execute/workflowStepScope.js';
 import { AGENT_FAILURE_CATEGORIES } from '../shared/types/agent-failure.js';
 import { buildPhaseExecutionId } from '../shared/utils/phaseExecutionId.js';
+import {
+  initDebugLogger,
+  resetDebugLogger,
+} from '../shared/utils/debug.js';
 
 const tempDirs = new Set<string>();
 
@@ -18,6 +22,7 @@ function createTempLogsDir(): string {
 }
 
 afterEach(() => {
+  resetDebugLogger();
   for (const dir of tempDirs) {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -25,58 +30,74 @@ afterEach(() => {
 });
 
 describe('SessionLogger', () => {
-  it('workflow_call lifecycle を iteration や provider のない制御レコードとして書き出す', () => {
+  it.each([
+    {
+      name: 'completed',
+      result: { status: 'completed' as const, returnValue: 'approved' },
+      expected: { status: 'completed', returnValue: 'approved' },
+    },
+    {
+      name: 'aborted',
+      result: {
+        status: 'aborted' as const,
+        abortKind: 'iteration_limit' as const,
+        abortReason: 'Maximum steps reached',
+      },
+      expected: {
+        status: 'aborted',
+        abortKind: 'iteration_limit',
+        abortReason: 'Maximum steps reached',
+      },
+    },
+    {
+      name: 'failed',
+      result: { status: 'failed' as const, reason: 'token=super-secret' },
+      expected: { status: 'failed', reason: 'token=[REDACTED]' },
+    },
+  ])('workflow_call $name lifecycle を NDJSON に永続化する', ({ result, expected }) => {
     const logsDir = createTempLogsDir();
     const ndjsonPath = initNdjsonLog('session-workflow-call', 'task', 'parent', { logsDir });
-    const logger = new SessionLogger(ndjsonPath, true);
+    const logger = new SessionLogger(ndjsonPath, false);
     const lifecycle = {
-      parentWorkflow: 'parent',
+      parentWorkflow: 'project:sha256:parent',
       step: 'delegate',
-      childWorkflow: 'shared/review',
+      childWorkflow: 'project:sha256:child',
       callInstance: 2,
-      stack: [
-        {
-          workflow: 'parent',
-          step: 'delegate',
-          kind: 'workflow_call' as const,
-          call_instance: 2,
-        },
-      ],
+      stack: [{
+        workflow: 'parent',
+        workflow_ref: 'project:sha256:parent',
+        step: 'delegate',
+        kind: 'workflow_call' as const,
+        occurrence: 2,
+      }],
     };
 
     logger.onWorkflowCallStart(lifecycle);
-    logger.onWorkflowCallComplete({
-      ...lifecycle,
-      result: {
-        status: 'completed',
-        returnValue: 'approved',
-      },
-    });
+    logger.onWorkflowCallComplete({ ...lifecycle, result });
 
     const records = readFileSync(ndjsonPath, 'utf-8')
       .trim()
       .split('\n')
-      .map((line) => JSON.parse(line) as Record<string, unknown>);
+      .map(parseNdjsonRecord);
     const start = records.find((record) => record.type === 'workflow_call_start');
     const complete = records.find((record) => record.type === 'workflow_call_complete');
 
     expect(start).toMatchObject({
       type: 'workflow_call_start',
-      workflow: 'parent',
-      step: 'delegate',
-      childWorkflow: 'shared/review',
-      callInstance: 2,
+      workflow: lifecycle.parentWorkflow,
+      step: lifecycle.step,
+      childWorkflow: lifecycle.childWorkflow,
+      callInstance: lifecycle.callInstance,
       stack: lifecycle.stack,
     });
     expect(complete).toMatchObject({
       type: 'workflow_call_complete',
-      workflow: 'parent',
-      step: 'delegate',
-      childWorkflow: 'shared/review',
-      callInstance: 2,
+      workflow: lifecycle.parentWorkflow,
+      step: lifecycle.step,
+      childWorkflow: lifecycle.childWorkflow,
+      callInstance: lifecycle.callInstance,
       stack: lifecycle.stack,
-      status: 'completed',
-      returnValue: 'approved',
+      ...expected,
     });
     for (const record of [start, complete]) {
       expect(record).not.toHaveProperty('iteration');
@@ -86,96 +107,14 @@ describe('SessionLogger', () => {
     }
   });
 
-  it('failed workflow_call reason を秘匿化して NDJSON から trace へ保持する', () => {
-    const logsDir = createTempLogsDir();
-    const ndjsonPath = initNdjsonLog('session-workflow-call-failed', 'task', 'parent', { logsDir });
-    const logger = new SessionLogger(ndjsonPath, false);
-    const lifecycle = {
-      parentWorkflow: 'parent',
-      step: 'delegate',
-      childWorkflow: 'shared/review',
-      callInstance: 1,
-      stack: [{
-        workflow: 'parent',
-        step: 'delegate',
-        kind: 'workflow_call' as const,
-        call_instance: 1,
-      }],
-    };
-
-    logger.onWorkflowCallStart(lifecycle);
-    logger.onWorkflowCallComplete({
-      ...lifecycle,
-      result: {
-        status: 'failed',
-        reason: 'token=super-secret',
-      },
-    });
-
-    const records = logger.getNdjsonRecords();
-    const trace = buildTraceFromRecords(records, [], '2026-08-01T00:00:00.000Z');
-    expect(records.find((record) => record.type === 'workflow_call_complete')).toMatchObject({
-      status: 'failed',
-      reason: 'token=[REDACTED]',
-    });
-    expect(trace.workflowCalls[0]?.result).toEqual({
-      status: 'failed',
-      reason: 'token=[REDACTED]',
-    });
-  });
-
-  it('aborted workflow_call を iteration なしで NDJSON から trace へ保持する', () => {
-    const logsDir = createTempLogsDir();
-    const ndjsonPath = initNdjsonLog('session-workflow-call-aborted', 'task', 'parent', { logsDir });
-    const logger = new SessionLogger(ndjsonPath, true);
-    const lifecycle = {
-      parentWorkflow: 'parent',
-      step: 'delegate',
-      childWorkflow: 'shared/review',
-      callInstance: 1,
-      stack: [{
-        workflow: 'parent',
-        step: 'delegate',
-        kind: 'workflow_call' as const,
-        call_instance: 1,
-      }],
-    };
-
-    logger.onWorkflowCallStart(lifecycle);
-    logger.onWorkflowCallComplete({
-      ...lifecycle,
-      result: {
-        status: 'aborted',
-        abortKind: 'iteration_limit',
-        abortReason: 'Maximum steps reached',
-      },
-    });
-
-    const records = logger.getNdjsonRecords();
-    const complete = records.find((record) => record.type === 'workflow_call_complete');
-    const trace = buildTraceFromRecords(records, [], '2026-08-01T00:00:00.000Z');
-    expect(complete).toMatchObject({
-      status: 'aborted',
-      abortKind: 'iteration_limit',
-      abortReason: 'Maximum steps reached',
-      stack: lifecycle.stack,
-    });
-    expect(complete).not.toHaveProperty('iteration');
-    expect(trace.steps).toEqual([]);
-    expect(trace.workflowCalls[0]?.result).toEqual({
-      status: 'aborted',
-      abortKind: 'iteration_limit',
-      abortReason: 'Maximum steps reached',
-    });
-  });
-
   it('subworkflow stack を step/phase records にそのまま書き出す', () => {
     const logsDir = createTempLogsDir();
     const ndjsonPath = initNdjsonLog('session-1', 'task', 'parent', { logsDir });
     const logger = new SessionLogger(ndjsonPath, true);
     const stack = [
-      { workflow: 'parent', workflow_ref: 'project:sha256:parent', step: 'delegate', kind: 'workflow_call' as const },
-      { workflow: 'takt/coding', workflow_ref: 'project:sha256:child', step: 'review', kind: 'agent' as const },
+      { workflow: 'parent', workflow_ref: 'project:sha256:parent', step: 'reviewers', kind: 'parallel' as const, occurrence: 1 },
+      { workflow: 'parent', workflow_ref: 'project:sha256:parent', step: 'delegate', kind: 'workflow_call' as const, occurrence: 1 },
+      { workflow: 'takt/coding', workflow_ref: 'project:sha256:child', step: 'review', kind: 'agent' as const, occurrence: 1 },
     ];
     const step = {
       name: 'review',
@@ -246,10 +185,10 @@ describe('SessionLogger', () => {
     const ndjsonPath = initNdjsonLog('session-2', 'task', 'parent', { logsDir });
     const logger = new SessionLogger(ndjsonPath, true);
     const parentStack = [
-      { workflow: 'shared/workflow', workflow_ref: 'project:sha256:parent', step: 'review', kind: 'workflow_call' as const },
+      { workflow: 'shared/workflow', workflow_ref: 'project:sha256:parent', step: 'review', kind: 'workflow_call' as const, occurrence: 1 },
     ];
     const childStack = [
-      { workflow: 'shared/workflow', workflow_ref: 'project:sha256:child', step: 'delegate', kind: 'workflow_call' as const },
+      { workflow: 'shared/workflow', workflow_ref: 'project:sha256:child', step: 'delegate', kind: 'workflow_call' as const, occurrence: 1 },
     ];
     const step = {
       name: 'review',
@@ -309,37 +248,206 @@ describe('SessionLogger', () => {
     ]));
   });
 
+  it('debug prompt と trace parser は同名 parallel child を scope で相関する', () => {
+    const logsDir = createTempLogsDir();
+    initDebugLogger({ enabled: true }, logsDir);
+    const ndjsonPath = initNdjsonLog(
+      'session-parallel-prompts',
+      'task',
+      'parent',
+      { logsDir },
+    );
+    const logger = new SessionLogger(ndjsonPath, true);
+    const step = {
+      name: 'review',
+      kind: 'agent' as const,
+      persona: 'reviewer',
+      personaDisplayName: 'reviewer',
+      instruction: 'Review',
+      passPreviousResponse: true,
+    };
+    const slowStack = [
+      {
+        workflow: 'parent',
+        workflow_ref: 'project:sha256:parent',
+        step: 'slow-delegate',
+        kind: 'workflow_call' as const,
+        occurrence: 1,
+      },
+      {
+        workflow: 'shared-child',
+        workflow_ref: 'project:sha256:shared-child',
+        step: 'review',
+        kind: 'agent' as const,
+        occurrence: 1,
+      },
+    ];
+    const fastStack = [
+      {
+        workflow: 'parent',
+        workflow_ref: 'project:sha256:parent',
+        step: 'fast-delegate',
+        kind: 'workflow_call' as const,
+        occurrence: 1,
+      },
+      {
+        workflow: 'shared-child',
+        workflow_ref: 'project:sha256:shared-child',
+        step: 'review',
+        kind: 'agent' as const,
+        occurrence: 1,
+      },
+    ];
+    const phaseExecutionId = buildPhaseExecutionId({
+      step: 'review',
+      iteration: 1,
+      phase: 1,
+      sequence: 1,
+    });
+
+    logger.onStepStart(step, 1, 'slow', slowStack);
+    logger.onPhaseStart(
+      step,
+      1,
+      'execute',
+      'slow',
+      { systemPrompt: 'slow-system', userInstruction: 'slow-user' },
+      slowStack,
+      phaseExecutionId,
+      1,
+    );
+    logger.onStepStart(step, 1, 'fast', fastStack);
+    logger.onPhaseStart(
+      step,
+      1,
+      'execute',
+      'fast',
+      { systemPrompt: 'fast-system', userInstruction: 'fast-user' },
+      fastStack,
+      phaseExecutionId,
+      1,
+    );
+    logger.onPhaseComplete(
+      step,
+      1,
+      'execute',
+      'fast-response',
+      'done',
+      undefined,
+      fastStack,
+      phaseExecutionId,
+      1,
+    );
+    logger.onStepComplete(step, {
+      persona: 'reviewer',
+      status: 'done',
+      content: 'fast-response',
+      timestamp: new Date('2026-04-13T00:00:01.000Z'),
+    }, 'fast', fastStack);
+    logger.onPhaseComplete(
+      step,
+      1,
+      'execute',
+      'slow-response',
+      'done',
+      undefined,
+      slowStack,
+      phaseExecutionId,
+      1,
+    );
+    logger.onStepComplete(step, {
+      persona: 'reviewer',
+      status: 'done',
+      content: 'slow-response',
+      timestamp: new Date('2026-04-13T00:00:02.000Z'),
+    }, 'slow', slowStack);
+
+    const promptRecords = logger.getPromptRecords();
+    expect(promptRecords.map((record) => ({
+      scope: record.scope,
+      systemPrompt: record.systemPrompt,
+      response: record.response,
+    }))).toEqual([
+      {
+        scope: buildWorkflowStepScopeKey('review', fastStack),
+        systemPrompt: 'fast-system',
+        response: 'fast-response',
+      },
+      {
+        scope: buildWorkflowStepScopeKey('review', slowStack),
+        systemPrompt: 'slow-system',
+        response: 'slow-response',
+      },
+    ]);
+
+    const trace = buildTraceFromRecords(
+      logger.getNdjsonRecords(),
+      promptRecords,
+      '2026-04-13T00:00:03.000Z',
+    );
+    expect(trace.steps.map((traceStep) => ({
+      stack: traceStep.stack,
+      systemPrompt: traceStep.phases[0]?.systemPrompt,
+      response: traceStep.phases[0]?.response,
+    }))).toEqual(expect.arrayContaining([
+      {
+        stack: slowStack,
+        systemPrompt: 'slow-system',
+        response: 'slow-response',
+      },
+      {
+        stack: fastStack,
+        systemPrompt: 'fast-system',
+        response: 'fast-response',
+      },
+    ]));
+  });
+
   it('workflow step scope key は : と > を含む名前でも可逆かつ一意である', () => {
     const firstStack = [
-      { workflow: 'parent:alpha', step: 'review', kind: 'agent' as const },
+      { workflow: 'parent:alpha', workflow_ref: 'project:sha256:parent-alpha', step: 'review', kind: 'agent' as const, occurrence: 1 },
     ];
     const secondStack = [
-      { workflow: 'parent', step: 'alpha:review', kind: 'agent' as const },
+      { workflow: 'parent', workflow_ref: 'project:sha256:parent', step: 'alpha:review', kind: 'agent' as const, occurrence: 1 },
     ];
     const key = buildWorkflowStepScopeKey('review>done', [
-      { workflow: 'parent:workflow', step: 'delegate>step', kind: 'workflow_call' as const },
-      { workflow: 'child>workflow', step: 'review:step', kind: 'agent' as const },
+      { workflow: 'parent:workflow', workflow_ref: 'project:sha256:parent-workflow', step: 'delegate>step', kind: 'workflow_call' as const, occurrence: 1 },
+      { workflow: 'child>workflow', workflow_ref: 'project:sha256:child-workflow', step: 'review:step', kind: 'agent' as const, occurrence: 1 },
     ]);
 
     expect(buildWorkflowStepScopeKey('result', firstStack)).not.toBe(buildWorkflowStepScopeKey('result', secondStack));
     expect(JSON.parse(key)).toEqual({
       step: 'review>done',
       stack: [
-        { workflow: 'parent:workflow', step: 'delegate>step', kind: 'workflow_call' },
-        { workflow: 'child>workflow', step: 'review:step', kind: 'agent' },
+        { workflow: 'parent:workflow', workflow_ref: 'project:sha256:parent-workflow', step: 'delegate>step', kind: 'workflow_call', occurrence: 1 },
+        { workflow: 'child>workflow', workflow_ref: 'project:sha256:child-workflow', step: 'review:step', kind: 'agent', occurrence: 1 },
       ],
     });
   });
 
   it('workflow_ref が異なる同名 workflow でも step scope key は衝突しない', () => {
     const firstStack = [
-      { workflow: 'shared/workflow', workflow_ref: 'project:sha256:a', step: 'delegate', kind: 'workflow_call' as const },
+      { workflow: 'shared/workflow', workflow_ref: 'project:sha256:a', step: 'delegate', kind: 'workflow_call' as const, occurrence: 1 },
     ];
     const secondStack = [
-      { workflow: 'shared/workflow', workflow_ref: 'project:sha256:b', step: 'delegate', kind: 'workflow_call' as const },
+      { workflow: 'shared/workflow', workflow_ref: 'project:sha256:b', step: 'delegate', kind: 'workflow_call' as const, occurrence: 1 },
     ];
 
     expect(buildWorkflowStepScopeKey('review', firstStack)).not.toBe(buildWorkflowStepScopeKey('review', secondStack));
+  });
+
+  it('同一workflow_callの別occurrenceはstep scope keyが衝突しない', () => {
+    const firstStack = [{
+      workflow: 'shared/workflow',
+      workflow_ref: 'project:sha256:shared',
+      step: 'delegate',
+      kind: 'workflow_call' as const,
+      occurrence: 1,
+    }];
+    const secondStack = [{ ...firstStack[0]!, occurrence: 2 }];
+
+    expect(buildWorkflowStepScopeKey('review', firstStack))
+      .not.toBe(buildWorkflowStepScopeKey('review', secondStack));
   });
 
   it('step_start record includes redacted providerOptions and providerOptionsSources when providerInfo carries them', () => {

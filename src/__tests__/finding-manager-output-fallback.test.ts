@@ -8,6 +8,8 @@ import type {
   RawFinding,
 } from '../core/workflow/findings/types.js';
 import type { RawAdmissionEvaluation } from '../core/workflow/findings/manager-admission.js';
+import { canonicalRawFindingFixture } from './helpers/finding-lifecycle-fixture.js';
+import { captureFindingMutationPrecondition } from '../core/workflow/findings/finding-preconditions.js';
 
 // 正規化（manager-plan-normalization）で既知の排他違反は assembly 段で解消される
 // ため、最終検証の失敗は「未知の違反経路」でしか起きない。ここでは検証を部分
@@ -34,6 +36,7 @@ function makeFinding(
     severity: 'medium',
     title: '既存の指摘',
     location: 'src/a.ts:10',
+    evidenceIds: [],
     reviewers: ['arch-review'],
     rawFindingIds: ['raw-old-1'],
     firstSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
@@ -49,12 +52,11 @@ function makeLedger(findings: FindingLedgerEntry[]): FindingLedger {
     updatedAt: '2026-07-01T00:00:00.000Z',
     rawFindings: [],
     conflicts: [],
-    interpretations: [],
     findings,
   };
 }
 
-const CONFIRMATION_RAW: RawFinding = {
+const CONFIRMATION_RAW: RawFinding = canonicalRawFindingFixture({
   rawFindingId: 'raw-confirm',
   stepName: 'arch-review',
   reviewer: 'arch-review',
@@ -62,29 +64,40 @@ const CONFIRMATION_RAW: RawFinding = {
   severity: 'medium',
   title: '解消を確認',
   description: '修正を確認した。',
+  suggestion: null,
   relation: 'resolution_confirmation',
   targetFindingId: 'F-0001',
-};
+  target: { kind: 'code', paths: ['src/a.ts'] },
+  evidence: [],
+});
 
-const ISSUE_RAW: RawFinding = {
+const ISSUE_RAW: RawFinding = canonicalRawFindingFixture({
   rawFindingId: 'raw-issue',
   stepName: 'arch-review',
   reviewer: 'arch-review',
   familyTag: 'bug',
   severity: 'medium',
   title: '新しい指摘',
-  location: 'src/b.ts:5',
   description: '別の問題。',
   suggestion: '直す。',
   relation: 'new',
-};
+  targetFindingId: null,
+  target: { kind: 'code', paths: ['src/b.ts'] },
+  evidence: [],
+});
+
+const PERSISTS_RAW: RawFinding = canonicalRawFindingFixture({
+  ...CONFIRMATION_RAW,
+  rawFindingId: 'raw-persists',
+  relation: 'persists',
+  description: 'The prior claim does not hold.',
+});
 
 function makeAdmission(cleanWire: RawFinding[]): RawAdmissionEvaluation {
   return {
     admissionRejections: [],
     admissionAnomalySpecs: [],
     admissionRejectedItems: [],
-    locationlessProvisionalItems: [],
     pendingRejectedObservations: [],
     cleanAdmitted: cleanWire.map((wire) => ({
       wire,
@@ -99,6 +112,7 @@ function makeAdmission(cleanWire: RawFinding[]): RawAdmissionEvaluation {
     ladderAnomalySpecs: [],
     verifiedEvidenceCandidates: [],
     provisionalOnlyLadderRawIds: new Set(),
+    verifiedEvidenceRecordsByRawFindingId: new Map(),
     cleanWire,
   };
 }
@@ -133,6 +147,7 @@ function makeActiveConflictDuplicateScenario() {
   return {
     previousLedger,
     output: {
+      anchorAdjudications: [],
       matches: [],
       newFindings: [],
       resolvedFindings: [],
@@ -210,10 +225,16 @@ describe('assembleCleanManagerDecision の mechanical フォールバック', ()
 
   it('最終検証に落ちたら empty ではなく mechanical 出力へ縮退し、残余 raw を manager-output-discarded で保持する', () => {
     const previousLedger = makeLedger([makeFinding({ revision: 1 })]);
-    const cleanWire = [CONFIRMATION_RAW, ISSUE_RAW];
+    const cleanWire = [{
+      ...CONFIRMATION_RAW,
+      targetPrecondition: captureFindingMutationPrecondition(previousLedger, 'F-0001')!,
+    }, ISSUE_RAW];
     const mechanical = classifyRawFindingsMechanically({ previousLedger, rawFindings: cleanWire });
-    expect(mechanical.output.resolvedFindings.map((resolved) => resolved.findingId)).toEqual(['F-0001']);
-    expect(mechanical.residualRawFindings.map((raw) => raw.rawFindingId)).toEqual(['raw-issue']);
+    expect(mechanical.output.resolvedFindings).toEqual([]);
+    expect(mechanical.residualRawFindings.map((raw) => raw.rawFindingId)).toEqual([
+      'raw-confirm',
+      'raw-issue',
+    ]);
 
     // 未知の違反経路の再現: マージ済み出力への最終検証だけを落とす
     validateMock.mockReturnValueOnce({ ok: false, errors: ['synthetic invariant violation'] });
@@ -223,7 +244,21 @@ describe('assembleCleanManagerDecision の mechanical フォールバック', ()
       admission: makeAdmission(cleanWire),
       mechanical,
       decisions: makeDecisions({
-        rawDecisions: [{ rawFindingId: 'raw-issue', decision: 'new', evidence: '' }],
+        rawDecisions: [
+          {
+            rawFindingId: 'raw-confirm',
+            decision: 'resolved',
+            findingId: 'F-0001',
+            evidence: 'The original failure mode is fixed.',
+            anchorRelevance: 'not_applicable',
+          },
+          {
+            rawFindingId: 'raw-issue',
+            decision: 'new',
+            evidence: '',
+            anchorRelevance: 'not_applicable',
+          },
+        ],
       }),
       initialInvalidAttempts: [],
       invalidLocationCandidateFindingIds: new Set(),
@@ -231,16 +266,24 @@ describe('assembleCleanManagerDecision の mechanical フォールバック', ()
       priorStepResponseText: undefined,
     });
 
-    // mechanical 確定分（resolution confirmation）は失われない
+    // semantic manager 出力は破棄され、空の mechanical 確定分だけが残る
     expect(result.managerOutput).toEqual(mechanical.output);
-    // LLM 判断の残余 raw は discarded kind の provisional として保持
+    // LLM 判断の残余 raw はすべて discarded kind の provisional として保持
     expect(result.cleanProvisionalSpecs).toHaveLength(1);
-    expect(result.cleanProvisionalSpecs[0]).toMatchObject({
+    expect(result.cleanProvisionalSpecs).toEqual([expect.objectContaining({
       kind: 'manager-output-discarded',
       sourceRawFindingIds: ['raw-issue'],
-    });
-    // 破棄された LLM 出力の unsupported を採用済み判断として残さない
-    expect(result.unsupportedRawFindingReports).toEqual([]);
+    })]);
+    expect(result.unsupportedRawFindingReports).toEqual([expect.objectContaining({
+      rawFindingId: 'raw-confirm',
+      targetFindingId: 'F-0001',
+    })]);
+    // lifecycle raw は product finding にせず audit-only で保持する
+    expect(result.unsupportedRawFindingReports).toEqual([{
+      rawFindingId: 'raw-confirm',
+      targetFindingId: 'F-0001',
+      evidence: 'Manager output violated ledger invariants and was discarded',
+    }]);
     // invalid attempt は監査記録として残る
     expect(result.invalidAttempts).toHaveLength(1);
     expect(result.invalidAttempts[0]!.validationErrors).toEqual(['synthetic invariant violation']);
@@ -263,5 +306,45 @@ describe('assembleCleanManagerDecision の mechanical フォールバック', ()
       dismissCandidateFindingIds: new Set(),
       priorStepResponseText: undefined,
     })).toThrow(/engine bug/);
+  });
+
+  it('mechanical persists と semantic confirmation が同時なら対象を open のまま維持する', () => {
+    const previousLedger = makeLedger([makeFinding({ revision: 1 })]);
+    const targetPrecondition = captureFindingMutationPrecondition(previousLedger, 'F-0001')!;
+    const cleanWire = [
+      { ...PERSISTS_RAW, targetPrecondition },
+      { ...CONFIRMATION_RAW, targetPrecondition },
+    ];
+    const mechanical = classifyRawFindingsMechanically({ previousLedger, rawFindings: cleanWire });
+    expect(mechanical.residualRawFindings.map((raw) => raw.rawFindingId)).toEqual(['raw-confirm']);
+    validateMock.mockReturnValue({ ok: true });
+
+    const result = assembleCleanManagerDecision({
+      previousLedger,
+      admission: makeAdmission(cleanWire),
+      mechanical,
+      decisions: makeDecisions({
+        rawDecisions: [
+          {
+            rawFindingId: 'raw-confirm',
+            decision: 'resolved',
+            findingId: 'F-0001',
+            evidence: 'The fix is present.',
+            anchorRelevance: 'not_applicable',
+          },
+        ],
+      }),
+      initialInvalidAttempts: [],
+      invalidLocationCandidateFindingIds: new Set(),
+      dismissCandidateFindingIds: new Set(),
+      priorStepResponseText: undefined,
+    });
+
+    expect(result.managerOutput.resolvedFindings).toEqual([]);
+    expect(result.managerOutput.matches).toEqual([
+      expect.objectContaining({ findingId: 'F-0001', rawFindingIds: ['raw-persists'] }),
+    ]);
+    expect(result.cleanProvisionalSpecs).toEqual([]);
+    expect(result.unsupportedRawFindingReports).toEqual([]);
   });
 });

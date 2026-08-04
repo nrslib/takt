@@ -11,6 +11,7 @@ tags:
 edit: false
 persona: cqrs-es-reviewer
 policy:
+  - contract-change
   - review
   - $param: review_policy_additions
 knowledge:

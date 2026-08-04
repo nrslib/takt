@@ -102,6 +102,10 @@ function reportStreamId(targetPath: string): string {
   return sha256(['filesystem-report', resolve(targetPath)].join('\0'));
 }
 
+export function reportPublicationStreamId(targetPath: string): string {
+  return reportStreamId(targetPath);
+}
+
 function runReportPublicationExclusive<Result>(
   reportDir: string,
   targetPath: string,

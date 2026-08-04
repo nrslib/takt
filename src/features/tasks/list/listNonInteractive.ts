@@ -97,7 +97,9 @@ export async function listTasksNonInteractive(
       tryMergeBranch(cwd, task);
       return;
     case 'sync':
-      await syncBranchWithRoot(cwd, task);
+      if (!(await syncBranchWithRoot(cwd, task))) {
+        process.exit(1);
+      }
       return;
     case 'merge':
       if (mergeBranch(cwd, task)) {

@@ -29,6 +29,7 @@ function toMockOptions(options: ProviderCallOptions): MockCallOptions {
 export class MockProvider implements Provider {
   readonly supportsStructuredOutput = true;
   readonly supportsNativeImageInput = false;
+  readonly supportsIsolatedStructuredExecution = true;
   readonly supportsStrictInternalAgentIsolation = true;
 
   getRuntimeInstructions(_allowedTools?: string[]): string | null {

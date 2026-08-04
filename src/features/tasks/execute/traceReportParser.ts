@@ -7,7 +7,6 @@ import {
 import type {
   TraceStep,
   TracePhase,
-  TraceWorkflowCall,
 } from './traceReportTypes.js';
 import { buildWorkflowStepScopeKey } from './workflowStepScope.js';
 
@@ -18,21 +17,6 @@ interface PromptRecord extends PromptLogRecord {
 interface BuildTraceResult {
   traceStartedAt: string;
   steps: TraceStep[];
-  workflowCalls: TraceWorkflowCall[];
-}
-
-function workflowCallKey(record: {
-  step: string;
-  childWorkflow: string;
-  callInstance: number;
-  stack: NdjsonWorkflowStackEntry[];
-}): string {
-  return JSON.stringify([
-    record.step,
-    record.childWorkflow,
-    record.callInstance,
-    record.stack,
-  ]);
 }
 
 export function parseJsonl<T>(path: string): T[] {
@@ -54,14 +38,24 @@ function stepKey(step: string, iteration: number, stack: NdjsonWorkflowStackEntr
   return `${stepScopeKey(step, stack)}:${iteration}`;
 }
 
+function phaseExecutionKey(
+  phaseExecutionId: string,
+  step: string,
+  stack: NdjsonWorkflowStackEntry[] | undefined,
+): string {
+  return JSON.stringify([
+    stepScopeKey(step, stack),
+    phaseExecutionId,
+  ]);
+}
+
 function createPhaseExecutionId(
   step: string,
   iteration: number,
   phase: 1 | 2 | 3,
-  stack: NdjsonWorkflowStackEntry[] | undefined,
   counters: Map<string, number>,
 ): string {
-  const key = JSON.stringify([stepScopeKey(step, stack), iteration, phase]);
+  const key = `${step}:${iteration}:${phase}`;
   const current = counters.get(key) ?? 0;
   const next = current + 1;
   counters.set(key, next);
@@ -70,7 +64,6 @@ function createPhaseExecutionId(
     iteration,
     phase,
     sequence: next,
-    workflowStack: stack,
   });
 }
 
@@ -118,56 +111,25 @@ export function buildTraceFromRecords(
 ): BuildTraceResult {
   const promptByExecutionId = new Map<string, PromptRecord>();
   for (const prompt of promptRecords) {
-    if (prompt.phaseExecutionId) {
-      promptByExecutionId.set(prompt.phaseExecutionId, prompt);
+    const key = JSON.stringify([prompt.scope, prompt.phaseExecutionId]);
+    if (promptByExecutionId.has(key)) {
+      throw new Error(
+        `Duplicate prompt execution: ${prompt.scope}:${prompt.phaseExecutionId}`,
+      );
     }
+    promptByExecutionId.set(key, prompt);
   }
 
   const stepsByKey = new Map<string, TraceStep>();
-  const phasesByExecutionId = new Map<string, { step: TraceStep; index: number }>();
+  const phasesByExecutionKey = new Map<string, { step: TraceStep; index: number }>();
   const phaseExecutionCounters = new Map<string, number>();
   const latestIterationByStepScope = new Map<string, number>();
-  const workflowCallsByKey = new Map<string, TraceWorkflowCall>();
 
   let traceStartedAt = '';
 
   for (const record of records) {
     if (!traceStartedAt && record.type === 'workflow_start') {
       traceStartedAt = record.startTime;
-      continue;
-    }
-
-    if (record.type === 'workflow_call_start') {
-      workflowCallsByKey.set(workflowCallKey(record), {
-        parentWorkflow: record.workflow,
-        step: record.step,
-        childWorkflow: record.childWorkflow,
-        callInstance: record.callInstance,
-        stack: record.stack,
-        startedAt: record.timestamp,
-      });
-      continue;
-    }
-
-    if (record.type === 'workflow_call_complete') {
-      const key = workflowCallKey(record);
-      const started = workflowCallsByKey.get(key);
-      workflowCallsByKey.set(key, {
-        parentWorkflow: record.workflow,
-        step: record.step,
-        childWorkflow: record.childWorkflow,
-        callInstance: record.callInstance,
-        stack: record.stack,
-        startedAt: started?.startedAt ?? record.timestamp,
-        completedAt: record.timestamp,
-        result: {
-          status: record.status,
-          ...(record.returnValue !== undefined ? { returnValue: record.returnValue } : {}),
-          ...(record.abortKind !== undefined ? { abortKind: record.abortKind } : {}),
-          ...(record.abortReason !== undefined ? { abortReason: record.abortReason } : {}),
-          ...(record.reason !== undefined ? { reason: record.reason } : {}),
-        },
-      });
       continue;
     }
 
@@ -233,8 +195,11 @@ export function buildTraceFromRecords(
       );
       const resolvedExecutionId =
         record.phaseExecutionId
-        ?? createPhaseExecutionId(record.step, iteration, record.phase, record.stack, phaseExecutionCounters);
-      const prompt = promptByExecutionId.get(resolvedExecutionId);
+        ?? createPhaseExecutionId(record.step, iteration, record.phase, phaseExecutionCounters);
+      const prompt = promptByExecutionId.get(JSON.stringify([
+        stepScopeKey(record.step, record.stack),
+        resolvedExecutionId,
+      ]));
       const phase: TracePhase = {
         phaseExecutionId: resolvedExecutionId,
         phase: record.phase,
@@ -245,10 +210,13 @@ export function buildTraceFromRecords(
         startedAt: record.timestamp,
       };
       traceStep.phases.push(phase);
-      phasesByExecutionId.set(resolvedExecutionId, {
-        step: traceStep,
-        index: traceStep.phases.length - 1,
-      });
+      phasesByExecutionKey.set(
+        phaseExecutionKey(resolvedExecutionId, record.step, record.stack),
+        {
+          step: traceStep,
+          index: traceStep.phases.length - 1,
+        },
+      );
       continue;
     }
 
@@ -265,8 +233,10 @@ export function buildTraceFromRecords(
       }
       const resolvedExecutionId =
         record.phaseExecutionId
-        ?? createPhaseExecutionId(record.step, iteration, record.phase, record.stack, phaseExecutionCounters);
-      const phaseRef = phasesByExecutionId.get(resolvedExecutionId);
+        ?? createPhaseExecutionId(record.step, iteration, record.phase, phaseExecutionCounters);
+      const phaseRef = phasesByExecutionKey.get(
+        phaseExecutionKey(resolvedExecutionId, record.step, record.stack),
+      );
       if (!phaseRef) {
         throw new Error(`Missing phase_start before phase_complete: ${resolvedExecutionId}`);
       }
@@ -274,7 +244,10 @@ export function buildTraceFromRecords(
       if (!existing) {
         throw new Error(`Missing phase state for completion: ${resolvedExecutionId}`);
       }
-      const prompt = promptByExecutionId.get(resolvedExecutionId);
+      const prompt = promptByExecutionId.get(JSON.stringify([
+        stepScopeKey(record.step, record.stack),
+        resolvedExecutionId,
+      ]));
       phaseRef.step.phases[phaseRef.index] = {
         ...existing,
         instruction: existing.instruction || prompt?.userInstruction || '',
@@ -290,7 +263,13 @@ export function buildTraceFromRecords(
 
     if (record.type === 'phase_judge_stage') {
       const phaseRef = record.phaseExecutionId
-        ? phasesByExecutionId.get(record.phaseExecutionId)
+        ? phasesByExecutionKey.get(
+            phaseExecutionKey(
+              record.phaseExecutionId,
+              record.step,
+              record.stack,
+            ),
+          )
         : undefined;
       if (!phaseRef) {
         continue;
@@ -326,9 +305,6 @@ export function buildTraceFromRecords(
   return {
     traceStartedAt: traceStartedAt || defaultEndTime,
     steps,
-    workflowCalls: [...workflowCallsByKey.values()].sort((a, b) => (
-      a.startedAt.localeCompare(b.startedAt)
-    )),
   };
 }
 

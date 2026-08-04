@@ -191,7 +191,7 @@ describe.skipIf(!shouldRun)('IT: opencode list tool shim against the real binary
     rmSync(workDir, { recursive: true, force: true });
   });
 
-  it('registers list only in environments consistent with the version allowlist', async () => {
+  it('registers list without colliding with an allowlisted upstream registry', async () => {
     // シム登録済みサーバの registry には 'list' が現れる。
     const shimmedIds = await opencodeHandle.client.tool.ids({ directory: workDir });
     const shimmedRegistry = shimmedIds.data as string[];
@@ -205,10 +205,12 @@ describe.skipIf(!shouldRun)('IT: opencode list tool shim against the real binary
     const shimlessRegistry = shimlessIds.data as string[];
     expect(shimlessRegistry).not.toContain('list');
 
-    // allowlist の判定は、シム無しの実 registry（= upstream の実態）と一致する。
-    // 将来 upstream が 'list' を復活させたら shimlessRegistry に 'list' が現れ、
-    // registryAllowsListToolShim が false になってこの整合が破れ、検出できる。
-    expect(versionAllowsListToolShim(opencodeVersion!)).toBe(registryAllowsListToolShim(shimlessRegistry));
+    // 静的 allowlist は未知バージョンを実 registry の内容にかかわらず
+    // fail-closed にするため、実 registry との同値関係ではない。許可済み版に
+    // upstream の 'list' が存在しない、という soundness のみを要求する。
+    const versionAllowsShim = versionAllowsListToolShim(opencodeVersion!);
+    const registryAllowsShim = registryAllowsListToolShim(shimlessRegistry);
+    expect(versionAllowsShim && !registryAllowsShim).toBe(false);
   }, 60_000);
 
   it('exposes list to the model when read is enabled and executes it end to end', async () => {

@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { WorkflowStep } from '../core/models/types.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
-import { buildPhaseExecutionId } from '../shared/utils/phaseExecutionId.js';
 
 const { mockRunWithPhaseSpan, phaseOutcomes } = vi.hoisted(() => ({
   mockRunWithPhaseSpan: vi.fn(),
@@ -15,14 +14,6 @@ vi.mock('../core/workflow/observability/workflowSpans.js', async (importOriginal
 
 import { runStatusJudgmentPhase } from '../core/workflow/status-judgment-phase.js';
 import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDetectionExhaustedError.js';
-
-const executionScope = { kind: 'workflow_execution_scope', stack: [] } as const;
-const reviewPhaseExecutionId = buildPhaseExecutionId({
-  step: 'review',
-  iteration: 4,
-  phase: 3,
-  sequence: 1,
-});
 
 describe('runStatusJudgmentPhase', () => {
   beforeEach(() => {
@@ -49,7 +40,6 @@ describe('runStatusJudgmentPhase', () => {
     await expect(runStatusJudgmentPhase(step, {
       cwd: '/tmp/project',
       reportDir: '/tmp/project/.takt/reports',
-      executionScope,
       lastResponse: 'response body',
       iteration: 1,
       resolveStepProviderModel,
@@ -104,7 +94,6 @@ describe('runStatusJudgmentPhase', () => {
     const result = await runStatusJudgmentPhase(step, {
       cwd: '/tmp/project',
       reportDir: '/tmp/project/.takt/reports',
-      executionScope,
       lastResponse: 'response body',
       iteration: 4,
       resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'cursor', model: undefined }),
@@ -127,22 +116,18 @@ describe('runStatusJudgmentPhase', () => {
         systemPrompt: 'conductor-system',
         userInstruction: 'structured prompt',
       },
-      reviewPhaseExecutionId,
+      'review:4:3:1',
       4,
-      executionScope,
     );
     expect(onJudgeStage).toHaveBeenCalledWith(
       step,
       3,
       'judge',
       expect.objectContaining({ stage: 1, method: 'structured_output' }),
-      reviewPhaseExecutionId,
+      'review:4:3:1',
       4,
-      executionScope,
     );
-    expect(onPhaseComplete).toHaveBeenCalledWith(
-      step, 3, 'judge', 'approved', 'done', undefined, reviewPhaseExecutionId, 4, executionScope,
-    );
+    expect(onPhaseComplete).toHaveBeenCalledWith(step, 3, 'judge', 'approved', 'done', undefined, 'review:4:3:1', 4);
   });
 
   it('should pass abortSignal to the Phase 3 structured caller', async () => {
@@ -171,7 +156,6 @@ describe('runStatusJudgmentPhase', () => {
     await runStatusJudgmentPhase(step, {
       cwd: '/tmp/project',
       reportDir: '/tmp/project/.takt/reports',
-      executionScope,
       lastResponse: 'response body',
       iteration: 4,
       abortSignal: abortController.signal,
@@ -212,7 +196,6 @@ describe('runStatusJudgmentPhase', () => {
     const run = (interactive: boolean) => runStatusJudgmentPhase(step, {
       cwd: '/tmp/project',
       reportDir: '/tmp/project/.takt/reports',
-      executionScope,
       lastResponse: 'response body',
       iteration: 4,
       interactive,
@@ -259,7 +242,6 @@ describe('runStatusJudgmentPhase', () => {
     await expect(runStatusJudgmentPhase(step, {
       cwd: '/tmp/project',
       reportDir: '/tmp/project/.takt/reports',
-      executionScope,
       lastResponse: 'response body',
       resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'cursor', model: undefined }),
       structuredCaller,
@@ -290,7 +272,6 @@ describe('runStatusJudgmentPhase', () => {
     await expect(runStatusJudgmentPhase(step, {
       cwd: '/tmp/project',
       reportDir: '/tmp/project/.takt/reports',
-      executionScope,
       lastResponse: 'response body',
       iteration: 4,
       resolveStepProviderModel,
@@ -307,9 +288,8 @@ describe('runStatusJudgmentPhase', () => {
       '',
       'error',
       'provider resolution failed',
-      reviewPhaseExecutionId,
+      'review:4:3:1',
       4,
-      executionScope,
     );
   });
 
@@ -339,7 +319,6 @@ describe('runStatusJudgmentPhase', () => {
     await expect(runStatusJudgmentPhase(step, {
       cwd: '/tmp/project',
       reportDir: '/tmp/project/.takt/reports',
-      executionScope,
       lastResponse: 'response body',
       iteration: 4,
       observabilityEnabled: true,
@@ -356,9 +335,8 @@ describe('runStatusJudgmentPhase', () => {
       '',
       'error',
       'Status not found for step "review": no rule matched after all detection phases',
-      reviewPhaseExecutionId,
+      'review:4:3:1',
       4,
-      executionScope,
     );
   });
 
@@ -382,7 +360,6 @@ describe('runStatusJudgmentPhase', () => {
     await expect(runStatusJudgmentPhase(step, {
       cwd: '/tmp/project',
       reportDir: '/tmp/project/.takt/reports',
-      executionScope,
       lastResponse: 'response body',
       iteration: 4,
       observabilityEnabled: true,
@@ -399,9 +376,8 @@ describe('runStatusJudgmentPhase', () => {
       '',
       'error',
       'Missing prompt parts for phase start: review:3',
-      reviewPhaseExecutionId,
+      'review:4:3:1',
       4,
-      executionScope,
     );
   });
 });

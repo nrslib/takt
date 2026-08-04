@@ -8,7 +8,9 @@ parallel:
     provider_options:
       extends: review-readonly
     persona: architecture-reviewer
-    policy: review
+    policy:
+      - contract-change
+      - review
     knowledge: architecture
     instruction: review-arch
     output_contracts:
@@ -22,7 +24,10 @@ parallel:
     provider_options:
       extends: review-readonly
     persona: ai-antipattern-reviewer
-    policy: [review, ai-antipattern]
+    policy:
+      - contract-change
+      - review
+      - ai-antipattern
     instruction: ai-antipattern-review
     output_contracts:
       report:
@@ -35,7 +40,10 @@ parallel:
     provider_options:
       extends: review-readonly
     persona: coding-reviewer
-    policy: [review, coding]
+    policy:
+      - contract-change
+      - review
+      - coding
     instruction: review-coding
     output_contracts:
       report:
@@ -48,7 +56,9 @@ parallel:
     provider_options:
       extends: review-readonly
     persona: implementation-semantics-reviewer
-    policy: review
+    policy:
+      - contract-change
+      - review
     knowledge: implementation-semantics
     instruction: review-implementation-semantics
     output_contracts:
@@ -62,7 +72,9 @@ parallel:
     provider_options:
       extends: review-readonly
     persona: contract-lifecycle-reviewer
-    policy: review
+    policy:
+      - contract-change
+      - review
     knowledge: contract-lifecycle
     instruction: contract-lifecycle-review
     output_contracts:
@@ -76,7 +88,9 @@ parallel:
     provider_options:
       extends: review-readonly
     persona: robustness-reviewer
-    policy: review
+    policy:
+      - contract-change
+      - review
     knowledge: robustness
     instruction: robustness-review
     output_contracts:

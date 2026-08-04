@@ -12,4 +12,12 @@ export class Cache {
   get(key) {
     return this.#entries.get(key);
   }
+
+  has(key) {
+    return this.#entries.has(key);
+  }
+
+  delete(key) {
+    return this.#entries.delete(key);
+  }
 }

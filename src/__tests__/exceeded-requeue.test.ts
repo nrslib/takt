@@ -10,7 +10,11 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { parse as parseYaml } from 'yaml';
 import type { WorkflowConfig } from '../core/models/index.js';
 
 // --- Mock setup (must be before imports that use these modules) ---
@@ -36,12 +40,20 @@ vi.mock('../core/workflow/phase-runner.js', () => ({
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   generateReportDir: vi.fn().mockReturnValue('test-report-dir'),
+  notifySuccess: vi.fn(),
+  notifyError: vi.fn(),
+  sendSlackNotification: vi.fn(),
+  getSlackWebhookUrl: vi.fn(() => undefined),
 }));
 
 // --- Imports (after mocks) ---
 
 import { WorkflowEngine } from '../core/workflow/index.js';
 import { runAgent } from '../agents/runner.js';
+import { setMockScenario, resetScenario } from '../infra/mock/index.js';
+import { runAllTasks } from '../features/tasks/index.js';
+import { TaskRunner } from '../infra/task/index.js';
+import { invalidateGlobalConfigCache } from '../infra/config/index.js';
 import {
   makeResponse,
   makeStep,
@@ -158,7 +170,7 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
     expect(onIterationLimit).toHaveBeenCalledOnce();
   });
 
-  it('should persist an extended max_steps before later provider preflight fails', async () => {
+  it('should apply an extended task limit before executing the resumed step', async () => {
     const config: WorkflowConfig = {
       name: 'test',
       maxSteps: 1,
@@ -173,25 +185,19 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
       projectCwd: tmpDir,
       startStep: 'implement',
       initialIteration: 1,
-      resumePoint: {
-        version: 2,
-        stack: [{ workflow: 'test', step: 'implement', kind: 'agent' }],
-        iteration: 1,
-        elapsed_ms: 100,
-        max_steps: 1,
-        workflow_call_invocations: {},
-        workflow_step_participations: {},
-      },
       onIterationLimit,
     });
 
-    await expect(engine.run()).rejects.toThrow('Step "implement" has no resolved provider');
+    const state = await engine.run();
 
-    expect(engine.getResumePoint()?.max_steps).toBe(2);
-    expect(engine.getState().iteration).toBe(1);
+    expect(onIterationLimit).toHaveBeenCalledWith(expect.objectContaining({
+      maxSteps: 1,
+      currentIteration: 1,
+    }));
+    expect(state.iteration).toBe(2);
   });
 
-  it('should prefer maxStepsOverride over an older resume max_steps', async () => {
+  it('should prefer the task maxStepsOverride when resuming', async () => {
     const config: WorkflowConfig = {
       name: 'test',
       maxSteps: 1,
@@ -207,22 +213,13 @@ describe('WorkflowEngine: onIterationLimit - exceeded behavior', () => {
       startStep: 'implement',
       initialIteration: 1,
       maxStepsOverride: 3,
-      resumePoint: {
-        version: 2,
-        stack: [{ workflow: 'test', step: 'implement', kind: 'agent' }],
-        iteration: 1,
-        elapsed_ms: 100,
-        max_steps: 1,
-        workflow_call_invocations: {},
-        workflow_step_participations: {},
-      },
       onIterationLimit,
     });
 
-    await expect(engine.run()).rejects.toThrow('Step "implement" has no resolved provider');
+    const state = await engine.run();
 
     expect(onIterationLimit).not.toHaveBeenCalled();
-    expect(engine.getResumePoint()?.max_steps).toBe(3);
+    expect(state.iteration).toBe(2);
   });
 
   it('should continue without calling onIterationLimit when iteration limit is ignored', async () => {

@@ -4,6 +4,7 @@ tags:
 edit: false
 persona: ai-antipattern-reviewer
 policy:
+  - contract-change
   - review
   - ai-antipattern
 provider_options:

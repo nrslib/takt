@@ -135,6 +135,7 @@ export async function executeTaskWorkflow(
     restartPoint,
     resumeSource,
     reportDirName,
+    taskSpec,
     abortSignal,
     taskPrefix,
     taskColorIndex,
@@ -145,7 +146,11 @@ export async function executeTaskWorkflow(
     prContext,
   } = options;
   const traceTaskMetadata = resolveTraceTaskMetadata(options);
-  const workflowConfig = loadWorkflowByIdentifier(workflowIdentifier, projectCwd, { lookupCwd: cwd });
+  const workflowConfig = loadWorkflowByIdentifier(
+    workflowIdentifier,
+    projectCwd,
+    { lookupCwd: cwd },
+  );
   const safeWorkflowIdentifier = sanitizeTerminalText(workflowIdentifier);
 
   if (!workflowConfig) {
@@ -203,6 +208,7 @@ export async function executeTaskWorkflow(
     restartPoint,
     resumeSource,
     reportDirName,
+    taskSpec,
     abortSignal,
     taskPrefix,
     taskColorIndex,

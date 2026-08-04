@@ -1,0 +1,150 @@
+{
+  "baseInvocation": {
+    "caseId": "broad-target-review-reports",
+    "candidateReport": 1
+  },
+  "orderInvocation": {
+    "caseId": "pr-attachments-six-reviews",
+    "candidateReport": 2
+  },
+  "malformedOutputs": [
+    {
+      "id": "null-item",
+      "output": {
+        "rawFindings": [
+          null
+        ]
+      }
+    },
+    {
+      "id": "missing-candidate",
+      "output": {
+        "rawFindings": [
+          {
+            "rawExcerpt": "malformed output"
+          }
+        ]
+      }
+    },
+    {
+      "id": "missing-target",
+      "output": {
+        "rawFindings": [
+          {
+            "rawExcerpt": "malformed output",
+            "candidate": {
+              "rawFindingId": null,
+              "relation": null,
+              "targetFindingId": null,
+              "familyTag": null,
+              "severity": null,
+              "title": null,
+              "description": null,
+              "suggestion": null,
+              "evidenceRequests": []
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "missing-structure-scope",
+      "output": {
+        "rawFindings": [
+          {
+            "rawExcerpt": "malformed output",
+            "candidate": {
+              "rawFindingId": null,
+              "relation": null,
+              "targetFindingId": null,
+              "familyTag": null,
+              "severity": null,
+              "title": null,
+              "description": null,
+              "suggestion": null,
+              "target": {
+                "kind": "structure",
+                "manifestTargets": [
+                  "src/example.ts"
+                ]
+              },
+              "evidenceRequests": []
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "missing-code-paths",
+      "output": {
+        "rawFindings": [
+          {
+            "rawExcerpt": "malformed output",
+            "candidate": {
+              "rawFindingId": null,
+              "relation": null,
+              "targetFindingId": null,
+              "familyTag": null,
+              "severity": null,
+              "title": null,
+              "description": null,
+              "suggestion": null,
+              "target": {
+                "kind": "code"
+              },
+              "evidenceRequests": []
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "missing-evidence-requests",
+      "output": {
+        "rawFindings": [
+          {
+            "rawExcerpt": "malformed output",
+            "candidate": {
+              "rawFindingId": null,
+              "relation": null,
+              "targetFindingId": null,
+              "familyTag": null,
+              "severity": null,
+              "title": null,
+              "description": null,
+              "suggestion": null,
+              "target": null
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "wrong-types",
+      "output": {
+        "rawFindings": [
+          {
+            "rawExcerpt": 42,
+            "candidate": {
+              "rawFindingId": [],
+              "relation": {},
+              "targetFindingId": 7,
+              "familyTag": false,
+              "severity": "urgent",
+              "title": 1,
+              "description": [],
+              "suggestion": {},
+              "target": {
+                "kind": "code",
+                "paths": "src/example.ts"
+              },
+              "evidenceRequests": {
+                "kind": "file_quote"
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

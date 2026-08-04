@@ -9,6 +9,7 @@ tags:
 edit: true
 persona: coder
 policy:
+  - contract-change
   - coding
   - testing
 knowledge:

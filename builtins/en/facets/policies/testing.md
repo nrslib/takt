@@ -108,6 +108,17 @@ test('should return NotFound error when user does not exist', async () => {
 | UI element identification | Identify targets by user-observable contracts such as role plus exact accessible name | Broad partial matches, first match, or display position used to identify the target |
 | Collision cases | Verify targets remain distinguishable even with valid data sharing the same display string | Deliberately making all fixture display values unique, hiding the possibility of collisions |
 
+## Assertion Contracts
+
+Map every assertion to an invariant explicitly stated by the source of truth, an invariant indispensably and directly derived from that source with its origin and rationale recorded, or an observable existing contract outside the requested change scope. Do not add an assertion without such a mapping.
+
+| Criteria | Verdict |
+|----------|---------|
+| The source specifies value equivalence, but the test also fixes reference identity or copying behavior | REJECT |
+| The source specifies rejection, but the test also fixes an error type or wording that the source does not define | REJECT |
+| Defensive implementation is used to invent an input class, behavior, error kind, wording, or internal representation as a new test contract | REJECT |
+| Every assertion traces to an explicit or indispensable invariant or a preserved observable contract | OK |
+
 ## Testing Side Effects and State Transitions
 
 Changes involving side effects or state transitions are not sufficiently verified by successful-path coverage alone.

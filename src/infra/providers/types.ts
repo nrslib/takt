@@ -13,8 +13,11 @@ export interface ProviderImageAttachment {
   path: string;
 }
 
+export type ProviderExecutionProfile = 'isolated-structured';
+
 export interface ProviderCallOptions {
   cwd: string;
+  executionProfile?: ProviderExecutionProfile;
   abortSignal?: AbortSignal;
   sessionId?: string;
   internalAgentIsolation?: InternalAgentIsolation;
@@ -55,6 +58,7 @@ export interface ProviderAgent {
 export interface Provider {
   supportsStructuredOutput: boolean;
   supportsNativeImageInput: boolean;
+  supportsIsolatedStructuredExecution?: boolean;
   supportsStrictInternalAgentIsolation: boolean;
   getRuntimeInstructions(allowedTools?: string[], permissionMode?: import('../../core/models/index.js').PermissionMode, networkAccess?: boolean): string | null;
   keepsAllowedToolWithoutEdit(tool: string): boolean;

@@ -10,11 +10,11 @@ instructions:
   findings-manager: |
     Reconcile reviewer raw findings into the finding ledger.
 report_formats:
+  review-finding-contract: |
+    Return a concise review report.
   findings-manager: |
     Return the finding manager JSON contract.
 finding_contract:
-  ledger_path: .takt/findings/peer-review.json
-  raw_findings_path: .takt/findings/raw
   manager:
     persona: findings-manager.md
     instruction: findings-manager
@@ -27,16 +27,24 @@ steps:
   - name: review
     parallel:
       - name: architecture-review
-        persona: review-agent.md
+        persona: ./agents/architecture-review.md
         instruction: |
           Review the task and return no findings.
+        output_contracts:
+          report:
+            - name: architecture-review.md
+              format: review-finding-contract
         rules:
           - condition: approved
           - condition: needs_fix
       - name: security-review
-        persona: review-agent.md
+        persona: ./agents/security-review.md
         instruction: |
           Review the task and return no findings.
+        output_contracts:
+          report:
+            - name: security-review.md
+              format: review-finding-contract
         rules:
           - condition: approved
           - condition: needs_fix

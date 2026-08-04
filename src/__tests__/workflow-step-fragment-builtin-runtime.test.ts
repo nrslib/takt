@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
@@ -14,7 +14,8 @@ vi.mock('../core/workflow/evaluation/index.js', async (importOriginal) => {
   return { ...actual, RuleEvaluator: MockRuleEvaluator };
 });
 
-vi.mock('../core/workflow/phase-runner.js', () => ({
+vi.mock('../core/workflow/phase-runner.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
   runStatusJudgmentPhase: vi.fn().mockResolvedValue({ label: '', method: 'auto_select' }),
 }));
@@ -25,7 +26,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 }));
 
 import { runAgent } from '../agents/runner.js';
-import { WorkflowEngine } from '../core/workflow/index.js';
+import { WorkflowEngine } from './helpers/workflow-engine.js';
 import { resolveWorkflowCallTarget } from '../infra/config/index.js';
 import { runReportPhase } from '../core/workflow/phase-runner.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
@@ -39,8 +40,12 @@ import {
 import { initializeGitFixture } from './helpers/git-fixture.js';
 import { invalidateAllResolvedConfigCache, invalidateGlobalConfigCache } from '../infra/config/index.js';
 import {
+  getBuiltinLanguageStepsDir,
   getBuiltinWorkflowsDir,
 } from '../infra/config/paths.js';
+import { buildStepFragmentLookupDirs } from '../infra/config/loaders/stepFragmentLookupDirectories.js';
+import { resolveWorkflowStepFragments } from '../infra/config/loaders/workflowStepFragmentResolver.js';
+import { CycleDetector } from '../core/workflow/engine/cycle-detector.js';
 
 interface BuiltinFragmentCase {
   fragment: 'fix' | 'gather';
@@ -100,6 +105,56 @@ function findRuleIndex(rules: readonly RawRule[], field: 'next' | 'return', valu
     throw new Error(`Expected builtin rule ${field}: ${value}`);
   }
   return index;
+}
+
+function schemaHasProperty(schema: unknown, property: string): boolean {
+  if (typeof schema !== 'object' || schema === null || Array.isArray(schema)) {
+    return false;
+  }
+  const properties = Reflect.get(schema, 'properties');
+  return typeof properties === 'object'
+    && properties !== null
+    && !Array.isArray(properties)
+    && property in properties;
+}
+
+function mockFindingContractAgents(
+  contentByPersona: Readonly<Record<string, string>> = {},
+): void {
+  vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+    options?.onPromptResolved?.({
+      systemPrompt: 'test system prompt',
+      userInstruction: instruction,
+    });
+    const content = contentByPersona[persona ?? ''] ?? 'approved';
+    if (schemaHasProperty(options?.outputSchema, 'rawFindings')) {
+      return makeResponse({
+        persona,
+        content,
+        structuredOutput: {
+          ...(schemaHasProperty(options?.outputSchema, 'reportContent')
+            ? { reportContent: content }
+            : {}),
+          rawFindings: [],
+        },
+      });
+    }
+    if (schemaHasProperty(options?.outputSchema, 'rawDecisions')) {
+      return makeResponse({
+        persona,
+        content: 'manager complete',
+        structuredOutput: {
+          rawDecisions: [],
+          disputeDecisions: [],
+          conflictDecisions: [],
+          invalidateDecisions: [],
+          duplicateDecisions: [],
+          dismissDecisions: [],
+        },
+      });
+    }
+    return makeResponse({ persona, content });
+  });
 }
 
 function fragmentRuleIndex(language: 'en' | 'ja', fragment: 'fix' | 'gather', nextStep: string): number {
@@ -213,8 +268,6 @@ function writeBuiltinReturnWorkflow(projectDir: string): string {
     'workflow_config:',
     '  provider: mock',
     'finding_contract:',
-    '  ledger_path: .takt/findings/ledger.json',
-    '  raw_findings_path: .takt/findings/raw',
     '  manager:',
     '    persona: findings-manager',
     '    instruction: findings-manager',
@@ -255,8 +308,6 @@ function writeBuiltinReviewersWorkflow(projectDir: string, language: 'en' | 'ja'
     'workflow_config:',
     '  provider: mock',
     'finding_contract:',
-    '  ledger_path: .takt/findings/ledger.json',
-    '  raw_findings_path: .takt/findings/raw',
     '  manager:',
     '    persona: findings-manager',
     '    instruction: findings-manager',
@@ -419,6 +470,8 @@ describe('builtin step fragment runtime contracts', () => {
     const workflow = loadWorkflowFromFile(writeBuiltinReviewersWorkflow(projectDir, language), projectDir);
     const engine = new WorkflowEngine(workflow, projectDir, 'test task', { projectCwd: projectDir });
     engines.push(engine);
+    const abortReasons: string[] = [];
+    engine.on('workflow:abort', (_state, reason) => abortReasons.push(reason));
     const reviewerPersonas = [
       'architecture-reviewer',
       'ai-antipattern-reviewer',
@@ -427,22 +480,19 @@ describe('builtin step fragment runtime contracts', () => {
       'contract-lifecycle-reviewer',
       'robustness-reviewer',
     ];
-    mockRunAgentSequence([
-      ...reviewerPersonas.map((persona) => makeResponse({ persona, content: 'approved', structuredOutput: { rawFindings: [] } })),
-      makeResponse({ persona: 'final-gate', content: 'done' }),
-    ]);
+    mockFindingContractAgents({ 'final-gate': 'done' });
     mockRuleEvaluationSequence([
       ...reviewerPersonas.map(() => ({ index: 0, method: 'phase3_tag' as const })),
-      { index: 5, method: 'aggregate' },
+      { index: 6, method: 'aggregate' },
       { index: 0, method: 'phase3_tag' },
     ]);
 
     const state = await engine.run();
 
-    expect(state.status).toBe('completed');
+    expect(state.status, abortReasons.join('\n')).toBe('completed');
     expect(vi.mocked(runAgent).mock.calls.slice(0, reviewerPersonas.length).map(([persona]) => persona).sort())
       .toEqual([...reviewerPersonas].sort());
-  });
+  }, 60_000);
 
   it('resolves and executes a relative workflow_call declared by a step fragment', async () => {
     const parentPath = join(projectDir, '.takt', 'workflows', 'parent.yaml');
@@ -473,6 +523,7 @@ describe('builtin step fragment runtime contracts', () => {
       'subworkflow:',
       '  callable: true',
       'initial_step: review',
+      'max_steps: 1',
       'steps:',
       '  - name: review',
       '    persona: reviewer',
@@ -485,7 +536,6 @@ describe('builtin step fragment runtime contracts', () => {
     const workflow = loadWorkflowFromFile(parentPath, projectDir);
     const engine = new WorkflowEngine(workflow, projectDir, 'test task', {
       projectCwd: projectDir,
-      provider: 'mock',
       workflowCallResolver: ({ parentWorkflow, step, projectCwd, lookupCwd }) =>
         resolveWorkflowCallTarget(parentWorkflow, step, projectCwd, lookupCwd),
     });
@@ -520,34 +570,424 @@ describe('builtin step fragment runtime contracts', () => {
     });
     engines.push(engine);
     const transitions: string[] = [];
+    const abortReasons: string[] = [];
     engine.on('step:complete', (step) => transitions.push(step.name));
-    const responses = [
-      makeResponse({ persona: 'merge-readiness-reviewer', content: 'approved', structuredOutput: { rawFindings: [] } }),
-      makeResponse({ persona: 'supervisor', content: returnValue, structuredOutput: { rawFindings: [] } }),
-    ];
-    if (nextStep) {
-      responses.push(makeResponse({ persona: nextStep, content: 'done' }));
-    }
-    mockRunAgentSequence(responses);
-      mockRuleEvaluationSequence([
+    engine.on('workflow:abort', (_state, reason) => abortReasons.push(reason));
+    mockFindingContractAgents({
+      'merge-readiness-reviewer': 'approved',
+      supervisor: returnValue,
+      ...(nextStep ? { [nextStep]: 'done' } : {}),
+    });
+    mockRuleEvaluationSequence([
       { index: MERGE_READINESS_TO_SUPERVISE_RULE_INDEX, method: 'phase3_tag' },
       { index: superviseRuleIndex, method: 'phase3_tag' },
       ...(nextStep ? [{ index: 0, method: 'phase3_tag' as const }] : []),
     ]);
 
     const state = await engine.run();
+    const needsConflictAdjudication = returnValue === 'needs_conflict_adjudication';
 
-    expect(state.status).toBe(
-      returnValue === 'ABORT' || returnValue === 'needs_conflict_adjudication' ? 'aborted' : 'completed',
+    expect(state.status, abortReasons.join('\n')).toBe(
+      returnValue === 'ABORT' || needsConflictAdjudication ? 'aborted' : 'completed',
     );
     expect(transitions).toEqual([
       'merge-readiness-review',
       'supervise',
-      ...(returnValue === 'needs_conflict_adjudication' ? ['finding-conflict-adjudication'] : []),
+      ...(needsConflictAdjudication ? ['finding-conflict-adjudication', 'merge-readiness-review'] : []),
       ...(nextStep ? [nextStep] : []),
     ]);
-    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(
-      nextStep || returnValue === 'needs_conflict_adjudication' ? 3 : 2,
+    const conflictAdjudicationCalls = needsConflictAdjudication ? 2 : 0;
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(4 + (nextStep ? 1 : 0) + conflictAdjudicationCalls);
+  }, 60_000);
+});
+
+type RawStep = Record<string, unknown>;
+type RawWorkflow = {
+  initial_step?: unknown;
+  steps: RawStep[];
+};
+type Language = 'en' | 'ja';
+
+const LANGUAGES: Language[] = ['en', 'ja'];
+const REVIEWER_WORKFLOWS = ['takt-default-high', 'takt-default-team-high', 'review-fix-takt-default-high'];
+const GATHER_WORKFLOWS = ['review-fix-takt-default', 'review-fix-takt-default-high'];
+const FIX_WORKFLOWS = ['takt-default-high', 'review-fix-takt-default-high'];
+const DEVELOPMENT_CORE_WORKFLOWS = [
+  'default',
+  'default-high',
+  'takt-default',
+  'cli',
+  'review-fix-takt-default',
+  'backend',
+  'frontend',
+  'dual',
+  'backend-cqrs',
+  'dual-cqrs',
+  'backend-maintenance',
+  'frontend-maintenance',
+];
+const MINI_WORKFLOWS = [
+  'default-mini',
+  'backend-mini',
+  'frontend-mini',
+  'dual-mini',
+  'backend-cqrs-mini',
+  'dual-cqrs-mini',
+];
+const LIGHTWEIGHT_CORE_WORKFLOWS = ['simple-core', 'mini-core', 'simple-mini'];
+const REMEDIATION_WORKFLOWS = [
+  'review-fix-default',
+  'review-fix-backend',
+  'review-fix-frontend',
+  'review-fix-dual',
+  'review-fix-backend-cqrs',
+  'review-fix-dual-cqrs',
+];
+
+function readBuiltinWorkflow(lang: Language, name: string): RawWorkflow {
+  return parseYaml(readFileSync(join(getBuiltinWorkflowsDir(lang), name + '.yaml'), 'utf-8')) as RawWorkflow;
+}
+
+function getStep(raw: RawWorkflow, name: string): RawStep {
+  const step = raw.steps.find((candidate) => candidate.name === name);
+  if (!step) throw new Error('Builtin workflow does not define step "' + name + '"');
+  return step;
+}
+
+function expectFragmentReference(step: RawStep, name: string): string {
+  expect(step.name).toBe(name);
+  expect(typeof step.uses).toBe('string');
+  expect(step.rules).toBeDefined();
+  return step.uses as string;
+}
+
+function resolveBuiltinWorkflow(lang: Language, name: string): RawWorkflow {
+  const workflowPath = join(getBuiltinWorkflowsDir(lang), name + '.yaml');
+  return resolveWorkflowStepFragments(readBuiltinWorkflow(lang, name), {
+    candidateDirs: buildStepFragmentLookupDirs({ lang }),
+    context: { lang, projectDir: process.cwd() },
+    workflowPath,
+  }).raw as RawWorkflow;
+}
+
+function collectRulesPaths(value: unknown, path = ''): string[] {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return [];
+  const record = value as RawStep;
+  const found = Object.hasOwn(record, 'rules') ? [`${path}rules`] : [];
+  const parallel = record.parallel;
+  if (!Array.isArray(parallel)) return found;
+  return parallel.reduce<string[]>(
+    (paths, child, index) => [...paths, ...collectRulesPaths(child, `${path}parallel[${index}].`)],
+    found,
+  );
+}
+
+function containsParam(value: unknown, paramName: string): boolean {
+  if (Array.isArray(value)) return value.some((entry) => containsParam(entry, paramName));
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as RawStep;
+  return record.$param === paramName;
+}
+
+function expectLoopMonitorsTrigger(
+  monitors: readonly { cycle: string[]; threshold: number }[],
+): void {
+  expect(monitors.length).toBeGreaterThan(0);
+  for (const monitor of monitors) {
+    const detector = new CycleDetector([monitor]);
+    let result = { triggered: false };
+    for (let repetition = 0; repetition < monitor.threshold; repetition += 1) {
+      for (const [index, step] of monitor.cycle.entries()) {
+        result = detector.recordAndCheck(
+          step,
+          index === monitor.cycle.length - 1 ? monitor.cycle[0]! : monitor.cycle[index + 1]!,
+        );
+      }
+      if (repetition < monitor.threshold - 1) {
+        expect(result.triggered, monitor.cycle.join(' -> ')).toBe(false);
+      }
+    }
+    expect(result.triggered, monitor.cycle.join(' -> ')).toBe(true);
+  }
+}
+
+describe('builtin workflow step fragment migration', () => {
+  let projectDir: string;
+  let globalConfigDir: string;
+  let previousConfigDir: string | undefined;
+
+  beforeEach(() => {
+    projectDir = mkdtempSync(join(tmpdir(), 'takt-step-fragment-builtins-project-'));
+    globalConfigDir = mkdtempSync(join(tmpdir(), 'takt-step-fragment-builtins-global-'));
+    previousConfigDir = process.env.TAKT_CONFIG_DIR;
+    process.env.TAKT_CONFIG_DIR = globalConfigDir;
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+  });
+
+  afterEach(() => {
+    rmSync(projectDir, { recursive: true, force: true });
+    rmSync(globalConfigDir, { recursive: true, force: true });
+    if (previousConfigDir === undefined) delete process.env.TAKT_CONFIG_DIR;
+    else process.env.TAKT_CONFIG_DIR = previousConfigDir;
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+  });
+
+  it.each(LANGUAGES)('moves structurally identical %s remediation calls to one typed fragment', (lang) => {
+    const workflows = REMEDIATION_WORKFLOWS.map((workflow) => ({
+      expanded: resolveBuiltinWorkflow(lang, workflow),
+      raw: readBuiltinWorkflow(lang, workflow),
+    }));
+    const steps = workflows.map(({ raw }) => getStep(raw, 'remediation'));
+    const refs = steps.map((step) => expectFragmentReference(step, 'remediation'));
+
+    expect(new Set(refs).size).toBe(1);
+    expect(existsSync(join(getBuiltinLanguageStepsDir(lang), `${refs[0]}.yaml`))).toBe(true);
+    for (const [index, { expanded }] of workflows.entries()) {
+      const step = steps[index]!;
+      expect(step.with).toMatchObject({
+        plan_policy: expect.any(Array),
+        fix_policy: expect.any(Array),
+        verification_policy: expect.any(Array),
+        fix_knowledge: expect.any(Array),
+      });
+      const withValues = step.with as RawStep;
+      const expandedStep = getStep(expanded, 'remediation');
+
+      expect(expandedStep).not.toHaveProperty('uses');
+      expect(expandedStep).not.toHaveProperty('with');
+      expect(expandedStep.kind).toBe('workflow_call');
+      expect(expandedStep.args).toEqual(withValues);
+      expect(expandedStep.rules).toEqual(step.rules);
+    }
+  });
+
+  it.each(LANGUAGES)('loads migrated %s builtin workflows through the fragment resolver', (lang) => {
+    mkdirSync(join(projectDir, '.takt'), { recursive: true });
+    writeFileSync(join(projectDir, '.takt', 'config.yaml'), 'language: ' + lang + '\n', 'utf-8');
+    invalidateAllResolvedConfigCache();
+
+    const workflows = new Set([
+      ...REVIEWER_WORKFLOWS,
+      ...GATHER_WORKFLOWS,
+      ...FIX_WORKFLOWS,
+      ...DEVELOPMENT_CORE_WORKFLOWS,
+      ...MINI_WORKFLOWS,
+      ...LIGHTWEIGHT_CORE_WORKFLOWS,
+      ...REMEDIATION_WORKFLOWS,
+      'peer-review-suite-base',
+      'peer-review-suite-frontend',
+      'peer-review-suite-cqrs',
+      'peer-review-suite-frontend-cqrs',
+      'merge-readiness-finding-contract-final-gate',
+    ]);
+    for (const name of workflows) {
+      expect(() => loadWorkflowFromFile(join(getBuiltinWorkflowsDir(lang), name + '.yaml'), projectDir)).not.toThrow();
+    }
+  });
+
+  it.each(LANGUAGES)('composes every %s development family through its shared core', (lang) => {
+    for (const workflowName of DEVELOPMENT_CORE_WORKFLOWS) {
+      const develop = getStep(readBuiltinWorkflow(lang, workflowName), 'develop');
+      expect(develop.kind, workflowName).toBe('workflow_call');
+      expect(develop.call, workflowName).toBe('development-core');
+      expect(develop.args, workflowName).toEqual(expect.any(Object));
+    }
+
+    for (const workflowName of MINI_WORKFLOWS) {
+      const develop = getStep(readBuiltinWorkflow(lang, workflowName), 'develop');
+      expect(develop.kind, workflowName).toBe('workflow_call');
+      expect(develop.call, workflowName).toBe('mini-core');
+      expect(develop.args, workflowName).toEqual(expect.any(Object));
+    }
+  });
+
+  it.each(LANGUAGES)('loads %s lightweight development routines with resolved runtime report contracts', (lang) => {
+    mkdirSync(join(projectDir, '.takt'), { recursive: true });
+    writeFileSync(join(projectDir, '.takt', 'config.yaml'), 'language: ' + lang + '\n', 'utf-8');
+    invalidateAllResolvedConfigCache();
+
+    for (const workflowName of LIGHTWEIGHT_CORE_WORKFLOWS) {
+      const workflowPath = join(getBuiltinWorkflowsDir(lang), workflowName + '.yaml');
+      const workflow = loadWorkflowFromFile(workflowPath, projectDir);
+      const plan = workflow.steps.find((step) => step.name === 'plan');
+      const implement = workflow.steps.find((step) => step.name === 'implement');
+      const planContract = plan?.outputContracts?.find((contract) => contract.name === 'plan.md');
+
+      expect(planContract, workflowName).toMatchObject({
+        formatRef: 'plan',
+        format: expect.any(String),
+      });
+      expect(planContract?.format?.trim().length, workflowName).toBeGreaterThan(0);
+      expect(
+        implement?.outputContracts?.some((contract) => contract.name === 'implementation-report.md'),
+        workflowName,
+      ).toBe(true);
+    }
+  });
+
+  it.each(LANGUAGES)('resolves a non-default %s plan report format through callable step composition', (lang) => {
+    mkdirSync(join(projectDir, '.takt'), { recursive: true });
+    writeFileSync(join(projectDir, '.takt', 'config.yaml'), 'language: ' + lang + '\n', 'utf-8');
+    invalidateAllResolvedConfigCache();
+
+    const workflow = loadWorkflowFromFile(join(getBuiltinWorkflowsDir(lang), 'mini-core.yaml'), projectDir, {
+      callableArgs: { plan_report_format: 'plan-frontend' },
+    });
+    const planContract = workflow.steps
+      .find((step) => step.name === 'plan')
+      ?.outputContracts?.find((contract) => contract.name === 'plan.md');
+
+    expect(planContract).toMatchObject({
+      formatRef: 'plan-frontend',
+      format: expect.any(String),
+    });
+    expect(planContract?.format?.trim().length).toBeGreaterThan(0);
+  });
+
+  it.each(LANGUAGES)('rejects an unknown %s callable plan report format', (lang) => {
+    mkdirSync(join(projectDir, '.takt'), { recursive: true });
+    writeFileSync(join(projectDir, '.takt', 'config.yaml'), 'language: ' + lang + '\n', 'utf-8');
+    invalidateAllResolvedConfigCache();
+
+    expect(() => loadWorkflowFromFile(join(getBuiltinWorkflowsDir(lang), 'mini-core.yaml'), projectDir, {
+      callableArgs: { plan_report_format: 'unknown-plan-format' },
+    })).toThrow();
+  });
+
+  it.each(LANGUAGES)('composes %s domain reviewer suites without dropping specialist or maintenance facets', (lang) => {
+    const expectedSuites: Record<string, string | undefined> = {
+      backend: undefined,
+      frontend: 'peer-review-suite-frontend',
+      dual: 'peer-review-suite-frontend',
+      'backend-cqrs': 'peer-review-suite-cqrs',
+      'dual-cqrs': 'peer-review-suite-frontend-cqrs',
+      'backend-maintenance': undefined,
+      'frontend-maintenance': 'peer-review-suite-frontend',
+    };
+
+    for (const [workflowName, expectedSuite] of Object.entries(expectedSuites)) {
+      const develop = getStep(readBuiltinWorkflow(lang, workflowName), 'develop');
+      const args = develop.args as RawStep;
+      expect(args.reviewer_suite, workflowName).toBe(expectedSuite);
+      expect(args.review_knowledge, workflowName).toEqual(expect.any(Array));
+      expect((args.review_knowledge as unknown[]).length, workflowName).toBeGreaterThan(0);
+    }
+
+    for (const workflowName of ['backend-maintenance', 'frontend-maintenance']) {
+      const develop = getStep(readBuiltinWorkflow(lang, workflowName), 'develop');
+      const args = develop.args as RawStep;
+      expect(args.review_policy_additions, workflowName).toContain('existing-system-respect');
+      expect(args.review_knowledge, workflowName).toContain('existing-system');
+    }
+  });
+
+  it.each(LANGUAGES)('propagates %s domain review context to every composed reviewer and final gate', (lang) => {
+    const fragmentNames = [
+      'peer-review-reviewers',
+      'peer-review-frontend-reviewer',
+      'peer-review-cqrs-reviewer',
+    ];
+
+    for (const fragmentName of fragmentNames) {
+      const fragment = parseYaml(readFileSync(
+        join(getBuiltinLanguageStepsDir(lang), fragmentName + '.yaml'),
+        'utf-8',
+      )) as RawStep;
+      const reviewers = Array.isArray(fragment.parallel) ? fragment.parallel as RawStep[] : [fragment];
+      for (const reviewer of reviewers) {
+        expect(containsParam(reviewer.policy, 'review_policy_additions'), `${fragmentName}:${String(reviewer.name)}`).toBe(true);
+        expect(containsParam(reviewer.knowledge, 'review_knowledge_additions'), `${fragmentName}:${String(reviewer.name)}`).toBe(true);
+      }
+    }
+
+    const peerReview = readBuiltinWorkflow(lang, 'peer-review');
+    const finalGate = getStep(peerReview, 'final-gate');
+    expect(finalGate.with).toMatchObject({
+      merge_readiness_policy: { $param: 'verification_policy' },
+      review_knowledge: { $param: 'review_knowledge_additions' },
+    });
+
+    const adjudication = getStep(peerReview, 'review-adjudication');
+    const fixPlan = getStep(peerReview, 'fix-plan');
+    const finalGateFragment = parseYaml(readFileSync(
+      join(getBuiltinLanguageStepsDir(lang), 'peer-review-final-gate.yaml'),
+      'utf-8',
+    )) as RawStep;
+    const adjudicationFragment = parseYaml(readFileSync(
+      join(getBuiltinLanguageStepsDir(lang), 'peer-review-adjudication.yaml'),
+      'utf-8',
+    )) as RawStep;
+
+    expect(adjudication.rules).toEqual(expect.any(Array));
+    expect(fixPlan.with).toMatchObject({
+      plan_instruction: 'fix-plan-from-review-resolution',
+    });
+    expect(adjudicationFragment.output_contracts).toEqual({
+      report: [{ name: 'review-resolution.md', format: 'review-decision' }],
+    });
+    expect(finalGateFragment).toMatchObject({
+      persona: 'merge-readiness-supervisor',
+      output_contracts: {
+        report: [{ name: 'review-resolution.md', format: 'merge-readiness-supervision' }],
+      },
+    });
+  });
+
+  it.each(LANGUAGES)('detects every %s peer-review remediation cycle at its configured threshold', (lang) => {
+    mkdirSync(join(projectDir, '.takt'), { recursive: true });
+    writeFileSync(join(projectDir, '.takt', 'config.yaml'), 'language: ' + lang + '\n', 'utf-8');
+    invalidateAllResolvedConfigCache();
+
+    const workflow = loadWorkflowFromFile(
+      join(getBuiltinWorkflowsDir(lang), 'peer-review.yaml'),
+      projectDir,
     );
+    expectLoopMonitorsTrigger(workflow.loopMonitors ?? []);
+  });
+
+  it.each(LANGUAGES)('detects every %s shared remediation cycle at its configured threshold', (lang) => {
+    mkdirSync(join(projectDir, '.takt'), { recursive: true });
+    writeFileSync(join(projectDir, '.takt', 'config.yaml'), 'language: ' + lang + '\n', 'utf-8');
+    invalidateAllResolvedConfigCache();
+
+    const workflow = loadWorkflowFromFile(
+      join(getBuiltinWorkflowsDir(lang), 'review-remediation.yaml'),
+      projectDir,
+    );
+    expectLoopMonitorsTrigger(workflow.loopMonitors ?? []);
+  });
+
+  it.each(LANGUAGES)('keeps %s migrated reviewers on the read-only provider preset', (lang) => {
+    mkdirSync(join(projectDir, '.takt'), { recursive: true });
+    writeFileSync(join(projectDir, '.takt', 'config.yaml'), 'language: ' + lang + '\n', 'utf-8');
+    invalidateAllResolvedConfigCache();
+
+    const workflow = loadWorkflowFromFile(
+      join(getBuiltinWorkflowsDir(lang), 'takt-default-high.yaml'),
+      projectDir,
+    );
+    const reviewers = workflow.steps.find((step) => step.name === 'reviewers');
+
+    expect(reviewers?.parallel).toHaveLength(6);
+    for (const reviewer of reviewers?.parallel ?? []) {
+      expect(reviewer.providerOptions).toMatchObject({
+        claude: { allowedTools: ['Read', 'Glob', 'Grep', 'Bash', 'WebSearch', 'WebFetch'] },
+        opencode: { allowedTools: ['read', 'glob', 'grep', 'bash', 'websearch', 'webfetch'] },
+      });
+    }
+  });
+
+  it('keeps every shipped fragment free of rules, including parallel descendants', () => {
+    const stepDirs = [
+      ...LANGUAGES.map((lang) => getBuiltinLanguageStepsDir(lang)),
+    ];
+    for (const directory of stepDirs) {
+      for (const file of readdirSync(directory).filter((name) => name.endsWith('.yaml'))) {
+        const fragment = parseYaml(readFileSync(join(directory, file), 'utf-8')) as unknown;
+        expect(collectRulesPaths(fragment), `${directory}/${file}`).toEqual([]);
+      }
+    }
   });
 });

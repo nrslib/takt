@@ -10,6 +10,7 @@ const { rootCommand, commandActions, commandMocks } = vi.hoisted(() => {
   function createCommandMock(actionKey: string): {
     description: ReturnType<typeof vi.fn>;
     argument: ReturnType<typeof vi.fn>;
+    requiredOption: ReturnType<typeof vi.fn>;
     option: ReturnType<typeof vi.fn>;
     opts: ReturnType<typeof vi.fn>;
     optsWithGlobals: ReturnType<typeof vi.fn>;
@@ -19,6 +20,7 @@ const { rootCommand, commandActions, commandMocks } = vi.hoisted(() => {
     const command: Record<string, unknown> = {
       description: vi.fn().mockReturnThis(),
       argument: vi.fn().mockReturnThis(),
+      requiredOption: vi.fn().mockReturnThis(),
       option: vi.fn().mockReturnThis(),
       opts: vi.fn(() => mockProgramOpts),
       optsWithGlobals: vi.fn(() => mockProgramOpts),
@@ -34,6 +36,7 @@ const { rootCommand, commandActions, commandMocks } = vi.hoisted(() => {
     return command as {
       description: ReturnType<typeof vi.fn>;
       argument: ReturnType<typeof vi.fn>;
+      requiredOption: ReturnType<typeof vi.fn>;
       option: ReturnType<typeof vi.fn>;
       opts: ReturnType<typeof vi.fn>;
       optsWithGlobals: ReturnType<typeof vi.fn>;

@@ -7,6 +7,7 @@ import { MAX_WORKFLOW_CALL_DEPTH } from '../../core/workflow/workflow-call-depth
 import { getWorkflowReference } from '../../core/workflow/workflow-reference.js';
 import type { ProviderType } from '../../shared/types/provider.js';
 import type { StepProviderOptions } from '../../core/models/workflow-types.js';
+import type { WorkflowCallResolver } from '../../core/workflow/types.js';
 import { resolveWorkflowCallTarget } from './loaders/workflowCallResolver.js';
 import { collectWorkflowCallSteps } from './loaders/workflowParallelTraversal.js';
 import {
@@ -37,6 +38,7 @@ export interface WorkflowSelectorResolutionOptions {
   readonly projectCwd: string;
   readonly lookupCwd: string;
   readonly overrides?: SelectorProviderOverrides;
+  readonly workflowCallResolver?: WorkflowCallResolver;
 }
 
 function hasDynamicParallel(workflow: WorkflowConfig): boolean {
@@ -63,12 +65,19 @@ function workflowGraphHasDynamicParallel(
         `Workflow selector resolution exceeded workflow-call depth ${MAX_WORKFLOW_CALL_DEPTH}`,
       );
     }
-    const child = resolveWorkflowCallTarget(
-      workflow,
-      step,
-      options.projectCwd,
-      options.lookupCwd,
-    );
+    const child = options.workflowCallResolver === undefined
+      ? resolveWorkflowCallTarget(
+          workflow,
+          step,
+          options.projectCwd,
+          options.lookupCwd,
+        )
+      : options.workflowCallResolver({
+          parentWorkflow: workflow,
+          step,
+          projectCwd: options.projectCwd,
+          lookupCwd: options.lookupCwd,
+        });
     if (child === null) {
       // Workflow validation and execution own unresolved call diagnostics. Selector
       // discovery must not prevent ordinary workflows from reaching those boundaries.

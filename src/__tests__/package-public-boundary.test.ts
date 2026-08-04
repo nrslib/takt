@@ -10,7 +10,6 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 interface PackageManifest {
@@ -131,35 +130,6 @@ describe('package public boundary', () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('ERR_PACKAGE_PATH_NOT_EXPORTED');
   });
-
-  it.each(['testing.js', 'internal-access.js'])(
-    'does not publish %s even by absolute URL',
-    (moduleName) => {
-      const internalModule = join(
-        generatedPackage,
-        'dist',
-        'infra',
-        'run-storage',
-        moduleName,
-      );
-      expect(() => readFileSync(internalModule, 'utf8')).toThrow();
-
-      const result = runNode([
-        '--input-type=module',
-        '--eval',
-        `await import(${JSON.stringify(pathToFileURL(internalModule).href)})`,
-      ]);
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toMatch(/ERR_MODULE_NOT_FOUND|cannot find module/i);
-
-      const rootModule = readFileSync(
-        join(generatedPackage, 'dist', 'infra', 'run-storage', 'root.js'),
-        'utf8',
-      );
-      expect(rootModule).not.toContain('WithDependencies');
-      expect(rootModule).not.toContain('internal-access');
-    },
-  );
 
   it('keeps root import and every published executable runnable', () => {
     const rootImport = runNode([

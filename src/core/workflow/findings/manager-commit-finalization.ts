@@ -1,5 +1,5 @@
 import {
-  reconcileFindingLedger,
+  reconcileFindingLedgerPlan,
   type CanonicalRawReconcileProvenance,
   type ProvisionalFindingSpec,
 } from './reconciler.js';
@@ -9,40 +9,41 @@ import {
   linkPromotedReviewerAnomalies,
   type ReviewerAnomalySpec,
 } from './reviewer-anomalies.js';
-import { attachFixpointState } from './fixpoint.js';
-import { attachStopBudgetState, resolveStopBudgetLimits } from './stop-budget.js';
-import { attachReviewIntegrityState, resolveReviewIntegrityLimits } from './review-integrity.js';
-import {
-  markInterpretationsApplied,
-  normalizeProvisionalInterpretationEpochs,
-} from './interpretation-wal.js';
 import type { ReviewerAnomalyLandingReport } from './store.js';
 import type {
   FindingLedger,
   FindingManagerOutput,
-  FindingObservation,
-  InterpretationApplicationResult,
-  RawFindingDisposition,
+  FindingEvidenceRecord,
   RawFinding,
 } from './types.js';
 import type { RawAdmissionEvaluation } from './manager-admission.js';
+import type {
+  PreAdmissionEntityMutationResult,
+  PreAdmissionEntityProvisionalMutation,
+} from './pre-admission-entity-binding-types.js';
 import type { RunFindingManagerForStepInput } from './manager-contracts.js';
 import {
   applyProvisionalSettlement,
-  applyRejectedObservationAttachments,
+  buildProvisionalSettlementLifecycleCommands,
   settleProvisionalsWithCleanEvidence,
+  type RejectedObservationAttachment,
 } from './manager-provisional-settlement.js';
-import { collectActiveConflictFindingIds, normalizeMergedManagerPlan } from './manager-plan-normalization.js';
+import {
+  collectActiveConflictFindingIds,
+  normalizeEngineDerivedWaiverConflicts,
+  normalizeMergedManagerPlan,
+} from './manager-plan-normalization.js';
 import { canonicalizeFindingManagerOutput } from './canonicalize.js';
 import { collectRegeneratedConflictIds } from '../../models/finding-conflict-identity.js';
-import { collectLandedRawIds } from './manager-utils.js';
+import type { FindingLifecycleCommand } from './lifecycle-transaction.js';
 import {
   applyResolutionRenotificationTransitions,
   type ResolutionRenotificationTransition,
 } from './resolution-renotification.js';
+import { resolveCurrentLifecycleObservationTarget } from './reviewer-anomaly-policy.js';
 
 interface RejectedObservationPlan {
-  attachments: Array<{ targetFindingId: string; rawFindingId: string; reason: string }>;
+  attachments: RejectedObservationAttachment[];
   anomalySpecs: ReviewerAnomalySpec[];
 }
 
@@ -52,24 +53,38 @@ function classifyRejectedObservations(
 ): RejectedObservationPlan {
   return pendingObservations.reduce<RejectedObservationPlan>((plan, pending) => {
     const target = ledger.findings.find((finding) => finding.id === pending.targetFindingId);
-    if (target !== undefined && target.status === 'open') {
+    const auditTarget = resolveCurrentLifecycleObservationTarget(
+      ledger,
+      pending.item.wire,
+    );
+    if (
+      pending.destination === 'target_audit'
+      && (
+        pending.targetValidation === 'entity_binding'
+          ? target !== undefined
+          : auditTarget?.id === pending.targetFindingId
+      )
+    ) {
       return {
         ...plan,
         attachments: [...plan.attachments, {
           targetFindingId: pending.targetFindingId,
           rawFindingId: pending.item.wire.rawFindingId,
-          reason: pending.reason,
+          reason: `${pending.reason}; recorded for audit only without lifecycle or evidence authority`,
+          rejectionCode: 'evidence_admission_failed',
         }],
       };
     }
+    const anomalySpec = createReviewerAnomalySpec({
+      wire: pending.item.wire,
+      canonical: pending.item.canonical,
+      anomalyKind: pending.anomalyKind,
+      failedEvidence: pending.failedEvidence,
+      reason: `${pending.reason}; lifecycle evidence failure is audit-only and cannot mutate the target (current status: ${target?.status ?? 'missing'})`,
+    });
     return {
       ...plan,
-      anomalySpecs: [...plan.anomalySpecs, createReviewerAnomalySpec({
-        wire: pending.item.wire,
-        canonical: pending.item.canonical,
-        anomalyKind: 'quote-mismatch',
-        reason: `${pending.reason}; the target is no longer open after this round, so the observation is isolated as a reviewer anomaly instead`,
-      })],
+      anomalySpecs: [...plan.anomalySpecs, anomalySpec],
     };
   }, { attachments: [], anomalySpecs: [] });
 }
@@ -80,8 +95,8 @@ export function reconcileCommitPlan(input: {
   rawFindings: RawFinding[];
   managerOutput: FindingManagerOutput;
   provisionalSpecs: ProvisionalFindingSpec[];
+  entityProvisionalMutations: PreAdmissionEntityProvisionalMutation[];
   anomalySpecs: ReviewerAnomalySpec[];
-  pendingRejectedObservations: RawAdmissionEvaluation['pendingRejectedObservations'];
   rawProvenanceByRawFindingId: Map<string, CanonicalRawReconcileProvenance>;
   cleanWire: RawFinding[];
   explicitResolvedByMapping: ReadonlyMap<string, string>;
@@ -95,12 +110,26 @@ export function reconcileCommitPlan(input: {
     evidence: string;
   }[];
   healthyReviewerStableKeys: ReadonlySet<string>;
+  verifiedEvidenceRecordsByRawFindingId: ReadonlyMap<
+    string,
+    readonly FindingEvidenceRecord[]
+  >;
 }): {
   ledger: FindingLedger;
+  managerDecisionLedger: FindingLedger;
+  managerDecisionCommands: FindingLifecycleCommand[];
+  managerOutput: FindingManagerOutput;
   landedSpecs: ProvisionalFindingSpec[];
+  entityMutationResults: PreAdmissionEntityMutationResult[];
   normalizationRejections: string[];
-  rawFindingDispositions: RawFindingDisposition[];
+  rejectedObservationAttachments: RejectedObservationAttachment[];
+  settlementCommands: FindingLifecycleCommand[];
 } {
+  if (!Array.isArray(input.entityProvisionalMutations)) {
+    throw new Error(
+      'Commit reconciliation entityProvisionalMutations must be an explicit array',
+    );
+  }
   // ladder マージ（mergeOutputs）は matches / newFindings / conflicts を後着させる。
   // 閉じる決定との衝突をここで一括正規化し、残った統合の match 転写もこの1回で
   // 行う（reconciler の最終検証がこの後に走る）。
@@ -116,139 +145,52 @@ export function reconcileCommitPlan(input: {
     explicitResolvedByMapping: input.explicitResolvedByMapping,
     explicitPromotedFindingIds: input.explicitPromotedFindingIds,
     healthyReviewerStableKeys: input.healthyReviewerStableKeys,
-    replayOrigins: new Map(),
   });
-  // clean 証拠による settlement（昇格 / 決定的 same による解消）が確定した
-  // provisional への dismiss は不採用にする — clean 証拠が常に管轄裁定より
-  // 優先（settlement 側が status を変えるため、残すと reconciler の
-  // 「1 finding = 1 決定」検証で出力全体が落ちる）。
-  const settledFindingIds = new Set([
-    ...settlement.promotedFindingIds,
-    ...settlement.resolvedByMapping.keys(),
-    ...settlement.resolvedByEvidence.keys(),
-  ]);
+  const rejectedProvisionalMatchRawIds = new Set(
+    settlement.rejectedObservationAttachments.map((attachment) => attachment.rawFindingId),
+  );
+  const provisionalSpecs = input.provisionalSpecs.flatMap((spec) => {
+    const sourceRawFindingIds = spec.sourceRawFindingIds.filter(
+      (rawFindingId) => !rejectedProvisionalMatchRawIds.has(rawFindingId),
+    );
+    return sourceRawFindingIds.length === 0
+      ? []
+      : [{ ...spec, sourceRawFindingIds }];
+  });
+  const entityProvisionalMutations = input.entityProvisionalMutations.flatMap((mutation) => {
+    const sourceRawFindingIds = mutation.sourceRawFindingIds.filter(
+      (rawFindingId) => !rejectedProvisionalMatchRawIds.has(rawFindingId),
+    );
+    return sourceRawFindingIds.length === 0
+      ? []
+      : [{ ...mutation, sourceRawFindingIds }];
+  });
   // settlement も matches を後着させる（clean new → provisional への match 変換）。
   // resolution confirmation と衝突した場合に備え、canonicalize をもう一度通す
   // （純・冪等 — 衝突が無ければ no-op）。
-  const canonicalized = canonicalizeFindingManagerOutput(
-    settledFindingIds.size > 0
-      ? {
-          ...settlement.output,
-          dismissedFindings: settlement.output.dismissedFindings.filter(
-            (dismissed) => !settledFindingIds.has(dismissed.findingId),
-          ),
-        }
-      : settlement.output,
+  const canonicalized = normalizeEngineDerivedWaiverConflicts(
+    canonicalizeFindingManagerOutput(settlement.output),
   );
   const { output: settledOutput, rejections: normalizationRejections } = dropRegeneratedConflictResolves(
     canonicalized,
     input.freshLedger,
     normalized.rejections,
   );
-  // dismiss と同一ラウンドに同じ主張（stableKey）の raw が再来した場合、その
-  // provisional spec を着地させない — 裁定は claim の再発同定キー単位で有効で、
-  // 着地を許すと dismissed の傍から同じ claim が新 ID の open provisional として
-  // 復活し、ゲートが開かないまま dismissed が増殖する。抑止した観測は
-  // 監査添付（rejectedObservations）として dismissed finding に残す。
-  const dismissedStableKeys = new Set(
-    settledOutput.dismissedFindings.flatMap((dismissed) => {
-      const finding = input.freshLedger.findings.find((entry) => entry.id === dismissed.findingId);
-      return finding?.provisional !== undefined ? [finding.provisional.stableKey] : [];
-    }),
-  );
-  const suppressedSpecs = input.provisionalSpecs.filter((spec) => dismissedStableKeys.has(spec.stableKey));
-  const landedSpecs = suppressedSpecs.length > 0
-    ? input.provisionalSpecs.filter((spec) => !dismissedStableKeys.has(spec.stableKey))
-    : input.provisionalSpecs;
-  const landedRawFindingIds = collectLandedRawIds(settledOutput);
-  const provisionalRawFindingIds = new Set(
-    landedSpecs.flatMap((spec) => spec.sourceRawFindingIds),
-  );
-  const rawFindingDispositions: RawFindingDisposition[] = [
-    ...input.pendingRejectedObservations.map((pending) => ({
-      rawFindingId: pending.item.wire.rawFindingId,
-      outcome: 'audit_only' as const,
-      reason: pending.reason,
-    })),
-    ...input.anomalySpecs.flatMap((spec) => spec.sourceRawFindingIds.map((rawFindingId) => ({
-      rawFindingId,
-      outcome: 'reviewer_anomaly' as const,
-      reason: spec.mismatchReason,
-    }))),
-    ...suppressedSpecs.flatMap((spec) => spec.sourceRawFindingIds.map((rawFindingId) => ({
-      rawFindingId,
-      outcome: 'audit_only' as const,
-      reason: `The observation was recorded on the finding dismissed in this round: ${spec.reason}`,
-    }))),
-    ...[...input.recoveryProvisionalRawFindingIds].flatMap((rawFindingId) => (
-      landedRawFindingIds.has(rawFindingId) || provisionalRawFindingIds.has(rawFindingId)
-        ? []
-        : [{
-            rawFindingId,
-            outcome: 'audit_only' as const,
-            reason: 'The interpretation recovery observation remains represented by its existing provisional finding',
-          }]
-    )),
-    ...[...input.staleRawFindingIds].map((rawFindingId) => ({
-      rawFindingId,
-      outcome: 'stale' as const,
-      reason: 'The recovery observation precondition became stale before commit',
-    })),
-    ...[...input.deferredRawFindingIds].map((rawFindingId) => ({
-      rawFindingId,
-      outcome: 'deferred' as const,
-      reason: 'Another live interpretation reservation owns this raw finding',
-    })),
-    ...input.resolutionRenotifications.flatMap((transition) => (
-      [...transition.resolutionRawFindingIds, ...transition.renotificationRawFindingIds]
-        .filter((rawFindingId) => input.rawFindings.some(
-          (rawFinding) => rawFinding.rawFindingId === rawFindingId,
-        ))
-        .map((rawFindingId) => ({
-          rawFindingId,
-          outcome: 'resolution_renotification_conflict' as const,
-          reason: `Resolution and verified renotification both observed finding "${transition.findingId}" at revision ${transition.observed.targetRevision}`,
-        }))
-    )),
-    ...input.unsupportedRawFindingReports.map((report) => ({
-      rawFindingId: report.rawFindingId,
-      outcome: 'unsupported' as const,
-      reason: report.evidence,
-    })),
-  ];
-  const dispositionRawFindingIds = new Set(
-    rawFindingDispositions.map((disposition) => disposition.rawFindingId),
-  );
-  for (const rawFinding of input.rawFindings) {
-    if (rawFinding.relation !== 'resolution_confirmation'
-      || landedRawFindingIds.has(rawFinding.rawFindingId)
-      || provisionalRawFindingIds.has(rawFinding.rawFindingId)
-      || dispositionRawFindingIds.has(rawFinding.rawFindingId)) {
-      continue;
-    }
-    rawFindingDispositions.push({
-      rawFindingId: rawFinding.rawFindingId,
-      outcome: 'confirmation_not_applied',
-      reason: `Resolution confirmation for target "${rawFinding.targetFindingId}" was not accepted by any explicit manager or mechanical outcome`,
-    });
-    dispositionRawFindingIds.add(rawFinding.rawFindingId);
-  }
-  if (dispositionRawFindingIds.size !== rawFindingDispositions.length) {
-    throw new Error('A raw finding received multiple finite dispositions during commit planning');
-  }
-  const reconcileRawFindingIds = new Set(
-    input.rawFindings.map((rawFinding) => rawFinding.rawFindingId),
-  );
-  const reconciled = reconcileFindingLedger({
+  const landedSpecs = provisionalSpecs;
+  const reconciledPlan = reconcileFindingLedgerPlan({
     priorStepResponseText: input.runInput.priorStepResponseText,
     previousLedger: input.freshLedger,
     rawFindings: input.rawFindings,
     managerOutput: settledOutput,
     provisionalFindings: landedSpecs,
+    entityProvisionalMutations,
+    terminalEntityAttachmentFindingIds: new Set([
+      ...settlement.promotedFindingIds,
+      ...settlement.resolvedByMapping.keys(),
+      ...settlement.resolvedByEvidence.keys(),
+    ]),
     rawProvenanceByRawFindingId: input.rawProvenanceByRawFindingId,
-    rawFindingDispositions: rawFindingDispositions.filter(
-      (disposition) => reconcileRawFindingIds.has(disposition.rawFindingId),
-    ),
+    verifiedEvidenceRecordsByRawFindingId: input.verifiedEvidenceRecordsByRawFindingId,
     context: {
       workflowName: input.runInput.workflowName,
       stepName: input.runInput.parentStep.name,
@@ -256,6 +198,7 @@ export function reconcileCommitPlan(input: {
       timestamp: input.runInput.timestamp,
     },
   });
+  const reconciled = reconciledPlan.ledger;
   const transitioned = applyResolutionRenotificationTransitions({
     ledger: reconciled,
     transitions: input.resolutionRenotifications,
@@ -266,21 +209,53 @@ export function reconcileCommitPlan(input: {
     },
   });
   const settled = applyProvisionalSettlement(transitioned, settlement, input.runInput.timestamp);
-  const attached = attachSuppressedObservationsToDismissed(
-    settled,
-    suppressedSpecs,
-    new Set(settledOutput.dismissedFindings.map((dismissed) => dismissed.findingId)),
-    {
-      runId: input.runInput.runId,
-      stepName: input.runInput.parentStep.name,
-      timestamp: input.runInput.timestamp,
+  const entityMutationResults = reconciledPlan.entityMutationResults.map(
+    (result): PreAdmissionEntityMutationResult => {
+      if (result.outcome === 'terminal_audit') {
+        return result;
+      }
+      const target = settled.findings.find((finding) => finding.id === result.findingId);
+      return target?.status === 'open' && target.provisional !== undefined
+        ? result
+        : {
+            outcome: 'terminal_audit',
+            targetFindingId: result.findingId,
+            sourceRawFindingIds: result.mutation.sourceRawFindingIds,
+            reason: `${result.mutation.reason}; target became terminal during commit`,
+          };
     },
   );
+  const terminalEntityResults = entityMutationResults.filter(
+    (result): result is Extract<
+      PreAdmissionEntityMutationResult,
+      { outcome: 'terminal_audit' }
+    > => result.outcome === 'terminal_audit',
+  );
+  const settlementCommands = buildProvisionalSettlementLifecycleCommands({
+    after: settled,
+    settlement,
+  });
+  const rejectedObservationAttachments = [
+    ...settlement.rejectedObservationAttachments,
+    ...terminalEntityResults.flatMap((result) => (
+      result.sourceRawFindingIds.map((rawFindingId) => ({
+        targetFindingId: result.targetFindingId,
+        rawFindingId,
+        reason: `${result.reason}; recorded for audit because the ambiguity episode became terminal`,
+        rejectionCode: 'evidence_admission_failed' as const,
+      }))
+    )),
+  ];
   return {
-    ledger: attached,
+    ledger: settled,
+    managerDecisionLedger: reconciled,
+    managerDecisionCommands: reconciledPlan.lifecycleCommands,
+    managerOutput: settledOutput,
     landedSpecs,
+    entityMutationResults,
     normalizationRejections,
-    rawFindingDispositions,
+    rejectedObservationAttachments,
+    settlementCommands,
   };
 }
 
@@ -322,72 +297,18 @@ function dropRegeneratedConflictResolves(
   };
 }
 
-/**
- * dismiss と同一ラウンドで抑止した同一 claim の観測を、**このラウンドで**
- * dismissed になった finding の rejectedObservations へ監査添付する（黙って
- * 消さない）。同一 stableKey の spec が複数あっても raw ID を全量集約し、
- * 過去ラウンドで dismissed になった同 stableKey の finding には添付しない。
- * status / canonical evidence には影響しない
- * （rejectedObservations の既存契約と同じ）。
- */
-function attachSuppressedObservationsToDismissed(
-  ledger: FindingLedger,
-  suppressedSpecs: readonly ProvisionalFindingSpec[],
-  dismissedThisRoundFindingIds: ReadonlySet<string>,
-  observedAt: { runId: string; stepName: string; timestamp: string },
-): FindingLedger {
-  if (suppressedSpecs.length === 0) {
-    return ledger;
-  }
-  const rawIdsByStableKey = new Map<string, Set<string>>();
-  for (const spec of suppressedSpecs) {
-    const rawIds = rawIdsByStableKey.get(spec.stableKey) ?? new Set<string>();
-    for (const rawFindingId of spec.sourceRawFindingIds) {
-      rawIds.add(rawFindingId);
-    }
-    rawIdsByStableKey.set(spec.stableKey, rawIds);
-  }
-  return {
-    ...ledger,
-    findings: ledger.findings.map((finding) => {
-      if (!dismissedThisRoundFindingIds.has(finding.id) || finding.provisional === undefined) {
-        return finding;
-      }
-      const rawIds = rawIdsByStableKey.get(finding.provisional.stableKey);
-      if (rawIds === undefined) {
-        return finding;
-      }
-      return {
-        ...finding,
-        revision: finding.revision + 1,
-        rejectedObservations: [
-          ...(finding.rejectedObservations ?? []),
-          ...[...rawIds].map((rawFindingId) => ({
-            rawFindingId,
-            reason: 'Same-claim observation arrived in the round its provisional was dismissed; recorded for audit only — the dismissal covers this re-assertion',
-            observedAt: { runId: observedAt.runId, stepName: observedAt.stepName, timestamp: observedAt.timestamp },
-          })),
-        ],
-      };
-    }),
-  };
-}
-
 export function applyCommitLedgerStates(input: {
   runInput: RunFindingManagerForStepInput;
   freshLedger: FindingLedger;
   settledLedger: FindingLedger;
   baseAnomalySpecs: ReviewerAnomalySpec[];
   pendingRejectedObservations: RawAdmissionEvaluation['pendingRejectedObservations'];
-  interpretationResults: Map<string, InterpretationApplicationResult>;
-  interpretationReservations: ReadonlyMap<string, string>;
-  interpretationIntegrityDigests: ReadonlyMap<string, string>;
-  observation: FindingObservation;
   verifiedEvidenceCandidates: RawAdmissionEvaluation['verifiedEvidenceCandidates'];
-  stopBudgetLimits: ReturnType<typeof resolveStopBudgetLimits>;
-  stopBudgetRoundMarker: string;
-  reviewIntegrityLimits: ReturnType<typeof resolveReviewIntegrityLimits>;
-}): { ledger: FindingLedger; reviewerAnomalyLandings: ReviewerAnomalyLandingReport[] } {
+}): {
+  ledger: FindingLedger;
+  reviewerAnomalyLandings: ReviewerAnomalyLandingReport[];
+  rejectedObservationAttachments: RejectedObservationAttachment[];
+} {
   const rejectedObservations = classifyRejectedObservations(
     input.pendingRejectedObservations,
     input.settledLedger,
@@ -403,41 +324,19 @@ export function applyCommitLedgerStates(input: {
       timestamp: input.runInput.timestamp,
     },
   );
-  const withRejectedObservations = applyRejectedObservationAttachments(
+  const withPromotions = linkPromotedReviewerAnomalies(
     withAnomalies,
-    rejectedObservations.attachments,
-    input.observation,
-  );
-  const applied = markInterpretationsApplied(
-    withRejectedObservations,
-    input.interpretationResults,
-    input.interpretationReservations,
-    input.interpretationIntegrityDigests,
-    input.observation,
-  );
-  const normalized = normalizeProvisionalInterpretationEpochs(applied);
-  const withPromotions = linkPromotedReviewerAnomalies(normalized, input.verifiedEvidenceCandidates);
-  const withFixpoint = attachFixpointState(input.freshLedger, withPromotions, input.runInput.cwd);
-  const withStopBudget = attachStopBudgetState(
-    input.freshLedger,
-    withFixpoint,
-    input.stopBudgetLimits,
-    input.stopBudgetRoundMarker,
-    input.runInput.timestamp,
+    input.verifiedEvidenceCandidates,
   );
   return {
-    ledger: attachReviewIntegrityState(
-      input.freshLedger,
-      withStopBudget,
-      input.reviewIntegrityLimits,
-      input.stopBudgetRoundMarker,
-      input.runInput.timestamp,
-    ),
+    ledger: withPromotions,
     reviewerAnomalyLandings: anomalySpecs.map((spec) => ({
       kind: spec.kind,
       stableKey: spec.stableKey,
       reason: spec.mismatchReason,
       sourceRawFindingIds: spec.sourceRawFindingIds,
+      sourceIntakeIds: spec.sourceIntakeIds,
     })),
+    rejectedObservationAttachments: rejectedObservations.attachments,
   };
 }

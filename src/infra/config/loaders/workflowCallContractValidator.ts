@@ -1,5 +1,6 @@
 import { dirname } from 'node:path';
 import type { WorkflowConfig } from '../../../core/models/index.js';
+import { canonicalJson } from '../../../shared/utils/canonical-json.js';
 import { validateWorkflowCallRulesAgainstChildReturns } from './workflowCallContracts.js';
 import { getWorkflowSourcePath } from './workflowSourceMetadata.js';
 import { getWorkflowTrustInfo, type WorkflowTrustInfo } from './workflowTrustSource.js';
@@ -30,76 +31,115 @@ interface WorkflowCallContractValidationOptions {
   lookupCwd?: string;
 }
 
-function getWorkflowCallValidationKey(workflow: WorkflowConfig, lookupCwd: string): string {
+interface WorkflowCallContractValidationTraversal {
+  active: Set<string>;
+  completed: Set<string>;
+}
+
+function getWorkflowCallInvocationIdentity(
+  call: string,
+  args: Record<string, string | string[]> | undefined,
+): string {
+  return canonicalJson({ call, args: args ?? {} });
+}
+
+function getWorkflowCallValidationKey(
+  workflow: WorkflowConfig,
+  lookupCwd: string,
+  inheritedFindingContractAvailable: boolean,
+  invocationIdentity: string,
+): string {
   const sourcePath = getWorkflowSourcePath(workflow);
-  if (sourcePath) {
-    return sourcePath;
-  }
-  return `${lookupCwd}:${workflow.name}`;
+  const workflowKey = sourcePath ?? `${lookupCwd}:${workflow.name}`;
+  return canonicalJson({
+    findingContractAvailable: inheritedFindingContractAvailable,
+    invocation: invocationIdentity,
+    workflow: workflowKey,
+  });
 }
 
 function validateWorkflowCallContractsRecursive(
   workflow: WorkflowConfig,
   projectCwd: string,
   lookupCwd: string,
-  visited: Set<string>,
+  traversal: WorkflowCallContractValidationTraversal,
   deps: ValidateWorkflowCallContractsDeps,
   allowPathBasedCalls: boolean,
+  inheritedFindingContractAvailable: boolean,
+  invocationIdentity: string,
 ): void {
-  const validationKey = getWorkflowCallValidationKey(workflow, lookupCwd);
-  if (visited.has(validationKey)) {
+  const validationKey = getWorkflowCallValidationKey(
+    workflow,
+    lookupCwd,
+    inheritedFindingContractAvailable,
+    invocationIdentity,
+  );
+  if (traversal.completed.has(validationKey)) {
     return;
   }
-  visited.add(validationKey);
+  if (traversal.active.has(validationKey)) {
+    throw new Error(
+      `Configuration error: recursive workflow_call cycle detected at workflow "${workflow.name}"`,
+    );
+  }
+  traversal.active.add(validationKey);
 
-  const parentSourcePath = getWorkflowSourcePath(workflow);
-  const basePath = parentSourcePath ? dirname(parentSourcePath) : lookupCwd;
-  const parentTrustInfo = getWorkflowTrustInfo(workflow, projectCwd);
+  try {
+    const parentSourcePath = getWorkflowSourcePath(workflow);
+    const basePath = parentSourcePath ? dirname(parentSourcePath) : lookupCwd;
+    const parentTrustInfo = getWorkflowTrustInfo(workflow, projectCwd);
 
-  for (const step of collectWorkflowCallSteps(workflow.steps)) {
-    const stepPath = findWorkflowStepLocation(workflow, step);
-    if (!allowPathBasedCalls && deps.isWorkflowPath(step.call)) {
-      continue;
-    }
+    for (const step of collectWorkflowCallSteps(workflow.steps)) {
+      const stepPath = findWorkflowStepLocation(workflow, step);
+      if (!allowPathBasedCalls && deps.isWorkflowPath(step.call)) {
+        continue;
+      }
 
-    const childWorkflow = deps.loadWorkflowByIdentifierForWorkflowCall(step.call, projectCwd, {
-      basePath,
-      lookupCwd,
-      callableArgs: step.args,
-      parentTrustInfo,
-      skipWorkflowCallContractValidation: true,
-    });
+      const childWorkflow = deps.loadWorkflowByIdentifierForWorkflowCall(step.call, projectCwd, {
+        basePath,
+        lookupCwd,
+        callableArgs: step.args,
+        parentTrustInfo,
+        skipWorkflowCallContractValidation: true,
+      });
 
-    if (!childWorkflow) {
-      continue;
-    }
+      if (!childWorkflow) {
+        continue;
+      }
 
-    const parentProvidesFindingContract = workflow.findingContract !== undefined
-      || workflow.subworkflow?.requiresFindingContract === true;
-    if (childWorkflow.subworkflow?.requiresFindingContract === true && !parentProvidesFindingContract) {
-      const error = new Error(
+      const parentProvidesFindingContract = inheritedFindingContractAvailable
+        || workflow.findingContract !== undefined
+        || workflow.subworkflow?.requiresFindingContract === true;
+      if (childWorkflow.subworkflow?.requiresFindingContract === true && !parentProvidesFindingContract) {
+        const error = new Error(
           `Configuration error: workflow_call step "${step.name}" calls workflow "${childWorkflow.name}", `
           + 'which requires a finding_contract inherited from its caller, but the calling workflow does not provide one',
-      );
-      throw annotateWorkflowConfigFragmentError(
-        stepPath ? withWorkflowStepErrorPath(error, [...stepPath, 'call']) : error,
-        workflow,
-      );
-    }
+        );
+        throw annotateWorkflowConfigFragmentError(
+          stepPath ? withWorkflowStepErrorPath(error, [...stepPath, 'call']) : error,
+          workflow,
+        );
+      }
 
-    validateWorkflowCallContractsRecursive(
-      childWorkflow,
-      projectCwd,
-      lookupCwd,
-      visited,
-      deps,
-      allowPathBasedCalls,
-    );
-    try {
-      validateWorkflowCallRulesAgainstChildReturns(step, childWorkflow, stepPath);
-    } catch (error) {
-      throw annotateWorkflowConfigFragmentError(error, workflow);
+      validateWorkflowCallContractsRecursive(
+        childWorkflow,
+        projectCwd,
+        lookupCwd,
+        traversal,
+        deps,
+        allowPathBasedCalls,
+        parentProvidesFindingContract,
+        getWorkflowCallInvocationIdentity(step.call, step.args),
+      );
+      try {
+        validateWorkflowCallRulesAgainstChildReturns(step, childWorkflow, stepPath);
+      } catch (error) {
+        throw annotateWorkflowConfigFragmentError(error, workflow);
+      }
     }
+    traversal.completed.add(validationKey);
+  } finally {
+    traversal.active.delete(validationKey);
   }
 }
 
@@ -113,8 +153,10 @@ export function validateWorkflowCallContracts(
     workflow,
     projectCwd,
     options?.lookupCwd ?? projectCwd,
-    new Set<string>(),
+    { active: new Set<string>(), completed: new Set<string>() },
     deps,
     options?.allowPathBasedCalls !== false,
+    false,
+    canonicalJson({ root: true }),
   );
 }

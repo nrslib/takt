@@ -2,6 +2,7 @@ name: plan
 tags: [plan]
 edit: false
 persona: planner
+policy: contract-change
 knowledge: architecture
 instruction: plan
 output_contracts:

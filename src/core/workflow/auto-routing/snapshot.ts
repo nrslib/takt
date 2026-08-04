@@ -3,6 +3,10 @@ import { ROUTING_WORK_SNAPSHOT_LOCAL_IDENTITY, type RoutingWorkSnapshot } from '
 import { normalizeRoutingText } from './normalizer.js';
 import type { FindingLedger } from '../../models/finding-types.js';
 import {
+  isProductFindingEntry,
+  isProvisionalFindingEntry,
+} from '../findings/finding-entry.js';
+import {
   ROUTING_REMAINING_WORK_FIELD_BUDGET,
   ROUTING_REMAINING_WORK_ITEM_LIMIT,
   ROUTING_REMAINING_WORK_TOTAL_BUDGET,
@@ -46,6 +50,18 @@ export function buildRoutingFindings(ledger: FindingLedger | undefined): Routing
     open: (function* () {
       for (const finding of ledger.findings) {
         if (finding.status !== 'open') continue;
+        if (isProvisionalFindingEntry(finding)) {
+          yield {
+            id: finding.id,
+            lifecycle: finding.lifecycle,
+            description: finding.provisional.reason,
+            provisional: true,
+          };
+          continue;
+        }
+        if (!isProductFindingEntry(finding)) {
+          throw new Error(`Open product finding "${finding.id}" has an incomplete claim`);
+        }
         if (finding.description === undefined) {
           throw new Error(`Open finding "${finding.id}" is missing a routing description`);
         }

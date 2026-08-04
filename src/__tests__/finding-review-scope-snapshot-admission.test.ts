@@ -2,13 +2,10 @@
  * codex 対策#4 の配線バグ回帰テスト（manager 検証側）。
  *
  * finding-review-scope-snapshot-wiring.test.ts は ParallelRunner が正しい
- * reviewScopeSnapshotId を reviewer instruction へ配ることを固定する。
- * ここではその値が実際に admission の結果を左右することを確認する —
- * 正しい snapshotId を echo した source_quote finding は product finding へ
- * 昇格し、配線バグ時に reviewer が実際に受け取っていた値（空文字 / 古い値）を
- * echo した同じ引用は reviewer anomaly に隔離される。quote 自体（path/行範囲/
- * verbatimExcerpt）は常に正しい実在の引用のまま固定し、snapshotId だけを
- * 変えることで、この1変数だけが admission を分けることを示す。
+ * reviewer が返すのは file_quote request だけであり、snapshotId はエンジンが
+ * 現在の review scope へ束縛して発行する。ここでは正確な request が product
+ * finding へ昇格し、不一致 quote request が anomaly へ隔離されることを実際の
+ * manager-runner 経路で固定する。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -36,19 +33,24 @@ vi.mock('node:fs', async (importOriginal) => {
 import { linkSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { processInterpretationLiveClaims } from '../core/workflow/findings/interpretation-live-claims.js';
 import type { AgentResponse, FindingContractConfig, WorkflowStep } from '../core/models/types.js';
-import { verifySourceQuoteEvidence } from '../core/workflow/findings/admission-validation.js';
+import { verifyFileQuoteEvidence } from '../core/workflow/findings/admission-validation.js';
 import { computeReviewScopeSnapshotId } from '../core/workflow/findings/snapshot.js';
 import { runFindingManagerForStep } from '../core/workflow/findings/manager-runner.js';
 import { createFindingManagerPublicationDouble, RevisionedFindingLedgerTestRepository } from './helpers/finding-manager-publication.js';
+import {
+  emptyFindingAuthorityProjection,
+  reviewerRawExtractionFixture,
+} from './helpers/finding-lifecycle-fixture.js';
+import { findingReviewPublicationFixture } from './helpers/finding-review-publication.js';
 import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
 import type { FindingLedger } from '../core/workflow/findings/types.js';
 import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
+import { MAIN_MANAGER_INPUT_MAX_BYTES } from '../core/workflow/findings/manager-task-contracts.js';
 
 const FINDING_CONTRACT: FindingContractConfig = {
-  ledgerPath: '.takt/findings/peer-review.json',
-  rawFindingsPath: '.takt/findings/raw',
   manager: {
     persona: 'findings-manager',
     instruction: 'Reconcile findings.',
@@ -56,7 +58,7 @@ const FINDING_CONTRACT: FindingContractConfig = {
   },
 };
 
-describe('reviewScopeSnapshotId correctness determines admission outcome (manager-runner.ts)', () => {
+describe('engine-issued review scope evidence determines admission outcome (manager-runner.ts)', () => {
   let cwd: string;
   let reportDir: string;
 
@@ -86,22 +88,17 @@ describe('reviewScopeSnapshotId correctness determines admission outcome (manage
       nextId: 1,
       updatedAt: '2026-07-13T00:00:00.000Z',
       findings: [],
+      evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
+      ...emptyFindingAuthorityProjection(),
     });
-    const reservations = new Set<string>();
     const store: FindingLedgerStore = {
       ledgerIdentity: '/test/finding-review-scope-snapshot-admission/ledger.json',
       workflowName: 'peer-review',
       loadLedger: () => ledgerRepository.loadLedger(),
       updateLedger: (mutator) => ledgerRepository.updateLedger(mutator),
-      claimAdjudicationReservation: (token) => {
-        if (reservations.has(token)) return false;
-        reservations.add(token);
-        return true;
-      },
-      releaseAdjudicationReservation: (token) => { reservations.delete(token); },
+      interpretationLiveClaims: processInterpretationLiveClaims,
       saveLedgerSnapshot: () => {},
       saveRawFindings: () => {},
       saveManagerValidationReport: () => {},
@@ -109,19 +106,34 @@ describe('reviewScopeSnapshotId correctness determines admission outcome (manage
         (report) => join(reportDir, `findings-manager-validation.${report.stepName}.json`),
         ledgerRepository,
       ),
-      saveConflictAdjudicationReport: () => {},
     };
     return { store, current: () => ledgerRepository.loadLedger() };
   }
 
   /**
-   * quote 自体（path/行範囲/verbatimExcerpt）は常に正しい実在の引用にする。
-   * 変えるのは snapshotId だけ — これは「ParallelRunner が reviewer instruction
-   * へ何を渡したか」に対応する変数であり、この関数の1変数だけが admission の
-   * 結果を分けることを示す。
+   * reviewer は quote request だけを返し、snapshotId は返さない。
    */
-  async function runManagerWithSnapshotId(store: FindingLedgerStore, snapshotId: string) {
+  async function runManagerWithQuoteRequest(
+    store: FindingLedgerStore,
+    _legacyVerbatimExcerpt?: string,
+    options: {
+      reviewReport?: string;
+      runId?: string;
+      stepIteration?: number;
+    } = {},
+  ) {
     const quote = verifiedSourceQuoteFields(cwd, 'src/example.ts', 3);
+    const extraction = reviewerRawExtractionFixture({
+      rawFindingId: 'finding-1',
+      familyTag: 'bug',
+      severity: 'high',
+      title: 'Suspicious pattern in example.ts',
+      description: 'A real observation quoting an existing line verbatim.',
+      suggestion: 'Fix it.',
+      relation: 'new',
+      targetFindingId: null,
+      evidence: [quote],
+    });
     const optionsBuilder = {
       buildAgentOptions: () => ({}),
       resolveStepProviderModel: () => ({ provider: 'claude', model: 'claude-sonnet' }),
@@ -139,86 +151,175 @@ describe('reviewScopeSnapshotId correctness determines admission outcome (manage
       stepExecutor: stepExecutor as never,
       cwd,
       parentStep,
-      stepIteration: 1,
+      stepIteration: options.stepIteration ?? 1,
       subResults: [{
         subStep: { kind: 'agent', name: 'ai-antipattern-review', persona: 'ai-antipattern-reviewer', edit: false } as WorkflowStep,
-        response: {
-          status: 'done',
-          content: '',
-          structuredOutput: {
-            rawFindings: [{
-              rawFindingId: 'finding-1',
-              familyTag: 'bug',
-              severity: 'high',
-              title: 'Suspicious pattern in example.ts',
-              location: quote.location,
-              description: 'A real observation quoting an existing line verbatim.',
-              suggestion: 'Fix it.',
-              relation: 'new',
-              evidenceKind: quote.evidenceKind,
-              verbatimExcerpt: quote.verbatimExcerpt,
-              snapshotId,
-            }],
-          },
-        } as unknown as AgentResponse,
+        publication: findingReviewPublicationFixture({
+          scopeIdentity: store.ledgerIdentity,
+          parentStepName: parentStep.name,
+          stepIteration: options.stepIteration ?? 1,
+          reviewerStepName: 'ai-antipattern-review',
+          reportContent: options.reviewReport ?? extraction.rawExcerpt,
+          rawFindings: [extraction],
+        }),
       }],
       workflowName: 'peer-review',
-      runId: 'test-run',
+      workflowTask: 'Review the implementation.',
+      runId: options.runId ?? 'test-run',
       callNamespace: '',
       timestamp: '2026-07-13T00:00:00.000Z',
     });
   }
 
-  it('admits a source_quote finding as a real product finding when the reviewer echoes the correct reviewScopeSnapshotId (post-fix ParallelRunner behavior)', async () => {
-    const { store, current } = makeLedgerStore();
-    const correctSnapshotId = computeReviewScopeSnapshotId(cwd);
+  async function runManagerWithEntityOverflow(store: FindingLedgerStore) {
+    const extractions = Array.from({ length: 4 }, (_, index) => (
+      reviewerRawExtractionFixture({
+        rawFindingId: `overflow-${index}`,
+        familyTag: 'correctness',
+        severity: 'high',
+        title: `Overflow semantic entity ${index}`,
+        description: `Overflow observation ${index} ${'x'.repeat(6_100)}`,
+        suggestion: 'Investigate.',
+        relation: 'new',
+        targetFindingId: null,
+        target: { kind: 'code', paths: ['src/shared-overflow.ts'] },
+        evidence: [],
+      })
+    ));
+    const parentStep: WorkflowStep = {
+      kind: 'agent',
+      name: 'reviewers',
+      persona: 'reviewer',
+      edit: false,
+    } as WorkflowStep;
+    return runFindingManagerForStep({
+      contract: FINDING_CONTRACT as never,
+      ledgerStore: store,
+      optionsBuilder: {
+        buildAgentOptions: () => ({}),
+        resolveStepProviderModel: () => ({ provider: 'claude', model: 'claude-sonnet' }),
+      } as never,
+      stepExecutor: {
+        buildPhase1Instruction: (instruction: string) => instruction,
+        recordSynthesizedAgentUsage: () => {},
+        normalizeStructuredOutput: (_step: WorkflowStep, response: AgentResponse) => response,
+      } as never,
+      cwd,
+      parentStep,
+      stepIteration: 1,
+      subResults: [{
+        subStep: {
+          kind: 'agent',
+          name: 'entity-overflow-review',
+          persona: 'entity-overflow-review',
+          edit: false,
+        } as WorkflowStep,
+        publication: findingReviewPublicationFixture({
+          scopeIdentity: store.ledgerIdentity,
+          parentStepName: parentStep.name,
+          stepIteration: 1,
+          reviewerStepName: 'entity-overflow-review',
+          rawFindings: extractions,
+        }),
+      }],
+      workflowName: 'peer-review',
+      workflowTask: 'Review the implementation.',
+      runId: 'entity-overflow-run',
+      callNamespace: '',
+      timestamp: '2026-07-13T00:00:00.000Z',
+    });
+  }
 
-    const result = await runManagerWithSnapshotId(store, correctSnapshotId);
+  it('admits an exact file_quote request and binds the engine-issued snapshotId', async () => {
+    const { store, current } = makeLedgerStore();
+
+    const result = await runManagerWithQuoteRequest(store);
 
     expect(result.status).toBe('updated');
     const ledger = current();
     expect(ledger.findings).toHaveLength(1);
     expect(ledger.findings[0]?.title).toBe('Suspicious pattern in example.ts');
     expect(ledger.reviewerAnomalies ?? []).toHaveLength(0);
+    const quote = ledger.rawFindings[0]?.evidence[0];
+    expect(quote?.kind).toBe('file_quote');
+    if (quote?.kind !== 'file_quote') {
+      throw new Error('Expected engine-issued file quote');
+    }
+    expect(quote.snapshotId).toBe(computeReviewScopeSnapshotId(cwd));
   });
 
-  it('rejects the identical quote into a reviewer anomaly when reviewScopeSnapshotId is empty — the exact wire shape the pre-fix ParallelRunner bug produced', async () => {
+  it('ignores a legacy reviewer excerpt and materializes the quote from the engine snapshot', async () => {
     const { store, current } = makeLedgerStore();
+    const expectedQuote = verifiedSourceQuoteFields(cwd, 'src/example.ts', 3);
 
-    // pre-fix ParallelRunner built the finding-contract instruction context
-    // inline without reviewScopeSnapshotId. finding-contract-instruction.ts's
-    // `contract.reviewScopeSnapshotId ?? ''` then rendered an empty token into
-    // the reviewer-facing instruction, so a compliant reviewer echoed back ''.
-    const result = await runManagerWithSnapshotId(store, '');
+    const result = await runManagerWithQuoteRequest(store, '// stale line 3');
 
     expect(result.status).toBe('updated');
     const ledger = current();
-    // 引用そのものは完全に正確でも admit されない。空文字は raw-canonicalization.ts の
-    // pickString が「未指定」として弾くため evidence が source_quote として
-    // 構築されず、verifySourceQuoteEvidence の stale-snapshot 判定にすら届かず
-    // 「検証済み evidence が無い new claim」として quote-mismatch に落ちる —
-    // どちらの経路でも共通しているのは「product finding へは絶対に昇格しない」こと。
-    expect(ledger.findings).toHaveLength(0);
-    const anomalies = ledger.reviewerAnomalies ?? [];
-    expect(anomalies).toHaveLength(1);
-    expect(anomalies[0]?.kind).toBe('quote-mismatch');
+    expect(ledger.findings).toHaveLength(1);
+    expect(ledger.reviewerAnomalies ?? []).toHaveLength(0);
+    const evidence = ledger.rawFindings[0]?.evidence[0];
+    expect(evidence).toMatchObject({
+      kind: 'file_quote',
+      verbatimExcerpt: expectedQuote.verbatimExcerpt,
+    });
   });
 
-  it('rejects the identical quote into a stale-snapshot reviewer anomaly when reviewScopeSnapshotId is a non-empty but wrong value (the working tree moved on since the reviewer read it)', async () => {
+  it('rejects a source-binding mismatch before manager intake', async () => {
     const { store, current } = makeLedgerStore();
 
-    const result = await runManagerWithSnapshotId(store, 'some-other-round-snapshot-id');
+    await expect(runManagerWithQuoteRequest(store, undefined, {
+      reviewReport: 'The structured extraction is not quoted in this report.',
+      runId: 'source-binding-run-1',
+      stepIteration: 1,
+    })).rejects.toThrow(/rawExcerpt must occur exactly once/);
+    expect(current().findings).toEqual([]);
+    expect(current().rawFindings).toEqual([]);
+    expect(current().reviewerAnomalies).toBeUndefined();
+  });
+
+  it('commits over-budget entity raws as durable incidents without product mutation', async () => {
+    const { store, current } = makeLedgerStore();
+
+    const result = await runManagerWithEntityOverflow(store);
 
     expect(result.status).toBe('updated');
     const ledger = current();
-    // verbatimExcerpt は現在のファイルと完全一致するが、snapshotId が違うため
-    // verifySourceQuoteEvidence は内容の一致/不一致を判定する前に stale-snapshot で
-    // 弾く（幻覚した引用が偶然一致しても match と誤判定しないための設計 —
-    // finding-evidence-protocol.integration.test.ts 参照）。
-    expect(ledger.findings).toHaveLength(0);
-    const anomalies = ledger.reviewerAnomalies ?? [];
-    expect(anomalies).toHaveLength(1);
-    expect(anomalies[0]?.kind).toBe('stale-snapshot');
+    expect(ledger.rawFindings).toHaveLength(4);
+    expect(ledger.findings).toEqual([]);
+    expect(ledger.reviewerAnomalies).toHaveLength(4);
+    expect(ledger.reviewerAnomalies?.every((anomaly) => (
+      anomaly.kind === 'protocol-anomaly'
+      && anomaly.sourceRawFindingIds.length === 1
+      && anomaly.sourceIntakeIds.length === 0
+    ))).toBe(true);
+    expect(ledger.reviewIntegrity).toMatchObject({
+      exhausted: false,
+      roundMarkers: expect.arrayContaining([expect.any(String)]),
+    });
+    const report = JSON.parse(readFileSync(
+      join(reportDir, 'findings-manager-validation.reviewers.json'),
+      'utf8',
+    )) as {
+      managerTaskAudits: Array<{
+        status: string;
+        inputBytes: number;
+      }>;
+      reviewerAnomalyLandings: Array<{
+        sourceRawFindingIds: string[];
+      }>;
+    };
+    expect(report.managerTaskAudits).toMatchObject([{
+      status: 'input_overflow',
+      inputBytes: expect.any(Number),
+    }]);
+    expect(report.managerTaskAudits[0]?.inputBytes).toBeGreaterThan(
+      MAIN_MANAGER_INPUT_MAX_BYTES,
+    );
+    expect(report.reviewerAnomalyLandings).toHaveLength(4);
+    expect(report.reviewerAnomalyLandings.every(
+      (landing) => landing.sourceRawFindingIds.length === 1,
+    )).toBe(true);
   });
 
   it('rejects admission when the source file is replaced after inspection and leaves the substitute unchanged', () => {
@@ -234,8 +335,8 @@ describe('reviewScopeSnapshotId correctness determines admission outcome (manage
       linkSync(outsidePath, sourcePath);
     };
 
-    const verification = verifySourceQuoteEvidence(cwd, {
-      kind: 'source_quote',
+    const verification = verifyFileQuoteEvidence(cwd, {
+      kind: 'file_quote',
       path: 'src/example.ts',
       startLine: 3,
       endLine: 3,

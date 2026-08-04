@@ -1,6 +1,9 @@
-import type { WorkflowStep } from '../../models/types.js';
+import type {
+  WorkflowResumePointEntry,
+  WorkflowStep,
+} from '../../models/types.js';
 import type { JudgeStageEntry, PhaseName, PhasePromptParts } from '../types.js';
-import type { WorkflowExecutionScope } from '../workflow-execution-scope.js';
+import { requireWorkflowResumeStackSnapshot } from '../run/resume-point.js';
 
 export interface WorkflowPhaseRelay {
   onPhaseStart: (
@@ -11,7 +14,6 @@ export interface WorkflowPhaseRelay {
     promptParts: PhasePromptParts,
     phaseExecutionId?: string,
     iteration?: number,
-    scope?: WorkflowExecutionScope,
   ) => void;
   onPhaseComplete: (
     step: WorkflowStep,
@@ -22,7 +24,6 @@ export interface WorkflowPhaseRelay {
     error?: string,
     phaseExecutionId?: string,
     iteration?: number,
-    scope?: WorkflowExecutionScope,
   ) => void;
   onJudgeStage: (
     step: WorkflowStep,
@@ -31,31 +32,83 @@ export interface WorkflowPhaseRelay {
     entry: JudgeStageEntry,
     phaseExecutionId?: string,
     iteration?: number,
-    scope?: WorkflowExecutionScope,
   ) => void;
 }
 
 export function createWorkflowPhaseRelay(
   emit: (event: string, ...args: unknown[]) => void,
+  getCurrentWorkflowStack: () => readonly WorkflowResumePointEntry[] | undefined,
 ): WorkflowPhaseRelay {
+  const workflowStackByPhase = new Map<string, WorkflowResumePointEntry[]>();
+  const phaseKey = (
+    step: WorkflowStep,
+    phase: 1 | 2 | 3,
+    phaseExecutionId: string | undefined,
+    iteration: number | undefined,
+  ): string => JSON.stringify([
+    step.name,
+    phase,
+    phaseExecutionId,
+    iteration,
+  ]);
   return {
-    onPhaseStart: (step, phase, phaseName, instruction, promptParts, phaseExecutionId, iteration, scope) => {
-      if (scope === undefined) {
-        throw new Error(`phase:start for step "${step.name}" requires an execution scope`);
-      }
-      emit('phase:start', step, phase, phaseName, instruction, promptParts, phaseExecutionId, iteration, scope);
+    onPhaseStart: (step, phase, phaseName, instruction, promptParts, phaseExecutionId, iteration) => {
+      const workflowStack = requireWorkflowResumeStackSnapshot(
+        getCurrentWorkflowStack(),
+      );
+      workflowStackByPhase.set(
+        phaseKey(step, phase, phaseExecutionId, iteration),
+        workflowStack,
+      );
+      emit(
+        'phase:start',
+        step,
+        phase,
+        phaseName,
+        instruction,
+        promptParts,
+        phaseExecutionId,
+        iteration,
+        workflowStack,
+      );
     },
-    onPhaseComplete: (step, phase, phaseName, content, phaseStatus, error, phaseExecutionId, iteration, scope) => {
-      if (scope === undefined) {
-        throw new Error(`phase:complete for step "${step.name}" requires an execution scope`);
+    onPhaseComplete: (step, phase, phaseName, content, phaseStatus, error, phaseExecutionId, iteration) => {
+      const key = phaseKey(step, phase, phaseExecutionId, iteration);
+      const workflowStack = workflowStackByPhase.get(key);
+      if (workflowStack === undefined) {
+        throw new Error(`Phase completion has no originating workflow stack: ${step.name}:${phase}`);
       }
-      emit('phase:complete', step, phase, phaseName, content, phaseStatus, error, phaseExecutionId, iteration, scope);
+      workflowStackByPhase.delete(key);
+      emit(
+        'phase:complete',
+        step,
+        phase,
+        phaseName,
+        content,
+        phaseStatus,
+        error,
+        phaseExecutionId,
+        iteration,
+        workflowStack,
+      );
     },
-    onJudgeStage: (step, phase, phaseName, entry, phaseExecutionId, iteration, scope) => {
-      if (scope === undefined) {
-        throw new Error(`phase:judge_stage for step "${step.name}" requires an execution scope`);
+    onJudgeStage: (step, phase, phaseName, entry, phaseExecutionId, iteration) => {
+      const workflowStack = workflowStackByPhase.get(
+        phaseKey(step, phase, phaseExecutionId, iteration),
+      );
+      if (workflowStack === undefined) {
+        throw new Error(`Judge stage has no originating workflow stack: ${step.name}:${phase}`);
       }
-      emit('phase:judge_stage', step, phase, phaseName, entry, phaseExecutionId, iteration, scope);
+      emit(
+        'phase:judge_stage',
+        step,
+        phase,
+        phaseName,
+        entry,
+        phaseExecutionId,
+        iteration,
+        workflowStack,
+      );
     },
   };
 }

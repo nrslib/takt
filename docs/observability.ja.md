@@ -22,6 +22,8 @@ observability:
   usage_events_phase: true
 ```
 
+`monitor: true` は run ごとの metrics スナップショットを `.takt/runs/<run>/monitor.json` に、`session_log_exporter: true` は OTel 由来の shadow session log を `.takt/runs/<run>/logs/<session>-otel-session-shadow.jsonl` に出力します。どちらもローカルファイルへの出力で、OTLP endpoint は不要です。
+
 OpenTelemetry HTTP exporter の送信先をローカル collector に向けて TAKT を実行します。
 
 ```bash
@@ -31,7 +33,7 @@ takt run
 
 `observability.enabled: true` かつ `OTEL_EXPORTER_OTLP_ENDPOINT` が設定されている場合、TAKT は config で有効化したローカル exporter を維持したまま、span と metric を OTLP で送信します。`OTEL_EXPORTER_OTLP_ENDPOINT` が未設定の場合はローカル exporter のみを使い、ネットワーク送信は行いません。`observability.enabled: false` の場合は、OTLP 環境変数が設定されていても OpenTelemetry SDK を初期化しません。
 
-Grafana は `http://127.0.0.1:3000` で開き、`takt` service を確認します。trace は既存の workflow span tree（`workflow.<name>` の下に `step.<name>`、さらに phase / judge span）として表示され、metric はローカルの `monitor.json` 出力と並走して送信されます。
+Grafana は `http://127.0.0.1:3000` で開き、`takt` service を確認します。trace は既存の workflow span tree（`workflow.<name>` の下に `step.<name>`、さらに `phase.<step>.<phaseName>` / `judge_stage.<step>.<stage>.<method>` という名前の phase / judge span）として表示され、metric はローカルの `monitor.json` 出力と並走して送信されます。
 
 workflow がまだ実行中の場合、OpenTelemetry exporter は長時間生存する root `workflow.<name>` span が終了する前に、完了済みの child span を送信することがあります。Tempo でその active trace を見つけやすくするため、TAKT は root workflow span の下に短命の `workflow_start.<workflowName>` span も送信します。この補助 span は `takt.workflow.status = running` を含む workflow / run 属性を持ちますが、root、step、phase、judge span を置き換えたり改名したりしません。trace discovery 専用であり、shadow session log の canonical record には変換されません。
 
@@ -64,7 +66,7 @@ workflow が abort/error で終わった場合、root `workflow.<name>` span に
 | 属性 | 意味 |
 |------|------|
 | `takt.failure.kind` | `step_error`、`runtime_error`、`iteration_limit` などの abort 種別 |
-| `takt.failure.step` | abort 記録時点の current workflow step |
+| `takt.failure.step` | ネストした workflow をまたいで保持される最深の failing step |
 | `takt.failure.reason` | sanitize 済みの abort reason |
 
 OTLP export には base endpoint が必要です。
@@ -75,7 +77,24 @@ OTLP export には base endpoint が必要です。
 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | 任意の trace endpoint 上書き。`OTEL_EXPORTER_OTLP_ENDPOINT` も設定されている場合だけ使用します。 |
 | `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | 任意の metric endpoint 上書き。`OTEL_EXPORTER_OTLP_ENDPOINT` も設定されている場合だけ使用します。 |
 
+TAKT が明示的に解決・検証するのはこの endpoint 3種だけです。その他の標準 `OTEL_EXPORTER_OTLP_*` 環境変数（`_HEADERS`、`_TIMEOUT`、`_COMPRESSION` など）は TAKT では解釈せず、OpenTelemetry SDK にはそのまま届きます。子プロセスへの伝播はより厳格で、資格情報を含む変数（`_HEADERS`、クライアント証明書、クライアント鍵）は TAKT が渡す環境から除外され、非機微な変数のみ通過します。
+
 OTLP export に使用する endpoint は絶対 `http` または `https` URL である必要があります。trace / metric 個別 endpoint だけを設定して base endpoint を設定していない場合、OTLP export には opt-in せず、TAKT はローカル exporter のみを使います。base endpoint が設定されている場合は、個別 endpoint 上書きも run 開始前に検証されます。起動後に collector が停止しているなどの export 送信失敗が起きても、workflow run は阻害しません。
+
+## 環境変数で observability を上書きする
+
+`observability` の各フラグは、config ファイルを編集せずにプロセス単位で上書きできます。
+
+| 環境変数 | 上書き対象 |
+|----------|-----------|
+| `TAKT_OBSERVABILITY_ENABLED` | `observability.enabled` |
+| `TAKT_OBSERVABILITY_MONITOR` | `observability.monitor` |
+| `TAKT_OBSERVABILITY_SESSION_LOG_EXPORTER` | `observability.session_log_exporter` |
+| `TAKT_OBSERVABILITY_USAGE_EVENTS_PHASE` | `observability.usage_events_phase` |
+
+各変数は `true` または `false` を受け付け、`~/.takt/config.yaml` と `.takt/config.yaml` の値より優先されます。
+
+command gate から起動される nested `takt` run には、observability 設定と OTLP endpoint がこれらの環境変数経由で自動的に伝播します。credential を含む exporter 変数（`_HEADERS`、client certificate、client key）は伝播から除外されます。
 
 ## Phase Usage Events を有効化する
 

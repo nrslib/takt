@@ -11,7 +11,10 @@ import type {
   FindingManagerReportPublication,
 } from './types.js';
 import type { FindingManagerLedgerCommit } from './store.js';
-import { assertRawFindingsAppendOnly } from './finding-integrity.js';
+import {
+  assertFindingLedgerAppendOnlyProjection,
+  assertFindingLedgerAppendOnlyTransition,
+} from './finding-integrity.js';
 import { addRoundMarker } from './round-marker.js';
 
 export interface FindingLedgerMutationValue<Result> {
@@ -39,13 +42,7 @@ export function normalizeFindingLedger(
     );
   }
   assertFindingLedgerProjectionInvariant(ledger);
-  assertRawFindingsAppendOnly([], ledger.rawFindings);
-  if (ledger.pendingManagerCommit !== undefined) {
-    assertRawFindingsAppendOnly(
-      ledger.rawFindings,
-      ledger.pendingManagerCommit.completed.rawFindings,
-    );
-  }
+  assertFindingLedgerAppendOnlyProjection(ledger);
   return ledger;
 }
 
@@ -55,7 +52,7 @@ function normalizeFindingLedgerTransition(
   workflowName: string,
 ): FindingLedger {
   const normalized = normalizeFindingLedger(next, workflowName);
-  assertRawFindingsAppendOnly(current.rawFindings, normalized.rawFindings);
+  assertFindingLedgerAppendOnlyTransition(current, normalized);
   return normalized;
 }
 

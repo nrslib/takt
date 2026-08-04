@@ -4,14 +4,9 @@ import type {
   TraceReportParams,
   TraceStep,
   TracePhase,
-  TraceWorkflowCall,
 } from './traceReportTypes.js';
 import { parseJsonl, buildTraceFromRecords, type PromptRecord } from './traceReportParser.js';
-import {
-  cloneStepsForMode,
-  cloneWorkflowCallsForMode,
-  sanitizeTraceParamsForMode,
-} from './traceReportRedaction.js';
+import { cloneStepsForMode, sanitizeTraceParamsForMode } from './traceReportRedaction.js';
 import { assertTraceParams, renderTraceReportMarkdown } from './traceReportRenderer.js';
 
 export type {
@@ -19,7 +14,6 @@ export type {
   TraceReportParams,
   TraceStep,
   TracePhase,
-  TraceWorkflowCall,
 };
 
 export { assertTraceParams, renderTraceReportMarkdown };
@@ -57,11 +51,5 @@ export function renderTraceReportFromRecords(
   const trace = buildTraceFromRecords(records, promptRecords as PromptRecord[], params.endTime);
   const paramsForMode = sanitizeTraceParamsForMode(params, mode);
   const stepsForMode = cloneStepsForMode(trace.steps, mode);
-  const workflowCallsForMode = cloneWorkflowCallsForMode(trace.workflowCalls, mode);
-  return renderTraceReportMarkdown(
-    paramsForMode,
-    trace.traceStartedAt,
-    stepsForMode,
-    workflowCallsForMode,
-  );
+  return renderTraceReportMarkdown(paramsForMode, trace.traceStartedAt, stepsForMode);
 }

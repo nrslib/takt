@@ -104,6 +104,14 @@ describe('WorkflowEngine report fallback integration', () => {
       requestMoreParts: vi.fn(),
     };
 
+    const attemptTelemetry: Array<{
+      readonly provider: string;
+      readonly providerModel: string;
+    }> = [];
+    const reportProvenance: Array<{
+      readonly provider: string;
+      readonly model: string;
+    }> = [];
     const engine = new WorkflowEngine(workflowConfig(), tmpRoot, 'Task: implement fallback', {
       projectCwd: tmpRoot,
       provider: 'opencode',
@@ -114,6 +122,18 @@ describe('WorkflowEngine report fallback integration', () => {
       },
       reportDirName: 'report-fallback-it',
       structuredCaller,
+      onDelegatedAgentUsage: (context) => {
+        attemptTelemetry.push({
+          provider: context.provider,
+          providerModel: context.providerModel,
+        });
+      },
+    });
+    engine.on('step:report', (_step, _path, _name, context) => {
+      reportProvenance.push({
+        provider: context.provider,
+        model: context.model,
+      });
     });
 
     const state = await engine.run();
@@ -142,5 +162,13 @@ describe('WorkflowEngine report fallback integration', () => {
       allowedTools: [],
       sessionId: undefined,
     }));
+    expect(reportProvenance).toEqual([{
+      provider: 'opencode',
+      model: 'opencode/qwen3-coder-next',
+    }]);
+    expect(attemptTelemetry).toEqual(expect.arrayContaining([{
+      provider: 'codex',
+      providerModel: 'gpt-5-report',
+    }]));
   });
 });

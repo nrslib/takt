@@ -22,9 +22,11 @@
 | `--provider <name>` | エージェント provider を上書き（claude\|claude-sdk\|claude-terminal\|codex\|opencode\|cursor\|copilot\|kiro\|mock） |
 | `--auto-strategy <strategy>` | auto routing の strategy を上書き（`cost`\|`balanced`\|`performance`）。実行時に effective `auto_routing` を持つ現在の workflow または workflow_call child へ到達した場合に適用し、それ以外では warning を出して無視します。 |
 | `--model <name>` | エージェントモデルを上書き |
-| `--config <path>` | グローバル設定ファイルのパス（デフォルト: `~/.takt/config.yaml`） |
+| `-c, --continue` | 現在のプロジェクトディレクトリ・プロバイダの直近アシスタントセッションから継続 |
 
 正式オプションは `--workflow` です。
+
+グローバル設定ディレクトリ（デフォルト: `~/.takt/`）は環境変数 `TAKT_CONFIG_DIR` で変更できます。
 
 ## インタラクティブモード
 
@@ -242,7 +244,15 @@ takt add
 
 # GitHub Issue からタスクを追加（Issue 番号がブランチ名に反映される）
 takt add #28
+
+# 積むタスクの workflow を指定
+takt add -w default
+
+# PR レビューコメントからタスクを作成
+takt add --pr 123
 ```
+
+`-w, --workflow <name or path>` はタスクに保存する workflow を指定し、`--pr <number>` は PR のレビューコメントからタスクを作成します。
 
 ### takt run
 
@@ -286,6 +296,8 @@ takt list --non-interactive --action diff --branch takt/my-branch
 takt list --non-interactive --action delete --branch takt/my-branch --yes
 takt list --non-interactive --format json
 ```
+
+`--action` に指定できるのは `diff`、`sync`、`try`、`merge`、`delete` の5種です。非インタラクティブのアクションには `--branch` が必須で、`delete` にはさらに `--yes` が必須です。`sync` が失敗した場合は終了コード `1` で終了します。
 
 インタラクティブモードでは **Merge from root** を選択でき、ルートリポジトリの HEAD をワークツリーブランチにマージします。コンフリクト発生時は AI が自動解決を試みます。
 
@@ -353,6 +365,8 @@ takt eject persona coder
 takt eject instruction plan --global
 ```
 
+`eject` のファセット型は単数形（`persona`、`policy`、`knowledge`、`instruction`、`output-contract`）です（`takt catalog` は複数形を使います）。
+
 workflow の正式ディレクトリ名は `workflows/` です。
 
 ### takt workflow
@@ -369,14 +383,6 @@ takt workflow init review-flow --template faceted --global
 # workflow 名または YAML パスを検証
 takt workflow doctor sample-flow
 takt workflow doctor .takt/workflows/sample-flow.yaml
-```
-
-### takt resume
-
-直近の失敗・中断したダイレクト（ワンショット）run を再開します。完了しなかった最新のダイレクト run を探し、最初からやり直すのではなく既存の run ディレクトリを再利用して止まったところから続行します。
-
-```bash
-takt resume
 ```
 
 ### takt clear
@@ -413,12 +419,15 @@ takt catalog
 takt catalog personas
 ```
 
+`catalog` のファセット型引数は複数形（`personas`、`policies`、`knowledge`、`instructions`、`output-contracts`）です（`takt eject` は単数形を使います）。
+
 ### takt prompt
 
 各 step とフェーズの組み立て済みプロンプトをプレビューします。
 
 ```bash
-takt prompt [workflow]
+takt prompt
+takt prompt default
 ```
 
 ### takt reset
@@ -465,7 +474,7 @@ takt repertoire remove @{owner}/{repo}
 
 インストールされたパッケージは `~/.takt/repertoire/` に保存され、workflow 選択やファセット解決で利用可能になります。
 
-同名 workflow が複数箇所にある場合の探索順は `.takt/workflows/` → `~/.takt/workflows/` → builtin です。
+同名 workflow が複数箇所にある場合の探索順は `.takt/workflows/` → `~/.takt/workflows/` → builtin です。この名前解決の対象は project・user・builtin の 3 層だけで、repertoire の workflow は `@{owner}/{repo}/{workflow-name}` で明示的に参照します。
 
 ### takt telemetry
 
@@ -480,6 +489,14 @@ takt telemetry enable
 
 # ローカルのルーティングイベント記録を無効化
 takt telemetry disable
+```
+
+### takt resume
+
+現在のプロジェクトディレクトリで直近に中断（aborted）・失敗（failed）したダイレクト（ワンショット）run を対象に対話メニュー（Requeue / Retry / Instruct / View reports / Cancel）を表示します。worktree/クローン実行は対象外で、再実行のレポートは新しい run ディレクトリに出力します。
+
+```bash
+takt resume
 ```
 
 ### takt purge

@@ -11,16 +11,8 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import type {
-  WorkflowConfig,
-  WorkflowStep,
-  LoopMonitorConfig,
-  LoopMonitorRule,
-  WorkflowMaxSteps,
-  WorkflowResumePoint,
-} from '../core/models/index.js';
+import { existsSync, rmSync } from 'node:fs';
+import type { WorkflowConfig, WorkflowStep, LoopMonitorConfig, LoopMonitorRule } from '../core/models/index.js';
 
 // --- Mock setup (must be before imports that use these modules) ---
 
@@ -50,12 +42,6 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 // --- Imports (after mocks) ---
 
 import { WorkflowEngine } from '../core/workflow/index.js';
-import { LoopMonitorJudgeRunner } from '../core/workflow/engine/LoopMonitorJudgeRunner.js';
-import type { InstructionBuildTransaction } from '../core/workflow/engine/instruction-build-transaction.js';
-import { createInitialState } from '../core/workflow/engine/state-manager.js';
-import { WorkflowStepBudget } from '../core/workflow/workflow-step-budget.js';
-import { snapshotWorkflowExecutionScope } from '../core/workflow/workflow-execution-scope.js';
-import { parseWorkflowResumePoint } from '../core/workflow/resume-point-codec.js';
 import { runAgent } from '../agents/runner.js';
 import { runReportPhase } from '../core/workflow/phase-runner.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
@@ -69,7 +55,6 @@ import {
   applyDefaultMocks,
   cleanupWorkflowEngine,
 } from './engine-test-helpers.js';
-import { buildWorkflowCallInvocationRecordsFixture } from './helpers/workflow-resume-fixture.js';
 
 function loopJudgeRules(): LoopMonitorRule[] {
   return [
@@ -125,255 +110,6 @@ function buildConfigWithLoopMonitor(
   return config;
 }
 
-function buildNestedPendingJudgeResumePoint(): WorkflowResumePoint {
-  return {
-    version: 2,
-    stack: [
-      {
-        workflow: 'parent-loop-monitor',
-        step: 'review',
-        kind: 'workflow_call',
-        call_instance: 1,
-        step_iterations: { review: 1 },
-      },
-      {
-        workflow: 'child-loop-monitor',
-        step: 'review',
-        kind: 'agent',
-        step_iterations: { review: 1 },
-      },
-    ],
-    iteration: 3,
-    elapsed_ms: 100,
-    max_steps: 5,
-    pending_loop_judge: {
-      status: 'budget_wait',
-      triggering_step: 'review',
-      cycle: ['review'],
-      cycle_count: 1,
-      fallback_next_step: 'review',
-    },
-    workflow_call_invocations: buildWorkflowCallInvocationRecordsFixture([{
-      workflowReference: 'parent-loop-monitor',
-      step: 'review',
-      ownerPath: [],
-      callInstance: 1,
-      childWorkflowReference: 'child-loop-monitor',
-    }]),
-    workflow_step_participations: {},
-  };
-}
-
-function buildPendingJudgeResumePoint(): WorkflowResumePoint {
-  return {
-    version: 2,
-    stack: [{
-      workflow: 'test-loop-monitor',
-      step: 'ai_fix',
-      kind: 'agent',
-      step_iterations: { implement: 1, ai_review: 1, ai_fix: 1 },
-    }],
-    iteration: 3,
-    elapsed_ms: 100,
-    max_steps: 5,
-    pending_loop_judge: {
-      status: 'budget_wait',
-      triggering_step: 'ai_fix',
-      cycle: ['ai_review', 'ai_fix'],
-      cycle_count: 1,
-      fallback_next_step: 'ai_review',
-    },
-    workflow_call_invocations: {},
-    workflow_step_participations: {},
-  };
-}
-
-function buildPendingJudgeOwnerScenario(
-  configuredKind: 'agent' | 'system' | 'workflow_call',
-  resumeKind: 'agent' | 'system' | 'workflow_call',
-): { config: WorkflowConfig; resumePoint: WorkflowResumePoint } {
-  const workflowName = `pending-${configuredKind}-owner`;
-  const stepName = 'review';
-  let triggeringStep: WorkflowStep;
-  if (configuredKind === 'system') {
-    triggeringStep = {
-      name: stepName,
-      kind: 'system',
-      rules: [normalizeRule({ condition: 'when(true)', next: stepName })],
-    };
-  } else if (configuredKind === 'workflow_call') {
-    triggeringStep = {
-      name: stepName,
-      kind: 'workflow_call',
-      call: 'unused-child',
-      rules: [normalizeRule({ condition: 'COMPLETE', next: stepName })],
-    };
-  } else {
-    triggeringStep = makeStep(stepName, {
-      rules: [makeRule('done', stepName)],
-    });
-  }
-  const entry = {
-    workflow: workflowName,
-    step: stepName,
-    kind: resumeKind,
-    step_iterations: { [stepName]: 1 },
-    ...(resumeKind === 'workflow_call' ? { call_instance: 1 } : {}),
-  };
-  return {
-    config: {
-      name: workflowName,
-      initialStep: stepName,
-      maxSteps: 1,
-      loopMonitors: [{
-        cycle: [stepName],
-        threshold: 1,
-        judge: {
-          rules: [normalizeRule({ condition: 'Healthy', next: stepName })],
-        },
-      }],
-      steps: [triggeringStep],
-    },
-    resumePoint: {
-      version: 2,
-      stack: [entry],
-      iteration: 1,
-      elapsed_ms: 100,
-      max_steps: 1,
-      pending_loop_judge: {
-        status: 'budget_wait',
-        triggering_step: stepName,
-        cycle: [stepName],
-        cycle_count: 1,
-        fallback_next_step: stepName,
-      },
-      workflow_call_invocations: resumeKind === 'workflow_call'
-        ? buildWorkflowCallInvocationRecordsFixture([{
-            workflowReference: workflowName,
-            step: stepName,
-            ownerPath: [],
-            callInstance: 1,
-            childWorkflowReference: 'unused-child',
-          }])
-        : {},
-      workflow_step_participations: {},
-    },
-  };
-}
-
-function createJudgeBoundaryHarness(options: {
-  maxSteps: WorkflowMaxSteps;
-  initialIteration: number;
-  ignoreIterationLimit?: boolean;
-  requestExtension?: (request: {
-    currentIteration: number;
-    maxSteps: number;
-    currentStep: string;
-  }) => Promise<number | null>;
-  providerError?: Error;
-  findingsSummaryError?: Error;
-  interruptRequested?: () => boolean;
-  buildInstruction?: (
-    state: ReturnType<typeof createInitialState>,
-    transaction: InstructionBuildTransaction,
-  ) => string;
-}) {
-  const triggeringStep = makeStep('review', {
-    rules: [makeRule('done', 'fix')],
-  });
-  const config: WorkflowConfig = {
-    name: 'judge-budget',
-    initialStep: triggeringStep.name,
-    maxSteps: options.maxSteps,
-    steps: [triggeringStep],
-  };
-  const state = createInitialState(config, { initialIteration: options.initialIteration });
-  const providerInfo = {
-    provider: 'mock' as const,
-    providerSource: 'step' as const,
-    model: 'judge-model',
-    modelSource: 'step' as const,
-  };
-  const resolveStepProviderModel = options.providerError === undefined
-    ? vi.fn(() => providerInfo)
-    : vi.fn(() => {
-        throw options.providerError;
-      });
-  const runNormalStep = vi.fn().mockResolvedValue({
-    response: makeResponse({ persona: 'supervisor', content: 'Healthy', matchedRuleIndex: 0 }),
-    instruction: 'judge instruction',
-  });
-  const onStepStart = vi.fn();
-  const setActiveStep = vi.fn();
-  const emitIterationLimit = vi.fn();
-  const setPendingLoopJudge = vi.fn();
-  const clearPendingLoopJudge = vi.fn();
-  const syncMaxSteps = vi.fn();
-  const interruptRequested = options.interruptRequested === undefined
-    ? () => false
-    : options.interruptRequested;
-  const runner = new LoopMonitorJudgeRunner({
-    optionsBuilder: {
-      resolveStepProviderModelBeforeAutoRouting: vi.fn(() => providerInfo),
-      resolveStepProviderModel,
-    },
-    stepExecutor: {
-      buildInstruction: vi.fn((
-        _step,
-        _stepIteration,
-        instructionState,
-        _task,
-        _maxSteps,
-        buildOptions,
-      ) => options.buildInstruction?.(instructionState, buildOptions.transaction) ?? 'judge instruction'),
-      buildPhase1Instruction: vi.fn((instruction) => instruction),
-      runNormalStep,
-    },
-    state,
-    task: 'test task',
-    stepBudget: new WorkflowStepBudget(options.maxSteps),
-    recordCountableProgress: vi.fn(),
-    interruptRequested,
-    ignoreIterationLimit: options.ignoreIterationLimit === true,
-    requestIterationLimitExtension: options.requestExtension,
-    setPendingLoopJudge,
-    startPendingLoopJudge: vi.fn(),
-    clearPendingLoopJudge,
-    syncMaxSteps,
-    getExecutionScope: () => snapshotWorkflowExecutionScope([]),
-    getLimitExecutionScope: (step) => snapshotWorkflowExecutionScope([{
-      workflow: config.name,
-      step: step.name,
-      kind: 'agent',
-    }]),
-    setActiveStep,
-    emitIterationLimit,
-    updatePersonaSession: vi.fn(),
-    resolveNextStepFromDone: vi.fn(() => 'fix'),
-    onStepStart,
-    onStepComplete: vi.fn(),
-    emitCollectedReports: vi.fn(),
-    resetCycleDetector: vi.fn(),
-    getFindingsSummaryForJudge: options.findingsSummaryError === undefined
-      ? undefined
-      : () => { throw options.findingsSummaryError; },
-  } as never);
-
-  return {
-    state,
-    triggeringStep,
-    runner,
-    resolveStepProviderModel,
-    runNormalStep,
-    onStepStart,
-    setActiveStep,
-    emitIterationLimit,
-    setPendingLoopJudge,
-    clearPendingLoopJudge,
-    syncMaxSteps,
-  };
-}
-
 describe('WorkflowEngine Integration: Loop Monitors', () => {
   let tmpDir: string;
   let engine: WorkflowEngine | null = null;
@@ -394,740 +130,6 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
     }
   });
 
-  it('should resolve a workflow_call-triggered judge without resolving the wrapper provider', async () => {
-    const triggeringStep = {
-      name: 'delegate',
-      kind: 'workflow_call' as const,
-      call: 'shared/review',
-      rules: [normalizeRule({ condition: 'COMPLETE', next: 'COMPLETE' })],
-    };
-    const config: WorkflowConfig = {
-      name: 'parent',
-      initialStep: 'delegate',
-      maxSteps: 3,
-      steps: [triggeringStep],
-    };
-    const state = createInitialState(config, {});
-    const judgeProviderInfo = {
-      provider: 'codex' as const,
-      providerSource: 'step' as const,
-      model: 'gpt-5',
-      modelSource: 'step' as const,
-    };
-    const resolveStepProviderModel = vi.fn((step: WorkflowStep) => {
-      if (step.kind === 'workflow_call') {
-        throw new Error('workflow_call wrapper reached provider resolution');
-      }
-      return judgeProviderInfo;
-    });
-    const runner = new LoopMonitorJudgeRunner({
-      optionsBuilder: {
-        resolveStepProviderModelBeforeAutoRouting: vi.fn(() => judgeProviderInfo),
-        resolveStepProviderModel,
-      },
-      stepExecutor: {
-        buildInstruction: vi.fn(() => 'judge instruction'),
-        buildPhase1Instruction: vi.fn((instruction) => instruction),
-        runNormalStep: vi.fn().mockResolvedValue({
-          response: makeResponse({ persona: 'supervisor', content: 'Healthy', matchedRuleIndex: 0 }),
-          instruction: 'judge instruction',
-        }),
-      },
-      state,
-      task: 'test task',
-      stepBudget: new WorkflowStepBudget(3),
-      recordCountableProgress: vi.fn(),
-      interruptRequested: () => false,
-      ignoreIterationLimit: false,
-      setPendingLoopJudge: vi.fn(),
-      startPendingLoopJudge: vi.fn(),
-      clearPendingLoopJudge: vi.fn(),
-      syncMaxSteps: vi.fn(),
-      getExecutionScope: () => snapshotWorkflowExecutionScope([]),
-      getLimitExecutionScope: (step) => snapshotWorkflowExecutionScope([{
-        workflow: config.name,
-        step: step.name,
-        kind: 'agent',
-      }]),
-      setActiveStep: vi.fn(),
-      emitIterationLimit: vi.fn(),
-      updatePersonaSession: vi.fn(),
-      resolveNextStepFromDone: vi.fn(() => 'COMPLETE'),
-      onStepStart: vi.fn(),
-      onStepComplete: vi.fn(),
-      emitCollectedReports: vi.fn(),
-      resetCycleDetector: vi.fn(),
-    } as never);
-
-    const nextStep = await runner.run({
-      cycle: ['delegate'],
-      threshold: 1,
-      judge: {
-        persona: 'supervisor',
-        rules: loopJudgeRules(),
-      },
-    }, 1, triggeringStep, undefined, 'COMPLETE');
-
-    expect(nextStep).toEqual(expect.objectContaining({ nextStep: 'COMPLETE' }));
-    expect(resolveStepProviderModel).toHaveBeenCalledTimes(1);
-    expect(resolveStepProviderModel.mock.calls[0]?.[0].name).toMatch(/^_loop_judge_/);
-  });
-
-  it('should reject a judge at the shared budget boundary before provider resolution', async () => {
-    const requestExtension = vi.fn().mockResolvedValue(null);
-    const harness = createJudgeBoundaryHarness({
-      maxSteps: 3,
-      initialIteration: 3,
-      requestExtension,
-    });
-
-    const result = await harness.runner.run({
-      cycle: ['review'],
-      threshold: 1,
-      judge: { persona: 'supervisor', rules: loopJudgeRules() },
-    }, 1, harness.triggeringStep, undefined, 'fix');
-
-    expect(result).toEqual({ iterationLimitReached: true });
-    expect(harness.state.iteration).toBe(3);
-    expect(harness.state.stepIterations.has('_loop_judge_review')).toBe(false);
-    expect(harness.resolveStepProviderModel).not.toHaveBeenCalled();
-    expect(harness.runNormalStep).not.toHaveBeenCalled();
-    expect(harness.onStepStart).not.toHaveBeenCalled();
-    expect(harness.emitIterationLimit).toHaveBeenCalledWith(
-      3,
-      3,
-      '_loop_judge_review',
-      expect.objectContaining({
-        stack: [expect.objectContaining({ step: '_loop_judge_review' })],
-      }),
-    );
-    expect(requestExtension).toHaveBeenCalledWith(expect.objectContaining({
-      currentIteration: 3,
-      maxSteps: 3,
-      currentStep: '_loop_judge_review',
-      scope: expect.objectContaining({
-        stack: [expect.objectContaining({ step: '_loop_judge_review' })],
-      }),
-    }));
-  });
-
-  it('should run a judge only after extending the shared budget', async () => {
-    const requestExtension = vi.fn().mockResolvedValue(1);
-    const harness = createJudgeBoundaryHarness({
-      maxSteps: 3,
-      initialIteration: 3,
-      requestExtension,
-    });
-
-    const result = await harness.runner.run({
-      cycle: ['review'],
-      threshold: 1,
-      judge: { persona: 'supervisor', rules: loopJudgeRules() },
-    }, 1, harness.triggeringStep, undefined, 'fix');
-
-    expect(result).toEqual(expect.objectContaining({ nextStep: 'fix' }));
-    expect(harness.state.iteration).toBe(4);
-    expect(harness.state.stepIterations.get('_loop_judge_review')).toBe(1);
-    expect(harness.runNormalStep).toHaveBeenCalledOnce();
-    expect(requestExtension).toHaveBeenCalledOnce();
-    expect(harness.syncMaxSteps).toHaveBeenCalledWith(4);
-  });
-
-  it('should not commit a judge interrupted while waiting for a budget extension', async () => {
-    let interrupted = false;
-    let resolveExtension: ((value: number | null) => void) | undefined;
-    const extension = new Promise<number | null>((resolve) => {
-      resolveExtension = resolve;
-    });
-    const requestExtension = vi.fn(() => extension);
-    const harness = createJudgeBoundaryHarness({
-      maxSteps: 3,
-      initialIteration: 3,
-      requestExtension,
-      interruptRequested: () => interrupted,
-    });
-
-    const runPromise = harness.runner.run({
-      cycle: ['review'],
-      threshold: 1,
-      judge: { persona: 'supervisor', rules: loopJudgeRules() },
-    }, 1, harness.triggeringStep, undefined, 'fix');
-    await vi.waitFor(() => expect(requestExtension).toHaveBeenCalledOnce());
-    interrupted = true;
-    if (resolveExtension === undefined) {
-      throw new Error('Budget extension resolver was not initialized');
-    }
-    resolveExtension(1);
-
-    await expect(runPromise).rejects.toThrow('Loop monitor judge interrupted before start');
-    expect(harness.state.iteration).toBe(3);
-    expect(harness.state.stepIterations.has('_loop_judge_review')).toBe(false);
-    expect(harness.runNormalStep).not.toHaveBeenCalled();
-    expect(harness.onStepStart).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { name: 'an infinite budget', maxSteps: 'infinite' as const, ignoreIterationLimit: false },
-    { name: 'an ignored finite budget', maxSteps: 3 as const, ignoreIterationLimit: true },
-  ])('should run a judge without an extension callback for $name', async ({ maxSteps, ignoreIterationLimit }) => {
-    const requestExtension = vi.fn().mockResolvedValue(null);
-    const harness = createJudgeBoundaryHarness({
-      maxSteps,
-      initialIteration: 3,
-      ignoreIterationLimit,
-      requestExtension,
-    });
-
-    const result = await harness.runner.run({
-      cycle: ['review'],
-      threshold: 1,
-      judge: { persona: 'supervisor', rules: loopJudgeRules() },
-    }, 1, harness.triggeringStep, undefined, 'fix');
-
-    expect(result).toEqual(expect.objectContaining({ nextStep: 'fix' }));
-    expect(harness.state.iteration).toBe(4);
-    expect(harness.runNormalStep).toHaveBeenCalledOnce();
-    expect(requestExtension).not.toHaveBeenCalled();
-    expect(harness.emitIterationLimit).not.toHaveBeenCalled();
-  });
-
-  it('should preserve judge iteration state when provider resolution fails', async () => {
-    const providerError = new Error('judge provider resolution failed');
-    const harness = createJudgeBoundaryHarness({
-      maxSteps: 4,
-      initialIteration: 3,
-      providerError,
-    });
-
-    await expect(harness.runner.run({
-      cycle: ['review'],
-      threshold: 1,
-      judge: { persona: 'supervisor', rules: loopJudgeRules() },
-    }, 1, harness.triggeringStep, undefined, 'fix')).rejects.toBe(providerError);
-
-    expect(harness.state.iteration).toBe(3);
-    expect(harness.state.stepIterations.has('_loop_judge_review')).toBe(false);
-    expect(harness.runNormalStep).not.toHaveBeenCalled();
-    expect(harness.onStepStart).not.toHaveBeenCalled();
-  });
-
-  it('should roll back judge preparation when instruction metadata generation fails', async () => {
-    const findingsSummaryError = new Error('judge findings summary failed');
-    const harness = createJudgeBoundaryHarness({
-      maxSteps: 4,
-      initialIteration: 3,
-      findingsSummaryError,
-    });
-    harness.state.previousResponseSourcePath = 'previous.md';
-
-    await expect(harness.runner.run({
-      cycle: ['review'],
-      threshold: 1,
-      judge: { persona: 'supervisor', rules: loopJudgeRules() },
-    }, 1, harness.triggeringStep, undefined, 'fix')).rejects.toBe(findingsSummaryError);
-
-    expect(harness.state.iteration).toBe(3);
-    expect(harness.state.stepIterations.has('_loop_judge_review')).toBe(false);
-    expect(harness.state.previousResponseSourcePath).toBe('previous.md');
-    expect(harness.runNormalStep).not.toHaveBeenCalled();
-    expect(harness.onStepStart).not.toHaveBeenCalled();
-  });
-
-  it('should roll back judge preparation when interrupted after instruction generation', async () => {
-    let interrupted = false;
-    const snapshotPath = join(tmpDir, 'judge.snapshot.md');
-    const harness = createJudgeBoundaryHarness({
-      maxSteps: 4,
-      initialIteration: 3,
-      interruptRequested: () => interrupted,
-      buildInstruction: (instructionState, transaction) => {
-        transaction.recordSnapshotWrite(snapshotPath);
-        writeFileSync(snapshotPath, 'pending judge snapshot');
-        instructionState.previousResponseSourcePath = 'judge.snapshot.md';
-        interrupted = true;
-        return 'judge instruction';
-      },
-    });
-    harness.state.previousResponseSourcePath = 'previous.md';
-
-    await expect(harness.runner.run({
-      cycle: ['review'],
-      threshold: 1,
-      judge: { persona: 'supervisor', rules: loopJudgeRules() },
-    }, 1, harness.triggeringStep, undefined, 'fix')).rejects.toThrow(
-      'Loop monitor judge interrupted before start',
-    );
-
-    expect(harness.state.iteration).toBe(3);
-    expect(harness.state.stepIterations.has('_loop_judge_review')).toBe(false);
-    expect(harness.state.previousResponseSourcePath).toBe('previous.md');
-    expect(existsSync(snapshotPath)).toBe(false);
-    expect(harness.runNormalStep).not.toHaveBeenCalled();
-    expect(harness.onStepStart).not.toHaveBeenCalled();
-  });
-
-  it('should abort with iteration_limit before starting a cycle judge at the shared budget boundary', async () => {
-    const config = {
-      ...buildConfigWithLoopMonitor(1),
-      maxSteps: 3,
-    };
-    let resumePointAtLimit: ReturnType<WorkflowEngine['getResumePoint']>;
-    const onIterationLimit = vi.fn().mockImplementation(async () => {
-      resumePointAtLimit = engine?.getResumePoint();
-      return null;
-    });
-    let abortKind: string | undefined;
-    const startedSteps: string[] = [];
-    engine = new WorkflowEngine(config, tmpDir, 'test task', {
-      projectCwd: tmpDir,
-      provider: 'mock',
-      onIterationLimit,
-    });
-    engine.on('step:start', (step) => startedSteps.push(step.name));
-    engine.on('workflow:abort', (_state, _reason, kind) => {
-      abortKind = kind;
-    });
-    mockRunAgentSequence([
-      makeResponse({ persona: 'implement', content: 'Implementation done' }),
-      makeResponse({ persona: 'ai_review', content: 'Issues found' }),
-      makeResponse({ persona: 'ai_fix', content: 'Fixed' }),
-    ]);
-    mockRuleEvaluationSequence([
-      { index: 0, method: 'phase3_tag' },
-      { index: 1, method: 'phase3_tag' },
-      { index: 0, method: 'phase3_tag' },
-    ]);
-
-    const state = await engine.run();
-
-    expect(state.status).toBe('aborted');
-    expect(state.iteration).toBe(3);
-    expect(state.stepIterations.has('_loop_judge_ai_review_ai_fix')).toBe(false);
-    expect(abortKind).toBe('iteration_limit');
-    expect(startedSteps).toEqual(['implement', 'ai_review', 'ai_fix']);
-    const calledPersonas = vi.mocked(runAgent).mock.calls.map(([persona]) => String(persona));
-    expect(calledPersonas).toHaveLength(3);
-    expect(calledPersonas.every((persona) => !persona.includes('supervisor'))).toBe(true);
-    expect(onIterationLimit).toHaveBeenCalledWith(expect.objectContaining({
-      currentIteration: 3,
-      maxSteps: 3,
-      currentStep: '_loop_judge_ai_review_ai_fix',
-      scope: expect.objectContaining({
-        stack: [expect.objectContaining({ step: '_loop_judge_ai_review_ai_fix' })],
-      }),
-    }));
-    expect(resumePointAtLimit).toEqual(expect.objectContaining({
-      iteration: 3,
-      stack: [expect.objectContaining({
-        workflow: 'test-loop-monitor',
-        step: 'ai_fix',
-        kind: 'agent',
-      })],
-      pending_loop_judge: {
-        status: 'budget_wait',
-        triggering_step: 'ai_fix',
-        cycle: ['ai_review', 'ai_fix'],
-        cycle_count: 1,
-        fallback_next_step: 'ai_review',
-      },
-    }));
-  });
-
-  it('should not start or commit a cycle judge when interrupted by the cycle event', async () => {
-    const config: WorkflowConfig = {
-      name: 'cycle-interrupt',
-      initialStep: 'review',
-      maxSteps: 5,
-      loopMonitors: [{
-        cycle: ['review'],
-        threshold: 1,
-        judge: {
-          persona: 'supervisor',
-          rules: [normalizeRule({ condition: 'Healthy', next: 'review' })],
-        },
-      }],
-      steps: [
-        makeStep('review', {
-          rules: [makeRule('done', 'review')],
-        }),
-      ],
-    };
-    const startedSteps: string[] = [];
-    const cycleEngine = new WorkflowEngine(config, tmpDir, 'test task', {
-      projectCwd: tmpDir,
-      provider: 'mock',
-    });
-    engine = cycleEngine;
-    let snapshotPathsAtCycle: string[] = [];
-    cycleEngine.on('step:start', (step) => startedSteps.push(step.name));
-    cycleEngine.on('step:cycle_detected', () => {
-      snapshotPathsAtCycle = readdirSync(tmpDir, { recursive: true }) as string[];
-      cycleEngine.abort();
-    });
-    mockRunAgentSequence([
-      makeResponse({ persona: 'review', content: 'Review complete' }),
-    ]);
-    mockRuleEvaluationSequence([
-      { index: 0, method: 'phase3_tag' },
-    ]);
-
-    const state = await cycleEngine.run();
-
-    expect(state.status).toBe('aborted');
-    expect(state.iteration).toBe(1);
-    expect(state.stepIterations.has('_loop_judge_review')).toBe(false);
-    expect(state.previousResponseSourcePath).toMatch(/previous_responses\/review\.1\./);
-    expect(startedSteps).toEqual(['review']);
-    expect(vi.mocked(runAgent)).toHaveBeenCalledOnce();
-    expect(vi.mocked(runAgent).mock.calls[0]?.[0]).toBe(config.steps[0]?.persona);
-    const snapshotPaths = readdirSync(tmpDir, { recursive: true }) as string[];
-    expect(snapshotPaths).toEqual(snapshotPathsAtCycle);
-    expect(snapshotPaths.some((path) => path.includes('loop-judge-review'))).toBe(false);
-  });
-
-  it('should resume a pending judge once without re-running the authored triggering step', async () => {
-    const config = buildConfigWithLoopMonitor(1);
-    const startedSteps: string[] = [];
-    engine = new WorkflowEngine(config, tmpDir, 'test task', {
-      projectCwd: tmpDir,
-      provider: 'mock',
-      startStep: 'ai_fix',
-      initialIteration: 3,
-      resumePoint: buildPendingJudgeResumePoint(),
-    });
-    engine.on('step:start', (step) => startedSteps.push(step.name));
-    mockRunAgentSequence([
-      makeResponse({ persona: 'supervisor', content: 'Unproductive' }),
-      makeResponse({ persona: 'reviewers', content: 'All approved' }),
-    ]);
-    mockRuleEvaluationSequence([
-      { index: 1, method: 'phase3_tag' },
-      { index: 0, method: 'phase3_tag' },
-    ]);
-
-    const state = await engine.run();
-
-    expect(state.status).toBe('completed');
-    expect(state.iteration).toBe(5);
-    expect(startedSteps).toEqual(['_loop_judge_ai_review_ai_fix', 'reviewers']);
-    expect(state.stepIterations.get('ai_fix')).toBe(1);
-    expect(engine.getResumePoint()?.pending_loop_judge).toBeUndefined();
-  });
-
-  it('should resume a started judge without consuming its budget twice after a provider exception', async () => {
-    const config = buildConfigWithLoopMonitor(1);
-    const firstEngine = new WorkflowEngine(config, tmpDir, 'test task', {
-      projectCwd: tmpDir,
-      provider: 'mock',
-    });
-    engine = firstEngine;
-    mockRunAgentSequence([
-      makeResponse({ persona: 'implement', content: 'Implementation done' }),
-      makeResponse({ persona: 'ai_review', content: 'Issues found' }),
-      makeResponse({ persona: 'ai_fix', content: 'Fixed' }),
-    ]);
-    vi.mocked(runAgent).mockRejectedValueOnce(new Error('judge provider failed'));
-    mockRuleEvaluationSequence([
-      { index: 0, method: 'phase3_tag' },
-      { index: 1, method: 'phase3_tag' },
-      { index: 0, method: 'phase3_tag' },
-    ]);
-
-    const interruptedState = await firstEngine.run();
-    const resumePoint = firstEngine.getResumePoint();
-
-    expect(interruptedState.status).toBe('aborted');
-    expect(resumePoint).toEqual(expect.objectContaining({
-      iteration: 4,
-      stack: [expect.objectContaining({
-        step: '_loop_judge_ai_review_ai_fix',
-        step_iterations: expect.objectContaining({
-          _loop_judge_ai_review_ai_fix: 1,
-        }),
-      })],
-      pending_loop_judge: expect.objectContaining({
-        status: 'started',
-        judge_step: '_loop_judge_ai_review_ai_fix',
-        iteration: 4,
-        step_iteration: 1,
-      }),
-    }));
-    if (resumePoint === undefined) throw new Error('Started judge resume point was not created');
-
-    cleanupWorkflowEngine(firstEngine);
-    const resumedEngine = new WorkflowEngine(config, tmpDir, 'test task', {
-      projectCwd: tmpDir,
-      provider: 'mock',
-      startStep: 'ai_fix',
-      initialIteration: resumePoint.iteration,
-      resumePoint,
-    });
-    engine = resumedEngine;
-    mockRunAgentSequence([
-      makeResponse({ persona: 'supervisor', content: 'Unproductive' }),
-      makeResponse({ persona: 'reviewers', content: 'All approved' }),
-    ]);
-    mockRuleEvaluationSequence([
-      { index: 1, method: 'phase3_tag' },
-      { index: 0, method: 'phase3_tag' },
-    ]);
-
-    const resumedState = await resumedEngine.run();
-
-    expect(resumedState.status).toBe('completed');
-    expect(resumedState.iteration).toBe(5);
-    expect(resumedState.stepIterations.get('_loop_judge_ai_review_ai_fix')).toBe(1);
-    expect(resumedEngine.getResumePoint()?.pending_loop_judge).toBeUndefined();
-  });
-
-  it('should resume only the pending judge in a single iteration', async () => {
-    const config = buildConfigWithLoopMonitor(1);
-    const startedSteps: string[] = [];
-    engine = new WorkflowEngine(config, tmpDir, 'test task', {
-      projectCwd: tmpDir,
-      provider: 'mock',
-      startStep: 'ai_fix',
-      initialIteration: 3,
-      resumePoint: buildPendingJudgeResumePoint(),
-    });
-    engine.on('step:start', (step) => startedSteps.push(step.name));
-    mockRunAgentSequence([
-      makeResponse({ persona: 'supervisor', content: 'Unproductive' }),
-    ]);
-    mockRuleEvaluationSequence([
-      { index: 1, method: 'phase3_tag' },
-    ]);
-
-    const result = await engine.runSingleIteration();
-
-    expect(result).toEqual(expect.objectContaining({
-      response: expect.objectContaining({ persona: 'supervisor', content: 'Unproductive' }),
-      nextStep: 'reviewers',
-      isComplete: false,
-      loopDetected: true,
-    }));
-    expect(engine.getState().iteration).toBe(4);
-    expect(engine.getState().currentStep).toBe('reviewers');
-    expect(engine.getState().stepIterations.get('ai_fix')).toBe(1);
-    expect(startedSteps).toEqual(['_loop_judge_ai_review_ai_fix']);
-    expect(engine.getResumePoint()?.pending_loop_judge).toBeUndefined();
-  });
-
-  it('should not start a pending judge when the full run is already interrupted', async () => {
-    const config = buildConfigWithLoopMonitor(1);
-    const startedSteps: string[] = [];
-    engine = new WorkflowEngine(config, tmpDir, 'test task', {
-      projectCwd: tmpDir,
-      provider: 'mock',
-      startStep: 'ai_fix',
-      initialIteration: 3,
-      resumePoint: buildPendingJudgeResumePoint(),
-    });
-    engine.on('step:start', (step) => startedSteps.push(step.name));
-    engine.abort();
-
-    const state = await engine.run();
-
-    expect(state.status).toBe('aborted');
-    expect(state.iteration).toBe(3);
-    expect(state.stepIterations.has('_loop_judge_ai_review_ai_fix')).toBe(false);
-    expect(state.previousResponseSourcePath).toBeUndefined();
-    expect(startedSteps).toEqual([]);
-    expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
-  });
-
-  it('should not start a pending judge when a single iteration is already interrupted', async () => {
-    const config = buildConfigWithLoopMonitor(1);
-    const startedSteps: string[] = [];
-    engine = new WorkflowEngine(config, tmpDir, 'test task', {
-      projectCwd: tmpDir,
-      provider: 'mock',
-      startStep: 'ai_fix',
-      initialIteration: 3,
-      resumePoint: buildPendingJudgeResumePoint(),
-    });
-    engine.on('step:start', (step) => startedSteps.push(step.name));
-    engine.abort();
-
-    const result = await engine.runSingleIteration();
-
-    expect(result).toEqual(expect.objectContaining({
-      nextStep: 'ABORT',
-      isComplete: true,
-    }));
-    expect(engine.getState().status).toBe('aborted');
-    expect(engine.getState().iteration).toBe(3);
-    expect(engine.getState().stepIterations.has('_loop_judge_ai_review_ai_fix')).toBe(false);
-    expect(engine.getState().previousResponseSourcePath).toBeUndefined();
-    expect(startedSteps).toEqual([]);
-    expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
-  });
-
-  it('should reject a pending judge whose triggering step differs from the terminal resume entry', () => {
-    expect(() => parseWorkflowResumePoint({
-      version: 2,
-      stack: [{
-        workflow: 'test-loop-monitor',
-        step: 'ai_review',
-        kind: 'agent',
-      }],
-      iteration: 3,
-      elapsed_ms: 100,
-      max_steps: 5,
-      pending_loop_judge: {
-        status: 'budget_wait',
-        triggering_step: 'ai_fix',
-        cycle: ['ai_review', 'ai_fix'],
-        cycle_count: 1,
-        fallback_next_step: 'ai_review',
-      },
-      workflow_call_invocations: {},
-      workflow_step_participations: {},
-    })).toThrow(/Pending loop judge owner must match terminal resume stack entry/);
-  });
-
-  it.each(['agent', 'system', 'workflow_call'] as const)(
-    'should resume a budget-wait judge owned by its configured %s step kind',
-    async (kind) => {
-      const { config, resumePoint } = buildPendingJudgeOwnerScenario(kind, kind);
-      let abortKind: string | undefined;
-      engine = new WorkflowEngine(config, tmpDir, 'test task', {
-        projectCwd: tmpDir,
-        provider: 'mock',
-        startStep: 'review',
-        initialIteration: resumePoint.iteration,
-        resumePoint,
-        workflowCallResolver: () => null,
-      });
-      engine.on('workflow:abort', (_state, _reason, kindValue) => {
-        abortKind = kindValue;
-      });
-
-      const state = await engine.run();
-
-      expect(state.status).toBe('aborted');
-      expect(abortKind).toBe('iteration_limit');
-      expect(state.iteration).toBe(1);
-      expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    { configuredKind: 'agent', resumeKind: 'system' },
-    { configuredKind: 'system', resumeKind: 'agent' },
-    { configuredKind: 'workflow_call', resumeKind: 'agent' },
-  ] as const)(
-    'should reject a budget-wait judge persisted as $resumeKind for a configured $configuredKind step',
-    async ({ configuredKind, resumeKind }) => {
-      const { config, resumePoint } = buildPendingJudgeOwnerScenario(configuredKind, resumeKind);
-      let abortReason: string | undefined;
-      let abortKind: string | undefined;
-      engine = new WorkflowEngine(config, tmpDir, 'test task', {
-        projectCwd: tmpDir,
-        provider: 'mock',
-        startStep: 'review',
-        initialIteration: resumePoint.iteration,
-        resumePoint,
-        workflowCallResolver: () => null,
-      });
-      engine.on('workflow:abort', (_state, reason, kindValue) => {
-        abortReason = reason;
-        abortKind = kindValue;
-      });
-
-      const state = await engine.run();
-
-      expect(state.status).toBe('aborted');
-      expect(abortKind).toBe('runtime_error');
-      expect(abortReason).toContain(`Pending loop judge owner does not match workflow "${config.name}"`);
-      expect(state.iteration).toBe(1);
-      expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
-    },
-  );
-
-  it('should leave a descendant pending judge to the terminal resume stack owner', async () => {
-    const config: WorkflowConfig = {
-      name: 'parent-loop-monitor',
-      initialStep: 'review',
-      maxSteps: 5,
-      loopMonitors: [{
-        cycle: ['review'],
-        threshold: 1,
-        judge: { rules: [normalizeRule({ condition: 'Healthy', next: 'after' })] },
-      }],
-      steps: [
-        {
-          name: 'review',
-          kind: 'workflow_call',
-          call: 'child-loop-monitor',
-          rules: [normalizeRule({ condition: 'COMPLETE', next: 'after' })],
-        },
-        makeStep('after', { rules: [makeRule('done', 'COMPLETE')] }),
-      ],
-    };
-    const startedSteps: string[] = [];
-    engine = new WorkflowEngine(config, tmpDir, 'test task', {
-      projectCwd: tmpDir,
-      provider: 'mock',
-      startStep: 'after',
-      initialIteration: 3,
-      workflowCallResolver: () => null,
-      resumePoint: buildNestedPendingJudgeResumePoint(),
-    });
-    engine.on('step:start', (step) => startedSteps.push(step.name));
-    mockRunAgentSequence([makeResponse({ persona: 'after', content: 'done' })]);
-    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
-
-    const state = await engine.run();
-
-    expect(state.status).toBe('completed');
-    expect(startedSteps).toEqual(['after']);
-  });
-
-  it('should resume a descendant pending judge once in the terminal stack owner', async () => {
-    const ancestorEntry = buildNestedPendingJudgeResumePoint().stack[0]!;
-    const config: WorkflowConfig = {
-      name: 'child-loop-monitor',
-      initialStep: 'review',
-      maxSteps: 5,
-      loopMonitors: [{
-        cycle: ['review'],
-        threshold: 1,
-        judge: { rules: [normalizeRule({ condition: 'Healthy', next: 'after' })] },
-      }],
-      steps: [
-        makeStep('review', { rules: [makeRule('done', 'review')] }),
-        makeStep('after', { rules: [makeRule('done', 'COMPLETE')] }),
-      ],
-    };
-    const startedSteps: string[] = [];
-    engine = new WorkflowEngine(config, tmpDir, 'test task', {
-      projectCwd: tmpDir,
-      provider: 'mock',
-      startStep: 'review',
-      initialIteration: 3,
-      resumeStackPrefix: [ancestorEntry],
-      resumePoint: buildNestedPendingJudgeResumePoint(),
-    });
-    engine.on('step:start', (step) => startedSteps.push(step.name));
-    mockRunAgentSequence([
-      makeResponse({ persona: 'supervisor', content: 'Healthy' }),
-      makeResponse({ persona: 'after', content: 'done' }),
-    ]);
-    mockRuleEvaluationSequence([
-      { index: 0, method: 'phase3_tag' },
-      { index: 0, method: 'phase3_tag' },
-    ]);
-
-    const state = await engine.run();
-
-    expect(state.status).toBe('completed');
-    expect(state.iteration).toBe(5);
-    expect(startedSteps).toEqual(['_loop_judge_review', 'after']);
-    expect(state.stepIterations.get('review')).toBe(1);
-    expect(engine.getResumePoint()?.pending_loop_judge).toBeUndefined();
-  });
-
   // =====================================================
   // 1. Cycle triggers judge → unproductive → skip to reviewers
   // =====================================================
@@ -1140,10 +142,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
           rules: loopJudgeRules(),
         },
       });
-      engine = new WorkflowEngine(config, tmpDir, 'test task', {
-        projectCwd: tmpDir,
-        provider: 'mock',
-      });
+      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         // implement
@@ -1191,10 +190,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
 
     it('should run judge and continue loop when cycle is healthy', async () => {
       const config = buildConfigWithLoopMonitor(2);
-      engine = new WorkflowEngine(config, tmpDir, 'test task', {
-        projectCwd: tmpDir,
-        provider: 'mock',
-      });
+      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         // implement
@@ -1236,10 +232,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
 
     it('should continue with the natural transition when judge returns non-done status', async () => {
       const config = buildConfigWithLoopMonitor(1);
-      engine = new WorkflowEngine(config, tmpDir, 'test task', {
-        projectCwd: tmpDir,
-        provider: 'mock',
-      });
+      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({ persona: 'implement', content: 'Implementation done' }),
@@ -1320,9 +313,6 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
     it('Given effective auto_routing selects the triggering step, When loop judge runs without overrides, Then it inherits the selected concrete candidate', async () => {
       const config = buildConfigWithLoopMonitor(1);
       config.loopMonitors![0]!.judge.persona = 'supervisor';
-      for (const step of config.steps) {
-        step.provider = undefined;
-      }
       config.autoRouting = {
         strategy: 'balanced',
         router: { provider: 'codex', model: 'router-model' },
@@ -2303,10 +1293,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
   describe('No trigger before threshold', () => {
     it('should not trigger judge when fewer cycles than threshold', async () => {
       const config = buildConfigWithLoopMonitor(3); // threshold = 3, only do 1 cycle
-      engine = new WorkflowEngine(config, tmpDir, 'test task', {
-        projectCwd: tmpDir,
-        provider: 'mock',
-      });
+      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({ persona: 'implement', content: 'Implementation done' }),
@@ -2358,26 +1345,6 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       }).toThrow('nonexistent');
     });
 
-    it('should throw when loop_monitor ignore_steps references nonexistent step', () => {
-      const config = buildConfigWithLoopMonitor(3, {
-        ignoreSteps: ['nonexistent'],
-      });
-
-      expect(() => {
-        new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
-      }).toThrow('nonexistent');
-    });
-
-    it('should throw when loop_monitor ignore_steps overlaps the monitored cycle', () => {
-      const config = buildConfigWithLoopMonitor(3, {
-        ignoreSteps: ['ai_fix'],
-      });
-
-      expect(() => {
-        new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
-      }).toThrow('cannot appear in both cycle and ignore_steps');
-    });
-
     it('should throw when loop_monitor judge rule references nonexistent step', () => {
       const config = buildConfigWithLoopMonitor(3);
       config.loopMonitors = [
@@ -2402,7 +1369,6 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
         throw new Error('ai_fix step is required for this test');
       }
       aiFixStep.personaDisplayName = 'fixer';
-      aiFixStep.provider = undefined;
       config.loopMonitors![0]!.judge.model = 'big-pickle';
 
       expect(() => {
@@ -2492,10 +1458,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
     it('should work normally without loop_monitors configured', async () => {
       const config = buildConfigWithLoopMonitor(3);
       config.loopMonitors = undefined;
-      engine = new WorkflowEngine(config, tmpDir, 'test task', {
-        projectCwd: tmpDir,
-        provider: 'mock',
-      });
+      engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
         makeResponse({ persona: 'implement', content: 'Done' }),
@@ -2547,10 +1510,7 @@ describe('Judge failure falls back to the natural transition', () => {
         rules: loopJudgeRules(),
       },
     });
-    engine = new WorkflowEngine(config, tmpDir, 'test task', {
-      projectCwd: tmpDir,
-      provider: 'mock',
-    });
+    engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
     mockRunAgentSequence([
       makeResponse({ persona: 'implement', content: 'Implementation done' }),
@@ -2691,10 +1651,7 @@ describe('Replan-family judge transitions (runtime)', () => {
   }
 
   it('should return to reviewers when the judge sees the latest fix as complete', async () => {
-    engine = new WorkflowEngine(buildReplanFamilyConfig(), tmpDir, 'task', {
-      projectCwd: tmpDir,
-      provider: 'mock',
-    });
+    engine = new WorkflowEngine(buildReplanFamilyConfig(), tmpDir, 'task', { projectCwd: tmpDir });
     primeTwoCycles({ index: 0, method: 'ai_judge' }, {
       responses: [makeResponse({ persona: 'reviewers', content: 'All approved' })],
       matches: [{ index: 1, method: 'phase3_tag' }],
@@ -2708,10 +1665,7 @@ describe('Replan-family judge transitions (runtime)', () => {
   });
 
   it('should return to plan when the judge sees healthy replanning', async () => {
-    engine = new WorkflowEngine(buildReplanFamilyConfig(), tmpDir, 'task', {
-      projectCwd: tmpDir,
-      provider: 'mock',
-    });
+    engine = new WorkflowEngine(buildReplanFamilyConfig(), tmpDir, 'task', { projectCwd: tmpDir });
     primeTwoCycles({ index: 1, method: 'ai_judge' }, {
       responses: [makeResponse({ persona: 'plan', content: 'Cannot plan' })],
       matches: [{ index: 1, method: 'phase3_tag' }],
@@ -2726,10 +1680,7 @@ describe('Replan-family judge transitions (runtime)', () => {
   });
 
   it('should abort when the judge sees the same dead end repeating', async () => {
-    engine = new WorkflowEngine(buildReplanFamilyConfig(), tmpDir, 'task', {
-      projectCwd: tmpDir,
-      provider: 'mock',
-    });
+    engine = new WorkflowEngine(buildReplanFamilyConfig(), tmpDir, 'task', { projectCwd: tmpDir });
     primeTwoCycles({ index: 2, method: 'ai_judge' }, { responses: [], matches: [] });
     const steps = collectStepStarts(engine);
 

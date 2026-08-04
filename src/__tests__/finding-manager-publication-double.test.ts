@@ -17,6 +17,7 @@ import {
   createFindingManagerPublicationDouble,
   RevisionedFindingLedgerTestRepository,
 } from './helpers/finding-manager-publication.js';
+import { emptyFindingAuthorityProjection } from './helpers/finding-lifecycle-fixture.js';
 
 function report(stepName: string, retryCount = 0): FindingManagerValidationReport {
   return {
@@ -47,9 +48,10 @@ describe('Finding manager publication contract double', () => {
       nextId: 1,
       updatedAt: '2026-07-26T00:00:00.000Z',
       findings: [],
+      evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
+      ...emptyFindingAuthorityProjection(),
     });
     const publicationDouble = createFindingManagerPublicationDouble((current) => {
       const targetPath = join(
@@ -112,9 +114,10 @@ describe('Finding manager publication contract double', () => {
       nextId: 1,
       updatedAt: '2026-07-26T00:00:00.000Z',
       findings: [],
+      evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
+      ...emptyFindingAuthorityProjection(),
     });
     const publicationDouble = createFindingManagerPublicationDouble(
       () => join(reportDir, expected),
@@ -133,9 +136,10 @@ describe('Finding manager publication contract double', () => {
       nextId: 1,
       updatedAt: '2026-07-26T00:00:00.000Z',
       findings: [],
+      evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
+      ...emptyFindingAuthorityProjection(),
     });
     const publicationDouble = createFindingManagerPublicationDouble(
       () => join(reportDir, 'unused.json'),
@@ -154,9 +158,10 @@ describe('Finding manager publication contract double', () => {
       nextId: 1,
       updatedAt: '2026-07-26T00:00:00.000Z',
       findings: [],
+      evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
+      ...emptyFindingAuthorityProjection(),
     } satisfies FindingLedger;
     const first = createFindingManagerPublicationDouble(
       () => join(reportDir, 'first.json'),
@@ -199,9 +204,10 @@ describe('Finding manager publication contract double', () => {
       nextId: 1,
       updatedAt: '2026-07-26T00:00:00.000Z',
       findings: [],
+      evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
+      ...emptyFindingAuthorityProjection(),
     };
     const repository = new RevisionedFindingLedgerTestRepository(initial);
     const publicationDouble = createFindingManagerPublicationDouble(
@@ -267,9 +273,10 @@ describe('Finding manager publication contract double', () => {
       nextId: 1,
       updatedAt: '2026-07-26T00:00:00.000Z',
       findings: [],
+      evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
+      ...emptyFindingAuthorityProjection(),
     };
     const repository = new RevisionedFindingLedgerTestRepository(initial);
     const publicationDouble = createFindingManagerPublicationDouble(
@@ -338,9 +345,10 @@ describe('Finding manager publication contract double', () => {
       nextId: 1,
       updatedAt: '2026-07-26T00:00:00.000Z',
       findings: [],
+      evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
+      ...emptyFindingAuthorityProjection(),
     };
     const repository = new RevisionedFindingLedgerTestRepository(initial);
     const result = (): string => 'not cloneable';
@@ -362,9 +370,10 @@ describe('Finding manager publication contract double', () => {
       nextId: 1,
       updatedAt: '2026-07-26T00:00:00.000Z',
       findings: [],
+      evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
+      ...emptyFindingAuthorityProjection(),
       stopBudget: {
         roundMarkers: ['z-round'],
         firstRoundAt: '2026-07-26T00:00:00.000Z',
@@ -407,9 +416,10 @@ describe('Finding manager publication contract double', () => {
       nextId: 1,
       updatedAt: '2026-07-26T00:00:00.000Z',
       findings: [],
+      evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
+      ...emptyFindingAuthorityProjection(),
     });
     const publicationDouble = createFindingManagerPublicationDouble(
       () => join(reportDir, 'unused.json'),
@@ -433,9 +443,10 @@ describe('Finding manager publication contract double', () => {
       nextId: 1,
       updatedAt: '2026-07-26T00:00:00.000Z',
       findings: [],
+      evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
+      ...emptyFindingAuthorityProjection(),
     };
     const repository = new RevisionedFindingLedgerTestRepository(initial);
     repository.corruptStateForFixture({
@@ -461,9 +472,10 @@ describe('Finding manager publication contract double', () => {
       nextId: 1,
       updatedAt: '2026-07-26T00:00:00.000Z',
       findings: [],
+      evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
+      ...emptyFindingAuthorityProjection(),
     };
     const repository = new RevisionedFindingLedgerTestRepository(initial);
     repository.corruptStateForFixture({
@@ -475,7 +487,7 @@ describe('Finding manager publication contract double', () => {
       },
     });
 
-    expect(() => repository.loadLedger()).toThrow(/binary-sorted unique set/);
+    expect(() => repository.loadLedger()).toThrow(/binary-sorted unique string set/);
   });
 
   it('rejects content tampering after publication', async () => {

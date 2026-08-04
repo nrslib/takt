@@ -1,27 +1,28 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { buildRunPaths } from '../../../core/workflow/run/run-paths.js';
+import {
+  buildRunPaths,
+  type RunPaths,
+} from '../../../core/workflow/run/run-paths.js';
 import { buildTaskInstruction } from '../../../infra/task/index.js';
-import { copyTaskAttachmentsToRunContext } from '../attachments.js';
+import {
+  copyTaskAttachmentsToRunContext,
+  resolveTaskAttachmentManifest,
+  type TaskAttachmentManifest,
+} from '../attachments.js';
 import { readTaskSpecFile } from '../taskSpecFile.js';
 
-export interface StagedTaskSpec {
-  taskPrompt: string;
-  orderContent: string;
-  stagedOrderContent: string;
-  contextTaskDir: string;
-  contextDir: string;
-  runRootDir: string;
+export interface ResolvedTaskSpec {
+  readonly runSlug: string;
+  readonly sourceTaskDir: string;
+  readonly attachmentManifest: TaskAttachmentManifest;
+  readonly taskPrompt: string;
+  readonly orderContent: string;
+  readonly stagedOrderContent: string;
 }
 
 function getTaskSpecPath(projectCwd: string, taskDir: string): string {
   return path.join(projectCwd, taskDir, 'order.md');
-}
-
-function removeEmptyDirectory(directory: string): void {
-  if (fs.existsSync(directory) && fs.readdirSync(directory).length === 0) {
-    fs.rmdirSync(directory);
-  }
 }
 
 function rewriteAttachmentPathsForRunContext(orderContent: string, contextTaskRel: string): string {
@@ -53,39 +54,52 @@ function rewriteAttachmentPathsForRunContext(orderContent: string, contextTaskRe
   });
 }
 
-export function stageTaskSpecForExecution(
+export function resolveTaskSpecForExecution(
   projectCwd: string,
   execCwd: string,
   taskDir: string,
   reportDirName: string,
-): StagedTaskSpec {
+): ResolvedTaskSpec {
   const sourceTaskDir = path.join(projectCwd, taskDir);
   const sourceOrderPath = getTaskSpecPath(projectCwd, taskDir);
   const orderContent = readTaskSpecFile(sourceOrderPath);
   const runPaths = buildRunPaths(execCwd, reportDirName);
   const stagedOrderContent = rewriteAttachmentPathsForRunContext(orderContent, runPaths.contextTaskRel);
+  const attachmentManifest = resolveTaskAttachmentManifest(sourceTaskDir);
 
+  return Object.freeze({
+    runSlug: runPaths.slug,
+    sourceTaskDir,
+    attachmentManifest,
+    taskPrompt: buildTaskInstruction(runPaths.contextTaskRel, runPaths.contextTaskOrderRel),
+    orderContent,
+    stagedOrderContent,
+  });
+}
+
+export function stageTaskSpecForExecution(
+  taskSpec: ResolvedTaskSpec,
+  runPaths: RunPaths,
+): void {
+  if (taskSpec.runSlug !== runPaths.slug) {
+    throw new Error(
+      `Task spec run "${taskSpec.runSlug}" does not match reserved run "${runPaths.slug}"`,
+    );
+  }
   try {
     fs.mkdirSync(runPaths.contextTaskAbs, { recursive: true });
-    fs.writeFileSync(runPaths.contextTaskOrderAbs, stagedOrderContent, 'utf-8');
-    copyTaskAttachmentsToRunContext(sourceTaskDir, runPaths.contextTaskAbs);
+    fs.writeFileSync(
+      runPaths.contextTaskOrderAbs,
+      taskSpec.stagedOrderContent,
+      'utf-8',
+    );
+    copyTaskAttachmentsToRunContext(
+      taskSpec.sourceTaskDir,
+      runPaths.contextTaskAbs,
+      taskSpec.attachmentManifest,
+    );
   } catch (error) {
     fs.rmSync(runPaths.contextTaskAbs, { recursive: true, force: true });
     throw error;
   }
-
-  return {
-    taskPrompt: buildTaskInstruction(runPaths.contextTaskRel, runPaths.contextTaskOrderRel),
-    orderContent,
-    stagedOrderContent,
-    contextTaskDir: runPaths.contextTaskAbs,
-    contextDir: runPaths.contextAbs,
-    runRootDir: runPaths.runRootAbs,
-  };
-}
-
-export function cleanupStagedTaskSpec(stagedSpec: StagedTaskSpec): void {
-  fs.rmSync(stagedSpec.contextTaskDir, { recursive: true, force: true });
-  removeEmptyDirectory(stagedSpec.contextDir);
-  removeEmptyDirectory(stagedSpec.runRootDir);
 }

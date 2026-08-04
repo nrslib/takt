@@ -20,19 +20,8 @@ import {
   type SelectorGitOutput,
 } from '../core/workflow/dynamic-parallel/selector-git-command-runner.js';
 import { GitSelectorCommandRunner } from '../infra/task/selector-git-command-runner.js';
-import { buildWorkflowCallNamespaceSegment } from '../core/workflow/workflow-call-namespace.js';
-import { buildWorkflowCallInvocationIdentity } from '../core/workflow/workflow-call-invocation-index.js';
-import { workflowCallReportRequestPathsMatch } from '../core/workflow/workflow-call-namespace.js';
 
 const temporaryDirectories: string[] = [];
-
-function callNamespace(callInstance: number | '*'): string {
-  return buildWorkflowCallNamespaceSegment(
-    buildWorkflowCallInvocationIdentity('parent', 'delegate', []),
-    'child',
-    callInstance,
-  );
-}
 
 function createGitDirectory(): string {
   const directory = mkdtempSync(join(tmpdir(), 'takt-selector-input-'));
@@ -538,12 +527,12 @@ describe('SelectorInputReader', () => {
     const firstNamespace = join(
       reportDirectory,
       'subworkflows',
-      callNamespace(3),
+      'iteration-3--step-delegate--workflow-child',
     );
     const currentNamespace = join(
       reportDirectory,
       'subworkflows',
-      callNamespace(9),
+      'iteration-9--step-delegate--workflow-child',
     );
     mkdirSync(firstNamespace, { recursive: true });
     mkdirSync(currentNamespace, { recursive: true });
@@ -553,7 +542,7 @@ describe('SelectorInputReader', () => {
 
     const result = await new SelectorInputReader(runner).readInputs(
       reportDirectory,
-      [['subworkflows', callNamespace(9), 'review.md'].join('/')],
+      ['subworkflows/iteration-9--step-delegate--workflow-child/review.md'],
       cwd,
       undefined,
     );
@@ -562,18 +551,18 @@ describe('SelectorInputReader', () => {
     expect(result.reports).not.toContain('stale report');
   });
 
-  it('should choose one deterministic latest report for a workflow-call wildcard namespace', async () => {
+  it('should choose one deterministic latest report for a legacy wildcard namespace', async () => {
     const cwd = createGitDirectory();
     const reportDirectory = join(cwd, 'reports');
     const firstNamespace = join(
       reportDirectory,
       'subworkflows',
-      callNamespace(3),
+      'iteration-3--step-delegate--workflow-child',
     );
     const latestNamespace = join(
       reportDirectory,
       'subworkflows',
-      callNamespace(9),
+      'iteration-9--step-delegate--workflow-child',
     );
     mkdirSync(firstNamespace, { recursive: true });
     mkdirSync(latestNamespace, { recursive: true });
@@ -583,19 +572,12 @@ describe('SelectorInputReader', () => {
     writeFileSync(latestReport, 'latest report');
     utimesSync(firstReport, new Date(1_000), new Date(1_000));
     utimesSync(latestReport, new Date(2_000), new Date(2_000));
-    expect(workflowCallReportRequestPathsMatch(
-      ['subworkflows', callNamespace(9), 'review.md'],
-      ['subworkflows', callNamespace('*'), 'review.md'],
-    )).toBe(true);
+
     const result = await new SelectorInputReader(
       new FakeGitCommandRunner([], 0, () => Buffer.alloc(0)),
     ).readInputs(
       reportDirectory,
-      [[
-        'subworkflows',
-        callNamespace('*'),
-        'review.md',
-      ].join('/')],
+      ['subworkflows/iteration-*--step-delegate--workflow-child/review.md'],
       cwd,
       undefined,
     );

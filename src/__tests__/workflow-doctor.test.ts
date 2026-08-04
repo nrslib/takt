@@ -26,6 +26,39 @@ function writeWorkflow(projectDir: string, relativePath: string, content: string
   return filePath;
 }
 
+function writeWorkflowRefComposer(projectDir: string): void {
+  writeWorkflow(projectDir, '.takt/workflows/composer.yaml', `name: composer
+subworkflow:
+  callable: true
+  params:
+    target:
+      type: workflow_ref
+initial_step: delegate
+steps:
+  - name: delegate
+    kind: workflow_call
+    call:
+      $param: target
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+}
+
+function writeRequiredFindingContractReview(projectDir: string): void {
+  writeWorkflow(projectDir, '.takt/workflows/required-review.yaml', `name: required-review
+subworkflow:
+  callable: true
+  requires_finding_contract: true
+initial_step: review
+steps:
+  - name: review
+    rules:
+      - condition: when(findings.open.count == 0)
+        next: COMPLETE
+`);
+}
+
 interface WorktreeRootCase {
   name: string;
   rootDirRelativePath: string;
@@ -301,6 +334,7 @@ steps:
     writeWorkflow(projectDir, '.takt/workflows/child-dynamic.yaml', `name: child-dynamic
 subworkflow:
   callable: true
+max_steps: 1
 initial_step: reviewers
 steps:
   - name: reviewers
@@ -362,8 +396,6 @@ steps:
 max_steps: 10
 initial_step: step1
 finding_contract:
-  ledger_path: .takt/findings/peer-review.json
-  raw_findings_path: .takt/findings/raw
   manager:
     persona: findings-manager
     instruction: findings-manager
@@ -423,6 +455,82 @@ steps:
     expect(mockError).toHaveBeenCalledWith(expect.stringContaining('Conflicting provider routing for tags'));
   });
 
+  it('propagates a root finding contract through an expanded workflow_ref invocation', async () => {
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/root.yaml', `name: root
+finding_contract:
+  manager:
+    persona: findings-manager
+    instruction: findings-manager
+    output_contract: findings-manager
+initial_step: compose
+steps:
+  - name: compose
+    kind: workflow_call
+    call: composer
+    args:
+      target: required-review
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+    writeWorkflowRefComposer(projectDir);
+    writeRequiredFindingContractReview(projectDir);
+
+    await expect(doctorWorkflowCommand([filePath], projectDir)).resolves.toBeUndefined();
+  });
+
+  it('rejects an expanded Finding Contract workflow_ref when the root has no contract', async () => {
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/root.yaml', `name: root
+initial_step: compose
+steps:
+  - name: compose
+    kind: workflow_call
+    call: composer
+    args:
+      target: required-review
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+    writeWorkflowRefComposer(projectDir);
+    writeRequiredFindingContractReview(projectDir);
+
+    await expect(doctorWorkflowCommand([filePath], projectDir)).rejects.toThrow(
+      'Workflow validation failed',
+    );
+    expect(mockError).toHaveBeenCalledWith(
+      expect.stringContaining('requires a finding_contract inherited from its caller'),
+    );
+  });
+
+  it('keeps expanded workflow_ref composition valid without a Finding Contract requirement', async () => {
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/root.yaml', `name: root
+initial_step: compose
+steps:
+  - name: compose
+    kind: workflow_call
+    call: composer
+    args:
+      target: regular-review
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+    writeWorkflowRefComposer(projectDir);
+    writeWorkflow(projectDir, '.takt/workflows/regular-review.yaml', `name: regular-review
+subworkflow:
+  callable: true
+initial_step: review
+steps:
+  - name: review
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    await expect(doctorWorkflowCommand([filePath], projectDir)).resolves.toBeUndefined();
+  });
+
   it('attributes runtime validation errors to the referenced step fragment', async () => {
     const fragmentPath = writeWorkflow(projectDir, '.takt/steps/opencode-review.yaml', `provider: opencode
 instruction: review the implementation
@@ -455,8 +563,6 @@ steps:
 max_steps: 10
 initial_step: reviewers
 finding_contract:
-  ledger_path: .takt/findings/peer-review.json
-  raw_findings_path: .takt/findings/raw
   manager:
     persona: findings-manager
     instruction: findings-manager
@@ -467,6 +573,10 @@ steps:
       - name: review
         persona: reviewer
         instruction: review it
+        output_contracts:
+          report:
+            - name: review.md
+              format: architecture-review-finding-contract
         rules:
           - condition: approved
     rules:
@@ -489,8 +599,6 @@ steps:
 max_steps: 10
 initial_step: reviewers
 finding_contract:
-  ledger_path: .takt/findings/peer-review.json
-  raw_findings_path: .takt/findings/raw
   manager:
     persona: findings-manager
     instruction: findings-manager
@@ -501,6 +609,10 @@ steps:
       - name: review
         persona: reviewer
         instruction: review it
+        output_contracts:
+          report:
+            - name: review.md
+              format: architecture-review-finding-contract
         rules:
           - condition: approved
     rules:
@@ -532,8 +644,6 @@ steps:
 max_steps: 10
 initial_step: reviewers
 finding_contract:
-  ledger_path: .takt/findings/peer-review.json
-  raw_findings_path: .takt/findings/raw
   manager:
     persona: findings-manager
     instruction: findings-manager
@@ -570,8 +680,6 @@ steps:
 max_steps: 10
 initial_step: reviewers
 finding_contract:
-  ledger_path: .takt/findings/peer-review.json
-  raw_findings_path: .takt/findings/raw
   manager:
     persona: findings-manager
     instruction: findings-manager
@@ -620,14 +728,16 @@ steps:
   ) => {
     const parallelSteps = childConditions.map((condition, index) => `      - name: review-${index}
         instruction: review it
+        output_contracts:
+          report:
+            - name: review-${index}.md
+              format: architecture-review-finding-contract
         rules:
           - condition: ${condition}`).join('\n');
     const filePath = writeWorkflow(projectDir, '.takt/workflows/aggregate-condition-complete.yaml', `name: aggregate-condition-complete
 max_steps: 10
 initial_step: reviewers
 finding_contract:
-  ledger_path: .takt/findings/peer-review.json
-  raw_findings_path: .takt/findings/raw
   manager:
     persona: findings-manager
     instruction: findings-manager
@@ -656,8 +766,6 @@ ${parallelSteps}
 max_steps: 10
 initial_step: reviewers
 finding_contract:
-  ledger_path: .takt/findings/peer-review.json
-  raw_findings_path: .takt/findings/raw
   manager:
     persona: findings-manager
     instruction: findings-manager
@@ -685,6 +793,10 @@ steps:
       - name: review
         persona: reviewer
         instruction: review it
+        output_contracts:
+          report:
+            - name: review.md
+              format: architecture-review-finding-contract
         rules:
           - condition: approved
     rules:
@@ -723,8 +835,6 @@ steps:
 max_steps: 10
 initial_step: reviewers
 finding_contract:
-  ledger_path: .takt/findings/peer-review.json
-  raw_findings_path: .takt/findings/raw
   manager:
     persona: findings-manager
     instruction: findings-manager
@@ -735,6 +845,10 @@ steps:
       - name: review
         persona: reviewer
         instruction: review it
+        output_contracts:
+          report:
+            - name: review.md
+              format: architecture-review-finding-contract
         rules:
           - condition: approved
     rules:
@@ -771,8 +885,6 @@ steps:
 max_steps: 10
 initial_step: reviewers
 finding_contract:
-  ledger_path: .takt/findings/peer-review.json
-  raw_findings_path: .takt/findings/raw
   manager:
     persona: findings-manager
     instruction: findings-manager
@@ -800,6 +912,10 @@ steps:
       - name: review
         persona: reviewer
         instruction: review it
+        output_contracts:
+          report:
+            - name: review.md
+              format: architecture-review-finding-contract
         rules:
           - condition: approved
     rules:
@@ -948,6 +1064,7 @@ subworkflow:
   callable: true
   returns: [ok]
 initial_step: work
+max_steps: 3
 steps:
   - name: work
     instruction: do the delegated work
@@ -1205,6 +1322,7 @@ steps:
     const filePath = writeWorkflow(projectDir, '.takt/workflows/report-ref-callable.yaml', `name: report-ref-callable
 subworkflow:
   callable: true
+max_steps: 10
 initial_step: step1
 steps:
   - name: step1
@@ -1431,6 +1549,7 @@ subworkflow:
       type: facet_ref
       facet_kind: report_format
       default: summary
+max_steps: 10
 initial_step: review
 knowledge:
   architecture: ./facets/knowledge/architecture.md
@@ -1478,6 +1597,7 @@ subworkflow:
       type: facet_ref
       facet_kind: knowledge
       default: architecture
+max_steps: 10
 initial_step: review
 policies:
   strict-review: ./facets/policies/strict-review.md
@@ -1512,6 +1632,7 @@ subworkflow:
       type: facet_ref
       facet_kind: knowledge
       default: strict-review
+max_steps: 10
 initial_step: review
 policies:
   strict-review: ./facets/policies/strict-review.md
@@ -1548,6 +1669,7 @@ subworkflow:
       type: facet_ref
       facet_kind: instruction
       default: linked
+max_steps: 1
 initial_step: review
 instructions:
   linked: ../facets/instructions/linked.md
@@ -1583,6 +1705,7 @@ subworkflow:
       type: facet_ref
       facet_kind: instruction
       default: linked
+max_steps: 1
 initial_step: review
 instructions:
   linked: ../facets/instructions/linked.md
@@ -1611,6 +1734,7 @@ subworkflow:
     review_knowledge:
       type: facet_ref[]
       facet_kind: knowledge
+max_steps: 10
 initial_step: review
 steps:
   - name: review
@@ -1632,6 +1756,7 @@ subworkflow:
   callable: true
   returns: [ok]
 initial_step: review
+max_steps: 3
 steps:
   - name: review
     persona: reviewer
@@ -1649,6 +1774,7 @@ subworkflow:
       facet_kind: knowledge
   returns: [ok]
 initial_step: review
+max_steps: 3
 steps:
   - name: review
     knowledge:
@@ -1677,6 +1803,7 @@ subworkflow:
   callable: true
   returns: [ok]
 initial_step: review
+max_steps: 3
 steps:
   - name: review
     persona: reviewer
@@ -1710,6 +1837,7 @@ subworkflow:
   callable: true
   returns: [ok]
 initial_step: review
+max_steps: 3
 steps:
   - name: review
     persona: reviewer
@@ -1748,6 +1876,7 @@ subworkflow:
   callable: true
   returns: [ok]
 initial_step: review
+max_steps: 3
 steps:
   - name: review
     persona: reviewer
@@ -1761,6 +1890,7 @@ subworkflow:
   callable: true
   returns: [ok]
 initial_step: delegate-grandchild
+max_steps: 3
 steps:
   - name: delegate-grandchild
     kind: workflow_call
@@ -1927,8 +2057,6 @@ steps:
 max_steps: 10
 initial_step: step1
 finding_contract:
-  ledger_path: .takt/findings/adjudication-wired.json
-  raw_findings_path: .takt/findings/adjudication-wired/raw
   manager:
     persona: findings-manager
     instruction: findings-manager
@@ -1976,8 +2104,6 @@ steps:
 max_steps: 10
 initial_step: step1
 finding_contract:
-  ledger_path: .takt/findings/adjudication-parallel-sub.json
-  raw_findings_path: .takt/findings/adjudication-parallel-sub/raw
   manager:
     persona: findings-manager
     instruction: findings-manager
@@ -2012,8 +2138,6 @@ steps:
 max_steps: 10
 initial_step: step1
 finding_contract:
-  ledger_path: .takt/findings/adjudication-parallel-fragment.json
-  raw_findings_path: .takt/findings/adjudication-parallel-fragment/raw
   manager:
     persona: findings-manager
     instruction: findings-manager
@@ -2238,6 +2362,7 @@ steps:
 subworkflow:
   callable: true
 initial_step: review
+max_steps: 3
 steps:
   - name: review
     rules:
@@ -2323,6 +2448,7 @@ steps:
 subworkflow:
   callable: true
 initial_step: review
+max_steps: 3
 steps:
   - name: review
     rules:

@@ -38,8 +38,6 @@ AI と会話してやりたいことを決め、タスクとして積み、`takt
 
 TAKT は AI コーディングワークフローを主な用途として提供していますが、コーディング以外でも、複数の AI エージェントを協調させたいタスクや、レビュー・判定・フィードバックループによってタスクの精度を高めたい場面で活用できます。
 
-繰り返し使う step 定義は `.takt/steps/` に置き、workflow から `uses` で参照できます。探索順と上書き規則は [workflow ガイド](./workflows.ja.md) を参照してください。
-
 TAKT は TAKT 自身で開発しています（ドッグフーディング）。
 
 ## なぜ TAKT か
@@ -196,9 +194,9 @@ takt list
 
 ## 仕組み
 
-TAKT という名前自体が、オーケストラの指揮で拍を刻む「タクト（Takt）」に由来しています。TAKT はユーザー向けにも実装名にも **workflow** と **step** を使います。
+TAKT という名前は、オーケストラの指揮で拍を刻むために使われる「拍」「指揮棒の一振り」を意味するドイツ語の「タクト（Takt）」に由来しています。TAKT はユーザー向けにも実装名にも **workflow** と **step** を使います。
 
-workflow は step の並びで構成されます。YAML では `steps`、`initial_step`、`max_steps` を使います。各 step では persona（誰が実行するか）、権限（何を許可するか）、ルール（次にどこへ進むか）を指定します。
+workflow は step の並びで構成されます。YAML では `steps`、`initial_step`、`max_steps` を使います。各 step では persona（誰が実行するか）、権限（何を許可するか）、ルール（次にどこへ進むか）を指定します。最小の例は次の通りです。
 
 ```yaml
 name: plan-implement-review
@@ -231,7 +229,9 @@ steps:
         next: implement    # <- 修正ループ
 ```
 
-ルールが次の step を決めます。`COMPLETE` でワークフロー成功終了、`ABORT` で失敗終了です。並列 step やルール条件の詳細は [Workflow Guide](./workflows.ja.md) を参照してください。
+ルールが次の step を決めます。`COMPLETE` でワークフロー成功終了、`ABORT` で失敗終了です。完全なスキーマ、並列 step、ルール条件の詳細は [Workflow Guide](./workflows.ja.md) を参照してください。
+
+繰り返し使う step 定義は `.takt/steps/` に置き、workflow から `uses` で参照できます。探索順と上書き規則は [Workflow Guide](./workflows.ja.md) を参照してください。
 
 workflow ファイルの正式ディレクトリ名は `workflows/` です。
 
@@ -258,9 +258,11 @@ workflow ファイルの正式ディレクトリ名は `workflows/` です。
 |---------|------|
 | `takt` | AI と相談して、タスクを実行または積みます |
 | `takt exec` | ワークフロー YAML を書かずにマルチエージェントを即座に実行します |
+| `takt add` | AI と会話してタスク要件を精緻化し、タスクを積みます（GitHub Issue からも可） |
 | `takt run` | 積まれたタスクをまとめて実行します |
+| `takt watch` | タスクキューを監視し、pending タスクを自動実行します（常駐プロセス） |
 | `takt list` | タスクブランチを管理します（マージ、リトライ、リキュー、強制失敗、追加指示、削除） |
-| `takt #N` | GitHub Issue をタスクとして実行します |
+| `takt #N` | GitHub Issue を初期入力としてタスク化します |
 | `takt eject` | ビルトインの workflow/facet をコピーしてカスタマイズできます |
 | `takt workflow init` | カスタム workflow のひな形を作成します |
 | `takt workflow doctor` | カスタム workflow の定義を静的検証します |
@@ -289,8 +291,8 @@ exec の入力行を編集中に画像を添付できます。macOS では `/pas
 最小限の `~/.takt/config.yaml` は次の通りです。
 
 ```yaml
-provider: codex    # claude, claude-sdk, claude-terminal, codex, opencode, cursor, copilot, kiro, or mock
-model: gpt-5.5       # プロバイダーにそのまま渡されます
+provider: claude    # claude, claude-sdk, claude-terminal, codex, opencode, cursor, copilot, kiro, or mock
+model: sonnet       # プロバイダーにそのまま渡されます
 language: ja        # en or ja
 ```
 
@@ -298,7 +300,7 @@ TAKT に workflow step ごとの provider/model 選択を任せる場合は、to
 
 ```yaml
 provider: codex          # workflow step 外と auto_routing がない場合に使用する
-model: gpt-5.6-luna
+model: gpt-5.6-sol
 takt_providers:
   assistant:             # 省略可。interactive / instruct / retry は auto routing 対象外
     provider: codex
@@ -362,21 +364,23 @@ export TAKT_KIRO_API_KEY=...               # Kiro CLI
 ### カスタム workflow
 
 ```bash
-takt eject default    # ビルトイン workflow を ~/.takt/workflows/ にコピーして編集できます
-takt workflow init my-flow
-takt workflow doctor my-flow
+takt workflow init my-flow   # カスタム workflow のひな形を作成
+takt workflow doctor my-flow # workflow 定義を静的検証
+takt eject default           # ビルトイン workflow を ~/.takt/workflows/ にコピーして編集
 ```
 
 ### カスタム persona
 
-`~/.takt/personas/` に Markdown ファイルを置きます。
+`~/.takt/facets/personas/` に Markdown ファイルを置きます。
 
 ```markdown
-# ~/.takt/personas/my-reviewer.md
+# ~/.takt/facets/personas/my-reviewer.md
 You are a code reviewer specialized in security.
 ```
 
 workflow から `persona: my-reviewer` で参照できます。
+
+`~/.takt/personas/` も互換パスとして動作しますが、`takt catalog` が走査するのは `facets/` 配下だけです。
 
 詳細は [Workflow Guide](./workflows.ja.md) を参照してください。ビルトインの persona 一覧は [Builtin Catalog](./builtin-catalog.ja.md) にあります。
 
@@ -406,7 +410,7 @@ takt --pipeline --task "バグを修正して" --auto-pr
 ├── config.yaml             # プロバイダー、モデル、言語など
 ├── workflows/              # ユーザー定義の workflow
 ├── facets/                 # ユーザー定義のファセット（personas, policies, knowledge など）
-└── repertoire/               # インストール済み repertoire パッケージ
+└── repertoire/             # インストール済み repertoire パッケージ
 
 .takt/                      # プロジェクトレベル
 ├── config.yaml             # プロジェクト設定
@@ -443,6 +447,7 @@ npx create-takt-sdd
 | [Workflow Guide](./workflows.ja.md) | workflow の作成・カスタマイズ |
 | [Builtin Catalog](./builtin-catalog.ja.md) | ビルトイン workflow・persona の一覧 |
 | [Faceted Prompting](./faceted-prompting.ja.md) | プロンプト設計の方法論 |
+| [Token Saving](./token-saving.ja.md) | トークン消費の計測と節約 |
 | [Repertoire Packages](./repertoire.ja.md) | パッケージのインストール・共有 |
 | [Task Management](./task-management.ja.md) | タスクの追加・実行・隔離 |
 | [CI/CD Integration](./ci-cd.ja.md) | GitHub Actions・パイプラインモード |
@@ -467,7 +472,7 @@ TAKT は [CodeRabbit](https://coderabbit.link/nrslib) の Open Source Support Pr
 
 ## コントリビュート
 
-[CONTRIBUTING.md](../CONTRIBUTING.md) を参照してください。
+[CONTRIBUTING.ja.md](./CONTRIBUTING.ja.md)（[English](../CONTRIBUTING.md)）を参照してください。
 
 ## ライセンス
 

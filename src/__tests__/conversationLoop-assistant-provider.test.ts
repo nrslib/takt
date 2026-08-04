@@ -21,8 +21,7 @@ vi.mock('../infra/config/index.js', () => ({
     mockResolveNonWorkflowProviderModel(...args),
   resolveNonWorkflowProviderOptions: (...args: unknown[]) =>
     mockResolveNonWorkflowProviderOptions(...args),
-  loadSessionState: vi.fn(() => null),
-  clearSessionState: vi.fn(),
+  takeSessionState: vi.fn(() => null),
 }));
 
 vi.mock('../features/interactive/assistantConfig.js', () => ({

@@ -3,25 +3,18 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, st
 import { tmpdir } from 'node:os';
 import { join, win32 } from 'node:path';
 import { inheritReviewReports } from '../core/workflow/report-inheritance.js';
+import { scanReportEntries } from '../core/workflow/report-file-index.js';
+import { classifyReportRelativePath } from '../core/models/reserved-report-names.js';
 import {
   proveWorkflowCallRunNamespacePathsCorrespond,
   workflowCallReportRequestSegmentsMatch,
+  workflowCallRunNamespaceSegmentsCorrespond,
 } from '../core/workflow/workflow-call-namespace.js';
-import { buildWorkflowCallNamespaceSegment } from '../core/workflow/workflow-call-namespace.js';
-import { buildWorkflowCallInvocationIdentity } from '../core/workflow/workflow-call-invocation-index.js';
 
 const sourceRunSlug = '20260717-source-run';
 const currentRunSlug = '20260717-current-run';
 const reviewReportNames = ['05-arch-review.md', '06-security-review.md'] as const;
 const temporaryDirectories: string[] = [];
-
-function callNamespace(step: string, childWorkflow: string, callInstance: number | '*'): string {
-  return buildWorkflowCallNamespaceSegment(
-    buildWorkflowCallInvocationIdentity('parent', step, []),
-    childWorkflow,
-    callInstance,
-  );
-}
 
 function createProjectDirectory(): string {
   const projectDirectory = mkdtempSync(join(tmpdir(), 'takt-report-inheritance-'));
@@ -34,15 +27,7 @@ function sourceReportPath(projectDirectory: string, namespace: string[], reportN
 }
 
 function targetReportDirectory(projectDirectory: string): string {
-  return join(
-    projectDirectory,
-    '.takt',
-    'runs',
-    currentRunSlug,
-    'reports',
-    'subworkflows',
-    callNamespace('peer-review', 'peer-review', 2),
-  );
+  return join(projectDirectory, '.takt', 'runs', currentRunSlug, 'reports', 'subworkflows', 'iteration-2--step-peer-review--workflow-peer-review');
 }
 
 function writeSourceReport(
@@ -76,45 +61,26 @@ afterEach(() => {
 });
 
 describe('inheritReviewReports', () => {
-  it('should use explicit wildcard only for report requests and map call invocations between runs separately', () => {
+  it('should use explicit wildcard only for report requests and map iterations between runs separately', () => {
     expect(workflowCallReportRequestSegmentsMatch(
-      callNamespace('peer-review', 'reviewers', 1),
-      callNamespace('peer-review', 'reviewers', 2),
+      'iteration-1--step-peer-review--workflow-reviewers',
+      'iteration-2--step-peer-review--workflow-reviewers',
     )).toBe(false);
     expect(workflowCallReportRequestSegmentsMatch(
-      callNamespace('peer-review', 'reviewers', 1),
-      callNamespace('peer-review', 'reviewers', '*'),
+      'iteration-1--step-peer-review--workflow-reviewers',
+      'iteration-*--step-peer-review--workflow-reviewers',
     )).toBe(true);
-    expect(workflowCallReportRequestSegmentsMatch(
-      callNamespace('peer-review', 'reviewers', 1),
-      callNamespace('other-step', 'reviewers', '*'),
+    expect(workflowCallRunNamespaceSegmentsCorrespond(
+      'iteration-1--step-peer-review--workflow-reviewers',
+      'iteration-2--step-peer-review--workflow-reviewers',
+    )).toBe(true);
+    expect(workflowCallRunNamespaceSegmentsCorrespond(
+      'iteration-1--step-peer-review',
+      'iteration-2--step-peer-review',
     )).toBe(false);
-    expect(workflowCallReportRequestSegmentsMatch(
-      callNamespace('peer-review', 'reviewers', 1),
-      callNamespace('peer-review', 'other-child', '*'),
-    )).toBe(false);
-    const agentOwnerNamespace = buildWorkflowCallNamespaceSegment(
-      buildWorkflowCallInvocationIdentity('parent', 'peer-review', [{
-        workflow: 'parent',
-        step: 'fanout',
-        kind: 'agent',
-      }]),
-      'reviewers',
-      1,
-    );
-    const systemOwnerWildcard = buildWorkflowCallNamespaceSegment(
-      buildWorkflowCallInvocationIdentity('parent', 'peer-review', [{
-        workflow: 'parent',
-        step: 'fanout',
-        kind: 'system',
-      }]),
-      'reviewers',
-      '*',
-    );
-    expect(workflowCallReportRequestSegmentsMatch(agentOwnerNamespace, systemOwnerWildcard)).toBe(false);
     expect(proveWorkflowCallRunNamespacePathsCorrespond(
-      [callNamespace('peer-review', 'reviewers', 1)],
-      [callNamespace('peer-review', 'reviewers', 2)],
+      ['iteration-1--step-peer-review--workflow-reviewers'],
+      ['iteration-2--step-peer-review--workflow-reviewers'],
     )).toEqual({ matches: true });
   });
 
@@ -124,35 +90,35 @@ describe('inheritReviewReports', () => {
     mkdirSync(join(projectDirectory, '.takt', 'runs', sourceRunSlug, 'reports'), { recursive: true });
     const olderPath = writeSourceReport(
       projectDirectory,
-      ['subworkflows', callNamespace('peer-review', 'peer-review', 1)],
+      ['subworkflows', 'iteration-1--step-peer-review--workflow-peer-review'],
       '05-arch-review.md',
       'older review',
       new Date('2026-07-17T00:00:00.000Z'),
     );
     const latestPath = writeSourceReport(
       projectDirectory,
-      ['subworkflows', callNamespace('peer-review', 'peer-review', 2)],
+      ['subworkflows', 'iteration-2--step-peer-review--workflow-peer-review'],
       '05-arch-review.md',
       'latest review',
       new Date('2026-07-17T00:01:00.000Z'),
     );
     writeSourceReport(
       projectDirectory,
-      ['subworkflows', callNamespace('peer-review', 'peer-review', 2)],
+      ['subworkflows', 'iteration-2--step-peer-review--workflow-peer-review'],
       '05-arch-review.md.20260717T000200Z',
       'historical review',
       new Date('2026-07-17T00:02:00.000Z'),
     );
     writeSourceReport(
       projectDirectory,
-      ['subworkflows', callNamespace('peer-review', 'peer-review', 2)],
+      ['subworkflows', 'iteration-2--step-peer-review--workflow-peer-review'],
       'findings-ledger.json',
       '{"findings":[]}',
       new Date('2026-07-17T00:02:00.000Z'),
     );
     const securityPath = writeSourceReport(
       projectDirectory,
-      ['subworkflows', callNamespace('peer-review', 'peer-review', 2)],
+      ['subworkflows', 'iteration-2--step-peer-review--workflow-peer-review'],
       '06-security-review.md',
       'security review',
       new Date('2026-07-17T00:01:00.000Z'),
@@ -181,7 +147,7 @@ describe('inheritReviewReports', () => {
     const projectDirectory = createProjectDirectory();
     writeSourceReport(
       projectDirectory,
-      ['subworkflows', callNamespace('peer-review', 'peer-review', 1)],
+      ['subworkflows', 'iteration-1--step-peer-review--workflow-peer-review'],
       '05-arch-review.md',
       'arch review',
       new Date('2026-07-17T00:00:00.000Z'),
@@ -225,7 +191,7 @@ describe('inheritReviewReports', () => {
     const projectDirectory = createProjectDirectory();
     const unreadablePath = writeSourceReport(
       projectDirectory,
-      ['subworkflows', callNamespace('peer-review', 'peer-review', 1)],
+      ['subworkflows', 'iteration-1--step-peer-review--workflow-peer-review'],
       '05-arch-review.md',
       'unreadable review',
       new Date('2026-07-17T00:00:00.000Z'),
@@ -248,7 +214,7 @@ describe('inheritReviewReports', () => {
     const projectDirectory = createProjectDirectory();
     const invalidReportPath = sourceReportPath(
       projectDirectory,
-      ['subworkflows', callNamespace('peer-review', 'peer-review', 1)],
+      ['subworkflows', 'iteration-1--step-peer-review--workflow-peer-review'],
       '05-arch-review.md',
     );
     mkdirSync(join(invalidReportPath, '..'), { recursive: true });
@@ -269,14 +235,14 @@ describe('inheritReviewReports', () => {
   it('should reject symlinked and directory candidates without preventing valid sibling reports from being copied', () => {
     // Given
     const projectDirectory = createProjectDirectory();
-    const namespace = ['subworkflows', callNamespace('peer-review', 'peer-review', 1)];
+    const namespace = ['subworkflows', 'iteration-1--step-peer-review--workflow-peer-review'];
     const invalidDirectory = sourceReportPath(projectDirectory, namespace, '05-arch-review.md');
     mkdirSync(invalidDirectory, { recursive: true });
     const symlinkPath = sourceReportPath(projectDirectory, namespace, '06-security-review.md');
     symlinkSync(join(projectDirectory, 'outside-report.md'), symlinkPath);
     writeSourceReport(
       projectDirectory,
-      ['subworkflows', callNamespace('peer-review', 'peer-review', 2)],
+      ['subworkflows', 'iteration-2--step-peer-review--workflow-peer-review'],
       '05-arch-review.md',
       'valid arch review',
       new Date('2026-07-17T00:01:00.000Z'),
@@ -299,11 +265,7 @@ describe('inheritReviewReports', () => {
   it('should classify a directory-only report candidate as an invalid source', () => {
     // Given
     const projectDirectory = createProjectDirectory();
-    mkdirSync(sourceReportPath(
-      projectDirectory,
-      ['subworkflows', callNamespace('peer-review', 'peer-review', 1)],
-      '05-arch-review.md',
-    ), { recursive: true });
+    mkdirSync(sourceReportPath(projectDirectory, ['subworkflows', 'iteration-1--step-peer-review--workflow-peer-review'], '05-arch-review.md'), { recursive: true });
 
     // When
     const result = inherit(projectDirectory);
@@ -361,7 +323,7 @@ describe('inheritReviewReports', () => {
     const projectDirectory = createProjectDirectory();
     writeSourceReport(
       projectDirectory,
-      ['subworkflows', callNamespace('peer-review', 'peer-review', 1)],
+      ['subworkflows', 'iteration-1--step-peer-review--workflow-peer-review'],
       '05-arch-review.md',
       'source review',
       new Date('2026-07-17T00:00:00.000Z'),
@@ -386,7 +348,7 @@ describe('inheritReviewReports', () => {
     const projectDirectory = createProjectDirectory();
     const sourcePath = writeSourceReport(
       projectDirectory,
-      ['subworkflows', callNamespace('peer-review', 'peer-review', 1)],
+      ['subworkflows', 'iteration-1--step-peer-review--workflow-peer-review'],
       '05-arch-review.md',
       'source review',
       new Date('2026-07-17T00:00:00.000Z'),
@@ -405,20 +367,20 @@ describe('inheritReviewReports', () => {
     expect(readFileSync(sourcePath, 'utf-8')).toBe('source review');
   });
 
-  it('should match ordinary call-prefixed report names exactly', () => {
+  it('should match ordinary iteration-prefixed report names exactly', () => {
     // Given
     const projectDirectory = createProjectDirectory();
     const expectedSourcePath = writeSourceReport(
       projectDirectory,
       [],
-      'call-2--review.md',
+      'iteration-2--review.md',
       'expected review',
       new Date('2026-07-17T00:00:00.000Z'),
     );
     writeSourceReport(
       projectDirectory,
       [],
-      'call-1--review.md',
+      'iteration-1--review.md',
       'incorrect review',
       new Date('2026-07-17T00:01:00.000Z'),
     );
@@ -430,11 +392,11 @@ describe('inheritReviewReports', () => {
       sourceRunSlug,
       currentRunSlug,
       targetReportDirectory: currentReportDirectory,
-      reviewReportNames: ['call-2--review.md'],
+      reviewReportNames: ['iteration-2--review.md'],
     });
 
     // Then
-    const copiedPath = join(currentReportDirectory, 'call-2--review.md');
+    const copiedPath = join(currentReportDirectory, 'iteration-2--review.md');
     expect(result.copied).toEqual([
       expect.objectContaining({ sourcePath: expectedSourcePath, targetPath: copiedPath }),
     ]);
@@ -446,14 +408,14 @@ describe('inheritReviewReports', () => {
     const projectDirectory = createProjectDirectory();
     const sourcePath = writeSourceReport(
       projectDirectory,
-      ['subworkflows', callNamespace('peer-review', 'peer-review', 1)],
+      ['subworkflows', 'iteration-1--step-peer-review--workflow-peer-review'],
       'reviews/architect-review.md',
       'architecture review',
       new Date('2026-07-17T00:00:00.000Z'),
     );
     writeSourceReport(
       projectDirectory,
-      ['subworkflows', 'call-1--step-other-review'],
+      ['subworkflows', 'iteration-1--step-other-review'],
       'reviews/architect-review.md',
       'unrelated review',
       new Date('2026-07-17T00:01:00.000Z'),
@@ -481,9 +443,9 @@ describe('inheritReviewReports', () => {
     const projectDirectory = createProjectDirectory();
     const namespace = [
       'subworkflows',
-      callNamespace('final-gate', 'final-gate', 1),
+      'iteration-1--step-final-gate--workflow-final-gate',
       'subworkflows',
-      callNamespace('reviewers', 'reviewers', 1),
+      'iteration-1--step-reviewers--workflow-reviewers',
     ];
     const sourcePath = writeSourceReport(
       projectDirectory,
@@ -499,9 +461,9 @@ describe('inheritReviewReports', () => {
       currentRunSlug,
       'reports',
       'subworkflows',
-      callNamespace('final-gate', 'final-gate', 2),
+      'iteration-2--step-final-gate--workflow-final-gate',
       'subworkflows',
-      callNamespace('reviewers', 'reviewers', 2),
+      'iteration-2--step-reviewers--workflow-reviewers',
     );
 
     // When
@@ -511,13 +473,7 @@ describe('inheritReviewReports', () => {
       currentRunSlug,
       targetReportDirectory: targetDirectory,
       reviewReportNames: [
-        [
-          'subworkflows',
-          callNamespace('final-gate', 'final-gate', '*'),
-          'subworkflows',
-          callNamespace('reviewers', 'reviewers', '*'),
-          'merge-readiness-review.md',
-        ].join('/'),
+        'subworkflows/iteration-*--step-final-gate--workflow-final-gate/subworkflows/iteration-*--step-reviewers--workflow-reviewers/merge-readiness-review.md',
       ],
     });
 
@@ -535,7 +491,7 @@ describe('inheritReviewReports', () => {
     const reportName = win32.join('reviews', 'architect-review.md');
     writeSourceReport(
       projectDirectory,
-      ['subworkflows', callNamespace('peer-review', 'peer-review', 1)],
+      ['subworkflows', 'iteration-1--step-peer-review--workflow-peer-review'],
       'reviews/architect-review.md',
       'architecture review',
       new Date('2026-07-17T00:00:00.000Z'),
@@ -559,7 +515,7 @@ describe('inheritReviewReports', () => {
     const projectDirectory = createProjectDirectory();
     writeSourceReport(
       projectDirectory,
-      ['subworkflows', callNamespace('peer-review', 'peer-review', 1)],
+      ['subworkflows', 'iteration-1--step-peer-review--workflow-peer-review'],
       '05-arch-review.md',
       'source review',
       new Date('2026-07-17T00:00:00.000Z'),
@@ -578,12 +534,7 @@ describe('inheritReviewReports', () => {
     expect(result.skipped).toEqual(expect.arrayContaining([
       expect.objectContaining({ reason: expect.stringContaining('target_unavailable') }),
     ]));
-    expect(existsSync(join(
-      outsideDirectory,
-      'subworkflows',
-      callNamespace('peer-review', 'peer-review', 2),
-      '05-arch-review.md',
-    ))).toBe(false);
+    expect(existsSync(join(outsideDirectory, 'subworkflows', 'iteration-2--step-peer-review--workflow-peer-review', '05-arch-review.md'))).toBe(false);
   });
 
   it('should skip an oversized source report without reading or copying it', () => {
@@ -591,7 +542,7 @@ describe('inheritReviewReports', () => {
     const projectDirectory = createProjectDirectory();
     const reportPath = sourceReportPath(
       projectDirectory,
-      ['subworkflows', callNamespace('peer-review', 'peer-review', 1)],
+      ['subworkflows', 'iteration-1--step-peer-review--workflow-peer-review'],
       '05-arch-review.md',
     );
     mkdirSync(join(reportPath, '..'), { recursive: true });
@@ -723,7 +674,7 @@ describe('inheritReviewReports', () => {
     }
     writeSourceReport(
       projectDirectory,
-      ['subworkflows', callNamespace('peer-review', 'peer-review', 1)],
+      ['subworkflows', 'iteration-1--step-peer-review--workflow-peer-review'],
       '05-arch-review.md',
       'boundary-entry report',
       new Date('2026-07-17T00:00:00.000Z'),
@@ -760,5 +711,106 @@ describe('inheritReviewReports', () => {
     expect(result.skipped).toEqual(expect.arrayContaining([
       expect.objectContaining({ reportName: '*', reason: 'report_name_limit_exceeded:1024' }),
     ]));
+  });
+});
+
+describe('report file discovery', () => {
+  it('excludes the internal report subtree before applying the entry limit', () => {
+    const reportDir = mkdtempSync(join(tmpdir(), 'takt-report-file-index-'));
+    temporaryDirectories.push(reportDir);
+    const internalDir = join(reportDir, '.takt-report-internal', 'history');
+    mkdirSync(internalDir, { recursive: true });
+    for (let index = 0; index < 1_024; index += 1) {
+      writeFileSync(join(internalDir, `${index}.json`), '{}');
+    }
+    const publicReport = join(reportDir, 'review.md');
+    writeFileSync(publicReport, '# Review');
+
+    expect(scanReportEntries(reportDir)).toEqual({
+      entries: [publicReport],
+    });
+  });
+
+  it('uses the normalized classifier for internal and manifest entries', () => {
+    const reportDir = mkdtempSync(join(tmpdir(), 'takt-report-file-index-'));
+    temporaryDirectories.push(reportDir);
+    mkdirSync(join(reportDir, '.TAKT-REPORT-INTERNAL', 'history'), { recursive: true });
+    writeFileSync(join(reportDir, '.TAKT-REPORT-INTERNAL', 'history', 'private.json'), '{}');
+    mkdirSync(join(reportDir, 'nested'), { recursive: true });
+    writeFileSync(join(reportDir, 'nested', 'resume-artifacts.json'), '{}');
+    const publicReport = join(reportDir, 'nested', 'review.md');
+    writeFileSync(publicReport, '# Review');
+
+    expect(scanReportEntries(reportDir).entries.filter((entry) => !entry.endsWith('nested')))
+      .toEqual([publicReport]);
+  });
+});
+
+describe('classifyReportRelativePath', () => {
+  it.each([
+    ['review.md', 'review.md', 'review.md'],
+    [
+      'public/.takt-report-internal/review.md',
+      'public/.takt-report-internal/review.md',
+      'public/.takt-report-internal/review.md',
+    ],
+  ])('classifies public report path %s', (input, normalizedPath, portableIdentity) => {
+    expect(classifyReportRelativePath(input)).toEqual({
+      kind: 'public',
+      normalizedPath,
+      portableIdentity,
+    });
+  });
+
+  it.each([
+    '.takt-report-internal/history/review.md',
+    '.TAKT-REPORT-INTERNAL/history/review.md',
+  ])('classifies normalized internal namespace path %s', (input) => {
+    expect(classifyReportRelativePath(input).kind).toBe('internal-namespace');
+  });
+
+  it.each([
+    'resume-artifacts.json',
+    'nested/resume-artifacts.json',
+  ])('classifies reserved manifest path %s', (input) => {
+    expect(classifyReportRelativePath(input).kind).toBe('reserved-manifest');
+  });
+
+  it('uses Unicode Default Case Fold and NFC for portable identity', () => {
+    const fullFold = classifyReportRelativePath('Straße.md');
+    const upperFold = classifyReportRelativePath('STRASSE.md');
+    const nfc = classifyReportRelativePath('réview.md');
+    const nfd = classifyReportRelativePath('re\u0301view.md');
+
+    expect(fullFold.kind === 'public' && fullFold.portableIdentity).toBe('strasse.md');
+    expect(upperFold.kind === 'public' && upperFold.portableIdentity).toBe('strasse.md');
+    expect(nfc.kind === 'public' && nfc.portableIdentity).toBe('réview.md');
+    expect(nfd.kind === 'public' && nfd.portableIdentity).toBe('réview.md');
+  });
+
+  it.each([
+    '',
+    '.',
+    '..',
+    '../review.md',
+    'nested/../../review.md',
+    '/absolute/review.md',
+    'C:\\absolute\\review.md',
+    'C:drive-relative.md',
+    'review\0.md',
+    ' review.md',
+    'review.md ',
+    './nested/review.md',
+    'nested/./review.md',
+    'draft/../review.md',
+    'nested//review.md',
+    'nested\\\\review.md',
+    'nested\\review.md',
+    '.takt-report-internal\\history\\review.md',
+    'nested\\Resume-Artifacts.JSON',
+    'nested/',
+    'public/../.takt-report-internal/history/review.md',
+  ])('classifies invalid report-relative path %s', (input) => {
+    expect(classifyReportRelativePath(input).kind).toBe('invalid');
   });
 });

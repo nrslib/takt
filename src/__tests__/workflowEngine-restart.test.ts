@@ -74,7 +74,13 @@ function makeRestartPoint(
 function makeResumePoint(): WorkflowResumePoint {
   return {
     version: 2,
-    stack: [{ workflow: 'root', step: 'selected', kind: 'agent' }],
+    stack: [{
+      workflow: 'root',
+      workflow_ref: 'root',
+      step: 'selected',
+      kind: 'agent',
+      occurrence: 1,
+    }],
     iteration: 3,
     elapsed_ms: 1_000,
     workflow_call_invocations: {},
@@ -222,7 +228,7 @@ describe('WorkflowEngine root restart contract', () => {
     });
 
     expect(engine.getState().currentStep).toBe('selected');
-    expect(engine.getState().iteration).toBe(3);
+    expect(engine.getResumePoint()?.iteration).toBe(3);
   });
 
   it('should reject simultaneous checkpoint resume and stateless restart ownership before initialization', () => {

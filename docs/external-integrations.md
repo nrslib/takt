@@ -1,5 +1,9 @@
 # External Integrations
 
+[日本語](./external-integrations.ja.md)
+
+This page is a catalog of community-built third-party integrations. For the official GitHub/GitLab integration, see [Configuration](./configuration.md) and [CI/CD](./ci-cd.md).
+
 Community-maintained examples that extend TAKT without modifying its core. They are not officially supported by TAKT, and inclusion in this list is not an endorsement — please review each project's license, dependencies, and security posture before adopting it.
 
 To add an integration here, open a PR with a one-line description and a link to a public repository.
@@ -16,4 +20,4 @@ Bundles that implement a software development methodology on top of TAKT — pre
 
 | Integration | Description |
 |-------------|-------------|
-| [ScopeBlind/examples/takt-workflow-receipts](https://github.com/ScopeBlind/examples/tree/main/takt-workflow-receipts) | Adds Ed25519-signed receipts and Cedar policy enforcement via an MCP server declared in `mcp_servers`. Receipts sit alongside TAKT's NDJSON logs and can be verified offline. No TAKT core changes required. |
+| [ScopeBlind/examples/takt-workflow-receipts](https://github.com/ScopeBlind/examples/tree/main/takt-workflow-receipts) | Adds Ed25519-signed receipts and Cedar policy enforcement via an MCP server declared in a step's `mcp_servers` (the transport must first be allowed through the `workflow_mcp_servers` config policy). Receipts sit alongside TAKT's NDJSON logs and can be verified offline. No TAKT core changes required. |

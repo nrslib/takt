@@ -244,11 +244,13 @@ describe('command quality gates', () => {
   it('should fail and stop the command when stdout exceeds the output byte limit', async () => {
     const projectRoot = createTempDir();
 
+    // 70000 bytes emitted as newline-separated lines: uniform alphanumeric runs
+    // trigger quadratic backtracking in sanitizeSensitiveText and only slow the test down.
     const result = await runCommandQualityGate({
       gate: {
         type: 'command',
         name: 'noisy-check',
-        command: 'node -e "process.stdout.write(\'x\'.repeat(70000)); setInterval(()=>{},1000)"',
+        command: 'node -e "process.stdout.write((\'x\'.repeat(499)+\'\\n\').repeat(140)); setInterval(()=>{},1000)"',
         timeoutMs: 1000,
       },
       projectRoot,
@@ -275,7 +277,7 @@ describe('command quality gates', () => {
       gate: {
         type: 'command',
         name: 'multibyte-noisy-check',
-        command: 'node -e "process.stdout.write(\'x\'.repeat(65535) + \'界\' + \'x\'.repeat(1024)); setInterval(()=>{},1000)"',
+        command: 'node -e "process.stdout.write((\'x\'.repeat(499)+\'\\n\').repeat(131) + \'x\'.repeat(35) + \'界\' + \'x\'.repeat(1024)); setInterval(()=>{},1000)"',
         timeoutMs: 1000,
       },
       projectRoot,
@@ -297,7 +299,7 @@ describe('command quality gates', () => {
       gate: {
         type: 'command',
         name: 'noisy-stderr-check',
-        command: 'node -e "process.stderr.write(\'x\'.repeat(70000)); setInterval(()=>{},1000)"',
+        command: 'node -e "process.stderr.write((\'x\'.repeat(499)+\'\\n\').repeat(140)); setInterval(()=>{},1000)"',
         timeoutMs: 1000,
       },
       projectRoot,
@@ -324,7 +326,7 @@ describe('command quality gates', () => {
       gate: {
         type: 'command',
         name: 'combined-noisy-check',
-        command: 'node -e "process.stdout.write(\'o\'.repeat(40000)); process.stderr.write(\'e\'.repeat(40000)); setInterval(()=>{},1000)"',
+        command: 'node -e "process.stdout.write((\'o\'.repeat(499)+\'\\n\').repeat(80)); process.stderr.write((\'e\'.repeat(499)+\'\\n\').repeat(80)); setInterval(()=>{},1000)"',
         timeoutMs: 1000,
       },
       projectRoot,

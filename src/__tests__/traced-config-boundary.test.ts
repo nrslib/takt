@@ -5,7 +5,10 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { loadGlobalConfigTrace, loadProjectConfigTrace } from '../infra/config/traced/tracedConfigLoader.js';
 import { getGlobalTracedSchema, getProjectTracedSchema } from '../infra/config/traced/tracedConfigSchema.js';
-import { loadTraceEntriesViaRuntime } from '../infra/config/traced/tracedConfigRuntimeBridge.js';
+import {
+  clearRuntimeTraceCache,
+  loadTraceEntriesViaRuntime,
+} from '../infra/config/traced/tracedConfigRuntimeBridge.js';
 import { clearTaktEnv, restoreTaktEnv, type TaktEnvSnapshot } from './helpers/taktEnv.js';
 
 let taktEnvSnapshot: TaktEnvSnapshot;
@@ -13,6 +16,9 @@ let taktEnvSnapshot: TaktEnvSnapshot;
 describe('traced config boundaries', () => {
   beforeEach(() => {
     taktEnvSnapshot = clearTaktEnv();
+    // 各テストが実 subprocess 経路（偽 traced-config 排除・TMPDIR 復旧など）を
+    // 検証できるよう、メモ化キャッシュを毎回リセットする。
+    clearRuntimeTraceCache();
   });
 
   afterEach(() => {

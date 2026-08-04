@@ -25,13 +25,12 @@ export function selectPrimaryRawFinding(
 
 export function foldRawFindingEvidence(
   rawFindings: readonly RawFinding[],
-): Pick<FindingRecord, 'location' | 'description' | 'suggestion' | 'reviewers'> {
+): Pick<FindingRecord, 'description' | 'suggestion' | 'reviewers'> {
   const ordered = [...rawFindings].sort(compareRawFinding);
   const primary = selectPrimaryRawFinding(ordered);
   return {
-    ...(primary.location !== undefined ? { location: primary.location } : {}),
-    description: primary.description,
-    ...(primary.suggestion !== undefined ? { suggestion: primary.suggestion } : {}),
+    ...(primary.description !== null ? { description: primary.description } : {}),
+    ...(primary.suggestion !== null ? { suggestion: primary.suggestion } : {}),
     reviewers: mergeIds([], ordered.map((raw) => raw.reviewer)),
   };
 }
@@ -42,7 +41,7 @@ export function foldFindingObservation(input: {
   readonly observation: FindingObservation;
 }): Pick<
   FindingRecord,
-  'rawFindingIds' | 'location' | 'description' | 'suggestion' | 'reviewers' | 'lastSeen'
+  'rawFindingIds' | 'description' | 'suggestion' | 'reviewers' | 'lastSeen'
 > {
   const evidence = foldRawFindingEvidence(input.rawFindings);
   return {
@@ -50,7 +49,6 @@ export function foldFindingObservation(input: {
       input.finding.rawFindingIds,
       input.rawFindings.map((raw) => raw.rawFindingId),
     ),
-    location: evidence.location ?? input.finding.location,
     description: evidence.description,
     suggestion: evidence.suggestion ?? input.finding.suggestion,
     reviewers: mergeIds(input.finding.reviewers, evidence.reviewers),

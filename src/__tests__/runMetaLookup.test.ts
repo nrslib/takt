@@ -7,7 +7,9 @@ import { findRunningStepByRunSlug, readRunMeta } from '../core/workflow/run/run-
 function writeMeta(runRoot: string, slug: string, meta: Record<string, unknown>): void {
   const metaPath = path.join(runRoot, '.takt', 'runs', slug, 'meta.json');
   fs.mkdirSync(path.dirname(metaPath), { recursive: true });
-  fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2), 'utf-8');
+  fs.writeFileSync(metaPath, JSON.stringify({
+    ...meta,
+  }, null, 2), 'utf-8');
 }
 
 describe('run-meta lookup', () => {
@@ -81,6 +83,34 @@ describe('run-meta lookup', () => {
     expect(readRunMeta(newestMetaPath)).toBeNull();
   });
 
+  it('should read the persisted workflow failure record', () => {
+    const slug = '20260802-step-failure';
+    writeMeta(projectDir, slug, {
+      task: 'Review findings',
+      workflow: 'default',
+      runSlug: slug,
+      runRoot: `.takt/runs/${slug}`,
+      reportDirectory: `.takt/runs/${slug}/reports`,
+      contextDirectory: `.takt/runs/${slug}/context`,
+      logsDirectory: `.takt/runs/${slug}/logs`,
+      status: 'failed',
+      startTime: '2026-08-02T15:26:51.000Z',
+      failure: {
+        step: 'reviewers',
+        error: 'NEEDS_ADJUDICATION: finding invariant failed',
+      },
+    });
+
+    const meta = readRunMeta(
+      path.join(projectDir, '.takt', 'runs', slug, 'meta.json'),
+    );
+
+    expect(meta?.failure).toEqual({
+      step: 'reviewers',
+      error: 'NEEDS_ADJUDICATION: finding invariant failed',
+    });
+  });
+
   it('should report broken run metadata with metaPath context', () => {
     const metaPath = path.join(projectDir, '.takt', 'runs', '20260409-run-z', 'meta.json');
     const warnings: string[] = [];
@@ -93,6 +123,23 @@ describe('run-meta lookup', () => {
 
     expect(warnings).toEqual([
       expect.stringContaining(`Failed to parse run metadata at ${metaPath}`),
+    ]);
+  });
+
+  it('should reject run metadata missing the required run identity fields', () => {
+    const metaPath = path.join(projectDir, '.takt', 'runs', '20260409-run-a', 'meta.json');
+    const warnings: string[] = [];
+    fs.mkdirSync(path.dirname(metaPath), { recursive: true });
+    fs.writeFileSync(metaPath, JSON.stringify({
+      task: 'Legacy run',
+      workflow: 'default',
+      status: 'failed',
+      startTime: '2026-04-09T00:00:00.000Z',
+    }), 'utf-8');
+
+    expect(readRunMeta(metaPath, (warning) => warnings.push(warning))).toBeNull();
+    expect(warnings).toEqual([
+      expect.stringContaining('runSlug must be a non-empty string'),
     ]);
   });
 
@@ -126,8 +173,21 @@ describe('run-meta lookup', () => {
       resumePoint: {
         version: 2,
         stack: [
-          { workflow: 'default', step: 'dev', kind: 'workflow_call', call_instance: 1 },
-          { workflow: 'takt/coding', step: 'review', kind: 'agent' },
+          {
+            workflow: 'default',
+            workflow_ref: 'default',
+            step: 'dev',
+            kind: 'workflow_call',
+            occurrence: 1,
+            call_instance: 1,
+          },
+          {
+            workflow: 'takt/coding',
+            workflow_ref: 'takt/coding',
+            step: 'review',
+            kind: 'agent',
+            occurrence: 1,
+          },
         ],
         iteration: 7,
         elapsed_ms: 183245,
@@ -139,6 +199,93 @@ describe('run-meta lookup', () => {
     expect(findRunningStepByRunSlug(projectDir, '20260409-run-a')).toBeUndefined();
   });
 
+  it('should validate canonical resume_point at read boundary', () => {
+    const metaPath = path.join(projectDir, '.takt', 'runs', '20260409-run-a', 'meta.json');
+    writeMeta(projectDir, '20260409-run-a', {
+      task: 'Force fail me\nwith full prompt',
+      workflow: 'default',
+      runSlug: '20260409-run-a',
+      runRoot: '.takt/runs/20260409-run-a',
+      reportDirectory: '.takt/runs/20260409-run-a/reports',
+      contextDirectory: '.takt/runs/20260409-run-a/context',
+      logsDirectory: '.takt/runs/20260409-run-a/logs',
+      status: 'running',
+      startTime: '2026-04-09T00:00:00.000Z',
+      currentStep: 'delegate',
+      currentIteration: 7,
+      resume_point: {
+        version: 2,
+        stack: [
+          { workflow: 'default', workflow_ref: 'project:sha256:default', step: 'delegate', kind: 'workflow_call', occurrence: 1, call_instance: 1 },
+          { workflow: 'takt/coding', workflow_ref: 'project:sha256:coding', step: 'review', kind: 'agent', occurrence: 1 },
+        ],
+        iteration: 7,
+        elapsed_ms: 183245,
+        workflow_call_invocations: {
+          '{"workflow":"project:sha256:default","step":"delegate","calls":[]}': {
+            call_instance: 1,
+            report_namespace_segment: 'iteration-1--step-delegate--workflow-takt%2Fcoding',
+          },
+        },
+        workflow_step_participations: {},
+      },
+    });
+
+    expect(readRunMeta(metaPath)?.resumePoint).toEqual({
+      version: 2,
+      stack: [
+        { workflow: 'default', workflow_ref: 'project:sha256:default', step: 'delegate', kind: 'workflow_call', occurrence: 1, call_instance: 1 },
+        { workflow: 'takt/coding', workflow_ref: 'project:sha256:coding', step: 'review', kind: 'agent', occurrence: 1 },
+      ],
+      iteration: 7,
+      elapsed_ms: 183245,
+      workflow_call_invocations: {
+        '{"workflow":"project:sha256:default","step":"delegate","calls":[]}': {
+          call_instance: 1,
+          report_namespace_segment: 'iteration-1--step-delegate--workflow-takt%2Fcoding',
+        },
+      },
+      workflow_step_participations: {},
+    });
+  });
+
+  it('occurrenceが欠けたresume_pointを補完せず拒否する', () => {
+    const metaPath = path.join(
+      projectDir,
+      '.takt',
+      'runs',
+      '20260409-run-a',
+      'meta.json',
+    );
+    const warnings: string[] = [];
+    writeMeta(projectDir, '20260409-run-a', {
+      task: 'Invalid resume',
+      workflow: 'default',
+      runSlug: '20260409-run-a',
+      runRoot: '.takt/runs/20260409-run-a',
+      reportDirectory: '.takt/runs/20260409-run-a/reports',
+      contextDirectory: '.takt/runs/20260409-run-a/context',
+      logsDirectory: '.takt/runs/20260409-run-a/logs',
+      status: 'running',
+      startTime: '2026-04-09T00:00:00.000Z',
+      resume_point: {
+        version: 2,
+        stack: [{
+          workflow: 'default',
+          workflow_ref: 'project:sha256:default',
+          step: 'delegate',
+          kind: 'workflow_call',
+        }],
+        iteration: 1,
+        elapsed_ms: 0,
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
+      },
+    });
+
+    expect(readRunMeta(metaPath, (warning) => warnings.push(warning))).toBeNull();
+    expect(warnings[0]).toContain('occurrence');
+  });
   it('should normalize operation journal ownership metadata at the read boundary', () => {
     const metaPath = path.join(projectDir, '.takt', 'runs', '20260409-run-a', 'meta.json');
     writeMeta(projectDir, '20260409-run-a', {
@@ -197,6 +344,11 @@ describe('run-meta lookup', () => {
     writeMeta(projectDir, '20260409-run-a', {
       task: 'Review PR changes',
       workflow: 'default',
+      runSlug: '20260409-run-a',
+      runRoot: '.takt/runs/20260409-run-a',
+      reportDirectory: '.takt/runs/20260409-run-a/reports',
+      contextDirectory: '.takt/runs/20260409-run-a/context',
+      logsDirectory: '.takt/runs/20260409-run-a/logs',
       status: 'running',
       startTime: '2026-04-09T00:00:00.000Z',
       pr_context: {

@@ -1,19 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SessionLog } from '../shared/utils/index.js';
 
-const { mockSaveSessionState } = vi.hoisted(() => ({
-  mockSaveSessionState: vi.fn(),
+const { mockNotifyError } = vi.hoisted(() => ({
+  mockNotifyError: vi.fn(),
 }));
 
-vi.mock('../infra/config/index.js', async (importOriginal) => ({
+vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  saveSessionState: (...args: unknown[]) => mockSaveSessionState(...args),
+  notifyError: (...args: unknown[]) => mockNotifyError(...args),
 }));
 
 import {
-  finalizeWorkflowAbort,
-  finalizeWorkflowSuccess,
-  reportWorkflowAbort,
+  reportWorkflowFailure,
   reportWorkflowCompletion,
 } from '../features/tasks/execute/workflowExecutionReporting.js';
 
@@ -42,60 +40,6 @@ describe('workflowExecutionReporting', () => {
     vi.clearAllMocks();
   });
 
-  it('should warn with workflow, task, and project path when saving success session state fails', () => {
-    const warnings: string[] = [];
-    mockSaveSessionState.mockImplementation(() => {
-      throw new Error('disk full');
-    });
-
-    const finalized = finalizeWorkflowSuccess(
-      createSessionLog(),
-      'Implement subworkflow call',
-      'takt-default',
-      'done',
-      'fix',
-      '/project',
-      (warning) => {
-        warnings.push(warning);
-      },
-    );
-
-    expect(finalized.status).toBe('completed');
-    expect(finalized.endTime).toBeDefined();
-    expect(warnings).toEqual([
-      expect.stringContaining('Failed to save session state for workflow "takt-default"'),
-    ]);
-    expect(warnings[0]).toContain('task "Implement subworkflow call"');
-    expect(warnings[0]).toContain('in /project: disk full');
-  });
-
-  it('should warn with workflow, task, and project path when saving abort session state fails', () => {
-    const warnings: string[] = [];
-    mockSaveSessionState.mockImplementation(() => {
-      throw new Error('permission denied');
-    });
-
-    const finalized = finalizeWorkflowAbort(
-      createSessionLog(),
-      'user_interrupted',
-      'Implement subworkflow call',
-      'takt-default',
-      'fix',
-      '/project',
-      (warning) => {
-        warnings.push(warning);
-      },
-    );
-
-    expect(finalized.status).toBe('aborted');
-    expect(finalized.endTime).toBeDefined();
-    expect(warnings).toEqual([
-      expect.stringContaining('Failed to save session state for workflow "takt-default"'),
-    ]);
-    expect(warnings[0]).toContain('task "Implement subworkflow call"');
-    expect(warnings[0]).toContain('in /project: permission denied');
-  });
-
   it('Given trace discovery metadata, When reporting workflow completion, Then it prints TraceQL query hints', () => {
     const out = createOut();
 
@@ -107,7 +51,7 @@ describe('workflowExecutionReporting', () => {
       },
       3,
       '/tmp/project/.takt/runs/run-843/logs/session.jsonl',
-      false,
+      true,
       {
         queries: [
           '{ resource.service.name = "takt" && span."takt.run.id" = "run-843" }',
@@ -149,7 +93,7 @@ describe('workflowExecutionReporting', () => {
   it('Given trace discovery metadata, When reporting workflow abort, Then it prints the same TraceQL query hints', () => {
     const out = createOut();
 
-    reportWorkflowAbort(
+    reportWorkflowFailure(
       out as never,
       {
         ...createSessionLog(),
@@ -157,6 +101,7 @@ describe('workflowExecutionReporting', () => {
       },
       2,
       'Step "write_tests" failed',
+      'aborted',
       '/tmp/project/.takt/runs/run-843/logs/session.jsonl',
       false,
       {
@@ -170,5 +115,33 @@ describe('workflowExecutionReporting', () => {
     expect(out.info).toHaveBeenCalledWith('Session log: /tmp/project/.takt/runs/run-843/logs/session.jsonl');
     expect(out.info).toHaveBeenCalledWith('TraceQL discovery:');
     expect(out.info).toHaveBeenCalledWith('  { resource.service.name = "takt" && span."takt.run.id" = "run-843" }');
+  });
+
+  it('reports failed status without calling it aborted', () => {
+    const out = createOut();
+
+    reportWorkflowFailure(
+      out as never,
+      {
+        ...createSessionLog(),
+        endTime: '2026-04-14T00:00:01.000Z',
+      },
+      1,
+      'SQLite setup failed',
+      'failed',
+      '/tmp/project/.takt/runs/run-843/logs/session.jsonl',
+      true,
+    );
+
+    expect(out.error).toHaveBeenCalledWith(
+      expect.stringContaining('Workflow failed after 1 iterations'),
+    );
+    expect(out.error).not.toHaveBeenCalledWith(
+      expect.stringContaining('Workflow aborted'),
+    );
+    expect(mockNotifyError).toHaveBeenCalledWith(
+      'TAKT',
+      expect.stringContaining('Failed: SQLite setup failed'),
+    );
   });
 });

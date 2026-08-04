@@ -2,13 +2,12 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, vi } from 'vitest';
-import type { AgentResponse, AgentWorkflowStep, WorkflowConfig, WorkflowState, WorkflowStep } from '../core/models/index.js';
+import type { AgentResponse, WorkflowConfig, WorkflowState, WorkflowStep } from '../core/models/index.js';
 import { createInitialState } from '../core/workflow/engine/state-manager.js';
 import { runSingleWorkflowIteration, runWorkflowToCompletion } from '../core/workflow/engine/WorkflowRunLoop.js';
 import { runQualityGates as runActualQualityGates } from '../core/workflow/quality-gates/qualityGateRunner.js';
-import { WorkflowStepBudget } from '../core/workflow/workflow-step-budget.js';
-import { snapshotWorkflowExecutionScope } from '../core/workflow/workflow-execution-scope.js';
 import { makeResponse, makeRule, makeStep } from './engine-test-helpers.js';
+import { createWorkflowRunLoopTestContract } from './test-helpers.js';
 
 type CommandGateRunResult = {
   ok: true;
@@ -42,18 +41,13 @@ function makeDeps(
   runQualityGates: ReturnType<typeof vi.fn<() => Promise<CommandGateRunResult>>>,
   cwd: string,
 ) {
-  const stack = [{ workflow: 'command-gate-workflow', step: step.name, kind: 'agent' as const }];
+  const config = makeConfig(step);
   return {
     state,
     options: {},
     getWorkflowName: () => 'command-gate-workflow',
-    getTask: () => 'test task',
-    getRoutingFindings: () => ({ open: [], conflicts: [] }),
-    getCurrentWorkflowStack: () => stack,
-    buildStepExecutionScope: () => snapshotWorkflowExecutionScope(stack),
     getCwd: () => cwd,
-    stepBudget: new WorkflowStepBudget(5),
-    recordCountableProgress: vi.fn(),
+    getMaxSteps: () => 5,
     getReportDir: () => '/worktree/.takt/runs/test/reports',
     abortRequested: () => false,
     getStep: () => step,
@@ -62,38 +56,22 @@ function makeDeps(
     cycleDetectorRecordAndCheck: () => ({ triggered: false, cycleCount: 0 }),
     resolveDoneTransition: vi.fn(() => ({ nextStep: 'COMPLETE' })),
     runLoopMonitorJudge: vi.fn(),
-    getPendingLoopJudge: () => undefined,
-    runStep: (candidate: WorkflowStep, plan: { kind: string; preparedExecution?: { phase1Instruction: string } }) => {
-      if (plan.kind !== 'normal' || plan.preparedExecution === undefined) {
-        throw new Error('Expected a prepared normal execution plan');
-      }
-      return runStep(candidate, plan.preparedExecution.phase1Instruction);
-    },
+    runStep,
     runQualityGates,
-    prepareNormalStepExecution: vi.fn((_step: WorkflowStep, stepIteration: number) => {
+    buildInstruction: vi.fn((_step: WorkflowStep, stepIteration: number) => {
       const previous = state.lastOutput?.content;
-      const phase1Instruction = previous
-        ? `instruction ${stepIteration}\n${previous}`
-        : `instruction ${stepIteration}`;
-      return {
-        executableStep: step as AgentWorkflowStep,
-        phase1Instruction,
-        stepIteration,
-        rollbackPreparation: vi.fn(),
-      };
+      return previous ? `instruction ${stepIteration}\n${previous}` : `instruction ${stepIteration}`;
     }),
+    buildPhase1Instruction: vi.fn((_step: WorkflowStep, instruction: string) => instruction),
+    prepareNormalStepExecution: vi.fn(() => undefined),
     resolveStepProviderModel: vi.fn(() => ({
-      provider: 'mock',
-      model: 'test-model',
+      provider: undefined,
+      model: undefined,
     })),
-    resolveStepProviderModelBeforeAutoRouting: vi.fn(() => ({
-      provider: 'mock',
-      model: 'test-model',
-    })),
-    setActiveStep: vi.fn(),
-    syncMaxSteps: vi.fn(),
+    resolveRuntimeForStep: vi.fn(),
     addUserInput: vi.fn(),
     emit: vi.fn(),
+    updateMaxSteps: vi.fn(),
     checkCompletionGate: vi.fn(() => ({ ok: true as const })),
     checkReturnValueGate: vi.fn(() => ({ ok: true as const })),
     persistPreviousResponseSnapshot: vi.fn((targetState: WorkflowState, stepName: string, stepIteration: number, content: string) => {
@@ -105,6 +83,7 @@ function makeDeps(
         timestamp: new Date(),
       };
     }),
+    ...createWorkflowRunLoopTestContract(config, state, 'test task'),
   };
 }
 
@@ -301,7 +280,7 @@ describe('WorkflowRunLoop command quality gates', () => {
     }
   });
 
-  it('builds the canonical phase-1 instruction when observability is disabled', async () => {
+  it('does not build the phase-1 instruction for the step span when observability is disabled', async () => {
     const step = makeStep('implement', {
       rules: [makeRule('Implementation complete', 'COMPLETE')],
     });
@@ -319,11 +298,7 @@ describe('WorkflowRunLoop command quality gates', () => {
 
     await runSingleWorkflowIteration(deps);
 
-    expect(deps.prepareNormalStepExecution).toHaveBeenCalledWith(step, 1, undefined);
-    expect(runStep).toHaveBeenCalledWith(
-      step,
-      'instruction 1',
-    );
+    expect(deps.buildPhase1Instruction).not.toHaveBeenCalled();
     expect(deps.emit.mock.calls.some(([event]) => event === 'step:start')).toBe(false);
   });
 

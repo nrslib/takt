@@ -24,6 +24,7 @@ import type {
   FindingLedgerReviewIntegrityState,
 } from './types.js';
 import { addRoundMarker } from './round-marker.js';
+import { isOutstandingReviewerAnomaly } from './reviewer-anomalies.js';
 
 /**
  * finding_contract.review_budget が省略した場合の既定値。「無制限を許さない」
@@ -54,9 +55,9 @@ export function reviewIntegrityRoundsCompleted(ledger: FindingLedger): number {
   return ledger.reviewIntegrity?.roundMarkers.length ?? 0;
 }
 
-/** 未昇格（promotedFindingId 無し）の reviewer anomaly が1件でも残っているか。 */
+/** 未昇格かつ未settleの reviewer anomaly が1件でも残っているか。 */
 function hasOutstandingReviewerAnomalies(ledger: FindingLedger): boolean {
-  return (ledger.reviewerAnomalies ?? []).some((anomaly) => anomaly.promotedFindingId === undefined);
+  return (ledger.reviewerAnomalies ?? []).some(isOutstandingReviewerAnomaly);
 }
 
 /**

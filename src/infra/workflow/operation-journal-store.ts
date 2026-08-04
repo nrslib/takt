@@ -34,6 +34,7 @@ import {
   type CompareAndSetOperationParentInput,
   type CreateOperationChildInput,
   type CreateOperationParentInput,
+  type CreateOperationParentSuccessorInput,
   type OperationJournalChild,
   type OperationJournalDocument,
   type OperationJournalParent,
@@ -44,7 +45,7 @@ import {
 
 const PRIVATE_FILE_MODE = 0o600;
 const LOCK_RETRY_DELAY_MS = 25;
-const LOCK_TIMEOUT_MS = 5_000;
+const DEFAULT_LOCK_TIMEOUT_MS = 5_000;
 const MALFORMED_LOCK_GRACE_MS = 250;
 const RECOVERY_ELECTION_RECORD_LIMIT = 256;
 const RECOVERY_ELECTION_LOG_BYTE_LIMIT = 256 * 1024;
@@ -290,7 +291,7 @@ function publishOperationLock(
       cwd: parentPath,
       encoding: 'utf-8',
       env: {},
-      timeout: LOCK_TIMEOUT_MS,
+      timeout: DEFAULT_LOCK_TIMEOUT_MS,
       maxBuffer: 64 * 1024,
       windowsHide: true,
     },
@@ -454,13 +455,21 @@ class FileOperationJournalStore implements OperationJournalStore {
   private readonly lockPath: string;
   private readonly recoveryElectionPath: string;
   private readonly recoveryElectionMutexPath: string;
+  private readonly lockTimeoutMs: number;
   private locked = false;
 
-  constructor(journalPath: string) {
+  constructor(journalPath: string, options: OperationJournalStoreOptions = {}) {
+    const lockTimeoutMs = options.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS;
+    if (!Number.isFinite(lockTimeoutMs) || lockTimeoutMs <= 0) {
+      throw new Error(
+        `Operation journal lock timeout must be a positive number of milliseconds: ${lockTimeoutMs}`,
+      );
+    }
     this.journalPath = resolve(journalPath);
     this.lockPath = `${this.journalPath}.lock`;
     this.recoveryElectionPath = `${this.lockPath}.recovery`;
     this.recoveryElectionMutexPath = `${this.recoveryElectionPath}.mutex`;
+    this.lockTimeoutMs = lockTimeoutMs;
   }
 
   createParent(input: CreateOperationParentInput): OperationJournalParent {
@@ -555,6 +564,117 @@ class FileOperationJournalStore implements OperationJournalStore {
       return {
         document: replaceParent(document, index, updated),
         result: updated,
+      };
+    });
+  }
+
+  createParentSuccessor(input: CreateOperationParentSuccessorInput): OperationJournalParent {
+    return this.mutate((document) => {
+      const { parent: predecessor } = requireParent(document, input.predecessorParentId);
+      assertOwner(predecessor, input.expectedPredecessorOwner);
+      this.assertRevisionAndStage(
+        predecessor.id,
+        predecessor.revision,
+        predecessor.stage,
+        input.expectedPredecessorRevision,
+        'terminated',
+      );
+      if (predecessor.stage !== 'terminated') {
+        throw new OperationJournalConflictError(
+          `Operation parent "${predecessor.id}" is not a terminated predecessor`,
+        );
+      }
+      if (document.parents.some((parent) => parent.id === input.successorParentId)) {
+        throw new OperationJournalConflictError(
+          `Operation parent successor "${input.successorParentId}" already exists`,
+        );
+      }
+      if (input.successorClaimToken === predecessor.owner.claimToken) {
+        throw new OperationJournalConflictError(
+          `Operation parent successor "${input.successorParentId}" must change claim token`,
+        );
+      }
+      if (input.children.length !== predecessor.children.length) {
+        throw new OperationJournalConflictError(
+          `Operation parent successor "${input.successorParentId}" must materialize every predecessor child`,
+        );
+      }
+      const materializations = new Map(input.children.map((child) => [child.id, child]));
+      if (materializations.size !== input.children.length) {
+        throw new OperationJournalConflictError(
+          `Operation parent successor "${input.successorParentId}" has duplicate child materializations`,
+        );
+      }
+      const children = predecessor.children.map((child) => {
+        const materialization = materializations.get(child.id);
+        if (
+          materialization === undefined
+          || materialization.expectedRevision !== child.revision
+          || materialization.expectedStage !== child.stage
+        ) {
+          throw new OperationJournalConflictError(
+            `Operation child "${child.id}" changed before successor materialization`,
+          );
+        }
+        const isOrphanReservation = materialization.nextStage === 'reserved'
+          && (child.stage === 'worker_started' || child.stage === 'running')
+          && materialization.resetReason === 'orphan_worker_after_dispatch';
+        const isAppliedFailureReservation = materialization.nextStage === 'reserved'
+          && child.stage === 'applied'
+          && materialization.resetReason === 'explicit_part_failure';
+        if (
+          materialization.nextStage === child.stage
+          && materialization.resetReason !== undefined
+        ) {
+          throw new OperationJournalConflictError(
+            `Operation child "${child.id}" cannot declare reset reason `
+            + `"${materialization.resetReason}" without a reset transition`,
+          );
+        }
+        if (
+          materialization.nextStage !== child.stage
+          && !isOrphanReservation
+          && !isAppliedFailureReservation
+        ) {
+          throw new OperationJournalConflictError(
+            `Operation child "${child.id}" cannot materialize from stage `
+            + `"${child.stage}" to "${materialization.nextStage}"`,
+          );
+        }
+        return {
+          ...child,
+          stage: materialization.nextStage,
+          payload: materialization.payload,
+        };
+      });
+      const generation = predecessor.owner.generation + 1;
+      if (!Number.isSafeInteger(generation)) {
+        throw new OperationJournalConflictError(
+          `Operation parent "${predecessor.id}" owner generation is exhausted`,
+        );
+      }
+      const revision = children.reduce(
+        (total, child) => total + 1 + child.revision,
+        generation,
+      );
+      const successor: OperationJournalParent = {
+        id: input.successorParentId,
+        kind: predecessor.kind,
+        revision,
+        stage: 'running',
+        payload: input.successorPayload,
+        owner: {
+          generation,
+          claimToken: input.successorClaimToken,
+        },
+        children,
+      };
+      return {
+        document: {
+          ...document,
+          parents: [...document.parents, successor],
+        },
+        result: successor,
       };
     });
   }
@@ -794,7 +914,7 @@ class FileOperationJournalStore implements OperationJournalStore {
     lockPath: string,
     recover: (existing: LockSnapshot, deadline: number) => void,
   ): LockSnapshot {
-    const deadline = Date.now() + LOCK_TIMEOUT_MS;
+    const deadline = Date.now() + this.lockTimeoutMs;
     while (true) {
       const acquired = this.tryAcquireLock(lockPath);
       if (acquired !== undefined) {
@@ -1086,6 +1206,14 @@ class FileOperationJournalStore implements OperationJournalStore {
   }
 }
 
-export function createOperationJournalStore(journalPath: string): OperationJournalStore {
-  return new FileOperationJournalStore(journalPath);
+export interface OperationJournalStoreOptions {
+  /** Maximum time to wait for the journal file lock. Defaults to 5000ms. */
+  readonly lockTimeoutMs?: number;
+}
+
+export function createOperationJournalStore(
+  journalPath: string,
+  options: OperationJournalStoreOptions = {},
+): OperationJournalStore {
+  return new FileOperationJournalStore(journalPath, options);
 }

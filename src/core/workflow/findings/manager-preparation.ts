@@ -6,13 +6,8 @@ import { intakeReviewerOutputs } from './manager-intake.js';
 import { buildFindingManagerStep } from './manager-step.js';
 import { resolveReviewIntegrityLimits } from './review-integrity.js';
 import { resolveStopBudgetLimits } from './stop-budget.js';
-import { stopBudgetRoundsCompleted } from './stop-budget.js';
-import {
-  attachInterpretationRecoveryOrigins,
-  collectInterpretationRecoveryPlan,
-  type InterpretationRecoveryFailure,
-} from './interpretation-recovery.js';
 import type { RunFindingManagerForStepInput } from './manager-contracts.js';
+import type { ReviewScopeProofSnapshot } from './snapshot.js';
 
 export interface PreparedFindingManagerRound {
   previousLedger: FindingLedger;
@@ -21,7 +16,6 @@ export interface PreparedFindingManagerRound {
   stopBudgetRoundMarker: string;
   reviewIntegrityLimits: ReturnType<typeof resolveReviewIntegrityLimits>;
   intake: ReviewerIntakeResult;
-  interpretationRecoveryFailures: InterpretationRecoveryFailure[];
   managerStep: AgentWorkflowStep;
   providerInfo: StepProviderInfo;
 }
@@ -29,6 +23,7 @@ export interface PreparedFindingManagerRound {
 export function prepareFindingManagerRound(
   input: RunFindingManagerForStepInput,
   stopBudgetRoundMarker: string,
+  reviewScopeSnapshot: ReviewScopeProofSnapshot,
 ): PreparedFindingManagerRound {
   const previousLedger = input.ledgerStore.loadLedger();
   input.ledgerStore.saveLedgerSnapshot();
@@ -47,22 +42,13 @@ export function prepareFindingManagerRound(
     parentStepName: input.parentStep.name,
     stepIteration: input.stepIteration,
     runId: input.runId,
+    workflowTask: input.workflowTask,
+    cwd: input.cwd,
+    scopeIdentity: input.ledgerStore.ledgerIdentity,
+    issuedAt: input.timestamp,
+    reviewScopeSnapshot,
   });
-  const roundsCompleted = stopBudgetRoundsCompleted(previousLedger);
-  const currentItems = attachInterpretationRecoveryOrigins({
-    ledger: previousLedger,
-    currentItems: reviewerIntake.items,
-    roundsCompleted,
-  });
-  const interpretationRecovery = collectInterpretationRecoveryPlan({
-    ledger: previousLedger,
-    currentItems,
-    roundsCompleted,
-  });
-  const intake: ReviewerIntakeResult = {
-    ...reviewerIntake,
-    items: [...interpretationRecovery.items, ...currentItems],
-  };
+  const intake: ReviewerIntakeResult = reviewerIntake;
   input.ledgerStore.saveRawFindings(
     input.runId,
     input.parentStep.name,
@@ -99,7 +85,6 @@ export function prepareFindingManagerRound(
     stopBudgetRoundMarker,
     reviewIntegrityLimits,
     intake,
-    interpretationRecoveryFailures: interpretationRecovery.failures,
     managerStep,
     providerInfo: input.optionsBuilder.resolveStepProviderModel(managerStep),
   };

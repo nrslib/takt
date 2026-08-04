@@ -15,6 +15,7 @@ parallel:
     edit: false
     persona: architecture-reviewer
     policy:
+      - contract-change
       - review
       - $param: review_policy_additions
     knowledge:
@@ -33,6 +34,7 @@ parallel:
     edit: false
     persona: security-reviewer
     policy:
+      - contract-change
       - review
       - $param: review_policy_additions
     knowledge:
@@ -52,6 +54,7 @@ parallel:
     edit: false
     persona: testing-reviewer
     policy:
+      - contract-change
       - review
       - testing
       - $param: review_policy_additions
@@ -73,6 +76,7 @@ parallel:
     edit: false
     persona: coding-reviewer
     policy:
+      - contract-change
       - review
       - coding
       - $param: review_policy_additions
@@ -93,6 +97,7 @@ parallel:
     edit: false
     persona: ai-antipattern-reviewer
     policy:
+      - contract-change
       - review
       - ai-antipattern
       - $param: review_policy_additions

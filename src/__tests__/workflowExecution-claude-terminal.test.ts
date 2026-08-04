@@ -1,9 +1,12 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkflowConfig } from '../core/models/index.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
+import { FindingDatabase } from '../infra/finding-storage/database.js';
+import { createTestFindingLedgerStore } from './helpers/finding-storage.js';
 
 const terminalMocks = vi.hoisted(() => ({
   start: vi.fn().mockResolvedValue({ id: 'tmux-session', name: 'takt-claude-terminal' }),
@@ -214,4 +217,133 @@ describe('executeWorkflow claude-terminal integration', () => {
     expect(terminalMocks.start).toHaveBeenCalledTimes(2);
     expect(terminalMocks.waitForAssistantResponse).toHaveBeenCalledTimes(2);
   });
+
+  it('bootstrap失敗後も解決済みoperation lineageを次のdistinct resumeへ引き継ぐ', async () => {
+    const { executeWorkflow } = await import('../features/tasks/execute/workflowExecution.js');
+    const sourceRunSlug = '20260801-bootstrap-source';
+    const failedRunSlug = '20260801-bootstrap-failed';
+    const resumedRunSlug = '20260801-bootstrap-resumed';
+
+    await executeWorkflow(makeConfig(), 'source task', projectDir, {
+      projectCwd: projectDir,
+      provider: 'claude-terminal',
+      reportDirName: sourceRunSlug,
+    });
+    const sourceMetaPath = join(projectDir, '.takt', 'runs', sourceRunSlug, 'meta.json');
+    const sourceMeta = JSON.parse(await readFile(sourceMetaPath, 'utf-8')) as {
+      status: string;
+      operation_journal_run_slug?: string;
+    };
+    sourceMeta.status = 'failed';
+    await writeFile(sourceMetaPath, JSON.stringify(sourceMeta), 'utf-8');
+    createTestFindingLedgerStore({
+      projectCwd: projectDir,
+      runId: sourceRunSlug,
+      reportDir: join(projectDir, '.takt', 'runs', sourceRunSlug, 'reports'),
+      workflowName: makeConfig().name,
+    });
+
+    await expect(executeWorkflow(makeConfig(), 'failed target task', projectDir, {
+      projectCwd: projectDir,
+      provider: 'claude-terminal',
+      reportDirName: failedRunSlug,
+      resumeSource: { sourceRunSlug, resumeMode: 'requeue' },
+      taskSpec: {
+        runSlug: failedRunSlug,
+        sourceTaskDir: join(projectDir, 'missing-task-source'),
+        attachmentManifest: [{
+          relativePath: 'attachments/missing.png',
+          kind: 'file',
+          contentSha256: 'a'.repeat(64),
+        }],
+        taskPrompt: 'missing task prompt',
+        orderContent: 'missing task',
+        stagedOrderContent: 'missing task',
+      },
+    })).rejects.toThrow();
+    const failedMeta = JSON.parse(await readFile(
+      join(projectDir, '.takt', 'runs', failedRunSlug, 'meta.json'),
+      'utf-8',
+    )) as {
+      status: string;
+      source_run_slug?: string;
+      operation_journal_run_slug?: string;
+      operation_claim_token?: string;
+    };
+    expect(failedMeta).toMatchObject({
+      status: 'failed',
+      source_run_slug: sourceRunSlug,
+      operation_journal_run_slug: sourceMeta.operation_journal_run_slug,
+      operation_claim_token: expect.any(String),
+    });
+    FindingDatabase.openTarget({
+      databasePath: join(
+        projectDir,
+        '.takt',
+        'runs',
+        failedRunSlug,
+        'finding-contract.sqlite',
+      ),
+      runId: failedRunSlug,
+    }).close();
+
+    terminalMocks.waitForAssistantResponse
+      .mockResolvedValueOnce({
+        sessionId: 'claude-session-1',
+        assistantText: 'work complete',
+        events: [],
+      })
+      .mockResolvedValueOnce({
+        sessionId: 'claude-session-1',
+        assistantText: '{"step":1,"reason":"done"}',
+        events: [],
+      });
+    const resumed = await executeWorkflow(makeMultiRuleConfig(), 'resumed target task', projectDir, {
+      projectCwd: projectDir,
+      provider: 'claude-terminal',
+      reportDirName: resumedRunSlug,
+      resumeSource: { sourceRunSlug: failedRunSlug, resumeMode: 'requeue' },
+    });
+    expect(resumed.success).toBe(true);
+    const resumedMeta = JSON.parse(await readFile(
+      join(projectDir, '.takt', 'runs', resumedRunSlug, 'meta.json'),
+      'utf-8',
+    )) as { workflow: string };
+    expect(resumedMeta.workflow).toBe('claude-terminal-workflow-phase3');
+  });
+
+  it('FC非使用workflowのrequeueはsource finding DBを検証せず成功する', async () => {
+    const { executeWorkflow } = await import('../features/tasks/execute/workflowExecution.js');
+    const sourceRunSlug = '20260801-non-finding-source';
+    const targetRunSlug = '20260801-non-finding-target';
+
+    const sourceResult = await executeWorkflow(makeConfig(), 'source task', projectDir, {
+      projectCwd: projectDir,
+      provider: 'claude-terminal',
+      reportDirName: sourceRunSlug,
+    });
+    expect(sourceResult.success).toBe(true);
+    await writeFile(
+      join(projectDir, '.takt', 'runs', sourceRunSlug, 'finding-contract.sqlite'),
+      'not sqlite',
+    );
+    const readSource = vi.spyOn(FindingDatabase, 'readSource');
+
+    const resumedResult = await executeWorkflow(makeConfig(), 'resumed task', projectDir, {
+      projectCwd: projectDir,
+      provider: 'claude-terminal',
+      reportDirName: targetRunSlug,
+      resumeSource: {
+        sourceRunSlug,
+        resumeMode: 'requeue',
+      },
+    });
+
+    expect(resumedResult.success).toBe(true);
+    expect(readSource).not.toHaveBeenCalled();
+    expect(existsSync(
+      join(projectDir, '.takt', 'runs', targetRunSlug, 'finding-contract.sqlite'),
+    )).toBe(false);
+  });
+
 });

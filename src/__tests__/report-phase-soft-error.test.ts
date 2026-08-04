@@ -26,11 +26,6 @@ import {
   runStatusJudgmentPhase,
 } from '../core/workflow/phase-runner.js';
 
-const eventAttribution = {
-  iteration: 1,
-  scope: { kind: 'workflow_execution_scope', stack: [] },
-} as const;
-
 function makeState(): WorkflowState {
   return {
     workflowName: 'test-workflow',
@@ -149,6 +144,7 @@ function makeParallelRunner(): ParallelRunner {
       requestMoreParts: vi.fn(),
     },
     runQualityGates: vi.fn().mockResolvedValue({ ok: true }),
+    updateMaxSteps: vi.fn(),
     setActiveResumePoint: vi.fn(),
   };
   return new ParallelRunner(deps);
@@ -185,7 +181,16 @@ describe('ReportPhaseGenerationError soft error', () => {
     const executor = makeStepExecutor();
     const step = makeReportStep();
     const state = makeState();
-    vi.mocked(runReportPhase).mockRejectedValue(new ReportPhaseGenerationError('report failed'));
+    vi.mocked(runReportPhase).mockRejectedValue(
+      new ReportPhaseGenerationError(
+        'report failed',
+        'provider_error',
+        {
+          requiresFreshPhase1: false,
+          failureReasons: ['provider_error'],
+        },
+      ),
+    );
 
     const response = await executor.applyPostExecutionPhases(
       step,
@@ -193,9 +198,6 @@ describe('ReportPhaseGenerationError soft error', () => {
       1,
       makeDoneResponse(),
       vi.fn(),
-      undefined,
-      undefined,
-      eventAttribution,
     );
 
     expect(runReportPhase).toHaveBeenCalledOnce();
@@ -215,9 +217,6 @@ describe('ReportPhaseGenerationError soft error', () => {
       1,
       makeDoneResponse(),
       vi.fn(),
-      undefined,
-      undefined,
-      eventAttribution,
     )).rejects.toThrow('generic report failure');
 
     expect(runStatusJudgmentPhase).not.toHaveBeenCalled();
@@ -228,11 +227,18 @@ describe('ReportPhaseGenerationError soft error', () => {
     const subStep = makeReportStep({ name: 'security-review', persona: 'security-review' });
     const state = makeState();
     queueAgentResponse(makeDoneResponse({ persona: 'security-review' }));
-    vi.mocked(runReportPhase).mockRejectedValue(new ReportPhaseGenerationError('report failed'));
-
-    const result = await runner.runParallelStep(
-      makeParallelStep(subStep), state, 'review task', 5, vi.fn(), undefined, undefined, eventAttribution,
+    vi.mocked(runReportPhase).mockRejectedValue(
+      new ReportPhaseGenerationError(
+        'report failed',
+        'provider_error',
+        {
+          requiresFreshPhase1: false,
+          failureReasons: ['provider_error'],
+        },
+      ),
     );
+
+    const result = await runner.runParallelStep(makeParallelStep(subStep), state, 'review task', 5, vi.fn());
 
     expect(runReportPhase).toHaveBeenCalledOnce();
     expect(runStatusJudgmentPhase).toHaveBeenCalledOnce();
@@ -246,9 +252,7 @@ describe('ReportPhaseGenerationError soft error', () => {
     queueAgentResponse(makeDoneResponse({ persona: 'security-review' }));
     vi.mocked(runReportPhase).mockRejectedValue(new Error('generic report failure'));
 
-    const result = await runner.runParallelStep(
-      makeParallelStep(subStep), makeState(), 'review task', 5, vi.fn(), undefined, undefined, eventAttribution,
-    );
+    const result = await runner.runParallelStep(makeParallelStep(subStep), makeState(), 'review task', 5, vi.fn());
 
     expect(runStatusJudgmentPhase).not.toHaveBeenCalled();
     expect(result.response.status).toBe('error');
@@ -269,9 +273,7 @@ describe('ReportPhaseGenerationError soft error', () => {
       structuredOutput: { result: 'ok' },
     }));
 
-    const result = await runner.runParallelStep(
-      makeParallelStep(subStep), state, 'review task', 5, vi.fn(), undefined, undefined, eventAttribution,
-    );
+    const result = await runner.runParallelStep(makeParallelStep(subStep), state, 'review task', 5, vi.fn());
 
     expect(state.stepOutputs.get('structured-review')?.status).toBe('done');
     expect(result.response.status).toBe('done');
@@ -302,11 +304,8 @@ describe('ReportPhaseGenerationError soft error', () => {
       structuredOutput: { result: 'ok' },
     }));
     vi.spyOn(executor, 'persistPreviousResponseSnapshot').mockReturnValue('');
-    const prepared = executor.prepareNormalStepExecution(step, state, 'review task', 5, 1);
 
-    const result = await executor.runNormalStep(
-      step, state, vi.fn(), undefined, prepared, eventAttribution,
-    );
+    const result = await executor.runNormalStep(step, state, 'review task', 5, vi.fn());
 
     expect(result.response.status).toBe('done');
     expect(result.response.structuredOutput).toEqual({ result: 'ok' });

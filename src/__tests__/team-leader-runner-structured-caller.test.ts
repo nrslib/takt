@@ -1,4 +1,27 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { buildRunPaths } from '../core/workflow/run/run-paths.js';
+import { createOperationJournalStore } from '../infra/workflow/operation-journal-store.js';
+import type {
+  FindingContractConfig,
+  FindingLedger,
+} from '../core/models/types.js';
+import type { RuntimeStepResolution } from '../core/workflow/types.js';
+import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
+import { evaluateWhenExpression } from '../core/workflow/evaluation/when-evaluator.js';
+import { computeFileQuoteEvidenceRecordId } from '../core/models/finding-evidence-record.js';
+import type { FindingEvidenceRecord } from '../core/models/finding-types.js';
+import { compareBinaryStrings } from '../shared/utils/binary-string-comparator.js';
+import {
+  authorizeFindingLedgerFixture,
+  canonicalRawFindingFixture,
+} from './helpers/finding-lifecycle-fixture.js';
+import {
+  requestValidTeamLeaderDecomposition,
+  TeamLeaderDecompositionValidationError,
+} from '../agents/team-leader-decomposition-regeneration.js';
 import { OptionsBuilder } from '../core/workflow/engine/OptionsBuilder.js';
 import { TeamLeaderRunner } from '../core/workflow/engine/TeamLeaderRunner.js';
 import {
@@ -224,10 +247,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       state,
       'implement feature',
       5,
-      expect.objectContaining({
-        iteration: 1,
-        transaction: expect.any(Object),
-      }),
+      undefined,
+      undefined,
+      expect.any(Object),
     );
     expect(mockRunWithPhaseSpan).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -2696,5 +2718,944 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       expect(result.response.content).not.toContain('timeout-continuation');
       expect(mockExecuteAgent).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+const temporaryDirectories: string[] = [];
+
+afterEach(() => {
+  for (const directory of temporaryDirectories.splice(0)) {
+    rmSync(directory, { recursive: true, force: true });
+  }
+  vi.clearAllMocks();
+});
+
+function fileQuoteEvidenceRecord(
+  path: string,
+  line: number,
+  claimIdentityHash: string,
+): FindingEvidenceRecord {
+  const payload = {
+    kind: 'file_quote' as const,
+    path,
+    startLine: line,
+    endLine: line,
+    verbatimExcerpt: 'fixture evidence',
+    snapshotId: 'a'.repeat(64),
+    claimIdentityHash,
+    fileHash: 'c'.repeat(64),
+  };
+  return {
+    evidenceId: computeFileQuoteEvidenceRecordId(payload),
+    ...payload,
+  };
+}
+
+function makeLedger(): FindingLedger {
+  const observedAt = {
+    runId: 'run-1',
+    stepName: 'reviewers',
+    timestamp: '2026-07-24T00:00:00.000Z',
+  };
+  const firstRaw = canonicalRawFindingFixture({
+    rawFindingId: 'R-0001',
+    stepName: 'reviewers',
+    reviewer: 'reviewer',
+    familyTag: 'first-family',
+    severity: 'high',
+    title: 'First defect',
+    description: 'first description',
+    suggestion: 'fix first',
+    relation: 'new',
+    targetFindingId: null,
+    target: { kind: 'code', paths: ['src/first.ts'] },
+    evidence: [{
+      kind: 'file_quote',
+      path: 'src/first.ts',
+      startLine: 10,
+      endLine: 10,
+      verbatimExcerpt: 'fixture evidence',
+      snapshotId: 'a'.repeat(64),
+    }],
+  });
+  const secondRaw = canonicalRawFindingFixture({
+    rawFindingId: 'R-0002',
+    stepName: 'reviewers',
+    reviewer: 'reviewer',
+    familyTag: 'second-family',
+    severity: 'medium',
+    title: 'Second defect',
+    description: 'second description',
+    suggestion: 'fix second',
+    relation: 'new',
+    targetFindingId: null,
+    target: { kind: 'code', paths: ['src/second.ts'] },
+    evidence: [{
+      kind: 'file_quote',
+      path: 'src/second.ts',
+      startLine: 20,
+      endLine: 20,
+      verbatimExcerpt: 'fixture evidence',
+      snapshotId: 'a'.repeat(64),
+    }],
+  });
+  const firstEvidence = fileQuoteEvidenceRecord(
+    'src/first.ts',
+    10,
+    firstRaw.claimIdentityHash,
+  );
+  const secondEvidence = fileQuoteEvidenceRecord(
+    'src/second.ts',
+    20,
+    secondRaw.claimIdentityHash,
+  );
+  return authorizeFindingLedgerFixture({
+    workflowName: 'workflow',
+    nextId: 3,
+    updatedAt: observedAt.timestamp,
+    findings: [
+      {
+        id: 'F-0001',
+        status: 'open',
+        lifecycle: 'new',
+        revision: 1,
+        target: firstRaw.target,
+        targetIdentityHash: firstRaw.targetIdentityHash,
+        claimIdentityHash: firstRaw.claimIdentityHash,
+        semanticClaimIdentityHash: firstRaw.semanticClaimIdentityHash,
+        severity: 'high',
+        title: 'First defect',
+        evidenceIds: [firstEvidence.evidenceId],
+        description: 'first description',
+        suggestion: 'fix first',
+        reviewers: ['reviewer'],
+        rawFindingIds: ['R-0001'],
+        firstSeen: observedAt,
+        lastSeen: observedAt,
+      },
+      {
+        id: 'F-0002',
+        status: 'open',
+        lifecycle: 'persists',
+        revision: 1,
+        target: secondRaw.target,
+        targetIdentityHash: secondRaw.targetIdentityHash,
+        claimIdentityHash: secondRaw.claimIdentityHash,
+        semanticClaimIdentityHash: secondRaw.semanticClaimIdentityHash,
+        severity: 'medium',
+        title: 'Second defect',
+        evidenceIds: [secondEvidence.evidenceId],
+        description: 'second description',
+        suggestion: 'fix second',
+        reviewers: ['reviewer'],
+        rawFindingIds: ['R-0002'],
+        firstSeen: observedAt,
+        lastSeen: observedAt,
+      },
+    ],
+    evidenceRecords: [firstEvidence, secondEvidence].sort(
+      (left, right) => compareBinaryStrings(left.evidenceId, right.evidenceId),
+    ),
+    rawFindings: [firstRaw, secondRaw],
+    conflicts: [],
+    reviewerAnomalies: [],
+  });
+}
+
+function makeState(): WorkflowState {
+  return {
+    workflowName: 'workflow',
+    currentStep: 'fix',
+    iteration: 1,
+    stepOutputs: new Map(),
+    structuredOutputs: new Map(),
+    systemContexts: new Map(),
+    effectResults: new Map(),
+    lastOutput: undefined,
+    previousResponseSourcePath: undefined,
+    userInputs: [],
+    personaSessions: new Map(),
+    stepIterations: new Map(),
+    status: 'running',
+  };
+}
+
+describe('TeamLeaderRunner finding_contract_fix', () => {
+  beforeEach(() => {
+    // Fully reset queued once-implementations from other describes before each
+    // finding-contract run, then restore the phase-span pass-through.
+    vi.resetAllMocks();
+    mockRunWithPhaseSpan.mockImplementation(async (_params, execute) => execute());
+  });
+
+  it('scopes each worker to assigned findings and publishes the explicit final decision', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-finding-contract-runner-'));
+    temporaryDirectories.push(cwd);
+    const runPaths = buildRunPaths(cwd, 'run-1');
+    mkdirSync(runPaths.contextAbs, { recursive: true });
+    const operationStore = createOperationJournalStore(runPaths.operationJournalAbs);
+    const ledger = makeLedger();
+    const ledgerStore = {
+      loadLedger: vi.fn(() => ledger),
+      saveLedgerSnapshot: vi.fn(),
+    } as unknown as FindingLedgerStore;
+    const findingContract: FindingContractConfig = {
+      manager: {
+        persona: 'findings-manager',
+        instruction: 'manage',
+        outputContract: 'contract',
+      },
+    };
+    const parts = [
+      {
+        id: 'repair-first',
+        title: 'First',
+        instruction: 'repair first',
+        findingContract: {
+          findingIds: ['F-0001'],
+          role: 'repair' as const,
+          readPaths: [],
+        },
+      },
+      {
+        id: 'repair-second',
+        title: 'Second',
+        instruction: 'repair second',
+        findingContract: {
+          findingIds: ['F-0002'],
+          role: 'repair' as const,
+          readPaths: [],
+        },
+      },
+    ];
+    const verificationPart = {
+      id: 'verify-first',
+      title: 'Verify first',
+      instruction: 'verify first',
+      findingContract: {
+        findingIds: ['F-0001'],
+        role: 'verify' as const,
+        readPaths: ['src/first.ts'],
+      },
+    };
+    mockExecuteAgent
+      .mockResolvedValueOnce({
+        persona: 'coder',
+        status: 'done',
+        content: 'FIRST_RAW',
+        sessionId: 'worker-session-1',
+        structuredOutput: {
+          findingOutcomes: [{ findingId: 'F-0001', outcome: 'disputed', evidence: ['inspected source'] }],
+          changedPaths: ['src/first.ts'],
+          checks: [{ command: 'npm test', status: 'passed' }],
+          summary: 'first claim needs evidence correction',
+        },
+        timestamp: new Date(),
+      })
+      .mockResolvedValueOnce({
+        persona: 'coder',
+        status: 'done',
+        content: 'SECOND_RAW',
+        structuredOutput: {
+          findingOutcomes: [{ findingId: 'F-0002', outcome: 'addressed', evidence: ['src/second.ts:20'] }],
+          changedPaths: ['src/second.ts'],
+          checks: [{ command: 'npm test', status: 'passed' }],
+          summary: 'second fixed',
+        },
+        timestamp: new Date(),
+      })
+      .mockResolvedValueOnce({
+        persona: 'coder',
+        status: 'done',
+        content: 'CORRECTED_FIRST_CLAIM',
+        sessionId: 'worker-session-2',
+        structuredOutput: {
+          findingOutcomes: [{ findingId: 'F-0001', outcome: 'addressed', evidence: ['src/first.ts:10'] }],
+          changedPaths: ['src/first.ts'],
+          checks: [{ command: 'npm test', status: 'passed' }],
+          summary: 'first claim needs evidence correction',
+        },
+        timestamp: new Date(),
+      })
+      .mockResolvedValueOnce({
+        persona: 'coder',
+        status: 'done',
+        content: 'VERIFY_RAW',
+        structuredOutput: {
+          findingOutcomes: [{ findingId: 'F-0001', outcome: 'addressed', evidence: ['src/first.ts:10'] }],
+          changedPaths: [],
+          checks: [{ command: 'npm test', status: 'passed' }],
+          summary: 'first verified',
+        },
+        timestamp: new Date(),
+      });
+    const completeDecision = {
+      decision: 'complete' as const,
+      reasoning: 'all covered',
+      parts: [] as [],
+      blockers: [] as string[],
+      fixCoverage: parts.map((part) => {
+        const findingId = part.findingContract.findingIds[0];
+        if (!findingId) throw new Error(`Missing finding assignment: ${part.id}`);
+        return {
+          findingId,
+          disposition: 'addressed' as const,
+          supportingPartIds: [part.id],
+          verificationPartIds: [part.id === 'repair-first' ? verificationPart.id : part.id],
+        };
+      }),
+    };
+    const rawDecisionResponse = (structuredOutput: Record<string, unknown>): AgentResponse => ({
+      persona: 'leader',
+      status: 'done',
+      content: JSON.stringify(structuredOutput),
+      structuredOutput,
+      timestamp: new Date(),
+    });
+    const structuredCaller = {
+      judgeStatus: vi.fn(),
+      evaluateCondition: vi.fn(),
+      decomposeTask: vi.fn(async (_instruction, _max, options) => {
+        options.onPromptResolved?.({ systemPrompt: 'system', userInstruction: 'leader instruction' });
+        return { parts };
+      }),
+      requestDecompositionRawResponse: vi.fn(async (_instruction, _max, options) => {
+        options.onPromptResolved?.({ systemPrompt: 'system', userInstruction: 'leader instruction' });
+        return rawDecisionResponse({ parts });
+      }),
+      requestMoreParts: vi.fn()
+        .mockResolvedValue({ done: true, reasoning: 'unused', parts: [] }),
+      requestMorePartsRawResponse: vi.fn()
+        .mockResolvedValueOnce(rawDecisionResponse({
+          decision: 'continue',
+          reasoning: 'invalid coverage',
+          parts: [verificationPart],
+          fixCoverage: [{
+            findingId: 'F-0001',
+            disposition: 'addressed',
+            supportingPartIds: ['repair-first'],
+            verificationPartIds: ['repair-first'],
+          }],
+          blockers: [],
+        }))
+        .mockResolvedValueOnce(rawDecisionResponse({
+          ...completeDecision,
+          reasoning: 'unsupported disposition',
+          fixCoverage: completeDecision.fixCoverage.map((coverage) => (
+            coverage.findingId === 'F-0001'
+              ? { ...coverage, disposition: 'disputed' }
+              : coverage
+          )),
+        }))
+        .mockResolvedValueOnce(rawDecisionResponse({
+          decision: 'continue',
+          reasoning: 'verify first',
+          parts: [verificationPart],
+          fixCoverage: [],
+          blockers: [],
+        }))
+        .mockResolvedValueOnce(rawDecisionResponse(completeDecision)),
+    };
+    let leaderContext: unknown;
+    let completeRuleMatched = false;
+    let postExecutionCalls = 0;
+    let workflowStepIterations: Record<string, number> = { fix: 1 };
+    const stepExecutor = {
+      buildInstruction: vi.fn((step: WorkflowStep, _iteration, _state, _task, _max, _fallback, context) => {
+        if (!step.name.includes('.')) leaderContext = context;
+        return step.name.includes('.') ? step.instruction : 'leader instruction';
+      }),
+      buildPhase1Instruction: vi.fn((instruction: string) => instruction),
+      normalizeStructuredOutput: vi.fn((_step, response: AgentResponse) => response),
+      normalizeStructuredOutputWithDiagnostics: vi.fn((_step, response: AgentResponse) => ({
+        response,
+        invalidDetail: undefined,
+      })),
+      applyPostExecutionPhases: vi.fn(async (_step, state: WorkflowState, _iteration, response: AgentResponse) => {
+        postExecutionCalls += 1;
+        if (postExecutionCalls === 1) {
+          throw new Error('simulated crash after accepted Team Leader boundaries');
+        }
+        if (response.structuredOutput) state.structuredOutputs.set('fix', response.structuredOutput);
+        completeRuleMatched = evaluateWhenExpression(
+          'structured.fix.decision == "complete"',
+          state,
+        );
+        return response;
+      }),
+      persistPreviousResponseSnapshot: vi.fn(),
+      emitStepReports: vi.fn(),
+    };
+    const runnerDeps = {
+      optionsBuilder: {
+        buildAgentOptions: vi.fn().mockReturnValue({ cwd }),
+        buildBaseOptions: vi.fn().mockReturnValue({}),
+        buildResumeOptions: vi.fn((_step, sessionId) => ({
+          cwd,
+          sessionId,
+          permissionMode: 'readonly',
+          allowedTools: [],
+        })),
+        buildNewSessionReportOptions: vi.fn().mockReturnValue({
+          cwd,
+          permissionMode: 'readonly',
+          allowedTools: [],
+        }),
+        buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+        resolveMcpServersForStep: vi.fn().mockReturnValue(undefined),
+        resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'codex', model: 'gpt-5' }),
+      },
+      stepExecutor,
+      engineOptions: { projectCwd: cwd, structuredCaller, language: 'ja' },
+      getCwd: () => cwd,
+      getWorkflowName: () => 'workflow',
+      getInteractive: () => false,
+      getRunPaths: () => runPaths,
+      getCurrentWorkflowStack: () => [{
+        workflow: 'workflow',
+        workflow_ref: 'project:sha256:workflow',
+        step: 'fix',
+        kind: 'agent',
+        occurrence: 1,
+        step_iterations: workflowStepIterations,
+      }],
+      findingContract,
+      findingLedgerStore: ledgerStore,
+      operationJournal: {
+        store: operationStore,
+        journalRunSlug: runPaths.slug,
+        claimToken: 'claim-a',
+      },
+      observabilityEnabled: false,
+      emitEvent: vi.fn(),
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0];
+    const step: WorkflowStep = {
+      name: 'fix',
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      instruction: 'fix findings',
+      edit: true,
+      teamLeader: {
+        mode: 'finding_contract_fix',
+        maxConcurrency: 2,
+        timeoutMs: 1000,
+        partPersona: 'coder',
+        partEdit: true,
+      },
+    };
+    const state = makeState();
+    state.stepIterations.set('fix', 1);
+
+    const firstRunner = new TeamLeaderRunner(runnerDeps);
+    await expect(
+      firstRunner.runTeamLeaderStep(step, state, 'task', 20, vi.fn(), undefined, 1),
+    ).rejects.toThrow('simulated crash after accepted Team Leader boundaries');
+    const callsBeforeResume = {
+      worker: mockExecuteAgent.mock.calls.length,
+      decomposition: structuredCaller.requestDecompositionRawResponse.mock.calls.length,
+      decision: structuredCaller.requestMorePartsRawResponse.mock.calls.length,
+    };
+    workflowStepIterations = {
+      fix: 1,
+      'fix.repair-first': 1,
+      'fix.repair-second': 1,
+      'fix.verify-first': 1,
+    };
+    const resumedRunner = new TeamLeaderRunner({
+      ...runnerDeps,
+      operationJournal: {
+        store: createOperationJournalStore(runPaths.operationJournalAbs),
+        journalRunSlug: runPaths.slug,
+        claimToken: 'claim-b',
+        sourceClaimTokens: new Set(['claim-a']),
+      },
+    });
+    const result = await resumedRunner.runTeamLeaderStep(
+      step,
+      state,
+      'task',
+      20,
+      vi.fn(),
+      undefined,
+      1,
+    );
+
+    expect(mockExecuteAgent).toHaveBeenCalledTimes(callsBeforeResume.worker);
+    expect(structuredCaller.requestDecompositionRawResponse).toHaveBeenCalledTimes(callsBeforeResume.decomposition);
+    expect(structuredCaller.requestMorePartsRawResponse).toHaveBeenCalledTimes(callsBeforeResume.decision);
+
+    expect(result.response.structuredOutput).toEqual({
+      decision: 'complete',
+      reasoning: 'all covered',
+      fixCoverage: expect.any(Array),
+    });
+    result.commitTransition?.({ kind: 'next_step', nextStep: 'COMPLETE' });
+    expect(completeRuleMatched).toBe(true);
+    expect(result.response.content).not.toContain('FIRST_RAW');
+    expect(result.response.content).not.toContain('SECOND_RAW');
+    expect(leaderContext).toEqual({ mode: 'omit' });
+    const decompositionOptions = structuredCaller.requestDecompositionRawResponse.mock.calls[0]?.[2];
+    expect(decompositionOptions?.findingContract.actionableFindings).toContain('F-0001');
+    expect(decompositionOptions?.findingContract.actionableFindings).toContain('F-0002');
+    expect(decompositionOptions?.findingContract.actionableFindings).not.toContain('R-0001');
+    expect(decompositionOptions?.findingContract.actionableFindings).not.toContain('R-0002');
+    const firstWorkerInstruction = mockExecuteAgent.mock.calls[0]?.[1] as string;
+    const secondWorkerInstruction = mockExecuteAgent.mock.calls[1]?.[1] as string;
+    const correctionInstruction = mockExecuteAgent.mock.calls[2]?.[1] as string;
+    expect(firstWorkerInstruction).toContain('## Finding Contract Part Assignment');
+    expect(firstWorkerInstruction).toContain('src/first.ts');
+    expect(firstWorkerInstruction).not.toContain('src/second.ts');
+    expect(firstWorkerInstruction).toContain('F-0001');
+    expect(firstWorkerInstruction).toContain('R-0001');
+    expect(firstWorkerInstruction).not.toContain('F-0002');
+    expect(firstWorkerInstruction).not.toContain('R-0002');
+    expect(secondWorkerInstruction).toContain('src/second.ts');
+    expect(correctionInstruction).toContain('完了済み worker part の申告訂正専用フェーズ');
+    expect(correctionInstruction).toContain('evidence.disputed_file_line');
+    expect(mockExecuteAgent.mock.calls[2]?.[2]).toEqual(expect.objectContaining({
+      sessionId: 'worker-session-1',
+      permissionMode: 'readonly',
+      allowedTools: [],
+    }));
+    expect(secondWorkerInstruction).toContain('F-0002');
+    expect(secondWorkerInstruction).toContain('R-0002');
+    expect(secondWorkerInstruction).not.toContain('F-0001');
+    expect(secondWorkerInstruction).not.toContain('R-0001');
+    expect(firstWorkerInstruction).not.toContain('.takt/finding-ledger.json');
+    expect(mockExecuteAgent).toHaveBeenCalledTimes(4);
+    expect(state.stepIterations.get('fix.repair-first')).toBe(1);
+    expect(state.stepIterations.get('fix.repair-second')).toBe(1);
+    expect(state.stepIterations.get('fix.verify-first')).toBe(1);
+    expect(structuredCaller.requestMorePartsRawResponse).toHaveBeenCalledTimes(4);
+    const firstFeedbackOptions = structuredCaller.requestMorePartsRawResponse.mock.calls[0]?.[3];
+    const secondFeedbackOptions = structuredCaller.requestMorePartsRawResponse.mock.calls[1]?.[3];
+    const thirdFeedbackOptions = structuredCaller.requestMorePartsRawResponse.mock.calls[2]?.[3];
+    const fourthFeedbackOptions = structuredCaller.requestMorePartsRawResponse.mock.calls[3]?.[3];
+    const firstFeedbackResults = structuredCaller.requestMorePartsRawResponse.mock.calls[0]?.[1];
+    expect(firstFeedbackResults).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'repair-first',
+        findingContractClaim: expect.objectContaining({
+          changedPaths: ['src/first.ts'],
+          omittedChangedPathCount: 0,
+        }),
+      }),
+      expect.objectContaining({
+        id: 'repair-second',
+        findingContractClaim: expect.objectContaining({
+          changedPaths: ['src/second.ts'],
+          omittedChangedPathCount: 0,
+        }),
+      }),
+    ]));
+    expect(firstFeedbackOptions?.findingContract.completedPartIndex).toEqual([]);
+    expect(firstFeedbackOptions?.findingContract.recovery).toEqual(expect.objectContaining({
+      attempt: 1,
+      mode: 'normal',
+    }));
+    expect(secondFeedbackOptions?.findingContract.recovery).toEqual(expect.objectContaining({
+      attempt: 2,
+      mode: 'normal',
+      latestRejection: expect.objectContaining({
+        attempt: 1,
+        issueFingerprint: expect.any(String),
+      }),
+    }));
+    expect(thirdFeedbackOptions?.findingContract.recovery).toEqual(expect.objectContaining({
+      attempt: 3,
+      mode: 'strict',
+      strictReason: 'evidence_or_reference_issue',
+    }));
+    expect(fourthFeedbackOptions?.findingContract.recovery).toEqual(expect.objectContaining({
+      attempt: 1,
+      mode: 'normal',
+    }));
+    const attemptDirectory = readdirSync(join(runPaths.contextAbs, 'team_leader', 'fix'))
+      .find((entry) => (
+        entry.startsWith('attempt-')
+        && existsSync(join(
+          runPaths.contextAbs,
+          'team_leader',
+          'fix',
+          entry,
+          'finding-contract-recovery.jsonl',
+        ))
+      ));
+    if (attemptDirectory === undefined) throw new Error('Missing Team Leader attempt directory');
+    const auditRecords = readFileSync(
+      join(runPaths.contextAbs, 'team_leader', 'fix', attemptDirectory, 'finding-contract-recovery.jsonl'),
+      'utf8',
+    ).trim().split('\n').map((line) => JSON.parse(line) as {
+      type: string;
+      attempt: number;
+      mode: string;
+      boundaryId: string;
+      attemptToken: string;
+      rawOutputDigest?: { hash: string };
+      normalizedOutputDigest?: { hash: string };
+    });
+    expect(auditRecords.map((record) => [record.type, record.attempt, record.mode])).toEqual([
+      ['started', 1, 'normal'],
+      ['accepted', 1, 'normal'],
+      ['rejected', 0, 'strict'],
+      ['started', 1, 'strict'],
+      ['accepted', 1, 'strict'],
+      ['started', 1, 'normal'],
+      ['rejected', 1, 'normal'],
+      ['started', 2, 'normal'],
+      ['rejected', 2, 'strict'],
+      ['started', 3, 'strict'],
+      ['accepted', 3, 'strict'],
+      ['started', 1, 'normal'],
+      ['accepted', 1, 'normal'],
+    ]);
+    expect(new Set(auditRecords.map((record) => record.boundaryId))).toEqual(new Set([
+      'decomposition',
+      'part:repair-first:completion',
+      'feedback:1',
+      'feedback:2',
+    ]));
+    expect(auditRecords.every((record) => record.attemptToken.length > 0)).toBe(true);
+    expect(auditRecords.filter((record) => record.type === 'accepted')).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          rawOutputDigest: expect.objectContaining({ hash: expect.any(String) }),
+          normalizedOutputDigest: expect.objectContaining({ hash: expect.any(String) }),
+        }),
+      ]),
+    );
+    const [operation] = operationStore.listParents();
+    if (operation === undefined) throw new Error('Missing Team Leader operation');
+    expect(operation.stage).toBe('completed');
+    expect(operation.owner).toEqual({ generation: 1, claimToken: 'claim-b' });
+    expect(new Set(operation.children.map((child) => child.id))).toEqual(new Set([
+      'decomposition',
+      'part:repair-first:completion',
+      'part:repair-second:completion',
+      'part:verify-first:completion',
+      'feedback:1',
+      'feedback:2',
+    ]));
+    expect(operation.children.every((child) => child.stage === 'completed')).toBe(true);
+    expect(
+      operation.children.find((child) => child.id === 'part:repair-first:completion')?.attempts,
+    ).toHaveLength(3);
+  }, 120_000);
+
+  it('redispatches a rate-limited part with the fallback provider instead of replaying it', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-finding-contract-rate-limit-'));
+    temporaryDirectories.push(cwd);
+    const runPaths = buildRunPaths(cwd, 'run-rate-limit');
+    mkdirSync(runPaths.contextAbs, { recursive: true });
+    const operationStore = createOperationJournalStore(runPaths.operationJournalAbs);
+    const fullLedger = makeLedger();
+    const ledger: FindingLedger = {
+      ...fullLedger,
+      findings: fullLedger.findings.filter((finding) => finding.id === 'F-0002'),
+      rawFindings: fullLedger.rawFindings.filter(
+        (finding) => finding.rawFindingId === 'R-0002',
+      ),
+    };
+    const ledgerStore = {
+      loadLedger: vi.fn(() => ledger),
+      saveLedgerSnapshot: vi.fn(),
+    } as unknown as FindingLedgerStore;
+    const findingContract: FindingContractConfig = {
+      manager: {
+        persona: 'findings-manager',
+        instruction: 'manage',
+        outputContract: 'contract',
+      },
+    };
+    const part = {
+      id: 'repair',
+      title: 'Repair',
+      instruction: 'repair finding',
+      findingContract: {
+        findingIds: ['F-0002'],
+        role: 'repair' as const,
+        readPaths: [],
+      },
+    };
+    mockExecuteAgent
+      .mockImplementationOnce(async (_persona, _instruction, options) => {
+        options.onDispatch?.('edit');
+        return {
+          persona: 'coder',
+          status: 'rate_limited',
+          content: 'rate limited',
+          timestamp: new Date(),
+        };
+      })
+      .mockImplementationOnce(async (_persona, _instruction, options) => {
+        options.onDispatch?.('edit');
+        return {
+          persona: 'coder',
+          status: 'done',
+          content: 'fixed',
+          structuredOutput: {
+            findingOutcomes: [{
+              findingId: 'F-0002',
+              outcome: 'addressed',
+              evidence: ['src/second.ts:20'],
+            }],
+            changedPaths: ['src/second.ts'],
+            checks: [{ command: 'npm test', status: 'passed' }],
+            summary: 'fixed with fallback provider',
+          },
+          timestamp: new Date(),
+        };
+      });
+    const rawResponse = (structuredOutput: Record<string, unknown>): AgentResponse => ({
+      persona: 'leader',
+      status: 'done',
+      content: JSON.stringify(structuredOutput),
+      structuredOutput,
+      timestamp: new Date(),
+    });
+    const structuredCaller = {
+      judgeStatus: vi.fn(),
+      evaluateCondition: vi.fn(),
+      decomposeTask: vi.fn(),
+      requestDecompositionRawResponse: vi.fn(async (_instruction, _max, options) => {
+        options.onPromptResolved?.({
+          systemPrompt: 'system',
+          userInstruction: 'leader instruction',
+        });
+        return rawResponse({ parts: [part] });
+      }),
+      requestMoreParts: vi.fn(),
+      requestMorePartsRawResponse: vi.fn(async () => rawResponse({
+        decision: 'complete',
+        reasoning: 'fixed',
+        parts: [],
+        blockers: [],
+        fixCoverage: [{
+          findingId: 'F-0002',
+          disposition: 'addressed',
+          supportingPartIds: ['repair'],
+          verificationPartIds: ['repair'],
+        }],
+      })),
+    };
+    const stepExecutor = {
+      buildInstruction: vi.fn((currentStep: WorkflowStep) => (
+        currentStep.name.includes('.') ? currentStep.instruction : 'leader instruction'
+      )),
+      buildPhase1Instruction: vi.fn((instruction: string) => instruction),
+      normalizeStructuredOutputWithDiagnostics: vi.fn((_step, response: AgentResponse) => ({
+        response,
+        invalidDetail: undefined,
+      })),
+      applyPostExecutionPhases: vi.fn(async (
+        _step,
+        _state,
+        _iteration,
+        response: AgentResponse,
+      ) => response),
+      persistPreviousResponseSnapshot: vi.fn(),
+      emitStepReports: vi.fn(),
+    };
+    const resolveProvider = (runtime?: RuntimeStepResolution) => (
+      runtime?.providerInfo ?? {
+        provider: 'codex' as const,
+        model: 'gpt-5',
+        providerSource: 'step' as const,
+        modelSource: 'step' as const,
+      }
+    );
+    const optionsBuilder = {
+      buildAgentOptions: vi.fn((_step, runtime?: RuntimeStepResolution) => ({
+        cwd,
+        resolvedProvider: resolveProvider(runtime).provider,
+        resolvedModel: resolveProvider(runtime).model,
+      })),
+      buildBaseOptions: vi.fn().mockReturnValue({}),
+      buildResumeOptions: vi.fn(),
+      buildNewSessionReportOptions: vi.fn(),
+      buildPhase1WorkflowMeta: vi.fn().mockReturnValue(undefined),
+      resolveMcpServersForStep: vi.fn().mockReturnValue(undefined),
+      resolveStepProviderModel: vi.fn((_step, runtime?: RuntimeStepResolution) => (
+        resolveProvider(runtime)
+      )),
+    };
+    const runner = new TeamLeaderRunner({
+      optionsBuilder,
+      stepExecutor,
+      engineOptions: { projectCwd: cwd, structuredCaller, language: 'ja' },
+      getCwd: () => cwd,
+      getWorkflowName: () => 'workflow',
+      getInteractive: () => false,
+      getRunPaths: () => runPaths,
+      getCurrentWorkflowStack: () => [{
+        workflow: 'workflow',
+        workflow_ref: 'project:sha256:workflow',
+        step: 'fix',
+        kind: 'agent',
+        occurrence: 1,
+      }],
+      findingContract,
+      findingLedgerStore: ledgerStore,
+      operationJournal: {
+        store: operationStore,
+        journalRunSlug: runPaths.slug,
+        claimToken: 'claim-a',
+      },
+      observabilityEnabled: false,
+      emitEvent: vi.fn(),
+    } as unknown as ConstructorParameters<typeof TeamLeaderRunner>[0]);
+    const step: WorkflowStep = {
+      name: 'fix',
+      persona: 'coder',
+      personaDisplayName: 'coder',
+      instruction: 'fix findings',
+      edit: true,
+      teamLeader: {
+        mode: 'finding_contract_fix',
+        maxConcurrency: 1,
+        timeoutMs: 1000,
+        partPersona: 'coder',
+        partEdit: true,
+      },
+    };
+    const state = makeState();
+    state.stepIterations.set('fix', 1);
+
+    const rateLimited = await runner.runTeamLeaderStep(
+      step,
+      state,
+      'task',
+      20,
+      vi.fn(),
+      undefined,
+      1,
+    );
+    expect(rateLimited.response.status).toBe('rate_limited');
+    const [rateLimitedOperation] = operationStore.listParents();
+    if (rateLimitedOperation === undefined) {
+      throw new Error('Missing rate-limited Team Leader operation');
+    }
+    expect(operationStore.getChild(
+      rateLimitedOperation.id,
+      'part:repair:completion',
+    ).stage).toBe('running');
+    state.stepIterations.set('fix', 1);
+
+    const fallbackRuntime: RuntimeStepResolution = {
+      providerInfo: {
+        provider: 'claude-sdk',
+        model: 'claude-sonnet',
+        providerSource: 'step',
+        modelSource: 'step',
+      },
+      fallback: {
+        reason: 'rate_limited',
+        reasonDetail: 'rate limited',
+        originalIteration: 1,
+        previousProvider: 'codex',
+        previousModel: 'gpt-5',
+        currentProvider: 'claude-sdk',
+        currentModel: 'claude-sonnet',
+        stepName: 'fix',
+        reportDir: runPaths.reportsAbs,
+      },
+    };
+    const completed = await runner.runTeamLeaderStep(
+      step,
+      state,
+      'task',
+      20,
+      vi.fn(),
+      fallbackRuntime,
+      1,
+    );
+
+    expect(completed.response.status).toBe('done');
+    expect(mockExecuteAgent).toHaveBeenCalledTimes(2);
+    expect(optionsBuilder.buildAgentOptions.mock.calls[1]?.[1]).toEqual(
+      expect.objectContaining({
+        providerInfo: expect.objectContaining({ provider: 'claude-sdk' }),
+      }),
+    );
+    expect(structuredCaller.requestDecompositionRawResponse).toHaveBeenCalledTimes(1);
+    const [operation] = operationStore.listParents();
+    expect(
+      operation?.children.find((child) => child.id === 'part:repair:completion')?.stage,
+    ).toBe('completed');
+  }, 120_000);
+});
+
+function invalidDecomposition(message: string): TeamLeaderDecompositionValidationError {
+  return new TeamLeaderDecompositionValidationError(
+    'decomposition.parts_invalid',
+    '$.parts',
+    new Error(message),
+  );
+}
+
+describe('Team Leader decomposition regeneration', () => {
+  it('regenerates after semantic validation failure and passes bounded diagnostics', async () => {
+    const request = vi.fn()
+      .mockRejectedValueOnce(invalidDecomposition('x'.repeat(3_000)))
+      .mockResolvedValueOnce('valid');
+
+    await expect(requestValidTeamLeaderDecomposition({ request })).resolves.toBe('valid');
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenNthCalledWith(1, undefined);
+    expect(request).toHaveBeenNthCalledWith(2, {
+      attempt: 1,
+      maxAttempts: 3,
+      diagnostic: {
+        code: 'decomposition.parts_invalid',
+        path: '$.parts',
+        message: `${'x'.repeat(1_999)}…`,
+      },
+    });
+  });
+
+  it('stops after three consecutive semantic validation failures', async () => {
+    const error = invalidDecomposition('still invalid');
+    const request = vi.fn().mockRejectedValue(error);
+
+    await expect(requestValidTeamLeaderDecomposition({ request })).rejects.toBe(error);
+
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not retry provider or engine failures', async () => {
+    const error = new Error('provider unavailable');
+    const request = vi.fn().mockRejectedValue(error);
+
+    await expect(requestValidTeamLeaderDecomposition({ request })).rejects.toBe(error);
+
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it('rejects immediately when an in-flight request ignores cancellation', async () => {
+    const controller = new AbortController();
+    const request = vi.fn().mockReturnValue(new Promise<string>(() => {}));
+    const result = requestValidTeamLeaderDecomposition({
+      abortSignal: controller.signal,
+      request,
+    });
+
+    controller.abort(new Error('cancelled while waiting'));
+
+    await expect(result).rejects.toThrow('cancelled while waiting');
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it('does not invoke the request when the signal is already aborted', async () => {
+    const controller = new AbortController();
+    controller.abort(new Error('cancelled before start'));
+    const request = vi.fn();
+
+    await expect(requestValidTeamLeaderDecomposition({
+      abortSignal: controller.signal,
+      request,
+    })).rejects.toThrow('cancelled before start');
+
+    expect(request).not.toHaveBeenCalled();
   });
 });

@@ -10,7 +10,14 @@ describe('resolveRetryMetadataFromRunMeta', () => {
     const resumePoint = {
       version: 2 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },
+        {
+          workflow: 'default',
+          workflow_ref: 'default',
+          step: 'delegate',
+          kind: 'workflow_call' as const,
+          occurrence: 1,
+          call_instance: 1,
+        },
       ],
       iteration: 7,
       elapsed_ms: 183245,
@@ -43,8 +50,21 @@ describe('resolveRetryMetadataFromRunMeta', () => {
     const resumePoint = {
       version: 2 as const,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },
-        { workflow: 'takt/coding', step: 'fix', kind: 'agent' as const },
+        {
+          workflow: 'default',
+          workflow_ref: 'default',
+          step: 'delegate',
+          kind: 'workflow_call' as const,
+          occurrence: 1,
+          call_instance: 1,
+        },
+        {
+          workflow: 'takt/coding',
+          workflow_ref: 'takt/coding',
+          step: 'fix',
+          kind: 'agent' as const,
+          occurrence: 1,
+        },
       ],
       iteration: 11,
       elapsed_ms: 183245,

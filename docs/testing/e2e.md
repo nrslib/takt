@@ -5,9 +5,9 @@ E2Eテストを追加・変更した場合は、このドキュメントも更�
 ## 前提条件
 - `gh` CLI が利用可能で、対象GitHubアカウントでログイン済みであること。
 - `takt-testing` リポジトリが対象アカウントに存在すること（E2Eがクローンして使用）。
-- 必要に応じて `TAKT_E2E_PROVIDER` を設定すること（例: `claude` / `codex` / `cursor` / `opencode`）。
+- 必要に応じて `TAKT_E2E_PROVIDER` を設定すること（例: `claude` / `claude-sdk` / `codex` / `cursor` / `opencode`）。
 - `TAKT_E2E_PROVIDER=cursor` の場合は `cursor-agent` CLI が利用可能で、認証済みであること。
-- `TAKT_E2E_PROVIDER=opencode` の場合は `TAKT_E2E_MODEL` が必須。既定は `ollama-cloud/qwen3-coder-next`（`team_leader` の構造化分解をこなせる能力が必要。`opencode/big-pickle` のような小型無料モデルでは分解が失敗する）。
+- `TAKT_E2E_PROVIDER=opencode` の場合はモデル指定が必要。npm script（`test:e2e:provider:opencode`）は `TAKT_E2E_MODEL` 未指定時に `ollama-cloud/qwen3.5:397b` を既定として使う。vitest を直接実行する場合は `TAKT_E2E_MODEL` を明示すること（`team_leader` の構造化分解をこなせる能力が必要。`opencode/big-pickle` のような小型無料モデルでは分解が失敗する）。
 - 実行時間が長いテストがあるため、タイムアウトに注意すること。
 - E2Eは `e2e/helpers/test-repo.ts` が一時リポジトリを作成する。mock 固定テストはローカル bare origin を使い、GitHub 固有テストだけ `gh` でリポジトリをクローンする。
 - 対話UIを避けるため、E2E環境では `TAKT_NO_TTY=1` を設定してTTYを無効化する。
@@ -19,7 +19,7 @@ E2Eテストを追加・変更した場合は、このドキュメントも更�
 - E2Eのグローバル設定は `e2e/fixtures/config.e2e.yaml` を基準に生成する。
 - `createIsolatedEnv()` は毎回一時ディレクトリ配下（`$TAKT_CONFIG_DIR/config.yaml`）にこの基準設定を書き出す。
 - E2E実行中の `takt` 内通知音は `notification_sound: false` で無効化する。
-- `npm run test:e2e` は成否にかかわらず最後に1回ベルを鳴らし、終了コードはテスト結果を維持する。
+- `npm run test:e2e` は成否にかかわらず最後に1回 macOS 通知を出し、終了コードはテスト結果を維持する。
 - 各スペックで `provider` や `concurrency` を変更する場合は、`updateIsolatedConfig()` を使って差分のみ上書きする。
 - `~/.takt/config.yaml` はE2Eでは参照されないため、通常実行の設定には影響しない。
 
@@ -33,13 +33,19 @@ E2Eテストを追加・変更した場合は、このドキュメントも更�
 - `npm run test:e2e:provider:claude-sdk`: `TAKT_E2E_PROVIDER=claude-sdk` で実行。
 - `npm run test:e2e:provider:codex`: `TAKT_E2E_PROVIDER=codex` で実行。
 - `npm run test:e2e:provider:cursor`: `TAKT_AUTO_PR=false TAKT_E2E_PROVIDER=cursor` で実行（Cursor専用スイート: `add-and-run` / `worktree`）。
-- `npm run test:e2e:provider:opencode`: `TAKT_E2E_PROVIDER=opencode` で実行（`TAKT_E2E_MODEL` 必須）。
+- `npm run test:e2e:provider:opencode`: `TAKT_E2E_PROVIDER=opencode` で実行（`TAKT_E2E_MODEL` 未指定時の既定は `ollama-cloud/qwen3.5:397b`）。
 - `npm run test:e2e:all`: `mock` + `provider` を通しで実行。
 - `npm run test:e2e:claude`: `test:e2e:provider:claude` の別名。
 - `npm run test:e2e:codex`: `test:e2e:provider:codex` の別名。
 - `npm run test:e2e:cursor`: `test:e2e:provider:cursor` の別名。
 - `npm run test:e2e:opencode`: `test:e2e:provider:opencode` の別名。
 - `npx vitest run e2e/specs/add-and-run.e2e.ts`: 単体実行の例。
+- `TAKT_E2E_PROVIDER=opencode TAKT_E2E_MODEL=ollama-cloud/qwen3.5:397b npx vitest run --config vitest.config.e2e.opencode-parallel.ts`: OpenCode 並列セッション専用スペック（`opencode-parallel-sessions.e2e.ts`）を長めのタイムアウト設定で単独実行する専用 config（直接実行時は provider と model の指定が必要）。
+- `npx vitest run --config vitest.config.e2e.structured-output.ts`: `structured-output.e2e.ts` を単独実行する専用 config。
+
+provider E2E スクリプトの対象は `claude` / `claude-sdk` / `codex` / `cursor` / `opencode`。`copilot` と `kiro` には provider E2E 経路がなく、単体テスト（`src/__tests__/copilot-*.test.ts` / `kiro-*.test.ts`）のみで検証している。
+
+GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` のみ。provider E2E は API 課金を伴うため CI には含めず、メンテナーが PR コメントコマンド `/ci`（OWNER 限定）で必要時にのみ実行する。
 
 ## シナリオ一覧
 - Add task and run（`e2e/specs/add-and-run.e2e.ts`）
@@ -215,9 +221,6 @@ E2Eテストを追加・変更した場合は、このドキュメントも更�
     - 出力に `reset` と `backup:` を含むことを確認する。
     - `$TAKT_CONFIG_DIR/config.yaml` がテンプレート内容（例: `branch_name_strategy: ai`, `concurrency: 2`）に置き換わっていることを確認する。
     - `$TAKT_CONFIG_DIR/` 直下に `config.yaml.YYYYMMDD-HHmmss.old` 形式のバックアップファイルが1件作成されることを確認する。
-## 追記シナリオ（2026-02-19）
-過去にドキュメント未反映だったシナリオを以下に追記する。
-
 - Config priority（`e2e/specs/config-priority.e2e.ts`）
   - 目的: `workflow` と `auto_pr` の優先順位（config/env/CLI）を検証。
   - 手順（要約）:
@@ -274,3 +277,39 @@ E2Eテストを追加・変更した場合は、このドキュメントも更�
     - `takt workflow init sample-flow` を実行し、`.takt/workflows/sample-flow.yaml` が生成されることを確認する。
     - `takt workflow doctor sample-flow` を実行し、正常系が成功終了することを確認する。
     - 壊れた YAML を配置して `takt workflow doctor <path>` を実行し、失敗終了と診断出力を確認する。
+- Claude allowed_tools pytest（`e2e/specs/claude-allowed-tools-pytest.e2e.ts`）
+  - 目的: `config.yaml` の `provider_options.claude.allowed_tools` が claude CLI に伝播し、approval なしで pytest が緑化することを確認（claude provider suite 限定。pytest 不在時は skip）。
+- Export-cc command（`e2e/specs/cli-export-cc.e2e.ts`）
+  - 目的: `takt export-cc` が skill ファイルとリソースディレクトリを HOME 配下へ配置することを確認。
+- Clone branch resolution（`e2e/specs/clone-branch-resolution.e2e.ts`）
+  - 目的: remote-only ブランチ（PR シナリオ）や未存在ブランチからの clone 時のブランチ解決を、worktree の場合も含めて確認。
+- Codex permission mode（`e2e/specs/codex-permission-mode.e2e.ts`）
+  - 目的: `provider_options.codex.default_permission_mode` が `readonly` で失敗し `full` で成功することを確認（codex provider suite 限定）。
+- Dynamic parallel selector（`e2e/specs/dynamic-parallel-selector.e2e.ts`）
+  - 目的: 並列 reviewer pool の動的選択（selector）による選択実行、YAML 順序の維持、CLI override、resume 時の選択再利用、レポート・台帳の保持を確認。
+- OpenCode conversation（`e2e/specs/opencode-conversation.e2e.ts`）
+  - 目的: 実 OpenCode SDK での複数ターン会話（sessionId 引き継ぎ、`allowedTools` 空指定時の tool 非公開）を確認（opencode provider suite 限定）。
+- OpenCode parallel sessions（`e2e/specs/opencode-parallel-sessions.e2e.ts`）
+  - 目的: OpenCode 共有サーバープールの並列セッション分離、abort が他セッションへ干渉しないこと、同一 session ID 呼び出しの FIFO 直列化を確認（専用 config `vitest.config.e2e.opencode-parallel.ts` で実行）。
+- Repertoire add/remove（`e2e/specs/repertoire.e2e.ts`）
+  - 目的: `takt repertoire add` の正常系・上書き・バリデーションと、`remove` のパッケージ削除・参照警告・owner ディレクトリ整理を確認。
+- Repertoire real GitHub fixtures（`e2e/specs/repertoire-real.e2e.ts`）
+  - 目的: 実 GitHub 上の fixture リポジトリに対する `repertoire add` の取得、lock 記録、manifest 欠落などのエラー系を確認。
+- Report file output（`e2e/specs/report-file-output.e2e.ts`）
+  - 目的: report が `.takt/runs/*/reports` に期待内容で出力されることを確認。
+- Resume report inheritance（`e2e/specs/resume-report-inheritance.e2e.ts`）
+  - 目的: resume 時に中断元 run の report スナップショットが引き継がれることを確認。
+- SIGINT during AI wait（`e2e/specs/run-sigint-ai-wait.e2e.ts`）
+  - 目的: provider 応答待ち（mock の delay 中）でも `Ctrl+C` が効き、delay 完了を待たずにプロセスが速やかに終了することを確認。
+- Team leader（`e2e/specs/team-leader.e2e.ts`）
+  - 目的: `team_leader` step がタスクを parts に分解して並列実行できることを実 provider で確認（provider 共通 suite）。
+- Team leader batch barrier（`e2e/specs/team-leader-batch-barrier.e2e.ts`）
+  - 目的: 最初の part 正常完了後に feedback を開始し、遅い running part を集約対象にせず中断することを確認。
+- Team leader finding contract（`e2e/specs/team-leader-finding-contract.e2e.ts`）
+  - 目的: finding contract の明示的な decision に応じて `reviewers` / `replan` へルーティングされることを確認。
+- Team leader worker pool（`e2e/specs/team-leader-worker-pool.e2e.ts`）
+  - 目的: worker-pool の動的スケジューリングで `max_parts` を超える件数のファイル生成を完了できること、および `inspect_tools` が child part に継承されないことを確認。
+- Workflow call budget（`e2e/specs/workflow-call-budget.e2e.ts`）
+  - 目的: `workflow_call` で抽出した subworkflow が、親と同じ step budget を共有したまま完走することを確認。
+- Workflow selection branches（`e2e/specs/workflow-selection-branches.e2e.ts`）
+  - 目的: `--workflow` のファイルパス指定、ローカル名、repertoire `@scope` 名、未知名（fail fast）、省略時の各分岐を確認。

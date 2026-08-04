@@ -26,7 +26,7 @@ Compare by `step`, `phase`, `provider`, and `model`. Focus on repeated review lo
 ## Reduce Workflow Cost
 
 - Choose lighter builtin workflows such as `*-mini` when a task does not need the full planning/review loop.
-- Use `provider_routing` to send cheaper or faster providers and models to low-risk steps.
+- Use [`provider_routing`](./configuration.md) to send cheaper or faster providers and models to low-risk steps.
 - Route expensive models only to steps that need them, such as final review or difficult implementation steps.
 - Split oversized tasks before running TAKT so each workflow has a smaller planning and review context.
 - Shorten output contracts when a report does not need detailed prose.

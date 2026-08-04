@@ -1,41 +1,17 @@
 import { EventEmitter } from 'node:events';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import type {
-  AgentResponse,
-  FindingLedger,
-  WorkflowConfig,
-  WorkflowResumePoint,
-  WorkflowStep,
-} from '../core/models/index.js';
+import type { FindingLedger, WorkflowResumePoint, WorkflowStep } from '../core/models/index.js';
 import { initAnalyticsWriter } from '../features/analytics/index.js';
 import { resetAnalyticsWriter } from '../features/analytics/writer.js';
 import { AnalyticsEmitter } from '../features/tasks/execute/analyticsEmitter.js';
-import { SessionLogger } from '../features/tasks/execute/sessionLogger.js';
 import { bindWorkflowExecutionEvents } from '../features/tasks/execute/workflowExecutionEvents.js';
+import { createWorkflowTerminalPayloadFactory } from '../features/tasks/execute/workflowTerminalPayload.js';
 import { resetDebugLogger, setVerboseConsole } from '../shared/utils/debug.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
-import {
-  type WorkflowExecutionScope,
-  snapshotWorkflowExecutionScope,
-} from '../core/workflow/workflow-execution-scope.js';
-import { WorkflowEngine } from '../core/workflow/engine/WorkflowEngine.js';
-import { runAgent } from '../agents/runner.js';
-
-vi.mock('../agents/runner.js', () => ({ runAgent: vi.fn() }));
-
-const SCOPED_EVENT_ARGUMENT_COUNTS: Readonly<Record<string, number>> = {
-  'step:start': 8,
-  'step:complete': 4,
-  'routing:decision': 8,
-  'phase:start': 7,
-  'phase:complete': 8,
-  'phase:judge_stage': 6,
-  'step:report': 4,
-  'findings:ledger': 2,
-};
+import type { ProviderType } from '../shared/types/provider.js';
 
 class TestEngine extends EventEmitter {
   public abort = vi.fn();
@@ -51,35 +27,6 @@ class TestEngine extends EventEmitter {
     return this.resumePoint;
   }
 
-  getExecutionScope(): WorkflowExecutionScope {
-    return snapshotWorkflowExecutionScope(this.resumePoint.stack);
-  }
-
-  emitScoped(
-    executionScope: WorkflowExecutionScope,
-    eventName: string,
-    ...args: unknown[]
-  ): boolean {
-    const expectedArgumentCount = SCOPED_EVENT_ARGUMENT_COUNTS[eventName];
-    if (expectedArgumentCount === undefined) {
-      return super.emit(eventName, ...args);
-    }
-    const contractArgs = [...args];
-    if (eventName === 'routing:decision' && contractArgs.length === 7) {
-      contractArgs.push(this.resumePoint.stack[0]?.workflow);
-    }
-    if (eventName === 'step:start' && contractArgs.length < 8) {
-      while (contractArgs.length < 7) {
-        contractArgs.push(undefined);
-      }
-      contractArgs.push(this.resumePoint.max_steps ?? 5);
-    }
-    while (contractArgs.length < expectedArgumentCount) {
-      contractArgs.push(undefined);
-    }
-    return super.emit(eventName, ...contractArgs, executionScope);
-  }
-
   getState() {
     return {
       findings: {
@@ -92,17 +39,24 @@ class TestEngine extends EventEmitter {
 }
 
 function createBridgeHarness(options?: {
-  currentProvider?: string;
+  currentProvider?: ProviderType;
   configuredModel?: string;
   resumePoint?: WorkflowResumePoint;
   findingIds?: string[];
   traceDiscovery?: { queries: string[] };
   eventSink?: ReturnType<typeof vi.fn>;
   shouldNotifyRateLimit?: boolean;
+  display?: { flush: ReturnType<typeof vi.fn> };
 }) {
   const resumePoint = options?.resumePoint ?? {
     version: 2,
-    stack: [{ workflow: 'parent', step: 'review', kind: 'agent' }],
+    stack: [{
+      workflow: 'parent',
+      workflow_ref: 'project:sha256:parent',
+      step: 'review',
+      kind: 'agent',
+      occurrence: 1,
+    }],
     iteration: 2,
     elapsed_ms: 100,
     workflow_call_invocations: {},
@@ -122,6 +76,9 @@ function createBridgeHarness(options?: {
     setStepContext: vi.fn(),
     flush: vi.fn(),
   };
+  const displayRef = {
+    current: options?.display ?? null,
+  };
   const runMetaManager = {
     updateStep: vi.fn(),
     updatePhase: vi.fn(),
@@ -132,7 +89,7 @@ function createBridgeHarness(options?: {
     onStepComplete: vi.fn(),
     onStepReport: vi.fn(),
     onFindingLedgerUpdated: vi.fn(),
-    seedFindingContractFindingIds: vi.fn(),
+    setFindingContractFindingIds: vi.fn(),
     onRoutingDecision: vi.fn(),
   };
   const usageEventLogger = {
@@ -140,16 +97,44 @@ function createBridgeHarness(options?: {
   };
   const sessionLogger = {
     onPhaseStart: vi.fn(),
-    setIteration: vi.fn(),
     onPhaseComplete: vi.fn(),
     onJudgeStage: vi.fn(),
-    onStepStart: vi.fn(),
-    onStepComplete: vi.fn(),
     onWorkflowCallStart: vi.fn(),
     onWorkflowCallComplete: vi.fn(),
+    onStepStart: vi.fn(),
+    onStepComplete: vi.fn(),
     onWorkflowComplete: vi.fn(),
     onWorkflowAbort: vi.fn(),
   };
+  const sessionLog = {
+    task: 'task',
+    projectDir: '/tmp/project',
+    workflowName: 'parent',
+    iterations: 0,
+    startTime: new Date().toISOString(),
+    status: 'running' as const,
+    history: [],
+  };
+  const terminalPayloads = createWorkflowTerminalPayloadFactory({
+    runSlug: 'run-1',
+    projectCwd: '/tmp/project',
+    task: 'task',
+    workflowName: 'parent',
+    sessionLog,
+    sessionId: 'session',
+    ndjsonLogPath: '/tmp/project/run/logs/session.jsonl',
+    traceReportMode: 'redacted',
+    ...(options?.traceDiscovery === undefined
+      ? {}
+      : {
+          traceDiscovery: {
+            serviceName: 'takt',
+            runId: 'run-1',
+            workflowName: 'parent',
+            queries: options.traceDiscovery.queries,
+          },
+        }),
+  });
   const bridge = bindWorkflowExecutionEvents({
     engine: engine as never,
     workflowConfig: {
@@ -157,36 +142,21 @@ function createBridgeHarness(options?: {
       maxSteps: 5,
       steps: [{ name: 'review' }],
     },
-    task: 'task',
-    projectCwd: '/tmp/project',
-    currentProvider: (options?.currentProvider ?? 'mock') as never,
-    configuredModel: options?.configuredModel,
+    currentProvider: options?.currentProvider ?? 'mock',
+    configuredModel: options?.configuredModel ?? 'gpt-test',
     out: out as never,
     prefixWriter: prefixWriter as never,
-    displayRef: { current: null },
+    displayRef: displayRef as never,
     handlerRef: { current: null },
     usageEventLogger: usageEventLogger as never,
     analyticsEmitter: analyticsEmitter as never,
     sessionLogger: sessionLogger as never,
     runMetaManager: runMetaManager as never,
-    ndjsonLogPath: '/tmp/project/run/logs/session.jsonl',
     shouldNotifyRateLimit: options?.shouldNotifyRateLimit ?? false,
-    shouldNotifyWorkflowComplete: false,
-    shouldNotifyWorkflowAbort: false,
-    writeTraceReportOnce: vi.fn(),
-    traceDiscovery: options?.traceDiscovery,
     initialResumePoint: resumePoint,
-    sessionLog: {
-      task: 'task',
-      projectDir: '/tmp/project',
-      workflowName: 'parent',
-      iterations: 0,
-      startTime: new Date().toISOString(),
-      status: 'running',
-      history: [],
-    },
+    sessionLog,
     eventSink: options?.eventSink,
-    reportDirectory: '/tmp/project/run/reports',
+    terminalPayloads,
   });
 
   return {
@@ -195,393 +165,41 @@ function createBridgeHarness(options?: {
     out,
     runMetaManager,
     prefixWriter,
+    displayRef,
     resumePoint,
     analyticsEmitter,
     usageEventLogger,
     sessionLogger,
+    terminalPayloads,
   };
 }
 
-function bindActualWorkflowConsumers(
-  engine: WorkflowEngine,
-  workflowConfig: WorkflowConfig & { maxSteps: number | 'infinite' },
-  root: string,
-  runSlug: string,
-) {
-  const ndjsonLogPath = join(root, 'logs', `${runSlug}.jsonl`);
-  const analyticsDir = join(root, 'analytics');
-  mkdirSync(join(root, 'logs'), { recursive: true });
-  initAnalyticsWriter(true, analyticsDir);
-  const usageEventLogger = { logUsageFor: vi.fn() };
-  const sessionLogger = new SessionLogger(ndjsonLogPath, true);
-  const analyticsEmitter = new AnalyticsEmitter(runSlug, false);
-  bindWorkflowExecutionEvents({
-    engine,
-    workflowConfig,
-    task: 'scope task',
-    projectCwd: root,
-    currentProvider: 'mock',
-    configuredModel: undefined,
-    out: {
-      info: vi.fn(), blankLine: vi.fn(), status: vi.fn(), error: vi.fn(),
-      logLine: vi.fn(), success: vi.fn(), warn: vi.fn(),
-    } as never,
-    prefixWriter: undefined,
-    displayRef: { current: null },
-    handlerRef: { current: null },
-    usageEventLogger: usageEventLogger as never,
-    analyticsEmitter,
-    sessionLogger,
-    runMetaManager: {
-      updateStep: vi.fn(), updatePhase: vi.fn(), updateResumePoint: vi.fn(), finalize: vi.fn(),
-    } as never,
-    ndjsonLogPath,
-    shouldNotifyRateLimit: false,
-    shouldNotifyWorkflowComplete: false,
-    shouldNotifyWorkflowAbort: false,
-    writeTraceReportOnce: vi.fn(),
-    initialResumePoint: undefined,
-    sessionLog: {
-      task: 'scope task', projectDir: root, workflowName: workflowConfig.name,
-      iterations: 0, startTime: new Date().toISOString(), status: 'running', history: [],
-    },
-    eventSink: undefined,
-    reportDirectory: join(root, '.takt', 'runs', runSlug, 'reports'),
-  });
-  return { analyticsDir, ndjsonLogPath, usageEventLogger };
-}
-
-function readNdjsonRecords(filePath: string): Array<Record<string, unknown>> {
-  return readFileSync(filePath, 'utf-8')
-    .trim()
-    .split('\n')
-    .map((line) => JSON.parse(line) as Record<string, unknown>);
-}
-
-function createDeferredAgentResponse() {
-  let resolve!: (response: AgentResponse) => void;
-  const promise = new Promise<AgentResponse>((promiseResolve) => {
-    resolve = promiseResolve;
-  });
-  return { promise, resolve };
-}
-
 describe('bindWorkflowExecutionEvents', () => {
-  it('実 WorkflowEngine の scope を SessionLogger と AnalyticsEmitter まで保持する', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'workflow-event-integration-'));
-    const ndjsonLogPath = join(root, 'logs', 'session.jsonl');
-    const analyticsDir = join(root, 'analytics');
-    mkdirSync(join(root, 'logs'), { recursive: true });
-    initAnalyticsWriter(true, analyticsDir);
-    try {
-      const workflowConfig = {
-        name: 'actual-engine-scope',
-        initialStep: 'review',
-        maxSteps: 2,
-        steps: [{
-          name: 'review',
-          persona: 'reviewer',
-          personaDisplayName: 'Reviewer',
-          instruction: 'Review actual scope',
-          provider: 'mock' as const,
-          rules: [normalizeRule({ condition: 'when(true)', next: 'COMPLETE' })],
-        }],
-      };
-      const engine = new WorkflowEngine(workflowConfig, root, 'scope task', {
-        projectCwd: root,
-        reportDirName: 'actual-engine-run',
-        provider: 'mock',
-      });
-      vi.mocked(runAgent).mockImplementationOnce(async (persona, prompt, options) => {
-        options?.onPromptResolved?.({ systemPrompt: String(persona), userInstruction: prompt });
-        return {
-          persona: String(persona),
-          status: 'done',
-          content: 'approved',
-          timestamp: new Date('2026-08-01T00:00:00.000Z'),
-          providerUsage: { inputTokens: 2, outputTokens: 1, totalTokens: 3, usageMissing: false },
-        };
-      });
-      const usageEventLogger = { logUsageFor: vi.fn() };
-      const sessionLogger = new SessionLogger(ndjsonLogPath, true);
-      const analyticsEmitter = new AnalyticsEmitter('actual-engine-run', false);
-      const out = {
-        info: vi.fn(), blankLine: vi.fn(), status: vi.fn(), error: vi.fn(),
-        logLine: vi.fn(), success: vi.fn(), warn: vi.fn(),
-      };
-      bindWorkflowExecutionEvents({
-        engine,
-        workflowConfig,
-        task: 'scope task',
-        projectCwd: root,
-        currentProvider: 'mock',
-        configuredModel: undefined,
-        out: out as never,
-        prefixWriter: undefined,
-        displayRef: { current: null },
-        handlerRef: { current: null },
-        usageEventLogger: usageEventLogger as never,
-        analyticsEmitter,
-        sessionLogger,
-        runMetaManager: {
-          updateStep: vi.fn(), updatePhase: vi.fn(), updateResumePoint: vi.fn(), finalize: vi.fn(),
-        } as never,
-        ndjsonLogPath,
-        shouldNotifyRateLimit: false,
-        shouldNotifyWorkflowComplete: false,
-        shouldNotifyWorkflowAbort: false,
-        writeTraceReportOnce: vi.fn(),
-        initialResumePoint: undefined,
-        sessionLog: {
-          task: 'scope task', projectDir: root, workflowName: workflowConfig.name,
-          iterations: 0, startTime: new Date().toISOString(), status: 'running', history: [],
-        },
-        eventSink: undefined,
-        reportDirectory: join(root, '.takt', 'runs', 'actual-engine-run', 'reports'),
-      });
-
-      const state = await engine.run();
-
-      expect(state.status).toBe('completed');
-      const records = readFileSync(ndjsonLogPath, 'utf-8')
-        .trim()
-        .split('\n')
-        .map((line) => JSON.parse(line) as { type: string; stack?: unknown; iteration?: number });
-      const stepStart = records.find((record) => record.type === 'step_start');
-      const stepComplete = records.find((record) => record.type === 'step_complete');
-      expect(stepStart?.stack).toEqual([{ workflow: 'actual-engine-scope', step: 'review', kind: 'agent' }]);
-      expect(stepComplete?.stack).toEqual(stepStart?.stack);
-      expect(stepComplete?.iteration).toBe(1);
-      expect(usageEventLogger.logUsageFor).toHaveBeenCalledWith(
-        expect.objectContaining({ provider: 'mock', step: 'review' }),
-        expect.objectContaining({ success: true }),
-      );
-      const analyticsFiles = readdirSync(analyticsDir);
-      const analyticsRecords = analyticsFiles.flatMap((file) => readFileSync(join(analyticsDir, file), 'utf-8')
-        .trim()
-        .split('\n')
-        .map((line) => JSON.parse(line) as Record<string, unknown>));
-      expect(analyticsRecords).toContainEqual(expect.objectContaining({
-        type: 'step_result', step: 'review', provider: 'mock', iteration: 1,
-      }));
-    } finally {
-      resetAnalyticsWriter();
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it('実 Engine と公開 consumer は mixed parallel の child 解決失敗でも親 scope と元エラーを保持する', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'workflow-event-parallel-failure-'));
-    const workflowConfig: WorkflowConfig & { maxSteps: number } = {
-      name: 'parallel-parent',
-      initialStep: 'reviewers',
-      maxSteps: 3,
-      steps: [{
-        name: 'reviewers',
-        personaDisplayName: 'Reviewers',
-        instruction: 'Run reviewers',
-        parallel: [
-          {
-            name: 'delegate-review',
-            kind: 'workflow_call',
-            call: 'missing/review',
-            personaDisplayName: 'Delegated review',
-            instruction: '',
-            rules: [normalizeRule({ condition: 'COMPLETE', next: 'COMPLETE' })],
-          },
-          {
-            name: 'local-review',
-            persona: 'local-reviewer',
-            personaDisplayName: 'Local reviewer',
-            instruction: 'Review locally',
-            provider: 'mock',
-            rules: [normalizeRule({ condition: 'when(true)', next: 'COMPLETE' })],
-          },
-        ],
-        rules: [normalizeRule({ condition: 'when(true)', next: 'COMPLETE' })],
+  it('workflow_call lifecycle を SessionLogger へ橋渡しする', () => {
+    const { engine, sessionLogger } = createBridgeHarness();
+    const lifecycle = {
+      parentWorkflow: 'project:sha256:parent',
+      step: 'delegate',
+      childWorkflow: 'project:sha256:child',
+      callInstance: 1,
+      stack: [{
+        workflow: 'parent',
+        workflow_ref: 'project:sha256:parent',
+        step: 'delegate',
+        kind: 'workflow_call' as const,
+        occurrence: 1,
       }],
     };
-    const engine = new WorkflowEngine(workflowConfig, root, 'scope task', {
-      projectCwd: root,
-      reportDirName: 'parallel-failure',
-      provider: 'mock',
-      workflowCallResolver: () => null,
-    });
-    vi.mocked(runAgent).mockImplementationOnce(async (persona, prompt, options) => {
-      options?.onPromptResolved?.({ systemPrompt: String(persona), userInstruction: prompt });
-      return {
-        persona: String(persona),
-        status: 'done',
-        content: 'local review complete',
-        timestamp: new Date('2026-08-01T00:00:00.000Z'),
-      };
-    });
-    const { ndjsonLogPath } = bindActualWorkflowConsumers(
-      engine,
-      workflowConfig,
-      root,
-      'parallel-failure',
-    );
-    try {
-      const state = await engine.run();
-
-      expect(state.status).toBe('aborted');
-      expect(state.stepOutputs.get('delegate-review')?.error).toContain(
-        'references unknown workflow "missing/review"',
-      );
-      const records = readNdjsonRecords(ndjsonLogPath);
-      const parentRecords = records.filter((record) => (
-        record.step === 'reviewers'
-        && (record.type === 'step_start' || record.type === 'step_complete')
-      ));
-      expect(parentRecords).toHaveLength(2);
-      expect(parentRecords[1]?.stack).toEqual(parentRecords[0]?.stack);
-      expect(parentRecords[0]?.stack).toEqual([
-        expect.objectContaining({ workflow: 'parallel-parent', step: 'reviewers', kind: 'agent' }),
-      ]);
-      const localPhaseRecords = records.filter((record) => (
-        record.step === 'local-review'
-        && (record.type === 'phase_start' || record.type === 'phase_complete')
-      ));
-      expect(localPhaseRecords).toHaveLength(2);
-      expect(localPhaseRecords[1]?.stack).toEqual(localPhaseRecords[0]?.stack);
-      expect(localPhaseRecords[0]?.stack).toEqual(parentRecords[0]?.stack);
-    } finally {
-      resetAnalyticsWriter();
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it('実 Engine と公開 consumer は parallel child の逆順完了を provider 別 scope へ帰属する', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'workflow-event-parallel-provider-'));
-    const childA: WorkflowConfig = {
-      name: 'child-a',
-      subworkflow: { callable: true, visibility: 'internal' },
-      initialStep: 'review-a',
-      steps: [{
-        name: 'review-a',
-        persona: 'reviewer-a',
-        personaDisplayName: 'Reviewer A',
-        instruction: 'Review A',
-        provider: 'claude-sdk',
-        model: 'claude-sonnet-4-5',
-        rules: [normalizeRule({ condition: 'when(true)', next: 'COMPLETE' })],
-      }],
+    const complete = {
+      ...lifecycle,
+      result: { status: 'failed' as const, reason: 'child failed' },
     };
-    const childB: WorkflowConfig = {
-      name: 'child-b',
-      subworkflow: { callable: true, visibility: 'internal' },
-      initialStep: 'review-b',
-      steps: [{
-        name: 'review-b',
-        persona: 'reviewer-b',
-        personaDisplayName: 'Reviewer B',
-        instruction: 'Review B',
-        provider: 'codex',
-        model: 'gpt-5',
-        rules: [normalizeRule({ condition: 'when(true)', next: 'COMPLETE' })],
-      }],
-    };
-    const workflowConfig: WorkflowConfig & { maxSteps: number } = {
-      name: 'parallel-provider-parent',
-      initialStep: 'reviewers',
-      maxSteps: 4,
-      steps: [{
-        name: 'reviewers',
-        personaDisplayName: 'Reviewers',
-        instruction: 'Run delegated reviewers',
-        parallel: [
-          {
-            name: 'delegate-a',
-            kind: 'workflow_call',
-            call: 'child-a',
-            personaDisplayName: 'Delegate A',
-            instruction: '',
-            rules: [normalizeRule({ condition: 'COMPLETE', next: 'COMPLETE' })],
-          },
-          {
-            name: 'delegate-b',
-            kind: 'workflow_call',
-            call: 'child-b',
-            personaDisplayName: 'Delegate B',
-            instruction: '',
-            rules: [normalizeRule({ condition: 'COMPLETE', next: 'COMPLETE' })],
-          },
-        ],
-        rules: [normalizeRule({ condition: 'all("COMPLETE")', next: 'COMPLETE' })],
-      }],
-    };
-    const workflows = new Map([
-      [childA.name, childA],
-      [childB.name, childB],
-    ]);
-    const engine = new WorkflowEngine(workflowConfig, root, 'scope task', {
-      projectCwd: root,
-      reportDirName: 'parallel-provider',
-      provider: 'mock',
-      workflowCallResolver: ({ step }) => workflows.get(step.call) ?? null,
-    });
-    const deferredA = createDeferredAgentResponse();
-    const deferredB = createDeferredAgentResponse();
-    vi.mocked(runAgent).mockImplementation(async (persona, prompt, options) => {
-      options?.onPromptResolved?.({ systemPrompt: String(persona), userInstruction: prompt });
-      if (persona === 'reviewer-a') {
-        return deferredA.promise;
-      }
-      if (persona === 'reviewer-b') {
-        return deferredB.promise;
-      }
-      throw new Error(`Unexpected persona: ${String(persona)}`);
-    });
-    const { analyticsDir, ndjsonLogPath } = bindActualWorkflowConsumers(
-      engine,
-      workflowConfig,
-      root,
-      'parallel-provider',
-    );
-    try {
-      const statePromise = engine.run();
-      await vi.waitFor(() => expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2));
-      deferredB.resolve({
-        persona: 'reviewer-b', status: 'done', content: 'B complete',
-        timestamp: new Date('2026-08-01T00:00:01.000Z'),
-      });
-      await vi.waitFor(() => {
-        const records = readNdjsonRecords(ndjsonLogPath);
-        expect(records.some((record) => record.type === 'step_complete' && record.step === 'review-b')).toBe(true);
-      });
-      deferredA.resolve({
-        persona: 'reviewer-a', status: 'done', content: 'A complete',
-        timestamp: new Date('2026-08-01T00:00:02.000Z'),
-      });
-      const state = await statePromise;
 
-      expect(state.status).toBe('completed');
-      const sessionRecords = readNdjsonRecords(ndjsonLogPath);
-      for (const stepName of ['review-a', 'review-b']) {
-        const start = sessionRecords.find((record) => record.type === 'step_start' && record.step === stepName);
-        const complete = sessionRecords.find((record) => record.type === 'step_complete' && record.step === stepName);
-        expect(start?.stack).toEqual(expect.arrayContaining([
-          expect.objectContaining({ step: 'reviewers' }),
-          expect.objectContaining({ step: stepName === 'review-a' ? 'delegate-a' : 'delegate-b', kind: 'workflow_call' }),
-          expect.objectContaining({ step: stepName }),
-        ]));
-        expect(complete?.stack).toEqual(start?.stack);
-      }
-      const analyticsRecords = readdirSync(analyticsDir).flatMap((file) => (
-        readNdjsonRecords(join(analyticsDir, file))
-      ));
-      const resultEvents = analyticsRecords.filter((record) => record.type === 'step_result');
-      expect(resultEvents).toEqual(expect.arrayContaining([
-        expect.objectContaining({ step: 'review-a', provider: 'claude-sdk', model: 'claude-sonnet-4-5' }),
-        expect.objectContaining({ step: 'review-b', provider: 'codex', model: 'gpt-5' }),
-        expect.objectContaining({ step: 'reviewers', provider: 'mock', model: '(default)' }),
-      ]));
-      expect(resultEvents.map((record) => record.step)).toEqual(['review-b', 'review-a', 'reviewers']);
-    } finally {
-      resetAnalyticsWriter();
-      rmSync(root, { recursive: true, force: true });
-    }
+    engine.emit('workflow_call:start', lifecycle);
+    engine.emit('workflow_call:complete', complete);
+
+    expect(sessionLogger.onWorkflowCallStart).toHaveBeenCalledWith(lifecycle);
+    expect(sessionLogger.onWorkflowCallComplete).toHaveBeenCalledWith(complete);
   });
 
   it('event bridge が run meta と実行結果を同期する', () => {
@@ -601,7 +219,7 @@ describe('bindWorkflowExecutionEvents', () => {
       matchedRuleIndex: 0,
     };
 
-    engine.emitScoped(engine.getExecutionScope(),
+    engine.emit(
       'step:start',
       step,
       2,
@@ -611,10 +229,13 @@ describe('bindWorkflowExecutionEvents', () => {
       step.name,
       7,
     );
-    engine.emitScoped(engine.getExecutionScope(), 'phase:start', step, 1, 'main', 'instruction', [], 'phase-1', 2);
-    engine.emitScoped(engine.getExecutionScope(), 'phase:complete', step, 1, 'main', 'approved', 'done', undefined, 'phase-1', 2);
-    engine.emitScoped(engine.getExecutionScope(), 'step:complete', step, response, 'instruction', step.name);
-    engine.emitScoped(engine.getExecutionScope(), 'workflow:complete', { iteration: 2 });
+    engine.emit('phase:start', step, 1, 'main', 'instruction', [], 'phase-1', 2);
+    engine.emit('phase:complete', step, 1, 'main', 'approved', 'done', undefined, 'phase-1', 2);
+    engine.emit('step:complete', step, response, 'instruction', step.name);
+    engine.emit('workflow:complete', { iteration: 2 });
+
+    expect(runMetaManager.finalize).not.toHaveBeenCalled();
+    const payload = bridge.prepareTerminalPublicationPayload();
 
     expect(runMetaManager.updateStep).toHaveBeenCalledWith('review', 2, resumePoint);
     expect(prefixWriter.setStepContext).toHaveBeenCalledWith({
@@ -627,10 +248,14 @@ describe('bindWorkflowExecutionEvents', () => {
     expect(runMetaManager.updatePhase.mock.calls[0]?.slice(0, 3)).toEqual(['review', 2, 1]);
     expect(runMetaManager.updatePhase.mock.calls[1]?.slice(0, 3)).toEqual(['review', 2, 1]);
     expect(runMetaManager.updateResumePoint).toHaveBeenCalledWith(resumePoint);
-    expect(runMetaManager.finalize).toHaveBeenCalledWith('completed', 2);
+    expect(runMetaManager.finalize).not.toHaveBeenCalled();
+    expect(payload).toMatchObject({
+      status: 'completed',
+      iterations: 2,
+    });
     expect(bridge.state.lastStepName).toBe('review');
     expect(bridge.state.lastStepContent).toBe('approved');
-    expect(bridge.state.sessionLog.iterations).toBe(2);
+    expect(bridge.state.sessionLog.iterations).toBe(1);
   });
 
   it('内部 step は観測名を維持しつつ再開可能な実 step を run meta に保存する', () => {
@@ -649,7 +274,7 @@ describe('bindWorkflowExecutionEvents', () => {
       matchedRuleIndex: 0,
     };
 
-    engine.emitScoped(engine.getExecutionScope(),
+    engine.emit(
       'step:start',
       judgeStep,
       8,
@@ -658,8 +283,8 @@ describe('bindWorkflowExecutionEvents', () => {
       'parent',
       'review',
     );
-    engine.emitScoped(engine.getExecutionScope(), 'phase:start', judgeStep, 3, 'judge', 'judge', [], 'judge-phase', 8);
-    engine.emitScoped(engine.getExecutionScope(),
+    engine.emit('phase:start', judgeStep, 3, 'judge', 'judge', [], 'judge-phase', 8);
+    engine.emit(
       'phase:complete',
       judgeStep,
       3,
@@ -670,7 +295,7 @@ describe('bindWorkflowExecutionEvents', () => {
       'judge-phase',
       8,
     );
-    engine.emitScoped(engine.getExecutionScope(), 'step:complete', judgeStep, response, 'judge', 'review');
+    engine.emit('step:complete', judgeStep, response, 'judge', 'review');
 
     expect(runMetaManager.updateStep).toHaveBeenCalledWith('review', 8, resumePoint);
     expect(runMetaManager.updatePhase).toHaveBeenCalledTimes(2);
@@ -679,17 +304,188 @@ describe('bindWorkflowExecutionEvents', () => {
     expect(bridge.state.lastStepName).toBe('review');
   });
 
+  it('step の開始・完了を event payload の発生元 stack で相関する', () => {
+    const { engine, sessionLogger } = createBridgeHarness();
+    const step = {
+      name: 'child-review',
+      personaDisplayName: 'Reviewer',
+      instruction: '',
+      rules: [],
+    } as WorkflowStep;
+    const workflowStack = [
+      {
+        workflow: 'parent',
+        workflow_ref: 'project:sha256:parent',
+        step: 'delegate',
+        kind: 'workflow_call' as const,
+        occurrence: 1,
+      },
+      {
+        workflow: 'child',
+        workflow_ref: 'project:sha256:child',
+        step: step.name,
+        kind: 'agent' as const,
+        occurrence: 1,
+      },
+    ];
+
+    engine.emit(
+      'step:start',
+      step,
+      2,
+      'instruction',
+      { provider: 'mock', model: 'gpt-test' },
+      'child',
+      'delegate',
+      1,
+      workflowStack,
+    );
+    const response = {
+      persona: 'reviewer',
+      status: 'done',
+      content: 'approved',
+      timestamp: new Date(),
+    };
+    engine.emit(
+      'step:complete',
+      step,
+      response,
+      'instruction',
+      'delegate',
+      workflowStack,
+    );
+
+    expect(sessionLogger.onStepStart).toHaveBeenCalledWith(
+      step,
+      2,
+      'instruction',
+      workflowStack,
+      { provider: 'mock', model: 'gpt-test' },
+    );
+    expect(sessionLogger.onStepComplete).toHaveBeenCalledWith(
+      step,
+      response,
+      'instruction',
+      workflowStack,
+    );
+  });
+
   it('workflow abort kind を実行状態に保持する', () => {
     const { bridge, engine } = createBridgeHarness();
 
-    engine.emitScoped(engine.getExecutionScope(),
+    engine.emit(
       'workflow:abort',
       { iteration: 3 },
       'Workflow aborted by step transition',
       'step_transition',
+      {
+        kind: 'step_transition',
+        step: 'review',
+        reason: 'Workflow aborted by step transition',
+        error: 'Workflow aborted by step transition',
+      },
     );
 
     expect(bridge.state.abortKind).toBe('step_transition');
+  });
+
+  it('terminal投影失敗をadditionalに保持しcleanupを完了して最初のabort intentを維持する', () => {
+    const projectionFailure = new Error('resume-point projection failed');
+    const display = { flush: vi.fn() };
+    const {
+      bridge,
+      engine,
+      runMetaManager,
+      prefixWriter,
+      displayRef,
+    } = createBridgeHarness({ display });
+    runMetaManager.updateResumePoint.mockImplementation(() => {
+      throw projectionFailure;
+    });
+
+    expect(() => {
+      engine.emit(
+        'workflow:abort',
+        { iteration: 3 },
+        'first abort',
+        'step_error',
+        { kind: 'step_error', step: 'reviewers', reason: 'first abort', error: 'first abort' },
+      );
+    }).not.toThrow();
+    expect(() => {
+      engine.emit(
+        'workflow:abort',
+        { iteration: 4 },
+        'second abort',
+        'runtime_error',
+        { kind: 'runtime_error', step: 'reviewers', reason: 'second abort', error: 'second abort' },
+      );
+    }).not.toThrow();
+
+    expect(bridge.getStagedAbort()).toEqual({
+      iteration: 3,
+      reason: 'first abort',
+      kind: 'step_error',
+      status: 'failed',
+    });
+    expect(bridge.getFinalizationIssues()).toEqual([
+      expect.objectContaining({
+        name: 'RunProjectionError',
+        stage: 'meta',
+        cause: projectionFailure,
+      }),
+      expect.objectContaining({
+        name: 'RunProjectionError',
+        stage: 'meta',
+        cause: projectionFailure,
+      }),
+    ]);
+    expect(display.flush).toHaveBeenCalledOnce();
+    expect(displayRef.current).toBeNull();
+    expect(prefixWriter.flush).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    {
+      kind: 'interrupt',
+      expectedStatus: 'aborted',
+      failureError: 'terminal reason',
+    },
+    {
+      kind: 'step_error',
+      expectedStatus: 'failed',
+      failureError: 'NEEDS_ADJUDICATION: finding invariant failed',
+    },
+  ] as const)('publishes $kind as $expectedStatus', ({
+    kind,
+    expectedStatus,
+    failureError,
+  }) => {
+    const { bridge, engine, runMetaManager } = createBridgeHarness();
+
+    engine.emit(
+      'workflow:abort',
+      { iteration: 3 },
+      'terminal reason',
+      kind,
+      { kind, step: 'reviewers', reason: 'terminal reason', error: failureError },
+    );
+    const payload = bridge.prepareTerminalPublicationPayload();
+
+    expect(runMetaManager.finalize).not.toHaveBeenCalled();
+    expect(payload).toMatchObject({
+      status: expectedStatus,
+      iterations: 3,
+      reason: 'terminal reason',
+      failure: {
+        step: 'reviewers',
+        error: failureError,
+      },
+    });
+    expect(bridge.state.failure).toEqual({
+      step: 'reviewers',
+      error: failureError,
+    });
   });
 
   it('findings ledger event を analytics emitter に渡す', () => {
@@ -701,42 +497,60 @@ describe('bindWorkflowExecutionEvents', () => {
       findings: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
     };
 
-    engine.emitScoped(engine.getExecutionScope(), 'findings:ledger', ledger, 2);
+    const context = {
+      iteration: 4,
+      workflowName: 'peer-review',
+      scopeIdentity: 'peer-review-scope',
+    };
+    engine.emit('findings:ledger', ledger, context);
 
-    expect(analyticsEmitter.onFindingLedgerUpdated).toHaveBeenCalledWith(ledger, 2);
+    expect(analyticsEmitter.onFindingLedgerUpdated).toHaveBeenCalledWith(
+      ledger,
+      context,
+    );
   });
 
   it('workflow complete event が TraceQL discovery を完了出力へ渡す', () => {
-    const { engine, out } = createBridgeHarness({
+    const { bridge, engine } = createBridgeHarness({
       traceDiscovery: {
         queries: ['{ resource.service.name = "takt" && span."takt.run.id" = "run-843" }'],
       },
     });
 
-    engine.emitScoped(engine.getExecutionScope(), 'workflow:complete', { iteration: 2 });
+    engine.emit('workflow:complete', { iteration: 2 });
+    const payload = bridge.prepareTerminalPublicationPayload();
 
-    expect(out.info).toHaveBeenCalledWith('TraceQL discovery:');
-    expect(out.info).toHaveBeenCalledWith(
-      '  { resource.service.name = "takt" && span."takt.run.id" = "run-843" }',
-    );
+    expect(payload.traceDiscovery?.queries).toEqual([
+      '{ resource.service.name = "takt" && span."takt.run.id" = "run-843" }',
+    ]);
   });
 
   it('workflow abort event が TraceQL discovery を abort 出力へ渡す', () => {
-    const { engine, out } = createBridgeHarness({
+    const { bridge, engine } = createBridgeHarness({
       traceDiscovery: {
         queries: ['{ resource.service.name = "takt" && span."takt.task.issue_number" = 792 }'],
       },
     });
 
-    engine.emitScoped(engine.getExecutionScope(), 'workflow:abort', { iteration: 2 }, 'Step "write_tests" failed');
-
-    expect(out.info).toHaveBeenCalledWith('TraceQL discovery:');
-    expect(out.info).toHaveBeenCalledWith(
-      '  { resource.service.name = "takt" && span."takt.task.issue_number" = 792 }',
+    engine.emit(
+      'workflow:abort',
+      { iteration: 2 },
+      'Step "write_tests" failed',
+      'step_error',
+      {
+        kind: 'step_error',
+        step: 'write_tests',
+        reason: 'Step "write_tests" failed',
+        error: 'write tests failed',
+      },
     );
+    const payload = bridge.prepareTerminalPublicationPayload();
+
+    expect(payload.traceDiscovery?.queries).toEqual([
+      '{ resource.service.name = "takt" && span."takt.task.issue_number" = 792 }',
+    ]);
   });
 
   it('finding ledger analytics の書き込み失敗後も workflow complete を処理する', () => {
@@ -746,9 +560,21 @@ describe('bindWorkflowExecutionEvents', () => {
     initAnalyticsWriter(true, analyticsPath);
     try {
       const actualAnalyticsEmitter = new AnalyticsEmitter('run-ledger', false);
-      const { engine, runMetaManager, analyticsEmitter } = createBridgeHarness();
-      analyticsEmitter.onFindingLedgerUpdated.mockImplementation((ledger: FindingLedger, iteration: number) => {
-        actualAnalyticsEmitter.onFindingLedgerUpdated(ledger, iteration);
+      const {
+        bridge,
+        engine,
+        runMetaManager,
+        analyticsEmitter,
+      } = createBridgeHarness();
+      analyticsEmitter.onFindingLedgerUpdated.mockImplementation((
+        ledger: FindingLedger,
+        context: {
+          readonly iteration: number;
+          readonly workflowName: string;
+          readonly scopeIdentity: string;
+        },
+      ) => {
+        actualAnalyticsEmitter.onFindingLedgerUpdated(ledger, context);
       });
       const ledger: FindingLedger = {
         workflowName: 'peer-review',
@@ -770,23 +596,52 @@ describe('bindWorkflowExecutionEvents', () => {
         ],
         rawFindings: [],
         conflicts: [],
-        interpretations: [],
       };
 
-      expect(() => engine.emitScoped(engine.getExecutionScope(), 'findings:ledger', ledger, 2)).not.toThrow();
-      expect(() => engine.emitScoped(engine.getExecutionScope(), 'workflow:complete', { iteration: 3 })).not.toThrow();
+      expect(() => engine.emit('findings:ledger', ledger, {
+        iteration: 2,
+        workflowName: 'peer-review',
+        scopeIdentity: 'peer-review-scope',
+      })).not.toThrow();
+      expect(() => engine.emit('workflow:complete', { iteration: 3 })).not.toThrow();
+      const payload = bridge.prepareTerminalPublicationPayload();
 
-      expect(runMetaManager.finalize).toHaveBeenCalledWith('completed', 3);
+      expect(runMetaManager.finalize).not.toHaveBeenCalled();
+      expect(payload).toMatchObject({
+        status: 'completed',
+        iterations: 3,
+      });
     } finally {
       resetAnalyticsWriter();
       rmSync(analyticsRoot, { recursive: true, force: true });
     }
   });
 
-  it('event bridge 初期化時に既存 open finding id を analytics emitter に渡す', () => {
-    const { analyticsEmitter } = createBridgeHarness({ findingIds: ['F-0001', 'F-0002'] });
+  it('direct child resumeの初回stepでchild ledgerの現行Finding IDsを渡す', () => {
+    const { analyticsEmitter, engine } = createBridgeHarness();
+    const step = {
+      name: 'fix',
+      personaDisplayName: 'Coder',
+      instruction: '',
+    } as WorkflowStep;
+    engine.emit(
+      'step:start',
+      step,
+      1,
+      'fix',
+      { provider: 'mock', model: 'test' },
+      'peer-review',
+      step.name,
+      1,
+      [],
+      'peer-review-scope',
+      ['F-1001', 'F-1002'],
+    );
 
-    expect(analyticsEmitter.seedFindingContractFindingIds).toHaveBeenCalledWith(['F-0001', 'F-0002']);
+    expect(analyticsEmitter.setFindingContractFindingIds).toHaveBeenCalledWith(
+      'peer-review-scope',
+      ['F-1001', 'F-1002'],
+    );
   });
 
   it('routing decision event を analytics emitter に渡す', () => {
@@ -814,7 +669,7 @@ describe('bindWorkflowExecutionEvents', () => {
       },
     };
 
-    engine.emitScoped(engine.getExecutionScope(), 'routing:decision', step, response, 'Implement API', providerInfo, 'agent', 1234, 2);
+    engine.emit('routing:decision', step, response, 'Implement API', providerInfo, 'agent', 1234, 2);
 
     expect(analyticsEmitter.onRoutingDecision).toHaveBeenCalledWith(
       step,
@@ -829,7 +684,7 @@ describe('bindWorkflowExecutionEvents', () => {
   });
 
   it('step model が明示省略された場合は configured model へ戻さず default として記録する', () => {
-    const { engine, out, usageEventLogger, analyticsEmitter } = createBridgeHarness({
+    const { engine, out } = createBridgeHarness({
       currentProvider: 'cursor',
       configuredModel: 'global-model',
     });
@@ -839,18 +694,25 @@ describe('bindWorkflowExecutionEvents', () => {
       instruction: '',
     } as WorkflowStep;
 
-    engine.emitScoped(engine.getExecutionScope(), 'step:start', step, 1, 'instruction', {
+    engine.emit('step:start', step, 1, 'instruction', {
       provider: 'cursor',
       model: undefined,
       modelSource: 'step',
     }, 'parent', step.name);
 
     expect(out.info).toHaveBeenCalledWith('Model: (default)');
-    expect(usageEventLogger.logUsageFor).not.toHaveBeenCalled();
   });
 
-  it('workflow_call wrapper を usage として記録せず child 実 step の usage context だけを保持する', () => {
-    const { engine, usageEventLogger } = createBridgeHarness();
+  it('workflow_call 親子の完了順が入れ子でも開始時の usage context を保持する', () => {
+    const { engine, usageEventLogger, analyticsEmitter } = createBridgeHarness();
+    const parentStep = {
+      name: 'call-child',
+      kind: 'workflow_call',
+      call: 'child',
+      personaDisplayName: 'Child workflow',
+      instruction: '',
+      rules: [],
+    } as WorkflowStep;
     const childStep = {
       name: 'child-implement',
       personaDisplayName: 'Child coder',
@@ -859,17 +721,29 @@ describe('bindWorkflowExecutionEvents', () => {
     } as WorkflowStep;
     const usage = { inputTokens: 1, outputTokens: 2, totalTokens: 3, usageMissing: false };
 
-    engine.emitScoped(engine.getExecutionScope(), 'step:start', childStep, 1, 'implement', {
+    engine.emit('step:start', parentStep, 1, 'call child', {
+      provider: 'codex',
+      model: 'parent-model',
+    }, 'parent', parentStep.name);
+    engine.emit('step:start', childStep, 1, 'implement', {
       provider: 'claude',
       model: 'child-model',
     }, 'parent', childStep.name);
-    engine.emitScoped(engine.getExecutionScope(), 'step:complete', childStep, {
+    engine.emit('step:complete', childStep, {
       persona: 'child-implement',
       status: 'done',
       content: 'child done',
       timestamp: new Date(),
       providerUsage: usage,
     }, 'implement', childStep.name);
+    engine.emit('step:complete', parentStep, {
+      persona: 'call-child',
+      status: 'done',
+      content: 'parent done',
+      timestamp: new Date(),
+      providerUsage: usage,
+    }, 'call child', parentStep.name);
+
     expect(usageEventLogger.logUsageFor.mock.calls).toEqual([
       [
         expect.objectContaining({
@@ -880,143 +754,223 @@ describe('bindWorkflowExecutionEvents', () => {
         }),
         expect.objectContaining({ success: true, usage }),
       ],
+      [
+        expect.objectContaining({
+          provider: 'codex',
+          providerModel: 'parent-model',
+          step: 'call-child',
+          stepType: 'workflow_call',
+        }),
+        expect.objectContaining({ success: true, usage }),
+      ],
+    ]);
+    expect(analyticsEmitter.onStepComplete.mock.calls).toEqual([
+      [
+        childStep,
+        expect.objectContaining({ content: 'child done' }),
+        {
+          iteration: 1,
+          workflowName: 'parent',
+          scopeIdentity: '{"workflow":"parent","stack":[]}',
+          provider: 'claude',
+          model: 'child-model',
+        },
+      ],
+      [
+        parentStep,
+        expect.objectContaining({ content: 'parent done' }),
+        {
+          iteration: 1,
+          workflowName: 'parent',
+          scopeIdentity: '{"workflow":"parent","stack":[]}',
+          provider: 'codex',
+          model: 'parent-model',
+        },
+      ],
     ]);
   });
 
-  it('arpeggio parent の集約 usage と analytics を実 provider identity へ記録する', () => {
-    const { engine, usageEventLogger, analyticsEmitter } = createBridgeHarness();
-    const step = {
-      name: 'batch-review',
-      personaDisplayName: 'Batch reviewer',
+  it('parallel substep reportは対応するstep:startなしで実行境界のcontextを使う', () => {
+    const { engine, analyticsEmitter } = createBridgeHarness();
+    const reportRoot = mkdtempSync(join(tmpdir(), 'takt-parallel-report-context-'));
+    const reportPath = join(reportRoot, 'architecture-review.md');
+    writeFileSync(reportPath, '# Architecture review\n');
+    const subStep = {
+      name: 'architecture-review',
+      personaDisplayName: 'Architecture Reviewer',
       instruction: '',
-      arpeggio: {
-        source: 'csv', sourcePath: 'input.csv', batchSize: 1, concurrency: 1,
-        templatePath: 'template.md', merge: { strategy: 'concat' }, maxRetries: 0, retryDelayMs: 0,
-      },
       rules: [],
     } as WorkflowStep;
-    const response = {
-      persona: 'batch-review',
-      status: 'done',
-      content: 'merged',
-      timestamp: new Date('2026-08-01T00:00:00.000Z'),
-      providerUsage: { inputTokens: 9, outputTokens: 4, totalTokens: 13, usageMissing: false },
-    } as const;
-    const scope = engine.getExecutionScope();
+    const workflowStack = [{
+      workflow: 'parent',
+      workflow_ref: 'project:sha256:parent',
+      step: 'reviewers',
+      kind: 'parallel' as const,
+      occurrence: 2,
+    }];
+    const reportContext = {
+      iteration: 7,
+      workflowName: 'parent',
+      resumeStepName: 'reviewers',
+      stepIteration: 3,
+      providerInfo: {
+        provider: 'codex' as const,
+        model: 'gpt-5',
+      },
+      provider: 'codex' as const,
+      model: 'gpt-5',
+      workflowStack,
+      findingScopeIdentity: 'review-scope',
+      findingIds: ['F-0007'],
+    };
 
-    engine.emitScoped(scope, 'step:start', step, 2, '', {
-      provider: 'codex', model: 'gpt-5',
-    }, 'parent', step.name, 1, 5);
-    engine.emitScoped(scope, 'step:complete', step, response, '', step.name);
-
-    expect(usageEventLogger.logUsageFor).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: 'codex', providerModel: 'gpt-5', step: 'batch-review', stepType: 'arpeggio',
-      }),
-      expect.objectContaining({ success: true, usage: response.providerUsage }),
-    );
-    expect(analyticsEmitter.onStepComplete).toHaveBeenCalledWith(
-      step,
-      response,
-      { iteration: 2, provider: 'codex', model: 'gpt-5' },
-    );
+    try {
+      expect(() => {
+        engine.emit(
+          'step:report',
+          subStep,
+          reportPath,
+          'architecture-review.md',
+          reportContext,
+        );
+      }).not.toThrow();
+      expect(analyticsEmitter.onStepReport).toHaveBeenCalledWith(
+        subStep,
+        reportPath,
+        {
+          iteration: 7,
+          workflowName: 'parent',
+          scopeIdentity: 'review-scope',
+          provider: 'codex',
+          model: 'gpt-5',
+        },
+      );
+    } finally {
+      rmSync(reportRoot, { recursive: true, force: true });
+    }
   });
 
-  it('parallel child の完了順に依存せず provider・model・iteration を scope ごとに保持する', () => {
+  it('同名 parallel child の逆順完了でも開始 scope ごとの analytics context を保持する', () => {
     const { engine, analyticsEmitter } = createBridgeHarness();
-    const step = {
+    const slowStep = {
       name: 'review',
       personaDisplayName: 'Reviewer',
       instruction: '',
       rules: [],
     } as WorkflowStep;
-    const scopeA = snapshotWorkflowExecutionScope([
-      { workflow: 'parent', step: 'reviewers', kind: 'agent' },
-      { workflow: 'child-a', step: 'review', kind: 'agent' },
-    ]);
-    const scopeB = snapshotWorkflowExecutionScope([
-      { workflow: 'parent', step: 'reviewers', kind: 'agent' },
-      { workflow: 'child-b', step: 'review', kind: 'agent' },
-    ]);
-    const responseA = {
-      persona: 'reviewer-a',
-      status: 'done',
-      content: 'A done',
-      timestamp: new Date('2026-08-01T00:00:00.000Z'),
-    } as const;
-    const responseB = {
-      persona: 'reviewer-b',
-      status: 'done',
-      content: 'B done',
-      timestamp: new Date('2026-08-01T00:00:01.000Z'),
-    } as const;
-
-    engine.emitScoped(scopeA, 'step:start', step, 1, 'A', { provider: 'claude', model: 'sonnet' }, 'child-a', step.name, 1, 5);
-    engine.emitScoped(scopeB, 'step:start', step, 2, 'B', { provider: 'codex', model: 'gpt-5' }, 'child-b', step.name, 1, 5);
-    engine.emitScoped(scopeB, 'step:complete', step, responseB, 'B', step.name);
-    engine.emitScoped(scopeA, 'step:complete', step, responseA, 'A', step.name);
-
-    expect(analyticsEmitter.onStepComplete.mock.calls).toEqual([
-      [step, responseB, { iteration: 2, provider: 'codex', model: 'gpt-5' }],
-      [step, responseA, { iteration: 1, provider: 'claude', model: 'sonnet' }],
-    ]);
-  });
-
-  it('workflow_call lifecycle を agent step の副作用なしで session logger へ渡す', () => {
-    const {
-      engine,
-      sessionLogger,
-      usageEventLogger,
-      analyticsEmitter,
-      runMetaManager,
-    } = createBridgeHarness();
-    const lifecycle = {
-      parentWorkflow: 'parent',
-      step: 'delegate',
-      childWorkflow: 'shared/review',
-      callInstance: 2,
-      stack: [
-        {
-          workflow: 'parent',
-          step: 'delegate',
-          kind: 'workflow_call' as const,
-          call_instance: 2,
-        },
-      ],
+    const fastStep = {
+      ...slowStep,
     };
-    const completion = {
-      ...lifecycle,
-      result: {
-        status: 'completed' as const,
-        returnValue: 'approved',
+    const slowStack = [
+      {
+        workflow: 'parent',
+        workflow_ref: 'project:sha256:parent',
+        step: 'slow-delegate',
+        kind: 'workflow_call',
+        occurrence: 1,
       },
-    };
+      {
+        workflow: 'shared-child',
+        workflow_ref: 'project:sha256:shared-child',
+        step: 'review',
+        kind: 'agent',
+        occurrence: 1,
+      },
+    ];
+    const fastStack = [
+      {
+        workflow: 'parent',
+        workflow_ref: 'project:sha256:parent',
+        step: 'fast-delegate',
+        kind: 'workflow_call',
+        occurrence: 1,
+      },
+      {
+        workflow: 'shared-child',
+        workflow_ref: 'project:sha256:shared-child',
+        step: 'review',
+        kind: 'agent',
+        occurrence: 1,
+      },
+    ];
 
-    engine.emitScoped(engine.getExecutionScope(), 'workflow_call:start', lifecycle);
-    engine.emitScoped(engine.getExecutionScope(), 'workflow_call:complete', completion);
+    engine.emit(
+      'step:start',
+      slowStep,
+      3,
+      'slow',
+      { provider: 'codex', model: 'slow-model' },
+      'shared-child',
+      slowStep.name,
+      1,
+      slowStack,
+      'slow-finding-scope',
+      ['F-0001'],
+    );
+    engine.emit(
+      'step:start',
+      fastStep,
+      4,
+      'fast',
+      { provider: 'claude', model: 'fast-model' },
+      'shared-child',
+      fastStep.name,
+      1,
+      fastStack,
+      'fast-finding-scope',
+      ['F-0002'],
+    );
+    engine.emit('step:complete', fastStep, {
+      persona: 'reviewer',
+      status: 'done',
+      content: 'fast done',
+      timestamp: new Date(),
+    }, 'fast', fastStep.name, fastStack);
+    engine.emit('step:complete', slowStep, {
+      persona: 'reviewer',
+      status: 'done',
+      content: 'slow done',
+      timestamp: new Date(),
+    }, 'slow', slowStep.name, slowStack);
 
-    expect(sessionLogger.onWorkflowCallStart).toHaveBeenCalledWith(lifecycle);
-    expect(sessionLogger.onWorkflowCallComplete).toHaveBeenCalledWith(completion);
-    expect(usageEventLogger.logUsageFor).not.toHaveBeenCalled();
-    expect(analyticsEmitter.onStepComplete).not.toHaveBeenCalled();
-    expect(runMetaManager.updateStep).not.toHaveBeenCalled();
+    expect(analyticsEmitter.onStepComplete.mock.calls.map(
+      ([, response, context]) => ({
+        content: response.content,
+        context,
+      }),
+    )).toEqual([
+      {
+        content: 'fast done',
+        context: {
+          iteration: 4,
+          workflowName: 'shared-child',
+          scopeIdentity: 'fast-finding-scope',
+          provider: 'claude',
+          model: 'fast-model',
+        },
+      },
+      {
+        content: 'slow done',
+        context: {
+          iteration: 3,
+          workflowName: 'shared-child',
+          scopeIdentity: 'slow-finding-scope',
+          provider: 'codex',
+          model: 'slow-model',
+        },
+      },
+    ]);
+    expect(analyticsEmitter.setFindingContractFindingIds.mock.calls).toEqual([
+      ['slow-finding-scope', ['F-0001']],
+      ['fast-finding-scope', ['F-0002']],
+    ]);
   });
 
   it.each([
-    ['parallel', {
-      parallel: [{ name: 'child', persona: 'reviewer', instruction: 'review', rules: [] }],
-    }],
-    ['team_leader', {
-      name: 'fix',
-      edit: true,
-      teamLeader: { maxConcurrency: 1, refillThreshold: 0, timeoutMs: 1000 },
-    }],
-    ['system', { kind: 'system' }],
-  ])('%s step は analytics を維持し agent usage だけを記録しない', (_stepType, delegatedConfig) => {
-    const { engine, usageEventLogger, analyticsEmitter } = createBridgeHarness({
-      currentProvider: 'codex',
-      configuredModel: 'gpt-5',
-    });
+    ['parallel', { parallel: { steps: [] } }],
+    ['team_leader', { teamLeader: { maxConcurrency: 1, refillThreshold: 0, timeoutMs: 1000 } }],
+  ])('%s parent の集約レスポンスを usage として記録しない', (_stepType, delegatedConfig) => {
+    const { engine, usageEventLogger } = createBridgeHarness();
     const step = {
       name: 'review',
       personaDisplayName: 'Reviewer',
@@ -1026,137 +980,26 @@ describe('bindWorkflowExecutionEvents', () => {
     const response = {
       persona: 'review',
       status: 'done',
-      content: 'Fixed AI-001',
-      timestamp: new Date('2026-08-01T00:00:00.000Z'),
+      content: 'aggregated',
+      timestamp: new Date(),
     } as const;
 
-    engine.emitScoped(engine.getExecutionScope(), 'step:start', step, 1, 'instruction', undefined, 'parent', step.name);
-    engine.emitScoped(engine.getExecutionScope(), 'step:complete', step, response, 'instruction', step.name);
+    engine.emit(
+      'step:start',
+      step,
+      1,
+      'instruction',
+      { provider: 'mock', model: 'test-model' },
+      'parent',
+      step.name,
+    );
+    engine.emit('step:complete', step, response, 'instruction', step.name);
 
     expect(usageEventLogger.logUsageFor).not.toHaveBeenCalled();
-    expect(analyticsEmitter.onStepComplete).toHaveBeenCalledWith(
-      step,
-      response,
-      { iteration: 1, provider: 'codex', model: 'gpt-5' },
-    );
-  });
-
-  it('実 AnalyticsEmitter は delegated・system の step_result と team-leader fix の fix_action を発行する', () => {
-    const root = mkdtempSync(join(tmpdir(), 'workflow-event-delegated-analytics-'));
-    const analyticsDir = join(root, 'analytics');
-    initAnalyticsWriter(true, analyticsDir);
-    try {
-      const resumePoint = {
-        version: 2 as const,
-        stack: [{ workflow: 'parent', step: 'review', kind: 'agent' as const }],
-        iteration: 3,
-        elapsed_ms: 0,
-        workflow_call_invocations: {},
-        workflow_step_participations: {},
-      };
-      const engine = new TestEngine(resumePoint);
-      const usageEventLogger = { logUsageFor: vi.fn() };
-      const analyticsEmitter = new AnalyticsEmitter('delegated-run', false);
-      bindWorkflowExecutionEvents({
-        engine: engine as never,
-        workflowConfig: {
-          name: 'parent',
-          maxSteps: 5,
-          steps: [{ name: 'reviewers' }, { name: 'fix' }, { name: 'sync' }],
-        },
-        task: 'task',
-        projectCwd: root,
-        currentProvider: 'mock',
-        configuredModel: 'root-model',
-        out: {
-          info: vi.fn(), blankLine: vi.fn(), status: vi.fn(), error: vi.fn(),
-          logLine: vi.fn(), success: vi.fn(), warn: vi.fn(),
-        } as never,
-        prefixWriter: undefined,
-        displayRef: { current: null },
-        handlerRef: { current: null },
-        usageEventLogger: usageEventLogger as never,
-        analyticsEmitter,
-        sessionLogger: {
-          onPhaseStart: vi.fn(), setIteration: vi.fn(), onPhaseComplete: vi.fn(),
-          onJudgeStage: vi.fn(), onStepStart: vi.fn(), onStepComplete: vi.fn(),
-          onWorkflowCallStart: vi.fn(), onWorkflowCallComplete: vi.fn(),
-          onWorkflowComplete: vi.fn(), onWorkflowAbort: vi.fn(),
-        } as never,
-        runMetaManager: {
-          updateStep: vi.fn(), updatePhase: vi.fn(), updateResumePoint: vi.fn(), finalize: vi.fn(),
-        } as never,
-        ndjsonLogPath: join(root, 'session.jsonl'),
-        shouldNotifyRateLimit: false,
-        shouldNotifyWorkflowComplete: false,
-        shouldNotifyWorkflowAbort: false,
-        writeTraceReportOnce: vi.fn(),
-        initialResumePoint: resumePoint,
-        sessionLog: {
-          task: 'task', projectDir: root, workflowName: 'parent', iterations: 0,
-          startTime: new Date().toISOString(), status: 'running', history: [],
-        },
-        eventSink: undefined,
-        reportDirectory: join(root, 'reports'),
-      });
-      const steps = [
-        {
-          name: 'reviewers',
-          personaDisplayName: 'Reviewers',
-          instruction: '',
-          parallel: [{ name: 'child', persona: 'reviewer', instruction: 'review', rules: [] }],
-        },
-        {
-          name: 'fix',
-          personaDisplayName: 'Fix lead',
-          instruction: '',
-          edit: true,
-          teamLeader: { maxConcurrency: 1, refillThreshold: 0, timeoutMs: 1000 },
-        },
-        {
-          name: 'sync',
-          personaDisplayName: 'System',
-          instruction: '',
-          kind: 'system',
-        },
-      ] as WorkflowStep[];
-      steps.forEach((step, index) => {
-        const iteration = index + 1;
-        const response = {
-          persona: step.name,
-          status: 'done',
-          content: step.name === 'fix' ? 'Fixed AI-001' : 'done',
-          timestamp: new Date('2026-08-01T00:00:00.000Z'),
-        } as const;
-        engine.emitScoped(engine.getExecutionScope(), 'step:start', step, iteration, '', undefined, 'parent', step.name, 1, 5);
-        engine.emitScoped(engine.getExecutionScope(), 'step:complete', step, response, '', step.name);
-      });
-      engine.emitScoped(engine.getExecutionScope(), 'workflow_call:start', {
-        parentWorkflow: 'parent',
-        step: 'delegate',
-        childWorkflow: 'child',
-        callInstance: 1,
-        stack: [{ workflow: 'parent', step: 'delegate', kind: 'workflow_call', call_instance: 1 }],
-      });
-
-      const analyticsRecords = readNdjsonRecords(join(analyticsDir, '2026-08-01.jsonl'));
-      expect(analyticsRecords.filter((record) => record.type === 'step_result').map((record) => record.step))
-        .toEqual(['reviewers', 'fix', 'sync']);
-      expect(analyticsRecords).toContainEqual(expect.objectContaining({
-        type: 'fix_action',
-        findingId: 'AI-001',
-        iteration: 2,
-      }));
-      expect(analyticsRecords.some((record) => record.step === 'delegate')).toBe(false);
-      expect(usageEventLogger.logUsageFor).not.toHaveBeenCalled();
-    } finally {
-      resetAnalyticsWriter();
-      rmSync(root, { recursive: true, force: true });
-    }
   });
 
   it('loop monitor judge model が明示省略された場合は usage に default として記録する', () => {
-    const { engine, out, usageEventLogger, analyticsEmitter } = createBridgeHarness({
+    const { engine, out } = createBridgeHarness({
       currentProvider: 'codex',
       configuredModel: 'configured-model',
     });
@@ -1166,14 +1009,13 @@ describe('bindWorkflowExecutionEvents', () => {
       instruction: '',
     } as WorkflowStep;
 
-    engine.emitScoped(engine.getExecutionScope(), 'step:start', step, 1, 'instruction', {
+    engine.emit('step:start', step, 1, 'instruction', {
       provider: 'codex',
       model: undefined,
       modelSource: 'step',
     }, 'parent', step.name);
 
     expect(out.info).toHaveBeenCalledWith('Model: (default)');
-    expect(usageEventLogger.logUsageFor).not.toHaveBeenCalled();
   });
 
   it('OpenCode variant を step start の provider option 表示に含める', () => {
@@ -1187,7 +1029,7 @@ describe('bindWorkflowExecutionEvents', () => {
       instruction: '',
     } as WorkflowStep;
 
-    engine.emitScoped(engine.getExecutionScope(), 'step:start', step, 1, 'instruction', {
+    engine.emit('step:start', step, 1, 'instruction', {
       provider: 'opencode',
       model: 'gpt-5',
       providerOptions: { opencode: { variant: 'high' } },
@@ -1207,7 +1049,7 @@ describe('bindWorkflowExecutionEvents', () => {
       instruction: '',
     } as WorkflowStep;
 
-    engine.emitScoped(engine.getExecutionScope(), 'step:start', step, 1, 'instruction', {
+    engine.emit('step:start', step, 1, 'instruction', {
       provider: 'codex',
       model: 'gpt-5.2',
       providerOptions: { codex: { reasoningEffort: 'high' } },
@@ -1227,7 +1069,7 @@ describe('bindWorkflowExecutionEvents', () => {
       instruction: '',
     } as WorkflowStep;
 
-    engine.emitScoped(engine.getExecutionScope(), 'step:start', step, 1, 'instruction', {
+    engine.emit('step:start', step, 1, 'instruction', {
       provider: 'codex',
       model: 'gpt-5.2',
       providerOptions: { codex: { baseUrl: 'http://127.0.0.1:8787/v1' } },
@@ -1250,7 +1092,7 @@ describe('bindWorkflowExecutionEvents', () => {
         instruction: '',
       } as WorkflowStep;
 
-      engine.emitScoped(engine.getExecutionScope(), 'step:start', step, 1, 'instruction', {
+      engine.emit('step:start', step, 1, 'instruction', {
         provider: 'claude-sdk',
         model: 'claude-sonnet-4-5',
         providerOptions: { claude: { baseUrl: 'http://127.0.0.1:8787' } },
@@ -1274,7 +1116,7 @@ describe('bindWorkflowExecutionEvents', () => {
       instruction: '',
     } as WorkflowStep;
 
-    engine.emitScoped(engine.getExecutionScope(), 'step:start', step, 1, 'instruction', {
+    engine.emit('step:start', step, 1, 'instruction', {
       provider: 'kiro',
       model: 'kiro-default',
       providerOptions: { kiro: { agent: 'reviewer-agent' } },
@@ -1294,7 +1136,7 @@ describe('bindWorkflowExecutionEvents', () => {
       instruction: '',
     } as WorkflowStep;
 
-    engine.emitScoped(engine.getExecutionScope(), 'step:start', step, 1, 'instruction', {
+    engine.emit('step:start', step, 1, 'instruction', {
       provider: 'kiro',
       model: 'kiro-default',
       providerOptions: { opencode: { variant: 'high' } },
@@ -1320,7 +1162,7 @@ describe('bindWorkflowExecutionEvents', () => {
         instruction: '',
       } as WorkflowStep;
 
-      engine.emitScoped(engine.getExecutionScope(), 'step:start', step, 1, 'instruction', {
+      engine.emit('step:start', step, 1, 'instruction', {
         provider: 'kiro',
         model: 'kiro-default',
         providerOptions: { kiro: { agent: 'reviewer-agent' } },
@@ -1347,7 +1189,7 @@ describe('bindWorkflowExecutionEvents', () => {
         instruction: '',
       } as WorkflowStep;
 
-      engine.emitScoped(engine.getExecutionScope(), 'step:start', step, 1, 'instruction', {
+      engine.emit('step:start', step, 1, 'instruction', {
         provider: 'opencode',
         model: 'gpt-5',
         providerOptions: { opencode: { variant: 'high' } },
@@ -1369,9 +1211,9 @@ describe('bindWorkflowExecutionEvents', () => {
       instruction: '',
     } as WorkflowStep;
 
-    engine.emitScoped(engine.getExecutionScope(), 'step:start', step, 1, 'instruction', { provider: 'mock', model: 'gpt-test' }, 'parent', step.name);
+    engine.emit('step:start', step, 1, 'instruction', { provider: 'mock', model: 'gpt-test' }, 'parent', step.name);
     bridge.emitProviderOutput({ type: 'text', data: { text: 'streamed answer' } });
-    engine.emitScoped(engine.getExecutionScope(), 'step:blocked', step, {
+    engine.emit('step:blocked', step, {
       content: '質問: Which file should be updated?',
       status: 'blocked',
     });
@@ -1408,42 +1250,6 @@ describe('bindWorkflowExecutionEvents', () => {
     });
   });
 
-  it('step_started と表示へ step 開始時の有効上限 snapshot を渡す', async () => {
-    const eventSink = vi.fn().mockResolvedValue(undefined);
-    const { bridge, engine, out } = createBridgeHarness({ eventSink });
-    const step = {
-      name: 'review',
-      personaDisplayName: 'Reviewer',
-      instruction: '',
-    } as WorkflowStep;
-
-    engine.emitScoped(engine.getExecutionScope(),
-      'step:start',
-      step,
-      2,
-      'instruction',
-      { provider: 'mock', model: 'gpt-test' },
-      'parent',
-      step.name,
-      1,
-      3,
-    );
-    await bridge.flushEventSink();
-
-    expect(eventSink).toHaveBeenCalledWith({
-      type: 'step_started',
-      step: 'review',
-      iteration: 2,
-      maxSteps: 3,
-    });
-    expect(eventSink).toHaveBeenCalledWith({
-      type: 'progress',
-      message: 'Starting step "review" (2/3)',
-      step: 'review',
-    });
-    expect(out.info).toHaveBeenCalledWith('[2/3] review (Reviewer)');
-  });
-
   it('event sink へ step completed の専用イベントを渡す', async () => {
     const eventSink = vi.fn().mockResolvedValue(undefined);
     const { bridge, engine } = createBridgeHarness({ eventSink });
@@ -1453,8 +1259,8 @@ describe('bindWorkflowExecutionEvents', () => {
       instruction: '',
     } as WorkflowStep;
 
-    engine.emitScoped(engine.getExecutionScope(), 'step:start', step, 1, 'instruction', { provider: 'mock', model: 'gpt-test' }, 'parent', step.name);
-    engine.emitScoped(engine.getExecutionScope(), 'step:complete', step, {
+    engine.emit('step:start', step, 1, 'instruction', { provider: 'mock', model: 'gpt-test' }, 'parent', step.name);
+    engine.emit('step:complete', step, {
       persona: 'reviewer',
       status: 'done',
       content: 'approved',
@@ -1478,7 +1284,7 @@ describe('bindWorkflowExecutionEvents', () => {
       instruction: '',
     } as WorkflowStep;
 
-    engine.emitScoped(engine.getExecutionScope(), 'step:rate_limited', step, {
+    engine.emit('step:rate_limited', step, {
       status: 'rate_limited',
       content: '',
       error: 'retry later',
@@ -1501,7 +1307,7 @@ describe('bindWorkflowExecutionEvents', () => {
       instruction: '',
     } as WorkflowStep;
 
-    engine.emitScoped(engine.getExecutionScope(), 'step:blocked', step, {
+    engine.emit('step:blocked', step, {
       content: '質問: Proceed?',
       status: 'blocked',
     });
@@ -1544,7 +1350,7 @@ describe('bindWorkflowExecutionEvents', () => {
       instruction: '',
     } as WorkflowStep;
 
-    engine.emitScoped(engine.getExecutionScope(), 'step:start', step, 1, 'instruction', { provider: 'mock', model: 'gpt-test' }, 'parent', step.name);
+    engine.emit('step:start', step, 1, 'instruction', { provider: 'mock', model: 'gpt-test' }, 'parent', step.name);
     bridge.emitProviderOutput({
       type: 'tool_result',
       data: { content: 'tool failed', isError: true },
@@ -1631,12 +1437,12 @@ describe('bindWorkflowExecutionEvents', () => {
       instruction: '',
     } as WorkflowStep;
 
-    engine.emitScoped(engine.getExecutionScope(), 'step:start', step, 1, 'instruction', { provider: 'mock', model: 'gpt-test' }, 'parent', step.name);
-    engine.emitScoped(engine.getExecutionScope(), 'step:blocked', step, {
+    engine.emit('step:start', step, 1, 'instruction', { provider: 'mock', model: 'gpt-test' }, 'parent', step.name);
+    engine.emit('step:blocked', step, {
       content: '質問: First question?',
       status: 'blocked',
     });
-    engine.emitScoped(engine.getExecutionScope(), 'step:blocked', step, {
+    engine.emit('step:blocked', step, {
       content: '質問: Second question?',
       status: 'blocked',
     });
@@ -1660,7 +1466,7 @@ describe('bindWorkflowExecutionEvents', () => {
       instruction: '',
     } as WorkflowStep;
 
-    engine.emitScoped(engine.getExecutionScope(), 'step:start', step, 1, 'instruction', { provider: 'mock', model: 'gpt-test' }, 'parent', step.name);
+    engine.emit('step:start', step, 1, 'instruction', { provider: 'mock', model: 'gpt-test' }, 'parent', step.name);
     bridge.emitProviderOutput({
       type: 'tool_use',
       data: { id: 'tool-1', tool: 'Read', input: { file_path: 'src/index.ts' } },
@@ -1696,7 +1502,7 @@ describe('bindWorkflowExecutionEvents', () => {
       instruction: '',
     } as WorkflowStep;
 
-    engine.emitScoped(engine.getExecutionScope(), 'step:start', step, 1, 'instruction', { provider: 'mock', model: 'gpt-test' }, 'parent', step.name);
+    engine.emit('step:start', step, 1, 'instruction', { provider: 'mock', model: 'gpt-test' }, 'parent', step.name);
     bridge.emitProviderOutput({
       type: 'tool_use',
       data: { id: 'tool-a', tool: 'Read', input: { file_path: 'src/a.ts' } },
@@ -1760,7 +1566,7 @@ describe('bindWorkflowExecutionEvents', () => {
       instruction: '',
     } as WorkflowStep;
 
-    engine.emitScoped(engine.getExecutionScope(), 'step:start', step, 1, 'instruction', { provider: 'mock', model: 'gpt-test' }, 'parent', step.name);
+    engine.emit('step:start', step, 1, 'instruction', { provider: 'mock', model: 'gpt-test' }, 'parent', step.name);
     bridge.emitProviderOutput({
       type: 'tool_use',
       data: { id: 'tool-a', tool: 'Read', input: { file_path: 'src/a.ts' } },
@@ -1810,7 +1616,7 @@ describe('bindWorkflowExecutionEvents', () => {
       instruction: '',
     } as WorkflowStep;
 
-    engine.emitScoped(engine.getExecutionScope(), 'step:start', step, 1, 'instruction', { provider: 'opencode', model: 'gpt-test' }, 'parent', step.name);
+    engine.emit('step:start', step, 1, 'instruction', { provider: 'opencode', model: 'gpt-test' }, 'parent', step.name);
     bridge.emitProviderOutput({
       type: 'permission_asked',
       data: {
@@ -1864,51 +1670,83 @@ describe('bindWorkflowExecutionEvents', () => {
     });
   });
 
-  it('event sink へ workflow completed 成功/失敗を渡す', async () => {
+  it('workflow completed 成功/失敗をbackend-neutral payloadへstageする', () => {
     const eventSink = vi.fn().mockResolvedValue(undefined);
     const successHarness = createBridgeHarness({ eventSink });
 
-    successHarness.engine.emitScoped(successHarness.engine.getExecutionScope(), 'workflow:complete', { iteration: 2 });
-    await successHarness.bridge.flushEventSink();
+    successHarness.engine.emit('workflow:complete', { iteration: 2 });
+    const successPayload =
+      successHarness.bridge.prepareTerminalPublicationPayload();
 
-    expect(eventSink).toHaveBeenCalledWith({
-      type: 'completed',
-      success: true,
-      reportDirectory: '/tmp/project/run/reports',
+    expect(successPayload).toMatchObject({
+      status: 'completed',
+      iterations: 2,
     });
+    expect(eventSink).not.toHaveBeenCalled();
 
     eventSink.mockClear();
     const failureHarness = createBridgeHarness({ eventSink });
-    failureHarness.engine.emitScoped(failureHarness.engine.getExecutionScope(), 'workflow:abort', { iteration: 3 }, 'Step "review" failed');
-    await failureHarness.bridge.flushEventSink();
+    failureHarness.engine.emit(
+      'workflow:abort',
+      { iteration: 3 },
+      'Step "review" failed',
+      'step_error',
+      {
+        kind: 'step_error',
+        step: 'review',
+        reason: 'Step "review" failed',
+        error: 'review failed',
+      },
+    );
+    const failurePayload =
+      failureHarness.bridge.prepareTerminalPublicationPayload();
 
-    expect(eventSink).toHaveBeenCalledWith({
-      type: 'completed',
-      success: false,
-      reportDirectory: '/tmp/project/run/reports',
+    expect(failurePayload).toMatchObject({
+      status: 'failed',
+      iterations: 3,
       reason: 'Step "review" failed',
     });
-
+    expect(eventSink).not.toHaveBeenCalled();
   });
 
-  it('event sink 失敗時は workflow を abort し、flush で伝播する', async () => {
+  it('terminal payloadをimmutableな同一instanceとして一度だけ確定する', () => {
+    const { bridge, engine } = createBridgeHarness();
+    engine.emit('workflow:complete', { iteration: 2 });
+
+    const first = bridge.prepareTerminalPublicationPayload();
+    const second = bridge.prepareTerminalPublicationPayload();
+
+    expect(first).toBe(second);
+    expect(Object.isFrozen(first)).toBe(true);
+  });
+
+  it('event sink 失敗はworkflowをabortせずlive delivery issueにする', async () => {
     const eventSinkError = new Error('session/update failed');
     const { bridge, engine } = createBridgeHarness({
       eventSink: vi.fn().mockRejectedValue(eventSinkError),
     });
 
-    engine.emitScoped(engine.getExecutionScope(), 'step:start', {
+    engine.emit('step:start', {
       name: 'review',
       personaDisplayName: 'Reviewer',
       instruction: '',
     } as WorkflowStep, 1, 'instruction', { provider: 'mock', model: 'gpt-test' }, 'parent', 'review');
 
-    await expect(bridge.flushEventSink()).rejects.toThrow('session/update failed');
-    expect(engine.abort).toHaveBeenCalled();
-    expect(bridge.state.abortReason).toBe('Workflow event sink failed: session/update failed');
+    await expect(bridge.flushEventSink()).resolves.toBeUndefined();
+    expect(engine.abort).not.toHaveBeenCalled();
+    expect(bridge.state.abortReason).toBeUndefined();
+    expect(bridge.getFinalizationIssues()).toHaveLength(2);
+    expect(bridge.getFinalizationIssues()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: 'RunLiveDeliveryError',
+          cause: eventSinkError,
+        }),
+      ]),
+    );
   });
 
-  it('event sink の同期 throw も workflow を abort し、flush で伝播する', async () => {
+  it('event sink の同期throwもworkflow outcomeを変更しない', async () => {
     const eventSinkError = new Error('session/update threw');
     const { bridge, engine } = createBridgeHarness({
       eventSink: vi.fn(() => {
@@ -1923,8 +1761,14 @@ describe('bindWorkflowExecutionEvents', () => {
       ndjsonLogPath: '/tmp/project/run/logs/session.jsonl',
     });
 
-    await expect(bridge.flushEventSink()).rejects.toThrow('session/update threw');
-    expect(engine.abort).toHaveBeenCalled();
-    expect(bridge.state.abortReason).toBe('Workflow event sink failed: session/update threw');
+    await expect(bridge.flushEventSink()).resolves.toBeUndefined();
+    expect(engine.abort).not.toHaveBeenCalled();
+    expect(bridge.state.abortReason).toBeUndefined();
+    expect(bridge.getFinalizationIssues()).toEqual([
+      expect.objectContaining({
+        name: 'RunLiveDeliveryError',
+        cause: eventSinkError,
+      }),
+    ]);
   });
 });

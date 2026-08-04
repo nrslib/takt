@@ -68,7 +68,7 @@ export function stopBudgetRoundsCompleted(ledger: FindingLedger): number {
  * （このラウンド開始直前の最新永続化状態）を渡すこと。
  *
  * ラウンド計上は「このラウンドの一意マーカーを適用済み集合へ追記する」形にする
- * （interpretation-wal.ts の ledger_applied 集合と同じ冪等機構）— crash/replay で
+ * （永続した適用済み集合による冪等機構）— crash/replay で
  * 同一 invocation の更新が二度コミットされても Set の重複追加は no-op になり、
  * roundsCompleted（= 集合サイズ）は二重計上・巻き戻りしない。進捗（resolved の
  * 増加等）ではマーカーは変わらないため、予算は単調累積のみ。firstRoundAt は

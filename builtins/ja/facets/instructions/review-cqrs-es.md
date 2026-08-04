@@ -12,7 +12,7 @@
 8. Query / Read Model の結果で同一 Aggregate への command 種別を投げ分けていないか確認し、Aggregate に寄せられる判断は Aggregate に寄せる
 9. Application Service が同じ状態遷移のために複数 command を順番に送っていないか確認し、確定済みイベントの EventHandler に分離できる場合は指摘する
 10. Projection 待機は同期 API 契約がある場合だけか確認し、不要なら即時応答や画面側の保持・ポーリングへ寄せる
-11. migration が登場する場合、DB schema / data / event upcaster / Read Model rebuild / API互換のどれかを分解し、指示なしの migration 追加を指摘する
+11. migration が登場する場合、DB schema / data / event upcaster / Read Model rebuild / API互換のどれかを分解し、各対象を有効な契約置換ポリシーに照合する
 12. 既存 Aggregate の通常ライフサイクルで済む処理を、入力元別の専用 command / wrapper / service / deletion path にしていないか確認する
 
 **注意:** このプロジェクトが CQRS+ES パターンを使用していない場合は、一般的なドメイン設計の観点からレビューしてください。

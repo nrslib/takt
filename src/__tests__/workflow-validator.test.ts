@@ -17,7 +17,6 @@ function createFakeLedgerStore(): FindingLedgerStore {
       findings: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
     }),
     updateLedger: (mutator) => Promise.resolve(mutator({
       workflowName: 'fake',
@@ -26,7 +25,6 @@ function createFakeLedgerStore(): FindingLedgerStore {
       findings: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
     })),
     saveLedgerSnapshot: () => {},
     saveRawFindings: () => {},
@@ -95,8 +93,6 @@ function createFindingContractParallelWorkflow(
 ): WorkflowConfig {
   return createWorkflow({
     findingContract: {
-      ledgerPath: '.takt/findings/peer-review.json',
-      rawFindingsPath: '.takt/findings/raw',
       manager: {
         persona: 'findings-manager',
         instruction: 'findings-manager',
@@ -173,27 +169,8 @@ function createPoolScopedValidatorAutoRouting(): AutoRoutingConfig {
 }
 
 describe('validateWorkflowConfig', () => {
-  it('accepts canonical workflow transitions', () => {
+  it('accepts valid workflow transitions', () => {
     expect(() => validateWorkflowConfig(createWorkflow(), { projectCwd: process.cwd() })).not.toThrow();
-  });
-
-  it('accepts a callable workflow without maxSteps', () => {
-    const workflow = createWorkflow({
-      subworkflow: { callable: true },
-      maxSteps: undefined,
-    });
-
-    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).not.toThrow();
-  });
-
-  it.each([3, 'infinite'] as const)('rejects callable workflow maxSteps %s', (maxSteps) => {
-    const workflow = createWorkflow({
-      subworkflow: { callable: true },
-      maxSteps,
-    });
-
-    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() }))
-      .toThrow(/callable.*max_steps|max_steps.*callable/i);
   });
 
   it('requires finding_contract when a Team Leader uses finding_contract_fix mode', () => {
@@ -300,8 +277,6 @@ describe('validateWorkflowConfig', () => {
   it('fails fast for incompatible auto-routing on the finding manager', () => {
     const workflow = createWorkflow({
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -320,8 +295,6 @@ describe('validateWorkflowConfig', () => {
   it('retains a workflow_call model source when auto-routing rejects the finding manager', () => {
     const workflow = createWorkflow({
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -353,8 +326,6 @@ describe('validateWorkflowConfig', () => {
     // 初めて落ち、エラーは捕捉されてバッチ全体が provisional 化されてしまう。
     const workflow = createWorkflow({
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -373,8 +344,6 @@ describe('validateWorkflowConfig', () => {
   it('retains a workflow_call model source when auto-routing rejects the finding interpreter', () => {
     const workflow = createWorkflow({
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -405,8 +374,6 @@ describe('validateWorkflowConfig', () => {
     // codex + sonnet の組み合わせ）を検証すると、有効な構成を拒否する偽陽性になる。
     const workflow = createWorkflow({
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -456,34 +423,6 @@ describe('validateWorkflowConfig', () => {
     expect(() => validateWorkflowConfig(workflow, {
       projectCwd: process.cwd(),
       autoRouting: createPoolScopedValidatorAutoRouting(),
-    })).not.toThrow();
-  });
-
-  it('validates a workflow_call-triggered loop judge from judge context instead of wrapper provider fields', () => {
-    const workflow = createWorkflow({
-      initialStep: 'delegate',
-      steps: [{
-        name: 'delegate',
-        kind: 'workflow_call',
-        call: 'shared/review',
-        provider: 'opencode',
-        model: 'sonnet',
-        rules: [normalizeRule({ condition: 'COMPLETE', next: 'COMPLETE' })],
-      } as unknown as WorkflowConfig['steps'][number]],
-      loopMonitors: [{
-        cycle: ['delegate'],
-        threshold: 1,
-        judge: {
-          rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
-        },
-      }],
-    });
-
-    expect(() => validateWorkflowConfig(workflow, {
-      projectCwd: process.cwd(),
-      provider: 'mock',
-      model: 'judge-model',
-      workflowCallResolver: () => undefined,
     })).not.toThrow();
   });
 
@@ -562,8 +501,6 @@ describe('validateWorkflowConfig', () => {
   it('accepts findings rules when findingContract is configured', () => {
     const workflow = createWorkflow({
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -657,8 +594,6 @@ describe('validateWorkflowConfig', () => {
   it('accepts step, parallel sub-step, and loop monitor routes to finding-conflict-adjudication when findingContract is configured', () => {
     const workflow = createWorkflow({
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -671,6 +606,11 @@ describe('validateWorkflowConfig', () => {
           name: 'review',
           persona: 'reviewer',
           personaDisplayName: 'reviewer',
+          outputContracts: [{
+            name: 'review.md',
+            format: 'review',
+            formatRef: 'review-finding-contract',
+          }],
           rules: [normalizeRule({ condition: 'conflicts', next: 'finding-conflict-adjudication' })],
         })],
       })],
@@ -689,8 +629,6 @@ describe('validateWorkflowConfig', () => {
   it('fails fast when finding_contract.manager uses opencode without a model', () => {
     const workflow = createWorkflow({
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -716,8 +654,6 @@ describe('validateWorkflowConfig', () => {
     const workflow = createWorkflow({
       provider: 'opencode',
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -735,8 +671,6 @@ describe('validateWorkflowConfig', () => {
   it('validates finding_contract.manager through provider_routing.personas when manager provider is not direct', () => {
     const workflow = createWorkflow({
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           providerRoutingPersonaKey: 'findings-manager',
@@ -760,8 +694,6 @@ describe('validateWorkflowConfig', () => {
   it('prefers finding_contract.manager provider/model over provider_routing and persona_providers', () => {
     const workflow = createWorkflow({
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           providerRoutingPersonaKey: 'findings-manager',
@@ -799,8 +731,6 @@ describe('validateWorkflowConfig', () => {
     // 最終不変条件が fail-fast する）。
     const workflow = createWorkflow({
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -823,6 +753,11 @@ describe('validateWorkflowConfig', () => {
               edit: false,
               instruction: 'review',
               passPreviousResponse: true,
+              outputContracts: [{
+                name: 'review.md',
+                format: 'review',
+                formatRef: 'review-finding-contract',
+              }],
               rules: [normalizeRule({ condition: 'approved' })],
             },
           ],
@@ -837,8 +772,6 @@ describe('validateWorkflowConfig', () => {
   it('accepts loop monitor judge findings rules when findingContract is configured', () => {
     const workflow = createWorkflow({
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -893,8 +826,6 @@ describe('validateWorkflowConfig', () => {
   it('accepts parallel sub-step findings rules when findingContract is configured', () => {
     const workflow = createWorkflow({
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -917,6 +848,11 @@ describe('validateWorkflowConfig', () => {
               edit: false,
               instruction: 'review',
               passPreviousResponse: true,
+              outputContracts: [{
+                name: 'review.md',
+                format: 'review',
+                formatRef: 'review-finding-contract',
+              }],
               rules: [normalizeRule({ condition: 'when(findings.open.count == 0)' })],
             },
           ],
@@ -949,11 +885,95 @@ describe('validateWorkflowConfig', () => {
     );
   });
 
+  it('rejects a parallel Finding Contract reviewer without a report', () => {
+    const workflow = createWorkflow({
+      findingContract: {
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
+      steps: [createPlanAgent({
+        parallel: [createPlanAgent({
+          name: 'review',
+          persona: 'reviewer',
+          personaDisplayName: 'reviewer',
+        })],
+      })],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() }))
+      .toThrow('Finding Contract reviewer "review" requires exactly one Finding Contract report');
+  });
+
+  it('rejects a Finding Contract reviewer with multiple reports', () => {
+    const workflow = createWorkflow({
+      findingContract: {
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
+      steps: [createPlanAgent({
+        outputContracts: [
+          {
+            name: 'review.md',
+            format: 'review',
+            formatRef: 'review-finding-contract',
+          },
+          {
+            name: 'summary.md',
+            format: 'summary',
+            formatRef: 'summary-finding-contract',
+          },
+        ],
+      })],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() }))
+      .toThrow('Finding Contract reviewer "plan" requires exactly one Finding Contract report');
+  });
+
+  it('rejects duplicate Finding Contract report names under the same parallel parent', () => {
+    const reviewer = (name: string) => createPlanAgent({
+      name,
+      persona: name,
+      personaDisplayName: name,
+      outputContracts: [{
+        name: 'review.md',
+        format: 'review',
+        formatRef: 'review-finding-contract',
+      }],
+    });
+    const workflow = createWorkflow({
+      initialStep: 'reviewers',
+      findingContract: {
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
+      steps: [createPlanAgent({
+        name: 'reviewers',
+        parallel: [
+          reviewer('architecture-review'),
+          reviewer('security-review'),
+        ],
+      })],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() }))
+      .toThrow(
+        'Finding Contract reviewers "architecture-review" and "security-review" under parallel step "reviewers" use duplicate report name "review.md"',
+      );
+  });
+
   it('fails fast when findingContract parallel sub-steps already declare structuredOutput', () => {
     const workflow = createWorkflow({
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -996,7 +1016,6 @@ describe('validateWorkflowConfig', () => {
   it('fails fast when a normal finding-contract producer also declares structuredOutput', () => {
     const workflow = createWorkflow({
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json', rawFindingsPath: '.takt/findings/raw',
         manager: { persona: 'findings-manager', instruction: 'findings-manager', outputContract: 'findings-manager' },
       },
       steps: [createPlanAgent({
@@ -1286,6 +1305,31 @@ describe('validateWorkflowConfig', () => {
     expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).toThrow(
       'Configuration error: parallel step "reviewers" contains duplicate sub-step name "delegate"',
     );
+  });
+
+  it('accepts a parallel sub-step name that is also used at top level', () => {
+    const workflow = createWorkflow({
+      initialStep: 'delegate',
+      steps: [
+        createPlanAgent({ name: 'delegate' }),
+        {
+          name: 'reviewers',
+          personaDisplayName: 'reviewers',
+          instruction: 'review',
+          parallel: [{
+            name: 'delegate',
+            persona: 'reviewer',
+            personaDisplayName: 'reviewer',
+            instruction: 'review delegated work',
+            rules: [normalizeRule({ condition: 'approved', next: 'COMPLETE' })],
+          }],
+          rules: [normalizeRule({ condition: 'all("approved")', next: 'COMPLETE' })],
+        },
+      ],
+    });
+
+    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() }))
+      .not.toThrow();
   });
 
   it('rejects conflicting appendices in normalized normal-step rules', () => {
@@ -1606,8 +1650,6 @@ describe('validateWorkflowConfig', () => {
   it('accepts a *-finding-contract report format when the workflow declares its own finding_contract', () => {
       const workflow = createWorkflow({
         findingContract: {
-          ledgerPath: '.takt/findings/peer-review.json',
-          rawFindingsPath: '.takt/findings/raw',
           manager: {
             persona: 'findings-manager',
             instruction: 'findings-manager',
@@ -1655,8 +1697,6 @@ describe('validateWorkflowConfig', () => {
         projectCwd: process.cwd(),
         inheritedFindingContract: {
           contract: {
-            ledgerPath: '.takt/findings/peer-review.json',
-            rawFindingsPath: '.takt/findings/raw',
             manager: {
               persona: 'findings-manager',
               instruction: 'findings-manager',
@@ -1664,6 +1704,7 @@ describe('validateWorkflowConfig', () => {
             },
           },
           ledgerStore: createFakeLedgerStore(),
+          managerAuthority: 'standard',
         },
       })).not.toThrow();
     });
@@ -1687,8 +1728,6 @@ describe('validateWorkflowConfig', () => {
         projectCwd: process.cwd(),
         inheritedFindingContract: {
           contract: {
-            ledgerPath: '.takt/findings/peer-review.json',
-            rawFindingsPath: '.takt/findings/raw',
             manager: {
               persona: 'findings-manager',
               instruction: 'findings-manager',
@@ -1696,6 +1735,7 @@ describe('validateWorkflowConfig', () => {
             },
           },
           ledgerStore: createFakeLedgerStore(),
+          managerAuthority: 'standard',
         },
       })).not.toThrow();
     });
@@ -1704,7 +1744,6 @@ describe('validateWorkflowConfig', () => {
       const workflow = createWorkflow({
         name: 'finding-contract-child',
         subworkflow: { callable: true, requiresFindingContract: true },
-        maxSteps: undefined,
       });
 
       expect(() => validateWorkflowConfig(workflow, {
@@ -1718,15 +1757,12 @@ describe('validateWorkflowConfig', () => {
       const workflow = createWorkflow({
         name: 'finding-contract-child',
         subworkflow: { callable: true, requiresFindingContract: true },
-        maxSteps: undefined,
       });
 
       expect(() => validateWorkflowConfig(workflow, {
         projectCwd: process.cwd(),
         inheritedFindingContract: {
           contract: {
-            ledgerPath: '.takt/findings/peer-review.json',
-            rawFindingsPath: '.takt/findings/raw',
             manager: {
               persona: 'findings-manager',
               instruction: 'findings-manager',
@@ -1734,15 +1770,14 @@ describe('validateWorkflowConfig', () => {
             },
           },
           ledgerStore: createFakeLedgerStore(),
+          managerAuthority: 'standard',
         },
       })).not.toThrow();
     });
 
-    it('fails fast when a workflow declares its own finding_contract while also inheriting one from a workflow_call parent', () => {
+    it('accepts a local finding_contract while inheriting the parent authority', () => {
       const workflow = createWorkflow({
         findingContract: {
-          ledgerPath: '.takt/findings/own.json',
-          rawFindingsPath: '.takt/findings/own/raw',
           manager: {
             persona: 'findings-manager',
             instruction: 'findings-manager',
@@ -1755,8 +1790,6 @@ describe('validateWorkflowConfig', () => {
         projectCwd: process.cwd(),
         inheritedFindingContract: {
           contract: {
-            ledgerPath: '.takt/findings/parent.json',
-            rawFindingsPath: '.takt/findings/parent/raw',
             manager: {
               persona: 'findings-manager',
               instruction: 'findings-manager',
@@ -1764,10 +1797,9 @@ describe('validateWorkflowConfig', () => {
             },
           },
           ledgerStore: createFakeLedgerStore(),
+          managerAuthority: 'standard',
         },
-      })).toThrow(
-        /declares its own finding_contract while also being called as a workflow_call subworkflow that inherits/,
-      );
+      })).not.toThrow();
     });
 
     it('fails fast when finding_contract.manager uses opencode without a model and the contract is inherited from a workflow_call parent', () => {
@@ -1778,8 +1810,6 @@ describe('validateWorkflowConfig', () => {
         provider: 'claude',
         inheritedFindingContract: {
           contract: {
-            ledgerPath: '.takt/findings/peer-review.json',
-            rawFindingsPath: '.takt/findings/raw',
             manager: {
               persona: 'findings-manager',
               instruction: 'findings-manager',
@@ -1788,6 +1818,7 @@ describe('validateWorkflowConfig', () => {
             },
           },
           ledgerStore: createFakeLedgerStore(),
+          managerAuthority: 'standard',
         },
       })).toThrow(/provider 'opencode' requires model/);
     });
@@ -1800,8 +1831,6 @@ describe('validateWorkflowConfig', () => {
         provider: 'claude',
         inheritedFindingContract: {
           contract: {
-            ledgerPath: '.takt/findings/peer-review.json',
-            rawFindingsPath: '.takt/findings/raw',
             manager: {
               persona: 'findings-manager',
               instruction: 'findings-manager',
@@ -1811,6 +1840,7 @@ describe('validateWorkflowConfig', () => {
             },
           },
           ledgerStore: createFakeLedgerStore(),
+          managerAuthority: 'standard',
         },
       })).not.toThrow();
     });

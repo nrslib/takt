@@ -9,6 +9,7 @@
 import type { FindingLedger, FindingLedgerEntry } from '../../core/models/finding-types.js';
 import type { FindingStatus, FindingSeverity, FindingDecision, FixActionEvent, FixActionType, ReviewFindingEvent } from './events.js';
 import { writeAnalyticsEvent } from './writer.js';
+import { findingAnalyticsDisplayLocation } from '../../core/workflow/findings/evidence-location.js';
 
 export interface ParsedFinding {
   findingId: string;
@@ -160,6 +161,8 @@ const FINDING_CONTRACT_RULE_ID = 'finding-contract';
 export function buildReviewFindingEventsFromLedger(
   ledger: FindingLedger,
   iteration: number,
+  workflowName: string,
+  scopeIdentity: string,
   runId: string,
   timestamp: Date,
 ): ReviewFindingEvent[] {
@@ -169,7 +172,7 @@ export function buildReviewFindingEventsFromLedger(
     : 'approve';
 
   return ledger.findings.map((finding) => {
-    const { file, line } = parseLocation(finding.location ?? '');
+    const { file, line } = parseLocation(findingAnalyticsDisplayLocation(ledger, finding) ?? '');
     return {
       type: 'review_finding',
       findingId: finding.id,
@@ -180,6 +183,8 @@ export function buildReviewFindingEventsFromLedger(
       file,
       line,
       iteration,
+      workflowName,
+      scopeIdentity,
       runId,
       timestamp: timestamp.toISOString(),
     };
@@ -194,9 +199,20 @@ export function emitFixActionEvents(
   iteration: number,
   runId: string,
   timestamp: Date,
+  workflowName: string,
+  scopeIdentity: string,
   findingContractFindingIds?: ReadonlySet<string>,
 ): void {
-  emitActionEvents(responseContent, 'fixed', iteration, runId, timestamp, findingContractFindingIds);
+  emitActionEvents(
+    responseContent,
+    'fixed',
+    iteration,
+    runId,
+    timestamp,
+    workflowName,
+    scopeIdentity,
+    findingContractFindingIds,
+  );
 }
 
 export function emitRebuttalEvents(
@@ -204,9 +220,20 @@ export function emitRebuttalEvents(
   iteration: number,
   runId: string,
   timestamp: Date,
+  workflowName: string,
+  scopeIdentity: string,
   findingContractFindingIds?: ReadonlySet<string>,
 ): void {
-  emitActionEvents(responseContent, 'rebutted', iteration, runId, timestamp, findingContractFindingIds);
+  emitActionEvents(
+    responseContent,
+    'rebutted',
+    iteration,
+    runId,
+    timestamp,
+    workflowName,
+    scopeIdentity,
+    findingContractFindingIds,
+  );
 }
 
 function emitActionEvents(
@@ -215,6 +242,8 @@ function emitActionEvents(
   iteration: number,
   runId: string,
   timestamp: Date,
+  workflowName: string,
+  scopeIdentity: string,
   findingContractFindingIds?: ReadonlySet<string>,
 ): void {
   const matches = responseContent.match(FINDING_ID_PATTERN);
@@ -232,6 +261,8 @@ function emitActionEvents(
       findingId,
       action,
       iteration,
+      workflowName,
+      scopeIdentity,
       runId,
       timestamp: timestamp.toISOString(),
     };

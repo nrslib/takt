@@ -194,7 +194,7 @@ export class TaskRetryRestartBrowser {
 
 function resolveTaskRetryStackPathWithOptions(
   rootWorkflow: WorkflowConfig,
-  stack: readonly WorkflowResumePointEntry[],
+  stack: readonly (WorkflowResumePointEntry | WorkflowRestartPointEntry)[],
   context: TaskRetryStartPathContext,
   options: ResolveTaskRetryStackOptions,
 ): ResolvedTaskRetryPath | undefined {
@@ -206,7 +206,7 @@ function resolveTaskRetryStackPathWithOptions(
     const entry = stack[index]!;
     const entryMatchesWorkflow = options.requireRestartIdentity
       ? workflowRestartEntryMatchesWorkflow(entry as WorkflowRestartPointEntry, workflow)
-      : workflowEntryMatchesWorkflow(entry, workflow);
+      : workflowEntryMatchesWorkflow(entry as WorkflowResumePointEntry, workflow);
     if (!entryMatchesWorkflow) {
       return undefined;
     }

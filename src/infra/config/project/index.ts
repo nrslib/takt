@@ -37,7 +37,6 @@ export {
 export {
   type SessionState,
   getSessionStatePath,
-  loadSessionState,
   saveSessionState,
-  clearSessionState,
+  takeSessionState,
 } from './sessionState.js';

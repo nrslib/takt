@@ -1,22 +1,35 @@
 import { describe, expect, it } from 'vitest';
 import { assembleManagerOutput } from '../core/workflow/findings/decision-assembly.js';
 import {
+  normalizeEngineDerivedWaiverConflicts,
   normalizeMergedManagerPlan,
   rejectConflictTouchedDuplicates,
   transferSupersededMatches,
 } from '../core/workflow/findings/manager-plan-normalization.js';
+import { canonicalizeFindingManagerOutput } from '../core/workflow/findings/canonicalize.js';
+import {
+  createEngineDerivedWaiverConflict,
+  createEngineDerivedWaiverDisputeNote,
+  isEngineDerivedWaiverConflict,
+} from '../core/workflow/findings/waiver-conflict.js';
 import { validateFindingManagerOutput } from '../core/workflow/findings/manager-output-validation.js';
 import { reconcileCommitPlan } from '../core/workflow/findings/manager-commit-finalization.js';
-import { reconcileFindingLedger } from '../core/workflow/findings/reconciler.js';
+import {
+  applyProvisionalFindingSpecsToLedger,
+  reconcileFindingLedger,
+} from '../core/workflow/findings/reconciler.js';
 import { createEmptyManagerOutput } from '../core/workflow/findings/manager-output.js';
 import {
   canonicalizeReviewerRawFinding,
   computeLineageKey,
   computeReviewerStableKey,
   createReviewerRawFindingCandidates,
+  projectReviewerRawStructuredOutputWithEnvelope,
   toLedgerRawFinding,
 } from '../core/workflow/findings/raw-canonicalization.js';
 import { foldRawFindingEvidence } from '../core/workflow/findings/finding-evidence-fold.js';
+import { computeClaimIdentityHash } from '../core/workflow/findings/evidence-domain.js';
+import { captureFindingPreconditions } from '../core/workflow/findings/finding-preconditions.js';
 import { detectClarifiableRawMismatches } from '../core/workflow/findings/relation-coherence.js';
 import type {
   FindingLedger,
@@ -28,43 +41,60 @@ import type {
 } from '../core/workflow/findings/types.js';
 import { formatConflictId } from '../core/models/finding-conflict-identity.js';
 import { storedRawReconcileProvenance } from './helpers/finding-integrity.js';
+import {
+  applyFindingLedgerFixtureRevision,
+  authorizeFindingLedgerFixture,
+  canonicalRawFindingFixture,
+  reviewerRawExtractionFixture,
+} from './helpers/finding-lifecycle-fixture.js';
 import { intakeReviewerOutputs } from '../core/workflow/findings/manager-intake.js';
+import { createAnchorAdjudication } from '../core/models/finding-anchor-relevance.js';
+import { evaluateRawAdmission } from '../core/workflow/findings/manager-admission.js';
+import { applyCommitLedgerStates } from '../core/workflow/findings/manager-commit-finalization.js';
+import { applyRejectedObservationAttachments } from '../core/workflow/findings/manager-provisional-settlement.js';
+import { resolveStopBudgetLimits } from '../core/workflow/findings/stop-budget.js';
+import { findingReviewPublicationFixture } from './helpers/finding-review-publication.js';
+import { provisionalSpecForRawKind } from '../core/workflow/findings/manager-provisional.js';
 
 function makeFinding(
   overrides: Pick<FindingLedgerEntry, 'revision'> & Partial<Omit<FindingLedgerEntry, 'revision'>>,
 ): FindingLedgerEntry {
+  const { location: _location, ...currentOverrides } = overrides as typeof overrides & {
+    location?: string;
+  };
   return {
     id: 'F-0001',
     status: 'open',
     lifecycle: 'new',
     severity: 'medium',
     title: '候補にない初期値が確定結果へ混入する',
-    location: 'src/multi-select.ts:34',
+    evidenceIds: [],
     reviewers: ['arch-review'],
     rawFindingIds: ['raw-old-1'],
     firstSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
     lastSeen: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
-    ...overrides,
+    ...currentOverrides,
   };
 }
 
 function makeLedger(findings: FindingLedgerEntry[], overrides: Partial<FindingLedger> = {}): FindingLedger {
-  return {
+  return authorizeFindingLedgerFixture({
     workflowName: 'peer-review',
     nextId: 100,
     updatedAt: '2026-07-01T00:00:00.000Z',
+    evidenceRecords: [],
     rawFindings: [],
     conflicts: [],
-    interpretations: [],
     findings,
     ...overrides,
-  };
+  });
 }
 
 function makeConflict(overrides: Partial<FindingLedgerConflict> = {}): FindingLedgerConflict {
   return {
     id: 'C-FA2947446963',
     status: 'active',
+    revision: 1,
     findingIds: ['F-0001'],
     rawFindingIds: [],
     description: 'Reviewers disagree.',
@@ -75,17 +105,83 @@ function makeConflict(overrides: Partial<FindingLedgerConflict> = {}): FindingLe
 }
 
 function makeRaw(overrides: Partial<RawFinding> = {}): RawFinding {
-  return {
+  const { location = 'src/multi-select.ts:34', ...currentOverrides } = overrides as Partial<RawFinding> & {
+    location?: string;
+  };
+  const match = /^(.*):(\d+)$/u.exec(location);
+  const path = match?.[1] ?? location;
+  const line = Number(match?.[2] ?? 1);
+  return canonicalRawFindingFixture({
     rawFindingId: 'raw-1',
     stepName: 'arch-review',
     reviewer: 'arch-review',
     familyTag: 'bug',
     severity: 'medium',
     title: '候補にない初期値が確定結果へ混入する',
-    location: 'src/multi-select.ts:34',
     description: '初期値が候補と照合されないまま確定される。',
-    ...overrides,
-  };
+    suggestion: null,
+    relation: 'new',
+    targetFindingId: null,
+    target: { kind: 'code', paths: [path] },
+    evidence: [{
+      kind: 'file_quote',
+      path,
+      startLine: line,
+      endLine: line,
+      verbatimExcerpt: `evidence at ${location}`,
+      snapshotId: '1'.repeat(64),
+    }],
+    ...currentOverrides,
+  });
+}
+
+function reviewerExtraction(
+  raw: Record<string, unknown>,
+  index: number,
+): ReturnType<typeof reviewerRawExtractionFixture> {
+  const finding = raw as Partial<RawFinding>;
+  return reviewerRawExtractionFixture({
+    rawFindingId: typeof finding.rawFindingId === 'string' ? finding.rawFindingId : null,
+    familyTag: typeof finding.familyTag === 'string' ? finding.familyTag : null,
+    severity: finding.severity ?? null,
+    title: typeof finding.title === 'string' ? finding.title : null,
+    description: typeof finding.description === 'string' ? finding.description : null,
+    suggestion: typeof finding.suggestion === 'string' ? finding.suggestion : null,
+    relation: finding.relation ?? 'new',
+    targetFindingId: typeof finding.targetFindingId === 'string'
+      ? finding.targetFindingId
+      : null,
+    target: finding.target,
+    evidence: finding.evidence,
+    rawExcerpt: `[item ${index}] ${finding.description ?? finding.title ?? 'observation'}`,
+  });
+}
+
+function reviewerCandidates(
+  items: readonly unknown[],
+  context: Record<string, unknown>,
+) {
+  const extractions = items.map((item, index) => (
+    reviewerExtraction(item as Record<string, unknown>, index)
+  ));
+  return createReviewerRawFindingCandidates(extractions, {
+    ...context,
+    ledger: makeLedger([]),
+    reviewReport: extractions.map((item) => item.rawExcerpt).join('\n'),
+    issueEvidenceRequests: ({ requests }: {
+      requests: Array<Record<string, unknown>>;
+    }) => ({
+      evidence: requests.flatMap((request) => (
+        request.kind === 'file_quote'
+          ? [{ ...request, snapshotId: '1'.repeat(64) }]
+          : []
+      )),
+      engineProofRecords: [],
+      coverageGaps: [],
+      materializedQuoteBytes: 0,
+    }),
+    commitEvidenceIssuance: () => {},
+  } as never).candidates;
 }
 
 function makeDecisions(overrides: Partial<FindingManagerDecisions> = {}): FindingManagerDecisions {
@@ -103,6 +199,73 @@ function makeDecisions(overrides: Partial<FindingManagerDecisions> = {}): Findin
 function outputWith(overrides: Partial<FindingManagerOutput>): FindingManagerOutput {
   return { ...createEmptyManagerOutput(), ...overrides };
 }
+
+describe('normalizer source binding review integrity', () => {
+  function intakeWithReport(
+    report: string,
+    stepIteration: number,
+    previousLedger = makeLedger([]),
+  ) {
+    const extraction = reviewerRawExtractionFixture({
+      rawFindingId: 'F-0016',
+      familyTag: 'correctness',
+      severity: 'high',
+      title: 'F-0016 remains unresolved',
+      description: 'The same target still has the F-0016 defect.',
+      suggestion: 'Repair the target.',
+      relation: 'new',
+      targetFindingId: null,
+      target: { kind: 'code', paths: ['src/f-0016.ts'] },
+      rawExcerpt: 'F-0016 remains unresolved.',
+    });
+    return intakeReviewerOutputs({
+      subResults: [{
+        subStep: {
+          kind: 'agent',
+          name: 'arch-review',
+          persona: 'arch-review',
+          edit: false,
+        },
+        publication: findingReviewPublicationFixture({
+          scopeIdentity: '/test/normalizer-source-binding/ledger.json',
+          parentStepName: 'reviewers',
+          stepIteration,
+          reviewerStepName: 'arch-review',
+          reportContent: report,
+          rawFindings: [extraction],
+        }),
+      }],
+      previousLedger,
+      workflowName: 'peer-review',
+      callNamespace: '',
+      parentStepName: 'reviewers',
+      stepIteration,
+      runId: 'run-normalizer',
+      workflowTask: 'Review.',
+      cwd: process.cwd(),
+      scopeIdentity: '/test/normalizer-source-binding/ledger.json',
+      issuedAt: '2026-07-30T00:00:00.000Z',
+      reviewScopeSnapshot: {
+        reviewScopeSnapshotId: 'a'.repeat(64),
+        trackedDiff: undefined,
+        untrackedEvidence: [],
+        queryInventory: [],
+      },
+    });
+  }
+
+  it.each([
+    ['zero', 'No matching excerpt is present.'],
+    ['multiple', 'F-0016 remains unresolved.\nF-0016 remains unresolved.'],
+  ])(
+    'rejects a %s-match rawExcerpt before canonical publication',
+    (_caseName, report) => {
+      expect(() => intakeWithReport(report, 1))
+        .toThrow(/rawExcerpt must occur exactly once/);
+    },
+  );
+
+});
 
 describe('transferSupersededMatches', () => {
   it('superseded 対象への match を canonical へ付け替え、既存の canonical match と統合する', () => {
@@ -234,7 +397,13 @@ describe('normalizeMergedManagerPlan（保存直前のフル正規化）', () =>
           { findingId: 'F-0002', rawFindingIds: ['raw-ladder-2'] },
         ],
         invalidatedFindings: [{ findingId: 'F-0001', evidence: 'location unresolvable' }],
-        dismissedFindings: [{ findingId: 'F-0002', basis: 'out_of_scope', reason: '管轄外' }],
+        dismissedFindings: [{
+          findingId: 'F-0002',
+          basis: 'outside_contract_jurisdiction',
+          reason: '管轄外',
+          evidence: '品質ゲートの実行記録だけを対象にしている',
+          authority: 'standard',
+        }],
       }),
       activeConflictFindingIds: new Set(),
     });
@@ -242,6 +411,58 @@ describe('normalizeMergedManagerPlan（保存直前のフル正規化）', () =>
     expect(result.output.invalidatedFindings).toEqual([]);
     expect(result.output.dismissedFindings).toEqual([]);
     expect(result.rejections).toHaveLength(2);
+  });
+
+  it('terminal 形式を装った manager outside_task_scope dismissal も不採用にする', () => {
+    const result = normalizeMergedManagerPlan({
+      output: outputWith({
+        matches: [{ findingId: 'F-0001', rawFindingIds: ['raw-persist'] }],
+        resolvedFindings: [{
+          findingId: 'F-0001',
+          rawFindingIds: ['raw-confirm'],
+          evidence: 'clean confirmation',
+        }],
+        dismissedFindings: [{
+          findingId: 'F-0001',
+          basis: 'outside_task_scope',
+          reason: 'GitLab は GitHub 限定 task の範囲外',
+          taskQuote: 'GitHub issue attachments',
+          workflowTaskDigest: '1'.repeat(64),
+          adjudicationTaskId: '2'.repeat(64),
+          authority: 'terminal_adjudication',
+        }],
+      }),
+      activeConflictFindingIds: new Set(),
+    });
+
+    expect(result.output.matches).toEqual([
+      { findingId: 'F-0001', rawFindingIds: ['raw-persist'] },
+    ]);
+    expect(result.output.resolvedFindings).toEqual([]);
+    expect(result.output.dismissedFindings).toEqual([]);
+    expect(result.rejections).toEqual([
+      expect.stringContaining('manager dismissal requires verified terminal adjudication'),
+    ]);
+  });
+
+  it('active conflict の有無にかかわらず manager outside_task_scope dismissal を拒否する', () => {
+    const result = normalizeMergedManagerPlan({
+      output: outputWith({
+        dismissedFindings: [{
+          findingId: 'F-0001',
+          basis: 'outside_task_scope',
+          reason: 'task 範囲外',
+          taskQuote: 'GitHub issue attachments',
+          workflowTaskDigest: '1'.repeat(64),
+          adjudicationTaskId: '2'.repeat(64),
+          authority: 'terminal_adjudication',
+        }],
+      }),
+      activeConflictFindingIds: new Set(['F-0001']),
+    });
+
+    expect(result.output.dismissedFindings).toEqual([]);
+    expect(result.rejections[0]).toContain('manager dismissal requires verified terminal adjudication');
   });
 
   it('後着証拠が触れた waive は disputeNote へ降格し finding を open に保つ', () => {
@@ -276,6 +497,108 @@ describe('normalizeMergedManagerPlan（保存直前のフル正規化）', () =>
     expect(result.rejections.some((rejection) => rejection.includes('already referenced by another conflict'))).toBe(true);
   });
 
+  it('late merge で raw-backed conflict が後着したら derived marker を継承せず plain conflict を正本にする', () => {
+    const result = normalizeMergedManagerPlan({
+      output: outputWith({
+        matches: [{ findingId: 'F-0001', rawFindingIds: ['raw-match'] }],
+        conflicts: [
+          createEngineDerivedWaiverConflict('F-0001'),
+          {
+            findingIds: ['F-0001'],
+            rawFindingIds: ['raw-conflict'],
+            description: 'Reviewer evidence conflicts with F-0001.',
+          },
+        ],
+        disputeNotes: [createEngineDerivedWaiverDisputeNote({
+          findingId: 'F-0001',
+          reason: 'frozen contract',
+          evidence: 'src/types.ts:94',
+        })],
+      }),
+      activeConflictFindingIds: new Set(),
+    });
+
+    expect(result.output.conflicts).toHaveLength(1);
+    expect(result.output.conflicts[0]?.rawFindingIds).toEqual(['raw-conflict']);
+    expect(result.output.conflicts[0]?.description).toBe('Reviewer evidence conflicts with F-0001.');
+    expect(isEngineDerivedWaiverConflict(result.output.conflicts[0]!)).toBe(false);
+    expect(Reflect.ownKeys(result.output.conflicts[0]!).every((key) => typeof key === 'string')).toBe(true);
+    expect([
+      ...result.output.matches.flatMap((match) => match.rawFindingIds),
+      ...result.output.conflicts.flatMap((conflict) => conflict.rawFindingIds),
+    ].sort()).toEqual(['raw-conflict', 'raw-match']);
+  });
+
+  it('rawless derived と部分重複する multi-finding raw-backed conflict は拒否せず plain 正本として残す', () => {
+    const result = normalizeMergedManagerPlan({
+      output: outputWith({
+        matches: [{ findingId: 'F-0001', rawFindingIds: ['raw-match'] }],
+        conflicts: [
+          createEngineDerivedWaiverConflict('F-0001'),
+          {
+            findingIds: ['F-0001', 'F-0002'],
+            rawFindingIds: ['raw-recovery-conflict'],
+            description: 'Recovery evidence spans F-0001 and F-0002.',
+          },
+        ],
+        disputeNotes: [createEngineDerivedWaiverDisputeNote({
+          findingId: 'F-0001',
+          reason: 'frozen contract',
+          evidence: 'src/types.ts:94',
+        })],
+      }),
+      activeConflictFindingIds: new Set(),
+    });
+
+    expect(result.output.conflicts).toEqual([{
+      findingIds: ['F-0001', 'F-0002'],
+      rawFindingIds: ['raw-recovery-conflict'],
+      description: 'Recovery evidence spans F-0001 and F-0002.',
+    }]);
+    expect(isEngineDerivedWaiverConflict(result.output.conflicts[0]!)).toBe(false);
+    expect(result.rejections.some((rejection) => rejection.includes('already referenced'))).toBe(false);
+  });
+
+  it('canonicalize の resolution collision が derived conflict に raw を足すとき plain raw-backed conflict へ変換する', () => {
+    const output = canonicalizeFindingManagerOutput(outputWith({
+      matches: [{ findingId: 'F-0001', rawFindingIds: ['raw-match'] }],
+      resolvedFindings: [{
+        findingId: 'F-0001',
+        rawFindingIds: ['raw-confirm'],
+        evidence: 'The issue is fixed.',
+      }],
+      conflicts: [createEngineDerivedWaiverConflict('F-0001')],
+      disputeNotes: [createEngineDerivedWaiverDisputeNote({
+        findingId: 'F-0001',
+        reason: 'frozen contract',
+        evidence: 'src/types.ts:94',
+      })],
+    }));
+
+    expect(output.resolvedFindings).toEqual([]);
+    expect(output.conflicts).toHaveLength(1);
+    expect(output.conflicts[0]?.rawFindingIds).toEqual(['raw-confirm']);
+    expect(isEngineDerivedWaiverConflict(output.conflicts[0]!)).toBe(false);
+    expect(Reflect.ownKeys(output.conflicts[0]!).every((key) => typeof key === 'string')).toBe(true);
+  });
+
+  it('後段 isolation で raw-backed conflict が消えても current match が残れば rawless derived conflict を復元する', () => {
+    const output = normalizeEngineDerivedWaiverConflicts(outputWith({
+      matches: [{ findingId: 'F-0001', rawFindingIds: ['raw-match'] }],
+      conflicts: [],
+      disputeNotes: [createEngineDerivedWaiverDisputeNote({
+        findingId: 'F-0001',
+        reason: 'frozen contract',
+        evidence: 'src/types.ts:94',
+      })],
+    }));
+
+    expect(output.conflicts).toHaveLength(1);
+    expect(output.conflicts[0]?.rawFindingIds).toEqual([]);
+    expect(isEngineDerivedWaiverConflict(output.conflicts[0]!)).toBe(true);
+    expect(JSON.stringify(output)).not.toContain('engine-derived-waiver-conflict');
+  });
+
   it('reopened と同じ finding への後着 match は reopened の観測へ畳む', () => {
     const result = normalizeMergedManagerPlan({
       output: outputWith({
@@ -292,17 +615,17 @@ describe('normalizeMergedManagerPlan（保存直前のフル正規化）', () =>
   });
 });
 
-describe('reconcileCommitPlan の resolvedConflicts 再生成不採用', () => {
-  it('後着証拠が同じ conflict を再生成する場合、その resolve を不採用にして active を保つ', () => {
-    const conflictId = formatConflictId({ findingIds: ['F-0001'], rawFindingIds: ['raw-old'] });
-    const conflict = makeConflict({ id: conflictId, findingIds: ['F-0001'], rawFindingIds: ['raw-old'] });
+describe('reconcileCommitPlan の conflict registry 契約', () => {
+  it('active conflict に fresh adjudication snapshot がなければ保存を拒否する', () => {
+    const conflictId = formatConflictId({ findingIds: ['F-0001'], rawFindingIds: [] });
+    const conflict = makeConflict({ id: conflictId, findingIds: ['F-0001'], rawFindingIds: [] });
     const freshLedger = makeLedger(
       [makeFinding({ revision: 1, id: 'F-0001' })],
       { conflicts: [conflict] },
     );
     const ladderRaw = makeRaw({ rawFindingId: 'raw-ladder' });
 
-    const result = reconcileCommitPlan({
+    expect(() => reconcileCommitPlan({
       runInput: {
         workflowName: 'peer-review',
         callNamespace: '',
@@ -314,6 +637,13 @@ describe('reconcileCommitPlan の resolvedConflicts 再生成不採用', () => {
       freshLedger,
       rawFindings: [ladderRaw],
       managerOutput: outputWith({
+        anchorAdjudications: [createAnchorAdjudication({
+          rawFindingId: 'raw-ladder',
+          decision: 'conflict',
+          findingId: 'F-0001',
+          anchorRelevance: 'not_applicable',
+          evidence: 'Ladder evidence disagrees again.',
+        })],
         // manager は canonical conflict を resolve したが、ladder マージが同じ署名の
         // conflict（F-0001）を後着させた
         resolvedConflicts: [{ conflictId, evidence: 'adjudicated' }],
@@ -324,8 +654,10 @@ describe('reconcileCommitPlan の resolvedConflicts 再生成不採用', () => {
         }],
       }),
       provisionalSpecs: [],
+      entityProvisionalMutations: [],
       anomalySpecs: [],
       pendingRejectedObservations: [],
+      verifiedEvidenceRecordsByRawFindingId: new Map(),
       rawProvenanceByRawFindingId: new Map([[ladderRaw.rawFindingId,
         storedRawReconcileProvenance(
           ladderRaw,
@@ -336,9 +668,7 @@ describe('reconcileCommitPlan の resolvedConflicts 再生成不採用', () => {
           reviewerPersonaKey: ladderRaw.reviewer,
           }),
           computeLineageKey({
-          location: ladderRaw.location!,
-          title: ladderRaw.title,
-          familyTag: ladderRaw.familyTag,
+          claimIdentityHash: computeClaimIdentityHash(ladderRaw),
           }),
         ),
       ]]),
@@ -351,13 +681,140 @@ describe('reconcileCommitPlan の resolvedConflicts 再生成不採用', () => {
       resolutionRenotifications: [],
       unsupportedRawFindingReports: [],
       healthyReviewerStableKeys: new Set(),
+    })).toThrow('must have exactly one fresh adjudication snapshot');
+  });
+});
+
+describe('provisional match の materialization 境界', () => {
+  it('継承 provisional と異なる claim の persists を監査へ隔離し、回復 spec の旧 claim を維持する', () => {
+    const oldRaw = makeRaw({
+      rawFindingId: 'raw-old-provisional',
+      evidence: [],
+    });
+    const reviewerStableKey = computeReviewerStableKey({
+      workflowName: 'peer-review',
+      callNamespace: '',
+      parentStepName: 'reviewers',
+      reviewerPersonaKey: oldRaw.reviewer,
+    });
+    const oldLineageKey = computeLineageKey({
+      claimIdentityHash: oldRaw.claimIdentityHash,
+    });
+    const oldSpec = provisionalSpecForRawKind({
+      wire: oldRaw,
+      canonical: { reviewerStableKey, lineageKey: oldLineageKey },
+      reason: 'The original claim needs interpretation recovery.',
+    }, 'raw-meaning-ambiguous');
+    const inherited = authorizeFindingLedgerFixture(applyProvisionalFindingSpecsToLedger(
+      makeLedger([], { rawFindings: [oldRaw] }),
+      [oldSpec],
+      {
+        workflowName: 'peer-review',
+        stepName: 'reviewers',
+        runId: 'run-1',
+        timestamp: '2026-07-31T00:00:00.000Z',
+      },
+    ));
+    const inheritedFinding = inherited.findings[0]!;
+    const targetPrecondition = captureFindingPreconditions(inherited)
+      .get(inheritedFinding.id)!.precondition;
+    const mismatchedPersists = makeRaw({
+      rawFindingId: 'raw-fresh-mismatched-claim',
+      title: 'A different fresh claim',
+      description: 'This description must not overwrite the inherited provisional claim.',
+      relation: 'persists',
+      targetFindingId: inheritedFinding.id,
+      targetPrecondition,
+      target: oldRaw.target,
+      evidence: [],
+    });
+    const recoveryRaw = makeRaw({
+      ...oldRaw,
+      rawFindingId: 'raw-recovery-original-claim',
+      evidence: [],
+    });
+    const recoverySpec = {
+      ...oldSpec,
+      sourceRawFindingIds: [recoveryRaw.rawFindingId],
+    };
+    const mismatchedLineageKey = computeLineageKey({
+      targetFindingId: inheritedFinding.id,
+      claimIdentityHash: mismatchedPersists.claimIdentityHash,
     });
 
-    expect(result.normalizationRejections.some((rejection) => (
-      rejection.includes('C-FA2947446963') && rejection.includes('regenerated')
-    ))).toBe(true);
-    const savedConflict = result.ledger.conflicts.find((entry) => entry.id === 'C-FA2947446963')!;
-    expect(savedConflict.status).toBe('active');
+    const result = reconcileCommitPlan({
+      runInput: {
+        workflowName: 'peer-review',
+        callNamespace: '',
+        runId: 'run-2',
+        timestamp: '2026-07-31T00:01:00.000Z',
+        cwd: process.cwd(),
+        parentStep: { kind: 'agent', name: 'reviewers', persona: 'reviewer', edit: false },
+      } as never,
+      freshLedger: inherited,
+      rawFindings: [mismatchedPersists, recoveryRaw],
+      managerOutput: outputWith({
+        matches: [{
+          findingId: inheritedFinding.id,
+          rawFindingIds: [mismatchedPersists.rawFindingId],
+          evidence: 'The manager associated the fresh claim with the inherited provisional.',
+        }],
+      }),
+      provisionalSpecs: [recoverySpec],
+      entityProvisionalMutations: [],
+      anomalySpecs: [],
+      verifiedEvidenceRecordsByRawFindingId: new Map(),
+      rawProvenanceByRawFindingId: new Map([
+        [mismatchedPersists.rawFindingId, storedRawReconcileProvenance(
+          mismatchedPersists,
+          reviewerStableKey,
+          mismatchedLineageKey,
+        )],
+        [recoveryRaw.rawFindingId, storedRawReconcileProvenance(
+          recoveryRaw,
+          reviewerStableKey,
+          oldLineageKey,
+        )],
+      ]),
+      cleanWire: [mismatchedPersists],
+      explicitResolvedByMapping: new Map(),
+      explicitPromotedFindingIds: new Set(),
+      recoveryProvisionalRawFindingIds: new Set([recoveryRaw.rawFindingId]),
+      staleRawFindingIds: new Set(),
+      deferredRawFindingIds: new Set(),
+      resolutionRenotifications: [],
+      unsupportedRawFindingReports: [],
+      healthyReviewerStableKeys: new Set(),
+    });
+
+    expect(result.managerOutput.matches).toEqual([]);
+    expect(result.ledger.findings[0]).toMatchObject({
+      id: inheritedFinding.id,
+      title: oldRaw.title,
+      description: oldRaw.description,
+      rawFindingIds: [oldRaw.rawFindingId, recoveryRaw.rawFindingId],
+      provisional: { stableKey: oldSpec.stableKey },
+    });
+    expect(result.rejectedObservationAttachments).toEqual([
+      expect.objectContaining({
+        targetFindingId: inheritedFinding.id,
+        rawFindingId: mismatchedPersists.rawFindingId,
+        rejectionCode: 'evidence_admission_failed',
+      }),
+    ]);
+    const audited = applyRejectedObservationAttachments(
+      authorizeFindingLedgerFixture(result.ledger),
+      result.rejectedObservationAttachments,
+      {
+        runId: 'run-2',
+        stepName: 'reviewers',
+        timestamp: '2026-07-31T00:01:00.000Z',
+      },
+    );
+    expect(audited.findings[0]?.description).toBe(oldRaw.description);
+    expect(audited.findings[0]?.rejectedObservations).toEqual([
+      expect.objectContaining({ rawFindingId: mismatchedPersists.rawFindingId }),
+    ]);
   });
 });
 
@@ -378,8 +835,8 @@ describe('assembleManagerOutput → 保存正規化 → reconciler（ラウン�
       residualRawFindings: persistsRaws,
       decisions: makeDecisions({
         rawDecisions: [
-          { rawFindingId: 'raw-6', decision: 'same', findingId: 'F-0006', evidence: '同一問題' },
-          { rawFindingId: 'raw-8', decision: 'same', findingId: 'F-0008', evidence: '同一問題' },
+          { rawFindingId: 'raw-6', decision: 'same', findingId: 'F-0006', anchorRelevance: 'not_applicable', evidence: '同一問題' },
+          { rawFindingId: 'raw-8', decision: 'same', findingId: 'F-0008', anchorRelevance: 'not_applicable', evidence: '同一問題' },
         ],
         duplicateDecisions: [
           { canonicalFindingId: 'F-0001', duplicateFindingIds: ['F-0006', 'F-0008'], evidence: '同一問題の言い換え' },
@@ -408,8 +865,10 @@ describe('assembleManagerOutput → 保存正規化 → reconciler（ラウン�
       previousLedger: ledger,
       rawFindings: persistsRaws,
       managerOutput: normalized.output,
+      entityProvisionalMutations: [],
+      terminalEntityAttachmentFindingIds: new Set(),
       provisionalFindings: [],
-      rawFindingDispositions: [],
+      verifiedEvidenceRecordsByRawFindingId: new Map(),
       rawProvenanceByRawFindingId: new Map(persistsRaws.map((rawFinding) => [
         rawFinding.rawFindingId,
         storedRawReconcileProvenance(
@@ -421,10 +880,8 @@ describe('assembleManagerOutput → 保存正規化 → reconciler（ラウン�
             reviewerPersonaKey: rawFinding.reviewer,
           }),
           computeLineageKey({
-            targetFindingId: rawFinding.targetFindingId!,
-            location: rawFinding.location!,
-            title: rawFinding.title,
-            familyTag: rawFinding.familyTag,
+            targetFindingId: rawFinding.targetFindingId,
+            claimIdentityHash: computeClaimIdentityHash(rawFinding),
           }),
         ),
       ])),
@@ -446,8 +903,8 @@ describe('assembleManagerOutput → 保存正規化 → reconciler（ラウン�
       residualRawFindings: persistsRaws,
       decisions: makeDecisions({
         rawDecisions: [
-          { rawFindingId: 'raw-6', decision: 'conflict', findingId: 'F-0006', evidence: '解消済みとの主張と矛盾' },
-          { rawFindingId: 'raw-8', decision: 'same', findingId: 'F-0008', evidence: '同一問題' },
+          { rawFindingId: 'raw-6', decision: 'conflict', findingId: 'F-0006', anchorRelevance: 'not_applicable', evidence: '解消済みとの主張と矛盾' },
+          { rawFindingId: 'raw-8', decision: 'same', findingId: 'F-0008', anchorRelevance: 'not_applicable', evidence: '同一問題' },
         ],
         duplicateDecisions: [
           { canonicalFindingId: 'F-0001', duplicateFindingIds: ['F-0006', 'F-0008'], evidence: '同一問題の言い換え' },
@@ -474,7 +931,7 @@ describe('invalidate と同ラウンド証拠の衝突', () => {
       previousLedger: ledger,
       residualRawFindings: [raw],
       decisions: makeDecisions({
-        rawDecisions: [{ rawFindingId: 'raw-1', decision: 'same', findingId: 'F-0001', evidence: '再観測' }],
+        rawDecisions: [{ rawFindingId: 'raw-1', decision: 'same', findingId: 'F-0001', anchorRelevance: 'not_applicable', evidence: '再観測' }],
         invalidateDecisions: [{ findingId: 'F-0001', evidence: 'location が現行コードに無い' }],
       }),
       checkMissingDecisions: true,
@@ -517,7 +974,7 @@ describe('carried conflict の部分重複', () => {
       previousLedger: ledger,
       residualRawFindings: [raw],
       decisions: makeDecisions({
-        rawDecisions: [{ rawFindingId: 'raw-1', decision: 'conflict', findingId: 'F-0001', evidence: '矛盾' }],
+        rawDecisions: [{ rawFindingId: 'raw-1', decision: 'conflict', findingId: 'F-0001', anchorRelevance: 'not_applicable', evidence: '矛盾' }],
       }),
       checkMissingDecisions: true,
       carriedFindingOnlyConflicts: [{
@@ -546,7 +1003,7 @@ describe('createReviewerRawFindingCandidates の rawFindingId 一意性', () => 
   } as never;
 
   it('同一 reviewer 内の重複 ID を決定的にサフィックスして一意化する', () => {
-    const candidates = createReviewerRawFindingCandidates([
+    const candidates = reviewerCandidates([
       { rawFindingId: 'x', title: 'a', severity: 'low', description: 'a' },
       { rawFindingId: 'x', title: 'b', severity: 'low', description: 'b' },
       { rawFindingId: 'x-dup2', title: 'c', severity: 'low', description: 'c' },
@@ -577,7 +1034,7 @@ describe('createReviewerRawFindingCandidates の rawFindingId 一意性', () => 
       relation: 'new',
     };
     const project = (items: readonly unknown[]) => {
-      const candidates = createReviewerRawFindingCandidates(items, context);
+      const candidates = reviewerCandidates(items, context);
       const rawFindings = candidates
         .map((candidate) => canonicalizeReviewerRawFinding(candidate, {
           ledger: makeLedger([]),
@@ -610,7 +1067,7 @@ describe('createReviewerRawFindingCandidates の rawFindingId 一意性', () => 
       severity: 'low',
       description: 'same',
     };
-    const candidates = createReviewerRawFindingCandidates([
+    const candidates = reviewerCandidates([
       { ...item },
       { ...item },
     ], context);
@@ -623,7 +1080,7 @@ describe('createReviewerRawFindingCandidates の rawFindingId 一意性', () => 
     // 明示 ID の改名は clarification の priorAmbiguityCodesByRawId 相関を壊し、
     // 訂正済み raw の taint（ambiguityOrigin）が外れて clean 権限を得てしまう。
     // ずれるのは常に内部採番の側でなければならない。
-    const candidates = createReviewerRawFindingCandidates([
+    const candidates = reviewerCandidates([
       { title: 'a', severity: 'low', description: 'a' },
       { rawFindingId: 'item-1', title: 'b', severity: 'low', description: 'b' },
     ], context);
@@ -635,7 +1092,7 @@ describe('createReviewerRawFindingCandidates の rawFindingId 一意性', () => 
   });
 
   it('ID 未指定の項目は従来どおり reviewerRawFindingId を持たない', () => {
-    const candidates = createReviewerRawFindingCandidates([
+    const candidates = reviewerCandidates([
       { title: 'a', severity: 'low', description: 'a' },
       { title: 'b', severity: 'low', description: 'b' },
     ], context);
@@ -644,7 +1101,7 @@ describe('createReviewerRawFindingCandidates の rawFindingId 一意性', () => 
     expect(new Set(candidates.map((candidate) => candidate.intakeId)).size).toBe(2);
   });
 
-  it('未信頼 provider item の実行コードを呼ばず、悪性 item だけを寛容な rejection に落とす', () => {
+  it('未信頼 provider item の実行コードを呼ばず、unsafe な reviewer 出力全体を単一 overflow に置換する', () => {
     let getterReads = 0;
     let toJsonCalls = 0;
     let proxyReads = 0;
@@ -689,54 +1146,48 @@ describe('createReviewerRawFindingCandidates の rawFindingId 一意性', () => 
       title: sharedValue,
       description: sharedValue,
     };
-    const validItem = {
+    const validItem = reviewerExtraction({
       rawFindingId: 'valid',
       relation: 'new',
       familyTag: 'bug',
       severity: 'low',
       title: 'valid title',
       description: 'valid description',
-    };
-
-    const intake = intakeReviewerOutputs({
-      subResults: [{
-        subStep: {
-          name: 'arch-review',
-          persona: 'arch-review',
-        } as never,
-        response: {
-          status: 'done',
-          content: '',
-          structuredOutput: {
-            rawFindings: [
-              getterItem,
-              toJsonItem,
-              proxyItem,
-              symbolItem,
-              nonEnumerableItem,
-              extraItem,
-              cyclicItem,
-              sharedReferenceItem,
-              validItem,
-            ],
-          },
-        },
+      evidence: [{
+        kind: 'file_quote',
+        path: 'src/valid.ts',
+        startLine: 1,
+        endLine: 1,
+        verbatimExcerpt: 'valid evidence',
+        snapshotId: '1'.repeat(64),
       }],
-      previousLedger: makeLedger([]),
-      workflowName: 'peer-review',
-      callNamespace: '',
-      parentStepName: 'reviewers',
-      stepIteration: 1,
-      runId: 'run-provider-items',
+    }, 99);
+
+    const projected = projectReviewerRawStructuredOutputWithEnvelope({
+      rawFindings: [
+        getterItem,
+        toJsonItem,
+        proxyItem,
+        symbolItem,
+        nonEnumerableItem,
+        extraItem,
+        cyclicItem,
+        sharedReferenceItem,
+        validItem,
+      ],
     });
 
     expect(getterReads).toBe(0);
     expect(toJsonCalls).toBe(0);
     expect(proxyReads).toBe(0);
-    expect(intake.items).toHaveLength(9);
-    expect(intake.items.filter(({ wire }) => wire.title === 'valid title')).toHaveLength(1);
-    expect(intake.items.filter(({ canonical }) => canonical.provenance.ambiguityOrigin))
-      .toHaveLength(8);
+    expect(() => findingReviewPublicationFixture({
+      scopeIdentity: '/test/provider-items/ledger.json',
+      parentStepName: 'reviewers',
+      stepIteration: 1,
+      reviewerStepName: 'arch-review',
+      reportContent: String(validItem.rawExcerpt),
+      rawFindings: projected.structuredOutput.rawFindings as unknown[],
+    })).toThrow(/requires rawExcerpt/);
   });
 });
 
@@ -753,10 +1204,664 @@ describe('detectClarifiableRawMismatches の重複 ID 除外', () => {
       description: 'まだ残っている',
     };
 
-    const unique = detectClarifiableRawMismatches([item], ledger);
-    const duplicated = detectClarifiableRawMismatches([item, { ...item, description: '別内容' }], ledger);
+    const unique = detectClarifiableRawMismatches([
+      reviewerExtraction(item, 0),
+    ], ledger);
+    const duplicated = detectClarifiableRawMismatches([
+      reviewerExtraction(item, 0),
+      reviewerExtraction({ ...item, description: '別内容' }, 1),
+    ], ledger);
 
     expect(unique.length).toBeGreaterThan(0);
     expect(duplicated).toEqual([]);
+  });
+});
+
+describe('不完全な review_scope finding の lineage', () => {
+  function canonicalReviewScope(input: {
+    excerpt: string;
+    reviewer?: string;
+    stepIteration?: number;
+    title?: string | null;
+    description?: string | null;
+    target?: { kind: 'review_scope' } | { kind: 'code'; paths: string[] };
+  }) {
+    const reviewer = input.reviewer ?? 'architecture-review';
+    const extraction = reviewerRawExtractionFixture({
+      rawFindingId: null,
+      familyTag: 'architecture',
+      severity: 'medium',
+      title: input.title ?? null,
+      description: input.description ?? null,
+      suggestion: null,
+      relation: 'new',
+      target: input.target ?? { kind: 'review_scope' },
+      evidenceRequests: [],
+      rawExcerpt: input.excerpt,
+    });
+    const candidate = createReviewerRawFindingCandidates([extraction], {
+      workflowName: 'peer-review',
+      callNamespace: '',
+      parentStepName: 'reviewers',
+      stepIteration: input.stepIteration ?? 1,
+      runId: `run-${input.stepIteration ?? 1}`,
+      reviewerStepName: reviewer,
+      reviewerPersonaKey: reviewer,
+      reviewReport: input.excerpt,
+      ledger: makeLedger([]),
+      issueEvidenceRequests: () => ({
+        evidence: [],
+        engineProofRecords: [],
+        coverageGaps: [],
+        materializedQuoteBytes: 0,
+      }),
+      commitEvidenceIssuance: () => {},
+    }).candidates[0]!;
+    return canonicalizeReviewerRawFinding(candidate, {
+      ledger: makeLedger([]),
+    }).canonical;
+  }
+
+  it('不完全な広域指摘だけexcerptで分離し、完全な広域指摘とcode指摘の収束性は変えない', () => {
+    const broadFirst = canonicalReviewScope({ excerpt: 'The dependency direction is inverted.' });
+    const broadSecond = canonicalReviewScope({ excerpt: 'The module boundary is too broad.' });
+    expect(broadFirst.claimIdentityHash).toBe(broadSecond.claimIdentityHash);
+    expect(broadFirst.semanticClaimIdentityHash).toBe(broadSecond.semanticClaimIdentityHash);
+    expect(broadFirst.lineageKey).not.toBe(broadSecond.lineageKey);
+
+    const completeFirst = canonicalReviewScope({
+      excerpt: 'First wording.',
+      title: 'Boundary problem',
+      description: 'The module boundary couples unrelated responsibilities.',
+    });
+    const completeSecond = canonicalReviewScope({
+      excerpt: 'Second wording.',
+      title: 'Boundary problem',
+      description: 'The module boundary couples unrelated responsibilities.',
+    });
+    expect(completeFirst.lineageKey).toBe(completeSecond.lineageKey);
+
+    const codeFirst = canonicalReviewScope({
+      excerpt: 'First code wording.',
+      target: { kind: 'code', paths: ['src/example.ts'] },
+    });
+    const codeSecond = canonicalReviewScope({
+      excerpt: 'Second code wording.',
+      target: { kind: 'code', paths: ['src/example.ts'] },
+    });
+    expect(codeFirst.lineageKey).toBe(codeSecond.lineageKey);
+  });
+
+  it('同じexcerptはreviewerとroundをまたいで同じlineageになり、reconcilerは同一reviewerの再観測だけをupsertする', () => {
+    const excerpt = 'The dependency direction is inverted.';
+    const first = canonicalReviewScope({
+      excerpt,
+      reviewer: 'architecture-review',
+      stepIteration: 1,
+    });
+    const nextRound = canonicalReviewScope({
+      excerpt,
+      reviewer: 'architecture-review',
+      stepIteration: 2,
+    });
+    const peerReviewer = canonicalReviewScope({
+      excerpt,
+      reviewer: 'ai-antipattern-review',
+      stepIteration: 2,
+    });
+    expect(nextRound.lineageKey).toBe(first.lineageKey);
+    expect(peerReviewer.lineageKey).toBe(first.lineageKey);
+    expect(nextRound.reviewerStableKey).toBe(first.reviewerStableKey);
+    expect(peerReviewer.reviewerStableKey).not.toBe(first.reviewerStableKey);
+
+    const firstWire = toLedgerRawFinding(first);
+    const nextWire = toLedgerRawFinding(nextRound);
+    const reason = 'Review-scope finding has no concrete target for typed evidence verification.';
+    const firstSpec = provisionalSpecForRawKind({
+      wire: firstWire,
+      canonical: first,
+      reason,
+    }, 'raw-meaning-ambiguous');
+    const nextSpec = provisionalSpecForRawKind({
+      wire: nextWire,
+      canonical: nextRound,
+      reason,
+    }, 'raw-meaning-ambiguous');
+    const firstLedger = applyProvisionalFindingSpecsToLedger(
+      makeLedger([]),
+      [firstSpec],
+      {
+        workflowName: 'peer-review',
+        stepName: 'reviewers',
+        runId: 'run-1',
+        timestamp: '2026-07-31T00:00:00.000Z',
+      },
+    );
+    const secondLedger = applyProvisionalFindingSpecsToLedger(
+      firstLedger,
+      [nextSpec],
+      {
+        workflowName: 'peer-review',
+        stepName: 'reviewers',
+        runId: 'run-2',
+        timestamp: '2026-07-31T00:01:00.000Z',
+      },
+    );
+    expect(secondLedger.findings).toHaveLength(1);
+    expect(secondLedger.findings[0]).toMatchObject({
+      lifecycle: 'persists',
+      revision: 2,
+      rawFindingIds: [firstWire.rawFindingId, nextWire.rawFindingId],
+    });
+
+    const distinct = canonicalReviewScope({
+      excerpt: 'The module boundary is too broad.',
+      reviewer: 'architecture-review',
+      stepIteration: 3,
+    });
+    const distinctLedger = applyProvisionalFindingSpecsToLedger(
+      secondLedger,
+      [provisionalSpecForRawKind({
+        wire: toLedgerRawFinding(distinct),
+        canonical: distinct,
+        reason,
+      }, 'raw-meaning-ambiguous')],
+      {
+        workflowName: 'peer-review',
+        stepName: 'reviewers',
+        runId: 'run-3',
+        timestamp: '2026-07-31T00:02:00.000Z',
+      },
+    );
+    expect(distinctLedger.findings).toHaveLength(2);
+  });
+});
+
+describe('relation 別 intake と target atomization', () => {
+  function lifecycleLedger(): FindingLedger {
+    const source = makeRaw({
+      rawFindingId: 'source',
+      target: { kind: 'code', paths: ['src/lifecycle.ts'] },
+    });
+    return makeLedger([
+      makeFinding({
+        revision: 1,
+        id: 'F-0001',
+        target: source.target,
+        targetIdentityHash: source.targetIdentityHash,
+        claimIdentityHash: source.claimIdentityHash,
+        semanticClaimIdentityHash: source.semanticClaimIdentityHash,
+        description: source.description ?? undefined,
+      }),
+      makeFinding({
+        revision: 1,
+        id: 'F-0006',
+        target: source.target,
+        targetIdentityHash: source.targetIdentityHash,
+        claimIdentityHash: source.claimIdentityHash,
+        semanticClaimIdentityHash: source.semanticClaimIdentityHash,
+        description: source.description ?? undefined,
+      }),
+    ]);
+  }
+
+  function candidateContext(report: string) {
+    return {
+      workflowName: 'peer-review',
+      callNamespace: '',
+      parentStepName: 'reviewers',
+      stepIteration: 1,
+      runId: 'run-lifecycle',
+      reviewerStepName: 'arch-review',
+      reviewerPersonaKey: 'arch-review',
+      reviewReport: report,
+      ledger: lifecycleLedger(),
+      issueEvidenceRequests: () => ({
+        evidence: [],
+        engineProofRecords: [],
+        coverageGaps: [],
+        materializedQuoteBytes: 0,
+      }),
+      commitEvidenceIssuance: () => {},
+    };
+  }
+
+  it('deduplicates and atomizes targetFindingIds before canonical matching', () => {
+    const extraction = reviewerRawExtractionFixture({
+      rawFindingId: 'confirmation',
+      familyTag: null,
+      severity: null,
+      title: null,
+      description: null,
+      suggestion: null,
+      relation: 'resolution_confirmation',
+      targetFindingId: 'F-0001',
+      target: { kind: 'code', paths: ['src/lifecycle.ts'] },
+      rawExcerpt: 'Relation: resolution_confirmation; Target Finding ID: F-0001, F-0006',
+    });
+    extraction.candidate!.targetFindingIds = ['F-0006', 'F-0001', 'F-0006'];
+    const batch = createReviewerRawFindingCandidates(
+      [extraction],
+      candidateContext(extraction.rawExcerpt),
+    );
+
+    expect(batch.rejections).toEqual([]);
+    expect(batch.candidates.map((candidate) => candidate.targetFindingId)).toEqual([
+      'F-0001',
+      'F-0006',
+    ]);
+    const canonical = batch.candidates.map((candidate) => (
+      canonicalizeReviewerRawFinding(candidate, { ledger: lifecycleLedger() }).canonical
+    ));
+    expect(canonical.map((item) => item.coherence)).toEqual(['coherent', 'coherent']);
+    expect(canonical.map(toLedgerRawFinding).map((wire) => wire.targetFindingId)).toEqual([
+      'F-0001',
+      'F-0006',
+    ]);
+  });
+
+  it('inherits clarification taint from the source raw id across every atom', () => {
+    const intakeFor = (targetFindingIds: string[]) => {
+      const extraction = reviewerRawExtractionFixture({
+        rawFindingId: 'multi-target',
+        familyTag: null,
+        severity: null,
+        title: null,
+        description: null,
+        suggestion: null,
+        relation: 'persists',
+        targetFindingId: 'F-0001',
+        target: { kind: 'code', paths: ['src/lifecycle.ts'] },
+        rawExcerpt: 'Relation: persists; Target Finding IDs: F-0001, F-9999',
+      });
+      extraction.candidate!.targetFindingIds = targetFindingIds;
+      return intakeReviewerOutputs({
+        subResults: [{
+          subStep: {
+            kind: 'agent',
+            name: 'arch-review',
+            persona: 'arch-review',
+            edit: false,
+          } as never,
+          publication: findingReviewPublicationFixture({
+            scopeIdentity: '/test/multi-target-taint/ledger.json',
+            parentStepName: 'reviewers',
+            stepIteration: 1,
+            reviewerStepName: 'arch-review',
+            rawFindings: [extraction],
+          }),
+          relationClarification: {
+            attempted: true,
+            flaggedRawFindingIds: ['multi-target'],
+            priorAmbiguityCodesByRawId: {
+              'multi-target': ['persists-target-unknown'],
+            },
+          },
+        }],
+        previousLedger: lifecycleLedger(),
+        workflowName: 'peer-review',
+        callNamespace: '',
+        parentStepName: 'reviewers',
+        stepIteration: 1,
+        runId: 'run-1',
+        workflowTask: 'Review.',
+        cwd: process.cwd(),
+        scopeIdentity: '/test/multi-target-taint/ledger.json',
+        issuedAt: '2026-07-30T00:00:00.000Z',
+        reviewScopeSnapshot: {
+          reviewScopeSnapshotId: 'a'.repeat(64),
+          trackedDiff: undefined,
+          untrackedEvidence: [],
+          queryInventory: [],
+        },
+      });
+    };
+
+    const correctionSucceeded = intakeFor(['F-9999', 'F-0001']);
+    const correctionFailed = intakeFor(['F-0001', 'F-9999']);
+    for (const intake of [correctionSucceeded, correctionFailed]) {
+      expect(intake.items).toHaveLength(2);
+      expect(intake.items.map(({ canonical }) => canonical.targetFindingId)).toEqual([
+        'F-0001',
+        'F-9999',
+      ]);
+      expect(intake.items.every(({ canonical }) => (
+        canonical.provenance.ambiguityOrigin
+        && canonical.provenance.ambiguityCodes.includes('persists-target-unknown')
+      ))).toBe(true);
+      expect(intake.items.map(({ canonical }) => canonical.rawFindingId)).toEqual([
+        expect.stringMatching(/:multi-target$/),
+        expect.stringMatching(/:multi-target-dup2$/),
+      ]);
+    }
+    expect(correctionSucceeded.items.map(({ canonical }) => canonical.rawFindingId))
+      .toEqual(correctionFailed.items.map(({ canonical }) => canonical.rawFindingId));
+    expect(correctionSucceeded.items.map(({ canonical }) => canonical.claimIdentityHash))
+      .toEqual(correctionFailed.items.map(({ canonical }) => canonical.claimIdentityHash));
+  });
+
+  it('keeps a lifecycle raw coherent without product finding fields', () => {
+    const extraction = reviewerRawExtractionFixture({
+      rawFindingId: 'confirmation',
+      familyTag: null,
+      severity: null,
+      title: null,
+      description: null,
+      suggestion: null,
+      relation: 'resolution_confirmation',
+      targetFindingId: 'F-0001',
+      target: { kind: 'code', paths: ['src/lifecycle.ts'] },
+      rawExcerpt: 'Relation: resolution_confirmation; Target Finding ID: F-0001',
+    });
+    const [candidate] = createReviewerRawFindingCandidates(
+      [extraction],
+      candidateContext(extraction.rawExcerpt),
+    ).candidates;
+    const canonical = canonicalizeReviewerRawFinding(candidate!, {
+      ledger: lifecycleLedger(),
+    }).canonical;
+
+    expect(canonical).toMatchObject({
+      coherence: 'coherent',
+      relation: 'resolution_confirmation',
+      targetFindingId: 'F-0001',
+    });
+    expect(canonical.provenance.ambiguityCodes).not.toContain('missing-required-field');
+    expect(toLedgerRawFinding(canonical)).toMatchObject({
+      familyTag: null,
+      severity: null,
+      title: null,
+      description: null,
+    });
+  });
+
+  it.each(['persists', 'resolution_confirmation'] as const)(
+    'hydrates target:null %s observations and keeps Finding allocation unchanged across rounds',
+    (relation) => {
+      let ledger = lifecycleLedger();
+      for (let round = 0; round < 3; round += 1) {
+        const extraction = reviewerRawExtractionFixture({
+          rawFindingId: `${relation}-${round}`,
+          familyTag: null,
+          severity: null,
+          title: null,
+          description: null,
+          suggestion: null,
+          relation,
+          targetFindingId: 'F-0001',
+          target: { kind: 'code', paths: ['src/lifecycle.ts'] },
+          rawExcerpt: `Relation: ${relation}; Target Finding ID: F-0001; round ${round}`,
+        });
+        extraction.candidate!.target = null;
+        const intake = intakeReviewerOutputs({
+          subResults: [{
+            subStep: {
+              kind: 'agent',
+              name: 'arch-review',
+              persona: 'arch-review',
+              edit: false,
+            } as never,
+            publication: findingReviewPublicationFixture({
+              scopeIdentity: '/test/lifecycle-target-hydration/ledger.json',
+              parentStepName: 'reviewers',
+              stepIteration: round + 1,
+              reviewerStepName: 'arch-review',
+              rawFindings: [extraction],
+            }),
+          }],
+          previousLedger: ledger,
+          workflowName: 'peer-review',
+          callNamespace: '',
+          parentStepName: 'reviewers',
+          stepIteration: round + 1,
+          runId: `run-${round}`,
+          workflowTask: 'Review.',
+          cwd: process.cwd(),
+          scopeIdentity: '/test/lifecycle-target-hydration/ledger.json',
+          issuedAt: `2026-07-30T00:00:0${round}.000Z`,
+          reviewScopeSnapshot: {
+            reviewScopeSnapshotId: 'a'.repeat(64),
+            trackedDiff: undefined,
+            untrackedEvidence: [],
+            queryInventory: [],
+          },
+        });
+        expect(intake.intakeProvisionalSpecs).toEqual([]);
+        expect(intake.items).toHaveLength(1);
+        expect(intake.items[0]?.canonical).toMatchObject({
+          coherence: 'coherent',
+          relation,
+          targetFindingId: 'F-0001',
+          target: { kind: 'code', paths: ['src/lifecycle.ts'] },
+        });
+        const admission = evaluateRawAdmission({
+          cwd: process.cwd(),
+          reviewScopeSnapshotId: 'a'.repeat(64),
+          runId: `run-${round}`,
+          scopeIdentity: 'scope',
+          previousLedger: ledger,
+          intake,
+          reviewScopeSnapshot: {
+            reviewScopeSnapshotId: 'a'.repeat(64),
+            trackedDiff: undefined,
+            untrackedEvidence: [],
+            queryInventory: [],
+          },
+          workflowTask: 'Review.',
+        });
+        expect(admission.admissionProvisionalSpecs).toEqual([]);
+        expect(admission.pendingRejectedObservations).toHaveLength(1);
+        expect(admission.pendingRejectedObservations[0]?.anomalyKind)
+          .toBe('lifecycle-admission-failure');
+        expect(admission.pendingRejectedObservations[0]?.destination)
+          .toBe('target_audit');
+        expect(admission.pendingRejectedObservations[0]?.targetFindingId)
+          .toBe('F-0001');
+        expect(admission.admissionRejectedItems).toHaveLength(1);
+        expect(admission.admissionAnomalySpecs).toEqual([]);
+        const observation = {
+          runId: `run-${round}`,
+          stepName: 'reviewers',
+          timestamp: `2026-07-30T00:00:0${round}.000Z`,
+        };
+        const wire = intake.items[0]!.wire;
+        if (round === 0) {
+          const target = ledger.findings.find((finding) => finding.id === 'F-0001')!;
+          const staleLedger = applyFindingLedgerFixtureRevision({
+            ledger,
+            entityKind: 'finding',
+            entity: {
+              ...target,
+              lifecycle: 'persists',
+              revision: target.revision + 1,
+              lastSeen: observation,
+            },
+          });
+          const staleCommit = applyCommitLedgerStates({
+            runInput: {
+              workflowName: 'peer-review',
+              parentStep: { name: 'reviewers' },
+              runId: observation.runId,
+              timestamp: observation.timestamp,
+            } as never,
+            freshLedger: ledger,
+            settledLedger: staleLedger,
+            baseAnomalySpecs: [],
+            pendingRejectedObservations: admission.pendingRejectedObservations,
+            interpretationResults: new Map(),
+            interpretationReservations: new Map(),
+            interpretationIntegrityDigests: new Map(),
+            observation,
+            verifiedEvidenceCandidates: [],
+            stopBudgetLimits: resolveStopBudgetLimits(undefined),
+            stopBudgetRoundMarker: 'stale-round',
+          });
+          expect(staleCommit.rejectedObservationAttachments).toEqual([]);
+          expect(staleCommit.ledger.reviewerAnomalies).toEqual([
+            expect.objectContaining({ sourceRawFindingIds: [wire.rawFindingId] }),
+          ]);
+        }
+        const committed = applyCommitLedgerStates({
+          runInput: {
+            workflowName: 'peer-review',
+            parentStep: { name: 'reviewers' },
+            runId: observation.runId,
+            timestamp: observation.timestamp,
+          } as never,
+          freshLedger: ledger,
+          settledLedger: ledger,
+          baseAnomalySpecs: [],
+          pendingRejectedObservations: admission.pendingRejectedObservations,
+          interpretationResults: new Map(),
+          interpretationReservations: new Map(),
+          interpretationIntegrityDigests: new Map(),
+          observation,
+          verifiedEvidenceCandidates: [],
+          stopBudgetLimits: resolveStopBudgetLimits(undefined),
+          stopBudgetRoundMarker: `round-${round}`,
+        });
+        expect(committed.reviewerAnomalyLandings).toEqual([]);
+        expect(committed.rejectedObservationAttachments).toHaveLength(1);
+        ledger = applyRejectedObservationAttachments(
+          authorizeFindingLedgerFixture({
+            ...committed.ledger,
+            rawFindings: [...committed.ledger.rawFindings, wire],
+          }),
+          committed.rejectedObservationAttachments,
+          observation,
+        );
+      }
+      expect(ledger.nextId).toBe(100);
+      expect(ledger.findings.map((finding) => finding.id)).toEqual(['F-0001', 'F-0006']);
+      expect(ledger.findings[0]?.status).toBe('open');
+      expect(ledger.findings[0]?.rejectedObservations).toHaveLength(3);
+    },
+  );
+
+  it('target付きprotocol anomalyとstale target preconditionをblocking anomalyに保つ', () => {
+    const ledger = lifecycleLedger();
+    const extraction = reviewerRawExtractionFixture({
+      rawFindingId: 'protocol-target',
+      familyTag: 'bug',
+      severity: 'high',
+      title: 'Existing lifecycle issue',
+      description: 'The target is still affected.',
+      suggestion: null,
+      relation: 'persists',
+      targetFindingId: 'F-0001',
+      target: { kind: 'code', paths: ['src/lifecycle.ts'] },
+      evidence: [],
+      rawExcerpt: 'Protocol anomaly targeting F-0001.',
+    });
+    const intake = intakeReviewerOutputs({
+      subResults: [{
+        subStep: {
+          kind: 'agent',
+          name: 'arch-review',
+          persona: 'arch-review',
+          edit: false,
+        } as never,
+        publication: findingReviewPublicationFixture({
+          scopeIdentity: '/test/lifecycle-anomaly-policy/ledger.json',
+          parentStepName: 'reviewers',
+          stepIteration: 1,
+          reviewerStepName: 'arch-review',
+          rawFindings: [extraction],
+        }),
+      }],
+      previousLedger: ledger,
+      workflowName: 'peer-review',
+      callNamespace: '',
+      parentStepName: 'reviewers',
+      stepIteration: 1,
+      runId: 'run-policy',
+      workflowTask: 'Review.',
+      cwd: process.cwd(),
+      scopeIdentity: '/test/lifecycle-anomaly-policy/ledger.json',
+      issuedAt: '2026-07-30T00:00:00.000Z',
+      reviewScopeSnapshot: {
+        reviewScopeSnapshotId: 'a'.repeat(64),
+        trackedDiff: undefined,
+        untrackedEvidence: [],
+        queryInventory: [],
+      },
+    });
+    const item = intake.items[0]!;
+    const protocolAdmission = evaluateRawAdmission({
+      cwd: process.cwd(),
+      reviewScopeSnapshotId: 'a'.repeat(64),
+      runId: 'run-policy',
+      scopeIdentity: 'scope',
+      previousLedger: ledger,
+      intake: {
+        ...intake,
+        items: [{
+          ...item,
+          canonical: {
+            ...item.canonical,
+            provenance: {
+              ...item.canonical.provenance,
+              ambiguityCodes: [
+                ...item.canonical.provenance.ambiguityCodes,
+                'invalid-evidence-shape',
+              ],
+            },
+          },
+        }],
+      },
+      reviewScopeSnapshot: {
+        reviewScopeSnapshotId: 'a'.repeat(64),
+        trackedDiff: undefined,
+        untrackedEvidence: [],
+        queryInventory: [],
+      },
+      workflowTask: 'Review.',
+    });
+    expect(protocolAdmission.pendingRejectedObservations).toEqual([]);
+    expect(protocolAdmission.admissionAnomalySpecs).toEqual([
+      expect.objectContaining({ kind: 'protocol-anomaly' }),
+    ]);
+
+    const staleAdmission = evaluateRawAdmission({
+      cwd: process.cwd(),
+      reviewScopeSnapshotId: 'a'.repeat(64),
+      runId: 'run-stale',
+      scopeIdentity: 'scope',
+      previousLedger: ledger,
+      intake: {
+        ...intake,
+        items: [{
+          ...item,
+          canonical: {
+            ...item.canonical,
+            provenance: {
+              ...item.canonical.provenance,
+              ambiguityOrigin: true,
+            },
+          },
+          wire: {
+            ...item.wire,
+            targetPrecondition: {
+              ...item.wire.targetPrecondition!,
+              targetRevision: item.wire.targetPrecondition!.targetRevision + 1,
+            },
+          },
+        }],
+      },
+      reviewScopeSnapshot: {
+        reviewScopeSnapshotId: 'a'.repeat(64),
+        trackedDiff: undefined,
+        untrackedEvidence: [],
+        queryInventory: [],
+      },
+      workflowTask: 'Review.',
+    });
+    expect(staleAdmission.pendingRejectedObservations).toEqual([]);
+    expect(staleAdmission.admissionRejectedItems).toEqual([
+      expect.objectContaining({ wire: expect.objectContaining({ rawFindingId: item.wire.rawFindingId }) }),
+    ]);
+    expect(staleAdmission.ladderAnomalySpecs).toEqual([
+      expect.objectContaining({ kind: 'lifecycle-admission-failure' }),
+    ]);
   });
 });

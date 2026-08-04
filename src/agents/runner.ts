@@ -91,7 +91,7 @@ export class AgentRunner {
     personaProviders: ReturnType<typeof AgentRunner.resolvePersonaProviders>,
   ): ProviderCallOptions['providerOptions'] {
     if (options.resolvedProviderOptions !== undefined) {
-      return options.resolvedProviderOptions;
+      return options.resolvedProviderOptions ?? undefined;
     }
 
     const personaProviderOptions = resolvePersonaProviderOptions(
@@ -168,6 +168,7 @@ export class AgentRunner {
   ): ProviderCallOptions {
     return {
       cwd: options.cwd,
+      executionProfile: options.executionProfile,
       abortSignal: options.abortSignal,
       sessionId: options.sessionId,
       internalAgentIsolation: options.internalAgentIsolation,
@@ -221,6 +222,14 @@ export class AgentRunner {
       customOptions,
     );
     const provider = getProvider(resolution.provider);
+    if (
+      options.executionProfile === 'isolated-structured'
+      && provider.supportsIsolatedStructuredExecution !== true
+    ) {
+      throw new Error(
+        `Provider "${resolution.provider}" does not support strict isolated structured execution`,
+      );
+    }
     const resolvedSystemPrompt = loadAgentPrompt(agentConfig, options.cwd);
     const callOptions = AgentRunner.buildCallOptions(resolution, customOptions);
     const providerRuntimeInstructions = provider.getRuntimeInstructions(customOptions.allowedTools, callOptions.permissionMode, callOptions.providerOptions?.opencode?.networkAccess);
@@ -239,6 +248,7 @@ export class AgentRunner {
       systemPrompt,
     });
 
+    options.onDispatch?.(resolution.permissionMode);
     return agent.call(task, callOptions);
   }
 
@@ -262,6 +272,14 @@ export class AgentRunner {
 
     const resolution = AgentRunner.resolveExecution(options.cwd, personaName, options);
     const provider = getProvider(resolution.provider);
+    if (
+      options.executionProfile === 'isolated-structured'
+      && provider.supportsIsolatedStructuredExecution !== true
+    ) {
+      throw new Error(
+        `Provider "${resolution.provider}" does not support strict isolated structured execution`,
+      );
+    }
     const callOptions = AgentRunner.buildCallOptions(resolution, options);
 
     if (options.internalSystemPrompt !== undefined) {
@@ -274,6 +292,7 @@ export class AgentRunner {
         userInstruction: task,
       });
       const agent = provider.setup({ name: 'takt-internal', systemPrompt });
+      options.onDispatch?.(resolution.permissionMode);
       return agent.call(task, callOptions);
     }
 
@@ -281,6 +300,7 @@ export class AgentRunner {
       const agentDefinition = loadPersonaPromptFromPath(
         options.personaPath,
         options.projectCwd ?? options.cwd,
+        options.workflowBundleResourceRoot,
       );
       const systemPrompt = buildWrappedSystemPrompt(agentDefinition, {
         ...options,
@@ -291,6 +311,7 @@ export class AgentRunner {
         userInstruction: task,
       });
       const agent = provider.setup({ name: personaName, systemPrompt });
+      options.onDispatch?.(resolution.permissionMode);
       return agent.call(task, callOptions);
     }
 
@@ -311,6 +332,7 @@ export class AgentRunner {
         userInstruction: task,
       });
       const agent = provider.setup({ name: personaName, systemPrompt });
+      options.onDispatch?.(resolution.permissionMode);
       return agent.call(task, callOptions);
     }
 
@@ -326,6 +348,7 @@ export class AgentRunner {
       ? { name: personaName, systemPrompt }
       : { name: personaName };
     const agent = provider.setup(agentSetup);
+    options.onDispatch?.(resolution.permissionMode);
     return agent.call(task, callOptions);
   }
 }

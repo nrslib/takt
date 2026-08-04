@@ -31,7 +31,9 @@ steps:
           - review
         edit: false
         persona: architecture-reviewer
-        policy: review
+        policy:
+          - contract-change
+          - review
         knowledge:
           - architecture
           - takt
@@ -58,7 +60,9 @@ steps:
           - review
         edit: false
         persona: security-reviewer
-        policy: review
+        policy:
+          - contract-change
+          - review
         knowledge: security
         provider_options:
           claude:
@@ -84,6 +88,7 @@ steps:
         edit: false
         persona: testing-reviewer
         policy:
+          - contract-change
           - review
           - testing
         knowledge:
@@ -113,6 +118,7 @@ steps:
         edit: false
         persona: ai-antipattern-reviewer
         policy:
+          - contract-change
           - review
           - ai-antipattern
         provider_options:
@@ -139,6 +145,7 @@ steps:
         edit: false
         persona: coding-reviewer
         policy:
+          - contract-change
           - review
           - coding
         provider_options:
@@ -180,7 +187,9 @@ steps:
       - supervise
     edit: false
     persona: supervisor
-    policy: review
+    policy:
+      - contract-change
+      - review
     provider_options:
       claude:
         allowed_tools:
@@ -287,7 +296,9 @@ steps:
       - supervise
     edit: false
     persona: supervisor
-    policy: review
+    policy:
+      - contract-change
+      - review
     provider_options:
       claude:
         allowed_tools:
