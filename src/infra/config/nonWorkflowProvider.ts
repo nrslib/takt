@@ -3,7 +3,9 @@ import type { StepProviderOptions } from '../../core/models/workflow-types.js';
 import type { ProviderType } from '../../core/workflow/types.js';
 import { loadGlobalConfig } from './global/globalConfig.js';
 import { loadProjectConfig } from './project/projectConfig.js';
+import { resolveConfigValueWithSource } from './resolveConfigValue.js';
 import { resolveRuntimeNonWorkflowProvider } from './runtime-provider/internal-agents.js';
+import { composeRuntimeProviderOverride } from './runtime-provider/override.js';
 
 /**
  * Provider/model/options for a non-workflow agent (task summarizer, sync conflict resolver,
@@ -22,18 +24,32 @@ export interface ResolvedNonWorkflowProvider {
 /**
  * Resolve the non-workflow provider/model/options. When an active runtime.yaml provider section
  * exists its `defaults` profile wins (order.md #1136) and its provider/model/options are carried
- * from a single profile; otherwise the legacy config.yaml resolution runs unchanged and the caller
- * keeps resolving options via `resolveNonWorkflowProviderOptions`. A mixed configuration fails fast
+ * from a single profile, with env (`TAKT_PROVIDER`/`TAKT_MODEL`) overrides composed on top the
+ * same way the selector/assistant seams do; otherwise the legacy config.yaml resolution runs
+ * unchanged (env overrides are already folded into the loaded config there) and the caller keeps
+ * resolving options via `resolveNonWorkflowProviderOptions`. A mixed configuration fails fast
  * inside `resolveRuntimeNonWorkflowProvider`, consistent with the sibling selector/assistant seams.
  */
 export function resolveNonWorkflowProviderModel(cwd: string): ResolvedNonWorkflowProvider {
   const runtime = resolveRuntimeNonWorkflowProvider(cwd);
   if (runtime !== undefined) {
+    // An env (`TAKT_PROVIDER`/`TAKT_MODEL`) override is a runtime override in both modes, the same
+    // rule the selector/assistant seams apply: a provider override drops the runtime-tied
+    // model/options, while a model-only override keeps the runtime provider and its options.
+    const configuredProvider = resolveConfigValueWithSource(cwd, 'provider');
+    const configuredModel = resolveConfigValueWithSource(cwd, 'model');
+    const composed = composeRuntimeProviderOverride(
+      { provider: runtime.provider, model: runtime.model, providerOptions: runtime.providerOptions },
+      {
+        provider: configuredProvider.source === 'env' ? configuredProvider.value : undefined,
+        model: configuredModel.source === 'env' ? configuredModel.value : undefined,
+      },
+    );
     return {
       runtimeManaged: true,
-      provider: runtime.provider,
-      ...(runtime.model !== undefined ? { model: runtime.model } : {}),
-      ...(runtime.providerOptions !== undefined ? { providerOptions: runtime.providerOptions } : {}),
+      provider: composed.provider,
+      ...(composed.model !== undefined ? { model: composed.model } : {}),
+      ...(composed.providerOptions !== undefined ? { providerOptions: composed.providerOptions } : {}),
     };
   }
   const legacy = resolveNonWorkflowProviderModelFromConfig({

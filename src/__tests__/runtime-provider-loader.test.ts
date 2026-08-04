@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 // New module under test (implemented in the following `implement` step).
@@ -18,9 +18,9 @@ import {
  * the "解決責務の一元化 / pass paths from above" policy.
  */
 
-const root = join(tmpdir(), 'takt-runtime-provider-loader');
-const globalDir = join(root, 'global-.takt');
-const projectDir = join(root, 'project-.takt');
+let root: string;
+let globalDir: string;
+let projectDir: string;
 
 function writeRuntimeYaml(dir: string, lines: string[]): void {
   mkdirSync(dir, { recursive: true });
@@ -29,8 +29,11 @@ function writeRuntimeYaml(dir: string, lines: string[]): void {
 
 describe('runtime-provider loader', () => {
   beforeEach(() => {
-    rmSync(root, { recursive: true, force: true });
-    mkdirSync(root, { recursive: true });
+    // Unique per-run directory: a fixed tmpdir path would let two concurrent runs of this
+    // file delete each other's fixtures.
+    root = mkdtempSync(join(tmpdir(), 'takt-runtime-provider-loader-'));
+    globalDir = join(root, 'global-.takt');
+    projectDir = join(root, 'project-.takt');
   });
 
   afterEach(() => {
@@ -42,9 +45,15 @@ describe('runtime-provider loader', () => {
     expect(loadRuntimeProviderFileAt(join(globalDir, 'runtime.yaml'))).toBeUndefined();
   });
 
-  it('Given an invalid runtime.yaml, When loading, Then it throws (schema validation, C1)', () => {
+  it('Given an invalid runtime.yaml, When loading, Then it throws naming the failing file path (schema validation, C1)', () => {
     writeRuntimeYaml(globalDir, ['version: 2']);
-    expect(() => loadRuntimeProviderFileAt(join(globalDir, 'runtime.yaml'))).toThrow();
+    const filePath = join(globalDir, 'runtime.yaml');
+    expect(() => loadRuntimeProviderFileAt(filePath)).toThrow(filePath);
+  });
+
+  it('Given an empty runtime.yaml, When loading, Then it is treated as unset (C1)', () => {
+    writeRuntimeYaml(globalDir, ['']);
+    expect(loadRuntimeProviderFileAt(join(globalDir, 'runtime.yaml'))).toBeUndefined();
   });
 
   it('Given only the global file, When resolving, Then the global config is returned (C1)', () => {
@@ -60,6 +69,21 @@ describe('runtime-provider loader', () => {
     ]);
     const resolved: any = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
     expect(resolved?.provider?.profiles?.g?.model).toBe('global-model');
+  });
+
+  it('Given only the project file, When resolving, Then the project config is returned (C1)', () => {
+    writeRuntimeYaml(projectDir, [
+      'version: 1',
+      'provider:',
+      '  defaults:',
+      '    profile: p',
+      '  profiles:',
+      '    p:',
+      '      provider: mock',
+      '      model: project-model',
+    ]);
+    const resolved: any = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
+    expect(resolved?.provider?.profiles?.p?.model).toBe('project-model');
   });
 
   it('Given both files, When resolving, Then project takes priority over global (C3)', () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { parse as parseYaml } from 'yaml';
@@ -19,8 +19,8 @@ import { hasActiveProviderSection } from '../infra/config/runtime-provider/mode.
  * `generateGlobalRuntimeProviderFile({ runtimeFilePath, selection, hasLegacyProviderConfig })`.
  */
 
-const dir = join(tmpdir(), 'takt-runtime-provider-init');
-const runtimeFilePath = join(dir, 'runtime.yaml');
+let dir: string;
+let runtimeFilePath: string;
 
 function read(): unknown {
   return parseYaml(readFileSync(runtimeFilePath, 'utf-8'));
@@ -28,8 +28,10 @@ function read(): unknown {
 
 describe('generateGlobalRuntimeProviderFile', () => {
   beforeEach(() => {
-    rmSync(dir, { recursive: true, force: true });
-    mkdirSync(dir, { recursive: true });
+    // Unique per-run directory: a fixed tmpdir path would let two concurrent runs of this
+    // file delete each other's fixtures.
+    dir = mkdtempSync(join(tmpdir(), 'takt-runtime-provider-init-'));
+    runtimeFilePath = join(dir, 'runtime.yaml');
   });
 
   afterEach(() => {
@@ -88,6 +90,17 @@ describe('generateGlobalRuntimeProviderFile', () => {
   it('Given a generated inactive file, When validating, Then the written content passes schema validation (C18)', () => {
     generateGlobalRuntimeProviderFile({ runtimeFilePath, selection: undefined, hasLegacyProviderConfig: true });
     expect(RuntimeProviderFileSchema.safeParse(read()).success).toBe(true);
+  });
+
+  it('Given a new environment without a selection, When generating, Then it fails fast and writes nothing (C17)', () => {
+    expect(() =>
+      generateGlobalRuntimeProviderFile({
+        runtimeFilePath,
+        selection: undefined,
+        hasLegacyProviderConfig: false,
+      }),
+    ).toThrow(/selection/i);
+    expect(existsSync(runtimeFilePath)).toBe(false);
   });
 
   it('Given generation completes, When inspecting the directory, Then no temp file is left behind (atomic write, C17)', () => {

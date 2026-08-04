@@ -18,13 +18,22 @@ import {
   type RuntimeProviderSection,
 } from './schema.js';
 
-/** Load and validate a single runtime.yaml. Returns undefined when the file is absent. */
+/** Load and validate a single runtime.yaml. Returns undefined when the file is absent or empty. */
 export function loadRuntimeProviderFileAt(filePath: string): RuntimeProviderFile | undefined {
   if (!existsSync(filePath)) {
     return undefined;
   }
   const raw: unknown = parseYaml(readFileSync(filePath, 'utf-8'));
-  return RuntimeProviderFileSchema.parse(raw);
+  // An empty document parses to null; treat it as "not configured" rather than a shape error.
+  if (raw === null || raw === undefined) {
+    return undefined;
+  }
+  const result = RuntimeProviderFileSchema.safeParse(raw);
+  if (!result.success) {
+    // Global and project layers share the `runtime.yaml` filename; name the failing path.
+    throw new Error(`Invalid ${filePath}: ${result.error.message}`);
+  }
+  return result.data;
 }
 
 export interface ResolveRuntimeProviderInput {

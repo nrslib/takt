@@ -128,4 +128,48 @@ describe('RuntimeProviderFileSchema', () => {
     const result = RuntimeProviderFileSchema.safeParse({ version: 1, runtime_file: '~/other.yaml' });
     expect(result.success).toBe(false);
   });
+
+  it('Given a null provider section, When parsed, Then it is rejected (invalid shape)', () => {
+    expect(RuntimeProviderFileSchema.safeParse({ version: 1, provider: null }).success).toBe(false);
+  });
+
+  it('Given an array provider section, When parsed, Then it is rejected (invalid shape)', () => {
+    expect(RuntimeProviderFileSchema.safeParse({ version: 1, provider: [] }).success).toBe(false);
+  });
+
+  it('Given profiles as an array, When parsed, Then it is rejected (invalid shape)', () => {
+    expect(
+      RuntimeProviderFileSchema.safeParse({ version: 1, provider: { profiles: [] } }).success,
+    ).toBe(false);
+  });
+
+  it('Given profiles as a scalar, When parsed, Then it is rejected (invalid shape)', () => {
+    expect(
+      RuntimeProviderFileSchema.safeParse({ version: 1, provider: { profiles: 'default' } }).success,
+    ).toBe(false);
+  });
+
+  it('Given an empty candidates array, When parsed, Then the min(1) boundary rejects it (C9)', () => {
+    const doc: any = fullExample();
+    doc.provider.auto_routing.pools['sol-pool'].candidates = [];
+    expect(RuntimeProviderFileSchema.safeParse(doc).success).toBe(false);
+  });
+
+  it('Given a pool without a candidates key, When parsed, Then it is rejected (missing value)', () => {
+    const doc: any = fullExample();
+    delete doc.provider.auto_routing.pools['sol-pool'].candidates;
+    expect(RuntimeProviderFileSchema.safeParse(doc).success).toBe(false);
+  });
+
+  it('Given an empty model string, When parsed, Then it is rejected (missing value)', () => {
+    const doc: any = fullExample();
+    doc.provider.profiles['sol-high'].model = '';
+    expect(RuntimeProviderFileSchema.safeParse(doc).success).toBe(false);
+  });
+
+  it('Given an empty extends string, When parsed, Then it is rejected (missing value)', () => {
+    const doc: any = fullExample();
+    doc.provider.profiles['sol-high'].extends = '';
+    expect(RuntimeProviderFileSchema.safeParse(doc).success).toBe(false);
+  });
 });

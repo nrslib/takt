@@ -33,8 +33,14 @@ export function hasActiveProviderSection(file: RuntimeProviderFile | undefined):
     return false;
   }
   const hasProfiles = provider.profiles !== undefined && Object.keys(provider.profiles).length > 0;
-  const hasTargets = provider.targets !== undefined && Object.keys(provider.targets).length > 0;
-  return Boolean(provider.defaults || hasProfiles || hasTargets || provider.auto_routing);
+  // Empty nested maps (`targets: { personas: {} }`, `auto_routing: {}`) carry no assignment and
+  // must not flip the mode to runtime-v1 (they would trip the mixed-config gate for nothing).
+  const hasTargets = Object.values(provider.targets ?? {}).some(
+    (map) => Object.keys(map ?? {}).length > 0,
+  );
+  const hasAutoRouting = provider.auto_routing !== undefined
+    && Object.keys(provider.auto_routing).length > 0;
+  return Boolean(provider.defaults || hasProfiles || hasTargets || hasAutoRouting);
 }
 
 export function determineProviderConfigMode(

@@ -516,17 +516,23 @@ provider:
 
 ### 解決の優先順位
 
-agent の provider は次のラダーで解決し、後のエントリが前のエントリを上書きします。
+workflow agent の provider は次のラダーで解決し、後のエントリが前のエントリを上書きします。
 
 ```text
 defaults
   < personas
   < tags
   < steps
-  < internal_agents
 ```
 
-`internal_agents` は `selector` と `assistant` の 2 つの内部 agent を対象とします。同じ優先度の target（例えば複数の一致する tag）が異なる provider を割り当てた場合は、暗黙に一方を選ばず fail-fast します。コマンドラインの `--provider` / `--model` は実行時 override であり、legacy と runtime のどちらのモードでも許可されます。
+内部 agent（`selector` と `assistant`）は別のラダーで解決します。`internal_agents` は step 解決後に汎用的に上書きされる target ではありません。
+
+```text
+defaults
+  < internal_agents.<agent>
+```
+
+同じ優先度の target（例えば複数の一致する tag）が異なる provider を割り当てた場合は、暗黙に一方を選ばず fail-fast します。コマンドラインの `--provider` / `--model` は実行時 override であり、legacy と runtime のどちらのモードでも許可されます。
 
 auto routing の candidate は provider/model/options を重複記述せず `provider.profiles` を参照し、router 自身も `router_profile` で profile を参照します。pool・tier などの routing metadata は `provider.auto_routing` が所有します。router 出力の parse/schema 不整合や未知の profile 参照は、fallback で隠さず agent 実行前に fail-fast します。
 
@@ -542,7 +548,8 @@ runtime と legacy の provider 設定は混在させられません。各 legac
 | `provider_routing.tags` | `provider.targets.tags` |
 | `provider_routing.steps` | `provider.targets.steps` |
 | `persona_providers` | `provider.targets.personas` |
-| `takt_providers.assistant` | `provider.targets.internal_agents` |
+| `takt_providers.selector` / `takt_providers.assistant` | `provider.targets.internal_agents` |
+| `auto_routing` | `provider.auto_routing` |
 | auto routing candidates | `provider.profiles` を参照する pool candidates |
 | workflow 内の provider 指定 | `provider.targets.steps` |
 

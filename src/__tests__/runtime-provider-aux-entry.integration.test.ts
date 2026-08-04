@@ -197,7 +197,7 @@ describe('getWorkflowDescription consumes the compiled provider environment', ()
       .toThrow(/[Cc]onflicting provider routing/);
   });
 
-  it('does not throw on same-priority tag routing in legacy mode (last-wins)', () => {
+  it('resolves same-priority tag routing in legacy mode by last-wins', () => {
     writeGlobalConfig([
       'language: en',
       'provider: claude',
@@ -226,7 +226,17 @@ describe('getWorkflowDescription consumes the compiled provider environment', ()
       '        next: COMPLETE',
     ]);
 
-    expect(() => getWorkflowDescription('preview-legacy-tags', projectCwd, 1)).not.toThrow();
+    const description = getWorkflowDescription('preview-legacy-tags', projectCwd, 1);
+
+    // Legacy last-wins: the last matching tag (t2) supplies the provider/model. A first-wins or
+    // defaults regression would surface claude/sonnet here.
+    expect(description.stepPreviews).toContainEqual(
+      expect.objectContaining({
+        name: 'implement',
+        provider: 'codex',
+        model: 'gpt-5',
+      }),
+    );
   });
 
   it('fails fast in preview when an active runtime section coexists with a legacy provider', () => {

@@ -386,10 +386,15 @@ function resolveProfileEntry(
   flatProfiles: Map<string, FlatProfile>,
 ): ProviderRoutingEntry {
   const profile = flatProfiles.get(profileName);
+  if (profile?.provider === undefined || profile.model === undefined) {
+    throw new Error(
+      `runtime.yaml \`provider.profiles."${profileName}"\` is not defined or is missing \`provider\`/\`model\``,
+    );
+  }
   const options = resolveProfileProviderOptions(profile);
   return {
-    provider: profile?.provider as ProviderType,
-    model: profile?.model as string,
+    provider: profile.provider as ProviderType,
+    model: profile.model,
     ...(options !== undefined ? { providerOptions: options } : {}),
   };
 }

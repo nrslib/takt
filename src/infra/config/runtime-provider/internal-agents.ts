@@ -43,7 +43,9 @@ function resolveActiveRuntimeProviderEnvironment(
   }
   const section = runtimeFile?.provider;
   if (section === undefined) {
-    return undefined;
+    // Unreachable: runtime-v1 mode requires an active provider section. Fail fast like
+    // resolveCompiledProviderEnvironment instead of silently falling back to legacy resolution.
+    throw new Error('runtime-v1 mode resolved without a provider section');
   }
   return compileProviderEnvironment({ kind: 'runtime-v1', section });
 }

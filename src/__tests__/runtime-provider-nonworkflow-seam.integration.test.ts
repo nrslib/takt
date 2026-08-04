@@ -121,6 +121,74 @@ describe('runtime.yaml non-workflow provider resolution', () => {
     expect(ctx.providerOptions).toEqual({ codex: { reasoningEffort: 'high' } });
   });
 
+  it('treats an env-source provider as an override that drops the runtime model/options', () => {
+    writeGlobalRuntimeFile({
+      version: 1,
+      provider: {
+        defaults: { profile: 'default' },
+        profiles: {
+          default: { provider: 'codex', model: 'gpt-default', options: { reasoning_effort: 'high' } },
+        },
+      },
+    });
+    const previous = process.env.TAKT_PROVIDER;
+    process.env.TAKT_PROVIDER = 'claude';
+    invalidate();
+    try {
+      expect(resolveNonWorkflowProviderModel(projectCwd)).toEqual({
+        runtimeManaged: true,
+        provider: 'claude',
+      });
+
+      const ctx = initializeSession(projectCwd, 'coder');
+      expect(ctx.providerType).toBe('claude');
+      expect(ctx.model).toBeUndefined();
+      expect(ctx.providerOptions).toBeUndefined();
+    } finally {
+      if (previous === undefined) {
+        delete process.env.TAKT_PROVIDER;
+      } else {
+        process.env.TAKT_PROVIDER = previous;
+      }
+      invalidate();
+    }
+  });
+
+  it('treats an env-source model as an override that keeps the runtime provider/options', () => {
+    writeGlobalRuntimeFile({
+      version: 1,
+      provider: {
+        defaults: { profile: 'default' },
+        profiles: {
+          default: { provider: 'codex', model: 'gpt-default', options: { reasoning_effort: 'high' } },
+        },
+      },
+    });
+    const previous = process.env.TAKT_MODEL;
+    process.env.TAKT_MODEL = 'gpt-env';
+    invalidate();
+    try {
+      expect(resolveNonWorkflowProviderModel(projectCwd)).toEqual({
+        runtimeManaged: true,
+        provider: 'codex',
+        model: 'gpt-env',
+        providerOptions: { codex: { reasoningEffort: 'high' } },
+      });
+
+      const ctx = initializeSession(projectCwd, 'coder');
+      expect(ctx.providerType).toBe('codex');
+      expect(ctx.model).toBe('gpt-env');
+      expect(ctx.providerOptions).toEqual({ codex: { reasoningEffort: 'high' } });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.TAKT_MODEL;
+      } else {
+        process.env.TAKT_MODEL = previous;
+      }
+      invalidate();
+    }
+  });
+
   it('passes legacy config.yaml provider/model through unchanged when no active runtime section exists', () => {
     writeGlobalConfig(['language: en', 'provider: opencode', 'model: opencode/big-pickle']);
     invalidate();

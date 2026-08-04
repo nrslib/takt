@@ -516,17 +516,23 @@ provider:
 
 ### Resolution priority
 
-An agent's provider is resolved by this ladder, later entries overriding earlier ones:
+A workflow agent's provider is resolved by this ladder, later entries overriding earlier ones:
 
 ```text
 defaults
   < personas
   < tags
   < steps
-  < internal_agents
 ```
 
-`internal_agents` covers the `selector` and `assistant` agents. When two targets at the same priority (for example two matching tags) assign different providers, resolution fails fast instead of picking one silently. Explicit `--provider` / `--model` on the command line are runtime overrides and are allowed in both legacy and runtime modes.
+The internal `selector` and `assistant` agents resolve through a separate ladder — `internal_agents` is not a generic override applied after step resolution:
+
+```text
+defaults
+  < internal_agents.<agent>
+```
+
+When two targets at the same priority (for example two matching tags) assign different providers, resolution fails fast instead of picking one silently. Explicit `--provider` / `--model` on the command line are runtime overrides and are allowed in both legacy and runtime modes.
 
 Auto routing candidates reference `provider.profiles` instead of repeating provider/model/options, and the router references a profile through `router_profile`. Pool, tier, and other routing metadata belong to `provider.auto_routing`. A parse/schema mismatch from the router or an unknown profile reference fails fast before any agent runs rather than being hidden behind a fallback.
 
@@ -542,7 +548,8 @@ Runtime and legacy provider settings must not be mixed. Move each legacy setting
 | `provider_routing.tags` | `provider.targets.tags` |
 | `provider_routing.steps` | `provider.targets.steps` |
 | `persona_providers` | `provider.targets.personas` |
-| `takt_providers.assistant` | `provider.targets.internal_agents` |
+| `takt_providers.selector` / `takt_providers.assistant` | `provider.targets.internal_agents` |
+| `auto_routing` | `provider.auto_routing` |
 | auto routing candidates | pool candidates that reference `provider.profiles` |
 | workflow-level provider settings | `provider.targets.steps` |
 

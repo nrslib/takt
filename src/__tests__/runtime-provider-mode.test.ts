@@ -65,6 +65,16 @@ describe('hasActiveProviderSection (C11/C25)', () => {
   it('Given an empty `targets` map, Then it is not active', () => {
     expect(hasActiveProviderSection({ version: 1, provider: { targets: {} } })).toBe(false);
   });
+
+  it('Given `targets` with only empty nested maps, Then it is not active', () => {
+    expect(
+      hasActiveProviderSection({ version: 1, provider: { targets: { personas: {} } } }),
+    ).toBe(false);
+  });
+
+  it('Given an empty `auto_routing` map, Then it is not active', () => {
+    expect(hasActiveProviderSection({ version: 1, provider: { auto_routing: {} } })).toBe(false);
+  });
 });
 
 describe('determineProviderConfigMode (C11/C12/C13)', () => {
@@ -123,9 +133,23 @@ describe('determineProviderConfigMode (C11/C12/C13)', () => {
     ['takt_providers', 'takt_providers', 'provider.targets.internal_agents'],
     ['workflow provider', 'workflow.provider', 'provider.targets.steps'],
   ])('Given active runtime and a %s legacy signal, When determining mode, Then it fails fast (C13)', (_name, setting, migrateTo) => {
-    expect(() => determineProviderConfigMode({
-      runtimeFile: activeFile,
-      legacyProviderSignals: [{ setting, location: `config.yaml:${setting}`, migrateTo }],
-    })).toThrow(new RegExp(setting.replace('.', '\\.')));
+    const location = `config.yaml:${setting}`;
+    let thrown: unknown;
+
+    try {
+      determineProviderConfigMode({
+        runtimeFile: activeFile,
+        legacyProviderSignals: [{ setting, location, migrateTo }],
+      });
+    } catch (error: unknown) {
+      thrown = error;
+    }
+
+    // The error must name the actual location and migration target for every signal, not just
+    // mention the setting somewhere.
+    expect(thrown).toBeInstanceOf(Error);
+    const message = (thrown as Error).message;
+    expect(message).toContain(location);
+    expect(message).toContain(migrateTo);
   });
 });
