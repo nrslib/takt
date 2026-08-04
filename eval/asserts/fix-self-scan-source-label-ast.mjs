@@ -19,9 +19,17 @@ function bindingParamCounts(sourceFile) {
   const record = (name, node) => {
     if (name) counts.set(name, node.parameters.length);
   };
+  // Only module-scope declarations count as export candidates: an inner
+  // same-named binding must not overwrite the outer function's parameter
+  // count (name-keyed maps would otherwise hide a 2-param export behind a
+  // 1-param local shadow).
+  const isTopLevelFunction = (node) => ts.isSourceFile(node.parent);
+  const isTopLevelVariable = (node) => ts.isVariableDeclarationList(node.parent)
+    && ts.isVariableStatement(node.parent.parent)
+    && ts.isSourceFile(node.parent.parent.parent);
   const visit = (node) => {
-    if (ts.isFunctionDeclaration(node)) record(node.name?.text, node);
-    if (ts.isVariableDeclaration(node) && node.initializer
+    if (ts.isFunctionDeclaration(node) && isTopLevelFunction(node)) record(node.name?.text, node);
+    if (ts.isVariableDeclaration(node) && isTopLevelVariable(node) && node.initializer
       && (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))
       && ts.isIdentifier(node.name)) {
       record(node.name.text, node.initializer);
@@ -123,6 +131,8 @@ const MUST_DETECT = [
     `export { ghost as sourceLabel } from './missing.js';`, () => undefined],
   ['import alias called with two arguments',
     `import { sourceLabel as label } from './resolve.js';\nlabel(name, origin);`],
+  ['inner shadow must not hide the outer two-parameter export',
+    `export function sourceLabel(origin, fallback = 'unknown') { return origin; }\nfunction helper() {\n  const sourceLabel = (origin) => origin;\n  return sourceLabel;\n}`],
 ];
 const MUST_ALLOW = [
   ['single argument call', 'sourceLabel(entry.origin);'],
