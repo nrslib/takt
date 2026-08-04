@@ -346,6 +346,119 @@ describe('resolveStepProviderModel', () => {
 
 });
 
+describe('resolveStepProviderModel — tag routing conflict policy', () => {
+  const twoTagRouting = {
+    tags: {
+      t1: { provider: 'codex' as const, model: 'm-a' },
+      t2: { provider: 'claude' as const, model: 'm-b' },
+    },
+  };
+
+  it('throws when runtime-v1 fail-fast policy meets a step with two conflicting tags', () => {
+    expect(() =>
+      resolveStepProviderModel({
+        step: { name: 'implement', personaDisplayName: 'coder', tags: ['t1', 't2'] },
+        providerRouting: twoTagRouting,
+        tagConflictPolicy: 'fail-fast',
+      }),
+    ).toThrow(/Conflicting provider routing for tags \[t1, t2\]/);
+  });
+
+  it('does not throw under fail-fast when the step tags map to the same assignment', () => {
+    const result = resolveStepProviderModel({
+      step: { name: 'implement', personaDisplayName: 'coder', tags: ['t1', 't3'] },
+      providerRouting: {
+        tags: {
+          t1: { provider: 'codex', model: 'm-a' },
+          t3: { provider: 'codex', model: 'm-a' },
+        },
+      },
+      tagConflictPolicy: 'fail-fast',
+    });
+
+    expect(result).toMatchObject({ provider: 'codex', model: 'm-a' });
+  });
+
+  it('keeps legacy last-wins (no throw) when the policy is last-wins', () => {
+    const result = resolveStepProviderModel({
+      step: { name: 'implement', personaDisplayName: 'coder', tags: ['t1', 't2'] },
+      providerRouting: twoTagRouting,
+      tagConflictPolicy: 'last-wins',
+    });
+
+    expect(result).toMatchObject({ provider: 'claude', model: 'm-b' });
+  });
+
+  it('defaults to last-wins when no policy is supplied (legacy callers)', () => {
+    const result = resolveStepProviderModel({
+      step: { name: 'implement', personaDisplayName: 'coder', tags: ['t1', 't2'] },
+      providerRouting: twoTagRouting,
+    });
+
+    expect(result).toMatchObject({ provider: 'claude', model: 'm-b' });
+  });
+
+  it('throws under fail-fast when tags share provider/model but differ in providerOptions', () => {
+    expect(() =>
+      resolveStepProviderModel({
+        step: { name: 'implement', personaDisplayName: 'coder', tags: ['t1', 't2'] },
+        providerRouting: {
+          tags: {
+            t1: { provider: 'codex', model: 'm-a', providerOptions: { codex: { reasoning_effort: 'high' } } },
+            t2: { provider: 'codex', model: 'm-a', providerOptions: { codex: { reasoning_effort: 'low' } } },
+          },
+        },
+        tagConflictPolicy: 'fail-fast',
+      }),
+    ).toThrow(/Conflicting provider routing for tags \[t1, t2\]/);
+  });
+
+  it('does not throw under fail-fast when tags share identical provider/model/providerOptions', () => {
+    const result = resolveStepProviderModel({
+      step: { name: 'implement', personaDisplayName: 'coder', tags: ['t1', 't2'] },
+      providerRouting: {
+        tags: {
+          t1: { provider: 'codex', model: 'm-a', providerOptions: { codex: { reasoning_effort: 'high' } } },
+          t2: { provider: 'codex', model: 'm-a', providerOptions: { codex: { reasoning_effort: 'high' } } },
+        },
+      },
+      tagConflictPolicy: 'fail-fast',
+    });
+
+    expect(result).toMatchObject({ provider: 'codex', model: 'm-a' });
+  });
+
+  it('does not throw under fail-fast when providerOptions differ only in key order', () => {
+    const result = resolveStepProviderModel({
+      step: { name: 'implement', personaDisplayName: 'coder', tags: ['t1', 't2'] },
+      providerRouting: {
+        tags: {
+          t1: { provider: 'codex', model: 'm-a', providerOptions: { codex: { reasoning_effort: 'high', network_access: true } } },
+          t2: { provider: 'codex', model: 'm-a', providerOptions: { codex: { network_access: true, reasoning_effort: 'high' } } },
+        },
+      },
+      tagConflictPolicy: 'fail-fast',
+    });
+
+    expect(result).toMatchObject({ provider: 'codex', model: 'm-a' });
+  });
+
+  it('throws under fail-fast when only one tag defines providerOptions but assignments still conflict', () => {
+    expect(() =>
+      resolveStepProviderModel({
+        step: { name: 'implement', personaDisplayName: 'coder', tags: ['t1', 't2'] },
+        providerRouting: {
+          tags: {
+            t1: { provider: 'codex', model: 'm-a' },
+            t2: { provider: 'codex', model: 'm-a', providerOptions: { codex: { reasoning_effort: 'high' } } },
+          },
+        },
+        tagConflictPolicy: 'fail-fast',
+      }),
+    ).toThrow(/Conflicting provider routing for tags \[t1, t2\]/);
+  });
+});
+
 describe('resolveWorkflowCallProviderModel', () => {
   it('should prefer workflow fallback over resolved project input', () => {
     const result = resolveWorkflowCallProviderModel({

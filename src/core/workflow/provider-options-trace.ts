@@ -17,6 +17,7 @@ export type ProviderOptionsOriginResolver = (path: string) => ProviderOptionsTra
  * - `workflow`: workflow YAML's `workflow_config.provider` / `workflow_config.model`
  * - `project`: project `.takt/config.yaml`
  * - `global`: `~/.takt/config.yaml`
+ * - `runtime-v1`: runtime.yaml `provider.defaults` (issue #1136 runtime-v1 mode)
  * - `default`: provider's built-in default (no explicit configuration)
  */
 export type ProviderResolutionSource =
@@ -35,4 +36,5 @@ export type ProviderResolutionSource =
   | 'workflow'
   | 'project'
   | 'global'
+  | 'runtime-v1'
   | 'default';

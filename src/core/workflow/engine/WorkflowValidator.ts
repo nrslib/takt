@@ -280,6 +280,7 @@ export function validateFindingContractManagerProviderModel(config: WorkflowConf
       modelSource: options.modelSource,
       autoRouting: options.autoRouting,
       providerRouting: options.providerRouting,
+      tagConflictPolicy: options.providerRoutingTagConflictPolicy,
       personaProviders: options.personaProviders,
     });
     const deterministicInfo = options.autoRouting !== undefined
@@ -460,6 +461,7 @@ function validateAgentStepProviderModel(
     modelSource: options.modelSource,
     autoRouting: options.autoRouting,
     providerRouting: options.providerRouting,
+    tagConflictPolicy: options.providerRoutingTagConflictPolicy,
     personaProviders: options.personaProviders,
   });
   let validationInfos: ValidationProviderInfo[];
@@ -792,6 +794,7 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
       model: options.model,
       modelSource: options.modelSource,
       providerRouting: options.providerRouting,
+      tagConflictPolicy: options.providerRoutingTagConflictPolicy,
       personaProviders: options.personaProviders,
     });
     const triggeringProviderInfo = isWorkflowCallStep(triggeringStep)
@@ -804,6 +807,7 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
           modelSource: options.modelSource,
           autoRouting: options.autoRouting,
           providerRouting: options.providerRouting,
+          tagConflictPolicy: options.providerRoutingTagConflictPolicy,
           personaProviders: options.personaProviders,
         });
     const validationInfos = isWorkflowCallStep(triggeringStep)

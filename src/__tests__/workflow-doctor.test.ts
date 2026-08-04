@@ -382,6 +382,47 @@ steps:
     expect(mockError).toHaveBeenCalledWith(expect.stringContaining("provider 'opencode' requires model"));
   });
 
+  it('reports a runtime.yaml same-priority tag routing conflict as a doctor error (fail-fast forwarded)', async () => {
+    writeWorkflow(projectDir, '.takt/runtime.yaml', `version: 1
+provider:
+  defaults:
+    profile: default
+  profiles:
+    default:
+      provider: codex
+      model: gpt-runtime
+    alt:
+      provider: opencode
+      model: opencode/big-pickle
+  targets:
+    tags:
+      t1:
+        profile: default
+      t2:
+        profile: alt
+`);
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+    const filePath = writeWorkflow(projectDir, '.takt/workflows/runtime-tag-conflict.yaml', `name: runtime-tag-conflict
+max_steps: 1
+initial_step: review
+steps:
+  - name: review
+    instruction: review the implementation
+    tags:
+      - t1
+      - t2
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+
+    await expect(doctorWorkflowCommand([filePath], projectDir)).rejects.toThrow('Workflow validation failed');
+
+    expect(mockError).toHaveBeenCalledWith(expect.stringContaining('runtime-tag-conflict.yaml'));
+    expect(mockError).toHaveBeenCalledWith(expect.stringContaining('Conflicting provider routing for tags'));
+  });
+
   it('attributes runtime validation errors to the referenced step fragment', async () => {
     const fragmentPath = writeWorkflow(projectDir, '.takt/steps/opencode-review.yaml', `provider: opencode
 instruction: review the implementation

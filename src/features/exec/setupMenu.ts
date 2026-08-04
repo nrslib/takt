@@ -1,4 +1,5 @@
 import type { ProviderType } from '../../infra/providers/index.js';
+import { getExecModelCandidates } from '../../infra/providers/model-candidates.js';
 import { resolveTtyPolicy } from '../../shared/prompt/tty.js';
 import { info } from '../../shared/ui/index.js';
 import { sanitizeTerminalText } from '../../shared/utils/index.js';
@@ -7,7 +8,6 @@ import {
   assertExecConfig,
   assertExecProviderEffort,
   EXEC_PROVIDERS,
-  getExecModelCandidates,
   getSupportedExecEfforts,
 } from './configValidation.js';
 import {

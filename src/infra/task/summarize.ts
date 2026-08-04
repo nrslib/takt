@@ -14,6 +14,7 @@ import { getProvider, type ProviderType } from '../providers/index.js';
 import { buildProviderRuntimeSystemPrompt } from '../providers/runtimeSystemPrompt.js';
 import { createLogger, slugify } from '../../shared/utils/index.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
+import type { StepProviderOptions } from '../../core/models/workflow-types.js';
 import type { SummarizeOptions } from './types.js';
 
 export type { SummarizeOptions };
@@ -55,6 +56,7 @@ class TaskSummarizer {
   constructor(
     private readonly providerType: ProviderType,
     private readonly model: string | undefined,
+    private readonly providerOptions: StepProviderOptions | undefined,
   ) {}
 
   /**
@@ -83,7 +85,7 @@ class TaskSummarizer {
       cwd,
       model: this.model,
       permissionMode: 'readonly',
-      providerOptions: resolveNonWorkflowProviderOptions(cwd),
+      providerOptions: this.providerOptions,
     });
 
     const slug = slugify(response.content);
@@ -113,9 +115,15 @@ export async function summarizeTaskName(
   if (resolved.provider === undefined) {
     throw new Error('No provider configured. Set "provider" in ~/.takt/config.yaml');
   }
+  // A runtime-v1 `defaults` profile owns its options; every other case keeps the legacy
+  // `provider_options` resolution unchanged so provider/model/options come from one source.
+  const providerOptions = resolved.runtimeManaged
+    ? resolved.providerOptions
+    : resolveNonWorkflowProviderOptions(options.cwd);
   const summarizer = new TaskSummarizer(
     resolved.provider,
     options.model ?? resolved.model,
+    providerOptions,
   );
   return summarizer.summarize(taskName, options.cwd);
 }

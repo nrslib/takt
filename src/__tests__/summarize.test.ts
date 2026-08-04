@@ -57,6 +57,7 @@ beforeEach(() => {
   mockResolveNonWorkflowProviderModel.mockReturnValue({
     provider: 'claude',
     model: undefined,
+    runtimeManaged: false,
   });
   mockResolveNonWorkflowProviderOptions.mockReturnValue({
     codex: { skills: { repo: true, user: false } },
@@ -189,6 +190,7 @@ describe('summarizeTaskName', () => {
     mockResolveNonWorkflowProviderModel.mockReturnValue({
       provider: 'codex',
       model: 'gpt-4',
+      runtimeManaged: false,
     });
     mockProviderCall.mockResolvedValue({
       persona: 'summarizer',
@@ -218,6 +220,7 @@ describe('summarizeTaskName', () => {
     mockResolveNonWorkflowProviderModel.mockReturnValue({
       provider: 'mock',
       model: 'default-summary-model',
+      runtimeManaged: false,
     });
     mockProviderCall.mockResolvedValue({
       persona: 'summarizer',
@@ -241,6 +244,7 @@ describe('summarizeTaskName', () => {
     mockResolveNonWorkflowProviderModel.mockReturnValue({
       provider: 'mock',
       model: undefined,
+      runtimeManaged: false,
     });
     mockProviderCall.mockResolvedValue({
       persona: 'summarizer',

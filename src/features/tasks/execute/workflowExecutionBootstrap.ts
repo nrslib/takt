@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { CapabilityAwareStructuredCaller } from '../../../agents/structured-caller.js';
 import type { WorkflowConfig } from '../../../core/models/index.js';
-import type { ResolvedObservabilityConfig } from '../../../core/models/config-types.js';
+import type { ResolvedObservabilityConfig, TagRoutingConflictPolicy } from '../../../core/models/config-types.js';
 import { buildRunPaths } from '../../../core/workflow/run/run-paths.js';
 import { readRunMetaBySlug } from '../../../core/workflow/run/run-meta.js';
 import { OperationRecoveryError } from '../../../core/workflow/operations/operation-recovery-error.js';
@@ -14,7 +14,9 @@ import {
 } from '../../../core/workflow/run/resume-report-snapshot.js';
 import { resolveRuntimeConfig } from '../../../core/runtime/runtime-environment.js';
 import {
+  loadGlobalConfig,
   loadPersonaSessions,
+  loadProjectConfig,
   loadWorktreeSessions,
   resolveWorkflowConfigValues,
   updatePersonaSession,
@@ -53,6 +55,12 @@ import { SessionLogger } from './sessionLogger.js';
 import { createTraceReportWriter } from './traceReportWriter.js';
 import { sanitizeTextForStorage } from './traceReportRedaction.js';
 import type { WorkflowExecutionOptions } from './types.js';
+import { resolveCompiledProviderEnvironment } from '../../../infra/config/runtime-provider/provider-environment.js';
+import {
+  collectLegacyProviderSignals,
+  selectConfigTaktProviders,
+} from '../../../infra/config/runtime-provider/legacy-signals.js';
+import type { LegacyProviderEnvironmentInput } from '../../../infra/config/runtime-provider/environment.js';
 import { assertTaskPrefixPair, detectStepType } from './workflowExecutionUtils.js';
 import { inheritWorkflowConfigMetadata } from '../../../shared/workflowConfigMetadata.js';
 
@@ -85,6 +93,10 @@ export interface WorkflowExecutionBootstrap {
   currentProviderSource: ProviderResolutionSource;
   configuredModel: string | undefined;
   configuredModelSource: ProviderResolutionSource;
+  personaProviders: WorkflowExecutionOptions['personaProviders'];
+  providerRouting: WorkflowExecutionOptions['providerRouting'];
+  providerRoutingTagConflictPolicy: TagRoutingConflictPolicy;
+  providerOptions: WorkflowExecutionOptions['providerOptions'];
   effectiveWorkflowConfig: WorkflowConfig;
   autoStrategyOverride: WorkflowExecutionOptions['autoStrategy'];
   onEffectiveAutoRoutingReached: () => void;
@@ -354,8 +366,6 @@ export async function createWorkflowExecutionBootstrap(
     : resolveConfigValueWithSource(projectCwd, 'provider', {
         workflowContext: { provider: workflowConfig.provider },
       });
-  const currentProvider = resolvedProvider.value;
-  const currentProviderSource = resolvedProvider.source;
   const resolvedModel = options.model !== undefined
     ? {
         value: options.model,
@@ -364,8 +374,47 @@ export async function createWorkflowExecutionBootstrap(
     : resolveConfigValueWithSource(projectCwd, 'model', {
         workflowContext: { model: workflowConfig.model },
       });
-  const configuredModel = resolvedModel.value;
-  const configuredModelSource = resolvedModel.source;
+  const inheritedAutoRouting = resolveEffectiveAutoRouting(workflowConfig, globalConfig.autoRouting);
+
+  // Configuration-format anti-corruption boundary (issue #1136): compile either legacy
+  // config or an active runtime.yaml provider section into the shared engine-options bundle.
+  // In legacy mode this passes the resolved legacy values through unchanged.
+  const legacyProviderEnvironment: LegacyProviderEnvironmentInput = {
+    provider: resolvedProvider.value,
+    providerSource: resolvedProvider.source,
+    model: resolvedModel.value,
+    modelSource: resolvedModel.source,
+    personaProviders: options.personaProviders,
+    providerRouting: options.providerRouting,
+    autoRouting: inheritedAutoRouting,
+    providerOptions: options.providerOptions,
+    taktProviders: selectConfigTaktProviders(
+      loadProjectConfig(projectCwd).taktProviders,
+      loadGlobalConfig().taktProviders,
+    ),
+  };
+  const providerEnvironment = resolveCompiledProviderEnvironment({
+    projectCwd,
+    legacy: legacyProviderEnvironment,
+    legacySignals: collectLegacyProviderSignals(
+      legacyProviderEnvironment,
+      {
+        name: workflowConfig.name,
+        provider: workflowConfig.provider,
+        model: workflowConfig.model,
+        autoRouting: workflowConfig.autoRouting,
+      },
+      options.providerOptionsSource,
+    ),
+  });
+  const currentProvider = providerEnvironment.provider;
+  const currentProviderSource = providerEnvironment.providerSource;
+  const configuredModel = providerEnvironment.model;
+  const configuredModelSource = providerEnvironment.modelSource;
+  const effectivePersonaProviders = providerEnvironment.personaProviders;
+  const effectiveProviderRouting = providerEnvironment.providerRouting;
+  const effectiveProviderOptions = providerEnvironment.providerOptions;
+  const providerRoutingTagConflictPolicy = providerEnvironment.tagConflictPolicy;
   const autoRoutingReachTracker = new AutoRoutingReachTracker();
   const onEffectiveAutoRoutingReached = (): void => {
     autoRoutingReachTracker.markReached();
@@ -375,11 +424,10 @@ export async function createWorkflowExecutionBootstrap(
       log.warn('--auto-strategy was ignored because execution did not reach a workflow with effective auto_routing');
     }
   };
-  const inheritedAutoRouting = resolveEffectiveAutoRouting(workflowConfig, globalConfig.autoRouting);
   const autoStrategyOverride = options.autoStrategy;
   const effectiveWorkflowConfig: WorkflowConfig = {
     ...workflowConfig,
-    autoRouting: inheritedAutoRouting,
+    autoRouting: providerEnvironment.autoRouting,
     rateLimitFallback: workflowConfig.rateLimitFallback ?? globalConfig.rateLimitFallback,
     runtime: resolveRuntimeConfig(globalConfig.runtime, workflowConfig.runtime),
     maxSteps: effectiveMaxSteps,
@@ -498,6 +546,10 @@ export async function createWorkflowExecutionBootstrap(
     currentProviderSource,
     configuredModel,
     configuredModelSource,
+    personaProviders: effectivePersonaProviders,
+    providerRouting: effectiveProviderRouting,
+    providerRoutingTagConflictPolicy,
+    providerOptions: effectiveProviderOptions,
     effectiveWorkflowConfig,
     autoStrategyOverride,
     onEffectiveAutoRoutingReached,

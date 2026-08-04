@@ -441,6 +441,127 @@ steps:
     ...
 ```
 
+## Runtime Provider Configuration (runtime.yaml)
+
+`runtime.yaml` keeps provider/model/options out of your workflows so the same workflow can run in different execution environments without edits. It is read from two fixed paths, with the project file taking priority over the global one:
+
+1. `~/.takt/runtime.yaml`
+2. `<project>/.takt/runtime.yaml`
+
+Runtime mode is enabled by the presence of an active `provider` section, not by the file existing. A file that only contains `version: 1` is inactive and leaves the legacy `config.yaml` provider resolution in place.
+
+### Configuration example
+
+```yaml
+version: 1
+
+provider:
+  defaults:
+    pool: sol-pool
+
+  profiles:
+    sol-high:
+      provider: codex
+      model: gpt-5.6-sol
+      options:
+        reasoning_effort: high
+    sol-medium:
+      provider: codex
+      model: gpt-5.6-sol
+      options:
+        reasoning_effort: medium
+    sol-low:
+      provider: codex
+      model: gpt-5.6-sol
+      options:
+        reasoning_effort: low
+    router:
+      provider: codex
+      model: gpt-5.6-luna
+      options:
+        reasoning_effort: high
+
+  targets:
+    personas:
+      coder:
+        profile: sol-medium
+    tags:
+      high-stakes:
+        profile: sol-high
+    steps:
+      default/supervise:
+        profile: sol-high
+    internal_agents:
+      selector:
+        profile: router
+
+  auto_routing:
+    strategy: balanced
+    router_profile: router
+    pools:
+      sol-pool:
+        candidates:
+          - profile: sol-high
+            tier: high
+          - profile: sol-medium
+            tier: medium
+          - profile: sol-low
+            tier: low
+        fallback_profile: sol-high
+```
+
+`provider.profiles` holds named provider/model/options definitions. A profile's flat `options` bag applies to that profile's provider (for example `reasoning_effort` maps to the Codex `reasoning_effort` option). Profiles may reuse another profile with an explicit `extends`; there is no field-level merge between same-name profiles across the global and project files — the project definition replaces the whole profile.
+
+`provider.defaults` and every `provider.targets` entry choose exactly one of a fixed `profile` or an auto-routing `pool`. Steps are named `<leaf-workflow-name>/<step-name>`; control nodes that do not run an agent (such as `workflow_call`) are not resolution targets.
+
+### Resolution priority
+
+An agent's provider is resolved by this ladder, later entries overriding earlier ones:
+
+```text
+defaults
+  < personas
+  < tags
+  < steps
+  < internal_agents
+```
+
+`internal_agents` covers the `selector` and `assistant` agents. When two targets at the same priority (for example two matching tags) assign different providers, resolution fails fast instead of picking one silently. Explicit `--provider` / `--model` on the command line are runtime overrides and are allowed in both legacy and runtime modes.
+
+Auto routing candidates reference `provider.profiles` instead of repeating provider/model/options, and the router references a profile through `router_profile`. Pool, tier, and other routing metadata belong to `provider.auto_routing`. A parse/schema mismatch from the router or an unknown profile reference fails fast before any agent runs rather than being hidden behind a fallback.
+
+### Migration from legacy config.yaml
+
+Runtime and legacy provider settings must not be mixed. Move each legacy setting to its runtime destination:
+
+| Legacy setting | Runtime destination |
+|---|---|
+| `provider` / `model` | a profile referenced by `provider.defaults` |
+| `provider_options` | `provider.profiles.*.options` |
+| `provider_routing.personas` | `provider.targets.personas` |
+| `provider_routing.tags` | `provider.targets.tags` |
+| `provider_routing.steps` | `provider.targets.steps` |
+| `persona_providers` | `provider.targets.personas` |
+| `takt_providers.assistant` | `provider.targets.internal_agents` |
+| auto routing candidates | pool candidates that reference `provider.profiles` |
+| workflow-level provider settings | `provider.targets.steps` |
+
+### Mixed configuration error
+
+If an active `runtime.yaml` provider section coexists with any legacy provider setting, TAKT stops before running an agent and reports each location together with its migration target:
+
+```text
+Mixed provider configuration detected: an active runtime.yaml provider section cannot
+coexist with legacy provider settings. Remove the runtime.yaml provider section or migrate
+the following legacy settings:
+  - provider at config.yaml:provider (global) → migrate to provider.defaults + provider.profiles
+  - provider_routing at config.yaml:provider_routing → migrate to provider.targets
+```
+
+### First-run generation
+
+On first launch TAKT generates `~/.takt/runtime.yaml` atomically and never overwrites an existing file; the project `.takt/runtime.yaml` is never generated automatically. A fresh environment is written with the selected provider/model as `provider.profiles.default` plus `provider.defaults.profile: default`. An environment that already has legacy provider settings receives only an inactive `version: 1` file, so its behavior does not change until you migrate.
+
 ## Provider Profiles
 
 Provider profiles allow you to set default permission modes and per-step permission overrides for each provider. This is useful when running different providers with different security postures.

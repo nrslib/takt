@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { resolveAssistantProviderModelFromConfig as realResolveAssistantProviderModelFromConfig } from '../core/config/provider-resolution.js';
 
 let mockPipelineMode = false;
 
@@ -106,6 +107,11 @@ vi.mock('../infra/config/index.js', () => ({
 
 vi.mock('../features/interactive/assistantConfig.js', () => ({
   resolveAssistantConfigLayers: (...args: unknown[]) => mockResolveAssistantConfigLayers(...args),
+  resolveAssistantProviderModel: (projectDir: string, cliOverrides?: { provider?: string; model?: string }) =>
+    realResolveAssistantProviderModelFromConfig(
+      mockResolveAssistantConfigLayers(projectDir),
+      cliOverrides as never,
+    ),
 }));
 
 const mockOpts: Record<string, unknown> = {};

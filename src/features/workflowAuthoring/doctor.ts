@@ -20,9 +20,9 @@ import { evaluateWhenExpression } from '../../core/workflow/evaluation/when-eval
 import { splitTopLevelClausesOrThrow } from '../../core/models/workflow-condition-expression.js';
 import {
   resolveWorkflowSelector,
-  resolveWorkflowConfigValues,
   type SelectorProviderOverrides,
 } from '../../infra/config/index.js';
+import { resolveAuxiliaryProviderEnvironment } from '../../infra/config/runtime-provider/provider-environment.js';
 import { inspectWorkflowFile, resolveWorkflowDoctorTargets } from '../../infra/config/loaders/workflowDoctor.js';
 import { isMissingWorkflowCallArgError } from '../../infra/config/loaders/workflowCallableArgResolver.js';
 import { loadWorkflowFileWithResolutionOptions } from '../../infra/config/loaders/workflowResolvedLoader.js';
@@ -77,17 +77,18 @@ function validateWorkflowRuntimeContract(
       lookupCwd: target.lookupCwd ?? projectDir,
       overrides: selectorOverrides,
     });
-    const config = resolveWorkflowConfigValues(
-      projectDir,
-      ['provider', 'model', 'personaProviders', 'providerRouting', 'autoRouting'],
-    );
+    // Validate provider/model/personaProviders/providerRouting/autoRouting through the same
+    // compiled bundle as execution and preview, so a runtime-v1 environment validates the
+    // runtime.yaml `profiles.default` resolution (and a mixed configuration fails fast here too).
+    const env = resolveAuxiliaryProviderEnvironment(projectDir, workflow);
     validateWorkflowConfig(workflow, {
       projectCwd: projectDir,
-      provider: workflow.provider ?? config.provider,
-      model: workflow.model ?? config.model,
-      personaProviders: config.personaProviders,
-      providerRouting: config.providerRouting,
-      autoRouting: workflow.autoRouting ?? config.autoRouting,
+      provider: env.provider,
+      model: env.model,
+      personaProviders: env.personaProviders,
+      providerRouting: env.providerRouting,
+      autoRouting: env.autoRouting,
+      providerRoutingTagConflictPolicy: env.tagConflictPolicy,
       workflowCallResolver: () => null,
     });
     warnOnMissingProvisionalRouting(report, workflow);

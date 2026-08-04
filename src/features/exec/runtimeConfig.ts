@@ -1,7 +1,6 @@
-import {
-  resolveNonWorkflowProviderOptions,
-  resolveWorkflowConfigValues,
-} from '../../infra/config/index.js';
+import { resolveNonWorkflowProviderOptions } from '../../infra/config/index.js';
+import { resolveAuxiliaryProviderEnvironment } from '../../infra/config/runtime-provider/provider-environment.js';
+import type { WorkflowConfig } from '../../core/models/index.js';
 import type { ProviderType } from '../../infra/providers/index.js';
 import { assertResolvedExecConfig } from './configValidation.js';
 import type {
@@ -32,15 +31,23 @@ export function resolveExecCodexSkillInheritance(cwd: string): ExecCodexSkillInh
   };
 }
 
+/** `exec` carries no workflow, so provider/model resolve purely from config / runtime.yaml. */
+const EXEC_WORKFLOW_CONTEXT: Pick<WorkflowConfig, 'name' | 'provider' | 'model' | 'autoRouting'> = {
+  name: 'exec',
+};
+
 export function resolveConfiguredExecProviderModel(cwd: string): ExecProviderModelDefaults {
-  const config = resolveWorkflowConfigValues(cwd, ['provider', 'model']);
-  const provider = config.provider;
+  // Resolve provider/model through the same compiled bundle as execution/preview so an active
+  // runtime.yaml surfaces its `profiles.default` provider (a mixed configuration fails fast here
+  // too), instead of the legacy resolver silently returning the schema-default provider.
+  const env = resolveAuxiliaryProviderEnvironment(cwd, EXEC_WORKFLOW_CONTEXT);
+  const provider = env.provider;
   if (provider === undefined) {
     return {};
   }
   return {
     provider,
-    ...(config.model !== undefined ? { model: config.model } : {}),
+    ...(env.model !== undefined ? { model: env.model } : {}),
   };
 }
 

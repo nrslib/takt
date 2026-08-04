@@ -177,6 +177,14 @@ E2Eテストを追加・変更した場合は、このドキュメントも更�
     - `takt --task '<gradle/npm を実行する指示>' --workflow e2e/fixtures/workflows/simple.yaml` を実行する。
     - 正例では、作業リポジトリに `.takt/.runtime/env.sh` と `.takt/.runtime/{cache,config,state,gradle,npm}` が作成されていることを確認する。`TMPDIR` はworktree固有の短い外部パスであり、NodeとGradleに同じ値が伝播することを確認する。
     - 負例（`runtime.prepare` 未設定）では、隔離環境から `GRADLE_USER_HOME` と `npm_config_cache` を除外し、Gradle の欠落環境変数および npm のruntimeキャッシュ未注入を示す専用証跡ファイルと両コマンドの実行markerを確認する。`.takt/.runtime/env.sh` は生成されないことを確認する。
+- Runtime.yaml provider section（runtime-v1）（`e2e/specs/runtime-provider.e2e.ts`）
+  - 目的: 有効な `~/.takt/runtime.yaml` の `provider` セクションから provider/model が解決され（runtime-v1）、`--provider` を渡さずに workflow が完了することをmockで確認する（issue #1136）。
+  - LLM: 呼び出さない（`--provider` 未指定で runtime.yaml の `provider: mock` プロファイルを使用）。
+  - 手順（ユーザー行動/コマンド）:
+    - `config.yaml` に legacy provider signal（`provider` / `model` / `provider_options` / `provider_routing` / `persona_providers` / `auto_routing`）を持たせない状態にする。
+    - `~/.takt/runtime.yaml` に `version: 1` と `provider.defaults.profile: default`、`provider.profiles.default: { provider: mock, model: ... }` を書く。
+    - `takt --task '<任意>' --workflow e2e/fixtures/workflows/mock-single-step.yaml`（`--provider` 無し）を実行する。
+    - `Workflow completed` を確認し、セッションログの `step_start` が `provider: mock` / `providerSource: runtime-v1` / `model` / `modelSource: runtime-v1` を持つことを確認する。
 - List tasks non-interactive（`e2e/specs/list-non-interactive.e2e.ts`）
   - 目的: `takt list` の非対話モードでブランチ操作ができることを確認。
   - LLM: 呼び出さない（LLM不使用の操作のみ）

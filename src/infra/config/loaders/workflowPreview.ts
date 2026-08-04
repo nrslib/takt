@@ -1,6 +1,7 @@
 import type { InteractiveMode, WorkflowConfig, WorkflowStep } from '../../../core/models/index.js';
 import { getAllParallelSubSteps, isDynamicParallelSubSteps } from '../../../core/models/types.js';
 import type { StepProviderOptions } from '../../../core/models/workflow-types.js';
+import type { TagRoutingConflictPolicy } from '../../../core/models/config-types.js';
 import {
   resolveStepProviderModel,
   type ProviderModelResolutionContext,
@@ -12,7 +13,6 @@ import {
   resolveRuleBasedAutoRoutingProviderInfo,
   toAutoRoutingStepMetadata,
 } from '../../../core/workflow/auto-routing/resolver.js';
-import { resolveEffectiveAutoRouting } from '../../../core/workflow/auto-routing/effective-auto-routing.js';
 import { buildFindingManagerStep } from '../../../core/workflow/findings/manager-step.js';
 import { resolveFindingContractIntakeStep } from '../../../core/workflow/findings/contract-intake.js';
 import {
@@ -22,8 +22,8 @@ import {
 } from '../../../core/workflow/engine/engine-provider-options.js';
 import { createTeamLeaderPlanningStep } from '../../../core/workflow/engine/team-leader-common.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
-import { resolveWorkflowConfigValues } from '../resolveWorkflowConfigValue.js';
-import { resolveConfigValueWithSource, resolveProviderOptionsWithTrace } from '../resolveConfigValue.js';
+import { resolveProviderOptionsWithTrace } from '../resolveConfigValue.js';
+import { resolveAuxiliaryProviderEnvironment } from '../runtime-provider/provider-environment.js';
 import {
   resolveEffectiveProviderOptions,
   resolveDirectStepProviderOptions,
@@ -85,6 +85,7 @@ export interface FirstStepInfo {
 interface PreviewProviderResolution extends ProviderModelResolutionContext {
   providerSource: ProviderResolutionSource;
   modelSource: ProviderResolutionSource;
+  tagConflictPolicy: TagRoutingConflictPolicy;
   providerOptions: StepProviderOptions | undefined;
   providerOptionsSource: ReturnType<typeof resolveProviderOptionsWithTrace>['source'];
   providerOptionsOriginResolver: ReturnType<typeof resolveProviderOptionsWithTrace>['originResolver'];
@@ -147,6 +148,7 @@ function resolvePreviewProviderInfo(
     autoRouting: resolution.autoRouting,
     providerRouting: resolution.providerRouting,
     personaProviders: resolution.personaProviders,
+    tagConflictPolicy: resolution.tagConflictPolicy,
   });
   if (resolution.autoRouting === undefined) {
     return currentProviderInfo;
@@ -332,22 +334,12 @@ function resolvePreviewProviderResolution(
   workflow: WorkflowConfig,
   selectorOverrides?: SelectorProviderOverrides,
 ): PreviewProviderResolution {
+  // Resolve provider/model/personaProviders/providerRouting/autoRouting/providerOptions through the
+  // same compiled bundle as execution, so a runtime-v1 environment previews the runtime.yaml
+  // `profiles.default` resolution (and a mixed configuration fails fast here too). providerOptions
+  // source/originResolver stay on the trace resolver, matching how the executor traces them.
+  const env = resolveAuxiliaryProviderEnvironment(projectCwd, workflow);
   const {
-    autoRouting,
-    personaProviders,
-    providerRouting,
-  } = resolveWorkflowConfigValues(
-    projectCwd,
-    ['autoRouting', 'personaProviders', 'providerRouting'],
-  );
-  const provider = resolveConfigValueWithSource(projectCwd, 'provider', {
-    workflowContext: workflow,
-  });
-  const model = resolveConfigValueWithSource(projectCwd, 'model', {
-    workflowContext: workflow,
-  });
-  const {
-    value: providerOptions,
     source: providerOptionsSource,
     originResolver: providerOptionsOriginResolver,
   } = resolveProviderOptionsWithTrace(projectCwd);
@@ -358,14 +350,15 @@ function resolvePreviewProviderResolution(
   });
 
   return {
-    provider: provider.value,
-    providerSource: provider.source,
-    model: model.value,
-    modelSource: model.source,
-    autoRouting: resolveEffectiveAutoRouting(workflow, autoRouting),
-    personaProviders,
-    providerRouting,
-    providerOptions,
+    provider: env.provider,
+    providerSource: env.providerSource,
+    model: env.model,
+    modelSource: env.modelSource,
+    autoRouting: env.autoRouting,
+    personaProviders: env.personaProviders,
+    providerRouting: env.providerRouting,
+    tagConflictPolicy: env.tagConflictPolicy,
+    providerOptions: env.providerOptions,
     providerOptionsSource,
     providerOptionsOriginResolver,
     ...(selectorResolution.applies

@@ -62,6 +62,13 @@ export interface ProviderRoutingConfig {
   steps?: Record<string, ProviderRoutingEntry>;
 }
 
+/**
+ * How to resolve a step whose tag set maps to two or more distinct tag routing
+ * assignments at the same priority. `last-wins` merges them field-by-field in tag order
+ * (legacy behavior); `fail-fast` throws before the agent runs (runtime-v1 behavior).
+ */
+export type TagRoutingConflictPolicy = 'last-wins' | 'fail-fast';
+
 export interface TaktProviderEntry {
   provider: ProviderType;
   model?: string;

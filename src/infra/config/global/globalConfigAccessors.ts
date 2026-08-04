@@ -1,5 +1,4 @@
 import type { Language } from '../../../core/models/index.js';
-import type { ProviderType } from '../../../shared/types/provider.js';
 import { DEFAULT_LANGUAGE } from '../../../shared/constants.js';
 import { loadGlobalConfig, loadGlobalConfigTraceState, saveGlobalConfig } from './globalConfigCore.js';
 import { loadProjectConfig, loadProjectConfigTraceState, saveProjectConfig } from '../project/projectConfig.js';
@@ -42,18 +41,6 @@ export function getBuiltinWorkflowsEnabled(): boolean {
 export function getLanguage(): Language {
   const config = loadGlobalConfig();
   return config.language ?? DEFAULT_LANGUAGE;
-}
-
-export function setLanguage(language: Language): void {
-  const config = loadGlobalConfig();
-  config.language = language;
-  saveGlobalConfig(config);
-}
-
-export function setProvider(provider: ProviderType): void {
-  const config = loadGlobalConfig();
-  config.provider = provider;
-  saveGlobalConfig(config);
 }
 
 export function getRoutingTelemetryStatus(projectDir?: string): RoutingTelemetryStatus {

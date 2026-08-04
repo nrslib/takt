@@ -4,9 +4,8 @@ import type { MockInstance } from 'vitest';
 const {
   mockLoadWorkflowByIdentifier,
   mockResolveWorkflowConfigValue,
-  mockResolveWorkflowConfigValues,
-  mockResolveConfigValueWithSource,
   mockResolveWorkflowSelector,
+  mockResolveAuxiliaryProviderEnvironment,
   mockHeader,
   mockInfo,
   mockError,
@@ -18,9 +17,8 @@ const {
 } = vi.hoisted(() => ({
   mockLoadWorkflowByIdentifier: vi.fn(),
   mockResolveWorkflowConfigValue: vi.fn(),
-  mockResolveWorkflowConfigValues: vi.fn(),
-  mockResolveConfigValueWithSource: vi.fn(),
   mockResolveWorkflowSelector: vi.fn(),
+  mockResolveAuxiliaryProviderEnvironment: vi.fn(),
   mockHeader: vi.fn(),
   mockInfo: vi.fn(),
   mockError: vi.fn(),
@@ -34,10 +32,32 @@ const {
 vi.mock('../infra/config/index.js', () => ({
   loadWorkflowByIdentifier: mockLoadWorkflowByIdentifier,
   resolveWorkflowConfigValue: mockResolveWorkflowConfigValue,
-  resolveWorkflowConfigValues: mockResolveWorkflowConfigValues,
-  resolveConfigValueWithSource: mockResolveConfigValueWithSource,
   resolveWorkflowSelector: mockResolveWorkflowSelector,
 }));
+
+// Preview resolves provider/model through the same compiled bundle as execution (issue #1136,
+// Unit B). The bundle's runtime-v1/legacy/mixed behavior is covered by the integration tests for
+// resolveAuxiliaryProviderEnvironment; here we drive its resolved output directly.
+vi.mock('../infra/config/runtime-provider/provider-environment.js', () => ({
+  resolveAuxiliaryProviderEnvironment: mockResolveAuxiliaryProviderEnvironment,
+}));
+
+function compiledEnvironment(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    provider: undefined,
+    providerSource: 'default',
+    model: undefined,
+    modelSource: 'default',
+    personaProviders: undefined,
+    providerRouting: undefined,
+    autoRouting: undefined,
+    providerOptions: undefined,
+    tagConflictPolicy: 'last-wins',
+    ...overrides,
+  };
+}
 
 vi.mock('../core/workflow/instruction/InstructionBuilder.js', () => ({
   InstructionBuilder: vi.fn().mockImplementation(() => ({
@@ -83,15 +103,7 @@ describe('previewPrompts', () => {
       if (key === 'language') return 'en';
       return undefined;
     });
-    mockResolveWorkflowConfigValues.mockReturnValue({
-      autoRouting: undefined,
-      personaProviders: undefined,
-      providerRouting: undefined,
-    });
-    mockResolveConfigValueWithSource.mockImplementation(() => ({
-      value: undefined,
-      source: 'default',
-    }));
+    mockResolveAuxiliaryProviderEnvironment.mockReturnValue(compiledEnvironment());
     mockResolveWorkflowSelector.mockImplementation((workflow: {
       steps?: Array<{ parallel?: { kind?: string } }>;
     }) => workflow.steps?.some((step) => step.parallel?.kind === 'dynamic')
@@ -129,9 +141,9 @@ describe('previewPrompts', () => {
     await previewPrompts('/project', undefined, undefined);
 
     expect(mockLoadWorkflowByIdentifier).toHaveBeenCalledWith('default', '/project');
-    expect(mockResolveWorkflowConfigValues).toHaveBeenCalledWith(
+    expect(mockResolveAuxiliaryProviderEnvironment).toHaveBeenCalledWith(
       '/project',
-      ['autoRouting', 'personaProviders', 'providerRouting'],
+      expect.objectContaining({ name: 'default' }),
     );
   });
 
@@ -537,17 +549,14 @@ describe('previewPrompts', () => {
   });
 
   it('finding manager の provider/model を runtime と同じ resolver 経由で表示する', async () => {
-    mockResolveWorkflowConfigValues.mockReturnValue({
-      provider: undefined,
-      model: undefined,
+    mockResolveAuxiliaryProviderEnvironment.mockReturnValue(compiledEnvironment({
       personaProviders: {
         'Findings Manager': {
           provider: 'codex',
           model: 'gpt-5.5',
         },
       },
-      providerRouting: undefined,
-    });
+    }));
     mockLoadWorkflowByIdentifier.mockReturnValueOnce({
       name: 'finding-contract-preview',
       maxSteps: 1,
@@ -577,11 +586,12 @@ describe('previewPrompts', () => {
   });
 
   it('環境変数由来の provider/model を finding manager の直接指定より優先する', async () => {
-    mockResolveConfigValueWithSource.mockImplementation((_: string, key: string) => (
-      key === 'provider'
-        ? { value: 'mock', source: 'env' }
-        : { value: 'env-model', source: 'env' }
-    ));
+    mockResolveAuxiliaryProviderEnvironment.mockReturnValue(compiledEnvironment({
+      provider: 'mock',
+      providerSource: 'env',
+      model: 'env-model',
+      modelSource: 'env',
+    }));
     mockLoadWorkflowByIdentifier.mockReturnValueOnce({
       name: 'finding-contract-preview',
       maxSteps: 1,
@@ -606,17 +616,14 @@ describe('previewPrompts', () => {
   });
 
   it('finding manager の provider 直接指定時は persona model を表示しない', async () => {
-    mockResolveWorkflowConfigValues.mockReturnValue({
-      provider: undefined,
-      model: undefined,
+    mockResolveAuxiliaryProviderEnvironment.mockReturnValue(compiledEnvironment({
       personaProviders: {
         'Findings Manager': {
           provider: 'opencode',
           model: 'opencode/persona-model',
         },
       },
-      providerRouting: undefined,
-    });
+    }));
     mockLoadWorkflowByIdentifier.mockReturnValueOnce({
       name: 'finding-contract-preview',
       maxSteps: 1,
@@ -647,9 +654,7 @@ describe('previewPrompts', () => {
   });
 
   it('finding manager の静的 auto_routing rule を runtime と同じ候補へ解決する', async () => {
-    mockResolveWorkflowConfigValues.mockReturnValue({
-      provider: undefined,
-      model: undefined,
+    mockResolveAuxiliaryProviderEnvironment.mockReturnValue(compiledEnvironment({
       autoRouting: {
         strategy: 'balanced',
         router: { provider: 'claude-sdk', model: 'claude-haiku-4-5-20251001' },
@@ -664,9 +669,7 @@ describe('previewPrompts', () => {
         candidatePools: { general: { candidates: ['manager'], fallback: 'manager' } },
         rules: { steps: { 'findings-manager': 'manager' } },
       },
-      personaProviders: undefined,
-      providerRouting: undefined,
-    });
+    }));
     mockLoadWorkflowByIdentifier.mockReturnValueOnce({
       name: 'finding-contract-preview',
       maxSteps: 1,
@@ -689,9 +692,7 @@ describe('previewPrompts', () => {
   });
 
   it('finding manager は auto_routing の rules 不一致でも strategy デフォルトへ確定して表示する', async () => {
-    mockResolveWorkflowConfigValues.mockReturnValue({
-      provider: undefined,
-      model: undefined,
+    mockResolveAuxiliaryProviderEnvironment.mockReturnValue(compiledEnvironment({
       autoRouting: {
         strategy: 'balanced',
         router: { provider: 'claude-sdk', model: 'claude-haiku-4-5-20251001' },
@@ -706,9 +707,7 @@ describe('previewPrompts', () => {
         candidatePools: { general: { candidates: ['manager'], fallback: 'manager' } },
         rules: {},
       },
-      personaProviders: undefined,
-      providerRouting: undefined,
-    });
+    }));
     mockLoadWorkflowByIdentifier.mockReturnValueOnce({
       name: 'finding-contract-preview',
       maxSteps: 1,

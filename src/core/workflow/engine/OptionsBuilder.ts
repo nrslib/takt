@@ -150,6 +150,7 @@ export class OptionsBuilder {
       modelSource: this.engineOptions.modelSource,
       autoRouting: this.engineOptions.autoRouting,
       providerRouting: this.engineOptions.providerRouting,
+      tagConflictPolicy: this.engineOptions.providerRoutingTagConflictPolicy,
       personaProviders: this.engineOptions.personaProviders,
     });
     const providerOptions = this.resolveMergedProviderOptions(step, resolved.provider, runtime);

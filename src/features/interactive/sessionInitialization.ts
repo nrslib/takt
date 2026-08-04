@@ -4,11 +4,8 @@ import {
   resolveNonWorkflowProviderOptions,
 } from '../../infra/config/index.js';
 import { getProvider } from '../../infra/providers/index.js';
-import {
-  resolveAssistantProviderModelFromConfig,
-  type AssistantCliOverrides,
-} from '../../core/config/provider-resolution.js';
-import { resolveAssistantConfigLayers } from './assistantConfig.js';
+import type { AssistantCliOverrides } from '../../core/config/provider-resolution.js';
+import { resolveAssistantProviderModel } from './assistantConfig.js';
 import type { SessionContext } from './aiCaller.js';
 
 export function initializeSession(
@@ -19,16 +16,19 @@ export function initializeSession(
   const { language } = resolveConfigValues(cwd, ['language']);
   const lang = language === 'ja' ? 'ja' : 'en';
   const usesAssistantProvider = ['interactive', 'instruct', 'retry'].includes(personaName);
-  const resolvedProviderModel = usesAssistantProvider
-    ? resolveAssistantProviderModelFromConfig(
-      resolveAssistantConfigLayers(cwd),
-      assistantCliOverrides,
-    )
+  const resolved = usesAssistantProvider
+    ? resolveAssistantProviderModel(cwd, assistantCliOverrides)
     : resolveNonWorkflowProviderModel(cwd);
-  const { provider: resolvedProvider, model } = resolvedProviderModel;
+  const { provider: resolvedProvider, model } = resolved;
   if (!resolvedProvider) {
     throw new Error('Provider is not configured.');
   }
+  // A runtime-v1 assistant or non-workflow `defaults` profile owns its options (the assistant path
+  // drops them on a CLI provider override); every other case keeps the legacy `provider_options`
+  // resolution unchanged so provider/model/options come from one source.
+  const providerOptions = resolved.runtimeManaged
+    ? resolved.providerOptions
+    : resolveNonWorkflowProviderOptions(cwd);
 
   return {
     provider: getProvider(resolvedProvider),
@@ -37,6 +37,6 @@ export function initializeSession(
     lang,
     personaName,
     sessionId: undefined,
-    providerOptions: resolveNonWorkflowProviderOptions(cwd),
+    providerOptions,
   };
 }

@@ -31,6 +31,8 @@ vi.mock('../infra/config/index.js', () => ({
   ensureDir: vi.fn(),
   loadPersonaSessions: vi.fn(() => ({})),
   loadWorktreeSessions: vi.fn(() => ({})),
+  loadProjectConfig: vi.fn(() => ({})),
+  loadGlobalConfig: vi.fn(() => ({})),
   resolveWorkflowConfigValues: mockResolveWorkflowConfigValues,
   updatePersonaSession: vi.fn(),
   updateWorktreeSession: vi.fn(),
@@ -48,6 +50,7 @@ vi.mock('../infra/config/resolveConfigValue.js', () => ({
 
 vi.mock('../infra/config/paths.js', () => ({
   getGlobalConfigDir: vi.fn(() => '/tmp/.takt'),
+  getProjectConfigDir: vi.fn((projectDir: string) => `${projectDir}/.takt`),
 }));
 
 vi.mock('../infra/fs/index.js', () => ({

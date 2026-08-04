@@ -441,6 +441,127 @@ steps:
     ...
 ```
 
+## Runtime Provider 設定（runtime.yaml）
+
+`runtime.yaml` は provider/model/options を workflow の外へ切り出し、同じ workflow を編集せずに異なる実行環境で再利用できるようにします。次の 2 つの固定パスから読み込み、project 側の設定を global より優先します。
+
+1. `~/.takt/runtime.yaml`
+2. `<project>/.takt/runtime.yaml`
+
+runtime モードはファイルの存在ではなく、有効な `provider` セクションの有無で有効化されます。`version: 1` だけのファイルは inactive で、従来の `config.yaml` による provider 解決がそのまま使われます。
+
+### 設定例
+
+```yaml
+version: 1
+
+provider:
+  defaults:
+    pool: sol-pool
+
+  profiles:
+    sol-high:
+      provider: codex
+      model: gpt-5.6-sol
+      options:
+        reasoning_effort: high
+    sol-medium:
+      provider: codex
+      model: gpt-5.6-sol
+      options:
+        reasoning_effort: medium
+    sol-low:
+      provider: codex
+      model: gpt-5.6-sol
+      options:
+        reasoning_effort: low
+    router:
+      provider: codex
+      model: gpt-5.6-luna
+      options:
+        reasoning_effort: high
+
+  targets:
+    personas:
+      coder:
+        profile: sol-medium
+    tags:
+      high-stakes:
+        profile: sol-high
+    steps:
+      default/supervise:
+        profile: sol-high
+    internal_agents:
+      selector:
+        profile: router
+
+  auto_routing:
+    strategy: balanced
+    router_profile: router
+    pools:
+      sol-pool:
+        candidates:
+          - profile: sol-high
+            tier: high
+          - profile: sol-medium
+            tier: medium
+          - profile: sol-low
+            tier: low
+        fallback_profile: sol-high
+```
+
+`provider.profiles` は名前付きの provider/model/options 定義を保持します。profile のフラットな `options` はその profile の provider に適用されます（例えば `reasoning_effort` は Codex の `reasoning_effort` オプションになります）。profile は明示的な `extends` で別の profile を継承できます。global と project で同名の profile を field 単位で暗黙に混ぜることはなく、project の定義が profile 全体を置き換えます。
+
+`provider.defaults` と各 `provider.targets` エントリは、固定の `profile` か auto routing を行う `pool` のいずれか一方だけを指定します。step は `<leaf-workflow-name>/<step-name>` 形式で指定し、agent を起動しない制御ノード（`workflow_call` など）は解決対象になりません。
+
+### 解決の優先順位
+
+agent の provider は次のラダーで解決し、後のエントリが前のエントリを上書きします。
+
+```text
+defaults
+  < personas
+  < tags
+  < steps
+  < internal_agents
+```
+
+`internal_agents` は `selector` と `assistant` の 2 つの内部 agent を対象とします。同じ優先度の target（例えば複数の一致する tag）が異なる provider を割り当てた場合は、暗黙に一方を選ばず fail-fast します。コマンドラインの `--provider` / `--model` は実行時 override であり、legacy と runtime のどちらのモードでも許可されます。
+
+auto routing の candidate は provider/model/options を重複記述せず `provider.profiles` を参照し、router 自身も `router_profile` で profile を参照します。pool・tier などの routing metadata は `provider.auto_routing` が所有します。router 出力の parse/schema 不整合や未知の profile 参照は、fallback で隠さず agent 実行前に fail-fast します。
+
+### legacy config.yaml からの移行
+
+runtime と legacy の provider 設定は混在させられません。各 legacy 設定を次の移行先へ移してください。
+
+| 既存設定 | 移行先 |
+|---|---|
+| `provider` / `model` | `provider.defaults` から参照する profile |
+| `provider_options` | `provider.profiles.*.options` |
+| `provider_routing.personas` | `provider.targets.personas` |
+| `provider_routing.tags` | `provider.targets.tags` |
+| `provider_routing.steps` | `provider.targets.steps` |
+| `persona_providers` | `provider.targets.personas` |
+| `takt_providers.assistant` | `provider.targets.internal_agents` |
+| auto routing candidates | `provider.profiles` を参照する pool candidates |
+| workflow 内の provider 指定 | `provider.targets.steps` |
+
+### 混在エラー
+
+有効な `runtime.yaml` provider セクションが legacy provider 設定と共存している場合、TAKT は agent を実行する前に停止し、各箇所とその移行先を示します。
+
+```text
+Mixed provider configuration detected: an active runtime.yaml provider section cannot
+coexist with legacy provider settings. Remove the runtime.yaml provider section or migrate
+the following legacy settings:
+  - provider at config.yaml:provider (global) → migrate to provider.defaults + provider.profiles
+  - provider_routing at config.yaml:provider_routing → migrate to provider.targets
+```
+
+### 初回生成
+
+初回起動時、TAKT は `~/.takt/runtime.yaml` を atomic に生成し、既存ファイルは上書きしません。project 側の `.takt/runtime.yaml` は自動生成されません。新規環境では、選択された provider/model を `provider.profiles.default` と `provider.defaults.profile: default` として書き込みます。legacy provider 設定が既に存在する環境には inactive な `version: 1` ファイルだけを生成し、移行するまで動作は変わりません。
+
 ## Provider プロファイル
 
 Provider プロファイルを使用すると、各 provider にデフォルトのパーミッションモードと step ごとのパーミッション上書きを設定できます。異なる provider を異なるセキュリティポリシーで運用する場合に便利です。

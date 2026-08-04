@@ -7,12 +7,11 @@
 
 import {
   loadWorkflowByIdentifier,
-  resolveConfigValueWithSource,
   resolveWorkflowConfigValue,
-  resolveWorkflowConfigValues,
   resolveWorkflowSelector,
   type SelectorProviderOverrides,
 } from '../../infra/config/index.js';
+import { resolveAuxiliaryProviderEnvironment } from '../../infra/config/runtime-provider/provider-environment.js';
 import { InstructionBuilder } from '../../core/workflow/instruction/InstructionBuilder.js';
 import { ReportInstructionBuilder } from '../../core/workflow/instruction/ReportInstructionBuilder.js';
 import { StatusJudgmentBuilder } from '../../core/workflow/instruction/StatusJudgmentBuilder.js';
@@ -22,10 +21,10 @@ import {
   type ProviderModelResolutionContext,
 } from '../../core/workflow/provider-resolution.js';
 import { resolveDeterministicAutoRoutingProviderInfo, toAutoRoutingStepMetadata } from '../../core/workflow/auto-routing/resolver.js';
-import { resolveEffectiveAutoRouting } from '../../core/workflow/auto-routing/effective-auto-routing.js';
 import { buildFindingManagerStep } from '../../core/workflow/findings/manager-step.js';
 import type { InstructionContext } from '../../core/workflow/instruction/instruction-context.js';
 import type { WorkflowConfig, WorkflowStep } from '../../core/models/index.js';
+import type { TagRoutingConflictPolicy } from '../../core/models/config-types.js';
 import { getAllParallelSubSteps, isDynamicParallelSubSteps } from '../../core/models/types.js';
 import type { Language } from '../../core/models/types.js';
 import type { ProviderResolutionSource } from '../../core/workflow/provider-options-trace.js';
@@ -91,25 +90,23 @@ function formatProviderOptions(
 type PreviewProviderResolution = ProviderModelResolutionContext & {
   providerSource: ProviderResolutionSource;
   modelSource: ProviderResolutionSource;
+  tagConflictPolicy: TagRoutingConflictPolicy;
 };
 
 function resolvePreviewProviderResolution(
   cwd: string,
   config: WorkflowConfig,
 ): PreviewProviderResolution {
-  const resolution = resolveWorkflowConfigValues(
-    cwd,
-    ['autoRouting', 'personaProviders', 'providerRouting'],
-  );
-  const provider = resolveConfigValueWithSource(cwd, 'provider', { workflowContext: config });
-  const model = resolveConfigValueWithSource(cwd, 'model', { workflowContext: config });
+  const env = resolveAuxiliaryProviderEnvironment(cwd, config);
   return {
-    ...resolution,
-    provider: provider.value,
-    providerSource: provider.source,
-    model: model.value,
-    modelSource: model.source,
-    autoRouting: resolveEffectiveAutoRouting(config, resolution.autoRouting),
+    provider: env.provider,
+    providerSource: env.providerSource,
+    model: env.model,
+    modelSource: env.modelSource,
+    autoRouting: env.autoRouting,
+    personaProviders: env.personaProviders,
+    providerRouting: env.providerRouting,
+    tagConflictPolicy: env.tagConflictPolicy,
   };
 }
 
@@ -134,6 +131,7 @@ function resolveFindingManagerProviderModel(
     autoRouting: resolution.autoRouting,
     personaProviders: resolution.personaProviders,
     providerRouting: resolution.providerRouting,
+    tagConflictPolicy: resolution.tagConflictPolicy,
   });
   if (resolution.autoRouting === undefined) {
     return currentProviderInfo;

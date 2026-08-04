@@ -39,6 +39,7 @@ export const mockE2eSpecs = [
   'e2e/specs/task-content-file.e2e.ts',
   'e2e/specs/config-priority.e2e.ts',
   'e2e/specs/runtime-config-provider.e2e.ts',
+  'e2e/specs/runtime-provider.e2e.ts',
   'e2e/specs/repertoire.e2e.ts',
   'e2e/specs/repertoire-real.e2e.ts',
   'e2e/specs/workflow-selection-branches.e2e.ts',
@@ -83,6 +84,7 @@ export const mockE2eShards = [
     'e2e/specs/task-content-file.e2e.ts',
     'e2e/specs/config-priority.e2e.ts',
     'e2e/specs/runtime-config-provider.e2e.ts',
+    'e2e/specs/runtime-provider.e2e.ts',
   ],
   [
     'e2e/specs/report-judge.e2e.ts',

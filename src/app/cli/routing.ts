@@ -27,8 +27,7 @@ import {
   loadPersonaSessions,
 } from '../../infra/config/index.js';
 import { resolvePersonaSessionId } from '../../infra/config/project/sessionStore.js';
-import { resolveAssistantProviderModelFromConfig } from '../../core/config/provider-resolution.js';
-import { resolveAssistantConfigLayers } from '../../features/interactive/assistantConfig.js';
+import { resolveAssistantProviderModel } from '../../features/interactive/assistantConfig.js';
 import { program } from './program.js';
 import { getCliExecutionContext } from './initialization.js';
 import { resolveAgentOverrides, resolveWorkflowCliOption } from './helpers.js';
@@ -214,13 +213,10 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     case 'assistant': {
       let selectedSessionId: string | undefined;
       if (opts.continue === true) {
-        const { provider } = resolveAssistantProviderModelFromConfig(
-          resolveAssistantConfigLayers(resolvedCwd),
-          {
-            provider: assistantOverrideProvider,
-            model: agentOverrides?.model,
-          },
-        );
+        const { provider } = resolveAssistantProviderModel(resolvedCwd, {
+          provider: assistantOverrideProvider,
+          model: agentOverrides?.model,
+        });
         if (!provider) {
           throw new Error('Provider is not configured.');
         }

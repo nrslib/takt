@@ -46,11 +46,17 @@ export async function runSyncConflictResolver(
     ? autoApproveToolRequest
     : undefined;
 
+  // A runtime-v1 `defaults` profile owns its options; the legacy path keeps resolving
+  // `provider_options` so provider/model/options come from one source.
+  const providerOptions = resolvedProviderModel.runtimeManaged
+    ? resolvedProviderModel.providerOptions
+    : resolveNonWorkflowProviderOptions(options.projectCwd);
+
   return agent.call(prompt, {
     cwd: options.cwd,
     model: resolvedProviderModel.model,
     permissionMode: 'edit',
-    providerOptions: resolveNonWorkflowProviderOptions(options.projectCwd),
+    providerOptions,
     onPermissionRequest,
     onStream: options.onStream,
   });

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { resolveAssistantProviderModelFromConfig } from '../core/config/provider-resolution.js';
 
 const {
   mockResolveConfigValues,
@@ -26,6 +27,13 @@ vi.mock('../infra/config/index.js', () => ({
 
 vi.mock('../features/interactive/assistantConfig.js', () => ({
   resolveAssistantConfigLayers: (...args: unknown[]) => mockResolveAssistantConfigLayers(...args),
+  // No runtime.yaml in this unit test, so the wrapper takes its legacy path: resolve the
+  // configured layers through the real core resolver.
+  resolveAssistantProviderModel: (projectDir: string, cliOverrides?: { provider?: string; model?: string }) =>
+    resolveAssistantProviderModelFromConfig(
+      mockResolveAssistantConfigLayers(projectDir),
+      cliOverrides as never,
+    ),
 }));
 
 vi.mock('../infra/providers/index.js', () => ({

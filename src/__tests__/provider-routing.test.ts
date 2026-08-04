@@ -231,6 +231,77 @@ describe('provider_routing provider/model resolution', () => {
   });
 });
 
+describe('OptionsBuilder tag conflict policy forwarding', () => {
+  const conflictingTagRouting = {
+    tags: {
+      review: { provider: 'opencode' as const, model: 'opencode/big-pickle' },
+      web: { provider: 'codex' as const, model: 'gpt-5' },
+    },
+  };
+
+  it('Given fail-fast policy and two conflicting tags, When resolving through OptionsBuilder, Then it throws before running', () => {
+    const builder = createBuilder({
+      providerRoutingTagConflictPolicy: 'fail-fast',
+      providerRouting: conflictingTagRouting,
+    });
+    const step = createStep({ name: 'review', tags: ['review', 'web'] });
+
+    expect(() => builder.resolveStepProviderModel(step)).toThrow(/Conflicting provider routing/);
+  });
+
+  it('Given last-wins policy and two conflicting tags, When resolving through OptionsBuilder, Then the later tag wins', () => {
+    const builder = createBuilder({
+      providerRoutingTagConflictPolicy: 'last-wins',
+      providerRouting: conflictingTagRouting,
+    });
+    const step = createStep({ name: 'review', tags: ['review', 'web'] });
+
+    expect(builder.resolveStepProviderModel(step)).toMatchObject({
+      provider: 'codex',
+      model: 'gpt-5',
+      providerSource: 'provider_routing.tags',
+      modelSource: 'provider_routing.tags',
+    });
+  });
+});
+
+describe('WorkflowValidator tag conflict policy forwarding', () => {
+  const conflictingTagRouting = {
+    tags: {
+      review: { provider: 'opencode' as const, model: 'opencode/big-pickle' },
+      web: { provider: 'codex' as const, model: 'gpt-5' },
+    },
+  };
+
+  function validateConflictingWorkflow(
+    providerRoutingTagConflictPolicy: 'fail-fast' | 'last-wins',
+  ): void {
+    validateWorkflowConfig({
+      name: 'validator-tag-conflict',
+      initialStep: 'review',
+      maxSteps: 1,
+      steps: [
+        createStep({
+          name: 'review',
+          tags: ['review', 'web'],
+        }),
+      ],
+    }, {
+      projectCwd: '/project',
+      providerRouting: conflictingTagRouting,
+      providerRoutingTagConflictPolicy,
+    } as WorkflowEngineOptions);
+  }
+
+  it('Given fail-fast policy and a step with two conflicting tags, When validating the workflow, Then preflight throws before execution', () => {
+    expect(() => validateConflictingWorkflow('fail-fast')).toThrow(/Conflicting provider routing for tags/);
+  });
+
+  it('Given last-wins policy and a step with two conflicting tags, When validating the workflow, Then preflight does not throw', () => {
+    expect(() => validateConflictingWorkflow('last-wins')).not.toThrow();
+  });
+});
+
 describe('provider_routing provider_options resolution', () => {
   it('Given provider_routing resolves the provider, When building agent options, Then session key includes persona, provider, and model', () => {
     const step = createStep({

@@ -1,5 +1,5 @@
 import type { LoopMonitorJudge, WorkflowConfig, WorkflowStep } from '../models/types.js';
-import type { AutoRoutingConfig, PersonaProviderEntry, ProviderRoutingConfig, ProviderRoutingEntry } from '../models/config-types.js';
+import type { AutoRoutingConfig, PersonaProviderEntry, ProviderRoutingConfig, ProviderRoutingEntry, TagRoutingConflictPolicy } from '../models/config-types.js';
 import {
   resolveProviderModelCandidates,
   resolveModelFromCandidates,
@@ -27,6 +27,12 @@ export interface StepProviderModelInput extends ProviderModelResolutionContext {
   providerSource?: ProviderResolutionSource;
   /** Source layer of `model` argument (engine-level fallback). */
   modelSource?: ProviderResolutionSource;
+  /**
+   * How to resolve a step whose tag set maps to two or more distinct tag routing
+   * assignments at the same priority. Defaults to `last-wins` (legacy merge order); the
+   * runtime-v1 environment sets `fail-fast` so conflicts throw before the agent runs.
+   */
+  tagConflictPolicy?: TagRoutingConflictPolicy;
 }
 
 export interface StepProviderModelOutput {
@@ -104,6 +110,7 @@ const PROVIDER_MODEL_SOURCE_PRIORITY: Record<ProviderResolutionSource, number> =
   workflow: 9,
   project: 10,
   global: 11,
+  'runtime-v1': 11,
   default: 12,
 };
 
@@ -163,20 +170,62 @@ export function applyProviderModelOverride<T extends StepProviderModelOutput>(
   };
 }
 
+/**
+ * Serialize a value with object keys recursively sorted so that assignments that differ
+ * only in key insertion order produce the same identity. `normalizeProviderOptions`
+ * already normalizes shape, but identity must not depend on that step, so sorting keeps
+ * AC "options key-order-only difference does not conflict" unconditionally true.
+ */
+function stableSerialize(value: unknown): string {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value) ?? 'null';
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(stableSerialize).join(',')}]`;
+  }
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, v]) => v !== undefined)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([k, v]) => `${JSON.stringify(k)}:${stableSerialize(v)}`);
+  return `{${entries.join(',')}}`;
+}
+
+function tagRoutingEntryIdentity(
+  entry: Pick<ProviderRoutingEntry, 'provider' | 'model' | 'providerOptions'>,
+): string {
+  const options = entry.providerOptions !== undefined ? stableSerialize(entry.providerOptions) : '';
+  return `${entry.provider ?? ''}::${entry.model ?? ''}::${options}`;
+}
+
 function resolveTagProviderRoutingEntry(
   providerRouting: ProviderRoutingConfig | undefined,
   tags: readonly string[] | undefined,
+  tagConflictPolicy: TagRoutingConflictPolicy | undefined,
 ): Pick<ProviderRoutingEntry, 'provider' | 'model'> | undefined {
   if (!providerRouting?.tags || !tags || tags.length === 0) {
     return undefined;
   }
 
-  let resolved: ProviderRoutingEntry | undefined;
-  for (const tag of tags) {
-    const entry = providerRouting.tags[tag];
-    if (!entry) {
-      continue;
+  const routingTags = providerRouting.tags;
+  const matchedTags = tags.filter((tag): tag is string => routingTags[tag] !== undefined);
+  if (matchedTags.length === 0) {
+    return undefined;
+  }
+
+  if (tagConflictPolicy === 'fail-fast') {
+    const distinct = new Set(
+      matchedTags.map((tag) => tagRoutingEntryIdentity(routingTags[tag] as ProviderRoutingEntry)),
+    );
+    if (distinct.size > 1) {
+      throw new Error(
+        `Conflicting provider routing for tags [${matchedTags.join(', ')}] at the same priority`,
+      );
     }
+  }
+
+  let resolved: ProviderRoutingEntry | undefined;
+  for (const tag of matchedTags) {
+    const entry = routingTags[tag] as ProviderRoutingEntry;
     resolved = {
       ...(resolved?.provider !== undefined ? { provider: resolved.provider } : {}),
       ...(resolved?.model !== undefined ? { model: resolved.model } : {}),
@@ -212,7 +261,11 @@ export function resolveStepProviderModel(input: StepProviderModelInput): StepPro
   const routingStepEntry = input.step.name !== undefined
     ? input.providerRouting?.steps?.[input.step.name]
     : undefined;
-  const routingTagEntry = resolveTagProviderRoutingEntry(input.providerRouting, input.step.tags);
+  const routingTagEntry = resolveTagProviderRoutingEntry(
+    input.providerRouting,
+    input.step.tags,
+    input.tagConflictPolicy,
+  );
   const routingPersonaEntry = input.step.providerRoutingPersonaKey
     ? input.providerRouting?.personas?.[input.step.providerRoutingPersonaKey]
     : undefined;

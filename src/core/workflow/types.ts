@@ -21,6 +21,7 @@ import type {
   PersonaProviderEntry,
   ProviderRoutingConfig,
   ResolvedObservabilityConfig,
+  TagRoutingConflictPolicy,
 } from '../models/config-types.js';
 import type { ProviderPermissionProfiles } from '../models/provider-profiles.js';
 import type { ProviderUsageSnapshot } from '../models/response.js';
@@ -456,6 +457,11 @@ export interface WorkflowEngineOptions {
   personaProviders?: Record<string, PersonaProviderEntry>;
   /** Provider routing by raw persona key, workflow step tag, and workflow step name */
   providerRouting?: ProviderRoutingConfig;
+  /**
+   * How to resolve same-priority tag routing conflicts. `fail-fast` (runtime-v1) throws
+   * before the agent runs; `last-wins` (legacy, the default) merges in tag order.
+   */
+  providerRoutingTagConflictPolicy?: TagRoutingConflictPolicy;
   /** Resolved provider permission profiles */
   providerProfiles?: ProviderPermissionProfiles;
   /** Enable interactive-only rules and user-input transitions */

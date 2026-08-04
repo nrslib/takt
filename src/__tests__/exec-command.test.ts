@@ -34,6 +34,19 @@ vi.mock('../infra/config/index.js', () => ({
   resolveNonWorkflowProviderOptions: vi.fn((_cwd: string, options?: unknown) => options),
 }));
 
+// exec resolves its provider/model default through the shared compiled provider environment
+// (issue #1136). This suite controls the exec default provider/model via the mocked
+// resolveWorkflowConfigValues, so delegate the compiled-environment stub to it to preserve behavior.
+vi.mock('../infra/config/runtime-provider/provider-environment.js', () => ({
+  resolveAuxiliaryProviderEnvironment: vi.fn((cwd: string) => {
+    const config = resolveWorkflowConfigValues(cwd, ['provider', 'model']) as {
+      provider?: unknown;
+      model?: unknown;
+    };
+    return { provider: config.provider, model: config.model };
+  }),
+}));
+
 vi.mock('../features/interactive/interactiveInput.js', () => ({
   readInteractiveInput: vi.fn(),
 }));

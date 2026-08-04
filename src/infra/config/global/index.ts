@@ -9,8 +9,6 @@ export {
   getDisabledBuiltins,
   getBuiltinWorkflowsEnabled,
   getLanguage,
-  setLanguage,
-  setProvider,
   getRoutingTelemetryStatus,
   enableRoutingTelemetry,
   disableRoutingTelemetry,

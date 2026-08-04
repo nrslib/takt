@@ -20,14 +20,6 @@ export const EXEC_PROVIDERS: readonly ProviderType[] = [
 ];
 
 export const EXEC_EFFORTS: readonly ExecEffort[] = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
-const EXEC_MODEL_CANDIDATES: Partial<Record<ProviderType, readonly string[]>> = {
-  claude: ['opus', 'sonnet', 'haiku'],
-  'claude-sdk': ['opus', 'sonnet', 'haiku'],
-  'claude-terminal': ['opus', 'sonnet', 'haiku'],
-  codex: ['gpt-5'],
-  opencode: ['opencode/big-pickle'],
-  mock: ['mock-model'],
-};
 const EXEC_OPTIONAL_MODEL_PROVIDERS: ReadonlySet<ProviderType> = new Set(['cursor', 'copilot', 'kiro']);
 
 export const CLAUDE_TOOL_PROVIDERS: ReadonlySet<ProviderType> = new Set(['claude', 'claude-sdk', 'claude-terminal']);
@@ -60,10 +52,6 @@ export function providerSupportsExecEffort(provider: ProviderType, effort: ExecE
 
 export function getSupportedExecEfforts(provider: ProviderType): ExecEffort[] {
   return EXEC_EFFORTS.filter((effort) => providerSupportsExecEffort(provider, effort));
-}
-
-export function getExecModelCandidates(provider: ProviderType): readonly string[] {
-  return EXEC_MODEL_CANDIDATES[provider] ?? [];
 }
 
 export function providerAllowsOmittedExecModel(provider: ProviderType): boolean {

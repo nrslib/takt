@@ -185,7 +185,6 @@ function getGlobalLayerValue<K extends ConfigParameterKey>(
 function getProviderModelSource(
   trace: TracedConfigState,
   key: 'provider' | 'model',
-  fallback: 'project' | 'global',
 ): ConfigValueSource {
   const origin = trace.getOrigin(key);
   if (origin === 'env' || origin === 'cli') {
@@ -197,7 +196,11 @@ function getProviderModelSource(
   if (origin === 'global') {
     return 'global';
   }
-  return fallback;
+  // A schema-injected default (e.g. GlobalConfigSchema defaults `provider: claude`) is not a
+  // configured legacy value: attributing it to the project/global layer would make it trip the
+  // runtime-v1 mixed-config gate even though the user never set a legacy provider. Report it as a
+  // default so it is not treated as a legacy provider signal.
+  return 'default';
 }
 
 function resolveProviderModelConfigValue(
@@ -211,14 +214,13 @@ function resolveProviderModelConfigValue(
   const projectSource = getProviderModelSource(
     loadProjectConfigTraceState(projectDir),
     key,
-    'project',
   );
   if (projectValue !== undefined && projectSource === 'env') {
     return { value: projectValue, source: projectSource };
   }
 
   const globalValue = getGlobalLayerValue(global, key);
-  const globalSource = getProviderModelSource(loadGlobalConfigTraceState(), key, 'global');
+  const globalSource = getProviderModelSource(loadGlobalConfigTraceState(), key);
   if (globalValue !== undefined && globalSource === 'env') {
     return { value: globalValue, source: globalSource };
   }

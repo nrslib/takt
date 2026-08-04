@@ -1,4 +1,5 @@
 import type { AssistantProviderConfig } from '../../core/config/provider-resolution.js';
+import type { ProviderRoutingEntry } from '../../core/models/config-types.js';
 import type { StepProviderOptions } from '../../core/models/workflow-types.js';
 import type { ProviderResolutionSource } from '../../core/workflow/provider-options-trace.js';
 import type { ProviderType } from '../../shared/types/provider.js';
@@ -8,6 +9,8 @@ import { ConfiguredModelSchema } from '../../core/models/model-schema.js';
 import { loadProjectConfig } from './project/projectConfig.js';
 import { loadGlobalConfig } from './global/globalConfig.js';
 import { resolveConfigValueWithSource } from './resolveConfigValue.js';
+import { resolveRuntimeInternalAgentProvider } from './runtime-provider/internal-agents.js';
+import { composeRuntimeProviderOverride } from './runtime-provider/override.js';
 
 export interface SelectorProviderOverrides {
   provider?: ProviderType;
@@ -70,6 +73,10 @@ export function resolveSelectorProviderForProject(
   projectCwd: string,
   overrides?: SelectorProviderOverrides,
 ): ResolvedSelectorProvider {
+  const runtimeSelector = resolveRuntimeInternalAgentProvider(projectCwd, 'selector');
+  if (runtimeSelector !== undefined) {
+    return resolveSelectorFromRuntimeV1(runtimeSelector, projectCwd, overrides);
+  }
   const project = loadProjectConfig(projectCwd);
   const global = loadGlobalConfig();
   const configuredProvider = resolveConfigValueWithSource(projectCwd, 'provider');
@@ -99,6 +106,57 @@ export function resolveSelectorProviderForProject(
     modelSource: overrides?.modelSource
       ?? (configuredModel.source === 'env' ? 'env' : undefined),
   });
+}
+
+/**
+ * Resolve the selector provider from an active runtime.yaml section. CLI/env overrides still win
+ * (order.md treats explicit provider selection as a runtime override in both modes); when the
+ * provider is overridden the runtime-tied model/options no longer apply.
+ */
+function resolveSelectorFromRuntimeV1(
+  runtime: ProviderRoutingEntry,
+  projectCwd: string,
+  overrides?: SelectorProviderOverrides,
+): ResolvedSelectorProvider {
+  const configuredProvider = resolveConfigValueWithSource(projectCwd, 'provider');
+  const configuredModel = resolveConfigValueWithSource(projectCwd, 'model');
+  const providerOverride = overrides?.provider
+    ?? (configuredProvider.source === 'env' ? configuredProvider.value : undefined);
+  const providerOverrideSource = overrides?.providerSource
+    ?? (configuredProvider.source === 'env' ? 'env' : 'cli');
+  const modelOverride = overrides?.model
+    ?? (configuredModel.source === 'env' ? configuredModel.value : undefined);
+  const modelOverrideSource = overrides?.modelSource
+    ?? (configuredModel.source === 'env' ? 'env' : 'cli');
+
+  const composed = composeRuntimeProviderOverride(
+    { provider: runtime.provider, model: runtime.model, providerOptions: runtime.providerOptions },
+    { provider: providerOverride, model: normalizeSelectorModel(modelOverride) },
+  );
+  const provider = composed.provider;
+  const providerSource: ProviderResolutionSource | undefined = providerOverride !== undefined
+    ? providerOverrideSource
+    : (runtime.provider !== undefined ? 'runtime-v1' : undefined);
+
+  const model = composed.model;
+  let modelSource: ProviderResolutionSource | undefined;
+  if (modelOverride !== undefined) {
+    modelSource = modelOverrideSource;
+  } else if (providerOverride === undefined && runtime.model !== undefined) {
+    modelSource = 'runtime-v1';
+  }
+
+  validateProviderModelRequirements(provider, model, {
+    modelFieldName: 'Configuration error: runtime.yaml internal_agents.selector resolved model',
+  });
+  const providerOptions = composed.providerOptions;
+  return {
+    ...(provider === undefined ? {} : { provider }),
+    ...(providerSource === undefined ? {} : { providerSource }),
+    ...(model === undefined ? {} : { model }),
+    ...(modelSource === undefined ? {} : { modelSource }),
+    ...(providerOptions === undefined ? {} : { providerOptions }),
+  };
 }
 
 function resolveSelectorProviderOptions(

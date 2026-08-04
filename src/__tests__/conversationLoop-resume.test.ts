@@ -8,6 +8,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { resolveAssistantProviderModelFromConfig as realResolveAssistantProviderModelFromConfig } from '../core/config/provider-resolution.js';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -45,6 +46,11 @@ vi.mock('../infra/config/index.js', () => ({
 
 vi.mock('../features/interactive/assistantConfig.js', () => ({
   resolveAssistantConfigLayers: (...args: unknown[]) => mockResolveAssistantConfigLayers(...args),
+  resolveAssistantProviderModel: (projectDir: string, cliOverrides?: { provider?: string; model?: string }) =>
+    realResolveAssistantProviderModelFromConfig(
+      mockResolveAssistantConfigLayers(projectDir),
+      cliOverrides as never,
+    ),
 }));
 
 vi.mock('../infra/providers/index.js', () => ({
