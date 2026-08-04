@@ -537,6 +537,12 @@ export async function createWorkflowExecutionBootstrap(
     ),
   });
   const currentProvider = providerEnvironment.provider;
+  // Fail fast when neither the legacy config nor a runtime.yaml profile resolves a provider.
+  // A runtime-v1 pool default legitimately leaves the fixed provider unset (auto routing
+  // selects the candidate per step), so only an environment without auto routing is an error.
+  if (currentProvider === undefined && providerEnvironment.autoRouting === undefined) {
+    throw new Error('No provider configured. Set "provider" in ~/.takt/config.yaml');
+  }
   const currentProviderSource = providerEnvironment.providerSource;
   const configuredModel = providerEnvironment.model;
   const configuredModelSource = providerEnvironment.modelSource;

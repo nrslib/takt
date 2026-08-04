@@ -120,8 +120,11 @@ describe('E2E: runtime.yaml provider section (runtime-v1, mock)', () => {
     const workflowPath = createLocalWorkflowFixture(repo.path, 'mock-single-step.yaml');
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/execute-done.json');
 
-    // No --provider flag: the provider must come from runtime.yaml.
+    // No --provider flag: the provider must come from runtime.yaml. The harness would
+    // otherwise inject `--provider mock` from TAKT_E2E_PROVIDER, turning the resolution
+    // into a CLI override and masking the runtime-v1 sources under test.
     const result = runTakt({
+      injectProvider: false,
       args: [
         '--task', 'Test runtime-v1 provider resolution',
         '--workflow', workflowPath,
@@ -162,8 +165,10 @@ describe('E2E: runtime.yaml provider section (runtime-v1, mock)', () => {
     const workflowPath = createLocalWorkflowFixture(repo.path, 'mock-single-step.yaml');
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/execute-done.json');
 
-    // No --provider flag: the step provider must come from the runtime.yaml auto-routing pool.
+    // No --provider flag: the step provider must come from the runtime.yaml auto-routing pool
+    // (injectProvider: false keeps the harness from injecting a CLI override).
     const result = runTakt({
+      injectProvider: false,
       args: [
         '--task', 'Test runtime-v1 auto_routing resolution',
         '--workflow', workflowPath,
