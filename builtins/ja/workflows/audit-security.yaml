@@ -26,6 +26,7 @@ steps:
     tags:
       - plan
     persona: planner
+    policy: contract-change
     instruction: audit-security-plan
     edit: false
     output_contracts:
@@ -40,6 +41,7 @@ steps:
     tags:
       - review
     persona: security-reviewer
+    policy: contract-change
     knowledge: security
     instruction: audit-security-team-leader
     edit: false
@@ -60,6 +62,7 @@ steps:
       - review
       - supervise
     persona: supervisor
+    policy: contract-change
     knowledge: security
     instruction: audit-security-supervise
     edit: false
@@ -73,6 +76,7 @@ steps:
     tags:
       - review
     persona: security-reviewer
+    policy: contract-change
     knowledge: security
     instruction: audit-security-review
     edit: false

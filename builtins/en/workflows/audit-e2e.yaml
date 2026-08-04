@@ -32,7 +32,7 @@ steps:
     tags:
       - plan
     persona: test-planner
-    policy: testing
+    policy: [contract-change, testing]
     knowledge:
       - architecture
       - e2e-testing

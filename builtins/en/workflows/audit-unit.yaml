@@ -33,7 +33,7 @@ steps:
       - plan
     edit: false
     persona: test-planner
-    policy: testing
+    policy: [contract-change, testing]
     knowledge:
       - architecture
       - unit-testing
