@@ -1,0 +1,33 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+# TAKT facet eval: peer-review / fix (coder, claude headless writes files).
+# Measures whether the coder's post-edit self-scan removes change-induced
+# dead code, keeps the layer direction, and avoids duplicating semantics.
+# Run via npm run eval:prompts:fix-self-scan
+
+description: 'TAKT facet eval: peer-review / fix post-edit self-scan'
+
+prompts:
+  - file://prompts/fix-self-scan.phase1.md
+
+providers:
+  - id: 'exec: bash providers/claude-coder.sh opus .work/fix-self-scan'
+    label: claude-opus
+
+tests:
+  - description: 'fix: implementing the plan must not introduce dead code, upward imports, or duplicated semantics'
+    vars:
+      task: file://cases/fix-self-scan-task.md
+      previous_response: ''
+    assert:
+      - type: javascript
+        metric: self-scan/change-induced-dead-code
+        value: file://asserts/fix-self-scan-dead-code.mjs
+      - type: javascript
+        metric: self-scan/layer-direction
+        value: file://asserts/fix-self-scan-layer.mjs
+      - type: javascript
+        metric: self-scan/single-implementation
+        value: file://asserts/fix-self-scan-dup.mjs
+      - type: javascript
+        metric: self-scan/planned-behavior
+        value: file://asserts/fix-self-scan-behavior.mjs

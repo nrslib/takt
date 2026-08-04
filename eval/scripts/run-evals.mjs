@@ -37,6 +37,7 @@ const SUITES = {
   'frontend-coder': 'promptfooconfig.frontend-coder.yaml',
   'cqrs-coder': 'promptfooconfig.cqrs-coder.yaml',
   'fix-closure': 'promptfooconfig.fix-closure.yaml',
+  'fix-self-scan': 'promptfooconfig.fix-self-scan.yaml',
   'fix-plan-fresh-findings': 'promptfooconfig.fix-plan-fresh-findings.yaml',
   'fix-plan-boundary-preflight': 'promptfooconfig.fix-plan-boundary-preflight.yaml',
   'review-family-closure': 'promptfooconfig.review-family-closure.yaml',
@@ -67,7 +68,9 @@ for (const name of names) {
 }
 // rescan 系はローカルモデル（要 opencode 認証）を含む測定用スイートで、
 // 弱いモデルの行は常に部分失敗するため、デフォルトのゲート実行からは除外する。
-const DEFAULT_EXCLUDED = new Set(['rescan', 'rescan-coding', 'rescan-semantics', 'rescan-precision']);
+// fix-self-scan は claude ヘッドレス CLI（要 claude ログイン）で走るため、
+// codex 前提のデフォルト実行からは除外し、明示的に呼び出す。
+const DEFAULT_EXCLUDED = new Set(['rescan', 'rescan-coding', 'rescan-semantics', 'rescan-precision', 'fix-self-scan']);
 const selected = names.length > 0 ? names : Object.keys(SUITES).filter((s) => !DEFAULT_EXCLUDED.has(s));
 
 const summary = [];
