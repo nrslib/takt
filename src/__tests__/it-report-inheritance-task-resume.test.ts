@@ -16,7 +16,6 @@ import {
   resolveWorkflowCallTarget,
 } from '../infra/config/index.js';
 import { TaskRunner, type TaskInfo } from '../infra/task/index.js';
-import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import {
   buildWorkflowResumePointEntry,
   getWorkflowReference,
@@ -360,32 +359,6 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
     const success = await executeAndCompleteTask(resumedTask, runner, environment.projectDir);
 
     const resumedRunSlug = findResumedRunSlug(environment.projectDir);
-    if (mode === 'requeue' && !withFindingContract) {
-      const sourceDatabasePath = buildRunPaths(
-        environment.projectDir,
-        sourceRunSlug,
-      ).findingContractDatabaseAbs;
-      const targetDatabasePath = buildRunPaths(
-        environment.projectDir,
-        resumedRunSlug,
-      ).findingContractDatabaseAbs;
-      const resumedMeta = JSON.parse(readFileSync(join(
-        environment.projectDir,
-        '.takt',
-        'runs',
-        resumedRunSlug,
-        'meta.json',
-      ), 'utf-8')) as { reason?: string };
-
-      expect(success).toBe(false);
-      expect(instructions).toHaveLength(0);
-      expect(resumedMeta.reason).toBe(
-        `Requeue source run "${sourceRunSlug}" has no finding contract database: ${sourceDatabasePath}`,
-      );
-      expect(existsSync(targetDatabasePath)).toBe(false);
-      return;
-    }
-
     const inheritedReportPath = join(
       environment.projectDir,
       '.takt',

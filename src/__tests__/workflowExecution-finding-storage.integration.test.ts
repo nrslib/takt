@@ -3,7 +3,6 @@ import {
   mkdirSync,
   mkdtempSync,
   rmSync,
-  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
@@ -273,32 +272,30 @@ steps:
     });
   });
 
-  it('source SQLite欠落ならtarget storage作成前にfail-fastする', async () => {
-    const sourceRunSlug = 'source-with-deleted-sqlite';
+  it('FC初回アクセス前に失敗したsourceから空のtarget storageでrequeueする', async () => {
+    const sourceRunSlug = 'source-before-finding-access';
     const targetRunSlug = 'target-with-fresh-findings';
     const sourcePaths = buildRunPaths(projectDir, sourceRunSlug);
     const targetPaths = buildRunPaths(projectDir, targetRunSlug);
     const { executeWorkflow } = await import(
       '../features/tasks/execute/workflowExecution.js'
     );
-    terminal.waitForAssistantResponse.mockRejectedValueOnce(
-      new Error('source interrupted'),
-    );
-    const sourceResult = await executeWorkflow(
+    await expect(executeWorkflow(
       workflow(true),
       'source finding task',
       projectDir,
       {
         projectCwd: projectDir,
-        provider: 'claude-terminal',
+        taskPrefix: 'source',
         reportDirName: sourceRunSlug,
       },
-    );
-    expect(sourceResult.success).toBe(false);
-    unlinkSync(sourcePaths.findingContractDatabaseAbs);
+    )).rejects.toThrow('taskPrefix and taskColorIndex must be provided together');
+    expect(readMeta(projectDir, sourceRunSlug)).toMatchObject({
+      status: 'failed',
+    });
+    expect(existsSync(sourcePaths.findingContractDatabaseAbs)).toBe(false);
 
-    const expectedError = `Requeue source run "${sourceRunSlug}" has no finding contract database: ${sourcePaths.findingContractDatabaseAbs}`;
-    await expect(executeWorkflow(
+    const resumedResult = await executeWorkflow(
       workflow(true),
       'resumed finding task',
       projectDir,
@@ -311,9 +308,21 @@ steps:
           resumeMode: 'requeue',
         },
       },
-    )).rejects.toThrow(expectedError);
+    );
 
-    expect(existsSync(targetPaths.findingContractDatabaseAbs)).toBe(false);
+    expect(resumedResult.success).toBe(true);
+    expect(existsSync(targetPaths.findingContractDatabaseAbs)).toBe(true);
+    const sqlite = new DatabaseSync(targetPaths.findingContractDatabaseAbs, {
+      readOnly: true,
+    });
+    expect(sqlite.prepare(`
+      SELECT authority_key AS authorityKey, workflow_name AS workflowName
+      FROM finding_authorities
+    `).all()).toEqual([{
+      authorityKey: 'root',
+      workflowName: 'root-finding',
+    }]);
+    sqlite.close();
   });
 
   it('workflow変更後もsource authorityを新workflow名でseedする', async () => {

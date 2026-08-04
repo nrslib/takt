@@ -4,6 +4,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -278,31 +279,108 @@ describe('workflow run lifecycle composition', () => {
     await finishRun(target);
   });
 
-  it('fails before target Finding storage creation when requeue source has no finding-contract.sqlite', async () => {
+  it('starts with empty Finding storage when requeue source has no finding-contract.sqlite', async () => {
     const cwd = createRoot();
-    const sourcePaths = buildRunPaths(cwd, 'file-only-source');
-    const sourceHandle = await createWorkflowRunLifecycle({
+    const source = await bindRun({
       cwd,
-    }).lifecycle.beginRun({
+      runSlug: 'file-only-source',
       workflowConfig: workflow('file-only', false),
-      task: 'source task',
-      requestedRunSlug: sourcePaths.slug,
     });
-    expect(existsSync(sourceHandle.runPaths.findingContractDatabaseAbs)).toBe(false);
+    expect(existsSync(source.handle.runPaths.findingContractDatabaseAbs)).toBe(false);
+    await finishRun(source, 'failed');
 
     const targetRunSlug = 'fresh-target';
     const targetPaths = buildRunPaths(cwd, targetRunSlug);
-    await expect(bindRun({
+    const targetWorkflow = workflow('target-workflow', true);
+    const target = await bindRun({
       cwd,
       runSlug: targetRunSlug,
-      workflowConfig: workflow('target-workflow', true),
+      workflowConfig: targetWorkflow,
       resumeSource: {
-        sourceRunSlug: sourcePaths.slug,
+        sourceRunSlug: source.handle.runSlug,
         resumeMode: 'requeue',
       },
-    })).rejects.toThrow(
-      `Requeue source run "${sourcePaths.slug}" has no finding contract database: ${sourcePaths.findingContractDatabaseAbs}`,
-    );
-    expect(existsSync(targetPaths.findingContractDatabaseAbs)).toBe(false);
+    });
+    const targetStore = target.binding.findingAuthorityResolver.resolve({
+      workflowConfig: targetWorkflow,
+      runPaths: target.handle.runPaths,
+      runPathNamespace: [],
+    });
+
+    expect(targetStore.loadLedger()).toMatchObject({
+      workflowName: 'target-workflow',
+      findings: [],
+      rawFindings: [],
+    });
+    expect(existsSync(targetPaths.findingContractDatabaseAbs)).toBe(true);
+    await finishRun(target);
+  });
+
+  it('does not inspect requeue source Finding storage when target workflow has no Finding Contract', async () => {
+    const cwd = createRoot();
+    const source = await bindRun({
+      cwd,
+      runSlug: 'non-finding-source',
+      workflowConfig: workflow('non-finding-source', false),
+    });
+    writeFileSync(source.handle.runPaths.findingContractDatabaseAbs, 'not sqlite');
+    await finishRun(source, 'failed');
+
+    const target = await bindRun({
+      cwd,
+      runSlug: 'non-finding-target',
+      workflowConfig: workflow('non-finding-target', false),
+      resumeSource: {
+        sourceRunSlug: source.handle.runSlug,
+        resumeMode: 'requeue',
+      },
+    });
+
+    expect(existsSync(target.handle.runPaths.findingContractDatabaseAbs)).toBe(false);
+    await finishRun(target);
+  });
+
+  it('resolves requeue source lazily when a child workflow uses Finding Contract', async () => {
+    const cwd = createRoot();
+    const rootWorkflow = workflow('root-without-findings', false);
+    const childWorkflow = workflow('child-with-findings', true);
+    const source = await bindRun({
+      cwd,
+      runSlug: 'child-finding-source',
+      workflowConfig: rootWorkflow,
+    });
+    const sourceStore = source.binding.findingAuthorityResolver.resolve({
+      workflowConfig: childWorkflow,
+      runPaths: source.handle.runPaths,
+      runPathNamespace: ['child'],
+      workflowCallSiteIdentity: 'child-call-site',
+    });
+    await sourceStore.updateLedger((current) => ({
+      ledger: { ...current, updatedAt: '2026-08-01T00:00:01.000Z' },
+      result: undefined,
+    }));
+    await finishRun(source, 'failed');
+
+    const target = await bindRun({
+      cwd,
+      runSlug: 'child-finding-target',
+      workflowConfig: rootWorkflow,
+      resumeSource: {
+        sourceRunSlug: source.handle.runSlug,
+        resumeMode: 'requeue',
+      },
+    });
+    const targetStore = target.binding.findingAuthorityResolver.resolve({
+      workflowConfig: childWorkflow,
+      runPaths: target.handle.runPaths,
+      runPathNamespace: ['child'],
+      workflowCallSiteIdentity: 'child-call-site',
+    });
+
+    expect(targetStore.loadLedger()).toMatchObject({
+      workflowName: 'child-with-findings',
+      updatedAt: '2026-08-01T00:00:01.000Z',
+    });
+    await finishRun(target);
   });
 });

@@ -149,6 +149,28 @@ function createUnseededDatabase(
   database.close();
 }
 
+async function createDatabaseWithIdentity(input: {
+  readonly cwd: string;
+  readonly runSlug: string;
+  readonly databaseInstanceId: string;
+  readonly storedRunId: string;
+}): Promise<void> {
+  await createAuthority({
+    cwd: input.cwd,
+    runSlug: input.runSlug,
+    authorityKey: ROOT_FINDING_AUTHORITY_KEY,
+    workflowName: 'source-workflow',
+  });
+  const database = new DatabaseSync(
+    buildRunPaths(input.cwd, input.runSlug).findingContractDatabaseAbs,
+  );
+  database.prepare(`
+    UPDATE database_identity
+    SET database_instance_id = ?, run_id = ?
+  `).run(input.databaseInstanceId, input.storedRunId);
+  database.close();
+}
+
 async function bindTarget(input: {
   readonly cwd: string;
   readonly runSlug: string;
@@ -199,6 +221,16 @@ async function bindTarget(input: {
     terminalPayloads,
   });
   return { binding, handle, terminalPayloads, workflowConfig };
+}
+
+function resolveRootAuthority(
+  target: Awaited<ReturnType<typeof bindTarget>>,
+) {
+  return target.binding.findingAuthorityResolver.resolve({
+    workflowConfig: target.workflowConfig,
+    runPaths: target.handle.runPaths,
+    runPathNamespace: [],
+  });
 }
 
 async function finishRun(run: {
@@ -256,15 +288,50 @@ describe('Finding storage resume source ancestry', () => {
       runSlug: 'requeue-c',
       resumeSource: { sourceRunSlug: 'unseeded-b', resumeMode: 'requeue' },
     });
-    const store = target.binding.findingAuthorityResolver.resolve({
-      workflowConfig: target.workflowConfig,
-      runPaths: target.handle.runPaths,
-      runPathNamespace: [],
-    });
+    const store = resolveRootAuthority(target);
 
     expect(store.loadLedger()).toMatchObject({
       workflowName: 'target-workflow',
       updatedAt: '2026-08-03T00:00:09.000Z',
+    });
+    await finishRun(target);
+  });
+
+  it.each([
+    {
+      name: 'an unseeded database',
+      arrange: (cwd: string) => createUnseededDatabase(
+        cwd,
+        'unseeded-b',
+        'seeded-a',
+      ),
+    },
+    {
+      name: 'a missing database',
+      arrange: (_cwd: string) => undefined,
+    },
+  ])('starts with an empty ledger when ancestry ends at $name', async ({ arrange }) => {
+    const cwd = createRoot();
+    await createAuthority({
+      cwd,
+      runSlug: 'seeded-a',
+      authorityKey: ROOT_FINDING_AUTHORITY_KEY,
+      workflowName: 'unrelated-workflow',
+    });
+    writeRunMeta(cwd, 'unseeded-b');
+    arrange(cwd);
+
+    const target = await bindTarget({
+      cwd,
+      runSlug: 'requeue-c',
+      resumeSource: { sourceRunSlug: 'unseeded-b', resumeMode: 'requeue' },
+    });
+    const store = resolveRootAuthority(target);
+
+    expect(store.loadLedger()).toMatchObject({
+      workflowName: 'target-workflow',
+      findings: [],
+      rawFindings: [],
     });
     await finishRun(target);
   });
@@ -288,12 +355,20 @@ describe('Finding storage resume source ancestry', () => {
       expected: 'Finding storage source run "unseeded-b" has no readable metadata',
     },
     {
-      name: 'ancestry end',
+      name: 'malformed metadata',
       arrange: (cwd: string) => {
-        writeRunMeta(cwd, 'unseeded-b');
         createUnseededDatabase(cwd, 'unseeded-b', 'seeded-a');
+        writeFileSync(buildRunPaths(cwd, 'unseeded-b').metaAbs, '{');
       },
-      expected: 'Finding storage source ancestry ended at unseeded run "unseeded-b"',
+      expected: 'Finding storage source run "unseeded-b" has no readable metadata',
+    },
+    {
+      name: 'invalid parent slug',
+      arrange: (cwd: string) => {
+        createUnseededDatabase(cwd, 'unseeded-b', 'seeded-a');
+        writeRunMeta(cwd, 'unseeded-b', '../invalid');
+      },
+      expected: 'Finding storage source run slug "../invalid" is invalid',
     },
   ])('fails fast at $name', async ({ arrange, expected }) => {
     const cwd = createRoot();
@@ -305,12 +380,79 @@ describe('Finding storage resume source ancestry', () => {
     });
     arrange(cwd);
 
-    await expect(bindTarget({
+    const target = await bindTarget({
       cwd,
       runSlug: 'requeue-c',
       resumeSource: { sourceRunSlug: 'unseeded-b', resumeMode: 'requeue' },
-    })).rejects.toThrow(expected);
+    });
+    expect(() => resolveRootAuthority(target)).toThrow(expected);
     expect(readAuthorityCount(cwd, 'unseeded-b')).toBe(0);
+    await finishRun(target);
+  });
+
+  it.each([
+    {
+      name: 'malformed SQLite',
+      arrange: async (cwd: string) => {
+        const paths = buildRunPaths(cwd, 'invalid-source');
+        mkdirSync(paths.runRootAbs, { recursive: true });
+        writeFileSync(paths.findingContractDatabaseAbs, 'not sqlite');
+      },
+      expected: /not a database/,
+    },
+    {
+      name: 'schema mismatch',
+      arrange: async (cwd: string) => {
+        const paths = buildRunPaths(cwd, 'invalid-source');
+        mkdirSync(paths.runRootAbs, { recursive: true });
+        const database = new DatabaseSync(paths.findingContractDatabaseAbs);
+        database.exec('CREATE TABLE unrelated_table (id TEXT PRIMARY KEY) STRICT');
+        database.close();
+      },
+      expected: /schema tables mismatch/,
+    },
+    {
+      name: 'invalid database identity',
+      arrange: async (cwd: string) => createDatabaseWithIdentity({
+        cwd,
+        runSlug: 'invalid-source',
+        databaseInstanceId: '',
+        storedRunId: 'invalid-source',
+      }),
+      expected: /database identity is invalid/,
+    },
+    {
+      name: 'source run ID mismatch',
+      arrange: async (cwd: string) => createDatabaseWithIdentity({
+        cwd,
+        runSlug: 'invalid-source',
+        databaseInstanceId: 'database-instance',
+        storedRunId: 'different-run',
+      }),
+      expected: /source run id mismatch/,
+    },
+    {
+      name: 'SQLite read error',
+      arrange: async (cwd: string) => {
+        const paths = buildRunPaths(cwd, 'invalid-source');
+        mkdirSync(paths.findingContractDatabaseAbs, { recursive: true });
+      },
+      expected: /disk I\/O error/,
+    },
+  ])('fails fast for $name through production source resolution', async ({
+    arrange,
+    expected,
+  }) => {
+    const cwd = createRoot();
+    await arrange(cwd);
+    const target = await bindTarget({
+      cwd,
+      runSlug: 'requeue-target',
+      resumeSource: { sourceRunSlug: 'invalid-source', resumeMode: 'requeue' },
+    });
+
+    expect(() => resolveRootAuthority(target)).toThrow(expected);
+    await finishRun(target);
   });
 
   it('does not traverse a seeded source that lacks only the requested authority', async () => {

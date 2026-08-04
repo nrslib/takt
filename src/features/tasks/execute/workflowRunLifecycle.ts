@@ -216,7 +216,7 @@ class WorkflowRunLifecycleAdapter {
         },
       }),
       bindExecution: async (
-        context: Omit<WorkflowRunExecutionContext, 'runPaths'>,
+        _context: Omit<WorkflowRunExecutionContext, 'runPaths'>,
       ) => {
         if (bound) {
           throw new Error(
@@ -227,19 +227,23 @@ class WorkflowRunLifecycleAdapter {
         const executionControl = createWorkflowRunExecutionControl(
           abortController,
         );
-        const findingResumeSource = context.workflowConfig.findingContract !== undefined
-          || input.resumeSource?.resumeMode === 'requeue'
-          ? input.resumeSource
-          : undefined;
-        findingStorage = createFindingStorageResolver({
-          runPaths,
-          cwd: this.#cwd,
-          ...(findingResumeSource === undefined
-            ? {}
-            : { resumeSource: findingResumeSource }),
-        });
+        const getFindingStorage = (): FindingStorageResolver => {
+          if (finished) {
+            throw new Error(`Workflow run "${runPaths.slug}" is already finished`);
+          }
+          if (findingStorage === undefined) {
+            findingStorage = createFindingStorageResolver({
+              runPaths,
+              cwd: this.#cwd,
+              ...(input.resumeSource === undefined
+                ? {}
+                : { resumeSource: input.resumeSource }),
+            });
+          }
+          return findingStorage;
+        };
         const findingAuthorityResolver = createFindingAuthorityResolver(
-          findingStorage,
+          getFindingStorage,
         );
         return {
           findingAuthorityResolver,
@@ -314,7 +318,7 @@ function createFindingStorageResolver(input: {
 }
 
 function createFindingAuthorityResolver(
-  storage: FindingStorageResolver,
+  getStorage: () => FindingStorageResolver,
 ): FindingAuthorityResolver {
   const stores = new Map<string, FindingLedgerStore>();
   return {
@@ -335,6 +339,7 @@ function createFindingAuthorityResolver(
       if (existing !== undefined) {
         return existing;
       }
+      const storage = getStorage();
       const store = storage.resolveAuthority({
         authorityKey,
         workflowName: workflowConfig.name,

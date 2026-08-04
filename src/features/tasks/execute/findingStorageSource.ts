@@ -39,49 +39,26 @@ export function resolveFindingStorageSource(
     if (databaseExists && hasAnyFindingAuthority(source)) {
       return source;
     }
-    sourceRunSlug = requireParentSourceRunSlug({
+    const parentSourceRunSlug = resolveParentSourceRunSlug({
       cwd,
       sourceRunSlug,
-      sourceDatabasePath,
-      databaseExists,
-      resumeMode: resumeSource.resumeMode,
     });
+    if (parentSourceRunSlug === undefined) {
+      return undefined;
+    }
+    sourceRunSlug = parentSourceRunSlug;
   }
 }
 
-function requireParentSourceRunSlug(input: {
+function resolveParentSourceRunSlug(input: {
   readonly cwd: string;
   readonly sourceRunSlug: string;
-  readonly sourceDatabasePath: string;
-  readonly databaseExists: boolean;
-  readonly resumeMode: RunResumeSource['resumeMode'];
-}): string {
+}): string | undefined {
   const sourceMeta = readRunMetaBySlug(input.cwd, input.sourceRunSlug);
-  if (sourceMeta?.sourceRunSlug !== undefined) {
-    return sourceMeta.sourceRunSlug;
-  }
-  if (!input.databaseExists && input.resumeMode === 'requeue') {
-    throw missingRequeueSourceDatabase(
-      input.sourceRunSlug,
-      input.sourceDatabasePath,
-    );
-  }
   if (sourceMeta === null) {
     throw new Error(
       `Finding storage source run "${input.sourceRunSlug}" has no readable metadata`,
     );
   }
-  throw new Error(
-    `Finding storage source ancestry ended at unseeded run "${input.sourceRunSlug}"`,
-  );
-}
-
-function missingRequeueSourceDatabase(
-  sourceRunSlug: string,
-  sourceDatabasePath: string,
-): Error {
-  return new Error(
-    `Requeue source run "${sourceRunSlug}" has no finding contract database: `
-    + sourceDatabasePath,
-  );
+  return sourceMeta.sourceRunSlug;
 }
