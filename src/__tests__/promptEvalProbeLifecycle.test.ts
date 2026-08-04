@@ -36,6 +36,11 @@ interface SmokeFixtureCase {
   args: string[];
 }
 
+// Windows CI boots node children slowly enough that a 500ms phase budget can
+// expire before the probe finishes starting (it then never spawns its
+// grandchild or prints its PIDs), so give each phase extra headroom there.
+const PROBE_PHASE_BUDGET_MS = process.platform === 'win32' ? 2_000 : 500;
+
 const smokeBatchFixture = fileURLToPath(
   new URL('../../prompt-evals/fixtures/run-smoke-batch.mjs', import.meta.url),
 );
@@ -498,9 +503,9 @@ describe('prompt eval probe lifecycle', () => {
             'setInterval(() => {}, 1000)',
           ].join(';'),
         ], {
-          startupTimeout: 500,
-          executionTimeout: 500,
-          cleanupTimeout: 500,
+          startupTimeout: PROBE_PHASE_BUDGET_MS,
+          executionTimeout: PROBE_PHASE_BUDGET_MS,
+          cleanupTimeout: PROBE_PHASE_BUDGET_MS,
           env: process.env,
         });
       } catch (error) {
@@ -754,18 +759,19 @@ describe('prompt eval probe lifecycle', () => {
   });
 
   it('should apply independent startup, execution, and cleanup timeouts', async () => {
-    // Each phase takes 500ms (below the 1000ms per-phase budget) while the
-    // 1500ms total exceeds any single budget, proving the timeouts are independent.
+    // Each phase completes at half its budget while the total run exceeds any
+    // single budget, proving the timeouts are independent.
+    const budget = PROBE_PHASE_BUDGET_MS * 2;
     const result = await runProbeProcess('-e', [
       [
-        "setTimeout(() => console.log('PROBE_READY'), 500)",
-        "setTimeout(() => console.log('PROBE_CLEANUP_START'), 1000)",
-        "setTimeout(() => console.log('PROBE_RESULT {}'), 1500)",
+        `setTimeout(() => console.log('PROBE_READY'), ${budget / 2})`,
+        `setTimeout(() => console.log('PROBE_CLEANUP_START'), ${budget})`,
+        `setTimeout(() => console.log('PROBE_RESULT {}'), ${budget * 1.5})`,
       ].join(';'),
     ], {
-      startupTimeout: 1000,
-      executionTimeout: 1000,
-      cleanupTimeout: 1000,
+      startupTimeout: budget,
+      executionTimeout: budget,
+      cleanupTimeout: budget,
       env: process.env,
     });
 
@@ -780,9 +786,9 @@ describe('prompt eval probe lifecycle', () => {
     ['cleanup', "console.log('PROBE_READY'); console.log('PROBE_CLEANUP_START'); setInterval(() => {}, 1000)"],
   ])('should report a %s phase timeout independently', async (phase, source) => {
     const execution = runProbeProcess('-e', [source], {
-      startupTimeout: 500,
-      executionTimeout: 500,
-      cleanupTimeout: 500,
+      startupTimeout: PROBE_PHASE_BUDGET_MS,
+      executionTimeout: PROBE_PHASE_BUDGET_MS,
+      cleanupTimeout: PROBE_PHASE_BUDGET_MS,
       env: process.env,
     });
 
