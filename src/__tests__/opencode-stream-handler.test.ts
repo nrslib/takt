@@ -815,6 +815,34 @@ describe('trackOpenCodeStreamEvent', () => {
     expect(trackOpenCodeStreamEvent(state, event)).toBe(false);
     expect(state.exhausted).toBe(true);
   });
+
+  it('does not count message.part.delta toward the structural event limit', () => {
+    const state = createStreamTrackingState();
+    const deltaEvent: OpenCodeStreamEvent = {
+      type: 'message.part.delta',
+      properties: { sessionID: 'session-1', partID: 'part-1', field: 'text', delta: 'x' },
+    };
+    for (let index = 0; index < OPENCODE_STREAM_EVENT_LIMIT + 100; index += 1) {
+      expect(trackOpenCodeStreamEvent(state, deltaEvent)).toBe(true);
+    }
+    expect(state.exhausted).toBe(false);
+    expect(state.eventCount).toBe(0);
+  });
+
+  it('does not count message.part.updated toward the structural event limit', () => {
+    const state = createStreamTrackingState();
+    const partUpdatedEvent: OpenCodeStreamEvent = {
+      type: 'message.part.updated',
+      properties: {
+        part: { id: 'part-1', sessionID: 'session-1', type: 'text', text: 'x' },
+      },
+    };
+    for (let index = 0; index < OPENCODE_STREAM_EVENT_LIMIT + 100; index += 1) {
+      expect(trackOpenCodeStreamEvent(state, partUpdatedEvent)).toBe(true);
+    }
+    expect(state.exhausted).toBe(false);
+    expect(state.eventCount).toBe(0);
+  });
 });
 
 describe('trackOpenCodeTextBytes', () => {

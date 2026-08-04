@@ -274,10 +274,12 @@ export function trackOpenCodeStreamEvent(
   if (state.exhausted) {
     return false;
   }
-  state.eventCount += 1;
-  if (state.eventCount > OPENCODE_STREAM_EVENT_LIMIT) {
-    exhaustStreamTrackingState(state, 'event_count');
-    return false;
+  if (event.type !== 'message.part.delta' && event.type !== 'message.part.updated') {
+    state.eventCount += 1;
+    if (state.eventCount > OPENCODE_STREAM_EVENT_LIMIT) {
+      exhaustStreamTrackingState(state, 'event_count');
+      return false;
+    }
   }
   if (event.type === 'message.part.updated') {
     const part = event.properties['part'] as OpenCodePart;
