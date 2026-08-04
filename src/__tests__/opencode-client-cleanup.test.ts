@@ -543,6 +543,66 @@ describe('OpenCodeClient stream cleanup', () => {
     expect(stream.returnSpy).toHaveBeenCalled();
   });
 
+  it('does not exhaust sensitive source tracking when the same tool input is updated repeatedly', async () => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const sessionId = 'session-sensitive-same-tool';
+    const toolId = 'same-tool';
+    const updates = MAX_TRACKED_SENSITIVE_SOURCES + 10;
+    const events: unknown[] = [
+      sensitiveToolPartUpdated(sessionId, toolId, 'initial-secret'),
+    ];
+    for (let index = 1; index <= updates; index += 1) {
+      events.push({
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            id: toolId,
+            sessionID: sessionId,
+            type: 'tool',
+            callID: `call-${toolId}`,
+            tool: 'remote',
+            state: { status: 'running', input: { token: `secret-${index}` } },
+          },
+        },
+      });
+    }
+    events.push({
+      type: 'message.part.updated',
+      properties: {
+        part: {
+          id: toolId,
+          sessionID: sessionId,
+          type: 'tool',
+          callID: `call-${toolId}`,
+          tool: 'remote',
+          state: { status: 'completed', input: { token: 'final-secret' }, output: 'ok', title: 'done' },
+        },
+      },
+    });
+    events.push(sessionIdle(sessionId));
+    const stream = new MockEventStream(events, sessionId);
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn() },
+        session: {
+          create: vi.fn().mockResolvedValue({ data: { id: sessionId } }),
+          promptAsync: vi.fn().mockResolvedValue(undefined),
+          abort: successfulSessionAbort(),
+        },
+        event: { subscribe: vi.fn().mockResolvedValue({ stream }) },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const result = await new OpenCodeClient().call('interactive', 'hello', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+    });
+    expect(result.status).toBe('done');
+    expect(result.error ?? '').not.toContain('sensitive_sources');
+  });
+
   it('should consume stream events while promptAsync is still pending', async () => {
     // promptAsync を手動 resolve するまで宙吊りにするテストなので、pump が
     // fake 時間を進めると prompt 完了タイムアウトが先に発火してしまう。実時間で走らせる。

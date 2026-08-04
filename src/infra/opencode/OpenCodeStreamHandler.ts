@@ -531,9 +531,10 @@ function handleToolPartUpdated(
   state: StreamTrackingState,
 ): boolean {
   const toolId = toolPart.callID || toolPart.id;
-  const previousInput = state.latestToolInputs.get(toolId);
+  const isNewTool = !state.startedTools.has(toolId);
   state.latestToolInputs.set(toolId, toolPart.state.input);
-  if (previousInput !== toolPart.state.input) {
+  if (isNewTool) {
+    state.startedTools.add(toolId);
     state.sensitiveSources.add(toolPart.state.input);
     if (state.sensitiveSources.exhausted) {
       exhaustStreamTrackingState(state, 'sensitive_sources');
@@ -543,9 +544,8 @@ function handleToolPartUpdated(
 
   if (!onStream) return true;
 
-  if (!state.startedTools.has(toolId)) {
+  if (isNewTool) {
     emitToolUse(onStream, toolPart.tool, toolPart.state.input, toolId);
-    state.startedTools.add(toolId);
   }
 
   switch (toolPart.state.status) {
