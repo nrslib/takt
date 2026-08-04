@@ -173,6 +173,7 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
       provider: 'claude',
       findingContract: {
         manager: { persona: 'findings-manager', instruction: 'findings-manager', outputContract: 'findings-manager' },
+        adjudicator: { persona: 'supervisor' },
       },
       steps: [
         reviewerStep([makeRule('when(findings.open.count == 0 && findings.conflicts.count == 0)', 'COMPLETE')]),
@@ -216,6 +217,7 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
       provider: 'claude',
       findingContract: {
         manager: { persona: 'findings-manager', instruction: 'findings-manager', outputContract: 'findings-manager' },
+        adjudicator: { persona: 'supervisor' },
       },
       steps: [
         reviewerStep([makeRule(
@@ -269,6 +271,7 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
       provider: 'claude',
       findingContract: {
         manager: { persona: 'findings-manager', instruction: 'findings-manager', outputContract: 'findings-manager' },
+        adjudicator: { persona: 'supervisor' },
       },
       steps: [
         {
@@ -343,6 +346,7 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
       }],
       findingContract: {
         manager: { persona: 'findings-manager', instruction: 'findings-manager', outputContract: 'findings-manager' },
+        adjudicator: { persona: 'supervisor' },
         reviewBudget: { maxReviewRounds: 2 },
       },
       steps: [
@@ -422,6 +426,7 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
       provider: 'claude',
       findingContract: {
         manager: { persona: 'findings-manager', instruction: 'findings-manager', outputContract: 'findings-manager' },
+        adjudicator: { persona: 'supervisor' },
       },
       steps: [
         makeStep({

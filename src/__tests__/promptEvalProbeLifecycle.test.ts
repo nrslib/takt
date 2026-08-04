@@ -40,6 +40,8 @@ interface SmokeFixtureCase {
 // expire before the probe finishes starting (it then never spawns its
 // grandchild or prints its PIDs), so give each phase extra headroom there.
 const PROBE_PHASE_BUDGET_MS = process.platform === 'win32' ? 2_000 : 500;
+// The owned entrypoint adds a second Node process hop before worker cleanup.
+const OWNED_ENTRYPOINT_TIMEOUT_MS = process.platform === 'win32' ? 10_000 : 2_000;
 
 const smokeBatchFixture = fileURLToPath(
   new URL('../../prompt-evals/fixtures/run-smoke-batch.mjs', import.meta.url),
@@ -1069,7 +1071,9 @@ describe('prompt eval probe lifecycle', () => {
       "console.log(`PROBE_RESULT ${JSON.stringify({ workspace, temporaryRoot: tmpdir() })}`)",
     ].join('\n'), 'utf8');
 
-    const { stdout } = await runSmokeScript(script, [], process.env, { timeoutMs: 2_000 });
+    const { stdout } = await runSmokeScript(script, [], process.env, {
+      timeoutMs: OWNED_ENTRYPOINT_TIMEOUT_MS,
+    });
     const result = parseProbeResult(stdout) as { workspace: string; temporaryRoot: string };
     if (existsSync(result.workspace)) {
       temporaryDirectories.push(result.workspace);

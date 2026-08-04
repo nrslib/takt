@@ -62,6 +62,7 @@ function makeFindingContract() {
       instruction: 'Reconcile findings.',
       outputContract: 'Return manager decisions.',
     },
+    adjudicator: { persona: 'supervisor' },
   };
 }
 

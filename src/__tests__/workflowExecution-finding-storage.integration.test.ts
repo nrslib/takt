@@ -92,6 +92,7 @@ function workflow(
               instruction: 'Manage findings',
               outputContract: 'findings-manager',
             },
+            adjudicator: { persona: 'supervisor' },
           },
         }
       : {}),

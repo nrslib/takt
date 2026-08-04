@@ -32,6 +32,7 @@ function workflow(): WorkflowConfig {
         instruction: 'manage',
         outputContract: 'findings-manager',
       },
+      adjudicator: { persona: 'supervisor' },
     },
     steps: [{
       name: 'review',
