@@ -1,11 +1,16 @@
 import { describe, expect, it } from 'vitest';
+import { findingContentAddress } from '../core/models/finding-contract-identity.js';
+import { createEngineProofRecord } from '../core/models/finding-evidence-record.js';
 import { buildLoopMonitorFindingsSummaryData, renderLoopMonitorFindingsSummary } from '../core/workflow/findings/loop-monitor-summary.js';
 import { reconcileFindingLedger } from '../core/workflow/findings/reconciler.js';
 import { createEmptyManagerOutput } from '../core/workflow/findings/manager-output.js';
+import { captureFindingLifecycleHead } from '../core/workflow/findings/lifecycle-mutation.js';
+import { applyFindingLifecycleCommands } from '../core/workflow/findings/lifecycle-transaction.js';
 import { computeReviewerStableKey, computeLineageKey, computeProvisionalStableKey } from '../core/workflow/findings/raw-canonicalization.js';
 import type {
   FindingLedger,
   FindingLedgerEntry,
+  RawFinding,
   ReviewerAnomalyEntry,
 } from '../core/workflow/findings/types.js';
 import { storedRawReconcileProvenance } from './helpers/finding-integrity.js';
@@ -43,19 +48,112 @@ function provisionalEntry(
   };
 }
 
+function rawFindingFixtures(findings: FindingLedgerEntry[]): RawFinding[] {
+  return [...new Set(findings.flatMap((finding) => finding.rawFindingIds))]
+    .map((rawFindingId) => {
+      const source = findings.find((finding) => finding.rawFindingIds.includes(rawFindingId));
+      if (source === undefined) {
+        throw new Error(`Missing fixture finding for raw finding "${rawFindingId}"`);
+      }
+      const reviewer = source.reviewers[0];
+      if (reviewer === undefined) {
+        throw new Error(`Missing fixture reviewer for raw finding "${rawFindingId}"`);
+      }
+      return canonicalRawFindingFixture({
+        rawFindingId,
+        stepName: 'reviewers',
+        reviewer,
+        familyTag: source.provisional === undefined ? 'product' : source.provisional.kind,
+        severity: source.severity,
+        title: source.title,
+        description: source.description === undefined ? source.title : source.description,
+        suggestion: source.suggestion === undefined ? null : source.suggestion,
+        relation: 'new',
+        targetFindingId: null,
+        target: { kind: 'code', paths: [`fixtures/${source.id}.ts`] },
+        evidence: [],
+      });
+    });
+}
+
+function attachProvisionalProvenance(
+  ledger: FindingLedger,
+  finding: FindingLedgerEntry,
+): FindingLedger {
+  const expectedHead = captureFindingLifecycleHead(ledger, 'finding', finding.id);
+  if (expectedHead === undefined || finding.provisional === undefined) {
+    throw new Error(`Missing provisional fixture head for finding "${finding.id}"`);
+  }
+  const proof = createEngineProofRecord({
+    kind: 'engine_proof',
+    purpose: 'lifecycle_authority',
+    verifierId: 'takt.finding-lifecycle-policy',
+    verifierVersion: '1',
+    workflowName: ledger.workflowName,
+    runId: finding.lastSeen.runId,
+    scopeIdentity: 'loop-monitor-summary-fixture',
+    snapshotId: findingContentAddress('loop-monitor-summary-snapshot', { findingId: finding.id }),
+    claimIdentityHash: finding.claimIdentityHash,
+    targetFindingId: finding.id,
+    subject: {
+      kind: 'finding_provisional_isolation',
+      findingId: finding.id,
+      provisionalKind: finding.provisional.kind,
+      stableKey: finding.provisional.stableKey,
+      claimBindingAuthorizationReferences: [],
+    },
+    dependencyDigests: [expectedHead.projectionDigest],
+    resultDigest: findingContentAddress('loop-monitor-summary-proof', { findingId: finding.id }),
+    issuedAt: finding.lastSeen.timestamp,
+  });
+  const { revision: _revision, ...change } = finding;
+  void _revision;
+  return applyFindingLifecycleCommands({
+    ledger: {
+      ...ledger,
+      evidenceRecords: [...ledger.evidenceRecords, proof],
+    },
+    commands: [{
+      operation: 'update_provisional',
+      changes: {
+        findings: [{
+          ...change,
+          evidenceIds: [...new Set([...finding.evidenceIds, proof.evidenceId])].sort(),
+        }],
+        conflicts: [],
+      },
+      authority: { kind: 'verified_evidence' },
+      evidenceSourcesByTarget: new Map([[
+        `finding\0${finding.id}`,
+        {
+          sourceRawFindingIds: [...finding.provisional.sourceRawFindingIds],
+          authorityEvidenceIds: [proof.evidenceId],
+        },
+      ]]),
+    }],
+    occurredAt: finding.lastSeen,
+  });
+}
+
 function makeLedger(findings: FindingLedgerEntry[], roundMarkers: string[] = []): FindingLedger {
-  return authorizeFindingLedgerFixture({
+  let ledger = authorizeFindingLedgerFixture({
     workflowName: 'peer-review',
     nextId: findings.length + 1,
     updatedAt: '2026-07-01T00:00:00.000Z',
     evidenceRecords: [],
-    rawFindings: [],
+    rawFindings: rawFindingFixtures(findings),
     conflicts: [],
     findings,
     ...(roundMarkers.length > 0
       ? { stopBudget: { roundMarkers, firstRoundAt: '2026-07-01T00:00:00.000Z', exhausted: false } }
       : {}),
   });
+  for (const finding of ledger.findings) {
+    if (finding.provisional !== undefined) {
+      ledger = attachProvisionalProvenance(ledger, finding);
+    }
+  }
+  return ledger;
 }
 
 function reviewerAnomaly(overrides: Partial<ReviewerAnomalyEntry> = {}): ReviewerAnomalyEntry {
@@ -88,14 +186,21 @@ describe('renderLoopMonitorFindingsSummary', () => {
         provisionalEntry({ revision: 1 }),
         provisionalEntry({ revision: 1,
           id: 'F-0002',
+          rawFindingIds: ['raw-2'],
           provisional: {
             ...provisionalEntry({ revision: 1 }).provisional!,
             kind: 'reviewer-output-overflow',
             stableKey: 'stable-2',
+            sourceRawFindingIds: ['raw-2'],
             firstObservedRound: 5,
           },
         }),
-        { ...provisionalEntry({ revision: 1, id: 'F-0003' }), provisional: undefined },
+        provisionalEntry({
+          revision: 1,
+          id: 'F-0003',
+          rawFindingIds: ['raw-3'],
+          provisional: undefined,
+        }),
       ],
       ['r1', 'r2', 'r3', 'r4', 'r5', 'r6'],
     );

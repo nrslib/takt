@@ -158,7 +158,7 @@ function makeWorkflowCallChain(workflowCount: number): {
         `iteration-${index + 1}--step-${step.name}--workflow-workflow-${index + 2}`,
     };
     workflowCallPath.push(
-      buildWorkflowResumePointEntry(parent, step.name, 'workflow_call', undefined, 1),
+      buildWorkflowResumePointEntry(parent, step.name, 'workflow_call', 1, undefined, 1),
     );
   }
 
@@ -212,8 +212,23 @@ describe('WorkflowEngine report inheritance', () => {
   });
 
   async function expectMissingReportBeforeAgent(reportName: string): Promise<void> {
-    await expect(engine!.run()).rejects.toThrow(
-      `Report reference "${reportName}" is unavailable for step "fix"`,
+    const abort = vi.fn();
+    engine!.on('workflow:abort', abort);
+
+    const state = await engine!.run();
+    const expectedError = `Report reference "${reportName}" is unavailable for step "fix"`;
+
+    expect(state.status).toBe('aborted');
+    expect(abort).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'aborted' }),
+      expect.stringContaining(expectedError),
+      'runtime_error',
+      {
+        kind: 'runtime_error',
+        step: 'fix',
+        reason: expect.stringContaining(expectedError),
+        error: expect.stringContaining(expectedError),
+      },
     );
     expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
   }
@@ -237,7 +252,13 @@ describe('WorkflowEngine report inheritance', () => {
       resumeSource: { sourceRunSlug, resumeMode: 'retry' },
       resumePoint: {
         version: 2,
-        stack: [{ workflow: workflow.name, step: 'fix', kind: 'agent' }],
+        stack: [{
+          workflow: workflow.name,
+          workflow_ref: workflow.name,
+          step: 'fix',
+          kind: 'agent',
+          occurrence: 1,
+        }],
         iteration: 1,
         elapsed_ms: 0,
         workflow_call_invocations: {},
@@ -294,6 +315,7 @@ describe('WorkflowEngine report inheritance', () => {
       workflow,
       'final-gate',
       'workflow_call',
+      1,
       undefined,
       1,
     );
@@ -301,6 +323,7 @@ describe('WorkflowEngine report inheritance', () => {
       gateWorkflow,
       'delegate',
       'workflow_call',
+      1,
       undefined,
       1,
     );
@@ -320,8 +343,10 @@ describe('WorkflowEngine report inheritance', () => {
         version: 2,
         stack: [{
           workflow: workflow.name,
+          workflow_ref: workflow.name,
           step: 'fix',
           kind: 'agent',
+          occurrence: 1,
           step_iterations: { 'final-gate': 1 },
         }],
         iteration: 1,
@@ -413,6 +438,7 @@ describe('WorkflowEngine report inheritance', () => {
       workflow,
       'delegate',
       'workflow_call',
+      1,
       undefined,
       2,
     );
@@ -440,8 +466,10 @@ describe('WorkflowEngine report inheritance', () => {
         version: 2,
         stack: [{
           workflow: workflow.name,
+          workflow_ref: workflow.name,
           step: 'fix',
           kind: 'agent',
+          occurrence: 1,
           step_iterations: { delegate: 2 },
         }],
         iteration: 2,
@@ -510,8 +538,10 @@ describe('WorkflowEngine report inheritance', () => {
         version: 2,
         stack: [{
           workflow: workflow.name,
+          workflow_ref: workflow.name,
           step: 'fix',
           kind: 'agent',
+          occurrence: 1,
           step_iterations: { delegate: 1 },
         }],
         iteration: 1,
@@ -565,6 +595,7 @@ describe('WorkflowEngine report inheritance', () => {
       workflow,
       'delegate',
       'workflow_call',
+      1,
       undefined,
       2,
     );
@@ -579,8 +610,10 @@ describe('WorkflowEngine report inheritance', () => {
         version: 2,
         stack: [{
           workflow: workflow.name,
+          workflow_ref: workflow.name,
           step: 'fix',
           kind: 'agent',
+          occurrence: 1,
           step_iterations: { delegate: 2 },
         }],
         iteration: 2,
@@ -642,8 +675,10 @@ describe('WorkflowEngine report inheritance', () => {
         version: 2,
         stack: [{
           workflow: workflow.name,
+          workflow_ref: workflow.name,
           step: 'fix',
           kind: 'agent',
+          occurrence: 1,
           step_iterations: {
             'available-review': 1,
             'missing-review': 1,
@@ -710,8 +745,10 @@ describe('WorkflowEngine report inheritance', () => {
         version: 2,
         stack: [{
           workflow: chain.workflow.name,
+          workflow_ref: chain.workflow.name,
           step: 'fix',
           kind: 'agent',
+          occurrence: 1,
         }],
         iteration: 1,
         elapsed_ms: 0,
@@ -762,8 +799,10 @@ describe('WorkflowEngine report inheritance', () => {
         version: 2,
         stack: [{
           workflow: workflow.name,
+          workflow_ref: workflow.name,
           step: 'fix',
           kind: 'agent',
+          occurrence: 1,
           step_iterations: { review: 1 },
         }],
         iteration: 1,
@@ -827,8 +866,10 @@ describe('WorkflowEngine report inheritance', () => {
         version: 2,
         stack: [{
           workflow: workflow.name,
+          workflow_ref: workflow.name,
           step: 'review',
           kind: 'agent',
+          occurrence: 1,
         }],
         iteration: 1,
         elapsed_ms: 0,
@@ -855,8 +896,10 @@ describe('WorkflowEngine report inheritance', () => {
         version: 2,
         stack: [{
           workflow: workflow.name,
+          workflow_ref: workflow.name,
           step: 'fix',
           kind: 'agent',
+          occurrence: 1,
           step_iterations: { review: 1 },
         }],
         iteration: 1,

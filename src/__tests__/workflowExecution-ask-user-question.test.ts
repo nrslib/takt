@@ -6,7 +6,9 @@
  * during automated workflow runs — AskUserQuestion is always blocked.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest';
 import { join } from 'node:path';
 import type { WorkflowConfig, WorkflowResumePoint } from '../core/models/index.js';
 import { AskUserQuestionDeniedError } from '../core/workflow/ask-user-question-error.js';
@@ -259,6 +261,8 @@ function makeConfig(): WorkflowConfig {
 }
 
 describe('executeWorkflow AskUserQuestion deny handler wiring', () => {
+  let projectCwd: string;
+
   beforeEach(() => {
     vi.clearAllMocks();
     MockWorkflowEngine.triggerIterationLimit = false;
@@ -266,12 +270,17 @@ describe('executeWorkflow AskUserQuestion deny handler wiring', () => {
     MockWorkflowEngine.iterationLimitCurrentIteration = 1;
     MockWorkflowEngine.activeResumePoint = undefined;
     MockWorkflowEngine.buildResumePointForCurrentStep = undefined;
+    projectCwd = mkdtempSync(join(tmpdir(), 'takt-ask-user-question-project-'));
+  });
+
+  afterEach(() => {
+    rmSync(projectCwd, { recursive: true, force: true });
   });
 
   it('should pass onAskUserQuestion handler to WorkflowEngine', async () => {
     // Given: normal workflow execution
-    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
     });
 
     // Then: WorkflowEngine receives an onAskUserQuestion handler
@@ -281,8 +290,8 @@ describe('executeWorkflow AskUserQuestion deny handler wiring', () => {
 
   it('should provide a handler that throws AskUserQuestionDeniedError', async () => {
     // Given: workflow execution completed
-    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
     });
 
     // When: the handler is invoked (as WorkflowEngine would when agent calls AskUserQuestion)
@@ -295,8 +304,8 @@ describe('executeWorkflow AskUserQuestion deny handler wiring', () => {
   it('should pass a custom AskUserQuestion handler when supplied by an adapter', async () => {
     const onAskUserQuestion = vi.fn().mockResolvedValue({ Answer: 'Use src/index.ts' });
 
-    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
       onAskUserQuestion,
     });
 
@@ -305,8 +314,8 @@ describe('executeWorkflow AskUserQuestion deny handler wiring', () => {
 
   it('should complete successfully despite deny handler being present', async () => {
     // Given/When: normal workflow execution with deny handler wired
-    const result = await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    const result = await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
     });
 
     // Then: workflow completes successfully
@@ -318,8 +327,8 @@ describe('executeWorkflow AskUserQuestion deny handler wiring', () => {
     MockWorkflowEngine.triggerIterationLimit = true;
 
     // When: executeWorkflow runs in interactive mode
-    const result = await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    const result = await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
       interactiveUserInput: true,
     });
 
@@ -340,8 +349,8 @@ describe('executeWorkflow AskUserQuestion deny handler wiring', () => {
     const result = await executeWorkflow({
       ...makeConfig(),
       maxSteps: 'infinite',
-    }, 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    }, 'task', projectCwd, {
+      projectCwd,
       maxStepsOverride: 3,
     });
 
@@ -384,8 +393,8 @@ describe('executeWorkflow AskUserQuestion deny handler wiring', () => {
     };
     MockWorkflowEngine.buildResumePointForCurrentStep = undefined;
 
-    const result = await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    const result = await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
     });
 
     expect(result.success).toBe(false);
@@ -443,8 +452,8 @@ describe('executeWorkflow AskUserQuestion deny handler wiring', () => {
       workflow_step_participations: {},
     };
 
-    const result = await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    const result = await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
     });
 
     expect(result.success).toBe(false);
@@ -460,15 +469,22 @@ describe('executeWorkflow AskUserQuestion deny handler wiring', () => {
   it('should report workflow failure feedback and session log path when aborted', async () => {
     MockWorkflowEngine.triggerIterationLimit = true;
 
-    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
     });
 
     expect(vi.mocked(error)).toHaveBeenCalledWith(
       expect.stringContaining('Workflow failed after 1 iterations'),
     );
     expect(vi.mocked(info)).toHaveBeenCalledWith(
-      'Session log: /tmp/project/.takt/runs/test-report-dir/logs/test-session-id.jsonl',
+      `Session log: ${join(
+        projectCwd,
+        '.takt',
+        'runs',
+        'test-report-dir',
+        'logs',
+        'test-session-id.jsonl',
+      )}`,
     );
   });
 });

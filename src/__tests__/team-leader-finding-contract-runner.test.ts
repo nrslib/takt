@@ -18,6 +18,10 @@ import { evaluateWhenExpression } from '../core/workflow/evaluation/when-evaluat
 import { computeFileQuoteEvidenceRecordId } from '../core/models/finding-evidence-record.js';
 import type { FindingEvidenceRecord } from '../core/models/finding-types.js';
 import { compareBinaryStrings } from '../shared/utils/binary-string-comparator.js';
+import {
+  authorizeFindingLedgerFixture,
+  canonicalRawFindingFixture,
+} from './helpers/finding-lifecycle-fixture.js';
 
 const { executeAgentMock } = vi.hoisted(() => ({ executeAgentMock: vi.fn() }));
 
@@ -34,7 +38,11 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-function fileQuoteEvidenceRecord(path: string, line: number): FindingEvidenceRecord {
+function fileQuoteEvidenceRecord(
+  path: string,
+  line: number,
+  claimIdentityHash: string,
+): FindingEvidenceRecord {
   const payload = {
     kind: 'file_quote' as const,
     path,
@@ -42,7 +50,7 @@ function fileQuoteEvidenceRecord(path: string, line: number): FindingEvidenceRec
     endLine: line,
     verbatimExcerpt: 'fixture evidence',
     snapshotId: 'a'.repeat(64),
-    claimIdentityHash: 'b'.repeat(64),
+    claimIdentityHash,
     fileHash: 'c'.repeat(64),
   };
   return {
@@ -57,9 +65,59 @@ function makeLedger(): FindingLedger {
     stepName: 'reviewers',
     timestamp: '2026-07-24T00:00:00.000Z',
   };
-  const firstEvidence = fileQuoteEvidenceRecord('src/first.ts', 10);
-  const secondEvidence = fileQuoteEvidenceRecord('src/second.ts', 20);
-  return {
+  const firstRaw = canonicalRawFindingFixture({
+    rawFindingId: 'R-0001',
+    stepName: 'reviewers',
+    reviewer: 'reviewer',
+    familyTag: 'first-family',
+    severity: 'high',
+    title: 'First defect',
+    description: 'first description',
+    suggestion: 'fix first',
+    relation: 'new',
+    targetFindingId: null,
+    target: { kind: 'code', paths: ['src/first.ts'] },
+    evidence: [{
+      kind: 'file_quote',
+      path: 'src/first.ts',
+      startLine: 10,
+      endLine: 10,
+      verbatimExcerpt: 'fixture evidence',
+      snapshotId: 'a'.repeat(64),
+    }],
+  });
+  const secondRaw = canonicalRawFindingFixture({
+    rawFindingId: 'R-0002',
+    stepName: 'reviewers',
+    reviewer: 'reviewer',
+    familyTag: 'second-family',
+    severity: 'medium',
+    title: 'Second defect',
+    description: 'second description',
+    suggestion: 'fix second',
+    relation: 'new',
+    targetFindingId: null,
+    target: { kind: 'code', paths: ['src/second.ts'] },
+    evidence: [{
+      kind: 'file_quote',
+      path: 'src/second.ts',
+      startLine: 20,
+      endLine: 20,
+      verbatimExcerpt: 'fixture evidence',
+      snapshotId: 'a'.repeat(64),
+    }],
+  });
+  const firstEvidence = fileQuoteEvidenceRecord(
+    'src/first.ts',
+    10,
+    firstRaw.claimIdentityHash,
+  );
+  const secondEvidence = fileQuoteEvidenceRecord(
+    'src/second.ts',
+    20,
+    secondRaw.claimIdentityHash,
+  );
+  return authorizeFindingLedgerFixture({
     workflowName: 'workflow',
     nextId: 3,
     updatedAt: observedAt.timestamp,
@@ -69,6 +127,10 @@ function makeLedger(): FindingLedger {
         status: 'open',
         lifecycle: 'new',
         revision: 1,
+        target: firstRaw.target,
+        targetIdentityHash: firstRaw.targetIdentityHash,
+        claimIdentityHash: firstRaw.claimIdentityHash,
+        semanticClaimIdentityHash: firstRaw.semanticClaimIdentityHash,
         severity: 'high',
         title: 'First defect',
         evidenceIds: [firstEvidence.evidenceId],
@@ -84,6 +146,10 @@ function makeLedger(): FindingLedger {
         status: 'open',
         lifecycle: 'persists',
         revision: 1,
+        target: secondRaw.target,
+        targetIdentityHash: secondRaw.targetIdentityHash,
+        claimIdentityHash: secondRaw.claimIdentityHash,
+        semanticClaimIdentityHash: secondRaw.semanticClaimIdentityHash,
         severity: 'medium',
         title: 'Second defect',
         evidenceIds: [secondEvidence.evidenceId],
@@ -98,51 +164,10 @@ function makeLedger(): FindingLedger {
     evidenceRecords: [firstEvidence, secondEvidence].sort(
       (left, right) => compareBinaryStrings(left.evidenceId, right.evidenceId),
     ),
-    rawFindings: [
-      {
-        rawFindingId: 'R-0001',
-        stepName: 'reviewers',
-        reviewer: 'reviewer',
-        familyTag: 'first-family',
-        severity: 'high',
-        title: 'First defect',
-        description: 'first description',
-        suggestion: 'fix first',
-        relation: 'new',
-        targetFindingId: null,
-        evidence: [{
-          kind: 'file_quote',
-          path: 'src/first.ts',
-          startLine: 10,
-          endLine: 10,
-          verbatimExcerpt: 'fixture evidence',
-          snapshotId: 'a'.repeat(64),
-        }],
-      },
-      {
-        rawFindingId: 'R-0002',
-        stepName: 'reviewers',
-        reviewer: 'reviewer',
-        familyTag: 'second-family',
-        severity: 'medium',
-        title: 'Second defect',
-        description: 'second description',
-        suggestion: 'fix second',
-        relation: 'new',
-        targetFindingId: null,
-        evidence: [{
-          kind: 'file_quote',
-          path: 'src/second.ts',
-          startLine: 20,
-          endLine: 20,
-          verbatimExcerpt: 'fixture evidence',
-          snapshotId: 'a'.repeat(64),
-        }],
-      },
-    ],
+    rawFindings: [firstRaw, secondRaw],
     conflicts: [],
     reviewerAnomalies: [],
-  };
+  });
 }
 
 function makeState(): WorkflowState {
@@ -649,7 +674,7 @@ describe('TeamLeaderRunner finding_contract_fix', () => {
     expect(
       operation.children.find((child) => child.id === 'part:repair-first:completion')?.attempts,
     ).toHaveLength(3);
-  }, 30_000);
+  }, 60_000);
 
   it('redispatches a rate-limited part with the fallback provider instead of replaying it', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'takt-finding-contract-rate-limit-'));

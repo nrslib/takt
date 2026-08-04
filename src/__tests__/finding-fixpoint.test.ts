@@ -21,6 +21,7 @@ import {
 import { runFindingManagerForStep, type FindingManagerSubStepResult } from '../core/workflow/findings/manager-runner.js';
 import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
 import { processInterpretationLiveClaims } from '../core/workflow/findings/interpretation-live-claims.js';
+import { refreshActiveConflictAdjudicationSnapshots } from '../core/workflow/findings/conflict-adjudication-model.js';
 import { buildFindingsRuleContext as buildFindingsRuleContextWithCwd } from '../core/workflow/findings/context.js';
 import {
   verifiedSourceQuoteFields,
@@ -197,6 +198,33 @@ function fixpointRawFinding(overrides: Partial<RawFinding> = {}): RawFinding {
   });
 }
 
+function conflictLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
+  return refreshActiveConflictAdjudicationSnapshots({
+    ledger: ledger({
+      findings: [substantiveFinding({ revision: 1, id: 'F-0002' })],
+      rawFindings: [fixpointRawFinding({
+        rawFindingId: 'raw-2',
+        severity: 'medium',
+        title: 'Real issue',
+        description: 'Real issue',
+      })],
+      conflicts: [{
+        id: 'C-2BF240CC0BEC',
+        status: 'active',
+        findingIds: ['F-0002'],
+        rawFindingIds: [],
+        description: 'Unresolved disagreement',
+        firstSeen: observation(),
+        lastSeen: observation(),
+        revision: 1,
+      }],
+      ...overrides,
+    }),
+    originStep: 'reviewers',
+    createdAt: observation(),
+  });
+}
+
 describe('computeFixpointSnapshot', () => {
   it('returns empty arrays for an empty ledger', () => {
     const snapshot = computeFixpointSnapshot(ledger());
@@ -216,27 +244,38 @@ describe('computeFixpointSnapshot', () => {
       ],
     }));
     expect(snapshot.provisionalKeys).toEqual(['key-a']);
+    expect(snapshot.substantiveEntries).toEqual(['F-0003:resolved']);
   });
 
-  it('collects every non-provisional finding regardless of status into substantiveEntries as "id:status"', () => {
+  it('collects substantive findings and terminal provisional findings into substantiveEntries as "id:status"', () => {
     const snapshot = computeFixpointSnapshot(ledger({
       findings: [
         substantiveFinding({ revision: 1, id: 'F-0002', status: 'open' }),
-        substantiveFinding({ revision: 1, id: 'F-0004', status: 'resolved' }),
-        // provisional は substantiveEntries から除外される。
+        substantiveFinding({
+          revision: 2,
+          id: 'F-0004',
+          status: 'resolved',
+          lifecycle: 'resolved',
+          resolvedAt: observation().timestamp,
+          resolvedEvidence: 'Verified resolution.',
+        }),
         provisionalFinding({ revision: 1, id: 'F-0001' }),
+        provisionalFinding({
+          revision: 1,
+          id: 'F-0003',
+          status: 'resolved',
+        }),
       ],
     }));
-    expect(snapshot.substantiveEntries).toEqual(['F-0002:open', 'F-0004:resolved']);
+    expect(snapshot.substantiveEntries).toEqual([
+      'F-0002:open',
+      'F-0003:resolved',
+      'F-0004:resolved',
+    ]);
   });
 
   it('includes only active AND unadjudicated conflicts in unadjudicatedConflictEntries', () => {
-    const withRaws = ledger({
-      rawFindings: [fixpointRawFinding(), fixpointRawFinding({
-        rawFindingId: 'raw-c2',
-        title: 'Resolved conflicting claim',
-        description: 'A separate conflict was already resolved.',
-      })],
+    const withRaws = conflictLedger({
       conflicts: [
         {
           id: 'C-2BF240CC0BEC',
@@ -246,6 +285,7 @@ describe('computeFixpointSnapshot', () => {
           description: 'Unresolved disagreement',
           firstSeen: observation(),
           lastSeen: observation(),
+          revision: 1,
         },
         {
           id: 'C-4CE476E40661',
@@ -256,43 +296,27 @@ describe('computeFixpointSnapshot', () => {
           firstSeen: observation(),
           lastSeen: observation(),
           resolvedAt: observation().timestamp,
+          resolvedEvidence: 'Verified conflict adjudication.',
+          revision: 2,
         },
       ],
-      findings: [substantiveFinding({ revision: 1, id: 'F-0002' })],
     });
     const snapshot = computeFixpointSnapshot(withRaws);
     expect(snapshot.unadjudicatedConflictEntries).toHaveLength(1);
     expect(snapshot.unadjudicatedConflictEntries[0]).toMatch(/^C-2BF240CC0BEC:/);
   });
 
-  it('changes the conflict fixpoint entry when the reviewed worktree changes', () => {
-    const scopeCwd = mkdtempSync(join(tmpdir(), 'takt-fixpoint-scope-'));
-    try {
-      mkdirSync(join(scopeCwd, 'src'), { recursive: true });
-      writeFileSync(join(scopeCwd, 'src', 'a.ts'), 'export const value = 1;\n');
-      initializeGitFixture(scopeCwd, ['src/a.ts']);
-      const withConflict = ledger({
-        findings: [substantiveFinding({ revision: 1, id: 'F-0002' })],
-        rawFindings: [fixpointRawFinding()],
-        conflicts: [{
-          id: 'C-2BF240CC0BEC',
-          status: 'active',
-          findingIds: ['F-0002'],
-          rawFindingIds: ['raw-c1'],
-          description: 'Unresolved disagreement',
-          firstSeen: observation(),
-          lastSeen: observation(),
-        }],
-      });
-      const before = computeFixpointSnapshotWithCwd(withConflict, scopeCwd);
+  it('changes the conflict fixpoint entry when an active conflict subject gains admissible evidence', () => {
+    const before = computeFixpointSnapshot(conflictLedger());
+    const after = computeFixpointSnapshot(conflictLedger({
+      findings: [substantiveFinding({
+        revision: 2,
+        id: 'F-0002',
+        lifecycle: 'persists',
+      })],
+    }));
 
-      writeFileSync(join(scopeCwd, 'src', 'a.ts'), 'export const value = 2;\n');
-      const after = computeFixpointSnapshotWithCwd(withConflict, scopeCwd);
-
-      expect(after.unadjudicatedConflictEntries).not.toEqual(before.unadjudicatedConflictEntries);
-    } finally {
-      rmSync(scopeCwd, { recursive: true, force: true });
-    }
+    expect(after.unadjudicatedConflictEntries).not.toEqual(before.unadjudicatedConflictEntries);
   });
 
   it('produces sorted, order-independent output (two different insertion orders yield the same snapshot)', () => {
@@ -323,7 +347,13 @@ describe('attachFixpointState', () => {
   });
 
   it('does not reach fixpoint when there is no open provisional finding, even if the snapshot is otherwise unchanged', () => {
-    const clean = ledger({ findings: [substantiveFinding({ revision: 1, status: 'resolved' })] });
+    const clean = ledger({ findings: [substantiveFinding({
+      revision: 2,
+      status: 'resolved',
+      lifecycle: 'resolved',
+      resolvedAt: observation().timestamp,
+      resolvedEvidence: 'Verified resolution.',
+    })] });
     const previous = attachFixpointState(ledger(), clean);
     const next = attachFixpointState(previous, clean);
     expect(next.fixpoint?.reached).toBe(false);
@@ -340,7 +370,13 @@ describe('attachFixpointState', () => {
 
   it('breaks fixpoint when a substantive finding changes status between rounds (e.g. resolved)', () => {
     const round1 = ledger({ findings: [provisionalFinding({ revision: 1 }), substantiveFinding({ revision: 1, status: 'open' })] });
-    const round2 = ledger({ findings: [provisionalFinding({ revision: 1 }), substantiveFinding({ revision: 1, status: 'resolved' })] });
+    const round2 = ledger({ findings: [provisionalFinding({ revision: 1 }), substantiveFinding({
+      revision: 2,
+      status: 'resolved',
+      lifecycle: 'resolved',
+      resolvedAt: observation().timestamp,
+      resolvedEvidence: 'Verified resolution.',
+    })] });
     const previous = attachFixpointState(ledger(), round1);
     const next = attachFixpointState(previous, round2);
     expect(next.fixpoint?.reached).toBe(false);
@@ -384,7 +420,7 @@ afterAll(() => {
   rmSync(REPORT_DIR, { recursive: true, force: true });
 });
 
-function makeRoundHarness(
+function makeRoundHarnessFromAuthorizedLedger(
   initialLedger: FindingLedger,
   runId = 'run-1',
   roundsCompleted = 0,
@@ -393,7 +429,7 @@ function makeRoundHarness(
   run: (reviewerRawFindings: Array<Record<string, unknown>>) => ReturnType<typeof runFindingManagerForStep>;
 } {
   const ledgerRepository = new RevisionedFindingLedgerTestRepository(
-    authorizeFindingLedgerFixture(initialLedger),
+    initialLedger,
   );
   const ledgerStore: FindingLedgerStore = {
     ledgerIdentity: '/test/finding-fixpoint/ledger.json',
@@ -425,6 +461,7 @@ function makeRoundHarness(
       instruction: 'Reconcile findings.',
       outputContract: 'Return JSON.',
     },
+    adjudicator: { persona: 'supervisor' },
   };
   let round = roundsCompleted;
   return {
@@ -459,6 +496,26 @@ function makeRoundHarness(
       });
     },
   };
+}
+
+function makeRoundHarness(
+  initialLedger: FindingLedger,
+  runId = 'run-1',
+  roundsCompleted = 0,
+) {
+  return makeRoundHarnessFromAuthorizedLedger(
+    authorizeFindingLedgerFixture(initialLedger),
+    runId,
+    roundsCompleted,
+  );
+}
+
+function makeResumedRoundHarness(
+  persistedLedger: FindingLedger,
+  runId: string,
+  roundsCompleted: number,
+) {
+  return makeRoundHarnessFromAuthorizedLedger(persistedLedger, runId, roundsCompleted);
 }
 
 function hallucinatedRaw(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -501,6 +558,20 @@ function unresolvedRecoveryResponse(
   instruction: string,
   rawFindingId: string,
 ): AgentResponse {
+  if (instruction.includes('## Candidate snapshot')) {
+    return {
+      persona: 'supervisor',
+      status: 'done',
+      content: '',
+      structuredOutput: {
+        proposal: {
+          kind: 'undetermined',
+          rationale: 'No exact engine proof authorizes a terminal outcome.',
+        },
+      },
+      timestamp: new Date('2026-07-01T00:00:01.000Z'),
+    } as unknown as AgentResponse;
+  }
   if (instruction.includes('entity-binding contract')) {
     const manifest = instructionSectionJson<{
       taskId: string;
@@ -558,6 +629,9 @@ function resolutionAwareResponse(
   instruction: string,
   unresolvedRawFindingId: string,
 ): AgentResponse {
+  if (instruction.includes('## Candidate snapshot')) {
+    return unresolvedRecoveryResponse(instruction, unresolvedRawFindingId);
+  }
   if (instruction.includes('entity-binding contract')) {
     const response = unresolvedRecoveryResponse(instruction, unresolvedRawFindingId);
     if (instruction.includes(':confirm-1"')) {
@@ -677,7 +751,7 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
     expect(buildFindingsRuleContext(harness.currentLedger()).provisional.fixpoint).toBe(false);
   });
 
-  it('reaches fixpoint after bounded raw-adjudication recovery is exhausted and the claim stabilizes', async () => {
+  it('reaches fixpoint only after terminal adjudication progress for the durable claim stabilizes', async () => {
     const harness = makeRoundHarness({
       workflowName: 'peer-review', nextId: 1, updatedAt: '2026-07-01T00:00:00.000Z',
       findings: [], evidenceRecords: [], rawFindings: [], conflicts: [],
@@ -686,14 +760,18 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
     executeAgentMock.mockImplementation(async (_persona, instruction) => {
       const rawId = extractResidualRawIdFromEitherLocalId(
         instruction as string,
-        ['ambiguous-1', 'ambiguous-1-again', 'ambiguous-1-final', 'ambiguous-1-stable'],
+        ['ambiguous-1'],
       );
       return unresolvedRecoveryResponse(instruction as string, rawId);
     });
     await harness.run([unverifiedClaimRaw()]);
-    await harness.run([unverifiedClaimRaw({ rawFindingId: 'ambiguous-1-again' })]);
-    await harness.run([unverifiedClaimRaw({ rawFindingId: 'ambiguous-1-final' })]);
-    await harness.run([unverifiedClaimRaw({ rawFindingId: 'ambiguous-1-stable' })]);
+    await harness.run([]);
+    const afterTerminalAttempt = harness.currentLedger();
+    expect(afterTerminalAttempt.fixpoint?.reached).toBe(false);
+    expect(afterTerminalAttempt.fixpoint?.snapshot.provisionalKeys[0])
+      .toContain(':recovery:1:0:0');
+
+    await harness.run([]);
 
     const context = buildFindingsRuleContext(harness.currentLedger());
     expect(context.provisional.count).toBe(1);
@@ -782,9 +860,6 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
         .map((match) => match[1]!);
       const rawId = rawFindingIds.find((id) => [
         'ambiguous-1',
-        'ambiguous-1-r2',
-        'ambiguous-1-r3',
-        'ambiguous-1-r4',
       ].some((localId) => id.endsWith(`:${localId}`)))
         ?? rawFindingIds.find((id) => id.endsWith(':confirm-1'));
       if (rawId === undefined) {
@@ -798,10 +873,9 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
     await harness.run([unverifiedClaimRaw()]);
     expect(buildFindingsRuleContext(harness.currentLedger()).provisional.fixpoint).toBe(false);
 
-    // The substantive resolution and the first adjudication recovery attempt both
+    // The substantive resolution and the terminal adjudication attempt both
     // represent real progress, so this round cannot be a fixpoint.
     await harness.run([
-      unverifiedClaimRaw({ rawFindingId: 'ambiguous-1-r2' }),
       reviewerRawExtractionFixture({
         rawFindingId: 'confirm-1',
         familyTag: 'bug',
@@ -822,13 +896,16 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
       .toBe('resolved');
     expect(buildFindingsRuleContext(afterRound2).provisional.fixpoint).toBe(false);
 
-    // The second bounded recovery attempt is still progress.
-    await harness.run([unverifiedClaimRaw({ rawFindingId: 'ambiguous-1-r3' })]);
+    // Resolving F-0001 changes the provisional's terminal target candidates, so the
+    // resulting replacement episode is additional progress in the following round.
+    await harness.run([]);
     const afterRound3 = harness.currentLedger();
-    expect(buildFindingsRuleContext(afterRound3).provisional.fixpoint).toBe(false);
+    expect(afterRound3.fixpoint?.reached).toBe(false);
+    expect(afterRound3.fixpoint?.snapshot.provisionalKeys[0])
+      .toContain(':recovery:2:0:0');
 
-    // Once recovery is exhausted, an unchanged blocker forms a stable snapshot.
-    await harness.run([unverifiedClaimRaw({ rawFindingId: 'ambiguous-1-r4' })]);
+    // The next unchanged round compares equal after that replacement episode settles.
+    await harness.run([]);
     const context = buildFindingsRuleContext(harness.currentLedger());
     expect(context.provisional.count).toBe(1);
     expect(context.provisional.fixpoint).toBe(true);
@@ -843,7 +920,7 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
     executeAgentMock.mockImplementation(async (_persona, instruction) => {
       const rawId = extractResidualRawIdFromEitherLocalId(
         instruction as string,
-        ['ambiguous-1', 'ambiguous-1-resumed', 'ambiguous-1-resumed-again', 'ambiguous-1-resumed-stable'],
+        ['ambiguous-1'],
       );
       return unresolvedRecoveryResponse(instruction as string, rawId);
     });
@@ -851,13 +928,13 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
     const ledgerFromPriorProcess = priorProcess.currentLedger();
     expect(ledgerFromPriorProcess.fixpoint?.reached).toBe(false);
 
-    const reopenedProcess = makeRoundHarness(ledgerFromPriorProcess, runId, 1);
-    await reopenedProcess.run([unverifiedClaimRaw({ rawFindingId: 'ambiguous-1-resumed' })]);
+    const reopenedProcess = makeResumedRoundHarness(ledgerFromPriorProcess, runId, 1);
+    await reopenedProcess.run([]);
 
     expect(reopenedProcess.currentLedger().fixpoint?.snapshot.provisionalKeys[0])
-      .toContain(':recovery:0:1:0:0');
-    await reopenedProcess.run([unverifiedClaimRaw({ rawFindingId: 'ambiguous-1-resumed-again' })]);
-    await reopenedProcess.run([unverifiedClaimRaw({ rawFindingId: 'ambiguous-1-resumed-stable' })]);
+      .toContain(':recovery:1:0:0');
+    expect(reopenedProcess.currentLedger().fixpoint?.reached).toBe(false);
+    await reopenedProcess.run([]);
     expect(buildFindingsRuleContext(reopenedProcess.currentLedger()).provisional.fixpoint).toBe(true);
   });
 
@@ -869,21 +946,19 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
     executeAgentMock.mockImplementation(async (_persona, instruction) => {
       const rawId = extractResidualRawIdFromEitherLocalId(
         instruction as string,
-        ['ambiguous-1', 'ambiguous-1-r2', 'ambiguous-1-r3', 'ambiguous-1-r4', 'ambiguous-1-r5', 'new-observation'],
+        ['ambiguous-1', 'new-observation'],
       );
       return unresolvedRecoveryResponse(instruction as string, rawId);
     });
     await harness.run([unverifiedClaimRaw()]);
-    await harness.run([unverifiedClaimRaw({ rawFindingId: 'ambiguous-1-r2' })]);
-    await harness.run([unverifiedClaimRaw({ rawFindingId: 'ambiguous-1-r3' })]);
-    await harness.run([unverifiedClaimRaw({ rawFindingId: 'ambiguous-1-r4' })]);
+    await harness.run([]);
+    await harness.run([]);
     expect(buildFindingsRuleContext(harness.currentLedger()).provisional.fixpoint).toBe(true);
 
     // A new, different observation arrives (e.g. the human adjusted
     // something and a reviewer now reports something new) — the fixpoint
     // must not stay latched; it re-evaluates fresh each round.
     await harness.run([
-      unverifiedClaimRaw({ rawFindingId: 'ambiguous-1-r5' }),
       unverifiedClaimRaw({
         rawFindingId: 'new-observation',
         title: 'A newly reported, different unverified claim',

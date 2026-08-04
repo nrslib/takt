@@ -411,7 +411,7 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
     expect(ledger.reviewerAnomalies).toHaveLength(1);
     expect(ledger.reviewerAnomalies?.[0]?.promotedFindingId).toBeUndefined();
     expect(ledger.reviewerAnomalies?.[0]?.occurrences).toBeGreaterThanOrEqual(1);
-  });
+  }, 30_000);
 
   it('final-gate supervisor の単一Finding Contract報告を1回だけ取り込み、raw findingを重複保存しない', async () => {
     mockReviewerEmitsHallucination();

@@ -319,11 +319,14 @@ describe('takt-default-localllm composition', () => {
       const contract = readFileSync(join(dir, name), 'utf-8');
       expect(contract.match(/^## Finding Contract Claims$/gmu)).toHaveLength(1);
       expect(contract).toContain('structured');
-      expect(contract).not.toMatch(/^## (?:Observed Findings|Resolution Confirmations|観測した指摘|解消確認)/mu);
+      expect(contract).not.toMatch(/^## (?:Observed Findings|観測した指摘)$/mu);
     }
 
     for (const name of REGULAR_CONTRACT_NAMES) {
       const contract = readFileSync(join(dir, `${name}-review-finding-contract.md`), 'utf-8');
+      expect(contract.match(locale === 'ja'
+        ? /^## 解消確認$/gmu
+        : /^## Resolution Confirmations$/gmu)).toHaveLength(1);
       expect(contract).toMatch(locale === 'ja'
         ? /省略|すべて/u
         : /every|do not omit/iu);

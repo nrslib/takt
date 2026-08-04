@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkflowConfig } from '../core/models/index.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 import { FindingDatabase } from '../infra/finding-storage/database.js';
+import { createTestFindingLedgerStore } from './helpers/finding-storage.js';
 
 const terminalMocks = vi.hoisted(() => ({
   start: vi.fn().mockResolvedValue({ id: 'tmux-session', name: 'takt-claude-terminal' }),
@@ -234,6 +235,12 @@ describe('executeWorkflow claude-terminal integration', () => {
     };
     sourceMeta.status = 'failed';
     await writeFile(sourceMetaPath, JSON.stringify(sourceMeta), 'utf-8');
+    createTestFindingLedgerStore({
+      projectCwd: projectDir,
+      runId: sourceRunSlug,
+      reportDir: join(projectDir, '.takt', 'runs', sourceRunSlug, 'reports'),
+      workflowName: makeConfig().name,
+    });
 
     await expect(executeWorkflow(makeConfig(), 'failed target task', projectDir, {
       projectCwd: projectDir,

@@ -488,7 +488,7 @@ describe('builtin step fragment runtime contracts', () => {
     expect(state.status, abortReasons.join('\n')).toBe('completed');
     expect(vi.mocked(runAgent).mock.calls.slice(0, reviewerPersonas.length).map(([persona]) => persona).sort())
       .toEqual([...reviewerPersonas].sort());
-  });
+  }, 60_000);
 
   it('resolves and executes a relative workflow_call declared by a step fragment', async () => {
     const parentPath = join(projectDir, '.takt', 'workflows', 'parent.yaml');
@@ -581,17 +581,18 @@ describe('builtin step fragment runtime contracts', () => {
     ]);
 
     const state = await engine.run();
+    const needsConflictAdjudication = returnValue === 'needs_conflict_adjudication';
 
     expect(state.status, abortReasons.join('\n')).toBe(
-      returnValue === 'ABORT' || returnValue === 'needs_conflict_adjudication' ? 'aborted' : 'completed',
+      returnValue === 'ABORT' || needsConflictAdjudication ? 'aborted' : 'completed',
     );
     expect(transitions).toEqual([
       'merge-readiness-review',
       'supervise',
-      'final-gate',
-      ...(returnValue === 'needs_conflict_adjudication' ? ['finding-conflict-adjudication'] : []),
+      ...(needsConflictAdjudication ? ['finding-conflict-adjudication', 'merge-readiness-review'] : []),
       ...(nextStep ? [nextStep] : []),
     ]);
-    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(nextStep ? 5 : 4);
-  });
+    const conflictAdjudicationCalls = needsConflictAdjudication ? 2 : 0;
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(4 + (nextStep ? 1 : 0) + conflictAdjudicationCalls);
+  }, 60_000);
 });

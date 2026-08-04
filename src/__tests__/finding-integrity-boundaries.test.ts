@@ -7,6 +7,7 @@ import type {
 import {
   authorizeFindingLedgerFixture,
   canonicalRawFindingFixture,
+  rawCanonicalSnapshotFixture,
 } from './helpers/finding-lifecycle-fixture.js';
 import {
   captureFindingPreconditions,
@@ -106,11 +107,19 @@ describe('finding integrity boundaries', () => {
     const current = {
       ...baseLedger,
       rawFindings: [...baseLedger.rawFindings, rawE1],
+      rawCanonicalSnapshots: [
+        ...baseLedger.rawCanonicalSnapshots,
+        rawCanonicalSnapshotFixture(rawE1, observation),
+      ],
     };
     expect(() => normalizeFindingLedgerMutation(current, {
       ledger: {
         ...current,
         rawFindings: [...baseLedger.rawFindings, rawE2],
+        rawCanonicalSnapshots: [
+          ...baseLedger.rawCanonicalSnapshots,
+          rawCanonicalSnapshotFixture(rawE2, observation),
+        ],
       },
       result: undefined,
     }, current.workflowName)).toThrow('cannot be replaced with different content');
@@ -128,11 +137,13 @@ describe('finding integrity boundaries', () => {
         rawFindingIds: [rawE1.rawFindingId],
       }],
       rawFindings: [rawE1],
+      rawCanonicalSnapshots: [rawCanonicalSnapshotFixture(rawE1, observation)],
     };
     const captured = captureFindingPreconditions(observedLedger).get('F-0001')!;
     const tamperedLedger = {
       ...observedLedger,
       rawFindings: [rawE2],
+      rawCanonicalSnapshots: [rawCanonicalSnapshotFixture(rawE2, observation)],
     };
 
     expect(checkFindingPrecondition({

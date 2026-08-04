@@ -92,6 +92,7 @@ function makeSourceQuoteFinding(persona: string | undefined, schema: unknown): R
 
 function readFindingLedger(cwd: string, workflowName: string): {
   findings: Array<{ title: string; evidenceIds: string[] }>;
+  evidenceRecords: Array<{ evidenceId: string; kind: string }>;
   reviewerAnomalies?: Array<{ kind: string }>;
 } {
   return createTestFindingLedgerStore({
@@ -101,6 +102,7 @@ function readFindingLedger(cwd: string, workflowName: string): {
     workflowName,
   }).loadLedger() as {
     findings: Array<{ title: string; evidenceIds: string[] }>;
+    evidenceRecords: Array<{ evidenceId: string; kind: string }>;
     reviewerAnomalies?: Array<{ kind: string }>;
   };
 }
@@ -381,13 +383,16 @@ describe('finding reviewer observability wiring', () => {
     ))).toBe(true);
     const ledger = readFindingLedger(cwd, config.name);
     expect(ledger.findings).toHaveLength(2);
-    expect(ledger.findings.map((finding) => finding.evidenceIds)).toEqual([
-      [expect.any(String)],
-      [expect.any(String)],
-    ]);
-    expect(ledger.findings[0]?.evidenceIds[0]).not.toBe(
-      ledger.findings[1]?.evidenceIds[0],
+    const evidenceKindById = new Map(
+      ledger.evidenceRecords.map((record) => [record.evidenceId, record.kind]),
     );
+    expect(ledger.findings.map((finding) => (
+      finding.evidenceIds.map((evidenceId) => evidenceKindById.get(evidenceId)).sort()
+    ))).toEqual([
+      ['engine_proof', 'file_quote'],
+      ['engine_proof', 'file_quote'],
+    ]);
+    expect(new Set(ledger.findings.flatMap((finding) => finding.evidenceIds)).size).toBe(4);
     expect(ledger.reviewerAnomalies ?? []).toHaveLength(0);
   });
 

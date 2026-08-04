@@ -380,17 +380,18 @@ describe('item 1/4: raw admission validation and invalidate', () => {
     expect(result.reason).toContain('file has 0 lines');
   });
 
-  // B1: 字句的な resolve() はプロジェクト内に見えるパスの symlink 脱出を検出
-  // できない（codex 再現: node_modules/... の symlink 実体が受理された）。
-  // realpath で解決した実体パスがプロジェクト root 配下にあることを検証する。
-  it('Given a symlink inside the project pointing outside it When validated Then it is inadmissible', () => {
+  // B1: 最終パス要素が symlink なら参照先を追跡せず一律に拒否する。
+  // symlink 化による検証後の参照先すり替えを許可しない。
+  it('Given a final symlink inside the project pointing outside it When validated Then it is rejected without following the target', () => {
     const outsideDir = mkdtempSync(join(tmpdir(), 'takt-findings-outside-'));
     try {
       writeFileSync(join(outsideDir, 'outside.ts'), 'line 1\nline 2\n');
       symlinkSync(join(outsideDir, 'outside.ts'), join(projectDir, 'src/escape.ts'));
-      const result = validateLocationAdmission(projectDir, 'src/escape.ts:1');
-      expect(result.ok).toBe(false);
-      expect(result.reason).toContain('outside the project');
+      expect(validateLocationAdmission(projectDir, 'src/escape.ts:1')).toEqual({
+        ok: false,
+        outcome: 'invalid',
+        reason: 'location path "src/escape.ts" is a symbolic link',
+      });
     } finally {
       rmSync(outsideDir, { recursive: true, force: true });
     }
@@ -409,9 +410,13 @@ describe('item 1/4: raw admission validation and invalidate', () => {
     }
   });
 
-  it('Given a symlink inside the project pointing at another file inside the project When validated Then it is admissible', () => {
+  it('Given a final symlink pointing at another file inside the project When validated Then it is still rejected', () => {
     symlinkSync(join(projectDir, 'src/real.ts'), join(projectDir, 'src/alias.ts'));
-    expect(validateLocationAdmission(projectDir, 'src/alias.ts:1')).toEqual({ ok: true });
+    expect(validateLocationAdmission(projectDir, 'src/alias.ts:1')).toEqual({
+      ok: false,
+      outcome: 'invalid',
+      reason: 'location path "src/alias.ts" is a symbolic link',
+    });
   });
 
   it('Given no location When validated Then it is admissible (nothing to check)', () => {
@@ -701,6 +706,8 @@ describe('item 1/4: raw admission validation and invalidate', () => {
     const ledger = makeLedger({
       findings: [makeFinding({ revision: 1, status: 'resolved', lifecycle: 'resolved' })],
     });
+    const originalTarget = ledger.findings.find((finding) => finding.id === 'F-0001');
+    expect(originalTarget).toBeDefined();
     const harness = makeHarness(ledger);
 
     const result = await harness.run({
@@ -723,27 +730,34 @@ describe('item 1/4: raw admission validation and invalidate', () => {
     const savedLedger = harness.currentLedger();
     const target = savedLedger?.findings.find((f) => f.id === 'F-0001');
     expect(target?.status).toBe('resolved');
+    expect(target?.lifecycle).toBe('resolved');
+    expect(target?.rawFindingIds).toEqual(['raw-existing']);
+    expect(target?.evidenceIds).toEqual(originalTarget?.evidenceIds);
     expect(savedLedger?.findings).toHaveLength(1);
-    expect(target?.rejectedObservations ?? []).toEqual([expect.objectContaining({
+    expect(target?.rejectedObservations).toEqual([{
       rawFindingId: expect.stringContaining('p-1'),
       reason: expect.stringContaining('recorded for audit only'),
-    })]);
+      observedAt: {
+        runId: 'run-1',
+        stepName: 'reviewers',
+        timestamp: '2026-07-10T00:00:00.000Z',
+      },
+    }]);
     expect(savedLedger?.reviewerAnomalies ?? []).toEqual([]);
-    expect(savedLedger?.rawFindings.some(
+    expect(savedLedger?.rawFindings.find(
       (rawFinding) => rawFinding.rawFindingId.includes('p-1'),
-    )).toBe(true);
+    )).toMatchObject({
+      relation: 'persists',
+      targetFindingId: 'F-0001',
+    });
     // 監査記録: 先行保存（write-ahead の正規化監査）+ 最終保存の2件。
     expect(harness.savedValidationReports).toHaveLength(2);
     const report = harness.savedValidationReports.at(-1) as {
       provisionalLandings?: Array<{ kind: string; reason: string; sourceRawFindingIds: string[] }>;
-      unsupportedRawFindings?: Array<{ rawFindingId: string }>;
+      reviewerAnomalyLandings?: Array<{ sourceRawFindingIds: string[] }>;
     };
     expect(report.provisionalLandings ?? []).toEqual([]);
-    expect(report.unsupportedRawFindings).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        rawFindingId: expect.stringContaining('p-1'),
-      }),
-    ]));
+    expect(report.reviewerAnomalyLandings ?? []).toEqual([]);
   });
 });
 

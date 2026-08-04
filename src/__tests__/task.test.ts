@@ -289,7 +289,19 @@ describe('TaskRunner (tasks.yaml)', () => {
     });
   });
 
-  it('should fail interrupted running tasks with start_movement from run meta', () => {
+  it('should fail interrupted running tasks with the retry checkpoint from run meta', () => {
+    const latestResumePoint = {
+      version: 2 as const,
+      stack: [
+        { workflow: 'default', workflow_ref: 'default', step: 'delegate', kind: 'workflow_call' as const, occurrence: 1, call_instance: 1 },
+        { workflow: 'takt/coding', workflow_ref: 'takt/coding', step: 'review', kind: 'agent' as const, occurrence: 1 },
+      ],
+      iteration: 7,
+      elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
+    };
+
     runner.addTask('Task A', {
       workflow: 'default',
       start_step: 'draft',
@@ -322,17 +334,7 @@ describe('TaskRunner (tasks.yaml)', () => {
       startTime: '2026-04-13T00:00:00.000Z',
       currentStep: 'delegate',
       currentIteration: 7,
-      resume_point: {
-        version: 2,
-        stack: [
-          { workflow: 'default', workflow_ref: 'default', step: 'delegate', kind: 'workflow_call', occurrence: 1, call_instance: 1 },
-          { workflow: 'takt/coding', workflow_ref: 'takt/coding', step: 'review', kind: 'agent', occurrence: 1 },
-        ],
-        iteration: 7,
-        elapsed_ms: 183245,
-        workflow_call_invocations: {},
-        workflow_step_participations: {},
-      },
+      resume_point: latestResumePoint,
     });
 
     const current = loadTasksFile(testDir);
@@ -349,8 +351,9 @@ describe('TaskRunner (tasks.yaml)', () => {
     expect(file.tasks[0]?.run_slug).toBe('20260413-task-a');
     expect(file.tasks[0]?.start_movement).toBe('delegate');
     expect(file.tasks[0]?.start_step).toBeUndefined();
-    expect(file.tasks[0]?.resume_point).toBeUndefined();
-    expect(file.tasks[0]?.exceeded_current_iteration).toBeUndefined();
+    expect(file.tasks[0]?.resume_point).toEqual(latestResumePoint);
+    expect(file.tasks[0]?.exceeded_current_iteration).toBe(7);
+    expect(file.tasks[0]?.exceeded_max_steps).toBeUndefined();
     expect(file.tasks[0]?.failure).toEqual({
       error: 'Task was interrupted before this TAKT run started. Requeue it explicitly to run again.',
     });
@@ -1314,7 +1317,7 @@ describe('TaskRunner (tasks.yaml)', () => {
     expect(file.tasks[0]?.resume_point).toEqual(resumePoint);
   });
 
-  it('should keep only start_movement when a re-executed task fails with run meta', () => {
+  it('should preserve the latest retry checkpoint when a re-executed task fails with run meta', () => {
     const latestResumePoint = {
       version: 2 as const,
       stack: [
@@ -1374,12 +1377,12 @@ describe('TaskRunner (tasks.yaml)', () => {
     const file = loadTasksFile(testDir);
     expect(file.tasks[0]?.start_movement).toBe('final-review');
     expect(file.tasks[0]?.start_step).toBeUndefined();
-    expect(file.tasks[0]?.exceeded_current_iteration).toBeUndefined();
-    expect(file.tasks[0]?.resume_point).toBeUndefined();
+    expect(file.tasks[0]?.exceeded_current_iteration).toBe(9);
+    expect(file.tasks[0]?.resume_point).toEqual(latestResumePoint);
     expect(file.tasks[0]?.exceeded_max_steps).toBeUndefined();
   });
 
-  it('should keep only start_movement when terminal failure happens after the child completes', () => {
+  it('should preserve the parent retry checkpoint when terminal failure happens after the child completes', () => {
     const workflowCallResumePoint = {
       version: 2 as const,
       stack: [
@@ -1438,8 +1441,9 @@ describe('TaskRunner (tasks.yaml)', () => {
     const file = loadTasksFile(testDir);
     expect(file.tasks[0]?.start_movement).toBe('delegate');
     expect(file.tasks[0]?.start_step).toBeUndefined();
-    expect(file.tasks[0]?.exceeded_current_iteration).toBeUndefined();
-    expect(file.tasks[0]?.resume_point).toBeUndefined();
+    expect(file.tasks[0]?.exceeded_current_iteration).toBe(7);
+    expect(file.tasks[0]?.resume_point).toEqual(workflowCallResumePoint);
+    expect(file.tasks[0]?.exceeded_max_steps).toBeUndefined();
   });
 
   it('should clear stale retry metadata when a re-executed task completes without run meta', () => {

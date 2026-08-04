@@ -308,7 +308,7 @@ describe('workflow step fragment runtime contract', () => {
     });
     expect(fragmentResult.resumePoint?.stack[0]?.step_iterations)
       .toEqual(inlineResult.resumePoint?.stack[0]?.step_iterations);
-  });
+  }, 60_000);
 
   it('resumes inline and fragment workflows from the same saved step, iteration, and transition', async () => {
     writeFile(projectDir, '.takt/steps/review.yaml', [

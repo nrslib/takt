@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createEmptyFindingContractRegistries } from '../core/models/finding-contract-seed.js';
 import type {
   FindingLedger,
   FindingManagerOutput,
@@ -16,6 +17,7 @@ import { storedRawReconcileProvenance } from './helpers/finding-integrity.js';
 import {
   authorizeFindingLedgerFixture,
   canonicalRawFindingFixture,
+  rawCanonicalSnapshotFixture,
 } from './helpers/finding-lifecycle-fixture.js';
 import { createAnchorAdjudication } from '../core/models/finding-anchor-relevance.js';
 import type { FindingManagerRawDecision } from '../core/models/finding-types.js';
@@ -60,6 +62,7 @@ function raw(overrides: Partial<RawFinding> & Pick<RawFinding, 'rawFindingId'>):
 function ledger(overrides: Partial<FindingLedger> = {}): FindingLedger {
   const originalRaw = raw({ rawFindingId: 'raw-original' });
   return {
+    ...createEmptyFindingContractRegistries(),
     workflowName: 'test',
     nextId: 2,
     updatedAt: OBSERVATION.timestamp,
@@ -86,6 +89,7 @@ function ledger(overrides: Partial<FindingLedger> = {}): FindingLedger {
     lifecycleReservations: [],
     lifecycleEvents: [],
     rawFindings: [originalRaw],
+    rawCanonicalSnapshots: [rawCanonicalSnapshotFixture(originalRaw, OBSERVATION)],
     conflicts: [],
     interpretationRawObservations: [],
     interpretationAttempts: [],
@@ -344,14 +348,21 @@ describe('resolution/renotification exact authority', () => {
       ),
       reviewScopeSnapshotId: 'scope-test',
     };
+    const proofRecordId = freshLedger.evidenceRecords[0]?.evidenceId;
+    if (proofRecordId === undefined) {
+      throw new Error('Expected authorized fixture evidence for conflict adjudication');
+    }
     const commands = attachCapturedConflictHeads({
       commands: [{
         operation: 'resolve_conflict',
         changes: { findings: [], conflicts: [resolvedConflict] },
         authority: {
-          kind: 'engine_policy',
-          decisionKind: 'resolve_conflict',
-          decisionDigest: 'a'.repeat(64),
+          kind: 'verified_conflict_adjudication',
+          conflictId: conflict.id,
+          conflictSnapshotId: 'a'.repeat(64),
+          attemptId: 'b'.repeat(64),
+          verificationDigest: 'c'.repeat(64),
+          proofRecordIds: [proofRecordId],
         },
         evidenceSourcesByTarget: new Map(),
       }],
@@ -366,7 +377,7 @@ describe('resolution/renotification exact authority', () => {
       ledger: freshLedger,
       commands,
       occurredAt: OBSERVATION,
-    })).toThrow('Conflict evidence dependency CAS failed for "C-0001"');
+    })).toThrow('Lifecycle reservation has a stale full head for "C-0001"');
   });
 
   it.each(['match', 'reopen'] as const)(
