@@ -336,12 +336,10 @@ describe('resolveTaskExecution', () => {
         runner.requeueTask(
           queued.name,
           ['failed'],
-          'implement',
-          undefined,
-          resumePoint,
-          undefined,
-          undefined,
-          'source-run',
+          {
+            resumePoint,
+            sourceRunSlug: 'source-run',
+          },
         );
         task = runner.claimNextTasks(1)[0]!;
       } else {
@@ -349,12 +347,10 @@ describe('resolveTaskExecution', () => {
           queued.name,
           ['failed'],
           resumeMode,
-          'implement',
-          undefined,
-          resumePoint,
-          undefined,
-          undefined,
-          'source-run',
+          {
+            resumePoint,
+            sourceRunSlug: 'source-run',
+          },
         );
       }
 

@@ -3,7 +3,9 @@ import { mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'nod
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import type { WorkflowResumePointEntry } from '../core/models/index.js';
 import { TaskRunner } from '../infra/task/runner.js';
+import { buildWorkflowCallInvocationFixture } from './helpers/workflow-resume-fixture.js';
 
 function loadTasksFile(testDir: string): { tasks: Array<Record<string, unknown>> } {
   const raw = readFileSync(join(testDir, '.takt', 'tasks.yaml'), 'utf-8');
@@ -56,6 +58,26 @@ function writeRunningRestartRecord(testDir: string, overrides: Record<string, un
     stringifyYaml({ tasks: [record] }),
     'utf-8',
   );
+}
+
+function makeWorkflowCallResumeStack(): WorkflowResumePointEntry[] {
+  return [
+    {
+      workflow: 'default',
+      workflow_ref: 'default',
+      step: 'delegate',
+      kind: 'workflow_call' as const,
+      occurrence: 1,
+      call_instance: 1,
+    },
+    {
+      workflow: 'coding',
+      workflow_ref: 'coding',
+      step: 'fix',
+      kind: 'agent' as const,
+      occurrence: 1,
+    },
+  ];
 }
 
 describe('TaskRunner - exceedTask', () => {
@@ -278,10 +300,7 @@ describe('TaskRunner - exceedTask', () => {
       worktree_path: '/tmp/restart-worktree',
       branch: 'takt/restart-task',
     });
-    const stack = [
-      { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },
-      { workflow: 'coding', step: 'fix', kind: 'agent' as const },
-    ];
+    const stack = makeWorkflowCallResumeStack();
     const resumePoint = {
       version: 2 as const,
       stack,
@@ -332,10 +351,7 @@ describe('TaskRunner - exceedTask', () => {
 
   it('should preserve the current exceeded checkpoint when the task is requeued and claimed', () => {
     writeRunningRestartRecord(testDir);
-    const stack = [
-      { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },
-      { workflow: 'coding', step: 'fix', kind: 'agent' as const },
-    ];
+    const stack = makeWorkflowCallResumeStack();
     const resumePoint = {
       version: 2 as const,
       stack,

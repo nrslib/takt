@@ -534,8 +534,8 @@ describe('executeWorkflow session loading', () => {
       ],
     } satisfies WorkflowRestartPoint;
 
-    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
       restartPoint,
     });
 
