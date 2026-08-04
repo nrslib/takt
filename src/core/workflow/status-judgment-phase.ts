@@ -94,7 +94,7 @@ export async function runStatusJudgmentPhase(
     ...baseContext,
     semanticCandidates,
   }).build();
-  if (!Number.isInteger(ctx.iteration) || ctx.iteration <= 0) {
+  if (!ctx.iteration || !Number.isInteger(ctx.iteration) || ctx.iteration <= 0) {
     throw new Error(`Status judgment requires iteration for step "${step.name}"`);
   }
   const phaseExecutionId = buildPhaseExecutionId({
@@ -102,14 +102,13 @@ export async function runStatusJudgmentPhase(
     iteration: ctx.iteration,
     phase: 3,
     sequence: 1,
-    workflowStack: ctx.executionScope.stack,
   });
 
   let didEmitPhaseStart = false;
   let resolvedPromptParts: { systemPrompt: string; userInstruction: string } | undefined;
   const emitPhaseStart = (promptParts: { systemPrompt: string; userInstruction: string }): void => {
     resolvedPromptParts = promptParts;
-    ctx.onPhaseStart?.(step, 3, 'judge', structuredInstruction, promptParts, phaseExecutionId, ctx.iteration, ctx.executionScope);
+    ctx.onPhaseStart?.(step, 3, 'judge', structuredInstruction, promptParts, phaseExecutionId, ctx.iteration);
     didEmitPhaseStart = true;
   };
 
@@ -129,7 +128,7 @@ export async function runStatusJudgmentPhase(
         phaseName: 'judge',
         instruction: structuredInstruction,
         phaseExecutionId,
-        workflowStack: [...ctx.executionScope.stack],
+        workflowStack: ctx.getCurrentWorkflowStack?.(),
         sanitizeText: ctx.sanitizeObservabilityText,
         providerInfo: resolvedStepProvider,
         getPromptParts: () => resolvedPromptParts,
@@ -164,12 +163,12 @@ export async function runStatusJudgmentPhase(
             step,
             iteration: ctx.iteration,
             phaseExecutionId,
-            workflowStack: [...ctx.executionScope.stack],
+            workflowStack: ctx.getCurrentWorkflowStack?.(),
             entry,
             sanitizeText: ctx.sanitizeObservabilityText,
             providerInfo: resolvedStepProvider,
           });
-          ctx.onJudgeStage?.(step, 3, 'judge', entry, phaseExecutionId, ctx.iteration, ctx.executionScope);
+          ctx.onJudgeStage?.(step, 3, 'judge', entry, phaseExecutionId, ctx.iteration);
         },
         });
         const label = semanticCandidates[judgeResult.candidateIndex]?.label;
@@ -186,14 +185,14 @@ export async function runStatusJudgmentPhase(
         matchedRuleMethod: judgment.method,
       }),
     );
-    ctx.onPhaseComplete?.(step, 3, 'judge', result.label, 'done', undefined, phaseExecutionId, ctx.iteration, ctx.executionScope);
+    ctx.onPhaseComplete?.(step, 3, 'judge', result.label, 'done', undefined, phaseExecutionId, ctx.iteration);
     return { label: result.label, method: result.method };
   } catch (error) {
     if (stepProvider !== undefined && !didRecordProviderAttempt) {
       ctx.onProviderAttempt?.(stepProvider, false, undefined);
     }
     const errorMsg = error instanceof Error ? error.message : String(error);
-    ctx.onPhaseComplete?.(step, 3, 'judge', '', 'error', errorMsg, phaseExecutionId, ctx.iteration, ctx.executionScope);
+    ctx.onPhaseComplete?.(step, 3, 'judge', '', 'error', errorMsg, phaseExecutionId, ctx.iteration);
     throw error;
   }
 }

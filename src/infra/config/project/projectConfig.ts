@@ -30,6 +30,8 @@ import {
   denormalizeRateLimitFallback,
   normalizeTelemetryConfig,
   denormalizeTelemetryConfig,
+  normalizeFindingIntakeNormalize,
+  denormalizeFindingIntakeNormalize,
 } from '../configNormalizers.js';
 import {
   resolveAliasedPreviewCount,
@@ -99,6 +101,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     takt_providers,
     persona_providers,
     provider_routing,
+    finding_contract,
     branch_name_strategy,
     minimal_output,
     concurrency,
@@ -199,6 +202,16 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     model: normalizedProvider.model,
     providerOptions: normalizedProvider.providerOptions,
     autoRouting: normalizeAutoRoutingConfig(auto_routing, projectBaseUrlOptions),
+    findingContract: finding_contract === undefined
+      ? undefined
+      : {
+          intakeNormalize: normalizeFindingIntakeNormalize(
+            finding_contract.intake_normalize as Parameters<
+              typeof normalizeFindingIntakeNormalize
+            >[0],
+            projectBaseUrlOptions,
+          ),
+        },
     rateLimitFallback: normalizeRateLimitFallback(rate_limit_fallback),
     providerProfiles: normalizeProviderProfiles(
       parsedConfigResult.provider_profiles as Record<string, {
@@ -259,6 +272,15 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
     savePayload.auto_routing = rawAutoRouting;
   } else {
     delete savePayload.auto_routing;
+  }
+
+  const rawIntakeNormalize = denormalizeFindingIntakeNormalize(
+    config.findingContract?.intakeNormalize,
+  );
+  if (rawIntakeNormalize) {
+    savePayload.finding_contract = { intake_normalize: rawIntakeNormalize };
+  } else {
+    delete savePayload.finding_contract;
   }
 
   const rawObservability = denormalizeObservabilityConfig(config.observability);
@@ -335,7 +357,7 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
       delete savePayload.with_submodules;
     }
   }
-  for (const k of ['providerProfiles', 'providerOptions', 'autoRouting', 'rateLimitFallback', 'autoPr', 'draftPr', 'allowGitHooks', 'allowGitFilters', 'vcsProvider', 'baseBranch', 'withSubmodules', 'branchNameStrategy', 'minimalOutput', 'taskPollIntervalMs', 'interactivePreviewSteps', 'syncProjectLocalTaktOnRetry', 'autoRequeueMaxAttempts', 'ignoreExceed', 'personaProviders', 'providerRouting', 'taktProviders', 'workflowRuntimePrepare', 'workflowCommandGates', 'workflowArpeggio', 'syncConflictResolver', 'workflowMcpServers'] as const) {
+  for (const k of ['providerProfiles', 'providerOptions', 'autoRouting', 'findingContract', 'rateLimitFallback', 'autoPr', 'draftPr', 'allowGitHooks', 'allowGitFilters', 'vcsProvider', 'baseBranch', 'withSubmodules', 'branchNameStrategy', 'minimalOutput', 'taskPollIntervalMs', 'interactivePreviewSteps', 'syncProjectLocalTaktOnRetry', 'autoRequeueMaxAttempts', 'ignoreExceed', 'personaProviders', 'providerRouting', 'taktProviders', 'workflowRuntimePrepare', 'workflowCommandGates', 'workflowArpeggio', 'syncConflictResolver', 'workflowMcpServers'] as const) {
     delete savePayload[k];
   }
 

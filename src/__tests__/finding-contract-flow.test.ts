@@ -6,8 +6,12 @@ import { buildFindingsRuleContext as buildFindingsRuleContextWithCwd } from '../
 import { reconcileFindingLedger } from '../core/workflow/findings/reconciler.js';
 import type { FindingLedger } from '../core/workflow/findings/types.js';
 import type { WorkflowState } from '../core/models/types.js';
+import { createEmptyFindingContractRegistries } from '../core/models/finding-contract-seed.js';
+import { createAnchorAdjudication } from '../core/models/finding-anchor-relevance.js';
+import { computeFileQuoteEvidenceRecordId } from '../core/models/finding-evidence-record.js';
 import { computeLineageKey, computeReviewerStableKey } from '../core/workflow/findings/raw-canonicalization.js';
 import { storedRawReconcileProvenance } from './helpers/finding-integrity.js';
+import { canonicalRawFindingFixture } from './helpers/finding-lifecycle-fixture.js';
 
 function buildFindingsRuleContext(ledger: FindingLedger) {
   return buildFindingsRuleContextWithCwd(ledger, process.cwd());
@@ -18,9 +22,13 @@ function makeEmptyLedger(): FindingLedger {
     workflowName: 'peer-review',
     nextId: 1,
     findings: [],
+    evidenceRecords: [],
     rawFindings: [],
     conflicts: [],
-    interpretations: [],
+    evidenceBindings: [],
+    lifecycleReservations: [],
+    lifecycleEvents: [],
+    ...createEmptyFindingContractRegistries(),
     updatedAt: '2026-06-13T00:00:00.000Z',
   };
 }
@@ -31,9 +39,53 @@ function makeLedgerWithOptionalFields(): FindingLedger {
     stepName: 'reviewers',
     timestamp: '2026-06-13T01:00:00.000Z',
   };
+  const missingRaw = canonicalRawFindingFixture({
+    rawFindingId: 'raw-1',
+    stepName: 'reviewers',
+    reviewer: 'reviewer',
+    familyTag: 'bug',
+    severity: 'medium',
+    title: 'Missing optional fields',
+    description: 'Missing optional fields',
+    suggestion: null,
+    relation: 'new',
+    targetFindingId: null,
+    target: { kind: 'code', paths: ['src/missing.ts'] },
+    evidence: [],
+  });
+  const populatedRaw = canonicalRawFindingFixture({
+    rawFindingId: 'raw-2',
+    stepName: 'reviewers',
+    reviewer: 'reviewer',
+    familyTag: 'bug',
+    severity: 'medium',
+    title: 'Populated optional fields',
+    description: 'value',
+    suggestion: 'value',
+    relation: 'new',
+    targetFindingId: null,
+    target: { kind: 'code', paths: ['src/value.ts'] },
+    evidence: [],
+  });
+  const evidencePayload = {
+    kind: 'file_quote' as const,
+    path: 'src/value.ts',
+    startLine: 1,
+    endLine: 1,
+    verbatimExcerpt: 'value',
+    snapshotId: 'a'.repeat(64),
+    claimIdentityHash: populatedRaw.claimIdentityHash,
+    fileHash: 'b'.repeat(64),
+  };
+  const evidenceRecord = {
+    evidenceId: computeFileQuoteEvidenceRecordId(evidencePayload),
+    ...evidencePayload,
+  };
   return {
     ...makeEmptyLedger(),
     nextId: 3,
+    evidenceRecords: [evidenceRecord],
+    rawFindings: [missingRaw, populatedRaw],
     findings: [
       {
         id: 'F-0001',
@@ -42,6 +94,11 @@ function makeLedgerWithOptionalFields(): FindingLedger {
         revision: 1,
         severity: 'medium',
         title: 'Missing optional fields',
+        target: missingRaw.target,
+        targetIdentityHash: missingRaw.targetIdentityHash,
+        claimIdentityHash: missingRaw.claimIdentityHash,
+        semanticClaimIdentityHash: missingRaw.semanticClaimIdentityHash,
+        evidenceIds: [],
         reviewers: ['reviewer'],
         rawFindingIds: ['raw-1'],
         firstSeen: observedAt,
@@ -54,7 +111,11 @@ function makeLedgerWithOptionalFields(): FindingLedger {
         revision: 1,
         severity: 'medium',
         title: 'Populated optional fields',
-        location: 'value',
+        target: populatedRaw.target,
+        targetIdentityHash: populatedRaw.targetIdentityHash,
+        claimIdentityHash: populatedRaw.claimIdentityHash,
+        semanticClaimIdentityHash: populatedRaw.semanticClaimIdentityHash,
+        evidenceIds: [evidenceRecord.evidenceId],
         description: 'value',
         suggestion: 'value',
         reviewers: ['reviewer'],
@@ -94,17 +155,17 @@ describe('Finding Contract integration flow', () => {
     const context = buildFindingsRuleContext(makeLedgerWithOptionalFields());
     const item = context.open.items[0]!;
 
-    expect(Object.hasOwn(item, 'location')).toBe(true);
+    expect(Object.hasOwn(item, 'locations')).toBe(true);
     expect(Object.hasOwn(item, 'description')).toBe(true);
     expect(Object.hasOwn(item, 'suggestion')).toBe(true);
     expect(item).toMatchObject({
-      location: undefined,
+      locations: [],
       description: undefined,
       suggestion: undefined,
     });
   });
 
-  it.each(['location', 'description', 'suggestion'] as const)(
+  it.each(['description', 'suggestion'] as const)(
     'should evaluate missing and populated %s values through every access form',
     (field) => {
       const state = makeState(buildFindingsRuleContext(makeLedgerWithOptionalFields()));
@@ -128,12 +189,27 @@ describe('Finding Contract integration flow', () => {
     },
   );
 
+  it('should evaluate locations through the canonical list field', () => {
+    const state = makeState(buildFindingsRuleContext(makeLedgerWithOptionalFields()));
+
+    expect(evaluateWhenExpression(
+      'exists(findings.open.items, item.locations.length == 1)',
+      state,
+    )).toBe(true);
+    expect(evaluateWhenExpression(
+      'findings.open.items[0].locations.length == 0',
+      state,
+    )).toBe(true);
+    expect(evaluateWhenExpression(
+      'findings.open.items.locations.length == 2',
+      state,
+    )).toBe(true);
+  });
+
   it('should route from normalized finding_contract through reconciled ledger findings without Phase 3 AI judge', async () => {
     const workflow = normalizeWorkflowConfig({
       name: 'finding-contract-workflow',
       finding_contract: {
-        ledger_path: '.takt/findings/peer-review.json',
-        raw_findings_path: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -154,21 +230,30 @@ describe('Finding Contract integration flow', () => {
         },
       ],
     }, '/tmp/project');
-    const rawFinding = {
+    const rawFinding = canonicalRawFindingFixture({
       rawFindingId: 'raw-security-1',
       familyTag: 'security',
       stepName: 'security-review',
       reviewer: 'security-reviewer',
       severity: 'high' as const,
       title: 'Secret is logged',
-      location: 'src/secret.ts:12',
       description: 'The code logs a token.',
       suggestion: 'Mask the token before logging.',
-    };
+      relation: 'new',
+      targetFindingId: null,
+      target: { kind: 'code', paths: ['src/secret.ts'] },
+      evidence: [],
+    });
     const ledger = reconcileFindingLedger({
       previousLedger: makeEmptyLedger(),
       rawFindings: [rawFinding],
       managerOutput: {
+        anchorAdjudications: [createAnchorAdjudication({
+          rawFindingId: rawFinding.rawFindingId,
+          decision: 'new',
+          anchorRelevance: 'not_applicable',
+          evidence: 'The code target does not require anchor adjudication.',
+        })],
         matches: [],
         newFindings: [
           {
@@ -187,8 +272,10 @@ describe('Finding Contract integration flow', () => {
         duplicateFindings: [],
         dismissedFindings: [],
       },
+      entityProvisionalMutations: [],
+      terminalEntityAttachmentFindingIds: new Set(),
       provisionalFindings: [],
-      rawFindingDispositions: [],
+      verifiedEvidenceRecordsByRawFindingId: new Map(),
       rawProvenanceByRawFindingId: new Map([[
         rawFinding.rawFindingId,
         storedRawReconcileProvenance(
@@ -200,9 +287,7 @@ describe('Finding Contract integration flow', () => {
             reviewerPersonaKey: rawFinding.reviewer,
           }),
           computeLineageKey({
-            location: rawFinding.location,
-            title: rawFinding.title,
-            familyTag: rawFinding.familyTag,
+            claimIdentityHash: rawFinding.claimIdentityHash,
           }),
         ),
       ]]),
@@ -219,7 +304,6 @@ describe('Finding Contract integration flow', () => {
     const result = new RuleEvaluator(workflow.steps[0]!, ctx).evaluate(undefined);
 
     expect(workflow.findingContract).toEqual(expect.objectContaining({
-      ledgerPath: '.takt/findings/peer-review.json',
     }));
     expect(result).toEqual({ index: 1, method: 'auto_select' });
   });

@@ -15,6 +15,29 @@ import type {
 import { loadTemplate } from '../../../shared/prompts/index.js';
 import type { PullRequestContext } from '../pr-context.js';
 
+export type FindingContractReviewerOutputStrategy =
+  | {
+      readonly kind: 'structured';
+      readonly reportGeneration: 'structured';
+      readonly intake: 'reviewer_structured';
+    }
+  | {
+      readonly kind: 'plain_text_normalized';
+      readonly reportGeneration: 'plain_text';
+      readonly intake: 'isolated_normalizer';
+    };
+
+export type FindingContractReviewerContext =
+  | {
+      mode: 'structured';
+      rawFindingsStructuredOutput: WorkflowStructuredOutput;
+      reviewScopeSnapshotId: string;
+    }
+  | {
+      mode: 'plain_text_normalized';
+      reviewScopeSnapshotId: string;
+    };
+
 export interface FindingContractInstructionContext {
   ledgerSummary: string;
   reportLedgerSummary: string;
@@ -27,16 +50,7 @@ export interface FindingContractInstructionContext {
    * このレビューラウンドで生成した raw findings の provider-facing 契約。
    * プロンプト表示と実行ステップの structuredOutput に同じオブジェクトを渡す。
    */
-  rawFindingsStructuredOutput?: WorkflowStructuredOutput;
-  /**
-   * review-integrity protocol: reviewer が typed evidence protocol の source_quote 主張に
-   * echo する review scope snapshot id（snapshot.ts の
-   * computeReviewScopeSnapshotId）。reviewer step（includeRawFindingsSchema が
-   * true）のときだけ設定される — manager-runner.ts の runFindingManagerForStep が
-   * 同じ cwd に対して同じ関数を呼び直し、検証時点の値と比較する
-   * （admission-validation.ts の verifySourceQuoteEvidence 参照）。
-   */
-  reviewScopeSnapshotId?: string;
+  reviewer?: FindingContractReviewerContext;
 }
 
 export type FindingContractInstructionPolicy =

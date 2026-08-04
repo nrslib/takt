@@ -6,6 +6,7 @@
 
 import {
   appendNdjsonLine,
+  parseNdjsonRecord,
 } from '../../../infra/fs/index.js';
 import type { InteractiveMetadata } from './types.js';
 import { isDebugEnabled, writePromptLog } from '../../../shared/utils/index.js';
@@ -18,6 +19,7 @@ import type {
   WorkflowCallCompleteLifecycle,
   WorkflowCallLifecycle,
 } from '../../../core/workflow/types.js';
+import { parsePhaseExecutionId } from '../../../shared/utils/phaseExecutionId.js';
 import { sanitizeTextForStorage } from './traceReportRedaction.js';
 import { buildWorkflowStepScopeKey } from './workflowStepScope.js';
 import { SessionLoggerPhaseTracker } from './sessionLoggerPhaseTracker.js';
@@ -29,11 +31,131 @@ import {
   buildPromptLogRecord,
   buildStepCompleteRecord,
   buildStepStartRecord,
+  buildWorkflowAbortRecord,
   buildWorkflowCallCompleteRecord,
   buildWorkflowCallStartRecord,
-  buildWorkflowAbortRecord,
   buildWorkflowCompleteRecord,
 } from './sessionLoggerRecordFactory.js';
+import {
+  PrivateArtifactPublicationConflictError,
+  readPrivateFileState,
+  writePrivateFileWithModeExpected,
+} from '../../../shared/utils/private-file.js';
+
+const SESSION_LOG_MODE = 0o600;
+
+type TerminalSessionRecord = Extract<
+  NdjsonRecord,
+  { type: 'workflow_complete' | 'workflow_abort' }
+> & {
+  readonly publicationId: string;
+};
+
+export function projectTerminalSessionRecord(
+  ndjsonLogPath: string,
+  start: {
+    readonly task: string;
+    readonly workflowName: string;
+    readonly startTime: string;
+  },
+  record: TerminalSessionRecord,
+): void {
+  while (true) {
+    const snapshot = readPrivateFileState(ndjsonLogPath);
+    const lines = snapshot.state.exists
+      ? requireSessionLogContent(snapshot, ndjsonLogPath)
+          .toString('utf-8')
+          .split('\n')
+          .filter((line) => line.length > 0)
+      : [];
+    const records = lines.map(parseNdjsonRecord);
+    if (records.length === 0) {
+      records.push({
+        type: 'workflow_start',
+        task: start.task,
+        workflowName: start.workflowName,
+        startTime: start.startTime,
+      });
+    } else {
+      assertSessionStart(records[0], start);
+    }
+    const terminalIndex = records.findIndex(isTerminalSessionRecord);
+    if (terminalIndex !== -1) {
+      const existing = records[terminalIndex] as TerminalSessionRecord;
+      if (terminalIndex !== records.length - 1) {
+        throw new Error('NDJSON terminal record must be the final record');
+      }
+      if (
+        existing.publicationId === record.publicationId
+        && sameTerminalSessionRecord(existing, record)
+      ) {
+        return;
+      }
+      throw new Error(
+        `NDJSON terminal publication conflicts with "${record.publicationId}"`,
+      );
+    }
+    const content = `${records
+      .map((entry) => JSON.stringify(entry))
+      .join('\n')}\n${JSON.stringify(record)}\n`;
+    try {
+      writePrivateFileWithModeExpected(
+        ndjsonLogPath,
+        content,
+        SESSION_LOG_MODE,
+        snapshot.state,
+      );
+      return;
+    } catch (error) {
+      if (error instanceof PrivateArtifactPublicationConflictError) {
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
+function requireSessionLogContent(
+  snapshot: ReturnType<typeof readPrivateFileState>,
+  path: string,
+): Buffer {
+  if (!('content' in snapshot)) {
+    throw new Error(`NDJSON session log content is missing: ${path}`);
+  }
+  return snapshot.content;
+}
+
+function assertSessionStart(
+  record: NdjsonRecord | undefined,
+  expected: {
+    readonly task: string;
+    readonly workflowName: string;
+    readonly startTime: string;
+  },
+): void {
+  if (
+    record?.type !== 'workflow_start'
+    || record.task !== expected.task
+    || record.workflowName !== expected.workflowName
+    || record.startTime !== expected.startTime
+  ) {
+    throw new Error('NDJSON workflow_start identity is invalid');
+  }
+}
+
+function isTerminalSessionRecord(
+  record: NdjsonRecord,
+): record is TerminalSessionRecord {
+  return record.type === 'workflow_complete'
+    || record.type === 'workflow_abort';
+}
+
+function sameTerminalSessionRecord(
+  left: TerminalSessionRecord,
+  right: TerminalSessionRecord,
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
 
 export class SessionLogger {
   private readonly ndjsonLogPath: string;
@@ -42,7 +164,7 @@ export class SessionLogger {
   private readonly activeStepIterations = new Map<string, number>();
   private readonly ndjsonRecords: NdjsonRecord[] = [];
   private readonly promptRecords: PromptLogRecord[] = [];
-  private currentIteration = 0;
+  private workflowTerminalLogged = false;
 
   constructor(ndjsonLogPath: string, allowSensitiveData: boolean) {
     this.ndjsonLogPath = ndjsonLogPath;
@@ -55,17 +177,13 @@ export class SessionLogger {
     this.appendRecord(endRecord);
   }
 
-  setIteration(iteration: number): void {
-    this.currentIteration = iteration;
-  }
-
   onPhaseStart(
     step: WorkflowStep,
     phase: 1 | 2 | 3,
     phaseName: 'execute' | 'report' | 'judge',
     instruction: string,
     promptParts: PhasePromptParts,
-    workflowStack: readonly WorkflowResumePointEntry[] | undefined,
+    workflowStack: WorkflowResumePointEntry[] | undefined,
     phaseExecutionId?: string,
     iteration?: number,
   ): void {
@@ -78,9 +196,9 @@ export class SessionLogger {
       phase,
       phaseExecutionId,
       iteration,
-      workflowStack,
       promptParts,
       capturePrompt: debugEnabled,
+      scopeKey: buildWorkflowStepScopeKey(step.name, workflowStack),
     });
     const record = buildPhaseStartRecord(
       step,
@@ -103,7 +221,7 @@ export class SessionLogger {
     content: string,
     phaseStatus: string,
     phaseError: string | undefined,
-    workflowStack: readonly WorkflowResumePointEntry[] | undefined,
+    workflowStack: WorkflowResumePointEntry[] | undefined,
     phaseExecutionId?: string,
     iteration?: number,
   ): void {
@@ -116,8 +234,8 @@ export class SessionLogger {
       phase,
       phaseExecutionId,
       iteration,
-      workflowStack,
       requirePrompt: debugEnabled,
+      scopeKey: buildWorkflowStepScopeKey(step.name, workflowStack),
     });
     const completedAt = new Date().toISOString();
     const record = buildPhaseCompleteRecord(
@@ -136,10 +254,18 @@ export class SessionLogger {
     this.appendRecord(record);
 
     if (debugEnabled && trackedPhase.promptParts) {
+      const promptIteration = iteration
+        ?? parsePhaseExecutionId(trackedPhase.phaseExecutionId)?.iteration;
+      if (promptIteration === undefined) {
+        throw new Error(
+          `Missing iteration for debug prompt: ${step.name}:${phase}:${trackedPhase.phaseExecutionId}`,
+        );
+      }
       const promptRecord = buildPromptLogRecord(
         step,
         phase,
-        iteration ?? this.currentIteration,
+        promptIteration,
+        buildWorkflowStepScopeKey(step.name, workflowStack),
         trackedPhase.phaseExecutionId,
         trackedPhase.promptParts,
         content,
@@ -156,7 +282,7 @@ export class SessionLogger {
     phase: 3,
     phaseName: 'judge',
     entry: JudgeStageEntry,
-    workflowStack: readonly WorkflowResumePointEntry[] | undefined,
+    workflowStack: WorkflowResumePointEntry[] | undefined,
     phaseExecutionId?: string,
     iteration?: number,
   ): void {
@@ -165,7 +291,7 @@ export class SessionLogger {
       phase,
       phaseExecutionId,
       iteration,
-      workflowStack,
+      scopeKey: buildWorkflowStepScopeKey(step.name, workflowStack),
     });
     const record = buildPhaseJudgeStageRecord(
       step,
@@ -184,10 +310,9 @@ export class SessionLogger {
     step: WorkflowStep,
     iteration: number,
     instruction: string | undefined,
-    workflowStack: readonly WorkflowResumePointEntry[] | undefined,
+    workflowStack: WorkflowResumePointEntry[] | undefined,
     providerInfo?: StepProviderInfo,
   ): void {
-    this.currentIteration = iteration;
     this.activeStepIterations.set(buildWorkflowStepScopeKey(step.name, workflowStack), iteration);
     const record = buildStepStartRecord(
       step,
@@ -205,14 +330,17 @@ export class SessionLogger {
   }
 
   onWorkflowCallComplete(lifecycle: WorkflowCallCompleteLifecycle): void {
-    this.appendRecord(buildWorkflowCallCompleteRecord(lifecycle, this.sanitizeText.bind(this)));
+    this.appendRecord(buildWorkflowCallCompleteRecord(
+      lifecycle,
+      this.sanitizeText.bind(this),
+    ));
   }
 
   onStepComplete(
     step: WorkflowStep,
     response: AgentResponse,
     instruction: string,
-    workflowStack: readonly WorkflowResumePointEntry[] | undefined,
+    workflowStack: WorkflowResumePointEntry[] | undefined,
   ): void {
     const stepScopeKey = buildWorkflowStepScopeKey(step.name, workflowStack);
     const iteration = this.activeStepIterations.get(stepScopeKey);
@@ -232,11 +360,19 @@ export class SessionLogger {
   }
 
   onWorkflowComplete(state: WorkflowState): void {
+    if (this.workflowTerminalLogged) {
+      return;
+    }
     this.appendRecord(buildWorkflowCompleteRecord(state));
+    this.workflowTerminalLogged = true;
   }
 
   onWorkflowAbort(state: WorkflowState, reason: string): void {
+    if (this.workflowTerminalLogged) {
+      return;
+    }
     this.appendRecord(buildWorkflowAbortRecord(state, reason, this.sanitizeText.bind(this)));
+    this.workflowTerminalLogged = true;
   }
 
   getNdjsonRecords(): NdjsonRecord[] {

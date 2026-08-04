@@ -6,7 +6,9 @@
  * producer 実行後の resume で consumer の参照が必ず壊れる（v3-r4 の resume
  * 境界バグ）。ここでは旧 run の workflow 成果物全体を新 run の reports/
  * として原子的に継承する。writer の lock・履歴を保持する
- * `.takt-report-internal/` は run 内部状態なので継承しない。
+ * `.takt-report-internal/` は原則継承しない。ただし正式 resume に必要な
+ * Finding review publication の pending/completed record だけは、専用の
+ * allowlist 経路で非公開のまま継承する。
  *
  * Finding Contractのポイント:
  * - workflow成果物の選択コピーはしない。静的解析では workflow_call / loop
@@ -15,8 +17,10 @@
  * - 祖先探索・fallback はしない。常に source_run_slug の直接の親のみ。
  * - symlink・run 外 path・非通常ファイルは拒否。target reports/ が既に非空なら
  *   fail-fast。失敗時は一時成果物を除去し、半端な reports/ を公開しない。
- * - ファイル一覧と hash の SSOT は manifest（resume-artifacts.json）。meta.json
- *   からは参照のみ。
+ * - 公開 workflow 成果物のファイル一覧と hash の SSOT は manifest
+ *   （resume-artifacts.json）。非公開の Finding review record は各 record
+ *   自身の identity/digest/protocol 検証を使い、manifest には露出させない。
+ *   meta.json からは manifest への参照のみ。
  * - **公開は単一 rename に集約する（atomic publication requirement）**: manifest は staged
  *   reports の内側（reports/resume-artifacts.json、予約名）に置き、一時領域で
  *   全部完成させてから reports の rename 1回だけで公開する。ロールバックという
@@ -53,6 +57,8 @@ import { buildRunPaths } from './run-paths.js';
 export { RESUME_ARTIFACTS_FILE_NAME } from '../../models/reserved-report-names.js';
 import {
   classifyReportRelativePath,
+  FINDING_REVIEW_PUBLICATIONS_INTERNAL_DIRECTORY,
+  REPORT_INTERNAL_NAMESPACE,
   RESUME_ARTIFACTS_FILE_NAME,
 } from '../../models/reserved-report-names.js';
 
@@ -224,6 +230,50 @@ interface CopyResult {
 }
 
 const PRIVATE_FILE_MODE = 0o600;
+const FINDING_REVIEW_PUBLICATIONS_INTERNAL_ROOT = [
+  REPORT_INTERNAL_NAMESPACE,
+  FINDING_REVIEW_PUBLICATIONS_INTERNAL_DIRECTORY,
+].join('/');
+const FINDING_REVIEW_PUBLICATION_RECORD_PATTERN = /^[a-f0-9]{64}\.json$/;
+
+type ResumeSnapshotEntryKind =
+  | 'public'
+  | 'finding-review-directory'
+  | 'finding-review-record'
+  | 'excluded';
+
+function classifyResumeSnapshotEntry(relativePath: string): ResumeSnapshotEntryKind {
+  const classification = classifyReportRelativePath(relativePath);
+  if (classification.kind === 'public') {
+    return 'public';
+  }
+  if (
+    relativePath === REPORT_INTERNAL_NAMESPACE
+    || relativePath === FINDING_REVIEW_PUBLICATIONS_INTERNAL_ROOT
+    || relativePath === `${FINDING_REVIEW_PUBLICATIONS_INTERNAL_ROOT}/pending`
+  ) {
+    return 'finding-review-directory';
+  }
+  const completedPrefix = `${FINDING_REVIEW_PUBLICATIONS_INTERNAL_ROOT}/`;
+  const pendingPrefix = `${completedPrefix}pending/`;
+  if (
+    (
+      relativePath.startsWith(pendingPrefix)
+      && FINDING_REVIEW_PUBLICATION_RECORD_PATTERN.test(
+        relativePath.slice(pendingPrefix.length),
+      )
+    )
+    || (
+      relativePath.startsWith(completedPrefix)
+      && FINDING_REVIEW_PUBLICATION_RECORD_PATTERN.test(
+        relativePath.slice(completedPrefix.length),
+      )
+    )
+  ) {
+    return 'finding-review-record';
+  }
+  return 'excluded';
+}
 
 function inspectSnapshotSource<T>(operation: () => T): T {
   try {
@@ -259,26 +309,36 @@ function copyReportsTree(
   inspectSnapshotSource(() => assertPrivateDirectoryReadSnapshot(directorySnapshot));
   for (const entryName of entryNames) {
     const entryRel = relativeDir === '' ? entryName : join(relativeDir, entryName);
-    if (classifyReportRelativePath(toPosixRelative(entryRel)).kind !== 'public') {
+    const entryPosix = toPosixRelative(entryRel);
+    const entryKind = classifyResumeSnapshotEntry(entryPosix);
+    if (entryKind === 'excluded') {
       continue;
     }
     const entryAbs = resolve(sourceRootAbs, entryRel);
-    assertInside(sourceRootAbs, entryAbs, `source entry "${toPosixRelative(entryRel)}"`);
+    assertInside(sourceRootAbs, entryAbs, `source entry "${entryPosix}"`);
     const stat = inspectSnapshotSource(() => lstatSync(entryAbs));
     if (stat.isSymbolicLink()) {
       throw new ResumeReportSnapshotSourceError(
-        `Resume report snapshot: refusing to copy symlink "${toPosixRelative(entryRel)}" from source run reports`,
+        `Resume report snapshot: refusing to copy symlink "${entryPosix}" from source run reports`,
       );
     }
     if (stat.isDirectory()) {
-      const stagingDirectory = join(stagingRootAbs, entryRel);
-      ensurePrivateDirectory(stagingDirectory);
+      if (entryKind === 'finding-review-record') {
+        throw new ResumeReportSnapshotSourceError(
+          `Resume report snapshot: finding review record "${entryPosix}" is not a regular file`,
+        );
+      }
       files.push(...copyReportsTree(sourceRootSnapshot, stagingRootAbs, entryRel).files);
       continue;
     }
+    if (entryKind === 'finding-review-directory') {
+      throw new ResumeReportSnapshotSourceError(
+        `Resume report snapshot: finding review directory "${entryPosix}" is not a directory`,
+      );
+    }
     if (!stat.isFile()) {
       throw new ResumeReportSnapshotSourceError(
-        `Resume report snapshot: refusing to copy non-regular file "${toPosixRelative(entryRel)}" from source run reports`,
+        `Resume report snapshot: refusing to copy non-regular file "${entryPosix}" from source run reports`,
       );
     }
     const content = inspectSnapshotSource(() => readRegularFileNoFollow(entryAbs, stat));
@@ -288,11 +348,13 @@ function copyReportsTree(
     ensurePrivateDirectory(stagingDirectory);
     const inheritedMode = stat.mode & PRIVATE_FILE_MODE;
     writePrivateFileWithMode(stagingAbs, content, inheritedMode);
-    files.push({
-      path: toPosixRelative(entryRel),
-      size: content.length,
-      sha256: createHash('sha256').update(content).digest('hex'),
-    });
+    if (entryKind === 'public') {
+      files.push({
+        path: entryPosix,
+        size: content.length,
+        sha256: createHash('sha256').update(content).digest('hex'),
+      });
+    }
   }
   return { files };
 }

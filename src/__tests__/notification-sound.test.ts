@@ -43,24 +43,26 @@ const {
 
     private runResolve: ((value: { status: string; iteration: number }) => void) | null = null;
     private onIterationLimit: ((req: unknown) => Promise<number | null>) | undefined;
-    private resumePoint: unknown;
-    private readonly workflowName: string;
 
     constructor(
-      config: { name: string },
+      _config: unknown,
       _cwd: string,
       _task: string,
       options: { onIterationLimit?: (req: unknown) => Promise<number | null> },
     ) {
       super();
-      this.workflowName = config.name;
       this.onIterationLimit = options?.onIterationLimit;
       MockWorkflowEngine.latestInstance = this;
     }
 
     abort(): void {
       const state = { status: 'aborted', iteration: 1 };
-      this.emit('workflow:abort', state, 'user_interrupted');
+      this.emit('workflow:abort', state, 'user_interrupted', 'interrupt', {
+        kind: 'interrupt',
+        step: 'step1',
+        reason: 'user_interrupted',
+        error: 'user_interrupted',
+      });
       if (this.runResolve) {
         this.runResolve(state);
         this.runResolve = null;
@@ -77,20 +79,6 @@ const {
     }
 
     async triggerIterationLimit(): Promise<void> {
-      this.resumePoint = {
-        version: 2,
-        stack: [{
-          workflow: this.workflowName,
-          step: 'step1',
-          kind: 'agent',
-          step_iterations: { step1: 1 },
-        }],
-        iteration: 10,
-        max_steps: 10,
-        elapsed_ms: 0,
-        workflow_call_invocations: {},
-        workflow_step_participations: {},
-      };
       if (this.onIterationLimit) {
         await this.onIterationLimit({
           currentIteration: 10,
@@ -98,10 +86,6 @@ const {
           currentStep: 'step1',
         });
       }
-    }
-
-    getResumePoint(): unknown {
-      return this.resumePoint;
     }
 
     triggerRateLimited(): void {
@@ -155,6 +139,29 @@ vi.mock('../core/workflow/index.js', async () => {
   return {
     WorkflowEngine: MockWorkflowEngine,
     createDenyAskUserQuestionHandler: errorModule.createDenyAskUserQuestionHandler,
+  };
+});
+
+vi.mock('../features/tasks/execute/workflowRunLifecycle.js', async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import('../features/tasks/execute/workflowRunLifecycle.js')
+  >();
+  const { createWorkflowRunLifecycleCompositionTestDouble } = await import(
+    './helpers/run-lifecycle.js'
+  );
+  return {
+    ...actual,
+    createWorkflowRunLifecycle: (
+      input: Parameters<typeof actual.createWorkflowRunLifecycle>[0],
+    ) => createWorkflowRunLifecycleCompositionTestDouble(
+      actual.createWorkflowRunLifecycle,
+      input,
+      {
+        sessionId: 'test-session-id',
+        startedAt: '2026-02-07T00:00:00.000Z',
+        projectTerminalArtifacts: false,
+      },
+    ),
   };
 });
 
@@ -212,16 +219,31 @@ vi.mock('../shared/ui/index.js', () => ({
 
 vi.mock('../infra/fs/index.js', () => ({
   generateSessionId: vi.fn().mockReturnValue('test-session-id'),
-  createSessionLog: vi.fn().mockReturnValue({
-    startTime: new Date().toISOString(),
+  createSessionLog: vi.fn().mockImplementation((
+    task,
+    projectDir,
+    workflowName,
+    options,
+  ) => ({
+    task,
+    projectDir,
+    workflowName,
+    startTime: options.startTime,
     iterations: 0,
-  }),
+    status: 'running',
+    history: [],
+  })),
   finalizeSessionLog: vi.fn().mockImplementation((log, _status) => ({
     ...log,
     status: _status,
     endTime: new Date().toISOString(),
   })),
-  initNdjsonLog: vi.fn().mockReturnValue('/tmp/test-log.jsonl'),
+  initNdjsonLog: vi.fn((
+    sessionId: string,
+    _task: string,
+    _workflowName: string,
+    options: { logsDir: string },
+  ) => join(options.logsDir, `${sessionId}.jsonl`)),
   appendNdjsonLine: vi.fn(),
 }));
 
@@ -289,6 +311,17 @@ function makeConfig(): WorkflowConfig {
   };
 }
 
+async function waitForWorkflowEngine(): Promise<InstanceType<typeof MockWorkflowEngine>> {
+  await vi.waitFor(() => {
+    expect(MockWorkflowEngine.latestInstance).not.toBeNull();
+  });
+  const engine = MockWorkflowEngine.latestInstance;
+  if (!engine) {
+    throw new Error('Mock workflow engine was not created');
+  }
+  return engine;
+}
+
 // --- Tests ---
 
 describe('executeWorkflow: notification sound behavior', () => {
@@ -321,9 +354,8 @@ describe('executeWorkflow: notification sound behavior', () => {
       mockLoadGlobalConfig.mockReturnValue({ provider: 'claude' });
 
       const resultPromise = executeWorkflow(makeConfig(), 'test task', tmpDir, { projectCwd: tmpDir });
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
-      MockWorkflowEngine.latestInstance!.complete();
+      const engine = await waitForWorkflowEngine();
+      engine.complete();
       await resultPromise;
 
       expect(mockNotifySuccess).toHaveBeenCalledOnce();
@@ -333,9 +365,8 @@ describe('executeWorkflow: notification sound behavior', () => {
       mockLoadGlobalConfig.mockReturnValue({ provider: 'claude', notificationSound: true });
 
       const resultPromise = executeWorkflow(makeConfig(), 'test task', tmpDir, { projectCwd: tmpDir });
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
-      MockWorkflowEngine.latestInstance!.complete();
+      const engine = await waitForWorkflowEngine();
+      engine.complete();
       await resultPromise;
 
       expect(mockNotifySuccess).toHaveBeenCalledOnce();
@@ -345,9 +376,8 @@ describe('executeWorkflow: notification sound behavior', () => {
       mockLoadGlobalConfig.mockReturnValue({ provider: 'claude', notificationSound: false });
 
       const resultPromise = executeWorkflow(makeConfig(), 'test task', tmpDir, { projectCwd: tmpDir });
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
-      MockWorkflowEngine.latestInstance!.complete();
+      const engine = await waitForWorkflowEngine();
+      engine.complete();
       await resultPromise;
 
       expect(mockNotifySuccess).not.toHaveBeenCalled();
@@ -361,9 +391,8 @@ describe('executeWorkflow: notification sound behavior', () => {
       });
 
       const resultPromise = executeWorkflow(makeConfig(), 'test task', tmpDir, { projectCwd: tmpDir });
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
-      MockWorkflowEngine.latestInstance!.complete();
+      const engine = await waitForWorkflowEngine();
+      engine.complete();
       await resultPromise;
 
       expect(mockNotifySuccess).not.toHaveBeenCalled();
@@ -375,9 +404,8 @@ describe('executeWorkflow: notification sound behavior', () => {
       mockLoadGlobalConfig.mockReturnValue({ provider: 'claude' });
 
       const resultPromise = executeWorkflow(makeConfig(), 'test task', tmpDir, { projectCwd: tmpDir });
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
-      MockWorkflowEngine.latestInstance!.abort();
+      const engine = await waitForWorkflowEngine();
+      engine.abort();
       await resultPromise;
 
       expect(mockNotifyError).toHaveBeenCalledOnce();
@@ -387,9 +415,8 @@ describe('executeWorkflow: notification sound behavior', () => {
       mockLoadGlobalConfig.mockReturnValue({ provider: 'claude', notificationSound: true });
 
       const resultPromise = executeWorkflow(makeConfig(), 'test task', tmpDir, { projectCwd: tmpDir });
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
-      MockWorkflowEngine.latestInstance!.abort();
+      const engine = await waitForWorkflowEngine();
+      engine.abort();
       await resultPromise;
 
       expect(mockNotifyError).toHaveBeenCalledOnce();
@@ -399,9 +426,8 @@ describe('executeWorkflow: notification sound behavior', () => {
       mockLoadGlobalConfig.mockReturnValue({ provider: 'claude', notificationSound: false });
 
       const resultPromise = executeWorkflow(makeConfig(), 'test task', tmpDir, { projectCwd: tmpDir });
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
-      MockWorkflowEngine.latestInstance!.abort();
+      const engine = await waitForWorkflowEngine();
+      engine.abort();
       await resultPromise;
 
       expect(mockNotifyError).not.toHaveBeenCalled();
@@ -415,9 +441,8 @@ describe('executeWorkflow: notification sound behavior', () => {
       });
 
       const resultPromise = executeWorkflow(makeConfig(), 'test task', tmpDir, { projectCwd: tmpDir });
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
-      MockWorkflowEngine.latestInstance!.abort();
+      const engine = await waitForWorkflowEngine();
+      engine.abort();
       await resultPromise;
 
       expect(mockNotifyError).not.toHaveBeenCalled();
@@ -429,10 +454,9 @@ describe('executeWorkflow: notification sound behavior', () => {
       mockLoadGlobalConfig.mockReturnValue({ provider: 'claude' });
 
       const resultPromise = executeWorkflow(makeConfig(), 'test task', tmpDir, { projectCwd: tmpDir });
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
-      await MockWorkflowEngine.latestInstance!.triggerIterationLimit();
-      MockWorkflowEngine.latestInstance!.abort();
+      const engine = await waitForWorkflowEngine();
+      await engine.triggerIterationLimit();
+      engine.abort();
       await resultPromise;
 
       expect(mockPlayWarningSound).toHaveBeenCalledOnce();
@@ -442,10 +466,9 @@ describe('executeWorkflow: notification sound behavior', () => {
       mockLoadGlobalConfig.mockReturnValue({ provider: 'claude', notificationSound: true });
 
       const resultPromise = executeWorkflow(makeConfig(), 'test task', tmpDir, { projectCwd: tmpDir });
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
-      await MockWorkflowEngine.latestInstance!.triggerIterationLimit();
-      MockWorkflowEngine.latestInstance!.abort();
+      const engine = await waitForWorkflowEngine();
+      await engine.triggerIterationLimit();
+      engine.abort();
       await resultPromise;
 
       expect(mockPlayWarningSound).toHaveBeenCalledOnce();
@@ -455,10 +478,9 @@ describe('executeWorkflow: notification sound behavior', () => {
       mockLoadGlobalConfig.mockReturnValue({ provider: 'claude', notificationSound: false });
 
       const resultPromise = executeWorkflow(makeConfig(), 'test task', tmpDir, { projectCwd: tmpDir });
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
-      await MockWorkflowEngine.latestInstance!.triggerIterationLimit();
-      MockWorkflowEngine.latestInstance!.abort();
+      const engine = await waitForWorkflowEngine();
+      await engine.triggerIterationLimit();
+      engine.abort();
       await resultPromise;
 
       expect(mockPlayWarningSound).not.toHaveBeenCalled();
@@ -472,10 +494,9 @@ describe('executeWorkflow: notification sound behavior', () => {
       });
 
       const resultPromise = executeWorkflow(makeConfig(), 'test task', tmpDir, { projectCwd: tmpDir });
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
-      await MockWorkflowEngine.latestInstance!.triggerIterationLimit();
-      MockWorkflowEngine.latestInstance!.abort();
+      const engine = await waitForWorkflowEngine();
+      await engine.triggerIterationLimit();
+      engine.abort();
       await resultPromise;
 
       expect(mockPlayWarningSound).not.toHaveBeenCalled();
@@ -487,10 +508,9 @@ describe('executeWorkflow: notification sound behavior', () => {
       mockLoadGlobalConfig.mockReturnValue({ provider: 'claude' });
 
       const resultPromise = executeWorkflow(makeConfig(), 'test task', tmpDir, { projectCwd: tmpDir });
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
-      MockWorkflowEngine.latestInstance!.triggerRateLimited();
-      MockWorkflowEngine.latestInstance!.abort();
+      const engine = await waitForWorkflowEngine();
+      engine.triggerRateLimited();
+      engine.abort();
       await resultPromise;
 
       expect(mockPlayWarningSound).toHaveBeenCalledOnce();

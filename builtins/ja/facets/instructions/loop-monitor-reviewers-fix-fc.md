@@ -1,6 +1,6 @@
 修正後レビューを含むループが {cycle_count} 回繰り返されました。
 
-Finding Contract の台帳サマリー / `findings-ledger.json` を主要な根拠にし、Report Directory 内の最新レビュー報告を補助証拠として、次の順序で判断してください。
+エンジンが提供する live Finding Contract ledger summary / current Finding state を正本として扱ってください。`findings-ledger.json` が存在しても、補助的な snapshot にすぎません。Report Directory 内の最新レビュー報告は補助証拠として、次の順序で判断してください。
 
 1. まず、今回の判定が修正後レビューまたは final gate の完了後であることを確認してください。修正完了だけを根拠に、指摘の反復や停滞を判定してはいけません。
 2. 修正進捗として、修正後レビューが同じ `finding_id`、根本原因、または受入条件を再確認しているか確認してください。
@@ -10,7 +10,7 @@ Finding Contract の台帳サマリー / `findings-ledger.json` を主要な根�
 6. 修正後レビューの証拠から次の修正が具体的かつ実行可能なら、通常の修正を続けてください。
 7. 試行済みの修正と再計画を踏まえても、要件を満たす実現可能な方針が存在しない場合に限り ABORT を選んでください。
 
-**Findings state がある場合:**
-- `findings` / `conflicts` を正とし、open であることだけでは修正失敗と判断しないでください。直前の修正後に再確認された証拠が必要です。
+**エンジンが提供する current Finding state がある場合:**
+- その `findings` / `conflicts` を正本とし、open であることだけでは修正失敗と判断しないでください。直前の修正後に再確認された証拠が必要です。
 - provisional の fixpoint や budget exhaustion は停滞の証拠です。要件に沿う再定義が可能なら replan、既に再定義を試しても成立しないなら ABORT と判断してください。
 - 人手裁定、台帳の手編集、resume を解決策として提案してはいけません。

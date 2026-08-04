@@ -1,0 +1,216 @@
+{
+  "reports": {
+    "1": {
+      "candidates": [
+        {
+          "rawExcerptAnchor": "### Finding: Cache invalidation can race the durable write",
+          "candidate": {
+            "rawFindingId": null,
+            "relation": null,
+            "targetFindingId": null,
+            "familyTag": null,
+            "severity": null,
+            "title": "Cache invalidation can race the durable write",
+            "description": "Cache invalidation runs before the durable session write completes.",
+            "suggestion": null,
+            "target": {
+              "kind": "code",
+              "paths": [
+                "src/cache/session-cache.ts"
+              ]
+            },
+            "evidenceRequests": []
+          }
+        }
+      ]
+    },
+    "2": {
+      "candidates": [
+        {
+          "rawExcerptAnchor": "### Finding: Adapter registration is not wired across the review scope",
+          "candidate": {
+            "rawFindingId": null,
+            "relation": null,
+            "targetFindingId": null,
+            "familyTag": null,
+            "severity": null,
+            "title": "Adapter registration is not wired across the review scope",
+            "description": "The adapter has no registration path in the stated review scope.",
+            "suggestion": null,
+            "target": {
+              "kind": "structure",
+              "scope": {
+                "kind": "review_scope",
+                "roots": [
+                  "src/app/",
+                  "src/infra/"
+                ]
+              },
+              "manifestTargets": [
+                "src/infra/image-adapter.ts"
+              ]
+            },
+            "evidenceRequests": [
+              {
+                "kind": "engine_proof",
+                "subject": {
+                  "kind": "repository_manifest"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "3": {
+      "candidates": [
+        {
+          "rawExcerptAnchor": "### Finding: Required migration file is missing",
+          "candidate": {
+            "rawFindingId": null,
+            "relation": null,
+            "targetFindingId": null,
+            "familyTag": null,
+            "severity": null,
+            "title": "Required migration file is missing",
+            "description": "The deployment references this migration, but the report states that the path is missing.",
+            "suggestion": null,
+            "target": {
+              "kind": "absence",
+              "predicate": {
+                "kind": "path_state",
+                "path": "migrations/20260729_add_session_index.sql",
+                "expected": "absent"
+              }
+            },
+            "evidenceRequests": [
+              {
+                "kind": "engine_proof",
+                "subject": {
+                  "kind": "repository_query"
+                }
+              },
+              {
+                "kind": "engine_proof",
+                "subject": {
+                  "kind": "authoritative_quote",
+                  "source": "task",
+                  "declarationId": "TASK-20260729",
+                  "verbatimExcerpt": "The deployment migration file migrations/20260729_add_session_index.sql must be present."
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "4": {
+      "candidates": [
+        {
+          "rawExcerptAnchor": "The error handling might be unsafe and may cause a problem somewhere.",
+          "candidate": {
+            "rawFindingId": null,
+            "relation": null,
+            "targetFindingId": null,
+            "familyTag": null,
+            "severity": null,
+            "title": null,
+            "description": null,
+            "suggestion": null,
+            "target": null,
+            "evidenceRequests": []
+          }
+        }
+      ]
+    },
+    "5": {
+      "candidates": [
+        {
+          "rawExcerptAnchor": "### Finding: Cleanup call drops the asynchronous result",
+          "candidate": {
+            "rawFindingId": null,
+            "relation": null,
+            "targetFindingId": null,
+            "familyTag": null,
+            "severity": null,
+            "title": "Cleanup call drops the asynchronous result",
+            "description": "The cleanup promise is started but not awaited before returning.",
+            "suggestion": null,
+            "target": {
+              "kind": "code",
+              "paths": [
+                "src/worker/cleanup.ts"
+              ]
+            },
+            "evidenceRequests": [
+              {
+                "kind": "file_quote",
+                "path": "src/worker/cleanup.ts",
+                "startLine": 41,
+                "endLine": 42,
+                "verbatimExcerpt": "cleanup();\nreturn result;"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "6": {
+      "candidates": [
+        {
+          "rawExcerptAnchor": "### Finding: Cleanup leak persists",
+          "candidate": {
+            "rawFindingId": "review-2-cleanup",
+            "relation": "persists",
+            "targetFindingId": "F-0042",
+            "familyTag": "resource-cleanup",
+            "severity": "high",
+            "title": "Cleanup leak persists",
+            "description": "The previously reported cleanup leak remains in the worker.",
+            "suggestion": null,
+            "target": {
+              "kind": "code",
+              "paths": [
+                "src/worker/cleanup.ts"
+              ]
+            },
+            "evidenceRequests": []
+          }
+        }
+      ]
+    },
+    "7": {
+      "candidates": [
+        {
+          "rawExcerptAnchor": "### Finding: Cleanup leak is fixed",
+          "rawExcerptEndMarker": "The remaining code looks correct.",
+          "candidate": {
+            "rawFindingId": null,
+            "relation": "resolution_confirmation",
+            "targetFindingId": "F-0042",
+            "familyTag": null,
+            "severity": "high",
+            "title": "Cleanup leak is fixed",
+            "description": "The cleanup promise is now awaited before returning.",
+            "suggestion": null,
+            "target": {
+              "kind": "code",
+              "paths": [
+                "src/worker/cleanup.ts"
+              ]
+            },
+            "evidenceRequests": [
+              {
+                "kind": "file_quote",
+                "path": "src/worker/cleanup.ts",
+                "startLine": 41,
+                "endLine": 42,
+                "verbatimExcerpt": "await cleanup();\nreturn result;"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

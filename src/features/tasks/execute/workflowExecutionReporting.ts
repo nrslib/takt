@@ -2,9 +2,11 @@ import { readFileSync } from 'node:fs';
 import type { ProviderUsageSnapshot } from '../../../core/models/response.js';
 import type { UsageEventLogContext } from '../../../core/logging/usageEventLogger.js';
 import type { SessionLog } from '../../../infra/fs/index.js';
-import { saveSessionState, type SessionState } from '../../../infra/config/index.js';
+import {
+  saveSessionState,
+  type SessionState,
+} from '../../../infra/config/index.js';
 import { getLabel } from '../../../shared/i18n/index.js';
-import { getErrorMessage } from '../../../shared/utils/error.js';
 import { notifyError, notifySuccess } from '../../../shared/utils/index.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import { USAGE_MISSING_REASONS } from '../../../core/logging/contracts.js';
@@ -12,77 +14,67 @@ import type { WorkflowTraceDiscovery } from '../../../core/workflow/observabilit
 import { createOutputFns } from './outputFns.js';
 import { formatElapsedTime, truncate } from './workflowExecutionUtils.js';
 
-type WorkflowExecutionWarningHandler = (warning: string) => void;
-
-function buildSessionStateWarning(
-  projectCwd: string,
-  workflowName: string,
-  task: string,
-  error: unknown,
-): string {
-  return [
-    `Failed to save session state for workflow "${workflowName}"`,
-    `task "${truncate(task, 200)}"`,
-    `in ${projectCwd}: ${getErrorMessage(error)}`,
-  ].join(' ');
+export interface WorkflowSessionFinalization {
+  readonly sessionLog: SessionLog;
+  readonly sessionState: SessionState;
 }
 
-export function finalizeWorkflowSuccess(
-  sessionLog: SessionLog,
-  task: string,
-  workflowName: string,
-  lastStepContent: string | undefined,
-  lastStepName: string | undefined,
-  projectCwd: string,
-  onWarning?: WorkflowExecutionWarningHandler,
-): SessionLog {
-  const finalized = {
-    ...sessionLog,
-    status: 'completed' as const,
-    endTime: new Date().toISOString(),
-  };
-  try {
-    saveSessionState(projectCwd, {
+export function buildWorkflowSuccessSessionFinalization(input: {
+  readonly sessionLog: SessionLog;
+  readonly task: string;
+  readonly workflowName: string;
+  readonly lastStepContent: string | undefined;
+  readonly lastStepName: string | undefined;
+  readonly endTime: string;
+}): WorkflowSessionFinalization {
+  return {
+    sessionLog: {
+      ...input.sessionLog,
+      status: 'completed' as const,
+      endTime: input.endTime,
+    },
+    sessionState: {
       status: 'success',
-      taskResult: truncate(lastStepContent ?? '', 1000),
-      timestamp: new Date().toISOString(),
-      workflowName,
-      taskContent: truncate(task, 200),
-      lastStep: lastStepName,
-    } satisfies SessionState);
-  } catch (error) {
-    onWarning?.(buildSessionStateWarning(projectCwd, workflowName, task, error));
-  }
-  return finalized;
+      taskResult: truncate(input.lastStepContent ?? '', 1000),
+      timestamp: input.endTime,
+      workflowName: input.workflowName,
+      taskContent: truncate(input.task, 200),
+      lastStep: input.lastStepName,
+    },
+  };
 }
 
-export function finalizeWorkflowAbort(
-  sessionLog: SessionLog,
-  reason: string,
-  task: string,
-  workflowName: string,
-  lastStepName: string | undefined,
+export function persistWorkflowSessionState(
   projectCwd: string,
-  onWarning?: WorkflowExecutionWarningHandler,
-): SessionLog {
-  const finalized = {
-    ...sessionLog,
-    status: 'aborted' as const,
-    endTime: new Date().toISOString(),
+  publicationId: string,
+  sessionState: SessionState,
+): void {
+  saveSessionState(projectCwd, publicationId, sessionState);
+}
+
+export function buildWorkflowAbortSessionFinalization(input: {
+  readonly sessionLog: SessionLog;
+  readonly reason: string;
+  readonly task: string;
+  readonly workflowName: string;
+  readonly lastStepName: string | undefined;
+  readonly endTime: string;
+}): WorkflowSessionFinalization {
+  return {
+    sessionLog: {
+      ...input.sessionLog,
+      status: 'aborted' as const,
+      endTime: input.endTime,
+    },
+    sessionState: {
+      status: input.reason === 'user_interrupted' ? 'user_stopped' : 'error',
+      errorMessage: input.reason,
+      timestamp: input.endTime,
+      workflowName: input.workflowName,
+      taskContent: truncate(input.task, 200),
+      lastStep: input.lastStepName,
+    },
   };
-  try {
-    saveSessionState(projectCwd, {
-      status: reason === 'user_interrupted' ? 'user_stopped' : 'error',
-      errorMessage: reason,
-      timestamp: new Date().toISOString(),
-      workflowName,
-      taskContent: truncate(task, 200),
-      lastStep: lastStepName,
-    } satisfies SessionState);
-  } catch (error) {
-    onWarning?.(buildSessionStateWarning(projectCwd, workflowName, task, error));
-  }
-  return finalized;
 }
 
 export function reportStepFile(filePath: string, fileName: string, out: ReturnType<typeof createOutputFns>): void {
@@ -107,21 +99,26 @@ export function reportWorkflowCompletion(
   }
 }
 
-export function reportWorkflowAbort(
+export function reportWorkflowFailure(
   out: ReturnType<typeof createOutputFns>,
   sessionLog: SessionLog,
   iteration: number,
   reason: string,
+  status: 'aborted' | 'failed',
   ndjsonLogPath: string,
   shouldNotifyWorkflowAbort: boolean,
   traceDiscovery?: Pick<WorkflowTraceDiscovery, 'queries'>,
 ): void {
   const elapsed = sessionLog.endTime ? formatElapsedTime(sessionLog.startTime, sessionLog.endTime) : '';
-  out.error(`Workflow aborted after ${iteration} iterations${elapsed ? ` (${elapsed})` : ''}: ${reason}`);
+  const statusLabel = status === 'failed' ? 'failed' : 'aborted';
+  out.error(`Workflow ${statusLabel} after ${iteration} iterations${elapsed ? ` (${elapsed})` : ''}: ${reason}`);
   out.info(`Session log: ${ndjsonLogPath}`);
   reportTraceDiscovery(out, traceDiscovery);
   if (shouldNotifyWorkflowAbort) {
-    notifyError('TAKT', getLabel('workflow.notifyAbort', undefined, { reason }));
+    const label = status === 'failed'
+      ? 'workflow.notifyFailed'
+      : 'workflow.notifyAbort';
+    notifyError('TAKT', getLabel(label, undefined, { reason }));
   }
 }
 

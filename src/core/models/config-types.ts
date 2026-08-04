@@ -89,6 +89,24 @@ export interface AssistantConfig {
   initFiles?: string[];
 }
 
+/** Finding Contract reviewer report extraction configuration. */
+export interface FindingIntakeNormalizeTarget {
+  provider: ProviderType;
+  model: string;
+}
+
+export interface FindingIntakeNormalizeConfig {
+  provider: ProviderType;
+  model: string;
+  targets?: FindingIntakeNormalizeTarget[];
+  providerOptions?: StepProviderOptions;
+}
+
+/** Engine-side Finding Contract settings from global/project config. */
+export interface FindingContractRuntimeConfig {
+  intakeNormalize?: FindingIntakeNormalizeConfig;
+}
+
 /** Step-specific quality gates override */
 export interface StepQualityGatesOverride {
   qualityGates?: QualityGate[];
@@ -289,6 +307,8 @@ export interface ProjectConfig {
   providerOptions?: StepProviderOptions;
   /** Automatic provider/model routing configuration. */
   autoRouting?: AutoRoutingConfig;
+  /** Engine-side Finding Contract settings. */
+  findingContract?: FindingContractRuntimeConfig;
   /** Rate limit fallback provider switch chain */
   rateLimitFallback?: RateLimitFallbackConfig;
   /** Provider-specific permission profiles (project-level override) */

@@ -1,17 +1,9 @@
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { afterEach, beforeEach, vi } from 'vitest';
+import { afterEach, beforeEach } from 'vitest';
 import { clearTaktEnv, restoreTaktEnv, type TaktEnvSnapshot } from './helpers/taktEnv.js';
-
-vi.mock('../infra/run-storage/clock.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../infra/run-storage/clock.js')>();
-  const { TEST_RUN_STORAGE_CLOCK } = await import('./helpers/run-storage-clock.js');
-  return {
-    ...actual,
-    SYSTEM_RUN_STORAGE_CLOCK: TEST_RUN_STORAGE_CLOCK,
-  };
-});
+import { cleanupTestFindingStorage } from './helpers/finding-storage-cleanup.js';
 
 const shouldForceNoTty = process.env.TAKT_TEST_FLG_TOUCH_TTY !== '1';
 const TEST_TMPDIR = realpathSync(tmpdir());
@@ -62,6 +54,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  cleanupTestFindingStorage();
   restoreTaktEnv(taktEnvSnapshot);
   for (const [key, value] of gitEnvSnapshot) {
     if (value === undefined) {

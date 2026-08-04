@@ -1,5 +1,5 @@
 import type { RawFinding } from '../../core/workflow/findings/types.js';
-import { computeRawEvidenceHash } from '../../core/workflow/findings/raw-canonicalization.js';
+import { computeClaimIdentityHash } from '../../core/workflow/findings/evidence-domain.js';
 import { computeCanonicalRawIntegrityDigest } from '../../core/workflow/findings/finding-integrity.js';
 
 export function storedRawReconcileProvenance(
@@ -7,7 +7,7 @@ export function storedRawReconcileProvenance(
   reviewerStableKey: string,
   lineageKey: string,
 ) {
-  const claimIdentityHash = computeRawEvidenceHash(rawFinding);
+  const claimIdentityHash = computeClaimIdentityHash(rawFinding);
   const canonicalProvenance = {
     origin: 'stored-ledger' as const,
     ambiguityOrigin: false,

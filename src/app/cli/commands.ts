@@ -259,6 +259,36 @@ workflow
     );
   });
 
+const workflowBundle = workflow
+  .command('bundle')
+  .description('Manage immutable workflow execution bundles');
+
+workflowBundle
+  .command('attach')
+  .description('Attach a bundle to a legacy run from an explicit historical source tree')
+  .argument('<run>', 'Legacy run slug')
+  .option('--source-root <path>', 'Historical checkout or source archive root')
+  .option('--root-workflow <path>', 'Root workflow YAML path inside the historical source root')
+  .option('--dry-run', 'Validate the historical bundle without publishing it')
+  .action(async (run: string, opts: { sourceRoot?: string; rootWorkflow?: string; dryRun?: boolean }) => {
+    if (opts.sourceRoot === undefined || opts.rootWorkflow === undefined) {
+      throw new Error('workflow bundle attach requires --source-root and --root-workflow');
+    }
+    const { getCliExecutionContext } = await import('./initialization.js');
+    const { attachLegacyWorkflowExecutionBundle } = await import('../../features/workflowAuthoring/attachExecutionBundle.js');
+    const { success } = await import('../../shared/ui/index.js');
+    const result = attachLegacyWorkflowExecutionBundle({
+      projectDir: getCliExecutionContext().cwd,
+      runSlug: run,
+      sourceRoot: opts.sourceRoot,
+      rootWorkflow: opts.rootWorkflow,
+      dryRun: opts.dryRun === true,
+    });
+    success(opts.dryRun === true
+      ? `Validated workflow execution bundle for ${result.runSlug} (${result.nodeCount} nodes)`
+      : `Attached workflow execution bundle to ${result.runSlug} (${result.nodeCount} nodes)`);
+  });
+
 const metrics = program
   .command('metrics')
   .description('Show analytics metrics');

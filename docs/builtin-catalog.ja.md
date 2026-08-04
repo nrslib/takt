@@ -92,12 +92,13 @@ TAKT に同梱されているすべてのビルトイン workflow と persona �
 | | `review-fix-takt-default-high` | `review-fix-takt-default` の強化版となる Finding Contract 付き workflow。レビュー対象の収集後、計画、テスト、直接実装、6観点の compact 並列レビュー、直接修正、fail-closed 最終ゲートを実行する。 |
 | | `takt-default-high` | takt-default の高コスト強化構成。直接実装・直接修正、6観点の compact 専門レビュー、Finding Contract、merge-readiness/supervisor 最終ゲートで構成する。 |
 | | `takt-default-team-high` | takt-default-high の Team Leader 版。実装・修正を Team Leader が分解して member へ委譲し、同じ6観点の compact 専門レビュー、Finding Contract、最終ゲートを実行する。provider/model は固定しない。 |
+| | `takt-default-localllm` | 共通開発コアと Finding Contract stage を合成し、通常レビューをローカルLLMへ、integrity・配線・資源所有権・失敗境界・最終準備状況の再検査を高信頼モデルへ割り当てる。`review`、`boundary-review`、`final-gate` のタグで経路を分離し、provider/model 自体は固定しない。 |
 | その他 | `research` | リサーチ workflow: planner -> digger -> supervisor。質問せずに自律的にリサーチを実行。 |
 | | `deep-research` | ディープリサーチ workflow: plan -> dig -> analyze -> supervise。発見駆動型の調査で、浮上した疑問を多角的に分析。 |
 | | `magi` | エヴァンゲリオンにインスパイアされた合議システム。3つの AI persona (MELCHIOR, BALTHASAR, CASPER) が分析・投票。 |
 | | `compound-eye` | 複眼レビュー。同じ指示を Claude と Codex に同時に投げ、両者の回答を統合する。 |
 
-ローカルモデルを使う場合は `takt-default-high` または `takt-default-team-high` に provider/model を設定してください。モデル種別ごとの独立した workflow 系統は提供しません。
+ローカルモデルだけで既存workflowを動かす場合は、各workflowへ provider/model を設定してください。ハイブリッド構成では、`review` をローカル provider へ、`boundary-review` と `final-gate` を commercial provider へルーティングしてください。タグは step の記載順に適用されるため、`merge-readiness-review` と `supervise` では後ろの `final-gate` が先の `review` を上書きします。`finding-contract-local-review` の integrity gate と `finding-contract-boundary-review` の final gate は同じ `merge-readiness-finding-contract-final-gate` subworkflow を呼ぶため、この1つの routing で両 stage を保証でき、workflow 自体へ provider/model を固定する必要はありません。
 
 `takt` を実行すると workflow をインタラクティブに選択できます。
 

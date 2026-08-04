@@ -356,132 +356,11 @@ describe('previewPrompts', () => {
     expect(console.log).toHaveBeenCalledWith('phase3');
   });
 
-  it('workflow_call wrapper は agent metadata を持たない control node として表示する', async () => {
-    mockLoadWorkflowByIdentifier.mockReturnValueOnce({
-      name: 'parent',
-      maxSteps: 1,
-      steps: [{
-        name: 'delegate\tcall',
-        kind: 'workflow_call',
-        call: 'shared/\nreview',
-        personaDisplayName: 'must-not-be-rendered',
-        provider: 'mock',
-        model: 'must-not-be-rendered',
-        instruction: 'must-not-be-rendered',
-        allowedTools: ['Read'],
-        canEdit: true,
-        outputContracts: [],
-      }],
-    });
-
-    await previewPrompts('/project');
-
-    const controlSection = consoleLogSpy.mock.calls.map(([line]) => String(line)).join('\n');
-    expect(controlSection).toContain('Step 1: delegate\\tcall');
-    expect(controlSection).toContain('Control node: workflow_call');
-    expect(controlSection).toContain('Child workflow: shared/\\nreview');
-    for (const forbidden of [
-      'persona:',
-      'provider:',
-      'model:',
-      'instruction:',
-      'tools:',
-      'edit:',
-      'Phase 1',
-      'Phase 2',
-      'Phase 3',
-    ]) {
-      expect(controlSection).not.toContain(forbidden);
-    }
-    expect(mockInstructionBuild).not.toHaveBeenCalled();
-    expect(mockReportBuild).not.toHaveBeenCalled();
-    expect(mockJudgmentBuild).not.toHaveBeenCalled();
-    expect(mockNeedsStatusJudgmentPhase).not.toHaveBeenCalled();
-  });
-
-  it('parallel workflow_call だけを control 表示し agent sibling だけを build する', async () => {
-    mockLoadWorkflowByIdentifier.mockReturnValueOnce({
-      name: 'parent',
-      maxSteps: 1,
-      steps: [{
-        name: 'fanout',
-        personaDisplayName: 'fanout',
-        outputContracts: [],
-        parallel: [
-          {
-            name: 'delegate',
-            kind: 'workflow_call',
-            call: 'shared/review',
-            personaDisplayName: 'must-not-be-rendered',
-            provider: 'mock',
-            model: 'must-not-be-rendered',
-            instruction: 'must-not-be-rendered',
-            allowedTools: ['Read'],
-            canEdit: true,
-            outputContracts: [],
-          },
-          {
-            name: 'local-review',
-            personaDisplayName: 'reviewer',
-            instruction: 'Review locally',
-            outputContracts: [],
-          },
-        ],
-      }],
-    });
-
-    await previewPrompts('/project');
-
-    const outputLines = consoleLogSpy.mock.calls.map(([line]) => String(line));
-    const controlStart = outputLines.findIndex((line) => line.includes('substep 1: delegate'));
-    const agentStart = outputLines.findIndex((line) => line.includes('substep 2: local-review'));
-    const controlSection = outputLines.slice(controlStart, agentStart).join('\n');
-    expect(controlStart).toBeGreaterThanOrEqual(0);
-    expect(agentStart).toBeGreaterThan(controlStart);
-    expect(controlSection).toContain('parallel substep 1: delegate');
-    expect(controlSection).toContain('Control node: workflow_call');
-    expect(controlSection).toContain('Child workflow: shared/review');
-    for (const forbidden of [
-      'persona:',
-      'provider:',
-      'model:',
-      'instruction:',
-      'tools:',
-      'edit:',
-      'Phase 1',
-      'Phase 2',
-      'Phase 3',
-    ]) {
-      expect(controlSection).not.toContain(forbidden);
-    }
-    expect(outputLines[agentStart]).toContain('local-review (persona: reviewer)');
-    expect(mockInstructionBuild).toHaveBeenCalledOnce();
-    expect(mockReportBuild).not.toHaveBeenCalled();
-    expect(mockJudgmentBuild).not.toHaveBeenCalled();
-    expect(mockNeedsStatusJudgmentPhase).toHaveBeenCalledOnce();
-  });
-
-  it('call context のない callable workflow preview を拒否する', async () => {
-    mockLoadWorkflowByIdentifier.mockReturnValueOnce({
-      name: 'shared/review',
-      subworkflow: { callable: true },
-      steps: [],
-    });
-
-    await expect(previewPrompts('/project', 'shared/review'))
-      .rejects.toThrow('without a workflow_call context');
-
-    expect(mockHeader).not.toHaveBeenCalled();
-    expect(mockInstructionBuild).not.toHaveBeenCalled();
-  });
-
   it('finding manager の設定済み provider/model を表示する', async () => {
     mockLoadWorkflowByIdentifier.mockReturnValueOnce({
       name: 'finding-contract-preview',
       maxSteps: 1,
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           personaDisplayName: 'Findings Manager',
@@ -512,8 +391,6 @@ describe('previewPrompts', () => {
       name: 'finding-contract-preview',
       maxSteps: 1,
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'manager instruction',
@@ -552,8 +429,6 @@ describe('previewPrompts', () => {
       name: 'finding-contract-preview',
       maxSteps: 1,
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           personaDisplayName: 'Findings Manager',
@@ -586,8 +461,6 @@ describe('previewPrompts', () => {
       name: 'finding-contract-preview',
       maxSteps: 1,
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'manager instruction',
@@ -621,8 +494,6 @@ describe('previewPrompts', () => {
       name: 'finding-contract-preview',
       maxSteps: 1,
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           personaDisplayName: 'Findings Manager',
@@ -671,8 +542,6 @@ describe('previewPrompts', () => {
       name: 'finding-contract-preview',
       maxSteps: 1,
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'manager instruction',
@@ -713,8 +582,6 @@ describe('previewPrompts', () => {
       name: 'finding-contract-preview',
       maxSteps: 1,
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'manager instruction',

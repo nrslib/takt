@@ -1,5 +1,14 @@
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
-import type { AgentResponse, LoopMonitorConfig, WorkflowState, WorkflowStep } from '../../models/types.js';
+import type {
+  AgentResponse,
+  FallbackContext,
+  FallbackOperationOrigin,
+  LoopMonitorConfig,
+  RateLimitFallbackProvider,
+  WorkflowMaxSteps,
+  WorkflowState,
+  WorkflowStep,
+} from '../../models/types.js';
 import { ABORT_STEP, COMPLETE_STEP, ERROR_MESSAGES } from '../constants.js';
 import type {
   RuntimeStepResolution,
@@ -9,15 +18,12 @@ import type {
   WorkflowAbortResult,
   WorkflowEngineOptions,
   WorkflowRunResult,
+  WorkflowStepFailureSummary,
 } from '../types.js';
 import type { WorkflowRuleTransition } from './transitions.js';
+import { decrementStepIteration } from './state-manager.js';
 import { handleBlocked } from './blocked-handler.js';
-import {
-  getWorkflowStepKind,
-  isCountableWorkflowStep,
-  isDelegatedWorkflowStep,
-  isProviderBackedWorkflowStep,
-} from '../step-kind.js';
+import { getWorkflowStepKind, isDelegatedWorkflowStep } from '../step-kind.js';
 import { resolvePromotionRuntime } from '../promotion/promotion-runtime.js';
 import { createRoutingScope, resolveAutoRoutingRuntime } from '../auto-routing/resolver.js';
 import { buildRoutingWorkSnapshot, type RoutingFindings } from '../auto-routing/snapshot.js';
@@ -25,25 +31,13 @@ import { runWithStepSpan, type StepSpanParams } from '../observability/workflowS
 import type { QualityGateRunResult } from '../quality-gates/types.js';
 import { RuleDetectionExhaustedError } from '../evaluation/RuleDetectionExhaustedError.js';
 import type { PreparedNormalStepExecution } from './StepExecutor.js';
-import type { WorkflowStepExecutionPlan } from './WorkflowEngineStepCoordinator.js';
-import type { WorkflowStepBudget } from '../workflow-step-budget.js';
-import type { LoopMonitorJudgeRunResult } from './LoopMonitorJudgeRunner.js';
-import { WorkflowCallLoopDetectedError } from '../workflow-call-progress-tracker.js';
+import type { WorkflowCallExecutionToken } from './WorkflowCallRunner.js';
+import { requireWorkflowResumeStackSnapshot } from '../run/resume-point.js';
+import { createRunFailure } from '../run/run-failure.js';
 import {
-  snapshotWorkflowExecutionScope,
-  type WorkflowExecutionScope,
-} from '../workflow-execution-scope.js';
-import {
-  appendFallbackAttempt,
-  buildRateLimitFallbackContext,
-  pickNextFallbackProvider,
-} from '../rate-limit-fallback.js';
-import {
-  commitCountableStepStart,
-  commitFallbackRollback,
-  completeFallback,
-  requeueFallbackAfterTerminalResponse,
-} from './execution-checkpoint.js';
+  reviewerOperationOrigin,
+  sameFallbackOperationOrigin,
+} from './fallback-operation.js';
 
 const log = createLogger('workflow-run-loop');
 
@@ -60,13 +54,13 @@ interface WorkflowRunLoopDeps {
   state: WorkflowState;
   options: WorkflowEngineOptions;
   getWorkflowName: () => string;
+  getFindingScopeIdentity: () => string | undefined;
+  getFindingIds: () => readonly string[] | undefined;
   getTask: () => string;
   getRoutingFindings: () => RoutingFindings;
   getCurrentWorkflowStack: () => StepSpanParams['workflowStack'];
-  buildStepExecutionScope: (step: WorkflowStep, iteration: number) => WorkflowExecutionScope;
   getCwd: () => string;
-  stepBudget: WorkflowStepBudget;
-  recordCountableProgress: () => void;
+  getMaxSteps: () => WorkflowMaxSteps;
   getReportDir: () => string;
   abortRequested: () => boolean;
   getStep: (name: string) => WorkflowStep;
@@ -80,18 +74,14 @@ interface WorkflowRunLoopDeps {
     triggeringStep: WorkflowStep,
     triggeringRuntime: RuntimeStepResolution | undefined,
     fallbackNextStep: string,
-    resumedStart?: import('../../models/types.js').WorkflowPendingLoopJudgeStarted,
-  ) => Promise<LoopMonitorJudgeRunResult>;
-  getPendingLoopJudge: () => {
-    monitor: LoopMonitorConfig;
-    cycleCount: number;
-    triggeringStep: WorkflowStep;
-    fallbackNextStep: string;
-    resumedStart?: import('../../models/types.js').WorkflowPendingLoopJudgeStarted;
-  } | undefined;
+  ) => Promise<string>;
   runStep: (
     step: WorkflowStep,
-    plan: WorkflowStepExecutionPlan,
+    prebuiltInstruction?: string,
+    runtime?: RuntimeStepResolution,
+    stepIteration?: number,
+    preparedExecution?: PreparedNormalStepExecution,
+    workflowCallExecution?: WorkflowCallExecutionToken,
   ) => Promise<StepRunResult>;
   runQualityGates: (options: {
     qualityGates: WorkflowStep['qualityGates'];
@@ -105,19 +95,32 @@ interface WorkflowRunLoopDeps {
     stepIteration: number,
     content: string,
   ) => void;
+  buildInstruction: (
+    step: WorkflowStep,
+    stepIteration: number,
+    fallbackContext?: FallbackContext,
+  ) => string;
+  buildPhase1Instruction: (step: WorkflowStep, instruction: string, runtime?: RuntimeStepResolution) => string;
   /** Engine が通常 agent ステップに渡す、実行前に一度だけ確定した入力。 */
   prepareNormalStepExecution: (
     step: WorkflowStep,
     stepIteration: number,
     runtime?: RuntimeStepResolution,
-  ) => PreparedNormalStepExecution;
+  ) => PreparedNormalStepExecution | undefined;
   resolveStepProviderModel: (step: WorkflowStep, runtime?: RuntimeStepResolution) => StepProviderInfo;
   /** auto-routing ルーター・promotion 評価への入力専用（補完前の解決）。 */
   resolveStepProviderModelBeforeAutoRouting: (step: WorkflowStep, runtime?: RuntimeStepResolution) => StepProviderInfo;
-  setActiveStep: (step: WorkflowStep, iteration: number) => void;
-  syncMaxSteps: (maxSteps: import('../../models/types.js').WorkflowMaxSteps) => void;
+  resolveRuntimeForStep: (step: WorkflowStep) => RuntimeStepResolution | undefined;
+  claimStepOccurrence: (step: WorkflowStep) => number;
+  setActiveStep: (
+    step: WorkflowStep,
+    iteration: number,
+    occurrence: number,
+  ) => WorkflowCallExecutionToken | undefined;
+  cancelPendingStepActivation: () => void;
   addUserInput: (input: string) => void;
   emit: (event: string, ...args: unknown[]) => void;
+  updateMaxSteps: (maxSteps: number) => void;
   /**
    * COMPLETE 遷移直前のエンジン最終不変条件: open な
    * provisional finding が1件でもあれば COMPLETE を拒否する。バックストップ
@@ -221,7 +224,6 @@ function emitNormalRoutingDecision(
   providerInfo: StepProviderInfo,
   durationMs: number,
   iteration: number,
-  scope: WorkflowExecutionScope,
 ): void {
   if (isDelegatedWorkflowStep(step) || providerInfo.autoRoutingDecision === undefined) {
     return;
@@ -236,7 +238,6 @@ function emitNormalRoutingDecision(
     durationMs,
     iteration,
     deps.getWorkflowName(),
-    scope,
   );
 }
 
@@ -263,23 +264,122 @@ function recordNormalRoutingResult(
   });
 }
 
+function sameFallbackProvider(
+  candidate: RateLimitFallbackProvider,
+  current: { provider?: StepProviderInfo['provider']; model?: StepProviderInfo['model'] },
+): boolean {
+  if (candidate.provider !== current.provider) {
+    return false;
+  }
+  if (candidate.model === undefined) {
+    return true;
+  }
+  return candidate.model === current.model;
+}
+
+function pickNextFallbackProvider(
+  switchChain: readonly RateLimitFallbackProvider[] | undefined,
+  current: StepProviderInfo,
+  attempted: readonly RateLimitFallbackProvider[],
+): RateLimitFallbackProvider | undefined {
+  if (!switchChain || switchChain.length === 0) {
+    return undefined;
+  }
+  return switchChain.find((candidate) => (
+    !sameFallbackProvider(candidate, current)
+    && !attempted.some((tried) => sameFallbackProvider(candidate, tried))
+  ));
+}
+
+function toFallbackProvider(providerInfo: StepProviderInfo): RateLimitFallbackProvider {
+  if (!providerInfo.provider) {
+    throw new Error('Resolved provider is required for rate limit fallback');
+  }
+  return {
+    provider: providerInfo.provider,
+    ...(providerInfo.model !== undefined ? { model: providerInfo.model } : {}),
+  };
+}
+
+function appendFallbackAttempt(
+  attempted: readonly RateLimitFallbackProvider[],
+  providerInfo: StepProviderInfo,
+): RateLimitFallbackProvider[] {
+  const current = toFallbackProvider(providerInfo);
+  if (attempted.some((tried) => sameFallbackProvider(current, tried))) {
+    return [...attempted];
+  }
+  return [...attempted, current];
+}
+
+function buildFallbackContext(
+  deps: WorkflowRunLoopDeps,
+  step: WorkflowStep,
+  response: AgentResponse,
+  current: StepProviderInfo,
+  fallback: RateLimitFallbackProvider,
+  originalIteration: number,
+  origin: FallbackOperationOrigin,
+): FallbackContext {
+  if (!current.provider) {
+    throw new Error(`Step "${step.name}" has no resolved provider for rate limit fallback`);
+  }
+  return {
+    reason: 'rate_limited',
+    reasonDetail: response.error ?? 'Rate limit exceeded',
+    originalIteration,
+    previousProvider: current.provider,
+    ...(current.model !== undefined ? { previousModel: current.model } : {}),
+    currentProvider: fallback.provider,
+    ...(fallback.model !== undefined ? { currentModel: fallback.model } : {}),
+    stepName: step.name,
+    reportDir: deps.getReportDir(),
+    origin,
+  };
+}
+
 function withFallbackRuntime(
   state: WorkflowState,
+  step: WorkflowStep,
   runtime: RuntimeStepResolution | undefined,
 ): RuntimeStepResolution | undefined {
   if (!state.pendingFallback) {
     return runtime;
   }
+  const fallback = state.pendingFallback;
+  if (
+    fallback.origin.stage === 'reviewer'
+    && fallback.origin.reviewerStepName === step.name
+  ) {
+    return {
+      ...runtime,
+      providerInfo: {
+        provider: fallback.currentProvider,
+        model: fallback.currentModel,
+        providerSource: 'step',
+        modelSource: fallback.currentModel !== undefined ? 'step' : undefined,
+      },
+      fallback,
+    };
+  }
   return {
     ...runtime,
-    providerInfo: {
-      provider: state.pendingFallback.currentProvider,
-      model: state.pendingFallback.currentModel,
-      providerSource: 'step',
-      modelSource: state.pendingFallback.currentModel !== undefined ? 'step' : undefined,
-    },
-    fallback: state.pendingFallback,
+    fallback,
   };
+}
+
+function settleFallbackAttempt(
+  state: WorkflowState,
+  runtime: RuntimeStepResolution | undefined,
+  status: AgentResponse['status'],
+): void {
+  if (runtime?.fallback === undefined) {
+    return;
+  }
+  state.pendingFallback = undefined;
+  if (status !== 'rate_limited') {
+    state.rateLimitFallbackState = undefined;
+  }
 }
 
 function advanceActiveStep(deps: WorkflowRunLoopDeps, nextStep: string, iteration: number): void {
@@ -289,18 +389,26 @@ function advanceActiveStep(deps: WorkflowRunLoopDeps, nextStep: string, iteratio
   // WorkflowEngineStepCoordinator.resolveTransitionFromDone).
   deps.state.previousStep = deps.state.currentStep;
   deps.state.currentStep = nextStep;
-  deps.setActiveStep(resolvedStep, iteration);
+  const nextOccurrence = (deps.state.stepIterations.get(nextStep) ?? 0) + 1;
+  deps.setActiveStep(resolvedStep, iteration, nextOccurrence);
 }
 
-function buildWorkflowAbortResult(kind: WorkflowAbortKind, stepName: string, reason: string): WorkflowAbortResult {
+function buildWorkflowAbortResult(
+  kind: WorkflowAbortKind,
+  stepName: string,
+  reason: string,
+  error: string,
+): WorkflowAbortResult {
+  const failure = createRunFailure({
+    kind,
+    step: stepName,
+    reason,
+    error,
+  });
   return {
     kind,
-    reason,
-    failure: {
-      kind,
-      step: stepName,
-      reason,
-    },
+    reason: failure.reason,
+    failure,
   };
 }
 
@@ -308,14 +416,28 @@ function abortWorkflow(
   deps: WorkflowRunLoopDeps,
   kind: WorkflowAbortKind,
   reason: string,
-  options: { clearLastOutput?: boolean } = {},
+  options: {
+    clearLastOutput?: boolean;
+    failureError?: string;
+    failure?: WorkflowStepFailureSummary;
+  } = {},
 ): WorkflowAbortResult {
   deps.state.status = 'aborted';
   if (options.clearLastOutput) {
     deps.state.lastOutput = undefined;
   }
-  deps.emit('workflow:abort', deps.state, reason, kind);
-  return buildWorkflowAbortResult(kind, deps.state.currentStep, reason);
+  const failureError = options.failureError === undefined
+    ? reason
+    : options.failureError;
+  const result = options.failure === undefined
+    ? buildWorkflowAbortResult(kind, deps.state.currentStep, reason, failureError)
+    : {
+        kind: options.failure.kind,
+        reason: options.failure.reason,
+        failure: options.failure,
+      };
+  deps.emit('workflow:abort', deps.state, result.reason, result.kind, result.failure);
+  return result;
 }
 
 function abortWorkflowRuntimeError(deps: WorkflowRunLoopDeps, error: unknown): WorkflowAbortResult {
@@ -323,20 +445,23 @@ function abortWorkflowRuntimeError(deps: WorkflowRunLoopDeps, error: unknown): W
     return abortInterruptedWorkflow(deps);
   }
   if (error instanceof RuleDetectionExhaustedError) {
-    return abortWorkflow(deps, 'rule_no_match', 'rule_no_match', { clearLastOutput: true });
+    const reason = 'rule_no_match';
+    return abortWorkflow(deps, 'rule_no_match', reason, {
+      clearLastOutput: true,
+      failure: createRunFailure({
+        kind: 'rule_no_match',
+        step: error.stepName,
+        reason,
+        error: reason,
+      }),
+    });
   }
-  if (error instanceof WorkflowCallLoopDetectedError) {
-    return abortWorkflow(
-      deps,
-      'loop_detected',
-      ERROR_MESSAGES.LOOP_DETECTED(error.stepName, 2),
-    );
-  }
+  const errorMessage = getErrorMessage(error);
   return abortWorkflow(
     deps,
     'runtime_error',
-    ERROR_MESSAGES.STEP_EXECUTION_FAILED(getErrorMessage(error)),
-    { clearLastOutput: true },
+    ERROR_MESSAGES.STEP_EXECUTION_FAILED(errorMessage),
+    { clearLastOutput: true, failureError: errorMessage },
   );
 }
 
@@ -416,9 +541,51 @@ type TerminalTransitionResult =
       abort?: WorkflowAbortResult;
     };
 
+function abortStepTransition(
+  deps: WorkflowRunLoopDeps,
+  workflowCallFailure?: WorkflowStepFailureSummary,
+): WorkflowAbortResult {
+  if (workflowCallFailure === undefined) {
+    return abortWorkflow(
+      deps,
+      'step_transition',
+      'Workflow aborted by step transition',
+    );
+  }
+  return abortWorkflow(
+    deps,
+    workflowCallFailure.kind,
+    workflowCallFailure.reason,
+    { failure: workflowCallFailure },
+  );
+}
+
+function abortStepError(
+  deps: WorkflowRunLoopDeps,
+  step: WorkflowStep,
+  result: StepRunResult,
+): WorkflowAbortResult {
+  if (result.workflowCallFailure !== undefined) {
+    return abortWorkflow(
+      deps,
+      result.workflowCallFailure.kind,
+      result.workflowCallFailure.reason,
+      { failure: result.workflowCallFailure },
+    );
+  }
+  const failureError = result.response.error ?? result.response.content;
+  return abortWorkflow(
+    deps,
+    'step_error',
+    `Step "${step.name}" failed: ${failureError}`,
+    { failureError },
+  );
+}
+
 function handleTerminalTransition(
   deps: WorkflowRunLoopDeps,
   nextStep: string,
+  workflowCallFailure?: WorkflowStepFailureSummary,
 ): TerminalTransitionResult {
   if (nextStep === COMPLETE_STEP) {
     const gateAbort = finalizeCompletionOrAbort(deps, deps.checkCompletionGate());
@@ -432,7 +599,7 @@ function handleTerminalTransition(
     return {
       handled: true,
       transitionAccepted: true,
-      abort: abortWorkflow(deps, 'step_transition', 'Workflow aborted by step transition'),
+      abort: abortStepTransition(deps, workflowCallFailure),
     };
   }
   return { handled: false };
@@ -467,11 +634,15 @@ function prepareRateLimitFallback(
   step: WorkflowStep,
   response: AgentResponse,
   currentProvider: StepProviderInfo,
+  origin: FallbackOperationOrigin,
   activeIteration: number,
   consumedStepIterations: readonly string[],
 ): { queued: true } | { queued: false; abort: WorkflowAbortResult } {
   deps.emit('step:rate_limited', step, response, response.rateLimitInfo);
-  const previousAttempts = deps.state.rateLimitFallbackAttempts ?? [];
+  const previousAttempts = deps.state.rateLimitFallbackState !== undefined
+    && sameFallbackOperationOrigin(deps.state.rateLimitFallbackState.origin, origin)
+    ? deps.state.rateLimitFallbackState.attempts
+    : [];
   const currentAttempts = appendFallbackAttempt(previousAttempts, currentProvider);
   const fallback = pickNextFallbackProvider(
     deps.options.rateLimitFallback?.switchChain,
@@ -479,41 +650,31 @@ function prepareRateLimitFallback(
     currentAttempts,
   );
   if (!fallback) {
+    deps.state.rateLimitFallbackState = undefined;
     return {
       queued: false,
       abort: abortWorkflow(deps, 'rate_limited', `Step "${step.name}" hit a rate limit and no fallback provider is configured`),
     };
   }
 
-  const attempts = [...currentAttempts, fallback];
-  const context = buildRateLimitFallbackContext({
+  deps.state.rateLimitFallbackState = {
+    origin,
+    attempts: [...currentAttempts, fallback],
+  };
+  deps.state.pendingFallback = buildFallbackContext(
+    deps,
     step,
     response,
-    current: currentProvider,
+    currentProvider,
     fallback,
-    originalIteration: activeIteration,
-    reportDir: deps.getReportDir(),
-  });
-  commitFallbackRollback({
-    state: deps.state,
-    context,
-    attempts,
-    consumedStepIterations,
-    persist: () => deps.setActiveStep(step, deps.state.iteration),
-  });
-  return { queued: true };
-}
-
-function preserveTerminalFallbackAttempt(
-  deps: WorkflowRunLoopDeps,
-  step: WorkflowStep,
-  result: StepRunResult,
-): void {
-  requeueFallbackAfterTerminalResponse(
-    deps.state,
-    result.consumedStepIterations ?? [step.name],
-    () => deps.setActiveStep(step, deps.state.iteration),
+    activeIteration,
+    origin,
   );
+  deps.state.iteration--;
+  for (const stepName of new Set(consumedStepIterations)) {
+    decrementStepIteration(deps.state, stepName);
+  }
+  return { queued: true };
 }
 
 function requireNextStep(step: WorkflowStep, transition: WorkflowRuleTransition): string {
@@ -550,217 +711,49 @@ function resolveQualityGateSnapshotIteration(
   throw new Error(`Step "${step.name}" completed without a step iteration for quality gate feedback`);
 }
 
-function nextStepIteration(state: WorkflowState, stepName: string): number {
-  return (state.stepIterations.get(stepName) ?? 0) + 1;
-}
-
-interface CountableStepExecutionPlan {
-  readonly activeIteration: number;
-  readonly stepIteration: number;
-  readonly runtime: RuntimeStepResolution | undefined;
-  readonly providerInfo: StepProviderInfo | undefined;
-  readonly eventStep: WorkflowStep;
-  readonly instruction: string;
-  readonly rollback: () => void;
-  readonly commit: () => {
-    readonly scope: WorkflowExecutionScope;
-    readonly execute: () => Promise<StepRunResult>;
-  };
-}
-
-type CountableStepPlanKind = Exclude<WorkflowStepExecutionPlan['kind'], 'workflow_call'>;
-
-function resolveCountableStepPlanKind(step: WorkflowStep): CountableStepPlanKind {
-  if (step.engineSynthesized === true) {
-    return 'engine_synthesized';
-  }
-  if (step.parallel !== undefined) {
-    return 'parallel';
-  }
-  if (step.arpeggio !== undefined) {
-    return 'arpeggio';
-  }
-  if (step.teamLeader !== undefined) {
-    return 'team_leader';
-  }
-  if (getWorkflowStepKind(step) === 'system') {
-    return 'system';
-  }
-  return 'normal';
-}
-
-async function runPendingLoopJudge(
-  deps: WorkflowRunLoopDeps,
-): Promise<LoopMonitorJudgeRunResult | undefined> {
-  const pending = deps.getPendingLoopJudge();
-  if (pending === undefined) {
-    return undefined;
-  }
-  return deps.runLoopMonitorJudge(
-    pending.monitor,
-    pending.cycleCount,
-    pending.triggeringStep,
-    undefined,
-    pending.fallbackNextStep,
-    pending.resumedStart,
-  );
-}
-
-async function enforceIterationLimit(
-  deps: WorkflowRunLoopDeps,
-  step: WorkflowStep,
-): Promise<WorkflowAbortResult | undefined> {
-  if (!isCountableWorkflowStep(step)) {
-    return undefined;
-  }
-
-  const limitScope = deps.buildStepExecutionScope(step, deps.state.iteration);
-  const result = await deps.stepBudget.check({
-    request: {
-      currentIteration: deps.state.iteration,
-      currentStep: step.name,
-      scope: limitScope,
-    },
-    ignoreLimit: deps.options.ignoreIterationLimit === true,
-    onLimitReached: (maxSteps) => {
-      deps.setActiveStep(step, deps.state.iteration);
-      deps.emit('iteration:limit', deps.state.iteration, maxSteps, step.name, limitScope);
-    },
-    onMaxStepsExtended: deps.syncMaxSteps,
-    requestExtension: deps.options.onIterationLimit,
-  });
-  if (result.allowed) {
-    return undefined;
-  }
-  deps.setActiveStep(step, deps.state.iteration);
-  return abortWorkflow(deps, 'iteration_limit', ERROR_MESSAGES.MAX_STEPS_REACHED);
-}
-
-async function prepareCountableStepExecution(
-  deps: WorkflowRunLoopDeps,
-  step: WorkflowStep,
-): Promise<CountableStepExecutionPlan> {
-  const pendingIteration = deps.state.iteration + 1;
-  const pendingStepIteration = nextStepIteration(deps.state, step.name);
-  const promotedRuntime = await resolveStepPromotionRuntime(
-    deps,
-    step,
-    isDelegatedWorkflowStep(step) ? undefined : pendingStepIteration,
-    undefined,
-  );
-  const fallbackRuntime = withFallbackRuntime(deps.state, promotedRuntime);
-  const runtime = await resolveStepAutoRoutingRuntime(deps, step, fallbackRuntime, step.instruction);
-  const kind = resolveCountableStepPlanKind(step);
-  const preparedExecution = kind === 'normal'
-    ? deps.prepareNormalStepExecution(step, pendingStepIteration, runtime)
-    : undefined;
-  const providerInfo = isProviderBackedWorkflowStep(step)
-    ? deps.resolveStepProviderModel(step, runtime)
-    : undefined;
-  if (providerInfo !== undefined && providerInfo.provider === undefined) {
-    preparedExecution?.rollbackPreparation();
-    throw new Error(`Step "${step.name}" has no resolved provider`);
-  }
-  const eventStep = preparedExecution?.executableStep ?? step;
-  const instruction = preparedExecution?.phase1Instruction ?? '';
-
-  return {
-    activeIteration: pendingIteration,
-    stepIteration: pendingStepIteration,
-    runtime,
-    providerInfo,
-    eventStep,
-    instruction,
-    rollback: () => preparedExecution?.rollbackPreparation(),
-    commit: () => {
-      const stepIteration = commitCountableStepStart({
-        state: deps.state,
-        stepName: step.name,
-        iteration: pendingIteration,
-        expectedStepIteration: pendingStepIteration,
-        recordProgress: deps.recordCountableProgress,
-        persist: () => deps.setActiveStep(step, pendingIteration),
-      });
-      const scope = snapshotWorkflowExecutionScope(deps.getCurrentWorkflowStack());
-      const eventAttribution = { iteration: pendingIteration, scope } as const;
-      let executionPlan: WorkflowStepExecutionPlan;
-      if (kind === 'normal') {
-        if (preparedExecution === undefined) {
-          throw new Error(`Normal agent step "${step.name}" is missing prepared execution`);
-        }
-        executionPlan = {
-          kind,
-          runtime,
-          stepIteration,
-          preparedExecution,
-          eventAttribution,
-        };
-      } else {
-        executionPlan = {
-          kind,
-          runtime,
-          stepIteration,
-          eventAttribution,
-        };
-      }
-      return {
-        scope,
-        execute: () => runWithStepSpan({
-          enabled: deps.options.observability?.enabled === true,
-          runId: deps.options.observabilityRunId,
-          workflowName: deps.getWorkflowName(),
-          step: eventStep,
-          iteration: pendingIteration,
-          stepIteration,
-          instruction,
-          workflowStack: [...scope.stack],
-          sanitizeText: deps.options.sanitizeObservabilityText,
-          providerInfo,
-          getFinalStepIteration: () => deps.state.stepIterations.get(step.name),
-          traceTaskMetadata: deps.options.traceTaskMetadata,
-        }, () => deps.runStep(step, executionPlan)),
-      };
-    },
-  };
-}
-
 export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promise<WorkflowRunResult> {
+  try {
+    return await runWorkflowToCompletionCore(deps);
+  } finally {
+    deps.cancelPendingStepActivation();
+  }
+}
+
+async function runWorkflowToCompletionCore(deps: WorkflowRunLoopDeps): Promise<WorkflowRunResult> {
   let abort: WorkflowAbortResult | undefined;
   let returnValue: string | undefined;
 
-  if (workflowInterruptRequested(deps)) {
-    abort = abortInterruptedWorkflow(deps);
-  } else {
-    try {
-      const judgeResult = await runPendingLoopJudge(deps);
-      if (judgeResult !== undefined) {
-        if ('iterationLimitReached' in judgeResult) {
-          abort = abortWorkflow(deps, 'iteration_limit', ERROR_MESSAGES.MAX_STEPS_REACHED);
-        } else {
-          const terminal = handleTerminalTransition(deps, judgeResult.nextStep);
-          if (terminal.handled) {
-            abort = terminal.abort;
-          } else {
-            advanceActiveStep(deps, judgeResult.nextStep, deps.state.iteration);
-          }
-        }
-      }
-    } catch (error) {
-      abort = abortWorkflowRuntimeError(deps, error);
-    }
-  }
-
-  while (abort === undefined && deps.state.status === 'running') {
+  while (deps.state.status === 'running') {
     if (workflowInterruptRequested(deps)) {
       abort = abortInterruptedWorkflow(deps);
       break;
     }
 
     const step = deps.getStep(deps.state.currentStep);
-    const isCountable = isCountableWorkflowStep(step);
-    const iterationLimitAbort = await enforceIterationLimit(deps, step);
-    if (iterationLimitAbort) {
-      abort = iterationLimitAbort;
+    const consumesIterationBudget = getWorkflowStepKind(step) !== 'workflow_call';
+    const maxSteps = deps.getMaxSteps();
+    if (
+      consumesIterationBudget
+      &&
+      deps.options.ignoreIterationLimit !== true
+      && typeof maxSteps === 'number'
+      && deps.state.iteration >= maxSteps
+    ) {
+      deps.emit('iteration:limit', deps.state.iteration, maxSteps);
+
+      if (deps.options.onIterationLimit) {
+        const additionalIterations = await deps.options.onIterationLimit({
+          currentIteration: deps.state.iteration,
+          maxSteps,
+          currentStep: deps.state.currentStep,
+        });
+        if (additionalIterations !== null && additionalIterations > 0) {
+          deps.updateMaxSteps(maxSteps + additionalIterations);
+          continue;
+        }
+      }
+
+      abort = abortWorkflow(deps, 'iteration_limit', ERROR_MESSAGES.MAX_STEPS_REACHED);
       break;
     }
 
@@ -780,110 +773,145 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
       break;
     }
 
-    let activeIteration = deps.state.iteration;
-    let stepIteration: number;
+    if (consumesIterationBudget) {
+      deps.state.iteration++;
+    }
+    const isDelegated = isDelegatedWorkflowStep(step);
+    const activeIteration = deps.state.iteration;
+    const stepIteration = deps.claimStepOccurrence(step);
+    let workflowCallExecution: WorkflowCallExecutionToken | undefined;
+    try {
+      workflowCallExecution = deps.setActiveStep(step, activeIteration, stepIteration);
+    } catch (error) {
+      abort = abortWorkflowRuntimeError(deps, error);
+      break;
+    }
     let stepRuntime: RuntimeStepResolution | undefined;
-    let providerInfo: StepProviderInfo | undefined;
-    let executionScope: WorkflowExecutionScope | undefined;
-    let eventStep = step;
-    let executeStep: () => Promise<StepRunResult>;
-    if (!isCountable) {
-      stepIteration = deps.state.stepIterations.get(step.name) ?? 0;
-      executeStep = async () => {
-        const result = await deps.runStep(step, { kind: 'workflow_call' });
-        stepIteration = deps.state.stepIterations.get(step.name) ?? 0;
-        return result;
-      };
-    } else {
-      let plan: CountableStepExecutionPlan;
-      try {
-        plan = await prepareCountableStepExecution(deps, step);
-      } catch (error) {
-        if (workflowInterruptRequested(deps)) {
-          abort = abortInterruptedWorkflow(deps);
-          break;
-        }
-        throw error;
-      }
+    let preparedExecution: PreparedNormalStepExecution | undefined;
+    let executionStep: WorkflowStep;
+    let prebuiltInstruction: string | undefined;
+    let stepInstruction: string;
+    let providerInfo: StepProviderInfo;
+    let stepEventWorkflowStack: StepSpanParams['workflowStack'];
+    try {
+      const baseStepRuntime = deps.resolveRuntimeForStep(step);
+      const promotedRuntime = await resolveStepPromotionRuntime(
+        deps,
+        step,
+        isDelegated ? undefined : stepIteration,
+        baseStepRuntime,
+      );
+      const fallbackRuntime = withFallbackRuntime(deps.state, step, promotedRuntime);
+      stepRuntime = await resolveStepAutoRoutingRuntime(deps, step, fallbackRuntime, step.instruction);
+      preparedExecution = deps.prepareNormalStepExecution(step, stepIteration, stepRuntime);
+      executionStep = preparedExecution?.executableStep ?? step;
+      prebuiltInstruction = preparedExecution === undefined && !isDelegated
+        ? deps.buildInstruction(step, stepIteration, stepRuntime?.fallback)
+        : undefined;
+      stepInstruction = preparedExecution?.phase1Instruction
+        ?? (prebuiltInstruction
+        ? deps.buildPhase1Instruction(step, prebuiltInstruction, stepRuntime)
+        : '');
+      providerInfo = deps.resolveStepProviderModel(executionStep, stepRuntime);
+      stepEventWorkflowStack = requireWorkflowResumeStackSnapshot(
+        deps.getCurrentWorkflowStack(),
+      );
+    } catch (error) {
+      workflowCallExecution?.fail(error);
       if (workflowInterruptRequested(deps)) {
-        plan.rollback();
         abort = abortInterruptedWorkflow(deps);
         break;
       }
-      const committed = plan.commit();
-      activeIteration = plan.activeIteration;
-      stepIteration = plan.stepIteration;
-      stepRuntime = plan.runtime;
-      eventStep = plan.eventStep;
-      providerInfo = plan.providerInfo;
-      executionScope = committed.scope;
+      abort = abortWorkflowRuntimeError(deps, error);
+      break;
+    }
+    if (workflowInterruptRequested(deps)) {
+      workflowCallExecution?.cancel();
+      abort = abortInterruptedWorkflow(deps);
+      break;
+    }
+    if (consumesIterationBudget) {
       deps.emit(
         'step:start',
-        plan.eventStep,
+        executionStep,
         activeIteration,
-        plan.instruction,
-        plan.providerInfo,
+        stepInstruction,
+        providerInfo,
         deps.getWorkflowName(),
         step.name,
         stepIteration,
-        deps.stepBudget.currentMaxSteps(),
-        committed.scope,
+        stepEventWorkflowStack,
+        deps.getFindingScopeIdentity(),
+        deps.getFindingIds(),
       );
-      executeStep = committed.execute;
     }
 
     try {
       const startedAt = Date.now();
-      const result = await executeStep();
+      const executeStep = () => deps.runStep(
+        step,
+        prebuiltInstruction,
+        stepRuntime,
+        stepIteration,
+        preparedExecution,
+        workflowCallExecution,
+      );
+      const result = consumesIterationBudget
+        ? await runWithStepSpan({
+            enabled: deps.options.observability?.enabled === true,
+            runId: deps.options.observabilityRunId,
+            workflowName: deps.getWorkflowName(),
+            step: executionStep,
+            iteration: activeIteration,
+            stepIteration,
+            instruction: stepInstruction,
+            workflowStack: stepEventWorkflowStack,
+            sanitizeText: deps.options.sanitizeObservabilityText,
+            providerInfo,
+            getFinalStepIteration: () => deps.state.stepIterations.get(step.name),
+            traceTaskMetadata: deps.options.traceTaskMetadata,
+          }, executeStep)
+        : await executeStep();
       if (workflowInterruptRequested(deps)) {
         abort = abortInterruptedWorkflow(deps);
         break;
       }
       const { response, instruction, providerInfo: resultProviderInfo } = result;
       const completedProviderInfo = resultProviderInfo ?? providerInfo;
-      if (isCountable) {
-        if (executionScope === undefined) {
-          throw new Error(`Step "${step.name}" completed without an execution scope`);
-        }
-        if (isProviderBackedWorkflowStep(eventStep) && completedProviderInfo === undefined) {
-          throw new Error(`Step "${step.name}" completed without provider information`);
-        }
-        if (completedProviderInfo !== undefined) {
-          recordNormalRoutingResult(deps, step, completedProviderInfo, response);
-          emitNormalRoutingDecision(
-            deps,
-            step,
-            response,
-            instruction,
-            completedProviderInfo,
-            Math.max(0, Date.now() - startedAt),
-            activeIteration,
-            executionScope,
-          );
-        }
-        deps.emit('step:complete', eventStep, response, instruction, step.name, executionScope);
+      if (consumesIterationBudget) {
+        recordNormalRoutingResult(deps, step, completedProviderInfo, response);
+        emitNormalRoutingDecision(
+          deps,
+          step,
+          response,
+          instruction,
+          completedProviderInfo,
+          Math.max(0, Date.now() - startedAt),
+          activeIteration,
+        );
+        settleFallbackAttempt(deps.state, stepRuntime, response.status);
+        deps.emit(
+          'step:complete',
+          executionStep,
+          response,
+          instruction,
+          step.name,
+          stepEventWorkflowStack,
+        );
       }
 
       if (response.status === 'rate_limited') {
-        if (completedProviderInfo === undefined) {
-          throw new Error(`Rate-limited step "${step.name}" is missing provider information`);
-        }
-        if (result.rateLimitFallbackHandled === true) {
-          deps.emit('step:rate_limited', step, response, response.rateLimitInfo);
-          abort = abortWorkflow(
-            deps,
-            'rate_limited',
-            `Step "${step.name}" hit a rate limit and no fallback provider is configured`,
-          );
-          break;
-        }
-        const currentProvider = completedProviderInfo;
+        const terminalOperation = result.terminalOperation ?? {
+          origin: reviewerOperationOrigin(step.name),
+          providerInfo: completedProviderInfo,
+        };
         const consumedStepIterations = result.consumedStepIterations ?? [step.name];
         const fallbackResult = prepareRateLimitFallback(
           deps,
           step,
           response,
-          currentProvider,
+          terminalOperation.providerInfo,
+          terminalOperation.origin,
           activeIteration,
           consumedStepIterations,
         );
@@ -892,14 +920,6 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
           break;
         }
         continue;
-      }
-
-      if (stepRuntime?.fallback) {
-        if (response.status === 'error' || response.status === 'blocked') {
-          preserveTerminalFallbackAttempt(deps, step, result);
-        } else {
-          completeFallback(deps.state, () => deps.setActiveStep(step, deps.state.iteration));
-        }
       }
 
       if (result.qualityGateFailure) {
@@ -915,21 +935,23 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
       if (response.status === 'blocked') {
         deps.emit('step:blocked', step, response);
         const result = await handleBlocked(step, response, deps.options);
-        if (result.shouldContinue && result.userInput) {
+        if (result.kind === 'continued') {
           deps.addUserInput(result.userInput);
           deps.emit('step:user_input', step, result.userInput);
           continue;
         }
-        abort = abortWorkflow(deps, 'blocked', 'Workflow blocked and no user input provided');
+        abort = result.kind === 'cancelled'
+          ? abortWorkflow(deps, 'user_input_cancelled', 'User input cancelled')
+          : abortWorkflow(
+              deps,
+              'blocked',
+              'Workflow blocked and no user input provided',
+            );
         break;
       }
 
       if (response.status === 'error') {
-        abort = abortWorkflow(
-          deps,
-          'step_error',
-          `Step "${step.name}" failed: ${response.error ?? response.content}`,
-        );
+        abort = abortStepError(deps, step, result);
         break;
       }
 
@@ -989,7 +1011,11 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
         nextStep,
       });
 
-      const naturalTerminal = handleTerminalTransition(deps, nextStep);
+      const naturalTerminal = handleTerminalTransition(
+        deps,
+        nextStep,
+        result.workflowCallFailure,
+      );
       if (naturalTerminal.handled) {
         if (naturalTerminal.transitionAccepted) {
           result.commitTransition?.({ kind: 'next_step', nextStep });
@@ -1006,24 +1032,7 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
           threshold: cycleCheck.monitor.threshold,
         });
         deps.emit('step:cycle_detected', cycleCheck.monitor, cycleCheck.cycleCount);
-        if (workflowInterruptRequested(deps)) {
-          abort = abortInterruptedWorkflow(deps);
-          break;
-        }
-        const judgeResult = await deps.runLoopMonitorJudge(
-          cycleCheck.monitor,
-          cycleCheck.cycleCount,
-          step,
-          completedProviderInfo === undefined
-            ? stepRuntime
-            : { ...stepRuntime, providerInfo: completedProviderInfo },
-          nextStep,
-        );
-        if ('iterationLimitReached' in judgeResult) {
-          abort = abortWorkflow(deps, 'iteration_limit', ERROR_MESSAGES.MAX_STEPS_REACHED);
-          break;
-        }
-        nextStep = judgeResult.nextStep;
+        nextStep = await deps.runLoopMonitorJudge(cycleCheck.monitor, cycleCheck.cycleCount, step, stepRuntime, nextStep);
       }
 
       const monitoredTerminal = handleTerminalTransition(deps, nextStep);
@@ -1037,8 +1046,11 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
       result.commitTransition?.({ kind: 'next_step', nextStep });
       advanceActiveStep(deps, nextStep, deps.state.iteration);
     } catch (error) {
+      workflowCallExecution?.fail(error);
       abort = abortWorkflowRuntimeError(deps, error);
       break;
+    } finally {
+      workflowCallExecution?.cancel();
     }
   }
 
@@ -1049,21 +1061,15 @@ export async function runWorkflowToCompletion(deps: WorkflowRunLoopDeps): Promis
 
 export async function runSingleWorkflowIteration(deps: WorkflowRunLoopDeps): Promise<SingleWorkflowIterationResult> {
   const step = deps.getStep(deps.state.currentStep);
-  if (workflowInterruptRequested(deps)) {
-    return buildInterruptedIterationResult(deps, step);
-  }
   try {
-    const pendingJudgeResult = await runPendingLoopJudge(deps);
-    if (pendingJudgeResult !== undefined) {
-      return completeSinglePendingLoopJudgeIteration(deps, step, pendingJudgeResult);
+    const result = await runSingleWorkflowIterationCore(deps);
+    if (result.isComplete || result.abort !== undefined) {
+      deps.cancelPendingStepActivation();
     }
-    return await runSingleWorkflowIterationCore(deps);
+    return result;
   } catch (error) {
-    if (
-      !workflowInterruptRequested(deps)
-      && !(error instanceof RuleDetectionExhaustedError)
-      && !(error instanceof WorkflowCallLoopDetectedError)
-    ) {
+    deps.cancelPendingStepActivation();
+    if (!workflowInterruptRequested(deps) && !(error instanceof RuleDetectionExhaustedError)) {
       throw error;
     }
     const abort = abortWorkflowRuntimeError(deps, error);
@@ -1081,65 +1087,10 @@ export async function runSingleWorkflowIteration(deps: WorkflowRunLoopDeps): Pro
   }
 }
 
-function completeSinglePendingLoopJudgeIteration(
-  deps: WorkflowRunLoopDeps,
-  triggeringStep: WorkflowStep,
-  judgeResult: LoopMonitorJudgeRunResult,
-): SingleWorkflowIterationResult {
-  if ('iterationLimitReached' in judgeResult) {
-    const abort = abortWorkflow(deps, 'iteration_limit', ERROR_MESSAGES.MAX_STEPS_REACHED);
-    return {
-      response: {
-        persona: triggeringStep.persona ?? triggeringStep.name,
-        status: 'blocked',
-        content: abort.reason,
-        timestamp: new Date(),
-      },
-      nextStep: ABORT_STEP,
-      isComplete: true,
-      loopDetected: true,
-      abort,
-    };
-  }
-
-  const terminal = handleTerminalTransition(deps, judgeResult.nextStep);
-  if (terminal.handled) {
-    return {
-      response: judgeResult.response,
-      nextStep: terminal.abort === undefined ? judgeResult.nextStep : ABORT_STEP,
-      isComplete: true,
-      loopDetected: true,
-      ...(terminal.abort === undefined ? {} : { abort: terminal.abort }),
-    };
-  }
-
-  advanceActiveStep(deps, judgeResult.nextStep, deps.state.iteration);
-  return {
-    response: judgeResult.response,
-    nextStep: judgeResult.nextStep,
-    isComplete: false,
-    loopDetected: true,
-  };
-}
-
 async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promise<SingleWorkflowIterationResult> {
   const step = deps.getStep(deps.state.currentStep);
   if (workflowInterruptRequested(deps)) {
     return buildInterruptedIterationResult(deps, step);
-  }
-  const iterationLimitAbort = await enforceIterationLimit(deps, step);
-  if (iterationLimitAbort) {
-    return {
-      response: {
-        persona: step.persona ?? step.name,
-        status: 'blocked',
-        content: iterationLimitAbort.reason,
-        timestamp: new Date(),
-      },
-      nextStep: ABORT_STEP,
-      isComplete: true,
-      abort: iterationLimitAbort,
-    };
   }
   const userInputRuntimeAbort = validateUserInputRuntime(deps, step);
   if (userInputRuntimeAbort) {
@@ -1174,98 +1125,104 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
     };
   }
 
-  const isCountable = isCountableWorkflowStep(step);
-  let activeIteration = deps.state.iteration;
-  let stepIteration: number;
+  if (getWorkflowStepKind(step) !== 'workflow_call') {
+    deps.state.iteration++;
+  }
+  const activeIteration = deps.state.iteration;
+  const isDelegated = isDelegatedWorkflowStep(step);
+  const stepIteration = deps.claimStepOccurrence(step);
+  const workflowCallExecution = deps.setActiveStep(step, activeIteration, stepIteration);
+  try {
+  const baseStepRuntime = deps.resolveRuntimeForStep(step);
+  const promotedRuntime = await resolveStepPromotionRuntime(
+    deps,
+    step,
+    isDelegated ? undefined : stepIteration,
+    baseStepRuntime,
+  );
+  const fallbackRuntime = withFallbackRuntime(deps.state, step, promotedRuntime);
   let stepRuntime: RuntimeStepResolution | undefined;
-  const startedAt = Date.now();
-  let providerInfo: StepProviderInfo | undefined;
-  let executionScope: WorkflowExecutionScope | undefined;
-  let result: StepRunResult;
-  if (!isCountable) {
-    result = await deps.runStep(step, { kind: 'workflow_call' });
-    stepIteration = deps.state.stepIterations.get(step.name) ?? 0;
-  } else {
-    let plan: CountableStepExecutionPlan;
-    try {
-      plan = await prepareCountableStepExecution(deps, step);
-    } catch (error) {
-      if (workflowInterruptRequested(deps)) {
-        return buildInterruptedIterationResult(deps, step, loopCheck.isLoop);
-      }
-      throw error;
-    }
+  try {
+    stepRuntime = await resolveStepAutoRoutingRuntime(deps, step, fallbackRuntime, step.instruction);
+  } catch (error) {
     if (workflowInterruptRequested(deps)) {
-      plan.rollback();
       return buildInterruptedIterationResult(deps, step, loopCheck.isLoop);
     }
-    const committed = plan.commit();
-    activeIteration = plan.activeIteration;
-    stepIteration = plan.stepIteration;
-    stepRuntime = plan.runtime;
-    providerInfo = plan.providerInfo;
-    executionScope = committed.scope;
-    result = await committed.execute();
+    throw error;
   }
+  if (workflowInterruptRequested(deps)) {
+    return buildInterruptedIterationResult(deps, step, loopCheck.isLoop);
+  }
+  const preparedExecution = deps.prepareNormalStepExecution(step, stepIteration, stepRuntime);
+  const executionStep = preparedExecution?.executableStep ?? step;
+  const prebuiltInstruction = preparedExecution === undefined && !isDelegated
+    ? deps.buildInstruction(step, stepIteration, stepRuntime?.fallback)
+    : undefined;
+  const stepInstruction = preparedExecution?.phase1Instruction
+    ?? (deps.options.observability?.enabled === true && prebuiltInstruction
+      ? deps.buildPhase1Instruction(step, prebuiltInstruction, stepRuntime)
+      : '');
+  const providerInfo = deps.resolveStepProviderModel(executionStep, stepRuntime);
+  const startedAt = Date.now();
+  const executeStep = () => deps.runStep(
+    step,
+    prebuiltInstruction,
+    stepRuntime,
+    stepIteration,
+    preparedExecution,
+    workflowCallExecution,
+  );
+  const result = getWorkflowStepKind(step) === 'workflow_call'
+    ? await executeStep()
+    : await runWithStepSpan({
+        enabled: deps.options.observability?.enabled === true,
+        runId: deps.options.observabilityRunId,
+        workflowName: deps.getWorkflowName(),
+        step: executionStep,
+        iteration: activeIteration,
+        stepIteration,
+        instruction: stepInstruction,
+        workflowStack: deps.getCurrentWorkflowStack(),
+        sanitizeText: deps.options.sanitizeObservabilityText,
+        providerInfo,
+        getFinalStepIteration: () => deps.state.stepIterations.get(step.name),
+        traceTaskMetadata: deps.options.traceTaskMetadata,
+      }, executeStep);
   if (workflowInterruptRequested(deps)) {
     return buildInterruptedIterationResult(deps, step, loopCheck.isLoop);
   }
   const { response, providerInfo: resultProviderInfo } = result;
   const completedProviderInfo = resultProviderInfo ?? providerInfo;
-  if (isCountable) {
-    if (executionScope === undefined) {
-      throw new Error(`Step "${step.name}" completed without an execution scope`);
-    }
-    if (isProviderBackedWorkflowStep(step) && completedProviderInfo === undefined) {
-      throw new Error(`Step "${step.name}" completed without provider information`);
-    }
-    if (completedProviderInfo !== undefined) {
-      recordNormalRoutingResult(deps, step, completedProviderInfo, response);
-      emitNormalRoutingDecision(
-        deps,
-        step,
-        response,
-        result.instruction,
-        completedProviderInfo,
-        Math.max(0, Date.now() - startedAt),
-        activeIteration,
-        executionScope,
-      );
-    }
+  if (getWorkflowStepKind(step) !== 'workflow_call') {
+    recordNormalRoutingResult(deps, step, completedProviderInfo, response);
+    emitNormalRoutingDecision(
+      deps,
+      step,
+      response,
+      result.instruction,
+      completedProviderInfo,
+      Math.max(0, Date.now() - startedAt),
+      activeIteration,
+    );
+    settleFallbackAttempt(deps.state, stepRuntime, response.status);
   }
 
   if (response.status === 'blocked') {
-    if (stepRuntime?.fallback) {
-      preserveTerminalFallbackAttempt(deps, step, result);
-    }
     const abort = abortWorkflow(deps, 'blocked', 'Workflow blocked and no user input provided');
     return { response, nextStep: ABORT_STEP, isComplete: true, loopDetected: loopCheck.isLoop, abort };
   }
   if (response.status === 'rate_limited') {
-    if (completedProviderInfo === undefined) {
-      throw new Error(`Rate-limited step "${step.name}" is missing provider information`);
-    }
-    if (result.rateLimitFallbackHandled === true) {
-      deps.emit('step:rate_limited', step, response, response.rateLimitInfo);
-      return {
-        response,
-        nextStep: ABORT_STEP,
-        isComplete: true,
-        loopDetected: loopCheck.isLoop,
-        abort: abortWorkflow(
-          deps,
-          'rate_limited',
-          `Step "${step.name}" hit a rate limit and no fallback provider is configured`,
-        ),
-      };
-    }
-    const currentProvider = completedProviderInfo;
+    const terminalOperation = result.terminalOperation ?? {
+      origin: reviewerOperationOrigin(step.name),
+      providerInfo: completedProviderInfo,
+    };
     const consumedStepIterations = result.consumedStepIterations ?? [step.name];
     const fallbackResult = prepareRateLimitFallback(
       deps,
       step,
       response,
-      currentProvider,
+      terminalOperation.providerInfo,
+      terminalOperation.origin,
       activeIteration,
       consumedStepIterations,
     );
@@ -1280,17 +1237,8 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
       abort: fallbackResult.abort,
     };
   }
-  if (stepRuntime?.fallback && response.status === 'error') {
-    preserveTerminalFallbackAttempt(deps, step, result);
-  } else if (stepRuntime?.fallback) {
-    completeFallback(deps.state, () => deps.setActiveStep(step, deps.state.iteration));
-  }
   if (response.status === 'error') {
-    const abort = abortWorkflow(
-      deps,
-      'step_error',
-      `Step "${step.name}" failed: ${response.error ?? response.content}`,
-    );
+    const abort = abortStepError(deps, step, result);
     return { response, nextStep: ABORT_STEP, isComplete: true, loopDetected: loopCheck.isLoop, abort };
   }
 
@@ -1382,9 +1330,15 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
   }
 
   if (nextStep === ABORT_STEP) {
-    const abort = abortWorkflow(deps, 'step_transition', 'Workflow aborted by step transition');
+    const abort = abortStepTransition(deps, result.workflowCallFailure);
     return { response, nextStep, isComplete, loopDetected: loopCheck.isLoop, abort };
   }
 
   return { response, nextStep, isComplete, loopDetected: loopCheck.isLoop };
+  } catch (error) {
+    workflowCallExecution?.fail(error);
+    throw error;
+  } finally {
+    workflowCallExecution?.cancel();
+  }
 }

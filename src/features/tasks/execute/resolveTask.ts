@@ -22,7 +22,10 @@ import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { generateReportDir } from '../../../shared/utils/reportDir.js';
 import { generateExecutionReportDir } from '../../../core/workflow/run/run-slug.js';
 import { getTaskSlugFromTaskDir } from '../../../shared/utils/taskPaths.js';
-import { stageTaskSpecForExecution } from './taskSpecContext.js';
+import {
+  resolveTaskSpecForExecution,
+  type ResolvedTaskSpec,
+} from './taskSpecContext.js';
 import { resolveReusedWorktreeExecution } from './reusedWorktree.js';
 import { validateTaskRetryRestartPoint } from '../taskRetryStartPath.js';
 import type { ExecuteTaskOptions, TaskExecutionContextOverride } from './types.js';
@@ -31,6 +34,7 @@ import {
   materializeTaskPullRequestWorktreeContext,
   resolveTaskPullRequestContext,
 } from '../pullRequestWorktreeContext.js';
+import { warnIfResumePointAdjusted } from './resumePointAdjustmentWarning.js';
 
 const log = createLogger('task');
 
@@ -141,8 +145,7 @@ export interface ResolvedTaskExecution {
   workflowIdentifier: string;
   isWorktree: boolean;
   reportDirName: string;
-  taskPrompt?: string;
-  orderContent?: string;
+  taskSpec?: ResolvedTaskSpec;
   branch?: string;
   worktreePath?: string;
   baseBranch?: string;
@@ -174,6 +177,7 @@ function resolveRetryResume(
   configuredStartStep: string | undefined,
   resumePoint: WorkflowResumePoint | undefined,
   restartPoint: WorkflowRestartPoint | undefined,
+  outputMode: ExecuteTaskOptions['outputMode'],
 ): {
   startStep?: string;
   resumePoint?: WorkflowResumePoint;
@@ -193,12 +197,24 @@ function resolveRetryResume(
   if (resumePoint === undefined) {
     return configuredStartStep ? { startStep: configuredStartStep } : {};
   }
-
-  const workflowConfig = loadWorkflowByIdentifier(workflowIdentifier, projectCwd, { lookupCwd });
+  const workflowConfig = loadWorkflowByIdentifier(
+    workflowIdentifier,
+    projectCwd,
+    { lookupCwd },
+  );
   if (!workflowConfig) {
-    return {
-      ...(configuredStartStep ? { startStep: configuredStartStep } : {}),
-    };
+    const resolved = configuredStartStep
+      ? { startStep: configuredStartStep }
+      : {};
+    warnIfResumePointAdjusted({
+      context: 'task_reexecution',
+      outputMode,
+      workflow: workflowIdentifier,
+      original: resumePoint,
+      accepted: undefined,
+      startStep: configuredStartStep,
+    });
+    return resolved;
   }
 
   const resolvedResumePoint = trimResumePointStackForWorkflow({
@@ -212,16 +228,23 @@ function resolveRetryResume(
     ),
   });
   const rootEntry = resolvedResumePoint?.stack[0];
-  if (rootEntry) {
-    return {
+  const resolved = rootEntry
+    ? {
       startStep: rootEntry.step,
       resumePoint: resolvedResumePoint,
+    }
+    : {
+      ...(configuredStartStep ? { startStep: configuredStartStep } : {}),
     };
-  }
-
-  return {
-    ...(configuredStartStep ? { startStep: configuredStartStep } : {}),
-  };
+  warnIfResumePointAdjusted({
+    context: 'task_reexecution',
+    outputMode,
+    workflow: workflowConfig.name,
+    original: resumePoint,
+    accepted: resolvedResumePoint,
+    startStep: resolved.startStep,
+  });
+  return resolved;
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
@@ -289,7 +312,7 @@ export async function resolveTaskExecution(
     throw new Error(`Task "${task.name}" is missing required workflow.`);
   }
   const configuredStartStep = resolveTaskStartStepValue(normalizedData);
-  const resumePoint = normalizedData.resume_point as WorkflowResumePoint | undefined;
+  const resumePoint = normalizedData.resume_point;
   const restartPoint = normalizedData.restart_point as WorkflowRestartPoint | undefined;
   const retryNote = normalizedData.retry_note;
   const contextOverride = options?.taskContext;
@@ -298,8 +321,7 @@ export async function resolveTaskExecution(
   let execCwd = defaultCwd;
   let isWorktree = false;
   let reportDirName: string | undefined;
-  let taskPrompt: string | undefined;
-  let orderContent: string | undefined;
+  let taskSpec: ResolvedTaskSpec | undefined;
   let branch: string | undefined;
   let worktreePath: string | undefined;
   let baseBranch: string | undefined = prContext?.baseBranch ?? contextOverride?.baseBranch;
@@ -392,12 +414,21 @@ export async function resolveTaskExecution(
 
   if (task.taskDir) {
     reportDirName = generateExecutionReportDir(execCwd, task.content);
-    const stagedTaskSpec = stageTaskSpecForExecution(defaultCwd, execCwd, task.taskDir, reportDirName);
-    taskPrompt = stagedTaskSpec.taskPrompt;
-    orderContent = stagedTaskSpec.orderContent;
+    taskSpec = resolveTaskSpecForExecution(
+      defaultCwd,
+      execCwd,
+      task.taskDir,
+      reportDirName,
+    );
   }
 
-  const resolvedReportDirName = reportDirName ?? generateReportDir(task.content);
+  const resumeSource = task.resumeMode
+    ? { ...(task.sourceRunSlug ? { sourceRunSlug: task.sourceRunSlug } : {}), resumeMode: task.resumeMode }
+    : undefined;
+  const resolvedReportDirName = reportDirName
+    ?? (resumeSource?.sourceRunSlug === undefined
+      ? generateReportDir(task.content)
+      : generateExecutionReportDir(execCwd, task.content));
   const retryResume = resolveRetryResume(
     workflowIdentifier,
     defaultCwd,
@@ -405,13 +436,11 @@ export async function resolveTaskExecution(
     configuredStartStep,
     resumePoint,
     restartPoint,
+    options?.outputMode,
   );
   const resolvedRetryNote = data.retry_note;
-  const resumeSource = task.resumeMode
-    ? { ...(task.sourceRunSlug ? { sourceRunSlug: task.sourceRunSlug } : {}), resumeMode: task.resumeMode }
-    : undefined;
   const maxStepsOverride = data.exceeded_max_steps;
-  const initialIterationOverride = data.exceeded_current_iteration ?? retryResume.resumePoint?.iteration;
+  const initialIterationOverride = data.exceeded_current_iteration;
 
   const autoPr = data.auto_pr ?? resolveWorkflowConfigValue(defaultCwd, 'autoPr') ?? false;
   const draftPr = data.draft_pr ?? resolveWorkflowConfigValue(defaultCwd, 'draftPr') ?? false;
@@ -428,8 +457,7 @@ export async function resolveTaskExecution(
     draftPr,
     managedPr,
     shouldPublishBranchToOrigin,
-    ...(taskPrompt ? { taskPrompt } : {}),
-    ...(orderContent !== undefined ? { orderContent } : {}),
+    ...(taskSpec === undefined ? {} : { taskSpec }),
     ...(branch ? { branch } : {}),
     ...(worktreePath ? { worktreePath } : {}),
     ...(baseBranch ? { baseBranch } : {}),

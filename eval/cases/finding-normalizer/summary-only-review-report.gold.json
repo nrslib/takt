@@ -1,0 +1,30 @@
+{
+  "reports": {
+    "1": {
+      "verdictExcerpt": "**Verdict: REJECT**",
+      "candidates": [
+        {
+          "rawExcerptAnchor": "**Issue: Cleanup is not awaited**",
+          "rawExcerptEndMarker": "**Verdict: REJECT**",
+          "candidate": {
+            "rawFindingId": null,
+            "relation": null,
+            "targetFindingId": null,
+            "familyTag": null,
+            "severity": null,
+            "title": "Cleanup is not awaited",
+            "description": null,
+            "suggestion": "Await `cleanup()` before returning.",
+            "target": {
+              "kind": "code",
+              "paths": [
+                "src/example/cleanup.ts"
+              ]
+            },
+            "evidenceRequests": []
+          }
+        }
+      ]
+    }
+  }
+}

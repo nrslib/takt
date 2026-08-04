@@ -43,7 +43,13 @@ function makeContext(options: {
       // 参照）。片方だけの fixture は finding-contract-instruction.ts の
       // fail-loud ガードに引っかかるため、実際の生成規則に合わせて両方立てる。
       ...(options.rawFindingsStructuredOutput !== undefined
-        ? { rawFindingsStructuredOutput: options.rawFindingsStructuredOutput, reviewScopeSnapshotId: 'test-snapshot-id' }
+        ? {
+            reviewer: {
+              mode: 'structured',
+              rawFindingsStructuredOutput: options.rawFindingsStructuredOutput,
+              reviewScopeSnapshotId: 'test-snapshot-id',
+            },
+          }
         : {}),
     },
   } as unknown as InstructionContext;
@@ -62,7 +68,6 @@ describe('dispute guidance injection', () => {
 
     const section = extractFindingContractSection(instruction);
     expect(section).not.toContain('Consolidated ledger copy');
-    expect(section).not.toContain('/tmp/.takt/findings/ledger.json');
     expect(section).not.toContain('Disputed Findings');
     expect(section).not.toContain('dispute claim');
   });
@@ -108,10 +113,10 @@ describe('dispute guidance injection', () => {
 });
 
 describe('reviewer duty gating', () => {
-  // 確認義務の有無は義務の文言（with relation "resolution_confirmation"）で判定する。
+  // 確認義務の有無は義務の文言（with relation `resolution_confirmation`）で判定する。
   // 裸の resolution_confirmation トークンは、レビュアー共通の kind 設定規則
   // （kind と relation の整合）にも現れるため、義務の存在判定には使えない。
-  const CONFIRMATION_DUTY = 'with relation "resolution_confirmation"';
+  const CONFIRMATION_DUTY = 'with relation `resolution_confirmation`';
 
   it('should omit confirmation and waived duties for reviewers when the ledger is empty', () => {
     const instruction = new InstructionBuilder(
@@ -159,7 +164,6 @@ describe('ledgerHasOpenFindings', () => {
       updatedAt: '2026-07-05T00:00:00.000Z',
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
       findings: statuses.map((status, index) => ({
         id: `F-000${index + 1}`,
         status,

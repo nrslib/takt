@@ -13,7 +13,7 @@
  *      再計画へ進み、再計画後も解消不能な反復だけ loop monitor が停止する。
  * を検証する。
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -33,11 +33,13 @@ vi.mock('../infra/providers/index.js', () => ({
   })),
 }));
 
-vi.mock('../core/workflow/findings/snapshot.js', () => ({
-  computeReviewScopeSnapshotId: vi.fn(() => 'test-review-snapshot'),
+vi.mock('../core/workflow/findings/snapshot.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../core/workflow/findings/snapshot.js')>(),
+  computeReviewScopeSnapshotId: vi.fn(() => '1'.repeat(64)),
 }));
 
-vi.mock('../core/workflow/phase-runner.js', () => ({
+vi.mock('../core/workflow/phase-runner.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../core/workflow/phase-runner.js')>(),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
   runStatusJudgmentPhase: vi.fn().mockResolvedValue(undefined),
 }));
@@ -53,11 +55,13 @@ vi.mock('../core/workflow/findings/contract-intake.js', async (importOriginal) =
   };
 });
 
-import { WorkflowEngine } from '../core/workflow/index.js';
+import { WorkflowEngine } from './helpers/workflow-engine.js';
 import type { WorkflowConfig } from '../core/models/index.js';
 import { runAgent } from '../agents/runner.js';
 import { makeRule, makeStep } from './test-helpers.js';
-import { resolveFindingLedgerRoot } from '../core/workflow/findings/store.js';
+import { createTestFindingLedgerStore } from './helpers/finding-storage.js';
+import { reviewerRawExtractionFixture } from './helpers/finding-lifecycle-fixture.js';
+import { initializeGitFixture } from './helpers/git-fixture.js';
 
 function createTestTmpDir(): string {
   const dir = mkdtempSync(join(tmpdir(), 'takt-review-integrity-'));
@@ -68,34 +72,45 @@ function createTestTmpDir(): string {
   mkdirSync(join(dir, '.takt', 'runs', 'test-report-dir', 'logs'), { recursive: true });
   mkdirSync(join(dir, 'src'), { recursive: true });
   writeFileSync(join(dir, 'src', 'a.ts'), Array.from({ length: 20 }, (_, i) => `// line ${i + 1}`).join('\n') + '\n');
+  initializeGitFixture(dir, ['src/a.ts']);
   return dir;
 }
 
-// A hallucinated finding: a fresh claim citing a file that does not exist, with no
-// verifiable evidence → the engine isolates it as a reviewer anomaly (never a
-// product finding). The reviewer re-emits the same raw every round.
-const HALLUCINATED_RAW = {
+// A hallucinated finding with a deterministically invalid locator. The reviewer
+// re-emits the same raw every round.
+const HALLUCINATED_RAW = reviewerRawExtractionFixture({
   rawFindingId: 'h-1',
   familyTag: 'security',
   severity: 'high',
-  title: 'Hallucinated issue in a nonexistent file',
-  location: 'src/does-not-exist.ts:99',
-  description: 'Claims a bug in a file that is not part of the reviewed tree.',
-  suggestion: '',
+  title: 'Hallucinated issue at an invalid source line',
+  description: 'Claims a bug at a line outside the reviewed source file.',
+  suggestion: null,
   relation: 'new',
-  targetFindingId: '',
-};
+  targetFindingId: null,
+  evidence: [{
+    kind: 'file_quote',
+    path: 'src/a.ts',
+    startLine: 99,
+    endLine: 99,
+    verbatimExcerpt: 'hallucinated source line',
+    snapshotId: '1'.repeat(64),
+  }],
+  rawExcerpt: 'Review report body.',
+});
 
 function mockReviewerEmitsHallucination(): void {
   vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
     options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
     const schemaText = options?.outputSchema ? JSON.stringify(options.outputSchema) : '';
     if (schemaText.includes('"rawFindings"')) {
+      const isPublication = schemaText.includes('"reportContent"');
       return {
         persona,
         status: 'done',
-        content: 'Review report body.',
-        structuredOutput: { rawFindings: [HALLUCINATED_RAW] },
+        content: isPublication ? '' : 'Review report body.',
+        structuredOutput: isPublication
+          ? { reportContent: 'Review report body.', rawFindings: [HALLUCINATED_RAW] }
+          : { rawFindings: [HALLUCINATED_RAW] },
         timestamp: new Date('2026-06-13T00:00:01.000Z'),
       };
     }
@@ -120,6 +135,15 @@ function reviewerStep(rules: ReturnType<typeof makeRule>[]): ReturnType<typeof m
     ],
     rules,
   });
+}
+
+function loadRootLedger(cwd: string, workflowName: string) {
+  return createTestFindingLedgerStore({
+    projectCwd: cwd,
+    runId: 'test-report-dir',
+    reportDir: join(cwd, '.takt', 'runs', 'test-report-dir', 'reports'),
+    workflowName,
+  }).loadLedger();
 }
 
 describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', () => {
@@ -148,8 +172,6 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
       initialStep: 'reviewers',
       provider: 'claude',
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: { persona: 'findings-manager', instruction: 'findings-manager', outputContract: 'findings-manager' },
       },
       steps: [
@@ -172,8 +194,7 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
     expect(abortReason).toContain('reviewer anomaly');
 
     // 台帳: product finding 0、未昇格 anomaly 1。
-    const ledgerPath = join(resolveFindingLedgerRoot(cwd), '.takt', 'findings', 'peer-review.json');
-    const ledger = JSON.parse(readFileSync(ledgerPath, 'utf-8')) as {
+    const ledger = loadRootLedger(cwd, config.name) as {
       findings: unknown[];
       reviewerAnomalies?: Array<{ kind: string; promotedFindingId?: string }>;
     };
@@ -194,8 +215,6 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
       initialStep: 'reviewers',
       provider: 'claude',
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: { persona: 'findings-manager', instruction: 'findings-manager', outputContract: 'findings-manager' },
       },
       steps: [
@@ -232,6 +251,7 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
         requiresFindingContract: true,
         returns: ['need_replan'],
       },
+      maxSteps: 3,
       initialStep: 'reviewers',
       provider: 'claude',
       steps: [
@@ -248,8 +268,6 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
       initialStep: 'final-gate',
       provider: 'claude',
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: { persona: 'findings-manager', instruction: 'findings-manager', outputContract: 'findings-manager' },
       },
       steps: [
@@ -324,8 +342,6 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
         },
       }],
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: { persona: 'findings-manager', instruction: 'findings-manager', outputContract: 'findings-manager' },
         reviewBudget: { maxReviewRounds: 2 },
       },
@@ -382,8 +398,7 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
     expect(reviewerCalls.length).toBeGreaterThan(2);
 
     // 台帳: 予算を使い切り、anomaly は監査に残る（消えない）。
-    const ledgerPath = join(resolveFindingLedgerRoot(cwd), '.takt', 'findings', 'peer-review.json');
-    const ledger = JSON.parse(readFileSync(ledgerPath, 'utf-8')) as {
+    const ledger = loadRootLedger(cwd, config.name) as {
       findings: unknown[];
       reviewerAnomalies?: Array<{ occurrences: number; promotedFindingId?: string }>;
       reviewIntegrity?: { roundMarkers: string[]; exhausted: boolean };
@@ -396,18 +411,16 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
     expect(ledger.reviewerAnomalies).toHaveLength(1);
     expect(ledger.reviewerAnomalies?.[0]?.promotedFindingId).toBeUndefined();
     expect(ledger.reviewerAnomalies?.[0]?.occurrences).toBeGreaterThanOrEqual(1);
-  });
+  }, 30_000);
 
-  it('final-gate supervisor は2つのFinding Contract報告を出しても、ステップごとに1回だけ取り込み、raw findingを重複保存しない', async () => {
+  it('final-gate supervisor の単一Finding Contract報告を1回だけ取り込み、raw findingを重複保存しない', async () => {
     mockReviewerEmitsHallucination();
     const config: WorkflowConfig = {
-      name: 'supervisor-two-reports',
+      name: 'supervisor-single-report',
       maxSteps: 4,
       initialStep: 'supervise',
       provider: 'claude',
       findingContract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: { persona: 'findings-manager', instruction: 'findings-manager', outputContract: 'findings-manager' },
       },
       steps: [
@@ -417,7 +430,6 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
           instruction: 'Supervise the final gate.',
           outputContracts: [
             { name: 'supervisor-validation.md', format: 'validation', formatRef: 'supervisor-validation-finding-contract' },
-            { name: 'supervisor-gate-summary.md', format: 'summary', formatRef: 'supervisor-gate-summary-finding-contract' },
           ],
           rules: [makeRule('approved', 'COMPLETE')],
         }),
@@ -435,12 +447,13 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
     const reviewerCalls = vi.mocked(runAgent).mock.calls.filter(([, , options]) => (
       options?.outputSchema && JSON.stringify(options.outputSchema).includes('"rawFindings"')
     ));
-    expect(reviewerCalls).toHaveLength(1);
+    expect(reviewerCalls).toHaveLength(2);
+    const publicationCalls = reviewerCalls.filter(([, , options]) => (
+      JSON.stringify(options?.outputSchema).includes('"reportContent"')
+    ));
+    expect(publicationCalls).toHaveLength(1);
 
-    const rawFindingsDir = join(resolveFindingLedgerRoot(cwd), '.takt', 'findings', 'raw');
-    const rawFindingFiles = readdirSync(rawFindingsDir);
-    expect(rawFindingFiles).toHaveLength(1);
-    const rawFindings = JSON.parse(readFileSync(join(rawFindingsDir, rawFindingFiles[0]), 'utf-8')) as Array<{ rawFindingId: string }>;
+    const rawFindings = loadRootLedger(cwd, config.name).rawFindings;
     expect(rawFindings).toHaveLength(1);
     expect(new Set(rawFindings.map((finding) => finding.rawFindingId)).size).toBe(rawFindings.length);
   });

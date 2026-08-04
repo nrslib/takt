@@ -1,15 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createIsolatedEnv, type IsolatedEnv, updateIsolatedConfig } from '../helpers/isolated-env';
 import { runTakt } from '../helpers/takt-runner';
 import { createTestRepo, type TestRepo } from '../helpers/test-repo';
 import { readSessionRecords } from '../helpers/session-log';
+import { readOnlyRunFindingLedger } from '../helpers/finding-ledger';
 
 function writeDynamicParallelFixture(
   repoPath: string,
   selectedIds: readonly string[] = ['frontend'],
-  maxSteps = 1,
 ): { workflowPath: string; scenarioPath: string } {
   const workflowDir = join(repoPath, '.takt', 'workflows');
   const agentsDir = join(workflowDir, 'agents');
@@ -22,7 +22,7 @@ function writeDynamicParallelFixture(
   writeFileSync(workflowPath, [
     'name: dynamic-parallel-selector',
     'initial_step: reviewers',
-    `max_steps: ${maxSteps}`,
+    'max_steps: 1',
     'steps:',
     '  - name: reviewers',
     '    parallel:',
@@ -226,7 +226,7 @@ function writeSelectedArtifactsFixture(repoPath: string): { workflowPath: string
     '          output_contracts:',
     '            report:',
     '              - name: REPORT_NAME',
-    '                format: review',
+    '                format: review-finding-contract',
   ];
   const reviewer = (name: string, description?: string) => [
     `        - name: ${name}`,
@@ -246,11 +246,9 @@ function writeSelectedArtifactsFixture(repoPath: string): { workflowPath: string
     'instructions:',
     '  findings-manager: Reconcile raw findings.',
     'report_formats:',
-    '  review: Return a concise E2E review report.',
+    '  review-finding-contract: Return a concise E2E review report.',
     '  findings-manager: Return the finding manager JSON contract.',
     'finding_contract:',
-    '  ledger_path: .takt/findings/peer-review.json',
-    '  raw_findings_path: .takt/findings/raw',
     '  manager:',
     '    persona: ./agents/findings-manager.md',
     '    instruction: findings-manager',
@@ -279,31 +277,41 @@ function writeSelectedArtifactsFixture(repoPath: string): { workflowPath: string
     '',
   ].join('\n'), 'utf-8');
 
-  const rawFinding = (id: string) => ({
-    rawFindingId: id,
-    relation: 'new',
-    targetFindingId: '',
-    familyTag: 'selected-only',
-    severity: 'low',
-    title: `${id} finding`,
-    location: '',
-    evidenceKind: 'locationless',
-    verbatimExcerpt: '',
-    snapshotId: '',
-    description: `${id} observed a selected-only finding.`,
-    suggestion: 'Keep the selected reviewer evidence.',
-  });
-  const rawResponse = (persona: string, id: string, content: string) => ({
+  const rawFinding = (id: string) => {
+    const rawExcerpt = `${id} observed a selected-only finding.`;
+    return {
+      rawExcerpt,
+      candidate: {
+        rawFindingId: id,
+        familyTag: 'selected-only',
+        severity: 'low',
+        title: `${id} finding`,
+        description: rawExcerpt,
+        suggestion: 'Keep the selected reviewer evidence.',
+        relation: 'new',
+        targetFindingIds: [],
+        target: { kind: 'code', paths: [`fixtures/${id}.ts`] },
+        evidenceRequests: [],
+      },
+    };
+  };
+  const executeResponse = (persona: string, content: string) => ({
     persona: `agents/${persona}`,
     status: 'done',
     content,
-    structured_output: { rawFindings: [rawFinding(id)] },
   });
-  const reportResponse = (persona: string, round: number) => ({
-    persona: `agents/${persona}`,
-    status: 'done',
-    content: `${persona} report for round ${round}`,
-  });
+  const reportResponse = (persona: string, id: string, round: number) => {
+    const finding = rawFinding(id);
+    return {
+      persona: `agents/${persona}`,
+      status: 'done',
+      content: '',
+      structured_output: {
+        reportContent: `${persona} report for round ${round}\n${finding.rawExcerpt}`,
+        rawFindings: [finding],
+      },
+    };
+  };
   const judgeResponse = (step: number) => ({
     persona: 'conductor',
     status: 'done',
@@ -313,35 +321,29 @@ function writeSelectedArtifactsFixture(repoPath: string): { workflowPath: string
   const managerResponse = {
     persona: 'agents/findings-manager',
     status: 'done',
-    content: 'Manager deferred the locationless findings.',
+    content: 'Manager left the findings unresolved for the final gate.',
     structured_output: {
-      matches: [],
-      newFindings: [],
-      resolvedFindings: [],
-      reopenedFindings: [],
-      conflicts: [],
-      resolvedConflicts: [],
-      waivedFindings: [],
-      disputeNotes: [],
+      taskId: 'intentionally-unmatched-e2e-task',
+      decisions: [],
     },
   };
   const scenarioPath = join(repoPath, '.takt', 'dynamic-parallel-selected-artifacts-scenario.json');
   writeFileSync(scenarioPath, JSON.stringify([
     { status: 'done', content: '', structured_output: { selected_ids: ['frontend'], rationale: 'Initial frontend review.' } },
-    rawResponse('architecture', 'architecture-round-1', 'approved'),
-    reportResponse('architecture', 1),
+    executeResponse('architecture', 'approved'),
+    reportResponse('architecture', 'architecture-round-1', 1),
     judgeResponse(1),
-    rawResponse('frontend', 'frontend-round-1', 'needs_fix'),
-    reportResponse('frontend', 1),
+    executeResponse('frontend', 'needs_fix'),
+    reportResponse('frontend', 'frontend-round-1', 1),
     judgeResponse(2),
     managerResponse,
     { persona: 'agents/fix', status: 'done', content: 'approved' },
     { status: 'done', content: '', structured_output: { selected_ids: ['backend'], rationale: 'Follow-up backend review.' } },
-    rawResponse('architecture', 'architecture-round-2', 'approved'),
-    reportResponse('architecture', 2),
+    executeResponse('architecture', 'approved'),
+    reportResponse('architecture', 'architecture-round-2', 2),
     judgeResponse(1),
-    rawResponse('backend', 'backend-round-2', 'approved'),
-    reportResponse('backend', 2),
+    executeResponse('backend', 'approved'),
+    reportResponse('backend', 'backend-round-2', 2),
     judgeResponse(1),
     managerResponse,
   ]), 'utf-8');
@@ -557,7 +559,7 @@ describe('E2E: dynamic parallel selector (mock)', () => {
   }, 240_000);
 
   it('should resume with the saved selection without invoking the selector again', () => {
-    const { workflowPath } = writeDynamicParallelFixture(testRepo.path, ['frontend'], 2);
+    const { workflowPath } = writeDynamicParallelFixture(testRepo.path);
     const firstScenarioPath = join(testRepo.path, '.takt', 'dynamic-parallel-resume-first.json');
     const resumedScenarioPath = join(testRepo.path, '.takt', 'dynamic-parallel-resume-second.json');
     const resumedCallLogPath = join(testRepo.path, '.takt-mock-resume-calls.ndjson');
@@ -580,6 +582,10 @@ describe('E2E: dynamic parallel selector (mock)', () => {
       },
       { persona: 'agents/architecture', status: 'done', content: 'approved' },
       { persona: 'agents/frontend', status: 'error', content: 'interrupted after selection' },
+      { persona: 'agents/frontend', status: 'error', content: 'interrupted after selection' },
+      { persona: 'agents/frontend', status: 'error', content: 'interrupted after selection' },
+      { persona: 'agents/frontend', status: 'error', content: 'interrupted after selection' },
+      { persona: 'agents/frontend', status: 'error', content: 'interrupted after selection' },
     ]), 'utf-8');
     writeFileSync(resumedScenarioPath, JSON.stringify([
       { persona: 'agents/architecture', status: 'done', content: 'approved' },
@@ -597,7 +603,7 @@ describe('E2E: dynamic parallel selector (mock)', () => {
       env: { ...isolatedEnv.env, TAKT_MOCK_SCENARIO: firstScenarioPath },
       timeout: 240_000,
     });
-    expect(firstRun.exitCode).not.toBe(0);
+    expect(firstRun.exitCode, `${firstRun.stdout}\n${firstRun.stderr}`).not.toBe(0);
 
     const resumedRun = runTakt({
       args: ['--provider', 'mock', '--model', 'cli-resume-model', 'resume'],
@@ -611,7 +617,6 @@ describe('E2E: dynamic parallel selector (mock)', () => {
     });
 
     expect(resumedRun.exitCode, `${resumedRun.stdout}\n${resumedRun.stderr}`).toBe(0);
-    expect(existsSync(resumedCallLogPath), `${resumedRun.stdout}\n${resumedRun.stderr}`).toBe(true);
     const resumedStarts = readJsonl(resumedCallLogPath)
       .filter((record) => record.event === 'start');
     const personaNames = resumedStarts.map((record) => record.personaName);
@@ -645,24 +650,50 @@ describe('E2E: dynamic parallel selector (mock)', () => {
     expect(readFileSync(join(reportDir, 'architecture-review.md'), 'utf-8')).toContain('round 2');
     expect(readFileSync(join(reportDir, 'frontend-review.md'), 'utf-8')).toContain('round 1');
     expect(readFileSync(join(reportDir, 'backend-review.md'), 'utf-8')).toContain('round 2');
-    const historyFiles = readdirSync(join(reportDir, '.takt-report-internal', 'history'), { recursive: true })
-      .filter((entry) => typeof entry === 'string');
-    expect(historyFiles.filter((entry) => entry.includes('architecture-review.md'))).toHaveLength(1);
-    expect(historyFiles.some((entry) => entry.includes('frontend-review.md'))).toBe(false);
-    expect(historyFiles.some((entry) => entry.includes('backend-review.md'))).toBe(false);
+    const historyDirectory = join(reportDir, '.takt-report-internal', 'history');
+    const historyContents = readdirSync(historyDirectory, { recursive: true })
+      .filter((entry) => typeof entry === 'string')
+      .map((entry) => join(historyDirectory, entry))
+      .filter((path) => statSync(path).isFile())
+      .map((path) => readFileSync(path, 'utf-8'));
+    expect(historyContents.filter((content) => content.includes('architecture report for round 1'))).toHaveLength(1);
+    expect(historyContents.some((content) => content.includes('frontend report'))).toBe(false);
+    expect(historyContents.some((content) => content.includes('backend report'))).toBe(false);
 
-    const rawDirectory = join(testRepo.path, '.takt', 'findings', 'raw');
-    const rawBatches = readdirSync(rawDirectory)
-      .map((file) => JSON.parse(readFileSync(join(rawDirectory, file), 'utf-8')) as Array<{ reviewer: string }>);
+    const rawSnapshotFiles = readdirSync(reportDir)
+      .filter((file) => file.startsWith('raw-findings.') && file.endsWith('.json'));
+    expect(rawSnapshotFiles).toHaveLength(1);
+    const rawBatches = [
+      readFileSync(join(reportDir, rawSnapshotFiles[0]!), 'utf-8'),
+      ...historyContents,
+    ].flatMap((content): Array<Array<{ reviewer: string }>> => {
+      try {
+        const parsed: unknown = JSON.parse(content);
+        return Array.isArray(parsed)
+          && parsed.every((entry) => (
+            typeof entry === 'object'
+            && entry !== null
+            && typeof Reflect.get(entry, 'reviewer') === 'string'
+          ))
+          ? [parsed as Array<{ reviewer: string }>]
+          : [];
+      } catch {
+        return [];
+      }
+    });
     expect(rawBatches).toHaveLength(2);
-    const firstRoundRaw = rawBatches.find((batch) => batch.some((finding) => finding.reviewer === 'frontend'));
-    const secondRoundRaw = rawBatches.find((batch) => batch.some((finding) => finding.reviewer === 'backend'));
-    expect(firstRoundRaw?.map((finding) => finding.reviewer).sort()).toEqual(['architecture', 'frontend']);
-    expect(secondRoundRaw?.map((finding) => finding.reviewer).sort()).toEqual(['architecture', 'backend']);
+    const firstRoundRaw = rawBatches.find(
+      (batch) => batch.some((finding) => finding.reviewer === 'frontend'),
+    );
+    const secondRoundRaw = rawBatches.find(
+      (batch) => batch.some((finding) => finding.reviewer === 'backend'),
+    );
+    expect(firstRoundRaw?.map((finding) => finding.reviewer).sort())
+      .toEqual(['architecture', 'frontend']);
+    expect(secondRoundRaw?.map((finding) => finding.reviewer).sort())
+      .toEqual(['architecture', 'backend']);
 
-    const ledger = JSON.parse(readFileSync(join(testRepo.path, '.takt', 'findings', 'peer-review.json'), 'utf-8')) as {
-      rawFindings: Array<{ reviewer: string }>;
-    };
+    const ledger = readOnlyRunFindingLedger(testRepo.path);
     expect(ledger.rawFindings.map((finding) => finding.reviewer).sort())
       .toEqual(['architecture', 'architecture', 'backend', 'frontend']);
 

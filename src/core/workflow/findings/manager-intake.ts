@@ -1,14 +1,14 @@
-import type { AgentResponse, WorkflowStep } from '../../models/types.js';
-import { classifyLocationAdmissionNormalization } from './admission-validation.js';
+import { createHash } from 'node:crypto';
+import type { AgentWorkflowStep } from '../../models/types.js';
 import type { ReviewerRelationClarification } from './relation-coherence.js';
 import {
   canonicalizeReviewerRawFinding,
   computeOverflowStableKey,
+  computeReviewerAnomalyStableKey,
   computeReviewerStableKey,
-  createOverflowRawCandidate,
   createReviewerRawFindingCandidates,
   extractLenientRawFields,
-  projectReviewerRawFindingItems,
+  projectReviewerRawStructuredOutputWithEnvelope,
   toLedgerRawFinding,
   type ReviewerRawIntakeContext,
 } from './raw-canonicalization.js';
@@ -20,16 +20,58 @@ import {
 import type { RawNormalizationAuditRecord } from './store.js';
 import type { FindingLedger } from './types.js';
 import type { ReviewerIntakeResult } from './manager-admission.js';
-import { isWorkflowCallStep } from '../step-kind.js';
 import { createLogger } from '../../../shared/utils/index.js';
-import { canonicalJson } from '../../../shared/utils/canonical-json.js';
+import { issueFindingEvidenceRequests } from './evidence-request-issuer.js';
+import type { ReviewScopeProofSnapshot } from './snapshot.js';
+import type { CanonicalFindingReviewPublication } from './review-publication.js';
+import { FINDING_EVIDENCE_ISSUANCE_LIMITS } from '../../models/finding-contract-limits.js';
 
 const log = createLogger('finding-manager-intake');
 
 export interface FindingManagerSubStepResult {
-  subStep: WorkflowStep;
-  response: AgentResponse;
+  subStep: AgentWorkflowStep;
+  publication: CanonicalFindingReviewPublication;
   relationClarification?: ReviewerRelationClarification;
+}
+
+function recordReviewerOutputOverflow(input: {
+  result: ReviewerIntakeResult;
+  reviewer: string;
+  reviewerStableKey: string;
+  reason: string;
+  emittedAtomizedRawFindingCount: number;
+  admittedAtomizedRawFindingCount: number;
+}): void {
+  const overflowAtomizedRawFindingCount = input.emittedAtomizedRawFindingCount
+    - input.admittedAtomizedRawFindingCount;
+  const stableKey = computeOverflowStableKey(input.reviewerStableKey);
+  const description = `Reviewer "${input.reviewer}" output exceeded Finding Contract limits: ${input.reason}`;
+  input.result.overflowReports.push({
+    reviewer: input.reviewer,
+    reason: input.reason,
+    emittedAtomizedRawFindingCount: input.emittedAtomizedRawFindingCount,
+    admittedAtomizedRawFindingCount: input.admittedAtomizedRawFindingCount,
+    overflowAtomizedRawFindingCount,
+  });
+  input.result.intakeProvisionalSpecs.push({
+    kind: 'reviewer-output-overflow',
+    stableKey,
+    lineageKey: stableKey,
+    sourceRawFindingIds: [],
+    reason: description,
+    title: 'Reviewer output exceeded Finding Contract limits',
+    severity: 'high',
+    description,
+    reviewers: [input.reviewer],
+    recoveryReviewerStableKey: input.reviewerStableKey,
+  });
+  log.warn('Reviewer output exceeded Finding Contract limits; recorded bounded overflow', {
+    reviewer: input.reviewer,
+    reason: input.reason,
+    emittedAtomizedRawFindingCount: input.emittedAtomizedRawFindingCount,
+    admittedAtomizedRawFindingCount: input.admittedAtomizedRawFindingCount,
+    overflowAtomizedRawFindingCount,
+  });
 }
 
 export function intakeReviewerOutputs(input: {
@@ -40,41 +82,47 @@ export function intakeReviewerOutputs(input: {
   parentStepName: string;
   stepIteration: number;
   runId: string;
+  workflowTask: string;
+  cwd: string;
+  scopeIdentity: string;
+  issuedAt: string;
+  reviewScopeSnapshot: ReviewScopeProofSnapshot;
 }): ReviewerIntakeResult {
+  const authoritativeTargetByFindingId = new Map(
+    input.previousLedger.findings.map((finding) => [
+      finding.id,
+      finding.target === null ? null : structuredClone(finding.target),
+    ] as const),
+  );
   const result: ReviewerIntakeResult = {
     items: [],
+    entityBindings: new Map(),
     overflowRawFindingIds: new Set(),
-    overflowSpecs: [],
+    intakeProvisionalSpecs: [],
+    intakeAnomalySpecs: [],
     overflowReports: [],
     clarifications: [],
     rawNormalizations: [],
     healthyReviewerStableKeys: new Set(),
   };
-  let admittedCount = 0;
+  let admittedAtomizedCount = 0;
   let admittedBytes = 0;
+  let issuedStepQuoteBytes = 0;
 
   for (const subResult of input.subResults) {
-    // workflow_call サブステップは raw findings を返さない（子ワークフロー側で
-    // 取り込み済み）ため除外する。
-    if (isWorkflowCallStep(subResult.subStep)) {
-      continue;
-    }
-    const structuredOutput = subResult.response.structuredOutput;
-    // raw findings は Finding Contract の契約入力。構造化出力自体の欠落は raw の
-    // 意味矛盾ではなく provider / contract 障害なので従来どおり fail-fast する。
-    if (structuredOutput === undefined) {
+    let issuedReviewerQuoteBytes = 0;
+    const items = [...subResult.publication.rawFindings];
+    const resourceEnvelope = projectReviewerRawStructuredOutputWithEnvelope({
+      rawFindings: items,
+    }).resourceEnvelope;
+    if (
+      resourceEnvelope.itemCount !== items.length
+      || resourceEnvelope.itemSourceBytes.length !== items.length
+    ) {
       throw new Error(
-        `Finding contract reviewer "${subResult.subStep.name}" returned no structured output; raw findings are required`,
+        `Finding contract reviewer "${subResult.subStep.name}" resource envelope does not match rawFindings`,
       );
     }
-    if (!Array.isArray(structuredOutput.rawFindings)) {
-      throw new Error(
-        `Finding contract reviewer "${subResult.subStep.name}" returned structured output without a rawFindings array`,
-      );
-    }
-    const items = projectReviewerRawFindingItems(
-      structuredOutput.rawFindings as unknown[],
-    );
     const context: ReviewerRawIntakeContext = {
       workflowName: input.workflowName,
       callNamespace: input.callNamespace,
@@ -83,6 +131,33 @@ export function intakeReviewerOutputs(input: {
       runId: input.runId,
       reviewerStepName: subResult.subStep.name,
       reviewerPersonaKey: (subResult.subStep as { persona?: string }).persona ?? subResult.subStep.name,
+      reviewReport: subResult.publication.reportContent,
+      ledger: input.previousLedger,
+      authoritativeTargetByFindingId,
+      issueEvidenceRequests: (request) => {
+        const issued = issueFindingEvidenceRequests({
+          cwd: input.cwd,
+          snapshot: input.reviewScopeSnapshot,
+          workflowName: input.workflowName,
+          runId: input.runId,
+          scopeIdentity: input.scopeIdentity,
+          workflowTask: input.workflowTask,
+          issuedAt: input.issuedAt,
+        }, {
+          ...request,
+          quoteByteBudget: {
+            reviewerRemainingBytes: FINDING_EVIDENCE_ISSUANCE_LIMITS.maxReviewerBytes
+              - issuedReviewerQuoteBytes,
+            stepRemainingBytes: FINDING_EVIDENCE_ISSUANCE_LIMITS.maxStepBytes
+              - issuedStepQuoteBytes,
+          },
+        });
+        return issued;
+      },
+      commitEvidenceIssuance: (materializedQuoteBytes) => {
+        issuedReviewerQuoteBytes += materializedQuoteBytes;
+        issuedStepQuoteBytes += materializedQuoteBytes;
+      },
     };
     if (subResult.relationClarification !== undefined) {
       result.clarifications.push({
@@ -91,67 +166,102 @@ export function intakeReviewerOutputs(input: {
       });
     }
 
-    // envelope 検査は Zod parse の前（65件目を読んだ時点で打ち切る）。
-    const jsonBytes = Buffer.byteLength(canonicalJson(items), 'utf-8');
-    const envelopeViolation = checkReviewerEnvelope({ itemCount: items.length, jsonBytes });
+    // publication 境界で件数を bounded 化済み。ここでは field と step 合算を再検査する。
+    const jsonBytes = resourceEnvelope.jsonBytes;
+    const lenientFields = items.map(extractLenientRawFields);
+    const atomizedItemCount = lenientFields.reduce(
+      (total, fields) => total + Math.max(1, fields.targetFindingIds?.length ?? 0),
+      0,
+    );
+    const envelopeViolation = checkReviewerEnvelope({
+      itemCount: resourceEnvelope.itemCount,
+      atomizedItemCount,
+      jsonBytes,
+    });
     const fieldViolation = envelopeViolation === undefined
-      ? items.map((item) => findRawFieldLimitViolation(extractLenientRawFields(item))).find((violation) => violation !== undefined)
+      ? lenientFields.map(findRawFieldLimitViolation).find((violation) => violation !== undefined)
       : undefined;
     const wouldExceedStep = envelopeViolation === undefined && fieldViolation === undefined
-      && (admittedCount + items.length > RAW_FINDING_LIMITS.maxRawFindingsPerStep
+      && (admittedAtomizedCount + atomizedItemCount > RAW_FINDING_LIMITS.maxRawFindingsPerStep
         || admittedBytes + jsonBytes > RAW_FINDING_LIMITS.maxStepRawFindingsJsonBytes);
     const overflowReason = envelopeViolation?.reason
       ?? (fieldViolation !== undefined ? `a raw finding field exceeded its limit: ${fieldViolation}` : undefined)
       ?? (wouldExceedStep
-        ? `admitting this reviewer's ${items.length} raw findings (${jsonBytes} bytes) would exceed the per-step limits (${RAW_FINDING_LIMITS.maxRawFindingsPerStep} findings / ${RAW_FINDING_LIMITS.maxStepRawFindingsJsonBytes} bytes)`
+        ? `admitting this reviewer's ${atomizedItemCount} atomized raw findings (${jsonBytes} bytes) would exceed the per-step limits (${RAW_FINDING_LIMITS.maxRawFindingsPerStep} findings / ${RAW_FINDING_LIMITS.maxStepRawFindingsJsonBytes} bytes)`
         : undefined);
 
-    if (overflowReason !== undefined) {
-      // 部分採用しない: この reviewer の全 raw を単一 overflow provisional に置換。
-      const candidate = createOverflowRawCandidate({
-        context,
-        reason: `Reviewer "${subResult.subStep.name}" output exceeded Finding Contract limits: ${overflowReason}`,
-      });
-      const canonicalized = canonicalizeReviewerRawFinding(candidate, { ledger: input.previousLedger });
-      const canonical = canonicalized.canonical;
-      const wire = toLedgerRawFinding(canonical);
-      result.items.push({ canonical, wire });
-      result.overflowRawFindingIds.add(canonical.rawFindingId);
-      result.overflowReports.push({ reviewer: subResult.subStep.name, reason: overflowReason });
-      result.overflowSpecs.push({
-        kind: 'reviewer-output-overflow',
-        stableKey: computeOverflowStableKey(canonical.reviewerStableKey),
-        lineageKey: canonical.lineageKey,
-        sourceRawFindingIds: [canonical.rawFindingId],
-        reason: wire.description,
-        title: 'Reviewer output exceeded Finding Contract limits',
-        severity: 'high',
-        description: wire.description,
-        reviewers: [subResult.subStep.name],
-        recoveryReviewerStableKey: canonical.reviewerStableKey,
-      });
-      log.warn('Reviewer output exceeded Finding Contract limits; replaced with a single overflow provisional', {
-        reviewer: subResult.subStep.name,
-        reason: overflowReason,
-      });
-      continue;
-    }
-
-    admittedCount += items.length;
-    admittedBytes += jsonBytes;
-    result.healthyReviewerStableKeys.add(computeReviewerStableKey({
+    const reviewerStableKey = computeReviewerStableKey({
       workflowName: input.workflowName,
       callNamespace: input.callNamespace,
       parentStepName: input.parentStepName,
       reviewerPersonaKey: context.reviewerPersonaKey,
-    }));
-    const candidates = createReviewerRawFindingCandidates(items, context);
+    });
+    const publicationOverflow = subResult.publication.reviewerOutputOverflow;
+    if (overflowReason !== undefined) {
+      recordReviewerOutputOverflow({
+        result,
+        reviewer: subResult.subStep.name,
+        reviewerStableKey,
+        reason: overflowReason,
+        emittedAtomizedRawFindingCount: publicationOverflow
+          ?.emittedAtomizedRawFindingCount ?? atomizedItemCount,
+        admittedAtomizedRawFindingCount: 0,
+      });
+      continue;
+    }
+
+    if (publicationOverflow !== undefined) {
+      recordReviewerOutputOverflow({
+        result,
+        reviewer: subResult.subStep.name,
+        reviewerStableKey,
+        reason: publicationOverflow.reason,
+        emittedAtomizedRawFindingCount:
+          publicationOverflow.emittedAtomizedRawFindingCount,
+        admittedAtomizedRawFindingCount:
+          publicationOverflow.admittedAtomizedRawFindingCount,
+      });
+    }
+
+    admittedAtomizedCount += atomizedItemCount;
+    admittedBytes += jsonBytes;
+    if (publicationOverflow === undefined) {
+      result.healthyReviewerStableKeys.add(reviewerStableKey);
+    }
+    const candidateBatch = createReviewerRawFindingCandidates(items, context, resourceEnvelope);
+    for (const rejection of candidateBatch.rejections) {
+      const lineageKey = rejection.lineageKey
+        ?? createHash('sha256').update(JSON.stringify({
+          domain: 'finding-normalizer-extraction-rejection',
+          intakeId: rejection.intakeId,
+          reviewerStableKey: rejection.reviewerStableKey,
+          reason: rejection.reason,
+        })).digest('hex');
+      result.intakeAnomalySpecs.push({
+        kind: 'protocol-anomaly',
+        stableKey: computeReviewerAnomalyStableKey({
+          reviewerStableKey: rejection.reviewerStableKey,
+          lineageKey,
+          anomalyKind: 'protocol-anomaly',
+        }),
+        lineageKey,
+        sourceRawFindingIds: [],
+        sourceIntakeIds: [rejection.intakeId],
+        reviewers: [rejection.reviewer],
+        title: `Unbound reviewer extraction ${rejection.intakeId}`,
+        ...(rejection.claimedExcerpt !== undefined
+          ? { claimedExcerpt: rejection.claimedExcerpt }
+          : {}),
+        mismatchReason: rejection.reason,
+      });
+    }
+    const candidates = candidateBatch.candidates;
     const clarification = subResult.relationClarification;
     for (const candidate of candidates) {
       const priorCodes = clarification !== undefined
-        && candidate.reviewerRawFindingId !== undefined
-        && Object.hasOwn(clarification.priorAmbiguityCodesByRawId, candidate.reviewerRawFindingId)
-        ? clarification.priorAmbiguityCodesByRawId[candidate.reviewerRawFindingId]
+        && candidate.sourceReviewerRawFindingId !== undefined
+        && Object.hasOwn(clarification.priorAmbiguityCodesByRawId, candidate.sourceReviewerRawFindingId)
+        ? clarification.priorAmbiguityCodesByRawId[candidate.sourceReviewerRawFindingId]
         : undefined;
       const canonicalized = canonicalizeReviewerRawFinding(candidate, {
         ledger: input.previousLedger,
@@ -168,12 +278,7 @@ export function intakeReviewerOutputs(input: {
       if (candidate.relation !== canonical.relation) {
         normalizations.push('relation-normalized');
       }
-      // location の機械正規化（行範囲解釈 / N/A → locationless）の適用事実。
-      const locationNormalization = classifyLocationAdmissionNormalization(candidate.location);
-      if (locationNormalization !== undefined) {
-        normalizations.push(locationNormalization);
-      }
-      if (candidate.targetFindingId !== undefined && wire.targetFindingId === undefined) {
+      if (candidate.targetFindingId !== undefined && wire.targetFindingId === null) {
         normalizations.push('target-dropped-from-wire');
       }
       if (candidate.title === undefined || candidate.description === undefined
@@ -187,7 +292,7 @@ export function intakeReviewerOutputs(input: {
           ...(candidate.relation !== undefined ? { claimedRelation: candidate.relation } : {}),
           ...(candidate.targetFindingId !== undefined ? { claimedTargetFindingId: candidate.targetFindingId } : {}),
           normalizedRelation: canonical.relation,
-          ...(wire.targetFindingId !== undefined ? { wireTargetFindingId: wire.targetFindingId } : {}),
+          ...(wire.targetFindingId !== null ? { wireTargetFindingId: wire.targetFindingId } : {}),
           ambiguityCodes: [...canonical.provenance.ambiguityCodes],
           normalizations,
         });

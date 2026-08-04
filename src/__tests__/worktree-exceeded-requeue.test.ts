@@ -183,8 +183,21 @@ describe('シナリオ1・2: exceeded status transition via executeAndCompleteTa
     const resumePoint = {
       version: 2 as const,
       stack: [
-        { workflow: 'test-workflow', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },
-        { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
+        {
+          workflow: 'test-workflow',
+          workflow_ref: 'test-workflow',
+          step: 'delegate',
+          kind: 'workflow_call' as const,
+          occurrence: 1,
+          call_instance: 1,
+        },
+        {
+          workflow: 'takt/coding',
+          workflow_ref: 'takt/coding',
+          step: 'review',
+          kind: 'agent' as const,
+          occurrence: 1,
+        },
       ],
       iteration: 30,
       elapsed_ms: 183245,
@@ -394,8 +407,21 @@ describe('シナリオ3・4: requeue → re-execution passes exceeded metadata t
       resume_point: {
         version: 2,
         stack: [
-          { workflow: 'test-workflow', step: 'delegate', kind: 'workflow_call', call_instance: 1 },
-          { workflow: 'takt/coding', step: 'review', kind: 'agent' },
+          {
+            workflow: 'test-workflow',
+            workflow_ref: 'test-workflow',
+            step: 'delegate',
+            kind: 'workflow_call',
+            occurrence: 1,
+            call_instance: 1,
+          },
+          {
+            workflow: 'takt/coding',
+            workflow_ref: 'takt/coding',
+            step: 'review',
+            kind: 'agent',
+            occurrence: 1,
+          },
         ],
         iteration: 30,
         elapsed_ms: 183245,
@@ -424,7 +450,14 @@ describe('シナリオ3・4: requeue → re-execution passes exceeded metadata t
     expect(capturedOptions.resumePoint).toEqual({
       version: 2,
       stack: [
-        { workflow: 'test-workflow', step: 'delegate', kind: 'workflow_call', call_instance: 1 },
+        {
+          workflow: 'test-workflow',
+          workflow_ref: 'test-workflow',
+          step: 'delegate',
+          kind: 'workflow_call',
+          occurrence: 1,
+          call_instance: 1,
+        },
       ],
       iteration: 30,
       elapsed_ms: 183245,

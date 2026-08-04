@@ -353,15 +353,19 @@ function makeResumePoint() {
   const stack = [
     {
       workflow: 'default',
+      workflow_ref: 'default',
       step: 'delegate',
       kind: 'workflow_call' as const,
+      occurrence: 8,
       call_instance: 8,
       step_iterations: { delegate: 8 },
     },
     {
       workflow: 'coding',
+      workflow_ref: 'coding',
       step: 'old-review',
       kind: 'agent' as const,
+      occurrence: 5,
       step_iterations: { 'old-review': 5 },
     },
   ];

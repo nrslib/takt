@@ -14,8 +14,11 @@ import type { WorkflowEngine } from '../../../core/workflow/engine/WorkflowEngin
 export interface AbortHandlerOptions {
   /** 外部から渡された AbortSignal（並列実行モード） */
   externalSignal?: AbortSignal;
-  /** 外部シグナルがない場合に使う内部 AbortController */
-  internalController: AbortController;
+  /** 外部シグナルがない場合に使う内部中断制御 */
+  internalController: {
+    readonly signal: AbortSignal;
+    abort(reason?: unknown): void;
+  };
   /** 中断時に呼び出す WorkflowEngine インスタンス（遅延参照） */
   getEngine: () => WorkflowEngine | null;
 }

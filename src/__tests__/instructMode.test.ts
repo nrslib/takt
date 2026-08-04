@@ -14,6 +14,7 @@ import {
   createScenarioProvider,
   type MockProviderCapture,
 } from './helpers/stdinSimulator.js';
+import { makeFileRunMetaPathFields } from './test-helpers.js';
 
 vi.mock('../infra/fs/session.js', () => ({
   loadNdjsonLog: vi.fn(),
@@ -46,8 +47,7 @@ vi.mock('../infra/config/paths.js', async (importOriginal) => ({
   loadPersonaSessions: vi.fn(() => ({})),
   updatePersonaSession: vi.fn(),
   getProjectConfigDir: vi.fn(() => '/tmp'),
-  loadSessionState: vi.fn(() => null),
-  clearSessionState: vi.fn(),
+  takeSessionState: vi.fn(() => null),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
@@ -558,6 +558,7 @@ function createRunFixture(
   const runDir = path.join(cwd, '.takt', 'runs', slug);
   fs.mkdirSync(path.join(runDir, 'logs'), { recursive: true });
   fs.mkdirSync(path.join(runDir, 'reports'), { recursive: true });
+  fs.mkdirSync(path.join(runDir, 'context'), { recursive: true });
 
   if (overrides?.emptyMeta) {
     fs.writeFileSync(path.join(runDir, 'meta.json'), '', 'utf-8');
@@ -569,9 +570,7 @@ function createRunFixture(
       workflow: 'default',
       status: 'completed',
       startTime: '2026-02-01T00:00:00.000Z',
-      logsDirectory: `.takt/runs/${slug}/logs`,
-      reportDirectory: `.takt/runs/${slug}/reports`,
-      runSlug: slug,
+      ...makeFileRunMetaPathFields(cwd, slug),
       ...overrides?.meta,
     };
     fs.writeFileSync(path.join(runDir, 'meta.json'), JSON.stringify(meta), 'utf-8');

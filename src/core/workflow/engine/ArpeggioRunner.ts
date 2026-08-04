@@ -28,9 +28,6 @@ import { buildGitRules } from '../instruction/instruction-context.js';
 import { renderFallbackNotice } from '../instruction/fallback-notice.js';
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
 import { USAGE_MISSING_REASONS } from '../../logging/contracts.js';
-import { buildPhaseExecutionId } from '../../../shared/utils/phaseExecutionId.js';
-import type { ProviderUsageSnapshot } from '../../models/response.js';
-import { snapshotWorkflowExecutionScope, type WorkflowExecutionScope } from '../workflow-execution-scope.js';
 
 const log = createLogger('arpeggio-runner');
 
@@ -53,7 +50,6 @@ export interface ArpeggioRunnerDeps {
     promptParts: PhasePromptParts,
     phaseExecutionId?: string,
     iteration?: number,
-    scope?: WorkflowExecutionScope,
   ) => void;
   readonly onPhaseComplete?: (
     step: WorkflowStep,
@@ -64,7 +60,6 @@ export interface ArpeggioRunnerDeps {
     error?: string,
     phaseExecutionId?: string,
     iteration?: number,
-    scope?: WorkflowExecutionScope,
   ) => void;
 }
 
@@ -109,36 +104,6 @@ interface ArpeggioBatchObservability {
   readonly sanitizeText?: (text: string) => string;
   readonly providerInfo?: StepProviderInfo;
   readonly getPromptParts?: () => PhasePromptParts | undefined;
-}
-
-const ARPEGGIO_USAGE_FIELDS = [
-  'inputTokens',
-  'outputTokens',
-  'totalTokens',
-  'cachedInputTokens',
-  'cacheCreationInputTokens',
-  'cacheReadInputTokens',
-] as const satisfies readonly (keyof ProviderUsageSnapshot)[];
-
-function aggregateBatchProviderUsage(results: readonly BatchResult[]): ProviderUsageSnapshot {
-  const snapshots = results.map((result) => result.providerUsage);
-  const missing = snapshots.find((usage) => usage === undefined || usage.usageMissing);
-  if (missing === undefined) {
-    const aggregated: ProviderUsageSnapshot = { usageMissing: false };
-    for (const field of ARPEGGIO_USAGE_FIELDS) {
-      const values = snapshots
-        .map((usage) => usage?.[field])
-        .filter((value): value is number => value !== undefined);
-      if (values.length > 0) {
-        aggregated[field] = values.reduce((sum, value) => sum + value, 0);
-      }
-    }
-    return aggregated;
-  }
-  return {
-    usageMissing: true,
-    reason: missing?.reason ?? USAGE_MISSING_REASONS.NOT_AVAILABLE,
-  };
 }
 
 /** Execute a single batch with retry logic */
@@ -289,7 +254,6 @@ export class ArpeggioRunner {
     if (!arpeggioConfig) {
       throw new Error(`Step "${step.name}" has no arpeggio configuration`);
     }
-    const executionScope = snapshotWorkflowExecutionScope(this.deps.getCurrentWorkflowStack?.());
 
     const stepIteration = activeStepIteration ?? incrementStepIteration(state, step.name);
     log.debug('Running arpeggio step', {
@@ -324,12 +288,12 @@ export class ArpeggioRunner {
       batches,
       template,
       step,
+      stepIteration,
       state.iteration,
       agentOptions,
       arpeggioConfig,
       semaphore,
       stepProviderModel,
-      executionScope,
       runtime,
     );
 
@@ -374,12 +338,11 @@ export class ArpeggioRunner {
         state,
         mergedContent,
         () => undefined,
-        {
-          eventAttribution: { iteration: state.iteration, scope: executionScope },
-          runtime,
-          onPhaseStart: this.deps.onPhaseStart,
-          onPhaseComplete: this.deps.onPhaseComplete,
-        },
+        this.deps.onPhaseStart,
+        this.deps.onPhaseComplete,
+        undefined,
+        state.iteration,
+        runtime,
       ),
       ruleCtx,
     );
@@ -389,7 +352,6 @@ export class ArpeggioRunner {
       status: 'done',
       content: mergedContent,
       timestamp: new Date(),
-      providerUsage: aggregateBatchProviderUsage(results),
       ...(match && { matchedRuleIndex: match.index, matchedRuleMethod: match.method }),
     };
 
@@ -410,12 +372,12 @@ export class ArpeggioRunner {
     batches: readonly DataBatch[],
     template: string,
     step: WorkflowStep,
+    stepIteration: number,
     iteration: number,
     agentOptions: RunAgentOptions,
     config: ArpeggioStepConfig,
     semaphore: Semaphore,
     providerInfo: StepProviderInfo,
-    executionScope: WorkflowExecutionScope,
     runtime?: RuntimeStepResolution,
   ): Promise<BatchResult[]> {
     const promises = batches.map(async (batch) => {
@@ -423,28 +385,13 @@ export class ArpeggioRunner {
       try {
         let didEmitPhaseStart = false;
         let resolvedPromptParts: PhasePromptParts | undefined;
-        const phaseExecutionId = buildPhaseExecutionId({
-          step: step.name,
-          iteration,
-          phase: 1,
-          sequence: batch.batchIndex + 1,
-          workflowStack: executionScope.stack,
-        });
+        const phaseExecutionId = `${step.name}:1:${stepIteration}:${batch.batchIndex}`;
         const batchAgentOptions: RunAgentOptions = {
           ...agentOptions,
           onPromptResolved: (promptParts) => {
             if (didEmitPhaseStart) return;
             resolvedPromptParts = promptParts;
-            this.deps.onPhaseStart?.(
-              step,
-              1,
-              'execute',
-              promptParts.userInstruction,
-              promptParts,
-              phaseExecutionId,
-              iteration,
-              executionScope,
-            );
+            this.deps.onPhaseStart?.(step, 1, 'execute', promptParts.userInstruction, promptParts, phaseExecutionId, iteration);
             didEmitPhaseStart = true;
           },
         };
@@ -463,7 +410,7 @@ export class ArpeggioRunner {
             step,
             iteration,
             phaseExecutionId,
-            workflowStack: [...executionScope.stack],
+            workflowStack: this.deps.getCurrentWorkflowStack?.(),
             sanitizeText: this.deps.sanitizeObservabilityText,
             providerInfo,
             getPromptParts: () => resolvedPromptParts,
@@ -480,7 +427,6 @@ export class ArpeggioRunner {
           result.error,
           phaseExecutionId,
           iteration,
-          executionScope,
         );
         return result;
       } finally {

@@ -19,9 +19,12 @@ export const serialGitTestFiles = Object.freeze([
   'src/__tests__/finding-evidence-protocol.integration.test.ts',
   'src/__tests__/finding-ladder-robustness.integration.test.ts',
   'src/__tests__/finding-manager-filesystem.integration.test.ts',
-  'src/__tests__/finding-manager-mechanical-runner.integration.test.ts',
-  'src/__tests__/it-finding-ledger-store.test.ts',
   'src/__tests__/it-operation-journal-store.test.ts',
+  // Spawns full runAllTasks engine runs (real child processes); on 2-core CI
+  // runners it blocked a parallel worker past the 60s RPC deadline in two
+  // consecutive runs (2026-08-04), failing the it job with "Timeout calling
+  // onTaskUpdate" despite all tests passing.
+  'src/__tests__/it-runAllTasks-auto-requeue.test.ts',
   'src/__tests__/workflow-engine-structured-caller.integration.test.ts',
 ]);
 

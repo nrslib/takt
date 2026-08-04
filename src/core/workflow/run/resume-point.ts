@@ -3,16 +3,62 @@ import type {
   WorkflowConfig,
   WorkflowResumePoint,
   WorkflowResumePointEntry,
+  WorkflowStep,
 } from '../../models/types.js';
-import { isWorkflowCallStep } from '../step-kind.js';
-import { isDynamicParallelSubSteps } from '../../models/types.js';
+import { getAllParallelSubSteps } from '../../models/types.js';
+import { getWorkflowResumeFrameKind, isWorkflowCallStep } from '../step-kind.js';
+import { workflowEntriesMatch, workflowEntryMatchesWorkflow } from '../workflow-reference.js';
 import {
-  workflowEntriesMatch,
-  workflowEntryMatchesWorkflow,
-} from '../workflow-reference.js';
+  parseCanonicalWorkflowResumeFrame,
+} from '../../../shared/types/workflow-resume.js';
 
 export interface ResumePointStepResolver {
   (parentWorkflow: WorkflowConfig, step: WorkflowCallStep): WorkflowConfig | null;
+}
+
+export function requireWorkflowResumeStackSnapshot(
+  stack: readonly WorkflowResumePointEntry[] | undefined,
+): WorkflowResumePointEntry[] {
+  if (stack === undefined || stack.length === 0) {
+    throw new Error('Step event requires an active workflow resume stack');
+  }
+  return stack.map((entry, index) => {
+    const frame = parseCanonicalWorkflowResumeFrame(
+      entry,
+      `workflow resume stack[${index}]`,
+    );
+    return {
+      ...frame,
+      ...(entry.step_iterations !== undefined
+        ? {
+            step_iterations: validateStepIterations(
+              entry.step_iterations,
+              index,
+            ),
+          }
+        : {}),
+    };
+  });
+}
+
+function validateStepIterations(
+  value: Readonly<Record<string, number>>,
+  frameIndex: number,
+): Record<string, number> {
+  const snapshot: Record<string, number> = {};
+  for (const [step, occurrence] of Object.entries(value)) {
+    if (
+      step.length === 0
+      || !Number.isSafeInteger(occurrence)
+      || occurrence <= 0
+    ) {
+      throw new Error(
+        `workflow resume stack[${frameIndex}].step_iterations is invalid`,
+      );
+    }
+    snapshot[step] = occurrence;
+  }
+  return snapshot;
 }
 
 interface TrimResumePointStackOptions {
@@ -22,7 +68,7 @@ interface TrimResumePointStackOptions {
   resolveWorkflowCall: ResumePointStepResolver;
 }
 
-function matchesResumeStackPrefix(
+export function matchesResumeStackPrefix(
   stack: readonly WorkflowResumePointEntry[],
   resumeStackPrefix: readonly WorkflowResumePointEntry[],
 ): boolean {
@@ -37,8 +83,26 @@ function matchesResumeStackPrefix(
     }
     return workflowEntriesMatch(candidate, entry)
       && candidate.step === entry.step
-      && candidate.kind === entry.kind;
+      && candidate.kind === entry.kind
+      && candidate.occurrence === entry.occurrence;
   });
+}
+
+function resolveUniqueStep(
+  steps: readonly WorkflowStep[],
+  entry: WorkflowResumePointEntry,
+): WorkflowStep | undefined {
+  const matches = steps.filter((candidate) => candidate.name === entry.step);
+  if (matches.length > 1) {
+    throw new Error(
+      `Workflow resume step "${entry.workflow}/${entry.step}" is ambiguous`,
+    );
+  }
+  const step = matches[0];
+  if (step === undefined || getWorkflowResumeFrameKind(step) !== entry.kind) {
+    return undefined;
+  }
+  return step;
 }
 
 function canResolveResumePointSuffix(
@@ -51,15 +115,15 @@ function canResolveResumePointSuffix(
   }
 
   let currentWorkflow = workflow;
-  let currentSteps = currentWorkflow.steps;
+  let candidateSteps: readonly WorkflowStep[] = currentWorkflow.steps;
   for (let index = 0; index < stackSuffix.length; index += 1) {
     const entry = stackSuffix[index]!;
     if (!workflowEntryMatchesWorkflow(entry, currentWorkflow)) {
       return false;
     }
 
-    const step = currentSteps.find((candidate) => candidate.name === entry.step);
-    if (!step) {
+    const step = resolveUniqueStep(candidateSteps, entry);
+    if (step === undefined) {
       return false;
     }
 
@@ -73,18 +137,13 @@ function canResolveResumePointSuffix(
         return false;
       }
       currentWorkflow = childWorkflow;
-      currentSteps = childWorkflow.steps;
+      candidateSteps = childWorkflow.steps;
       continue;
     }
-
-    if (step.parallel === undefined || isDynamicParallelSubSteps(step.parallel)) {
+    if (step.parallel === undefined || getAllParallelSubSteps(step.parallel).length === 0) {
       return false;
     }
-    const nextEntry = stackSuffix[index + 1]!;
-    if (!workflowEntryMatchesWorkflow(nextEntry, currentWorkflow)) {
-      return false;
-    }
-    currentSteps = step.parallel;
+    candidateSteps = getAllParallelSubSteps(step.parallel);
   }
 
   return true;

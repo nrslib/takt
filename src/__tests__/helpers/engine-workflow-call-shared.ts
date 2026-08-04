@@ -11,13 +11,10 @@ import { normalizeWorkflowConfig } from '../../infra/config/loaders/workflowPars
 import { makeResponse } from '../engine-test-helpers.js';
 import type { AutoRoutingConfig } from '../../core/models/index.js';
 import { GitSelectorCommandRunner } from '../../infra/task/selector-git-command-runner.js';
-import { WorkflowCallProgressTracker } from '../../core/workflow/workflow-call-progress-tracker.js';
 
 export function createWorkflowCallProgressDeps() {
-  const workflowCallProgressTracker = new WorkflowCallProgressTracker();
   return {
-    sharedRuntime: { startedAtMs: Date.now(), workflowCallProgressTracker },
-    progressLease: workflowCallProgressTracker.acquire(),
+    sharedRuntime: { startedAtMs: Date.now() },
   };
 }
 

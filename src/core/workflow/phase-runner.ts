@@ -4,15 +4,30 @@
  * Exposes shared phase context plus Phase 2/3 entry points.
  */
 
-import type { WorkflowStep, Language } from '../models/types.js';
+import type { WorkflowStep, Language, WorkflowResumePointEntry } from '../models/types.js';
 import type { ProviderUsageSnapshot } from '../models/response.js';
 import type { StructuredCaller } from '../../agents/structured-caller.js';
 import type { PhaseName, PhasePromptParts, JudgeStageEntry, StepProviderInfo } from './types.js';
 import type { RunAgentOptions } from '../../agents/runner.js';
 import { needsSemanticStatusJudgment } from '../models/workflow-rule-condition.js';
-import type { FindingContractInstructionContext } from './instruction/instruction-context.js';
-import type { WorkflowExecutionScope } from './workflow-execution-scope.js';
-export { runReportPhase, ReportPhaseGenerationError, type ReportPhaseBlockedResult, type ReportPhaseRateLimitedResult } from './report-phase-runner.js';
+import type {
+  FindingContractInstructionContext,
+  FindingContractReviewerOutputStrategy,
+} from './instruction/instruction-context.js';
+export {
+  generateReportPhase,
+  runReportPhase,
+  ReportPhaseGenerationError,
+  type GeneratedReport,
+  type GeneratedReportPhaseResult,
+  type ReportContentValidationResult,
+  type ReportContentValidator,
+  type ReportPhaseGenerationOptions,
+  type ReportPhaseRecoveryMetadata,
+  type ReportPhaseBlockedResult,
+  type ReportPhaseRateLimitedResult,
+  type ReportRetryFailureReason,
+} from './report-phase-runner.js';
 export { runStatusJudgmentPhase, type StatusJudgmentPhaseResult } from './status-judgment-phase.js';
 
 export interface BasePhaseRunnerContext {
@@ -36,8 +51,8 @@ export interface BasePhaseRunnerContext {
   observabilityEnabled?: boolean;
   /** Optional text sanitizer for observability span attributes */
   sanitizeObservabilityText?: (text: string) => string;
-  /** Immutable workflow scope captured when the owning step starts. */
-  executionScope: WorkflowExecutionScope;
+  /** Current workflow stack for observability span parity (phase/judge records) */
+  getCurrentWorkflowStack?: () => WorkflowResumePointEntry[] | undefined;
   /** Run-local environment values passed to trusted child processes. */
   childProcessEnv?: RunAgentOptions['childProcessEnv'];
   /** Interrupts active provider calls when the workflow is cancelled. */
@@ -45,7 +60,7 @@ export interface BasePhaseRunnerContext {
   /** Stream callback for provider event logging */
   onStream?: import('../../agents/types.js').StreamCallback;
   /** Parent workflow iteration for sub-step phase events */
-  iteration: number;
+  iteration?: number;
   /** Callback for phase lifecycle logging */
   onPhaseStart?: (
     step: WorkflowStep,
@@ -55,7 +70,6 @@ export interface BasePhaseRunnerContext {
     promptParts: PhasePromptParts,
     phaseExecutionId?: string,
     iteration?: number,
-    scope?: WorkflowExecutionScope,
   ) => void;
   /** Callback for phase completion logging */
   onPhaseComplete?: (
@@ -67,7 +81,6 @@ export interface BasePhaseRunnerContext {
     error?: string,
     phaseExecutionId?: string,
     iteration?: number,
-    scope?: WorkflowExecutionScope,
   ) => void;
   onProviderAttempt?: (
     providerInfo: StepProviderInfo,
@@ -95,7 +108,7 @@ export interface ReportPhaseRunnerContext extends BasePhaseRunnerContext {
   updatePersonaSession: (persona: string, sessionId: string | undefined) => void;
   buildFindingContractInstructionContext?: (
     step: WorkflowStep,
-    includeRawFindingsSchema: boolean,
+    reviewerOutputStrategy: FindingContractReviewerOutputStrategy | undefined,
   ) => FindingContractInstructionContext | undefined;
   resolveStepProviderModel: (step: WorkflowStep) => StepProviderInfo;
 }
@@ -112,7 +125,6 @@ export interface StatusJudgmentPhaseContext extends BasePhaseRunnerContext {
     entry: JudgeStageEntry,
     phaseExecutionId?: string,
     iteration?: number,
-    scope?: WorkflowExecutionScope,
   ) => void;
 }
 

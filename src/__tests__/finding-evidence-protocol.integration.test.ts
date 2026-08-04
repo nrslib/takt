@@ -38,8 +38,10 @@ import { chmodSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, renameSync, rm
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
+  captureReviewScopeProofSnapshot,
   captureReviewScopeSnapshot,
   computeReviewScopeSnapshotId,
+  protectUnsupportedPathEncoding,
 } from '../core/workflow/findings/snapshot.js';
 
 describe('computeReviewScopeSnapshotId (snapshot.ts)', () => {
@@ -214,7 +216,7 @@ describe('computeReviewScopeSnapshotId (snapshot.ts)', () => {
     expect(computeReviewScopeSnapshotId(dir)).not.toBe(before);
   }, 120_000);
 
-  it('.gitignore 済みファイル（node_modules 等）は snapshot に含めない（--exclude-standard）', () => {
+  it('.gitignore 済み領域を absence proof の coverage gap として snapshot に束縛する', () => {
     execFileSync('git', ['init'], { cwd: dir });
     execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: dir });
     execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
@@ -226,8 +228,7 @@ describe('computeReviewScopeSnapshotId (snapshot.ts)', () => {
     mkdirSync(join(dir, 'ignored'), { recursive: true });
     writeFileSync(join(dir, 'ignored', 'huge.bin'), 'x'.repeat(1000));
     const afterIgnored = computeReviewScopeSnapshotId(dir);
-    // .gitignore 済みの変化は snapshot に影響しない。
-    expect(afterIgnored).toBe(beforeIgnored);
+    expect(afterIgnored).not.toBe(beforeIgnored);
   });
 
   it('65 MiB超の tracked ファイルを固定バッファで全量ハッシュし、同サイズのバイナリ改変を検出する', () => {
@@ -410,6 +411,63 @@ describe('computeReviewScopeSnapshotId (snapshot.ts)', () => {
 
     expect(() => computeReviewScopeSnapshotId(dir)).toThrow(/ReviewScopeSnapshotError: submodule digest failed.*path encoding failed/);
   }, 120_000);
+
+  it('tracked・untracked・excluded の不正 UTF-8 path を共通の coverage gap として保持する', () => {
+    execFileSync('git', ['init'], { cwd: dir });
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    writeFileSync(join(dir, 'seed.txt'), 'seed\n');
+    execFileSync('git', ['add', '.'], { cwd: dir });
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: dir });
+
+    const undecodableName = Buffer.concat([Buffer.from('entry-'), Buffer.from([0xff])]);
+    const display = (path: Buffer) => `0x${path.toString('hex')}`;
+
+    const blob = execFileSync('git', ['hash-object', '-w', '--stdin'], {
+      cwd: dir,
+      input: Buffer.from('tracked\n'),
+    }).toString('ascii').trim();
+    const indexRecord = Buffer.concat([
+      Buffer.from(`100644 ${blob}\t`),
+      undecodableName,
+      Buffer.from([0]),
+    ]);
+    execFileSync('git', ['update-index', '-z', '--index-info'], {
+      cwd: dir,
+      input: indexRecord,
+    });
+
+    const trackedSnapshot = captureReviewScopeProofSnapshot(dir);
+    expect(trackedSnapshot.queryInventory).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        path: display(undecodableName),
+        coverage: 'unsupported_path_encoding',
+      }),
+    ]));
+    const untracked = protectUnsupportedPathEncoding(undecodableName, {
+      path: undecodableName.toString('utf8'),
+      kind: 'file',
+      content: Buffer.from('untracked\n'),
+      coverage: 'complete',
+    });
+    const excluded = protectUnsupportedPathEncoding(undecodableName, {
+      path: undecodableName.toString('utf8'),
+      kind: 'file',
+      coverage: 'excluded',
+    });
+    expect([untracked, excluded]).toEqual([
+      {
+        path: display(undecodableName),
+        kind: 'file',
+        coverage: 'unsupported_path_encoding',
+      },
+      {
+        path: display(undecodableName),
+        kind: 'file',
+        coverage: 'unsupported_path_encoding',
+      },
+    ]);
+  });
 
   it('gitlink が親と同じ dev/ino へ再帰すると fail-loud する', () => {
     execFileSync('git', ['init'], { cwd: dir });

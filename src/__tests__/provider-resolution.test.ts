@@ -193,8 +193,6 @@ describe('resolveStepProviderModel', () => {
   it('should not inherit a persona model when the finding manager provider is direct', () => {
     const step = buildFindingManagerStep({
       contract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',

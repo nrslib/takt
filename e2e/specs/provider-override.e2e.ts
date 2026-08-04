@@ -11,6 +11,7 @@ import { createLocalRepo, type LocalRepo } from '../helpers/test-repo';
 import { runTakt } from '../helpers/takt-runner';
 import { readSessionRecords } from '../helpers/session-log';
 import { copyWorkflowFixtureToRepo } from '../helpers/local-workflow-fixture';
+import { readOnlyRunFindingLedger } from '../helpers/finding-ledger';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -74,7 +75,7 @@ describe('E2E: --provider option override (mock)', () => {
     });
 
     // Then: executes successfully using the mock provider
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode, `${result.stdout}\n${result.stderr}`).toBe(0);
     expect(result.stdout).toContain('Workflow completed');
   }, 240_000);
 
@@ -135,7 +136,7 @@ describe('E2E: --provider option override (mock)', () => {
     }
 
     // Then: workflow completes and status is resolved via structured output
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode, `${result.stdout}\n${result.stderr}`).toBe(0);
     expect(result.stdout).toContain('Workflow completed');
 
     const records = readSessionRecords(repo.path);
@@ -249,19 +250,13 @@ describe('E2E: --provider option override (mock)', () => {
       timeout: 240_000,
     });
 
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode, `${result.stdout}\n${result.stderr}`).toBe(0);
     expect(result.stdout).toContain('Workflow completed');
 
     const records = readSessionRecords(repo.path);
     expect(records.some((record) => record.type === 'workflow_complete')).toBe(true);
 
-    const ledger = JSON.parse(
-      readFileSync(join(repo.path, '.takt', 'findings', 'peer-review.json'), 'utf-8'),
-    ) as {
-      findings: unknown[];
-      rawFindings: unknown[];
-      conflicts: unknown[];
-    };
+    const ledger = readOnlyRunFindingLedger(repo.path);
     expect(ledger.findings).toEqual([]);
     expect(ledger.rawFindings).toEqual([]);
     expect(ledger.conflicts).toEqual([]);

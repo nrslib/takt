@@ -2,7 +2,9 @@ import type { RawNormalizationAuditRecord, RawAdmissionRejectionReport, Reviewer
 import type {
   CanonicalRawFinding,
   FindingLedger,
+  FindingEvidenceRecord,
   RawFinding,
+  RawFindingEvidence,
   ReviewerAnomalyKind,
 } from './types.js';
 import type { ProvisionalFindingSpec } from './reconciler.js';
@@ -11,101 +13,50 @@ import {
   type ReviewerAnomalyPromotionCandidate,
   type ReviewerAnomalySpec,
 } from './reviewer-anomalies.js';
-import { isLocationClaimAbsent, verifySourceQuoteEvidence } from './admission-validation.js';
 import {
-  matchesProvisionalRecoveryOrigin,
-  type ProvisionalRecoveryOrigin,
-} from './provisional-recovery-origin.js';
+  createEngineProofVerifierRegistry,
+  createLedgerEngineProofRegistry,
+} from './evidence-domain.js';
+import { formatFileQuoteLocation } from './evidence-location.js';
+import { verifyFindingEvidenceSet } from './evidence-verification.js';
+import { provisionalSpecForRawKind } from './manager-provisional.js';
+import {
+  createSnapshotEngineProofVerifiers,
+} from './evidence-request-issuer.js';
+import type { ReviewScopeProofSnapshot } from './snapshot.js';
+import { hasLifecycleTransitionIntent } from './raw-relation-capabilities.js';
+import type {
+  PreAdmissionEntityBinding,
+  PreAdmissionEntityProvisionalMutation,
+} from './pre-admission-entity-binding-types.js';
+import { resolvePreAdmissionEntityBindings } from './pre-admission-entity-binding-commit.js';
+import { resolveCurrentLifecycleObservationTarget } from './reviewer-anomaly-policy.js';
+
+export type { PreAdmissionEntityBinding } from './pre-admission-entity-binding-types.js';
 
 interface CanonicalIntakeItemBase {
   canonical: CanonicalRawFinding;
   wire: RawFinding;
 }
 
-export type ProvisionalRecoveryOrigins = [
-  ProvisionalRecoveryOrigin,
-  ...ProvisionalRecoveryOrigin[],
-];
-
-export type CanonicalIntakeItem =
-  | (CanonicalIntakeItemBase & {
-      recoveryOrigins?: never;
-      interpretationRecoveryAttempt?: never;
-    })
-  | (CanonicalIntakeItemBase & {
-      recoveryOrigins: ProvisionalRecoveryOrigins;
-      interpretationRecoveryAttempt: true;
-    });
-
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === 'string' && value.length > 0;
-}
-
-function isProvisionalRecoveryOrigin(value: unknown): value is ProvisionalRecoveryOrigin {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    return false;
-  }
-  const origin = value as Record<string, unknown>;
-  return isNonEmptyString(origin.provisionalFindingId)
-    && typeof origin.expectedProvisionalRevision === 'number'
-    && Number.isSafeInteger(origin.expectedProvisionalRevision)
-    && origin.expectedProvisionalRevision > 0
-    && isNonEmptyString(origin.expectedProvisionalStableKey)
-    && isNonEmptyString(origin.expectedProvisionalLineageKey)
-    && (
-      origin.expectedRecoveryReviewerStableKey === undefined
-      || isNonEmptyString(origin.expectedRecoveryReviewerStableKey)
-    );
-}
+export type CanonicalIntakeItem = CanonicalIntakeItemBase;
 
 export function assertCanonicalIntakeRecoveryState(
   item: CanonicalIntakeItem,
-  ledger?: FindingLedger,
+  _ledger?: FindingLedger,
 ): void {
   if (item.canonical.rawFindingId !== item.wire.rawFindingId) {
     throw new Error(
       `Canonical and wire raw finding identity mismatch: "${item.canonical.rawFindingId}" !== "${item.wire.rawFindingId}"`,
     );
   }
-  const origins: unknown = Reflect.get(item, 'recoveryOrigins');
-  const recovery: unknown = Reflect.get(item, 'interpretationRecoveryAttempt');
-  if (origins === undefined && recovery === undefined) {
-    return;
-  }
   if (
-    recovery !== true
-    || !Array.isArray(origins)
-    || origins.length === 0
-    || !origins.every(isProvisionalRecoveryOrigin)
+    Reflect.has(item, 'recoveryOrigins')
+    || Reflect.has(item, 'interpretationRecoveryAttempt')
   ) {
     throw new Error(
-      `Raw finding "${item.wire.rawFindingId}" has inconsistent interpretation recovery metadata`,
+      `Raw finding "${item.wire.rawFindingId}" contains transient interpretation recovery metadata`,
     );
-  }
-  const typedOrigins = origins as ProvisionalRecoveryOrigin[];
-  const originIds = new Set<string>();
-  for (const origin of typedOrigins) {
-    if (originIds.has(origin.provisionalFindingId)) {
-      throw new Error(
-        `Raw finding "${item.wire.rawFindingId}" has duplicate recovery origin "${origin.provisionalFindingId}"`,
-      );
-    }
-    originIds.add(origin.provisionalFindingId);
-    if (ledger !== undefined) {
-      const finding = ledger.findings.find(
-        (candidate) => candidate.id === origin.provisionalFindingId,
-      );
-      if (finding !== undefined && matchesProvisionalRecoveryOrigin(finding, origin)) {
-        if (
-          origin.expectedProvisionalLineageKey !== item.canonical.lineageKey
-          || origin.expectedRecoveryReviewerStableKey !== item.canonical.reviewerStableKey
-        ) {
-          throw new Error(
-            `Raw finding "${item.wire.rawFindingId}" recovery origin provenance mismatch`,
-          );
-        }
-      }
-    }
   }
 }
 
@@ -113,36 +64,40 @@ export function assertCanonicalIntakeRecoveryStates(
   items: readonly CanonicalIntakeItem[],
   ledger?: FindingLedger,
 ): void {
-  const claimedOriginIds = new Set<string>();
   for (const item of items) {
     assertCanonicalIntakeRecoveryState(item, ledger);
-    for (const origin of item.recoveryOrigins ?? []) {
-      if (claimedOriginIds.has(origin.provisionalFindingId)) {
-        throw new Error(
-          `Recovery origin "${origin.provisionalFindingId}" is claimed by multiple raw findings`,
-        );
-      }
-      claimedOriginIds.add(origin.provisionalFindingId);
-    }
   }
 }
 
 export interface ReviewerIntakeResult {
   items: CanonicalIntakeItem[];
+  entityBindings: ReadonlyMap<string, PreAdmissionEntityBinding>;
   overflowRawFindingIds: Set<string>;
-  overflowSpecs: ProvisionalFindingSpec[];
+  intakeProvisionalSpecs: ProvisionalFindingSpec[];
+  intakeAnomalySpecs: ReviewerAnomalySpec[];
   overflowReports: ReviewerOutputOverflowReport[];
   clarifications: Array<{ reviewer: string; flaggedRawFindingIds: string[] }>;
   rawNormalizations: RawNormalizationAuditRecord[];
   healthyReviewerStableKeys: Set<string>;
 }
 
+interface PendingRejectedObservation {
+  item: CanonicalIntakeItem;
+  targetFindingId: string;
+  reason: string;
+  destination: 'target_audit' | 'reviewer_anomaly';
+  targetValidation: 'lifecycle_precondition' | 'entity_binding';
+  anomalyKind: ReviewerAnomalyKind;
+  failedEvidence?: RawFindingEvidence;
+}
+
 export interface RawAdmissionEvaluation {
   admissionRejections: RawAdmissionRejectionReport[];
   admissionAnomalySpecs: ReviewerAnomalySpec[];
+  admissionProvisionalSpecs: ProvisionalFindingSpec[];
+  preAdmissionEntityMutations: PreAdmissionEntityProvisionalMutation[];
   admissionRejectedItems: CanonicalIntakeItem[];
-  locationlessProvisionalItems: Array<{ item: CanonicalIntakeItem; reason: string }>;
-  pendingRejectedObservations: Array<{ item: CanonicalIntakeItem; targetFindingId: string; reason: string }>;
+  pendingRejectedObservations: PendingRejectedObservation[];
   cleanAdmitted: CanonicalIntakeItem[];
   tainted: CanonicalIntakeItem[];
   taintedAdmitted: CanonicalIntakeItem[];
@@ -150,128 +105,286 @@ export interface RawAdmissionEvaluation {
   verifiedEvidenceCandidates: ReviewerAnomalyPromotionCandidate[];
   provisionalOnlyLadderRawIds: Set<string>;
   cleanWire: RawFinding[];
+  verifiedEvidenceRecordsByRawFindingId: ReadonlyMap<string, readonly FindingEvidenceRecord[]>;
 }
 
 type AdmissionPool = 'clean' | 'tainted';
 
-type LocationEvidenceClassification =
-  | { admit: true }
-  | { admit: false; provisionalKind: 'unverified-locationless'; reason: string }
-  | { admit: false; anomalyKind: ReviewerAnomalyKind; reason: string };
+type EvidenceClassification =
+  | { admit: true; evidenceRecords: FindingEvidenceRecord[] }
+  | {
+      admit: false;
+      disposition: 'anomaly';
+      anomalyKind: ReviewerAnomalyKind;
+      reason: string;
+      failedEvidence?: RawFindingEvidence;
+    }
+  | {
+      admit: false;
+      disposition: 'provisional';
+      reason: string;
+      failedEvidence?: RawFindingEvidence;
+    };
 
 interface AdmissionItemEvaluation {
   pool: AdmissionPool;
   admitted?: CanonicalIntakeItem;
   rejection?: RawAdmissionRejectionReport;
   anomalySpec?: ReviewerAnomalySpec;
+  provisionalSpec?: ProvisionalFindingSpec;
   rejectedItem?: CanonicalIntakeItem;
-  locationlessProvisional?: { item: CanonicalIntakeItem; reason: string };
-  pendingRejectedObservation?: { item: CanonicalIntakeItem; targetFindingId: string; reason: string };
+  pendingRejectedObservation?: PendingRejectedObservation;
   verifiedEvidenceCandidate?: ReviewerAnomalyPromotionCandidate;
+  verifiedEvidenceRecords?: FindingEvidenceRecord[];
   provisionalOnlyLadderRawId?: string;
 }
 
-function classifyLocationEvidence(input: {
+function classifyEvidence(input: {
   cwd: string;
   reviewScopeSnapshotId: string;
+  runId: string;
+  scopeIdentity: string;
+  previousLedger: FindingLedger;
   item: CanonicalIntakeItem;
-  pool: AdmissionPool;
-}): LocationEvidenceClassification {
-  const { cwd, reviewScopeSnapshotId, item, pool } = input;
-  const evidence = item.canonical.evidence;
-  const relation = item.canonical.relation;
-
-  if (evidence?.kind === 'source_quote') {
-    const verification = verifySourceQuoteEvidence(cwd, evidence, reviewScopeSnapshotId);
-    if (verification.outcome === 'match') {
-      return { admit: true };
-    }
-    if (verification.outcome === 'unverifiable') {
-      if ('error' in verification) {
-        throw verification.error;
-      }
-      throw new Error(
-        `Source quote evidence for raw finding "${item.wire.rawFindingId}" could not be verified: ${verification.reason}`,
-      );
-    }
-    return { admit: false, anomalyKind: verification.outcome, reason: verification.reason };
-  }
-
-  if (relation === 'new') {
-    if (evidence?.kind === 'locationless') {
-      return {
-        admit: false,
-        provisionalKind: 'unverified-locationless',
-        reason: 'a new locationless claim has no mechanically verifiable source_quote evidence, so it is retained as a gate-blocking provisional observation rather than admitted as a confirmed product finding',
-      };
-    }
-    const reason = isLocationClaimAbsent(item.wire.location)
-      ? 'no verifiable evidence was supplied (an explicit locationless evidence declaration or a matching source_quote is required); a bare empty/N-A claim cannot become a product finding'
-      : `location "${item.wire.location ?? ''}" was cited but no verifiable source_quote evidence (verbatimExcerpt) was supplied`;
-    return { admit: false, anomalyKind: 'quote-mismatch', reason };
-  }
-
-  if (relation === 'persists' || relation === 'reopened') {
-    if (pool === 'tainted' && isLocationClaimAbsent(item.wire.location)) {
-      return { admit: true };
-    }
-    const detail = evidence?.kind === 'locationless'
-      ? 'locationless evidence is retained only as a provisional new observation and cannot mutate an existing finding'
-      : 'no verified source_quote evidence was supplied';
+  reviewScopeSnapshot: ReviewScopeProofSnapshot;
+  workflowTask: string;
+}): EvidenceClassification {
+  const { cwd, reviewScopeSnapshotId, item } = input;
+  if (item.canonical.provenance.ambiguityCodes.includes('invalid-evidence-shape')) {
     return {
       admit: false,
-      anomalyKind: 'quote-mismatch',
-      reason: `a "${relation}" claim cannot mutate the referenced existing finding without a matching source_quote (verbatimExcerpt): ${detail}, so the claim is not applied to the finding's state`,
+      disposition: 'anomaly',
+      anomalyKind: 'protocol-anomaly',
+      reason: 'Reviewer evidence does not match the typed evidence protocol',
     };
   }
-
+  if ((item.canonical.evidenceQuoteFailureReasons?.length ?? 0) > 0) {
+    return {
+      admit: false,
+      disposition: 'anomaly',
+      anomalyKind: 'quote-mismatch',
+      reason: item.canonical.evidenceQuoteFailureReasons!.join('; '),
+    };
+  }
+  if (item.canonical.evidenceCoverageGaps.length > 0) {
+    return {
+      admit: false,
+      disposition: 'provisional',
+      reason: item.canonical.evidenceCoverageGaps.join('; '),
+    };
+  }
+  const evidence = item.canonical.evidence;
+  const proofLedger = {
+    ...input.previousLedger,
+    evidenceRecords: [
+      ...input.previousLedger.evidenceRecords,
+      ...item.canonical.issuedEngineProofRecords,
+    ],
+  };
+  const verification = verifyFindingEvidenceSet({
+    cwd,
+    evidence,
+    expectedSnapshotId: reviewScopeSnapshotId,
+    claimIdentityHash: item.canonical.claimIdentityHash,
+    targetFindingId: item.wire.targetFindingId,
+    proofRegistry: createLedgerEngineProofRegistry(proofLedger),
+    proofVerifiers: createEngineProofVerifierRegistry(
+      createSnapshotEngineProofVerifiers({
+        snapshot: input.reviewScopeSnapshot,
+        workflowTask: input.workflowTask,
+      }),
+    ),
+    proofContext: {
+      cwd,
+      workflowName: input.previousLedger.workflowName,
+      runId: input.runId,
+      scopeIdentity: input.scopeIdentity,
+    },
+  });
+  if (verification.outcome === 'match') {
+    const records = verification.records;
+    const matrixSatisfied = (() => {
+      if (item.canonical.target.kind === 'code') {
+        return records.some((record) => (
+          record.kind === 'file_quote'
+          && item.canonical.target.kind === 'code'
+          && item.canonical.target.paths.includes(record.path)
+        ));
+      }
+      if (item.canonical.target.kind === 'structure') {
+        return records.some((record) => (
+          record.kind === 'engine_proof'
+          && record.purpose === 'claim_evidence'
+          && record.subject.kind === 'repository_manifest'
+        ));
+      }
+      const hasCompleteQuery = records.some((record) => (
+        record.kind === 'engine_proof'
+        && record.purpose === 'claim_evidence'
+        && record.subject.kind === 'repository_query'
+        && record.subject.coverage === 'complete'
+      ));
+      const hasOriginalAnchor = records.some((record) => (
+        record.kind === 'engine_proof'
+        && record.purpose === 'claim_evidence'
+        && record.subject.kind === 'authoritative_quote'
+      ));
+      return hasCompleteQuery && hasOriginalAnchor;
+    })();
+    if (!matrixSatisfied) {
+      return {
+        admit: false,
+        disposition: 'provisional',
+        reason: `Evidence matrix is incomplete for target kind "${item.canonical.target.kind}"`,
+      };
+    }
+    return { admit: true, evidenceRecords: verification.records };
+  }
+  if (verification.outcome === 'unverifiable') {
+    if ('error' in verification) {
+      throw verification.error;
+    }
+    throw new Error(
+      `Evidence for raw finding "${item.wire.rawFindingId}" could not be verified: ${verification.reason}`,
+    );
+  }
+  const failedEvidence = verification.failureLevel === 'item'
+    ? verification.failedEvidence
+    : undefined;
+  if (verification.outcome === 'protocol-anomaly') {
+    return {
+      admit: false,
+      disposition: 'anomaly',
+      anomalyKind: 'protocol-anomaly',
+      reason: verification.reason,
+      failedEvidence,
+    };
+  }
+  if (
+    verification.outcome === 'quote-mismatch'
+    || verification.outcome === 'stale-snapshot'
+  ) {
+    return {
+      admit: false,
+      disposition: 'anomaly',
+      anomalyKind: verification.outcome,
+      reason: verification.reason,
+      failedEvidence,
+    };
+  }
+  if (verification.outcome === 'resource_exhausted') {
+    return {
+      admit: false,
+      disposition: 'provisional',
+      reason: verification.reason,
+      failedEvidence,
+    };
+  }
   return {
     admit: false,
-    anomalyKind: 'quote-mismatch',
-    reason: 'a resolution confirmation cannot close a finding without a source_quote whose verbatimExcerpt mechanically matches the current file (locationless or unverified evidence cannot serve as resolution evidence)',
+    disposition: 'provisional',
+    reason: verification.reason,
+    failedEvidence,
   };
 }
 
 function evaluateRejectedItem(input: {
   item: CanonicalIntakeItem;
   pool: AdmissionPool;
-  classification: Extract<LocationEvidenceClassification, { admit: false; anomalyKind: ReviewerAnomalyKind }>;
-  previousFindingsById: ReadonlyMap<string, FindingLedger['findings'][number]>;
+  classification: Extract<EvidenceClassification, { admit: false }>;
+  previousLedger: FindingLedger;
 }): AdmissionItemEvaluation {
-  const { item, pool, classification, previousFindingsById } = input;
+  const { item, pool, classification } = input;
   const rejection = {
     rawFindingId: item.wire.rawFindingId,
-    location: item.wire.location ?? '',
+    location: classification.failedEvidence?.kind === 'file_quote'
+      ? formatFileQuoteLocation(classification.failedEvidence)
+      : '',
     reason: classification.reason,
   };
-  if (item.wire.relation === 'resolution_confirmation') {
-    return { pool, rejection };
-  }
-
-  const targetFindingId = item.wire.targetFindingId;
-  const target = targetFindingId !== undefined ? previousFindingsById.get(targetFindingId) : undefined;
-  if (item.canonical.relation === 'persists' && targetFindingId !== undefined && target?.status === 'open') {
+  if (
+    classification.disposition === 'anomaly'
+    && classification.anomalyKind === 'protocol-anomaly'
+  ) {
     return {
       pool,
       rejection,
-      ...(pool === 'clean' ? { rejectedItem: item } : {}),
+      rejectedItem: item,
+      anomalySpec: createReviewerAnomalySpec({
+        wire: item.wire,
+        canonical: item.canonical,
+        anomalyKind: classification.anomalyKind,
+        failedEvidence: classification.failedEvidence,
+        reason: `Evidence failed deterministic admission (${classification.reason}); the malformed protocol record is isolated as a reviewer anomaly`,
+      }),
+    };
+  }
+  const lifecycleIntent = hasLifecycleTransitionIntent({
+    relation: item.canonical.relation,
+    targetFindingId: item.canonical.targetFindingId,
+  });
+  const auditTarget = resolveCurrentLifecycleObservationTarget(
+    input.previousLedger,
+    item.wire,
+  );
+  if (lifecycleIntent && auditTarget !== undefined) {
+    return {
+      pool,
+      rejection,
+      rejectedItem: item,
       pendingRejectedObservation: {
         item,
-        targetFindingId,
-        reason: `Location evidence "${item.wire.location ?? ''}" failed deterministic admission (${classification.reason}); recorded as a rejected re-observation of the open target`,
+        targetFindingId: auditTarget.id,
+        reason: `Evidence failed deterministic admission (${classification.reason}); recorded as a rejected lifecycle observation of the target`,
+        destination: 'target_audit',
+        targetValidation: 'lifecycle_precondition',
+        anomalyKind: classification.disposition === 'anomaly'
+          ? classification.anomalyKind
+          : 'lifecycle-admission-failure',
+        failedEvidence: classification.failedEvidence,
       },
+    };
+  }
+  if (lifecycleIntent) {
+    const anomalyKind = classification.disposition === 'anomaly'
+      ? classification.anomalyKind
+      : 'lifecycle-admission-failure';
+    return {
+      pool,
+      rejection,
+      rejectedItem: item,
+      anomalySpec: createReviewerAnomalySpec({
+        wire: item.wire,
+        canonical: item.canonical,
+        anomalyKind,
+        failedEvidence: classification.failedEvidence,
+        reason: `Evidence failed deterministic admission (${classification.reason}); the lifecycle target or engine-issued target precondition is not current`,
+      }),
+    };
+  }
+  if (classification.disposition === 'provisional') {
+    return {
+      pool,
+      rejection,
+      rejectedItem: item,
+      provisionalSpec: provisionalSpecForRawKind({
+        wire: item.wire,
+        canonical: item.canonical,
+        reason: `Engine proof failed deterministic admission (${classification.reason})`,
+      }, 'raw-adjudication-unresolved'),
     };
   }
 
   return {
     pool,
     rejection,
-    ...(pool === 'clean' ? { rejectedItem: item } : {}),
+    rejectedItem: item,
     anomalySpec: createReviewerAnomalySpec({
       wire: item.wire,
       canonical: item.canonical,
       anomalyKind: classification.anomalyKind,
-      reason: `Location evidence "${item.wire.location ?? ''}" failed deterministic admission (${classification.reason}); the observation is isolated as a reviewer anomaly because the evidence's failure does not prove the finding itself is false`,
+      failedEvidence: classification.failedEvidence,
+      reason: `Evidence failed deterministic admission (${classification.reason}); the observation is isolated as a reviewer anomaly because the evidence's failure does not prove the finding itself is false`,
     }),
   };
 }
@@ -279,20 +392,30 @@ function evaluateRejectedItem(input: {
 function evaluateAdmissionItem(input: {
   cwd: string;
   reviewScopeSnapshotId: string;
+  runId: string;
+  scopeIdentity: string;
+  previousLedger: FindingLedger;
   item: CanonicalIntakeItem;
   pool: AdmissionPool;
-  previousFindingsById: ReadonlyMap<string, FindingLedger['findings'][number]>;
+  reviewScopeSnapshot: ReviewScopeProofSnapshot;
+  workflowTask: string;
+  entityBindings: ReviewerIntakeResult['entityBindings'];
 }): AdmissionItemEvaluation {
-  const classification = classifyLocationEvidence(input);
-  const { item, pool } = input;
-  if (!classification.admit && 'provisionalKind' in classification) {
-    return { pool, locationlessProvisional: { item, reason: classification.reason } };
+  const binding = input.entityBindings.get(input.item.wire.rawFindingId);
+  if (binding !== undefined) {
+    return evaluateEntityBindingItem({
+      item: input.item,
+      pool: input.pool,
+      binding,
+    });
   }
+  const classification = classifyEvidence(input);
+  const { item, pool } = input;
   if (!classification.admit) {
     return evaluateRejectedItem({ ...input, classification });
   }
 
-  const verifiedEvidenceCandidate = item.canonical.evidence?.kind === 'source_quote'
+  const verifiedEvidenceCandidate = classification.evidenceRecords.length > 0
     ? { lineageKey: item.canonical.lineageKey, rawFindingId: item.wire.rawFindingId }
     : undefined;
   const provisionalOnlyLadderRawId = pool === 'tainted'
@@ -300,7 +423,33 @@ function evaluateAdmissionItem(input: {
     && (item.canonical.relation === 'persists' || item.canonical.relation === 'reopened')
     ? item.canonical.rawFindingId
     : undefined;
-  return { pool, admitted: item, verifiedEvidenceCandidate, provisionalOnlyLadderRawId };
+  return {
+    pool,
+    admitted: item,
+    verifiedEvidenceCandidate,
+    provisionalOnlyLadderRawId,
+    verifiedEvidenceRecords: classification.evidenceRecords,
+  };
+}
+
+function evaluateEntityBindingItem(input: {
+  item: CanonicalIntakeItem;
+  pool: AdmissionPool;
+  binding: PreAdmissionEntityBinding;
+}): AdmissionItemEvaluation {
+  const { item, pool, binding } = input;
+  const reason = binding.kind === 'bind_existing'
+    ? `Evidence-less observation was semantically associated with "${binding.targetFindingId}" by the Finding Manager; association grants audit authority only`
+    : `Evidence-less observation was classified as ${binding.decision} before admission`;
+  return {
+    pool,
+    rejection: {
+      rawFindingId: item.wire.rawFindingId,
+      location: '',
+      reason,
+    },
+    rejectedItem: item,
+  };
 }
 
 function definedValues<T>(items: readonly (T | undefined)[]): T[] {
@@ -310,10 +459,21 @@ function definedValues<T>(items: readonly (T | undefined)[]): T[] {
 export function evaluateRawAdmission(input: {
   cwd: string;
   reviewScopeSnapshotId: string;
+  runId: string;
+  scopeIdentity: string;
   previousLedger: FindingLedger;
   intake: ReviewerIntakeResult;
+  reviewScopeSnapshot: ReviewScopeProofSnapshot;
+  workflowTask: string;
 }): RawAdmissionEvaluation {
   assertCanonicalIntakeRecoveryStates(input.intake.items, input.previousLedger);
+  const resolvedEntityBindings = resolvePreAdmissionEntityBindings({
+    ledger: input.previousLedger,
+    intake: input.intake,
+  });
+  const itemByRawFindingId = new Map(
+    input.intake.items.map((item) => [item.wire.rawFindingId, item]),
+  );
   const nonOverflow = input.intake.items.filter(
     (item) => !input.intake.overflowRawFindingIds.has(item.canonical.rawFindingId),
   );
@@ -321,21 +481,30 @@ export function evaluateRawAdmission(input: {
     (item) => item.canonical.coherence === 'coherent' && !item.canonical.provenance.ambiguityOrigin,
   );
   const tainted = nonOverflow.filter((item) => item.canonical.provenance.ambiguityOrigin);
-  const previousFindingsById = new Map(input.previousLedger.findings.map((finding) => [finding.id, finding]));
   const evaluations = [
     ...clean.map((item) => evaluateAdmissionItem({
       cwd: input.cwd,
       reviewScopeSnapshotId: input.reviewScopeSnapshotId,
+      runId: input.runId,
+      scopeIdentity: input.scopeIdentity,
+      previousLedger: input.previousLedger,
       item,
       pool: 'clean',
-      previousFindingsById,
+      reviewScopeSnapshot: input.reviewScopeSnapshot,
+      workflowTask: input.workflowTask,
+      entityBindings: input.intake.entityBindings,
     })),
     ...tainted.map((item) => evaluateAdmissionItem({
       cwd: input.cwd,
       reviewScopeSnapshotId: input.reviewScopeSnapshotId,
+      runId: input.runId,
+      scopeIdentity: input.scopeIdentity,
+      previousLedger: input.previousLedger,
       item,
       pool: 'tainted',
-      previousFindingsById,
+      reviewScopeSnapshot: input.reviewScopeSnapshot,
+      workflowTask: input.workflowTask,
+      entityBindings: input.intake.entityBindings,
     })),
   ];
   const cleanAdmitted = definedValues(
@@ -345,22 +514,46 @@ export function evaluateRawAdmission(input: {
   return {
     admissionRejections: definedValues(evaluations.map((evaluation) => evaluation.rejection)),
     admissionAnomalySpecs: definedValues(
-      evaluations.map((evaluation) => evaluation.pool === 'clean' ? evaluation.anomalySpec : undefined),
+      evaluations.map((evaluation) => (
+        evaluation.pool === 'clean' || evaluation.anomalySpec?.kind === 'protocol-anomaly'
+          ? evaluation.anomalySpec
+          : undefined
+      )),
     ),
+    admissionProvisionalSpecs: definedValues(
+      evaluations.map((evaluation) => evaluation.provisionalSpec),
+    ),
+    preAdmissionEntityMutations: resolvedEntityBindings.mutations,
     admissionRejectedItems: definedValues(evaluations.map((evaluation) => evaluation.rejectedItem)),
-    locationlessProvisionalItems: definedValues(
-      evaluations.map((evaluation) => evaluation.locationlessProvisional),
-    ),
     pendingRejectedObservations: definedValues(
       evaluations.map((evaluation) => evaluation.pendingRejectedObservation),
-    ),
+    ).concat(resolvedEntityBindings.auditAttachments.map((attachment) => {
+      const item = itemByRawFindingId.get(attachment.rawFindingId);
+      if (item === undefined) {
+        throw new Error(
+          `Entity binding audit references missing raw finding "${attachment.rawFindingId}"`,
+        );
+      }
+      return {
+        item,
+        targetFindingId: attachment.targetFindingId,
+        reason: attachment.reason,
+        destination: 'target_audit',
+        targetValidation: 'entity_binding',
+        anomalyKind: 'lifecycle-admission-failure',
+      };
+    })),
     cleanAdmitted,
     tainted,
     taintedAdmitted: definedValues(
       evaluations.map((evaluation) => evaluation.pool === 'tainted' ? evaluation.admitted : undefined),
     ),
     ladderAnomalySpecs: definedValues(
-      evaluations.map((evaluation) => evaluation.pool === 'tainted' ? evaluation.anomalySpec : undefined),
+      evaluations.map((evaluation) => (
+        evaluation.pool === 'tainted' && evaluation.anomalySpec?.kind !== 'protocol-anomaly'
+          ? evaluation.anomalySpec
+          : undefined
+      )),
     ),
     verifiedEvidenceCandidates: definedValues(
       evaluations.map((evaluation) => evaluation.verifiedEvidenceCandidate),
@@ -369,5 +562,15 @@ export function evaluateRawAdmission(input: {
       evaluations.map((evaluation) => evaluation.provisionalOnlyLadderRawId),
     )),
     cleanWire: cleanAdmitted.map((item) => item.wire),
+    verifiedEvidenceRecordsByRawFindingId: new Map(
+      evaluations.flatMap((evaluation) => (
+        evaluation.admitted === undefined || evaluation.verifiedEvidenceRecords === undefined
+          ? []
+          : [[
+              evaluation.admitted.wire.rawFindingId,
+              evaluation.verifiedEvidenceRecords,
+            ] as const]
+      )),
+    ),
   };
 }

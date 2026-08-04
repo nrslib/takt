@@ -11,6 +11,13 @@ import type {
 import type { RuntimeStepResolution } from '../core/workflow/types.js';
 import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
 import { evaluateWhenExpression } from '../core/workflow/evaluation/when-evaluator.js';
+import { computeFileQuoteEvidenceRecordId } from '../core/models/finding-evidence-record.js';
+import type { FindingEvidenceRecord } from '../core/models/finding-types.js';
+import { compareBinaryStrings } from '../shared/utils/binary-string-comparator.js';
+import {
+  authorizeFindingLedgerFixture,
+  canonicalRawFindingFixture,
+} from './helpers/finding-lifecycle-fixture.js';
 import {
   requestValidTeamLeaderDecomposition,
   TeamLeaderDecompositionValidationError,
@@ -240,10 +247,9 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       state,
       'implement feature',
       5,
-      expect.objectContaining({
-        iteration: 1,
-        transaction: expect.any(Object),
-      }),
+      undefined,
+      undefined,
+      expect.any(Object),
     );
     expect(mockRunWithPhaseSpan).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -2724,13 +2730,86 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+function fileQuoteEvidenceRecord(
+  path: string,
+  line: number,
+  claimIdentityHash: string,
+): FindingEvidenceRecord {
+  const payload = {
+    kind: 'file_quote' as const,
+    path,
+    startLine: line,
+    endLine: line,
+    verbatimExcerpt: 'fixture evidence',
+    snapshotId: 'a'.repeat(64),
+    claimIdentityHash,
+    fileHash: 'c'.repeat(64),
+  };
+  return {
+    evidenceId: computeFileQuoteEvidenceRecordId(payload),
+    ...payload,
+  };
+}
+
 function makeLedger(): FindingLedger {
   const observedAt = {
     runId: 'run-1',
     stepName: 'reviewers',
     timestamp: '2026-07-24T00:00:00.000Z',
   };
-  return {
+  const firstRaw = canonicalRawFindingFixture({
+    rawFindingId: 'R-0001',
+    stepName: 'reviewers',
+    reviewer: 'reviewer',
+    familyTag: 'first-family',
+    severity: 'high',
+    title: 'First defect',
+    description: 'first description',
+    suggestion: 'fix first',
+    relation: 'new',
+    targetFindingId: null,
+    target: { kind: 'code', paths: ['src/first.ts'] },
+    evidence: [{
+      kind: 'file_quote',
+      path: 'src/first.ts',
+      startLine: 10,
+      endLine: 10,
+      verbatimExcerpt: 'fixture evidence',
+      snapshotId: 'a'.repeat(64),
+    }],
+  });
+  const secondRaw = canonicalRawFindingFixture({
+    rawFindingId: 'R-0002',
+    stepName: 'reviewers',
+    reviewer: 'reviewer',
+    familyTag: 'second-family',
+    severity: 'medium',
+    title: 'Second defect',
+    description: 'second description',
+    suggestion: 'fix second',
+    relation: 'new',
+    targetFindingId: null,
+    target: { kind: 'code', paths: ['src/second.ts'] },
+    evidence: [{
+      kind: 'file_quote',
+      path: 'src/second.ts',
+      startLine: 20,
+      endLine: 20,
+      verbatimExcerpt: 'fixture evidence',
+      snapshotId: 'a'.repeat(64),
+    }],
+  });
+  const firstEvidence = fileQuoteEvidenceRecord(
+    'src/first.ts',
+    10,
+    firstRaw.claimIdentityHash,
+  );
+  const secondEvidence = fileQuoteEvidenceRecord(
+    'src/second.ts',
+    20,
+    secondRaw.claimIdentityHash,
+  );
+  return authorizeFindingLedgerFixture({
     workflowName: 'workflow',
     nextId: 3,
     updatedAt: observedAt.timestamp,
@@ -2740,9 +2819,13 @@ function makeLedger(): FindingLedger {
         status: 'open',
         lifecycle: 'new',
         revision: 1,
+        target: firstRaw.target,
+        targetIdentityHash: firstRaw.targetIdentityHash,
+        claimIdentityHash: firstRaw.claimIdentityHash,
+        semanticClaimIdentityHash: firstRaw.semanticClaimIdentityHash,
         severity: 'high',
         title: 'First defect',
-        location: 'src/first.ts:10',
+        evidenceIds: [firstEvidence.evidenceId],
         description: 'first description',
         suggestion: 'fix first',
         reviewers: ['reviewer'],
@@ -2755,9 +2838,13 @@ function makeLedger(): FindingLedger {
         status: 'open',
         lifecycle: 'persists',
         revision: 1,
+        target: secondRaw.target,
+        targetIdentityHash: secondRaw.targetIdentityHash,
+        claimIdentityHash: secondRaw.claimIdentityHash,
+        semanticClaimIdentityHash: secondRaw.semanticClaimIdentityHash,
         severity: 'medium',
         title: 'Second defect',
-        location: 'src/second.ts:20',
+        evidenceIds: [secondEvidence.evidenceId],
         description: 'second description',
         suggestion: 'fix second',
         reviewers: ['reviewer'],
@@ -2766,32 +2853,13 @@ function makeLedger(): FindingLedger {
         lastSeen: observedAt,
       },
     ],
-    rawFindings: [
-      {
-        rawFindingId: 'R-0001',
-        stepName: 'reviewers',
-        reviewer: 'reviewer',
-        familyTag: 'first-family',
-        severity: 'high',
-        title: 'First defect',
-        description: 'first description',
-        relation: 'new',
-      },
-      {
-        rawFindingId: 'R-0002',
-        stepName: 'reviewers',
-        reviewer: 'reviewer',
-        familyTag: 'second-family',
-        severity: 'medium',
-        title: 'Second defect',
-        description: 'second description',
-        relation: 'new',
-      },
-    ],
+    evidenceRecords: [firstEvidence, secondEvidence].sort(
+      (left, right) => compareBinaryStrings(left.evidenceId, right.evidenceId),
+    ),
+    rawFindings: [firstRaw, secondRaw],
     conflicts: [],
-    interpretations: [],
     reviewerAnomalies: [],
-  };
+  });
 }
 
 function makeState(): WorkflowState {
@@ -2832,8 +2900,6 @@ describe('TeamLeaderRunner finding_contract_fix', () => {
       saveLedgerSnapshot: vi.fn(),
     } as unknown as FindingLedgerStore;
     const findingContract: FindingContractConfig = {
-      ledgerPath: '.takt/findings.json',
-      rawFindingsPath: '.takt/raw',
       manager: {
         persona: 'findings-manager',
         instruction: 'manage',
@@ -2995,8 +3061,8 @@ describe('TeamLeaderRunner finding_contract_fix', () => {
     let postExecutionCalls = 0;
     let workflowStepIterations: Record<string, number> = { fix: 1 };
     const stepExecutor = {
-      buildInstruction: vi.fn((step: WorkflowStep, _iteration, _state, _task, _max, options) => {
-        if (!step.name.includes('.')) leaderContext = options.findingContractPolicy;
+      buildInstruction: vi.fn((step: WorkflowStep, _iteration, _state, _task, _max, _fallback, context) => {
+        if (!step.name.includes('.')) leaderContext = context;
         return step.name.includes('.') ? step.instruction : 'leader instruction';
       }),
       buildPhase1Instruction: vi.fn((instruction: string) => instruction),
@@ -3047,8 +3113,10 @@ describe('TeamLeaderRunner finding_contract_fix', () => {
       getRunPaths: () => runPaths,
       getCurrentWorkflowStack: () => [{
         workflow: 'workflow',
+        workflow_ref: 'project:sha256:workflow',
         step: 'fix',
         kind: 'agent',
+        occurrence: 1,
         step_iterations: workflowStepIterations,
       }],
       findingContract,
@@ -3099,7 +3167,7 @@ describe('TeamLeaderRunner finding_contract_fix', () => {
         store: createOperationJournalStore(runPaths.operationJournalAbs),
         journalRunSlug: runPaths.slug,
         claimToken: 'claim-b',
-        sourceClaimToken: 'claim-a',
+        sourceClaimTokens: new Set(['claim-a']),
       },
     });
     const result = await resumedRunner.runTeamLeaderStep(
@@ -3293,8 +3361,6 @@ describe('TeamLeaderRunner finding_contract_fix', () => {
       saveLedgerSnapshot: vi.fn(),
     } as unknown as FindingLedgerStore;
     const findingContract: FindingContractConfig = {
-      ledgerPath: '.takt/findings.json',
-      rawFindingsPath: '.takt/raw',
       manager: {
         persona: 'findings-manager',
         instruction: 'manage',
@@ -3312,27 +3378,33 @@ describe('TeamLeaderRunner finding_contract_fix', () => {
       },
     };
     mockExecuteAgent
-      .mockResolvedValueOnce({
-        persona: 'coder',
-        status: 'rate_limited',
-        content: 'rate limited',
-        timestamp: new Date(),
+      .mockImplementationOnce(async (_persona, _instruction, options) => {
+        options.onDispatch?.('edit');
+        return {
+          persona: 'coder',
+          status: 'rate_limited',
+          content: 'rate limited',
+          timestamp: new Date(),
+        };
       })
-      .mockResolvedValueOnce({
-        persona: 'coder',
-        status: 'done',
-        content: 'fixed',
-        structuredOutput: {
-          findingOutcomes: [{
-            findingId: 'F-0002',
-            outcome: 'addressed',
-            evidence: ['src/second.ts:20'],
-          }],
-          changedPaths: ['src/second.ts'],
-          checks: [{ command: 'npm test', status: 'passed' }],
-          summary: 'fixed with fallback provider',
-        },
-        timestamp: new Date(),
+      .mockImplementationOnce(async (_persona, _instruction, options) => {
+        options.onDispatch?.('edit');
+        return {
+          persona: 'coder',
+          status: 'done',
+          content: 'fixed',
+          structuredOutput: {
+            findingOutcomes: [{
+              findingId: 'F-0002',
+              outcome: 'addressed',
+              evidence: ['src/second.ts:20'],
+            }],
+            changedPaths: ['src/second.ts'],
+            checks: [{ command: 'npm test', status: 'passed' }],
+            summary: 'fixed with fallback provider',
+          },
+          timestamp: new Date(),
+        };
       });
     const rawResponse = (structuredOutput: Record<string, unknown>): AgentResponse => ({
       persona: 'leader',
@@ -3415,7 +3487,13 @@ describe('TeamLeaderRunner finding_contract_fix', () => {
       getWorkflowName: () => 'workflow',
       getInteractive: () => false,
       getRunPaths: () => runPaths,
-      getCurrentWorkflowStack: () => [],
+      getCurrentWorkflowStack: () => [{
+        workflow: 'workflow',
+        workflow_ref: 'project:sha256:workflow',
+        step: 'fix',
+        kind: 'agent',
+        occurrence: 1,
+      }],
       findingContract,
       findingLedgerStore: ledgerStore,
       operationJournal: {

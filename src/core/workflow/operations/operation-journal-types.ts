@@ -115,6 +115,33 @@ export interface CreateOperationChildInput {
   readonly payload: OperationJournalJsonValue;
 }
 
+export interface MaterializeOperationSuccessorChildInput {
+  readonly id: string;
+  readonly expectedRevision: number;
+  readonly expectedStage: OperationJournalStage;
+  readonly nextStage: OperationJournalStage;
+  readonly payload: OperationJournalJsonValue;
+  readonly resetReason?: OperationSuccessorResetReason;
+}
+
+export const OPERATION_SUCCESSOR_RESET_REASONS = Object.freeze([
+  'orphan_worker_after_dispatch',
+  'explicit_part_failure',
+] as const);
+
+export type OperationSuccessorResetReason =
+  (typeof OPERATION_SUCCESSOR_RESET_REASONS)[number];
+
+export interface CreateOperationParentSuccessorInput {
+  readonly predecessorParentId: string;
+  readonly expectedPredecessorOwner: OperationOwner;
+  readonly expectedPredecessorRevision: number;
+  readonly successorParentId: string;
+  readonly successorClaimToken: string;
+  readonly successorPayload: OperationJournalJsonValue;
+  readonly children: readonly MaterializeOperationSuccessorChildInput[];
+}
+
 export interface CompareAndSetOperationChildInput {
   readonly parentId: string;
   readonly owner: OperationOwner;
@@ -146,6 +173,7 @@ export interface OperationJournalStore {
   listParents(): readonly OperationJournalParent[];
   claimParent(input: ClaimOperationParentInput): OperationJournalParent;
   compareAndSetParent(input: CompareAndSetOperationParentInput): OperationJournalParent;
+  createParentSuccessor(input: CreateOperationParentSuccessorInput): OperationJournalParent;
   createChild(input: CreateOperationChildInput): OperationJournalChild;
   getChild(parentId: string, childId: string): OperationJournalChild;
   listChildren(parentId: string): readonly OperationJournalChild[];

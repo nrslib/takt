@@ -1,13 +1,13 @@
 import type { AgentWorkflowStep } from '../../models/types.js';
+import { computeFindingManagerRoundIdentity } from '../../models/finding-contract-identity.js';
 import type {
   FindingLedger,
-  FindingManagerDecisions,
+  FindingManagerTaskAudit,
   FindingObservation,
 } from './types.js';
 import { classifyRawFindingsMechanically } from './mechanical-classification.js';
 import type { RawAdmissionEvaluation } from './manager-admission.js';
 import {
-  computeDismissCandidates,
   computeInvalidLocationCandidates,
 } from './manager-utils.js';
 import { hasDisputeClaimsHeading } from './manager-output-validation.js';
@@ -15,14 +15,16 @@ import type {
   FindingManagerValidationAttemptReport,
 } from './store.js';
 import type { ManagerDecisionStageResult, RunFindingManagerForStepInput } from './manager-contracts.js';
-import { buildManagerInstruction, parseManagerDecisions, runManagerAttempt } from './manager-agent.js';
-import { runAmbiguousLadder } from './manager-interpretation.js';
-import { createLogger } from '../../../shared/utils/index.js';
+import { runInterpretationCases } from './interpretation-case-runner.js';
 import { assembleCleanManagerDecision } from './manager-clean-decision.js';
-import { runRawAdjudicationRecovery } from './raw-adjudication-recovery.js';
-import { releaseRawAdjudicationReservations } from './raw-adjudication-reservation.js';
-
-const log = createLogger('finding-manager-decision');
+import { runMainManagerTasks } from './manager-task-runner.js';
+import {
+  hasLifecycleProductTransitionCapability,
+  hasLifecycleTransitionIntent,
+} from './raw-relation-capabilities.js';
+import { computeWorkflowTaskDigest } from './task-scope-adjudication.js';
+import { runTerminalAdjudication } from './terminal-adjudication-runner.js';
+import type { ReviewScopeProofSnapshot } from './snapshot.js';
 
 export {
   FINDING_MANAGER_SCHEMA_REF,
@@ -37,7 +39,9 @@ export async function runManagerDecisionStage(params: {
   managerStep: AgentWorkflowStep;
   observation: FindingObservation;
   reviewScopeSnapshotId: string;
+  reviewScopeSnapshot: ReviewScopeProofSnapshot;
   stopBudgetRoundMarker: string;
+  preAdmissionTaskAudits: FindingManagerTaskAudit[];
 }): Promise<ManagerDecisionStageResult> {
   const {
     input,
@@ -46,31 +50,51 @@ export async function runManagerDecisionStage(params: {
     managerStep,
     observation,
     reviewScopeSnapshotId,
-    stopBudgetRoundMarker,
+    preAdmissionTaskAudits,
   } = params;
   const {
     cleanWire,
     taintedAdmitted,
     provisionalOnlyLadderRawIds,
   } = admission;
-  const rawRecovery = await runRawAdjudicationRecovery({
-    runInput: input,
-    previousLedger,
-    managerStep,
-    observation,
-    reviewScopeSnapshotId,
-  });
-  try {
-    const invalidLocationCandidates = computeInvalidLocationCandidates(input.cwd, previousLedger.findings);
+  const workflowTaskDigest = computeWorkflowTaskDigest(input.workflowTask);
+  const findingsById = new Map(previousLedger.findings.map((finding) => [finding.id, finding]));
+  const cleanAuditOnlyLifecycleRawIds = new Set(
+      admission.cleanAdmitted
+        .filter((item) => (
+          item.canonical.relation !== null
+          && item.canonical.relation !== 'new'
+          && !hasLifecycleProductTransitionCapability({
+            relation: item.canonical.relation,
+            target: item.canonical.targetFindingId === undefined
+              ? undefined
+              : findingsById.get(item.canonical.targetFindingId),
+            workflowTaskDigest,
+          })
+        ))
+        .map((item) => item.wire.rawFindingId),
+    );
+  const decisionAdmission: RawAdmissionEvaluation = cleanAuditOnlyLifecycleRawIds.size === 0
+      ? admission
+      : {
+          ...admission,
+          cleanAdmitted: admission.cleanAdmitted.filter(
+            (item) => !cleanAuditOnlyLifecycleRawIds.has(item.wire.rawFindingId),
+          ),
+          cleanWire: cleanWire.filter(
+            (wire) => !cleanAuditOnlyLifecycleRawIds.has(wire.rawFindingId),
+          ),
+        };
+  const invalidLocationCandidates = computeInvalidLocationCandidates(input.cwd, previousLedger);
     const invalidLocationCandidateFindingIds = new Set(invalidLocationCandidates.keys());
-    const dismissCandidates = computeDismissCandidates(previousLedger);
+    const dismissCandidates = new Map<string, string>();
     const dismissCandidateFindingIds = new Set(dismissCandidates.keys());
-    const mechanical = classifyRawFindingsMechanically({ previousLedger, rawFindings: cleanWire });
+    const mechanical = classifyRawFindingsMechanically({
+      previousLedger,
+      rawFindings: decisionAdmission.cleanWire,
+    });
     const hasDisputeClaims = hasDisputeClaimsHeading(input.priorStepResponseText);
     const hasActiveConflict = previousLedger.conflicts.some((conflict) => conflict.status === 'active');
-    // dismiss 候補（滞留する provisional）が1件でもあれば、残余 raw がゼロでも
-    // manager を起動する — 起動しないと候補が裁定されないまま完了ゲートを
-    // 塞ぎ続ける（1ラウンド税の成立条件）。
     const needsAgent = mechanical.residualRawFindings.length > 0
       || hasDisputeClaims
       || hasActiveConflict
@@ -78,46 +102,43 @@ export async function runManagerDecisionStage(params: {
       || dismissCandidateFindingIds.size > 0;
 
     let initialInvalidAttempts: FindingManagerValidationAttemptReport[] = [];
-    let decisions: FindingManagerDecisions | undefined;
+    let taskExecution: Awaited<ReturnType<typeof runMainManagerTasks>> | undefined;
     if (needsAgent) {
-      const instruction = buildManagerInstruction({
+      taskExecution = await runMainManagerTasks({
         contract: input.contract,
         previousLedger,
+        reviewScopeSnapshotId,
         residualRawFindings: mechanical.residualRawFindings,
-        mechanicallyClassifiedCount: cleanWire.length - mechanical.residualRawFindings.length,
+        mechanicallyClassifiedCount: decisionAdmission.cleanWire.length
+          - mechanical.residualRawFindings.length,
         priorStepResponseText: input.priorStepResponseText,
         invalidLocationCandidates,
         dismissCandidates,
+        evidenceRecordsByRawFindingId: admission.verifiedEvidenceRecordsByRawFindingId,
+        managerStep,
+        runInput: input,
+        managerAuthority: input.managerAuthority,
+        workflowTask: input.workflowTask,
+        subResults: input.subResults,
       });
-      try {
-        const response = await runManagerAttempt({
-          managerStep,
-          instruction,
-          optionsBuilder: input.optionsBuilder,
-          stepExecutor: input.stepExecutor,
-        });
-        decisions = parseManagerDecisions(response);
-      } catch (error) {
-        // manager の壊れた応答で run を殺さない。残余 raw は
-        // 全て provisional へ着地し、機械分類の確定分だけを適用する。
-        const message = error instanceof Error ? error.message : String(error);
-        log.warn('Finding manager decisions call failed; landing residual raws as provisional', { error: message });
-        decisions = { rawDecisions: [], disputeDecisions: [], conflictDecisions: [], invalidateDecisions: [], duplicateDecisions: [], dismissDecisions: [] };
-        initialInvalidAttempts = [
-          { attempt: 1, managerOutput: { error: message }, validationErrors: [message] },
-        ];
-      }
+      initialInvalidAttempts = taskExecution.invalidAttemptMessages.map((message, index) => ({
+        attempt: index + 1,
+        managerOutput: { error: message },
+        validationErrors: [message],
+      }));
     }
 
     const cleanDecision = assembleCleanManagerDecision({
       previousLedger,
-      admission,
+      admission: decisionAdmission,
       mechanical,
-      decisions,
+      decisions: taskExecution?.decisions,
       initialInvalidAttempts,
       invalidLocationCandidateFindingIds,
       dismissCandidateFindingIds,
+      managerAuthority: input.managerAuthority,
       priorStepResponseText: input.priorStepResponseText,
+      rawFailureById: taskExecution?.rawFailures,
     });
     const {
       managerOutput,
@@ -125,27 +146,54 @@ export async function runManagerDecisionStage(params: {
       cleanProvisionalSpecs,
       cleanWireById,
       cleanCanonicalById,
+      provisionalTargetConflicts,
     } = cleanDecision;
     let unsupportedRawFindingReports = cleanDecision.unsupportedRawFindingReports;
 
-    // 曖昧起源の confirmation には resolve 権限がなく、blocker にも変換しない。
-    const taintedConfirmations = taintedAdmitted.filter(
-      (item) => item.canonical.relation === 'resolution_confirmation',
+    for (const item of admission.cleanAdmitted) {
+      if (!cleanAuditOnlyLifecycleRawIds.has(item.wire.rawFindingId)) {
+        continue;
+      }
+      unsupportedRawFindingReports = [...unsupportedRawFindingReports, {
+        rawFindingId: item.wire.rawFindingId,
+        targetFindingId: item.wire.targetFindingId
+          ?? item.canonical.targetFindingId
+          ?? '(none)',
+        evidence: 'Lifecycle claim has no transition capability for the target state; recorded for audit only — no finding was created or changed',
+      }];
+    }
+
+    // 曖昧起源の lifecycle claim には product finding の作成・変更権限がない。
+    const taintedLifecycle = taintedAdmitted.filter(
+      (item) => hasLifecycleTransitionIntent({
+        relation: item.canonical.relation,
+        targetFindingId: item.canonical.targetFindingId,
+      }),
     );
-    for (const item of taintedConfirmations) {
+    for (const item of taintedLifecycle) {
       unsupportedRawFindingReports = [...unsupportedRawFindingReports, {
         rawFindingId: item.wire.rawFindingId,
         targetFindingId: item.wire.targetFindingId ?? item.canonical.targetFindingId ?? '(none)',
-        evidence: 'Ambiguity-tainted resolution confirmation cannot serve as resolution evidence (no resolve capability); recorded for audit only — no finding was created or changed',
+        evidence: 'Ambiguity-tainted lifecycle claim has no product transition capability; recorded for audit only — no finding was created or changed',
       }];
     }
     const ladderTainted = taintedAdmitted.filter(
-      (item) => item.canonical.relation !== 'resolution_confirmation',
+      (item) => !taintedLifecycle.includes(item),
     );
-    const ladder = await runAmbiguousLadder({
-      tainted: ladderTainted,
+    await runTerminalAdjudication({
+      runInput: input,
+      observation,
+      roundIdentity: computeFindingManagerRoundIdentity({
+        scopeIdentity: workflowTaskDigest,
+        workflowName: input.workflowName,
+        roundMarker: params.stopBudgetRoundMarker,
+      }),
+      scopeIdentity: workflowTaskDigest,
+      reviewScopeSnapshot: params.reviewScopeSnapshot,
+    });
+    const interpretation = await runInterpretationCases({
+      items: ladderTainted,
       provisionalOnlyRawFindingIds: provisionalOnlyLadderRawIds,
-      previousLedger,
       ledgerStore: input.ledgerStore,
       contract: input.contract,
       workflowProvider: input.workflowProvider,
@@ -153,24 +201,24 @@ export async function runManagerDecisionStage(params: {
       optionsBuilder: input.optionsBuilder,
       stepExecutor: input.stepExecutor,
       observation,
-      workflowName: input.workflowName,
-      callNamespace: input.callNamespace,
-      parentStepName: input.parentStep.name,
-      stopBudgetRoundMarker,
+      roundMarker: params.stopBudgetRoundMarker,
+      scopeIdentity: workflowTaskDigest,
+      verifiedEvidenceRecordsByRawFindingId: admission.verifiedEvidenceRecordsByRawFindingId,
     });
 
-    return {
-      managerOutput,
-      invalidAttempts,
-      cleanProvisionalSpecs,
-      unsupportedRawFindingReports,
-      cleanWireById,
-      cleanCanonicalById,
-      ladder,
-      rawRecovery,
-    };
-  } catch (error) {
-    releaseRawAdjudicationReservations(input.ledgerStore, rawRecovery.reservationTokens);
-    throw error;
-  }
+  return {
+    managerOutput,
+    conflictTargetHeads: taskExecution?.conflictTargetHeads ?? new Map(),
+    invalidAttempts,
+    cleanProvisionalSpecs,
+    unsupportedRawFindingReports,
+    cleanWireById,
+    cleanCanonicalById,
+    provisionalTargetConflicts,
+    interpretation,
+    taskAudits: [
+      ...preAdmissionTaskAudits,
+      ...(taskExecution?.taskAudits ?? []),
+    ],
+  };
 }

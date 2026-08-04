@@ -109,7 +109,6 @@ describe('formatStepPreviews', () => {
   it('provider/model を workflow summary に表示する', () => {
     const result = formatStepPreviews([
       {
-        kind: 'agent',
         name: 'review',
         personaDisplayName: 'Reviewer',
         personaContent: '',
@@ -128,7 +127,6 @@ describe('formatStepPreviews', () => {
   it('selectorの非機密metadata・readonly・tool-free契約をworkflow summaryに表示する', () => {
     const result = formatStepPreviews([
       {
-        kind: 'agent',
         name: 'dynamic-selector',
         personaDisplayName: 'TAKT internal selector',
         personaContent: '',
@@ -149,20 +147,6 @@ describe('formatStepPreviews', () => {
     expect(result).toContain('**Permission:** readonly');
     expect(result).toContain('**Tools:** None');
     expect(result).toContain('**Edit:** No');
-  });
-
-  it('workflow_callを子workflow付きのcontrol nodeとして表示する', () => {
-    const result = formatStepPreviews([{
-      kind: 'workflow_call',
-      name: 'delegate',
-      call: 'shared/review',
-    }], 'en');
-
-    expect(result).toContain('**Kind:** workflow_call');
-    expect(result).toContain('**Child workflow:** shared/review');
-    expect(result).not.toContain('**Provider:**');
-    expect(result).not.toContain('**Persona:**');
-    expect(result).not.toContain('**Tools:**');
   });
 });
 

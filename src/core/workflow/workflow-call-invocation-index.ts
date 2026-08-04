@@ -4,90 +4,164 @@ import type {
   WorkflowResumePoint,
   WorkflowResumePointEntry,
 } from '../models/types.js';
-import { getWorkflowReference } from './workflow-reference.js';
 import {
-  buildWorkflowExecutionOwnerIdentity,
-  serializeWorkflowExecutionOwnerIdentity,
-  validateWorkflowCallInvocationRecord,
-  validateWorkflowResumePointInvocationSemantics,
-} from '../models/workflow-resume-contract.js';
-import { buildWorkflowCallNamespaceSegment } from './workflow-call-namespace.js';
+  getResumePointWorkflowReference,
+  getWorkflowReference,
+  normalizeWorkflowResumePointEntry,
+} from './workflow-reference.js';
+import {
+  parseWorkflowCallNamespaceSegment,
+  workflowCallNamespaceSegmentMatchesInvocation,
+} from './workflow-call-namespace.js';
+import {
+  parseWorkflowExecutionIdentity,
+  serializeWorkflowExecutionIdentity,
+  type WorkflowExecutionIdentity,
+} from './workflow-execution-identity-codec.js';
 
 export function buildWorkflowCallInvocationIdentity(
   workflowReference: string,
   stepName: string,
-  ownerPath: readonly WorkflowResumePointEntry[],
+  workflowCallPath: readonly WorkflowResumePointEntry[],
 ): string {
   if (workflowReference.length === 0 || stepName.length === 0) {
     throw new Error('Workflow-call invocation identity requires non-empty workflow and step values');
   }
-  return serializeWorkflowExecutionOwnerIdentity(
-    buildWorkflowExecutionOwnerIdentity(workflowReference, stepName, ownerPath),
-  );
+  return serializeWorkflowExecutionIdentity({
+    workflow: workflowReference,
+    step: stepName,
+    calls: workflowCallPath.map((rawEntry) => {
+      const entry = normalizeWorkflowResumePointEntry(rawEntry);
+      const instance = entry.kind === 'workflow_call'
+        ? entry.call_instance
+        : entry.occurrence;
+      if (instance === undefined || instance < 1) {
+        throw new Error(`Workflow-call invocation requires a positive instance for "${entry.step}"`);
+      }
+      const entryWorkflow = getResumePointWorkflowReference(entry);
+      if (entryWorkflow.length === 0 || entry.step.length === 0) {
+        throw new Error('Workflow-call invocation identity requires non-empty workflow-call path values');
+      }
+      return {
+        workflow: entryWorkflow,
+        step: entry.step,
+        kind: entry.kind,
+        instance,
+      };
+    }),
+  });
+}
+
+function parseIdentity(identity: string): WorkflowExecutionIdentity {
+  const parsedIdentity = parseWorkflowExecutionIdentity(identity);
+  if (parsedIdentity === undefined) {
+    throw new Error(`Invalid workflow-call invocation identity "${identity}"`);
+  }
+  return parsedIdentity;
 }
 
 export class WorkflowCallInvocationIndex {
   private readonly records: Map<string, WorkflowCallInvocationRecord>;
-  private readonly storageKeyOwners = new Map<string, string>();
 
   constructor(initial: ReadonlyMap<string, WorkflowCallInvocationRecord>) {
-    this.records = new Map();
-    for (const [identity, record] of initial) {
+    this.records = new Map([...initial].map(([identity, record]) => {
+      const parsedIdentity = parseIdentity(identity);
       if (!Number.isInteger(record.call_instance) || record.call_instance < 1) {
         throw new Error(`Workflow-call invocation "${identity}" requires a positive instance`);
       }
-      validateWorkflowCallInvocationRecord(identity, record);
-      this.assign(identity, record);
+      const namespace = parseWorkflowCallNamespaceSegment(record.report_namespace_segment);
+      if (namespace === undefined || namespace.iteration === '*') {
+        throw new Error(`Workflow-call invocation "${identity}" has an invalid report namespace segment`);
+      }
+      if (namespace.stepName !== parsedIdentity.step) {
+        throw new Error(`Workflow-call invocation "${identity}" report namespace does not match its step`);
+      }
+      return [identity, { ...record }];
+    }));
+    for (const [identity, record] of this.records) {
+      this.assertNamespaceAvailable(identity, record.report_namespace_segment);
     }
   }
 
-  private storageKey(identity: string, record: WorkflowCallInvocationRecord): string {
-    return buildWorkflowCallNamespaceSegment(
-      identity,
-      record.child_workflow_ref,
-      record.call_instance,
+  private assertNamespaceAvailable(identity: string, namespace: string): void {
+    const collision = [...this.records.entries()].find(
+      ([existingIdentity, record]) => existingIdentity !== identity
+        && record.report_namespace_segment === namespace,
     );
-  }
-
-  private assign(identity: string, record: WorkflowCallInvocationRecord): void {
-    const storageKey = this.storageKey(identity, record);
-    const existingOwner = this.storageKeyOwners.get(storageKey);
-    if (existingOwner !== undefined && existingOwner !== identity) {
-      throw new Error(`Workflow-call storage key is already assigned to invocation "${existingOwner}"`);
+    if (collision !== undefined) {
+      throw new Error('Workflow-call report namespace is already assigned to another invocation');
     }
-    const previous = this.records.get(identity);
-    if (previous !== undefined) {
-      this.storageKeyOwners.delete(this.storageKey(identity, previous));
-    }
-    this.records.set(identity, { ...record });
-    this.storageKeyOwners.set(storageKey, identity);
   }
 
   record(
     workflow: WorkflowConfig,
     stepName: string,
-    ownerPath: readonly WorkflowResumePointEntry[],
+    workflowCallPath: readonly WorkflowResumePointEntry[],
     record: WorkflowCallInvocationRecord,
   ): void {
     if (!Number.isInteger(record.call_instance) || record.call_instance < 1) {
       throw new Error(`Workflow-call step "${stepName}" requires a positive invocation instance`);
     }
+    const namespace = parseWorkflowCallNamespaceSegment(record.report_namespace_segment);
+    if (namespace === undefined || namespace.iteration === '*') {
+      throw new Error(`Workflow-call step "${stepName}" requires a valid report namespace segment`);
+    }
+    if (!workflowCallNamespaceSegmentMatchesInvocation(
+      record.report_namespace_segment,
+      stepName,
+      namespace.workflowName,
+    )) {
+      throw new Error(`Workflow-call step "${stepName}" report namespace does not match its invocation`);
+    }
     const identity = buildWorkflowCallInvocationIdentity(
       getWorkflowReference(workflow),
       stepName,
-      ownerPath,
+      workflowCallPath,
     );
-    validateWorkflowCallInvocationRecord(identity, record);
-    this.assign(identity, record);
+    this.assertNamespaceAvailable(identity, record.report_namespace_segment);
+    this.records.set(identity, { ...record });
+  }
+
+  replace(
+    workflow: WorkflowConfig,
+    stepName: string,
+    workflowCallPath: readonly WorkflowResumePointEntry[],
+    record: WorkflowCallInvocationRecord,
+  ): void {
+    const identity = buildWorkflowCallInvocationIdentity(
+      getWorkflowReference(workflow),
+      stepName,
+      workflowCallPath,
+    );
+    if (!this.records.has(identity)) {
+      throw new Error(`Workflow-call step "${stepName}" has no invocation record to replace`);
+    }
+    if (!Number.isInteger(record.call_instance) || record.call_instance < 1) {
+      throw new Error(`Workflow-call step "${stepName}" requires a positive invocation instance`);
+    }
+    const namespace = parseWorkflowCallNamespaceSegment(record.report_namespace_segment);
+    if (
+      namespace === undefined
+      || namespace.iteration === '*'
+      || !workflowCallNamespaceSegmentMatchesInvocation(
+        record.report_namespace_segment,
+        stepName,
+        namespace.workflowName,
+      )
+    ) {
+      throw new Error(`Workflow-call step "${stepName}" requires a valid report namespace segment`);
+    }
+    this.assertNamespaceAvailable(identity, record.report_namespace_segment);
+    this.records.set(identity, { ...record });
   }
 
   get(
     workflow: WorkflowConfig,
     stepName: string,
-    ownerPath: readonly WorkflowResumePointEntry[],
+    workflowCallPath: readonly WorkflowResumePointEntry[],
   ): WorkflowCallInvocationRecord | undefined {
     const record = this.records.get(
-      buildWorkflowCallInvocationIdentity(getWorkflowReference(workflow), stepName, ownerPath),
+      buildWorkflowCallInvocationIdentity(getWorkflowReference(workflow), stepName, workflowCallPath),
     );
     return record === undefined ? undefined : { ...record };
   }
@@ -104,7 +178,23 @@ export class WorkflowCallInvocationIndex {
     if (resumePoint === undefined) {
       return;
     }
-    validateWorkflowResumePointInvocationSemantics(resumePoint);
+    resumePoint.stack.forEach((rawEntry, index) => {
+      const entry = normalizeWorkflowResumePointEntry(rawEntry);
+      if (entry.kind !== 'workflow_call') {
+        return;
+      }
+      if (entry.call_instance === undefined) {
+        throw new Error(`Workflow-call resume entry "${entry.step}" requires a positive call_instance`);
+      }
+      const identity = buildWorkflowCallInvocationIdentity(
+        getResumePointWorkflowReference(entry),
+        entry.step,
+        resumePoint.stack.slice(0, index),
+      );
+      if (this.records.get(identity)?.call_instance !== entry.call_instance) {
+        throw new Error(`Workflow-call invocation identity does not match resume entry "${entry.step}"`);
+      }
+    });
   }
 }
 

@@ -2,27 +2,53 @@
  * Integration tests: debug prompt log wiring in executeWorkflow().
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest';
 import type { WorkflowConfig } from '../core/models/index.js';
-import type { WorkflowExecutionScope } from '../core/workflow/workflow-execution-scope.js';
 import { buildPhaseExecutionId } from '../shared/utils/phaseExecutionId.js';
 
 const {
   disabledObservability,
   mockIsDebugEnabled,
   mockWritePromptLog,
+  mockInitNdjsonLog,
+  mockAppendNdjsonLine,
   MockWorkflowEngine,
 } = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { EventEmitter: EE } = require('node:events') as typeof import('node:events');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const fs = require('node:fs') as typeof import('node:fs');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const path = require('node:path') as typeof import('node:path');
 
   const mockIsDebugEnabled = vi.fn().mockReturnValue(true);
   const mockWritePromptLog = vi.fn();
+  const mockInitNdjsonLog = vi.fn((
+    sessionId: string,
+    task: string,
+    workflowName: string,
+    options: { logsDir: string; startTime: string },
+  ) => {
+    fs.mkdirSync(options.logsDir, { recursive: true });
+    const filePath = path.join(options.logsDir, `${sessionId}.jsonl`);
+    fs.writeFileSync(filePath, `${JSON.stringify({
+      type: 'workflow_start',
+      task,
+      workflowName,
+      startTime: options.startTime,
+    })}\n`);
+    return filePath;
+  });
+  const mockAppendNdjsonLine = vi.fn((filePath: string, record: unknown) => {
+    fs.appendFileSync(filePath, `${JSON.stringify(record)}\n`);
+  });
 
   class MockWorkflowEngine extends EE {
     private config: WorkflowConfig;
     private task: string;
-    private readonly executionScope: WorkflowExecutionScope;
 
     constructor(config: WorkflowConfig, _cwd: string, task: string, _options: unknown) {
       super();
@@ -31,21 +57,9 @@ const {
       }
       this.config = config;
       this.task = task;
-      this.executionScope = Object.freeze({
-        kind: 'workflow_execution_scope',
-        stack: Object.freeze([Object.freeze({
-          workflow: this.config.name,
-          step: this.config.steps[0]!.name,
-          kind: 'agent',
-        })]),
-      });
     }
 
     abort(): void {}
-
-    private emitScoped(eventName: string, ...args: unknown[]): boolean {
-      return super.emit(eventName, ...args, this.executionScope);
-    }
 
     async run(): Promise<{ status: string; iteration: number }> {
       const step = this.config.steps[0]!;
@@ -56,7 +70,7 @@ const {
       const shouldEmitSensitive = this.task === 'sensitive-content-task';
       const shouldRepeatStep = this.task === 'repeat-step-task';
       const shouldReversePhaseCompletion = this.task === 'reverse-phase-complete-task';
-      const providerInfo = { provider: 'mock', model: undefined };
+      const providerInfo = { provider: undefined, model: undefined };
       const executePhaseId = buildPhaseExecutionId({
         step: step.name,
         iteration: 1,
@@ -75,67 +89,63 @@ const {
         phase: 3,
         sequence: 1,
       });
-      this.emitScoped(
-        'step:start',
-        step,
-        1,
-        'step instruction',
-        providerInfo,
-        this.config.name,
-        step.name,
-        1,
-        this.config.maxSteps,
-      );
+      this.emit('step:start', step, 1, 'step instruction', providerInfo, this.config.name, step.name, 1);
       if (shouldReversePhaseCompletion) {
-        this.emitScoped('phase:start', step, 1, 'execute', 'phase prompt first', {
+        this.emit('phase:start', step, 1, 'execute', 'phase prompt first', {
           systemPrompt: '../agents/coder.md',
           userInstruction: 'phase prompt first',
         }, executePhaseId, 1);
-        this.emitScoped('phase:start', step, 1, 'execute', 'phase prompt second', {
+        this.emit('phase:start', step, 1, 'execute', 'phase prompt second', {
           systemPrompt: '../agents/coder.md',
           userInstruction: 'phase prompt second',
         }, executePhaseSecondId, 1);
       } else {
-        this.emitScoped('phase:start', step, 1, 'execute', shouldEmitSensitive ? 'token=plain-secret' : 'phase prompt', {
+        this.emit('phase:start', step, 1, 'execute', shouldEmitSensitive ? 'token=plain-secret' : 'phase prompt', {
           systemPrompt: shouldEmitSensitive ? 'Authorization: Bearer super-secret-token' : '../agents/coder.md',
           userInstruction: shouldEmitSensitive ? 'api_key=plain-secret' : 'phase prompt',
         }, executePhaseId, 1);
       }
-      this.emitScoped('phase:start', step, 3, 'judge', 'phase3 prompt', {
+      this.emit('phase:start', step, 3, 'judge', 'phase3 prompt', {
         systemPrompt: 'conductor',
         userInstruction: 'phase3 prompt',
       }, judgePhaseId, 1);
-      this.emitScoped('phase:judge_stage', step, 3, 'judge', {
+      this.emit('phase:judge_stage', step, 3, 'judge', {
         stage: 1,
         method: 'structured_output',
         status: 'done',
         instruction: 'judge stage prompt',
         response: 'judge stage response',
       }, judgePhaseId, 1);
-      this.emitScoped('phase:complete', step, 3, 'judge', '[IMPLEMENT:1]', 'done', undefined, judgePhaseId, 1);
+      this.emit('phase:complete', step, 3, 'judge', '[IMPLEMENT:1]', 'done', undefined, judgePhaseId, 1);
       if (shouldAbortBeforeComplete) {
         this.emit(
           'workflow:abort',
           { status: 'aborted', iteration: 1 },
           'user_interrupted',
           'interrupt',
+          {
+            kind: 'interrupt',
+            step: step.name,
+            reason: 'user_interrupted',
+            error: 'user_interrupted',
+          },
         );
         return { status: 'aborted', iteration: 1 };
       }
       if (shouldReversePhaseCompletion) {
-        this.emitScoped('phase:complete', step, 1, 'execute', 'phase response second', 'done', undefined, executePhaseSecondId, 1);
-        this.emitScoped('phase:complete', step, 1, 'execute', 'phase response first', 'done', undefined, executePhaseId, 1);
+        this.emit('phase:complete', step, 1, 'execute', 'phase response second', 'done', undefined, executePhaseSecondId, 1);
+        this.emit('phase:complete', step, 1, 'execute', 'phase response first', 'done', undefined, executePhaseId, 1);
       } else {
-        this.emitScoped('phase:complete', step, 1, 'execute', shouldEmitSensitive ? 'password=plain-secret' : 'phase response', 'done', undefined, executePhaseId, 1);
+        this.emit('phase:complete', step, 1, 'execute', shouldEmitSensitive ? 'password=plain-secret' : 'phase response', 'done', undefined, executePhaseId, 1);
       }
       if (shouldDuplicatePhase) {
-        this.emitScoped('phase:start', step, 1, 'execute', 'phase prompt second', {
+        this.emit('phase:start', step, 1, 'execute', 'phase prompt second', {
           systemPrompt: '../agents/coder.md',
           userInstruction: 'phase prompt second',
         }, executePhaseSecondId, 1);
-        this.emitScoped('phase:complete', step, 1, 'execute', 'phase response second', 'done', undefined, executePhaseSecondId, 1);
+        this.emit('phase:complete', step, 1, 'execute', 'phase response second', 'done', undefined, executePhaseSecondId, 1);
       }
-      this.emitScoped(
+      this.emit(
         'step:complete',
         step,
         {
@@ -148,7 +158,7 @@ const {
         step.name,
       );
       if (shouldRepeatStep) {
-        this.emitScoped(
+        this.emit(
           'step:start',
           step,
           2,
@@ -157,9 +167,8 @@ const {
           this.config.name,
           step.name,
           2,
-          this.config.maxSteps,
         );
-        this.emitScoped(
+        this.emit(
           'step:complete',
           step,
           {
@@ -178,6 +187,12 @@ const {
           { status: 'aborted', iteration: 1 },
           'user_interrupted',
           'interrupt',
+          {
+            kind: 'interrupt',
+            step: step.name,
+            reason: 'user_interrupted',
+            error: 'user_interrupted',
+          },
         );
         return { status: 'aborted', iteration: shouldRepeatStep ? 2 : 1 };
       }
@@ -195,6 +210,8 @@ const {
     },
     mockIsDebugEnabled,
     mockWritePromptLog,
+    mockInitNdjsonLog,
+    mockAppendNdjsonLine,
     MockWorkflowEngine,
   };
 });
@@ -204,6 +221,29 @@ vi.mock('../core/workflow/index.js', async () => {
   return {
   WorkflowEngine: MockWorkflowEngine,
     createDenyAskUserQuestionHandler: errorModule.createDenyAskUserQuestionHandler,
+  };
+});
+
+vi.mock('../features/tasks/execute/workflowRunLifecycle.js', async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import('../features/tasks/execute/workflowRunLifecycle.js')
+  >();
+  const { createWorkflowRunLifecycleCompositionTestDouble } = await import(
+    './helpers/run-lifecycle.js'
+  );
+  return {
+    ...actual,
+    createWorkflowRunLifecycle: (
+      input: Parameters<typeof actual.createWorkflowRunLifecycle>[0],
+    ) => createWorkflowRunLifecycleCompositionTestDouble(
+      actual.createWorkflowRunLifecycle,
+      input,
+      {
+        sessionId: 'test-session-id',
+        startedAt: '2026-02-07T00:00:00.000Z',
+        projectTerminalArtifacts: true,
+      },
+    ),
   };
 });
 
@@ -238,6 +278,46 @@ vi.mock('../infra/config/resolveConfigValue.js', async (importOriginal) => ({
     : { value: undefined, source: 'default' }),
 }));
 
+vi.mock('../features/tasks/execute/traceReportWriter.js', async () => {
+  const { renderTraceReportFromLogs } = await import(
+    '../features/tasks/execute/traceReport.js'
+  );
+  const { writeFileAtomic } = await import('../infra/config/index.js');
+  return {
+    writeTerminalTraceReport: (input: {
+      tracePath: string;
+      workflowName: string;
+      task: string;
+      runSlug: string;
+      ndjsonLogPath: string;
+      promptLogPath?: string;
+      mode: 'off' | 'redacted' | 'full';
+      terminal: {
+        status: 'completed' | 'aborted' | 'failed';
+        iterations: number;
+        endTime: string;
+        reason?: string;
+      };
+    }) => {
+      const markdown = renderTraceReportFromLogs(
+        {
+          tracePath: input.tracePath,
+          workflowName: input.workflowName,
+          task: input.task,
+          runSlug: input.runSlug,
+          ...input.terminal,
+        },
+        input.ndjsonLogPath,
+        input.promptLogPath,
+        input.mode,
+      );
+      if (markdown !== undefined) {
+        writeFileAtomic(input.tracePath, markdown);
+      }
+    },
+  };
+});
+
 vi.mock('../shared/context.js', () => ({
   isQuietMode: vi.fn().mockReturnValue(true),
 }));
@@ -256,19 +336,32 @@ vi.mock('../shared/ui/index.js', () => ({
   })),
 }));
 
-vi.mock('../infra/fs/index.js', () => ({
+vi.mock('../infra/fs/index.js', async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import('../infra/fs/index.js')
+  >()),
   generateSessionId: vi.fn().mockReturnValue('test-session-id'),
-  createSessionLog: vi.fn().mockReturnValue({
-    startTime: new Date().toISOString(),
+  createSessionLog: vi.fn().mockImplementation((
+    task,
+    projectDir,
+    workflowName,
+    options,
+  ) => ({
+    task,
+    projectDir,
+    workflowName,
+    startTime: options.startTime,
     iterations: 0,
-  }),
+    status: 'running',
+    history: [],
+  })),
   finalizeSessionLog: vi.fn().mockImplementation((log, status) => ({
     ...log,
     status,
     endTime: new Date().toISOString(),
   })),
-  initNdjsonLog: vi.fn().mockReturnValue('/tmp/test-log.jsonl'),
-  appendNdjsonLine: vi.fn(),
+  initNdjsonLog: mockInitNdjsonLog,
+  appendNdjsonLine: mockAppendNdjsonLine,
 }));
 
 vi.mock('../shared/utils/index.js', () => ({
@@ -307,8 +400,16 @@ import { appendNdjsonLine } from '../infra/fs/index.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 
 describe('executeWorkflow debug prompts logging', () => {
+  let projectDir: string;
+
   beforeEach(() => {
+    projectDir = mkdtempSync(join(tmpdir(), 'takt-debug-prompts-'));
     vi.clearAllMocks();
+    mockIsDebugEnabled.mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    rmSync(projectDir, { recursive: true, force: true });
   });
 
   function makeConfig(): WorkflowConfig {
@@ -332,8 +433,8 @@ describe('executeWorkflow debug prompts logging', () => {
   it('should write prompt log record when debug is enabled', async () => {
     mockIsDebugEnabled.mockReturnValue(true);
 
-    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'task', projectDir, {
+      projectCwd: projectDir,
     });
 
     expect(mockWritePromptLog).toHaveBeenCalledTimes(2);
@@ -357,8 +458,8 @@ describe('executeWorkflow debug prompts logging', () => {
   it('should separate system prompt and user instruction in debug prompt records', async () => {
     mockIsDebugEnabled.mockReturnValue(true);
 
-    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'task', projectDir, {
+      projectCwd: projectDir,
     });
 
     expect(mockWritePromptLog).toHaveBeenCalledTimes(2);
@@ -371,8 +472,8 @@ describe('executeWorkflow debug prompts logging', () => {
   });
 
   it('should include phase and judge stage details in trace markdown', async () => {
-    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'task', projectDir, {
+      projectCwd: projectDir,
       reportDirName: 'test-report-dir',
     });
 
@@ -388,8 +489,8 @@ describe('executeWorkflow debug prompts logging', () => {
   });
 
   it('should render trace markdown even when workflow aborts before step completion', async () => {
-    await executeWorkflow(makeConfig(), 'abort-before-complete-task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'abort-before-complete-task', projectDir, {
+      projectCwd: projectDir,
       reportDirName: 'test-report-dir',
     });
 
@@ -405,8 +506,8 @@ describe('executeWorkflow debug prompts logging', () => {
   it('should not write prompt log record when debug is disabled', async () => {
     mockIsDebugEnabled.mockReturnValue(false);
 
-    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'task', projectDir, {
+      projectCwd: projectDir,
     });
 
     expect(mockWritePromptLog).not.toHaveBeenCalled();
@@ -415,8 +516,8 @@ describe('executeWorkflow debug prompts logging', () => {
   it('should handle repeated phase starts for same step and phase without missing debug prompt', async () => {
     mockIsDebugEnabled.mockReturnValue(true);
 
-    await executeWorkflow(makeConfig(), 'duplicate-phase-task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'duplicate-phase-task', projectDir, {
+      projectCwd: projectDir,
     });
 
     expect(mockWritePromptLog).toHaveBeenCalledTimes(3);
@@ -434,8 +535,8 @@ describe('executeWorkflow debug prompts logging', () => {
     const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
 
     try {
-      await executeWorkflow(makeConfig(), 'repeat-step-task', '/tmp/project', {
-        projectCwd: '/tmp/project',
+      await executeWorkflow(makeConfig(), 'repeat-step-task', projectDir, {
+        projectCwd: projectDir,
         taskPrefix: 'override-persona-provider',
         taskColorIndex: 0,
       });
@@ -451,8 +552,8 @@ describe('executeWorkflow debug prompts logging', () => {
 
   it('should fail fast when taskPrefix is provided without taskColorIndex', async () => {
     await expect(
-      executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-        projectCwd: '/tmp/project',
+      executeWorkflow(makeConfig(), 'task', projectDir, {
+        projectCwd: projectDir,
         taskPrefix: 'override-persona-provider',
       })
     ).rejects.toThrow('taskPrefix and taskColorIndex must be provided together');
@@ -460,8 +561,8 @@ describe('executeWorkflow debug prompts logging', () => {
 
   it('should fail fast for invalid reportDirName before run directory writes', async () => {
     await expect(
-      executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-        projectCwd: '/tmp/project',
+      executeWorkflow(makeConfig(), 'task', projectDir, {
+        projectCwd: projectDir,
         reportDirName: '..',
       })
     ).rejects.toThrow('Invalid reportDirName: ..');
@@ -471,8 +572,8 @@ describe('executeWorkflow debug prompts logging', () => {
   });
 
   it('should update meta status from running to completed', async () => {
-    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'task', projectDir, {
+      projectCwd: projectDir,
       reportDirName: 'test-report-dir',
     });
 
@@ -512,8 +613,8 @@ describe('executeWorkflow debug prompts logging', () => {
   });
 
   it('should update meta status from running to aborted', async () => {
-    await executeWorkflow(makeConfig(), 'abort-task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'abort-task', projectDir, {
+      projectCwd: projectDir,
       reportDirName: 'test-report-dir',
     });
 
@@ -554,8 +655,8 @@ describe('executeWorkflow debug prompts logging', () => {
 
   it('should finalize meta as aborted when WorkflowEngine constructor throws', async () => {
     await expect(
-      executeWorkflow(makeConfig(), 'constructor-throw-task', '/tmp/project', {
-        projectCwd: '/tmp/project',
+      executeWorkflow(makeConfig(), 'constructor-throw-task', projectDir, {
+        projectCwd: projectDir,
         reportDirName: 'test-report-dir',
       })
     ).rejects.toThrow('mock constructor failure');
@@ -569,13 +670,13 @@ describe('executeWorkflow debug prompts logging', () => {
     const secondMeta = JSON.parse(String(metaCalls[1]![1])) as { status: string; endTime?: string };
     expect(firstMeta.status).toBe('running');
     expect(firstMeta.endTime).toBeUndefined();
-    expect(secondMeta.status).toBe('aborted');
+    expect(secondMeta.status).toBe('failed');
     expect(secondMeta.endTime).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
   it('should write trace.md on workflow completion', async () => {
-    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'task', projectDir, {
+      projectCwd: projectDir,
       reportDirName: 'test-report-dir',
     });
 
@@ -586,8 +687,8 @@ describe('executeWorkflow debug prompts logging', () => {
   });
 
   it('should write trace.md on workflow abort', async () => {
-    await executeWorkflow(makeConfig(), 'abort-task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'abort-task', projectDir, {
+      projectCwd: projectDir,
       reportDirName: 'test-report-dir',
     });
 
@@ -598,16 +699,16 @@ describe('executeWorkflow debug prompts logging', () => {
   });
 
   it('should sanitize sensitive fields before writing session NDJSON when trace mode is default', async () => {
-    await executeWorkflow(makeConfig(), 'token=plain-secret', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'token=plain-secret', projectDir, {
+      projectCwd: projectDir,
       reportDirName: 'test-report-dir',
       interactiveMetadata: {
         confirmed: true,
         task: 'api_key=plain-secret',
       },
     });
-    await executeWorkflow(makeConfig(), 'sensitive-content-task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'sensitive-content-task', projectDir, {
+      projectCwd: projectDir,
       reportDirName: 'test-report-dir-2',
     });
 
@@ -619,8 +720,8 @@ describe('executeWorkflow debug prompts logging', () => {
   });
 
   it('should keep phaseExecutionId bindings consistent in trace when completions arrive in reverse order', async () => {
-    await executeWorkflow(makeConfig(), 'reverse-phase-complete-task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'reverse-phase-complete-task', projectDir, {
+      projectCwd: projectDir,
       reportDirName: 'test-report-dir',
     });
 

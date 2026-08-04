@@ -9,19 +9,12 @@
 ## 次アクションまたは未完了理由
 {APPROVE では次の進行、REJECT では修正、NEED_REPLAN では未確認事項と再計画理由}
 
-## 観測した指摘
-| # | family_tag | 重大度 | 場所 | 問題 | 必要アクション |
-|---|------------|--------|------|------|----------------|
-| 1 | validation | high / medium / low | `file:line` | {現在の観測欠陥} | {修正} |
-
-## 解消確認
-| 台帳参照 | 元の受入条件 | 確認証跡 |
-|----------|--------------|----------|
-| {既存指摘} | {期待結果} | `file:line` |
+## Finding Contract Claims
+{観測した欠陥または明示的な台帳 lifecycle claim を、ここに1件ずつ分けて記載する。注入された指示が structured output を要求するときは、その schema を機械形式として使い、要求がなければ Markdown report だけを返す。指摘表は使わない。claim がなければ `None` と記載する。}
 
 ## 出力整合性
-- Markdown の観測した指摘と structured issue、解消確認と structured confirmation はそれぞれ同じ集合にする。
+- 注入された structured-output schema がある場合は、report に記載したすべての問題を structured output にも含める。schema がなければ通常の report 本文だけを使う。最終 finding ID は採番しない。
 - APPROVE は issue 0 件、REJECT は issue 1 件以上。NEED_REPLAN は issue 0 件のまま未確認事項を次アクションまたは未完了理由に記録する。承認や要約を issue にしない。
 ```
 
-**認知負荷軽減ルール:** 実際の判定、要点、次アクションまたは未完了理由を必ず記載し、関連行のみを20行以内で記載する。
+**認知負荷軽減ルール:** 実際の判定、要点、次アクションまたは未完了理由を必ず記載し、必要な機械 claim は省略・打ち切りせずすべて記載する。

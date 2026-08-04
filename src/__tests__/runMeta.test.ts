@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { RunPaths } from '../core/workflow/run/run-paths.js';
+import { buildRunPaths, type RunPaths } from '../core/workflow/run/run-paths.js';
 
 vi.mock('../infra/config/index.js', () => ({
   ensureDir: vi.fn(),
@@ -10,33 +10,7 @@ import { ensureDir, writeFileAtomic } from '../infra/config/index.js';
 import { RunMetaManager } from '../features/tasks/execute/runMeta.js';
 
 function createRunPaths(): RunPaths {
-  return {
-    slug: '20260409-force-fail-test',
-    runRootAbs: '/tmp/project/.takt/runs/20260409-force-fail-test',
-    runRootRel: '.takt/runs/20260409-force-fail-test',
-    reportsAbs: '/tmp/project/.takt/runs/20260409-force-fail-test/reports',
-    reportsRel: '.takt/runs/20260409-force-fail-test/reports',
-    contextAbs: '/tmp/project/.takt/runs/20260409-force-fail-test/context',
-    contextRel: '.takt/runs/20260409-force-fail-test/context',
-    contextTaskAbs: '/tmp/project/.takt/runs/20260409-force-fail-test/context/task',
-    contextTaskRel: '.takt/runs/20260409-force-fail-test/context/task',
-    contextTaskOrderAbs: '/tmp/project/.takt/runs/20260409-force-fail-test/context/task/order.md',
-    contextTaskOrderRel: '.takt/runs/20260409-force-fail-test/context/task/order.md',
-    contextKnowledgeAbs: '/tmp/project/.takt/runs/20260409-force-fail-test/context/knowledge',
-    contextKnowledgeRel: '.takt/runs/20260409-force-fail-test/context/knowledge',
-    contextPolicyAbs: '/tmp/project/.takt/runs/20260409-force-fail-test/context/policy',
-    contextPolicyRel: '.takt/runs/20260409-force-fail-test/context/policy',
-    contextPreviousResponsesAbs: '/tmp/project/.takt/runs/20260409-force-fail-test/context/previous_responses',
-    contextPreviousResponsesRel: '.takt/runs/20260409-force-fail-test/context/previous_responses',
-    logsAbs: '/tmp/project/.takt/runs/20260409-force-fail-test/logs',
-    logsRel: '.takt/runs/20260409-force-fail-test/logs',
-    operationsAbs: '/tmp/project/.takt/runs/20260409-force-fail-test/operations',
-    operationsRel: '.takt/runs/20260409-force-fail-test/operations',
-    operationJournalAbs: '/tmp/project/.takt/runs/20260409-force-fail-test/operations/journal.json',
-    operationJournalRel: '.takt/runs/20260409-force-fail-test/operations/journal.json',
-    metaAbs: '/tmp/project/.takt/runs/20260409-force-fail-test/meta.json',
-    metaRel: '.takt/runs/20260409-force-fail-test/meta.json',
-  };
+  return buildRunPaths('/tmp/project', '20260409-force-fail-test');
 }
 
 describe('RunMetaManager', () => {
@@ -100,38 +74,13 @@ describe('RunMetaManager', () => {
     expect(phasedMeta.phase).toBe(2);
   });
 
-  it('should keep currentStep and currentIteration when finalize is called', () => {
-    const manager = new RunMetaManager(createRunPaths(), 'Force fail task', 'default');
-    manager.updateStep('review', 3);
-
-    manager.finalize('completed', 3);
-
-    expect(vi.mocked(writeFileAtomic)).toHaveBeenCalledTimes(3);
-
-    const finalizedMeta = JSON.parse(String(vi.mocked(writeFileAtomic).mock.calls[2]![1])) as {
-      status: string;
-      updatedAt?: string;
-      currentStep?: string;
-      currentIteration?: number;
-      iterations?: number;
-      endTime?: string;
-    };
-
-    expect(finalizedMeta.status).toBe('completed');
-    expect(finalizedMeta.updatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
-    expect(finalizedMeta.currentStep).toBe('review');
-    expect(finalizedMeta.currentIteration).toBe(3);
-    expect(finalizedMeta.iterations).toBe(3);
-    expect(finalizedMeta.endTime).toMatch(/^\d{4}-\d{2}-\d{2}T/);
-  });
-
   it('should persist and retain resume point metadata for workflow_call retries', () => {
     const manager = new RunMetaManager(createRunPaths(), 'Force fail task', 'default');
     const resumePoint = {
       version: 2,
       stack: [
-        { workflow: 'default', step: 'dev', kind: 'workflow_call', call_instance: 1 },
-        { workflow: 'takt/coding', step: 'review', kind: 'agent' },
+        { workflow: 'default', workflow_ref: 'project:sha256:default', step: 'dev', kind: 'workflow_call', occurrence: 1, call_instance: 1 },
+        { workflow: 'takt/coding', workflow_ref: 'project:sha256:coding', step: 'review', kind: 'agent', occurrence: 1 },
       ],
       iteration: 7,
       elapsed_ms: 183245,
@@ -145,19 +94,12 @@ describe('RunMetaManager', () => {
       }
     ).updateStep('review', 7, resumePoint);
 
-    manager.finalize('aborted', 7);
-
     const updatedMeta = JSON.parse(String(vi.mocked(writeFileAtomic).mock.calls[1]![1])) as {
-      resume_point?: typeof resumePoint;
-    };
-    const finalizedMeta = JSON.parse(String(vi.mocked(writeFileAtomic).mock.calls[2]![1])) as {
       resume_point?: typeof resumePoint;
     };
 
     expect(updatedMeta).not.toHaveProperty('resumePoint');
-    expect(finalizedMeta).not.toHaveProperty('resumePoint');
     expect(updatedMeta.resume_point).toEqual(resumePoint);
-    expect(finalizedMeta.resume_point).toEqual(resumePoint);
   });
 
   it('should refresh resume point without rolling back current step metadata', () => {
@@ -165,8 +107,8 @@ describe('RunMetaManager', () => {
     const staleResumePoint = {
       version: 2,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call', call_instance: 1 },
-        { workflow: 'takt/coding', step: 'review', kind: 'agent' },
+        { workflow: 'default', workflow_ref: 'project:sha256:default', step: 'delegate', kind: 'workflow_call', occurrence: 1, call_instance: 1 },
+        { workflow: 'takt/coding', workflow_ref: 'project:sha256:coding', step: 'review', kind: 'agent', occurrence: 1 },
       ],
       iteration: 7,
       elapsed_ms: 183245,
@@ -176,7 +118,7 @@ describe('RunMetaManager', () => {
     const refreshedResumePoint = {
       version: 2,
       stack: [
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call', call_instance: 1 },
+        { workflow: 'default', workflow_ref: 'project:sha256:default', step: 'delegate', kind: 'workflow_call', occurrence: 1, call_instance: 1 },
       ],
       iteration: 7,
       elapsed_ms: 183900,
@@ -186,14 +128,7 @@ describe('RunMetaManager', () => {
 
     manager.updateStep('delegate', 7, staleResumePoint);
     manager.updateResumePoint(refreshedResumePoint);
-    manager.finalize('aborted', 7);
-
     const refreshedMeta = JSON.parse(String(vi.mocked(writeFileAtomic).mock.calls[2]![1])) as {
-      currentStep?: string;
-      currentIteration?: number;
-      resume_point?: typeof refreshedResumePoint;
-    };
-    const finalizedMeta = JSON.parse(String(vi.mocked(writeFileAtomic).mock.calls[3]![1])) as {
       currentStep?: string;
       currentIteration?: number;
       resume_point?: typeof refreshedResumePoint;
@@ -202,12 +137,9 @@ describe('RunMetaManager', () => {
     expect(refreshedMeta.currentStep).toBe('delegate');
     expect(refreshedMeta.currentIteration).toBe(7);
     expect(refreshedMeta.resume_point).toEqual(refreshedResumePoint);
-    expect(finalizedMeta.currentStep).toBe('delegate');
-    expect(finalizedMeta.currentIteration).toBe(7);
-    expect(finalizedMeta.resume_point).toEqual(refreshedResumePoint);
   });
 
-  it('should persist trace discovery metadata from initial write through finalize', () => {
+  it('should persist trace discovery metadata through progress updates', () => {
     const traceDiscovery = {
       serviceName: 'takt',
       runId: '20260409-force-fail-test',
@@ -236,7 +168,6 @@ describe('RunMetaManager', () => {
     );
 
     manager.updateStep('review', 3);
-    manager.finalize('completed', 3);
 
     const initialMeta = JSON.parse(String(vi.mocked(writeFileAtomic).mock.calls[0]![1])) as {
       observability?: { traceDiscovery?: typeof traceDiscovery };
@@ -244,13 +175,32 @@ describe('RunMetaManager', () => {
     const updatedMeta = JSON.parse(String(vi.mocked(writeFileAtomic).mock.calls[1]![1])) as {
       observability?: { traceDiscovery?: typeof traceDiscovery };
     };
-    const finalizedMeta = JSON.parse(String(vi.mocked(writeFileAtomic).mock.calls[2]![1])) as {
-      observability?: { traceDiscovery?: typeof traceDiscovery };
-    };
 
     expect(initialMeta.observability?.traceDiscovery).toEqual(traceDiscovery);
     expect(updatedMeta.observability?.traceDiscovery).toEqual(traceDiscovery);
-    expect(finalizedMeta.observability?.traceDiscovery).toEqual(traceDiscovery);
+  });
+
+  it('should persist the deepest workflow failure at terminal projection', () => {
+    const manager = new RunMetaManager(createRunPaths(), 'Force fail task', 'default');
+
+    manager.projectTerminal({
+      status: 'failed',
+      iterations: 4,
+      reason: 'NEEDS_ADJUDICATION: finding invariant failed',
+      failure: {
+        step: 'reviewers',
+        error: 'NEEDS_ADJUDICATION: finding invariant failed',
+      },
+      endTime: '2026-08-02T15:26:51.000Z',
+    });
+
+    const terminalMeta = JSON.parse(String(vi.mocked(writeFileAtomic).mock.calls[1]![1])) as {
+      failure?: { step: string; error: string };
+    };
+    expect(terminalMeta.failure).toEqual({
+      step: 'reviewers',
+      error: 'NEEDS_ADJUDICATION: finding invariant failed',
+    });
   });
 
   it('should persist direct resume source metadata for resumed runs', () => {
@@ -265,17 +215,12 @@ describe('RunMetaManager', () => {
     );
 
     manager.updateStep('review', 3);
-    manager.finalize('completed', 3);
 
     const initialMeta = JSON.parse(String(vi.mocked(writeFileAtomic).mock.calls[0]![1])) as {
       source_run_slug?: string;
       resume_mode?: string;
     } & Record<string, unknown>;
     const updatedMeta = JSON.parse(String(vi.mocked(writeFileAtomic).mock.calls[1]![1])) as {
-      source_run_slug?: string;
-      resume_mode?: string;
-    } & Record<string, unknown>;
-    const finalizedMeta = JSON.parse(String(vi.mocked(writeFileAtomic).mock.calls[2]![1])) as {
       source_run_slug?: string;
       resume_mode?: string;
     } & Record<string, unknown>;
@@ -288,13 +233,9 @@ describe('RunMetaManager', () => {
     expect(updatedMeta.resume_mode).toBe('retry');
     expect(updatedMeta).not.toHaveProperty('sourceRunSlug');
     expect(updatedMeta).not.toHaveProperty('resumeMode');
-    expect(finalizedMeta.source_run_slug).toBe('20260409-source-run');
-    expect(finalizedMeta.resume_mode).toBe('retry');
-    expect(finalizedMeta).not.toHaveProperty('sourceRunSlug');
-    expect(finalizedMeta).not.toHaveProperty('resumeMode');
   });
 
-  it('should persist operation journal ownership metadata through finalize', () => {
+  it('should persist operation journal ownership metadata through progress updates', () => {
     const manager = new RunMetaManager(
       createRunPaths(),
       'Force fail task',
@@ -307,7 +248,6 @@ describe('RunMetaManager', () => {
     );
 
     manager.updateStep('fix', 4);
-    manager.finalize('completed', 4);
 
     for (const call of vi.mocked(writeFileAtomic).mock.calls) {
       const meta = JSON.parse(String(call[1])) as Record<string, unknown>;
@@ -318,7 +258,7 @@ describe('RunMetaManager', () => {
     }
   });
 
-  it('should persist a validated PR context through finalize', () => {
+  it('should persist a validated PR context through progress updates', () => {
     const prContext = {
       source: 'pr_review' as const,
       prNumber: 861,
@@ -335,7 +275,6 @@ describe('RunMetaManager', () => {
     );
 
     manager.updateStep('review', 2);
-    manager.finalize('completed', 2);
 
     for (const call of vi.mocked(writeFileAtomic).mock.calls) {
       const meta = JSON.parse(String(call[1])) as Record<string, unknown>;

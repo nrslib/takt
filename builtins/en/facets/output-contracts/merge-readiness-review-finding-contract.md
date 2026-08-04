@@ -19,19 +19,17 @@
 ## Problem-Family Completion Sweep
 | family_tag / changed contract | Invariant or root cause | Definition, production, validation | Consumption, persistence, reinjection | Failure, interruption, retry, resume, parallel, auxiliary entries | Mocks, fixtures, test doubles | Unchecked paths | Result |
 |-------------------------------|-------------------------|------------------------------------|---------------------------------------|--------------------------------------------------------------------------|------------------------------|-----------------|--------|
-| {problem family or contract reviewed} | {condition to preserve} | {locations checked} | {locations checked} | {paths checked} | {test assets checked} | {none or reason unchecked} | {no issue / finding number} |
+| {problem family or contract reviewed} | {condition to preserve} | {locations checked} | {locations checked} | {paths checked} | {test assets checked} | {none or reason unchecked} | {no issue / Finding Contract claim} |
 
-## Observed Findings
-| # | family_tag | Severity | Location | Problem | Impact or breaking condition | Fix direction |
-|---|------------|----------|----------|---------|------------------------------|---------------|
-| 1 | merge-readiness | high / medium / low | `file:line` | {currently observed defect} | {impact or condition} | {fix direction} |
+## Finding Contract Claims
+{Describe every observed defect or explicit ledger lifecycle claim here separately. If the injected instructions require structured output, use that schema as the machine format; otherwise return only the Markdown report. Do not use a findings table. If there are no claims, write `None`.}
 
 ## Resolution Confirmations
-| Ledger reference | Original acceptance condition | Verification evidence |
-|------------------|-----------------------------|-----------------------|
+| Ledger Reference | Original Acceptance Criteria | Confirmation Evidence |
+|------------------|------------------------------|-----------------------|
 | {existing finding} | {expected result} | `file:line` |
 
 ## Output Consistency
-- Markdown Observed Findings and structured issues, and Markdown Resolution Confirmations and structured confirmations, must each be the same set. Keep Markdown and structured output 1:1.
+- When an injected structured-output schema is present, every issue described in the report must also appear in that structured output. Otherwise use ordinary report prose only. Do not assign final finding IDs.
 - APPROVE means zero issues; REJECT means one or more issues.
 ```

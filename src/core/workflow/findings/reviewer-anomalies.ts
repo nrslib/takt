@@ -9,17 +9,19 @@
  *     そもそもそういう状態フィールドが無い — 型で保証）
  *   - 既存 finding の状態・revision・evidence hash を変更しない（別配列を返す
  *     だけで、呼び出し元は findings 配列に一切触れない）
- *   - 観測を削除・改変しない（upsert は追記専用 — occurrences を増やし
- *     lastObserved/最新の claim を更新するだけで、既存レコードを消さない）
+ *   - 観測を削除しない（未決着 episode の upsert は source を包含し、決着済み
+ *     episode の再観測は別レコードへ保存する）
  *   - 「引用が違うので問題は存在しない」と記録しない（mismatchReason は
  *     「証拠が不成立」の事実だけを記述する契約 — 呼び出し元の責務）
  */
 import { createHash } from 'node:crypto';
+import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
 import type {
   CanonicalRawFinding,
   FindingLedger,
   FindingReconcileContext,
   RawFinding,
+  RawFindingEvidence,
   ReviewerAnomalyEntry,
   ReviewerAnomalyKind,
 } from './types.js';
@@ -30,6 +32,7 @@ export interface ReviewerAnomalySpec {
   stableKey: string;
   lineageKey: string;
   sourceRawFindingIds: string[];
+  sourceIntakeIds: string[];
   reviewers: string[];
   title: string;
   claimedLocation?: string;
@@ -42,7 +45,11 @@ export function createReviewerAnomalySpec(input: {
   canonical: Pick<CanonicalRawFinding, 'reviewerStableKey' | 'lineageKey'>;
   anomalyKind: ReviewerAnomalyKind;
   reason: string;
+  failedEvidence?: RawFindingEvidence;
 }): ReviewerAnomalySpec {
+  const fileQuote = input.failedEvidence?.kind === 'file_quote'
+    ? input.failedEvidence
+    : undefined;
   return {
     kind: input.anomalyKind,
     stableKey: computeReviewerAnomalyStableKey({
@@ -52,11 +59,14 @@ export function createReviewerAnomalySpec(input: {
     }),
     lineageKey: input.canonical.lineageKey,
     sourceRawFindingIds: [input.wire.rawFindingId],
+    sourceIntakeIds: [],
     reviewers: [input.wire.reviewer],
-    title: input.wire.title,
-    ...(input.wire.location !== undefined ? { claimedLocation: input.wire.location } : {}),
-    ...(input.wire.evidence?.kind === 'source_quote'
-      ? { claimedExcerpt: input.wire.evidence.verbatimExcerpt }
+    title: input.wire.title ?? `Reviewer evidence anomaly ${input.wire.rawFindingId}`,
+    ...(fileQuote?.kind === 'file_quote'
+      ? {
+        claimedLocation: fileQuote.path,
+        claimedExcerpt: fileQuote.verbatimExcerpt,
+      }
       : {}),
     mismatchReason: input.reason,
   };
@@ -66,21 +76,54 @@ export function createReviewerAnomalySpec(input: {
  * 決定的・内容アドレス方式の id（conflict-identity.ts の formatConflictId と同じ発想:
  * LLM が id を採番・参照することは無い — reviewer anomaly は product finding と
  * 違い、どの LLM にも id を返させないため、F-XXXX のような密な連番カウンタは
- * 不要）。同じ stableKey は常に同じ id になるため、upsert が id 割当を
- * 意識しなくてよい。
+ * 不要）。未決着 episode は stableKey で upsert し、決着後の再観測だけは
+ * 新しい source observation を seed に別 id を決定する。
  */
-function formatReviewerAnomalyId(stableKey: string): string {
-  return `RA-${createHash('sha256').update(stableKey).digest('hex').slice(0, 12).toUpperCase()}`;
+function formatReviewerAnomalyId(stableKey: string, episodeSeed?: string): string {
+  const identity = episodeSeed === undefined
+    ? stableKey
+    : `${stableKey}\0episode\0${episodeSeed}`;
+  return `RA-${createHash('sha256').update(identity).digest('hex').slice(0, 12).toUpperCase()}`;
 }
 
 function mergeUnique(current: readonly string[], next: readonly string[]): string[] {
   return Array.from(new Set([...current, ...next]));
 }
 
+function anomalySpecObservationKey(spec: ReviewerAnomalySpec): string {
+  const observations = [
+    ...spec.sourceRawFindingIds.map((id) => `raw:${id}`),
+    ...spec.sourceIntakeIds.map((id) => `intake:${id}`),
+  ].sort(compareBinaryStrings);
+  if (observations.length === 0) {
+    throw new Error(`Reviewer anomaly "${spec.stableKey}" has no source observation`);
+  }
+  return observations.join('\0');
+}
+
+function specAlreadyApplied(
+  anomaly: ReviewerAnomalyEntry,
+  spec: ReviewerAnomalySpec,
+): boolean {
+  return spec.sourceRawFindingIds.every((id) => anomaly.sourceRawFindingIds.includes(id))
+    && spec.sourceIntakeIds.every((id) => anomaly.sourceIntakeIds.includes(id));
+}
+
+function assertSameAnomalyIdentity(
+  anomaly: ReviewerAnomalyEntry,
+  spec: ReviewerAnomalySpec,
+): void {
+  if (anomaly.kind !== spec.kind || anomaly.lineageKey !== spec.lineageKey) {
+    throw new Error(
+      `Reviewer anomaly stable key "${spec.stableKey}" cannot identify different anomaly content`,
+    );
+  }
+}
+
 /**
- * reviewer anomaly spec を台帳へ追記適用する（upsert by stableKey）。
+ * reviewer anomaly spec を台帳へ追記適用する（upsert by outstanding stableKey）。
  * provisional の applyProvisionalFindingSpecs（reconciler.ts）と同じ「同じ
- * stableKey が既にあれば更新、無ければ新規」則だが、意図的に別実装にしている —
+ * stableKey の未決着 episode があれば更新、無ければ新規」則だが、意図的に別実装にしている —
  * 対象レコード型（ReviewerAnomalyEntry には status/lifecycle/revision/waivers が
  * 無く、gate-blocking の概念も無い）も安全不変条件（既存 finding 側は一切
  * 触らない）もドメインとして別物であり、無理に共通化すると「product finding の
@@ -95,31 +138,54 @@ export function applyReviewerAnomalySpecsToLedger(
     return ledger;
   }
   const observation = { runId: context.runId, stepName: context.stepName, timestamp: context.timestamp };
-  const byStableKey = new Map<string, ReviewerAnomalyEntry>(
-    (ledger.reviewerAnomalies ?? []).map((entry) => [entry.stableKey, entry]),
-  );
+  const anomalies = [...(ledger.reviewerAnomalies ?? [])];
+  const orderedSpecs = [...specs].sort((left, right) => (
+    compareBinaryStrings(left.stableKey, right.stableKey)
+    || compareBinaryStrings(
+      anomalySpecObservationKey(left),
+      anomalySpecObservationKey(right),
+    )
+  ));
 
-  for (const spec of specs) {
-    const existing = byStableKey.get(spec.stableKey);
+  for (const spec of orderedSpecs) {
+    const matchingIndexes = anomalies.flatMap((entry, index) => (
+      entry.stableKey === spec.stableKey ? [index] : []
+    ));
+    for (const index of matchingIndexes) {
+      assertSameAnomalyIdentity(anomalies[index]!, spec);
+    }
+    const outstandingIndexes = matchingIndexes.filter((index) => (
+      isOutstandingReviewerAnomaly(anomalies[index]!)
+    ));
+    if (outstandingIndexes.length > 1) {
+      throw new Error(
+        `Reviewer anomaly stable key "${spec.stableKey}" has multiple outstanding episodes`,
+      );
+    }
+    const existingIndex = outstandingIndexes[0];
+    const existing = existingIndex === undefined ? undefined : anomalies[existingIndex];
     if (existing !== undefined) {
       // crash/replay 冪等（review-integrity requirement）: occurrences は「観測された
       // 回数」なので、同一 raw finding id の再適用（同一ラウンドが二度コミット
       // される crash/replay）で二重計上してはならない。stop budget の round
-      // marker（適用済みマーカー集合）と同じ思想で、適用済みの raw finding id を
-      // 冪等判定キーにする — 入力 spec が既存に無い新しい raw finding id を
-      // 1件も持ち込まないなら、それは既適用の再来なので完全な no-op にする
+      // marker（適用済みマーカー集合）と同じ思想で、適用済みの raw finding id
+      // または intake id を冪等判定キーにする — 入力 spec が既存に無い新しい
+      // 観測 id を1件も持ち込まないなら、それは既適用の再来なので完全な no-op にする
       // （occurrences も lastObserved も mismatchReason も動かさない）。別ラウンドの
       // 再観測は名前空間付き raw finding id（runId:step:iter:reviewer:localId）が
       // 必ず異なるため新規 id として現れ、正しく +1 される。
       const bringsNewObservation = spec.sourceRawFindingIds.some(
         (id) => !existing.sourceRawFindingIds.includes(id),
+      ) || spec.sourceIntakeIds.some(
+        (id) => !existing.sourceIntakeIds.includes(id),
       );
       if (!bringsNewObservation) {
         continue;
       }
-      byStableKey.set(spec.stableKey, {
+      anomalies[existingIndex!] = {
         ...existing,
         sourceRawFindingIds: mergeUnique(existing.sourceRawFindingIds, spec.sourceRawFindingIds),
+        sourceIntakeIds: mergeUnique(existing.sourceIntakeIds, spec.sourceIntakeIds),
         reviewers: mergeUnique(existing.reviewers, spec.reviewers),
         mismatchReason: spec.mismatchReason,
         lastObserved: observation,
@@ -127,15 +193,26 @@ export function applyReviewerAnomalySpecsToLedger(
         // 最新の claim を監査用に保持する（無ければ前回値を残す）。
         ...(spec.claimedLocation !== undefined ? { claimedLocation: spec.claimedLocation } : {}),
         ...(spec.claimedExcerpt !== undefined ? { claimedExcerpt: spec.claimedExcerpt } : {}),
-      });
+      };
       continue;
     }
-    byStableKey.set(spec.stableKey, {
-      id: formatReviewerAnomalyId(spec.stableKey),
+    if (matchingIndexes.some((index) => specAlreadyApplied(anomalies[index]!, spec))) {
+      continue;
+    }
+    const episodeSeed = matchingIndexes.length === 0
+      ? undefined
+      : anomalySpecObservationKey(spec);
+    const id = formatReviewerAnomalyId(spec.stableKey, episodeSeed);
+    if (anomalies.some((entry) => entry.id === id)) {
+      throw new Error(`Reviewer anomaly id "${id}" identifies a different episode`);
+    }
+    anomalies.push({
+      id,
       kind: spec.kind,
       stableKey: spec.stableKey,
       lineageKey: spec.lineageKey,
       sourceRawFindingIds: [...spec.sourceRawFindingIds],
+      sourceIntakeIds: [...spec.sourceIntakeIds],
       reviewers: [...spec.reviewers],
       title: spec.title,
       ...(spec.claimedLocation !== undefined ? { claimedLocation: spec.claimedLocation } : {}),
@@ -147,7 +224,7 @@ export function applyReviewerAnomalySpecsToLedger(
     });
   }
 
-  return { ...ledger, reviewerAnomalies: [...byStableKey.values()] };
+  return { ...ledger, reviewerAnomalies: anomalies };
 }
 
 export interface ReviewerAnomalyPromotionCandidate {
@@ -159,7 +236,7 @@ export interface ReviewerAnomalyPromotionCandidate {
 
 /**
  * 後続ラウンドの clean な verbatimExcerpt 一致が product finding を確定させた
- * 場合に、同じ lineageKey を持つ未昇格の reviewer anomaly へ promotedFindingId を
+ * 場合に、同じ lineageKey を持つ未決着の reviewer anomaly へ promotedFindingId を
  * 記録する。レコード自体は削除・改変しない — 昇格後も監査履歴として
  * 残る（観測消去の禁止）。呼び出し元は reconcile 完了後の最終 ledger（finding id
  * 割当済み）を渡すこと — このタイミングでしか「どの finding id に着地したか」が
@@ -189,12 +266,21 @@ export function linkPromotedReviewerAnomalies(
   if (promotedFindingIdByLineageKey.size === 0) {
     return ledger;
   }
+  let changed = false;
   const updated = anomalies.map((anomaly) => {
-    if (anomaly.promotedFindingId !== undefined) {
+    if (!isOutstandingReviewerAnomaly(anomaly)) {
       return anomaly;
     }
     const promotedFindingId = promotedFindingIdByLineageKey.get(anomaly.lineageKey);
-    return promotedFindingId === undefined ? anomaly : { ...anomaly, promotedFindingId };
+    if (promotedFindingId === undefined) {
+      return anomaly;
+    }
+    changed = true;
+    return { ...anomaly, promotedFindingId };
   });
-  return { ...ledger, reviewerAnomalies: updated };
+  return changed ? { ...ledger, reviewerAnomalies: updated } : ledger;
+}
+
+export function isOutstandingReviewerAnomaly(anomaly: ReviewerAnomalyEntry): boolean {
+  return anomaly.promotedFindingId === undefined && anomaly.settlement === undefined;
 }

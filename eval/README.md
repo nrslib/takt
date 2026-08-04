@@ -5,9 +5,9 @@ E2E suite (which verifies engine mechanics), this measures whether the
 *content* of personas/policies/instructions actually produces good agent
 output — so that "the prompt got better" is a measured fact, not a feeling.
 
-All suites run on the **codex** provider (local Codex CLI login / ChatGPT
-plan), so runs consume subscription quota, not API billing. The `llm-rubric`
-grader is also pinned to codex for the same reason.
+All promptfoo suites run on the **codex** provider (local Codex CLI login /
+ChatGPT plan), so runs consume subscription quota, not API billing. The
+`llm-rubric` grader is also pinned to codex for the same reason.
 
 The `rescan` suite additionally runs local/open models through the opencode
 CLI (`eval/providers/opencode-review.sh`) to track how far facet design can
@@ -27,6 +27,7 @@ not the pass/fail summary.
 | `frontend` | review-frontend / frontend-review | frontend-app | recall on 3 planted layering violations |
 | `cqrs` | review-backend-cqrs / cqrs-es-review | backend-cqrs | recall on 3 planted CQRS+ES violations |
 | `rescan` | peer-review / arch-review (round 2) | inventory-es | re-scan evidence + recall on 4 planted defects after previous findings were resolved |
+| `finding-normalizer` | self-contained review + engine context -> Finding Contract JSON | direct FC assembly cases | schema validity, all 12 required fields, exact output, extra-key count, completion, and duration |
 | `frontend-coder` | frontend / implement | frontend-app (work copy) | artifact checks on the implemented change |
 | `cqrs-coder` | backend-cqrs / implement | backend-cqrs (work copy) | artifact checks on the implemented change |
 | `fix-closure` | review-remediation / fix-retry | fix-closure (work copy) | whether verifier-return remediation closes every falsifiable obligation across multiple fix units and hierarchical projections instead of patching only the latest verifier example or relying on broad test success |
@@ -39,6 +40,8 @@ not the pass/fail summary.
 | `issue-plan-samples` | default / plan | nrslib/takt repository (read-only) | whether planning preserves explicit breadth, allowed design choices, and explicitly required architecture across Issues #1127, #1155, and #1136 |
 | `plan-report-source-authority` | default / plan report phase | synthetic Phase 1 draft (tool-less) | whether the final `plan.md` keeps the original task authoritative and demotes unsupported design details from requirements |
 | `write-tests-contract-traceability` | default / write_tests | write-tests-contract-traceability | whether generated tests accept the intended local contract, reject plausible mutations, and avoid inventing irrelevant impact paths |
+| `implement-contract-traceability` | default / implement | implement-contract-traceability | whether implementation preserves named contract identities from plan and tests |
+| `implementation-report-contract-traceability` | default / implementation report | implement-contract-traceability | whether the report preserves the same contract identities and evidence |
 | `follow-up-review-repair-regression` | peer-review / follow-up coding-review | follow-up-review-repair-regression | whether follow-up review independently falsifies completion claims and distinguishes repair-induced defects from adjacent omissions |
 | `review-adjudication` | peer-review / review-adjudication | review-adjudication | whether real defects remain actionable while duplicates, overreach, false positives, and environment-only gaps are separated by evidence |
 | `final-readiness-supervision` | peer-review / final-gate | final-readiness-supervision | whether the final supervisor catches a merge-blocking unmet requirement without reopening an adjudicated non-actionable finding |
@@ -48,6 +51,39 @@ Reviewer suites run read-only against `eval/fixtures/*`. Coder suites run
 with `sandbox_mode: workspace-write` in a disposable copy under `eval/.work/`
 (recreated by prepare on every run) and are scored by Node assertion scripts
 in `eval/asserts/` that inspect the files the agent actually wrote.
+
+`finding-normalizer` is a multi-provider JSON-assembly measurement, not a
+promptfoo suite. Each case supplies every reviewer-owned field, engine-bound
+field, and engine-verified current-code quote needed by the existing
+`RawFindingsOutputJsonSchema`. The model must return that schema directly:
+no prose, intermediate `claimSections`, classifications, or extra keys.
+The suite deliberately does not test missing-information, provisional, or
+multi-evidence policy; those require separate design cases.
+
+Measured result:
+
+- Sol, Luna, Terra, Opus, Haiku, and Sonnet passed all initial cases (3/3)
+  and the multiline `verbatimExcerpt` hard case across four runs (4/4 each).
+- Gemma4 passed 2/3 initial cases. On the hard case it passed 1/4 before prompt
+  tuning and 0/5 after explicit JSON-escape guidance. Its failures still had a
+  valid schema, zero extra keys, and the correct finding count; only one of 12
+  fields differed because newline became literal `\n`.
+
+This measures direct FC JSON assembly when every required value is supplied.
+It does not measure free-form semantic normalization or a future multi-evidence
+Finding Contract.
+
+All providers have an external wall-clock timeout. A timeout/error is saved and
+the remaining matrix continues. Completion requires `status === "done"` with
+no error. There is no silent retry or provider fallback.
+
+The earlier extract-only and semantic-verifier experiments remain historical
+evidence in `eval/baselines/finding-normalizer-2026-07-28.md`; they are not the
+main command's output contract.
+
+Result artifacts:
+`eval/.work/finding-normalizer/results/direct-{codex,claude,gemma4}/`,
+`repeat-{codex,claude,gemma4}/`, and `tuned-gemma4/`.
 
 The `issue-plan-samples` and `plan-report-source-authority` suites are the
 exceptions to the reviewer fixture rule: `eval/scripts/prepare.mjs` uses
@@ -85,8 +121,7 @@ test case — and the case must FAIL before the facet fix is trusted.
 5. **Run and confirm PASS (green)**, then run the other affected suites to
    check nothing regressed. Because detection is stochastic, confirm
    important reviewer fixes with `--repeat 3`. For mutable coder suites,
-   run the complete `prepare -> single eval` command three separate times;
-   `--repeat` would share one work copy across trials.
+   rerun the complete prepare-and-eval command so each trial gets a fresh work copy.
 6. Keep the case forever — it is the regression test for that miss.
 
 ## How it works
@@ -127,6 +162,9 @@ npm run eval:prompts             # prepare + ALL suites
 npm run eval:prompts -- arch cqrs        # only selected suites
 npm run eval:prompts -- arch --repeat 3  # extra flags pass through to promptfoo
 npm run eval:prompts:prepare     # prepare only (inspect eval/prompts/)
+npm run eval:prompts:fix-closure
+npm run eval:prompts:fix-plan-fresh-findings
+npm run eval:prompts:fix-plan-boundary-preflight
 npm run eval:prompts:review-family-closure
 npm run eval:prompts:initial-review-contract-discovery
 npm run eval:prompts:initial-plan-contract-closure
@@ -134,24 +172,43 @@ npm run eval:prompts:replan-contract-closure
 npm run eval:prompts:issue-plan-samples
 npm run eval:prompts:plan-report-source-authority
 npm run eval:prompts:write-tests-contract-traceability
-npm run eval:prompts:review-adjudication
-npm run eval:prompts:fix-plan-fresh-findings
-npm run eval:prompts:fix-plan-boundary-preflight
+npm run eval:prompts:implement-contract-traceability
 npm run eval:prompts:follow-up-review-repair-regression
+npm run eval:prompts:review-adjudication
 npm run eval:prompts:final-readiness-supervision
 npm run eval:prompts:final-readiness-precision
+npm run eval:finding-normalizer -- --models luna --batch-size 1 --repeat 3
+npm run eval:finding-normalizer -- --models sol,opus --reports 1,2,3
+npm run eval:finding-normalizer -- --models terra,sonnet --reports 1,2
+npm run eval:finding-normalizer -- --render-only --reports 1,2,3
+npm run eval:finding-normalizer -- --models luna --reports 1,2 --score-only
+npm run eval:finding-normalizer -- --models terra --timeout-ms 600000
+npm run eval:finding-normalizer -- --models terra,luna --score-only --result-set current
+node eval/scripts/run-finding-report-normalizer-eval.mjs --render-only
+node eval/scripts/run-finding-report-normalizer-eval.mjs \
+  --self-test \
+  --result-set scorer-self-test
+node eval/scripts/run-finding-report-normalizer-eval.mjs \
+  --cases summary-only-review-report,broad-target-review-reports \
+  --models luna,terra \
+  --result-set synthetic-comparison
 npx promptfoo view               # browse results in the web UI
 ```
 
 Do not use `--repeat` with mutable coder suites such as `fix-closure`,
-`frontend-coder`, or `cqrs-coder`. Their trials edit `eval/.work/<id>`, so
-independent evidence requires rerunning the suite command, including prepare,
-for each trial.
+`frontend-coder`, or `cqrs-coder`; independent trials require a fresh work copy.
 
 Run from the repo root. Note: `working_dir` in the configs is resolved
 relative to the config file's directory (`eval/`), not the process cwd.
 `run-evals.mjs` keeps going when a suite fails and prints a summary
 (promptfoo exits non-zero on test failures, which would break `&&` chains).
+The normalizer suite requires a prior `npm run build`; use `--render-only`
+to inspect its one-report prompts without calling a model. `--score-only`
+never calls a model and writes `*.rescored.json` plus
+`summary.rescored.json`, leaving the original response artifacts intact.
+The finding report normalizer is an extraction-only experiment. Its catalog,
+external-send guard, and measurement state are documented in
+`eval/cases/finding-normalizer/extraction-catalog.md`.
 
 ### Token budget rules
 
@@ -175,6 +232,13 @@ eval/
   promptfooconfig.<suite>.yaml   provider + tests + assertions per suite
   scripts/prepare.mjs            facet placement + prompt rendering
   scripts/run-evals.mjs          suite runner (failures don't stop the batch)
+  scripts/run-finding-normalizer-eval.mjs
+                                 multi-provider normalizer runner + scorer
+  scripts/run-finding-report-normalizer-eval.mjs
+                                 extraction-only Finding Contract runner
+  scripts/run-finding-semantic-verifier-eval.mjs
+                                 archived repository-inspecting experiment
+  baselines/                     recorded experiment decisions and metrics
   cases/                         per-test inputs (diffs, canned previous_response)
   asserts/                       artifact assertion scripts for coder suites
   fixtures/                      self-contained sample projects

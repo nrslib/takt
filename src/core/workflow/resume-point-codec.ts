@@ -9,23 +9,6 @@ export function parseWorkflowResumePoint(value: unknown): WorkflowResumePoint {
 export function cloneWorkflowResumePoint(resumePoint: WorkflowResumePoint): WorkflowResumePoint {
   return {
     ...resumePoint,
-    ...(resumePoint.max_steps === undefined ? {} : { max_steps: resumePoint.max_steps }),
-    ...(resumePoint.pending_loop_judge === undefined
-      ? {}
-      : {
-          pending_loop_judge: {
-            ...resumePoint.pending_loop_judge,
-            cycle: [...resumePoint.pending_loop_judge.cycle],
-          },
-        }),
-    ...(resumePoint.pending_fallback === undefined
-      ? {}
-      : {
-          pending_fallback: {
-            context: { ...resumePoint.pending_fallback.context },
-            attempts: resumePoint.pending_fallback.attempts.map((attempt) => ({ ...attempt })),
-          },
-        }),
     stack: resumePoint.stack.map((entry) => ({
       ...entry,
       ...(entry.step_iterations === undefined ? {} : { step_iterations: { ...entry.step_iterations } }),

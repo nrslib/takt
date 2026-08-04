@@ -38,12 +38,21 @@ export function isRealPathInside(basePath: string, candidatePath: string): boole
 
 export type BoundaryViolation = 'outside' | 'symlink' | 'not_directory';
 
-export function assertPathSegmentsAreSafe(
+export interface SafePathSegmentInspection {
+  readonly resolvedRoot: string;
+  readonly resolvedTarget: string;
+  readonly segments: readonly {
+    readonly path: string;
+    readonly stats: Stats | null;
+  }[];
+}
+
+export function inspectSafePathSegments(
   rootDir: string,
   targetPath: string,
   buildError: (violation: BoundaryViolation, segmentPath: string) => Error,
   options?: { readonly rejectSamePath?: boolean },
-): Stats | null {
+): SafePathSegmentInspection {
   const resolvedRoot = path.resolve(rootDir);
   const resolvedTarget = path.resolve(targetPath);
   if (!isPathInside(resolvedRoot, resolvedTarget) || (options?.rejectSamePath && resolvedRoot === resolvedTarget)) {
@@ -55,12 +64,13 @@ export function assertPathSegmentsAreSafe(
     .filter((segment) => segment.length > 0);
 
   let current = resolvedRoot;
-  let stats: Stats | null = null;
+  const inspectedSegments: Array<{ path: string; stats: Stats | null }> = [];
   for (const [index, segment] of segments.entries()) {
     current = path.join(current, segment);
-    stats = lstatIfExists(current);
+    const stats = lstatIfExists(current);
+    inspectedSegments.push({ path: current, stats });
     if (stats === null) {
-      return null;
+      break;
     }
     if (stats.isSymbolicLink()) {
       throw buildError('symlink', current);
@@ -69,5 +79,19 @@ export function assertPathSegmentsAreSafe(
       throw buildError('not_directory', current);
     }
   }
-  return stats;
+  return {
+    resolvedRoot,
+    resolvedTarget,
+    segments: inspectedSegments,
+  };
+}
+
+export function assertPathSegmentsAreSafe(
+  rootDir: string,
+  targetPath: string,
+  buildError: (violation: BoundaryViolation, segmentPath: string) => Error,
+  options?: { readonly rejectSamePath?: boolean },
+): Stats | null {
+  const inspection = inspectSafePathSegments(rootDir, targetPath, buildError, options);
+  return inspection.segments.at(-1)?.stats ?? null;
 }

@@ -43,6 +43,9 @@ subworkflow:
     reviewer_suite:
       type: workflow_ref
       default: peer-review-suite-base
+    peer_review_workflow:
+      type: workflow_ref
+      default: peer-review
     review_policy_additions:
       type: facet_ref[]
       facet_kind: policy
@@ -125,7 +128,8 @@ steps:
 
   - name: peer-review
     kind: workflow_call
-    call: peer-review
+    call:
+      $param: peer_review_workflow
     args:
       reviewer_suite:
         $param: reviewer_suite

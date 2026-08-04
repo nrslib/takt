@@ -10,10 +10,10 @@ import type {
 } from './manager-contracts.js';
 import { runManagerDecisionStage } from './manager-decision.js';
 import { prepareFindingManagerRound } from './manager-preparation.js';
-import { retainInterpretationRecoveryForLadder } from './interpretation-recovery.js';
-import { computeReviewScopeSnapshotId } from './snapshot.js';
+import { captureReviewScopeProofSnapshot } from './snapshot.js';
 import { computeRoundMarker } from './round-marker.js';
 import { runManagerRoundExclusive } from './manager-round-lock.js';
+import { bindPreAdmissionEntities } from './pre-admission-entity-binding.js';
 
 const log = createLogger('finding-manager-runner');
 
@@ -31,11 +31,29 @@ export {
 export async function runFindingManagerForStep(
   input: RunFindingManagerForStepInput,
 ): Promise<FindingManagerRunResult> {
+  const publicationIds = input.subResults.map(({ subStep, publication }) => {
+    if (
+      publication.scopeIdentity !== input.ledgerStore.ledgerIdentity
+      || publication.callNamespace !== input.callNamespace
+      || publication.parentStepName !== input.parentStep.name
+      || publication.stepIteration !== input.stepIteration
+      || publication.reviewerStepName !== subStep.name
+    ) {
+      throw new Error(
+        `Finding review publication "${publication.publicationId}" does not match its manager round`,
+      );
+    }
+    return publication.publicationId;
+  });
+  if (new Set(publicationIds).size !== publicationIds.length) {
+    throw new Error('Finding manager round contains duplicate review publications');
+  }
   const stopBudgetRoundMarker = computeRoundMarker({
     runId: input.runId,
     callNamespace: input.callNamespace,
     parentStepName: input.parentStep.name,
     stepIteration: input.stepIteration,
+    publicationIds,
   });
 
   return runManagerRoundExclusive(input.ledgerStore, async () => {
@@ -55,14 +73,32 @@ export async function runFindingManagerForStep(
       };
     }
 
-    const reviewScopeSnapshotId = computeReviewScopeSnapshotId(input.cwd);
-    const prepared = prepareFindingManagerRound(input, stopBudgetRoundMarker);
-    const admission = retainInterpretationRecoveryForLadder(evaluateRawAdmission({
-      cwd: input.cwd,
-      reviewScopeSnapshotId,
+    const reviewScopeSnapshot = captureReviewScopeProofSnapshot(input.cwd);
+    const reviewScopeSnapshotId = reviewScopeSnapshot.reviewScopeSnapshotId;
+    const prepared = prepareFindingManagerRound(
+      input,
+      stopBudgetRoundMarker,
+      reviewScopeSnapshot,
+    );
+    const entityBinding = await bindPreAdmissionEntities({
+      contract: input.contract,
       previousLedger: prepared.previousLedger,
       intake: prepared.intake,
-    }), prepared.intake);
+      managerStep: prepared.managerStep,
+      roundMarker: stopBudgetRoundMarker,
+      runInput: input,
+    });
+    const intake = entityBinding.intake;
+    const admission = evaluateRawAdmission({
+      cwd: input.cwd,
+      reviewScopeSnapshotId,
+      runId: input.ledgerStore.runId,
+      scopeIdentity: input.ledgerStore.ledgerIdentity,
+      previousLedger: prepared.previousLedger,
+      intake,
+      reviewScopeSnapshot,
+      workflowTask: input.workflowTask,
+    });
     const managerDecision = await runManagerDecisionStage({
       input,
       previousLedger: prepared.previousLedger,
@@ -70,13 +106,14 @@ export async function runFindingManagerForStep(
       managerStep: prepared.managerStep,
       observation: prepared.observation,
       reviewScopeSnapshotId,
+      reviewScopeSnapshot,
       stopBudgetRoundMarker,
+      preAdmissionTaskAudits: entityBinding.taskAudits,
     });
     const committed = await commitFindingManagerRound({
       input,
       previousLedger: prepared.previousLedger,
-      intake: prepared.intake,
-      interpretationRecoveryFailures: prepared.interpretationRecoveryFailures,
+      intake,
       admission,
       managerDecision,
       observation: prepared.observation,
@@ -84,6 +121,7 @@ export async function runFindingManagerForStep(
       stopBudgetRoundMarker,
       reviewIntegrityLimits: prepared.reviewIntegrityLimits,
       reviewScopeSnapshotId,
+      reviewScopeSnapshot,
     });
 
     if (!committed.applied) {
@@ -97,8 +135,8 @@ export async function runFindingManagerForStep(
     log.info('Finding contract intake completed', {
       step: input.parentStep.name,
       rawFindings: prepared.intake.items.length,
-      ambiguous: managerDecision.ladder.stats.ambiguousRawCount,
-      managerCalls: managerDecision.ladder.stats.managerCalls,
+      ambiguous: managerDecision.interpretation.stats.ambiguousRawCount,
+      managerCalls: managerDecision.interpretation.stats.managerCalls,
       provisionalLandings: committed.provisionalLandingCount,
       reviewerAnomalyLandings: committed.reviewerAnomalyLandingCount,
       overflowReviewers: prepared.intake.overflowReports.length,

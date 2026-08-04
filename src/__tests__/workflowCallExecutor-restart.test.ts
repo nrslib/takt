@@ -3,20 +3,16 @@ import type {
   WorkflowCallStep,
   WorkflowConfig,
   WorkflowRestartPoint,
-  WorkflowResumePoint,
   WorkflowResumePointEntry,
   WorkflowState,
 } from '../core/models/index.js';
 import { WorkflowCallExecutor } from '../core/workflow/engine/WorkflowCallExecutor.js';
 import { WorkflowRestartNavigator } from '../core/workflow/engine/WorkflowRestartNavigator.js';
-import { buildWorkflowCallNamespaceSegment } from '../core/workflow/workflow-call-namespace.js';
-import { buildWorkflowCallInvocationIdentity } from '../core/workflow/workflow-call-invocation-index.js';
 import type {
   WorkflowCallChildEngine,
   WorkflowEngineOptions,
   WorkflowSharedRuntimeState,
 } from '../core/workflow/types.js';
-import { WorkflowStepBudget } from '../core/workflow/workflow-step-budget.js';
 
 function makeState(workflowName: string, stepName: string): WorkflowState {
   return {
@@ -36,17 +32,6 @@ function makeState(workflowName: string, stepName: string): WorkflowState {
   };
 }
 
-function makeOwnedResumePoint(workflowName: string, step: string): WorkflowResumePoint {
-  return {
-    version: 2,
-    stack: [{ workflow: workflowName, step, kind: 'agent' }],
-    iteration: 1,
-    elapsed_ms: 0,
-    workflow_call_invocations: {},
-    workflow_step_participations: {},
-  };
-}
-
 function makeChildEngine(workflow: WorkflowConfig): WorkflowCallChildEngine {
   const state = makeState(workflow.name, workflow.initialStep);
   state.iteration = 1;
@@ -54,7 +39,6 @@ function makeChildEngine(workflow: WorkflowConfig): WorkflowCallChildEngine {
   return {
     on: vi.fn(),
     runWithResult: vi.fn().mockResolvedValue({ state }),
-    getOwnedResumePoint: vi.fn(() => makeOwnedResumePoint(workflow.name, workflow.initialStep)),
   };
 }
 
@@ -64,6 +48,23 @@ function makeCallStep(name: string, call: string): WorkflowCallStep {
     kind: 'workflow_call',
     call,
     instruction: `${name} instruction`,
+  };
+}
+
+function makeRuntimeCallEntry(
+  workflow: string,
+  step: string,
+  callInstance = 1,
+  stepIterations?: Record<string, number>,
+): WorkflowResumePointEntry {
+  return {
+    workflow,
+    workflow_ref: workflow,
+    step,
+    kind: 'workflow_call',
+    occurrence: callInstance,
+    call_instance: callInstance,
+    ...(stepIterations === undefined ? {} : { step_iterations: stepIterations }),
   };
 }
 
@@ -91,11 +92,12 @@ function makeExecutor(options: {
   const createEngine = vi.fn().mockReturnValue(options.childEngine);
   const sharedRuntime = options.sharedRuntime ?? {
     startedAtMs: Date.now(),
-    stepBudget: new WorkflowStepBudget(10),
     restartNavigator: new WorkflowRestartNavigator(options.restartPoint),
   };
   const executor = new WorkflowCallExecutor({
     getConfig: () => options.parent,
+    getMaxSteps: () => options.parent.maxSteps,
+    updateMaxSteps: vi.fn(),
     getOptions: (): WorkflowEngineOptions => ({
       projectCwd: '/project',
       reportDirName: 'run',
@@ -106,6 +108,7 @@ function makeExecutor(options: {
     task: 'restart nested workflow',
     sharedRuntime,
     resumeStackPrefix: [],
+    consumeWorkflowCallContinuation: vi.fn(),
     runPaths: { slug: 'run' } as never,
     resolveWorkflowCall: vi.fn(),
     createEngine,
@@ -119,20 +122,29 @@ function makeExecutor(options: {
   return { executor, createEngine, sharedRuntime };
 }
 
-function makeRequest(options: {
+function makeRequest(executor: WorkflowCallExecutor, options: {
   step: WorkflowCallStep;
   child: WorkflowConfig;
   callStack: WorkflowResumePointEntry[];
 }) {
+  const currentFrame = options.callStack.at(-1);
+  if (currentFrame?.kind !== 'workflow_call' || currentFrame.call_instance === undefined) {
+    throw new Error('Workflow-call executor test requires a current workflow_call frame');
+  }
+  const resumeStackPrefix = options.callStack.slice(0, -1);
+  executor.recordPendingInvocation(
+    options.step,
+    currentFrame.call_instance,
+    resumeStackPrefix,
+  );
   return {
     step: options.step,
-    childWorkflow: options.child,
-    reportNamespaceSegment: buildWorkflowCallNamespaceSegment(
-      buildWorkflowCallInvocationIdentity('default', 'delegate', []),
-      'coding',
-      1,
+    preparedExecution: executor.prepare(
+      options.step,
+      options.child,
+      currentFrame.call_instance,
+      resumeStackPrefix,
     ),
-    callStack: options.callStack,
     childProviderInfo: { provider: 'mock' as const, model: 'test-model' },
     parentProviderOptions: undefined,
     personaProviders: undefined,
@@ -147,13 +159,7 @@ async function executeTerminalChildRestart() {
     { name: 'implement', persona: 'coder', instruction: 'Implement' },
     { name: 'review', persona: 'reviewer', instruction: 'Review' },
   ]);
-  const callStack = [{
-    workflow: 'default',
-    step: 'delegate',
-    kind: 'workflow_call' as const,
-    call_instance: 1,
-    step_iterations: { delegate: 1 },
-  }];
+  const callStack = [makeRuntimeCallEntry('default', 'delegate', 1, { delegate: 1 })];
   const restartPoint = {
     stack: [
       { workflow: 'default', workflow_ref: 'default', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 as const },
@@ -168,7 +174,7 @@ async function executeTerminalChildRestart() {
   });
 
   await execution.executor.execute(
-    makeRequest({ step, child, callStack }),
+    makeRequest(execution.executor, { step, child, callStack }),
     { syncParentState: true },
   );
 
@@ -186,22 +192,11 @@ async function executeNestedWorkflowCallRestart() {
     { name: 'review', persona: 'reviewer', instruction: 'Review' },
   ]);
   const callStack = [
-    {
-      workflow: 'default',
-      step: 'delegate',
-      kind: 'workflow_call' as const,
-      call_instance: 1,
-    },
-    {
-      workflow: 'coding',
-      step: 'delegate-review',
-      kind: 'workflow_call' as const,
-      call_instance: 1,
-      step_iterations: { 'delegate-review': 1 },
-    },
+    makeRuntimeCallEntry('default', 'delegate'),
+    makeRuntimeCallEntry('coding', 'delegate-review', 1, { 'delegate-review': 1 }),
   ];
   const restartPoint = {
-    stack: callStack.map(({ step_iterations: _stepIterations, ...entry }) => ({
+    stack: callStack.map(({ occurrence: _occurrence, step_iterations: _stepIterations, ...entry }) => ({
       ...entry,
       workflow_ref: entry.workflow,
       call_instance: 1 as const,
@@ -216,7 +211,7 @@ async function executeNestedWorkflowCallRestart() {
   });
 
   await rootExecution.executor.execute(
-    makeRequest({ step: rootStep, child: parent, callStack: callStack.slice(0, 1) }),
+    makeRequest(rootExecution.executor, { step: rootStep, child: parent, callStack: callStack.slice(0, 1) }),
     { syncParentState: true },
   );
 
@@ -235,7 +230,7 @@ async function consumeNestedWorkflowCallRestart() {
   });
 
   await childExecution.executor.execute(
-    makeRequest({
+    makeRequest(childExecution.executor, {
       step: scenario.step,
       child: scenario.grandchild,
       callStack: scenario.callStack,
@@ -299,12 +294,12 @@ describe('WorkflowCallExecutor nested restart contract', () => {
       engineOwnsRestartPoint: false,
     });
     await childExecution.executor.execute(
-      makeRequest({
+      makeRequest(childExecution.executor, {
         step: publish,
         child: publisher,
         callStack: [
           execution.callStack[0]!,
-          { workflow: 'coding', step: 'publish', kind: 'workflow_call', call_instance: 1 },
+          makeRuntimeCallEntry('coding', 'publish'),
         ],
       }),
       { syncParentState: true },
@@ -330,10 +325,10 @@ describe('WorkflowCallExecutor nested restart contract', () => {
       engineOwnsRestartPoint: false,
     });
     await rootSiblingExecution.executor.execute(
-      makeRequest({
+      makeRequest(rootSiblingExecution.executor, {
         step: rootSibling,
         child: notifier,
-        callStack: [{ workflow: 'default', step: 'notify', kind: 'workflow_call', call_instance: 1 }],
+        callStack: [makeRuntimeCallEntry('default', 'notify')],
       }),
       { syncParentState: true },
     );
@@ -374,13 +369,13 @@ describe('WorkflowCallExecutor nested restart contract', () => {
       engineOwnsRestartPoint: false,
     });
     await grandchildExecution.executor.execute(
-      makeRequest({
+      makeRequest(grandchildExecution.executor, {
         step: archive,
         child: archiveWorkflow,
         callStack: [
           execution.callStack[0]!,
           execution.callStack[1]!,
-          { workflow: 'review-loop', step: 'archive', kind: 'workflow_call', call_instance: 1 },
+          makeRuntimeCallEntry('review-loop', 'archive'),
         ],
       }),
       { syncParentState: true },
@@ -426,7 +421,7 @@ describe('WorkflowCallExecutor nested restart contract', () => {
       instruction: 'Publish',
       effects: [{ type: 'merge_pr', pr: 42 }],
     }]);
-    const callStack = [restartPoint.stack[0]!];
+    const callStack = [makeRuntimeCallEntry('default', 'delegate')];
     const { executor, createEngine } = makeExecutor({
       parent,
       state: makeState('default', 'delegate'),
@@ -435,7 +430,7 @@ describe('WorkflowCallExecutor nested restart contract', () => {
     });
 
     await expect(executor.execute(
-      makeRequest({ step, child, callStack }),
+      makeRequest(executor, { step, child, callStack }),
       { syncParentState: true },
     )).rejects.toThrow();
     expect(createEngine).not.toHaveBeenCalled();
@@ -447,12 +442,7 @@ describe('WorkflowCallExecutor nested restart contract', () => {
     const child = makeWorkflow('coding', 'review', [
       { name: 'review', persona: 'reviewer', instruction: 'Review' },
     ]);
-    const callStack = [{
-      workflow: 'default',
-      step: 'delegate',
-      kind: 'workflow_call' as const,
-      call_instance: 1,
-    }];
+    const callStack = [makeRuntimeCallEntry('default', 'delegate')];
     const restartPoint = {
       stack: [
         {
@@ -474,7 +464,7 @@ describe('WorkflowCallExecutor nested restart contract', () => {
     });
 
     await expect(executor.execute(
-      makeRequest({ step, child, callStack }),
+      makeRequest(executor, { step, child, callStack }),
       { syncParentState: true },
     )).rejects.toThrow(/restart.*other-root|other-root.*restart/i);
     expect(createEngine).not.toHaveBeenCalled();
@@ -500,18 +490,13 @@ describe('WorkflowCallExecutor nested restart contract', () => {
     });
 
     await expect(executor.execute(
-      makeRequest({
+      makeRequest(executor, {
         step,
         child,
-        callStack: [{
-          workflow: 'default',
-          step: 'delegate',
-          kind: 'workflow_call',
-          call_instance: 2,
-        }],
+        callStack: [makeRuntimeCallEntry('default', 'delegate', 2)],
       }),
       { syncParentState: true },
-    )).rejects.toThrow(/does not match restart path/i);
+    )).rejects.toThrow(/prepared occurrence does not match execution state/i);
     expect(createEngine).not.toHaveBeenCalled();
   });
 
@@ -525,8 +510,8 @@ describe('WorkflowCallExecutor nested restart contract', () => {
     ]);
 
     expect(() => navigator.resolveChildStartStep(child, [
-      restartPoint.stack[0]!,
-      { workflow: 'coding', step: 'nested', kind: 'workflow_call', call_instance: 1 },
+      makeRuntimeCallEntry('default', 'delegate'),
+      makeRuntimeCallEntry('coding', 'nested'),
     ])).toThrow(/exceeds/i);
     expect(navigator.isActive()).toBe(true);
   });

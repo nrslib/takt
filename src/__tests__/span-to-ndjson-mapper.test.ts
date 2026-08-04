@@ -8,8 +8,9 @@ import {
 describe('span-to-ndjson mapper', () => {
   it('maps step span start and end into session log compatible records', () => {
     const stack = [
-      { workflow: 'parent', workflow_ref: 'project:sha256:parent', step: 'delegate', kind: 'workflow_call' },
-      { workflow: 'child', workflow_ref: 'project:sha256:child', step: 'implement', kind: 'agent' },
+      { workflow: 'parent', workflow_ref: 'project:sha256:parent', step: 'reviewers', kind: 'parallel', occurrence: 1 },
+      { workflow: 'parent', workflow_ref: 'project:sha256:parent', step: 'delegate', kind: 'workflow_call', occurrence: 2 },
+      { workflow: 'child', workflow_ref: 'project:sha256:child', step: 'implement', kind: 'agent', occurrence: 1 },
     ];
     const baseSpan: SpanSnapshot = {
       name: 'step.implement',
@@ -69,6 +70,27 @@ describe('span-to-ndjson mapper', () => {
       failureCategory: 'provider_error',
       timestamp: '2026-05-18T00:00:00.000Z',
     });
+  });
+
+  it('canonical workflow stack frameにoccurrenceが欠けたspanはfail-fastする', () => {
+    const span: SpanSnapshot = {
+      name: 'step.implement',
+      startTime: [1_778_777_200, 0],
+      attributes: {
+        'takt.step.name': 'implement',
+        'takt.step.persona': 'coder',
+        'takt.step.iteration': 1,
+        'takt.step.instruction': 'implement',
+        'takt.workflow.stack': JSON.stringify([{
+          workflow: 'child',
+          workflow_ref: 'project:sha256:child',
+          step: 'implement',
+          kind: 'agent',
+        }]),
+      },
+    };
+
+    expect(() => mapSpanStartToNdjson(span)).toThrow(/occurrence/i);
   });
 
   it('parses provider options from the step span into step_start', () => {
@@ -182,7 +204,13 @@ describe('span-to-ndjson mapper', () => {
 
   it('maps phase spans into session log compatible phase records', () => {
     const stack = [
-      { workflow: 'default', step: 'implement', kind: 'agent' },
+      {
+        workflow: 'default',
+        workflow_ref: 'project:sha256:default',
+        step: 'implement',
+        kind: 'agent',
+        occurrence: 1,
+      },
     ];
     const phaseSpan: SpanSnapshot = {
       name: 'phase.implement.execute',

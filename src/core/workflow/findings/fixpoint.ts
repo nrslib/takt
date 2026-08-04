@@ -12,8 +12,11 @@
  * run/resume を跨いで永続化されるため、resume 後の新しいラウンドも
  * このモジュールだけで前ラウンドとの比較を継続できる。
  */
-import { computeConflictEvidenceHash, isLedgerConflictUnadjudicated } from './adjudication-evidence.js';
-import { computeReviewScopeSnapshotId } from './snapshot.js';
+import {
+  computeConflictAdjudicationRequestDigest,
+  freshConflictAdjudicationSnapshot,
+  isActiveConflictUnadjudicated,
+} from './conflict-adjudication-model.js';
 import { stopBudgetRoundsCompleted } from './stop-budget.js';
 import { REVIEWER_ENVELOPE_RECOVERY_LIMITS } from './raw-finding-limits.js';
 import type { FindingLedger, FindingLedgerFixpointSnapshot, FindingLedgerFixpointState } from './types.js';
@@ -24,6 +27,7 @@ function sortedUnique(values: Iterable<string>): string[] {
 }
 
 function provisionalFixpointKey(
+  ledger: FindingLedger,
   finding: FindingLedger['findings'][number] & { provisional: NonNullable<FindingLedger['findings'][number]['provisional']> },
   roundsCompleted: number,
 ): string {
@@ -35,8 +39,9 @@ function provisionalFixpointKey(
       )
     : 0;
   const progress = [
-    provisional.interpretationEpochs,
-    provisional.adjudicationAttempts?.length ?? 0,
+    ledger.terminalAdjudicationAttempts.filter(
+      (attempt) => attempt.findingId === finding.id,
+    ).length,
     provisional.actionRecoveryAttempts?.length ?? 0,
     envelopeRounds,
   ];
@@ -53,14 +58,14 @@ function provisionalFixpointKey(
  * 新規 finding・resolve・reopen・waive・invalidate は必ずどれかの集合の
  * 要素を変える）。
  */
-export function computeFixpointSnapshot(ledger: FindingLedger, cwd: string): FindingLedgerFixpointSnapshot {
+export function computeFixpointSnapshot(ledger: FindingLedger, _cwd: string): FindingLedgerFixpointSnapshot {
   const roundsCompleted = stopBudgetRoundsCompleted(ledger);
   const provisionalKeys = sortedUnique(
     ledger.findings
       .filter((finding): finding is FindingLedger['findings'][number] & {
         provisional: NonNullable<FindingLedger['findings'][number]['provisional']>;
       } => finding.status === 'open' && finding.provisional !== undefined)
-      .map((finding) => provisionalFixpointKey(finding, roundsCompleted)),
+      .map((finding) => provisionalFixpointKey(ledger, finding, roundsCompleted)),
   );
 
   // 終端した provisional（dismissed 等）も id:status で含める: provisionalKeys
@@ -73,15 +78,14 @@ export function computeFixpointSnapshot(ledger: FindingLedger, cwd: string): Fin
   );
 
   const activeConflicts = ledger.conflicts.filter((conflict) => conflict.status === 'active');
-  let unadjudicatedConflictEntries: string[] = [];
-  if (activeConflicts.length > 0) {
-    const reviewScopeSnapshotId = computeReviewScopeSnapshotId(cwd);
-    unadjudicatedConflictEntries = sortedUnique(
-      activeConflicts
-        .filter((conflict) => isLedgerConflictUnadjudicated(conflict, ledger, reviewScopeSnapshotId))
-        .map((conflict) => `${conflict.id}:${computeConflictEvidenceHash(conflict, ledger, reviewScopeSnapshotId)}`),
-    );
-  }
+  const unadjudicatedConflictEntries = sortedUnique(
+    activeConflicts
+      .filter((conflict) => isActiveConflictUnadjudicated(ledger, conflict.id))
+      .map((conflict) => {
+        const snapshot = freshConflictAdjudicationSnapshot(ledger, conflict.id);
+        return `${conflict.id}:${computeConflictAdjudicationRequestDigest(snapshot)}`;
+      }),
+  );
 
   return { provisionalKeys, substantiveEntries, unadjudicatedConflictEntries };
 }

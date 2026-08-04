@@ -10,31 +10,26 @@ vi.mock('../agents/runner.js', () => ({
 
 import { runAgent } from '../agents/runner.js';
 import { executeAndCompleteTask } from '../features/tasks/execute/taskExecution.js';
-import { invalidateGlobalConfigCache, loadWorkflowByIdentifier } from '../infra/config/index.js';
+import {
+  invalidateGlobalConfigCache,
+  loadWorkflowByIdentifier,
+  resolveWorkflowCallTarget,
+} from '../infra/config/index.js';
 import { TaskRunner, type TaskInfo } from '../infra/task/index.js';
-import { parseFindingLedger } from '../core/models/finding-schemas.js';
-import { buildWorkflowResumePointEntry, getWorkflowReference } from '../core/workflow/workflow-reference.js';
+import {
+  buildWorkflowResumePointEntry,
+  getWorkflowReference,
+} from '../core/workflow/workflow-reference.js';
+import { buildWorkflowCallSiteIdentity } from '../core/workflow/workflow-call-site-identity.js';
 import { WorkflowCallInvocationIndex } from '../core/workflow/workflow-call-invocation-index.js';
 import { WorkflowStepParticipationIndex } from '../core/workflow/workflow-step-participation-index.js';
-import { buildWorkflowCallNamespaceFixture } from './helpers/workflow-resume-fixture.js';
+import { createTestFindingLedgerStore } from './helpers/finding-storage.js';
+import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
 
 const sourceRunSlug = '20260717-source-run';
 const resumeModes = ['requeue', 'retry', 'instruct'] as const;
 
 type ResumeMode = typeof resumeModes[number];
-
-function callNamespace(parentWorkflow: string, childWorkflow: string): string {
-  return buildWorkflowCallNamespaceFixture(parentWorkflow, 'delegate', [], childWorkflow, 1);
-}
-
-function loadCallNamespace(projectDir: string): string {
-  const parent = loadWorkflowByIdentifier('parent-fix', projectDir);
-  const child = loadWorkflowByIdentifier('child-fix', projectDir);
-  if (parent === null || child === null) {
-    throw new Error('Expected report inheritance workflows');
-  }
-  return callNamespace(getWorkflowReference(parent), getWorkflowReference(child));
-}
 
 interface TestEnvironment {
   root: string;
@@ -70,24 +65,25 @@ function createEnvironment(withFindingContract: boolean): TestEnvironment {
     '  callable: true',
     ...(withFindingContract ? [
       'finding_contract:',
-      '  ledger_path: .takt/findings/review-ledger.json',
-      '  raw_findings_path: .takt/findings/raw',
       '  manager:',
       '    persona: findings-manager',
       '    instruction: findings-manager',
       '    output_contract: findings-manager',
     ] : []),
     'initial_step: fix',
+    'max_steps: 4',
     'steps:',
     '  - name: reviewers',
     '    parallel:',
     '      - name: arch-review',
     '        persona: ./personas/fixer.md',
     '        instruction: arch review',
-    '        output_contracts:',
-    '          report:',
-    '            - name: 05-arch-review.md',
-    '              format: "# Architecture Review"',
+      '        output_contracts:',
+      '          report:',
+      '            - name: 05-arch-review.md',
+      ...(withFindingContract
+        ? ['              format: architecture-review-finding-contract']
+        : ['              format: "# Architecture Review"']),
     '        rules:',
     '          - condition: approved',
     '            next: COMPLETE',
@@ -105,36 +101,72 @@ function createEnvironment(withFindingContract: boolean): TestEnvironment {
   return { root, projectDir, globalDir };
 }
 
-function buildResumePoint(projectDir: string) {
+function loadResumeWorkflows(projectDir: string) {
   const parent = loadWorkflowByIdentifier('parent-fix', projectDir);
-  const child = loadWorkflowByIdentifier('child-fix', projectDir);
-  if (parent === null || child === null) {
-    throw new Error('Expected report inheritance workflows');
+  if (!parent) {
+    throw new Error('Resume workflow fixtures could not be loaded');
   }
+  const parentStep = parent.steps.find((step) => step.name === 'delegate');
+  if (!parentStep || parentStep.kind !== 'workflow_call') {
+    throw new Error('Resume parent workflow_call fixture could not be loaded');
+  }
+  const child = resolveWorkflowCallTarget(
+    parent,
+    parentStep,
+    projectDir,
+    projectDir,
+  );
+  if (!child) {
+    throw new Error('Resume child workflow fixture could not be loaded');
+  }
+  return { parent, child };
+}
+
+function buildWorkflowCallSite(projectDir: string, occurrence: number) {
+  const { parent, child } = loadResumeWorkflows(projectDir);
+  return buildWorkflowCallSiteIdentity({
+    stack: [{
+      workflow: parent.name,
+      workflow_ref: getWorkflowReference(parent),
+      step: 'delegate',
+      kind: 'workflow_call',
+      occurrence,
+    }],
+    childWorkflow: child,
+  });
+}
+
+function buildWorkflowCallNamespace(projectDir: string, occurrence: number): string {
+  return buildWorkflowCallSite(projectDir, occurrence).runPathSegment;
+}
+
+function buildWorkflowCallAuthorityKey(projectDir: string, occurrence: number): string {
+  return buildWorkflowCallSite(projectDir, occurrence).key;
+}
+
+function buildResumePoint(projectDir: string) {
+  const { parent, child } = loadResumeWorkflows(projectDir);
   const delegateEntry = buildWorkflowResumePointEntry(
     parent,
     'delegate',
     'workflow_call',
+    1,
     undefined,
     1,
   );
   const invocationIndex = new WorkflowCallInvocationIndex(new Map());
   invocationIndex.record(parent, 'delegate', [], {
     call_instance: 1,
-    child_workflow_ref: getWorkflowReference(child),
+    report_namespace_segment: buildWorkflowCallNamespace(projectDir, 1),
   });
   const participationIndex = new WorkflowStepParticipationIndex(new Map());
   participationIndex.record(child, 'reviewers', [delegateEntry], []);
-  participationIndex.record(child, 'arch-review', [
-    delegateEntry,
-    buildWorkflowResumePointEntry(child, 'reviewers', 'agent'),
-  ], ['05-arch-review.md']);
-
+  participationIndex.record(child, 'arch-review', [delegateEntry], ['05-arch-review.md']);
   return {
     version: 2 as const,
     stack: [
       delegateEntry,
-      buildWorkflowResumePointEntry(child, 'fix', 'agent', new Map([['reviewers', 1]])),
+      buildWorkflowResumePointEntry(child, 'fix', 'agent', 1, new Map([['reviewers', 1]])),
     ],
     iteration: 1,
     elapsed_ms: 0,
@@ -154,7 +186,11 @@ function completeSourceTask(runner: TaskRunner, task: TaskInfo): void {
   });
 }
 
-function prepareResumedTask(runner: TaskRunner, projectDir: string, mode: ResumeMode): TaskInfo {
+function prepareResumedTask(
+  runner: TaskRunner,
+  mode: ResumeMode,
+  projectDir: string,
+): TaskInfo {
   runner.addTask('resume inherited review reports', { workflow: 'parent-fix' });
   const sourceTask = runner.claimNextTasks(1)[0];
   if (!sourceTask) {
@@ -193,10 +229,31 @@ function prepareResumedTask(runner: TaskRunner, projectDir: string, mode: Resume
   );
 }
 
-function writeSourceReports(projectDir: string, withFindingContract: boolean): {
+function writeSourceRunMeta(projectDir: string): void {
+  const runRoot = `.takt/runs/${sourceRunSlug}`;
+  const runDir = join(projectDir, runRoot);
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(join(runDir, 'meta.json'), JSON.stringify({
+    task: 'resume inherited review reports',
+    workflow: 'parent-fix',
+    runSlug: sourceRunSlug,
+    runRoot,
+    reportDirectory: `${runRoot}/reports`,
+    contextDirectory: `${runRoot}/context`,
+    logsDirectory: `${runRoot}/logs`,
+    status: 'failed',
+    startTime: '2026-07-17T00:00:00.000Z',
+    endTime: '2026-07-17T00:01:00.000Z',
+    reason: 'source run stopped before the resumed fix',
+  }), 'utf-8');
+}
+
+async function writeSourceReports(projectDir: string, withFindingContract: boolean): Promise<{
   sourceReportDir: string;
-  sourceLedger?: string;
-} {
+  sourceLedger?: ReturnType<typeof parseFindingLedger>;
+  sourceStore?: FindingLedgerStore;
+}> {
+  writeSourceRunMeta(projectDir);
   const sourceReportDir = join(
     projectDir,
     '.takt',
@@ -204,7 +261,7 @@ function writeSourceReports(projectDir: string, withFindingContract: boolean): {
     sourceRunSlug,
     'reports',
     'subworkflows',
-    loadCallNamespace(projectDir),
+    buildWorkflowCallNamespace(projectDir, 1),
   );
   mkdirSync(sourceReportDir, { recursive: true });
   writeFileSync(join(sourceReportDir, '05-arch-review.md'), 'previous architecture review', 'utf-8');
@@ -213,19 +270,15 @@ function writeSourceReports(projectDir: string, withFindingContract: boolean): {
     return { sourceReportDir };
   }
 
-  const sourceLedger = JSON.stringify(parseFindingLedger({
+  const sourceStore = createTestFindingLedgerStore({
+    projectCwd: projectDir,
+    runId: sourceRunSlug,
+    reportDir: sourceReportDir,
     workflowName: 'child-fix',
-    nextId: 1,
-    updatedAt: '2026-07-17T00:00:00.000Z',
-    findings: [],
-    rawFindings: [],
-    conflicts: [],
-    interpretations: [],
-  }));
-  const ledgerPath = join(projectDir, '.takt', 'findings', 'review-ledger.json');
-  mkdirSync(join(projectDir, '.takt', 'findings'), { recursive: true });
-  writeFileSync(ledgerPath, sourceLedger, 'utf-8');
-  return { sourceReportDir, sourceLedger };
+    authorityKey: buildWorkflowCallAuthorityKey(projectDir, 1),
+  });
+  const sourceLedger = sourceStore.loadLedger();
+  return { sourceReportDir, sourceLedger, sourceStore };
 }
 
 function findResumedRunSlug(projectDir: string): string {
@@ -235,6 +288,22 @@ function findResumedRunSlug(projectDir: string): string {
     throw new Error('Resumed run directory was not created');
   }
   return resumedRunSlug;
+}
+
+function readResumeArtifacts(projectDir: string, runSlug: string) {
+  return JSON.parse(readFileSync(join(
+    projectDir,
+    '.takt',
+    'runs',
+    runSlug,
+    'reports',
+    'resume-artifacts.json',
+  ), 'utf-8')) as {
+    version: number;
+    sourceRunSlug: string;
+    targetRunSlug: string;
+    files: Array<{ path: string; size: number; sha256: string }>;
+  };
 }
 
 describe.each(resumeModes)('IT: report inheritance through %s task resume', (mode) => {
@@ -258,7 +327,7 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
     }
   });
 
-  it.each([false, true])('runs the nested fix with inherited reports (finding contract: %s)', async (withFindingContract) => {
+  it.each([false, true])('honors report inheritance and finding storage contracts (finding contract: %s)', async (withFindingContract) => {
     environment = createEnvironment(withFindingContract);
     process.env.TAKT_CONFIG_DIR = environment.globalDir;
     invalidateGlobalConfigCache();
@@ -279,9 +348,13 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
       };
     });
 
-    const source = writeSourceReports(environment.projectDir, withFindingContract);
+    const source = await writeSourceReports(environment.projectDir, withFindingContract);
     const runner = new TaskRunner(environment.projectDir);
-    const resumedTask = prepareResumedTask(runner, environment.projectDir, mode);
+    const resumedTask = prepareResumedTask(
+      runner,
+      mode,
+      environment.projectDir,
+    );
 
     const success = await executeAndCompleteTask(resumedTask, runner, environment.projectDir);
 
@@ -293,17 +366,22 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
       resumedRunSlug,
       'reports',
       'subworkflows',
-      loadCallNamespace(environment.projectDir),
+      buildWorkflowCallNamespace(environment.projectDir, 1),
       '05-arch-review.md',
     );
-    const diagnosticPath = join(
+    const inheritedReportRelativePath = [
+      'subworkflows',
+      buildWorkflowCallNamespace(environment.projectDir, 1),
+      '05-arch-review.md',
+    ].join('/');
+    const inheritanceDiagnosticPath = join(
       environment.projectDir,
       '.takt',
       'runs',
       resumedRunSlug,
       'reports',
       'subworkflows',
-      loadCallNamespace(environment.projectDir),
+      buildWorkflowCallNamespace(environment.projectDir, 1),
       'review-report-inheritance.json',
     );
 
@@ -315,8 +393,19 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
     expect(instructions[0]).not.toContain(source.sourceReportDir);
     expect(readFileSync(inheritedReportPath, 'utf-8')).toBe('previous architecture review');
     expect(readFileSync(join(source.sourceReportDir, '05-arch-review.md'), 'utf-8')).toBe('previous architecture review');
-    expect(JSON.parse(readFileSync(diagnosticPath, 'utf-8'))).toEqual(expect.objectContaining({
+    expect(readResumeArtifacts(environment.projectDir, resumedRunSlug)).toEqual(expect.objectContaining({
+      version: 1,
       sourceRunSlug,
+      targetRunSlug: resumedRunSlug,
+      files: [
+        expect.objectContaining({
+          path: inheritedReportRelativePath,
+          size: Buffer.byteLength('previous architecture review'),
+          sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+        }),
+      ],
+    }));
+    expect(JSON.parse(readFileSync(inheritanceDiagnosticPath, 'utf-8'))).toEqual(expect.objectContaining({
       sourceReportDirectory: join(environment.projectDir, '.takt', 'runs', sourceRunSlug, 'reports'),
       status: 'partial',
       fallbackUsed: true,
@@ -325,14 +414,13 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
         reason: 'target_exists',
       })],
     }));
-    if (source.sourceLedger !== undefined) {
-      expect(readFileSync(join(environment.projectDir, '.takt', 'findings', 'review-ledger.json'), 'utf-8'))
-        .toBe(source.sourceLedger);
+    if (source.sourceLedger !== undefined && source.sourceStore !== undefined) {
+      expect(source.sourceStore.loadLedger()).toEqual(source.sourceLedger);
     }
   });
 });
 
-describe('IT: missing report source fallback through task resume', () => {
+describe('IT: missing report source through task resume', () => {
   let environment: TestEnvironment;
   let originalConfigDir: string | undefined;
 
@@ -353,7 +441,7 @@ describe('IT: missing report source fallback through task resume', () => {
     }
   });
 
-  it('should fail before the resumed fix agent runs and record unavailable diagnostics when the source run was deleted', async () => {
+  it('should fail before the resumed fix agent runs and publish an empty source snapshot when source reports are missing', async () => {
     environment = createEnvironment(false);
     process.env.TAKT_CONFIG_DIR = environment.globalDir;
     invalidateGlobalConfigCache();
@@ -374,12 +462,24 @@ describe('IT: missing report source fallback through task resume', () => {
       };
     });
 
+    writeSourceRunMeta(environment.projectDir);
     const runner = new TaskRunner(environment.projectDir);
-    const resumedTask = prepareResumedTask(runner, environment.projectDir, 'requeue');
+    const resumedTask = prepareResumedTask(
+      runner,
+      'retry',
+      environment.projectDir,
+    );
 
     const success = await executeAndCompleteTask(resumedTask, runner, environment.projectDir);
 
     const resumedRunSlug = findResumedRunSlug(environment.projectDir);
+    const resumedMeta = JSON.parse(readFileSync(join(
+      environment.projectDir,
+      '.takt',
+      'runs',
+      resumedRunSlug,
+      'meta.json',
+    ), 'utf-8')) as { reason?: string };
     const reportRoot = join(
       environment.projectDir,
       '.takt',
@@ -400,13 +500,21 @@ describe('IT: missing report source fallback through task resume', () => {
 
     expect(success).toBe(false);
     expect(instructions).toHaveLength(0);
+    expect(readResumeArtifacts(environment.projectDir, resumedRunSlug)).toEqual(expect.objectContaining({
+      version: 1,
+      sourceRunSlug,
+      targetRunSlug: resumedRunSlug,
+      files: [],
+    }));
     expect(diagnostic).toEqual(expect.objectContaining({
       sourceRunSlug,
       status: 'unavailable',
       fallbackUsed: true,
+      skipped: [expect.objectContaining({
+        reportName: '05-arch-review.md',
+        reason: 'not_found',
+      })],
     }));
-    expect(diagnostic.skipped).toEqual(expect.arrayContaining([
-      expect.objectContaining({ reason: expect.stringContaining('source_resolution_failed') }),
-    ]));
+    expect(resumedMeta.reason).toBe('rule_no_match');
   });
 });

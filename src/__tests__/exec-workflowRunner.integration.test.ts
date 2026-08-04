@@ -10,6 +10,7 @@ import {
   buildExecReadonlyProviderProfileOverrides,
   runGeneratedWorkflow as runGeneratedWorkflowRaw,
 } from '../features/exec/workflowRunner.js';
+import { makeFileRunMetaPathFields } from './test-helpers.js';
 import type { TaskAttachment } from '../features/tasks/attachments.js';
 import type { ResolvedExecConfig } from '../features/exec/types.js';
 
@@ -50,15 +51,14 @@ function writeCompletedRun(cwd: string, slug: string, task: string, reportNames 
   const runDir = join(cwd, '.takt', 'runs', slug);
   const reportsDir = join(runDir, 'reports');
   mkdirSync(join(runDir, 'logs'), { recursive: true });
+  mkdirSync(join(runDir, 'context'), { recursive: true });
   mkdirSync(reportsDir, { recursive: true });
   writeFileSync(join(runDir, 'meta.json'), JSON.stringify({
     task,
     workflow: 'exec-test',
     status: 'completed',
     startTime: '2026-06-23T00:00:00.000Z',
-    runSlug: slug,
-    logsDirectory: `.takt/runs/${slug}/logs`,
-    reportDirectory: `.takt/runs/${slug}/reports`,
+    ...makeFileRunMetaPathFields(cwd, slug),
   }), 'utf-8');
   const reportTitles = new Map([
     ['review-1-review-result.md', 'Review 1'],

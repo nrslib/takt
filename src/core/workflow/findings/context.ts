@@ -2,17 +2,43 @@ import {
   FINDING_SEVERITIES,
   type FindingLedger,
   type FindingLedgerEntry,
+  type ProductFindingEntry,
   type FindingSeverity,
   type FindingsRuleContext,
 } from './types.js';
-import { isLedgerConflictUnadjudicated } from './adjudication-evidence.js';
-import { computeReviewScopeSnapshotId } from './snapshot.js';
+import { isProductFindingEntry } from './finding-entry.js';
+import { isActiveConflictUnadjudicated } from './conflict-adjudication-model.js';
 import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
-import { stopBudgetRoundsCompleted } from './stop-budget.js';
+import {
+  findingFileQuoteLocations,
+  formatFileQuoteLocation,
+} from './evidence-location.js';
+import { computeDismissCandidates } from './manager-utils.js';
+import { isOutstandingReviewerAnomaly } from './reviewer-anomalies.js';
+
+function resolveFindingLedgerInstructionProjection(ledger: FindingLedger): FindingLedger {
+  const completed = ledger.pendingManagerCommit?.completed;
+  if (completed === undefined) {
+    return ledger;
+  }
+  return {
+    ...ledger,
+    ...completed,
+    pendingManagerCommit: ledger.pendingManagerCommit,
+  };
+}
+
+function findingLocations(
+  ledger: FindingLedger,
+  finding: FindingLedgerEntry,
+): string[] {
+  return findingFileQuoteLocations(ledger, finding).map(formatFileQuoteLocation);
+}
 
 function indexRawFindingFamilyTags(ledger: FindingLedger): ReadonlyMap<string, string> {
   const familyTagsByRawFindingId = new Map<string, string>();
   for (const finding of ledger.rawFindings) {
+    if (finding.familyTag === null) continue;
     const existingFamilyTag = familyTagsByRawFindingId.get(finding.rawFindingId);
     if (existingFamilyTag !== undefined && existingFamilyTag !== finding.familyTag) {
       throw new Error(
@@ -45,10 +71,19 @@ function deriveFindingFamilyTags(
   };
 }
 
-export function selectActionableFindingEntries(ledger: FindingLedger): FindingLedgerEntry[] {
-  return ledger.findings.filter((finding) => (
+export function selectActionableFindingEntries(
+  ledger: FindingLedger,
+): ProductFindingEntry[] {
+  const projection = resolveFindingLedgerInstructionProjection(ledger);
+  const findings = projection.findings.filter((finding) => (
     finding.status === 'open' && finding.provisional === undefined
   ));
+  for (const finding of findings) {
+    if (!isProductFindingEntry(finding)) {
+      throw new Error(`Actionable finding "${finding.id}" has an incomplete claim payload`);
+    }
+  }
+  return findings.filter(isProductFindingEntry);
 }
 
 function buildActionableFindingLedgerInstructionSummary(
@@ -61,25 +96,26 @@ function buildActionableFindingLedgerInstructionSummary(
     lifecycle: FindingLedgerEntry['lifecycle'];
     severity: FindingSeverity;
     title: string;
-    location: string | undefined;
+    locations: string[];
     description: string | undefined;
     suggestion: string | undefined;
     rawFindingIds: string[];
     familyTags: string[];
   }>;
 } {
+  const projection = resolveFindingLedgerInstructionProjection(ledger);
   const selectedIds = findingIds === undefined ? undefined : new Set(findingIds);
-  const familyTagsByRawFindingId = indexRawFindingFamilyTags(ledger);
+  const familyTagsByRawFindingId = indexRawFindingFamilyTags(projection);
   return {
-    workflowName: ledger.workflowName,
-    open: selectActionableFindingEntries(ledger)
+    workflowName: projection.workflowName,
+    open: selectActionableFindingEntries(projection)
       .filter((finding) => selectedIds === undefined || selectedIds.has(finding.id))
       .map((finding) => ({
         id: finding.id,
         lifecycle: finding.lifecycle,
         severity: finding.severity,
         title: finding.title,
-        location: finding.location,
+        locations: findingLocations(projection, finding),
         description: finding.description,
         suggestion: finding.suggestion,
         rawFindingIds: finding.rawFindingIds,
@@ -106,49 +142,11 @@ export function renderCompactActionableFindingLedgerInstructionSummary(
   }, null, 2);
 }
 
-function resolveFindingLedgerInstructionProjection(ledger: FindingLedger): FindingLedger {
-  const completed = ledger.pendingManagerCommit?.completed;
-  if (completed === undefined) {
-    return ledger;
-  }
-  return {
-    workflowName: ledger.workflowName,
-    nextId: completed.nextId,
-    updatedAt: completed.updatedAt,
-    findings: completed.findings,
-    rawFindings: completed.rawFindings,
-    conflicts: completed.conflicts,
-    interpretations: completed.interpretations,
-    ...(completed.fixpoint !== undefined ? { fixpoint: completed.fixpoint } : {}),
-    ...(completed.stopBudget !== undefined ? { stopBudget: completed.stopBudget } : {}),
-    ...(completed.reviewerAnomalies !== undefined
-      ? { reviewerAnomalies: completed.reviewerAnomalies }
-      : {}),
-    ...(completed.reviewIntegrity !== undefined
-      ? { reviewIntegrity: completed.reviewIntegrity }
-      : {}),
-    pendingManagerCommit: ledger.pendingManagerCommit,
-  };
-}
-
-export function resolveFindingLedgerReviewMode(ledger: FindingLedger): 'initial' | 'follow_up' {
-  const projection = resolveFindingLedgerInstructionProjection(ledger);
-  const hasReviewHistory = projection.findings.length > 0
-    || projection.rawFindings.length > 0
-    || projection.conflicts.length > 0
-    || projection.interpretations.length > 0
-    || (projection.reviewerAnomalies?.length ?? 0) > 0
-    || stopBudgetRoundsCompleted(projection) > 0
-    || projection.pendingManagerCommit !== undefined;
-  return hasReviewHistory ? 'follow_up' : 'initial';
-}
-
 export function renderFindingLedgerInstructionSummary(ledger: FindingLedger): string {
   const projection = resolveFindingLedgerInstructionProjection(ledger);
   const familyTagsByRawFindingId = indexRawFindingFamilyTags(projection);
   return JSON.stringify({
     workflowName: projection.workflowName,
-    reviewMode: resolveFindingLedgerReviewMode(projection),
     open: projection.findings
       .filter((finding) => finding.status === 'open')
       .map((finding) => {
@@ -158,7 +156,7 @@ export function renderFindingLedgerInstructionSummary(ledger: FindingLedger): st
           lifecycle: finding.lifecycle,
           severity: finding.severity,
           title: finding.title,
-          location: finding.location,
+          locations: findingLocations(projection, finding),
           description: finding.description,
           suggestion: finding.suggestion,
           reviewers: finding.reviewers,
@@ -212,6 +210,9 @@ export function renderFindingLedgerInstructionSummary(ledger: FindingLedger): st
         title: finding.title,
         basis: finding.dismissal?.basis,
         reason: finding.dismissal?.reason,
+        taskQuote: finding.dismissal?.taskQuote,
+        workflowTaskDigest: finding.dismissal?.workflowTaskDigest,
+        adjudicationTaskId: finding.dismissal?.adjudicationTaskId,
       })),
     conflicts: projection.conflicts.map((conflict) => ({
       id: conflict.id,
@@ -270,22 +271,21 @@ export function ledgerHasDismissedFindings(ledger: FindingLedger): boolean {
     .some((finding) => finding.status === 'dismissed');
 }
 
-export function buildFindingsRuleContext(ledger: FindingLedger, cwd: string): FindingsRuleContext {
-  const openItems = ledger.findings.filter((finding) => finding.status === 'open');
-  const familyTagsByRawFindingId = indexRawFindingFamilyTags(ledger);
-  const activeConflicts = ledger.conflicts.filter((conflict) => conflict.status === 'active');
-  let unadjudicatedConflictCount = 0;
-  if (activeConflicts.length > 0) {
-    const reviewScopeSnapshotId = computeReviewScopeSnapshotId(cwd);
-    unadjudicatedConflictCount = activeConflicts.filter((conflict) => (
-      isLedgerConflictUnadjudicated(conflict, ledger, reviewScopeSnapshotId)
-    )).length;
-  }
+export function buildFindingsRuleContext(ledger: FindingLedger, _cwd: string): FindingsRuleContext {
+  const projection = resolveFindingLedgerInstructionProjection(ledger);
+  const openItems = projection.findings.filter((finding) => finding.status === 'open');
+  const familyTagsByRawFindingId = indexRawFindingFamilyTags(projection);
+  const activeConflicts = projection.conflicts.filter((conflict) => conflict.status === 'active');
+  const unadjudicatedConflictCount = activeConflicts.filter((conflict) => (
+    isActiveConflictUnadjudicated(projection, conflict.id)
+  )).length;
   const bySeverity = Object.fromEntries(
     FINDING_SEVERITIES.map((severity) => [severity, 0]),
   ) as Record<FindingSeverity, number>;
   for (const finding of openItems) {
-    bySeverity[finding.severity] += 1;
+    if (finding.severity !== null) {
+      bySeverity[finding.severity] += 1;
+    }
   }
 
   return {
@@ -296,7 +296,7 @@ export function buildFindingsRuleContext(ledger: FindingLedger, cwd: string): Fi
         id: finding.id,
         severity: finding.severity,
         title: finding.title,
-        location: finding.location,
+        locations: findingLocations(projection, finding),
         description: finding.description,
         suggestion: finding.suggestion,
         reviewers: finding.reviewers,
@@ -309,10 +309,13 @@ export function buildFindingsRuleContext(ledger: FindingLedger, cwd: string): Fi
     // count > 0 での COMPLETE を最終不変条件として拒否する。
     provisional: {
       count: openItems.filter((finding) => finding.provisional !== undefined).length,
+      dismissEligible: {
+        count: computeDismissCandidates(projection).size,
+      },
       // 直前の findings-manager ラウンドが fixpoint に達したか
       // （台帳側で計算・永続化済み。ここは読むだけ）。builtin workflow はこれを
       // 見て要件を維持した再計画へルーティングする。
-      fixpoint: ledger.fixpoint?.reached ?? false,
+      fixpoint: projection.fixpoint?.reached ?? false,
       items: openItems
         .filter((finding) => finding.provisional !== undefined)
         .map((finding) => ({
@@ -326,34 +329,34 @@ export function buildFindingsRuleContext(ledger: FindingLedger, cwd: string): Fi
     // provisional バケットとは独立 — fixpoint が成立しない churn でも、
     // ラウンド数だけで機械的に判定できる最終防波堤。
     rounds: {
-      budgetExhausted: ledger.stopBudget?.exhausted ?? false,
+      budgetExhausted: projection.stopBudget?.exhausted ?? false,
     },
     resolved: {
-      count: ledger.findings.filter((finding) => finding.status === 'resolved').length,
+      count: projection.findings.filter((finding) => finding.status === 'resolved').length,
     },
     waived: {
-      count: ledger.findings.filter((finding) => finding.status === 'waived').length,
+      count: projection.findings.filter((finding) => finding.status === 'waived').length,
     },
     // 監査可視化のみ。gate 条件は open/conflicts のまま
     // 変えない — count を公開するだけで、既存ルール式の意味は変わらない。
     invalidated: {
-      count: ledger.findings.filter((finding) => finding.status === 'invalidated').length,
+      count: projection.findings.filter((finding) => finding.status === 'invalidated').length,
     },
     superseded: {
-      count: ledger.findings.filter((finding) => finding.status === 'superseded').length,
+      count: projection.findings.filter((finding) => finding.status === 'superseded').length,
     },
-    // review-integrity protocol: 二系統台帳の review-integrity 側。未昇格（promotedFindingId
-    // 無し）の anomaly だけを数える — 昇格済みは既に product finding 側
+    // review-integrity protocol: 二系統台帳の review-integrity 側。未昇格かつ
+    // 未settleの anomaly だけを数える — 昇格済みは既に product finding 側
     // （open/provisional 等）でカウントされているため二重計上しない。product
     // gate（COMPLETE 判定）はこの count を一切参照しない — reviewerAnomalies は
     // findings 配列と別物なので、参照しなくても構造的に gate を塞げない。
     reviewerAnomalies: {
-      count: (ledger.reviewerAnomalies ?? []).filter((anomaly) => anomaly.promotedFindingId === undefined).length,
+      count: (projection.reviewerAnomalies ?? []).filter(isOutstandingReviewerAnomaly).length,
       // review-integrity requirement: review-integrity 予算が尽きたか（台帳側で計算・
       // 永続化済み。ここは読むだけ）。未昇格 anomaly が残る限り COMPLETE は許さず
       // 再レビューへ送るが、有限回で補完できなければ builtin はこれを見て
       // 要件を維持した再計画へルーティングする。
-      budgetExhausted: ledger.reviewIntegrity?.exhausted ?? false,
+      budgetExhausted: projection.reviewIntegrity?.exhausted ?? false,
     },
     conflicts: {
       count: activeConflicts.length,

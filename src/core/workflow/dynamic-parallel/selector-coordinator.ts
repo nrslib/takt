@@ -32,7 +32,7 @@ export interface DynamicParallelSelectorCoordinatorDeps {
   readonly getReportDirectory: () => string;
   readonly getReportNames: (step: WorkflowStep, state: WorkflowState) => readonly string[];
   readonly getWorkflowReference: () => string;
-  readonly ownerPath: readonly WorkflowResumePointEntry[];
+  readonly workflowCallPath: readonly WorkflowResumePointEntry[];
   readonly commitSelection: (
     step: WorkflowStep,
     iteration: number,
@@ -178,7 +178,7 @@ export class DynamicParallelSelectorCoordinator {
     return buildDynamicParallelSelectionIdentityFromPath(
       this.deps.getWorkflowReference(),
       stepName,
-      this.deps.ownerPath,
+      this.deps.workflowCallPath,
     );
   }
 

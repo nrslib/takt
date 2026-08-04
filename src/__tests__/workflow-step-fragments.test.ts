@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { ZodError } from 'zod';
 import { invalidateAllResolvedConfigCache, invalidateGlobalConfigCache } from '../infra/config/index.js';
-import { getBuiltinLanguageStepsDir, getGlobalStepsDir } from '../infra/config/paths.js';
+import { getBuiltinLanguageStepsDir, getBuiltinSharedStepsDir, getGlobalStepsDir } from '../infra/config/paths.js';
 import { buildStepFragmentLookupDirs } from '../infra/config/loaders/stepFragmentLookupDirectories.js';
 import { resolveWorkflowStepFragments } from '../infra/config/loaders/workflowStepFragmentResolver.js';
 import { inspectWorkflowFile } from '../infra/config/loaders/workflowDoctor.js';
@@ -56,6 +56,7 @@ subworkflow:
   callable: true
   returns: [done]
 initial_step: child
+max_steps: 1
 steps:
   - name: child
     instruction: child
@@ -338,6 +339,7 @@ steps:
     expect(buildStepFragmentLookupDirs({ lang })).toEqual([
       getGlobalStepsDir(),
       getBuiltinLanguageStepsDir(lang),
+      getBuiltinSharedStepsDir(),
     ]);
   });
 
@@ -1038,6 +1040,7 @@ model: gpt-5
       '  callable: true',
       '  requires_finding_contract: true',
       'initial_step: child',
+      'max_steps: 1',
       'steps:',
       '  - name: child',
       '    instruction: child',

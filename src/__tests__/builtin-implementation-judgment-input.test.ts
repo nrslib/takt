@@ -85,7 +85,6 @@ describe('builtin implementation status judgment input', () => {
             lastResponse: implementationResult,
             workflowName: workflow.name,
             iteration: 1,
-            executionScope: { kind: 'workflow_execution_scope', stack: [] },
             resolveStepProviderModel: vi.fn().mockReturnValue({
               provider: 'cursor',
               model: undefined,

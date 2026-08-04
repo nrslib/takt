@@ -20,18 +20,32 @@ export interface FindingContractInstructionInput {
   renderFencedJsonBlock: (value: unknown) => string;
 }
 
-export function buildFindingContractInstruction(input: FindingContractInstructionInput): string {
-  const { contract, language, renderFencedJsonBlock } = input;
-  const rawFindingsStructuredOutput = contract.rawFindingsStructuredOutput;
-  const isReviewer = rawFindingsStructuredOutput !== undefined;
+function renderFindingContractInstruction(input: {
+  contract: FindingContractInstructionContext;
+  language: Language;
+  renderFencedJsonBlock: (value: unknown) => string;
+  reportPhase: boolean;
+}): string {
+  const {
+    contract,
+    language,
+    renderFencedJsonBlock,
+    reportPhase,
+  } = input;
+  const reviewer = contract.reviewer;
+  const isReviewer = reviewer !== undefined;
+  const structuredReviewer = reviewer?.mode === 'structured';
+  const plainTextNormalizedReviewer = reviewer?.mode === 'plain_text_normalized';
+  const rawFindingsStructuredOutput = structuredReviewer
+    ? reviewer.rawFindingsStructuredOutput
+    : undefined;
 
   // review-integrity protocol: rawFindingsStructuredOutput と reviewScopeSnapshotId は同じ
   // includeRawFindingsSchema 条件下で必ずセットで生成される（WorkflowEngineSetup.ts
   // の buildFindingContractInstructionContext 参照）。reviewer 用の
   // FindingContractInstructionContext を組む経路が reviewScopeSnapshotId の配線を
-  // 落とすと、reviewer は空文字列の snapshotId を source_quote evidence に echo し、
-  // manager 側の決定的検証（verifySourceQuoteEvidence）が必ず stale-snapshot で弾く
-  // ようになる。引用が完全に正確でも product finding へ絶対に昇格できず、reviewer
+  // 落とすと engine が evidence request を現在の review scope に束縛できない。
+  // 引用が完全に正確でも product finding へ絶対に昇格できず、reviewer
   // anomaly に落ち続けるという重大な machine-detectable な配線バグであるにも
   // かかわらず、`?? ''` によるサイレントな空文字 fallback はこれを不可視にする
   // （実際に ParallelRunner が inline で context を組み立てて発生させていた）。
@@ -39,7 +53,13 @@ export function buildFindingContractInstruction(input: FindingContractInstructio
   // おり、ここも唯一の発見場所として throw で止める。呼び出し側は
   // optionsBuilder.buildFindingContractInstructionContext(step, true) 経由で
   // context を組み立てる限りこの分岐に到達しない。
-  if (isReviewer && !contract.reviewScopeSnapshotId) {
+  if (
+    isReviewer
+    && (
+      typeof reviewer.reviewScopeSnapshotId !== 'string'
+      || reviewer.reviewScopeSnapshotId.length === 0
+    )
+  ) {
     throw new Error(
       'Finding contract reviewer instruction is missing reviewScopeSnapshotId even though '
       + 'rawFindingsStructuredOutput is present. This is a wiring bug in the caller that built the '
@@ -51,9 +71,17 @@ export function buildFindingContractInstruction(input: FindingContractInstructio
   }
 
   const rendered = loadTemplate('parts/finding_contract_instruction', language, {
-    ledgerSummary: renderFencedJsonBlock(contract.ledgerSummary),
+    ledgerSummary: renderFencedJsonBlock(
+      reportPhase ? contract.reportLedgerSummary : contract.ledgerSummary,
+    ),
+    isReportPhase: reportPhase,
     isReviewer,
+    structuredReviewer,
+    plainTextNormalizedReviewer,
     reviewerHasOpenFindings: isReviewer && contract.hasOpenFindings,
+    structuredReviewerHasOpenFindings: structuredReviewer && contract.hasOpenFindings,
+    plainTextNormalizedReviewerHasOpenFindings:
+      plainTextNormalizedReviewer && contract.hasOpenFindings,
     reviewerHasWaivedFindings: isReviewer && contract.hasWaivedFindings,
     reviewerHasDismissedFindings: isReviewer && contract.hasDismissedFindings,
     rawFindingsJsonSchema: rawFindingsStructuredOutput
@@ -62,7 +90,7 @@ export function buildFindingContractInstruction(input: FindingContractInstructio
     // review-integrity protocol: reviewer step のときだけ設定される（instruction-context.ts
     // 参照）。空文字は「該当なし」— テンプレート側は isReviewer と一緒にしか
     // 出さない。
-    reviewScopeSnapshotId: contract.reviewScopeSnapshotId ?? '',
+    reviewScopeSnapshotId: reviewer?.reviewScopeSnapshotId ?? '',
     // 異議申告のガイドは open な指摘が存在するときだけ注入する。台帳が空の
     // 段階（初回 implement 等）では無意味であり、無関係なプロトコル文が
     // 弱いモデルのツール呼び出しを不安定化させることを実走で確認済み。
@@ -72,8 +100,15 @@ export function buildFindingContractInstruction(input: FindingContractInstructio
   return rendered.trimEnd();
 }
 
+export function buildFindingContractInstruction(input: FindingContractInstructionInput): string {
+  return renderFindingContractInstruction({
+    ...input,
+    reportPhase: false,
+  });
+}
+
 export interface FindingContractReportInstructionInput {
-  reportLedgerSummary: unknown;
+  contract: FindingContractInstructionContext;
   language: Language;
   renderFencedJsonBlock: (value: unknown) => string;
 }
@@ -81,19 +116,14 @@ export interface FindingContractReportInstructionInput {
 /**
  * Phase 2（レポート出力フェーズ）用の Finding Contract 指示文を組み立てる。
  *
- * Phase 2 はツール呼び出しを行わない出力専用フェーズのため、isReviewer /
- * canDispute 系の分岐は常に false（未指定）で渡し、テンプレート側の
- * isReportPhase 分岐だけを使う。Phase 1 とは異なる文言（「inline ledger
- * summary」「ledger IDs」）になるのは reportLedgerSummary が ledgerSummary
- * とは別の（IDのみの）データだから。
+ * Phase 2 はツール呼び出しを行わない出力専用フェーズだが、reviewer 契約は
+ * Phase 1 と同じ context から引き継ぐ。これにより新規 session retry / provider
+ * fallback でも、レポート本文と raw findings を同じ応答から抽出する publication
+ * schema を欠落させない。台帳だけは ID 参照用の reportLedgerSummary を使う。
  */
 export function buildFindingContractReportInstruction(input: FindingContractReportInstructionInput): string {
-  const { reportLedgerSummary, language, renderFencedJsonBlock } = input;
-
-  const rendered = loadTemplate('parts/finding_contract_instruction', language, {
-    ledgerSummary: renderFencedJsonBlock(reportLedgerSummary),
-    isReportPhase: true,
+  return renderFindingContractInstruction({
+    ...input,
+    reportPhase: true,
   });
-
-  return rendered.trimEnd();
 }

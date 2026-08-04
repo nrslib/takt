@@ -1061,14 +1061,14 @@ export class OpenCodeAttemptRunner {
     // `message.part.updated` — some providers emit both for the same part.
     const consumeTextDelta = (partId: string, rawDelta: string): void => {
       if (!rawDelta) return;
-      if (!trackOpenCodeTextBytes(state, rawDelta)) {
+      const visibleDelta = stripPromptEcho(rawDelta, echoState);
+      if (visibleDelta && !trackOpenCodeTextBytes(state, visibleDelta)) {
         textContentParts.clear();
         textOffsets.clear();
         success = false;
         failureMessage = describeOpenCodeStreamTrackingLimitFailure(state.trackingLimitReason);
         return;
       }
-      const visibleDelta = stripPromptEcho(rawDelta, echoState);
       if (visibleDelta) {
         const redactor = state.textRedactors.get(partId) ?? createSensitiveTextStreamRedactor();
         state.textRedactors.set(partId, redactor);

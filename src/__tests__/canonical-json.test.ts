@@ -133,7 +133,6 @@ describe('canonicalJson', () => {
       findings: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
       stopBudget: {
         roundMarkers: ['round-2', 'round-1'],
         firstRoundAt: '2026-07-27T00:00:00.000Z',

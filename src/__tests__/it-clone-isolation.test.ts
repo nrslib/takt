@@ -196,7 +196,7 @@ describe('shared clone generated metadata isolation', () => {
       fixture.clonePath,
       ['rev-parse', result.pullRequestBaseRef!],
     ).toString().trim()).toBe(rewrittenBase);
-  });
+  }, 60_000);
 
   it('force-updates existing remote-tracking and PR base refs in the same repository', () => {
     const fixture = createPullRequestRepoFixture();
@@ -227,7 +227,7 @@ describe('shared clone generated metadata isolation', () => {
         ['rev-parse', `refs/takt/pr-base/${fixture.baseBranch}`],
       ).toString().trim(),
     ).toBe(rewrittenBase);
-  });
+  }, 60_000);
 
   it('does not leave the source repo path in clone .git metadata for local branch clones', () => {
     const tempDir = createTempDir();

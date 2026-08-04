@@ -40,13 +40,10 @@ import type { RuntimeStepResolution, StepProviderInfo, StepRunResult } from '../
 import {
   buildPartScopedSessionKey,
   buildTeamLeaderErrorPartResult,
+  createExplicitPartFailure,
   runTeamLeaderPart,
 } from './team-leader-part-runner.js';
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
-import {
-  snapshotWorkflowExecutionScope,
-  type WorkflowExecutionScope,
-} from '../workflow-execution-scope.js';
 import { buildPhaseExecutionId } from '../../../shared/utils/phaseExecutionId.js';
 import { resolveInspectToolsForProvider } from './engine-provider-options.js';
 import {
@@ -118,7 +115,6 @@ export interface TeamLeaderRunnerDeps {
     promptParts: PhasePromptParts,
     phaseExecutionId?: string,
     iteration?: number,
-    scope?: WorkflowExecutionScope,
   ) => void;
   readonly onPhaseComplete?: (
     step: WorkflowStep,
@@ -129,7 +125,6 @@ export interface TeamLeaderRunnerDeps {
     error?: string,
     phaseExecutionId?: string,
     iteration?: number,
-    scope?: WorkflowExecutionScope,
   ) => void;
   readonly emitEvent: (
     event: 'routing:decision',
@@ -141,7 +136,6 @@ export interface TeamLeaderRunnerDeps {
     durationMs: number,
     iteration: number,
     workflowName: string,
-    scope: WorkflowExecutionScope,
   ) => void;
 }
 
@@ -163,7 +157,6 @@ export class TeamLeaderRunner {
       throw new Error(`Step "${step.name}" has no teamLeader configuration`);
     }
     const teamLeaderConfig = step.teamLeader;
-    const executionScope = snapshotWorkflowExecutionScope(this.deps.getCurrentWorkflowStack?.());
     const findingContractMode = teamLeaderConfig.mode === 'finding_contract_fix';
     const parentIteration = state.iteration;
     const attemptState = captureTeamLeaderAttemptState(state, step.name, activeStepIteration);
@@ -171,7 +164,7 @@ export class TeamLeaderRunner {
 
     const stepIteration = activeStepIteration ?? incrementStepIteration(state, step.name);
     const findingContractCoordinator = findingContractMode
-      ? new FindingContractTeamLeaderCoordinator(this.deps, step, stepIteration, executionScope)
+      ? new FindingContractTeamLeaderCoordinator(this.deps, step, stepIteration)
       : undefined;
     const findingContractExecution = findingContractCoordinator?.execution;
     const replayedStepResult = findingContractCoordinator?.readPreparedStepResult();
@@ -187,11 +180,9 @@ export class TeamLeaderRunner {
       state,
       task,
       maxSteps,
-      {
-        iteration: parentIteration,
-        ...(findingContractMode ? { findingContractPolicy: { mode: 'omit' as const } } : {}),
-        transaction: instructionTransaction,
-      },
+      runtime?.fallback,
+      findingContractMode ? { mode: 'omit' } : undefined,
+      instructionTransaction,
     );
     const leaderRuntime = await this.resolveLeaderAutoRouting(leaderStep, runtime);
     const leaderProviderInfo = this.deps.optionsBuilder.resolveStepProviderModel(leaderStep, leaderRuntime);
@@ -211,7 +202,6 @@ export class TeamLeaderRunner {
       iteration: parentIteration,
       phase: 1,
       sequence: 1,
-      workflowStack: executionScope.stack,
     });
     const emitReplayedDecompositionPhaseStart = (): void => {
       if (didEmitPhaseStart) return;
@@ -228,7 +218,6 @@ export class TeamLeaderRunner {
         promptParts,
         phaseExecutionId,
         parentIteration,
-        executionScope,
       );
       didEmitPhaseStart = true;
     };
@@ -246,6 +235,7 @@ export class TeamLeaderRunner {
       cwd: this.deps.getCwd(),
       persona: leaderStep.persona,
       personaPath: leaderStep.personaPath,
+      workflowBundleResourceRoot: this.deps.engineOptions.workflowBundleResourceRoot,
       model: leaderModel,
       provider: leaderProvider,
       resolvedModel: leaderModel,
@@ -280,7 +270,6 @@ export class TeamLeaderRunner {
           promptParts,
           phaseExecutionId,
           parentIteration,
-          executionScope,
         );
         didEmitPhaseStart = true;
       },
@@ -331,7 +320,7 @@ export class TeamLeaderRunner {
         phaseName: 'execute',
         instruction,
         phaseExecutionId,
-        workflowStack: [...executionScope.stack],
+        workflowStack: this.deps.getCurrentWorkflowStack?.(),
         sanitizeText: this.deps.sanitizeObservabilityText,
         providerInfo: leaderProviderInfo,
         getPromptParts: () => resolvedPromptParts,
@@ -371,7 +360,7 @@ export class TeamLeaderRunner {
       content: JSON.stringify({ parts }, null, 2),
       timestamp: new Date(),
     };
-    this.deps.onPhaseComplete?.(leaderStep, 1, 'execute', leaderResponse.content, leaderResponse.status, leaderResponse.error, phaseExecutionId, parentIteration, executionScope);
+    this.deps.onPhaseComplete?.(leaderStep, 1, 'execute', leaderResponse.content, leaderResponse.status, leaderResponse.error, phaseExecutionId, parentIteration);
     this.emitLeaderRoutingDecisionEvent(
       leaderStep,
       leaderResponse,
@@ -379,7 +368,6 @@ export class TeamLeaderRunner {
       leaderProviderInfo,
       Math.max(0, Date.now() - leaderStartedAt),
       parentIteration,
-      executionScope,
     );
     this.recordRoutingResult(
       createRoutingScope({
@@ -566,6 +554,7 @@ export class TeamLeaderRunner {
             cwd: this.deps.getCwd(),
             persona: leaderStep.persona,
             personaPath: leaderStep.personaPath,
+            workflowBundleResourceRoot: this.deps.engineOptions.workflowBundleResourceRoot,
             language: this.deps.engineOptions.language,
             model: leaderModel,
             provider: leaderProvider,
@@ -714,10 +703,7 @@ export class TeamLeaderRunner {
         findingContractExecution === undefined
           ? undefined
           : findingContractCoordinator?.partSummary(part),
-        findingContractCoordinator?.boundary(
-          `part:${part.id}:completion`,
-          'finding_contract_part_completion',
-        ),
+        findingContractCoordinator?.partBoundary(part),
         findingContractExecution === undefined
           ? undefined
           : (event) => {
@@ -731,7 +717,6 @@ export class TeamLeaderRunner {
             },
         partAbortSignal,
         publicationFence,
-        executionScope,
         ).catch((error) => {
           if (isTeamLeaderPartCancellation(error)) throw error;
           if (findingContractMode) throw error;
@@ -746,7 +731,7 @@ export class TeamLeaderRunner {
     }
     const { plannedParts, partResults, findingContractDecision } = executionResult;
     this.recordPartRoutingResults(step, partResults, routedProviderInfoByPart);
-    this.emitPartRoutingDecisionEvents(step, partResults, routedProviderInfoByPart, parentIteration, executionScope);
+    this.emitPartRoutingDecisionEvents(step, partResults, routedProviderInfoByPart, parentIteration);
 
     const rateLimitedResult = partResults.find((result) => result.response.status === 'rate_limited');
     if (rateLimitedResult) {
@@ -826,6 +811,7 @@ export class TeamLeaderRunner {
         : {}),
     };
 
+    let terminalOperation: StepRunResult['terminalOperation'];
     aggregatedResponse = await this.deps.stepExecutor.applyPostExecutionPhases(
       step,
       state,
@@ -836,7 +822,9 @@ export class TeamLeaderRunner {
       (providerInfo, success, usage) => {
         this.recordUsage(step.name, providerInfo, success, usage);
       },
-      { iteration: parentIteration, scope: executionScope },
+      (operation) => {
+        terminalOperation = operation;
+      },
     );
 
     state.stepOutputs.set(step.name, aggregatedResponse);
@@ -847,6 +835,7 @@ export class TeamLeaderRunner {
         response: aggregatedResponse,
         instruction,
         providerInfo: leaderProviderInfo,
+        ...(terminalOperation !== undefined ? { terminalOperation } : {}),
         consumedStepIterations: [],
       };
     }
@@ -856,9 +845,22 @@ export class TeamLeaderRunner {
       stepIteration,
       aggregatedResponse.content,
     );
-    this.deps.stepExecutor.emitStepReports(step);
+    this.deps.stepExecutor.emitStepReports(
+      step,
+      {
+        iteration: parentIteration,
+        resumeStepName: step.name,
+        stepIteration,
+        providerInfo: leaderProviderInfo,
+      },
+    );
 
-    const result = { response: aggregatedResponse, instruction, providerInfo: leaderProviderInfo };
+    const result: StepRunResult = {
+      response: aggregatedResponse,
+      instruction,
+      providerInfo: leaderProviderInfo,
+      ...(terminalOperation !== undefined ? { terminalOperation } : {}),
+    };
     return findingContractCoordinator?.prepareStepResult(result) ?? result;
   }
 
@@ -937,12 +939,11 @@ export class TeamLeaderRunner {
     ) => void,
     executionAbortSignal?: AbortSignal,
     publicationFence?: TeamLeaderExecutionPublicationFence,
-    executionScope?: WorkflowExecutionScope,
   ): Promise<PartResult> {
-    if (executionScope === undefined) {
-      throw new Error(`Team leader part "${part.id}" requires an execution scope`);
-    }
     const startedAt = Date.now();
+    const orphanRecoveryInstruction = operationBoundary?.orphanRecoveryInstruction(
+      this.deps.engineOptions.language,
+    );
     let pendingSessionPublication: {
       readonly key: string;
       readonly sessionId: string;
@@ -974,7 +975,6 @@ export class TeamLeaderRunner {
     } else {
       publicationFence?.assertRunning('part.worker_start');
       operationBoundary?.assertWorkerCanStart();
-      operationBoundary?.markWorkerStarted();
       publicationFence?.assertRunning('part.provider_call');
       result = await runTeamLeaderPart(
         this.deps.optionsBuilder,
@@ -994,7 +994,7 @@ export class TeamLeaderRunner {
           runId: this.deps.observabilityRunId,
           workflowName: this.deps.getWorkflowName(),
           iteration: parentIteration,
-          workflowStack: [...executionScope.stack],
+          workflowStack: this.deps.getCurrentWorkflowStack?.(),
           sanitizeText: this.deps.sanitizeObservabilityText,
         },
         (partStep) => {
@@ -1005,14 +1005,9 @@ export class TeamLeaderRunner {
             state,
             task,
             maxSteps,
-            {
-              iteration: state.iteration,
-              ...(runtime?.fallback === undefined ? {} : { fallbackContext: runtime.fallback }),
-              ...(findingContractSummary === undefined
-                ? {}
-                : { findingContractPolicy: { mode: 'omit' as const } }),
-              transaction: instructionTransaction,
-            },
+            runtime?.fallback,
+            findingContractSummary === undefined ? undefined : { mode: 'omit' },
+            instructionTransaction,
           );
           if (findingContractSummary === undefined) return builtInstruction;
           const assignedInstruction = appendFindingContractPartAssignmentInstruction(
@@ -1021,10 +1016,24 @@ export class TeamLeaderRunner {
             this.deps.engineOptions.language,
             findingContractSummary,
           );
-          return this.deps.stepExecutor.buildPhase1Instruction(assignedInstruction, partStep, runtime);
+          const recoveryInstruction = orphanRecoveryInstruction === undefined
+            ? assignedInstruction
+            : `${assignedInstruction}\n\n${orphanRecoveryInstruction}`;
+          return this.deps.stepExecutor.buildPhase1Instruction(recoveryInstruction, partStep, runtime);
         },
         runtime,
         executionAbortSignal,
+        {
+          forceNewSession: orphanRecoveryInstruction !== undefined,
+          ...(operationBoundary === undefined
+            ? {}
+            : {
+                onDispatch: (permissionMode) => {
+                  publicationFence?.assertRunning('part.provider_dispatch');
+                  operationBoundary.markWorkerStarted(permissionMode);
+                },
+              }),
+        },
       );
       result = {
         ...result,
@@ -1053,6 +1062,9 @@ export class TeamLeaderRunner {
       && result.response.status !== 'done'
       && result.response.status !== 'rate_limited'
     ) {
+      if (result.response.status === 'error' && operationBoundary !== undefined) {
+        throw createExplicitPartFailure(operationBoundary.id, result);
+      }
       throw new Error(result.response.error ?? result.response.content);
     }
     publicationFence?.assertRunning('part.session');
@@ -1121,7 +1133,6 @@ export class TeamLeaderRunner {
     partResults: PartResult[],
     routedProviderInfoByPart: Map<string, StepProviderInfo>,
     iteration: number,
-    executionScope: WorkflowExecutionScope,
   ): void {
     for (const result of partResults) {
       const providerInfo = routedProviderInfoByPart.get(result.part.id);
@@ -1139,7 +1150,6 @@ export class TeamLeaderRunner {
         result.durationMs ?? 0,
         iteration,
         this.deps.getWorkflowName(),
-        executionScope,
       );
     }
   }
@@ -1188,7 +1198,6 @@ export class TeamLeaderRunner {
     providerInfo: StepProviderInfo,
     durationMs: number,
     iteration: number,
-    executionScope: WorkflowExecutionScope,
   ): void {
     if (providerInfo.autoRoutingDecision === undefined) {
       return;
@@ -1203,7 +1212,6 @@ export class TeamLeaderRunner {
       durationMs,
       iteration,
       this.deps.getWorkflowName(),
-      executionScope,
     );
   }
 
@@ -1306,7 +1314,7 @@ interface TeamLeaderAttemptState {
   readonly lastOutput: WorkflowState['lastOutput'];
   readonly previousResponseSourcePath: WorkflowState['previousResponseSourcePath'];
   readonly pendingFallback: WorkflowState['pendingFallback'];
-  readonly rateLimitFallbackAttempts: WorkflowState['rateLimitFallbackAttempts'];
+  readonly rateLimitFallbackState: WorkflowState['rateLimitFallbackState'];
   readonly stepOutputs: Map<string, AgentResponse>;
   readonly personaSessions: Map<string, string>;
   readonly stepIterations: Map<string, number>;
@@ -1335,7 +1343,7 @@ function captureTeamLeaderAttemptState(
     lastOutput: state.lastOutput,
     previousResponseSourcePath: state.previousResponseSourcePath,
     pendingFallback: state.pendingFallback,
-    rateLimitFallbackAttempts: state.rateLimitFallbackAttempts?.map((attempt) => ({ ...attempt })),
+    rateLimitFallbackState: state.rateLimitFallbackState,
     stepOutputs: new Map(state.stepOutputs),
     personaSessions: new Map(state.personaSessions),
     stepIterations,
@@ -1369,7 +1377,7 @@ function restoreNonSessionAttemptState(
   state.lastOutput = snapshot.lastOutput;
   state.previousResponseSourcePath = snapshot.previousResponseSourcePath;
   state.pendingFallback = snapshot.pendingFallback;
-  state.rateLimitFallbackAttempts = snapshot.rateLimitFallbackAttempts?.map((attempt) => ({ ...attempt }));
+  state.rateLimitFallbackState = snapshot.rateLimitFallbackState;
   state.stepOutputs.clear();
   for (const [name, response] of snapshot.stepOutputs) {
     state.stepOutputs.set(name, response);

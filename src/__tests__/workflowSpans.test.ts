@@ -483,6 +483,7 @@ describe('workflow OpenTelemetry spans', () => {
             kind: 'step_error',
             step: 'implement',
             reason: 'Step "implement" failed: secret content',
+            error: 'secret content',
           },
         })),
       ).rejects.toThrow('workflow execution rejected');
@@ -599,6 +600,7 @@ describe('workflow OpenTelemetry spans', () => {
         kind: 'step_error',
         step: 'implement',
         reason: 'Step "implement" failed: secret content',
+        error: 'secret content',
       },
     }));
 
@@ -1052,12 +1054,36 @@ describe('workflow OpenTelemetry spans', () => {
     const { module, spans } = await loadWorkflowSpansWithMockedApi();
     const step = makeStep({ personaDisplayName: 'coder' });
     const workflowStack = [
-      { workflow: 'parent', step: 'review', kind: 'workflow_call' as const },
-      { workflow: 'child', step: 'implement', kind: 'agent' as const },
+      {
+        workflow: 'parent',
+        workflow_ref: 'parent',
+        step: 'review',
+        kind: 'workflow_call' as const,
+        occurrence: 1,
+      },
+      {
+        workflow: 'child',
+        workflow_ref: 'child',
+        step: 'implement',
+        kind: 'agent' as const,
+        occurrence: 1,
+      },
     ];
     const expectedStackJson = JSON.stringify([
-      { workflow: 'parent', step: 'review', kind: 'workflow_call' },
-      { workflow: 'child', step: 'implement', kind: 'agent' },
+      {
+        workflow: 'parent',
+        workflow_ref: 'parent',
+        step: 'review',
+        kind: 'workflow_call',
+        occurrence: 1,
+      },
+      {
+        workflow: 'child',
+        workflow_ref: 'child',
+        step: 'implement',
+        kind: 'agent',
+        occurrence: 1,
+      },
     ]);
 
     await module.runWithPhaseSpan({

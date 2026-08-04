@@ -24,6 +24,7 @@ import {
   createMockProvider,
   type MockProviderCapture,
 } from './helpers/stdinSimulator.js';
+import { makeFileRunMetaPathFields } from './test-helpers.js';
 
 // --- Mocks (infrastructure only) ---
 
@@ -58,8 +59,7 @@ vi.mock('../infra/config/paths.js', async (importOriginal) => ({
   loadPersonaSessions: vi.fn(() => ({})),
   updatePersonaSession: vi.fn(),
   getProjectConfigDir: vi.fn(() => '/tmp'),
-  loadSessionState: vi.fn(() => null),
-  clearSessionState: vi.fn(),
+  takeSessionState: vi.fn(() => null),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
@@ -125,15 +125,14 @@ function createRunFixture(
   const runDir = join(cwd, '.takt', 'runs', slug);
   mkdirSync(join(runDir, 'logs'), { recursive: true });
   mkdirSync(join(runDir, 'reports'), { recursive: true });
+  mkdirSync(join(runDir, 'context'), { recursive: true });
 
   const meta = {
     task: `Task for ${slug}`,
     workflow: 'default',
     status: 'completed',
     startTime: '2026-02-01T00:00:00.000Z',
-    logsDirectory: `.takt/runs/${slug}/logs`,
-    reportDirectory: `.takt/runs/${slug}/reports`,
-    runSlug: slug,
+    ...makeFileRunMetaPathFields(cwd, slug),
     ...overrides?.meta,
   };
   writeFileSync(join(runDir, 'meta.json'), JSON.stringify(meta), 'utf-8');

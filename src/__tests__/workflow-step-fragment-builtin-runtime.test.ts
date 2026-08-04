@@ -14,7 +14,8 @@ vi.mock('../core/workflow/evaluation/index.js', async (importOriginal) => {
   return { ...actual, RuleEvaluator: MockRuleEvaluator };
 });
 
-vi.mock('../core/workflow/phase-runner.js', () => ({
+vi.mock('../core/workflow/phase-runner.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
   runStatusJudgmentPhase: vi.fn().mockResolvedValue({ label: '', method: 'auto_select' }),
 }));
@@ -25,7 +26,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 }));
 
 import { runAgent } from '../agents/runner.js';
-import { WorkflowEngine } from '../core/workflow/index.js';
+import { WorkflowEngine } from './helpers/workflow-engine.js';
 import { resolveWorkflowCallTarget } from '../infra/config/index.js';
 import { runReportPhase } from '../core/workflow/phase-runner.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
@@ -104,6 +105,56 @@ function findRuleIndex(rules: readonly RawRule[], field: 'next' | 'return', valu
     throw new Error(`Expected builtin rule ${field}: ${value}`);
   }
   return index;
+}
+
+function schemaHasProperty(schema: unknown, property: string): boolean {
+  if (typeof schema !== 'object' || schema === null || Array.isArray(schema)) {
+    return false;
+  }
+  const properties = Reflect.get(schema, 'properties');
+  return typeof properties === 'object'
+    && properties !== null
+    && !Array.isArray(properties)
+    && property in properties;
+}
+
+function mockFindingContractAgents(
+  contentByPersona: Readonly<Record<string, string>> = {},
+): void {
+  vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+    options?.onPromptResolved?.({
+      systemPrompt: 'test system prompt',
+      userInstruction: instruction,
+    });
+    const content = contentByPersona[persona ?? ''] ?? 'approved';
+    if (schemaHasProperty(options?.outputSchema, 'rawFindings')) {
+      return makeResponse({
+        persona,
+        content,
+        structuredOutput: {
+          ...(schemaHasProperty(options?.outputSchema, 'reportContent')
+            ? { reportContent: content }
+            : {}),
+          rawFindings: [],
+        },
+      });
+    }
+    if (schemaHasProperty(options?.outputSchema, 'rawDecisions')) {
+      return makeResponse({
+        persona,
+        content: 'manager complete',
+        structuredOutput: {
+          rawDecisions: [],
+          disputeDecisions: [],
+          conflictDecisions: [],
+          invalidateDecisions: [],
+          duplicateDecisions: [],
+          dismissDecisions: [],
+        },
+      });
+    }
+    return makeResponse({ persona, content });
+  });
 }
 
 function fragmentRuleIndex(language: 'en' | 'ja', fragment: 'fix' | 'gather', nextStep: string): number {
@@ -217,8 +268,6 @@ function writeBuiltinReturnWorkflow(projectDir: string): string {
     'workflow_config:',
     '  provider: mock',
     'finding_contract:',
-    '  ledger_path: .takt/findings/ledger.json',
-    '  raw_findings_path: .takt/findings/raw',
     '  manager:',
     '    persona: findings-manager',
     '    instruction: findings-manager',
@@ -259,8 +308,6 @@ function writeBuiltinReviewersWorkflow(projectDir: string, language: 'en' | 'ja'
     'workflow_config:',
     '  provider: mock',
     'finding_contract:',
-    '  ledger_path: .takt/findings/ledger.json',
-    '  raw_findings_path: .takt/findings/raw',
     '  manager:',
     '    persona: findings-manager',
     '    instruction: findings-manager',
@@ -423,6 +470,8 @@ describe('builtin step fragment runtime contracts', () => {
     const workflow = loadWorkflowFromFile(writeBuiltinReviewersWorkflow(projectDir, language), projectDir);
     const engine = new WorkflowEngine(workflow, projectDir, 'test task', { projectCwd: projectDir });
     engines.push(engine);
+    const abortReasons: string[] = [];
+    engine.on('workflow:abort', (_state, reason) => abortReasons.push(reason));
     const reviewerPersonas = [
       'architecture-reviewer',
       'ai-antipattern-reviewer',
@@ -431,22 +480,19 @@ describe('builtin step fragment runtime contracts', () => {
       'contract-lifecycle-reviewer',
       'robustness-reviewer',
     ];
-    mockRunAgentSequence([
-      ...reviewerPersonas.map((persona) => makeResponse({ persona, content: 'approved', structuredOutput: { rawFindings: [] } })),
-      makeResponse({ persona: 'final-gate', content: 'done' }),
-    ]);
+    mockFindingContractAgents({ 'final-gate': 'done' });
     mockRuleEvaluationSequence([
       ...reviewerPersonas.map(() => ({ index: 0, method: 'phase3_tag' as const })),
-      { index: 5, method: 'aggregate' },
+      { index: 6, method: 'aggregate' },
       { index: 0, method: 'phase3_tag' },
     ]);
 
     const state = await engine.run();
 
-    expect(state.status).toBe('completed');
+    expect(state.status, abortReasons.join('\n')).toBe('completed');
     expect(vi.mocked(runAgent).mock.calls.slice(0, reviewerPersonas.length).map(([persona]) => persona).sort())
       .toEqual([...reviewerPersonas].sort());
-  });
+  }, 60_000);
 
   it('resolves and executes a relative workflow_call declared by a step fragment', async () => {
     const parentPath = join(projectDir, '.takt', 'workflows', 'parent.yaml');
@@ -477,6 +523,7 @@ describe('builtin step fragment runtime contracts', () => {
       'subworkflow:',
       '  callable: true',
       'initial_step: review',
+      'max_steps: 1',
       'steps:',
       '  - name: review',
       '    persona: reviewer',
@@ -489,7 +536,6 @@ describe('builtin step fragment runtime contracts', () => {
     const workflow = loadWorkflowFromFile(parentPath, projectDir);
     const engine = new WorkflowEngine(workflow, projectDir, 'test task', {
       projectCwd: projectDir,
-      provider: 'mock',
       workflowCallResolver: ({ parentWorkflow, step, projectCwd, lookupCwd }) =>
         resolveWorkflowCallTarget(parentWorkflow, step, projectCwd, lookupCwd),
     });
@@ -524,36 +570,35 @@ describe('builtin step fragment runtime contracts', () => {
     });
     engines.push(engine);
     const transitions: string[] = [];
+    const abortReasons: string[] = [];
     engine.on('step:complete', (step) => transitions.push(step.name));
-    const responses = [
-      makeResponse({ persona: 'merge-readiness-reviewer', content: 'approved', structuredOutput: { rawFindings: [] } }),
-      makeResponse({ persona: 'supervisor', content: returnValue, structuredOutput: { rawFindings: [] } }),
-    ];
-    if (nextStep) {
-      responses.push(makeResponse({ persona: nextStep, content: 'done' }));
-    }
-    mockRunAgentSequence(responses);
-      mockRuleEvaluationSequence([
+    engine.on('workflow:abort', (_state, reason) => abortReasons.push(reason));
+    mockFindingContractAgents({
+      'merge-readiness-reviewer': 'approved',
+      supervisor: returnValue,
+      ...(nextStep ? { [nextStep]: 'done' } : {}),
+    });
+    mockRuleEvaluationSequence([
       { index: MERGE_READINESS_TO_SUPERVISE_RULE_INDEX, method: 'phase3_tag' },
       { index: superviseRuleIndex, method: 'phase3_tag' },
       ...(nextStep ? [{ index: 0, method: 'phase3_tag' as const }] : []),
     ]);
 
     const state = await engine.run();
+    const needsConflictAdjudication = returnValue === 'needs_conflict_adjudication';
 
-    expect(state.status).toBe(
-      returnValue === 'ABORT' || returnValue === 'needs_conflict_adjudication' ? 'aborted' : 'completed',
+    expect(state.status, abortReasons.join('\n')).toBe(
+      returnValue === 'ABORT' || needsConflictAdjudication ? 'aborted' : 'completed',
     );
     expect(transitions).toEqual([
       'merge-readiness-review',
       'supervise',
-      ...(returnValue === 'needs_conflict_adjudication' ? ['finding-conflict-adjudication'] : []),
+      ...(needsConflictAdjudication ? ['finding-conflict-adjudication', 'merge-readiness-review'] : []),
       ...(nextStep ? [nextStep] : []),
     ]);
-    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(
-      nextStep || returnValue === 'needs_conflict_adjudication' ? 3 : 2,
-    );
-  });
+    const conflictAdjudicationCalls = needsConflictAdjudication ? 2 : 0;
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(4 + (nextStep ? 1 : 0) + conflictAdjudicationCalls);
+  }, 60_000);
 });
 
 type RawStep = Record<string, unknown>;

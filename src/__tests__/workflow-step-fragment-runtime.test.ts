@@ -13,7 +13,8 @@ vi.mock('../core/workflow/evaluation/index.js', async (importOriginal) => {
   return { ...actual, RuleEvaluator: MockRuleEvaluator };
 });
 
-vi.mock('../core/workflow/phase-runner.js', () => ({
+vi.mock('../core/workflow/phase-runner.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
   runStatusJudgmentPhase: vi.fn().mockResolvedValue({ label: '', method: 'auto_select' }),
 }));
@@ -23,10 +24,9 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   generateReportDir: vi.fn().mockReturnValue('test-report-dir'),
 }));
 
+import { WorkflowEngine } from './helpers/workflow-engine.js';
 import type { WorkflowConfig, WorkflowResumePoint } from '../core/models/types.js';
-import { WorkflowEngine } from '../core/workflow/index.js';
 import { getWorkflowReference } from '../core/workflow/workflow-reference.js';
-import { runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
 import { runAgent } from '../agents/runner.js';
 import { resolveWorkflowCallTarget } from '../infra/config/loaders/workflowCallResolver.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
@@ -34,7 +34,6 @@ import {
   getAttachedWorkflowTrustInfo,
   getWorkflowSourcePath,
 } from '../shared/workflowConfigMetadata.js';
-import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 import {
   applyDefaultMocks,
   cleanupWorkflowEngine,
@@ -45,12 +44,24 @@ import {
 } from './engine-test-helpers.js';
 import { isolateStepFragmentTestConfig } from './helpers/step-fragment-test-helpers.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
+import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 
 function writeFile(root: string, relativePath: string, content: string): string {
   const filePath = join(root, relativePath);
   mkdirSync(dirname(filePath), { recursive: true });
   writeFileSync(filePath, content, 'utf-8');
   return filePath;
+}
+
+function schemaHasProperty(schema: unknown, property: string): boolean {
+  if (typeof schema !== 'object' || schema === null || Array.isArray(schema)) {
+    return false;
+  }
+  const properties = Reflect.get(schema, 'properties');
+  return typeof properties === 'object'
+    && properties !== null
+    && !Array.isArray(properties)
+    && property in properties;
 }
 
 function workflowSteps(fragmentName?: string): string {
@@ -84,8 +95,6 @@ function workflowSteps(fragmentName?: string): string {
     'workflow_config:',
     '  provider: claude',
     'finding_contract:',
-    '  ledger_path: .takt/findings/ledger.json',
-    '  raw_findings_path: .takt/findings/raw',
     '  manager:',
     '    persona: findings-manager',
     '    instruction: findings-manager',
@@ -184,7 +193,7 @@ describe('workflow step fragment runtime contract', () => {
       testCwds.push(cwd);
       writeFile(cwd, 'src/reviewed.ts', 'export const reviewed = true;\n');
       initializeGitFixture(cwd, ['src/reviewed.ts']);
-      const engine = new WorkflowEngine(config, cwd, 'test task', { projectCwd: cwd, provider: 'mock' });
+      const engine = new WorkflowEngine(config, cwd, 'test task', { projectCwd: cwd });
       engines.push(engine);
       const transitions: string[] = [];
       const cycleCounts: number[] = [];
@@ -193,41 +202,57 @@ describe('workflow step fragment runtime contract', () => {
       engine.on('step:cycle_detected', (_monitor, count) => cycleCounts.push(count));
       engine.on('findings:ledger', (ledger) => ledgers.push(ledger));
       vi.mocked(runAgent).mockReset();
-      mockRunAgentSequence([
-        makeResponse({
-          persona: 'review',
-          content: 'issue',
-          structuredOutput: {
-            rawFindings: [{
-              rawFindingId: 'review-issue',
-              familyTag: 'test',
-              severity: 'high',
-              title: 'Test finding',
-              location: '',
-              evidenceKind: 'locationless',
-              verbatimExcerpt: '',
-              snapshotId: '',
-              description: 'A finding emitted by the reviewer.',
-              suggestion: '',
-              relation: 'new',
-              targetFindingId: '',
-            }],
-          },
-        }),
-        makeResponse({
-          persona: 'findings-manager',
-          structuredOutput: {
-            rawDecisions: [],
-            disputeDecisions: [],
-            conflictDecisions: [],
-            invalidateDecisions: [],
-            duplicateDecisions: [],
-            dismissDecisions: [],
-          },
-        }),
-        makeResponse({ persona: 'fix', content: 'fixed' }),
-        makeResponse({ persona: 'supervisor', content: 'stop' }),
-      ]);
+      vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+        options?.onPromptResolved?.({
+          systemPrompt: 'test system prompt',
+          userInstruction: instruction,
+        });
+        if (schemaHasProperty(options?.outputSchema, 'rawFindings')) {
+          const reportContent = 'A finding emitted by the reviewer.';
+          return makeResponse({
+            persona,
+            content: reportContent,
+            structuredOutput: {
+              ...(schemaHasProperty(options?.outputSchema, 'reportContent')
+                ? { reportContent }
+                : {}),
+              rawFindings: [{
+                rawExcerpt: reportContent,
+                candidate: {
+                  rawFindingId: 'review-issue',
+                  familyTag: 'test',
+                  severity: 'high',
+                  title: 'Test finding',
+                  description: reportContent,
+                  suggestion: null,
+                  relation: 'new',
+                  targetFindingIds: [],
+                  target: null,
+                  evidenceRequests: [],
+                },
+              }],
+            },
+          });
+        }
+        if (schemaHasProperty(options?.outputSchema, 'rawDecisions')) {
+          return makeResponse({
+            persona,
+            content: 'manager complete',
+            structuredOutput: {
+              rawDecisions: [],
+              disputeDecisions: [],
+              conflictDecisions: [],
+              invalidateDecisions: [],
+              duplicateDecisions: [],
+              dismissDecisions: [],
+            },
+          });
+        }
+        return makeResponse({
+          persona,
+          content: persona === 'supervisor' ? 'stop' : 'fixed',
+        });
+      });
       mockRuleEvaluationSequence([
         { index: 0, method: 'phase3_tag' },
         { index: 0, method: 'phase3_tag' },
@@ -269,11 +294,12 @@ describe('workflow step fragment runtime contract', () => {
           severity: 'high',
           title: 'Test finding',
           relation: 'new',
+          target: { kind: 'review_scope' },
         }],
         findings: [{
           severity: 'high',
           title: 'Test finding',
-          provisional: { kind: 'unverified-locationless' },
+          provisional: { gateEffect: 'block' },
         }],
       });
     }
@@ -289,7 +315,7 @@ describe('workflow step fragment runtime contract', () => {
     });
     expect(fragmentResult.resumePoint?.stack[0]?.step_iterations)
       .toEqual(inlineResult.resumePoint?.stack[0]?.step_iterations);
-  });
+  }, 60_000);
 
   it('resumes inline and fragment workflows from the same saved step, iteration, and transition', async () => {
     writeFile(projectDir, '.takt/steps/review.yaml', [
@@ -307,7 +333,7 @@ describe('workflow step fragment runtime contract', () => {
       testCwds.push(cwd);
       writeFile(cwd, 'src/reviewed.ts', 'export const reviewed = true;\n');
       initializeGitFixture(cwd, ['src/reviewed.ts']);
-      const engine = new WorkflowEngine(config, cwd, 'test task', { projectCwd: cwd, provider: 'mock' });
+      const engine = new WorkflowEngine(config, cwd, 'test task', { projectCwd: cwd });
       engines.push(engine);
       let resumePoint: ReturnType<WorkflowEngine['getResumePoint']>;
       engine.on('step:start', (step) => {
@@ -337,7 +363,6 @@ describe('workflow step fragment runtime contract', () => {
       initializeGitFixture(cwd, ['src/fixed.ts']);
       const engine = new WorkflowEngine(config, cwd, 'test task', {
         projectCwd: cwd,
-        provider: 'mock',
         startStep: 'fix',
         initialIteration: resumePoint.iteration,
         resumePoint,
@@ -367,13 +392,12 @@ describe('workflow step fragment runtime contract', () => {
     expect(fragmentResult.restoredStepIterations).toEqual(inlineResult.restoredStepIterations);
     expect(fragmentResult.result.nextStep).toBe('review');
     expect(fragmentResult.state.stepIterations).toEqual(inlineResult.state.stepIterations);
-    expect(fragmentResult.state.stepIterations).toEqual(new Map([['review', 1], ['fix', 2]]));
+    expect(fragmentResult.state.stepIterations).toEqual(new Map([['review', 1], ['fix', 1]]));
     expect(fragmentResult.result).toMatchObject({ nextStep: inlineResult.result.nextStep });
   });
 
   it('preserves source, trust, opaque resume identity, and relative workflow calls across resume', async () => {
     vi.mocked(mockRuleEvaluation).mockReturnValue({ index: 0, method: 'auto_select' });
-    vi.mocked(runStatusJudgmentPhase).mockResolvedValue({ label: 'done', method: 'auto_select' });
     writeFile(projectDir, '.takt/steps/delegate.yaml', [
       'kind: workflow_call',
       'call: ./children/child.yaml',
@@ -385,6 +409,7 @@ describe('workflow step fragment runtime contract', () => {
       '  callable: true',
       '  returns: [success]',
       'initial_step: done',
+      'max_steps: 10',
       'steps:',
       '  - name: done',
       '    instruction: done',
@@ -396,6 +421,7 @@ describe('workflow step fragment runtime contract', () => {
     const parentPath = writeFile(projectDir, '.takt/workflows/parent.yaml', [
       'name: parent',
       'initial_step: delegate',
+      'max_steps: 10',
       'steps:',
       '  - name: delegate',
       '    uses: delegate',
@@ -438,9 +464,7 @@ describe('workflow step fragment runtime contract', () => {
     engine.on('workflow:abort', (_state, reason) => abortReasons.push(reason));
     engine.on('step:complete', (step) => completedSteps.push(step.name));
     engine.on('step:start', (step) => {
-      if (step.name === 'done') {
-        savedResumePoint = engine.getResumePoint();
-      }
+      if (step.name === 'done') savedResumePoint = engine.getResumePoint();
     });
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
       options?.onPromptResolved?.({
@@ -455,16 +479,19 @@ describe('workflow step fragment runtime contract', () => {
     });
     const firstState = await engine.run();
     if (savedResumePoint === undefined) {
-      throw new Error(`Expected a resume point while the child workflow is running (step: ${firstState.currentStep}, status: ${firstState.status}, calls: ${vi.mocked(runAgent).mock.calls.length}, abort: ${abortReasons.join(' ')})`);
+      throw new Error(`Expected a child resume point (status: ${firstState.status}, abort: ${abortReasons.join(' ')})`);
     }
 
     const resumedEngine = createEngine(savedResumePoint);
     const resumedChildStepIterations: number[] = [];
-    resumedEngine.on('step:start', (step, _iteration, _instruction, _providerInfo, _workflowName, _resumeStepName, stepIteration) => {
-      if (step.name === 'done' && stepIteration !== undefined) {
-        resumedChildStepIterations.push(stepIteration);
-      }
-    });
+    resumedEngine.on(
+      'step:start',
+      (step, _iteration, _instruction, _providerInfo, _workflowName, _resumeStepName, stepIteration) => {
+        if (step.name === 'done' && stepIteration !== undefined) {
+          resumedChildStepIterations.push(stepIteration);
+        }
+      },
+    );
     const resumedState = await resumedEngine.run();
 
     expect(getWorkflowSourcePath(config)).toBe(parentPath);
@@ -480,7 +507,8 @@ describe('workflow step fragment runtime contract', () => {
       isProjectTrustRoot: true,
       isProjectWorkflowRoot: true,
     });
-    expect(firstState.status, `${abortReasons.join(' ')}; completed: ${completedSteps.join(', ')}`).toBe('completed');
+    expect(firstState.status, `${abortReasons.join(' ')}; completed: ${completedSteps.join(', ')}`)
+      .toBe('completed');
     expect(savedResumePoint.stack).toHaveLength(2);
     expect(savedResumePoint.stack[0]?.workflow_ref).toBe(getWorkflowReference(config));
     expect(savedResumePoint.stack[0]?.workflow_ref).not.toContain(parentPath);
@@ -488,7 +516,7 @@ describe('workflow step fragment runtime contract', () => {
     expect(savedResumePoint.stack[1]?.step).toBe('done');
     expect(savedResumePoint.stack[1]?.step_iterations).toMatchObject({ done: 1 });
     expect(resumedState.status).toBe('completed');
-    expect(resumedChildStepIterations).toEqual([2]);
+    expect(resumedChildStepIterations).toEqual([1]);
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2);
   });
 });

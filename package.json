@@ -24,6 +24,7 @@
     "analyze:usage": "node dist/commands/analyze-usage.js",
     "eval:prompts:prepare": "node eval/scripts/prepare.mjs",
     "eval:prompts": "npm run eval:prompts:prepare && node eval/scripts/run-evals.mjs",
+    "eval:finding-normalizer": "node eval/scripts/run-finding-normalizer-eval.mjs",
     "eval:prompts:fix-closure": "node eval/scripts/prepare.mjs fix-closure && node eval/scripts/run-evals.mjs fix-closure",
     "eval:prompts:fix-plan-fresh-findings": "node eval/scripts/prepare.mjs fix-plan-fresh-findings && node eval/scripts/run-evals.mjs fix-plan-fresh-findings",
     "eval:prompts:fix-plan-boundary-preflight": "node eval/scripts/prepare.mjs fix-plan-boundary-preflight && node eval/scripts/run-evals.mjs fix-plan-boundary-preflight",

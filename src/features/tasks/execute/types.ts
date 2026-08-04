@@ -29,6 +29,8 @@ import type { RunResumeSource } from '../../../core/workflow/run/run-meta.js';
 import type { PullRequestContext } from '../../../core/workflow/pr-context.js';
 import type { TaskAttachment } from '../attachments.js';
 import type { TraceTaskContext } from './traceTaskMetadata.js';
+import type { RunFinalizationIssue } from './workflowRunExecution.js';
+import type { ResolvedTaskSpec } from './taskSpecContext.js';
 
 /** Info captured when iteration limit is hit in non-interactive mode */
 export interface ExceededInfo {
@@ -117,6 +119,7 @@ export type WorkflowExecutionEvent =
       reportDirectory?: string;
     };
 
+/** Live-only workflow feedback. Delivery failure never changes run outcome. */
 export type WorkflowExecutionEventSink = (event: WorkflowExecutionEvent) => void | Promise<void>;
 
 /** Result of workflow execution */
@@ -132,6 +135,7 @@ export interface WorkflowExecutionResult {
   /** True when iteration limit was hit in non-interactive mode */
   exceeded?: boolean;
   exceededInfo?: ExceededInfo;
+  finalizationIssues?: readonly RunFinalizationIssue[];
 }
 
 /** Metadata from interactive mode, passed through to NDJSON logging */
@@ -204,6 +208,7 @@ export interface WorkflowExecutionOptions {
   workflowCallResolver?: WorkflowCallResolver;
   /** Override report directory name (e.g. "20260201-015714-foptng") */
   reportDirName?: string;
+  taskSpec?: ResolvedTaskSpec;
   /** External abort signal for parallel execution — when provided, SIGINT handling is delegated to caller */
   abortSignal?: AbortSignal;
   /** Task name prefix for parallel execution output (e.g. "[task-name] output...") */
@@ -287,6 +292,7 @@ export interface ExecuteTaskOptions {
   resumeSource?: RunResumeSource;
   /** Override report directory name (e.g. "20260201-015714-foptng") */
   reportDirName?: string;
+  taskSpec?: ResolvedTaskSpec;
   /** Provider permission profile overrides supplied by a trusted runtime boundary. */
   providerProfileOverrides?: ProviderPermissionProfiles;
   /** External abort signal for parallel execution — when provided, SIGINT handling is delegated to caller */

@@ -11,6 +11,9 @@ import type {
   WorkflowStepFailureSummary,
   WorkflowTraceTaskMetadata,
 } from '../types.js';
+import {
+  parseCanonicalWorkflowResumeFrame,
+} from '../../../shared/types/workflow-resume.js';
 import { getWorkflowStepKind } from '../step-kind.js';
 import { toJudgmentMatchMethod, USAGE_MISSING_REASONS } from '../../logging/contracts.js';
 import {
@@ -532,12 +535,12 @@ function workflowStackAttributes(stack: WorkflowResumePointEntry[] | undefined):
   }
   return {
     'takt.workflow.current_name': stack[stack.length - 1]?.workflow,
-    'takt.workflow.stack': JSON.stringify(stack.map((entry) => ({
-      workflow: entry.workflow,
-      ...(entry.workflow_ref ? { workflow_ref: entry.workflow_ref } : {}),
-      step: entry.step,
-      kind: entry.kind,
-    }))),
+    'takt.workflow.stack': JSON.stringify(stack.map((entry, index) => (
+      parseCanonicalWorkflowResumeFrame(
+        entry,
+        `workflow span stack[${index}]`,
+      )
+    ))),
   };
 }
 

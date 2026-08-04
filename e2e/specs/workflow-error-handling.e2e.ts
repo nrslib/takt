@@ -73,7 +73,7 @@ describe('E2E: Workflow error handling (mock)', () => {
     // Then: workflow aborts due to iteration limit
     expect(result.exitCode).not.toBe(0);
     const combined = result.stdout + result.stderr;
-    expect(combined).toContain('Workflow aborted after');
+    expect(combined).toMatch(/Workflow failed after .*: Max steps reached/);
   }, 240_000);
 
   it('should pass previous response between sequential steps', () => {

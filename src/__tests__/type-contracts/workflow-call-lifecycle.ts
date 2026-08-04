@@ -11,8 +11,10 @@ const start = {
   stack: [
     {
       workflow: 'parent',
+      workflow_ref: 'parent',
       step: 'delegate',
       kind: 'workflow_call' as const,
+      occurrence: 1,
       call_instance: 1,
     },
   ],

@@ -10,7 +10,7 @@ export interface TraceReportParams {
   workflowName: string;
   task: string;
   runSlug: string;
-  status: 'completed' | 'aborted';
+  status: 'completed' | 'aborted' | 'failed';
   iterations: number;
   endTime: string;
   reason?: string;
@@ -49,22 +49,5 @@ export interface TraceStep {
     matchedRuleIndex?: number;
     matchedRuleMethod?: string;
     matchMethod?: string;
-  };
-}
-
-export interface TraceWorkflowCall {
-  parentWorkflow: string;
-  step: string;
-  childWorkflow: string;
-  callInstance: number;
-  stack: NdjsonWorkflowStackEntry[];
-  startedAt: string;
-  completedAt?: string;
-  result?: {
-    status: 'completed' | 'aborted' | 'failed';
-    returnValue?: string;
-    abortKind?: string;
-    abortReason?: string;
-    reason?: string;
   };
 }

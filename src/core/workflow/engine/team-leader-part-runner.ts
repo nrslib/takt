@@ -16,6 +16,10 @@ import { isTeamLeaderPartCancellation } from './team-leader-part-cancellation.js
 import type {
   FindingContractControlValidationIssue,
 } from '../team-leader-finding-contract-control-validation.js';
+import {
+  ExplicitPartFailureError,
+  OperationRecoveryError,
+} from '../operations/operation-recovery-error.js';
 
 export interface TeamLeaderPartObservability {
   readonly enabled: boolean;
@@ -24,6 +28,11 @@ export interface TeamLeaderPartObservability {
   readonly iteration: number;
   readonly workflowStack?: WorkflowResumePointEntry[];
   readonly sanitizeText?: (text: string) => string;
+}
+
+export interface TeamLeaderPartExecutionOptions {
+  readonly forceNewSession: boolean;
+  readonly onDispatch?: RunAgentOptions['onDispatch'];
 }
 
 export function buildPartScopedSessionKey(
@@ -53,12 +62,13 @@ export async function runTeamLeaderPart(
   buildInstruction: (partStep: WorkflowStep) => string,
   runtime?: RuntimeStepResolution,
   executionAbortSignal?: AbortSignal,
+  executionOptions?: TeamLeaderPartExecutionOptions,
 ): Promise<PartResult> {
   const partStep = createPartStep(step, part);
   const partProviderInfo = runtime
     ? optionsBuilder.resolveStepProviderModel(partStep, runtime)
     : optionsBuilder.resolveStepProviderModel(partStep);
-  const baseOptions = optionsBuilder.buildAgentOptions(partStep, {
+  const resolvedBaseOptions = optionsBuilder.buildAgentOptions(partStep, {
     ...runtime,
     providerInfo: partProviderInfo,
     teamLeaderPart: {
@@ -66,6 +76,9 @@ export async function runTeamLeaderPart(
       processSafety: leaderWorkflowMeta?.processSafety,
     },
   });
+  const baseOptions = executionOptions?.forceNewSession === true
+    ? { ...resolvedBaseOptions, sessionId: undefined }
+    : resolvedBaseOptions;
   const { signal, dispose } = buildAbortSignal(
     defaultTimeoutMs,
     executionAbortSignal ?? baseOptions.abortSignal,
@@ -74,6 +87,7 @@ export async function runTeamLeaderPart(
     ? {
       ...baseOptions,
       abortSignal: signal,
+      onDispatch: executionOptions?.onDispatch,
       onStream: optionsBuilder.buildProviderStream(
         partStep,
         partProviderInfo.provider,
@@ -84,6 +98,7 @@ export async function runTeamLeaderPart(
     : {
       ...baseOptions,
       abortSignal: signal,
+      onDispatch: executionOptions?.onDispatch,
     };
 
   try {
@@ -141,6 +156,9 @@ export async function runTeamLeaderPart(
       },
     };
   } catch (error) {
+    if (error instanceof OperationRecoveryError) {
+      throw error;
+    }
     if (isTeamLeaderPartCancellation(error)) {
       throw error;
     }
@@ -218,4 +236,14 @@ export function buildTeamLeaderErrorPartResult(
     ...(failure ? { failureCategory: failure.category } : {}),
   };
   return { part, response: errorResponse };
+}
+
+export function createExplicitPartFailure(
+  boundaryId: string,
+  result: PartResult,
+): ExplicitPartFailureError {
+  return new ExplicitPartFailureError(
+    result.response.error ?? result.response.content,
+    { boundaryId },
+  );
 }

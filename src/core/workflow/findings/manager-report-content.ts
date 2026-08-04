@@ -40,8 +40,18 @@ function canonicalizeReport(
     ?.map((landing) => ({
       ...landing,
       sourceRawFindingIds: sortStrings(landing.sourceRawFindingIds),
+      sourceIntakeIds: sortStrings(landing.sourceIntakeIds),
     }))
     .sort(compareCanonicalJsonValues);
+  const managerTaskAudits = report.managerTaskAudits
+    ?.map((audit) => ({
+      ...audit,
+      ownedIds: sortStrings(audit.ownedIds),
+    }))
+    .sort((left, right) => (
+      compareBinaryStrings(left.taskId, right.taskId)
+      || compareCanonicalJsonValues(left, right)
+    ));
   return {
     ...report,
     finalErrors: [...report.finalErrors],
@@ -59,24 +69,17 @@ function canonicalizeReport(
     ...(reviewerAnomalyLandings === undefined ? {} : { reviewerAnomalyLandings }),
     ...(rawNormalizations === undefined ? {} : { rawNormalizations }),
     ...(relationClarifications === undefined ? {} : { relationClarifications }),
-    ...(report.rawFindingDispositions === undefined
-      ? {}
-      : {
-          rawFindingDispositions: [...report.rawFindingDispositions].sort((left, right) => (
-            compareBinaryStrings(left.rawFindingId, right.rawFindingId)
-            || compareCanonicalJsonValues(left, right)
-          )),
-        }),
     ...(report.interpretationRecoverySettlements === undefined
       ? {}
       : {
           interpretationRecoverySettlements: [
             ...report.interpretationRecoverySettlements,
           ].sort((left, right) => (
-            compareBinaryStrings(left.provisionalFindingId, right.provisionalFindingId)
+            compareBinaryStrings(left.settlementId, right.settlementId)
             || compareCanonicalJsonValues(left, right)
           )),
         }),
+    ...(managerTaskAudits === undefined ? {} : { managerTaskAudits }),
   };
 }
 

@@ -1,6 +1,7 @@
 import type {
   WorkflowConfig,
   WorkflowRestartPointEntry,
+  WorkflowResumeFrameKind,
   WorkflowResumePointEntry,
   WorkflowStepKind,
 } from '../models/types.js';
@@ -18,16 +19,21 @@ export function getWorkflowReference(workflow: WorkflowConfig): string {
 export function buildWorkflowResumePointEntry(
   workflow: WorkflowConfig,
   step: string,
-  kind: WorkflowStepKind,
+  kind: WorkflowResumeFrameKind,
+  occurrence: number,
   stepIterations?: ReadonlyMap<string, number>,
   callInstance?: number,
 ): WorkflowResumePointEntry {
+  if (!Number.isSafeInteger(occurrence) || occurrence <= 0) {
+    throw new Error(`Workflow resume frame "${workflow.name}/${step}" occurrence is invalid`);
+  }
   const workflowRef = getWorkflowReference(workflow);
   return {
     workflow: workflow.name,
-    ...(workflowRef !== workflow.name ? { workflow_ref: workflowRef } : {}),
+    workflow_ref: workflowRef,
     step,
     kind,
+    occurrence,
     ...(stepIterations !== undefined
       ? { step_iterations: Object.fromEntries(stepIterations) }
       : {}),
@@ -51,7 +57,7 @@ export function buildWorkflowRestartPointEntry(
 }
 
 export function getResumePointWorkflowReference(entry: WorkflowResumePointEntry): string {
-  return entry.workflow_ref ?? entry.workflow;
+  return entry.workflow_ref;
 }
 
 export function normalizeWorkflowResumePointEntry(
@@ -71,10 +77,7 @@ export function workflowEntryMatchesWorkflow(
   entry: WorkflowResumePointEntry,
   workflow: WorkflowConfig,
 ): boolean {
-  if (entry.workflow_ref !== undefined) {
-    return entry.workflow_ref === getWorkflowReference(workflow);
-  }
-  return entry.workflow === workflow.name;
+  return entry.workflow_ref === getWorkflowReference(workflow);
 }
 
 export function workflowRestartEntryMatchesWorkflow(
@@ -82,6 +85,15 @@ export function workflowRestartEntryMatchesWorkflow(
   workflow: WorkflowConfig,
 ): boolean {
   return entry.workflow_ref === getWorkflowReference(workflow);
+}
+
+export function workflowRestartEntryMatchesRuntime(
+  runtimeEntry: WorkflowResumePointEntry,
+  restartEntry: WorkflowRestartPointEntry,
+): boolean {
+  const normalizedRuntimeEntry = normalizeWorkflowResumePointEntry(runtimeEntry);
+  return normalizedRuntimeEntry.workflow_ref === restartEntry.workflow_ref
+    && normalizedRuntimeEntry.call_instance === restartEntry.call_instance;
 }
 
 export function workflowEntriesMatch(
@@ -93,8 +105,5 @@ export function workflowEntriesMatch(
   if (normalizedLeft.call_instance !== normalizedRight.call_instance) {
     return false;
   }
-  if (normalizedLeft.workflow_ref !== undefined && normalizedRight.workflow_ref !== undefined) {
-    return normalizedLeft.workflow_ref === normalizedRight.workflow_ref;
-  }
-  return normalizedLeft.workflow === normalizedRight.workflow;
+  return normalizedLeft.workflow_ref === normalizedRight.workflow_ref;
 }

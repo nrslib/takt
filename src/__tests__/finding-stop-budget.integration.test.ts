@@ -31,11 +31,25 @@ import {
 } from '../core/workflow/findings/stop-budget.js';
 import { computeRoundMarker } from '../core/workflow/findings/round-marker.js';
 import { runFindingManagerForStep, type FindingManagerSubStepResult } from '../core/workflow/findings/manager-runner.js';
+import {
+  createFindingReviewPublication,
+  STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+} from '../core/workflow/findings/review-publication.js';
 import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
 import { buildFindingsRuleContext as buildFindingsRuleContextWithCwd } from '../core/workflow/findings/context.js';
+import { processInterpretationLiveClaims } from '../core/workflow/findings/interpretation-live-claims.js';
 import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
 import { createFindingManagerPublicationDouble, RevisionedFindingLedgerTestRepository } from './helpers/finding-manager-publication.js';
-import { buildWorkflowCallNamespaceFixture } from './helpers/workflow-resume-fixture.js';
+import {
+  findingManagerTaskManifest,
+  findingManagerTaskResponse,
+} from './helpers/finding-manager-task-response.js';
+import {
+  authorizeFindingLedgerFixture,
+  canonicalRawFindingFixture,
+  emptyFindingAuthorityProjection,
+  reviewerRawExtractionFixture,
+} from './helpers/finding-lifecycle-fixture.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
   executeAgent: vi.fn(),
@@ -50,13 +64,9 @@ function buildFindingsRuleContext(ledger: FindingLedger) {
 
 beforeEach(() => {
   executeAgentMock.mockReset();
-  // Round-trip harness tests below all use the ambiguous-persists vehicle
-  // (hallucinatedRaw), which needs one manager interpretation call per
-  // distinct-evidence round; this generic implementation answers any such
-  // call regardless of which round/harness triggered it. The pure-function
-  // describe blocks above never call runFindingManagerForStep, so this is
-  // simply unused for them.
-  executeAgentMock.mockImplementation(async (_persona, instruction) => interpretationRunAgentResponse(instruction as string));
+  executeAgentMock.mockImplementation(async (_persona, instruction) => (
+    managerRunAgentResponse(instruction as string)
+  ));
 });
 
 // ---------------------------------------------------------------------------
@@ -71,7 +81,6 @@ function ledger(overrides: Partial<FindingLedger> = {}): FindingLedger {
     findings: [],
     rawFindings: [],
     conflicts: [],
-    interpretations: [],
     ...overrides,
   };
 }
@@ -111,78 +120,22 @@ describe('resolveStopBudgetLimits', () => {
 
 describe('computeRoundMarker', () => {
   it('is stable for the same (runId, callNamespace, stepName, stepIteration) and distinct for different ones', () => {
-    const a = computeRoundMarker({ runId: 'run-1', callNamespace: '', parentStepName: 'reviewers', stepIteration: 3 });
-    const aAgain = computeRoundMarker({ runId: 'run-1', callNamespace: '', parentStepName: 'reviewers', stepIteration: 3 });
-    const differentIteration = computeRoundMarker({ runId: 'run-1', callNamespace: '', parentStepName: 'reviewers', stepIteration: 4 });
-    const differentRun = computeRoundMarker({ runId: 'run-2', callNamespace: '', parentStepName: 'reviewers', stepIteration: 3 });
+    const a = computeRoundMarker({ runId: 'run-1', callNamespace: '', parentStepName: 'reviewers', stepIteration: 3, publicationIds: ['publication-1'] });
+    const aAgain = computeRoundMarker({ runId: 'run-1', callNamespace: '', parentStepName: 'reviewers', stepIteration: 3, publicationIds: ['publication-1'] });
+    const differentIteration = computeRoundMarker({ runId: 'run-1', callNamespace: '', parentStepName: 'reviewers', stepIteration: 4, publicationIds: ['publication-1'] });
+    const differentRun = computeRoundMarker({ runId: 'run-2', callNamespace: '', parentStepName: 'reviewers', stepIteration: 3, publicationIds: ['publication-1'] });
+    const differentPublication = computeRoundMarker({ runId: 'run-1', callNamespace: '', parentStepName: 'reviewers', stepIteration: 3, publicationIds: ['publication-2'] });
     expect(a).toBe(aAgain);
     expect(a).toContain('\0');
     expect(a).not.toBe(differentIteration);
     expect(a).not.toBe(differentRun);
-  });
-
-  it('keeps delimiter-equivalent workflow-call structures in different rounds', () => {
-    const firstNamespace = buildWorkflowCallNamespaceFixture(
-      'parent',
-      'b/c',
-      [{ workflow: 'parent', step: 'a', kind: 'agent' }],
-      'child',
-      1,
-    );
-    const secondNamespace = buildWorkflowCallNamespaceFixture(
-      'parent',
-      'c',
-      [{ workflow: 'parent', step: 'a/b', kind: 'agent' }],
-      'child',
-      1,
-    );
-
-    expect(computeRoundMarker({
-      runId: 'run-1',
-      callNamespace: firstNamespace,
-      parentStepName: 'reviewers',
-      stepIteration: 1,
-    })).not.toBe(computeRoundMarker({
-      runId: 'run-1',
-      callNamespace: secondNamespace,
-      parentStepName: 'reviewers',
-      stepIteration: 1,
-    }));
-  });
-
-  it('keeps case-only workflow-call identities in different rounds', () => {
-    const upperNamespace = buildWorkflowCallNamespaceFixture(
-      'parent',
-      'Delegate',
-      [],
-      'child',
-      1,
-    );
-    const lowerNamespace = buildWorkflowCallNamespaceFixture(
-      'parent',
-      'delegate',
-      [],
-      'child',
-      1,
-    );
-
-    expect(computeRoundMarker({
-      runId: 'run-1',
-      callNamespace: upperNamespace,
-      parentStepName: 'reviewers',
-      stepIteration: 1,
-    })).not.toBe(computeRoundMarker({
-      runId: 'run-1',
-      callNamespace: lowerNamespace,
-      parentStepName: 'reviewers',
-      stepIteration: 1,
-    }));
+    expect(a).not.toBe(differentPublication);
   });
 });
 
 describe('attachStopBudgetState', () => {
   const limits: ResolvedStopBudgetLimits = { maxRounds: 3, maxMinutes: 90 };
-  const marker = (n: number) => computeRoundMarker({ runId: 'run-1', callNamespace: '', parentStepName: 'reviewers', stepIteration: n });
+  const marker = (n: number) => computeRoundMarker({ runId: 'run-1', callNamespace: '', parentStepName: 'reviewers', stepIteration: n, publicationIds: ['publication-1'] });
 
   it('records the first round marker and firstRoundAt on the very first round', () => {
     const result = attachStopBudgetState(ledger(), ledger(), limits, marker(1), '2026-07-01T00:00:00.000Z');
@@ -320,7 +273,7 @@ describe('attachStopBudgetState', () => {
   });
 
   it('builds on the freshest persisted marker set, so a concurrent round that already added its own marker is preserved alongside this round (monotonic, no lost update)', () => {
-    const concurrentMarker = computeRoundMarker({ runId: 'run-other', callNamespace: '', parentStepName: 'reviewers', stepIteration: 9 });
+    const concurrentMarker = computeRoundMarker({ runId: 'run-other', callNamespace: '', parentStepName: 'reviewers', stepIteration: 9, publicationIds: ['publication-1'] });
     const previous = ledger({ stopBudget: { roundMarkers: [marker(1), concurrentMarker], firstRoundAt: '2026-07-01T00:00:00.000Z', exhausted: false } });
     const result = attachStopBudgetState(previous, ledger(), limits, marker(2), '2026-07-01T00:10:00.000Z');
     expect(stopBudgetRoundsCompleted(result)).toBe(3);
@@ -367,20 +320,19 @@ function makeRoundHarness(
   currentLedger: () => FindingLedger;
   run: (reviewerRawFindings: Array<Record<string, unknown>>, timestamp: string) => ReturnType<typeof runFindingManagerForStep>;
 } {
-  const ledgerRepository = new RevisionedFindingLedgerTestRepository(initialLedger);
+  const ledgerRepository = new RevisionedFindingLedgerTestRepository(
+    initialLedger.findings.length > 0
+      && (initialLedger.lifecycleEvents?.length ?? 0) === 0
+      ? authorizeFindingLedgerFixture(initialLedger)
+      : initialLedger,
+  );
   const publicationReportDir = makePublicationDir('takt-stop-budget-publication-');
-  const reservations = new Set<string>();
   const ledgerStore: FindingLedgerStore = {
     ledgerIdentity: '/test/finding-stop-budget/ledger.json',
     workflowName: 'peer-review',
     loadLedger: () => ledgerRepository.loadLedger(),
     updateLedger: (mutator) => ledgerRepository.updateLedger(mutator),
-    claimAdjudicationReservation: (token) => {
-      if (reservations.has(token)) return false;
-      reservations.add(token);
-      return true;
-    },
-    releaseAdjudicationReservation: (token) => { reservations.delete(token); },
+    interpretationLiveClaims: processInterpretationLiveClaims,
     saveLedgerSnapshot: () => {},
     saveRawFindings: () => {},
     saveManagerValidationReport: () => {},
@@ -391,7 +343,6 @@ function makeRoundHarness(
       ),
       ledgerRepository,
     ),
-    saveConflictAdjudicationReport: () => {},
   };
   const optionsBuilder = {
     buildAgentOptions: () => ({}),
@@ -400,16 +351,16 @@ function makeRoundHarness(
   const stepExecutor = {
     buildPhase1Instruction: (instruction: string) => instruction,
     normalizeStructuredOutput: (_step: WorkflowStep, response: AgentResponse) => response,
+    recordSynthesizedAgentUsage: () => {},
   };
   const parentStep: WorkflowStep = { kind: 'agent', name: 'reviewers', persona: 'reviewer', edit: false } as WorkflowStep;
   const contract = {
-    ledgerPath: '.takt/findings/ledger.json',
-    rawFindingsPath: '.takt/findings/raw',
     manager: {
       persona: 'findings-manager',
       instruction: 'Reconcile findings.',
       outputContract: 'Return JSON.',
     },
+    adjudicator: { persona: 'findings-supervisor' },
     ...(stopBudget !== undefined ? { stopBudget } : {}),
   };
   let round = 0;
@@ -417,13 +368,25 @@ function makeRoundHarness(
     currentLedger: () => ledgerRepository.loadLedger(),
     run: (reviewerRawFindings, timestamp) => {
       round += 1;
+      const reportContent = [
+        ...reviewerRawFindings.map((item) => String(item.rawExcerpt ?? '')),
+        '**APPROVE**',
+      ].join('\n');
       const subResults: FindingManagerSubStepResult[] = [{
         subStep: { kind: 'agent', name: 'arch-review', persona: 'arch', edit: false } as WorkflowStep,
-        response: {
-          status: 'done',
-          content: '',
-          structuredOutput: { rawFindings: reviewerRawFindings },
-        } as unknown as AgentResponse,
+        publication: createFindingReviewPublication({
+          identity: {
+            scopeIdentity: ledgerStore.ledgerIdentity,
+            callNamespace: '',
+            parentStepName: parentStep.name,
+            stepIteration: round,
+            reviewerStepName: 'arch-review',
+            reportName: 'arch-review.md',
+          },
+          protocol: STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+          reportContent,
+          rawFindings: reviewerRawFindings,
+        }),
       }];
       return runFindingManagerForStep({
         contract: contract as never,
@@ -435,6 +398,7 @@ function makeRoundHarness(
         stepIteration: round,
         subResults,
         workflowName: 'peer-review',
+        workflowTask: 'Review the implementation.',
         runId: `${runIdPrefix}-${round}`,
         callNamespace: '',
         timestamp,
@@ -451,7 +415,7 @@ function makeRoundHarness(
 // 引数は実ファイルパスの代わりに識別用の distinguishing marker として使う
 // （呼び出し側のシグネチャ・churn/repeat のセマンティクスは変えない）。
 function hallucinatedRaw(rawFindingId: string, title: string, path: string): Record<string, unknown> {
-  return {
+  return reviewerRawExtractionFixture({
     rawFindingId,
     familyTag: 'bug',
     severity: 'high',
@@ -460,33 +424,125 @@ function hallucinatedRaw(rawFindingId: string, title: string, path: string): Rec
     suggestion: '',
     relation: 'persists',
     targetFindingId: `F-fake-${path}`,
-  };
+    target: { kind: 'code', paths: [path] },
+    evidenceRequests: [],
+  });
 }
 
-/** ambiguous ladder の interpretation 呼び出しへの汎用応答（'provisional' 提案）。instruction から正規化済み rawFindingId を動的に抽出する。 */
+/** ambiguous ladder の interpretation 呼び出しへの汎用応答（'provisional' 提案）。 */
 function interpretationRunAgentResponse(instruction: string): AgentResponse {
-  const match = /"rawFindingId":\s*"([^"]+)"/.exec(instruction);
-  const rawFindingId = match?.[1];
-  if (rawFindingId === undefined) {
-    throw new Error(`Test setup error: rawFindingId not found in interpretation instruction: ${instruction}`);
+  const match = /"caseId":\s*"([^"]+)"/.exec(instruction);
+  const caseId = match?.[1];
+  if (caseId === undefined) {
+    throw new Error(`Test setup error: caseId not found in interpretation instruction: ${instruction}`);
   }
   return {
     persona: 'findings-manager',
     status: 'done',
     content: '',
     structuredOutput: {
-      interpretations: [
-        { decision: 'provisional', rawFindingId, proofId: '', targetFindingId: '', reason: 'Cannot determine the identity of this re-report.' },
+      decisions: [
+        {
+          caseId,
+          decision: {
+            kind: 'provisional',
+            reason: 'Cannot determine the identity of this re-report.',
+          },
+        },
       ],
     },
     timestamp: new Date(),
   } as unknown as AgentResponse;
 }
 
+function entityBindingRunAgentResponse(instruction: string): AgentResponse {
+  const manifest = findingManagerTaskManifest(instruction) as ReturnType<
+    typeof findingManagerTaskManifest
+  > & { ownedRawFindingIds: string[] };
+  const groupRawFindingId = manifest.ownedRawFindingIds[0];
+  if (groupRawFindingId === undefined) {
+    throw new Error('Test setup error: entity binding task owns no raw findings');
+  }
+  return {
+    persona: 'findings-manager',
+    status: 'done',
+    content: '',
+    structuredOutput: {
+      taskId: manifest.taskId,
+      decisions: manifest.ownedRawFindingIds.map((rawFindingId) => ({
+        rawFindingId,
+        decision: 'new_entity',
+        findingId: '',
+        groupRawFindingId,
+        reason: 'The raw observation requires lifecycle interpretation.',
+      })),
+    },
+    timestamp: new Date(),
+  } as AgentResponse;
+}
+
+function semanticLifecycleRunAgentResponse(instruction: string): AgentResponse {
+  const match = /## Owned raw findings\n(`{3,})json\n([\s\S]*?)\n\1/.exec(instruction);
+  if (match?.[2] === undefined) {
+    throw new Error('Test setup error: semantic lifecycle task input is missing');
+  }
+  const rawFindings = JSON.parse(match[2]) as Array<{
+    rawFindingId: string;
+    relation: string;
+    targetFindingId: string | null;
+  }>;
+  return findingManagerTaskResponse(instruction, {
+    rawDecisions: rawFindings.map((rawFinding) => {
+      if (
+        rawFinding.relation !== 'resolution_confirmation'
+        || rawFinding.targetFindingId === null
+      ) {
+        throw new Error('Test setup error: unexpected semantic lifecycle raw finding');
+      }
+      return {
+        decision: 'resolved',
+        rawFindingId: rawFinding.rawFindingId,
+        findingId: rawFinding.targetFindingId,
+        evidence: 'The materialized quote satisfies the original failure mode and required fix.',
+      };
+    }),
+    disputeDecisions: [],
+    conflictDecisions: [],
+    invalidateDecisions: [],
+    duplicateDecisions: [],
+    dismissDecisions: [],
+  });
+}
+
+function managerRunAgentResponse(instruction: string): AgentResponse {
+  if (instruction.startsWith('Adjudicate the durable provisional finding below.')) {
+    return {
+      persona: 'findings-supervisor',
+      status: 'done',
+      content: '{}',
+      structuredOutput: {
+        proposal: {
+          kind: 'undetermined',
+          rationale: 'The stop-budget fixture supplies no exact terminal authority.',
+        },
+      },
+      timestamp: new Date(),
+    } as AgentResponse;
+  }
+  if (instruction.includes('entity-binding contract below replaces')) {
+    return entityBindingRunAgentResponse(instruction);
+  }
+  if (instruction.includes('## Owned raw findings')) {
+    return semanticLifecycleRunAgentResponse(instruction);
+  }
+  return interpretationRunAgentResponse(instruction);
+}
+
 function emptyLedger(): FindingLedger {
   return {
     workflowName: 'peer-review', nextId: 1, updatedAt: '2026-07-01T00:00:00.000Z',
-    findings: [], rawFindings: [], conflicts: [], interpretations: [],
+    findings: [], evidenceRecords: [], rawFindings: [], conflicts: [],
+    ...emptyFindingAuthorityProjection(),
   };
 }
 
@@ -517,29 +573,50 @@ describe('runFindingManagerForStep across rounds: churn that never reaches fixpo
     expect(stopBudgetRoundsCompleted(harness.currentLedger())).toBe(3);
   });
 
-  it('priority: when fixpoint is reached after interpretation recovery is exhausted but before the round budget, fixpoint fires first', async () => {
+  it('priority: when fixpoint is reached after interpretation and terminal recovery are exhausted but before the round budget, fixpoint fires first', async () => {
     const harness = makeRoundHarness(emptyLedger(), { maxRounds: 10 });
 
     await harness.run([hallucinatedRaw('r1', 'Same bug', 'src/does-not-exist.ts')], '2026-07-01T00:00:00.000Z');
     await harness.run([hallucinatedRaw('r2', 'Same bug', 'src/does-not-exist.ts')], '2026-07-01T00:01:00.000Z');
     await harness.run([hallucinatedRaw('r3', 'Same bug', 'src/does-not-exist.ts')], '2026-07-01T00:02:00.000Z');
+    await harness.run([hallucinatedRaw('r4', 'Same bug', 'src/does-not-exist.ts')], '2026-07-01T00:03:00.000Z');
+    await harness.run([], '2026-07-01T00:04:00.000Z');
+    await harness.run([], '2026-07-01T00:05:00.000Z');
 
     const context = buildFindingsRuleContext(harness.currentLedger());
     expect(context.provisional.fixpoint).toBe(true);
     expect(context.rounds.budgetExhausted).toBe(false);
-    expect(stopBudgetRoundsCompleted(harness.currentLedger())).toBe(3);
+    expect(stopBudgetRoundsCompleted(harness.currentLedger())).toBe(6);
   });
 
   it('progress (a substantive finding resolving) does not reset the round budget — it accumulates monotonically alongside the churn', async () => {
+    const seedRaw = canonicalRawFindingFixture({
+      rawFindingId: 'raw-seed',
+      stepName: 'reviewers',
+      reviewer: 'arch-review',
+      familyTag: 'bug',
+      severity: 'medium',
+      title: 'Real, fixable issue',
+      description: 'A genuine issue that the fixer can and will resolve.',
+      suggestion: null,
+      relation: 'new',
+      targetFindingId: null,
+      target: { kind: 'code', paths: ['src/real.ts'] },
+      evidence: [],
+    });
     const seeded: FindingLedger = {
       workflowName: 'peer-review', nextId: 2, updatedAt: '2026-07-01T00:00:00.000Z',
       findings: [{
         id: 'F-0001',
         status: 'open',
         lifecycle: 'new',
+        target: seedRaw.target,
+        targetIdentityHash: seedRaw.targetIdentityHash,
+        claimIdentityHash: seedRaw.claimIdentityHash,
+        semanticClaimIdentityHash: seedRaw.semanticClaimIdentityHash,
         severity: 'medium',
         title: 'Real, fixable issue',
-        location: 'src/real.ts:10',
+        evidenceIds: [],
         description: 'A genuine issue that the fixer can and will resolve.',
         reviewers: ['arch-review'],
         rawFindingIds: ['raw-seed'],
@@ -547,37 +624,29 @@ describe('runFindingManagerForStep across rounds: churn that never reaches fixpo
         lastSeen: { runId: 'run-0', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
         revision: 1,
       }],
-      rawFindings: [{
-        rawFindingId: 'raw-seed',
-        stepName: 'reviewers',
-        reviewer: 'arch-review',
-        familyTag: 'bug',
-        severity: 'medium',
-        title: 'Real, fixable issue',
-        location: 'src/real.ts:10',
-        description: 'A genuine issue that the fixer can and will resolve.',
-        relation: 'new',
-      }],
+      evidenceRecords: [],
+      rawFindings: [seedRaw],
       conflicts: [],
-      interpretations: [],
+      ...emptyFindingAuthorityProjection(),
     };
     const harness = makeRoundHarness(seeded, { maxRounds: 3 });
 
     // Round 1: churn hallucination + real progress (F-0001 confirmed resolved).
     await harness.run([
       hallucinatedRaw('r1', 'Bug in file A', 'src/does-not-exist-a.ts'),
-      {
+      reviewerRawExtractionFixture({
         rawFindingId: 'confirm-1',
         familyTag: 'bug',
         severity: 'medium',
         title: 'Real, fixable issue',
         description: 'Verified: the fix removes the issue.',
+        suggestion: null,
         relation: 'resolution_confirmation',
         targetFindingId: 'F-0001',
-        // codex 検証ブロッカー#2: confirmation は検証済み source_quote 証跡が
+        // confirmation は検証済み file_quote 証跡が
         // 無いと resolve できない。
-        ...verifiedSourceQuoteFields(FIXTURE_CWD, 'src/real.ts', 10),
-      },
+        evidence: [verifiedSourceQuoteFields(FIXTURE_CWD, 'src/real.ts', 10)],
+      }),
     ], '2026-07-01T00:00:00.000Z');
     expect(harness.currentLedger().findings.find((f) => f.id === 'F-0001')?.status).toBe('resolved');
     expect(stopBudgetRoundsCompleted(harness.currentLedger())).toBe(1);
@@ -620,18 +689,12 @@ describe('runFindingManagerForStep across rounds: churn that never reaches fixpo
     // re-commits before the workflow checkpoint advanced.
     const ledgerRepository = new RevisionedFindingLedgerTestRepository(emptyLedger());
     const publicationReportDir = makePublicationDir('takt-stop-budget-replay-publication-');
-    const reservations = new Set<string>();
     const ledgerStore: FindingLedgerStore = {
       ledgerIdentity: '/test/finding-stop-budget/integrity-ledger.json',
       workflowName: 'peer-review',
       loadLedger: () => ledgerRepository.loadLedger(),
       updateLedger: (mutator) => ledgerRepository.updateLedger(mutator),
-      claimAdjudicationReservation: (token) => {
-        if (reservations.has(token)) return false;
-        reservations.add(token);
-        return true;
-      },
-      releaseAdjudicationReservation: (token) => { reservations.delete(token); },
+      interpretationLiveClaims: processInterpretationLiveClaims,
       saveLedgerSnapshot: () => {},
       saveRawFindings: () => {},
       saveManagerValidationReport: () => {},
@@ -642,14 +705,26 @@ describe('runFindingManagerForStep across rounds: churn that never reaches fixpo
         ),
         ledgerRepository,
       ),
-      saveConflictAdjudicationReport: () => {},
     };
     const contract = {
-      ledgerPath: '.takt/findings/ledger.json',
-      rawFindingsPath: '.takt/findings/raw',
       manager: { persona: 'findings-manager', instruction: 'Reconcile.', outputContract: 'JSON.' },
+      adjudicator: { persona: 'findings-supervisor' },
       stopBudget: { maxRounds: 5 },
     };
+    const sameRoundRawFindings = [hallucinatedRaw('r1', 'Bug in file A', 'src/does-not-exist-a.ts')];
+    const sameRoundPublication = createFindingReviewPublication({
+      identity: {
+        scopeIdentity: ledgerStore.ledgerIdentity,
+        callNamespace: '',
+        parentStepName: 'reviewers',
+        stepIteration: 1,
+        reviewerStepName: 'arch-review',
+        reportName: 'arch-review.md',
+      },
+      protocol: STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+      reportContent: String(sameRoundRawFindings[0]!.rawExcerpt),
+      rawFindings: sameRoundRawFindings,
+    });
     const runSameRound = (timestamp: string) => runFindingManagerForStep({
       contract: contract as never,
       ledgerStore,
@@ -661,9 +736,10 @@ describe('runFindingManagerForStep across rounds: churn that never reaches fixpo
       stepIteration: 1,
       subResults: [{
         subStep: { kind: 'agent', name: 'arch-review', persona: 'arch', edit: false } as WorkflowStep,
-        response: { status: 'done', content: '', structuredOutput: { rawFindings: [hallucinatedRaw('r1', 'Bug in file A', 'src/does-not-exist-a.ts')] } } as unknown as AgentResponse,
+        publication: sameRoundPublication,
       }],
       workflowName: 'peer-review',
+      workflowTask: 'Review the implementation.',
       runId: 'run-crashed',
       callNamespace: '',
       timestamp,

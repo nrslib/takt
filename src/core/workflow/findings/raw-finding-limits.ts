@@ -2,11 +2,14 @@
  * Finding Contract のハード上限。正常時が数件〜十数件、
  * 暴走時が435件という実測から、正常値の約4倍以上を許容しつつ暴走を早期遮断する。
  *
- * 1項目でも超過した reviewer 出力は部分採用しない: その reviewer の全 raw を
- * 単一の reviewer-output-overflow provisional に置き換える（先頭N件の部分採用は
- * 「やるな」リスト該当）。件数・byte の envelope 検査は巨大 JSON 全体を Zod
- * parse する前に行う（435件なら65件目を読んだ時点で打ち切る）。
+ * reviewer 件数超過は publication 境界で atomized 64件までを intake 対象にし、
+ * 超過件数を reviewer-output-overflow provisional と report に残す。byte・field・
+ * step envelope 違反は reviewer 全体を単一 overflow provisional に置き換える。
  */
+import {
+  RAW_FINDING_FIELD_LIMITS,
+  RAW_FINDING_NORMALIZER_LIMITS,
+} from '../../models/finding-contract-limits.js';
 
 export const RAW_FINDING_LIMITS = {
   /** raw 件数 / reviewer / review invocation */
@@ -17,21 +20,8 @@ export const RAW_FINDING_LIMITS = {
   maxReviewerRawFindingsJsonBytes: 256 * 1024,
   /** reconciliation step 全 raw JSON バイト数 */
   maxStepRawFindingsJsonBytes: 512 * 1024,
-  maxRawFindingIdChars: 128,
-  maxFamilyTagChars: 128,
-  maxTitleChars: 512,
-  maxLocationChars: 1024,
-  maxDescriptionChars: 8192,
-  maxSuggestionChars: 8192,
-  /**
-   * typed evidence protocol（review-integrity protocol）の verbatimExcerpt 上限。
-   * admission-validation.ts の MAX_SOURCE_QUOTE_LINES（200行）と整合する
-   * 概算バイト数 — 極端に広い引用（ファイル丸ごとの貼り付け等）を envelope
-   * 検査（parse 前）の段階で早期遮断する、行数チェックとは別の防御線。
-   */
-  maxVerbatimExcerptChars: 8192,
-  /** typed evidence protocol の snapshotId は不透明トークン（sha256 hex）なので短い。 */
-  maxSnapshotIdChars: 128,
+  ...RAW_FINDING_FIELD_LIMITS,
+  ...RAW_FINDING_NORMALIZER_LIMITS,
   /** reviewer correction は reviewer あたり1回 */
   maxReviewerCorrectionsPerReviewer: 1,
   /** correction 出力の上限（output tokens 近似） */
@@ -57,23 +47,6 @@ export const MANAGER_INTERPRETATION_LIMITS = {
   maxManagerSemanticRetries: 0,
   /** 自動解釈 epoch / lineage */
   maxInterpretationEpochsPerLineage: 2,
-} as const;
-
-/**
- * engine 主導の再裁定（RawAdjudicationRecovery）の上限。
- * maxReplayAttempts は「初回着地の失敗後に engine が再裁定を試みる回数」で、
- * 解釈 epoch（初回を含む解釈 attempt 総数）とは別カウンタ・別意味。
- * 枯渇後は dismiss 候補（内容の管轄裁定）へ回す。
- */
-export const RAW_ADJUDICATION_RECOVERY_LIMITS = {
-  maxReplayTargetsPerStep: 64,
-  maxReplayCandidatesPerBatch: 16,
-  maxManagerCallsPerStep: 4,
-  maxInputTokensPerCall: 24_000,
-  maxInputTokensPerStep: 64_000,
-  maxOutputTokensPerCall: 2_048,
-  maxOutputTokensPerStep: 8_192,
-  maxReplayAttempts: 2,
 } as const;
 
 export const MANAGER_ACTION_RECOVERY_LIMITS = {
@@ -108,11 +81,17 @@ export interface ReviewerEnvelopeViolation {
  */
 export function checkReviewerEnvelope(input: {
   itemCount: number;
+  atomizedItemCount: number;
   jsonBytes: number;
 }): ReviewerEnvelopeViolation | undefined {
   if (input.itemCount > RAW_FINDING_LIMITS.maxRawFindingsPerReviewer) {
     return {
       reason: `reviewer emitted ${input.itemCount} raw findings, exceeding the per-reviewer limit of ${RAW_FINDING_LIMITS.maxRawFindingsPerReviewer}`,
+    };
+  }
+  if (input.atomizedItemCount > RAW_FINDING_LIMITS.maxRawFindingsPerReviewer) {
+    return {
+      reason: `reviewer emitted ${input.atomizedItemCount} atomized raw findings, exceeding the per-reviewer limit of ${RAW_FINDING_LIMITS.maxRawFindingsPerReviewer}`,
     };
   }
   if (input.jsonBytes > RAW_FINDING_LIMITS.maxReviewerRawFindingsJsonBytes) {
@@ -153,25 +132,59 @@ export function findRawFieldLimitViolation(fields: {
   rawFindingId?: string;
   familyTag?: string;
   title?: string;
-  location?: string;
   description?: string;
   suggestion?: string;
-  verbatimExcerpt?: string;
-  snapshotId?: string;
+  evidence?: readonly unknown[];
+  rawExcerpt?: string;
+  targetFindingIds?: readonly string[];
+  targetFindingIdCount?: number;
+  evidenceRequests?: readonly unknown[];
 }): string | undefined {
   const checks: Array<[string, string | undefined, number]> = [
-    ['rawFindingId', fields.rawFindingId, RAW_FINDING_LIMITS.maxRawFindingIdChars],
+    [
+      'rawFindingId',
+      fields.rawFindingId,
+      RAW_FINDING_LIMITS.maxProviderRawFindingIdChars,
+    ],
     ['familyTag', fields.familyTag, RAW_FINDING_LIMITS.maxFamilyTagChars],
     ['title', fields.title, RAW_FINDING_LIMITS.maxTitleChars],
-    ['location', fields.location, RAW_FINDING_LIMITS.maxLocationChars],
     ['description', fields.description, RAW_FINDING_LIMITS.maxDescriptionChars],
     ['suggestion', fields.suggestion, RAW_FINDING_LIMITS.maxSuggestionChars],
-    ['verbatimExcerpt', fields.verbatimExcerpt, RAW_FINDING_LIMITS.maxVerbatimExcerptChars],
-    ['snapshotId', fields.snapshotId, RAW_FINDING_LIMITS.maxSnapshotIdChars],
+    ['rawExcerpt', fields.rawExcerpt, RAW_FINDING_LIMITS.maxDescriptionChars],
   ];
   for (const [name, value, limit] of checks) {
     if (value !== undefined && value.length > limit) {
       return `${name} is ${value.length} characters, exceeding the limit of ${limit}`;
+    }
+  }
+  if (
+    (fields.targetFindingIdCount ?? 0)
+    > RAW_FINDING_LIMITS.maxTargetFindingIdsPerCandidate
+  ) {
+    return `targetFindingIds has ${fields.targetFindingIdCount} items, exceeding the limit of ${RAW_FINDING_LIMITS.maxTargetFindingIdsPerCandidate}`;
+  }
+  for (const [index, targetFindingId] of (fields.targetFindingIds ?? []).entries()) {
+    if (targetFindingId.length > RAW_FINDING_LIMITS.maxFindingIdChars) {
+      return `targetFindingIds[${index}] is ${targetFindingId.length} characters, exceeding the limit of ${RAW_FINDING_LIMITS.maxFindingIdChars}`;
+    }
+  }
+  for (const [index, evidence] of (
+    fields.evidenceRequests ?? fields.evidence ?? []
+  ).entries()) {
+    if (evidence === null || typeof evidence !== 'object' || Array.isArray(evidence)) {
+      continue;
+    }
+    const record = evidence as Record<string, unknown>;
+    const evidenceChecks: Array<[string, unknown, number]> = record.kind === 'file_quote'
+      ? [
+          [`evidence[${index}].path`, record.path, RAW_FINDING_LIMITS.maxEvidencePathChars],
+          [`evidence[${index}].verbatimExcerpt`, record.verbatimExcerpt, RAW_FINDING_LIMITS.maxVerbatimExcerptChars],
+        ]
+      : [];
+    for (const [name, value, limit] of evidenceChecks) {
+      if (typeof value === 'string' && value.length > limit) {
+        return `${name} is ${value.length} characters, exceeding the limit of ${limit}`;
+      }
     }
   }
   return undefined;

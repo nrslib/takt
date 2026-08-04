@@ -75,6 +75,7 @@ export interface DecomposeTaskOptions {
   cwd: string;
   persona?: string;
   personaPath?: string;
+  workflowBundleResourceRoot?: string;
   language?: Language;
   model?: string;
   provider?: ProviderType;
@@ -145,6 +146,7 @@ async function requestDecompositionResponse(
     ), {
       cwd: options.cwd,
       personaPath: options.personaPath,
+      workflowBundleResourceRoot: options.workflowBundleResourceRoot,
       language: options.language,
       model: options.model,
       provider: options.provider,
@@ -272,6 +274,7 @@ export async function requestMorePartsRawResponse(
     response = await runAgent(options.persona, prompt, {
       cwd: options.cwd,
       personaPath: options.personaPath,
+      workflowBundleResourceRoot: options.workflowBundleResourceRoot,
       language: options.language,
       model: options.model,
       provider: options.provider,

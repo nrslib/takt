@@ -1,45 +1,98 @@
-/**
- * Test helper for the typed evidence protocol (codex 対策#4). Builds
- * evidenceKind/verbatimExcerpt/snapshotId fields that WILL pass
- * verifySourceQuoteEvidence (admission-validation.ts) for a given cwd-relative
- * path and 1-based line range, by reading the actual fixture file content —
- * so tests never hand-transcribe file content that has to stay byte-identical
- * to what the fixture setup wrote.
- *
- * Tests whose raw findings don't need to survive admission (e.g. they exist
- * only to reference a real ledger finding by id, or intentionally test the
- * rejected path) should not use this helper.
- */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { computeReviewScopeSnapshotId } from '../../core/workflow/findings/snapshot.js';
-
-export interface VerifiedSourceQuoteFields {
-  location: string;
-  evidenceKind: 'source_quote';
-  verbatimExcerpt: string;
-  snapshotId: string;
-}
+import {
+  computeClaimIdentityHash,
+  createEngineProofVerifierRegistry,
+  createLedgerEngineProofRegistry,
+} from '../../core/workflow/findings/evidence-domain.js';
+import { verifyFindingEvidenceSet } from '../../core/workflow/findings/evidence-verification.js';
+import type {
+  FileQuoteEvidence,
+  FindingEvidenceRecord,
+} from '../../core/workflow/findings/types.js';
 
 /**
- * Reads `cwd/relativePath` and returns the evidence fields for lines
- * [startLine, endLine] (1-based, inclusive; endLine defaults to startLine).
- * The returned `location` uses the "path:line" form for a single line and
- * "path:start-end" for a range, matching the reviewer-facing wire contract.
+ * Fixture の実ファイルから、機械照合を通る file_quote evidence を組み立てる。
  */
 export function verifiedSourceQuoteFields(
   cwd: string,
   relativePath: string,
   startLine: number,
   endLine: number = startLine,
-): VerifiedSourceQuoteFields {
+): FileQuoteEvidence {
   const content = readFileSync(join(cwd, relativePath), 'utf-8');
   const lines = content.split('\n');
   const verbatimExcerpt = lines.slice(startLine - 1, endLine).join('\n');
   return {
-    location: startLine === endLine ? `${relativePath}:${startLine}` : `${relativePath}:${startLine}-${endLine}`,
-    evidenceKind: 'source_quote',
+    kind: 'file_quote',
+    path: relativePath,
+    startLine,
+    endLine,
     verbatimExcerpt,
     snapshotId: computeReviewScopeSnapshotId(cwd),
+  };
+}
+
+export function verifiedFindingEvidenceFixture(input: {
+  cwd: string;
+  path: string;
+  startLine: number;
+  endLine?: number;
+  title: string;
+  description: string;
+  targetFindingId: string | null;
+  familyTag: string | null;
+  severity?: 'critical' | 'high' | 'medium' | 'low' | null;
+  suggestion?: string | null;
+}): {
+  evidence: FileQuoteEvidence;
+  record: FindingEvidenceRecord;
+} {
+  const evidence = verifiedSourceQuoteFields(
+    input.cwd,
+    input.path,
+    input.startLine,
+    input.endLine,
+  );
+  const verification = verifyFindingEvidenceSet({
+    cwd: input.cwd,
+    evidence: [evidence],
+    expectedSnapshotId: evidence.snapshotId,
+    claimIdentityHash: computeClaimIdentityHash({
+      target: {
+        kind: 'code',
+        paths: [input.path],
+      },
+      familyTag: input.familyTag,
+      severity: input.severity ?? 'high',
+      title: input.title,
+      description: input.description,
+      suggestion: input.suggestion ?? null,
+    }),
+    targetFindingId: input.targetFindingId,
+    proofRegistry: createLedgerEngineProofRegistry({
+      workflowName: 'fixture',
+      nextId: 1,
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      findings: [],
+      evidenceRecords: [],
+      rawFindings: [],
+      conflicts: [],
+    }),
+    proofVerifiers: createEngineProofVerifierRegistry([]),
+    proofContext: {
+      cwd: input.cwd,
+      workflowName: 'fixture',
+      runId: 'fixture-run',
+      scopeIdentity: 'fixture-scope',
+    },
+  });
+  if (verification.outcome !== 'match' || verification.records.length !== 1) {
+    throw new Error(`Fixture evidence did not pass production verification: ${verification.outcome}`);
+  }
+  return {
+    evidence,
+    record: verification.records[0]!,
   };
 }

@@ -13,11 +13,14 @@ import type {
   WorkflowResumePointEntry,
   RateLimitFallbackConfig,
   FallbackContext,
+  FallbackOperationOrigin,
   McpServerConfig,
 } from '../models/types.js';
+import type { FindingManagerAuthority } from '../models/finding-types.js';
 import type {
   AutoRoutingConfig,
   AutoRoutingStrategy,
+  FindingContractRuntimeConfig,
   PersonaProviderEntry,
   ProviderRoutingConfig,
   ResolvedObservabilityConfig,
@@ -36,12 +39,11 @@ import type { RunResumeSource } from './run/run-meta.js';
 import type { FindingLedgerStore } from './findings/store.js';
 import type { OperationJournalStore } from './operations/operation-journal-types.js';
 import type { PullRequestContext } from './pr-context.js';
+import type { RunPaths } from './run/run-paths.js';
 import type { DynamicParallelSelectionStore } from './dynamic-parallel/selection-store.js';
 import type { WorkflowCallInvocationEvidence } from './workflow-call-invocation-index.js';
 import type { WorkflowStepParticipationIndex } from './workflow-step-participation-index.js';
-import type { WorkflowExecutionScope } from './workflow-execution-scope.js';
 import type { SelectorGitCommandRunner } from './dynamic-parallel/selector-git-command-runner.js';
-import type { WorkflowStepBudget } from './workflow-step-budget.js';
 
 import type { ProviderType, StreamCallback, StreamEvent } from '../../shared/types/provider.js';
 
@@ -49,7 +51,7 @@ export interface WorkflowOperationJournalContext {
   readonly store: OperationJournalStore;
   readonly journalRunSlug: string;
   readonly claimToken: string;
-  readonly sourceClaimToken?: string;
+  readonly sourceClaimTokens?: ReadonlySet<string>;
 }
 export type {
   ProviderType,
@@ -156,8 +158,12 @@ export interface StepRunResult {
   response: AgentResponse;
   instruction: string;
   providerInfo?: StepProviderInfo;
+  workflowCallFailure?: WorkflowStepFailureSummary;
+  terminalOperation?: {
+    readonly origin: FallbackOperationOrigin;
+    readonly providerInfo: StepProviderInfo;
+  };
   consumedStepIterations?: readonly string[];
-  rateLimitFallbackHandled?: true;
   qualityGateFailure?: {
     response: AgentResponse;
     stepIteration: number;
@@ -176,15 +182,16 @@ export interface TeamLeaderPartRuntimeResolution {
 
 export interface RuntimeStepResolution {
   providerInfo?: StepProviderInfo;
+  providerInfoResolution?: 'fully_resolved';
   fallback?: FallbackContext;
   teamLeaderPart?: TeamLeaderPartRuntimeResolution;
 }
 
 export interface WorkflowSharedRuntimeState {
   startedAtMs: number;
+  activeResumePoint?: WorkflowResumePoint;
+  maxSteps?: WorkflowMaxSteps;
   restartNavigator?: import('./engine/WorkflowRestartNavigator.js').WorkflowRestartNavigator;
-  stepBudget?: WorkflowStepBudget;
-  workflowCallProgressTracker?: import('./workflow-call-progress-tracker.js').WorkflowCallProgressTracker;
   dynamicParallelSelectionStore?: DynamicParallelSelectionStore;
   workflowCallInvocationEvidence?: WorkflowCallInvocationEvidence;
   workflowStepParticipationIndex?: WorkflowStepParticipationIndex;
@@ -214,12 +221,13 @@ export interface WorkflowStepFailureSummary {
   kind: WorkflowAbortKind;
   step: string;
   reason: string;
+  error: string;
 }
 
 export interface WorkflowAbortResult {
   kind: WorkflowAbortKind;
   reason: string;
-  failure?: WorkflowStepFailureSummary;
+  failure: WorkflowStepFailureSummary;
 }
 
 export interface WorkflowRunResult {
@@ -231,7 +239,6 @@ export interface WorkflowRunResult {
 export interface WorkflowCallChildEngine {
   on: (event: string, listener: (...args: unknown[]) => void) => void;
   runWithResult: () => Promise<WorkflowRunResult>;
-  getOwnedResumePoint: () => WorkflowResumePoint | undefined;
 }
 
 export interface WorkflowCallResolutionRequest {
@@ -243,6 +250,28 @@ export interface WorkflowCallResolutionRequest {
 
 export type WorkflowCallResolver = (request: WorkflowCallResolutionRequest) => WorkflowConfig | null;
 
+export interface FindingAuthorityResolver {
+  resolve(input: {
+    readonly workflowConfig: WorkflowConfig;
+    readonly runPaths: RunPaths;
+    readonly runPathNamespace: readonly string[];
+    readonly workflowCallSiteIdentity?: string;
+  }): FindingLedgerStore;
+}
+
+export interface WorkflowStepExecutionEventContext {
+  readonly iteration: number;
+  readonly workflowName: string;
+  readonly resumeStepName: string;
+  readonly stepIteration: number;
+  readonly providerInfo: StepProviderInfo;
+  readonly provider: ProviderType;
+  readonly model: string;
+  readonly workflowStack: WorkflowResumePointEntry[];
+  readonly findingScopeIdentity: string | undefined;
+  readonly findingIds: readonly string[] | undefined;
+}
+
 export interface WorkflowCallLifecycle {
   parentWorkflow: string;
   step: string;
@@ -253,19 +282,9 @@ export interface WorkflowCallLifecycle {
 
 export interface WorkflowCallCompleteLifecycle extends WorkflowCallLifecycle {
   result:
-    | {
-        status: 'completed';
-        returnValue?: string;
-      }
-      | {
-        status: 'aborted';
-        abortKind?: WorkflowAbortKind;
-        abortReason?: string;
-      }
-      | {
-        status: 'failed';
-        reason: string;
-      };
+    | { status: 'completed'; returnValue?: string }
+    | { status: 'aborted'; abortKind?: WorkflowAbortKind; abortReason?: string }
+    | { status: 'failed'; reason: string };
 }
 
 /** Events emitted by workflow engine */
@@ -276,14 +295,21 @@ export interface WorkflowEvents {
     step: WorkflowStep,
     iteration: number,
     instruction: string,
-    providerInfo: StepProviderInfo | undefined,
+    providerInfo: StepProviderInfo,
     workflowName: string,
     resumeStepName: string,
     stepIteration: number,
-    maxSteps: WorkflowMaxSteps,
-    scope: WorkflowExecutionScope,
+    workflowStack: WorkflowResumePointEntry[],
+    findingScopeIdentity: string | undefined,
+    findingIds: readonly string[] | undefined,
   ) => void;
-  'step:complete': (step: WorkflowStep, response: AgentResponse, instruction: string, resumeStepName: string, scope: WorkflowExecutionScope) => void;
+  'step:complete': (
+    step: WorkflowStep,
+    response: AgentResponse,
+    instruction: string,
+    resumeStepName: string,
+    workflowStack: WorkflowResumePointEntry[],
+  ) => void;
   'routing:decision': (
     step: WorkflowStep,
     response: AgentResponse,
@@ -293,16 +319,21 @@ export interface WorkflowEvents {
     durationMs: number,
     iteration: number,
     workflowName: string,
-    scope: WorkflowExecutionScope,
   ) => void;
   'step:report': (
     step: WorkflowStep,
     filePath: string,
     fileName: string,
-    iteration: number,
-    scope: WorkflowExecutionScope,
+    context: WorkflowStepExecutionEventContext,
   ) => void;
-  'findings:ledger': (ledger: FindingLedger, iteration: number, scope: WorkflowExecutionScope) => void;
+  'findings:ledger': (
+    ledger: FindingLedger,
+    context: {
+      readonly iteration: number;
+      readonly workflowName: string;
+      readonly scopeIdentity: string;
+    },
+  ) => void;
   'step:blocked': (step: WorkflowStep, response: AgentResponse) => void;
   'step:rate_limited': (step: WorkflowStep, response: AgentResponse, rateLimitInfo: AgentResponse['rateLimitInfo']) => void;
   'step:user_input': (step: WorkflowStep, userInput: string) => void;
@@ -312,9 +343,9 @@ export interface WorkflowEvents {
     phaseName: PhaseName,
     instruction: string,
     promptParts: PhasePromptParts,
-    phaseExecutionId?: string,
-    iteration?: number,
-    scope?: WorkflowExecutionScope,
+    phaseExecutionId: string | undefined,
+    iteration: number | undefined,
+    workflowStack: WorkflowResumePointEntry[],
   ) => void;
   'phase:complete': (
     step: WorkflowStep,
@@ -322,28 +353,28 @@ export interface WorkflowEvents {
     phaseName: PhaseName,
     content: string,
     status: string,
-    error?: string,
-    phaseExecutionId?: string,
-    iteration?: number,
-    scope?: WorkflowExecutionScope,
+    error: string | undefined,
+    phaseExecutionId: string | undefined,
+    iteration: number | undefined,
+    workflowStack: WorkflowResumePointEntry[],
   ) => void;
   'phase:judge_stage': (
     step: WorkflowStep,
     phase: 3,
     phaseName: 'judge',
     entry: JudgeStageEntry,
-    phaseExecutionId?: string,
-    iteration?: number,
-    scope?: WorkflowExecutionScope,
+    phaseExecutionId: string | undefined,
+    iteration: number | undefined,
+    workflowStack: WorkflowResumePointEntry[],
   ) => void;
   'workflow:complete': (state: WorkflowState) => void;
-  'workflow:abort': (state: WorkflowState, reason: string, kind: WorkflowAbortKind) => void;
-  'iteration:limit': (
-    iteration: number,
-    maxSteps: number,
-    currentStep: string,
-    scope: WorkflowExecutionScope,
+  'workflow:abort': (
+    state: WorkflowState,
+    reason: string,
+    kind: WorkflowAbortKind,
+    failure: WorkflowStepFailureSummary,
   ) => void;
+  'iteration:limit': (iteration: number, maxSteps: number) => void;
   'step:loop_detected': (step: WorkflowStep, consecutiveCount: number) => void;
   'step:cycle_detected': (monitor: LoopMonitorConfig, cycleCount: number) => void;
 }
@@ -366,8 +397,6 @@ export interface IterationLimitRequest {
   maxSteps: number;
   /** Current step name */
   currentStep: string;
-  /** Immutable workflow call stack for the branch that reached the limit. */
-  scope: WorkflowExecutionScope;
 }
 
 /** Callback for session updates (when persona session IDs change or clear) */
@@ -438,6 +467,8 @@ export interface WorkflowEngineOptions {
   selectorGitCommandRunner?: SelectorGitCommandRunner;
   /** Resolved automatic provider/model routing configuration */
   autoRouting?: AutoRoutingConfig;
+  /** Opt-in reviewer report extraction for effective Finding Contract workflows. */
+  findingContractConfig?: FindingContractRuntimeConfig;
   /** Run-scoped strategy override for automatic provider/model routing. */
   autoStrategyOverride?: AutoRoutingStrategy;
   onEffectiveAutoRoutingReached?: () => void;
@@ -503,17 +534,24 @@ export interface WorkflowEngineOptions {
   workflowCallResolver?: WorkflowCallResolver;
   /** Scalar execution context inherited through nested workflow_call boundaries. */
   workflowCallVars?: Readonly<Record<string, string | number | boolean>>;
+  /** Exact verified resource root for the run's workflow execution bundle. */
+  workflowBundleResourceRoot?: string;
+  /**
+   * Run-bound Finding authority selected by the application composition root.
+   * Local contracts resolve through it; inherited contracts keep the exact
+   * parent store instance.
+   */
+  findingAuthorityResolver?: FindingAuthorityResolver;
   /**
    * workflow_call の親から継承する Finding Contract。
    * 継承しないと子の parallel レビューが出す raw findings が親の台帳に届かず、
    * fix ステップへ渡らないまま reviewers ↔ fix が回り続ける（実測: 56周・9時間）。
-   * ledgerStore は親と同一インスタンスを渡す。ledger_path / raw_findings_path は
-   * ワークフロー名に紐づくため、子が自前で store を作り直すと親の
-   * when(findings.*) と別の台帳を見てしまう。
+   * ledgerStore は親と同一インスタンスを渡し、同じ authority を共有する。
    */
   inheritedFindingContract?: {
     contract: FindingContractConfig;
     ledgerStore: FindingLedgerStore;
+    managerAuthority: FindingManagerAuthority;
   };
   /**
    * workflow_call の呼び出しスタックを表す名前空間。raw finding id にこの値を
@@ -524,6 +562,8 @@ export interface WorkflowEngineOptions {
    * undefined のままにし、既存の raw finding id の形を変えない。
    */
   findingCallNamespace?: string;
+  /** Full resume-stack-derived identity for the workflow_call that owns this engine. */
+  workflowCallSiteIdentity?: string;
 }
 
 export interface WorkflowTraceTaskMetadata {

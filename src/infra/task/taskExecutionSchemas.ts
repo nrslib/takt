@@ -4,6 +4,11 @@ import { getLocalBranchNameError } from '../../shared/utils/gitBranchValidation.
 import { parseWorkflowResumePoint } from '../../core/workflow/resume-point-codec.js';
 import { WorkflowRestartPointSchema } from '../../core/models/workflow-resume-schema.js';
 
+const positiveSafeIntegerSchema = z.number().refine(
+  (value) => Number.isSafeInteger(value) && value > 0,
+  { message: 'Expected a positive safe integer' },
+);
+
 const WorkflowResumePointCodecSchema = z.unknown().transform((value, ctx) => {
   try {
     return parseWorkflowResumePoint(value);
@@ -16,13 +21,7 @@ const WorkflowResumePointCodecSchema = z.unknown().transform((value, ctx) => {
   }
 });
 
-const positiveSafeIntegerSchema = z.number().refine(
-  (value) => Number.isSafeInteger(value) && value > 0,
-  { message: 'Expected a positive safe integer' },
-);
-
 export const TASK_RESTART_POINT_KEY = 'restart_point' as const;
-
 export const TaskExecutionConfigObjectSchema = z.object({
   worktree: z.union([z.boolean(), z.string()]).optional(),
   branch: z.string().optional(),

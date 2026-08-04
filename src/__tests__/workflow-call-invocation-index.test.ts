@@ -1,20 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, readdirSync, realpathSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
-const forcedNamespaceSegment = vi.hoisted(() => ({ value: undefined as string | undefined }));
-
-vi.mock('../core/workflow/workflow-call-namespace.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../core/workflow/workflow-call-namespace.js')>();
-  return {
-    ...actual,
-    buildWorkflowCallNamespaceSegment: (
-      ...args: Parameters<typeof actual.buildWorkflowCallNamespaceSegment>
-    ) => forcedNamespaceSegment.value ?? actual.buildWorkflowCallNamespaceSegment(...args),
-  };
-});
-import type { WorkflowConfig, WorkflowResumePointEntry } from '../core/models/types.js';
+import { describe, expect, it } from 'vitest';
+import type { WorkflowConfig } from '../core/models/types.js';
 import { buildWorkflowResumePointEntry } from '../core/workflow/workflow-reference.js';
 import {
   WorkflowCallInvocationIndex,
@@ -22,15 +7,6 @@ import {
   restoreWorkflowCallInvocationEvidence,
   serializeWorkflowCallInvocationEvidence,
 } from '../core/workflow/workflow-call-invocation-index.js';
-import {
-  MAX_WORKFLOW_CALL_STORAGE_KEY_BYTES,
-  buildWorkflowCallNamespaceSegment,
-  parseWorkflowCallNamespaceSegment,
-  workflowCallReportRequestSegmentsMatch,
-} from '../core/workflow/workflow-call-namespace.js';
-import { buildRunPaths } from '../core/workflow/run/run-paths.js';
-import { ensureRunDirsExist } from '../core/workflow/engine/WorkflowEngineSetup.js';
-import { MAX_WORKFLOW_CALL_DEPTH } from '../core/workflow/workflow-call-depth.js';
 
 function makeWorkflow(name: string): WorkflowConfig {
   return {
@@ -41,74 +17,54 @@ function makeWorkflow(name: string): WorkflowConfig {
   };
 }
 
-function storageKey(
-  workflow: string,
-  step: string,
-  ownerPath: readonly WorkflowResumePointEntry[],
-  childWorkflow: string,
-  callInstance: number | '*',
-): string {
-  return buildWorkflowCallNamespaceSegment(
-    buildWorkflowCallInvocationIdentity(workflow, step, ownerPath),
-    childWorkflow,
-    callInstance,
-  );
-}
-
 describe('WorkflowCallInvocationIndex', () => {
   it('should distinguish the same nested call step under different ancestor invocations', () => {
     const parent = makeWorkflow('parent');
     const child = makeWorkflow('child');
-    const firstParentCall = buildWorkflowResumePointEntry(parent, 'delegate', 'workflow_call', undefined, 1);
-    const secondParentCall = buildWorkflowResumePointEntry(parent, 'delegate', 'workflow_call', undefined, 2);
+    const firstParentCall = buildWorkflowResumePointEntry(
+      parent,
+      'delegate',
+      'workflow_call',
+      1,
+      undefined,
+      1,
+    );
+    const secondParentCall = buildWorkflowResumePointEntry(
+      parent,
+      'delegate',
+      'workflow_call',
+      2,
+      undefined,
+      2,
+    );
     const index = new WorkflowCallInvocationIndex(new Map());
 
     index.record(child, 'nested', [firstParentCall], {
       call_instance: 4,
-      child_workflow_ref: 'grandchild',
+      report_namespace_segment: 'iteration-10--step-nested--workflow-grandchild',
     });
     index.record(child, 'nested', [secondParentCall], {
       call_instance: 7,
-      child_workflow_ref: 'grandchild',
+      report_namespace_segment: 'iteration-20--step-nested--workflow-grandchild',
     });
 
     expect(index.get(child, 'nested', [firstParentCall])).toEqual({
       call_instance: 4,
-      child_workflow_ref: 'grandchild',
+      report_namespace_segment: 'iteration-10--step-nested--workflow-grandchild',
     });
     expect(index.get(child, 'nested', [secondParentCall])).toEqual({
       call_instance: 7,
-      child_workflow_ref: 'grandchild',
+      report_namespace_segment: 'iteration-20--step-nested--workflow-grandchild',
     });
-    expect(storageKey('child', 'nested', [firstParentCall], 'grandchild', 4))
-      .not.toBe(storageKey('child', 'nested', [secondParentCall], 'grandchild', 7));
-  });
-
-  it('should distinguish the same call step owned by different parallel parents', () => {
-    const parent = makeWorkflow('parent');
-    const firstOwner = buildWorkflowResumePointEntry(parent, 'fanout_a', 'agent');
-    const secondOwner = buildWorkflowResumePointEntry(parent, 'fanout_b', 'agent');
-    const index = new WorkflowCallInvocationIndex(new Map());
-
-    index.record(parent, 'delegate', [firstOwner], {
-      call_instance: 1,
-      child_workflow_ref: 'child',
-    });
-    index.record(parent, 'delegate', [secondOwner], {
-      call_instance: 1,
-      child_workflow_ref: 'child',
-    });
-
-    expect(index.get(parent, 'delegate', [firstOwner])?.child_workflow_ref).toBe('child');
-    expect(index.get(parent, 'delegate', [secondOwner])?.child_workflow_ref).toBe('child');
-    expect(storageKey('parent', 'delegate', [firstOwner], 'child', 1))
-      .not.toBe(storageKey('parent', 'delegate', [secondOwner], 'child', 1));
   });
 
   it('should reject a persisted invocation that disagrees with the resume stack', () => {
     const parent = makeWorkflow('parent');
     const identity = buildWorkflowCallInvocationIdentity('parent', 'delegate', []);
-    const invocation = { call_instance: 1, child_workflow_ref: 'child' };
+    const invocation = {
+      call_instance: 1,
+      report_namespace_segment: 'iteration-11--step-delegate--workflow-child',
+    };
     const index = new WorkflowCallInvocationIndex(new Map([[identity, invocation]]));
 
     expect(() => index.validateResumePoint({
@@ -117,6 +73,7 @@ describe('WorkflowCallInvocationIndex', () => {
         parent,
         'delegate',
         'workflow_call',
+        2,
         new Map([['delegate', 2]]),
         2,
       )],
@@ -127,72 +84,43 @@ describe('WorkflowCallInvocationIndex', () => {
     })).toThrow('Workflow-call invocation identity does not match resume entry "delegate"');
   });
 
-  it('should reject a persisted child reference that disagrees with the resume stack', () => {
-    const parent = makeWorkflow('parent');
-    const identity = buildWorkflowCallInvocationIdentity('parent', 'delegate', []);
-    const invocation = { call_instance: 1, child_workflow_ref: 'other-child' };
-    const index = new WorkflowCallInvocationIndex(new Map([[identity, invocation]]));
-
-    expect(() => index.validateResumePoint({
-      version: 2,
-      stack: [
-        buildWorkflowResumePointEntry(parent, 'delegate', 'workflow_call', undefined, 1),
-        { workflow: 'child', step: 'review', kind: 'agent' },
-      ],
-      iteration: 2,
-      elapsed_ms: 0,
-      workflow_call_invocations: { [identity]: invocation },
-      workflow_step_participations: {},
-    })).toThrow('Workflow-call child reference does not match resume entry "delegate"');
-  });
-
-  it('should reject a workflow-call step iteration that disagrees with its call instance', () => {
-    const parent = makeWorkflow('parent');
-    const identity = buildWorkflowCallInvocationIdentity('parent', 'delegate', []);
-    const invocation = { call_instance: 2, child_workflow_ref: 'child' };
-    const index = new WorkflowCallInvocationIndex(new Map([[identity, invocation]]));
-
-    expect(() => index.validateResumePoint({
-      version: 2,
-      stack: [buildWorkflowResumePointEntry(
-        parent,
-        'delegate',
-        'workflow_call',
-        new Map([['delegate', 3]]),
-        2,
-      )],
-      iteration: 2,
-      elapsed_ms: 0,
-      workflow_call_invocations: { [identity]: invocation },
-      workflow_step_participations: {},
-    })).toThrow('Workflow-call step iteration does not match resume entry "delegate"');
-  });
-
-  it('should serialize a defensive logical record snapshot per canonical path', () => {
+  it('should serialize a defensive snapshot of the current invocation per canonical path', () => {
     const workflow = makeWorkflow('parent');
     const index = new WorkflowCallInvocationIndex(new Map());
-    index.record(workflow, 'delegate', [], { call_instance: 1, child_workflow_ref: 'child' });
-    index.record(workflow, 'delegate', [], { call_instance: 2, child_workflow_ref: 'child' });
+    index.record(workflow, 'delegate', [], {
+      call_instance: 1,
+      report_namespace_segment: 'iteration-8--step-delegate--workflow-child',
+    });
+    index.record(workflow, 'delegate', [], {
+      call_instance: 2,
+      report_namespace_segment: 'iteration-21--step-delegate--workflow-child',
+    });
 
     const serialized = index.serialized();
 
     expect(serialized).toEqual({
       [buildWorkflowCallInvocationIdentity('parent', 'delegate', [])]: {
         call_instance: 2,
-        child_workflow_ref: 'child',
+        report_namespace_segment: 'iteration-21--step-delegate--workflow-child',
       },
     });
     serialized[buildWorkflowCallInvocationIdentity('parent', 'delegate', [])]!.call_instance = 9;
     expect(index.get(workflow, 'delegate', [])).toEqual({
       call_instance: 2,
-      child_workflow_ref: 'child',
+      report_namespace_segment: 'iteration-21--step-delegate--workflow-child',
     });
   });
 
   it('should preserve an explicit empty exact index when serializing current evidence', () => {
     const evidence = restoreWorkflowCallInvocationEvidence({
       version: 2,
-      stack: [{ workflow: 'parent', step: 'prepare', kind: 'agent' }],
+      stack: [{
+        workflow: 'parent',
+        workflow_ref: 'parent',
+        step: 'prepare',
+        kind: 'agent',
+        occurrence: 1,
+      }],
       iteration: 0,
       elapsed_ms: 0,
       workflow_call_invocations: {},
@@ -203,173 +131,75 @@ describe('WorkflowCallInvocationIndex', () => {
     expect(serializeWorkflowCallInvocationEvidence(evidence)).toEqual({});
   });
 
-  it('should reject an empty persisted child workflow reference', () => {
+  it('should reject an invalid persisted report namespace segment', () => {
     const identity = buildWorkflowCallInvocationIdentity('parent', 'delegate', []);
 
     expect(() => new WorkflowCallInvocationIndex(new Map([[identity, {
       call_instance: 1,
-      child_workflow_ref: '',
-    }]]))).toThrow('requires a child workflow reference');
+      report_namespace_segment: 'iteration-*--step-delegate--workflow-child',
+    }]]))).toThrow('has an invalid report namespace segment');
   });
 
   it.each([
-    '{"workflow":"parent","step":"delegate","owners":[],"extra":true}',
-    '{"step":"delegate","workflow":"parent","owners":[]}',
-    '{ "workflow":"parent","step":"delegate","owners":[]}',
-  ])('should reject a non-canonical persisted invocation identity', (identity) => {
+    {
+      label: 'an extra property',
+      identity: '{"workflow":"parent","step":"delegate","calls":[],"extra":true}',
+    },
+    {
+      label: 'a non-canonical key order',
+      identity: '{"step":"delegate","workflow":"parent","calls":[]}',
+    },
+    {
+      label: 'a non-canonical JSON representation',
+      identity: '{ "workflow":"parent","step":"delegate","calls":[]}',
+    },
+  ])('should reject persisted invocation identity with $label', ({ identity }) => {
     expect(() => new WorkflowCallInvocationIndex(new Map([[identity, {
       call_instance: 1,
-      child_workflow_ref: 'child',
+      report_namespace_segment: 'iteration-1--step-delegate--workflow-child',
     }]]))).toThrow('Invalid workflow-call invocation identity');
   });
 
   it.each([
-    '{"workflow":"child","step":"nested","owners":[{"workflow":"parent","step":"delegate","kind":"agent","instance":1}]}',
-    '{"workflow":"child","step":"nested","owners":[{"workflow":"parent","step":"delegate","kind":"workflow_call","instance":0}]}',
-    '{"workflow":"child","step":"nested","owners":[{"workflow":"parent","step":"delegate","kind":"workflow_call","instance":1,"extra":true}]}',
-  ])('should reject a non-canonical nested invocation identity', (identity) => {
+    {
+      label: 'an unknown ancestor frame kind',
+      identity: '{"workflow":"child","step":"nested","calls":[{"workflow":"parent","step":"delegate","kind":"unknown","instance":1}]}',
+    },
+    {
+      label: 'a zero nested call instance',
+      identity: '{"workflow":"child","step":"nested","calls":[{"workflow":"parent","step":"delegate","kind":"workflow_call","instance":0}]}',
+    },
+    {
+      label: 'an extra nested call property',
+      identity: '{"workflow":"child","step":"nested","calls":[{"workflow":"parent","step":"delegate","kind":"workflow_call","instance":1,"extra":true}]}',
+    },
+  ])('should reject persisted nested invocation identity with $label', ({ identity }) => {
     expect(() => new WorkflowCallInvocationIndex(new Map([[identity, {
       call_instance: 1,
-      child_workflow_ref: 'grandchild',
+      report_namespace_segment: 'iteration-1--step-nested--workflow-grandchild',
     }]]))).toThrow('Invalid workflow-call invocation identity');
   });
 
-  it('should project opaque and long identity values to a bounded lowercase ASCII key', () => {
-    const longValue = 'A/%#'.repeat(100);
-    const ownerPath = [{ workflow: longValue, step: `${longValue}owner`, kind: 'agent' as const }];
-    const segment = storageKey(longValue, `${longValue}step`, ownerPath, `${longValue}child`, 7);
+  it('should reject a persisted invocation namespace with iteration zero', () => {
+    const identity = buildWorkflowCallInvocationIdentity('parent', 'delegate', []);
 
-    expect(segment).toMatch(/^call-[0-9a-f]{64}-7$/);
-    expect(Buffer.byteLength(segment)).toBeLessThanOrEqual(MAX_WORKFLOW_CALL_STORAGE_KEY_BYTES);
-    expect(Buffer.byteLength(storageKey(longValue, `${longValue}step`, ownerPath, `${longValue}child`, Number.MAX_SAFE_INTEGER)))
-      .toBe(MAX_WORKFLOW_CALL_STORAGE_KEY_BYTES);
-    expect(MAX_WORKFLOW_CALL_STORAGE_KEY_BYTES).toBe(86);
-    expect(parseWorkflowCallNamespaceSegment(segment)?.callInstance).toBe(7);
-    expect(segment).toBe(segment.toLowerCase());
+    expect(() => new WorkflowCallInvocationIndex(new Map([[identity, {
+      call_instance: 1,
+      report_namespace_segment: 'iteration-0--step-delegate--workflow-child',
+    }]]))).toThrow('has an invalid report namespace segment');
   });
 
-  it('should distinguish every logical scope boundary and case-only differences', () => {
-    const agentOwner = [{ workflow: 'parent', step: 'owner', kind: 'agent' as const }];
-    const systemOwner = [{ workflow: 'parent', step: 'owner', kind: 'system' as const }];
-    const baseline = storageKey('parent', 'delegate', agentOwner, 'child', 1);
-    const variants = [
-      storageKey('Parent', 'delegate', agentOwner, 'child', 1),
-      storageKey('parent', 'Delegate', agentOwner, 'child', 1),
-      storageKey('parent', 'delegate', [{ ...agentOwner[0]!, workflow: 'Parent' }], 'child', 1),
-      storageKey('parent', 'delegate', [{ ...agentOwner[0]!, step: 'Owner' }], 'child', 1),
-      storageKey('parent', 'delegate', systemOwner, 'child', 1),
-      storageKey('parent', 'delegate', agentOwner, 'Child', 1),
-    ];
+  it('should reject one report namespace assigned to different logical identities', () => {
+    const index = new WorkflowCallInvocationIndex(new Map());
 
-    expect(new Set([baseline, ...variants]).size).toBe(variants.length + 1);
-  });
-
-  it('should create separate real run directories for long case-only identities', () => {
-    const temporaryDirectory = mkdtempSync(join(tmpdir(), 'takt-call-storage-'));
-    const longWorkflow = 'w'.repeat(200);
-    const first = storageKey(longWorkflow, 'Delegate', [], 'c'.repeat(200), 1);
-    const second = storageKey(longWorkflow, 'delegate', [], 'c'.repeat(200), 1);
-
-    try {
-      const firstPaths = buildRunPaths(temporaryDirectory, 'run', ['subworkflows', first]);
-      const secondPaths = buildRunPaths(temporaryDirectory, 'run', ['subworkflows', second]);
-      ensureRunDirsExist(firstPaths);
-      ensureRunDirsExist(secondPaths);
-
-      expect(realpathSync(firstPaths.reportsAbs)).not.toBe(realpathSync(secondPaths.reportsAbs));
-      expect(readdirSync(join(temporaryDirectory, '.takt', 'runs', 'run', 'reports', 'subworkflows')).sort())
-        .toEqual([first, second].sort());
-    } finally {
-      rmSync(temporaryDirectory, { recursive: true, force: true });
-    }
-  });
-
-  it('should create the production run path at maximum workflow call depth', () => {
-    const temporaryDirectory = mkdtempSync(join(tmpdir(), 'takt-call-depth-'));
-    const namespace = Array.from({ length: MAX_WORKFLOW_CALL_DEPTH }, (_, index) => [
-      'subworkflows',
-      storageKey(
-        `workflow-${index}-${'w'.repeat(200)}`,
-        `delegate-${index}-${'s'.repeat(200)}`,
-        [],
-        `child-${index}-${'c'.repeat(200)}`,
-        1,
-      ),
-    ]).flat();
-
-    try {
-      const paths = buildRunPaths(temporaryDirectory, 'run', namespace);
-      ensureRunDirsExist(paths);
-
-      expect(realpathSync(paths.reportsAbs)).not.toHaveLength(0);
-      expect(realpathSync(paths.contextAbs)).not.toHaveLength(0);
-    } finally {
-      rmSync(temporaryDirectory, { recursive: true, force: true });
-    }
-  });
-
-  it('should distinguish delimiter-equivalent flat and structured call paths', () => {
-    const firstOwner = [{ workflow: 'parent', step: 'a', kind: 'agent' as const }];
-    const secondOwner = [{ workflow: 'parent', step: 'a/b', kind: 'agent' as const }];
-
-    expect(storageKey('parent', 'b/c', firstOwner, 'child', 1))
-      .not.toBe(storageKey('parent', 'c', secondOwner, 'child', 1));
-  });
-
-  it('should let a wildcard ignore only the current call instance', () => {
-    const exact = storageKey('parent', 'delegate', [], 'child', 2);
-    const wildcard = storageKey('parent', 'delegate', [], 'child', '*');
-
-    expect(workflowCallReportRequestSegmentsMatch(exact, wildcard)).toBe(true);
-    expect(workflowCallReportRequestSegmentsMatch(
-      storageKey('parent', 'other-step', [], 'child', 2),
-      wildcard,
-    )).toBe(false);
-    expect(workflowCallReportRequestSegmentsMatch(
-      storageKey('parent', 'delegate', [], 'other-child', 2),
-      wildcard,
-    )).toBe(false);
-  });
-
-  it('should reject uppercase or malformed storage digests', () => {
-    const canonical = storageKey('parent', 'delegate', [], 'child', 1);
-
-    expect(parseWorkflowCallNamespaceSegment(canonical.toUpperCase())).toBeUndefined();
-    expect(parseWorkflowCallNamespaceSegment('call-deadbeef-deadbeef-1')).toBeUndefined();
-    expect(parseWorkflowCallNamespaceSegment(canonical.replace(/-1$/, '-0'))).toBeUndefined();
-  });
-
-  it('should not match a request whose storage scope digest was modified', () => {
-    const exact = storageKey('parent', 'delegate', [], 'child', 1);
-    const wildcard = storageKey('parent', 'delegate', [], 'child', '*');
-    const digestOffset = 'call-'.length;
-    const replacement = wildcard[digestOffset] === '0' ? '1' : '0';
-    const modifiedWildcard = wildcard.slice(0, digestOffset)
-      + replacement
-      + wildcard.slice(digestOffset + 1);
-
-    expect(parseWorkflowCallNamespaceSegment(modifiedWildcard)).toBeDefined();
-    expect(workflowCallReportRequestSegmentsMatch(exact, modifiedWildcard)).toBe(false);
-  });
-
-  describe('storage collision handling', () => {
-    afterEach(() => {
-      forcedNamespaceSegment.value = undefined;
+    index.record(makeWorkflow('first'), 'delegate', [], {
+      call_instance: 1,
+      report_namespace_segment: 'iteration-1--step-delegate--workflow-child',
     });
 
-    it('should reject one storage key assigned to different logical identities', () => {
-      forcedNamespaceSegment.value = `call-${'0'.repeat(64)}-1`;
-      const index = new WorkflowCallInvocationIndex(new Map());
-
-      index.record(makeWorkflow('first'), 'delegate', [], {
-        call_instance: 1,
-        child_workflow_ref: 'child',
-      });
-
-      expect(() => index.record(makeWorkflow('second'), 'delegate', [], {
-        call_instance: 1,
-        child_workflow_ref: 'child',
-      })).toThrow('Workflow-call storage key is already assigned to invocation');
-    });
+    expect(() => index.record(makeWorkflow('second'), 'delegate', [], {
+      call_instance: 1,
+      report_namespace_segment: 'iteration-1--step-delegate--workflow-child',
+    })).toThrow('Workflow-call report namespace is already assigned to another invocation');
   });
 });

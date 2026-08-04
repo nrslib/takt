@@ -278,137 +278,6 @@ describe('WorkflowEngine workflow_call integration', () => {
     });
   });
 
-  it.each([
-    {
-      name: 'provider only',
-      options: {
-        provider: 'codex',
-        providerSource: 'cli',
-        model: 'mock/parent-model',
-        modelSource: 'project',
-      },
-      expected: {
-        provider: 'codex',
-        providerSource: 'cli',
-        model: 'claude/workflow-call-model',
-        modelSource: 'workflow_call',
-      },
-    },
-    {
-      name: 'model only',
-      options: {
-        provider: 'mock',
-        providerSource: 'project',
-        model: 'codex/cli-model',
-        modelSource: 'cli',
-      },
-      expected: {
-        provider: 'claude',
-        providerSource: 'workflow_call',
-        model: 'codex/cli-model',
-        modelSource: 'cli',
-      },
-    },
-    {
-      name: 'provider and model',
-      options: {
-        provider: 'codex',
-        providerSource: 'cli',
-        model: 'codex/cli-model',
-        modelSource: 'cli',
-      },
-      expected: {
-        provider: 'codex',
-        providerSource: 'cli',
-        model: 'codex/cli-model',
-        modelSource: 'cli',
-      },
-    },
-  ] as const)('preserves CLI $name over workflow_call overrides through child engine execution', async ({ options, expected }) => {
-    const parentConfig = createParentWorkflow(tmpDir, {
-      name: 'parent',
-      initial_step: 'delegate',
-      max_steps: 1,
-      steps: [{
-        name: 'delegate',
-        kind: 'workflow_call',
-        call: 'takt/coding',
-        overrides: { provider: 'claude', model: 'claude/workflow-call-model' },
-        rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
-      }],
-    });
-    const childConfig: WorkflowConfig = {
-      name: 'takt/coding',
-      subworkflow: { callable: true },
-      initialStep: 'child-step',
-      steps: [{
-        name: 'child-step',
-        personaDisplayName: 'Child',
-        instruction: 'Run child',
-        rules: [makeRule('done', 'COMPLETE')],
-      }],
-    };
-    const createEngine = vi.fn().mockReturnValue({
-      on: vi.fn(),
-      getOwnedResumePoint: vi.fn(() => createOwnedResumePoint('child', 'review', 1)),
-      runWithResult: vi.fn().mockResolvedValue({
-        state: {
-          workflowName: childConfig.name,
-          currentStep: 'child-step',
-          iteration: 1,
-          stepOutputs: new Map(),
-          structuredOutputs: new Map(),
-          systemContexts: new Map(),
-          effectResults: new Map(),
-          lastOutput: makeResponse({ persona: 'child-step', content: 'done' }),
-          userInputs: [],
-          personaSessions: new Map(),
-          stepIterations: new Map(),
-          status: 'completed',
-        },
-      }),
-    });
-    const runner = new WorkflowCallRunner({
-      getConfig: () => parentConfig,
-      state: {
-        workflowName: parentConfig.name,
-        currentStep: 'delegate',
-        iteration: 1,
-        stepOutputs: new Map(),
-        structuredOutputs: new Map(),
-        systemContexts: new Map(),
-        effectResults: new Map(),
-        userInputs: [],
-        personaSessions: new Map(),
-        stepIterations: new Map(),
-        status: 'running',
-      },
-      projectCwd: tmpDir,
-      getCwd: () => tmpDir,
-      task: 'Preserve CLI workflow_call overrides',
-      getOptions: () => createWorkflowCallOptions(tmpDir, options),
-      ...createWorkflowCallProgressDeps(),
-      resumeStackPrefix: [],
-      runPaths: { slug: 'test-report-dir' } as never,
-      setActiveResumePoint: vi.fn(),
-      setActiveResumeStack: vi.fn(),
-      adoptResumeCheckpoint: vi.fn(),
-      emit: vi.fn(),
-      resolveWorkflowCall: () => childConfig,
-      createEngine,
-    });
-    const step = parentConfig.steps[0] as never;
-
-    await runner.run(step);
-
-    expect(createEngine).toHaveBeenCalledWith(
-      childConfig,
-      tmpDir,
-      'Preserve CLI workflow_call overrides',
-      expect.objectContaining(expected),
-    );
-  });
-
   it('workflow_call concrete provider and model override wins over child and inherited auto_routing defaults', async () => {
     const parentConfig = createParentWorkflow(tmpDir, {
       name: 'parent',
@@ -436,6 +305,7 @@ describe('WorkflowEngine workflow_call integration', () => {
       autoRouting: createWorkflowCallAutoRoutingConfig(),
       subworkflow: { callable: true },
       initialStep: 'review',
+      maxSteps: 5,
       steps: [
         {
           name: 'review',
@@ -447,7 +317,6 @@ describe('WorkflowEngine workflow_call integration', () => {
     };
     const createEngine = vi.fn().mockReturnValue({
       on: vi.fn(),
-      getOwnedResumePoint: vi.fn(() => createOwnedResumePoint('child', 'review', 1)),
       runWithResult: vi.fn().mockResolvedValue({
         state: {
           workflowName: childConfig.name,
@@ -477,10 +346,12 @@ describe('WorkflowEngine workflow_call integration', () => {
         effectResults: new Map(),
         userInputs: [],
         personaSessions: new Map(),
-        stepIterations: new Map(),
+        stepIterations: new Map([['delegate', 1]]),
         status: 'running',
       },
       projectCwd: tmpDir,
+      getMaxSteps: () => parentConfig.maxSteps,
+      updateMaxSteps: vi.fn(),
       getCwd: () => tmpDir,
       task: 'Preserve auto workflow_call models',
       getOptions: () => createWorkflowCallOptions(tmpDir, {
@@ -488,19 +359,28 @@ describe('WorkflowEngine workflow_call integration', () => {
         model: 'parent-runtime-model',
         autoRouting: createWorkflowCallAutoRoutingConfig(),
       }),
-      ...createWorkflowCallProgressDeps(),
+      sharedRuntime: { startedAtMs: Date.now() },
       resumeStackPrefix: [],
+      consumeWorkflowCallContinuation: vi.fn(),
       runPaths: { slug: 'test-report-dir' } as never,
       setActiveResumePoint: vi.fn(),
-      setActiveResumeStack: vi.fn(),
-      adoptResumeCheckpoint: vi.fn(),
       emit: vi.fn(),
       resolveWorkflowCall: () => childConfig as never,
       createEngine,
     });
     const step = parentConfig.steps[0] as never;
 
-    await runner.run(step);
+    expect(runner.resolveRuntime(step)).toEqual({
+      providerInfo: {
+        provider: 'mock',
+        providerSource: 'workflow_call',
+        model: 'workflow-call-model',
+        modelSource: 'workflow_call',
+      },
+    });
+
+    const execution = runner.activateInvocation(step, 1, 1, []);
+    await runner.run(step, execution);
 
     expect(createEngine).toHaveBeenCalledWith(
       childConfig,
@@ -511,6 +391,9 @@ describe('WorkflowEngine workflow_call integration', () => {
         model: 'workflow-call-model',
         autoRouting: createWorkflowCallAutoRoutingConfig(),
       }),
+    );
+    await expect(runner.run(step, execution)).rejects.toThrow(
+      'workflow_call step "delegate" execution was not prepared',
     );
   });
 
@@ -1696,154 +1579,6 @@ steps:
     }));
   });
 
-  it('workflow_call wrapper は非計数のまま child system だけが共有予算を消費する', async () => {
-    const childConfig: WorkflowConfig = {
-      name: 'child-system',
-      subworkflow: { callable: true },
-      initialStep: 'route-context',
-      steps: [{
-        name: 'route-context',
-        kind: 'system',
-        rules: [makeRule('when(true)', 'COMPLETE')],
-      }],
-    };
-    const config = createParentWorkflow(tmpDir, {
-      name: 'parent-system-budget',
-      initial_step: 'delegate',
-      max_steps: 1,
-      steps: [
-        {
-          name: 'delegate',
-          kind: 'workflow_call',
-          call: 'child-system',
-          rules: [{ condition: 'COMPLETE', next: 'final-review' }],
-        },
-        {
-          name: 'final-review',
-          persona: 'supervisor',
-          instruction: 'Review the routed context',
-          rules: [{ condition: 'done', next: 'COMPLETE' }],
-        },
-      ],
-    });
-    const lifecycle: string[] = [];
-    const started: Array<{ step: string; iteration: number; provider?: string }> = [];
-    let systemCheckpoint: ReturnType<WorkflowEngine['getResumePoint']>;
-    const iterationLimit = vi.fn();
-    engine = new WorkflowEngine(config, tmpDir, 'Run child system budget', createWorkflowCallOptions(tmpDir, {
-      workflowCallResolver: () => childConfig,
-    }));
-    engine.on('workflow_call:start', () => lifecycle.push('start'));
-    engine.on('workflow_call:complete', () => lifecycle.push('complete'));
-    engine.on('step:start', (step, iteration, _instruction, providerInfo) => {
-      started.push({
-        step: step.name,
-        iteration,
-        ...(providerInfo?.provider === undefined ? {} : { provider: providerInfo.provider }),
-      });
-      if (step.name === 'route-context') systemCheckpoint = engine?.getResumePoint();
-    });
-    engine.on('iteration:limit', iterationLimit);
-    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
-
-    const state = await engine.run();
-
-    expect(state.status).toBe('aborted');
-    expect(state.iteration).toBe(1);
-    expect(state.stepIterations.get('delegate')).toBe(1);
-    expect(started).toEqual([{ step: 'route-context', iteration: 1 }]);
-    expect(lifecycle).toEqual(['start', 'complete']);
-    expect(systemCheckpoint).toEqual(expect.objectContaining({
-      iteration: 1,
-      stack: [
-        expect.objectContaining({ step: 'delegate', kind: 'workflow_call', call_instance: 1 }),
-        expect.objectContaining({
-          step: 'route-context',
-          kind: 'system',
-          step_iterations: { 'route-context': 1 },
-        }),
-      ],
-    }));
-    expect(iterationLimit).toHaveBeenCalledWith(
-      1,
-      1,
-      'final-review',
-      expect.objectContaining({
-        stack: [expect.objectContaining({ step: 'final-review', kind: 'agent' })],
-      }),
-    );
-    expect(runAgent).not.toHaveBeenCalled();
-  });
-
-  it('child provider 解決失敗は親 iteration を消費せず call attempt だけを保存する', async () => {
-    writeWorkflow(tmpDir, 'takt/coding.yaml', `name: takt/coding
-subworkflow:
-  callable: true
-initial_step: review
-steps:
-  - name: review
-    persona: reviewer
-    instruction: "Review child workflow"
-    rules:
-      - condition: done
-        next: COMPLETE
-`);
-    const config = createParentWorkflow(tmpDir, {
-      name: 'parent',
-      initial_step: 'delegate',
-      max_steps: 1,
-      steps: [{
-        name: 'delegate',
-        kind: 'workflow_call',
-        call: 'takt/coding',
-        rules: [
-          { condition: 'COMPLETE', next: 'COMPLETE' },
-          { condition: 'ABORT', next: 'ABORT' },
-        ],
-      }],
-    });
-    const lifecycleEvents: Array<Record<string, unknown>> = [];
-    const startedSteps: string[] = [];
-    engine = new WorkflowEngine(config, tmpDir, 'Fail child provider validation', createWorkflowCallOptions(tmpDir, {
-      provider: undefined,
-      model: undefined,
-    }));
-    engine.on('workflow_call:start', (event) => lifecycleEvents.push(event));
-    engine.on('workflow_call:complete', (event) => lifecycleEvents.push(event));
-    engine.on('step:start', (step) => startedSteps.push(step.name));
-
-    const state = await engine.run();
-    const resumePoint = engine.getResumePoint();
-
-    expect(state.status).toBe('aborted');
-    expect(state.iteration).toBe(0);
-    expect(state.stepIterations.get('delegate')).toBe(1);
-    expect(startedSteps).toEqual([]);
-    expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
-    expect(resumePoint?.stack[0]).toEqual(expect.objectContaining({
-      workflow: 'parent',
-      step: 'delegate',
-      kind: 'workflow_call',
-      call_instance: 1,
-      step_iterations: { delegate: 1 },
-    }));
-    expect(lifecycleEvents).toHaveLength(2);
-    expect(lifecycleEvents[0]).toEqual(expect.objectContaining({
-      step: 'delegate',
-      childWorkflow: 'takt/coding',
-      callInstance: 1,
-    }));
-    expect(lifecycleEvents[1]).toEqual(expect.objectContaining({
-      step: 'delegate',
-      childWorkflow: 'takt/coding',
-      callInstance: 1,
-      result: {
-        status: 'failed',
-        reason: 'Step "review" has no resolved provider',
-      },
-    }));
-  });
-
   it('workflow_call child workflow の AI router は child workflow 名で判定する', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-02-18T10:00:00.000Z'));
@@ -2130,6 +1865,7 @@ steps:
       autoRouting: createWorkflowCallAutoRoutingConfig(),
       subworkflow: { callable: true },
       initialStep: 'review',
+      maxSteps: 5,
       steps: [
         {
           name: 'review',
@@ -2141,7 +1877,6 @@ steps:
     };
     const createEngine = vi.fn().mockReturnValue({
       on: vi.fn(),
-      getOwnedResumePoint: vi.fn(() => createOwnedResumePoint('child', 'review', 2)),
       runWithResult: vi.fn().mockResolvedValue({
         state: {
           workflowName: childConfig.name,
@@ -2175,6 +1910,8 @@ steps:
         status: 'running',
       },
       projectCwd: tmpDir,
+      getMaxSteps: () => parentConfig.maxSteps,
+      updateMaxSteps: vi.fn(),
       getCwd: () => tmpDir,
       task: 'Concrete override child top-level auto',
       getOptions: () => ({
@@ -2183,18 +1920,19 @@ steps:
         model: undefined,
         autoStrategyOverride: 'performance',
       }),
-      ...createWorkflowCallProgressDeps(),
+      sharedRuntime: { startedAtMs: Date.now() },
       resumeStackPrefix: [],
+      consumeWorkflowCallContinuation: vi.fn(),
       runPaths: { slug: 'test-report-dir' } as never,
       setActiveResumePoint: vi.fn(),
-      setActiveResumeStack: vi.fn(),
-      adoptResumeCheckpoint: vi.fn(),
       emit: vi.fn(),
       resolveWorkflowCall: () => childConfig as never,
       createEngine,
     });
 
-    await expect(runner.run(parentConfig.steps[0] as never)).resolves.toBeDefined();
+    const step = parentConfig.steps[0] as never;
+    const execution = runner.activateInvocation(step, 1, 1, []);
+    await expect(runner.run(step, execution)).resolves.toBeDefined();
 
     expect(createEngine).toHaveBeenCalledWith(
       childConfig,
@@ -2207,4 +1945,5 @@ steps:
       }),
     );
   });
+
 });

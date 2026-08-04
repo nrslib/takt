@@ -254,6 +254,12 @@ Sub-steps execute concurrently, and the parent aggregates sub-step matches via `
 - Parallel sub-steps do not support `promotion`
 - The parent step accepts an optional `concurrency: <N>` (minimum 1) to bound how many sub-steps run at the same time; without it, all sub-steps start together
 
+### Finding Contract reviewer output normalization
+
+Finding Contract reviewers use native structured output by default. Runtime
+configuration under `finding_contract.intake_normalize` can select ordinary
+Markdown plus isolated extraction by exact resolved reviewer provider/model.
+
 ### Dynamic Parallel Step
 
 `parallel` may instead define a fixed set and a selectable pool. TAKT runs an internal read-only selector when the step is entered; it is not a workflow step and cannot create agents or change the workflow. The selector runs with read-only permissions, permission bypass disabled, no inherited MCP servers, and a TAKT-owned structured output contract.
@@ -303,8 +309,6 @@ Sub-steps execute concurrently, and the parent aggregates sub-step matches via `
 
 ```yaml
 finding_contract:
-  ledger_path: .takt/findings/review.json
-  raw_findings_path: .takt/findings/review/raw
   manager:
     persona: findings-manager
     instruction: findings-manager
@@ -312,6 +316,9 @@ finding_contract:
     provider: codex
     model: gpt-5.5
 ```
+
+The report is saved before normalization, and the normalizer receives only that
+single report in a fresh, tool-free session.
 
 When set, these values are applied as step-level `provider` / `model` for the Finding Manager. Explicit CLI and environment overrides remain higher priority. The manager values take priority over `provider_routing`, deprecated `persona_providers.findings-manager`, effective auto routing, and workflow/project/global fallbacks. When neither field is set, the manager keeps the normal workflow step provider/model resolution behavior. Setting only `provider` stops lower-priority model fallback, so the selected provider uses its own default; providers that require an explicit model fail validation.
 

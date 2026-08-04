@@ -195,7 +195,7 @@ describe('parseWhenConditionExpression', () => {
   });
 
   it('should decode supported escapes in exists predicate string literals', () => {
-    const expression = String.raw`exists(findings.open.items, item.title == "a\"b" && item.location == "C:\\tmp")`;
+    const expression = String.raw`exists(findings.open.items, item.title == "a\"b" && item.description == "C:\\tmp")`;
 
     expect(parseWhenConditionExpression(expression)).toMatchObject({
       alternatives: [[{
@@ -476,7 +476,9 @@ describe('WorkflowConfigRawSchema when operand validation', () => {
           'id',
           'severity',
           'title',
-          'location',
+          'locations',
+          'locations.length',
+          'locations.0',
           'description',
           'suggestion',
           'reviewers',
@@ -518,7 +520,7 @@ describe('WorkflowConfigRawSchema when operand validation', () => {
   it.each(placements)(
     'should accept every optional findings item access form in a %s',
     (_label, createWorkflow) => {
-      for (const field of ['location', 'description', 'suggestion']) {
+      for (const field of ['description', 'suggestion']) {
         for (const expression of [
           `when(exists(findings.open.items, item.${field} == "value"))`,
           `when(findings.open.items[0].${field} == null)`,

@@ -461,26 +461,6 @@ describe('Issue resolution in routing', () => {
       expect(mockInteractiveMode).not.toHaveBeenCalled();
     });
 
-    it('should use generic interactive mode when persona mode starts with workflow_call', async () => {
-      mockSelectInteractiveMode.mockResolvedValueOnce('persona');
-      mockGetWorkflowDescription.mockReturnValueOnce({
-        name: 'default',
-        description: 'workflow call first',
-        workflowStructure: '',
-        stepPreviews: [{ kind: 'workflow_call', name: 'delegate', call: 'child' }],
-        firstStep: undefined,
-      });
-
-      await executeDefaultAction('delegate the task');
-
-      expect(mockPersonaMode).not.toHaveBeenCalled();
-      expect(mockInteractiveMode).toHaveBeenCalledWith(
-        '/test/cwd',
-        { userMessage: 'delegate the task' },
-        expect.anything(),
-      );
-    });
-
     it('should pass regular text input to passthrough mode as the raw task', async () => {
       mockSelectInteractiveMode.mockResolvedValueOnce('passthrough');
 

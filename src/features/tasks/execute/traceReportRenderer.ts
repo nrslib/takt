@@ -2,7 +2,6 @@ import type {
   TraceStep,
   TracePhase,
   TraceReportParams,
-  TraceWorkflowCall,
 } from './traceReportTypes.js';
 
 interface StepBlock {
@@ -52,7 +51,7 @@ function stepMarker(
   if (step.result?.status === 'error' || step.result?.error) {
     return '❌';
   }
-  if (runStatus === 'aborted' && !step.result && isLastStep) {
+  if (runStatus !== 'completed' && !step.result && isLastStep) {
     return '❌';
   }
   if (step.phases.some(hasPhaseError)) {
@@ -183,7 +182,9 @@ function renderStepSection(
     }
     lines.push('<details><summary>Step Response</summary>', '', step.result.content, '', '</details>');
   } else {
-    lines.push(`- Step Status: ${step.completedAt ? 'aborted' : 'in_progress'}`);
+    lines.push(
+      `- Step Status: ${step.completedAt ? params.status : 'in_progress'}`,
+    );
   }
 
   lines.push('', '---', '');
@@ -253,59 +254,28 @@ function renderLoopBlock(block: LoopBlock, params: TraceReportParams): string[] 
   return lines;
 }
 
-function renderWorkflowCalls(workflowCalls: TraceWorkflowCall[]): string[] {
-  if (workflowCalls.length === 0) {
-    return [];
-  }
-  const lines = ['## Workflow Calls', ''];
-  for (const workflowCall of workflowCalls) {
-    lines.push(
-      `### ${workflowCall.step}#${workflowCall.callInstance} → ${workflowCall.childWorkflow}`,
-      '',
-      `- Parent Workflow: ${workflowCall.parentWorkflow}`,
-      `- Call Stack: ${workflowCall.stack.map((entry) => (
-        `${entry.workflow}/${entry.step}${entry.call_instance !== undefined ? `#${entry.call_instance}` : ''}`
-      )).join(' → ')}`,
-      `- Started: ${workflowCall.startedAt}`,
-      ...(workflowCall.completedAt ? [`- Completed: ${workflowCall.completedAt}`] : []),
-      `- Status: ${workflowCall.result?.status ?? 'in_progress'}`,
-    );
-    if (workflowCall.result?.abortKind) {
-      lines.push(`- Abort Kind: ${workflowCall.result.abortKind}`);
-    }
-    if (workflowCall.result?.abortReason) {
-      lines.push(`- Abort Reason: ${workflowCall.result.abortReason}`);
-    }
-    if (workflowCall.result?.reason) {
-      lines.push(`- Failure Reason: ${workflowCall.result.reason}`);
-    }
-    if (workflowCall.result?.returnValue !== undefined) {
-      lines.push(
-        '- Return Value:',
-        '<details><summary>Return Value</summary>',
-        '',
-        workflowCall.result.returnValue,
-        '',
-        '</details>',
-      );
-    }
-    lines.push('', '---', '');
-  }
-  return lines;
-}
-
 export function renderTraceReportMarkdown(
   params: TraceReportParams,
   traceStartedAt: string,
   steps: TraceStep[],
-  workflowCalls: TraceWorkflowCall[],
 ): string {
   assertTraceParams(params);
   if (!traceStartedAt) {
     throw new Error('traceStartedAt is required');
   }
 
-  const statusLabel = params.status === 'completed' ? '✅ completed' : '❌ aborted';
+  let statusLabel: string;
+  switch (params.status) {
+    case 'completed':
+      statusLabel = '✅ completed';
+      break;
+    case 'aborted':
+      statusLabel = '❌ aborted';
+      break;
+    case 'failed':
+      statusLabel = '❌ failed';
+      break;
+  }
   const lines: string[] = [
     `# Execution Trace: ${params.workflowName}`,
     '',
@@ -320,7 +290,6 @@ export function renderTraceReportMarkdown(
     '---',
     '',
   ];
-  lines.push(...renderWorkflowCalls(workflowCalls));
 
   const sorted = [...steps].sort((a, b) => {
     const byStart = a.startedAt.localeCompare(b.startedAt);

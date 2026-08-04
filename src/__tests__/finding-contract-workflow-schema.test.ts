@@ -12,6 +12,7 @@ function makeWorkflowWithFindingContract(findingContract: unknown) {
     name: 'invalid-finding-contract-workflow',
     finding_contract: findingContract,
     initial_step: 'peer-review',
+    max_steps: 2,
     steps: [
       {
         name: 'peer-review',
@@ -28,8 +29,6 @@ describe('workflow finding_contract schema', () => {
     const workflow = normalizeWorkflowConfig({
       name: 'finding-contract-workflow',
       finding_contract: {
-        ledger_path: '.takt/findings/peer-review.json',
-        raw_findings_path: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -37,6 +36,7 @@ describe('workflow finding_contract schema', () => {
         },
       },
       initial_step: 'peer-review',
+      max_steps: 2,
       steps: [
         {
           name: 'peer-review',
@@ -48,8 +48,6 @@ describe('workflow finding_contract schema', () => {
     }, '/tmp/project');
 
     expect(workflow.findingContract).toMatchObject({
-      ledgerPath: '.takt/findings/peer-review.json',
-      rawFindingsPath: '.takt/findings/raw',
       manager: {
         persona: 'findings-manager',
         personaDisplayName: 'findings-manager',
@@ -66,13 +64,25 @@ describe('workflow finding_contract schema', () => {
     );
   });
 
+  it('should reject the removed workflow-level reviewer_output field', () => {
+    expect(() => normalizeWorkflowConfig(
+      makeWorkflowWithFindingContract({
+        reviewer_output: 'plain_text_normalized',
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          output_contract: 'findings-manager',
+        },
+      }),
+      '/tmp/project',
+    )).toThrow();
+  });
+
   // 有限停止予算（codex 裁定・対策バッチ B1 の拡張）。
   it('should leave findingContract.stopBudget undefined when stop_budget is omitted (defaults are applied lazily by stop-budget.ts, not at normalization time)', () => {
     const workflow = normalizeWorkflowConfig({
       name: 'finding-contract-workflow-no-stop-budget',
       finding_contract: {
-        ledger_path: '.takt/findings/peer-review.json',
-        raw_findings_path: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -80,6 +90,7 @@ describe('workflow finding_contract schema', () => {
         },
       },
       initial_step: 'peer-review',
+      max_steps: 2,
       steps: [
         {
           name: 'peer-review',
@@ -97,8 +108,6 @@ describe('workflow finding_contract schema', () => {
     const workflow = normalizeWorkflowConfig({
       name: 'finding-contract-workflow-stop-budget',
       finding_contract: {
-        ledger_path: '.takt/findings/peer-review.json',
-        raw_findings_path: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -110,6 +119,7 @@ describe('workflow finding_contract schema', () => {
         },
       },
       initial_step: 'peer-review',
+      max_steps: 2,
       steps: [
         {
           name: 'peer-review',
@@ -127,8 +137,6 @@ describe('workflow finding_contract schema', () => {
     const workflow = normalizeWorkflowConfig({
       name: 'finding-contract-workflow-partial-stop-budget',
       finding_contract: {
-        ledger_path: '.takt/findings/peer-review.json',
-        raw_findings_path: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -139,6 +147,7 @@ describe('workflow finding_contract schema', () => {
         },
       },
       initial_step: 'peer-review',
+      max_steps: 2,
       steps: [
         {
           name: 'peer-review',
@@ -157,8 +166,6 @@ describe('workflow finding_contract schema', () => {
       normalizeWorkflowConfig({
         name: 'invalid-stop-budget-workflow',
         finding_contract: {
-          ledger_path: '.takt/findings/peer-review.json',
-          raw_findings_path: '.takt/findings/raw',
           manager: {
             persona: 'findings-manager',
             instruction: 'findings-manager',
@@ -170,6 +177,7 @@ describe('workflow finding_contract schema', () => {
           },
         },
         initial_step: 'peer-review',
+        max_steps: 2,
         steps: [
           {
             name: 'peer-review',
@@ -198,8 +206,6 @@ describe('workflow finding_contract schema', () => {
         normalizeWorkflowConfig({
           name: 'invalid-stop-budget-shape-workflow',
           finding_contract: {
-            ledger_path: '.takt/findings/peer-review.json',
-            raw_findings_path: '.takt/findings/raw',
             manager: {
               persona: 'findings-manager',
               instruction: 'findings-manager',
@@ -208,6 +214,7 @@ describe('workflow finding_contract schema', () => {
             stop_budget: stopBudget,
           },
           initial_step: 'peer-review',
+          max_steps: 2,
           steps: [
             {
               name: 'peer-review',
@@ -225,8 +232,6 @@ describe('workflow finding_contract schema', () => {
     const workflow = normalizeWorkflowConfig({
       name: 'finding-contract-manager-provider-workflow',
       finding_contract: {
-        ledger_path: '.takt/findings/peer-review.json',
-        raw_findings_path: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -236,6 +241,7 @@ describe('workflow finding_contract schema', () => {
         },
       },
       initial_step: 'peer-review',
+      max_steps: 2,
       steps: [
         {
           name: 'peer-review',
@@ -272,8 +278,6 @@ describe('workflow finding_contract schema', () => {
       const workflow = normalizeWorkflowConfig({
         name: 'finding-contract-workflow',
         finding_contract: {
-          ledger_path: '.takt/findings/peer-review.json',
-          raw_findings_path: '.takt/findings/raw',
           manager: {
             persona: 'findings-manager',
             instruction: 'findings-manager',
@@ -281,6 +285,7 @@ describe('workflow finding_contract schema', () => {
           },
         },
         initial_step: 'peer-review',
+        max_steps: 2,
         steps: [
           {
             name: 'peer-review',
@@ -307,6 +312,7 @@ describe('workflow finding_contract schema', () => {
     const workflow = normalizeWorkflowConfig({
       name: 'workflow-without-finding-contract',
       initial_step: 'review',
+      max_steps: 2,
       steps: [
         {
           name: 'review',
@@ -326,6 +332,7 @@ describe('workflow finding_contract schema', () => {
       normalizeWorkflowConfig({
         name: 'invalid-findings-rule-workflow',
         initial_step: 'review',
+        max_steps: 2,
         steps: [
           {
             name: 'review',
@@ -347,6 +354,7 @@ describe('workflow finding_contract schema', () => {
         requires_finding_contract: true,
       },
       initial_step: 'review',
+      max_steps: 2,
       steps: [
         {
           name: 'review',
@@ -365,16 +373,14 @@ describe('workflow finding_contract schema', () => {
     });
   });
 
-  it('should reject a subworkflow that both requires inheritance and declares its own Finding Contract', () => {
-    expect(() => normalizeWorkflowConfig({
+  it('should accept a subworkflow that both requires inheritance and declares its own Finding Contract', () => {
+    const workflow = normalizeWorkflowConfig({
       name: 'ambiguous-finding-contract-child',
       subworkflow: {
         callable: true,
         requires_finding_contract: true,
       },
       finding_contract: {
-        ledger_path: '.takt/findings/child.json',
-        raw_findings_path: '.takt/findings/child/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -382,6 +388,7 @@ describe('workflow finding_contract schema', () => {
         },
       },
       initial_step: 'review',
+      max_steps: 2,
       steps: [
         {
           name: 'review',
@@ -390,9 +397,10 @@ describe('workflow finding_contract schema', () => {
           rules: [{ condition: 'approved', next: 'COMPLETE' }],
         },
       ],
-    }, '/tmp/project')).toThrow(
-      'subworkflow.requires_finding_contract cannot be combined with a local finding_contract',
-    );
+    }, '/tmp/project');
+
+    expect(workflow.findingContract).toBeDefined();
+    expect(workflow.subworkflow?.requiresFindingContract).toBe(true);
   });
 
   it('should reject loop monitor judge findings rules when finding_contract is not configured', () => {
@@ -400,6 +408,7 @@ describe('workflow finding_contract schema', () => {
       normalizeWorkflowConfig({
         name: 'invalid-loop-monitor-findings-rule-workflow',
         initial_step: 'review',
+        max_steps: 2,
         steps: [
           {
             name: 'review',
@@ -426,6 +435,7 @@ describe('workflow finding_contract schema', () => {
       normalizeWorkflowConfig({
         name: 'invalid-parallel-findings-rule-workflow',
         initial_step: 'reviewers',
+        max_steps: 2,
         steps: [
           {
             name: 'reviewers',
@@ -451,6 +461,7 @@ describe('workflow finding_contract schema', () => {
       normalizeWorkflowConfig({
         name: 'invalid-aggregate-findings-guard-workflow',
         initial_step: 'reviewers',
+        max_steps: 2,
         steps: [
           {
             name: 'reviewers',
@@ -475,8 +486,6 @@ describe('workflow finding_contract schema', () => {
     const workflow = normalizeWorkflowConfig({
       name: 'parallel-findings-rule-workflow',
       finding_contract: {
-        ledger_path: '.takt/findings/peer-review.json',
-        raw_findings_path: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -484,6 +493,7 @@ describe('workflow finding_contract schema', () => {
         },
       },
       initial_step: 'reviewers',
+      max_steps: 2,
       steps: [
         {
           name: 'reviewers',
@@ -513,8 +523,6 @@ describe('workflow finding_contract schema', () => {
     const workflow = normalizeWorkflowConfig({
       name: 'aggregate-findings-guard-workflow',
       finding_contract: {
-        ledger_path: '.takt/findings/peer-review.json',
-        raw_findings_path: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -522,6 +530,7 @@ describe('workflow finding_contract schema', () => {
         },
       },
       initial_step: 'reviewers',
+      max_steps: 2,
       steps: [
         {
           name: 'reviewers',
@@ -559,8 +568,6 @@ describe('workflow finding_contract schema', () => {
     const workflow = normalizeWorkflowConfig({
       name: 'loop-monitor-findings-rule-workflow',
       finding_contract: {
-        ledger_path: '.takt/findings/peer-review.json',
-        raw_findings_path: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -568,6 +575,7 @@ describe('workflow finding_contract schema', () => {
         },
       },
       initial_step: 'review',
+      max_steps: 2,
       steps: [
         {
           name: 'review',
@@ -595,38 +603,11 @@ describe('workflow finding_contract schema', () => {
     );
   });
 
-  it('should reject finding_contract when a required path is missing', () => {
-    expect(() =>
-      normalizeWorkflowConfig({
-        name: 'invalid-finding-contract-workflow',
-        finding_contract: {
-          raw_findings_path: '.takt/findings/raw',
-          manager: {
-            persona: 'findings-manager',
-            instruction: 'findings-manager',
-            output_contract: 'findings-manager',
-          },
-        },
-        initial_step: 'peer-review',
-        steps: [
-          {
-            name: 'peer-review',
-            persona: 'reviewer',
-            instruction: 'Review the change.',
-            rules: [{ condition: 'done', next: 'COMPLETE' }],
-          },
-        ],
-      }, '/tmp/project'),
-    ).toThrow();
-  });
-
   it('should reject unknown finding_contract fields instead of silently accepting contract drift', () => {
     expect(() =>
       normalizeWorkflowConfig({
         name: 'invalid-finding-contract-workflow',
         finding_contract: {
-          ledger_path: '.takt/findings/peer-review.json',
-          raw_findings_path: '.takt/findings/raw',
           manager: {
             persona: 'findings-manager',
             instruction: 'findings-manager',
@@ -635,6 +616,7 @@ describe('workflow finding_contract schema', () => {
           manager_session: 'continue',
         },
         initial_step: 'peer-review',
+        max_steps: 2,
         steps: [
           {
             name: 'peer-review',
@@ -649,8 +631,6 @@ describe('workflow finding_contract schema', () => {
 
   it('should reject invalid finding_contract raw shapes', () => {
     const validFindingContract = {
-      ledger_path: '.takt/findings/peer-review.json',
-      raw_findings_path: '.takt/findings/raw',
       manager: {
         persona: 'findings-manager',
         instruction: 'findings-manager',
@@ -659,10 +639,6 @@ describe('workflow finding_contract schema', () => {
     };
     const invalidFindingContracts: unknown[] = [
       null,
-      { ...validFindingContract, ledger_path: null },
-      { ...validFindingContract, ledger_path: {} },
-      { ...validFindingContract, raw_findings_path: null },
-      { ...validFindingContract, raw_findings_path: {} },
       { ...validFindingContract, manager: null },
       { ...validFindingContract, manager: { ...validFindingContract.manager, persona: null } },
       { ...validFindingContract, manager: { ...validFindingContract.manager, instruction: {} } },

@@ -173,6 +173,54 @@ describe('OptionsBuilder.buildBaseOptions', () => {
     });
   });
 
+  it('keeps fully resolved persisted runtime options without merging current config layers', () => {
+    const step = createStep({
+      provider: 'codex',
+      model: 'current-model',
+      providerOptions: {
+        codex: {
+          reasoningEffort: 'low',
+          networkAccess: false,
+        },
+      },
+    });
+    const builder = createBuilder(step, {
+      providerOptions: {
+        codex: {
+          reasoningEffort: 'medium',
+          networkAccess: true,
+        },
+      },
+    });
+    const persistedRuntime = {
+      providerInfoResolution: 'fully_resolved' as const,
+      providerInfo: {
+        provider: 'codex' as const,
+        model: 'persisted-model',
+        providerOptions: {
+          codex: {
+            reasoningEffort: 'high' as const,
+          },
+        },
+      },
+    };
+
+    expect(builder.resolveStepProviderModel(step, persistedRuntime)).toEqual(
+      persistedRuntime.providerInfo,
+    );
+    expect(builder.buildAgentOptions(step, persistedRuntime)).toMatchObject({
+      resolvedProvider: 'codex',
+      resolvedModel: 'persisted-model',
+      providerOptions: {
+        codex: {
+          reasoningEffort: 'high',
+        },
+      },
+    });
+    expect(builder.buildAgentOptions(step, persistedRuntime).providerOptions)
+      .not.toHaveProperty('codex.networkAccess');
+  });
+
   it('lets persona provider_options override project provider options when step has none', () => {
     const step = createStep({ personaDisplayName: 'reviewer' });
     const builder = createBuilder(step, {
@@ -497,8 +545,6 @@ describe('OptionsBuilder auto routing deterministic completion', () => {
     // buildAgentOptions の structured_output ガードを通過すること。
     const managerStep = buildFindingManagerStep({
       contract: {
-        ledgerPath: '.takt/findings/peer-review.json',
-        rawFindingsPath: '.takt/findings/raw',
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
@@ -828,18 +874,7 @@ describe('OptionsBuilder.buildFallbackReportOptions', () => {
     };
 
     // When
-    const ctx = builder.buildPhaseRunnerContext(
-      step,
-      state,
-      'Phase 1 response',
-      vi.fn(),
-      {
-        eventAttribution: {
-          iteration: 1,
-          scope: { kind: 'workflow_execution_scope', stack: [] },
-        },
-      },
-    );
+    const ctx = builder.buildPhaseRunnerContext(step, state, 'Phase 1 response', vi.fn());
     ctx.onStream?.({ type: 'text', data: { text: 'Phase 2 response' } });
     const options = ctx.buildFallbackReportOptions(step, {
       cwd: '/project',
@@ -1133,12 +1168,23 @@ describe('OptionsBuilder.buildAgentOptions', () => {
     );
   });
 
-  it('fails fast before agent option construction when provider is unresolved', () => {
-    const step = createStep();
+  it('fails fast when structured_output is used without a resolved provider', () => {
+    const step = createStep({
+      structuredOutput: {
+        schema: {
+          type: 'object',
+          properties: {
+            result: { type: 'string' },
+          },
+          required: ['result'],
+          additionalProperties: false,
+        },
+      },
+    });
     const builder = createBuilder(step, { provider: undefined });
 
     expect(() => builder.buildAgentOptions(step)).toThrow(
-      'Step "reviewers" has no resolved provider',
+      /structured_output.*provider is not resolved/i,
     );
   });
 

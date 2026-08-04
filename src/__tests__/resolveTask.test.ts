@@ -5,24 +5,37 @@ import * as path from 'node:path';
 import type { TaskInfo } from '../infra/task/index.js';
 import * as infraTask from '../infra/task/index.js';
 import { TaskRunner } from '../infra/task/runner.js';
+import { TaskStore } from '../infra/task/store.js';
 import * as runOrderContent from '../core/workflow/run/order-content.js';
 import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig.js';
 import { invalidateAllResolvedConfigCache } from '../infra/config/resolveConfigValue.js';
 import { loadWorkflowByIdentifier } from '../infra/config/loaders/workflowLoader.js';
 import { buildWorkflowRestartPointEntry } from '../core/workflow/workflow-reference.js';
 import { generateExecutionReportDir } from '../core/workflow/run/run-slug.js';
-import type { WorkflowResumePointEntry } from '../core/models/index.js';
+import { buildOpaqueWorkflowRef } from '../infra/config/loaders/workflowSourceMetadata.js';
+import { loadWorkflowByIdentifier } from '../infra/config/index.js';
+import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import {
-  buildWorkflowCallInvocationFixture,
-  buildWorkflowCallInvocationRecordsFixture,
-} from './helpers/workflow-resume-fixture.js';
+  createWorkflowCallResolver,
+  createWorkflowExecutionContext,
+} from '../features/tasks/execute/workflowExecutionContext.js';
+import {
+  prepareWorkflowExecutionBundle,
+  publishWorkflowExecutionBundle,
+} from '../features/tasks/execute/workflowExecutionBundle.js';
 
 const mockGetGitProvider = vi.hoisted(() => vi.fn());
+const mockWarn = vi.hoisted(() => vi.fn());
 let originalTaktConfigDir: string | undefined;
 
 vi.mock('../infra/git/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   getGitProvider: mockGetGitProvider,
+}));
+
+vi.mock('../shared/ui/index.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  warn: mockWarn,
 }));
 
 import { resolveTaskExecution, resolveTaskIssue } from '../features/tasks/execute/resolveTask.js';
@@ -46,6 +59,7 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  mockWarn.mockClear();
   originalTaktConfigDir = process.env.TAKT_CONFIG_DIR;
   invalidateGlobalConfigCache();
   invalidateAllResolvedConfigCache();
@@ -99,15 +113,45 @@ function readTaktFile(baseDir: string, relativePath: string): string {
   return fs.readFileSync(path.join(baseDir, '.takt', relativePath), 'utf-8');
 }
 
-function createResumePoint(stack: WorkflowResumePointEntry[], iteration = 7) {
-  return {
-    version: 2 as const,
-    stack,
-    iteration,
-    elapsed_ms: 183245,
-    workflow_call_invocations: buildWorkflowCallInvocationFixture(stack),
-    workflow_step_participations: {},
-  };
+function projectWorkflowRef(
+  root: string,
+  relativePath: string,
+): string {
+  return buildOpaqueWorkflowRef(
+    path.join(root, '.takt', 'workflows', relativePath),
+    { source: 'project' },
+  );
+}
+
+function worktreeWorkflowRef(
+  root: string,
+  relativePath: string,
+): string {
+  return buildOpaqueWorkflowRef(
+    path.join(root, '.takt', 'workflows', relativePath),
+    { source: 'worktree' },
+  );
+}
+
+function publishTestExecutionBundle(
+  projectRoot: string,
+  lookupCwd: string,
+  sourceRunSlug: string,
+  workflowIdentifier = 'default',
+): void {
+  const workflow = loadWorkflowByIdentifier(workflowIdentifier, projectRoot, { lookupCwd });
+  if (workflow === null) throw new Error(`Test workflow not found: ${workflowIdentifier}`);
+  publishWorkflowExecutionBundle(
+    buildRunPaths(lookupCwd, sourceRunSlug),
+    prepareWorkflowExecutionBundle({
+      rootWorkflow: workflow,
+      workflowCallResolver: createWorkflowCallResolver(
+        createWorkflowExecutionContext(workflow, projectRoot),
+      ),
+      projectCwd: projectRoot,
+      lookupCwd,
+    }),
+  );
 }
 
 const resolveTaskExecutionStrict = resolveTaskExecution as (task: TaskInfo, projectCwd: string) => ReturnType<typeof resolveTaskExecution>;
@@ -190,10 +234,17 @@ describe('resolveTaskExecution', () => {
       '      - condition: approved',
       '        next: COMPLETE',
     ].join('\n'));
-    const identity = '{"workflow":"default","step":"reviewers","owners":[]}' as const;
+    const identity = '{"workflow":"default","step":"reviewers","calls":[]}' as const;
+    const invocationIdentity = '{"workflow":"default","step":"delegate","calls":[]}' as const;
     const resumePoint = {
       version: 2 as const,
-      stack: [{ workflow: 'default', step: 'reviewers', kind: 'agent' as const }],
+      stack: [{
+        workflow: 'default',
+        workflow_ref: projectWorkflowRef(root, 'default.yaml'),
+        step: 'reviewers',
+        kind: 'agent' as const,
+        occurrence: 1,
+      }],
       iteration: 30,
       elapsed_ms: 183245,
       dynamic_parallel_selections: {
@@ -205,18 +256,20 @@ describe('resolveTaskExecution', () => {
           effective_selection_ids: ['architecture', 'frontend'],
         },
       },
-      workflow_call_invocations: buildWorkflowCallInvocationRecordsFixture([{
-        workflowReference: 'default',
-        step: 'delegate',
-        ownerPath: [],
-        callInstance: 2,
-        childWorkflowReference: 'child',
-      }]),
+      workflow_call_invocations: {
+        [invocationIdentity]: {
+          call_instance: 2,
+          report_namespace_segment: 'iteration-30--step-delegate--workflow-child',
+        },
+      },
       workflow_step_participations: {},
     };
     const runner = new TaskRunner(root);
     runner.addTask('Run task', { workflow: 'default' });
     const running = runner.claimNextTasks(1)[0]!;
+    const sourceRunSlug = 'source-run';
+    runner.updateRunningTaskExecution(running.name, { runSlug: sourceRunSlug });
+    publishTestExecutionBundle(root, root, sourceRunSlug);
 
     runner.exceedTask(running.name, {
       currentStep: 'reviewers',
@@ -232,6 +285,145 @@ describe('resolveTaskExecution', () => {
     expect(result.startStep).toBe('reviewers');
     expect(result.initialIterationOverride).toBe(30);
     expect(result.resumePoint).toEqual(resumePoint);
+    expect(result.resumeSource).toEqual({
+      sourceRunSlug,
+      resumeMode: 'requeue',
+    });
+    expect(result.reportDirName).not.toBe(sourceRunSlug);
+  });
+
+  it.each(['requeue', 'retry', 'instruct'] as const)(
+    'should reset the target run iteration for %s while retaining its resume location',
+    async (resumeMode) => {
+      const root = createTempProjectDir();
+      writeTaktFile(root, 'workflows/default.yaml', [
+        'name: default',
+        'initial_step: implement',
+        'max_steps: 5',
+        'steps:',
+        '  - name: implement',
+        '    persona: coder',
+        '    instruction: Implement',
+        '    rules:',
+        '      - condition: done',
+        '        next: COMPLETE',
+      ].join('\n'));
+      const resumePoint = {
+        version: 2 as const,
+        stack: [{
+          workflow: 'default',
+          workflow_ref: projectWorkflowRef(root, 'default.yaml'),
+          step: 'implement',
+          kind: 'agent' as const,
+          occurrence: 3,
+          step_iterations: { implement: 3 },
+        }],
+        iteration: 17,
+        elapsed_ms: 183245,
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
+      };
+      const runner = new TaskRunner(root);
+      const queued = runner.addTask('Run task', { workflow: 'default' });
+      const running = runner.claimNextTasks(1)[0]!;
+      runner.updateRunningTaskExecution(running.name, { runSlug: 'source-run' });
+      runner.forceFailRunningTask(running.name, {
+        step: 'implement',
+        error: 'source run failed',
+      });
+      let task: TaskInfo;
+      if (resumeMode === 'requeue') {
+        runner.requeueTask(
+          queued.name,
+          ['failed'],
+          {
+            resumePoint,
+            sourceRunSlug: 'source-run',
+          },
+        );
+        task = runner.claimNextTasks(1)[0]!;
+      } else {
+        task = runner.startReExecution(
+          queued.name,
+          ['failed'],
+          resumeMode,
+          {
+            resumePoint,
+            sourceRunSlug: 'source-run',
+          },
+        );
+      }
+
+      const result = await resolveTaskExecutionStrict(task, root);
+
+      expect(result.startStep).toBe('implement');
+      expect(result.resumePoint).toEqual(resumePoint);
+      expect(result.initialIterationOverride).toBeUndefined();
+      expect(result.resumeSource).toEqual({
+        sourceRunSlug: 'source-run',
+        resumeMode,
+      });
+    },
+  );
+
+  it('should reset the target run iteration for auto requeue while retaining its resume location', async () => {
+    const root = createTempProjectDir();
+    writeTaktFile(root, 'workflows/default.yaml', [
+      'name: default',
+      'initial_step: implement',
+      'max_steps: 5',
+      'steps:',
+      '  - name: implement',
+      '    persona: coder',
+      '    instruction: Implement',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
+    ].join('\n'));
+    const resumePoint = {
+      version: 2 as const,
+      stack: [{
+        workflow: 'default',
+        workflow_ref: projectWorkflowRef(root, 'default.yaml'),
+        step: 'implement',
+        kind: 'agent' as const,
+        occurrence: 2,
+        step_iterations: { implement: 2 },
+      }],
+      iteration: 9,
+      elapsed_ms: 1200,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
+    };
+    const runner = new TaskRunner(root);
+    const queued = runner.addTask('Auto requeue task', { workflow: 'default' });
+    const running = runner.claimNextTasks(1)[0]!;
+    runner.updateRunningTaskExecution(running.name, { runSlug: 'source-run' });
+    runner.forceFailRunningTask(running.name, {
+      step: 'implement',
+      error: 'retryable failure',
+      retryable: true,
+    });
+    const store = new TaskStore(root);
+    store.update((current) => ({
+      tasks: current.tasks.map((task) => (
+        task.name === queued.name ? { ...task, resume_point: resumePoint } : task
+      )),
+    }));
+
+    expect(runner.autoRequeueFailedTask(queued.name, { maxAttempts: 1 })).toMatchObject({
+      requeued: true,
+    });
+    const task = runner.claimNextTasks(1)[0]!;
+    const result = await resolveTaskExecutionStrict(task, root);
+
+    expect(result.startStep).toBe('implement');
+    expect(result.resumePoint).toEqual(resumePoint);
+    expect(result.initialIterationOverride).toBeUndefined();
+    expect(result.resumeSource).toEqual({
+      sourceRunSlug: 'source-run',
+      resumeMode: 'requeue',
+    });
   });
 
   it('should prefer resume_point root step over stored start_movement on workflow_call retry', async () => {
@@ -255,10 +447,24 @@ describe('resolveTaskExecution', () => {
       data: ({
         task: 'Run task',
         start_movement: 'review',
-        resume_point: createResumePoint([
-            { workflow: 'default', step: 'delegate', kind: 'workflow_call', call_instance: 1 },
-            { workflow: 'takt/coding', step: 'review', kind: 'agent' },
-          ]),
+        resume_point: {
+          version: 2,
+          stack: [
+            {
+              workflow: 'default',
+              workflow_ref: projectWorkflowRef(root, 'default.yaml'),
+              step: 'delegate',
+              kind: 'workflow_call',
+              occurrence: 1,
+              call_instance: 1,
+            },
+            { workflow: 'takt/coding', workflow_ref: 'takt/coding', step: 'review', kind: 'agent', occurrence: 1 },
+          ],
+          iteration: 7,
+          elapsed_ms: 183245,
+          workflow_call_invocations: {},
+          workflow_step_participations: {},
+        },
       } as unknown) as NonNullable<TaskInfo['data']>,
     });
 
@@ -269,7 +475,8 @@ describe('resolveTaskExecution', () => {
       ...task.data?.resume_point,
       stack: task.data?.resume_point?.stack.slice(0, 1),
     });
-    expect(result.initialIterationOverride).toBe(7);
+    expect(result.initialIterationOverride).toBeUndefined();
+    expect(mockWarn).toHaveBeenCalledTimes(1);
   });
 
   it('should preserve resume_point when child workflow step no longer resolves', async () => {
@@ -293,6 +500,7 @@ describe('resolveTaskExecution', () => {
       'subworkflow:',
       '  callable: true',
       'initial_step: fix',
+      'max_steps: 5',
       'steps:',
       '  - name: fix',
       '    persona: fixer',
@@ -302,10 +510,30 @@ describe('resolveTaskExecution', () => {
       '        next: COMPLETE',
     ].join('\n'));
 
-    const resumePoint = createResumePoint([
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },
-        { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
-      ]);
+    const resumePoint = {
+      version: 2 as const,
+      stack: [
+        {
+          workflow: 'default',
+          workflow_ref: projectWorkflowRef(root, 'default.yaml'),
+          step: 'delegate',
+          kind: 'workflow_call' as const,
+          occurrence: 1,
+          call_instance: 1,
+        },
+        {
+          workflow: 'takt/coding',
+          workflow_ref: projectWorkflowRef(root, 'takt/coding.yaml'),
+          step: 'review',
+          kind: 'agent' as const,
+          occurrence: 1,
+        },
+      ],
+      iteration: 7,
+      elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
+    };
     const task = createTask({
       data: ({
         task: 'Run task',
@@ -320,7 +548,7 @@ describe('resolveTaskExecution', () => {
       ...resumePoint,
       stack: resumePoint.stack.slice(0, 1),
     });
-    expect(result.initialIterationOverride).toBe(7);
+    expect(result.initialIterationOverride).toBeUndefined();
   });
 
   it('should preserve resume_point when child workflow no longer exists', async () => {
@@ -340,10 +568,24 @@ describe('resolveTaskExecution', () => {
       '        next: COMPLETE',
     ].join('\n'));
 
-    const resumePoint = createResumePoint([
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },
-        { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
-      ]);
+    const resumePoint = {
+      version: 2 as const,
+      stack: [
+        {
+          workflow: 'default',
+          workflow_ref: projectWorkflowRef(root, 'default.yaml'),
+          step: 'delegate',
+          kind: 'workflow_call' as const,
+          occurrence: 1,
+          call_instance: 1,
+        },
+        { workflow: 'takt/coding', workflow_ref: 'takt/coding', step: 'review', kind: 'agent' as const, occurrence: 1 },
+      ],
+      iteration: 7,
+      elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
+    };
     const task = createTask({
       data: ({
         task: 'Run task',
@@ -358,7 +600,7 @@ describe('resolveTaskExecution', () => {
       ...resumePoint,
       stack: resumePoint.stack.slice(0, 1),
     });
-    expect(result.initialIterationOverride).toBe(7);
+    expect(result.initialIterationOverride).toBeUndefined();
   });
 
   it('should preserve child resume_point entries when worktree workflow exists only under execCwd', async () => {
@@ -386,6 +628,7 @@ describe('resolveTaskExecution', () => {
       'subworkflow:',
       '  callable: true',
       'initial_step: review',
+      'max_steps: 5',
       'steps:',
       '  - name: review',
       '    persona: reviewer',
@@ -395,10 +638,30 @@ describe('resolveTaskExecution', () => {
       '        next: COMPLETE',
     ].join('\n'));
 
-    const resumePoint = createResumePoint([
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },
-        { workflow: 'takt/coding', step: 'review', kind: 'agent' as const },
-      ]);
+    const resumePoint = {
+      version: 2 as const,
+      stack: [
+        {
+          workflow: 'default',
+          workflow_ref: worktreeWorkflowRef(worktreePath, 'default.yaml'),
+          step: 'delegate',
+          kind: 'workflow_call' as const,
+          occurrence: 1,
+          call_instance: 1,
+        },
+        {
+          workflow: 'takt/coding',
+          workflow_ref: worktreeWorkflowRef(worktreePath, 'takt/coding.yaml'),
+          step: 'review',
+          kind: 'agent' as const,
+          occurrence: 1,
+        },
+      ],
+      iteration: 7,
+      elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
+    };
     const task = createTask({
       worktreePath,
       data: ({
@@ -414,7 +677,7 @@ describe('resolveTaskExecution', () => {
     expect(result.execCwd).toBe(worktreePath);
     expect(result.startStep).toBe('delegate');
     expect(result.resumePoint).toEqual(resumePoint);
-    expect(result.initialIterationOverride).toBe(7);
+    expect(result.initialIterationOverride).toBeUndefined();
   });
 
   it('should trim resume_point to the nearest valid workflow_call when a deep child step no longer resolves', async () => {
@@ -438,6 +701,7 @@ describe('resolveTaskExecution', () => {
       'subworkflow:',
       '  callable: true',
       'initial_step: delegate_review',
+      'max_steps: 5',
       'steps:',
       '  - name: delegate_review',
       '    kind: workflow_call',
@@ -451,6 +715,7 @@ describe('resolveTaskExecution', () => {
       'subworkflow:',
       '  callable: true',
       'initial_step: fix',
+      'max_steps: 5',
       'steps:',
       '  - name: fix',
       '    persona: fixer',
@@ -460,16 +725,38 @@ describe('resolveTaskExecution', () => {
       '        next: COMPLETE',
     ].join('\n'));
 
-    const resumePoint = createResumePoint([
-        { workflow: 'default', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },
+    const resumePoint = {
+      version: 2 as const,
+      stack: [
         {
-          workflow: 'takt/coding',
-          step: 'delegate_review',
+          workflow: 'default',
+          workflow_ref: projectWorkflowRef(root, 'default.yaml'),
+          step: 'delegate',
           kind: 'workflow_call' as const,
+          occurrence: 1,
           call_instance: 1,
         },
-        { workflow: 'takt/review-loop', step: 'review', kind: 'agent' as const },
-      ]);
+        {
+          workflow: 'takt/coding',
+          workflow_ref: projectWorkflowRef(root, 'takt/coding.yaml'),
+          step: 'delegate_review',
+          kind: 'workflow_call' as const,
+          occurrence: 1,
+          call_instance: 1,
+        },
+        {
+          workflow: 'takt/review-loop',
+          workflow_ref: projectWorkflowRef(root, 'takt/review-loop.yaml'),
+          step: 'review',
+          kind: 'agent' as const,
+          occurrence: 1,
+        },
+      ],
+      iteration: 7,
+      elapsed_ms: 183245,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
+    };
     const task = createTask({
       data: ({
         task: 'Run task',
@@ -484,10 +771,10 @@ describe('resolveTaskExecution', () => {
       ...resumePoint,
       stack: resumePoint.stack.slice(0, 2),
     });
-    expect(result.initialIterationOverride).toBe(7);
+    expect(result.initialIterationOverride).toBeUndefined();
   });
 
-  it('should drop resume_point when its root step no longer resolves', async () => {
+  it('should drop resume_point without a UI warning in silent output mode', async () => {
     const root = createTempProjectDir();
     const workflowDir = path.join(root, '.takt', 'workflows');
     fs.mkdirSync(workflowDir, { recursive: true });
@@ -508,22 +795,32 @@ describe('resolveTaskExecution', () => {
       data: ({
         task: 'Run task',
         start_step: 'implement',
-        resume_point: createResumePoint([
-            { workflow: 'default', step: 'delegate', kind: 'workflow_call', call_instance: 1 },
-            { workflow: 'takt/coding', step: 'review', kind: 'agent' },
-          ]),
+        resume_point: {
+          version: 2,
+          stack: [
+            { workflow: 'default', workflow_ref: 'default', step: 'delegate', kind: 'workflow_call', occurrence: 1, call_instance: 1 },
+            { workflow: 'takt/coding', workflow_ref: 'takt/coding', step: 'review', kind: 'agent', occurrence: 1 },
+          ],
+          iteration: 7,
+          elapsed_ms: 183245,
+          workflow_call_invocations: {},
+          workflow_step_participations: {},
+        },
       } as unknown) as NonNullable<TaskInfo['data']>,
     });
 
-    const result = await resolveTaskExecutionStrict(task, root);
+    const result = await resolveTaskExecution(task, root, undefined, {
+      outputMode: 'silent',
+    });
 
     expect(result.startStep).toBe('implement');
     expect(result.resumePoint).toBeUndefined();
     expect(result.initialIterationOverride).toBeUndefined();
+    expect(mockWarn).not.toHaveBeenCalled();
   });
 
 
-  it('should generate report context and copy issue-bearing task spec', async () => {
+  it('should resolve issue-bearing task spec without creating the run context', async () => {
     const root = createTempProjectDir();
     const taskDir = '.takt/tasks/issue-task-123';
     const sourceTaskDir = path.join(root, taskDir);
@@ -549,17 +846,20 @@ describe('resolveTaskExecution', () => {
       isWorktree: false,
       autoPr: true,
       draftPr: false,
-      orderContent: '# task instruction',
       shouldPublishBranchToOrigin: true,
       issueNumber: 12345,
-      taskPrompt: expect.stringContaining(`Primary spec: \`.takt/runs/${result.reportDirName}/context/task/order.md\``),
+      taskSpec: {
+        orderContent: '# task instruction',
+        taskPrompt: expect.stringContaining(
+          `Primary spec: \`.takt/runs/${result.reportDirName}/context/task/order.md\``,
+        ),
+      },
     });
     expect(result.reportDirName).not.toBe('issue-task-123');
-    expect(fs.existsSync(expectedReportOrderPath)).toBe(true);
-    expect(fs.readFileSync(expectedReportOrderPath, 'utf-8')).toBe('# task instruction');
+    expect(fs.existsSync(expectedReportOrderPath)).toBe(false);
   });
 
-  it('should create separate run contexts when executing the same task_dir repeatedly', async () => {
+  it('should resolve separate run identities for repeated task_dir execution without staging', async () => {
     const root = createTempProjectDir();
     const taskDir = '.takt/tasks/reused-task-123';
     const sourceTaskDir = path.join(root, taskDir);
@@ -584,15 +884,17 @@ describe('resolveTaskExecution', () => {
     expect(first.reportDirName).not.toBe('reused-task-123');
     expect(second.reportDirName).not.toBe('reused-task-123');
     expect(second.reportDirName).not.toBe(first.reportDirName);
-    expect(fs.readFileSync(path.join(root, '.takt', 'runs', first.reportDirName, 'context', 'task', 'order.md'), 'utf-8')).toBe(
-      '# reused task instruction',
-    );
-    expect(fs.readFileSync(path.join(root, '.takt', 'runs', second.reportDirName, 'context', 'task', 'order.md'), 'utf-8')).toBe(
-      '# reused task instruction',
-    );
+    expect(first.taskSpec?.orderContent).toBe('# reused task instruction');
+    expect(second.taskSpec?.orderContent).toBe('# reused task instruction');
+    expect(fs.existsSync(
+      path.join(root, '.takt', 'runs', first.reportDirName),
+    )).toBe(false);
+    expect(fs.existsSync(
+      path.join(root, '.takt', 'runs', second.reportDirName),
+    )).toBe(false);
   });
 
-  it('should stage order.md into the worktree run context and return order content', async () => {
+  it('should resolve worktree task spec without staging before run reservation', async () => {
     const root = createTempProjectDir();
     const worktreePath = createTempProjectDir();
     const taskDir = '.takt/tasks/worktree-task-123';
@@ -636,11 +938,15 @@ describe('resolveTaskExecution', () => {
       shouldPublishBranchToOrigin: true,
       branch: 'feature/worktree-task-123',
       worktreePath,
-      orderContent,
-      taskPrompt: expect.stringContaining(`Primary spec: \`.takt/runs/${result.reportDirName}/context/task/order.md\``),
+      taskSpec: {
+        orderContent,
+        taskPrompt: expect.stringContaining(
+          `Primary spec: \`.takt/runs/${result.reportDirName}/context/task/order.md\``,
+        ),
+      },
     });
     expect(result.reportDirName).not.toBe('worktree-task-123');
-    expect(fs.readFileSync(stagedOrderPath, 'utf-8')).toBe(orderContent);
+    expect(fs.existsSync(stagedOrderPath)).toBe(false);
 
     mockCreateSharedClone.mockRestore();
     mockResolveBaseBranch.mockRestore();
@@ -688,9 +994,10 @@ describe('resolveTaskExecution', () => {
 
     expect(result.reportDirName).toBe(`${existingReportDirName}-2`);
     expect(fs.existsSync(path.join(worktreePath, '.takt', 'runs', existingReportDirName, 'context', 'task', 'order.md'))).toBe(false);
-    expect(fs.readFileSync(path.join(worktreePath, '.takt', 'runs', result.reportDirName, 'context', 'task', 'order.md'), 'utf-8')).toBe(
-      orderContent,
-    );
+    expect(result.taskSpec?.orderContent).toBe(orderContent);
+    expect(fs.existsSync(
+      path.join(worktreePath, '.takt', 'runs', result.reportDirName),
+    )).toBe(false);
 
     mockCreateSharedClone.mockRestore();
     mockResolveBaseBranch.mockRestore();
@@ -733,7 +1040,7 @@ describe('resolveTaskExecution', () => {
 
     const result = await resolveTaskExecutionStrict(task, root);
 
-    expect(result.orderContent).toBeUndefined();
+    expect(result.taskSpec).toBeUndefined();
     expect(readRunContextOrderContentSpy).not.toHaveBeenCalled();
     readRunContextOrderContentSpy.mockRestore();
   });
@@ -1751,7 +2058,7 @@ describe('resolveTaskExecution', () => {
         resume_point: {
           version: 2,
           stack: [
-            { workflow: 'default', step: 'fix', kind: 'agent' },
+            { workflow: 'default', workflow_ref: 'default', step: 'fix', kind: 'agent', occurrence: 1 },
           ],
           iteration: 3,
           elapsed_ms: 1200,

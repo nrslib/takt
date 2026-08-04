@@ -12,6 +12,7 @@ const {
   mockInfo,
   mockHeader,
   mockBlankLine,
+  mockWarn,
   mockExecuteTaskWithResult,
   mockLoadWorkflowByIdentifier,
   mockGetWorkflowDescription,
@@ -29,6 +30,7 @@ const {
   mockInfo: vi.fn(),
   mockHeader: vi.fn(),
   mockBlankLine: vi.fn(),
+  mockWarn: vi.fn(),
   mockExecuteTaskWithResult: vi.fn(),
   mockLoadWorkflowByIdentifier: vi.fn(),
   mockGetWorkflowDescription: vi.fn(() => ({
@@ -60,6 +62,7 @@ vi.mock('../shared/ui/index.js', () => ({
   info: mockInfo,
   header: mockHeader,
   blankLine: mockBlankLine,
+  warn: mockWarn,
   status: vi.fn(),
 }));
 
@@ -99,7 +102,7 @@ import { resumeDirectRun } from '../features/tasks/resume/index.js';
 const resumePoint: WorkflowResumePoint = {
   version: 2,
   stack: [
-    { workflow: 'default', step: 'review', kind: 'agent' },
+    { workflow: 'default', workflow_ref: 'default', step: 'review', kind: 'agent', occurrence: 1 },
   ],
   iteration: 4,
   elapsed_ms: 1000,
@@ -173,14 +176,21 @@ function expectPromotedAttachment(projectDir: string, content: string, imageInde
   const executeArg = mockExecuteTaskWithResult.mock.calls[0]?.[0] as {
     task: string;
     reportDirName: string;
+    taskSpec: {
+      stagedOrderContent: string;
+      sourceTaskDir: string;
+    };
   };
   const fileName = `image-${imageIndex}.png`;
-  const contextTaskDir = path.join(projectDir, '.takt', 'runs', executeArg.reportDirName, 'context', 'task');
-  const orderContent = fs.readFileSync(path.join(contextTaskDir, 'order.md'), 'utf-8');
   expect(executeArg.task).toContain(`.takt/runs/${executeArg.reportDirName}/context/task`);
-  expect(orderContent).toContain(content);
-  expect(orderContent).toContain(`.takt/runs/${executeArg.reportDirName}/context/task/attachments/${fileName}`);
-  expect(fs.readFileSync(path.join(contextTaskDir, 'attachments', fileName), 'utf-8')).toBe('png-data');
+  expect(executeArg.taskSpec.stagedOrderContent).toContain(content);
+  expect(executeArg.taskSpec.stagedOrderContent).toContain(
+    `.takt/runs/${executeArg.reportDirName}/context/task/attachments/${fileName}`,
+  );
+  expect(fs.existsSync(executeArg.taskSpec.sourceTaskDir)).toBe(false);
+  expect(fs.existsSync(
+    path.join(projectDir, '.takt', 'runs', executeArg.reportDirName),
+  )).toBe(false);
   expect(fs.existsSync(path.join(projectDir, '.takt', 'tasks'))).toBe(false);
 }
 
@@ -404,7 +414,7 @@ describe('resumeDirectRun', () => {
       resumePoint: {
         ...resumePoint,
         stack: [
-          { workflow: 'other-workflow', step: 'missing', kind: 'agent' },
+          { workflow: 'other-workflow', workflow_ref: 'other-workflow', step: 'missing', kind: 'agent', occurrence: 1 },
         ],
       },
     }));
@@ -416,6 +426,7 @@ describe('resumeDirectRun', () => {
       startStep: undefined,
       resumePoint: undefined,
     }));
+    expect(mockWarn).toHaveBeenCalledTimes(1);
   });
 
   it('Given Requeue is selected without resume point or currentStep, When resume runs, Then the workflow initial step is used', async () => {

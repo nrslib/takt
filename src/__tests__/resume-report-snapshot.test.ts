@@ -248,6 +248,60 @@ describe('inheritResumeReportSnapshot', () => {
     expect(existsSync(join(targetReports, 'nested', 'resume-artifacts.json'))).toBe(false);
   });
 
+  it('inherits only Finding review pending/completed records without exposing them in manifest', () => {
+    const completedId = 'a'.repeat(64);
+    const pendingId = 'b'.repeat(64);
+    seedSourceRun('source-run', {
+      'plan.md': 'the plan',
+      [`.takt-report-internal/finding-review-publications/${completedId}.json`]:
+        'completed publication',
+      [`.takt-report-internal/finding-review-publications/pending/${pendingId}.json`]:
+        'pending publication',
+      [`.takt-report-internal/finding-review-publications/${completedId}.json.lock`]:
+        'publication lock',
+      '.takt-report-internal/history/private.json': 'internal history',
+    });
+
+    const manifest = inheritResumeReportSnapshot({
+      cwd,
+      sourceRunSlug: 'source-run',
+      targetRunSlug: 'target-run',
+    });
+
+    const targetReports = buildRunPaths(cwd, 'target-run').reportsAbs;
+    expect(manifest.files.map((entry) => entry.path)).toEqual(['plan.md']);
+    expect(readFileSync(
+      join(
+        targetReports,
+        '.takt-report-internal',
+        'finding-review-publications',
+        `${completedId}.json`,
+      ),
+      'utf-8',
+    )).toBe('completed publication');
+    expect(readFileSync(
+      join(
+        targetReports,
+        '.takt-report-internal',
+        'finding-review-publications',
+        'pending',
+        `${pendingId}.json`,
+      ),
+      'utf-8',
+    )).toBe('pending publication');
+    expect(existsSync(join(
+      targetReports,
+      '.takt-report-internal',
+      'finding-review-publications',
+      `${completedId}.json.lock`,
+    ))).toBe(false);
+    expect(existsSync(join(
+      targetReports,
+      '.takt-report-internal',
+      'history',
+    ))).toBe(false);
+  });
+
   it('leaves the source run untouched', () => {
     seedSourceRun('source-run', { 'plan.md': 'the plan' });
     const sourceReports = buildRunPaths(cwd, 'source-run').reportsAbs;

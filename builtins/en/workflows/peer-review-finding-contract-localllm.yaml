@@ -1,0 +1,100 @@
+name: peer-review-finding-contract-localllm
+description: "Composed Finding Contract review flow: local specialist review, terminal integrity gate, high-assurance boundary review, terminal final gate, and ledger-driven remediation."
+subworkflow:
+  callable: true
+  visibility: internal
+  requires_finding_contract: true
+  returns:
+    - need_replan
+  params:
+    reviewer_suite:
+      type: workflow_ref
+      default: peer-review-suite-base
+    review_policy_additions:
+      type: facet_ref[]
+      facet_kind: policy
+      default: []
+    review_knowledge_additions:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default: []
+    fix_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default: [takt, architecture, implementation-semantics]
+    plan_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default: [coding, testing, review]
+    fix_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default: [coding, testing]
+    verification_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default: [coding, testing, review]
+    supervisor_persona:
+      type: facet_ref
+      facet_kind: persona
+      default: supervisor
+max_steps: 20
+initial_step: local-review
+loop_monitors:
+  - cycle: [local-review, remediation]
+    threshold: 5
+    judge: &convergence_judge
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix-fc
+      rules:
+        - condition: Fixes are progressing and another local review is actionable
+          next: local-review
+        - condition: The remediation assumptions must change
+          next: remediation
+        - condition: No feasible action can satisfy the requirements
+          next: ABORT
+  - cycle: [local-review, boundary-review, remediation]
+    threshold: 5
+    judge: *convergence_judge
+steps:
+  - name: local-review
+    kind: workflow_call
+    call: finding-contract-local-review
+    rules:
+      - condition: COMPLETE
+        next: boundary-review
+      - condition: needs_fix
+        next: remediation
+      - condition: need_replan
+        return: need_replan
+      - condition: ABORT
+        next: ABORT
+
+  - name: boundary-review
+    kind: workflow_call
+    call: finding-contract-boundary-review
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+      - condition: needs_fix
+        next: remediation
+      - condition: need_replan
+        return: need_replan
+      - condition: ABORT
+        next: ABORT
+
+  - name: remediation
+    kind: workflow_call
+    call: finding-contract-remediation
+    args:
+      fix_policy:
+        $param: fix_policy
+      fix_knowledge:
+        $param: fix_knowledge
+    rules:
+      - condition: COMPLETE
+        next: local-review
+      - condition: need_replan
+        return: need_replan
+      - condition: ABORT
+        next: ABORT

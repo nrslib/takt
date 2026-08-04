@@ -1,4 +1,7 @@
 import type { ProviderType } from '../../shared/types/provider.js';
+import type {
+  CanonicalWorkflowResumeFrame,
+} from '../../shared/types/workflow-resume.js';
 import type { AutoRoutingConfig } from './config-types.js';
 import type { PermissionMode } from './status.js';
 import type { AgentResponse } from './response.js';
@@ -15,7 +18,11 @@ import type {
   WorkflowEffect,
   WorkflowSystemInput,
 } from './workflow-system-input-types.js';
-import type { FindingContractConfig, FindingsRuleContext } from './finding-types.js';
+import type {
+  FindingContractConfig,
+  FindingManagerAuthority,
+  FindingsRuleContext,
+} from './finding-types.js';
 import type { WorkflowRuleCondition } from './workflow-rule-condition.js';
 
 export const WORKFLOW_SESSION_MODES = ['continue', 'refresh', 'compact'] as const;
@@ -31,6 +38,7 @@ export type {
   WorkflowTemplateReference,
   WorkflowEffectScalarReference,
 } from './workflow-system-input-types.js';
+export type { WorkflowResumeFrameKind } from '../../shared/types/workflow-resume.js';
 export type { FindingContractConfig, FindingLedger, FindingsRuleContext } from './finding-types.js';
 export {
   normalizeWorkflowPrListWhere,
@@ -146,20 +154,17 @@ export interface WorkflowSubworkflowConfig {
   params?: Record<string, WorkflowSubworkflowParamConfig>;
 }
 
-export interface WorkflowResumePointEntry {
-  workflow: string;
-  workflow_ref?: string;
-  step: string;
-  kind: WorkflowStepKind;
+export interface WorkflowResumePointEntry extends CanonicalWorkflowResumeFrame {
   step_iterations?: Record<string, number>;
   call_instance?: number;
 }
 
 export type WorkflowRestartPointEntry = Omit<
   WorkflowResumePointEntry,
-  'workflow_ref' | 'step_iterations' | 'call_instance'
+  'workflow_ref' | 'occurrence' | 'kind' | 'step_iterations' | 'call_instance'
 > & {
   workflow_ref: string;
+  kind: WorkflowStepKind;
   call_instance?: 1;
 };
 
@@ -171,36 +176,11 @@ export interface WorkflowResumePoint {
   version: 2;
   stack: WorkflowResumePointEntry[];
   iteration: number;
-  max_steps?: WorkflowMaxSteps;
   elapsed_ms: number;
-  pending_loop_judge?: WorkflowPendingLoopJudge;
-  pending_fallback?: WorkflowPendingFallback;
   dynamic_parallel_selections?: Record<string, DynamicParallelSelectionSnapshot>;
   workflow_call_invocations: Record<string, WorkflowCallInvocationRecord>;
   workflow_step_participations: Record<string, WorkflowStepParticipationRecord>;
 }
-
-interface WorkflowPendingLoopJudgeBase {
-  triggering_step: string;
-  cycle: string[];
-  cycle_count: number;
-  fallback_next_step: string;
-}
-
-export interface WorkflowPendingLoopJudgeBudgetWait extends WorkflowPendingLoopJudgeBase {
-  status: 'budget_wait';
-}
-
-export interface WorkflowPendingLoopJudgeStarted extends WorkflowPendingLoopJudgeBase {
-  status: 'started';
-  judge_step: string;
-  iteration: number;
-  step_iteration: number;
-}
-
-export type WorkflowPendingLoopJudge =
-  | WorkflowPendingLoopJudgeBudgetWait
-  | WorkflowPendingLoopJudgeStarted;
 
 export interface WorkflowStepParticipationRecord {
   report_names: string[];
@@ -208,7 +188,7 @@ export interface WorkflowStepParticipationRecord {
 
 export interface WorkflowCallInvocationRecord {
   call_instance: number;
-  child_workflow_ref: string;
+  report_namespace_segment: string;
 }
 
 export interface DynamicParallelSelectionSnapshot {
@@ -395,6 +375,7 @@ export interface WorkflowCallStep extends WorkflowStepBase {
   vars?: Record<string, WorkflowCallVariableValue>;
   overrides?: WorkflowCallOverrides;
   args?: Record<string, WorkflowCallArgValue>;
+  findingContractAuthority?: Exclude<FindingManagerAuthority, 'standard'>;
   sessionKey?: never;
   requiresUserInput?: never;
   persona?: never;
@@ -500,7 +481,7 @@ export interface WorkflowConfig {
   reportFormats?: Record<string, string>;
   steps: WorkflowStep[];
   initialStep: string;
-  maxSteps?: WorkflowMaxSteps;
+  maxSteps: WorkflowMaxSteps;
   loopDetection?: LoopDetectionConfig;
   loopMonitors?: LoopMonitorConfig[];
   interactiveMode?: InteractiveMode;
@@ -515,6 +496,15 @@ export interface RateLimitFallbackConfig {
   switchChain: RateLimitFallbackProvider[];
 }
 
+export type FallbackOperationStage =
+  | 'reviewer'
+  | 'finding_intake_normalizer';
+
+export interface FallbackOperationOrigin {
+  readonly stage: FallbackOperationStage;
+  readonly reviewerStepName: string;
+}
+
 export interface FallbackContext {
   reason: 'rate_limited';
   reasonDetail: string;
@@ -525,11 +515,12 @@ export interface FallbackContext {
   currentModel?: string;
   stepName: string;
   reportDir: string;
+  origin: FallbackOperationOrigin;
 }
 
-export interface WorkflowPendingFallback {
-  context: FallbackContext;
-  attempts: RateLimitFallbackProvider[];
+export interface RateLimitFallbackState {
+  readonly origin: FallbackOperationOrigin;
+  readonly attempts: readonly RateLimitFallbackProvider[];
 }
 
 export interface WorkflowState {
@@ -559,6 +550,6 @@ export interface WorkflowState {
   resumedDynamicParallelSteps: Set<string>;
   activeDynamicParallelSelectionIdentity?: string;
   pendingFallback?: FallbackContext;
-  rateLimitFallbackAttempts?: RateLimitFallbackProvider[];
+  rateLimitFallbackState?: RateLimitFallbackState;
   status: 'running' | 'completed' | 'aborted';
 }

@@ -1,17 +1,15 @@
 [
   {
-    "persona": "review-agent",
+    "persona": "agents/architecture-review",
     "status": "done",
-    "content": "approved",
-    "structured_output": {
-      "rawFindings": []
-    }
+    "content": "approved"
   },
   {
-    "persona": "review-agent",
+    "persona": "agents/architecture-review",
     "status": "done",
-    "content": "approved",
+    "content": "",
     "structured_output": {
+      "reportContent": "Architecture review approved.",
       "rawFindings": []
     }
   },
@@ -22,6 +20,20 @@
     "structured_output": {
       "step": 1,
       "reason": "approved"
+    }
+  },
+  {
+    "persona": "agents/security-review",
+    "status": "done",
+    "content": "approved"
+  },
+  {
+    "persona": "agents/security-review",
+    "status": "done",
+    "content": "",
+    "structured_output": {
+      "reportContent": "Security review approved.",
+      "rawFindings": []
     }
   },
   {
@@ -38,14 +50,12 @@
     "status": "done",
     "content": "manager reconciled no findings",
     "structured_output": {
-      "matches": [],
-      "newFindings": [],
-      "resolvedFindings": [],
-      "reopenedFindings": [],
-      "conflicts": [],
-      "resolvedConflicts": [],
-      "waivedFindings": [],
-      "disputeNotes": []
+      "rawDecisions": [],
+      "disputeDecisions": [],
+      "conflictDecisions": [],
+      "invalidateDecisions": [],
+      "duplicateDecisions": [],
+      "dismissDecisions": []
     }
   }
 ]

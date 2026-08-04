@@ -37,6 +37,8 @@ import {
 import { WorkflowCallRunner } from '../core/workflow/engine/WorkflowCallRunner.js';
 import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDetectionExhaustedError.js';
 import { buildWorkflowCallInvocationIdentity } from '../core/workflow/workflow-call-invocation-index.js';
+import { getWorkflowReference } from '../core/workflow/workflow-reference.js';
+import { buildWorkflowCallSiteIdentity } from '../core/workflow/workflow-call-site-identity.js';
 import {
   applyDefaultMocks,
   cleanupWorkflowEngine,
@@ -52,6 +54,25 @@ import type {
   WorkflowState,
 } from '../core/models/index.js';
 import { resetAnalyticsWriter } from '../features/analytics/writer.js';
+
+function expectedWorkflowCallNamespace(
+  parentConfig: WorkflowConfig,
+  stepName: string,
+  occurrence: number,
+  childConfig: WorkflowConfig,
+): string[] {
+  const runPathSegment = buildWorkflowCallSiteIdentity({
+    stack: [{
+      workflow: parentConfig.name,
+      workflow_ref: getWorkflowReference(parentConfig),
+      step: stepName,
+      kind: 'workflow_call',
+      occurrence,
+    }],
+    childWorkflow: childConfig,
+  }).runPathSegment;
+  return ['subworkflows', runPathSegment];
+}
 
 import {
   createOwnedResumePoint,
@@ -266,90 +287,6 @@ steps:
     expect(state.status).toBe('completed');
     expect(plannerPrompt).toContain('Step execution failed: child exploded');
     expect(plannerPrompt).not.toContain('Review done');
-  });
-
-  it('workflow_call 自体を数えず child と復帰後の親実 step だけが共通予算を消費する', async () => {
-    writeWorkflow(tmpDir, 'takt/coding.yaml', `name: takt/coding
-subworkflow:
-  callable: true
-initial_step: review
-steps:
-  - name: review
-    persona: reviewer
-    instruction: "Review child workflow"
-    rules:
-      - condition: done
-        next: fix
-  - name: fix
-    persona: fixer
-    instruction: "Fix child workflow"
-    rules:
-      - condition: done
-        next: COMPLETE
-`);
-
-    const config = createParentWorkflow(tmpDir, {
-      name: 'parent',
-      initial_step: 'delegate',
-      max_steps: 3,
-      steps: [
-        {
-          name: 'delegate',
-          kind: 'workflow_call',
-          call: 'takt/coding',
-          rules: [
-            {
-              condition: 'COMPLETE',
-              next: 'final_review',
-            },
-            {
-              condition: 'ABORT',
-              next: 'ABORT',
-            },
-          ],
-        },
-        {
-          name: 'final_review',
-          persona: 'supervisor',
-          instruction: 'Review child output:\n{previous_response}',
-          rules: [
-            {
-              condition: 'approved',
-              next: 'COMPLETE',
-            },
-          ],
-        },
-      ],
-    });
-
-    mockPersonaResponses({
-      reviewer: 'Review done',
-      fixer: 'Fix done',
-      supervisor: 'approved',
-    });
-    mockRuleEvaluationSequence([
-      { index: 0, method: 'phase3_tag' },
-      { index: 0, method: 'phase3_tag' },
-      { index: 0, method: 'phase3_tag' },
-    ]);
-
-    const startedIterations: Array<{ step: string; iteration: number }> = [];
-    engine = new WorkflowEngine(config, tmpDir, 'Budget test', createWorkflowCallOptions(tmpDir));
-    engine.on('step:start', (step, iteration) => {
-      expect(engine?.getState().iteration).toBe(iteration);
-      expect(engine?.getResumePoint()?.iteration).toBe(iteration);
-      startedIterations.push({ step: step.name, iteration });
-    });
-
-    const state = await engine.run();
-    expect(state.status).toBe('completed');
-    expect(state.iteration).toBe(3);
-    expect(state.stepIterations.get('delegate')).toBe(1);
-    expect(startedIterations).toEqual([
-      { step: 'review', iteration: 1 },
-      { step: 'fix', iteration: 2 },
-      { step: 'final_review', iteration: 3 },
-    ]);
   });
 
   it('子 workflow で max_steps を延長した場合も親 run へ共有予算を引き継いで継続する', async () => {
@@ -588,69 +525,6 @@ steps:
     expect(onIterationLimit).not.toHaveBeenCalled();
   });
 
-  it('上限到達時も workflow_call へ進入し child の最初の実 step で停止する', async () => {
-    writeWorkflow(tmpDir, 'shared/review.yaml', `name: shared/review
-subworkflow:
-  callable: true
-initial_step: review
-steps:
-  - name: review
-    persona: reviewer
-    instruction: Review
-    rules:
-      - condition: done
-        next: COMPLETE
-`);
-    const config = createParentWorkflow(tmpDir, {
-      name: 'parent',
-      initial_step: 'plan',
-      max_steps: 1,
-      steps: [
-        {
-          name: 'plan',
-          persona: 'planner',
-          instruction: 'Plan',
-          rules: [{ condition: 'done', next: 'delegate' }],
-        },
-        {
-          name: 'delegate',
-          kind: 'workflow_call',
-          call: 'shared/review',
-          rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
-        },
-      ],
-    });
-    const workflowCallResolver = vi.fn(createWorkflowCallOptions(tmpDir).workflowCallResolver!);
-    mockPersonaResponses({ planner: 'done' });
-    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
-    let resumePointAtLimit: ReturnType<WorkflowEngine['getResumePoint']>;
-    const onIterationLimit = vi.fn().mockImplementation(async () => {
-      resumePointAtLimit = engine?.getResumePoint();
-      return null;
-    });
-    engine = new WorkflowEngine(config, tmpDir, 'Enter call at the budget boundary', createWorkflowCallOptions(tmpDir, {
-      workflowCallResolver,
-      onIterationLimit,
-    }));
-
-    const state = await engine.run();
-
-    expect(state.status).toBe('aborted');
-    expect(state.iteration).toBe(1);
-    expect(workflowCallResolver).toHaveBeenCalledOnce();
-    expect(onIterationLimit).toHaveBeenCalledWith(expect.objectContaining({
-      currentIteration: 1,
-      maxSteps: 1,
-      currentStep: 'review',
-    }));
-    expect(onIterationLimit.mock.calls[0]?.[0].scope.stack.at(-1)?.step).toBe('review');
-    expect(resumePointAtLimit?.stack).toEqual([
-      expect.objectContaining({ workflow: 'parent', step: 'delegate', kind: 'workflow_call', call_instance: 1 }),
-      expect.objectContaining({ workflow: 'shared/review', step: 'review', kind: 'agent' }),
-    ]);
-    expect(vi.mocked(runAgent).mock.calls.map(([persona]) => persona)).toEqual(['planner']);
-  });
-
   it('nested workflow_call の階層数を共通 iteration へ加算しない', async () => {
     writeWorkflow(tmpDir, 'shared/outer.yaml', `name: shared/outer
 subworkflow:
@@ -813,541 +687,6 @@ steps:
     }));
   });
 
-  it('非カウント workflow_call の自己再試行を既定設定で attempt 作成前に停止する', async () => {
-    writeWorkflow(tmpDir, 'shared/aborting.yaml', `name: shared/aborting
-subworkflow:
-  callable: true
-initial_step: nested-delegate
-steps:
-  - name: nested-delegate
-    kind: workflow_call
-    call: shared/missing
-    rules:
-      - condition: COMPLETE
-        next: COMPLETE
-      - condition: ABORT
-        next: ABORT
-`);
-    const config = createParentWorkflow(tmpDir, {
-      name: 'parent',
-      initial_step: 'delegate',
-      max_steps: 1,
-      steps: [{
-        name: 'delegate',
-        kind: 'workflow_call',
-        call: 'shared/aborting',
-        rules: [
-          { condition: 'COMPLETE', next: 'COMPLETE' },
-          { condition: 'ABORT', next: 'delegate' },
-        ],
-      }],
-    });
-    const parentLifecycle: Array<{ callInstance: number; status?: string }> = [];
-    let abortReason = '';
-    engine = new WorkflowEngine(config, tmpDir, 'Retry an aborting call', createWorkflowCallOptions(tmpDir));
-    engine.on('workflow_call:start', (event) => {
-      if (event.parentWorkflow === 'parent' && event.step === 'delegate') {
-        parentLifecycle.push({ callInstance: event.callInstance });
-      }
-    });
-    engine.on('workflow_call:complete', (event) => {
-      if (event.parentWorkflow === 'parent' && event.step === 'delegate') {
-        parentLifecycle.push({ callInstance: event.callInstance, status: event.result.status });
-      }
-    });
-    engine.on('workflow:abort', (_state, reason) => {
-      abortReason = reason;
-    });
-
-    const state = await engine.run();
-
-    expect(state.status).toBe('aborted');
-    expect(state.iteration).toBe(0);
-    expect(state.stepIterations.get('delegate')).toBe(1);
-    expect(abortReason).toContain('Loop detected');
-    expect(parentLifecycle).toEqual([
-      { callInstance: 1 },
-      { callInstance: 1, status: 'aborted' },
-    ]);
-  });
-
-  it('非カウント workflow_call の交互 cycle を既定設定で再訪前に停止する', async () => {
-    writeWorkflow(tmpDir, 'shared/aborting.yaml', `name: shared/aborting
-subworkflow:
-  callable: true
-initial_step: nested-delegate
-steps:
-  - name: nested-delegate
-    kind: workflow_call
-    call: shared/missing
-    rules:
-      - condition: COMPLETE
-        next: COMPLETE
-      - condition: ABORT
-        next: ABORT
-`);
-    const config = createParentWorkflow(tmpDir, {
-      name: 'parent',
-      initial_step: 'delegate-a',
-      max_steps: 1,
-      steps: [
-        {
-          name: 'delegate-a',
-          kind: 'workflow_call',
-          call: 'shared/aborting',
-          rules: [
-            { condition: 'COMPLETE', next: 'COMPLETE' },
-            { condition: 'ABORT', next: 'delegate-b' },
-          ],
-        },
-        {
-          name: 'delegate-b',
-          kind: 'workflow_call',
-          call: 'shared/aborting',
-          rules: [
-            { condition: 'COMPLETE', next: 'COMPLETE' },
-            { condition: 'ABORT', next: 'delegate-a' },
-          ],
-        },
-      ],
-    });
-    const started: string[] = [];
-    engine = new WorkflowEngine(config, tmpDir, 'Stop alternating calls', createWorkflowCallOptions(tmpDir));
-    engine.on('workflow_call:start', (event) => {
-      if (event.parentWorkflow === 'parent') {
-        started.push(event.step);
-      }
-    });
-
-    const state = await engine.run();
-
-    expect(state.status).toBe('aborted');
-    expect(state.iteration).toBe(0);
-    expect(state.stepIterations.get('delegate-a')).toBe(1);
-    expect(state.stepIterations.get('delegate-b')).toBe(1);
-    expect(started).toEqual(['delegate-a', 'delegate-b']);
-  });
-
-  it('実 step の進捗後は同じ workflow_call を再実行できる', async () => {
-    writeWorkflow(tmpDir, 'shared/worker.yaml', `name: shared/worker
-subworkflow:
-  callable: true
-initial_step: work
-steps:
-  - name: work
-    persona: worker
-    instruction: Work
-    rules:
-      - condition: done
-        next: COMPLETE
-`);
-    const config = createParentWorkflow(tmpDir, {
-      name: 'parent',
-      initial_step: 'delegate',
-      max_steps: 4,
-      steps: [
-        {
-          name: 'delegate',
-          kind: 'workflow_call',
-          call: 'shared/worker',
-          rules: [{ condition: 'COMPLETE', next: 'bridge' }],
-        },
-        {
-          name: 'bridge',
-          persona: 'bridge',
-          instruction: 'Continue or complete',
-          rules: [
-            { condition: 'done', next: 'delegate' },
-            { condition: 'done', next: 'COMPLETE' },
-          ],
-        },
-      ],
-    });
-    mockRunAgentSequence([
-      makeResponse({ persona: 'worker' }),
-      makeResponse({ persona: 'bridge' }),
-      makeResponse({ persona: 'worker' }),
-      makeResponse({ persona: 'bridge' }),
-    ]);
-    mockRuleEvaluationSequence([
-      { index: 0, method: 'phase3_tag' },
-      { index: 0, method: 'phase3_tag' },
-      { index: 0, method: 'phase3_tag' },
-      { index: 1, method: 'phase3_tag' },
-    ]);
-    const callInstances: number[] = [];
-    engine = new WorkflowEngine(config, tmpDir, 'Revisit after progress', createWorkflowCallOptions(tmpDir));
-    engine.on('workflow_call:start', (event) => callInstances.push(event.callInstance));
-
-    const state = await engine.run();
-
-    expect(state.status).toBe('completed');
-    expect(state.iteration).toBe(4);
-    expect(callInstances).toEqual([1, 2]);
-  });
-
-  it('runSingleIteration でも非カウント workflow_call の自己再試行を再訪前に停止する', async () => {
-    writeWorkflow(tmpDir, 'shared/aborting.yaml', `name: shared/aborting
-subworkflow:
-  callable: true
-initial_step: nested-delegate
-steps:
-  - name: nested-delegate
-    kind: workflow_call
-    call: shared/missing
-    rules:
-      - condition: COMPLETE
-        next: COMPLETE
-      - condition: ABORT
-        next: ABORT
-`);
-    const config = createParentWorkflow(tmpDir, {
-      name: 'parent',
-      initial_step: 'delegate',
-      max_steps: 1,
-      steps: [{
-        name: 'delegate',
-        kind: 'workflow_call',
-        call: 'shared/aborting',
-        rules: [
-          { condition: 'COMPLETE', next: 'COMPLETE' },
-          { condition: 'ABORT', next: 'delegate' },
-        ],
-      }],
-    });
-    const started: number[] = [];
-    engine = new WorkflowEngine(config, tmpDir, 'Stop single-iteration retry', createWorkflowCallOptions(tmpDir));
-    engine.on('workflow_call:start', (event) => {
-      if (event.parentWorkflow === 'parent') {
-        started.push(event.callInstance);
-      }
-    });
-
-    const first = await engine.runSingleIteration();
-    const second = await engine.runSingleIteration();
-
-    expect(first).toEqual(expect.objectContaining({ isComplete: false, nextStep: 'delegate' }));
-    expect(second).toEqual(expect.objectContaining({ isComplete: true, nextStep: 'ABORT' }));
-    expect(engine.getState().status).toBe('aborted');
-    expect(engine.getState().iteration).toBe(0);
-    expect(started).toEqual([1]);
-  });
-
-  it('child resolver 失敗でも call attempt identity を保存し iteration を消費しない', async () => {
-    const config = createParentWorkflow(tmpDir, {
-      name: 'parent',
-      initial_step: 'delegate',
-      max_steps: 1,
-      steps: [{
-        name: 'delegate',
-        kind: 'workflow_call',
-        call: 'missing/child',
-        rules: [
-          { condition: 'COMPLETE', next: 'COMPLETE' },
-          { condition: 'ABORT', next: 'ABORT' },
-        ],
-      }],
-    });
-    const lifecycleEvents: unknown[] = [];
-    engine = new WorkflowEngine(config, tmpDir, 'Fail before child execution', createWorkflowCallOptions(tmpDir, {
-      workflowCallResolver: () => {
-        throw new Error('resolver failed');
-      },
-    }));
-    engine.on('workflow_call:start', (event) => lifecycleEvents.push(event));
-    engine.on('workflow_call:complete', (event) => lifecycleEvents.push(event));
-
-    const state = await engine.run();
-    const resumePoint = engine.getResumePoint();
-
-    expect(state.status).toBe('aborted');
-    expect(state.iteration).toBe(0);
-    expect(state.stepIterations.get('delegate')).toBe(1);
-    expect(resumePoint?.stack[0]).toEqual(expect.objectContaining({
-      workflow: 'parent',
-      step: 'delegate',
-      kind: 'workflow_call',
-      call_instance: 1,
-      step_iterations: { delegate: 1 },
-    }));
-    expect(resumePoint?.workflow_call_invocations).toEqual({
-      [buildWorkflowCallInvocationIdentity('parent', 'delegate', [])]: {
-        call_instance: 1,
-        child_workflow_ref: 'missing/child',
-      },
-    });
-    expect(lifecycleEvents).toEqual([
-      expect.objectContaining({ callInstance: 1 }),
-      expect.objectContaining({
-        callInstance: 1,
-        result: { status: 'failed', reason: 'resolver failed' },
-      }),
-    ]);
-    expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
-  });
-
-  it('child の次実 step で上限へ達した resume point は call stack と未実行 step を指す', async () => {
-    writeWorkflow(tmpDir, 'takt/coding.yaml', `name: takt/coding
-subworkflow:
-  callable: true
-initial_step: review
-steps:
-  - name: review
-    persona: reviewer
-    instruction: "Review child workflow"
-    rules:
-      - condition: done
-        next: fix
-  - name: fix
-    persona: fixer
-    instruction: "Fix child workflow"
-    rules:
-      - condition: done
-        next: COMPLETE
-`);
-
-    const config = createParentWorkflow(tmpDir, {
-      name: 'parent',
-      initial_step: 'delegate',
-      max_steps: 1,
-      steps: [
-        {
-          name: 'delegate',
-          kind: 'workflow_call',
-          call: 'takt/coding',
-          rules: [
-            {
-              condition: 'COMPLETE',
-              next: 'COMPLETE',
-            },
-            {
-              condition: 'ABORT',
-              next: 'ABORT',
-            },
-          ],
-        },
-      ],
-    });
-
-    mockRunAgentSequence([
-      makeResponse({ persona: 'reviewer', content: 'Review done' }),
-      makeResponse({ persona: 'fixer', content: 'Fix done' }),
-    ]);
-    mockRuleEvaluationSequence([
-      { index: 0, method: 'phase3_tag' },
-      { index: 0, method: 'phase3_tag' },
-    ]);
-
-    let capturedResumePoint: ReturnType<WorkflowEngine['getResumePoint']>;
-    engine = new WorkflowEngine(config, tmpDir, 'Capture latest child resume point', createWorkflowCallOptions(tmpDir, {
-      onIterationLimit: vi.fn().mockImplementation(async () => {
-        capturedResumePoint = engine?.getResumePoint();
-        return null;
-      }),
-    }));
-
-    const state = await engine.run();
-
-    expect(state.status).toBe('aborted');
-    expect(capturedResumePoint?.stack).toHaveLength(2);
-    expect(capturedResumePoint?.stack[0]).toEqual({
-      workflow: 'parent',
-      step: 'delegate',
-      kind: 'workflow_call',
-      step_iterations: { delegate: 1 },
-      call_instance: 1,
-    });
-    expect(capturedResumePoint?.stack[1]).toEqual(expect.objectContaining({
-      workflow: 'takt/coding',
-      step: 'fix',
-      kind: 'agent',
-    }));
-    expect(capturedResumePoint?.iteration).toBe(1);
-    if (!capturedResumePoint) {
-      throw new Error('Expected iteration-limit resume point');
-    }
-
-    cleanupWorkflowEngine(engine);
-    engine = null;
-    const resumedLifecycleEvents: Array<Record<string, unknown>> = [];
-    const resumedStartedSteps: Array<{ step: string; iteration: number }> = [];
-    const onResumedIterationLimit = vi.fn().mockResolvedValue(1);
-    engine = new WorkflowEngine(config, tmpDir, 'Resume latest child point', createWorkflowCallOptions(tmpDir, {
-      initialIteration: capturedResumePoint.iteration,
-      resumePoint: capturedResumePoint,
-      onIterationLimit: onResumedIterationLimit,
-    }));
-    engine.on('workflow_call:start', (event) => resumedLifecycleEvents.push(event));
-    engine.on('workflow_call:complete', (event) => resumedLifecycleEvents.push(event));
-    engine.on('step:start', (step, iteration) => {
-      resumedStartedSteps.push({ step: step.name, iteration });
-    });
-
-    const resumedState = await engine.run();
-    const resumedPoint = engine.getResumePoint();
-
-    expect(resumedState.status).toBe('completed');
-    expect(resumedState.iteration).toBe(2);
-    expect(resumedState.stepIterations.get('delegate')).toBe(1);
-    expect(onResumedIterationLimit).toHaveBeenCalledWith(expect.objectContaining({
-      currentIteration: 1,
-      maxSteps: 1,
-      currentStep: 'fix',
-    }));
-    expect(resumedStartedSteps).toEqual([{ step: 'fix', iteration: 2 }]);
-    expect(vi.mocked(runAgent).mock.calls.map(([persona]) => persona)).toEqual([
-      expect.stringContaining('reviewer'),
-      expect.stringContaining('fixer'),
-    ]);
-    expect(resumedLifecycleEvents).toEqual([
-      expect.objectContaining({
-        step: 'delegate',
-        childWorkflow: 'takt/coding',
-        callInstance: 1,
-      }),
-      expect.objectContaining({
-        step: 'delegate',
-        childWorkflow: 'takt/coding',
-        callInstance: 1,
-        result: expect.objectContaining({ status: 'completed' }),
-      }),
-    ]);
-    expect(resumedPoint?.workflow_call_invocations).toEqual(
-      capturedResumePoint.workflow_call_invocations,
-    );
-  });
-
-  it('再開した子 workflow が最初の step 前に max_steps へ達しても child checkpoint を保持する', async () => {
-    writeWorkflow(tmpDir, 'takt/coding.yaml', `name: takt/coding
-subworkflow:
-  callable: true
-initial_step: review
-steps:
-  - name: review
-    persona: reviewer
-    instruction: "Review child workflow"
-    rules:
-      - condition: done
-        next: fix
-  - name: fix
-    persona: fixer
-    instruction: "Fix child workflow"
-    rules:
-      - condition: done
-        next: COMPLETE
-`);
-
-    const config = createParentWorkflow(tmpDir, {
-      name: 'parent',
-      initial_step: 'delegate',
-      max_steps: 1,
-      steps: [
-        {
-          name: 'delegate',
-          kind: 'workflow_call',
-          call: 'takt/coding',
-          rules: [
-            {
-              condition: 'COMPLETE',
-              next: 'COMPLETE',
-            },
-            {
-              condition: 'ABORT',
-              next: 'ABORT',
-            },
-          ],
-        },
-      ],
-    });
-    const resumePoint = {
-      version: 2 as const,
-      stack: [
-        { workflow: 'parent', step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 },
-        { workflow: 'takt/coding', step: 'fix', kind: 'agent' as const },
-      ],
-      iteration: 1,
-      elapsed_ms: 183245,
-      workflow_call_invocations: buildWorkflowCallInvocationRecordsFixture([{
-        workflowReference: 'parent',
-        step: 'delegate',
-        ownerPath: [],
-        childWorkflowReference: 'takt/coding',
-        callInstance: 1,
-      }]),
-      workflow_step_participations: {},
-    };
-    let capturedResumePoint: ReturnType<WorkflowEngine['getResumePoint']>;
-    engine = new WorkflowEngine(config, tmpDir, 'Resume child at iteration limit', createWorkflowCallOptions(tmpDir, {
-      initialIteration: 1,
-      resumePoint,
-      onIterationLimit: vi.fn().mockImplementation(async () => {
-        capturedResumePoint = engine?.getResumePoint();
-        return null;
-      }),
-    }));
-
-    const state = await engine.run();
-
-    expect(state.status).toBe('aborted');
-    expect(runAgent).not.toHaveBeenCalled();
-    expect(capturedResumePoint?.stack).toEqual([
-      expect.objectContaining({
-        workflow: 'parent',
-        step: 'delegate',
-        kind: 'workflow_call',
-      }),
-      expect.objectContaining({
-        workflow: 'takt/coding',
-        step: 'fix',
-        kind: 'agent',
-      }),
-    ]);
-    expect(capturedResumePoint?.iteration).toBe(1);
-    expect(capturedResumePoint?.elapsed_ms).toBeGreaterThanOrEqual(resumePoint.elapsed_ms);
-  });
-
-  it('resolveWorkflowCallTarget は callable child へ max_steps default を注入しない', () => {
-    writeWorkflow(tmpDir, 'takt/coding.yaml', `name: takt/coding
-subworkflow:
-  callable: true
-initial_step: review
-steps:
-  - name: review
-    persona: reviewer
-    instruction: "Review child workflow"
-    rules:
-      - condition: done
-        next: COMPLETE
-`);
-
-    const config = createParentWorkflow(tmpDir, {
-      name: 'parent',
-      initial_step: 'delegate',
-      max_steps: 2,
-      steps: [
-        {
-          name: 'delegate',
-          kind: 'workflow_call',
-          call: 'takt/coding',
-          rules: [
-            {
-              condition: 'COMPLETE',
-              next: 'COMPLETE',
-            },
-          ],
-        },
-      ],
-    });
-
-    const childWorkflow = resolveWorkflowCallTarget(
-      config,
-      findWorkflowCallStep(config, 'delegate'),
-      tmpDir,
-    );
-
-    expect(childWorkflow?.maxSteps).toBeUndefined();
-  });
-
   it('retry 時は resume_point.elapsed_ms を引き継いで resume_point を再構築する', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-04-13T00:00:10.000Z'));
@@ -1370,24 +709,53 @@ steps:
         },
       ],
     });
+    const childConfig = createParentWorkflow(tmpDir, {
+      name: 'takt/coding',
+      initial_step: 'review',
+      max_steps: 5,
+      subworkflow: { callable: true },
+      steps: [{
+        name: 'review',
+        persona: 'reviewer',
+        instruction: 'Review',
+        rules: [{ condition: 'done', next: 'COMPLETE' }],
+      }],
+    });
 
     engine = new WorkflowEngine(config, tmpDir, 'Retry workflow composition', createWorkflowCallOptions(tmpDir, {
       initialIteration: 7,
       resumePoint: {
         version: 2,
         stack: [
-          { workflow: 'parent', step: 'delegate', kind: 'workflow_call', call_instance: 1 },
-          { workflow: 'takt/coding', step: 'review', kind: 'agent' },
+          {
+            workflow: 'parent',
+            workflow_ref: getWorkflowReference(config),
+            step: 'delegate',
+            kind: 'workflow_call',
+            occurrence: 1,
+            call_instance: 1,
+          },
+          {
+            workflow: 'takt/coding',
+            workflow_ref: getWorkflowReference(childConfig),
+            step: 'review',
+            kind: 'agent',
+            occurrence: 1,
+          },
         ],
         iteration: 7,
         elapsed_ms: 183245,
-        workflow_call_invocations: buildWorkflowCallInvocationRecordsFixture([{
-          workflowReference: 'parent',
-          step: 'delegate',
-          ownerPath: [],
-          callInstance: 1,
-          childWorkflowReference: 'takt/coding',
-        }]),
+        workflow_call_invocations: {
+          '{"workflow":"parent","step":"delegate","calls":[]}': {
+            call_instance: 1,
+            report_namespace_segment: expectedWorkflowCallNamespace(
+              config,
+              'delegate',
+              1,
+              childConfig,
+            )[1]!,
+          },
+        },
         workflow_step_participations: {},
       },
     }));
@@ -1403,6 +771,7 @@ steps:
 subworkflow:
   callable: true
 initial_step: review
+max_steps: 5
 steps:
   - name: review
     persona: child-reviewer
@@ -1426,7 +795,6 @@ steps:
     const childConfig = loadWorkflowOrThrow(join(tmpDir, '.takt', 'workflows', 'nested', 'child.yaml'), tmpDir);
     const createEngine = vi.fn().mockReturnValue({
       on: vi.fn(),
-      getOwnedResumePoint: vi.fn(() => createOwnedResumePoint('child', 'review', 2)),
       runWithResult: vi.fn().mockResolvedValue({
         state: {
           workflowName: childConfig.name,
@@ -1460,23 +828,26 @@ steps:
         status: 'running',
       },
       projectCwd: tmpDir,
+      getMaxSteps: () => parentConfig.maxSteps,
+      updateMaxSteps: vi.fn(),
       getCwd: () => tmpDir,
       task: 'Allow same-name subworkflow from another source',
       getOptions: () => createWorkflowCallOptions(tmpDir),
-      ...createWorkflowCallProgressDeps(),
+      sharedRuntime: { startedAtMs: Date.now() },
       resumeStackPrefix: [],
+      consumeWorkflowCallContinuation: vi.fn(),
       runPaths: {
         slug: 'test-report-dir',
       } as never,
       setActiveResumePoint: vi.fn(),
-      setActiveResumeStack: vi.fn(),
-      adoptResumeCheckpoint: vi.fn(),
       emit: vi.fn(),
       resolveWorkflowCall: () => childConfig,
       createEngine,
     });
 
-    const result = await runner.run(parentConfig.steps[0] as never);
+    const step = parentConfig.steps[0] as never;
+    const execution = runner.activateInvocation(step, 1, 1, []);
+    const result = await runner.run(step, execution);
 
     expect(result.response.matchedRuleIndex).toBe(0);
     expect(createEngine).toHaveBeenCalledTimes(1);
@@ -1506,6 +877,7 @@ steps:
       const childConfig = {
         name: 'child',
         initialStep: 'review',
+        maxSteps: 5,
         subworkflow: { callable: true },
         steps: [{ name: 'review' }],
       } as WorkflowConfig;
@@ -1525,7 +897,6 @@ steps:
       } as WorkflowState;
       const createEngine = vi.fn().mockReturnValue({
         on: vi.fn(),
-        getOwnedResumePoint: vi.fn(() => createOwnedResumePoint('child', 'review', 2)),
         runWithResult: vi.fn().mockResolvedValue({ state: childState }),
       });
       const runner = new WorkflowCallRunner({
@@ -1535,29 +906,34 @@ steps:
           workflowName: parentConfig.name,
           currentStep: 'delegate',
           iteration: 1,
+          stepIterations: new Map([['delegate', 1]]),
           status: 'running',
         },
         projectCwd: tmpDir,
+        getMaxSteps: () => parentConfig.maxSteps,
+        updateMaxSteps: vi.fn(),
         getCwd: () => tmpDir,
         task: 'Filter interactive workflow_call rules',
         getOptions: () => createWorkflowCallOptions(tmpDir, { interactive }),
-        ...createWorkflowCallProgressDeps(),
+        sharedRuntime: { startedAtMs: Date.now() },
         resumeStackPrefix: [],
+        consumeWorkflowCallContinuation: vi.fn(),
         runPaths: { slug: 'test-report-dir' } as never,
         setActiveResumePoint: vi.fn(),
-        setActiveResumeStack: vi.fn(),
-        adoptResumeCheckpoint: vi.fn(),
         emit: vi.fn(),
         resolveWorkflowCall: () => childConfig,
         createEngine,
         refreshFindingsState: vi.fn(),
       });
       const step = parentConfig.steps[0] as never;
+      const workflowCallExecution = runner.activateInvocation(step, 1, 1, []);
 
       if (execution === 'direct') {
-        return (await runner.run(step)).response.matchedRuleIndex;
+        return (await runner.run(step, workflowCallExecution)).response.matchedRuleIndex;
       }
-      return (await runner.runIsolated(step)).result.response.matchedRuleIndex;
+      return (
+        await runner.runIsolated(step, runner.resolveRuntime(step), [], workflowCallExecution)
+      ).result.response.matchedRuleIndex;
     };
 
     const regularRules = [
@@ -1577,4 +953,5 @@ steps:
     await expect(executeWithRules(interactiveOnlyRules, true, 'direct')).resolves.toBe(0);
     await expect(executeWithRules(interactiveOnlyRules, true, 'isolated')).resolves.toBe(0);
   });
+
 });

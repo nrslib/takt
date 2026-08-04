@@ -12,7 +12,11 @@ vi.mock('../shared/ui/index.js', () => ({
 }));
 
 import { info } from '../shared/ui/index.js';
-import { persistExceededTaskResult } from '../features/tasks/execute/taskResultHandler.js';
+import {
+  buildTaskResult,
+  persistExceededTaskResult,
+  persistTaskResult,
+} from '../features/tasks/execute/taskResultHandler.js';
 import { TaskRunner } from '../infra/task/runner.js';
 
 const mockInfo = vi.mocked(info);
@@ -61,6 +65,40 @@ describe('persistExceededTaskResult', () => {
     expect(row.exceeded_current_iteration).toBe(30);
     expect(mockInfo).toHaveBeenCalledWith(
       `Task "${task.name}" exceeded iteration limit at step "reviewers"`,
+    );
+  });
+
+  it('should persist sanitized workflow failure details in the task record', () => {
+    runner.addTask('Review findings');
+    const [task] = runner.claimNextTasks(1);
+    if (!task) {
+      throw new Error('expected claimed task');
+    }
+    const taskResult = buildTaskResult({
+      task,
+      runResult: {
+        success: false,
+        reason: 'NEEDS_ADJUDICATION: finding invariant failed',
+        lastStep: 'reviewers',
+        lastMessage: 'Provider failed with api_key=task-result-secret',
+      },
+      startedAt: '2026-08-02T15:26:00.000Z',
+      completedAt: '2026-08-02T15:26:51.000Z',
+    });
+
+    persistTaskResult(runner, taskResult);
+
+    const { tasks } = loadTasksFile(testDir);
+    expect(tasks[0]).toMatchObject({
+      status: 'failed',
+      failure: {
+        step: 'reviewers',
+        error: 'NEEDS_ADJUDICATION: finding invariant failed',
+        last_message: 'Provider failed with api_key=[REDACTED]',
+      },
+    });
+    expect(readFileSync(join(testDir, '.takt', 'tasks.yaml'), 'utf-8')).not.toContain(
+      'task-result-secret',
     );
   });
 

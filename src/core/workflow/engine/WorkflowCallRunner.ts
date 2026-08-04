@@ -4,7 +4,7 @@ import type {
   FindingContractConfig,
   WorkflowConfig,
   WorkflowCallStep,
-  WorkflowCallInvocationRecord,
+  WorkflowMaxSteps,
   WorkflowResumePointEntry,
   WorkflowState,
 } from '../../models/types.js';
@@ -18,14 +18,13 @@ import {
   buildWorkflowResumePointEntry,
   getResumePointWorkflowReference,
   getWorkflowReference,
-  normalizeWorkflowResumePointEntry,
-  workflowEntryMatchesWorkflow,
 } from '../workflow-reference.js';
-import { buildWorkflowCallNamespaceSegment } from '../workflow-call-namespace.js';
 import { MAX_WORKFLOW_CALL_DEPTH } from '../workflow-call-depth.js';
+import { buildWorkflowCallInvocationIdentity } from '../workflow-call-invocation-index.js';
 import { withWorkflowConfigErrorPath } from '../workflow-config-error.js';
 import { findWorkflowStepLocation } from '../workflow-step-location.js';
 import type {
+  RuntimeStepResolution,
   StepProviderInfo,
   StepRunResult,
   WorkflowCallChildEngine,
@@ -43,60 +42,35 @@ import {
   type WorkflowCallExecutionResult,
   type WorkflowCallIsolatedStateSync,
   type WorkflowCallSessionUpdates,
+  type PreparedWorkflowCallExecution,
 } from './WorkflowCallExecutor.js';
 import { terminalLabelOf } from '../../models/workflow-rule-condition.js';
 import { RuleDetectionExhaustedError } from '../evaluation/RuleDetectionExhaustedError.js';
 import { translateWorkflowConfigError } from '../../../shared/workflowConfigMetadata.js';
-import { incrementStepIteration } from './state-manager.js';
 import { getErrorMessage } from '../../../shared/utils/error.js';
-import { workflowCallPathFromStack, workflowOwnerPathFromStack } from '../workflow-execution-scope.js';
-import {
-  buildWorkflowCallInvocationIdentity,
-} from '../workflow-call-invocation-index.js';
-
-interface WorkflowCallAttempt {
-  readonly invocation: WorkflowCallInvocationRecord;
-  readonly persistedInvocation: boolean;
-  readonly upgradePersistedChildReference: boolean;
-  readonly callStack: WorkflowResumePointEntry[];
-  readonly lifecycle: WorkflowCallLifecycle;
-  readonly context: WorkflowCallAttemptContext;
-}
-
-export interface WorkflowCallAttemptContext {
-  readonly resumeStackPrefix: readonly WorkflowResumePointEntry[];
-  readonly ownerPath: readonly WorkflowResumePointEntry[];
-  readonly workflowCallPath: readonly WorkflowResumePointEntry[];
-}
-
-interface WorkflowCallAttemptValue<T> {
-  readonly childResult: WorkflowCallExecutionResult;
-  readonly value: T;
-}
-
-type WorkflowCallAttemptOutcome<T> =
-  | { readonly lifecycle: WorkflowCallCompleteLifecycle; readonly value: T }
-  | { readonly lifecycle: WorkflowCallCompleteLifecycle; readonly error: unknown };
 
 interface WorkflowCallRunnerDeps {
   getConfig: () => WorkflowConfig;
+  getMaxSteps: () => WorkflowMaxSteps;
+  updateMaxSteps: (maxSteps: WorkflowMaxSteps) => void;
   state: WorkflowState;
   projectCwd: string;
   getCwd: () => string;
   task: string;
   getOptions: () => WorkflowEngineOptions;
   sharedRuntime: WorkflowSharedRuntimeState;
-  progressLease: import('../workflow-call-progress-tracker.js').WorkflowCallProgressLease;
   resumeStackPrefix: WorkflowResumePointEntry[];
+  consumeWorkflowCallContinuation: (
+    step: WorkflowCallStep,
+    occurrence: number,
+    resumeStackPrefix: readonly WorkflowResumePointEntry[],
+  ) => WorkflowResumePointEntry | undefined;
   runPaths: RunPaths;
-  setActiveResumePoint: (step: WorkflowCallStep, iteration: number) => void;
-  setActiveResumeStack: (
-    stack: readonly WorkflowResumePointEntry[],
+  setActiveResumePoint: (
+    step: WorkflowCallStep,
     iteration: number,
-  ) => void;
-  adoptResumeCheckpoint: (
-    resumePoint: import('../../models/types.js').WorkflowResumePoint,
-    iteration: number,
+    occurrence: number,
+    resumeStackPrefix: readonly WorkflowResumePointEntry[],
   ) => void;
   emit: (event: string, ...args: unknown[]) => void;
   resolveWorkflowCall: WorkflowCallResolver;
@@ -113,9 +87,38 @@ interface WorkflowCallRunnerDeps {
   refreshFindingsState: () => void;
 }
 
+export interface WorkflowCallExecutionToken {
+  readonly stepName: string;
+  readonly occurrence: number;
+  readonly resumeStackPrefix: readonly WorkflowResumePointEntry[];
+  fail(error: unknown): void;
+  cancel(): void;
+}
+
+interface PendingWorkflowCallExecution {
+  readonly identity: string;
+  readonly occurrence: number;
+  readonly token: WorkflowCallExecutionToken;
+}
+
+interface WorkflowCallAttempt {
+  readonly lifecycle: WorkflowCallLifecycle;
+  readonly preparedExecution: PreparedWorkflowCallExecution;
+}
+
+interface WorkflowCallAttemptValue<T> {
+  readonly childResult: WorkflowCallExecutionResult;
+  readonly value: T;
+}
+
+type WorkflowCallAttemptOutcome<T> =
+  | { readonly lifecycle: WorkflowCallCompleteLifecycle; readonly value: T }
+  | { readonly lifecycle: WorkflowCallCompleteLifecycle; readonly error: unknown };
+
 export class WorkflowCallRunner {
   private readonly executor: WorkflowCallExecutor;
-  private readonly consumedResumeAttempts = new Set<string>();
+  private readonly preparedExecutions = new WeakMap<WorkflowCallExecutionToken, WorkflowCallAttempt>();
+  private pendingExecution: PendingWorkflowCallExecution | undefined;
 
   constructor(private readonly deps: WorkflowCallRunnerDeps) {
     this.executor = new WorkflowCallExecutor(deps);
@@ -181,6 +184,25 @@ export class WorkflowCallRunner {
       modelSpecified: step.overrides.model !== undefined,
       source: 'workflow_call',
     });
+  }
+
+  resolveRuntime(step: WorkflowCallStep): RuntimeStepResolution {
+    const parentProviderInfo = this.resolveParentWorkflowProviderContext();
+    const workflowCallProviderModel = applyProviderModelOverride(parentProviderInfo, {
+      provider: step.overrides?.provider,
+      providerSpecified: step.overrides?.provider !== undefined,
+      model: step.overrides?.model,
+      modelSpecified: step.overrides?.model !== undefined,
+      source: 'workflow_call',
+    });
+    return {
+      providerInfo: {
+        provider: workflowCallProviderModel.provider,
+        providerSource: workflowCallProviderModel.providerSource,
+        model: workflowCallProviderModel.model,
+        modelSource: workflowCallProviderModel.modelSource,
+      },
+    };
   }
 
   private buildChildPersonaProviders(
@@ -273,140 +295,95 @@ export class WorkflowCallRunner {
     );
   }
 
-  private defaultAttemptContext(): WorkflowCallAttemptContext {
-    return {
-      resumeStackPrefix: this.deps.resumeStackPrefix,
-      ownerPath: workflowOwnerPathFromStack(this.deps.resumeStackPrefix),
-      workflowCallPath: workflowCallPathFromStack(this.deps.resumeStackPrefix),
-    };
-  }
-
-  private attemptKey(
+  private resolveCallableChildWorkflow(
     step: WorkflowCallStep,
-    context: WorkflowCallAttemptContext,
-  ): string {
-    return JSON.stringify({
-      workflow: getWorkflowReference(this.deps.getConfig()),
-      step: step.name,
-      path: context.resumeStackPrefix.map((entry) => ({
-        workflow: getResumePointWorkflowReference(entry),
-        step: entry.step,
-        callInstance: entry.call_instance,
-      })),
+    resumeStackPrefix: readonly WorkflowResumePointEntry[],
+  ): WorkflowConfig {
+    const parentConfig = this.deps.getConfig();
+    const childWorkflow = this.deps.resolveWorkflowCall({
+      parentWorkflow: parentConfig,
+      step,
+      projectCwd: this.deps.projectCwd,
+      lookupCwd: this.deps.getCwd(),
     });
-  }
-
-  private resolveAttemptInstance(
-    step: WorkflowCallStep,
-    context: WorkflowCallAttemptContext,
-  ): number {
-    const key = this.attemptKey(step, context);
-    const resumeEntry = this.deps.getOptions().resumePoint
-      ?.stack[context.resumeStackPrefix.length];
-    if (
-      !this.consumedResumeAttempts.has(key)
-      && resumeEntry !== undefined
-      && resumeEntry.step === step.name
-      && resumeEntry.kind === 'workflow_call'
-      && workflowEntryMatchesWorkflow(resumeEntry, this.deps.getConfig())
-    ) {
-      const callInstance = normalizeWorkflowResumePointEntry(resumeEntry).call_instance;
-      if (callInstance === undefined) {
-        throw new Error(`workflow_call resume entry "${step.name}" requires a positive call_instance`);
-      }
-      this.consumedResumeAttempts.add(key);
-      return callInstance;
+    if (!childWorkflow) {
+      throw this.translateWorkflowCallConfigError(
+        parentConfig,
+        step,
+        new Error(`workflow_call step "${step.name}" references unknown workflow "${step.call}"`),
+        ['call'],
+      );
     }
-    return incrementStepIteration(this.deps.state, step.name);
-  }
-
-  private recordInvocation(
-    step: WorkflowCallStep,
-    callInstance: number,
-    childWorkflowName: string,
-    ownerPath: readonly WorkflowResumePointEntry[],
-  ): WorkflowCallInvocationRecord {
-    const index = this.deps.sharedRuntime.workflowCallInvocationEvidence!.index;
-    const existing = index.get(this.deps.getConfig(), step.name, ownerPath);
-    if (
-      existing?.call_instance === callInstance
-      && existing.child_workflow_ref === childWorkflowName
-    ) {
-      return existing;
+    if (childWorkflow.subworkflow?.callable !== true) {
+      throw this.translateWorkflowCallConfigError(
+        parentConfig,
+        step,
+        new Error(`workflow "${childWorkflow.name}" is not callable`),
+        ['call'],
+      );
     }
-    const invocation = {
-      call_instance: callInstance,
-      child_workflow_ref: childWorkflowName,
-    };
-    index.record(this.deps.getConfig(), step.name, ownerPath, invocation);
-    return invocation;
-  }
 
-  private startAttempt(
-    step: WorkflowCallStep,
-    context: WorkflowCallAttemptContext,
-  ): WorkflowCallAttempt {
-    const attemptIdentity = buildWorkflowCallInvocationIdentity(
-      getWorkflowReference(this.deps.getConfig()),
-      step.name,
-      context.ownerPath,
-    );
-    this.deps.progressLease.enter(
-      attemptIdentity,
-      step.name,
-    );
-    const callInstance = this.resolveAttemptInstance(step, context);
-    if ((this.deps.state.stepIterations.get(step.name) ?? 0) < callInstance) {
-      this.deps.state.stepIterations.set(step.name, callInstance);
-    }
-    const existingInvocation = this.deps.sharedRuntime.workflowCallInvocationEvidence!.index.get(
-      this.deps.getConfig(),
-      step.name,
-      context.ownerPath,
-    );
-    const persistedInvocation = existingInvocation?.call_instance === callInstance;
-    const upgradePersistedChildReference = persistedInvocation
-      && existingInvocation.child_workflow_ref === step.call;
-    const invocation = persistedInvocation
-      ? existingInvocation
-      : this.recordInvocation(
-          step,
-          callInstance,
-          step.call,
-          context.ownerPath,
-        );
-    const callStack = [
-      ...context.resumeStackPrefix,
-      buildWorkflowResumePointEntry(
-        this.deps.getConfig(),
-        step.name,
-        'workflow_call',
-        this.deps.state.stepIterations,
-        callInstance,
-      ),
+    const workflowChain = [
+      ...resumeStackPrefix
+        .filter((entry) => entry.kind === 'workflow_call')
+        .map((entry) => getResumePointWorkflowReference(entry)),
+      getWorkflowReference(parentConfig),
     ];
-    this.deps.setActiveResumeStack(callStack, this.deps.state.iteration);
+    const childWorkflowRef = getWorkflowReference(childWorkflow);
+    if (workflowChain.includes(childWorkflowRef)) {
+      throw this.translateWorkflowCallConfigError(
+        parentConfig,
+        step,
+        new Error(`Detected workflow_call cycle: ${[...workflowChain, childWorkflow.name].join(' -> ')}`),
+        ['call'],
+      );
+    }
+
+    const currentDepth = resumeStackPrefix.filter(
+      (entry) => entry.kind === 'workflow_call',
+    ).length + 1;
+    const nextDepth = currentDepth + 1;
+    if (nextDepth > MAX_WORKFLOW_CALL_DEPTH) {
+      throw this.translateWorkflowCallConfigError(
+        parentConfig,
+        step,
+        new Error(`workflow_call depth exceeds limit (${MAX_WORKFLOW_CALL_DEPTH}): ${childWorkflow.name}`),
+        ['call'],
+      );
+    }
+    return childWorkflow;
+  }
+
+  private buildAttemptLifecycle(
+    step: WorkflowCallStep,
+    occurrence: number,
+    resumeStackPrefix: readonly WorkflowResumePointEntry[],
+  ): WorkflowCallLifecycle {
+    const parentConfig = this.deps.getConfig();
+    const stackPrefixSnapshot = resumeStackPrefix.map((entry) => ({
+      ...entry,
+      ...(entry.step_iterations === undefined
+        ? {}
+        : { step_iterations: { ...entry.step_iterations } }),
+    }));
     const lifecycle: WorkflowCallLifecycle = {
-      parentWorkflow: this.deps.getConfig().name,
+      parentWorkflow: getWorkflowReference(parentConfig),
       step: step.name,
       childWorkflow: step.call,
-      callInstance,
-      stack: callStack.map((entry) => ({
-        ...entry,
-        ...(entry.step_iterations === undefined
-          ? {}
-          : { step_iterations: { ...entry.step_iterations } }),
-      })),
+      callInstance: occurrence,
+      stack: [
+        ...stackPrefixSnapshot,
+        buildWorkflowResumePointEntry(
+          parentConfig,
+          step.name,
+          'workflow_call',
+          occurrence,
+          this.deps.state.stepIterations,
+          occurrence,
+        ),
+      ],
     };
-    this.deps.emit('workflow_call:start', lifecycle);
-    return {
-      invocation,
-      persistedInvocation,
-      upgradePersistedChildReference,
-      callStack,
-      lifecycle,
-      context,
-    };
+    return lifecycle;
   }
 
   private buildTerminalLifecycle(
@@ -436,11 +413,11 @@ export class WorkflowCallRunner {
   }
 
   private buildFailedLifecycle(
-    attempt: WorkflowCallAttempt,
+    lifecycle: WorkflowCallLifecycle,
     error: unknown,
   ): WorkflowCallCompleteLifecycle {
     return {
-      ...attempt.lifecycle,
+      ...lifecycle,
       result: {
         status: 'failed',
         reason: getErrorMessage(error),
@@ -460,7 +437,7 @@ export class WorkflowCallRunner {
       };
     } catch (error) {
       return {
-        lifecycle: this.buildFailedLifecycle(attempt, error),
+        lifecycle: this.buildFailedLifecycle(attempt.lifecycle, error),
         error,
       };
     }
@@ -478,142 +455,272 @@ export class WorkflowCallRunner {
     return outcome.value;
   }
 
+  private failAttempt(lifecycle: WorkflowCallLifecycle, error: unknown): void {
+    this.deps.emit('workflow_call:complete', this.buildFailedLifecycle(lifecycle, error));
+  }
+
+  private terminatePreparedExecution(
+    token: WorkflowCallExecutionToken,
+    error: unknown,
+  ): void {
+    const attempt = this.preparedExecutions.get(token);
+    if (this.pendingExecution?.token === token) {
+      this.pendingExecution = undefined;
+    }
+    if (attempt === undefined) {
+      return;
+    }
+    this.preparedExecutions.delete(token);
+    this.failAttempt(attempt.lifecycle, error);
+  }
+
+  private prepareInvocation(
+    step: WorkflowCallStep,
+    occurrence: number,
+    resumeStackPrefix: readonly WorkflowResumePointEntry[],
+    identity: string,
+    lifecycleAtStart: WorkflowCallLifecycle,
+  ): WorkflowCallExecutionToken {
+    let childWorkflow: WorkflowConfig;
+    try {
+      childWorkflow = this.resolveCallableChildWorkflow(step, resumeStackPrefix);
+    } catch (error) {
+      this.failAttempt(lifecycleAtStart, error);
+      throw error;
+    }
+    const lifecycle = {
+      ...lifecycleAtStart,
+      childWorkflow: getWorkflowReference(childWorkflow),
+    };
+    try {
+      const preparedExecution = this.executor.prepare(
+        step,
+        childWorkflow,
+        occurrence,
+        resumeStackPrefix,
+      );
+      const token: WorkflowCallExecutionToken = Object.freeze({
+        stepName: step.name,
+        occurrence,
+        resumeStackPrefix: preparedExecution.resumeStackPrefix,
+        fail: (error: unknown) => this.terminatePreparedExecution(token, error),
+        cancel: () => this.terminatePreparedExecution(
+          token,
+          new Error(`workflow_call step "${step.name}" execution was cancelled`),
+        ),
+      });
+      this.preparedExecutions.set(token, { lifecycle, preparedExecution });
+      this.pendingExecution = { identity, occurrence, token };
+      return token;
+    } catch (error) {
+      this.failAttempt(lifecycle, error);
+      throw error;
+    }
+  }
+
+  cancelPendingInvocation(): void {
+    this.pendingExecution?.token.cancel();
+  }
+
+  activateInvocation(
+    step: WorkflowCallStep,
+    iteration: number,
+    occurrence: number,
+    resumeStackPrefix: readonly WorkflowResumePointEntry[],
+  ): WorkflowCallExecutionToken {
+    const identity = buildWorkflowCallInvocationIdentity(
+      getWorkflowReference(this.deps.getConfig()),
+      step.name,
+      resumeStackPrefix,
+    );
+    let token: WorkflowCallExecutionToken;
+    if (
+      this.pendingExecution?.identity === identity
+      && this.pendingExecution.occurrence === occurrence
+    ) {
+      token = this.pendingExecution.token;
+    } else {
+      this.cancelPendingInvocation();
+      this.executor.recordPendingInvocation(step, occurrence, resumeStackPrefix);
+      this.deps.setActiveResumePoint(step, iteration, occurrence, resumeStackPrefix);
+      const lifecycleAtStart = this.buildAttemptLifecycle(
+        step,
+        occurrence,
+        resumeStackPrefix,
+      );
+      try {
+        this.deps.emit('workflow_call:start', lifecycleAtStart);
+      } catch (error) {
+        this.failAttempt(lifecycleAtStart, error);
+        throw error;
+      }
+      token = this.prepareInvocation(
+        step,
+        occurrence,
+        resumeStackPrefix,
+        identity,
+        lifecycleAtStart,
+      );
+    }
+    try {
+      this.deps.setActiveResumePoint(step, iteration, occurrence, token.resumeStackPrefix);
+      const attempt = this.preparedExecutions.get(token);
+      if (attempt === undefined) {
+        throw new Error(`workflow_call step "${step.name}" execution was not prepared`);
+      }
+      return token;
+    } catch (error) {
+      const attempt = this.preparedExecutions.get(token);
+      this.preparedExecutions.delete(token);
+      if (this.pendingExecution?.token === token) {
+        this.pendingExecution = undefined;
+      }
+      if (attempt !== undefined) {
+        this.failAttempt(attempt.lifecycle, error);
+      }
+      throw error;
+    }
+  }
+
+  private consumePreparedExecution(
+    step: WorkflowCallStep,
+    resumeStackPrefix: readonly WorkflowResumePointEntry[],
+    token: WorkflowCallExecutionToken,
+  ): WorkflowCallAttempt {
+    const attempt = this.preparedExecutions.get(token);
+    if (attempt === undefined) {
+      throw new Error(`workflow_call step "${step.name}" execution was not prepared`);
+    }
+    try {
+      const expectedIdentity = buildWorkflowCallInvocationIdentity(
+        getWorkflowReference(this.deps.getConfig()),
+        step.name,
+        resumeStackPrefix,
+      );
+      const tokenIdentity = buildWorkflowCallInvocationIdentity(
+        getWorkflowReference(this.deps.getConfig()),
+        token.stepName,
+        token.resumeStackPrefix,
+      );
+      if (tokenIdentity !== expectedIdentity) {
+        throw new Error(`workflow_call step "${step.name}" execution token does not match the call site`);
+      }
+      if (token.occurrence !== attempt.preparedExecution.occurrence) {
+        throw new Error(`workflow_call step "${step.name}" execution token occurrence does not match its preparation`);
+      }
+    } catch (error) {
+      this.preparedExecutions.delete(token);
+      if (this.pendingExecution?.token === token) {
+        this.pendingExecution = undefined;
+      }
+      this.failAttempt(attempt.lifecycle, error);
+      throw error;
+    }
+    this.preparedExecutions.delete(token);
+    if (this.pendingExecution?.token === token) {
+      this.pendingExecution = undefined;
+    }
+    return attempt;
+  }
+
   private async executeChildWorkflow(
     step: WorkflowCallStep,
+    runtime: RuntimeStepResolution,
     syncParentState: boolean,
-    attempt: WorkflowCallAttempt,
-  ): Promise<WorkflowCallExecutionResult> {
+    preparedExecution: PreparedWorkflowCallExecution,
+  ): Promise<{
+    childResult: WorkflowCallExecutionResult;
+    providerInfo: NonNullable<StepRunResult['providerInfo']>;
+  }> {
     const parentConfig = this.deps.getConfig();
-    const childWorkflow = this.deps.resolveWorkflowCall({
-      parentWorkflow: parentConfig,
-      step,
-      projectCwd: this.deps.projectCwd,
-      lookupCwd: this.deps.getCwd(),
-    });
-    if (!childWorkflow) {
-      throw this.translateWorkflowCallConfigError(
-        parentConfig,
-        step,
-        new Error(`workflow_call step "${step.name}" references unknown workflow "${step.call}"`),
-        ['call'],
-      );
-    }
-    if (childWorkflow.subworkflow?.callable !== true) {
-      throw this.translateWorkflowCallConfigError(
-        parentConfig,
-        step,
-        new Error(`workflow "${childWorkflow.name}" is not callable`),
-        ['call'],
-      );
-    }
+    const childWorkflow = preparedExecution.childWorkflow;
 
-    const workflowChain = [
-      ...attempt.context.workflowCallPath.map((entry) => getResumePointWorkflowReference(entry)),
-      getWorkflowReference(parentConfig),
-    ];
-    const childWorkflowRef = getWorkflowReference(childWorkflow);
-    if (workflowChain.includes(childWorkflowRef)) {
+    const runtimeProviderInfo = runtime.providerInfo ?? this.resolveRuntime(step).providerInfo;
+    if (!runtimeProviderInfo) {
       throw this.translateWorkflowCallConfigError(
         parentConfig,
         step,
-        new Error(`Detected workflow_call cycle: ${[...workflowChain, childWorkflow.name].join(' -> ')}`),
-        ['call'],
+        new Error(`workflow_call step "${step.name}" could not resolve provider context`),
+        step.overrides === undefined ? ['call'] : ['overrides'],
       );
     }
-
-    const currentDepth = attempt.context.workflowCallPath.length + 1;
-    const nextDepth = currentDepth + 1;
-    if (nextDepth > MAX_WORKFLOW_CALL_DEPTH) {
-      throw this.translateWorkflowCallConfigError(
-        parentConfig,
-        step,
-        new Error(`workflow_call depth exceeds limit (${MAX_WORKFLOW_CALL_DEPTH}): ${childWorkflow.name}`),
-        ['call'],
-      );
-    }
-
-    const childProviderInfo = this.resolveChildProviderModel(step, childWorkflow);
+    const childProviderInfo = runtime.fallback
+      ? runtimeProviderInfo
+      : this.resolveChildProviderModel(step, childWorkflow);
     const parentProviderContext = this.resolveParentWorkflowProviderContext();
-    const invocationIdentity = buildWorkflowCallInvocationIdentity(
-      getWorkflowReference(parentConfig),
-      step.name,
-      attempt.context.ownerPath,
-    );
-    const persistedNamespaceMatches = attempt.persistedInvocation
-      && attempt.invocation.child_workflow_ref === childWorkflowRef;
-    if (
-      attempt.persistedInvocation
-      && !persistedNamespaceMatches
-      && !attempt.upgradePersistedChildReference
-    ) {
-      throw new Error(`Persisted workflow-call namespace does not match resolved child "${childWorkflowRef}"`);
-    }
-    const invocation = persistedNamespaceMatches
-      ? attempt.invocation
-      : this.recordInvocation(
-          step,
-          attempt.invocation.call_instance,
-          childWorkflowRef,
-          attempt.context.ownerPath,
-        );
     const childResult = await this.executor.execute({
       step,
-      childWorkflow,
-      reportNamespaceSegment: buildWorkflowCallNamespaceSegment(
-        invocationIdentity,
-        invocation.child_workflow_ref,
-        invocation.call_instance,
-      ),
-      callStack: attempt.callStack,
+      preparedExecution,
       childProviderInfo,
       parentProviderOptions: parentProviderContext.providerOptions,
       personaProviders: this.buildChildPersonaProviders(step),
       providerRouting: this.buildChildProviderRouting(step),
-    }, { syncParentState });
+    }, {
+      syncParentState,
+    });
 
-    return childResult;
+    return {
+      childResult,
+      providerInfo: runtimeProviderInfo,
+    };
   }
 
   async run(
     step: WorkflowCallStep,
+    token: WorkflowCallExecutionToken,
+    runtime?: RuntimeStepResolution,
   ): Promise<StepRunResult> {
-    const attempt = this.startAttempt(step, this.defaultAttemptContext());
+    const attempt = this.consumePreparedExecution(step, this.deps.resumeStackPrefix, token);
     return this.executeAttempt(attempt, async () => {
-      const childResult = await this.executeChildWorkflow(step, true, attempt);
-      let response: AgentResponse;
-      try {
-        response = this.buildWorkflowCallResponse(
-          step,
-          childResult,
-          childResult.abortKind,
-          childResult.abortReason,
-          childResult.returnValue,
-        );
-      } catch (error) {
-        this.deps.adoptResumeCheckpoint(childResult.resumePoint, childResult.iteration);
-        throw error;
-      }
+      const resolvedRuntime = runtime ?? this.resolveRuntime(step);
+      const { childResult, providerInfo } = await this.executeChildWorkflow(
+        step,
+        resolvedRuntime,
+        true,
+        attempt.preparedExecution,
+      );
+      const response = this.buildWorkflowCallResponse(
+        step,
+        childResult,
+        childResult.abortKind,
+        childResult.abortReason,
+        childResult.returnValue,
+      );
       this.deps.state.stepOutputs.set(step.name, response);
       this.deps.state.lastOutput = response;
       this.deps.state.previousResponseSourcePath = undefined;
       return {
         childResult,
-        value: { response, instruction: '' },
+        value: {
+          response,
+          instruction: '',
+          providerInfo,
+          ...(childResult.abortFailure === undefined
+            ? {}
+            : { workflowCallFailure: childResult.abortFailure }),
+        },
       };
     });
   }
 
   async runIsolated(
     step: WorkflowCallStep,
-    context: WorkflowCallAttemptContext = this.defaultAttemptContext(),
+    runtime: RuntimeStepResolution,
+    resumeStackPrefix: readonly WorkflowResumePointEntry[],
+    token: WorkflowCallExecutionToken,
   ): Promise<{
     result: StepRunResult;
     sessionUpdates: WorkflowCallSessionUpdates;
     stateSync: WorkflowCallIsolatedStateSync;
   }> {
-    const attempt = this.startAttempt(step, context);
+    const attempt = this.consumePreparedExecution(step, resumeStackPrefix, token);
     return this.executeAttempt(attempt, async () => {
-      const childResult = await this.executeChildWorkflow(step, false, attempt);
+      const { childResult, providerInfo } = await this.executeChildWorkflow(
+        step,
+        runtime,
+        false,
+        attempt.preparedExecution,
+      );
       let response: AgentResponse;
       try {
         response = this.buildWorkflowCallResponse(
@@ -624,17 +731,23 @@ export class WorkflowCallRunner {
           childResult.returnValue,
         );
       } catch (error) {
-        const stateSync = this.requireIsolatedStateSync(step, childResult);
         throw preserveWorkflowCallChildExecutionState(
           error,
           this.requireIsolatedSessionUpdates(step, childResult),
-          { ...stateSync, interrupted: true },
+          this.requireIsolatedStateSync(step, childResult),
         );
       }
       return {
         childResult,
         value: {
-          result: { response, instruction: '' },
+          result: {
+            response,
+            instruction: '',
+            providerInfo,
+            ...(childResult.abortFailure === undefined
+              ? {}
+              : { workflowCallFailure: childResult.abortFailure }),
+          },
           sessionUpdates: this.requireIsolatedSessionUpdates(step, childResult),
           stateSync: this.requireIsolatedStateSync(step, childResult),
         },

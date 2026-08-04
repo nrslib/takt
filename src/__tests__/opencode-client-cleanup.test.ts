@@ -250,6 +250,103 @@ describe('OpenCodeClient stream cleanup', () => {
   });
 
   it.each([
+    ['full snapshots', (sessionId: string, prompt: string) => [
+      {
+        type: 'message.part.updated',
+        properties: {
+          part: { id: 'text-1', sessionID: sessionId, type: 'text', text: prompt },
+        },
+      },
+      {
+        type: 'message.part.updated',
+        properties: {
+          part: { id: 'text-1', sessionID: sessionId, type: 'text', text: `${prompt}answer` },
+        },
+      },
+      sessionIdle(sessionId),
+    ]],
+    ['delta chunks', (sessionId: string, prompt: string) => {
+      const splitAt = Math.floor(prompt.length / 2);
+      return [
+        {
+          type: 'message.part.delta',
+          properties: {
+            sessionID: sessionId,
+            partID: 'text-1',
+            field: 'text',
+            delta: prompt.slice(0, splitAt),
+          },
+        },
+        {
+          type: 'message.part.delta',
+          properties: {
+            sessionID: sessionId,
+            partID: 'text-1',
+            field: 'text',
+            delta: prompt.slice(splitAt),
+          },
+        },
+        {
+          type: 'message.part.delta',
+          properties: { sessionID: sessionId, partID: 'text-1', field: 'text', delta: 'answer' },
+        },
+        sessionIdle(sessionId),
+      ];
+    }],
+    ['a final echo chunk with visible text', (sessionId: string, prompt: string) => {
+      const splitAt = Math.floor(prompt.length / 2);
+      return [
+        {
+          type: 'message.part.delta',
+          properties: {
+            sessionID: sessionId,
+            partID: 'text-1',
+            field: 'text',
+            delta: prompt.slice(0, splitAt),
+          },
+        },
+        {
+          type: 'message.part.delta',
+          properties: {
+            sessionID: sessionId,
+            partID: 'text-1',
+            field: 'text',
+            delta: `${prompt.slice(splitAt)}answer`,
+          },
+        },
+        sessionIdle(sessionId),
+      ];
+    }],
+  ] as const)('does not charge an oversized prompt echo received through %s', async (_kind, makeEvents) => {
+    const { OpenCodeClient } = await import('../infra/opencode/client.js');
+    const sessionId = `session-oversized-prompt-echo-${_kind.replaceAll(' ', '-')}`;
+    const prompt = 'p'.repeat(OPENCODE_STREAM_TEXT_BYTE_LIMIT + 1);
+    const stream = new MockEventStream(makeEvents(sessionId, prompt), sessionId);
+    createOpencodeMock.mockResolvedValue({
+      client: {
+        instance: { dispose: vi.fn() },
+        session: {
+          create: vi.fn().mockResolvedValue({ data: { id: sessionId } }),
+          promptAsync: vi.fn().mockResolvedValue(undefined),
+          abort: successfulSessionAbort(),
+        },
+        event: { subscribe: vi.fn().mockResolvedValue({ stream }) },
+        permission: { reply: vi.fn() },
+      },
+      server: { close: vi.fn() },
+    });
+
+    const result = await new OpenCodeClient().call('interactive', prompt, {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+    });
+
+    expect(result.status).toBe('done');
+    expect(result.content).toBe('answer');
+    expect(stream.returnSpy).toHaveBeenCalled();
+  });
+
+  it.each([
     ['delta', (sessionId: string) => [{
       type: 'message.part.delta',
       properties: {
@@ -287,6 +384,21 @@ describe('OpenCodeClient stream cleanup', () => {
           partID: 'text-2',
           field: 'text',
           delta: 'y'.repeat(Math.floor(OPENCODE_STREAM_TEXT_BYTE_LIMIT / 2) + 1),
+        },
+      },
+    ]],
+    ['visible text after prompt echo', (sessionId: string) => [
+      {
+        type: 'message.part.delta',
+        properties: { sessionID: sessionId, partID: 'text-1', field: 'text', delta: 'hello' },
+      },
+      {
+        type: 'message.part.delta',
+        properties: {
+          sessionID: sessionId,
+          partID: 'text-1',
+          field: 'text',
+          delta: 'x'.repeat(OPENCODE_STREAM_TEXT_BYTE_LIMIT + 1),
         },
       },
     ]],

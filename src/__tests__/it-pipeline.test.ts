@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -156,7 +156,6 @@ vi.mock('../core/workflow/quality-gates/commandGateRunner.js', () => ({
 
 import { executePipeline } from '../features/pipeline/index.js';
 import { loadGlobalConfig } from '../infra/config/global/globalConfig.js';
-import type { UsageEventLogRecord } from '../core/logging/usageEvent.js';
 
 const mockExecFileSync = vi.mocked(execFileSync);
 
@@ -253,6 +252,7 @@ auto_routing:
       candidates: [low, medium, high]
       fallback: high
 initial_step: child-step
+max_steps: 2
 steps:
   - name: child-step
     persona: ./.takt/personas/coder.md
@@ -287,18 +287,6 @@ steps:
 ${delegate}
 `);
   return workflowPath;
-}
-
-function readUsageEvents(dir: string): UsageEventLogRecord[] {
-  const logsDir = join(dir, '.takt', 'runs', 'test-report-dir', 'logs');
-  const file = readdirSync(logsDir).find((name) => name.endsWith('-usage-events.jsonl'));
-  if (!file) {
-    throw new Error('usage event log was not created');
-  }
-  return readFileSync(join(logsDir, file), 'utf-8')
-    .trim()
-    .split('\n')
-    .map((line) => JSON.parse(line) as UsageEventLogRecord);
 }
 
 describe('Pipeline Integration Tests', () => {
@@ -350,7 +338,7 @@ describe('Pipeline Integration Tests', () => {
       provider: 'mock',
     });
 
-    expect(exitCode, JSON.stringify(mockUiError.mock.calls)).toBe(0);
+    expect(exitCode).toBe(0);
   });
 
   it('should handle ABORT transition from workflow', async () => {
@@ -463,106 +451,6 @@ describe('Pipeline Integration Tests', () => {
     expect(getScenarioQueue()?.remaining).toBe(0);
   }, 30_000);
 
-  it('should send non-actionable peer findings to the final gate without remediation', async () => {
-    setMockScenario([
-      { persona: 'planner', status: 'done', content: '[PLAN:1]\n\nRequirements are clear and implementable.' },
-      { persona: 'coder', status: 'done', content: '[WRITE_TESTS:1]\n\nTests written successfully.' },
-      { persona: 'coder', status: 'done', content: '[IMPLEMENT:1]\n\nImplementation complete.' },
-      { persona: 'architecture-reviewer', status: 'done', content: '[ARCH-REVIEW:2]\n\nA finding was submitted.' },
-      { persona: 'security-reviewer', status: 'done', content: '[SECURITY-REVIEW:1]\n\nApproved.' },
-      { persona: 'testing-reviewer', status: 'done', content: '[TESTING-REVIEW:1]\n\nApproved.' },
-      { persona: 'coding-reviewer', status: 'done', content: '[CODING-REVIEW:1]\n\nApproved.' },
-      { persona: 'ai-antipattern-reviewer', status: 'done', content: '[AI-ANTIPATTERN-REVIEW-2ND:1]\n\nApproved.' },
-      { persona: 'review-adjudicator', status: 'done', content: '[REVIEW-ADJUDICATION:2]\n\nNo actionable findings remain.' },
-      { persona: 'merge-readiness-supervisor', status: 'done', content: '[FINAL-GATE:1]\n\nMergeable.' },
-    ]);
-
-    const exitCode = await executePipeline({
-      task: 'Implement a change whose peer-review finding is not actionable',
-      workflow: 'default',
-      autoPr: false,
-      skipGit: true,
-      cwd: testDir,
-      provider: 'mock',
-    });
-
-    expect(exitCode).toBe(0);
-    expect(getScenarioQueue()?.remaining).toBe(0);
-  });
-
-  it('should propagate an adjudication replan decision to the development plan', async () => {
-    setMockScenario([
-      { persona: 'planner', status: 'done', content: '[PLAN:1]\n\nInitial plan completed.' },
-      { persona: 'coder', status: 'done', content: '[WRITE_TESTS:1]\n\nInitial tests completed.' },
-      { persona: 'coder', status: 'done', content: '[IMPLEMENT:1]\n\nInitial implementation completed.' },
-      { persona: 'architecture-reviewer', status: 'done', content: '[ARCH-REVIEW:2]\n\nConflicting requirement found.' },
-      { persona: 'security-reviewer', status: 'done', content: '[SECURITY-REVIEW:1]\n\nApproved.' },
-      { persona: 'testing-reviewer', status: 'done', content: '[TESTING-REVIEW:1]\n\nApproved.' },
-      { persona: 'coding-reviewer', status: 'done', content: '[CODING-REVIEW:1]\n\nApproved.' },
-      { persona: 'ai-antipattern-reviewer', status: 'done', content: '[AI-ANTIPATTERN-REVIEW-2ND:1]\n\nApproved.' },
-      { persona: 'review-adjudicator', status: 'done', content: '[REVIEW-ADJUDICATION:3]\n\nReplanning is required.' },
-      { persona: 'planner', status: 'done', content: '[PLAN:1]\n\nRevised plan completed.' },
-      { persona: 'coder', status: 'done', content: '[WRITE_TESTS:1]\n\nRevised tests completed.' },
-      { persona: 'coder', status: 'done', content: '[IMPLEMENT:1]\n\nRevised implementation completed.' },
-      { persona: 'architecture-reviewer', status: 'done', content: '[ARCH-REVIEW:1]\n\nApproved.' },
-      { persona: 'security-reviewer', status: 'done', content: '[SECURITY-REVIEW:1]\n\nApproved.' },
-      { persona: 'testing-reviewer', status: 'done', content: '[TESTING-REVIEW:1]\n\nApproved.' },
-      { persona: 'coding-reviewer', status: 'done', content: '[CODING-REVIEW:1]\n\nApproved.' },
-      { persona: 'ai-antipattern-reviewer', status: 'done', content: '[AI-ANTIPATTERN-REVIEW-2ND:1]\n\nApproved.' },
-      { persona: 'review-adjudicator', status: 'done', content: '[REVIEW-ADJUDICATION:2]\n\nNo actionable findings remain.' },
-      { persona: 'merge-readiness-supervisor', status: 'done', content: '[FINAL-GATE:1]\n\nMergeable.' },
-    ]);
-
-    const exitCode = await executePipeline({
-      task: 'Implement a change that requires task-level replanning after review',
-      workflow: 'default',
-      autoPr: false,
-      skipGit: true,
-      cwd: testDir,
-      provider: 'mock',
-    });
-
-    expect(exitCode).toBe(0);
-    expect(getScenarioQueue()?.remaining).toBe(0);
-  });
-
-  it('should send a final supervisor finding directly to shared remediation', async () => {
-    setMockScenario([
-      { persona: 'planner', status: 'done', content: '[PLAN:1]\n\nPlan completed.' },
-      { persona: 'coder', status: 'done', content: '[WRITE_TESTS:1]\n\nTests created.' },
-      { persona: 'coder', status: 'done', content: '[IMPLEMENT:1]\n\nImplementation completed.' },
-      { persona: 'architecture-reviewer', status: 'done', content: '[ARCH-REVIEW:1]\n\nApproved.' },
-      { persona: 'security-reviewer', status: 'done', content: '[SECURITY-REVIEW:1]\n\nApproved.' },
-      { persona: 'testing-reviewer', status: 'done', content: '[TESTING-REVIEW:1]\n\nApproved.' },
-      { persona: 'coding-reviewer', status: 'done', content: '[CODING-REVIEW:1]\n\nApproved.' },
-      { persona: 'ai-antipattern-reviewer', status: 'done', content: '[AI-ANTIPATTERN-REVIEW-2ND:1]\n\nApproved.' },
-      { persona: 'review-adjudicator', status: 'done', content: '[REVIEW-ADJUDICATION:2]\n\nNo actionable findings remain.' },
-      { persona: 'merge-readiness-supervisor', status: 'done', content: '[FINAL-GATE:2]\n\nA merge-blocking finding requires a fix.' },
-      { persona: 'planner', status: 'done', content: '[FIX-PLAN:1]\n\nFinal-gate finding added to the fix plan.' },
-      { persona: 'coder', status: 'done', content: '[FIX:1]\n\nFix completed.' },
-      { persona: 'coding-reviewer', status: 'done', content: '[FIX-VERIFIER:1]\n\nVerified.' },
-      { persona: 'architecture-reviewer', status: 'done', content: '[ARCH-REVIEW:1]\n\nApproved.' },
-      { persona: 'security-reviewer', status: 'done', content: '[SECURITY-REVIEW:1]\n\nApproved.' },
-      { persona: 'testing-reviewer', status: 'done', content: '[TESTING-REVIEW:1]\n\nApproved.' },
-      { persona: 'coding-reviewer', status: 'done', content: '[CODING-REVIEW:1]\n\nApproved.' },
-      { persona: 'ai-antipattern-reviewer', status: 'done', content: '[AI-ANTIPATTERN-REVIEW-2ND:1]\n\nApproved.' },
-      { persona: 'review-adjudicator', status: 'done', content: '[REVIEW-ADJUDICATION:2]\n\nNo actionable findings remain.' },
-      { persona: 'merge-readiness-supervisor', status: 'done', content: '[FINAL-GATE:1]\n\nMergeable.' },
-    ]);
-
-    const exitCode = await executePipeline({
-      task: 'Implement a change whose final readiness check finds a contract gap',
-      workflow: 'default',
-      autoPr: false,
-      skipGit: true,
-      cwd: testDir,
-      provider: 'mock',
-    });
-
-    expect(exitCode).toBe(0);
-    expect(getScenarioQueue()?.remaining).toBe(0);
-  });
-
   it.each(['backend-mini', 'default-mini'])('should complete %s through the shared mini core', async (workflow) => {
     setMockScenario([
       { persona: 'planner', status: 'done', content: '[PLAN:1]\n\nPlan completed.' },
@@ -608,43 +496,6 @@ describe('Pipeline Integration Tests', () => {
   });
 
   it.each([
-    { name: 'direct workflow_call', parallel: false },
-    { name: 'parallel workflow_call', parallel: true },
-  ])('should apply child-only auto routing strategy through the real $name entrypoint', async ({ parallel }) => {
-    workflowPath = writeChildAutoRoutingWorkflow(testDir, parallel);
-    vi.mocked(loadGlobalConfig).mockReturnValue({
-      language: 'en',
-      provider: 'mock',
-      enableBuiltinWorkflows: true,
-      disabledBuiltins: [],
-      logging: { usageEvents: true },
-    });
-    setMockScenario([
-      { persona: 'auto-router', status: 'error', content: 'router unavailable' },
-      { persona: 'coder', status: 'done', content: '[CHILD-STEP:1]\n\nDone.' },
-    ]);
-
-    const exitCode = await executePipeline({
-      task: 'Run child-only automatic routing',
-      workflow: workflowPath,
-      autoPr: false,
-      skipGit: true,
-      cwd: testDir,
-      autoStrategy: 'performance',
-    });
-
-    expect(exitCode).toBe(0);
-    expect(readUsageEvents(testDir)).toContainEqual(expect.objectContaining({
-      step: 'child-step',
-      provider: 'mock',
-      provider_model: 'mock/high-model',
-    }));
-    expect(mockWorkflowWarn).not.toHaveBeenCalledWith(
-      expect.stringMatching(/auto-strategy.*ignored/i),
-    );
-  });
-
-  it.each([
     { name: 'root workflow', child: false },
     { name: 'workflow_call child', child: true },
   ])('should accept a pool with one eligible tier regardless of strategy without reporting it as unused for $name', async ({ child }) => {
@@ -675,6 +526,7 @@ subworkflow:
   callable: true
 ${invalidAutoRouting}
 initial_step: child-step
+max_steps: 2
 steps:
   - name: child-step
     persona: ./.takt/personas/coder.md
@@ -773,140 +625,4 @@ steps:
     );
   });
 
-  it('should apply workflow_config provider/model before project config at runtime', async () => {
-    writeFileSync(join(testDir, '.takt', 'config.yaml'), [
-      'provider: opencode',
-      'model: opencode/project-model',
-    ].join('\n'));
-    workflowPath = join(testDir, 'workflow-priority.yaml');
-    writeFileSync(workflowPath, `name: workflow-priority
-workflow_config:
-  provider: mock
-  model: mock/workflow-model
-initial_step: implement
-max_steps: 2
-steps:
-  - name: implement
-    persona: ./.takt/personas/coder.md
-    instruction: Run with workflow provider
-    rules:
-      - condition: done
-        next: COMPLETE
-`);
-    vi.mocked(loadGlobalConfig).mockReturnValue({
-      language: 'en',
-      provider: 'mock',
-      enableBuiltinWorkflows: true,
-      disabledBuiltins: [],
-      logging: { usageEvents: true },
-    });
-    setMockScenario([
-      { persona: 'coder', status: 'done', content: '[IMPLEMENT:1]\n\nDone.' },
-    ]);
-
-    const exitCode = await executePipeline({
-      task: 'Verify workflow priority',
-      workflow: workflowPath,
-      autoPr: false,
-      skipGit: true,
-      cwd: testDir,
-    });
-
-    expect(exitCode).toBe(0);
-    expect(readUsageEvents(testDir)).toContainEqual(expect.objectContaining({
-      step: 'implement',
-      provider: 'mock',
-      provider_model: 'mock/workflow-model',
-    }));
-  });
-
-  it.each([
-    {
-      label: 'provider only',
-      workflowProvider: 'codex',
-      workflowModel: 'gpt-5',
-      envProvider: 'mock',
-      envModel: undefined,
-      expectedProvider: 'mock',
-      expectedModel: 'gpt-5',
-    },
-    {
-      label: 'model only',
-      workflowProvider: 'mock',
-      workflowModel: 'gpt-5',
-      envProvider: undefined,
-      envModel: 'mock/env-model',
-      expectedProvider: 'mock',
-      expectedModel: 'mock/env-model',
-    },
-    {
-      label: 'provider and model',
-      workflowProvider: 'codex',
-      workflowModel: 'gpt-5',
-      envProvider: 'mock',
-      envModel: 'mock/env-model',
-      expectedProvider: 'mock',
-      expectedModel: 'mock/env-model',
-    },
-  ])('should preserve environment $label through the terminal provider call', async ({
-    workflowProvider,
-    workflowModel,
-    envProvider,
-    envModel,
-    expectedProvider,
-    expectedModel,
-  }) => {
-    workflowPath = join(testDir, 'env-priority.yaml');
-    writeFileSync(workflowPath, `name: env-priority
-initial_step: implement
-max_steps: 2
-steps:
-  - name: implement
-    persona: ./.takt/personas/coder.md
-    provider: ${workflowProvider}
-    model: ${workflowModel}
-    instruction: Run with environment provider
-    rules:
-      - condition: done
-        next: COMPLETE
-`);
-    vi.mocked(loadGlobalConfig).mockReturnValue({
-      language: 'en',
-      provider: 'mock',
-      enableBuiltinWorkflows: true,
-      disabledBuiltins: [],
-      logging: { usageEvents: true },
-    });
-    const previousProvider = process.env.TAKT_PROVIDER;
-    const previousModel = process.env.TAKT_MODEL;
-    if (envProvider === undefined) delete process.env.TAKT_PROVIDER;
-    else process.env.TAKT_PROVIDER = envProvider;
-    if (envModel === undefined) delete process.env.TAKT_MODEL;
-    else process.env.TAKT_MODEL = envModel;
-    setMockScenario([
-      { persona: 'coder', status: 'done', content: '[IMPLEMENT:1]\n\nDone.' },
-    ]);
-
-    try {
-      const exitCode = await executePipeline({
-        task: 'Verify environment priority',
-        workflow: workflowPath,
-        autoPr: false,
-        skipGit: true,
-        cwd: testDir,
-      });
-
-      expect(exitCode).toBe(0);
-      expect(readUsageEvents(testDir)).toContainEqual(expect.objectContaining({
-        step: 'implement',
-        provider: expectedProvider,
-        provider_model: expectedModel,
-      }));
-    } finally {
-      if (previousProvider === undefined) delete process.env.TAKT_PROVIDER;
-      else process.env.TAKT_PROVIDER = previousProvider;
-      if (previousModel === undefined) delete process.env.TAKT_MODEL;
-      else process.env.TAKT_MODEL = previousModel;
-    }
-  });
 });

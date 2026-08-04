@@ -4,7 +4,8 @@ import type {
   FindingContractConfig,
   WorkflowConfig,
   WorkflowCallStep,
-  WorkflowResumePoint,
+  WorkflowCallInvocationRecord,
+  WorkflowMaxSteps,
   WorkflowResumePointEntry,
   WorkflowState,
 } from '../../models/types.js';
@@ -20,8 +21,16 @@ import { resolveEffectiveAutoRouting } from '../auto-routing/effective-auto-rout
 import type { WorkRequirementEstimator } from '../auto-routing/contracts.js';
 import { RoutingRuntime } from '../auto-routing/runtime.js';
 import {
+  buildWorkflowResumePointEntry,
+  getWorkflowReference,
   workflowEntryMatchesWorkflow,
 } from '../workflow-reference.js';
+import { buildWorkflowCallSiteIdentity } from '../workflow-call-site-identity.js';
+import {
+  buildWorkflowCallNamespaceSegment,
+  parseWorkflowCallNamespaceSegment,
+} from '../workflow-call-namespace.js';
+import { buildWorkflowStackStepIterationIdentity } from '../step-iteration-identity.js';
 import type {
   StepProviderInfo,
   AutoRoutingEstimatorSource,
@@ -29,7 +38,9 @@ import type {
   WorkflowCallChildEngine,
   WorkflowCallResolver,
   WorkflowEngineOptions,
+  WorkflowEvents,
   WorkflowSharedRuntimeState,
+  WorkflowStepFailureSummary,
 } from '../types.js';
 import { validateFindingContractManagerProviderModel } from './WorkflowValidator.js';
 import { getProviderValidationErrorSource } from '../provider-validation-error.js';
@@ -37,8 +48,8 @@ import { withWorkflowConfigErrorPath } from '../workflow-config-error.js';
 import { findWorkflowStepLocation } from '../workflow-step-location.js';
 import { translateWorkflowConfigError } from '../../../shared/workflowConfigMetadata.js';
 import { restoreWorkflowCallInvocationEvidence } from '../workflow-call-invocation-index.js';
-import { isWorkflowExecutionScope } from '../workflow-execution-scope.js';
-import { cloneWorkflowResumePoint } from '../resume-point-codec.js';
+
+const PENDING_WORKFLOW_CALL_SITE_DIGEST = '0'.repeat(64);
 
 export interface WorkflowCallSessionUpdate {
   expectedSessionId: string | undefined;
@@ -48,8 +59,7 @@ export interface WorkflowCallSessionUpdate {
 export type WorkflowCallSessionUpdates = ReadonlyMap<string, WorkflowCallSessionUpdate>;
 export interface WorkflowCallIsolatedStateSync {
   iteration: number;
-  resumePoint: WorkflowResumePoint;
-  interrupted: boolean;
+  maxSteps?: WorkflowMaxSteps;
 }
 
 class WorkflowCallChildExecutionError extends Error {
@@ -185,11 +195,18 @@ export function applyWorkflowCallOverridesToProviderRouting(
 interface WorkflowCallExecutorDeps {
   getConfig: () => WorkflowConfig;
   getOptions: () => WorkflowEngineOptions;
+  getMaxSteps: () => WorkflowMaxSteps;
+  updateMaxSteps: (maxSteps: WorkflowMaxSteps) => void;
   getCwd: () => string;
   projectCwd: string;
   task: string;
   sharedRuntime: WorkflowSharedRuntimeState;
   resumeStackPrefix: WorkflowResumePointEntry[];
+  consumeWorkflowCallContinuation: (
+    step: WorkflowCallStep,
+    occurrence: number,
+    resumeStackPrefix: readonly WorkflowResumePointEntry[],
+  ) => WorkflowResumePointEntry | undefined;
   runPaths: RunPaths;
   resolveWorkflowCall: WorkflowCallResolver;
   createEngine: (
@@ -205,12 +222,12 @@ interface WorkflowCallExecutorDeps {
     stepIterations: Map<string, number>;
     userInputs: string[];
   };
-  setActiveResumePoint: (step: WorkflowCallStep, iteration: number) => void;
-  setActiveResumeStack: (
-    stack: readonly WorkflowResumePointEntry[],
+  setActiveResumePoint: (
+    step: WorkflowCallStep,
     iteration: number,
+    occurrence: number,
+    resumeStackPrefix: readonly WorkflowResumePointEntry[],
   ) => void;
-  adoptResumeCheckpoint: (resumePoint: WorkflowResumePoint, iteration: number) => void;
   /** 自前 or 継承済みの、この engine で有効な Finding Contract。子へ引き継ぐ。 */
   findingContract?: FindingContractConfig;
   findingLedgerStore?: FindingLedgerStore;
@@ -218,11 +235,18 @@ interface WorkflowCallExecutorDeps {
   refreshFindingsState: () => void;
 }
 
+export interface PreparedWorkflowCallExecution {
+  readonly parentWorkflowReference: string;
+  readonly stepName: string;
+  readonly childWorkflow: WorkflowConfig;
+  readonly occurrence: number;
+  readonly resumeStackPrefix: readonly WorkflowResumePointEntry[];
+  readonly invocation: Readonly<WorkflowCallInvocationRecord>;
+}
+
 interface ExecuteWorkflowCallRequest {
   step: WorkflowCallStep;
-  childWorkflow: WorkflowConfig;
-  reportNamespaceSegment: string;
-  callStack: WorkflowResumePointEntry[];
+  preparedExecution: PreparedWorkflowCallExecution;
   childProviderInfo: StepProviderInfo;
   parentProviderOptions: WorkflowEngineOptions['providerOptions'];
   personaProviders: WorkflowEngineOptions['personaProviders'];
@@ -236,10 +260,10 @@ interface ExecuteWorkflowCallOptions {
 export type WorkflowCallExecutionResult = WorkflowState & {
   abortKind?: WorkflowAbortKind;
   abortReason?: string;
+  abortFailure?: WorkflowStepFailureSummary;
   returnValue?: string;
   sessionUpdates?: WorkflowCallSessionUpdates;
   isolatedStateSync?: WorkflowCallIsolatedStateSync;
-  resumePoint: WorkflowResumePoint;
 };
 
 export class WorkflowCallExecutor {
@@ -294,34 +318,63 @@ export class WorkflowCallExecutor {
     return created;
   }
 
-  private buildFindingCallNamespace(
-    reportNamespaceSegment: string,
-  ): string {
-    const parentNamespace = this.deps.getOptions().findingCallNamespace;
-    return parentNamespace
-      ? `${parentNamespace}/${reportNamespaceSegment}`
-      : reportNamespaceSegment;
-  }
-
-  private buildWorkflowCallNamespace(reportNamespaceSegment: string): string[] {
+  /**
+   * raw finding id 用の呼び出し名前空間を組み立てる。子エンジンは
+   * reportDirName（= runId）を親からそのまま継承するため、親の parallel から
+   * 同じ子ワークフローを複数同時に呼ぶと2子の runId が一致し、findings
+   * manager-runner.ts の normalizeRawFindingId が生成する raw finding id が
+   * 完全に衝突する（実測: parentStepName / stepIteration / subStepName /
+   * rawFindingId のいずれも子ワークフロー内では同一になるため）。
+   * 呼び出し元ステップ名（parallel の子ステップ間で一意）を積み上げることで
+   * 衝突を避ける。親が既に名前空間を持つ場合（さらに深い入れ子）は連結する。
+   * トップレベルの走行では親の名前空間が undefined のため、この関数は常に
+   * 呼ばれるが、その戻り値は options.findingCallNamespace としてのみ子へ渡り、
+   * 親自身が undefined のままなら raw finding id の形は変わらない。
+   *
+   * ステップ名だけでは、同じ workflow_call ステップがループで再実行された
+   * ケースを区別できない。resume continuation では stepIterations を復元するが、
+   * 同一 run 内の新規 workflow_call は子エンジンを新規生成するため、子の最初の
+   * レビューは stepIteration=1 になる。ステップ名・parentStepName・stepIteration・
+   * subStepName が全て一致すれば、ローカルの raw finding id が同じ場合に
+   * 正規化後の id も完全に一致し、後勝ちで前回の raw finding が台帳から
+   * 消える。buildWorkflowCallNamespace() と同じ workflow_call step の
+   * occurrence をステップ名に組み合わせ、ループの各回を区別する。resume
+   * continuation では source frame の occurrence を再利用する。
+   */
+  private buildWorkflowCallNamespace(record: WorkflowCallInvocationRecord): string[] {
     const baseNamespace = this.deps.getOptions().runPathNamespace ?? [];
     return [
       ...baseNamespace,
       'subworkflows',
-      reportNamespaceSegment,
+      record.report_namespace_segment,
     ];
+  }
+
+  private buildCurrentWorkflowCallFrame(
+    step: WorkflowCallStep,
+    occurrence: number,
+    callInstance: number,
+  ): WorkflowResumePointEntry {
+    return buildWorkflowResumePointEntry(
+      this.deps.getConfig(),
+      step.name,
+      'workflow_call',
+      occurrence,
+      this.deps.state.stepIterations,
+      callInstance,
+    );
   }
 
   private resolveChildResumeStartStep(
     childWorkflow: WorkflowConfig,
     resumePoint: WorkflowEngineOptions['resumePoint'],
-    callStackDepth: number,
+    resumeStackPrefix: readonly WorkflowResumePointEntry[],
   ): string | undefined {
     if (!resumePoint) {
       return undefined;
     }
 
-    const nextEntry = resumePoint.stack[callStackDepth];
+    const nextEntry = resumePoint.stack[resumeStackPrefix.length + 1];
     if (!nextEntry || !workflowEntryMatchesWorkflow(nextEntry, childWorkflow)) {
       return undefined;
     }
@@ -330,15 +383,31 @@ export class WorkflowCallExecutor {
     return targetStep?.name;
   }
 
-  private resolveChildResumePoint(
+  private resolveChildContinuation(
+    step: WorkflowCallStep,
     childWorkflow: WorkflowConfig,
-    callStack: readonly WorkflowResumePointEntry[],
-  ): WorkflowEngineOptions['resumePoint'] {
+    occurrence: number,
+    resumeStackPrefix: readonly WorkflowResumePointEntry[],
+  ): {
+    readonly resumePoint?: NonNullable<WorkflowEngineOptions['resumePoint']>;
+    readonly frame: WorkflowResumePointEntry;
+  } | undefined {
     const options = this.deps.getOptions();
-    return trimResumePointStackForWorkflow({
+    const frame = this.deps.consumeWorkflowCallContinuation(
+      step,
+      occurrence,
+      resumeStackPrefix,
+    );
+    if (frame === undefined) {
+      return undefined;
+    }
+    const resumePoint = trimResumePointStackForWorkflow({
       workflow: childWorkflow,
       resumePoint: options.resumePoint,
-      resumeStackPrefix: [...callStack],
+      resumeStackPrefix: [
+        ...resumeStackPrefix,
+        frame,
+      ],
       resolveWorkflowCall: (parentWorkflow, nestedStep) => this.deps.resolveWorkflowCall({
         parentWorkflow,
         step: nestedStep,
@@ -346,21 +415,119 @@ export class WorkflowCallExecutor {
         lookupCwd: this.deps.getCwd(),
       }),
     });
+    return {
+      frame,
+      ...(resumePoint !== undefined ? { resumePoint } : {}),
+    };
   }
 
-  private relayChildEvents(
-    childEngine: WorkflowCallChildEngine,
-    resumeStepName: string,
-    syncParentState: boolean,
+  recordPendingInvocation(
+    step: WorkflowCallStep,
+    occurrence: number,
+    resumeStackPrefix: readonly WorkflowResumePointEntry[],
   ): void {
+    const parentConfig = this.deps.getConfig();
+    const index = this.deps.sharedRuntime.workflowCallInvocationEvidence!.index;
+    const existing = index.get(parentConfig, step.name, resumeStackPrefix);
+    if (existing?.call_instance === occurrence) {
+      return;
+    }
+    index.record(parentConfig, step.name, resumeStackPrefix, {
+      call_instance: occurrence,
+      report_namespace_segment: `${buildWorkflowCallNamespaceSegment(
+        step.name,
+        step.call,
+        occurrence,
+      )}--site-${PENDING_WORKFLOW_CALL_SITE_DIGEST}`,
+    });
+  }
+
+  prepare(
+    step: WorkflowCallStep,
+    childWorkflow: WorkflowConfig,
+    occurrence: number,
+    resumeStackPrefix: readonly WorkflowResumePointEntry[],
+  ): PreparedWorkflowCallExecution {
+    const parentConfig = this.deps.getConfig();
+    const resumeStackSnapshot = Object.freeze(resumeStackPrefix.map((entry) => Object.freeze({
+      ...entry,
+      ...(entry.step_iterations === undefined
+        ? {}
+        : { step_iterations: Object.freeze({ ...entry.step_iterations }) }),
+    })));
+    const expectedInvocation = Object.freeze({
+      call_instance: occurrence,
+      report_namespace_segment: buildWorkflowCallSiteIdentity({
+        stack: [
+          ...resumeStackSnapshot,
+          buildWorkflowResumePointEntry(
+            parentConfig,
+            step.name,
+            'workflow_call',
+            occurrence,
+            this.deps.state.stepIterations,
+            occurrence,
+          ),
+        ],
+        childWorkflow,
+      }).runPathSegment,
+    });
+    const existing = this.deps.sharedRuntime.workflowCallInvocationEvidence!.index.get(
+      parentConfig,
+      step.name,
+      resumeStackSnapshot,
+    );
+    if (existing?.call_instance === occurrence) {
+      if (existing.report_namespace_segment !== expectedInvocation.report_namespace_segment) {
+        const existingNamespace = parseWorkflowCallNamespaceSegment(
+          existing.report_namespace_segment,
+        );
+        if (
+          existingNamespace?.siteDigest === PENDING_WORKFLOW_CALL_SITE_DIGEST
+          && existingNamespace?.workflowName === step.call
+        ) {
+          this.deps.sharedRuntime.workflowCallInvocationEvidence!.index.replace(
+            parentConfig,
+            step.name,
+            resumeStackSnapshot,
+            expectedInvocation,
+          );
+        } else {
+          throw new Error(`workflow_call step "${step.name}" invocation record does not match the canonical call site`);
+        }
+      }
+    } else {
+      this.deps.sharedRuntime.workflowCallInvocationEvidence!.index.record(
+        parentConfig,
+        step.name,
+        resumeStackSnapshot,
+        expectedInvocation,
+      );
+    }
+    return Object.freeze({
+      parentWorkflowReference: getWorkflowReference(parentConfig),
+      stepName: step.name,
+      childWorkflow,
+      occurrence,
+      resumeStackPrefix: resumeStackSnapshot,
+      invocation: expectedInvocation,
+    });
+  }
+
+  private relayChildEvents(childEngine: WorkflowCallChildEngine, resumeStepName: string): void {
     childEngine.on('step:start', (...args) => {
-      const [step, iteration, instruction, providerInfo, workflowName, , stepIteration, maxSteps, scope] = args;
-      if (typeof iteration !== 'number' || !isWorkflowExecutionScope(scope)) {
-        throw new Error('Child step:start requires explicit iteration and execution scope');
-      }
-      if (syncParentState) {
-        this.deps.setActiveResumeStack(scope.stack, iteration);
-      }
+      const [
+        step,
+        iteration,
+        instruction,
+        providerInfo,
+        workflowName,
+        ,
+        stepIteration,
+        workflowStack,
+        findingScopeIdentity,
+        findingIds,
+      ] = args as Parameters<WorkflowEvents['step:start']>;
       this.deps.emit(
         'step:start',
         step,
@@ -370,13 +537,27 @@ export class WorkflowCallExecutor {
         workflowName,
         resumeStepName,
         stepIteration,
-        maxSteps,
-        scope,
+        workflowStack,
+        findingScopeIdentity,
+        findingIds,
       );
     });
     childEngine.on('step:complete', (...args) => {
-      const [step, response, instruction, , scope] = args;
-      this.deps.emit('step:complete', step, response, instruction, resumeStepName, scope);
+      const [
+        step,
+        response,
+        instruction,
+        ,
+        workflowStack,
+      ] = args as Parameters<WorkflowEvents['step:complete']>;
+      this.deps.emit(
+        'step:complete',
+        step,
+        response,
+        instruction,
+        resumeStepName,
+        workflowStack,
+      );
     });
     for (const eventName of [
       'workflow_call:start',
@@ -399,14 +580,12 @@ export class WorkflowCallExecutor {
   }
 
   private syncStateFromChild(
-    step: WorkflowCallStep,
     childState: WorkflowState,
-    interrupted: boolean,
-    childResumePoint: WorkflowResumePoint,
   ): void {
-    if (childState.iteration < this.deps.state.iteration) {
-      throw new Error(`workflow_call step "${step.name}" returned an earlier iteration`);
+    if (this.deps.sharedRuntime.maxSteps !== undefined) {
+      this.deps.updateMaxSteps(this.deps.sharedRuntime.maxSteps);
     }
+    this.deps.state.iteration = childState.iteration;
     // direct 子は親の session 全体を initialSessions として継承する。したがって
     // 子の最終 map は、この workflow_call 後の親 session の正しい状態である。
     // 子実行中に onSessionUpdate が外部永続化を済ませているため、ここでは親 state
@@ -414,11 +593,6 @@ export class WorkflowCallExecutor {
     this.deps.state.personaSessions.clear();
     for (const [sessionKey, sessionId] of childState.personaSessions) {
       this.deps.state.personaSessions.set(sessionKey, sessionId);
-    }
-    if (interrupted) {
-      this.deps.adoptResumeCheckpoint(childResumePoint, childState.iteration);
-    } else {
-      this.deps.setActiveResumePoint(step, childState.iteration);
     }
     // 子が Finding Contract の台帳（親と共有）へ書き込んでいても、iteration /
     // session の同期だけでは親の state.findings は古いまま。親の
@@ -438,39 +612,64 @@ export class WorkflowCallExecutor {
     delete inheritedOptions.maxStepsOverride;
     delete inheritedOptions.restartPoint;
     const parentConfig = this.deps.getConfig();
-    const resolvedChildResumePoint = this.resolveChildResumePoint(
-      request.childWorkflow,
-      request.callStack,
+    const prepared = request.preparedExecution;
+    if (
+      prepared.parentWorkflowReference !== getWorkflowReference(parentConfig)
+      || prepared.stepName !== request.step.name
+    ) {
+      throw new Error(`workflow_call step "${request.step.name}" prepared execution does not match the call site`);
+    }
+    const childWorkflow = prepared.childWorkflow;
+    const occurrence = prepared.occurrence;
+    const resumeStackPrefix = prepared.resumeStackPrefix;
+    const stepIterationIdentity = buildWorkflowStackStepIterationIdentity(
+      parentConfig,
+      request.step.name,
+      resumeStackPrefix,
     );
-    const childResumePoint = resolvedChildResumePoint === undefined
-      ? undefined
-      : cloneWorkflowResumePoint({
-          ...resolvedChildResumePoint,
-          iteration: this.deps.state.iteration,
-        });
+    const activeOccurrence = this.deps.state.stepIterations.get(stepIterationIdentity);
+    if (activeOccurrence === undefined) {
+      throw new Error(`workflow_call step "${request.step.name}" has no occurrence`);
+    }
+    if (activeOccurrence !== occurrence) {
+      throw new Error(`workflow_call step "${request.step.name}" prepared occurrence does not match execution state`);
+    }
+    const invocation = prepared.invocation;
+    const continuation = this.resolveChildContinuation(
+      request.step,
+      childWorkflow,
+      occurrence,
+      resumeStackPrefix,
+    );
+    const childResumePoint = continuation?.resumePoint;
+    const workflowCallFrame = continuation?.frame
+      ?? this.buildCurrentWorkflowCallFrame(
+        request.step,
+        occurrence,
+        invocation.call_instance,
+      );
+    if (workflowCallFrame.occurrence !== occurrence) {
+      throw new Error(
+        `workflow_call step "${request.step.name}" continuation occurrence does not match active occurrence`,
+      );
+    }
+    const workflowCallSite = buildWorkflowCallSiteIdentity({
+      stack: [
+        ...resumeStackPrefix,
+        workflowCallFrame,
+      ],
+      childWorkflow,
+    });
     const inheritedSessions = new Map(this.deps.state.personaSessions);
     const sessionUpdates = new Map<string, WorkflowCallSessionUpdate>();
-    const childAutoRouting = resolveEffectiveAutoRouting(request.childWorkflow, options.autoRouting);
+    const childAutoRouting = resolveEffectiveAutoRouting(childWorkflow, options.autoRouting);
     const childRoutingRuntime = childAutoRouting === undefined
       ? undefined
-      : this.getChildRoutingRuntime(request.childWorkflow, childAutoRouting, options, request.step);
+      : this.getChildRoutingRuntime(childWorkflow, childAutoRouting, options, request.step);
     const inheritedEstimatorSource = options.autoRoutingEstimatorSource;
-    let childEngine: WorkflowCallChildEngine;
-    const onChildIterationLimit = options.onIterationLimit === undefined
-      ? undefined
-      : async (limitRequest: Parameters<NonNullable<WorkflowEngineOptions['onIterationLimit']>>[0]) => {
-          if (executeOptions.syncParentState) {
-            const childResumePoint = childEngine.getOwnedResumePoint();
-            if (childResumePoint === undefined) {
-              throw new Error(`workflow_call step "${request.step.name}" reached its limit without an owned resume checkpoint`);
-            }
-            this.deps.adoptResumeCheckpoint(childResumePoint, childResumePoint.iteration);
-          }
-          return options.onIterationLimit!(limitRequest);
-        };
     const childOptions: WorkflowEngineOptions = {
       ...inheritedOptions,
-      onIterationLimit: onChildIterationLimit,
+      maxStepsOverride: this.deps.sharedRuntime.maxSteps ?? this.deps.getMaxSteps(),
       initialSessions: Object.fromEntries(this.deps.state.personaSessions),
       initialUserInputs: [...this.deps.state.userInputs],
       provider: request.childProviderInfo.provider,
@@ -505,40 +704,39 @@ export class WorkflowCallExecutor {
         : structuredClone(request.providerRouting),
       startStep: this.deps.sharedRuntime.restartNavigator === undefined
         ? this.resolveChildResumeStartStep(
-            request.childWorkflow,
+            childWorkflow,
             childResumePoint,
-            request.callStack.length,
+            resumeStackPrefix,
           )
         : this.deps.sharedRuntime.restartNavigator.resolveChildStartStep(
-            request.childWorkflow,
-            request.callStack,
+            childWorkflow,
+            [...resumeStackPrefix, workflowCallFrame],
           ),
       resumePoint: childResumePoint,
       initialIteration: this.deps.state.iteration,
       reportDirName: this.deps.runPaths.slug,
-      runPathNamespace: this.buildWorkflowCallNamespace(request.reportNamespaceSegment),
-      findingCallNamespace: this.buildFindingCallNamespace(request.reportNamespaceSegment),
+      runPathNamespace: this.buildWorkflowCallNamespace(invocation),
+      findingCallNamespace: workflowCallSite.key,
+      workflowCallSiteIdentity: workflowCallSite.key,
       workflowCallVars: {
         ...options.workflowCallVars,
         ...request.step.vars,
       },
       sharedRuntime: this.deps.sharedRuntime,
-      resumeStackPrefix: request.callStack.map((entry) => ({
-        ...entry,
-        ...(entry.step_iterations === undefined
-          ? {}
-          : { step_iterations: { ...entry.step_iterations } }),
-      })),
-      // 親の Finding Contract を子エンジンへ継承する。継承しないと子の
-      // parallel レビューが出す raw findings が台帳に入らず、fix に届かないまま
-      // reviewers ↔ fix が回り続ける（実測: 56周・9時間）。子が自前の
-      // finding_contract も持つ場合は WorkflowValidator が設定エラーで落とす
-      // ため、ここでは無条件に継承値を渡してよい。
+      resumeStackPrefix: [
+        ...resumeStackPrefix,
+        workflowCallFrame,
+      ],
+      // 親の Finding Contract と ledger store を子エンジンへ継承する。継承値は
+      // 子のローカル finding_contract より優先され、親子で同じ authority を使う。
+      // 継承しないと子の parallel レビューが出す raw findings が親の台帳に入らず、
+      // fix に届かないまま reviewers ↔ fix が回り続ける（実測: 56周・9時間）。
       ...(this.deps.findingContract !== undefined && this.deps.findingLedgerStore !== undefined
         ? {
             inheritedFindingContract: {
               contract: this.deps.findingContract,
               ledgerStore: this.deps.findingLedgerStore,
+              managerAuthority: request.step.findingContractAuthority ?? 'standard',
             },
           }
         : {}),
@@ -549,9 +747,10 @@ export class WorkflowCallExecutor {
     // 契約入り options に対してもう一度行わないと、不正な組み合わせが素通り
     // したまま manager 起動時に初めて失敗する（WorkflowValidator.ts はここで
     // 検証済みの childOptions を再利用する）。
+    let childEngine: WorkflowCallChildEngine;
     try {
-      validateFindingContractManagerProviderModel(request.childWorkflow, childOptions);
-      childEngine = this.deps.createEngine(request.childWorkflow, this.deps.getCwd(), this.deps.task, childOptions);
+      validateFindingContractManagerProviderModel(childWorkflow, childOptions);
+      childEngine = this.deps.createEngine(childWorkflow, this.deps.getCwd(), this.deps.task, childOptions);
     } catch (error) {
       const overridePath = workflowCallOverrideErrorPath(request.step, error);
       const parentStepPath = findWorkflowStepLocation(parentConfig, request.step);
@@ -562,49 +761,31 @@ export class WorkflowCallExecutor {
       throw translateWorkflowConfigError(parentConfig, located);
     }
 
-    this.relayChildEvents(childEngine, request.step.name, executeOptions.syncParentState);
-    let childResult: Awaited<ReturnType<WorkflowCallChildEngine['runWithResult']>>;
-    try {
-      childResult = await childEngine.runWithResult();
-    } catch (error) {
-      const interruptedResumePoint = childEngine.getOwnedResumePoint();
-      if (interruptedResumePoint === undefined) {
-        throw error;
-      }
-      if (executeOptions.syncParentState) {
-        this.deps.adoptResumeCheckpoint(interruptedResumePoint, interruptedResumePoint.iteration);
-        throw error;
-      }
-      throw preserveWorkflowCallChildExecutionState(
-        error,
-        sessionUpdates,
-        {
-          iteration: interruptedResumePoint.iteration,
-          resumePoint: interruptedResumePoint,
-          interrupted: true,
-        },
-      );
-    }
+    this.relayChildEvents(childEngine, request.step.name);
+    const childResult = await childEngine.runWithResult();
     const childState = childResult.state;
-    const ownedChildResumePoint = childEngine.getOwnedResumePoint();
-    if (ownedChildResumePoint === undefined) {
-      throw new Error(`workflow_call step "${request.step.name}" completed without an owned resume checkpoint`);
-    }
-    const interrupted = childResult.abort !== undefined;
     if (executeOptions.syncParentState) {
-      this.syncStateFromChild(request.step, childState, interrupted, ownedChildResumePoint);
+      this.syncStateFromChild(childState);
+      if (childState.status === 'completed') {
+        this.deps.setActiveResumePoint(
+          request.step,
+          this.deps.state.iteration,
+          occurrence,
+          resumeStackPrefix,
+        );
+      }
     }
     return {
       ...childState,
-      resumePoint: ownedChildResumePoint,
       ...(childResult.returnValue !== undefined ? { returnValue: childResult.returnValue } : {}),
       ...(!executeOptions.syncParentState
         ? {
             sessionUpdates,
             isolatedStateSync: {
               iteration: childState.iteration,
-              resumePoint: ownedChildResumePoint,
-              interrupted,
+              ...(this.deps.sharedRuntime.maxSteps !== undefined
+                ? { maxSteps: this.deps.sharedRuntime.maxSteps }
+                : {}),
             },
           }
         : {}),
@@ -612,6 +793,7 @@ export class WorkflowCallExecutor {
         ? {
             abortKind: childResult.abort.kind,
             abortReason: childResult.abort.reason,
+            abortFailure: childResult.abort.failure,
           }
         : {}),
     };

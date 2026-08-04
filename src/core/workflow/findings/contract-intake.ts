@@ -13,8 +13,8 @@ import type {
   FindingContractConfig,
   WorkflowConfig,
   WorkflowStep,
-  WorkflowStructuredOutput,
 } from '../../models/types.js';
+import type { FindingManagerAuthority } from '../../models/finding-types.js';
 import type { OptionsBuilder } from '../engine/OptionsBuilder.js';
 import type { StepExecutor } from '../engine/StepExecutor.js';
 import type { FindingContractInstructionContext } from '../instruction/instruction-context.js';
@@ -26,7 +26,6 @@ import {
   type FindingManagerSubStepResult,
 } from './manager-runner.js';
 import type { FindingManagerStore } from './store.js';
-import type { WorkflowEventAttribution } from '../workflow-execution-scope.js';
 
 /**
  * ある単独ステップが Finding Contract の取り込み対象かどうかを判定する。
@@ -75,15 +74,17 @@ export interface FindingContractIntakeInput {
   cwd: string;
   parentStep: WorkflowStep;
   stepIteration: number;
+  iteration: number;
   subResults: FindingManagerSubStepResult[];
   workflowName: string;
-  runId: string;
+  workflowTask: string;
+  analyticsWorkflowName: string;
   /** raw finding id 衝突対策の呼び出し名前空間。トップレベルでは空文字列。 */
   callNamespace: string;
   timestamp: string;
   priorStepResponseText?: string;
+  managerAuthority: FindingManagerAuthority;
   refreshFindingsState: () => void;
-  eventAttribution: WorkflowEventAttribution;
   emitEvent: (event: string, ...args: unknown[]) => void;
 }
 
@@ -108,65 +109,34 @@ export async function ingestFindingContractResults(
     stepIteration: input.stepIteration,
     subResults: input.subResults,
     workflowName: input.workflowName,
-    runId: input.runId,
+    workflowTask: input.workflowTask,
+    runId: input.ledgerStore.runId,
     callNamespace: input.callNamespace,
     timestamp: input.timestamp,
     priorStepResponseText: input.priorStepResponseText,
+    managerAuthority: input.managerAuthority,
   });
   if (result.status === 'updated') {
     input.refreshFindingsState();
-    input.emitEvent(
-      'findings:ledger',
-      result.ledger,
-      input.eventAttribution.iteration,
-      input.eventAttribution.scope,
-    );
+    input.emitEvent('findings:ledger', result.ledger, {
+      iteration: input.iteration,
+      workflowName: input.analyticsWorkflowName,
+      scopeIdentity: input.ledgerStore.ledgerIdentity,
+    });
   }
   return result;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function getRawFindingSnapshotIdEnum(structuredOutput: WorkflowStructuredOutput): unknown {
-  const properties = structuredOutput.schema.properties;
-  if (!isRecord(properties)) {
-    return undefined;
-  }
-  const rawFindings = properties.rawFindings;
-  if (!isRecord(rawFindings) || !isRecord(rawFindings.items)) {
-    return undefined;
-  }
-  const itemProperties = rawFindings.items.properties;
-  if (!isRecord(itemProperties) || !isRecord(itemProperties.snapshotId)) {
-    return undefined;
-  }
-  return itemProperties.snapshotId.enum;
-}
-
-function assertReviewerStructuredOutputSnapshot(
+function assertReviewerStructuredOutputContext(
   context: FindingContractInstructionContext | undefined,
 ): asserts context is FindingContractInstructionContext & {
-  rawFindingsStructuredOutput: WorkflowStructuredOutput;
-  reviewScopeSnapshotId: string;
+  reviewer: Extract<NonNullable<FindingContractInstructionContext['reviewer']>, { mode: 'structured' }>;
 } {
-  const structuredOutput = context?.rawFindingsStructuredOutput;
-  const reviewScopeSnapshotId = context?.reviewScopeSnapshotId;
-  if (!structuredOutput || !reviewScopeSnapshotId) {
-    throw new Error('Finding contract reviewer context requires raw findings structured output and reviewScopeSnapshotId');
-  }
-  const snapshotIdEnum = getRawFindingSnapshotIdEnum(structuredOutput);
   if (
-    !Array.isArray(snapshotIdEnum)
-    || snapshotIdEnum.length !== 2
-    || snapshotIdEnum[0] !== ''
-    || snapshotIdEnum[1] !== reviewScopeSnapshotId
+    context?.reviewer?.mode !== 'structured'
+    || context.reviewer.reviewScopeSnapshotId.length === 0
   ) {
-    throw new Error(
-      'Finding contract reviewer context requires rawFindings snapshotId enum to be exactly '
-      + '["", reviewScopeSnapshotId]',
-    );
+    throw new Error('Finding contract reviewer context requires raw findings structured output and reviewScopeSnapshotId');
   }
 }
 
@@ -180,8 +150,8 @@ export function withFindingContractStructuredOutput(
   step: AgentWorkflowStep,
   context: FindingContractInstructionContext | undefined,
 ): AgentWorkflowStep {
-  assertReviewerStructuredOutputSnapshot(context);
-  const structuredOutput = context.rawFindingsStructuredOutput;
+  assertReviewerStructuredOutputContext(context);
+  const structuredOutput = context.reviewer.rawFindingsStructuredOutput;
   if (step.structuredOutput) {
     throw new Error(`Step "${step.name}" cannot combine finding_contract raw findings with structured_output`);
   }

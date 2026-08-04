@@ -182,6 +182,7 @@ describe('debug logging', () => {
           step: 'plan',
           phase: 1,
           iteration: 2,
+          scope: '{"step":"plan","stack":[]}',
           systemPrompt: 'system prompt',
           userInstruction: 'prompt text',
           prompt: 'prompt text',
@@ -217,8 +218,9 @@ describe('debug logging', () => {
     it('should do nothing when debug is disabled', () => {
       writePromptLog({
         step: 'plan',
-        phase: 1,
-        iteration: 1,
+          phase: 1,
+          iteration: 1,
+          scope: '{"step":"plan","stack":[]}',
         systemPrompt: 'system prompt',
         userInstruction: 'ignored prompt',
         prompt: 'ignored prompt',

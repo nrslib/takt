@@ -17,7 +17,10 @@ export default defineConfig({
     // fsync and spawnSync serialize at the device/kernel level, so extra
     // workers only add contention: a worker stuck >60s in synchronous IO
     // trips the vitest worker RPC timeout as a spurious unhandled error.
-    maxWorkers: 4,
+    // On CI runners (4 vCPU, unhandled errors fatal) three consecutive runs
+    // failed that way with all tests passing, each time on a different
+    // spawn-heavy file — so run the slice single-worker there.
+    maxWorkers: process.env.CI ? 1 : 4,
     include: itTestGlobs,
     exclude: itSerialTestGlobs,
   },

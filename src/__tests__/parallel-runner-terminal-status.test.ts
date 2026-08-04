@@ -1,14 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ParallelRunner, type ParallelRunnerDeps } from '../core/workflow/engine/ParallelRunner.js';
-import type {
-  AgentResponse,
-  AutoRoutingConfig,
-  WorkflowResumePoint,
-  WorkflowState,
-  WorkflowStep,
-} from '../core/models/index.js';
+import type { AgentResponse, WorkflowState, WorkflowStep } from '../core/models/index.js';
 import { makeRule, makeStep } from './test-helpers.js';
-import { WorkflowStepBudget } from '../core/workflow/workflow-step-budget.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
   executeAgent: vi.fn(),
@@ -30,14 +23,6 @@ vi.mock('../core/workflow/phase-runner.js', () => ({
 
 import { executeAgent } from '../agents/agent-usecases.js';
 import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
-
-const eventAttribution = {
-  iteration: 1,
-  scope: {
-    kind: 'workflow_execution_scope',
-    stack: [],
-  },
-} as const;
 
 function makeState(): WorkflowState {
   return {
@@ -92,43 +77,6 @@ function makeParallelStep(): WorkflowStep {
   });
 }
 
-function makeAutoRoutingConfig(): AutoRoutingConfig {
-  return {
-    strategy: 'balanced',
-    router: { provider: 'mock', model: 'router-model' },
-    candidates: [
-      {
-        name: 'default',
-        provider: 'mock',
-        model: 'routed-model',
-        routingTier: 'medium',
-      },
-    ],
-    defaultPool: 'general',
-    candidatePools: {
-      general: {
-        candidates: ['default'],
-        fallback: 'default',
-      },
-    },
-  };
-}
-
-function makeResumePoint(
-  stack: WorkflowResumePoint['stack'],
-  iteration: number,
-): WorkflowResumePoint {
-  return {
-    version: 2,
-    stack,
-    iteration,
-    max_steps: 5,
-    elapsed_ms: 0,
-    workflow_call_invocations: {},
-    workflow_step_participations: {},
-  };
-}
-
 function makeRunner(): { runner: ParallelRunner; deps: ParallelRunnerDeps } {
   const deps: ParallelRunnerDeps = {
     optionsBuilder: {
@@ -157,15 +105,8 @@ function makeRunner(): { runner: ParallelRunner; deps: ParallelRunnerDeps } {
       requestMoreParts: vi.fn(),
     },
     runQualityGates: vi.fn().mockResolvedValue({ ok: true }),
-    emitEvent: vi.fn(),
+    updateMaxSteps: vi.fn(),
     setActiveResumePoint: vi.fn(),
-    adoptResumeCheckpoint: vi.fn(),
-    setActiveResumeStack: vi.fn(),
-    getCurrentWorkflowStack: () => [{
-      workflow: 'test-workflow',
-      step: 'reviewers',
-      kind: 'agent',
-    }],
   };
   return { runner: new ParallelRunner(deps), deps };
 }
@@ -200,323 +141,51 @@ describe('ParallelRunner terminal sub-step statuses', () => {
     });
   });
 
-  it('runs a parallel workflow_call without resolving provider or model for the call wrapper', async () => {
+  it('keeps configured provider/model preflight for agent sub-steps', async () => {
     const { runner, deps } = makeRunner();
-    const estimate = vi.fn().mockResolvedValue({
-      requiredTier: 'medium',
-      reasonCodes: ['focused-change'],
-    });
-    deps.engineOptions.autoRouting = makeAutoRoutingConfig();
-    deps.engineOptions.autoRoutingEstimator = { estimate };
-    const workflowCallStep = makeStep({
-      name: 'delegate-review',
-      kind: 'workflow_call',
-      call: './child.yaml',
-      rules: [makeRule('COMPLETE', 'COMPLETE')],
-    });
-    const parentStep = makeStep({
-      name: 'reviewers',
-      instruction: 'Run reviewers',
-      parallel: [workflowCallStep],
-      rules: [makeRule('all("COMPLETE")', 'COMPLETE')],
-    });
-    const resolveBeforeRouting = vi.mocked(
+    const failure = new Error('configured provider preflight failed');
+    const resolveBeforeAutoRouting = vi.mocked(
       deps.optionsBuilder.resolveStepProviderModelBeforeAutoRouting,
     );
-    const resolveProviderModel = vi.mocked(deps.optionsBuilder.resolveStepProviderModel);
-    resolveBeforeRouting.mockImplementation((step) => {
-      if (step.name === 'delegate-review') {
-        throw new Error('workflow_call wrapper reached provider preflight');
+    resolveBeforeAutoRouting.mockImplementation((step) => {
+      if (step.name === 'security-review') {
+        throw failure;
       }
-      return { provider: 'mock', model: 'parent-model' };
+      return { provider: 'claude', model: 'claude-sonnet' };
     });
-    resolveProviderModel.mockImplementation((step) => {
-      if (step.name === 'delegate-review') {
-        throw new Error('workflow_call wrapper reached provider resolution');
-      }
-      return { provider: 'mock', model: 'parent-model' };
-    });
-    const resolveRuntime = vi.fn(() => {
-      throw new Error('workflow_call wrapper resolved runtime provider/model');
-    });
-    const state = makeState();
-    vi.mocked(deps.setActiveResumePoint).mockImplementation((_step, iteration) => {
-      expect(state.iteration).toBe(1);
-      state.iteration = iteration;
-    });
-    const runIsolated = vi.fn().mockImplementation(async () => {
-      state.stepIterations.set('delegate-review', 1);
-      return {
-        result: {
-          response: makeAgentResponse({
-            persona: 'child-review',
-            content: 'approved',
-          }),
-          instruction: 'child instruction',
-        },
-        sessionUpdates: new Map(),
-        stateSync: {
-          iteration: 2,
-          resumePoint: makeResumePoint([], 2),
-          interrupted: false,
-        },
-      };
-    });
-    deps.getWorkflowCallRunner = () => ({
-      resolveRuntime,
-      runIsolated,
-    } as unknown as ReturnType<NonNullable<ParallelRunnerDeps['getWorkflowCallRunner']>>);
 
-    const result = await runner.runParallelStep(parentStep, state, 'test task', 5, vi.fn(), undefined, undefined, eventAttribution);
+    await expect(
+      runner.runParallelStep(makeParallelStep(), makeState(), 'test task', 5, vi.fn()),
+    ).rejects.toBe(failure);
 
-    expect(result.response.status).toBe('done');
-    expect(state.iteration).toBe(2);
-    expect(state.stepIterations).toEqual(new Map([
-      ['reviewers', 1],
-      ['delegate-review', 1],
-    ]));
-    expect(deps.setActiveResumePoint).toHaveBeenCalledOnce();
-    expect(runIsolated).toHaveBeenCalledOnce();
-    expect(resolveBeforeRouting.mock.calls.map(([step]) => step.name))
-      .not.toContain('delegate-review');
-    expect(resolveProviderModel.mock.calls.map(([step]) => step.name))
-      .not.toContain('delegate-review');
-    expect(resolveRuntime).not.toHaveBeenCalled();
-    expect(estimate).not.toHaveBeenCalled();
+    expect(resolveBeforeAutoRouting.mock.calls.map(([step]) => step.name)).toEqual([
+      'ai-antipattern-review-2nd',
+      'security-review',
+    ]);
     expect(executeAgent).not.toHaveBeenCalled();
   });
 
-  it('routes only agent sub-steps when workflow_call and agent sub-steps are mixed', async () => {
+  it('keeps final provider/model preflight for agent sub-steps', async () => {
     const { runner, deps } = makeRunner();
-    const estimate = vi.fn().mockResolvedValue({
-      requiredTier: 'medium',
-      reasonCodes: ['focused-change'],
-    });
-    deps.engineOptions.autoRouting = makeAutoRoutingConfig();
-    deps.engineOptions.autoRoutingEstimator = { estimate };
-    const agentStep = makeReviewStep('security-review');
-    const workflowCallStep = makeStep({
-      name: 'delegate-review',
-      kind: 'workflow_call',
-      call: './child.yaml',
-      rules: [makeRule('COMPLETE', 'COMPLETE')],
-    });
-    const parentStep = makeStep({
-      name: 'reviewers',
-      instruction: 'Run reviewers',
-      parallel: [agentStep, workflowCallStep],
-      rules: [makeRule('all("approved")', 'COMPLETE')],
-    });
-    const resolveBeforeRouting = vi.mocked(
-      deps.optionsBuilder.resolveStepProviderModelBeforeAutoRouting,
-    );
-    resolveBeforeRouting.mockImplementation((step) => (
-      step.name === agentStep.name
-        ? { provider: undefined, model: undefined }
-        : { provider: 'mock', model: 'parent-model' }
-    ));
-    vi.mocked(deps.optionsBuilder.resolveStepProviderModel).mockImplementation(
-      (_step, runtime) => runtime?.providerInfo ?? { provider: 'mock', model: 'parent-model' },
-    );
-    const state = makeState();
-    const runIsolated = vi.fn().mockImplementation(async () => {
-      state.stepIterations.set(workflowCallStep.name, 1);
-      return {
-        result: {
-          response: makeAgentResponse({
-            persona: 'child-review',
-            content: 'approved',
-          }),
-          instruction: '',
-        },
-        sessionUpdates: new Map(),
-        stateSync: {
-          iteration: 2,
-          resumePoint: makeResumePoint([], 2),
-          interrupted: false,
-        },
-      };
-    });
-    deps.getWorkflowCallRunner = () => ({
-      runIsolated,
-    } as unknown as ReturnType<NonNullable<ParallelRunnerDeps['getWorkflowCallRunner']>>);
-    queueAgentResponse(makeAgentResponse({
-      persona: agentStep.name,
-      content: 'approved',
-    }));
-
-    const result = await runner.runParallelStep(parentStep, state, 'test task', 5, vi.fn(), undefined, undefined, eventAttribution);
-
-    expect(result.response.status).toBe('done');
-    expect(estimate).toHaveBeenCalledOnce();
-    expect(estimate.mock.calls.map(([input]) => input.step.name)).toEqual([agentStep.name]);
-    expect(resolveBeforeRouting.mock.calls.map(([step]) => step.name)).toEqual([agentStep.name]);
-    expect(runIsolated).toHaveBeenCalledOnce();
-    expect(executeAgent).toHaveBeenCalledOnce();
-  });
-
-  it('does not rerun a successful workflow_call when an agent fallback is exhausted', async () => {
-    const { runner, deps } = makeRunner();
-    deps.engineOptions.rateLimitFallback = {
-      switchChain: [{ provider: 'codex', model: 'gpt-5' }],
-    };
-    vi.mocked(deps.optionsBuilder.resolveStepProviderModel).mockImplementation(
-      (_step, runtime) => runtime?.providerInfo ?? { provider: 'claude', model: 'claude-sonnet' },
-    );
-    const workflowCallStep = makeStep({
-      name: 'delegate-review',
-      kind: 'workflow_call',
-      call: './child.yaml',
-      rules: [makeRule('COMPLETE', 'COMPLETE')],
-    });
-    const agentStep = makeReviewStep('security-review');
-    const parentStep = makeStep({
-      name: 'reviewers',
-      instruction: 'Run reviewers',
-      parallel: [workflowCallStep, agentStep],
-      rules: [makeRule('all("COMPLETE")', 'COMPLETE')],
-    });
-    const runIsolated = vi.fn().mockResolvedValue({
-      result: {
-        response: makeAgentResponse({ persona: 'child-review', content: 'approved' }),
-        instruction: '',
-      },
-      sessionUpdates: new Map(),
-      stateSync: {
-        iteration: 2,
-        resumePoint: makeResumePoint([], 2),
-        interrupted: false,
-      },
-    });
-    deps.getWorkflowCallRunner = () => ({
-      runIsolated,
-    } as unknown as ReturnType<NonNullable<ParallelRunnerDeps['getWorkflowCallRunner']>>);
-    const rateLimitedResponse = makeAgentResponse({
-      persona: agentStep.name,
-      status: 'rate_limited',
-      content: '',
-      error: 'Rate limit exceeded',
-      errorKind: 'rate_limit',
-    });
-    queueAgentResponse(rateLimitedResponse);
-    queueAgentResponse(rateLimitedResponse);
-
-    const result = await runner.runParallelStep(
-      parentStep,
-      makeState(),
-      'test task',
-      5,
-      vi.fn(),
-      undefined,
-      undefined,
-      eventAttribution,
-    );
-
-    expect(result.response.status).toBe('rate_limited');
-    expect(result.rateLimitFallbackHandled).toBe(true);
-    expect(runIsolated).toHaveBeenCalledOnce();
-    expect(executeAgent).toHaveBeenCalledTimes(2);
-  });
-
-  it.each([
-    ['A then B', ['delegate-a', 'delegate-b']],
-    ['B then A', ['delegate-b', 'delegate-a']],
-  ] as const)('selects the YAML-first interrupted child resume regardless of limit rejection order: %s', async (_label, limitRejectionOrder) => {
-    const { runner, deps } = makeRunner();
-    const delegates = ['delegate-a', 'delegate-b'].map((name) => makeStep({
-      name,
-      kind: 'workflow_call',
-      call: `./${name}.yaml`,
-      rules: [makeRule('ABORT', 'ABORT')],
-    }));
-    const parentStep = makeStep({
-      name: 'reviewers',
-      instruction: 'Run delegated reviewers',
-      parallel: delegates,
-      rules: [makeRule('any("ABORT")', 'ABORT')],
-    });
-    const resumeStacks = new Map(delegates.map((delegate) => [delegate.name, [
-      { workflow: 'test-workflow', step: 'reviewers', kind: 'agent' as const },
-      {
-        workflow: 'test-workflow',
-        step: delegate.name,
-        kind: 'workflow_call' as const,
-        call_instance: 1,
-      },
-      { workflow: delegate.name, step: 'child-work', kind: 'agent' as const },
-    ]]));
-    const budget = new WorkflowStepBudget(1);
-    const rejectionOrder: string[] = [];
-    const resolvers = new Map<string, () => Promise<void>>();
-    deps.getWorkflowCallRunner = () => ({
-      runIsolated: vi.fn((subStep: WorkflowStep) => new Promise((resolve) => {
-        resolvers.set(subStep.name, async () => {
-          const resumeStack = resumeStacks.get(subStep.name)!;
-          const limitResult = await budget.check({
-            request: {
-              currentIteration: 1,
-              currentStep: `${subStep.name}-child-work`,
-              scope: {
-                kind: 'workflow_execution_scope',
-                stack: resumeStack,
-              },
-            },
-            ignoreLimit: false,
-            onLimitReached: () => {
-              rejectionOrder.push(subStep.name);
-            },
-            onMaxStepsExtended: vi.fn(),
-            requestExtension: vi.fn().mockResolvedValue(null),
-          });
-          expect(limitResult).toEqual({ allowed: false, maxSteps: 1 });
-          resolve({
-            result: {
-              response: makeAgentResponse({ persona: subStep.name, status: 'error', content: 'ABORT' }),
-              instruction: '',
-            },
-            sessionUpdates: new Map(),
-            stateSync: {
-              iteration: subStep.name === 'delegate-a' ? 3 : 4,
-              resumePoint: makeResumePoint(
-                resumeStack,
-                subStep.name === 'delegate-a' ? 3 : 4,
-              ),
-              interrupted: true,
-            },
-          });
-        });
-      })),
-    } as unknown as ReturnType<NonNullable<ParallelRunnerDeps['getWorkflowCallRunner']>>);
-    const state = makeState();
-    vi.mocked(deps.adoptResumeCheckpoint).mockImplementation((_resumePoint, iteration) => {
-      expect(state.iteration).toBe(1);
-      state.iteration = iteration;
+    const failure = new Error('final provider preflight failed');
+    const resolveProviderModel = vi.mocked(deps.optionsBuilder.resolveStepProviderModel);
+    resolveProviderModel.mockImplementation((step) => {
+      if (step.name === 'security-review') {
+        throw failure;
+      }
+      return { provider: 'claude', model: 'claude-sonnet' };
     });
 
-    const resultPromise = runner.runParallelStep(
-      parentStep,
-      state,
-      'test task',
-      5,
-      vi.fn(),
-      undefined,
-      undefined,
-      eventAttribution,
-    );
-    await vi.waitFor(() => expect(resolvers.size).toBe(2));
-    for (const name of limitRejectionOrder) {
-      await resolvers.get(name)?.();
-    }
-    await resultPromise;
+    await expect(
+      runner.runParallelStep(makeParallelStep(), makeState(), 'test task', 5, vi.fn()),
+    ).rejects.toBe(failure);
 
-    expect(rejectionOrder).toEqual([limitRejectionOrder[0]]);
-    expect(budget.currentMaxSteps()).toBe(1);
-    expect(state.iteration).toBe(4);
-    expect(deps.adoptResumeCheckpoint).toHaveBeenCalledOnce();
-    expect(deps.adoptResumeCheckpoint).toHaveBeenCalledWith(
-      makeResumePoint(resumeStacks.get('delegate-a')!, 3),
-      4,
-    );
+    expect(resolveProviderModel.mock.calls.map(([step]) => step.name)).toEqual([
+      'reviewers',
+      'ai-antipattern-review-2nd',
+      'security-review',
+    ]);
+    expect(executeAgent).not.toHaveBeenCalled();
   });
 
   it('returns parent error when one sub-step returns error and another approves', async () => {
@@ -544,7 +213,7 @@ describe('ParallelRunner terminal sub-step statuses', () => {
       failureCategory: 'provider_error',
     }));
 
-    const result = await runner.runParallelStep(step, state, 'test task', 5, vi.fn(), undefined, undefined, eventAttribution);
+    const result = await runner.runParallelStep(step, state, 'test task', 5, vi.fn());
 
     expect(result.response.status).toBe('error');
     expect(result.response.persona).toBe('reviewers');
@@ -574,7 +243,7 @@ describe('ParallelRunner terminal sub-step statuses', () => {
       content: '[STEP:1] approved',
     }));
 
-    await runner.runParallelStep(step, state, 'test task', 5, vi.fn(), undefined, undefined, eventAttribution);
+    await runner.runParallelStep(step, state, 'test task', 5, vi.fn());
 
     expect(deps.runQualityGates).toHaveBeenCalledWith(expect.objectContaining({
       childProcessEnv,
@@ -596,7 +265,7 @@ describe('ParallelRunner terminal sub-step statuses', () => {
       content: '[SECURITY-REVIEW:1] approved',
     }));
 
-    const result = await runner.runParallelStep(step, state, 'test task', 5, vi.fn(), undefined, undefined, eventAttribution);
+    const result = await runner.runParallelStep(step, state, 'test task', 5, vi.fn());
 
     expect(result.response.status).toBe('error');
     expect(result.response.error).toContain('Session resume failed');
@@ -627,7 +296,7 @@ describe('ParallelRunner terminal sub-step statuses', () => {
       content: '[SECURITY-REVIEW:1] approved',
     }));
 
-    const result = await runner.runParallelStep(step, state, 'test task', 5, vi.fn(), undefined, undefined, eventAttribution);
+    const result = await runner.runParallelStep(step, state, 'test task', 5, vi.fn());
 
     expect(result.response.status).toBe('blocked');
     expect(result.response.persona).toBe('reviewers');
@@ -670,7 +339,7 @@ describe('ParallelRunner terminal sub-step statuses', () => {
       content: '[SECURITY-REVIEW:1] approved',
     }));
 
-    const result = await runner.runParallelStep(step, state, 'test task', 5, vi.fn(), undefined, undefined, eventAttribution);
+    const result = await runner.runParallelStep(step, state, 'test task', 5, vi.fn());
 
     expect(result.response.status).toBe('rate_limited');
     expect(result.response.persona).toBe('reviewers');
@@ -723,7 +392,7 @@ describe('ParallelRunner terminal sub-step statuses', () => {
     }));
 
 
-    const result = await runner.runParallelStep(step, state, 'test task', 5, vi.fn(), undefined, undefined, eventAttribution);
+    const result = await runner.runParallelStep(step, state, 'test task', 5, vi.fn());
 
     expect(result.response.status).toBe('rate_limited');
     expect(result.response.error).toBe(result.response.content);
@@ -766,7 +435,7 @@ describe('ParallelRunner terminal sub-step statuses', () => {
     });
 
     const updateSession = vi.fn();
-    const result = await runner.runParallelStep(step, state, 'test task', 5, updateSession, undefined, undefined, eventAttribution);
+    const result = await runner.runParallelStep(step, state, 'test task', 5, updateSession);
 
     expect(result.response.status).toBe('done');
     // 劣化していた旧セッションが resume 対象に残らない（undefined で削除）
@@ -789,7 +458,7 @@ describe('ParallelRunner terminal sub-step statuses', () => {
       content: '[SECURITY-REVIEW:1] approved',
     }));
 
-    const result = await runner.runParallelStep(step, state, 'test task', 5, vi.fn(), undefined, undefined, eventAttribution);
+    const result = await runner.runParallelStep(step, state, 'test task', 5, vi.fn());
 
     // rate limit は新セッション再試行の対象外（既存の rate_limited 経路に委ねる）
     expect(vi.mocked(executeAgent)).toHaveBeenCalledTimes(2);
@@ -818,7 +487,7 @@ describe('ParallelRunner terminal sub-step statuses', () => {
       error: 'Provider failed with api_key=top-secret and Authorization: Bearer sk-secret123456',
     }));
 
-    const result = await runner.runParallelStep(step, state, 'test task', 5, vi.fn(), undefined, undefined, eventAttribution);
+    const result = await runner.runParallelStep(step, state, 'test task', 5, vi.fn());
 
     expect(result.response.status).toBe('error');
     expect(result.response.content).toContain('api_key=[REDACTED]');

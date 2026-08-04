@@ -4,16 +4,23 @@ import type {
   FindingManagerReportPublication,
 } from './types.js';
 import { assertFindingLedgerProjectionInvariant } from '../../models/finding-ledger-invariants.js';
-import { assertRawFindingsAppendOnly } from './finding-integrity.js';
+import { projectFindingContractRegistries } from '../../models/finding-contract-seed.js';
+import {
+  assertFindingLedgerAppendOnlyTransition,
+} from './finding-integrity.js';
 
 function projectManagerCommit(ledger: FindingLedger): FindingManagerCommitProjection {
   return {
     nextId: ledger.nextId,
     updatedAt: ledger.updatedAt,
     findings: ledger.findings,
+    evidenceRecords: ledger.evidenceRecords,
+    evidenceBindings: ledger.evidenceBindings,
+    lifecycleReservations: ledger.lifecycleReservations,
+    lifecycleEvents: ledger.lifecycleEvents,
     rawFindings: ledger.rawFindings,
     conflicts: ledger.conflicts,
-    interpretations: ledger.interpretations,
+    ...projectFindingContractRegistries(ledger),
     ...(ledger.fixpoint === undefined ? {} : { fixpoint: ledger.fixpoint }),
     ...(ledger.stopBudget === undefined ? {} : { stopBudget: ledger.stopBudget }),
     ...(ledger.reviewerAnomalies === undefined
@@ -23,12 +30,6 @@ function projectManagerCommit(ledger: FindingLedger): FindingManagerCommitProjec
       ? {}
       : { reviewIntegrity: ledger.reviewIntegrity }),
   };
-}
-
-function withoutPending(ledger: FindingLedger): FindingLedger {
-  const current = { ...ledger };
-  delete current.pendingManagerCommit;
-  return current;
 }
 
 function sameValue(left: unknown, right: unknown): boolean {
@@ -45,14 +46,6 @@ function samePublicationIntent(
     && current.fileName === next.fileName
     && current.contentSha256 === next.contentSha256
     && sameValue(current.report, next.report);
-}
-
-function samePublication(
-  current: FindingManagerReportPublication,
-  next: FindingManagerReportPublication,
-): boolean {
-  return samePublicationIntent(current, next)
-    && current.destinationRunId === next.destinationRunId;
 }
 
 export function stagePendingManagerCommit(input: {
@@ -72,16 +65,12 @@ export function stagePendingManagerCommit(input: {
   if (input.completedLedger.pendingManagerCommit !== undefined) {
     throw new Error(`Completed manager round "${input.roundMarker}" contains a nested pending commit`);
   }
-  assertRawFindingsAppendOnly(
-    input.previousLedger.rawFindings,
-    input.completedLedger.rawFindings,
-  );
   const completed = projectManagerCommit(input.completedLedger);
   assertFindingLedgerProjectionInvariant(completed);
   if (completed.stopBudget?.roundMarkers.includes(input.roundMarker) !== true) {
     throw new Error(`Completed manager round "${input.roundMarker}" has no completed stop budget marker`);
   }
-  return {
+  const staged: FindingLedger = {
     ...input.previousLedger,
     pendingManagerCommit: {
       roundMarker: input.roundMarker,
@@ -89,6 +78,13 @@ export function stagePendingManagerCommit(input: {
       completed,
     },
   };
+  if (
+    assertFindingLedgerAppendOnlyTransition(input.previousLedger, staged)
+    !== 'stage'
+  ) {
+    throw new Error(`Manager round "${input.roundMarker}" did not produce a stage transition`);
+  }
+  return staged;
 }
 
 export function rebindPendingManagerCommit(
@@ -103,13 +99,18 @@ export function rebindPendingManagerCommit(
   if (!samePublicationIntent(pending.publication, publication)) {
     throw new Error(`Pending manager publication intent changed for "${publicationId}"`);
   }
-  return {
+  const rebound: FindingLedger = {
     ...ledger,
     pendingManagerCommit: {
       ...pending,
       publication,
     },
   };
+  const transition = assertFindingLedgerAppendOnlyTransition(ledger, rebound);
+  if (transition !== 'rebind' && transition !== 'unchanged') {
+    throw new Error(`Pending manager publication "${publicationId}" did not produce a rebind transition`);
+  }
+  return rebound;
 }
 
 export function finalizePendingManagerCommit(
@@ -120,11 +121,13 @@ export function finalizePendingManagerCommit(
   if (pending === undefined || pending.publication.publicationId !== publicationId) {
     throw new Error(`Pending manager commit CAS failed for publication "${publicationId}"`);
   }
-  const finalized = {
+  const finalized: FindingLedger = {
     workflowName: ledger.workflowName,
     ...pending.completed,
   };
-  assertRawFindingsAppendOnly(ledger.rawFindings, finalized.rawFindings);
+  if (assertFindingLedgerAppendOnlyTransition(ledger, finalized) !== 'finalize') {
+    throw new Error(`Pending manager publication "${publicationId}" did not produce a finalization transition`);
+  }
   return finalized;
 }
 
@@ -132,28 +135,19 @@ export function assertGeneralPendingManagerCommitTransition(
   current: FindingLedger,
   next: FindingLedger,
 ): void {
+  const transition = assertFindingLedgerAppendOnlyTransition(current, next);
+  if (transition === 'ordinary' || transition === 'unchanged') {
+    return;
+  }
   const pending = current.pendingManagerCommit;
-  if (pending === undefined) {
-    if (next.pendingManagerCommit === undefined) {
-      return;
-    }
+  if (transition === 'stage') {
     throw new Error(
-      `Finding ledger publication "${next.pendingManagerCommit.publication.publicationId}" `
+      `Finding ledger publication "${next.pendingManagerCommit!.publication.publicationId}" `
       + 'cannot be staged through the general mutation API',
     );
   }
-  const nextPending = next.pendingManagerCommit;
-  if (nextPending !== undefined) {
-    const topLevelUnchanged = sameValue(withoutPending(current), withoutPending(next));
-    const completedUnchanged = sameValue(pending.completed, nextPending.completed);
-    const pendingUnchanged = pending.roundMarker === nextPending.roundMarker
-      && samePublication(pending.publication, nextPending.publication);
-    if (topLevelUnchanged && completedUnchanged && pendingUnchanged) {
-      return;
-    }
-  }
   throw new Error(
-    `Finding ledger publication "${pending.publication.publicationId}" is pending; `
+    `Finding ledger publication "${pending!.publication.publicationId}" is pending; `
     + 'changes require the dedicated finalization API or authorized rebind API',
   );
 }

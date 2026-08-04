@@ -11,8 +11,6 @@ vi.mock('../core/workflow/phase-runner.js', () => ({
 
 import { SystemStepExecutor } from '../core/workflow/engine/SystemStepExecutor.js';
 
-const executionScope = { kind: 'workflow_execution_scope', stack: [] } as const;
-
 function createState(): WorkflowState {
   return {
     workflowName: 'system-step-rule-resolution',
@@ -53,7 +51,7 @@ describe('SystemStepExecutor rule resolution', () => {
       makeRule('approved', 'COMPLETE'),
     ]],
   ])('should not resolve a provider context for %s', async (_case, rules) => {
-    const response = await executor.run(makeStep({ name: 'route', rules }), createState(), undefined, executionScope);
+    const response = await executor.run(makeStep({ name: 'route', rules }), createState());
 
     expect(response).toMatchObject({ matchedRuleIndex: 0, matchedRuleMethod: 'auto_select' });
     expect(getStatusJudgmentContext).not.toHaveBeenCalled();
@@ -63,7 +61,7 @@ describe('SystemStepExecutor rule resolution', () => {
   it('should auto-select a single semantic candidate when provider resolution would fail', async () => {
     const step = makeStep({ name: 'route', rules: [makeRule('approved', 'COMPLETE')] });
 
-    const response = await executor.run(step, createState(), undefined, executionScope);
+    const response = await executor.run(step, createState());
 
     expect(response).toMatchObject({ matchedRuleIndex: 0, matchedRuleMethod: 'auto_select' });
     expect(getStatusJudgmentContext).not.toHaveBeenCalled();
@@ -93,7 +91,7 @@ describe('SystemStepExecutor rule resolution', () => {
     });
     const state = createState();
 
-    await inputExecutor.run(step, state, undefined, executionScope);
+    await inputExecutor.run(step, state);
 
     expect(getCwd).toHaveBeenCalledOnce();
     expect(systemStepServicesFactory).toHaveBeenCalledWith(expect.objectContaining({
@@ -125,7 +123,7 @@ describe('SystemStepExecutor rule resolution', () => {
     });
     const state = createState();
 
-    await aliasExecutor.run(step, state, undefined, executionScope);
+    await aliasExecutor.run(step, state);
 
     const context = state.systemContexts.get('route');
     expect(context).toBeDefined();
@@ -155,7 +153,7 @@ describe('SystemStepExecutor rule resolution', () => {
       rules: [makeRule('when(true)', 'COMPLETE')],
     });
 
-    await effectExecutor.run(step, createState(), undefined, executionScope);
+    await effectExecutor.run(step, createState());
 
     expect(getCwd).toHaveBeenCalledOnce();
     expect(systemStepServicesFactory).toHaveBeenCalledWith(expect.objectContaining({

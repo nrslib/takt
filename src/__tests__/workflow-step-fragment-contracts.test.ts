@@ -29,6 +29,7 @@ function writeWorkflow(root: string, name: string, steps: string, initialStep: s
   return writeFile(root, '.takt/workflows/' + name + '.yaml', yaml(
     'name: ' + name,
     'initial_step: ' + initialStep,
+    'max_steps: 3',
     'steps:',
     steps,
   ));
@@ -462,6 +463,7 @@ describe('workflow step fragment contracts', () => {
       '  callable: true',
       '  requires_finding_contract: true',
       'initial_step: child',
+      'max_steps: 1',
       'steps:',
       '  - name: child',
       '    instruction: child',

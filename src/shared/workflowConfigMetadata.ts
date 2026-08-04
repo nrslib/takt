@@ -4,12 +4,14 @@ import { resolve } from 'node:path';
 const WORKFLOW_SOURCE_PATH = Symbol('workflowSourcePath');
 const WORKFLOW_TRUST_INFO = Symbol('workflowTrustInfo');
 const WORKFLOW_OPAQUE_REF = Symbol.for('takt.workflowOpaqueRef');
+const WORKFLOW_BUNDLE_NODE_ID = Symbol.for('takt.workflowBundleNodeId');
 const WORKFLOW_CONFIG_ERROR_TRANSLATOR = Symbol('workflowConfigErrorTranslator');
 type WorkflowConfigErrorTranslator = (workflow: object, error: unknown) => Error;
 type WorkflowConfigWithSourcePath = object & {
   [WORKFLOW_SOURCE_PATH]?: string;
   [WORKFLOW_TRUST_INFO]?: object;
   [WORKFLOW_OPAQUE_REF]?: string;
+  [WORKFLOW_BUNDLE_NODE_ID]?: string;
   [WORKFLOW_CONFIG_ERROR_TRANSLATOR]?: WorkflowConfigErrorTranslator;
 };
 
@@ -35,6 +37,17 @@ export function attachWorkflowOpaqueRef<T extends object>(workflow: T, opaqueRef
 
 export function getAttachedWorkflowOpaqueRef(workflow: object): string | undefined {
   return (workflow as WorkflowConfigWithSourcePath)[WORKFLOW_OPAQUE_REF];
+}
+
+export function attachWorkflowBundleNodeId<T extends object>(workflow: T, nodeId: string): T {
+  Object.defineProperty(workflow, WORKFLOW_BUNDLE_NODE_ID, {
+    value: nodeId, writable: false, configurable: false, enumerable: false,
+  });
+  return workflow;
+}
+
+export function getAttachedWorkflowBundleNodeId(workflow: object): string | undefined {
+  return (workflow as WorkflowConfigWithSourcePath)[WORKFLOW_BUNDLE_NODE_ID];
 }
 
 export function getWorkflowSourcePath(workflow: object): string | undefined {
@@ -69,7 +82,13 @@ export function translateWorkflowConfigError(workflow: object, error: unknown): 
 
 export function inheritWorkflowConfigMetadata(source: object, target: object): void {
   if (source === target) return;
-  for (const key of [WORKFLOW_SOURCE_PATH, WORKFLOW_TRUST_INFO, WORKFLOW_OPAQUE_REF, WORKFLOW_CONFIG_ERROR_TRANSLATOR]) {
+  for (const key of [
+    WORKFLOW_SOURCE_PATH,
+    WORKFLOW_TRUST_INFO,
+    WORKFLOW_OPAQUE_REF,
+    WORKFLOW_BUNDLE_NODE_ID,
+    WORKFLOW_CONFIG_ERROR_TRANSLATOR,
+  ]) {
     const descriptor = Object.getOwnPropertyDescriptor(source, key);
     if (!descriptor) continue;
     if (Object.getOwnPropertyDescriptor(target, key)) continue;

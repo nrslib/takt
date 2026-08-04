@@ -1,22 +1,29 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type {
   WorkflowConfig,
-  WorkflowResumePoint,
   WorkflowResumePointEntry,
   WorkflowState,
 } from '../core/models/index.js';
+import { createInitialState } from '../core/workflow/engine/state-manager.js';
+import { WorkflowCallExecutor } from '../core/workflow/engine/WorkflowCallExecutor.js';
+import { WorkflowCallRunner } from '../core/workflow/engine/WorkflowCallRunner.js';
+import { WorkflowEngine } from '../core/workflow/engine/WorkflowEngine.js';
+import { MAX_WORKFLOW_CALL_DEPTH } from '../core/workflow/workflow-call-depth.js';
+import type {
+  RuntimeStepResolution,
+  WorkflowCallCompleteLifecycle,
+  WorkflowEngineOptions,
+  WorkflowSharedRuntimeState,
+  WorkflowStepFailureSummary,
+} from '../core/workflow/types.js';
+import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
+import { buildWorkflowCallCompleteRecord } from '../features/tasks/execute/sessionLoggerRecordFactory.js';
 import type { AutoRoutingConfig } from '../core/models/config-types.js';
 import type { WorkRequirementEstimator } from '../core/workflow/auto-routing/contracts.js';
-import { createInitialState } from '../core/workflow/engine/state-manager.js';
-import { WorkflowCallRunner } from '../core/workflow/engine/WorkflowCallRunner.js';
-import { WorkflowCallExecutor } from '../core/workflow/engine/WorkflowCallExecutor.js';
-import { MAX_WORKFLOW_CALL_DEPTH } from '../core/workflow/workflow-call-depth.js';
-import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
-import { WorkflowCallProgressTracker } from '../core/workflow/workflow-call-progress-tracker.js';
-import { buildWorkflowCallNamespaceSegment } from '../core/workflow/workflow-call-namespace.js';
-import { buildWorkflowCallInvocationIdentity } from '../core/workflow/workflow-call-invocation-index.js';
-import { buildWorkflowCallInvocationRecordsFixture } from './helpers/workflow-resume-fixture.js';
-import type { WorkflowSharedRuntimeState } from '../core/workflow/types.js';
+import { createWorkflowOccurrenceTestHarness } from './test-helpers.js';
 
 const { createWorkRequirementEstimatorMock } = vi.hoisted(() => ({
   createWorkRequirementEstimatorMock: vi.fn(),
@@ -26,174 +33,222 @@ vi.mock('../agents/auto-routing-usecase.js', () => ({
   createWorkRequirementEstimator: createWorkRequirementEstimatorMock,
 }));
 
-interface ChildResult {
-  state: WorkflowState;
-  returnValue?: string;
-  abort?: {
-    kind: 'iteration_limit';
-    reason: string;
+function createAutoRoutingConfig(model = 'router-model'): AutoRoutingConfig {
+  return {
+    strategy: 'cost',
+    router: { provider: 'mock', model },
+    candidates: [
+      { name: 'medium', description: 'Focused work', provider: 'mock', model: 'medium-model', routingTier: 'medium' },
+      { name: 'high', description: 'Complex work', provider: 'mock', model: 'high-model', routingTier: 'high' },
+    ],
+    defaultPool: 'general',
+    candidatePools: { general: { candidates: ['medium', 'high'], fallback: 'high' } },
   };
+}
+
+const OPAQUE_WORKFLOW_REF = Symbol.for('takt.workflowOpaqueRef');
+
+interface HarnessOptions {
+  parentWorkflow?: string;
+  parentWorkflowReference?: string;
+  step?: string;
+  childWorkflow?: string;
+  childWorkflowReference?: string;
+  callInstance?: number;
+  resumeStackPrefix?: WorkflowResumePointEntry[];
+  childCallable?: boolean;
+  childStatus?: 'completed' | 'aborted';
+  returnValue?: string;
+  abortKind?: 'iteration_limit' | 'step_transition' | 'rule_no_match';
+  abortReason?: string;
+  abortFailure?: WorkflowStepFailureSummary;
+  resolverError?: Error;
+  resolverReturnsNull?: boolean;
+  createEngineError?: Error;
+  runError?: Error;
+  setActiveResumePointError?: Error;
+  terminalListenerError?: Error;
+  rules?: WorkflowConfig['steps'][number]['rules'];
+}
+
+interface LifecycleHarness {
+  emit: ReturnType<typeof vi.fn>;
+  order: string[];
+  state: WorkflowState;
+  execute: () => Promise<unknown>;
+  executeIsolated: () => Promise<unknown>;
+}
+
+function attachWorkflowReference(workflow: WorkflowConfig, reference: string | undefined): void {
+  if (reference === undefined) return;
+  Object.defineProperty(workflow, OPAQUE_WORKFLOW_REF, { value: reference });
 }
 
 function createChildState(
   childWorkflow: WorkflowConfig,
   status: 'completed' | 'aborted',
-  initialIteration: number,
 ): WorkflowState {
-  const state = createInitialState(childWorkflow, { initialIteration });
+  const state = createInitialState(childWorkflow, { initialIteration: 1 });
   state.status = status;
+  state.lastOutput = {
+    persona: 'child-reviewer',
+    status: 'done',
+    content: status === 'completed' ? 'approved' : 'child aborted',
+    timestamp: new Date(),
+  };
   return state;
 }
 
-function createLifecycleHarness(options: {
-  parentWorkflow: string;
-  step: string;
-  childWorkflow: string;
-  childWorkflowReference?: string;
-  callInstance: number;
-  resumeStackPrefix?: WorkflowResumePointEntry[];
-  childResult?: ChildResult;
-  childCallable?: boolean;
-  resolverError?: Error;
-  createEngineError?: Error;
-  runError?: Error;
-  terminalListenerError?: Error;
-  resumePoint?: WorkflowResumePoint;
-  expectedChildReferenceDuringResolution?: string;
-  rules?: WorkflowConfig['steps'][number]['rules'];
-}) {
+function createLifecycleHarness(options: HarnessOptions = {}): LifecycleHarness {
+  const parentName = options.parentWorkflow ?? 'parent';
+  const stepName = options.step ?? 'delegate';
+  const childName = options.childWorkflow ?? 'shared/review';
+  const callInstance = options.callInstance ?? 1;
+  const resumeStackPrefix = options.resumeStackPrefix ?? [];
   const workflowStep = {
-    name: options.step,
+    name: stepName,
     kind: 'workflow_call' as const,
-    call: options.childWorkflow,
+    call: childName,
     rules: options.rules ?? [
       normalizeRule({ condition: 'approved', next: 'COMPLETE' }),
       normalizeRule({ condition: 'ABORT', next: 'ABORT' }),
     ],
   };
   const parentWorkflow: WorkflowConfig = {
-    name: options.parentWorkflow,
-    initialStep: options.step,
+    name: parentName,
+    initialStep: stepName,
     maxSteps: 3,
     steps: [workflowStep],
   };
   const childWorkflow: WorkflowConfig = {
-    name: options.childWorkflow,
+    name: childName,
     subworkflow: { callable: options.childCallable ?? true },
     initialStep: 'review',
+    maxSteps: 3,
     steps: [],
   };
-  if (options.childWorkflowReference !== undefined) {
-    Object.defineProperty(childWorkflow, Symbol.for('takt.workflowOpaqueRef'), {
-      value: options.childWorkflowReference,
-    });
-  }
-  const emit = vi.fn((event: string, lifecycle: { result?: { status: string } }) => {
+  attachWorkflowReference(parentWorkflow, options.parentWorkflowReference);
+  attachWorkflowReference(childWorkflow, options.childWorkflowReference);
+
+  const order: string[] = [];
+  const emit = vi.fn((event: string, lifecycle: WorkflowCallCompleteLifecycle) => {
+    if (event === 'workflow_call:start') {
+      order.push('start');
+    } else if (event === 'workflow_call:complete') {
+      order.push('complete');
+    }
     if (
       options.terminalListenerError !== undefined
       && event === 'workflow_call:complete'
-      && lifecycle.result?.status === 'completed'
+      && lifecycle.result.status === 'completed'
     ) {
       throw options.terminalListenerError;
     }
   });
-  const engineOptions = {
+  const engineOptions: WorkflowEngineOptions = {
     projectCwd: '/project',
-    provider: 'mock' as const,
+    provider: 'mock',
+    model: 'parent-model',
     initialIteration: 1,
-    resumePoint: options.resumePoint,
   };
   const state = createInitialState(parentWorkflow, engineOptions);
-  state.stepIterations.set(
-    options.step,
-    options.resumePoint === undefined ? options.callInstance - 1 : options.callInstance,
+  state.stepIterations.set(stepName, callInstance);
+  const sharedRuntime: WorkflowSharedRuntimeState = { startedAtMs: 0 };
+  let setActiveResumePointCalls = 0;
+  const childState = createChildState(
+    childWorkflow,
+    options.childStatus ?? 'completed',
   );
-  const progressTracker = new WorkflowCallProgressTracker();
-  const progressLease = progressTracker.acquire();
-  const sharedRuntime: WorkflowSharedRuntimeState = {
-    startedAtMs: 0,
-    workflowCallProgressTracker: progressTracker,
-  };
-  const adoptResumeCheckpoint = vi.fn((_resumePoint: WorkflowResumePoint, iteration: number) => {
-    state.iteration = iteration;
+  const createEngine = vi.fn(() => {
+    if (options.createEngineError !== undefined) {
+      throw options.createEngineError;
+    }
+    return {
+      on: vi.fn(),
+      runWithResult: options.runError === undefined
+        ? vi.fn().mockResolvedValue({
+            state: childState,
+            ...(childState.status === 'completed'
+              ? { returnValue: options.returnValue ?? 'approved' }
+              : options.returnValue === undefined
+                ? {}
+                : { returnValue: options.returnValue }),
+            ...(childState.status === 'aborted'
+              ? {
+                  abort: {
+                    kind: options.abortKind ?? 'iteration_limit',
+                    reason: options.abortReason ?? 'Maximum steps reached',
+                    ...(options.abortFailure === undefined
+                      ? {}
+                      : { failure: options.abortFailure }),
+                  },
+                }
+              : {}),
+          })
+        : vi.fn().mockRejectedValue(options.runError),
+    };
   });
-  let resolutionCount = 0;
   const runner = new WorkflowCallRunner({
     getConfig: () => parentWorkflow,
-    getOptions: () => engineOptions,
-    getCwd: () => '/project',
+    getMaxSteps: () => parentWorkflow.maxSteps,
+    updateMaxSteps: vi.fn(),
+    state,
     projectCwd: '/project',
+    getCwd: () => '/project',
     task: 'Review the change',
+    getOptions: () => engineOptions,
     sharedRuntime,
-    progressLease,
-    resumeStackPrefix: options.resumeStackPrefix ?? [],
-    runPaths: { slug: 'run' },
+    resumeStackPrefix,
+    consumeWorkflowCallContinuation: vi.fn(),
+    runPaths: { slug: 'run' } as never,
+    setActiveResumePoint: vi.fn(() => {
+      setActiveResumePointCalls++;
+      if (
+        options.setActiveResumePointError !== undefined
+        && setActiveResumePointCalls === 2
+      ) {
+        throw options.setActiveResumePointError;
+      }
+    }),
+    emit,
     resolveWorkflowCall: vi.fn(() => {
-      resolutionCount += 1;
-      if (options.resolverError) {
+      order.push('resolve');
+      if (options.resolverError !== undefined) {
         throw options.resolverError;
       }
-      if (options.expectedChildReferenceDuringResolution !== undefined && resolutionCount === 1) {
-        expect(sharedRuntime.workflowCallInvocationEvidence?.index.get(
-          parentWorkflow,
-          options.step,
-          options.resumeStackPrefix ?? [],
-        )?.child_workflow_ref).toBe(options.expectedChildReferenceDuringResolution);
+      if (options.resolverReturnsNull === true) {
+        return null;
       }
       return childWorkflow;
     }),
-    createEngine: vi.fn((_config, _cwd, _task, childOptions) => {
-      if (options.createEngineError) {
-        throw options.createEngineError;
-      }
-      if (childOptions.initialIteration === undefined) {
-        throw new Error('Child engine fake requires initialIteration');
-      }
-      const childResult = options.childResult ?? {
-        state: createChildState(childWorkflow, 'completed', childOptions.initialIteration),
-        returnValue: 'approved',
-      };
-      const childResumePoint: WorkflowResumePoint = {
-        version: 2,
-        stack: [{
-          workflow: childWorkflow.name,
-          step: 'review',
-          kind: 'agent',
-          step_iterations: {},
-        }],
-        iteration: childResult.state.iteration,
-        max_steps: 3,
-        elapsed_ms: 0,
-        workflow_call_invocations: {},
-        workflow_step_participations: {},
-      };
-      return {
-        on: vi.fn(),
-        runWithResult: options.runError
-          ? vi.fn().mockRejectedValue(options.runError)
-          : vi.fn().mockResolvedValue(childResult),
-        getOwnedResumePoint: vi.fn(() => childResumePoint),
-      };
-    }),
-    emit,
-    state,
-    setActiveResumePoint: vi.fn((_step, iteration) => {
-      state.iteration = iteration;
-    }),
-    setActiveResumeStack: vi.fn((_stack, iteration) => {
-      state.iteration = iteration;
-    }),
-    adoptResumeCheckpoint,
+    createEngine,
     refreshFindingsState: vi.fn(),
-  } as never);
+  });
+  const runtime: RuntimeStepResolution = {
+    providerInfo: {
+      provider: 'mock',
+      model: 'parent-model',
+    },
+  };
 
+  const activate = () => runner.activateInvocation(
+    workflowStep,
+    state.iteration,
+    callInstance,
+    resumeStackPrefix,
+  );
   return {
     emit,
+    order,
     state,
-    adoptResumeCheckpoint,
-    execute: () => runner.run(workflowStep),
-    executeIsolated: () => runner.runIsolated(workflowStep),
-    recordCountableProgress: () => progressLease.recordCountableProgress(),
+    execute: async () => {
+      const token = activate();
+      return runner.run(workflowStep, token, runtime);
+    },
+    executeIsolated: async () => {
+      const token = activate();
+      return runner.runIsolated(workflowStep, runtime, resumeStackPrefix, token);
+    },
   };
 }
 
@@ -203,217 +258,359 @@ function lifecycleCalls(emit: ReturnType<typeof vi.fn>): unknown[][] {
   ));
 }
 
+function expectFailedLifecycle(
+  emit: ReturnType<typeof vi.fn>,
+  reason: string,
+): WorkflowCallCompleteLifecycle {
+  const calls = lifecycleCalls(emit);
+  expect(calls).toHaveLength(2);
+  const start = calls[0]?.[1];
+  const complete = calls[1]?.[1];
+  expect(calls).toEqual([
+    ['workflow_call:start', expect.objectContaining({ callInstance: 1 })],
+    ['workflow_call:complete', expect.objectContaining({
+      result: {
+        status: 'failed',
+        reason: expect.stringContaining(reason),
+      },
+    })],
+  ]);
+  expect(complete).toMatchObject({
+    parentWorkflow: (start as WorkflowCallCompleteLifecycle).parentWorkflow,
+    step: (start as WorkflowCallCompleteLifecycle).step,
+    childWorkflow: (start as WorkflowCallCompleteLifecycle).childWorkflow,
+    callInstance: (start as WorkflowCallCompleteLifecycle).callInstance,
+    stack: (start as WorkflowCallCompleteLifecycle).stack,
+  });
+  return complete as WorkflowCallCompleteLifecycle;
+}
+
+function createProviderResolutionFailureWorkflows(parallel: boolean): {
+  parent: WorkflowConfig;
+  child: WorkflowConfig;
+} {
+  const workflowCall = {
+    name: 'delegate',
+    kind: 'workflow_call' as const,
+    call: 'child',
+    rules: [normalizeRule({ condition: 'COMPLETE', next: 'COMPLETE' })],
+  };
+  const parent: WorkflowConfig = {
+    name: parallel ? 'parallel-parent' : 'serial-parent',
+    initialStep: parallel ? 'reviewers' : 'delegate',
+    maxSteps: 3,
+    providerOptions: { codex: { networkAccess: false } },
+    steps: parallel
+      ? [{
+          name: 'reviewers',
+          instruction: 'Run delegated review',
+          parallel: [workflowCall],
+          rules: [normalizeRule({ condition: 'all("COMPLETE")', next: 'COMPLETE' })],
+        }]
+      : [workflowCall],
+  };
+  const child: WorkflowConfig = {
+    name: 'child',
+    subworkflow: { callable: true },
+    initialStep: 'child-review',
+    maxSteps: 2,
+    steps: [{
+      name: 'child-review',
+      persona: 'child-reviewer',
+      instruction: 'Review child workflow',
+      rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
+    }],
+  };
+  return { parent, child };
+}
+
+async function runProviderResolutionFailureThroughEngine(parallel: boolean): Promise<{
+  emit: ReturnType<typeof vi.fn>;
+  resumePointAtStart: ReturnType<WorkflowEngine['getResumePoint']>;
+  state: WorkflowState;
+}> {
+  const projectDir = mkdtempSync(join(tmpdir(), 'takt-workflow-call-lifecycle-'));
+  const failure = new Error(`${parallel ? 'parallel' : 'serial'} provider resolution failed`);
+  const { parent, child } = createProviderResolutionFailureWorkflows(parallel);
+  const emit = vi.fn();
+  let runStarted = false;
+  let parallelStepStarted = false;
+  let providerOriginCalls = 0;
+  const parentParallelProviderResolutionCalls = parallel ? 2 : 0;
+  let resumePointAtStart: ReturnType<WorkflowEngine['getResumePoint']>;
+  try {
+    const engine = new WorkflowEngine(parent, projectDir, 'Resolve provider context', {
+      projectCwd: projectDir,
+      provider: 'mock',
+      model: 'parent-model',
+      providerOptions: { codex: { networkAccess: true } },
+      providerOptionsOriginResolver: (path) => {
+        if (
+          runStarted
+          && (!parallel || parallelStepStarted)
+          && path === 'codex.networkAccess'
+        ) {
+          providerOriginCalls++;
+          if (providerOriginCalls === parentParallelProviderResolutionCalls + 1) {
+            throw failure;
+          }
+        }
+        return 'default';
+      },
+      workflowCallResolver: () => child,
+    });
+    engine.on('step:start', (step) => {
+      if (step.name === 'reviewers') {
+        parallelStepStarted = true;
+      }
+    });
+    engine.on('workflow_call:start', (lifecycle) => {
+      resumePointAtStart = engine.getResumePoint();
+      emit('workflow_call:start', lifecycle);
+    });
+    engine.on('workflow_call:complete', (lifecycle) => {
+      emit('workflow_call:complete', lifecycle);
+    });
+    runStarted = true;
+    const state = await engine.run();
+    return { emit, resumePointAtStart, state };
+  } finally {
+    rmSync(projectDir, { recursive: true, force: true });
+  }
+}
+
 describe('WorkflowCallRunner lifecycle events', () => {
-  it('should retain provider-independent invocation identity when a child workflow completes', async () => {
-    const { emit, execute } = createLifecycleHarness({
-      parentWorkflow: 'parent',
-      step: 'delegate',
-      childWorkflow: 'shared/review',
-      callInstance: 1,
+  it('records the requested child at start and the canonical child at completion', async () => {
+    const harness = createLifecycleHarness({
+      parentWorkflowReference: 'project:sha256:parent',
+      childWorkflowReference: 'builtin:sha256:child',
     });
 
-    await execute();
+    await harness.execute();
 
-    const calls = lifecycleCalls(emit);
-    expect(calls).toEqual([
+    expect(lifecycleCalls(harness.emit)).toEqual([
       [
         'workflow_call:start',
-        expect.objectContaining({
-          parentWorkflow: 'parent',
+        {
+          parentWorkflow: 'project:sha256:parent',
           step: 'delegate',
           childWorkflow: 'shared/review',
           callInstance: 1,
-          stack: [
-            expect.objectContaining({
-              workflow: 'parent',
-              step: 'delegate',
-              kind: 'workflow_call',
-              call_instance: 1,
-            }),
-          ],
-        }),
+          stack: [{
+            workflow: 'parent',
+            workflow_ref: 'project:sha256:parent',
+            step: 'delegate',
+            kind: 'workflow_call',
+            occurrence: 1,
+            step_iterations: { delegate: 1 },
+            call_instance: 1,
+          }],
+        },
       ],
       [
         'workflow_call:complete',
         expect.objectContaining({
-          parentWorkflow: 'parent',
-          step: 'delegate',
-          childWorkflow: 'shared/review',
-          callInstance: 1,
-          result: {
-            status: 'completed',
-            returnValue: 'approved',
-          },
+          parentWorkflow: 'project:sha256:parent',
+          childWorkflow: 'builtin:sha256:child',
+          result: { status: 'completed', returnValue: 'approved' },
         }),
       ],
     ]);
-    for (const [, lifecycle] of calls) {
-      expect(lifecycle).not.toHaveProperty('iteration');
-      expect(lifecycle).not.toHaveProperty('provider');
-      expect(lifecycle).not.toHaveProperty('model');
-    }
   });
 
-  it('should retain the complete ancestor stack when a nested workflow call starts', async () => {
-    const ancestor = {
-      workflow: 'parent',
-      step: 'delegate',
-      kind: 'workflow_call' as const,
+  it('retains the complete canonical ancestor stack for nested calls', async () => {
+    const ancestor: WorkflowResumePointEntry = {
+      workflow: 'outer',
+      workflow_ref: 'project:sha256:outer',
+      step: 'delegate-parent',
+      kind: 'workflow_call',
+      occurrence: 3,
       call_instance: 3,
     };
-    const { emit, execute } = createLifecycleHarness({
-      parentWorkflow: 'shared/outer',
+    const harness = createLifecycleHarness({
+      parentWorkflow: 'inner-parent',
+      parentWorkflowReference: 'project:sha256:inner-parent',
       step: 'delegate-inner',
-      childWorkflow: 'shared/inner',
       callInstance: 2,
       resumeStackPrefix: [ancestor],
     });
 
-    await execute();
+    await harness.execute();
 
-    const start = lifecycleCalls(emit)[0]?.[1];
-    expect(start).toMatchObject({
+    expect(lifecycleCalls(harness.emit)[0]?.[1]).toMatchObject({
       callInstance: 2,
       stack: [
         ancestor,
         {
-          workflow: 'shared/outer',
+          workflow: 'inner-parent',
+          workflow_ref: 'project:sha256:inner-parent',
           step: 'delegate-inner',
           kind: 'workflow_call',
+          occurrence: 2,
           call_instance: 2,
         },
       ],
     });
   });
 
-  it('should record an aborted terminal event when the child workflow aborts', async () => {
-    const childWorkflow: WorkflowConfig = {
-      name: 'shared/review',
-      subworkflow: { callable: true },
-      initialStep: 'review',
-      steps: [],
+  it('records an aborted terminal event and preserves deepest failure provenance', async () => {
+    const failure: WorkflowStepFailureSummary = {
+      kind: 'step_transition',
+      step: 'deepest-review',
+      reason: 'child rejection',
+      error: 'child rejection',
     };
-    const { emit, execute } = createLifecycleHarness({
-      parentWorkflow: 'parent',
-      step: 'delegate',
-      childWorkflow: childWorkflow.name,
-      callInstance: 1,
-      childResult: {
-        state: createChildState(childWorkflow, 'aborted', 1),
-        abort: {
-          kind: 'iteration_limit',
-          reason: 'Maximum steps reached',
-        },
-      },
+    const harness = createLifecycleHarness({
+      childStatus: 'aborted',
+      returnValue: undefined,
+      abortKind: 'step_transition',
+      abortReason: 'child rejection',
+      abortFailure: failure,
     });
 
-    await execute();
+    const result = await harness.execute() as { workflowCallFailure?: WorkflowStepFailureSummary };
 
-    const complete = lifecycleCalls(emit)[1]?.[1];
-    expect(complete).toMatchObject({
+    expect(result.workflowCallFailure).toEqual(failure);
+    expect(lifecycleCalls(harness.emit)[1]?.[1]).toMatchObject({
       result: {
         status: 'aborted',
-        abortKind: 'iteration_limit',
-        abortReason: 'Maximum steps reached',
+        abortKind: 'step_transition',
+        abortReason: 'child rejection',
       },
     });
   });
 
-  it('should record one failed terminal event and preserve iteration when resolution fails', async () => {
+  it('records start then failed when child resolution throws', async () => {
     const failure = new Error('resolver failed');
-    const { emit, execute, state } = createLifecycleHarness({
-      parentWorkflow: 'parent',
-      step: 'delegate',
-      childWorkflow: 'shared/review',
-      callInstance: 1,
-      resolverError: failure,
-    });
+    const harness = createLifecycleHarness({ resolverError: failure });
 
-    await expect(execute()).rejects.toBe(failure);
+    await expect(harness.execute()).rejects.toBe(failure);
 
-    expect(state.iteration).toBe(1);
-    expect(state.stepIterations.get('delegate')).toBe(1);
-    expect(lifecycleCalls(emit)).toEqual([
-      ['workflow_call:start', expect.objectContaining({ callInstance: 1 })],
-      ['workflow_call:complete', expect.objectContaining({
-        callInstance: 1,
-        result: { status: 'failed', reason: 'resolver failed' },
-      })],
-    ]);
+    expect(harness.order).toEqual(['start', 'resolve', 'complete']);
+    expectFailedLifecycle(harness.emit, 'resolver failed');
   });
 
-  it('should record one failed terminal event when child execution rejects', async () => {
-    const failure = new Error('child run rejected');
-    const childWorkflow: WorkflowConfig = {
-      name: 'shared/review',
-      subworkflow: { callable: true },
-      initialStep: 'review',
-      steps: [],
-    };
-    const childState = createChildState(childWorkflow, 'aborted', 4);
-    const { adoptResumeCheckpoint, emit, execute, state } = createLifecycleHarness({
-      parentWorkflow: 'parent',
-      step: 'delegate',
-      childWorkflow: 'shared/review',
-      callInstance: 1,
-      childResult: { state: childState },
-      runError: failure,
-    });
+  it('records start then failed when the child workflow is unknown', async () => {
+    const harness = createLifecycleHarness({ resolverReturnsNull: true });
 
-    await expect(execute()).rejects.toBe(failure);
-
-    expect(lifecycleCalls(emit)).toEqual([
-      ['workflow_call:start', expect.objectContaining({ callInstance: 1 })],
-      ['workflow_call:complete', expect.objectContaining({
-        callInstance: 1,
-        result: { status: 'failed', reason: 'child run rejected' },
-      })],
-    ]);
-    expect(state.iteration).toBe(4);
-    expect(adoptResumeCheckpoint).toHaveBeenCalledWith(
-      expect.objectContaining({ iteration: 4 }),
-      4,
+    await expect(harness.execute()).rejects.toThrow(
+      'references unknown workflow "shared/review"',
     );
-  });
 
-  it('should preserve the child iteration when response rule resolution fails', async () => {
-    const childWorkflow: WorkflowConfig = {
-      name: 'shared/review',
-      subworkflow: { callable: true },
-      initialStep: 'review',
-      steps: [],
-    };
-    const childState = createChildState(childWorkflow, 'completed', 4);
-    const harness = createLifecycleHarness({
-      parentWorkflow: 'parent',
-      step: 'delegate',
-      childWorkflow: 'shared/review',
-      callInstance: 1,
-      childResult: { state: childState, returnValue: 'approved' },
-      rules: [normalizeRule({ condition: 'rejected', next: 'ABORT' })],
-    });
-
-    await expect(harness.execute()).rejects.toThrow();
-
-    expect(harness.state.iteration).toBe(4);
-    expect(harness.adoptResumeCheckpoint).toHaveBeenCalledWith(
-      expect.objectContaining({ iteration: 4 }),
-      4,
-    );
+    expect(harness.order).toEqual(['start', 'resolve', 'complete']);
+    expectFailedLifecycle(harness.emit, 'references unknown workflow "shared/review"');
   });
 
   it.each([
-    { mode: 'normal', isolated: false },
-    { mode: 'isolated', isolated: true },
-  ])('should propagate a completed listener error without reclassifying the $mode attempt', async ({ isolated }) => {
-    const failure = new Error('completed listener failed');
-    const harness = createLifecycleHarness({
-      parentWorkflow: 'parent',
+    {
+      name: 'the resolved workflow is not callable',
+      options: { childCallable: false },
+      reason: 'workflow "shared/review" is not callable',
+    },
+    {
+      name: 'the resolved workflow creates a cycle',
+      options: { childWorkflow: 'parent' },
+      reason: 'Detected workflow_call cycle',
+    },
+    {
+      name: 'the call depth exceeds the limit',
+      options: {
+        resumeStackPrefix: Array.from(
+          { length: MAX_WORKFLOW_CALL_DEPTH - 1 },
+          (_, index): WorkflowResumePointEntry => ({
+            workflow: `ancestor-${index + 1}`,
+            workflow_ref: `project:sha256:ancestor-${index + 1}`,
+            step: `delegate-${index + 1}`,
+            kind: 'workflow_call',
+            occurrence: 1,
+            call_instance: 1,
+          }),
+        ),
+      },
+      reason: `workflow_call depth exceeds limit (${MAX_WORKFLOW_CALL_DEPTH})`,
+    },
+  ])('records exactly one failed terminal when $name', async ({ options, reason }) => {
+    const harness = createLifecycleHarness(options);
+
+    await expect(harness.execute()).rejects.toThrow(reason);
+
+    expect(harness.order).toEqual(['start', 'resolve', 'complete']);
+    expectFailedLifecycle(harness.emit, reason);
+  });
+
+  it('records start then failed when active resume-point publication fails', async () => {
+    const failure = new Error('resume point publication failed');
+    const harness = createLifecycleHarness({ setActiveResumePointError: failure });
+
+    await expect(harness.execute()).rejects.toBe(failure);
+
+    expectFailedLifecycle(harness.emit, 'resume point publication failed');
+  });
+
+  it('records start then failed when child engine construction fails', async () => {
+    const failure = new Error('child engine construction failed');
+    const harness = createLifecycleHarness({ createEngineError: failure });
+
+    await expect(harness.execute()).rejects.toBe(failure);
+
+    expectFailedLifecycle(harness.emit, 'child engine construction failed');
+  });
+
+  it.each([
+    { name: 'serial RunLoop', parallel: false },
+    { name: 'ParallelRunner', parallel: true },
+  ])('records the original provider failure through the real $name wiring', async ({ parallel }) => {
+    const result = await runProviderResolutionFailureThroughEngine(parallel);
+    const reason = `${parallel ? 'parallel' : 'serial'} provider resolution failed`;
+
+    expect(result.state.status).toBe('aborted');
+    const complete = expectFailedLifecycle(result.emit, reason);
+    expect(complete.result).toEqual({ status: 'failed', reason });
+    expect(result.resumePointAtStart?.stack.at(-1)).toMatchObject({
       step: 'delegate',
-      childWorkflow: 'shared/review',
-      callInstance: 1,
-      terminalListenerError: failure,
+      kind: 'workflow_call',
+      occurrence: 1,
+      call_instance: 1,
     });
+    expect(Object.values(result.resumePointAtStart?.workflow_call_invocations ?? {})).toContainEqual({
+      call_instance: 1,
+      report_namespace_segment: expect.any(String),
+    });
+  });
+
+  it.each([
+    { name: 'normal', isolated: false },
+    { name: 'isolated', isolated: true },
+  ])('records start then failed when $name child execution rejects', async ({ isolated }) => {
+    const failure = new Error(`${isolated ? 'isolated' : 'normal'} child rejected`);
+    const harness = createLifecycleHarness({ runError: failure });
+
+    const execution = isolated ? harness.executeIsolated() : harness.execute();
+    await expect(execution).rejects.toBe(failure);
+
+    expectFailedLifecycle(harness.emit, failure.message);
+  });
+
+  it.each([
+    { name: 'normal', isolated: false },
+    { name: 'isolated', isolated: true },
+  ])('records failed when $name response rule resolution fails', async ({ isolated }) => {
+    const harness = createLifecycleHarness({
+      rules: [normalizeRule({ condition: 'rejected', next: 'ABORT' })],
+    });
+
+    const execution = isolated ? harness.executeIsolated() : harness.execute();
+    await expect(execution).rejects.toThrow('no rule matched');
+
+    expectFailedLifecycle(harness.emit, 'no rule matched');
+  });
+
+  it.each([
+    { name: 'normal', isolated: false },
+    { name: 'isolated', isolated: true },
+  ])('does not reclassify a completed listener error for $name execution', async ({ isolated }) => {
+    const failure = new Error('completed listener failed');
+    const harness = createLifecycleHarness({ terminalListenerError: failure });
 
     const execution = isolated ? harness.executeIsolated() : harness.execute();
     await expect(execution).rejects.toBe(failure);
@@ -421,357 +618,87 @@ describe('WorkflowCallRunner lifecycle events', () => {
     expect(lifecycleCalls(harness.emit)).toEqual([
       ['workflow_call:start', expect.objectContaining({ callInstance: 1 })],
       ['workflow_call:complete', expect.objectContaining({
-        callInstance: 1,
         result: { status: 'completed', returnValue: 'approved' },
       })],
     ]);
   });
 
-  it('should record one failed terminal event when isolated child execution rejects', async () => {
-    const failure = new Error('isolated child run rejected');
-    const { emit, executeIsolated } = createLifecycleHarness({
-      parentWorkflow: 'parent',
-      step: 'delegate',
-      childWorkflow: 'shared/review',
-      callInstance: 1,
-      runError: failure,
+  it('keeps the raw failure in the engine event and redacts it at the NDJSON boundary', async () => {
+    const secret = 'super-secret-token';
+    const harness = createLifecycleHarness({
+      runError: new Error(`token=${secret}`),
     });
 
-    await expect(executeIsolated()).rejects.toBe(failure);
+    await expect(harness.execute()).rejects.toThrow(secret);
 
-    expect(lifecycleCalls(emit)).toEqual([
-      ['workflow_call:start', expect.objectContaining({ callInstance: 1 })],
-      ['workflow_call:complete', expect.objectContaining({
-        callInstance: 1,
-        result: { status: 'failed', reason: 'isolated child run rejected' },
-      })],
-    ]);
-  });
-
-  it.each([
-    {
-      name: 'the resolved workflow is not callable',
-      options: {
-        parentWorkflow: 'parent',
-        step: 'delegate',
-        childWorkflow: 'shared/review',
-        callInstance: 1,
-        childCallable: false,
-      },
-      reason: 'workflow "shared/review" is not callable',
-    },
-    {
-      name: 'the resolved workflow creates a cycle',
-      options: {
-        parentWorkflow: 'parent',
-        step: 'delegate',
-        childWorkflow: 'parent',
-        callInstance: 1,
-      },
-      reason: 'Detected workflow_call cycle',
-    },
-    {
-      name: 'the call depth exceeds the limit',
-      options: {
-        parentWorkflow: 'parent',
-        step: 'delegate',
-        childWorkflow: 'shared/review',
-        callInstance: 1,
-        resumeStackPrefix: Array.from(
-          { length: MAX_WORKFLOW_CALL_DEPTH - 1 },
-          (_, index) => ({
-            workflow: `ancestor-${index + 1}`,
-            step: `delegate-${index + 1}`,
-            kind: 'workflow_call' as const,
-            call_instance: 1,
-          }),
-        ),
-      },
-      reason: `workflow_call depth exceeds limit (${MAX_WORKFLOW_CALL_DEPTH})`,
-    },
-  ])('should record exactly one failed terminal event when $name', async ({ options, reason }) => {
-    const { emit, execute } = createLifecycleHarness(options);
-
-    await expect(execute()).rejects.toThrow(reason);
-
-    const calls = lifecycleCalls(emit);
-    expect(calls).toHaveLength(2);
-    const start = calls[0]?.[1] as Record<string, unknown>;
-    expect(calls).toEqual([
-      ['workflow_call:start', expect.objectContaining({ callInstance: 1 })],
-      ['workflow_call:complete', expect.objectContaining({
-        parentWorkflow: start.parentWorkflow,
-        step: start.step,
-        childWorkflow: start.childWorkflow,
-        callInstance: start.callInstance,
-        stack: start.stack,
-        result: {
-          status: 'failed',
-          reason: expect.stringContaining(reason),
-        },
-      })],
-    ]);
-  });
-
-  it('should preserve the original error and record one failed terminal when child engine construction fails', async () => {
-    const failure = new Error('child engine construction failed');
-    const { emit, execute } = createLifecycleHarness({
-      parentWorkflow: 'parent',
-      step: 'delegate',
-      childWorkflow: 'shared/review',
-      callInstance: 1,
-      createEngineError: failure,
+    const complete = expectFailedLifecycle(harness.emit, secret);
+    const record = buildWorkflowCallCompleteRecord(
+      complete,
+      (text) => text.replaceAll(secret, '[REDACTED]'),
+    );
+    expect(complete.result).toEqual({ status: 'failed', reason: `token=${secret}` });
+    expect(record).toMatchObject({
+      type: 'workflow_call_complete',
+      status: 'failed',
+      reason: 'token=[REDACTED]',
     });
-
-    await expect(execute()).rejects.toBe(failure);
-
-    expect(lifecycleCalls(emit)).toEqual([
-      ['workflow_call:start', expect.objectContaining({ callInstance: 1 })],
-      ['workflow_call:complete', expect.objectContaining({
-        callInstance: 1,
-        result: {
-          status: 'failed',
-          reason: 'child engine construction failed',
-        },
-      })],
-    ]);
-  });
-
-  it('should consume a resumed call instance once and allocate a new instance on the next call', async () => {
-    const resumePoint = {
-      version: 2 as const,
-      stack: [{
-        workflow: 'parent',
-        step: 'delegate',
-        kind: 'workflow_call' as const,
-        call_instance: 1,
-        step_iterations: { delegate: 1 },
-      }],
-      iteration: 1,
-      elapsed_ms: 0,
-      workflow_call_invocations: buildWorkflowCallInvocationRecordsFixture([{
-        workflowReference: 'parent',
-        step: 'delegate',
-        ownerPath: [],
-        callInstance: 1,
-        childWorkflowReference: 'project:sha256:child',
-      }]),
-      workflow_step_participations: {},
-    };
-    const { emit, execute, state, recordCountableProgress } = createLifecycleHarness({
-      parentWorkflow: 'parent',
-      step: 'delegate',
-      childWorkflow: 'shared/review',
-      childWorkflowReference: 'project:sha256:child',
-      callInstance: 1,
-      resumePoint,
-      expectedChildReferenceDuringResolution: 'project:sha256:child',
-    });
-
-    await execute();
-    state.iteration = 2;
-    recordCountableProgress();
-    await execute();
-
-    expect(state.iteration).toBe(2);
-    expect(state.stepIterations.get('delegate')).toBe(2);
-    expect(lifecycleCalls(emit).map(([, lifecycle]) => (
-      lifecycle as { callInstance: number }
-    ).callInstance)).toEqual([1, 1, 2, 2]);
-  });
-
-  it('should fail fast when a resumed namespace references a different child workflow', async () => {
-    const identity = buildWorkflowCallInvocationIdentity('parent', 'delegate', []);
-    const resumePoint: WorkflowResumePoint = {
-      version: 2,
-      stack: [{
-        workflow: 'parent',
-        step: 'delegate',
-        kind: 'workflow_call',
-        call_instance: 1,
-        step_iterations: { delegate: 1 },
-      }],
-      iteration: 1,
-      elapsed_ms: 0,
-      workflow_call_invocations: {
-        [identity]: {
-          call_instance: 1,
-          child_workflow_ref: 'different-child',
-        },
-      },
-      workflow_step_participations: {},
-    };
-    const { emit, execute } = createLifecycleHarness({
-      parentWorkflow: 'parent',
-      step: 'delegate',
-      childWorkflow: 'shared/review',
-      callInstance: 1,
-      resumePoint,
-    });
-
-    await expect(execute()).rejects.toThrow('does not match resolved child');
-    expect(lifecycleCalls(emit)).toEqual([
-      ['workflow_call:start', expect.objectContaining({ callInstance: 1 })],
-      ['workflow_call:complete', expect.objectContaining({
-        callInstance: 1,
-        result: expect.objectContaining({ status: 'failed' }),
-      })],
-    ]);
-  });
-});
-
-describe('WorkflowCallProgressTracker', () => {
-  it('sibling branch progress does not erase another branch identity', () => {
-    const tracker = new WorkflowCallProgressTracker();
-    const firstBranch = tracker.acquire();
-    const secondBranch = tracker.acquire();
-
-    firstBranch.enter('A', 'call-a');
-    secondBranch.enter('B', 'call-b');
-    secondBranch.recordCountableProgress();
-
-    expect(() => firstBranch.enter('A', 'call-a')).toThrow(/without countable-step progress/);
-    expect(() => secondBranch.enter('B', 'call-b')).not.toThrow();
-  });
-
-  it('allows a call identity after countable progress advances its branch', () => {
-    const tracker = new WorkflowCallProgressTracker();
-    const branch = tracker.acquire();
-
-    branch.enter('A', 'call-a');
-    branch.recordCountableProgress();
-
-    expect(() => branch.enter('A', 'call-a')).not.toThrow();
-  });
-
-  it('allows an ancestor call identity after descendant countable progress', () => {
-    const tracker = new WorkflowCallProgressTracker();
-    const parent = tracker.acquire();
-    const child = tracker.acquire(parent);
-
-    parent.enter('A', 'call-a');
-    child.recordCountableProgress();
-
-    expect(() => parent.enter('A', 'call-a')).not.toThrow();
-    child.release();
-    parent.release();
-    expect(tracker.activeBranchCount()).toBe(0);
-  });
-
-  it('does not retain a reserved engine branch before execution starts', () => {
-    const tracker = new WorkflowCallProgressTracker();
-    const branch = tracker.reserve();
-
-    expect(tracker.activeBranchCount()).toBe(0);
-    branch.activate();
-    expect(tracker.activeBranchCount()).toBe(1);
-    branch.release();
-    expect(tracker.activeBranchCount()).toBe(0);
-  });
-
-  it('bounds retained history by active branches across long-running progress', () => {
-    const tracker = new WorkflowCallProgressTracker();
-    const branch = tracker.acquire();
-
-    for (let iteration = 0; iteration < 10_000; iteration += 1) {
-      branch.enter(`call-${iteration}`, 'delegate');
-      branch.recordCountableProgress();
-    }
-
-    expect(tracker.activeBranchCount()).toBe(1);
-    expect(tracker.retainedIdentityCount()).toBe(0);
-    branch.release();
-    expect(tracker.activeBranchCount()).toBe(0);
   });
 });
 
 describe('WorkflowCallExecutor routing runtime', () => {
-  function ownedResumePoint() {
-    return {
-      version: 2 as const,
-      stack: [{ workflow: 'child', step: 'review', kind: 'agent' as const, step_iterations: {} }],
-      iteration: 1,
-      max_steps: 4,
-      elapsed_ms: 0,
-      workflow_call_invocations: {},
-      workflow_step_participations: {},
-    };
-  }
-
-  function createAutoRoutingConfig(model = 'router-model'): AutoRoutingConfig {
-    return {
-      strategy: 'cost',
-      router: { provider: 'mock', model },
-      candidates: [
-        { name: 'medium', description: 'Focused work', provider: 'mock', model: 'medium-model', routingTier: 'medium' },
-        { name: 'high', description: 'Complex work', provider: 'mock', model: 'high-model', routingTier: 'high' },
-      ],
-      defaultPool: 'general',
-      candidatePools: { general: { candidates: ['medium', 'high'], fallback: 'high' } },
-    };
-  }
-
-  function createCallAttempt(stepName: string, childWorkflowName: string) {
-    const identity = buildWorkflowCallInvocationIdentity('parent', stepName, []);
-    return {
-      reportNamespaceSegment: buildWorkflowCallNamespaceSegment(identity, childWorkflowName, 1),
-      callStack: [{
-        workflow: 'parent',
-        step: stepName,
-        kind: 'workflow_call' as const,
-        step_iterations: { [stepName]: 1 },
-        call_instance: 1,
-      }],
-    };
-  }
-
   beforeEach(() => {
     createWorkRequirementEstimatorMock.mockReset();
     createWorkRequirementEstimatorMock.mockImplementation(() => ({ estimate: vi.fn() }));
   });
 
-  it('Given a child that inherits its parent auto routing, When creating child engines at separate call sites, Then it reuses the injected estimator with a runtime isolated to each call site', async () => {
+  function createRoutingHarness(options: {
+    childAutoRouting?: AutoRoutingConfig;
+    estimatorSource: 'injected' | 'engine-default';
+    initialUserInputs?: string[];
+  }) {
     const parentWorkflow = { name: 'parent', steps: [] } as never;
     const childWorkflow = {
       name: 'child',
       steps: [],
+      ...(options.childAutoRouting === undefined
+        ? {}
+        : { autoRouting: options.childAutoRouting }),
     } as never;
-    const parentAutoRouting = createAutoRoutingConfig();
     const parentEstimator: WorkRequirementEstimator = { estimate: vi.fn() };
-    const state = {
-      iteration: 1,
-      personaSessions: new Map(),
-      stepIterations: new Map([['delegate', 1], ['delegate-other', 1]]),
-      userInputs: ['Retry the remaining task work'],
-    };
+    const state = createInitialState(parentWorkflow, {
+      projectCwd: '/project',
+      ...(options.initialUserInputs === undefined
+        ? {}
+        : { initialUserInputs: options.initialUserInputs }),
+    });
+    state.iteration = 1;
+    const occurrenceHarness = createWorkflowOccurrenceTestHarness(parentWorkflow, state, []);
     const createdOptions: Array<Record<string, unknown>> = [];
     const executor = new WorkflowCallExecutor({
       getConfig: () => parentWorkflow,
       getOptions: () => ({
         projectCwd: '/project',
         provider: 'mock',
-        autoRouting: parentAutoRouting,
+        autoRouting: createAutoRoutingConfig('parent-router-model'),
         autoRoutingEstimator: parentEstimator,
-        autoRoutingEstimatorSource: 'injected',
+        autoRoutingEstimatorSource: options.estimatorSource,
       }),
+      getMaxSteps: () => 10,
+      updateMaxSteps: vi.fn(),
       getCwd: () => '/project',
       projectCwd: '/project',
       task: 'Complete the task',
       sharedRuntime: { startedAtMs: 0 },
       resumeStackPrefix: [],
+      consumeWorkflowCallContinuation: vi.fn(),
       runPaths: { slug: 'run' },
       resolveWorkflowCall: vi.fn(),
-      createEngine: vi.fn((_config, _cwd, _task, options) => {
-        createdOptions.push(options as Record<string, unknown>);
+      createEngine: vi.fn((_config, _cwd, _task, engineOptions) => {
+        createdOptions.push(engineOptions as Record<string, unknown>);
         return {
           on: vi.fn(),
-          getOwnedResumePoint: vi.fn(ownedResumePoint),
           runWithResult: vi.fn().mockResolvedValue({
-            state: {
-              iteration: 1,
-              personaSessions: new Map(),
-              status: 'completed',
-            },
+            state: { iteration: 1, personaSessions: new Map(), status: 'completed' },
           }),
         };
       }),
@@ -780,144 +707,70 @@ describe('WorkflowCallExecutor routing runtime', () => {
       setActiveResumePoint: vi.fn(),
       refreshFindingsState: vi.fn(),
     } as never);
-    const request = {
-      step: { name: 'delegate', kind: 'workflow_call', call: 'child' },
-      childWorkflow,
-      ...createCallAttempt('delegate', childWorkflow.name),
-      childProviderInfo: { provider: 'mock', model: 'child-model', providerSource: 'workflow_call', modelSource: 'workflow_call' },
-      parentProviderOptions: undefined,
-      personaProviders: undefined,
-      providerRouting: undefined,
-    } as never;
 
-    await executor.execute(request, { syncParentState: true });
-    await executor.execute({
-      ...request,
-      step: { ...request.step, name: 'delegate-other' },
-      ...createCallAttempt('delegate-other', childWorkflow.name),
-    }, { syncParentState: true });
+    const execute = async (stepName: string) => {
+      const step = { name: stepName, kind: 'workflow_call', call: 'child' } as const;
+      const occurrence = occurrenceHarness.claimStepOccurrence(step);
+      await executor.execute({
+        step,
+        childWorkflow,
+        childProviderInfo: {
+          provider: 'mock',
+          model: 'child-model',
+          providerSource: 'workflow_call',
+          modelSource: 'workflow_call',
+        },
+        parentProviderOptions: undefined,
+        personaProviders: undefined,
+        providerRouting: undefined,
+        preparedExecution: executor.prepare(step, childWorkflow, occurrence, []),
+      } as never, { syncParentState: true });
+    };
 
-    expect(createdOptions[0]?.autoRoutingEstimator).toBe(parentEstimator);
-    expect(createdOptions[1]?.autoRoutingEstimator).toBe(parentEstimator);
-    expect(createdOptions[0]?.routingRuntime).not.toBe(createdOptions[1]?.routingRuntime);
-    expect(createdOptions[0]?.initialUserInputs).toEqual(['Retry the remaining task work']);
+    return { createdOptions, execute, parentEstimator };
+  }
+
+  it('reuses an injected estimator while isolating inherited routing runtime by call site', async () => {
+    const harness = createRoutingHarness({
+      estimatorSource: 'injected',
+      initialUserInputs: ['Retry the remaining task work'],
+    });
+
+    await harness.execute('delegate');
+    await harness.execute('delegate-other');
+
+    expect(harness.createdOptions[0]?.autoRoutingEstimator).toBe(harness.parentEstimator);
+    expect(harness.createdOptions[1]?.autoRoutingEstimator).toBe(harness.parentEstimator);
+    expect(harness.createdOptions[0]?.routingRuntime)
+      .not.toBe(harness.createdOptions[1]?.routingRuntime);
+    expect(harness.createdOptions[0]?.initialUserInputs)
+      .toEqual(['Retry the remaining task work']);
     expect(createWorkRequirementEstimatorMock).not.toHaveBeenCalled();
   });
 
-  it('Given a child with its own auto routing and an injected estimator, When creating its child engine, Then it reuses the injected estimator', async () => {
-    const parentWorkflow = { name: 'parent', steps: [] } as never;
+  it('reuses an injected estimator when the child defines its own routing config', async () => {
     const childAutoRouting = createAutoRoutingConfig('child-router-model');
-    const childWorkflow = {
-      name: 'child',
-      autoRouting: childAutoRouting,
-      steps: [],
-    } as never;
-    const parentEstimator: WorkRequirementEstimator = { estimate: vi.fn() };
-    const createdOptions: Array<Record<string, unknown>> = [];
-    const executor = new WorkflowCallExecutor({
-      getConfig: () => parentWorkflow,
-      getOptions: () => ({
-        projectCwd: '/project',
-        provider: 'mock',
-        autoRouting: createAutoRoutingConfig('parent-router-model'),
-        autoRoutingEstimator: parentEstimator,
-        autoRoutingEstimatorSource: 'injected',
-      }),
-      getCwd: () => '/project',
-      projectCwd: '/project',
-      task: 'Complete the task',
-      sharedRuntime: { startedAtMs: 0 },
-      resumeStackPrefix: [],
-      runPaths: { slug: 'run' },
-      resolveWorkflowCall: vi.fn(),
-      createEngine: vi.fn((_config, _cwd, _task, options) => {
-        createdOptions.push(options as Record<string, unknown>);
-        return {
-          on: vi.fn(),
-          getOwnedResumePoint: vi.fn(ownedResumePoint),
-          runWithResult: vi.fn().mockResolvedValue({
-            state: {
-              iteration: 1,
-              personaSessions: new Map(),
-              status: 'completed',
-            },
-          }),
-        };
-      }),
-      emit: vi.fn(),
-      state: {
-        iteration: 1,
-        personaSessions: new Map(),
-        stepIterations: new Map([['delegate', 1]]),
-        userInputs: [],
-      },
-      setActiveResumePoint: vi.fn(),
-      refreshFindingsState: vi.fn(),
-    } as never);
+    const harness = createRoutingHarness({
+      childAutoRouting,
+      estimatorSource: 'injected',
+    });
 
-    await executor.execute({
-      step: { name: 'delegate', kind: 'workflow_call', call: 'child' },
-      childWorkflow,
-      ...createCallAttempt('delegate', childWorkflow.name),
-      childProviderInfo: { provider: 'mock', model: 'child-model', providerSource: 'workflow_call', modelSource: 'workflow_call' },
-      parentProviderOptions: undefined,
-      personaProviders: undefined,
-      providerRouting: undefined,
-    } as never, { syncParentState: true });
+    await harness.execute('delegate');
 
-    expect(createdOptions[0]?.autoRouting).toBe(childAutoRouting);
-    expect(createdOptions[0]?.autoRoutingEstimator).toBe(parentEstimator);
+    expect(harness.createdOptions[0]?.autoRouting).toBe(childAutoRouting);
+    expect(harness.createdOptions[0]?.autoRoutingEstimator).toBe(harness.parentEstimator);
     expect(createWorkRequirementEstimatorMock).not.toHaveBeenCalled();
   });
 
-  it('Given an engine-generated parent estimator and child routing, When creating its child engine, Then it creates a child-specific estimator', async () => {
-    const parentWorkflow = { name: 'parent', steps: [] } as never;
-    const childAutoRouting = createAutoRoutingConfig('child-router-model');
-    const parentEstimator: WorkRequirementEstimator = { estimate: vi.fn() };
-    const createdOptions: Array<Record<string, unknown>> = [];
-    const executor = new WorkflowCallExecutor({
-      getConfig: () => parentWorkflow,
-      getOptions: () => ({
-        projectCwd: '/project',
-        provider: 'mock',
-        autoRouting: createAutoRoutingConfig('parent-router-model'),
-        autoRoutingEstimator: parentEstimator,
-        autoRoutingEstimatorSource: 'engine-default',
-      }),
-      getCwd: () => '/project',
-      projectCwd: '/project',
-      task: 'Complete the task',
-      sharedRuntime: { startedAtMs: 0 },
-      resumeStackPrefix: [],
-      runPaths: { slug: 'run' },
-      resolveWorkflowCall: vi.fn(),
-      createEngine: vi.fn((_config, _cwd, _task, options) => {
-        createdOptions.push(options as Record<string, unknown>);
-        return {
-          on: vi.fn(),
-          getOwnedResumePoint: vi.fn(ownedResumePoint),
-          runWithResult: vi.fn().mockResolvedValue({
-            state: { iteration: 1, personaSessions: new Map(), status: 'completed' },
-          }),
-        };
-      }),
-      emit: vi.fn(),
-      state: { iteration: 1, personaSessions: new Map(), stepIterations: new Map([['delegate', 1]]), userInputs: [] },
-      setActiveResumePoint: vi.fn(),
-      refreshFindingsState: vi.fn(),
-    } as never);
+  it('creates a child-specific estimator for engine-default routing', async () => {
+    const harness = createRoutingHarness({
+      childAutoRouting: createAutoRoutingConfig('child-router-model'),
+      estimatorSource: 'engine-default',
+    });
 
-    await executor.execute({
-      step: { name: 'delegate', kind: 'workflow_call', call: 'child' },
-      childWorkflow: { name: 'child', autoRouting: childAutoRouting, steps: [] },
-      ...createCallAttempt('delegate', 'child'),
-      childProviderInfo: { provider: 'mock', model: 'child-model', providerSource: 'workflow_call', modelSource: 'workflow_call' },
-      parentProviderOptions: undefined,
-      personaProviders: undefined,
-      providerRouting: undefined,
-    } as never, { syncParentState: true });
+    await harness.execute('delegate');
 
-    expect(createdOptions[0]?.autoRoutingEstimator).not.toBe(parentEstimator);
+    expect(harness.createdOptions[0]?.autoRoutingEstimator).not.toBe(harness.parentEstimator);
     expect(createWorkRequirementEstimatorMock).toHaveBeenCalledWith(expect.objectContaining({
       provider: 'mock',
       model: 'child-router-model',

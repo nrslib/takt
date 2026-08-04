@@ -16,12 +16,15 @@
 ## Problem-Family Completion Sweep
 | family_tag / changed contract | Invariant or root cause | Definition, production, validation | Consumption, persistence, reinjection | Failure, interruption, retry, resume, parallel, auxiliary entries | Mocks, fixtures, test doubles | Unchecked paths | Result |
 |-------------------------------|-------------------------|------------------------------------|---------------------------------------|--------------------------------------------------------------------------|------------------------------|-----------------|--------|
-| {problem family or contract reviewed} | {condition to preserve} | {locations checked} | {locations checked} | {paths checked} | {test assets checked} | {none or reason unchecked} | {no issue / finding number} |
+| {problem family or contract reviewed} | {condition to preserve} | {locations checked} | {locations checked} | {paths checked} | {test assets checked} | {none or reason unchecked} | {no issue / Finding Contract claim} |
 
-## Observed Findings
-| # | family_tag | Severity | Type | Location | Issue | Fix Suggestion |
-|---|------------|----------|------|----------|-------|----------------|
-| 1 | injection-risk | High | SQLi | `src/db.ts:42` | Raw query string | Use parameterized queries |
+## Finding Contract Claims
+{Describe every observed defect or explicit ledger lifecycle claim here separately. If the injected instructions require structured output, use that schema as the machine format; otherwise return only the Markdown report. Do not use a findings table. If there are no claims, write `None`.}
+
+## Resolution Confirmations
+| Ledger Reference | Original Acceptance Criteria | Confirmation Evidence |
+|------------------|------------------------------|-----------------------|
+| {existing finding} | {expected result} | `file:line` |
 
 ## Verification Evidence
 - Build: {Verified target, what was checked, and observed result; or state that it was unverified}
@@ -38,4 +41,4 @@
 **Cognitive load reduction rules:**
 - No issues → Checklist only (10 lines or fewer)
 - Warnings only → + Warnings in 1-2 lines (15 lines or fewer)
-- Vulnerabilities found → include every verified finding in tables and aggregate locations with the same cause
+- Vulnerabilities found → Include every verified vulnerability claim in the active Finding Contract format and aggregate locations with the same cause

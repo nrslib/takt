@@ -105,7 +105,7 @@ describe('WorkflowEngine Integration: Blocked Handling', () => {
 
   it('should abort when blocked and no onUserInput callback', async () => {
     const config = buildDefaultWorkflowConfig();
-    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock' });
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
     mockRunAgentSequence([
       makeResponse({ persona: 'plan', status: 'blocked', content: 'Need clarification' }),
@@ -125,12 +125,23 @@ describe('WorkflowEngine Integration: Blocked Handling', () => {
     expect(state.status).toBe('aborted');
     expect(blockedFn).toHaveBeenCalledOnce();
     expect(abortFn).toHaveBeenCalledOnce();
+    expect(abortFn).toHaveBeenCalledWith(
+      expect.anything(),
+      'Workflow blocked and no user input provided',
+      'blocked',
+      {
+        kind: 'blocked',
+        step: 'plan',
+        reason: 'Workflow blocked and no user input provided',
+        error: 'Workflow blocked and no user input provided',
+      },
+    );
   });
 
   it('should abort when blocked and onUserInput returns null', async () => {
     const config = buildDefaultWorkflowConfig();
     const onUserInput = vi.fn().mockResolvedValue(null);
-    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock', onUserInput });
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, onUserInput });
 
     mockRunAgentSequence([
       makeResponse({ persona: 'plan', status: 'blocked', content: 'Need info' }),
@@ -140,16 +151,29 @@ describe('WorkflowEngine Integration: Blocked Handling', () => {
       { index: 0, method: 'phase3_tag' },
     ]);
 
+    const abortFn = vi.fn();
+    engine.on('workflow:abort', abortFn);
     const state = await engine.run();
 
     expect(state.status).toBe('aborted');
     expect(onUserInput).toHaveBeenCalledOnce();
+    expect(abortFn).toHaveBeenCalledWith(
+      expect.anything(),
+      'User input cancelled',
+      'user_input_cancelled',
+      {
+        kind: 'user_input_cancelled',
+        step: 'plan',
+        reason: 'User input cancelled',
+        error: 'User input cancelled',
+      },
+    );
   });
 
   it('should continue when blocked and onUserInput provides input', async () => {
     const config = buildDefaultWorkflowConfig();
     const onUserInput = vi.fn().mockResolvedValueOnce('User provided clarification');
-    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock', onUserInput });
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, onUserInput });
 
     mockRunAgentSequence([
       // First: plan is blocked
@@ -191,7 +215,7 @@ describe('WorkflowEngine Integration: Blocked Handling', () => {
     // implement has outputContracts: verifies the report phase is skipped on a Phase 1 block
     const config = buildConfigWithReport();
     const onUserInput = vi.fn().mockResolvedValueOnce(null);
-    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock', onUserInput });
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, onUserInput });
 
     mockRunAgentSequence([
       makeResponse({ persona: 'plan', status: 'done', content: 'Plan done' }),
@@ -238,7 +262,7 @@ describe('WorkflowEngine Integration: Blocked Handling', () => {
     });
 
     const onUserInput = vi.fn().mockResolvedValueOnce(null);
-    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock', onUserInput });
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, onUserInput });
 
     mockRunAgentSequence([
       makeResponse({ persona: 'escape', status: 'blocked', content: 'Need clarification' }),
@@ -275,7 +299,7 @@ describe('WorkflowEngine Integration: Blocked Handling', () => {
     // implement has outputContracts: verifies the report phase is skipped on a Phase 1 error
     const config = buildConfigWithReport();
     const onUserInput = vi.fn().mockResolvedValueOnce('should not be called');
-    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, provider: 'mock', onUserInput });
+    const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, onUserInput });
 
     mockRunAgentSequence([
       makeResponse({ persona: 'plan', content: 'Plan done' }),
@@ -296,8 +320,14 @@ describe('WorkflowEngine Integration: Blocked Handling', () => {
     expect(runReportPhase).not.toHaveBeenCalled();
     expect(abortFn).toHaveBeenCalledWith(
       expect.anything(),
-      expect.stringContaining('Transport error'),
+      'Step "implement" failed: Transport error',
       'step_error',
+      {
+        kind: 'step_error',
+        step: 'implement',
+        reason: 'Step "implement" failed: Transport error',
+        error: 'Transport error',
+      },
     );
     const reason = abortFn.mock.calls[0]?.[1] as string;
     expect(reason).toContain('Step "implement" failed');

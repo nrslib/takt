@@ -2,10 +2,16 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { CapabilityAwareStructuredCaller } from '../../../agents/structured-caller.js';
 import type { WorkflowConfig } from '../../../core/models/index.js';
-import type { ResolvedObservabilityConfig } from '../../../core/models/config-types.js';
+import type {
+  FindingContractRuntimeConfig,
+  ResolvedObservabilityConfig,
+} from '../../../core/models/config-types.js';
 import { buildRunPaths } from '../../../core/workflow/run/run-paths.js';
 import { readRunMetaBySlug } from '../../../core/workflow/run/run-meta.js';
-import { OperationRecoveryError } from '../../../core/workflow/operations/operation-recovery-error.js';
+import {
+  OperationLineageUnavailableError,
+  OperationRecoveryError,
+} from '../../../core/workflow/operations/operation-recovery-error.js';
 import type { WorkflowOperationJournalContext } from '../../../core/workflow/types.js';
 import {
   inheritResumeReportSnapshot,
@@ -29,17 +35,25 @@ import {
   type WorkflowTraceDiscovery,
 } from '../../../core/workflow/observability/traceDiscovery.js';
 import { getGlobalConfigDir } from '../../../infra/config/paths.js';
-import { createSessionLog, generateSessionId, initNdjsonLog, type SessionLog } from '../../../infra/fs/index.js';
+import { createSessionLog, initNdjsonLog, type SessionLog } from '../../../infra/fs/index.js';
 import { isQuietMode } from '../../../shared/context.js';
 import { StreamDisplay } from '../../../shared/ui/index.js';
 import { TaskPrefixWriter } from '../../../shared/ui/TaskPrefixWriter.js';
 import { getErrorMessage } from '../../../shared/utils/error.js';
-import { createLogger, generateReportDir, getDebugPromptsLogFile, isValidReportDirName, preventSleep } from '../../../shared/utils/index.js';
+import {
+  createLogger,
+  getDebugPromptsLogFile,
+  isValidReportDirName,
+  preventSleep,
+} from '../../../shared/utils/index.js';
 import { createProviderEventLogger, isProviderEventsEnabled } from '../../../core/logging/providerEventLogger.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import { createUsageEventLogger, isUsageEventsEnabled } from '../../../core/logging/usageEventLogger.js';
 import { initializeOtelFoundation, type OtelFoundationHandle } from '../../../infra/observability/otelFoundation.js';
-import { PHASE_USAGE_EVENTS_LOG_FILE_SUFFIX } from '../../../core/logging/contracts.js';
+import {
+  OTEL_SESSION_SHADOW_LOG_FILE_SUFFIX,
+  PHASE_USAGE_EVENTS_LOG_FILE_SUFFIX,
+} from '../../../core/logging/contracts.js';
 import {
   resolveEffectiveAutoRouting,
 } from '../../../core/workflow/auto-routing/effective-auto-routing.js';
@@ -48,12 +62,13 @@ import { ensureWorktreeTaktRuntimeProtection } from '../../../infra/task/project
 import { createOperationJournalStore } from '../../../infra/workflow/operation-journal-store.js';
 import { AnalyticsEmitter } from './analyticsEmitter.js';
 import { createOutputFns, createPrefixedStreamHandler } from './outputFns.js';
-import { RunMetaManager } from './runMeta.js';
+import type { RunMetaManager } from './runMeta.js';
 import { SessionLogger } from './sessionLogger.js';
-import { createTraceReportWriter } from './traceReportWriter.js';
+import type { TraceReportMode } from './traceReport.js';
 import { sanitizeTextForStorage } from './traceReportRedaction.js';
 import type { WorkflowExecutionOptions } from './types.js';
 import { assertTaskPrefixPair, detectStepType } from './workflowExecutionUtils.js';
+import type { WorkflowRunBootstrap } from './workflowRunLifecycle.js';
 import { inheritWorkflowConfigMetadata } from '../../../shared/workflowConfigMetadata.js';
 
 const log = createLogger('workflow');
@@ -86,6 +101,7 @@ export interface WorkflowExecutionBootstrap {
   configuredModel: string | undefined;
   configuredModelSource: ProviderResolutionSource;
   effectiveWorkflowConfig: WorkflowConfig;
+  findingContractConfig?: FindingContractRuntimeConfig;
   autoStrategyOverride: WorkflowExecutionOptions['autoStrategy'];
   onEffectiveAutoRoutingReached: () => void;
   warnIfAutoStrategyUnused: () => void;
@@ -97,8 +113,17 @@ export interface WorkflowExecutionBootstrap {
   structuredCaller: CapabilityAwareStructuredCaller;
   savedSessions: Record<string, string>;
   sessionUpdateHandler: (persona: string, sessionId: string | undefined) => void;
-  writeTraceReportOnce: ReturnType<typeof createTraceReportWriter>;
+  traceReportMode: TraceReportMode;
+  promptLogPath?: string;
   operationJournal: WorkflowOperationJournalContext;
+}
+
+export interface WorkflowExecutionResumeLineage {
+  readonly sourceRunSlug?: string;
+  readonly publishedResumeSource?: WorkflowExecutionOptions['resumeSource'];
+  readonly operationJournalRunSlug: string;
+  readonly operationClaimToken: string;
+  readonly sourceOperationClaimTokens?: ReadonlySet<string>;
 }
 
 class AutoRoutingReachTracker {
@@ -114,10 +139,10 @@ class AutoRoutingReachTracker {
 }
 
 function resolveMaxStepsForRestoredIteration(
-  currentMaxSteps: NonNullable<WorkflowConfig['maxSteps']>,
-  workflowMaxSteps: NonNullable<WorkflowConfig['maxSteps']>,
+  currentMaxSteps: WorkflowConfig['maxSteps'],
+  workflowMaxSteps: WorkflowConfig['maxSteps'],
   initialIteration: number | undefined,
-): NonNullable<WorkflowConfig['maxSteps']> {
+): WorkflowConfig['maxSteps'] {
   if (
     currentMaxSteps === 'infinite'
     || initialIteration === undefined
@@ -148,19 +173,140 @@ function resolveMaxStepsForRestoredIteration(
   return resumedMaxSteps;
 }
 
+function resolveOperationJournalSourceClaims(
+  cwd: string,
+  immediateSourceRunSlug: string,
+): {
+  readonly journalRunSlug: string;
+  readonly claimTokens: ReadonlySet<string>;
+} {
+  const visited = new Set<string>();
+  const claimTokens = new Set<string>();
+  let journalRunSlug: string | undefined;
+  let sourceRunSlug: string | undefined = immediateSourceRunSlug;
+  while (sourceRunSlug !== undefined) {
+    if (!isValidReportDirName(sourceRunSlug)) {
+      throw new OperationRecoveryError(
+        `Resume source run slug "${sourceRunSlug}" is invalid`,
+      );
+    }
+    if (visited.has(sourceRunSlug)) {
+      throw new OperationRecoveryError(
+        `Resume source run ancestry contains a cycle at "${sourceRunSlug}"`,
+      );
+    }
+    visited.add(sourceRunSlug);
+    const sourceMeta = readRunMetaBySlug(cwd, sourceRunSlug);
+    if (sourceMeta === null) {
+      throw new OperationLineageUnavailableError(
+        `Resume source run "${sourceRunSlug}" is missing`,
+      );
+    }
+    if (
+      sourceMeta.operationJournalRunSlug === undefined
+      || sourceMeta.operationClaimToken === undefined
+    ) {
+      throw new OperationLineageUnavailableError(
+        `Source run "${sourceRunSlug}" has incomplete operation journal ownership metadata`,
+      );
+    }
+    if (!isValidReportDirName(sourceMeta.operationJournalRunSlug)) {
+      throw new OperationRecoveryError(
+        `Source run "${sourceRunSlug}" has an invalid operation journal run slug`,
+      );
+    }
+    if (
+      journalRunSlug !== undefined
+      && sourceMeta.operationJournalRunSlug !== journalRunSlug
+    ) {
+      throw new OperationRecoveryError(
+        `Source run "${sourceRunSlug}" belongs to a different operation journal`,
+      );
+    }
+    journalRunSlug = sourceMeta.operationJournalRunSlug;
+    claimTokens.add(sourceMeta.operationClaimToken);
+    sourceRunSlug = sourceMeta.sourceRunSlug;
+  }
+  if (journalRunSlug === undefined) {
+    throw new OperationLineageUnavailableError(
+      'Resume source ancestry has no operation journal',
+    );
+  }
+  return {
+    journalRunSlug,
+    claimTokens,
+  };
+}
+
+export function resolveWorkflowExecutionResumeLineage(
+  cwd: string,
+  runSlug: string,
+  resumeSource: WorkflowExecutionOptions['resumeSource'],
+): WorkflowExecutionResumeLineage {
+  const sourceRunSlug = resumeSource?.sourceRunSlug;
+  if (resumeSource === undefined || sourceRunSlug === undefined) {
+    return {
+      operationJournalRunSlug: runSlug,
+      operationClaimToken: randomUUID(),
+      ...(resumeSource === undefined ? {} : { publishedResumeSource: resumeSource }),
+    };
+  }
+
+  try {
+    return resolveWorkflowExecutionResumeSourceLineage(cwd, resumeSource);
+  } catch (error) {
+    if (!(error instanceof OperationLineageUnavailableError)) {
+      throw error;
+    }
+    log.warn(
+      'Resume source operation lineage is unavailable; starting a new operation journal',
+      {
+        sourceRunSlug,
+        targetRunSlug: runSlug,
+        reason: getErrorMessage(error),
+      },
+    );
+    return {
+      sourceRunSlug,
+      publishedResumeSource: resumeSource,
+      operationJournalRunSlug: runSlug,
+      operationClaimToken: randomUUID(),
+    };
+  }
+}
+
+export function resolveWorkflowExecutionResumeSourceLineage(
+  cwd: string,
+  resumeSource: NonNullable<WorkflowExecutionOptions['resumeSource']>,
+): WorkflowExecutionResumeLineage {
+  const sourceRunSlug = resumeSource.sourceRunSlug;
+  if (sourceRunSlug === undefined) {
+    throw new OperationRecoveryError(
+      'Workflow resume requires a source run slug with operation lineage',
+    );
+  }
+
+  const sourceClaims = resolveOperationJournalSourceClaims(cwd, sourceRunSlug);
+  return {
+    sourceRunSlug,
+    publishedResumeSource: resumeSource,
+    operationJournalRunSlug: sourceClaims.journalRunSlug,
+    operationClaimToken: randomUUID(),
+    sourceOperationClaimTokens: sourceClaims.claimTokens,
+  };
+}
+
 export async function createWorkflowExecutionBootstrap(
   workflowConfig: WorkflowConfig,
   task: string,
   cwd: string,
   options: WorkflowExecutionOptions,
+  runBootstrap: WorkflowRunBootstrap,
+  resumeLineage: WorkflowExecutionResumeLineage,
 ): Promise<WorkflowExecutionBootstrap> {
-  if (workflowConfig.maxSteps === undefined) {
-    throw new Error(`Root workflow "${workflowConfig.name}" requires max_steps`);
-  }
-  const workflowMaxSteps = workflowConfig.maxSteps;
   const effectiveMaxSteps = resolveMaxStepsForRestoredIteration(
-    options.maxStepsOverride ?? workflowMaxSteps,
-    workflowMaxSteps,
+    options.maxStepsOverride ?? workflowConfig.maxSteps,
+    workflowConfig.maxSteps,
     options.initialIterationOverride,
   );
   const { headerPrefix = 'Running Workflow:', interactiveUserInput = false, outputMode = 'terminal' } = options;
@@ -200,62 +346,33 @@ export async function createWorkflowExecutionBootstrap(
   const isWorktree = cwd !== projectCwd;
   log.debug('Session mode', { isRetry, isWorktree });
 
-  const runSlug = options.reportDirName ?? generateReportDir(task);
-  if (!isValidReportDirName(runSlug)) {
-    throw new Error(`Invalid reportDirName: ${runSlug}`);
-  }
+  const { runSlug, runPaths } = runBootstrap;
   if (isWorktree) {
     ensureWorktreeTaktRuntimeProtection(cwd);
   }
 
-  const runPaths = buildRunPaths(cwd, runSlug);
-  // resume（requeue / retry / instruct、attachment 有無を問わず）が新しい run
-  // slug を作る場合、旧 run の reports/ を継承しないと {report:X} 参照が
-  // 壊れる（v3-r4 の resume 境界バグ）。同一秒の auto requeue などで slug
-  // を再利用する場合は既存 reports/ をそのまま使う。継承は resume feature
-  // 側ではなく bootstrap を一元境界にして配線漏れを防ぐ。順序: run slug
+  // resume（requeue / retry / instruct、attachment 有無を問わず）は source と
+  // 異なる run slug を使う。旧 run の reports/ を継承しないと {report:X}
+  // 参照が壊れるため、bootstrap を一元境界にして配線漏れを防ぐ。順序: run slug
   // 決定 → target 安全検証 → source 検証 → snapshot 作成 → manifest 保存
   // → RunMetaManager 作成 → logs/engine 初期化。source が取得不能な場合だけは
   // fix 側の選択的な best-effort 継承へ委ね、target の不整合や公開競合は
   // ここで失敗させる。
-  const sourceRunSlug = options.resumeSource?.sourceRunSlug;
-  const operationClaimToken = randomUUID();
-  let operationJournalRunSlug = runSlug;
-  let sourceOperationClaimToken: string | undefined;
-  if (sourceRunSlug !== undefined) {
-    const sourceMeta = readRunMetaBySlug(cwd, sourceRunSlug);
-    if (
-      (sourceMeta?.operationJournalRunSlug === undefined)
-      !== (sourceMeta?.operationClaimToken === undefined)
-    ) {
-      throw new OperationRecoveryError(
-        `Source run "${sourceRunSlug}" has incomplete operation journal ownership metadata`,
-      );
-    }
-    if (
-      sourceMeta?.operationJournalRunSlug !== undefined
-      && !isValidReportDirName(sourceMeta.operationJournalRunSlug)
-    ) {
-      throw new OperationRecoveryError(
-        `Source run "${sourceRunSlug}" has an invalid operation journal run slug`,
-      );
-    }
-    if (
-      sourceMeta?.operationJournalRunSlug !== undefined
-      && sourceMeta.operationClaimToken !== undefined
-    ) {
-      operationJournalRunSlug = sourceMeta.operationJournalRunSlug;
-      sourceOperationClaimToken = sourceMeta.operationClaimToken;
-    }
-  }
+  const {
+    sourceRunSlug,
+    publishedResumeSource,
+    operationClaimToken,
+    operationJournalRunSlug,
+    sourceOperationClaimTokens,
+  } = resumeLineage;
   const operationJournalPaths = buildRunPaths(cwd, operationJournalRunSlug);
   const operationJournal: WorkflowOperationJournalContext = {
     store: createOperationJournalStore(operationJournalPaths.operationJournalAbs),
     journalRunSlug: operationJournalRunSlug,
     claimToken: operationClaimToken,
-    ...(sourceOperationClaimToken === undefined
+    ...(sourceOperationClaimTokens === undefined
       ? {}
-      : { sourceClaimToken: sourceOperationClaimToken }),
+      : { sourceClaimTokens: sourceOperationClaimTokens }),
   };
   let resumeArtifactsManifest: ReturnType<typeof inheritResumeReportSnapshot> | undefined;
   if (sourceRunSlug && sourceRunSlug !== runSlug) {
@@ -284,7 +401,12 @@ export async function createWorkflowExecutionBootstrap(
       files: resumeArtifactsManifest.files.length,
     });
   }
-  const sessionLog = createSessionLog(task, projectCwd, workflowConfig.name);
+  const sessionLog = createSessionLog(
+    task,
+    projectCwd,
+    workflowConfig.name,
+    { startTime: runBootstrap.startedAt },
+  );
   const globalConfig = resolveWorkflowConfigValues(projectCwd, [
     'notificationSound',
     'notificationSoundEvents',
@@ -296,6 +418,7 @@ export async function createWorkflowExecutionBootstrap(
     'telemetry',
     'observability',
     'autoRouting',
+    'findingContract',
   ]);
   const traceReportMode = globalConfig.logging?.trace === true ? 'full' : 'redacted';
   const allowSensitiveData = traceReportMode === 'full';
@@ -311,12 +434,14 @@ export async function createWorkflowExecutionBootstrap(
         sanitizeText: sanitizeObservabilityText,
       })
     : undefined;
-  const runMetaManager = new RunMetaManager(
+  const runMetaManager = runBootstrap.publishRunMeta({
     runPaths,
     task,
-    workflowConfig.name,
-    options.resumeSource,
-    {
+    workflowName: workflowConfig.name,
+    ...(publishedResumeSource === undefined
+      ? {}
+      : { resumeSource: publishedResumeSource }),
+    options: {
       ...(traceDiscovery ? { traceDiscovery } : {}),
       // manifest（ファイル一覧と hash の SSOT）への参照のみを meta.json に残す。
       // manifest は reports スナップショットの内側の予約名（公開を単一 rename に
@@ -328,13 +453,16 @@ export async function createWorkflowExecutionBootstrap(
       operationClaimToken,
       ...(options.prContext ? { prContext: options.prContext } : {}),
     },
-  );
-  const workflowSessionId = generateSessionId();
+  });
+  const workflowSessionId = runBootstrap.sessionId;
   const ndjsonLogPath = initNdjsonLog(
     workflowSessionId,
-    sanitizeTextForStorage(task, allowSensitiveData),
+    task,
     workflowConfig.name,
-    { logsDir: runPaths.logsAbs },
+    {
+      logsDir: runPaths.logsAbs,
+      startTime: runBootstrap.startedAt,
+    },
   );
   const sessionLogger = new SessionLogger(ndjsonLogPath, allowSensitiveData);
   if (options.interactiveMetadata) {
@@ -355,6 +483,9 @@ export async function createWorkflowExecutionBootstrap(
         workflowContext: { provider: workflowConfig.provider },
       });
   const currentProvider = resolvedProvider.value;
+  if (!currentProvider) {
+    throw new Error('No provider configured. Set "provider" in ~/.takt/config.yaml');
+  }
   const currentProviderSource = resolvedProvider.source;
   const resolvedModel = options.model !== undefined
     ? {
@@ -426,17 +557,7 @@ export async function createWorkflowExecutionBootstrap(
         updateWorktreeSession(projectCwd, cwd, personaName, personaSessionId, currentProvider)
     : (persona: string, personaSessionId: string | undefined) =>
         updatePersonaSession(projectCwd, persona, personaSessionId, currentProvider);
-  const writeTraceReportOnce = createTraceReportWriter({
-    sessionLogger,
-    ndjsonLogPath,
-    tracePath: join(runPaths.runRootAbs, 'trace.md'),
-    workflowName: workflowConfig.name,
-    task,
-    runSlug,
-    promptLogPath: getDebugPromptsLogFile() ?? undefined,
-    mode: traceReportMode,
-    logger: log,
-  });
+  const promptLogPath = getDebugPromptsLogFile() ?? undefined;
   const observabilityOptions = globalConfig.observability.enabled
     && (
       globalConfig.observability.sessionLogExporter
@@ -448,7 +569,10 @@ export async function createWorkflowExecutionBootstrap(
           ? {
               sessionLogExporter: {
                 runId: runSlug,
-                shadowLogPath: join(runPaths.logsAbs, `${workflowSessionId}-otel-session-shadow.jsonl`),
+                shadowLogPath: join(
+                  runPaths.logsAbs,
+                  `${workflowSessionId}${OTEL_SESSION_SHADOW_LOG_FILE_SUFFIX}`,
+                ),
                 sanitizedTask: sanitizeTextForStorage(task, allowSensitiveData),
                 workflowName: workflowConfig.name,
               },
@@ -499,6 +623,7 @@ export async function createWorkflowExecutionBootstrap(
     configuredModel,
     configuredModelSource,
     effectiveWorkflowConfig,
+    findingContractConfig: globalConfig.findingContract,
     autoStrategyOverride,
     onEffectiveAutoRoutingReached,
     warnIfAutoStrategyUnused,
@@ -510,7 +635,8 @@ export async function createWorkflowExecutionBootstrap(
     structuredCaller,
     savedSessions,
     sessionUpdateHandler,
-    writeTraceReportOnce,
+    traceReportMode,
+    ...(promptLogPath === undefined ? {} : { promptLogPath }),
     operationJournal,
   };
 }

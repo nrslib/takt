@@ -206,6 +206,7 @@ workflow:
     userInputPrompt: "Enter additional instructions (empty to cancel)"
   notifyComplete: "Workflow complete ({iteration} iterations)"
   notifyAbort: "Aborted: {reason}"
+  notifyFailed: "Failed: {reason}"
   sigintGraceful: "Ctrl+C: Aborting workflow..."
   sigintTimeout: "Graceful shutdown timed out after {timeoutMs}ms"
   sigintForce: "Ctrl+C: Force exit"

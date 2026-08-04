@@ -1,6 +1,7 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { parse as parseYaml } from 'yaml';
 import { describe, expect, it, vi } from 'vitest';
 import { loadAllWorkflowsWithSourcesFromDirs } from '../infra/config/loaders/workflowDiscovery.js';
 
@@ -26,6 +27,24 @@ describe('workflowDiscovery', () => {
       expect(workflows.has('peer-review-suite-cqrs')).toBe(true);
       expect(workflows.has('peer-review-suite-frontend-cqrs')).toBe(true);
     }
+  });
+
+  it.each(['en', 'ja'] as const)('keeps the composed shared fix step report non-judging in %s', (language) => {
+    const source = readFileSync(
+      join(process.cwd(), 'builtins', language, 'steps', 'peer-review-fix.yaml'),
+      'utf-8',
+    );
+    const step = parseYaml(source) as {
+      output_contracts?: { report?: Array<Record<string, unknown>> };
+    };
+
+    expect(step.output_contracts?.report).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: 'fix-report.md',
+        format: 'fix-report',
+        use_judge: false,
+      }),
+    ]));
   });
 
   it('repo 直下でも builtin の privileged workflow を discovery で skip しない', () => {

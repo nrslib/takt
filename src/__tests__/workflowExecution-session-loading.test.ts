@@ -6,7 +6,7 @@
  * while stateless restartPoint runs start with empty sessions.
  */
 
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -97,31 +97,7 @@ const {
       const firstStep = this.config.steps[0];
       if (firstStep) {
         const providerInfo = resolveProviderInfo(firstStep, this.receivedOptions);
-        const stepIteration = 1;
-        const executionScope = Object.freeze({
-          kind: 'workflow_execution_scope' as const,
-          stack: Object.freeze([
-            Object.freeze({
-              workflow: this.config.name,
-              step: firstStep.name,
-              kind: firstStep.kind
-                ?? (firstStep.mode === 'system' ? 'system' : firstStep.call ? 'workflow_call' : 'agent'),
-              step_iterations: Object.freeze({ [firstStep.name]: stepIteration }),
-            }),
-          ]),
-        });
-        this.emit(
-          'step:start',
-          firstStep,
-          1,
-          firstStep.instruction,
-          providerInfo,
-          this.config.name,
-          firstStep.name,
-          stepIteration,
-          this.config.maxSteps,
-          executionScope,
-        );
+        this.emit('step:start', firstStep, 1, firstStep.instruction, providerInfo);
         this.emit('step:complete', firstStep, {
           persona: firstStep.personaDisplayName,
           status: 'done',
@@ -129,13 +105,20 @@ const {
           timestamp: new Date('2026-03-04T00:00:00.000Z'),
           sessionId: 'step-session',
           providerUsage: mockStepResponse.providerUsage,
-        }, firstStep.instruction, firstStep.name, executionScope);
+        }, firstStep.instruction);
       }
       if (MockWorkflowEngine.runOutcome.status === 'aborted') {
         this.emit(
           'workflow:abort',
           { status: 'aborted', iteration: 1 },
           MockWorkflowEngine.runOutcome.reason,
+          'step_error',
+          {
+            kind: 'step_error',
+            step: this.config.initialStep,
+            reason: MockWorkflowEngine.runOutcome.reason,
+            error: MockWorkflowEngine.runOutcome.reason,
+          },
         );
         return { status: 'aborted', iteration: 1 };
       }
@@ -164,6 +147,29 @@ vi.mock('../core/workflow/index.js', async () => {
   return {
     WorkflowEngine: MockWorkflowEngine,
     createDenyAskUserQuestionHandler: errorModule.createDenyAskUserQuestionHandler,
+  };
+});
+
+vi.mock('../features/tasks/execute/workflowRunLifecycle.js', async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import('../features/tasks/execute/workflowRunLifecycle.js')
+  >();
+  const { createWorkflowRunLifecycleCompositionTestDouble } = await import(
+    './helpers/run-lifecycle.js'
+  );
+  return {
+    ...actual,
+    createWorkflowRunLifecycle: (
+      input: Parameters<typeof actual.createWorkflowRunLifecycle>[0],
+    ) => createWorkflowRunLifecycleCompositionTestDouble(
+      actual.createWorkflowRunLifecycle,
+      input,
+      {
+        sessionId: 'test-session-id',
+        startedAt: '2026-03-04T00:00:00.000Z',
+        projectTerminalArtifacts: true,
+      },
+    ),
   };
 });
 
@@ -220,18 +226,36 @@ vi.mock('../shared/ui/index.js', () => ({
   })),
 }));
 
-vi.mock('../infra/fs/index.js', () => ({
+vi.mock('../infra/fs/index.js', async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import('../infra/fs/index.js')
+  >()),
   generateSessionId: vi.fn().mockReturnValue('test-session-id'),
-  createSessionLog: vi.fn().mockReturnValue({
-    startTime: new Date().toISOString(),
+  createSessionLog: vi.fn().mockImplementation((
+    task,
+    projectDir,
+    workflowName,
+    options,
+  ) => ({
+    task,
+    projectDir,
+    workflowName,
+    startTime: options.startTime,
     iterations: 0,
-  }),
+    status: 'running',
+    history: [],
+  })),
   finalizeSessionLog: vi.fn().mockImplementation((log, status) => ({
     ...log,
     status,
     endTime: new Date().toISOString(),
   })),
-  initNdjsonLog: vi.fn().mockReturnValue('/tmp/test-log.jsonl'),
+  initNdjsonLog: vi.fn((
+    sessionId: string,
+    _task: string,
+    _workflowName: string,
+    options: { logsDir: string },
+  ) => join(options.logsDir, `${sessionId}.jsonl`)),
   appendNdjsonLine: vi.fn(),
 }));
 
@@ -273,6 +297,20 @@ vi.mock('../shared/i18n/index.js', () => ({
 
 vi.mock('../shared/exitCodes.js', () => ({
   EXIT_SIGINT: 130,
+}));
+
+vi.mock('../features/tasks/execute/sessionLogger.js', async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import('../features/tasks/execute/sessionLogger.js')
+  >()),
+  projectTerminalSessionRecord: vi.fn(),
+}));
+
+vi.mock('../features/tasks/execute/traceReportWriter.js', async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import('../features/tasks/execute/traceReportWriter.js')
+  >()),
+  writeTerminalTraceReport: vi.fn(),
 }));
 
 import { executeWorkflow } from '../features/tasks/execute/workflowExecution.js';
@@ -327,6 +365,7 @@ function makeConfigWithStep(overrides: Record<string, unknown>): WorkflowConfig 
 
 describe('executeWorkflow session loading', () => {
   const temporaryDirs: string[] = [];
+  let projectCwd: string;
   const restoredEnvKeys = [
     'TAKT_OBSERVABILITY',
     'OTEL_EXPORTER_OTLP_ENDPOINT',
@@ -398,6 +437,7 @@ describe('executeWorkflow session loading', () => {
       totalTokens: 5,
       usageMissing: false,
     };
+    projectCwd = createTempDir('takt-session-loading-project-');
   });
 
   afterEach(() => {
@@ -409,8 +449,8 @@ describe('executeWorkflow session loading', () => {
 
   it('should pass empty initialSessions on normal run', async () => {
     // Given: normal execution (no startStep, no retryNote)
-    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
     });
 
     // Then: WorkflowEngine receives empty sessions
@@ -420,8 +460,8 @@ describe('executeWorkflow session loading', () => {
   });
 
   it('should log usage events on step completion when usage logging is enabled', async () => {
-    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
     });
 
     expect(mockCreateUsageEventLogger).toHaveBeenCalledOnce();
@@ -444,8 +484,8 @@ describe('executeWorkflow session loading', () => {
   it('should log usage_missing reason when provider usage is unavailable', async () => {
     mockStepResponse.providerUsage = undefined;
 
-    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
     });
 
     expect(mockUsageLogger.logUsageFor).toHaveBeenCalledWith(expect.objectContaining({
@@ -462,24 +502,24 @@ describe('executeWorkflow session loading', () => {
 
   it('should load persisted sessions when startStep is set (retry)', async () => {
     // Given: retry execution with startStep
-    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
       startStep: 'implement',
     });
 
     // Then: loadPersonaSessions is called to load saved sessions
-    expect(mockLoadPersonaSessions).toHaveBeenCalledWith('/tmp/project', 'claude');
+    expect(mockLoadPersonaSessions).toHaveBeenCalledWith(projectCwd, 'claude');
   });
 
   it('should load persisted sessions when retryNote is set (retry)', async () => {
     // Given: retry execution with retryNote
-    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
       retryNote: 'Fix the failing test',
     });
 
     // Then: loadPersonaSessions is called to load saved sessions
-    expect(mockLoadPersonaSessions).toHaveBeenCalledWith('/tmp/project', 'claude');
+    expect(mockLoadPersonaSessions).toHaveBeenCalledWith(projectCwd, 'claude');
   });
 
   it('should start with empty sessions when restartPoint requests a stateless retry', async () => {
@@ -494,8 +534,8 @@ describe('executeWorkflow session loading', () => {
       ],
     } satisfies WorkflowRestartPoint;
 
-    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
       restartPoint,
     });
 
@@ -535,19 +575,19 @@ describe('executeWorkflow session loading', () => {
 
   it('should load sessions when both startStep and retryNote are set', async () => {
     // Given: retry with both flags
-    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
       startStep: 'implement',
       retryNote: 'Fix issue',
     });
 
     // Then: sessions are loaded
-    expect(mockLoadPersonaSessions).toHaveBeenCalledWith('/tmp/project', 'claude');
+    expect(mockLoadPersonaSessions).toHaveBeenCalledWith(projectCwd, 'claude');
   });
 
   it('should log provider and model per step with global defaults', async () => {
-    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
     });
 
     const mockInfo = vi.mocked(info);
@@ -556,8 +596,8 @@ describe('executeWorkflow session loading', () => {
   });
 
   it('should resolve logging config from workflow config values', async () => {
-    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
     });
 
     const calls = vi.mocked(resolveWorkflowConfigValues).mock.calls;
@@ -580,8 +620,8 @@ describe('executeWorkflow session loading', () => {
       observability,
     });
 
-    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
     });
 
     expect(mockInitializeOtelFoundation).toHaveBeenCalledWith(observability, undefined);
@@ -601,8 +641,8 @@ describe('executeWorkflow session loading', () => {
       observability,
     });
 
-    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
       reportDirName: 'trace-discovery-run',
       traceTaskMetadata: {
         taskSource: 'pr_review',
@@ -614,7 +654,7 @@ describe('executeWorkflow session loading', () => {
     });
 
     const metaWrites = vi.mocked(writeFileAtomic).mock.calls.filter(([path]) => (
-      path === '/tmp/project/.takt/runs/trace-discovery-run/meta.json'
+      path === join(projectCwd, '.takt', 'runs', 'trace-discovery-run', 'meta.json')
     ));
     expect(metaWrites.length).toBeGreaterThan(0);
     const finalMetaWrite = metaWrites.at(-1);
@@ -654,8 +694,8 @@ describe('executeWorkflow session loading', () => {
       },
     });
 
-    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
       reportDirName: 'trace-discovery-disabled-run',
       traceTaskMetadata: {
         taskSource: 'pr_review',
@@ -667,7 +707,7 @@ describe('executeWorkflow session loading', () => {
     });
 
     const metaWrites = vi.mocked(writeFileAtomic).mock.calls.filter(([path]) => (
-      path === '/tmp/project/.takt/runs/trace-discovery-disabled-run/meta.json'
+      path === join(projectCwd, '.takt', 'runs', 'trace-discovery-disabled-run', 'meta.json')
     ));
     expect(metaWrites.length).toBeGreaterThan(0);
     const finalMetaWrite = metaWrites.at(-1);
@@ -702,8 +742,8 @@ describe('executeWorkflow session loading', () => {
       reason: 'step_failed',
     };
 
-    const result = await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    const result = await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
       reportDirName: 'trace-discovery-abort-run',
       traceTaskMetadata: {
         taskSource: 'pr_review',
@@ -718,7 +758,7 @@ describe('executeWorkflow session loading', () => {
     expect(result.reason).toBe('step_failed');
 
     const metaWrites = vi.mocked(writeFileAtomic).mock.calls.filter(([path]) => (
-      path === '/tmp/project/.takt/runs/trace-discovery-abort-run/meta.json'
+      path === join(projectCwd, '.takt', 'runs', 'trace-discovery-abort-run', 'meta.json')
     ));
     expect(metaWrites.length).toBeGreaterThan(0);
     const finalMetaWrite = metaWrites.at(-1);
@@ -734,7 +774,7 @@ describe('executeWorkflow session loading', () => {
       };
     };
     const metaQueries = finalMeta.observability?.traceDiscovery?.queries;
-    expect(finalMeta.status).toBe('aborted');
+    expect(finalMeta.status).toBe('failed');
     expect(metaQueries).toEqual([
       '{ resource.service.name = "takt" && span."takt.run.id" = "trace-discovery-abort-run" }',
       '{ resource.service.name = "takt" && span."takt.task.pr_number" = 826 }',
@@ -763,8 +803,8 @@ describe('executeWorkflow session loading', () => {
     MockWorkflowEngine.runError = new Error('workflow engine failed');
 
     await expect(
-      executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-        projectCwd: '/tmp/project',
+      executeWorkflow(makeConfig(), 'task', projectCwd, {
+        projectCwd,
         reportDirName: 'trace-discovery-error-run',
         traceTaskMetadata: {
           taskSource: 'pr_review',
@@ -777,7 +817,7 @@ describe('executeWorkflow session loading', () => {
     ).rejects.toThrow('workflow engine failed');
 
     const metaWrites = vi.mocked(writeFileAtomic).mock.calls.filter(([path]) => (
-      path === '/tmp/project/.takt/runs/trace-discovery-error-run/meta.json'
+      path === join(projectCwd, '.takt', 'runs', 'trace-discovery-error-run', 'meta.json')
     ));
     expect(metaWrites.length).toBeGreaterThan(0);
     const finalMetaWrite = metaWrites.at(-1);
@@ -793,7 +833,7 @@ describe('executeWorkflow session loading', () => {
       };
     };
     const metaQueries = finalMeta.observability?.traceDiscovery?.queries;
-    expect(finalMeta.status).toBe('aborted');
+    expect(finalMeta.status).toBe('failed');
     expect(metaQueries).toEqual([
       '{ resource.service.name = "takt" && span."takt.run.id" = "trace-discovery-error-run" }',
       '{ resource.service.name = "takt" && span."takt.task.pr_number" = 826 }',
@@ -822,8 +862,8 @@ describe('executeWorkflow session loading', () => {
       delivered.push(event.type);
     });
 
-    const runPromise = executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    const runPromise = executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
       eventSink,
     });
     await Promise.resolve();
@@ -849,8 +889,8 @@ describe('executeWorkflow session loading', () => {
     });
 
     await expect(
-      executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-        projectCwd: '/tmp/project',
+      executeWorkflow(makeConfig(), 'task', projectCwd, {
+        projectCwd,
         eventSink,
       }),
     ).rejects.toThrow('workflow engine failed');
@@ -896,8 +936,8 @@ describe('executeWorkflow session loading', () => {
       observability,
     });
 
-    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
     });
 
     expect(MockWorkflowEngine.lastInstance.receivedOptions.childProcessEnv).toEqual({
@@ -952,8 +992,8 @@ describe('executeWorkflow session loading', () => {
       observability,
     });
 
-    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
     });
 
     expect(MockWorkflowEngine.lastInstance.receivedOptions.childProcessEnv).toEqual({
@@ -980,8 +1020,8 @@ describe('executeWorkflow session loading', () => {
       observability,
     });
 
-    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
     });
 
     expect(MockWorkflowEngine.lastInstance.receivedOptions.childProcessEnv).toBeUndefined();
@@ -1004,8 +1044,8 @@ describe('executeWorkflow session loading', () => {
     MockWorkflowEngine.runError = new Error('workflow engine failed');
 
     await expect(
-      executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-        projectCwd: '/tmp/project',
+      executeWorkflow(makeConfig(), 'task', projectCwd, {
+        projectCwd,
       }),
     ).rejects.toThrow('workflow engine failed');
 
@@ -1036,8 +1076,8 @@ describe('executeWorkflow session loading', () => {
       observability,
     });
 
-    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
     });
 
     expect(mockInitializeOtelFoundation).toHaveBeenCalledWith(
@@ -1045,7 +1085,14 @@ describe('executeWorkflow session loading', () => {
       {
         sessionLogExporter: {
           runId: 'test-report-dir',
-          shadowLogPath: '/tmp/project/.takt/runs/test-report-dir/logs/test-session-id-otel-session-shadow.jsonl',
+          shadowLogPath: join(
+            projectCwd,
+            '.takt',
+            'runs',
+            'test-report-dir',
+            'logs',
+            'test-session-id-otel-session-shadow.jsonl',
+          ),
           sanitizedTask: 'task',
           workflowName: 'test-workflow',
         },
@@ -1065,8 +1112,8 @@ describe('executeWorkflow session loading', () => {
       observability,
     });
 
-    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
     });
 
     expect(mockInitializeOtelFoundation).toHaveBeenCalledWith(
@@ -1074,7 +1121,7 @@ describe('executeWorkflow session loading', () => {
       {
         monitorJsonExporter: {
           runId: 'test-report-dir',
-          monitorPath: '/tmp/project/.takt/runs/test-report-dir/monitor.json',
+          monitorPath: join(projectCwd, '.takt', 'runs', 'test-report-dir', 'monitor.json'),
         },
       },
     );
@@ -1094,8 +1141,8 @@ describe('executeWorkflow session loading', () => {
     MockWorkflowEngine.runError = new Error('workflow engine failed');
 
     await expect(
-      executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-        projectCwd: '/tmp/project',
+      executeWorkflow(makeConfig(), 'task', projectCwd, {
+        projectCwd,
       }),
     ).rejects.toThrow('workflow engine failed');
 
@@ -1118,8 +1165,8 @@ describe('executeWorkflow session loading', () => {
     mockObservabilityShutdown.mockRejectedValueOnce(new Error('shutdown failed'));
 
     await expect(
-      executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-        projectCwd: '/tmp/project',
+      executeWorkflow(makeConfig(), 'task', projectCwd, {
+        projectCwd,
       }),
     ).rejects.toThrow('workflow engine failed');
 
@@ -1136,8 +1183,8 @@ describe('executeWorkflow session loading', () => {
       ? { value: 'claude', source: 'global' }
       : { value: 'gpt-4.1', source: 'global' });
 
-    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
     });
 
     const mockInfo = vi.mocked(info);
@@ -1154,8 +1201,8 @@ describe('executeWorkflow session loading', () => {
       ? { value: 'claude', source: 'global' }
       : { value: 'gpt-5.4', source: 'global' });
 
-    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
       personaProviders: { coder: { provider: 'codex', model: 'o3' } },
     });
 
@@ -1167,8 +1214,8 @@ describe('executeWorkflow session loading', () => {
   });
 
   it('should log provider and model per step with overrides', async () => {
-    await executeWorkflow(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfig(), 'task', projectCwd, {
+      projectCwd,
       provider: 'codex',
       model: 'gpt-5',
       personaProviders: { coder: { provider: 'opencode' } },
@@ -1180,16 +1227,32 @@ describe('executeWorkflow session loading', () => {
   });
 
   it('should pass step type to usage logger for parallel step', async () => {
-    await executeWorkflow(makeConfigWithStep({ parallel: { branches: [] } }), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    await executeWorkflow(makeConfigWithStep({ parallel: [] }), 'task', projectCwd, {
+      projectCwd,
     });
 
     expect(mockUsageLogger.logUsageFor).not.toHaveBeenCalled();
   });
 
   it('should pass step type to usage logger for arpeggio step', async () => {
-    await executeWorkflow(makeConfigWithStep({ arpeggio: { source: './items.csv' } }), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
+    const sourcePath = join(projectCwd, 'items.csv');
+    const templatePath = join(projectCwd, 'item-template.md');
+    writeFileSync(sourcePath, 'item\nfirst\n', 'utf-8');
+    writeFileSync(templatePath, 'Process {line:1}', 'utf-8');
+
+    await executeWorkflow(makeConfigWithStep({
+      arpeggio: {
+        source: 'csv',
+        sourcePath,
+        batchSize: 1,
+        concurrency: 1,
+        templatePath,
+        merge: { strategy: 'concat' },
+        maxRetries: 0,
+        retryDelayMs: 0,
+      },
+    }), 'task', projectCwd, {
+      projectCwd,
     });
 
     expect(mockUsageLogger.logUsageFor).toHaveBeenCalledWith(
@@ -1202,9 +1265,9 @@ describe('executeWorkflow session loading', () => {
     await executeWorkflow(
       makeConfigWithStep({ teamLeader: { output: { mode: 'summary' } } }),
       'task',
-      '/tmp/project',
+      projectCwd,
       {
-        projectCwd: '/tmp/project',
+        projectCwd,
       },
     );
 

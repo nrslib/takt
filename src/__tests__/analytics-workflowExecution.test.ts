@@ -25,6 +25,25 @@ import type {
 } from '../features/analytics/index.js';
 import type { StepProviderInfo } from '../core/workflow/types.js';
 import { parseWorkflowRuleCondition } from '../core/models/workflow-rule-condition.js';
+import { computeFileQuoteEvidenceRecordId } from '../core/models/finding-evidence-record.js';
+import type { FindingEvidenceRecord } from '../core/models/finding-types.js';
+
+function fileQuoteEvidenceRecord(path: string, line: number): FindingEvidenceRecord {
+  const payload = {
+    kind: 'file_quote' as const,
+    path,
+    startLine: line,
+    endLine: line,
+    verbatimExcerpt: 'fixture evidence',
+    snapshotId: 'a'.repeat(64),
+    claimIdentityHash: 'b'.repeat(64),
+    fileHash: 'c'.repeat(64),
+  };
+  return {
+    evidenceId: computeFileQuoteEvidenceRecordId(payload),
+    ...payload,
+  };
+}
 
 describe('workflow execution analytics initialization', () => {
   let testDir: string;
@@ -53,8 +72,10 @@ describe('workflow execution analytics initialization', () => {
   });
 
   it('should disable analytics when analytics is undefined', () => {
-    const analytics = undefined;
-    const analyticsEnabled = analytics?.enabled === true;
+    const resolveEnabled = (
+      analytics: { readonly enabled?: boolean } | undefined,
+    ): boolean => analytics?.enabled === true;
+    const analyticsEnabled = resolveEnabled(undefined);
     initAnalyticsWriter(analyticsEnabled, testDir);
     expect(isAnalyticsEnabled()).toBe(false);
   });
@@ -84,6 +105,8 @@ describe('step_result event assembly', () => {
       model: 'sonnet',
       decisionTag: 'REJECT',
       iteration: 3,
+      workflowName: 'peer-review',
+      scopeIdentity: 'peer-review-scope',
       runId: 'test-run',
       timestamp: '2026-02-18T10:00:00.000Z',
     };
@@ -225,7 +248,13 @@ describe('routing_decision event assembly', () => {
     } as const;
 
     emitter.onRoutingDecision(step, response, 'Implement API', providerInfo, 'normal', 4200, 3, 'auto-workflow');
-    emitter.onStepComplete(step, response, { iteration: 3, provider: 'codex', model: 'gpt-5' });
+    emitter.onStepComplete(step, response, {
+      iteration: 3,
+      provider: 'codex',
+      model: 'gpt-5',
+      workflowName: 'auto-workflow',
+      scopeIdentity: 'auto-workflow-scope',
+    });
 
     const lines = readFileSync(join(routingEventsDir, '2026-02-18.jsonl'), 'utf-8').trim().split('\n');
     const routingEvents = lines
@@ -402,7 +431,11 @@ describe('routing_decision event assembly', () => {
 
   it('writes routing decisions when auto routing selects the provider and a higher-priority layer selects the model', () => {
     initAnalyticsWriter(true, testDir, { routingEventsDir });
-    const emitter = new AnalyticsEmitter('task-derived-slug', false, 'routing-run-id');
+    const emitter = new AnalyticsEmitter(
+      'task-derived-slug',
+      false,
+      'routing-run-id',
+    );
     const step = {
       name: 'implement',
       tags: ['implementation'],
@@ -479,6 +512,8 @@ describe('review_finding event writing', () => {
       file: 'src/foo.ts',
       line: 42,
       iteration: 2,
+      workflowName: 'peer-review',
+      scopeIdentity: 'peer-review-scope',
       runId: 'test-run',
       timestamp: '2026-02-18T10:00:00.000Z',
     };
@@ -513,6 +548,10 @@ describe('AnalyticsEmitter findings ledger integration', () => {
   it('writes review_finding events from findings ledger updates to JSONL', () => {
     initAnalyticsWriter(true, testDir);
     const emitter = new AnalyticsEmitter('run-ledger', false);
+    const evidenceRecord = fileQuoteEvidenceRecord(
+      'src/core/workflow/evaluation/RuleEvaluator.ts',
+      48,
+    );
     const ledger: FindingLedger = {
       workflowName: 'peer-review',
       nextId: 2,
@@ -525,7 +564,7 @@ describe('AnalyticsEmitter findings ledger integration', () => {
           revision: 1,
           severity: 'high',
           title: 'Secret token should not become ruleId',
-          location: 'src/core/workflow/evaluation/RuleEvaluator.ts:48',
+          evidenceIds: [evidenceRecord.evidenceId],
           description: 'The workflow cannot route on open findings.',
           suggestion: 'Read the consolidated finding ledger in deterministic rules.',
           reviewers: ['architecture-reviewer'],
@@ -534,12 +573,16 @@ describe('AnalyticsEmitter findings ledger integration', () => {
           lastSeen: { runId: 'run', stepName: 'reviewers', timestamp: '2026-06-13T02:00:00.000Z' },
         },
       ],
+      evidenceRecords: [evidenceRecord],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
     };
 
-    emitter.onFindingLedgerUpdated(ledger, 7);
+    emitter.onFindingLedgerUpdated(ledger, {
+      iteration: 7,
+      workflowName: 'peer-review',
+      scopeIdentity: 'peer-review-scope',
+    });
 
     const filePath = join(testDir, '2026-06-13.jsonl');
     const content = readFileSync(filePath, 'utf-8').trim();
@@ -554,6 +597,8 @@ describe('AnalyticsEmitter findings ledger integration', () => {
       file: 'src/core/workflow/evaluation/RuleEvaluator.ts',
       line: 48,
       iteration: 7,
+      workflowName: 'peer-review',
+      scopeIdentity: 'peer-review-scope',
       runId: 'run-ledger',
       timestamp: '2026-06-13T02:30:00.000Z',
     });
@@ -576,24 +621,32 @@ describe('AnalyticsEmitter findings ledger integration', () => {
           revision: 1,
           severity: 'high',
           title: 'Analytics write should not abort workflow',
+          evidenceIds: [],
           reviewers: ['architecture-reviewer'],
           rawFindingIds: ['run:reviewers:1:architecture-review:raw-1'],
           firstSeen: { runId: 'run', stepName: 'reviewers', timestamp: '2026-06-13T02:00:00.000Z' },
           lastSeen: { runId: 'run', stepName: 'reviewers', timestamp: '2026-06-13T02:00:00.000Z' },
         },
       ],
+      evidenceRecords: [],
       rawFindings: [],
       conflicts: [],
-      interpretations: [],
     };
 
-    expect(() => emitter.onFindingLedgerUpdated(ledger, 7)).not.toThrow();
+    expect(() => emitter.onFindingLedgerUpdated(ledger, {
+      iteration: 1,
+      workflowName: 'peer-review',
+      scopeIdentity: 'peer-review-scope',
+    })).not.toThrow();
   });
 
   it('writes fix_action for seeded finding ids before a ledger update event', () => {
     initAnalyticsWriter(true, testDir);
     const emitter = new AnalyticsEmitter('run-ledger', false);
-    emitter.seedFindingContractFindingIds(['F-0001']);
+    emitter.setFindingContractFindingIds(
+      'peer-review-scope',
+      ['F-0001'],
+    );
 
     emitter.onStepComplete(
       { name: 'fix', edit: true } as WorkflowStep,
@@ -603,7 +656,13 @@ describe('AnalyticsEmitter findings ledger integration', () => {
         content: 'Fixed F-0001 and F-9999.',
         timestamp: new Date('2026-06-13T03:00:00.000Z'),
       } as AgentResponse,
-      { iteration: 8, provider: 'mock', model: 'test-model' },
+      {
+        iteration: 8,
+        provider: 'mock',
+        model: 'test-model',
+        workflowName: 'peer-review',
+        scopeIdentity: 'peer-review-scope',
+      },
     );
 
     const filePath = join(testDir, '2026-06-13.jsonl');
@@ -615,9 +674,108 @@ describe('AnalyticsEmitter findings ledger integration', () => {
       findingId: 'F-0001',
       action: 'fixed',
       iteration: 8,
+      workflowName: 'peer-review',
+      scopeIdentity: 'peer-review-scope',
       runId: 'run-ledger',
       timestamp: '2026-06-13T03:00:00.000Z',
     });
+  });
+
+  it('keeps overlapping ledger and fix ids isolated by scope', () => {
+    initAnalyticsWriter(true, testDir);
+    const emitter = new AnalyticsEmitter('run-ledger', false);
+    const ledger = (
+      workflowName: string,
+      findingId: string,
+    ): FindingLedger => ({
+      workflowName,
+      nextId: 2,
+      updatedAt: '2026-06-13T04:00:00.000Z',
+      findings: [{
+        id: findingId,
+        status: 'open',
+        lifecycle: 'new',
+        revision: 1,
+        severity: 'high',
+        title: `${workflowName} finding`,
+        evidenceIds: [],
+        reviewers: ['reviewer'],
+        rawFindingIds: [`${workflowName}:raw-1`],
+        firstSeen: {
+          runId: 'run-ledger',
+          stepName: 'review',
+          timestamp: '2026-06-13T04:00:00.000Z',
+        },
+        lastSeen: {
+          runId: 'run-ledger',
+          stepName: 'review',
+          timestamp: '2026-06-13T04:00:00.000Z',
+        },
+      }],
+      evidenceRecords: [],
+      rawFindings: [],
+      conflicts: [],
+    });
+
+    emitter.onFindingLedgerUpdated(ledger('child-b', 'F-0002'), {
+      iteration: 4,
+      workflowName: 'child-b',
+      scopeIdentity: 'scope-b',
+    });
+    emitter.onFindingLedgerUpdated(ledger('child-a', 'F-0001'), {
+      iteration: 3,
+      workflowName: 'child-a',
+      scopeIdentity: 'scope-a',
+    });
+    const response = {
+      persona: 'coder',
+      status: 'done',
+      content: 'Fixed F-0001 and F-0002.',
+      timestamp: new Date('2026-06-13T05:00:00.000Z'),
+    } as AgentResponse;
+    emitter.onStepComplete(
+      { name: 'fix', edit: true } as WorkflowStep,
+      response,
+      {
+        iteration: 5,
+        provider: 'mock',
+        model: 'test-model',
+        workflowName: 'child-a',
+        scopeIdentity: 'scope-a',
+      },
+    );
+    emitter.onStepComplete(
+      { name: 'fix', edit: true } as WorkflowStep,
+      response,
+      {
+        iteration: 6,
+        provider: 'mock',
+        model: 'test-model',
+        workflowName: 'child-b',
+        scopeIdentity: 'scope-b',
+      },
+    );
+
+    const events = readFileSync(
+      join(testDir, '2026-06-13.jsonl'),
+      'utf-8',
+    ).trim().split('\n').map(
+      (line) => JSON.parse(line) as Record<string, unknown>,
+    );
+    expect(events.filter((event) => event.type === 'fix_action')).toEqual([
+      expect.objectContaining({
+        findingId: 'F-0001',
+        iteration: 5,
+        workflowName: 'child-a',
+        scopeIdentity: 'scope-a',
+      }),
+      expect.objectContaining({
+        findingId: 'F-0002',
+        iteration: 6,
+        workflowName: 'child-b',
+        scopeIdentity: 'scope-b',
+      }),
+    ]);
   });
 });
 
@@ -643,6 +801,8 @@ describe('fix_action event writing', () => {
       findingId: 'AA-001',
       action: 'fixed',
       iteration: 3,
+      workflowName: 'peer-review',
+      scopeIdentity: 'peer-review-scope',
       runId: 'test-run',
       timestamp: '2026-02-18T11:00:00.000Z',
     };
@@ -666,6 +826,8 @@ describe('fix_action event writing', () => {
       findingId: 'AA-002',
       action: 'rebutted',
       iteration: 4,
+      workflowName: 'peer-review',
+      scopeIdentity: 'peer-review-scope',
       runId: 'test-run',
       timestamp: '2026-02-18T12:00:00.000Z',
     };

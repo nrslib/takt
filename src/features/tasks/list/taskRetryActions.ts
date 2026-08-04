@@ -244,6 +244,11 @@ function resolveFailureStepForRequeueNote(
     return failureStep;
   }
 
+  const runFailureStep = runMeta?.failure?.step.trim();
+  if (runFailureStep) {
+    return runFailureStep;
+  }
+
   const currentStep = runMeta?.currentStep?.trim();
   if (currentStep) {
     return currentStep;

@@ -66,7 +66,7 @@ When a workflow aborts or errors, the root `workflow.<name>` span also records s
 | Attribute | Meaning |
 |-----------|---------|
 | `takt.failure.kind` | Abort category, such as `step_error`, `runtime_error`, or `iteration_limit`. |
-| `takt.failure.step` | Current workflow step when the abort was recorded. |
+| `takt.failure.step` | Deepest failing step preserved across nested workflows. |
 | `takt.failure.reason` | Sanitized abort reason. |
 
 The base endpoint is required for OTLP export:
