@@ -234,7 +234,7 @@ AI often changes existing contracts under the banner of "improvement", "standard
 | Tests are updated only to follow the new contract | REJECT |
 | New contract required by new functionality | OK |
 | Missing information is added while preserving the existing contract | OK |
-| The requirement source calls for the contract change, and its reason and impact scope are clear | OK. Add only migration or compatibility mechanisms necessary for the target and scope explicitly required by the source and, when time-bounded, its period and end condition |
+| The requirement source calls for the contract change, and its reason and impact scope are clear | OK. Add only migration or compatibility mechanisms necessary for the target and scope explicitly required by the source |
 | Fixing display, accessibility, or test contract breakage newly caused by the requested change | OK. This is change-induced reconciliation, not scope creep |
 
 Verification approach:
@@ -245,7 +245,7 @@ Verification approach:
 
 Legacy support criteria:
 - Unless the requirement source explicitly requires backward compatibility, legacy support, migration support, or coexistence for the target, legacy support is REJECT
-- Even with explicit authority, add or retain each alias, conversion, upcaster, fallback, backfill, data migration, rebuild, or other mechanism only when it is necessary for the stated target and scope and, when time-bounded, stays within the stated period and end condition
+- Even with explicit authority, add or retain each alias, conversion, upcaster, fallback, backfill, data migration, rebuild, or other mechanism only when it is necessary for the stated target and scope
 - Without that explicit authority, do not add `.transform()`, `LEGACY_*_MAP`, `@deprecated`, aliases, upcasters, fallback, backfill, data migration, or rebuilds that support a superseded contract, even when the old and new contracts do not coexist
 - When none of those forms of support or coexistence is explicitly required for the target, support only new values and keep it simple
 - Current code, existing tests and usage sites, stored or persisted data, published or released status, and placement or isolation at a read boundary are impact evidence, not authority to add or retain compatibility
@@ -378,19 +378,19 @@ Code to remove:
 | Comment says "remove later" | `// TODO: remove after migration` left abandoned | Remove now |
 | Excessive proxy/adapter usage | Complexity added solely for backward compatibility | Replace simply |
 
-Legacy support to evaluate only for the target and scope explicitly required by the requirement source and, when time-bounded, its period and end condition:
+Legacy support to evaluate only for the target and scope explicitly required by the requirement source:
 
 | Pattern | Example | Verdict |
 |---------|---------|---------|
 | Externally published API | Old npm package export | Retain only when the requirement source defines the supported range |
 | Config file compatibility | Can read old format config | Retain only when the requirement source explicitly requires reading the old format |
-| During data migration | In the middle of DB schema migration | Retain only when the requirement source defines the migration period and old path |
+| During data migration | In the middle of DB schema migration | Retain only when the requirement source explicitly requires the old path |
 
 Decision criteria:
 1. Does the requirement source explicitly require backward compatibility, legacy support, migration support, or coexistence? -> If not, remove the old path and migrate consumers to the new path
-2. What uses, persisted data, and publication scope exist? -> Use them to identify impact and current-consumer migration targets. Treat persisted-data backfill, data migration, and other legacy support as targets only when the requirement source explicitly requires them, and only within the stated scope and, when time-bounded, period and end condition
+2. What uses, persisted data, and publication scope exist? -> Use them to identify impact and current-consumer migration targets. Treat persisted-data backfill, data migration, and other legacy support as targets only when the requirement source explicitly requires them, and only within the stated scope
 3. Is each alias, conversion, upcaster, fallback, backfill, data migration, rebuild, or other mechanism necessary for the explicitly required target and scope? -> Remove unnecessary mechanisms even when that support family is authorized
-4. Does the code match the explicitly required compatibility scope and, when time-bounded, period and end condition? -> Remove it when outside the scope or period, or after the condition ends
+4. Does the code match the explicitly required compatibility scope? -> Remove it when outside that scope
 
 When AI says "for backward compatibility", require the explicit source location. Do not retain it based only on an implementer's or reviewer's safety judgment.
 

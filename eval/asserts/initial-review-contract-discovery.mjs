@@ -157,6 +157,9 @@ export default function assertInitialReviewContractDiscovery(output) {
   const projectionPaths = [
     'src/preview.js',
     'src/doctor.js',
+    'src/summary.js',
+    'src/catalog-row.js',
+    'src/list-command.js',
     'tests/public-projections.test.js',
   ];
   const identityPaths = [

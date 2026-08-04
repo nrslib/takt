@@ -1,10 +1,10 @@
 Before finalizing the report, perform a completion sweep for every detected problem family.
 
-1. Identify the violated invariant or root cause rather than the symptom, and assign its `family_tag`
-2. Include the shared state, helper, or abstraction that owns the root cause, then search every producer, normalization and validation path, consumer, persistence and reinjection path, event, and side effect implementing the same contract
+1. First inventory changed contracts from the original requirements, plan, and cumulative diff, then fix each contract's invariant and authoritative owner. Assign `family_tag` to that invariant or root cause, never to a symptom, discovery location, reviewer, or round
+2. Search the definition and every reference to the shared state, helper, or abstraction that owns the root cause, including implementations that resolve or reconstruct the same meaning under another name, then search every producer, normalization and validation path, consumer, persistence and reinjection path, event, and side effect implementing the same contract
 3. Inspect not only the normal path but also failure, interruption, retry, resume, parallel, parent-child, auxiliary entry paths, and mocks, fixtures, and test doubles
 4. Do not stop at the first blocking finding; complete every applicable Policy / Knowledge perspective and every detected problem-family search
-5. Group every confirmed location with the same cause into the same problem family in this round and list each file or symbol, including the root-cause definition, in the report. Do not substitute path labels for checked locations or present unverified paths as confirmed
-6. If a later round finds a new issue in an existing `family_tag`, rescan the whole family and record both the prior coverage gap and every path checked now
+5. Group every confirmed location violating the same invariant into the same problem family in this round even when symptoms or entry points differ, and list each file or symbol, including the root-cause definition, in the report. Do not substitute path labels for checked locations or present unverified paths as confirmed
+6. If a later round finds the same invariant or an existing `family_tag` violated at another location, do not create a differently named family; rescan the whole family and record both the prior coverage gap and every path checked now. When accessible history or a ledger shows that the original acceptance condition remains unmet, classify it as continuing or reopened rather than a new family
 
 Completion requires explaining the review targets, checked paths, and unchecked paths for every changed contract and detected problem family, with no unexplained search result or adjacent path left unclassified. Do not turn incomplete exploration itself into a finding; report only defects confirmed in the current code.
