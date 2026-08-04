@@ -30,6 +30,7 @@ import {
   canonicalRawFindingFixture,
   rawCanonicalSnapshotFixture,
 } from './helpers/finding-lifecycle-fixture.js';
+import { crashAfterAdjudicationReservation } from './helpers/finding-adjudication-reservation.js';
 import { createTestFindingLedgerStore } from './helpers/finding-storage.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({ executeAgent: vi.fn() }));
@@ -313,29 +314,6 @@ describe('terminal adjudication runner provider envelope', () => {
     });
   }
 
-  function crashAfterTerminalReservation(store: FindingLedgerStore): FindingLedgerStore {
-    let crashed = false;
-    return new Proxy(store, {
-      get(target, property, receiver) {
-        if (property === 'updateLedger') {
-          return async (...args: Parameters<FindingLedgerStore['updateLedger']>) => {
-            const mutation = await target.updateLedger(...args);
-            const hasReservation = mutation.ledger.findingManagerProviderCalls.some((call) => (
-              call.purpose === 'terminal_adjudication' && call.state === 'reserved'
-            ));
-            if (!crashed && hasReservation) {
-              crashed = true;
-              throw new Error('simulated crash after terminal WAL reservation');
-            }
-            return mutation;
-          };
-        }
-        const value = Reflect.get(target, property, receiver) as unknown;
-        return typeof value === 'function' ? value.bind(target) : value;
-      },
-    });
-  }
-
   it('preserves the omitted-adjudicator terminal prompt and reserved request digest', async () => {
     executeAgentMock.mockResolvedValue({
       persona: 'supervisor',
@@ -484,7 +462,12 @@ describe('terminal adjudication runner provider envelope', () => {
 
   it('resumes the same real terminal WAL reservation after reopening the store', async () => {
     const guidance = 'Use the configured terminal policy.';
-    await expect(run(guidance, crashAfterTerminalReservation(ledgerStore)))
+    const crashingStore = crashAfterAdjudicationReservation({
+      store: ledgerStore,
+      purpose: 'terminal_adjudication',
+      errorMessage: 'simulated crash after terminal WAL reservation',
+    });
+    await expect(run(guidance, crashingStore))
       .rejects.toThrow('simulated crash after terminal WAL reservation');
     const reserved = ledgerStore.loadLedger().findingManagerProviderCalls[0]!;
     expect(reserved.state).toBe('reserved');
@@ -510,7 +493,12 @@ describe('terminal adjudication runner provider envelope', () => {
   });
 
   it('rejects changed terminal guidance without dispatching or replacing the real reservation', async () => {
-    await expect(run('Original guidance.', crashAfterTerminalReservation(ledgerStore)))
+    const crashingStore = crashAfterAdjudicationReservation({
+      store: ledgerStore,
+      purpose: 'terminal_adjudication',
+      errorMessage: 'simulated crash after terminal WAL reservation',
+    });
+    await expect(run('Original guidance.', crashingStore))
       .rejects.toThrow('simulated crash after terminal WAL reservation');
     const reserved = ledgerStore.loadLedger().findingManagerProviderCalls[0]!;
     ledgerStore = reopenStore();

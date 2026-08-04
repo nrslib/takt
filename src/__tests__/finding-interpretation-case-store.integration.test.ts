@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { executeAgent } from '../agents/agent-usecases.js';
 import type { AgentResponse, WorkflowStep } from '../core/models/types.js';
 import { compareBinaryStrings } from '../shared/utils/binary-string-comparator.js';
@@ -32,6 +32,10 @@ import { applyFindingLedgerFixtureRevision } from './helpers/finding-lifecycle-f
 vi.mock('../agents/agent-usecases.js', () => ({ executeAgent: vi.fn() }));
 
 const executeAgentMock = vi.mocked(executeAgent);
+
+beforeEach(() => {
+  executeAgentMock.mockReset();
+});
 
 function interpretationDependencies() {
   return {

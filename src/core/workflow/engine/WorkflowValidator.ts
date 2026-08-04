@@ -26,6 +26,7 @@ import { buildFindingInterpretationStep, buildFindingManagerStep } from '../find
 import {
   buildFindingConflictAdjudicationStep,
   buildFindingTerminalAdjudicationStep,
+  FINDING_TERMINAL_ADJUDICATION_STEP,
   workflowWiresFindingConflictAdjudication,
 } from '../findings/adjudication-step.js';
 import { findFindingContractFormat, hasFindingContractFormat } from '../findings/finding-contract-format.js';
@@ -324,9 +325,10 @@ export function validateFindingContractSyntheticProviderModels(
           currentProviderInfo: providerInfo,
         })
       : undefined;
-    const configurationPath = step.name === 'findings-manager' || step.name === 'findings-interpreter'
-      ? 'Configuration error: finding_contract.manager.model'
-      : 'Configuration error: finding_contract.adjudicator.model';
+    const configurationPath = step.name === FINDING_TERMINAL_ADJUDICATION_STEP
+      || step.name === FINDING_CONFLICT_ADJUDICATION_STEP
+      ? 'Configuration error: finding_contract.adjudicator.model'
+      : 'Configuration error: finding_contract.manager.model';
     validateResolvedProviderInfo(
       deterministicInfo ?? providerInfo,
       configurationPath,

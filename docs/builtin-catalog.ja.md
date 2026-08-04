@@ -150,7 +150,7 @@ finding_contract:
     model: <strong-model>
 ```
 
-直接指定は `provider_routing`、deprecated の `persona_providers`、auto routing、workflow/project/global fallback より優先されます。CLI と環境変数の明示 override はさらに優先されます。`provider` だけを直接指定すると、下位優先度の model fallback は停止します。
+実装上の優先順は、CLI/環境変数の明示 override → 実行時にマッチした promotion → step の provider/model（この直接指定を含む）→ `workflow_call` override → `provider_routing` の step/tag/persona → deprecated の `persona_providers` → auto routing → workflow → project → global → provider default です。`provider` だけを直接指定すると、下位優先度の model fallback は停止します。
 
 `takt` を実行すると workflow をインタラクティブに選択できます。
 

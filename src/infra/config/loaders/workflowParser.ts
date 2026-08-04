@@ -17,7 +17,7 @@ import {
   parseWorkflowRuleCondition,
 } from '../../../core/models/workflow-rule-condition.js';
 import {
-  FINDING_CONFLICT_ADJUDICATION_PERSONA,
+  FINDING_ADJUDICATION_PERSONA,
   workflowWiresFindingConflictAdjudication,
 } from '../../../core/workflow/findings/adjudication-step.js';
 import { FINDING_CONFLICT_ADJUDICATION_STEP } from '../../../core/workflow/constants.js';
@@ -121,6 +121,71 @@ function resolveFindingManagerAdditions(input: {
   });
 }
 
+type RawFindingContractAdjudicator = NonNullable<
+  NonNullable<ReturnType<typeof WorkflowConfigRawSchema.parse>['finding_contract']>['adjudicator']
+>;
+
+function findingContractAdjudicatorResolutionError(
+  field: 'persona' | 'instruction',
+  ref: string,
+  options?: ErrorOptions,
+): Error {
+  return new Error(
+    `Configuration error: failed to resolve finding_contract.adjudicator.${field} "${ref}"`,
+    options,
+  );
+}
+
+function resolveFindingContractAdjudicator(
+  raw: RawFindingContractAdjudicator,
+  sections: WorkflowSections,
+  workflowDir: string,
+  context?: FacetResolutionContext,
+): NonNullable<FindingContractConfig['adjudicator']> {
+  let resolvedPersona: ReturnType<typeof resolvePersona>;
+  try {
+    resolvedPersona = resolvePersona(raw.persona, sections, workflowDir, context);
+  } catch (error) {
+    throw findingContractAdjudicatorResolutionError('persona', raw.persona, { cause: error });
+  }
+
+  let resolvedInstruction: string | undefined;
+  try {
+    resolvedInstruction = resolveRefToContent(
+      raw.instruction,
+      sections.resolvedInstructionsWithSource ?? sections.resolvedInstructions,
+      workflowDir,
+      'instructions',
+      context,
+    );
+  } catch (error) {
+    throw findingContractAdjudicatorResolutionError('instruction', raw.instruction, { cause: error });
+  }
+
+  if (
+    resolvedPersona.personaSpec === undefined
+    || (isScopeRef(raw.persona) && resolvedPersona.personaPath === undefined)
+  ) {
+    throw findingContractAdjudicatorResolutionError('persona', raw.persona);
+  }
+  if (resolvedInstruction === undefined) {
+    throw findingContractAdjudicatorResolutionError('instruction', raw.instruction);
+  }
+
+  const routingKey = raw.persona.trim();
+  return {
+    persona: resolvedPersona.personaSpec,
+    personaDisplayName: resolvedPersona.personaPath
+      ? extractPersonaDisplayName(resolvedPersona.personaPath)
+      : resolvedPersona.personaSpec,
+    ...(routingKey ? { providerRoutingPersonaKey: routingKey } : {}),
+    ...(resolvedPersona.personaPath ? { personaPath: resolvedPersona.personaPath } : {}),
+    instruction: resolvedInstruction,
+    ...(raw.provider ? { provider: raw.provider } : {}),
+    ...(raw.model ? { model: raw.model } : {}),
+  };
+}
+
 function normalizeFindingContractConfig(
   raw: ReturnType<typeof WorkflowConfigRawSchema.parse>['finding_contract'],
   workflowDir: string,
@@ -174,62 +239,7 @@ function normalizeFindingContractConfig(
   });
   const adjudicator = raw.adjudicator === undefined
     ? undefined
-    : (() => {
-        let resolvedPersona: ReturnType<typeof resolvePersona>;
-        try {
-          resolvedPersona = resolvePersona(
-            raw.adjudicator.persona,
-            sections,
-            workflowDir,
-            context,
-          );
-        } catch (error) {
-          throw new Error(
-            `Configuration error: failed to resolve finding_contract.adjudicator.persona "${raw.adjudicator.persona}"`,
-            { cause: error },
-          );
-        }
-        let resolvedInstruction: string | undefined;
-        try {
-          resolvedInstruction = resolveRefToContent(
-            raw.adjudicator.instruction,
-            sections.resolvedInstructionsWithSource ?? sections.resolvedInstructions,
-            workflowDir,
-            'instructions',
-            context,
-          );
-        } catch (error) {
-          throw new Error(
-            `Configuration error: failed to resolve finding_contract.adjudicator.instruction "${raw.adjudicator.instruction}"`,
-            { cause: error },
-          );
-        }
-        if (
-          resolvedPersona.personaSpec === undefined
-          || (isScopeRef(raw.adjudicator.persona) && resolvedPersona.personaPath === undefined)
-        ) {
-          throw new Error(
-            `Configuration error: failed to resolve finding_contract.adjudicator.persona "${raw.adjudicator.persona}"`,
-          );
-        }
-        if (resolvedInstruction === undefined) {
-          throw new Error(
-            `Configuration error: failed to resolve finding_contract.adjudicator.instruction "${raw.adjudicator.instruction}"`,
-          );
-        }
-        const routingKey = raw.adjudicator.persona.trim();
-        return {
-          persona: resolvedPersona.personaSpec,
-          personaDisplayName: resolvedPersona.personaPath
-            ? extractPersonaDisplayName(resolvedPersona.personaPath)
-            : resolvedPersona.personaSpec,
-          providerRoutingPersonaKey: routingKey,
-          ...(resolvedPersona.personaPath ? { personaPath: resolvedPersona.personaPath } : {}),
-          instruction: resolvedInstruction,
-          ...(raw.adjudicator.provider ? { provider: raw.adjudicator.provider } : {}),
-          ...(raw.adjudicator.model ? { model: raw.adjudicator.model } : {}),
-        };
-      })();
+    : resolveFindingContractAdjudicator(raw.adjudicator, sections, workflowDir, context);
 
   return {
     manager: {
@@ -295,7 +305,7 @@ function resolveFindingConflictAdjudicator(
   }
   const wires = workflowWiresFindingConflictAdjudication(steps, loopMonitors);
   const { personaSpec, personaPath } = resolvePersona(
-    FINDING_CONFLICT_ADJUDICATION_PERSONA,
+    FINDING_ADJUDICATION_PERSONA,
     sections,
     workflowDir,
     context,
@@ -305,13 +315,13 @@ function resolveFindingConflictAdjudicator(
       persona: personaSpec,
       personaPath,
       personaDisplayName: extractPersonaDisplayName(personaPath),
-      providerRoutingPersonaKey: FINDING_CONFLICT_ADJUDICATION_PERSONA,
+      providerRoutingPersonaKey: FINDING_ADJUDICATION_PERSONA,
     };
     return;
   }
   if (wires) {
     throw new Error(
-      `Configuration error: persona "${FINDING_CONFLICT_ADJUDICATION_PERSONA}" is required for `
+      `Configuration error: persona "${FINDING_ADJUDICATION_PERSONA}" is required for `
       + `next: ${FINDING_CONFLICT_ADJUDICATION_STEP} but could not be resolved`,
     );
   }

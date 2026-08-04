@@ -138,7 +138,12 @@ function sectionJson<T>(instruction: string, heading: string): T {
   return JSON.parse(match[2]) as T;
 }
 
-function runInput() {
+type CompatibilityRunInput = {
+  optionsBuilder: Pick<RunFindingManagerForStepInput['optionsBuilder'], 'buildAgentOptions'>;
+  stepExecutor: RunFindingManagerForStepInput['stepExecutor'];
+};
+
+function runInput(): CompatibilityRunInput {
   return {
     optionsBuilder: {
       buildAgentOptions: () => ({}),
@@ -148,7 +153,7 @@ function runInput() {
       normalizeStructuredOutput: (_step: WorkflowStep, agentResponse: AgentResponse) => agentResponse,
       recordSynthesizedAgentUsage: () => {},
     },
-  } as Pick<RunFindingManagerForStepInput, 'optionsBuilder' | 'stepExecutor'>;
+  };
 }
 
 function reviewerIntake(ledger: FindingLedger, raw: RawFinding): ReviewerIntakeResult {
@@ -397,7 +402,7 @@ async function collectManagerPrompts(
   const prepared = prepareInterpretationCaseProviderRequest({
     cases: [],
     contract: promptContract,
-    optionsBuilder: runInput().optionsBuilder as never,
+    optionsBuilder: runInput().optionsBuilder,
     stepExecutor: runInput().stepExecutor,
     ledger,
   });
@@ -407,7 +412,7 @@ async function collectManagerPrompts(
   await requestInterpretationCases({
     cases: [],
     contract: promptContract,
-    optionsBuilder: runInput().optionsBuilder as never,
+    optionsBuilder: runInput().optionsBuilder,
     stepExecutor: runInput().stepExecutor,
     ledger,
     prepared,
@@ -429,12 +434,11 @@ async function collectBaseline() {
   const interpretationRequest = prepareInterpretationCaseProviderRequest({
     cases: [],
     contract,
-    optionsBuilder: runInput().optionsBuilder as never,
+    optionsBuilder: runInput().optionsBuilder,
     stepExecutor: runInput().stepExecutor,
     ledger: emptyLedger(),
   }).requestBytes;
   return {
-    head: '3847cda1',
     normalizedFindingContract: byteGolden(normalizedContractBytes),
     executionBundle: bundleGolden(),
     adjudicatorPrompts: {
@@ -447,7 +451,9 @@ async function collectBaseline() {
 
 describe('takt-default-fc compatibility baseline', () => {
   it('pins omitted manager additions and adjudicator configuration before production changes', async () => {
-    const expected = JSON.parse(readFileSync(BASELINE_PATH, 'utf8')) as unknown;
+    const { head: _head, ...expected } = JSON.parse(
+      readFileSync(BASELINE_PATH, 'utf8'),
+    ) as Record<string, unknown>;
     const actual = await collectBaseline();
     expect(actual).toEqual(expected);
   });

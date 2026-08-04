@@ -14,6 +14,7 @@ import {
 } from '../core/workflow/findings/conflict-adjudication-model.js';
 import type { FindingContractConfig, FindingLedger } from '../core/workflow/findings/types.js';
 import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
+import { crashAfterAdjudicationReservation } from './helpers/finding-adjudication-reservation.js';
 import { createTestFindingLedgerStore } from './helpers/finding-storage.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
 import { authorizeFindingLedgerFixture } from './helpers/finding-lifecycle-fixture.js';
@@ -196,29 +197,6 @@ describe('finding-conflict-adjudication runner registry contract', () => {
     });
   }
 
-  function crashAfterConflictReservation(store: FindingLedgerStore): FindingLedgerStore {
-    let crashed = false;
-    return new Proxy(store, {
-      get(target, property, receiver) {
-        if (property === 'updateLedger') {
-          return async (...args: Parameters<FindingLedgerStore['updateLedger']>) => {
-            const mutation = await target.updateLedger(...args);
-            const hasReservation = mutation.ledger.findingManagerProviderCalls.some((call) => (
-              call.purpose === 'conflict_adjudication' && call.state === 'reserved'
-            ));
-            if (!crashed && hasReservation) {
-              crashed = true;
-              throw new Error('simulated crash after conflict WAL reservation');
-            }
-            return mutation;
-          };
-        }
-        const value = Reflect.get(target, property, receiver) as unknown;
-        return typeof value === 'function' ? value.bind(target) : value;
-      },
-    });
-  }
-
   it('records undetermined output in snapshots, episodes, attempts, and provider calls', async () => {
     const snapshot = freshConflictAdjudicationSnapshot(
       ledgerStore.loadLedger(),
@@ -375,7 +353,12 @@ describe('finding-conflict-adjudication runner registry contract', () => {
 
   it('resumes the same real conflict WAL reservation after reopening the store', async () => {
     const guidance = 'Use the configured conflict policy.';
-    const crashingTarget = runner(guidance, crashAfterConflictReservation(ledgerStore));
+    const crashingStore = crashAfterAdjudicationReservation({
+      store: ledgerStore,
+      purpose: 'conflict_adjudication',
+      errorMessage: 'simulated crash after conflict WAL reservation',
+    });
+    const crashingTarget = runner(guidance, crashingStore);
     await expect(crashingTarget.runner.run(crashingTarget.step, state()))
       .rejects.toThrow('simulated crash after conflict WAL reservation');
     const reserved = ledgerStore.loadLedger().findingManagerProviderCalls[0]!;
@@ -413,7 +396,12 @@ describe('finding-conflict-adjudication runner registry contract', () => {
   });
 
   it('rejects changed conflict guidance without dispatching or replacing the real reservation', async () => {
-    const crashingTarget = runner('Original guidance.', crashAfterConflictReservation(ledgerStore));
+    const crashingStore = crashAfterAdjudicationReservation({
+      store: ledgerStore,
+      purpose: 'conflict_adjudication',
+      errorMessage: 'simulated crash after conflict WAL reservation',
+    });
+    const crashingTarget = runner('Original guidance.', crashingStore);
     await expect(crashingTarget.runner.run(crashingTarget.step, state()))
       .rejects.toThrow('simulated crash after conflict WAL reservation');
     const reserved = ledgerStore.loadLedger().findingManagerProviderCalls[0]!;

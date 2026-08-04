@@ -21,9 +21,10 @@ const FINDING_INTERPRETATION_INSTRUCTION =
  * 同じ形のステップを見ないと、検証やプレビューでは通る provider/model が
  * 実行時に別の値へ解決される食い違いが生まれるため、ここへ一本化する。
  *
- * provider/model の優先順位: finding_contract.manager の直接指定が最優先
- * （providerSpecified/modelSpecified を立てて persona_providers 等の後段解決を
- * 抑止する）。未指定時はワークフローの provider/model を fallback として載せる。
+ * finding_contract.manager の直接指定は workflow 構成層内で最優先とし、
+ * providerSpecified/modelSpecified を立てて persona_providers 等の後段解決を
+ * 抑止する。CLI/環境変数の実行時 override はこの直接指定より優先する。
+ * 未指定時はワークフローの provider/model を fallback として載せる。
  * provider だけが直接指定された場合、workflow model を引き継ぐと provider と
  * model の組み合わせが食い違うため model は載せない（modelSpecified は立てて
  * 後段の model 解決も抑止する）。

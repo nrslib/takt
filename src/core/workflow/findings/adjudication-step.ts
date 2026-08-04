@@ -17,9 +17,11 @@ import {
 // Current output is a closed outcome plus optional actionableFix/rationale.
 // Finding transitions are engine-owned and derived from the outcome.
 export const FINDING_CONFLICT_ADJUDICATION_SCHEMA_REF = 'takt.findings.adjudication';
+export const FINDING_TERMINAL_ADJUDICATION_SCHEMA_REF = 'takt.findings.terminal-adjudication';
+export const FINDING_TERMINAL_ADJUDICATION_STEP = 'findings-terminal-adjudication';
 
 /** The engine-owned adjudication step always uses the supervisor facet resolved into finding_contract.adjudicator. */
-export const FINDING_CONFLICT_ADJUDICATION_PERSONA = 'supervisor';
+export const FINDING_ADJUDICATION_PERSONA = 'supervisor';
 
 /**
  * Rule indexes of the synthesized step. The adjudication executor
@@ -68,8 +70,8 @@ function buildFindingAdjudicatorStep(input: {
     name: input.name,
     engineSynthesized: true,
     persona: adjudicator.persona,
-    personaDisplayName: adjudicator.personaDisplayName ?? FINDING_CONFLICT_ADJUDICATION_PERSONA,
-    providerRoutingPersonaKey: adjudicator.providerRoutingPersonaKey ?? FINDING_CONFLICT_ADJUDICATION_PERSONA,
+    personaDisplayName: adjudicator.personaDisplayName ?? FINDING_ADJUDICATION_PERSONA,
+    providerRoutingPersonaKey: adjudicator.providerRoutingPersonaKey ?? FINDING_ADJUDICATION_PERSONA,
     ...(adjudicator.personaPath !== undefined ? { personaPath: adjudicator.personaPath } : {}),
     provider: providerIsDirect ? adjudicator.provider : input.workflowProvider,
     providerSpecified: providerIsDirect,
@@ -93,9 +95,9 @@ export function buildFindingTerminalAdjudicationStep(input: {
 }): AgentWorkflowStep {
   return buildFindingAdjudicatorStep({
     ...input,
-    name: 'findings-terminal-adjudication',
+    name: FINDING_TERMINAL_ADJUDICATION_STEP,
     instruction: 'Adjudicate one durable provisional finding entity.',
-    schemaRef: 'takt.findings.terminal-adjudication',
+    schemaRef: FINDING_TERMINAL_ADJUDICATION_SCHEMA_REF,
     schema: TerminalAdjudicationProviderOutputJsonSchema,
   });
 }
@@ -120,7 +122,7 @@ export function buildFindingConflictAdjudicationStep(input: {
 }): AgentWorkflowStep {
   if (!input.contract.adjudicator) {
     throw new Error(
-      `Configuration error: persona "${FINDING_CONFLICT_ADJUDICATION_PERSONA}" is required for `
+      `Configuration error: persona "${FINDING_ADJUDICATION_PERSONA}" is required for `
       + `next: ${FINDING_CONFLICT_ADJUDICATION_STEP} but finding_contract.adjudicator was not resolved `
       + '(the supervisor persona facet could not be found)',
     );

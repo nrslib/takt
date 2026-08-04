@@ -89,6 +89,8 @@ function requestBytes(input: {
   });
 }
 
+// A crash after WAL reservation leaves a started attempt that the normal
+// unadjudicated predicate excludes; selecting the reserved call resumes it.
 function hasReservedConflictAttempt(ledger: FindingLedger, conflictId: string): boolean {
   return ledger.conflictAdjudicationAttempts.some((attempt) => (
     attempt.conflictId === conflictId

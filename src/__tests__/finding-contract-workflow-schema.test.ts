@@ -916,7 +916,7 @@ describe('workflow finding_contract schema', () => {
     },
   );
 
-  it('should preserve omitted manager additions and reject invalid addition/adjudicator shapes', () => {
+  it('should preserve omitted manager additions', () => {
     const normalized = normalizeWorkflowConfig(
       makeWorkflowWithFindingContract({
         manager: {
@@ -929,31 +929,101 @@ describe('workflow finding_contract schema', () => {
     );
     expect(normalized.findingContract?.manager).not.toHaveProperty('policyContents');
     expect(normalized.findingContract?.manager).not.toHaveProperty('knowledgeContents');
+  });
 
-    const manager = {
-      persona: 'findings-manager',
-      instruction: 'findings-manager',
-      output_contract: 'findings-manager',
-    };
-    const invalidContracts = [
-      { manager: { ...manager, policy: [] } },
-      { manager: { ...manager, policy: [''] } },
-      { manager: { ...manager, knowledge: [] } },
-      { manager: { ...manager, knowledge: [''] } },
-      { manager, adjudicator: {} },
-      { manager, adjudicator: { persona: 'supervisor' } },
-      { manager, adjudicator: { instruction: 'adjudicate' } },
-      { manager, adjudicator: { persona: '', instruction: 'adjudicate' } },
-      { manager, adjudicator: { persona: 'supervisor', instruction: '' } },
-      { manager, adjudicator: { persona: 'supervisor', instruction: 'adjudicate', provider: 'auto' } },
-      { manager, adjudicator: { persona: 'supervisor', instruction: 'adjudicate', output_contract: 'forbidden' } },
-    ];
-    for (const findingContract of invalidContracts) {
-      expect(() => normalizeWorkflowConfig(
-        makeWorkflowWithFindingContract(findingContract),
-        '/tmp/project',
-      )).toThrow();
-    }
+  const validManager = {
+    persona: 'findings-manager',
+    instruction: 'findings-manager',
+    output_contract: 'findings-manager',
+  };
+
+  it.each([
+    {
+      label: 'empty manager policy list',
+      findingContract: { manager: { ...validManager, policy: [] } },
+      expectedError: /policy/,
+    },
+    {
+      label: 'empty manager policy ref',
+      findingContract: { manager: { ...validManager, policy: [''] } },
+      expectedError: /policy/,
+    },
+    {
+      label: 'empty manager knowledge list',
+      findingContract: { manager: { ...validManager, knowledge: [] } },
+      expectedError: /knowledge/,
+    },
+    {
+      label: 'empty manager knowledge ref',
+      findingContract: { manager: { ...validManager, knowledge: [''] } },
+      expectedError: /knowledge/,
+    },
+    {
+      label: 'adjudicator without persona and instruction',
+      findingContract: { manager: validManager, adjudicator: {} },
+      expectedError: /adjudicator.*persona|persona.*adjudicator/s,
+    },
+    {
+      label: 'adjudicator without instruction',
+      findingContract: { manager: validManager, adjudicator: { persona: 'supervisor' } },
+      expectedError: /adjudicator.*instruction|instruction.*adjudicator/s,
+    },
+    {
+      label: 'adjudicator without persona',
+      findingContract: { manager: validManager, adjudicator: { instruction: 'adjudicate' } },
+      expectedError: /adjudicator.*persona|persona.*adjudicator/s,
+    },
+    {
+      label: 'empty adjudicator persona',
+      findingContract: { manager: validManager, adjudicator: { persona: '', instruction: 'adjudicate' } },
+      expectedError: /adjudicator.*persona|persona.*adjudicator/s,
+    },
+    {
+      label: 'empty adjudicator instruction',
+      findingContract: { manager: validManager, adjudicator: { persona: 'supervisor', instruction: '' } },
+      expectedError: /adjudicator.*instruction|instruction.*adjudicator/s,
+    },
+    {
+      label: 'unsupported adjudicator provider',
+      findingContract: {
+        manager: validManager,
+        adjudicator: { persona: 'supervisor', instruction: 'adjudicate', provider: 'auto' },
+      },
+      expectedError: /adjudicator.*provider|provider.*adjudicator/s,
+    },
+    {
+      label: 'adjudicator output contract',
+      findingContract: {
+        manager: validManager,
+        adjudicator: {
+          persona: 'supervisor',
+          instruction: 'adjudicate',
+          output_contract: 'forbidden',
+        },
+      },
+      expectedError: /output_contract|unrecognized/i,
+    },
+  ])('should reject $label at its schema field', ({ findingContract, expectedError }) => {
+    expect(() => normalizeWorkflowConfig(
+      makeWorkflowWithFindingContract(findingContract),
+      '/tmp/project',
+    )).toThrow(expectedError);
+  });
+
+  it('should omit an empty adjudicator persona routing key after trimming', () => {
+    const normalized = normalizeWorkflowConfig(
+      makeWorkflowWithFindingContract({
+        manager: validManager,
+        adjudicator: {
+          persona: '   ',
+          instruction: 'adjudicate',
+        },
+      }),
+      '/tmp/project',
+    );
+
+    expect(normalized.findingContract?.adjudicator)
+      .not.toHaveProperty('providerRoutingPersonaKey');
   });
 
   it('should reject unresolved additions and explicit adjudicator facets with field paths', () => {

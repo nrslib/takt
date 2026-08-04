@@ -14,6 +14,8 @@ import {
 import type { FindingLedger, InterpretationCase, InterpretationDecision } from './types.js';
 import { composeFindingManagerInstruction } from './manager-instruction-composer.js';
 
+type ManagerOptionsBuilder = Pick<OptionsBuilder, 'buildAgentOptions'>;
+
 export interface InterpretationCaseProviderResult {
   responses: Array<{ caseId: string; decision: InterpretationDecision }>;
   omittedCaseIds: string[];
@@ -65,7 +67,7 @@ export function prepareInterpretationCaseProviderRequest(input: {
   contract: FindingContractConfig;
   workflowProvider?: WorkflowConfig['provider'];
   workflowModel?: WorkflowConfig['model'];
-  optionsBuilder: OptionsBuilder;
+  optionsBuilder: ManagerOptionsBuilder;
   stepExecutor: Pick<StepExecutor, 'buildPhase1Instruction'>;
   ledger: FindingLedger;
 }): PreparedInterpretationCaseProviderRequest {
@@ -116,7 +118,7 @@ export async function requestInterpretationCases(input: {
   contract: FindingContractConfig;
   workflowProvider?: WorkflowConfig['provider'];
   workflowModel?: WorkflowConfig['model'];
-  optionsBuilder: OptionsBuilder;
+  optionsBuilder: ManagerOptionsBuilder;
   stepExecutor: Pick<StepExecutor, 'buildPhase1Instruction' | 'normalizeStructuredOutput' | 'recordSynthesizedAgentUsage'>;
   ledger: FindingLedger;
   prepared: PreparedInterpretationCaseProviderRequest;

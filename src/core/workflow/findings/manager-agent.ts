@@ -38,6 +38,8 @@ import { computeFindingLifecycleProjectionDigest } from '../../models/finding-li
 import { selectActionableFindingEntries } from './context.js';
 import { composeFindingManagerInstruction } from './manager-instruction-composer.js';
 
+type ManagerOptionsBuilder = Pick<OptionsBuilder, 'buildAgentOptions'>;
+
 export { RAW_FINDINGS_SCHEMA_REF };
 export { FINDING_MANAGER_SCHEMA_REF } from './manager-step.js';
 
@@ -488,7 +490,7 @@ export function parseManagerDecisions(
 }
 
 export function buildManagerAgentOptions(
-  optionsBuilder: OptionsBuilder,
+  optionsBuilder: ManagerOptionsBuilder,
   managerStep: AgentWorkflowStep,
 ): ReturnType<OptionsBuilder['buildAgentOptions']> {
   const options = {
@@ -508,7 +510,7 @@ export function buildManagerAgentOptions(
 export async function runManagerAttempt(input: {
   managerStep: AgentWorkflowStep;
   instruction: string;
-  optionsBuilder: OptionsBuilder;
+  optionsBuilder: ManagerOptionsBuilder;
   stepExecutor: Pick<StepExecutor, 'buildPhase1Instruction' | 'normalizeStructuredOutput' | 'recordSynthesizedAgentUsage'>;
 }): Promise<AgentResponse> {
   const phase1Instruction = input.stepExecutor.buildPhase1Instruction(input.instruction, input.managerStep);
@@ -523,7 +525,7 @@ export async function runManagerAttempt(input: {
 export async function runPreparedManagerAttempt(input: {
   managerStep: AgentWorkflowStep;
   phase1Instruction: string;
-  optionsBuilder: OptionsBuilder;
+  optionsBuilder: ManagerOptionsBuilder;
   stepExecutor: Pick<StepExecutor, 'normalizeStructuredOutput' | 'recordSynthesizedAgentUsage'>;
 }): Promise<AgentResponse> {
   const agentOptions = buildManagerAgentOptions(input.optionsBuilder, input.managerStep);

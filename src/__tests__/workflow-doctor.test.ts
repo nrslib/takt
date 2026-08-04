@@ -2486,8 +2486,8 @@ steps:
         worktreeDir,
         expect.objectContaining({
           providerValidationOptions: expect.objectContaining({
-            providerSource: expect.any(String),
-            modelSource: expect.any(String),
+            providerSource: 'default',
+            modelSource: 'default',
           }),
         }),
       );

@@ -471,7 +471,7 @@ kiro_cli_path: /usr/local/bin/kiro-cli
 
 provider と model の選択には、[Provider Routing](#provider-routing) に記載した単一のフィールド別優先順位を使用します。同じ契約が通常 step、parallel sub-step、合成 step、workflow call に適用されます。
 
-Finding Contract workflow では、`finding_contract.manager.provider` / `model` と `finding_contract.adjudicator.provider` / `model` は、それぞれの合成 step の step レベル provider/model として扱われます。`provider_routing`、deprecated の `persona_providers`、auto routing、workflow/project/global の既定値より優先されますが、CLI と環境変数の明示 override はさらに高い優先順位を維持します。両方とも未指定の場合は通常の workflow step と同じ fallback chain を使います。`provider` だけを指定すると下位優先度の model fallback は停止し、明示 model が必須の provider では検証エラーになります。
+Finding Contract workflow では、`finding_contract.manager.provider` / `model` と `finding_contract.adjudicator.provider` / `model` は、それぞれの合成 step の step レベル provider/model として扱われます。実装上のフィールド別優先順は、CLI/環境変数の明示 override → 実行時にマッチした promotion → step の provider/model（これらの直接指定を含む）→ `workflow_call` override → `provider_routing` の step/tag/persona → deprecated の `persona_providers` → auto routing → workflow → project → global → provider default です。両方とも未指定の場合は通常の workflow step と同じ fallback chain を使います。`provider` だけを指定すると下位優先度の model fallback は停止し、明示 model が必須の provider では検証エラーになります。
 
 ```yaml
 finding_contract:
