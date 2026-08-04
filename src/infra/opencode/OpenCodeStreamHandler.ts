@@ -173,7 +173,7 @@ export interface StreamTrackingState {
   thinkingRedactors: Map<string, SensitiveTextStreamRedactor>;
   partTypes: Map<string, string>;
   startedTools: Set<string>;
-  latestToolInputs: Map<string, Record<string, unknown>>;
+  latestToolInputJson: Map<string, string>;
   sensitiveSources: BoundedSensitiveValues;
   eventCount: number;
   textBytes: number;
@@ -195,7 +195,7 @@ export function createStreamTrackingState(): StreamTrackingState {
     thinkingRedactors: new Map<string, SensitiveTextStreamRedactor>(),
     partTypes: new Map<string, string>(),
     startedTools: new Set<string>(),
-    latestToolInputs: new Map<string, Record<string, unknown>>(),
+    latestToolInputJson: new Map<string, string>(),
     sensitiveSources: createBoundedSensitiveValues(),
     eventCount: 0,
     textBytes: 0,
@@ -231,7 +231,7 @@ function exhaustStreamTrackingState(
   state.thinkingRedactors.clear();
   state.partTypes.clear();
   state.startedTools.clear();
-  state.latestToolInputs.clear();
+  state.latestToolInputJson.clear();
   state.trackedIds.clear();
   state.sensitiveSources.exhaust();
   state.exhausted = true;
@@ -532,14 +532,20 @@ function handleToolPartUpdated(
 ): boolean {
   const toolId = toolPart.callID || toolPart.id;
   const isNewTool = !state.startedTools.has(toolId);
-  state.latestToolInputs.set(toolId, toolPart.state.input);
+  const inputJson = JSON.stringify(toolPart.state.input);
+  const inputChanged = state.latestToolInputJson.get(toolId) !== inputJson;
+  state.latestToolInputJson.set(toolId, inputJson);
   if (isNewTool) {
+    // 新しいツールだけがソース枠（MAX_TRACKED_SENSITIVE_SOURCES）を消費する。
+    // 同一ツールの input 更新は枠を消費せず値収集のみ行い、バイト予算で有界化する。
     state.startedTools.add(toolId);
     state.sensitiveSources.add(toolPart.state.input);
-    if (state.sensitiveSources.exhausted) {
-      exhaustStreamTrackingState(state, 'sensitive_sources');
-      return false;
-    }
+  } else if (inputChanged) {
+    state.sensitiveSources.collect(toolPart.state.input);
+  }
+  if (state.sensitiveSources.exhausted) {
+    exhaustStreamTrackingState(state, 'sensitive_sources');
+    return false;
   }
 
   if (!onStream) return true;

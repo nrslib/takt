@@ -52,7 +52,7 @@ describe('createStreamTrackingState', () => {
     expect(state.textOffsets.size).toBe(0);
     expect(state.thinkingOffsets.size).toBe(0);
     expect(state.startedTools.size).toBe(0);
-    expect(state.latestToolInputs.size).toBe(0);
+    expect(state.latestToolInputJson.size).toBe(0);
     expect(state.textBytes).toBe(0);
   });
 });
@@ -646,7 +646,7 @@ describe('handlePartUpdated', () => {
         expect(jsonl).not.toContain(secret);
         expect(jsonl).toContain('[REDACTED]');
         expect(jsonl.match(/"event_type":"tool_use"/g)).toHaveLength(1);
-        expect(state.latestToolInputs.get('call-late')).toEqual({ token: secret });
+        expect(state.latestToolInputJson.get('call-late')).toBe(JSON.stringify({ token: secret }));
       } finally {
         rmSync(logsDir, { recursive: true, force: true });
       }
@@ -795,9 +795,27 @@ describe('handlePartUpdated', () => {
     }
 
     expect(state.exhausted).toBe(true);
-    expect(state.latestToolInputs.size).toBe(0);
+    expect(state.latestToolInputJson.size).toBe(0);
     expect(state.sensitiveSources.values.size).toBe(0);
     expect(sanitizeSensitiveTextWithKnownValues('unknown-secret', state.sensitiveSources)).toBe('[REDACTED]');
+  });
+
+  it('collects secrets from later input revisions of the same tool without consuming source slots', () => {
+    const state = createStreamTrackingState();
+    const revisions = ['first-revision-secret', 'second-revision-secret'];
+    for (const token of revisions) {
+      expect(handlePartUpdated({
+        id: 'tool-part',
+        type: 'tool',
+        callID: 'call-1',
+        tool: 'remote',
+        state: { status: 'running', input: { token } },
+      }, undefined, undefined, state)).toBe(true);
+    }
+
+    expect(state.sensitiveSources.sourceCount).toBe(1);
+    expect(state.sensitiveSources.values.has('first-revision-secret')).toBe(true);
+    expect(state.sensitiveSources.values.has('second-revision-secret')).toBe(true);
   });
 });
 

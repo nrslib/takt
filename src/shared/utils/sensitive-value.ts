@@ -31,6 +31,14 @@ export class BoundedSensitiveValues {
       this.exhaust();
       return;
     }
+    this.collect(source);
+  }
+
+  /** Collect values without consuming a source slot; still bounded by the byte budget. */
+  collect(source: unknown): void {
+    if (this.exhausted) {
+      return;
+    }
     const collected = collectSensitiveStringValues(
       source,
       MAX_TRACKED_SENSITIVE_SOURCE_BYTES - this.inspectedBytes,
