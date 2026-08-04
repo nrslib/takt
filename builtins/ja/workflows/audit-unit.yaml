@@ -56,6 +56,7 @@ steps:
     edit: false
     persona: testing-reviewer
     policy:
+      - contract-change
       - review
       - testing
     knowledge:
@@ -80,7 +81,7 @@ steps:
       - supervise
     edit: false
     persona: supervisor
-    policy: review
+    policy: [contract-change, review]
     knowledge:
       - unit-testing
     instruction: unit-audit-supervise
@@ -97,6 +98,7 @@ steps:
     edit: false
     persona: testing-reviewer
     policy:
+      - contract-change
       - review
       - testing
     knowledge:

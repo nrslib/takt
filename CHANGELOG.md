@@ -10,7 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- The long-standing ban on unsolicited backward compatibility was made precise and contract-enforced (#1172). An explicit compatibility requirement authorizes only its stated target and scope, and each target (schema migration, data backfill, event upcasting, read-model rebuild, API compatibility) needs its own authority. Migrating current consumers to a new contract is classified as normal replacement work rather than legacy support, and current code, existing tests, stored data, or released status count as impact-analysis evidence, not authority to keep a superseded path. Plans record the supported target and scope in the plan output contract, so reviewers verify compatibility as a contract instead of a prose guideline.
+- The long-standing ban on unsolicited backward compatibility was made precise and contract-enforced (#1172). An explicit compatibility requirement authorizes only its stated target and scope, and each target (schema migration, data backfill, event upcasting, read-model rebuild, API compatibility) needs its own authority. Migrating current consumers to a new contract is classified as normal replacement work rather than legacy support, and current code, existing tests, stored data, or released status count as impact-analysis evidence, not authority to keep a superseded path. Plans record the supported target and scope in the plan output contract, so reviewers verify compatibility as a contract instead of a prose guideline. Contract-replacement judgment now has one shared policy owner, while personas, phase instructions, and output contracts contain only their role-specific responsibilities.
 
 ### Fixed
 

@@ -101,6 +101,7 @@ steps:
         edit: false
         persona: ai-antipattern-reviewer
         policy:
+          - contract-change
           - review
           - ai-antipattern
         provider_options:
@@ -126,7 +127,7 @@ steps:
         edit: false
         persona:
           $param: supervisor_persona
-        policy: review
+        policy: [contract-change, review]
         knowledge:
           $param: development_knowledge
         provider_options:
@@ -190,7 +191,8 @@ steps:
     edit: true
     persona: coder
     policy:
-      $param: development_policy
+      - contract-change
+      - $param: development_policy
     knowledge:
       $param: development_knowledge
     provider_options:
@@ -226,7 +228,8 @@ steps:
     edit: true
     persona: coder
     policy:
-      $param: development_policy
+      - contract-change
+      - $param: development_policy
     knowledge:
       $param: development_knowledge
     provider_options:

@@ -113,7 +113,7 @@ steps:
     edit: true
     session: compact
     persona: coder
-    policy: coding
+    policy: [contract-change, coding]
     knowledge: [takt, architecture, implementation-semantics]
     required_permission_mode: edit
     instruction: implement

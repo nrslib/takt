@@ -90,7 +90,6 @@ REJECT without exception if any of the following apply.
 - Specific implementation leaking into generic layers (imports and branching for specific implementations in generic layers)
 - Internal implementation exported from public API (infrastructure functions or internal classes exposed publicly)
 - Replaced code/exports surviving after refactoring
-- Consumer migration is confused with backward compatibility, legacy support, migration support, or coexistence; superseded-contract production, reading, aliases, conversion, upcasters, fallback, backfill, data migration, or rebuilds are added or retained without the requirement source explicitly requiring that support for the target; or such support exceeds the explicitly required scope or uses a mechanism not necessary to satisfy it. Public APIs, events, commands, configuration, paths, persisted formats, current code, existing tests and usage sites, stored or persisted data, published or released status, and placement or isolation at a read boundary are impact evidence; they do not create an exception by themselves
 - Missing cross-validation of related fields (invariants of semantically coupled config values left unverified)
 - Missing caller, producer, consumer, validator, test data, or derived-entry updates after a contract change
 - Meaningful fields such as IDs, source, trace, or issue/PR numbers are added, forwarded, or persisted while only the storage shape is checked, without verifying downstream interpretation or confusion with existing fields

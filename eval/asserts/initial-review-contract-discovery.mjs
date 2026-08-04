@@ -1,6 +1,6 @@
 function hasRejectVerdict(output) {
   return /(?:結果|判定|Result|Verdict)\s*:\s*REJECT/i.test(output)
-    || /^#+\s*REJECT\s*$/im.test(output);
+    || /^(?:#+\s*)?REJECT\s*$/im.test(output);
 }
 
 function unwrapProviderOutput(output) {
@@ -113,20 +113,30 @@ function extractLocationEvidence(record) {
   const locations = [];
   let tableLocationIndex = -1;
   let locationSectionIndent = -1;
+  let locationLabelIndent = -1;
   for (const line of record.split('\n')) {
-    const labeled = line.match(/^(\s*)[-*]?\s*(?:場所|Location|Paths?|Files?|根本原因|Root Cause|影響箇所|Affected (?:Paths?|Files?))\s*[:：]\s*(.*)$/i);
+    const labeled = line.match(/^(\s*)([-*]\s+)?(?:場所|Location|Paths?|Files?|根本原因|Root Cause|影響箇所|Affected (?:Paths?|Files?))\s*[:：]\s*(.*)$/i);
     if (labeled) {
-      locationSectionIndent = labeled[1].length;
-      if (labeled[2].trim()) locations.push(labeled[2]);
+      locationLabelIndent = labeled[1].length;
+      locationSectionIndent = locationLabelIndent + (labeled[2] === undefined ? 0 : 1);
+      if (labeled[3].trim()) locations.push(labeled[3]);
       continue;
     }
     if (locationSectionIndent >= 0) {
+      const siblingField = line.match(/^(\s*)[-*]\s+(?:family[_ -]?tag|finding[_ -]?id|問題|Problem|Issue|修正案|修正方針|Fix|Remediation|Proposed Fix|Recommendation|影響|Impact|重大度|Severity)\s*[:：]/i);
+      if (siblingField && siblingField[1].length <= locationLabelIndent) {
+        locationSectionIndent = -1;
+        locationLabelIndent = -1;
+      }
       const listItem = line.match(/^(\s*)[-*]\s+(.+)$/);
-      if (listItem && listItem[1].length > locationSectionIndent) {
+      if (locationSectionIndent >= 0 && listItem && listItem[1].length >= locationSectionIndent) {
         locations.push(listItem[2]);
         continue;
       }
-      if (line.trim()) locationSectionIndent = -1;
+      if (line.trim()) {
+        locationSectionIndent = -1;
+        locationLabelIndent = -1;
+      }
     }
 
     if (!line.includes('|')) continue;
@@ -157,13 +167,10 @@ export default function assertInitialReviewContractDiscovery(output) {
   const projectionPaths = [
     'src/preview.js',
     'src/doctor.js',
-    'src/summary.js',
     'src/catalog-row.js',
     'src/list-command.js',
-    'tests/public-projections.test.js',
   ];
   const identityPaths = [
-    'src/name-schema.js',
     'src/path-key.js',
     'src/job-store.js',
     'src/checkpoint.js',

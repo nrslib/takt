@@ -42,7 +42,8 @@ steps:
     edit: false
     persona: merge-readiness-reviewer
     policy:
-      $param: merge_readiness_policy
+      - contract-change
+      - $param: merge_readiness_policy
     knowledge:
       $param: merge_readiness_knowledge
     provider_options:
@@ -67,7 +68,7 @@ steps:
     edit: false
     persona:
       $param: supervisor_persona
-    policy: review
+    policy: [contract-change, review]
     knowledge:
       $param: supervise_knowledge
     provider_options:

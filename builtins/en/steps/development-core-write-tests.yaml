@@ -15,7 +15,8 @@ tags:
 edit: true
 persona: coder
 policy:
-  $param: testing_policy
+  - contract-change
+  - $param: testing_policy
 knowledge:
   $param: testing_knowledge
 provider_options:

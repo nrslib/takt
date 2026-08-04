@@ -11,6 +11,7 @@ tags:
 edit: false
 persona: frontend-reviewer
 policy:
+  - contract-change
   - review
   - design-fidelity
   - $param: review_policy_additions

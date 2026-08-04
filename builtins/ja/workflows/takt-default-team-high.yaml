@@ -112,7 +112,7 @@ steps:
     tags: [leader]
     edit: true
     persona: coder
-    policy: coding
+    policy: [contract-change, coding]
     knowledge: [takt, architecture, implementation-semantics]
     required_permission_mode: edit
     pass_previous_response: true
@@ -179,7 +179,7 @@ steps:
     tags: [leader]
     edit: true
     persona: coder
-    policy: [coding, testing]
+    policy: [contract-change, coding, testing]
     knowledge: [takt, architecture, implementation-semantics]
     required_permission_mode: edit
     team_leader:

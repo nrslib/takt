@@ -14,6 +14,7 @@ steps:
       - plan
     edit: false
     persona: planner
+    policy: contract-change
     knowledge: terraform-aws
     provider_options:
       claude:
@@ -42,6 +43,7 @@ steps:
     edit: true
     persona: terraform-coder
     policy:
+      - contract-change
       - terraform
     knowledge: terraform-aws
     provider_options:
@@ -87,6 +89,7 @@ steps:
         edit: false
         persona: terraform-reviewer
         policy:
+          - contract-change
           - review
           - terraform
         knowledge: terraform-aws
@@ -113,6 +116,7 @@ steps:
         edit: false
         persona: ai-antipattern-reviewer
         policy:
+          - contract-change
           - review
           - ai-antipattern
         provider_options:
@@ -137,6 +141,7 @@ steps:
         edit: false
         persona: coding-reviewer
         policy:
+          - contract-change
           - review
           - coding
         provider_options:
@@ -168,7 +173,7 @@ steps:
       - merge-readiness
     edit: false
     persona: merge-readiness-reviewer
-    policy: review
+    policy: [contract-change, review]
     provider_options:
       claude:
         allowed_tools:
@@ -194,7 +199,7 @@ steps:
       - review
     edit: &terraform_supervise_edit false
     persona: &terraform_supervise_persona supervisor
-    policy: &terraform_supervise_policy review
+    policy: &terraform_supervise_policy [contract-change, review]
     knowledge: &terraform_supervise_knowledge terraform-aws
     provider_options: &terraform_supervise_provider_options
       claude:
@@ -261,6 +266,7 @@ steps:
         edit: true
         persona: terraform-coder
         policy:
+          - contract-change
           - terraform
         knowledge: terraform-aws
         provider_options:
@@ -289,6 +295,7 @@ steps:
         edit: true
         persona: terraform-coder
         policy:
+          - contract-change
           - terraform
         knowledge: terraform-aws
         provider_options:
@@ -316,6 +323,7 @@ steps:
     edit: true
     persona: terraform-coder
     policy:
+      - contract-change
       - terraform
     knowledge: terraform-aws
     provider_options:
@@ -349,6 +357,7 @@ steps:
     edit: true
     persona: terraform-coder
     policy:
+      - contract-change
       - terraform
     knowledge: terraform-aws
     provider_options:
