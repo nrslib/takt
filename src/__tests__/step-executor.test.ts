@@ -537,6 +537,72 @@ describe('StepExecutor', () => {
     ))).toEqual(['initial', 'correction']);
   });
 
+  it('plain-text normalizerの65件出力はcorrectionを消費せず64件とoverflow記録へ着地する', async () => {
+    const rawFindings = Array.from({ length: 65 }, (_, index) => {
+      const sequence = String(index + 1).padStart(3, '0');
+      const rawExcerpt = `Finding ${sequence} observation.`;
+      return {
+        rawExcerpt,
+        candidate: {
+          rawFindingId: `raw-${sequence}`,
+          familyTag: 'bug',
+          severity: 'medium',
+          title: `Finding ${sequence}`,
+          description: rawExcerpt,
+          suggestion: null,
+          relation: 'new',
+          targetFindingIds: [],
+          target: { kind: 'code', paths: ['src/example.ts'] },
+          evidenceRequests: [],
+        },
+      };
+    });
+    const reportContent = rawFindings.map((finding) => finding.rawExcerpt).join('\n');
+    const harness = createPlainTextPublicationHarness([{
+      persona: 'default',
+      status: 'done',
+      content: '{"rawFindings":[]}',
+      structuredOutput: { rawFindings },
+      timestamp: new Date('2026-07-31T00:00:01.000Z'),
+    }], reportContent);
+
+    const result = await harness.executor.prepareFindingReviewPublication({
+      step: harness.step,
+      executableStep: harness.step,
+      reviewerOutputStrategy: PLAIN_TEXT_NORMALIZED_STRATEGY,
+      parentStepName: 'reviewers',
+      stepIteration: 1,
+      state: harness.state,
+      phase1Response: {
+        persona: 'reviewer',
+        status: 'done',
+        content: 'phase 1 investigation',
+        timestamp: new Date('2026-07-31T00:00:00.000Z'),
+      },
+      agentOptions: { resolvedProvider: 'mock' },
+      onProviderAttempt: vi.fn(),
+      updatePersonaSession: harness.updatePersonaSession,
+    });
+
+    expect('publication' in result).toBe(true);
+    if (!('publication' in result)) {
+      throw new Error('Expected publication');
+    }
+    expect(result.publication.rawFindings).toHaveLength(64);
+    expect(result.publication.reviewerOutputOverflow).toEqual({
+      kind: 'reviewer-output-overflow',
+      emittedAtomizedRawFindingCount: 65,
+      admittedAtomizedRawFindingCount: 64,
+      overflowAtomizedRawFindingCount: 1,
+      reason: 'reviewer emitted 65 atomized raw findings; admitted 64 and recorded 1 as reviewer-output-overflow',
+    });
+    expect(result.response.structuredOutput?.rawFindings).toHaveLength(64);
+    expect(harness.normalizeFindingIntake).toHaveBeenCalledOnce();
+    expect(harness.normalizeFindingIntake.mock.calls[0]?.[1]).toMatchObject({
+      mode: 'initial',
+    });
+  });
+
   it('plain-text normalizerの訂正失敗はreport recoveryと混同せずreportを保持する', async () => {
     const harness = createPlainTextPublicationHarness([
       {
@@ -1234,13 +1300,6 @@ describe('StepExecutor', () => {
         rawExcerpt: ' Issue: src/example.ts still bypasses the required boundary.',
         candidate: null,
       }],
-    },
-    {
-      label: 'resource overflow',
-      rawFindings: Array.from({ length: 65 }, () => ({
-        rawExcerpt: 'Issue: src/example.ts still bypasses the required boundary.',
-        candidate: null,
-      })),
     },
   ])('plain-text normalizerのpublication違反($label)は1回だけ訂正する', async ({
     rawFindings,

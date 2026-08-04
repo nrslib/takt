@@ -96,6 +96,25 @@ function intakeExtractions(
   });
 }
 
+function reviewerExtractions(count: number): unknown[] {
+  return Array.from({ length: count }, (_, index) => {
+    const sequence = String(index + 1).padStart(3, '0');
+    return reviewerRawExtractionFixture({
+      rawFindingId: `raw-${sequence}`,
+      familyTag: 'bug',
+      severity: 'high',
+      title: `Finding ${sequence}`,
+      description: `Finding ${sequence} observation.`,
+      suggestion: null,
+      relation: 'new',
+      targetFindingId: null,
+      target: { kind: 'code', paths: ['src/a.ts'] },
+      evidence: [],
+      rawExcerpt: `Finding ${sequence} observation.`,
+    });
+  });
+}
+
 describe('reviewer raw resource envelope', () => {
   it('preserves nullable candidate fields through projection before intake', () => {
     const nullableRaw = reviewerRawExtractionFixture({
@@ -319,15 +338,59 @@ describe('reviewer raw resource envelope', () => {
     })).toThrow(/exceeded limits/);
   });
 
-  it('rejects one extraction that would exceed the atomized reviewer limit', () => {
+  it.each([63, 64])(
+    'intakes %i atomized findings without an overflow record',
+    (count) => {
+      const intake = intakeExtractions([{
+        name: 'reviewer',
+        extractions: reviewerExtractions(count),
+      }]);
+
+      expect(intake.items).toHaveLength(count);
+      expect(intake.overflowReports).toEqual([]);
+      expect(intake.intakeProvisionalSpecs).toEqual([]);
+    },
+  );
+
+  it('intakes 64 atomized findings and records the 65th as bounded overflow', () => {
+    const intake = intakeExtractions([{
+      name: 'reviewer',
+      extractions: reviewerExtractions(65),
+    }]);
+
+    expect(intake.items).toHaveLength(64);
+    expect(intake.overflowReports).toEqual([{
+      reviewer: 'reviewer',
+      reason: 'reviewer emitted 65 atomized raw findings; admitted 64 and recorded 1 as reviewer-output-overflow',
+      emittedAtomizedRawFindingCount: 65,
+      admittedAtomizedRawFindingCount: 64,
+      overflowAtomizedRawFindingCount: 1,
+    }]);
+    expect(intake.intakeProvisionalSpecs).toEqual([
+      expect.objectContaining({
+        kind: 'reviewer-output-overflow',
+        reason: expect.stringContaining('admitted 64 and recorded 1'),
+      }),
+    ]);
+  });
+
+  it('bounds one extraction that exceeds the atomized reviewer limit', () => {
     const extraction = structuredClone(raw);
     extraction.candidate!.relation = 'persists';
     extraction.candidate!.targetFindingIds = Array.from(
       { length: RAW_FINDING_LIMITS.maxRawFindingsPerReviewer + 1 },
       (_, index) => `F-${String(index + 1).padStart(4, '0')}`,
     );
-    expect(() => intakeExtractions([{ name: 'reviewer', extractions: [extraction] }]))
-      .toThrow(/atomized raw findings/);
+    const intake = intakeExtractions([{ name: 'reviewer', extractions: [extraction] }]);
+
+    expect(intake.items).toHaveLength(RAW_FINDING_LIMITS.maxRawFindingsPerReviewer);
+    expect(intake.overflowReports).toEqual([
+      expect.objectContaining({
+        emittedAtomizedRawFindingCount: 65,
+        admittedAtomizedRawFindingCount: 64,
+        overflowAtomizedRawFindingCount: 1,
+      }),
+    ]);
   });
 
   it('rejects a provider raw finding ID above the local limit before intake', () => {

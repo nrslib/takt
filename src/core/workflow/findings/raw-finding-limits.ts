@@ -2,10 +2,9 @@
  * Finding Contract のハード上限。正常時が数件〜十数件、
  * 暴走時が435件という実測から、正常値の約4倍以上を許容しつつ暴走を早期遮断する。
  *
- * 1項目でも超過した reviewer 出力は部分採用しない: その reviewer の全 raw を
- * 単一の reviewer-output-overflow provisional に置き換える（先頭N件の部分採用は
- * 「やるな」リスト該当）。件数・byte の envelope 検査は巨大 JSON 全体を Zod
- * parse する前に行う（435件なら65件目を読んだ時点で打ち切る）。
+ * reviewer 件数超過は publication 境界で atomized 64件までを intake 対象にし、
+ * 超過件数を reviewer-output-overflow provisional と report に残す。byte・field・
+ * step envelope 違反は reviewer 全体を単一 overflow provisional に置き換える。
  */
 import {
   RAW_FINDING_FIELD_LIMITS,

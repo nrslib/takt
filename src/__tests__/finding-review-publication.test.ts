@@ -110,6 +110,38 @@ describe('Finding review publication', () => {
     });
   });
 
+  it('persists and reloads bounded reviewer overflow metadata', () => {
+    const reportDir = createReportDirectory();
+    const rawFindings = Array.from({ length: 65 }, (_, index) => ({
+      rawExcerpt: `Finding ${String(index + 1).padStart(3, '0')}.`,
+      candidate: null,
+    }));
+    const reportContent = rawFindings.map((finding) => finding.rawExcerpt).join('\n');
+    const publication = createFindingReviewPublication({
+      identity: identity(),
+      protocol: PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+      reportContent,
+      rawFindings,
+    });
+    persistFindingReviewPublication(reportDir, {
+      publication,
+      reviewerExecutionIdentity,
+    });
+
+    const loaded = loadFindingReviewPublication(
+      reportDir,
+      identity(),
+      PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+    )?.publication;
+    expect(loaded?.rawFindings).toHaveLength(64);
+    expect(loaded?.reviewerOutputOverflow).toMatchObject({
+      kind: 'reviewer-output-overflow',
+      emittedAtomizedRawFindingCount: 65,
+      admittedAtomizedRawFindingCount: 64,
+      overflowAtomizedRawFindingCount: 1,
+    });
+  });
+
   it('persists an identity-bound pending plain report outside the public report path', () => {
     const reportDir = createReportDirectory();
     const reportContent = '## Result: REJECT\n\nBroad architecture concern.';

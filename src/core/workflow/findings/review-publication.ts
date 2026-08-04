@@ -22,6 +22,7 @@ import {
 import {
   checkReviewerEnvelope,
   findRawFieldLimitViolation,
+  RAW_FINDING_LIMITS,
 } from './raw-finding-limits.js';
 import type { ReviewerRelationClarification } from './relation-coherence.js';
 import { isProviderType, type ProviderType } from '../../../shared/types/provider.js';
@@ -78,6 +79,15 @@ export interface CanonicalFindingReviewPublication extends FindingReviewPublicat
   readonly reportContent: string;
   readonly reportDigest: string;
   readonly rawFindings: readonly unknown[];
+  readonly reviewerOutputOverflow?: FindingReviewPublicationOverflow;
+}
+
+export interface FindingReviewPublicationOverflow {
+  readonly kind: 'reviewer-output-overflow';
+  readonly emittedAtomizedRawFindingCount: number;
+  readonly admittedAtomizedRawFindingCount: number;
+  readonly overflowAtomizedRawFindingCount: number;
+  readonly reason: string;
 }
 
 export interface FindingReviewPublicationPreparation {
@@ -200,6 +210,7 @@ function preparationContentIdentity(
     protocol: preparation.publication.protocol,
     reportDigest: preparation.publication.reportDigest,
     rawFindings: preparation.publication.rawFindings,
+    reviewerOutputOverflow: preparation.publication.reviewerOutputOverflow ?? null,
     relationClarification: preparation.relationClarification ?? null,
     reviewerExecutionIdentity: preparation.reviewerExecutionIdentity ?? null,
   }));
@@ -253,6 +264,9 @@ function rebindInheritedFindingReviewPublication(
       protocol: first.publication.protocol,
       reportContent: first.publication.reportContent,
       rawFindings: first.publication.rawFindings,
+      ...(first.publication.reviewerOutputOverflow === undefined
+        ? {}
+        : { reviewerOutputOverflow: first.publication.reviewerOutputOverflow }),
     }),
     ...(first.relationClarification === undefined
       ? {}
@@ -429,6 +443,34 @@ function parseStoredRelationClarification(
   return structuredClone(value) as ReviewerRelationClarification;
 }
 
+function parseStoredReviewerOutputOverflow(
+  value: unknown,
+): FindingReviewPublicationOverflow | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('Finding review publication reviewerOutputOverflow is not an object');
+  }
+  const record = value as Record<string, unknown>;
+  const countFields = [
+    'emittedAtomizedRawFindingCount',
+    'admittedAtomizedRawFindingCount',
+    'overflowAtomizedRawFindingCount',
+  ] as const;
+  if (
+    record.kind !== 'reviewer-output-overflow'
+    || typeof record.reason !== 'string'
+    || record.reason.length === 0
+    || !countFields.every((field) => (
+      Number.isSafeInteger(record[field]) && Number(record[field]) >= 0
+    ))
+  ) {
+    throw new Error('Finding review publication reviewerOutputOverflow is invalid');
+  }
+  return structuredClone(value) as FindingReviewPublicationOverflow;
+}
+
 function parseStoredPreparation(
   content: Buffer,
   expectedPublicationId: string,
@@ -477,6 +519,13 @@ function parseStoredPreparation(
     reportContent: publicationRecord.reportContent,
     reportDigest: publicationRecord.reportDigest,
     rawFindings: publicationRecord.rawFindings,
+    ...(publicationRecord.reviewerOutputOverflow === undefined
+      ? {}
+      : {
+          reviewerOutputOverflow: parseStoredReviewerOutputOverflow(
+            publicationRecord.reviewerOutputOverflow,
+          )!,
+        }),
   };
   assertCanonicalFindingReviewPublication(publication);
   if (publication.publicationId !== expectedPublicationId) {
@@ -615,6 +664,142 @@ function assertPublicationRawFindings(
   assertFindingReviewPublicationSourceBindings(reportContent, rawFindings);
 }
 
+function atomizedRawFindingCount(rawFindings: readonly unknown[]): number {
+  return rawFindings.reduce<number>(
+    (total, item) => total + Math.max(
+      1,
+      extractLenientRawFields(item).targetFindingIds?.length ?? 0,
+    ),
+    0,
+  );
+}
+
+function boundPartialAtomizedRawFinding(
+  item: unknown,
+  admittedTargetFindingIds: readonly string[],
+): unknown {
+  const projected = projectReviewerRawStructuredOutputWithEnvelope({
+    rawFindings: [item],
+  }).structuredOutput.rawFindings;
+  if (!Array.isArray(projected) || projected.length !== 1) {
+    throw new Error('Finding review publication could not project overflow boundary item');
+  }
+  const bounded = projected[0];
+  if (typeof bounded !== 'object' || bounded === null || Array.isArray(bounded)) {
+    throw new Error('Finding review publication overflow boundary item is invalid');
+  }
+  const candidate = Reflect.get(bounded, 'candidate');
+  if (typeof candidate !== 'object' || candidate === null || Array.isArray(candidate)) {
+    throw new Error('Finding review publication overflow boundary candidate is invalid');
+  }
+  return {
+    ...bounded,
+    candidate: {
+      ...candidate,
+      targetFindingIds: [...admittedTargetFindingIds],
+    },
+  };
+}
+
+function boundPublicationRawFindings(input: {
+  rawFindings: readonly unknown[];
+  sourceEnvelope: ReviewerRawResourceEnvelope;
+}): {
+  rawFindings: readonly unknown[];
+  resourceEnvelope: ReviewerRawResourceEnvelope;
+  reviewerOutputOverflow?: FindingReviewPublicationOverflow;
+} {
+  if (
+    input.sourceEnvelope.itemCount !== input.rawFindings.length
+    || input.sourceEnvelope.itemSourceBytes.length !== input.rawFindings.length
+  ) {
+    throw new Error('Finding review publication resource envelope does not match rawFindings');
+  }
+  if (
+    input.sourceEnvelope.jsonBytes
+    > RAW_FINDING_LIMITS.maxReviewerRawFindingsJsonBytes
+  ) {
+    throw new Error(
+      `Finding review publication exceeded limits: reviewer rawFindings JSON is ${input.sourceEnvelope.jsonBytes} bytes, exceeding the per-reviewer limit of ${RAW_FINDING_LIMITS.maxReviewerRawFindingsJsonBytes} bytes`,
+    );
+  }
+
+  const emittedCount = atomizedRawFindingCount(input.rawFindings);
+  if (emittedCount <= RAW_FINDING_LIMITS.maxRawFindingsPerReviewer) {
+    return {
+      rawFindings: input.rawFindings,
+      resourceEnvelope: input.sourceEnvelope,
+    };
+  }
+
+  const bounded: unknown[] = [];
+  let admittedCount = 0;
+  for (const item of input.rawFindings) {
+    const fields = extractLenientRawFields(item);
+    const itemCount = Math.max(1, fields.targetFindingIds?.length ?? 0);
+    const remaining = RAW_FINDING_LIMITS.maxRawFindingsPerReviewer - admittedCount;
+    if (remaining === 0) {
+      break;
+    }
+    if (itemCount <= remaining) {
+      bounded.push(item);
+      admittedCount += itemCount;
+      continue;
+    }
+    if (fields.targetFindingIds === undefined) {
+      throw new Error('Finding review publication could not settle atomized overflow boundary');
+    }
+    bounded.push(boundPartialAtomizedRawFinding(
+      item,
+      fields.targetFindingIds.slice(0, remaining),
+    ));
+    admittedCount += remaining;
+  }
+
+  const overflowCount = emittedCount - admittedCount;
+  const reason = `reviewer emitted ${emittedCount} atomized raw findings; admitted ${admittedCount} and recorded ${overflowCount} as reviewer-output-overflow`;
+  return {
+    rawFindings: bounded,
+    resourceEnvelope: projectReviewerRawStructuredOutputWithEnvelope({
+      rawFindings: bounded,
+    }).resourceEnvelope,
+    reviewerOutputOverflow: {
+      kind: 'reviewer-output-overflow',
+      emittedAtomizedRawFindingCount: emittedCount,
+      admittedAtomizedRawFindingCount: admittedCount,
+      overflowAtomizedRawFindingCount: overflowCount,
+      reason,
+    },
+  };
+}
+
+function assertReviewerOutputOverflow(
+  publication: CanonicalFindingReviewPublication,
+): void {
+  const overflow = publication.reviewerOutputOverflow;
+  if (overflow === undefined) {
+    return;
+  }
+  const admittedCount = atomizedRawFindingCount(publication.rawFindings);
+  const counts = [
+    overflow.emittedAtomizedRawFindingCount,
+    overflow.admittedAtomizedRawFindingCount,
+    overflow.overflowAtomizedRawFindingCount,
+  ];
+  if (
+    overflow.kind !== 'reviewer-output-overflow'
+    || overflow.reason.length === 0
+    || !counts.every(Number.isSafeInteger)
+    || admittedCount !== overflow.admittedAtomizedRawFindingCount
+    || admittedCount !== RAW_FINDING_LIMITS.maxRawFindingsPerReviewer
+    || overflow.emittedAtomizedRawFindingCount
+      !== admittedCount + overflow.overflowAtomizedRawFindingCount
+    || overflow.overflowAtomizedRawFindingCount <= 0
+  ) {
+    throw new Error('Finding review publication reviewerOutputOverflow is inconsistent');
+  }
+}
+
 export class FindingReviewPublicationSourceBindingError extends Error {
   readonly rawFindingIndex: number;
 
@@ -662,6 +847,7 @@ export function assertCanonicalFindingReviewPublication(
     throw new Error(`Finding review publication digest mismatch for "${publication.publicationId}"`);
   }
   assertPublicationRawFindings(publication.reportContent, publication.rawFindings);
+  assertReviewerOutputOverflow(publication);
 }
 
 export function createFindingReviewPublication(input: {
@@ -670,19 +856,39 @@ export function createFindingReviewPublication(input: {
   readonly reportContent: string;
   readonly rawFindings: readonly unknown[];
   readonly reviewerRawResourceEnvelope?: ReviewerRawResourceEnvelope;
+  readonly reviewerOutputOverflow?: FindingReviewPublicationOverflow;
 }): CanonicalFindingReviewPublication {
+  const sourceEnvelope = input.reviewerRawResourceEnvelope
+    ?? projectReviewerRawStructuredOutputWithEnvelope({
+      rawFindings: input.rawFindings,
+    }).resourceEnvelope;
+  const bounded = boundPublicationRawFindings({
+    rawFindings: input.rawFindings,
+    sourceEnvelope,
+  });
+  if (
+    bounded.reviewerOutputOverflow !== undefined
+    && input.reviewerOutputOverflow !== undefined
+  ) {
+    throw new Error('Finding review publication received duplicate overflow metadata');
+  }
+  const reviewerOutputOverflow = bounded.reviewerOutputOverflow
+    ?? input.reviewerOutputOverflow;
   const publication: CanonicalFindingReviewPublication = {
     ...input.identity,
     publicationId: computeFindingReviewPublicationId(input.identity),
     protocol: input.protocol,
     reportContent: input.reportContent,
     reportDigest: sha256(Buffer.from(input.reportContent, 'utf8')),
-    rawFindings: structuredClone(input.rawFindings),
+    rawFindings: structuredClone(bounded.rawFindings),
+    ...(reviewerOutputOverflow === undefined
+      ? {}
+      : { reviewerOutputOverflow }),
   };
   assertPublicationRawFindings(
     publication.reportContent,
     publication.rawFindings,
-    input.reviewerRawResourceEnvelope,
+    bounded.resourceEnvelope,
   );
   assertCanonicalFindingReviewPublication(publication);
   return freezeCanonicalFindingReviewPublication(publication);

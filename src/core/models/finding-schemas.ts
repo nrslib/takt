@@ -2275,6 +2275,9 @@ const UnsupportedRawFindingReportSchema = z.object({
 const ReviewerOutputOverflowReportSchema = z.object({
   reviewer: nonEmptyString,
   reason: nonEmptyString,
+  emittedAtomizedRawFindingCount: z.number().int().nonnegative(),
+  admittedAtomizedRawFindingCount: z.number().int().nonnegative(),
+  overflowAtomizedRawFindingCount: z.number().int().positive(),
 }).strict();
 
 const RawNormalizationAuditRecordSchema = z.object({

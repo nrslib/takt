@@ -34,6 +34,46 @@ export interface FindingManagerSubStepResult {
   relationClarification?: ReviewerRelationClarification;
 }
 
+function recordReviewerOutputOverflow(input: {
+  result: ReviewerIntakeResult;
+  reviewer: string;
+  reviewerStableKey: string;
+  reason: string;
+  emittedAtomizedRawFindingCount: number;
+  admittedAtomizedRawFindingCount: number;
+}): void {
+  const overflowAtomizedRawFindingCount = input.emittedAtomizedRawFindingCount
+    - input.admittedAtomizedRawFindingCount;
+  const stableKey = computeOverflowStableKey(input.reviewerStableKey);
+  const description = `Reviewer "${input.reviewer}" output exceeded Finding Contract limits: ${input.reason}`;
+  input.result.overflowReports.push({
+    reviewer: input.reviewer,
+    reason: input.reason,
+    emittedAtomizedRawFindingCount: input.emittedAtomizedRawFindingCount,
+    admittedAtomizedRawFindingCount: input.admittedAtomizedRawFindingCount,
+    overflowAtomizedRawFindingCount,
+  });
+  input.result.intakeProvisionalSpecs.push({
+    kind: 'reviewer-output-overflow',
+    stableKey,
+    lineageKey: stableKey,
+    sourceRawFindingIds: [],
+    reason: description,
+    title: 'Reviewer output exceeded Finding Contract limits',
+    severity: 'high',
+    description,
+    reviewers: [input.reviewer],
+    recoveryReviewerStableKey: input.reviewerStableKey,
+  });
+  log.warn('Reviewer output exceeded Finding Contract limits; recorded bounded overflow', {
+    reviewer: input.reviewer,
+    reason: input.reason,
+    emittedAtomizedRawFindingCount: input.emittedAtomizedRawFindingCount,
+    admittedAtomizedRawFindingCount: input.admittedAtomizedRawFindingCount,
+    overflowAtomizedRawFindingCount,
+  });
+}
+
 export function intakeReviewerOutputs(input: {
   subResults: readonly FindingManagerSubStepResult[];
   previousLedger: FindingLedger;
@@ -126,7 +166,7 @@ export function intakeReviewerOutputs(input: {
       });
     }
 
-    // envelope 検査は Zod parse の前（65件目を読んだ時点で打ち切る）。
+    // publication 境界で件数を bounded 化済み。ここでは field と step 合算を再検査する。
     const jsonBytes = resourceEnvelope.jsonBytes;
     const lenientFields = items.map(extractLenientRawFields);
     const atomizedItemCount = lenientFields.reduce(
@@ -150,44 +190,44 @@ export function intakeReviewerOutputs(input: {
         ? `admitting this reviewer's ${atomizedItemCount} atomized raw findings (${jsonBytes} bytes) would exceed the per-step limits (${RAW_FINDING_LIMITS.maxRawFindingsPerStep} findings / ${RAW_FINDING_LIMITS.maxStepRawFindingsJsonBytes} bytes)`
         : undefined);
 
-    if (overflowReason !== undefined) {
-      // 部分採用しない: この reviewer の全 raw を単一 overflow provisional に置換。
-      const reviewerStableKey = computeReviewerStableKey({
-        workflowName: input.workflowName,
-        callNamespace: input.callNamespace,
-        parentStepName: input.parentStepName,
-        reviewerPersonaKey: context.reviewerPersonaKey,
-      });
-      const stableKey = computeOverflowStableKey(reviewerStableKey);
-      const description = `Reviewer "${subResult.subStep.name}" output exceeded Finding Contract limits: ${overflowReason}`;
-      result.overflowReports.push({ reviewer: subResult.subStep.name, reason: overflowReason });
-      result.intakeProvisionalSpecs.push({
-        kind: 'reviewer-output-overflow',
-        stableKey,
-        lineageKey: stableKey,
-        sourceRawFindingIds: [],
-        reason: description,
-        title: 'Reviewer output exceeded Finding Contract limits',
-        severity: 'high',
-        description,
-        reviewers: [subResult.subStep.name],
-        recoveryReviewerStableKey: reviewerStableKey,
-      });
-      log.warn('Reviewer output exceeded Finding Contract limits; replaced with a single overflow provisional', {
-        reviewer: subResult.subStep.name,
-        reason: overflowReason,
-      });
-      continue;
-    }
-
-    admittedAtomizedCount += atomizedItemCount;
-    admittedBytes += jsonBytes;
-    result.healthyReviewerStableKeys.add(computeReviewerStableKey({
+    const reviewerStableKey = computeReviewerStableKey({
       workflowName: input.workflowName,
       callNamespace: input.callNamespace,
       parentStepName: input.parentStepName,
       reviewerPersonaKey: context.reviewerPersonaKey,
-    }));
+    });
+    const publicationOverflow = subResult.publication.reviewerOutputOverflow;
+    if (overflowReason !== undefined) {
+      recordReviewerOutputOverflow({
+        result,
+        reviewer: subResult.subStep.name,
+        reviewerStableKey,
+        reason: overflowReason,
+        emittedAtomizedRawFindingCount: publicationOverflow
+          ?.emittedAtomizedRawFindingCount ?? atomizedItemCount,
+        admittedAtomizedRawFindingCount: 0,
+      });
+      continue;
+    }
+
+    if (publicationOverflow !== undefined) {
+      recordReviewerOutputOverflow({
+        result,
+        reviewer: subResult.subStep.name,
+        reviewerStableKey,
+        reason: publicationOverflow.reason,
+        emittedAtomizedRawFindingCount:
+          publicationOverflow.emittedAtomizedRawFindingCount,
+        admittedAtomizedRawFindingCount:
+          publicationOverflow.admittedAtomizedRawFindingCount,
+      });
+    }
+
+    admittedAtomizedCount += atomizedItemCount;
+    admittedBytes += jsonBytes;
+    if (publicationOverflow === undefined) {
+      result.healthyReviewerStableKeys.add(reviewerStableKey);
+    }
     const candidateBatch = createReviewerRawFindingCandidates(items, context, resourceEnvelope);
     for (const rejection of candidateBatch.rejections) {
       const lineageKey = rejection.lineageKey

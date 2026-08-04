@@ -1107,6 +1107,9 @@ export interface UnsupportedRawFindingReport {
 export interface ReviewerOutputOverflowReport {
   reviewer: string;
   reason: string;
+  emittedAtomizedRawFindingCount: number;
+  admittedAtomizedRawFindingCount: number;
+  overflowAtomizedRawFindingCount: number;
 }
 
 export interface RawNormalizationAuditRecord {
