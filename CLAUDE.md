@@ -93,15 +93,16 @@ Each normal step runs up to three phases on the same provider session (resumed a
 
 Implemented in `src/core/workflow/phase-runner.ts` / `report-phase-runner.ts` / `status-judgment-phase.ts`.
 
-### Rule evaluation (5-stage fallback)
+### Rule evaluation (staged fallback)
 
-`src/core/workflow/evaluation/` — first match wins, in this order:
+`src/core/workflow/evaluation/` + `src/agents/judge-status-usecase.ts` — first match wins, in this order:
 
-1. **Aggregate** — `all("…")` / `any("…")` for parallel parents
-2. **Phase 3 tag** — `[STEP:N]` emitted during status judgment
-3. **Phase 1 tag** — `[STEP:N]` emitted during main work (fallback)
-4. **AI judge** — `ai("…")` conditions evaluated by the provider
-5. **AI judge fallback** — provider evaluates every condition as a last resort
+1. **Aggregate** — `all("…")` / `any("…")` for parallel parents (`AggregateEvaluator`)
+2. **Structured output** — native provider structured output selects a candidate index (stage 1)
+3. **Phase 3 tag** — `[STEP:N]` emitted during status judgment (stage 2)
+4. **AI judge** — provider evaluates the candidates as a last resort (stage 3)
+
+`auto_select` short-circuits the judge when only one semantic candidate exists (`post-execution-rule-evaluator.ts`).
 
 Quirks that matter:
 
@@ -136,7 +137,7 @@ Quirks that matter:
 
 ### Worktree-isolated execution
 
-When a task sets `worktree: true`, TAKT runs it in a `git clone --shared` (lightweight clone with its own `.git`), not a real git worktree. The field name is retained for back-compat; the implementation uses `git clone` because Claude Code follows `.git`-file `gitdir:` pointers back to the main repo, which breaks isolation.
+When a task sets `worktree: true`, TAKT runs it in a `git clone --reference <main repo> --dissociate` (an independent clone with its own `.git`; plain `git clone` when the reference repo is shallow), not a real git worktree. The field name is retained for back-compat; the implementation uses `git clone` because Claude Code follows `.git`-file `gitdir:` pointers back to the main repo, which breaks isolation.
 
 - Clones are ephemeral: created pre-run, auto-committed + pushed on success, deleted afterward.
 - Sessions can't be resumed inside the clone (`cwd !== projectCwd`); session resume is skipped there.

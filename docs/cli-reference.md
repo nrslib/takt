@@ -22,9 +22,11 @@ This document provides a complete reference for all TAKT CLI commands and option
 | `--provider <name>` | Override agent provider (claude\|claude-sdk\|claude-terminal\|codex\|opencode\|cursor\|copilot\|kiro\|mock) |
 | `--auto-strategy <strategy>` | Override the auto-routing strategy (`cost`\|`balanced`\|`performance`). Applied when execution reaches the current workflow or a workflow-call child with effective `auto_routing`; otherwise, TAKT warns and ignores the option. |
 | `--model <name>` | Override agent model |
-| `--config <path>` | Path to global config file (default: `~/.takt/config.yaml`) |
+| `-c, --continue` | Continue from the last assistant session |
 
 `--workflow` is the canonical option.
+
+The global config directory (default: `~/.takt/`) can be changed with the `TAKT_CONFIG_DIR` environment variable.
 
 ## Interactive Mode
 
@@ -243,7 +245,15 @@ takt add
 
 # Add task from GitHub Issue (issue number reflected in branch name)
 takt add #28
+
+# Specify the workflow for the queued task
+takt add -w default
+
+# Create a task from PR review comments
+takt add --pr 123
 ```
+
+`-w, --workflow <name or path>` sets the workflow saved with the task, and `--pr <number>` creates a task from the PR's review comments.
 
 ### takt run
 
@@ -287,6 +297,8 @@ takt list --non-interactive --action diff --branch takt/my-branch
 takt list --non-interactive --action delete --branch takt/my-branch --yes
 takt list --non-interactive --format json
 ```
+
+`--action` accepts `diff`, `sync`, `try`, `merge`, or `delete`. Non-interactive actions require `--branch`, and `delete` also requires `--yes`.
 
 In interactive mode, **Merge from root** merges the root repository HEAD into the worktree branch with AI-assisted conflict resolution.
 
@@ -354,6 +366,8 @@ takt eject persona coder
 takt eject instruction plan --global
 ```
 
+Facet types for `eject` are singular: `persona`, `policy`, `knowledge`, `instruction`, `output-contract` (`takt catalog` uses the plural forms).
+
 Builtin and custom workflow lookup uses `workflows/`.
 
 ### takt workflow
@@ -370,14 +384,6 @@ takt workflow init review-flow --template faceted --global
 # Validate workflows by name or path
 takt workflow doctor sample-flow
 takt workflow doctor .takt/workflows/sample-flow.yaml
-```
-
-### takt resume
-
-Resume the latest failed or aborted direct (one-shot) run. Finds the most recent direct run that did not complete and continues it from where it stopped, reusing the existing run directory instead of starting over.
-
-```bash
-takt resume
 ```
 
 ### takt clear
@@ -414,12 +420,15 @@ takt catalog
 takt catalog personas
 ```
 
+Facet type arguments for `catalog` are plural: `personas`, `policies`, `knowledge`, `instructions`, `output-contracts` (`takt eject` uses the singular forms).
+
 ### takt prompt
 
 Preview assembled prompts for each step and phase.
 
 ```bash
-takt prompt [workflow]
+takt prompt
+takt prompt default
 ```
 
 ### takt reset
@@ -466,7 +475,7 @@ takt repertoire remove @{owner}/{repo}
 
 Installed packages are stored in `~/.takt/repertoire/` and their workflows/facets become available in workflow selection and facet resolution.
 
-When the same workflow name exists in multiple locations, TAKT resolves in this order: `.takt/workflows/` → `~/.takt/workflows/` → builtins.
+When the same workflow name exists in multiple locations, TAKT resolves in this order: `.takt/workflows/` → `~/.takt/workflows/` → builtins. This name resolution covers only the project, user, and builtin layers; repertoire workflows are referenced explicitly as `@{owner}/{repo}/{workflow-name}`.
 
 ### takt telemetry
 
@@ -481,6 +490,14 @@ takt telemetry enable
 
 # Disable local routing event recording
 takt telemetry disable
+```
+
+### takt resume
+
+Show an interactive menu (Requeue / Retry / Instruct / View reports / Cancel) for the most recent aborted or failed direct (one-shot) run; a resumed execution writes its reports to a new run directory.
+
+```bash
+takt resume
 ```
 
 ### takt purge

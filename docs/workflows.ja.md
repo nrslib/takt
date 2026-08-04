@@ -1,5 +1,7 @@
 # Workflow ガイド
 
+[English](./workflows.md)
+
 このガイドでは TAKT の workflow を作成・カスタマイズする方法を説明します。
 
 ## workflow の基本
@@ -94,6 +96,8 @@ steps:
 ```
 
 step はキー名で section map を参照します (例: `persona: coder`)。ファイルパスではありません。section map の中のパスは workflow YAML ファイルのディレクトリからの相対で解決されます。
+
+section map は任意です。facet は bare name で直接参照できます（`personas` マップの項目がなくても `persona: coder` と書けます）。bare name は project `.takt/facets/<type>/` → global `~/.takt/facets/<type>/` → 同梱の `builtins/{lang}/facets/<type>/` の優先順で解決されます。section map が必要になるのは、カスタムエイリアスや明示的なファイルパスを使いたい場合だけです。
 
 ### 再利用可能な step fragment
 
@@ -198,9 +202,13 @@ rule は YAML 記述順で評価され、最初に成立した rule を採用し
 
 任意の `appendix` フィールドは、そのルールにマッチしたときに AI が追加出力するためのテンプレートを与えます。構造化されたエラーレポートや特定情報の要求に便利です。
 
+### ルールフィールド: `interactive_only`
+
+`interactive_only: true` を指定した rule は interactive 実行時にのみ評価対象になります。非 interactive 実行（`--pipeline` や `takt run` など）では、その rule は宣言されていないものとしてスキップされ、残りの rule で評価が続行されます。ユーザー入力を待つ遷移など、人間の介在が必要な遷移に使用します。
+
 ## Step タイプ
 
-TAKT は 5 種類の step をサポートしています。必要な構造に応じて使い分けます。
+TAKT は Normal / Parallel / Dynamic Parallel / Arpeggio / Team Leader / Workflow Call / System の 7 種類の step をサポートしています。必要な構造に応じて使い分けます。
 
 ### Normal Step
 
@@ -243,6 +251,7 @@ TAKT は 5 種類の step をサポートしています。必要な構造に応
 - `any("X")`: いずれかのサブ step が条件 X にマッチしたら true
 - サブ step の `rules` は取りうる結果を定義し、`next` は省略可能（親がルーティングを担当）
 - 並列サブ step は `promotion` をサポートしません
+- 親 step には任意の `concurrency: <N>`（最小 1）を指定でき、同時実行するサブ step 数を制限できます。未指定時は全サブ step が同時に開始します
 
 ### Dynamic Parallel Step
 
@@ -353,6 +362,8 @@ CSV / JSON などのデータソースを反復し、同じ step テンプレー
 
 ファイル一覧 / Issue 一覧 / 生成テストケースなど、同じ操作を多数の入力に適用したいときに便利です。
 
+`merge.strategy` は `concat`（デフォルト）または `custom` です。`concat` は各行の結果を任意の `separator` で連結し、`inline_js` と `file` は指定できません。`custom` は `inline_js`（インラインの JavaScript merge 関数）か `file`（merge スクリプトへのパス）のどちらかが必須です。どちらも指定しない `custom`、および `inline_js` / `file` を伴う `concat` は workflow ロード時にエラーになります。
+
 ### Team Leader Step（動的タスク分解）
 
 エージェントがリーダー役として、実行時にタスクを独立したサブパートに分解し、各パートを worker エージェントに割り当てます。
@@ -378,7 +389,9 @@ CSV / JSON などのデータソースを反復し、同じ step テンプレー
 
 大きなタスクを「事前にユニット境界を決めなくても並列で進められる単位」に分解したいときに便利です。
 
-`max_concurrency` は同時に実行する独立した part 数を制御します。`initial_max_parts` は指定した場合に限り、最初の分解バッチの part 数を制限します。step 全体の part 総数に上限はなく、Team Leader が追加作業不要と判断するか、新しい一意な part を返さなくなるまで batch を追加します。scheduler は現在のバッチの part がすべて完了してから次のバッチを要求するため、同じバッチ内の part は相互に依存してはいけません。実装結果が必要な検証は後続 batch に置きます。`fail_on_part_error: true` の場合、生成された part が失敗した後でも Team Leader は新たな回復 part を計画・実行し得ます。その後、この step は error で終了します。未指定時は通常の回復フローに従います。旧名の `max_parts` は互換性のため `max_concurrency` として扱われます。`refill_threshold` は互換キーであり、省略または `0` のみ指定できます。batch 障壁と両立しないため、非0は workflow ロード時にエラーになります。`part_tags` は生成される part step の provider routing tag です。未指定時は親 step の `tags` を継承します。空文字や空白のみの tag は無効です。`part_tags` は通常の `provider_routing.tags` として解決されるため、`part_persona` による persona routing より優先されます。
+`team_leader.persona` は、リーダー agent 自身の persona を任意で指定します（step の persona と同じ方法で解決され、provider routing の persona キーとしても使われます）。未指定時は step 自身の `persona` が適用されます。
+
+`max_concurrency` は同時に実行する独立した part 数を制御します。`max_concurrency` と互換キーの `max_parts` はどちらも上限 `3` で、超える値は workflow ロード時にエラーになります。どちらも未指定の場合のデフォルトは `3` です。`initial_max_parts` は指定した場合に限り、最初の分解バッチの part 数を制限します。step 全体の part 総数に上限はなく、Team Leader が追加作業不要と判断するか、新しい一意な part を返さなくなるまで batch を追加します。scheduler は現在のバッチの part がすべて完了してから次のバッチを要求するため、同じバッチ内の part は相互に依存してはいけません。実装結果が必要な検証は後続 batch に置きます。`fail_on_part_error: true` の場合、生成された part が失敗した後でも Team Leader は新たな回復 part を計画・実行し得ます。その後、この step は error で終了します。未指定時は通常の回復フローに従います。旧名の `max_parts` は互換性のため `max_concurrency` として扱われます。`refill_threshold` は互換キーであり、省略または `0` のみ指定できます。batch 障壁と両立しないため、非0は workflow ロード時にエラーになります。`part_tags` は生成される part step の provider routing tag です。未指定時は親 step の `tags` を継承します。空文字や空白のみの tag は無効です。`part_tags` は通常の `provider_routing.tags` として解決されるため、`part_persona` による persona routing より優先されます。
 
 `inspect_tools` は親 Team Leader のタスク分解フェーズだけで read-only inspection tools (`read`, `glob`, `grep`) を許可します。不正な tool 名は workflow ロード時にエラーになります。生成される子 part には影響せず、子 part の tool は引き続き `part_allowed_tools` で別に制御されます。inspection tools は Claude 系 provider や OpenCode など、`allowedTools` に対応する provider で利用できます。Team Leader inspection tools に対応しない provider では、実行時に明確なエラーになります。
 
@@ -390,10 +403,10 @@ step が別の workflow を名前で呼び出します。子 workflow は同じ 
 
 ```yaml
   - name: peer-review
-    workflow_call:
-      workflow: peer-review
-      params:
-        impl_knowledge: cqrs-es
+    kind: workflow_call
+    call: peer-review
+    args:
+      impl_knowledge: cqrs-es
     rules:
       - condition: approved
         next: COMPLETE
@@ -401,7 +414,23 @@ step が別の workflow を名前で呼び出します。子 workflow は同じ 
         next: fix
 ```
 
-呼ばれる側の workflow は `subworkflow.params` を宣言することで、親から `impl_knowledge` や `fix_knowledge` などの値を受け取って動作を変えられます。step 定義の重複を避けられます。`subworkflow` の宣言については [Workflow レベルの設定](#workflow-レベルの設定) を参照してください。
+呼ばれる側の workflow は `subworkflow.params` を宣言することで、親から `args` 経由で `impl_knowledge` や `fix_knowledge` などの値を受け取って動作を変えられます。step 定義の重複を避けられます。`subworkflow` の宣言については [Workflow レベルの設定](#workflow-レベルの設定) を参照してください。
+
+`workflow_call` の rules に書けるのは `COMPLETE`、`ABORT`、または子が宣言する semantic return label だけです。子 workflow は `subworkflow.returns` にラベルを列挙し（例: `returns: [approved, needs_fix]`、予約結果の `COMPLETE` / `ABORT` は列挙できません）、子 step の rule は `next:` の代わりに `return:` でラベルを返してサブワークフローを終了します。親の rules は上の例の `approved` / `needs_fix` のように、そのラベルでルーティングします。
+
+`workflow_call` step は `overrides` を宣言して、子 workflow の step に適用する provider 設定を変更できます。`provider` / `model` / `provider_options` の少なくとも 1 つが必須で、`provider_options` には provider 固有の option を 1 つ以上含める必要があります。
+
+```yaml
+  - name: peer-review
+    kind: workflow_call
+    call: peer-review
+    overrides:
+      provider: codex
+      model: gpt-5.5
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+```
 
 `max_steps` はルート workflow が所有し、すべての子孫で共有する予算です。`workflow_call` は制御ノードなので予算を消費せず、自身の provider / model も選択しません。iteration を消費するのは子 workflow 内の実行可能な step だけです。たとえば `plan → workflow_call(implement → review) → supervise` は4 iterationを消費するため、`implement` と `review` を callable workflow へ抽出しても `max_steps` を増やす必要はありません。nested call でも同じです。call lifecycle は invocation 番号と完全な call stack を伴って session log と trace から引き続き確認できます。
 
@@ -417,6 +446,49 @@ step が別の workflow を名前で呼び出します。子 workflow は同じ 
     - condition: COMPLETE
       next: COMPLETE
 ```
+
+### System Step
+
+system step は TAKT エンジン自身が実行する step で、agent は起動しません。`kind: system`（または短縮形の `mode: system`。両方の宣言は設定エラー）で宣言します。system step には `persona`、`instruction`、`provider`、`structured_output`、`output_contracts`、`quality_gates` などの agent 用フィールドを宣言できません。完全なスキーマは `src/core/models/workflow-system-schemas.ts` を参照してください。builtin の `auto-improvement-loop` workflow（`builtins/ja/workflows/auto-improvement-loop.yaml`）が参考実装で、system step と planner agent step だけで PR 対応・Issue 駆動計画・新規改善計画の間をルーティングします。
+
+`system_inputs` はエンジンが提供するコンテキストを読み取り、各エントリを `as` で名前に束縛します。利用できる type は `task_context`、`branch_context`、`pr_context`、`issue_context`、`task_queue_context`、`pr_list`、`pr_selection`、`issue_list`、`issue_selection` です（`pr_list` / `pr_selection` は `where` フィルタを受け取り、両者の `where` は一致している必要があります）。binding 名は step 内で一意でなければなりません。束縛した値は `context.<step>.<binding>...` として `when()` rule を駆動し、後続の agent instruction からは `{context:step.binding.field}` で参照できます。
+
+```yaml
+  - name: route_context
+    mode: system
+    system_inputs:
+      - type: task_queue_context
+        source: current_project
+        as: active_queue
+        exclude_current_task: true
+      - type: pr_selection
+        source: current_project
+        as: selected_pr
+    rules:
+      - condition: when(context.route_context.active_queue.pending_count > 0)
+        next: wait_before_next_scan
+      - condition: when(context.route_context.selected_pr.exists == true)
+        next: plan_from_existing_pr
+```
+
+`effects` はエンジン側のアクションを実行します: `enqueue_task`、`comment_pr`、`sync_with_root`、`resolve_conflicts_with_ai`、`merge_pr`、`close_pr`。各 effect type は 1 step につき最大 1 回しか書けず、結果は `when(effect.<step>.<type>.<field>)` でルーティングします。
+
+```yaml
+  - name: prepare_merge
+    mode: system
+    effects:
+      - type: sync_with_root
+        pr: "{context:route_context.selected_pr.number}"
+    rules:
+      - condition: when(effect.prepare_merge.sync_with_root.success == true)
+        next: merge_pr
+      - condition: when(effect.prepare_merge.sync_with_root.conflicted == true)
+        next: resolve_conflicts
+```
+
+`delay_before_ms` は step 実行前に指定ミリ秒だけ待機します。builtin workflow の `wait_before_next_scan` のようなポーリングループに便利です。
+
+system step は agent step の `structured_output` と組み合わせて使います。agent step は `structured_output: { schema_ref: <name> }` を宣言し、`<name>` はトップレベルの `schemas:` マップを参照します。検証済みの出力は rule から `when(structured.<step>.<field> ...)` で、effect からは `{structured:step.field}` で参照できます。`structured_output` 自体は agent step のフィールドであり、system step には宣言できません。
 
 ## Output Contracts（レポートファイル）
 
@@ -437,12 +509,19 @@ output_contracts:
         # Plan
         ...
 
-# 複数レポート（ラベル付き）
+# 複数レポート
 output_contracts:
   report:
-    - Scope: 01-scope.md
-    - Decisions: 02-decisions.md
+    - name: 01-scope.md
+      format: scope
+    - name: 02-decisions.md
+      format: decisions
 ```
+
+各レポートエントリには `name` と `format` が必須です。任意フィールドが2つあります。
+
+- `use_judge`（デフォルト `true`）— そのレポートを Phase 3 のステータス判定に入力するかどうか。書き出すだけで判定の根拠にしないレポートには `use_judge: false` を指定します。rules の判定が必要な step では、少なくとも 1 件の `use_judge` レポートを残す必要があります。
+- `order` — report format facet への参照（`format` と同じ方法で解決）で、その内容が Phase 2 のデフォルトのレポート作成指示を置き換えます。format テンプレートだけでは足りない、レポート作成手順のカスタム指示が必要なときに使います。
 
 ## Step レベルのプロバイダープロモーション
 
@@ -473,6 +552,7 @@ promotion は並列サブ step ではサポートされません。
 
 | オプション | デフォルト | 説明 |
 |--------|---------|------|
+| `description` | - | 自由記述の step 説明。dynamic parallel の `pool` 項目では選択用の説明として使われ、必須になる |
 | `persona` | - | persona キー（section map 参照）またはファイルパス |
 | `persona_name` | - | ログやプロンプト用の表示名。`provider_routing.personas` には影響しない |
 | `session_key` | - | 通常の agent step と parallel sub-step の明示セッションキー。実行時キーには解決済み provider が付く。空文字・空白のみは無効 |
@@ -513,12 +593,60 @@ promotion は並列サブ step ではサポートされません。
 
 workflow のトップレベルフィールドは、実行全体の挙動を制御します。
 
+### `max_steps`
+
+run 全体の iteration 予算です。正の整数か、無限ループとして動かす workflow（builtin の `auto-improvement-loop` など）向けの `infinite` を指定します。予算はルート workflow が所有し、そこから呼ばれるすべての workflow で共有されます。callable なサブワークフローは独自の `max_steps` を宣言できません。
+
+```yaml
+max_steps: infinite
+```
+
+### `schemas`
+
+`structured_output.schema_ref` のキーを structured output スキーマ名に対応づけるマップです。各名前は project `.takt/schemas/`、`~/.takt/schemas/`、同梱の `schemas/` ディレクトリの順で `<name>.json` に解決されます。マップにない `schema_ref` はそのままスキーマ名として使われます。
+
+```yaml
+schemas:
+  followup-task: followup-task
+  pr-followup-task: pr-followup-task
+```
+
+### `auto_routing`
+
+workflow レベルの自動 provider ルーティングです。AI の `router`（provider + model）が step ごとに provider/model の `candidate` を選択します。`candidates` に選択可能な provider/model エントリを宣言し、`candidate_pools` で pool ごとの `fallback` 付きにグループ化し、`default_pool` でより特異的な一致がない場合の pool を指定し、`pool_rules` / `rules` で step の `tags`、`steps`（step 名）、`personas` ごとに pool や candidate を固定できます。rule は宣言済みの candidate / pool を参照する必要があり、未知の名前は検証エラーになります。
+
+### `finding_contract`
+
+workflow の Finding Contract を宣言します（実行時のセマンティクスは前述の Finding Contract 各節を参照）。`ledger_path`、`raw_findings_path`、`manager` は必須です。`manager` は `persona`、`instruction`、`output_contract` が必須で、`provider` / `model` は任意です。任意の予算として `stop_budget`（`max_rounds`、デフォルト 40。`max_minutes` は未指定時は時間上限なし）と `review_budget`（`max_review_rounds`）を指定できます。
+
+```yaml
+finding_contract:
+  ledger_path: .takt/findings/review.json
+  raw_findings_path: .takt/findings/review/raw
+  manager:
+    persona: findings-manager
+    instruction: findings-manager
+    output_contract: findings-manager
+  stop_budget:
+    max_rounds: 40
+```
+
 ### `interactive_mode`
 
 `takt` を引数なしで起動したときのデフォルト interactive mode。`assistant`（デフォルト） / `passthrough` / `quiet` / `persona` のいずれか。
 
 ```yaml
 interactive_mode: assistant
+```
+
+### `workflow_config.provider` / `workflow_config.model`
+
+workflow 全体のデフォルト provider と model です。解決順では step レベルの `provider` / `model`、routing、CLI・環境変数 override より下位で、project / global config のデフォルトより上位です。
+
+```yaml
+workflow_config:
+  provider: claude-sdk
+  model: opus
 ```
 
 ### `workflow_config.provider_options`

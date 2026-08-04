@@ -51,7 +51,9 @@ The following permissions are required for `takt-action` to function correctly:
 
 Specifying `--pipeline` enables non-interactive pipeline mode. It automatically creates a branch, runs the workflow, commits, and pushes. This mode is designed for CI/CD automation where no human interaction is available.
 
-In pipeline mode, PRs are **not** created unless `--auto-pr` is explicitly specified.
+Pipeline mode requires a task source: one of `--task`, `--issue`, or `--pr`. If none is given, TAKT exits with code `2`.
+
+In pipeline mode, PRs are **not** created unless `--auto-pr` is explicitly specified. When `--auto-pr` is combined with `--skip-git`, no PR is created: TAKT prints a warning and exits successfully.
 
 ### All Pipeline Options
 
@@ -60,14 +62,17 @@ In pipeline mode, PRs are **not** created unless `--auto-pr` is explicitly speci
 | `--pipeline` | **Enable pipeline (non-interactive) mode** -- Required for CI/automation |
 | `-t, --task <text>` | Task content (alternative to GitHub Issue) |
 | `-i, --issue <N>` | GitHub issue number (same as `#N` in interactive mode) |
+| `--pr <number>` | PR number to fetch review comments and fix |
 | `-w, --workflow <name or path>` | Workflow name or path to workflow YAML file |
 | `-b, --branch <name>` | Specify branch name (auto-generated if omitted) |
 | `--auto-pr` | Create PR (interactive: skip confirmation, pipeline: enable PR) |
+| `--draft` | Create the PR as a draft (requires `--auto-pr` or `auto_pr` config) |
 | `--skip-git` | Skip branch creation, commit, and push (pipeline mode, workflow-only) |
 | `--repo <owner/repo>` | Specify repository (for PR creation) |
 | `-q, --quiet` | Minimal output mode: suppress AI output (for CI) |
 | `--provider <name>` | Override agent provider (claude\|claude-sdk\|claude-terminal\|codex\|opencode\|cursor\|copilot\|kiro\|mock) |
 | `--model <name>` | Override agent model |
+| `--auto-strategy <strategy>` | Auto routing strategy (cost\|balanced\|performance) |
 
 ### Command Examples
 
@@ -107,11 +112,27 @@ takt --pipeline --task "Fix bug" --auto-pr --repo owner/repo
 takt --pipeline --task "Fix bug" --skip-git
 ```
 
+With `--skip-git`, nothing is pushed, so `--auto-pr` is ignored (a warning is printed and the run still exits successfully).
+
 **Minimal output mode (suppress AI output for CI logs):**
 
 ```bash
 takt --pipeline --task "Fix bug" --quiet
 ```
+
+## Exit Codes
+
+Pipeline mode returns fine-grained exit codes so CI scripts can distinguish failure modes:
+
+| Code | Meaning |
+|------|---------|
+| `0` | Success |
+| `1` | General error |
+| `2` | Issue/PR fetch failed, or none of `--issue` / `--pr` / `--task` was specified |
+| `3` | Workflow execution failed |
+| `4` | Git operation failed (environment preparation, commit, or push) |
+| `5` | PR creation failed |
+| `130` | Interrupted by SIGINT (Ctrl+C) |
 
 ## Pipeline Template Variables
 
@@ -129,10 +150,12 @@ pipeline:
 
 | Variable | Available In | Description |
 |----------|-------------|-------------|
-| `{title}` | Commit message | Issue title |
+| `{title}` | Commit message, PR body | Issue title |
 | `{issue}` | Commit message, PR body | Issue number |
 | `{issue_body}` | PR body | Issue body |
-| `{report}` | PR body | Workflow execution report |
+| `{report}` | PR body | Fixed string: ``Workflow `{workflow}` completed successfully.`` |
+
+`commit_message_template` is applied only when an issue is linked. With `--task` alone, the commit message is `takt: {task}`.
 
 ## Other CI Systems
 

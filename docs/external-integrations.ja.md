@@ -1,5 +1,9 @@
 # External Integrations
 
+[English](./external-integrations.md)
+
+本ページはコミュニティ製サードパーティ統合のカタログです。公式の GitHub/GitLab 連携については [Configuration](./configuration.ja.md) と [CI/CD](./ci-cd.ja.md) を参照してください。
+
 TAKT のコアを変更せずに機能を拡張する、コミュニティメンテナンスのサンプル集です。TAKT として公式にサポート・推奨するものではありません。各プロジェクトのライセンス、依存関係、セキュリティ面を必ず確認した上で利用してください。
 
 ここに追加したい場合は、1 行の説明とパブリックリポジトリへのリンクを添えて PR を送ってください。
@@ -16,4 +20,4 @@ TAKT 上に特定の開発手法を実装した bundle。ピース・ファセ�
 
 | 統合 | 説明 |
 |-----|------|
-| [ScopeBlind/examples/takt-workflow-receipts](https://github.com/ScopeBlind/examples/tree/main/takt-workflow-receipts) | `mcp_servers` で MCP サーバーを宣言する形で Ed25519 署名レシートと Cedar ポリシー検証を追加する。レシートは TAKT の NDJSON ログと並んで生成され、オフラインで検証可能。TAKT コアの変更不要。 |
+| [ScopeBlind/examples/takt-workflow-receipts](https://github.com/ScopeBlind/examples/tree/main/takt-workflow-receipts) | step の `mcp_servers` で MCP サーバーを宣言する形で Ed25519 署名レシートと Cedar ポリシー検証を追加する（事前に config の `workflow_mcp_servers` でトランスポートの許可が必要）。レシートは TAKT の NDJSON ログと並んで生成され、オフラインで検証可能。TAKT コアの変更不要。 |

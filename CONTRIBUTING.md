@@ -48,6 +48,8 @@ npm run test:e2e:mock
 
 `npm test` is the unit gate. Integration, regression, and performance tests run through `npm run test:it`; the deterministic OpenCode prompt smoke suite runs through `npm run test:prompt-evals`. `npm test -- <test-file>` routes each specified source test to exactly one unit, parallel integration, serial Git, or serial workflow runner. Routed runners execute sequentially, attempt every selected runner, and return the first failing child exit code. Release maintainers can run `npm run check:release` for the complete release path, including all provider E2E suites.
 
+See the [E2E testing overview](./docs/testing/e2e.md) for how to run the E2E suites and their prerequisites.
+
 ### 2. Run a TAKT review (recommended)
 
 A TAKT review pass is **optional but encouraged** — it catches issues early, and pasting the summary helps reviewers. We recommend `review-takt-default`, the read-only review that does not auto-modify your code. It auto-detects the review mode from the input:
@@ -79,17 +81,17 @@ Comment commands consume paid AI API credits, so they are permission-gated: `/re
 - ESLint for linting
 - Prefer simple, readable code over clever solutions
 
-## License
+## Canary runs for instruction / facet changes
 
-By contributing, you agree that your contributions will be licensed under the MIT License.
-
-## Instruction / facet 変更時の canary
-
-`InstructionBuilder` や `builtins/{lang}/facets/instructions` などプロンプト組み立てに影響する変更は、ユニットテストでは捕まらない「弱いモデルのツール呼び出し不安定化」を引き起こすことがある（実例: 台帳が空の段階への異議申告ガイド注入で implement が連続失敗）。変更時は実プロバイダでの canary 実行を推奨する。
+Changes that affect prompt assembly — `InstructionBuilder`, `builtins/{lang}/facets/instructions`, and the like — can destabilize tool calling on weaker models in ways unit tests do not catch (real example: injecting objection-filing guidance while the ledger was still empty caused consecutive `implement` failures). For such changes, a canary run against a real provider is recommended.
 
 ```bash
 npm run build
 npm run canary:coder -- --provider opencode --model ollama-cloud/qwen3-coder-next
 ```
 
-小さな implement 1走を現行の指示組み立てで実行し、完走とツールエラー数を確認する。PR の必須ゲートではない（実プロバイダのコストがかかるため）。
+This runs one small `implement` pass with the current instruction assembly and checks that it completes, along with the tool error count. It is not a required PR gate (real-provider runs cost money).
+
+## License
+
+By contributing, you agree that your contributions will be licensed under the MIT License.

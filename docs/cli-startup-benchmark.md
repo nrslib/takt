@@ -1,5 +1,7 @@
 # CLI startup benchmark
 
+> This is a one-off measurement record for developers (as of 2026-07), not user-facing documentation.
+
 Measured on 2026-07-17 after the CLI lazy-loading change.
 
 ## Results

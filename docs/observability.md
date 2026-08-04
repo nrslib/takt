@@ -22,6 +22,8 @@ observability:
   usage_events_phase: true
 ```
 
+`monitor: true` writes a per-run metrics snapshot to `.takt/runs/<run>/monitor.json`, and `session_log_exporter: true` writes an OTel-derived shadow session log to `.takt/runs/<run>/logs/<session>-otel-session-shadow.jsonl`. Both are local files and do not require an OTLP endpoint.
+
 Point the OpenTelemetry HTTP exporters at the local collector and run TAKT:
 
 ```bash
@@ -31,7 +33,7 @@ takt run
 
 When `observability.enabled: true` and `OTEL_EXPORTER_OTLP_ENDPOINT` is set, TAKT sends spans and metrics through OTLP while keeping the local exporters enabled by config. Without `OTEL_EXPORTER_OTLP_ENDPOINT`, TAKT keeps using only the local exporters and does not send telemetry over the network. When `observability.enabled: false`, the OpenTelemetry SDK is not initialized even if OTLP environment variables are set.
 
-Open Grafana at `http://127.0.0.1:3000` and inspect the `takt` service. Traces use the existing workflow span tree (`workflow.<name>` with `step.<name>` and phase or judge spans below it), and metrics are exported alongside the local `monitor.json` stream.
+Open Grafana at `http://127.0.0.1:3000` and inspect the `takt` service. Traces use the existing workflow span tree (`workflow.<name>` with `step.<name>` and phase or judge spans — named `phase.<step>.<phaseName>` and `judge_stage.<step>.<stage>.<method>` — below it), and metrics are exported alongside the local `monitor.json` stream.
 
 While a workflow is still running, OpenTelemetry exporters can deliver completed child spans before the long-lived root `workflow.<name>` span has ended. To make those active traces discoverable in Tempo, TAKT also emits a short-lived `workflow_start.<workflowName>` span under the root workflow span. This helper span carries the workflow and run attributes, including `takt.workflow.status = running`, but it does not replace or rename the root, step, phase, or judge spans. It is used only for trace discovery and is not converted into a canonical shadow session log record.
 
@@ -75,7 +77,24 @@ The base endpoint is required for OTLP export:
 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Optional absolute HTTP(S) trace endpoint override. Used only when `OTEL_EXPORTER_OTLP_ENDPOINT` is also set. |
 | `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | Optional absolute HTTP(S) metric endpoint override. Used only when `OTEL_EXPORTER_OTLP_ENDPOINT` is also set. |
 
+TAKT explicitly resolves and validates only these three endpoint variables. The other standard `OTEL_EXPORTER_OTLP_*` variables — such as `_HEADERS`, `_TIMEOUT`, and `_COMPRESSION` — are not interpreted by TAKT; they are passed through unchanged to the OpenTelemetry SDK and to child processes.
+
 Endpoint values used for OTLP export must be absolute `http` or `https` URLs. A trace or metric endpoint without `OTEL_EXPORTER_OTLP_ENDPOINT` does not opt in to OTLP export; TAKT keeps the local-only exporter set. When the base endpoint is set, any configured trace or metric override is validated before the run starts. Export delivery failures after startup, such as a stopped local collector, do not block the workflow run.
+
+## Override Observability via Environment Variables
+
+Each `observability` config flag can be overridden per process without editing config files:
+
+| Environment variable | Overrides |
+|----------------------|-----------|
+| `TAKT_OBSERVABILITY_ENABLED` | `observability.enabled` |
+| `TAKT_OBSERVABILITY_MONITOR` | `observability.monitor` |
+| `TAKT_OBSERVABILITY_SESSION_LOG_EXPORTER` | `observability.session_log_exporter` |
+| `TAKT_OBSERVABILITY_USAGE_EVENTS_PHASE` | `observability.usage_events_phase` |
+
+Each variable accepts `true` or `false` and takes priority over the values in `~/.takt/config.yaml` and `.takt/config.yaml`.
+
+Nested `takt` runs launched from a command gate inherit the observability settings and OTLP endpoints through these environment variables automatically; credential-bearing exporter variables (`_HEADERS`, client certificate, and client key) are excluded from that propagation.
 
 ## Enable Phase Usage Events
 

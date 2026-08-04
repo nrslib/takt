@@ -1,6 +1,6 @@
 # Repertoire Packages
 
-[Japanese](./repertoire.ja.md)
+[日本語](./repertoire.ja.md)
 
 Repertoire packages let you install and share TAKT workflows and facets from GitHub repositories.
 
@@ -19,6 +19,8 @@ takt repertoire list
 # Remove a package
 takt repertoire remove @nrslib/takt-fullstack
 ```
+
+The `{owner}/{repo}` part is lowercased when the package is installed, so pass the scope to `takt repertoire remove` in lowercase, exactly as shown by `takt repertoire list`.
 
 **Requirements:** [GitHub CLI](https://cli.github.com/) (`gh`) must be installed and authenticated.
 
@@ -163,7 +165,7 @@ Shows installed packages with their scope, description, ref, and commit SHA.
 takt repertoire remove @{owner}/{repo}
 ```
 
-Before removing, TAKT checks whether user or project workflows, provider-options presets, or step fragments reference the package and warns about potential breakage.
+Specify `{owner}/{repo}` in lowercase (as displayed by `takt repertoire list`), because the scope is lowercased at install time. Before removing, TAKT checks whether user or project workflows, provider-options presets, or step fragments reference the package and warns about potential breakage.
 
 ## Directory Structure
 

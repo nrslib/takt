@@ -19,12 +19,12 @@ model: sonnet                 # Default model (optional, passed to provider as-i
 branch_name_strategy: romaji  # Branch name generation: 'romaji' (fast) or 'ai' (slow)
 prevent_sleep: false          # Prevent macOS idle sleep during execution (caffeinate)
 notification_sound: true      # Enable/disable notification sounds
-notification_sound_events:    # Optional per-event toggles
-  iteration_limit: false
+notification_sound_events:    # Optional per-event toggles (all events enabled by default)
+  iteration_limit: false      # Example: set false to disable only this event
   workflow_complete: true
   workflow_abort: true
-  run_complete: true          # Enabled by default; set false to disable
-  run_abort: true             # Enabled by default; set false to disable
+  run_complete: true
+  run_abort: true
 concurrency: 1                # Parallel task count for takt run (1-10, default: 1 = sequential)
 task_poll_interval_ms: 500    # Polling interval for new tasks during takt run (100-5000, default: 500)
 interactive_preview_steps: 3  # Step previews in interactive mode (0-10, default: 3)
@@ -126,8 +126,12 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 #     provider_options:
 #       codex:
 #         reasoning_effort: medium
+```
 
 `takt_providers.selector` is optional. Provider/model precedence is explicit CLI or environment override, project selector, global selector, project top-level, then global top-level. A model is accepted only when its candidate belongs to the resolved provider. Only selector entries contribute `provider_options`, merged by option leaf from global then project; top-level, persona, and pool sub-step options are not inherited by the selector. An empty selector entry or an empty `provider_options` entry is rejected during configuration loading. Dynamic selectors require a provider that guarantees strict read-only internal-agent isolation; Claude, Codex, and Mock satisfy this contract, while OpenCode, Cursor, Copilot, and Kiro are rejected before selector or participant startup. Selector settings remain unused and do not affect workflows without dynamic parallel.
+
+```yaml
+# ~/.takt/config.yaml (continued)
 
 # Workflow security policies (all default to deny)
 # These settings control what untrusted workflow YAMLs are allowed to do.
@@ -162,7 +166,7 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 
 # Routing decision telemetry is local-only.
 # telemetry:
-#   routing_decisions: true       # Write auto-routing decisions to .takt/events/ (default: true)
+#   routing_decisions: true       # Write auto-routing decisions to .takt/events/ (default: false; enable with `takt telemetry enable` or this key)
 ```
 
 ### Global Config Field Reference
@@ -171,11 +175,11 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 |-------|------|---------|-------------|
 | `language` | `"en"` \| `"ja"` | `"en"` | UI language |
 | `logging.level` | `"debug"` \| `"info"` \| `"warn"` \| `"error"` | `"info"` | Log level |
-| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | `"claude"` | Default concrete AI provider (`claude` = headless CLI mode, `claude-sdk` = SDK/API mode, `claude-terminal` = experimental interactive terminal mode) |
 | `logging.trace` | boolean | `false` | Enable trace-level logging (suppresses high-frequency debug noise) |
 | `logging.debug` | boolean | `false` | Enable debug logging (`debug.log` + `prompts.jsonl`) |
 | `logging.provider_events` | boolean | `false` | Persist provider stream events |
 | `logging.usage_events` | boolean | `false` | Persist usage event logs |
+| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | `"claude"` | Default concrete AI provider (`claude` = headless CLI mode, `claude-sdk` = SDK/API mode, `claude-terminal` = experimental interactive terminal mode) |
 | `model` | string | - | Default model name (passed to provider as-is) |
 | `branch_name_strategy` | `"romaji"` \| `"ai"` | `"romaji"` | Branch name generation strategy |
 | `prevent_sleep` | boolean | `false` | Prevent macOS idle sleep (caffeinate) |
@@ -224,8 +228,8 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 | `workflow_categories_file` | string | - | Path to categories file (see [Workflow categories](#workflow-categories); default overlay path uses `workflow-categories.yaml`) |
 | `vcs_provider` | `"github"` \| `"gitlab"` | auto-detect | VCS provider (auto-detected from git remote URL) |
 | `takt_providers` | object | - | TAKT internal provider overrides. `assistant` routes assistant conversations (interactive planning, instruct on existing tasks, and retry dialogue) and is also used as the Report phase fallback provider after an OpenCode report retry fails. Project `takt_providers.assistant` overrides global `takt_providers.assistant`; if neither is set, Report phase fallback is disabled and top-level `provider` / `model` are not used as an implicit fallback. |
-| `telemetry` | object | `{ routing_decisions: true }` | Local-only routing decision recording. `telemetry.routing_decisions` controls whether auto-routing decisions are written as NDJSON under the project `.takt/events/` directory. TAKT does not upload routing decisions. |
-| `analytics` | object | disabled | Local-only analytics collection. `enabled` turns it on, `events_path` sets a custom events directory (default `~/.takt/analytics/events`), `retention_days` sets the retention period for event files. TAKT does not upload analytics events. |
+| `telemetry` | object | `{ routing_decisions: false }` | Local-only routing decision recording, disabled by default (opt-in). Enable with `takt telemetry enable` or `routing_decisions: true`; auto-routing decisions are then written as NDJSON under the project `.takt/events/` directory. TAKT does not upload routing decisions. |
+| `analytics` | object | disabled | Local-only analytics collection. `enabled` turns it on, `events_path` sets a custom events directory (default `~/.takt/analytics/events`), `retention_days` sets the retention period applied by `takt purge` (default: 30 days). TAKT does not upload analytics events. |
 | `workflow_mcp_servers` | object | all `false` | MCP server transport policy (`stdio`, `sse`, `http` toggles) |
 | `workflow_arpeggio` | object | all `false` | Arpeggio custom code policy (`custom_data_source_modules`, `custom_merge_inline_js`, `custom_merge_files`) |
 | `workflow_runtime_prepare` | object | `{ custom_scripts: false }` | Runtime prepare policy (builtin presets always allowed) |
@@ -243,8 +247,6 @@ Configure project-specific settings in `.takt/config.yaml`. This file is created
 provider: claude              # Override provider for this project
 model: sonnet                 # Override model for this project
 auto_pr: true                 # Auto-create PR after worktree execution
-logging:
-  level: info                 # Console log level: debug | info | warn | error
 concurrency: 2                # Parallel task count for takt run in this project (1-10)
 auto_requeue_max_attempts: 1  # Auto-requeue failed workflow tasks during takt run (non-negative integer)
 ignore_exceed: false          # Applies to takt run and takt watch like --ignore-exceed
@@ -281,7 +283,7 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 
 ### Project Config Field Reference
 
-Project config accepts most global keys and overrides their global values (e.g. `language`, `logging`, `branch_name_strategy`, `minimal_output`, `task_poll_interval_ms`, `interactive_preview_steps`, `provider_routing`, `persona_providers`, `runtime`, `analytics`, `telemetry`, `rate_limit_fallback`, `workflow_overrides`, `disabled_builtins` — see the [Global Config Field Reference](#global-config-field-reference) for their meaning). The table below lists project-only keys and the most common overrides.
+Project config accepts most global keys and overrides their global values (e.g. `language`, `branch_name_strategy`, `minimal_output`, `task_poll_interval_ms`, `interactive_preview_steps`, `provider_routing`, `persona_providers`, `runtime`, `analytics`, `telemetry`, `rate_limit_fallback`, `workflow_overrides` — see the [Global Config Field Reference](#global-config-field-reference) for their meaning). The project schema is strict: global-only keys such as `logging`, `disabled_builtins`, `enable_builtin_workflows`, notification settings, API keys, and CLI paths are rejected in `.takt/config.yaml` and cause a config validation error at startup. The table below lists project-only keys and the most common overrides.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -326,6 +328,12 @@ same config resolution order as other env-backed task execution settings:
 number parsing. Non-numeric values, negative values, and non-integers fail config
 validation. `TAKT_IGNORE_EXCEED` accepts only `true` or `false`; any other value
 fails config validation.
+
+## Environment Variable Overrides
+
+Most config keys can be overridden with an environment variable named `TAKT_` plus the config key path, uppercased and joined with underscores: `logging.debug` becomes `TAKT_LOGGING_DEBUG`, `telemetry.routing_decisions` becomes `TAKT_TELEMETRY_ROUTING_DECISIONS`. Common examples: `TAKT_PROVIDER`, `TAKT_MODEL`, `TAKT_CONCURRENCY`, `TAKT_LOGGING_DEBUG`, `TAKT_TELEMETRY_ROUTING_DECISIONS`, `TAKT_OBSERVABILITY_ENABLED`. An environment value overrides the corresponding file value and is applied at the layer that owns the key: global-only keys (e.g. `logging`, `disabled_builtins`) resolve at the global `~/.takt/config.yaml` layer, while project-overridable keys (e.g. `concurrency`, `telemetry.routing_decisions`) also resolve at the project `.takt/config.yaml` layer.
+
+Separately from config-key overrides, `TAKT_NOTIFY_WEBHOOK` sets a Slack Incoming Webhook URL. When it is set, TAKT posts a Slack notification on pipeline completion and when a `takt run` task batch finishes (run summary).
 
 ## API Key Configuration
 
@@ -503,6 +511,8 @@ Permission mode is resolved in the following order (first match wins):
 
 The `required_permission_mode` on a step sets the minimum floor. If the resolved mode from provider profiles is lower than the required mode, the required mode is used instead. For example, if a step requires `edit` but the profile resolves to `readonly`, the effective mode will be `edit`.
 
+Every provider also has a builtin `default_permission_mode: edit` that always participates in this resolution. When neither project nor global `provider_profiles` set a value, the effective mode is therefore `edit` (raised when the step's `required_permission_mode` demands more).
+
 ### Provider Routing
 
 Use `provider_routing` to route workflow steps to different providers, models, and provider-specific options without duplicating workflows. You can define this in either `~/.takt/config.yaml` or `.takt/config.yaml`:
@@ -572,6 +582,8 @@ explicit CLI / environment override
 ```
 
 Provider and model are resolved independently at each layer. A provider-only override does not displace a higher-priority model override.
+
+`active promotion` means a step `promotion` entry whose execution-count (`at: <N>`) or `ai()` condition matched for the current execution; see [Step-level Provider Promotion](./workflows.md#step-level-provider-promotion).
 
 For the Finding Contract manager, `finding_contract.manager.provider` and `finding_contract.manager.model` occupy the `step YAML provider/model` position for the synthetic `findings-manager` step.
 
@@ -650,9 +662,9 @@ Assistant conversations (interactive planning, instruct on existing tasks, and r
 
 Auto routing occupies the position shown in the complete provider/model priority above. Hard rules are checked in `tags`, `steps`, `personas` order. Otherwise `pool_rules` selects a candidate pool and the router estimates only the required tier; TAKT deterministically selects the candidate. After a successful estimate, both `cost` and `balanced` select the lowest `routing_tier` in the selected pool that meets the required tier. When multiple candidates have that tier, both strategies use their order in the pool's `candidates` list. `performance` selects the highest `routing_tier` in the selected pool. Estimator failures use that pool's explicit `fallback`. A successful estimate with no candidate at or above its required tier is an execution error.
 
-Candidate `routing_tier` is limited to `high`, `medium`, or `low`. Every configuration requires `default_pool`, non-empty `candidate_pools`, and a pool-local `fallback`. Candidate `provider_options` are merged at step priority, so env/CLI-resolved option leaves still win. `model: auto` is not supported; use multiple candidates instead. CLI can override the strategy with `--auto-strategy cost|balanced|performance`; the override is propagated until execution reaches a workflow with effective `auto_routing`. If execution completes without reaching one, the strategy flag is ignored with a warning. The router receives normalized task, raw step instruction, and current remaining work; identifier redaction reduces identification risk but does not guarantee anonymity. Routing events remain local-only and do not contain routing text.
+Candidate `routing_tier` is limited to `high`, `medium`, or `low`. Every configuration requires `strategy`, `router` (with `provider` and `model`), at least one entry in `candidates`, `default_pool`, non-empty `candidate_pools`, and a pool-local `fallback`. The `router.model` and every candidate `model` must be a full model id containing a digit or a `/`; aliases such as `sonnet` are rejected by validation. Candidate `provider_options` are merged at step priority, so env/CLI-resolved option leaves still win. `model: auto` is not supported; use multiple candidates instead. CLI can override the strategy with `--auto-strategy cost|balanced|performance`; the override is propagated until execution reaches a workflow with effective `auto_routing`. If execution completes without reaching one, the strategy flag is ignored with a warning. The router receives normalized task, raw step instruction, and current remaining work; identifier redaction reduces identification risk but does not guarantee anonymity. Routing events remain local-only and do not contain routing text.
 
-Routing decisions are local-only telemetry. When `telemetry.routing_decisions` is enabled, TAKT writes them as NDJSON under the project `.takt/events/` directory. TAKT does not upload routing decisions. Use `takt telemetry status`, `takt telemetry enable`, and `takt telemetry disable` to inspect or change only this local recording setting.
+Routing decisions are local-only telemetry and are not recorded by default. When `telemetry.routing_decisions` is enabled (`takt telemetry enable` or `routing_decisions: true`), TAKT writes them as NDJSON under the project `.takt/events/` directory. TAKT does not upload routing decisions. Use `takt telemetry status`, `takt telemetry enable`, and `takt telemetry disable` to inspect or change only this local recording setting.
 
 In workflow YAML, `model: null` is treated as an explicit entry-level value. It stops model resolution at the step, parallel sub-step, or `loop_monitors.judge`, so lower-priority sources and triggering-step inheritance are not consulted for `model`. Omitting the `model` field keeps normal fallback behavior.
 
@@ -698,6 +710,8 @@ TAKT passes `provider_options.claude.base_url` to `claude` and `claude-sdk` as `
 
 Provider-native environment variables such as `ANTHROPIC_BASE_URL` or `OPENAI_BASE_URL` are provider fallback settings. A TAKT `provider_options.*.base_url` value is explicit TAKT configuration and takes priority over those provider-native settings for the providers above.
 
+This also works for routing through an external proxy or gateway service — any endpoint that speaks the OpenAI- or Anthropic-compatible API — as long as the URL is set at a layer allowed to use non-loopback hosts (global config or the `TAKT_PROVIDER_OPTIONS_*_BASE_URL` environment variables). The workflow and project layers accept loopback addresses only.
+
 Workflow and project config can use `base_url` for local proxies only. Non-loopback proxy endpoints must be configured from global config or TAKT env so untrusted workflow files cannot redirect API keys and prompts to an arbitrary host.
 
 #### Network access (`network_access`)
@@ -732,7 +746,7 @@ provider_options:
 
 #### Codex Skill inheritance (`skills`)
 
-TAKT workflows do not inherit repository or user Codex Skills by default. Enable either scope explicitly when a workflow should use those environment-dependent instructions. `takt exec` is the exception: each scope defaults to inheritance when that scope is not explicitly configured, and the resolved values are written into the generated `.takt/exec/workflow.yaml`. The Assistant dialogue and generated workflow therefore use the same snapshot, and direct reruns using that generated path retain it. This does not add CLI resume support to exec runs. A `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_*` environment override supplied to a later invocation remains higher priority and intentionally replaces the stored value.
+TAKT workflows do not inherit repository or user Codex Skills by default. Enable either scope explicitly when a workflow should use those environment-dependent instructions. `takt exec` is the exception: each scope defaults to inheritance when that scope is not explicitly configured, and the resolved values are written into the generated `.takt/exec/workflow.yaml`. The Assistant dialogue and generated workflow therefore use the same snapshot, and direct reruns using that generated path retain it. A `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_*` environment override supplied to a later invocation remains higher priority and intentionally replaces the stored value.
 
 ```yaml
 provider_options:
@@ -785,24 +799,25 @@ Organize workflows into categories for better UI presentation in the `takt` work
 
 **Canonical YAML keys** (recommended, matches bundled `builtins/{lang}/workflow-categories.yaml`): top-level **`workflow_categories`**, and under each category object the **`workflows`** array listing **workflow names** (the `name` field from each workflow YAML, e.g. builtin `default`), not file paths.
 
-Use only **`workflow_categories`** and **`workflows`** in category configuration files.
+Use only **`workflow_categories`** and **`workflows`** in category configuration files. Removed legacy category keys are not accepted and cause a validation error.
 
 ### Configuration
 
 Categories can be configured in:
 - `builtins/{lang}/workflow-categories.yaml` — default builtin categories (bundled with TAKT)
-- `~/.takt/config.yaml` or a separate file via `workflow_categories_file` (default user overlay: `~/.takt/preferences/workflow-categories.yaml`)
+- `~/.takt/preferences/workflow-categories.yaml` — user overlay file, or a custom path set with `workflow_categories_file` in `~/.takt/config.yaml`
+
+`workflow_categories` cannot be written in `~/.takt/config.yaml` itself; the config schema is strict and rejects the key. Only the file path (`workflow_categories_file`) goes into `config.yaml` — the categories live in the dedicated overlay file:
 
 ```yaml
-# ~/.takt/config.yaml or dedicated categories file (canonical)
+# ~/.takt/preferences/workflow-categories.yaml (or the file set by workflow_categories_file)
 workflow_categories:
   Development:
     workflows: [default, simple]
-    children:
-      Backend:
-        workflows: [dual-cqrs]
-      Frontend:
-        workflows: [dual]
+    Backend:
+      workflows: [dual-cqrs]
+    Frontend:
+      workflows: [dual]
   Research:
     workflows: [research, magi]
 
@@ -812,7 +827,7 @@ others_category_name: "Other Workflows"  # Name for uncategorized category
 
 ### Category features
 
-- **Nested categories** — unlimited depth for hierarchical organization
+- **Nested categories** — unlimited depth for hierarchical organization; under a category, every key other than `workflows` is treated as a child category name (there is no `children:` key)
 - **Per-category workflow lists** — under each category, `workflows:` holds workflow names to show in that group
 - **Others category** — collects workflows not listed under any category (disable with `show_others_category: false`)
 - **Builtin workflow filtering** — turn off all builtins with `enable_builtin_workflows: false`, or specific names with `disabled_builtins: [name1, name2]`
@@ -857,38 +872,33 @@ pipeline:
 |--------|-------------|
 | `--pipeline` | Enable pipeline (non-interactive) mode |
 | `--auto-pr` | Create PR after execution |
+| `--draft` | Create the auto-created PR as a draft (requires `--auto-pr` or `auto_pr` config) |
 | `--skip-git` | Skip branch creation, commit, and push (workflow-only) |
 | `--repo <owner/repo>` | Repository for PR creation |
+| `--auto-strategy <strategy>` | Override auto routing strategy (`cost` \| `balanced` \| `performance`) |
 | `-q, --quiet` | Minimal output mode (suppress AI output) |
 
 ## Debugging
 
 ### Debug Logging
 
-Enable debug logging by setting `logging.debug: true` in `~/.takt/config.yaml`:
+Enable debug logging by setting `logging.debug: true` in `~/.takt/config.yaml` (the `logging` key is global-only):
 
 ```yaml
 logging:
   debug: true
 ```
 
-Debug logs are written to `.takt/runs/debug-{timestamp}/logs/debug.log` in NDJSON format.
+Debug logs are written to `.takt/runs/debug-{timestamp}/logs/debug-{timestamp}.log` in NDJSON format, and prompt/response logs to `debug-{timestamp}-prompts.jsonl` in the same directory.
 
 ### Detailed Console Output
 
-Enable detailed console output by setting `logging.level: debug` in your config:
+Enable detailed console output by setting `logging.level: debug`:
 
 ```yaml
-# ~/.takt/config.yaml or .takt/config.yaml
+# ~/.takt/config.yaml
 logging:
   level: debug
 ```
 
-This also enables the internal verbose console mode used by the CLI.
-
-If you want debug artifacts such as `debug.log`, enable them explicitly:
-
-```yaml
-logging:
-  debug: true
-```
+This also enables the internal verbose console mode used by the CLI. `logging.level: debug` alone additionally enables the debug logger, so the `debug-{timestamp}.log` and `debug-{timestamp}-prompts.jsonl` artifacts above are produced without setting `logging.debug` separately. Any of `logging.debug: true`, `logging.trace: true`, or `logging.level: debug` enables them.

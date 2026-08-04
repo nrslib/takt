@@ -19,12 +19,12 @@ model: sonnet                 # デフォルトモデル（省略可、provider 
 branch_name_strategy: romaji  # ブランチ名生成方式: 'romaji'（高速）または 'ai'（低速）
 prevent_sleep: false          # 実行中に macOS のアイドルスリープを防止（caffeinate）
 notification_sound: true      # 通知音の有効/無効
-notification_sound_events:    # イベントごとの通知音切り替え（省略可）
-  iteration_limit: false
+notification_sound_events:    # イベントごとの通知音切り替え（省略可。全イベントがデフォルト有効）
+  iteration_limit: false      # 例: このイベントだけ false で無効化
   workflow_complete: true
   workflow_abort: true
-  run_complete: true          # デフォルト有効。false で無効化
-  run_abort: true             # デフォルト有効。false で無効化
+  run_complete: true
+  run_abort: true
 concurrency: 1                # takt run の並列タスク数（1-10、デフォルト: 1 = 逐次実行）
 task_poll_interval_ms: 500    # takt run での新規タスクポーリング間隔（100-5000、デフォルト: 500）
 interactive_preview_steps: 3  # インタラクティブモードでの step プレビュー数（0-10、デフォルト: 3）
@@ -126,8 +126,12 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 #     provider_options:
 #       codex:
 #         reasoning_effort: medium
+```
 
 `takt_providers.selector` は任意です。provider/model の優先順位は、明示的な CLI または環境 override、project selector、global selector、project top-level、global top-level の順です。model は解決済み provider と一致する候補だけを採用します。`provider_options` は selector entry だけを global → project の leaf 単位でマージし、top-level・persona・pool sub-step の options は selector に継承されません。空の selector entry と空の `provider_options` entry は設定読み込み時に拒否されます。dynamic selector には strict read-only の内部 agent 隔離を保証できる provider が必要です。Claude、Codex、Mock はこの契約を満たし、OpenCode、Cursor、Copilot、Kiro は selector・participant 起動前に拒否されます。dynamic parallel を使わない workflow では selector 設定を解決せず、既存実行へ影響しません。
+
+```yaml
+# ~/.takt/config.yaml（続き）
 
 # ワークフローセキュリティポリシー（すべてデフォルト拒否）
 # 信頼されていないワークフロー YAML が実行できる内容を制御
@@ -162,7 +166,7 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 
 # routing decision telemetry は local-only です。
 # telemetry:
-#   routing_decisions: true       # auto-routing decision を .takt/events/ に書き込む（デフォルト: true）
+#   routing_decisions: true       # auto-routing decision を .takt/events/ に書き込む（デフォルト: false。`takt telemetry enable` またはこのキーで有効化）
 ```
 
 ### グローバル設定フィールドリファレンス
@@ -171,11 +175,11 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 |-----------|------|---------|------|
 | `language` | `"en"` \| `"ja"` | `"en"` | UI 言語 |
 | `logging.level` | `"debug"` \| `"info"` \| `"warn"` \| `"error"` | `"info"` | ログレベル |
-| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | `"claude"` | デフォルトの具体 AI provider（`claude` = ヘッドレス CLI モード、`claude-sdk` = SDK/API モード、`claude-terminal` = experimental interactive terminal モード） |
 | `logging.trace` | boolean | `false` | trace レベルのログを有効化（高頻度のデバッグノイズを抑制） |
 | `logging.debug` | boolean | `false` | デバッグログを有効化（`debug.log` + `prompts.jsonl`） |
 | `logging.provider_events` | boolean | `false` | provider stream イベントを永続化 |
 | `logging.usage_events` | boolean | `false` | usage イベントログを永続化 |
+| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | `"claude"` | デフォルトの具体 AI provider（`claude` = ヘッドレス CLI モード、`claude-sdk` = SDK/API モード、`claude-terminal` = experimental interactive terminal モード） |
 | `model` | string | - | デフォルトモデル名（provider にそのまま渡される） |
 | `branch_name_strategy` | `"romaji"` \| `"ai"` | `"romaji"` | ブランチ名生成方式 |
 | `prevent_sleep` | boolean | `false` | macOS アイドルスリープ防止（caffeinate） |
@@ -224,8 +228,8 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 | `workflow_categories_file` | string | - | カテゴリファイルのパス（[Workflow カテゴリ](#workflow-categories) 参照。デフォルトのユーザー上書きは `workflow-categories.yaml`） |
 | `vcs_provider` | `"github"` \| `"gitlab"` | 自動検出 | VCS プロバイダー（git リモート URL から自動検出） |
 | `takt_providers` | object | - | TAKT 内部プロバイダー上書き。`assistant` は assistant 会話（インタラクティブモードの計画会話、既存タスクへの追加指示 (instruct)、リトライ対話）をルーティングし、OpenCode の report retry 失敗後の Report phase fallback provider としても使われます。project の `takt_providers.assistant` は global の `takt_providers.assistant` を上書きします。どちらも未設定の場合、Report phase fallback は無効で、top-level `provider` / `model` は暗黙 fallback として使われません。 |
-| `telemetry` | object | `{ routing_decisions: true }` | local-only の routing decision 記録。`telemetry.routing_decisions` は auto-routing decision を project `.takt/events/` 配下に NDJSON として書き込むかどうかを制御します。TAKT は routing decision をアップロードしません。 |
-| `analytics` | object | 無効 | local-only の analytics 収集。`enabled` で有効化し、`events_path` でイベントディレクトリを変更（デフォルト `~/.takt/analytics/events`）、`retention_days` でイベントファイルの保持期間を設定します。TAKT は analytics イベントをアップロードしません。 |
+| `telemetry` | object | `{ routing_decisions: false }` | local-only の routing decision 記録。デフォルト無効（opt-in）です。`takt telemetry enable` または `routing_decisions: true` で有効化すると、auto-routing decision を project `.takt/events/` 配下に NDJSON として書き込みます。TAKT は routing decision をアップロードしません。 |
+| `analytics` | object | 無効 | local-only の analytics 収集。`enabled` で有効化し、`events_path` でイベントディレクトリを変更（デフォルト `~/.takt/analytics/events`）、`retention_days` で `takt purge` が適用する保持期間を設定します（デフォルト: 30日）。TAKT は analytics イベントをアップロードしません。 |
 | `workflow_mcp_servers` | object | すべて `false` | MCP サーバートランスポートポリシー（`stdio`, `sse`, `http` トグル） |
 | `workflow_arpeggio` | object | すべて `false` | Arpeggio カスタムコードポリシー（`custom_data_source_modules`, `custom_merge_inline_js`, `custom_merge_files`） |
 | `workflow_runtime_prepare` | object | `{ custom_scripts: false }` | ランタイム prepare ポリシー（ビルトインプリセットは常に許可） |
@@ -243,8 +247,6 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 provider: claude              # このプロジェクトの provider 上書き
 model: sonnet                 # このプロジェクトのモデル上書き
 auto_pr: true                 # worktree 実行後に PR を自動作成
-logging:
-  level: info                 # コンソールログレベル: debug | info | warn | error
 concurrency: 2                # このプロジェクトでの takt run 並列タスク数（1-10）
 auto_requeue_max_attempts: 1  # takt run 中の失敗 workflow task 自動 requeue 上限（非負整数）
 ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当を適用
@@ -281,7 +283,7 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 
 ### プロジェクト設定フィールドリファレンス
 
-プロジェクト設定はグローバル設定のほとんどのキーを受け付け、グローバル値を上書きします（例: `language`、`logging`、`branch_name_strategy`、`minimal_output`、`task_poll_interval_ms`、`interactive_preview_steps`、`provider_routing`、`persona_providers`、`runtime`、`analytics`、`telemetry`、`rate_limit_fallback`、`workflow_overrides`、`disabled_builtins`。意味は[グローバル設定フィールドリファレンス](#グローバル設定フィールドリファレンス)を参照）。次の表はプロジェクト専用キーと、よく使う上書きキーの一覧です。
+プロジェクト設定はグローバル設定のほとんどのキーを受け付け、グローバル値を上書きします（例: `language`、`branch_name_strategy`、`minimal_output`、`task_poll_interval_ms`、`interactive_preview_steps`、`provider_routing`、`persona_providers`、`runtime`、`analytics`、`telemetry`、`rate_limit_fallback`、`workflow_overrides`。意味は[グローバル設定フィールドリファレンス](#グローバル設定フィールドリファレンス)を参照）。プロジェクト設定のスキーマは strict で、`logging`、`disabled_builtins`、`enable_builtin_workflows`、通知設定、API キー、CLI パスなどのグローバル専用キーを `.takt/config.yaml` に書くと起動時に config validation error になります。次の表はプロジェクト専用キーと、よく使う上書きキーの一覧です。
 
 | フィールド | 型 | デフォルト | 説明 |
 |-----------|------|---------|------|
@@ -326,6 +328,12 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 数値でない値、負数、整数でない値は config validation に失敗します。
 `TAKT_IGNORE_EXCEED` は `true` または `false` のみ受け付け、それ以外の値は config
 validation に失敗します。
+
+## 環境変数上書き
+
+ほとんどの設定キーは、`TAKT_` に設定キーパスをアンダースコア区切り・大文字化して続けた環境変数で上書きできます。`logging.debug` は `TAKT_LOGGING_DEBUG`、`telemetry.routing_decisions` は `TAKT_TELEMETRY_ROUTING_DECISIONS` になります。よく使う例: `TAKT_PROVIDER`、`TAKT_MODEL`、`TAKT_CONCURRENCY`、`TAKT_LOGGING_DEBUG`、`TAKT_TELEMETRY_ROUTING_DECISIONS`、`TAKT_OBSERVABILITY_ENABLED`。環境変数の値は対応するファイルの値を上書きし、キーを持つ層で適用されます。グローバル専用キー（例: `logging`、`disabled_builtins`）はグローバル `~/.takt/config.yaml` 層で、プロジェクト上書き可能キー（例: `concurrency`、`telemetry.routing_decisions`）はプロジェクト `.takt/config.yaml` 層でも解決されます。
+
+設定キー上書きとは別に、`TAKT_NOTIFY_WEBHOOK` には Slack Incoming Webhook URL を設定できます。設定すると、pipeline 完了時と `takt run` のタスクバッチ完了時（run summary）に Slack へ通知が送信されます。
 
 ## API キー設定
 
@@ -503,6 +511,8 @@ provider_profiles:
 
 step の `required_permission_mode` は最低限の下限を設定します。provider プロファイルから解決されたモードが要求モードよりも低い場合、要求モードが使用されます。たとえば、step が `edit` を要求しているがプロファイルが `readonly` に解決される場合、実効モードは `edit` になります。
 
+すべての provider には組み込みの `default_permission_mode: edit` があり、この解決に常に参加します。project と global のどちらの `provider_profiles` も未設定の場合、実効モードは `edit` です（step の `required_permission_mode` がより高いモードを要求する場合は引き上げられます）。
+
 ### Provider Routing
 
 `provider_routing` を使うと、workflow を複製せずに step を別の provider、model、provider 固有オプションへルーティングできます。`~/.takt/config.yaml` と `.takt/config.yaml` のどちらでも定義できます。
@@ -572,6 +582,8 @@ CLI / 環境変数の明示 override
 ```
 
 provider と model は各レイヤーで個別に解決されます。provider だけの override によって、より高い優先順位の model override が失われることはありません。
+
+「有効な promotion」とは、step の `promotion` エントリのうち、実行回数条件（`at: <N>`）または `ai()` 条件が現在の実行にマッチしたものを指します。[Step レベルのプロバイダープロモーション](./workflows.ja.md#step-レベルのプロバイダープロモーション)を参照してください。
 
 Finding Contract manager では、`finding_contract.manager.provider` と `finding_contract.manager.model` が合成 `findings-manager` step の `step YAML provider/model` 位置に入ります。
 
@@ -650,9 +662,9 @@ assistant 会話（インタラクティブモードの計画会話、既存タ�
 
 auto routing の位置は、前述の provider/model の完全な優先順位に従います。hard rule は `tags`、`steps`、`personas` の順に確認します。それ以外は `pool_rules` が candidate pool を選び、router は必要な tier だけを推定し、TAKT が candidate を決定的に選びます。推定成功後、`cost` と `balanced` は選択された pool 内で必要 tier を満たす最小の `routing_tier` を選びます。同じ tier の candidate が複数ある場合は、どちらもその pool の `candidates` リストに記載された順序を使います。`performance` は選択された pool 内で最も高い `routing_tier` を選びます。推定失敗時は当該 pool の明示 `fallback` を使用し、推定成功後に必要 tier を満たす candidate がなければ実行エラーになります。
 
-candidate の `routing_tier` は `high`、`medium`、`low` のいずれかです。すべての設定には `default_pool`、空でない `candidate_pools`、pool 内の `fallback` が必要です。candidate の `provider_options` は step 優先度で merge されるため、env / CLI 由来の option leaf は引き続き優先されます。`model: auto` はサポートされません。複数 candidate を使ってください。CLI は `--auto-strategy cost|balanced|performance` で strategy を上書きできます。この上書きは、実行が effective `auto_routing` を持つ workflow に到達するまで伝播します。到達しないまま実行が完了した場合は、strategy flag が warning を出して無視されます。router には正規化済みの task、raw step instruction、現在の残作業が送信されます。識別子の置換は識別リスクを下げますが、匿名性を保証しません。routing event は local-only であり、routing 本文を保存しません。
+candidate の `routing_tier` は `high`、`medium`、`low` のいずれかです。すべての設定には `strategy`、`router`（`provider` と `model`）、最低 1 つの `candidates` エントリ、`default_pool`、空でない `candidate_pools`、pool 内の `fallback` が必要です。`router.model` と各 candidate の `model` は、数字か `/` を含む full model id である必要があります。`sonnet` などのエイリアスは validation で拒否されます。candidate の `provider_options` は step 優先度で merge されるため、env / CLI 由来の option leaf は引き続き優先されます。`model: auto` はサポートされません。複数 candidate を使ってください。CLI は `--auto-strategy cost|balanced|performance` で strategy を上書きできます。この上書きは、実行が effective `auto_routing` を持つ workflow に到達するまで伝播します。到達しないまま実行が完了した場合は、strategy flag が warning を出して無視されます。router には正規化済みの task、raw step instruction、現在の残作業が送信されます。識別子の置換は識別リスクを下げますが、匿名性を保証しません。routing event は local-only であり、routing 本文を保存しません。
 
-Routing decision は local-only telemetry です。`telemetry.routing_decisions` が有効な場合、TAKT は project `.takt/events/` ディレクトリ配下に NDJSON として書き込みます。TAKT は routing decision をアップロードしません。この local recording 設定の確認・変更には `takt telemetry status`、`takt telemetry enable`、`takt telemetry disable` を使います。
+Routing decision は local-only telemetry で、デフォルトでは記録されません。`telemetry.routing_decisions` を有効化した場合（`takt telemetry enable` または `routing_decisions: true`）、TAKT は project `.takt/events/` ディレクトリ配下に NDJSON として書き込みます。TAKT は routing decision をアップロードしません。この local recording 設定の確認・変更には `takt telemetry status`、`takt telemetry enable`、`takt telemetry disable` を使います。
 
 workflow YAML の `model: null` は、明示的な entry レベル値として扱われます。step、parallel sub-step、`loop_monitors.judge` で model 解決を止めるため、下位優先度のソースやトリガー元 step 継承は `model` には使われません。`model` フィールドを省略した場合は通常どおりフォールバックします。
 
@@ -698,6 +710,8 @@ TAKT は `provider_options.claude.base_url` を `claude` と `claude-sdk` に `A
 
 `ANTHROPIC_BASE_URL` や `OPENAI_BASE_URL` など provider-native の環境変数は provider 側の fallback 設定です。上記 provider では、TAKT の `provider_options.*.base_url` が明示的な TAKT config として provider-native 設定より優先されます。
 
+外部の proxy / gateway サービス（OpenAI 互換または Anthropic 互換 API を話す任意のエンドポイント）へのルーティングにも使えます。ただし非 loopback host を許可する層（global config または `TAKT_PROVIDER_OPTIONS_*_BASE_URL` 環境変数）で設定する必要があります。workflow 層と project 層で受理されるのは loopback アドレスのみです。
+
 workflow と project config での `base_url` は local proxy 用に限定されています。任意の workflow file が API key と prompt の送信先を外部 host に変更できないよう、非 loopback の proxy endpoint は global config または TAKT env から設定してください。
 
 #### ネットワークアクセス (`network_access`)
@@ -732,7 +746,7 @@ step / `provider_routing` / deprecated の `persona_providers` / `workflow_confi
 
 #### Codex Skill の継承 (`skills`)
 
-TAKT workflow は repository scope と user scope の Codex Skill をデフォルトでは継承しません。workflow が環境依存の指示を利用すべき場合だけ、対象 scope を明示的に有効化します。例外として `takt exec` は、各 scope が明示設定されていない場合、その scope を継承し、解決結果を生成する `.takt/exec/workflow.yaml` に書き込みます。これにより、Assistant 対話と生成 workflow は同じスナップショットを使い、生成パスを指定した直接の再実行でもその値を維持します。この変更はexec runのCLI resume対応を追加するものではありません。後の実行で指定した `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_*` 環境変数は引き続き最優先で、保存値を意図的に上書きします。
+TAKT workflow は repository scope と user scope の Codex Skill をデフォルトでは継承しません。workflow が環境依存の指示を利用すべき場合だけ、対象 scope を明示的に有効化します。例外として `takt exec` は、各 scope が明示設定されていない場合、その scope を継承し、解決結果を生成する `.takt/exec/workflow.yaml` に書き込みます。これにより、Assistant 対話と生成 workflow は同じスナップショットを使い、生成パスを指定した直接の再実行でもその値を維持します。後の実行で指定した `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_*` 環境変数は引き続き最優先で、保存値を意図的に上書きします。
 
 ```yaml
 provider_options:
@@ -785,24 +799,25 @@ provider_options:
 
 **推奨（正）の YAML キー**（同梱の `builtins/{lang}/workflow-categories.yaml` と一致）: トップレベル **`workflow_categories`**、各カテゴリオブジェクト直下の **`workflows`** 配列に **workflow 名**（各 workflow YAML の `name` フィールド。ビルトインなら `default` など）を列挙します。ファイルパスではありません。
 
-削除済みの旧カテゴリキーは受理されません。指定すると validation error になります。
+カテゴリ設定ファイルでは **`workflow_categories`** と **`workflows`** だけを使ってください。削除済みの旧カテゴリキーは受理されません。指定すると validation error になります。
 
 ### 設定方法
 
 カテゴリは次の場所で設定できます。
 - `builtins/{lang}/workflow-categories.yaml` — TAKT 同梱のデフォルト
-- `~/.takt/config.yaml` または `workflow_categories_file` で指定した別ファイル（ユーザー上書きのデフォルトは `~/.takt/preferences/workflow-categories.yaml`）
+- `~/.takt/preferences/workflow-categories.yaml` — ユーザー上書きファイル。`~/.takt/config.yaml` の `workflow_categories_file` で別パスも指定可能
+
+`workflow_categories` を `~/.takt/config.yaml` 自体に書くことはできません。config スキーマは strict でこのキーを拒否します。`config.yaml` に書けるのはファイルパス（`workflow_categories_file`）だけで、カテゴリ本体は専用の上書きファイルに書きます。
 
 ```yaml
-# ~/.takt/config.yaml または専用カテゴリファイル（推奨）
+# ~/.takt/preferences/workflow-categories.yaml（または workflow_categories_file で指定したファイル）
 workflow_categories:
   Development:
     workflows: [default, simple]
-    children:
-      Backend:
-        workflows: [dual-cqrs]
-      Frontend:
-        workflows: [dual]
+    Backend:
+      workflows: [dual-cqrs]
+    Frontend:
+      workflows: [dual]
   Research:
     workflows: [research, magi]
 
@@ -812,7 +827,7 @@ others_category_name: "Other Workflows"  # 未分類カテゴリの名前
 
 ### カテゴリ機能
 
-- **ネストされたカテゴリ** — 階層的な整理のための無制限の深さ
+- **ネストされたカテゴリ** — 階層的な整理のための無制限の深さ。カテゴリ配下の `workflows` 以外のキーはすべて子カテゴリ名として扱われます（`children:` キーはありません）
 - **カテゴリごとの workflow リスト** — 各カテゴリの `workflows:` に、そのグループに表示する workflow 名を並べる
 - **その他カテゴリ** — いずれのカテゴリにも列挙されていない workflow を自動収集（`show_others_category: false` で無効化可能）
 - **ビルトイン workflow フィルタリング** — `enable_builtin_workflows: false` ですべてのビルトインを無効化、または `disabled_builtins: [name1, name2]` で名前指定で無効化
@@ -857,38 +872,33 @@ pipeline:
 |-----------|------|
 | `--pipeline` | pipeline（非インタラクティブ）モードを有効化 |
 | `--auto-pr` | 実行後に PR を作成 |
+| `--draft` | 自動作成する PR を draft として作成（`--auto-pr` または `auto_pr` 設定が必要） |
 | `--skip-git` | ブランチ作成、コミット、プッシュをスキップ（workflow のみ実行） |
 | `--repo <owner/repo>` | PR 作成用のリポジトリを指定 |
+| `--auto-strategy <strategy>` | auto routing の strategy を上書き（`cost` \| `balanced` \| `performance`） |
 | `-q, --quiet` | 最小出力モード（AI 出力を抑制） |
 
 ## デバッグ
 
 ### デバッグログ
 
-`~/.takt/config.yaml` で `logging.debug: true` を設定してデバッグログを有効化できます。
+`~/.takt/config.yaml` で `logging.debug: true` を設定してデバッグログを有効化できます（`logging` キーはグローバル専用です）。
 
 ```yaml
 logging:
   debug: true
 ```
 
-デバッグログは `.takt/runs/debug-{timestamp}/logs/debug.log` に NDJSON 形式で出力されます。
+デバッグログは `.takt/runs/debug-{timestamp}/logs/debug-{timestamp}.log` に NDJSON 形式で出力され、プロンプト/レスポンスログは同じディレクトリの `debug-{timestamp}-prompts.jsonl` に出力されます。
 
 ### 詳細コンソール出力
 
 `logging.level: debug` を設定すると、詳細なコンソール出力が有効になります。
 
 ```yaml
-# ~/.takt/config.yaml または .takt/config.yaml
+# ~/.takt/config.yaml
 logging:
   level: debug
 ```
 
-これは CLI 内部の verbose console mode を有効にする設定です。
-
-`debug.log` などのデバッグ成果物が必要な場合は、別途 `logging.debug: true` を設定してください。
-
-```yaml
-logging:
-  debug: true
-```
+これは CLI 内部の verbose console mode も有効にします。さらに `logging.level: debug` だけでデバッグロガーも有効になるため、上記の `debug-{timestamp}.log` と `debug-{timestamp}-prompts.jsonl` は `logging.debug` を別途設定しなくても出力されます。`logging.debug: true`、`logging.trace: true`、`logging.level: debug` のいずれかで有効になります。

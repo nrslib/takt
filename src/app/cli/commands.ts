@@ -75,7 +75,7 @@ program
   .command('list')
   .description('List task branches (merge/delete)')
   .option('--non-interactive', 'Run list in non-interactive mode')
-  .option('--action <action>', 'Non-interactive action (diff|try|merge|delete)')
+  .option('--action <action>', 'Non-interactive action (diff|sync|try|merge|delete)')
   .option('--format <format>', 'Output format for non-interactive list (text|json)')
   .option('--yes', 'Skip confirmation prompts in non-interactive mode')
   .action(async (_opts, command) => {

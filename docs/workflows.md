@@ -1,5 +1,7 @@
 # Workflow Guide
 
+[日本語](./workflows.ja.md)
+
 This guide explains how to create and customize TAKT workflows.
 
 ## Workflow Basics
@@ -94,6 +96,8 @@ steps:
 ```
 
 Steps reference section maps by key name (e.g., `persona: coder`), not by file path. Paths in section maps are resolved relative to the workflow YAML file's directory.
+
+Section maps are optional. Facets can be referenced directly by bare name (e.g., `persona: coder` without a `personas` map entry); bare names are resolved through the facet layers in priority order — project `.takt/facets/<type>/`, then global `~/.takt/facets/<type>/`, then bundled `builtins/{lang}/facets/<type>/`. Use a section map only when you need a custom alias or an explicit file path.
 
 ### Reusable step fragments
 
@@ -199,9 +203,13 @@ Rules are evaluated in YAML order. The first matching rule is selected; no rule-
 
 The optional `appendix` field provides a template for additional AI output when that rule is matched. Useful for structured error reporting or requesting specific information.
 
+### Rule Field: `interactive_only`
+
+A rule with `interactive_only: true` is only considered during interactive execution. In non-interactive runs (e.g. `--pipeline` or `takt run`), the rule is skipped as if it were not declared, and evaluation continues with the remaining rules. Use it for transitions that require a human, such as a rule that waits for user input.
+
 ## Step Types
 
-TAKT supports five step types. Pick by the structure your step needs.
+TAKT supports seven step types — Normal, Parallel, Dynamic Parallel, Arpeggio, Team Leader, Workflow Call, and System. Pick by the structure your step needs.
 
 ### Normal Step
 
@@ -244,6 +252,7 @@ Sub-steps execute concurrently, and the parent aggregates sub-step matches via `
 - `any("X")`: true if ANY sub-steps matched condition X
 - Sub-step `rules` define possible outcomes; `next` is optional (parent handles routing)
 - Parallel sub-steps do not support `promotion`
+- The parent step accepts an optional `concurrency: <N>` (minimum 1) to bound how many sub-steps run at the same time; without it, all sub-steps start together
 
 ### Dynamic Parallel Step
 
@@ -354,6 +363,8 @@ Iterate over a data source (CSV, JSON, etc.) and apply the same step template to
 
 Useful for batch-applying the same operation to many inputs (file lists, issue lists, generated test cases, etc.).
 
+`merge.strategy` is `concat` (the default) or `custom`. `concat` joins the per-row results with the optional `separator` and does not accept `inline_js` or `file`. `custom` requires either `inline_js` (an inline JavaScript merge function) or `file` (a path to a merge script); declaring `custom` without one of them, or combining `concat` with either, fails workflow loading.
+
 ### Team Leader Step (dynamic task decomposition)
 
 The agent acts as a leader: it decomposes the task into independent sub-parts at runtime and dispatches each part to a worker agent:
@@ -379,7 +390,9 @@ The agent acts as a leader: it decomposes the task into independent sub-parts at
 
 Useful for breaking one large task into independent units that can run in parallel without you having to know the unit boundaries up-front.
 
-`max_concurrency` controls how many independent parts run at the same time. When specified, `initial_max_parts` limits only the first decomposition batch. There is no total-part limit for the workflow step; the Team Leader adds batches until it decides no additional work is required or stops returning new unique parts. The scheduler requests a new batch only after every part in the current batch completes, so parts in one batch must never depend on each other; verification that needs implementation results belongs in a later batch. With `fail_on_part_error: true`, a generated-part failure can still lead the Team Leader to plan and run new recovery parts; it then ends the step with an error. When omitted, the leader can continue according to its normal recovery flow. The older `max_parts` key is still accepted as the compatibility name for `max_concurrency`. `refill_threshold` is a compatibility key and may only be omitted or set to `0`; non-zero values fail workflow loading because incremental refill conflicts with the batch barrier. `part_tags` sets provider routing tags on generated part steps. When omitted, parts inherit the parent step's `tags`. Empty and whitespace-only tags are invalid. `part_tags` is resolved through normal `provider_routing.tags`, so tag routing takes priority over persona routing from `part_persona`.
+`team_leader.persona` optionally sets the persona for the leader agent itself (resolved like a step persona and used as the provider-routing persona key); when omitted, the step's own `persona` applies.
+
+`max_concurrency` controls how many independent parts run at the same time. Both `max_concurrency` and the compatibility key `max_parts` accept at most `3`; a larger value fails workflow loading. When neither is set, the default is `3`. When specified, `initial_max_parts` limits only the first decomposition batch. There is no total-part limit for the workflow step; the Team Leader adds batches until it decides no additional work is required or stops returning new unique parts. The scheduler requests a new batch only after every part in the current batch completes, so parts in one batch must never depend on each other; verification that needs implementation results belongs in a later batch. With `fail_on_part_error: true`, a generated-part failure can still lead the Team Leader to plan and run new recovery parts; it then ends the step with an error. When omitted, the leader can continue according to its normal recovery flow. The older `max_parts` key is still accepted as the compatibility name for `max_concurrency`. `refill_threshold` is a compatibility key and may only be omitted or set to `0`; non-zero values fail workflow loading because incremental refill conflicts with the batch barrier. `part_tags` sets provider routing tags on generated part steps. When omitted, parts inherit the parent step's `tags`. Empty and whitespace-only tags are invalid. `part_tags` is resolved through normal `provider_routing.tags`, so tag routing takes priority over persona routing from `part_persona`.
 
 `inspect_tools` allows only read-only inspection tools (`read`, `glob`, `grep`) during the parent Team Leader task decomposition phase. Invalid tool names fail workflow loading. It does not affect generated child parts; child part tools remain controlled separately by `part_allowed_tools`. Inspection tools are supported by providers that expose `allowedTools`, including Claude-family providers and OpenCode. Providers that do not support Team Leader inspection tools fail at runtime with a clear error.
 
@@ -391,10 +404,10 @@ A step invokes another workflow by name. The child workflow runs in the same run
 
 ```yaml
   - name: peer-review
-    workflow_call:
-      workflow: peer-review
-      params:
-        impl_knowledge: cqrs-es
+    kind: workflow_call
+    call: peer-review
+    args:
+      impl_knowledge: cqrs-es
     rules:
       - condition: approved
         next: COMPLETE
@@ -402,7 +415,23 @@ A step invokes another workflow by name. The child workflow runs in the same run
         next: fix
 ```
 
-The called workflow can declare `subworkflow.params` so the parent passes values (e.g. `impl_knowledge` or `fix_knowledge`) to customize the child without duplicating step definitions. See [Workflow-level Configuration](#workflow-level-configuration) for `subworkflow` declaration.
+The called workflow can declare `subworkflow.params` so the parent passes values via `args` (e.g. `impl_knowledge` or `fix_knowledge`) to customize the child without duplicating step definitions. See [Workflow-level Configuration](#workflow-level-configuration) for `subworkflow` declaration.
+
+`workflow_call` rules only accept `COMPLETE`, `ABORT`, or a semantic return label the child declares. A child workflow lists its labels in `subworkflow.returns` (e.g. `returns: [approved, needs_fix]`; the reserved results `COMPLETE` / `ABORT` cannot be listed), and a child step's rule ends the subworkflow with a label via `return:` instead of `next:`. The parent's rules then route on that label, as `approved` / `needs_fix` do above.
+
+A `workflow_call` step may declare `overrides` to change the provider settings applied to the child workflow's steps. At least one of `provider`, `model`, or `provider_options` is required, and `provider_options` must include at least one provider-specific option:
+
+```yaml
+  - name: peer-review
+    kind: workflow_call
+    call: peer-review
+    overrides:
+      provider: codex
+      model: gpt-5.5
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+```
 
 `max_steps` is a budget owned by the root workflow and shared by every descendant. A `workflow_call` is a control node and does not consume that budget or select a provider/model of its own; only executable steps in the child consume iterations. For example, `plan → workflow_call(implement → review) → supervise` consumes four iterations, so extracting `implement` and `review` into a callable workflow does not require increasing `max_steps`. Nested calls follow the same rule. The call lifecycle remains visible in session logs and traces with a call invocation number and the complete call stack.
 
@@ -418,6 +447,49 @@ A `workflow_call` step may also declare scalar `vars` for execution context that
     - condition: COMPLETE
       next: COMPLETE
 ```
+
+### System Step
+
+A system step is executed by the TAKT engine itself — no agent runs. Declare it with `kind: system` (or the shorthand `mode: system`; declaring both is a configuration error). System steps cannot declare agent fields such as `persona`, `instruction`, `provider`, `structured_output`, `output_contracts`, or `quality_gates`. See `src/core/models/workflow-system-schemas.ts` for the full schema. The builtin `auto-improvement-loop` workflow (`builtins/en/workflows/auto-improvement-loop.yaml`) is the reference example: it routes between PR handling, issue-driven planning, and fresh improvement planning using only system steps and planner agent steps.
+
+`system_inputs` reads engine-provided context and binds each entry to a name via `as`. Available types: `task_context`, `branch_context`, `pr_context`, `issue_context`, `task_queue_context`, `pr_list`, `pr_selection`, `issue_list`, `issue_selection` (`pr_list` / `pr_selection` accept a `where` filter, which must match between the two). Bindings must be unique within the step. Bound values drive `when()` rules as `context.<step>.<binding>...` and can be referenced from later agent instructions with `{context:step.binding.field}`:
+
+```yaml
+  - name: route_context
+    mode: system
+    system_inputs:
+      - type: task_queue_context
+        source: current_project
+        as: active_queue
+        exclude_current_task: true
+      - type: pr_selection
+        source: current_project
+        as: selected_pr
+    rules:
+      - condition: when(context.route_context.active_queue.pending_count > 0)
+        next: wait_before_next_scan
+      - condition: when(context.route_context.selected_pr.exists == true)
+        next: plan_from_existing_pr
+```
+
+`effects` executes engine-side actions: `enqueue_task`, `comment_pr`, `sync_with_root`, `resolve_conflicts_with_ai`, `merge_pr`, `close_pr`. Each effect type may appear at most once per step, and results route via `when(effect.<step>.<type>.<field>)`:
+
+```yaml
+  - name: prepare_merge
+    mode: system
+    effects:
+      - type: sync_with_root
+        pr: "{context:route_context.selected_pr.number}"
+    rules:
+      - condition: when(effect.prepare_merge.sync_with_root.success == true)
+        next: merge_pr
+      - condition: when(effect.prepare_merge.sync_with_root.conflicted == true)
+        next: resolve_conflicts
+```
+
+`delay_before_ms` waits the given number of milliseconds before the step executes — useful for polling loops such as `wait_before_next_scan` in the builtin workflow.
+
+System steps pair with agent-step `structured_output`. An agent step declares `structured_output: { schema_ref: <name> }`, where `<name>` references the top-level `schemas:` map, and its validated output is available to rules as `when(structured.<step>.<field> ...)` and to effects as `{structured:step.field}`. `structured_output` itself belongs on agent steps, not system steps.
 
 ## Output Contracts (Report Files)
 
@@ -438,12 +510,19 @@ output_contracts:
         # Plan
         ...
 
-# Multiple report files with labels
+# Multiple report files
 output_contracts:
   report:
-    - Scope: 01-scope.md
-    - Decisions: 02-decisions.md
+    - name: 01-scope.md
+      format: scope
+    - name: 02-decisions.md
+      format: decisions
 ```
+
+Every report entry requires `name` and `format`. Two optional fields refine behavior:
+
+- `use_judge` (default `true`) — whether the report is fed into the Phase 3 status judgment. Set `use_judge: false` for reports that should be written but not used as judgment evidence. A step whose rules need judgment must keep at least one `use_judge` report.
+- `order` — a report-format facet reference (resolved like `format`) whose content replaces the default report-writing instruction in Phase 2. Use it when the agent needs custom directions for producing the report beyond the format template itself.
 
 ## Step-level Provider Promotion
 
@@ -474,6 +553,7 @@ Promotion is not supported on parallel sub-steps.
 
 | Option | Default | Description |
 |--------|---------|-------------|
+| `description` | - | Free-form step description. Also used as the selection description for dynamic parallel `pool` items, where it is required |
 | `persona` | - | Persona key (references section map) or file path |
 | `persona_name` | - | Display name for logs and prompts. It does not affect `provider_routing.personas` |
 | `session_key` | - | Explicit session key for normal agent steps and parallel sub-steps. The resolved provider is appended to the runtime key; empty and whitespace-only values are invalid |
@@ -514,12 +594,60 @@ The effective tool list may be narrower than configured. When `edit: false`, or 
 
 Top-level workflow fields that control overall execution behavior.
 
+### `max_steps`
+
+The iteration budget for the run: a positive integer, or `infinite` for workflows that are meant to run as endless loops (e.g. the builtin `auto-improvement-loop`). The budget is owned by the root workflow and shared by every workflow called from it; callable subworkflows may not declare their own `max_steps`.
+
+```yaml
+max_steps: infinite
+```
+
+### `schemas`
+
+A map from `structured_output.schema_ref` keys to structured-output schema names. Each name resolves to `<name>.json` in project `.takt/schemas/`, then `~/.takt/schemas/`, then the bundled `schemas/` directory. A `schema_ref` that is not in the map is used directly as the schema name.
+
+```yaml
+schemas:
+  followup-task: followup-task
+  pr-followup-task: pr-followup-task
+```
+
+### `auto_routing`
+
+Workflow-level automatic provider routing: an AI `router` (provider + model) picks a provider/model `candidate` per step. `candidates` names the selectable provider/model entries, `candidate_pools` groups them with a per-pool `fallback`, `default_pool` selects the pool used when nothing more specific matches, and `pool_rules` / `rules` pin pools or candidates by step `tags`, `steps` (names), or `personas`. Rules must reference declared candidates and pools; unknown names fail validation.
+
+### `finding_contract`
+
+Declares a Finding Contract for the workflow (see the Finding Contract sections above for runtime semantics). `ledger_path`, `raw_findings_path`, and `manager` are required; `manager` requires `persona`, `instruction`, and `output_contract`, with optional `provider` / `model`. Optional budgets: `stop_budget` (`max_rounds`, default 40; `max_minutes`, no time limit unless set) and `review_budget` (`max_review_rounds`).
+
+```yaml
+finding_contract:
+  ledger_path: .takt/findings/review.json
+  raw_findings_path: .takt/findings/review/raw
+  manager:
+    persona: findings-manager
+    instruction: findings-manager
+    output_contract: findings-manager
+  stop_budget:
+    max_rounds: 40
+```
+
 ### `interactive_mode`
 
 Default interactive mode used when `takt` is invoked without arguments. One of `assistant` (default), `passthrough`, `quiet`, `persona`.
 
 ```yaml
 interactive_mode: assistant
+```
+
+### `workflow_config.provider` / `workflow_config.model`
+
+Workflow-wide default provider and model. They sit below step-level `provider` / `model`, routing, and CLI/env overrides in the resolution order, and above project/global config defaults.
+
+```yaml
+workflow_config:
+  provider: claude-sdk
+  model: opus
 ```
 
 ### `workflow_config.provider_options`

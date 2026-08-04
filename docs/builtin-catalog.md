@@ -10,12 +10,12 @@ A comprehensive catalog of all builtin workflows and personas included with TAKT
 |----------|-----------------|
 | `simple` | A simple development workflow that trusts a capable model's judgment. The model selects relevant available skills for plan → write tests → implement → code review → fix loop → final supervision → complete. |
 | `simple-mini` | A lightweight variant that trusts a capable model's judgment. Omits dedicated test writing and final supervision: plan → implement → code review → fix loop → complete. |
-| `default` | Standard test-first development workflow using the shared development core: plan → write tests → implement → specialist peer review → fix planning → fix → verification → merge-readiness and supervision → complete. |
-| `default-mini` | Mini development workflow without tests. A lightweight variant of `default` with `write_tests` removed. plan → implement → AI antipattern review → parallel review → complete. |
+| `default` | Test-first workflow that runs the shared development flow with standard facets. |
+| `default-mini` | Lightweight workflow without a test-writing step that injects standard facets into the shared mini development flow. |
 | `default-high` | Full-spec workflow using the shared development core with direct implementation, specialist peer review, convergent remediation, merge-readiness, and supervision. |
 | `frontend` | Frontend-specialized development workflow with React/Next.js focused reviews and knowledge injection. |
-| `backend` | Backend-specialized development workflow with backend-aware architecture, security, and testing reviews. |
-| `dual` | Frontend + backend development workflow with architecture, frontend, security, testing reviews, and convergent remediation. |
+| `backend` | Backend workflow that injects domain facets into the shared development flow. |
+| `dual` | Dual frontend/backend workflow that injects domain facets into the shared development flow. |
 
 ## All Builtin Workflows
 
@@ -24,12 +24,13 @@ Organized by category.
 | Category | Workflow | Description |
 |----------|----------|-------------|
 | 🚀 Quick Start | `simple` | A simple development workflow that trusts a capable model's judgment. The model selects relevant available skills for plan → write tests → implement → code review → fix loop → final supervision → complete. |
-| | `default` | Standard test-first workflow using the shared development core, specialist peer review, convergent remediation, merge-readiness, and supervision. |
-| | `default-mini` | Mini development workflow without tests. A lightweight variant of `default` with `write_tests` removed. plan → implement → AI antipattern review → parallel review → complete. |
+| | `default` | Test-first workflow that runs the shared development flow with standard facets. |
+| | `default-mini` | Lightweight workflow without a test-writing step that injects standard facets into the shared mini development flow. |
 | | `default-high` | Full-spec workflow using the shared development core with direct implementation, specialist peer review, convergent remediation, merge-readiness, and supervision. |
+| | `cli` | CLI development workflow that injects CLI-oriented facets into the shared development flow. |
 | | `frontend` | Frontend-specialized development workflow with React/Next.js focused reviews and knowledge injection. |
-| | `backend` | Backend-specialized development workflow with backend-aware peer review and convergent remediation. |
-| | `dual` | Frontend + backend development workflow with domain-specific peer review and convergent remediation. |
+| | `backend` | Backend workflow that injects domain facets into the shared development flow. |
+| | `dual` | Dual frontend/backend workflow that injects domain facets into the shared development flow. |
 | ✨ Simple | `simple` | A general workflow that trusts a capable model's judgment. The model selects relevant available skills and develops with minimal orchestration. |
 | | `simple-mini` | A lightweight variant for capable models that omits dedicated test writing and final supervision. |
 | | `simple-frontend` | A concise frontend variant for capable models with frontend, React, security, architecture, and testing knowledge and policies. |
@@ -38,22 +39,29 @@ Organized by category.
 | | `simple-cqrs` | A concise CQRS+ES variant for capable models with backend, CQRS+ES, security, architecture, and testing knowledge and policies. |
 | | `simple-dual-cqrs` | A concise dual CQRS+ES variant for capable models with frontend, React, backend, CQRS+ES, security, architecture, and testing knowledge and policies. |
 | ⚡ Mini | `simple-mini` | A lightweight variant that trusts a capable model's judgment. Omits dedicated test writing and final supervision: plan → implement → code review → fix loop → complete. |
-| | `default-mini` | Mini development workflow without tests. A lightweight variant of `default` with `write_tests` removed. plan → implement → AI antipattern review → parallel review → complete. |
-| | `backend-cqrs-mini` | Mini CQRS+ES workflow: plan -> implement -> parallel review (AI antipattern + supervisor) with CQRS+ES knowledge injection. |
-| | `dual-mini` | Mini dual workflow: plan -> implement -> parallel review (AI antipattern + expert supervisor) with frontend + backend knowledge injection. |
-| | `dual-cqrs-mini` | Mini CQRS+ES dual workflow: plan -> implement -> parallel review (AI antipattern + expert supervisor) with CQRS+ES knowledge injection. |
+| | `default-mini` | Lightweight workflow without a test-writing step that injects standard facets into the shared mini development flow. |
+| | `frontend-mini` | Frontend-focused mini development workflow (plan → implement → parallel review → fix if needed → complete). |
+| | `backend-mini` | Backend-focused mini development workflow (plan → implement → parallel review → fix if needed → complete). |
+| | `backend-cqrs-mini` | CQRS+ES-focused mini development workflow (plan → implement → parallel review → fix if needed → complete). |
+| | `dual-mini` | Frontend + backend mini development workflow (plan → implement → parallel review → fix if needed → complete) with frontend + backend knowledge injection. |
+| | `dual-cqrs-mini` | CQRS+ES frontend + backend mini development workflow (plan → implement → parallel review → fix if needed → complete) with CQRS+ES knowledge injection. |
 | 🎨 Frontend | `simple-frontend` | For capable models. A simple variant that injects frontend knowledge and policies into `simple-core`. |
 | | `frontend` | Frontend-specialized development workflow with React/Next.js focused reviews and knowledge injection. |
+| | `frontend-mini` | Frontend-focused mini development workflow (plan → implement → parallel review → fix if needed → complete). |
 | | `frontend-maintenance` | (Experimental) Frontend workflow for modifying existing products: maintenance-scoped plan/implement/test/fix/supervise that respects current conventions and keeps changes within scope. Can be heavy-handed today — use as a starting point and tune. |
 | ⚙️ Backend | `simple-backend` | For capable models. A simple variant that injects backend knowledge and policies into `simple-core`. |
 | | `simple-cqrs` | For capable models. A simple variant that injects backend and CQRS+ES knowledge and policies into `simple-core`. |
-| | `backend` | Backend-specialized development workflow with backend-aware peer review and convergent remediation. |
-| | `backend-cqrs` | CQRS+ES-specialized backend development workflow with CQRS+ES-aware peer review and convergent remediation. |
+| | `backend` | Backend workflow that injects domain facets into the shared development flow. |
+| | `backend-mini` | Backend-focused mini development workflow (plan → implement → parallel review → fix if needed → complete). |
 | | `backend-maintenance` | Strict backend maintenance workflow with parallel architecture, testing, security, coding, and AI-antipattern reviews, followed by merge-readiness and final supervision. |
+| | `backend-cqrs` | CQRS+ES-specialized backend development workflow with CQRS+ES-aware peer review and convergent remediation. |
+| | `backend-cqrs-mini` | CQRS+ES-focused mini development workflow (plan → implement → parallel review → fix if needed → complete). |
 | 🔧 Dual | `simple-dual` | For capable models. A simple variant that injects frontend and backend knowledge and policies into `simple-core`. |
 | | `simple-dual-cqrs` | For capable models. A simple variant that injects frontend, backend, and CQRS+ES knowledge and policies into `simple-core`. |
-| | `dual` | Frontend + backend development workflow with architecture, frontend, security, testing reviews, and convergent remediation. |
+| | `dual` | Dual frontend/backend workflow that injects domain facets into the shared development flow. |
+| | `dual-mini` | Frontend + backend mini development workflow (plan → implement → parallel review → fix if needed → complete) with frontend + backend knowledge injection. |
 | | `dual-cqrs` | Frontend + backend development workflow (CQRS+ES specialized) with CQRS+ES, frontend, security, testing reviews, and convergent remediation. |
+| | `dual-cqrs-mini` | CQRS+ES frontend + backend mini development workflow (plan → implement → parallel review → fix if needed → complete) with CQRS+ES knowledge injection. |
 | 🏗️ Infrastructure | `terraform` | Terraform IaC development workflow: plan → implement → parallel review → supervisor validation → fix → complete. |
 | 🔍 Review | `review-default` | Multi-perspective code review: auto-detects PR/branch/working diff, runs parallel architecture, security, testing, and coding reviews, then runs a merge-readiness gate and outputs consolidated results. |
 | | `review-fix-default` | Multi-perspective review + fix loop with parallel architecture, security, testing, and coding reviews followed by merge-readiness review. |
@@ -67,6 +75,9 @@ Organized by category.
 | | `review-fix-dual-cqrs` | Frontend + CQRS+ES focused architecture, CQRS+ES, frontend, security, and coding review with a fix loop. |
 | | `review-backend-cqrs` | CQRS+ES focused architecture, CQRS+ES, security, and coding review. |
 | | `review-fix-backend-cqrs` | CQRS+ES focused architecture, CQRS+ES, security, and coding review with a fix loop. |
+| | `review-takt-default` | TAKT-focused multi-perspective review (5 reviewers including AI antipattern and coding review). |
+| | `review-fix-takt-default` | Workflow that gathers the review target, then injects TAKT-specific facets into the shared development flow. |
+| | `review-fix-takt-default-high` | Enhanced variant of `review-fix-takt-default` with a Finding Contract: gathers the review target, then plans, writes tests, implements directly, runs six compact specialist reviews, applies direct fixes, and closes through a fail-closed final gate. |
 | | `audit-unit` | Unit test audit. Enumerates behaviors and coverage gaps, produces an issue-ready report without modifying code. |
 | | `audit-e2e` | E2E audit. Enumerates user flows and coverage gaps, produces an issue-ready report without modifying code. |
 | | `audit-security` | Full security audit. Reads every project file for security review. |
@@ -74,15 +85,17 @@ Organized by category.
 | | `audit-architecture-frontend` | Frontend-focused architecture audit. Enumerates UI modules and boundaries. |
 | | `audit-architecture-backend` | Backend-focused architecture audit. Enumerates service modules and boundaries. |
 | | `audit-architecture-dual` | Full-stack architecture audit. Enumerates frontend/backend boundaries and cross-layer wiring. |
-| 🧪 Testing | `unit-test` | Unit test focused workflow: test analysis -> test implementation -> review -> fix. |
-| | `e2e-test` | E2E test focused workflow: E2E analysis -> E2E implementation -> review -> fix (Vitest-based E2E flow). |
 | 🎵 TAKT Development | `takt-default` | TAKT-focused workflow using the shared development core with TAKT knowledge injected into planning, testing, implementation, review, and remediation. |
-| | `takt-default-team-high` | Team Leader variant of takt-default-high. The leader decomposes implementation and fixes for members, followed by the same six compact specialist reviews, Finding Contract, and final gate. Provider and model remain configurable. |
+| | `auto-improvement-loop` | Infinite orchestration loop that routes between open PR handling, issue-driven planning, and fresh improvement planning. |
+| | `review-takt-default` | TAKT-focused multi-perspective review (5 reviewers including AI antipattern and coding review). |
+| | `review-fix-takt-default` | Workflow that gathers the review target, then injects TAKT-specific facets into the shared development flow. |
+| | `review-fix-takt-default-high` | Enhanced variant of `review-fix-takt-default` with a Finding Contract: gathers the review target, then plans, writes tests, implements directly, runs six compact specialist reviews, applies direct fixes, and closes through a fail-closed final gate. |
 | | `takt-default-high` | Enhanced high-cost variant of takt-default: direct implementation and fixes, six compact specialist reviews, Finding Contract, and a merge-readiness/supervisor final gate. |
-| | `review-fix-takt-default` | Gathers the review target, then runs the TAKT-focused shared development core through implementation, review, remediation, and final gates. |
+| | `takt-default-team-high` | Team Leader variant of takt-default-high. The leader decomposes implementation and fixes for members, followed by the same six compact specialist reviews, Finding Contract, and final gate. Provider and model remain configurable. |
 | Others | `research` | Research workflow: planner -> digger -> supervisor. Autonomously executes research without asking questions. |
 | | `deep-research` | Deep research workflow: plan -> dig -> analyze -> supervise. Discovery-driven investigation that follows emerging questions with multi-perspective analysis. |
 | | `magi` | Deliberation system inspired by Evangelion. Three AI personas (MELCHIOR, BALTHASAR, CASPER) analyze and vote. |
+| | `compound-eye` | Multi-model review: send the same instruction to Claude and Codex simultaneously, then synthesize both responses. |
 
 For local models, configure the provider and model on `takt-default-high` or `takt-default-team-high`; TAKT does not maintain a separate model-specific workflow family.
 
@@ -97,6 +110,8 @@ Run `takt` to choose a workflow interactively.
 | **coder** | Feature implementation, bug fixing |
 | **ai-antipattern-reviewer** | AI-specific antipattern review (non-existent APIs, incorrect assumptions, scope creep) |
 | **architecture-reviewer** | Architecture and code quality review, spec compliance verification |
+| **coding-reviewer** | Implementation-level code review: concrete bugs, regressions, security risks, and missing tests against the task intent and diff |
+| **implementation-semantics-reviewer** | Implementation semantics review: data structure choice, state normalization, naming-meaning alignment, fail-fast at boundaries |
 | **frontend-reviewer** | Frontend (React/Next.js) code quality and best practices review |
 | **cqrs-es-reviewer** | CQRS+Event Sourcing architecture and implementation review |
 | **security-reviewer** | Security vulnerability assessment |
@@ -110,6 +125,8 @@ Run `takt` to choose a workflow interactively.
 | **test-planner** | Test strategy analysis and comprehensive test planning |
 | **testing-reviewer** | Testing-focused code review with integration test requirements analysis |
 | **merge-readiness-reviewer** | Cross-cutting quality review for whether the change is ready to merge into a codebase that must be maintained |
+| **merge-readiness-supervisor** | Final supervisor who adjudicates whether a deliverable is mergeable after specialist review and fix verification |
+| **review-adjudicator** | Adjudicates review findings from evidence and establishes the authoritative remediation set |
 | **contract-lifecycle-reviewer** | Contract lifecycle review across definition, producer, consumer, validation, and migration paths |
 | **robustness-reviewer** | Robustness review for failure handling, boundary conditions, and operational resilience |
 | **terraform-coder** | Terraform IaC implementation |
@@ -119,6 +136,8 @@ Run `takt` to choose a workflow interactively.
 | **casper** | MAGI deliberation system: CASPER-3 (woman perspective) |
 | **findings-manager** | Reconciles raw findings from multiple reviewers into a consolidated ledger with lifecycle tracking |
 | **pr-commenter** | Posts review findings as GitHub PR comments |
+
+`exec-assistant` and `exec-worker` also exist as builtin persona files, but they are internal personas for `exec`-generated workflows and are not intended for direct use in custom workflows.
 
 ## Custom Personas
 
@@ -148,6 +167,8 @@ steps:
 ```
 
 ## Per-persona Provider Overrides
+
+> **Deprecated**: `persona_providers` is a legacy setting. Prefer `provider_routing.personas` (see the [Configuration Guide](./configuration.md)) for new settings; it routes by raw persona key and also supports step-tag and step-name routing. `provider_routing` takes priority over `persona_providers` when both are set.
 
 Use `persona_providers` in `~/.takt/config.yaml` to route specific personas to different providers without duplicating workflows. This allows you to run, for example, coding on Codex while keeping reviewers on Claude.
 

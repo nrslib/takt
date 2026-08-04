@@ -1,5 +1,7 @@
 # Faceted Prompting: AIプロンプトへの関心の分離
 
+[English](./faceted-prompting.md)
+
 ## 問題
 
 マルチエージェントシステムが複雑になるにつれ、プロンプトはモノリシックになる。1つのプロンプトファイルにエージェントの役割、行動規範、タスク固有の指示、ドメイン知識、出力形式がすべて混在する。これは3つの問題を生む。
@@ -29,12 +31,18 @@ Faceted Promptingはプロンプトを5つの直交する関心に分解する�
 各関心はそれぞれのディレクトリに独立したファイル（Markdownまたはテンプレート）として格納される。
 
 ```
-workflows/       # ワークフロー定義
-personas/        # WHO — 役割定義
-policies/        # RULES — 禁止事項・品質基準
-instructions/    # WHAT — ステップ手順
-knowledge/       # CONTEXT — 前提知識・参照資料
-output-contracts/ # OUTPUT — 出力契約テンプレート
+builtins/{lang}/
+  workflows/           # ワークフロー定義
+  facets/
+    personas/          # WHO — 役割定義
+    policies/          # RULES — 禁止事項・品質基準
+    instructions/      # WHAT — ステップ手順
+    knowledge/         # CONTEXT — 前提知識・参照資料
+    output-contracts/  # OUTPUT — 出力契約テンプレート
+    partials/          # 他のファセットから参照される共有断片
+
+~/.takt/facets/<type>/   # ユーザー上書き（同じファセット種別）
+.takt/facets/<type>/     # プロジェクト上書き（最優先）
 ```
 
 ### 配置と各ファセットの典型例
@@ -332,14 +340,14 @@ Faceted Promptingの中核メカニズムは**宣言的な合成**である。�
 ```yaml
 name: my-workflow
 max_steps: 10
-initial_step: plan
+initial_step: implement
 
 steps:
   - name: implement
-    persona: coder            # WHO — builtins/{lang}/personas/coder.md
-    policy: coding            # RULES — builtins/{lang}/policies/coding.md
-    instruction: implement    # WHAT — builtins/{lang}/instructions/implement.md
-    knowledge: architecture   # CONTEXT — builtins/{lang}/knowledge/architecture.md
+    persona: coder            # WHO — builtins/{lang}/facets/personas/coder.md
+    policy: coding            # RULES — builtins/{lang}/facets/policies/coding.md
+    instruction: implement    # WHAT — builtins/{lang}/facets/instructions/implement.md
+    knowledge: architecture   # CONTEXT — builtins/{lang}/facets/knowledge/architecture.md
     edit: true
     rules:
       - condition: Implementation complete
@@ -348,12 +356,12 @@ steps:
   - name: review
     persona: architecture-reviewer   # 異なる WHO
     policy: review            # 異なる RULES
-    instruction: review       # 異なる WHAT（共有も可能）
+    instruction: review-arch  # 異なる WHAT（共有も可能）
     knowledge: architecture   # 同じ CONTEXT — 再利用
     output_contracts:
       report:
         - name: review.md
-          format: architecture-review # OUTPUT — builtins/{lang}/output-contracts/architecture-review.md
+          format: architecture-review # OUTPUT — builtins/{lang}/facets/output-contracts/architecture-review.md
     edit: false
     rules:
       - condition: Approved
