@@ -203,6 +203,7 @@ function previewAgentStep(
   if (step.outputContracts && step.outputContracts.length > 0) {
     const reportBuilder = new ReportInstructionBuilder(step, {
       cwd,
+      task: context.task,
       reportDir: '.takt/runs/preview/reports',
       stepIteration: 1,
       language,

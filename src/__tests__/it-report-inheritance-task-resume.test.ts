@@ -222,9 +222,11 @@ function prepareResumedTask(
     taskWithSourceRun.name,
     ['completed'],
     mode,
-    undefined,
-    undefined,
-    resumePoint,
+    {
+      startStep: undefined,
+      retryNote: undefined,
+      resumePoint: resumePoint,
+    },
   );
 }
 

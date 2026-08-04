@@ -12,6 +12,8 @@ In an existing system, contracts are not limited to explicit APIs. Values and st
 | Only file placement or type names change | May still be a maintenance contract change |
 | Closed internal duplication is removed | Internal change if impact is contained |
 
+Existing-contract preservation, current-consumer migration, and legacy support affect different boundaries. For a replaced public API, event, command, configuration, path, or persisted format, current code, existing tests and usage sites, stored or persisted data, published or released status, and placement or isolation at a read boundary reveal impact paths. API compatibility, event upcasters, data migration or backfill, and Read Model rebuilds operate on distinct support boundaries and do not imply one another.
+
 ## Diff Classification
 
 Changes in existing systems are classified by causal relationship to the request. The question is whether the request requires the change, not whether the change is in a touched file.
@@ -55,7 +57,8 @@ Comments and tests may preserve historical constraints or intent. Even comments 
 | Constraint or workaround comments | Preserve |
 | Comments contradicting code | Correct |
 | Comments that only restate function names | May consider deleting |
-| Existing test expectations | Treat as existing contracts |
+| Existing test expectations outside the change scope | Treat as existing contracts |
+| Existing tests that pin the contract being replaced | Evidence of impacted assertions and consumers |
 
 ## Maintenance Change Risk
 

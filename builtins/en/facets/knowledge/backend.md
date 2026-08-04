@@ -420,7 +420,7 @@ data class OrderEntity(
 
 ### Persistence Boundary for Structured Attributes
 
-For structured attributes in relational or read-model persistence, choose the storage format based on update granularity, integrity, size, and schema evolution — not just current query requirements. Do not implicitly use a domain type's generic serialized form as the persistence contract; use a persistence-specific representation or an explicit mapping. Event-store type identifiers and payloads may use an explicit, versioned serialization contract; govern their evolution with the CQRS-ES compatibility and upcaster rules.
+For structured attributes in relational or read-model persistence, choose the storage format based on update granularity, integrity, size, and schema evolution — not just current query requirements. Do not implicitly use a domain type's generic serialized form as the persistence contract; use a persistence-specific representation or an explicit mapping. Event-store type identifiers and payloads may use an explicit, versioned serialization contract.
 
 | Criteria | Judgment |
 |----------|----------|
@@ -428,7 +428,14 @@ For structured attributes in relational or read-model persistence, choose the st
 | Referential integrity, an independent lifecycle, or joins with other tables matter | Normalize into its own table |
 | The DB's structured-column features (jsonb, etc.) can guarantee the needed search, indexing, and partial updates, and integrity requirements are met | A structured column is also a valid choice |
 | Domain type is converted directly by a generic serializer, implicitly using its field names as the DB schema | REJECT. Insert a persistence-specific representation or an explicit mapping |
-| Field changes to stored structures have no chosen path among compatible reads, migration, or rebuild, and no test pinning it | REJECT. Choose one path and pin it with a test |
+
+Historical event-payload translation, relational database schema or data migration, and Read Model rebuilds are separate responsibilities. An upcaster translates versioned event payloads at the event-store restoration boundary. Database schema or data migration and Read Model rebuilds belong to their respective persistence boundaries and tests.
+
+| Target | Placement |
+|--------|-----------|
+| Historical event-payload translation | Upcaster at the event-store restoration boundary |
+| Relational schema or data transformation | Database migration boundary |
+| Read Model derived from events | Read Model rebuild process |
 
 ## Authentication & Authorization Placement
 

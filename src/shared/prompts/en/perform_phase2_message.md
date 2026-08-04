@@ -2,7 +2,7 @@
 <!--
   template: perform_phase2_message
   phase: 2 (report output)
-  vars: workingDirectory, hasGitRules, gitRules, reportContext, hasLastResponse, lastResponse,
+  vars: workingDirectory, hasTask, task, hasGitRules, gitRules, reportContext, hasLastResponse, lastResponse,
         hasReportOutput, reportOutput, hasOutputContract, outputContract, structuredPublication
   builder: ReportInstructionBuilder
 -->
@@ -23,6 +23,14 @@ Note: This section is metadata. Follow the language used in the rest of the prom
 
 ## Workflow Context
 {{reportContext}}
+{{#if hasTask}}
+
+## Original Task Context
+
+The following is the original task given to this workflow. Treat it as the authoritative source of requirements:
+
+{{task}}
+{{/if}}
 {{#if hasLastResponse}}
 
 ## Previous Work Context

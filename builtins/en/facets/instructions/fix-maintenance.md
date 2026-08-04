@@ -1,4 +1,4 @@
-Use reports in the Report Directory and fix reviewer findings within the causally related scope while preserving existing contracts.
+Use reports in the Report Directory and fix reviewer findings within the causally related scope while preserving existing contracts outside the requested change scope.
 
 **Fix principles:**
 - When a finding includes a "suggested fix", follow it rather than inventing your own workaround

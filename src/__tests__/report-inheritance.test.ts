@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, win32 } from 'node:path';
 import { inheritReviewReports } from '../core/workflow/report-inheritance.js';
 import {
+  proveWorkflowCallRunNamespacePathsCorrespond,
   workflowCallReportRequestSegmentsMatch,
   workflowCallRunNamespaceSegmentsCorrespond,
 } from '../core/workflow/workflow-call-namespace.js';
@@ -75,6 +76,10 @@ describe('inheritReviewReports', () => {
       'iteration-1--step-peer-review',
       'iteration-2--step-peer-review',
     )).toBe(false);
+    expect(proveWorkflowCallRunNamespacePathsCorrespond(
+      ['iteration-1--step-peer-review--workflow-reviewers'],
+      ['iteration-2--step-peer-review--workflow-reviewers'],
+    )).toEqual({ matches: true });
   });
 
   it('should copy the newest review report from a previous nested workflow into the current report directory', () => {

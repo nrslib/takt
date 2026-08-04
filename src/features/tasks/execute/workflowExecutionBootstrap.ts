@@ -341,7 +341,8 @@ export async function createWorkflowExecutionBootstrap(
         handlerRef.current(event);
       };
 
-  const isRetry = Boolean(options.startStep || options.retryNote || options.resumePoint);
+  const isRetry = Boolean(options.startStep || options.retryNote || options.resumePoint || options.restartPoint);
+  const shouldLoadSavedSessions = isRetry && options.restartPoint === undefined;
   const isWorktree = cwd !== projectCwd;
   log.debug('Session mode', { isRetry, isWorktree });
 
@@ -546,7 +547,7 @@ export async function createWorkflowExecutionBootstrap(
     workflowSessionId,
   );
   const structuredCaller = new CapabilityAwareStructuredCaller();
-  const savedSessions = isRetry
+  const savedSessions = shouldLoadSavedSessions
     ? (isWorktree
       ? loadWorktreeSessions(projectCwd, cwd, currentProvider)
       : loadPersonaSessions(projectCwd, currentProvider))

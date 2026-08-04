@@ -57,6 +57,7 @@ import {
 import { getWorkflowReference } from '../core/workflow/workflow-reference.js';
 import { buildWorkflowCallSiteIdentity } from '../core/workflow/workflow-call-site-identity.js';
 import { buildWorkflowCallInvocationIdentity } from '../core/workflow/workflow-call-invocation-index.js';
+import { buildWorkflowCallNamespaceSegment } from '../core/workflow/workflow-call-namespace.js';
 import { trimResumePointStackForWorkflow } from '../core/workflow/run/resume-point.js';
 import { parseWorkflowResumePoint } from '../core/workflow/resume-point-codec.js';
 import {
@@ -301,6 +302,34 @@ function expectCanonicalRootWorkflowCallInvocation(
   });
 }
 
+function expectPendingRootWorkflowCallInvocation(
+  resumePoint: WorkflowResumePoint,
+  parentConfig: WorkflowConfig,
+  childWorkflowName: string,
+  occurrence = 1,
+): void {
+  expect(resumePoint.stack[0]).toMatchObject({
+    workflow: parentConfig.name,
+    step: 'delegate',
+    kind: 'workflow_call',
+    occurrence,
+    call_instance: occurrence,
+  });
+  const identity = buildWorkflowCallInvocationIdentity(
+    getWorkflowReference(parentConfig),
+    'delegate',
+    [],
+  );
+  expect(resumePoint.workflow_call_invocations[identity]).toEqual({
+    call_instance: occurrence,
+    report_namespace_segment: `${buildWorkflowCallNamespaceSegment(
+      'delegate',
+      childWorkflowName,
+      occurrence,
+    )}--site-${'0'.repeat(64)}`,
+  });
+}
+
 function createWorkflowCallAutoRoutingConfig(): AutoRoutingConfig {
   return {
     strategy: 'balanced',
@@ -439,7 +468,7 @@ describe('WorkflowEngine workflow_call integration', () => {
 
     expect(state.status, state.lastOutput?.content).toBe('completed');
     expect(resumePointAtParentStart).toBeDefined();
-    expectCanonicalRootWorkflowCallInvocation(resumePointAtParentStart!, config, childConfig);
+    expectPendingRootWorkflowCallInvocation(resumePointAtParentStart!, config, childConfig.name);
   });
 
   it('runSingleIteration は先頭 workflow_call の実行前に canonical invocation を記録する', async () => {
@@ -2795,11 +2824,9 @@ steps:
         next: ABORT
 `);
 
-    engine = new WorkflowEngine(loadWorkflowOrThrow('a', tmpDir), tmpDir, 'Detect workflow call cycle', createWorkflowCallOptions(tmpDir));
-
-    const state = await engine.run();
-
-    expect(state.status).toBe('aborted');
+    expect(() => loadWorkflowOrThrow('a', tmpDir)).toThrow(
+      'Configuration error: recursive workflow_call cycle detected',
+    );
     expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
   });
 
@@ -5472,7 +5499,11 @@ steps:
           iteration: 7,
           elapsed_ms: 183245,
           workflow_call_invocations: {
-            '{"workflow":"parent","step":"delegate","calls":[]}': {
+            [buildWorkflowCallInvocationIdentity(
+              getWorkflowReference(parentConfig),
+              'delegate',
+              [],
+            )]: {
               call_instance: 1,
               report_namespace_segment: expectedWorkflowCallNamespace(
                 parentConfig,
@@ -5663,7 +5694,7 @@ steps:
         iteration: 7,
         elapsed_ms: 183245,
         workflow_call_invocations: {
-          '{"workflow":"parent","step":"delegate","calls":[]}': {
+          [buildWorkflowCallInvocationIdentity('parent', 'delegate', [])]: {
             call_instance: 3,
             report_namespace_segment: expectedWorkflowCallNamespace(
               config,

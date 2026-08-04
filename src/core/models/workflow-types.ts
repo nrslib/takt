@@ -12,6 +12,7 @@ import type {
   StepProviderOptions,
   WorkflowCallOverrides,
   WorkflowRuntimeConfig,
+  WorkflowStepKind,
 } from './workflow-provider-options.js';
 import type {
   WorkflowEffect,
@@ -156,6 +157,19 @@ export interface WorkflowSubworkflowConfig {
 export interface WorkflowResumePointEntry extends CanonicalWorkflowResumeFrame {
   step_iterations?: Record<string, number>;
   call_instance?: number;
+}
+
+export type WorkflowRestartPointEntry = Omit<
+  WorkflowResumePointEntry,
+  'workflow_ref' | 'occurrence' | 'kind' | 'step_iterations' | 'call_instance'
+> & {
+  workflow_ref: string;
+  kind: WorkflowStepKind;
+  call_instance?: 1;
+};
+
+export interface WorkflowRestartPoint {
+  stack: WorkflowRestartPointEntry[];
 }
 
 export interface WorkflowResumePoint {

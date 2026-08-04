@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { TaskFileSchema, type TaskFileData, type TaskRecord } from './schema.js';
+import { TASK_RESTART_POINT_KEY } from './taskExecutionSchemas.js';
 import { buildTaskInstruction } from './instruction.js';
 import { firstLine } from './naming.js';
 import type { TaskInfo, TaskListItem } from './types.js';
@@ -55,6 +56,7 @@ function buildTaskFileData(task: TaskRecord, content: string): TaskFileData {
     exceeded_max_steps: task.exceeded_max_steps,
     exceeded_current_iteration: task.exceeded_current_iteration,
     resume_point: task.resume_point,
+    [TASK_RESTART_POINT_KEY]: task[TASK_RESTART_POINT_KEY],
     source: task.source,
     pr_number: task.pr_number,
     context_pr_number: task.context_pr_number,

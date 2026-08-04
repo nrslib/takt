@@ -6,14 +6,14 @@ import { buildWorkflowCallInvocationIdentity } from '../../core/workflow/workflo
 import { buildWorkflowCallNamespaceSegment } from '../../core/workflow/workflow-call-namespace.js';
 
 export function buildWorkflowCallNamespaceFixture(
-  workflowReference: string,
+  _workflowReference: string,
   step: string,
-  ownerPath: readonly WorkflowResumePointEntry[],
+  _ownerPath: readonly WorkflowResumePointEntry[],
   childWorkflowReference: string,
   callInstance: number | '*',
 ): string {
   return buildWorkflowCallNamespaceSegment(
-    buildWorkflowCallInvocationIdentity(workflowReference, step, ownerPath),
+    step,
     childWorkflowReference,
     callInstance,
   );
@@ -61,11 +61,11 @@ export function buildWorkflowCallInvocationFixture(
       throw new Error(`workflow_call fixture is missing its child entry: ${entry.step}`);
     }
     return [{
-      workflowReference: entry.workflow_ref ?? entry.workflow,
+      workflowReference: entry.workflow_ref,
       step: entry.step,
       ownerPath: stack.slice(0, index),
       callInstance: entry.call_instance,
-      childWorkflowReference: childEntry.workflow_ref ?? childEntry.workflow,
+      childWorkflowReference: childEntry.workflow_ref,
     }];
   }));
 }

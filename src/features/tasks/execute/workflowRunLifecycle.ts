@@ -216,7 +216,7 @@ class WorkflowRunLifecycleAdapter {
         },
       }),
       bindExecution: async (
-        _context: Omit<WorkflowRunExecutionContext, 'runPaths'>,
+        context: Omit<WorkflowRunExecutionContext, 'runPaths'>,
       ) => {
         if (bound) {
           throw new Error(
@@ -227,12 +227,16 @@ class WorkflowRunLifecycleAdapter {
         const executionControl = createWorkflowRunExecutionControl(
           abortController,
         );
+        const findingResumeSource = context.workflowConfig.findingContract !== undefined
+          || input.resumeSource?.resumeMode === 'requeue'
+          ? input.resumeSource
+          : undefined;
         findingStorage = createFindingStorageResolver({
           runPaths,
           cwd: this.#cwd,
-          ...(input.resumeSource === undefined
+          ...(findingResumeSource === undefined
             ? {}
-            : { resumeSource: input.resumeSource }),
+            : { resumeSource: findingResumeSource }),
         });
         const findingAuthorityResolver = createFindingAuthorityResolver(
           findingStorage,

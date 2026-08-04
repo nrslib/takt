@@ -25,6 +25,8 @@ import { FINDING_REVIEW_PUBLICATION_SCHEMA_REF } from '../findings/review-public
 export interface ReportInstructionContext {
   /** Working directory */
   cwd: string;
+  /** Original workflow task. */
+  task?: string;
   /** Report directory path */
   reportDir: string;
   /** Step iteration (for {step_iteration} replacement) */
@@ -69,7 +71,7 @@ export class ReportInstructionBuilder {
     let reportOutput = '';
     let hasReportOutput = false;
     const instrContext: InstructionContext = {
-      task: '',
+      task: this.context.task ?? '',
       iteration: 0,
       maxSteps: 0,
       stepIteration: this.context.stepIteration,
@@ -113,6 +115,8 @@ export class ReportInstructionBuilder {
 
     return loadTemplate('perform_phase2_message', language, {
       workingDirectory: this.context.cwd,
+      hasTask: this.context.task != null && this.context.task.trim().length > 0,
+      task: this.context.task ?? '',
       hasGitRules,
       gitRules,
       reportContext,

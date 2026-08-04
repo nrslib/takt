@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import type { WorkflowResumePoint } from '../../../core/models/index.js';
+import type { WorkflowRestartPoint, WorkflowResumePoint } from '../../../core/models/index.js';
 import { resolveConfigValue } from '../../../infra/config/index.js';
 import {
   resolveCloneBaseDir,
@@ -30,6 +30,7 @@ function shouldSyncProjectLocalTaktOnReuse(
   task: TaskInfo,
   configuredStartStep: string | undefined,
   resumePoint: WorkflowResumePoint | undefined,
+  restartPoint: WorkflowRestartPoint | undefined,
   retryNote: unknown,
 ): boolean {
   if (task.status === 'failed' || task.status === 'pr_failed' || task.status === 'exceeded') {
@@ -38,6 +39,7 @@ function shouldSyncProjectLocalTaktOnReuse(
 
   return configuredStartStep !== undefined
     || resumePoint !== undefined
+    || restartPoint !== undefined
     || typeof retryNote === 'string';
 }
 
@@ -46,6 +48,7 @@ export function resolveReusedWorktreeExecution(
   task: TaskInfo,
   configuredStartStep: string | undefined,
   resumePoint: WorkflowResumePoint | undefined,
+  restartPoint: WorkflowRestartPoint | undefined,
   retryNote: unknown,
 ): ReusedWorktreeExecution | undefined {
   const worktreePath = task.worktreePath;
@@ -54,7 +57,7 @@ export function resolveReusedWorktreeExecution(
   }
 
   if (
-    shouldSyncProjectLocalTaktOnReuse(task, configuredStartStep, resumePoint, retryNote)
+    shouldSyncProjectLocalTaktOnReuse(task, configuredStartStep, resumePoint, restartPoint, retryNote)
     && resolveConfigValue(projectDir, 'syncProjectLocalTaktOnRetry')
   ) {
     syncProjectLocalTaktForRetry(projectDir, worktreePath);

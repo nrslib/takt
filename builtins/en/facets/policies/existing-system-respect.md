@@ -6,7 +6,7 @@ For released or operational systems, make changes that are causally related to t
 
 | Principle | Criteria |
 |-----------|----------|
-| Existing contracts first | Preserve contracts relied on by users, tests, and operations |
+| Existing contracts first | Preserve contracts outside the requested change scope that users, tests, and operations rely on |
 | Causal diff | Make changes causally related to the request; exclude changes without causal relationship |
 | Necessity over proximity | Do not use nearby code as a reason to change it |
 | Respect existing structure | Do not change file placement, type names, public APIs, or responsibility boundaries without causal relationship to the request |
@@ -39,6 +39,8 @@ In existing-system maintenance, apply general quality policies such as coding, f
 | Existing structure is imperfect, but not causally related to the request | Preserve existing structure |
 | Satisfying a quality criterion requires changing an existing contract | Requires an explicit user request or plan-level rationale |
 | Structural change causally related to the request | Make it with reason and impact scope documented |
+
+Do not confuse existing-contract preservation, consumer migration, and backward compatibility, legacy support, migration support, or coexistence. When a requirement targets a contract for replacement—including a public API, event, command, configuration, path, or persisted format—migrate current consumers to the new contract. Add or retain only superseded-contract production, reading, aliases, conversion, upcasters, fallback, backfill, data migration, or rebuilds necessary for backward compatibility, legacy support, migration support, or coexistence explicitly required by the requirement source for that target and scope and, when time-bounded, its stated period and end condition. Treat API compatibility, event upcasters, data migration or backfill, and Read Model rebuilds as independent support targets; authority for one does not authorize another. Current code, existing tests and usage sites, stored or persisted data, published or released status, and placement or isolation at a read boundary justify impact analysis, but do not create authority for that support.
 
 ## Observable Contracts
 

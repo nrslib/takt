@@ -1,7 +1,9 @@
 import type {
   WorkflowConfig,
+  WorkflowRestartPointEntry,
   WorkflowResumeFrameKind,
   WorkflowResumePointEntry,
+  WorkflowStepKind,
 } from '../models/types.js';
 
 const WORKFLOW_OPAQUE_REF = Symbol.for('takt.workflowOpaqueRef');
@@ -39,6 +41,21 @@ export function buildWorkflowResumePointEntry(
   };
 }
 
+export function buildWorkflowRestartPointEntry(
+  workflow: WorkflowConfig,
+  step: string,
+  kind: WorkflowStepKind,
+  callInstance?: 1,
+): WorkflowRestartPointEntry {
+  return {
+    workflow: workflow.name,
+    workflow_ref: getWorkflowReference(workflow),
+    step,
+    kind,
+    ...(callInstance === undefined ? {} : { call_instance: callInstance }),
+  };
+}
+
 export function getResumePointWorkflowReference(entry: WorkflowResumePointEntry): string {
   return entry.workflow_ref;
 }
@@ -46,7 +63,7 @@ export function getResumePointWorkflowReference(entry: WorkflowResumePointEntry)
 export function normalizeWorkflowResumePointEntry(
   entry: WorkflowResumePointEntry,
 ): WorkflowResumePointEntry {
-  if (entry.call_instance !== undefined) {
+  if (entry.kind !== 'workflow_call' || entry.call_instance !== undefined) {
     return entry;
   }
   const callInstance = entry.step_iterations?.[entry.step];
@@ -61,6 +78,22 @@ export function workflowEntryMatchesWorkflow(
   workflow: WorkflowConfig,
 ): boolean {
   return entry.workflow_ref === getWorkflowReference(workflow);
+}
+
+export function workflowRestartEntryMatchesWorkflow(
+  entry: WorkflowRestartPointEntry,
+  workflow: WorkflowConfig,
+): boolean {
+  return entry.workflow_ref === getWorkflowReference(workflow);
+}
+
+export function workflowRestartEntryMatchesRuntime(
+  runtimeEntry: WorkflowResumePointEntry,
+  restartEntry: WorkflowRestartPointEntry,
+): boolean {
+  const normalizedRuntimeEntry = normalizeWorkflowResumePointEntry(runtimeEntry);
+  return normalizedRuntimeEntry.workflow_ref === restartEntry.workflow_ref
+    && normalizedRuntimeEntry.call_instance === restartEntry.call_instance;
 }
 
 export function workflowEntriesMatch(

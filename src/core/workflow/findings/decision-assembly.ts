@@ -484,7 +484,7 @@ function assembleRawDecisions(input: {
         accepted.push(decision);
         break;
       case 'conflict':
-        if (classifyConflictTarget({
+        if (finding.status === 'open' && classifyConflictTarget({
           ledger: input.previousLedger,
           targetFindingId: findingId,
         }).kind === 'provisional_target') {

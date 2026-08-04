@@ -69,6 +69,10 @@ Check the summary in `.takt/runs/*/reports/review-summary.md`. If the result is 
 
 If CodeRabbit reviews your PR, go through each comment, decide whether it should be addressed, and act on the ones that should be. **Resolve every thread** — whether you applied a change or consciously decided not to (in which case leave a short note explaining why). Don't leave comments unaddressed and unresolved.
 
+## PR Comment Commands (permission-gated)
+
+Comment commands consume paid AI API credits, so they are permission-gated: `/review` responds to the repository owner, org members, and collaborators; `/resolve`, `/ci`, and `@takt` respond to the owner only. On PRs from external contributors these commands do not respond (the workflow simply does not start) — that's expected, not a bug. Regular CI runs automatically on every PR; if you think an extra run would help, just ask in a comment.
+
 ## Code Style
 
 - TypeScript strict mode

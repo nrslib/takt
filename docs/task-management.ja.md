@@ -185,6 +185,7 @@ takt list
 
 | 操作 | 説明 |
 |------|------|
+| **Requeue** | Resume または Restart の位置を選択し、会話を開かずタスクを `pending` に戻す |
 | **Retry** | 失敗コンテキスト付きのリトライ会話を開き、再実行 |
 | **Delete** | 失敗したタスクレコードを削除 |
 
@@ -215,11 +216,17 @@ takt list
 
 1. 失敗の詳細を表示（失敗した step、エラーメッセージ、最後のエージェントメッセージ）
 2. Workflow の選択を促す
-3. どの step から開始するかの選択を促す（デフォルトは失敗した step）
+3. **Resume failed position**、またはページ化された workflow 階層をたどって **Restart from** を選択するよう促す
 4. 失敗コンテキスト、実行セッションデータ、workflow 構造がプリロードされたリトライ会話を開く
 5. AI の支援で指示を精緻化
 
-リトライ会話は Instruct モードと同じ操作（実行、タスク保存、キャンセル）をサポートします。リトライのメモは複数のリトライ試行にわたってタスクレコードに蓄積されます。
+**Requeue** も同じ workflow と開始位置の選択を使用しますが、会話を開かずタスクを `pending` として保存します。保存済み checkpoint の path を解決できる場合は **Resume failed position** を選択でき、checkpoint の call stack、iteration counter、その他の実行状態を維持します。**Restart from** は、古い checkpoint の iteration、elapsed time、step iteration を引き継がず、選択した完全 path から新しい論理 execution を開始します。
+
+Restart の選択肢は、現在の workflow 階層ごとにページ化されます。**Next page** と **Previous page** ですべての authored step へ移動し、**Browse child workflow from** では選択した `workflow_call` の子だけを開き、**Back to parent workflow** で親へ戻ります。`workflow_call` 自体は別の **Restart from** 選択肢として残ります。call 自体を選ぶと子 workflow の `initial_step` から実行し、子を閲覧すると子の authored step を選択できます。
+
+Restart の確定時には、すべての親 workflow、`workflow_call` step、子 workflow、選択した子 step を含む完全 path が表示されるため、同名の nested 位置も区別できます。Root と nested の Restart path は同じ構造化形式で保存され、実行直前に再検証されます。選択した step、workflow identity、または step kind が変わった場合は、開始位置を暗黙に変更せず拒否します。現在の initial step だけが変わっても、選択した step が引き続き有効なら Restart path は無効になりません。
+
+リトライ会話は Instruct モードと同じ操作（実行、タスク保存、キャンセル）をサポートします。即時の **Execute** と **Save task**（`save_task`）は、選択した Resume または Restart の契約を共通して使用します。リトライのメモは複数のリトライ試行にわたってタスクレコードに蓄積されます。
 
 ### 非インタラクティブモード（`--non-interactive`）
 

@@ -6,6 +6,7 @@ import {
   agent,
   methods,
   ndJsonStream,
+  RequestError,
   type AgentContext,
   type AgentApp,
   type NewSessionRequest,
@@ -88,14 +89,18 @@ const acpTaskContextSchema = z.object({
 
 const streamSessionNewRequestParser = {
   parse(params: unknown): StreamSessionNewRequest {
-    const request = z.object({
+    const result = z.object({
       cwd: z.string(),
       additionalDirectories: z.array(z.string()).optional(),
       defaultAction: z.enum(['enqueue', 'direct']).optional(),
       taskContext: acpTaskContextSchema,
       mcpServers: z.array(acpMcpServerSchema).optional(),
       _meta: acpMetadataSchema,
-    }).parse(params);
+    }).safeParse(params);
+    if (!result.success) {
+      throw RequestError.invalidParams({ issues: result.error.issues });
+    }
+    const request = result.data;
     return {
       ...request,
       mcpServers: request.mcpServers ?? [],

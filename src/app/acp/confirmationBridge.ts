@@ -185,7 +185,7 @@ export async function askUserQuestionViaAcp(
         requestedSchema: buildQuestionSchema(question),
       });
       const response = await waitForElicitationResponse(elicitation, abortSignal);
-      if (response.action !== 'accept') {
+      if (response.action === 'decline' || response.action === 'cancel') {
         await sendSessionUpdate?.(sessionId, {
           kind: 'workflow_event',
           event: {

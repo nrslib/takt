@@ -1,5 +1,8 @@
 function encodeWorkflowNamespaceValue(value: string): string {
-  return encodeURIComponent(value).replace(/[!'()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
+  return encodeURIComponent(value).replace(
+    /[!'()*]/g,
+    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
 }
 
 const WORKFLOW_CALL_NAMESPACE_PATTERN = /^iteration-([1-9]\d*|\*)--step-([^/]+)--workflow-([^/]+?)(?:--site-([a-f0-9]{64}))?$/;
@@ -9,6 +12,10 @@ export interface WorkflowCallNamespace {
   readonly stepName: string;
   readonly workflowName: string;
   readonly siteDigest?: string;
+}
+
+export function isWorkflowCallNamespaceSegment(segment: string): boolean {
+  return parseWorkflowCallNamespaceSegment(segment) !== undefined;
 }
 
 export function parseWorkflowCallNamespaceSegment(
@@ -85,6 +92,45 @@ export function workflowCallRunNamespacePathsCorrespond(
 ): boolean {
   return source.length === target.length
     && source.every((segment, index) => workflowCallRunNamespaceSegmentsCorrespond(segment, target[index]!));
+}
+
+export type WorkflowCallNamespaceCorrespondenceProof =
+  | { readonly matches: true }
+  | { readonly matches: false; readonly reason: string };
+
+function proveWorkflowCallRunNamespaceSegmentsCorrespond(
+  source: string,
+  target: string,
+): WorkflowCallNamespaceCorrespondenceProof {
+  if (workflowCallRunNamespaceSegmentsCorrespond(source, target)) {
+    return { matches: true };
+  }
+  if (
+    parseWorkflowCallNamespaceSegment(source) !== undefined
+    && parseWorkflowCallNamespaceSegment(target) !== undefined
+  ) {
+    return { matches: false, reason: 'scope_mismatch' };
+  }
+  return { matches: false, reason: 'unsupported_namespace_format' };
+}
+
+export function proveWorkflowCallRunNamespacePathsCorrespond(
+  source: readonly string[],
+  target: readonly string[],
+): WorkflowCallNamespaceCorrespondenceProof {
+  if (source.length !== target.length) {
+    return { matches: false, reason: 'namespace_depth_mismatch' };
+  }
+  for (let index = 0; index < source.length; index += 1) {
+    const proof = proveWorkflowCallRunNamespaceSegmentsCorrespond(
+      source[index]!,
+      target[index]!,
+    );
+    if (!proof.matches) {
+      return { matches: false, reason: `namespace_segment_${index}:${proof.reason}` };
+    }
+  }
+  return { matches: true };
 }
 
 export function buildWorkflowCallNamespaceSegment(

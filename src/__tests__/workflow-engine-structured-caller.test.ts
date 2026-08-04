@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -4245,6 +4245,16 @@ describe('WorkflowEngine structured caller defaults', () => {
     // finding id を参照している（どちらも捨てられていない）。
     expect(persistedLedger.findings).toHaveLength(1);
     expect(persistedLedger.findings[0]?.rawFindingIds).toEqual(expect.arrayContaining(rawFindingIds));
+
+    const reportsRoot = join(cwd, '.takt', 'runs', 'test-report-dir', 'reports', 'subworkflows');
+    const reportNamespaces = readdirSync(reportsRoot);
+    expect(reportNamespaces).toHaveLength(2);
+    expect(reportNamespaces.map((namespace) => (
+      readFileSync(join(reportsRoot, namespace, 'review.md'), 'utf-8')
+    ))).toEqual([
+      'Parallel workflow_call duplicate finding.',
+      'Parallel workflow_call duplicate finding.',
+    ]);
   });
 
   it('同じ workflow_call ステップがループで再実行されても、別イテレーションの raw finding id は衝突せず、台帳に別々の raw finding として残る', async () => {

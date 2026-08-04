@@ -1,5 +1,7 @@
 既存の要件と受入条件は変更せず、最新の計画、実装、テスト、レビュー報告、Finding Contract の状態を確認して、実装方針を再定義してください。
 
+{{include:instructions/requirement-source-discipline}}
+
 次を満たしてください。
 
 - 未解決 finding と同じ `family_tag` の再発をまとめて解消する方針にする

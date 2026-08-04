@@ -11,7 +11,7 @@ import type {
 } from '../../../core/models/config-types.js';
 import type { ProviderPermissionProfiles } from '../../../core/models/provider-profiles.js';
 import type { StepProviderOptions } from '../../../core/models/workflow-types.js';
-import type { McpServerConfig, WorkflowResumePoint } from '../../../core/models/index.js';
+import type { McpServerConfig, WorkflowRestartPoint, WorkflowResumePoint } from '../../../core/models/index.js';
 import type { ProviderType } from '../../../shared/types/provider.js';
 import type {
   AskUserQuestionHandler,
@@ -201,6 +201,8 @@ export interface WorkflowExecutionOptions {
   retryNote?: string;
   /** Resume point for workflow_call-aware retries */
   resumePoint?: WorkflowResumePoint;
+  /** Stateless authored path for retrying from a new nested position. */
+  restartPoint?: WorkflowRestartPoint;
   resumeSource?: RunResumeSource;
   /** Resolver used to inspect workflow_call targets before engine construction. */
   workflowCallResolver?: WorkflowCallResolver;
@@ -285,6 +287,8 @@ export interface ExecuteTaskOptions {
   retryNote?: string;
   /** Resume point for workflow_call-aware retries */
   resumePoint?: WorkflowResumePoint;
+  /** Stateless authored path for retrying from a new nested position. */
+  restartPoint?: WorkflowRestartPoint;
   resumeSource?: RunResumeSource;
   /** Override report directory name (e.g. "20260201-015714-foptng") */
   reportDirName?: string;

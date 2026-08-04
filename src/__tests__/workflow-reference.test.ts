@@ -7,8 +7,11 @@ import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.
 import { attachWorkflowOpaqueRef } from '../infra/config/loaders/workflowSourceMetadata.js';
 import {
   buildWorkflowResumePointEntry,
+  buildWorkflowRestartPointEntry,
   getWorkflowReference,
+  workflowEntriesMatch,
   workflowEntryMatchesWorkflow,
+  workflowRestartEntryMatchesWorkflow,
 } from '../core/workflow/workflow-reference.js';
 import { trimResumePointStackForWorkflow } from '../core/workflow/run/resume-point.js';
 
@@ -29,6 +32,62 @@ afterEach(() => {
 });
 
 describe('workflow-reference', () => {
+  it('should store the canonical ref when a restart entry uses the workflow name', () => {
+    const workflow = normalizeWorkflowConfig({
+      name: 'default',
+      initial_step: 'review',
+      steps: [{ name: 'review', persona: 'reviewer', instruction: 'Review' }],
+    }, '/tmp/project');
+
+    expect(buildWorkflowRestartPointEntry(workflow, 'review', 'agent')).toEqual({
+      workflow: 'default',
+      workflow_ref: 'default',
+      step: 'review',
+      kind: 'agent',
+    });
+  });
+
+  it('should distinguish restart identity when opaque refs differ for the same workflow name', () => {
+    const workflow = attachWorkflowOpaqueRef(normalizeWorkflowConfig({
+      name: 'shared',
+      initial_step: 'review',
+      steps: [{ name: 'review', persona: 'reviewer', instruction: 'Review' }],
+    }, '/tmp/project'), 'project:shared-a');
+
+    expect(workflowRestartEntryMatchesWorkflow({
+      workflow: 'shared',
+      workflow_ref: 'project:shared-a',
+      step: 'review',
+      kind: 'agent',
+    }, workflow)).toBe(true);
+    expect(workflowRestartEntryMatchesWorkflow({
+      workflow: 'shared',
+      workflow_ref: 'project:shared-b',
+      step: 'review',
+      kind: 'agent',
+    }, workflow)).toBe(false);
+  });
+
+  it('agent entry の step iteration 差分を workflow_call instance として比較しない', () => {
+    expect(workflowEntriesMatch(
+      {
+        workflow: 'parent',
+        workflow_ref: 'parent',
+        step: 'reviewers',
+        kind: 'agent',
+        occurrence: 1,
+        step_iterations: { reviewers: 1 },
+      },
+      {
+        workflow: 'parent',
+        workflow_ref: 'parent',
+        step: 'reviewers',
+        kind: 'agent',
+        occurrence: 1,
+        step_iterations: { reviewers: 2 },
+      },
+    )).toBe(true);
+  });
   it('core は非公開 metadata の opaque ref で resume_point を解決する', () => {
     const workflow = attachWorkflowOpaqueRef(normalizeWorkflowConfig({
       name: 'shared/workflow',

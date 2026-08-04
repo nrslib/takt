@@ -86,6 +86,7 @@ export class OptionsBuilder {
       reviewerOutputStrategy: FindingContractReviewerOutputStrategy | undefined,
       reviewScopeSnapshotId?: string,
     ) => FindingContractInstructionContext | undefined,
+    private readonly getTask?: () => string,
   ) {}
 
   /**
@@ -591,6 +592,7 @@ export class OptionsBuilder {
     const stepProvider = this.resolveStepProviderModel(step, runtime);
     return {
       cwd: this.getCwd(),
+      task: this.getTask?.(),
       reportDir: join(this.getCwd(), this.getReportDir()),
       language: this.getLanguage(),
       interactive: this.engineOptions.interactive,

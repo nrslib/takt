@@ -182,6 +182,7 @@ describe('runReportPhase retry with new session', () => {
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
     const step = createStep('02-coder.md');
     const ctx = createContext(reportDir, 'Implemented feature X');
+    ctx.task = 'Preserve this original task marker in the report context';
     ctx.onProviderAttempt = vi.fn();
     const failedUsage = { inputTokens: 3, outputTokens: 1, totalTokens: 4, usageMissing: false };
     const successfulUsage = { inputTokens: 5, outputTokens: 2, totalTokens: 7, usageMissing: false };
@@ -212,6 +213,8 @@ describe('runReportPhase retry with new session', () => {
     const reportPath = join(reportDir, '02-coder.md');
     expect(readFileSync(reportPath, 'utf-8')).toBe('# Report\nRecovered output');
     expect(runAgentMock).toHaveBeenCalledTimes(2);
+    expect(runAgentMock.mock.calls[0]?.[1]).toContain(ctx.task);
+    expect(runAgentMock.mock.calls[1]?.[1]).toContain(ctx.task);
     expect(ctx.onProviderAttempt).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({ provider: 'opencode' }),

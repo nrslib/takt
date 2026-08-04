@@ -72,6 +72,8 @@ export type {
   WorkflowSubworkflowParamConfig,
   WorkflowSubworkflowConfig,
   WorkflowResumePointEntry,
+  WorkflowRestartPointEntry,
+  WorkflowRestartPoint,
   WorkflowResumePoint,
   WorkflowCallInvocationRecord,
   WorkflowStepParticipationRecord,

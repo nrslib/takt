@@ -238,7 +238,7 @@ When the same workflow name exists in multiple locations, TAKT resolves in this 
 
 | Workflow | Use Case |
 |-------|----------|
-| `default` | Standard development workflow. Test-first with AI antipattern review and parallel review (architecture + supervisor). |
+| `default` | Standard development workflow. Test-first with multi-perspective parallel peer review (architecture, AI antipattern, coding, semantics, contract lifecycle, robustness), adjudication, and a convergent fix loop. |
 | `frontend` | Frontend development workflow. |
 | `backend` | Backend development workflow. |
 | `dual` | Combined frontend + backend workflow. |

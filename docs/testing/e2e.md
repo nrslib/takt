@@ -7,7 +7,7 @@ E2Eテストを追加・変更した場合は、このドキュメントも更�
 - `takt-testing` リポジトリが対象アカウントに存在すること（E2Eがクローンして使用）。
 - 必要に応じて `TAKT_E2E_PROVIDER` を設定すること（例: `claude` / `codex` / `cursor` / `opencode`）。
 - `TAKT_E2E_PROVIDER=cursor` の場合は `cursor-agent` CLI が利用可能で、認証済みであること。
-- `TAKT_E2E_PROVIDER=opencode` の場合は `TAKT_E2E_MODEL` が必須。既定は `ollama-cloud/qwen3-coder-next`（`team_leader` の構造化分解をこなせる能力が必要。`opencode/big-pickle` のような小型無料モデルでは分解が失敗する）。
+- `TAKT_E2E_PROVIDER=opencode` の場合はモデル指定が必要。npm script（`test:e2e:provider:opencode`）は `TAKT_E2E_MODEL` 未指定時に `ollama-cloud/qwen3.5:397b` を既定として使う。vitest を直接実行する場合は `TAKT_E2E_MODEL` を明示すること（`team_leader` の構造化分解をこなせる能力が必要。`opencode/big-pickle` のような小型無料モデルでは分解が失敗する）。
 - 実行時間が長いテストがあるため、タイムアウトに注意すること。
 - E2Eは `e2e/helpers/test-repo.ts` が一時リポジトリを作成する。mock 固定テストはローカル bare origin を使い、GitHub 固有テストだけ `gh` でリポジトリをクローンする。
 - 対話UIを避けるため、E2E環境では `TAKT_NO_TTY=1` を設定してTTYを無効化する。
@@ -33,13 +33,17 @@ E2Eテストを追加・変更した場合は、このドキュメントも更�
 - `npm run test:e2e:provider:claude-sdk`: `TAKT_E2E_PROVIDER=claude-sdk` で実行。
 - `npm run test:e2e:provider:codex`: `TAKT_E2E_PROVIDER=codex` で実行。
 - `npm run test:e2e:provider:cursor`: `TAKT_AUTO_PR=false TAKT_E2E_PROVIDER=cursor` で実行（Cursor専用スイート: `add-and-run` / `worktree`）。
-- `npm run test:e2e:provider:opencode`: `TAKT_E2E_PROVIDER=opencode` で実行（`TAKT_E2E_MODEL` 必須）。
+- `npm run test:e2e:provider:opencode`: `TAKT_E2E_PROVIDER=opencode` で実行（`TAKT_E2E_MODEL` 未指定時の既定は `ollama-cloud/qwen3.5:397b`）。
 - `npm run test:e2e:all`: `mock` + `provider` を通しで実行。
 - `npm run test:e2e:claude`: `test:e2e:provider:claude` の別名。
 - `npm run test:e2e:codex`: `test:e2e:provider:codex` の別名。
 - `npm run test:e2e:cursor`: `test:e2e:provider:cursor` の別名。
 - `npm run test:e2e:opencode`: `test:e2e:provider:opencode` の別名。
 - `npx vitest run e2e/specs/add-and-run.e2e.ts`: 単体実行の例。
+
+provider E2E スクリプトの対象は `claude` / `claude-sdk` / `codex` / `cursor` / `opencode`。`copilot` と `kiro` には provider E2E 経路がなく、単体テスト（`src/__tests__/copilot-*.test.ts` / `kiro-*.test.ts`）のみで検証している。
+
+GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` のみ。provider E2E は API 課金を伴うため CI には含めず、メンテナーが PR コメントコマンド `/ci`（OWNER 限定）で必要時にのみ実行する。
 
 ## シナリオ一覧
 - Add task and run（`e2e/specs/add-and-run.e2e.ts`）

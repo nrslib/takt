@@ -247,6 +247,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     () => params.config.description,
     params.getCurrentWorkflowStack,
     buildFindingContractInstructionContext,
+    () => params.task,
   );
 
   const stepExecutor = new StepExecutor({

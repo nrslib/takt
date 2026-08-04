@@ -15,7 +15,7 @@ import { loadWorkflowByIdentifier, resolveWorkflowConfigValue, getWorkflowDescri
 import { selectOptionWithDefault } from '../../../shared/prompt/index.js';
 import { info, header, blankLine, status, warn } from '../../../shared/ui/index.js';
 import { createLogger } from '../../../shared/utils/index.js';
-import type { WorkflowConfig, WorkflowResumePoint } from '../../../core/models/index.js';
+import type { WorkflowConfig, WorkflowRestartPoint, WorkflowResumePoint } from '../../../core/models/index.js';
 import { readRunMetaBySlug, type RunMeta } from '../../../core/workflow/run/run-meta.js';
 import {
   findRunForTask,
@@ -48,6 +48,10 @@ import { workflowEntryMatchesWorkflow } from '../../../core/workflow/workflow-re
 import type { PullRequestContext } from '../../../core/workflow/pr-context.js';
 import { resolveTaskPullRequestWorktreeContext } from '../pullRequestWorktreeContext.js';
 import type { TaskExecutionOptions } from '../execute/types.js';
+import {
+  selectTaskRetryStart,
+  type TaskRetryStartSelection,
+} from './taskRetryStartSelection.js';
 
 const log = createLogger('list-tasks');
 
@@ -61,7 +65,33 @@ interface FailedTaskRetrySelection {
   previousOrderContent: string | null;
   startStep: string | undefined;
   selectedResumePoint: WorkflowResumePoint | undefined;
+  selectedRestartPoint: WorkflowRestartPoint | undefined;
   selectedWorkflowOverride: string | undefined;
+}
+
+type RetryStartOwnership = Pick<
+  FailedTaskRetrySelection,
+  'startStep' | 'selectedResumePoint' | 'selectedRestartPoint'
+>;
+
+function resolveRetryStartOwnership(
+  selectedStart: TaskRetryStartSelection,
+  workflowConfig: WorkflowConfig,
+): RetryStartOwnership {
+  if (selectedStart.kind === 'resume') {
+    const rootEntry = selectedStart.resumePoint.stack[0]!;
+    return {
+      startStep: rootEntry.step === workflowConfig.initialStep ? undefined : rootEntry.step,
+      selectedResumePoint: selectedStart.resumePoint,
+      selectedRestartPoint: undefined,
+    };
+  }
+
+  return {
+    startStep: undefined,
+    selectedResumePoint: undefined,
+    selectedRestartPoint: selectedStart.restartPoint,
+  };
 }
 
 function displayFailureInfo(task: TaskListItem, failure: TaskFailure): void {
@@ -80,24 +110,29 @@ function displayFailureInfo(task: TaskListItem, failure: TaskFailure): void {
   blankLine();
 }
 
-async function selectStartStep(
+async function selectRetryStart(
   workflowConfig: WorkflowConfig,
-  defaultStep: string | null,
-): Promise<string | null> {
-  const steps = workflowConfig.steps.map((step) => step.name);
-
-  const defaultIdx = defaultStep
-    ? steps.indexOf(defaultStep)
-    : 0;
-  const effectiveDefault = defaultIdx >= 0 ? steps[defaultIdx] : steps[0];
-
-  const options = steps.map((name) => ({
-    label: sanitizeTerminalText(name),
-    value: name,
-    description: name === workflowConfig.initialStep ? 'Initial step' : undefined,
-  }));
-
-  return await selectOptionWithDefault<string>('Start from step:', options, effectiveDefault ?? steps[0]!);
+  options: {
+    projectCwd: string;
+    lookupCwd: string;
+    resumePoint?: WorkflowResumePoint;
+    preferredRootStep?: string;
+  },
+): Promise<TaskRetryStartSelection | null> {
+  const result = await selectTaskRetryStart(
+    workflowConfig,
+    options,
+    (message, candidates, defaultValue) => selectOptionWithDefault(
+      message,
+      candidates,
+      defaultValue,
+    ),
+  );
+  if (result === null) {
+    return null;
+  }
+  info(`Selected start position: ${result.label}`);
+  return result.selection;
 }
 
 function buildRetryFailureInfo(task: TaskListItem, failure: TaskFailure): RetryFailureInfo {
@@ -234,21 +269,6 @@ function requireFailedStepForRequeueNote(failedStep: string | undefined): string
   return failedStep;
 }
 
-function shouldResumeFromSelectedStep(
-  workflowConfig: WorkflowConfig,
-  selectedStep: string,
-  resumePoint: WorkflowResumePoint | undefined,
-): resumePoint is WorkflowResumePoint {
-  const rootEntry = resumePoint?.stack[0];
-  if (!rootEntry) {
-    return false;
-  }
-
-  return workflowEntryMatchesWorkflow(rootEntry, workflowConfig)
-    && rootEntry.step === selectedStep
-    && workflowConfig.steps.some((step) => step.name === rootEntry.step);
-}
-
 function resolveWorktreePath(task: TaskListItem): string {
   if (!task.worktreePath) {
     throw new Error(`Worktree path is not set for task: ${task.name}`);
@@ -305,11 +325,14 @@ async function prepareFailedTaskRetrySelection(
 
   const resumePoint = resolveRetryResumePoint(task, runMeta);
   const failedStep = resolveFailureStepForRequeueNote(failure, runMeta, resumePoint);
-  const selectedStep = await selectStartStep(
-    workflowConfig,
-    resolveRetryDefaultStep(workflowConfig, failure, resumePoint),
-  );
-  if (selectedStep === null) {
+  const preferredRootStep = resolveRetryDefaultStep(workflowConfig, failure, resumePoint);
+  const selectedStart = await selectRetryStart(workflowConfig, {
+    projectCwd: projectDir,
+    lookupCwd: worktreePath,
+    ...(resumePoint === undefined ? {} : { resumePoint }),
+    ...(preferredRootStep === null ? {} : { preferredRootStep }),
+  });
+  if (selectedStart === null) {
     return null;
   }
 
@@ -318,12 +341,7 @@ async function prepareFailedTaskRetrySelection(
     warn(DEPRECATED_PROVIDER_CONFIG_WARNING);
   }
 
-  const startStep = selectedStep !== workflowConfig.initialStep
-    ? selectedStep
-    : undefined;
-  const selectedResumePoint = shouldResumeFromSelectedStep(workflowConfig, selectedStep, resumePoint)
-    ? resumePoint
-    : undefined;
+  const retryStartOwnership = resolveRetryStartOwnership(selectedStart, workflowConfig);
   const selectedWorkflowOverride = resolveSelectedWorkflowOverride(previousWorkflow, selectedWorkflow);
 
   return {
@@ -334,8 +352,7 @@ async function prepareFailedTaskRetrySelection(
     runMeta,
     selectedWorkflow,
     previousOrderContent,
-    startStep,
-    selectedResumePoint,
+    ...retryStartOwnership,
     selectedWorkflowOverride,
   };
 }
@@ -357,16 +374,18 @@ export async function requeueFailedTask(
     }),
   );
   const runner = new TaskRunner(projectDir);
-
   runner.requeueTask(
     task.name,
     ['failed'],
-    selection.startStep,
-    retryNote,
-    selection.selectedResumePoint,
-    selection.selectedWorkflowOverride,
-    undefined,
-    selection.matchedSlug ?? undefined,
+    {
+      startStep: selection.startStep,
+      retryNote,
+      resumePoint: selection.selectedResumePoint,
+      workflow: selection.selectedWorkflowOverride,
+      taskDir: undefined,
+      sourceRunSlug: selection.matchedSlug ?? undefined,
+      restartPoint: selection.selectedRestartPoint,
+    },
   );
 
   info(`Task "${sanitizeTerminalText(task.name)}" has been requeued.`);
@@ -433,18 +452,20 @@ export async function retryFailedTask(
     const executionRetryNote = preparedSpec ? preparedSpec.retryNote : retryNote;
     const taskDir = preparedSpec?.taskDirRelative;
     const runner = new TaskRunner(projectDir);
-
     if (retryResult.action === 'save_task') {
       try {
         runner.requeueTask(
           task.name,
           ['failed'],
-          selection.startStep,
-          executionRetryNote,
-          selection.selectedResumePoint,
-          selection.selectedWorkflowOverride,
-          taskDir,
-          selection.matchedSlug ?? undefined,
+          {
+            startStep: selection.startStep,
+            retryNote: executionRetryNote,
+            resumePoint: selection.selectedResumePoint,
+            workflow: selection.selectedWorkflowOverride,
+            taskDir,
+            sourceRunSlug: selection.matchedSlug ?? undefined,
+            restartPoint: selection.selectedRestartPoint,
+          },
         );
       } catch (error) {
         cleanupPreparedRetryTaskSpec(preparedSpec);
@@ -460,12 +481,15 @@ export async function retryFailedTask(
         task.name,
         ['failed'],
         'retry',
-        selection.startStep,
-        executionRetryNote,
-        selection.selectedResumePoint,
-        selection.selectedWorkflowOverride,
-        taskDir,
-        selection.matchedSlug ?? undefined,
+        {
+          startStep: selection.startStep,
+          retryNote: executionRetryNote,
+          resumePoint: selection.selectedResumePoint,
+          workflow: selection.selectedWorkflowOverride,
+          taskDir,
+          sourceRunSlug: selection.matchedSlug ?? undefined,
+          restartPoint: selection.selectedRestartPoint,
+        },
       );
     } catch (error) {
       cleanupPreparedRetryTaskSpec(preparedSpec);
@@ -477,6 +501,7 @@ export async function retryFailedTask(
       name: task.name,
       worktreePath: selection.worktreePath,
       startStep: selection.startStep,
+      restartPoint: selection.selectedRestartPoint,
     });
 
     return executeAndCompleteTask(taskForExecution, runner, projectDir, agentOverrides);

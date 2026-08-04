@@ -6,9 +6,12 @@ import { TaskLifecycleService } from './taskLifecycleService.js';
 import { TaskQueryService } from './taskQueryService.js';
 import { TaskDeletionService } from './taskDeletionService.js';
 import { TaskExceedService, type ExceedTaskOptions } from './taskExceedService.js';
-import type { WorkflowResumePoint } from '../../core/models/index.js';
 import type { RunResumeSource } from '../../core/workflow/run/run-meta.js';
-import { TaskRetryService, type AutoRequeueResult } from './taskRetryService.js';
+import {
+  TaskRetryService,
+  type AutoRequeueResult,
+  type TaskRetryOptions,
+} from './taskRetryService.js';
 
 export type { TaskInfo, TaskResult, TaskListItem };
 
@@ -125,28 +128,18 @@ export class TaskRunner {
   requeueTask(
     taskRef: string,
     allowedStatuses: readonly TaskStatus[],
-    startStep?: string,
-    retryNote?: string,
-    resumePoint?: WorkflowResumePoint,
-    workflow?: string,
-    taskDir?: string,
-    sourceRunSlug?: string,
+    options: TaskRetryOptions = {},
   ): string {
-    return this.retry.requeueTask(taskRef, allowedStatuses, startStep, retryNote, resumePoint, workflow, taskDir, sourceRunSlug);
+    return this.retry.requeueTask(taskRef, allowedStatuses, options);
   }
 
   startReExecution(
     taskRef: string,
     allowedStatuses: readonly TaskStatus[],
     resumeMode: RunResumeSource['resumeMode'],
-    startStep?: string,
-    retryNote?: string,
-    resumePoint?: WorkflowResumePoint,
-    workflow?: string,
-    taskDir?: string,
-    sourceRunSlug?: string,
+    options: TaskRetryOptions = {},
   ): TaskInfo {
-    return this.retry.startReExecution(taskRef, allowedStatuses, resumeMode, startStep, retryNote, resumePoint, workflow, taskDir, sourceRunSlug);
+    return this.retry.startReExecution(taskRef, allowedStatuses, resumeMode, options);
   }
 
   deleteTask(name: string, kind: 'pending' | 'failed' | 'completed' | 'exceeded' | 'pr_failed'): void {

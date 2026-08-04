@@ -78,6 +78,19 @@ export class WorkflowCallInvocationIndex {
       }
       return [identity, { ...record }];
     }));
+    for (const [identity, record] of this.records) {
+      this.assertNamespaceAvailable(identity, record.report_namespace_segment);
+    }
+  }
+
+  private assertNamespaceAvailable(identity: string, namespace: string): void {
+    const collision = [...this.records.entries()].find(
+      ([existingIdentity, record]) => existingIdentity !== identity
+        && record.report_namespace_segment === namespace,
+    );
+    if (collision !== undefined) {
+      throw new Error('Workflow-call report namespace is already assigned to another invocation');
+    }
   }
 
   record(
@@ -100,10 +113,13 @@ export class WorkflowCallInvocationIndex {
     )) {
       throw new Error(`Workflow-call step "${stepName}" report namespace does not match its invocation`);
     }
-    this.records.set(
-      buildWorkflowCallInvocationIdentity(getWorkflowReference(workflow), stepName, workflowCallPath),
-      { ...record },
+    const identity = buildWorkflowCallInvocationIdentity(
+      getWorkflowReference(workflow),
+      stepName,
+      workflowCallPath,
     );
+    this.assertNamespaceAvailable(identity, record.report_namespace_segment);
+    this.records.set(identity, { ...record });
   }
 
   replace(
@@ -135,6 +151,7 @@ export class WorkflowCallInvocationIndex {
     ) {
       throw new Error(`Workflow-call step "${stepName}" requires a valid report namespace segment`);
     }
+    this.assertNamespaceAvailable(identity, record.report_namespace_segment);
     this.records.set(identity, { ...record });
   }
 

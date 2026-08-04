@@ -13,6 +13,7 @@ import type {
   WorkflowStep,
 } from '../../models/types.js';
 import type { FindingManagerAuthority } from '../../models/finding-types.js';
+import { WorkflowRestartPointSchema } from '../../models/workflow-resume-schema.js';
 import {
   cloneDynamicParallelSelections,
   serializeDynamicParallelSelections,
@@ -78,6 +79,7 @@ import {
 import { getRemoteRepositoryIdentifiers } from '../../../infra/git/detect.js';
 import { WorkflowResumeContinuation } from './workflow-resume-continuation.js';
 import { inheritWorkflowConfigMetadata, translateWorkflowConfigError } from '../../../shared/workflowConfigMetadata.js';
+import { WorkflowRestartNavigator } from './WorkflowRestartNavigator.js';
 const log = createLogger('workflow-engine');
 
 type WorkflowEngineRuntimeOptions = WorkflowEngineOptions & {
@@ -150,6 +152,29 @@ export class WorkflowEngine extends EventEmitter {
   constructor(config: WorkflowConfig, cwd: string, task: string, options: WorkflowEngineOptions) {
     super();
     const resumePoint = options.resumePoint === undefined ? undefined : parseWorkflowResumePoint(options.resumePoint);
+    const restartPoint = options.restartPoint === undefined
+      ? undefined
+      : WorkflowRestartPointSchema.parse(options.restartPoint);
+    if (resumePoint !== undefined && restartPoint !== undefined) {
+      throw new Error('Workflow engine cannot own both resumePoint and restartPoint');
+    }
+    if (restartPoint !== undefined && options.initialIteration !== undefined) {
+      throw new Error('Workflow engine cannot own both restartPoint and initialIteration');
+    }
+    // The adjudication target must participate in normal step validation and execution,
+    // so it is injected before restart validation and before services capture config.steps.
+    this.config = injectFindingConflictAdjudicationStep(
+      config,
+      options.inheritedFindingContract?.contract ?? config.findingContract,
+    );
+    inheritWorkflowConfigMetadata(config, this.config);
+    const restartNavigator = restartPoint === undefined
+      ? undefined
+      : new WorkflowRestartNavigator(restartPoint);
+    const restartStartStep = restartNavigator?.resolveRootStartStep(
+      this.config,
+      options.startStep,
+    );
     assertTaskPrefixPair(options.taskPrefix, options.taskColorIndex);
     this.structuredCaller = options.structuredCaller ?? new CapabilityAwareStructuredCaller();
     if (options.reportDirName !== undefined && !isValidReportDirName(options.reportDirName)) {
@@ -196,20 +221,11 @@ export class WorkflowEngine extends EventEmitter {
         autoRouting: effectiveAutoRouting,
         estimator: autoRoutingEstimator,
       });
-    // The adjudication target must participate in normal step validation and execution,
-    // so it is injected into config.steps whenever the workflow (or a
-    // loop monitor judge) wires a rule to it and a finding contract is in
-    // effect. Injection happens before validateWorkflowConfig so the injected
-    // step is validated exactly like an authored step (session, provider,
-    // model), and before any service captures config.steps.
-    this.config = injectFindingConflictAdjudicationStep(
-      config,
-      options.inheritedFindingContract?.contract ?? config.findingContract,
-    );
-    inheritWorkflowConfigMetadata(config, this.config);
     this.options = {
       ...options,
       ...(resumePoint === undefined ? {} : { resumePoint }),
+      ...(restartPoint === undefined ? {} : { restartPoint }),
+      ...(restartStartStep === undefined ? {} : { startStep: restartStartStep }),
       rateLimitFallback: config.rateLimitFallback ?? options.rateLimitFallback,
       structuredCaller: this.structuredCaller,
       structuredOutputNormalizers: options.structuredOutputNormalizers ?? createStructuredOutputNormalizerRegistry([]),
@@ -231,6 +247,12 @@ export class WorkflowEngine extends EventEmitter {
       this.options.resumePoint,
       initialMaxSteps,
     );
+    if (restartNavigator !== undefined) {
+      if (this.sharedRuntime.restartNavigator !== undefined) {
+        throw new Error('Workflow restart navigator is already initialized');
+      }
+      this.sharedRuntime.restartNavigator = restartNavigator;
+    }
     this.sharedRuntime.dynamicParallelSelectionStore ??= new DynamicParallelSelectionStore(
       new Map(Object.entries(this.options.resumePoint?.dynamic_parallel_selections ?? {})),
     );
@@ -642,23 +664,18 @@ export class WorkflowEngine extends EventEmitter {
       throw new Error(`Invalid review report discovery state: ${fatalFailure.reason}`);
     }
     const recoverableFailures = reportNameResult.failures.map((failure) => failure.reason);
+    const inheritanceOptions = {
+      cwd: this.cwd,
+      sourceRunSlug: resumeSource.sourceRunSlug,
+      currentRunSlug: this.runPaths.slug,
+      targetReportDirectory: this.runPaths.reportsAbs,
+      reviewReportNames: reportNameResult.reportNames,
+      discoveryFailures: recoverableFailures,
+    };
     try {
-      const result = inheritReviewReports({
-        cwd: this.cwd,
-        sourceRunSlug: resumeSource.sourceRunSlug,
-        currentRunSlug: this.runPaths.slug,
-        targetReportDirectory: this.runPaths.reportsAbs,
-        reviewReportNames: reportNameResult.reportNames,
-        discoveryFailures: recoverableFailures,
-      });
+      const result = inheritReviewReports(inheritanceOptions);
       try {
-        writeReviewReportInheritanceDiagnostic({
-          cwd: this.cwd,
-          sourceRunSlug: resumeSource.sourceRunSlug,
-          currentRunSlug: this.runPaths.slug,
-          targetReportDirectory: this.runPaths.reportsAbs,
-          reviewReportNames: reportNameResult.reportNames,
-        }, result);
+        writeReviewReportInheritanceDiagnostic(inheritanceOptions, result);
       } catch (error) {
         log.warn('Failed to write review report inheritance diagnostic', { error: getErrorMessage(error), result });
       }

@@ -420,6 +420,7 @@ async function executeWorkflowInternal(
         startStep: options.startStep,
         retryNote: options.retryNote,
         resumePoint: options.resumePoint,
+        restartPoint: options.restartPoint,
         resumeSource: publishedResumeSource,
         onDynamicParallelSelectionPersisted: (resumePoint) => {
           bootstrap.runMetaManager.updateResumePoint(resumePoint);

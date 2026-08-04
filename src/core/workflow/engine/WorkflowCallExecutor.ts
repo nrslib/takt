@@ -608,6 +608,9 @@ export class WorkflowCallExecutor {
     executeOptions: ExecuteWorkflowCallOptions,
   ): Promise<WorkflowCallExecutionResult> {
     const options = this.deps.getOptions();
+    const inheritedOptions = { ...options };
+    delete inheritedOptions.maxStepsOverride;
+    delete inheritedOptions.restartPoint;
     const parentConfig = this.deps.getConfig();
     const prepared = request.preparedExecution;
     if (
@@ -665,7 +668,7 @@ export class WorkflowCallExecutor {
       : this.getChildRoutingRuntime(childWorkflow, childAutoRouting, options, request.step);
     const inheritedEstimatorSource = options.autoRoutingEstimatorSource;
     const childOptions: WorkflowEngineOptions = {
-      ...options,
+      ...inheritedOptions,
       maxStepsOverride: this.deps.sharedRuntime.maxSteps ?? this.deps.getMaxSteps(),
       initialSessions: Object.fromEntries(this.deps.state.personaSessions),
       initialUserInputs: [...this.deps.state.userInputs],
@@ -693,13 +696,22 @@ export class WorkflowCallExecutor {
               sessionId,
             });
           },
-      personaProviders: request.personaProviders,
-      providerRouting: request.providerRouting,
-      startStep: this.resolveChildResumeStartStep(
-        childWorkflow,
-        childResumePoint,
-        resumeStackPrefix,
-      ),
+      personaProviders: request.personaProviders === undefined
+        ? undefined
+        : structuredClone(request.personaProviders),
+      providerRouting: request.providerRouting === undefined
+        ? undefined
+        : structuredClone(request.providerRouting),
+      startStep: this.deps.sharedRuntime.restartNavigator === undefined
+        ? this.resolveChildResumeStartStep(
+            childWorkflow,
+            childResumePoint,
+            resumeStackPrefix,
+          )
+        : this.deps.sharedRuntime.restartNavigator.resolveChildStartStep(
+            childWorkflow,
+            [...resumeStackPrefix, workflowCallFrame],
+          ),
       resumePoint: childResumePoint,
       initialIteration: this.deps.state.iteration,
       reportDirName: this.deps.runPaths.slug,

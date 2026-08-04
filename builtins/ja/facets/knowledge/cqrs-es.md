@@ -338,43 +338,27 @@ data class OrderCancelledEvent(
 
 ## Event Evolution
 
-イベントは永続化済みの契約であり、現在のイベント型を変えた場合でも過去イベントを再生できなければならない。旧イベントの読み替えはイベント本体やドメインロジックではなく、イベントストアから復元する境界の upcaster / migration 層で行う。
-
-| 基準 | 判定 |
-|------|------|
-| 永続化済みイベントの型・フィールドを変更したのに変換経路がない | REJECT |
-| 現行イベント型に旧フィールド名の alias や互換用プロパティを残す | REJECT。履歴互換は upcaster に分離 |
-| Aggregate や apply が旧イベント形式を直接解釈する | REJECT。再生前に現行イベントへ変換する |
-| イベントに「変更前の値」を互換目的で追加する | REJECT。イベントは発生後の事実を表す |
-| upcaster が旧 payload を現行イベントの意味へ変換する | OK |
-| 旧 payload から現行イベントへ変換できることをテストしている | OK |
+イベント進化では、現行イベント契約、履歴payloadの変換、イベント再生による状態復元を別の責務として扱う。現行イベント型とドメインロジックは現在の意味だけを表す。履歴payloadの変換を行う場合は、イベントストアから復元する境界で replay 前に変換する。
 
 イベント進化で分ける責務:
 
 | 責務 | 置き場所 |
 |------|----------|
 | 現行イベントの意味とフィールド | イベント型 |
-| 旧 payload の読み替え | upcaster / migration 層 |
+| 設計対象となる場合の履歴payloadの読み替え | event-store 復元境界の upcaster |
 | イベント再生による状態復元 | Aggregate の `apply` |
-| 旧イベントから現行イベントへ変換できることの保証 | upcaster テスト |
+| 履歴payload読み替えの振る舞い証跡 | upcaster テスト |
 
 ```kotlin
-// NG - 現行イベント型に旧フィールド互換を混ぜる
+// 現行イベント型
 data class OrderAssignedEvent(
-    val orderId: String,
-    @JsonAlias("assigneeId")
+    override val orderId: String,
     val assigneeIds: List<String>
-)
-
-// OK - 現行イベント型は現行契約だけを表す
-data class OrderAssignedEvent(
-    val orderId: String,
-    val assigneeIds: List<String>
-)
+) : OrderEvent
 ```
 
 ```kotlin
-// OK - 旧 payload を upcaster で現行 payload へ変換する
+// 例 - 履歴 payload を復元境界の upcaster で現行 payload へ変換する
 when (eventType) {
     OrderAssignedEvent::class.java.typeName -> {
         event.moveTextFieldToArray("assigneeId", "assigneeIds")
@@ -382,20 +366,19 @@ when (eventType) {
 }
 ```
 
-旧イベント型そのものをアプリケーションコードに残すかどうかは、利用フレームワークと運用方針で決める。一般には「旧型を通常のドメインイベントとして扱う」のではなく、「旧 serialized type と payload を upcaster の入力契約としてテストする」方が、現行モデルを汚さずに済む。
+履歴変換が設計対象となる場合、旧イベント型そのものをアプリケーションコードに残すかは、利用フレームワークと移行方式で決まる。旧 serialized type と payload は、現行ドメインイベントに含めずに upcaster の入力契約として扱える。
 
-### migration 指示の分解
+### migration の責務境界
 
-CQRS+ES の migration は、DB schema migration、data migration、event upcaster、Read Model rebuild、API互換対応を分けて扱う。単に「migration する / しない」と捉えない。
+CQRS+ES では、DB schema migration、data migration、event upcaster、Read Model rebuild、API互換対応がそれぞれ異なる契約と実行境界を持つ。
 
-| 基準 | 判定 |
-|------|------|
-| ユーザーが migration 不要と述べたのに migration 種別を分解していない | REJECT |
-| 不明なまま DB schema migration や data migration を追加する | REJECT |
-| 既存の永続化済みイベントが存在しないのに upcaster を追加する | REJECT |
-| Read Model がイベントから再構築可能なのに data migration を作る | REJECT。rebuild で足りるか確認 |
-| event payload の互換が必要な場合だけ upcaster を追加する | OK |
-| API互換と event 互換を別の判断として扱う | OK |
+| migration 種別 | 責務境界 |
+|----------------|----------|
+| DB schema migration | relational schema の変更 |
+| data migration / backfill | relational data の変換 |
+| event upcaster | event-store 復元時の履歴payload変換 |
+| Read Model rebuild | イベントから導出可能な projection の再生成 |
+| API compatibility | 外部利用側との契約境界 |
 
 ## コマンドハンドラ
 
@@ -409,16 +392,15 @@ CQRS+ES の migration は、DB schema migration、data migration、event upcaste
 
 ### コマンドとイベントの契約寿命
 
-イベントは履歴として永続化される長寿命の契約であり、保存済みの型識別子と payload を再生できなければならない。型識別子が完全修飾名か論理名か、変更時に upcaster・alias・migration のどれを使うかは、イベントストアとシリアライズ方式で決まる。
+イベントは履歴として永続化される長寿命の契約である。履歴payloadの変換を行う場合は、現行イベントの型識別子・payloadと、履歴payloadを replay 可能な形へ変換する境界を分け、変換方式はイベントストアとシリアライズ方式から選ぶ。
 
-コマンドは通常、application 境界で生成・処理される短寿命のメッセージだが、予約実行、outbox、再試行、dead-letter、監査等で永続化される構成もある。配置と互換性は「コマンドだから一時的」と決め打ちせず、責務と実際の保存契約で判断する。ドメインモデルは配送方式やフレームワークのコマンド型に依存せず、application / adapter 境界でドメインの引数・値オブジェクトへ変換する。
+コマンドは通常、application 境界で生成・処理される短寿命のメッセージだが、予約実行、outbox、再試行、dead-letter、監査等で永続化される構成もある。永続参照の有無は、移動・改名時に調べる影響境界である。ドメインモデルは配送方式やフレームワークのコマンド型に依存せず、application / adapter 境界でドメインの引数・値オブジェクトへ変換する。
 
 | 基準 | 判定 |
 |------|------|
 | ドメインモデルが配送・フレームワーク固有のコマンド型を直接受け取る | REJECT。application / adapter 境界でドメインの入力へ変換する |
 | domain 層から参照されない application メッセージを domain パッケージに置く | application 境界へ移す |
-| コマンドの移動・改名時に、永続参照の有無を確認せず互換性不要と判断する | REJECT。予約・outbox・再試行・dead-letter・監査等の保存契約を確認する |
-| イベントの型識別子や payload を、保存済みデータの変換経路なしで変更する | REJECT。利用する識別・シリアライズ方式に応じた互換経路を用意する。直接変更できるのは保存済みイベントがまだ存在しない場合だけであり、リリース状態では判断しない |
+| コマンドの移動・改名 | 予約・outbox・再試行・dead-letter・監査等の永続参照を影響対象として確認する |
 
 良いコマンドハンドラ:
 ```

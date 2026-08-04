@@ -185,6 +185,9 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 | `logging.level` | `"debug"` \| `"info"` \| `"warn"` \| `"error"` | `"info"` | ログレベル |
 | `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | `"claude"` | デフォルトの具体 AI provider（`claude` = ヘッドレス CLI モード、`claude-sdk` = SDK/API モード、`claude-terminal` = experimental interactive terminal モード） |
 | `logging.trace` | boolean | `false` | trace レベルのログを有効化（高頻度のデバッグノイズを抑制） |
+| `logging.debug` | boolean | `false` | デバッグログを有効化（`debug.log` + `prompts.jsonl`） |
+| `logging.provider_events` | boolean | `false` | provider stream イベントを永続化 |
+| `logging.usage_events` | boolean | `false` | usage イベントログを永続化 |
 | `model` | string | - | デフォルトモデル名（provider にそのまま渡される） |
 | `branch_name_strategy` | `"romaji"` \| `"ai"` | `"romaji"` | ブランチ名生成方式 |
 | `prevent_sleep` | boolean | `false` | macOS アイドルスリープ防止（caffeinate） |
@@ -195,24 +198,33 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 | `interactive_preview_steps` | number (0-10) | `3` | インタラクティブモードでの step プレビュー数 |
 | `auto_requeue_max_attempts` | 非負整数 | `0` | `takt run` 中に失敗した workflow task を自動 requeue する上限回数。`0` で無効 |
 | `ignore_exceed` | boolean | `false` | `takt run` / `takt watch` の iteration 上限無視を設定します。CLI で `--ignore-exceed` を指定した場合は CLI 指定が優先されます |
+| `sync_project_local_takt_on_retry` | boolean | `true` | retry / 再実行前にルートの project-local `.takt` を worktree へ同期。`false` で worktree 側のコピーを維持 |
 | `worktree_dir` | string | - | 共有クローンのディレクトリ（デフォルトは `../{clone-name}`） |
 | `allow_git_hooks` | boolean | `false` | TAKT 管理の auto-commit 時に git hooks を許可 |
 | `allow_git_filters` | boolean | `false` | TAKT 管理の auto-commit 時に git filter を許可 |
 | `auto_pr` | boolean | - | worktree 実行後に PR を自動作成 |
+| `draft_pr` | boolean | `false` | 自動作成する PR を draft として作成 |
 | `minimal_output` | boolean | `false` | AI 出力を抑制（CI 向け） |
 | `runtime` | object | - | ランタイム環境デフォルト（例: `prepare: [gradle, node]`） |
 | `provider_routing` | object | - | 推奨設定。raw persona キー、step tag、step name による workflow step の provider / model / provider_options ルーティング |
+| `auto_routing` | object | - | 候補プールからの provider / model 自動選択（[Auto Routing](#auto-routing) 参照） |
 | `persona_providers` | object | - | deprecated の旧設定。persona display name ごとの provider / model / provider_options 上書き。新規設定では `provider_routing` を推奨 |
 | `provider_options` | object | - | グローバルな provider 固有オプション |
 | `provider_profiles` | object | - | provider 固有のパーミッションプロファイル |
 | `finding_contract.intake_normalize` | object | - | 選択したreviewer reportからraw findingを隔離sessionで抽出するprovider/model設定。両方必須。`targets`は解決済みreviewer provider/modelの完全一致allowlist |
+| `rate_limit_fallback` | object | - | rate limit 到達時のフォールバック。`switch_chain` に `{provider, model}` を列挙した順に切り替える |
 | `anthropic_api_key` | string | - | Claude 用 Anthropic API キー |
 | `openai_api_key` | string | - | Codex 用 OpenAI API キー |
+| `gemini_api_key` | string | - | Gemini API キー |
+| `google_api_key` | string | - | Google API キー |
+| `groq_api_key` | string | - | Groq API キー |
+| `openrouter_api_key` | string | - | OpenRouter API キー |
 | `opencode_api_key` | string | - | OpenCode API キー |
 | `cursor_api_key` | string | - | Cursor API キー（省略時は login セッションへフォールバック） |
 | `copilot_github_token` | string | - | Copilot CLI 認証用 GitHub トークン |
 | `kiro_api_key` | string | - | Kiro API キー |
 | `codex_cli_path` | string | - | Codex CLI バイナリパス上書き（絶対パス） |
+| `claude_cli_path` | string | - | Claude Code CLI バイナリパス上書き（絶対パス） |
 | `cursor_cli_path` | string | - | Cursor Agent CLI バイナリパス上書き（絶対パス） |
 | `copilot_cli_path` | string | - | Copilot CLI バイナリパス上書き（絶対パス） |
 | `kiro_cli_path` | string | - | Kiro CLI バイナリパス上書き（絶対パス） |
@@ -226,10 +238,12 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 | `vcs_provider` | `"github"` \| `"gitlab"` | 自動検出 | VCS プロバイダー（git リモート URL から自動検出） |
 | `takt_providers` | object | - | TAKT 内部プロバイダー上書き。`assistant` は assistant 会話（インタラクティブモードの計画会話、既存タスクへの追加指示 (instruct)、リトライ対話）をルーティングし、OpenCode の report retry 失敗後の Report phase fallback provider としても使われます。project の `takt_providers.assistant` は global の `takt_providers.assistant` を上書きします。どちらも未設定の場合、Report phase fallback は無効で、top-level `provider` / `model` は暗黙 fallback として使われません。 |
 | `telemetry` | object | `{ routing_decisions: true }` | local-only の routing decision 記録。`telemetry.routing_decisions` は auto-routing decision を project `.takt/events/` 配下に NDJSON として書き込むかどうかを制御します。TAKT は routing decision をアップロードしません。 |
+| `analytics` | object | 無効 | local-only の analytics 収集。`enabled` で有効化し、`events_path` でイベントディレクトリを変更（デフォルト `~/.takt/analytics/events`）、`retention_days` でイベントファイルの保持期間を設定します。TAKT は analytics イベントをアップロードしません。 |
 | `workflow_mcp_servers` | object | すべて `false` | MCP サーバートランスポートポリシー（`stdio`, `sse`, `http` トグル） |
 | `workflow_arpeggio` | object | すべて `false` | Arpeggio カスタムコードポリシー（`custom_data_source_modules`, `custom_merge_inline_js`, `custom_merge_files`） |
 | `workflow_runtime_prepare` | object | `{ custom_scripts: false }` | ランタイム prepare ポリシー（ビルトインプリセットは常に許可） |
 | `workflow_command_gates` | object | `{ custom_scripts: false }` | workflow YAML command quality gate ポリシー |
+| `workflow_overrides` | object | - | workflow レベルの上書き。トップレベル / step 単位 / persona 単位の `quality_gates`（AI ディレクティブまたは `type: command` ゲート）と `quality_gates_edit_only` |
 | `sync_conflict_resolver` | object | `{ auto_approve_tools: false }` | sync conflict resolver ポリシー |
 | `observability` | object | 無効 | OpenTelemetry foundation の opt-in 設定。`enabled` で SDK を初期化し、`monitor` は workflow metric を `.takt/runs/<run>/monitor.json` に出力し、`session_log_exporter` は span 由来の shadow session log を出力します。`usage_events_phase` は phase 粒度の usage events を `.takt/runs/<run>/logs/<session>-usage-events.phase.jsonl` に出力します。`enabled: true` と `OTEL_EXPORTER_OTLP_ENDPOINT` が揃うと、TAKT は標準の `OTEL_EXPORTER_OTLP_*` 環境変数で span と metric も OTLP 送信します。TAKT 独自の OTLP config キーはありません。 |
 
@@ -288,13 +302,18 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 
 ### プロジェクト設定フィールドリファレンス
 
+プロジェクト設定はグローバル設定のほとんどのキーを受け付け、グローバル値を上書きします（例: `language`、`logging`、`branch_name_strategy`、`minimal_output`、`task_poll_interval_ms`、`interactive_preview_steps`、`provider_routing`、`persona_providers`、`runtime`、`analytics`、`telemetry`、`rate_limit_fallback`、`workflow_overrides`、`disabled_builtins`。意味は[グローバル設定フィールドリファレンス](#グローバル設定フィールドリファレンス)を参照）。次の表はプロジェクト専用キーと、よく使う上書きキーの一覧です。
+
 | フィールド | 型 | デフォルト | 説明 |
 |-----------|------|---------|------|
 | `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | - | 具体 provider の上書き |
 | `model` | string | - | モデル名の上書き（provider にそのまま渡される） |
+| `submodules` | `"all"` \| string[] | - | プロジェクト専用。共有クローンで初期化する submodule。`"all"` または明示パスリスト（ワイルドカード不可） |
+| `with_submodules` | boolean | - | プロジェクト専用。`submodules: "all"` 相当の旧 boolean 設定。`submodules` を推奨 |
 | `allow_git_hooks` | boolean | `false` | TAKT 管理の auto-commit 時に git hooks を許可 |
 | `allow_git_filters` | boolean | `false` | TAKT 管理の auto-commit 時に git filter を許可 |
 | `auto_pr` | boolean | - | worktree 実行後に PR を自動作成 |
+| `draft_pr` | boolean | `false`（global 設定由来） | 自動作成する PR を draft として作成 |
 | `concurrency` | number (1-10) | `1`（global 設定由来） | `takt run` の並列タスク数 |
 | `auto_requeue_max_attempts` | 非負整数 | `0`（global 設定またはデフォルト由来） | `takt run` 中に失敗した workflow task を自動 requeue する上限回数。`0` で無効 |
 | `ignore_exceed` | boolean | `false`（global 設定またはデフォルト由来） | `takt run` / `takt watch` の iteration 上限無視を設定します。CLI で `--ignore-exceed` を指定した場合は CLI 指定が優先されます |

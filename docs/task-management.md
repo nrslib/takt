@@ -185,6 +185,7 @@ The list view shows all tasks organized by status (pending, running, completed, 
 
 | Action | Description |
 |--------|-------------|
+| **Requeue** | Select a resume or restart position and return the task to `pending` without a conversation |
 | **Retry** | Open a retry conversation with failure context, then re-execute |
 | **Delete** | Remove the failed task record |
 
@@ -215,11 +216,17 @@ When you select **Retry** on a failed task, TAKT:
 
 1. Displays failure details (failed step, error message, last agent message)
 2. Prompts you to select a workflow
-3. Prompts you to select which step to start from (defaults to the failed step)
+3. Prompts you to choose **Resume failed position** or browse paginated workflow levels to select **Restart from**
 4. Opens a retry conversation pre-loaded with failure context, run session data, and workflow structure
 5. Lets you refine instructions with AI assistance
 
-The retry conversation supports the same actions as Instruct mode (execute, save task, cancel). Retry notes are appended to the task record, accumulating across multiple retry attempts.
+**Requeue** uses the same workflow and start-position selection, but saves the task as `pending` without opening a conversation. **Resume failed position** is available when the saved checkpoint path can be resolved and preserves the checkpoint's call stack, iteration counters, and other execution state. **Restart from** starts a new logical execution from the selected fully qualified path without carrying over the old checkpoint's iteration, elapsed time, or step-iteration state.
+
+Restart choices are paginated at the current workflow level. Use **Next page** and **Previous page** to reach every authored step, **Browse child workflow from** to open only the selected `workflow_call`, and **Back to parent workflow** to move up. The `workflow_call` itself remains a separate **Restart from** choice: selecting it runs the call and starts its child workflow at the child's `initial_step`, while browsing it exposes the child's authored steps.
+
+The confirmed Restart position shows the full path, including every parent workflow, `workflow_call` step, child workflow, and selected child step, so nested positions with duplicate names remain distinguishable. Root and nested Restart paths are saved in the same structured form and validated again immediately before execution; changes to the selected step, workflow identity, or step kind are rejected instead of silently changing the start position. Changing which step is currently initial does not invalidate a still-existing selected step.
+
+The retry conversation supports the same actions as Instruct mode (execute, save task, cancel). Immediate **Execute** and **Save task** (`save_task`) use the same selected Resume or Restart contract. Retry notes are appended to the task record, accumulating across multiple retry attempts.
 
 ### Non-Interactive Mode (`--non-interactive`)
 

@@ -11,6 +11,8 @@ For small tasks, omit the design section. In maintenance work, do not omit exist
 
 {{include:instructions/change-contract-traceability}}
 
+{{include:instructions/requirement-source-discipline}}
+
 **Do:**
 1. **Read reference materials first (required)**
    - Actually open files or directories listed in the task's reference-materials section with Read/Glob
@@ -23,13 +25,10 @@ For small tasks, omit the design section. In maintenance work, do not omit exist
 3. Understand the task requirements
    - Compare reference materials with the current implementation to identify the delta
    - **For each requirement, decide whether a change is needed. If no change is needed, cite the current code location (file:line). Do not say "already correct" without evidence**
-   - **Limit requirements to explicit requirements and directly implied requirements. Do not turn general best practices or future extensibility into requirements**
-   - **Break requirements down only to make them verifiable. Do not let decomposition create new requirements**
-   - **When using an implied requirement, identify the explicit requirement that supports it in the plan report**
 4. Inspect code to resolve unknowns
-5. Identify existing contracts that must be preserved
+5. Identify existing contracts outside the requested change scope that must be preserved
    - Check existing structure, type names, hook return values, UI copy, accessible names, comments, and test expectations
-   - If an existing contract must change, document the reason and impact scope in the plan
+   - For a contract targeted for replacement, document the reason and impact scope, and trace current-consumer migration separately from each support target explicitly required by the requirement source
 6. Classify candidate changes as required, related, or unnecessary
    - Same file, nearby responsibility, or common style is not enough to make a change related
    - Do not assign unnecessary changes to the Coder
@@ -42,7 +41,7 @@ For small tasks, omit the design section. In maintenance work, do not omit exist
    - Existing implementation patterns to follow (file:line). Always cite same-kind existing code when available
    - Impact scope. Especially when adding a new parameter, list every call path that must be wired
    - Relevant anti-patterns for this task, if any
-   - Existing contracts that must not change
+   - Existing contracts outside the requested change scope that must not change
    - Candidate changes explicitly excluded as unnecessary
 
 **Required output (include headings)**
@@ -51,6 +50,6 @@ For small tasks, omit the design section. In maintenance work, do not omit exist
 ## Change Classification
 - {Required, related, and unnecessary changes}
 ## Existing Contracts
-- {Existing contracts to preserve}
+- {Existing contracts outside the requested change scope to preserve; distinguish old contracts targeted for replacement}
 ## Implementation Plan
 - {Causal-diff plan}

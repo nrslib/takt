@@ -639,6 +639,17 @@ Verification approach:
 2. Check if `/g` regexes are used with `test()`
 3. Check if the same regex is used with both `test()` and `replace()`
 
+## Contract Replacement and Compatibility or Migration
+
+When replacing a contract, migrate current consumers to the new contract and remove the superseded path except for targets the requirement source explicitly retains through backward compatibility, legacy support, migration support, or coexistence. Consumer migration is not legacy support. Explicit authority applies only to the stated target and scope and, when time-bounded, its period and end condition; use only the compatibility, migration, or coexistence mechanisms necessary within those limits. Evaluate database schema migration, data migration or backfill, event upcasting, Read Model rebuild, and API compatibility as separate targets; authority for one does not authorize the others.
+
+| Criteria | Judgment |
+|----------|----------|
+| Observable existing contract outside the requested change scope | Preserve it |
+| Current consumer of an old contract targeted for replacement | Migrate it to the new contract |
+| Superseded-contract production, reading, alias, fallback, conversion, upcaster, backfill, data migration, or rebuild added or retained | REJECT unless the requirement source explicitly requires backward compatibility, legacy support, migration support, or coexistence for that target and scope and, when time-bounded, its period and end condition, and the mechanism is necessary within those limits |
+| The requirement source explicitly requires backward compatibility, legacy support, migration support, or coexistence | Implement only the stated target and scope, the stated period and end condition when time-bounded, and necessary mechanisms, and verify the behavior |
+
 ## Prohibited
 
 - **Fallbacks are prohibited by default** - Do not write fallbacks using `?? 'unknown'`, `|| 'default'`, or swallowing via `try-catch`. Propagate errors upward. If absolutely necessary, add a comment explaining why
@@ -651,7 +662,7 @@ Verification approach:
 - **Sensitive information exposure** - Do not include sensitive data in hardcoded values, logs, error responses, or test output
 - **Scattered hardcoded contract strings** - File names and config key names must be defined as constants in one place. Scattered literals are prohibited
 - **Scattered try-catch** - Centralize error handling at the upper layer
-- **Unsolicited backward compatibility / legacy support** - Not needed unless explicitly instructed
+- **Unsolicited backward compatibility / legacy support** - REJECT. Production, reading, aliases, conversion, upcasters, fallback, backfill, data migration, or rebuilds that support a replaced contract—including a public API, event, command, configuration, path, or persisted format—may be added or retained only when necessary for backward compatibility, legacy support, migration support, or coexistence explicitly required by the requirement source for that target and scope and, when time-bounded, its period and end condition. Current code, existing tests and usage sites, stored or persisted data, published or released status, and placement or isolation at a read boundary are impact-analysis evidence, not authority for that support
 - **Internal implementation exported from public API** - Only export domain-level functions and types. Do not export infrastructure functions or internal classes
 - **Replaced code surviving after refactoring** - Remove replaced code and exports. Do not keep unless explicitly told to
 - **Workarounds that bypass safety mechanisms** - If the root fix is correct, no additional bypass is needed

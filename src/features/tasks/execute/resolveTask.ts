@@ -13,9 +13,8 @@ import {
   resolveTaskStartStepValue,
   TaskExecutionConfigSchema,
 } from '../../../infra/task/index.js';
-import type { WorkflowResumePoint } from '../../../core/models/index.js';
+import type { WorkflowRestartPoint, WorkflowResumePoint } from '../../../core/models/index.js';
 import type { RunResumeSource } from '../../../core/workflow/run/run-meta.js';
-import { parseWorkflowResumePoint } from '../../../core/workflow/resume-point-codec.js';
 import { trimResumePointStackForWorkflow } from '../../../core/workflow/run/resume-point.js';
 import { getGitProvider, type GitProvider, type Issue } from '../../../infra/git/index.js';
 import { withProgress } from '../../../shared/ui/index.js';
@@ -28,6 +27,7 @@ import {
   type ResolvedTaskSpec,
 } from './taskSpecContext.js';
 import { resolveReusedWorktreeExecution } from './reusedWorktree.js';
+import { validateTaskRetryRestartPoint } from '../taskRetryStartPath.js';
 import type { ExecuteTaskOptions, TaskExecutionContextOverride } from './types.js';
 import { createPullRequestContext, type PullRequestContext } from '../../../core/workflow/pr-context.js';
 import {
@@ -152,6 +152,7 @@ export interface ResolvedTaskExecution {
   startStep?: string;
   retryNote?: string;
   resumePoint?: WorkflowResumePoint;
+  restartPoint?: WorkflowRestartPoint;
   resumeSource?: RunResumeSource;
   autoPr: boolean;
   draftPr: boolean;
@@ -175,12 +176,25 @@ function resolveRetryResume(
   lookupCwd: string,
   configuredStartStep: string | undefined,
   resumePoint: WorkflowResumePoint | undefined,
+  restartPoint: WorkflowRestartPoint | undefined,
   outputMode: ExecuteTaskOptions['outputMode'],
 ): {
   startStep?: string;
   resumePoint?: WorkflowResumePoint;
+  restartPoint?: WorkflowRestartPoint;
 } {
-  if (!resumePoint) {
+  if (restartPoint !== undefined) {
+    const workflowConfig = loadWorkflowByIdentifier(workflowIdentifier, projectCwd, { lookupCwd });
+    if (!workflowConfig) {
+      throw new Error(`Cannot validate task retry restart path because workflow "${workflowIdentifier}" was not found`);
+    }
+    validateTaskRetryRestartPoint(workflowConfig, restartPoint, { projectCwd, lookupCwd });
+    return {
+      startStep: restartPoint.stack[0]!.step,
+      restartPoint,
+    };
+  }
+  if (resumePoint === undefined) {
     return configuredStartStep ? { startStep: configuredStartStep } : {};
   }
   const workflowConfig = loadWorkflowByIdentifier(
@@ -298,9 +312,8 @@ export async function resolveTaskExecution(
     throw new Error(`Task "${task.name}" is missing required workflow.`);
   }
   const configuredStartStep = resolveTaskStartStepValue(normalizedData);
-  const resumePoint = normalizedData.resume_point === undefined
-    ? undefined
-    : parseWorkflowResumePoint(normalizedData.resume_point);
+  const resumePoint = normalizedData.resume_point;
+  const restartPoint = normalizedData.restart_point as WorkflowRestartPoint | undefined;
   const retryNote = normalizedData.retry_note;
   const contextOverride = options?.taskContext;
   let prContext = resolvePrReviewContext(task.name, normalizedData, defaultCwd, contextOverride);
@@ -338,6 +351,7 @@ export async function resolveTaskExecution(
       task,
       configuredStartStep,
       resumePoint,
+      restartPoint,
       retryNote,
     );
     if (reusedWorktree) {
@@ -421,6 +435,7 @@ export async function resolveTaskExecution(
     execCwd,
     configuredStartStep,
     resumePoint,
+    restartPoint,
     options?.outputMode,
   );
   const resolvedRetryNote = data.retry_note;
@@ -449,6 +464,7 @@ export async function resolveTaskExecution(
     ...(retryResume.startStep ? { startStep: retryResume.startStep } : {}),
     ...(resolvedRetryNote ? { retryNote: resolvedRetryNote } : {}),
     ...(retryResume.resumePoint ? { resumePoint: retryResume.resumePoint } : {}),
+    ...(retryResume.restartPoint ? { restartPoint: retryResume.restartPoint } : {}),
     ...(resumeSource ? { resumeSource } : {}),
     ...(data.issue !== undefined ? { issueNumber: data.issue } : {}),
     ...(prContext
