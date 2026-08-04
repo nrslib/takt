@@ -107,15 +107,18 @@ describe('listTasksNonInteractive completed actions', () => {
       throw new Error('exit');
     }) as never);
 
-    await expect(listTasksNonInteractive('/project', {
-      enabled: true,
-      action: 'sync',
-      branch: 'takt/completed-task',
-    })).rejects.toThrow('exit');
+    try {
+      await expect(listTasksNonInteractive('/project', {
+        enabled: true,
+        action: 'sync',
+        branch: 'takt/completed-task',
+      })).rejects.toThrow('exit');
 
-    expect(exitSpy).toHaveBeenCalledWith(1);
-    expect(mockDeleteTask).not.toHaveBeenCalled();
-    exitSpy.mockRestore();
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(mockDeleteTask).not.toHaveBeenCalled();
+    } finally {
+      exitSpy.mockRestore();
+    }
   });
 
   it('should reject an unknown action listing the allowed set', async () => {
@@ -123,14 +126,17 @@ describe('listTasksNonInteractive completed actions', () => {
       throw new Error('exit');
     }) as never);
 
-    await expect(listTasksNonInteractive('/project', {
-      enabled: true,
-      action: 'rebase',
-      branch: 'takt/completed-task',
-    })).rejects.toThrow('exit');
+    try {
+      await expect(listTasksNonInteractive('/project', {
+        enabled: true,
+        action: 'rebase',
+        branch: 'takt/completed-task',
+      })).rejects.toThrow('exit');
 
-    expect(mockInfo).toHaveBeenCalledWith('Invalid --action. Use one of: diff, sync, try, merge, delete.');
-    expect(exitSpy).toHaveBeenCalledWith(1);
-    exitSpy.mockRestore();
+      expect(mockInfo).toHaveBeenCalledWith('Invalid --action. Use one of: diff, sync, try, merge, delete.');
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    } finally {
+      exitSpy.mockRestore();
+    }
   });
 });
