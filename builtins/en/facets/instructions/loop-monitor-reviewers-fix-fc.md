@@ -1,16 +1,11 @@
 A loop containing a post-fix review has repeated {cycle_count} times.
 
-Treat the engine-provided live Finding Contract ledger summary / current Finding state as authoritative. A `findings-ledger.json` file, when present, is only an auxiliary snapshot. Use the latest reports in the Report Directory as supporting evidence. Decide in this order:
+Treat only the engine-provided live Finding Contract ledger summary / current Finding state and the fresh Phase 1 response from the `reviewers` or `final-gate` step that triggered this cycle as authoritative observation inputs. Do not consult `findings-ledger.json` or any report in the Report Directory, including fix-plan, fix, fix-verification, reviewer, and final-gate reports; they are neither authoritative nor supporting evidence for this judgment.
 
-1. First confirm that this judgment occurs after a post-fix review or final gate. Never classify repetition or stagnation from a completed fix alone.
-2. For fix progress, check whether the post-fix review reconfirms the same `finding_id`, root cause, or acceptance criterion.
-3. For report convergence, check whether valid new structural or contract findings keep being added across completed review rounds. A different finding or `family_tag` is not itself evidence of progress.
-4. The loop may be converging when new findings are limited to a finite set of local issues and the unreviewed structural or contract surface is not expanding. Treat counts as supporting information.
-5. If redefining the implementation approach, test strategy, or finding treatment under the current requirements and acceptance criteria can resolve the loop, choose replanning.
-6. If post-fix evidence makes the next fix concrete and actionable, continue the normal fix path.
-7. Choose ABORT only when no feasible approach can satisfy the requirements after the attempted fixes and replans.
+Choose exactly one defined semantic condition in this order:
 
-**When engine-provided current Finding state is present:**
-- Treat its `findings` / `conflicts` as authoritative. An open status alone does not prove a failed fix; require evidence reconfirmed after the latest fix.
-- A provisional fixpoint or exhausted budget is evidence of stagnation. Choose replan when a requirements-compliant redefinition remains possible, and ABORT only after attempted redefinition still cannot produce a viable approach.
-- Do not propose human adjudication, manual ledger edits, or resume as the resolution.
+1. Choose the reviewers path when fixes are progressing, the triggering response shows that findings are converging rather than reconfirming the same `finding_id`, root cause, or acceptance criterion, and the next review is concrete and actionable.
+2. Choose the fix-plan path when implementation is incomplete or the triggering response shows that findings have not converged, and redefining the implementation approach, test strategy, or finding treatment can resolve the loop without changing the requirements or acceptance criteria.
+3. Treat a provisional fixpoint or exhausted budget in the live state as stagnation, but choose fix-plan when a concrete requirements-compliant redefinition remains possible.
+4. Choose ABORT only when no feasible approach can satisfy the requirements after the attempted fix-plan redefinitions.
+5. Do not adjudicate finding validity, dismiss, waive, or resolve. Do not propose human adjudication, manual ledger edits, or resume as the resolution.

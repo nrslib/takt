@@ -80,6 +80,7 @@ workflow_categories:
   🎵 TAKT開発:
     workflows:
       - takt-default
+      - takt-default-fc
       - auto-improvement-loop
       - review-takt-default
       - review-fix-takt-default

@@ -86,6 +86,7 @@ TAKT に同梱されているすべてのビルトイン workflow と persona �
 | | `audit-architecture-backend` | バックエンド特化アーキテクチャ監査。サービスモジュールと境界を列挙。 |
 | | `audit-architecture-dual` | フルスタックアーキテクチャ監査。フロントエンド/バックエンドの境界とクロスレイヤー配線を列挙。 |
 | 🎵 TAKT開発 | `takt-default` | 計画、テスト、実装、レビュー、修正へ TAKT 固有知識を注入して共通開発コアを実行する workflow です。 |
+| | `takt-default-fc` | `takt-default` と同じ開発フローで、標準5専門レビューを Finding Contract ledger へ取り込み、ledger 駆動の修正ループと terminal final gate を実行します。 |
 | | `auto-improvement-loop` | PR・Issue・新規改善を巡回しながら次の task を積み続ける orchestration loop workflow。 |
 | | `review-takt-default` | TAKT開発向け多角レビュー（AIアンチパターン・コーディングレビュー含む5観点レビュー）。 |
 | | `review-fix-takt-default` | レビュー対象を収集してから、TAKT固有ファセットを共通開発フローへ注入するワークフロー。 |
@@ -99,6 +100,38 @@ TAKT に同梱されているすべてのビルトイン workflow と persona �
 | | `compound-eye` | 複眼レビュー。同じ指示を Claude と Codex に同時に投げ、両者の回答を統合する。 |
 
 ローカルモデルだけで既存workflowを動かす場合は、各workflowへ provider/model を設定してください。ハイブリッド構成では、`review` をローカル provider へ、`boundary-review` と `final-gate` を commercial provider へルーティングしてください。タグは step の記載順に適用されるため、`merge-readiness-review` と `supervise` では後ろの `final-gate` が先の `review` を上書きします。`finding-contract-local-review` の integrity gate と `finding-contract-boundary-review` の final gate は同じ `merge-readiness-finding-contract-final-gate` subworkflow を呼ぶため、この1つの routing で両 stage を保証でき、workflow 自体へ provider/model を固定する必要はありません。
+
+`takt-default-fc` で一般 reviewer と修正を軽量モデルへ、Finding Manager、自動導出される supervisor、terminal final gate を強いモデルへ振り分ける例です。`.takt/config.yaml` に設定します。
+
+```yaml
+provider_routing:
+  tags:
+    review:
+      provider: opencode
+      model: <weak-local-review-model>
+    final-gate:
+      provider: codex
+      model: <strong-model>
+  steps:
+    fix:
+      provider: opencode
+      model: <weak-local-fix-model>
+    fix-retry:
+      provider: opencode
+      model: <weak-local-fix-model>
+  personas:
+    findings-manager:
+      provider: codex
+      model: <strong-model>
+    loop-judge:
+      provider: codex
+      model: <strong-model>
+    supervisor:
+      provider: codex
+      model: <strong-model>
+```
+
+`final-gate` タグは `review` より後に適用されるため、通常レビューをローカルに保ったまま final gate を強いモデルへ戻せます。Finding Manager は `findings-manager`、loop judge は judge の persona 設定にかかわらず固定キー `loop-judge`、現行エンジンが自動導出する adjudicator は `supervisor` の persona routing を使います。`loop-judge` の routing がない場合、loop judge は cycle を発火させた step の解決済み provider/model を引き継ぎます。
 
 `takt` を実行すると workflow をインタラクティブに選択できます。
 

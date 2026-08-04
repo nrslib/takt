@@ -86,6 +86,7 @@ Organized by category.
 | | `audit-architecture-backend` | Backend-focused architecture audit. Enumerates service modules and boundaries. |
 | | `audit-architecture-dual` | Full-stack architecture audit. Enumerates frontend/backend boundaries and cross-layer wiring. |
 | 🎵 TAKT Development | `takt-default` | TAKT-focused workflow using the shared development core with TAKT knowledge injected into planning, testing, implementation, review, and remediation. |
+| | `takt-default-fc` | Runs the same development flow as `takt-default`, with the five standard specialist reviews ingested into a Finding Contract ledger, ledger-driven remediation, and a terminal final gate. |
 | | `auto-improvement-loop` | Infinite orchestration loop that routes between open PR handling, issue-driven planning, and fresh improvement planning. |
 | | `review-takt-default` | TAKT-focused multi-perspective review (5 reviewers including AI antipattern and coding review). |
 | | `review-fix-takt-default` | Workflow that gathers the review target, then injects TAKT-specific facets into the shared development flow. |
@@ -99,6 +100,38 @@ Organized by category.
 | | `compound-eye` | Multi-model review: send the same instruction to Claude and Codex simultaneously, then synthesize both responses. |
 
 To run an existing workflow entirely with local models, configure its provider and model normally. For a hybrid setup, route `review` to the local provider and route both `boundary-review` and `final-gate` to the commercial provider. Tags are applied in step order, so `final-gate` overrides the earlier `review` route on both `merge-readiness-review` and `supervise`. The integrity gate in `finding-contract-local-review` and the final gate in `finding-contract-boundary-review` use the same `merge-readiness-finding-contract-final-gate` subworkflow, so this one route covers both stages without hardcoding a provider or model in the workflow.
+
+For `takt-default-fc`, the following `.takt/config.yaml` example routes regular reviewers and fixes to lightweight models while keeping the Finding Manager, automatically derived supervisor, and terminal final gate on strong models.
+
+```yaml
+provider_routing:
+  tags:
+    review:
+      provider: opencode
+      model: <weak-local-review-model>
+    final-gate:
+      provider: codex
+      model: <strong-model>
+  steps:
+    fix:
+      provider: opencode
+      model: <weak-local-fix-model>
+    fix-retry:
+      provider: opencode
+      model: <weak-local-fix-model>
+  personas:
+    findings-manager:
+      provider: codex
+      model: <strong-model>
+    loop-judge:
+      provider: codex
+      model: <strong-model>
+    supervisor:
+      provider: codex
+      model: <strong-model>
+```
+
+The `final-gate` tag is applied after `review`, so final-gate steps return to the strong model while regular reviews remain local. The Finding Manager uses `findings-manager`; loop judges use the fixed `loop-judge` routing key regardless of the configured judge persona; and the adjudicator automatically derived by the current engine uses `supervisor`. Without a `loop-judge` route, a loop judge inherits the resolved provider and model of the step that triggered the cycle.
 
 Run `takt` to choose a workflow interactively.
 

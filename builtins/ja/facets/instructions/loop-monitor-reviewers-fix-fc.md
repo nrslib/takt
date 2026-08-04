@@ -1,16 +1,11 @@
 修正後レビューを含むループが {cycle_count} 回繰り返されました。
 
-エンジンが提供する live Finding Contract ledger summary / current Finding state を正本として扱ってください。`findings-ledger.json` が存在しても、補助的な snapshot にすぎません。Report Directory 内の最新レビュー報告は補助証拠として、次の順序で判断してください。
+エンジンが提供する live Finding Contract ledger summary / current Finding state と、この cycle を発火させた `reviewers` または `final-gate` の fresh な Phase 1 response だけを正本となる観測入力として扱ってください。`findings-ledger.json` や、修正計画・修正・修正検証・reviewer・final gate を含む Report Directory 内のレポートは参照せず、この判定の正本にも補助証拠にも使ってはいけません。
 
-1. まず、今回の判定が修正後レビューまたは final gate の完了後であることを確認してください。修正完了だけを根拠に、指摘の反復や停滞を判定してはいけません。
-2. 修正進捗として、修正後レビューが同じ `finding_id`、根本原因、または受入条件を再確認しているか確認してください。
-3. 報告の収束として、正しい構造・契約上の new findings が完了したレビュー回ごとに追加され続けていないか確認してください。異なる finding / `family_tag` であること自体は進捗の根拠になりません。
-4. 新規指摘が有限な局所問題に限られ、構造・契約上の未確認領域が増えていない場合は収束中と判断できます。件数は補助情報に留めてください。
-5. 現在の要件と受入条件に従って、実装方針・テスト方針・finding の扱いを再定義すれば解消できるなら、再計画を選んでください。
-6. 修正後レビューの証拠から次の修正が具体的かつ実行可能なら、通常の修正を続けてください。
-7. 試行済みの修正と再計画を踏まえても、要件を満たす実現可能な方針が存在しない場合に限り ABORT を選んでください。
+次の順序で、定義された semantic condition を1つだけ選んでください。
 
-**エンジンが提供する current Finding state がある場合:**
-- その `findings` / `conflicts` を正本とし、open であることだけでは修正失敗と判断しないでください。直前の修正後に再確認された証拠が必要です。
-- provisional の fixpoint や budget exhaustion は停滞の証拠です。要件に沿う再定義が可能なら replan、既に再定義を試しても成立しないなら ABORT と判断してください。
-- 人手裁定、台帳の手編集、resume を解決策として提案してはいけません。
+1. 修正が進捗し、triggering response が同じ `finding_id`、根本原因、受入条件の再確認ではなく指摘の収束を示し、次のレビューが具体的かつ実行可能なら reviewers の経路を選んでください。
+2. 実装が未完了、または triggering response が指摘の未収束を示し、要件と受入条件を変えずに実装方針・テスト方針・finding の扱いを再定義すれば解消できるなら fix-plan の経路を選んでください。
+3. live state の provisional fixpoint や budget exhaustion は停滞として扱いますが、要件を満たす具体的な再定義が可能なら fix-plan を選んでください。
+4. 試行済みの fix-plan 再定義を踏まえても、要件を満たす実行可能な方針が存在しない場合に限り ABORT を選んでください。
+5. finding の妥当性、dismiss、waive、resolve を裁定しないでください。人手裁定、台帳の手編集、resume を解決策として提案してはいけません。
