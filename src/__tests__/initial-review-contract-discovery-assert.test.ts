@@ -4,6 +4,9 @@ import assertInitialReviewContractDiscovery from '../../eval/asserts/initial-rev
 const projectionPaths = [
   'src/preview.js',
   'src/doctor.js',
+  'src/summary.js',
+  'src/catalog-row.js',
+  'src/list-command.js',
   'tests/public-projections.test.js',
 ];
 const identityPaths = [
