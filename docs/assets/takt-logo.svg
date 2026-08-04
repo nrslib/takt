@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1807 485">
+  <defs>
+    <style>
+      .cls-1 {
+        fill: url(#_名称未設定グラデーション_18);
+      }
+
+      .cls-2 {
+        fill: #fff;
+      }
+
+      .cls-3 {
+        mask: url(#mask);
+      }
+
+      .cls-4 {
+        fill: #5bbb91;
+      }
+    </style>
+    <linearGradient id="_名称未設定グラデーション_18" data-name="名称未設定グラデーション 18" x1="210.31" y1="287.77" x2="1612.59" y2="289.11" gradientTransform="translate(-180.76 .9) rotate(-.05) scale(1.19 1) skewX(-.05)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#000"/>
+      <stop offset=".05" stop-color="#323232"/>
+      <stop offset=".11" stop-color="#686868"/>
+      <stop offset=".18" stop-color="#969696"/>
+      <stop offset=".24" stop-color="#bcbcbc"/>
+      <stop offset=".3" stop-color="#d9d9d9"/>
+      <stop offset=".36" stop-color="#eee"/>
+      <stop offset=".42" stop-color="#fafafa"/>
+      <stop offset=".47" stop-color="#fff"/>
+      <stop offset=".52" stop-color="#f3f3f3"/>
+      <stop offset=".6" stop-color="#d3d3d3"/>
+      <stop offset=".71" stop-color="#9f9f9f"/>
+      <stop offset=".85" stop-color="#585858"/>
+      <stop offset="1" stop-color="#000"/>
+    </linearGradient>
+    <mask id="mask" x="0" y="143.5" width="1807" height="289.92" maskUnits="userSpaceOnUse">
+      <polygon class="cls-1" points="1737.44 431.93 69.5 433.43 69.56 145 1737.5 143.5 1737.44 431.93"/>
+    </mask>
+  </defs>
+  <g id="_レイヤー_3" data-name="レイヤー 3">
+    <g class="cls-3">
+      <g id="_五線譜" data-name="五線譜">
+        <rect class="cls-4" y="394.78" width="1807" height="4"/>
+        <rect class="cls-4" y="337.78" width="1807" height="4"/>
+        <rect class="cls-4" y="280.78" width="1807" height="4"/>
+        <rect class="cls-4" y="223.78" width="1807" height="4"/>
+        <rect class="cls-4" y="166.78" width="1807" height="4"/>
+      </g>
+    </g>
+  </g>
+  <g id="_レイヤー_2" data-name="レイヤー 2">
+    <g>
+      <g id="_1" data-name="1">
+        <rect x="205" y="166.78" width="307" height="32"/>
+        <rect x="257.5" y="278.01" width="202" height="39.55" transform="translate(656.28 -60.72) rotate(90)"/>
+      </g>
+      <g id="_2" data-name="2">
+        <rect x="1335" y="166.78" width="307" height="32"/>
+        <rect x="1387.5" y="278.78" width="202" height="38" transform="translate(1786.28 -1190.72) rotate(90)"/>
+      </g>
+      <g>
+        <rect x="894.7" y="263.98" width="231.6" height="38" transform="translate(1293.48 -727.52) rotate(90)"/>
+        <polygon points="1284.5 399.28 1241.48 399.28 1084.36 280.37 1106.14 261.74 1284.5 399.28"/>
+        <g>
+          <polygon points="989.56 364.17 1325.44 74.38 1328.44 65.39 1318.44 66.39 966.56 330.17 966.56 356.84 989.56 364.17"/>
+          <path class="cls-2" d="M1328.44,65.39l-3,8.99-335.89,289.79-23-7.33v-26.67l351.89-263.78,10-1M1339.94,56.2l-12.3,1.23-10,1-2.22.22-1.78,1.34-351.89,263.78-3.2,2.4v36.52l5.57,1.77,23,7.33,4.26,1.36,3.39-2.92,335.89-289.79,1.67-1.44.7-2.09,3-8.99,3.91-11.72h0Z"/>
+        </g>
+      </g>
+      <g>
+        <polygon points="531.5 398.78 574.55 398.78 732.5 164.78 689.45 164.78 531.5 398.78"/>
+        <polygon points="791 331.78 632 331.78 648.34 307.78 774.75 307.78 791 331.78"/>
+        <polygon points="891.5 398.78 848.45 398.78 690.5 164.78 733.55 164.78 891.5 398.78"/>
+      </g>
+    </g>
+  </g>
+</svg>
