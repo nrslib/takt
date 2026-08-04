@@ -198,4 +198,41 @@ describe('E2E: runtime.yaml provider section (runtime-v1, mock)', () => {
       model: 'mock-low',
     }));
   }, 240_000);
+
+  it('fails fast from the CLI when an active runtime.yaml resolves no default provider', () => {
+    writeCleanConfig(isolatedEnv.taktDir);
+    // Active section (non-empty targets) but no `defaults` profile/pool: no fixed provider and
+    // no auto routing can be resolved, so the CLI must exit non-zero before any agent runs.
+    writeFileSync(
+      join(isolatedEnv.taktDir, 'runtime.yaml'),
+      stringifyYaml({
+        version: 1,
+        provider: {
+          profiles: { alt: { provider: 'mock', model: 'alt-model' } },
+          targets: { personas: { reviewer: { profile: 'alt' } } },
+        },
+      }),
+    );
+
+    const workflowPath = createLocalWorkflowFixture(repo.path, 'mock-single-step.yaml');
+
+    // No --provider flag and no TAKT_MOCK_SCENARIO: the run must stop at the bootstrap
+    // fail-fast boundary, never reaching a provider call.
+    const result = runTakt({
+      injectProvider: false,
+      args: [
+        '--task', 'Test runtime-v1 missing default provider',
+        '--workflow', workflowPath,
+      ],
+      cwd: repo.path,
+      env: {
+        ...isolatedEnv.env,
+        TAKT_PROVIDER_OPTIONS: undefined,
+      },
+      timeout: 240_000,
+    });
+
+    expect(result.exitCode).not.toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toContain('No provider configured');
+  }, 240_000);
 });
