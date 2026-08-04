@@ -16,8 +16,33 @@ import { RuntimeProviderFileSchema } from '../infra/config/runtime-provider/sche
  * These are the literal shapes from order.md:41-103 / 206-217 / 221-223.
  */
 
+/**
+ * Loose JSON shape for building intentionally-invalid fixtures without `any`: every leaf the
+ * tests mutate is typed `unknown` (or optional) so invalid values stay assignable while key
+ * names remain checked.
+ */
+type LooseRuntimeDoc = {
+  version?: unknown;
+  provider: {
+    defaults: { profile?: unknown; pool?: unknown };
+    profiles: Record<string, { provider?: unknown; model?: unknown; options?: unknown; extends?: unknown }>;
+    targets: {
+      personas: Record<string, unknown>;
+      tags: Record<string, unknown>;
+      steps: Record<string, unknown>;
+      internal_agents: Record<string, unknown>;
+      models?: unknown;
+    };
+    auto_routing: {
+      strategy?: unknown;
+      router_profile?: unknown;
+      pools: Record<string, { candidates?: Array<Record<string, unknown>>; fallback_profile?: unknown }>;
+    };
+  };
+};
+
 // order.md:41-103 verbatim (as parsed YAML → JS object).
-function fullExample(): unknown {
+function fullExample(): LooseRuntimeDoc {
   return {
     version: 1,
     provider: {
@@ -86,22 +111,22 @@ describe('RuntimeProviderFileSchema', () => {
   });
 
   it('Given an assignment with both profile and pool, When parsed, Then XOR is enforced (C5/C14)', () => {
-    const doc: any = fullExample();
+    const doc = fullExample();
     doc.provider.targets.personas.coder = { profile: 'sol-medium', pool: 'sol-pool' };
     const result = RuntimeProviderFileSchema.safeParse(doc);
     expect(result.success).toBe(false);
   });
 
   it('Given an assignment with neither profile nor pool, When parsed, Then it is rejected (C5)', () => {
-    const doc: any = fullExample();
+    const doc = fullExample();
     doc.provider.targets.personas.coder = {};
     const result = RuntimeProviderFileSchema.safeParse(doc);
     expect(result.success).toBe(false);
   });
 
   it('Given an auto_routing candidate with inline provider/model instead of a profile ref, When parsed, Then it is rejected (C9)', () => {
-    const doc: any = fullExample();
-    doc.provider.auto_routing.pools['sol-pool'].candidates[0] = {
+    const doc = fullExample();
+    doc.provider.auto_routing.pools['sol-pool']!.candidates![0] = {
       provider: 'codex',
       model: 'gpt-5.6-sol',
       tier: 'high',
@@ -111,15 +136,15 @@ describe('RuntimeProviderFileSchema', () => {
   });
 
   it('Given an unknown provider.targets map key, When parsed, Then only the four documented maps are allowed (C4)', () => {
-    const doc: any = fullExample();
+    const doc = fullExample();
     doc.provider.targets.models = { foo: { profile: 'sol-high' } };
     const result = RuntimeProviderFileSchema.safeParse(doc);
     expect(result.success).toBe(false);
   });
 
   it('Given a profile provider outside the known provider enum, When parsed, Then it is rejected (C10)', () => {
-    const doc: any = fullExample();
-    doc.provider.profiles['sol-high'].provider = 'not-a-provider';
+    const doc = fullExample();
+    doc.provider.profiles['sol-high']!.provider = 'not-a-provider';
     const result = RuntimeProviderFileSchema.safeParse(doc);
     expect(result.success).toBe(false);
   });
@@ -149,27 +174,39 @@ describe('RuntimeProviderFileSchema', () => {
     ).toBe(false);
   });
 
+  it('Given an unknown auto_routing strategy, When parsed, Then the enum rejects it (C9)', () => {
+    const doc = fullExample();
+    doc.provider.auto_routing.strategy = 'cheapest';
+    expect(RuntimeProviderFileSchema.safeParse(doc).success).toBe(false);
+  });
+
+  it('Given an unknown candidate tier, When parsed, Then the enum rejects it (C9)', () => {
+    const doc = fullExample();
+    doc.provider.auto_routing.pools['sol-pool']!.candidates![0] = { profile: 'sol-high', tier: 'ultra' };
+    expect(RuntimeProviderFileSchema.safeParse(doc).success).toBe(false);
+  });
+
   it('Given an empty candidates array, When parsed, Then the min(1) boundary rejects it (C9)', () => {
-    const doc: any = fullExample();
-    doc.provider.auto_routing.pools['sol-pool'].candidates = [];
+    const doc = fullExample();
+    doc.provider.auto_routing.pools['sol-pool']!.candidates = [];
     expect(RuntimeProviderFileSchema.safeParse(doc).success).toBe(false);
   });
 
   it('Given a pool without a candidates key, When parsed, Then it is rejected (missing value)', () => {
-    const doc: any = fullExample();
-    delete doc.provider.auto_routing.pools['sol-pool'].candidates;
+    const doc = fullExample();
+    delete doc.provider.auto_routing.pools['sol-pool']!.candidates;
     expect(RuntimeProviderFileSchema.safeParse(doc).success).toBe(false);
   });
 
   it('Given an empty model string, When parsed, Then it is rejected (missing value)', () => {
-    const doc: any = fullExample();
-    doc.provider.profiles['sol-high'].model = '';
+    const doc = fullExample();
+    doc.provider.profiles['sol-high']!.model = '';
     expect(RuntimeProviderFileSchema.safeParse(doc).success).toBe(false);
   });
 
   it('Given an empty extends string, When parsed, Then it is rejected (missing value)', () => {
-    const doc: any = fullExample();
-    doc.provider.profiles['sol-high'].extends = '';
+    const doc = fullExample();
+    doc.provider.profiles['sol-high']!.extends = '';
     expect(RuntimeProviderFileSchema.safeParse(doc).success).toBe(false);
   });
 });

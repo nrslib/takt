@@ -7,6 +7,7 @@ import {
   loadRuntimeProviderFileAt,
   resolveRuntimeProviderFile,
 } from '../infra/config/runtime-provider/loader.js';
+import { RUNTIME_PROVIDER_FILENAME } from '../infra/config/runtime-provider/constants.js';
 
 /**
  * Contracts covered (see plan.md 完了契約):
@@ -24,7 +25,7 @@ let projectDir: string;
 
 function writeRuntimeYaml(dir: string, lines: string[]): void {
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, 'runtime.yaml'), lines.join('\n'), 'utf-8');
+  writeFileSync(join(dir, RUNTIME_PROVIDER_FILENAME), lines.join('\n'), 'utf-8');
 }
 
 describe('runtime-provider loader', () => {
@@ -42,18 +43,18 @@ describe('runtime-provider loader', () => {
 
   it('Given a missing file, When loading a single path, Then it returns undefined (C1)', () => {
     mkdirSync(globalDir, { recursive: true });
-    expect(loadRuntimeProviderFileAt(join(globalDir, 'runtime.yaml'))).toBeUndefined();
+    expect(loadRuntimeProviderFileAt(join(globalDir, RUNTIME_PROVIDER_FILENAME))).toBeUndefined();
   });
 
   it('Given an invalid runtime.yaml, When loading, Then it throws naming the failing file path (schema validation, C1)', () => {
     writeRuntimeYaml(globalDir, ['version: 2']);
-    const filePath = join(globalDir, 'runtime.yaml');
+    const filePath = join(globalDir, RUNTIME_PROVIDER_FILENAME);
     expect(() => loadRuntimeProviderFileAt(filePath)).toThrow(filePath);
   });
 
   it('Given an empty runtime.yaml, When loading, Then it is treated as unset (C1)', () => {
     writeRuntimeYaml(globalDir, ['']);
-    expect(loadRuntimeProviderFileAt(join(globalDir, 'runtime.yaml'))).toBeUndefined();
+    expect(loadRuntimeProviderFileAt(join(globalDir, RUNTIME_PROVIDER_FILENAME))).toBeUndefined();
   });
 
   it('Given only the global file, When resolving, Then the global config is returned (C1)', () => {
@@ -67,7 +68,7 @@ describe('runtime-provider loader', () => {
       '      provider: mock',
       '      model: global-model',
     ]);
-    const resolved: any = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
+    const resolved = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
     expect(resolved?.provider?.profiles?.g?.model).toBe('global-model');
   });
 
@@ -82,7 +83,7 @@ describe('runtime-provider loader', () => {
       '      provider: mock',
       '      model: project-model',
     ]);
-    const resolved: any = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
+    const resolved = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
     expect(resolved?.provider?.profiles?.p?.model).toBe('project-model');
   });
 
@@ -107,7 +108,7 @@ describe('runtime-provider loader', () => {
       '      provider: codex',
       '      model: project-model',
     ]);
-    const resolved: any = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
+    const resolved = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
     expect(resolved?.provider?.profiles?.base?.model).toBe('project-model');
     expect(resolved?.provider?.profiles?.base?.provider).toBe('codex');
   });
@@ -140,7 +141,7 @@ describe('runtime-provider loader', () => {
       '      provider: mock',
       '      model: added',
     ]);
-    const resolved: any = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
+    const resolved = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
 
     // same-name profile fully replaced: project fields win AND the global-only `options` is gone.
     expect(resolved?.provider?.profiles?.shared?.model).toBe('project-model');
@@ -175,7 +176,7 @@ describe('runtime-provider loader', () => {
       '      high-stakes:',
       '        profile: p',
     ]);
-    const resolved: any = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
+    const resolved = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
     // section-level replacement: project targets wins wholesale, global `personas` disappears.
     expect(resolved?.provider?.targets?.tags?.['high-stakes']?.profile).toBe('p');
     expect(resolved?.provider?.targets?.personas).toBeUndefined();
@@ -200,7 +201,7 @@ describe('runtime-provider loader', () => {
       '      provider: codex',
       '      model: project-model',
     ]);
-    const resolved: any = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
+    const resolved = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
     // defaults is absent in project, so the global defaults survives.
     expect(resolved?.provider?.defaults?.profile).toBe('g-default');
     // disjoint profiles from both layers are retained.
@@ -213,16 +214,16 @@ describe('runtime-provider loader', () => {
       'version: 1',
       'provider:',
       '  auto_routing:',
-      '    strategy: global-strategy',
+      '    strategy: balanced',
     ]);
     writeRuntimeYaml(projectDir, [
       'version: 1',
       'provider:',
       '  auto_routing:',
-      '    strategy: project-strategy',
+      '    strategy: performance',
     ]);
-    const resolved: any = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
-    expect(resolved?.provider?.auto_routing?.strategy).toBe('project-strategy');
+    const resolved = resolveRuntimeProviderFile({ globalConfigDir: globalDir, projectConfigDir: projectDir });
+    expect(resolved?.provider?.auto_routing?.strategy).toBe('performance');
   });
 
   it('Given neither file present, When resolving, Then it returns undefined (C1)', () => {

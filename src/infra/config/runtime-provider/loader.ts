@@ -11,6 +11,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
+import { z } from 'zod';
 import { RUNTIME_PROVIDER_FILENAME, RUNTIME_PROVIDER_VERSION } from './constants.js';
 import {
   RuntimeProviderFileSchema,
@@ -31,7 +32,7 @@ export function loadRuntimeProviderFileAt(filePath: string): RuntimeProviderFile
   const result = RuntimeProviderFileSchema.safeParse(raw);
   if (!result.success) {
     // Global and project layers share the `runtime.yaml` filename; name the failing path.
-    throw new Error(`Invalid ${filePath}: ${result.error.message}`);
+    throw new Error(`Invalid ${filePath}: ${z.prettifyError(result.error)}`);
   }
   return result.data;
 }

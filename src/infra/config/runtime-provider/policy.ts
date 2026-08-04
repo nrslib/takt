@@ -111,6 +111,9 @@ function validateReferences(
   const targets = section.targets;
   if (targets) {
     for (const [mapName, map] of Object.entries(targets)) {
+      if (map === undefined) {
+        continue;
+      }
       for (const [key, assignment] of Object.entries(map)) {
         assertAssignment(assignment, `targets.${mapName}.${key}`);
       }

@@ -187,11 +187,11 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
   - 目的: 有効な `~/.takt/runtime.yaml` の `provider` セクションから provider/model が解決され（runtime-v1）、`--provider` を渡さずに workflow が完了することをmockで確認する（issue #1136）。
   - LLM: 呼び出さない（`--provider` 未指定で runtime.yaml の `provider: mock` プロファイルを使用）。
   - 手順（ユーザー行動/コマンド）:
-    - `config.yaml` に legacy provider signal（`provider` / `model` / `provider_options` / `provider_routing` / `persona_providers` / `auto_routing`）を持たせない状態にする。
+    - 空の HOME / `TAKT_CONFIG_DIR`（隔離環境）を使い、`config.yaml` に legacy provider signal（`provider` / `model` / `provider_options` / `provider_routing` / `persona_providers` / `takt_providers` / `auto_routing`）を持たせない状態にする。
     - `~/.takt/runtime.yaml` に `version: 1` と `provider.defaults.profile: default`、`provider.profiles.default: { provider: mock, model: ... }` を書く。
     - `takt --task '<任意>' --workflow e2e/fixtures/workflows/mock-single-step.yaml`（`--provider` 無し）を実行する。
     - `Workflow completed` を確認し、セッションログの `step_start` が `provider: mock` / `providerSource: runtime-v1` / `model` / `modelSource: runtime-v1` を持つことを確認する。
-    - 負例（fail-fast 境界）: `defaults` を持たない targets-only の有効な runtime.yaml を書き、`--provider` 無し・`TAKT_MOCK_SCENARIO` 無しで実行すると、agent 実行前に非ゼロ終了し `No provider configured` が出力されることを確認する。
+    - 負例（fail-fast 境界）: 同じく空の HOME / `TAKT_CONFIG_DIR` の隔離環境で（legacy provider signal を一切持たせず）、`defaults` を持たない targets-only の有効な runtime.yaml を書き、`--provider` 無し・`TAKT_MOCK_SCENARIO` 無しで実行すると、agent 実行前に非ゼロ終了し `No provider configured` が出力されることを確認する。既存設定が残っていると `Mixed provider configuration detected` や provider 解決成功に化けるため、この境界は隔離環境でのみ検証できる。
 - List tasks non-interactive（`e2e/specs/list-non-interactive.e2e.ts`）
   - 目的: `takt list` の非対話モードでブランチ操作ができることを確認。
   - LLM: 呼び出さない（LLM不使用の操作のみ）

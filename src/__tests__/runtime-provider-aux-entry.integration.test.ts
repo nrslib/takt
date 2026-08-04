@@ -15,6 +15,7 @@ import {
 } from '../infra/config/index.js';
 import { RUNTIME_PROVIDER_FILENAME } from '../infra/config/runtime-provider/constants.js';
 import type { WorkflowConfig } from '../core/models/index.js';
+import type { RuntimeProviderFile } from '../infra/config/runtime-provider/schema.js';
 
 /**
  * Integration coverage for the shared auxiliary provider-environment entry (issue #1136, Unit B).
@@ -34,11 +35,13 @@ function writeGlobalConfig(lines: string[]): void {
   writeFileSync(getGlobalConfigPath(), `${lines.join('\n')}\n`);
 }
 
-function writeGlobalRuntimeFile(content: unknown): void {
+function writeGlobalRuntimeFile(content: RuntimeProviderFile): void {
   writeFileSync(join(getGlobalConfigDir(), RUNTIME_PROVIDER_FILENAME), stringifyYaml(content));
 }
 
-function activeRuntimeSection(): unknown {
+const MIXED_CONFIG_PROVIDER_ERROR = /config\.yaml:provider.*provider\.defaults \+ provider\.profiles/s;
+
+function activeRuntimeSection(): RuntimeProviderFile {
   return {
     version: 1,
     provider: {
@@ -97,7 +100,7 @@ describe('resolveAuxiliaryProviderEnvironment', () => {
     invalidateAllResolvedConfigCache();
 
     expect(() => resolveAuxiliaryProviderEnvironment(projectCwd, WORKFLOW))
-      .toThrow(/config\.yaml:provider.*provider\.defaults \+ provider\.profiles/s);
+      .toThrow(MIXED_CONFIG_PROVIDER_ERROR);
   });
 });
 
@@ -257,7 +260,7 @@ describe('getWorkflowDescription consumes the compiled provider environment', ()
     ]);
 
     expect(() => getWorkflowDescription('preview-mixed', projectCwd, 1))
-      .toThrow(/config\.yaml:provider.*provider\.defaults \+ provider\.profiles/s);
+      .toThrow(MIXED_CONFIG_PROVIDER_ERROR);
   });
 
   it('passes legacy config.yaml provider/model through preview when no runtime section exists', () => {
@@ -319,7 +322,7 @@ describe('resolveConfiguredExecProviderModel consumes the compiled provider envi
     invalidateAllResolvedConfigCache();
 
     expect(() => resolveConfiguredExecProviderModel(projectCwd))
-      .toThrow(/config\.yaml:provider.*provider\.defaults \+ provider\.profiles/s);
+      .toThrow(MIXED_CONFIG_PROVIDER_ERROR);
   });
 
   it('passes the legacy config.yaml provider/model through when no runtime section exists', () => {

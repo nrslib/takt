@@ -402,6 +402,17 @@ describe('resolveStepProviderModel — tag routing conflict policy', () => {
     expect(result).toMatchObject({ provider: 'claude', model: 'm-b' });
   });
 
+  it('last-wins follows the step tag order, not the routing map key order', () => {
+    // Reversed step tags: t1 is now the last match even though the routing map lists t2 last.
+    const result = resolveStepProviderModel({
+      step: { name: 'implement', personaDisplayName: 'coder', tags: ['t2', 't1'] },
+      providerRouting: twoTagRouting,
+      tagConflictPolicy: 'last-wins',
+    });
+
+    expect(result).toMatchObject({ provider: 'codex', model: 'm-a' });
+  });
+
   it('throws under fail-fast when tags share provider/model but differ in providerOptions', () => {
     expect(() =>
       resolveStepProviderModel({

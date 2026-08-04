@@ -14,6 +14,7 @@ import {
   invalidateGlobalConfigCache,
 } from '../infra/config/index.js';
 import { RUNTIME_PROVIDER_FILENAME } from '../infra/config/runtime-provider/constants.js';
+import type { RuntimeProviderFile } from '../infra/config/runtime-provider/schema.js';
 
 /**
  * Integration coverage for the non-workflow provider seam reading the runtime.yaml `defaults`
@@ -31,7 +32,7 @@ function writeGlobalConfig(lines: string[]): void {
   writeFileSync(getGlobalConfigPath(), `${lines.join('\n')}\n`);
 }
 
-function writeGlobalRuntimeFile(content: unknown): void {
+function writeGlobalRuntimeFile(content: RuntimeProviderFile): void {
   writeFileSync(join(getGlobalConfigDir(), RUNTIME_PROVIDER_FILENAME), stringifyYaml(content));
 }
 
@@ -184,6 +185,48 @@ describe('runtime.yaml non-workflow provider resolution', () => {
         delete process.env.TAKT_MODEL;
       } else {
         process.env.TAKT_MODEL = previous;
+      }
+      invalidate();
+    }
+  });
+
+  it('fails fast when the active section resolves no defaults profile and no auto routing', () => {
+    // targets-only active section: runtime-v1 owns the resolution, so the seam must not
+    // silently fall back to the legacy config.yaml provider.
+    writeGlobalRuntimeFile({
+      version: 1,
+      provider: {
+        profiles: { router: { provider: 'claude', model: 'sonnet' } },
+        targets: { internal_agents: { selector: { profile: 'router' } } },
+      },
+    });
+    invalidate();
+
+    expect(() => resolveRuntimeNonWorkflowProvider(projectCwd)).toThrow(/No provider configured/);
+    expect(() => resolveNonWorkflowProviderModel(projectCwd)).toThrow(/No provider configured/);
+  });
+
+  it('fails fast when an env provider override requires a model the override does not carry', () => {
+    writeGlobalRuntimeFile({
+      version: 1,
+      provider: {
+        defaults: { profile: 'default' },
+        profiles: { default: { provider: 'codex', model: 'gpt-default' } },
+      },
+    });
+    const previous = process.env.TAKT_PROVIDER;
+    process.env.TAKT_PROVIDER = 'opencode';
+    invalidate();
+    try {
+      // The provider override drops the runtime model; opencode requires a `provider/model`
+      // model, so the seam must fail fast instead of deferring the error to the provider SDK.
+      expect(() => resolveNonWorkflowProviderModel(projectCwd))
+        .toThrow(/provider 'opencode' requires model/);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.TAKT_PROVIDER;
+      } else {
+        process.env.TAKT_PROVIDER = previous;
       }
       invalidate();
     }

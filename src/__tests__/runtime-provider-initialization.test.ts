@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { parse as parseYaml } from 'yaml';
 // New module under test (implemented in the following `implement` step).
 import { generateGlobalRuntimeProviderFile } from '../infra/config/runtime-provider/initialization.js';
-import { RuntimeProviderFileSchema } from '../infra/config/runtime-provider/schema.js';
+import { RuntimeProviderFileSchema, type RuntimeProviderFile } from '../infra/config/runtime-provider/schema.js';
 import { hasActiveProviderSection } from '../infra/config/runtime-provider/mode.js';
 
 /**
@@ -24,6 +24,11 @@ let runtimeFilePath: string;
 
 function read(): unknown {
   return parseYaml(readFileSync(runtimeFilePath, 'utf-8'));
+}
+
+/** Schema-validated read: fails the test on shape drift instead of hiding it behind `any`. */
+function readValidated(): RuntimeProviderFile {
+  return RuntimeProviderFileSchema.parse(read());
 }
 
 describe('generateGlobalRuntimeProviderFile', () => {
@@ -45,10 +50,10 @@ describe('generateGlobalRuntimeProviderFile', () => {
       hasLegacyProviderConfig: false,
     });
 
-    const doc: any = read();
+    const doc = readValidated();
     expect(doc.version).toBe(1);
-    expect(doc.provider.profiles.default).toEqual({ provider: 'codex', model: 'gpt-5.6-sol' });
-    expect(doc.provider.defaults.profile).toBe('default');
+    expect(doc.provider?.profiles?.default).toEqual({ provider: 'codex', model: 'gpt-5.6-sol' });
+    expect(doc.provider?.defaults?.profile).toBe('default');
     expect(hasActiveProviderSection(doc)).toBe(true);
   });
 
@@ -59,7 +64,7 @@ describe('generateGlobalRuntimeProviderFile', () => {
       hasLegacyProviderConfig: true,
     });
 
-    const doc: any = read();
+    const doc = readValidated();
     expect(doc.version).toBe(1);
     expect(doc.provider).toBeUndefined();
     expect(hasActiveProviderSection(doc)).toBe(false);

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MockInstance } from 'vitest';
+import type { CompiledProviderEnvironment } from '../infra/config/runtime-provider/environment.js';
 
 const {
   mockLoadWorkflowByIdentifier,
@@ -43,8 +44,8 @@ vi.mock('../infra/config/runtime-provider/provider-environment.js', () => ({
 }));
 
 function compiledEnvironment(
-  overrides: Record<string, unknown> = {},
-): Record<string, unknown> {
+  overrides: Partial<CompiledProviderEnvironment> = {},
+): CompiledProviderEnvironment {
   return {
     provider: undefined,
     providerSource: 'default',
@@ -55,6 +56,7 @@ function compiledEnvironment(
     autoRouting: undefined,
     providerOptions: undefined,
     tagConflictPolicy: 'last-wins',
+    internalAgents: undefined,
     ...overrides,
   };
 }

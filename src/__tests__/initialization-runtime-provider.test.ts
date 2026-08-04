@@ -61,6 +61,10 @@ describe('initGlobalDirs runtime.yaml generation', () => {
   afterEach(() => {
     if (stdinIsTTY) {
       Object.defineProperty(process.stdin, 'isTTY', stdinIsTTY);
+    } else {
+      // No original descriptor: remove the property a test added so later tests don't
+      // accidentally enter the interactive initialization branch.
+      Reflect.deleteProperty(process.stdin, 'isTTY');
     }
   });
 

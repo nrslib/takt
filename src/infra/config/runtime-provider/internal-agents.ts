@@ -50,11 +50,21 @@ function resolveActiveRuntimeProviderEnvironment(
   return compileProviderEnvironment({ kind: 'runtime-v1', section });
 }
 
-/** Build the `defaults` profile entry from a compiled runtime env, or `undefined` when unset. */
+/**
+ * Build the `defaults` profile entry from a compiled runtime env. A pool default (auto routing
+ * configured) legitimately leaves the fixed provider unset and returns `undefined`; an active
+ * section that resolves no provider at all fails fast instead of silently falling back to the
+ * legacy config.yaml resolution — symmetric with the workflow bootstrap boundary.
+ */
 function defaultsProfileEntry(
   env: CompiledProviderEnvironment,
 ): ProviderRoutingEntry | undefined {
   if (env.provider === undefined) {
+    if (env.autoRouting === undefined) {
+      throw new Error(
+        'No provider configured. The active runtime.yaml provider section resolves no `provider.defaults`; set `provider.defaults` in runtime.yaml',
+      );
+    }
     return undefined;
   }
   return {

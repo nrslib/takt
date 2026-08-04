@@ -1,6 +1,7 @@
 import { resolveNonWorkflowProviderModelFromConfig } from '../../core/config/provider-resolution.js';
 import type { StepProviderOptions } from '../../core/models/workflow-types.js';
 import type { ProviderType } from '../../core/workflow/types.js';
+import { validateProviderModelRequirements } from '../../core/workflow/provider-model-requirements.js';
 import { loadGlobalConfig } from './global/globalConfig.js';
 import { loadProjectConfig } from './project/projectConfig.js';
 import { resolveConfigValueWithSource } from './resolveConfigValue.js';
@@ -45,6 +46,11 @@ export function resolveNonWorkflowProviderModel(cwd: string): ResolvedNonWorkflo
         model: configuredModel.source === 'env' ? configuredModel.value : undefined,
       },
     );
+    // Same fail-fast the selector seam applies: providers that require a model (e.g. opencode's
+    // `provider/model` format) must not defer the error to the provider SDK.
+    validateProviderModelRequirements(composed.provider, composed.model, {
+      modelFieldName: 'Configuration error: runtime.yaml defaults resolved model',
+    });
     return {
       runtimeManaged: true,
       provider: composed.provider,

@@ -49,7 +49,7 @@ const AssignmentSchema = z
 const CandidateSchema = z
   .object({
     profile: z.string().min(1),
-    tier: z.string().min(1).optional(),
+    tier: z.enum(['low', 'medium', 'high']).optional(),
   })
   .strict();
 
@@ -62,7 +62,7 @@ const PoolSchema = z
 
 const AutoRoutingSchema = z
   .object({
-    strategy: z.string().min(1).optional(),
+    strategy: z.enum(['cost', 'balanced', 'performance']).optional(),
     router_profile: z.string().min(1).optional(),
     pools: z.record(z.string(), PoolSchema).optional(),
   })

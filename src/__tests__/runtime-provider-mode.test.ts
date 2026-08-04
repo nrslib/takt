@@ -75,6 +75,10 @@ describe('hasActiveProviderSection (C11/C25)', () => {
   it('Given an empty `auto_routing` map, Then it is not active', () => {
     expect(hasActiveProviderSection({ version: 1, provider: { auto_routing: {} } })).toBe(false);
   });
+
+  it('Given an empty `defaults` map, Then it is not active', () => {
+    expect(hasActiveProviderSection({ version: 1, provider: { defaults: {} } })).toBe(false);
+  });
 });
 
 describe('determineProviderConfigMode (C11/C12/C13)', () => {

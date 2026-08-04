@@ -541,7 +541,11 @@ export async function createWorkflowExecutionBootstrap(
   // A runtime-v1 pool default legitimately leaves the fixed provider unset (auto routing
   // selects the candidate per step), so only an environment without auto routing is an error.
   if (currentProvider === undefined && providerEnvironment.autoRouting === undefined) {
-    throw new Error('No provider configured. Set "provider" in ~/.takt/config.yaml');
+    // Keep the guidance format-agnostic: in runtime-v1 mode, pointing at config.yaml would
+    // steer the user into a mixed configuration on the next run.
+    throw new Error(
+      'No provider configured. Set `provider.defaults` in runtime.yaml or "provider" in ~/.takt/config.yaml',
+    );
   }
   const currentProviderSource = providerEnvironment.providerSource;
   const configuredModel = providerEnvironment.model;

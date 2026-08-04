@@ -129,8 +129,13 @@ function resolveSelectorFromRuntimeV1(
   const modelOverrideSource = overrides?.modelSource
     ?? (configuredModel.source === 'env' ? 'env' : 'cli');
 
+  // Normalize the runtime-tied model the same way the legacy path normalizes every candidate.
   const composed = composeRuntimeProviderOverride(
-    { provider: runtime.provider, model: runtime.model, providerOptions: runtime.providerOptions },
+    {
+      provider: runtime.provider,
+      model: normalizeSelectorModel(runtime.model),
+      providerOptions: runtime.providerOptions,
+    },
     { provider: providerOverride, model: normalizeSelectorModel(modelOverride) },
   );
   const provider = composed.provider;
