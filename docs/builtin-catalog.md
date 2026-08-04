@@ -150,7 +150,7 @@ finding_contract:
     model: <strong-model>
 ```
 
-The implementation order is explicit CLI/environment override → promotion matching the current execution → step provider/model (including these direct values) → `workflow_call` override → `provider_routing` step/tag/persona → deprecated `persona_providers` → auto routing → workflow → project → global → provider default. Specifying only `provider` stops lower-priority model fallback.
+At runtime, provider and model are resolved field by field in this order: explicit CLI/environment override → promotion matching the current execution (normal agent steps only) → step or parallel sub-step provider/model (including these direct values) → `workflow_call` override → `provider_routing` step/tag/persona → deprecated `persona_providers` → auto routing → workflow → project → global → provider default. Parallel sub-steps do not support promotion, so their direct values come immediately after an explicit CLI/environment override. Specifying only `provider` stops lower-priority model fallback.
 
 Run `takt` to choose a workflow interactively.
 
