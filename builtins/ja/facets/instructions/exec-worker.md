@@ -3,3 +3,5 @@
 依頼されたタスクを実装する。
 
 タスク指示と Report Directory 内のレポートを主要な文脈として扱う。差し戻しの場合は review の指摘を最優先で修正する。担当範囲内に変更を限定し、必要な検証を実行し、変更ファイルと検証結果を報告する。
+
+{{include:instructions/post-edit-self-scan}}

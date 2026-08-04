@@ -63,3 +63,5 @@ Workflow Contextに示されたReport Directory内のファイルのみ参照し
 - テスト作成後、テストを実行して結果を確認する
 - 実装前のためテスト失敗・import エラーは想定内（未実装モジュールの import を含む）
 - 既存モジュールの import パスミスなど、実装完了後も解消しないエラーは修正する
+
+{{include:instructions/post-edit-self-scan}}

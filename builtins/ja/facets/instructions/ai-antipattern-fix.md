@@ -13,6 +13,8 @@ Report Directory 内のレポートを一次情報として参照してくださ
 
 {{include:instructions/fix-family-completion}}
 
+{{include:instructions/post-edit-self-scan}}
+
 **報告フォーマット:**
 - NG: 「既に修正されています」
 - OK: 「ファイル X の L123 を確認した結果、問題 Y が存在したため、Z に修正しました」

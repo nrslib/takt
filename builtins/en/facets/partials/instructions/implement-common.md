@@ -20,3 +20,5 @@ Before build and tests, audit the implementation against Policy.
 5. Separately assess whether the targeted tests reject a plausible incorrect implementation by mapping the near-miss to the input or state and assertion that rejects it. If an existing isolated mutation runner operates on a disposable copy, its result may be used as additional evidence; do not modify the task worktree solely for this check
 6. Do not select implementation complete when a high-risk contract lacks evidence that can still be obtained within the current scope
 7. In the final response, leave one contract-ledger row for every upstream contract, mapping the original ID, origin, upstream meaning, implementation result, direct evidence, and status. Do not summarize only an ID range or reassign meanings according to implementation order
+
+{{include:instructions/post-edit-self-scan}}

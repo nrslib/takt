@@ -15,6 +15,8 @@ Success means completing every fix unit and every completion obligation derived 
 {{include:instructions/fix-plan-validity}}
 {{include:instructions/fix-family-completion}}
 
+{{include:instructions/post-edit-self-scan}}
+
 **Required output (include headings)**
 ## Work result
 - {Fix complete / Fix plan requires revision / Task-level replanning required}

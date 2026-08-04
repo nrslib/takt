@@ -17,6 +17,8 @@ Check which test cases were flagged as unimplemented and implement them.
 - Write one scenario per concern with clear expected results
 - Follow existing fixture/helper/mock patterns for cases with external dependencies
 
+{{include:instructions/post-edit-self-scan}}
+
 **Required output (include headings)**
 ## Implemented Test Cases
 - {Test case list number and corresponding test file/test name}

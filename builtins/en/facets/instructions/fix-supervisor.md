@@ -8,6 +8,8 @@ Address items in order of priority, starting with the highest.
 
 {{include:instructions/fix-family-completion}}
 
+{{include:instructions/post-edit-self-scan}}
+
 **Required output (include headings)**
 ## Work results
 - {Summary of actions taken}

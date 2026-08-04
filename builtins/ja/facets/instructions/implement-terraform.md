@@ -43,6 +43,8 @@ Small / Medium / Large
 - **コスト影響**: {ある場合のみ}
 ```
 
+{{include:instructions/post-edit-self-scan}}
+
 **必須出力（見出しを含める）**
 ## 作業結果
 - {実施内容の要約}

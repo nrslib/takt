@@ -20,6 +20,8 @@ The verifier list contains examples of incomplete coverage; it is not an upper b
 {{include:instructions/fix-plan-validity}}
 {{include:instructions/fix-family-completion}}
 
+{{include:instructions/post-edit-self-scan}}
+
 **Required output (include headings)**
 ## Work result
 - {Fix complete / Fix plan requires revision / Task-level replanning required}

@@ -11,6 +11,8 @@ Report Directory内のレビューレポートを確認し、指摘事項を変�
 
 {{include:instructions/fix-family-completion}}
 
+{{include:instructions/post-edit-self-scan}}
+
 **レポート参照方針:**
 - Report Directory内の最新レビューレポートを一次情報として参照してください。
 - 過去イテレーションのレポートは `{ファイル名}.{タイムスタンプ}` 形式で同ディレクトリに保存されています（例: `architect-review.md.20260304T123456Z`）。各レポートについて `{レポート名}.*` パターンで Glob を実行し、タイムスタンプ降順で最大2件まで読み、persists / reopened の傾向を把握してから修正に入ること。

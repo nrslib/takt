@@ -20,6 +20,8 @@ verifier の一覧は未完了範囲の例であり、今回の修正範囲の�
 {{include:instructions/fix-plan-validity}}
 {{include:instructions/fix-family-completion}}
 
+{{include:instructions/post-edit-self-scan}}
+
 **必須出力（見出しを含める）**
 ## 作業結果
 - {修正完了 / 修正計画の見直しが必要 / タスク全体の再計画が必要}

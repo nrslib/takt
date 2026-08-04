@@ -13,6 +13,8 @@ Use reports in the Report Directory as the primary source of truth. If additiona
 
 {{include:instructions/fix-family-completion}}
 
+{{include:instructions/post-edit-self-scan}}
+
 **Report format:**
 - NG: "It has already been fixed"
 - OK: "After checking file X at L123, I found issue Y and fixed it to Z"

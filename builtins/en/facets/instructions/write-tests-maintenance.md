@@ -41,6 +41,8 @@ Refer only to files within the Report Directory shown in the Workflow Context. D
 - Test failures and import errors are expected before implementation (including imports of not-yet-implemented modules)
 - Fix errors that will persist after implementation, such as wrong import paths for existing modules
 
+{{include:instructions/post-edit-self-scan}}
+
 **Required output (include headings)**
 ## Work Results
 - {Summary of created or updated tests}
