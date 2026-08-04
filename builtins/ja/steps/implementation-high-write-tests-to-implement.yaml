@@ -2,7 +2,10 @@ name: write_tests
 tags: [coding, test-planning]
 edit: true
 persona: coder
-policy: [contract-change, coding, testing]
+policy:
+  - contract-change
+  - coding
+  - testing
 knowledge: [takt, architecture, unit-testing, e2e-testing, implementation-semantics]
 required_permission_mode: edit
 instruction: write-tests-first

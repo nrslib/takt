@@ -33,7 +33,9 @@ steps:
       - plan
     edit: false
     persona: test-planner
-    policy: [contract-change, testing]
+    policy:
+      - contract-change
+      - testing
     knowledge:
       - architecture
       - unit-testing
@@ -81,7 +83,9 @@ steps:
       - supervise
     edit: false
     persona: supervisor
-    policy: [contract-change, review]
+    policy:
+      - contract-change
+      - review
     knowledge:
       - unit-testing
     instruction: unit-audit-supervise

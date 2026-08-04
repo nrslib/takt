@@ -5,7 +5,9 @@ tags:
   - merge-readiness
 edit: false
 persona: merge-readiness-reviewer
-policy: [contract-change, review]
+policy:
+  - contract-change
+  - review
 provider_options:
   extends: review-readonly
 pass_previous_response: false

@@ -29,7 +29,9 @@ steps:
     edit: false
     session: compact
     persona: merge-readiness-reviewer
-    policy: [contract-change, review]
+    policy:
+      - contract-change
+      - review
     instruction: review-merge-readiness
     rules:
       - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)

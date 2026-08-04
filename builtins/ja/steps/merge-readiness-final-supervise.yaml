@@ -9,7 +9,9 @@ tags:
   - supervise
 edit: false
 persona: supervisor
-policy: [contract-change, review]
+policy:
+  - contract-change
+  - review
 knowledge:
   $param: supervise_knowledge
 provider_options:

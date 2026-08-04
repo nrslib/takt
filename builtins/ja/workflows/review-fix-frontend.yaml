@@ -43,7 +43,9 @@ steps:
           - review
         edit: false
         persona: architecture-reviewer
-        policy: [contract-change, review]
+        policy:
+          - contract-change
+          - review
         knowledge:
           - architecture
           - frontend
@@ -96,7 +98,9 @@ steps:
           - review
         edit: false
         persona: security-reviewer
-        policy: [contract-change, review]
+        policy:
+          - contract-change
+          - review
         knowledge: security
         provider_options:
           claude:

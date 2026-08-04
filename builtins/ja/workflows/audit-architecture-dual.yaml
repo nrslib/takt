@@ -47,7 +47,9 @@ steps:
     tags:
       - review
     persona: architecture-reviewer
-    policy: [contract-change, review]
+    policy:
+      - contract-change
+      - review
     knowledge:
       - frontend
       - backend
@@ -71,7 +73,9 @@ steps:
       - review
       - supervise
     persona: supervisor
-    policy: [contract-change, review]
+    policy:
+      - contract-change
+      - review
     knowledge:
       - frontend
       - backend
@@ -89,7 +93,9 @@ steps:
     tags:
       - review
     persona: architecture-reviewer
-    policy: [contract-change, review]
+    policy:
+      - contract-change
+      - review
     knowledge:
       - frontend
       - backend

@@ -32,7 +32,9 @@ steps:
     tags:
       - plan
     persona: test-planner
-    policy: [contract-change, testing]
+    policy:
+      - contract-change
+      - testing
     knowledge:
       - architecture
       - e2e-testing
@@ -79,7 +81,9 @@ steps:
       - supervise
     edit: false
     persona: supervisor
-    policy: [contract-change, review]
+    policy:
+      - contract-change
+      - review
     knowledge:
       - e2e-testing
     instruction: e2e-audit-supervise

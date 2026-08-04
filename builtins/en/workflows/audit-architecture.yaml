@@ -44,7 +44,9 @@ steps:
     tags:
       - review
     persona: architecture-reviewer
-    policy: [contract-change, review]
+    policy:
+      - contract-change
+      - review
     knowledge: architecture
     instruction: architecture-audit-team-leader
     edit: false
@@ -65,7 +67,9 @@ steps:
       - review
       - supervise
     persona: supervisor
-    policy: [contract-change, review]
+    policy:
+      - contract-change
+      - review
     knowledge: architecture
     instruction: architecture-audit-supervise
     edit: false
@@ -80,7 +84,9 @@ steps:
     tags:
       - review
     persona: architecture-reviewer
-    policy: [contract-change, review]
+    policy:
+      - contract-change
+      - review
     knowledge: architecture
     instruction: architecture-audit-review
     edit: false

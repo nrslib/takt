@@ -31,7 +31,9 @@ steps:
           - review
         edit: false
         persona: architecture-reviewer
-        policy: [contract-change, review]
+        policy:
+          - contract-change
+          - review
         knowledge: architecture
         provider_options:
           claude:
@@ -56,7 +58,9 @@ steps:
           - review
         edit: false
         persona: security-reviewer
-        policy: [contract-change, review]
+        policy:
+          - contract-change
+          - review
         knowledge: security
         provider_options:
           claude:
@@ -154,7 +158,9 @@ steps:
       - supervise
     edit: false
     persona: supervisor
-    policy: [contract-change, review]
+    policy:
+      - contract-change
+      - review
     provider_options:
       claude:
         allowed_tools:
@@ -232,7 +238,9 @@ steps:
       - supervise
     edit: false
     persona: supervisor
-    policy: [contract-change, review]
+    policy:
+      - contract-change
+      - review
     provider_options:
       claude:
         allowed_tools:

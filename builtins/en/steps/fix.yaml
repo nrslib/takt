@@ -3,7 +3,10 @@ tags: [coding]
 edit: true
 session: compact
 persona: coder
-policy: [contract-change, coding, testing]
+policy:
+  - contract-change
+  - coding
+  - testing
 knowledge: [takt, architecture, implementation-semantics]
 required_permission_mode: edit
 instruction: fix

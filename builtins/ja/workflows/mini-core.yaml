@@ -127,7 +127,9 @@ steps:
         edit: false
         persona:
           $param: supervisor_persona
-        policy: [contract-change, review]
+        policy:
+          - contract-change
+          - review
         knowledge:
           $param: development_knowledge
         provider_options:

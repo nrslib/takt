@@ -5,7 +5,9 @@ tags:
   - supervise
 edit: false
 persona: supervisor
-policy: [contract-change, review]
+policy:
+  - contract-change
+  - review
 provider_options:
   claude:
     allowed_tools:

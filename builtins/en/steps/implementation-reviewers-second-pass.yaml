@@ -7,7 +7,9 @@ parallel:
       - review
     edit: false
     persona: security-reviewer
-    policy: [contract-change, review]
+    policy:
+      - contract-change
+      - review
     knowledge: security
     provider_options:
       claude:
