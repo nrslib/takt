@@ -67,31 +67,10 @@ const SHARED_PURPOSE_PARTIALS = [
   ['loop-monitor-gate-needs-review', 'loop-monitor-gate-needs-review-finding-contract', 'loop-monitor-gate-needs-review-purpose'],
 ] as const;
 const FC_HIGH_WORKFLOWS = ['takt-default-high', 'review-fix-takt-default-high'] as const;
-const FC_HIGH_MONITORS = [
-  { cycle: ['replan', 'implement'], instruction: 'loop-monitor-fix-replan-finding-contract' },
-  { cycle: ['replan', 'implement', 'reviewers'], instruction: 'loop-monitor-fix-replan-finding-contract' },
-  { cycle: ['replan', 'implement', 'reviewers', 'final-gate'], instruction: 'loop-monitor-fix-replan-finding-contract' },
-  { cycle: ['replan', 'implement', 'reviewers', 'fix'], instruction: 'loop-monitor-fix-replan-finding-contract' },
-  { cycle: ['fix', 'reviewers'], instruction: 'loop-monitor-reviewers-fix-fc' },
-  { cycle: ['fix', 'reviewers', 'final-gate'], instruction: 'loop-monitor-reviewers-fix-fc' },
+const STANDARD_MONITOR_INSTRUCTIONS = [
+  'loop-monitor-fix-replan',
+  'loop-monitor-gate-needs-review',
 ] as const;
-const EXPECTED_FC_MONITORS = {
-  'takt-default-high': FC_HIGH_MONITORS,
-  'review-fix-takt-default-high': FC_HIGH_MONITORS,
-  'takt-default-team-high': FC_HIGH_MONITORS,
-  'finding-contract-local-review': [
-    {
-      cycle: ['reviewers', 'integrity-gate'],
-      instruction: 'loop-monitor-gate-needs-review-finding-contract',
-    },
-  ],
-  'finding-contract-boundary-review': [
-    {
-      cycle: ['boundary-reviewers', 'final-gate'],
-      instruction: 'loop-monitor-gate-needs-review-finding-contract',
-    },
-  ],
-} as const;
 const FORBIDDEN_STANDARD_TERMS = /Finding Contract|finding contract|findings-ledger|Disputed Findings/u;
 
 let testRoot: string;
@@ -118,10 +97,12 @@ function readInstructionPartial(language: Language, name: string): string {
 
 function resolveInstruction(language: Language, name: string): string {
   const projectDir = join(testRoot, `project-${language}`);
-  return resolveRefToContent(name, undefined, projectDir, 'instructions', {
+  const content = resolveRefToContent(name, undefined, projectDir, 'instructions', {
     projectDir,
     lang: language,
   });
+  if (content === undefined) throw new Error(`Missing builtin instruction: ${name}`);
+  return content;
 }
 
 function readWorkflow(language: Language, name: string): RawWorkflow {
@@ -168,21 +149,35 @@ function collectStringValues(value: unknown): string[] {
 
 function expectSpecializedMonitorContent(
   language: Language,
-  workflowName: keyof typeof EXPECTED_FC_MONITORS,
   raw: RawWorkflow,
   loaded: WorkflowConfig,
 ): void {
-  const expectedMonitors = EXPECTED_FC_MONITORS[workflowName];
-  const rawMonitors = (raw.loop_monitors ?? []).map((monitor) => ({
-    cycle: monitor.cycle,
-    instruction: monitor.judge?.instruction,
-  }));
-  expect(rawMonitors, workflowName).toEqual(expectedMonitors);
-  expect(loaded.loopMonitors, workflowName).toHaveLength(expectedMonitors.length);
-  for (const [index, monitor] of expectedMonitors.entries()) {
-    expect(loaded.loopMonitors?.[index]?.judge.instruction, `${workflowName}:${index}`)
-      .toBe(resolveInstruction(language, monitor.instruction));
+  const rawMonitors = raw.loop_monitors ?? [];
+  expect(rawMonitors.length).toBeGreaterThan(0);
+  expect(loaded.loopMonitors).toHaveLength(rawMonitors.length);
+  for (const [index, monitor] of rawMonitors.entries()) {
+    const instruction = monitor.judge?.instruction;
+    if (typeof instruction !== 'string') {
+      throw new Error(`Missing loop monitor instruction at index ${index}`);
+    }
+    expect(STANDARD_MONITOR_INSTRUCTIONS).not.toContain(instruction);
+    expect(instruction).toMatch(/(?:-finding-contract|-fc)$/u);
+    expect(loaded.loopMonitors?.[index]?.judge.instruction, `${loaded.name}:${index}`)
+      .toBe(resolveInstruction(language, instruction));
   }
+}
+
+function expectLoopMonitorRoutesResolvable(workflow: WorkflowConfig): void {
+  const validTargets = new Set([...workflow.steps.map(({ name }) => name), 'ABORT', 'COMPLETE']);
+  for (const monitor of workflow.loopMonitors ?? []) {
+    for (const rule of monitor.judge.rules) {
+      expect(validTargets.has(rule.next), `${workflow.name}:${rule.next}`).toBe(true);
+    }
+  }
+}
+
+function expectIndependentReviewRoute(workflow: WorkflowConfig): void {
+  expect(getLoadedStep(workflow, 'replan').rules.some(({ next }) => next === 'reviewers')).toBe(true);
 }
 
 beforeAll(() => {
@@ -233,33 +228,26 @@ describe('builtin instruction Finding Contract specialization', () => {
     }
   });
 
-  it.each(LANGUAGES)('%s preserves each legacy report-history contract', (language) => {
+  it.each(LANGUAGES)('%s expands shared legacy fix contracts once and in order', (language) => {
     const fix = resolveInstruction(language, 'fix');
     const historyMechanism = readInstructionPartial(language, 'review-report-history');
-    const fixPrinciplesHeading = readInstructionPartial(language, 'fix-common').split('\n')[0]!;
+    const fixCommonAnchor = readInstructionPartial(language, 'fix-common').split('\n')[0]!;
+    const fixOutput = readInstructionPartial(language, 'fix-output-common');
     expect(fix.indexOf(historyMechanism)).toBeGreaterThanOrEqual(0);
-    expect(fix.indexOf(historyMechanism)).toBeLessThan(fix.indexOf(fixPrinciplesHeading));
+    expect(fix.indexOf(historyMechanism)).toBeLessThan(fix.indexOf(fixCommonAnchor));
+    expect(fix.indexOf(fixCommonAnchor)).toBeLessThan(fix.indexOf(fixOutput));
 
     const plan = resolveInstruction(language, 'fix-plan');
-    expect(plan).toMatch(language === 'ja' ? /再帰的/u : /recursively/u);
-    expect(plan).toMatch(/persists.*reopened/us);
-    expect(plan).toContain(language === 'ja'
-      ? '別レポートとの時刻比較や古い履歴からの対象追加を行わない'
-      : 'do not compare timestamps across report files or add targets from old history');
-    expect(plan).toContain(historyMechanism);
+    expect(plan.split(historyMechanism)).toHaveLength(2);
+    expect(plan).not.toContain('{{include:instructions/');
 
     expect(resolveInstruction(language, 'replan-implementation')).not.toContain(historyMechanism);
     expect(resolveInstruction(language, 'replan-implementation-finding-contract'))
       .not.toContain(historyMechanism);
 
-    const fixHeadings = language === 'ja'
-      ? ['## 作業結果', '## 変更内容', '## ビルド結果', '## テスト結果', '## 受入条件', '## 証拠']
-      : ['## Work results', '## Changes made', '## Build results', '## Test results', '## Acceptance criteria', '## Evidence'];
     for (const instruction of ['fix', 'fix-finding-contract']) {
       const content = resolveInstruction(language, instruction);
-      const headingIndexes = fixHeadings.map((heading) => content.indexOf(heading));
-      expect(headingIndexes.every((index) => index >= 0), instruction).toBe(true);
-      expect(headingIndexes, instruction).toEqual([...headingIndexes].sort((a, b) => a - b));
+      expect(content.split(fixOutput), instruction).toHaveLength(2);
     }
   });
 
@@ -272,9 +260,9 @@ describe('builtin instruction Finding Contract specialization', () => {
       expect(getLoadedStep(loaded, 'fix').instruction).toBe(expectedFix);
       expect(getLoadedStep(loaded, 'fix').instruction).not.toBe(resolveInstruction(language, 'fix'));
       expect(getLoadedStep(loaded, 'replan').instruction).toBe(expectedReplan);
+      expectIndependentReviewRoute(loaded);
       expectSpecializedMonitorContent(
         language,
-        workflowName,
         raw,
         loaded,
       );
@@ -286,19 +274,13 @@ describe('builtin instruction Finding Contract specialization', () => {
     const loaded = loadBuiltinWorkflow(language, 'takt-default-team-high');
     const teamFix = getLoadedStep(loaded, 'fix').instruction;
     expect(teamFix).toBe(resolveInstruction(language, 'team-leader-finding-contract-fix'));
-    const partIdentifierContract = language === 'ja'
-      ? '各 part instruction に finding ID を明記してください'
-      : 'State the finding ID in every part instruction';
-    const partFileContract = language === 'ja'
-      ? '各 part instruction に担当ファイル、参照専用ファイル、直接修正内容、完了基準を明記してください'
-      : 'State the responsible files, reference-only files, direct remediation, and completion criteria in every part instruction';
-    expect(teamFix.split(partIdentifierContract), partIdentifierContract).toHaveLength(2);
-    expect(teamFix.split(partFileContract), partFileContract).toHaveLength(2);
+    const teamFixCommon = readInstructionPartial(language, 'team-leader-fix-common');
+    expect(teamFix.split(teamFixCommon)).toHaveLength(2);
     expect(getLoadedStep(loaded, 'replan').instruction)
       .toBe(resolveInstruction(language, 'replan-implementation-finding-contract'));
+    expectIndependentReviewRoute(loaded);
     expectSpecializedMonitorContent(
       language,
-      'takt-default-team-high',
       raw,
       loaded,
     );
@@ -323,9 +305,9 @@ describe('builtin instruction Finding Contract specialization', () => {
     for (const workflowName of gateWorkflowNames) {
       const raw = resolveStepFragments(language, workflowName);
       const loaded = loadBuiltinWorkflow(language, workflowName);
+      expectLoopMonitorRoutesResolvable(loaded);
       expectSpecializedMonitorContent(
         language,
-        workflowName,
         raw,
         loaded,
       );

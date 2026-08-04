@@ -89,6 +89,8 @@ steps:
     rules:
       - condition: An actionable, untried project-scoped change or investigation and its verification steps were defined
         next: implement
+      - condition: The current implementation meets the requirements and acceptance criteria, required project-scoped verification is complete, and no untried change or investigation remains
+        next: reviewers
       - condition: Confirmed evidence shows that project-scoped changes or investigation cannot resolve the issue, leaving only external action or mutually unsatisfiable requirements
         next: ABORT
 
