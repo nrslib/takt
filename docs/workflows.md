@@ -554,15 +554,15 @@ Promotion is not supported on parallel sub-steps.
 | Option | Default | Description |
 |--------|---------|-------------|
 | `description` | - | Free-form step description. Also used as the selection description for dynamic parallel `pool` items, where it is required |
-| `persona` | - | Persona key (references section map) or file path |
+| `persona` | - | Persona key (section map, or bare facet name resolved project → user → builtin) or file path |
 | `persona_name` | - | Display name for logs and prompts. It does not affect `provider_routing.personas` |
 | `session_key` | - | Explicit session key for normal agent steps and parallel sub-steps. The resolved provider is appended to the runtime key; empty and whitespace-only values are invalid |
 | `session` | `continue` | Session handling for normal agent steps and parallel sub-steps. `continue` resumes the saved persona session, `refresh` starts without resuming it, and `compact` resumes it then asks the provider to compact it before Phase 1. `compact` runs only before Phase 1, not before report or status phases. Providers without a compaction capability continue unchanged, and compaction failures are logged as warnings before continuing with the uncompressed session |
 | `requires_user_input` | `false` | Marks a normal agent step as capable of waiting for user input. System steps, workflow-call steps, and parallel parent steps cannot set it. A step with `requires_user_input: true` requires interactive mode and a user input handler before the agent runs; otherwise the workflow aborts without executing that agent. The actual wait is triggered only by a matching rule with `requires_user_input: true` |
 | `tags` | - | Ordered provider routing tags matched against `provider_routing.tags` in config |
-| `policy` | - | Policy key or array of keys |
-| `knowledge` | - | Knowledge key or array of keys |
-| `instruction` | - | Instruction key (references section map) |
+| `policy` | - | Policy key or array of keys (section map, or bare facet name resolved project → user → builtin) |
+| `knowledge` | - | Knowledge key or array of keys (section map, or bare facet name resolved project → user → builtin) |
+| `instruction` | - | Instruction key (section map, or bare facet name resolved project → user → builtin) |
 | `edit` | - | Whether the step can edit project files (`true`/`false`) |
 | `pass_previous_response` | `true` | Pass previous step's output to `{previous_response}` |
 | `provider_options.claude.allowed_tools` | - | Claude tool allowlist for the step or workflow |

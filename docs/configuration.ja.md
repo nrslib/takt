@@ -799,7 +799,7 @@ provider_options:
 
 **推奨（正）の YAML キー**（同梱の `builtins/{lang}/workflow-categories.yaml` と一致）: トップレベル **`workflow_categories`**、各カテゴリオブジェクト直下の **`workflows`** 配列に **workflow 名**（各 workflow YAML の `name` フィールド。ビルトインなら `default` など）を列挙します。ファイルパスではありません。
 
-カテゴリ設定ファイルでは **`workflow_categories`** と **`workflows`** だけを使ってください。削除済みの旧カテゴリキーは受理されません。指定すると validation error になります。
+カテゴリ構造には正準キーの **`workflow_categories`** と **`workflows`** を使います。加えて、上の例にあるトップレベルの任意設定 `show_others_category` / `others_category_name` も使えます。削除済みの旧カテゴリキーは受理されません。指定すると validation error になります。
 
 ### 設定方法
 

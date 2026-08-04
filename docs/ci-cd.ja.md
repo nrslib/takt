@@ -53,7 +53,7 @@ jobs:
 
 Pipeline モードにはタスクソースが必須です。`--task`、`--issue`、`--pr` のいずれかを指定してください。いずれも指定しない場合、TAKT は exit code `2` で終了します。
 
-Pipeline モードでは、`--auto-pr` を明示的に指定しない限り PR は作成**されません**。`--auto-pr` を `--skip-git` と併用した場合、PR は作成されず、TAKT は警告を出力して成功終了します。
+Pipeline モードでは、`--auto-pr` を明示的に指定しない限り PR は作成**されません**。`--auto-pr` を `--skip-git` と併用した場合、PR は作成されず、TAKT は警告を出力します。終了コードはワークフローの結果に従います（ワークフロー自体が成功した場合のみ `0`）。
 
 ### Pipeline の全オプション
 
@@ -112,7 +112,7 @@ takt --pipeline --task "Fix bug" --auto-pr --repo owner/repo
 takt --pipeline --task "Fix bug" --skip-git
 ```
 
-`--skip-git` 指定時はプッシュが行われないため、`--auto-pr` は無視されます（警告を出力したうえで成功終了します）。
+`--skip-git` 指定時はプッシュが行われないため、`--auto-pr` は無視されます（警告を出力します）。`--auto-pr` の無視は結果を変えません。ワークフローが失敗した場合は終了コード `3` のままです。
 
 **最小出力モード（CI ログ向けに AI 出力を抑制）**
 

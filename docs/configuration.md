@@ -799,7 +799,7 @@ Organize workflows into categories for better UI presentation in the `takt` work
 
 **Canonical YAML keys** (recommended, matches bundled `builtins/{lang}/workflow-categories.yaml`): top-level **`workflow_categories`**, and under each category object the **`workflows`** array listing **workflow names** (the `name` field from each workflow YAML, e.g. builtin `default`), not file paths.
 
-Use only **`workflow_categories`** and **`workflows`** in category configuration files. Removed legacy category keys are not accepted and cause a validation error.
+Category structure uses the canonical keys **`workflow_categories`** and **`workflows`**; the file also accepts the optional top-level settings `show_others_category` and `others_category_name` shown above. Removed legacy category keys are not accepted and cause a validation error.
 
 ### Configuration
 

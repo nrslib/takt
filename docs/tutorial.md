@@ -103,7 +103,7 @@ What would you like to do?
     Create Issue
 ```
 
-`Save as Task` saves the generated instruction under `.takt/tasks/`. `Execute now` runs the task immediately; it also asks `Create worktree?` (default Yes), so by default it runs in an isolated worktree as well. The normal tutorial flow is to queue the task and run it with `takt run`.
+`Save as Task` appends the generated instruction to `.takt/tasks.yaml`. `Execute now` runs the task immediately; it also asks `Create worktree?` (default Yes), so by default it runs in an isolated worktree as well. The normal tutorial flow is to queue the task and run it with `takt run`.
 
 After choosing **Save as Task**, TAKT asks for worktree settings. `Auto-create PR?` defaults to Yes; answer `n` if you are proceeding without GitHub.
 

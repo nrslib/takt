@@ -53,7 +53,7 @@ Specifying `--pipeline` enables non-interactive pipeline mode. It automatically 
 
 Pipeline mode requires a task source: one of `--task`, `--issue`, or `--pr`. If none is given, TAKT exits with code `2`.
 
-In pipeline mode, PRs are **not** created unless `--auto-pr` is explicitly specified. When `--auto-pr` is combined with `--skip-git`, no PR is created: TAKT prints a warning and exits successfully.
+In pipeline mode, PRs are **not** created unless `--auto-pr` is explicitly specified. When `--auto-pr` is combined with `--skip-git`, no PR is created: TAKT prints a warning, and the run exits with the workflow result (code `0` only when the workflow itself succeeded).
 
 ### All Pipeline Options
 
@@ -112,7 +112,7 @@ takt --pipeline --task "Fix bug" --auto-pr --repo owner/repo
 takt --pipeline --task "Fix bug" --skip-git
 ```
 
-With `--skip-git`, nothing is pushed, so `--auto-pr` is ignored (a warning is printed and the run still exits successfully).
+With `--skip-git`, nothing is pushed, so `--auto-pr` is ignored (a warning is printed). Ignoring `--auto-pr` does not change the outcome: a failed workflow still exits with code `3`.
 
 **Minimal output mode (suppress AI output for CI logs):**
 

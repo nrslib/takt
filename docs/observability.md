@@ -77,7 +77,7 @@ The base endpoint is required for OTLP export:
 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Optional absolute HTTP(S) trace endpoint override. Used only when `OTEL_EXPORTER_OTLP_ENDPOINT` is also set. |
 | `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | Optional absolute HTTP(S) metric endpoint override. Used only when `OTEL_EXPORTER_OTLP_ENDPOINT` is also set. |
 
-TAKT explicitly resolves and validates only these three endpoint variables. The other standard `OTEL_EXPORTER_OTLP_*` variables — such as `_HEADERS`, `_TIMEOUT`, and `_COMPRESSION` — are not interpreted by TAKT; they are passed through unchanged to the OpenTelemetry SDK and to child processes.
+TAKT explicitly resolves and validates only these three endpoint variables. The other standard `OTEL_EXPORTER_OTLP_*` variables — such as `_HEADERS`, `_TIMEOUT`, and `_COMPRESSION` — are not interpreted by TAKT and reach the OpenTelemetry SDK unchanged. Child processes are handled more strictly: credential-bearing variables (`_HEADERS`, client certificate, and client key) are excluded from the environment TAKT passes to them, while non-sensitive variables pass through.
 
 Endpoint values used for OTLP export must be absolute `http` or `https` URLs. A trace or metric endpoint without `OTEL_EXPORTER_OTLP_ENDPOINT` does not opt in to OTLP export; TAKT keeps the local-only exporter set. When the base endpoint is set, any configured trace or metric override is validated before the run starts. Export delivery failures after startup, such as a stopped local collector, do not block the workflow run.
 

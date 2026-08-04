@@ -22,7 +22,7 @@ This document provides a complete reference for all TAKT CLI commands and option
 | `--provider <name>` | Override agent provider (claude\|claude-sdk\|claude-terminal\|codex\|opencode\|cursor\|copilot\|kiro\|mock) |
 | `--auto-strategy <strategy>` | Override the auto-routing strategy (`cost`\|`balanced`\|`performance`). Applied when execution reaches the current workflow or a workflow-call child with effective `auto_routing`; otherwise, TAKT warns and ignores the option. |
 | `--model <name>` | Override agent model |
-| `-c, --continue` | Continue from the last assistant session |
+| `-c, --continue` | Continue from the last assistant session for the current project directory and provider |
 
 `--workflow` is the canonical option.
 
@@ -494,7 +494,7 @@ takt telemetry disable
 
 ### takt resume
 
-Show an interactive menu (Requeue / Retry / Instruct / View reports / Cancel) for the most recent aborted or failed direct (one-shot) run; a resumed execution writes its reports to a new run directory.
+Show an interactive menu (Requeue / Retry / Instruct / View reports / Cancel) for the most recent aborted or failed direct (one-shot) run in the current project directory; worktree/clone runs are not eligible, and a resumed execution writes its reports to a new run directory.
 
 ```bash
 takt resume

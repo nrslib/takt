@@ -22,7 +22,7 @@
 | `--provider <name>` | エージェント provider を上書き（claude\|claude-sdk\|claude-terminal\|codex\|opencode\|cursor\|copilot\|kiro\|mock） |
 | `--auto-strategy <strategy>` | auto routing の strategy を上書き（`cost`\|`balanced`\|`performance`）。実行時に effective `auto_routing` を持つ現在の workflow または workflow_call child へ到達した場合に適用し、それ以外では warning を出して無視します。 |
 | `--model <name>` | エージェントモデルを上書き |
-| `-c, --continue` | 直近のアシスタントセッションから継続 |
+| `-c, --continue` | 現在のプロジェクトディレクトリ・プロバイダの直近アシスタントセッションから継続 |
 
 正式オプションは `--workflow` です。
 
@@ -493,7 +493,7 @@ takt telemetry disable
 
 ### takt resume
 
-直近の中断（aborted）・失敗（failed）したダイレクト（ワンショット）run を対象に対話メニュー（Requeue / Retry / Instruct / View reports / Cancel）を表示し、再実行のレポートは新しい run ディレクトリに出力します。
+現在のプロジェクトディレクトリで直近に中断（aborted）・失敗（failed）したダイレクト（ワンショット）run を対象に対話メニュー（Requeue / Retry / Instruct / View reports / Cancel）を表示します。worktree/クローン実行は対象外で、再実行のレポートは新しい run ディレクトリに出力します。
 
 ```bash
 takt resume

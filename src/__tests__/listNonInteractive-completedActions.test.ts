@@ -5,12 +5,14 @@ const {
   mockListAllTaskItems,
   mockMergeBranch,
   mockDeleteBranch,
+  mockSyncBranchWithRoot,
   mockInfo,
 } = vi.hoisted(() => ({
   mockDeleteTask: vi.fn(),
   mockListAllTaskItems: vi.fn(),
   mockMergeBranch: vi.fn(),
   mockDeleteBranch: vi.fn(),
+  mockSyncBranchWithRoot: vi.fn(),
   mockInfo: vi.fn(),
 }));
 
@@ -34,6 +36,8 @@ vi.mock('../features/tasks/list/taskActions.js', () => ({
   tryMergeBranch: vi.fn(),
   mergeBranch: (...args: unknown[]) => mockMergeBranch(...args),
   deleteBranch: (...args: unknown[]) => mockDeleteBranch(...args),
+  showDiffStatForTask: vi.fn(),
+  syncBranchWithRoot: (...args: unknown[]) => mockSyncBranchWithRoot(...args),
 }));
 
 import { listTasksNonInteractive } from '../features/tasks/list/listNonInteractive.js';
@@ -79,5 +83,35 @@ describe('listTasksNonInteractive completed actions', () => {
 
     expect(mockDeleteBranch).toHaveBeenCalled();
     expect(mockDeleteTask).toHaveBeenCalledWith('completed-task', 'completed');
+  });
+
+  it('should run sync action through syncBranchWithRoot', async () => {
+    await listTasksNonInteractive('/project', {
+      enabled: true,
+      action: 'sync',
+      branch: 'takt/completed-task',
+    });
+
+    expect(mockSyncBranchWithRoot).toHaveBeenCalledWith(
+      '/project',
+      expect.objectContaining({ branch: 'takt/completed-task' }),
+    );
+    expect(mockDeleteTask).not.toHaveBeenCalled();
+  });
+
+  it('should reject an unknown action listing the allowed set', async () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {
+      throw new Error('exit');
+    }) as never);
+
+    await expect(listTasksNonInteractive('/project', {
+      enabled: true,
+      action: 'rebase',
+      branch: 'takt/completed-task',
+    })).rejects.toThrow('exit');
+
+    expect(mockInfo).toHaveBeenCalledWith('Invalid --action. Use one of: diff, sync, try, merge, delete.');
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    exitSpy.mockRestore();
   });
 });

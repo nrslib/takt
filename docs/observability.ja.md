@@ -77,7 +77,7 @@ OTLP export には base endpoint が必要です。
 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | 任意の trace endpoint 上書き。`OTEL_EXPORTER_OTLP_ENDPOINT` も設定されている場合だけ使用します。 |
 | `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | 任意の metric endpoint 上書き。`OTEL_EXPORTER_OTLP_ENDPOINT` も設定されている場合だけ使用します。 |
 
-TAKT が明示的に解決・検証するのはこの endpoint 3種だけです。その他の標準 `OTEL_EXPORTER_OTLP_*` 環境変数（`_HEADERS`、`_TIMEOUT`、`_COMPRESSION` など）は TAKT では解釈せず、OpenTelemetry SDK と子プロセスへそのまま伝播します。
+TAKT が明示的に解決・検証するのはこの endpoint 3種だけです。その他の標準 `OTEL_EXPORTER_OTLP_*` 環境変数（`_HEADERS`、`_TIMEOUT`、`_COMPRESSION` など）は TAKT では解釈せず、OpenTelemetry SDK にはそのまま届きます。子プロセスへの伝播はより厳格で、資格情報を含む変数（`_HEADERS`、クライアント証明書、クライアント鍵）は TAKT が渡す環境から除外され、非機微な変数のみ通過します。
 
 OTLP export に使用する endpoint は絶対 `http` または `https` URL である必要があります。trace / metric 個別 endpoint だけを設定して base endpoint を設定していない場合、OTLP export には opt-in せず、TAKT はローカル exporter のみを使います。base endpoint が設定されている場合は、個別 endpoint 上書きも run 開始前に検証されます。起動後に collector が停止しているなどの export 送信失敗が起きても、workflow run は阻害しません。
 

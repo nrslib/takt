@@ -40,7 +40,7 @@ E2Eテストを追加・変更した場合は、このドキュメントも更�
 - `npm run test:e2e:cursor`: `test:e2e:provider:cursor` の別名。
 - `npm run test:e2e:opencode`: `test:e2e:provider:opencode` の別名。
 - `npx vitest run e2e/specs/add-and-run.e2e.ts`: 単体実行の例。
-- `npx vitest run --config vitest.config.e2e.opencode-parallel.ts`: OpenCode 並列セッション専用スペック（`opencode-parallel-sessions.e2e.ts`）を長めのタイムアウト設定で単独実行する専用 config。
+- `TAKT_E2E_PROVIDER=opencode TAKT_E2E_MODEL=ollama-cloud/qwen3.5:397b npx vitest run --config vitest.config.e2e.opencode-parallel.ts`: OpenCode 並列セッション専用スペック（`opencode-parallel-sessions.e2e.ts`）を長めのタイムアウト設定で単独実行する専用 config（直接実行時は provider と model の指定が必要）。
 - `npx vitest run --config vitest.config.e2e.structured-output.ts`: `structured-output.e2e.ts` を単独実行する専用 config。
 
 provider E2E スクリプトの対象は `claude` / `claude-sdk` / `codex` / `cursor` / `opencode`。`copilot` と `kiro` には provider E2E 経路がなく、単体テスト（`src/__tests__/copilot-*.test.ts` / `kiro-*.test.ts`）のみで検証している。
