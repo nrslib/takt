@@ -482,6 +482,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           instruction: 'findings-manager',
           outputContract: 'findings-manager',
         },
+        adjudicator: { persona: 'supervisor' },
       },
       steps: [
         makeStep({
@@ -703,6 +704,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           instruction: 'findings-manager',
           outputContract: 'findings-manager',
         },
+        adjudicator: { persona: 'supervisor' },
       },
       steps: [
         makeStep({
@@ -845,6 +847,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           instruction: 'findings-manager',
           outputContract: 'findings-manager',
         },
+        adjudicator: { persona: 'supervisor' },
       },
       steps: [
         makeStep({
@@ -1014,6 +1017,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           instruction: 'findings-manager',
           outputContract: 'findings-manager',
         },
+        adjudicator: { persona: 'supervisor' },
       },
       steps: [
         makeStep({
@@ -1099,6 +1103,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           instruction: 'findings-manager',
           outputContract: 'findings-manager',
         },
+        adjudicator: { persona: 'supervisor' },
       },
       steps: [makeStep({
         name: 'review',
@@ -1217,6 +1222,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           instruction: 'findings-manager',
           outputContract: 'findings-manager',
         },
+        adjudicator: { persona: 'supervisor' },
       },
       steps: [makeStep({
         name: 'review',
@@ -1252,6 +1258,7 @@ describe('WorkflowEngine structured caller defaults', () => {
       initialStep: 'review',
       findingContract: {
         manager: { persona: 'findings-manager', instruction: 'findings-manager', outputContract: 'findings-manager' },
+        adjudicator: { persona: 'supervisor' },
       },
       steps: [makeStep({
         name: 'review',
@@ -1352,6 +1359,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           instruction: 'findings-manager',
           outputContract: 'findings-manager',
         },
+        adjudicator: { persona: 'supervisor' },
       },
       steps: [
         makeStep({
@@ -1433,6 +1441,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           instruction: 'findings-manager',
           outputContract: 'findings-manager',
         },
+        adjudicator: { persona: 'supervisor' },
       },
       steps: [
         makeStep({
@@ -1535,6 +1544,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           instruction: 'findings-manager',
           outputContract: 'findings-manager',
         },
+        adjudicator: { persona: 'supervisor' },
       },
       steps: [
         makeStep({
@@ -1634,6 +1644,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           instruction: 'findings-manager',
           outputContract: 'findings-manager',
         },
+        adjudicator: { persona: 'supervisor' },
       },
       steps: [
         makeStep({
@@ -1748,6 +1759,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           instruction: 'findings-manager',
           outputContract: 'findings-manager',
         },
+        adjudicator: { persona: 'supervisor' },
       },
       steps: [
         makeStep({
@@ -1862,6 +1874,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           instruction: 'findings-manager',
           outputContract: 'findings-manager',
         },
+        adjudicator: { persona: 'supervisor' },
       },
       steps: [
         makeStep({
@@ -1982,6 +1995,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           instruction: 'findings-manager',
           outputContract: 'findings-manager',
         },
+        adjudicator: { persona: 'supervisor' },
       },
       steps: [
         makeStep({
@@ -2125,6 +2139,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           instruction: 'findings-manager',
           outputContract: 'findings-manager',
         },
+        adjudicator: { persona: 'supervisor' },
       },
       steps: [
         makeStep({
@@ -2258,6 +2273,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           instruction: 'findings-manager',
           outputContract: 'findings-manager',
         },
+        adjudicator: { persona: 'supervisor' },
       },
       steps: [
         makeStep({
@@ -2450,6 +2466,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           instruction: 'findings-manager',
           outputContract: 'findings-manager',
         },
+        adjudicator: { persona: 'supervisor' },
       },
       steps: [
         makeStep({
@@ -2590,6 +2607,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           instruction: 'findings-manager',
           outputContract: 'findings-manager',
         },
+        adjudicator: { persona: 'supervisor' },
       },
       steps: [
         makeStep({
@@ -2821,6 +2839,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           instruction: 'findings-manager',
           outputContract: 'findings-manager',
         },
+        adjudicator: { persona: 'supervisor' },
       },
       steps: [
         makeStep({
@@ -3077,6 +3096,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           instruction: 'findings-manager',
           outputContract: 'findings-manager',
         },
+        adjudicator: { persona: 'supervisor' },
       },
       steps: [
         makeStep({
@@ -3271,6 +3291,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           instruction: 'findings-manager',
           outputContract: 'findings-manager',
         },
+        adjudicator: { persona: 'supervisor' },
       },
       steps: [
         makeStep({
@@ -3463,6 +3484,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           instruction: 'findings-manager',
           outputContract: 'findings-manager',
         },
+        adjudicator: { persona: 'supervisor' },
       },
       steps: [
         makeStep({
@@ -3553,6 +3575,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           instruction: 'findings-manager',
           outputContract: 'findings-manager',
         },
+        adjudicator: { persona: 'supervisor' },
       },
       steps: [
         makeStep({
@@ -3656,6 +3679,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           provider: 'codex',
           model: 'gpt-5.5',
         },
+        adjudicator: { persona: 'supervisor' },
       },
       steps: [
         makeStep({
@@ -3749,6 +3773,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           instruction: 'findings-manager',
           outputContract: 'findings-manager',
         },
+        adjudicator: { persona: 'supervisor' },
       },
       steps: [
         makeStep({
@@ -3823,6 +3848,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           instruction: 'findings-manager',
           outputContract: 'findings-manager',
         },
+        adjudicator: { persona: 'supervisor' },
       },
       steps: [
         makeStep({
@@ -3949,6 +3975,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           instruction: 'findings-manager',
           outputContract: 'findings-manager',
         },
+        adjudicator: { persona: 'supervisor' },
       },
       steps: [
         makeStep({
@@ -4069,6 +4096,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           instruction: 'findings-manager',
           outputContract: 'findings-manager',
         },
+        adjudicator: { persona: 'supervisor' },
       },
       steps: [
         {
@@ -4149,6 +4177,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           instruction: 'findings-manager',
           outputContract: 'findings-manager',
         },
+        adjudicator: { persona: 'supervisor' },
       },
       steps: [
         makeStep({
@@ -4305,6 +4334,7 @@ describe('WorkflowEngine structured caller defaults', () => {
           instruction: 'findings-manager',
           outputContract: 'findings-manager',
         },
+        adjudicator: { persona: 'supervisor' },
       },
       steps: [
         makeStep({

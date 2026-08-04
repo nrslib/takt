@@ -51,6 +51,7 @@ function workflow(name: string, withFindingContract: boolean): WorkflowConfig {
               instruction: 'manage',
               outputContract: 'findings-manager',
             },
+            adjudicator: { persona: 'supervisor' },
           },
         }
       : {}),

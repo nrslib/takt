@@ -49,6 +49,7 @@ function workflow(name: string): WorkflowConfig {
         instruction: 'manage',
         outputContract: 'findings-manager',
       },
+      adjudicator: { persona: 'supervisor' },
     },
   };
 }
