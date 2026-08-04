@@ -13,7 +13,7 @@ loop_monitors:
     threshold: 2
     judge:
       persona: supervisor
-      instruction: loop-monitor-fix-replan
+      instruction: loop-monitor-fix-replan-finding-contract
       rules:
         - condition: 要件と受入条件を変えずに実装方針を再定義できる
           next: replan
@@ -23,7 +23,7 @@ loop_monitors:
     threshold: 2
     judge:
       persona: supervisor
-      instruction: loop-monitor-fix-replan
+      instruction: loop-monitor-fix-replan-finding-contract
       rules:
         - condition: 要件と受入条件を変えずに実装方針を再定義できる
           next: replan
@@ -33,7 +33,7 @@ loop_monitors:
     threshold: 2
     judge:
       persona: supervisor
-      instruction: loop-monitor-fix-replan
+      instruction: loop-monitor-fix-replan-finding-contract
       rules:
         - condition: 要件と受入条件を変えずに実装方針を再定義できる
           next: replan
@@ -43,7 +43,7 @@ loop_monitors:
     threshold: 2
     judge:
       persona: supervisor
-      instruction: loop-monitor-fix-replan
+      instruction: loop-monitor-fix-replan-finding-contract
       rules:
         - condition: 再計画により blocker の解消が進んでいる
           next: replan
@@ -85,7 +85,7 @@ steps:
         next: ABORT
 
   - name: replan
-    uses: implementation-high-replan-to-implement
+    uses: implementation-high-replan-to-implement-finding-contract
     rules:
       - condition: プロジェクト内で実行可能な未試行の変更または原因調査と、その検証手順を具体化した
         next: implement

@@ -14,7 +14,7 @@ loop_monitors:
     threshold: 2
     judge:
       persona: supervisor
-      instruction: loop-monitor-gate-needs-review
+      instruction: loop-monitor-gate-needs-review-finding-contract
       rules:
         - condition: The missing evidence can be obtained concretely and another boundary review is worthwhile
           next: boundary-reviewers

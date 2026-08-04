@@ -14,7 +14,7 @@ loop_monitors:
     threshold: 2
     judge:
       persona: supervisor
-      instruction: loop-monitor-gate-needs-review
+      instruction: loop-monitor-gate-needs-review-finding-contract
       rules:
         - condition: 不足証跡を具体的に取得でき、同じ境界レビューを再実行する価値がある
           next: boundary-reviewers

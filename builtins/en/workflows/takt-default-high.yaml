@@ -13,7 +13,7 @@ loop_monitors:
     threshold: 2
     judge:
       persona: supervisor
-      instruction: loop-monitor-fix-replan
+      instruction: loop-monitor-fix-replan-finding-contract
       rules:
         - condition: The implementation approach can be redefined without changing requirements or acceptance criteria
           next: replan
@@ -23,7 +23,7 @@ loop_monitors:
     threshold: 2
     judge:
       persona: supervisor
-      instruction: loop-monitor-fix-replan
+      instruction: loop-monitor-fix-replan-finding-contract
       rules:
         - condition: The implementation approach can be redefined without changing requirements or acceptance criteria
           next: replan
@@ -33,7 +33,7 @@ loop_monitors:
     threshold: 2
     judge:
       persona: supervisor
-      instruction: loop-monitor-fix-replan
+      instruction: loop-monitor-fix-replan-finding-contract
       rules:
         - condition: The implementation approach can be redefined without changing requirements or acceptance criteria
           next: replan
@@ -43,7 +43,7 @@ loop_monitors:
     threshold: 2
     judge:
       persona: supervisor
-      instruction: loop-monitor-fix-replan
+      instruction: loop-monitor-fix-replan-finding-contract
       rules:
         - condition: Replanning is making progress on blockers
           next: replan
@@ -85,7 +85,7 @@ steps:
         next: ABORT
 
   - name: replan
-    uses: implementation-high-replan-to-implement
+    uses: implementation-high-replan-to-implement-finding-contract
     rules:
       - condition: An actionable, untried project-scoped change or investigation and its verification steps were defined
         next: implement
@@ -168,7 +168,7 @@ steps:
         next: ABORT
 
   - name: fix
-    uses: fix
+    uses: fix-finding-contract
     rules:
       - condition: Fixes are complete
         next: reviewers

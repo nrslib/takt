@@ -1,0 +1,1 @@
+Reports from past iterations are stored in the same directory as `{filename}.{timestamp}` (for example, `architect-review.md.20260304T123456Z`). For each report, run Glob with the `{report-name}.*` pattern and inspect at most the two newest files in descending timestamp order.

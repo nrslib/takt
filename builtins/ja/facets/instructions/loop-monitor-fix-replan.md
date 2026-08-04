@@ -1,11 +1,5 @@
-再計画を含む実装・レビューのループが {cycle_count} 回繰り返されました。
+{{include:instructions/loop-monitor-fix-replan-purpose}}
 
-このモニターは、通常遷移が再び replan へ戻り、同じサイクルへ実際に再突入するときだけ発火します。エンジンが提供する live Finding Contract ledger summary / current Finding state を正本として扱ってください。`findings-ledger.json` が存在しても、補助的な snapshot にすぎません。Report Directory 内に存在する最新の計画・レビュー・修正報告は補助証拠として判断してください。
+Report Directory 内の最新の計画、レビュー、修正報告を正本として判断してください。
 
-**判断順序:**
-1. 前回の blocker に対し、直近の計画が新しい分解、別の実装方針、または検証可能な受入条件を示しているか確認してください。
-2. 現在の要件と受入条件を変えずに、実装方針・テスト方針・finding の扱いを再定義できるなら replan を選んでください。
-3. 計画が毎回実質同じ、同一 finding / family が再発する、または provisional が fixpoint / budget exhaustion に達していても、まだ具体的な別案があるなら replan を選んでください。
-4. 試行済みの計画と修正を踏まえても、要件を満たす実現可能な方針が存在しない場合に限り ABORT を選んでください。
-
-人手裁定、台帳の手編集、resume を解決策として提案してはいけません。ABORT の場合は、成立しない要件上の制約と試行済みの方針を簡潔に示してください。
+{{include:instructions/loop-monitor-fix-replan-common}}

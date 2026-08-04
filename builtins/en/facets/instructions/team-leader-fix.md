@@ -1,8 +1,5 @@
-Decompose the Finding Contract's open findings into non-conflicting fix parts. The parent Team Leader must not use tools; it plans from the engine-injected Finding Contract ledger summary as the primary source.
+Plan remediation using the latest reviewer reports in the Report Directory as primary information.
 
-**Decomposition requirements:**
-- Address only findings with lifecycle `new`, `persists`, or `reopened`
-- State the finding ID, responsible files, reference-only files, direct remediation, and completion criteria in every part instruction
-- Never assign the same file to multiple parts
-- Every part in the same batch must be independently executable; request tests and builds only in a later feedback batch after fix results are available
-- Do not fill in facts absent from the ledger. Create an inspection-only part when information is insufficient
+{{include:instructions/team-leader-fix-common}}
+
+State the issue ID or source in every part instruction, and assign every issue targeted by the latest reports to exactly one part.
