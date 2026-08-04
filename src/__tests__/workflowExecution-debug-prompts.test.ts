@@ -256,6 +256,8 @@ vi.mock('../infra/config/index.js', () => ({
   updatePersonaSession: vi.fn(),
   loadWorktreeSessions: vi.fn().mockReturnValue({}),
   updateWorktreeSession: vi.fn(),
+  loadProjectConfig: vi.fn(() => ({})),
+  loadGlobalConfig: vi.fn(() => ({})),
   resolveWorkflowConfigValues: vi.fn().mockReturnValue({
     notificationSound: true,
     notificationSoundEvents: {},

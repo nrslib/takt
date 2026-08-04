@@ -126,6 +126,7 @@ vi.mock('../infra/config/index.js', () => ({
   loadWorktreeSessions: vi.fn().mockReturnValue({}),
   updateWorktreeSession: vi.fn(),
   loadGlobalConfig: vi.fn().mockReturnValue({ provider: 'claude' }),
+  loadProjectConfig: vi.fn(() => ({})),
   loadConfig: vi.fn().mockReturnValue({
     global: { provider: 'claude' },
     project: {},
