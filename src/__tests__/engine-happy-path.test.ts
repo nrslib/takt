@@ -13,7 +13,13 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 import type { WorkflowConfig, WorkflowStep } from '../core/models/index.js';
+import type {
+  StepSpanParams,
+  WorkflowSpanParams,
+} from '../core/workflow/observability/workflowSpans.js';
+import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 
 // --- Mock setup (must be before imports that use these modules) ---
 
@@ -39,6 +45,29 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   generateReportDir: vi.fn().mockReturnValue('test-report-dir'),
 }));
+
+const {
+  workflowSpanParams,
+  stepSpanParams,
+  mockRunWithWorkflowSpan,
+  mockRunWithStepSpan,
+} = vi.hoisted(() => ({
+  workflowSpanParams: [] as WorkflowSpanParams[],
+  stepSpanParams: [] as StepSpanParams[],
+  mockRunWithWorkflowSpan: vi.fn(),
+  mockRunWithStepSpan: vi.fn(),
+}));
+
+vi.mock('../core/workflow/observability/workflowSpans.js', async () => {
+  const actual = await vi.importActual<typeof import('../core/workflow/observability/workflowSpans.js')>(
+    '../core/workflow/observability/workflowSpans.js',
+  );
+  return {
+    ...actual,
+    runWithWorkflowSpan: mockRunWithWorkflowSpan,
+    runWithStepSpan: mockRunWithStepSpan,
+  };
+});
 
 // --- Imports (after mocks) ---
 
@@ -68,6 +97,14 @@ describe('WorkflowEngine Integration: Happy Path', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     applyDefaultMocks();
+    mockRunWithWorkflowSpan.mockImplementation(async (
+      _params: WorkflowSpanParams,
+      execute: () => Promise<unknown>,
+    ) => execute());
+    mockRunWithStepSpan.mockImplementation(async (
+      _params: StepSpanParams,
+      execute: () => Promise<unknown>,
+    ) => execute());
     tmpDir = createTestTmpDir();
   });
 
@@ -950,6 +987,100 @@ describe('WorkflowEngine Integration: Happy Path', () => {
       // First step should be plan (the initialStep)
       const startedSteps = startFn.mock.calls.map(call => (call[0] as WorkflowStep).name);
       expect(startedSteps[0]).toBe('plan');
+    });
+  });
+});
+
+describe('WorkflowEngine trace task metadata', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    applyDefaultMocks();
+    workflowSpanParams.length = 0;
+    stepSpanParams.length = 0;
+    mockRunWithWorkflowSpan.mockImplementation(async (
+      params: WorkflowSpanParams,
+      execute: () => Promise<unknown>,
+    ) => {
+      workflowSpanParams.push(params);
+      return execute();
+    });
+    mockRunWithStepSpan.mockImplementation(async (
+      params: StepSpanParams,
+      execute: () => Promise<unknown>,
+    ) => {
+      stepSpanParams.push(params);
+      return execute();
+    });
+    tmpDir = createTestTmpDir();
+    vi.mocked(runAgent).mockResolvedValue({
+      persona: 'coder',
+      status: 'done',
+      content: 'done',
+      timestamp: new Date('2026-06-14T00:00:00.000Z'),
+    });
+    vi.mocked(mockRuleEvaluation).mockReturnValue({ index: 0, method: 'auto_select' });
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('passes trace task metadata and resolved run directory to workflow and step spans', async () => {
+    const config: WorkflowConfig = {
+      name: 'trace-metadata-workflow',
+      initialStep: 'implement',
+      maxSteps: 3,
+      steps: [{
+        name: 'implement',
+        persona: 'coder',
+        instruction: 'Implement',
+        rules: [makeRule('done', 'COMPLETE')],
+      }],
+    };
+    const traceTaskMetadata = {
+      taskName: 'task-827',
+      taskSlug: 'add-trace-task-metadata',
+      taskSummary: 'Add trace task metadata',
+      taskSource: 'issue',
+      issueNumber: 827,
+      gitBranch: 'takt/827/add-trace-task-metadata',
+      gitBaseBranch: 'main',
+      worktreePath: join(tmpDir, 'worktree'),
+    };
+    const options = {
+      projectCwd: tmpDir,
+      provider: 'mock' as const,
+      observability: {
+        enabled: true,
+        monitor: false,
+        sessionLogExporter: false,
+        usageEventsPhase: false,
+      },
+      observabilityRunId: 'test-report-dir',
+      reportDirName: 'test-report-dir',
+      traceTaskMetadata,
+    } satisfies WorkflowEngineOptions & {
+      traceTaskMetadata: typeof traceTaskMetadata;
+    };
+
+    const engine = new WorkflowEngine(config, tmpDir, 'Task body', options);
+    await engine.run();
+
+    const expectedMetadata = {
+      ...traceTaskMetadata,
+      runDir: join(tmpDir, '.takt', 'runs', 'test-report-dir'),
+    };
+    expect(workflowSpanParams[0]).toMatchObject({
+      enabled: true,
+      runId: 'test-report-dir',
+      traceTaskMetadata: expectedMetadata,
+    });
+    expect(stepSpanParams[0]).toMatchObject({
+      enabled: true,
+      runId: 'test-report-dir',
+      traceTaskMetadata: expectedMetadata,
     });
   });
 });

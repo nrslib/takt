@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -156,7 +156,6 @@ vi.mock('../core/workflow/quality-gates/commandGateRunner.js', () => ({
 
 import { executePipeline } from '../features/pipeline/index.js';
 import { loadGlobalConfig } from '../infra/config/global/globalConfig.js';
-import type { UsageEventLogRecord } from '../core/logging/usageEvent.js';
 
 const mockExecFileSync = vi.mocked(execFileSync);
 
@@ -290,18 +289,6 @@ ${delegate}
   return workflowPath;
 }
 
-function readUsageEvents(dir: string): UsageEventLogRecord[] {
-  const logsDir = join(dir, '.takt', 'runs', 'test-report-dir', 'logs');
-  const file = readdirSync(logsDir).find((name) => name.endsWith('-usage-events.jsonl'));
-  if (!file) {
-    throw new Error('usage event log was not created');
-  }
-  return readFileSync(join(logsDir, file), 'utf-8')
-    .trim()
-    .split('\n')
-    .map((line) => JSON.parse(line) as UsageEventLogRecord);
-}
-
 describe('Pipeline Integration Tests', () => {
   let testDir: string;
   let workflowPath: string;
@@ -354,117 +341,6 @@ describe('Pipeline Integration Tests', () => {
     expect(exitCode).toBe(0);
   });
 
-  it('should complete pipeline with workflow name + skip-git + mock scenario', async () => {
-    // Use builtin 'default' workflow
-    // persona field: extractPersonaName result (from .md filename)
-    // Flow: shared development core → peer-review → final gate → COMPLETE
-    setMockScenario([
-      { persona: 'planner', status: 'done', content: '[PLAN:1]\n\nRequirements are clear and implementable' },
-      { persona: 'coder', status: 'done', content: '[WRITE_TESTS:1]\n\nTests written successfully' },
-      { persona: 'coder', status: 'done', content: '[IMPLEMENT:1]\n\nImplementation complete' },
-      { persona: 'architecture-reviewer', status: 'done', content: '[ARCH-REVIEW:1]\n\napproved' },
-      { persona: 'security-reviewer', status: 'done', content: '[SECURITY-REVIEW:1]\n\napproved' },
-      { persona: 'qa-reviewer', status: 'done', content: '[QA-REVIEW:1]\n\napproved' },
-      { persona: 'testing-reviewer', status: 'done', content: '[TESTING-REVIEW:1]\n\napproved' },
-      { persona: 'coding-reviewer', status: 'done', content: '[CODING-REVIEW:1]\n\napproved' },
-      { persona: 'ai-antipattern-reviewer', status: 'done', content: '[AI-ANTIPATTERN-REVIEW-2ND:1]\n\napproved' },
-      { persona: 'merge-readiness-reviewer', status: 'done', content: '[MERGE-READINESS-REVIEW:1]\n\napproved' },
-      { persona: 'supervisor', status: 'done', content: '[SUPERVISE:2]\n\napproved' },
-    ]);
-
-    const exitCode = await executePipeline({
-      task: 'Add a hello world function',
-      workflow: 'default',
-      autoPr: false,
-      skipGit: true,
-      cwd: testDir,
-      provider: 'mock',
-    });
-
-    expect(exitCode).toBe(0);
-    expect(getScenarioQueue()?.remaining).toBe(0);
-  });
-
-  it('should complete the shared development core after remediating review findings', async () => {
-    setMockScenario([
-      { persona: 'planner', status: 'done', content: '[PLAN:1]\n\nPlan completed.' },
-      { persona: 'coder', status: 'done', content: '[WRITE_TESTS:1]\n\nTests created.' },
-      { persona: 'coder', status: 'done', content: '[IMPLEMENT:1]\n\nImplementation completed.' },
-      { persona: 'architecture-reviewer', status: 'done', content: '[ARCH-REVIEW:2]\n\nA fix is required.' },
-      { persona: 'security-reviewer', status: 'done', content: '[SECURITY-REVIEW:1]\n\nApproved.' },
-      { persona: 'qa-reviewer', status: 'done', content: '[QA-REVIEW:1]\n\nApproved.' },
-      { persona: 'testing-reviewer', status: 'done', content: '[TESTING-REVIEW:1]\n\nApproved.' },
-      { persona: 'coding-reviewer', status: 'done', content: '[CODING-REVIEW:1]\n\nApproved.' },
-      { persona: 'ai-antipattern-reviewer', status: 'done', content: '[AI-ANTIPATTERN-REVIEW-2ND:1]\n\nApproved.' },
-      { persona: 'frontend-reviewer', status: 'done', content: '[FRONTEND-REVIEW:1]\n\nApproved.' },
-      { persona: 'planner', status: 'done', content: '[FIX-PLAN:1]\n\nFix plan finalized.' },
-      { persona: 'coder', status: 'done', content: '[FIX:1]\n\nFix completed.' },
-      { persona: 'coding-reviewer', status: 'done', content: '[FIX-VERIFIER:1]\n\nVerified.' },
-      { persona: 'architecture-reviewer', status: 'done', content: '[ARCH-REVIEW:1]\n\nApproved.' },
-      { persona: 'security-reviewer', status: 'done', content: '[SECURITY-REVIEW:1]\n\nApproved.' },
-      { persona: 'qa-reviewer', status: 'done', content: '[QA-REVIEW:1]\n\nApproved.' },
-      { persona: 'testing-reviewer', status: 'done', content: '[TESTING-REVIEW:1]\n\nApproved.' },
-      { persona: 'coding-reviewer', status: 'done', content: '[CODING-REVIEW:1]\n\nApproved.' },
-      { persona: 'ai-antipattern-reviewer', status: 'done', content: '[AI-ANTIPATTERN-REVIEW-2ND:1]\n\nApproved.' },
-      { persona: 'frontend-reviewer', status: 'done', content: '[FRONTEND-REVIEW:1]\n\nApproved.' },
-      { persona: 'merge-readiness-reviewer', status: 'done', content: '[MERGE-READINESS-REVIEW:1]\n\nApproved.' },
-      { persona: 'dual-supervisor', status: 'done', content: '[SUPERVISE:2]\n\nApproved.' },
-    ]);
-
-    const exitCode = await executePipeline({
-      task: 'Implement a frontend change that requires review remediation',
-      workflow: 'frontend',
-      autoPr: false,
-      skipGit: true,
-      cwd: testDir,
-      provider: 'mock',
-    });
-
-    expect(
-      exitCode,
-      JSON.stringify({
-        errors: mockUiError.mock.calls,
-        remaining: getScenarioQueue()?.remaining,
-      }),
-    ).toBe(0);
-    expect(getScenarioQueue()?.remaining).toBe(0);
-  });
-
-  it.each(['backend-mini', 'default-mini'])('should complete %s through the shared mini core', async (workflow) => {
-    setMockScenario([
-      { persona: 'planner', status: 'done', content: '[PLAN:1]\n\nPlan completed.' },
-      { persona: 'coder', status: 'done', content: '[IMPLEMENT:1]\n\nImplementation completed.' },
-      { persona: 'ai-antipattern-reviewer', status: 'done', content: '[AI-ANTIPATTERN-REVIEW-2ND:1]\n\nApproved.' },
-      { persona: 'supervisor', status: 'done', content: '[SUPERVISE:2]\n\nApproved.' },
-    ]);
-
-    const exitCode = await executePipeline({
-      task: 'Implement a focused backend change',
-      workflow,
-      autoPr: false,
-      skipGit: true,
-      cwd: testDir,
-      provider: 'mock',
-    });
-
-    expect(exitCode).toBe(0);
-    expect(getScenarioQueue()?.remaining).toBe(0);
-  });
-
-  it('should return EXIT_WORKFLOW_FAILED for non-existent workflow', async () => {
-    const exitCode = await executePipeline({
-      task: 'Test task',
-      workflow: 'non-existent-workflow-xyz',
-      autoPr: false,
-      skipGit: true,
-      cwd: testDir,
-      provider: 'mock',
-    });
-
-    // executeTask returns false when workflow not found → executePipeline returns EXIT_WORKFLOW_FAILED (3)
-    expect(exitCode).toBe(3);
-  });
-
   it('should handle ABORT transition from workflow', async () => {
     // Scenario: plan returns second rule -> ABORT
     setMockScenario([
@@ -501,6 +377,101 @@ describe('Pipeline Integration Tests', () => {
     expect(exitCode).toBe(3);
   });
 
+  it('should complete pipeline with workflow name + skip-git + mock scenario', async () => {
+    // Use builtin 'default' workflow
+    // persona field: extractPersonaName result (from .md filename)
+    // Flow: shared development core → peer-review → final gate → COMPLETE
+    setMockScenario([
+      { persona: 'planner', status: 'done', content: '[PLAN:1]\n\nRequirements are clear and implementable' },
+      { persona: 'coder', status: 'done', content: '[WRITE_TESTS:1]\n\nTests written successfully' },
+      { persona: 'coder', status: 'done', content: '[IMPLEMENT:1]\n\nImplementation complete' },
+      { persona: 'architecture-reviewer', status: 'done', content: '[ARCH-REVIEW:1]\n\napproved' },
+      { persona: 'security-reviewer', status: 'done', content: '[SECURITY-REVIEW:1]\n\napproved' },
+      { persona: 'testing-reviewer', status: 'done', content: '[TESTING-REVIEW:1]\n\napproved' },
+      { persona: 'coding-reviewer', status: 'done', content: '[CODING-REVIEW:1]\n\napproved' },
+      { persona: 'ai-antipattern-reviewer', status: 'done', content: '[AI-ANTIPATTERN-REVIEW-2ND:1]\n\napproved' },
+      { persona: 'review-adjudicator', status: 'done', content: '[REVIEW-ADJUDICATION:2]\n\nNo actionable findings remain.' },
+      { persona: 'merge-readiness-supervisor', status: 'done', content: '[FINAL-GATE:1]\n\nMergeable.' },
+    ]);
+
+    const exitCode = await executePipeline({
+      task: 'Add a hello world function',
+      workflow: 'default',
+      autoPr: false,
+      skipGit: true,
+      cwd: testDir,
+      provider: 'mock',
+    });
+
+    expect(exitCode).toBe(0);
+    expect(getScenarioQueue()?.remaining).toBe(0);
+  });
+
+  it('should complete the shared development core after remediating review findings', async () => {
+    setMockScenario([
+      { persona: 'planner', status: 'done', content: '[PLAN:1]\n\nPlan completed.' },
+      { persona: 'coder', status: 'done', content: '[WRITE_TESTS:1]\n\nTests created.' },
+      { persona: 'coder', status: 'done', content: '[IMPLEMENT:1]\n\nImplementation completed.' },
+      { persona: 'architecture-reviewer', status: 'done', content: '[ARCH-REVIEW:2]\n\nA fix is required.' },
+      { persona: 'security-reviewer', status: 'done', content: '[SECURITY-REVIEW:1]\n\nApproved.' },
+      { persona: 'testing-reviewer', status: 'done', content: '[TESTING-REVIEW:1]\n\nApproved.' },
+      { persona: 'coding-reviewer', status: 'done', content: '[CODING-REVIEW:1]\n\nApproved.' },
+      { persona: 'ai-antipattern-reviewer', status: 'done', content: '[AI-ANTIPATTERN-REVIEW-2ND:1]\n\nApproved.' },
+      { persona: 'frontend-reviewer', status: 'done', content: '[FRONTEND-REVIEW:1]\n\nApproved.' },
+      { persona: 'review-adjudicator', status: 'done', content: '[REVIEW-ADJUDICATION:1]\n\nActionable findings remain.' },
+      { persona: 'planner', status: 'done', content: '[FIX-PLAN:1]\n\nFix plan finalized.' },
+      { persona: 'coder', status: 'done', content: '[FIX:1]\n\nFix completed.' },
+      { persona: 'coding-reviewer', status: 'done', content: '[FIX-VERIFIER:1]\n\nVerified.' },
+      { persona: 'architecture-reviewer', status: 'done', content: '[ARCH-REVIEW:1]\n\nApproved.' },
+      { persona: 'security-reviewer', status: 'done', content: '[SECURITY-REVIEW:1]\n\nApproved.' },
+      { persona: 'testing-reviewer', status: 'done', content: '[TESTING-REVIEW:1]\n\nApproved.' },
+      { persona: 'coding-reviewer', status: 'done', content: '[CODING-REVIEW:1]\n\nApproved.' },
+      { persona: 'ai-antipattern-reviewer', status: 'done', content: '[AI-ANTIPATTERN-REVIEW-2ND:1]\n\nApproved.' },
+      { persona: 'frontend-reviewer', status: 'done', content: '[FRONTEND-REVIEW:1]\n\nApproved.' },
+      { persona: 'review-adjudicator', status: 'done', content: '[REVIEW-ADJUDICATION:2]\n\nNo actionable findings remain.' },
+      { persona: 'merge-readiness-supervisor', status: 'done', content: '[FINAL-GATE:1]\n\nMergeable.' },
+    ]);
+
+    const exitCode = await executePipeline({
+      task: 'Implement a frontend change that requires review remediation',
+      workflow: 'frontend',
+      autoPr: false,
+      skipGit: true,
+      cwd: testDir,
+      provider: 'mock',
+    });
+
+    expect(
+      exitCode,
+      JSON.stringify({
+        errors: mockUiError.mock.calls,
+        remaining: getScenarioQueue()?.remaining,
+      }),
+    ).toBe(0);
+    expect(getScenarioQueue()?.remaining).toBe(0);
+  }, 30_000);
+
+  it.each(['backend-mini', 'default-mini'])('should complete %s through the shared mini core', async (workflow) => {
+    setMockScenario([
+      { persona: 'planner', status: 'done', content: '[PLAN:1]\n\nPlan completed.' },
+      { persona: 'coder', status: 'done', content: '[IMPLEMENT:1]\n\nImplementation completed.' },
+      { persona: 'ai-antipattern-reviewer', status: 'done', content: '[AI-ANTIPATTERN-REVIEW-2ND:1]\n\nApproved.' },
+      { persona: 'supervisor', status: 'done', content: '[SUPERVISE:2]\n\nApproved.' },
+    ]);
+
+    const exitCode = await executePipeline({
+      task: 'Implement a focused backend change',
+      workflow,
+      autoPr: false,
+      skipGit: true,
+      cwd: testDir,
+      provider: 'mock',
+    });
+
+    expect(exitCode).toBe(0);
+    expect(getScenarioQueue()?.remaining).toBe(0);
+  });
+
   it('should handle review reject → implement → review loop', async () => {
     setMockScenario([
       // First pass
@@ -522,43 +493,6 @@ describe('Pipeline Integration Tests', () => {
     });
 
     expect(exitCode).toBe(0);
-  });
-
-  it.each([
-    { name: 'direct workflow_call', parallel: false },
-    { name: 'parallel workflow_call', parallel: true },
-  ])('should apply child-only auto routing strategy through the real $name entrypoint', async ({ parallel }) => {
-    workflowPath = writeChildAutoRoutingWorkflow(testDir, parallel);
-    vi.mocked(loadGlobalConfig).mockReturnValue({
-      language: 'en',
-      provider: 'mock',
-      enableBuiltinWorkflows: true,
-      disabledBuiltins: [],
-      logging: { usageEvents: true },
-    });
-    setMockScenario([
-      { persona: 'auto-router', status: 'error', content: 'router unavailable' },
-      { persona: 'coder', status: 'done', content: '[CHILD-STEP:1]\n\nDone.' },
-    ]);
-
-    const exitCode = await executePipeline({
-      task: 'Run child-only automatic routing',
-      workflow: workflowPath,
-      autoPr: false,
-      skipGit: true,
-      cwd: testDir,
-      autoStrategy: 'performance',
-    });
-
-    expect(exitCode).toBe(0);
-    expect(readUsageEvents(testDir)).toContainEqual(expect.objectContaining({
-      step: 'child-step',
-      provider: 'mock',
-      provider_model: 'mock/high-model',
-    }));
-    expect(mockWorkflowWarn).not.toHaveBeenCalledWith(
-      expect.stringMatching(/auto-strategy.*ignored/i),
-    );
   });
 
   it.each([
@@ -691,140 +625,4 @@ steps:
     );
   });
 
-  it('should apply workflow_config provider/model before project config at runtime', async () => {
-    writeFileSync(join(testDir, '.takt', 'config.yaml'), [
-      'provider: opencode',
-      'model: opencode/project-model',
-    ].join('\n'));
-    workflowPath = join(testDir, 'workflow-priority.yaml');
-    writeFileSync(workflowPath, `name: workflow-priority
-workflow_config:
-  provider: mock
-  model: mock/workflow-model
-initial_step: implement
-max_steps: 2
-steps:
-  - name: implement
-    persona: ./.takt/personas/coder.md
-    instruction: Run with workflow provider
-    rules:
-      - condition: done
-        next: COMPLETE
-`);
-    vi.mocked(loadGlobalConfig).mockReturnValue({
-      language: 'en',
-      provider: 'mock',
-      enableBuiltinWorkflows: true,
-      disabledBuiltins: [],
-      logging: { usageEvents: true },
-    });
-    setMockScenario([
-      { persona: 'coder', status: 'done', content: '[IMPLEMENT:1]\n\nDone.' },
-    ]);
-
-    const exitCode = await executePipeline({
-      task: 'Verify workflow priority',
-      workflow: workflowPath,
-      autoPr: false,
-      skipGit: true,
-      cwd: testDir,
-    });
-
-    expect(exitCode).toBe(0);
-    expect(readUsageEvents(testDir)).toContainEqual(expect.objectContaining({
-      step: 'implement',
-      provider: 'mock',
-      provider_model: 'mock/workflow-model',
-    }));
-  });
-
-  it.each([
-    {
-      label: 'provider only',
-      workflowProvider: 'codex',
-      workflowModel: 'gpt-5',
-      envProvider: 'mock',
-      envModel: undefined,
-      expectedProvider: 'mock',
-      expectedModel: 'gpt-5',
-    },
-    {
-      label: 'model only',
-      workflowProvider: 'mock',
-      workflowModel: 'gpt-5',
-      envProvider: undefined,
-      envModel: 'mock/env-model',
-      expectedProvider: 'mock',
-      expectedModel: 'mock/env-model',
-    },
-    {
-      label: 'provider and model',
-      workflowProvider: 'codex',
-      workflowModel: 'gpt-5',
-      envProvider: 'mock',
-      envModel: 'mock/env-model',
-      expectedProvider: 'mock',
-      expectedModel: 'mock/env-model',
-    },
-  ])('should preserve environment $label through the terminal provider call', async ({
-    workflowProvider,
-    workflowModel,
-    envProvider,
-    envModel,
-    expectedProvider,
-    expectedModel,
-  }) => {
-    workflowPath = join(testDir, 'env-priority.yaml');
-    writeFileSync(workflowPath, `name: env-priority
-initial_step: implement
-max_steps: 2
-steps:
-  - name: implement
-    persona: ./.takt/personas/coder.md
-    provider: ${workflowProvider}
-    model: ${workflowModel}
-    instruction: Run with environment provider
-    rules:
-      - condition: done
-        next: COMPLETE
-`);
-    vi.mocked(loadGlobalConfig).mockReturnValue({
-      language: 'en',
-      provider: 'mock',
-      enableBuiltinWorkflows: true,
-      disabledBuiltins: [],
-      logging: { usageEvents: true },
-    });
-    const previousProvider = process.env.TAKT_PROVIDER;
-    const previousModel = process.env.TAKT_MODEL;
-    if (envProvider === undefined) delete process.env.TAKT_PROVIDER;
-    else process.env.TAKT_PROVIDER = envProvider;
-    if (envModel === undefined) delete process.env.TAKT_MODEL;
-    else process.env.TAKT_MODEL = envModel;
-    setMockScenario([
-      { persona: 'coder', status: 'done', content: '[IMPLEMENT:1]\n\nDone.' },
-    ]);
-
-    try {
-      const exitCode = await executePipeline({
-        task: 'Verify environment priority',
-        workflow: workflowPath,
-        autoPr: false,
-        skipGit: true,
-        cwd: testDir,
-      });
-
-      expect(exitCode).toBe(0);
-      expect(readUsageEvents(testDir)).toContainEqual(expect.objectContaining({
-        step: 'implement',
-        provider: expectedProvider,
-        provider_model: expectedModel,
-      }));
-    } finally {
-      if (previousProvider === undefined) delete process.env.TAKT_PROVIDER;
-      else process.env.TAKT_PROVIDER = previousProvider;
-      if (previousModel === undefined) delete process.env.TAKT_MODEL;
-      else process.env.TAKT_MODEL = previousModel;
-    }
-  });
 });

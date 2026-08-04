@@ -170,9 +170,8 @@ function localReviewers(language: Language, name: 'reviewers' | 'boundary-review
 }
 
 describe('builtin Finding ledger routing', () => {
-  it.each(['en', 'ja'] as const)('%s reviewer集約は末尾をstate-onlyの2ルールにする', (language) => {
+  it.each(['en', 'ja'] as const)('%s local reviewer集約は末尾をstate-onlyの2ルールにする', (language) => {
     for (const raw of [
-      sharedReviewers(language),
       localReviewers(language, 'reviewers'),
       localReviewers(language, 'boundary-reviewers'),
     ]) {
@@ -182,19 +181,20 @@ describe('builtin Finding ledger routing', () => {
       ]);
       expect(raw.rules?.some((rule) => /^(?:all|any)\(/u.test(rule.condition))).toBe(false);
     }
+
+    expect(sharedReviewers(language).rules?.some(
+      (rule) => /^(?:all|any)\(/u.test(rule.condition),
+    )).toBe(true);
   });
 
-  it.each(['en', 'ja'] as const)('%s shared reviewersはstatusとanomaly数によらず空台帳をfinal gateへ送る', (language) => {
+  it.each(['en', 'ja'] as const)('%s shared reviewersはreviewer結果と台帳を組み合わせて遷移する', (language) => {
     const step = toWorkflowStep(sharedReviewers(language));
 
-    for (const reviewerRuleIndex of [0, 1]) {
-      for (const label of [undefined, 'all("approved")', 'any("needs_fix")', 'needs_fix', 'need_replan']) {
-        for (const anomalies of [0, 3]) {
-          expect(transition(step, { anomalies }, reviewerRuleIndex, label)).toBe('final-gate');
-        }
-        expect(transition(step, { open: 1 }, reviewerRuleIndex, label)).toBe('fix');
-      }
-    }
+    expect(transition(step, {}, 0)).toBe('final-gate');
+    expect(transition(step, {}, 1)).toBe('fix');
+    expect(transition(step, { anomalies: 3 }, 1)).toBe('final-gate');
+    expect(transition(step, { open: 1 }, 0)).toBe('fix');
+    expect(transition(step, { open: 1 }, 1)).toBe('fix');
   });
 
   it.each(['en', 'ja'] as const)('%s localllmは空台帳を通常integrity gate、boundary final gateへ送る', (language) => {
@@ -216,7 +216,7 @@ describe('builtin Finding ledger routing', () => {
 
   it.each(['en', 'ja'] as const)('%s reviewer集約はconflict/provisionalの先行ルールを維持する', (language) => {
     const cases = [
-      { raw: sharedReviewers(language), dismissTarget: 'final-gate', replanTarget: 'replan' },
+      { raw: sharedReviewers(language), dismissTarget: 'replan', replanTarget: 'replan' },
       { raw: localReviewers(language, 'reviewers'), dismissTarget: 'integrity-gate', replanTarget: 'need_replan' },
       { raw: localReviewers(language, 'boundary-reviewers'), dismissTarget: 'final-gate', replanTarget: 'need_replan' },
     ];
@@ -232,7 +232,7 @@ describe('builtin Finding ledger routing', () => {
     }
   });
 
-  it.each(['en', 'ja'] as const)('%s merge-readinessは空台帳のneeds_fixをsuperviseへ進める', (language) => {
+  it.each(['en', 'ja'] as const)('%s merge-readinessは生labelと台帳を組み合わせて遷移する', (language) => {
     const raw = readExpandedStep(
       language,
       'merge-readiness-finding-contract-final-gate',
@@ -240,8 +240,9 @@ describe('builtin Finding ledger routing', () => {
     );
     const step = toWorkflowStep(raw);
 
-    expect(raw.rules?.some((rule) => rule.condition === 'needs_fix')).toBe(false);
-    expect(transition(step, {}, 0, 'needs_fix')).toBe('supervise');
+    expect(raw.rules?.some((rule) => rule.condition === 'needs_fix')).toBe(true);
+    expect(transition(step, {}, 0, 'approved')).toBe('supervise');
+    expect(transition(step, {}, 0, 'needs_fix')).toBe('needs_fix');
     expect(transition(step, { open: 1 }, 0, 'approved')).toBe('needs_fix');
     expect(transition(step, { open: 1 }, 0, 'needs_fix')).toBe('needs_fix');
     expect(transition(step, { anomalies: 1 }, 0, 'needs_fix')).toBe('needs_review');
@@ -254,7 +255,7 @@ describe('builtin Finding ledger routing', () => {
   });
 
   it.each(['en', 'ja'] as const)(
-    '%s supervisor callerは空台帳の生labelを無視してCOMPLETEにし、台帳だけで遷移する',
+    '%s supervisor callerは生labelと台帳を組み合わせて遷移する',
     (language) => {
       const raw = readExpandedStep(
         language,
@@ -263,11 +264,13 @@ describe('builtin Finding ledger routing', () => {
       );
       const step = toWorkflowStep(raw);
 
-      expect(raw.rules?.some((rule) => ['approved', 'needs_fix', 'need_replan'].includes(rule.condition)))
-        .toBe(false);
+      expect(raw.rules?.some((rule) => rule.condition === 'needs_fix')).toBe(true);
+      expect(raw.rules?.some((rule) => rule.condition === 'need_replan')).toBe(true);
       for (const label of ['approved', 'needs_fix', 'need_replan']) {
-        expect(transition(step, {}, 0, label)).toBe('COMPLETE');
-        expect(transition(step, { open: 1 }, 0, label)).toBe('needs_fix');
+        const emptyTarget = label === 'approved' ? 'COMPLETE' : label;
+        expect(transition(step, {}, 0, label)).toBe(emptyTarget);
+        const openTarget = label === 'need_replan' ? 'need_replan' : 'needs_fix';
+        expect(transition(step, { open: 1 }, 0, label)).toBe(openTarget);
         expect(transition(step, { anomalies: 1 }, 0, label)).toBe('needs_review');
         expect(transition(
           step,

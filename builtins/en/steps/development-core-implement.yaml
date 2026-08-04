@@ -14,7 +14,8 @@ tags:
 edit: true
 persona: coder
 policy:
-  $param: development_policy
+  - contract-change
+  - $param: development_policy
 knowledge:
   $param: development_knowledge
 provider_options:

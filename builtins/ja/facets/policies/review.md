@@ -34,7 +34,7 @@
 |------|------|
 | 現在のコードまたは証跡で確認でき、修正を要する欠陥 | issue として報告する |
 | 証拠が足りない、探索範囲が不足している、結果を確認できない | 未確認範囲として記録し、issue にしない |
-| 不存在または未配線を主張する | 明示的で完全な repository query と、元の義務を定める登録済み task / public declaration の引用がある場合だけ `absence` target をリクエストする |
+| 不存在または未配線を主張する | 元要件または既存公開契約から存在・配線が必須と導け、必要な全経路を探索済みのときだけ locationless issue にする |
 | 品質ゲートの実行・証跡の有無を問題にする | issue にしない。検証結果の評価は final gate の職掌 |
 | 環境要因により実証できず、現在のコードまたは再現可能な証拠からも修正すべき欠陥を確認できない | 未確認範囲として記録し、issue・REJECT にしない |
 
@@ -90,7 +90,6 @@
 - 特定実装の汎用層への漏洩（汎用層に特定実装のインポート・分岐がある）
 - 内部実装のパブリック API エクスポート（インフラ層の関数・内部クラスが公開されている）
 - リファクタリングで置き換えられた旧コード・旧エクスポートの残存
-- 利用側移行と後方互換、legacy support、移行支援、並存を混同している、置換対象の旧契約を支える生成・読込・alias・変換・upcaster・fallback・backfill・data migration・rebuild が要求ソースの明示した対象・範囲を超える、要求を満たすために不要な方式を使う、または時限的な支援で明示された期間・終了条件を欠くか超えている。公開API、イベント、コマンド、設定、パス、永続化形式、現行コード、既存テスト・利用箇所、保存済みデータ、公開・リリース状態、読込境界への配置・隔離は影響分析の証拠であり、それだけでは例外にしない
 - 関連フィールドのクロスバリデーション欠如（意味的に結合した設定値の不変条件が未検証）
 - 契約変更後の呼び出し元・生成元・利用元・検証元・テストデータ・派生入口の更新漏れ
 - ID、source、trace、issue/PR番号などの意味付きフィールドを追加・転送・保存する際に、保存形式だけを確認し、下流の意味解釈や既存フィールドとの混同を確認していない
@@ -215,7 +214,7 @@ DRY違反の修正案は、単に共通化を求めるだけでは不十分と�
 
 Finding Contract は individual finding 単位ではなく review workflow 全体に適用される。
 Finding Contract workflow かどうかは、workflow レベルの `finding_contract` 設定が
-宣言されている場合に限って判定する。補助 snapshot である `findings-ledger.json`、instruction template 内の
+宣言されている場合に限って判定する。`findings-ledger.json`、instruction template 内の
 専用 `Finding Contract` セクション、output contract の `観測した指摘` table は、
 すでに Finding Contract が設定された workflow 内での補助証跡であり、それ自体では
 Finding Contract を有効化しない。
@@ -223,17 +222,16 @@ Finding Contract を有効化しない。
 Finding Contract 利用時、レビュワーは新規の最終 `finding_id` を採番せず、最終 lifecycle
 状態も判定しない。観測した問題は `観測した指摘` table に、証跡付き raw finding として
 報告する。raw relation には `new` / `persists` / `resolution_confirmation` / `reopened`
-だけを使い、既存 ID への言及はエンジンが提供する live ledger summary / Finding state に載っている指摘を参照する場合に限る。最終
+だけを使い、既存 ID への言及は ledger に載っている指摘を参照する場合に限る。最終
 lifecycle 判定と finding ID の対応づけは findings-manager とエンジンの責務である。
 
-Finding Contract が設定された workflow では、エンジンが提供する live ledger summary /
-Finding state が tracked findings の正本である。個別レポート、raw finding 詳細、
-`findings-ledger.json` snapshot は補助証跡としてのみ扱う。live summary が不完全な場合は、
-mapped findings は live state に従い、unmapped raw findings は findings-manager reconciliation
-待ちの potential new entries として扱う。live Finding state がない場合、レポート履歴は
-observed raw findings の補助証跡としてのみ使う。最終 `finding_id` や lifecycle 状態は
-割り当てず、従来ルールも適用しない。エンジンまたは findings-manager が reconciled state
-を提供するのを待つ。
+Finding Contract が設定された workflow で parse 可能な ledger がある場合、tracked findings
+の正本は ledger である。個別レポートと raw finding 詳細は補助証跡として扱う。ledger が
+存在するが不完全な場合は、mapped findings は ledger に従い、unmapped raw findings は
+findings-manager reconciliation 待ちの potential new entries として扱う。Finding Contract
+が設定された workflow で parse 可能な ledger がない場合、レポート履歴は observed raw
+findings の補助証跡としてのみ使う。最終 `finding_id` や lifecycle 状態は割り当てず、
+従来ルールも適用しない。ledger 再生成または findings-manager reconciliation を待つ。
 
 ### 従来の Finding ID ルール（Finding Contract を使わない workflow 向け）
 
@@ -334,7 +332,7 @@ Finding Contract で再発が別問題なら reviewer は raw relation を `new`
 - 「既存問題」「非ブロッキング」に分類してよいのは、変更と直接関係しない箇所の問題のみ
 - 「コード自体は以前から存在していた」は、変更箇所・関係箇所の問題を非ブロッキングにする理由にならない
 - 「既存実装と同じ挙動」は、新しい公開入口・adapter・tool がその契約を露出する変更の承認理由にならない
-- 本文で触れた懸念を finding 化しない場合は、`false_positive` / `overreach` / `outside_contract_jurisdiction` / `no_issue_after_verification` のいずれかに分類し、根拠を示す
+- 本文で触れた懸念を finding 化しない場合は、`false_positive` / `overreach` / `out_of_scope` / `no_issue_after_verification` のいずれかに分類し、根拠を示す
 - 問題が1件でもあればREJECT。「APPROVE + 警告」「APPROVE + 提案」は禁止
 
 ## レビューの基本手順
@@ -395,9 +393,9 @@ Finding Contract で再発が別問題なら reviewer は raw relation を `new`
 
 **優先順位:**
 
-1. Finding Contract が設定された workflow では、エンジンが提供する live ledger summary / Finding state を tracked findings の正本として使用する。修正対象は live state 上の open findings（`new`、`persists`、`reopened`）のみとし、resolved / closed findings は修正対象外とする。個別レポートと `findings-ledger.json` snapshot は補助証跡としてのみ扱う。
-2. live summary が不完全な場合は、mapped findings は live state に従い、unmapped raw findings は findings-manager reconciliation 待ちの potential new entries として扱う。
-3. Finding Contract が設定されているが live Finding state がない場合、Report Directory の最新レビューは observed raw findings の補助証跡としてのみ使う。最終 `finding_id` や lifecycle 状態は割り当てず、従来ルールも適用しない。エンジンまたは findings-manager が reconciled state を提供するのを待つ。
+1. Finding Contract が設定された workflow で parse 可能な Finding Contract ledger / `findings-ledger.json` が利用できる場合、tracked findings の正本として ledger を使用する。修正対象は ledger 上の open findings（`new`、`persists`、`reopened`）のみとし、resolved / closed findings は修正対象外とする。個別レポートは ledger から辿る補助証跡として扱う。
+2. ledger が存在するが不完全な場合は、mapped findings は ledger に従い、unmapped raw findings は findings-manager reconciliation 待ちの potential new entries として扱う。
+3. Finding Contract が設定された workflow で parse 可能な ledger がない場合、Report Directory の最新レビューは observed raw findings の補助証跡としてのみ使う。最終 `finding_id` や lifecycle 状態は割り当てず、従来ルールも適用しない。ledger 再生成または findings-manager reconciliation を待つ。
 4. `finding_contract` 設定がない workflow では、Report Directory の最新レビューを primary evidence として扱い、従来ルールを適用する:
    - Report Directory 内で、このステップが前回までに出力したレビューレポートとそのタイムスタンプ付き履歴を確認する
    - 無印ファイルを最新結果、直前のタイムスタンプ付きファイル（`{レポート名}.{タイムスタンプ}`）を前回結果として扱う

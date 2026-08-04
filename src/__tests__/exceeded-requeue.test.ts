@@ -10,7 +10,11 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { parse as parseYaml } from 'yaml';
 import type { WorkflowConfig } from '../core/models/index.js';
 
 // --- Mock setup (must be before imports that use these modules) ---
@@ -36,12 +40,20 @@ vi.mock('../core/workflow/phase-runner.js', () => ({
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   generateReportDir: vi.fn().mockReturnValue('test-report-dir'),
+  notifySuccess: vi.fn(),
+  notifyError: vi.fn(),
+  sendSlackNotification: vi.fn(),
+  getSlackWebhookUrl: vi.fn(() => undefined),
 }));
 
 // --- Imports (after mocks) ---
 
 import { WorkflowEngine } from '../core/workflow/index.js';
 import { runAgent } from '../agents/runner.js';
+import { setMockScenario, resetScenario } from '../infra/mock/index.js';
+import { runAllTasks } from '../features/tasks/index.js';
+import { TaskRunner } from '../infra/task/index.js';
+import { invalidateGlobalConfigCache } from '../infra/config/index.js';
 import {
   makeResponse,
   makeStep,

@@ -102,19 +102,14 @@ function fixtureLedger(): FindingLedger {
     lifecycleEvents: [],
   });
   const finding = initial.findings[0]!;
-  const sourceRawFindingId = `fixture-raw:finding:${finding.id}:${finding.revision + 1}:${initial.rawFindings.length}`;
   return applyFindingLedgerFixtureRevision({
     ledger: initial,
     entityKind: 'finding',
     contributionOrigin: { kind: 'external' },
+    sourceRawFindingId: raw.rawFindingId,
     entity: {
       ...finding,
       revision: finding.revision + 1,
-      rawFindingIds: [sourceRawFindingId],
-      provisional: {
-        ...finding.provisional!,
-        sourceRawFindingIds: [sourceRawFindingId],
-      },
     },
   });
 }

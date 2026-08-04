@@ -223,6 +223,7 @@ export function applyFindingLedgerFixtureRevision(input: {
   entityKind: 'finding' | 'conflict';
   entity: FindingLedgerEntry | FindingLedgerConflict;
   contributionOrigin?: FindingEvidenceContributionOrigin;
+  sourceRawFindingId?: string;
 }): FindingLedger {
   const observation = fixtureObservation(input.entity);
   const finding = input.entityKind === 'finding'
@@ -336,6 +337,14 @@ export function applyFindingLedgerFixtureRevision(input: {
       (candidate) => candidate.rawFindingId === rawFindingId,
     ))
     .find((candidate) => candidate !== undefined);
+  const selectedSourceRaw = input.sourceRawFindingId === undefined
+    ? undefined
+    : input.ledger.rawFindings.find(
+        (candidate) => candidate.rawFindingId === input.sourceRawFindingId,
+      );
+  if (input.sourceRawFindingId !== undefined && selectedSourceRaw === undefined) {
+    throw new Error(`Fixture source raw finding "${input.sourceRawFindingId}" is missing`);
+  }
   const retainedEvidenceQuote = finding?.evidenceIds
     .map((evidenceId) => input.ledger.evidenceRecords.find(
       (candidate) => candidate.evidenceId === evidenceId,
@@ -390,12 +399,15 @@ export function applyFindingLedgerFixtureRevision(input: {
     )
     ? retainedSourceRaw
     : undefined;
+  const retainedRawForRevision = selectedSourceRaw !== undefined
+    ? selectedSourceRaw
+    : interpretedRetainedSource;
   const rawTargetPrecondition = rawTargetFindingId === null
     ? undefined
     : captureFindingMutationPrecondition(input.ledger, rawTargetFindingId);
   const raw: RawFinding | undefined = authority.kind === 'verified_evidence'
     && !usesManagerProof
-    ? interpretedRetainedSource ?? {
+    ? retainedRawForRevision ?? {
         rawFindingId: `fixture-raw:${input.entityKind}:${input.entity.id}:${input.entity.revision}:${input.ledger.rawFindings.length}`,
         stepName: observation.stepName,
         reviewer: 'fixture-reviewer',

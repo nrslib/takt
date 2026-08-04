@@ -4,7 +4,7 @@
  * producer 実行後に abort → resume した場合、新 run は旧 run の reports/ を
  * 継承したスナップショットを持ち、consumer（裁定ステップ）の {report:X} は
  * 新 run 内の実在ファイルへ解決される。継承が無い（レポート欠落）場合は
- * エージェント起動前（runAgent 呼び出しゼロ）に明確なエラーで落ちる。
+ * エージェント起動前（runAgent 呼び出しゼロ）に runtime_error で abort する。
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -112,20 +112,34 @@ describe('resume boundary: {report:X} references across runs', () => {
     expect(readFileSync(inheritedPath, 'utf-8')).toBe('REJECT: findings...');
   });
 
-  it('fails with a clear error and zero agent calls when the report was not inherited', async () => {
+  it('aborts with a clear runtime error and zero agent calls when the report was not inherited', async () => {
     // 継承なし: 新 run の reports/ は空（createTestTmpDir が作成済み）。
     const engine = new WorkflowEngine(makeArbitrateConfig(), tmpDir, 'resume the arbitration', {
       projectCwd: tmpDir,
       reportDirName: 'test-report-dir',
     });
 
-    await expect(engine.run()).rejects.toThrow(
-      /Report reference "ai-antipattern-review-1st\.md" is unavailable for step "ai-antipattern-no-fix"/,
+    const abort = vi.fn();
+    engine.on('workflow:abort', abort);
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(abort).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'aborted' }),
+      expect.stringMatching(
+        /Report reference "ai-antipattern-review-1st\.md" is unavailable for step "ai-antipattern-no-fix"/,
+      ),
+      'runtime_error',
+      expect.objectContaining({
+        kind: 'runtime_error',
+        step: 'ai-antipattern-no-fix',
+      }),
     );
     expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
   });
 
-  it('mentions the resume source when a manifest exists but lacks the report', async () => {
+  it('mentions the resume source when aborting for a manifest that lacks the report', async () => {
     // 空の source（レポートなし）から継承した場合、manifest は存在するが
     // 対象レポートは含まれない — エラーに resume 元を明示する。
     const sourcePaths = buildRunPaths(tmpDir, 'aborted-empty');
@@ -139,7 +153,21 @@ describe('resume boundary: {report:X} references across runs', () => {
       reportDirName: 'test-report-dir',
     });
 
-    await expect(engine.run()).rejects.toThrow(/Resumed from "aborted-empty"/);
+    const abort = vi.fn();
+    engine.on('workflow:abort', abort);
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(abort).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'aborted' }),
+      expect.stringMatching(/Resumed from "aborted-empty"/),
+      'runtime_error',
+      expect.objectContaining({
+        kind: 'runtime_error',
+        step: 'ai-antipattern-no-fix',
+      }),
+    );
     expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
   });
 });

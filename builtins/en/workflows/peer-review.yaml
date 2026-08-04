@@ -1,5 +1,5 @@
 name: peer-review
-description: Specialist parallel peer reviewers (+ ai-antipattern-review-2nd) -> finding adjudication -> shared remediation loop, followed by merge-readiness review and supervision.
+description: Specialist parallel peer reviewers (+ ai-antipattern-review-2nd) -> finding adjudication -> shared remediation loop, followed by one supervisor that integrates merge-readiness checks into the final decision.
 subworkflow:
   callable: true
   visibility: internal
@@ -45,10 +45,6 @@ subworkflow:
         - coding
         - testing
         - review
-    supervisor_persona:
-      type: facet_ref
-      facet_kind: persona
-      default: supervisor
 workflow_config:
   provider_options:
     codex:
@@ -187,20 +183,16 @@ steps:
     with:
       merge_readiness_policy:
         $param: verification_policy
-      merge_readiness_knowledge:
+      review_knowledge:
         $param: review_knowledge_additions
-      supervise_knowledge:
-        $param: review_knowledge_additions
-      supervisor_persona:
-        $param: supervisor_persona
     rules:
-      - condition: COMPLETE
+      - condition: MERGEABLE
         next: COMPLETE
-      - condition: needs_fix
+      - condition: FIX REQUIRED
         next: fix-plan
-      - condition: need_replan
+      - condition: TASK REPLAN REQUIRED
         return: need_replan
-      - condition: ABORT
+      - condition: BLOCKED BY ENVIRONMENT
         next: ABORT
   - name: fix-plan
     uses: peer-review-fix-plan

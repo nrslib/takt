@@ -9,6 +9,7 @@
 
 ## Reviewer Candidate
 - Prefer `encodeJsonBase64` because its output can be decoded back to the original pair in isolation.
+- For rollout safety, keep `encodeJsonBase64` as a fallback reader after switching current writes to `encodeFixedWidth`, so previously stored names remain readable.
 
 ## Non-actionable observations
 | Finding ID | State | Evidence |

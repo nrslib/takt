@@ -246,6 +246,8 @@ describe('resolveStepProviderModel', () => {
     });
 
     expect(result.provider).toBe('mock');
+    // Given engine source is undefined but value is set, the source stays undefined (caller must set)
+    expect(result.providerSource).toBeUndefined();
   });
 
   it('should return undefined provider when all provider candidates are missing', () => {
@@ -256,6 +258,7 @@ describe('resolveStepProviderModel', () => {
     });
 
     expect(result.provider).toBeUndefined();
+    expect(result.providerSource).toBeUndefined();
   });
 
   it('should prefer step.model over personaProviders.model and input.model', () => {
@@ -286,6 +289,8 @@ describe('resolveStepProviderModel', () => {
     });
 
     expect(result.model).toBe('input-model');
+    // Given engine source is undefined but value is set, the source stays undefined (caller must set)
+    expect(result.modelSource).toBeUndefined();
   });
 
   it('should return undefined model when all model candidates are missing', () => {
@@ -296,6 +301,7 @@ describe('resolveStepProviderModel', () => {
     });
 
     expect(result.model).toBeUndefined();
+    expect(result.modelSource).toBeUndefined();
   });
 
   it('should resolve provider from personaProviders entry with only model specified', () => {

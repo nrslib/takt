@@ -163,16 +163,8 @@ describe('npm test entrypoint routing', () => {
     ]);
   });
 
-  it('should route targeted serial Git tests to the Git runner', () => {
-    const args = ['src/__tests__/finding-ladder-robustness.test.ts'];
-
-    expect(selectNpmTestRuns(args)).toEqual([
-      { npmArgs: ['run', 'test:it:serial:git', '--', ...args] },
-    ]);
-  });
-
-  it('should route the adjudication runner integration test to the serial Git runner', () => {
-    const args = ['src/__tests__/finding-conflict-adjudication-runner.test.ts'];
+  it('should route serial Git members to the Git runner', () => {
+    const args = ['src/__tests__/finding-ladder-robustness.integration.test.ts'];
 
     expect(selectNpmTestRuns(args)).toEqual([
       { npmArgs: ['run', 'test:it:serial:git', '--', ...args] },
@@ -180,24 +172,24 @@ describe('npm test entrypoint routing', () => {
   });
 
   it('should normalize a serial Git basename before routing', () => {
-    expect(selectNpmTestRuns(['finding-ladder-robustness.test.ts'])).toEqual([
+    expect(selectNpmTestRuns(['finding-conflict-adjudication-runner.integration.test.ts'])).toEqual([
       {
         npmArgs: [
           'run',
           'test:it:serial:git',
           '--',
-          'src/__tests__/finding-ladder-robustness.test.ts',
+          'src/__tests__/finding-conflict-adjudication-runner.integration.test.ts',
         ],
       },
     ]);
   });
 
-  it('should normalize an absolute serial workflow path before routing', () => {
+  it('should normalize an absolute unit path before routing', () => {
     expect(selectNpmTestRuns([resolve('src/__tests__/workflowLoader.test.ts')])).toEqual([
       {
         npmArgs: [
           'run',
-          'test:it:serial:workflow',
+          'test:unit:parallel',
           '--',
           'src/__tests__/workflowLoader.test.ts',
         ],
@@ -205,11 +197,11 @@ describe('npm test entrypoint routing', () => {
     ]);
   });
 
-  it('should route targeted serial workflow tests to the workflow runner', () => {
+  it('should route former serial workflow members to the unit runner', () => {
     const args = ['src/__tests__/workflowLoader.test.ts'];
 
     expect(selectNpmTestRuns(args)).toEqual([
-      { npmArgs: ['run', 'test:it:serial:workflow', '--', ...args] },
+      { npmArgs: ['run', 'test:unit:parallel', '--', ...args] },
     ]);
   });
 
@@ -222,10 +214,9 @@ describe('npm test entrypoint routing', () => {
     ];
 
     expect(selectNpmTestRuns(args)).toEqual([
-      { npmArgs: ['run', 'test:unit:parallel', '--', args[0]] },
+      { npmArgs: ['run', 'test:unit:parallel', '--', args[0], args[3]] },
       { npmArgs: ['run', 'test:it:parallel', '--', args[1]] },
       { npmArgs: ['run', 'test:it:serial:git', '--', args[2]] },
-      { npmArgs: ['run', 'test:it:serial:workflow', '--', args[3]] },
     ]);
   });
 

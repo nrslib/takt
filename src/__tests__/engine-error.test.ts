@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { setMockScenario, resetScenario } from '../infra/mock/index.js';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
@@ -58,6 +59,7 @@ describe('WorkflowEngine Integration: Error Handling', () => {
   });
 
   afterEach(() => {
+    resetScenario();
     if (existsSync(tmpDir)) {
       rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -675,6 +677,60 @@ describe('WorkflowEngine Integration: Error Handling', () => {
       const reason = abortFn.mock.calls[0]![1] as string;
       expect(reason).toContain('Loop detected');
       expect(reason).toContain('loop-step');
+    });
+  });
+
+  describe('Scenario queue exhaustion', () => {
+    it('should handle scenario queue exhaustion mid-workflow', async () => {
+      // Delegate the mocked runAgent to the real implementation so the mock
+      // provider's scenario queue (and its empty-queue fallback) is exercised.
+      const actualRunner = await vi.importActual<typeof import('../agents/runner.js')>('../agents/runner.js');
+      vi.mocked(runAgent).mockImplementation(actualRunner.runAgent);
+
+      const personasDir = join(tmpDir, '.takt', 'personas');
+      mkdirSync(personasDir, { recursive: true });
+      for (const name of ['plan', 'implement']) {
+        writeFileSync(join(personasDir, `${name}.md`), `You are a ${name} agent.`);
+      }
+
+      // Only 1 scenario entry, but the workflow needs 2 steps
+      setMockScenario([
+        { persona: 'plan', status: 'done', content: '[PLAN:1]\n\nClear.' },
+      ]);
+
+      const config = buildDefaultWorkflowConfig({
+        steps: [
+          makeStep('plan', {
+            persona: './.takt/personas/plan.md',
+            personaPath: join(personasDir, 'plan.md'),
+            rules: [
+              makeRule('Requirements are clear', 'implement'),
+              makeRule('Requirements unclear', 'ABORT'),
+            ],
+          }),
+          makeStep('implement', {
+            persona: './.takt/personas/implement.md',
+            personaPath: join(personasDir, 'implement.md'),
+            rules: [
+              makeRule('Implementation complete', 'COMPLETE'),
+              makeRule('Cannot proceed', 'plan'),
+            ],
+          }),
+        ],
+      });
+      const engine = new WorkflowEngine(config, tmpDir, 'Task', { projectCwd: tmpDir, provider: 'mock' });
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+      ]);
+
+      // Should not throw; mock client falls back to generic response when queue is empty
+      const state = await engine.run();
+
+      // Even with queue exhaustion, engine should reach some terminal state
+      expect(['completed', 'aborted']).toContain(state.status);
+      // The step after exhaustion still received a provider response
+      expect(vi.mocked(runAgent).mock.calls.length).toBeGreaterThanOrEqual(2);
     });
   });
 

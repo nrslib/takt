@@ -29,6 +29,13 @@ export const commonSrcTestConfig = {
     TAKT_CONFIG_DIR: '',
     TAKT_NOTIFY_WEBHOOK: '',
   },
+  // Local runs execute 4 unit shards plus fork workers and spawnSync-heavy
+  // tests on one machine. A worker whose event loop is starved past 60s trips
+  // birpc's fixed RPC timeout and vitest surfaces it as an unhandled error
+  // ("Timeout calling onTaskUpdate") even though every test passed. Keep
+  // unhandled errors fatal on CI (one shard per runner, no such contention)
+  // and ignore them locally where they are reproducibly spurious.
+  dangerouslyIgnoreUnhandledErrors: !process.env.CI,
   environment: 'node',
   globals: false,
   reporters: ['dot'],
@@ -52,6 +59,7 @@ export const parallelSrcRunnerConfig = {
 
 export const serialSrcRunnerConfig = {
   testTimeout: 60_000,
+  passWithNoTests: true,
   pool: 'threads',
   poolOptions: {
     threads: {

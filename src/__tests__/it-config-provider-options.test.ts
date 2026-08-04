@@ -22,6 +22,8 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   notifySuccess: vi.fn(),
   notifyError: vi.fn(),
   playWarningSound: vi.fn(),
+  sendSlackNotification: vi.fn(),
+  getSlackWebhookUrl: vi.fn(() => undefined),
   generateReportDir: vi.fn().mockReturnValue('test-report-dir'),
   createLogger: () => ({
     trace: vi.fn(),
@@ -36,8 +38,14 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 
 import { runAgent } from '../agents/runner.js';
 import { executeTask } from '../features/tasks/execute/taskExecution.js';
+import { runAllTasks } from '../features/tasks/index.js';
+import { TaskRunner } from '../infra/task/index.js';
 import { invalidateGlobalConfigCache } from '../infra/config/index.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
+
+const runAllTasksNoWorkflow = runAllTasks as (projectCwd: string) => ReturnType<typeof runAllTasks>;
+const defaultCodexSkills = { repo: false, user: false } as const;
+const defaultClaudeSkills = { enabled: false } as const;
 
 interface TestEnv {
   projectDir: string;
@@ -500,5 +508,427 @@ describe('IT: config provider_options reflection', () => {
     expect(ok).toBe(true);
     expect(runAgent).toHaveBeenCalledTimes(1);
     expect(vi.mocked(runAgent).mock.calls[0]?.[2]?.outputSchema).toBeUndefined();
+  });
+});
+
+describe('IT: runAllTasks provider_options reflection', () => {
+  let root: string;
+  let projectDir: string;
+  let globalDir: string;
+  let originalConfigDir: string | undefined;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    root = join(tmpdir(), `takt-it-run-config-${randomUUID()}`);
+    projectDir = join(root, 'project');
+    globalDir = join(root, 'global');
+    mkdirSync(join(projectDir, '.takt', 'workflows', 'personas'), { recursive: true });
+    mkdirSync(globalDir, { recursive: true });
+
+    writeFileSync(
+      join(projectDir, '.takt', 'workflows', 'run-config-it.yaml'),
+      [
+        'name: run-config-it',
+        'description: run config provider options integration test',
+        'max_steps: 3',
+        'initial_step: plan',
+        'steps:',
+        '  - name: plan',
+        '    persona: ./personas/planner.md',
+        '    instruction: "{task}"',
+        '    rules:',
+        '      - condition: done',
+        '        next: COMPLETE',
+      ].join('\n'),
+      'utf-8',
+    );
+    writeFileSync(join(projectDir, '.takt', 'workflows', 'personas', 'planner.md'), 'You are planner.', 'utf-8');
+
+    originalConfigDir = process.env.TAKT_CONFIG_DIR;
+    process.env.TAKT_CONFIG_DIR = globalDir;
+    invalidateGlobalConfigCache();
+
+    vi.mocked(runAgent).mockResolvedValue(makeDoneResponse());
+
+    const runner = new TaskRunner(projectDir);
+    runner.addTask('test task', { workflow: 'run-config-it' });
+  });
+
+  afterEach(() => {
+    if (originalConfigDir === undefined) {
+      delete process.env.TAKT_CONFIG_DIR;
+    } else {
+      process.env.TAKT_CONFIG_DIR = originalConfigDir;
+    }
+    invalidateGlobalConfigCache();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('project provider_options should override global in runAllTasks flow', async () => {
+    setGlobalConfig(globalDir, [
+      'provider_options:',
+      '  codex:',
+      '    network_access: true',
+    ].join('\n'));
+    setProjectConfig(projectDir, [
+      'provider_options:',
+      '  codex:',
+      '    network_access: false',
+    ].join('\n'));
+
+    await runAllTasksNoWorkflow(projectDir);
+
+    const options = vi.mocked(runAgent).mock.calls[0]?.[2];
+    expect(options?.providerOptions).toEqual({
+      codex: { networkAccess: false, skills: defaultCodexSkills },
+      claude: { skills: defaultClaudeSkills },
+    });
+  });
+
+  it('project persona_providers provider_options should override project provider_options in runAllTasks flow', async () => {
+    setProjectConfig(projectDir, [
+      'provider: claude',
+      'provider_options:',
+      '  claude:',
+      '    allowed_tools:',
+      '      - Read',
+      'persona_providers:',
+      '  planner:',
+      '    provider_options:',
+      '      claude:',
+      '        allowed_tools:',
+      '          - Read',
+      '          - Edit',
+    ].join('\n'));
+
+    await runAllTasksNoWorkflow(projectDir);
+
+    const options = vi.mocked(runAgent).mock.calls[0]?.[2];
+    expect(options?.providerOptions).toEqual({
+      codex: { skills: defaultCodexSkills },
+      claude: {
+        allowedTools: ['Read', 'Edit'],
+        skills: defaultClaudeSkills,
+      },
+    });
+    expect(options?.allowedTools).toEqual(['Read', 'Edit']);
+  });
+
+  it('project persona_providers opencode variant should override project provider_options in runAllTasks flow', async () => {
+    setProjectConfig(projectDir, [
+      'provider: opencode',
+      'model: opencode/big-pickle',
+      'provider_options:',
+      '  opencode:',
+      '    network_access: true',
+      '    variant: low',
+      'persona_providers:',
+      '  planner:',
+      '    provider_options:',
+      '      opencode:',
+      '        variant: high',
+    ].join('\n'));
+
+    await runAllTasksNoWorkflow(projectDir);
+
+    const options = vi.mocked(runAgent).mock.calls[0]?.[2];
+    expect(options?.providerOptions).toEqual({
+      codex: { skills: defaultCodexSkills },
+      claude: { skills: defaultClaudeSkills },
+      opencode: {
+        networkAccess: true,
+        variant: 'high',
+      },
+    });
+  });
+});
+
+describe('IT: provider block reflection', () => {
+  let projectDir: string;
+  let globalDir: string;
+  let originalConfigDir: string | undefined;
+
+  function createProviderBlockEnv(workflowBody: string): void {
+    const root = join(tmpdir(), `takt-it-provider-block-${randomUUID()}`);
+    projectDir = join(root, 'project');
+    globalDir = join(root, 'global');
+
+    mkdirSync(projectDir, { recursive: true });
+    mkdirSync(join(projectDir, '.takt', 'workflows', 'personas'), { recursive: true });
+    mkdirSync(globalDir, { recursive: true });
+
+    writeFileSync(
+      join(projectDir, '.takt', 'workflows', 'provider-block-it.yaml'),
+      workflowBody,
+      'utf-8',
+    );
+    writeFileSync(join(projectDir, '.takt', 'workflows', 'personas', 'planner.md'), 'You are planner.', 'utf-8');
+    process.env.TAKT_CONFIG_DIR = globalDir;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    originalConfigDir = process.env.TAKT_CONFIG_DIR;
+    vi.mocked(runAgent).mockImplementation(async (persona, task, options) => {
+      options?.onPromptResolved?.({
+        systemPrompt: typeof persona === 'string' ? persona : '',
+        userInstruction: task,
+      });
+      return makeDoneResponse();
+    });
+  });
+
+  afterEach(() => {
+    if (originalConfigDir === undefined) {
+      delete process.env.TAKT_CONFIG_DIR;
+    } else {
+      process.env.TAKT_CONFIG_DIR = originalConfigDir;
+    }
+    invalidateGlobalConfigCache();
+    if (projectDir) {
+      rmSync(join(projectDir, '..'), { recursive: true, force: true });
+    }
+  });
+
+  it('step provider block should override global/project provider options when origin is local', async () => {
+    // Given
+    createProviderBlockEnv([
+      'name: provider-block-it',
+      'description: step provider block integration test',
+      'max_steps: 3',
+      'initial_step: plan',
+      'steps:',
+      '  - name: plan',
+      '    persona: ./personas/planner.md',
+      '    provider:',
+      '      type: codex',
+      '      model: gpt-5.3',
+      '      network_access: false',
+      '    instruction: "{task}"',
+      '    rules:',
+      '      - condition: when(true)',
+      '        next: COMPLETE',
+    ].join('\n'));
+    setGlobalConfig(globalDir, [
+      'provider:',
+      '  type: codex',
+      '  model: global-model',
+      '  network_access: true',
+    ].join('\n'));
+    setProjectConfig(projectDir, [
+      'provider:',
+      '  type: codex',
+      '  model: project-model',
+      '  network_access: true',
+    ].join('\n'));
+    invalidateGlobalConfigCache();
+
+    // When
+    const ok = await executeTask({
+      task: 'test task',
+      cwd: projectDir,
+      projectCwd: projectDir,
+      workflowIdentifier: 'provider-block-it',
+    });
+
+    // Then
+    expect(ok).toBe(true);
+    const options = vi.mocked(runAgent).mock.calls[0]?.[2];
+    expect(options?.resolvedProvider).toBe('codex');
+    expect(options?.resolvedModel).toBe('gpt-5.3');
+    expect(options?.providerOptions).toEqual({
+      codex: { networkAccess: false, skills: defaultCodexSkills },
+      claude: { skills: defaultClaudeSkills },
+    });
+  });
+
+  it('workflow_config provider block should be inherited by step without provider', async () => {
+    // Given
+    createProviderBlockEnv([
+      'name: provider-block-it',
+      'description: workflow_config provider block integration test',
+      'max_steps: 3',
+      'initial_step: plan',
+      'workflow_config:',
+      '  provider:',
+      '    type: codex',
+      '    model: workflow-model',
+      '    network_access: true',
+      'steps:',
+      '  - name: plan',
+      '    persona: ./personas/planner.md',
+      '    instruction: "{task}"',
+      '    rules:',
+      '      - condition: when(true)',
+      '        next: COMPLETE',
+    ].join('\n'));
+    setGlobalConfig(globalDir, 'provider: claude');
+    invalidateGlobalConfigCache();
+
+    // When
+    const ok = await executeTask({
+      task: 'test task',
+      cwd: projectDir,
+      projectCwd: projectDir,
+      workflowIdentifier: 'provider-block-it',
+    });
+
+    // Then
+    expect(ok).toBe(true);
+    const options = vi.mocked(runAgent).mock.calls[0]?.[2];
+    expect(options?.resolvedProvider).toBe('codex');
+    expect(options?.resolvedModel).toBe('workflow-model');
+    expect(options?.providerOptions).toEqual({
+      codex: { networkAccess: true, skills: defaultCodexSkills },
+      claude: { skills: defaultClaudeSkills },
+    });
+  });
+
+  it('project provider block should provide providerOptions when step and workflow_config do not specify provider', async () => {
+    // Given
+    createProviderBlockEnv([
+      'name: provider-block-it',
+      'description: project provider block integration test',
+      'max_steps: 3',
+      'initial_step: plan',
+      'steps:',
+      '  - name: plan',
+      '    persona: ./personas/planner.md',
+      '    instruction: "{task}"',
+      '    rules:',
+      '      - condition: when(true)',
+      '        next: COMPLETE',
+    ].join('\n'));
+    setGlobalConfig(globalDir, 'provider: claude');
+    setProjectConfig(projectDir, [
+      'provider:',
+      '  type: codex',
+      '  model: project-model',
+      '  network_access: false',
+    ].join('\n'));
+    invalidateGlobalConfigCache();
+
+    // When
+    const ok = await executeTask({
+      task: 'test task',
+      cwd: projectDir,
+      projectCwd: projectDir,
+      workflowIdentifier: 'provider-block-it',
+    });
+
+    // Then
+    expect(ok).toBe(true);
+    const options = vi.mocked(runAgent).mock.calls[0]?.[2];
+    expect(options?.resolvedProvider).toBe('codex');
+    expect(options?.resolvedModel).toBe('project-model');
+    expect(options?.providerOptions).toEqual({
+      codex: { networkAccess: false, skills: defaultCodexSkills },
+      claude: { skills: defaultClaudeSkills },
+    });
+  });
+
+  it('project claude provider block sandbox should reach runAgent providerOptions', async () => {
+    createProviderBlockEnv([
+      'name: provider-block-it',
+      'description: project claude sandbox provider block integration test',
+      'max_steps: 3',
+      'initial_step: plan',
+      'steps:',
+      '  - name: plan',
+      '    persona: ./personas/planner.md',
+      '    instruction: "{task}"',
+      '    rules:',
+      '      - condition: when(true)',
+      '        next: COMPLETE',
+    ].join('\n'));
+    setGlobalConfig(globalDir, 'provider: codex');
+    setProjectConfig(projectDir, [
+      'provider:',
+      '  type: claude',
+      '  model: sonnet',
+      '  sandbox:',
+      '    allow_unsandboxed_commands: true',
+      '    excluded_commands:',
+      '      - ./gradlew',
+    ].join('\n'));
+    invalidateGlobalConfigCache();
+
+    const ok = await executeTask({
+      task: 'test task',
+      cwd: projectDir,
+      projectCwd: projectDir,
+      workflowIdentifier: 'provider-block-it',
+    });
+
+    expect(ok).toBe(true);
+    const options = vi.mocked(runAgent).mock.calls[0]?.[2];
+    expect(options?.resolvedProvider).toBe('claude');
+    expect(options?.resolvedModel).toBe('sonnet');
+    expect(options?.providerOptions).toEqual({
+      codex: { skills: defaultCodexSkills },
+      claude: {
+        skills: defaultClaudeSkills,
+        sandbox: {
+          allowUnsandboxedCommands: true,
+          excludedCommands: ['./gradlew'],
+        },
+      },
+    });
+  });
+
+  it('workflow step claude_terminal provider_options should reach runAgent from YAML', async () => {
+    createProviderBlockEnv([
+      'name: provider-block-it',
+      'description: claude terminal provider options integration test',
+      'max_steps: 3',
+      'initial_step: plan',
+      'steps:',
+      '  - name: plan',
+      '    persona: ./personas/planner.md',
+      '    provider: claude-terminal',
+      '    provider_options:',
+      '      claude:',
+      '        effort: high',
+      '        allowed_tools:',
+      '          - Read',
+      '          - Edit',
+      '      claude_terminal:',
+      '        backend: tmux',
+      '        timeout_ms: 900000',
+      '        keep_session: false',
+      '        transcript_poll_interval_ms: 500',
+      '    instruction: "{task}"',
+      '    rules:',
+      '      - condition: when(true)',
+      '        next: COMPLETE',
+    ].join('\n'));
+    setGlobalConfig(globalDir, 'provider: claude');
+    invalidateGlobalConfigCache();
+
+    const ok = await executeTask({
+      task: 'test task',
+      cwd: projectDir,
+      projectCwd: projectDir,
+      workflowIdentifier: 'provider-block-it',
+    });
+
+    expect(ok).toBe(true);
+    const options = vi.mocked(runAgent).mock.calls[0]?.[2];
+    expect(options?.resolvedProvider).toBe('claude-terminal');
+    expect(options?.allowedTools).toEqual(['Read', 'Edit']);
+    expect(options?.providerOptions).toEqual({
+      codex: { skills: defaultCodexSkills },
+      claude: {
+        effort: 'high',
+        skills: defaultClaudeSkills,
+        allowedTools: ['Read', 'Edit'],
+      },
+      claudeTerminal: {
+        backend: 'tmux',
+        timeoutMs: 900000,
+        keepSession: false,
+        transcriptPollIntervalMs: 500,
+      },
+    });
   });
 });

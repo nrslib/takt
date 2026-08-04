@@ -12,7 +12,7 @@ Procedure:
 8. Check whether Query / Read Model results are used to choose the command type for the same Aggregate, and push decisions into the Aggregate when possible
 9. Check whether an Application Service sends multiple commands sequentially for the same state transition, and flag cases that can be separated into EventHandlers for committed events
 10. Confirm Projection waiting exists only for synchronous API contracts; otherwise prefer an immediate response, client-held state, or polling
-11. If migration appears, split it into DB schema / data / event upcaster / Read Model rebuild / API compatibility, and flag unrequested migration additions
+11. If migration appears, split it into DB schema / data / event upcaster / Read Model rebuild / API compatibility, and check each target against the active contract replacement policy
 12. Check whether processing that fits an existing Aggregate's normal lifecycle was turned into input-source-specific commands, wrappers, services, or deletion paths
 
 **Note:** If this project does not use the CQRS+ES pattern, review from a general domain design perspective instead.

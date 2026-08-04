@@ -26,6 +26,7 @@ steps:
     tags:
       - plan
     persona: planner
+    policy: contract-change
     knowledge:
       - backend
       - architecture
@@ -45,7 +46,9 @@ steps:
     tags:
       - review
     persona: architecture-reviewer
-    policy: review
+    policy:
+      - contract-change
+      - review
     knowledge:
       - backend
       - architecture
@@ -68,7 +71,9 @@ steps:
       - review
       - supervise
     persona: supervisor
-    policy: review
+    policy:
+      - contract-change
+      - review
     knowledge:
       - backend
       - architecture
@@ -85,7 +90,9 @@ steps:
     tags:
       - review
     persona: architecture-reviewer
-    policy: review
+    policy:
+      - contract-change
+      - review
     knowledge:
       - backend
       - architecture

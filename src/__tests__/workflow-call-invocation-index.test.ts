@@ -188,4 +188,18 @@ describe('WorkflowCallInvocationIndex', () => {
       report_namespace_segment: 'iteration-0--step-delegate--workflow-child',
     }]]))).toThrow('has an invalid report namespace segment');
   });
+
+  it('should reject one report namespace assigned to different logical identities', () => {
+    const index = new WorkflowCallInvocationIndex(new Map());
+
+    index.record(makeWorkflow('first'), 'delegate', [], {
+      call_instance: 1,
+      report_namespace_segment: 'iteration-1--step-delegate--workflow-child',
+    });
+
+    expect(() => index.record(makeWorkflow('second'), 'delegate', [], {
+      call_instance: 1,
+      report_namespace_segment: 'iteration-1--step-delegate--workflow-child',
+    })).toThrow('Workflow-call report namespace is already assigned to another invocation');
+  });
 });

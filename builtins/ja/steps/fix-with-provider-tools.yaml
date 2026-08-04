@@ -10,7 +10,8 @@ tags:
 edit: true
 persona: coder
 policy:
-  $param: fix_policy
+  - contract-change
+  - $param: fix_policy
 knowledge:
   $param: fix_knowledge
 provider_options:

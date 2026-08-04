@@ -6,7 +6,19 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { setupRawStdin, restoreStdin, toRawInputs, createMockProvider } from './helpers/stdinSimulator.js';
+import {
+  setupRawStdin,
+  restoreStdin,
+  toRawInputs,
+  createMockProvider,
+  createScenarioProvider,
+  type MockProviderCapture,
+} from './helpers/stdinSimulator.js';
+import { makeFileRunMetaPathFields } from './test-helpers.js';
+
+vi.mock('../infra/fs/session.js', () => ({
+  loadNdjsonLog: vi.fn(),
+}));
 
 vi.mock('../infra/config/global/globalConfig.js', () => ({
   loadGlobalConfig: vi.fn(() => ({ provider: 'mock', language: 'en' })),
@@ -76,25 +88,39 @@ vi.mock('../shared/prompts/index.js', () => ({
 }));
 
 import { getProvider } from '../infra/providers/index.js';
+import { loadNdjsonLog } from '../infra/fs/session.js';
+import {
+  listRecentRuns,
+  loadRunSessionContext,
+} from '../features/interactive/runSessionReader.js';
 import {
   runInstructMode,
   type InstructModeOptions,
 } from '../features/tasks/list/instructMode.js';
 import { selectOption } from '../shared/prompt/index.js';
-import { info } from '../shared/ui/index.js';
+import { error as logError, info } from '../shared/ui/index.js';
 import { loadTemplate } from '../shared/prompts/index.js';
 
 const mockGetProvider = vi.mocked(getProvider);
 const mockSelectOption = vi.mocked(selectOption);
 const mockInfo = vi.mocked(info);
+const mockLogError = vi.mocked(logError);
 const mockLoadTemplate = vi.mocked(loadTemplate);
+const mockLoadNdjsonLog = vi.mocked(loadNdjsonLog);
 const attachmentSessionDirs = new Set<string>();
 const originalTmpDir = process.env.TMPDIR;
 const TEST_TMPDIR = fs.realpathSync(os.tmpdir());
 
-function setupMockProvider(responses: string[]): void {
-  const { provider } = createMockProvider(responses);
+function setupMockProvider(responses: string[]): MockProviderCapture {
+  const { provider, capture } = createMockProvider(responses);
   mockGetProvider.mockReturnValue(provider);
+  return capture;
+}
+
+function setupScenarioProvider(...scenarios: Parameters<typeof createScenarioProvider>[0]): MockProviderCapture {
+  const { provider, capture } = createScenarioProvider(scenarios);
+  mockGetProvider.mockReturnValue(provider);
+  return capture;
 }
 
 beforeEach(() => {
@@ -390,5 +416,291 @@ describe('runInstructMode', () => {
 
     expect(result.action).toBe('cancel');
     expect(mockInfo).toHaveBeenCalledWith('Mock label');
+  });
+});
+
+describe('runInstructMode conversation routes', () => {
+  it('should return execute with the given task text on /play', async () => {
+    setupRawStdin(toRawInputs(['/play fix the login bug']));
+    setupMockProvider([]);
+
+    const result = await runTestInstructMode();
+
+    expect(result.action).toBe('execute');
+    expect(result.task).toBe('fix the login bug');
+  });
+
+  it('should append user note to summary prompt on /go with note', async () => {
+    setupRawStdin(toRawInputs(['refactor auth', '/go also check security']));
+    setupMockProvider(['Will do.', 'Refactor auth and check security.']);
+
+    const result = await runTestInstructMode();
+
+    expect(result.action).toBe('execute');
+    expect(result.task).toBe('Refactor auth and check security.');
+  });
+
+  it('should show error and allow retry when summary AI throws', async () => {
+    // Turn 1: normal message → success
+    // Turn 2: /go → AI throws (summary fails) → "summarize failed"
+    // Turn 3: /cancel
+    setupRawStdin(toRawInputs(['describe task', '/go', '/cancel']));
+    const capture = setupScenarioProvider(
+      { content: 'Understood.' },
+      { content: '', throws: new Error('API timeout') },
+    );
+
+    const result = await runTestInstructMode();
+
+    expect(result.action).toBe('cancel');
+    expect(capture.callCount).toBe(2);
+  });
+
+  it('should cancel when summary AI returns blocked', async () => {
+    setupRawStdin(toRawInputs(['some task', '/go']));
+    setupScenarioProvider(
+      { content: 'OK.' },
+      { content: 'Permission denied', status: 'blocked' },
+    );
+
+    const result = await runTestInstructMode();
+
+    expect(result.action).toBe('cancel');
+    expect(mockLogError).toHaveBeenCalledWith('Permission denied');
+  });
+
+  it('should handle multi-turn conversation ending with /go', async () => {
+    setupRawStdin(toRawInputs([
+      'I need to add pagination',
+      'Use cursor-based pagination',
+      'Also add sorting',
+      '/go',
+    ]));
+    const capture = setupMockProvider([
+      'What kind of pagination?',
+      'Cursor-based is a good choice.',
+      'OK, pagination with sorting.',
+      'Add cursor-based pagination and sorting to the API.',
+    ]);
+
+    const result = await runTestInstructMode();
+
+    expect(result.action).toBe('execute');
+    expect(result.task).toBe('Add cursor-based pagination and sorting to the API.');
+    expect(capture.callCount).toBe(4);
+  });
+
+  it('should cancel when regular message AI returns blocked', async () => {
+    setupRawStdin(toRawInputs(['hello']));
+    setupScenarioProvider(
+      { content: 'Rate limited', status: 'blocked' },
+    );
+
+    const result = await runTestInstructMode();
+
+    expect(result.action).toBe('cancel');
+    expect(mockLogError).toHaveBeenCalledWith('Rate limited');
+  });
+
+  it('should return execute with preceding text as task on end-of-line /play', async () => {
+    setupRawStdin(toRawInputs(['fix the login bug /play']));
+    setupMockProvider([]);
+
+    const result = await runTestInstructMode();
+
+    expect(result.action).toBe('execute');
+    expect(result.task).toBe('fix the login bug');
+  });
+
+  it('should use preceding text as user note in summary on end-of-line /go', async () => {
+    setupRawStdin(toRawInputs(['refactor auth', 'also check security /go']));
+    setupMockProvider(['Will do.', 'Refactor auth and check security.']);
+
+    const result = await runTestInstructMode();
+
+    expect(result.action).toBe('execute');
+    expect(result.task).toBe('Refactor auth and check security.');
+  });
+
+  it('should cancel when /cancel is at the end of input', async () => {
+    setupRawStdin(toRawInputs(['やっぱりやめる /cancel']));
+    setupMockProvider([]);
+
+    const result = await runTestInstructMode();
+
+    expect(result.action).toBe('cancel');
+    expect(result.task).toBe('');
+  });
+
+  it('should treat text with /go in the middle as a regular message', async () => {
+    setupRawStdin(toRawInputs(['テキスト中に /go を含むがコマンドではない文', '/cancel']));
+    const capture = setupMockProvider(['OK.']);
+
+    const result = await runTestInstructMode();
+
+    expect(result.action).toBe('cancel');
+    expect(capture.callCount).toBe(1);
+  });
+});
+
+// --- Run session fixtures for runSessionReader + instruct mode integration ---
+
+function createRunFixture(
+  cwd: string,
+  slug: string,
+  overrides?: {
+    meta?: Record<string, unknown>;
+    reports?: Array<{ name: string; content: string }>;
+    emptyMeta?: boolean;
+    corruptMeta?: boolean;
+  },
+): void {
+  const runDir = path.join(cwd, '.takt', 'runs', slug);
+  fs.mkdirSync(path.join(runDir, 'logs'), { recursive: true });
+  fs.mkdirSync(path.join(runDir, 'reports'), { recursive: true });
+  fs.mkdirSync(path.join(runDir, 'context'), { recursive: true });
+
+  if (overrides?.emptyMeta) {
+    fs.writeFileSync(path.join(runDir, 'meta.json'), '', 'utf-8');
+  } else if (overrides?.corruptMeta) {
+    fs.writeFileSync(path.join(runDir, 'meta.json'), '{ broken json', 'utf-8');
+  } else {
+    const meta = {
+      task: `Task for ${slug}`,
+      workflow: 'default',
+      status: 'completed',
+      startTime: '2026-02-01T00:00:00.000Z',
+      ...makeFileRunMetaPathFields(cwd, slug),
+      ...overrides?.meta,
+    };
+    fs.writeFileSync(path.join(runDir, 'meta.json'), JSON.stringify(meta), 'utf-8');
+  }
+
+  fs.writeFileSync(path.join(runDir, 'logs', 'session-001.jsonl'), '{}', 'utf-8');
+
+  for (const report of overrides?.reports ?? []) {
+    fs.writeFileSync(path.join(runDir, 'reports', report.name), report.content, 'utf-8');
+  }
+}
+
+function setupMockNdjsonLog(history: Array<{ step: string; persona: string; status: string; content: string }>): void {
+  mockLoadNdjsonLog.mockReturnValue({
+    task: 'mock',
+    projectDir: '',
+    workflowName: 'default',
+    iterations: history.length,
+    startTime: '2026-02-01T00:00:00.000Z',
+    status: 'completed',
+    history: history.map((h) => ({
+      ...h,
+      instruction: '',
+      timestamp: '2026-02-01T00:00:00.000Z',
+    })),
+  });
+}
+
+describe('run session → instruct mode', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = path.join(os.tmpdir(), `takt-instruct-run-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    fs.mkdirSync(tmpDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('should inject run session data into system prompt during interactive conversation', async () => {
+    // Fixture: run with step logs and reports
+    createRunFixture(tmpDir, 'run-auth', {
+      meta: { task: 'Implement JWT auth' },
+      reports: [
+        { name: '00-plan.md', content: '# Plan\n\nJWT auth with refresh tokens.' },
+      ],
+    });
+    setupMockNdjsonLog([
+      { step: 'plan', persona: 'architect', status: 'completed', content: 'Planned JWT auth flow' },
+      { step: 'implement', persona: 'coder', status: 'completed', content: 'Created auth middleware' },
+    ]);
+
+    // Load run session (real code)
+    const context = loadRunSessionContext(tmpDir, 'run-auth');
+
+    // Simulate: user types "fix the token expiry" → /go → AI summarizes → user selects execute
+    setupRawStdin(toRawInputs(['fix the token expiry', '/go']));
+    const capture = setupMockProvider(['Sure, I can help with that.', 'Fix token expiry handling in auth middleware.']);
+
+    const result = await runInstructMode({
+      cwd: tmpDir,
+      branchContext: '## Branch: takt/fix-auth\n',
+      branchName: 'takt/fix-auth',
+      taskName: 'fix-auth',
+      taskContent: 'Implement JWT auth',
+      retryNote: '',
+      workflowContext: { name: 'default', description: '', workflowStructure: '', stepPreviews: [] },
+      runSessionContext: context,
+    });
+
+    // Verify: interactive flow completed with execute action
+    expect(result.action).toBe('execute');
+    expect(result.task).toBe('Fix token expiry handling in auth middleware.');
+
+    // Verify: AI was called twice (user message + /go summary)
+    expect(capture.callCount).toBe(2);
+  });
+
+  it('should cancel cleanly mid-conversation with run session', async () => {
+    createRunFixture(tmpDir, 'run-1');
+    setupMockNdjsonLog([]);
+
+    const context = loadRunSessionContext(tmpDir, 'run-1');
+
+    setupRawStdin(toRawInputs(['some thought', '/cancel']));
+    const capture = setupMockProvider(['I understand.']);
+
+    const result = await runInstructMode({
+      cwd: tmpDir,
+      branchContext: '',
+      branchName: 'takt/branch',
+      taskName: 'branch',
+      taskContent: '',
+      retryNote: '',
+      runSessionContext: context,
+    });
+
+    expect(result.action).toBe('cancel');
+    // AI was called once for "some thought", then /cancel exits
+    expect(capture.callCount).toBe(1);
+  });
+
+  it('should skip empty and corrupt meta.json in listRecentRuns', () => {
+    createRunFixture(tmpDir, 'valid-run');
+    createRunFixture(tmpDir, 'empty-meta', { emptyMeta: true });
+    createRunFixture(tmpDir, 'corrupt-meta', { corruptMeta: true });
+
+    const runs = listRecentRuns(tmpDir);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]!.slug).toBe('valid-run');
+  });
+
+  it('should sort runs by startTime descending', () => {
+    createRunFixture(tmpDir, 'old', { meta: { startTime: '2026-01-01T00:00:00Z' } });
+    createRunFixture(tmpDir, 'new', { meta: { startTime: '2026-02-15T00:00:00Z' } });
+
+    const runs = listRecentRuns(tmpDir);
+    expect(runs[0]!.slug).toBe('new');
+    expect(runs[1]!.slug).toBe('old');
+  });
+
+  it('should truncate long step content to 500 chars', () => {
+    createRunFixture(tmpDir, 'long');
+    setupMockNdjsonLog([
+      { step: 'implement', persona: 'coder', status: 'completed', content: 'X'.repeat(800) },
+    ]);
+
+    const context = loadRunSessionContext(tmpDir, 'long');
+    expect(context.stepLogs[0]!.content.length).toBe(501);
+    expect(context.stepLogs[0]!.content.endsWith('…')).toBe(true);
   });
 });

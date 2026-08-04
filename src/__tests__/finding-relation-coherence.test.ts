@@ -216,6 +216,33 @@ describe('detectClarifiableRawMismatches', () => {
     const ledger = makeLedger({ findings: [makeOpenFinding({ revision: 1, status: 'resolved', lifecycle: 'resolved' })] });
     expect(detectClarifiableRawMismatches([makeRawItem()], ledger)).toHaveLength(0);
   });
+
+  it('同一 ID が複数回現れる場合は clarification 対象から外す（素の ID で相関できない）', () => {
+    const ledger = makeLedger({ findings: [makeOpenFinding({ revision: 1, status: 'resolved', lifecycle: 'resolved' })] });
+    // resolved な finding への persists 主張は clarifiable なミスマッチになる形
+    const item = makeRawItem({
+      rawFindingId: 'raw-dup',
+      relation: 'persists',
+      targetFindingId: 'F-0001',
+      title: 'まだ残っている',
+      description: 'まだ残っている',
+    });
+
+    const unique = detectClarifiableRawMismatches([item], ledger);
+    const duplicated = detectClarifiableRawMismatches([
+      item,
+      makeRawItem({
+        rawFindingId: 'raw-dup',
+        relation: 'persists',
+        targetFindingId: 'F-0001',
+        title: 'まだ残っている',
+        description: '別内容',
+      }),
+    ], ledger);
+
+    expect(unique.length).toBeGreaterThan(0);
+    expect(duplicated).toEqual([]);
+  });
 });
 
 describe('clarifyAmbiguousRawRelationsOnce', () => {

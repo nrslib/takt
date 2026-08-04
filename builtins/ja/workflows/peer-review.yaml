@@ -1,5 +1,5 @@
 name: peer-review
-description: 専門並列ピアレビュー（+ ai-antipattern-review-2nd）→ 指摘裁定 → 共通修正ループ後、マージ準備レビューと監督を行う。
+description: 専門並列ピアレビュー（+ ai-antipattern-review-2nd）→ 指摘裁定 → 共通修正ループ後、merge-readiness 観点を統合した supervisor が最終裁定する。
 subworkflow:
   callable: true
   visibility: internal
@@ -45,10 +45,6 @@ subworkflow:
         - coding
         - testing
         - review
-    supervisor_persona:
-      type: facet_ref
-      facet_kind: persona
-      default: supervisor
 workflow_config:
   provider_options:
     codex:
@@ -187,20 +183,16 @@ steps:
     with:
       merge_readiness_policy:
         $param: verification_policy
-      merge_readiness_knowledge:
+      review_knowledge:
         $param: review_knowledge_additions
-      supervise_knowledge:
-        $param: review_knowledge_additions
-      supervisor_persona:
-        $param: supervisor_persona
     rules:
-      - condition: COMPLETE
+      - condition: マージ可能
         next: COMPLETE
-      - condition: needs_fix
+      - condition: 修正が必要
         next: fix-plan
-      - condition: need_replan
+      - condition: タスク全体の再計画が必要
         return: need_replan
-      - condition: ABORT
+      - condition: 実行環境により判定不能
         next: ABORT
   - name: fix-plan
     uses: peer-review-fix-plan

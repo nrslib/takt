@@ -6,6 +6,9 @@ import { invalidateAllResolvedConfigCache, invalidateGlobalConfigCache } from '.
 import { inspectWorkflowFile } from '../infra/config/loaders/workflowDoctor.js';
 import { loadWorkflowFromFile, loadWorkflowFromFileForDiscovery } from '../infra/config/loaders/workflowFileLoader.js';
 import { loadWorkflowByIdentifier } from '../infra/config/loaders/workflowResolver.js';
+import { resolveWorkflowStepFragments } from '../infra/config/loaders/workflowStepFragmentResolver.js';
+import { StepFragmentConfigurationError } from '../infra/config/loaders/workflowStepFragmentReader.js';
+import { captureConfigError } from './helpers/step-fragment-test-helpers.js';
 import { previewPrompts } from '../features/prompt/preview.js';
 import { WorkflowEngine } from '../core/workflow/index.js';
 
@@ -609,5 +612,94 @@ describe('workflow step fragment contracts', () => {
     }
 
     expect(discovery.steps).toEqual(runtime.steps);
+  });
+
+  it.each([
+    ['top-level step', '  - name: review\n    uses: "@owner/repo/unsafe"\n    rules:\n      - condition: done\n        next: COMPLETE', 'instruction: review\nallow_git_commit: true\n'],
+    ['parallel parent', '  - name: reviewers\n    uses: "@owner/repo/unsafe"\n    rules:\n      self:\n        - condition: done\n          next: COMPLETE\n      parallel:\n        review:\n          - condition: done', 'allow_git_commit: true\nparallel:\n  - name: review\n    instruction: review\n'],
+    ['parallel sub-step', '  - name: reviewers\n    parallel:\n      - name: review\n        uses: "@owner/repo/unsafe"\n        rules:\n          - condition: done\n    rules:\n      - condition: all("done")\n        next: COMPLETE', 'instruction: review\nallow_git_commit: true\n'],
+    ['dynamic fixed sub-step', '  - name: reviewers\n    parallel:\n      fixed:\n        - name: architecture\n          uses: "@owner/repo/unsafe"\n          rules:\n            - condition: done\n      pool:\n        - name: frontend\n          description: Review frontend\n          instruction: Review frontend\n          rules:\n            - condition: done\n    rules:\n      - condition: all("done")\n        next: COMPLETE', 'instruction: review\nallow_git_commit: true\n'],
+    ['dynamic pool sub-step', '  - name: reviewers\n    parallel:\n      fixed:\n        - name: architecture\n          instruction: Review architecture\n          rules:\n            - condition: done\n      pool:\n        - name: frontend\n          description: Review frontend\n          uses: "@owner/repo/unsafe"\n          rules:\n            - condition: done\n    rules:\n      - condition: all("done")\n        next: COMPLETE', 'instruction: review\nallow_git_commit: true\n'],
+  ])('rejects low-trust allow_git_commit from a %s', (_placement, steps, fragment) => {
+    const fragmentPath = writeFile(globalConfigDir, 'repertoire/@owner/repo/steps/unsafe.yaml', fragment);
+    const workflowPath = writeFile(projectDir, '.takt/workflows/default.yaml', [
+      'name: default',
+      'initial_step: review',
+      'max_steps: 1',
+      'steps:',
+      steps,
+      '',
+    ].join('\n'));
+
+    expect(() => loadWorkflowFromFile(workflowPath, projectDir)).toThrow('allow_git_commit from step fragment "@owner/repo/unsafe"');
+    expect(() => loadWorkflowFromFile(workflowPath, projectDir)).toThrow(fragmentPath);
+  });
+
+  it('allows a project workflow to override a low-trust allow_git_commit value', () => {
+    writeFile(globalConfigDir, 'repertoire/@owner/repo/steps/unsafe.yaml', [
+      'instruction: review',
+      'allow_git_commit: true',
+      '',
+    ].join('\n'));
+    const workflowPath = writeFile(projectDir, '.takt/workflows/default.yaml', [
+      'name: default',
+      'initial_step: review',
+      'max_steps: 1',
+      'steps:',
+      '  - name: review',
+      '    uses: "@owner/repo/unsafe"',
+      '    allow_git_commit: false',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
+      '',
+    ].join('\n'));
+
+    expect(loadWorkflowFromFile(workflowPath, projectDir).steps[0]).toMatchObject({ allowGitCommit: false });
+  });
+
+  it('rejects allow_git_commit inherited through nested low-trust fragments', () => {
+    const fragmentPath = writeFile(globalConfigDir, 'repertoire/@owner/repo/steps/base.yaml', 'instruction: review\nallow_git_commit: true\n');
+    writeFile(globalConfigDir, 'repertoire/@owner/repo/steps/unsafe.yaml', 'uses: "@owner/repo/base"\n');
+    const workflowPath = writeFile(projectDir, '.takt/workflows/default.yaml', [
+      'name: default',
+      'initial_step: review',
+      'max_steps: 1',
+      'steps:',
+      '  - name: review',
+      '    uses: "@owner/repo/unsafe"',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
+      '',
+    ].join('\n'));
+
+    expect(() => loadWorkflowFromFile(workflowPath, projectDir)).toThrow(`allow_git_commit from step fragment "@owner/repo/base" at ${fragmentPath}`);
+  });
+
+  it.each([
+    ['workflow_call', 'kind: workflow_call\ncall: child\n', 'workflow_call'],
+    ['allow_git_commit', 'instruction: review\nallow_git_commit: true\n', 'allow_git_commit'],
+  ])('fails closed for fragment-derived %s without projectDir', (_field, fragment, expected) => {
+    const stepsDir = join(projectDir, '.takt', 'steps');
+    writeFile(projectDir, '.takt/steps/unsafe.yaml', fragment);
+
+    const error = captureConfigError(() => resolveWorkflowStepFragments({
+      steps: [{ uses: 'unsafe', rules: [{ condition: 'done', next: 'COMPLETE' }] }],
+    }, {
+      workflowPath: join(projectDir, '.takt', 'workflows', 'default.yaml'),
+      candidateDirs: [stepsDir],
+      context: { lang: 'en' },
+      trustInfo: {
+        source: 'project',
+        sourcePath: join(projectDir, '.takt', 'workflows', 'default.yaml'),
+        isProjectTrustRoot: true,
+        isProjectWorkflowRoot: true,
+      },
+    }));
+
+    expect(error).toBeInstanceOf(StepFragmentConfigurationError);
+    expect(error.message).toContain(expected);
+    expect(error.message).toContain('without projectDir');
   });
 });

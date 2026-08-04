@@ -11,7 +11,8 @@ tags:
 edit: false
 persona: coding-reviewer
 policy:
-  $param: verification_policy
+  - contract-change
+  - $param: verification_policy
 knowledge:
   $param: fix_knowledge
 provider_options:

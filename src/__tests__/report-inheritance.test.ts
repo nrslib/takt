@@ -3,6 +3,8 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, st
 import { tmpdir } from 'node:os';
 import { join, win32 } from 'node:path';
 import { inheritReviewReports } from '../core/workflow/report-inheritance.js';
+import { scanReportEntries } from '../core/workflow/report-file-index.js';
+import { classifyReportRelativePath } from '../core/models/reserved-report-names.js';
 import {
   proveWorkflowCallRunNamespacePathsCorrespond,
   workflowCallReportRequestSegmentsMatch,
@@ -709,5 +711,106 @@ describe('inheritReviewReports', () => {
     expect(result.skipped).toEqual(expect.arrayContaining([
       expect.objectContaining({ reportName: '*', reason: 'report_name_limit_exceeded:1024' }),
     ]));
+  });
+});
+
+describe('report file discovery', () => {
+  it('excludes the internal report subtree before applying the entry limit', () => {
+    const reportDir = mkdtempSync(join(tmpdir(), 'takt-report-file-index-'));
+    temporaryDirectories.push(reportDir);
+    const internalDir = join(reportDir, '.takt-report-internal', 'history');
+    mkdirSync(internalDir, { recursive: true });
+    for (let index = 0; index < 1_024; index += 1) {
+      writeFileSync(join(internalDir, `${index}.json`), '{}');
+    }
+    const publicReport = join(reportDir, 'review.md');
+    writeFileSync(publicReport, '# Review');
+
+    expect(scanReportEntries(reportDir)).toEqual({
+      entries: [publicReport],
+    });
+  });
+
+  it('uses the normalized classifier for internal and manifest entries', () => {
+    const reportDir = mkdtempSync(join(tmpdir(), 'takt-report-file-index-'));
+    temporaryDirectories.push(reportDir);
+    mkdirSync(join(reportDir, '.TAKT-REPORT-INTERNAL', 'history'), { recursive: true });
+    writeFileSync(join(reportDir, '.TAKT-REPORT-INTERNAL', 'history', 'private.json'), '{}');
+    mkdirSync(join(reportDir, 'nested'), { recursive: true });
+    writeFileSync(join(reportDir, 'nested', 'resume-artifacts.json'), '{}');
+    const publicReport = join(reportDir, 'nested', 'review.md');
+    writeFileSync(publicReport, '# Review');
+
+    expect(scanReportEntries(reportDir).entries.filter((entry) => !entry.endsWith('nested')))
+      .toEqual([publicReport]);
+  });
+});
+
+describe('classifyReportRelativePath', () => {
+  it.each([
+    ['review.md', 'review.md', 'review.md'],
+    [
+      'public/.takt-report-internal/review.md',
+      'public/.takt-report-internal/review.md',
+      'public/.takt-report-internal/review.md',
+    ],
+  ])('classifies public report path %s', (input, normalizedPath, portableIdentity) => {
+    expect(classifyReportRelativePath(input)).toEqual({
+      kind: 'public',
+      normalizedPath,
+      portableIdentity,
+    });
+  });
+
+  it.each([
+    '.takt-report-internal/history/review.md',
+    '.TAKT-REPORT-INTERNAL/history/review.md',
+  ])('classifies normalized internal namespace path %s', (input) => {
+    expect(classifyReportRelativePath(input).kind).toBe('internal-namespace');
+  });
+
+  it.each([
+    'resume-artifacts.json',
+    'nested/resume-artifacts.json',
+  ])('classifies reserved manifest path %s', (input) => {
+    expect(classifyReportRelativePath(input).kind).toBe('reserved-manifest');
+  });
+
+  it('uses Unicode Default Case Fold and NFC for portable identity', () => {
+    const fullFold = classifyReportRelativePath('Straße.md');
+    const upperFold = classifyReportRelativePath('STRASSE.md');
+    const nfc = classifyReportRelativePath('réview.md');
+    const nfd = classifyReportRelativePath('re\u0301view.md');
+
+    expect(fullFold.kind === 'public' && fullFold.portableIdentity).toBe('strasse.md');
+    expect(upperFold.kind === 'public' && upperFold.portableIdentity).toBe('strasse.md');
+    expect(nfc.kind === 'public' && nfc.portableIdentity).toBe('réview.md');
+    expect(nfd.kind === 'public' && nfd.portableIdentity).toBe('réview.md');
+  });
+
+  it.each([
+    '',
+    '.',
+    '..',
+    '../review.md',
+    'nested/../../review.md',
+    '/absolute/review.md',
+    'C:\\absolute\\review.md',
+    'C:drive-relative.md',
+    'review\0.md',
+    ' review.md',
+    'review.md ',
+    './nested/review.md',
+    'nested/./review.md',
+    'draft/../review.md',
+    'nested//review.md',
+    'nested\\\\review.md',
+    'nested\\review.md',
+    '.takt-report-internal\\history\\review.md',
+    'nested\\Resume-Artifacts.JSON',
+    'nested/',
+    'public/../.takt-report-internal/history/review.md',
+  ])('classifies invalid report-relative path %s', (input) => {
+    expect(classifyReportRelativePath(input).kind).toBe('invalid');
   });
 });

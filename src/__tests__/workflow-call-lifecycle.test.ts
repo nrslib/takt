@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,6 +8,7 @@ import type {
   WorkflowState,
 } from '../core/models/index.js';
 import { createInitialState } from '../core/workflow/engine/state-manager.js';
+import { WorkflowCallExecutor } from '../core/workflow/engine/WorkflowCallExecutor.js';
 import { WorkflowCallRunner } from '../core/workflow/engine/WorkflowCallRunner.js';
 import { WorkflowEngine } from '../core/workflow/engine/WorkflowEngine.js';
 import { MAX_WORKFLOW_CALL_DEPTH } from '../core/workflow/workflow-call-depth.js';
@@ -20,6 +21,30 @@ import type {
 } from '../core/workflow/types.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 import { buildWorkflowCallCompleteRecord } from '../features/tasks/execute/sessionLoggerRecordFactory.js';
+import type { AutoRoutingConfig } from '../core/models/config-types.js';
+import type { WorkRequirementEstimator } from '../core/workflow/auto-routing/contracts.js';
+import { createWorkflowOccurrenceTestHarness } from './test-helpers.js';
+
+const { createWorkRequirementEstimatorMock } = vi.hoisted(() => ({
+  createWorkRequirementEstimatorMock: vi.fn(),
+}));
+
+vi.mock('../agents/auto-routing-usecase.js', () => ({
+  createWorkRequirementEstimator: createWorkRequirementEstimatorMock,
+}));
+
+function createAutoRoutingConfig(model = 'router-model'): AutoRoutingConfig {
+  return {
+    strategy: 'cost',
+    router: { provider: 'mock', model },
+    candidates: [
+      { name: 'medium', description: 'Focused work', provider: 'mock', model: 'medium-model', routingTier: 'medium' },
+      { name: 'high', description: 'Complex work', provider: 'mock', model: 'high-model', routingTier: 'high' },
+    ],
+    defaultPool: 'general',
+    candidatePools: { general: { candidates: ['medium', 'high'], fallback: 'high' } },
+  };
+}
 
 const OPAQUE_WORKFLOW_REF = Symbol.for('takt.workflowOpaqueRef');
 
@@ -617,5 +642,138 @@ describe('WorkflowCallRunner lifecycle events', () => {
       status: 'failed',
       reason: 'token=[REDACTED]',
     });
+  });
+});
+
+describe('WorkflowCallExecutor routing runtime', () => {
+  beforeEach(() => {
+    createWorkRequirementEstimatorMock.mockReset();
+    createWorkRequirementEstimatorMock.mockImplementation(() => ({ estimate: vi.fn() }));
+  });
+
+  function createRoutingHarness(options: {
+    childAutoRouting?: AutoRoutingConfig;
+    estimatorSource: 'injected' | 'engine-default';
+    initialUserInputs?: string[];
+  }) {
+    const parentWorkflow = { name: 'parent', steps: [] } as never;
+    const childWorkflow = {
+      name: 'child',
+      steps: [],
+      ...(options.childAutoRouting === undefined
+        ? {}
+        : { autoRouting: options.childAutoRouting }),
+    } as never;
+    const parentEstimator: WorkRequirementEstimator = { estimate: vi.fn() };
+    const state = createInitialState(parentWorkflow, {
+      projectCwd: '/project',
+      ...(options.initialUserInputs === undefined
+        ? {}
+        : { initialUserInputs: options.initialUserInputs }),
+    });
+    state.iteration = 1;
+    const occurrenceHarness = createWorkflowOccurrenceTestHarness(parentWorkflow, state, []);
+    const createdOptions: Array<Record<string, unknown>> = [];
+    const executor = new WorkflowCallExecutor({
+      getConfig: () => parentWorkflow,
+      getOptions: () => ({
+        projectCwd: '/project',
+        provider: 'mock',
+        autoRouting: createAutoRoutingConfig('parent-router-model'),
+        autoRoutingEstimator: parentEstimator,
+        autoRoutingEstimatorSource: options.estimatorSource,
+      }),
+      getMaxSteps: () => 10,
+      updateMaxSteps: vi.fn(),
+      getCwd: () => '/project',
+      projectCwd: '/project',
+      task: 'Complete the task',
+      sharedRuntime: { startedAtMs: 0 },
+      resumeStackPrefix: [],
+      consumeWorkflowCallContinuation: vi.fn(),
+      runPaths: { slug: 'run' },
+      resolveWorkflowCall: vi.fn(),
+      createEngine: vi.fn((_config, _cwd, _task, engineOptions) => {
+        createdOptions.push(engineOptions as Record<string, unknown>);
+        return {
+          on: vi.fn(),
+          runWithResult: vi.fn().mockResolvedValue({
+            state: { iteration: 1, personaSessions: new Map(), status: 'completed' },
+          }),
+        };
+      }),
+      emit: vi.fn(),
+      state,
+      setActiveResumePoint: vi.fn(),
+      refreshFindingsState: vi.fn(),
+    } as never);
+
+    const execute = async (stepName: string) => {
+      const step = { name: stepName, kind: 'workflow_call', call: 'child' } as const;
+      const occurrence = occurrenceHarness.claimStepOccurrence(step);
+      await executor.execute({
+        step,
+        childWorkflow,
+        childProviderInfo: {
+          provider: 'mock',
+          model: 'child-model',
+          providerSource: 'workflow_call',
+          modelSource: 'workflow_call',
+        },
+        parentProviderOptions: undefined,
+        personaProviders: undefined,
+        providerRouting: undefined,
+        preparedExecution: executor.prepare(step, childWorkflow, occurrence, []),
+      } as never, { syncParentState: true });
+    };
+
+    return { createdOptions, execute, parentEstimator };
+  }
+
+  it('reuses an injected estimator while isolating inherited routing runtime by call site', async () => {
+    const harness = createRoutingHarness({
+      estimatorSource: 'injected',
+      initialUserInputs: ['Retry the remaining task work'],
+    });
+
+    await harness.execute('delegate');
+    await harness.execute('delegate-other');
+
+    expect(harness.createdOptions[0]?.autoRoutingEstimator).toBe(harness.parentEstimator);
+    expect(harness.createdOptions[1]?.autoRoutingEstimator).toBe(harness.parentEstimator);
+    expect(harness.createdOptions[0]?.routingRuntime)
+      .not.toBe(harness.createdOptions[1]?.routingRuntime);
+    expect(harness.createdOptions[0]?.initialUserInputs)
+      .toEqual(['Retry the remaining task work']);
+    expect(createWorkRequirementEstimatorMock).not.toHaveBeenCalled();
+  });
+
+  it('reuses an injected estimator when the child defines its own routing config', async () => {
+    const childAutoRouting = createAutoRoutingConfig('child-router-model');
+    const harness = createRoutingHarness({
+      childAutoRouting,
+      estimatorSource: 'injected',
+    });
+
+    await harness.execute('delegate');
+
+    expect(harness.createdOptions[0]?.autoRouting).toBe(childAutoRouting);
+    expect(harness.createdOptions[0]?.autoRoutingEstimator).toBe(harness.parentEstimator);
+    expect(createWorkRequirementEstimatorMock).not.toHaveBeenCalled();
+  });
+
+  it('creates a child-specific estimator for engine-default routing', async () => {
+    const harness = createRoutingHarness({
+      childAutoRouting: createAutoRoutingConfig('child-router-model'),
+      estimatorSource: 'engine-default',
+    });
+
+    await harness.execute('delegate');
+
+    expect(harness.createdOptions[0]?.autoRoutingEstimator).not.toBe(harness.parentEstimator);
+    expect(createWorkRequirementEstimatorMock).toHaveBeenCalledWith(expect.objectContaining({
+      provider: 'mock',
+      model: 'child-router-model',
+    }));
   });
 });

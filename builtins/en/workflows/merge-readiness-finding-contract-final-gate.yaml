@@ -29,7 +29,9 @@ steps:
     edit: false
     session: compact
     persona: merge-readiness-reviewer
-    policy: review
+    policy:
+      - contract-change
+      - review
     instruction: review-merge-readiness
     rules:
       - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)
@@ -46,9 +48,11 @@ steps:
         return: need_replan
       - condition: when(findings.open.count == 0 && findings.reviewerAnomalies.count > 0)
         return: needs_review
-      - condition: when(findings.open.count > 0 && findings.provisional.count == 0 && findings.conflicts.count == 0)
+      - condition: needs_fix
         return: needs_fix
-      - condition: when(findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0)
+      - condition: when(findings.open.count > 0)
+        return: needs_fix
+      - condition: approved && when(findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0)
         next: supervise
     output_contracts:
       report:
@@ -75,7 +79,11 @@ steps:
         return: need_replan
       - condition: when(findings.open.count == 0 && findings.reviewerAnomalies.count > 0)
         return: needs_review
-      - condition: when(findings.open.count > 0 && findings.provisional.count == 0 && findings.conflicts.count == 0)
+      - condition: needs_fix
         return: needs_fix
-      - condition: when(findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0)
+      - condition: need_replan
+        return: need_replan
+      - condition: when(findings.open.count > 0)
+        return: needs_fix
+      - condition: approved && when(findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0)
         next: COMPLETE

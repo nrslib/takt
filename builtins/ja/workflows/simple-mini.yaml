@@ -55,6 +55,7 @@ steps:
     edit: false
     persona: coding-reviewer
     policy:
+      - contract-change
       - review
       - coding
       - testing

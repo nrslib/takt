@@ -39,16 +39,6 @@ loop_monitors:
           next: replan
         - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
           next: ABORT
-  - cycle: [replan, implement, reviewers, final-gate, fix]
-    threshold: 2
-    judge:
-      persona: supervisor
-      instruction: loop-monitor-fix-replan
-      rules:
-        - condition: 再計画により blocker の解消が進んでいる
-          next: replan
-        - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
-          next: ABORT
   - cycle: [replan, implement, reviewers, fix]
     threshold: 2
     judge:
@@ -58,60 +48,6 @@ loop_monitors:
         - condition: 再計画により blocker の解消が進んでいる
           next: replan
         - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
-          next: ABORT
-  - cycle: [replan, reviewers]
-    threshold: 2
-    judge:
-      persona: supervisor
-      instruction: loop-monitor-fix-replan
-      rules:
-        - condition: 要件と受入条件を変えずに実装方針を再定義できる
-          next: replan
-        - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
-          next: ABORT
-  - cycle: [replan, reviewers, final-gate]
-    threshold: 2
-    judge:
-      persona: supervisor
-      instruction: loop-monitor-fix-replan
-      rules:
-        - condition: 要件と受入条件を変えずに実装方針を再定義できる
-          next: replan
-        - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
-          next: ABORT
-  - cycle: [replan, reviewers, final-gate, fix]
-    threshold: 2
-    judge:
-      persona: supervisor
-      instruction: loop-monitor-fix-replan
-      rules:
-        - condition: 再計画により blocker の解消が進んでいる
-          next: replan
-        - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
-          next: ABORT
-  - cycle: [replan, reviewers, fix]
-    threshold: 2
-    judge:
-      persona: supervisor
-      instruction: loop-monitor-fix-replan
-      rules:
-        - condition: 再計画により blocker の解消が進んでいる
-          next: replan
-        - condition: 試行済みの再計画を踏まえても要件を満たす実現可能な方針がない
-          next: ABORT
-  - cycle: [reviewers, final-gate]
-    threshold: 2
-    judge:
-      persona: supervisor
-      instruction: loop-monitor-gate-needs-review
-      rules:
-        - condition: 不足証拠を具体的に補完でき、同じレビューをもう一度実行する価値がある
-          next: reviewers
-        - condition: 完了ゲートが示した問題を具体的な実装修正で解消できる
-          next: fix
-        - condition: 要件と受入条件を変えずに実装方針またはテスト方針を再定義できる
-          next: replan
-        - condition: 試行済みのレビューと再計画を踏まえても要件を満たす実現可能な方針がない
           next: ABORT
   - cycle: [fix, reviewers]
     threshold: 3
@@ -153,8 +89,6 @@ steps:
     rules:
       - condition: プロジェクト内で実行可能な未試行の変更または原因調査と、その検証手順を具体化した
         next: implement
-      - condition: 現行実装が要件・受入条件を満たす具体的根拠があり、必要なプロジェクト内検証が完了し、未試行の変更・調査を残さず、独立レビューだけが必要
-        next: reviewers
       - condition: 確認済みの根拠により、プロジェクト内の変更や調査では解消できず、外部操作だけが残るか要件が両立不能である
         next: ABORT
 
@@ -176,7 +110,9 @@ steps:
     tags: [leader]
     edit: true
     persona: coder
-    policy: coding
+    policy:
+      - contract-change
+      - coding
     knowledge: [takt, architecture, implementation-semantics]
     required_permission_mode: edit
     pass_previous_response: true
@@ -202,17 +138,19 @@ steps:
           next: finding-conflict-adjudication
         - condition: when(findings.conflicts.count > 0)
           next: ABORT
-        - condition: when(findings.provisional.dismissEligible.count > 0 && findings.conflicts.count == 0)
-          next: final-gate
         - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)
           next: replan
         - condition: when(findings.rounds.budgetExhausted == true && findings.provisional.count > 0 && findings.conflicts.count == 0)
           next: replan
         - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
           next: replan
-        - condition: when(findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0)
+        - condition: all("approved", "AI特有の問題なし", "approved", "approved", "approved", "approved") && when(findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0)
           next: final-gate
-        - condition: when(findings.open.count > 0 && findings.provisional.count == 0 && findings.conflicts.count == 0)
+        - condition: any("approved", "needs_fix", "AI特有の問題なし", "AI特有の問題あり") && when(findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0 && findings.reviewerAnomalies.count > 0)
+          next: final-gate
+        - condition: any("needs_fix", "AI特有の問題あり") && when(findings.conflicts.count == 0)
+          next: fix
+        - condition: when(findings.conflicts.count == 0 && findings.open.count > 0)
           next: fix
       parallel:
         arch-review: [{ condition: approved }, { condition: needs_fix }]
@@ -241,7 +179,10 @@ steps:
     tags: [leader]
     edit: true
     persona: coder
-    policy: [coding, testing]
+    policy:
+      - contract-change
+      - coding
+      - testing
     knowledge: [takt, architecture, implementation-semantics]
     required_permission_mode: edit
     team_leader:

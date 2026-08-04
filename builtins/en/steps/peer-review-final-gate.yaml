@@ -2,24 +2,27 @@ params:
   merge_readiness_policy:
     type: facet_ref[]
     facet_kind: policy
-  merge_readiness_knowledge:
+  review_knowledge:
     type: facet_ref[]
     facet_kind: knowledge
-  supervise_knowledge:
-    type: facet_ref[]
-    facet_kind: knowledge
-  supervisor_persona:
-    type: facet_ref
-    facet_kind: persona
 name: final-gate
-kind: workflow_call
-call: merge-readiness-dual-final-gate
-args:
-  merge_readiness_policy:
-    $param: merge_readiness_policy
-  merge_readiness_knowledge:
-    $param: merge_readiness_knowledge
-  supervise_knowledge:
-    $param: supervise_knowledge
-  supervisor_persona:
-    $param: supervisor_persona
+tags:
+  - review
+  - final-gate
+  - merge-readiness
+  - supervise
+edit: false
+persona: merge-readiness-supervisor
+policy:
+  - contract-change
+  - $param: merge_readiness_policy
+knowledge:
+  $param: review_knowledge
+provider_options:
+  extends: review-readonly
+pass_previous_response: false
+instruction: supervise-merge-readiness
+output_contracts:
+  report:
+    - name: review-resolution.md
+      format: merge-readiness-supervision

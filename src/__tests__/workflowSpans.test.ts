@@ -159,6 +159,12 @@ async function loadWorkflowSpansWithRealSdk() {
     autoDetectResources: false,
     instrumentations: [],
     spanProcessors: [new SimpleSpanProcessor(exporter)],
+    // Without explicit empty lists the SDK creates env-default OTLP metric and
+    // log exporters whose shutdown flush retries against a collector that does
+    // not exist in unit tests, stalling shutdown for many seconds. These tests
+    // only assert span behavior.
+    metricReaders: [],
+    logRecordProcessors: [],
   });
   sdk.start();
 

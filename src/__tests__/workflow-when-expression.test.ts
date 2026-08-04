@@ -1,10 +1,21 @@
 import { describe, expect, it } from 'vitest';
+import { join } from 'node:path';
 import {
   describeFindingsReferencePath,
   type FindingsReferenceDescriptor,
 } from '../core/models/workflow-findings-reference.js';
 import { WorkflowConfigRawSchema } from '../core/models/workflow-schemas.js';
 import { parseWhenConditionExpression } from '../core/models/workflow-when-expression.js';
+import {
+  formatWorkflowRuleCondition,
+  hasFindingsReference,
+  hasUnquotedFindingsReference,
+  parseWorkflowRuleCondition,
+  semanticLabelsOf,
+} from '../core/models/workflow-rule-condition.js';
+import type { WorkflowRule } from '../core/models/types.js';
+import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
+import { normalizeArpeggio } from '../infra/config/loaders/workflowStepFeaturesNormalizer.js';
 
 function workflowWithStepRule(condition: string): unknown {
   return {
@@ -666,4 +677,154 @@ describe('WorkflowConfigRawSchema when operand validation', () => {
       expect(result.success).toBe(false);
     },
   );
+});
+
+function interactiveRule(condition: string, interactiveOnly = false): WorkflowRule {
+  return normalizeRule({ condition, next: 'COMPLETE', ...(interactiveOnly ? { interactiveOnly } : {}) });
+}
+
+describe('hasUnquotedFindingsReference', () => {
+  it('condition AST public operations recurse over an and condition directly', () => {
+    const condition = parseWorkflowRuleCondition('approved && when(findings.open.count == 0)');
+
+    expect(condition).toEqual({
+      kind: 'and',
+      left: { kind: 'semantic', label: 'approved' },
+      right: { kind: 'when', expression: 'findings.open.count == 0' },
+    });
+    expect(formatWorkflowRuleCondition(condition)).toBe('approved && when(findings.open.count == 0)');
+    expect(semanticLabelsOf(condition)).toEqual(['approved']);
+    expect(hasFindingsReference(condition)).toBe(true);
+  });
+
+  it('ignores findings references inside escaped quoted strings', () => {
+    expect(hasUnquotedFindingsReference(String.raw`structured.message == "ignore \"findings.open.count\" here"`)).toBe(false);
+  });
+
+  it('detects findings references after a closed quoted string', () => {
+    expect(hasUnquotedFindingsReference(String.raw`structured.message == "path \\" && findings.open.count == 0`)).toBe(true);
+  });
+  it('classifies only an unquoted findings state access as a findings reference', () => {
+    expect(hasFindingsReference(parseWorkflowRuleCondition('when(structured.note == "findings.open.count")'))).toBe(false);
+    expect(hasFindingsReference(parseWorkflowRuleCondition('when(findings.open.count == 0)'))).toBe(true);
+  });
+
+  it('rejects empty when expressions at the normalization boundary', () => {
+    expect(() => parseWorkflowRuleCondition('when()')).toThrow('empty when() expression');
+    expect(() => parseWorkflowRuleCondition('approved && when(  )')).toThrow('empty when() expression');
+    expect(() => parseWorkflowRuleCondition('all("approved") && when()')).toThrow('empty when() expression');
+  });
+});
+
+describe('generateStatusRulesComponents interactive default', () => {
+  const rules = [interactiveRule('approved'), interactiveRule('ユーザー入力が必要', true)];
+
+  it('should exclude interactive-only rules from the criteria table when interactive is unspecified', async () => {
+    const { generateStatusRulesComponents } = await import('../core/workflow/instruction/status-rules.js');
+
+    const components = generateStatusRulesComponents('gate', [{ label: 'approved' }], 'ja');
+
+    expect(components.criteriaTable).toContain('approved');
+    expect(components.criteriaTable).not.toContain('ユーザー入力が必要');
+  });
+
+  it('should include interactive-only rules in the criteria table when interactive is true', async () => {
+    const { generateStatusRulesComponents } = await import('../core/workflow/instruction/status-rules.js');
+
+    const components = generateStatusRulesComponents('gate', [
+      { label: 'approved' },
+      { label: 'ユーザー入力が必要' },
+    ], 'ja');
+
+    expect(components.criteriaTable).toContain('ユーザー入力が必要');
+  });
+});
+
+describe('workflow rule normalization', () => {
+  it('rejects the removed when alias instead of translating it into a condition', () => {
+    expect(() => normalizeRule({
+      when: 'findings.open.count == 0',
+      next: 'COMPLETE',
+    })).toThrow(/condition/i);
+  });
+
+  it('rejects workflow rule ai() expressions', () => {
+    expect(() => normalizeRule({
+      condition: 'ai("all reviewers approved")',
+      next: 'COMPLETE',
+    })).toThrow(/ai\(\)|workflow rule/i);
+  });
+
+  it.each([
+    'needs_fix && when(findings.provisional.count > 0)',
+    'all("approved") && when(findings.conflicts.count == 0)',
+    'any("needs_fix") && when(findings.open.count > 0)',
+  ])('keeps %s in the single condition AST without hidden guard fields', (condition) => {
+    const normalized = normalizeRule({ condition, next: 'next-step' });
+
+    expect(typeof normalized.condition).not.toBe('string');
+    expect(normalized).not.toHaveProperty('guardCondition');
+    expect(normalized).not.toHaveProperty('aggregateGuardCondition');
+    expect(normalized).not.toHaveProperty('isAggregateCondition');
+  });
+
+  it('formats normalized condition ASTs for observability output', () => {
+    const normalized = normalizeRule({
+      condition: 'all("approved", "needs_fix") && when(findings.open.count == 0)',
+      next: 'next-step',
+    });
+
+    expect(formatWorkflowRuleCondition(normalized.condition))
+      .toBe('all("approved", "needs_fix") && when(findings.open.count == 0)');
+  });
+
+  it('omits next when normalizing a return-only rule', () => {
+    const normalized = normalizeRule({ condition: 'needs_fix', return: 'need_replan' });
+
+    expect(normalized).not.toHaveProperty('next');
+    expect(normalized.returnValue).toBe('need_replan');
+  });
+
+  it.each([
+    'all("x") extra',
+    'approved && && when(findings.open.count == 0)',
+    'when(findings.open.count == 0) && when(findings.conflicts.count == 0)',
+  ])('rejects malformed reserved condition %s without treating it as a semantic label', (condition) => {
+    expect(() => normalizeRule({ condition, next: 'COMPLETE' })).toThrow();
+  });
+
+  it('should reject an invalid when predicate before creating the condition AST', () => {
+    expect(() => normalizeRule({
+      condition: 'when(findings.open.count ==)',
+      next: 'COMPLETE',
+    })).toThrow('Invalid when operand');
+  });
+});
+
+describe('workflow step feature normalization', () => {
+  it('normalizes arpeggio paths in the extracted helper', () => {
+    const workflowDir = join(process.cwd(), 'src', '__tests__');
+    const normalized = normalizeArpeggio(
+      {
+        source: 'files',
+        source_path: 'fixtures/input.txt',
+        batch_size: 5,
+        concurrency: 2,
+        template: 'fixtures/template.md',
+        merge: {
+          strategy: 'concat',
+          separator: '\n',
+        },
+      },
+      workflowDir,
+    );
+
+    expect(normalized).toMatchObject({
+      source: 'files',
+      batchSize: 5,
+      concurrency: 2,
+      sourcePath: join(workflowDir, 'fixtures/input.txt'),
+      templatePath: join(workflowDir, 'fixtures/template.md'),
+    });
+  });
 });

@@ -476,7 +476,7 @@ When NOT to apply DRY:
 
 ## Spec Compliance Verification
 
-Contract-change consistency follows the coding policy. In architecture review, check whether changes contradict documented specifications, types, schemas, or config formats.
+Contract-change consistency follows the active contract replacement policy. In architecture review, check whether changes contradict documented specifications, types, schemas, or config formats.
 
 Verification targets:
 

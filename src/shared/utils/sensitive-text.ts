@@ -1,10 +1,28 @@
 export const REDACTED_VALUE = '[REDACTED]';
 export const SENSITIVE_TEXT_BOUNDARY_WINDOW = 256;
 
-const SENSITIVE_KEY_PATTERN = String.raw`[A-Za-z0-9_.-]*(?:api[_-]?key|token|password|secret|credentials?|access[_-]?key|access[_-]?token|refresh[_-]?token|private[_-]?key)[A-Za-z0-9_.-]*`;
+const SENSITIVE_KEY_CHAR_PATTERN = String.raw`[A-Za-z0-9_.-]`;
+const SENSITIVE_KEY_WORD_PATTERN = String.raw`api[_-]?key|token|password|secret|credentials?|access[_-]?key|access[_-]?token|refresh[_-]?token|private[_-]?key`;
+// A sensitive key is a maximal run of key characters that contains a sensitive
+// key word. A key can only end where the run ends (every follower — quote,
+// `:`/`=`, whitespace — is a non-key character), so the atomic lookahead
+// locates the key word in a single pass and `+` then consumes the whole run.
+// The previous form (`chars* keyword chars*`) re-scanned the remainder of a
+// run from every backtracking position, which made sanitization O(n^2) on
+// long uniform runs (~5s for 64KB of base64-like output).
+const SENSITIVE_KEY_PATTERN = String.raw`(?=${SENSITIVE_KEY_CHAR_PATTERN}*(?:${SENSITIVE_KEY_WORD_PATTERN}))${SENSITIVE_KEY_CHAR_PATTERN}+`;
 const SENSITIVE_HEADER_KEY_PATTERN = String.raw`(?:proxy[_-]?)?authorization|(?:set[_-]?)?cookies?|session[_-]?id`;
 const SENSITIVE_TEXT_KEY_PATTERN = String.raw`(?:${SENSITIVE_KEY_PATTERN}|${SENSITIVE_HEADER_KEY_PATTERN})`;
-const SENSITIVE_ASSIGNMENT_KEY_PATTERN = String.raw`(?:["'](?:${SENSITIVE_TEXT_KEY_PATTERN})["']|(?!(?:${SENSITIVE_HEADER_KEY_PATTERN})\b)${SENSITIVE_KEY_PATTERN})`;
+// Bare (unquoted) assignment keys anchor to the start of a key-character run:
+// a match can never start mid-run (the leading `chars*` of the original
+// pattern always absorbed the run prefix), so rejecting mid-run start
+// positions with the lookbehind is behavior-preserving and stops the engine
+// from re-attempting every interior position of a long run. The skip loop
+// preserves the original handling of runs that begin with a header key
+// (e.g. `authorization-token=v`): header-key prefixes are consumed character
+// by character until the header exclusion no longer blocks the key.
+const SENSITIVE_BARE_ASSIGNMENT_KEY_PATTERN = String.raw`(?<!${SENSITIVE_KEY_CHAR_PATTERN})(?:(?=(?:${SENSITIVE_HEADER_KEY_PATTERN})\b)${SENSITIVE_KEY_CHAR_PATTERN})*(?!(?:${SENSITIVE_HEADER_KEY_PATTERN})\b)${SENSITIVE_KEY_PATTERN}`;
+const SENSITIVE_ASSIGNMENT_KEY_PATTERN = String.raw`(?:["'](?:${SENSITIVE_TEXT_KEY_PATTERN})["']|${SENSITIVE_BARE_ASSIGNMENT_KEY_PATTERN})`;
 const SENSITIVE_KEY_NAME_REGEX = new RegExp(
   String.raw`^${SENSITIVE_TEXT_KEY_PATTERN}$`,
   'i',
@@ -26,8 +44,12 @@ const SENSITIVE_HEADER_ASSIGNMENT_COLON_VALUE_REGEX = new RegExp(
   String.raw`((?:session[_-]?id)\s*:\s*["']?)([^"';,\s}\]]+)(["']?)`,
   'gi',
 );
+// `(?<!-)` skips `--` start positions preceded by another `-`: such a match
+// could only exist if the attempt one character earlier (also `--`) had
+// already failed, and that failure implies this one fails too. This keeps
+// long `-` runs (separator lines) linear instead of quadratic.
 const SENSITIVE_OPTION_VALUE_REGEX = new RegExp(
-  String.raw`(--(?:${SENSITIVE_KEY_PATTERN})(?:=|\s+))(${SENSITIVE_QUOTED_VALUE_PATTERN}|[^\s]+)`,
+  String.raw`((?<!-)--(?:${SENSITIVE_KEY_PATTERN})(?:=|\s+))(${SENSITIVE_QUOTED_VALUE_PATTERN}|[^\s]+)`,
   'gi',
 );
 const HTTP_AUTHORIZATION_HEADER_REGEX = /\b(Authorization\s*:\s*)([^"'\r\n]+)/gi;
