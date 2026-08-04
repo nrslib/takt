@@ -99,6 +99,18 @@ describe('listTasksNonInteractive completed actions', () => {
     expect(mockDeleteTask).not.toHaveBeenCalled();
   });
 
+  it('should propagate a sync failure without deleting the task record', async () => {
+    mockSyncBranchWithRoot.mockRejectedValue(new Error('merge conflict left unresolved'));
+
+    await expect(listTasksNonInteractive('/project', {
+      enabled: true,
+      action: 'sync',
+      branch: 'takt/completed-task',
+    })).rejects.toThrow('merge conflict left unresolved');
+
+    expect(mockDeleteTask).not.toHaveBeenCalled();
+  });
+
   it('should reject an unknown action listing the allowed set', async () => {
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {
       throw new Error('exit');
