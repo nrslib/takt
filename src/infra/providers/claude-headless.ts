@@ -35,7 +35,7 @@ function toHeadlessOptions(options: ProviderCallOptions): ClaudeHeadlessCallOpti
 
 export class ClaudeHeadlessProvider implements Provider {
   readonly supportsStructuredOutput = true;
-  readonly supportsIsolatedStructuredExecution = false;
+  readonly supportsIsolatedStructuredExecution = true;
   readonly supportsNativeImageInput = false;
   readonly supportsStrictInternalAgentIsolation = true;
 

@@ -75,7 +75,7 @@ function toTerminalOptions(options: ProviderCallOptions): ClaudeTerminalCallOpti
 
 export class ClaudeTerminalProvider implements Provider {
   readonly supportsStructuredOutput = true;
-  readonly supportsIsolatedStructuredExecution = false;
+  readonly supportsIsolatedStructuredExecution = true;
   readonly supportsNativeImageInput = false;
   readonly supportsStrictInternalAgentIsolation = true;
 

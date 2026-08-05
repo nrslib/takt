@@ -163,14 +163,16 @@ describe('Codex strict isolated structured execution', () => {
       invalidateGlobalConfigCache();
       invalidateAllResolvedConfigCache();
 
-      await expect(runAgent(undefined, 'normalize', {
+      const response = await runAgent(undefined, 'normalize', {
         cwd: projectDir,
         executionProfile: 'isolated-structured',
         resolvedProvider: 'copilot',
         resolvedModel: 'test-model',
         resolvedProviderOptions: null,
         outputSchema: { type: 'object' },
-      })).rejects.toThrow(
+      });
+      expect(response.status).toBe('error');
+      expect(response.error).toBe(
         'Provider "copilot" does not support isolated structured execution',
       );
     } finally {

@@ -43,7 +43,7 @@ function toClaudeOptions(options: ProviderCallOptions): ClaudeCallOptions {
 
 export class ClaudeProvider implements Provider {
   readonly supportsStructuredOutput = true;
-  readonly supportsIsolatedStructuredExecution = false;
+  readonly supportsIsolatedStructuredExecution = true;
   readonly supportsNativeImageInput = true;
   readonly supportsStrictInternalAgentIsolation = true;
 

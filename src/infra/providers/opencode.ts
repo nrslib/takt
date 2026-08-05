@@ -133,6 +133,8 @@ export class OpenCodeProvider implements Provider {
       const isolatedOptions: ProviderCallOptions = {
         ...options,
         sessionId: undefined,
+        internalAgentIsolation: 'strict-readonly',
+        permissionMode: 'readonly',
         allowedTools: [],
         mcpServers: undefined,
         imageAttachments: undefined,
