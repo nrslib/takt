@@ -303,12 +303,15 @@ function boundedRestatementClaimExcerpt(
   anomaly: NonNullable<ReturnType<FindingLedgerStore['loadLedger']>['reviewerAnomalies']>[number],
   raw: NonNullable<ReturnType<FindingLedgerStore['loadLedger']>['rawFindings']>[number],
 ): string {
-  // excerpt/description が全て欠ける観測（protocol-noise 相当）でも request が
-  // 空文字にならないよう、必ず非空の anomaly.title へフォールバックする。
-  // title は createReviewerAnomalySpec が常に非空で採番する。
-  const excerpt = anomaly.claimedExcerpt ?? raw.description ?? raw.rawExcerpt;
-  return (excerpt !== undefined && excerpt.trim().length > 0 ? excerpt : anomaly.title)
-    .slice(0, RAW_FINDING_LIMITS.maxDescriptionChars);
+  // フォールバックは「非 blank な最初の候補」を選ぶ。`??` だけだと空白のみの
+  // claimedExcerpt が後続の description / rawExcerpt を遮って title まで飛ぶ。
+  // 全候補が blank な観測（protocol-noise 相当）でも request が空文字にならない
+  // よう、最後は必ず非空の anomaly.title へフォールバックする。title は
+  // createReviewerAnomalySpec が常に非空で採番する。
+  const excerpt = [anomaly.claimedExcerpt, raw.description, raw.rawExcerpt]
+    .find((candidate) => candidate !== undefined && candidate !== null && candidate.trim().length > 0)
+    ?? anomaly.title;
+  return excerpt.slice(0, RAW_FINDING_LIMITS.maxDescriptionChars);
 }
 
 export function createWorkflowEngineServices(params: WorkflowEngineSetupParams): WorkflowEngineServices {

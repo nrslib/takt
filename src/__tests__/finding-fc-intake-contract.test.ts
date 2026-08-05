@@ -440,12 +440,13 @@ describe('FC intake contract', () => {
     expect(linked.reviewerAnomalies![0]!.promotedFindingId).toBe('F-0001');
   });
 
-  it('promotes multiple restatements in one batch and rejects ambiguous correspondence graphs', () => {
-    const reportDigest = 'e'.repeat(64);
-    const buildCase = (
+  describe('restatement batch promotion (correspondence edges)', () => {
+    const batchReportDigest = 'e'.repeat(64);
+    const buildBatchCase = (
       suffix: string,
       claim: string,
-      excerptDigestSeed: string,
+      sourceExcerptDigestSeed: string,
+      admittedExcerptDigestSeed: string,
     ): {
       source: ReturnType<typeof incompleteRaw>;
       admitted: ReturnType<typeof canonicalRawFindingFixture>;
@@ -456,7 +457,7 @@ describe('FC intake contract', () => {
           reportDigest: 'f'.repeat(64),
           startByte: 0,
           endByte: Buffer.byteLength(claim),
-          excerptDigest: excerptDigestSeed.repeat(64),
+          excerptDigest: sourceExcerptDigestSeed.repeat(64),
         },
       });
       const admitted = canonicalRawFindingFixture({
@@ -473,14 +474,14 @@ describe('FC intake contract', () => {
         target: source.target,
         sourceBinding: {
           ...source.sourceBinding,
-          reportDigest,
-          excerptDigest: excerptDigestSeed === '1' ? '8'.repeat(64) : '9'.repeat(64),
+          reportDigest: batchReportDigest,
+          excerptDigest: admittedExcerptDigestSeed.repeat(64),
         },
         evidence: [],
       });
       return { source, admitted };
     };
-    const defectFor = (source: ReturnType<typeof incompleteRaw>) => ({
+    const batchDefectFor = (source: ReturnType<typeof incompleteRaw>) => ({
       observationClass: 'claim-bearing' as const,
       classificationAuthorityId: 'system/intake_observation_classification_v1',
       reasonCodes: ['normalizer-extraction-loss'] as const,
@@ -488,24 +489,29 @@ describe('FC intake contract', () => {
       presentationOwnerReviewer: source.reviewer,
       presentationLimit: 2,
     });
-    const first = buildCase('a', 'The first defect remains observable.', '1');
-    const second = buildCase('b', 'The second defect remains observable.', '2');
-    const specs = [first, second].map(({ source }) => createReviewerAnomalySpec({
-      wire: source,
-      canonical: canonicalItem(source).canonical,
-      anomalyKind: 'intake-contract-incomplete',
-      reason: 'Normalizer lost the source-bound description',
-      intakeContract: defectFor(source),
-    }));
-    const withAnomalies = applyReviewerAnomalySpecsToLedger(emptyLedger(), specs, {
-      workflowName: 'peer-review',
-      stepName: observedAt.stepName,
-      runId: observedAt.runId,
-      timestamp: observedAt.timestamp,
-    });
-    const anomalies = withAnomalies.reviewerAnomalies!;
-    expect(anomalies).toHaveLength(2);
-    const requestFor = (source: ReturnType<typeof incompleteRaw>, anomalyId: string, claim: string) => {
+    const anomaliesFor = (cases: ReadonlyArray<{ source: ReturnType<typeof incompleteRaw> }>) => {
+      const specs = cases.map(({ source }) => createReviewerAnomalySpec({
+        wire: source,
+        canonical: canonicalItem(source).canonical,
+        anomalyKind: 'intake-contract-incomplete',
+        reason: 'Normalizer lost the source-bound description',
+        intakeContract: batchDefectFor(source),
+      }));
+      const ledger = applyReviewerAnomalySpecsToLedger(emptyLedger(), specs, {
+        workflowName: 'peer-review',
+        stepName: observedAt.stepName,
+        runId: observedAt.runId,
+        timestamp: observedAt.timestamp,
+      });
+      const anomalyOf = (source: ReturnType<typeof incompleteRaw>) => ledger.reviewerAnomalies!
+        .find((entry) => entry.sourceRawFindingIds.includes(source.rawFindingId))!;
+      return { ledger, anomalyOf };
+    };
+    const batchRequestFor = (
+      source: ReturnType<typeof incompleteRaw>,
+      anomalyId: string,
+      claim: string,
+    ) => {
       const requestWithoutId = {
         anomalyId,
         reviewer: source.reviewer,
@@ -521,15 +527,7 @@ describe('FC intake contract', () => {
       };
       return { ...requestWithoutId, restatementRequestId: computeRestatementRequestId(requestWithoutId) };
     };
-    const anomalyA = anomalies.find((entry) => entry.sourceRawFindingIds.includes(first.source.rawFindingId))!;
-    const anomalyB = anomalies.find((entry) => entry.sourceRawFindingIds.includes(second.source.rawFindingId))!;
-    // report 単位の binding 配布を再現: 各 admitted raw は同一 publication の
-    // 全 request を binding として受け取る。
-    const sharedBindings = [
-      { request: requestFor(first.source, anomalyA.id, 'The first defect remains observable.'), publicationId: 'publication-batch', reportDigest },
-      { request: requestFor(second.source, anomalyB.id, 'The second defect remains observable.'), publicationId: 'publication-batch', reportDigest },
-    ];
-    const findingFor = (admitted: ReturnType<typeof canonicalRawFindingFixture>, id: string) => ({
+    const batchFindingFor = (admitted: ReturnType<typeof canonicalRawFindingFixture>, id: string) => ({
       id,
       status: 'open' as const,
       lifecycle: 'new' as const,
@@ -547,84 +545,96 @@ describe('FC intake contract', () => {
       lastSeen: observedAt,
       revision: 1,
     });
-    const linked = linkPromotedReviewerAnomalies({
-      ...withAnomalies,
-      rawFindings: [first.source, second.source, first.admitted, second.admitted],
-      findings: [findingFor(first.admitted, 'F-0001'), findingFor(second.admitted, 'F-0002')],
-    }, [
-      { lineageKey: 'lineage-a', rawFindingId: first.admitted.rawFindingId, restatementRequestBindings: sharedBindings },
-      { lineageKey: 'lineage-b', rawFindingId: second.admitted.rawFindingId, restatementRequestBindings: sharedBindings },
-    ]);
-    const linkedA = linked.reviewerAnomalies!.find((entry) => entry.id === anomalyA.id)!;
-    const linkedB = linked.reviewerAnomalies!.find((entry) => entry.id === anomalyB.id)!;
-    expect(linkedA.promotedFindingId).toBe('F-0001');
-    expect(linkedB.promotedFindingId).toBe('F-0002');
-
-    // 曖昧グラフ1: 同一 claim atom の2 anomaly に1 raw が対応 → raw 側 exact-one 不成立で昇格しない。
+    // 曖昧グラフ用の claim atom ペア: 語間空白を1個/2個で変える。byte では別 excerpt
+    // （別 anomaly stable key）だが normalizeClaimAtom では同一 atom になる。production
+    // では bindReviewerReportExcerpt が前後空白の excerpt を拒否するため、末尾スペース
+    // ではなく内部空白の揺れで normalize-equal を再現する。
     const duplicateClaim = 'The duplicated defect remains observable.';
-    const dupFirst = buildCase('dup-a', duplicateClaim, '3');
-    const dupSecond = buildCase('dup-b', `${duplicateClaim} `, '4');
-    const dupSpecs = [dupFirst, dupSecond].map(({ source }) => createReviewerAnomalySpec({
-      wire: source,
-      canonical: canonicalItem(source).canonical,
-      anomalyKind: 'intake-contract-incomplete',
-      reason: 'Normalizer lost the source-bound description',
-      intakeContract: defectFor(source),
-    }));
-    const withDupAnomalies = applyReviewerAnomalySpecsToLedger(emptyLedger(), dupSpecs, {
-      workflowName: 'peer-review',
-      stepName: observedAt.stepName,
-      runId: observedAt.runId,
-      timestamp: observedAt.timestamp,
-    });
-    const dupAnomalies = withDupAnomalies.reviewerAnomalies!;
-    expect(dupAnomalies).toHaveLength(2);
-    const dupAnomalyA = dupAnomalies.find((entry) => entry.sourceRawFindingIds.includes(dupFirst.source.rawFindingId))!;
-    const dupAnomalyB = dupAnomalies.find((entry) => entry.sourceRawFindingIds.includes(dupSecond.source.rawFindingId))!;
-    const dupBindings = [
-      { request: requestFor(dupFirst.source, dupAnomalyA.id, duplicateClaim), publicationId: 'publication-dup', reportDigest },
-      { request: requestFor(dupSecond.source, dupAnomalyB.id, duplicateClaim), publicationId: 'publication-dup', reportDigest },
-    ];
-    const dupLinked = linkPromotedReviewerAnomalies({
-      ...withDupAnomalies,
-      rawFindings: [dupFirst.source, dupSecond.source, dupFirst.admitted],
-      findings: [findingFor(dupFirst.admitted, 'F-0003')],
-    }, [
-      { lineageKey: 'lineage-dup', rawFindingId: dupFirst.admitted.rawFindingId, restatementRequestBindings: dupBindings },
-    ]);
-    for (const entry of dupLinked.reviewerAnomalies!) {
-      expect(entry.promotedFindingId).toBeUndefined();
-    }
+    const duplicateClaimVariant = 'The duplicated  defect remains observable.';
 
-    // 曖昧グラフ2: 1 anomaly に同一 claim atom の2 raw が対応 → anomaly 側 exact-one 不成立で昇格しない。
-    const twinBindings = [
-      { request: requestFor(dupFirst.source, dupAnomalyA.id, duplicateClaim), publicationId: 'publication-twin', reportDigest },
-    ];
-    const twinSecondAdmitted = canonicalRawFindingFixture({
-      rawFindingId: 'raw-admitted-twin',
-      stepName: dupFirst.source.stepName,
-      reviewer: dupFirst.source.reviewer,
-      familyTag: 'bug',
-      severity: 'high',
-      title: 'Observed issue twin',
-      description: duplicateClaim,
-      suggestion: null,
-      relation: 'new',
-      targetFindingId: null,
-      target: dupFirst.source.target,
-      sourceBinding: { ...dupFirst.source.sourceBinding, reportDigest, excerptDigest: '7'.repeat(64) },
-      evidence: [],
+    it('promotes every correspondence pair in one multi-request publication batch', () => {
+      const first = buildBatchCase('a', 'The first defect remains observable.', '1', '8');
+      const second = buildBatchCase('b', 'The second defect remains observable.', '2', '9');
+      const { ledger, anomalyOf } = anomaliesFor([first, second]);
+      const anomalyA = anomalyOf(first.source);
+      const anomalyB = anomalyOf(second.source);
+      // report 単位の binding 配布を再現: 各 admitted raw は同一 publication の
+      // 全 request を binding として受け取る。
+      const sharedBindings = [
+        { request: batchRequestFor(first.source, anomalyA.id, 'The first defect remains observable.'), publicationId: 'publication-batch', reportDigest: batchReportDigest },
+        { request: batchRequestFor(second.source, anomalyB.id, 'The second defect remains observable.'), publicationId: 'publication-batch', reportDigest: batchReportDigest },
+      ];
+      const linked = linkPromotedReviewerAnomalies({
+        ...ledger,
+        rawFindings: [first.source, second.source, first.admitted, second.admitted],
+        findings: [batchFindingFor(first.admitted, 'F-0001'), batchFindingFor(second.admitted, 'F-0002')],
+      }, [
+        { lineageKey: 'lineage-a', rawFindingId: first.admitted.rawFindingId, restatementRequestBindings: sharedBindings },
+        { lineageKey: 'lineage-b', rawFindingId: second.admitted.rawFindingId, restatementRequestBindings: sharedBindings },
+      ]);
+
+      expect(linked.reviewerAnomalies!.find((entry) => entry.id === anomalyA.id)!.promotedFindingId).toBe('F-0001');
+      expect(linked.reviewerAnomalies!.find((entry) => entry.id === anomalyB.id)!.promotedFindingId).toBe('F-0002');
     });
-    const twinLinked = linkPromotedReviewerAnomalies({
-      ...withDupAnomalies,
-      reviewerAnomalies: [dupAnomalyA],
-      rawFindings: [dupFirst.source, dupFirst.admitted, twinSecondAdmitted],
-      findings: [findingFor(dupFirst.admitted, 'F-0004'), findingFor(twinSecondAdmitted, 'F-0005')],
-    }, [
-      { lineageKey: 'lineage-twin-a', rawFindingId: dupFirst.admitted.rawFindingId, restatementRequestBindings: twinBindings },
-      { lineageKey: 'lineage-twin-b', rawFindingId: twinSecondAdmitted.rawFindingId, restatementRequestBindings: twinBindings },
-    ]);
-    expect(twinLinked.reviewerAnomalies![0]!.promotedFindingId).toBeUndefined();
+
+    it('does not promote when one raw corresponds to two normalize-equal anomalies', () => {
+      const dupFirst = buildBatchCase('dup-a', duplicateClaim, '3', '8');
+      const dupSecond = buildBatchCase('dup-b', duplicateClaimVariant, '4', '9');
+      const { ledger, anomalyOf } = anomaliesFor([dupFirst, dupSecond]);
+      const dupAnomalyA = anomalyOf(dupFirst.source);
+      const dupAnomalyB = anomalyOf(dupSecond.source);
+      const dupBindings = [
+        { request: batchRequestFor(dupFirst.source, dupAnomalyA.id, duplicateClaim), publicationId: 'publication-dup', reportDigest: batchReportDigest },
+        { request: batchRequestFor(dupSecond.source, dupAnomalyB.id, duplicateClaim), publicationId: 'publication-dup', reportDigest: batchReportDigest },
+      ];
+      const linked = linkPromotedReviewerAnomalies({
+        ...ledger,
+        rawFindings: [dupFirst.source, dupSecond.source, dupFirst.admitted],
+        findings: [batchFindingFor(dupFirst.admitted, 'F-0003')],
+      }, [
+        { lineageKey: 'lineage-dup', rawFindingId: dupFirst.admitted.rawFindingId, restatementRequestBindings: dupBindings },
+      ]);
+
+      // raw 側 exact-one 不成立（1 raw が2 anomaly に対応）→ どちらも昇格しない。
+      for (const entry of linked.reviewerAnomalies!) {
+        expect(entry.promotedFindingId).toBeUndefined();
+      }
+    });
+
+    it('does not promote when two raws correspond to one anomaly', () => {
+      const dupFirst = buildBatchCase('dup-a', duplicateClaim, '3', '8');
+      const { ledger, anomalyOf } = anomaliesFor([dupFirst]);
+      const dupAnomalyA = anomalyOf(dupFirst.source);
+      const twinBindings = [
+        { request: batchRequestFor(dupFirst.source, dupAnomalyA.id, duplicateClaim), publicationId: 'publication-twin', reportDigest: batchReportDigest },
+      ];
+      const twinSecondAdmitted = canonicalRawFindingFixture({
+        rawFindingId: 'raw-admitted-twin',
+        stepName: dupFirst.source.stepName,
+        reviewer: dupFirst.source.reviewer,
+        familyTag: 'bug',
+        severity: 'high',
+        title: 'Observed issue twin',
+        description: duplicateClaim,
+        suggestion: null,
+        relation: 'new',
+        targetFindingId: null,
+        target: dupFirst.source.target,
+        sourceBinding: { ...dupFirst.source.sourceBinding, reportDigest: batchReportDigest, excerptDigest: '7'.repeat(64) },
+        evidence: [],
+      });
+      const linked = linkPromotedReviewerAnomalies({
+        ...ledger,
+        rawFindings: [dupFirst.source, dupFirst.admitted, twinSecondAdmitted],
+        findings: [batchFindingFor(dupFirst.admitted, 'F-0004'), batchFindingFor(twinSecondAdmitted, 'F-0005')],
+      }, [
+        { lineageKey: 'lineage-twin-a', rawFindingId: dupFirst.admitted.rawFindingId, restatementRequestBindings: twinBindings },
+        { lineageKey: 'lineage-twin-b', rawFindingId: twinSecondAdmitted.rawFindingId, restatementRequestBindings: twinBindings },
+      ]);
+
+      // anomaly 側 exact-one 不成立（2 raw が1 anomaly に対応）→ 昇格しない。
+      expect(linked.reviewerAnomalies![0]!.promotedFindingId).toBeUndefined();
+    });
   });
 
   it('promotes through reviewer output, normalizer, normalization, and admission without source-binding copying', () => {
