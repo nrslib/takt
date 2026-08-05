@@ -306,18 +306,17 @@ describe('CodexProvider — structured output', () => {
     expect(mockCallCodexIsolatedStructured).not.toHaveBeenCalled();
   });
 
-  it('isolated-structured profileだけをhardened direct CLI経路へ渡す', async () => {
+  it('setupIsolatedStructuredがhardened direct CLI経路を使う', async () => {
     mockCallCodexIsolatedStructured.mockResolvedValue(
       doneResponse('normalizer', { rawFindings: [] }),
     );
 
-    const agent = new CodexProvider().setup({
+    const agent = new CodexProvider().setupIsolatedStructured({
       name: 'normalizer',
       systemPrompt: 'system',
     });
     await agent.call('report', {
       cwd: '/tmp/isolated',
-      executionProfile: 'isolated-structured',
       outputSchema: SCHEMA,
     });
 
