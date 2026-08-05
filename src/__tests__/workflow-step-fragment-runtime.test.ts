@@ -288,6 +288,9 @@ describe('workflow step fragment runtime contract', () => {
     expect(inlineResult.ledgers).toHaveLength(1);
     expect(fragmentResult.ledgers).toHaveLength(1);
     for (const result of [inlineResult, fragmentResult]) {
+      // FC intake 契約化後の landing: target 無し（review_scope）の独立 claim は
+      // provisional finding ではなく intake-contract-incomplete reviewer anomaly に
+      // 隔離され、product findings は空のまま completion を塞ぐ。
       expect(result.ledgers[0]).toMatchObject({
         rawFindings: [{
           familyTag: 'test',
@@ -296,10 +299,14 @@ describe('workflow step fragment runtime contract', () => {
           relation: 'new',
           target: { kind: 'review_scope' },
         }],
-        findings: [{
-          severity: 'high',
+        findings: [],
+        reviewerAnomalies: [{
+          kind: 'intake-contract-incomplete',
           title: 'Test finding',
-          provisional: { gateEffect: 'block' },
+          intakeContract: {
+            observationClass: 'claim-bearing',
+            missingRequirements: ['target'],
+          },
         }],
       });
     }

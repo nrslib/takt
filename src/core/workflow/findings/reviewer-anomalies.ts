@@ -115,15 +115,9 @@ function hasRestatementCorrespondence(input: {
   request: RestatementRequestV1;
 }): boolean {
   const { anomaly, sourceRaw, admittedRaw, request } = input;
-  if (
-    request.anomalyId !== anomaly.id
-    || request.reviewer !== anomaly.intakeContract?.presentationOwnerReviewer
-    || sourceRaw.reviewer !== request.reviewer
-    || admittedRaw.reviewer !== request.reviewer
-    || admittedRaw.relation !== 'new'
-    || admittedRaw.targetFindingId !== null
-    || admittedRaw.targetPrecondition !== undefined
-  ) {
+  // 前段の shape 判定は候補計数と共通の1関数に集約する — 複製すると片方だけが
+  // 変更されて「候補として数えるのに昇格しない/その逆」の不整合が生まれる。
+  if (!hasRestatementCandidateShape(request, anomaly, sourceRaw, admittedRaw)) {
     return false;
   }
   const sourceAtom = sourceRaw.description?.trim().length
@@ -367,14 +361,22 @@ export function linkPromotedReviewerAnomalies(
     }
   }
   const promotedFindingIdByLineageKey = new Map<string, string>();
-  const restatementCandidateCountByAnomalyId = new Map<string, number>();
-  const restatementPromotionByAnomalyId = new Map<string, string>();
+  // restatement promotion は「correspondence が成立した edge」だけを数え、anomaly 側・
+  // raw 側の双方で exact-one の組だけに authority を与える。request binding は
+  // publication（= report）単位で全 admitted raw に配られるため、shape 一致だけを
+  // 数えると batch 内の全 raw が全 anomaly の候補になり、複数 restatement の
+  // 同時成立が構造的に不可能になる（report 単位 binding の副作用）。
+  const restatementEdges: Array<{
+    anomalyId: string;
+    rawFindingId: string;
+    findingId: string;
+  }> = [];
+  const correspondingRawFindingIds = new Set<string>();
   for (const candidate of candidates) {
     const findingId = findingIdByRawFindingId.get(candidate.rawFindingId);
-    let handledAsRestatement = false;
     const requestBindings = candidate.restatementRequestBindings ?? [];
     const admittedRaw = ledger.rawFindings.find((raw) => raw.rawFindingId === candidate.rawFindingId);
-    const handledRestatementAnomalyIds = new Set<string>();
+    const edgeAnomalyIds = new Set<string>();
     for (const binding of requestBindings) {
       const anomaly = anomalies.find((entry) => entry.id === binding.request.anomalyId);
       const sourceRaw = anomaly?.sourceRawFindingIds
@@ -388,30 +390,41 @@ export function linkPromotedReviewerAnomalies(
         || sourceRaw === undefined
         || admittedRaw === undefined
         || binding.reportDigest !== admittedRaw.sourceBinding.reportDigest
-        || !hasRestatementCandidateShape(binding.request, anomaly, sourceRaw, admittedRaw)
         || !hasValidRestatementEcho(admittedRaw, anomaly, requestBindings)
+        || edgeAnomalyIds.has(anomaly.id)
+        || !hasRestatementCorrespondence({ anomaly, sourceRaw, admittedRaw, request: binding.request })
       ) {
         continue;
       }
-      handledAsRestatement = true;
-      const anomalyId = anomaly.id;
-      if (handledRestatementAnomalyIds.has(anomalyId)) {
-        continue;
-      }
-      handledRestatementAnomalyIds.add(anomalyId);
-      restatementCandidateCountByAnomalyId.set(
-        anomalyId,
-        (restatementCandidateCountByAnomalyId.get(anomalyId) ?? 0) + 1,
-      );
-      if (hasRestatementCorrespondence({ anomaly, sourceRaw, admittedRaw, request: binding.request })) {
-        restatementPromotionByAnomalyId.set(anomalyId, findingId);
-      }
+      edgeAnomalyIds.add(anomaly.id);
+      restatementEdges.push({
+        anomalyId: anomaly.id,
+        rawFindingId: candidate.rawFindingId,
+        findingId,
+      });
+      correspondingRawFindingIds.add(candidate.rawFindingId);
     }
-    if (requestBindings.length > 0) {
-      handledAsRestatement = true;
-    }
-    if (findingId !== undefined && !handledAsRestatement) {
+    // correspondence が成立しなかった raw は通常の新規 claim として扱い、既存の
+    // lineage 昇格（非 intake anomaly 用）から除外しない。restatement 由来という
+    // だけで一括抑止すると、restatement round 中の clean 観測が他 anomaly の
+    // 回復に使えなくなる。
+    if (findingId !== undefined && !correspondingRawFindingIds.has(candidate.rawFindingId)) {
       promotedFindingIdByLineageKey.set(candidate.lineageKey, findingId);
+    }
+  }
+  const anomalyEdgeCounts = new Map<string, number>();
+  const rawEdgeCounts = new Map<string, number>();
+  for (const edge of restatementEdges) {
+    anomalyEdgeCounts.set(edge.anomalyId, (anomalyEdgeCounts.get(edge.anomalyId) ?? 0) + 1);
+    rawEdgeCounts.set(edge.rawFindingId, (rawEdgeCounts.get(edge.rawFindingId) ?? 0) + 1);
+  }
+  const restatementPromotionByAnomalyId = new Map<string, string>();
+  for (const edge of restatementEdges) {
+    if (
+      anomalyEdgeCounts.get(edge.anomalyId) === 1
+      && rawEdgeCounts.get(edge.rawFindingId) === 1
+    ) {
+      restatementPromotionByAnomalyId.set(edge.anomalyId, edge.findingId);
     }
   }
   if (promotedFindingIdByLineageKey.size === 0 && restatementPromotionByAnomalyId.size === 0) {
@@ -423,9 +436,8 @@ export function linkPromotedReviewerAnomalies(
       return anomaly;
     }
     if (anomaly.kind === 'intake-contract-incomplete') {
-      const candidateCount = restatementCandidateCountByAnomalyId.get(anomaly.id) ?? 0;
       const promotedFindingId = restatementPromotionByAnomalyId.get(anomaly.id);
-      if (candidateCount === 1 && promotedFindingId !== undefined) {
+      if (promotedFindingId !== undefined) {
         changed = true;
         return { ...anomaly, promotedFindingId };
       }

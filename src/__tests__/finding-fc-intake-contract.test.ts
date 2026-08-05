@@ -440,6 +440,193 @@ describe('FC intake contract', () => {
     expect(linked.reviewerAnomalies![0]!.promotedFindingId).toBe('F-0001');
   });
 
+  it('promotes multiple restatements in one batch and rejects ambiguous correspondence graphs', () => {
+    const reportDigest = 'e'.repeat(64);
+    const buildCase = (
+      suffix: string,
+      claim: string,
+      excerptDigestSeed: string,
+    ): {
+      source: ReturnType<typeof incompleteRaw>;
+      admitted: ReturnType<typeof canonicalRawFindingFixture>;
+    } => {
+      const source = incompleteRaw(`raw-source-${suffix}`, {
+        rawExcerpt: claim,
+        sourceBinding: {
+          reportDigest: 'f'.repeat(64),
+          startByte: 0,
+          endByte: Buffer.byteLength(claim),
+          excerptDigest: excerptDigestSeed.repeat(64),
+        },
+      });
+      const admitted = canonicalRawFindingFixture({
+        rawFindingId: `raw-admitted-${suffix}`,
+        stepName: source.stepName,
+        reviewer: source.reviewer,
+        familyTag: 'bug',
+        severity: 'high',
+        title: `Observed issue ${suffix}`,
+        description: claim,
+        suggestion: null,
+        relation: 'new',
+        targetFindingId: null,
+        target: source.target,
+        sourceBinding: {
+          ...source.sourceBinding,
+          reportDigest,
+          excerptDigest: excerptDigestSeed === '1' ? '8'.repeat(64) : '9'.repeat(64),
+        },
+        evidence: [],
+      });
+      return { source, admitted };
+    };
+    const defectFor = (source: ReturnType<typeof incompleteRaw>) => ({
+      observationClass: 'claim-bearing' as const,
+      classificationAuthorityId: 'system/intake_observation_classification_v1',
+      reasonCodes: ['normalizer-extraction-loss'] as const,
+      missingRequirements: ['description'] as const,
+      presentationOwnerReviewer: source.reviewer,
+      presentationLimit: 2,
+    });
+    const first = buildCase('a', 'The first defect remains observable.', '1');
+    const second = buildCase('b', 'The second defect remains observable.', '2');
+    const specs = [first, second].map(({ source }) => createReviewerAnomalySpec({
+      wire: source,
+      canonical: canonicalItem(source).canonical,
+      anomalyKind: 'intake-contract-incomplete',
+      reason: 'Normalizer lost the source-bound description',
+      intakeContract: defectFor(source),
+    }));
+    const withAnomalies = applyReviewerAnomalySpecsToLedger(emptyLedger(), specs, {
+      workflowName: 'peer-review',
+      stepName: observedAt.stepName,
+      runId: observedAt.runId,
+      timestamp: observedAt.timestamp,
+    });
+    const anomalies = withAnomalies.reviewerAnomalies!;
+    expect(anomalies).toHaveLength(2);
+    const requestFor = (source: ReturnType<typeof incompleteRaw>, anomalyId: string, claim: string) => {
+      const requestWithoutId = {
+        anomalyId,
+        reviewer: source.reviewer,
+        presentationOrdinal: 1,
+        reviewScopeSnapshotId: '2'.repeat(64),
+        sourceExcerptDigest: source.sourceBinding.excerptDigest,
+        claimedExcerpt: claim,
+        targetPaths: ['src/example.ts'] as const,
+        missingRequirements: ['description'] as const,
+        expectedRelation: 'new' as const,
+        expectedTargetFindingId: null,
+        expectedTargetPreconditionClass: 'absent' as const,
+      };
+      return { ...requestWithoutId, restatementRequestId: computeRestatementRequestId(requestWithoutId) };
+    };
+    const anomalyA = anomalies.find((entry) => entry.sourceRawFindingIds.includes(first.source.rawFindingId))!;
+    const anomalyB = anomalies.find((entry) => entry.sourceRawFindingIds.includes(second.source.rawFindingId))!;
+    // report 単位の binding 配布を再現: 各 admitted raw は同一 publication の
+    // 全 request を binding として受け取る。
+    const sharedBindings = [
+      { request: requestFor(first.source, anomalyA.id, 'The first defect remains observable.'), publicationId: 'publication-batch', reportDigest },
+      { request: requestFor(second.source, anomalyB.id, 'The second defect remains observable.'), publicationId: 'publication-batch', reportDigest },
+    ];
+    const findingFor = (admitted: ReturnType<typeof canonicalRawFindingFixture>, id: string) => ({
+      id,
+      status: 'open' as const,
+      lifecycle: 'new' as const,
+      target: admitted.target,
+      targetIdentityHash: admitted.targetIdentityHash,
+      claimIdentityHash: admitted.claimIdentityHash,
+      semanticClaimIdentityHash: admitted.semanticClaimIdentityHash,
+      severity: admitted.severity!,
+      title: admitted.title!,
+      description: admitted.description!,
+      evidenceIds: [],
+      reviewers: [admitted.reviewer],
+      rawFindingIds: [admitted.rawFindingId],
+      firstSeen: observedAt,
+      lastSeen: observedAt,
+      revision: 1,
+    });
+    const linked = linkPromotedReviewerAnomalies({
+      ...withAnomalies,
+      rawFindings: [first.source, second.source, first.admitted, second.admitted],
+      findings: [findingFor(first.admitted, 'F-0001'), findingFor(second.admitted, 'F-0002')],
+    }, [
+      { lineageKey: 'lineage-a', rawFindingId: first.admitted.rawFindingId, restatementRequestBindings: sharedBindings },
+      { lineageKey: 'lineage-b', rawFindingId: second.admitted.rawFindingId, restatementRequestBindings: sharedBindings },
+    ]);
+    const linkedA = linked.reviewerAnomalies!.find((entry) => entry.id === anomalyA.id)!;
+    const linkedB = linked.reviewerAnomalies!.find((entry) => entry.id === anomalyB.id)!;
+    expect(linkedA.promotedFindingId).toBe('F-0001');
+    expect(linkedB.promotedFindingId).toBe('F-0002');
+
+    // 曖昧グラフ1: 同一 claim atom の2 anomaly に1 raw が対応 → raw 側 exact-one 不成立で昇格しない。
+    const duplicateClaim = 'The duplicated defect remains observable.';
+    const dupFirst = buildCase('dup-a', duplicateClaim, '3');
+    const dupSecond = buildCase('dup-b', `${duplicateClaim} `, '4');
+    const dupSpecs = [dupFirst, dupSecond].map(({ source }) => createReviewerAnomalySpec({
+      wire: source,
+      canonical: canonicalItem(source).canonical,
+      anomalyKind: 'intake-contract-incomplete',
+      reason: 'Normalizer lost the source-bound description',
+      intakeContract: defectFor(source),
+    }));
+    const withDupAnomalies = applyReviewerAnomalySpecsToLedger(emptyLedger(), dupSpecs, {
+      workflowName: 'peer-review',
+      stepName: observedAt.stepName,
+      runId: observedAt.runId,
+      timestamp: observedAt.timestamp,
+    });
+    const dupAnomalies = withDupAnomalies.reviewerAnomalies!;
+    expect(dupAnomalies).toHaveLength(2);
+    const dupAnomalyA = dupAnomalies.find((entry) => entry.sourceRawFindingIds.includes(dupFirst.source.rawFindingId))!;
+    const dupAnomalyB = dupAnomalies.find((entry) => entry.sourceRawFindingIds.includes(dupSecond.source.rawFindingId))!;
+    const dupBindings = [
+      { request: requestFor(dupFirst.source, dupAnomalyA.id, duplicateClaim), publicationId: 'publication-dup', reportDigest },
+      { request: requestFor(dupSecond.source, dupAnomalyB.id, duplicateClaim), publicationId: 'publication-dup', reportDigest },
+    ];
+    const dupLinked = linkPromotedReviewerAnomalies({
+      ...withDupAnomalies,
+      rawFindings: [dupFirst.source, dupSecond.source, dupFirst.admitted],
+      findings: [findingFor(dupFirst.admitted, 'F-0003')],
+    }, [
+      { lineageKey: 'lineage-dup', rawFindingId: dupFirst.admitted.rawFindingId, restatementRequestBindings: dupBindings },
+    ]);
+    for (const entry of dupLinked.reviewerAnomalies!) {
+      expect(entry.promotedFindingId).toBeUndefined();
+    }
+
+    // 曖昧グラフ2: 1 anomaly に同一 claim atom の2 raw が対応 → anomaly 側 exact-one 不成立で昇格しない。
+    const twinBindings = [
+      { request: requestFor(dupFirst.source, dupAnomalyA.id, duplicateClaim), publicationId: 'publication-twin', reportDigest },
+    ];
+    const twinSecondAdmitted = canonicalRawFindingFixture({
+      rawFindingId: 'raw-admitted-twin',
+      stepName: dupFirst.source.stepName,
+      reviewer: dupFirst.source.reviewer,
+      familyTag: 'bug',
+      severity: 'high',
+      title: 'Observed issue twin',
+      description: duplicateClaim,
+      suggestion: null,
+      relation: 'new',
+      targetFindingId: null,
+      target: dupFirst.source.target,
+      sourceBinding: { ...dupFirst.source.sourceBinding, reportDigest, excerptDigest: '7'.repeat(64) },
+      evidence: [],
+    });
+    const twinLinked = linkPromotedReviewerAnomalies({
+      ...withDupAnomalies,
+      reviewerAnomalies: [dupAnomalyA],
+      rawFindings: [dupFirst.source, dupFirst.admitted, twinSecondAdmitted],
+      findings: [findingFor(dupFirst.admitted, 'F-0004'), findingFor(twinSecondAdmitted, 'F-0005')],
+    }, [
+      { lineageKey: 'lineage-twin-a', rawFindingId: dupFirst.admitted.rawFindingId, restatementRequestBindings: twinBindings },
+      { lineageKey: 'lineage-twin-b', rawFindingId: twinSecondAdmitted.rawFindingId, restatementRequestBindings: twinBindings },
+    ]);
+    expect(twinLinked.reviewerAnomalies![0]!.promotedFindingId).toBeUndefined();
+  });
+
   it('promotes through reviewer output, normalizer, normalization, and admission without source-binding copying', () => {
     const claim = 'The same defect remains observable.';
     const snapshot = captureReviewScopeProofSnapshot(process.cwd());

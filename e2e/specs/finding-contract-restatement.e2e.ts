@@ -190,9 +190,14 @@ describe('E2E: Finding Contract restatement recovery (mock)', () => {
     });
     const ledger = store.loadLedger();
     const anomaly = ledger.reviewerAnomalies?.find(({ id }) => id === 'RA-E2E-RESTATEMENT');
-    const admitted = ledger.rawFindings.find(({ rawFindingId }) => rawFindingId !== 'raw-weak-restatement');
     expect(ledger.findings).toHaveLength(1);
     expect(anomaly?.promotedFindingId).toBe(ledger.findings[0]?.id);
+    // 検証対象の admitted raw は「昇格した finding に束縛された raw」から解決する。
+    // 「seed 以外の最初の raw」では、resume round が複数 raw を追加した場合に
+    // 無関係な raw の source binding を検証してしまう。
+    const promotedRawIds = ledger.findings[0]?.rawFindingIds ?? [];
+    expect(promotedRawIds.length).toBeGreaterThan(0);
+    const admitted = ledger.rawFindings.find(({ rawFindingId }) => promotedRawIds.includes(rawFindingId));
     expect(admitted?.sourceBinding.reportDigest).not.toBe('1'.repeat(64));
     expect(admitted?.sourceBinding.excerptDigest).not.toBe('2'.repeat(64));
   }, 120_000);

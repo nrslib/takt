@@ -303,7 +303,11 @@ function boundedRestatementClaimExcerpt(
   anomaly: NonNullable<ReturnType<FindingLedgerStore['loadLedger']>['reviewerAnomalies']>[number],
   raw: NonNullable<ReturnType<FindingLedgerStore['loadLedger']>['rawFindings']>[number],
 ): string {
-  return (anomaly.claimedExcerpt ?? raw.description ?? raw.rawExcerpt ?? '')
+  // excerpt/description が全て欠ける観測（protocol-noise 相当）でも request が
+  // 空文字にならないよう、必ず非空の anomaly.title へフォールバックする。
+  // title は createReviewerAnomalySpec が常に非空で採番する。
+  const excerpt = anomaly.claimedExcerpt ?? raw.description ?? raw.rawExcerpt;
+  return (excerpt !== undefined && excerpt.trim().length > 0 ? excerpt : anomaly.title)
     .slice(0, RAW_FINDING_LIMITS.maxDescriptionChars);
 }
 

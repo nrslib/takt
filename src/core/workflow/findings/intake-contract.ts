@@ -44,7 +44,15 @@ export function intakeContractDefectFor(
     ...(input.severity === null || input.severity === undefined ? ['severity' as const] : []),
     ...(input.title === null || input.title === undefined ? ['title' as const] : []),
     ...(input.description === null || input.description === undefined ? ['description' as const] : []),
-    ...(input.evidence.length === 0 || input.evidenceCoverageGaps.length > 0
+    // claimEvidence は「レビュアーが claim evidence を一切提示しなかった」ときだけ欠落と
+    // みなす。evidenceCoverageGaps は engine 側の issuance 診断（byte budget 枯渇・
+    // source 再読の I/O 失敗・実在しない path 等）であり、gap が残っている時点で
+    // レビュアーは evidence request を提示している。これを intake 契約違反として
+    // reviewer anomaly（言い直し要求）へ送ると、engine のリソース事情をレビュアーの
+    // 契約不履行に転嫁してしまうため、gap 付き raw は従来どおり admission 側の
+    // fail-closed 経路（provisional）に残す。identity 不足があればそちらの欠落だけで
+    // anomaly になる。
+    ...(input.evidence.length === 0 && input.evidenceCoverageGaps.length === 0
       ? ['claimEvidence' as const]
       : []),
     ...(input.additionalMissingRequirements ?? []),
