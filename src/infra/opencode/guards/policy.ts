@@ -79,6 +79,16 @@ function resolveCallTimeoutMs(configured: number | undefined): number {
   return candidate;
 }
 
+/**
+ * 数値上限の不正値契約は入力経路で意図的に異なる。
+ *
+ * - `guards.*`（YAML / `TAKT_PROVIDER_OPTIONS_*` 由来）は宣言された設定なので
+ *   fail-fast で reject する。設定ミスを黙って既定値へ落とすと、利用者は
+ *   自分の指定が効いていないことに気づけない。
+ * - `TAKT_OPENCODE_*`（resolvePositiveEnvInt）は実験・テスト用のアドホックな
+ *   上書きなので、不正値は無視して既定値へ fallback する。全ての兄弟 env
+ *   （idle timeout / cycle budget / tool guard 各値）と揃えた挙動。
+ */
 function assertPositiveLimit(name: string, value: number | undefined): void {
   if (value !== undefined && (!Number.isInteger(value) || value <= 0)) {
     throw new Error(`OpenCode ${name} must be a positive integer`);

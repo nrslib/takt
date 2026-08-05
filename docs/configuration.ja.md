@@ -326,6 +326,11 @@ OpenCode の単一 call には既定で 3,600,000 ms（60分）の wall-clock �
 `TAKT_OPENCODE_STREAM_EVENT_LIMIT` でも上書きできます。`text_byte_limit` の既定値は 1 MiB、
 `reasoning_byte_limit` は 4 MiB です。
 
+数値上限の不正値は入力経路で扱いが異なります。`guards.*` に書いた値（および
+`TAKT_PROVIDER_OPTIONS_*` 由来の値）は宣言された設定なので、正の整数でなければ
+エラーで停止します。一方 `TAKT_OPENCODE_*` は実験・テスト用の一時上書きなので、
+不正値は無視して既定値へ戻ります。
+
 旧 `TAKT_OPENCODE_TOOL_ERROR_BUDGET`、
 `TAKT_OPENCODE_TOOL_SIGNATURE_ABSOLUTE`、
 `TAKT_OPENCODE_TOOL_SIGNATURE_REPEATS`、

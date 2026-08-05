@@ -327,6 +327,12 @@ through 86,400,000. `event_limit` defaults to 500,000 and can be overridden by
 `TAKT_OPENCODE_STREAM_EVENT_LIMIT`. `text_byte_limit` defaults to 1 MiB and
 `reasoning_byte_limit` to 4 MiB.
 
+Invalid numeric limits are treated differently per input path. Values written
+under `guards.*` (including those from `TAKT_PROVIDER_OPTIONS_*`) are declared
+configuration, so a non-positive-integer value fails fast with an error. Values
+from `TAKT_OPENCODE_*` are ad-hoc overrides for experiments and tests, so an
+invalid value is ignored and the default applies.
+
 The legacy `TAKT_OPENCODE_TOOL_ERROR_BUDGET`,
 `TAKT_OPENCODE_TOOL_SIGNATURE_ABSOLUTE`,
 `TAKT_OPENCODE_TOOL_SIGNATURE_REPEATS`,

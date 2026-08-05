@@ -184,6 +184,21 @@ describe('OpenCode guard registry / Strategy', () => {
     });
   });
 
+  it.each([0, 1.5, -5])('guards.eventLimit の不正値 %s は fail-fast で reject する', (invalid) => {
+    expect(() => resolveOpenCodeGuardSuite({ eventLimit: invalid }, 'opencode/big-pickle'))
+      .toThrow('OpenCode event limit must be a positive integer');
+  });
+
+  it.each(['0', '1.5', '-5', 'abc'])(
+    'TAKT_OPENCODE_STREAM_EVENT_LIMIT の不正値 %s は既定値へ fallback する',
+    (invalid) => {
+      process.env.TAKT_OPENCODE_STREAM_EVENT_LIMIT = invalid;
+
+      expect(resolveOpenCodeGuardSuite(undefined, 'opencode/big-pickle').policy.streamEventLimit)
+        .toBe(OPENCODE_STREAM_EVENT_LIMIT);
+    },
+  );
+
   it('mandatory guard は minimal・未知 profile・設定キーで無効化できない', () => {
     const minimal = resolveOpenCodeGuardSuite({ profile: 'minimal' }, 'opencode/model');
     expect(minimal.enabledGuardIds).toEqual(expect.arrayContaining(
