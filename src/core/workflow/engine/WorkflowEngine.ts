@@ -907,6 +907,7 @@ export class WorkflowEngine extends EventEmitter {
       workflowCallInstance,
     );
     const dynamicParallelSelections = this.sharedRuntime.dynamicParallelSelectionStore!.serialized();
+    const dynamicFacetSelections = this.sharedRuntime.dynamicFacetSelectionStore!.serialized();
     const workflowCallInvocations = serializeWorkflowCallInvocationEvidence(
       this.sharedRuntime.workflowCallInvocationEvidence!,
     );
@@ -918,6 +919,9 @@ export class WorkflowEngine extends EventEmitter {
       ...(dynamicParallelSelections === undefined
         ? {}
         : { dynamic_parallel_selections: dynamicParallelSelections }),
+      ...(dynamicFacetSelections === undefined
+        ? {}
+        : { dynamic_facet_selections: dynamicFacetSelections }),
       workflow_call_invocations: workflowCallInvocations,
       workflow_step_participations: workflowStepParticipations,
     };
@@ -1179,5 +1183,7 @@ function restoreActiveResumePoint(
 function serializeDynamicFacetSelectionsMap(
   selections: ReadonlyMap<string, import('../../models/types.js').DynamicFacetSelectionSnapshot>,
 ): Record<string, import('../../models/types.js').DynamicFacetSelectionSnapshot> {
-  return Object.fromEntries(selections);
+  return Object.fromEntries(
+    [...selections].map(([identity, snapshot]) => [identity, cloneDynamicFacetSelectionSnapshot(snapshot)]),
+  );
 }

@@ -125,6 +125,7 @@ export class DynamicFacetSelectorCoordinator {
       reports: inputs.reports,
       working_tree_diff: inputs.workingTreeDiff,
       candidates: pool.candidates.map((candidate) => ({ id: candidate.id, description: candidate.description })),
+      unresolved_findings: unresolvedFindings,
     });
     const redact = (text: string): string => sanitizeSensitiveTextWithKnownValues(text, sensitiveValues);
 

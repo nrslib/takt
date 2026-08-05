@@ -66,6 +66,16 @@ function makeDynamicFacetConfig(): WorkflowConfig {
       instruction: 'Fix',
       dynamicFacets: { pool: 'fix', maxSelected: 4 },
     }],
+    facetPools: {
+      fix: {
+        name: 'fix',
+        source: 'inline',
+        candidates: [
+          { id: 'backend', description: 'backend', policyRefs: [], knowledgeRefs: [], resolvedPolicyContents: [], resolvedKnowledgeContents: [] },
+          { id: 'transaction', description: 'transaction', policyRefs: [], knowledgeRefs: [], resolvedPolicyContents: [], resolvedKnowledgeContents: [] },
+        ],
+      },
+    },
   });
 }
 

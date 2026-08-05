@@ -31,6 +31,16 @@ function makeConfig(): WorkflowConfig {
     } as unknown as WorkflowConfig['steps'][number]],
     initialStep: 'fix',
     maxSteps: 5,
+    facetPools: {
+      fix: {
+        name: 'fix',
+        source: 'inline',
+        candidates: [
+          { id: 'transaction', description: 'transaction', policyRefs: [], knowledgeRefs: [], resolvedPolicyContents: [], resolvedKnowledgeContents: [] },
+          { id: 'backend', description: 'backend', policyRefs: [], knowledgeRefs: [], resolvedPolicyContents: [], resolvedKnowledgeContents: [] },
+        ],
+      },
+    },
   } as unknown as WorkflowConfig;
 }
 

@@ -93,6 +93,21 @@ function validateDynamicFacetSelections(
     const step = resolveDynamicFacetStep(config, options, identity, prefix.length);
     if (!step) throw new Error(`Dynamic facet selection snapshot identity "${identity}" does not match a reachable dynamic facet step`);
     if (snapshot.step_name !== step.name) throw new Error(`Dynamic facet selection snapshot step_name does not match resumed step "${step.name}"`);
+    if (step.dynamicFacets !== undefined) {
+      const pool = config.facetPools?.[step.dynamicFacets.pool];
+      if (pool === undefined) {
+        throw new Error(
+          `Dynamic facet selection snapshot for step "${step.name}" references pool "${step.dynamicFacets.pool}" that is not loaded`,
+        );
+      }
+      const knownIds = new Set(pool.candidates.map((candidate) => candidate.id));
+      const missingId = snapshot.selected_ids.find((id) => !knownIds.has(id));
+      if (missingId !== undefined) {
+        throw new Error(
+          `Dynamic facet selection snapshot for step "${step.name}" references candidate id "${missingId}" that is not in pool "${pool.name}"`,
+        );
+      }
+    }
   }
 }
 

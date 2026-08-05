@@ -504,8 +504,12 @@ export class StepExecutor {
     if (
       isNormalAgentWorkflowStep(step)
       && step.dynamicFacets !== undefined
-      && this.deps.dynamicFacetSelectorCoordinator !== undefined
     ) {
+      if (this.deps.dynamicFacetSelectorCoordinator === undefined) {
+        throw new Error(
+          `Configuration error: step "${step.name}" has dynamic_facets but no dynamic facet selector coordinator is configured`,
+        );
+      }
       const pool = this.resolveDynamicFacetPool(step);
       if (pool === undefined) {
         throw new Error(
