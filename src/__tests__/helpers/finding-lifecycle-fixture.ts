@@ -469,8 +469,27 @@ export function applyFindingLedgerFixtureRevision(input: {
       : sha256(`fixture-conflict:${input.entity.id}:${input.entity.revision}`);
   const invalidationEvidence = finding?.invalidatedEvidence
     ?? 'Fixture location is invalid.';
+  // fixture 側が isolation proof（claimBindingAuthorizationReferences 付き）を既に
+  // 保持している場合はそれを再利用する。fabricated proof（references: []）で
+  // 上書きすると、legacy 移行 allowlist の bundle authorization 検査が fixture の
+  // 意図（graph A/B 適格）を満たせなくなる。
+  // 再利用は作成 revision（expectedHead null）に限る。revision 2 以降の replay は
+  // dependencyDigests に直前 head を要求するため、従来どおり revision ごとに
+  // fabricate する。
+  const storedIsolationProof = usesManagerProof
+    && operation !== 'invalidate_finding'
+    && expectedHead === null
+    && finding?.provisional !== undefined
+    ? input.ledger.evidenceRecords.find((record) => (
+        record.kind === 'engine_proof'
+        && record.subject.kind === 'finding_provisional_isolation'
+        && record.subject.findingId === input.entity.id
+        && record.subject.provisionalKind === finding.provisional!.kind
+        && record.subject.stableKey === finding.provisional!.stableKey
+      ))
+    : undefined;
   const evidenceRecord = usesManagerProof
-      ? createEngineProofRecord({
+      ? storedIsolationProof ?? createEngineProofRecord({
         kind: 'engine_proof',
         purpose: 'lifecycle_authority',
         verifierId: 'takt.finding-lifecycle-policy',
@@ -531,15 +550,26 @@ export function applyFindingLedgerFixtureRevision(input: {
     : input.ledger.interpretationRawObservations.find(
         (observation) => observation.rawFindingId === raw.rawFindingId,
       );
+  // provisional 由来の isolation proof binding は、legacy 移行 allowlist が
+  // 「source raw への exact binding」を要求するため、provisional の source raw を
+  // sourceRawFindingId に束縛する（raw が ledger に存在するときのみ）。
+  const provisionalSourceRaw = usesManagerProof && finding?.provisional !== undefined
+    ? finding.provisional.sourceRawFindingIds
+        .map((rawFindingId) => input.ledger.rawFindings.find(
+          (candidate) => candidate.rawFindingId === rawFindingId,
+        ))
+        .find((candidate) => candidate !== undefined)
+    : undefined;
+  const bindingSourceRaw = raw ?? provisionalSourceRaw;
   const binding = evidenceRecord === undefined
     ? undefined
     : createFindingEvidenceBinding({
         evidenceId: evidenceRecord.evidenceId,
         claimIdentityHash,
-        sourceRawFindingId: raw?.rawFindingId ?? null,
-        sourceRawIntegrityDigest: raw === undefined
+        sourceRawFindingId: bindingSourceRaw?.rawFindingId ?? null,
+        sourceRawIntegrityDigest: bindingSourceRaw === undefined
           ? null
-          : computeRawFindingIntegrityDigest(raw),
+          : computeRawFindingIntegrityDigest(bindingSourceRaw),
         contributionOrigin: input.contributionOrigin ?? (interpretationObservation === undefined
           ? { kind: 'external' }
           : { kind: 'interpretation_case', caseId: interpretationObservation.caseId }),
@@ -588,7 +618,10 @@ export function applyFindingLedgerFixtureRevision(input: {
     ? input.entity
     : {
         ...finding,
-        description: findingDescription,
+        // description は schema 上 nonEmpty optional。fixture の provisional finding
+        // （description 未設定・title null）を空文字へ潰すと FindingLedgerEntrySchema
+        // を通らなくなるため、非空のときだけ設定する。
+        ...(findingDescription.length > 0 ? { description: findingDescription } : {}),
         evidenceIds: [...new Set([
           ...(currentFinding?.evidenceIds ?? []),
           ...finding.evidenceIds,

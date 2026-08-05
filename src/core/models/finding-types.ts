@@ -38,6 +38,7 @@ export const FINDING_LIFECYCLE_OPERATIONS = [
   'promote_provisional',
   'record_rejected_observation',
   'record_recovery_attempt',
+  'reclassify_provisional',
   'create_conflict',
   'observe_conflict',
   'resolve_conflict',
@@ -199,6 +200,18 @@ export type FindingLifecycleAuthority =
       action:
         | 'record_recovery_attempt'
         | 'settle_action_recovery';
+    }
+  | {
+      /**
+       * legacy provisional の intake 契約再分類（migration）。marker
+       * （`reviewerAnomalyReclassification`）の書き込みを lifecycle event として
+       * 記録するための engine 専用 authority。migrationId / anomalyId を束縛し、
+       * evidence binding は持たない。
+       */
+      kind: 'system';
+      action: 'intake_contract_reclassification';
+      migrationId: string;
+      anomalyId: string;
     }
   | {
       kind: 'rejected_observation';

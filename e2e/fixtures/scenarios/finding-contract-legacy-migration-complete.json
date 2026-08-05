@@ -1,0 +1,63 @@
+[
+  {
+    "status": "done",
+    "content": "Round one review investigation."
+  },
+  {
+    "status": "done",
+    "content": "No new findings in this round."
+  },
+  {
+    "status": "done",
+    "content": "{\"rawFindings\":[]}",
+    "structured_output": {
+      "rawFindings": []
+    }
+  },
+  {
+    "status": "done",
+    "content": "Restatement investigation."
+  },
+  {
+    "status": "done",
+    "content": "The legacy defect remains observable."
+  },
+  {
+    "status": "done",
+    "content": "{\"rawFindings\":[{\"rawExcerpt\":\"The legacy defect remains observable.\",\"candidate\":{\"rawFindingId\":null,\"familyTag\":\"correctness\",\"severity\":\"high\",\"title\":\"Legacy target defect\",\"description\":\"The legacy defect remains observable.\",\"suggestion\":\"Repair the target value.\",\"relation\":\"new\",\"targetFindingIds\":[],\"target\":{\"kind\":\"code\",\"paths\":[\"src/target.ts\"]},\"evidenceRequests\":[{\"kind\":\"file_quote\",\"path\":\"src/target.ts\",\"startLine\":1,\"endLine\":1}]}}]}",
+    "structured_output": {
+      "rawFindings": [
+        {
+          "rawExcerpt": "The legacy defect remains observable.",
+          "candidate": {
+            "rawFindingId": null,
+            "familyTag": "correctness",
+            "severity": "high",
+            "title": "Legacy target defect",
+            "description": "The legacy defect remains observable.",
+            "suggestion": "Repair the target value.",
+            "relation": "new",
+            "targetFindingIds": [],
+            "target": {
+              "kind": "code",
+              "paths": ["src/target.ts"]
+            },
+            "evidenceRequests": [
+              {
+                "kind": "file_quote",
+                "path": "src/target.ts",
+                "startLine": 1,
+                "endLine": 1
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  {
+    "status": "done",
+    "content": "manager accepted the restated legacy claim",
+    "mock_task_response": "main_manager_raw_decisions"
+  }
+]

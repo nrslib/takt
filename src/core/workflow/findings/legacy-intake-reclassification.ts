@@ -15,6 +15,7 @@ import type { ReviewerAnomalySpec } from './reviewer-anomalies.js';
 import { applyReviewerAnomalySpecsToLedger } from './reviewer-anomalies.js';
 import { computeReviewerAnomalyStableKey } from './raw-canonicalization.js';
 import { captureFindingLifecycleHead } from './lifecycle-mutation.js';
+import { applyFindingLifecycleCommands } from './lifecycle-transaction.js';
 import { provisionalClaimBindingAuthorizationViolation } from '../../models/finding-provisional-claim-authorization.js';
 import type { FindingProvisionalClaimBindingAuthorizationReference } from '../../models/finding-types.js';
 import { hasUnsettledActiveConflictOwnership } from './conflict-ownership.js';
@@ -467,33 +468,57 @@ export function migrateLegacyIntakeProvisionalFindings(input: {
         recordedAt: structuredClone(input.observation),
       }];
     });
+    // marker の付与は finding projection の変更なので、直接書換えではなく
+    // lifecycle reservation + event（authority `system/intake_contract_reclassification_v1`、
+    // revision+1）として記録する。直接書換えは projection digest と lifecycle head の
+    // 不一致を作り、store 書き込みゲート（assertFindingLedgerAppendOnlyProjection →
+    // assertFindingLifecycleAuthorityInvariant）が CAS を拒否する — run-3 実走で
+    // 継承台帳の最初の manager round がこの不一致でクラッシュした回帰。
+    const currentFinding = withAnomaly.findings.find((candidate) => candidate.id === finding.id);
+    if (currentFinding === undefined) {
+      throw new Error(`Legacy intake migration lost finding "${finding.id}"`);
+    }
+    const withMarker = applyFindingLifecycleCommands({
+      ledger: withAnomaly,
+      commands: [{
+        operation: 'reclassify_provisional',
+        changes: {
+          // revision は commandChanges が current.revision + 1 で採番する。
+          findings: [{
+            ...currentFinding,
+            reviewerAnomalyReclassification: {
+              kind: 'reclassified_to_reviewer_anomaly' as const,
+              migrationId,
+              authorityId: RECLASSIFICATION_AUTHORITY_ID,
+              reason: 'product_claim_not_adjudicated' as const,
+              anomalyId: anomaly.id,
+              oldHead,
+              rawFindingIds: sorted(finding.provisional!.sourceRawFindingIds),
+              rawCanonicalSnapshotIds: graph.rawCanonicalSnapshotIds,
+              terminalEpisodeIds: graph.episodeIds,
+              terminalAttemptIds: graph.attemptIds,
+              scopeBindingIds: graph.scopeBindingIds,
+              bindingAuthorizationIds: graph.bindingAuthorizationIds,
+              bindingDecisionIds: graph.bindingDecisionIds,
+              recordedAt: structuredClone(input.observation),
+            },
+          }],
+          conflicts: [],
+        },
+        authority: {
+          kind: 'system',
+          action: 'intake_contract_reclassification',
+          migrationId,
+          anomalyId: anomaly.id,
+        },
+        evidenceSourcesByTarget: new Map(),
+      }],
+      occurredAt: structuredClone(input.observation),
+    });
     ledger = {
-      ...withAnomaly,
-      findings: ledger.findings.map((candidate) => (
-        candidate.id === finding.id
-          ? {
-              ...candidate,
-              reviewerAnomalyReclassification: {
-                kind: 'reclassified_to_reviewer_anomaly' as const,
-                migrationId,
-                authorityId: RECLASSIFICATION_AUTHORITY_ID,
-                reason: 'product_claim_not_adjudicated' as const,
-                anomalyId: anomaly.id,
-                oldHead,
-                rawFindingIds: sorted(finding.provisional!.sourceRawFindingIds),
-                rawCanonicalSnapshotIds: graph.rawCanonicalSnapshotIds,
-                terminalEpisodeIds: graph.episodeIds,
-                terminalAttemptIds: graph.attemptIds,
-                scopeBindingIds: graph.scopeBindingIds,
-                bindingAuthorizationIds: graph.bindingAuthorizationIds,
-                bindingDecisionIds: graph.bindingDecisionIds,
-                recordedAt: structuredClone(input.observation),
-              },
-            }
-          : candidate
-      )),
+      ...withMarker,
       terminalAdjudicationSettlements: [
-        ...ledger.terminalAdjudicationSettlements,
+        ...withMarker.terminalAdjudicationSettlements,
         ...terminalSettlements,
       ],
       updatedAt: input.observation.timestamp,

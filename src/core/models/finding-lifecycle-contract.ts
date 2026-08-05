@@ -18,7 +18,8 @@ export type FindingLifecycleAuthorityContract =
   | 'verified_raw_provisional_identity'
   | 'conflict_reactivation'
   | 'system:record_recovery_attempt'
-  | 'system:settle_action_recovery';
+  | 'system:settle_action_recovery'
+  | 'system:intake_contract_reclassification';
 
 export interface LifecycleOperationContract {
   readonly targetShape:
@@ -156,6 +157,17 @@ export const FINDING_LIFECYCLE_OPERATION_CONTRACTS: Readonly<
     allowsCreate: false,
     authorities: ['system:record_recovery_attempt'],
     findingDelta: ['revision', 'provisional'],
+    conflictDelta: [],
+  },
+  // legacy provisional の intake 契約再分類。marker の付与だけを許し、
+  // status / provisional 等の product 状態は一切変更できない —
+  // 「product claim を false/rejected と判定しない schema migration」を
+  // findingDelta で機械的に強制する。
+  reclassify_provisional: {
+    targetShape: 'one_finding',
+    allowsCreate: false,
+    authorities: ['system:intake_contract_reclassification'],
+    findingDelta: ['revision', 'reviewerAnomalyReclassification'],
     conflictDelta: [],
   },
   create_conflict: {

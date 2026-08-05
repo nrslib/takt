@@ -355,6 +355,12 @@ export const FindingLifecycleAuthoritySchema = z.union([
     ]),
   }).strict(),
   z.object({
+    kind: z.literal('system'),
+    action: z.literal('intake_contract_reclassification'),
+    migrationId: Sha256Schema,
+    anomalyId: nonEmptyString,
+  }).strict(),
+  z.object({
     kind: z.literal('rejected_observation'),
     rawFindingId: rawFindingIdString,
     rawIntegrityDigest: Sha256Schema,

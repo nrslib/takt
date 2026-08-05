@@ -442,8 +442,8 @@
   ],
   "evidenceRecords": [
     {
-      "evidenceId": "4d8f8da031bc07613f850a3f4d6f81c41554587c835a5c8fe48677bca3840035",
-      "proofId": "4d8f8da031bc07613f850a3f4d6f81c41554587c835a5c8fe48677bca3840035",
+      "evidenceId": "1f395562a9e3bb3701b1c4255d6d003981b7ee76729ac8982b678afff010e929",
+      "proofId": "1f395562a9e3bb3701b1c4255d6d003981b7ee76729ac8982b678afff010e929",
       "kind": "engine_proof",
       "purpose": "lifecycle_authority",
       "verifierId": "takt.finding-lifecycle-policy",
@@ -453,7 +453,7 @@
       "scopeIdentity": "scope",
       "snapshotId": "1111111111111111111111111111111111111111111111111111111111111111",
       "claimIdentityHash": "6a0c9d7c05f14c2ada3bf13fd6df994cc7e65624f7f794616ed5730db4f55ca5",
-      "targetFindingId": "F-0001",
+      "targetFindingId": null,
       "subject": {
         "kind": "finding_provisional_isolation",
         "findingId": "F-0001",
@@ -1281,7 +1281,7 @@
   "evidenceBindings": [
     {
       "bindingId": "3333333333333333333333333333333333333333333333333333333333333333",
-      "evidenceId": "4d8f8da031bc07613f850a3f4d6f81c41554587c835a5c8fe48677bca3840035",
+      "evidenceId": "1f395562a9e3bb3701b1c4255d6d003981b7ee76729ac8982b678afff010e929",
       "claimIdentityHash": "6a0c9d7c05f14c2ada3bf13fd6df994cc7e65624f7f794616ed5730db4f55ca5",
       "sourceRawFindingId": "raw-legacy-raw-adjudication-unresolved",
       "sourceRawIntegrityDigest": null,

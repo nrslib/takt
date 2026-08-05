@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  authorizeFindingLedgerFixture,
   canonicalRawFindingFixture,
 } from './helpers/finding-lifecycle-fixture.js';
+import { normalizeFindingLedger } from '../core/workflow/findings/ledger-mutation.js';
+import {
+  cleanupTestFindingStorage,
+  createTestFindingLedgerStore,
+} from './helpers/finding-storage.js';
 import type {
   FindingLedger,
   FindingObservation,
@@ -36,6 +42,7 @@ import { captureFindingLifecycleHead } from '../core/workflow/findings/lifecycle
 import { computeRawPayloadDigest } from '../core/models/finding-contract-identity.js';
 import { createEmptyFindingContractRegistries } from '../core/models/finding-contract-seed.js';
 import { collectFindingLedgerProjectionInvariantViolations } from '../core/models/finding-ledger-invariants.js';
+import { assertFindingLifecycleAuthorityInvariant } from '../core/models/finding-lifecycle-invariants.js';
 import { buildFindingContractInstruction } from '../core/workflow/instruction/finding-contract-instruction.js';
 import { renderFindingLedgerInstructionSummary } from '../core/workflow/findings/context.js';
 import {
@@ -117,24 +124,22 @@ function incompleteRaw(rawFindingId: string, overrides: Partial<RawFinding> = {}
   });
 }
 
-function evidenceLessLegacyHolding(kind: 'raw-adjudication-unresolved' | 'raw-meaning-ambiguous'): {
+function evidenceLessLegacyHolding(
+  kind: 'raw-adjudication-unresolved' | 'raw-meaning-ambiguous',
+  findingId = 'F-0001',
+): {
   ledger: FindingLedger;
   findingId: string;
+  base: Pick<FindingLedger, 'findings' | 'rawFindings' | 'rawCanonicalSnapshots' | 'evidenceRecords'>;
 } {
   const raw = incompleteRaw(`raw-legacy-${kind}`);
   const snapshot = rawCanonicalSnapshotFixture(raw, observedAt);
-  const findingId = 'F-0001';
-  const findingHead = {
-    entityKind: 'finding' as const,
-    entityId: findingId,
-    revision: 1,
-    eventId: '8'.repeat(64),
-    projectionDigest: '9'.repeat(64),
-  };
+  const stableKeySeed = findingId === 'F-0001' ? 'a' : 'e';
+  const lineageKeySeed = findingId === 'F-0001' ? 'b' : 'f';
   const provisional = {
     kind,
-    stableKey: 'a'.repeat(64),
-    lineageKey: 'b'.repeat(64),
+    stableKey: stableKeySeed.repeat(64),
+    lineageKey: lineageKeySeed.repeat(64),
     sourceRawFindingIds: [raw.rawFindingId],
     reason: 'evidence-less pre-admission holding',
     firstObservedAt: observedAt,
@@ -159,7 +164,9 @@ function evidenceLessLegacyHolding(kind: 'raw-adjudication-unresolved' | 'raw-me
     scopeIdentity: 'scope',
     snapshotId: '1'.repeat(64),
     claimIdentityHash: raw.claimIdentityHash,
-    targetFindingId: findingId,
+    // provisional 作成時（expectedHead null）の isolation proof は
+    // lifecycle target が未存在のため targetFindingId は null（engine と同じ形）。
+    targetFindingId: null,
     subject: {
       kind: 'finding_provisional_isolation',
       findingId,
@@ -167,57 +174,44 @@ function evidenceLessLegacyHolding(kind: 'raw-adjudication-unresolved' | 'raw-me
       stableKey: provisional.stableKey,
       claimBindingAuthorizationReferences: [authorization],
     },
-    dependencyDigests: [findingHead.projectionDigest],
+    dependencyDigests: [],
     resultDigest: '2'.repeat(64),
     issuedAt: observedAt.timestamp,
   });
+  // 移行は lifecycle command として台帳へ入るため、fixture 自体も lifecycle 的に
+  // 正準な台帳（canonical binding / reservation / event / head digest）でなければ
+  // ならない。手書きの binding/event を持たせず authorizeFindingLedgerFixture で
+  // 正準履歴を再生する（保存済み isolation proof は helper が再利用する）。
+  const base = {
+    findings: [{
+      id: findingId,
+      status: 'open' as const,
+      lifecycle: 'new' as const,
+      target: raw.target,
+      targetIdentityHash: raw.targetIdentityHash,
+      claimIdentityHash: raw.claimIdentityHash,
+      semanticClaimIdentityHash: raw.semanticClaimIdentityHash,
+      severity: null,
+      title: null,
+      evidenceIds: [proof.evidenceId],
+      reviewers: [raw.reviewer],
+      rawFindingIds: [raw.rawFindingId],
+      firstSeen: observedAt,
+      lastSeen: observedAt,
+      revision: 1,
+      provisional,
+    }],
+    rawFindings: [raw],
+    rawCanonicalSnapshots: [snapshot],
+    evidenceRecords: [proof],
+  };
   return {
     findingId,
-    ledger: {
+    base,
+    ledger: authorizeFindingLedgerFixture({
       ...emptyLedger(),
-      findings: [{
-        id: findingId,
-        status: 'open',
-        lifecycle: 'new',
-        target: raw.target,
-        targetIdentityHash: raw.targetIdentityHash,
-        claimIdentityHash: raw.claimIdentityHash,
-        semanticClaimIdentityHash: raw.semanticClaimIdentityHash,
-        severity: null,
-        title: null,
-        evidenceIds: [],
-        reviewers: [raw.reviewer],
-        rawFindingIds: [raw.rawFindingId],
-        firstSeen: observedAt,
-        lastSeen: observedAt,
-        revision: 1,
-        provisional,
-      }],
-      rawFindings: [raw],
-      rawCanonicalSnapshots: [snapshot],
-      evidenceRecords: [proof],
-      evidenceBindings: [{
-        bindingId: '3'.repeat(64),
-        evidenceId: proof.evidenceId,
-        claimIdentityHash: raw.claimIdentityHash,
-        sourceRawFindingId: raw.rawFindingId,
-        sourceRawIntegrityDigest: null,
-        contributionOrigin: { kind: 'external' },
-        operation: 'update_provisional',
-        target: { entityKind: 'finding', entityId: findingId, expectedHead: findingHead },
-      }],
-      lifecycleEvents: [{
-        eventId: findingHead.eventId,
-        mutationId: '4'.repeat(64),
-        reservationId: '5'.repeat(64),
-        operation: 'update_provisional',
-        transitions: [{ before: null, after: findingHead }],
-        evidenceBindingIds: ['3'.repeat(64)],
-        outcome: { kind: 'projection_applied' },
-        resultDigest: '6'.repeat(64),
-        occurredAt: observedAt,
-      }],
-    },
+      ...base,
+    }),
   };
 }
 
@@ -1416,14 +1410,29 @@ describe('FC intake contract', () => {
     const providerCallId = '6'.repeat(64);
     const attemptId = '7'.repeat(64);
     const findingId = 'F-0001';
-    const findingHead = {
-      entityKind: 'finding' as const,
-      entityId: findingId,
-      revision: 1,
-      eventId: '8'.repeat(64),
-      projectionDigest: '9'.repeat(64),
-    };
-    const ledger: FindingLedger = {
+    const isolationProof = createEngineProofRecord({
+      kind: 'engine_proof',
+      purpose: 'lifecycle_authority',
+      verifierId: 'takt.finding-lifecycle-policy',
+      verifierVersion: '1',
+      workflowName: 'peer-review',
+      runId: observedAt.runId,
+      scopeIdentity: 'scope',
+      snapshotId: '1'.repeat(64),
+      claimIdentityHash: raw.claimIdentityHash,
+      targetFindingId: null,
+      subject: {
+        kind: 'finding_provisional_isolation',
+        findingId,
+        provisionalKind: 'raw-meaning-ambiguous',
+        stableKey: 'a'.repeat(64),
+        claimBindingAuthorizationReferences: [],
+      },
+      dependencyDigests: [],
+      resultDigest: '2'.repeat(64),
+      issuedAt: observedAt.timestamp,
+    });
+    const ledger: FindingLedger = authorizeFindingLedgerFixture({
       ...emptyLedger(),
       findings: [{
         id: findingId,
@@ -1435,7 +1444,7 @@ describe('FC intake contract', () => {
         semanticClaimIdentityHash: raw.semanticClaimIdentityHash,
         severity: null,
         title: null,
-        evidenceIds: [],
+        evidenceIds: [isolationProof.evidenceId],
         reviewers: [raw.reviewer],
         rawFindingIds: [raw.rawFindingId],
         firstSeen: observedAt,
@@ -1502,51 +1511,9 @@ describe('FC intake contract', () => {
         provisionalFindingId: findingId,
         landingEventId: 'f'.repeat(64),
       }],
-      evidenceRecords: [{
-        evidenceId: '0'.repeat(64),
-        kind: 'engine_proof',
-        purpose: 'lifecycle_authority',
-        verifierId: 'takt.finding-lifecycle-policy',
-        verifierVersion: '1',
-        workflowName: 'peer-review',
-        runId: observedAt.runId,
-        scopeIdentity: 'scope',
-        snapshotId: '1'.repeat(64),
-        claimIdentityHash: raw.claimIdentityHash,
-        targetFindingId: findingId,
-        subject: {
-          kind: 'finding_provisional_isolation',
-          findingId,
-          provisionalKind: 'raw-meaning-ambiguous',
-          stableKey: 'a'.repeat(64),
-          claimBindingAuthorizationReferences: [],
-        },
-        dependencyDigests: [findingHead.projectionDigest],
-        resultDigest: '2'.repeat(64),
-        issuedAt: observedAt.timestamp,
-      } as never],
-      evidenceBindings: [{
-        bindingId: '3'.repeat(64),
-        evidenceId: '0'.repeat(64),
-        claimIdentityHash: raw.claimIdentityHash,
-        sourceRawFindingId: raw.rawFindingId,
-        sourceRawIntegrityDigest: null,
-        contributionOrigin: { kind: 'external' },
-        operation: 'update_provisional',
-        target: { entityKind: 'finding', entityId: findingId, expectedHead: findingHead },
-      }],
-      lifecycleEvents: [{
-        eventId: findingHead.eventId,
-        mutationId: '4'.repeat(64),
-        reservationId: '5'.repeat(64),
-        operation: 'update_provisional',
-        transitions: [{ before: null, after: findingHead }],
-        evidenceBindingIds: ['3'.repeat(64)],
-        outcome: { kind: 'projection_applied' },
-        resultDigest: '6'.repeat(64),
-        occurredAt: observedAt,
-      }],
-    };
+      evidenceRecords: [isolationProof],
+    });
+    const preMigrationHead = captureFindingLifecycleHead(ledger, 'finding', findingId);
     const result = migrateLegacyIntakeProvisionalFindings({
       ledger,
       observation: { ...observedAt, timestamp: '2026-08-05T00:01:00.000Z' },
@@ -1563,12 +1530,36 @@ describe('FC intake contract', () => {
       reason: 'product_claim_not_adjudicated',
     });
     expect(computeRawPayloadDigest(raw)).toBe(snapshot.rawPayloadDigest);
-    expect(captureFindingLifecycleHead(result.ledger, 'finding', findingId)).toEqual(findingHead);
+    // marker は lifecycle event として記録される: head は revision+1 へ進み、
+    // reclassify_provisional の event と system authority reservation が残る。
+    const postMigrationHead = captureFindingLifecycleHead(result.ledger, 'finding', findingId);
+    expect(postMigrationHead?.revision).toBe(preMigrationHead!.revision + 1);
+    const reclassifyEvent = result.ledger.lifecycleEvents.find(
+      (event) => event.operation === 'reclassify_provisional',
+    );
+    expect(reclassifyEvent).toBeDefined();
+    const reclassifyReservation = result.ledger.lifecycleReservations.find(
+      (reservation) => reservation.reservationId === reclassifyEvent!.reservationId,
+    );
+    expect(reclassifyReservation?.authority).toMatchObject({
+      kind: 'system',
+      action: 'intake_contract_reclassification',
+      anomalyId: result.ledger.reviewerAnomalies![0]!.id,
+    });
+    // この fixture の interpretation graph は digest を簡略化しているため full parse は
+    // 通せない。store 書き込みゲート全体の回帰は allowlist B / archive replay /
+    // real store の各テストが担う。ここでは lifecycle authority invariant
+    // （run-3 クラッシュの発火点）だけを直接固定する。
+    expect(() => assertFindingLifecycleAuthorityInvariant(result.ledger)).not.toThrow();
   });
 
   it('replays the checked-in ledger fixture through current schema and migration guards', () => {
     const archivePath = join(import.meta.dirname, 'fixtures', 'finding-ledger-run-1-archive.json');
-    const ledger = parseFindingLedger(JSON.parse(readFileSync(archivePath, 'utf8')));
+    // parse は checked-in bytes に対する schema replay。migration は lifecycle event を
+    // 発行するため、正準な lifecycle 履歴（run-3 実台帳相当）の上で実行する。
+    const ledger = authorizeFindingLedgerFixture(
+      parseFindingLedger(JSON.parse(readFileSync(archivePath, 'utf8'))),
+    );
     const expectedFindingIds = Array.from({ length: 15 }, (_, index) => (
       `F-${String(index + 1).padStart(4, '0')}`
     ));
@@ -1591,6 +1582,95 @@ describe('FC intake contract', () => {
         ?.reviewerAnomalyReclassification).toBeUndefined();
     }
     expect(() => parseFindingLedger(migration.ledger)).not.toThrow();
+    // run-3 回帰: 移行結果は schema だけでなく store 書き込みゲート
+    // （normalizeFindingLedger → assertFindingLedgerAppendOnlyProjection →
+    // assertFindingLifecycleAuthorityInvariant）を通らなければならない。
+    // 旧実装（marker の直接書換え）はここで
+    // 'Lifecycle head "finding F-0001" does not match the current entity projection'
+    // を投げていた。
+    expect(() => normalizeFindingLedger(migration.ledger, migration.ledger.workflowName)).not.toThrow();
+  });
+
+  it('persists the inherited-ledger migration through the real store on the first manager round path', async () => {
+    // run-3 実走の再現: 継承台帳（移行適格 provisional 持ち）を実 store に seed し、
+    // manager round 先頭と同じ「updateLedger 内で migration を実行して CAS 保存」を行う。
+    // 旧実装では store 書き込みゲートがこの CAS を拒否して run 全体が abort した。
+    const archivePath = join(import.meta.dirname, 'fixtures', 'finding-ledger-run-1-archive.json');
+    const inherited = authorizeFindingLedgerFixture(
+      parseFindingLedger(JSON.parse(readFileSync(archivePath, 'utf8'))),
+    );
+    const reportDir = mkdtempSync(join(tmpdir(), 'takt-legacy-migration-store-'));
+    try {
+      const store = createTestFindingLedgerStore({
+        projectCwd: reportDir,
+        runId: observedAt.runId,
+        reportDir,
+        workflowName: inherited.workflowName,
+      });
+      await store.updateLedger(() => ({ ledger: inherited, result: undefined }));
+      const migrated = await store.updateLedger((current) => {
+        const result = migrateLegacyIntakeProvisionalFindings({
+          ledger: current,
+          observation: { ...observedAt, timestamp: '2026-08-05T00:05:00.000Z' },
+          presentationLimit: 2,
+        });
+        return { ledger: result.ledger, result: result.migratedFindingIds };
+      });
+      expect(migrated.result).toEqual(['F-0001']);
+      const persisted = store.loadLedger();
+      expect(persisted.findings.find(({ id }) => id === 'F-0001')?.reviewerAnomalyReclassification)
+        .toMatchObject({ kind: 'reclassified_to_reviewer_anomaly' });
+      expect(persisted.reviewerAnomalies?.some(
+        (anomaly) => anomaly.kind === 'intake-contract-incomplete',
+      )).toBe(true);
+      expect(persisted.lifecycleEvents.some(
+        (event) => event.operation === 'reclassify_provisional',
+      )).toBe(true);
+      // 冪等性: 再実行（resume 相当）は no-op。
+      const replay = await store.updateLedger((current) => {
+        const result = migrateLegacyIntakeProvisionalFindings({
+          ledger: current,
+          observation: { ...observedAt, timestamp: '2026-08-05T00:06:00.000Z' },
+          presentationLimit: 2,
+        });
+        return { ledger: result.ledger, result: result.migratedFindingIds };
+      });
+      expect(replay.result).toEqual([]);
+    } finally {
+      cleanupTestFindingStorage();
+      rmSync(reportDir, { recursive: true, force: true });
+    }
+  });
+
+  it('reclassifies multiple eligible legacy holdings with one lifecycle event per finding', () => {
+    // 複数移行（run-3 実台帳は10件）でも lifecycle event / revision / anomaly が
+    // finding ごとに1対1で整合し、store 書き込みゲートを通ることを固定する。
+    const first = evidenceLessLegacyHolding('raw-adjudication-unresolved');
+    const second = evidenceLessLegacyHolding('raw-meaning-ambiguous', 'F-0002');
+    const merged = authorizeFindingLedgerFixture({
+      ...emptyLedger(),
+      findings: [...first.base.findings, ...second.base.findings],
+      rawFindings: [...first.base.rawFindings, ...second.base.rawFindings],
+      rawCanonicalSnapshots: [
+        ...first.base.rawCanonicalSnapshots,
+        ...second.base.rawCanonicalSnapshots,
+      ],
+      evidenceRecords: [...first.base.evidenceRecords, ...second.base.evidenceRecords],
+    });
+    const result = migrateLegacyIntakeProvisionalFindings({
+      ledger: merged,
+      observation: { ...observedAt, timestamp: '2026-08-05T00:07:00.000Z' },
+      presentationLimit: 2,
+    });
+    expect(result.migratedFindingIds).toEqual(['F-0001', 'F-0002']);
+    expect(result.ledger.reviewerAnomalies).toHaveLength(2);
+    expect(result.ledger.lifecycleEvents.filter(
+      (event) => event.operation === 'reclassify_provisional',
+    )).toHaveLength(2);
+    expect(result.ledger.findings.every(
+      (finding) => finding.reviewerAnomalyReclassification !== undefined,
+    )).toBe(true);
+    expect(() => normalizeFindingLedger(result.ledger, result.ledger.workflowName)).not.toThrow();
   });
 });
 
