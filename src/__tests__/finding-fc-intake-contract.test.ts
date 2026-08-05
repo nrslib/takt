@@ -599,6 +599,21 @@ describe('FC intake contract', () => {
       for (const entry of linked.reviewerAnomalies!) {
         expect(entry.promotedFindingId).toBeUndefined();
       }
+
+      // 正の対照: 同一 fixture のまま binding を anomaly A の1本に減らすと
+      // raw 側の edge が exact-one になり昇格が成立する。これにより上の拒否が
+      // fixture 起因ではなく「曖昧さ由来」であることを識別できる。
+      const singleBindingLinked = linkPromotedReviewerAnomalies({
+        ...ledger,
+        rawFindings: [dupFirst.source, dupSecond.source, dupFirst.admitted],
+        findings: [batchFindingFor(dupFirst.admitted, 'F-0003')],
+      }, [
+        { lineageKey: 'lineage-dup', rawFindingId: dupFirst.admitted.rawFindingId, restatementRequestBindings: [dupBindings[0]!] },
+      ]);
+      expect(singleBindingLinked.reviewerAnomalies!.find((entry) => entry.id === dupAnomalyA.id)!.promotedFindingId)
+        .toBe('F-0003');
+      expect(singleBindingLinked.reviewerAnomalies!.find((entry) => entry.id === dupAnomalyB.id)!.promotedFindingId)
+        .toBeUndefined();
     });
 
     it('does not promote when two raws correspond to one anomaly', () => {
@@ -634,6 +649,18 @@ describe('FC intake contract', () => {
 
       // anomaly 側 exact-one 不成立（2 raw が1 anomaly に対応）→ 昇格しない。
       expect(linked.reviewerAnomalies![0]!.promotedFindingId).toBeUndefined();
+
+      // 正の対照: 同一 fixture のまま候補を1 raw に減らすと anomaly 側の edge が
+      // exact-one になり昇格が成立する。上の拒否が「曖昧さ由来」であることの識別。
+      const singleCandidateLinked = linkPromotedReviewerAnomalies({
+        ...ledger,
+        rawFindings: [dupFirst.source, dupFirst.admitted, twinSecondAdmitted],
+        findings: [batchFindingFor(dupFirst.admitted, 'F-0004'), batchFindingFor(twinSecondAdmitted, 'F-0005')],
+      }, [
+        { lineageKey: 'lineage-twin-a', rawFindingId: dupFirst.admitted.rawFindingId, restatementRequestBindings: twinBindings },
+      ]);
+      expect(singleCandidateLinked.reviewerAnomalies!.find((entry) => entry.id === dupAnomalyA.id)!.promotedFindingId)
+        .toBe('F-0004');
     });
   });
 
