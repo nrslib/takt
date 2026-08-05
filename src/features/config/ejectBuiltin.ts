@@ -21,6 +21,10 @@ import {
   getProjectFacetDir,
   getGlobalFacetDir,
   getBuiltinFacetDir,
+  getBuiltinLanguageFacetPoolsDir,
+  getBuiltinLanguageResourcesDir,
+  getGlobalFacetPoolsDir,
+  getProjectFacetPoolsDir,
   getLanguage,
   isPathSafe,
 } from '../../infra/config/index.js';
@@ -29,6 +33,7 @@ import { sanitizeTerminalText } from '../../shared/utils/text.js';
 import { VALID_FACET_TYPES } from './facetTypes.js';
 import {
   copyReferencedBuiltinStepFragments,
+  copyReferencedBuiltinFacetPools,
   pathExistsForEject,
   writeNewEjectedFile,
 } from './ejectStepFragments.js';
@@ -84,6 +89,11 @@ export async function ejectBuiltin(name: string | undefined, options: EjectOptio
   } else {
     const content = readFileSync(builtinPath, 'utf-8');
     const targetStepsDir = options.global ? getGlobalStepsDir() : getProjectStepsDir(options.projectDir);
+    const targetFacetPoolsDir = options.global
+      ? getGlobalFacetPoolsDir()
+      : getProjectFacetPoolsDir(options.projectDir);
+    const builtinFacetPoolsDir = getBuiltinLanguageFacetPoolsDir(lang);
+    const builtinLanguageRoot = getBuiltinLanguageResourcesDir(lang);
     const rollbackStepFragments = copyReferencedBuiltinStepFragments(
       content,
       lang,
@@ -91,10 +101,23 @@ export async function ejectBuiltin(name: string | undefined, options: EjectOptio
       workflowDest,
       !options.global,
     );
+    const rollbackFacetPools = copyReferencedBuiltinFacetPools(
+      content,
+      lang,
+      targetFacetPoolsDir,
+      workflowDest,
+      !options.global,
+      builtinFacetPoolsDir,
+      builtinLanguageRoot,
+    );
+    const rollback = (): void => {
+      rollbackFacetPools();
+      rollbackStepFragments();
+    };
     try {
       writeNewEjectedFile(options.global ? dirname(dirname(targetWorkflowsDir)) : options.projectDir, workflowDest, content);
     } catch (error) {
-      rollbackStepFragments();
+      rollback();
       throw error;
     }
     success(`Ejected workflow: ${safeWorkflowDest}`);

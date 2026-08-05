@@ -20,6 +20,8 @@ import { LoopMonitorJudgeRunner } from './LoopMonitorJudgeRunner.js';
 import { OptionsBuilder } from './OptionsBuilder.js';
 import { ParallelRunner } from './ParallelRunner.js';
 import { DynamicParallelSelectorCoordinator } from '../dynamic-parallel/selector-coordinator.js';
+import { DynamicFacetSelectorCoordinator } from '../dynamic-facets/dynamicFacetSelectorCoordinator.js';
+import { DynamicFacetSelectionStore } from '../dynamic-facets/dynamicFacetSelectionStore.js';
 import { recordAgentUsageEvent } from './agent-usage-event.js';
 import { StepExecutor } from './StepExecutor.js';
 import { SystemStepExecutor } from './SystemStepExecutor.js';
@@ -99,6 +101,12 @@ interface WorkflowEngineSetupParams {
     identity: string,
     selection: import('../../models/types.js').DynamicParallelSelectionSnapshot,
   ) => Promise<void>;
+  persistDynamicFacetSelection: (
+    step: WorkflowStep,
+    iteration: number,
+    identity: string,
+    selection: import('../../models/types.js').DynamicFacetSelectionSnapshot,
+  ) => Promise<void>;
   refreshFindingsState: () => void;
   /** 自前 or workflow_call 親から継承した、この engine で有効な Finding Contract。 */
   findingContract?: FindingContractConfig;
@@ -145,6 +153,9 @@ export function createSharedRuntime(
     maxSteps,
     dynamicParallelSelectionStore: new DynamicParallelSelectionStore(
       new Map(Object.entries(resumePoint?.dynamic_parallel_selections ?? {})),
+    ),
+    dynamicFacetSelectionStore: new DynamicFacetSelectionStore(
+      new Map(Object.entries(resumePoint?.dynamic_facet_selections ?? {})),
     ),
     workflowCallInvocationEvidence: restoreWorkflowCallInvocationEvidence(resumePoint),
     workflowStepParticipationIndex: restoreWorkflowStepParticipationIndex(resumePoint),
@@ -250,6 +261,41 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     () => params.task,
   );
 
+  const dynamicFacetSelector = new DynamicFacetSelectorCoordinator({
+    engineOptions: params.options,
+    selectionStore: params.sharedRuntime.dynamicFacetSelectionStore!,
+    getCwd: params.getCwd,
+    getReportDirectory: () => params.runPaths.reportsAbs,
+    getReportNames: (_step, state) => getSelectorReportNames(
+      params.config,
+      state,
+      params.resumeStackPrefix,
+      params.options.workflowCallResolver,
+      params.projectCwd,
+      params.getCwd(),
+      params.sharedRuntime.workflowCallInvocationEvidence!,
+      params.sharedRuntime.workflowStepParticipationIndex!,
+    ),
+    getWorkflowReference: () => getWorkflowReference(params.config),
+    workflowCallPath: params.resumeStackPrefix,
+    commitSelection: params.persistDynamicFacetSelection,
+    ...(params.options.selectorGitCommandRunner === undefined
+      ? {}
+      : { inputReader: new SelectorInputReader(params.options.selectorGitCommandRunner) }),
+    getUnresolvedFindings: () => {
+      if (!params.findingLedgerStore) {
+        return '';
+      }
+      const ledger = params.findingLedgerStore.loadLedger();
+      const summary = renderFindingLedgerInstructionSummary(ledger);
+      const projection = JSON.parse(summary) as { open?: readonly unknown[] };
+      if (!projection.open || projection.open.length === 0) {
+        return '';
+      }
+      return summary;
+    },
+  });
+
   const stepExecutor = new StepExecutor({
     optionsBuilder,
     getCwd: params.getCwd,
@@ -287,6 +333,8 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getRunId: () => params.runPaths.slug,
     getFindingCallNamespace: () => params.options.findingCallNamespace ?? '',
     ...phaseRelay,
+    getFacetPool: (name: string) => params.config.facetPools?.[name],
+    dynamicFacetSelectorCoordinator: dynamicFacetSelector,
   });
 
   const workflowCallRunner = new WorkflowCallRunner({

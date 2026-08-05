@@ -619,10 +619,10 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     if (normalizedParallel === undefined || !isDynamicParallelSubSteps(normalizedParallel)) {
       throw new Error('Expected normalized dynamic parallel step');
     }
-    normalizedParallel.fixed[0]!.policyContents = ['Architecture policy contract'];
-    normalizedParallel.fixed[0]!.knowledgeContents = ['Architecture knowledge contract'];
-    normalizedParallel.pool[0]!.policyContents = ['Frontend policy contract'];
-    normalizedParallel.pool[0]!.knowledgeContents = ['Frontend knowledge contract'];
+    normalizedParallel.fixed[0]!.policyContents = [{ content: 'Architecture policy contract' }];
+    normalizedParallel.fixed[0]!.knowledgeContents = [{ content: 'Architecture knowledge contract' }];
+    normalizedParallel.pool[0]!.policyContents = [{ content: 'Frontend policy contract' }];
+    normalizedParallel.pool[0]!.knowledgeContents = [{ content: 'Frontend knowledge contract' }];
     const participantCalls: Array<{
       persona: string | undefined;
       model: string | undefined;
@@ -684,8 +684,8 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       expect.objectContaining({
         name: 'architecture',
         persona: 'architecture-reviewer',
-        policyContents: ['Architecture policy contract'],
-        knowledgeContents: ['Architecture knowledge contract'],
+        policyContents: [{ content: 'Architecture policy contract' }],
+        knowledgeContents: [{ content: 'Architecture knowledge contract' }],
         outputContracts: [expect.objectContaining({
           name: 'architecture-review.md',
           format: 'Return a metadata-aware review report.',
@@ -694,8 +694,8 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       expect.objectContaining({
         name: 'frontend',
         persona: 'frontend-reviewer',
-        policyContents: ['Frontend policy contract'],
-        knowledgeContents: ['Frontend knowledge contract'],
+        policyContents: [{ content: 'Frontend policy contract' }],
+        knowledgeContents: [{ content: 'Frontend knowledge contract' }],
         outputContracts: [expect.objectContaining({
           name: 'frontend-review.md',
           format: 'Return a metadata-aware review report.',
@@ -1117,7 +1117,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       failureCategory: 'provider_error',
     });
 
-    expect(() => validateSelectorResponse(response, schema, 'reviewers', (text) => text))
+    expect(() => validateSelectorResponse(response, schema, 'reviewers', (text) => text, { label: 'Dynamic parallel' }))
       .toThrow('status "error": category "provider_error": provider rate-limit detail');
   });
 

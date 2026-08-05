@@ -46,7 +46,7 @@ import {
 } from '../../features/repertoire/pack-summary.js';
 import { getScopedProviderOptionsCandidateKey } from '../../infra/config/loaders/providerOptionsLookupDirectories.js';
 import { getScopedStepFragmentCandidateKey } from '../../infra/config/loaders/stepFragmentLookupDirectories.js';
-import { assertCopiedStepFragmentReferences } from '../../features/repertoire/step-fragment-integrity.js';
+import { assertCopiedStepFragmentReferences, assertCopiedFacetPoolReferences } from '../../features/repertoire/step-fragment-integrity.js';
 import { confirm } from '../../shared/prompt/index.js';
 import { info, success } from '../../shared/ui/index.js';
 import { sanitizeTerminalText } from '../../shared/utils/text.js';
@@ -182,6 +182,30 @@ export async function repertoireAddCommand(spec: string): Promise<void> {
       sources: [...workflowYamls.map(({ content, relativePath }) => ({ content, path: relativePath })), ...stepSources],
       packageRoot,
       copiedStepNames,
+      owner,
+      repo,
+    });
+    const facetPoolFiles = targets.filter(t => t.relativePath.startsWith('facet-pools/'));
+    const copiedPoolNames = new Set(facetPoolFiles.map((target) => target.relativePath.replace(/^facet-pools\//, '').replace(/\.ya?ml$/, '')));
+    const copiedFacetNamesByType = new Map<string, Set<string>>();
+    for (const facetFile of facetFiles) {
+      const parts = facetFile.relativePath.split('/');
+      if (parts.length >= 3 && parts[1] !== undefined && parts[2] !== undefined) {
+        const facetType = parts[1];
+        const facetName = parts[2].replace(/\.md$/, '');
+        let set = copiedFacetNamesByType.get(facetType);
+        if (set === undefined) {
+          set = new Set();
+          copiedFacetNamesByType.set(facetType, set);
+        }
+        set.add(facetName);
+      }
+    }
+    assertCopiedFacetPoolReferences({
+      sources: [...workflowYamls.map(({ content, relativePath }) => ({ content, path: relativePath })), ...stepSources],
+      packageRoot,
+      copiedPoolNames,
+      copiedFacetNamesByType,
       owner,
       repo,
     });

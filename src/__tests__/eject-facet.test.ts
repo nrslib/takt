@@ -64,6 +64,10 @@ vi.mock('../infra/config/index.js', () => ({
   getBuiltinLanguageStepsDir: () => mocks.builtinLanguageStepsDir,
   getProjectStepsDir: () => mocks.projectStepsDir,
   getGlobalStepsDir: () => mocks.globalStepsDir,
+  getBuiltinLanguageFacetPoolsDir: () => mocks.builtinDir,
+  getBuiltinLanguageResourcesDir: () => mocks.builtinDir,
+  getGlobalFacetPoolsDir: () => mocks.globalFacetDir,
+  getProjectFacetPoolsDir: () => mocks.projectFacetDir,
   invalidateGlobalConfigCache: vi.fn(),
   invalidateAllResolvedConfigCache: vi.fn(),
   isPathSafe: (basePath: string, targetPath: string) => {

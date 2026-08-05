@@ -358,6 +358,65 @@ describe('workflow selector resolution', () => {
     });
   });
 
+  it('should resolve selector configuration when only a called workflow has dynamic_facets', () => {
+    const projectDir = createProject('provider: codex\nmodel: gpt-selector\n');
+    const workflowDir = join(projectDir, '.takt', 'workflows');
+    writeFileSync(join(workflowDir, 'child.yaml'), [
+      'name: child',
+      'subworkflow:',
+      '  callable: true',
+      'initial_step: fix',
+      'max_steps: 1',
+      'facet_pools:',
+      '  fix:',
+      '    policies:',
+      '      coding: ./facets/policies/coding.md',
+      '    candidates:',
+      '      - id: backend',
+      '        description: backend facet',
+      '        policy: coding',
+      'steps:',
+      '  - name: fix',
+      '    persona: coder',
+      '    dynamic_facets:',
+      '      pool: fix',
+      '      max_selected: 1',
+      '    instruction: fix',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
+    ].join('\n'));
+    mkdirSync(join(workflowDir, 'facets', 'policies'), { recursive: true });
+    writeFileSync(join(workflowDir, 'facets', 'policies', 'coding.md'), '# coding policy\n', 'utf-8');
+    writeFileSync(join(workflowDir, 'parent.yaml'), [
+      'name: parent',
+      'initial_step: delegate',
+      'max_steps: 1',
+      'steps:',
+      '  - name: delegate',
+      '    kind: workflow_call',
+      '    call: child',
+      '    rules:',
+      '      - condition: COMPLETE',
+      '        next: COMPLETE',
+    ].join('\n'));
+    const workflow = loadWorkflowByIdentifier('parent', projectDir);
+    if (workflow === null) {
+      throw new Error('Expected parent workflow');
+    }
+
+    expect(resolveWorkflowSelector(workflow, {
+      projectCwd: projectDir,
+      lookupCwd: projectDir,
+    })).toMatchObject({
+      applies: true,
+      selectorProvider: {
+        provider: 'codex',
+        model: 'gpt-selector',
+      },
+    });
+  });
+
   it('should resolve selector configuration through a workflow_call nested in legacy parallel', () => {
     const projectDir = createProject('provider: codex\nmodel: gpt-selector\n');
     const workflowDir = join(projectDir, '.takt', 'workflows');

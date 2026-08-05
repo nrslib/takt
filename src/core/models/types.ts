@@ -111,6 +111,11 @@ export type {
   RateLimitFallbackState,
   WorkflowConfig,
   WorkflowState,
+  ResolvedFacetPool,
+  ResolvedFacetPoolCandidate,
+  ResolvedFacetContent,
+  DynamicFacetsConfig,
+  DynamicFacetSelectionSnapshot,
 } from './workflow-types.js';
 
 export {

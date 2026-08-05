@@ -477,8 +477,8 @@ steps:
 
     expect(reviewStep).toMatchObject({
       persona: expect.stringContaining('Review the delegated change'),
-      policyContents: [expect.stringContaining('strict child review checklist')],
-      knowledgeContents: [expect.stringContaining('Architecture reference content')],
+      policyContents: [expect.objectContaining({ content: expect.stringContaining('strict child review checklist') })],
+      knowledgeContents: [expect.objectContaining({ content: expect.stringContaining('Architecture reference content') })],
     });
     expect(fixStep).toMatchObject({
       instruction: expect.stringContaining('delegated instruction'),
@@ -579,7 +579,7 @@ steps:
 
     const reviewStep = childWorkflow!.steps.find((step) => step.name === 'review') as Record<string, unknown> | undefined;
     expect(reviewStep).toMatchObject({
-      knowledgeContents: [expect.stringContaining('Domain reference content')],
+      knowledgeContents: [expect.objectContaining({ content: expect.stringContaining('Domain reference content') })],
     });
   });
 
@@ -652,7 +652,7 @@ steps:
     expect(childWorkflow).not.toBeNull();
     expect(childWorkflow?.name).toBe('child-b');
     expect(childWorkflow?.steps[0]).toMatchObject({
-      policyContents: [expect.stringContaining('relaxed child policy')],
+      policyContents: [expect.objectContaining({ content: expect.stringContaining('relaxed child policy') })],
     });
   });
 
@@ -720,8 +720,8 @@ steps:
     const reviewStep = childWorkflow!.steps.find((step) => step.name === 'review') as Record<string, unknown> | undefined;
 
     expect(reviewStep).toMatchObject({
-      policyContents: [expect.stringContaining('strict child review checklist')],
-      knowledgeContents: [expect.stringContaining('Architecture reference content')],
+      policyContents: [expect.objectContaining({ content: expect.stringContaining('strict child review checklist') })],
+      knowledgeContents: [expect.objectContaining({ content: expect.stringContaining('Architecture reference content') })],
     });
   });
 
@@ -783,13 +783,13 @@ steps:
       projectDir,
     );
 
-    expect(child?.steps[0]?.policyContents).toEqual([
+    expect(child?.steps[0]?.policyContents?.map((r) => r.content)).toEqual([
       'Base policy',
       'Domain policy A',
       'Domain policy B',
       'Final policy',
     ]);
-    expect(child?.steps[0]?.knowledgeContents).toEqual([
+    expect(child?.steps[0]?.knowledgeContents?.map((r) => r.content)).toEqual([
       'Base knowledge',
       'Domain knowledge',
       'Final knowledge',
@@ -847,8 +847,8 @@ steps:
       projectDir,
     );
 
-    expect(child?.steps[0]?.policyContents).toEqual(['Base policy']);
-    expect(child?.steps[0]?.knowledgeContents).toEqual(['Base knowledge']);
+    expect(child?.steps[0]?.policyContents?.map((r) => r.content)).toEqual(['Base policy']);
+    expect(child?.steps[0]?.knowledgeContents?.map((r) => r.content)).toEqual(['Base knowledge']);
   });
 
   it('resolves a workflow_ref param before the nested workflow_call target boundary', () => {
@@ -1836,7 +1836,7 @@ steps:
 
       expect(childWorkflow).not.toBeNull();
       expect(childWorkflow?.steps[0]).toMatchObject({
-        knowledgeContents: [expect.stringContaining('Project child local knowledge.')],
+        knowledgeContents: [expect.objectContaining({ content: expect.stringContaining('Project child local knowledge.') })],
       });
     } finally {
       rmSync(worktreeDir, { recursive: true, force: true });

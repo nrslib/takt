@@ -46,9 +46,11 @@ my-takt-repertoire/
     review-readonly.yaml
   steps/
     final-gate.yaml
+  facet-pools/
+    implementation-fix.yaml
 ```
 
-Only `facets/`, `workflows/`, `provider-options/`, and `steps/` directories are imported. Other files are ignored.
+Only `facets/`, `workflows/`, `provider-options/`, `steps/`, and `facet-pools/` directories are imported. Other files are ignored.
 
 ### takt-repertoire.yaml
 
@@ -87,7 +89,7 @@ Before installing, TAKT displays a summary of the package contents (facet counts
 ### What happens during install
 
 1. Downloads the tarball from GitHub via `gh api`
-2. Extracts package files from `facets/`, `workflows/`, and `provider-options/` (`.md`, `.yaml`, `.yml`), plus root-level `.yaml` / `.yml` step fragments from `steps/`
+2. Extracts package files from `facets/`, `workflows/`, `provider-options/`, `facet-pools/`, and `steps/` (`.md`, `.yaml`, `.yml`), plus root-level `.yaml` / `.yml` step fragments from `steps/`
 3. Validates the `takt-repertoire.yaml` manifest
 4. Checks TAKT version compatibility
 5. Copies files to `~/.takt/repertoire/@{owner}/{repo}/`
@@ -187,4 +189,6 @@ Installed packages are stored under `~/.takt/repertoire/`:
         review-readonly.yaml
       steps/                   # Reusable step fragments
         final-gate.yaml
+      facet-pools/             # Reusable dynamic facet pool resources
+        implementation-fix.yaml
 ```

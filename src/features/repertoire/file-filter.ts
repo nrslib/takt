@@ -12,7 +12,7 @@ export const ALLOWED_EXTENSIONS = Object.freeze(['.md', '.yaml', '.yml'] as cons
 export const STEP_FRAGMENT_EXTENSIONS = Object.freeze(['.yaml', '.yml'] as const);
 
 /** Top-level package directories that can be copied. */
-export const ALLOWED_DIRS = Object.freeze(['facets', 'workflows', 'provider-options', 'steps'] as const);
+export const ALLOWED_DIRS = Object.freeze(['facets', 'workflows', 'provider-options', 'steps', 'facet-pools'] as const);
 
 export const MAX_FILE_SIZE = 1024 * 1024;
 

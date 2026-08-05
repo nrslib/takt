@@ -194,6 +194,7 @@ export interface WorkflowSharedRuntimeState {
   maxSteps?: WorkflowMaxSteps;
   restartNavigator?: import('./engine/WorkflowRestartNavigator.js').WorkflowRestartNavigator;
   dynamicParallelSelectionStore?: DynamicParallelSelectionStore;
+  dynamicFacetSelectionStore?: import('./dynamic-facets/dynamicFacetSelectionStore.js').DynamicFacetSelectionStore;
   workflowCallInvocationEvidence?: WorkflowCallInvocationEvidence;
   workflowStepParticipationIndex?: WorkflowStepParticipationIndex;
 }

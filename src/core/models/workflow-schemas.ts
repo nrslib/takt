@@ -299,6 +299,61 @@ export const ArpeggioConfigRawSchema = z.object({
   output_path: z.string().optional(),
 });
 
+export const FacetPoolCandidateRawSchema = z.object({
+  id: z.string().trim().min(1),
+  description: z.string().trim().min(1),
+  policy: z.union([z.string().min(1), z.array(z.string().min(1)).min(1)]).optional(),
+  knowledge: z.union([z.string().min(1), z.array(z.string().min(1)).min(1)]).optional(),
+}).strict().superRefine((candidate, ctx) => {
+  if (candidate.policy === undefined && candidate.knowledge === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['id'],
+      message: 'Facet pool candidate requires at least one of "policy" or "knowledge"',
+    });
+  }
+});
+
+export const InlineFacetPoolRawSchema = z.object({
+  policies: z.record(z.string(), z.string()).optional(),
+  knowledge: z.record(z.string(), z.string()).optional(),
+  candidates: z.array(FacetPoolCandidateRawSchema).min(1),
+}).strict().superRefine((pool, ctx) => {
+  const ids = new Set<string>();
+  for (const [index, candidate] of pool.candidates.entries()) {
+    if (ids.has(candidate.id)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['candidates', index, 'id'],
+        message: `Facet pool candidate id "${candidate.id}" is duplicate within this pool`,
+      });
+    }
+    ids.add(candidate.id);
+  }
+});
+
+export const ExternalFacetPoolRawSchema = z.object({
+  uses: z.string().min(1),
+}).strict();
+
+export const FacetPoolRawSchema = z.union([
+  InlineFacetPoolRawSchema,
+  ExternalFacetPoolRawSchema,
+]).superRefine((pool, ctx) => {
+  if ('uses' in pool && ('policies' in pool || 'knowledge' in pool || 'candidates' in pool)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['uses'],
+      message: 'Facet pool "uses" cannot be combined with inline "policies", "knowledge", or "candidates"',
+    });
+  }
+});
+
+export const DynamicFacetsRawSchema = z.object({
+  pool: z.string().min(1),
+  max_selected: z.number().int().positive(),
+}).strict();
+
 /** Team leader configuration schema for dynamic part decomposition */
 export const TeamLeaderConfigRawSchema = z.object({
   mode: z.literal('finding_contract_fix').optional(),
@@ -561,6 +616,7 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
     concurrency: z.number().int().min(1).optional(),
     arpeggio: ArpeggioConfigRawSchema.optional(),
     team_leader: TeamLeaderConfigRawSchema.optional(),
+    dynamic_facets: DynamicFacetsRawSchema.optional(),
   }).refine(
     (data) => [data.parallel, data.arpeggio, data.team_leader].filter((value) => value != null).length <= 1,
     {
@@ -693,6 +749,25 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
       });
     }
 
+    if (data.dynamic_facets !== undefined && stepKind !== 'agent') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['dynamic_facets'],
+        message: 'dynamic_facets is only allowed on normal agent steps',
+      });
+    }
+
+    if (
+      data.dynamic_facets !== undefined
+      && (data.parallel !== undefined || data.arpeggio !== undefined || data.team_leader !== undefined)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['dynamic_facets'],
+        message: 'dynamic_facets is only allowed on normal agent steps',
+      });
+    }
+
     if (stepKind === 'workflow_call') {
       if (data.call === undefined) {
         ctx.addIssue({
@@ -729,6 +804,7 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
         'output_contracts',
         'quality_gates',
         'pass_previous_response',
+        'dynamic_facets',
       ] as const) {
         if (data[field] !== undefined) {
           ctx.addIssue({
@@ -904,6 +980,7 @@ export const WorkflowConfigRawSchema = z.object({
   knowledge: z.record(z.string(), z.string()).optional(),
   instructions: z.record(z.string(), z.string()).optional(),
   report_formats: z.record(z.string(), z.string()).optional(),
+  facet_pools: z.record(z.string().min(1), FacetPoolRawSchema).optional(),
   steps: z.array(WorkflowConfigStepRawSchema).min(1),
   initial_step: z.string().optional(),
   max_steps: z.union([z.number().int().positive(), z.literal('infinite')]).optional().default(10),

@@ -106,7 +106,7 @@ interface WorkflowRunLoopDeps {
     step: WorkflowStep,
     stepIteration: number,
     runtime?: RuntimeStepResolution,
-  ) => PreparedNormalStepExecution | undefined;
+  ) => Promise<PreparedNormalStepExecution | undefined>;
   resolveStepProviderModel: (step: WorkflowStep, runtime?: RuntimeStepResolution) => StepProviderInfo;
   /** auto-routing ルーター・promotion 評価への入力専用（補完前の解決）。 */
   resolveStepProviderModelBeforeAutoRouting: (step: WorkflowStep, runtime?: RuntimeStepResolution) => StepProviderInfo;
@@ -803,7 +803,7 @@ async function runWorkflowToCompletionCore(deps: WorkflowRunLoopDeps): Promise<W
       );
       const fallbackRuntime = withFallbackRuntime(deps.state, step, promotedRuntime);
       stepRuntime = await resolveStepAutoRoutingRuntime(deps, step, fallbackRuntime, step.instruction);
-      preparedExecution = deps.prepareNormalStepExecution(step, stepIteration, stepRuntime);
+      preparedExecution = await deps.prepareNormalStepExecution(step, stepIteration, stepRuntime);
       executionStep = preparedExecution?.executableStep ?? step;
       prebuiltInstruction = preparedExecution === undefined && !isDelegated
         ? deps.buildInstruction(step, stepIteration, stepRuntime?.fallback)
@@ -1153,7 +1153,7 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
   if (workflowInterruptRequested(deps)) {
     return buildInterruptedIterationResult(deps, step, loopCheck.isLoop);
   }
-  const preparedExecution = deps.prepareNormalStepExecution(step, stepIteration, stepRuntime);
+  const preparedExecution = await deps.prepareNormalStepExecution(step, stepIteration, stepRuntime);
   const executionStep = preparedExecution?.executableStep ?? step;
   const prebuiltInstruction = preparedExecution === undefined && !isDelegated
     ? deps.buildInstruction(step, stepIteration, stepRuntime?.fallback)

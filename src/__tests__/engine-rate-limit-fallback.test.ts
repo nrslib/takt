@@ -1258,7 +1258,7 @@ describe('WorkflowEngine rate limit fallback', () => {
     if (!step) {
       throw new Error('team leader step is required');
     }
-    step.policyContents = ['member policy'];
+    step.policyContents = [{ content: 'member policy' }];
     const previousTail = 'PREVIOUS_RESPONSE_TAIL: retain the complete review result';
     const onSessionUpdate = vi.fn();
     const engine = new WorkflowEngine(config, tmpDir, 'test task', createEngineOptions(tmpDir, {

@@ -14,6 +14,8 @@ import {
   getProjectProviderOptionsDir,
   getGlobalStepsDir,
   getProjectStepsDir,
+  getGlobalFacetPoolsDir,
+  getProjectFacetPoolsDir,
 } from '../../infra/config/paths.js';
 import { getWorkflowCategoriesPath } from '../../infra/config/global/index.js';
 import { findScopeReferences, shouldRemoveOwnerDir } from '../../features/repertoire/remove.js';
@@ -59,6 +61,7 @@ export async function repertoireRemoveCommand(scope: string): Promise<void> {
     workflowDirs: [getGlobalWorkflowsDir(), getProjectWorkflowsDir(process.cwd())],
     providerOptionsDirs: [getGlobalProviderOptionsDir(), getProjectProviderOptionsDir(process.cwd())],
     stepsDirs: [getGlobalStepsDir(), getProjectStepsDir(process.cwd())],
+    facetPoolsDirs: [getGlobalFacetPoolsDir(), getProjectFacetPoolsDir(process.cwd())],
     categoriesFiles: [getWorkflowCategoriesPath(process.cwd())],
   });
   if (refs.length > 0) {

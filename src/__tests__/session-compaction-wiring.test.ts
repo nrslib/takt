@@ -562,7 +562,7 @@ describe('session compaction Phase 1 wiring', () => {
     }));
 
     const executor = new StepExecutor(deps);
-    const preparedExecution = executor.prepareNormalStepExecution(step, state, 'task', 5, 1);
+    const preparedExecution = await executor.prepareNormalStepExecution(step, state, 'task', 5, 1);
     await executor.runNormalStep(
       step,
       state,

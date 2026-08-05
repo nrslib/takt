@@ -302,6 +302,232 @@ provider/model完全一致を条件として、通常Markdownと隔離extractor�
 - 現在の diff には run 開始前から存在する変更も含まれます。run 中に commit された変更は `HEAD` との差分ではなくなるため、後続の selector 入力へ残ることを保証しません。前段レポートは別の証拠として引き続き参照できます。正常な空差分は明示的に渡します。非 Git directory、Git command の取得失敗、または `HEAD` が存在しない repository は agent 起動前に失敗します。
 - 保存する参加者 manifest のキーには workflow invocation path、workflow-call instance path、parallel step を含めます。report 継承と aggregate 評価はこの manifest を使用するため、`replace` により外れた reviewer の古い report や finding は現在 round に混入しません。
 
+### Dynamic Facet Selection（facet pool）
+
+通常の agent step は、main agent の起動直前に、検証済み候補 pool から追加の `policy` / `knowledge` facet を動的に選択できます。step が既に宣言している固定 facet は維持したまま、現在の状況が必要とする facet だけを追加します。例えば、レビューで transaction 境界の懸念が指摘された後にだけ transaction-correctness policy を選ぶ、といった運用が可能です。
+
+pool はトップレベルの `facet_pools` map に定義し、step から `dynamic_facets` で参照します。pool は workflow 内に inline で定義するか、外部 resource ファイルとして定義できます。
+
+#### inline pool
+
+inline pool は workflow YAML 内に直接記述します。候補の `policy` / `knowledge` 参照は、通常の step と同じ workflow-local facet namespace で解決します。workflow の `policies` / `knowledge` section map による alias と、通常の bare facet lookup の両方が使えます。
+
+```yaml
+name: backend-fix
+
+policies:
+  transaction-correctness: ../facets/policies/transaction-correctness.md
+  backward-compatibility: ../facets/policies/backward-compatibility.md
+
+knowledge:
+  backend-api: ../facets/knowledge/backend-api.md
+  database-transaction: ../facets/knowledge/database-transaction.md
+
+facet_pools:
+  fix:
+    candidates:
+      - id: backend
+        description: API、repository、server-side 実装を扱う
+        knowledge: backend-api
+      - id: transaction
+        description: transaction 境界、rollback、排他制御を扱う
+        policy: transaction-correctness
+        knowledge: database-transaction
+      - id: backward-compatibility
+        description: 公開 API や schema の互換性を維持する
+        policy: backward-compatibility
+
+steps:
+  - name: fix
+    persona: coder
+    policy: [coding, testing]
+    knowledge: architecture
+    dynamic_facets:
+      pool: fix
+      max_selected: 4
+    instruction: fix
+    edit: true
+    rules:
+      - condition: 修正が完了した
+        next: review
+```
+
+#### external pool
+
+workflow は inline 定義の代わりに `uses` で名前付き外部 pool resource を参照できます。外部 pool は自己完結しており、候補の facet 参照は pool ファイル自身の `policies` / `knowledge` section map のみで解決し、相対 path は pool ファイル基準です。外部 pool は caller workflow の同名 alias を暗黙に capture せず、caller から pool の候補や section map を merge/override できません。
+
+```yaml
+facet_pools:
+  fix:
+    uses: implementation-fix
+
+steps:
+  - name: fix
+    persona: coder
+    policy: [coding, testing]
+    knowledge: architecture
+    dynamic_facets:
+      pool: fix
+      max_selected: 4
+    instruction: fix
+    edit: true
+    rules:
+      - condition: 修正が完了した
+        next: review
+```
+
+参照先 `facet-pools/implementation-fix.yaml` は1つの pool resource を定義します。
+
+```yaml
+policies:
+  transaction-correctness: ../facets/policies/transaction-correctness.md
+  backward-compatibility: ../facets/policies/backward-compatibility.md
+
+knowledge:
+  backend-api: ../facets/knowledge/backend-api.md
+  database-transaction: ../facets/knowledge/database-transaction.md
+
+candidates:
+  - id: backend
+    description: API、repository、server-side 実装を扱う
+    knowledge: backend-api
+  - id: transaction
+    description: transaction 境界、rollback、排他制御を扱う
+    policy: transaction-correctness
+    knowledge: database-transaction
+  - id: backward-compatibility
+    description: 公開 API や schema の互換性を維持する
+    policy: backward-compatibility
+```
+
+外部 pool ファイルは nested `uses`、`params`、`$param` を受け付けません。1つの pool entry で `uses` と inline の `policies` / `knowledge` / `candidates` を混在させるとロード時に失敗します。
+
+#### 外部 pool の探索
+
+名前付き pool は step fragment と同じ階層で探索します。
+
+1. package-local `facet-pools/`（repertoire package 由来の workflow の場合）
+2. project `.takt/facet-pools/`
+3. global `$TAKT_CONFIG_DIR/facet-pools/`
+4. 言語固有 builtin `builtins/<lang>/facet-pools/`
+5. 共有 builtin `builtins/facet-pools/`
+
+bare name は各層で `<name>.yaml` を `<name>.yml` より優先して最初の一致を採用します。`@owner/repo/name` で repertoire package を明示できます。絶対 path、directory traversal、nested path、root 外 symlink、非通常ファイル、読み取り不能、size 上限超過を拒否します。provenance と依存 resource は `doctor`、`preview`、`eject`、`repertoire install` / `remove` で追跡できるように保持します。
+
+#### candidate 契約
+
+pool 内の全候補は同じ形を持ちます。
+
+```yaml
+- id: transaction
+  description: transaction 境界と rollback を扱う
+  policy:
+    - transaction-correctness
+  knowledge:
+    - database-transaction
+```
+
+- `id` は pool 内で空でなく一意です。
+- `description` は空でない文字列です。
+- `policy` と `knowledge` は scalar または空でない配列です。
+- `policy` または `knowledge` の少なくとも一方が必須です。
+- 候補は単一 facet または小さな facet bundle を表せます。
+- selector は複数候補を選択できます。
+- 空選択は「追加 facet 不要」として正常です。
+- 同一 pool 内の全候補は任意に組み合わせ可能とするのが pool author の契約です。`requires`、`conflicts_with`、排他 group は MVP では導入しません。
+
+#### selector 契約
+
+`dynamic_facets` を持つ step へ進入したとき、TAKT は main agent 起動前に内部の read-only selector を実行します。selector は workflow step ではなく、agent や workflow 定義を生成・変更できず、read-only 権限、permission bypass 無効、MCP server 非継承、TAKT が所有する structured output contract で fresh session で実行します。
+
+selector には少なくとも次を渡します。
+
+- ユーザー要求
+- leaf workflow、workflow-call instance、step の identity
+- 初回進入か再進入か、および step iteration
+- 現在の workflow-call scope から参照できる前段 report
+- 未解決 finding
+- タスク開始時点からの累積差分
+- 候補 ID と description
+
+facet 本文は selector に渡しません。selector は厳格な structured output schema（`additionalProperties: false`、`selected_ids` は pool の候補 ID を `enum` とする unique array、加えて必須の `rationale` 文字列）に対して候補 ID と理由だけを返します。pool 外 ID、重複 ID、`max_selected` 超過は拒否します。selector 失敗時は main agent を起動せず fail-fast し、全候補や空選択への暗黙 fallback はありません。selector 自身を dynamic facet selection や auto routing の対象にしません。
+
+selector provider は #1136 の `runtime.yaml` の `provider.targets.internal_agents.selector` で解決します。未指定時は runtime の通常 default を使います。
+
+#### facet 合成
+
+固定 facet は既存の step fields に残します。実効 facet は次の通りです。
+
+```text
+effective policy   = fixed policy   + selected dynamic policy
+effective knowledge = fixed knowledge + selected dynamic knowledge
+```
+
+- 固定 facet を先に、dynamic facet を後に配置します。
+- dynamic 側は selector 返却順ではなく pool の候補定義順で合成します。
+- 候補内では facet 記述順を維持します。
+- 同じ解決済み facet resource を複数回参照した場合は重複除去し、固定側を優先します。内容が偶然一致する別 resource は同一 facet としては扱いません。
+- security、privacy boundary、認可、必須品質条件など、AI 判断で外してはいけない facet は固定側に置きます。
+- dynamic facet から persona、instruction、provider、permission、MCP、tool、output contract を変更できません。
+
+#### round、session、resume
+
+同じ step への再進入を新しい round として扱い、毎回 selector を再実行して前回の dynamic 選択を置き換えます。累積 mode はありません。
+
+```text
+round 1: frontend を選択
+round 2: transaction を選択
+
+round 2 effective facets:
+  fixed + transaction
+```
+
+round 1 の frontend facet は round 2 に残りません。
+
+- dynamic facet を使う main agent session は round ごとに分離します。
+- 同一 round 内の provider retry/resume はその round の実効 facet 集合と session を復元し、selector を再実行しません。
+- 新しい workflow 遷移として step へ再到達した場合は新しい round として再選択します。
+- selector 結果と解決済み実効 facet 集合は main agent 起動前に runtime state へ渡します。
+- ロード時に inline/external pool を同じ `ResolvedFacetPool` へ正規化するため、実行層は inline/external を区別しません。外部 pool ファイルを実行中に再読込しません。
+
+MVP では実行途中の facet hot swap を行いません。必要領域が変わった場合は、次に同じ step に再到達した時点で再選択します。
+
+#### Fail-fast 条件
+
+ロード時に次のいずれかが成立すると実行前に失敗します。
+
+- `facet_pools` の schema 不整合
+- pool が空
+- candidate ID の重複
+- candidate の description 欠落
+- `policy` と `knowledge` 両方がない candidate
+- 未知の facet 参照または kind 不一致
+- `uses` と inline fields の混在
+- 外部 pool から caller workflow facet namespace への暗黙参照
+- 外部 pool での nested `uses`、`params`、`$param`
+- 外部 resource の探索、trust、file validation 違反
+- `dynamic_facets.pool` が未知
+- `max_selected` が不正または候補数を超える
+- 通常 agent step 以外への `dynamic_facets` 指定
+
+selector 実行時に次のいずれかが成立すると main agent 起動前に失敗します。
+
+- selector provider を解決できない
+- structured output が不成立
+- `selected_ids` が配列でない
+- 非文字列、重複、未知 ID
+- `max_selected` 超過
+
+暗黙 fallback はありません。
+
+#### package、eject、authoring tool
+
+- repertoire package で `facet-pools/` を install/remove でき、package-local / scoped pool は step fragment と同じ探索順で解決します。
+- `takt workflow eject` は参照している外部 pool とその pool が所有する facet 依存を、既存 eject 契約の衝突処理と既存ユーザーファイル優先に従ってコピーします。
+- `takt workflow doctor` は pool、candidate、facet 参照を検証します。
+- `takt workflow preview` は dynamic pool 名、候補 ID、参照 facet、source を表示します。
+- builtin の ja/en pool を提供する場合、候補 ID 集合を一致させます。
+
 ### Finding Contract manager の provider/model
 
 `finding_contract.manager` では、合成 Finding Manager step 専用の provider と model を指定できます。

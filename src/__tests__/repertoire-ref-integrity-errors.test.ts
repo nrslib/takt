@@ -19,6 +19,7 @@ const emptyConfig = {
   workflowDirs: [],
   providerOptionsDirs: [],
   stepsDirs: [],
+  facetPoolsDirs: [],
   categoriesFiles: [],
 };
 

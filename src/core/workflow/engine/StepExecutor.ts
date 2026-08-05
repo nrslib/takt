@@ -18,7 +18,11 @@ import type {
   FallbackContext,
   WorkflowConfig,
   WorkflowResumePointEntry,
+  NormalAgentWorkflowStep,
+  ResolvedFacetPool,
+  ResolvedFacetContent,
 } from '../../models/types.js';
+import { isNormalAgentWorkflowStep } from '../../models/types.js';
 import type { FindingIntakeNormalizeConfig } from '../../models/config-types.js';
 import type { StructuredCaller } from '../../../agents/structured-caller.js';
 import type { FindingManagerAuthority } from '../../models/finding-types.js';
@@ -34,6 +38,7 @@ import type {
 import type { ProviderUsageSnapshot } from '../../models/response.js';
 import { executeAgent } from '../../../agents/agent-usecases.js';
 import { InstructionBuilder } from '../instruction/InstructionBuilder.js';
+import type { DynamicFacetSelectorCoordinator } from '../dynamic-facets/dynamicFacetSelectorCoordinator.js';
 import {
   generateReportPhase,
   runReportPhase,
@@ -254,6 +259,8 @@ export interface StepExecutorDeps {
     phaseExecutionId?: string,
     iteration?: number,
   ) => void;
+  readonly dynamicFacetSelectorCoordinator?: DynamicFacetSelectorCoordinator;
+  readonly getFacetPool?: (name: string) => ResolvedFacetPool | undefined;
 }
 
 /**
@@ -289,6 +296,11 @@ export class StepExecutor {
   ): string {
     const safeStepName = slugify(stepName) || 'step';
     return `${safeStepName}.${stepIteration}.${timestamp}.md`;
+  }
+
+  private resolveDynamicFacetPool(step: NormalAgentWorkflowStep): ResolvedFacetPool | undefined {
+    if (step.dynamicFacets === undefined) return undefined;
+    return this.deps.getFacetPool?.(step.dynamicFacets.pool);
   }
 
   private buildFindingContractInstructionContext(
@@ -377,11 +389,12 @@ export class StepExecutor {
     facet: 'knowledge' | 'policy',
     stepName: string,
     stepIteration: number,
-    contents: string[] | undefined,
+    contents: readonly ResolvedFacetContent[] | undefined,
     transaction?: InstructionBuildTransaction,
   ): { content: string[]; sourcePath: string } | undefined {
     if (!contents || contents.length === 0) return undefined;
-    const merged = contents.join('\n\n---\n\n');
+    const contentStrings = contents.map((c) => c.content);
+    const merged = contentStrings.join('\n\n---\n\n');
     const timestamp = StepExecutor.buildTimestamp();
     const runPaths = this.deps.getRunPaths();
     const directoryRel = facet === 'knowledge'
@@ -457,14 +470,14 @@ export class StepExecutor {
     );
   }
 
-  prepareNormalStepExecution(
+  async prepareNormalStepExecution(
     step: WorkflowStep,
     state: WorkflowState,
     task: string,
     maxSteps: number | 'infinite',
     stepIteration: number,
     runtime?: RuntimeStepResolution,
-  ): PreparedNormalStepExecution {
+  ): Promise<PreparedNormalStepExecution> {
     const findingContractIntakeStep = this.resolveFindingContractIntakeStep(step);
     const reviewerRuntime = findingContractIntakeStep === undefined
       ? runtime
@@ -481,13 +494,36 @@ export class StepExecutor {
           reviewerOutputStrategy,
         )
       : this.buildFindingContractInstructionContext(step, undefined);
-    const executableStep = findingContractIntakeStep
+    let executableStep = findingContractIntakeStep
       && reviewerOutputStrategy?.reportGeneration === 'structured'
       ? withFindingContractStructuredOutput(
           findingContractIntakeStep,
           findingContractContext,
         )
       : step as AgentWorkflowStep;
+    if (
+      isNormalAgentWorkflowStep(step)
+      && step.dynamicFacets !== undefined
+      && this.deps.dynamicFacetSelectorCoordinator !== undefined
+    ) {
+      const pool = this.resolveDynamicFacetPool(step);
+      if (pool === undefined) {
+        throw new Error(
+          `Configuration error: step "${step.name}" references unknown facet pool "${step.dynamicFacets.pool}"`,
+        );
+      }
+      const result = await this.deps.dynamicFacetSelectorCoordinator.resolveDynamicFacets(
+        step,
+        state,
+        task,
+        pool,
+      );
+      executableStep = {
+        ...executableStep,
+        policyContents: result.effectivePolicyContents.map((content) => ({ content })),
+        knowledgeContents: result.effectiveKnowledgeContents.map((content) => ({ content })),
+      } as AgentWorkflowStep;
+    }
     const instruction = this.buildInstruction(
       executableStep,
       stepIteration,
@@ -1606,9 +1642,13 @@ export class StepExecutor {
       workflowCallVars: this.deps.getWorkflowCallVars?.(),
       retryNote: this.deps.getRetryNote(),
       prContext: this.deps.getPrContext?.(),
-      policyContents: policySnapshot?.content ?? step.policyContents,
+      policyContents: policySnapshot
+        ? policySnapshot.content.map((content) => ({ content, sourcePath: policySnapshot.sourcePath }))
+        : step.policyContents,
       policySourcePath: policySnapshot?.sourcePath,
-      knowledgeContents: knowledgeSnapshot?.content ?? step.knowledgeContents,
+      knowledgeContents: knowledgeSnapshot
+        ? knowledgeSnapshot.content.map((content) => ({ content, sourcePath: knowledgeSnapshot.sourcePath }))
+        : step.knowledgeContents,
       knowledgeSourcePath: knowledgeSnapshot?.sourcePath,
       previousResponseSourcePath: state.previousResponseSourcePath,
       fallbackContext,

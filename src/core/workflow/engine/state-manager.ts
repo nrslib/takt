@@ -7,6 +7,7 @@
 
 import {
   isDynamicParallelSubSteps,
+  isNormalAgentWorkflowStep,
   type WorkflowState,
   type WorkflowConfig,
   type AgentResponse,
@@ -21,6 +22,7 @@ import {
 } from '../workflow-reference.js';
 import { buildDynamicParallelSelectionIdentity } from '../dynamic-parallel/identity.js';
 import { restoreAndValidateDynamicParallelSelections } from '../dynamic-parallel/resume-state.js';
+import { restoreAndValidateDynamicFacetSelections } from '../dynamic-facets/dynamicFacetResumeState.js';
 
 /**
  * Manages workflow execution state.
@@ -52,6 +54,7 @@ export class StateManager {
       ? new Map(Object.entries(resumeEntry.step_iterations ?? {}))
       : new Map<string, number>();
     const dynamicParallelSelections = restoreAndValidateDynamicParallelSelections(config, options);
+    const dynamicFacetSelections = restoreAndValidateDynamicFacetSelections(config, options);
     const isResumeTarget = resumeEntry !== undefined
       && resumeEntry.step === currentStep
       && workflowEntryMatchesWorkflow(resumeEntry, config);
@@ -82,6 +85,39 @@ export class StateManager {
       );
     }
 
+    const dynamicFacetSelectionIdentity = currentStepConfig !== undefined
+      && isNormalAgentWorkflowStep(currentStepConfig)
+      && currentStepConfig.dynamicFacets !== undefined
+      ? buildDynamicParallelSelectionIdentity(config, currentStep, options.resumeStackPrefix ?? [])
+      : undefined;
+    const savedFacetSelectionForCurrentStep = dynamicFacetSelectionIdentity === undefined
+      ? undefined
+      : dynamicFacetSelections.get(dynamicFacetSelectionIdentity);
+    if (
+      isResumeTarget
+      && currentStepConfig !== undefined
+      && isNormalAgentWorkflowStep(currentStepConfig)
+      && currentStepConfig.dynamicFacets !== undefined
+      && savedFacetSelectionForCurrentStep === undefined
+    ) {
+      throw new Error(
+        `Dynamic facet selection snapshot is required to resume "${currentStep}"`,
+      );
+    }
+    if (
+      savedFacetSelectionForCurrentStep !== undefined
+      && savedFacetSelectionForCurrentStep.step_name !== currentStep
+    ) {
+      throw new Error(
+        `Dynamic facet selection snapshot step_name does not match resumed step "${currentStep}"`,
+      );
+    }
+    const dynamicFacetResumeSeed = isResumeTarget
+      && dynamicFacetSelectionIdentity !== undefined
+      && savedFacetSelectionForCurrentStep !== undefined
+      ? new Set([dynamicFacetSelectionIdentity])
+      : new Set<string>();
+
     this.state = {
       workflowName: config.name,
       currentStep,
@@ -107,6 +143,13 @@ export class StateManager {
         || savedSelectionForCurrentStep === undefined
         ? {}
         : { activeDynamicParallelSelectionIdentity: dynamicParallelSelectionIdentity }),
+      dynamicFacetSelections,
+      resumedDynamicFacetSteps: dynamicFacetResumeSeed,
+      ...(!isResumeTarget
+        || dynamicFacetSelectionIdentity === undefined
+        || savedFacetSelectionForCurrentStep === undefined
+        ? {}
+        : { activeDynamicFacetSelectionIdentity: dynamicFacetSelectionIdentity }),
       status: 'running',
     };
   }

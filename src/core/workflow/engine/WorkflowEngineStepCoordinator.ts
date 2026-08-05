@@ -47,7 +47,7 @@ interface WorkflowEngineStepCoordinatorDeps {
       maxSteps: WorkflowMaxSteps,
       stepIteration: number,
       runtime?: RuntimeStepResolution,
-    ) => PreparedNormalStepExecution;
+    ) => Promise<PreparedNormalStepExecution>;
     buildInstruction: (
       step: WorkflowStep,
       stepIteration: number,
@@ -352,11 +352,11 @@ export class WorkflowEngineStepCoordinator {
     );
   }
 
-  prepareNormalStepExecution(
+  async prepareNormalStepExecution(
     step: WorkflowStep,
     stepIteration: number,
     runtime?: RuntimeStepResolution,
-  ): PreparedNormalStepExecution | undefined {
+  ): Promise<PreparedNormalStepExecution | undefined> {
     if (
       (step.name === FINDING_CONFLICT_ADJUDICATION_STEP && step.engineSynthesized === true)
       || isDelegatedWorkflowStep(step)

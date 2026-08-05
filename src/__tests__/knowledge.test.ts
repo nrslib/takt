@@ -185,7 +185,7 @@ describe('normalizeWorkflowConfig knowledge resolution', () => {
 
     expect(workflow.knowledge).toBeDefined();
     expect(workflow.knowledge!['frontend']).toBe(frontendKnowledge);
-    expect(workflow.steps[0].knowledgeContents).toEqual([frontendKnowledge]);
+    expect(workflow.steps[0].knowledgeContents!.map((r) => r.content)).toEqual([frontendKnowledge]);
   });
 
   it('should resolve multiple knowledge references', () => {
@@ -213,8 +213,8 @@ describe('normalizeWorkflowConfig knowledge resolution', () => {
     const workflow = normalizeWorkflowConfig(raw, tempDir);
 
     expect(workflow.steps[0].knowledgeContents).toHaveLength(2);
-    expect(workflow.steps[0].knowledgeContents).toContain(frontendKnowledge);
-    expect(workflow.steps[0].knowledgeContents).toContain(backendKnowledge);
+    expect(workflow.steps[0].knowledgeContents!.map((r) => r.content)).toContain(frontendKnowledge);
+    expect(workflow.steps[0].knowledgeContents!.map((r) => r.content)).toContain(backendKnowledge);
   });
 
   it('should resolve knowledge on parallel sub-steps', () => {
@@ -245,7 +245,7 @@ describe('normalizeWorkflowConfig knowledge resolution', () => {
     const workflow = normalizeWorkflowConfig(raw, tempDir);
 
     expect(workflow.steps[0].parallel).toHaveLength(1);
-    expect(workflow.steps[0].parallel![0].knowledgeContents).toEqual([securityKnowledge]);
+    expect(workflow.steps[0].parallel![0].knowledgeContents!.map((r) => r.content)).toEqual([securityKnowledge]);
   });
 
   it('should handle inline knowledge content', () => {
@@ -267,7 +267,7 @@ describe('normalizeWorkflowConfig knowledge resolution', () => {
     const workflow = normalizeWorkflowConfig(raw, tempDir);
 
     expect(workflow.knowledge!['inline']).toBe('This is inline knowledge content.');
-    expect(workflow.steps[0].knowledgeContents).toEqual(['This is inline knowledge content.']);
+    expect(workflow.steps[0].knowledgeContents!.map((r) => r.content)).toEqual(['This is inline knowledge content.']);
   });
 
   it('should handle direct file path reference without workflow-level map', () => {
@@ -288,7 +288,7 @@ describe('normalizeWorkflowConfig knowledge resolution', () => {
 
     const workflow = normalizeWorkflowConfig(raw, tempDir);
 
-    expect(workflow.steps[0].knowledgeContents).toEqual([directKnowledge]);
+    expect(workflow.steps[0].knowledgeContents!.map((r) => r.content)).toEqual([directKnowledge]);
   });
 
   it('should treat non-file reference as inline content when knowledge reference not found in map', () => {
@@ -307,7 +307,7 @@ describe('normalizeWorkflowConfig knowledge resolution', () => {
     const workflow = normalizeWorkflowConfig(raw, tempDir);
 
     // Non-.md references that are not in the knowledge map are treated as inline content
-    expect(workflow.steps[0].knowledgeContents).toEqual(['nonexistent']);
+    expect(workflow.steps[0].knowledgeContents!.map((r) => r.content)).toEqual(['nonexistent']);
   });
 });
 
@@ -351,7 +351,7 @@ describe('knowledge and policy coexistence', () => {
 
     expect(workflow.policies!['coding']).toBe(policyContent);
     expect(workflow.knowledge!['frontend']).toBe(knowledgeContent);
-    expect(workflow.steps[0].policyContents).toEqual([policyContent]);
-    expect(workflow.steps[0].knowledgeContents).toEqual([knowledgeContent]);
+    expect(workflow.steps[0].policyContents!.map((r) => r.content)).toEqual([policyContent]);
+    expect(workflow.steps[0].knowledgeContents!.map((r) => r.content)).toEqual([knowledgeContent]);
   });
 });

@@ -25,12 +25,14 @@ import { normalizeAutoRoutingConfig, normalizeRateLimitFallback, normalizeRuntim
 import type {
   FacetResolutionContext,
   ResolvedSectionMap,
+  ResolvedFacetContent,
   WorkflowSections,
 } from './resource-resolver.js';
 import {
   extractPersonaDisplayName,
   resolvePersona,
   resolveRefToContent,
+  resolveRefToContentWithSource,
   resolveSectionMapWithSource,
   unwrapResolvedSectionMap,
 } from './resource-resolver.js';
@@ -40,6 +42,8 @@ import {
 } from './workflowNormalizationPolicies.js';
 import { normalizeLoopMonitors } from './workflowLoopMonitorNormalizer.js';
 import { normalizeProviderReference, normalizeStepFromRaw } from './workflowStepNormalizer.js';
+import { compileFacetPool, type FacetPoolCompilationInput } from './facetPoolCompiler.js';
+import type { ResolvedFacetPool } from '../../../core/models/index.js';
 import {
   expandCallableSubworkflowRaw,
   type WorkflowCallArgResolutionPolicy,
@@ -94,12 +98,14 @@ function resolveFindingManagerAdditions(input: {
   kind: 'policies' | 'knowledge';
   field: 'policy' | 'knowledge';
   context?: FacetResolutionContext;
-}): string[] | undefined {
-  return input.refs?.map((ref, index) => {
+}): readonly ResolvedFacetContent[] | undefined {
+  if (input.refs === undefined) return undefined;
+  const contents: ResolvedFacetContent[] = [];
+  input.refs.forEach((ref, index) => {
     const fieldPath = `finding_contract.manager.${input.field}[${index}]`;
-    let content: string | undefined;
+    let resolved: ResolvedFacetContent | undefined;
     try {
-      content = resolveRefToContent(
+      resolved = resolveRefToContentWithSource(
         ref,
         input.resolved,
         input.workflowDir,
@@ -112,13 +118,14 @@ function resolveFindingManagerAdditions(input: {
         { cause: error },
       );
     }
-    if (content === undefined) {
+    if (resolved === undefined) {
       throw new Error(
         `Configuration error: failed to resolve ${fieldPath} "${ref}"`,
       );
     }
-    return content;
+    contents.push(resolved);
   });
+  return contents.length > 0 ? contents : undefined;
 }
 
 type RawFindingContractAdjudicator = NonNullable<
@@ -472,6 +479,8 @@ export function normalizeWorkflowConfig(
 
   const loopMonitors = normalizeLoopMonitors(parsed.loop_monitors, workflowDir, sections, context);
   validateDynamicParallelContracts(steps, ['steps']);
+  const facetPools = compileWorkflowFacetPools(parsed.facet_pools, workflowDir, context, sections);
+  validateDynamicFacetsReferences(parsed.steps, facetPools);
   const findingContract = normalizeFindingContractConfig(parsed.finding_contract, workflowDir, sections, context);
   validateFindingsRulesRequireContract(
     parsed.steps,
@@ -503,6 +512,7 @@ export function normalizeWorkflowConfig(
     maxSteps: parsed.max_steps,
     loopMonitors,
     interactiveMode: parsed.interactive_mode,
+    ...(facetPools === undefined ? {} : { facetPools }),
   };
   registerWorkflowFragmentErrorSource(config, parsedRaw, workflowPath ?? workflowDir);
   return config;
@@ -513,4 +523,61 @@ export function normalizeWorkflowConfig(
       workflowPath ?? workflowDir,
     );
   }
+}
+
+type RawFacetPools = NonNullable<ReturnType<typeof WorkflowConfigRawSchema.parse>['facet_pools']>;
+type RawWorkflowSteps = ReturnType<typeof WorkflowConfigRawSchema.parse>['steps'];
+
+function validateDynamicFacetsReferences(
+  steps: RawWorkflowSteps,
+  facetPools: Record<string, ResolvedFacetPool> | undefined,
+): void {
+  for (const [index, step] of steps.entries()) {
+    if (step.dynamic_facets === undefined) continue;
+    const poolName = step.dynamic_facets.pool;
+    const pool = facetPools?.[poolName];
+    if (pool === undefined) {
+      throw withWorkflowStepErrorPath(
+        new Error(`Configuration error: step "${step.name}" references unknown facet pool "${poolName}"`),
+        ['steps', index, 'dynamic_facets', 'pool'],
+      );
+    }
+    const candidateCount = pool.candidates.length;
+    if (step.dynamic_facets.max_selected > candidateCount) {
+      throw withWorkflowStepErrorPath(
+        new Error(
+          `Configuration error: step "${step.name}" dynamic_facets.max_selected (${step.dynamic_facets.max_selected}) exceeds candidate count (${candidateCount}) of pool "${poolName}"`,
+        ),
+        ['steps', index, 'dynamic_facets', 'max_selected'],
+      );
+    }
+  }
+}
+
+function compileWorkflowFacetPools(
+  raw: RawFacetPools | undefined,
+  workflowDir: string,
+  context: FacetResolutionContext | undefined,
+  sections: WorkflowSections,
+): Record<string, ResolvedFacetPool> | undefined {
+  if (!raw) return undefined;
+  const result: Record<string, ResolvedFacetPool> = {};
+  for (const [name, pool] of Object.entries(raw)) {
+    const input: FacetPoolCompilationInput = 'uses' in pool
+      ? { kind: 'external', name, ref: pool.uses }
+      : {
+        kind: 'inline',
+        name,
+        policies: pool.policies,
+        knowledge: pool.knowledge,
+        candidates: pool.candidates.map((c) => ({
+          id: c.id,
+          description: c.description,
+          ...(c.policy === undefined ? {} : { policy: c.policy }),
+          ...(c.knowledge === undefined ? {} : { knowledge: c.knowledge }),
+        })),
+      };
+    result[name] = compileFacetPool(input, workflowDir, context, { workflowSections: sections });
+  }
+  return result;
 }

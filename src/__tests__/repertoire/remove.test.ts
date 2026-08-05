@@ -41,6 +41,8 @@ vi.mock('../../infra/config/paths.js', () => ({
   getProjectProviderOptionsDir: vi.fn().mockReturnValue('/project/.takt/provider-options'),
   getGlobalStepsDir: vi.fn().mockReturnValue('/home/user/.takt/steps'),
   getProjectStepsDir: vi.fn().mockReturnValue('/project/.takt/steps'),
+  getGlobalFacetPoolsDir: vi.fn().mockReturnValue('/home/user/.takt/facet-pools'),
+  getProjectFacetPoolsDir: vi.fn().mockReturnValue('/project/.takt/facet-pools'),
 }));
 
 vi.mock('../../infra/config/global/index.js', () => ({
@@ -99,6 +101,8 @@ describe('repertoireRemoveCommand — scan configuration', () => {
     expect(scanConfig.providerOptionsDirs).toHaveLength(2);
 
     expect(scanConfig.stepsDirs).toHaveLength(2);
+
+    expect(scanConfig.facetPoolsDirs).toHaveLength(2);
 
     // Then: exactly 1 categories file
     expect(scanConfig.categoriesFiles).toHaveLength(1);

@@ -12,6 +12,7 @@ export function makeScanConfig(tempDir: string): ScanConfig {
     workflowDirs: [join(tempDir, 'workflows'), join(tempDir, '.takt', 'workflows')],
     providerOptionsDirs: [join(tempDir, 'provider-options'), join(tempDir, '.takt', 'provider-options')],
     stepsDirs: [join(tempDir, 'steps'), join(tempDir, '.takt', 'steps')],
+    facetPoolsDirs: [join(tempDir, 'facet-pools'), join(tempDir, '.takt', 'facet-pools')],
     categoriesFiles: [join(tempDir, 'preferences', 'workflow-categories.yaml')],
   };
 }

@@ -27,9 +27,11 @@ vi.mock('../../infra/config/paths.js', () => ({
   getGlobalProviderOptionsDir: () => '/global/provider-options',
   getGlobalStepsDir: () => '/global/steps',
   getGlobalWorkflowsDir: () => '/global/workflows',
+  getGlobalFacetPoolsDir: () => '/global/facet-pools',
   getProjectProviderOptionsDir: () => '/project/.takt/provider-options',
   getProjectStepsDir: () => '/project/.takt/steps',
   getProjectWorkflowsDir: () => '/project/.takt/workflows',
+  getProjectFacetPoolsDir: () => '/project/.takt/facet-pools',
   getRepertoireDir: () => '/home/user/.takt/repertoire',
   getRepertoirePackageDir: () => '/home/user/.takt/repertoire/@owner/repo',
 }));

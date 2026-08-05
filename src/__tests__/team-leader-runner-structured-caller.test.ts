@@ -142,8 +142,8 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       personaDisplayName: 'coder',
       instruction: 'Task: {task}',
       passPreviousResponse: true,
-      policyContents: ['member policy'],
-      knowledgeContents: ['member knowledge'],
+      policyContents: [{ content: 'member policy' }],
+      knowledgeContents: [{ content: 'member knowledge' }],
       qualityGates: ['member quality gate'],
       providerOptions: {
         opencode: {
@@ -238,8 +238,8 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         name: 'implement.part-1',
         instruction: 'Implement API',
         passPreviousResponse: false,
-        policyContents: ['member policy'],
-        knowledgeContents: ['member knowledge'],
+        policyContents: [{ content: 'member policy' }],
+        knowledgeContents: [{ content: 'member knowledge' }],
         qualityGates: ['member quality gate'],
         session: 'refresh',
       }),

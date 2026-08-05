@@ -126,7 +126,7 @@ export class DynamicParallelSelectorCoordinator {
         },
       );
       signal?.throwIfAborted();
-      selectorResult = validateSelectorResponse(response, outputSchema, step.name, redact);
+      selectorResult = validateSelectorResponse(response, outputSchema, step.name, redact, { label: 'Dynamic parallel' });
       signal?.throwIfAborted();
       const selectedIds = selectorResult.selectedIds;
       selected = new Set(step.parallel.selection.mode === 'cumulative'

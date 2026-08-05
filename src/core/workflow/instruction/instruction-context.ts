@@ -11,6 +11,7 @@ import type {
   WorkflowMaxSteps,
   WorkflowState,
   WorkflowStructuredOutput,
+  ResolvedFacetContent,
 } from '../../models/types.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 import type { PullRequestContext } from '../pr-context.js';
@@ -112,11 +113,11 @@ export interface InstructionContext {
   /** Structured PR context resolved at the execution boundary. */
   prContext?: PullRequestContext;
   /** Resolved policy content strings for injection into instruction */
-  policyContents?: string[];
+  policyContents?: readonly ResolvedFacetContent[];
   /** Source path for policy snapshot */
   policySourcePath?: string;
   /** Resolved knowledge content strings for injection into instruction */
-  knowledgeContents?: string[];
+  knowledgeContents?: readonly ResolvedFacetContent[];
   /** Source path for knowledge snapshot */
   knowledgeSourcePath?: string;
   /** Workflow state for context/structured/effect interpolation */

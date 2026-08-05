@@ -14,10 +14,12 @@ import {
   getPreviousOutput,
 } from '../core/workflow/engine/state-manager.js';
 import { MAX_USER_INPUTS, MAX_INPUT_LENGTH } from '../core/workflow/constants.js';
-import type { WorkflowConfig, AgentResponse, WorkflowState } from '../core/models/types.js';
+import type { WorkflowConfig, AgentResponse, WorkflowState, DynamicFacetSelectionSnapshot } from '../core/models/types.js';
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 import { buildWorkflowResumePointEntry } from '../core/workflow/workflow-reference.js';
 import { buildDynamicParallelSelectionIdentity } from '../core/workflow/dynamic-parallel/identity.js';
+import { cloneWorkflowResumePoint } from '../core/workflow/resume-point-codec.js';
+import { cloneDynamicParallelSelectionSnapshot } from '../core/workflow/dynamic-parallel/snapshot.js';
 
 function makeConfig(overrides: Partial<WorkflowConfig> = {}): WorkflowConfig {
   return {
@@ -53,6 +55,34 @@ function makeDynamicParallelConfig(): WorkflowConfig {
       },
     }],
   });
+}
+
+function makeDynamicFacetConfig(): WorkflowConfig {
+  return makeConfig({
+    initialStep: 'fix',
+    steps: [{
+      name: 'fix',
+      personaDisplayName: 'coder',
+      instruction: 'Fix',
+      dynamicFacets: { pool: 'fix', maxSelected: 4 },
+    }],
+  });
+}
+
+function facetSelectionIdentity(workflow: WorkflowConfig, stepName = 'fix'): string {
+  return buildDynamicParallelSelectionIdentity(workflow, stepName, []);
+}
+
+function makeFacetSnapshot(identity: string, stepName: string, round = 1): DynamicFacetSelectionSnapshot {
+  return {
+    identity,
+    step_name: stepName,
+    round,
+    selected_ids: ['backend'],
+    effective_policy_refs: [],
+    effective_knowledge_refs: [],
+    rationale: 'selection',
+  };
 }
 
 function selectionIdentity(workflow: WorkflowConfig, stepName = 'reviewers'): string {
@@ -606,6 +636,180 @@ describe('StateManager', () => {
           workflow_step_participations: {},
         },
       }))).toThrow('Dynamic parallel selection snapshot is required to resume "reviewers"');
+    });
+  });
+
+  describe('constructor: dynamic facet resume wiring', () => {
+    it('should seed resumedDynamicFacetSteps when resuming a dynamic facet step with a saved snapshot', () => {
+      const config = makeDynamicFacetConfig();
+      const identity = facetSelectionIdentity(config);
+      const manager = new StateManager(
+        config,
+        makeOptions({
+          startStep: 'fix',
+          resumePoint: {
+            version: 2,
+            stack: [{ workflow: 'test-workflow', workflow_ref: 'test-workflow', step: 'fix', kind: 'agent', occurrence: 1 }],
+            iteration: 3,
+            elapsed_ms: 100,
+            workflow_call_invocations: {},
+            workflow_step_participations: {},
+            dynamic_facet_selections: {
+              [identity]: makeFacetSnapshot(identity, 'fix'),
+            },
+          },
+        }),
+      );
+
+      expect(manager.state.resumedDynamicFacetSteps.has(identity)).toBe(true);
+      expect(manager.state.activeDynamicFacetSelectionIdentity).toBe(identity);
+    });
+
+    it('should reject resuming a dynamic facet step without a saved snapshot', () => {
+      const config = makeDynamicFacetConfig();
+
+      expect(() => new StateManager(config, makeOptions({
+        startStep: 'fix',
+        resumePoint: {
+          version: 2,
+          stack: [{ workflow: 'test-workflow', workflow_ref: 'test-workflow', step: 'fix', kind: 'agent', occurrence: 1 }],
+          iteration: 3,
+          elapsed_ms: 100,
+          workflow_call_invocations: {},
+          workflow_step_participations: {},
+        },
+      }))).toThrow('Dynamic facet selection snapshot is required to resume "fix"');
+    });
+
+    it('should reject a dynamic facet snapshot whose step_name does not match the resumed step', () => {
+      const config = makeConfig({
+        initialStep: 'fix',
+        steps: [
+          { name: 'fix', personaDisplayName: 'coder', instruction: 'Fix', dynamicFacets: { pool: 'fix', maxSelected: 4 } },
+          { name: 'other', personaDisplayName: 'other', instruction: 'Other' },
+        ],
+      });
+      const identity = facetSelectionIdentity(config);
+
+      expect(() => new StateManager(config, makeOptions({
+        startStep: 'fix',
+        resumePoint: {
+          version: 2,
+          stack: [{ workflow: 'test-workflow', workflow_ref: 'test-workflow', step: 'fix', kind: 'agent', occurrence: 1 }],
+          iteration: 3,
+          elapsed_ms: 100,
+          workflow_call_invocations: {},
+          workflow_step_participations: {},
+          dynamic_facet_selections: {
+            [identity]: makeFacetSnapshot(identity, 'other'),
+          },
+        },
+      }))).toThrow('Dynamic facet selection snapshot step_name does not match resumed step "fix"');
+    });
+
+    it('should leave resumedDynamicFacetSteps empty when not resuming', () => {
+      const config = makeDynamicFacetConfig();
+      const manager = new StateManager(config, makeOptions());
+
+      expect(manager.state.resumedDynamicFacetSteps.size).toBe(0);
+      expect(manager.state.activeDynamicFacetSelectionIdentity).toBeUndefined();
+    });
+
+    it('should leave resumedDynamicFacetSteps empty when the current step has no dynamicFacets', () => {
+      const config = makeConfig({
+        initialStep: 'fix',
+        steps: [{ name: 'fix', personaDisplayName: 'coder', instruction: 'Fix' }],
+      });
+      const manager = new StateManager(
+        config,
+        makeOptions({
+          startStep: 'fix',
+          resumePoint: {
+            version: 2,
+            stack: [{ workflow: 'test-workflow', workflow_ref: 'test-workflow', step: 'fix', kind: 'agent', occurrence: 1 }],
+            iteration: 3,
+            elapsed_ms: 100,
+            workflow_call_invocations: {},
+            workflow_step_participations: {},
+          },
+        }),
+      );
+
+      expect(manager.state.resumedDynamicFacetSteps.size).toBe(0);
+    });
+  });
+
+  describe('cloneWorkflowResumePoint: dynamic facet snapshot clone isolation', () => {
+    it('should deep-clone dynamic_facet_selections snapshots so mutations to the original do not leak into the clone', () => {
+      const config = makeDynamicFacetConfig();
+      const identity = facetSelectionIdentity(config);
+      const original: import('../core/models/types.js').WorkflowResumePoint = {
+        version: 2,
+        stack: [{ workflow: 'test-workflow', workflow_ref: 'test-workflow', step: 'fix', kind: 'agent', occurrence: 1 }],
+        iteration: 3,
+        elapsed_ms: 100,
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
+        dynamic_facet_selections: {
+          [identity]: makeFacetSnapshot(identity, 'fix'),
+        },
+      };
+
+      const cloned = cloneWorkflowResumePoint(original);
+
+      const originalSnapshot = original.dynamic_facet_selections![identity]!;
+      const clonedSnapshot = cloned.dynamic_facet_selections![identity]!;
+      expect(clonedSnapshot).not.toBe(originalSnapshot);
+      expect(clonedSnapshot.selected_ids).not.toBe(originalSnapshot.selected_ids);
+      expect(clonedSnapshot.selected_ids).toEqual(originalSnapshot.selected_ids);
+
+      originalSnapshot.selected_ids.push('extra-facet');
+      expect(clonedSnapshot.selected_ids).toEqual(['backend']);
+    });
+
+    it('should deep-clone dynamic_parallel_selections snapshots symmetrically with dynamic_facet_selections', () => {
+      const config = makeDynamicParallelConfig();
+      const identity = selectionIdentity(config);
+      const parallelSnapshot = cloneDynamicParallelSelectionSnapshot({
+        identity,
+        step_name: 'reviewers',
+        round: 1,
+        selected_pool_ids: ['frontend'],
+        effective_selection_ids: ['frontend'],
+      });
+      const original: import('../core/models/types.js').WorkflowResumePoint = {
+        version: 2,
+        stack: [{ workflow: 'test-workflow', workflow_ref: 'test-workflow', step: 'reviewers', kind: 'parallel', occurrence: 1 }],
+        iteration: 1,
+        elapsed_ms: 0,
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
+        dynamic_parallel_selections: {
+          [identity]: parallelSnapshot,
+        },
+      };
+
+      const cloned = cloneWorkflowResumePoint(original);
+
+      const originalSnapshot = original.dynamic_parallel_selections![identity]!;
+      const clonedSnapshot = cloned.dynamic_parallel_selections![identity]!;
+      expect(clonedSnapshot).not.toBe(originalSnapshot);
+      originalSnapshot.selected_pool_ids.push('extra-pool');
+      expect(clonedSnapshot.selected_pool_ids).toEqual(['frontend']);
+    });
+
+    it('should omit dynamic_facet_selections when the source omits it', () => {
+      const original: import('../core/models/types.js').WorkflowResumePoint = {
+        version: 2,
+        stack: [{ workflow: 'test-workflow', workflow_ref: 'test-workflow', step: 'fix', kind: 'agent', occurrence: 1 }],
+        iteration: 1,
+        elapsed_ms: 0,
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
+      };
+
+      const cloned = cloneWorkflowResumePoint(original);
+      expect(cloned.dynamic_facet_selections).toBeUndefined();
     });
   });
 

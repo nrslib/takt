@@ -124,6 +124,7 @@ export function resolveResourceContentWithSource(
   facetType?: FacetType,
   refName?: string,
   context?: FacetResolutionContext,
+  trustedRoot?: string,
 ): ResolvedFacetContent | undefined {
   if (spec == null) {
     return undefined;
@@ -131,6 +132,13 @@ export function resolveResourceContentWithSource(
   if (spec.endsWith('.md')) {
     const resolved = resolveResourcePath(spec, workflowDir);
     if (existsSync(resolved)) {
+      if (trustedRoot !== undefined) {
+        assertPathSegmentsAreSafe(
+          trustedRoot,
+          resolved,
+          (_violation, segmentPath) => new Error(`External facet pool resource must stay inside the pool source layer root: ${segmentPath}`),
+        );
+      }
       return {
         content: readResourceFile(resolved, facetType, workflowDir, context),
         sourcePath: resolved,
@@ -147,13 +155,14 @@ export function resolveSectionMapWithSource(
   workflowDir: string,
   facetType: FacetType,
   context?: FacetResolutionContext,
+  trustedRoot?: string,
 ): ResolvedSectionMap | undefined {
   if (!raw) {
     return undefined;
   }
   const resolved: ResolvedSectionMap = {};
   for (const [name, value] of Object.entries(raw)) {
-    const content = resolveResourceContentWithSource(value, workflowDir, facetType, name, context);
+    const content = resolveResourceContentWithSource(value, workflowDir, facetType, name, context, trustedRoot);
     if (content?.content) {
       resolved[name] = content;
     }
@@ -515,12 +524,33 @@ function applyFacetIncludes(
   return body !== resolved.content ? { ...resolved, content: body } : resolved;
 }
 
+export interface ResolveRefToContentWithSourceOptions {
+  /**
+   * 当該呼出が facet pool の自己完結解決（context === undefined）のように
+   * bare facet name への最終フォールバックを許可しない境界で実行されている場合 true。
+   * true のとき、context === undefined かつ bare ref（`isResourcePath(ref)` false・
+   * `isScopeRef(ref)` false）が section map・candidate dirs のいずれでも解決できなかった
+   * 場合は、ref 名を content とする最終フォールバックを skip し undefined を返す。
+   * 呼出元は undefined を fail-fast として扱う。既存の汎用呼出元は未指定で従来通り
+   * 最終フォールバックを維持する。
+   */
+  readonly strictBareName?: boolean;
+  /**
+   * external facet pool 境界など、facet ファイル解決後に resolved パスが
+   * 指定 root に留まることを検証する必要がある呼出元で指定する。
+   * `resolveResourceContentWithSource` が read 前に `assertPathSegmentsAreSafe`
+   * で境界チェックを行う。未指定の場合は従来通りの境界チェック動作を維持する。
+   */
+  readonly trustedRoot?: string;
+}
+
 export function resolveRefToContentWithSource(
   ref: string,
   resolvedMap: ResolvedMapInput | undefined,
   workflowDir: string,
   facetType?: FacetType,
   context?: FacetResolutionContext,
+  options?: ResolveRefToContentWithSourceOptions,
 ): ResolvedFacetContent | undefined {
   const mapped = resolvedMap?.[ref];
   if (mapped !== undefined) {
@@ -541,7 +571,7 @@ export function resolveRefToContentWithSource(
   }
 
   if (isResourcePath(ref)) {
-    const resource = resolveResourceContentWithSource(ref, workflowDir, facetType, ref, context);
+    const resource = resolveResourceContentWithSource(ref, workflowDir, facetType, ref, context, options?.trustedRoot);
     return resource ? applyFacetIncludes(expandFacetInheritance(resource, facetType, context), context) : undefined;
   }
 
@@ -555,7 +585,16 @@ export function resolveRefToContentWithSource(
     }
   }
 
-  const resource = resolveResourceContentWithSource(ref, workflowDir, facetType, ref, context);
+  // Facet pool self-contained resolution (context === undefined) must not fall back to
+  // using a bare ref name as content for a bare facet name that missed every resolution
+  // layer. The compileExternalPool boundary opts into fail-fast via strictBareName so
+  // pool-external bare names throw at the caller instead of being silently captured.
+  const isBareName = !isResourcePath(ref) && !isScopeRef(ref);
+  if (options?.strictBareName === true && context === undefined && isBareName) {
+    return undefined;
+  }
+
+  const resource = resolveResourceContentWithSource(ref, workflowDir, facetType, ref, context, options?.trustedRoot);
   return resource ? applyFacetIncludes(expandFacetInheritance(resource, facetType, context), context) : undefined;
 }
 
@@ -572,6 +611,23 @@ export function resolveRefList(
   for (const ref of list) {
     const content = resolveRefToContent(ref, resolvedMap, workflowDir, facetType, context);
     if (content) contents.push(content);
+  }
+  return contents.length > 0 ? contents : undefined;
+}
+
+export function resolveRefListWithSource(
+  refs: string | string[] | undefined,
+  resolvedMap: ResolvedMapInput | undefined,
+  workflowDir: string,
+  facetType?: FacetType,
+  context?: FacetResolutionContext,
+): ResolvedFacetContent[] | undefined {
+  if (refs == null) return undefined;
+  const list = Array.isArray(refs) ? refs : [refs];
+  const contents: ResolvedFacetContent[] = [];
+  for (const ref of list) {
+    const resolved = resolveRefToContentWithSource(ref, resolvedMap, workflowDir, facetType, context);
+    if (resolved) contents.push(resolved);
   }
   return contents.length > 0 ? contents : undefined;
 }

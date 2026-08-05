@@ -15,6 +15,7 @@ import type {
   StepProviderOptions,
   WorkflowCallArgValue,
   WorkflowStepKind,
+  DynamicFacetsConfig,
 } from '../../../core/models/workflow-types.js';
 import { applyQualityGateOverrides } from './qualityGateOverrides.js';
 import {
@@ -23,7 +24,7 @@ import {
   extractPersonaDisplayName,
   isResourcePath,
   resolvePersona,
-  resolveRefList,
+  resolveRefListWithSource,
   resolveRefToContent,
 } from './resource-resolver.js';
 import { mergeProviderOptions } from '../providerOptions.js';
@@ -104,6 +105,19 @@ export function normalizeProviderReference(
     providerSpecified: true,
     modelSpecified: providerReference.model !== undefined || modelSpecified,
   };
+}
+
+function normalizeDynamicFacets(
+  raw: RawStep['dynamic_facets'],
+  stepPath: readonly PropertyKey[],
+): DynamicFacetsConfig | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  return normalizeStepField(stepPath, ['dynamic_facets'], () => ({
+    pool: raw.pool,
+    maxSelected: raw.max_selected,
+  }));
 }
 
 function normalizePromotionEntry(
@@ -214,7 +228,7 @@ export function normalizeStepFromRaw(
 
   const policyContents = isSystemStep || isWorkflowCallStep
     ? undefined
-    : normalizeStepField(stepPath, ['policy'], () => resolveRefList(
+    : normalizeStepField(stepPath, ['policy'], () => resolveRefListWithSource(
       (step as Record<string, unknown>).policy as string | string[] | undefined,
       sections.resolvedPoliciesWithSource ?? sections.resolvedPolicies,
       workflowDir,
@@ -223,7 +237,7 @@ export function normalizeStepFromRaw(
     ));
   const knowledgeContents = isSystemStep || isWorkflowCallStep
     ? undefined
-    : normalizeStepField(stepPath, ['knowledge'], () => resolveRefList(
+    : normalizeStepField(stepPath, ['knowledge'], () => resolveRefListWithSource(
       (step as Record<string, unknown>).knowledge as string | string[] | undefined,
       sections.resolvedKnowledgeWithSource ?? sections.resolvedKnowledge,
       workflowDir,
@@ -337,7 +351,7 @@ export function normalizeStepFromRaw(
 
   const normalizedAgentFields: Omit<
     NormalAgentWorkflowStep,
-    'session' | 'parallel' | 'concurrency' | 'arpeggio' | 'teamLeader'
+    'session' | 'parallel' | 'concurrency' | 'arpeggio' | 'teamLeader' | 'dynamicFacets'
   > = {
     name: step.name,
     description: step.description,
@@ -498,6 +512,7 @@ export function normalizeStepFromRaw(
   return {
     ...normalizedAgentFields,
     session: step.session,
+    dynamicFacets: normalizeDynamicFacets(step.dynamic_facets, stepPath),
   };
   } catch (error) {
     throw withWorkflowStepErrorPath(error, stepPath);

@@ -48,6 +48,61 @@ function hasDynamicParallel(workflow: WorkflowConfig): boolean {
     && getAllParallelSubSteps(step.parallel).length > 0);
 }
 
+function hasDynamicFacets(workflow: WorkflowConfig): boolean {
+  return workflow.steps.some((step) =>
+    (step as { dynamicFacets?: unknown }).dynamicFacets !== undefined);
+}
+
+function workflowGraphHasDynamicFacets(
+  workflow: WorkflowConfig,
+  options: WorkflowSelectorResolutionOptions,
+  activeReferences: ReadonlySet<string>,
+  depth: number,
+): boolean {
+  if (hasDynamicFacets(workflow)) {
+    return true;
+  }
+
+  for (const step of collectWorkflowCallSteps(workflow.steps)) {
+    const childDepth = depth + 1;
+    if (childDepth > MAX_WORKFLOW_CALL_DEPTH) {
+      throw new Error(
+        `Workflow selector resolution exceeded workflow-call depth ${MAX_WORKFLOW_CALL_DEPTH}`,
+      );
+    }
+    const child = options.workflowCallResolver === undefined
+      ? resolveWorkflowCallTarget(
+          workflow,
+          step,
+          options.projectCwd,
+          options.lookupCwd,
+        )
+      : options.workflowCallResolver({
+          parentWorkflow: workflow,
+          step,
+          projectCwd: options.projectCwd,
+          lookupCwd: options.lookupCwd,
+        });
+    if (child === null) {
+      continue;
+    }
+    const childReference = getWorkflowReference(child);
+    if (activeReferences.has(childReference)) {
+      continue;
+    }
+    if (workflowGraphHasDynamicFacets(
+      child,
+      options,
+      new Set([...activeReferences, childReference]),
+      childDepth,
+    )) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function workflowGraphHasDynamicParallel(
   workflow: WorkflowConfig,
   options: WorkflowSelectorResolutionOptions,
@@ -129,6 +184,11 @@ export function resolveWorkflowSelector(
 ): WorkflowSelectorResolution {
   const workflowReference = getWorkflowReference(workflow);
   const applies = workflowGraphHasDynamicParallel(
+    workflow,
+    options,
+    new Set([workflowReference]),
+    0,
+  ) || workflowGraphHasDynamicFacets(
     workflow,
     options,
     new Set([workflowReference]),

@@ -1751,7 +1751,7 @@ describe('StepExecutor', () => {
         reviewScopeSnapshotId: 'prompt-snapshot-B',
       },
     });
-    const mismatchedPreparedExecution = executor.prepareNormalStepExecution(
+    const mismatchedPreparedExecution = await executor.prepareNormalStepExecution(
       step,
       state,
       'review task',
@@ -1769,7 +1769,7 @@ describe('StepExecutor', () => {
       vi.fn(),
     )).rejects.toThrow('requires prepared execution input');
 
-    const preparedExecution = executor.prepareNormalStepExecution(
+    const preparedExecution = await executor.prepareNormalStepExecution(
       step,
       state,
       'review task',
@@ -2511,5 +2511,94 @@ describe('StepExecutor', () => {
     ).rejects.toThrow(
       'Step "implement" requires structured_output for provider "claude": $.extra is not allowed by the schema',
     );
+  });
+});
+
+describe('StepExecutor dynamic facet integration', () => {
+  it('prepareNormalStepExecution reflects dynamic facet policyContents/knowledgeContents and throws when pool is missing', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-df-'));
+    const runPaths = buildRunPaths(cwd, 'test-run');
+    mkdirSync(join(cwd, runPaths.contextPolicyRel), { recursive: true });
+    mkdirSync(join(cwd, runPaths.contextKnowledgeRel), { recursive: true });
+    try {
+      const step = makeStep({
+        name: 'fix',
+        personaDisplayName: 'coder',
+        instruction: 'Fix',
+        dynamicFacets: { pool: 'fix', maxSelected: 4 },
+      });
+      const pool = {
+        name: 'fix',
+        candidates: [
+          {
+            id: 'backend',
+            description: 'backend',
+            policyRefs: [],
+            knowledgeRefs: [],
+            resolvedPolicyContents: [],
+            resolvedKnowledgeContents: [],
+          },
+        ],
+      };
+      const coordinator = {
+        resolveDynamicFacets: vi.fn().mockResolvedValue({
+          selectedIds: ['backend'],
+          effectivePolicyContents: ['policy-content'],
+          effectiveKnowledgeContents: ['knowledge-content'],
+          snapshot: {
+            identity: 'id',
+            step_name: 'fix',
+            round: 1,
+            selected_ids: ['backend'],
+            effective_policy_refs: [],
+            effective_knowledge_refs: [],
+            rationale: 'r',
+          },
+        }),
+      };
+      const getFacetPool = vi.fn().mockReturnValue(pool);
+      const deps: StepExecutorDeps = {
+        optionsBuilder: {
+          buildAgentOptions: vi.fn().mockReturnValue({}),
+          buildPhaseRunnerContext: vi.fn().mockReturnValue({ childProcessEnv: undefined }),
+          resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'cursor', model: undefined }),
+          buildFindingContractInstructionContext: vi.fn(),
+        } as unknown as StepExecutorDeps['optionsBuilder'],
+        getCwd: () => cwd,
+        getProjectCwd: () => cwd,
+        getReportDir: () => '.takt/reports',
+        getRunPaths: () => runPaths,
+        getLanguage: () => undefined,
+        getInteractive: () => false,
+        getWorkflowSteps: () => [{ name: 'fix' }],
+        getWorkflowName: () => 'test-workflow',
+        getTask: () => 'task',
+        getWorkflowDescription: () => undefined,
+        getRetryNote: () => undefined,
+        structuredCaller: {
+          evaluateCondition: vi.fn(),
+          judgeStatus: vi.fn(),
+          decomposeTask: vi.fn(),
+          requestMoreParts: vi.fn(),
+        },
+        structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
+        dynamicFacetSelectorCoordinator: coordinator as unknown as StepExecutorDeps['dynamicFacetSelectorCoordinator'],
+        getFacetPool,
+      };
+      const executor = new StepExecutor(deps);
+      const state = makeState();
+      const prepared = await executor.prepareNormalStepExecution(step, state, 'task', 5, 1);
+
+      expect(coordinator.resolveDynamicFacets).toHaveBeenCalledWith(step, state, 'task', pool);
+      expect(prepared.executableStep.policyContents).toEqual([{ content: 'policy-content' }]);
+      expect(prepared.executableStep.knowledgeContents).toEqual([{ content: 'knowledge-content' }]);
+
+      getFacetPool.mockReturnValueOnce(undefined);
+      await expect(
+        executor.prepareNormalStepExecution(step, state, 'task', 5, 1),
+      ).rejects.toThrow('Configuration error: step "fix" references unknown facet pool "fix"');
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
   });
 });

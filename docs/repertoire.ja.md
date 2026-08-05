@@ -46,9 +46,11 @@ my-takt-repertoire/
     review-readonly.yaml
   steps/
     final-gate.yaml
+  facet-pools/
+    implementation-fix.yaml
 ```
 
-`facets/`、`workflows/`、`provider-options/`、`steps/` ディレクトリだけがインポートされます。その他のファイルは無視されます。
+`facets/`、`workflows/`、`provider-options/`、`steps/`、`facet-pools/` ディレクトリだけがインポートされます。その他のファイルは無視されます。
 
 ### takt-repertoire.yaml
 
@@ -87,7 +89,7 @@ takt repertoire add github:{owner}/{repo}@{ref}
 ### インストール時の処理
 
 1. `gh api` 経由で GitHub から tarball をダウンロード
-2. `facets/`、`workflows/`、`provider-options/` からパッケージファイルを展開（`.md`、`.yaml`、`.yml`）。`steps/` は直下の `.yaml` / `.yml` step fragmentのみを展開
+2. `facets/`、`workflows/`、`provider-options/`、`facet-pools/` からパッケージファイルを展開（`.md`、`.yaml`、`.yml`）。`steps/` は直下の `.yaml` / `.yml` step fragmentのみを展開
 3. `takt-repertoire.yaml` マニフェストをバリデーション
 4. TAKT バージョン互換性チェック
 5. `~/.takt/repertoire/@{owner}/{repo}/` にファイルをコピー
@@ -187,4 +189,6 @@ takt repertoire remove @{owner}/{repo}
         review-readonly.yaml
       steps/                   # 再利用可能な step fragment
         final-gate.yaml
+      facet-pools/             # 再利用可能な dynamic facet pool resource
+        implementation-fix.yaml
 ```

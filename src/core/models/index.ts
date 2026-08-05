@@ -94,6 +94,11 @@ export type {
   ProviderProfileName,
   ProviderPermissionProfile,
   ProviderPermissionProfiles,
+  ResolvedFacetPool,
+  ResolvedFacetPoolCandidate,
+  ResolvedFacetContent,
+  DynamicFacetsConfig,
+  DynamicFacetSelectionSnapshot,
 } from './types.js';
 
 export {

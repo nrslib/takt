@@ -168,6 +168,7 @@ describe('repertoire reference integrity: detection', () => {
       workflowDirs: [workflowsDir],
       providerOptionsDirs: [providerOptionsDir],
       stepsDirs: [stepsDir],
+      facetPoolsDirs: [],
       categoriesFiles: [categoriesFile],
     });
 

@@ -58,6 +58,16 @@ export const DynamicParallelSelectionSnapshotSchema = z.object({
   effective_selection_ids: z.array(z.string().min(1)).min(1),
 }).strict();
 
+export const DynamicFacetSelectionSnapshotSchema = z.object({
+  identity: z.string().min(1),
+  step_name: z.string().min(1),
+  round: z.number().int().positive(),
+  selected_ids: z.array(z.string().min(1)),
+  effective_policy_refs: z.array(z.string().min(1)),
+  effective_knowledge_refs: z.array(z.string().min(1)),
+  rationale: z.string().min(1),
+}).strict();
+
 export const WorkflowCallInvocationRecordSchema = z.object({
   call_instance: z.number().int().positive(),
   report_namespace_segment: z.string().regex(
@@ -76,6 +86,7 @@ export const WorkflowResumePointSchema = z.object({
   iteration: z.number().int().min(0),
   elapsed_ms: z.number().int().min(0),
   dynamic_parallel_selections: z.record(z.string().min(1), DynamicParallelSelectionSnapshotSchema).optional(),
+  dynamic_facet_selections: z.record(z.string().min(1), DynamicFacetSelectionSnapshotSchema).optional(),
   workflow_call_invocations: z.record(
     z.string().min(1),
     WorkflowCallInvocationRecordSchema,

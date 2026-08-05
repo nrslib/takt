@@ -685,7 +685,7 @@ describe('interpretation case SQLite begin transaction', () => {
 
   it.each([
     { label: 'omitted additions', policyContents: undefined, knowledgeContents: undefined },
-    { label: 'configured additions', policyContents: ['Manager policy'], knowledgeContents: ['Manager knowledge'] },
+    { label: 'configured additions', policyContents: [{ content: 'Manager policy' }], knowledgeContents: [{ content: 'Manager knowledge' }] },
   ])('reconstructs and dispatches the persisted real provider request after reopen: $label', async ({
     policyContents,
     knowledgeContents,
@@ -763,7 +763,7 @@ describe('interpretation case SQLite begin transaction', () => {
   it('keeps a real reserved interpretation call untouched when manager guidance changes after reopen', async () => {
     executeAgentMock.mockReset();
     const dependencies = interpretationDependencies();
-    const originalContract = { manager: { persona: 'findings-manager', policyContents: ['Original policy'] } };
+    const originalContract = { manager: { persona: 'findings-manager', policyContents: [{ content: 'Original policy' }] } };
     const prepareProviderRequest = (current: FindingLedger, cases: Parameters<
       NonNullable<Parameters<typeof openHarness>[0]['prepareProviderRequest']>
     >[1]) => ({
@@ -789,7 +789,7 @@ describe('interpretation case SQLite begin transaction', () => {
       items,
       provisionalOnlyRawFindingIds: new Set(),
       ledgerStore: harness.store,
-      contract: { manager: { persona: 'findings-manager', policyContents: ['Changed policy'] } },
+      contract: { manager: { persona: 'findings-manager', policyContents: [{ content: 'Changed policy' }] } },
       ...dependencies,
       observation: OBSERVATION,
       roundMarker: 'round-case-store',
@@ -819,8 +819,8 @@ describe('interpretation case SQLite begin transaction', () => {
       const contract = {
         manager: {
           persona: 'findings-manager',
-          policyContents: ['Boundary policy'],
-          knowledgeContents: ['Boundary knowledge'],
+          policyContents: [{ content: 'Boundary policy' }],
+          knowledgeContents: [{ content: 'Boundary knowledge' }],
         },
       };
       const prepareProviderRequest = (current: FindingLedger, cases: Parameters<

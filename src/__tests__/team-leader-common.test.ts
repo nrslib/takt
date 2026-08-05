@@ -135,8 +135,8 @@ describe('createPartStep', () => {
       personaDisplayName: 'coder',
       instruction: 'decompose work',
       passPreviousResponse: true,
-      policyContents: ['policy content'],
-      knowledgeContents: ['knowledge content'],
+      policyContents: [{ content: 'policy content' }],
+      knowledgeContents: [{ content: 'knowledge content' }],
       qualityGates: ['run focused tests'],
       teamLeader: {
         maxConcurrency: 1,
@@ -154,8 +154,8 @@ describe('createPartStep', () => {
       session: 'refresh',
       instruction: 'implement api',
       passPreviousResponse: false,
-      policyContents: ['policy content'],
-      knowledgeContents: ['knowledge content'],
+      policyContents: [{ content: 'policy content' }],
+      knowledgeContents: [{ content: 'knowledge content' }],
       qualityGates: ['run focused tests'],
     }));
 

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   copyFragments: vi.fn(),
+  copyFacetPools: vi.fn(),
   pathExistsForEject: vi.fn(),
   existsSync: vi.fn(),
   mkdirSync: vi.fn(),
@@ -41,11 +42,16 @@ vi.mock('../infra/config/index.js', () => ({
   getLanguage: () => 'en',
   getProjectStepsDir: (projectDir: string) => `${projectDir}/.takt/steps`,
   getProjectWorkflowsDir: (projectDir: string) => `${projectDir}/.takt/workflows`,
+  getBuiltinLanguageFacetPoolsDir: () => '/builtin/facet-pools',
+  getBuiltinLanguageResourcesDir: () => '/builtin',
+  getGlobalFacetPoolsDir: () => '/global/facet-pools',
+  getProjectFacetPoolsDir: (projectDir: string) => `${projectDir}/.takt/facet-pools`,
   isPathSafe: () => true,
 }));
 
 vi.mock('../features/config/ejectStepFragments.js', () => ({
   copyReferencedBuiltinStepFragments: mocks.copyFragments,
+  copyReferencedBuiltinFacetPools: mocks.copyFacetPools,
   pathExistsForEject: mocks.pathExistsForEject,
   writeNewEjectedFile: mocks.writeNewEjectedFile,
 }));
@@ -72,6 +78,7 @@ describe('ejectBuiltin rollback', () => {
     });
     mocks.readFileSync.mockReturnValue('name: default\n');
     mocks.copyFragments.mockReturnValue(vi.fn());
+    mocks.copyFacetPools.mockReturnValue(vi.fn());
     mocks.writeNewEjectedFile.mockImplementation(() => {
       workflowDirCreated = true;
       throw new Error('simulated workflow write failure');

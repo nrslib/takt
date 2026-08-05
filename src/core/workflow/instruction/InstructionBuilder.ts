@@ -162,16 +162,18 @@ export class InstructionBuilder {
 
     // Policy facet content
     const policyContents = this.context.policyContents ?? this.step.policyContents;
-    const hasPolicy = !!(policyContents && policyContents.length > 0);
-    const policyJoined = hasPolicy && policyContents ? policyContents.join('\n\n---\n\n') : '';
+    const policyStrings = policyContents?.map((c) => c.content);
+    const hasPolicy = !!(policyStrings && policyStrings.length > 0);
+    const policyJoined = hasPolicy && policyStrings ? policyStrings.join('\n\n---\n\n') : '';
     const policyContent = hasPolicy
       ? preparePolicyContent(policyJoined, this.context.policySourcePath)
       : '';
 
     // Knowledge injection (domain-specific knowledge, no reminder needed)
     const knowledgeContents = this.context.knowledgeContents ?? this.step.knowledgeContents;
-    const hasKnowledge = !!(knowledgeContents && knowledgeContents.length > 0);
-    const knowledgeJoined = hasKnowledge && knowledgeContents ? knowledgeContents.join('\n\n---\n\n') : '';
+    const knowledgeStrings = knowledgeContents?.map((c) => c.content);
+    const hasKnowledge = !!(knowledgeStrings && knowledgeStrings.length > 0);
+    const knowledgeJoined = hasKnowledge && knowledgeStrings ? knowledgeStrings.join('\n\n---\n\n') : '';
     const knowledgeContent = hasKnowledge
       ? prepareKnowledgeContent(knowledgeJoined, this.context.knowledgeSourcePath)
       : '';

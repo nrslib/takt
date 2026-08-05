@@ -504,8 +504,8 @@ describe('facet inheritance', () => {
       context,
     );
 
-    expect(config.steps[0]!.policyContents).toEqual(['Base policy\nCustom policy']);
-    expect(config.steps[0]!.knowledgeContents).toEqual(['Base knowledge\nCustom knowledge']);
+    expect(config.steps[0]!.policyContents!.map((r) => r.content)).toEqual(['Base policy\nCustom policy']);
+    expect(config.steps[0]!.knowledgeContents!.map((r) => r.content)).toEqual(['Base knowledge\nCustom knowledge']);
     expect(config.steps[0]!.outputContracts?.[0]?.format).toBe('Base report\nCustom report');
   });
 
@@ -799,7 +799,7 @@ describe('normalizeWorkflowConfig with layer resolution', () => {
     const config = normalizeWorkflowConfig(raw, workflowDir, context);
 
     expect(config.steps[0]!.policyContents).toBeDefined();
-    expect(config.steps[0]!.policyContents![0]).toBe('# Custom Policy\nBe nice.');
+    expect(config.steps[0]!.policyContents![0]!.content).toBe('# Custom Policy\nBe nice.');
   });
 
   it('should prefer section map over layer resolution', () => {
@@ -869,7 +869,7 @@ describe('normalizeWorkflowConfig with layer resolution', () => {
     const config = normalizeWorkflowConfig(raw, workflowDir, context);
 
     expect(config.steps[0]!.knowledgeContents).toBeDefined();
-    expect(config.steps[0]!.knowledgeContents![0]).toBe('# Domain Knowledge');
+    expect(config.steps[0]!.knowledgeContents![0]!.content).toBe('# Domain Knowledge');
   });
 
   it('should resolve instruction from section map before layer resolution', () => {

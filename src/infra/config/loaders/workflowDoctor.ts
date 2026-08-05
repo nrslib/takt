@@ -26,6 +26,8 @@ import {
   resolveSectionMapWithSource,
   unwrapResolvedSectionMap,
 } from './resource-resolver.js';
+import { buildResolvedFacetPoolDependencies, type FacetPoolCompilationInput } from './facetPoolCompiler.js';
+import type { WorkflowConfig } from '../../../core/models/types.js';
 
 export type { WorkflowDiagnostic, WorkflowDoctorReport } from './workflowDoctorTypes.js';
 
@@ -236,8 +238,9 @@ export function inspectWorkflowFile(
       }),
     });
     const lookupCwd = options?.lookupCwd ?? projectDir;
+    let workflow: WorkflowConfig | undefined;
     try {
-      const workflow = loadWorkflowForDoctorValidation(filePath, projectDir, raw, options);
+      workflow = loadWorkflowForDoctorValidation(filePath, projectDir, raw, options);
       validateWorkflowCallContracts(workflow, projectDir, lookupCwd, { allowPathBasedCalls: false });
     } catch (error) {
       return {
@@ -256,6 +259,9 @@ export function inspectWorkflowFile(
     const diagnostics: WorkflowDiagnostic[] = [];
     validateWorkflowReferences(raw, sections, context, diagnostics);
     validateDoctorGraph(raw, diagnostics);
+    if (workflow !== undefined) {
+      validateFacetPoolReferences(raw, workflow, context, diagnostics);
+    }
 
     return {
       diagnostics: diagnostics.map(({ path, ...diagnostic }) => ({
@@ -276,5 +282,45 @@ export function inspectWorkflowFile(
       diagnostics: [{ level: 'error', message: formatWorkflowLoadWarning(basename(filePath), error) }],
       filePath,
     };
+  }
+}
+
+function validateFacetPoolReferences(
+  raw: RawWorkflow,
+  workflow: WorkflowConfig,
+  context: FacetResolutionContext,
+  diagnostics: WorkflowDiagnostic[],
+): void {
+  const facetPools = raw.facet_pools;
+  if (facetPools === undefined) return;
+  const resolvedPools = workflow.facetPools;
+  for (const [poolName, pool] of Object.entries(facetPools)) {
+    const resolved = resolvedPools?.[poolName];
+    if (resolved === undefined) {
+      diagnostics.push({
+        level: 'error',
+        message: `facet_pools entry "${poolName}" did not resolve to a compiled pool`,
+        path: ['facet_pools', poolName],
+      });
+      continue;
+    }
+    const input: FacetPoolCompilationInput = 'uses' in pool && typeof pool.uses === 'string'
+      ? { kind: 'external', name: poolName, ref: pool.uses }
+      : {
+          kind: 'inline',
+          name: poolName,
+          policies: 'policies' in pool ? pool.policies : undefined,
+          knowledge: 'knowledge' in pool ? pool.knowledge : undefined,
+          candidates: 'candidates' in pool ? pool.candidates : [],
+        };
+    try {
+      buildResolvedFacetPoolDependencies(input, context);
+    } catch (error) {
+      diagnostics.push({
+        level: 'error',
+        message: `facet_pools entry "${poolName}" has unresolved dependencies: ${error instanceof Error ? error.message : String(error)}`,
+        path: ['facet_pools', poolName],
+      });
+    }
   }
 }

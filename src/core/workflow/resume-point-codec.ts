@@ -1,6 +1,7 @@
 import type { WorkflowResumePoint } from '../models/types.js';
 import { WorkflowResumePointSchema } from '../models/workflow-resume-schema.js';
 import { cloneDynamicParallelSelectionSnapshot } from './dynamic-parallel/snapshot.js';
+import { cloneDynamicFacetSelectionSnapshot } from './dynamic-facets/dynamicFacetSelectionStore.js';
 
 export function parseWorkflowResumePoint(value: unknown): WorkflowResumePoint {
   return cloneWorkflowResumePoint(WorkflowResumePointSchema.parse(value));
@@ -18,6 +19,12 @@ export function cloneWorkflowResumePoint(resumePoint: WorkflowResumePoint): Work
       : {
           dynamic_parallel_selections: Object.fromEntries(Object.entries(resumePoint.dynamic_parallel_selections)
             .map(([identity, snapshot]) => [identity, cloneDynamicParallelSelectionSnapshot(snapshot)])),
+        }),
+    ...(resumePoint.dynamic_facet_selections === undefined
+      ? {}
+      : {
+          dynamic_facet_selections: Object.fromEntries(Object.entries(resumePoint.dynamic_facet_selections)
+            .map(([identity, snapshot]) => [identity, cloneDynamicFacetSelectionSnapshot(snapshot)])),
         }),
     workflow_call_invocations: Object.fromEntries(
       Object.entries(resumePoint.workflow_call_invocations)

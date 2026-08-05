@@ -290,3 +290,97 @@ export function copyReferencedBuiltinStepFragments(
   }
   return rollback;
 }
+
+export function copyReferencedBuiltinFacetPools(
+  workflowContent: string,
+  lang: Language,
+  targetDir: string,
+  workflowPath: string,
+  isProjectEject: boolean,
+  builtinSourceDir: string,
+  builtinBoundaryDir: string,
+): () => void {
+  const trustedRoot = dirname(dirname(targetDir));
+  const targetDirExisted = pathExistsForEject(targetDir);
+  const createdPaths: string[] = [];
+  const rollbackDirectories: Array<() => void> = [];
+  const rollback = (): void => {
+    for (const path of [...createdPaths].reverse()) rmSync(path, { force: true });
+    if (!targetDirExisted && existsSync(targetDir)) removeEmptyEjectDirectories([targetDir]);
+    for (const rollbackDirectory of [...rollbackDirectories].reverse()) rollbackDirectory();
+  };
+
+  const parsed = parseYaml(workflowContent) as Record<string, unknown>;
+  const facetPools = parsed?.facet_pools;
+  if (!isPlainObjectRecord(facetPools)) return rollback;
+  const poolNames = new Set<string>();
+  for (const pool of Object.values(facetPools)) {
+    if (!isPlainObjectRecord(pool)) continue;
+    const uses = pool.uses;
+    if (typeof uses === 'string') {
+      poolNames.add(uses);
+    }
+  }
+
+  try {
+    for (const name of poolNames) {
+      let sourcePoolPath: string | undefined;
+      for (const ext of ['.yaml', '.yml']) {
+        const candidate = join(builtinSourceDir, `${name}${ext}`);
+        if (existsSync(candidate)) {
+          sourcePoolPath = candidate;
+          break;
+        }
+      }
+      if (sourcePoolPath === undefined) continue;
+      const poolContent = readFileSync(sourcePoolPath, 'utf-8');
+      const targetPoolPath = join(targetDir, basename(sourcePoolPath));
+      if (pathExistsForEject(targetPoolPath)) {
+        warn(`User facet pool already exists: ${sanitizeTerminalText(targetPoolPath)}`);
+        warn('Skipping facet pool copy (user version takes priority).');
+      } else {
+        rollbackDirectories.push(writeNewEjectedFile(trustedRoot, targetPoolPath, poolContent));
+        createdPaths.push(targetPoolPath);
+      }
+      const poolParsed = parseYaml(poolContent) as Record<string, unknown>;
+      const facetSections: Array<{ map: Record<string, string> | undefined }> = [
+        { map: isPlainObjectRecord(poolParsed.policies) ? poolParsed.policies as Record<string, string> : undefined },
+        { map: isPlainObjectRecord(poolParsed.knowledge) ? poolParsed.knowledge as Record<string, string> : undefined },
+      ];
+      for (const { map } of facetSections) {
+        if (!map) continue;
+        for (const relPath of Object.values(map)) {
+          if (typeof relPath !== 'string') continue;
+          const sourceFacetPath = resolve(builtinSourceDir, relPath);
+          if (!existsSync(sourceFacetPath)) continue;
+          // Builtin pools own facets live under builtins/<lang>/facets/, which is a sibling of
+          // builtins/<lang>/facet-pools/. The copy boundary must be the builtin language resources
+          // root (builtins/<lang>/) so pool-referenced facets are copied, while still rejecting
+          // paths that escape the language resource root.
+          if (!isPathInside(builtinBoundaryDir, sourceFacetPath)) continue;
+          // Mirror the facet's position relative to the builtin language root into the eject
+          // target's language root (dirname(targetDir) = .takt/ for project eject). This keeps
+          // ../facets/... references in the ejected pool file resolvable from targetDir.
+          const targetLanguageRoot = dirname(targetDir);
+          const relativeFacetPath = relative(builtinBoundaryDir, sourceFacetPath);
+          const targetFacetPath = join(targetLanguageRoot, relativeFacetPath);
+          if (pathExistsForEject(targetFacetPath)) {
+            warn(`User facet file already exists: ${sanitizeTerminalText(targetFacetPath)}`);
+            warn('Skipping facet copy (user version takes priority).');
+            continue;
+          }
+          rollbackDirectories.push(writeNewEjectedFile(trustedRoot, targetFacetPath, readFileSync(sourceFacetPath, 'utf-8')));
+          createdPaths.push(targetFacetPath);
+        }
+      }
+    }
+  } catch (error) {
+    rollback();
+    throw error;
+  }
+  return rollback;
+}
+
+function isPlainObjectRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}

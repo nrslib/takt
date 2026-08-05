@@ -145,6 +145,8 @@ export interface ScanConfig {
   providerOptionsDirs: string[];
   /** Directories containing direct YAML step fragments to scan for the scope substring. */
   stepsDirs: string[];
+  /** Directories to recursively scan for facet-pool YAML files containing the scope substring. */
+  facetPoolsDirs: string[];
   /** Individual YAML files to check for the scope substring (e.g. workflow-categories.yaml). */
   categoriesFiles: string[];
 }
@@ -152,17 +154,18 @@ export interface ScanConfig {
 export function findScopeReferences(scope: string, config: ScanConfig): ScopeReference[] {
   const results: ScopeReference[] = [];
   const scannedDirs = new Set<string>();
+  const visitedDirectories = new Set<string>();
 
   for (const dir of config.workflowDirs) {
     if (!scannedDirs.has(dir)) {
-      scanYamlFilesInDir(dir, scope, results);
+      scanYamlFilesInDir(dir, scope, results, visitedDirectories);
       scannedDirs.add(dir);
     }
   }
 
   for (const dir of config.providerOptionsDirs) {
     if (!scannedDirs.has(dir)) {
-      scanYamlFilesInDir(dir, scope, results);
+      scanYamlFilesInDir(dir, scope, results, visitedDirectories);
       scannedDirs.add(dir);
     }
   }
@@ -170,6 +173,13 @@ export function findScopeReferences(scope: string, config: ScanConfig): ScopeRef
   for (const dir of config.stepsDirs) {
     if (!scannedDirs.has(dir)) {
       scanStepFragmentFilesInDir(dir, scope, results);
+      scannedDirs.add(dir);
+    }
+  }
+
+  for (const dir of config.facetPoolsDirs) {
+    if (!scannedDirs.has(dir)) {
+      scanYamlFilesInDir(dir, scope, results, visitedDirectories);
       scannedDirs.add(dir);
     }
   }

@@ -674,8 +674,8 @@ describe('workflow finding_contract schema', () => {
         }],
       }, workflowDir, { projectDir, workflowDir, lang: 'ja' });
 
-      expect(workflow.findingContract?.manager.policyContents).toEqual(['First policy', 'Second policy']);
-      expect(workflow.findingContract?.manager.knowledgeContents).toEqual(['Domain knowledge']);
+      expect(workflow.findingContract?.manager.policyContents!.map((r) => r.content)).toEqual(['First policy', 'Second policy']);
+      expect(workflow.findingContract?.manager.knowledgeContents!.map((r) => r.content)).toEqual(['Domain knowledge']);
       expect(workflow.findingContract?.adjudicator).toMatchObject({
         persona: 'terminal-supervisor',
         providerRoutingPersonaKey: 'terminal-supervisor',
@@ -734,8 +734,8 @@ describe('workflow finding_contract schema', () => {
         personaPath: expectedPersonaPath,
         instruction: 'Project instruction override',
         outputContract: 'Project output override',
-        policyContents: ['Project policy override'],
-        knowledgeContents: ['Project knowledge override'],
+        policyContents: expect.arrayContaining([expect.objectContaining({ content: 'Project policy override' })]),
+        knowledgeContents: expect.arrayContaining([expect.objectContaining({ content: 'Project knowledge override' })]),
       });
       expect(workflow.findingContract?.adjudicator).toMatchObject({
         personaPath: expectedPersonaPath,

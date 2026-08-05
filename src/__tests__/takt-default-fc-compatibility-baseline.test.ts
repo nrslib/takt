@@ -462,8 +462,8 @@ describe('takt-default-fc compatibility baseline', () => {
     const additionsContract: FindingContractConfig = {
       manager: {
         ...contract.manager,
-        knowledgeContents: ['Knowledge one', 'Knowledge two'],
-        policyContents: ['Policy one', 'Policy two'],
+        knowledgeContents: [{ content: 'Knowledge one' }, { content: 'Knowledge two' }],
+        policyContents: [{ content: 'Policy one' }, { content: 'Policy two' }],
       },
     };
     const additionsStep: AgentWorkflowStep = {

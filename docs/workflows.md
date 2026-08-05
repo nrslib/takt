@@ -303,6 +303,232 @@ Markdown plus isolated extraction by exact resolved reviewer provider/model.
 - The current diff includes changes that already existed when the run started. Changes committed during a run are no longer different from `HEAD` and are not guaranteed to remain in later selector inputs; prior reports remain available as separate evidence. A normal empty diff is passed explicitly. A non-Git directory, an unavailable Git command, or a repository without `HEAD` fails before agent startup.
 - The saved participant manifest is keyed by the workflow invocation path, workflow-call instance path, and parallel step. Report inheritance and aggregate evaluation use that manifest, so a reviewer removed by `replace` cannot contribute stale reports or findings to the current round.
 
+### Dynamic Facet Selection (facet pools)
+
+A normal agent step can dynamically select additional `policy` and `knowledge` facets from a validated candidate pool right before its main agent runs. This keeps the fixed facets the step already declares and adds only the facets the current situation requires — for example, selecting a transaction-correctness policy only after a review surfaces transaction-boundary concerns.
+
+Define a pool under the top-level `facet_pools` map, then reference it from a step with `dynamic_facets`. Pools can be defined inline in the workflow or as external resource files.
+
+#### Inline pool
+
+An inline pool lives in the workflow YAML. Its candidate `policy` / `knowledge` references resolve through the same workflow-local facet namespace as ordinary steps: the workflow `policies` / `knowledge` section maps and bare facet lookup both work.
+
+```yaml
+name: backend-fix
+
+policies:
+  transaction-correctness: ../facets/policies/transaction-correctness.md
+  backward-compatibility: ../facets/policies/backward-compatibility.md
+
+knowledge:
+  backend-api: ../facets/knowledge/backend-api.md
+  database-transaction: ../facets/knowledge/database-transaction.md
+
+facet_pools:
+  fix:
+    candidates:
+      - id: backend
+        description: Handle API, repository, and server-side implementation
+        knowledge: backend-api
+      - id: transaction
+        description: Handle transaction boundaries, rollback, and concurrency control
+        policy: transaction-correctness
+        knowledge: database-transaction
+      - id: backward-compatibility
+        description: Preserve compatibility of public APIs and schemas
+        policy: backward-compatibility
+
+steps:
+  - name: fix
+    persona: coder
+    policy: [coding, testing]
+    knowledge: architecture
+    dynamic_facets:
+      pool: fix
+      max_selected: 4
+    instruction: fix
+    edit: true
+    rules:
+      - condition: Fix complete
+        next: review
+```
+
+#### External pool
+
+A workflow can reference a named external pool resource with `uses` instead of defining the pool inline. External pools are self-contained: candidate facet references resolve only against the pool file's own `policies` / `knowledge` section maps, resolved relative to the pool file's directory. An external pool never captures the caller workflow's same-named aliases, and the caller cannot merge or override the pool's candidates or section maps.
+
+```yaml
+facet_pools:
+  fix:
+    uses: implementation-fix
+
+steps:
+  - name: fix
+    persona: coder
+    policy: [coding, testing]
+    knowledge: architecture
+    dynamic_facets:
+      pool: fix
+      max_selected: 4
+    instruction: fix
+    edit: true
+    rules:
+      - condition: Fix complete
+        next: review
+```
+
+The referenced `facet-pools/implementation-fix.yaml` defines exactly one pool resource:
+
+```yaml
+policies:
+  transaction-correctness: ../facets/policies/transaction-correctness.md
+  backward-compatibility: ../facets/policies/backward-compatibility.md
+
+knowledge:
+  backend-api: ../facets/knowledge/backend-api.md
+  database-transaction: ../facets/knowledge/database-transaction.md
+
+candidates:
+  - id: backend
+    description: Handle API, repository, and server-side implementation
+    knowledge: backend-api
+  - id: transaction
+    description: Handle transaction boundaries, rollback, and concurrency control
+    policy: transaction-correctness
+    knowledge: database-transaction
+  - id: backward-compatibility
+    description: Preserve compatibility of public APIs and schemas
+    policy: backward-compatibility
+```
+
+External pool files do not accept nested `uses`, `params`, or `$param`; mixing `uses` with inline `policies`, `knowledge`, or `candidates` in a single pool entry fails loading.
+
+#### External pool lookup
+
+Named pools are discovered with the same layering as step fragments:
+
+1. Package-local `facet-pools/` (for workflows provided by a repertoire package)
+2. Project `.takt/facet-pools/`
+3. Global `$TAKT_CONFIG_DIR/facet-pools/`
+4. Language-specific builtin `builtins/<lang>/facet-pools/`
+5. Shared builtin `builtins/facet-pools/`
+
+Bare names resolve the first matching `<name>.yaml` before `<name>.yml` in each layer. `@owner/repo/name` selects a repertoire package explicitly. Absolute paths, directory traversal, nested paths, root-escaping symlinks, non-regular files, unreadable files, and oversize files are rejected. Provenance and dependency resources are tracked so `doctor`, `preview`, `eject`, and `repertoire install` / `remove` can follow them.
+
+#### Candidate contract
+
+Every candidate in a pool shares the same shape:
+
+```yaml
+- id: transaction
+  description: Handle transaction boundaries and rollback
+  policy:
+    - transaction-correctness
+  knowledge:
+    - database-transaction
+```
+
+- `id` is non-empty and unique within the pool.
+- `description` is a non-empty string.
+- `policy` and `knowledge` are each a scalar or a non-empty array.
+- At least one of `policy` or `knowledge` is required.
+- A candidate may represent a single facet or a small bundle of facets.
+- The selector can choose multiple candidates.
+- An empty selection means "no additional facet is needed" and is valid.
+- The pool author's contract is that any combination of candidates in the same pool is valid; `requires`, `conflicts_with`, and exclusive groups are not introduced in the MVP.
+
+#### Selector contract
+
+When a step with `dynamic_facets` is entered, TAKT runs an internal read-only selector before the main agent starts. The selector is not a workflow step, cannot create agents or change the workflow, and runs with read-only permissions, permission bypass disabled, no inherited MCP servers, and a TAKT-owned structured output contract in a fresh session.
+
+The selector receives at least:
+
+- The user request
+- The leaf workflow, workflow-call instance, and step identity
+- Whether this is an initial entry or a re-entry, and the step iteration
+- Reports available in the current workflow-call scope
+- Unresolved findings
+- The cumulative diff since the task started
+- Candidate IDs and descriptions
+
+Facet bodies are not sent to the selector. The selector returns only candidate IDs and a rationale against a strict structured output schema (`additionalProperties: false`, `selected_ids` as a unique array whose items are an `enum` of the pool's candidate IDs, plus a required `rationale` string). Pool-external IDs, duplicate IDs, and selections exceeding `max_selected` are rejected. Selector failure stops the run before the main agent starts; there is no implicit fallback to all candidates or to an empty selection. The selector itself is not subject to dynamic facet selection or auto routing.
+
+The selector provider is resolved through #1136's `provider.targets.internal_agents.selector` in `runtime.yaml`. When left unspecified, the runtime's normal default is used.
+
+#### Facet composition
+
+Fixed facets stay in the existing step fields. The effective facets are:
+
+```text
+effective policy   = fixed policy   + selected dynamic policy
+effective knowledge = fixed knowledge + selected dynamic knowledge
+```
+
+- Fixed facets come first, dynamic facets after.
+- Dynamic facets are appended in pool candidate definition order, not in the order the selector returns them.
+- Within a candidate, facet declaration order is preserved.
+- When the same resolved facet resource is referenced more than once, the duplicate is removed in favor of the fixed side. Two distinct resources whose contents happen to coincide are not treated as the same facet.
+- Facets that the AI must never drop — security, privacy boundaries, authorization, mandatory quality conditions — belong on the fixed side.
+- Dynamic facets cannot change `persona`, `instruction`, `provider`, `permission`, MCP, tools, or output contracts.
+
+#### Rounds, sessions, and resume
+
+Each re-entry into the same step as a new round re-runs the selector and replaces the previous dynamic selection; there is no cumulative mode.
+
+```text
+round 1: selects frontend
+round 2: selects transaction
+
+round 2 effective facets:
+  fixed + transaction
+```
+
+The round-1 `frontend` facet does not leak into round 2.
+
+- The main agent session for a step using dynamic facets is isolated per round.
+- A provider retry or resume within the same round restores that round's effective facet set and session; the selector is not re-run.
+- Reaching the same step as a new workflow transition starts a new round and re-selects.
+- The selector result and the resolved effective facet set are written to runtime state before the main agent starts.
+- At load time, inline and external pools are normalized into the same `ResolvedFacetPool`, so the execution layer never branches on whether a pool was inline or external. External pool files are not re-read during execution.
+
+The MVP does not hot-swap facets mid-execution. If the required expertise changes during a run, the next time the step is reached a new selection is made.
+
+#### Fail-fast conditions
+
+Loading fails before execution when any of these hold:
+
+- `facet_pools` schema is invalid
+- A pool is empty
+- A candidate ID is duplicated
+- A candidate description is missing
+- A candidate has neither `policy` nor `knowledge`
+- A facet reference is unknown or its kind does not match
+- `uses` is combined with inline fields
+- An external pool implicitly references the caller workflow's facet namespace
+- An external pool uses nested `uses`, `params`, or `$param`
+- External resource lookup, trust, or file validation fails
+- `dynamic_facets.pool` is unknown
+- `max_selected` is invalid or exceeds the candidate count
+- `dynamic_facets` is declared on a non-agent step
+
+Selector execution fails before the main agent starts when:
+
+- The selector provider cannot be resolved
+- Structured output is not established
+- `selected_ids` is not an array
+- An ID is non-string, duplicate, or unknown
+- `max_selected` is exceeded
+
+There is no implicit fallback.
+
+#### Packages, eject, and authoring tools
+
+- Repertoire packages can install and remove `facet-pools/`, and package-local / scoped pools resolve through the same lookup order as step fragments.
+- `takt workflow eject` copies referenced external pools and the facet dependencies they own, following the existing eject contract for collision handling and existing-user-file priority.
+- `takt workflow doctor` validates pools, candidates, and facet references.
+- `takt workflow preview` shows the dynamic pool name, candidate IDs, referenced facets, and source.
+- When builtin ja/en pools are provided, their candidate ID sets are kept identical.
+
 ### Finding Contract manager provider/model
 
 `finding_contract.manager` can set a dedicated provider and model for the synthetic Finding Manager step:

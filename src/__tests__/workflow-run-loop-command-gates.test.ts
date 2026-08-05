@@ -63,7 +63,7 @@ function makeDeps(
       return previous ? `instruction ${stepIteration}\n${previous}` : `instruction ${stepIteration}`;
     }),
     buildPhase1Instruction: vi.fn((_step: WorkflowStep, instruction: string) => instruction),
-    prepareNormalStepExecution: vi.fn(() => undefined),
+    prepareNormalStepExecution: vi.fn(async () => undefined),
     resolveStepProviderModel: vi.fn(() => ({
       provider: undefined,
       model: undefined,

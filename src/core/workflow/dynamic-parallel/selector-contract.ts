@@ -2,6 +2,10 @@ import type { AgentResponse } from '../../models/types.js';
 import { getErrorMessage } from '../../../shared/utils/index.js';
 import { validateStructuredOutputAgainstSchema } from '../engine/structured-output-schema-validator.js';
 
+export interface SelectorResponseLabel {
+  readonly label: string;
+}
+
 export function createSelectorOutputSchema(poolIds: readonly string[]): Record<string, unknown> {
   return {
     type: 'object',
@@ -23,6 +27,7 @@ export function validateSelectorResponse(
   outputSchema: Record<string, unknown>,
   stepName: string,
   redact: (text: string) => string,
+  label: SelectorResponseLabel,
 ): { readonly selectedIds: readonly string[]; readonly rationale: string } {
   if (response.status !== 'done') {
     const category = response.failureCategory ?? response.errorKind;
@@ -32,7 +37,7 @@ export function validateSelectorResponse(
       ...(category === undefined ? [] : [`category "${category}"`]),
       ...(detail.length === 0 ? [] : [detail]),
     ].join(': ');
-    throw new Error(`Dynamic parallel selector for "${stepName}" failed with ${diagnostics}`);
+    throw new Error(`${label.label} selector for "${stepName}" failed with ${diagnostics}`);
   }
   const structuredOutput = response.structuredOutput;
   try {
@@ -40,7 +45,7 @@ export function validateSelectorResponse(
   } catch (error) {
     throw new Error(
       redact(
-        `Dynamic parallel selector for "${stepName}" returned invalid structured output: ${getErrorMessage(error)}`,
+        `${label.label} selector for "${stepName}" returned invalid structured output: ${getErrorMessage(error)}`,
       ),
     );
   }

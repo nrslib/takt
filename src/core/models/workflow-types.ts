@@ -181,6 +181,7 @@ export interface WorkflowResumePoint {
   iteration: number;
   elapsed_ms: number;
   dynamic_parallel_selections?: Record<string, DynamicParallelSelectionSnapshot>;
+  dynamic_facet_selections?: Record<string, DynamicFacetSelectionSnapshot>;
   workflow_call_invocations: Record<string, WorkflowCallInvocationRecord>;
   workflow_step_participations: Record<string, WorkflowStepParticipationRecord>;
 }
@@ -200,6 +201,41 @@ export interface DynamicParallelSelectionSnapshot {
   round: number;
   selected_pool_ids: string[];
   effective_selection_ids: string[];
+}
+
+export interface ResolvedFacetContent {
+  readonly content: string;
+  readonly sourcePath?: string;
+}
+
+export interface ResolvedFacetPoolCandidate {
+  readonly id: string;
+  readonly description: string;
+  readonly policyRefs: readonly string[];
+  readonly knowledgeRefs: readonly string[];
+  readonly resolvedPolicyContents: readonly ResolvedFacetContent[];
+  readonly resolvedKnowledgeContents: readonly ResolvedFacetContent[];
+}
+
+export interface ResolvedFacetPool {
+  readonly name: string;
+  readonly source: 'inline' | 'external';
+  readonly candidates: readonly ResolvedFacetPoolCandidate[];
+}
+
+export interface DynamicFacetsConfig {
+  readonly pool: string;
+  readonly maxSelected: number;
+}
+
+export interface DynamicFacetSelectionSnapshot {
+  identity: string;
+  step_name: string;
+  round: number;
+  selected_ids: string[];
+  effective_policy_refs: string[];
+  effective_knowledge_refs: string[];
+  rationale: string;
 }
 
 export interface WorkflowPromotionEntry {
@@ -266,8 +302,8 @@ interface AgentWorkflowStepBase extends WorkflowStepBase {
   concurrency?: number;
   arpeggio?: ArpeggioStepConfig;
   teamLeader?: TeamLeaderConfig;
-  policyContents?: string[];
-  knowledgeContents?: string[];
+  policyContents?: readonly ResolvedFacetContent[];
+  knowledgeContents?: readonly ResolvedFacetContent[];
 }
 
 export interface NormalAgentWorkflowStep extends AgentWorkflowStepBase {
@@ -276,6 +312,7 @@ export interface NormalAgentWorkflowStep extends AgentWorkflowStepBase {
   concurrency?: never;
   arpeggio?: never;
   teamLeader?: never;
+  dynamicFacets?: DynamicFacetsConfig;
 }
 
 export interface ParallelWorkflowStep extends AgentWorkflowStepBase {
@@ -284,6 +321,7 @@ export interface ParallelWorkflowStep extends AgentWorkflowStepBase {
   concurrency?: number;
   arpeggio?: never;
   teamLeader?: never;
+  dynamicFacets?: never;
 }
 
 export type DynamicParallelSelectionMode = 'replace' | 'cumulative';
@@ -321,6 +359,7 @@ export interface ArpeggioWorkflowStep extends AgentWorkflowStepBase {
   concurrency?: never;
   arpeggio: ArpeggioStepConfig;
   teamLeader?: never;
+  dynamicFacets?: never;
 }
 
 export interface TeamLeaderWorkflowStep extends AgentWorkflowStepBase {
@@ -329,6 +368,7 @@ export interface TeamLeaderWorkflowStep extends AgentWorkflowStepBase {
   concurrency?: never;
   arpeggio?: never;
   teamLeader: TeamLeaderConfig;
+  dynamicFacets?: never;
 }
 
 export type AgentWorkflowStep =
@@ -488,6 +528,7 @@ export interface WorkflowConfig {
   loopDetection?: LoopDetectionConfig;
   loopMonitors?: LoopMonitorConfig[];
   interactiveMode?: InteractiveMode;
+  facetPools?: Record<string, ResolvedFacetPool>;
 }
 
 export interface RateLimitFallbackProvider {
@@ -552,6 +593,9 @@ export interface WorkflowState {
   dynamicParallelSelections: Map<string, DynamicParallelSelectionSnapshot>;
   resumedDynamicParallelSteps: Set<string>;
   activeDynamicParallelSelectionIdentity?: string;
+  dynamicFacetSelections: Map<string, DynamicFacetSelectionSnapshot>;
+  resumedDynamicFacetSteps: Set<string>;
+  activeDynamicFacetSelectionIdentity?: string;
   pendingFallback?: FallbackContext;
   rateLimitFallbackState?: RateLimitFallbackState;
   status: 'running' | 'completed' | 'aborted';

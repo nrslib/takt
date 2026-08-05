@@ -57,6 +57,17 @@ export interface StepPreview {
   substeps?: StepPreview[];
   parallelRole?: 'fixed' | 'pool';
   dynamicSelectionMode?: 'replace' | 'cumulative';
+  dynamicFacets?: {
+    readonly pool: string;
+    readonly maxSelected: number;
+    readonly candidates: readonly {
+      readonly id: string;
+      readonly description: string;
+      readonly policyRefs: readonly string[];
+      readonly knowledgeRefs: readonly string[];
+    }[];
+    readonly source: 'inline' | 'external';
+  };
 }
 
 export interface FirstStepInfo {
@@ -287,7 +298,31 @@ function buildStepPreview(
     ...(previewStep.parallel !== undefined && isDynamicParallelSubSteps(previewStep.parallel)
       ? { dynamicSelectionMode: previewStep.parallel.selection.mode }
       : {}),
+    ...(resolveDynamicFacetsPreview(workflow, previewStep)),
     ...(substeps ? { substeps } : {}),
+  };
+}
+
+function resolveDynamicFacetsPreview(
+  workflow: WorkflowConfig,
+  step: WorkflowStep,
+): { dynamicFacets: NonNullable<StepPreview['dynamicFacets']> } | Record<string, never> {
+  const dynamicFacets = (step as { dynamicFacets?: { readonly pool: string; readonly maxSelected: number } }).dynamicFacets;
+  if (dynamicFacets === undefined) return {};
+  const pool = workflow.facetPools?.[dynamicFacets.pool];
+  if (pool === undefined) return {};
+  return {
+    dynamicFacets: {
+      pool: dynamicFacets.pool,
+      maxSelected: dynamicFacets.maxSelected,
+      candidates: pool.candidates.map((candidate) => ({
+        id: candidate.id,
+        description: candidate.description,
+        policyRefs: [...candidate.policyRefs],
+        knowledgeRefs: [...candidate.knowledgeRefs],
+      })),
+      source: pool.source,
+    },
   };
 }
 

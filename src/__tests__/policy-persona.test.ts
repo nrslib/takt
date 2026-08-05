@@ -201,7 +201,7 @@ describe('policies', () => {
       coding: 'Always write clean code.',
       review: 'Be thorough in reviews.',
     });
-    expect(config.steps[0]!.policyContents).toEqual(['Always write clean code.']);
+    expect(config.steps[0]!.policyContents!.map((r) => r.content)).toEqual(['Always write clean code.']);
   });
 
   it('should resolve policies from .md file paths', () => {
@@ -229,7 +229,7 @@ describe('policies', () => {
     const config = normalizeWorkflowConfig(raw, testDir);
     expect(config.policies!['coding']).toBe('# Coding Policy\n\nWrite clean code.');
     expect(config.policies!['review']).toBe('# Review Policy\n\nBe thorough.');
-    expect(config.steps[0]!.policyContents).toEqual(['# Coding Policy\n\nWrite clean code.']);
+    expect(config.steps[0]!.policyContents!.map((r) => r.content)).toEqual(['# Coding Policy\n\nWrite clean code.']);
   });
 
   it('should support multiple policy references (array)', () => {
@@ -250,7 +250,7 @@ describe('policies', () => {
     };
 
     const config = normalizeWorkflowConfig(raw, testDir);
-    expect(config.steps[0]!.policyContents).toEqual([
+    expect(config.steps[0]!.policyContents!.map((r) => r.content)).toEqual([
       'Clean code rules.',
       'Test everything.',
     ]);
@@ -292,7 +292,7 @@ describe('policies', () => {
     };
 
     const config = normalizeWorkflowConfig(raw, testDir);
-    expect(config.steps[0]!.policyContents).toEqual(['nonexistent']);
+    expect(config.steps[0]!.policyContents!.map((r) => r.content)).toEqual(['nonexistent']);
   });
 
   it('should resolve policies in parallel sub-steps', () => {
@@ -326,8 +326,8 @@ describe('policies', () => {
 
     const config = normalizeWorkflowConfig(raw, testDir);
     const parallel = config.steps[0]!.parallel!;
-    expect(parallel[0]!.policyContents).toEqual(['Be thorough.']);
-    expect(parallel[1]!.policyContents).toEqual(['Write clean code.', 'Be thorough.']);
+    expect(parallel[0]!.policyContents!.map((r) => r.content)).toEqual(['Be thorough.']);
+    expect(parallel[1]!.policyContents!.map((r) => r.content)).toEqual(['Write clean code.', 'Be thorough.']);
   });
 
   it('should leave config.policies undefined when no policies defined', () => {
@@ -400,7 +400,7 @@ describe('section reference resolution', () => {
     };
 
     const config = normalizeWorkflowConfig(raw, testDir);
-    expect(config.steps[0]!.policyContents).toEqual(['# Coding Policy\nWrite clean code.']);
+    expect(config.steps[0]!.policyContents!.map((r) => r.content)).toEqual(['# Coding Policy\nWrite clean code.']);
   });
 
   it('should resolve mixed policy array: [section-name, ./path]', () => {
@@ -416,7 +416,7 @@ describe('section reference resolution', () => {
     };
 
     const config = normalizeWorkflowConfig(raw, testDir);
-    expect(config.steps[0]!.policyContents).toEqual([
+    expect(config.steps[0]!.policyContents!.map((r) => r.content)).toEqual([
       '# Coding Policy\nWrite clean code.',
       '# Testing Policy\nTest everything.',
     ]);
@@ -671,9 +671,9 @@ describe('section reference resolution', () => {
     const config = normalizeWorkflowConfig(raw, testDir);
     const parallel = config.steps[0]!.parallel!;
     expect(parallel[0]!.persona).toBe('./personas/coder.md');
-    expect(parallel[0]!.policyContents).toEqual(['# Coding Policy\nWrite clean code.']);
+    expect(parallel[0]!.policyContents!.map((r) => r.content)).toEqual(['# Coding Policy\nWrite clean code.']);
     expect(parallel[0]!.instruction).toBe('Implement the feature.');
-    expect(parallel[1]!.policyContents).toEqual([
+    expect(parallel[1]!.policyContents!.map((r) => r.content)).toEqual([
       '# Coding Policy\nWrite clean code.',
       '# Testing Policy\nTest everything.',
     ]);
@@ -692,6 +692,6 @@ describe('section reference resolution', () => {
     };
 
     const config = normalizeWorkflowConfig(raw, testDir);
-    expect(config.steps[0]!.policyContents).toEqual(['# Coding Policy\nWrite clean code.']);
+    expect(config.steps[0]!.policyContents!.map((r) => r.content)).toEqual(['# Coding Policy\nWrite clean code.']);
   });
 });

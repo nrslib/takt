@@ -255,8 +255,8 @@ describe('WorkflowEngine: worktree reportDir resolution', () => {
       initialStep: 'implement',
       steps: [
         makeStep('implement', {
-          policyContents: ['Policy content'],
-          knowledgeContents: ['Knowledge content'],
+          policyContents: [{ content: 'Policy content' }],
+          knowledgeContents: [{ content: 'Knowledge content' }],
           rules: [makeRule('go-review', 'review')],
         }),
         makeStep('review', {

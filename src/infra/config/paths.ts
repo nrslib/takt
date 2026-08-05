@@ -68,6 +68,11 @@ export function getGlobalStepsDir(): string {
   return join(getGlobalConfigDir(), 'steps');
 }
 
+/** Get takt global facet-pools directory (~/.takt/facet-pools) */
+export function getGlobalFacetPoolsDir(): string {
+  return join(getGlobalConfigDir(), 'facet-pools');
+}
+
 /** Get takt global logs directory */
 export function getGlobalLogsDir(): string {
   return join(getGlobalConfigDir(), 'logs');
@@ -94,6 +99,21 @@ export function getBuiltinLanguageStepsDir(lang: Language): string {
 /** Legacy shared step-fragment root used before fragments became language-scoped. */
 export function getBuiltinSharedStepsDir(): string {
   return join(getResourcesDir(), 'steps');
+}
+
+/** Get builtin language-scoped facet-pools directory (builtins/{lang}/facet-pools) */
+export function getBuiltinLanguageFacetPoolsDir(lang: Language): string {
+  return join(getLanguageResourcesDir(lang), 'facet-pools');
+}
+
+/** Get builtin language resources root (builtins/{lang}). Facet-pool owned facets live under builtins/{lang}/facets/, outside facet-pools/. */
+export function getBuiltinLanguageResourcesDir(lang: Language): string {
+  return getLanguageResourcesDir(lang);
+}
+
+/** Get builtin shared facet-pools directory (builtins/facet-pools) */
+export function getBuiltinSharedFacetPoolsDir(): string {
+  return join(getResourcesDir(), 'facet-pools');
 }
 
 export function isBuiltinWorkflowPath(filePath: string): boolean {
@@ -127,6 +147,11 @@ export function getProjectProviderOptionsDir(projectDir: string): string {
 
 export function getProjectStepsDir(projectDir: string): string {
   return join(getProjectConfigDir(projectDir), 'steps');
+}
+
+/** Get project facet-pools directory (.takt/facet-pools in project) */
+export function getProjectFacetPoolsDir(projectDir: string): string {
+  return join(getProjectConfigDir(projectDir), 'facet-pools');
 }
 
 /** Get project config file path */
@@ -201,6 +226,12 @@ export function getRepertoireProviderOptionsDir(owner: string, repo: string, rep
 export function getRepertoireStepsDir(owner: string, repo: string, repertoireDir?: string): string {
   const base = repertoireDir ?? getRepertoireDir();
   return join(base, `@${owner}`, repo, 'steps');
+}
+
+/** Get repertoire facet-pools directory (~/.takt/repertoire/@{owner}/{repo}/facet-pools) */
+export function getRepertoireFacetPoolsDir(owner: string, repo: string, repertoireDir?: string): string {
+  const base = repertoireDir ?? getRepertoireDir();
+  return join(base, `@${owner}`, repo, 'facet-pools');
 }
 
 /** Validate path is safe (no directory traversal) */

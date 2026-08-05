@@ -3,6 +3,7 @@ import type {
   FindingContractLedgerRegistries,
   InterpretationRecoveryOriginSettlement,
 } from './finding-contract-types.js';
+import type { ResolvedFacetContent } from './workflow-types.js';
 
 export * from './finding-contract-types.js';
 
@@ -286,8 +287,8 @@ export interface FindingContractManagerConfig {
   providerRoutingPersonaKey?: string;
   instruction: string;
   outputContract: string;
-  policyContents?: string[];
-  knowledgeContents?: string[];
+  policyContents?: readonly ResolvedFacetContent[];
+  knowledgeContents?: readonly ResolvedFacetContent[];
   provider?: ProviderType;
   model?: string;
 }
