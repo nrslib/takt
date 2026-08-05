@@ -85,6 +85,7 @@ export class OptionsBuilder {
       step: WorkflowStep,
       reviewerOutputStrategy: FindingContractReviewerOutputStrategy | undefined,
       reviewScopeSnapshotId?: string,
+      parallelContextKey?: string,
     ) => FindingContractInstructionContext | undefined,
     private readonly getTask?: () => string,
   ) {}
@@ -388,11 +389,13 @@ export class OptionsBuilder {
     step: WorkflowStep,
     reviewerOutputStrategy: FindingContractReviewerOutputStrategy | undefined,
     reviewScopeSnapshotId?: string,
+    parallelContextKey?: string,
   ): FindingContractInstructionContext | undefined {
     return this.getFindingContractInstructionContext?.(
       step,
       reviewerOutputStrategy,
       reviewScopeSnapshotId,
+      parallelContextKey,
     );
   }
 

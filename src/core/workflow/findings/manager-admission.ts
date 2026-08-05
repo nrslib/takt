@@ -5,6 +5,9 @@ import type {
   FindingEvidenceRecord,
   RawFinding,
   RawFindingEvidence,
+  IntakeContractDefect,
+  IntakeContractMissingRequirement,
+  IntakeContractAnomalyReasonCode,
   ReviewerAnomalyKind,
 } from './types.js';
 import type { ProvisionalFindingSpec } from './reconciler.js';
@@ -31,6 +34,91 @@ import type {
 } from './pre-admission-entity-binding-types.js';
 import { resolvePreAdmissionEntityBindings } from './pre-admission-entity-binding-commit.js';
 import { resolveCurrentLifecycleObservationTarget } from './reviewer-anomaly-policy.js';
+import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
+import type { RestatementRequestV1 } from './review-publication.js';
+
+export const INTAKE_CONTRACT_CLASSIFICATION_AUTHORITY_ID = 'system/intake_observation_classification_v1';
+
+function sortedUniqueStrings(values: readonly string[]): string[] {
+  return [...new Set(values)].sort(compareBinaryStrings);
+}
+
+function intakeContractDefectFor(input: {
+  item: CanonicalIntakeItem;
+  presentationLimit: number;
+  additionalReasonCodes?: readonly IntakeContractAnomalyReasonCode[];
+  additionalMissingRequirements?: readonly IntakeContractMissingRequirement[];
+}): IntakeContractDefect | undefined {
+  const { canonical, wire } = input.item;
+  const lifecycleIntent = hasLifecycleTransitionIntent({
+    relation: canonical.relation,
+    targetFindingId: canonical.targetFindingId,
+  });
+  if (lifecycleIntent) {
+    return undefined;
+  }
+  const hasTargetAnchor = canonical.target !== undefined
+    && canonical.target.kind !== 'review_scope';
+  const missingRequirements: IntakeContractMissingRequirement[] = [
+    ...(canonical.relation === null ? ['relation' as const] : []),
+    ...(!hasTargetAnchor ? ['target' as const] : []),
+    ...(canonical.familyTag === undefined ? ['familyTag' as const] : []),
+    ...(canonical.severity === undefined ? ['severity' as const] : []),
+    ...(canonical.title === undefined ? ['title' as const] : []),
+    ...(canonical.description === undefined ? ['description' as const] : []),
+    ...(canonical.evidence.length === 0 || canonical.evidenceCoverageGaps.length > 0
+      ? ['claimEvidence' as const]
+      : []),
+    ...(input.additionalMissingRequirements ?? []),
+  ];
+  const reasonCodes: IntakeContractAnomalyReasonCode[] = [
+    ...(missingRequirements.some((requirement) => (
+      requirement !== 'claimEvidence'
+    )) ? ['product-identity-incomplete' as const] : []),
+    ...(missingRequirements.includes('claimEvidence') ? ['claim-evidence-missing' as const] : []),
+    ...(canonical.description === undefined && canonical.rawExcerpt !== undefined
+      ? ['normalizer-extraction-loss' as const]
+      : []),
+    ...(input.additionalReasonCodes ?? []),
+  ];
+  if (missingRequirements.length === 0 && reasonCodes.length === 0) {
+    return undefined;
+  }
+  const hasClaimAnchor = Boolean(
+    (canonical.rawExcerpt !== undefined && canonical.rawExcerpt.trim().length > 0)
+    || (canonical.description !== undefined && canonical.description.trim().length > 0)
+    || hasTargetAnchor
+    || canonical.evidence.length > 0,
+  );
+  return {
+    observationClass: hasClaimAnchor ? 'claim-bearing' : 'protocol-noise',
+    classificationAuthorityId: INTAKE_CONTRACT_CLASSIFICATION_AUTHORITY_ID,
+    reasonCodes: sortedUniqueStrings(reasonCodes) as IntakeContractAnomalyReasonCode[],
+    missingRequirements: sortedUniqueStrings(missingRequirements) as IntakeContractMissingRequirement[],
+    presentationOwnerReviewer: wire.reviewer,
+    presentationLimit: Math.max(1, input.presentationLimit),
+  };
+}
+
+function intakeContractAnomalyFor(input: {
+  item: CanonicalIntakeItem;
+  reason: string;
+  presentationLimit: number;
+  additionalReasonCodes?: readonly IntakeContractAnomalyReasonCode[];
+  additionalMissingRequirements?: readonly IntakeContractMissingRequirement[];
+}): ReviewerAnomalySpec | undefined {
+  const intakeContract = intakeContractDefectFor(input);
+  if (intakeContract === undefined) {
+    return undefined;
+  }
+  return createReviewerAnomalySpec({
+    wire: input.item.wire,
+    canonical: input.item.canonical,
+    anomalyKind: 'intake-contract-incomplete',
+    reason: input.reason,
+    intakeContract,
+  });
+}
 
 export type { PreAdmissionEntityBinding } from './pre-admission-entity-binding-types.js';
 
@@ -137,6 +225,17 @@ interface AdmissionItemEvaluation {
   verifiedEvidenceCandidate?: ReviewerAnomalyPromotionCandidate;
   verifiedEvidenceRecords?: FindingEvidenceRecord[];
   provisionalOnlyLadderRawId?: string;
+}
+
+function restatementRequestForItem(
+  item: CanonicalIntakeItem,
+  requests: readonly RestatementRequestV1[],
+): RestatementRequestV1 | undefined {
+  const matching = requests.filter((request) => (
+    request.reviewer === item.wire.reviewer
+    && request.sourceExcerptDigest === item.wire.sourceBinding.excerptDigest
+  ));
+  return matching.length === 1 ? matching[0] : undefined;
 }
 
 function classifyEvidence(input: {
@@ -400,14 +499,55 @@ function evaluateAdmissionItem(input: {
   reviewScopeSnapshot: ReviewScopeProofSnapshot;
   workflowTask: string;
   entityBindings: ReviewerIntakeResult['entityBindings'];
+  presentationLimit: number;
+  exactEntityAuditRawIds: ReadonlySet<string>;
+  restatementRequests: readonly RestatementRequestV1[];
 }): AdmissionItemEvaluation {
+  if (input.exactEntityAuditRawIds.has(input.item.wire.rawFindingId)) {
+    return {
+      pool: input.pool,
+      rejection: {
+        rawFindingId: input.item.wire.rawFindingId,
+        location: '',
+        reason: 'Evidence-less observation was deterministically bound to an existing entity; association grants audit authority only',
+      },
+      rejectedItem: input.item,
+    };
+  }
   const binding = input.entityBindings.get(input.item.wire.rawFindingId);
-  if (binding !== undefined) {
+  if (
+    binding !== undefined
+    && !(
+      binding.kind === 'entity_group'
+      && hasLifecycleTransitionIntent({
+        relation: input.item.canonical.relation,
+        targetFindingId: input.item.canonical.targetFindingId,
+      })
+    )
+  ) {
     return evaluateEntityBindingItem({
       item: input.item,
       pool: input.pool,
       binding,
+      presentationLimit: input.presentationLimit,
     });
+  }
+  const intakeAnomaly = intakeContractAnomalyFor({
+    item: input.item,
+    reason: 'Independent reviewer observation does not satisfy the product admission contract',
+    presentationLimit: input.presentationLimit,
+  });
+  if (intakeAnomaly !== undefined) {
+    return {
+      pool: input.pool,
+      rejection: {
+        rawFindingId: input.item.wire.rawFindingId,
+        location: '',
+        reason: intakeAnomaly.mismatchReason,
+      },
+      anomalySpec: intakeAnomaly,
+      rejectedItem: input.item,
+    };
   }
   const classification = classifyEvidence(input);
   const { item, pool } = input;
@@ -415,8 +555,13 @@ function evaluateAdmissionItem(input: {
     return evaluateRejectedItem({ ...input, classification });
   }
 
+  const restatementRequest = restatementRequestForItem(item, input.restatementRequests);
   const verifiedEvidenceCandidate = classification.evidenceRecords.length > 0
-    ? { lineageKey: item.canonical.lineageKey, rawFindingId: item.wire.rawFindingId }
+    ? {
+        lineageKey: item.canonical.lineageKey,
+        rawFindingId: item.wire.rawFindingId,
+        ...(restatementRequest === undefined ? {} : { restatementRequest }),
+      }
     : undefined;
   const provisionalOnlyLadderRawId = pool === 'tainted'
     && verifiedEvidenceCandidate === undefined
@@ -436,11 +581,34 @@ function evaluateEntityBindingItem(input: {
   item: CanonicalIntakeItem;
   pool: AdmissionPool;
   binding: PreAdmissionEntityBinding;
+  presentationLimit: number;
 }): AdmissionItemEvaluation {
   const { item, pool, binding } = input;
-  const reason = binding.kind === 'bind_existing'
-    ? `Evidence-less observation was semantically associated with "${binding.targetFindingId}" by the Finding Manager; association grants audit authority only`
-    : `Evidence-less observation was classified as ${binding.decision} before admission`;
+  if (binding.kind === 'entity_group') {
+    const anomaly = intakeContractAnomalyFor({
+      item,
+      reason: `Evidence-less observation was classified as ${binding.decision} before admission`,
+      presentationLimit: input.presentationLimit,
+      additionalReasonCodes: ['claim-evidence-missing'],
+      additionalMissingRequirements: ['claimEvidence'],
+    });
+    if (anomaly === undefined) {
+      throw new Error(
+        `Entity binding for raw finding "${item.wire.rawFindingId}" did not produce an intake contract anomaly`,
+      );
+    }
+    return {
+      pool,
+      rejection: {
+        rawFindingId: item.wire.rawFindingId,
+        location: '',
+        reason: anomaly.mismatchReason,
+      },
+      anomalySpec: anomaly,
+      rejectedItem: item,
+    };
+  }
+  const reason = `Evidence-less observation was semantically associated with "${binding.targetFindingId}" by the Finding Manager; association grants audit authority only`;
   return {
     pool,
     rejection: {
@@ -465,12 +633,18 @@ export function evaluateRawAdmission(input: {
   intake: ReviewerIntakeResult;
   reviewScopeSnapshot: ReviewScopeProofSnapshot;
   workflowTask: string;
+  presentationLimit?: number;
+  restatementRequests?: readonly RestatementRequestV1[];
 }): RawAdmissionEvaluation {
   assertCanonicalIntakeRecoveryStates(input.intake.items, input.previousLedger);
   const resolvedEntityBindings = resolvePreAdmissionEntityBindings({
     ledger: input.previousLedger,
     intake: input.intake,
   });
+  const restatementRequests = input.restatementRequests ?? [];
+  const exactEntityAuditRawIds = new Set(
+    resolvedEntityBindings.auditAttachments.map(({ rawFindingId }) => rawFindingId),
+  );
   const itemByRawFindingId = new Map(
     input.intake.items.map((item) => [item.wire.rawFindingId, item]),
   );
@@ -493,6 +667,9 @@ export function evaluateRawAdmission(input: {
       reviewScopeSnapshot: input.reviewScopeSnapshot,
       workflowTask: input.workflowTask,
       entityBindings: input.intake.entityBindings,
+      presentationLimit: input.presentationLimit ?? 6,
+      exactEntityAuditRawIds,
+      restatementRequests,
     })),
     ...tainted.map((item) => evaluateAdmissionItem({
       cwd: input.cwd,
@@ -505,6 +682,9 @@ export function evaluateRawAdmission(input: {
       reviewScopeSnapshot: input.reviewScopeSnapshot,
       workflowTask: input.workflowTask,
       entityBindings: input.intake.entityBindings,
+      presentationLimit: input.presentationLimit ?? 6,
+      exactEntityAuditRawIds,
+      restatementRequests,
     })),
   ];
   const cleanAdmitted = definedValues(

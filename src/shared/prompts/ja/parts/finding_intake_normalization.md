@@ -45,8 +45,11 @@ schema に一致する JSON object を1つだけ返してください。説明�
    抽出対象がありません。対象となる問題またはlifecycle claimがない場合は
    `{"rawFindings":[]}`を返してください。
 
-{{#if correction}}前回の抽出は schema または機械 intake 検証に失敗しました。同じ報告から新規に1回だけ
-抽出してください。前回出力の再利用、議論、修復は禁止です。
+{{#if correction}}前回の抽出は schema または機械 intake 検証に失敗したか、`rawExcerpt` があるのに
+claim本文を失いました。同じ報告から新規に1回だけ抽出してください。extraction-fidelity の場合だけ、
+非空の `rawExcerpt` が claim を記述し candidate の `description: null` になっているときは、その
+`rawExcerpt` 全体を `candidate.description` にそのままコピーしてください。他の項目の生成・改善は
+禁止です。前回出力の再利用、議論、修復は禁止です。
 
 {{/if}}## レビュー報告
 

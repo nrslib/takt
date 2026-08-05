@@ -6,7 +6,7 @@ import {
   type FindingSeverity,
   type FindingsRuleContext,
 } from './types.js';
-import { isProductFindingEntry } from './finding-entry.js';
+import { isProductFindingEntry, isReclassifiedReviewerAnomalyFinding } from './finding-entry.js';
 import { isActiveConflictUnadjudicated } from './conflict-adjudication-model.js';
 import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
 import {
@@ -271,9 +271,15 @@ export function ledgerHasDismissedFindings(ledger: FindingLedger): boolean {
     .some((finding) => finding.status === 'dismissed');
 }
 
-export function buildFindingsRuleContext(ledger: FindingLedger, _cwd: string): FindingsRuleContext {
+export function buildFindingsRuleContext(
+  ledger: FindingLedger,
+  _cwd: string,
+  presentationCounts: ReadonlyMap<string, number> = new Map(),
+): FindingsRuleContext {
   const projection = resolveFindingLedgerInstructionProjection(ledger);
-  const openItems = projection.findings.filter((finding) => finding.status === 'open');
+  const openItems = projection.findings.filter((finding) => (
+    finding.status === 'open' && !isReclassifiedReviewerAnomalyFinding(finding)
+  ));
   const familyTagsByRawFindingId = indexRawFindingFamilyTags(projection);
   const activeConflicts = projection.conflicts.filter((conflict) => conflict.status === 'active');
   const unadjudicatedConflictCount = activeConflicts.filter((conflict) => (
@@ -350,14 +356,36 @@ export function buildFindingsRuleContext(ledger: FindingLedger, _cwd: string): F
     // （open/provisional 等）でカウントされているため二重計上しない。product
     // gate（COMPLETE 判定）はこの count を一切参照しない — reviewerAnomalies は
     // findings 配列と別物なので、参照しなくても構造的に gate を塞げない。
-    reviewerAnomalies: {
-      count: (projection.reviewerAnomalies ?? []).filter(isOutstandingReviewerAnomaly).length,
+    reviewerAnomalies: (() => {
+      const anomalies = projection.reviewerAnomalies ?? [];
+      const outstanding = anomalies.filter(isOutstandingReviewerAnomaly);
+      const intake = outstanding.filter((anomaly) => (
+        anomaly.kind === 'intake-contract-incomplete' && anomaly.intakeContract !== undefined
+      ));
+      return {
+        count: outstanding.length,
+        requiresGuaranteedPresentationCount: intake.filter((anomaly) => (
+          (presentationCounts.get(anomaly.id) ?? 0) === 0
+        )).length,
+        restatementReadyCount: intake.filter((anomaly) => {
+          const count = presentationCounts.get(anomaly.id) ?? 0;
+          return count > 0 && count < anomaly.intakeContract!.presentationLimit;
+        }).length,
+        claimBearingTerminalCount: intake.filter((anomaly) => (
+          anomaly.intakeContract!.observationClass === 'claim-bearing'
+          && anomaly.intakeContract!.terminalDisposition?.workflowOutcome === 'review_integrity_unresolved'
+        )).length,
+        protocolNoiseRejectedCount: anomalies.filter((anomaly) => (
+          anomaly.kind === 'intake-contract-incomplete'
+          && anomaly.intakeContract?.terminalDisposition?.workflowOutcome === 'non_claim_observation_rejected'
+        )).length,
       // review-integrity requirement: review-integrity 予算が尽きたか（台帳側で計算・
       // 永続化済み。ここは読むだけ）。未昇格 anomaly が残る限り COMPLETE は許さず
       // 再レビューへ送るが、有限回で補完できなければ builtin はこれを見て
       // 要件を維持した再計画へルーティングする。
-      budgetExhausted: projection.reviewIntegrity?.exhausted ?? false,
-    },
+        budgetExhausted: projection.reviewIntegrity?.exhausted ?? false,
+      };
+    })(),
     conflicts: {
       count: activeConflicts.length,
       items: activeConflicts.map((conflict) => ({

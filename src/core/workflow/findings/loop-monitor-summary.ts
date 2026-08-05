@@ -5,6 +5,7 @@ import { stopBudgetRoundsCompleted } from './stop-budget.js';
 import { resolveStopBudgetLimits } from './stop-budget.js';
 import type { FindingContractConfig } from './types.js';
 import { isOutstandingReviewerAnomaly } from './reviewer-anomalies.js';
+import { isReclassifiedReviewerAnomalyFinding } from './finding-entry.js';
 
 export interface LoopMonitorProvisionalSummary {
   id: string;
@@ -22,7 +23,7 @@ export interface LoopMonitorFindingsSummaryData {
   activeConflictCount: number;
   roundsCompleted: number;
   maxRounds: number;
-  reviewerAnomalies: Pick<FindingsRuleContext['reviewerAnomalies'], 'count' | 'budgetExhausted'>;
+  reviewerAnomalies: Pick<FindingsRuleContext['reviewerAnomalies'], 'count' | 'budgetExhausted' | 'requiresGuaranteedPresentationCount' | 'restatementReadyCount' | 'claimBearingTerminalCount' | 'protocolNoiseRejectedCount'>;
 }
 
 /**
@@ -38,7 +39,9 @@ export function buildLoopMonitorFindingsSummaryData(
   ledger: FindingLedger,
   contract: Pick<FindingContractConfig, 'stopBudget'>,
 ): LoopMonitorFindingsSummaryData {
-  const open = ledger.findings.filter((finding) => finding.status === 'open');
+  const open = ledger.findings.filter((finding) => (
+    finding.status === 'open' && !isReclassifiedReviewerAnomalyFinding(finding)
+  ));
   const openProvisionalFindings = open.filter((finding) => finding.provisional !== undefined);
   const roundsCompleted = stopBudgetRoundsCompleted(ledger);
   const limits = resolveStopBudgetLimits(contract.stopBudget);
@@ -63,6 +66,13 @@ export function buildLoopMonitorFindingsSummaryData(
       count: (ledger.reviewerAnomalies ?? [])
         .filter(isOutstandingReviewerAnomaly).length,
       budgetExhausted: ledger.reviewIntegrity?.exhausted ?? false,
+      requiresGuaranteedPresentationCount: 0,
+      restatementReadyCount: 0,
+      claimBearingTerminalCount: 0,
+      protocolNoiseRejectedCount: (ledger.reviewerAnomalies ?? []).filter((anomaly) => (
+        anomaly.kind === 'intake-contract-incomplete'
+        && anomaly.intakeContract?.terminalDisposition?.workflowOutcome === 'non_claim_observation_rejected'
+      )).length,
     },
   };
 }
@@ -82,7 +92,7 @@ export function renderLoopMonitorFindingsSummary(
   return [
     `Completion gate requires findings.open.count == 0; currently ${data.openCount} open (${data.openSubstantiveCount} substantive, ${data.openProvisional.length} gate-blocking provisional). Active conflicts: ${data.activeConflictCount}.`,
     `Manager rounds completed: ${data.roundsCompleted}/${data.maxRounds}.`,
-    `findings.reviewerAnomalies.count: ${data.reviewerAnomalies.count}; findings.reviewerAnomalies.budgetExhausted: ${data.reviewerAnomalies.budgetExhausted}. Engine invariant: reviewer anomalies are unverified reviewer claims, not repairable product findings. Never route a reviewer anomaly to fix; only actionable open findings may be routed to fix.`,
+    `findings.reviewerAnomalies.count: ${data.reviewerAnomalies.count}; findings.reviewerAnomalies.budgetExhausted: ${data.reviewerAnomalies.budgetExhausted}; requiresGuaranteedPresentationCount: ${data.reviewerAnomalies.requiresGuaranteedPresentationCount}; restatementReadyCount: ${data.reviewerAnomalies.restatementReadyCount}; claimBearingTerminalCount: ${data.reviewerAnomalies.claimBearingTerminalCount}. Engine invariant: reviewer anomalies are unverified reviewer claims, not repairable product findings. Never route a reviewer anomaly to fix; only actionable open findings may be routed to fix.`,
     ...(provisionalLines.length > 0
       ? ['Open provisional findings (these block completion until settled):', ...provisionalLines]
       : []),

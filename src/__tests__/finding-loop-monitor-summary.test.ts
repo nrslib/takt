@@ -277,6 +277,10 @@ describe('renderLoopMonitorFindingsSummary', () => {
     expect(data.reviewerAnomalies).toEqual({
       count: 1,
       budgetExhausted: false,
+      requiresGuaranteedPresentationCount: 0,
+      restatementReadyCount: 0,
+      claimBearingTerminalCount: 0,
+      protocolNoiseRejectedCount: 0,
     });
     expect(summary).toContain('findings.reviewerAnomalies.count: 1');
   });

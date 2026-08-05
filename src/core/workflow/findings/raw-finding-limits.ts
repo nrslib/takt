@@ -35,8 +35,8 @@ export const MANAGER_INTERPRETATION_LIMITS = {
   maxManagerCallsPerStep: 4,
   /** 解釈対象 / step */
   maxInterpretationTargetsPerStep: 64,
-  /** input tokens / call */
-  maxInputTokensPerCall: 24_000,
+  /** adapter-visible UTF-8 bytes / call */
+  maxInputBytesPerCall: 24_000,
   /** input tokens / step */
   maxInputTokensPerStep: 64_000,
   /** output tokens / call */

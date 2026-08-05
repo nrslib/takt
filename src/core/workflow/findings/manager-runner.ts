@@ -14,6 +14,9 @@ import { captureReviewScopeProofSnapshot } from './snapshot.js';
 import { computeRoundMarker } from './round-marker.js';
 import { runManagerRoundExclusive } from './manager-round-lock.js';
 import { bindPreAdmissionEntities } from './pre-admission-entity-binding.js';
+import { collectRestatementRequests } from './review-publication.js';
+import { migrateLegacyIntakeProvisionalFindings } from './legacy-intake-reclassification.js';
+import { resolveReviewIntegrityLimits } from './review-integrity.js';
 
 const log = createLogger('finding-manager-runner');
 
@@ -57,7 +60,19 @@ export async function runFindingManagerForStep(
   });
 
   return runManagerRoundExclusive(input.ledgerStore, async () => {
-    const loadedLedger = input.ledgerStore.loadLedger();
+    const migrated = await input.ledgerStore.updateLedger((ledger) => {
+      const result = migrateLegacyIntakeProvisionalFindings({
+        ledger,
+        observation: {
+          runId: input.runId,
+          stepName: input.parentStep.name,
+          timestamp: input.timestamp,
+        },
+        presentationLimit: resolveReviewIntegrityLimits(input.contract.reviewBudget).maxReviewRounds,
+      });
+      return { ledger: result.ledger, result: result.migratedFindingIds };
+    });
+    const loadedLedger = migrated.ledger;
     const resumed = await resumePendingManagerCommit(input, loadedLedger);
     const currentLedger = resumed?.ledger ?? loadedLedger;
     if (resumed?.completedRoundMarker === stopBudgetRoundMarker) {
@@ -98,6 +113,8 @@ export async function runFindingManagerForStep(
       intake,
       reviewScopeSnapshot,
       workflowTask: input.workflowTask,
+      presentationLimit: prepared.reviewIntegrityLimits.maxReviewRounds,
+      restatementRequests: collectRestatementRequests(input.subResults.map(({ publication }) => publication)),
     });
     const managerDecision = await runManagerDecisionStage({
       input,

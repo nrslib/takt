@@ -255,7 +255,7 @@ export function openHarness(input: {
       scopeIdentity: '2'.repeat(64),
       budgetLimits: input.budgetLimits ?? {
         maxCallsPerRound: 4,
-        maxAdapterVisibleInputTokensPerCall: 100_000,
+        maxAdapterVisibleInputBytesPerCall: 100_000,
         maxOutputTokensPerCall: 10_000,
         maxChargedInputTokensPerRound: 400_000,
         maxChargedOutputTokensPerRound: 40_000,

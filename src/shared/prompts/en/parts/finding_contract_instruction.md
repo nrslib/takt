@@ -7,6 +7,11 @@
 {{else}}Current finding ledger summary:
 {{/if}}{{ledgerSummary}}
 
+{{#if restatementOnly}}## Restatement requests
+This is a restatement-only review. Address only the requests below. Preserve each request's source claim atom and return a complete product claim only when the repository evidence supports every required field. Do not invent missing fields, lifecycle relations, targets, or evidence. Each request may produce at most one `new` claim, and any claim must keep relation `new`, have no targetFindingId or target precondition, and may echo the request's anomaly ID in `reassertsReviewerAnomalyId`.
+{{restatementRequestsJson}}
+{{/if}}
+
 {{#if structuredReviewer}}- Report every fresh issue you observe as a structured raw finding with relation "new" (empty targetFindingId).
 - `new`, `persists`, `resolution_confirmation`, and `reopened` are evidence-backed raw relations with ledger IDs where required. The findings-manager and engine make final lifecycle decisions and finding-ID matches; reviewers must not assign or decide final state.
 {{/if}}{{#if plainTextNormalizedReviewer}}- Write an ordinary Markdown review report. Do not return JSON or structured output.

@@ -497,6 +497,23 @@ export interface FindingProvisionalMetadata {
   firstObservedRound: number;
 }
 
+export interface FindingReviewerAnomalyReclassification {
+  kind: 'reclassified_to_reviewer_anomaly';
+  migrationId: string;
+  authorityId: 'system/intake_contract_reclassification_v1';
+  reason: 'product_claim_not_adjudicated';
+  anomalyId: string;
+  oldHead: FindingLifecycleEntityHead;
+  rawFindingIds: string[];
+  rawCanonicalSnapshotIds: string[];
+  terminalEpisodeIds: string[];
+  terminalAttemptIds: string[];
+  scopeBindingIds: string[];
+  bindingAuthorizationIds: string[];
+  bindingDecisionIds: string[];
+  recordedAt: FindingObservation;
+}
+
 export interface FindingLedgerEntry {
   id: string;
   status: FindingStatus;
@@ -536,6 +553,7 @@ export interface FindingLedgerEntry {
   /** 楽観的前提条件（CAS）の版数。エントリを変更するたびに +1。 */
   revision: number;
   provisional?: FindingProvisionalMetadata;
+  reviewerAnomalyReclassification?: FindingReviewerAnomalyReclassification;
   /**
    * 証跡不成立で証拠としては不採用になった再観測の履歴。
    * location admission に落ちた persists が「実在する open target」を指す場合、
@@ -835,6 +853,7 @@ export interface ReviewerRawFindingCandidate {
   readonly intakeId: string;
   readonly reviewerStableKey: string;
   readonly rawExcerpt?: string;
+  readonly reassertsReviewerAnomalyId?: string;
   readonly sourceBinding: CandidateSourceBinding;
   readonly target: FindingTarget;
   readonly targetIdentityHash: string;
@@ -889,6 +908,8 @@ interface CanonicalRawFindingBase {
   readonly target: FindingTarget;
   readonly targetIdentityHash: string;
   readonly candidateIdentityHash: string;
+  readonly rawExcerpt?: string;
+  readonly reassertsReviewerAnomalyId?: string;
   readonly sourceBinding: CandidateSourceBinding;
   readonly issuedEngineProofRecords: readonly EngineProofRecord[];
   readonly evidenceCoverageGaps: readonly string[];
@@ -1500,6 +1521,10 @@ export interface RawFinding {
   semanticClaimIdentityHash: string;
   /** claim identity と source binding を束縛する candidate content address。 */
   candidateIdentityHash: string;
+  /** dedicated restatement request への reviewer の任意 echo。product identity には含めない。 */
+  reassertsReviewerAnomalyId?: string;
+  /** report 本文へ source-bound された元の claim excerpt。再提示と監査に使う。 */
+  rawExcerpt?: string;
   /** review report 本文へ束縛された候補の出典。 */
   sourceBinding: CandidateSourceBinding;
   /** This raw finding's relationship to the ledger. */
@@ -1519,6 +1544,7 @@ export interface RawFinding {
 // ---------------------------------------------------------------------------
 
 export const REVIEWER_ANOMALY_KINDS = [
+  'intake-contract-incomplete',
   /**
    * typed evidence record の shape または content address が壊れており、
    * 主張の真偽を検証する前提となる engine protocol が成立していない。
@@ -1545,6 +1571,46 @@ export const REVIEWER_ANOMALY_KINDS = [
   'lifecycle-admission-failure',
 ] as const;
 export type ReviewerAnomalyKind = typeof REVIEWER_ANOMALY_KINDS[number];
+
+export const INTAKE_CONTRACT_ANOMALY_REASON_CODES = [
+  'product-identity-incomplete',
+  'claim-evidence-missing',
+  'normalizer-extraction-loss',
+] as const;
+export type IntakeContractAnomalyReasonCode = typeof INTAKE_CONTRACT_ANOMALY_REASON_CODES[number];
+
+export const INTAKE_CONTRACT_MISSING_REQUIREMENTS = [
+  'familyTag',
+  'severity',
+  'title',
+  'description',
+  'target',
+  'relation',
+  'claimEvidence',
+] as const;
+export type IntakeContractMissingRequirement = typeof INTAKE_CONTRACT_MISSING_REQUIREMENTS[number];
+
+export interface IntakeContractTerminalDisposition {
+  kind:
+    | 'restatement_exhausted_claim_bearing'
+    | 'protocol_noise_rejected_after_presentation';
+  workflowOutcome:
+    | 'review_integrity_unresolved'
+    | 'non_claim_observation_rejected';
+  decidedAt: FindingObservation;
+  terminalPublicationId: string;
+  reason: string;
+}
+
+export interface IntakeContractDefect {
+  observationClass: 'claim-bearing' | 'protocol-noise';
+  classificationAuthorityId: string;
+  reasonCodes: IntakeContractAnomalyReasonCode[];
+  missingRequirements: IntakeContractMissingRequirement[];
+  presentationOwnerReviewer: string;
+  presentationLimit: number;
+  terminalDisposition?: IntakeContractTerminalDisposition;
+}
 
 export interface ReviewerAnomalySettlement {
   kind:
@@ -1585,6 +1651,7 @@ export interface ReviewerAnomalyEntry {
   claimedExcerpt?: string;
   /** 機械照合が不成立と判定した理由(決定的な事実の記述。欠陥の真偽には言及しない)。 */
   mismatchReason: string;
+  intakeContract?: IntakeContractDefect;
   firstObserved: FindingObservation;
   lastObserved: FindingObservation;
   /** この episode で観測された回数(upsert のたびに +1)。 */
@@ -1882,6 +1949,10 @@ export interface FindingsRuleContext {
    */
   reviewerAnomalies: {
     count: number;
+    requiresGuaranteedPresentationCount: number;
+    restatementReadyCount: number;
+    claimBearingTerminalCount: number;
+    protocolNoiseRejectedCount: number;
     /**
      * review-integrity 予算（review-integrity requirement）が尽きたか。未昇格 anomaly が
      * 残る限り product gate とは別に COMPLETE を拒否し再レビューへ送るが、有限回で

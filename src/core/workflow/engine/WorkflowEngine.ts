@@ -70,6 +70,9 @@ import { injectFindingConflictAdjudicationStep } from '../findings/adjudication-
 import { createFindingConflictAdjudicationRunner } from '../findings/adjudication-runner.js';
 import { rebindPendingManagerPublicationAtBootstrap } from '../findings/manager-commit.js';
 import { isOutstandingReviewerAnomaly } from '../findings/reviewer-anomalies.js';
+import { listFindingReviewPublications } from '../findings/review-publication.js';
+import { isReclassifiedReviewerAnomalyFinding } from '../findings/finding-entry.js';
+import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
 import { ERROR_MESSAGES } from '../constants.js';
 import { inheritReviewReports, writeReviewReportInheritanceDiagnostic } from '../report-inheritance.js';
 import {
@@ -242,6 +245,19 @@ export class WorkflowEngine extends EventEmitter {
     this.loopDetector = new LoopDetector(this.config.loopDetection);
     this.cycleDetector = new CycleDetector(this.config.loopMonitors ?? []);
     const initialMaxSteps = this.options.maxStepsOverride ?? this.config.maxSteps;
+    const findingContractConfigured = options.inheritedFindingContract?.contract
+      ?? this.config.findingContract;
+    if (
+      findingContractConfigured !== undefined
+      && (
+        initialMaxSteps === 'infinite'
+        || options.ignoreIterationLimit === true
+      )
+    ) {
+      throw new Error(
+        'Finding Contract execution requires finite maxSteps and cannot ignore the iteration limit',
+      );
+    }
     ensureRunDirsExist(runPaths);
     this.sharedRuntime = this.options.sharedRuntime ?? createSharedRuntime(
       this.options.resumePoint,
@@ -268,6 +284,11 @@ export class WorkflowEngine extends EventEmitter {
     this.sharedRuntime.workflowCallInvocationEvidence.index.validateResumePoint(this.options.resumePoint);
     this.sharedRuntime.maxSteps ??= initialMaxSteps;
     this.maxSteps = this.sharedRuntime.maxSteps;
+    if (findingContractConfigured !== undefined && this.maxSteps === 'infinite') {
+      throw new Error(
+        'Finding Contract execution requires a finite shared maxSteps value',
+      );
+    }
     this.resumeStackPrefix = this.options.resumeStackPrefix ?? [];
     this.runPaths = runPaths;
     this.reportDir = this.runPaths.reportsRel;
@@ -525,7 +546,20 @@ export class WorkflowEngine extends EventEmitter {
     if (!this.findingLedgerStore) {
       return;
     }
-    this.state.findings = buildFindingsRuleContext(this.findingLedgerStore.loadLedger(), this.cwd);
+    const presentationCounts = new Map<string, number>();
+    for (const publication of listFindingReviewPublications(this.runPaths.reportsAbs)) {
+      if (publication.presentationContext?.revision !== 2) {
+        continue;
+      }
+      for (const anomalyId of publication.presentationContext.presentedReviewerAnomalyIds) {
+        presentationCounts.set(anomalyId, (presentationCounts.get(anomalyId) ?? 0) + 1);
+      }
+    }
+    this.state.findings = buildFindingsRuleContext(
+      this.findingLedgerStore.loadLedger(),
+      this.cwd,
+      presentationCounts,
+    );
   }
 
   private async initializeFindingContract(): Promise<void> {
@@ -542,7 +576,9 @@ export class WorkflowEngine extends EventEmitter {
   /** Open findings still carrying provisional metadata. */
   private loadOpenProvisionalFindings(ledger: FindingLedger): FindingLedgerEntry[] {
     return ledger.findings.filter(
-      (finding) => finding.status === 'open' && finding.provisional !== undefined,
+      (finding) => finding.status === 'open'
+        && finding.provisional !== undefined
+        && !isReclassifiedReviewerAnomalyFinding(finding),
     );
   }
 
@@ -580,13 +616,102 @@ export class WorkflowEngine extends EventEmitter {
    * state.findings のキャッシュではなく保存直前の台帳を再読込して行う（並列子の
    * 更新を見逃さない）。
    */
-  private checkCompletionGate(): { ok: true } | { ok: false; reason: string } {
+  private intakeReviewIntegrityFailure(
+    anomalies: readonly ReviewerAnomalyEntry[],
+  ): {
+    reason: string;
+    failure: import('../types.js').WorkflowStepFailureSummary;
+  } | undefined {
+    const intakeAnomalies = anomalies.filter((anomaly) => (
+      anomaly.kind === 'intake-contract-incomplete'
+      && anomaly.intakeContract !== undefined
+    ));
+    if (intakeAnomalies.length === 0) {
+      return undefined;
+    }
+    const publications = listFindingReviewPublications(this.runPaths.reportsAbs);
+    const presentationCounts = new Map<string, number>();
+    const publicationIdsByAnomalyId = new Map<string, string[]>();
+    for (const publication of publications) {
+      if (publication.presentationContext?.revision !== 2) continue;
+      for (const anomalyId of publication.presentationContext.presentedReviewerAnomalyIds) {
+        presentationCounts.set(anomalyId, (presentationCounts.get(anomalyId) ?? 0) + 1);
+        const publicationIds = publicationIdsByAnomalyId.get(anomalyId) ?? [];
+        if (!publicationIds.includes(publication.publicationId)) {
+          publicationIds.push(publication.publicationId);
+        }
+        publicationIdsByAnomalyId.set(anomalyId, publicationIds);
+      }
+    }
+    const unpresentedIds = intakeAnomalies
+      .filter((anomaly) => (presentationCounts.get(anomaly.id) ?? 0) === 0)
+      .map(({ id }) => id)
+      .sort(compareBinaryStrings);
+    const exhaustedIds = intakeAnomalies
+      .filter((anomaly) => (
+        anomaly.intakeContract!.terminalDisposition?.workflowOutcome === 'review_integrity_unresolved'
+        || (presentationCounts.get(anomaly.id) ?? 0) >= anomaly.intakeContract!.presentationLimit
+      ))
+      .map(({ id }) => id)
+      .sort(compareBinaryStrings);
+    if (unpresentedIds.length === 0 && exhaustedIds.length === 0) {
+      return undefined;
+    }
+    const anomalyIds = intakeAnomalies.map(({ id }) => id).sort(compareBinaryStrings);
+    const publicationIds = [...new Set(intakeAnomalies.flatMap(({ id }) => (
+      publicationIdsByAnomalyId.get(id) ?? []
+    )))].sort(compareBinaryStrings);
+    const code = unpresentedIds.length > 0
+      ? 'review_integrity_unresolved_unpresented' as const
+      : 'restatement_exhausted_claim_bearing' as const;
+    const reason = code === 'review_integrity_unresolved_unpresented'
+      ? `Review-integrity reviewer anomaly restatement could not be presented for anomaly IDs: ${unpresentedIds.join(', ')}`
+      : `Review-integrity reviewer anomaly restatement limit was exhausted for anomaly IDs: ${exhaustedIds.join(', ')}`;
+    return {
+      reason,
+      failure: createRunFailure({
+        kind: 'review_integrity_unresolved',
+        step: this.state.currentStep,
+        reason,
+        error: reason,
+        details: {
+          reviewIntegrity: {
+            code,
+            anomalyIds,
+            unpresentedIds,
+            classificationAuthorityIds: [...new Set(intakeAnomalies.map(
+              ({ intakeContract }) => intakeContract!.classificationAuthorityId,
+            ))].sort(compareBinaryStrings),
+            publicationIds,
+          },
+        },
+      }),
+    };
+  }
+
+  private checkCompletionGate(): {
+    ok: true;
+  } | {
+    ok: false;
+    reason: string;
+    abortKind?: WorkflowAbortKind;
+    failure?: import('../types.js').WorkflowStepFailureSummary;
+  } {
     if (!this.findingLedgerStore) {
       return { ok: true };
     }
     const ledger = this.findingLedgerStore.loadLedger();
     const provisionals = this.loadOpenProvisionalFindings(ledger);
     const anomalies = this.loadOutstandingReviewerAnomalies(ledger);
+    const intakeFailure = this.intakeReviewIntegrityFailure(anomalies);
+    if (intakeFailure !== undefined) {
+      return {
+        ok: false,
+        reason: intakeFailure.reason,
+        abortKind: 'review_integrity_unresolved',
+        failure: intakeFailure.failure,
+      };
+    }
     if (provisionals.length === 0 && anomalies.length === 0) {
       return { ok: true };
     }
@@ -621,11 +746,27 @@ export class WorkflowEngine extends EventEmitter {
    * そのシグナルで扱われる）が、未昇格 anomaly が残ったまま 'completed' になるのは
    * どの完了経路でも許さない（review integrity は engine 側のハード不変条件）。
    */
-  private checkReviewIntegrityGate(): { ok: true } | { ok: false; reason: string } {
+  private checkReviewIntegrityGate(): {
+    ok: true;
+  } | {
+    ok: false;
+    reason: string;
+    abortKind?: WorkflowAbortKind;
+    failure?: import('../types.js').WorkflowStepFailureSummary;
+  } {
     if (!this.findingLedgerStore) {
       return { ok: true };
     }
     const anomalies = this.loadOutstandingReviewerAnomalies(this.findingLedgerStore.loadLedger());
+    const intakeFailure = this.intakeReviewIntegrityFailure(anomalies);
+    if (intakeFailure !== undefined) {
+      return {
+        ok: false,
+        reason: intakeFailure.reason,
+        abortKind: 'review_integrity_unresolved',
+        failure: intakeFailure.failure,
+      };
+    }
     if (anomalies.length === 0) {
       return { ok: true };
     }

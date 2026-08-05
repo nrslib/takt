@@ -2,6 +2,7 @@ import {
   computeTerminalEpisodeId,
   computeTerminalSelectionId,
 } from '../../models/finding-contract-identity.js';
+import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
 import type {
   TerminalAdjudicationCandidateSnapshot,
   TerminalAdjudicationEpisode,
@@ -9,10 +10,8 @@ import type {
 } from '../../models/finding-contract-types.js';
 import type { FindingLedger, FindingObservation } from './types.js';
 
-export function selectActiveTerminalAdjudicationEpisode(
-  ledger: FindingLedger,
-): TerminalAdjudicationEpisode | undefined {
-  return ledger.terminalAdjudicationEpisodes.find((episode) => {
+function activeEpisodes(ledger: FindingLedger): TerminalAdjudicationEpisode[] {
+  return ledger.terminalAdjudicationEpisodes.filter((episode) => {
     if (ledger.terminalAdjudicationSettlements.some(
       (settlement) => settlement.episodeId === episode.episodeId,
     )) {
@@ -26,6 +25,59 @@ export function selectActiveTerminalAdjudicationEpisode(
       || latest.stage === 'started'
       || (latest.stage === 'interrupted' && attempts.length < episode.maxAttempts);
   });
+}
+
+function attemptPriority(
+  ledger: FindingLedger,
+  episode: TerminalAdjudicationEpisode,
+): { phase: number; timestamp: string; count: number; findingId: string } {
+  const attempts = ledger.terminalAdjudicationAttempts.filter(
+    (attempt) => attempt.episodeId === episode.episodeId,
+  );
+  const latest = attempts[attempts.length - 1];
+  if (latest?.stage === 'proposed') {
+    return { phase: 0, timestamp: latest.completedAt?.timestamp ?? episode.createdAt.timestamp, count: 0, findingId: episode.findingId };
+  }
+  if (latest?.stage === 'started') {
+    return { phase: 1, timestamp: latest.startedAt.timestamp, count: 0, findingId: episode.findingId };
+  }
+  if (latest?.stage === 'interrupted') {
+    return { phase: 2, timestamp: latest.interruptedAt.timestamp, count: latest.retryOrdinal, findingId: episode.findingId };
+  }
+  const completedAttemptCount = ledger.terminalAdjudicationAttempts.filter(
+    (attempt) => attempt.findingId === episode.findingId && attempt.stage === 'completed',
+  ).length;
+  return { phase: 3, timestamp: episode.createdAt.timestamp, count: completedAttemptCount, findingId: episode.findingId };
+}
+
+export function listActiveTerminalAdjudicationEpisodes(
+  ledger: FindingLedger,
+): TerminalAdjudicationEpisode[] {
+  return activeEpisodes(ledger).sort((left, right) => {
+    const leftPriority = attemptPriority(ledger, left);
+    const rightPriority = attemptPriority(ledger, right);
+    if (leftPriority.phase !== rightPriority.phase) {
+      return leftPriority.phase - rightPriority.phase;
+    }
+    if (leftPriority.phase === 3 && leftPriority.count !== rightPriority.count) {
+      return leftPriority.count - rightPriority.count;
+    }
+    const timestampComparison = compareBinaryStrings(
+      leftPriority.timestamp,
+      rightPriority.timestamp,
+    );
+    if (timestampComparison !== 0) {
+      return timestampComparison;
+    }
+    return compareBinaryStrings(leftPriority.findingId, rightPriority.findingId)
+      || compareBinaryStrings(left.episodeId, right.episodeId);
+  });
+}
+
+export function selectActiveTerminalAdjudicationEpisode(
+  ledger: FindingLedger,
+): TerminalAdjudicationEpisode | undefined {
+  return listActiveTerminalAdjudicationEpisodes(ledger)[0];
 }
 
 export function createTerminalAdjudicationRound(input: {

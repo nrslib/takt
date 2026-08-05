@@ -20,12 +20,14 @@ import type {
   CanonicalRawFinding,
   FindingLedger,
   FindingReconcileContext,
+  IntakeContractDefect,
   RawFinding,
   RawFindingEvidence,
   ReviewerAnomalyEntry,
   ReviewerAnomalyKind,
 } from './types.js';
 import { computeReviewerAnomalyStableKey } from './raw-canonicalization.js';
+import type { RestatementRequestV1 } from './review-publication.js';
 
 export interface ReviewerAnomalySpec {
   kind: ReviewerAnomalyKind;
@@ -38,37 +40,46 @@ export interface ReviewerAnomalySpec {
   claimedLocation?: string;
   claimedExcerpt?: string;
   mismatchReason: string;
+  intakeContract?: IntakeContractDefect;
 }
 
 export function createReviewerAnomalySpec(input: {
   wire: RawFinding;
-  canonical: Pick<CanonicalRawFinding, 'reviewerStableKey' | 'lineageKey'>;
+  canonical: CanonicalRawFinding;
   anomalyKind: ReviewerAnomalyKind;
   reason: string;
   failedEvidence?: RawFindingEvidence;
+  intakeContract?: IntakeContractDefect;
 }): ReviewerAnomalySpec {
   const fileQuote = input.failedEvidence?.kind === 'file_quote'
     ? input.failedEvidence
     : undefined;
+  const claimedExcerpt = fileQuote?.kind === 'file_quote'
+    ? fileQuote.verbatimExcerpt
+    : input.canonical.coherence === 'ambiguous'
+      ? input.canonical.safeEvidenceExcerpt
+      : input.wire.description ?? input.canonical.rawExcerpt ?? input.wire.rawExcerpt;
   return {
     kind: input.anomalyKind,
     stableKey: computeReviewerAnomalyStableKey({
       reviewerStableKey: input.canonical.reviewerStableKey,
       lineageKey: input.canonical.lineageKey,
       anomalyKind: input.anomalyKind,
+      ...(input.anomalyKind === 'intake-contract-incomplete'
+        ? { sourceExcerptDigest: input.wire.sourceBinding.excerptDigest }
+        : {}),
     }),
     lineageKey: input.canonical.lineageKey,
     sourceRawFindingIds: [input.wire.rawFindingId],
     sourceIntakeIds: [],
     reviewers: [input.wire.reviewer],
     title: input.wire.title ?? `Reviewer evidence anomaly ${input.wire.rawFindingId}`,
-    ...(fileQuote?.kind === 'file_quote'
-      ? {
-        claimedLocation: fileQuote.path,
-        claimedExcerpt: fileQuote.verbatimExcerpt,
-      }
+    ...(fileQuote?.kind === 'file_quote' ? { claimedLocation: fileQuote.path } : {}),
+    ...(claimedExcerpt !== undefined && claimedExcerpt.length > 0
+      ? { claimedExcerpt }
       : {}),
     mismatchReason: input.reason,
+    ...(input.intakeContract === undefined ? {} : { intakeContract: structuredClone(input.intakeContract) }),
   };
 }
 
@@ -88,6 +99,50 @@ function formatReviewerAnomalyId(stableKey: string, episodeSeed?: string): strin
 
 function mergeUnique(current: readonly string[], next: readonly string[]): string[] {
   return Array.from(new Set([...current, ...next]));
+}
+
+function normalizeClaimAtom(value: string): string {
+  return value.trim().replace(/\s+/gu, ' ');
+}
+
+function hasRestatementCorrespondence(input: {
+  anomaly: ReviewerAnomalyEntry;
+  sourceRaw: RawFinding;
+  admittedRaw: RawFinding;
+  request: RestatementRequestV1;
+}): boolean {
+  const { anomaly, sourceRaw, admittedRaw, request } = input;
+  if (
+    request.anomalyId !== anomaly.id
+    || request.reviewer !== anomaly.intakeContract?.presentationOwnerReviewer
+    || sourceRaw.reviewer !== request.reviewer
+    || admittedRaw.reviewer !== request.reviewer
+    || admittedRaw.relation !== 'new'
+    || admittedRaw.targetFindingId !== null
+    || admittedRaw.targetPrecondition !== undefined
+    || admittedRaw.sourceBinding.excerptDigest !== request.sourceExcerptDigest
+  ) {
+    return false;
+  }
+  const sourceAtom = sourceRaw.description ?? sourceRaw.rawExcerpt ?? anomaly.claimedExcerpt;
+  const admittedAtom = admittedRaw.description;
+  if (sourceAtom === undefined || admittedAtom === null) {
+    return false;
+  }
+  if (normalizeClaimAtom(sourceAtom) !== normalizeClaimAtom(admittedAtom)) {
+    return false;
+  }
+  const sourceQuotes = sourceRaw.evidence.filter((evidence) => evidence.kind === 'file_quote');
+  if (sourceQuotes.length === 0) {
+    return true;
+  }
+  const admittedQuotes = admittedRaw.evidence.filter((evidence) => evidence.kind === 'file_quote');
+  return sourceQuotes.every((sourceQuote) => admittedQuotes.some((admittedQuote) => (
+    admittedQuote.path === sourceQuote.path
+    && admittedQuote.startLine === sourceQuote.startLine
+    && admittedQuote.endLine === sourceQuote.endLine
+    && admittedQuote.verbatimExcerpt === sourceQuote.verbatimExcerpt
+  )));
 }
 
 function anomalySpecObservationKey(spec: ReviewerAnomalySpec): string {
@@ -113,10 +168,25 @@ function assertSameAnomalyIdentity(
   anomaly: ReviewerAnomalyEntry,
   spec: ReviewerAnomalySpec,
 ): void {
-  if (anomaly.kind !== spec.kind || anomaly.lineageKey !== spec.lineageKey) {
+  if (
+    anomaly.kind !== spec.kind
+    || (anomaly.kind !== 'intake-contract-incomplete' && anomaly.lineageKey !== spec.lineageKey)
+  ) {
     throw new Error(
       `Reviewer anomaly stable key "${spec.stableKey}" cannot identify different anomaly content`,
     );
+  }
+  if (anomaly.kind === 'intake-contract-incomplete') {
+    if (anomaly.intakeContract === undefined || spec.intakeContract === undefined) {
+      throw new Error(`Reviewer anomaly stable key "${spec.stableKey}" is missing intake contract metadata`);
+    }
+    if (
+      anomaly.intakeContract.presentationOwnerReviewer !== spec.intakeContract.presentationOwnerReviewer
+      || anomaly.intakeContract.presentationLimit !== spec.intakeContract.presentationLimit
+      || anomaly.intakeContract.classificationAuthorityId !== spec.intakeContract.classificationAuthorityId
+    ) {
+      throw new Error(`Reviewer anomaly stable key "${spec.stableKey}" cannot change intake contract ownership or limit`);
+    }
   }
 }
 
@@ -218,6 +288,7 @@ export function applyReviewerAnomalySpecsToLedger(
       ...(spec.claimedLocation !== undefined ? { claimedLocation: spec.claimedLocation } : {}),
       ...(spec.claimedExcerpt !== undefined ? { claimedExcerpt: spec.claimedExcerpt } : {}),
       mismatchReason: spec.mismatchReason,
+      ...(spec.intakeContract === undefined ? {} : { intakeContract: structuredClone(spec.intakeContract) }),
       firstObserved: observation,
       lastObserved: observation,
       occurrences: 1,
@@ -232,6 +303,8 @@ export interface ReviewerAnomalyPromotionCandidate {
   lineageKey: string;
   /** この raw を含む product finding を reconciled ledger から探すためのキー。 */
   rawFindingId: string;
+  /** engine-owned request binding for intake-contract correspondence */
+  restatementRequest?: RestatementRequestV1;
 }
 
 /**
@@ -257,18 +330,51 @@ export function linkPromotedReviewerAnomalies(
     }
   }
   const promotedFindingIdByLineageKey = new Map<string, string>();
+  const restatementCandidateCountByAnomalyId = new Map<string, number>();
+  const restatementPromotionByAnomalyId = new Map<string, string>();
   for (const candidate of candidates) {
     const findingId = findingIdByRawFindingId.get(candidate.rawFindingId);
-    if (findingId !== undefined) {
+    if (findingId !== undefined && candidate.restatementRequest !== undefined) {
+      const anomaly = anomalies.find((entry) => entry.id === candidate.restatementRequest!.anomalyId);
+      const sourceRaw = anomaly?.sourceRawFindingIds
+        .map((rawFindingId) => ledger.rawFindings.find((raw) => raw.rawFindingId === rawFindingId))
+        .find((raw) => raw !== undefined);
+      const admittedRaw = ledger.rawFindings.find((raw) => raw.rawFindingId === candidate.rawFindingId);
+      if (
+        anomaly?.kind === 'intake-contract-incomplete'
+        && anomaly.promotedFindingId === undefined
+        && anomaly.settlement === undefined
+        && sourceRaw !== undefined
+        && admittedRaw !== undefined
+      ) {
+        const anomalyId = anomaly.id;
+        restatementCandidateCountByAnomalyId.set(
+          anomalyId,
+          (restatementCandidateCountByAnomalyId.get(anomalyId) ?? 0) + 1,
+        );
+        if (hasRestatementCorrespondence({ anomaly, sourceRaw, admittedRaw, request: candidate.restatementRequest })) {
+          restatementPromotionByAnomalyId.set(anomalyId, findingId);
+        }
+      }
+    } else if (findingId !== undefined) {
       promotedFindingIdByLineageKey.set(candidate.lineageKey, findingId);
     }
   }
-  if (promotedFindingIdByLineageKey.size === 0) {
+  if (promotedFindingIdByLineageKey.size === 0 && restatementPromotionByAnomalyId.size === 0) {
     return ledger;
   }
   let changed = false;
   const updated = anomalies.map((anomaly) => {
     if (!isOutstandingReviewerAnomaly(anomaly)) {
+      return anomaly;
+    }
+    if (anomaly.kind === 'intake-contract-incomplete') {
+      const candidateCount = restatementCandidateCountByAnomalyId.get(anomaly.id) ?? 0;
+      const promotedFindingId = restatementPromotionByAnomalyId.get(anomaly.id);
+      if (candidateCount === 1 && promotedFindingId !== undefined) {
+        changed = true;
+        return { ...anomaly, promotedFindingId };
+      }
       return anomaly;
     }
     const promotedFindingId = promotedFindingIdByLineageKey.get(anomaly.lineageKey);
@@ -282,5 +388,8 @@ export function linkPromotedReviewerAnomalies(
 }
 
 export function isOutstandingReviewerAnomaly(anomaly: ReviewerAnomalyEntry): boolean {
-  return anomaly.promotedFindingId === undefined && anomaly.settlement === undefined;
+  return anomaly.promotedFindingId === undefined
+    && anomaly.settlement === undefined
+    && anomaly.intakeContract?.terminalDisposition?.workflowOutcome
+      !== 'non_claim_observation_rejected';
 }

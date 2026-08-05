@@ -51,8 +51,8 @@ export function assertFindingManagerProviderBudgetLimits(
 ): void {
   assertPositiveInteger(limits.maxCallsPerRound, 'maxCallsPerRound');
   assertPositiveInteger(
-    limits.maxAdapterVisibleInputTokensPerCall,
-    'maxAdapterVisibleInputTokensPerCall',
+    limits.maxAdapterVisibleInputBytesPerCall,
+    'maxAdapterVisibleInputBytesPerCall',
   );
   assertPositiveInteger(limits.maxOutputTokensPerCall, 'maxOutputTokensPerCall');
   assertPositiveInteger(
@@ -179,8 +179,8 @@ function assertReservationFits(input: {
 }): void {
   const limits = input.scope.limits;
   if (
-    input.measurement.measuredAdapterVisibleInputTokens
-    > limits.maxAdapterVisibleInputTokensPerCall
+    input.measurement.requestByteLength
+      > limits.maxAdapterVisibleInputBytesPerCall
   ) {
     throw new FindingManagerProviderBudgetExhaustedError(
       'adapter_visible_input_ceiling',
@@ -201,7 +201,7 @@ function assertReservationFits(input: {
     );
   }
   if (
-    aggregate.inputTokens + limits.maxAdapterVisibleInputTokensPerCall
+    aggregate.inputTokens + input.measurement.measuredAdapterVisibleInputTokens
     > limits.maxChargedInputTokensPerRound
   ) {
     throw new FindingManagerProviderBudgetExhaustedError(
@@ -282,7 +282,7 @@ export function reserveFindingManagerProviderCall(input: {
     ownerAttemptId,
     attemptIds,
     ...measurement,
-    reservedInputTokens: ensured.scope.limits.maxAdapterVisibleInputTokensPerCall,
+    reservedInputTokens: measurement.measuredAdapterVisibleInputTokens,
     reservedOutputTokens: ensured.scope.limits.maxOutputTokensPerCall,
     reservedAt: structuredClone(input.reservedAt),
     state: 'reserved',

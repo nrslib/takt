@@ -49,6 +49,8 @@ import {
   FINDING_STATUSES,
   RAW_AMBIGUITY_CODES,
   RAW_DECISION_KINDS,
+  INTAKE_CONTRACT_ANOMALY_REASON_CODES,
+  INTAKE_CONTRACT_MISSING_REQUIREMENTS,
   REVIEWER_ANOMALY_KINDS,
   SEMANTIC_FINDING_DISMISSAL_BASES,
 } from './finding-types.js';
@@ -733,6 +735,30 @@ export const ReviewerAnomalyEntrySchema = z.object({
   claimedLocation: nonEmptyString.optional(),
   claimedExcerpt: nonEmptyString.optional(),
   mismatchReason: nonEmptyString,
+  intakeContract: z.object({
+    observationClass: z.enum(['claim-bearing', 'protocol-noise']),
+    classificationAuthorityId: nonEmptyString,
+    reasonCodes: z.array(z.enum(INTAKE_CONTRACT_ANOMALY_REASON_CODES))
+      .min(1)
+      .superRefine((values, ctx) => validateBinarySortedUniqueSet(values, ctx, 'intake anomaly reason code')),
+    missingRequirements: z.array(z.enum(INTAKE_CONTRACT_MISSING_REQUIREMENTS))
+      .superRefine((values, ctx) => validateBinarySortedUniqueSet(values, ctx, 'intake anomaly missing requirement')),
+    presentationOwnerReviewer: nonEmptyString,
+    presentationLimit: z.number().int().positive(),
+    terminalDisposition: z.object({
+      kind: z.enum([
+        'restatement_exhausted_claim_bearing',
+        'protocol_noise_rejected_after_presentation',
+      ]),
+      workflowOutcome: z.enum([
+        'review_integrity_unresolved',
+        'non_claim_observation_rejected',
+      ]),
+      decidedAt: FindingObservationSchema,
+      terminalPublicationId: Sha256Schema,
+      reason: nonEmptyString,
+    }).strict().optional(),
+  }).strict().optional(),
   firstObserved: FindingObservationSchema,
   lastObserved: FindingObservationSchema,
   occurrences: z.number().int().positive(),
@@ -745,7 +771,34 @@ export const ReviewerAnomalyEntrySchema = z.object({
     findingId: nonEmptyString,
     lifecycleEventId: nonEmptyString,
   }).strict().optional(),
-}).strict();
+}).strict().superRefine((value, ctx) => {
+  if (value.kind === 'intake-contract-incomplete' && value.intakeContract === undefined) {
+    ctx.addIssue({ code: 'custom', path: ['intakeContract'], message: 'intake-contract-incomplete requires intakeContract' });
+  }
+  if (value.kind !== 'intake-contract-incomplete' && value.intakeContract !== undefined) {
+    ctx.addIssue({ code: 'custom', path: ['intakeContract'], message: 'intakeContract is only valid for intake-contract-incomplete' });
+  }
+  if (value.intakeContract?.observationClass === 'protocol-noise'
+    && value.intakeContract.terminalDisposition?.workflowOutcome === 'review_integrity_unresolved') {
+    ctx.addIssue({ code: 'custom', path: ['intakeContract', 'terminalDisposition'], message: 'protocol-noise cannot become review_integrity_unresolved' });
+  }
+  const terminal = value.intakeContract?.terminalDisposition;
+  if (terminal !== undefined) {
+    const expectedKind = value.intakeContract!.observationClass === 'claim-bearing'
+      ? 'restatement_exhausted_claim_bearing'
+      : 'protocol_noise_rejected_after_presentation';
+    const expectedOutcome = value.intakeContract!.observationClass === 'claim-bearing'
+      ? 'review_integrity_unresolved'
+      : 'non_claim_observation_rejected';
+    if (terminal.kind !== expectedKind || terminal.workflowOutcome !== expectedOutcome) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['intakeContract', 'terminalDisposition'],
+        message: 'terminal disposition kind and workflowOutcome do not match observationClass',
+      });
+    }
+  }
+});
 
 const FindingActionRecoverySchema = z.discriminatedUnion('action', [
   z.object({
@@ -809,6 +862,23 @@ export const FindingProvisionalMetadataSchema = z.object({
   recoveryReviewerStableKey: nonEmptyString.optional(),
 }).strict();
 
+const FindingReviewerAnomalyReclassificationSchema = z.object({
+  kind: z.literal('reclassified_to_reviewer_anomaly'),
+  migrationId: Sha256Schema,
+  authorityId: z.literal('system/intake_contract_reclassification_v1'),
+  reason: z.literal('product_claim_not_adjudicated'),
+  anomalyId: nonEmptyString,
+  oldHead: FindingLifecycleEntityHeadSchema,
+  rawFindingIds: BinarySortedUniqueRawFindingIdSetSchema,
+  rawCanonicalSnapshotIds: BinarySortedUniqueSha256SetSchema,
+  terminalEpisodeIds: BinarySortedUniqueSha256SetSchema,
+  terminalAttemptIds: BinarySortedUniqueSha256SetSchema,
+  scopeBindingIds: BinarySortedUniqueSha256SetSchema,
+  bindingAuthorizationIds: BinarySortedUniqueSha256SetSchema,
+  bindingDecisionIds: BinarySortedUniqueSha256SetSchema,
+  recordedAt: FindingObservationSchema,
+}).strict();
+
 export const FindingLedgerEntrySchema = z.object({
   id: nonEmptyString,
   status: FindingStatusSchema,
@@ -854,6 +924,7 @@ export const FindingLedgerEntrySchema = z.object({
   }).strict().superRefine(validateFindingDismissalAuthority).optional(),
   revision: z.number().int().positive(),
   provisional: FindingProvisionalMetadataSchema.optional(),
+  reviewerAnomalyReclassification: FindingReviewerAnomalyReclassificationSchema.optional(),
   rejectedObservations: z.array(z.object({
     rawFindingId: rawFindingIdString,
     reason: nonEmptyString,
@@ -982,6 +1053,8 @@ const RawFindingFieldsSchema = z.object({
   claimIdentityHash: Sha256Schema,
   semanticClaimIdentityHash: Sha256Schema,
   candidateIdentityHash: Sha256Schema,
+  reassertsReviewerAnomalyId: nonEmptyString.optional(),
+  rawExcerpt: rawFindingDescriptionString.optional(),
   sourceBinding: CandidateSourceBindingSchema,
   relation: z.enum(RAW_FINDING_RELATIONS).nullable(),
   targetFindingId: nonEmptyString.nullable(),
@@ -1009,6 +1082,7 @@ export const RawFindingSchema = RawFindingFieldsSchema.superRefine((value, ctx) 
     const candidateIdentityHash = computeCandidateIdentityHash({
       claimIdentityHash,
       sourceBinding: value.sourceBinding,
+      reassertsReviewerAnomalyId: value.reassertsReviewerAnomalyId,
     });
     for (const [path, actual, expected] of [
       ['targetIdentityHash', value.targetIdentityHash, targetIdentityHash],
@@ -1061,6 +1135,7 @@ export const FindingEvidenceRequestSchema = z.discriminatedUnion('kind', [
 
 const ReviewerCandidatePayloadSchema = z.object({
   rawFindingId: providerRawFindingIdString.nullable(),
+  reassertsReviewerAnomalyId: nonEmptyString.optional(),
   familyTag: familyTagString.nullable(),
   severity: FindingSeveritySchema.nullable(),
   title: rawFindingTitleString.nullable(),
@@ -1392,7 +1467,7 @@ export const ConflictRawClaimLandingSchema = z.object({
 
 export const FindingManagerProviderBudgetLimitsSchema = z.object({
   maxCallsPerRound: z.number().int().positive(),
-  maxAdapterVisibleInputTokensPerCall: z.number().int().positive(),
+  maxAdapterVisibleInputBytesPerCall: z.number().int().positive(),
   maxOutputTokensPerCall: z.number().int().positive(),
   maxChargedInputTokensPerRound: z.number().int().positive(),
   maxChargedOutputTokensPerRound: z.number().int().positive(),
@@ -1857,7 +1932,7 @@ export const TerminalAdjudicationSettlementSchema = z.discriminatedUnion('outcom
     expectedHead: FindingLifecycleEntityHeadSchema,
     candidateSnapshotDigest: Sha256Schema,
     outcome: z.literal('exhausted'),
-    reason: z.literal('stale_precondition'),
+    reason: z.enum(['stale_precondition', 'attempts_exhausted_interrupted']),
     supersedingEpisodeId: Sha256Schema.nullable(),
     supersedingCandidateSnapshotDigest: Sha256Schema.nullable(),
     recordedAt: FindingObservationSchema,
@@ -1872,6 +1947,18 @@ export const TerminalAdjudicationSettlementSchema = z.discriminatedUnion('outcom
     reason: z.enum(['candidate_snapshot_changed', 'subject_no_longer_candidate']),
     supersedingEpisodeId: Sha256Schema.nullable(),
     supersedingCandidateSnapshotDigest: Sha256Schema.nullable(),
+    recordedAt: FindingObservationSchema,
+  }).strict(),
+  z.object({
+    settlementId: Sha256Schema,
+    episodeId: Sha256Schema,
+    provisionalFindingId: nonEmptyString,
+    candidateSnapshotDigest: Sha256Schema,
+    outcome: z.literal('reclassified_to_reviewer_anomaly'),
+    reason: z.literal('product_claim_not_adjudicated'),
+    migrationId: Sha256Schema,
+    attemptIds: BinarySortedUniqueSha256SetSchema,
+    scopeBindingIds: BinarySortedUniqueSha256SetSchema,
     recordedAt: FindingObservationSchema,
   }).strict(),
 ]);
@@ -2525,6 +2612,77 @@ export const FindingLedgerSchema = FindingLedgerObjectSchema.superRefine((ledger
     addProjectionIssues(pending.completed, ['pendingManagerCommit', 'completed']);
   }
 });
+
+/**
+ * provider budget の byte-aware 改訂前に保存された ledger を、現行の JSON
+ * 契約へ一度だけ射影する。物理 SQLite schema は ledger_json のままなので、
+ * resume 時に旧 limits 名を読み替えれば次回の保存で現行形へ収束する。
+ */
+export function migrateFindingLedgerJson(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return value;
+  }
+  const record = value as Record<string, unknown>;
+  const rawScopes = record.findingManagerProviderBudgetScopes;
+  if (!Array.isArray(rawScopes)) {
+    return value;
+  }
+  let legacyLimitFound = false;
+  const scopes = rawScopes.map((scope) => {
+    if (typeof scope !== 'object' || scope === null || Array.isArray(scope)) {
+      return scope;
+    }
+    const scopeRecord = scope as Record<string, unknown>;
+    const rawLimits = scopeRecord.limits;
+    if (typeof rawLimits !== 'object' || rawLimits === null || Array.isArray(rawLimits)) {
+      return scope;
+    }
+    const limits = rawLimits as Record<string, unknown>;
+    if (!Object.prototype.hasOwnProperty.call(limits, 'maxAdapterVisibleInputTokensPerCall')) {
+      return scope;
+    }
+    legacyLimitFound = true;
+    const legacyLimit = limits.maxAdapterVisibleInputTokensPerCall;
+    if (
+      Object.prototype.hasOwnProperty.call(limits, 'maxAdapterVisibleInputBytesPerCall')
+      && limits.maxAdapterVisibleInputBytesPerCall !== legacyLimit
+    ) {
+      throw new Error('Finding manager provider budget contains conflicting legacy and current input limits');
+    }
+    const {
+      maxAdapterVisibleInputTokensPerCall: _legacyLimit,
+      ...currentLimits
+    } = limits;
+    return {
+      ...scopeRecord,
+      limits: {
+        ...currentLimits,
+        maxAdapterVisibleInputBytesPerCall: legacyLimit,
+      },
+    };
+  });
+  if (!legacyLimitFound) {
+    return value;
+  }
+  const rawCalls = record.findingManagerProviderCalls;
+  const calls = Array.isArray(rawCalls)
+    ? rawCalls.map((call) => {
+        if (typeof call !== 'object' || call === null || Array.isArray(call)) {
+          return call;
+        }
+        const callRecord = call as Record<string, unknown>;
+        return {
+          ...callRecord,
+          reservedInputTokens: callRecord.measuredAdapterVisibleInputTokens,
+        };
+      })
+    : rawCalls;
+  return {
+    ...record,
+    findingManagerProviderBudgetScopes: scopes,
+    findingManagerProviderCalls: calls,
+  };
+}
 
 const InterpretationCaseDecisionsOutputIntakeJsonSchema = {
   type: 'object',
@@ -3268,6 +3426,10 @@ const RawFindingsOutputIntakeJsonSchema = {
                     minLength: 1,
                     maxLength: RAW_FINDING_FIELD_LIMITS.maxProviderRawFindingIdChars,
                   },
+                  reassertsReviewerAnomalyId: {
+                    type: 'string',
+                    minLength: 1,
+                  },
                   relation: {
                     enum: [...RAW_FINDING_RELATIONS, null],
                     description: 'Extract the stated ledger relation, or null when the report does not state one. Null remains an unresolved relation and is handled by canonical ambiguity admission.',
@@ -3492,7 +3654,7 @@ export const RawFindingsOutputValidationJsonSchema = {
 } as const;
 
 export function parseFindingLedger(value: unknown): FindingLedger {
-  return FindingLedgerSchema.parse(value);
+  return FindingLedgerSchema.parse(migrateFindingLedgerJson(value));
 }
 
 export function parseRawFindings(value: unknown): RawFinding[] {

@@ -39,6 +39,9 @@ function renderFindingContractInstruction(input: {
   const rawFindingsStructuredOutput = structuredReviewer
     ? reviewer.rawFindingsStructuredOutput
     : undefined;
+  const restatementRequests = reviewer?.presentationContext?.revision === 2
+    ? reviewer.presentationContext.restatementRequests
+    : [];
 
   // review-integrity protocol: rawFindingsStructuredOutput と reviewScopeSnapshotId は同じ
   // includeRawFindingsSchema 条件下で必ずセットで生成される（WorkflowEngineSetup.ts
@@ -73,7 +76,7 @@ function renderFindingContractInstruction(input: {
   const rendered = loadTemplate('parts/finding_contract_instruction', language, {
     ledgerSummary: renderFencedJsonBlock(
       reportPhase ? contract.reportLedgerSummary : contract.ledgerSummary,
-    ),
+    ).trimEnd(),
     isReportPhase: reportPhase,
     isReviewer,
     structuredReviewer,
@@ -91,13 +94,17 @@ function renderFindingContractInstruction(input: {
     // 参照）。空文字は「該当なし」— テンプレート側は isReviewer と一緒にしか
     // 出さない。
     reviewScopeSnapshotId: reviewer?.reviewScopeSnapshotId ?? '',
+    restatementOnly: restatementRequests.length > 0,
+    restatementRequestsJson: restatementRequests.length > 0
+      ? renderFencedJsonBlock(restatementRequests).trimEnd()
+      : '',
     // 異議申告のガイドは open な指摘が存在するときだけ注入する。台帳が空の
     // 段階（初回 implement 等）では無意味であり、無関係なプロトコル文が
     // 弱いモデルのツール呼び出しを不安定化させることを実走で確認済み。
     canDispute: !isReviewer && contract.hasOpenFindings,
   });
 
-  return rendered.trimEnd();
+  return rendered.replace(/\n{3,}/g, '\n\n').trimEnd();
 }
 
 export function buildFindingContractInstruction(input: FindingContractInstructionInput): string {

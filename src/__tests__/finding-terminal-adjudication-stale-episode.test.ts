@@ -181,16 +181,19 @@ function addInterruptedAttempt(input: {
   ledger: FindingLedger;
   episode: ReturnType<typeof createTerminalAdjudicationRound>['episodes'][number];
   candidate: ReturnType<typeof buildTerminalAdjudicationCandidateSnapshot>;
+  attemptOrdinal?: 1 | 2;
 }): FindingLedger {
   if (input.candidate === undefined) {
     throw new Error('Interrupted attempt fixture requires a terminal candidate');
   }
+  const attemptOrdinal = input.attemptOrdinal ?? 1;
+  const retryOrdinal = (attemptOrdinal - 1) as 0 | 1;
   const attemptId = computeTerminalAttemptId({
     episodeId: input.episode.episodeId,
-    attemptOrdinal: 1,
-    retryOrdinal: 0,
+    attemptOrdinal,
+    retryOrdinal,
   });
-  const requestBytes = JSON.stringify({ episodeId: input.episode.episodeId });
+  const requestBytes = JSON.stringify({ episodeId: input.episode.episodeId, attemptOrdinal });
   const reserved = reserveFindingManagerProviderCall({
     scopes: input.ledger.findingManagerProviderBudgetScopes,
     calls: input.ledger.findingManagerProviderCalls,
@@ -199,7 +202,7 @@ function addInterruptedAttempt(input: {
     roundMarker: input.episode.roundIdentity,
     limits: {
       maxCallsPerRound: 2,
-      maxAdapterVisibleInputTokensPerCall: 1_000,
+      maxAdapterVisibleInputBytesPerCall: 1_000,
       maxOutputTokensPerCall: 1_000,
       maxChargedInputTokensPerRound: 2_000,
       maxChargedOutputTokensPerRound: 2_000,
@@ -229,7 +232,7 @@ function addInterruptedAttempt(input: {
     ...input.ledger,
     findingManagerProviderBudgetScopes: reserved.scopes,
     findingManagerProviderCalls: settled.calls,
-    terminalAdjudicationAttempts: [{
+    terminalAdjudicationAttempts: [...input.ledger.terminalAdjudicationAttempts, {
       attemptId,
       episodeId: input.episode.episodeId,
       selectionId: input.episode.selectionId,
@@ -237,8 +240,8 @@ function addInterruptedAttempt(input: {
       findingId: input.episode.findingId,
       expectedHead: input.episode.expectedHead,
       candidateSnapshotDigest: input.episode.candidateSnapshotDigest,
-      attemptOrdinal: 1,
-      retryOrdinal: 0,
+      attemptOrdinal,
+      retryOrdinal,
       providerCallId: reserved.call.providerCallId,
       requestDigest: reserved.call.requestDigest,
       sourceClaimRefIds: input.candidate.sourceClaims.map(({ sourceClaimRefId }) => sourceClaimRefId),
@@ -495,5 +498,55 @@ describe('terminal adjudication stale episode settlement', () => {
 
     expect(() => parseFindingLedger(malformed))
       .toThrow(/invalid exhausted settlement ownership/u);
+  });
+
+  it('settles a current episode after two interrupted attempts without changing either attempt', () => {
+    let ledger = initialLedger({ onlyB: true });
+    const candidate = buildTerminalAdjudicationCandidateSnapshot({
+      ledger,
+      finding: ledger.findings[0]!,
+      currentRound: 2,
+    })!;
+    const round = createTerminalAdjudicationRound({
+      ledger,
+      roundIdentity: findingContentAddress('terminal-round', { round: 'retry-exhausted' }),
+      candidates: [candidate],
+      selectedAt: OBSERVATION,
+    });
+    ledger = {
+      ...ledger,
+      terminalAdjudicationRounds: [round.round],
+      terminalAdjudicationEpisodes: round.episodes,
+    };
+    const episode = round.episodes[0]!;
+    ledger = addInterruptedAttempt({ ledger, episode, candidate });
+    ledger = addInterruptedAttempt({ ledger, episode, candidate, attemptOrdinal: 2 });
+    const beforeAttempts = structuredClone(ledger.terminalAdjudicationAttempts);
+
+    const selected = selectReconstructableTerminalEpisode({
+      ledger,
+      currentRound: 2,
+      observation: OBSERVATION,
+    });
+
+    expect(selected.selected).toBeUndefined();
+    expect(selected.ledger.terminalAdjudicationAttempts).toEqual(beforeAttempts);
+    expect(selected.ledger.terminalAdjudicationSettlements).toEqual([expect.objectContaining({
+      settlementId: computeTerminalSettlementId(episode.episodeId),
+      episodeId: episode.episodeId,
+      attemptId: beforeAttempts.at(-1)!.attemptId,
+      outcome: 'exhausted',
+      reason: 'attempts_exhausted_interrupted',
+      supersedingEpisodeId: null,
+      supersedingCandidateSnapshotDigest: null,
+    })]);
+
+    const replay = selectReconstructableTerminalEpisode({
+      ledger: selected.ledger,
+      currentRound: 2,
+      observation: OBSERVATION,
+    });
+    expect(replay.ledger.terminalAdjudicationSettlements).toHaveLength(1);
+    expect(() => parseFindingLedger(replay.ledger)).not.toThrow();
   });
 });

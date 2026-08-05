@@ -29,6 +29,12 @@ steps:
           next: finding-conflict-adjudication
         - condition: when(findings.conflicts.count > 0)
           next: ABORT
+        - condition: when(findings.reviewerAnomalies.requiresGuaranteedPresentationCount > 0)
+          return: needs_review
+        - condition: when(findings.reviewerAnomalies.claimBearingTerminalCount > 0)
+          return: need_replan
+        - condition: when(findings.reviewerAnomalies.restatementReadyCount > 0)
+          return: needs_review
         - condition: when(findings.provisional.dismissEligible.count > 0 && findings.conflicts.count == 0)
           return: needs_terminal_adjudication
         - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)

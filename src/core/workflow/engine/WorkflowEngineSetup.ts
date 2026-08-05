@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import type { StructuredCaller } from '../../../agents/structured-caller.js';
 import { createLogger } from '../../../shared/utils/index.js';
+import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
 import type {
   AgentResponse,
   FindingContractConfig,
@@ -14,7 +15,12 @@ import type {
 import type { FindingManagerAuthority } from '../../models/finding-types.js';
 import { prepareRuntimeEnvironment } from '../../runtime/runtime-environment.js';
 import type { RunPaths } from '../run/run-paths.js';
-import type { WorkflowEngineOptions, WorkflowSharedRuntimeState } from '../types.js';
+import type {
+  WorkflowEngineOptions,
+  WorkflowSharedRuntimeState,
+  WorkflowStepFailureSummary,
+} from '../types.js';
+import { createRunFailure } from '../run/run-failure.js';
 import { ArpeggioRunner } from './ArpeggioRunner.js';
 import { LoopMonitorJudgeRunner } from './LoopMonitorJudgeRunner.js';
 import { OptionsBuilder } from './OptionsBuilder.js';
@@ -41,6 +47,12 @@ import {
 } from '../findings/context.js';
 import { renderLoopMonitorFindingsSummary } from '../findings/loop-monitor-summary.js';
 import { computeReviewScopeSnapshotId } from '../findings/snapshot.js';
+import {
+  computeRestatementRequestId,
+  createFindingReviewPresentationContextV2,
+  listFindingReviewPublications,
+  type RestatementRequestV1,
+} from '../findings/review-publication.js';
 import type {
   FindingContractInstructionContext,
   FindingContractReviewerOutputStrategy,
@@ -61,6 +73,38 @@ import { SelectorInputReader } from '../dynamic-parallel/selector-input-reader.j
 import { restoreWorkflowStepParticipationIndex } from '../workflow-step-participation-index.js';
 
 const log = createLogger('workflow-engine');
+
+export class FindingReviewCapacityError extends Error {
+  readonly failure: WorkflowStepFailureSummary;
+
+  constructor(input: {
+    stepName: string;
+    anomalyIds: readonly string[];
+    classificationAuthorityIds: readonly string[];
+    requiredInvocations: number;
+    remainingCapacity: number;
+  }) {
+    const unpresentedIds = [...input.anomalyIds].sort(compareBinaryStrings);
+    const reason = `Finding review presentation capacity is insufficient: ${input.requiredInvocations} invocation(s) required, ${input.remainingCapacity} remaining`;
+    super(reason);
+    this.name = 'FindingReviewCapacityError';
+    this.failure = createRunFailure({
+      kind: 'review_integrity_unresolved',
+      step: input.stepName,
+      reason,
+      error: reason,
+      details: {
+        reviewIntegrity: {
+          code: 'review_integrity_unresolved_unpresented',
+          anomalyIds: unpresentedIds,
+          unpresentedIds,
+          classificationAuthorityIds: [...input.classificationAuthorityIds].sort(compareBinaryStrings),
+          publicationIds: [],
+        },
+      },
+    });
+  }
+}
 
 interface WorkflowEngineSetupParams {
   config: WorkflowConfig;
@@ -188,6 +232,53 @@ export function applyRuntimeEnvironment(
   });
 }
 
+export function assertFindingReviewPresentationCapacity(input: {
+  ledger: ReturnType<FindingLedgerStore['loadLedger']>;
+  presentationCounts: ReadonlyMap<string, number>;
+  maxSteps: WorkflowMaxSteps;
+  currentIteration: number;
+  stepName: string;
+}): void {
+  const unpresented = (input.ledger.reviewerAnomalies ?? []).filter((anomaly) => {
+    const defect = anomaly.intakeContract;
+    const presentedCount = input.presentationCounts.get(anomaly.id) ?? 0;
+    return anomaly.kind === 'intake-contract-incomplete'
+      && defect !== undefined
+      && anomaly.promotedFindingId === undefined
+      && anomaly.settlement === undefined
+      && defect.terminalDisposition === undefined
+      && presentedCount < defect.presentationLimit;
+  });
+  if (unpresented.length === 0) {
+    return;
+  }
+  const countsByOwner = new Map<string, number>();
+  for (const anomaly of unpresented) {
+    const owner = anomaly.intakeContract!.presentationOwnerReviewer;
+    countsByOwner.set(owner, (countsByOwner.get(owner) ?? 0) + 1);
+  }
+  const total = unpresented.length;
+  const ownerInvocationCount = Math.max(
+    ...Array.from(countsByOwner.values(), (count) => Math.ceil(count / 64)),
+  );
+  const requiredInvocations = Math.max(ownerInvocationCount, Math.ceil(total / 128));
+  const remainingCapacity = typeof input.maxSteps === 'number'
+    ? Math.max(0, input.maxSteps - input.currentIteration + (input.currentIteration > 0 ? 1 : 0))
+    : 0;
+  if (requiredInvocations <= remainingCapacity) {
+    return;
+  }
+  throw new FindingReviewCapacityError({
+    stepName: input.stepName,
+    anomalyIds: unpresented.map(({ id }) => id),
+    classificationAuthorityIds: unpresented.map(
+      ({ intakeContract }) => intakeContract!.classificationAuthorityId,
+    ),
+    requiredInvocations,
+    remainingCapacity,
+  });
+}
+
 export function createWorkflowEngineServices(params: WorkflowEngineSetupParams): WorkflowEngineServices {
   const phaseRelay = createWorkflowPhaseRelay(
     (event, ...args) => params.emitEvent(event, ...args),
@@ -197,10 +288,18 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     params.options.findingContractConfig?.intakeNormalize,
     params.findingContract,
   );
+  let frozenParallelFindingContractInput: {
+    contextKey: string;
+    ledger: ReturnType<FindingLedgerStore['loadLedger']>;
+    presentationCounts: Map<string, number>;
+    contexts: Map<string, FindingContractInstructionContext>;
+    allocatedRequestCount: number;
+  } | undefined;
   const buildFindingContractInstructionContext = (
-    _step: WorkflowStep,
+    step: WorkflowStep,
     strategy: FindingContractReviewerOutputStrategy | undefined,
     sharedReviewScopeSnapshotId?: string,
+    parallelContextKey?: string,
   ): FindingContractInstructionContext | undefined => {
     if (!params.findingContract) {
       return undefined;
@@ -209,23 +308,133 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
       throw new Error('Finding contract is configured but finding ledger store is not available');
     }
 
-    const ledger = params.findingLedgerStore.loadLedger();
+    let ledger: ReturnType<FindingLedgerStore['loadLedger']>;
+    let presentationCounts: Map<string, number>;
+    let frozenContexts: Map<string, FindingContractInstructionContext> | undefined;
+    let allocatedRequestCount = 0;
+    if (
+      sharedReviewScopeSnapshotId !== undefined
+      && parallelContextKey !== undefined
+      && frozenParallelFindingContractInput?.contextKey === parallelContextKey
+    ) {
+      ({ ledger, presentationCounts, contexts: frozenContexts, allocatedRequestCount } = frozenParallelFindingContractInput);
+    } else {
+      ledger = params.findingLedgerStore.loadLedger();
+      presentationCounts = new Map<string, number>();
+      for (const publication of listFindingReviewPublications(params.getReportDir())) {
+        if (publication.presentationContext?.revision !== 2) {
+          continue;
+        }
+        for (const anomalyId of publication.presentationContext.presentedReviewerAnomalyIds) {
+          presentationCounts.set(anomalyId, (presentationCounts.get(anomalyId) ?? 0) + 1);
+        }
+      }
+      if (parallelContextKey !== undefined) {
+        frozenParallelFindingContractInput = {
+          contextKey: parallelContextKey,
+          ledger,
+          presentationCounts,
+          contexts: new Map(),
+          allocatedRequestCount: 0,
+        };
+        frozenContexts = frozenParallelFindingContractInput.contexts;
+      }
+    }
+    if (frozenContexts !== undefined && strategy !== undefined) {
+      const frozenContext = frozenContexts.get(step.name);
+      if (frozenContext !== undefined) {
+        return frozenContext;
+      }
+    }
     let reviewer: FindingContractInstructionContext['reviewer'];
     if (strategy !== undefined) {
       const reviewScopeSnapshotId = sharedReviewScopeSnapshotId
         ?? computeReviewScopeSnapshotId(params.getCwd());
+      assertFindingReviewPresentationCapacity({
+        ledger,
+        presentationCounts,
+        maxSteps: params.getMaxSteps(),
+        currentIteration: params.state.iteration,
+        stepName: step.name,
+      });
+      const requests = (ledger.reviewerAnomalies ?? [])
+        .filter((anomaly) => (
+          anomaly.kind === 'intake-contract-incomplete'
+          && anomaly.intakeContract !== undefined
+          && anomaly.intakeContract.presentationOwnerReviewer === step.name
+          && anomaly.promotedFindingId === undefined
+          && anomaly.settlement === undefined
+        ))
+        .map((anomaly) => ({
+          anomaly,
+          presentedCount: presentationCounts.get(anomaly.id) ?? 0,
+        }))
+        .filter(({ anomaly, presentedCount }) => (
+          presentedCount < anomaly.intakeContract!.presentationLimit
+        ))
+        .sort((left, right) => (
+          left.presentedCount - right.presentedCount
+          || compareBinaryStrings(left.anomaly.firstObserved.timestamp, right.anomaly.firstObserved.timestamp)
+          || compareBinaryStrings(left.anomaly.id, right.anomaly.id)
+        ))
+        .slice(0, Math.min(64, Math.max(0, 128 - allocatedRequestCount)));
+      const restatementRequests: RestatementRequestV1[] = requests.flatMap(({ anomaly, presentedCount }) => {
+        const raw = anomaly.sourceRawFindingIds
+          .map((rawId) => ledger.rawFindings.find((candidate) => candidate.rawFindingId === rawId))
+          .find((candidate) => candidate !== undefined);
+        if (raw === undefined) {
+          return [];
+        }
+        const requestWithoutId = {
+          anomalyId: anomaly.id,
+          reviewer: step.name,
+          presentationOrdinal: presentedCount + 1,
+          reviewScopeSnapshotId,
+          sourceExcerptDigest: raw.sourceBinding.excerptDigest,
+          expectedRelation: 'new' as const,
+          expectedTargetFindingId: null,
+          expectedTargetPreconditionClass: 'absent' as const,
+        };
+        return [{
+          ...requestWithoutId,
+          restatementRequestId: computeRestatementRequestId(requestWithoutId),
+        }];
+      });
+      const presentationContext = createFindingReviewPresentationContextV2({
+        reviewScopeSnapshotId,
+        restatementRequests,
+      });
       reviewer = strategy.reportGeneration === 'structured'
         ? {
             mode: 'structured',
             rawFindingsStructuredOutput: createRawFindingsStructuredOutput(),
             reviewScopeSnapshotId,
+            presentationContext,
           }
         : {
             mode: strategy.kind,
             reviewScopeSnapshotId,
+            presentationContext,
           };
+      if (frozenContexts !== undefined && parallelContextKey !== undefined) {
+        frozenContexts.set(step.name, {
+          ledgerSummary: renderFindingLedgerInstructionSummary(ledger),
+          reportLedgerSummary: renderFindingLedgerReportSummary(ledger),
+          hasOpenFindings: ledgerHasOpenFindings(ledger),
+          hasWaivedFindings: ledgerHasWaivedFindings(ledger),
+          hasDismissedFindings: ledgerHasDismissedFindings(ledger),
+          ...(reviewer !== undefined ? { reviewer } : {}),
+        });
+        frozenParallelFindingContractInput = {
+          contextKey: parallelContextKey,
+          ledger,
+          presentationCounts,
+          contexts: frozenContexts,
+          allocatedRequestCount: allocatedRequestCount + restatementRequests.length,
+        };
+      }
     }
-    return {
+    const context = {
       ledgerSummary: renderFindingLedgerInstructionSummary(ledger),
       reportLedgerSummary: renderFindingLedgerReportSummary(ledger),
       hasOpenFindings: ledgerHasOpenFindings(ledger),
@@ -233,6 +442,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
       hasDismissedFindings: ledgerHasDismissedFindings(ledger),
       ...(reviewer !== undefined ? { reviewer } : {}),
     };
+    return context;
   };
 
   const optionsBuilder = new OptionsBuilder(
@@ -365,6 +575,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
       params.resumeStackPrefix,
     ),
     getRunId: () => params.runPaths.slug,
+    reviewPublicationDir: params.runPaths.reportsAbs,
     getFindingCallNamespace: () => params.options.findingCallNamespace ?? '',
     runQualityGates,
     ...phaseRelay,

@@ -208,7 +208,7 @@ export interface ConflictRawClaimLanding {
 
 export interface FindingManagerProviderBudgetLimits {
   maxCallsPerRound: number;
-  maxAdapterVisibleInputTokensPerCall: number;
+  maxAdapterVisibleInputBytesPerCall: number;
   maxOutputTokensPerCall: number;
   maxChargedInputTokensPerRound: number;
   maxChargedOutputTokensPerRound: number;
@@ -495,7 +495,7 @@ export type TerminalAdjudicationSettlement =
       expectedHead: FindingLifecycleEntityHead;
       candidateSnapshotDigest: string;
       outcome: 'exhausted';
-      reason: 'stale_precondition';
+      reason: 'stale_precondition' | 'attempts_exhausted_interrupted';
       supersedingEpisodeId: string | null;
       supersedingCandidateSnapshotDigest: string | null;
       recordedAt: FindingObservation;
@@ -510,6 +510,18 @@ export type TerminalAdjudicationSettlement =
       reason: 'candidate_snapshot_changed' | 'subject_no_longer_candidate';
       supersedingEpisodeId: string | null;
       supersedingCandidateSnapshotDigest: string | null;
+      recordedAt: FindingObservation;
+    }
+  | {
+      settlementId: string;
+      episodeId: string;
+      provisionalFindingId: string;
+      candidateSnapshotDigest: string;
+      outcome: 'reclassified_to_reviewer_anomaly';
+      reason: 'product_claim_not_adjudicated';
+      migrationId: string;
+      attemptIds: string[];
+      scopeBindingIds: string[];
       recordedAt: FindingObservation;
     };
 

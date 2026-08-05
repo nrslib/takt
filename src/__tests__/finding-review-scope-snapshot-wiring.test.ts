@@ -496,11 +496,13 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
     // （sub-step ごとに独立して呼ぶと、間に working tree が変化した場合に
     // reviewer ごとに異なる snapshotId を配ってしまう — 並行実行の semaphore
     // 直列化時に特に問題になる）。
-    expect(deps.optionsBuilder.buildFindingContractInstructionContext).toHaveBeenCalledTimes(1);
+    expect(deps.optionsBuilder.buildFindingContractInstructionContext).toHaveBeenCalledTimes(3);
     expect(deps.optionsBuilder.buildFindingContractInstructionContext)
       .toHaveBeenCalledWith(
         step.parallel![0],
         { kind: 'structured', reportGeneration: 'structured', intake: 'reviewer_structured' },
+        undefined,
+        expect.any(String),
       );
 
     const builtContext = vi.mocked(deps.optionsBuilder.buildFindingContractInstructionContext).mock.results[0]?.value;
@@ -571,11 +573,13 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
 
     await runner.runParallelStep(step, state, 'test task', 5, vi.fn());
 
-    expect(deps.optionsBuilder.buildFindingContractInstructionContext).toHaveBeenCalledTimes(1);
+    expect(deps.optionsBuilder.buildFindingContractInstructionContext).toHaveBeenCalledTimes(3);
     expect(deps.optionsBuilder.buildFindingContractInstructionContext)
       .toHaveBeenCalledWith(
         step.parallel![0],
         { kind: 'structured', reportGeneration: 'structured', intake: 'reviewer_structured' },
+        undefined,
+        expect.any(String),
       );
     const instructionPolicies = vi.mocked(deps.stepExecutor.buildInstruction).mock.calls
       .map((call) => call[6] as FindingContractInstructionPolicy);

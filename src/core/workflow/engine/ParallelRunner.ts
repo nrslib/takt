@@ -122,6 +122,9 @@ function specializeParallelFindingContractContext(
     reviewer: {
       mode: 'plain_text_normalized',
       reviewScopeSnapshotId: sharedReviewerContext.reviewScopeSnapshotId,
+      ...(sharedReviewerContext.presentationContext === undefined
+        ? {}
+        : { presentationContext: sharedReviewerContext.presentationContext }),
     },
   };
 }
@@ -191,6 +194,7 @@ export interface ParallelRunnerDeps {
     occurrence: number,
   ) => void;
   readonly getRunId: () => string;
+  readonly reviewPublicationDir: string;
   /** raw finding id 衝突対策の呼び出し名前空間。トップレベルでは空文字列。 */
   readonly getFindingCallNamespace: () => string;
   readonly runQualityGates: (options: {
@@ -229,6 +233,8 @@ export interface ParallelRunnerDeps {
 }
 
 export class ParallelRunner {
+  private parallelContextSequence = 0;
+
   constructor(
     private readonly deps: ParallelRunnerDeps,
   ) {}
@@ -341,14 +347,18 @@ export class ParallelRunner {
       reportGeneration: 'structured',
       intake: 'reviewer_structured',
     };
+    const parallelContextKey = `${step.name}\0${stepIteration}\0${++this.parallelContextSequence}`;
     const baseFindingContractContext = this.deps.findingContract
       && agentSubSteps[0] !== undefined
-      ? this.deps.optionsBuilder.buildFindingContractInstructionContext(
+        ? this.deps.optionsBuilder.buildFindingContractInstructionContext(
           agentSubSteps[0],
           structuredReviewerStrategy,
+          undefined,
+          parallelContextKey,
         )
       : undefined;
     const sharedReviewerContext = baseFindingContractContext?.reviewer;
+    const sharedReviewScopeSnapshotId = sharedReviewerContext?.reviewScopeSnapshotId;
     if (
       this.deps.findingContract !== undefined
       && agentSubSteps.length > 0
@@ -445,7 +455,12 @@ export class ParallelRunner {
           }
           const findingContractContext = reviewerOutputStrategy !== undefined
             ? specializeParallelFindingContractContext(
-                baseFindingContractContext,
+                this.deps.optionsBuilder.buildFindingContractInstructionContext(
+                  subStep,
+                  structuredReviewerStrategy,
+                  sharedReviewerContext?.reviewScopeSnapshotId,
+                  parallelContextKey,
+                ),
                 reviewerOutputStrategy,
               )
             : undefined;
@@ -500,6 +515,7 @@ export class ParallelRunner {
               stepIteration,
               state,
               runtime: publicationResumeRuntime,
+              presentationContext: findingContractContext?.reviewer?.presentationContext,
             });
           if (resumedPublication !== undefined) {
             if ('terminalResponse' in resumedPublication) {
@@ -722,6 +738,7 @@ export class ParallelRunner {
             },
             updatePersonaSession,
             runtime: subRuntime,
+            presentationContext: findingContractContext?.reviewer?.presentationContext,
           });
           if ('terminalResponse' in prepared) {
             state.stepOutputs.set(subStep.name, prepared.terminalResponse);
@@ -1350,6 +1367,7 @@ export class ParallelRunner {
       timestamp: new Date().toISOString(),
       priorStepResponseText,
       managerAuthority: this.deps.findingManagerAuthority,
+      reviewPublicationDir: this.deps.reviewPublicationDir,
       refreshFindingsState: this.deps.refreshFindingsState,
       emitEvent: this.deps.emitEvent,
     });

@@ -34,6 +34,7 @@ import type { PreparedNormalStepExecution } from './StepExecutor.js';
 import type { WorkflowCallExecutionToken } from './WorkflowCallRunner.js';
 import { requireWorkflowResumeStackSnapshot } from '../run/resume-point.js';
 import { createRunFailure } from '../run/run-failure.js';
+import { FindingReviewCapacityError } from './WorkflowEngineSetup.js';
 import {
   reviewerOperationOrigin,
   sameFallbackOperationOrigin,
@@ -129,14 +130,24 @@ interface WorkflowRunLoopDeps {
    * 選ばず fail-fast」と同じ扱い）。violation.reason には provisional の
    * id / kind / reason と修正ガイダンスを含める。
    */
-  checkCompletionGate: () => { ok: true } | { ok: false; reason: string };
+  checkCompletionGate: () => { ok: true } | {
+    ok: false;
+    reason: string;
+    abortKind?: WorkflowAbortKind;
+    failure?: WorkflowStepFailureSummary;
+  };
   /**
    * returnValue 終端（`return: X`）の gate。自前の Finding Contract を持つ
    * workflow では review-integrity を検証する。親から契約を継承した callable
    * workflow では、return は最終完了ではなく契約所有者への制御返却なので通し、
    * 最終的な COMPLETE は親の completion gate が検証する。
    */
-  checkReturnValueGate: () => { ok: true } | { ok: false; reason: string };
+  checkReturnValueGate: () => { ok: true } | {
+    ok: false;
+    reason: string;
+    abortKind?: WorkflowAbortKind;
+    failure?: WorkflowStepFailureSummary;
+  };
 }
 
 async function resolveStepPromotionRuntime(
@@ -456,6 +467,14 @@ function abortWorkflowRuntimeError(deps: WorkflowRunLoopDeps, error: unknown): W
       }),
     });
   }
+  if (error instanceof FindingReviewCapacityError) {
+    return abortWorkflow(
+      deps,
+      'review_integrity_unresolved',
+      error.failure.reason,
+      { failure: error.failure },
+    );
+  }
   const errorMessage = getErrorMessage(error);
   return abortWorkflow(
     deps,
@@ -524,10 +543,17 @@ function buildInterruptedIterationResult(
  */
 function finalizeCompletionOrAbort(
   deps: WorkflowRunLoopDeps,
-  gate: { ok: true } | { ok: false; reason: string },
+  gate: { ok: true } | {
+    ok: false;
+    reason: string;
+    abortKind?: WorkflowAbortKind;
+    failure?: WorkflowStepFailureSummary;
+  },
 ): WorkflowAbortResult | undefined {
   if (!gate.ok) {
-    return abortWorkflow(deps, 'provisional_findings', gate.reason);
+    return abortWorkflow(deps, gate.abortKind ?? 'provisional_findings', gate.reason, {
+      ...(gate.failure === undefined ? {} : { failure: gate.failure }),
+    });
   }
   deps.state.status = 'completed';
   return undefined;
@@ -1069,7 +1095,11 @@ export async function runSingleWorkflowIteration(deps: WorkflowRunLoopDeps): Pro
     return result;
   } catch (error) {
     deps.cancelPendingStepActivation();
-    if (!workflowInterruptRequested(deps) && !(error instanceof RuleDetectionExhaustedError)) {
+    if (
+      !workflowInterruptRequested(deps)
+      && !(error instanceof RuleDetectionExhaustedError)
+      && !(error instanceof FindingReviewCapacityError)
+    ) {
       throw error;
     }
     const abort = abortWorkflowRuntimeError(deps, error);

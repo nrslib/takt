@@ -36,6 +36,7 @@ import {
 } from './terminal-adjudication-candidates.js';
 import {
   createTerminalAdjudicationRound,
+  listActiveTerminalAdjudicationEpisodes,
   selectActiveTerminalAdjudicationEpisode,
 } from './terminal-adjudication-model.js';
 import { resolveTerminalAdjudicationPlan } from './terminal-adjudication-verifier.js';
@@ -135,6 +136,56 @@ function currentCandidate(
       });
 }
 
+function settleRetryExhaustedCurrentEpisodes(input: {
+  ledger: FindingLedger;
+  currentRound: number;
+  observation: FindingObservation;
+}): FindingLedger {
+  const settlements: TerminalAdjudicationSettlement[] = [];
+  for (const episode of input.ledger.terminalAdjudicationEpisodes) {
+    if (input.ledger.terminalAdjudicationSettlements.some(
+      (settlement) => settlement.episodeId === episode.episodeId,
+    )) {
+      continue;
+    }
+    const attempts = input.ledger.terminalAdjudicationAttempts
+      .filter((attempt) => attempt.episodeId === episode.episodeId)
+      .sort((left, right) => left.attemptOrdinal - right.attemptOrdinal);
+    const latest = attempts.at(-1);
+    if (
+      latest?.stage !== 'interrupted'
+      || attempts.length !== episode.maxAttempts
+      || currentCandidate(input.ledger, episode, input.currentRound)?.candidateSnapshotDigest
+        !== episode.candidateSnapshotDigest
+    ) {
+      continue;
+    }
+    settlements.push({
+      settlementId: computeTerminalSettlementId(episode.episodeId),
+      episodeId: episode.episodeId,
+      attemptId: latest.attemptId,
+      provisionalFindingId: episode.findingId,
+      expectedHead: structuredClone(episode.expectedHead),
+      candidateSnapshotDigest: episode.candidateSnapshotDigest,
+      outcome: 'exhausted',
+      reason: 'attempts_exhausted_interrupted',
+      supersedingEpisodeId: null,
+      supersedingCandidateSnapshotDigest: null,
+      recordedAt: structuredClone(input.observation),
+    });
+  }
+  return settlements.length === 0
+    ? input.ledger
+    : {
+        ...input.ledger,
+        updatedAt: input.observation.timestamp,
+        terminalAdjudicationSettlements: [
+          ...input.ledger.terminalAdjudicationSettlements,
+          ...settlements,
+        ],
+      };
+}
+
 export function selectReconstructableTerminalEpisode(input: {
   ledger: FindingLedger;
   currentRound: number;
@@ -150,7 +201,26 @@ export function selectReconstructableTerminalEpisode(input: {
   let ledger = input.ledger;
   let hadActiveEpisode = false;
   while (true) {
-    const episode = selectActiveTerminalAdjudicationEpisode(ledger);
+    const settled = settleRetryExhaustedCurrentEpisodes({
+      ledger,
+      currentRound: input.currentRound,
+      observation: input.observation,
+    });
+    if (settled !== ledger) {
+      ledger = settled;
+      hadActiveEpisode = true;
+      continue;
+    }
+    const unsettledEpisodes = ledger.terminalAdjudicationEpisodes.filter((episode) => (
+      !ledger.terminalAdjudicationSettlements.some(
+        (settlement) => settlement.episodeId === episode.episodeId,
+      )
+    ));
+    const staleEpisode = unsettledEpisodes.find((entry) => {
+      const candidate = currentCandidate(ledger, entry, input.currentRound);
+      return candidate?.candidateSnapshotDigest !== entry.candidateSnapshotDigest;
+    });
+    const episode = staleEpisode ?? selectActiveTerminalAdjudicationEpisode(ledger);
     if (episode === undefined) {
       return { ledger, selected: undefined, hadActiveEpisode };
     }
@@ -527,7 +597,7 @@ export async function runTerminalAdjudication(input: {
         roundMarker: input.roundIdentity,
         limits: {
           maxCallsPerRound: MANAGER_INTERPRETATION_LIMITS.maxManagerCallsPerStep,
-          maxAdapterVisibleInputTokensPerCall: MANAGER_INTERPRETATION_LIMITS.maxInputTokensPerCall,
+          maxAdapterVisibleInputBytesPerCall: MANAGER_INTERPRETATION_LIMITS.maxInputBytesPerCall,
           maxOutputTokensPerCall: MANAGER_INTERPRETATION_LIMITS.maxOutputTokensPerCall,
           maxChargedInputTokensPerRound: MANAGER_INTERPRETATION_LIMITS.maxInputTokensPerStep,
           maxChargedOutputTokensPerRound: MANAGER_INTERPRETATION_LIMITS.maxOutputTokensPerStep,

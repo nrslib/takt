@@ -27,23 +27,38 @@ import {
 import type { ReviewerRelationClarification } from './relation-coherence.js';
 import { isProviderType, type ProviderType } from '../../../shared/types/provider.js';
 import type { StepProviderOptions } from '../../models/workflow-types.js';
+import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
 
 const PRIVATE_FILE_MODE = 0o600;
 const STORED_PUBLICATION_FILE_PATTERN = /^([a-f0-9]{64})\.json$/;
 
-export const STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL = Object.freeze({
+const LEGACY_STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL = Object.freeze({
   generationMode: 'structured',
   format: 'structured-output',
   protocolRevision: 1,
 } as const);
 
-export const PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL = Object.freeze({
+const LEGACY_PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL = Object.freeze({
   generationMode: 'freeform',
   format: 'normalized-plain-text',
   protocolRevision: 1,
 } as const);
 
+export const STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL = Object.freeze({
+  generationMode: 'structured',
+  format: 'structured-output',
+  protocolRevision: 2,
+} as const);
+
+export const PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL = Object.freeze({
+  generationMode: 'freeform',
+  format: 'normalized-plain-text',
+  protocolRevision: 2,
+} as const);
+
 export type FindingReviewPublicationProtocol =
+  | typeof LEGACY_STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL
+  | typeof LEGACY_PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL
   | typeof STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL
   | typeof PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL;
 
@@ -79,8 +94,39 @@ export interface CanonicalFindingReviewPublication extends FindingReviewPublicat
   readonly reportContent: string;
   readonly reportDigest: string;
   readonly rawFindings: readonly unknown[];
+  readonly presentationContext: FindingReviewPresentationContext;
   readonly reviewerOutputOverflow?: FindingReviewPublicationOverflow;
 }
+
+export interface RestatementRequestV1 {
+  readonly restatementRequestId: string;
+  readonly anomalyId: string;
+  readonly reviewer: string;
+  readonly presentationOrdinal: number;
+  readonly reviewScopeSnapshotId: string;
+  readonly sourceExcerptDigest: string;
+  readonly expectedRelation: 'new';
+  readonly expectedTargetFindingId: null;
+  readonly expectedTargetPreconditionClass: 'absent';
+}
+
+export interface FindingReviewPresentationContextV1 {
+  readonly revision: 1;
+  readonly restatementRequests: readonly [];
+  readonly presentedReviewerAnomalyIds: readonly [];
+}
+
+export interface FindingReviewPresentationContextV2 {
+  readonly revision: 2;
+  readonly reviewScopeSnapshotId: string;
+  readonly restatementRequests: readonly RestatementRequestV1[];
+  readonly presentedReviewerAnomalyIds: readonly string[];
+  readonly contextDigest: string;
+}
+
+export type FindingReviewPresentationContext =
+  | FindingReviewPresentationContextV1
+  | FindingReviewPresentationContextV2;
 
 export interface FindingReviewPublicationOverflow {
   readonly kind: 'reviewer-output-overflow';
@@ -106,14 +152,162 @@ export interface PendingFindingReviewNormalization
   extends FindingReviewPublicationIdentity {
   readonly workflowName: string;
   readonly publicationId: string;
-  readonly protocol: typeof PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL;
+  readonly protocol:
+    | typeof LEGACY_PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL
+    | typeof PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL;
   readonly reportContent: string;
   readonly reportDigest: string;
   readonly reviewerExecutionIdentity: ReviewerExecutionIdentity;
+  readonly presentationContext: FindingReviewPresentationContext;
 }
 
 function sha256(value: string | Buffer): string {
   return createHash('sha256').update(value).digest('hex');
+}
+
+function sortedUnique(values: readonly string[]): string[] {
+  return [...new Set(values)].sort(compareBinaryStrings);
+}
+
+function restatementRequestIdentity(request: Omit<RestatementRequestV1, 'restatementRequestId'>): string {
+  return sha256(JSON.stringify([
+    'restatement-request-v1',
+    request.anomalyId,
+    request.reviewer,
+    request.presentationOrdinal,
+    request.reviewScopeSnapshotId,
+    request.sourceExcerptDigest,
+    request.expectedRelation,
+    request.expectedTargetFindingId,
+    request.expectedTargetPreconditionClass,
+  ]));
+}
+
+export function computeRestatementRequestId(
+  request: Omit<RestatementRequestV1, 'restatementRequestId'>,
+): string {
+  return restatementRequestIdentity(request);
+}
+
+export function computeFindingReviewPresentationContextDigest(input: {
+  reviewScopeSnapshotId: string;
+  restatementRequests: readonly RestatementRequestV1[];
+  presentedReviewerAnomalyIds: readonly string[];
+}): string {
+  const restatementRequestDigestValues = input.restatementRequests.map((request) => [
+    request.restatementRequestId,
+    request.anomalyId,
+    request.reviewer,
+    request.presentationOrdinal,
+    request.reviewScopeSnapshotId,
+    request.sourceExcerptDigest,
+    request.expectedRelation,
+    request.expectedTargetFindingId,
+    request.expectedTargetPreconditionClass,
+  ]);
+  return sha256(JSON.stringify([
+    'finding-review-presentation-context-v2',
+    2,
+    input.reviewScopeSnapshotId,
+    restatementRequestDigestValues,
+    input.presentedReviewerAnomalyIds,
+  ]));
+}
+
+export function createFindingReviewPresentationContextV2(input: {
+  reviewScopeSnapshotId: string;
+  restatementRequests?: readonly RestatementRequestV1[];
+}): FindingReviewPresentationContextV2 {
+  const requests = [...(input.restatementRequests ?? [])].sort((left, right) => (
+    left.presentationOrdinal - right.presentationOrdinal
+    || compareBinaryStrings(left.anomalyId, right.anomalyId)
+    || compareBinaryStrings(left.restatementRequestId, right.restatementRequestId)
+  ));
+  const anomalyIds = sortedUnique(requests.map((request) => request.anomalyId));
+  const context: FindingReviewPresentationContextV2 = {
+    revision: 2,
+    reviewScopeSnapshotId: input.reviewScopeSnapshotId,
+    restatementRequests: requests,
+    presentedReviewerAnomalyIds: anomalyIds,
+    contextDigest: computeFindingReviewPresentationContextDigest({
+      reviewScopeSnapshotId: input.reviewScopeSnapshotId,
+      restatementRequests: requests,
+      presentedReviewerAnomalyIds: anomalyIds,
+    }),
+  };
+  assertFindingReviewPresentationContext(context);
+  return deepFreeze(context);
+}
+
+export function collectRestatementRequests(
+  publications: readonly Pick<CanonicalFindingReviewPublication, 'presentationContext'>[],
+): RestatementRequestV1[] {
+  const byId = new Map<string, RestatementRequestV1>();
+  for (const publication of publications) {
+    if (publication.presentationContext?.revision !== 2) {
+      continue;
+    }
+    for (const request of publication.presentationContext.restatementRequests) {
+      const existing = byId.get(request.restatementRequestId);
+      if (existing !== undefined && JSON.stringify(existing) !== JSON.stringify(request)) {
+        throw new Error(`Restatement request "${request.restatementRequestId}" has conflicting content`);
+      }
+      byId.set(request.restatementRequestId, request);
+    }
+  }
+  return [...byId.values()].sort((left, right) => (
+    compareBinaryStrings(left.reviewer, right.reviewer)
+    || left.presentationOrdinal - right.presentationOrdinal
+    || compareBinaryStrings(left.anomalyId, right.anomalyId)
+    || compareBinaryStrings(left.restatementRequestId, right.restatementRequestId)
+  ));
+}
+
+export function assertFindingReviewPresentationContext(
+  context: FindingReviewPresentationContext,
+): void {
+  if (context.revision === 1) {
+    if (context.restatementRequests.length !== 0 || context.presentedReviewerAnomalyIds.length !== 0) {
+      throw new Error('Legacy finding review presentation context must be empty');
+    }
+    return;
+  }
+  if (context.reviewScopeSnapshotId.length === 0 || context.restatementRequests.length > 64) {
+    throw new Error('Finding review presentation context has an invalid scope or request count');
+  }
+  const requestKeys = context.restatementRequests.map((request) => {
+    if (
+      request.restatementRequestId !== restatementRequestIdentity(request)
+      || request.expectedRelation !== 'new'
+      || request.expectedTargetFindingId !== null
+      || request.expectedTargetPreconditionClass !== 'absent'
+      || request.reviewScopeSnapshotId !== context.reviewScopeSnapshotId
+      || request.reviewer.length === 0
+      || request.anomalyId.length === 0
+      || request.sourceExcerptDigest.length === 0
+      || !Number.isSafeInteger(request.presentationOrdinal)
+      || request.presentationOrdinal < 1
+    ) {
+      throw new Error('Finding review presentation context contains an invalid restatement request');
+    }
+    return `${String(request.presentationOrdinal)}\0${request.anomalyId}\0${request.restatementRequestId}`;
+  });
+  if (new Set(requestKeys).size !== requestKeys.length) {
+    throw new Error('Finding review presentation context contains duplicate restatement requests');
+  }
+  const sortedKeys = [...requestKeys].sort(compareBinaryStrings);
+  if (JSON.stringify(sortedKeys) !== JSON.stringify(requestKeys)) {
+    throw new Error('Finding review presentation restatement requests are not binary sorted');
+  }
+  const expectedAnomalyIds = sortedUnique(context.restatementRequests.map((request) => request.anomalyId));
+  if (
+    JSON.stringify(expectedAnomalyIds) !== JSON.stringify(context.presentedReviewerAnomalyIds)
+    || JSON.stringify(context.presentedReviewerAnomalyIds)
+      !== JSON.stringify(sortedUnique(context.presentedReviewerAnomalyIds))
+    || context.contextDigest !== computeFindingReviewPresentationContextDigest(context)
+  ) {
+    throw new Error('Finding review presentation context digest or anomaly projection is invalid');
+  }
 }
 
 export function computeFindingReviewPublicationId(
@@ -211,6 +405,7 @@ function preparationContentIdentity(
     reportDigest: preparation.publication.reportDigest,
     rawFindings: preparation.publication.rawFindings,
     reviewerOutputOverflow: preparation.publication.reviewerOutputOverflow ?? null,
+    presentationContext: preparation.publication.presentationContext,
     relationClarification: preparation.relationClarification ?? null,
     reviewerExecutionIdentity: preparation.reviewerExecutionIdentity ?? null,
   }));
@@ -235,6 +430,11 @@ function rebindInheritedFindingReviewPublication(
     ))
     .filter(({ publication }) => (
       samePublicationIdentityExceptScope(publication, identity)
+      && publication.protocol.protocolRevision === 2
+      && (
+        publication.presentationContext.revision === 1
+        || publication.presentationContext.restatementRequests.length === 0
+      )
     ));
   if (candidates.length === 0) {
     return undefined;
@@ -264,6 +464,7 @@ function rebindInheritedFindingReviewPublication(
       protocol: first.publication.protocol,
       reportContent: first.publication.reportContent,
       rawFindings: first.publication.rawFindings,
+      presentationContext: first.publication.presentationContext,
       ...(first.publication.reviewerOutputOverflow === undefined
         ? {}
         : { reviewerOutputOverflow: first.publication.reviewerOutputOverflow }),
@@ -286,6 +487,7 @@ function pendingContentIdentity(
     protocol: pending.protocol,
     reportDigest: pending.reportDigest,
     reviewerExecutionIdentity: pending.reviewerExecutionIdentity,
+    presentationContext: pending.presentationContext,
   }));
 }
 
@@ -307,7 +509,12 @@ function rebindInheritedPendingFindingReviewNormalization(
     .map(({ publicationId, content }) => (
       parseStoredPendingNormalization(content, publicationId)
     ))
-    .filter((pending) => samePublicationIdentityExceptScope(pending, identity));
+    .filter((pending) => samePublicationIdentityExceptScope(pending, identity))
+    .filter((pending) => pending.protocol.protocolRevision === 2)
+    .filter((pending) => (
+      pending.presentationContext.revision === 1
+      || pending.presentationContext.restatementRequests.length === 0
+    ));
   if (candidates.length === 0) {
     return undefined;
   }
@@ -332,6 +539,7 @@ function rebindInheritedPendingFindingReviewNormalization(
       workflowName: expectedWorkflowName,
       reportContent: first.reportContent,
       reviewerExecutionIdentity: first.reviewerExecutionIdentity,
+      presentationContext: first.presentationContext,
     }),
   );
 }
@@ -379,6 +587,22 @@ function parsePublicationProtocol(value: unknown): FindingReviewPublicationProto
     throw new Error('Finding review publication requires protocol');
   }
   const record = value as Record<string, unknown>;
+  const legacyStructured = LEGACY_STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL;
+  if (
+    record.generationMode === legacyStructured.generationMode
+    && record.format === legacyStructured.format
+    && record.protocolRevision === legacyStructured.protocolRevision
+  ) {
+    return legacyStructured;
+  }
+  const legacyPlainTextNormalized = LEGACY_PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL;
+  if (
+    record.generationMode === legacyPlainTextNormalized.generationMode
+    && record.format === legacyPlainTextNormalized.format
+    && record.protocolRevision === legacyPlainTextNormalized.protocolRevision
+  ) {
+    return legacyPlainTextNormalized;
+  }
   const structured = STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL;
   if (
     record.generationMode === structured.generationMode
@@ -405,6 +629,15 @@ function samePublicationProtocol(
   return left.generationMode === right.generationMode
     && left.format === right.format
     && left.protocolRevision === right.protocolRevision;
+}
+
+function assertProtocolPresentationCompatibility(
+  protocol: FindingReviewPublicationProtocol,
+  presentationContext: FindingReviewPresentationContext,
+): void {
+  if (protocol.protocolRevision === 1 && presentationContext.revision !== 1) {
+    throw new Error('Legacy finding review publication protocol cannot carry V2 presentation context');
+  }
 }
 
 function parseStoredRelationClarification(
@@ -471,6 +704,76 @@ function parseStoredReviewerOutputOverflow(
   return structuredClone(value) as FindingReviewPublicationOverflow;
 }
 
+function parseStoredPresentationContext(
+  value: unknown,
+): FindingReviewPresentationContext {
+  if (value === undefined) {
+    return { revision: 1, restatementRequests: [], presentedReviewerAnomalyIds: [] };
+  }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('Finding review publication presentationContext is not an object');
+  }
+  const record = value as Record<string, unknown>;
+  if (record.revision === 1) {
+    const legacy: FindingReviewPresentationContextV1 = {
+      revision: 1,
+      restatementRequests: [],
+      presentedReviewerAnomalyIds: [],
+    };
+    assertFindingReviewPresentationContext(legacy);
+    return legacy;
+  }
+  if (
+    record.revision !== 2
+    || typeof record.reviewScopeSnapshotId !== 'string'
+    || !Array.isArray(record.restatementRequests)
+    || !Array.isArray(record.presentedReviewerAnomalyIds)
+    || !record.presentedReviewerAnomalyIds.every((id) => typeof id === 'string')
+    || typeof record.contextDigest !== 'string'
+  ) {
+    throw new Error('Finding review publication presentationContext is invalid');
+  }
+  const restatementRequests = record.restatementRequests.map((value): RestatementRequestV1 => {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      throw new Error('Finding review publication restatement request is invalid');
+    }
+    const request = value as Record<string, unknown>;
+    if (
+      typeof request.restatementRequestId !== 'string'
+      || typeof request.anomalyId !== 'string'
+      || typeof request.reviewer !== 'string'
+      || !Number.isSafeInteger(request.presentationOrdinal)
+      || typeof request.reviewScopeSnapshotId !== 'string'
+      || typeof request.sourceExcerptDigest !== 'string'
+      || request.expectedRelation !== 'new'
+      || request.expectedTargetFindingId !== null
+      || request.expectedTargetPreconditionClass !== 'absent'
+    ) {
+      throw new Error('Finding review publication restatement request is invalid');
+    }
+    return {
+      anomalyId: request.anomalyId,
+      reviewer: request.reviewer,
+      presentationOrdinal: Number(request.presentationOrdinal),
+      reviewScopeSnapshotId: request.reviewScopeSnapshotId,
+      sourceExcerptDigest: request.sourceExcerptDigest,
+      expectedRelation: 'new',
+      expectedTargetFindingId: null,
+      expectedTargetPreconditionClass: 'absent',
+      restatementRequestId: request.restatementRequestId,
+    };
+  });
+  const context: FindingReviewPresentationContextV2 = {
+    revision: 2,
+    reviewScopeSnapshotId: record.reviewScopeSnapshotId,
+    restatementRequests,
+    presentedReviewerAnomalyIds: record.presentedReviewerAnomalyIds,
+    contextDigest: record.contextDigest,
+  };
+  assertFindingReviewPresentationContext(context);
+  return deepFreeze(context);
+}
+
 function parseStoredPreparation(
   content: Buffer,
   expectedPublicationId: string,
@@ -519,6 +822,7 @@ function parseStoredPreparation(
     reportContent: publicationRecord.reportContent,
     reportDigest: publicationRecord.reportDigest,
     rawFindings: publicationRecord.rawFindings,
+    presentationContext: parseStoredPresentationContext(publicationRecord.presentationContext),
     ...(publicationRecord.reviewerOutputOverflow === undefined
       ? {}
       : {
@@ -562,7 +866,7 @@ function assertPendingFindingReviewNormalization(
   if (!samePublicationProtocol(
     pending.protocol,
     PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
-  )) {
+  ) && pending.protocol.protocolRevision !== 1) {
     throw new Error(
       `Pending finding review normalization protocol mismatch for "${pending.publicationId}"`,
     );
@@ -573,6 +877,7 @@ function assertPendingFindingReviewNormalization(
       `Pending finding review normalization digest mismatch for "${pending.publicationId}"`,
     );
   }
+  assertProtocolPresentationCompatibility(pending.protocol, pending.presentationContext);
   parseReviewerExecutionIdentity(pending.reviewerExecutionIdentity);
 }
 
@@ -624,6 +929,7 @@ function parseStoredPendingNormalization(
     reviewerExecutionIdentity: parseReviewerExecutionIdentity(
       record.reviewerExecutionIdentity,
     ),
+    presentationContext: parseStoredPresentationContext(record.presentationContext),
   };
   assertPendingFindingReviewNormalization(pending);
   if (pending.publicationId !== expectedPublicationId) {
@@ -838,6 +1144,7 @@ export function assertCanonicalFindingReviewPublication(
   publication: CanonicalFindingReviewPublication,
 ): void {
   parsePublicationProtocol(publication.protocol);
+  assertProtocolPresentationCompatibility(publication.protocol, publication.presentationContext);
   const expectedId = computeFindingReviewPublicationId(publication);
   if (publication.publicationId !== expectedId) {
     throw new Error(`Finding review publication identity mismatch for "${publication.publicationId}"`);
@@ -848,6 +1155,15 @@ export function assertCanonicalFindingReviewPublication(
   }
   assertPublicationRawFindings(publication.reportContent, publication.rawFindings);
   assertReviewerOutputOverflow(publication);
+  assertFindingReviewPresentationContext(publication.presentationContext);
+  if (
+    publication.presentationContext.revision === 2
+    && publication.presentationContext.restatementRequests.some(
+      (request) => request.reviewer !== publication.reviewerStepName,
+    )
+  ) {
+    throw new Error('Finding review presentation request reviewer does not match publication reviewer');
+  }
 }
 
 export function createFindingReviewPublication(input: {
@@ -855,6 +1171,7 @@ export function createFindingReviewPublication(input: {
   readonly protocol: FindingReviewPublicationProtocol;
   readonly reportContent: string;
   readonly rawFindings: readonly unknown[];
+  readonly presentationContext?: FindingReviewPresentationContext;
   readonly reviewerRawResourceEnvelope?: ReviewerRawResourceEnvelope;
   readonly reviewerOutputOverflow?: FindingReviewPublicationOverflow;
 }): CanonicalFindingReviewPublication {
@@ -881,6 +1198,8 @@ export function createFindingReviewPublication(input: {
     reportContent: input.reportContent,
     reportDigest: sha256(Buffer.from(input.reportContent, 'utf8')),
     rawFindings: structuredClone(bounded.rawFindings),
+    presentationContext: input.presentationContext
+      ?? { revision: 1, restatementRequests: [], presentedReviewerAnomalyIds: [] },
     ...(reviewerOutputOverflow === undefined
       ? {}
       : { reviewerOutputOverflow }),
@@ -899,6 +1218,7 @@ export function createPendingFindingReviewNormalization(input: {
   readonly workflowName: string;
   readonly reportContent: string;
   readonly reviewerExecutionIdentity: ReviewerExecutionIdentity;
+  readonly presentationContext?: FindingReviewPresentationContext;
 }): PendingFindingReviewNormalization {
   const pending: PendingFindingReviewNormalization = {
     ...input.identity,
@@ -910,6 +1230,8 @@ export function createPendingFindingReviewNormalization(input: {
     reviewerExecutionIdentity: parseReviewerExecutionIdentity(
       input.reviewerExecutionIdentity,
     ),
+    presentationContext: input.presentationContext
+      ?? { revision: 1, restatementRequests: [], presentedReviewerAnomalyIds: [] },
   };
   assertPendingFindingReviewNormalization(pending);
   return deepFreeze(pending);
@@ -966,6 +1288,8 @@ export function persistPendingFindingReviewNormalization(
         || !samePublicationProtocol(existing.protocol, pending.protocol)
         || JSON.stringify(existing.reviewerExecutionIdentity)
           !== JSON.stringify(pending.reviewerExecutionIdentity)
+        || JSON.stringify(existing.presentationContext)
+          !== JSON.stringify(pending.presentationContext)
       ) {
         throw new Error(
           `Pending finding review normalization conflict for "${pending.publicationId}"`,
@@ -1000,6 +1324,7 @@ export function loadFindingReviewPublication(
   const preparation = parseStoredPreparation(snapshot.content, publicationId);
   if (
     expectedProtocol !== undefined
+    && preparation.publication.protocol.protocolRevision !== 1
     && !samePublicationProtocol(preparation.publication.protocol, expectedProtocol)
   ) {
     throw new Error(
@@ -1007,6 +1332,23 @@ export function loadFindingReviewPublication(
     );
   }
   return preparation;
+}
+
+/** 保存済みの canonical publication だけを監査・提示計上へ利用する。 */
+export function listFindingReviewPublications(
+  reportDir: string,
+): CanonicalFindingReviewPublication[] {
+  const directory = resolve(
+    reportDir,
+    REPORT_INTERNAL_NAMESPACE,
+    FINDING_REVIEW_PUBLICATIONS_INTERNAL_DIRECTORY,
+  );
+  return readStoredRecordContents(directory)
+    .map(({ publicationId, content }) => parseStoredPreparation(content, publicationId).publication)
+    .sort((left, right) => (
+      left.stepIteration - right.stepIteration
+      || compareBinaryStrings(left.publicationId, right.publicationId)
+    ));
 }
 
 export function persistFindingReviewPublication(
@@ -1034,6 +1376,8 @@ export function persistFindingReviewPublication(
         || !samePublicationProtocol(existing.publication.protocol, publication.protocol)
         || JSON.stringify(existing.reviewerExecutionIdentity ?? null)
           !== JSON.stringify(preparation.reviewerExecutionIdentity ?? null)
+        || JSON.stringify(existing.publication.presentationContext)
+          !== JSON.stringify(publication.presentationContext)
       ) {
         throw new Error(
           `Finding review publication conflict for "${publication.publicationId}"`,

@@ -54,6 +54,10 @@ import { computeInterpretationAttemptId } from './finding-interpretation-identit
 import {
   reviewerAnomalySettlementEligibilityViolation,
 } from './finding-reviewer-anomaly-settlement-policy.js';
+import {
+  INTAKE_CONTRACT_ANOMALY_REASON_CODES,
+  INTAKE_CONTRACT_MISSING_REQUIREMENTS,
+} from './finding-types.js';
 import type {
   FindingEvidenceBinding,
   FindingEvidenceRecord,
@@ -72,6 +76,11 @@ type ReadonlyContractRegistries = {
     FindingContractLedgerRegistries[Key]
   >;
 };
+
+type ReclassificationSettlement = Extract<
+  FindingContractLedgerRegistries['terminalAdjudicationSettlements'][number],
+  { outcome: 'reclassified_to_reviewer_anomaly' }
+>;
 
 export type FindingLedgerProjectionInvariantInput = ReadonlyContractRegistries & {
   nextId: number;
@@ -234,6 +243,137 @@ function collectCoreViolations(
     violations,
   });
   return { rawById, findingsById };
+}
+
+function collectReclassificationViolations(
+  projection: FindingLedgerProjectionInvariantInput,
+  rawById: ReadonlyMap<string, RawFinding>,
+  violations: Violation[],
+): void {
+  projection.findings.forEach((finding, index) => {
+    const marker = finding.reviewerAnomalyReclassification;
+    if (marker === undefined) {
+      return;
+    }
+    const anomaly = (projection.reviewerAnomalies ?? []).find(
+      (candidate) => candidate.id === marker.anomalyId,
+    );
+    const oldHeadMatches = marker.oldHead.entityKind === 'finding'
+      && marker.oldHead.entityId === finding.id
+      && projection.lifecycleEvents.some((event) => (
+        event.eventId === marker.oldHead.eventId
+        && event.transitions.some((transition) => (
+          transition.after.entityKind === 'finding'
+            && transition.after.entityId === finding.id
+            && sameValue(transition.after, marker.oldHead)
+        ))
+      ));
+    const provisionalRawIds = finding.provisional?.sourceRawFindingIds ?? [];
+    const sourceRawIdsValid = sameValue(
+      marker.rawFindingIds,
+      provisionalRawIds,
+    ) && marker.rawFindingIds.every((rawFindingId) => rawById.has(rawFindingId));
+    const anomalyBindingValid = anomaly !== undefined
+      && sameValue(anomaly.sourceRawFindingIds, marker.rawFindingIds);
+    const reclassificationSettlements = projection.terminalAdjudicationSettlements.filter(
+      (settlement): settlement is ReclassificationSettlement => (
+        settlement.outcome === 'reclassified_to_reviewer_anomaly'
+          && settlement.migrationId === marker.migrationId
+          && settlement.provisionalFindingId === finding.id
+      ),
+    );
+    const settlementEpisodeIds = reclassificationSettlements.map(({ episodeId }) => episodeId);
+    const settlementAttemptIds = reclassificationSettlements.flatMap(({ attemptIds }) => attemptIds);
+    const settlementsValid = sameSet(marker.terminalEpisodeIds, settlementEpisodeIds)
+      && sameSet(marker.terminalAttemptIds, settlementAttemptIds)
+      && reclassificationSettlements.every((settlement) => (
+        sameSet(settlement.scopeBindingIds, marker.scopeBindingIds)
+      ));
+    const terminalEpisodeRefsValid = marker.terminalEpisodeIds.every((episodeId) => {
+      const episode = projection.terminalAdjudicationEpisodes.find(
+        (candidate) => candidate.episodeId === episodeId,
+      );
+      return episode?.findingId === finding.id;
+    });
+    const terminalAttemptRefsValid = marker.terminalAttemptIds.every((attemptId) => {
+      const attempt = projection.terminalAdjudicationAttempts.find(
+        (candidate) => candidate.attemptId === attemptId,
+      );
+      return attempt !== undefined
+        && attempt.findingId === finding.id
+        && marker.terminalEpisodeIds.includes(attempt.episodeId);
+    });
+    const bindingReferences = projection.evidenceRecords.flatMap((record) => (
+      record.kind === 'engine_proof'
+        && record.subject.kind === 'finding_provisional_isolation'
+        && record.subject.findingId === finding.id
+        ? record.subject.claimBindingAuthorizationReferences
+        : []
+    ));
+    const bindingIdsValid = marker.bindingAuthorizationIds.every((authorizationId) => (
+      bindingReferences.some((reference) => reference.authorizationId === authorizationId)
+    ));
+    const decisionIdsValid = marker.bindingDecisionIds.every((bindingDecisionId) => (
+      bindingReferences.some((reference) => reference.bindingDecisionId === bindingDecisionId)
+    ));
+    const allowlistBMetadataRequired = finding.provisional?.kind === 'raw-adjudication-unresolved'
+      || marker.bindingAuthorizationIds.length > 0
+      || marker.bindingDecisionIds.length > 0;
+    const allowlistBMetadataValid = allowlistBMetadataRequired
+      ? marker.bindingAuthorizationIds.length === 1
+        && marker.bindingDecisionIds.length === 1
+        && bindingReferences.some((reference) => (
+          reference.kind === 'new_provisional_bundle'
+            && reference.authorizationId === marker.bindingAuthorizationIds[0]
+            && reference.bindingDecisionId === marker.bindingDecisionIds[0]
+            && sameSet(reference.sourceRawFindingIds, marker.rawFindingIds)
+        ))
+      : true;
+    const sourceSnapshots = projection.rawCanonicalSnapshots.filter((snapshot) => (
+      marker.rawFindingIds.includes(snapshot.rawFindingId)
+    ));
+    const rawCanonicalSnapshotsValid = sourceSnapshots.length === marker.rawFindingIds.length
+      && sameSet(
+        marker.rawCanonicalSnapshotIds,
+        sourceSnapshots.map(({ rawCanonicalSnapshotId }) => rawCanonicalSnapshotId),
+      );
+    const scopeBindingsForMigration = projection.findingScopeBindings.filter((binding) => (
+      binding.findingId === finding.id
+    ));
+    const scopeBindingIdsValid = marker.scopeBindingIds.every((bindingId) => (
+      scopeBindingsForMigration.some((binding) => binding.bindingId === bindingId)
+    )) && sameSet(
+      marker.scopeBindingIds,
+      scopeBindingsForMigration.map(({ bindingId }) => bindingId),
+    );
+    if (
+      !oldHeadMatches
+      || !sourceRawIdsValid
+      || !anomalyBindingValid
+      || !settlementsValid
+      || !terminalEpisodeRefsValid
+      || !terminalAttemptRefsValid
+      || !bindingIdsValid
+      || !decisionIdsValid
+      || !allowlistBMetadataValid
+      || !isBinarySortedUnique(marker.rawFindingIds)
+      || !isBinarySortedUnique(marker.rawCanonicalSnapshotIds)
+      || !isBinarySortedUnique(marker.terminalEpisodeIds)
+      || !isBinarySortedUnique(marker.terminalAttemptIds)
+      || !isBinarySortedUnique(marker.scopeBindingIds)
+      || !isBinarySortedUnique(marker.bindingAuthorizationIds)
+      || !isBinarySortedUnique(marker.bindingDecisionIds)
+      || marker.bindingAuthorizationIds.length !== marker.bindingDecisionIds.length
+      || !rawCanonicalSnapshotsValid
+      || !scopeBindingIdsValid
+    ) {
+      addViolation(
+        violations,
+        ['findings', index, 'reviewerAnomalyReclassification'],
+        `Finding "${finding.id}" has an invalid intake reclassification marker`,
+      );
+    }
+  });
 }
 
 function collectRawSnapshotViolations(
@@ -622,7 +762,8 @@ function collectProviderAndAttemptViolations(
       || call.ownerAttemptKind !== call.purpose
       || call.ownerAttemptId !== call.attemptIds[0]
       || (call.purpose !== 'interpretation' && call.attemptIds.length !== 1)
-      || call.reservedInputTokens !== scope.limits.maxAdapterVisibleInputTokensPerCall
+      || call.reservedInputTokens !== call.measuredAdapterVisibleInputTokens
+      || call.requestByteLength > scope.limits.maxAdapterVisibleInputBytesPerCall
       || call.reservedOutputTokens !== scope.limits.maxOutputTokensPerCall
       || call.measuredAdapterVisibleInputTokens > call.reservedInputTokens
       || (call.state === 'settled'
@@ -1870,6 +2011,28 @@ function collectConflictAndTerminalIdentityViolations(
     const episode = projection.terminalAdjudicationEpisodes.find(
       (candidate) => candidate.episodeId === settlement.episodeId,
     );
+    if (settlement.outcome === 'reclassified_to_reviewer_anomaly') {
+      const finding = projection.findings.find(
+        (candidate) => candidate.id === settlement.provisionalFindingId,
+      );
+      const attempts = projection.terminalAdjudicationAttempts.filter(
+        (attempt) => settlement.attemptIds.includes(attempt.attemptId),
+      );
+      if (
+        episode === undefined
+        || finding?.reviewerAnomalyReclassification?.migrationId !== settlement.migrationId
+        || finding.reviewerAnomalyReclassification?.anomalyId === undefined
+        || !sameValue(attempts.map(({ attemptId }) => attemptId).sort(compareBinaryStrings), settlement.attemptIds)
+        || attempts.some((attempt) => attempt.episodeId !== settlement.episodeId)
+      ) {
+        addViolation(
+          violations,
+          ['terminalAdjudicationSettlements', index],
+          `Terminal reclassification settlement "${settlement.settlementId}" is invalid`,
+        );
+      }
+      return;
+    }
     if (settlement.outcome === 'superseded' || settlement.outcome === 'exhausted') {
       const attempts = projection.terminalAdjudicationAttempts.filter(
         (attempt) => attempt.episodeId === settlement.episodeId,
@@ -1891,15 +2054,21 @@ function collectConflictAndTerminalIdentityViolations(
         ? settlement.reason === 'candidate_snapshot_changed'
           ? changedCandidateMatches
           : absentCandidateMatches
-        : changedCandidateMatches || absentCandidateMatches;
+        : settlement.reason === 'attempts_exhausted_interrupted'
+          ? absentCandidateMatches
+          : changedCandidateMatches || absentCandidateMatches;
       const attemptStateMatches = settlement.outcome === 'superseded'
         ? attempts.length === 0
-        : attempts.length > 0
-          && latestAttempt?.stage === 'completed'
-          && latestAttempt.result.kind === 'stale_precondition'
-          && latestAttempt.result.proposal === null
-          && latestAttempt.result.proposalDigest === null
-          && settlement.attemptId === latestAttempt.attemptId;
+        : settlement.reason === 'attempts_exhausted_interrupted'
+          ? attempts.length === (episode?.maxAttempts ?? -1)
+            && latestAttempt?.stage === 'interrupted'
+            && settlement.attemptId === latestAttempt.attemptId
+          : attempts.length > 0
+            && latestAttempt?.stage === 'completed'
+            && latestAttempt.result.kind === 'stale_precondition'
+            && latestAttempt.result.proposal === null
+            && latestAttempt.result.proposalDigest === null
+            && settlement.attemptId === latestAttempt.attemptId;
       if (
         episode === undefined
         || settlement.provisionalFindingId !== episode.findingId
@@ -1961,9 +2130,21 @@ function collectConflictAndTerminalIdentityViolations(
       && attempt.result.kind === 'stale_precondition'
       && attempt.result.proposal === null
       && attempt.result.proposalDigest === null;
+    const episode = projection.terminalAdjudicationEpisodes.find(
+      (candidate) => candidate.episodeId === attempt.episodeId,
+    );
+    const episodeAttempts = projection.terminalAdjudicationAttempts
+      .filter((candidate) => candidate.episodeId === attempt.episodeId)
+      .sort((left, right) => left.attemptOrdinal - right.attemptOrdinal);
+    const requiresRetryExhaustedSettlement = episode !== undefined
+      && attempt.stage === 'interrupted'
+      && episodeAttempts.length === episode.maxAttempts
+      && episodeAttempts.at(-1)?.attemptId === attempt.attemptId;
     if (
-      (requiresExhaustedSettlement && exhaustedSettlements.length !== 1)
-      || (!requiresExhaustedSettlement && exhaustedSettlements.length !== 0)
+      ((requiresExhaustedSettlement || requiresRetryExhaustedSettlement)
+        && exhaustedSettlements.length !== 1)
+      || (!(requiresExhaustedSettlement || requiresRetryExhaustedSettlement)
+        && exhaustedSettlements.length !== 0)
     ) {
       addViolation(
         violations,
@@ -1974,6 +2155,7 @@ function collectConflictAndTerminalIdentityViolations(
     const settlements = projection.terminalAdjudicationSettlements.filter(
       (settlement) => settlement.outcome !== 'superseded'
         && settlement.outcome !== 'exhausted'
+        && settlement.outcome !== 'reclassified_to_reviewer_anomaly'
         && settlement.attemptId === attempt.attemptId,
     );
     if ((attempt.stage === 'applied' && settlements.length !== 1)
@@ -2021,7 +2203,7 @@ function collectReviewerAnomalyViolations(
     anomalyIds.add(anomaly.id);
     const stableIdentity = canonicalJson({
       kind: anomaly.kind,
-      lineageKey: anomaly.lineageKey,
+      ...(anomaly.kind === 'intake-contract-incomplete' ? {} : { lineageKey: anomaly.lineageKey }),
     });
     const priorStableIdentity = anomalyIdentityByStableKey.get(anomaly.stableKey);
     if (priorStableIdentity !== undefined && priorStableIdentity !== stableIdentity) {
@@ -2051,6 +2233,69 @@ function collectReviewerAnomalyViolations(
         );
       }
     });
+    if (anomaly.kind === 'intake-contract-incomplete') {
+      const defect = anomaly.intakeContract;
+      if (defect === undefined) {
+        addViolation(
+          violations,
+          ['reviewerAnomalies', index, 'intakeContract'],
+          'intake-contract-incomplete requires intakeContract',
+        );
+      } else {
+        if (
+          defect.classificationAuthorityId !== 'system/intake_observation_classification_v1'
+          || defect.presentationOwnerReviewer.length === 0
+          || !Number.isSafeInteger(defect.presentationLimit)
+          || defect.presentationLimit < 1
+          || defect.reasonCodes.length === 0
+          || !defect.reasonCodes.every((code) => (
+            (INTAKE_CONTRACT_ANOMALY_REASON_CODES as readonly string[]).includes(code)
+          ))
+          || !defect.missingRequirements.every((requirement) => (
+            (INTAKE_CONTRACT_MISSING_REQUIREMENTS as readonly string[]).includes(requirement)
+          ))
+          || JSON.stringify(defect.reasonCodes)
+            !== JSON.stringify([...new Set(defect.reasonCodes)].sort(compareBinaryStrings))
+          || JSON.stringify(defect.missingRequirements)
+            !== JSON.stringify([...new Set(defect.missingRequirements)].sort(compareBinaryStrings))
+        ) {
+          addViolation(
+            violations,
+            ['reviewerAnomalies', index, 'intakeContract'],
+            `Intake contract metadata for anomaly "${anomaly.id}" is invalid`,
+          );
+        }
+        if (
+          defect.terminalDisposition !== undefined
+          && (
+            anomaly.promotedFindingId !== undefined
+            || anomaly.settlement !== undefined
+            || (defect.observationClass === 'claim-bearing'
+              && (
+                defect.terminalDisposition.workflowOutcome !== 'review_integrity_unresolved'
+                || defect.terminalDisposition.kind !== 'restatement_exhausted_claim_bearing'
+              ))
+            || (defect.observationClass === 'protocol-noise'
+              && (
+                defect.terminalDisposition.workflowOutcome !== 'non_claim_observation_rejected'
+                || defect.terminalDisposition.kind !== 'protocol_noise_rejected_after_presentation'
+              ))
+          )
+        ) {
+          addViolation(
+            violations,
+            ['reviewerAnomalies', index, 'intakeContract', 'terminalDisposition'],
+            `Intake contract terminal disposition for anomaly "${anomaly.id}" conflicts with its classification or settlement`,
+          );
+        }
+      }
+    } else if (anomaly.intakeContract !== undefined) {
+      addViolation(
+        violations,
+        ['reviewerAnomalies', index, 'intakeContract'],
+        `Anomaly kind "${anomaly.kind}" must not contain intakeContract`,
+      );
+    }
     if (anomaly.settlement !== undefined) {
       const settlementViolation = reviewerAnomalySettlementEligibilityViolation({
         projection,
@@ -2077,6 +2322,11 @@ export function collectFindingLedgerProjectionInvariantViolations(
 ): FindingLedgerProjectionInvariantViolation[] {
   const violations: Violation[] = [];
   const core = collectCoreViolations(projection, violations);
+  collectReclassificationViolations(
+    projection,
+    core.rawById,
+    violations,
+  );
   const rawSnapshots = collectRawSnapshotViolations(projection, core.rawById, violations);
   const caseSnapshotIds = collectInterpretationViolations(
     projection,

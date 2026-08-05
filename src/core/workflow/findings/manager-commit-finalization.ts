@@ -14,8 +14,10 @@ import type {
   FindingLedger,
   FindingManagerOutput,
   FindingEvidenceRecord,
+  FindingObservation,
   RawFinding,
 } from './types.js';
+import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
 import type { RawAdmissionEvaluation } from './manager-admission.js';
 import type {
   PreAdmissionEntityMutationResult,
@@ -41,10 +43,89 @@ import {
   type ResolutionRenotificationTransition,
 } from './resolution-renotification.js';
 import { resolveCurrentLifecycleObservationTarget } from './reviewer-anomaly-policy.js';
+import {
+  listFindingReviewPublications,
+  type CanonicalFindingReviewPublication,
+} from './review-publication.js';
 
 interface RejectedObservationPlan {
   attachments: RejectedObservationAttachment[];
   anomalySpecs: ReviewerAnomalySpec[];
+}
+
+function applyIntakeContractTerminalDispositions(input: {
+  ledger: FindingLedger;
+  publications: readonly CanonicalFindingReviewPublication[];
+  observation: FindingObservation;
+}): FindingLedger {
+  const publicationsByAnomalyId = new Map<string, CanonicalFindingReviewPublication[]>();
+  for (const publication of input.publications) {
+    if (publication.presentationContext?.revision !== 2) {
+      continue;
+    }
+    for (const anomalyId of publication.presentationContext.presentedReviewerAnomalyIds) {
+      const publications = publicationsByAnomalyId.get(anomalyId) ?? [];
+      if (!publications.some((candidate) => candidate.publicationId === publication.publicationId)) {
+        publications.push(publication);
+      }
+      publicationsByAnomalyId.set(anomalyId, publications);
+    }
+  }
+  let changed = false;
+  const reviewerAnomalies = (input.ledger.reviewerAnomalies ?? []).map((anomaly) => {
+    const defect = anomaly.intakeContract;
+    if (
+      anomaly.kind !== 'intake-contract-incomplete'
+      || defect === undefined
+      || anomaly.promotedFindingId !== undefined
+      || anomaly.settlement !== undefined
+      || defect.terminalDisposition !== undefined
+    ) {
+      return anomaly;
+    }
+    const publications = publicationsByAnomalyId.get(anomaly.id) ?? [];
+    if (
+      publications.length === 0
+      || publications.length < defect.presentationLimit
+        && defect.observationClass === 'claim-bearing'
+    ) {
+      return anomaly;
+    }
+    changed = true;
+    const terminalPublicationId = [...publications]
+      .sort((left, right) => {
+        const leftRequest = left.presentationContext.restatementRequests.find(
+          (request) => request.anomalyId === anomaly.id,
+        );
+        const rightRequest = right.presentationContext.restatementRequests.find(
+          (request) => request.anomalyId === anomaly.id,
+        );
+        return left.stepIteration - right.stepIteration
+          || (leftRequest?.presentationOrdinal ?? 0) - (rightRequest?.presentationOrdinal ?? 0)
+          || compareBinaryStrings(left.publicationId, right.publicationId);
+      })
+      .at(-1)!.publicationId;
+    return {
+      ...anomaly,
+      intakeContract: {
+        ...defect,
+        terminalDisposition: {
+          kind: defect.observationClass === 'claim-bearing'
+            ? 'restatement_exhausted_claim_bearing' as const
+            : 'protocol_noise_rejected_after_presentation' as const,
+          workflowOutcome: defect.observationClass === 'claim-bearing'
+            ? 'review_integrity_unresolved' as const
+            : 'non_claim_observation_rejected' as const,
+          decidedAt: input.observation,
+          terminalPublicationId,
+          reason: defect.observationClass === 'claim-bearing'
+            ? `Restatement presentation limit ${defect.presentationLimit} was reached without verified correspondence`
+            : 'The protocol-noise observation was presented once without a claim-bearing reassertion',
+        },
+      },
+    };
+  });
+  return changed ? { ...input.ledger, reviewerAnomalies } : input.ledger;
 }
 
 function classifyRejectedObservations(
@@ -324,12 +405,27 @@ export function applyCommitLedgerStates(input: {
       timestamp: input.runInput.timestamp,
     },
   );
+  const storedPublications = input.runInput.reviewPublicationDir === undefined
+    ? []
+    : listFindingReviewPublications(input.runInput.reviewPublicationDir);
   const withPromotions = linkPromotedReviewerAnomalies(
     withAnomalies,
     input.verifiedEvidenceCandidates,
   );
-  return {
+  const withTerminalDispositions = applyIntakeContractTerminalDispositions({
     ledger: withPromotions,
+    publications: [
+      ...storedPublications,
+      ...(input.runInput.subResults ?? []).map(({ publication }) => publication),
+    ],
+    observation: {
+      runId: input.runInput.runId,
+      stepName: input.runInput.parentStep.name,
+      timestamp: input.runInput.timestamp,
+    },
+  });
+  return {
+    ledger: withTerminalDispositions,
     reviewerAnomalyLandings: anomalySpecs.map((spec) => ({
       kind: spec.kind,
       stableKey: spec.stableKey,

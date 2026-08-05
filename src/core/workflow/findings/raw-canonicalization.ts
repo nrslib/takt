@@ -196,8 +196,16 @@ export function computeReviewerAnomalyStableKey(input: {
   reviewerStableKey: string;
   lineageKey: string;
   anomalyKind: string;
+  sourceExcerptDigest?: string;
 }): string {
-  return sha256Of('reviewer-anomaly-stable-key', input.reviewerStableKey, input.lineageKey, input.anomalyKind);
+  return input.sourceExcerptDigest === undefined
+    ? sha256Of('reviewer-anomaly-stable-key', input.reviewerStableKey, input.lineageKey, input.anomalyKind)
+    : sha256Of(
+        'reviewer-anomaly-stable-key',
+        input.reviewerStableKey,
+        input.anomalyKind,
+        input.sourceExcerptDigest,
+      );
 }
 
 /** reviewer 全量超過の単一 blocker 用 overflow stableKey。 */
@@ -354,6 +362,7 @@ const REVIEWER_CANDIDATE_KEYS: ReadonlySet<string> = new Set([
   'severity',
   'title',
   'evidenceRequests',
+  'reassertsReviewerAnomalyId',
   'description',
   'suggestion',
 ]);
@@ -1153,6 +1162,7 @@ export function createReviewerRawFindingCandidates(
     // 未指定として扱う（pickString が弾く）。
     const requests = projectEvidenceRequests(record.evidenceRequests) ?? [];
     const rawExcerpt = pickString(record.rawExcerpt);
+    const reassertsReviewerAnomalyId = pickString(record.reassertsReviewerAnomalyId);
     const relation = pickRelation(record.relation);
     const targetFindingId = pickString(record.targetFindingId);
     const reviewerTarget = projectFindingTarget(record.target);
@@ -1264,6 +1274,7 @@ export function createReviewerRawFindingCandidates(
       candidateIdentityHash: computeCandidateIdentityHash({
         claimIdentityHash,
         sourceBinding,
+        reassertsReviewerAnomalyId,
       }),
       issuedEngineProofRecords: issued.engineProofRecords.map((record) => structuredClone(record)),
       evidenceCoverageGaps: [
@@ -1284,6 +1295,7 @@ export function createReviewerRawFindingCandidates(
         ? { relation }
         : {}),
       ...(targetFindingId !== undefined ? { targetFindingId } : {}),
+      ...(reassertsReviewerAnomalyId !== undefined ? { reassertsReviewerAnomalyId } : {}),
       evidence,
       sourceBytes: projectedItems[index]!.sourceBytes,
       reviewer: context.reviewerStepName,
@@ -1331,6 +1343,10 @@ export function candidateFromStoredRawFinding(
     target: structuredClone(raw.target),
     targetIdentityHash: raw.targetIdentityHash,
     candidateIdentityHash: raw.candidateIdentityHash,
+    ...(raw.rawExcerpt !== undefined ? { rawExcerpt: raw.rawExcerpt } : {}),
+    ...(raw.reassertsReviewerAnomalyId !== undefined
+      ? { reassertsReviewerAnomalyId: raw.reassertsReviewerAnomalyId }
+      : {}),
     issuedEngineProofRecords: [],
     evidenceCoverageGaps: [],
     evidenceQuoteFailureReasons: [],
@@ -1524,6 +1540,7 @@ export function extractLenientRawFields(
   rawFindingId?: string;
   suggestion?: string;
   rawExcerpt?: string;
+  reassertsReviewerAnomalyId?: string;
   targetFindingIds?: readonly string[];
   targetFindingIdCount?: number;
   evidenceRequests?: readonly FindingEvidenceRequest[];
@@ -1536,6 +1553,9 @@ export function extractLenientRawFields(
   const targetFindingIds = canonicalStringSet(record.targetFindingIds);
   return {
     ...(pickString(record.rawExcerpt) !== undefined ? { rawExcerpt: pickString(record.rawExcerpt)! } : {}),
+    ...(pickString(record.reassertsReviewerAnomalyId) !== undefined
+      ? { reassertsReviewerAnomalyId: pickString(record.reassertsReviewerAnomalyId)! }
+      : {}),
     ...(pickString(record.rawFindingId) !== undefined ? { rawFindingId: pickString(record.rawFindingId)! } : {}),
     ...(pickRelation(record.relation) !== undefined ? { relation: pickRelation(record.relation)! } : {}),
     ...(targetFindingIds !== undefined ? { targetFindingIds } : {}),
@@ -1643,6 +1663,10 @@ export function canonicalizeReviewerRawFinding(
     target: structuredClone(candidate.target),
     targetIdentityHash: candidate.targetIdentityHash,
     candidateIdentityHash: candidate.candidateIdentityHash,
+    ...(candidate.rawExcerpt !== undefined ? { rawExcerpt: candidate.rawExcerpt } : {}),
+    ...(candidate.reassertsReviewerAnomalyId !== undefined
+      ? { reassertsReviewerAnomalyId: candidate.reassertsReviewerAnomalyId }
+      : {}),
     sourceBinding: { ...candidate.sourceBinding },
     issuedEngineProofRecords: candidate.issuedEngineProofRecords.map((record) => structuredClone(record)),
     evidenceCoverageGaps: [...candidate.evidenceCoverageGaps],
@@ -1742,6 +1766,10 @@ export function toLedgerRawFinding(canonical: CanonicalRawFinding): RawFinding {
     targetFindingId: canonical.relation !== 'new' && canonical.targetFindingId !== undefined
       ? canonical.targetFindingId
       : null,
+    ...(canonical.rawExcerpt !== undefined ? { rawExcerpt: canonical.rawExcerpt } : {}),
+    ...(canonical.reassertsReviewerAnomalyId !== undefined
+      ? { reassertsReviewerAnomalyId: canonical.reassertsReviewerAnomalyId }
+      : {}),
     ...(canonical.targetPrecondition !== undefined
       ? { targetPrecondition: canonical.targetPrecondition }
       : {}),

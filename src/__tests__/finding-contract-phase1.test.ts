@@ -76,7 +76,7 @@ describe('Finding Contract phase 1', () => {
     const attemptId = 'a'.repeat(64);
     const limits = {
       maxCallsPerRound: 2,
-      maxAdapterVisibleInputTokensPerCall: 100,
+      maxAdapterVisibleInputBytesPerCall: 100,
       maxOutputTokensPerCall: 50,
       maxChargedInputTokensPerRound: 200,
       maxChargedOutputTokensPerRound: 100,
@@ -138,7 +138,7 @@ describe('Finding Contract phase 1', () => {
   it('charges an oversized response in full and blocks another reservation', () => {
     const limits = {
       maxCallsPerRound: 2,
-      maxAdapterVisibleInputTokensPerCall: 100,
+      maxAdapterVisibleInputBytesPerCall: 100,
       maxOutputTokensPerCall: 5,
       maxChargedInputTokensPerRound: 200,
       maxChargedOutputTokensPerRound: 10,

@@ -84,6 +84,7 @@ export interface FindingContractIntakeInput {
   timestamp: string;
   priorStepResponseText?: string;
   managerAuthority: FindingManagerAuthority;
+  reviewPublicationDir?: string;
   refreshFindingsState: () => void;
   emitEvent: (event: string, ...args: unknown[]) => void;
 }
@@ -115,6 +116,7 @@ export async function ingestFindingContractResults(
     timestamp: input.timestamp,
     priorStepResponseText: input.priorStepResponseText,
     managerAuthority: input.managerAuthority,
+    reviewPublicationDir: input.reviewPublicationDir,
   });
   if (result.status === 'updated') {
     input.refreshFindingsState();

@@ -50,6 +50,7 @@ export interface RunFindingManagerForStepInput {
   timestamp: string;
   priorStepResponseText?: string;
   managerAuthority: FindingManagerAuthority;
+  reviewPublicationDir?: string;
 }
 
 export type FindingManagerRunResult =

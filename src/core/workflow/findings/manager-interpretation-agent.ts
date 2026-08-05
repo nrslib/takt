@@ -8,7 +8,6 @@ import { buildFindingInterpretationStep } from './manager-step.js';
 import { estimateTokens } from './raw-finding-limits.js';
 import {
   buildManagerAgentOptions,
-  buildManagerInputLedger,
   runPreparedManagerAttempt,
 } from './manager-agent.js';
 import type { FindingLedger, InterpretationCase, InterpretationDecision } from './types.js';
@@ -29,13 +28,28 @@ export interface PreparedInterpretationCaseProviderRequest {
   requestBytes: string;
 }
 
+export interface InterpretationRequestContext {
+  workflowName: string;
+  ledgerUpdatedAt: string;
+  cases: readonly Extract<InterpretationCase, { kind: 'provider_case' }>[];
+}
+
+export function buildInterpretationRequestContext(input: {
+  ledger: FindingLedger;
+  cases: readonly Extract<InterpretationCase, { kind: 'provider_case' }>[];
+}): InterpretationRequestContext {
+  return {
+    workflowName: input.ledger.workflowName,
+    ledgerUpdatedAt: input.ledger.updatedAt,
+    cases: input.cases,
+  };
+}
+
 export function buildInterpretationCaseInstruction(input: {
   ledger: FindingLedger;
   cases: readonly Extract<InterpretationCase, { kind: 'provider_case' }>[];
 }): { instruction: string; inputTokens: number } {
-  const detailIds = new Set(input.cases.flatMap((plannedCase) => (
-    plannedCase.decisionContext.candidateTargets.map((target) => target.targetFindingId)
-  )));
+  const context = buildInterpretationRequestContext(input);
   const instruction = [
     '## Interpretation cases',
     'Return exactly one decision for each caseId. Decide only from the supplied decisionContext. The engine validates and applies every decision atomically; you do not edit the ledger.',
@@ -47,11 +61,14 @@ export function buildInterpretationCaseInstruction(input: {
     '',
     'Do not return rawFindingId, proof ids, same/match decisions, lifecycle operations, or partial member decisions.',
     '',
-    '## Current ledger',
-    renderFencedJsonBlock(buildManagerInputLedger(input.ledger, detailIds)),
+    '## Interpretation request context',
+    renderFencedJsonBlock({
+      workflowName: context.workflowName,
+      ledgerUpdatedAt: context.ledgerUpdatedAt,
+    }),
     '',
     '## Cases',
-    renderFencedJsonBlock(input.cases.map((plannedCase) => ({
+    renderFencedJsonBlock(context.cases.map((plannedCase) => ({
       caseId: plannedCase.caseId,
       lineageKey: plannedCase.lineageKey,
       semanticProjectionDigest: plannedCase.semanticProjectionDigest,

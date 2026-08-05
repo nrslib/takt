@@ -99,11 +99,16 @@ export function computeSemanticClaimIdentityHash(
 export function computeCandidateIdentityHash(input: {
   claimIdentityHash: string;
   sourceBinding: CandidateSourceBinding;
+  reassertsReviewerAnomalyId?: string | null;
 }): string {
-  return createHash('sha256').update(canonicalJson({
+  const identity = {
     domain: 'finding-candidate-identity',
     version: 1,
     claimIdentityHash: input.claimIdentityHash,
     sourceBinding: input.sourceBinding,
-  })).digest('hex');
+    ...(input.reassertsReviewerAnomalyId == null
+      ? {}
+      : { reassertsReviewerAnomalyId: input.reassertsReviewerAnomalyId }),
+  };
+  return createHash('sha256').update(canonicalJson(identity)).digest('hex');
 }

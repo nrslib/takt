@@ -14,6 +14,7 @@ import type {
 } from '../../models/types.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 import type { PullRequestContext } from '../pr-context.js';
+import type { FindingReviewPresentationContext } from '../findings/review-publication.js';
 
 export type FindingContractReviewerOutputStrategy =
   | {
@@ -32,10 +33,12 @@ export type FindingContractReviewerContext =
       mode: 'structured';
       rawFindingsStructuredOutput: WorkflowStructuredOutput;
       reviewScopeSnapshotId: string;
+      presentationContext?: FindingReviewPresentationContext;
     }
   | {
       mode: 'plain_text_normalized';
       reviewScopeSnapshotId: string;
+      presentationContext?: FindingReviewPresentationContext;
     };
 
 export interface FindingContractInstructionContext {

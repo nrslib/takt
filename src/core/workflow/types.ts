@@ -216,13 +216,29 @@ export type WorkflowAbortKind =
    * rules が findings.provisional.count を処理する記述を欠いている設定不備で、
    * 「ルールはあるが何もマッチしない」と同じクラスの fail-fast。
    */
-  | 'provisional_findings';
+  | 'provisional_findings'
+  | 'review_integrity_unresolved';
+
+export type ReviewIntegrityFailureCode =
+  | 'restatement_exhausted_claim_bearing'
+  | 'review_integrity_unresolved_unpresented';
+
+export interface ReviewIntegrityFailureDetails {
+  code: ReviewIntegrityFailureCode;
+  anomalyIds: string[];
+  unpresentedIds: string[];
+  classificationAuthorityIds: string[];
+  publicationIds: string[];
+}
 
 export interface WorkflowStepFailureSummary {
   kind: WorkflowAbortKind;
   step: string;
   reason: string;
   error: string;
+  details?: {
+    reviewIntegrity?: ReviewIntegrityFailureDetails;
+  };
 }
 
 export interface WorkflowAbortResult {

@@ -2,6 +2,7 @@ import { sanitizeSensitiveText } from '../../../shared/utils/sensitiveText.js';
 import type {
   WorkflowAbortKind,
   WorkflowStepFailureSummary,
+  ReviewIntegrityFailureDetails,
 } from '../types.js';
 
 interface RunFailureInput {
@@ -9,6 +10,9 @@ interface RunFailureInput {
   readonly step: string;
   readonly reason: string;
   readonly error: string;
+  readonly details?: {
+    reviewIntegrity?: ReviewIntegrityFailureDetails;
+  };
 }
 
 export function createRunFailure(input: RunFailureInput): WorkflowStepFailureSummary {
@@ -17,5 +21,6 @@ export function createRunFailure(input: RunFailureInput): WorkflowStepFailureSum
     step: input.step,
     reason: sanitizeSensitiveText(input.reason),
     error: sanitizeSensitiveText(input.error),
+    ...(input.details === undefined ? {} : { details: input.details }),
   };
 }

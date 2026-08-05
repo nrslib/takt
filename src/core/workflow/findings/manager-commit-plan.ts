@@ -62,6 +62,7 @@ import { issueRawProvisionalIdentityProof } from './raw-provisional-identity-pro
 import { applyFindingLifecycleCommands } from './lifecycle-transaction.js';
 import { landUnownedConflictRawClaims } from './conflict-claim-landing.js';
 import { computeConflictReactivationDigest } from '../../models/finding-contract-identity.js';
+import { collectRestatementRequests } from './review-publication.js';
 
 export function attachCapturedConflictHeads(input: {
   commands: readonly FindingLifecycleCommand[];
@@ -833,12 +834,23 @@ function prepareCommitReconciliation(
     intake: params.intake,
     reviewScopeSnapshot: params.reviewScopeSnapshot,
     workflowTask: params.input.workflowTask,
+    presentationLimit: params.reviewIntegrityLimits.maxReviewRounds,
+    restatementRequests: collectRestatementRequests(params.input.subResults.map(({ publication }) => publication)),
   });
   const retainItem = (item: { wire: { rawFindingId: string } }): boolean => (
     !isolatedRawFindingIds.has(item.wire.rawFindingId)
   );
   const retainSpec = (spec: { sourceRawFindingIds: readonly string[] }): boolean => (
     !containsIsolatedRawFinding(spec.sourceRawFindingIds, isolatedRawFindingIds)
+  );
+  const intakeContractEntityRawFindingIds = new Set(
+    [...params.intake.entityBindings.entries()].flatMap(([rawFindingId, binding]) => (
+      binding.kind === 'entity_group'
+        && (binding.decision === 'new_entity' || binding.decision === 'ambiguous')
+        && params.intake.items.find((item) => item.wire.rawFindingId === rawFindingId)?.wire.evidence.length === 0
+        ? binding.groupRawFindingIds
+        : []
+    )),
   );
   const admission: RawAdmissionEvaluation = {
     admissionRejections: evaluatedAdmission.admissionRejections.filter(
@@ -847,7 +859,10 @@ function prepareCommitReconciliation(
     admissionAnomalySpecs: evaluatedAdmission.admissionAnomalySpecs.filter(retainSpec),
     admissionProvisionalSpecs: evaluatedAdmission.admissionProvisionalSpecs.filter(retainSpec),
     preAdmissionEntityMutations: evaluatedAdmission.preAdmissionEntityMutations.filter(
-      (mutation) => retainSpec(mutation),
+      (mutation) => retainSpec(mutation)
+        && !mutation.sourceRawFindingIds.some((rawFindingId) => (
+          intakeContractEntityRawFindingIds.has(rawFindingId)
+        )),
     ),
     admissionRejectedItems: evaluatedAdmission.admissionRejectedItems.filter(retainItem),
     pendingRejectedObservations: evaluatedAdmission.pendingRejectedObservations.filter(

@@ -15,6 +15,8 @@ export {
   RAW_FINDING_EVIDENCE_KINDS,
   RAW_FINDING_RELATIONS,
   REVIEWER_ANOMALY_KINDS,
+  INTAKE_CONTRACT_ANOMALY_REASON_CODES,
+  INTAKE_CONTRACT_MISSING_REQUIREMENTS,
 } from '../../models/finding-types.js';
 
 export type {
@@ -32,6 +34,7 @@ export type {
   FindingMutationPrecondition,
   FindingProvisionalKind,
   FindingProvisionalMetadata,
+  FindingReviewerAnomalyReclassification,
   InterpretationAttempt,
   InterpretationAttemptFence,
   InterpretationBatchReceipt,
@@ -137,6 +140,10 @@ export type {
   ReviewerAnomalyEntry,
   ReviewerAnomalyLandingReport,
   ReviewerAnomalyKind,
+  IntakeContractDefect,
+  IntakeContractTerminalDisposition,
+  IntakeContractAnomalyReasonCode,
+  IntakeContractMissingRequirement,
   ReviewerAnomalySettlement,
   ReviewerOutputOverflowReport,
   RawNormalizationAuditRecord,

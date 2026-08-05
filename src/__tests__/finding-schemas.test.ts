@@ -48,6 +48,10 @@ import {
 } from '../core/models/finding-contract-limits.js';
 import { computeFileQuoteEvidenceRecordId } from '../core/models/finding-evidence-record.js';
 import {
+  computeFindingManagerBudgetScopeId,
+  computeFindingManagerRoundIdentity,
+} from '../core/models/finding-contract-identity.js';
+import {
   computeClaimIdentityHash,
   computeSemanticClaimIdentityHash,
   computeTargetIdentityHash,
@@ -296,6 +300,49 @@ describe('finding schemas', () => {
     };
 
     expect(parseFindingLedger(ledger)).toEqual(ledger);
+  });
+
+  it('migrates the legacy provider input limit name to the byte-aware ledger contract', () => {
+    const roundIdentity = computeFindingManagerRoundIdentity({
+      scopeIdentity: 'scope-legacy',
+      workflowName: 'peer-review',
+      roundMarker: 'round-legacy',
+    });
+    const legacyLedger = {
+      workflowName: 'peer-review',
+      nextId: 1,
+      updatedAt: '2026-07-24T00:00:00.000Z',
+      findings: [],
+      evidenceRecords: [],
+      rawFindings: [],
+      conflicts: [],
+      ...emptyFindingAuthorityProjection(),
+      findingManagerProviderBudgetScopes: [{
+        budgetScopeId: computeFindingManagerBudgetScopeId(roundIdentity),
+        roundIdentity,
+        scopeIdentity: 'scope-legacy',
+        workflowName: 'peer-review',
+        roundMarker: 'round-legacy',
+        limits: {
+          maxCallsPerRound: 1,
+          maxAdapterVisibleInputTokensPerCall: 24_000,
+          maxOutputTokensPerCall: 2_048,
+          maxChargedInputTokensPerRound: 24_000,
+          maxChargedOutputTokensPerRound: 2_048,
+        },
+        createdAt: {
+          runId: 'run-legacy',
+          stepName: 'reviewers',
+          timestamp: '2026-07-24T00:00:00.000Z',
+        },
+      }],
+    };
+
+    const migrated = parseFindingLedger(legacyLedger);
+    expect(migrated.findingManagerProviderBudgetScopes[0]?.limits)
+      .toEqual(expect.objectContaining({ maxAdapterVisibleInputBytesPerCall: 24_000 }));
+    expect(migrated.findingManagerProviderBudgetScopes[0]?.limits)
+      .not.toHaveProperty('maxAdapterVisibleInputTokensPerCall');
   });
 
   it('parses a persisted nullable provisional from a pending resume snapshot', () => {

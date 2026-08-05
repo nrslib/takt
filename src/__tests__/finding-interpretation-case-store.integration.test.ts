@@ -299,7 +299,7 @@ describe('interpretation case SQLite begin transaction', () => {
   it('returns retry ownership to the interrupted attempt when retry reservation is rejected', async () => {
     const budgetLimits = {
       maxCallsPerRound: 1,
-      maxAdapterVisibleInputTokensPerCall: 24_000,
+      maxAdapterVisibleInputBytesPerCall: 24_000,
       maxOutputTokensPerCall: 10_000,
       maxChargedInputTokensPerRound: 64_000,
       maxChargedOutputTokensPerRound: 40_000,
@@ -371,7 +371,7 @@ describe('interpretation case SQLite begin transaction', () => {
   it('fails fast when resume changes limits for the same provider budget round', async () => {
     const initialLimits = {
       maxCallsPerRound: 2,
-      maxAdapterVisibleInputTokensPerCall: 24_000,
+      maxAdapterVisibleInputBytesPerCall: 24_000,
       maxOutputTokensPerCall: 10_000,
       maxChargedInputTokensPerRound: 48_000,
       maxChargedOutputTokensPerRound: 20_000,
@@ -411,7 +411,7 @@ describe('interpretation case SQLite begin transaction', () => {
     const harness = openHarness({
       budgetLimits: {
         maxCallsPerRound: 1,
-        maxAdapterVisibleInputTokensPerCall: 100_000,
+        maxAdapterVisibleInputBytesPerCall: 100_000,
         maxOutputTokensPerCall: 10_000,
         maxChargedInputTokensPerRound: 100_000,
         maxChargedOutputTokensPerRound: 10_000,
@@ -538,11 +538,11 @@ describe('interpretation case SQLite begin transaction', () => {
     harness.resolver.close();
   });
 
-  it('cleans every unreserved registry when the third batch of 33 cases exceeds budget', async () => {
+  it('charges measured request input and keeps all three small batches within budget', async () => {
     const harness = openHarness({
       budgetLimits: {
         maxCallsPerRound: 4,
-        maxAdapterVisibleInputTokensPerCall: 24_000,
+      maxAdapterVisibleInputBytesPerCall: 24_000,
         maxOutputTokensPerCall: 10_000,
         maxChargedInputTokensPerRound: 64_000,
         maxChargedOutputTokensPerRound: 40_000,
@@ -565,14 +565,14 @@ describe('interpretation case SQLite begin transaction', () => {
     const leasedCaseIds = new Set(begun.providerCases.map(({ caseId }) => caseId));
     const leasedRawFindingIds = new Set(begun.attempts.flatMap(({ rawFindingIds }) => rawFindingIds));
 
-    expect(begun.providerCases).toHaveLength(32);
-    expect(begun.attempts).toHaveLength(32);
-    expect(begun.directPlans).toHaveLength(1);
-    expect(stored.findingManagerProviderCalls).toHaveLength(2);
-    expect(stored.interpretationCaseSnapshots).toHaveLength(32);
+    expect(begun.providerCases).toHaveLength(33);
+    expect(begun.attempts).toHaveLength(33);
+    expect(begun.directPlans).toHaveLength(0);
+    expect(stored.findingManagerProviderCalls).toHaveLength(3);
+    expect(stored.interpretationCaseSnapshots).toHaveLength(33);
     expect(stored.interpretationCaseSnapshots.every(({ caseId }) => leasedCaseIds.has(caseId)))
       .toBe(true);
-    expect(stored.interpretationRawObservations).toHaveLength(32);
+    expect(stored.interpretationRawObservations).toHaveLength(33);
     expect(stored.interpretationRawObservations.every(({ rawFindingId }) => (
       leasedRawFindingIds.has(rawFindingId)
     ))).toBe(true);
@@ -581,10 +581,10 @@ describe('interpretation case SQLite begin transaction', () => {
     ))).toBe(true);
     expect(stored.rawCanonicalSnapshots.filter(({ rawFindingId }) => (
       leasedRawFindingIds.has(rawFindingId)
-    ))).toHaveLength(32);
+    ))).toHaveLength(33);
     expect(stored.rawFindings.filter(({ rawFindingId }) => (
       leasedRawFindingIds.has(rawFindingId)
-    ))).toHaveLength(32);
+    ))).toHaveLength(33);
     harness.resolver.close();
   });
 
@@ -855,7 +855,7 @@ describe('interpretation case SQLite begin transaction', () => {
         prepareProviderRequest,
         budgetLimits: {
           maxCallsPerRound: 4,
-          maxAdapterVisibleInputTokensPerCall: 24_000,
+          maxAdapterVisibleInputBytesPerCall: 24_000,
           maxOutputTokensPerCall: 10_000,
           maxChargedInputTokensPerRound: 96_000,
           maxChargedOutputTokensPerRound: 40_000,

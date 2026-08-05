@@ -593,8 +593,129 @@ function planInterpretationBatch(input: {
   const unleasedProviderCases = providerCases.filter((plannedCase) => (
     attemptByCaseId.get(plannedCase.caseId)?.providerCallId === ''
   ));
-  for (let cursor = 0; cursor < unleasedProviderCases.length; cursor += input.maxCasesPerProviderCall) {
-    const batch = unleasedProviderCases.slice(cursor, cursor + input.maxCasesPerProviderCall);
+  const discardUnreservedCases = (caseIds: ReadonlySet<string>): void => {
+    const unreservedAttempts = attempts.filter((attempt) => caseIds.has(attempt.caseId));
+    const unreservedAttemptIds = new Set(unreservedAttempts.map(({ attemptId }) => attemptId));
+    const unreservedRawFindingIds = new Set(unreservedAttempts.flatMap(
+      ({ rawFindingIds }) => rawFindingIds,
+    ));
+    for (let index = attempts.length - 1; index >= 0; index -= 1) {
+      if (caseIds.has(attempts[index]!.caseId)) {
+        attempts.splice(index, 1);
+      }
+    }
+    for (let index = providerCases.length - 1; index >= 0; index -= 1) {
+      if (caseIds.has(providerCases[index]!.caseId)) {
+        providerCases.splice(index, 1);
+      }
+    }
+    ledger = {
+      ...ledger,
+      rawFindings: ledger.rawFindings.filter((raw) => (
+        initialRawFindingIds.has(raw.rawFindingId)
+        || !unreservedRawFindingIds.has(raw.rawFindingId)
+      )),
+      interpretationCaseSnapshots: ledger.interpretationCaseSnapshots.filter((snapshot) => (
+        initialCaseSnapshotIds.has(snapshot.caseSnapshotId)
+        || !caseIds.has(snapshot.caseId)
+      )),
+      interpretationAttempts: ledger.interpretationAttempts.filter(
+        (attempt) => !unreservedAttemptIds.has(attempt.attemptId),
+      ),
+      interpretationRawObservations: ledger.interpretationRawObservations.filter((observation) => (
+        initialObservationDigests.has(observation.observationDigest)
+          || !unreservedRawFindingIds.has(observation.rawFindingId)
+      )),
+      interpretationRecoveryOriginBindings: ledger.interpretationRecoveryOriginBindings.filter((binding) => (
+        initialOriginBindingIds.has(binding.bindingId)
+          || !caseIds.has(binding.caseId)
+      )),
+      rawInterpretationOutcomes: ledger.rawInterpretationOutcomes.filter((outcome) => (
+        outcome.kind !== 'pending_attempt' || !unreservedAttemptIds.has(outcome.attemptId)
+      )),
+      rawCanonicalSnapshots: ledger.rawCanonicalSnapshots.filter((snapshot) => (
+        initialSnapshotIds.has(snapshot.rawCanonicalSnapshotId)
+          || !unreservedRawFindingIds.has(snapshot.rawFindingId)
+      )),
+    };
+  };
+
+  const handleUnreservedCase = (plannedCase: Extract<InterpretationCase, { kind: 'provider_case' }>, reason: 'manager-input-overflow' | 'manager-budget-exhausted'): void => {
+    const caseItems = itemsForCase(plannedCase, itemsByRawFindingId);
+    const unreservedAttempt = attempts.find((attempt) => attempt.caseId === plannedCase.caseId);
+    const prior = ledger.interpretationAttempts
+      .filter((attempt) => (
+        attempt.caseId === plannedCase.caseId
+        && attempt.attemptId !== unreservedAttempt?.attemptId
+      ))
+      .sort((left, right) => left.retryOrdinal - right.retryOrdinal)
+      .at(-1);
+    if (unreservedAttempt !== undefined && prior?.stage === 'interrupted') {
+      ledger = {
+        ...ledger,
+        interpretationAttempts: ledger.interpretationAttempts.filter(
+          (attempt) => attempt.attemptId !== unreservedAttempt.attemptId,
+        ),
+        rawInterpretationOutcomes: ledger.rawInterpretationOutcomes.map((outcome) => (
+          outcome.kind === 'pending_attempt'
+          && outcome.attemptId === unreservedAttempt.attemptId
+            ? { ...outcome, attemptId: prior.attemptId }
+            : outcome
+        )),
+      };
+      const authority = unreservedAuthority({
+        roundIdentity: input.roundIdentity,
+        reason,
+        items: caseItems,
+        observation: input.observation,
+      });
+      ledger = applyInterruptedInterpretationLanding({
+        ledger,
+        plannedCase,
+        items: caseItems,
+        interruptedAttempt: prior,
+        authority,
+        verifiedEvidenceRecordsByRawFindingId: input.verifiedEvidenceRecordsByRawFindingId,
+        reason: reason === 'manager-input-overflow'
+          ? 'Interpretation request exceeded the provider byte ceiling'
+          : 'Interpretation manager provider budget is exhausted',
+        observation: input.observation,
+      });
+      return;
+    }
+    directPlans.push({
+      plannedCase,
+      items: caseItems,
+      decision: {
+        kind: 'provisional',
+        reason: reason === 'manager-input-overflow'
+          ? 'Input exceeded the manager provider byte ceiling for the interpretation request'
+          : 'Interpretation manager provider budget is exhausted',
+      },
+      roundIdentity: input.roundIdentity,
+      unreservedAuthority: unreservedAuthority({
+        roundIdentity: input.roundIdentity,
+        reason,
+        items: caseItems,
+        observation: input.observation,
+      }),
+    });
+  };
+
+  let cursor = 0;
+  while (cursor < unleasedProviderCases.length) {
+    let batch = unleasedProviderCases.slice(cursor, cursor + input.maxCasesPerProviderCall);
+    let prepared = input.prepareProviderRequest(ledger, batch);
+    while (
+      batch.length > 1
+      && Buffer.byteLength(prepared.requestBytes, 'utf8') > input.budgetLimits.maxAdapterVisibleInputBytesPerCall
+    ) {
+      batch = batch.slice(0, -1);
+      prepared = input.prepareProviderRequest(ledger, batch);
+    }
+    if (batch.length === 0) {
+      throw new Error('Interpretation provider batch became empty while adapting to the byte ceiling');
+    }
     const batchAttempts = batch.map((plannedCase) => {
       const attempt = attemptByCaseId.get(plannedCase.caseId);
       if (attempt === undefined) {
@@ -602,7 +723,6 @@ function planInterpretationBatch(input: {
       }
       return attempt;
     });
-    const prepared = input.prepareProviderRequest(ledger, batch);
     let reserved: ReturnType<typeof reserveFindingManagerProviderCall>;
     try {
       reserved = reserveFindingManagerProviderCall({
@@ -626,118 +746,21 @@ function planInterpretationBatch(input: {
       if (!(error instanceof FindingManagerProviderBudgetExhaustedError)) {
         throw error;
       }
-      const unreservedCases = unleasedProviderCases.slice(cursor);
-      const unreservedCaseIds = new Set(unreservedCases.map(({ caseId }) => caseId));
-      const unreservedAttempts = attempts.filter((attempt) => unreservedCaseIds.has(attempt.caseId));
-      const unreservedAttemptIds = new Set(unreservedAttempts.map(({ attemptId }) => attemptId));
-      const unreservedRawFindingIds = new Set(unreservedAttempts.flatMap(
-        ({ rawFindingIds }) => rawFindingIds,
-      ));
       const reason = error.reason === 'adapter_visible_input_ceiling'
         ? 'manager-input-overflow' as const
         : 'manager-budget-exhausted' as const;
+      const unreservedCases = error.reason === 'adapter_visible_input_ceiling'
+        ? [batch[0]!]
+        : unleasedProviderCases.slice(cursor);
+      const unreservedCaseIds = new Set(unreservedCases.map(({ caseId }) => caseId));
       for (const plannedCase of unreservedCases) {
-        const caseItems = itemsForCase(plannedCase, itemsByRawFindingId);
-        const unreservedAttempt = unreservedAttempts.find(
-          (attempt) => attempt.caseId === plannedCase.caseId,
-        );
-        const prior = ledger.interpretationAttempts
-          .filter((attempt) => (
-            attempt.caseId === plannedCase.caseId
-            && attempt.attemptId !== unreservedAttempt?.attemptId
-          ))
-          .sort((left, right) => left.retryOrdinal - right.retryOrdinal)
-          .at(-1);
-        if (unreservedAttempt !== undefined && prior?.stage === 'interrupted') {
-          ledger = {
-            ...ledger,
-            interpretationAttempts: ledger.interpretationAttempts.filter(
-              (attempt) => attempt.attemptId !== unreservedAttempt.attemptId,
-            ),
-            rawInterpretationOutcomes: ledger.rawInterpretationOutcomes.map((outcome) => (
-              outcome.kind === 'pending_attempt'
-              && outcome.attemptId === unreservedAttempt.attemptId
-                ? { ...outcome, attemptId: prior.attemptId }
-                : outcome
-            )),
-          };
-          const authority = unreservedAuthority({
-            roundIdentity: input.roundIdentity,
-            reason,
-            items: caseItems,
-            observation: input.observation,
-          });
-          ledger = applyInterruptedInterpretationLanding({
-            ledger,
-            plannedCase,
-            items: caseItems,
-            interruptedAttempt: prior,
-            authority,
-            verifiedEvidenceRecordsByRawFindingId: input.verifiedEvidenceRecordsByRawFindingId,
-            reason: reason === 'manager-input-overflow'
-              ? 'Interpretation retry input exceeded the provider ceiling'
-              : 'Interpretation retry could not reserve manager provider budget',
-            observation: input.observation,
-          });
-          continue;
-        }
-        directPlans.push({
-          plannedCase,
-          items: caseItems,
-          decision: {
-            kind: 'provisional',
-            reason: reason === 'manager-input-overflow'
-              ? 'Interpretation input exceeded the manager provider ceiling'
-              : 'Interpretation manager provider budget is exhausted',
-          },
-          roundIdentity: input.roundIdentity,
-          unreservedAuthority: unreservedAuthority({
-            roundIdentity: input.roundIdentity,
-            reason,
-            items: caseItems,
-            observation: input.observation,
-          }),
-        });
+        handleUnreservedCase(plannedCase, reason);
       }
-      for (let index = attempts.length - 1; index >= 0; index -= 1) {
-        if (unreservedAttemptIds.has(attempts[index]!.attemptId)) {
-          attempts.splice(index, 1);
-        }
+      discardUnreservedCases(unreservedCaseIds);
+      if (error.reason === 'adapter_visible_input_ceiling') {
+        cursor += 1;
+        continue;
       }
-      for (let index = providerCases.length - 1; index >= 0; index -= 1) {
-        if (unreservedCaseIds.has(providerCases[index]!.caseId)) {
-          providerCases.splice(index, 1);
-        }
-      }
-      ledger = {
-        ...ledger,
-        rawFindings: ledger.rawFindings.filter((raw) => (
-          initialRawFindingIds.has(raw.rawFindingId)
-          || !unreservedRawFindingIds.has(raw.rawFindingId)
-        )),
-        interpretationCaseSnapshots: ledger.interpretationCaseSnapshots.filter((snapshot) => (
-          initialCaseSnapshotIds.has(snapshot.caseSnapshotId)
-          || !unreservedCaseIds.has(snapshot.caseId)
-        )),
-        interpretationAttempts: ledger.interpretationAttempts.filter(
-          (attempt) => !unreservedAttemptIds.has(attempt.attemptId),
-        ),
-        interpretationRawObservations: ledger.interpretationRawObservations.filter(
-          (observation) => initialObservationDigests.has(observation.observationDigest)
-            || !unreservedRawFindingIds.has(observation.rawFindingId),
-        ),
-        interpretationRecoveryOriginBindings: ledger.interpretationRecoveryOriginBindings.filter(
-          (binding) => initialOriginBindingIds.has(binding.bindingId)
-            || !unreservedCaseIds.has(binding.caseId),
-        ),
-        rawInterpretationOutcomes: ledger.rawInterpretationOutcomes.filter((outcome) => (
-          outcome.kind !== 'pending_attempt' || !unreservedAttemptIds.has(outcome.attemptId)
-        )),
-        rawCanonicalSnapshots: ledger.rawCanonicalSnapshots.filter((snapshot) => (
-          initialSnapshotIds.has(snapshot.rawCanonicalSnapshotId)
-          || !unreservedRawFindingIds.has(snapshot.rawFindingId)
-        )),
-      };
       break;
     }
     budgetScopes = reserved.scopes;
@@ -748,6 +771,7 @@ function planInterpretationBatch(input: {
         providerCallId: reserved.call.providerCallId,
       });
     }
+    cursor += batch.length;
   }
   const leasedAttempts = attempts.map((attempt) => attemptByCaseId.get(attempt.caseId)!);
   const leasedAttemptsById = new Map(

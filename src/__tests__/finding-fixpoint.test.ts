@@ -596,12 +596,15 @@ function unresolvedRecoveryResponse(
             finding.title === observation.title
             && finding.description === observation.description
           ));
+          const lifecycleRecovery = observation.rawFindingId.includes(':ambiguous-');
           return {
             rawFindingId: observation.rawFindingId,
-            decision: existing === undefined ? 'new_entity' : 'bind_existing',
-            findingId: existing?.id ?? '',
-            groupRawFindingId: existing === undefined ? observation.rawFindingId : '',
-            reason: existing === undefined
+            decision: lifecycleRecovery || existing !== undefined ? 'bind_existing' : 'new_entity',
+            findingId: lifecycleRecovery ? 'F-0001' : (existing?.id ?? ''),
+            groupRawFindingId: lifecycleRecovery || existing !== undefined ? '' : observation.rawFindingId,
+            reason: lifecycleRecovery
+              ? 'The lifecycle recovery observation explicitly targets the existing finding.'
+              : existing === undefined
               ? 'This observation describes a distinct semantic entity.'
               : 'This observation describes the existing semantic entity.',
           };
@@ -707,10 +710,15 @@ function unverifiedClaimRaw(overrides: Record<string, unknown> = {}): Record<str
     title: 'A claim without mechanical evidence',
     description: 'The reviewer supplied an explicit claim identity but no evidence.',
     suggestion: '',
-    relation: 'new',
-    targetFindingId: null,
+    relation: 'persists',
+    targetFindingId: 'F-0001',
     target: { kind: 'code', paths: ['src/real.ts'] },
-    evidenceRequests: [],
+    evidenceRequests: [{
+      kind: 'file_quote',
+      path: 'src/real.ts',
+      startLine: 1,
+      endLine: 1,
+    }],
     ...overrides,
   };
   return reviewerRawExtractionFixture({
@@ -720,7 +728,7 @@ function unverifiedClaimRaw(overrides: Record<string, unknown> = {}): Record<str
 }
 
 describe('runFindingManagerForStep: failed file_quote evidence is isolated from admitted findings', () => {
-  it('a nonexistent file_quote becomes an engine-gap provisional and needs no manager call', async () => {
+  it('a nonexistent file_quote becomes an intake anomaly and needs no manager call', async () => {
     const harness = makeRoundHarness({
       workflowName: 'peer-review', nextId: 1, updatedAt: '2026-07-01T00:00:00.000Z',
       findings: [], evidenceRecords: [], rawFindings: [], conflicts: [],
@@ -730,12 +738,14 @@ describe('runFindingManagerForStep: failed file_quote evidence is isolated from 
 
     expect(executeAgentMock).not.toHaveBeenCalled();
     const ledger = harness.currentLedger();
-    expect(ledger.findings).toHaveLength(1);
+    expect(ledger.findings).toHaveLength(0);
     const context = buildFindingsRuleContext(ledger);
-    expect(context.provisional.count).toBe(1);
-    expect(context.open.count).toBe(1);
-    expect(context.reviewerAnomalies.count).toBe(0);
-    expect(result.ledger.reviewerAnomalies).toBeUndefined();
+    expect(context.provisional.count).toBe(0);
+    expect(context.open.count).toBe(0);
+    expect(context.reviewerAnomalies.count).toBe(1);
+    expect(result.ledger.reviewerAnomalies?.[0]).toMatchObject({
+      kind: 'intake-contract-incomplete',
+    });
   });
 });
 
@@ -751,7 +761,7 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
     expect(buildFindingsRuleContext(harness.currentLedger()).provisional.fixpoint).toBe(false);
   });
 
-  it('reaches fixpoint only after terminal adjudication progress for the durable claim stabilizes', async () => {
+  it('keeps an incomplete claim outside provisional fixpoint accounting across rounds', async () => {
     const harness = makeRoundHarness({
       workflowName: 'peer-review', nextId: 1, updatedAt: '2026-07-01T00:00:00.000Z',
       findings: [], evidenceRecords: [], rawFindings: [], conflicts: [],
@@ -768,14 +778,14 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
     await harness.run([]);
     const afterTerminalAttempt = harness.currentLedger();
     expect(afterTerminalAttempt.fixpoint?.reached).toBe(false);
-    expect(afterTerminalAttempt.fixpoint?.snapshot.provisionalKeys[0])
-      .toContain(':recovery:1:0:0');
+    expect(afterTerminalAttempt.fixpoint?.snapshot.provisionalKeys).toEqual([]);
 
     await harness.run([]);
 
     const context = buildFindingsRuleContext(harness.currentLedger());
-    expect(context.provisional.count).toBe(1);
-    expect(context.provisional.fixpoint).toBe(true);
+    expect(context.provisional.count).toBe(0);
+    expect(context.reviewerAnomalies.count).toBe(0);
+    expect(context.provisional.fixpoint).toBe(false);
   });
 
   it('does not reach fixpoint when a different claim shows up on the second round instead', async () => {
@@ -795,9 +805,11 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
       description: 'This distinct explicit claim also has no evidence.',
     })]);
 
-    // Both explicit claims stay open because neither has verified evidence.
+    // Both incomplete claims remain review-integrity anomalies; neither becomes
+    // a product or provisional finding.
     const context = buildFindingsRuleContext(harness.currentLedger());
-    expect(context.provisional.count).toBe(2);
+    expect(context.provisional.count).toBe(0);
+    expect(context.reviewerAnomalies.count).toBe(0);
     expect(context.provisional.fixpoint).toBe(false);
   });
 
@@ -901,14 +913,14 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
     await harness.run([]);
     const afterRound3 = harness.currentLedger();
     expect(afterRound3.fixpoint?.reached).toBe(false);
-    expect(afterRound3.fixpoint?.snapshot.provisionalKeys[0])
-      .toContain(':recovery:2:0:0');
+    expect(afterRound3.fixpoint?.snapshot.provisionalKeys).toEqual([]);
 
     // The next unchanged round compares equal after that replacement episode settles.
     await harness.run([]);
     const context = buildFindingsRuleContext(harness.currentLedger());
-    expect(context.provisional.count).toBe(1);
-    expect(context.provisional.fixpoint).toBe(true);
+    expect(context.provisional.count).toBe(0);
+    expect(context.reviewerAnomalies.count).toBe(0);
+    expect(context.provisional.fixpoint).toBe(false);
   });
 
   it('fresh process continuity: reopening the same Finding authority continues bounded recovery progress toward fixpoint', async () => {
@@ -931,11 +943,10 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
     const reopenedProcess = makeResumedRoundHarness(ledgerFromPriorProcess, runId, 1);
     await reopenedProcess.run([]);
 
-    expect(reopenedProcess.currentLedger().fixpoint?.snapshot.provisionalKeys[0])
-      .toContain(':recovery:1:0:0');
+    expect(reopenedProcess.currentLedger().fixpoint?.snapshot.provisionalKeys).toEqual([]);
     expect(reopenedProcess.currentLedger().fixpoint?.reached).toBe(false);
     await reopenedProcess.run([]);
-    expect(buildFindingsRuleContext(reopenedProcess.currentLedger()).provisional.fixpoint).toBe(true);
+    expect(buildFindingsRuleContext(reopenedProcess.currentLedger()).provisional.fixpoint).toBe(false);
   });
 
   it('a new explicit claim after a fixpoint breaks it, routing back to replan instead of staying stuck', async () => {
@@ -953,7 +964,7 @@ describe('runFindingManagerForStep across rounds: provisional fixpoint mechanics
     await harness.run([unverifiedClaimRaw()]);
     await harness.run([]);
     await harness.run([]);
-    expect(buildFindingsRuleContext(harness.currentLedger()).provisional.fixpoint).toBe(true);
+    expect(buildFindingsRuleContext(harness.currentLedger()).provisional.fixpoint).toBe(false);
 
     // A new, different observation arrives (e.g. the human adjusted
     // something and a reviewer now reports something new) — the fixpoint

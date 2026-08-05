@@ -1,7 +1,8 @@
 import type { FindingLedger } from '../../core/workflow/findings/types.js';
 import {
-  FindingLedgerSchema,
   LegacyProvisionalConflictFindingLedgerSchema,
+  migrateFindingLedgerJson,
+  parseFindingLedger,
 } from '../../core/models/finding-schemas.js';
 
 export interface SourceAuthorityRaw {
@@ -131,11 +132,11 @@ export function parseInheritedSourceAuthority(
   }
   const shape = classifyInheritedSourceShape(JSON.parse(source.ledgerJson));
   if (shape.kind === 'current') {
-    return { kind: 'current', ledger: FindingLedgerSchema.parse(shape.raw) };
+    return { kind: 'current', ledger: parseFindingLedger(shape.raw) };
   }
   assertNoLegacyPendingManagerCommit(source, shape.raw);
   return {
     kind: 'legacy_provisional_conflict',
-    ledger: LegacyProvisionalConflictFindingLedgerSchema.parse(shape.raw),
+    ledger: LegacyProvisionalConflictFindingLedgerSchema.parse(migrateFindingLedgerJson(shape.raw)),
   } as ParsedInheritedSource;
 }

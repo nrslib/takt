@@ -21,6 +21,7 @@ import { stopBudgetRoundsCompleted } from './stop-budget.js';
 import { REVIEWER_ENVELOPE_RECOVERY_LIMITS } from './raw-finding-limits.js';
 import type { FindingLedger, FindingLedgerFixpointSnapshot, FindingLedgerFixpointState } from './types.js';
 import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
+import { isReclassifiedReviewerAnomalyFinding } from './finding-entry.js';
 
 function sortedUnique(values: Iterable<string>): string[] {
   return [...new Set(values)].sort(compareBinaryStrings);
@@ -64,7 +65,9 @@ export function computeFixpointSnapshot(ledger: FindingLedger, _cwd: string): Fi
     ledger.findings
       .filter((finding): finding is FindingLedger['findings'][number] & {
         provisional: NonNullable<FindingLedger['findings'][number]['provisional']>;
-      } => finding.status === 'open' && finding.provisional !== undefined)
+      } => finding.status === 'open'
+        && finding.provisional !== undefined
+        && !isReclassifiedReviewerAnomalyFinding(finding))
       .map((finding) => provisionalFixpointKey(ledger, finding, roundsCompleted)),
   );
 
@@ -73,7 +76,11 @@ export function computeFixpointSnapshot(ledger: FindingLedger, _cwd: string): Fi
   // 監査可能にする（dismiss 直後のラウンドが「変化なし」と誤判定されない）。
   const substantiveEntries = sortedUnique(
     ledger.findings
-      .filter((finding) => finding.provisional === undefined || finding.status !== 'open')
+      .filter((finding) => (
+        finding.provisional === undefined
+        || finding.status !== 'open'
+        || isReclassifiedReviewerAnomalyFinding(finding)
+      ))
       .map((finding) => `${finding.id}:${finding.status}`),
   );
 
