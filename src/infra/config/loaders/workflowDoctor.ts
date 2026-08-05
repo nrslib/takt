@@ -260,7 +260,7 @@ export function inspectWorkflowFile(
     validateWorkflowReferences(raw, sections, context, diagnostics);
     validateDoctorGraph(raw, diagnostics);
     if (workflow !== undefined) {
-      validateFacetPoolReferences(raw, workflow, context, diagnostics);
+      validateFacetPoolReferences(raw, workflow, context, sections, diagnostics);
     }
 
     return {
@@ -289,6 +289,7 @@ function validateFacetPoolReferences(
   raw: RawWorkflow,
   workflow: WorkflowConfig,
   context: FacetResolutionContext,
+  sections: WorkflowSections,
   diagnostics: WorkflowDiagnostic[],
 ): void {
   const facetPools = raw.facet_pools;
@@ -315,12 +316,8 @@ function validateFacetPoolReferences(
         };
     try {
       buildResolvedFacetPoolDependencies(input, context);
-      // Re-compile the pool with requireFile to catch .md references that resolve
-      // to non-existent files. The load-time compiler already succeeds for these
-      // because the fallback turns the path string into literal content. The doctor
-      // must surface this as a diagnostic so authors can detect typos.
-      compileFacetPool(input, dirname(context.workflowDir ?? ''), context, {
-        workflowSections: undefined,
+      compileFacetPool(input, context.workflowDir ?? '', context, {
+        workflowSections: sections,
       });
     } catch (error) {
       diagnostics.push({

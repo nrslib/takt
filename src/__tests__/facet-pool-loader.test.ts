@@ -547,6 +547,50 @@ candidates:
       expect(report.diagnostics.some((d) => d.level === 'error')).toBe(true);
     });
 
+    it('doctor should not report errors for an inline pool with valid relative .md paths (C-DOCTOR-POOL: 正常系)', () => {
+      writeFacet(projectDir, 'facets/policies/coding.md', '# coding\n');
+      writeFacet(projectDir, 'facets/knowledge/architecture.md', '# architecture\n');
+      writeFacet(projectDir, 'facets/policies/transaction-correctness.md', '# transaction\n');
+      writeFacet(projectDir, 'facets/knowledge/backend-api.md', '# backend\n');
+      writeFacet(projectDir, 'facets/knowledge/database-transaction.md', '# database\n');
+
+      const workflowPath = writeWorkflow(projectDir, 'inline-doctor-ok', INLINE_POOL_WORKFLOW, 'fix');
+      const report = inspectWorkflowFile(workflowPath, projectDir);
+      expect(report.diagnostics.some((d) => d.level === 'error')).toBe(false);
+    });
+
+    it('doctor should report an error for an inline pool referencing a non-existent .md file (C-DOCTOR-POOL: 存在しない.md)', () => {
+      const workflow = `
+policies:
+  coding: ../../facets/policies/coding.md
+  missing: ../../facets/policies/does-not-exist.md
+knowledge:
+  architecture: ../../facets/knowledge/architecture.md
+facet_pools:
+  fix:
+    candidates:
+      - id: broken
+        description: references a missing file
+        policy: missing
+steps:
+  - name: fix
+    persona: coder
+    policy: [coding]
+    knowledge: [architecture]
+    dynamic_facets:
+      pool: fix
+      max_selected: 3
+    instruction: fix
+    edit: true${COMPLETE_CALLER_RULES}
+`;
+      writeFacet(projectDir, 'facets/policies/coding.md', '# coding\n');
+      writeFacet(projectDir, 'facets/knowledge/architecture.md', '# architecture\n');
+
+      const workflowPath = writeWorkflow(projectDir, 'inline-doctor-missing-md', workflow, 'fix');
+      const report = inspectWorkflowFile(workflowPath, projectDir);
+      expect(report.diagnostics.some((d) => d.level === 'error')).toBe(true);
+    });
+
     it('preview should include dynamic pool name, candidate IDs, and source (C-PREVIEW-POOL)', () => {
       writeProjectPool(projectDir, 'implementation-fix', EXTERNAL_POOL_BODY);
       writeFacet(projectDir, '.takt/facet-pools/facets/policies/transaction-correctness.md', '# ext\n');
