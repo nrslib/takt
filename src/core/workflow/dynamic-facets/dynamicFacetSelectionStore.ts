@@ -4,8 +4,8 @@ export function cloneDynamicFacetSelectionSnapshot(snapshot: DynamicFacetSelecti
   return {
     ...snapshot,
     selected_ids: [...snapshot.selected_ids],
-    effective_policy_refs: [...snapshot.effective_policy_refs],
-    effective_knowledge_refs: [...snapshot.effective_knowledge_refs],
+    selected_policy_refs: [...snapshot.selected_policy_refs],
+    selected_knowledge_refs: [...snapshot.selected_knowledge_refs],
   };
 }
 

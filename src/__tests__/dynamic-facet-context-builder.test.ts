@@ -86,4 +86,27 @@ describe('DynamicFacetContextBuilder (C-SELECTOR-INPUT, C-SELECTOR-INVOKE)', () 
     expect(instruction).not.toContain('# backward');
     expect(instruction).not.toContain('# backend-api\n');
   });
+
+  it('should render a non-root workflow call path and maxSelected in the selector instruction (C-SELECTOR-INPUT: nested path)', () => {
+    const instruction = buildDynamicFacetSelectorInstruction({
+      task: 'task',
+      workflowName: 'wf',
+      stepName: 'fix',
+      workflowCallPath: [
+        { step: 'delegate' } as never,
+        { step: 'child-fix' } as never,
+      ],
+      isReentry: false,
+      stepIteration: 1,
+      reports: '',
+      unresolvedFindings: '',
+      cumulativeDiff: '',
+      pool,
+      maxSelected: 4,
+    });
+
+    expect(instruction).toContain('delegate > child-fix');
+    expect(instruction).not.toContain('(root)');
+    expect(instruction).toContain('Max selected:\n4');
+  });
 });

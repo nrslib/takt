@@ -6,7 +6,7 @@ import { sanitizeTerminalText } from '../../shared/utils/text.js';
 import { STEP_FRAGMENT_EXTENSIONS } from './file-filter.js';
 
 const FACET_POOL_EXTENSIONS = ['.yaml', '.yml'] as const;
-const FACET_TYPES = ['policies', 'knowledge', 'personas'] as const;
+const FACET_TYPES = ['policies', 'knowledge'] as const;
 
 interface FragmentSource {
   content: string;
@@ -92,7 +92,7 @@ function extractInlinePoolSectionMaps(parsed: unknown): Map<string, { policies?:
 function resolveAliasFacetName(
   ref: string,
   sectionMaps: { policies?: SectionMap; knowledge?: SectionMap },
-  facetType: string,
+  facetType: (typeof FACET_TYPES)[number],
 ): string {
   const map = facetType === 'policies' ? sectionMaps.policies : sectionMaps.knowledge;
   if (map === undefined) return ref;

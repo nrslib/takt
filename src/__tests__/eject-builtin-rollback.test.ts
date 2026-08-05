@@ -92,4 +92,16 @@ describe('ejectBuiltin rollback', () => {
     expect(mocks.rmSync).not.toHaveBeenCalled();
     expect(mocks.rmdirSync).not.toHaveBeenCalled();
   });
+
+  it('should roll back step fragments when facet pool copy fails', async () => {
+    mocks.copyFacetPools.mockImplementation(() => {
+      throw new Error('simulated pool copy failure');
+    });
+    const stepFragmentRollback = vi.fn();
+    mocks.copyFragments.mockReturnValue(stepFragmentRollback);
+
+    await expect(ejectBuiltin('default', { projectDir: '/project' })).rejects.toThrow('simulated pool copy failure');
+
+    expect(stepFragmentRollback).toHaveBeenCalledOnce();
+  });
 });

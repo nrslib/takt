@@ -293,10 +293,10 @@ export function copyReferencedBuiltinStepFragments(
 
 export function copyReferencedBuiltinFacetPools(
   workflowContent: string,
-  lang: Language,
+  _lang: Language,
   targetDir: string,
-  workflowPath: string,
-  isProjectEject: boolean,
+  _workflowPath: string,
+  _isProjectEject: boolean,
   builtinSourceDir: string,
   builtinBoundaryDir: string,
 ): () => void {
@@ -343,12 +343,8 @@ export function copyReferencedBuiltinFacetPools(
         createdPaths.push(targetPoolPath);
       }
       const poolParsed = parseYaml(poolContent) as Record<string, unknown>;
-      const facetSections: Array<{ map: Record<string, string> | undefined }> = [
-        { map: isPlainObjectRecord(poolParsed.policies) ? poolParsed.policies as Record<string, string> : undefined },
-        { map: isPlainObjectRecord(poolParsed.knowledge) ? poolParsed.knowledge as Record<string, string> : undefined },
-      ];
-      for (const { map } of facetSections) {
-        if (!map) continue;
+      const facetMaps = [poolParsed.policies, poolParsed.knowledge].filter(isPlainObjectRecord) as Array<Record<string, string>>;
+      for (const map of facetMaps) {
         for (const relPath of Object.values(map)) {
           if (typeof relPath !== 'string') continue;
           const sourceFacetPath = resolve(builtinSourceDir, relPath);

@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { invalidateAllResolvedConfigCache, invalidateGlobalConfigCache } from '../infra/config/index.js';
 import { copyReferencedBuiltinFacetPools } from '../features/config/ejectStepFragments.js';
 import { assertCopiedFacetPoolReferences, collectFacetPoolUses } from '../features/repertoire/step-fragment-integrity.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
@@ -60,35 +59,23 @@ candidates:
 
 describe('facet pool eject and repertoire (C-EJECT-POOL, C-REPERTOIRE-POOL)', () => {
   let projectDir: string;
-  let globalConfigDir: string;
-  let previousConfigDir: string | undefined;
+  let builtinFixtureDir: string;
 
   beforeEach(() => {
-    previousConfigDir = process.env.TAKT_CONFIG_DIR;
     projectDir = mkdtempSync(join(tmpdir(), 'takt-facet-pool-eject-project-'));
-    globalConfigDir = mkdtempSync(join(tmpdir(), 'takt-facet-pool-eject-global-'));
-    process.env.TAKT_CONFIG_DIR = globalConfigDir;
-    invalidateGlobalConfigCache();
-    invalidateAllResolvedConfigCache();
+    builtinFixtureDir = mkdtempSync(join(tmpdir(), 'takt-facet-pool-eject-builtin-'));
   });
 
   afterEach(() => {
     rmSync(projectDir, { recursive: true, force: true });
-    rmSync(globalConfigDir, { recursive: true, force: true });
-    if (previousConfigDir === undefined) {
-      delete process.env.TAKT_CONFIG_DIR;
-    } else {
-      process.env.TAKT_CONFIG_DIR = previousConfigDir;
-    }
-    invalidateGlobalConfigCache();
-    invalidateAllResolvedConfigCache();
+    rmSync(builtinFixtureDir, { recursive: true, force: true });
   });
 
   describe('C-EJECT-POOL: eject copies external pool and its facet dependencies', () => {
     it('should copy a referenced builtin external pool and its facets to the project facet-pools/ directory', () => {
       // Real builtin layout: builtins/<lang>/facet-pools/ + builtins/<lang>/facets/ (siblings).
       // Pool file references facets via ../facets/... which resolves to the sibling facets dir.
-      const builtinLanguageRoot = join(globalConfigDir, 'builtin-lang');
+      const builtinLanguageRoot = join(builtinFixtureDir, 'builtin-lang');
       const builtinSourceDir = join(builtinLanguageRoot, 'facet-pools');
       const builtinFacetsDir = join(builtinLanguageRoot, 'facets');
       mkdirSync(join(builtinSourceDir), { recursive: true });
@@ -140,7 +127,7 @@ ${EXTERNAL_POOL_WORKFLOW}
     });
 
     it('should keep an existing user pool file and warn instead of overwriting (existing eject contract)', () => {
-      const builtinLanguageRoot = join(globalConfigDir, 'builtin-lang');
+      const builtinLanguageRoot = join(builtinFixtureDir, 'builtin-lang');
       const builtinSourceDir = join(builtinLanguageRoot, 'facet-pools');
       const builtinFacetsDir = join(builtinLanguageRoot, 'facets');
       mkdirSync(join(builtinSourceDir), { recursive: true });
@@ -207,9 +194,9 @@ ${EXTERNAL_POOL_WORKFLOW}
       };
       collectFacetPoolUses(parsed, refs);
       // Inline pools resolve facets through the caller workflow's sections; they do not produce
-      // cross-package pool references, but the facet refs they mention should be collected
+      // cross-package pool references, but the facet refs they mention must be collected
       // so the repertoire integrity check can verify they are copied.
-      expect(refs.has('backend-api') || refs.has('transaction-correctness')).toBe(true);
+      expect([...refs].sort()).toEqual(['backend-api', 'transaction-correctness']);
     });
 
     it('should report a pool reference that is excluded from package installation as an integrity violation', () => {

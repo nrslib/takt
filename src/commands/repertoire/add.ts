@@ -178,8 +178,12 @@ export async function repertoireAddCommand(spec: string): Promise<void> {
       const content = readRequiredPackageSource(stepFile.absolutePath, stepFile.relativePath);
       stepSources.push({ content, path: stepFile.relativePath });
     }
+    const integritySources = [
+      ...workflowYamls.map(({ content, relativePath }) => ({ content, path: relativePath })),
+      ...stepSources,
+    ];
     assertCopiedStepFragmentReferences({
-      sources: [...workflowYamls.map(({ content, relativePath }) => ({ content, path: relativePath })), ...stepSources],
+      sources: integritySources,
       packageRoot,
       copiedStepNames,
       owner,
@@ -202,7 +206,7 @@ export async function repertoireAddCommand(spec: string): Promise<void> {
       }
     }
     assertCopiedFacetPoolReferences({
-      sources: [...workflowYamls.map(({ content, relativePath }) => ({ content, path: relativePath })), ...stepSources],
+      sources: integritySources,
       packageRoot,
       copiedPoolNames,
       copiedFacetNamesByType,

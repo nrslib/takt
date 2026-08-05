@@ -8,8 +8,8 @@ function snapshot(identity: string, selectedIds: string[], round: number): Dynam
     step_name: 'fix',
     round,
     selected_ids: [...selectedIds],
-    effective_policy_refs: [...selectedIds],
-    effective_knowledge_refs: [...selectedIds],
+    selected_policy_refs: [...selectedIds],
+    selected_knowledge_refs: [...selectedIds],
     rationale: `round ${round}`,
   };
 }
@@ -70,6 +70,12 @@ describe('DynamicFacetSelectionStore (C-ROUND-REPLACE, C-ROUND-RESUME, C-STATE-R
     expect(store.serialized()).toEqual({
       'parent:fix': snapshot('parent:fix', ['frontend'], 1),
     });
+  });
+
+  it('should return undefined from serialized() when no selection exists (C-STATE-RUNTIME)', () => {
+    const store = new DynamicFacetSelectionStore(new Map());
+
+    expect(store.serialized()).toBeUndefined();
   });
 
   it('should merge concurrent commits from independent workflow call identities (C-STATE-RUNTIME)', async () => {

@@ -208,20 +208,20 @@ export class DynamicFacetSelectorCoordinator {
     previous: DynamicFacetSelectionSnapshot | undefined,
   ): DynamicFacetSelectionSnapshot {
     const selectedSet = new Set(selectedIds);
-    const effectivePolicyRefs: string[] = [];
-    const effectiveKnowledgeRefs: string[] = [];
+    const selectedPolicyRefs: string[] = [];
+    const selectedKnowledgeRefs: string[] = [];
     for (const candidate of pool.candidates) {
       if (!selectedSet.has(candidate.id)) continue;
-      effectivePolicyRefs.push(...candidate.policyRefs);
-      effectiveKnowledgeRefs.push(...candidate.knowledgeRefs);
+      selectedPolicyRefs.push(...candidate.policyRefs);
+      selectedKnowledgeRefs.push(...candidate.knowledgeRefs);
     }
     return {
       identity,
       step_name: stepName,
       round: (previous?.round ?? 0) + 1,
       selected_ids: [...selectedIds],
-      effective_policy_refs: effectivePolicyRefs,
-      effective_knowledge_refs: effectiveKnowledgeRefs,
+      selected_policy_refs: selectedPolicyRefs,
+      selected_knowledge_refs: selectedKnowledgeRefs,
       rationale,
     };
   }
@@ -250,6 +250,13 @@ export class DynamicFacetSelectorCoordinator {
     snapshot: DynamicFacetSelectionSnapshot,
     step: NormalAgentWorkflowStep,
   ): DynamicFacetSelectionResult {
+    const knownIds = new Set(pool.candidates.map((candidate) => candidate.id));
+    const missingId = snapshot.selected_ids.find((id) => !knownIds.has(id));
+    if (missingId !== undefined) {
+      throw new Error(
+        `Restored dynamic facet selection for step "${snapshot.step_name}" references candidate id "${missingId}" that is not in pool "${pool.name}"`,
+      );
+    }
     return this.buildResult(pool, snapshot, snapshot.selected_ids, step);
   }
 

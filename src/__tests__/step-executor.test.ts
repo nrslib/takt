@@ -2550,8 +2550,8 @@ describe('StepExecutor dynamic facet integration', () => {
             step_name: 'fix',
             round: 1,
             selected_ids: ['backend'],
-            effective_policy_refs: [],
-            effective_knowledge_refs: [],
+            selected_policy_refs: [],
+            selected_knowledge_refs: [],
             rationale: 'r',
           },
         }),
@@ -2584,6 +2584,14 @@ describe('StepExecutor dynamic facet integration', () => {
         structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
         dynamicFacetSelectorCoordinator: coordinator as unknown as StepExecutorDeps['dynamicFacetSelectorCoordinator'],
         getFacetPool,
+        findingManagerAuthority: { canMarkFindings: () => false } as unknown as StepExecutorDeps['findingManagerAuthority'],
+        executionProvider: 'cursor',
+        executionModel: undefined,
+        refreshFindingsState: vi.fn(),
+        emitEvent: vi.fn(),
+        recordSynthesizedAgentUsage: vi.fn(),
+        getRunId: () => 'test-run',
+        getFindingCallNamespace: () => '',
       };
       const executor = new StepExecutor(deps);
       const state = makeState();

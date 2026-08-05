@@ -27,11 +27,9 @@ describe('CandidateSelector strict ID selection primitive (C-SHARED-SELECTOR, C-
       });
     });
 
-    it('should produce the same shape as the dynamic-parallel selector contract (C-SHARED-SELECTOR: 両 consumer が同じ schema 形状)', () => {
+    it('should produce the same strict schema shape for both facet pool and dynamic-parallel consumers (C-SHARED-SELECTOR)', () => {
       // The shared primitive must produce the same strict schema shape for both consumers.
       const facetPoolSchema = createSelectorOutputSchema(['a', 'b']);
-      // Re-import the dynamic-parallel contract to compare shape (delegated to the same primitive).
-      // Since the dynamic-parallel selector-contract delegates to candidateSelector, we verify shape equality here.
       expect(facetPoolSchema).toMatchObject({
         type: 'object',
         additionalProperties: false,
@@ -157,10 +155,9 @@ describe('CandidateSelector strict ID selection primitive (C-SHARED-SELECTOR, C-
       expect(() => validateSelectorResponse(response, schema, 'fix', identity, { label: 'Dynamic facet' })).toThrow();
     });
 
-    it('should reject a selection exceeding max_selected when enforced by the caller (C-SELECTOR-FAILFAST: max_selected 超過)', () => {
+    it('should reject duplicate IDs even when the count exceeds max_selected (C-SELECTOR-FAILFAST: 重複かつ超過)', () => {
       // The primitive schema enforces enum/uniqueness; max_selected is enforced by the caller (coordinator).
-      // Here we test that the primitive rejects duplicates (which would also exceed max_selected),
-      // and the coordinator-level test covers the explicit max_selected check.
+      // Here we test that the primitive rejects duplicates (which would also exceed max_selected).
       const response: AgentResponse = {
         status: 'done',
         content: '',

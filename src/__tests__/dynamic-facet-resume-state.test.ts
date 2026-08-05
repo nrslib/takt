@@ -2,15 +2,20 @@ import { describe, expect, it } from 'vitest';
 import { restoreAndValidateDynamicFacetSelections } from '../core/workflow/dynamic-facets/dynamicFacetResumeState.js';
 import type { WorkflowConfig, DynamicFacetSelectionSnapshot } from '../core/models/workflow-types.js';
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
+import { buildDynamicParallelSelectionIdentityFromPath } from '../core/workflow/dynamic-parallel/identity.js';
 
-function snapshot(identity: string, selectedIds: string[], round: number): DynamicFacetSelectionSnapshot {
+function makeIdentity(workflowRef: string, stepName: string): string {
+  return buildDynamicParallelSelectionIdentityFromPath(workflowRef, stepName, []);
+}
+
+function snapshot(identity: string, stepName: string, selectedIds: string[], round: number): DynamicFacetSelectionSnapshot {
   return {
     identity,
-    step_name: 'fix',
+    step_name: stepName,
     round,
     selected_ids: [...selectedIds],
-    effective_policy_refs: [...selectedIds],
-    effective_knowledge_refs: [...selectedIds],
+    selected_policy_refs: [...selectedIds],
+    selected_knowledge_refs: [...selectedIds],
     rationale: `round ${round}`,
   };
 }
@@ -30,16 +35,18 @@ function makeOptions(selections: Record<string, DynamicFacetSelectionSnapshot>):
 
 describe('DynamicFacetResumeState (C-ROUND-RESUME, C-ROUND-REPLACE)', () => {
   it('should restore selections from a resume point without invoking the selector (C-ROUND-RESUME)', () => {
+    const identity = makeIdentity('wf', 'fix');
     const selections: Record<string, DynamicFacetSelectionSnapshot> = {
-      'wf:fix': snapshot('wf:fix', ['transaction'], 1),
+      [identity]: snapshot(identity, 'fix', ['transaction'], 1),
     };
     const restored = restoreAndValidateDynamicFacetSelections(makeConfig(), makeOptions(selections));
-    expect(restored.get('wf:fix')?.selected_ids).toEqual(['transaction']);
+    expect(restored.get(identity)?.selected_ids).toEqual(['transaction']);
   });
 
   it('should reject a snapshot whose identity does not match a reachable step (C-ROUND-RESUME: 不正 identity)', () => {
+    const identity = makeIdentity('wf', 'nonexistent');
     const selections: Record<string, DynamicFacetSelectionSnapshot> = {
-      'wf:nonexistent': snapshot('wf:nonexistent', ['transaction'], 1),
+      [identity]: snapshot(identity, 'nonexistent', ['transaction'], 1),
     };
     const config = makeConfig();
     config.steps = [];
@@ -52,9 +59,23 @@ describe('DynamicFacetResumeState (C-ROUND-RESUME, C-ROUND-REPLACE)', () => {
   });
 
   it('should reject a snapshot whose identity does not match its stored key (C-STATE-RUNTIME: 不正 snapshot)', () => {
+    const identity = makeIdentity('wf', 'fix');
+    const mismatchIdentity = makeIdentity('wf', 'MISMATCH');
     const selections = {
-      'wf:fix': snapshot('wf:MISMATCH', ['transaction'], 1),
+      [identity]: snapshot(mismatchIdentity, 'fix', ['transaction'], 1),
     } as unknown as Record<string, DynamicFacetSelectionSnapshot>;
     expect(() => restoreAndValidateDynamicFacetSelections(makeConfig(), makeOptions(selections))).toThrow();
+  });
+
+  it('should restore selections independent of the saved input (C-STATE-RUNTIME: clone isolation)', () => {
+    const identity = makeIdentity('wf', 'fix');
+    const selections: Record<string, DynamicFacetSelectionSnapshot> = {
+      [identity]: snapshot(identity, 'fix', ['transaction'], 1),
+    };
+    const restored = restoreAndValidateDynamicFacetSelections(makeConfig(), makeOptions(selections));
+    const restoredSnapshot = restored.get(identity);
+    expect(restoredSnapshot).toBeDefined();
+    restoredSnapshot!.selected_ids.push('backend');
+    expect(selections[identity]!.selected_ids).toEqual(['transaction']);
   });
 });

@@ -233,8 +233,8 @@ export interface DynamicFacetSelectionSnapshot {
   step_name: string;
   round: number;
   selected_ids: string[];
-  effective_policy_refs: string[];
-  effective_knowledge_refs: string[];
+  selected_policy_refs: string[];
+  selected_knowledge_refs: string[];
   rationale: string;
 }
 

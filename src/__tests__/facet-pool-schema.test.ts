@@ -7,7 +7,7 @@ function baseWorkflowWithFacetPools(facetPools: unknown, steps: unknown[] = [
     persona: 'coder',
     policy: ['coding'],
     knowledge: ['architecture'],
-    dynamic_facets: { pool: 'fix', max_selected: 4 },
+    dynamic_facets: { pool: 'fix', max_selected: 3 },
     instruction: 'fix',
     edit: true,
     rules: [{ condition: 'done', next: 'COMPLETE' }],
@@ -197,7 +197,7 @@ describe('facet_pools schema (C-CANDIDATE-SCHEMA, C-USES-INLINE-MIX, C-EXTERNAL-
           persona: 'coder',
           policy: ['coding'],
           knowledge: ['architecture'],
-          dynamic_facets: { pool: 'fix', max_selected: 4 },
+          dynamic_facets: { pool: 'fix', max_selected: 3 },
           instruction: 'fix',
           edit: true,
           rules: [{ condition: 'done', next: 'COMPLETE' }],
@@ -212,7 +212,7 @@ describe('facet_pools schema (C-CANDIDATE-SCHEMA, C-USES-INLINE-MIX, C-EXTERNAL-
         [{
           name: 'callstep',
           call: 'called',
-          dynamic_facets: { pool: 'fix', max_selected: 4 },
+          dynamic_facets: { pool: 'fix', max_selected: 3 },
           rules: [{ condition: 'done', next: 'COMPLETE' }],
         }],
       );
@@ -227,7 +227,26 @@ describe('facet_pools schema (C-CANDIDATE-SCHEMA, C-USES-INLINE-MIX, C-EXTERNAL-
           parallel: [
             { name: 'child', instruction: 'child', rules: [{ condition: 'done', next: 'COMPLETE' }] },
           ],
-          dynamic_facets: { pool: 'fix', max_selected: 4 },
+          dynamic_facets: { pool: 'fix', max_selected: 3 },
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        }],
+      );
+      expect(() => WorkflowConfigRawSchema.parse(raw)).toThrow();
+    });
+
+    it('should reject dynamic_facets on a parallel sub-step (C-LOAD-FAILFAST: parallel 子)', () => {
+      const raw = baseWorkflowWithFacetPools(
+        { fix: { uses: 'implementation-fix' } },
+        [{
+          name: 'parallel-parent',
+          parallel: [
+            {
+              name: 'child',
+              instruction: 'child',
+              dynamic_facets: { pool: 'fix', max_selected: 3 },
+              rules: [{ condition: 'done', next: 'COMPLETE' }],
+            },
+          ],
           rules: [{ condition: 'done', next: 'COMPLETE' }],
         }],
       );
@@ -248,6 +267,54 @@ describe('facet_pools schema (C-CANDIDATE-SCHEMA, C-USES-INLINE-MIX, C-EXTERNAL-
         }],
       );
       expect(() => WorkflowConfigRawSchema.parse(raw)).toThrow();
+    });
+
+    it('should reject a negative max_selected (C-LOAD-FAILFAST: max_selected が不正)', () => {
+      const raw = baseWorkflowWithFacetPools(
+        { fix: { uses: 'implementation-fix' } },
+        [{
+          name: 'fix',
+          persona: 'coder',
+          policy: ['coding'],
+          dynamic_facets: { pool: 'fix', max_selected: -1 },
+          instruction: 'fix',
+          edit: true,
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        }],
+      );
+      expect(() => WorkflowConfigRawSchema.parse(raw)).toThrow();
+    });
+
+    it('should reject a non-integer max_selected (C-LOAD-FAILFAST: max_selected が不正)', () => {
+      const raw = baseWorkflowWithFacetPools(
+        { fix: { uses: 'implementation-fix' } },
+        [{
+          name: 'fix',
+          persona: 'coder',
+          policy: ['coding'],
+          dynamic_facets: { pool: 'fix', max_selected: 1.5 },
+          instruction: 'fix',
+          edit: true,
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        }],
+      );
+      expect(() => WorkflowConfigRawSchema.parse(raw)).toThrow();
+    });
+
+    it('should reject dynamic_facets referencing an undefined pool (C-LOAD-FAILFAST: 未知 pool)', () => {
+      const raw = baseWorkflowWithFacetPools(
+        { fix: { uses: 'implementation-fix' } },
+        [{
+          name: 'fix',
+          persona: 'coder',
+          policy: ['coding'],
+          dynamic_facets: { pool: 'nonexistent', max_selected: 3 },
+          instruction: 'fix',
+          edit: true,
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        }],
+      );
+      expect(() => WorkflowConfigRawSchema.parse(raw)).not.toThrow();
     });
   });
 });

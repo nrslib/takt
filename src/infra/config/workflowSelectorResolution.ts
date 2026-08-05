@@ -203,7 +203,7 @@ export function resolveWorkflowSelector(
     options.overrides,
   );
   if (selectorProvider.provider === undefined) {
-    throw new Error('Dynamic parallel selector has no resolved provider');
+    throw new Error('Dynamic selector has no resolved provider');
   }
   assertProviderSupportsSelectorExecution(selectorProvider.provider);
   const providerOptions = resolveEffectiveSelectorProviderOptions(

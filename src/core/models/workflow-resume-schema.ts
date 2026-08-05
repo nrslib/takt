@@ -62,9 +62,12 @@ export const DynamicFacetSelectionSnapshotSchema = z.object({
   identity: z.string().min(1),
   step_name: z.string().min(1),
   round: z.number().int().positive(),
-  selected_ids: z.array(z.string().min(1)),
-  effective_policy_refs: z.array(z.string().min(1)),
-  effective_knowledge_refs: z.array(z.string().min(1)),
+  selected_ids: z.array(z.string().min(1)).refine(
+    (ids) => new Set(ids).size === ids.length,
+    'selected_ids must be unique',
+  ),
+  selected_policy_refs: z.array(z.string().min(1)),
+  selected_knowledge_refs: z.array(z.string().min(1)),
   rationale: z.string().min(1),
 }).strict();
 

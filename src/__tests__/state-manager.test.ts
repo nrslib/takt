@@ -79,8 +79,8 @@ function makeFacetSnapshot(identity: string, stepName: string, round = 1): Dynam
     step_name: stepName,
     round,
     selected_ids: ['backend'],
-    effective_policy_refs: [],
-    effective_knowledge_refs: [],
+    selected_policy_refs: [],
+    selected_knowledge_refs: [],
     rationale: 'selection',
   };
 }
@@ -765,6 +765,11 @@ describe('StateManager', () => {
 
       originalSnapshot.selected_ids.push('extra-facet');
       expect(clonedSnapshot.selected_ids).toEqual(['backend']);
+
+      originalSnapshot.selected_policy_refs.push('extra-policy-ref');
+      originalSnapshot.selected_knowledge_refs.push('extra-knowledge-ref');
+      expect(clonedSnapshot.selected_policy_refs).toEqual([]);
+      expect(clonedSnapshot.selected_knowledge_refs).toEqual([]);
     });
 
     it('should deep-clone dynamic_parallel_selections snapshots symmetrically with dynamic_facet_selections', () => {

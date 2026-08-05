@@ -101,15 +101,21 @@ export async function ejectBuiltin(name: string | undefined, options: EjectOptio
       workflowDest,
       !options.global,
     );
-    const rollbackFacetPools = copyReferencedBuiltinFacetPools(
-      content,
-      lang,
-      targetFacetPoolsDir,
-      workflowDest,
-      !options.global,
-      builtinFacetPoolsDir,
-      builtinLanguageRoot,
-    );
+    let rollbackFacetPools: () => void;
+    try {
+      rollbackFacetPools = copyReferencedBuiltinFacetPools(
+        content,
+        lang,
+        targetFacetPoolsDir,
+        workflowDest,
+        !options.global,
+        builtinFacetPoolsDir,
+        builtinLanguageRoot,
+      );
+    } catch (error) {
+      rollbackStepFragments();
+      throw error;
+    }
     const rollback = (): void => {
       rollbackFacetPools();
       rollbackStepFragments();

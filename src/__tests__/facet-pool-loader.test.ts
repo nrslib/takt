@@ -537,9 +537,6 @@ candidates:
       const workflowPath = writeWorkflow(projectDir, 'ext-doctor', EXTERNAL_POOL_WORKFLOW, 'fix');
       const report = inspectWorkflowFile(workflowPath, projectDir);
 
-      const messages = report.diagnostics.map((d) => d.message).join('\n');
-      // The doctor should mention the pool resource name or its candidate/facet references.
-      expect(messages).not.toContain('implementation-fix'); // placeholder: doctor should NOT error on a resolved pool
       // No error diagnostics expected when everything resolves.
       expect(report.diagnostics.some((d) => d.level === 'error')).toBe(false);
     });
@@ -560,11 +557,13 @@ candidates:
       const workflowPath = writeWorkflow(projectDir, 'ext-preview', EXTERNAL_POOL_WORKFLOW, 'fix');
       const preview = getWorkflowDescription(workflowPath, projectDir, 5);
 
-      // The preview output should reference the pool name and candidate IDs somewhere.
-      const blob = JSON.stringify(preview);
-      expect(blob).toContain('fix');
-      // The step with dynamic_facets should appear in stepPreviews.
-      expect(preview.stepPreviews.some((s) => s.name === 'fix')).toBe(true);
+      const step = preview.stepPreviews.find((s) => s.name === 'fix');
+      expect(step).toBeDefined();
+      expect(step?.dynamicFacets?.pool).toBe('fix');
+      const candidateIds = step?.dynamicFacets?.candidates?.map((c) => c.id) ?? [];
+      expect(candidateIds).toEqual(
+        expect.arrayContaining(['backend', 'transaction', 'backward-compatibility']),
+      );
     });
 
     it('preview should report source: external for external pools and source: inline for inline pools (S4)', () => {

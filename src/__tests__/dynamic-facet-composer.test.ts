@@ -171,4 +171,48 @@ describe('DynamicFacetComposer (C-COMPOSE-ORDER, C-NO-DYNAMIC-OTHER)', () => {
     // It must not return any field that could alter persona/instruction/provider/permission/MCP/tool/output contract.
     expect(Object.keys(result).sort()).toEqual(['knowledgeContents', 'policyContents']);
   });
+
+  it('should deduplicate dynamic candidates sharing the same sourcePath (C-COMPOSE-ORDER: dynamic 同士の重複除去)', () => {
+    const pool = makePool(
+      [
+        { id: 'a', description: 'a', policy: 'shared-policy' },
+        { id: 'b', description: 'b', policy: 'shared-policy' },
+      ],
+      { 'shared-policy': 'SHARED' },
+    );
+    const fixed = fixedFacets([], []);
+
+    const result = composeDynamicFacets(pool, ['a', 'b'], fixed);
+
+    expect(result.policyContents).toEqual(['SHARED']);
+  });
+
+  it('should deduplicate sourcePath-less entries with identical content (C-COMPOSE-ORDER: sourcePath 無しの内容一致 dedup)', () => {
+    const pool: ResolvedFacetPool = {
+      name: 'fix',
+      candidates: [
+        {
+          id: 'a',
+          description: 'a',
+          policyRefs: ['bare-a'],
+          knowledgeRefs: [],
+          resolvedPolicyContents: [{ content: 'BARE-CONTENT' }],
+          resolvedKnowledgeContents: [],
+        },
+        {
+          id: 'b',
+          description: 'b',
+          policyRefs: ['bare-b'],
+          knowledgeRefs: [],
+          resolvedPolicyContents: [{ content: 'BARE-CONTENT' }],
+          resolvedKnowledgeContents: [],
+        },
+      ],
+    };
+    const fixed = fixedFacets([], []);
+
+    const result = composeDynamicFacets(pool, ['a', 'b'], fixed);
+
+    expect(result.policyContents).toEqual(['BARE-CONTENT']);
+  });
 });

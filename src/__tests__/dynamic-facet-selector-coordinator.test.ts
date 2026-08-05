@@ -140,8 +140,8 @@ describe('DynamicFacetSelectorCoordinator', () => {
       step_name: 'fix',
       round: 1,
       selected_ids: ['backend'],
-      effective_policy_refs: [],
-      effective_knowledge_refs: [],
+      selected_policy_refs: [],
+      selected_knowledge_refs: [],
       rationale: 'prev',
     };
     const store = new DynamicFacetSelectionStore(new Map([[identity, snapshot]]));
@@ -183,8 +183,8 @@ describe('DynamicFacetSelectorCoordinator', () => {
       step_name: 'fix',
       round: 1,
       selected_ids: ['a'],
-      effective_policy_refs: [],
-      effective_knowledge_refs: [],
+      selected_policy_refs: [],
+      selected_knowledge_refs: [],
       rationale: 'prev',
     };
     const store = new DynamicFacetSelectionStore(new Map([[identity, previous]]));
@@ -242,5 +242,44 @@ describe('DynamicFacetSelectorCoordinator', () => {
       coordinator.resolveDynamicFacets(step, makeState(), 'task', pool),
     ).rejects.toThrow(/unknown candidate id/);
     spy.mockRestore();
+  });
+
+  it('propagates commitSelection failure and leaves activeDynamicFacetSelectionIdentity unset (C-STATE-RUNTIME: persistence failure)', async () => {
+    const pool = makePool([{ id: 'a', description: 'A' }]);
+    const step = makeStep();
+    const response: AgentResponse = {
+      persona: 'selector',
+      status: 'done',
+      content: '',
+      timestamp: new Date(),
+      structuredOutput: { selected_ids: ['a'], rationale: 'ok' },
+    };
+    mockedExecuteAgent.mockResolvedValueOnce(response);
+    const state = makeState();
+    const deps = buildDeps({
+      commitSelection: vi.fn().mockRejectedValue(new Error('metadata write failed')),
+    });
+
+    const coordinator = new DynamicFacetSelectorCoordinator(deps);
+    await expect(
+      coordinator.resolveDynamicFacets(step, state, 'task', pool),
+    ).rejects.toThrow('metadata write failed');
+    expect(state.activeDynamicFacetSelectionIdentity).toBeUndefined();
+  });
+
+  it('throws before main agent execution when abortSignal is already aborted (C-STATE-RUNTIME: pre-execution abort)', async () => {
+    const pool = makePool([{ id: 'a', description: 'A' }]);
+    const step = makeStep();
+    const controller = new AbortController();
+    controller.abort();
+    const deps = buildDeps({
+      engineOptions: { ...makeOptions(), abortSignal: controller.signal } as unknown as WorkflowEngineOptions,
+    });
+
+    const coordinator = new DynamicFacetSelectorCoordinator(deps);
+    await expect(
+      coordinator.resolveDynamicFacets(step, makeState(), 'task', pool),
+    ).rejects.toThrow();
+    expect(mockedExecuteAgent).not.toHaveBeenCalled();
   });
 });

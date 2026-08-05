@@ -734,8 +734,8 @@ describe('workflow finding_contract schema', () => {
         personaPath: expectedPersonaPath,
         instruction: 'Project instruction override',
         outputContract: 'Project output override',
-        policyContents: expect.arrayContaining([expect.objectContaining({ content: 'Project policy override' })]),
-        knowledgeContents: expect.arrayContaining([expect.objectContaining({ content: 'Project knowledge override' })]),
+        policyContents: [expect.objectContaining({ content: 'Project policy override' })],
+        knowledgeContents: [expect.objectContaining({ content: 'Project knowledge override' })],
       });
       expect(workflow.findingContract?.adjudicator).toMatchObject({
         personaPath: expectedPersonaPath,

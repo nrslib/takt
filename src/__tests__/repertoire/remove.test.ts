@@ -102,7 +102,10 @@ describe('repertoireRemoveCommand — scan configuration', () => {
 
     expect(scanConfig.stepsDirs).toHaveLength(2);
 
-    expect(scanConfig.facetPoolsDirs).toHaveLength(2);
+    expect(scanConfig.facetPoolsDirs).toEqual([
+      '/home/user/.takt/facet-pools',
+      '/project/.takt/facet-pools',
+    ]);
 
     // Then: exactly 1 categories file
     expect(scanConfig.categoriesFiles).toHaveLength(1);

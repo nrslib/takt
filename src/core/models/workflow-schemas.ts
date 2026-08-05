@@ -447,6 +447,7 @@ const AgentParallelSubStepRawObjectSchema = z.object({
   concurrency: z.never().optional(),
   arpeggio: z.never().optional(),
   team_leader: z.never().optional(),
+  dynamic_facets: z.never().optional(),
 });
 
 function validateAgentParallelSubStepRules(
