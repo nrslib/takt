@@ -564,7 +564,20 @@ export function resolveRefToContentWithSource(
 ): ResolvedFacetContent | undefined {
   const mapped = resolvedMap?.[ref];
   if (mapped !== undefined) {
-    return applyFacetIncludes(expandFacetInheritance(toResolvedContent(mapped, facetType, ref), facetType, context), context);
+    const resolved = toResolvedContent(mapped, facetType, ref);
+    // When requireFile is set and the mapped value is a .md path that was never
+    // resolved to an actual file (sourcePath is undefined), the path string leaked
+    // into content. Re-resolve with requireFile to fail-fast on missing files.
+    if (
+      options?.requireFile === true
+      && resolved.sourcePath === undefined
+      && resolved.content.endsWith('.md')
+    ) {
+      const resource = resolveResourceContentWithSource(resolved.content, workflowDir, facetType, ref, context, options?.trustedRoot, true);
+      if (resource === undefined) return undefined;
+      return applyFacetIncludes(expandFacetInheritance(resource, facetType, context), context);
+    }
+    return applyFacetIncludes(expandFacetInheritance(resolved, facetType, context), context);
   }
 
   if (facetType && context && isScopeRef(ref) && context.repertoireDir) {

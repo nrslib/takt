@@ -572,6 +572,9 @@ facet_pools:
       - id: broken
         description: references a missing file
         policy: missing
+      - id: ok
+        description: valid candidate
+        policy: coding
 steps:
   - name: fix
     persona: coder
@@ -589,6 +592,8 @@ steps:
       const workflowPath = writeWorkflow(projectDir, 'inline-doctor-missing-md', workflow, 'fix');
       const report = inspectWorkflowFile(workflowPath, projectDir);
       expect(report.diagnostics.some((d) => d.level === 'error')).toBe(true);
+      const errorDiag = report.diagnostics.find((d) => d.level === 'error');
+      expect(errorDiag?.message).toContain('does-not-exist.md');
     });
 
     it('preview should include dynamic pool name, candidate IDs, and source (C-PREVIEW-POOL)', () => {
