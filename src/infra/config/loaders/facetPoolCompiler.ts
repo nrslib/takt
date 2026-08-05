@@ -72,7 +72,7 @@ function resolveCandidate(
   sections: ResolvedSections,
   baseDir: string,
   context: FacetResolutionContext | undefined,
-  resolveOptions?: { readonly strictBareName?: boolean; readonly trustedRoot?: string },
+  resolveOptions?: { readonly strictBareName?: boolean; readonly trustedRoot?: string; readonly requireFile?: boolean },
 ): ResolvedFacetPoolCandidate {
   const policyRefs = normalizeRefs(candidate.policy);
   const knowledgeRefs = normalizeRefs(candidate.knowledge);
@@ -115,7 +115,7 @@ function compileInlinePool(
   // must resolve against the workflow's resolved section maps. Pool-side aliases win on collision.
   const sections = mergeResolvedSections(poolSections, workflowSections);
   const candidates = input.candidates.map((candidate) =>
-    resolveCandidate(candidate, sections, baseDir, context),
+    resolveCandidate(candidate, sections, baseDir, context, { requireFile: true }),
   );
   return {
     name: input.name,
@@ -140,7 +140,7 @@ function compileExternalPool(
   const trustedRoot = dirname(resource.candidateDir);
   const sections = buildResolvedSections(pool.policies, pool.knowledge, resource.sourceDir, undefined, trustedRoot);
   const candidates = pool.candidates.map((candidate) =>
-    resolveCandidate(candidate, sections, resource.sourceDir, undefined, { strictBareName: true, trustedRoot }),
+    resolveCandidate(candidate, sections, resource.sourceDir, undefined, { strictBareName: true, trustedRoot, requireFile: true }),
   );
   return {
     name: input.name,

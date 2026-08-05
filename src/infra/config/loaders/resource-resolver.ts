@@ -125,6 +125,7 @@ export function resolveResourceContentWithSource(
   refName?: string,
   context?: FacetResolutionContext,
   trustedRoot?: string,
+  requireFile?: boolean,
 ): ResolvedFacetContent | undefined {
   if (spec == null) {
     return undefined;
@@ -145,6 +146,9 @@ export function resolveResourceContentWithSource(
         facetType,
         refName,
       };
+    }
+    if (requireFile === true) {
+      throw new Error(`Facet resource file not found: ${resolved}`);
     }
   }
   return { content: spec, facetType, refName };
@@ -542,6 +546,12 @@ export interface ResolveRefToContentWithSourceOptions {
    * で境界チェックを行う。未指定の場合は従来通りの境界チェック動作を維持する。
    */
   readonly trustedRoot?: string;
+  /**
+   * true のとき、.md パス参照がファイルに解決できない場合は undefined を返さず
+   * fail-fast で例外を投げる。facet pool の候補参照など、存在しない .md が
+   * リテラル文字列として本文に混入するのを防ぐために指定する。
+   */
+  readonly requireFile?: boolean;
 }
 
 export function resolveRefToContentWithSource(
@@ -571,7 +581,7 @@ export function resolveRefToContentWithSource(
   }
 
   if (isResourcePath(ref)) {
-    const resource = resolveResourceContentWithSource(ref, workflowDir, facetType, ref, context, options?.trustedRoot);
+    const resource = resolveResourceContentWithSource(ref, workflowDir, facetType, ref, context, options?.trustedRoot, options?.requireFile);
     return resource ? applyFacetIncludes(expandFacetInheritance(resource, facetType, context), context) : undefined;
   }
 

@@ -26,7 +26,7 @@ import {
   resolveSectionMapWithSource,
   unwrapResolvedSectionMap,
 } from './resource-resolver.js';
-import { buildResolvedFacetPoolDependencies, type FacetPoolCompilationInput } from './facetPoolCompiler.js';
+import { buildResolvedFacetPoolDependencies, compileFacetPool, type FacetPoolCompilationInput } from './facetPoolCompiler.js';
 import type { WorkflowConfig } from '../../../core/models/types.js';
 
 export type { WorkflowDiagnostic, WorkflowDoctorReport } from './workflowDoctorTypes.js';
@@ -315,6 +315,13 @@ function validateFacetPoolReferences(
         };
     try {
       buildResolvedFacetPoolDependencies(input, context);
+      // Re-compile the pool with requireFile to catch .md references that resolve
+      // to non-existent files. The load-time compiler already succeeds for these
+      // because the fallback turns the path string into literal content. The doctor
+      // must surface this as a diagnostic so authors can detect typos.
+      compileFacetPool(input, dirname(context.workflowDir ?? ''), context, {
+        workflowSections: undefined,
+      });
     } catch (error) {
       diagnostics.push({
         level: 'error',

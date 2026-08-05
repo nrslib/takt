@@ -98,6 +98,18 @@ function formatStepPreview(p: StepPreview, label: string, lang: TaskHistoryLocal
   }
   lines.push(`**${toolsLabel}:** ${toolsStr}`, `**${editLabel}:** ${editStr}`);
 
+  if (p.dynamicFacets) {
+    const poolLabel = lang === 'ja' ? '動的ファセットプール' : 'Dynamic facet pool';
+    const candidatesLabel = lang === 'ja' ? '候補' : 'Candidates';
+    const sourceLabel = lang === 'ja' ? 'ソース' : 'Source';
+    const candidateIds = p.dynamicFacets.candidates.map((c) => c.id).join(', ');
+    lines.push(
+      `**${poolLabel}:** ${p.dynamicFacets.pool}`,
+      `**${candidatesLabel}:** ${candidateIds}`,
+      `**${sourceLabel}:** ${p.dynamicFacets.source}`,
+    );
+  }
+
   if (p.substeps && p.substeps.length > 0) {
     lines.push(
       ...p.substeps.map((substep, index) =>
