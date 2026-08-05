@@ -12,7 +12,10 @@ import {
   markToolGuardCorrectionPending,
   shouldIssueToolGuardCorrection,
 } from '../infra/opencode/tool-guard.js';
-import type { OpenCodeStreamEvent } from '../infra/opencode/OpenCodeStreamHandler.js';
+import {
+  OPENCODE_STREAM_EVENT_LIMIT,
+  type OpenCodeStreamEvent,
+} from '../infra/opencode/OpenCodeStreamHandler.js';
 import {
   computeToolInputHash,
   computeToolResultHash,
@@ -31,6 +34,7 @@ const ENV_KEYS = [
   'TAKT_OPENCODE_TOOL_SIGNATURE_REPEATS',
   'TAKT_OPENCODE_TOOL_SUCCESS_REPEATS',
   'TAKT_OPENCODE_TOOL_RESULT_STAGNATION_REPEATS',
+  'TAKT_OPENCODE_STREAM_EVENT_LIMIT',
 ] as const;
 
 afterEach(() => {
@@ -129,6 +133,55 @@ describe('OpenCode guard registry / Strategy', () => {
     );
     expect(minimal.enabledGuardIds).toContain('wall-clock');
     expect(minimal.enabledGuardIds).toContain('exact-loop');
+  });
+
+  it('event count guard は既定で 500,000 を使う', () => {
+    expect(OPENCODE_STREAM_EVENT_LIMIT).toBe(500_000);
+    expect(resolveOpenCodeGuardSuite(undefined, 'opencode/big-pickle').policy.streamEventLimit)
+      .toBe(500_000);
+  });
+
+  it('event count guard は delta と part.updated を除外し、上限ちょうどを受理して +1 で失敗する', () => {
+    const suite = resolveOpenCodeGuardSuite({ profile: 'minimal', eventLimit: 2 }, 'opencode/big-pickle');
+    const deltaEvent = {
+      type: 'message.part.delta',
+      properties: {
+        sessionID: 'session-1',
+        partID: 'text-1',
+        field: 'text',
+        delta: 'x',
+        guardPartType: 'text',
+      },
+    } as OpenCodeStreamEvent;
+    const updatedEvent = {
+      type: 'message.part.updated',
+      properties: {
+        part: { id: 'text-1', sessionID: 'session-1', type: 'text', text: 'x' },
+      },
+    } as OpenCodeStreamEvent;
+
+    expect(suite.onEvent(deltaEvent).failure).toBeUndefined();
+    expect(suite.onEvent(updatedEvent).failure).toBeUndefined();
+    expect(suite.onEvent(completedMessage('message-1')).failure).toBeUndefined();
+    expect(suite.onEvent(completedMessage('message-2')).failure).toBeUndefined();
+    expect(suite.onEvent(completedMessage('message-3')).failure).toMatchObject({
+      guardId: 'event-count',
+      verdict: { reason: 'OpenCode stream tracking limit exceeded: event_count' },
+    });
+  });
+
+  it('TAKT_OPENCODE_STREAM_EVENT_LIMIT は guard 設定を上書きする', () => {
+    process.env.TAKT_OPENCODE_STREAM_EVENT_LIMIT = '3';
+
+    const suite = resolveOpenCodeGuardSuite({ eventLimit: 2 }, 'opencode/big-pickle');
+
+    expect(suite.policy.streamEventLimit).toBe(3);
+    expect(suite.onEvent(completedMessage('message-1')).failure).toBeUndefined();
+    expect(suite.onEvent(completedMessage('message-2')).failure).toBeUndefined();
+    expect(suite.onEvent(completedMessage('message-3')).failure).toBeUndefined();
+    expect(suite.onEvent(completedMessage('message-4')).failure).toMatchObject({
+      guardId: 'event-count',
+    });
   });
 
   it('mandatory guard は minimal・未知 profile・設定キーで無効化できない', () => {
@@ -452,7 +505,7 @@ describe('OpenCode guard suite', () => {
   );
 
   it('廃止済み tool guard env は値を無視して各変数につき一度だけ警告する', () => {
-    const deprecated = ENV_KEYS.slice(4);
+    const deprecated = ENV_KEYS.slice(4, -1);
     for (const key of deprecated) process.env[key] = '1';
     const emitWarning = vi.spyOn(process, 'emitWarning').mockImplementation(() => undefined);
 

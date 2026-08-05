@@ -36,6 +36,7 @@ type RawProviderOptions = {
       profile?: OpenCodeGuardProfile;
       model_profiles?: Record<string, OpenCodeGuardProfile>;
       call_timeout_ms?: number;
+      event_limit?: number;
       text_byte_limit?: number;
       reasoning_byte_limit?: number;
     };
@@ -237,6 +238,9 @@ export function normalizeProviderOptions(
               ...(options.opencode.guards.call_timeout_ms !== undefined
                 ? { callTimeoutMs: options.opencode.guards.call_timeout_ms }
                 : {}),
+              ...(options.opencode.guards.event_limit !== undefined
+                ? { eventLimit: options.opencode.guards.event_limit }
+                : {}),
               ...(options.opencode.guards.text_byte_limit !== undefined
                 ? { textByteLimit: options.opencode.guards.text_byte_limit }
                 : {}),
@@ -361,6 +365,9 @@ export function mergeProviderOptions(
               : {}),
             ...(layer.opencode.guards.callTimeoutMs !== undefined
               ? { callTimeoutMs: layer.opencode.guards.callTimeoutMs }
+              : {}),
+            ...(layer.opencode.guards.eventLimit !== undefined
+              ? { eventLimit: layer.opencode.guards.eventLimit }
               : {}),
             ...(layer.opencode.guards.textByteLimit !== undefined
               ? { textByteLimit: layer.opencode.guards.textByteLimit }
@@ -684,6 +691,12 @@ export function resolveEffectiveProviderOptions(
     stepOptions?.opencode?.guards?.callTimeoutMs,
     resolveProviderOptionOrigin(originResolver, 'opencode.guards.callTimeoutMs', source),
   );
+  const opencodeGuardEventLimit = selectProviderValue(
+    resolvedConfigOptions.opencode?.guards?.eventLimit,
+    personaOptions?.opencode?.guards?.eventLimit,
+    stepOptions?.opencode?.guards?.eventLimit,
+    resolveProviderOptionOrigin(originResolver, 'opencode.guards.eventLimit', source),
+  );
   const opencodeGuardTextByteLimit = selectProviderValue(
     resolvedConfigOptions.opencode?.guards?.textByteLimit,
     personaOptions?.opencode?.guards?.textByteLimit,
@@ -761,6 +774,7 @@ export function resolveEffectiveProviderOptions(
       || opencodeGuardProfile !== undefined
       || opencodeGuardModelProfiles !== undefined
       || opencodeGuardCallTimeoutMs !== undefined
+      || opencodeGuardEventLimit !== undefined
       || opencodeGuardTextByteLimit !== undefined
       || opencodeGuardReasoningByteLimit !== undefined
       ? {
@@ -771,6 +785,7 @@ export function resolveEffectiveProviderOptions(
             ...(opencodeGuardProfile !== undefined
               || opencodeGuardModelProfiles !== undefined
               || opencodeGuardCallTimeoutMs !== undefined
+              || opencodeGuardEventLimit !== undefined
               || opencodeGuardTextByteLimit !== undefined
               || opencodeGuardReasoningByteLimit !== undefined
               ? {
@@ -781,6 +796,9 @@ export function resolveEffectiveProviderOptions(
                       : {}),
                     ...(opencodeGuardCallTimeoutMs !== undefined
                       ? { callTimeoutMs: opencodeGuardCallTimeoutMs }
+                      : {}),
+                    ...(opencodeGuardEventLimit !== undefined
+                      ? { eventLimit: opencodeGuardEventLimit }
                       : {}),
                     ...(opencodeGuardTextByteLimit !== undefined
                       ? { textByteLimit: opencodeGuardTextByteLimit }
@@ -928,6 +946,7 @@ export const PROVIDER_OPTION_PATHS = [
   'opencode.guards.profile',
   'opencode.guards.modelProfiles',
   'opencode.guards.callTimeoutMs',
+  'opencode.guards.eventLimit',
   'opencode.guards.textByteLimit',
   'opencode.guards.reasoningByteLimit',
   'copilot.effort',

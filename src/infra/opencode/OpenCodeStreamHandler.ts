@@ -194,7 +194,20 @@ export interface StreamTrackingState {
   exhausted: boolean;
 }
 
-export const OPENCODE_STREAM_EVENT_LIMIT = 10_000;
+// このガードが守るのは「コンテンツを伴わないイベント洪水」だけ。コンテンツを伴う
+// 暴走は text/reasoning の容量上限が受け持つ。よって上限は、容量上限より先に
+// binding しない位置に置く — さもないと実測を根拠に決めた容量上限の手前で
+// このガードが割り込み、主従が逆転する。
+//
+// 実測（ollama-cloud/deepseek-v4-flash、レビュー1本あたり reasoning 約10万字）:
+// 成功したレビューでもイベント数が 8,816 / 9,662 に達した（旧上限 10,000 を誤爆）。
+// 約11文字あたり1イベントの比率から、reasoning 上限 4MiB 相当の生成は
+// 13万〜36万イベントに達しうる。
+//
+// イベント洪水は毎秒数千の規模なので、この値でも数分以内に検出できる。一方、
+// 正常な生成はトークン生成速度に律速されるため到達しない。ガードは整数カウンタ
+// だけを保持するので、上限を上げてもメモリコストは増えない。
+export const OPENCODE_STREAM_EVENT_LIMIT = 500_000;
 export const OPENCODE_STREAM_ID_LIMIT = 8_192;
 // 健全な implement 実行の実測は text 65.5KB / reasoning 28.4KB（13分・3.5分）。
 // この上限は劣化検出器ではなく「どう考えても異常な量」を止めるバックストップ

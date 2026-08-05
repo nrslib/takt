@@ -796,6 +796,9 @@ export function denormalizeProviderOptions(
               ...(providerOptions.opencode.guards.callTimeoutMs !== undefined
                 ? { call_timeout_ms: providerOptions.opencode.guards.callTimeoutMs }
                 : {}),
+              ...(providerOptions.opencode.guards.eventLimit !== undefined
+                ? { event_limit: providerOptions.opencode.guards.eventLimit }
+                : {}),
               ...(providerOptions.opencode.guards.textByteLimit !== undefined
                 ? { text_byte_limit: providerOptions.opencode.guards.textByteLimit }
                 : {}),

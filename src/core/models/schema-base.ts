@@ -95,6 +95,7 @@ const OpenCodeGuardOptionShape = {
     z.enum(OPENCODE_GUARD_PROFILES),
   ).optional(),
   call_timeout_ms: z.number().int().min(60_000).max(86_400_000).optional(),
+  event_limit: z.number().int().positive().optional(),
   text_byte_limit: z.number().int().positive().optional(),
   reasoning_byte_limit: z.number().int().positive().optional(),
 };
@@ -579,6 +580,7 @@ const NormalizedStepProviderOptionsSchema = z.object({
         z.enum(OPENCODE_GUARD_PROFILES),
       ).optional(),
       callTimeoutMs: z.number().int().min(60_000).max(86_400_000).optional(),
+      eventLimit: z.number().int().positive().optional(),
       textByteLimit: z.number().int().positive().optional(),
       reasoningByteLimit: z.number().int().positive().optional(),
     }).strict().optional(),

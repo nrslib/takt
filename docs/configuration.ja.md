@@ -284,6 +284,7 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 #         "opencode/big-pickle": minimal
 #         "lmstudio/*": standard
 #       call_timeout_ms: 3600000
+#       event_limit: 500000
 #       text_byte_limit: 1048576
 #       reasoning_byte_limit: 4194304
 #   kiro:
@@ -321,7 +322,8 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 
 OpenCode の単一 call には既定で 3,600,000 ms（60分）の wall-clock 上限があります。
 60分を超える可能性がある call は、60,000〜86,400,000 の
-`call_timeout_ms` を明示してください。`text_byte_limit` の既定値は 1 MiB、
+`call_timeout_ms` を明示してください。`event_limit` の既定値は 500,000 で、
+`TAKT_OPENCODE_STREAM_EVENT_LIMIT` でも上書きできます。`text_byte_limit` の既定値は 1 MiB、
 `reasoning_byte_limit` は 4 MiB です。
 
 旧 `TAKT_OPENCODE_TOOL_ERROR_BUDGET`、

@@ -48,6 +48,8 @@ export interface OpenCodeGuardOptions {
   modelProfiles?: Record<string, OpenCodeGuardProfile>;
   /** 呼び出し全体の wall-clock 上限 (ms)。60,000〜86,400,000 の整数。0 不可。既定 3,600,000。 */
   callTimeoutMs?: number;
+  /** 構造イベント数上限。既定 100,000。 */
+  eventLimit?: number;
   /** 可視テキスト累計バイト上限。既定 1MiB。 */
   textByteLimit?: number;
   /** reasoning 累計バイト上限。既定 4MiB。 */

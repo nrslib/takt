@@ -15,6 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- OpenCode's structural event-count guard now defaults to 500,000 instead of 10,000 and supports `provider_options.opencode.guards.event_limit` and `TAKT_OPENCODE_STREAM_EVENT_LIMIT`, preventing healthy long-reasoning reviews from being aborted.
 - Fresh installs no longer break the ACP integration (#1171). `@agentclientprotocol/sdk` is bumped to `^1.3.0` and the ACP entrypoint follows its renamed MCP server id field and extended elicitation response contract; a lockfile-less install had resolved 1.3.0 against code written for 1.0.x.
 
 ## [0.55.0] - 2026-08-03

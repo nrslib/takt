@@ -90,6 +90,7 @@ export function resolveOpenCodeGuardPolicy(
   profile: OpenCodeGuardProfile,
 ): ResolvedOpenCodeGuardPolicy {
   warnDeprecatedGuardEnvironment();
+  assertPositiveLimit('event limit', guards?.eventLimit);
   assertPositiveLimit('text byte limit', guards?.textByteLimit);
   assertPositiveLimit('reasoning byte limit', guards?.reasoningByteLimit);
   return {
@@ -99,7 +100,10 @@ export function resolveOpenCodeGuardPolicy(
     messageCycleBudget: resolvePositiveEnvInt('TAKT_OPENCODE_MESSAGE_CYCLE_BUDGET', 120),
     exactToolRepeatLimit: OPENCODE_EXACT_TOOL_REPEAT_LIMIT,
     streamLimits: resolveOpenCodeStreamLimits(guards),
-    streamEventLimit: OPENCODE_STREAM_EVENT_LIMIT,
+    streamEventLimit: resolvePositiveEnvInt(
+      'TAKT_OPENCODE_STREAM_EVENT_LIMIT',
+      guards?.eventLimit ?? OPENCODE_STREAM_EVENT_LIMIT,
+    ),
     sensitiveCandidateLimit: MAX_TRACKED_SENSITIVE_VALUES,
     sensitiveCandidateByteLimit: MAX_TRACKED_SENSITIVE_VALUE_BYTES,
     sensitiveSourceScanByteLimit: MAX_INSPECTED_BYTES_PER_SOURCE,

@@ -712,6 +712,7 @@ describe('providerOptionsContract', () => {
       'provider_options.opencode.guards.profile',
       'provider_options.opencode.guards.model_profiles',
       'provider_options.opencode.guards.call_timeout_ms',
+      'provider_options.opencode.guards.event_limit',
       'provider_options.opencode.guards.text_byte_limit',
       'provider_options.opencode.guards.reasoning_byte_limit',
       'provider_options.claude.base_url',
@@ -737,6 +738,8 @@ describe('providerOptionsContract', () => {
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.opencode.allowed_tools');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.opencode.guards');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.opencode.guards.model_profiles');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.opencode.guards.event_limit');
+    expect(PROVIDER_OPTIONS_TRACKED_KEYS).toContain('provider_options.opencode.guards.event_limit');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.copilot.effort');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.claude_terminal.timeout_ms');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.kiro');
@@ -774,6 +777,8 @@ describe('providerOptionsContract', () => {
       .toBe('provider_options.opencode.allowed_tools');
     expect(toProviderOptionsTracePath('opencode.guards.modelProfiles'))
       .toBe('provider_options.opencode.guards.model_profiles');
+    expect(toProviderOptionsTracePath('opencode.guards.eventLimit'))
+      .toBe('provider_options.opencode.guards.event_limit');
     expect(toProviderOptionsTracePath('claudeTerminal.transcriptPollIntervalMs'))
       .toBe('provider_options.claude_terminal.transcript_poll_interval_ms');
     expect(toProviderOptionsTracePath('kiro.agent'))
@@ -788,7 +793,11 @@ describe('providerOptionsContract', () => {
         reasoningEffort: 'high',
         skills: { repo: false, user: true },
       },
-      opencode: { variant: 'high', allowedTools: ['read', 'grep'] },
+      opencode: {
+        variant: 'high',
+        allowedTools: ['read', 'grep'],
+        guards: { eventLimit: 100_000 },
+      },
       claude: {
         baseUrl: 'http://127.0.0.1:8787',
         effort: 'medium',
@@ -805,6 +814,7 @@ describe('providerOptionsContract', () => {
       'codex.skills.user',
       'opencode.variant',
       'opencode.allowedTools',
+      'opencode.guards.eventLimit',
       'claude.baseUrl',
       'claude.effort',
       'claude.sandbox.excludedCommands',
@@ -905,6 +915,7 @@ describe('claude_terminal provider_options normalization', () => {
             profile: 'standard',
             modelProfiles: { 'global/*': 'minimal', 'shared/*': 'standard' },
             callTimeoutMs: 120_000,
+            eventLimit: 2048,
             textByteLimit: 1024,
           },
         },
@@ -913,6 +924,7 @@ describe('claude_terminal provider_options normalization', () => {
         opencode: {
           guards: {
             modelProfiles: { 'step/*': 'minimal' },
+            eventLimit: 8192,
             reasoningByteLimit: 4096,
           },
         },
@@ -923,6 +935,7 @@ describe('claude_terminal provider_options normalization', () => {
       profile: 'standard',
       modelProfiles: { 'step/*': 'minimal' },
       callTimeoutMs: 120_000,
+      eventLimit: 8192,
       textByteLimit: 1024,
       reasoningByteLimit: 4096,
     });
@@ -967,6 +980,7 @@ describe('claude_terminal provider_options normalization', () => {
       'claudeTerminal.timeoutMs',
       'claudeTerminal.keepSession',
       'claudeTerminal.transcriptPollIntervalMs',
+      'opencode.guards.eventLimit',
     ]));
   });
 

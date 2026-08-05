@@ -356,6 +356,8 @@ describe('Schemas accept opencode provider', () => {
 
   it.each([
     { profile: 'disabled' },
+    { event_limit: 0 },
+    { event_limit: 1.5 },
     { call_timeout_ms: 59_999 },
     { call_timeout_ms: 86_400_001 },
     { call_timeout_ms: 60_000.5 },

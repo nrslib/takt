@@ -277,6 +277,7 @@ describe('OpenCodeProvider tool naming addendum', () => {
       '      model_profiles:',
       '        "opencode/big-*": minimal',
       '      call_timeout_ms: 120000',
+      '      event_limit: 4096',
       '      text_byte_limit: 2048',
     ].join('\n')) as unknown;
     const stepRaw = parseYaml([
@@ -305,6 +306,7 @@ describe('OpenCodeProvider tool naming addendum', () => {
       profile: 'standard',
       modelProfiles: { 'opencode/big-*': 'minimal' },
       callTimeoutMs: 120_000,
+      eventLimit: 4096,
       textByteLimit: 2048,
       reasoningByteLimit: 8192,
     });
@@ -312,6 +314,7 @@ describe('OpenCodeProvider tool naming addendum', () => {
     expect(suite.profile).toBe('minimal');
     expect(suite.policy).toMatchObject({
       callTimeoutMs: 120_000,
+      streamEventLimit: 4096,
       streamLimits: { textByteLimit: 2048, reasoningByteLimit: 8192 },
     });
   });
