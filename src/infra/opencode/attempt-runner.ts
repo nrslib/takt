@@ -35,6 +35,7 @@ import {
   flushSensitiveTextStreams,
   handlePartUpdated,
   OPENCODE_STREAM_TRACKING_LIMIT_MESSAGE,
+  trackOpenCodeReasoningBytes,
 } from './OpenCodeStreamHandler.js';
 import {
   buildToolGuardCorrectionPrompt,
@@ -48,6 +49,7 @@ import {
 } from './tool-guard.js';
 import {
   resolveOpenCodeGuardSuite,
+  describeOpenCodeIdleTimeout,
   type OpenCodeGuardAbortKind,
   type OpenCodeGuardEvaluation,
   type OpenCodeGuardSuite,
@@ -826,7 +828,7 @@ export class OpenCodeAttemptRunner {
   callState: OpenCodeCallState,
   ): Promise<AgentResponse | typeof RETRY_ATTEMPT> {
   const streamAbortController = new AbortController();
-  const timeoutMessage = `OpenCode stream timed out after ${Math.round(guardSuite.policy.streamIdleTimeoutMs / 60000)} minutes of inactivity`;
+  const timeoutMessage = describeOpenCodeIdleTimeout(guardSuite.policy.streamIdleTimeoutMs);
   let abortCause: OpenCodeAbortCause | undefined;
   let diagRef: StreamDiagnostics | undefined;
   let release: (() => void) | undefined;
@@ -1215,8 +1217,9 @@ export class OpenCodeAttemptRunner {
       }
     };
 
-    const consumeReasoningDelta = (partId: string, rawDelta: string): void => {
-      if (!rawDelta) return;
+    const consumeReasoningDelta = (partId: string, rawDelta: string): boolean => {
+      if (!rawDelta) return true;
+      if (!trackOpenCodeReasoningBytes(state, rawDelta)) return false;
       const fallbackRedactor = state.textRedactors.get(partId);
       if (fallbackRedactor !== undefined) {
         state.textRedactors.delete(partId);
@@ -1233,6 +1236,7 @@ export class OpenCodeAttemptRunner {
       const prevOffset = state.thinkingOffsets.get(partId) ?? 0;
       const nextOffset = prevOffset + rawDelta.length;
       state.thinkingOffsets.set(partId, nextOffset);
+      return true;
     };
 
     // for-await 単体だと、タイマーが abort してもイベントが来るまで
@@ -1332,7 +1336,12 @@ export class OpenCodeAttemptRunner {
             id: string;
             text: string;
           };
-          consumeReasoningDelta(reasoningPart.id, delta ?? reasoningPart.text);
+          if (!consumeReasoningDelta(reasoningPart.id, delta ?? reasoningPart.text)) {
+            success = false;
+            failureMessage = describeOpenCodeStreamTrackingLimitFailure(state.trackingLimitReason);
+            diag.onStreamError(sseEvent.type, failureMessage);
+            break;
+          }
           continue;
         }
 
@@ -1397,7 +1406,12 @@ export class OpenCodeAttemptRunner {
         if (deltaProps.field === 'text' && deltaProps.delta) {
           const partType = deltaProps.guardPartType;
           if (partType === 'reasoning') {
-            consumeReasoningDelta(deltaProps.partID, deltaProps.delta);
+            if (!consumeReasoningDelta(deltaProps.partID, deltaProps.delta)) {
+              success = false;
+              failureMessage = describeOpenCodeStreamTrackingLimitFailure(state.trackingLimitReason);
+              diag.onStreamError(sseEvent.type, failureMessage);
+              break;
+            }
           } else if (partType === 'text' || partType === undefined) {
             consumeTextDelta(deltaProps.partID, deltaProps.delta);
           }

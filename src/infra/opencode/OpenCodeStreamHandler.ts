@@ -18,7 +18,6 @@ import {
   maskOpenCodeToolContentInText,
   sanitizeOpenCodeToolInput,
 } from './tool-input-sanitizer.js';
-import { computeToolInputHash } from './tool-call-tuple.js';
 
 /** Subset of OpenCode Part types relevant for stream handling */
 export interface OpenCodeTextPart {
@@ -185,7 +184,6 @@ export interface StreamTrackingState {
   thinkingRedactors: Map<string, SensitiveTextStreamRedactor>;
   partTypes: Map<string, string>;
   startedTools: Set<string>;
-  latestToolInputHashes: Map<string, string>;
   sensitiveSources: BoundedSensitiveValues;
   eventCount: number;
   textBytes: number;
@@ -243,7 +241,6 @@ export function createStreamTrackingState(
     thinkingRedactors: new Map<string, SensitiveTextStreamRedactor>(),
     partTypes: new Map<string, string>(),
     startedTools: new Set<string>(),
-    latestToolInputHashes: new Map<string, string>(),
     sensitiveSources: sensitiveSources ?? createBoundedSensitiveValues(),
     eventCount: 0,
     textBytes: 0,
@@ -294,7 +291,6 @@ function exhaustStreamTrackingState(
   state.thinkingRedactors.clear();
   state.partTypes.clear();
   state.startedTools.clear();
-  state.latestToolInputHashes.clear();
   state.trackedIds.clear();
   state.sensitiveSources.exhaust();
   state.exhausted = true;
@@ -598,18 +594,10 @@ function handleToolPartUpdated(
 ): boolean {
   const toolId = toolPart.callID || toolPart.id;
   const isNewTool = !state.startedTools.has(toolId);
-  const inputHash = computeToolInputHash(toolPart.state.input);
-  const inputChanged = inputHash === undefined
-    || state.latestToolInputHashes.get(toolId) !== inputHash;
-  if (inputHash !== undefined) state.latestToolInputHashes.set(toolId, inputHash);
   if (isNewTool) {
     state.startedTools.add(toolId);
   }
-  // 予算は保持候補ベース（BoundedSensitiveValues 参照）なので、同一入力の
-  // 再収集は候補 Set の重複排除で無害。未変更入力はスキャンコストだけ省く。
-  if (isNewTool || inputChanged) {
-    state.sensitiveSources.collect(toolPart.state.input);
-  }
+  state.sensitiveSources.collect(toolPart.state.input);
   if (state.sensitiveSources.exhausted) {
     exhaustStreamTrackingState(state, 'sensitive_sources');
     return false;

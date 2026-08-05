@@ -1,6 +1,10 @@
 import type { OpenCodeStreamEvent } from '../OpenCodeStreamHandler.js';
 import type { OpenCodeGuard, OpenCodeGuardLifecycleScope, OpenCodeGuardVerdict } from './types.js';
 
+export function describeOpenCodeIdleTimeout(timeoutMs: number): string {
+  return `OpenCode stream timed out after ${Math.round(timeoutMs / 60000)} minutes of inactivity`;
+}
+
 export class WallClockGuard implements OpenCodeGuard {
   readonly id = 'wall-clock';
   readonly layer = 'time' as const;
@@ -11,13 +15,15 @@ export class WallClockGuard implements OpenCodeGuard {
   start(scope: OpenCodeGuardLifecycleScope, onVerdict: (verdict: OpenCodeGuardVerdict) => void): void {
     if (scope !== 'call') return;
     this.stop('call');
-    this.timeoutId = setTimeout(() => {
+    const timeoutId = setTimeout(() => {
       onVerdict({
         action: 'fail',
         reason: `OpenCode call wall-clock timeout exceeded (${this.timeoutMs} ms)`,
         abortKind: 'deadline',
       });
     }, this.timeoutMs);
+    timeoutId.unref();
+    this.timeoutId = timeoutId;
   }
 
   stop(scope: OpenCodeGuardLifecycleScope): void {
@@ -59,7 +65,7 @@ export class IdleTimeoutGuard implements OpenCodeGuard {
     this.timeoutId = setTimeout(() => {
       this.onVerdict?.({
         action: 'fail',
-        reason: `OpenCode stream timed out after ${Math.round(this.timeoutMs / 60000)} minutes of inactivity`,
+        reason: describeOpenCodeIdleTimeout(this.timeoutMs),
       });
     }, this.timeoutMs);
   }

@@ -1307,7 +1307,7 @@ describe('OpenCodeClient tool loop recovery', () => {
     expect(promptTextOfCall(promptAsync, 2)).toContain('read files');
   });
 
-  it('撤去した累積エラー予算は2件の一般エラーで発火しない', async () => {
+  it('連続閾値未満の一般エラー2件では正常完了する', async () => {
       const { OpenCodeClient } = await import('../infra/opencode/client.js');
       const events = [
         {
@@ -1544,7 +1544,7 @@ describe('OpenCodeClient tool loop recovery', () => {
     }
   });
 
-  it('撤去した累積エラー総数では回転ツール名の6エラーを停止しない', async () => {
+  it('ツール名が回転する6件のエラーは連続閾値に達せず正常完了する', async () => {
       const result = await runBudgetScenario('session-degenerate', ['read', 'write', 'glob', 'grep', 'list', 'edit'].map((tool, i) => ({
         type: 'message.part.updated',
         properties: {

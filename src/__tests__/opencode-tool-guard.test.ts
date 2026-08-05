@@ -17,6 +17,8 @@ import {
   computeToolInputHash,
   computeToolResultHash,
 } from '../infra/opencode/tool-call-tuple.js';
+import { ExactLoopGuard } from '../infra/opencode/guards/integrity-guards.js';
+import { SensitiveBudgetGuard } from '../infra/opencode/guards/resource-guards.js';
 import { createBoundedSensitiveValues } from '../shared/utils/sensitiveText.js';
 
 const ENV_KEYS = [
@@ -190,6 +192,21 @@ describe('OpenCode guard suite', () => {
     });
   });
 
+  it('exact tool outcome streak は attempt 境界を越えて持ち越さない', () => {
+    const suite = resolveOpenCodeGuardSuite(undefined, 'opencode/big-pickle');
+    suite.startAttempt(() => undefined);
+    for (let index = 1; index < 12; index += 1) {
+      expect(suite.onEvent(completedTool(`first-${index}`, { filePath: 'a.ts' }, 'same')).failure)
+        .toBeUndefined();
+    }
+    suite.stopAttempt();
+
+    suite.startAttempt(() => undefined);
+    expect(suite.onEvent(completedTool('second-1', { filePath: 'a.ts' }, 'same')).failure)
+      .toBeUndefined();
+    suite.stopAttempt();
+  });
+
   it('結果が変わる正当な polling は完全一致ストリークをリセットする', () => {
     const suite = resolveOpenCodeGuardSuite(undefined, 'opencode/big-pickle');
     for (let index = 0; index < 20; index += 1) {
@@ -241,6 +258,21 @@ describe('OpenCode guard suite', () => {
     expect(suite.onEvent(completedMessage('message-5')).failure).toMatchObject({ guardId: 'cycle-budget' });
   });
 
+  it('cycle budget は attempt 境界を越えて持ち越さない', () => {
+    process.env.TAKT_OPENCODE_MESSAGE_CYCLE_BUDGET = '3';
+    const suite = resolveOpenCodeGuardSuite(undefined, 'opencode/big-pickle');
+    suite.startAttempt(() => undefined);
+    expect(suite.onEvent(completedMessage('first-1')).failure).toBeUndefined();
+    expect(suite.onEvent(completedMessage('first-2')).failure).toBeUndefined();
+    suite.stopAttempt();
+
+    suite.startAttempt(() => undefined);
+    expect(suite.onEvent(completedMessage('second-1')).failure).toBeUndefined();
+    expect(suite.onEvent(completedMessage('second-2')).failure).toBeUndefined();
+    expect(suite.onEvent(completedMessage('second-3')).failure).toMatchObject({ guardId: 'cycle-budget' });
+    suite.stopAttempt();
+  });
+
   it('strict loop は minimal でも有効で correction 用の型付き失敗を返す', () => {
     const suite = resolveOpenCodeGuardSuite({ profile: 'minimal' }, 'opencode/big-pickle');
     const message = "Model tried to call unavailable tool 'run'";
@@ -250,6 +282,65 @@ describe('OpenCode guard suite', () => {
       guardId: 'exact-loop',
       recoveryFailure: { kind: 'unavailable_tool_loop', tool: 'run' },
     });
+  });
+
+  it('strict loop の観測済み callID は attempt 境界で破棄する', () => {
+    const policy = resolveOpenCodeGuardSuite(undefined, 'opencode/big-pickle').policy;
+    const guard = new ExactLoopGuard(policy);
+    const message = "Model tried to call unavailable tool 'run'";
+
+    guard.start('attempt');
+    expect(guard.onEvent(errorTool('shared-call', 'run', message))).toBeUndefined();
+    guard.start('attempt');
+    expect(guard.onEvent(errorTool('shared-call', 'run', message))).toBeUndefined();
+    expect(guard.onEvent(errorTool('next-call', 'run', message))).toMatchObject({
+      action: 'fail',
+      reason: expect.stringContaining('unavailable tool loop'),
+    });
+  });
+
+  it('sensitive budget の未設定 exhaust reason は unknown として分類可能な接頭辞を保つ', () => {
+    const sensitiveValues = createBoundedSensitiveValues();
+    sensitiveValues.exhaust();
+    const guard = new SensitiveBudgetGuard(sensitiveValues);
+
+    expect(guard.onInitialSource({})).toEqual({
+      action: 'fail',
+      reason: 'OpenCode sensitive value budget exceeded: unknown',
+    });
+  });
+
+  it('tool input hash は sensitive budget guard だけが保持し terminal と attempt で解放する', () => {
+    const sensitiveValues = createBoundedSensitiveValues();
+    const collect = vi.spyOn(sensitiveValues, 'collect');
+    const guard = new SensitiveBudgetGuard(sensitiveValues);
+    const toolEvent = (status: 'pending' | 'running' | 'completed'): OpenCodeStreamEvent => ({
+      type: 'message.part.updated',
+      properties: {
+        part: {
+          id: 'part-1',
+          sessionID: 'session-1',
+          type: 'tool',
+          callID: 'call-1',
+          tool: 'read',
+          state: status === 'completed'
+            ? { status, input: { path: 'a.ts' }, output: 'ok', title: 'read' }
+            : { status, input: { path: 'a.ts' } },
+        },
+      },
+    });
+
+    guard.start('attempt');
+    guard.onEvent(toolEvent('running'));
+    guard.onEvent(toolEvent('running'));
+    guard.onEvent(toolEvent('completed'));
+    expect(collect).toHaveBeenCalledTimes(1);
+
+    guard.onEvent(toolEvent('pending'));
+    expect(collect).toHaveBeenCalledTimes(2);
+    guard.start('attempt');
+    guard.onEvent(toolEvent('pending'));
+    expect(collect).toHaveBeenCalledTimes(3);
   });
 
   it('consecutive-errors は standard で発火し minimal では選択されない', () => {
@@ -336,6 +427,29 @@ describe('OpenCode guard suite', () => {
     expect(suite.onEvent(reasoningEvent('x'.repeat(4 * 1024 * 1024))).failure).toBeUndefined();
     expect(suite.onEvent(reasoningEvent('x')).failure).toMatchObject({ guardId: 'reasoning-volume' });
   });
+
+  it.each(['text', 'reasoning'] as const)(
+    '%s volume guard は同一 snapshot の再送を新規出力として課金しない',
+    (partType) => {
+      const suite = resolveOpenCodeGuardSuite({
+        profile: 'minimal',
+        textByteLimit: 5,
+        reasoningByteLimit: 5,
+      }, 'opencode/big-pickle');
+      const snapshot = (text: string): OpenCodeStreamEvent => ({
+        type: 'message.part.updated',
+        properties: {
+          part: { id: `${partType}-1`, sessionID: 'session-1', type: partType, text },
+        },
+      } as OpenCodeStreamEvent);
+
+      expect(suite.onEvent(snapshot('12345')).failure).toBeUndefined();
+      expect(suite.onEvent(snapshot('12345')).failure).toBeUndefined();
+      expect(suite.onEvent(snapshot('123456')).failure).toMatchObject({
+        guardId: `${partType}-volume`,
+      });
+    },
+  );
 
   it('廃止済み tool guard env は値を無視して各変数につき一度だけ警告する', () => {
     const deprecated = ENV_KEYS.slice(4);

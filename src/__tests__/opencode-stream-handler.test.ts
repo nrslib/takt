@@ -33,7 +33,6 @@ import {
   maskOpenCodeToolContentInText,
   sanitizeOpenCodeToolInput,
 } from '../infra/opencode/tool-input-sanitizer.js';
-import { computeToolInputHash } from '../infra/opencode/tool-call-tuple.js';
 import { startTimerPump } from './helpers/opencode-client-test-helpers.js';
 
 function buildProviderEventCallback(
@@ -53,7 +52,6 @@ describe('createStreamTrackingState', () => {
     expect(state.textOffsets.size).toBe(0);
     expect(state.thinkingOffsets.size).toBe(0);
     expect(state.startedTools.size).toBe(0);
-    expect(state.latestToolInputHashes.size).toBe(0);
     expect(state.textBytes).toBe(0);
   });
 });
@@ -647,7 +645,7 @@ describe('handlePartUpdated', () => {
         expect(jsonl).not.toContain(secret);
         expect(jsonl).toContain('[REDACTED]');
         expect(jsonl.match(/"event_type":"tool_use"/g)).toHaveLength(1);
-        expect(state.latestToolInputHashes.get('call-late')).toBe(computeToolInputHash({ token: secret }));
+        expect(state.sensitiveSources.values.has(secret)).toBe(true);
       } finally {
         rmSync(logsDir, { recursive: true, force: true });
       }
@@ -796,7 +794,6 @@ describe('handlePartUpdated', () => {
     }
 
     expect(state.exhausted).toBe(true);
-    expect(state.latestToolInputHashes.size).toBe(0);
     expect(state.sensitiveSources.values.size).toBe(0);
     expect(sanitizeSensitiveTextWithKnownValues('unknown-secret', state.sensitiveSources)).toBe('[REDACTED]');
   });

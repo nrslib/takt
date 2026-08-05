@@ -310,7 +310,7 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 #         model: ollama-cloud/gemma4:31b
 ```
 
-#### OpenCode execution guards
+### OpenCode execution guards
 
 `provider_options.opencode.guards.profile` is `standard` by default. `minimal`
 disables heuristic loop detection only; time, bounded-resource, integrity, and

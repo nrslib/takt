@@ -9,7 +9,11 @@ import type {
 } from '../OpenCodeStreamHandler.js';
 import { computeToolInputHash } from '../tool-call-tuple.js';
 import type { ResolvedOpenCodeGuardPolicy } from './policy.js';
-import type { OpenCodeGuard, OpenCodeGuardVerdict } from './types.js';
+import type {
+  OpenCodeGuard,
+  OpenCodeGuardLifecycleScope,
+  OpenCodeGuardVerdict,
+} from './types.js';
 
 function trackingFailure(reason: string): OpenCodeGuardVerdict {
   return {
@@ -18,28 +22,52 @@ function trackingFailure(reason: string): OpenCodeGuardVerdict {
   };
 }
 
-function guardDelta(event: OpenCodeStreamEvent, partType: string): string | undefined {
+function guardPartKey(sessionId: unknown, partId: unknown): string | undefined {
+  return typeof partId === 'string'
+    ? `${typeof sessionId === 'string' ? sessionId : ''}\0${partId}`
+    : undefined;
+}
+
+function guardDelta(
+  event: OpenCodeStreamEvent,
+  partType: string,
+  offsets: Map<string, number>,
+): string | undefined {
   if (event.type === 'message.part.updated') {
     const part = event.properties.part as OpenCodePart;
     if (part.type !== partType) return undefined;
+    const key = guardPartKey(part.sessionID, part.id);
+    if (key === undefined) return undefined;
     const delta = event.properties.delta;
-    if (typeof delta === 'string') return delta;
+    if (typeof delta === 'string') {
+      offsets.set(key, (offsets.get(key) ?? 0) + delta.length);
+      return delta;
+    }
     const text = (part as { text?: unknown }).text;
-    return typeof text === 'string' ? text : undefined;
+    if (typeof text !== 'string') return undefined;
+    const previous = offsets.get(key) ?? 0;
+    offsets.set(key, text.length);
+    return text.length > previous ? text.slice(previous) : undefined;
   }
   if (event.type !== 'message.part.delta') return undefined;
   const properties = event.properties as Record<string, unknown>;
-  return properties.field === 'text'
+  const delta = properties.field === 'text'
     && properties.guardPartType === partType
     && typeof properties.delta === 'string'
     ? properties.delta
     : undefined;
+  const key = guardPartKey(properties.sessionID, properties.partID);
+  if (delta !== undefined && key !== undefined) {
+    offsets.set(key, (offsets.get(key) ?? 0) + delta.length);
+  }
+  return delta;
 }
 
 abstract class ByteVolumeGuard implements OpenCodeGuard {
   abstract readonly id: string;
   readonly layer = 'resource' as const;
   private bytes = 0;
+  private readonly offsets = new Map<string, number>();
 
   constructor(
     private readonly partType: 'text' | 'reasoning',
@@ -48,7 +76,7 @@ abstract class ByteVolumeGuard implements OpenCodeGuard {
   ) {}
 
   onEvent(event: OpenCodeStreamEvent): OpenCodeGuardVerdict | undefined {
-    const delta = guardDelta(event, this.partType);
+    const delta = guardDelta(event, this.partType, this.offsets);
     if (delta === undefined) return undefined;
     this.bytes += Buffer.byteLength(delta, 'utf8');
     return this.bytes > this.byteLimit ? trackingFailure(this.reason) : undefined;
@@ -116,7 +144,7 @@ export class TrackedIdsGuard implements OpenCodeGuard {
 }
 
 function sensitiveFailure(reason: SensitiveBudgetExhaustReason | undefined): OpenCodeGuardVerdict {
-  const suffix = reason ?? 'source_scan';
+  const suffix = reason ?? 'unknown';
   return {
     action: 'fail',
     reason: `OpenCode sensitive value budget exceeded: ${suffix}`,
@@ -129,6 +157,10 @@ export class SensitiveBudgetGuard implements OpenCodeGuard {
   private readonly latestInputHashes = new Map<string, string>();
 
   constructor(readonly sensitiveValues: BoundedSensitiveValues) {}
+
+  start(scope: OpenCodeGuardLifecycleScope): void {
+    if (scope === 'attempt') this.latestInputHashes.clear();
+  }
 
   onInitialSource(source: unknown): OpenCodeGuardVerdict | undefined {
     return this.collect(source);
@@ -149,9 +181,16 @@ export class SensitiveBudgetGuard implements OpenCodeGuard {
     const inputHash = computeToolInputHash(toolPart.state.input);
     const key = `${toolPart.sessionID}\0${toolPart.callID || toolPart.id}`;
     if (inputHash !== undefined && this.latestInputHashes.get(key) === inputHash) {
+      if (toolPart.state.status === 'completed' || toolPart.state.status === 'error') {
+        this.latestInputHashes.delete(key);
+      }
       return undefined;
     }
     if (inputHash !== undefined) this.latestInputHashes.set(key, inputHash);
-    return this.collect(toolPart.state.input);
+    const verdict = this.collect(toolPart.state.input);
+    if (toolPart.state.status === 'completed' || toolPart.state.status === 'error') {
+      this.latestInputHashes.delete(key);
+    }
+    return verdict;
   }
 }

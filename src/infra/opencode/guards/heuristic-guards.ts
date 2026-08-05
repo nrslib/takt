@@ -95,6 +95,12 @@ export class CycleBudgetGuard implements OpenCodeGuard {
 
   constructor(private readonly limit: number) {}
 
+  start(scope: OpenCodeGuardLifecycleScope): void {
+    if (scope !== 'attempt') return;
+    this.completedMessages.clear();
+    this.cyclesWithoutToolSuccess = 0;
+  }
+
   onToolOutcome(outcome: ToolOutcomeTuple): OpenCodeGuardVerdict | undefined {
     if (outcome.outcome === 'success') this.cyclesWithoutToolSuccess = 0;
     return undefined;

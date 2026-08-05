@@ -46,6 +46,7 @@ export class ExactLoopGuard implements OpenCodeGuard {
     this.unavailableDetector.reset();
     this.invalidArgumentDetector.reset();
     this.editConflictCounts.clear();
+    this.observedErrors.clear();
   }
 
   onEvent(event: OpenCodeStreamEvent): OpenCodeGuardVerdict | undefined {
@@ -135,6 +136,12 @@ export class ExactRepeatStreakGuard implements OpenCodeGuard {
   private streak = 0;
 
   constructor(private readonly limit: number) {}
+
+  start(scope: OpenCodeGuardLifecycleScope): void {
+    if (scope !== 'attempt') return;
+    this.lastKey = undefined;
+    this.streak = 0;
+  }
 
   onToolOutcome(outcome: ToolOutcomeTuple): OpenCodeGuardVerdict | undefined {
     this.streak = outcome.key === this.lastKey ? this.streak + 1 : 1;

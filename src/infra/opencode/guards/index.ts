@@ -16,6 +16,7 @@ export {
   type OpenCodeGuardSuiteResult,
 } from './suite.js';
 export { resolveOpenCodeGuardProfile } from './profile.js';
+export { describeOpenCodeIdleTimeout } from './time-guards.js';
 export type {
   OpenCodeGuard,
   OpenCodeGuardAbortKind,

@@ -1248,6 +1248,29 @@ describe('OpenCodeClient retry', () => {
       .toHaveLength(0);
   });
 
+  it('main reasoning update path rejects output above the 4MiB limit before emitting it', async () => {
+    const overLimit = 'x'.repeat(OPENCODE_STREAM_REASONING_BYTE_LIMIT + 1);
+    runPlans = [{
+      type: 'events',
+      events: [
+        reasoningPartUpdated('session-1', 'reasoning-main', overLimit),
+        { type: 'session.idle', properties: { sessionID: 'session-1' } },
+      ],
+    }];
+    installOpenCodeMock();
+    const onStream = vi.fn();
+
+    const result = await new OpenCodeClient().call('interactive', 'hello', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      onStream,
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('reasoning_bytes');
+    expect(onStream.mock.calls.filter(([event]) => event.type === 'thinking')).toHaveLength(0);
+  });
+
   it('fails text byte tracking with a reason that identifies text_bytes', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const stream = new MockEventStream([

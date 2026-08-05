@@ -310,7 +310,7 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 #         model: ollama-cloud/gemma4:31b
 ```
 
-#### OpenCode 実行ガード
+### OpenCode 実行ガード
 
 `provider_options.opencode.guards.profile` の既定値は `standard` です。
 `minimal` が無効にするのはヒューリスティックなループ検出だけで、時間・有界資源・
