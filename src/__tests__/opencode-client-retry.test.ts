@@ -1271,6 +1271,33 @@ describe('OpenCodeClient retry', () => {
     expect(onStream.mock.calls.filter(([event]) => event.type === 'thinking')).toHaveLength(0);
   });
 
+  it('emits and charges only the unseen suffix of cumulative reasoning updates', async () => {
+    runPlans = [{
+      type: 'events',
+      events: [
+        reasoningPartUpdated('session-1', 'reasoning-main', 'A'),
+        reasoningPartUpdated('session-1', 'reasoning-main', 'AB'),
+        { type: 'session.idle', properties: { sessionID: 'session-1' } },
+      ],
+    }];
+    installOpenCodeMock();
+    const onStream = vi.fn();
+
+    const result = await new OpenCodeClient().call('interactive', 'hello', {
+      cwd: '/tmp',
+      model: 'opencode/big-pickle',
+      guards: { reasoningByteLimit: 2 },
+      onStream,
+    });
+
+    expect(result.status).toBe('done');
+    expect(onStream.mock.calls
+      .map(([event]) => event as { type: string; data?: { thinking?: string } })
+      .filter((event) => event.type === 'thinking')
+      .map((event) => event.data?.thinking ?? '')
+      .join('')).toBe('AB');
+  });
+
   it('fails text byte tracking with a reason that identifies text_bytes', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const stream = new MockEventStream([

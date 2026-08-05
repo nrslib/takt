@@ -1336,7 +1336,9 @@ export class OpenCodeAttemptRunner {
             id: string;
             text: string;
           };
-          if (!consumeReasoningDelta(reasoningPart.id, delta ?? reasoningPart.text)) {
+          const reasoningDelta = delta
+            ?? reasoningPart.text.slice(state.thinkingOffsets.get(reasoningPart.id) ?? 0);
+          if (!consumeReasoningDelta(reasoningPart.id, reasoningDelta)) {
             success = false;
             failureMessage = describeOpenCodeStreamTrackingLimitFailure(state.trackingLimitReason);
             diag.onStreamError(sseEvent.type, failureMessage);
