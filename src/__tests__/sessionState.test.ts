@@ -42,6 +42,11 @@ describe('session state envelope', () => {
     };
   }
 
+  function writeSerializedSessionState(serialized: string): void {
+    mkdirSync(join(testDir, '.takt'), { recursive: true });
+    writeFileSync(getSessionStatePath(testDir), serialized, 'utf-8');
+  }
+
   it('pending stateを一度だけ取得してconsumed envelopeを残す', () => {
     const saved = state('2026-07-28T00:00:00.000Z', 'done');
     saveSessionState(testDir, 'publication-a', saved);
@@ -98,7 +103,7 @@ describe('session state envelope', () => {
     expect(takeSessionState(testDir)).toMatchObject({ taskResult: 'second' });
   });
 
-  it('errorMessageを含む旧session stateを読み込みconsumed envelopeへ移行する', () => {
+  it('should migrate a legacy session state to a consumed envelope when it includes errorMessage', () => {
     const legacyState: SessionState = {
       status: 'error',
       errorMessage: 'user_interrupted',
@@ -128,14 +133,75 @@ describe('session state envelope', () => {
     expect(takeSessionState(testDir)).toBeNull();
   });
 
+  it('should reject a v1 envelope when it contains an unknown field', () => {
+    const serialized = JSON.stringify({
+      version: 1,
+      publicationId: 'publication-a',
+      status: 'pending',
+      state: state('2026-07-28T00:00:00.000Z', 'done'),
+      unknownField: true,
+    }, null, 2);
+    writeSerializedSessionState(serialized);
+
+    expect(() => takeSessionState(testDir)).toThrow(
+      'Session state envelope contains unknown field "unknownField"',
+    );
+    expect(readFileSync(getSessionStatePath(testDir), 'utf-8')).toBe(serialized);
+  });
+
+  it.each([
+    ['status is missing', {
+      timestamp: '2026-07-28T00:00:00.000Z',
+      workflowName: 'coding',
+    }],
+    ['timestamp is missing', {
+      status: 'error',
+      workflowName: 'coding',
+    }],
+    ['workflowName is missing', {
+      status: 'error',
+      timestamp: '2026-07-28T00:00:00.000Z',
+    }],
+    ['status is invalid', {
+      status: 'failed',
+      timestamp: '2026-07-28T00:00:00.000Z',
+      workflowName: 'coding',
+    }],
+    ['timestamp is invalid', {
+      status: 'error',
+      timestamp: 'not-a-timestamp',
+      workflowName: 'coding',
+    }],
+    ['workflowName is empty', {
+      status: 'error',
+      timestamp: '2026-07-28T00:00:00.000Z',
+      workflowName: '',
+    }],
+  ] as const)(
+    'should reject a legacy session state when %s',
+    (_condition, legacyState) => {
+      const serialized = JSON.stringify(legacyState, null, 2);
+      writeSerializedSessionState(serialized);
+
+      expect(() => takeSessionState(testDir)).toThrow(/Session state/);
+      expect(readFileSync(getSessionStatePath(testDir), 'utf-8')).toBe(serialized);
+    },
+  );
+
   it('malformed envelopeを通知なしとして握りつぶさない', () => {
     saveSessionState(
       testDir,
       'publication-a',
       state('2026-07-28T00:00:00.000Z', 'first'),
     );
-    writeFileSync(getSessionStatePath(testDir), '{"version":1}');
+    const malformedEnvelope = '{"version":1}';
+    writeFileSync(getSessionStatePath(testDir), malformedEnvelope);
 
-    expect(() => takeSessionState(testDir)).toThrow(/session state/i);
+    expect(() => takeSessionState(testDir)).toThrow(
+      'Session state envelope version or status is invalid',
+    );
+    expect(readFileSync(getSessionStatePath(testDir), 'utf-8')).toBe(
+      malformedEnvelope,
+    );
   });
 });
