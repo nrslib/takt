@@ -369,6 +369,31 @@ export TAKT_KIRO_API_KEY=...               # Kiro CLI
 
 See the [Configuration Guide](./docs/configuration.md) for all options, provider profiles, and model resolution.
 
+OpenCode calls have a 60-minute wall-clock limit by default. Calls that may run
+longer than 60 minutes must set `provider_options.opencode.guards.call_timeout_ms`
+explicitly (up to 86,400,000 ms). Guard profiles and per-model overrides can be
+configured as follows; `model_profiles` uses first-match order and `*` wildcards:
+
+```yaml
+provider_options:
+  opencode:
+    guards:
+      profile: standard
+      model_profiles:
+        "opencode/big-pickle": minimal
+        "lmstudio/*": standard
+      call_timeout_ms: 7200000
+      text_byte_limit: 1048576
+      reasoning_byte_limit: 4194304
+```
+
+The removed `TAKT_OPENCODE_TOOL_ERROR_BUDGET`,
+`TAKT_OPENCODE_TOOL_SIGNATURE_ABSOLUTE`,
+`TAKT_OPENCODE_TOOL_SIGNATURE_REPEATS`,
+`TAKT_OPENCODE_TOOL_SUCCESS_REPEATS`, and
+`TAKT_OPENCODE_TOOL_RESULT_STAGNATION_REPEATS` variables are ignored and emit a
+one-time migration warning. See the configuration guide for the v6 guard policy.
+
 ## Customization
 
 ### Custom workflows

@@ -31,10 +31,34 @@ export interface CodexProviderOptions {
   };
 }
 
+export const OPENCODE_GUARD_PROFILES = ['standard', 'minimal'] as const;
+export type OpenCodeGuardProfile = (typeof OPENCODE_GUARD_PROFILES)[number];
+
+/**
+ * OpenCode 実行ガード設定。
+ * profile が切るのはヒューリスティック検出（連続エラー・burst・cycle budget・
+ * 連続完全一致反復）のみ。時間（idle / wall-clock）・有界資源（容量・イベント
+ * 数・追跡ID数）・機密リダクションの fail-closed・厳密検出（edit conflict /
+ * unavailable / invalid + correction）は minimal でも常時有効。
+ */
+export interface OpenCodeGuardOptions {
+  /** standard（既定）= 全ガード有効。minimal = ヒューリスティック検出のみ無効。 */
+  profile?: OpenCodeGuardProfile;
+  /** 解決済みモデル文字列に対する先勝ちの `*` ワイルドカードプロファイル。 */
+  modelProfiles?: Record<string, OpenCodeGuardProfile>;
+  /** 呼び出し全体の wall-clock 上限 (ms)。60,000〜86,400,000 の整数。0 不可。既定 3,600,000。 */
+  callTimeoutMs?: number;
+  /** 可視テキスト累計バイト上限。既定 1MiB。 */
+  textByteLimit?: number;
+  /** reasoning 累計バイト上限。既定 4MiB。 */
+  reasoningByteLimit?: number;
+}
+
 export interface OpenCodeProviderOptions {
   networkAccess?: boolean;
   variant?: string;
   allowedTools?: string[];
+  guards?: OpenCodeGuardOptions;
 }
 
 export const RUNTIME_PREPARE_PRESETS = ['gradle', 'node'] as const;

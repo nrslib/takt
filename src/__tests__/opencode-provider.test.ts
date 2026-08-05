@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { PermissionMode } from '../core/models/index.js';
+import { parse as parseYaml } from 'yaml';
+import { GlobalConfigSchema, type PermissionMode } from '../core/models/index.js';
+import { normalizeProviderOptions, resolveEffectiveProviderOptions } from '../infra/config/providerOptions.js';
+import { resolveOpenCodeGuardSuite } from '../infra/opencode/guards/index.js';
 
 function extractToolNames(instruction: string | null): string[] {
   const match = instruction?.match(/You have ONLY these tools:\s*(.*?)\./);
@@ -263,6 +266,54 @@ describe('OpenCodeProvider tool naming addendum', () => {
       'implement task',
       expect.objectContaining({ model: 'opencode/big-pickle' }),
     );
+  });
+
+  it('YAML guards を設定解決・provider 変換・guard suite まで伝播する', async () => {
+    const globalRaw = parseYaml([
+      'provider_options:',
+      '  opencode:',
+      '    guards:',
+      '      profile: standard',
+      '      model_profiles:',
+      '        "opencode/big-*": minimal',
+      '      call_timeout_ms: 120000',
+      '      text_byte_limit: 2048',
+    ].join('\n')) as unknown;
+    const stepRaw = parseYaml([
+      'opencode:',
+      '  guards:',
+      '    reasoning_byte_limit: 8192',
+    ].join('\n')) as Record<string, unknown>;
+    const parsed = GlobalConfigSchema.parse(globalRaw);
+    const effective = resolveEffectiveProviderOptions(
+      undefined,
+      undefined,
+      normalizeProviderOptions(parsed.provider_options),
+      normalizeProviderOptions(stepRaw),
+    );
+
+    const agent = new OpenCodeProvider().setup({ name: 'coder' });
+    await agent.call('implement task', {
+      cwd: '/tmp/project',
+      model: 'opencode/big-pickle',
+      opencodeApiKey: 'test-key',
+      providerOptions: effective,
+    });
+
+    const callOptions = openCodeMocks.callOpenCode.mock.calls.at(-1)?.[2];
+    expect(callOptions?.guards).toEqual({
+      profile: 'standard',
+      modelProfiles: { 'opencode/big-*': 'minimal' },
+      callTimeoutMs: 120_000,
+      textByteLimit: 2048,
+      reasoningByteLimit: 8192,
+    });
+    const suite = resolveOpenCodeGuardSuite(callOptions?.guards, callOptions?.model ?? '');
+    expect(suite.profile).toBe('minimal');
+    expect(suite.policy).toMatchObject({
+      callTimeoutMs: 120_000,
+      streamLimits: { textByteLimit: 2048, reasoningByteLimit: 8192 },
+    });
   });
 });
 

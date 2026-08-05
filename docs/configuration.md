@@ -278,6 +278,14 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 #   opencode:
 #     variant: high
 #     allowed_tools: [read, glob, grep, bash, websearch, webfetch]
+#     guards:
+#       profile: standard
+#       model_profiles:
+#         "opencode/big-pickle": minimal
+#         "lmstudio/*": standard
+#       call_timeout_ms: 3600000
+#       text_byte_limit: 1048576
+#       reasoning_byte_limit: 4194304
 #   kiro:
 #     agent: my-default-agent
 #   claude_terminal:
@@ -301,6 +309,30 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 #       - provider: opencode
 #         model: ollama-cloud/gemma4:31b
 ```
+
+#### OpenCode execution guards
+
+`provider_options.opencode.guards.profile` is `standard` by default. `minimal`
+disables heuristic loop detection only; time, bounded-resource, integrity, and
+strict correction guards remain mandatory. `model_profiles` selects a profile
+from the resolved model string in insertion order, with `*` as the only
+wildcard. Guard leaves merge independently across provider-option layers, while
+each higher-priority `model_profiles` value replaces the complete lower-priority
+map.
+
+Each OpenCode call has a 3,600,000 ms (60 minute) wall-clock limit. A call that
+may run longer than 60 minutes must explicitly set `call_timeout_ms` from 60,000
+through 86,400,000. `text_byte_limit` defaults to 1 MiB and
+`reasoning_byte_limit` to 4 MiB.
+
+The legacy `TAKT_OPENCODE_TOOL_ERROR_BUDGET`,
+`TAKT_OPENCODE_TOOL_SIGNATURE_ABSOLUTE`,
+`TAKT_OPENCODE_TOOL_SIGNATURE_REPEATS`,
+`TAKT_OPENCODE_TOOL_SUCCESS_REPEATS`, and
+`TAKT_OPENCODE_TOOL_RESULT_STAGNATION_REPEATS` variables no longer control a
+guard. They are ignored with a one-time warning. Remove them and use the
+`guards` profile and bounded limits above; exact terminal-tool repetition is now
+a fixed consecutive-tuple guard rather than the removed cumulative detectors.
 
 ### Project Config Field Reference
 

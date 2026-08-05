@@ -95,7 +95,7 @@ export class DynamicParallelSelectorCoordinator {
       ...(previous === undefined ? {} : { previousSnapshot: previous }),
     });
     const sensitiveValues = createBoundedSensitiveValues();
-    sensitiveValues.add({
+    sensitiveValues.collect({
       task,
       reports: inputs.reports,
       working_tree_diff: inputs.workingTreeDiff,

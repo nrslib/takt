@@ -11,7 +11,13 @@ import {
 import { z } from 'zod/v4';
 import { PROVIDER_TYPES } from '../../shared/types/provider.js';
 import { STATUS_VALUES } from './status.js';
-import { CLAUDE_EFFORT_VALUES, CODEX_REASONING_EFFORT_VALUES, COPILOT_EFFORT_VALUES, RUNTIME_PREPARE_PRESETS } from './workflow-types.js';
+import {
+  CLAUDE_EFFORT_VALUES,
+  CODEX_REASONING_EFFORT_VALUES,
+  COPILOT_EFFORT_VALUES,
+  OPENCODE_GUARD_PROFILES,
+  RUNTIME_PREPARE_PRESETS,
+} from './workflow-types.js';
 import { ConfiguredModelSchema } from './model-schema.js';
 
 export { McpServerConfigSchema, McpServersSchema } from './mcp-schemas.js';
@@ -82,11 +88,30 @@ const StrictCodexProviderOptionsSchema = z.object({
   skills: z.object(CodexSkillsShape).strict().optional(),
 }).strict();
 
-const OpenCodeProviderOptionsSchema = z.object({
+const OpenCodeGuardOptionShape = {
+  profile: z.enum(OPENCODE_GUARD_PROFILES).optional(),
+  model_profiles: z.record(
+    z.string().min(1),
+    z.enum(OPENCODE_GUARD_PROFILES),
+  ).optional(),
+  call_timeout_ms: z.number().int().min(60_000).max(86_400_000).optional(),
+  text_byte_limit: z.number().int().positive().optional(),
+  reasoning_byte_limit: z.number().int().positive().optional(),
+};
+
+const OpenCodeProviderOptionShape = {
   network_access: z.boolean().optional(),
   variant: z.string().min(1).optional(),
   allowed_tools: z.array(z.string()).optional(),
-});
+  guards: z.object(OpenCodeGuardOptionShape).optional(),
+};
+
+const OpenCodeProviderOptionsSchema = z.object(OpenCodeProviderOptionShape);
+
+const StrictOpenCodeProviderOptionsSchema = z.object({
+  ...OpenCodeProviderOptionShape,
+  guards: z.object(OpenCodeGuardOptionShape).strict().optional(),
+}).strict();
 
 const ClaudeSkillsShape = { enabled: z.boolean().optional() };
 const ClaudeSkillsSchema = z.object(ClaudeSkillsShape).strict();
@@ -134,7 +159,7 @@ export const StepProviderOptionsSchema = StepProviderOptionsObjectSchema.optiona
 
 const StrictStepProviderOptionsSchema = z.object({
   codex: StrictCodexProviderOptionsSchema.optional(),
-  opencode: OpenCodeProviderOptionsSchema.strict().optional(),
+  opencode: StrictOpenCodeProviderOptionsSchema.optional(),
   claude: StrictClaudeProviderOptionsSchema.optional(),
   claude_terminal: ClaudeTerminalProviderOptionsSchema.strict().optional(),
   copilot: CopilotProviderOptionsSchema.strict().optional(),
@@ -547,6 +572,16 @@ const NormalizedStepProviderOptionsSchema = z.object({
     networkAccess: z.boolean().optional(),
     variant: z.string().min(1).optional(),
     allowedTools: z.array(z.string()).optional(),
+    guards: z.object({
+      profile: z.enum(OPENCODE_GUARD_PROFILES).optional(),
+      modelProfiles: z.record(
+        z.string().min(1),
+        z.enum(OPENCODE_GUARD_PROFILES),
+      ).optional(),
+      callTimeoutMs: z.number().int().min(60_000).max(86_400_000).optional(),
+      textByteLimit: z.number().int().positive().optional(),
+      reasoningByteLimit: z.number().int().positive().optional(),
+    }).strict().optional(),
   }).strict().optional(),
   claude: z.object({
     baseUrl: z.string().min(1).optional(),

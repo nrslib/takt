@@ -285,7 +285,7 @@ describe('OpenCodeClient permissions', () => {
     });
 
     expect(result.status).toBe('done');
-    expect(sessionCreate).toHaveBeenCalledWith({
+    expect(sessionCreate.mock.calls[0]?.[0]).toEqual({
       directory: '/tmp',
       permission: [
         { permission: '*', pattern: '*', action: 'deny' },
@@ -359,7 +359,7 @@ describe('OpenCodeClient permissions', () => {
     });
 
     expect(result.status).toBe('done');
-    expect(sessionCreate).toHaveBeenCalledWith({
+    expect(sessionCreate.mock.calls[0]?.[0]).toEqual({
       directory: '/tmp',
       permission: [
         { permission: '*', pattern: '*', action: 'deny' },
@@ -424,7 +424,7 @@ describe('OpenCodeClient permissions', () => {
     });
 
     expect(result.status).toBe('done');
-    expect(sessionCreate).toHaveBeenCalledWith({
+    expect(sessionCreate.mock.calls[0]?.[0]).toEqual({
       directory: '/tmp',
       permission: [
         { permission: '*', pattern: '*', action: 'allow' },
@@ -474,7 +474,7 @@ describe('OpenCodeClient permissions', () => {
     });
 
     expect(result.status).toBe('done');
-    expect(sessionCreate).toHaveBeenCalledWith({
+    expect(sessionCreate.mock.calls[0]?.[0]).toEqual({
       directory: '/tmp',
       permission: EMPTY_TOOLS_SESSION_PERMISSION_RULESET,
     });
@@ -759,7 +759,7 @@ describe('OpenCodeClient permissions', () => {
       permissionMode: 'edit',
     });
 
-    expect(sessionCreate).toHaveBeenCalledWith(expect.objectContaining({
+    expect(sessionCreate.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
       directory: '/tmp',
       permission: expect.arrayContaining([
         expect.objectContaining({ permission: 'edit', action: 'allow' }),

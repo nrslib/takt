@@ -67,6 +67,8 @@ export type {
   ProviderRoutingEntry,
   WorkflowRule,
   StepProviderOptions,
+  OpenCodeGuardOptions,
+  OpenCodeGuardProfile,
   WorkflowStep,
   ArpeggioStepConfig,
   ArpeggioMergeStepConfig,
@@ -96,6 +98,7 @@ export type {
 
 export {
   WORKFLOW_SESSION_MODES,
+  OPENCODE_GUARD_PROFILES,
   getAllParallelSubSteps,
   isDynamicParallelSubSteps,
   isNormalAgentWorkflowStep,

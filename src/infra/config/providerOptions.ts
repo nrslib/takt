@@ -3,6 +3,7 @@ import type {
   ClaudeTerminalProviderOptions,
   CodexReasoningEffort,
   CopilotEffort,
+  OpenCodeGuardProfile,
   WorkflowStep,
   StepProviderOptions,
 } from '../../core/models/workflow-types.js';
@@ -31,6 +32,13 @@ type RawProviderOptions = {
     network_access?: boolean;
     variant?: string;
     allowed_tools?: string[];
+    guards?: {
+      profile?: OpenCodeGuardProfile;
+      model_profiles?: Record<string, OpenCodeGuardProfile>;
+      call_timeout_ms?: number;
+      text_byte_limit?: number;
+      reasoning_byte_limit?: number;
+    };
   };
   claude?: {
     base_url?: string;
@@ -205,6 +213,7 @@ export function normalizeProviderOptions(
     options.opencode?.network_access !== undefined
     || options.opencode?.variant !== undefined
     || options.opencode?.allowed_tools !== undefined
+    || options.opencode?.guards !== undefined
   ) {
     result.opencode = {
       ...(options.opencode.network_access !== undefined
@@ -215,6 +224,27 @@ export function normalizeProviderOptions(
         : {}),
       ...(options.opencode.allowed_tools !== undefined
         ? { allowedTools: options.opencode.allowed_tools }
+        : {}),
+      ...(options.opencode.guards !== undefined
+        ? {
+            guards: {
+              ...(options.opencode.guards.profile !== undefined
+                ? { profile: options.opencode.guards.profile }
+                : {}),
+              ...(options.opencode.guards.model_profiles !== undefined
+                ? { modelProfiles: { ...options.opencode.guards.model_profiles } }
+                : {}),
+              ...(options.opencode.guards.call_timeout_ms !== undefined
+                ? { callTimeoutMs: options.opencode.guards.call_timeout_ms }
+                : {}),
+              ...(options.opencode.guards.text_byte_limit !== undefined
+                ? { textByteLimit: options.opencode.guards.text_byte_limit }
+                : {}),
+              ...(options.opencode.guards.reasoning_byte_limit !== undefined
+                ? { reasoningByteLimit: options.opencode.guards.reasoning_byte_limit }
+                : {}),
+            },
+          }
         : {}),
     };
   }
@@ -319,7 +349,39 @@ export function mergeProviderOptions(
       };
     }
     if (layer.opencode) {
-      result.opencode = { ...result.opencode, ...layer.opencode };
+      const guards = layer.opencode.guards === undefined
+        ? result.opencode?.guards
+        : {
+            ...result.opencode?.guards,
+            ...(layer.opencode.guards.profile !== undefined
+              ? { profile: layer.opencode.guards.profile }
+              : {}),
+            ...(layer.opencode.guards.modelProfiles !== undefined
+              ? { modelProfiles: { ...layer.opencode.guards.modelProfiles } }
+              : {}),
+            ...(layer.opencode.guards.callTimeoutMs !== undefined
+              ? { callTimeoutMs: layer.opencode.guards.callTimeoutMs }
+              : {}),
+            ...(layer.opencode.guards.textByteLimit !== undefined
+              ? { textByteLimit: layer.opencode.guards.textByteLimit }
+              : {}),
+            ...(layer.opencode.guards.reasoningByteLimit !== undefined
+              ? { reasoningByteLimit: layer.opencode.guards.reasoningByteLimit }
+              : {}),
+          };
+      result.opencode = {
+        ...result.opencode,
+        ...(layer.opencode.networkAccess !== undefined
+          ? { networkAccess: layer.opencode.networkAccess }
+          : {}),
+        ...(layer.opencode.variant !== undefined
+          ? { variant: layer.opencode.variant }
+          : {}),
+        ...(layer.opencode.allowedTools !== undefined
+          ? { allowedTools: layer.opencode.allowedTools }
+          : {}),
+        ...(guards !== undefined ? { guards } : {}),
+      };
     }
     if (layer.claude) {
       result.claude = {
@@ -604,6 +666,36 @@ export function resolveEffectiveProviderOptions(
     stepOptions?.opencode?.allowedTools,
     resolveProviderOptionOrigin(originResolver, 'opencode.allowedTools', source),
   );
+  const opencodeGuardProfile = selectProviderValue(
+    resolvedConfigOptions.opencode?.guards?.profile,
+    personaOptions?.opencode?.guards?.profile,
+    stepOptions?.opencode?.guards?.profile,
+    resolveProviderOptionOrigin(originResolver, 'opencode.guards.profile', source),
+  );
+  const opencodeGuardModelProfiles = selectProviderValue(
+    resolvedConfigOptions.opencode?.guards?.modelProfiles,
+    personaOptions?.opencode?.guards?.modelProfiles,
+    stepOptions?.opencode?.guards?.modelProfiles,
+    resolveProviderOptionOrigin(originResolver, 'opencode.guards.modelProfiles', source),
+  );
+  const opencodeGuardCallTimeoutMs = selectProviderValue(
+    resolvedConfigOptions.opencode?.guards?.callTimeoutMs,
+    personaOptions?.opencode?.guards?.callTimeoutMs,
+    stepOptions?.opencode?.guards?.callTimeoutMs,
+    resolveProviderOptionOrigin(originResolver, 'opencode.guards.callTimeoutMs', source),
+  );
+  const opencodeGuardTextByteLimit = selectProviderValue(
+    resolvedConfigOptions.opencode?.guards?.textByteLimit,
+    personaOptions?.opencode?.guards?.textByteLimit,
+    stepOptions?.opencode?.guards?.textByteLimit,
+    resolveProviderOptionOrigin(originResolver, 'opencode.guards.textByteLimit', source),
+  );
+  const opencodeGuardReasoningByteLimit = selectProviderValue(
+    resolvedConfigOptions.opencode?.guards?.reasoningByteLimit,
+    personaOptions?.opencode?.guards?.reasoningByteLimit,
+    stepOptions?.opencode?.guards?.reasoningByteLimit,
+    resolveProviderOptionOrigin(originResolver, 'opencode.guards.reasoningByteLimit', source),
+  );
   const copilotEffort = selectProviderValue(
     resolvedConfigOptions.copilot?.effort,
     personaOptions?.copilot?.effort,
@@ -666,11 +758,39 @@ export function resolveEffectiveProviderOptions(
     ...(opencodeNetworkAccess !== undefined
       || opencodeVariant !== undefined
       || opencodeAllowedTools !== undefined
+      || opencodeGuardProfile !== undefined
+      || opencodeGuardModelProfiles !== undefined
+      || opencodeGuardCallTimeoutMs !== undefined
+      || opencodeGuardTextByteLimit !== undefined
+      || opencodeGuardReasoningByteLimit !== undefined
       ? {
           opencode: {
             ...(opencodeNetworkAccess !== undefined ? { networkAccess: opencodeNetworkAccess } : {}),
             ...(opencodeVariant !== undefined ? { variant: opencodeVariant } : {}),
             ...(opencodeAllowedTools !== undefined ? { allowedTools: opencodeAllowedTools } : {}),
+            ...(opencodeGuardProfile !== undefined
+              || opencodeGuardModelProfiles !== undefined
+              || opencodeGuardCallTimeoutMs !== undefined
+              || opencodeGuardTextByteLimit !== undefined
+              || opencodeGuardReasoningByteLimit !== undefined
+              ? {
+                  guards: {
+                    ...(opencodeGuardProfile !== undefined ? { profile: opencodeGuardProfile } : {}),
+                    ...(opencodeGuardModelProfiles !== undefined
+                      ? { modelProfiles: { ...opencodeGuardModelProfiles } }
+                      : {}),
+                    ...(opencodeGuardCallTimeoutMs !== undefined
+                      ? { callTimeoutMs: opencodeGuardCallTimeoutMs }
+                      : {}),
+                    ...(opencodeGuardTextByteLimit !== undefined
+                      ? { textByteLimit: opencodeGuardTextByteLimit }
+                      : {}),
+                    ...(opencodeGuardReasoningByteLimit !== undefined
+                      ? { reasoningByteLimit: opencodeGuardReasoningByteLimit }
+                      : {}),
+                  },
+                }
+              : {}),
           },
         }
       : {}),
@@ -805,6 +925,11 @@ export const PROVIDER_OPTION_PATHS = [
   'opencode.networkAccess',
   'opencode.variant',
   'opencode.allowedTools',
+  'opencode.guards.profile',
+  'opencode.guards.modelProfiles',
+  'opencode.guards.callTimeoutMs',
+  'opencode.guards.textByteLimit',
+  'opencode.guards.reasoningByteLimit',
   'copilot.effort',
   'kiro.agent',
   'claudeTerminal.backend',

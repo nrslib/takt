@@ -78,6 +78,8 @@ export type {
   WorkflowCallInvocationRecord,
   WorkflowStepParticipationRecord,
   StepProviderOptions,
+  OpenCodeGuardOptions,
+  OpenCodeGuardProfile,
   FindingContractConfig,
   FindingLedger,
   FindingsRuleContext,
@@ -113,6 +115,7 @@ export type {
 
 export {
   WORKFLOW_SESSION_MODES,
+  OPENCODE_GUARD_PROFILES,
   getAllParallelSubSteps,
   isDynamicParallelSubSteps,
   isNormalAgentWorkflowStep,

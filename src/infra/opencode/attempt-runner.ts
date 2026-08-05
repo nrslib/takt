@@ -35,11 +35,8 @@ import {
   flushSensitiveTextStreams,
   handlePartUpdated,
   OPENCODE_STREAM_TRACKING_LIMIT_MESSAGE,
-  trackOpenCodeStreamEvent,
-  trackOpenCodeTextBytes,
 } from './OpenCodeStreamHandler.js';
 import {
-  OpenCodeToolGuard,
   buildToolGuardCorrectionPrompt,
   buildToolGuardRetryPrompt,
   clearToolGuardPendingCorrection,
@@ -47,9 +44,15 @@ import {
   markToolGuardCorrectionPending,
   markToolGuardFreshSessionUsed,
   shouldIssueToolGuardCorrection,
-  type ToolGuardFailure,
   type ToolGuardRecoverableFailure,
 } from './tool-guard.js';
+import {
+  resolveOpenCodeGuardSuite,
+  type OpenCodeGuardAbortKind,
+  type OpenCodeGuardEvaluation,
+  type OpenCodeGuardSuite,
+} from './guards/index.js';
+import { extractOpenCodeToolRejection } from './guards/tool-events.js';
 import {
   STRUCTURED_OUTPUT_TOOL_NAME,
   buildFormatlessStructuredPrompt,
@@ -114,10 +117,10 @@ function sanitizeToolCallInputForLogging(tool: string, value: Record<string, unk
 }
 
 function sanitizeToolGuardFailure(
-  failure: ToolGuardFailure,
+  failure: ToolGuardRecoverableFailure,
   tool: string,
   input: unknown,
-): ToolGuardFailure {
+): ToolGuardRecoverableFailure {
   return {
     ...failure,
     message: sanitizeSensitiveTextWithKnownValues(
@@ -159,59 +162,9 @@ const log = createLogger('opencode-sdk');
  * 本来呼ぼうとしたツール名は state.input.tool に入っている。検出器は連続性と
  * 総量で判断するので、1〜2 回の空振り（モデルが自力で直す場合）では発火しない。
  */
-function extractOpenCodeToolRejection(
-  toolPart: OpenCodeToolPart,
-): { tool: string; error: string } | undefined {
-  if (toolPart.state.status === 'error') {
-    return { tool: toolPart.tool, error: toolPart.state.error };
-  }
-  if (toolPart.tool !== 'invalid' || toolPart.state.status !== 'completed') {
-    return undefined;
-  }
-  const input = toolPart.state.input as { tool?: unknown; error?: unknown } | undefined;
-  const attemptedTool = typeof input?.tool === 'string' ? input.tool : 'invalid';
-  const error = typeof input?.error === 'string'
-    ? input.error
-    : (typeof toolPart.state.output === 'string' ? toolPart.state.output : 'OpenCode rejected the tool call');
-  return { tool: attemptedTool, error };
-}
-
-type CompletedToolExit =
-  | { known: false }
-  | { known: true; exit: number | null };
-
-function getCompletedToolExit(toolPart: OpenCodeToolPart): CompletedToolExit {
-  if (toolPart.state.status !== 'completed') {
-    return { known: false };
-  }
-  const metadata = toolPart.state.metadata;
-  if (
-    metadata === undefined
-    || typeof metadata !== 'object'
-    || metadata === null
-    || !Object.prototype.hasOwnProperty.call(metadata, 'exit')
-  ) {
-    return { known: false };
-  }
-  const exit = metadata.exit;
-  if (exit === null || typeof exit === 'number') {
-    return { known: true, exit };
-  }
-  return { known: false };
-}
-
-/** 呼び出し時に評価する（テストや実験で env から上書きできるようにする） */
-function resolveMessageCycleBudget(): number {
-  const fromEnv = Number(process.env.TAKT_OPENCODE_MESSAGE_CYCLE_BUDGET);
-  return fromEnv > 0 ? fromEnv : 120;
-}
-
-/** 呼び出し時に評価する（テストや実験で env から上書きできるようにする） */
-function resolveStreamIdleTimeoutMs(): number {
-  const fromEnv = Number(process.env.TAKT_OPENCODE_STREAM_IDLE_TIMEOUT_MS);
-  return fromEnv > 0 ? fromEnv : 10 * 60 * 1000;
-}
 const OPENCODE_STREAM_ABORTED_MESSAGE = 'OpenCode execution aborted';
+const OPENCODE_PENDING_PART_DELTA_LIMIT_PROTOCOL_FAILURE =
+  'OpenCode stream protocol failure: unresolved part delta count exceeded';
 const OPENCODE_RETRY_MAX_ATTEMPTS = 3;
 const OPENCODE_RETRY_BASE_DELAY_MS = 250;
 const OPENCODE_INTERACTION_TIMEOUT_MS = 5000;
@@ -229,24 +182,7 @@ const OPENCODE_RETRYABLE_ERROR_PATTERNS = [
   'timeout waiting for server',
 ];
 type OpenCodeSessionSnapshot = NonNullable<Awaited<ReturnType<OpencodeClient['session']['get']>>['data']>;
-type OpenCodeAbortCause = 'timeout' | 'external' | 'prompt' | 'server';
-
-function toRecoverableToolGuardFailure(
-  failure: ToolGuardFailure | undefined,
-): ToolGuardRecoverableFailure | undefined {
-  if (failure?.kind === 'unavailable_tool_loop' && failure.tool === STRUCTURED_OUTPUT_TOOL_NAME) {
-    return undefined;
-  }
-  if (
-    failure?.kind === 'unavailable_tool_loop'
-    || failure?.kind === 'invalid_argument_loop'
-    || failure?.kind === 'edit_conflict_loop'
-    || failure?.kind === 'tool_error_burst'
-  ) {
-    return failure;
-  }
-  return undefined;
-}
+type OpenCodeAbortCause = 'timeout' | OpenCodeGuardAbortKind | 'external' | 'prompt' | 'server';
 
 function getToolGuardFailureFingerprint(failure: ToolGuardRecoverableFailure): string {
   return failure.kind === 'edit_conflict_loop' ? failure.signature : failure.fingerprint;
@@ -324,6 +260,7 @@ async function postmortemRateLimitError(
   client: OpencodeClient,
   sessionID: string,
   directory: string,
+  abortSignal: AbortSignal,
 ): Promise<string | undefined> {
   let messages: OpenCodeSessionMessages;
   try {
@@ -331,12 +268,14 @@ async function postmortemRateLimitError(
       (signal) => client.session.messages({ sessionID, directory }, { signal }),
       resolvePostmortemTimeoutMs(),
       'OpenCode rate limit postmortem timed out',
+      abortSignal,
     );
     if (!result.data) {
       return undefined;
     }
     messages = result.data;
   } catch (error) {
+    if (abortSignal.aborted) throw error;
     // 検死そのものの失敗（RPC エラー・ハング）で本来のエラーを覆い隠さない。
     log.debug('Rate limit postmortem could not read session messages', {
       sessionID,
@@ -465,6 +404,22 @@ async function withTimeout<T>(
   }
 }
 
+async function withAbortSignal<T>(operation: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (signal === undefined) return operation;
+  if (signal.aborted) throw new Error(OPENCODE_STREAM_ABORTED_MESSAGE);
+  let removeListener: (() => void) | undefined;
+  const aborted = new Promise<never>((_, reject) => {
+    const onAbort = (): void => reject(new Error(OPENCODE_STREAM_ABORTED_MESSAGE));
+    signal.addEventListener('abort', onAbort, { once: true });
+    removeListener = () => signal.removeEventListener('abort', onAbort);
+  });
+  try {
+    return await Promise.race([operation, aborted]);
+  } finally {
+    removeListener?.();
+  }
+}
+
 function extractOpenCodeErrorMessage(error: unknown): string | undefined {
   if (!error || typeof error !== 'object') {
     return undefined;
@@ -519,6 +474,153 @@ function buildPromptEchoCandidates(prompt: string, systemPrompt: string | undefi
   }
 
   return Array.from(new Set(prompts)).filter((candidate) => candidate.length > 0);
+}
+
+interface GuardIngressState {
+  readonly rawOffsets: Map<string, number>;
+  readonly partTypes: Map<string, string>;
+  readonly pendingPartDeltas: Map<number, BufferedPartDelta>;
+  nextPartDeltaSequence: number;
+  nextPartDeltaSequenceToFlush: number;
+  pendingPartDeltaBytes: number;
+  readonly pendingPartDeltaByteLimit: number;
+  readonly pendingPartDeltaCountLimit: number;
+  readonly pendingPartDeltaLimitReason: 'text_bytes' | 'reasoning_bytes';
+  protocolFailure: string | undefined;
+  readonly echoState: { remainingPrompts: string[] };
+}
+
+interface BufferedPartDelta {
+  readonly sequence: number;
+  readonly partId: string;
+  readonly delta: string;
+  readonly bytes: number;
+  readonly event: OpenCodeStreamEvent;
+}
+
+function bufferPartDelta(
+  event: OpenCodeStreamEvent,
+  partId: string,
+  delta: string,
+  state: GuardIngressState,
+): void {
+  const bytes = Buffer.byteLength(delta, 'utf8');
+  if (state.pendingPartDeltas.size >= state.pendingPartDeltaCountLimit) {
+    state.protocolFailure = OPENCODE_PENDING_PART_DELTA_LIMIT_PROTOCOL_FAILURE;
+    return;
+  }
+  if (state.pendingPartDeltaBytes + bytes > state.pendingPartDeltaByteLimit) {
+    throw new Error(describeOpenCodeStreamTrackingLimitFailure(state.pendingPartDeltaLimitReason));
+  }
+  const sequence = state.nextPartDeltaSequence;
+  state.nextPartDeltaSequence += 1;
+  state.pendingPartDeltas.set(sequence, { sequence, partId, delta, bytes, event });
+  state.pendingPartDeltaBytes += bytes;
+}
+
+function flushResolvedPartDeltas(state: GuardIngressState): OpenCodeStreamEvent[] {
+  const events: OpenCodeStreamEvent[] = [];
+  while (true) {
+    const pending = state.pendingPartDeltas.get(state.nextPartDeltaSequenceToFlush);
+    if (pending === undefined) break;
+    const partType = state.partTypes.get(pending.partId);
+    if (partType === undefined) break;
+
+    state.pendingPartDeltas.delete(pending.sequence);
+    state.nextPartDeltaSequenceToFlush += 1;
+    state.pendingPartDeltaBytes -= pending.bytes;
+    if (partType !== 'text' && partType !== 'reasoning') continue;
+
+    const delta = partType === 'text'
+      ? stripPromptEcho(pending.delta, state.echoState)
+      : pending.delta;
+    events.push({
+      ...pending.event,
+      properties: {
+        ...pending.event.properties,
+        partID: pending.partId,
+        field: 'text',
+        delta,
+        guardPartType: partType,
+      },
+    } as OpenCodeStreamEvent);
+  }
+  return events;
+}
+
+function normalizeGuardIngressEvent(
+  event: OpenCodeStreamEvent,
+  activeSessionId: string,
+  state: GuardIngressState,
+): OpenCodeStreamEvent[] {
+  if (event.type === 'message.part.updated') {
+    const part = event.properties.part as OpenCodePart;
+    const normalizedPart = {
+      ...part,
+      sessionID: typeof part.sessionID === 'string' ? part.sessionID : activeSessionId,
+    } as OpenCodePart;
+    state.partTypes.set(part.id, part.type);
+    if (part.type !== 'text' && part.type !== 'reasoning') {
+      return [
+        { ...event, properties: { ...event.properties, part: normalizedPart } },
+        ...flushResolvedPartDeltas(state),
+      ];
+    }
+    const text = (part as OpenCodeTextPart).text;
+    const previous = state.rawOffsets.get(part.id) ?? 0;
+    const providedDelta = typeof event.properties.delta === 'string'
+      ? event.properties.delta
+      : undefined;
+    const currentDelta = providedDelta
+      ?? (text.length > previous ? text.slice(previous) : '');
+    state.rawOffsets.set(part.id, providedDelta === undefined ? text.length : previous + currentDelta.length);
+    if (state.pendingPartDeltas.size === 0) {
+      const delta = part.type === 'text'
+        ? stripPromptEcho(currentDelta, state.echoState)
+        : currentDelta;
+      return [{
+        ...event,
+        properties: {
+          ...event.properties,
+          part: { ...normalizedPart, text: delta },
+          delta,
+        },
+      } as OpenCodeStreamEvent];
+    }
+    if (currentDelta.length > 0) {
+      bufferPartDelta(event, part.id, currentDelta, state);
+    }
+    const normalizedEvent = {
+      ...event,
+      properties: {
+        ...event.properties,
+        part: normalizedPart,
+        delta: '',
+      },
+    } as OpenCodeStreamEvent;
+    return [normalizedEvent, ...flushResolvedPartDeltas(state)];
+  }
+  if (event.type !== 'message.part.delta') return [event];
+  const properties = event.properties as Record<string, unknown>;
+  if (properties.field !== 'text' || typeof properties.delta !== 'string') return [event];
+  const partId = typeof properties.partID === 'string' ? properties.partID : undefined;
+  const partType = partId === undefined ? 'text' : state.partTypes.get(partId);
+  if (partId !== undefined) {
+    state.rawOffsets.set(partId, (state.rawOffsets.get(partId) ?? 0) + properties.delta.length);
+  }
+  if (partId !== undefined && (partType === undefined || state.pendingPartDeltas.size > 0)) {
+    if (properties.delta.length > 0) {
+      bufferPartDelta(event, partId, properties.delta, state);
+    }
+    return flushResolvedPartDeltas(state);
+  }
+  const delta = partType === 'reasoning'
+    ? properties.delta
+    : stripPromptEcho(properties.delta, state.echoState);
+  return [{
+    ...event,
+    properties: { ...properties, delta, guardPartType: partType },
+  } as OpenCodeStreamEvent];
 }
 
 type OpenCodeQuestionOption = {
@@ -659,46 +761,72 @@ export class OpenCodeAttemptRunner {
     prompt: string,
     options: OpenCodeCallOptions,
   ): Promise<AgentResponse> {
+    const parsedModel = parseProviderModel(options.model, 'OpenCode model');
+    const resolvedModel = `${parsedModel.providerID}/${parsedModel.modelID}`;
+    const guardSuite = resolveOpenCodeGuardSuite(options.guards, resolvedModel);
+    log.debug('Resolved OpenCode guard policy', {
+      model: resolvedModel,
+      profile: guardSuite.profile,
+      enabledGuardIds: guardSuite.enabledGuardIds,
+      callTimeoutMs: guardSuite.policy.callTimeoutMs,
+      streamIdleTimeoutMs: guardSuite.policy.streamIdleTimeoutMs,
+      messageCycleBudget: guardSuite.policy.messageCycleBudget,
+      exactToolRepeatLimit: guardSuite.policy.exactToolRepeatLimit,
+      streamEventLimit: guardSuite.policy.streamEventLimit,
+      streamLimits: guardSuite.policy.streamLimits,
+      sensitiveCandidateLimit: guardSuite.policy.sensitiveCandidateLimit,
+      sensitiveCandidateByteLimit: guardSuite.policy.sensitiveCandidateByteLimit,
+      sensitiveSourceScanByteLimit: guardSuite.policy.sensitiveSourceScanByteLimit,
+    });
+    const callAbortController = new AbortController();
+    const abortFromCaller = (): void => callAbortController.abort(options.abortSignal?.reason);
+    if (options.abortSignal?.aborted) abortFromCaller();
+    else options.abortSignal?.addEventListener('abort', abortFromCaller, { once: true });
+    guardSuite.startCall((failure) => callAbortController.abort(new Error(failure.verdict.reason)));
+    const guardedOptions: OpenCodeCallOptions & { abortSignal: AbortSignal } = {
+      ...options,
+      abortSignal: callAbortController.signal,
+    };
     const callState: OpenCodeCallState = {
       recoveryState: createStructuredOutputRecoveryState(options.outputSchema !== undefined),
-      toolGuardRecovery: createToolGuardRecoveryState(),
+      toolGuardRecovery: createToolGuardRecoveryState(guardSuite.policy.toolGuard.editCorrectionLimit),
       maxAttempts: OPENCODE_RETRY_MAX_ATTEMPTS,
     };
-    const toolGuard = new OpenCodeToolGuard();
     const hasInitialSessionId = options.sessionId !== undefined;
     const provisionalKey = `provisional-${nextProvisionalId++}`;
-    for (let attempt = 1; attempt <= callState.maxAttempts; attempt++) {
-      const result = await this.runAttempt(
-        agentType,
-        prompt,
-        options,
-        attempt,
-        hasInitialSessionId,
-        provisionalKey,
-        toolGuard,
-        callState,
-      );
-      if (result !== RETRY_ATTEMPT) {
-        return result;
+    try {
+      for (let attempt = 1; attempt <= callState.maxAttempts; attempt++) {
+        const result = await this.runAttempt(
+          agentType,
+          prompt,
+          guardedOptions,
+          attempt,
+          hasInitialSessionId,
+          provisionalKey,
+          guardSuite,
+          callState,
+        );
+        if (result !== RETRY_ATTEMPT) return result;
       }
+      throw new Error('Unreachable: OpenCode retry loop exhausted without returning');
+    } finally {
+      guardSuite.stopCall();
+      options.abortSignal?.removeEventListener('abort', abortFromCaller);
     }
-    throw new Error('Unreachable: OpenCode retry loop exhausted without returning');
   }
 
   private async runAttempt(
     agentType: string,
     prompt: string,
-    options: OpenCodeCallOptions,
+    options: OpenCodeCallOptions & { abortSignal: AbortSignal },
     attempt: number,
     hasInitialSessionId: boolean,
     provisionalKey: string,
-    toolGuard: OpenCodeToolGuard,
-    callState: OpenCodeCallState,
+  guardSuite: OpenCodeGuardSuite,
+  callState: OpenCodeCallState,
   ): Promise<AgentResponse | typeof RETRY_ATTEMPT> {
-  let idleTimeoutId: ReturnType<typeof setTimeout> | undefined;
   const streamAbortController = new AbortController();
-  const streamIdleTimeoutMs = resolveStreamIdleTimeoutMs();
-  const timeoutMessage = `OpenCode stream timed out after ${Math.round(streamIdleTimeoutMs / 60000)} minutes of inactivity`;
+  const timeoutMessage = `OpenCode stream timed out after ${Math.round(guardSuite.policy.streamIdleTimeoutMs / 60000)} minutes of inactivity`;
   let abortCause: OpenCodeAbortCause | undefined;
   let diagRef: StreamDiagnostics | undefined;
   let release: (() => void) | undefined;
@@ -741,16 +869,19 @@ export class OpenCodeAttemptRunner {
     { opencodeApiKey: options.opencodeApiKey },
     options.childProcessEnv,
   ];
-  const state = createStreamTrackingState();
+  const state = createStreamTrackingState(guardSuite.policy.streamLimits, guardSuite.sensitiveValues);
+  let initialGuardFailure: OpenCodeGuardEvaluation | undefined;
   for (const source of attemptSensitiveSources) {
-    state.sensitiveSources.add(source);
+    initialGuardFailure ??= guardSuite.onInitialSource(source).failure;
   }
   const isTrackingLimitFailureMessage = (message: string): boolean => (
     message === OPENCODE_STREAM_TRACKING_LIMIT_MESSAGE
     || message === describeOpenCodeStreamTrackingLimitFailure('event_count')
     || message === describeOpenCodeStreamTrackingLimitFailure('tracked_id_count')
     || message === describeOpenCodeStreamTrackingLimitFailure('text_bytes')
+    || message === describeOpenCodeStreamTrackingLimitFailure('reasoning_bytes')
     || message === describeOpenCodeStreamTrackingLimitFailure('sensitive_sources')
+    || message.startsWith('OpenCode sensitive value budget exceeded:')
   );
 
   const sanitizeAttemptError = (message: string): string => (
@@ -767,22 +898,15 @@ export class OpenCodeAttemptRunner {
     }
 
     promptCompletionWait ??= (async () => {
-      let timeoutId: ReturnType<typeof setTimeout> | undefined;
       try {
-        await Promise.race([
-          promptCompletion,
-          new Promise<never>((_, reject) => {
-            timeoutId = setTimeout(() => {
-              reject(new Error(promptCompletionTimeoutMessage));
-            }, interactionTimeoutMs);
-          }),
-        ]);
+        await withTimeout(
+          () => promptCompletion!,
+          interactionTimeoutMs,
+          promptCompletionTimeoutMessage,
+          options.abortSignal,
+        );
       } catch (error) {
         promptError ??= getErrorMessage(error);
-      } finally {
-        if (timeoutId !== undefined) {
-          clearTimeout(timeoutId);
-        }
       }
     })();
     return promptCompletionWait;
@@ -833,36 +957,33 @@ export class OpenCodeAttemptRunner {
     };
   };
 
-  const resetIdleTimeout = (): void => {
-    if (idleTimeoutId !== undefined) {
-      clearTimeout(idleTimeoutId);
-    }
-    idleTimeoutId = setTimeout(() => {
-      diagRef?.onIdleTimeoutFired();
-      log.warn(timeoutMessage, { sessionId, model: options.model });
-      abortCause = 'timeout';
-      streamAbortController.abort();
-    }, streamIdleTimeoutMs);
-  };
-
   const onExternalAbort = (): void => {
-    abortCause = 'external';
-    streamAbortController.abort();
+    const guardFailure = guardSuite.getCallFailure();
+    abortCause = guardFailure?.verdict.abortKind ?? 'external';
+    streamAbortController.abort(options.abortSignal?.reason);
   };
 
   if (options.abortSignal) {
     if (options.abortSignal.aborted) {
-      abortCause = 'external';
-      streamAbortController.abort();
+      onExternalAbort();
     } else {
       options.abortSignal.addEventListener('abort', onExternalAbort, { once: true });
     }
   }
 
+  const throwIfCallAborted = (): void => {
+    if (!options.abortSignal?.aborted) return;
+    const failure = guardSuite.getCallFailure();
+    throw new Error(failure?.verdict.reason ?? OPENCODE_STREAM_ABORTED_MESSAGE);
+  };
+
   let attemptResult: AgentResponse | typeof RETRY_ATTEMPT;
   try {
     attemptResult = await (async (): Promise<AgentResponse | typeof RETRY_ATTEMPT> => {
   try {
+    if (initialGuardFailure !== undefined) {
+      throw new Error(initialGuardFailure.verdict.reason);
+    }
     log.debug('Starting OpenCode session', {
       agentType,
       model: options.model,
@@ -883,6 +1004,7 @@ export class OpenCodeAttemptRunner {
       options.abortSignal,
       sessionId ?? provisionalKey,
     );
+    throwIfCallAborted();
     registerSharedServerExitCleanup();
     const onServerInvalidated = (): void => {
       serverInvalidationError = sharedServerInvalidationError(acquired.invalidationSignal);
@@ -924,10 +1046,12 @@ export class OpenCodeAttemptRunner {
       options.allowedTools,
     );
     if (sessionId === undefined) {
+      throwIfCallAborted();
       const sessionResult = await opencodeApiClient.session.create({
         directory: options.cwd,
         permission: sessionPermission,
-      });
+      }, { signal: streamAbortController.signal });
+      throwIfCallAborted();
 
       sessionId = sessionResult.data?.id;
       if (!sessionId) {
@@ -940,6 +1064,7 @@ export class OpenCodeAttemptRunner {
           sessionId,
           options.abortSignal,
         );
+        throwIfCallAborted();
         release!();
         acquired = realAcquired;
         opencodeApiClient = realAcquired.client;
@@ -964,7 +1089,13 @@ export class OpenCodeAttemptRunner {
       { directory: options.cwd },
       { signal: streamAbortController.signal },
     );
-    resetIdleTimeout();
+    throwIfCallAborted();
+    guardSuite.startAttempt((failure) => {
+      diagRef?.onIdleTimeoutFired();
+      log.warn(failure.verdict.reason, { sessionId, model: options.model });
+      abortCause = 'timeout';
+      streamAbortController.abort(new Error(failure.verdict.reason));
+    });
     diag.onConnected();
     if (appliedPermissionRuleset) {
       emitPermissionSummary(options.onStream, {
@@ -1022,6 +1153,7 @@ export class OpenCodeAttemptRunner {
       parts: [{ type: 'text' as const, text: promptText }],
     };
     const promptPayloadForSdk = promptPayload as unknown as Parameters<typeof opencodeApiClient.session.promptAsync>[0];
+    throwIfCallAborted();
     sessionLifecycle.markPromptSent();
     promptCompletion = opencodeApiClient.session.promptAsync(promptPayloadForSdk, {
       signal: streamAbortController.signal,
@@ -1045,30 +1177,32 @@ export class OpenCodeAttemptRunner {
     // recovery の対象判定（StructuredOutput 以外か）の両方に使う。
     let unavailableLoopToolName: string | undefined;
     let unavailableLoopServerTools: readonly string[] | undefined;
-    // 新しい attempt ごとに短期カウンタをリセットする。成功台帳は実セッション
-    // ID が変わったときだけ tool-guard 内でリセットされる。
-    toolGuard.resetSessionCounters(activeSessionId);
-    let toolGuardFailure: ToolGuardFailure | undefined;
+    let toolGuardFailure: ToolGuardRecoverableFailure | undefined;
     let idleConfirmed = false;
-    const echoState = { remainingPrompts: buildPromptEchoCandidates(promptText, options.systemPrompt) };
-    const textOffsets = new Map<string, number>();
+    const guardIngressState: GuardIngressState = {
+      rawOffsets: new Map<string, number>(),
+      partTypes: new Map<string, string>(),
+      pendingPartDeltas: new Map<number, BufferedPartDelta>(),
+      nextPartDeltaSequence: 0,
+      nextPartDeltaSequenceToFlush: 0,
+      pendingPartDeltaBytes: 0,
+      pendingPartDeltaByteLimit: Math.max(
+        guardSuite.policy.streamLimits.textByteLimit,
+        guardSuite.policy.streamLimits.reasoningByteLimit,
+      ),
+      // delta は構造イベント数に入らないが、未確定中はイベント全体を保持する。
+      // 構造イベントと同じ上限なら、payload のバイト上限とは別に要素 overhead も抑えられる。
+      pendingPartDeltaCountLimit: guardSuite.policy.streamEventLimit,
+      pendingPartDeltaLimitReason: guardSuite.policy.streamLimits.reasoningByteLimit
+        >= guardSuite.policy.streamLimits.textByteLimit
+        ? 'reasoning_bytes'
+        : 'text_bytes',
+      protocolFailure: undefined,
+      echoState: { remainingPrompts: buildPromptEchoCandidates(promptText, options.systemPrompt) },
+    };
     const textContentParts = new Map<string, string>();
 
-    // Consume a raw text delta for a part: strip the prompt echo, stream the
-    // visible portion, accumulate it, and advance the part's raw offset in
-    // lockstep. Sharing this keeps content and offset consistent whether the
-    // text arrives via `message.part.delta` or a full-snapshot
-    // `message.part.updated` — some providers emit both for the same part.
-    const consumeTextDelta = (partId: string, rawDelta: string): void => {
-      if (!rawDelta) return;
-      const visibleDelta = stripPromptEcho(rawDelta, echoState);
-      if (visibleDelta && !trackOpenCodeTextBytes(state, visibleDelta)) {
-        textContentParts.clear();
-        textOffsets.clear();
-        success = false;
-        failureMessage = describeOpenCodeStreamTrackingLimitFailure(state.trackingLimitReason);
-        return;
-      }
+    const consumeTextDelta = (partId: string, visibleDelta: string): void => {
       if (visibleDelta) {
         const redactor = state.textRedactors.get(partId) ?? createSensitiveTextStreamRedactor();
         state.textRedactors.set(partId, redactor);
@@ -1079,8 +1213,6 @@ export class OpenCodeAttemptRunner {
         const previous = textContentParts.get(partId) ?? '';
         textContentParts.set(partId, `${previous}${visibleDelta}`);
       }
-      const prevOffset = textOffsets.get(partId) ?? 0;
-      textOffsets.set(partId, prevOffset + rawDelta.length);
     };
 
     const consumeReasoningDelta = (partId: string, rawDelta: string): void => {
@@ -1109,57 +1241,79 @@ export class OpenCodeAttemptRunner {
     const streamIterator = (stream as AsyncIterable<unknown>)[Symbol.asyncIterator]();
     const streamAborted = new Promise<never>((_, reject) => {
       streamAbortController.signal.addEventListener('abort', () => {
-        reject(new Error(timeoutMessage));
+        const message = abortCause === 'deadline'
+          ? guardSuite.getCallFailure()?.verdict.reason ?? OPENCODE_STREAM_ABORTED_MESSAGE
+          : abortCause === 'timeout'
+            ? timeoutMessage
+            : OPENCODE_STREAM_ABORTED_MESSAGE;
+        reject(new Error(message));
       }, { once: true });
     });
     streamAborted.catch(() => { /* race の敗者側での未処理拒否を防ぐ */ });
 
-    // 劣化した生成は「ごく短いアシスタント応答サイクル」を数百回繰り返す
-    // （実測: 524〜1211 ループ）。テキスト断片だけの空転はツールエラー
-    // 予算にも無音検出にも掛からないため、応答サイクル数で打ち切る。
-    //
-    // 数えるのは「ツール呼び出しが1つも成功しないまま続いたサイクル」に限る。
-    // 総サイクル数で打ち切ると、健全な作業まで巻き込む（実測: 9万行の
-    // リポジトリで implement が 120 サイクル・ツール成功 150 回の途中で
-    // 打ち切られた）。
-    //
-    // OpenCode が拒否した呼び出し（`invalid` 擬似ツール）は status='completed'
-    // で返るため、素直に completed でリセットすると空転もリセットされる。
-    // extractOpenCodeToolRejection() で拒否を先に切り分けてから数える。
-    let cyclesWithoutToolSuccess = 0;
-    const messageCycleBudget = resolveMessageCycleBudget();
-
     let streamConsumptionError: unknown;
+    const normalizedEventQueue: OpenCodeStreamEvent[] = [];
     try {
     while (true) {
       if (streamAbortController.signal.aborted) break;
-      let iteration: IteratorResult<unknown>;
-      try {
-        iteration = await Promise.race([streamIterator.next(), streamAborted]);
-      } catch (raceError) {
-        if (streamAbortController.signal.aborted) break;
-        throw raceError;
-      }
-      if (iteration.done) break;
-      const event = iteration.value;
+      if (normalizedEventQueue.length === 0) {
+        let iteration: IteratorResult<unknown>;
+        try {
+          iteration = await Promise.race([streamIterator.next(), streamAborted]);
+          throwIfCallAborted();
+        } catch (raceError) {
+          if (streamAbortController.signal.aborted) break;
+          throw raceError;
+        }
+        if (iteration.done) break;
+        const rawEvent = iteration.value as OpenCodeStreamEvent;
 
-      const sseEvent = event as OpenCodeStreamEvent;
-      // active session への帰属を確認できないイベントは処理しない。
-      // サーバプールは同一モデルで共有されるため（並列レビュー等）、
-      // 兄弟セッションの text/tool 更新を通すと content と検出器が
-      // 汚染される。帰属不明のイベントも状態変更や無音検出の延命には
-      // 使わない。
-      const eventSessionId = extractEventSessionId(sseEvent);
-      if (eventSessionId !== activeSessionId) {
-        continue;
+        // active session への帰属を確認できないイベントは処理しない。
+        // サーバプールは同一モデルで共有されるため（並列レビュー等）、
+        // 兄弟セッションの text/tool 更新を通すと content と検出器が
+        // 汚染される。帰属不明のイベントも状態変更や無音検出の延命には
+        // 使わない。
+        const eventSessionId = extractEventSessionId(rawEvent);
+        if (eventSessionId !== activeSessionId) {
+          continue;
+        }
+        normalizedEventQueue.push(
+          ...normalizeGuardIngressEvent(rawEvent, activeSessionId, guardIngressState),
+        );
+        if (guardIngressState.protocolFailure !== undefined) {
+          success = false;
+          failureMessage = guardIngressState.protocolFailure;
+          break;
+        }
+        if (normalizedEventQueue.length === 0) continue;
       }
-      if (!trackOpenCodeStreamEvent(state, sseEvent)) {
+      const sseEvent = normalizedEventQueue.shift();
+      if (sseEvent === undefined) continue;
+      const guardResult = guardSuite.onEvent(sseEvent);
+      for (const anomaly of guardResult.anomalies) {
+        log.warn(anomaly.verdict.reason, { sessionId: activeSessionId, guardId: anomaly.guardId });
+      }
+      if (guardResult.failure !== undefined) {
         success = false;
-        failureMessage = describeOpenCodeStreamTrackingLimitFailure(state.trackingLimitReason);
+        failureMessage = guardResult.failure.verdict.reason;
+        const recoveryFailure = guardResult.failure.recoveryFailure;
+        if (recoveryFailure !== undefined) {
+          const part = sseEvent.type === 'message.part.updated'
+            ? sseEvent.properties.part as OpenCodePart
+            : undefined;
+          const toolPart = part?.type === 'tool' ? part as OpenCodeToolPart : undefined;
+          toolGuardFailure = toolPart === undefined
+            ? recoveryFailure
+            : sanitizeToolGuardFailure(recoveryFailure, toolPart.tool, toolPart.state.input);
+          failureMessage = toolGuardFailure.message;
+          if (toolGuardFailure.kind === 'unavailable_tool_loop') {
+            unavailableLoopToolName = toolGuardFailure.tool;
+            unavailableLoopServerTools = parseServerAvailableTools(toolGuardFailure.message);
+          }
+        }
         diag.onStreamError(sseEvent.type, failureMessage);
         break;
       }
-      resetIdleTimeout();
       diag.onFirstEvent(sseEvent.type);
       diag.onEvent(sseEvent.type);
       if (sseEvent.type === 'message.part.updated') {
@@ -1168,41 +1322,23 @@ export class OpenCodeAttemptRunner {
         const delta = props.delta;
 
         if (part.type === 'text') {
-          toolGuard.noteTextActivity();
           const textPart = part as OpenCodeTextPart;
-          const prev = textOffsets.get(textPart.id) ?? 0;
-          const rawDelta = delta
-            ?? (textPart.text.length > prev ? textPart.text.slice(prev) : '');
-          consumeTextDelta(textPart.id, rawDelta);
-          if (!success) {
-            diag.onStreamError(sseEvent.type, failureMessage);
-            break;
-          }
+          consumeTextDelta(textPart.id, delta ?? textPart.text);
           continue;
         }
 
         if (part.type === 'reasoning') {
-          toolGuard.noteTextActivity();
           const reasoningPart = part as {
             id: string;
             text: string;
           };
-          const prev = state.thinkingOffsets.get(reasoningPart.id) ?? 0;
-          const rawDelta = delta
-            ?? (reasoningPart.text.length > prev ? reasoningPart.text.slice(prev) : '');
-          consumeReasoningDelta(reasoningPart.id, rawDelta);
-          if (!success) {
-            diag.onStreamError(sseEvent.type, failureMessage);
-            break;
-          }
+          consumeReasoningDelta(reasoningPart.id, delta ?? reasoningPart.text);
           continue;
         }
 
         if (part.type === 'tool') {
           const toolPart = part as OpenCodeToolPart;
           const rejection = extractOpenCodeToolRejection(toolPart);
-          const completedExit = getCompletedToolExit(toolPart);
-          let loopError: string | undefined;
           // onStream（→ provider event logging 有効時は *-provider-events.jsonl
           // へ永続化される）にも raw エラー文を流さない。マスク済みの
           // コピーを downstream へ渡す（Finding Contract: onStream はライブ表示
@@ -1231,66 +1367,11 @@ export class OpenCodeAttemptRunner {
               error: sanitizeSensitiveText(maskedError),
               input: sanitizeToolCallInputForLogging(toolPart.tool, toolPart.state.input),
             });
-            // ガードに観測させる（unavailable / invalid-argument の連続性
-            // 検出器はガード内部で従来ロジックのまま動く）。発火は型付き
-            // union（ToolGuardFailure）で受け取り、文字列を再パースしない。
-            const rawFailure = toolGuard.observeError(
-              toolPart.callID || toolPart.id,
-              rejection.tool,
-              rejection.error,
-              toolPart.state.input,
-            );
-            const failure = rawFailure === undefined
-              ? undefined
-              : sanitizeToolGuardFailure(rawFailure, toolPart.tool, toolPart.state.input);
-            if (failure !== undefined) {
-              if (failure.kind === 'unavailable_tool_loop') {
-                unavailableLoopToolName = failure.tool;
-                // サーバのエラー文が申告する利用可能一覧を実測として保持する。
-                // recovery 前置文はこれを正とする（TAKT の写像には旧バージョン
-                // 互換のワイヤ専用 ID が含まれ、v3-r4 で 'list' を誤誘導した）。
-                unavailableLoopServerTools = parseServerAvailableTools(failure.message);
-              }
-              toolGuardFailure = failure;
-              loopError = failure.message;
-            }
-          } else if (toolPart.state.status === 'completed') {
-            const callId = toolPart.callID || toolPart.id;
-            const failure = completedExit.known && completedExit.exit !== 0
-              ? toolGuard.observeToolResultStagnation(
-                callId,
-                toolPart.tool,
-                toolPart.state.input,
-                toolPart.state.output,
-              )
-              : toolGuard.observeSuccess(
-                callId,
-                toolPart.tool,
-                toolPart.state.input,
-                toolPart.state.output,
-            );
-            if (completedExit.known && completedExit.exit === 0) {
-              toolGuard.clearToolResultStagnation(toolPart.tool, toolPart.state.input);
-            }
-            if (failure !== undefined) {
-              toolGuardFailure = failure;
-              loopError = failure.message;
-            } else if (!completedExit.known || completedExit.exit === 0) {
-              // ツールが1つでも成功したなら作業は前に進んでいる。
-              // 空転の計数をここで戻す（下の cyclesWithoutToolSuccess を参照）。
-              cyclesWithoutToolSuccess = 0;
-            }
           }
           if (!handlePartUpdated(partForDownstream, delta, options.onStream, state)) {
             success = false;
             failureMessage = describeOpenCodeStreamTrackingLimitFailure(state.trackingLimitReason);
             diag.onStreamError(sseEvent.type, failureMessage);
-            break;
-          }
-          if (loopError !== undefined) {
-            success = false;
-            failureMessage = loopError;
-            diag.onStreamError('message.part.updated', sanitizeAttemptError(loopError));
             break;
           }
           continue;
@@ -1311,22 +1392,14 @@ export class OpenCodeAttemptRunner {
           partID: string;
           field: string;
           delta: string;
+          guardPartType?: string;
         };
         if (deltaProps.field === 'text' && deltaProps.delta) {
-          toolGuard.noteTextActivity();
-          const partType = state.partTypes.get(deltaProps.partID);
+          const partType = deltaProps.guardPartType;
           if (partType === 'reasoning') {
             consumeReasoningDelta(deltaProps.partID, deltaProps.delta);
           } else if (partType === 'text' || partType === undefined) {
             consumeTextDelta(deltaProps.partID, deltaProps.delta);
-            if (partType === undefined) {
-              const prevOffset = state.thinkingOffsets.get(deltaProps.partID) ?? 0;
-              state.thinkingOffsets.set(deltaProps.partID, prevOffset + deltaProps.delta.length);
-            }
-          }
-          if (!success) {
-            diag.onStreamError(sseEvent.type, failureMessage);
-            break;
           }
         }
         continue;
@@ -1342,6 +1415,7 @@ export class OpenCodeAttemptRunner {
         };
         if (permProps.sessionID === activeSessionId) {
           try {
+            throwIfCallAborted();
             const reply = resolveOpenCodePermissionReply(
               options.permissionMode,
               permProps.permission,
@@ -1363,7 +1437,9 @@ export class OpenCodeAttemptRunner {
               }, { signal }),
               interactionTimeoutMs,
               'OpenCode permission reply timed out',
+              options.abortSignal,
             );
+            throwIfCallAborted();
             if (reply === 'reject') {
               // A rejected permission is a per-tool failure, not a fatal
               // one: OpenCode returns the rejection to the model as a tool
@@ -1399,11 +1475,14 @@ export class OpenCodeAttemptRunner {
               }, { signal }),
               interactionTimeoutMs,
               'OpenCode question reject timed out',
+              options.abortSignal,
             );
 
           if (!options.onAskUserQuestion) {
             try {
+              throwIfCallAborted();
               await rejectQuestion();
+              throwIfCallAborted();
             } catch (e) {
               success = false;
               failureMessage = getErrorMessage(e);
@@ -1413,7 +1492,12 @@ export class OpenCodeAttemptRunner {
           }
 
           try {
-            const answers = await options.onAskUserQuestion(toQuestionInput(questionProps));
+            throwIfCallAborted();
+            const answers = await withAbortSignal(
+              options.onAskUserQuestion(toQuestionInput(questionProps)),
+              options.abortSignal,
+            );
+            throwIfCallAborted();
             await withTimeout(
               (signal) => opencodeApiClient!.question.reply({
                 requestID: questionProps.id,
@@ -1422,11 +1506,15 @@ export class OpenCodeAttemptRunner {
               }, { signal }),
               interactionTimeoutMs,
               'OpenCode question reply timed out',
+              options.abortSignal,
             );
+            throwIfCallAborted();
           } catch (e) {
             if (e instanceof AskUserQuestionDeniedError) {
               try {
+                throwIfCallAborted();
                 await rejectQuestion();
+                throwIfCallAborted();
               } catch (rejectErr) {
                 success = false;
                 failureMessage = getErrorMessage(rejectErr);
@@ -1464,15 +1552,6 @@ export class OpenCodeAttemptRunner {
             failureMessage = streamError;
             diag.onStreamError('message.updated', sanitizeAttemptError(streamError));
             break;
-          }
-          if (info?.time?.completed !== undefined) {
-            cyclesWithoutToolSuccess += 1;
-            if (cyclesWithoutToolSuccess >= messageCycleBudget) {
-              success = false;
-              failureMessage = `OpenCode assistant message cycle budget exceeded (${cyclesWithoutToolSuccess} cycles without a successful tool call)`;
-              diag.onStreamError('message.updated', failureMessage);
-              break;
-            }
           }
         }
         continue;
@@ -1565,7 +1644,14 @@ export class OpenCodeAttemptRunner {
     }
     let streamCloseError: unknown;
     try {
-      await streamIterator.return?.(undefined);
+      if (streamIterator.return !== undefined) {
+        await withTimeout(
+          () => streamIterator.return!(undefined).then(() => undefined),
+          OPENCODE_SESSION_ABORT_TIMEOUT_MS,
+          'OpenCode stream iterator close timed out',
+          options.abortSignal,
+        );
+      }
     } catch (error) {
       streamCloseError = error;
     }
@@ -1589,9 +1675,22 @@ export class OpenCodeAttemptRunner {
     // success still true - do not let a timed-out or aborted stream
     // pass as a completed call (a stalled stream after a rejected
     // permission would otherwise be reported as done).
-    if (success && streamAbortController.signal.aborted && (abortCause === 'timeout' || abortCause === 'external')) {
+    if (
+      success
+      && streamAbortController.signal.aborted
+      && (abortCause === 'timeout' || abortCause === 'deadline' || abortCause === 'external')
+    ) {
       success = false;
-      failureMessage = abortCause === 'timeout' ? timeoutMessage : OPENCODE_STREAM_ABORTED_MESSAGE;
+      failureMessage = abortCause === 'timeout'
+        ? timeoutMessage
+        : abortCause === 'deadline'
+          ? guardSuite.getCallFailure()?.verdict.reason ?? OPENCODE_STREAM_ABORTED_MESSAGE
+          : OPENCODE_STREAM_ABORTED_MESSAGE;
+    }
+
+    if (success && guardIngressState.pendingPartDeltas.size > 0) {
+      success = false;
+      failureMessage = 'OpenCode stream protocol failure: unresolved part type for buffered text delta';
     }
 
     if (success && !idleConfirmed) {
@@ -1604,6 +1703,7 @@ export class OpenCodeAttemptRunner {
       streamAbortController.abort();
     }
     await awaitPromptCompletion();
+    throwIfCallAborted();
     throwIfServerInvalidated();
     if (promptError !== undefined) {
       if (success || abortCause === 'prompt') {
@@ -1621,6 +1721,7 @@ export class OpenCodeAttemptRunner {
     if (!success) {
       let message = failureMessage || 'OpenCode execution failed';
       const stopResult = await sessionLifecycle.stopServerSessionOnce();
+      throwIfCallAborted();
       throwIfServerInvalidated();
       if (!stopResult.ok) {
         message = stopResult.error.message;
@@ -1648,7 +1749,9 @@ export class OpenCodeAttemptRunner {
           opencodeApiClient,
           activeSessionId,
           options.cwd,
+          options.abortSignal,
         );
+        throwIfCallAborted();
         throwIfServerInvalidated();
         if (rateLimitMessage !== undefined) {
           // プロバイダ由来の生エラー文はリクエスト内容やアカウント情報を
@@ -1693,6 +1796,7 @@ export class OpenCodeAttemptRunner {
       // (transport/network) must not trigger this, or they would burn the
       // one-shot fallback budget before a real format failure arrives.
       if (shouldDegradeToFormatless(callState.recoveryState, message)) {
+        throwIfCallAborted();
         callState.recoveryState = degradeToFormatless(callState.recoveryState);
         callState.maxAttempts = Math.max(callState.maxAttempts, attempt + 1);
         log.debug('OpenCode native structured output failed; degrading to formatless prompt in a fresh session', {
@@ -1702,6 +1806,7 @@ export class OpenCodeAttemptRunner {
           message: sanitizeAttemptError(message),
         });
         await this.waitForRetryDelay(attempt, options.abortSignal);
+        throwIfCallAborted();
         throwIfServerInvalidated();
         return RETRY_ATTEMPT;
       }
@@ -1714,6 +1819,7 @@ export class OpenCodeAttemptRunner {
       // retry the same prompt once in a fresh session instead of failing
       // the step outright.
       if (shouldRecoverStaleSession(callState.recoveryState, attemptPlan, unavailableLoopToolName)) {
+        throwIfCallAborted();
         callState.recoveryState = recoverStaleSession(callState.recoveryState);
         callState.maxAttempts = Math.max(callState.maxAttempts, attempt + 1);
         log.debug('OpenCode resumed session called a stale StructuredOutput tool; retrying prompt in a fresh session', {
@@ -1723,11 +1829,15 @@ export class OpenCodeAttemptRunner {
           tool: unavailableLoopToolName,
         });
         await this.waitForRetryDelay(attempt, options.abortSignal);
+        throwIfCallAborted();
         throwIfServerInvalidated();
         return RETRY_ATTEMPT;
       }
 
-      const recoverableToolFailure = toRecoverableToolGuardFailure(toolGuardFailure);
+      const recoverableToolFailure = toolGuardFailure?.kind === 'unavailable_tool_loop'
+        && toolGuardFailure.tool === STRUCTURED_OUTPUT_TOOL_NAME
+        ? undefined
+        : toolGuardFailure;
       if (
         recoverableToolFailure !== undefined
         && !callState.toolGuardRecovery.freshSessionUsed
@@ -1736,13 +1846,14 @@ export class OpenCodeAttemptRunner {
           getToolGuardFailureFingerprint(recoverableToolFailure),
         )
       ) {
+        throwIfCallAborted();
         callState.toolGuardRecovery = markToolGuardCorrectionPending(
           callState.toolGuardRecovery,
           activeSessionId,
           getToolGuardFailureFingerprint(recoverableToolFailure),
           buildToolGuardCorrectionPrompt(recoverableToolFailure, unavailableLoopServerTools),
         );
-        toolGuard.noteRecovery();
+        guardSuite.noteRecovery();
         callState.maxAttempts = Math.max(callState.maxAttempts, attempt + 1);
         log.debug('OpenCode tool loop detected; sending one in-session correction', {
           agentType,
@@ -1750,25 +1861,28 @@ export class OpenCodeAttemptRunner {
           sessionId: activeSessionId,
           kind: recoverableToolFailure.kind,
           fingerprint: getToolGuardFailureFingerprint(recoverableToolFailure).slice(0, 12),
-          toolHealth: toolGuard.stats(),
+          toolHealth: guardSuite.stats(),
         });
         await this.waitForRetryDelay(attempt, options.abortSignal);
+        throwIfCallAborted();
         throwIfServerInvalidated();
         return RETRY_ATTEMPT;
       }
 
       if (recoverableToolFailure !== undefined && !callState.toolGuardRecovery.freshSessionUsed) {
+        throwIfCallAborted();
         callState.toolGuardRecovery = markToolGuardFreshSessionUsed(callState.toolGuardRecovery, recoverableToolFailure.kind);
-        toolGuard.noteRecovery();
+        guardSuite.noteRecovery();
         callState.maxAttempts = Math.max(callState.maxAttempts, attempt + 1);
         log.debug('OpenCode tool guard failure; retrying prompt once in a fresh session with a continuation preamble', {
           agentType,
           previousAttempt: attempt,
           previousSessionId: activeSessionId,
           reason: recoverableToolFailure.kind,
-          toolHealth: toolGuard.stats(),
+          toolHealth: guardSuite.stats(),
         });
         await this.waitForRetryDelay(attempt, options.abortSignal);
+        throwIfCallAborted();
         throwIfServerInvalidated();
         return RETRY_ATTEMPT;
       }
@@ -1780,12 +1894,14 @@ export class OpenCodeAttemptRunner {
       const retriable = toolGuardFailure === undefined
         && this.isRetriableError(message, abortCause);
       if (retriable && attempt < OPENCODE_RETRY_MAX_ATTEMPTS) {
+        throwIfCallAborted();
         log.info('Retrying OpenCode call after transient failure', {
           agentType,
           attempt,
           message: sanitizeAttemptError(message),
         });
         await this.waitForRetryDelay(attempt, options.abortSignal);
+        throwIfCallAborted();
         throwIfServerInvalidated();
         return RETRY_ATTEMPT;
       }
@@ -1805,8 +1921,9 @@ export class OpenCodeAttemptRunner {
 
       // 観測: 閾値校正の材料として tool health を構造化して残す
       // （debug ログ + AgentResponse.debugInfo）。
-      const failureToolHealth = toolGuard.stats();
+      const failureToolHealth = guardSuite.stats();
       log.debug('OpenCode tool health at failure', { agentType, ...failureToolHealth });
+      throwIfCallAborted();
       throwIfServerInvalidated();
       const sanitizedMessage = sanitizeAttemptError(message);
       scheduleResultEmission(false, sanitizedMessage, activeSessionId);
@@ -1853,10 +1970,11 @@ export class OpenCodeAttemptRunner {
 
     // 観測: 成功時も tool health を残す（v3-r4 のような「生産的だが edit 税を
     // 払っている」走行の分布を校正データとして採取するため）。
-    const successToolHealth = toolGuard.stats();
+    const successToolHealth = guardSuite.stats();
     if (successToolHealth.totalErrors > 0) {
       log.debug('OpenCode tool health at success', { agentType, ...successToolHealth });
     }
+    throwIfCallAborted();
     throwIfServerInvalidated();
     scheduleResultEmission(true, trimmed, activeSessionId);
     throwIfServerInvalidated();
@@ -1881,6 +1999,8 @@ export class OpenCodeAttemptRunner {
     let errorMessage = streamAbortController.signal.aborted
       ? abortCause === 'timeout'
         ? timeoutMessage
+        : abortCause === 'deadline'
+          ? guardSuite.getCallFailure()?.verdict.reason ?? OPENCODE_STREAM_ABORTED_MESSAGE
         : abortCause === 'prompt' && promptError !== undefined
           ? promptError
           : OPENCODE_STREAM_ABORTED_MESSAGE
@@ -1927,12 +2047,14 @@ export class OpenCodeAttemptRunner {
     const retriable = (stopResult === undefined || stopResult.ok)
       && this.isRetriableError(errorMessage, abortCause);
     if (retriable && attempt < OPENCODE_RETRY_MAX_ATTEMPTS) {
+      throwIfCallAborted();
       log.info('Retrying OpenCode call after transient exception', {
         agentType,
         attempt,
         errorMessage: sanitizeAttemptError(errorMessage),
       });
       await this.waitForRetryDelay(attempt, options.abortSignal);
+      throwIfCallAborted();
       const invalidationAfterRetryDelay = currentServerInvalidationError();
       if (invalidationAfterRetryDelay !== undefined) {
         return buildServerInvalidationResponse(invalidationAfterRetryDelay);
@@ -1958,9 +2080,7 @@ export class OpenCodeAttemptRunner {
       sessionId,
     };
   } finally {
-    if (idleTimeoutId !== undefined) {
-      clearTimeout(idleTimeoutId);
-    }
+    guardSuite.stopAttempt();
     if (options.abortSignal) {
       options.abortSignal.removeEventListener('abort', onExternalAbort);
     }
@@ -1983,7 +2103,11 @@ export class OpenCodeAttemptRunner {
     })();
 
     // lease を譲渡する前に、最後の invalidation 確認と観測可能な結果を確定する。
-    const finalizationError = attemptCleanupError
+    const callAbortError = options.abortSignal?.aborted
+      ? new Error(guardSuite.getCallFailure()?.verdict.reason ?? OPENCODE_STREAM_ABORTED_MESSAGE)
+      : undefined;
+    const finalizationError = callAbortError
+      ?? attemptCleanupError
       ?? currentServerInvalidationError()
       ?? finalizationInvalidationError;
     if (finalizationError !== undefined) {
@@ -2004,8 +2128,10 @@ export class OpenCodeAttemptRunner {
     if (pendingCompletion !== undefined) {
       diagRef?.onCompleted(pendingCompletion.reason, pendingCompletion.detail);
     }
-    flushSensitiveTextStreams(options.onStream, state);
-    if (pendingResultEmission !== undefined) {
+    if (!options.abortSignal?.aborted) {
+      flushSensitiveTextStreams(options.onStream, state);
+    }
+    if (!options.abortSignal?.aborted && pendingResultEmission !== undefined) {
       emitResult(
         options.onStream,
         pendingResultEmission.success,

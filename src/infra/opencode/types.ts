@@ -3,7 +3,7 @@
  */
 
 import type { AskUserQuestionHandler } from '../../core/workflow/types.js';
-import type { Language, PermissionMode } from '../../core/models/index.js';
+import type { Language, OpenCodeGuardOptions, PermissionMode } from '../../core/models/index.js';
 import type { StreamCallback } from '../../shared/types/provider.js';
 import { mapsToOpenCodeEditPermission } from './allowedTools.js';
 
@@ -433,6 +433,8 @@ export interface OpenCodeCallOptions {
   permissionMode?: PermissionMode;
   networkAccess?: boolean;
   variant?: string;
+  /** Guard feature switches from provider_options.opencode.guards. */
+  guards?: OpenCodeGuardOptions;
   onStream?: StreamCallback;
   onAskUserQuestion?: AskUserQuestionHandler;
   opencodeApiKey?: string;

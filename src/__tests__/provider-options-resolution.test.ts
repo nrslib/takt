@@ -709,6 +709,11 @@ describe('providerOptionsContract', () => {
       'provider_options.opencode.network_access',
       'provider_options.opencode.variant',
       'provider_options.opencode.allowed_tools',
+      'provider_options.opencode.guards.profile',
+      'provider_options.opencode.guards.model_profiles',
+      'provider_options.opencode.guards.call_timeout_ms',
+      'provider_options.opencode.guards.text_byte_limit',
+      'provider_options.opencode.guards.reasoning_byte_limit',
       'provider_options.claude.base_url',
       'provider_options.claude.effort',
       'provider_options.claude.skills.enabled',
@@ -730,6 +735,8 @@ describe('providerOptionsContract', () => {
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.codex.skills.user');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.opencode.variant');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.opencode.allowed_tools');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.opencode.guards');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.opencode.guards.model_profiles');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.copilot.effort');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.claude_terminal.timeout_ms');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.kiro');
@@ -765,6 +772,8 @@ describe('providerOptionsContract', () => {
       .toBe('provider_options.opencode.variant');
     expect(toProviderOptionsTracePath('opencode.allowedTools'))
       .toBe('provider_options.opencode.allowed_tools');
+    expect(toProviderOptionsTracePath('opencode.guards.modelProfiles'))
+      .toBe('provider_options.opencode.guards.model_profiles');
     expect(toProviderOptionsTracePath('claudeTerminal.transcriptPollIntervalMs'))
       .toBe('provider_options.claude_terminal.transcript_poll_interval_ms');
     expect(toProviderOptionsTracePath('kiro.agent'))
@@ -885,6 +894,37 @@ describe('claude_terminal provider_options normalization', () => {
         keepSession: false,
         transcriptPollIntervalMs: 1000,
       },
+    });
+  });
+
+  it('OpenCode guards は leaf 単位でマージし modelProfiles は map ごと置換する', () => {
+    const merged = mergeProviderOptions(
+      {
+        opencode: {
+          guards: {
+            profile: 'standard',
+            modelProfiles: { 'global/*': 'minimal', 'shared/*': 'standard' },
+            callTimeoutMs: 120_000,
+            textByteLimit: 1024,
+          },
+        },
+      },
+      {
+        opencode: {
+          guards: {
+            modelProfiles: { 'step/*': 'minimal' },
+            reasoningByteLimit: 4096,
+          },
+        },
+      },
+    );
+
+    expect(merged?.opencode?.guards).toEqual({
+      profile: 'standard',
+      modelProfiles: { 'step/*': 'minimal' },
+      callTimeoutMs: 120_000,
+      textByteLimit: 1024,
+      reasoningByteLimit: 4096,
     });
   });
 

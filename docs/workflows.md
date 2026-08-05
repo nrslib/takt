@@ -578,6 +578,7 @@ Promotion is not supported on parallel sub-steps.
 | `provider_options.claude.skills.enabled` | `false` | Enable Claude filesystem Skill discovery for `claude-sdk`, `claude`, and `claude-terminal` (see [configuration guide](./configuration.md#claude-skill-inheritance-skills)) |
 | `provider_options.opencode.allowed_tools` | - | OpenCode tool allowlist. Tool names are lowercase, for example `read`, `glob`, `grep`, `bash`, `websearch`, `webfetch` |
 | `provider_options.opencode.variant` | - | OpenCode model variant, passed through as a provider/model-specific string |
+| `provider_options.opencode.guards` | `standard` / 60 minutes | OpenCode guard profile, first-match `model_profiles`, call wall-clock, and text/reasoning byte limits (see [configuration guide](./configuration.md#opencode-execution-guards)) |
 | `provider_options.codex.base_url` | - | OpenAI-compatible base URL for Codex SDK constructor options (see [configuration guide](./configuration.md#provider-base-url-base_url)) |
 | `provider_options.codex.network_access` | - | Allow Codex sandbox to access the network (see [configuration guide](./configuration.md#network-access-network_access)) |
 | `provider_options.codex.skills.repo` | `false` | Inherit Codex Skills from `.agents/skills` between the execution CWD and repository root (see [configuration guide](./configuration.md#codex-skill-inheritance-skills)) |

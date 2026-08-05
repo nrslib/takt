@@ -7,8 +7,9 @@ import {
 } from './sensitive-text.js';
 
 const MAX_SENSITIVE_VALUE_NODES = 10_000;
-export const MAX_TRACKED_SENSITIVE_SOURCES = 256;
-export const MAX_TRACKED_SENSITIVE_SOURCE_BYTES = 256 * 1024;
+export const MAX_TRACKED_SENSITIVE_VALUES = 1_024;
+export const MAX_TRACKED_SENSITIVE_VALUE_BYTES = 1024 * 1024;
+export const MAX_INSPECTED_BYTES_PER_SOURCE = 16 * 1024 * 1024;
 
 export interface SensitiveValues {
   values: Set<string>;
@@ -16,53 +17,68 @@ export interface SensitiveValues {
   inspectedBytes: number;
 }
 
+/**
+ * 予算超過の理由。挙動はいずれも同じ exhaust（fail-closed）だが、
+ * 誤爆調査のためにどの上限に当たったかを失敗メッセージへ残す。
+ */
+export type SensitiveBudgetExhaustReason =
+  | 'candidate_count'
+  | 'candidate_bytes'
+  | 'source_scan';
+
+/**
+ * 予算は「検査した量」ではなく「保持している機密候補」に課金する。
+ * 検査量課金だと Write/Edit 本文のような非機密の大きな入力が予算を食い潰し、
+ * 健全な長時間実行が fail-closed に到達してしまう（実測で発生）。
+ * 保持候補への課金なら、予算超過 = 実際に大量の機密候補を追跡できなくなった
+ * ときだけであり、そのときの exhaust（以降すべて [REDACTED]）は漏洩防止として正当。
+ * 単一ソースの検査上限（バイト・ノード数）は、走査コストとフラット化攻撃への
+ * 防護として別途残す。
+ */
 export class BoundedSensitiveValues {
   readonly values = new Set<string>();
   exhausted = false;
-  sourceCount = 0;
-  inspectedBytes = 0;
+  exhaustReason: SensitiveBudgetExhaustReason | undefined;
+  storedValueBytes = 0;
 
-  add(source: unknown): void {
-    if (this.exhausted) {
-      return;
-    }
-    this.sourceCount += 1;
-    if (this.sourceCount > MAX_TRACKED_SENSITIVE_SOURCES) {
-      this.exhaust();
-      return;
-    }
-    this.collect(source);
-  }
-
-  /** Collect values without consuming a source slot; still bounded by the byte budget. */
   collect(source: unknown): void {
     if (this.exhausted) {
       return;
     }
-    const collected = collectSensitiveStringValues(
-      source,
-      MAX_TRACKED_SENSITIVE_SOURCE_BYTES - this.inspectedBytes,
-    );
+    const collected = collectSensitiveStringValues(source, MAX_INSPECTED_BYTES_PER_SOURCE);
     if (collected.exhausted) {
-      this.exhaust();
+      this.exhaust('source_scan');
       return;
     }
-    this.inspectedBytes += collected.inspectedBytes;
     for (const value of collected.values) {
+      if (this.values.has(value)) {
+        continue;
+      }
       this.values.add(value);
+      this.storedValueBytes += Buffer.byteLength(value, 'utf8');
+    }
+    if (this.values.size > MAX_TRACKED_SENSITIVE_VALUES) {
+      this.exhaust('candidate_count');
+      return;
+    }
+    if (this.storedValueBytes > MAX_TRACKED_SENSITIVE_VALUE_BYTES) {
+      this.exhaust('candidate_bytes');
     }
   }
 
   reset(): void {
     this.values.clear();
     this.exhausted = false;
-    this.sourceCount = 0;
-    this.inspectedBytes = 0;
+    this.exhaustReason = undefined;
+    this.storedValueBytes = 0;
   }
 
-  exhaust(): void {
+  exhaust(reason?: SensitiveBudgetExhaustReason): void {
     this.values.clear();
     this.exhausted = true;
+    if (reason !== undefined && this.exhaustReason === undefined) {
+      this.exhaustReason = reason;
+    }
   }
 }
 
@@ -210,7 +226,7 @@ export function collectSensitiveStringValues(
     return {
       values: new Set(source.values),
       exhausted: source.exhausted,
-      inspectedBytes: source.inspectedBytes,
+      inspectedBytes: 0,
     };
   }
   const result: SensitiveValues = { values: new Set(), exhausted: false, inspectedBytes: 0 };

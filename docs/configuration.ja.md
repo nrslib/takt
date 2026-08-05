@@ -278,6 +278,14 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 #   opencode:
 #     variant: high
 #     allowed_tools: [read, glob, grep, bash, websearch, webfetch]
+#     guards:
+#       profile: standard
+#       model_profiles:
+#         "opencode/big-pickle": minimal
+#         "lmstudio/*": standard
+#       call_timeout_ms: 3600000
+#       text_byte_limit: 1048576
+#       reasoning_byte_limit: 4194304
 #   kiro:
 #     agent: my-default-agent
 #   claude_terminal:
@@ -301,6 +309,29 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 #       - provider: opencode
 #         model: ollama-cloud/gemma4:31b
 ```
+
+#### OpenCode 実行ガード
+
+`provider_options.opencode.guards.profile` の既定値は `standard` です。
+`minimal` が無効にするのはヒューリスティックなループ検出だけで、時間・有界資源・
+完全性・厳密 correction のガードは mandatory のままです。`model_profiles` は解決済み
+モデル文字列を記述順に照合し、`*` だけをワイルドカードとして扱います。guards の
+各 leaf は provider option の各レイヤー間で個別にマージされますが、上位優先度の
+`model_profiles` は下位の map 全体を置換します。
+
+OpenCode の単一 call には既定で 3,600,000 ms（60分）の wall-clock 上限があります。
+60分を超える可能性がある call は、60,000〜86,400,000 の
+`call_timeout_ms` を明示してください。`text_byte_limit` の既定値は 1 MiB、
+`reasoning_byte_limit` は 4 MiB です。
+
+旧 `TAKT_OPENCODE_TOOL_ERROR_BUDGET`、
+`TAKT_OPENCODE_TOOL_SIGNATURE_ABSOLUTE`、
+`TAKT_OPENCODE_TOOL_SIGNATURE_REPEATS`、
+`TAKT_OPENCODE_TOOL_SUCCESS_REPEATS`、
+`TAKT_OPENCODE_TOOL_RESULT_STAGNATION_REPEATS` はガードを制御せず、無視時に一度だけ
+警告されます。これらを削除し、上記の `guards` profile と有界上限へ移行してください。
+terminal tool の完全一致反復は、廃止された累積検出ではなく固定の連続 tuple ガードに
+置き換わっています。
 
 ### プロジェクト設定フィールドリファレンス
 

@@ -4,7 +4,7 @@ import {
   OPENCODE_STREAM_ID_LIMIT,
   OPENCODE_STREAM_TEXT_BYTE_LIMIT,
 } from '../infra/opencode/OpenCodeStreamHandler.js';
-import { MAX_TRACKED_SENSITIVE_SOURCES } from '../shared/utils/sensitiveText.js';
+import { MAX_TRACKED_SENSITIVE_VALUES } from '../shared/utils/sensitiveText.js';
 import {
   ChatterOnlyEventStream,
   MockEventStream,
@@ -269,6 +269,10 @@ describe('OpenCodeClient stream cleanup', () => {
       const splitAt = Math.floor(prompt.length / 2);
       return [
         {
+          type: 'message.part.updated',
+          properties: { part: { id: 'text-1', sessionID: sessionId, type: 'text', text: '' } },
+        },
+        {
           type: 'message.part.delta',
           properties: {
             sessionID: sessionId,
@@ -296,6 +300,10 @@ describe('OpenCodeClient stream cleanup', () => {
     ['a final echo chunk with visible text', (sessionId: string, prompt: string) => {
       const splitAt = Math.floor(prompt.length / 2);
       return [
+        {
+          type: 'message.part.updated',
+          properties: { part: { id: 'text-1', sessionID: sessionId, type: 'text', text: '' } },
+        },
         {
           type: 'message.part.delta',
           properties: {
@@ -347,15 +355,21 @@ describe('OpenCodeClient stream cleanup', () => {
   });
 
   it.each([
-    ['delta', (sessionId: string) => [{
-      type: 'message.part.delta',
-      properties: {
-        sessionID: sessionId,
-        partID: 'text-1',
-        field: 'text',
-        delta: 'x'.repeat(OPENCODE_STREAM_TEXT_BYTE_LIMIT + 1),
+    ['delta', (sessionId: string) => [
+      {
+        type: 'message.part.updated',
+        properties: { part: { id: 'text-1', sessionID: sessionId, type: 'text', text: '' } },
       },
-    }]],
+      {
+        type: 'message.part.delta',
+        properties: {
+          sessionID: sessionId,
+          partID: 'text-1',
+          field: 'text',
+          delta: 'x'.repeat(OPENCODE_STREAM_TEXT_BYTE_LIMIT + 1),
+        },
+      },
+    ]],
     ['full snapshot', (sessionId: string) => [{
       type: 'message.part.updated',
       properties: {
@@ -368,6 +382,14 @@ describe('OpenCodeClient stream cleanup', () => {
       },
     }]],
     ['multiple ids', (sessionId: string) => [
+      {
+        type: 'message.part.updated',
+        properties: { part: { id: 'text-1', sessionID: sessionId, type: 'text', text: '' } },
+      },
+      {
+        type: 'message.part.updated',
+        properties: { part: { id: 'text-2', sessionID: sessionId, type: 'text', text: '' } },
+      },
       {
         type: 'message.part.delta',
         properties: {
@@ -388,6 +410,10 @@ describe('OpenCodeClient stream cleanup', () => {
       },
     ]],
     ['visible text after prompt echo', (sessionId: string) => [
+      {
+        type: 'message.part.updated',
+        properties: { part: { id: 'text-1', sessionID: sessionId, type: 'text', text: '' } },
+      },
       {
         type: 'message.part.delta',
         properties: { sessionID: sessionId, partID: 'text-1', field: 'text', delta: 'hello' },
@@ -512,10 +538,10 @@ describe('OpenCodeClient stream cleanup', () => {
     }
   });
 
-  it('fails an attempt when sensitive source tracking is exhausted and reports sensitive_sources', async () => {
+  it('fails an attempt when the sensitive candidate count is exhausted', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const sessionId = 'session-sensitive-source-limit';
-    const events = Array.from({ length: MAX_TRACKED_SENSITIVE_SOURCES + 1 }, (_, index) => (
+    const events = Array.from({ length: MAX_TRACKED_SENSITIVE_VALUES + 1 }, (_, index) => (
       sensitiveToolPartUpdated(sessionId, `tool-${index}`, `secret-${index}`)
     ));
     const stream = new MockEventStream(events, sessionId);
@@ -539,7 +565,7 @@ describe('OpenCodeClient stream cleanup', () => {
     });
 
     expect(result.status).toBe('error');
-    expect(result.error).toContain('sensitive_sources');
+    expect(result.error).toContain('candidate_count');
     expect(stream.returnSpy).toHaveBeenCalled();
   });
 
@@ -547,7 +573,7 @@ describe('OpenCodeClient stream cleanup', () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
     const sessionId = 'session-sensitive-same-tool';
     const toolId = 'same-tool';
-    const updates = MAX_TRACKED_SENSITIVE_SOURCES + 10;
+    const updates = MAX_TRACKED_SENSITIVE_VALUES + 10;
     const events: unknown[] = [
       sensitiveToolPartUpdated(sessionId, toolId, 'initial-secret'),
     ];
@@ -561,7 +587,7 @@ describe('OpenCodeClient stream cleanup', () => {
             type: 'tool',
             callID: `call-${toolId}`,
             tool: 'remote',
-            state: { status: 'running', input: { token: `secret-${index}` } },
+            state: { status: 'running', input: { token: 'initial-secret' } },
           },
         },
       });
@@ -575,7 +601,7 @@ describe('OpenCodeClient stream cleanup', () => {
           type: 'tool',
           callID: `call-${toolId}`,
           tool: 'remote',
-          state: { status: 'completed', input: { token: 'final-secret' }, output: 'ok', title: 'done' },
+          state: { status: 'completed', input: { token: 'initial-secret' }, output: 'ok', title: 'done' },
         },
       },
     });

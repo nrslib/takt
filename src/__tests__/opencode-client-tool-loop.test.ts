@@ -291,13 +291,29 @@ describe('OpenCodeClient tool loop recovery', () => {
     const sessionCreate = vi.fn()
       .mockResolvedValueOnce({ data: { id: 'session-invalid-loop' } })
       .mockResolvedValue({ data: { id: 'session-invalid-loop-fresh' } });
+    let subscription = 0;
     const subscribe = vi.fn().mockImplementation(() => {
+      subscription += 1;
       const sessionID = sessionCreate.mock.calls.length > 1
         ? 'session-invalid-loop-fresh'
         : 'session-invalid-loop';
+      const attemptEvents = events.map((event) => {
+        const value = event as { type: string; properties: { part: Record<string, unknown> } };
+        return {
+          ...value,
+          properties: {
+            ...value.properties,
+            part: {
+              ...value.properties.part,
+              id: `${String(value.properties.part.id)}-${subscription}`,
+              callID: `${String(value.properties.part.callID)}-${subscription}`,
+            },
+          },
+        };
+      });
       return Promise.resolve({
         stream: new MockEventStream([
-          ...events,
+          ...attemptEvents,
           sessionIdle(sessionID),
         ], sessionID),
       });
@@ -1248,11 +1264,24 @@ describe('OpenCodeClient tool loop recovery', () => {
     const sessionCreate = vi.fn()
       .mockResolvedValueOnce({ data: { id: 'session-invalid-arg' } })
       .mockResolvedValueOnce({ data: { id: 'session-invalid-arg-fresh' } });
+    let subscription = 0;
     const subscribe = vi.fn().mockImplementation(() => {
+      subscription += 1;
       const sessionID = sessionCreate.mock.calls.length > 1
         ? 'session-invalid-arg-fresh'
         : 'session-invalid-arg';
-      return Promise.resolve({ stream: new MockEventStream(events, sessionID) });
+      const attemptEvents = events.map((event) => ({
+        ...event,
+        properties: {
+          ...event.properties,
+          part: {
+            ...event.properties.part,
+            id: `${event.properties.part.id}-${subscription}`,
+            callID: `${event.properties.part.callID}-${subscription}`,
+          },
+        },
+      }));
+      return Promise.resolve({ stream: new MockEventStream(attemptEvents, sessionID) });
     });
     createOpencodeMock.mockResolvedValue({
       client: {
@@ -1278,12 +1307,8 @@ describe('OpenCodeClient tool loop recovery', () => {
     expect(promptTextOfCall(promptAsync, 2)).toContain('read files');
   });
 
-  it('should not enter the unavailable-tool recovery when the tool error budget is exhausted', async () => {
-    process.env.TAKT_OPENCODE_TOOL_ERROR_BUDGET = '2';
-    try {
+  it('撤去した累積エラー予算は2件の一般エラーで発火しない', async () => {
       const { OpenCodeClient } = await import('../infra/opencode/client.js');
-      // unavailable / invalid-argument どちらのパターンにも当たらない一般エラーで
-      // 予算だけを使い切らせる（ツール名を変えて連続性検出も回避）
       const events = [
         {
           type: 'message.part.updated',
@@ -1309,6 +1334,7 @@ describe('OpenCodeClient tool loop recovery', () => {
             },
           },
         },
+        { type: 'session.idle', properties: { sessionID: 'session-budget-x' } },
       ];
       const promptAsync = vi.fn().mockResolvedValue(undefined);
       createOpencodeMock.mockResolvedValue({
@@ -1327,12 +1353,8 @@ describe('OpenCodeClient tool loop recovery', () => {
         model: 'opencode/big-pickle',
       });
 
-      expect(result.status).toBe('error');
-      expect(result.content).toContain('tool error budget exceeded');
+      expect(result.status).toBe('done');
       expect(promptAsync).toHaveBeenCalledTimes(1);
-    } finally {
-      delete process.env.TAKT_OPENCODE_TOOL_ERROR_BUDGET;
-    }
   });
 
   it('should keep the unavailable-tool recovery slot even after the transient budget is consumed', async () => {
@@ -1446,7 +1468,7 @@ describe('OpenCodeClient tool loop recovery', () => {
     try {
       const result = await runBudgetScenario('session-under', Array.from({ length: 4 }, (_, i) => ({
         type: 'message.updated',
-        properties: { info: { sessionID: 'session-under', role: 'assistant', time: { completed: 1000 + i } } },
+        properties: { info: { id: `message-${i}`, sessionID: 'session-under', role: 'assistant', time: { completed: 1000 + i } } },
       })).concat([{
         type: 'message.part.updated',
         properties: { part: { id: 'p-t', type: 'text', text: 'done', sessionID: 'session-under' } },
@@ -1459,9 +1481,7 @@ describe('OpenCodeClient tool loop recovery', () => {
     }
   });
 
-  it('should complete normally when tool errors stay under the budget', async () => {
-    process.env.TAKT_OPENCODE_TOOL_ERROR_BUDGET = '6';
-    try {
+  it('should complete normally when rotating tool errors stay under the consecutive threshold', async () => {
       const result = await runBudgetScenario('session-under2', ['read', 'write', 'glob', 'grep', 'list'].map((tool, i) => ({
         type: 'message.part.updated',
         properties: {
@@ -1475,11 +1495,8 @@ describe('OpenCodeClient tool loop recovery', () => {
         properties: { part: { id: 'p-t2', type: 'text', text: 'done', sessionID: 'session-under2' } },
       }] as unknown[]));
 
-      // 予算未満（5 < 6）なら通常どおり完了する（回転ツール名で連続性検出も発火しない）
+      // 既定の consecutive=10 未満で、strict loop も同一ツール連続にならない。
       expect(result.status).toBe('done');
-    } finally {
-      delete process.env.TAKT_OPENCODE_TOOL_ERROR_BUDGET;
-    }
   });
 
   it('should stop a degenerate text-fragment loop via the message cycle budget', async () => {
@@ -1487,7 +1504,7 @@ describe('OpenCodeClient tool loop recovery', () => {
     try {
       const result = await runBudgetScenario('session-spin', Array.from({ length: 6 }, (_, i) => ({
         type: 'message.updated',
-        properties: { info: { sessionID: 'session-spin', role: 'assistant', time: { completed: 1000 + i } } },
+        properties: { info: { id: `message-${i}`, sessionID: 'session-spin', role: 'assistant', time: { completed: 1000 + i } } },
       })));
 
       expect(result.status).toBe('error');
@@ -1515,7 +1532,7 @@ describe('OpenCodeClient tool loop recovery', () => {
         },
         {
           type: 'message.updated',
-          properties: { info: { sessionID: 'session-healthy', role: 'assistant', time: { completed: 1000 + i } } },
+          properties: { info: { id: `message-${i}`, sessionID: 'session-healthy', role: 'assistant', time: { completed: 1000 + i } } },
         },
       ])).flat();
 
@@ -1527,9 +1544,7 @@ describe('OpenCodeClient tool loop recovery', () => {
     }
   });
 
-  it('should stop a degenerate loop that rotates tool names via the error budget', async () => {
-    process.env.TAKT_OPENCODE_TOOL_ERROR_BUDGET = '6';
-    try {
+  it('撤去した累積エラー総数では回転ツール名の6エラーを停止しない', async () => {
       const result = await runBudgetScenario('session-degenerate', ['read', 'write', 'glob', 'grep', 'list', 'edit'].map((tool, i) => ({
         type: 'message.part.updated',
         properties: {
@@ -1540,11 +1555,7 @@ describe('OpenCodeClient tool loop recovery', () => {
         },
       })));
 
-      expect(result.status).toBe('error');
-      expect(result.error).toContain('tool error budget exceeded');
-    } finally {
-      delete process.env.TAKT_OPENCODE_TOOL_ERROR_BUDGET;
-    }
+      expect(result.status).toBe('done');
   });
 
   it('should not trip the invalid-argument loop across interleaved unavailable errors', async () => {

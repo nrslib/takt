@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   createBoundedSensitiveValues,
-  MAX_TRACKED_SENSITIVE_SOURCE_BYTES,
-  MAX_TRACKED_SENSITIVE_SOURCES,
+  MAX_INSPECTED_BYTES_PER_SOURCE,
+  MAX_TRACKED_SENSITIVE_VALUE_BYTES,
+  MAX_TRACKED_SENSITIVE_VALUES,
   createSensitiveTextStreamRedactor,
   sanitizeSensitiveTextWithKnownValues,
   sanitizeSensitiveValue,
@@ -52,20 +53,52 @@ describe('sensitiveText', () => {
     }
   });
 
-  it('bounds accumulated sensitive sources and remains fail-closed after exhaustion', () => {
+  it('bounds retained sensitive candidates and remains fail-closed after exhaustion', () => {
     const byCount = createBoundedSensitiveValues();
-    for (let index = 0; index <= MAX_TRACKED_SENSITIVE_SOURCES; index += 1) {
-      byCount.add({ token: `secret-${index}` });
+    for (let index = 0; index <= MAX_TRACKED_SENSITIVE_VALUES; index += 1) {
+      byCount.collect({ token: `secret-${index}` });
     }
     expect(byCount.exhausted).toBe(true);
+    expect(byCount.exhaustReason).toBe('candidate_count');
     expect(byCount.values.size).toBe(0);
     expect(sanitizeSensitiveTextWithKnownValues('unknown-secret', byCount)).toBe('[REDACTED]');
 
     const byBytes = createBoundedSensitiveValues();
-    byBytes.add({ token: 'x'.repeat(MAX_TRACKED_SENSITIVE_SOURCE_BYTES + 1) });
+    byBytes.collect({ token: 'x'.repeat(MAX_TRACKED_SENSITIVE_VALUE_BYTES + 1) });
     expect(byBytes.exhausted).toBe(true);
+    expect(byBytes.exhaustReason).toBe('candidate_bytes');
     expect(byBytes.values.size).toBe(0);
     expect(sanitizeSensitiveTextWithKnownValues('another-secret', byBytes)).toBe('[REDACTED]');
+
+    const bySourceScan = createBoundedSensitiveValues();
+    bySourceScan.collect({ token: 'x'.repeat(MAX_INSPECTED_BYTES_PER_SOURCE + 1) });
+    expect(bySourceScan.exhausted).toBe(true);
+    expect(bySourceScan.exhaustReason).toBe('source_scan');
+  });
+
+  it('accepts exactly 1,024 sensitive candidates', () => {
+    const bounded = createBoundedSensitiveValues();
+    bounded.collect({
+      token: Array.from({ length: MAX_TRACKED_SENSITIVE_VALUES }, (_, index) => `secret-${index}`),
+    });
+
+    expect(bounded.exhausted).toBe(false);
+    expect(bounded.values.size).toBe(MAX_TRACKED_SENSITIVE_VALUES);
+  });
+
+  it('accepts exactly 1MiB of retained sensitive candidate bytes', () => {
+    const bounded = createBoundedSensitiveValues();
+    bounded.collect({ token: 'x'.repeat(MAX_TRACKED_SENSITIVE_VALUE_BYTES) });
+
+    expect(bounded.exhausted).toBe(false);
+    expect(bounded.storedValueBytes).toBe(MAX_TRACKED_SENSITIVE_VALUE_BYTES);
+  });
+
+  it('accepts exactly 16MiB from one inspected source', () => {
+    const bounded = createBoundedSensitiveValues();
+    bounded.collect('x'.repeat(MAX_INSPECTED_BYTES_PER_SOURCE));
+
+    expect(bounded.exhausted).toBe(false);
   });
 
   it('redacts sensitive-key values when repeated in sibling, nested, and array fields', () => {

@@ -275,8 +275,7 @@ describe('OpenCodeClient session queue', () => {
   it('should release queue after abort, allowing subsequent same-session call', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
 
-    // abort 後の解放は固定 5000ms の settlement barrier を待つため、
-    // fake timers で明示的に進めて実時間ゼロに圧縮する。
+    // call 共通 signal は未完了 prompt wait も打ち切り、queue を即時解放する。
     vi.useFakeTimers();
     const sessionId = 'release-abort-session';
     const abortController = new AbortController();
@@ -317,7 +316,7 @@ describe('OpenCodeClient session queue', () => {
 
     try {
       abortController.abort();
-      await vi.advanceTimersByTimeAsync(5001);
+      await vi.advanceTimersByTimeAsync(0);
       const result1 = await call1;
       expect(result1.status).toBe('error');
 
@@ -327,7 +326,7 @@ describe('OpenCodeClient session queue', () => {
 
       secondPrompt.resolve();
       const result2 = await call2;
-      expect(result2.status).toBe('done');
+      expect(result2.status, JSON.stringify(result2)).toBe('done');
     } finally {
       vi.useRealTimers();
     }
@@ -440,10 +439,10 @@ describe('OpenCodeClient session queue', () => {
 
     await vi.waitFor(() => {
       expect(call2Promise).toBeDefined();
-      expect(registerAbortSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(registerAbortSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
     }, { timeout: ASYNC_START_TIMEOUT_MS });
 
-    expect(registerAbortSpy.mock.calls[1]).toEqual([
+    expect(registerAbortSpy.mock.calls[0]).toEqual([
       'abort',
       expect.any(Function),
       { once: true },

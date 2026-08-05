@@ -18,6 +18,7 @@ import {
   maskOpenCodeToolContentInText,
   sanitizeOpenCodeToolInput,
 } from './tool-input-sanitizer.js';
+import { computeToolInputHash } from './tool-call-tuple.js';
 
 /** Subset of OpenCode Part types relevant for stream handling */
 export interface OpenCodeTextPart {
@@ -61,6 +62,7 @@ export type OpenCodeStreamTrackingLimitReason =
   | 'event_count'
   | 'tracked_id_count'
   | 'text_bytes'
+  | 'reasoning_bytes'
   | 'sensitive_sources';
 
 /** OpenCode SSE event types relevant for stream handling */
@@ -165,6 +167,16 @@ export type OpenCodeStreamEvent =
   | OpenCodeQuestionAskedEvent
   | { type: string; properties: Record<string, unknown> };
 
+/** Volume/memory limits applied to a single attempt's stream tracking. */
+export interface OpenCodeStreamLimits {
+  /** 可視テキスト累計バイト上限。 */
+  textByteLimit: number;
+  /** reasoning 累計バイト上限。 */
+  reasoningByteLimit: number;
+  /** 追跡する part/tool ID 数の上限（メモリ有界化）。 */
+  idLimit: number;
+}
+
 /** Tracking state for stream offsets during a single OpenCode session */
 export interface StreamTrackingState {
   textOffsets: Map<string, number>;
@@ -173,21 +185,57 @@ export interface StreamTrackingState {
   thinkingRedactors: Map<string, SensitiveTextStreamRedactor>;
   partTypes: Map<string, string>;
   startedTools: Set<string>;
-  latestToolInputJson: Map<string, string>;
+  latestToolInputHashes: Map<string, string>;
   sensitiveSources: BoundedSensitiveValues;
   eventCount: number;
   textBytes: number;
+  reasoningBytes: number;
   trackedIds: Set<string>;
+  limits: OpenCodeStreamLimits;
   trackingLimitReason?: OpenCodeStreamTrackingLimitReason;
   exhausted: boolean;
 }
 
 export const OPENCODE_STREAM_EVENT_LIMIT = 10_000;
-export const OPENCODE_STREAM_ID_LIMIT = 1_024;
-export const OPENCODE_STREAM_TEXT_BYTE_LIMIT = 64 * 1024;
+export const OPENCODE_STREAM_ID_LIMIT = 8_192;
+// 健全な implement 実行の実測は text 65.5KB / reasoning 28.4KB（13分・3.5分）。
+// この上限は劣化検出器ではなく「どう考えても異常な量」を止めるバックストップ
+// なので、実測から1桁以上離した値に置く。誤爆した旧値 64KiB の反省を維持する
+// こと — 正常系の実測と同じ桁に上限を置いてはならない。
+export const OPENCODE_STREAM_TEXT_BYTE_LIMIT = 1024 * 1024;
+export const OPENCODE_STREAM_REASONING_BYTE_LIMIT = 4 * 1024 * 1024;
 export const OPENCODE_STREAM_TRACKING_LIMIT_MESSAGE = 'OpenCode stream tracking limit exceeded';
 
-export function createStreamTrackingState(): StreamTrackingState {
+function resolveLimitEnvInt(name: string, fallback: number): number {
+  const fromEnv = Number(process.env[name]);
+  return Number.isFinite(fromEnv) && fromEnv > 0 ? Math.floor(fromEnv) : fallback;
+}
+
+/**
+ * 呼び出し時に評価する。優先順位は既存 provider_options 機構と同じで
+ * env > config（env は実験・テスト用の一時上書き、運用調整は config/persona）。
+ * 容量上限は profile では切れない（有界資源層）。
+ */
+export function resolveOpenCodeStreamLimits(
+  guards?: { textByteLimit?: number; reasoningByteLimit?: number },
+): OpenCodeStreamLimits {
+  return {
+    textByteLimit: resolveLimitEnvInt(
+      'TAKT_OPENCODE_STREAM_TEXT_BYTE_LIMIT',
+      guards?.textByteLimit ?? OPENCODE_STREAM_TEXT_BYTE_LIMIT,
+    ),
+    reasoningByteLimit: resolveLimitEnvInt(
+      'TAKT_OPENCODE_STREAM_REASONING_BYTE_LIMIT',
+      guards?.reasoningByteLimit ?? OPENCODE_STREAM_REASONING_BYTE_LIMIT,
+    ),
+    idLimit: resolveLimitEnvInt('TAKT_OPENCODE_STREAM_ID_LIMIT', OPENCODE_STREAM_ID_LIMIT),
+  };
+}
+
+export function createStreamTrackingState(
+  limits?: OpenCodeStreamLimits,
+  sensitiveSources?: BoundedSensitiveValues,
+): StreamTrackingState {
   return {
     textOffsets: new Map<string, number>(),
     thinkingOffsets: new Map<string, number>(),
@@ -195,11 +243,13 @@ export function createStreamTrackingState(): StreamTrackingState {
     thinkingRedactors: new Map<string, SensitiveTextStreamRedactor>(),
     partTypes: new Map<string, string>(),
     startedTools: new Set<string>(),
-    latestToolInputJson: new Map<string, string>(),
-    sensitiveSources: createBoundedSensitiveValues(),
+    latestToolInputHashes: new Map<string, string>(),
+    sensitiveSources: sensitiveSources ?? createBoundedSensitiveValues(),
     eventCount: 0,
     textBytes: 0,
+    reasoningBytes: 0,
     trackedIds: new Set<string>(),
+    limits: limits ?? resolveOpenCodeStreamLimits(),
     trackingLimitReason: undefined,
     exhausted: false,
   };
@@ -210,11 +260,24 @@ export function trackOpenCodeTextBytes(state: StreamTrackingState, text: string)
     return false;
   }
   const nextTextBytes = state.textBytes + Buffer.byteLength(text, 'utf8');
-  if (nextTextBytes > OPENCODE_STREAM_TEXT_BYTE_LIMIT) {
+  if (nextTextBytes > state.limits.textByteLimit) {
     exhaustStreamTrackingState(state, 'text_bytes');
     return false;
   }
   state.textBytes = nextTextBytes;
+  return true;
+}
+
+export function trackOpenCodeReasoningBytes(state: StreamTrackingState, text: string): boolean {
+  if (state.exhausted) {
+    return false;
+  }
+  const nextReasoningBytes = state.reasoningBytes + Buffer.byteLength(text, 'utf8');
+  if (nextReasoningBytes > state.limits.reasoningByteLimit) {
+    exhaustStreamTrackingState(state, 'reasoning_bytes');
+    return false;
+  }
+  state.reasoningBytes = nextReasoningBytes;
   return true;
 }
 
@@ -231,7 +294,7 @@ function exhaustStreamTrackingState(
   state.thinkingRedactors.clear();
   state.partTypes.clear();
   state.startedTools.clear();
-  state.latestToolInputJson.clear();
+  state.latestToolInputHashes.clear();
   state.trackedIds.clear();
   state.sensitiveSources.exhaust();
   state.exhausted = true;
@@ -244,7 +307,7 @@ function trackStreamId(state: StreamTrackingState, id: string): boolean {
   if (state.trackedIds.has(id)) {
     return true;
   }
-  if (state.trackedIds.size >= OPENCODE_STREAM_ID_LIMIT) {
+  if (state.trackedIds.size >= state.limits.idLimit) {
     exhaustStreamTrackingState(state, 'tracked_id_count');
     return false;
   }
@@ -490,6 +553,7 @@ export function handlePartUpdated(
       if (!onStream) return true;
       const reasoningPart = part as OpenCodeReasoningPart;
       if (delta) {
+        if (!trackOpenCodeReasoningBytes(state, delta)) return false;
         emitThinking(onStream, redactStreamChunk(
           state.thinkingRedactors,
           reasoningPart.id,
@@ -501,12 +565,14 @@ export function handlePartUpdated(
       } else {
         const prev = state.thinkingOffsets.get(reasoningPart.id) ?? 0;
         if (reasoningPart.text.length > prev) {
+          const nextText = reasoningPart.text.slice(prev);
+          if (!trackOpenCodeReasoningBytes(state, nextText)) return false;
           emitThinking(
             onStream,
             redactStreamChunk(
               state.thinkingRedactors,
               reasoningPart.id,
-              reasoningPart.text.slice(prev),
+              nextText,
               state.sensitiveSources,
             ),
           );
@@ -532,15 +598,16 @@ function handleToolPartUpdated(
 ): boolean {
   const toolId = toolPart.callID || toolPart.id;
   const isNewTool = !state.startedTools.has(toolId);
-  const inputJson = JSON.stringify(toolPart.state.input);
-  const inputChanged = state.latestToolInputJson.get(toolId) !== inputJson;
-  state.latestToolInputJson.set(toolId, inputJson);
+  const inputHash = computeToolInputHash(toolPart.state.input);
+  const inputChanged = inputHash === undefined
+    || state.latestToolInputHashes.get(toolId) !== inputHash;
+  if (inputHash !== undefined) state.latestToolInputHashes.set(toolId, inputHash);
   if (isNewTool) {
-    // 新しいツールだけがソース枠（MAX_TRACKED_SENSITIVE_SOURCES）を消費する。
-    // 同一ツールの input 更新は枠を消費せず値収集のみ行い、バイト予算で有界化する。
     state.startedTools.add(toolId);
-    state.sensitiveSources.add(toolPart.state.input);
-  } else if (inputChanged) {
+  }
+  // 予算は保持候補ベース（BoundedSensitiveValues 参照）なので、同一入力の
+  // 再収集は候補 Set の重複排除で無害。未変更入力はスキャンコストだけ省く。
+  if (isNewTool || inputChanged) {
     state.sensitiveSources.collect(toolPart.state.input);
   }
   if (state.sensitiveSources.exhausted) {

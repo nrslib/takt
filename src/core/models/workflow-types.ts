@@ -55,6 +55,8 @@ export type {
   CopilotEffort,
   ClaudeSandboxSettings,
   CodexProviderOptions,
+  OpenCodeGuardOptions,
+  OpenCodeGuardProfile,
   OpenCodeProviderOptions,
   ClaudeProviderOptions,
   ClaudeTerminalProviderOptions,
@@ -66,6 +68,7 @@ export type {
 } from './workflow-provider-options.js';
 export {
   RUNTIME_PREPARE_PRESETS,
+  OPENCODE_GUARD_PROFILES,
   CODEX_REASONING_EFFORT_VALUES,
   CLAUDE_EFFORT_VALUES,
   COPILOT_EFFORT_VALUES,

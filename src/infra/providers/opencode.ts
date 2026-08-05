@@ -54,6 +54,7 @@ function toOpenCodeOptions(options: ProviderCallOptions): OpenCodeCallOptions {
     permissionMode: options.permissionMode,
     networkAccess: options.providerOptions?.opencode?.networkAccess,
     variant: options.providerOptions?.opencode?.variant,
+    guards: options.providerOptions?.opencode?.guards,
     onStream: options.onStream,
     onAskUserQuestion: options.onAskUserQuestion,
     opencodeApiKey: options.opencodeApiKey ?? resolveOpencodeApiKey(),

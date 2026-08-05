@@ -131,6 +131,34 @@ describe('denormalizeProviderOptions', () => {
     expect(denormalizedProviderOptions).toEqual(rawProviderOptions);
   });
 
+  it('should round-trip OpenCode guard leaves and model_profiles', () => {
+    const rawProviderOptions = {
+      opencode: {
+        guards: {
+          profile: 'minimal' as const,
+          model_profiles: { 'opencode/*': 'standard' as const },
+          call_timeout_ms: 120_000,
+          text_byte_limit: 1024,
+          reasoning_byte_limit: 4096,
+        },
+      },
+    };
+
+    const normalizedProviderOptions = normalizeProviderOptions(rawProviderOptions);
+    expect(normalizedProviderOptions).toEqual({
+      opencode: {
+        guards: {
+          profile: 'minimal',
+          modelProfiles: { 'opencode/*': 'standard' },
+          callTimeoutMs: 120_000,
+          textByteLimit: 1024,
+          reasoningByteLimit: 4096,
+        },
+      },
+    });
+    expect(denormalizeProviderOptions(normalizedProviderOptions)).toEqual(rawProviderOptions);
+  });
+
   it('should round-trip Claude Skill enabled through normalize and denormalize', () => {
     const rawProviderOptions = {
       claude: {

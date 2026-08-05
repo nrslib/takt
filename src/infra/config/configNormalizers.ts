@@ -772,6 +772,7 @@ export function denormalizeProviderOptions(
     providerOptions.opencode?.networkAccess !== undefined
     || providerOptions.opencode?.variant !== undefined
     || providerOptions.opencode?.allowedTools !== undefined
+    || providerOptions.opencode?.guards !== undefined
   ) {
     raw.opencode = {
       ...(providerOptions.opencode.networkAccess !== undefined
@@ -782,6 +783,27 @@ export function denormalizeProviderOptions(
         : {}),
       ...(providerOptions.opencode.allowedTools !== undefined
         ? { allowed_tools: providerOptions.opencode.allowedTools }
+        : {}),
+      ...(providerOptions.opencode.guards !== undefined
+        ? {
+            guards: {
+              ...(providerOptions.opencode.guards.profile !== undefined
+                ? { profile: providerOptions.opencode.guards.profile }
+                : {}),
+              ...(providerOptions.opencode.guards.modelProfiles !== undefined
+                ? { model_profiles: { ...providerOptions.opencode.guards.modelProfiles } }
+                : {}),
+              ...(providerOptions.opencode.guards.callTimeoutMs !== undefined
+                ? { call_timeout_ms: providerOptions.opencode.guards.callTimeoutMs }
+                : {}),
+              ...(providerOptions.opencode.guards.textByteLimit !== undefined
+                ? { text_byte_limit: providerOptions.opencode.guards.textByteLimit }
+                : {}),
+              ...(providerOptions.opencode.guards.reasoningByteLimit !== undefined
+                ? { reasoning_byte_limit: providerOptions.opencode.guards.reasoningByteLimit }
+                : {}),
+            },
+          }
         : {}),
     };
   }
