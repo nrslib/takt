@@ -35,6 +35,12 @@ export function isOpenProvisional(
     && finding.reviewerAnomalyReclassification === undefined;
 }
 
+export function isOpenProvisionalForActionRecovery(
+  finding: FindingLedgerEntry,
+): finding is FindingLedgerEntry & { provisional: NonNullable<FindingLedgerEntry['provisional']> } {
+  return finding.status === 'open' && finding.provisional !== undefined;
+}
+
 function claimSnapshotDigest(finding: FindingLedgerEntry): string {
   return findingContentAddress('terminal-finding-claim-snapshot', {
     findingId: finding.id,

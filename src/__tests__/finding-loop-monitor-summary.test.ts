@@ -285,6 +285,40 @@ describe('renderLoopMonitorFindingsSummary', () => {
     expect(summary).toContain('findings.reviewerAnomalies.count: 1');
   });
 
+  it('protocol-noise の拒否件数を要約文にも出力する', () => {
+    const ledger: FindingLedger = {
+      ...makeLedger([]),
+      reviewerAnomalies: [reviewerAnomaly({
+        kind: 'intake-contract-incomplete',
+        intakeContract: {
+          observationClass: 'protocol-noise',
+          classificationAuthorityId: 'system/intake_observation_classification_v1',
+          reasonCodes: ['claim-evidence-missing'],
+          missingRequirements: ['claimEvidence'],
+          presentationOwnerReviewer: 'coding-review',
+          presentationLimit: 1,
+          terminalDisposition: {
+            kind: 'protocol_noise_rejected_after_presentation',
+            workflowOutcome: 'non_claim_observation_rejected',
+            decidedAt: {
+              runId: 'run-1',
+              stepName: 'reviewers',
+              timestamp: '2026-07-01T00:00:00.000Z',
+            },
+            terminalPublicationId: 'publication-1',
+            reason: 'protocol noise',
+          },
+        },
+      })],
+    };
+
+    const data = buildLoopMonitorFindingsSummaryData(ledger, {});
+    const summary = renderLoopMonitorFindingsSummary(ledger, {});
+
+    expect(data.reviewerAnomalies.protocolNoiseRejectedCount).toBe(1);
+    expect(summary).toContain('protocolNoiseRejectedCount: 1');
+  });
+
   it('promoted/settled/outstanding anomaly が混在しても未決着だけを数える', () => {
     const ledger: FindingLedger = {
       ...makeLedger([]),

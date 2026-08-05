@@ -21,6 +21,7 @@ export interface NormalizeFindingIntakeOptions {
     userInstruction: string;
   }) => void;
   mode?: 'initial' | 'correction';
+  extractionFidelityCorrection?: boolean;
 }
 
 export async function normalizeFindingIntake(
@@ -30,7 +31,11 @@ export async function normalizeFindingIntake(
   const isolatedCwd = mkdtempSync(join(tmpdir(), 'takt-finding-intake-'));
   try {
     const instruction = options.mode === 'correction'
-      ? buildFindingIntakeCorrectionPrompt(report, options.language ?? 'en')
+      ? buildFindingIntakeCorrectionPrompt(
+          report,
+          options.language ?? 'en',
+          options.extractionFidelityCorrection ?? false,
+        )
       : buildFindingIntakeExtractionPrompt(report, options.language ?? 'en');
     return await runAgent(undefined, instruction, {
       cwd: isolatedCwd,

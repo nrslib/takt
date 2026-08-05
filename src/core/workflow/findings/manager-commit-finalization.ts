@@ -86,8 +86,10 @@ function applyIntakeContractTerminalDispositions(input: {
     const publications = publicationsByAnomalyId.get(anomaly.id) ?? [];
     if (
       publications.length === 0
-      || publications.length < defect.presentationLimit
+      || (
+        publications.length < defect.presentationLimit
         && defect.observationClass === 'claim-bearing'
+      )
     ) {
       return anomaly;
     }

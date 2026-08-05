@@ -262,7 +262,10 @@ describe('engine proof admission', () => {
       'query coverage gap at "src/current.ts" (resource_cap)',
     ]);
     expect(admission.cleanWire).toEqual([]);
-    expect(admission.admissionProvisionalSpecs).toHaveLength(1);
+    expect(admission.admissionProvisionalSpecs).toEqual([]);
+    expect(admission.admissionAnomalySpecs).toEqual([expect.objectContaining({
+      kind: 'intake-contract-incomplete',
+    })]);
   });
 
   it('admits a complete repository manifest proof for a structure target', () => {

@@ -201,7 +201,7 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
     };
     expect(ledger.findings).toHaveLength(0);
     expect(ledger.reviewerAnomalies?.filter((a) => a.promotedFindingId === undefined)).toHaveLength(1);
-    expect(ledger.reviewerAnomalies?.[0]?.kind).toBe('intake-contract-incomplete');
+    expect(ledger.reviewerAnomalies?.[0]?.kind).toBe('quote-mismatch');
   });
 
   it('fail-closed: returnValue 終端（return: ...）で完了しようとしても、未昇格 anomaly が残る限り completion gate が拒否して abort する（codex 検証2巡目#1: gate を迂回する完了経路を塞ぐ）', async () => {

@@ -358,7 +358,6 @@ export class ParallelRunner {
         )
       : undefined;
     const sharedReviewerContext = baseFindingContractContext?.reviewer;
-    const sharedReviewScopeSnapshotId = sharedReviewerContext?.reviewScopeSnapshotId;
     if (
       this.deps.findingContract !== undefined
       && agentSubSteps.length > 0

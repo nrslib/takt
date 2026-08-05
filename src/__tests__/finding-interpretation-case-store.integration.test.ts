@@ -588,6 +588,132 @@ describe('interpretation case SQLite begin transaction', () => {
     harness.resolver.close();
   });
 
+  it('continues after a byte-limited batch is reduced within the same round', async () => {
+    const harness = openHarness({
+      prepareProviderRequest: (_ledger, cases) => ({
+        requestBytes: 'x'.repeat(cases.length * 40),
+        adapterSupportsUtf8ByteUpperBound: true,
+      }),
+      budgetLimits: {
+        maxCallsPerRound: 4,
+        maxAdapterVisibleInputBytesPerCall: 100,
+        maxOutputTokensPerCall: 10_000,
+        maxChargedInputTokensPerRound: 400_000,
+        maxChargedOutputTokensPerRound: 40_000,
+      },
+    });
+    const ledger = baseLedger();
+    await seed(harness, ledger);
+    const items = Array.from({ length: 4 }, (_, index) => taintedItems({
+      rawFindingIds: [`raw-reduced-batch-${index + 1}`],
+      ledger,
+      description: `Reduced batch defect ${index + 1}.`,
+      evidenceLine: index + 1,
+    })[0]!);
+
+    const begun = await harness.beginInterpretationCases({
+      items,
+      provisionalOnlyRawFindingIds: new Set(),
+    });
+
+    expect(begun.providerCases).toHaveLength(4);
+    expect(begun.directPlans).toHaveLength(0);
+    expect(harness.store.loadLedger().findingManagerProviderCalls)
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ requestByteLength: 80 }),
+      ]));
+    expect(harness.store.loadLedger().findingManagerProviderCalls).toHaveLength(2);
+    harness.resolver.close();
+  });
+
+  it('lands an irreducible oversized case and continues with the following case', async () => {
+    let oversizedCaseId: string | undefined;
+    const harness = openHarness({
+      prepareProviderRequest: (_ledger, cases) => {
+        oversizedCaseId ??= cases[0]?.caseId;
+        return {
+          requestBytes: 'x'.repeat(cases.some(({ caseId }) => caseId === oversizedCaseId) ? 80 : 20),
+          adapterSupportsUtf8ByteUpperBound: true,
+        };
+      },
+      budgetLimits: {
+        maxCallsPerRound: 4,
+        maxAdapterVisibleInputBytesPerCall: 50,
+        maxOutputTokensPerCall: 10_000,
+        maxChargedInputTokensPerRound: 400_000,
+        maxChargedOutputTokensPerRound: 40_000,
+      },
+    });
+    const ledger = baseLedger();
+    await seed(harness, ledger);
+    const items = [
+      ...taintedItems({
+        rawFindingIds: ['raw-irreducible-overflow'],
+        ledger,
+        description: 'Irreducible oversized defect.',
+      }),
+      ...taintedItems({
+        rawFindingIds: ['raw-after-overflow'],
+        ledger,
+        description: 'Following reservable defect.',
+        evidenceLine: 2,
+      }),
+    ];
+
+    const begun = await harness.beginInterpretationCases({
+      items,
+      provisionalOnlyRawFindingIds: new Set(),
+    });
+    const stored = harness.store.loadLedger();
+
+    expect(begun.providerCases).toHaveLength(1);
+    expect(begun.directPlans).toEqual([
+      expect.objectContaining({
+        decision: expect.objectContaining({ kind: 'provisional' }),
+        unreservedAuthority: expect.objectContaining({ reason: 'manager-input-overflow' }),
+      }),
+    ]);
+    expect(stored.interpretationAttempts).toHaveLength(1);
+    expect(stored.findingManagerProviderCalls).toHaveLength(1);
+    harness.resolver.close();
+  });
+
+  it('lands the remaining cases as budget exhausted after the current batch', async () => {
+    const harness = openHarness({
+      prepareProviderRequest: (_ledger, cases) => ({
+        requestBytes: 'x'.repeat(cases.length * 40),
+        adapterSupportsUtf8ByteUpperBound: true,
+      }),
+      budgetLimits: {
+        maxCallsPerRound: 1,
+        maxAdapterVisibleInputBytesPerCall: 100,
+        maxOutputTokensPerCall: 10_000,
+        maxChargedInputTokensPerRound: 400_000,
+        maxChargedOutputTokensPerRound: 40_000,
+      },
+    });
+    const ledger = baseLedger();
+    await seed(harness, ledger);
+    const items = Array.from({ length: 4 }, (_, index) => taintedItems({
+      rawFindingIds: [`raw-budget-tail-${index + 1}`],
+      ledger,
+      description: `Budget tail defect ${index + 1}.`,
+      evidenceLine: index + 1,
+    })[0]!);
+
+    const begun = await harness.beginInterpretationCases({
+      items,
+      provisionalOnlyRawFindingIds: new Set(),
+    });
+
+    expect(begun.providerCases).toHaveLength(2);
+    expect(begun.directPlans).toHaveLength(2);
+    expect(begun.directPlans.every((plan) => (
+      plan.unreservedAuthority?.reason === 'manager-budget-exhausted'
+    ))).toBe(true);
+    harness.resolver.close();
+  });
+
   it('is idempotent for the same raw payload and rejects another payload without a DB write', async () => {
     const harness = openHarness();
     const ledger = baseLedger();

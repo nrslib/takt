@@ -50,6 +50,7 @@ import {
   RAW_AMBIGUITY_CODES,
   RAW_DECISION_KINDS,
   INTAKE_CONTRACT_ANOMALY_REASON_CODES,
+  INTAKE_CONTRACT_CLASSIFICATION_AUTHORITY_ID,
   INTAKE_CONTRACT_MISSING_REQUIREMENTS,
   REVIEWER_ANOMALY_KINDS,
   SEMANTIC_FINDING_DISMISSAL_BASES,
@@ -737,7 +738,7 @@ export const ReviewerAnomalyEntrySchema = z.object({
   mismatchReason: nonEmptyString,
   intakeContract: z.object({
     observationClass: z.enum(['claim-bearing', 'protocol-noise']),
-    classificationAuthorityId: nonEmptyString,
+    classificationAuthorityId: z.literal(INTAKE_CONTRACT_CLASSIFICATION_AUTHORITY_ID),
     reasonCodes: z.array(z.enum(INTAKE_CONTRACT_ANOMALY_REASON_CODES))
       .min(1)
       .superRefine((values, ctx) => validateBinarySortedUniqueSet(values, ctx, 'intake anomaly reason code')),
@@ -847,7 +848,7 @@ export const FindingProvisionalMetadataSchema = z.object({
   kind: z.enum(FINDING_PROVISIONAL_KINDS),
   stableKey: nonEmptyString,
   lineageKey: nonEmptyString,
-  sourceRawFindingIds: z.array(rawFindingIdString),
+  sourceRawFindingIds: BinarySortedUniqueRawFindingIdSetSchema,
   reason: nonEmptyString,
   firstObservedAt: FindingObservationSchema,
   lastObservedAt: FindingObservationSchema,
@@ -2649,10 +2650,8 @@ export function migrateFindingLedgerJson(value: unknown): unknown {
     ) {
       throw new Error('Finding manager provider budget contains conflicting legacy and current input limits');
     }
-    const {
-      maxAdapterVisibleInputTokensPerCall: _legacyLimit,
-      ...currentLimits
-    } = limits;
+    const currentLimits = { ...limits };
+    delete currentLimits.maxAdapterVisibleInputTokensPerCall;
     return {
       ...scopeRecord,
       limits: {
@@ -3410,6 +3409,7 @@ const RawFindingsOutputIntakeJsonSchema = {
                 additionalProperties: false,
                 required: [
                   'rawFindingId',
+                  'reassertsReviewerAnomalyId',
                   'relation',
                   'targetFindingIds',
                   'familyTag',
@@ -3427,7 +3427,7 @@ const RawFindingsOutputIntakeJsonSchema = {
                     maxLength: RAW_FINDING_FIELD_LIMITS.maxProviderRawFindingIdChars,
                   },
                   reassertsReviewerAnomalyId: {
-                    type: 'string',
+                    type: ['string', 'null'],
                     minLength: 1,
                   },
                   relation: {
@@ -3648,6 +3648,19 @@ export const RawFindingsOutputValidationJsonSchema = {
       items: {
         ...RawFindingsOutputIntakeJsonSchema.properties.rawFindings.items,
         required: [],
+        properties: {
+          ...RawFindingsOutputIntakeJsonSchema.properties.rawFindings.items.properties,
+          candidate: {
+            ...RawFindingsOutputIntakeJsonSchema.properties.rawFindings.items.properties.candidate,
+            anyOf: [
+              RawFindingsOutputIntakeJsonSchema.properties.rawFindings.items.properties.candidate.anyOf[0],
+              {
+                ...RawFindingsOutputIntakeJsonSchema.properties.rawFindings.items.properties.candidate.anyOf[1],
+                required: [],
+              },
+            ],
+          },
+        },
       },
     },
   },

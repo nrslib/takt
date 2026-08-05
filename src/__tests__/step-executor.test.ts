@@ -537,6 +537,69 @@ describe('StepExecutor', () => {
     ))).toEqual(['initial', 'correction']);
   });
 
+  it('extraction-fidelity correctionが同じ欠落を返した場合はpublicationしない', async () => {
+    const rawFinding = {
+      rawExcerpt: 'Issue: src/example.ts still bypasses the required boundary.',
+      candidate: {
+        rawFindingId: null,
+        familyTag: null,
+        severity: null,
+        title: null,
+        description: null,
+        suggestion: null,
+        relation: null,
+        targetFindingIds: [],
+        target: null,
+        evidenceRequests: [],
+      },
+    };
+    const harness = createPlainTextPublicationHarness([
+      {
+        persona: 'default',
+        status: 'done',
+        content: '{}',
+        structuredOutput: { rawFindings: [rawFinding] },
+        timestamp: new Date('2026-07-31T00:00:01.000Z'),
+      },
+      {
+        persona: 'default',
+        status: 'done',
+        content: '{}',
+        structuredOutput: { rawFindings: [rawFinding] },
+        timestamp: new Date('2026-07-31T00:00:02.000Z'),
+      },
+    ]);
+
+    await expect(harness.executor.prepareFindingReviewPublication({
+      step: harness.step,
+      executableStep: harness.step,
+      reviewerOutputStrategy: PLAIN_TEXT_NORMALIZED_STRATEGY,
+      parentStepName: 'reviewers',
+      stepIteration: 1,
+      state: harness.state,
+      phase1Response: {
+        persona: 'reviewer',
+        status: 'done',
+        content: 'phase 1 investigation',
+        timestamp: new Date('2026-07-31T00:00:00.000Z'),
+      },
+      agentOptions: { resolvedProvider: 'mock' },
+      onProviderAttempt: vi.fn(),
+      updatePersonaSession: harness.updatePersonaSession,
+    })).rejects.toThrow('extraction-fidelity correction failed');
+    expect(harness.normalizeFindingIntake).toHaveBeenCalledTimes(2);
+    expect(harness.normalizeFindingIntake.mock.calls.map(([, options]) => {
+      const typed = options as { mode: string; extractionFidelityCorrection?: boolean };
+      return {
+        mode: typed.mode,
+        extractionFidelityCorrection: typed.extractionFidelityCorrection,
+      };
+    })).toEqual([
+      { mode: 'initial', extractionFidelityCorrection: false },
+      { mode: 'correction', extractionFidelityCorrection: true },
+    ]);
+  });
+
   it('plain-text normalizerの65件出力はcorrectionを消費せず64件とoverflow記録へ着地する', async () => {
     const rawFindings = Array.from({ length: 65 }, (_, index) => {
       const sequence = String(index + 1).padStart(3, '0');

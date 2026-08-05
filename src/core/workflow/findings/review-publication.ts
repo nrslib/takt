@@ -169,6 +169,15 @@ function sortedUnique(values: readonly string[]): string[] {
   return [...new Set(values)].sort(compareBinaryStrings);
 }
 
+function compareRestatementRequests(
+  left: RestatementRequestV1,
+  right: RestatementRequestV1,
+): number {
+  return left.presentationOrdinal - right.presentationOrdinal
+    || compareBinaryStrings(left.anomalyId, right.anomalyId)
+    || compareBinaryStrings(left.restatementRequestId, right.restatementRequestId);
+}
+
 function restatementRequestIdentity(request: Omit<RestatementRequestV1, 'restatementRequestId'>): string {
   return sha256(JSON.stringify([
     'restatement-request-v1',
@@ -218,11 +227,7 @@ export function createFindingReviewPresentationContextV2(input: {
   reviewScopeSnapshotId: string;
   restatementRequests?: readonly RestatementRequestV1[];
 }): FindingReviewPresentationContextV2 {
-  const requests = [...(input.restatementRequests ?? [])].sort((left, right) => (
-    left.presentationOrdinal - right.presentationOrdinal
-    || compareBinaryStrings(left.anomalyId, right.anomalyId)
-    || compareBinaryStrings(left.restatementRequestId, right.restatementRequestId)
-  ));
+  const requests = [...(input.restatementRequests ?? [])].sort(compareRestatementRequests);
   const anomalyIds = sortedUnique(requests.map((request) => request.anomalyId));
   const context: FindingReviewPresentationContextV2 = {
     revision: 2,
@@ -295,8 +300,8 @@ export function assertFindingReviewPresentationContext(
   if (new Set(requestKeys).size !== requestKeys.length) {
     throw new Error('Finding review presentation context contains duplicate restatement requests');
   }
-  const sortedKeys = [...requestKeys].sort(compareBinaryStrings);
-  if (JSON.stringify(sortedKeys) !== JSON.stringify(requestKeys)) {
+  const sortedRequests = [...context.restatementRequests].sort(compareRestatementRequests);
+  if (JSON.stringify(sortedRequests) !== JSON.stringify(context.restatementRequests)) {
     throw new Error('Finding review presentation restatement requests are not binary sorted');
   }
   const expectedAnomalyIds = sortedUnique(context.restatementRequests.map((request) => request.anomalyId));

@@ -1395,6 +1395,7 @@ describe('finding schemas', () => {
     const candidateSchema = RawFindingsOutputJsonSchema.properties.rawFindings.items
       .properties.candidate.anyOf[1];
     expect(candidateSchema.required).toContain('familyTag');
+    expect(candidateSchema.required).toContain('reassertsReviewerAnomalyId');
     expect(candidateSchema.required).toContain('evidenceRequests');
     expect(candidateSchema.required).toContain('suggestion');
     expect(candidateSchema.properties.targetFindingIds.maxItems)
@@ -1405,6 +1406,7 @@ describe('finding schemas', () => {
       type: ['string', 'null'],
       maxLength: RAW_FINDING_FIELD_LIMITS.maxFamilyTagChars,
     });
+    expect(candidateSchema.properties.reassertsReviewerAnomalyId.type).toEqual(['string', 'null']);
   });
 
   it('keeps target mutation authority engine-issued and persisted only', () => {
@@ -1562,6 +1564,10 @@ describe('finding schemas', () => {
       duplicateFindings: [],
       dismissedFindings: [],
     };
+    expect(() => FindingProvisionalMetadataSchema.parse({
+      ...provisional,
+      sourceRawFindingIds: ['raw-b', 'raw-a'],
+    })).toThrow(/binary sorted|sorted/u);
     expect(() => FindingProvisionalMetadataSchema.parse({
       ...provisional,
       actionRecovery: {

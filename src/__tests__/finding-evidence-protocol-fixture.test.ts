@@ -55,7 +55,7 @@ const { executeAgent } = await import('../agents/agent-usecases.js');
 const executeAgentMock = vi.mocked(executeAgent);
 
 function buildFindingsRuleContext(ledger: FindingLedger) {
-  return buildFindingsRuleContextWithCwd(ledger, process.cwd());
+  return buildFindingsRuleContextWithCwd(ledger, process.cwd(), new Map());
 }
 
 beforeEach(() => {

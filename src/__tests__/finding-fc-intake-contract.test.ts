@@ -36,7 +36,7 @@ import { createEmptyFindingContractRegistries } from '../core/models/finding-con
 import { collectFindingLedgerProjectionInvariantViolations } from '../core/models/finding-ledger-invariants.js';
 import { buildFindingContractInstruction } from '../core/workflow/instruction/finding-contract-instruction.js';
 import { rawCanonicalSnapshotFixture } from './helpers/finding-lifecycle-fixture.js';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -660,6 +660,19 @@ describe('FC intake contract', () => {
       });
       expect(context.restatementRequests.map(({ anomalyId }) => anomalyId)).toEqual(['a', 'b']);
       expect(context.presentedReviewerAnomalyIds).toEqual(['a', 'b']);
+      const ordinalContext = createFindingReviewPresentationContextV2({
+        reviewScopeSnapshotId: '3'.repeat(64),
+        restatementRequests: requests.map((request, index) => ({
+          ...request,
+          presentationOrdinal: index === 0 ? 10 : 2,
+          restatementRequestId: computeRestatementRequestId({
+            ...request,
+            presentationOrdinal: index === 0 ? 10 : 2,
+          }),
+        })),
+      });
+      expect(ordinalContext.restatementRequests.map(({ presentationOrdinal }) => presentationOrdinal))
+        .toEqual([2, 10]);
       expect(() => assertFindingReviewPresentationContext({
         ...context,
         contextDigest: '0'.repeat(64),
@@ -1068,26 +1081,21 @@ describe('FC intake contract', () => {
     expect(captureFindingLifecycleHead(result.ledger, 'finding', findingId)).toEqual(findingHead);
   });
 
-  it.skipIf(!existsSync(
-    '/Users/nrs/work/git/takt-worktrees/20260804T2312-pr-komento-no-wodaunroodoshite-e4f343d5b676a1dc/.takt/runs/20260805-005547-implement-using-only-the-files-fcgafa/reports/findings-ledger.json',
-  ))('replays the archived FC ledger through current schema and migration guards', () => {
-    const archivePath = '/Users/nrs/work/git/takt-worktrees/20260804T2312-pr-komento-no-wodaunroodoshite-e4f343d5b676a1dc/.takt/runs/20260805-005547-implement-using-only-the-files-fcgafa/reports/findings-ledger.json';
+  it('replays the checked-in ledger fixture through current schema and migration guards', () => {
+    const archivePath = join(import.meta.dirname, 'fixtures', 'finding-ledger-run-1-archive.json');
     const ledger = parseFindingLedger(JSON.parse(readFileSync(archivePath, 'utf8')));
-    const provisionalKinds = ledger.findings
-      .map((finding) => finding.provisional?.kind)
-      .filter((kind): kind is string => kind !== undefined);
-    expect(ledger.findings.length).toBeGreaterThanOrEqual(15);
-    expect(ledger.rawFindings.length).toBeGreaterThanOrEqual(80);
-    expect(provisionalKinds.filter((kind) => kind === 'raw-meaning-ambiguous')).toHaveLength(6);
-    expect(provisionalKinds.filter((kind) => kind === 'raw-adjudication-unresolved')).toHaveLength(4);
+    expect(ledger.findings).toHaveLength(1);
+    expect(ledger.rawFindings).toHaveLength(1);
     const migration = migrateLegacyIntakeProvisionalFindings({
       ledger,
       observation: { ...observedAt, timestamp: '2026-08-05T00:04:00.000Z' },
       presentationLimit: 2,
     });
-    expect(migration.migratedFindingIds).toEqual(
-      expect.arrayContaining(['F-0007', 'F-0008', 'F-0009', 'F-0010']),
-    );
+    expect(migration.migratedFindingIds).toEqual(['F-0001']);
+    expect(migration.ledger.findings[0]?.reviewerAnomalyReclassification).toMatchObject({
+      kind: 'reclassified_to_reviewer_anomaly',
+      reason: 'product_claim_not_adjudicated',
+    });
     expect(() => parseFindingLedger(migration.ledger)).not.toThrow();
   });
 });

@@ -693,6 +693,7 @@ export class StepExecutor {
     const runtime: RuntimeStepResolution = { providerInfo };
     const execute = async (
       mode: 'initial' | 'correction',
+      extractionFidelityCorrection = false,
     ): Promise<
       StructuredOutputNormalizationResult
       & {
@@ -710,6 +711,7 @@ export class StepExecutor {
           language: this.deps.getLanguage(),
           abortSignal: this.deps.abortSignal,
           mode,
+          extractionFidelityCorrection,
           onPromptResolved: (resolved) => {
             promptParts = resolved;
             this.deps.onPhaseStart?.(
@@ -821,7 +823,7 @@ export class StepExecutor {
     const normalized = initial.invalidDetail !== undefined
       && initial.invalidKind === 'model_output'
       || extractionFidelityFailure
-      ? await execute('correction')
+      ? await execute('correction', extractionFidelityFailure)
       : initial;
     if (
       initial.invalidDetail !== undefined
@@ -860,7 +862,11 @@ export class StepExecutor {
     }
     if (
       extractionFidelityFailure
-      && (normalized.invalidDetail !== undefined || normalized.response.status !== 'done')
+      && (
+        normalized.invalidDetail !== undefined
+        || normalized.response.status !== 'done'
+        || hasExtractionFidelityFailure(normalized.response)
+      )
     ) {
       return {
         ...normalized,

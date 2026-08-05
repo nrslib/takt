@@ -492,18 +492,19 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
 
     await runner.runParallelStep(step, state, 'test task', 5, vi.fn());
 
-    // WorkflowEngineSetup と同じヘルパ経由で、ラウンドに1回だけ呼ばれる
-    // （sub-step ごとに独立して呼ぶと、間に working tree が変化した場合に
-    // reviewer ごとに異なる snapshotId を配ってしまう — 並行実行の semaphore
-    // 直列化時に特に問題になる）。
+    // 3回は共有 base context 1回と各 parallel sub-step 2回。全呼出しが
+    // 同じ review scope snapshot を受け取り、working tree が変化しても
+    // reviewer ごとに別の snapshotId を生成しない。
     expect(deps.optionsBuilder.buildFindingContractInstructionContext).toHaveBeenCalledTimes(3);
-    expect(deps.optionsBuilder.buildFindingContractInstructionContext)
-      .toHaveBeenCalledWith(
-        step.parallel![0],
-        { kind: 'structured', reportGeneration: 'structured', intake: 'reviewer_structured' },
-        undefined,
-        expect.any(String),
-      );
+    const contextCalls = vi.mocked(deps.optionsBuilder.buildFindingContractInstructionContext).mock.calls;
+    expect(contextCalls.map((call) => call[3])).toEqual([
+      ['reviewers', '1', '1'].join('\0'),
+      ['reviewers', '1', '1'].join('\0'),
+      ['reviewers', '1', '1'].join('\0'),
+    ]);
+    expect(contextCalls[0]?.[2]).toBeUndefined();
+    expect(contextCalls[1]?.[2]).toBe('round-snapshot-abc123');
+    expect(contextCalls[2]?.[2]).toBe('round-snapshot-abc123');
 
     const builtContext = vi.mocked(deps.optionsBuilder.buildFindingContractInstructionContext).mock.results[0]?.value;
     expect(builtContext).toBeDefined();
@@ -574,13 +575,12 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
     await runner.runParallelStep(step, state, 'test task', 5, vi.fn());
 
     expect(deps.optionsBuilder.buildFindingContractInstructionContext).toHaveBeenCalledTimes(3);
-    expect(deps.optionsBuilder.buildFindingContractInstructionContext)
-      .toHaveBeenCalledWith(
-        step.parallel![0],
-        { kind: 'structured', reportGeneration: 'structured', intake: 'reviewer_structured' },
-        undefined,
-        expect.any(String),
-      );
+    const contextCalls = vi.mocked(deps.optionsBuilder.buildFindingContractInstructionContext).mock.calls;
+    expect(contextCalls.map((call) => call[3])).toEqual([
+      ['reviewers', '1', '1'].join('\0'),
+      ['reviewers', '1', '1'].join('\0'),
+      ['reviewers', '1', '1'].join('\0'),
+    ]);
     const instructionPolicies = vi.mocked(deps.stepExecutor.buildInstruction).mock.calls
       .map((call) => call[6] as FindingContractInstructionPolicy);
     expect(instructionPolicies.map((policy) => policy.context.reviewer?.mode)).toEqual([

@@ -12,7 +12,7 @@ This is a restatement-only review. Address only the requests below. Preserve eac
 {{restatementRequestsJson}}
 {{/if}}
 
-{{#if structuredReviewer}}- Report every fresh issue you observe as a structured raw finding with relation "new" (empty targetFindingId).
+{{#unless restatementOnly}}{{#if structuredReviewer}}- Report every fresh issue you observe as a structured raw finding with relation "new" (empty targetFindingId).
 - `new`, `persists`, `resolution_confirmation`, and `reopened` are evidence-backed raw relations with ledger IDs where required. The findings-manager and engine make final lifecycle decisions and finding-ID matches; reviewers must not assign or decide final state.
 {{/if}}{{#if plainTextNormalizedReviewer}}- Write an ordinary Markdown review report. Do not return JSON or structured output.
 - State every observed issue and every explicit ledger lifecycle claim separately and explicitly in normal prose. An isolated extractor sees only this final report and does not investigate the repository or infer unstated claims.
@@ -47,3 +47,4 @@ This is a restatement-only review. Address only the requests below. Preserve eac
   - evidence: file:line references from the current code backing the reason
 - The findings manager adjudicates dispute claims; only accepted claims stop blocking the gate. Critical findings can never be waived.
 {{/if}}
+{{/unless}}

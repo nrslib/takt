@@ -274,7 +274,7 @@ export function ledgerHasDismissedFindings(ledger: FindingLedger): boolean {
 export function buildFindingsRuleContext(
   ledger: FindingLedger,
   _cwd: string,
-  presentationCounts: ReadonlyMap<string, number> = new Map(),
+  presentationCounts: ReadonlyMap<string, number>,
 ): FindingsRuleContext {
   const projection = resolveFindingLedgerInstructionProjection(ledger);
   const openItems = projection.findings.filter((finding) => (

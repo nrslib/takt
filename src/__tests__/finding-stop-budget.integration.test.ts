@@ -59,7 +59,7 @@ const { executeAgent } = await import('../agents/agent-usecases.js');
 const executeAgentMock = vi.mocked(executeAgent);
 
 function buildFindingsRuleContext(ledger: FindingLedger) {
-  return buildFindingsRuleContextWithCwd(ledger, process.cwd());
+  return buildFindingsRuleContextWithCwd(ledger, process.cwd(), new Map());
 }
 
 beforeEach(() => {
@@ -562,18 +562,18 @@ describe('runFindingManagerForStep across rounds: churn that never reaches fixpo
 
     await harness.run([hallucinatedRaw('r3', 'Bug in file C', 'src/does-not-exist-c.ts')], '2026-07-01T00:02:00.000Z');
     context = buildFindingsRuleContext(harness.currentLedger());
-    // Churn is real: the provisional set is different every round, so fixpoint
-    // never fires. Without the stop budget, builtin workflows would replan
-    // this forever (measured churn shape).
+    // Churn is real: the reviewer-anomaly set is different every round, while
+    // provisional fixpoint intentionally ignores that separate ledger.
     expect(context.provisional.fixpoint).toBe(false);
-    expect(context.provisional.count).toBe(3);
-    // The bounded stop budget fires independently of fixpoint: 3 completed
-    // rounds reached the configured maxRounds.
+    expect(context.provisional.count).toBe(0);
+    expect(context.reviewerAnomalies.count).toBe(3);
+    // The bounded stop budget fires independently of reviewer-anomaly intake:
+    // 3 completed rounds reached the configured maxRounds.
     expect(context.rounds.budgetExhausted).toBe(true);
     expect(stopBudgetRoundsCompleted(harness.currentLedger())).toBe(3);
   });
 
-  it('priority: when fixpoint is reached after interpretation and terminal recovery are exhausted but before the round budget, fixpoint fires first', async () => {
+  it('repeated intake anomalies do not create a provisional fixpoint before the round budget', async () => {
     const harness = makeRoundHarness(emptyLedger(), { maxRounds: 10 });
 
     await harness.run([hallucinatedRaw('r1', 'Same bug', 'src/does-not-exist.ts')], '2026-07-01T00:00:00.000Z');
@@ -584,7 +584,9 @@ describe('runFindingManagerForStep across rounds: churn that never reaches fixpo
     await harness.run([], '2026-07-01T00:05:00.000Z');
 
     const context = buildFindingsRuleContext(harness.currentLedger());
-    expect(context.provisional.fixpoint).toBe(true);
+    expect(context.provisional.fixpoint).toBe(false);
+    expect(context.provisional.count).toBe(0);
+    expect(context.reviewerAnomalies.count).toBe(1);
     expect(context.rounds.budgetExhausted).toBe(false);
     expect(stopBudgetRoundsCompleted(harness.currentLedger())).toBe(6);
   });

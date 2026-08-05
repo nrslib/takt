@@ -6,7 +6,7 @@ import {
 import { createEmptyManagerOutput } from './manager-output.js';
 import { applyProvisionalSettlement } from './manager-provisional-settlement.js';
 import {
-  isOpenProvisional,
+  isOpenProvisionalForActionRecovery,
 } from './terminal-adjudication-candidates.js';
 import { reconcileManagerActionRecovery } from './reconciler.js';
 import type {
@@ -62,7 +62,7 @@ export function collectManagerActionRecoveryCandidates(
   roundsCompleted: number,
 ): ManagerActionRecoveryCandidate[] {
   return ledger.findings.flatMap((finding) => (
-    isOpenProvisional(finding)
+    isOpenProvisionalForActionRecovery(finding)
       && finding.provisional.actionRecovery !== undefined
       && finding.provisional.firstObservedRound < roundsCompleted + 1
       && (finding.provisional.actionRecoveryAttempts?.length ?? 0) < 2
@@ -153,7 +153,7 @@ function buildActionRecoveryPlan(input: {
   return input.candidates.reduce<ActionRecoveryPlan>((plan, candidate) => {
     const process = input.ledger.findings.find((finding) => finding.id === candidate.provisionalFindingId);
     if (process === undefined
-      || !isOpenProvisional(process)
+      || !isOpenProvisionalForActionRecovery(process)
       || process.revision !== candidate.expectedRevision
       || process.provisional.actionRecovery === undefined) {
       return plan;
@@ -210,7 +210,7 @@ function recordActionRecoveryFailures(
     ...ledger,
     findings: ledger.findings.map((finding) => {
       const reason = failures.get(finding.id);
-      if (!isOpenProvisional(finding)
+      if (!isOpenProvisionalForActionRecovery(finding)
         || reason === undefined
         || finding.revision !== expectedById.get(finding.id)) {
         return finding;

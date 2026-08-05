@@ -5,6 +5,7 @@ import {
 import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
 import type {
   TerminalAdjudicationCandidateSnapshot,
+  TerminalAdjudicationAttempt,
   TerminalAdjudicationEpisode,
   TerminalAdjudicationRound,
 } from '../../models/finding-contract-types.js';
@@ -28,34 +29,50 @@ function activeEpisodes(ledger: FindingLedger): TerminalAdjudicationEpisode[] {
 }
 
 function attemptPriority(
-  ledger: FindingLedger,
   episode: TerminalAdjudicationEpisode,
+  attempts: readonly TerminalAdjudicationAttempt[],
+  completedAttemptCount: number,
 ): { phase: number; timestamp: string; count: number; findingId: string } {
-  const attempts = ledger.terminalAdjudicationAttempts.filter(
-    (attempt) => attempt.episodeId === episode.episodeId,
-  );
   const latest = attempts[attempts.length - 1];
-  if (latest?.stage === 'proposed') {
-    return { phase: 0, timestamp: latest.completedAt?.timestamp ?? episode.createdAt.timestamp, count: 0, findingId: episode.findingId };
-  }
   if (latest?.stage === 'started') {
     return { phase: 1, timestamp: latest.startedAt.timestamp, count: 0, findingId: episode.findingId };
   }
   if (latest?.stage === 'interrupted') {
     return { phase: 2, timestamp: latest.interruptedAt.timestamp, count: latest.retryOrdinal, findingId: episode.findingId };
   }
-  const completedAttemptCount = ledger.terminalAdjudicationAttempts.filter(
-    (attempt) => attempt.findingId === episode.findingId && attempt.stage === 'completed',
-  ).length;
   return { phase: 3, timestamp: episode.createdAt.timestamp, count: completedAttemptCount, findingId: episode.findingId };
 }
 
 export function listActiveTerminalAdjudicationEpisodes(
   ledger: FindingLedger,
 ): TerminalAdjudicationEpisode[] {
-  return activeEpisodes(ledger).sort((left, right) => {
-    const leftPriority = attemptPriority(ledger, left);
-    const rightPriority = attemptPriority(ledger, right);
+  const attemptsByEpisodeId = new Map<string, TerminalAdjudicationAttempt[]>();
+  for (const attempt of ledger.terminalAdjudicationAttempts) {
+    const attempts = attemptsByEpisodeId.get(attempt.episodeId) ?? [];
+    attempts.push(attempt);
+    attemptsByEpisodeId.set(attempt.episodeId, attempts);
+  }
+  const completedAttemptCountByFindingId = new Map<string, number>();
+  for (const attempt of ledger.terminalAdjudicationAttempts) {
+    if (attempt.stage !== 'completed') {
+      continue;
+    }
+    completedAttemptCountByFindingId.set(
+      attempt.findingId,
+      (completedAttemptCountByFindingId.get(attempt.findingId) ?? 0) + 1,
+    );
+  }
+  const ranked = activeEpisodes(ledger).map((episode) => ({
+    episode,
+    priority: attemptPriority(
+      episode,
+      attemptsByEpisodeId.get(episode.episodeId) ?? [],
+      completedAttemptCountByFindingId.get(episode.findingId) ?? 0,
+    ),
+  }));
+  return ranked.sort((left, right) => {
+    const leftPriority = left.priority;
+    const rightPriority = right.priority;
     if (leftPriority.phase !== rightPriority.phase) {
       return leftPriority.phase - rightPriority.phase;
     }
@@ -70,8 +87,8 @@ export function listActiveTerminalAdjudicationEpisodes(
       return timestampComparison;
     }
     return compareBinaryStrings(leftPriority.findingId, rightPriority.findingId)
-      || compareBinaryStrings(left.episodeId, right.episodeId);
-  });
+      || compareBinaryStrings(left.episode.episodeId, right.episode.episodeId);
+  }).map(({ episode }) => episode);
 }
 
 export function selectActiveTerminalAdjudicationEpisode(

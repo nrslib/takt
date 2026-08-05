@@ -650,7 +650,8 @@ export class WorkflowEngine extends EventEmitter {
     const exhaustedIds = intakeAnomalies
       .filter((anomaly) => (
         anomaly.intakeContract!.terminalDisposition?.workflowOutcome === 'review_integrity_unresolved'
-        || (presentationCounts.get(anomaly.id) ?? 0) >= anomaly.intakeContract!.presentationLimit
+        || (anomaly.intakeContract!.observationClass === 'claim-bearing'
+          && (presentationCounts.get(anomaly.id) ?? 0) >= anomaly.intakeContract!.presentationLimit)
       ))
       .map(({ id }) => id)
       .sort(compareBinaryStrings);

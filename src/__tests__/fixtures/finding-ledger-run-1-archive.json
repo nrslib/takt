@@ -1,0 +1,211 @@
+{
+  "workflowName": "peer-review",
+  "nextId": 2,
+  "updatedAt": "2026-08-05T00:00:00.000Z",
+  "findings": [
+    {
+      "id": "F-0001",
+      "status": "open",
+      "lifecycle": "new",
+      "target": { "kind": "code", "paths": ["src/example.ts"] },
+      "targetIdentityHash": "c699c883f2ce48a0a7db21fa2b24eb8db9726c825b51e68710c733a8c1596f6f",
+      "claimIdentityHash": "6a0c9d7c05f14c2ada3bf13fd6df994cc7e65624f7f794616ed5730db4f55ca5",
+      "semanticClaimIdentityHash": "a2cb2561f9ebb5e3431e04062d7f9c44e7864b52846f712d4ac278d7150188cd",
+      "severity": null,
+      "title": null,
+      "evidenceIds": [],
+      "reviewers": ["architecture-review"],
+      "rawFindingIds": ["raw-legacy-raw-adjudication-unresolved"],
+      "firstSeen": {
+        "runId": "run-fc-intake",
+        "stepName": "architecture-review",
+        "timestamp": "2026-08-05T00:00:00.000Z"
+      },
+      "lastSeen": {
+        "runId": "run-fc-intake",
+        "stepName": "architecture-review",
+        "timestamp": "2026-08-05T00:00:00.000Z"
+      },
+      "revision": 1,
+      "provisional": {
+        "kind": "raw-adjudication-unresolved",
+        "stableKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "lineageKey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "sourceRawFindingIds": ["raw-legacy-raw-adjudication-unresolved"],
+        "reason": "evidence-less pre-admission holding",
+        "firstObservedAt": {
+          "runId": "run-fc-intake",
+          "stepName": "architecture-review",
+          "timestamp": "2026-08-05T00:00:00.000Z"
+        },
+        "lastObservedAt": {
+          "runId": "run-fc-intake",
+          "stepName": "architecture-review",
+          "timestamp": "2026-08-05T00:00:00.000Z"
+        },
+        "gateEffect": "block",
+        "firstObservedRound": 1
+      }
+    }
+  ],
+  "evidenceRecords": [
+    {
+      "evidenceId": "deeea91b194bd091d5a44e3d1e9c026f8f0edf8d975bd9c66a4dcc67eb3ecddb",
+      "proofId": "deeea91b194bd091d5a44e3d1e9c026f8f0edf8d975bd9c66a4dcc67eb3ecddb",
+      "kind": "engine_proof",
+      "purpose": "lifecycle_authority",
+      "verifierId": "takt.finding-lifecycle-policy",
+      "verifierVersion": "1",
+      "workflowName": "peer-review",
+      "runId": "run-fc-intake",
+      "scopeIdentity": "scope",
+      "snapshotId": "1111111111111111111111111111111111111111111111111111111111111111",
+      "claimIdentityHash": "6a0c9d7c05f14c2ada3bf13fd6df994cc7e65624f7f794616ed5730db4f55ca5",
+      "targetFindingId": "F-0001",
+      "subject": {
+        "kind": "finding_provisional_isolation",
+        "findingId": "F-0001",
+        "provisionalKind": "raw-adjudication-unresolved",
+        "stableKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "claimBindingAuthorizationReferences": [
+          {
+            "kind": "new_provisional_bundle",
+            "bindingDecisionId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "creationRequestKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "expectedHead": null,
+            "sourceRawFindingIds": ["raw-legacy-raw-adjudication-unresolved"],
+            "authorizationId": "6ac6334e00ce95ba95551074547b843b1ed193ab83d1166d48319237c3d00ccb"
+          }
+        ]
+      },
+      "dependencyDigests": ["9999999999999999999999999999999999999999999999999999999999999999"],
+      "resultDigest": "2222222222222222222222222222222222222222222222222222222222222222",
+      "issuedAt": "2026-08-05T00:00:00.000Z"
+    }
+  ],
+  "rawFindings": [
+    {
+      "rawFindingId": "raw-legacy-raw-adjudication-unresolved",
+      "stepName": "architecture-review",
+      "reviewer": "architecture-review",
+      "familyTag": null,
+      "severity": null,
+      "title": null,
+      "description": null,
+      "suggestion": null,
+      "relation": "new",
+      "targetFindingId": null,
+      "target": { "kind": "code", "paths": ["src/example.ts"] },
+      "evidence": [],
+      "targetIdentityHash": "c699c883f2ce48a0a7db21fa2b24eb8db9726c825b51e68710c733a8c1596f6f",
+      "claimIdentityHash": "6a0c9d7c05f14c2ada3bf13fd6df994cc7e65624f7f794616ed5730db4f55ca5",
+      "semanticClaimIdentityHash": "a2cb2561f9ebb5e3431e04062d7f9c44e7864b52846f712d4ac278d7150188cd",
+      "candidateIdentityHash": "caeae94bb4b024eb8841476e625a999b92ffec2fc1dcccb1670f0ba586fbc92b",
+      "sourceBinding": {
+        "reportDigest": "a9fdb80e25ceda7f2f4274ca50dfecd4c09aa15ac9085ae7aac3243f04861cf9",
+        "startByte": 0,
+        "endByte": 38,
+        "excerptDigest": "ec02d992325a645f989fe0d83bebd8aacfec4d76e4c6a1794db0fda3a4d585cc"
+      }
+    }
+  ],
+  "conflicts": [],
+  "lifecycleReservations": [],
+  "lifecycleEvents": [
+    {
+      "eventId": "8888888888888888888888888888888888888888888888888888888888888888",
+      "mutationId": "4444444444444444444444444444444444444444444444444444444444444444",
+      "reservationId": "5555555555555555555555555555555555555555555555555555555555555555",
+      "operation": "update_provisional",
+      "transitions": [
+        {
+          "before": null,
+          "after": {
+            "entityKind": "finding",
+            "entityId": "F-0001",
+            "revision": 1,
+            "eventId": "8888888888888888888888888888888888888888888888888888888888888888",
+            "projectionDigest": "9999999999999999999999999999999999999999999999999999999999999999"
+          }
+        }
+      ],
+      "evidenceBindingIds": ["3333333333333333333333333333333333333333333333333333333333333333"],
+      "outcome": { "kind": "projection_applied" },
+      "resultDigest": "6666666666666666666666666666666666666666666666666666666666666666",
+      "occurredAt": {
+        "runId": "run-fc-intake",
+        "stepName": "architecture-review",
+        "timestamp": "2026-08-05T00:00:00.000Z"
+      }
+    }
+  ],
+  "rawCanonicalSnapshots": [
+    {
+      "rawCanonicalSnapshotId": "07cc686fff2ac5fae0fd653919f81af12a7c732c00c7092c1cc6b87de021b9f5",
+      "rawFindingId": "raw-legacy-raw-adjudication-unresolved",
+      "rawPayloadDigest": "2a3ed8dcd13043feea896baca58afcf1d06ae791e9f875ae712d4b47ef16d03c",
+      "reviewerStableKey": "f6bcaa4fff6cd7d91f781b0f755df96e3377f510ec9aad5af57e8e895538efa8",
+      "lineageKey": "088828455e39fba4f758e262a43f03754a3a0add5d16492a0dab9abf07fa07ae",
+      "targetIdentityHash": "c699c883f2ce48a0a7db21fa2b24eb8db9726c825b51e68710c733a8c1596f6f",
+      "claimIdentityHash": "6a0c9d7c05f14c2ada3bf13fd6df994cc7e65624f7f794616ed5730db4f55ca5",
+      "semanticClaimIdentityHash": "a2cb2561f9ebb5e3431e04062d7f9c44e7864b52846f712d4ac278d7150188cd",
+      "canonicalProvenance": {
+        "origin": "system",
+        "ambiguityOrigin": false,
+        "clarificationAttempted": false,
+        "ambiguityCodes": []
+      },
+      "canonicalizationContextDigest": "62dae0ccf648afd6a9ff33789bfc1fc310fe9ab86a9a3d981c4ea8a46d1b2e11",
+      "captureAdmissionSnapshotId": "e1b0b624b5a3fe36b7dde3984f6594c5ce10e60caf7e794a4ecee4c58ba9201d",
+      "captureDependencyDigests": [],
+      "canonicalIntegrityDigest": "bec7a08377703c37c5659fff36d417bd0ba1ab24bd9eb586d1ae7f617f8527ba",
+      "capturedAt": {
+        "runId": "run-fc-intake",
+        "stepName": "architecture-review",
+        "timestamp": "2026-08-05T00:00:00.000Z"
+      }
+    }
+  ],
+  "conflictRawClaimLandings": [],
+  "conflictAdjudicationSnapshots": [],
+  "conflictAdjudicationEpisodes": [],
+  "conflictAdjudicationAttempts": [],
+  "conflictClaimSettlements": [],
+  "provisionalConflictNormalizationSnapshots": [],
+  "provisionalConflictNormalizations": [],
+  "interpretationCaseSnapshots": [],
+  "interpretationRawObservations": [],
+  "interpretationRecoveryOriginBindings": [],
+  "interpretationRecoveryOriginSettlements": [],
+  "interpretationAttempts": [],
+  "rawInterpretationOutcomes": [],
+  "findingManagerProviderBudgetScopes": [],
+  "findingManagerProviderCalls": [],
+  "findingScopeBindings": [],
+  "terminalAdjudicationRounds": [],
+  "terminalAdjudicationEpisodes": [],
+  "terminalAdjudicationAttempts": [],
+  "terminalAdjudicationSettlements": [],
+  "evidenceBindings": [
+    {
+      "bindingId": "3333333333333333333333333333333333333333333333333333333333333333",
+      "evidenceId": "deeea91b194bd091d5a44e3d1e9c026f8f0edf8d975bd9c66a4dcc67eb3ecddb",
+      "claimIdentityHash": "6a0c9d7c05f14c2ada3bf13fd6df994cc7e65624f7f794616ed5730db4f55ca5",
+      "sourceRawFindingId": "raw-legacy-raw-adjudication-unresolved",
+      "sourceRawIntegrityDigest": null,
+      "contributionOrigin": { "kind": "external" },
+      "operation": "update_provisional",
+      "target": {
+        "entityKind": "finding",
+        "entityId": "F-0001",
+        "expectedHead": {
+          "entityKind": "finding",
+          "entityId": "F-0001",
+          "revision": 1,
+          "eventId": "8888888888888888888888888888888888888888888888888888888888888888",
+          "projectionDigest": "9999999999999999999999999999999999999999999999999999999999999999"
+        }
+      }
+    }
+  ]
+}

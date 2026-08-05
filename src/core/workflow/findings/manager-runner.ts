@@ -60,19 +60,33 @@ export async function runFindingManagerForStep(
   });
 
   return runManagerRoundExclusive(input.ledgerStore, async () => {
-    const migrated = await input.ledgerStore.updateLedger((ledger) => {
-      const result = migrateLegacyIntakeProvisionalFindings({
-        ledger,
-        observation: {
-          runId: input.runId,
-          stepName: input.parentStep.name,
-          timestamp: input.timestamp,
-        },
-        presentationLimit: resolveReviewIntegrityLimits(input.contract.reviewBudget).maxReviewRounds,
-      });
-      return { ledger: result.ledger, result: result.migratedFindingIds };
+    const migrationInput = {
+      observation: {
+        runId: input.runId,
+        stepName: input.parentStep.name,
+        timestamp: input.timestamp,
+      },
+      presentationLimit: resolveReviewIntegrityLimits(input.contract.reviewBudget).maxReviewRounds,
+    };
+    const loadedBeforeMigration = input.ledgerStore.loadLedger();
+    const migration = migrateLegacyIntakeProvisionalFindings({
+      ledger: loadedBeforeMigration,
+      ...migrationInput,
     });
-    const loadedLedger = migrated.ledger;
+    const loadedLedger = migration.migratedFindingIds.length === 0
+      ? loadedBeforeMigration
+      : (await input.ledgerStore.updateLedger((ledger) => {
+          const result = migrateLegacyIntakeProvisionalFindings({
+            ledger,
+            ...migrationInput,
+          });
+          return { ledger: result.ledger, result: result.migratedFindingIds };
+        })).ledger;
+    log.info('Legacy intake migration checked', {
+      step: input.parentStep.name,
+      migratedFindingIds: migration.migratedFindingIds,
+      migratedCount: migration.migratedFindingIds.length,
+    });
     const resumed = await resumePendingManagerCommit(input, loadedLedger);
     const currentLedger = resumed?.ledger ?? loadedLedger;
     if (resumed?.completedRoundMarker === stopBudgetRoundMarker) {

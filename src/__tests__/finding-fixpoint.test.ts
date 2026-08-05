@@ -53,7 +53,7 @@ function attachFixpointState(previous: FindingLedger, next: FindingLedger): Find
 }
 
 function buildFindingsRuleContext(ledger: FindingLedger) {
-  return buildFindingsRuleContextWithCwd(ledger, process.cwd());
+  return buildFindingsRuleContextWithCwd(ledger, process.cwd(), new Map());
 }
 
 beforeEach(() => {
@@ -728,7 +728,7 @@ function unverifiedClaimRaw(overrides: Record<string, unknown> = {}): Record<str
 }
 
 describe('runFindingManagerForStep: failed file_quote evidence is isolated from admitted findings', () => {
-  it('a nonexistent file_quote becomes an intake anomaly and needs no manager call', async () => {
+  it('an unverifiable file_quote remains provisional and needs no manager call', async () => {
     const harness = makeRoundHarness({
       workflowName: 'peer-review', nextId: 1, updatedAt: '2026-07-01T00:00:00.000Z',
       findings: [], evidenceRecords: [], rawFindings: [], conflicts: [],
@@ -738,13 +738,15 @@ describe('runFindingManagerForStep: failed file_quote evidence is isolated from 
 
     expect(executeAgentMock).not.toHaveBeenCalled();
     const ledger = harness.currentLedger();
-    expect(ledger.findings).toHaveLength(0);
+    expect(ledger.findings).toHaveLength(1);
     const context = buildFindingsRuleContext(ledger);
-    expect(context.provisional.count).toBe(0);
-    expect(context.open.count).toBe(0);
-    expect(context.reviewerAnomalies.count).toBe(1);
-    expect(result.ledger.reviewerAnomalies?.[0]).toMatchObject({
-      kind: 'intake-contract-incomplete',
+    expect(context.provisional.count).toBe(1);
+    expect(context.open.count).toBe(1);
+    expect(context.reviewerAnomalies.count).toBe(0);
+    expect(result.ledger.findings[0]).toMatchObject({
+      provisional: {
+        kind: 'raw-adjudication-unresolved',
+      },
     });
   });
 });

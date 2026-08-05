@@ -14,7 +14,7 @@ import { storedRawReconcileProvenance } from './helpers/finding-integrity.js';
 import { canonicalRawFindingFixture } from './helpers/finding-lifecycle-fixture.js';
 
 function buildFindingsRuleContext(ledger: FindingLedger) {
-  return buildFindingsRuleContextWithCwd(ledger, process.cwd());
+  return buildFindingsRuleContextWithCwd(ledger, process.cwd(), new Map());
 }
 
 function makeEmptyLedger(): FindingLedger {

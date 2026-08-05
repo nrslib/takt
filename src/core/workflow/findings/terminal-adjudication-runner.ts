@@ -211,12 +211,8 @@ export function selectReconstructableTerminalEpisode(input: {
       hadActiveEpisode = true;
       continue;
     }
-    const unsettledEpisodes = ledger.terminalAdjudicationEpisodes.filter((episode) => (
-      !ledger.terminalAdjudicationSettlements.some(
-        (settlement) => settlement.episodeId === episode.episodeId,
-      )
-    ));
-    const staleEpisode = unsettledEpisodes.find((entry) => {
+    const activeEpisodes = listActiveTerminalAdjudicationEpisodes(ledger);
+    const staleEpisode = activeEpisodes.find((entry) => {
       const candidate = currentCandidate(ledger, entry, input.currentRound);
       return candidate?.candidateSnapshotDigest !== entry.candidateSnapshotDigest;
     });

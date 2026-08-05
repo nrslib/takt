@@ -635,7 +635,7 @@ describe('reviewer anomaly settlement', () => {
       }),
     ]);
     expect(isOutstandingReviewerAnomaly(settled.reviewerAnomalies![0]!)).toBe(false);
-    expect(buildFindingsRuleContext(settled, process.cwd()).reviewerAnomalies.count).toBe(0);
+    expect(buildFindingsRuleContext(settled, process.cwd(), new Map()).reviewerAnomalies.count).toBe(0);
     expect(buildLoopMonitorFindingsSummaryData(settled, {}).reviewerAnomalies.count).toBe(0);
     expect(attachReviewIntegrityState(
       previous,
@@ -772,6 +772,7 @@ describe('reviewer anomaly settlement', () => {
     expect(buildFindingsRuleContext(
       settled,
       process.cwd(),
+      new Map(),
     ).reviewerAnomalies.count).toBe(0);
     expect(() => assertFindingLedgerAppendOnlyTransition(
       anomaliesApplied,

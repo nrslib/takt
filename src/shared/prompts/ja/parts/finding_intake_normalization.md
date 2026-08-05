@@ -46,9 +46,12 @@ schema に一致する JSON object を1つだけ返してください。説明�
    `{"rawFindings":[]}`を返してください。
 
 {{#if correction}}前回の抽出は schema または機械 intake 検証に失敗したか、`rawExcerpt` があるのに
-claim本文を失いました。同じ報告から新規に1回だけ抽出してください。extraction-fidelity の場合だけ、
-非空の `rawExcerpt` が claim を記述し candidate の `description: null` になっているときは、その
-`rawExcerpt` 全体を `candidate.description` にそのままコピーしてください。他の項目の生成・改善は
+claim本文を失いました。同じ報告から新規に1回だけ抽出してください。
+{{#if extractionFidelityCorrection}}extraction-fidelity の場合に限り、この例外は規則3を
+`candidate.description` だけについて上書きします。非空の `rawExcerpt` が claim を記述し candidate の
+`description: null` になっているときは、その `rawExcerpt` 全体を `candidate.description` にそのままコピーしてください。
+規則3は他のすべての項目に適用されます。
+{{/if}}他の項目の生成・改善は
 禁止です。前回出力の再利用、議論、修復は禁止です。
 
 {{/if}}## レビュー報告

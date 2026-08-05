@@ -82,6 +82,16 @@ describe('normalizeFindingIntake', () => {
       permissionMode: 'readonly',
       allowedTools: [],
     });
+
+    await normalizeFindingIntake('extraction-fidelity report', {
+      provider: 'codex',
+      model: 'gpt-5.6-terra',
+      mode: 'correction',
+      extractionFidelityCorrection: true,
+    });
+    expect(runAgent.mock.calls[1]?.[1]).toContain(
+      'this exception overrides rule 3 for `candidate.description` alone',
+    );
   });
 
   it('removes the isolated working directory when the provider call throws', async () => {

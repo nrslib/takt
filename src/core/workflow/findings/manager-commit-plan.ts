@@ -843,11 +843,14 @@ function prepareCommitReconciliation(
   const retainSpec = (spec: { sourceRawFindingIds: readonly string[] }): boolean => (
     !containsIsolatedRawFinding(spec.sourceRawFindingIds, isolatedRawFindingIds)
   );
+  const intakeItemByRawFindingId = new Map(
+    params.intake.items.map((item) => [item.wire.rawFindingId, item]),
+  );
   const intakeContractEntityRawFindingIds = new Set(
     [...params.intake.entityBindings.entries()].flatMap(([rawFindingId, binding]) => (
       binding.kind === 'entity_group'
         && (binding.decision === 'new_entity' || binding.decision === 'ambiguous')
-        && params.intake.items.find((item) => item.wire.rawFindingId === rawFindingId)?.wire.evidence.length === 0
+        && intakeItemByRawFindingId.get(rawFindingId)?.wire.evidence.length === 0
         ? binding.groupRawFindingIds
         : []
     )),

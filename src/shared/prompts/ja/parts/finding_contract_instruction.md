@@ -12,7 +12,7 @@
 {{restatementRequestsJson}}
 {{/if}}
 
-{{#if structuredReviewer}}- 観測した新規の問題はすべて、relation を "new"（targetFindingId は空）にした構造化 raw finding として報告してください。
+{{#unless restatementOnly}}{{#if structuredReviewer}}- 観測した新規の問題はすべて、relation を "new"（targetFindingId は空）にした構造化 raw finding として報告してください。
 - `new` / `persists` / `resolution_confirmation` / `reopened` は、証跡と必要な ledger ID を添える raw relation です。最終 lifecycle 判定と finding ID の対応づけは findings-manager とエンジンが行うため、レビュワーは最終状態を採番・判定しないでください。
 {{/if}}{{#if plainTextNormalizedReviewer}}- 通常の Markdown レビュー報告を書いてください。JSON や structured output は返さないでください。
 - 観測した各問題と明示的な台帳 lifecycle claim を、通常の文章で1件ずつ分けて明確に記述してください。隔離された抽出器が見るのはこの最終報告だけであり、リポジトリ調査や暗黙の主張の推論は行いません。
@@ -47,3 +47,4 @@
   - evidence: 理由を裏づける、現在のコードの file:line 参照
 - 異議は findings manager が裁定します。認められた申告だけがゲートのブロックを解きます。critical な指摘は決して waive できません。
 {{/if}}
+{{/unless}}

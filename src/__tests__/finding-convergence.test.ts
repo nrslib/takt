@@ -57,7 +57,7 @@ import {
 import { findingManagerTaskResponse } from './helpers/finding-manager-task-response.js';
 
 function buildFindingsRuleContext(ledger: FindingLedger) {
-  return buildFindingsRuleContextWithCwd(ledger, process.cwd());
+  return buildFindingsRuleContextWithCwd(ledger, process.cwd(), new Map());
 }
 
 vi.mock('../agents/agent-usecases.js', () => ({
@@ -516,7 +516,7 @@ describe('item 1/4: raw admission validation and invalidate', () => {
     };
   }
 
-  it('Given a critical raw finding without mechanical evidence When entity binding is unavailable Then target uncertainty remains gate-blocking', async () => {
+  it('Given a critical raw finding without mechanical evidence When entity binding is unavailable Then the observation remains review-integrity blocking', async () => {
     const harness = makeHarness(makeLedger({ findings: [], rawFindings: [] }));
     const result = await harness.run({
       reviewerRawFindings: [reviewerRawExtractionFixture({
@@ -535,19 +535,21 @@ describe('item 1/4: raw admission validation and invalidate', () => {
     expect(result.status).toBe('updated');
     expect(executeAgentMock).toHaveBeenCalledTimes(1);
     const savedLedger = harness.currentLedger();
-    const provisional = savedLedger.findings.find(
-      (finding) => finding.title === 'Hallucinated critical finding',
+    const anomaly = (savedLedger.reviewerAnomalies ?? []).find(
+      (candidate) => candidate.title === 'Hallucinated critical finding',
     );
-    expect(provisional).toMatchObject({
-      status: 'open',
-      severity: 'critical',
-      provisional: {
-        kind: 'raw-meaning-ambiguous',
-        gateEffect: 'block',
+    expect(anomaly).toMatchObject({
+      kind: 'intake-contract-incomplete',
+      intakeContract: {
+        observationClass: 'claim-bearing',
+        missingRequirements: ['claimEvidence'],
+        presentationOwnerReviewer: 'architecture-review',
       },
     });
-    expect(provisional?.rawFindingIds.some((id) => id.endsWith(':raw-hallucinated'))).toBe(true);
-    expect(savedLedger.reviewerAnomalies ?? []).toEqual([]);
+    expect(savedLedger.findings.find(
+      (finding) => finding.title === 'Hallucinated critical finding',
+    )).toBeUndefined();
+    expect(anomaly?.sourceRawFindingIds.some((id) => id.endsWith(':raw-hallucinated'))).toBe(true);
     expect(harness.savedValidationReports).toHaveLength(1);
     const report = harness.savedValidationReports[0] as { rawAdmissionRejections?: Array<{ rawFindingId: string; reason: string }> };
     expect(report.rawAdmissionRejections).toHaveLength(1);

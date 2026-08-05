@@ -1590,6 +1590,9 @@ export const INTAKE_CONTRACT_MISSING_REQUIREMENTS = [
 ] as const;
 export type IntakeContractMissingRequirement = typeof INTAKE_CONTRACT_MISSING_REQUIREMENTS[number];
 
+export const INTAKE_CONTRACT_CLASSIFICATION_AUTHORITY_ID =
+  'system/intake_observation_classification_v1' as const;
+
 export interface IntakeContractTerminalDisposition {
   kind:
     | 'restatement_exhausted_claim_bearing'
@@ -1604,7 +1607,7 @@ export interface IntakeContractTerminalDisposition {
 
 export interface IntakeContractDefect {
   observationClass: 'claim-bearing' | 'protocol-noise';
-  classificationAuthorityId: string;
+  classificationAuthorityId: typeof INTAKE_CONTRACT_CLASSIFICATION_AUTHORITY_ID;
   reasonCodes: IntakeContractAnomalyReasonCode[];
   missingRequirements: IntakeContractMissingRequirement[];
   presentationOwnerReviewer: string;

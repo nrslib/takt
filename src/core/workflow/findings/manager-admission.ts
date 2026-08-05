@@ -34,14 +34,11 @@ import type {
 } from './pre-admission-entity-binding-types.js';
 import { resolvePreAdmissionEntityBindings } from './pre-admission-entity-binding-commit.js';
 import { resolveCurrentLifecycleObservationTarget } from './reviewer-anomaly-policy.js';
-import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
 import type { RestatementRequestV1 } from './review-publication.js';
+import { intakeContractDefectFor as classifyIntakeContractDefect } from './intake-contract.js';
+import { resolveReviewIntegrityLimits } from './review-integrity.js';
 
-export const INTAKE_CONTRACT_CLASSIFICATION_AUTHORITY_ID = 'system/intake_observation_classification_v1';
-
-function sortedUniqueStrings(values: readonly string[]): string[] {
-  return [...new Set(values)].sort(compareBinaryStrings);
-}
+export { INTAKE_CONTRACT_CLASSIFICATION_AUTHORITY_ID } from '../../models/finding-types.js';
 
 function intakeContractDefectFor(input: {
   item: CanonicalIntakeItem;
@@ -50,54 +47,25 @@ function intakeContractDefectFor(input: {
   additionalMissingRequirements?: readonly IntakeContractMissingRequirement[];
 }): IntakeContractDefect | undefined {
   const { canonical, wire } = input.item;
-  const lifecycleIntent = hasLifecycleTransitionIntent({
+  return classifyIntakeContractDefect({
     relation: canonical.relation,
-    targetFindingId: canonical.targetFindingId,
+    target: canonical.target,
+    familyTag: canonical.familyTag,
+    severity: canonical.severity,
+    title: canonical.title,
+    description: canonical.description,
+    rawExcerpt: canonical.rawExcerpt,
+    evidence: canonical.evidence,
+    evidenceCoverageGaps: canonical.evidenceCoverageGaps,
+    reviewer: wire.reviewer,
+    presentationLimit: input.presentationLimit,
+    lifecycleIntent: hasLifecycleTransitionIntent({
+      relation: canonical.relation,
+      targetFindingId: canonical.targetFindingId,
+    }),
+    additionalReasonCodes: input.additionalReasonCodes,
+    additionalMissingRequirements: input.additionalMissingRequirements,
   });
-  if (lifecycleIntent) {
-    return undefined;
-  }
-  const hasTargetAnchor = canonical.target !== undefined
-    && canonical.target.kind !== 'review_scope';
-  const missingRequirements: IntakeContractMissingRequirement[] = [
-    ...(canonical.relation === null ? ['relation' as const] : []),
-    ...(!hasTargetAnchor ? ['target' as const] : []),
-    ...(canonical.familyTag === undefined ? ['familyTag' as const] : []),
-    ...(canonical.severity === undefined ? ['severity' as const] : []),
-    ...(canonical.title === undefined ? ['title' as const] : []),
-    ...(canonical.description === undefined ? ['description' as const] : []),
-    ...(canonical.evidence.length === 0 || canonical.evidenceCoverageGaps.length > 0
-      ? ['claimEvidence' as const]
-      : []),
-    ...(input.additionalMissingRequirements ?? []),
-  ];
-  const reasonCodes: IntakeContractAnomalyReasonCode[] = [
-    ...(missingRequirements.some((requirement) => (
-      requirement !== 'claimEvidence'
-    )) ? ['product-identity-incomplete' as const] : []),
-    ...(missingRequirements.includes('claimEvidence') ? ['claim-evidence-missing' as const] : []),
-    ...(canonical.description === undefined && canonical.rawExcerpt !== undefined
-      ? ['normalizer-extraction-loss' as const]
-      : []),
-    ...(input.additionalReasonCodes ?? []),
-  ];
-  if (missingRequirements.length === 0 && reasonCodes.length === 0) {
-    return undefined;
-  }
-  const hasClaimAnchor = Boolean(
-    (canonical.rawExcerpt !== undefined && canonical.rawExcerpt.trim().length > 0)
-    || (canonical.description !== undefined && canonical.description.trim().length > 0)
-    || hasTargetAnchor
-    || canonical.evidence.length > 0,
-  );
-  return {
-    observationClass: hasClaimAnchor ? 'claim-bearing' : 'protocol-noise',
-    classificationAuthorityId: INTAKE_CONTRACT_CLASSIFICATION_AUTHORITY_ID,
-    reasonCodes: sortedUniqueStrings(reasonCodes) as IntakeContractAnomalyReasonCode[],
-    missingRequirements: sortedUniqueStrings(missingRequirements) as IntakeContractMissingRequirement[],
-    presentationOwnerReviewer: wire.reviewer,
-    presentationLimit: Math.max(1, input.presentationLimit),
-  };
 }
 
 function intakeContractAnomalyFor(input: {
@@ -532,6 +500,15 @@ function evaluateAdmissionItem(input: {
       presentationLimit: input.presentationLimit,
     });
   }
+  const hasEngineEvidenceFailure = input.item.canonical.evidenceCoverageGaps.length > 0
+    || (input.item.canonical.evidenceQuoteFailureReasons?.length ?? 0) > 0
+    || input.item.canonical.provenance.ambiguityCodes.includes('invalid-evidence-shape');
+  if (hasEngineEvidenceFailure) {
+    const classification = classifyEvidence(input);
+    if (!classification.admit) {
+      return evaluateRejectedItem({ ...input, classification });
+    }
+  }
   const intakeAnomaly = intakeContractAnomalyFor({
     item: input.item,
     reason: 'Independent reviewer observation does not satisfy the product admission contract',
@@ -637,6 +614,8 @@ export function evaluateRawAdmission(input: {
   restatementRequests?: readonly RestatementRequestV1[];
 }): RawAdmissionEvaluation {
   assertCanonicalIntakeRecoveryStates(input.intake.items, input.previousLedger);
+  const presentationLimit = input.presentationLimit
+    ?? resolveReviewIntegrityLimits(undefined).maxReviewRounds;
   const resolvedEntityBindings = resolvePreAdmissionEntityBindings({
     ledger: input.previousLedger,
     intake: input.intake,
@@ -667,7 +646,7 @@ export function evaluateRawAdmission(input: {
       reviewScopeSnapshot: input.reviewScopeSnapshot,
       workflowTask: input.workflowTask,
       entityBindings: input.intake.entityBindings,
-      presentationLimit: input.presentationLimit ?? 6,
+      presentationLimit,
       exactEntityAuditRawIds,
       restatementRequests,
     })),
@@ -682,7 +661,7 @@ export function evaluateRawAdmission(input: {
       reviewScopeSnapshot: input.reviewScopeSnapshot,
       workflowTask: input.workflowTask,
       entityBindings: input.intake.entityBindings,
-      presentationLimit: input.presentationLimit ?? 6,
+      presentationLimit,
       exactEntityAuditRawIds,
       restatementRequests,
     })),

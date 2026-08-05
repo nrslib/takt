@@ -182,7 +182,6 @@ function assertSameAnomalyIdentity(
     }
     if (
       anomaly.intakeContract.presentationOwnerReviewer !== spec.intakeContract.presentationOwnerReviewer
-      || anomaly.intakeContract.presentationLimit !== spec.intakeContract.presentationLimit
       || anomaly.intakeContract.classificationAuthorityId !== spec.intakeContract.classificationAuthorityId
     ) {
       throw new Error(`Reviewer anomaly stable key "${spec.stableKey}" cannot change intake contract ownership or limit`);
@@ -334,6 +333,7 @@ export function linkPromotedReviewerAnomalies(
   const restatementPromotionByAnomalyId = new Map<string, string>();
   for (const candidate of candidates) {
     const findingId = findingIdByRawFindingId.get(candidate.rawFindingId);
+    let handledAsRestatement = false;
     if (findingId !== undefined && candidate.restatementRequest !== undefined) {
       const anomaly = anomalies.find((entry) => entry.id === candidate.restatementRequest!.anomalyId);
       const sourceRaw = anomaly?.sourceRawFindingIds
@@ -347,6 +347,7 @@ export function linkPromotedReviewerAnomalies(
         && sourceRaw !== undefined
         && admittedRaw !== undefined
       ) {
+        handledAsRestatement = true;
         const anomalyId = anomaly.id;
         restatementCandidateCountByAnomalyId.set(
           anomalyId,
@@ -356,7 +357,8 @@ export function linkPromotedReviewerAnomalies(
           restatementPromotionByAnomalyId.set(anomalyId, findingId);
         }
       }
-    } else if (findingId !== undefined) {
+    }
+    if (findingId !== undefined && !handledAsRestatement) {
       promotedFindingIdByLineageKey.set(candidate.lineageKey, findingId);
     }
   }

@@ -18,28 +18,16 @@ import { captureFindingLifecycleHead } from './lifecycle-mutation.js';
 import { provisionalClaimBindingAuthorizationViolation } from '../../models/finding-provisional-claim-authorization.js';
 import type { FindingProvisionalClaimBindingAuthorizationReference } from '../../models/finding-types.js';
 import { hasUnsettledActiveConflictOwnership } from './conflict-ownership.js';
+import { intakeContractDefectFor as classifyIntakeContractDefect } from './intake-contract.js';
 
 const MIGRATABLE_KINDS = new Set<FindingProvisionalKind>([
   'raw-meaning-ambiguous',
   'raw-adjudication-unresolved',
 ]);
-const CLASSIFICATION_AUTHORITY_ID = 'system/intake_observation_classification_v1';
 const RECLASSIFICATION_AUTHORITY_ID = 'system/intake_contract_reclassification_v1' as const;
 
 function sorted(values: readonly string[]): string[] {
   return [...new Set(values)].sort(compareBinaryStrings);
-}
-
-function missingRequirements(raw: RawFinding): IntakeContractDefect['missingRequirements'] {
-  const missing: IntakeContractDefect['missingRequirements'] = [];
-  if (raw.familyTag === null) missing.push('familyTag');
-  if (raw.severity === null) missing.push('severity');
-  if (raw.title === null) missing.push('title');
-  if (raw.description === null) missing.push('description');
-  if (raw.target.kind === 'review_scope') missing.push('target');
-  if (raw.relation === null) missing.push('relation');
-  if (raw.evidence.length === 0) missing.push('claimEvidence');
-  return sorted(missing) as IntakeContractDefect['missingRequirements'];
 }
 
 function contractDefect(input: {
@@ -47,42 +35,24 @@ function contractDefect(input: {
   presentationOwnerReviewer: string;
   presentationLimit: number;
 }): IntakeContractDefect {
-  const missing = missingRequirements(input.raw);
-  const reasonCodes: IntakeContractDefect['reasonCodes'] = [];
-  if (missing.some((requirement) => (
-    requirement === 'familyTag'
-    || requirement === 'severity'
-    || requirement === 'title'
-    || requirement === 'description'
-    || requirement === 'target'
-    || requirement === 'relation'
-  ))) {
-    reasonCodes.push('product-identity-incomplete');
+  const result = classifyIntakeContractDefect({
+    relation: input.raw.relation,
+    target: input.raw.target,
+    familyTag: input.raw.familyTag,
+    severity: input.raw.severity,
+    title: input.raw.title,
+    description: input.raw.description,
+    rawExcerpt: input.raw.rawExcerpt,
+    evidence: input.raw.evidence,
+    evidenceCoverageGaps: [],
+    reviewer: input.presentationOwnerReviewer,
+    presentationLimit: input.presentationLimit,
+    lifecycleIntent: false,
+  });
+  if (result === undefined) {
+    throw new Error(`Legacy raw finding "${input.raw.rawFindingId}" has no intake contract defect`);
   }
-  if (input.raw.evidence.length === 0) {
-    reasonCodes.push('claim-evidence-missing');
-  }
-  if (input.raw.rawExcerpt !== undefined && input.raw.rawExcerpt.length > 0
-    && input.raw.description === null) {
-    reasonCodes.push('normalizer-extraction-loss');
-  }
-  const observationClass = input.raw.rawExcerpt !== undefined
-    || input.raw.description !== null
-    || input.raw.evidence.length > 0
-    || input.raw.target.kind !== 'review_scope'
-    || input.raw.familyTag !== null
-    || input.raw.severity !== null
-    || input.raw.title !== null
-    ? 'claim-bearing' as const
-    : 'protocol-noise' as const;
-  return {
-    observationClass,
-    classificationAuthorityId: CLASSIFICATION_AUTHORITY_ID,
-    reasonCodes: sorted(reasonCodes) as IntakeContractDefect['reasonCodes'],
-    missingRequirements: missing,
-    presentationOwnerReviewer: input.presentationOwnerReviewer,
-    presentationLimit: Math.max(1, input.presentationLimit),
-  };
+  return result;
 }
 
 function exactLegacyGraph(input: {
@@ -107,7 +77,20 @@ function exactLegacyGraph(input: {
     snapshot.rawPayloadDigest !== computeRawPayloadDigest(raw)
     || snapshot.canonicalProvenance.ambiguityCodes.length === 0
     || snapshot.canonicalProvenance.ambiguityCodes.some((code) => code !== 'missing-required-field')
-    || missingRequirements(raw).length === 0
+    || classifyIntakeContractDefect({
+      relation: raw.relation,
+      target: raw.target,
+      familyTag: raw.familyTag,
+      severity: raw.severity,
+      title: raw.title,
+      description: raw.description,
+      rawExcerpt: raw.rawExcerpt,
+      evidence: raw.evidence,
+      evidenceCoverageGaps: [],
+      reviewer: raw.reviewer,
+      presentationLimit: 1,
+      lifecycleIntent: false,
+    }) === undefined
   ) {
     return undefined;
   }
@@ -146,6 +129,9 @@ function exactLegacyGraph(input: {
   ));
   if (isolationBindings.length !== 1) return undefined;
   if (ledger.conflictRawClaimLandings.some((landing) => landing.rawFindingId === raw.rawFindingId)) {
+    return undefined;
+  }
+  if (hasUnsettledActiveConflictOwnership(ledger, findingId)) {
     return undefined;
   }
   const terminalEpisodes = ledger.terminalAdjudicationEpisodes.filter(
@@ -273,7 +259,7 @@ function exactLegacyGraphB(input: {
   const bundleReferences = references.filter((reference) => (
     reference.kind === 'new_provisional_bundle'
       && reference.sourceRawFindingIds.length === rawIds.length
-      && JSON.stringify(reference.sourceRawFindingIds) === JSON.stringify(rawIds)
+      && sameStringSet(reference.sourceRawFindingIds, rawIds)
       && provisionalClaimBindingAuthorizationViolation(reference) === undefined
   ));
   if (references.length !== 1 || bundleReferences.length !== 1) {
@@ -327,7 +313,8 @@ function legacyAnomalySpec(input: {
   lineageKey: string;
   defect: IntakeContractDefect;
 }): ReviewerAnomalySpec {
-  const raw = input.raws[0];
+  const raw = [...input.raws]
+    .sort((left, right) => compareBinaryStrings(left.rawFindingId, right.rawFindingId))[0];
   if (raw === undefined) {
     throw new Error('Legacy intake migration requires at least one source raw finding');
   }
@@ -376,7 +363,9 @@ export function migrateLegacyIntakeProvisionalFindings(input: {
       input.ledger.rawFindings.filter((raw) => raw.rawFindingId === rawFindingId)
     ));
     if (rawMatches.some((matches) => matches.length !== 1)) continue;
-    const sourceRaws = rawMatches.map((matches) => matches[0]!);
+    const sourceRaws = rawMatches
+      .map((matches) => matches[0]!)
+      .sort((left, right) => compareBinaryStrings(left.rawFindingId, right.rawFindingId));
     const raw = sourceRaws[0]!;
     const graph = finding.provisional.kind === 'raw-adjudication-unresolved'
       ? exactLegacyGraphB({

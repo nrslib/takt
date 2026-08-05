@@ -704,17 +704,35 @@ function planInterpretationBatch(input: {
 
   let cursor = 0;
   while (cursor < unleasedProviderCases.length) {
-    let batch = unleasedProviderCases.slice(cursor, cursor + input.maxCasesPerProviderCall);
-    let prepared = input.prepareProviderRequest(ledger, batch);
-    while (
-      batch.length > 1
-      && Buffer.byteLength(prepared.requestBytes, 'utf8') > input.budgetLimits.maxAdapterVisibleInputBytesPerCall
-    ) {
-      batch = batch.slice(0, -1);
-      prepared = input.prepareProviderRequest(ledger, batch);
+    const maxBatchLength = Math.min(
+      input.maxCasesPerProviderCall,
+      unleasedProviderCases.length - cursor,
+    );
+    let lower = 1;
+    let upper = maxBatchLength;
+    let batch: typeof unleasedProviderCases = [];
+    let prepared: PreparedInterpretationProviderRequest | undefined;
+    while (lower <= upper) {
+      const candidateLength = Math.floor((lower + upper) / 2);
+      const candidateBatch = unleasedProviderCases.slice(
+        cursor,
+        cursor + candidateLength,
+      );
+      const candidatePrepared = input.prepareProviderRequest(ledger, candidateBatch);
+      if (
+        Buffer.byteLength(candidatePrepared.requestBytes, 'utf8')
+        <= input.budgetLimits.maxAdapterVisibleInputBytesPerCall
+      ) {
+        batch = candidateBatch;
+        prepared = candidatePrepared;
+        lower = candidateLength + 1;
+      } else {
+        upper = candidateLength - 1;
+      }
     }
-    if (batch.length === 0) {
-      throw new Error('Interpretation provider batch became empty while adapting to the byte ceiling');
+    if (prepared === undefined) {
+      batch = unleasedProviderCases.slice(cursor, cursor + 1);
+      prepared = input.prepareProviderRequest(ledger, batch);
     }
     const batchAttempts = batch.map((plannedCase) => {
       const attempt = attemptByCaseId.get(plannedCase.caseId);

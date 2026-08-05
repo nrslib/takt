@@ -80,6 +80,10 @@ interface FindingCounts {
   roundBudgetExhausted: boolean;
   anomalies: number;
   anomalyBudgetExhausted: boolean;
+  requiresGuaranteedPresentationCount: number;
+  restatementReadyCount: number;
+  claimBearingTerminalCount: number;
+  protocolNoiseRejectedCount: number;
   conflicts: number;
   unadjudicated: number;
 }
@@ -120,6 +124,10 @@ const EMPTY_FINDING_COUNTS: FindingCounts = {
   roundBudgetExhausted: false,
   anomalies: 0,
   anomalyBudgetExhausted: false,
+  requiresGuaranteedPresentationCount: 0,
+  restatementReadyCount: 0,
+  claimBearingTerminalCount: 0,
+  protocolNoiseRejectedCount: 0,
   conflicts: 0,
   unadjudicated: 0,
 };
@@ -207,6 +215,10 @@ function findings(counts: FindingCounts): FindingsRuleContext {
     reviewerAnomalies: {
       count: counts.anomalies,
       budgetExhausted: counts.anomalyBudgetExhausted,
+      requiresGuaranteedPresentationCount: counts.requiresGuaranteedPresentationCount,
+      restatementReadyCount: counts.restatementReadyCount,
+      claimBearingTerminalCount: counts.claimBearingTerminalCount,
+      protocolNoiseRejectedCount: counts.protocolNoiseRejectedCount,
     },
     conflicts: {
       count: counts.conflicts,
@@ -238,22 +250,31 @@ function expectedRuleMatch(counts: FindingCounts): ExpectedRuleMatch {
     return { index: 0, nextStep: 'finding-conflict-adjudication' };
   }
   if (counts.conflicts > 0) return { index: 1, nextStep: 'ABORT' };
+  if (counts.requiresGuaranteedPresentationCount > 0) {
+    return { index: 2, returnValue: 'needs_review' };
+  }
+  if (counts.claimBearingTerminalCount > 0) {
+    return { index: 3, returnValue: 'need_replan' };
+  }
+  if (counts.restatementReadyCount > 0) {
+    return { index: 4, returnValue: 'needs_review' };
+  }
   if (counts.dismissEligible > 0) {
-    return { index: 2, returnValue: 'needs_terminal_adjudication' };
+    return { index: 5, returnValue: 'needs_terminal_adjudication' };
   }
-  if (counts.provisionalFixpoint) return { index: 3, returnValue: 'need_replan' };
+  if (counts.provisionalFixpoint) return { index: 6, returnValue: 'need_replan' };
   if (counts.roundBudgetExhausted && counts.provisional > 0) {
-    return { index: 4, returnValue: 'need_replan' };
+    return { index: 7, returnValue: 'need_replan' };
   }
-  if (counts.provisional > 0) return { index: 5, returnValue: 'need_replan' };
+  if (counts.provisional > 0) return { index: 8, returnValue: 'need_replan' };
   if (counts.open === 0 && counts.anomalies > 0 && counts.anomalyBudgetExhausted) {
-    return { index: 6, returnValue: 'need_replan' };
+    return { index: 9, returnValue: 'need_replan' };
   }
   if (counts.open === 0 && counts.anomalies > 0) {
-    return { index: 7, returnValue: 'needs_review' };
+    return { index: 10, returnValue: 'needs_review' };
   }
-  if (counts.open === 0) return { index: 8, nextStep: 'COMPLETE' };
-  return { index: 9, returnValue: 'needs_fix' };
+  if (counts.open === 0) return { index: 11, nextStep: 'COMPLETE' };
+  return { index: 12, returnValue: 'needs_fix' };
 }
 
 function enumerateFindingCounts(): FindingCounts[] {
@@ -266,18 +287,28 @@ function enumerateFindingCounts(): FindingCounts[] {
             for (let anomalies = 0; anomalies <= 2; anomalies += 1) {
               for (const provisionalFixpoint of [false, true]) {
                 for (const roundBudgetExhausted of [false, true]) {
-                  for (const anomalyBudgetExhausted of [false, true]) {
-                    states.push({
-                      open,
-                      provisional,
-                      dismissEligible,
-                      provisionalFixpoint,
-                      roundBudgetExhausted,
-                      anomalies,
-                      anomalyBudgetExhausted,
-                      conflicts,
-                      unadjudicated,
-                    });
+                  for (const requiresGuaranteedPresentationCount of [0, 1, 2]) {
+                    for (const restatementReadyCount of [0, 1, 2]) {
+                      for (const claimBearingTerminalCount of [0, 1, 2]) {
+                        for (const anomalyBudgetExhausted of [false, true]) {
+                          states.push({
+                            open,
+                            provisional,
+                            dismissEligible,
+                            provisionalFixpoint,
+                            roundBudgetExhausted,
+                            anomalies,
+                            anomalyBudgetExhausted,
+                            requiresGuaranteedPresentationCount,
+                            restatementReadyCount,
+                            claimBearingTerminalCount,
+                            protocolNoiseRejectedCount: 0,
+                            conflicts,
+                            unadjudicated,
+                          });
+                        }
+                      }
+                    }
                   }
                 }
               }
@@ -492,10 +523,10 @@ describe('takt-default-fc builtins', () => {
     );
     const reached = new Set<number>();
     const states = enumerateFindingCounts();
-    expect(states).toHaveLength(1440);
+    expect(states).toHaveLength(38880);
     const rules = reviewers.rules;
     if (rules === undefined) throw new Error('Missing suite self rules');
-    expect(rules).toHaveLength(10);
+    expect(rules).toHaveLength(13);
 
     for (const counts of states) {
       const match = new RuleEvaluator(reviewers, { state: workflowState(reviewers, counts) })
