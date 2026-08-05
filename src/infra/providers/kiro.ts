@@ -40,6 +40,7 @@ function toKiroOptions(options: ProviderCallOptions, systemPrompt?: string): Kir
 
 export class KiroProvider implements Provider {
   readonly supportsStructuredOutput = false;
+  readonly supportsIsolatedStructuredExecution = false;
   readonly supportsNativeImageInput = false;
   readonly supportsStrictInternalAgentIsolation = false;
 
@@ -59,5 +60,12 @@ export class KiroProvider implements Provider {
         return callKiro(name, prompt, toKiroOptions(options, systemPrompt));
       },
     };
+  }
+
+  setupIsolatedStructured(_config: AgentSetup): ProviderAgent {
+    const call = async (): Promise<AgentResponse> => {
+      throw new Error('Provider "kiro" does not support isolated structured execution');
+    };
+    return { call };
   }
 }

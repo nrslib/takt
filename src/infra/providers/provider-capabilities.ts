@@ -67,8 +67,7 @@ function resolveProviderCapabilities(
 
   return {
     supportsStructuredOutput: providerImpl.supportsStructuredOutput,
-    supportsIsolatedStructuredExecution:
-      providerImpl.supportsIsolatedStructuredExecution === true,
+    supportsIsolatedStructuredExecution: providerImpl.supportsIsolatedStructuredExecution,
     supportsNativeImageInput: providerImpl.supportsNativeImageInput,
     supportsMcpServers: MCP_SERVER_PROVIDERS.has(provider),
     supportsAllowedTools: ALLOWED_TOOLS_PROVIDERS.has(provider),

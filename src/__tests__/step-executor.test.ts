@@ -1164,69 +1164,6 @@ describe('StepExecutor', () => {
     });
   });
 
-  it('pending normalizerのfallback providerが隔離structured実行に非対応ならreviewerを再実行せず拒否する', async () => {
-    const harness = createPlainTextPublicationHarness([]);
-    persistPendingFindingReviewNormalization(
-      runPaths.reportsAbs,
-      createPendingFindingReviewNormalization({
-        identity: {
-          scopeIdentity: 'scope-plain-text',
-          callNamespace: '',
-          parentStepName: 'review',
-          stepIteration: 1,
-          reviewerStepName: 'review',
-          reportName: 'review.md',
-        },
-        workflowName: 'test-workflow',
-        reportContent: harness.reportContent,
-        reviewerExecutionIdentity: {
-          provider: 'mock',
-          model: 'reviewer-model',
-        },
-      }),
-    );
-    const fallbackRuntime = {
-      providerInfo: {
-        provider: 'opencode' as const,
-        model: 'unsupported-normalizer-model',
-      },
-      fallback: {
-        reason: 'rate_limited' as const,
-        reasonDetail: 'normalizer rate limited',
-        originalIteration: 3,
-        previousProvider: 'mock' as const,
-        previousModel: 'normalizer-model',
-        currentProvider: 'opencode' as const,
-        currentModel: 'unsupported-normalizer-model',
-        stepName: 'review',
-        reportDir: runPaths.reportsRel,
-        origin: {
-          stage: 'finding_intake_normalizer' as const,
-          reviewerStepName: 'review',
-        },
-      },
-    };
-
-    await expect(harness.executor.runNormalStep(
-      harness.step,
-      harness.state,
-      'test task',
-      5,
-      harness.updatePersonaSession,
-      undefined,
-      fallbackRuntime,
-      {
-        executableStep: harness.step,
-        findingContractContext: harness.findingContractContext,
-        reviewerOutputStrategy: PLAIN_TEXT_NORMALIZED_STRATEGY,
-        phase1Instruction: 'Review.',
-        stepIteration: 1,
-      },
-    )).rejects.toThrow(/does not support isolated structured execution/u);
-    expect(executeAgent).not.toHaveBeenCalled();
-    expect(harness.normalizeFindingIntake).not.toHaveBeenCalled();
-  });
-
   it('runNormalStepの正式resumeはpending本文をnormalizerだけで再開する', async () => {
     const rawFinding = {
       rawExcerpt: 'Issue: src/example.ts still bypasses the required boundary.',

@@ -8,7 +8,7 @@ import {
   buildFindingIntakeCorrectionPrompt,
   buildFindingIntakeExtractionPrompt,
 } from '../shared/prompts/finding-intake-extraction.js';
-import { runAgent } from './runner.js';
+import { getProvider } from '../infra/providers/index.js';
 
 export interface NormalizeFindingIntakeOptions {
   provider: ProviderType;
@@ -37,19 +37,26 @@ export async function normalizeFindingIntake(
           options.extractionFidelityCorrection ?? false,
         )
       : buildFindingIntakeExtractionPrompt(report, options.language ?? 'en');
-    return await runAgent(undefined, instruction, {
+    const provider = getProvider(options.provider);
+    const callOptions = {
       cwd: isolatedCwd,
-      executionProfile: 'isolated-structured',
-      resolvedProvider: options.provider,
-      resolvedModel: options.model,
-      resolvedProviderOptions: options.providerOptions ?? null,
-      permissionMode: 'readonly',
-      allowedTools: [],
+      abortSignal: options.abortSignal,
+      model: options.model,
+      permissionMode: 'readonly' as const,
+      allowedTools: [] as string[],
       outputSchema: createRawFindingsOutputJsonSchema(),
       language: options.language,
-      abortSignal: options.abortSignal,
-      onPromptResolved: options.onPromptResolved,
+      providerOptions: options.providerOptions,
+    };
+    const agent = provider.setupIsolatedStructured({
+      name: 'finding-intake-normalizer',
+      systemPrompt: '',
     });
+    options.onPromptResolved?.({
+      systemPrompt: '',
+      userInstruction: instruction,
+    });
+    return await agent.call(instruction, callOptions);
   } finally {
     rmSync(isolatedCwd, { recursive: true, force: true });
   }

@@ -39,8 +39,8 @@ function toCodexOptions(options: ProviderCallOptions): CodexCallOptions {
 /** Codex provider — delegates to OpenAI Codex SDK */
 export class CodexProvider implements Provider {
   readonly supportsStructuredOutput = true;
-  readonly supportsNativeImageInput = true;
   readonly supportsIsolatedStructuredExecution = true;
+  readonly supportsNativeImageInput = true;
   readonly supportsStrictInternalAgentIsolation = true;
 
   getRuntimeInstructions(_allowedTools?: string[]): string | null {
@@ -58,21 +58,26 @@ export class CodexProvider implements Provider {
       options: ProviderCallOptions,
     ): Promise<AgentResponse> => {
       const codexOptions = toCodexOptions(options);
-      if (options.executionProfile === 'isolated-structured') {
-        return callCodexIsolatedStructured(
-          name,
-          systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt,
-          codexOptions,
-        );
-      }
       return systemPrompt
         ? callCodexCustom(name, prompt, systemPrompt, codexOptions)
         : callCodex(name, prompt, codexOptions);
     };
-    if (systemPrompt) {
-      return { call };
-    }
+    return { call };
+  }
 
+  setupIsolatedStructured(config: AgentSetup): ProviderAgent {
+    const { name, systemPrompt } = config;
+    const call = async (
+      prompt: string,
+      options: ProviderCallOptions,
+    ): Promise<AgentResponse> => {
+      const codexOptions = toCodexOptions(options);
+      return callCodexIsolatedStructured(
+        name,
+        systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt,
+        codexOptions,
+      );
+    };
     return { call };
   }
 }

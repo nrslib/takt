@@ -11,7 +11,6 @@ import type {
   ProviderPermissionProfiles,
 } from '../core/models/index.js';
 import type { InternalAgentIsolation, ProviderType } from '../shared/types/provider.js';
-import type { ProviderExecutionProfile } from '../infra/providers/types.js';
 
 export type { StreamCallback };
 
@@ -38,7 +37,7 @@ export interface ResolvedAgentExecution {
 /** Common options for running agents */
 export interface RunAgentOptions {
   cwd: string;
-  executionProfile?: ProviderExecutionProfile;
+  executionProfile?: 'isolated-structured';
   projectCwd?: string;
   abortSignal?: AbortSignal;
   sessionId?: string;

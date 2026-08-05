@@ -60,7 +60,6 @@ import {
   validateStructuredOutputAgainstSchema,
 } from './structured-output-schema-validator.js';
 import {
-  providerSupportsIsolatedStructuredExecution,
   providerSupportsStructuredOutput,
 } from '../../../infra/providers/provider-capabilities.js';
 import { AGENT_FAILURE_CATEGORIES } from '../../../shared/types/agent-failure.js';
@@ -680,13 +679,9 @@ export class StepExecutor {
       ...resolvedProviderInfo,
       providerOptions: config.providerOptions,
     };
-    if (
-      providerInfo.provider === undefined
-      || providerSupportsIsolatedStructuredExecution(providerInfo.provider) !== true
-    ) {
+    if (providerInfo.provider === undefined) {
       throw new Error(
-        `Finding intake normalizer provider "${providerInfo.provider ?? '(unresolved)'}" `
-        + 'does not support isolated structured execution',
+        'Finding intake normalizer provider could not be resolved',
       );
     }
     const normalizerProvider = providerInfo.provider;

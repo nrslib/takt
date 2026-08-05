@@ -16,6 +16,7 @@ import type { AgentResponse } from '../../core/models/index.js';
 import type { PermissionMode } from '../../core/models/index.js';
 import { createLogger } from '../../shared/utils/index.js';
 import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions, ProviderCompactSessionOptions } from './types.js';
+import { assertOutputSchema } from './types.js';
 
 const log = createLogger('opencode-provider');
 
@@ -87,6 +88,7 @@ function requireOpenCodeModel(model: string | undefined): string {
 /** OpenCode provider — delegates to OpenCode SDK */
 export class OpenCodeProvider implements Provider {
   readonly supportsStructuredOutput = true;
+  readonly supportsIsolatedStructuredExecution = true;
   readonly supportsNativeImageInput = false;
   readonly supportsStrictInternalAgentIsolation = false;
 
@@ -123,5 +125,22 @@ export class OpenCodeProvider implements Provider {
         return callOpenCode(name, prompt, toOpenCodeOptions(options));
       },
     };
+  }
+
+  setupIsolatedStructured(config: AgentSetup): ProviderAgent {
+    const { name, systemPrompt } = config;
+    const call = async (prompt: string, options: ProviderCallOptions): Promise<AgentResponse> => {
+      const isolatedOptions: ProviderCallOptions = {
+        ...options,
+        sessionId: undefined,
+        allowedTools: [],
+        mcpServers: undefined,
+        imageAttachments: undefined,
+        outputSchema: assertOutputSchema(options.outputSchema, 'opencode'),
+      };
+      const fullPrompt = systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt;
+      return callOpenCodeCustom(name, fullPrompt, '', toOpenCodeOptions(isolatedOptions));
+    };
+    return { call };
   }
 }

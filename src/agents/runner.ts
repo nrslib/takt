@@ -13,7 +13,7 @@ import {
   resolveEffectiveProviderOptions,
   resolvePersonaProviderOptions,
 } from '../infra/config/providerOptions.js';
-import { getProvider, type ProviderType, type ProviderCallOptions } from '../infra/providers/index.js';
+import { getProvider, type ProviderType, type ProviderCallOptions, type ProviderAgent, type AgentSetup } from '../infra/providers/index.js';
 import type { AgentResponse, CustomAgentConfig } from '../core/models/index.js';
 import { resolveAgentProviderModel } from '../core/workflow/provider-resolution.js';
 import { mergeGlobalPermissionProfiles, resolveStepPermissionMode } from '../core/workflow/permission-profile-resolution.js';
@@ -168,7 +168,6 @@ export class AgentRunner {
   ): ProviderCallOptions {
     return {
       cwd: options.cwd,
-      executionProfile: options.executionProfile,
       abortSignal: options.abortSignal,
       sessionId: options.sessionId,
       internalAgentIsolation: options.internalAgentIsolation,
@@ -222,14 +221,6 @@ export class AgentRunner {
       customOptions,
     );
     const provider = getProvider(resolution.provider);
-    if (
-      options.executionProfile === 'isolated-structured'
-      && provider.supportsIsolatedStructuredExecution !== true
-    ) {
-      throw new Error(
-        `Provider "${resolution.provider}" does not support strict isolated structured execution`,
-      );
-    }
     const resolvedSystemPrompt = loadAgentPrompt(agentConfig, options.cwd);
     const callOptions = AgentRunner.buildCallOptions(resolution, customOptions);
     const providerRuntimeInstructions = provider.getRuntimeInstructions(customOptions.allowedTools, callOptions.permissionMode, callOptions.providerOptions?.opencode?.networkAccess);
@@ -243,10 +234,15 @@ export class AgentRunner {
       userInstruction: task,
     });
 
-    const agent = provider.setup({
-      name: agentConfig.name,
-      systemPrompt,
-    });
+    const agent = options.executionProfile === 'isolated-structured'
+      ? provider.setupIsolatedStructured({
+          name: agentConfig.name,
+          systemPrompt,
+        })
+      : provider.setup({
+          name: agentConfig.name,
+          systemPrompt,
+        });
 
     options.onDispatch?.(resolution.permissionMode);
     return agent.call(task, callOptions);
@@ -272,15 +268,12 @@ export class AgentRunner {
 
     const resolution = AgentRunner.resolveExecution(options.cwd, personaName, options);
     const provider = getProvider(resolution.provider);
-    if (
-      options.executionProfile === 'isolated-structured'
-      && provider.supportsIsolatedStructuredExecution !== true
-    ) {
-      throw new Error(
-        `Provider "${resolution.provider}" does not support strict isolated structured execution`,
-      );
-    }
     const callOptions = AgentRunner.buildCallOptions(resolution, options);
+    const useIsolatedStructured = options.executionProfile === 'isolated-structured';
+    const setupAgent = (agentSetup: AgentSetup): ProviderAgent =>
+      useIsolatedStructured
+        ? provider.setupIsolatedStructured(agentSetup)
+        : provider.setup(agentSetup);
 
     if (options.internalSystemPrompt !== undefined) {
       const systemPrompt = buildWrappedSystemPrompt(options.internalSystemPrompt, {
@@ -291,7 +284,7 @@ export class AgentRunner {
         systemPrompt,
         userInstruction: task,
       });
-      const agent = provider.setup({ name: 'takt-internal', systemPrompt });
+      const agent = setupAgent({ name: 'takt-internal', systemPrompt });
       options.onDispatch?.(resolution.permissionMode);
       return agent.call(task, callOptions);
     }
@@ -310,7 +303,7 @@ export class AgentRunner {
         systemPrompt,
         userInstruction: task,
       });
-      const agent = provider.setup({ name: personaName, systemPrompt });
+      const agent = setupAgent({ name: personaName, systemPrompt });
       options.onDispatch?.(resolution.permissionMode);
       return agent.call(task, callOptions);
     }
@@ -331,7 +324,7 @@ export class AgentRunner {
         systemPrompt,
         userInstruction: task,
       });
-      const agent = provider.setup({ name: personaName, systemPrompt });
+      const agent = setupAgent({ name: personaName, systemPrompt });
       options.onDispatch?.(resolution.permissionMode);
       return agent.call(task, callOptions);
     }
@@ -347,7 +340,7 @@ export class AgentRunner {
     const agentSetup = systemPrompt
       ? { name: personaName, systemPrompt }
       : { name: personaName };
-    const agent = provider.setup(agentSetup);
+    const agent = setupAgent(agentSetup);
     options.onDispatch?.(resolution.permissionMode);
     return agent.call(task, callOptions);
   }

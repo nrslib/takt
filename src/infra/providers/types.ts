@@ -13,11 +13,8 @@ export interface ProviderImageAttachment {
   path: string;
 }
 
-export type ProviderExecutionProfile = 'isolated-structured';
-
 export interface ProviderCallOptions {
   cwd: string;
-  executionProfile?: ProviderExecutionProfile;
   abortSignal?: AbortSignal;
   sessionId?: string;
   internalAgentIsolation?: InternalAgentIsolation;
@@ -57,13 +54,27 @@ export interface ProviderAgent {
 
 export interface Provider {
   supportsStructuredOutput: boolean;
+  /** Pre-check flag for isolated structured execution; the implementation itself lives in setupIsolatedStructured. */
+  supportsIsolatedStructuredExecution: boolean;
   supportsNativeImageInput: boolean;
-  supportsIsolatedStructuredExecution?: boolean;
   supportsStrictInternalAgentIsolation: boolean;
   getRuntimeInstructions(allowedTools?: string[], permissionMode?: import('../../core/models/index.js').PermissionMode, networkAccess?: boolean): string | null;
   keepsAllowedToolWithoutEdit(tool: string): boolean;
   setup(config: AgentSetup): ProviderAgent;
+  setupIsolatedStructured(config: AgentSetup): ProviderAgent;
   compactSession?(options: ProviderCompactSessionOptions): Promise<void>;
 }
 
 export type ProviderType = SharedProviderType;
+
+export function assertOutputSchema(
+  schema: Record<string, unknown> | undefined,
+  provider: string,
+): Record<string, unknown> {
+  if (schema === undefined) {
+    throw new Error(
+      `Provider "${provider}" cannot run isolated structured execution without an output schema`,
+    );
+  }
+  return schema;
+}

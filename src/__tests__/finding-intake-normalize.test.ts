@@ -194,15 +194,22 @@ describe('reviewer output strategy', () => {
     )?.kind).toBe('structured');
   });
 
-  it('validates the isolated normalizer provider independently of targets', () => {
+  it('accepts providers that implement isolated structured execution', () => {
     expect(resolveFindingIntakeNormalizeConfig(
       { provider: 'codex', model: 'gpt-5.6-terra' },
       findingContract,
     )).toBeDefined();
-    expect(() => resolveFindingIntakeNormalizeConfig(
-      { provider: 'claude', model: 'sonnet' },
+    expect(resolveFindingIntakeNormalizeConfig(
+      { provider: 'opencode', model: 'ollama-cloud/glm-5.2' },
       findingContract,
-    )).toThrow(/finding_contract\.intake_normalize/);
+    )).toBeDefined();
+  });
+
+  it('rejects providers without isolated structured execution at load time', () => {
+    expect(() => resolveFindingIntakeNormalizeConfig(
+      { provider: 'cursor', model: 'auto' },
+      findingContract,
+    )).toThrow('does not support isolated structured execution');
   });
 });
 

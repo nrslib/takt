@@ -40,6 +40,7 @@ function toCursorOptions(options: ProviderCallOptions): CursorCallOptions {
 /** Cursor provider — delegates to Cursor Agent CLI */
 export class CursorProvider implements Provider {
   readonly supportsStructuredOutput = false;
+  readonly supportsIsolatedStructuredExecution = false;
   readonly supportsNativeImageInput = false;
   readonly supportsStrictInternalAgentIsolation = false;
 
@@ -66,5 +67,12 @@ export class CursorProvider implements Provider {
         return callCursor(name, prompt, toCursorOptions(options));
       },
     };
+  }
+
+  setupIsolatedStructured(_config: AgentSetup): ProviderAgent {
+    const call = async (): Promise<AgentResponse> => {
+      throw new Error('Provider "cursor" does not support isolated structured execution');
+    };
+    return { call };
   }
 }

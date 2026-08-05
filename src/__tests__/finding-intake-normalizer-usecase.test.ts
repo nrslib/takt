@@ -1,24 +1,29 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync } from 'node:fs';
 
-const { runAgent } = vi.hoisted(() => ({
-  runAgent: vi.fn(),
+const { setupIsolatedStructured, getProvider } = vi.hoisted(() => ({
+  setupIsolatedStructured: vi.fn(),
+  getProvider: vi.fn(),
 }));
 
-vi.mock('../agents/runner.js', () => ({ runAgent }));
+vi.mock('../infra/providers/index.js', () => ({ getProvider }));
 
 import { normalizeFindingIntake } from '../agents/finding-intake-normalizer-usecase.js';
 
 describe('normalizeFindingIntake', () => {
   beforeEach(() => {
-    runAgent.mockReset();
-    runAgent.mockResolvedValue({
-      persona: 'default',
-      status: 'done',
-      content: '{}',
-      sessionId: 'discard-me',
-      structuredOutput: { rawFindings: [] },
+    setupIsolatedStructured.mockReset();
+    getProvider.mockReset();
+    setupIsolatedStructured.mockReturnValue({
+      call: vi.fn().mockResolvedValue({
+        persona: 'default',
+        status: 'done',
+        content: '{}',
+        sessionId: 'discard-me',
+        structuredOutput: { rawFindings: [] },
+      }),
     });
+    getProvider.mockReturnValue({ setupIsolatedStructured });
   });
 
   it('uses one fresh read-only configured call with no tools, session, or MCP inheritance', async () => {
@@ -30,40 +35,41 @@ describe('normalizeFindingIntake', () => {
       },
     });
 
-    expect(runAgent).toHaveBeenCalledOnce();
-    const [persona, prompt, options] = runAgent.mock.calls[0]!;
-    expect(persona).toBeUndefined();
-    expect(prompt).toContain('normal Markdown report');
-    expect(options).toMatchObject({
-      executionProfile: 'isolated-structured',
-      resolvedProvider: 'codex',
-      resolvedModel: 'gpt-5.6-terra',
-      resolvedProviderOptions: {
+    expect(getProvider).toHaveBeenCalledWith('codex');
+    expect(setupIsolatedStructured).toHaveBeenCalledOnce();
+    const [setupConfig] = setupIsolatedStructured.mock.calls[0]!;
+    expect(setupConfig).toMatchObject({
+      name: 'finding-intake-normalizer',
+      systemPrompt: '',
+    });
+  });
+
+  it('passes provider options through to the isolated call', async () => {
+    await normalizeFindingIntake('report', {
+      provider: 'codex',
+      model: 'gpt-5.6-terra',
+      providerOptions: {
         codex: { reasoningEffort: 'high' },
       },
+    });
+
+    const callFn = setupIsolatedStructured.mock.results[0]!.value.call;
+    const [prompt, options] = callFn.mock.calls[0]!;
+    expect(prompt).toContain('report');
+    expect(options).toMatchObject({
+      model: 'gpt-5.6-terra',
       permissionMode: 'readonly',
       allowedTools: [],
+      providerOptions: {
+        codex: { reasoningEffort: 'high' },
+      },
     });
     expect(options).not.toHaveProperty('childProcessEnv');
-    expect(options.cwd).not.toBe('/repo');
     expect(options.cwd).toContain('takt-finding-intake-');
     expect(existsSync(options.cwd)).toBe(false);
     expect(options.sessionId).toBeUndefined();
     expect(options.mcpServers).toBeUndefined();
-    expect(options.provider).toBeUndefined();
-    expect(options.model).toBeUndefined();
     expect(options.outputSchema).toBeDefined();
-  });
-
-  it('explicitly suppresses project/global provider option fallback when none are configured', async () => {
-    await normalizeFindingIntake('report', {
-      provider: 'codex',
-      model: 'gpt-5.6-terra',
-    });
-
-    expect(runAgent.mock.calls[0]?.[2]).toMatchObject({
-      resolvedProviderOptions: null,
-    });
   });
 
   it('uses the correction extractor with the same report and no prior output, ledger, or repository context', async () => {
@@ -73,12 +79,13 @@ describe('normalizeFindingIntake', () => {
       mode: 'correction',
     });
 
-    const prompt = runAgent.mock.calls[0]?.[1];
+    const callFn = setupIsolatedStructured.mock.results[0]!.value.call;
+    const [prompt] = callFn.mock.calls[0]!;
     expect(prompt).toContain('previous extraction failed');
     expect(prompt).toContain('## Review report\n\nauthoritative report');
     expect(prompt.match(/authoritative report/g)).toHaveLength(1);
-    expect(runAgent.mock.calls[0]?.[2]).toMatchObject({
-      executionProfile: 'isolated-structured',
+    const [, options] = callFn.mock.calls[0]!;
+    expect(options).toMatchObject({
       permissionMode: 'readonly',
       allowedTools: [],
     });
@@ -89,16 +96,20 @@ describe('normalizeFindingIntake', () => {
       mode: 'correction',
       extractionFidelityCorrection: true,
     });
-    expect(runAgent.mock.calls[1]?.[1]).toContain(
+    const secondCallFn = setupIsolatedStructured.mock.results[1]!.value.call;
+    const [secondPrompt] = secondCallFn.mock.calls[0]!;
+    expect(secondPrompt).toContain(
       'this exception overrides rule 3 for `candidate.description` alone',
     );
   });
 
   it('removes the isolated working directory when the provider call throws', async () => {
     let isolatedCwd: string | undefined;
-    runAgent.mockImplementationOnce(async (_persona, _prompt, options) => {
-      isolatedCwd = options.cwd;
-      throw new Error('provider failed');
+    setupIsolatedStructured.mockReturnValueOnce({
+      call: vi.fn(async (_prompt: string, options: { cwd: string }) => {
+        isolatedCwd = options.cwd;
+        throw new Error('provider failed');
+      }),
     });
 
     await expect(normalizeFindingIntake('report', {
