@@ -7,6 +7,7 @@ import {
 } from 'vitest';
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -95,6 +96,36 @@ describe('session state envelope', () => {
     );
 
     expect(takeSessionState(testDir)).toMatchObject({ taskResult: 'second' });
+  });
+
+  it('errorMessageを含む旧session stateを読み込みconsumed envelopeへ移行する', () => {
+    const legacyState: SessionState = {
+      status: 'error',
+      errorMessage: 'user_interrupted',
+      timestamp: '2026-07-28T00:00:00.000Z',
+      workflowName: 'coding',
+      taskContent: 'Interrupted task',
+      lastStep: 'implement',
+    };
+    mkdirSync(join(testDir, '.takt'), { recursive: true });
+    writeFileSync(
+      getSessionStatePath(testDir),
+      JSON.stringify(legacyState, null, 2),
+      'utf-8',
+    );
+
+    expect(takeSessionState(testDir)).toEqual(legacyState);
+    expect(JSON.parse(readFileSync(
+      getSessionStatePath(testDir),
+      'utf-8',
+    ))).toMatchObject({
+      version: 1,
+      publicationId: 'legacy-session-state',
+      status: 'consumed',
+      state: legacyState,
+      consumedAt: expect.any(String),
+    });
+    expect(takeSessionState(testDir)).toBeNull();
   });
 
   it('malformed envelopeを通知なしとして握りつぶさない', () => {

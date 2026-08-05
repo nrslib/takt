@@ -6,6 +6,7 @@ import type { TaskListItem } from '../infra/task/types.js';
 import { isStaleRunningTask } from '../infra/task/index.js';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import { initNdjsonLog } from '../infra/fs/index.js';
+import { getSessionStatePath } from '../infra/config/project/sessionState.js';
 import { createUsageEventLogger } from '../core/logging/usageEventLogger.js';
 import {
   OTEL_SESSION_SHADOW_LOG_FILE_SUFFIX,
@@ -409,6 +410,56 @@ describe('forceFailRunningTask', () => {
       step: 'implement',
       error: 'Manually marked as failed',
     });
+    expect(mockSuccess).toHaveBeenCalled();
+  });
+
+  it('should mark an interrupted running task as failed with a legacy error session state', async () => {
+    mockConfirm.mockResolvedValue(true);
+    writeMeta(projectDir, '20260409-run-a', {
+      task: 'Interrupted task',
+      status: 'aborted',
+      currentStep: 'implement',
+      currentIteration: 2,
+      reason: 'user_interrupted',
+      endTime: '2026-04-09T00:01:00.000Z',
+    });
+    const sessionStatePath = getSessionStatePath(projectDir);
+    fs.writeFileSync(
+      sessionStatePath,
+      JSON.stringify({
+        status: 'error',
+        errorMessage: 'user_interrupted',
+        timestamp: '2026-04-09T00:01:00.000Z',
+        workflowName: 'default',
+        taskContent: 'Interrupted task',
+        lastStep: 'implement',
+      }, null, 2),
+      'utf-8',
+    );
+
+    const result = await forceFailRunningTask(
+      createRunningTask(projectDir),
+      projectDir,
+    );
+
+    expect(result).toBe(true);
+    expect(mockForceFailRunningTask).toHaveBeenCalledWith('running-task', {
+      step: undefined,
+      error: 'Manually marked as failed',
+    });
+    expect(JSON.parse(fs.readFileSync(
+      sessionStatePath,
+      'utf-8',
+    ))).toMatchObject({
+      version: 1,
+      status: 'pending',
+      state: {
+        status: 'error',
+        errorMessage: 'Manually marked as failed',
+        workflowName: 'default',
+      },
+    });
+    expect(mockLogError).not.toHaveBeenCalled();
     expect(mockSuccess).toHaveBeenCalled();
   });
 

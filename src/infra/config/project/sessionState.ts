@@ -8,6 +8,7 @@ import {
 import { getProjectConfigDir, ensureDir } from '../paths.js';
 
 const SESSION_STATE_MODE = 0o600;
+const LEGACY_SESSION_STATE_PUBLICATION_ID = 'legacy-session-state';
 
 export interface SessionState {
   readonly status: 'success' | 'error' | 'user_stopped';
@@ -164,6 +165,12 @@ function parseSessionStateEnvelope(serialized: string): SessionStateEnvelope {
     });
   }
   const envelope = requireRecord(value, 'Session state envelope');
+  if (!Object.hasOwn(envelope, 'version')) {
+    return pendingEnvelope(
+      LEGACY_SESSION_STATE_PUBLICATION_ID,
+      parseSessionState(envelope),
+    );
+  }
   const expectedKeys = envelope.status === 'consumed'
     ? ['version', 'publicationId', 'status', 'state', 'consumedAt']
     : ['version', 'publicationId', 'status', 'state'];
