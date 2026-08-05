@@ -149,41 +149,61 @@ describe('session state envelope', () => {
     expect(readFileSync(getSessionStatePath(testDir), 'utf-8')).toBe(serialized);
   });
 
+  const validLegacyState: SessionState = {
+    status: 'error',
+    taskResult: 'partial result',
+    errorMessage: 'user_interrupted',
+    timestamp: '2026-07-28T00:00:00.000Z',
+    workflowName: 'coding',
+    taskContent: 'Interrupted task',
+    lastStep: 'implement',
+  };
+
   it.each([
-    ['status is missing', {
-      timestamp: '2026-07-28T00:00:00.000Z',
-      workflowName: 'coding',
-    }],
-    ['timestamp is missing', {
-      status: 'error',
-      workflowName: 'coding',
-    }],
-    ['workflowName is missing', {
-      status: 'error',
-      timestamp: '2026-07-28T00:00:00.000Z',
-    }],
-    ['status is invalid', {
-      status: 'failed',
-      timestamp: '2026-07-28T00:00:00.000Z',
-      workflowName: 'coding',
-    }],
-    ['timestamp is invalid', {
-      status: 'error',
-      timestamp: 'not-a-timestamp',
-      workflowName: 'coding',
-    }],
-    ['workflowName is empty', {
-      status: 'error',
-      timestamp: '2026-07-28T00:00:00.000Z',
-      workflowName: '',
-    }],
+    [
+      'status is missing',
+      ({ status: _status, ...legacyState }: SessionState) => legacyState,
+      'Session state status is invalid',
+    ],
+    [
+      'timestamp is missing',
+      ({ timestamp: _timestamp, ...legacyState }: SessionState) => legacyState,
+      'Session state timestamp must be a non-empty string',
+    ],
+    [
+      'workflowName is missing',
+      ({
+        workflowName: _workflowName,
+        ...legacyState
+      }: SessionState) => legacyState,
+      'Session state workflowName must be a non-empty string',
+    ],
+    [
+      'status is invalid',
+      (legacyState: SessionState) => ({ ...legacyState, status: 'failed' }),
+      'Session state status is invalid',
+    ],
+    [
+      'timestamp is invalid',
+      (legacyState: SessionState) => ({
+        ...legacyState,
+        timestamp: 'not-a-timestamp',
+      }),
+      'Session state timestamp is invalid: not-a-timestamp',
+    ],
+    [
+      'workflowName is empty',
+      (legacyState: SessionState) => ({ ...legacyState, workflowName: '' }),
+      'Session state workflowName must be a non-empty string',
+    ],
   ] as const)(
     'should reject a legacy session state when %s',
-    (_condition, legacyState) => {
+    (_condition, makeInvalidLegacyState, expectedError) => {
+      const legacyState = makeInvalidLegacyState(validLegacyState);
       const serialized = JSON.stringify(legacyState, null, 2);
       writeSerializedSessionState(serialized);
 
-      expect(() => takeSessionState(testDir)).toThrow(/Session state/);
+      expect(() => takeSessionState(testDir)).toThrow(expectedError);
       expect(readFileSync(getSessionStatePath(testDir), 'utf-8')).toBe(serialized);
     },
   );
