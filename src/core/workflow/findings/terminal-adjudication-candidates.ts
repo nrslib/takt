@@ -31,8 +31,7 @@ export function isOpenProvisional(
   finding: FindingLedgerEntry,
 ): finding is FindingLedgerEntry & { provisional: NonNullable<FindingLedgerEntry['provisional']> } {
   return finding.status === 'open'
-    && finding.provisional !== undefined
-    && finding.reviewerAnomalyReclassification === undefined;
+    && finding.provisional !== undefined;
 }
 
 export function isOpenProvisionalForActionRecovery(

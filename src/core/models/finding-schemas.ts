@@ -361,12 +361,6 @@ export const FindingLifecycleAuthoritySchema = z.union([
     rejectionCode: z.enum(FINDING_REJECTED_OBSERVATION_CODES),
   }).strict(),
   z.object({
-    kind: z.literal('provisional_conflict_normalization'),
-    normalizationId: Sha256Schema,
-    normalizationSnapshotId: Sha256Schema,
-    decisionDigest: Sha256Schema,
-  }).strict(),
-  z.object({
     kind: z.literal('verified_raw_provisional_identity'),
     rawFindingId: rawFindingIdString,
     rawCanonicalSnapshotId: Sha256Schema,
@@ -637,18 +631,6 @@ const LifecycleAuthoritySubjectSchema = z.discriminatedUnion('kind', [
     exactClaimIdentityDigest: Sha256Schema,
   }).strict(),
   z.object({
-    kind: z.literal('provisional_conflict_association_identical'),
-    associationId: Sha256Schema,
-    sourceHoldingSubjectId: Sha256Schema,
-    targetSubjectId: Sha256Schema,
-    targetSubjectRole: z.enum(['provisional_target', 'holding_provisional']),
-    sourceExpectedHead: FindingLifecycleEntityHeadSchema,
-    targetExpectedHead: FindingLifecycleEntityHeadSchema,
-    sourceClaimSnapshotDigest: Sha256Schema,
-    targetClaimSnapshotDigest: Sha256Schema,
-    exactClaimIdentityDigest: Sha256Schema,
-  }).strict(),
-  z.object({
     kind: z.literal('finding_claim_supported_after_verification'),
     adjudicationKind: z.enum(['conflict', 'terminal']),
     subjectId: nonEmptyString,
@@ -863,23 +845,6 @@ export const FindingProvisionalMetadataSchema = z.object({
   recoveryReviewerStableKey: nonEmptyString.optional(),
 }).strict();
 
-const FindingReviewerAnomalyReclassificationSchema = z.object({
-  kind: z.literal('reclassified_to_reviewer_anomaly'),
-  migrationId: Sha256Schema,
-  authorityId: z.literal('system/intake_contract_reclassification_v1'),
-  reason: z.literal('product_claim_not_adjudicated'),
-  anomalyId: nonEmptyString,
-  oldHead: FindingLifecycleEntityHeadSchema,
-  rawFindingIds: BinarySortedUniqueRawFindingIdSetSchema,
-  rawCanonicalSnapshotIds: BinarySortedUniqueSha256SetSchema,
-  terminalEpisodeIds: BinarySortedUniqueSha256SetSchema,
-  terminalAttemptIds: BinarySortedUniqueSha256SetSchema,
-  scopeBindingIds: BinarySortedUniqueSha256SetSchema,
-  bindingAuthorizationIds: BinarySortedUniqueSha256SetSchema,
-  bindingDecisionIds: BinarySortedUniqueSha256SetSchema,
-  recordedAt: FindingObservationSchema,
-}).strict();
-
 export const FindingLedgerEntrySchema = z.object({
   id: nonEmptyString,
   status: FindingStatusSchema,
@@ -925,7 +890,6 @@ export const FindingLedgerEntrySchema = z.object({
   }).strict().superRefine(validateFindingDismissalAuthority).optional(),
   revision: z.number().int().positive(),
   provisional: FindingProvisionalMetadataSchema.optional(),
-  reviewerAnomalyReclassification: FindingReviewerAnomalyReclassificationSchema.optional(),
   rejectedObservations: z.array(z.object({
     rawFindingId: rawFindingIdString,
     reason: nonEmptyString,
@@ -1950,18 +1914,6 @@ export const TerminalAdjudicationSettlementSchema = z.discriminatedUnion('outcom
     supersedingCandidateSnapshotDigest: Sha256Schema.nullable(),
     recordedAt: FindingObservationSchema,
   }).strict(),
-  z.object({
-    settlementId: Sha256Schema,
-    episodeId: Sha256Schema,
-    provisionalFindingId: nonEmptyString,
-    candidateSnapshotDigest: Sha256Schema,
-    outcome: z.literal('reclassified_to_reviewer_anomaly'),
-    reason: z.literal('product_claim_not_adjudicated'),
-    migrationId: Sha256Schema,
-    attemptIds: BinarySortedUniqueSha256SetSchema,
-    scopeBindingIds: BinarySortedUniqueSha256SetSchema,
-    recordedAt: FindingObservationSchema,
-  }).strict(),
 ]);
 
 const ConflictProductSubjectSchema = z.object({
@@ -2138,195 +2090,7 @@ const AdjudicatedConflictClaimSettlementSchema = z.discriminatedUnion('outcome',
   ConflictClaimSettlementBaseSchema.extend({ outcome: z.literal('invalidated') }).strict(),
 ]);
 
-const ProvisionalConflictNormalizationSubjectBaseSchema = z.object({
-  subjectId: Sha256Schema,
-  conflictId: nonEmptyString,
-  findingId: nonEmptyString,
-  expectedHead: FindingLifecycleEntityHeadSchema,
-  targetIdentityHash: Sha256Schema.nullable(),
-  claimIdentityHash: Sha256Schema.nullable(),
-  semanticClaimIdentityHash: Sha256Schema.nullable(),
-  claimSnapshotDigest: Sha256Schema,
-  sourceRawFindingIds: BinarySortedUniqueRawFindingIdSetSchema.min(1),
-  sourceRawPayloadDigests: BinarySortedUniqueSha256SetSchema.min(1),
-  evidenceBindingIds: BinarySortedUniqueSha256SetSchema,
-  evidenceSetDigest: Sha256Schema,
-});
-const ProvisionalConflictNormalizationSubjectSchema = z.discriminatedUnion('role', [
-  ProvisionalConflictNormalizationSubjectBaseSchema.extend({
-    role: z.literal('provisional_target'),
-    rawClaimLandingIds: z.tuple([]),
-  }).strict(),
-  ProvisionalConflictNormalizationSubjectBaseSchema.extend({
-    role: z.literal('holding_provisional'),
-    rawClaimLandingIds: BinarySortedUniqueSha256SetSchema.min(1),
-    independentClaimKey: Sha256Schema,
-    independentLineageKey: Sha256Schema,
-    independentStableKey: Sha256Schema,
-  }).strict(),
-]);
-const ProvisionalConflictNormalizationConflictRefSchema = z.object({
-  conflictId: nonEmptyString,
-  expectedConflictHead: FindingLifecycleEntityHeadSchema,
-  legacyConflictSnapshotId: Sha256Schema,
-  findingIds: BinarySortedUniqueStringSetSchema.min(1),
-  rawFindingIds: BinarySortedUniqueRawFindingIdSetSchema.min(1),
-  rawClaimLandingIds: BinarySortedUniqueSha256SetSchema.min(1),
-  provisionalTargetSubjectIds: BinarySortedUniqueSha256SetSchema.min(1),
-  holdingSubjectIds: BinarySortedUniqueSha256SetSchema.min(1),
-  claimUniverseDigest: Sha256Schema,
-}).strict();
-const ProvisionalConflictAssociationCandidateSchema = z.object({
-  associationId: Sha256Schema,
-  sourceHoldingSubjectId: Sha256Schema,
-  targetSubjectId: Sha256Schema,
-  targetSubjectRole: z.enum(['provisional_target', 'holding_provisional']),
-  basis: z.enum(['conflict_target', 'independent_key_collision']),
-}).strict();
-const ProvisionalConflictProofUniverseWitnessSchema = z.object({
-  trustedVerifierId: z.literal('takt.finding-lifecycle-policy'),
-  trustedVerifierVersion: z.literal('1'),
-  candidateAssociations: z.array(ProvisionalConflictAssociationCandidateSchema),
-  mechanicalExactAssociationIds: BinarySortedUniqueSha256SetSchema,
-  trustedProofRecordIds: BinarySortedUniqueSha256SetSchema,
-  provenAssociationIds: BinarySortedUniqueSha256SetSchema,
-  proofUniverseDigest: Sha256Schema,
-}).strict();
-export const ProvisionalConflictNormalizationSnapshotSchema = z.object({
-  normalizationSnapshotId: Sha256Schema,
-  sourceProjectionDigest: Sha256Schema,
-  workflowName: nonEmptyString,
-  conflicts: z.array(ProvisionalConflictNormalizationConflictRefSchema).min(1),
-  subjects: z.array(ProvisionalConflictNormalizationSubjectSchema).min(2),
-  proofUniverse: ProvisionalConflictProofUniverseWitnessSchema,
-  capturedAt: FindingObservationSchema,
-}).strict();
-const ProvisionalConflictReleaseWitnessSchema = z.object({
-  releaseWitnessId: Sha256Schema,
-  normalizationSnapshotId: Sha256Schema,
-  holdingSubjectId: Sha256Schema,
-  candidateAssociationIds: BinarySortedUniqueSha256SetSchema,
-  proofUniverseDigest: Sha256Schema,
-  provenAssociationIds: z.tuple([]),
-}).strict();
-export const ProvisionalConflictFinalFindingIntentSchema = z.discriminatedUnion('kind', [
-  z.object({
-    kind: z.literal('open_provisional'),
-    findingId: nonEmptyString,
-    expectedHead: FindingLifecycleEntityHeadSchema,
-    sourceSubjectIds: BinarySortedUniqueSha256SetSchema.min(1),
-    afterRevision: z.number().int().positive(),
-    afterLifecycle: z.literal('persists'),
-    stableKey: Sha256Schema,
-    lineageKey: Sha256Schema,
-    rawFindingIds: BinarySortedUniqueRawFindingIdSetSchema.min(1),
-    provisionalSourceRawFindingIds: BinarySortedUniqueRawFindingIdSetSchema.min(1),
-    reviewerIds: BinarySortedUniqueStringSetSchema.min(1),
-    evidenceIds: BinarySortedUniqueSha256SetSchema,
-    absorbedFindingIds: BinarySortedUniqueStringSetSchema,
-    intentDigest: Sha256Schema,
-  }).strict(),
-  z.object({
-    kind: z.literal('superseded'),
-    findingId: nonEmptyString,
-    expectedHead: FindingLifecycleEntityHeadSchema,
-    sourceSubjectIds: BinarySortedUniqueSha256SetSchema.min(1),
-    afterRevision: z.number().int().positive(),
-    afterLifecycle: z.literal('superseded'),
-    supersededByFindingId: nonEmptyString,
-    provisionalAfter: z.null(),
-    intentDigest: Sha256Schema,
-  }).strict(),
-]);
-const ProvisionalConflictFinalFindingProjectionSchema = z.object({
-  findingId: nonEmptyString,
-  intentDigest: Sha256Schema,
-  expectedHead: FindingLifecycleEntityHeadSchema,
-  after: FindingLedgerEntrySchema,
-  projectionDigest: Sha256Schema,
-}).strict();
-const ProvisionalConflictNormalizationDecisionSchema = z.discriminatedUnion('outcome', [
-  z.object({
-    conflictId: nonEmptyString,
-    subjectId: Sha256Schema,
-    subjectRole: z.literal('provisional_target'),
-    findingId: nonEmptyString,
-    outcome: z.literal('retained_provisional'),
-    finalIntentDigest: Sha256Schema,
-  }).strict(),
-  z.object({
-    conflictId: nonEmptyString,
-    subjectId: Sha256Schema,
-    subjectRole: z.literal('holding_provisional'),
-    findingId: nonEmptyString,
-    outcome: z.literal('bundled_into_provisional'),
-    targetSubjectId: Sha256Schema,
-    targetFindingId: nonEmptyString,
-    associationId: Sha256Schema,
-    proofRecordIds: BinarySortedUniqueSha256SetSchema.min(1),
-    sourceFinalIntentDigest: Sha256Schema,
-    targetFinalIntentDigest: Sha256Schema,
-  }).strict(),
-  z.object({
-    conflictId: nonEmptyString,
-    subjectId: Sha256Schema,
-    subjectRole: z.literal('holding_provisional'),
-    findingId: nonEmptyString,
-    outcome: z.literal('released_independent'),
-    independentClaimKey: Sha256Schema,
-    independentLineageKey: Sha256Schema,
-    independentStableKey: Sha256Schema,
-    releaseWitnessId: Sha256Schema,
-    proofRecordIds: z.tuple([]),
-    finalIntentDigest: Sha256Schema,
-  }).strict(),
-]);
-export const ProvisionalConflictNormalizationRecordSchema = z.object({
-  normalizationId: Sha256Schema,
-  normalizationSnapshotId: Sha256Schema,
-  batchFingerprintDigest: Sha256Schema,
-  decisionDigest: Sha256Schema,
-  decisions: z.array(ProvisionalConflictNormalizationDecisionSchema).min(2),
-  releaseWitnesses: z.array(ProvisionalConflictReleaseWitnessSchema),
-  finalFindingProjections: z.array(ProvisionalConflictFinalFindingProjectionSchema).min(2),
-  recordedAt: FindingObservationSchema,
-}).strict();
-const ProvisionalConflictNormalizationSettlementBaseSchema = z.object({
-  settlementId: Sha256Schema,
-  normalizationId: Sha256Schema,
-  normalizationSnapshotId: Sha256Schema,
-  conflictId: nonEmptyString,
-  subjectId: Sha256Schema,
-  findingId: nonEmptyString,
-  expectedHead: FindingLifecycleEntityHeadSchema,
-  rawClaimLandingIds: BinarySortedUniqueSha256SetSchema,
-  lifecycleEventIds: z.tuple([Sha256Schema]),
-  recordedAt: FindingObservationSchema,
-});
-const ProvisionalConflictNormalizationSettlementSchema = z.discriminatedUnion('outcome', [
-  ProvisionalConflictNormalizationSettlementBaseSchema.extend({
-    subjectRole: z.literal('provisional_target'),
-    outcome: z.literal('retained_provisional'),
-    rawClaimLandingIds: z.tuple([]),
-  }).strict(),
-  ProvisionalConflictNormalizationSettlementBaseSchema.extend({
-    subjectRole: z.literal('holding_provisional'),
-    outcome: z.literal('bundled_into_provisional'),
-    targetFindingId: nonEmptyString,
-    proofRecordIds: BinarySortedUniqueSha256SetSchema.min(1),
-  }).strict(),
-  ProvisionalConflictNormalizationSettlementBaseSchema.extend({
-    subjectRole: z.literal('holding_provisional'),
-    outcome: z.literal('released_independent'),
-    releaseWitnessId: Sha256Schema,
-    independentStableKey: Sha256Schema,
-    proofRecordIds: z.tuple([]),
-  }).strict(),
-]);
-export const ConflictClaimSettlementSchema = z.union([
-  AdjudicatedConflictClaimSettlementSchema,
-  ProvisionalConflictNormalizationSettlementSchema,
-]);
+export const ConflictClaimSettlementSchema = AdjudicatedConflictClaimSettlementSchema;
 
 /** ラウンド跨ぎの fixpoint 比較スナップショット。 */
 export const FindingLedgerFixpointSnapshotSchema = z.object({
@@ -2496,8 +2260,6 @@ const FindingManagerCommitProjectionSchema = z.object({
   conflictAdjudicationEpisodes: z.array(ConflictAdjudicationEpisodeSchema),
   conflictAdjudicationAttempts: z.array(ConflictAdjudicationAttemptSchema),
   conflictClaimSettlements: z.array(ConflictClaimSettlementSchema),
-  provisionalConflictNormalizationSnapshots: z.array(ProvisionalConflictNormalizationSnapshotSchema),
-  provisionalConflictNormalizations: z.array(ProvisionalConflictNormalizationRecordSchema),
   interpretationCaseSnapshots: z.array(InterpretationCaseSnapshotSchema),
   interpretationRawObservations: z.array(InterpretationRawObservationSchema),
   interpretationRecoveryOriginBindings: z.array(InterpretationRecoveryOriginBindingSchema),
@@ -2550,8 +2312,6 @@ const FindingLedgerObjectSchema = z.object({
   conflictAdjudicationEpisodes: z.array(ConflictAdjudicationEpisodeSchema),
   conflictAdjudicationAttempts: z.array(ConflictAdjudicationAttemptSchema),
   conflictClaimSettlements: z.array(ConflictClaimSettlementSchema),
-  provisionalConflictNormalizationSnapshots: z.array(ProvisionalConflictNormalizationSnapshotSchema),
-  provisionalConflictNormalizations: z.array(ProvisionalConflictNormalizationRecordSchema),
   interpretationCaseSnapshots: z.array(InterpretationCaseSnapshotSchema),
   interpretationRawObservations: z.array(InterpretationRawObservationSchema),
   interpretationRecoveryOriginBindings: z.array(InterpretationRecoveryOriginBindingSchema),
@@ -2572,12 +2332,6 @@ const FindingLedgerObjectSchema = z.object({
   // review-integrity 予算（review-integrity requirement）。optional。
   reviewIntegrity: FindingLedgerReviewIntegrityStateSchema.optional(),
   pendingManagerCommit: FindingManagerPendingCommitSchema.optional(),
-}).strict();
-
-/** Frozen schema for the last ledger shape written before normalization registries existed. */
-export const LegacyProvisionalConflictFindingLedgerSchema = FindingLedgerObjectSchema.omit({
-  provisionalConflictNormalizationSnapshots: true,
-  provisionalConflictNormalizations: true,
 }).strict();
 
 export const FindingLedgerSchema = FindingLedgerObjectSchema.superRefine((ledger, ctx) => {
@@ -2614,74 +2368,6 @@ export const FindingLedgerSchema = FindingLedgerObjectSchema.superRefine((ledger
   }
 });
 
-/**
- * provider budget の byte-aware 改訂前に保存された ledger を、現行の JSON
- * 契約へ一度だけ射影する。物理 SQLite schema は ledger_json のままなので、
- * resume 時に旧 limits 名を読み替えれば次回の保存で現行形へ収束する。
- */
-export function migrateFindingLedgerJson(value: unknown): unknown {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    return value;
-  }
-  const record = value as Record<string, unknown>;
-  const rawScopes = record.findingManagerProviderBudgetScopes;
-  if (!Array.isArray(rawScopes)) {
-    return value;
-  }
-  let legacyLimitFound = false;
-  const scopes = rawScopes.map((scope) => {
-    if (typeof scope !== 'object' || scope === null || Array.isArray(scope)) {
-      return scope;
-    }
-    const scopeRecord = scope as Record<string, unknown>;
-    const rawLimits = scopeRecord.limits;
-    if (typeof rawLimits !== 'object' || rawLimits === null || Array.isArray(rawLimits)) {
-      return scope;
-    }
-    const limits = rawLimits as Record<string, unknown>;
-    if (!Object.prototype.hasOwnProperty.call(limits, 'maxAdapterVisibleInputTokensPerCall')) {
-      return scope;
-    }
-    legacyLimitFound = true;
-    const legacyLimit = limits.maxAdapterVisibleInputTokensPerCall;
-    if (
-      Object.prototype.hasOwnProperty.call(limits, 'maxAdapterVisibleInputBytesPerCall')
-      && limits.maxAdapterVisibleInputBytesPerCall !== legacyLimit
-    ) {
-      throw new Error('Finding manager provider budget contains conflicting legacy and current input limits');
-    }
-    const currentLimits = { ...limits };
-    delete currentLimits.maxAdapterVisibleInputTokensPerCall;
-    return {
-      ...scopeRecord,
-      limits: {
-        ...currentLimits,
-        maxAdapterVisibleInputBytesPerCall: legacyLimit,
-      },
-    };
-  });
-  if (!legacyLimitFound) {
-    return value;
-  }
-  const rawCalls = record.findingManagerProviderCalls;
-  const calls = Array.isArray(rawCalls)
-    ? rawCalls.map((call) => {
-        if (typeof call !== 'object' || call === null || Array.isArray(call)) {
-          return call;
-        }
-        const callRecord = call as Record<string, unknown>;
-        return {
-          ...callRecord,
-          reservedInputTokens: callRecord.measuredAdapterVisibleInputTokens,
-        };
-      })
-    : rawCalls;
-  return {
-    ...record,
-    findingManagerProviderBudgetScopes: scopes,
-    findingManagerProviderCalls: calls,
-  };
-}
 
 const InterpretationCaseDecisionsOutputIntakeJsonSchema = {
   type: 'object',
@@ -3667,7 +3353,7 @@ export const RawFindingsOutputValidationJsonSchema = {
 } as const;
 
 export function parseFindingLedger(value: unknown): FindingLedger {
-  return FindingLedgerSchema.parse(migrateFindingLedgerJson(value));
+  return FindingLedgerSchema.parse(value);
 }
 
 export function parseRawFindings(value: unknown): RawFinding[] {

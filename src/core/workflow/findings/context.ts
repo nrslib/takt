@@ -6,7 +6,7 @@ import {
   type FindingSeverity,
   type FindingsRuleContext,
 } from './types.js';
-import { isProductFindingEntry, isReclassifiedReviewerAnomalyFinding } from './finding-entry.js';
+import { isProductFindingEntry } from './finding-entry.js';
 import { isActiveConflictUnadjudicated } from './conflict-adjudication-model.js';
 import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
 import {
@@ -309,7 +309,7 @@ export function buildFindingsRuleContext(
 ): FindingsRuleContext {
   const projection = resolveFindingLedgerInstructionProjection(ledger);
   const openItems = projection.findings.filter((finding) => (
-    finding.status === 'open' && !isReclassifiedReviewerAnomalyFinding(finding)
+    finding.status === 'open'
   ));
   const familyTagsByRawFindingId = indexRawFindingFamilyTags(projection);
   const activeConflicts = projection.conflicts.filter((conflict) => conflict.status === 'active');

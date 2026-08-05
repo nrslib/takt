@@ -71,7 +71,6 @@ import { createFindingConflictAdjudicationRunner } from '../findings/adjudicatio
 import { rebindPendingManagerPublicationAtBootstrap } from '../findings/manager-commit.js';
 import { isOutstandingReviewerAnomaly } from '../findings/reviewer-anomalies.js';
 import { listFindingReviewPublications } from '../findings/review-publication.js';
-import { isReclassifiedReviewerAnomalyFinding } from '../findings/finding-entry.js';
 import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
 import { ERROR_MESSAGES } from '../constants.js';
 import { inheritReviewReports, writeReviewReportInheritanceDiagnostic } from '../report-inheritance.js';
@@ -577,8 +576,7 @@ export class WorkflowEngine extends EventEmitter {
   private loadOpenProvisionalFindings(ledger: FindingLedger): FindingLedgerEntry[] {
     return ledger.findings.filter(
       (finding) => finding.status === 'open'
-        && finding.provisional !== undefined
-        && !isReclassifiedReviewerAnomalyFinding(finding),
+        && finding.provisional !== undefined,
     );
   }
 

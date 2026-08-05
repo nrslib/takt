@@ -46,10 +46,6 @@ export interface FindingLifecycleAuthorityProjection {
   readonly rawFindings: readonly FindingLedger['rawFindings'][number][];
   readonly conflicts: readonly FindingLedger['conflicts'][number][];
   readonly findingScopeBindings: readonly FindingLedger['findingScopeBindings'][number][];
-  readonly provisionalConflictNormalizationSnapshots:
-    readonly FindingLedger['provisionalConflictNormalizationSnapshots'][number][];
-  readonly provisionalConflictNormalizations:
-    readonly FindingLedger['provisionalConflictNormalizations'][number][];
 }
 
 function targetKey(target: {
@@ -517,11 +513,6 @@ function assertEngineProofOperation(input: {
         reject();
       }
       return;
-    case 'provisional_conflict_association_identical':
-      if (input.operation !== 'normalize_provisional_conflicts') {
-        reject();
-      }
-      return;
     case 'finding_claim_supported_after_verification':
       if (
         input.operation !== 'apply_conflict_adjudication'
@@ -562,10 +553,6 @@ export function assertEligibleEvidenceForLifecycleOperation(input: {
   rawFindings: readonly RawFinding[];
   findings: readonly FindingLedger['findings'][number][];
   findingScopeBindings: readonly FindingLedger['findingScopeBindings'][number][];
-  provisionalConflictNormalizationSnapshots:
-    readonly FindingLedger['provisionalConflictNormalizationSnapshots'][number][];
-  provisionalConflictNormalizations:
-    readonly FindingLedger['provisionalConflictNormalizations'][number][];
 }): void {
   assertCanonicalTargets(input.operation, input.targets);
   assertCanonicalIds(input.evidenceBindingIds, 'Lifecycle evidence binding ids');
@@ -810,44 +797,6 @@ export function assertEligibleEvidenceForLifecycleOperation(input: {
     }
     return;
   }
-  if (input.authority.kind === 'provisional_conflict_normalization') {
-    const authority = input.authority;
-    const records = input.provisionalConflictNormalizations.filter(
-      (record) => record.normalizationId === authority.normalizationId,
-    );
-    const snapshots = input.provisionalConflictNormalizationSnapshots.filter(
-      (snapshot) => snapshot.normalizationSnapshotId === authority.normalizationSnapshotId,
-    );
-    const record = records[0];
-    const snapshot = snapshots[0];
-    const expectedTargets = new Map<string, FindingLifecycleEntityHead>([
-      ...(snapshot?.conflicts.map((conflict) => [
-        `conflict\0${conflict.conflictId}`,
-        conflict.expectedConflictHead,
-      ] as const) ?? []),
-      ...(record?.finalFindingProjections.map((projection) => [
-        `finding\0${projection.findingId}`,
-        projection.expectedHead,
-      ] as const) ?? []),
-    ]);
-    if (
-      input.evidenceBindingIds.length !== 0
-      || records.length !== 1
-      || snapshots.length !== 1
-      || record === undefined
-      || snapshot === undefined
-      || record.normalizationSnapshotId !== snapshot.normalizationSnapshotId
-      || record.decisionDigest !== authority.decisionDigest
-      || record.normalizationId !== authority.normalizationId
-      || expectedTargets.size !== input.targets.length
-      || input.targets.some((target) => (
-        !sameValue(expectedTargets.get(targetKey(target)), target.expectedHead)
-      ))
-    ) {
-      throw new Error('Lifecycle operation has an invalid provisional conflict normalization authority');
-    }
-    return;
-  }
   if (input.authority.kind === 'conflict_reactivation') {
     const target = input.targets[0];
     if (
@@ -997,9 +946,6 @@ export function assertFindingLifecycleAuthorityInvariant(
       rawFindings: ledger.rawFindings,
       findings: ledger.findings,
       findingScopeBindings: ledger.findingScopeBindings,
-      provisionalConflictNormalizationSnapshots:
-        ledger.provisionalConflictNormalizationSnapshots,
-      provisionalConflictNormalizations: ledger.provisionalConflictNormalizations,
     });
     reservation.evidenceBindingIds.forEach((bindingId) => referencedBindingIds.add(bindingId));
     reservationsById.set(reservation.reservationId, reservation);

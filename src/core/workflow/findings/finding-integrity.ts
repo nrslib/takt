@@ -397,18 +397,6 @@ function assertContractRegistryTransitions(
     'Conflict claim settlement',
   );
   assertRegistryPrefix(
-    current.provisionalConflictNormalizationSnapshots,
-    next.provisionalConflictNormalizationSnapshots,
-    'normalizationSnapshotId',
-    'Provisional conflict normalization snapshot',
-  );
-  assertRegistryPrefix(
-    current.provisionalConflictNormalizations,
-    next.provisionalConflictNormalizations,
-    'normalizationId',
-    'Provisional conflict normalization',
-  );
-  assertRegistryPrefix(
     current.interpretationCaseSnapshots,
     next.interpretationCaseSnapshots,
     'caseSnapshotId',

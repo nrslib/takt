@@ -165,9 +165,6 @@ export function reserveVerifiedLifecycleMutation(
     rawFindings: ledger.rawFindings,
     findings: ledger.findings,
     findingScopeBindings: ledger.findingScopeBindings,
-    provisionalConflictNormalizationSnapshots:
-      ledger.provisionalConflictNormalizationSnapshots,
-    provisionalConflictNormalizations: ledger.provisionalConflictNormalizations,
   });
   const existing = ledger.lifecycleReservations.find(
     (reservation) => reservation.mutationId === input.reservation.mutationId,

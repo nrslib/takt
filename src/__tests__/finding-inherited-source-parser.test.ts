@@ -1,10 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createEmptyFindingContractRegistries } from '../core/models/finding-contract-seed.js';
-import {
-  classifyInheritedSourceShape,
-  LegacyPendingManagerCommitError,
-  parseInheritedSourceAuthority,
-} from '../infra/finding-storage/inherited-source-parser.js';
+import { parseInheritedSourceAuthority } from '../infra/finding-storage/inherited-source-parser.js';
 
 const TIMESTAMP = '2026-08-03T00:00:00.000Z';
 
@@ -34,45 +30,31 @@ function source(ledger: object) {
 }
 
 describe('inherited finding source parser', () => {
-  it('classifies both normalization registries as current without legacy fallback', () => {
-    expect(classifyInheritedSourceShape(currentLedger()).kind).toBe('current');
-    expect(parseInheritedSourceAuthority(source(currentLedger())).kind).toBe('current');
+  it('should parse the inherited authority when the ledger matches the current contract', () => {
+    const ledger = parseInheritedSourceAuthority(source(currentLedger()));
+    expect(ledger.workflowName).toBe('review');
+    expect(ledger.findings).toEqual([]);
+  });
 
+  it('should reject an inherited authority when the ledger does not match the current contract', () => {
+    // FC 台帳に後方互換は持たない: 現行 schema と異なる形（旧形式・壊れた形）は
+    // 変換や救済をせず、そのまま parse 失敗として弾く。
     const broken = { ...currentLedger(), findings: 'broken' };
     expect(() => parseInheritedSourceAuthority(source(broken))).toThrow();
+
+    const legacyShape: Record<string, unknown> = { ...currentLedger() };
+    delete legacyShape.reviewerAnomalies;
+    delete legacyShape.reviewIntegrity;
+    legacyShape.unknownLegacyKey = [];
+    expect(() => parseInheritedSourceAuthority(source(legacyShape))).toThrow();
   });
 
-  it('rejects a partial normalization registry before schema selection', () => {
-    const { provisionalConflictNormalizations: _records, ...partial } = currentLedger();
-    expect(() => classifyInheritedSourceShape(partial)).toThrow(
-      /partial provisional conflict normalization registry/,
-    );
-  });
-
-  it('fails closed on a legacy pending manager commit before frozen schema parsing', () => {
-    const {
-      provisionalConflictNormalizationSnapshots: _snapshots,
-      provisionalConflictNormalizations: _records,
-      ...legacy
-    } = currentLedger();
-    const pending = {
-      ...legacy,
-      pendingManagerCommit: {
-        roundMarker: 'round-3',
-        publication: { publicationId: 'publication-3' },
-      },
-    };
-    try {
-      parseInheritedSourceAuthority(source(pending));
-      throw new Error('Expected legacy pending preflight to fail');
-    } catch (error) {
-      expect(error).toBeInstanceOf(LegacyPendingManagerCommitError);
-      expect((error as LegacyPendingManagerCommitError).failure).toMatchObject({
-        code: 'legacy_pending_manager_commit',
-        roundMarker: 'round-3',
-        publicationId: 'publication-3',
-        retryCondition: 'source ledger_json has no top-level pendingManagerCommit property',
-      });
-    }
+  it('should reject invalid source metadata before reading the ledger', () => {
+    expect(() => parseInheritedSourceAuthority({
+      authorityKey: '',
+      workflowName: 'review',
+      revision: 1,
+      ledgerJson: JSON.stringify(currentLedger()),
+    })).toThrow(/invalid metadata/);
   });
 });

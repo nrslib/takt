@@ -1,7 +1,6 @@
 import type {
   CanonicalRawFindingProvenance,
   FindingLifecycleEntityHead,
-  FindingLedgerEntry,
   FindingObservation,
   FindingProvisionalKind,
   FindingSeverity,
@@ -511,18 +510,6 @@ export type TerminalAdjudicationSettlement =
       supersedingEpisodeId: string | null;
       supersedingCandidateSnapshotDigest: string | null;
       recordedAt: FindingObservation;
-    }
-  | {
-      settlementId: string;
-      episodeId: string;
-      provisionalFindingId: string;
-      candidateSnapshotDigest: string;
-      outcome: 'reclassified_to_reviewer_anomaly';
-      reason: 'product_claim_not_adjudicated';
-      migrationId: string;
-      attemptIds: string[];
-      scopeBindingIds: string[];
-      recordedAt: FindingObservation;
     };
 
 export type ConflictClaimRole = 'product_finding' | 'holding_provisional';
@@ -762,236 +749,13 @@ interface ConflictClaimSettlementBase {
   recordedAt: FindingObservation;
 }
 
-export type ConflictClaimSettlement =
-  | AdjudicatedConflictClaimSettlement
-  | ProvisionalConflictNormalizationSettlement;
+export type ConflictClaimSettlement = AdjudicatedConflictClaimSettlement;
 
 export type AdjudicatedConflictClaimSettlement =
   | ConflictClaimSettlementBase & { outcome: 'merged'; targetFindingId: string }
   | ConflictClaimSettlementBase & { outcome: 'promoted'; targetFindingId: string }
   | ConflictClaimSettlementBase & { outcome: 'resolved' }
   | ConflictClaimSettlementBase & { outcome: 'invalidated' };
-
-export type ProvisionalConflictNormalizationSubject =
-  | ProvisionalConflictNormalizationSubjectBase & {
-      role: 'provisional_target';
-      rawClaimLandingIds: [];
-    }
-  | ProvisionalConflictNormalizationSubjectBase & {
-      role: 'holding_provisional';
-      rawClaimLandingIds: string[];
-      independentClaimKey: string;
-      independentLineageKey: string;
-      independentStableKey: string;
-    };
-
-interface ProvisionalConflictNormalizationSubjectBase {
-  subjectId: string;
-  conflictId: string;
-  findingId: string;
-  expectedHead: FindingLifecycleEntityHead;
-  targetIdentityHash: string | null;
-  claimIdentityHash: string | null;
-  semanticClaimIdentityHash: string | null;
-  claimSnapshotDigest: string;
-  sourceRawFindingIds: string[];
-  sourceRawPayloadDigests: string[];
-  evidenceBindingIds: string[];
-  evidenceSetDigest: string;
-}
-
-export interface ProvisionalConflictNormalizationConflictRef {
-  conflictId: string;
-  expectedConflictHead: FindingLifecycleEntityHead;
-  legacyConflictSnapshotId: string;
-  findingIds: string[];
-  rawFindingIds: string[];
-  rawClaimLandingIds: string[];
-  provisionalTargetSubjectIds: string[];
-  holdingSubjectIds: string[];
-  claimUniverseDigest: string;
-}
-
-export interface ProvisionalConflictAssociationCandidate {
-  associationId: string;
-  sourceHoldingSubjectId: string;
-  targetSubjectId: string;
-  targetSubjectRole: 'provisional_target' | 'holding_provisional';
-  basis: 'conflict_target' | 'independent_key_collision';
-}
-
-export interface ProvisionalConflictProofUniverseWitness {
-  trustedVerifierId: 'takt.finding-lifecycle-policy';
-  trustedVerifierVersion: '1';
-  candidateAssociations: ProvisionalConflictAssociationCandidate[];
-  mechanicalExactAssociationIds: string[];
-  trustedProofRecordIds: string[];
-  provenAssociationIds: string[];
-  proofUniverseDigest: string;
-}
-
-export interface ProvisionalConflictNormalizationSnapshot {
-  normalizationSnapshotId: string;
-  sourceProjectionDigest: string;
-  workflowName: string;
-  conflicts: ProvisionalConflictNormalizationConflictRef[];
-  subjects: ProvisionalConflictNormalizationSubject[];
-  proofUniverse: ProvisionalConflictProofUniverseWitness;
-  capturedAt: FindingObservation;
-}
-
-export interface ProvisionalConflictReleaseWitness {
-  releaseWitnessId: string;
-  normalizationSnapshotId: string;
-  holdingSubjectId: string;
-  candidateAssociationIds: string[];
-  proofUniverseDigest: string;
-  provenAssociationIds: [];
-}
-
-export type ProvisionalConflictNormalizationFinalFindingIntent =
-  | {
-      kind: 'open_provisional';
-      findingId: string;
-      expectedHead: FindingLifecycleEntityHead;
-      sourceSubjectIds: string[];
-      afterRevision: number;
-      afterLifecycle: 'persists';
-      stableKey: string;
-      lineageKey: string;
-      rawFindingIds: string[];
-      provisionalSourceRawFindingIds: string[];
-      reviewerIds: string[];
-      evidenceIds: string[];
-      absorbedFindingIds: string[];
-      intentDigest: string;
-    }
-  | {
-      kind: 'superseded';
-      findingId: string;
-      expectedHead: FindingLifecycleEntityHead;
-      sourceSubjectIds: string[];
-      afterRevision: number;
-      afterLifecycle: 'superseded';
-      supersededByFindingId: string;
-      provisionalAfter: null;
-      intentDigest: string;
-    };
-
-export interface ProvisionalConflictNormalizationFinalFindingProjection {
-  findingId: string;
-  intentDigest: string;
-  expectedHead: FindingLifecycleEntityHead;
-  after: FindingLedgerEntry;
-  projectionDigest: string;
-}
-
-export type ProvisionalConflictNormalizationDecision =
-  | {
-      conflictId: string;
-      subjectId: string;
-      subjectRole: 'provisional_target';
-      findingId: string;
-      outcome: 'retained_provisional';
-      finalIntentDigest: string;
-    }
-  | {
-      conflictId: string;
-      subjectId: string;
-      subjectRole: 'holding_provisional';
-      findingId: string;
-      outcome: 'bundled_into_provisional';
-      targetSubjectId: string;
-      targetFindingId: string;
-      associationId: string;
-      proofRecordIds: string[];
-      sourceFinalIntentDigest: string;
-      targetFinalIntentDigest: string;
-    }
-  | {
-      conflictId: string;
-      subjectId: string;
-      subjectRole: 'holding_provisional';
-      findingId: string;
-      outcome: 'released_independent';
-      independentClaimKey: string;
-      independentLineageKey: string;
-      independentStableKey: string;
-      releaseWitnessId: string;
-      proofRecordIds: [];
-      finalIntentDigest: string;
-    };
-
-export interface ProvisionalConflictNormalizationRecord {
-  normalizationId: string;
-  normalizationSnapshotId: string;
-  batchFingerprintDigest: string;
-  decisionDigest: string;
-  decisions: ProvisionalConflictNormalizationDecision[];
-  releaseWitnesses: ProvisionalConflictReleaseWitness[];
-  finalFindingProjections: ProvisionalConflictNormalizationFinalFindingProjection[];
-  recordedAt: FindingObservation;
-}
-
-interface ProvisionalConflictNormalizationSettlementBase {
-  settlementId: string;
-  normalizationId: string;
-  normalizationSnapshotId: string;
-  conflictId: string;
-  subjectId: string;
-  findingId: string;
-  expectedHead: FindingLifecycleEntityHead;
-  rawClaimLandingIds: string[];
-  lifecycleEventIds: [string];
-  recordedAt: FindingObservation;
-}
-
-export type ProvisionalConflictNormalizationSettlement =
-  | ProvisionalConflictNormalizationSettlementBase & {
-      subjectRole: 'provisional_target';
-      outcome: 'retained_provisional';
-      rawClaimLandingIds: [];
-    }
-  | ProvisionalConflictNormalizationSettlementBase & {
-      subjectRole: 'holding_provisional';
-      outcome: 'bundled_into_provisional';
-      targetFindingId: string;
-      proofRecordIds: string[];
-    }
-  | ProvisionalConflictNormalizationSettlementBase & {
-      subjectRole: 'holding_provisional';
-      outcome: 'released_independent';
-      releaseWitnessId: string;
-      independentStableKey: string;
-      proofRecordIds: [];
-    };
-
-export interface VerifiedLegacyProvisionalIdentity {
-  findingId: string;
-  role: 'provisional_target' | 'holding_provisional';
-  targetIdentityHash: string;
-  claimIdentityHash: string;
-  semanticClaimIdentityHash: string;
-  claimSnapshotDigest: string;
-  rawFindingIds: string[];
-  rawCanonicalSnapshotIds: string[];
-}
-
-export interface LegacyHoldingConflictOwner {
-  holdingFindingId: string;
-  conflictId: string;
-  rawClaimLandingIds: string[];
-}
-
-export interface LegacyProvisionalConflictBatchFingerprint {
-  conflictIds: string[];
-  provisionalTargetFindingIds: string[];
-  holdingFindingIds: string[];
-  holdingOwners: LegacyHoldingConflictOwner[];
-  verifiedIdentities: VerifiedLegacyProvisionalIdentity[];
-  finalFindingIntents: ProvisionalConflictNormalizationFinalFindingIntent[];
-  fingerprintDigest: string;
-}
 
 export type TerminalVerificationFailureCode =
   | 'episode_not_found'
@@ -1084,8 +848,6 @@ export interface FindingContractLedgerRegistries {
   conflictAdjudicationEpisodes: ConflictAdjudicationEpisode[];
   conflictAdjudicationAttempts: ConflictAdjudicationAttempt[];
   conflictClaimSettlements: ConflictClaimSettlement[];
-  provisionalConflictNormalizationSnapshots: ProvisionalConflictNormalizationSnapshot[];
-  provisionalConflictNormalizations: ProvisionalConflictNormalizationRecord[];
   interpretationCaseSnapshots: InterpretationCaseSnapshot[];
   interpretationRawObservations: InterpretationRawObservation[];
   interpretationRecoveryOriginBindings: InterpretationRecoveryOriginBinding[];

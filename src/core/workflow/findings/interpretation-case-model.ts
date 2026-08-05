@@ -159,15 +159,6 @@ function semanticEngineProofSubject(subject: EngineProofSubject): unknown {
         semanticClaimIdentityHash: subject.semanticClaimIdentityHash,
         exactClaimIdentityDigest: subject.exactClaimIdentityDigest,
       };
-    case 'provisional_conflict_association_identical':
-      return {
-        kind: subject.kind,
-        associationId: subject.associationId,
-        sourceHoldingSubjectId: subject.sourceHoldingSubjectId,
-        targetSubjectId: subject.targetSubjectId,
-        targetSubjectRole: subject.targetSubjectRole,
-        exactClaimIdentityDigest: subject.exactClaimIdentityDigest,
-      };
     case 'finding_claim_supported_after_verification':
       return {
         kind: subject.kind,

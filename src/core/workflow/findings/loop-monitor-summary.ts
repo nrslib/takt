@@ -5,7 +5,6 @@ import { stopBudgetRoundsCompleted } from './stop-budget.js';
 import { resolveStopBudgetLimits } from './stop-budget.js';
 import type { FindingContractConfig } from './types.js';
 import { isOutstandingReviewerAnomaly } from './reviewer-anomalies.js';
-import { isReclassifiedReviewerAnomalyFinding } from './finding-entry.js';
 
 export interface LoopMonitorProvisionalSummary {
   id: string;
@@ -40,7 +39,7 @@ export function buildLoopMonitorFindingsSummaryData(
   contract: Pick<FindingContractConfig, 'stopBudget'>,
 ): LoopMonitorFindingsSummaryData {
   const open = ledger.findings.filter((finding) => (
-    finding.status === 'open' && !isReclassifiedReviewerAnomalyFinding(finding)
+    finding.status === 'open'
   ));
   const openProvisionalFindings = open.filter((finding) => finding.provisional !== undefined);
   const roundsCompleted = stopBudgetRoundsCompleted(ledger);

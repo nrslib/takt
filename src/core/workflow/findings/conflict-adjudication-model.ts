@@ -15,7 +15,6 @@ import type {
   ConflictAdjudicationSnapshot,
   ConflictClaimSettlement,
   ConflictClaimSubject,
-  ProvisionalConflictNormalizationSettlement,
 } from '../../models/finding-contract-types.js';
 import type {
   FindingLedger,
@@ -162,54 +161,13 @@ export function validConflictClaimSettlements(
   );
 }
 
-function validNormalizationSettlement(
-  ledger: FindingLedger,
-  settlement: ProvisionalConflictNormalizationSettlement,
-): boolean {
-  const snapshot = ledger.provisionalConflictNormalizationSnapshots.find(
-    (candidate) => candidate.normalizationSnapshotId === settlement.normalizationSnapshotId,
-  );
-  const record = ledger.provisionalConflictNormalizations.find(
-    (candidate) => candidate.normalizationId === settlement.normalizationId,
-  );
-  const subject = snapshot?.subjects.find(
-    (candidate) => candidate.subjectId === settlement.subjectId,
-  );
-  const decision = record?.decisions.find(
-    (candidate) => candidate.subjectId === settlement.subjectId,
-  );
-  const event = ledger.lifecycleEvents.find(
-    (candidate) => candidate.eventId === settlement.lifecycleEventIds[0],
-  );
-  const projection = record?.finalFindingProjections.find(
-    (candidate) => candidate.findingId === settlement.findingId,
-  );
-  return subject !== undefined
-    && subject.conflictId === settlement.conflictId
-    && subject.findingId === settlement.findingId
-    && subject.role === settlement.subjectRole
-    && canonicalJson(subject.expectedHead) === canonicalJson(settlement.expectedHead)
-    && decision !== undefined
-    && decision.conflictId === settlement.conflictId
-    && decision.outcome === settlement.outcome
-    && event?.operation === 'normalize_provisional_conflicts'
-    && projection !== undefined
-    && event.transitions.some((transition) => (
-      transition.after.entityKind === 'finding'
-      && transition.after.entityId === projection.findingId
-      && transition.after.projectionDigest === projection.projectionDigest
-    ));
-}
-
 export function validConflictLandingSettlements(
   ledger: FindingLedger,
   conflictId: string,
 ): ConflictClaimSettlement[] {
   return ledger.conflictClaimSettlements.filter((settlement) => (
     settlement.conflictId === conflictId
-    && ('attemptId' in settlement
-      ? validSettlementForSubject(ledger, settlement)
-      : validNormalizationSettlement(ledger, settlement))
+    && validSettlementForSubject(ledger, settlement)
   ));
 }
 
@@ -470,14 +428,6 @@ function allProductClaimsDurablyCovered(
     ))
     .map((settlement) => settlement.findingId));
   return conflict.findingIds.every((findingId) => {
-    if (settlements.some((settlement) => (
-      !('attemptId' in settlement)
-      && settlement.subjectRole === 'provisional_target'
-      && settlement.findingId === findingId
-      && settlement.outcome === 'retained_provisional'
-    ))) {
-      return true;
-    }
     if (productSettlements.has(findingId)) {
       return true;
     }

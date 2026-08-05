@@ -35,7 +35,6 @@ export type {
   FindingMutationPrecondition,
   FindingProvisionalKind,
   FindingProvisionalMetadata,
-  FindingReviewerAnomalyReclassification,
   InterpretationAttempt,
   InterpretationAttemptFence,
   InterpretationBatchReceipt,

@@ -43,7 +43,6 @@ export const FINDING_LIFECYCLE_OPERATIONS = [
   'resolve_conflict',
   'apply_conflict_adjudication',
   'apply_resolution_renotification',
-  'normalize_provisional_conflicts',
   'attach_raw_to_provisional',
   'reactivate_conflict',
 ] as const;
@@ -205,12 +204,6 @@ export type FindingLifecycleAuthority =
       rawFindingId: string;
       rawIntegrityDigest: string;
       rejectionCode: FindingRejectedObservationCode;
-    }
-  | {
-      kind: 'provisional_conflict_normalization';
-      normalizationId: string;
-      normalizationSnapshotId: string;
-      decisionDigest: string;
     }
   | VerifiedRawProvisionalIdentityAuthority
   | ConflictReactivationAuthority;
@@ -497,23 +490,6 @@ export interface FindingProvisionalMetadata {
   firstObservedRound: number;
 }
 
-export interface FindingReviewerAnomalyReclassification {
-  kind: 'reclassified_to_reviewer_anomaly';
-  migrationId: string;
-  authorityId: 'system/intake_contract_reclassification_v1';
-  reason: 'product_claim_not_adjudicated';
-  anomalyId: string;
-  oldHead: FindingLifecycleEntityHead;
-  rawFindingIds: string[];
-  rawCanonicalSnapshotIds: string[];
-  terminalEpisodeIds: string[];
-  terminalAttemptIds: string[];
-  scopeBindingIds: string[];
-  bindingAuthorizationIds: string[];
-  bindingDecisionIds: string[];
-  recordedAt: FindingObservation;
-}
-
 export interface FindingLedgerEntry {
   id: string;
   status: FindingStatus;
@@ -553,7 +529,6 @@ export interface FindingLedgerEntry {
   /** 楽観的前提条件（CAS）の版数。エントリを変更するたびに +1。 */
   revision: number;
   provisional?: FindingProvisionalMetadata;
-  reviewerAnomalyReclassification?: FindingReviewerAnomalyReclassification;
   /**
    * 証跡不成立で証拠としては不採用になった再観測の履歴。
    * location admission に落ちた persists が「実在する open target」を指す場合、
@@ -1426,18 +1401,6 @@ export type EngineProofSubject =
       claimIdentityHash: string;
       semanticClaimIdentityHash: string;
       sourceEvidenceBindingIds: string[];
-      exactClaimIdentityDigest: string;
-    }
-  | {
-      kind: 'provisional_conflict_association_identical';
-      associationId: string;
-      sourceHoldingSubjectId: string;
-      targetSubjectId: string;
-      targetSubjectRole: 'provisional_target' | 'holding_provisional';
-      sourceExpectedHead: FindingLifecycleEntityHead;
-      targetExpectedHead: FindingLifecycleEntityHead;
-      sourceClaimSnapshotDigest: string;
-      targetClaimSnapshotDigest: string;
       exactClaimIdentityDigest: string;
     }
   | {

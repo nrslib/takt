@@ -14,7 +14,6 @@ export type FindingLifecycleAuthorityContract =
   | 'interpretation_unreserved_landing'
   | 'interpretation_case_rejection'
   | 'rejected_observation'
-  | 'provisional_conflict_normalization'
   | 'verified_raw_provisional_identity'
   | 'conflict_reactivation'
   | 'system:record_recovery_attempt'
@@ -210,16 +209,6 @@ export const FINDING_LIFECYCLE_OPERATION_CONTRACTS: Readonly<
       'resolvedAt', 'resolvedEvidence',
     ],
   },
-  normalize_provisional_conflicts: {
-    targetShape: 'one_or_more_conflicts_and_findings',
-    allowsCreate: false,
-    authorities: ['provisional_conflict_normalization'],
-    findingDelta: [
-      'status', 'lifecycle', 'revision', 'rawFindingIds', 'reviewers',
-      'evidenceIds', 'lastSeen', 'provisional', 'supersededByFindingId',
-    ],
-    conflictDelta: ['status', 'revision', 'resolvedAt', 'resolvedEvidence'],
-  },
   attach_raw_to_provisional: {
     targetShape: 'one_finding',
     allowsCreate: false,
@@ -252,7 +241,6 @@ export function findingLifecycleAuthorityContract(
     case 'interpretation_unreserved_landing':
     case 'interpretation_case_rejection':
     case 'rejected_observation':
-    case 'provisional_conflict_normalization':
     case 'verified_raw_provisional_identity':
     case 'conflict_reactivation':
       return authority.kind;

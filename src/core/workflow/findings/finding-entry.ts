@@ -23,7 +23,6 @@ export function isProductFindingEntry(
   finding: FindingLedgerEntry,
 ): finding is ProductFindingEntry {
   return finding.provisional === undefined
-    && finding.reviewerAnomalyReclassification === undefined
     && finding.severity !== null
     && finding.title !== null
     && finding.description !== undefined
@@ -31,12 +30,6 @@ export function isProductFindingEntry(
     && finding.targetIdentityHash !== null
     && finding.claimIdentityHash !== null
     && finding.semanticClaimIdentityHash !== null;
-}
-
-export function isReclassifiedReviewerAnomalyFinding(
-  finding: FindingLedgerEntry,
-): boolean {
-  return finding.reviewerAnomalyReclassification !== undefined;
 }
 
 function canonicalProvisionalMetadata(
@@ -83,7 +76,6 @@ export function createFindingLedgerEntry(
     supersededByFindingId,
     dismissal,
     provisional,
-    reviewerAnomalyReclassification,
     rejectedObservations,
     ...required
   } = parsed;
@@ -102,9 +94,6 @@ export function createFindingLedgerEntry(
     ...(dismissal !== undefined ? { dismissal: structuredClone(dismissal) } : {}),
     ...(provisional !== undefined
       ? { provisional: canonicalProvisionalMetadata(provisional) }
-      : {}),
-    ...(reviewerAnomalyReclassification !== undefined
-      ? { reviewerAnomalyReclassification: structuredClone(reviewerAnomalyReclassification) }
       : {}),
     ...(rejectedObservations !== undefined
       ? { rejectedObservations: structuredClone(rejectedObservations) }

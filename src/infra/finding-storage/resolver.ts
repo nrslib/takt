@@ -11,7 +11,6 @@ import {
 } from './repository.js';
 import { SqliteFindingLedgerStore } from './store.js';
 import { parseInheritedSourceAuthority } from './inherited-source-parser.js';
-import { normalizeInheritedProvisionalTargetConflicts } from '../../core/workflow/findings/provisional-conflict-normalization.js';
 import { normalizeFindingLedger } from '../../core/workflow/findings/ledger-mutation.js';
 
 export const ROOT_FINDING_AUTHORITY_KEY = 'root';
@@ -191,22 +190,10 @@ export class FindingStorageResolver {
     if (source === undefined) {
       throw new Error(`Finding authority "${authorityKey}" is missing from the source`);
     }
-    const parsed = parseInheritedSourceAuthority(source);
-    const sourceLedger = parsed.kind === 'current'
-      ? normalizeFindingLedger(parsed.ledger, source.workflowName)
-      : normalizeFindingLedger(
-          normalizeInheritedProvisionalTargetConflicts({
-            source,
-            legacyLedger: parsed.ledger,
-            destinationRunId: this.runId,
-            recordedAt: {
-              runId: this.runId,
-              stepName: 'finding-requeue-normalization',
-              timestamp: this.#now(),
-            },
-          }).ledger,
-          source.workflowName,
-        );
+    const sourceLedger = normalizeFindingLedger(
+      parseInheritedSourceAuthority(source),
+      source.workflowName,
+    );
     return importLedger(sourceLedger, workflowName, this.runId);
   }
 }
