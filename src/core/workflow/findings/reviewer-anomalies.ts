@@ -27,7 +27,7 @@ import type {
   ReviewerAnomalyKind,
 } from './types.js';
 import { computeReviewerAnomalyStableKey } from './raw-canonicalization.js';
-import type { RestatementRequestV1 } from './review-publication.js';
+import type { RestatementRequestBinding, RestatementRequestV1 } from './review-publication.js';
 
 export interface ReviewerAnomalySpec {
   kind: ReviewerAnomalyKind;
@@ -54,11 +54,14 @@ export function createReviewerAnomalySpec(input: {
   const fileQuote = input.failedEvidence?.kind === 'file_quote'
     ? input.failedEvidence
     : undefined;
+  const originalClaimExcerpt = input.wire.description?.trim().length
+    ? input.wire.description
+    : input.wire.rawExcerpt?.trim().length
+      ? input.wire.rawExcerpt
+      : input.canonical.rawExcerpt;
   const claimedExcerpt = fileQuote?.kind === 'file_quote'
     ? fileQuote.verbatimExcerpt
-    : input.canonical.coherence === 'ambiguous'
-      ? input.canonical.safeEvidenceExcerpt
-      : input.wire.description ?? input.canonical.rawExcerpt ?? input.wire.rawExcerpt;
+    : originalClaimExcerpt ?? input.canonical.rawExcerpt;
   return {
     kind: input.anomalyKind,
     stableKey: computeReviewerAnomalyStableKey({
@@ -120,13 +123,20 @@ function hasRestatementCorrespondence(input: {
     || admittedRaw.relation !== 'new'
     || admittedRaw.targetFindingId !== null
     || admittedRaw.targetPrecondition !== undefined
-    || admittedRaw.sourceBinding.excerptDigest !== request.sourceExcerptDigest
   ) {
     return false;
   }
-  const sourceAtom = sourceRaw.description ?? sourceRaw.rawExcerpt ?? anomaly.claimedExcerpt;
-  const admittedAtom = admittedRaw.description;
-  if (sourceAtom === undefined || admittedAtom === null) {
+  const sourceAtom = sourceRaw.description?.trim().length
+    ? sourceRaw.description
+    : anomaly.claimedExcerpt?.trim().length
+      ? anomaly.claimedExcerpt
+      : sourceRaw.rawExcerpt?.trim().length
+        ? sourceRaw.rawExcerpt
+        : undefined;
+  const admittedAtom = admittedRaw.description?.trim().length
+    ? admittedRaw.description
+    : undefined;
+  if (sourceAtom === undefined || admittedAtom === undefined) {
     return false;
   }
   if (normalizeClaimAtom(sourceAtom) !== normalizeClaimAtom(admittedAtom)) {
@@ -143,6 +153,34 @@ function hasRestatementCorrespondence(input: {
     && admittedQuote.endLine === sourceQuote.endLine
     && admittedQuote.verbatimExcerpt === sourceQuote.verbatimExcerpt
   )));
+}
+
+function hasRestatementCandidateShape(
+  request: RestatementRequestV1,
+  anomaly: ReviewerAnomalyEntry,
+  sourceRaw: RawFinding,
+  admittedRaw: RawFinding,
+): boolean {
+  return request.anomalyId === anomaly.id
+    && request.reviewer === anomaly.intakeContract?.presentationOwnerReviewer
+    && sourceRaw.reviewer === request.reviewer
+    && admittedRaw.reviewer === request.reviewer
+    && admittedRaw.relation === 'new'
+    && admittedRaw.targetFindingId === null
+    && admittedRaw.targetPrecondition === undefined;
+}
+
+function hasValidRestatementEcho(
+  admittedRaw: RawFinding,
+  anomaly: ReviewerAnomalyEntry,
+  bindings: readonly RestatementRequestBinding[],
+): boolean {
+  const echoedAnomalyId = admittedRaw.reassertsReviewerAnomalyId;
+  if (echoedAnomalyId === undefined) {
+    return true;
+  }
+  return echoedAnomalyId === anomaly.id
+    && bindings.some((binding) => binding.request.anomalyId === echoedAnomalyId);
 }
 
 function anomalySpecObservationKey(spec: ReviewerAnomalySpec): string {
@@ -303,7 +341,7 @@ export interface ReviewerAnomalyPromotionCandidate {
   /** この raw を含む product finding を reconciled ledger から探すためのキー。 */
   rawFindingId: string;
   /** engine-owned request binding for intake-contract correspondence */
-  restatementRequest?: RestatementRequestV1;
+  restatementRequestBindings?: readonly RestatementRequestBinding[];
 }
 
 /**
@@ -334,29 +372,43 @@ export function linkPromotedReviewerAnomalies(
   for (const candidate of candidates) {
     const findingId = findingIdByRawFindingId.get(candidate.rawFindingId);
     let handledAsRestatement = false;
-    if (findingId !== undefined && candidate.restatementRequest !== undefined) {
-      const anomaly = anomalies.find((entry) => entry.id === candidate.restatementRequest!.anomalyId);
+    const requestBindings = candidate.restatementRequestBindings ?? [];
+    const admittedRaw = ledger.rawFindings.find((raw) => raw.rawFindingId === candidate.rawFindingId);
+    const handledRestatementAnomalyIds = new Set<string>();
+    for (const binding of requestBindings) {
+      const anomaly = anomalies.find((entry) => entry.id === binding.request.anomalyId);
       const sourceRaw = anomaly?.sourceRawFindingIds
         .map((rawFindingId) => ledger.rawFindings.find((raw) => raw.rawFindingId === rawFindingId))
         .find((raw) => raw !== undefined);
-      const admittedRaw = ledger.rawFindings.find((raw) => raw.rawFindingId === candidate.rawFindingId);
       if (
-        anomaly?.kind === 'intake-contract-incomplete'
-        && anomaly.promotedFindingId === undefined
-        && anomaly.settlement === undefined
-        && sourceRaw !== undefined
-        && admittedRaw !== undefined
+        findingId === undefined
+        || anomaly?.kind !== 'intake-contract-incomplete'
+        || anomaly.promotedFindingId !== undefined
+        || anomaly.settlement !== undefined
+        || sourceRaw === undefined
+        || admittedRaw === undefined
+        || binding.reportDigest !== admittedRaw.sourceBinding.reportDigest
+        || !hasRestatementCandidateShape(binding.request, anomaly, sourceRaw, admittedRaw)
+        || !hasValidRestatementEcho(admittedRaw, anomaly, requestBindings)
       ) {
-        handledAsRestatement = true;
-        const anomalyId = anomaly.id;
-        restatementCandidateCountByAnomalyId.set(
-          anomalyId,
-          (restatementCandidateCountByAnomalyId.get(anomalyId) ?? 0) + 1,
-        );
-        if (hasRestatementCorrespondence({ anomaly, sourceRaw, admittedRaw, request: candidate.restatementRequest })) {
-          restatementPromotionByAnomalyId.set(anomalyId, findingId);
-        }
+        continue;
       }
+      handledAsRestatement = true;
+      const anomalyId = anomaly.id;
+      if (handledRestatementAnomalyIds.has(anomalyId)) {
+        continue;
+      }
+      handledRestatementAnomalyIds.add(anomalyId);
+      restatementCandidateCountByAnomalyId.set(
+        anomalyId,
+        (restatementCandidateCountByAnomalyId.get(anomalyId) ?? 0) + 1,
+      );
+      if (hasRestatementCorrespondence({ anomaly, sourceRaw, admittedRaw, request: binding.request })) {
+        restatementPromotionByAnomalyId.set(anomalyId, findingId);
+      }
+    }
+    if (requestBindings.length > 0) {
+      handledAsRestatement = true;
     }
     if (findingId !== undefined && !handledAsRestatement) {
       promotedFindingIdByLineageKey.set(candidate.lineageKey, findingId);

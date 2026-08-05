@@ -62,7 +62,7 @@ import { issueRawProvisionalIdentityProof } from './raw-provisional-identity-pro
 import { applyFindingLifecycleCommands } from './lifecycle-transaction.js';
 import { landUnownedConflictRawClaims } from './conflict-claim-landing.js';
 import { computeConflictReactivationDigest } from '../../models/finding-contract-identity.js';
-import { collectRestatementRequests } from './review-publication.js';
+import { collectRestatementRequestBindings } from './review-publication.js';
 
 export function attachCapturedConflictHeads(input: {
   commands: readonly FindingLifecycleCommand[];
@@ -835,7 +835,9 @@ function prepareCommitReconciliation(
     reviewScopeSnapshot: params.reviewScopeSnapshot,
     workflowTask: params.input.workflowTask,
     presentationLimit: params.reviewIntegrityLimits.maxReviewRounds,
-    restatementRequests: collectRestatementRequests(params.input.subResults.map(({ publication }) => publication)),
+    restatementRequestBindings: collectRestatementRequestBindings(
+      params.input.subResults.map(({ publication }) => publication),
+    ),
   });
   const retainItem = (item: { wire: { rawFindingId: string } }): boolean => (
     !isolatedRawFindingIds.has(item.wire.rawFindingId)

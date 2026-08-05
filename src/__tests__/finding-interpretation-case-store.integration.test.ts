@@ -646,19 +646,18 @@ describe('interpretation case SQLite begin transaction', () => {
     });
     const ledger = baseLedger();
     await seed(harness, ledger);
-    const items = [
-      ...taintedItems({
+    const oversizedItems = taintedItems({
         rawFindingIds: ['raw-irreducible-overflow'],
         ledger,
         description: 'Irreducible oversized defect.',
-      }),
-      ...taintedItems({
+      });
+    const followingItems = taintedItems({
         rawFindingIds: ['raw-after-overflow'],
         ledger,
         description: 'Following reservable defect.',
         evidenceLine: 2,
-      }),
-    ];
+      });
+    const items = [...oversizedItems, ...followingItems];
 
     const begun = await harness.beginInterpretationCases({
       items,
@@ -667,8 +666,11 @@ describe('interpretation case SQLite begin transaction', () => {
     const stored = harness.store.loadLedger();
 
     expect(begun.providerCases).toHaveLength(1);
+    expect(begun.providerCases.flatMap(({ members }) => members.map(({ rawFindingId }) => rawFindingId)))
+      .toEqual([followingItems[0]!.canonical.rawFindingId]);
     expect(begun.directPlans).toEqual([
       expect.objectContaining({
+        items: [oversizedItems[0]],
         decision: expect.objectContaining({ kind: 'provisional' }),
         unreservedAuthority: expect.objectContaining({ reason: 'manager-input-overflow' }),
       }),

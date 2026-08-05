@@ -55,6 +55,32 @@ function contractDefect(input: {
   return result;
 }
 
+function hasNonIsolationProofBoundToLegacyClaim(
+  ledger: FindingLedger,
+  findingId: string,
+  rawFindingIds: readonly string[],
+): boolean {
+  return ledger.evidenceRecords.some((record) => {
+    if (record.kind !== 'engine_proof' || record.subject.kind === 'finding_provisional_isolation') {
+      return false;
+    }
+    const subject = record.subject;
+    const subjectBindsClaim = (
+      ('findingId' in subject && subject.findingId === findingId)
+      || ('findingIds' in subject && subject.findingIds.includes(findingId))
+      || ('rawFindingId' in subject && rawFindingIds.includes(subject.rawFindingId))
+      || ('rawClaimRefIds' in subject && subject.rawClaimRefIds.some((rawId) => rawFindingIds.includes(rawId)))
+    );
+    const bindingBindsClaim = ledger.evidenceBindings.some((binding) => (
+      binding.evidenceId === record.evidenceId
+      && binding.target.entityKind === 'finding'
+      && binding.target.entityId === findingId
+      && (binding.sourceRawFindingId === null || rawFindingIds.includes(binding.sourceRawFindingId))
+    ));
+    return subjectBindsClaim || bindingBindsClaim;
+  });
+}
+
 function exactLegacyGraph(input: {
   ledger: FindingLedger;
   findingId: string;
@@ -128,6 +154,9 @@ function exactLegacyGraph(input: {
       ))
   ));
   if (isolationBindings.length !== 1) return undefined;
+  if (hasNonIsolationProofBoundToLegacyClaim(ledger, findingId, [raw.rawFindingId])) {
+    return undefined;
+  }
   if (ledger.conflictRawClaimLandings.some((landing) => landing.rawFindingId === raw.rawFindingId)) {
     return undefined;
   }
@@ -269,14 +298,7 @@ function exactLegacyGraphB(input: {
     FindingProvisionalClaimBindingAuthorizationReference,
     { kind: 'new_provisional_bundle' }
   >;
-  const otherFindingProofs = ledger.evidenceRecords.filter((record) => (
-    record.kind === 'engine_proof'
-      && 'subject' in record
-      && record.subject.kind !== 'finding_provisional_isolation'
-      && 'findingId' in record.subject
-      && record.subject.findingId === findingId
-  ));
-  if (otherFindingProofs.length > 0) {
+  if (hasNonIsolationProofBoundToLegacyClaim(ledger, findingId, rawIds)) {
     return undefined;
   }
   const terminalEpisodes = ledger.terminalAdjudicationEpisodes.filter(

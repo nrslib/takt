@@ -27,6 +27,7 @@ import {
 import type { ReviewerRelationClarification } from './relation-coherence.js';
 import { isProviderType, type ProviderType } from '../../../shared/types/provider.js';
 import type { StepProviderOptions } from '../../models/workflow-types.js';
+import type { IntakeContractMissingRequirement } from '../../models/finding-types.js';
 import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
 
 const PRIVATE_FILE_MODE = 0o600;
@@ -105,9 +106,18 @@ export interface RestatementRequestV1 {
   readonly presentationOrdinal: number;
   readonly reviewScopeSnapshotId: string;
   readonly sourceExcerptDigest: string;
+  readonly claimedExcerpt: string;
+  readonly targetPaths: readonly string[];
+  readonly missingRequirements: readonly IntakeContractMissingRequirement[];
   readonly expectedRelation: 'new';
   readonly expectedTargetFindingId: null;
   readonly expectedTargetPreconditionClass: 'absent';
+}
+
+export interface RestatementRequestBinding {
+  readonly request: RestatementRequestV1;
+  readonly publicationId: string;
+  readonly reportDigest: string;
 }
 
 export interface FindingReviewPresentationContextV1 {
@@ -186,6 +196,9 @@ function restatementRequestIdentity(request: Omit<RestatementRequestV1, 'restate
     request.presentationOrdinal,
     request.reviewScopeSnapshotId,
     request.sourceExcerptDigest,
+    request.claimedExcerpt,
+    request.targetPaths,
+    request.missingRequirements,
     request.expectedRelation,
     request.expectedTargetFindingId,
     request.expectedTargetPreconditionClass,
@@ -210,6 +223,9 @@ export function computeFindingReviewPresentationContextDigest(input: {
     request.presentationOrdinal,
     request.reviewScopeSnapshotId,
     request.sourceExcerptDigest,
+    request.claimedExcerpt,
+    request.targetPaths,
+    request.missingRequirements,
     request.expectedRelation,
     request.expectedTargetFindingId,
     request.expectedTargetPreconditionClass,
@@ -268,6 +284,42 @@ export function collectRestatementRequests(
   ));
 }
 
+export function collectRestatementRequestBindings(
+  publications: readonly Pick<CanonicalFindingReviewPublication, 'presentationContext' | 'publicationId' | 'reportDigest'>[],
+): RestatementRequestBinding[] {
+  const bindingsById = new Map<string, RestatementRequestBinding>();
+  for (const publication of publications) {
+    if (publication.presentationContext?.revision !== 2) {
+      continue;
+    }
+    for (const request of publication.presentationContext.restatementRequests) {
+      const binding: RestatementRequestBinding = {
+        request,
+        publicationId: publication.publicationId,
+        reportDigest: publication.reportDigest,
+      };
+      const existing = bindingsById.get(request.restatementRequestId);
+      if (existing !== undefined) {
+        if (
+          JSON.stringify(existing.request) !== JSON.stringify(request)
+          || existing.publicationId !== publication.publicationId
+          || existing.reportDigest !== publication.reportDigest
+        ) {
+          throw new Error(`Restatement request "${request.restatementRequestId}" has conflicting binding`);
+        }
+        continue;
+      }
+      bindingsById.set(request.restatementRequestId, binding);
+    }
+  }
+  return [...bindingsById.values()].sort((left, right) => (
+    compareBinaryStrings(left.request.reviewer, right.request.reviewer)
+    || left.request.presentationOrdinal - right.request.presentationOrdinal
+    || compareBinaryStrings(left.request.anomalyId, right.request.anomalyId)
+    || compareBinaryStrings(left.request.restatementRequestId, right.request.restatementRequestId)
+  ));
+}
+
 export function assertFindingReviewPresentationContext(
   context: FindingReviewPresentationContext,
 ): void {
@@ -290,6 +342,22 @@ export function assertFindingReviewPresentationContext(
       || request.reviewer.length === 0
       || request.anomalyId.length === 0
       || request.sourceExcerptDigest.length === 0
+      || typeof request.claimedExcerpt !== 'string'
+      || !Array.isArray(request.targetPaths)
+      || !request.targetPaths.every((path) => typeof path === 'string' && path.length > 0)
+      || JSON.stringify(sortedUnique(request.targetPaths)) !== JSON.stringify(request.targetPaths)
+      || !Array.isArray(request.missingRequirements)
+      || !request.missingRequirements.every((requirement) => (
+        requirement === 'relation'
+        || requirement === 'target'
+        || requirement === 'familyTag'
+        || requirement === 'severity'
+        || requirement === 'title'
+        || requirement === 'description'
+        || requirement === 'claimEvidence'
+      ))
+      || JSON.stringify(sortedUnique(request.missingRequirements))
+        !== JSON.stringify(request.missingRequirements)
       || !Number.isSafeInteger(request.presentationOrdinal)
       || request.presentationOrdinal < 1
     ) {
@@ -750,6 +818,11 @@ function parseStoredPresentationContext(
       || !Number.isSafeInteger(request.presentationOrdinal)
       || typeof request.reviewScopeSnapshotId !== 'string'
       || typeof request.sourceExcerptDigest !== 'string'
+      || typeof request.claimedExcerpt !== 'string'
+      || !Array.isArray(request.targetPaths)
+      || !request.targetPaths.every((path) => typeof path === 'string')
+      || !Array.isArray(request.missingRequirements)
+      || !request.missingRequirements.every((requirement) => typeof requirement === 'string')
       || request.expectedRelation !== 'new'
       || request.expectedTargetFindingId !== null
       || request.expectedTargetPreconditionClass !== 'absent'
@@ -762,6 +835,9 @@ function parseStoredPresentationContext(
       presentationOrdinal: Number(request.presentationOrdinal),
       reviewScopeSnapshotId: request.reviewScopeSnapshotId,
       sourceExcerptDigest: request.sourceExcerptDigest,
+      claimedExcerpt: request.claimedExcerpt,
+      targetPaths: sortedUnique(request.targetPaths),
+      missingRequirements: sortedUnique(request.missingRequirements) as IntakeContractMissingRequirement[],
       expectedRelation: 'new',
       expectedTargetFindingId: null,
       expectedTargetPreconditionClass: 'absent',

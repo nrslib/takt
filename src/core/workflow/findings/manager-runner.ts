@@ -14,7 +14,7 @@ import { captureReviewScopeProofSnapshot } from './snapshot.js';
 import { computeRoundMarker } from './round-marker.js';
 import { runManagerRoundExclusive } from './manager-round-lock.js';
 import { bindPreAdmissionEntities } from './pre-admission-entity-binding.js';
-import { collectRestatementRequests } from './review-publication.js';
+import { collectRestatementRequestBindings } from './review-publication.js';
 import { migrateLegacyIntakeProvisionalFindings } from './legacy-intake-reclassification.js';
 import { resolveReviewIntegrityLimits } from './review-integrity.js';
 
@@ -68,13 +68,15 @@ export async function runFindingManagerForStep(
       },
       presentationLimit: resolveReviewIntegrityLimits(input.contract.reviewBudget).maxReviewRounds,
     };
-    const loadedBeforeMigration = input.ledgerStore.loadLedger();
+    const loadedLedger = input.ledgerStore.loadLedger();
+    const resumed = await resumePendingManagerCommit(input, loadedLedger);
+    const resumedLedger = resumed?.ledger ?? loadedLedger;
     const migration = migrateLegacyIntakeProvisionalFindings({
-      ledger: loadedBeforeMigration,
+      ledger: resumedLedger,
       ...migrationInput,
     });
-    const loadedLedger = migration.migratedFindingIds.length === 0
-      ? loadedBeforeMigration
+    const currentLedger = migration.migratedFindingIds.length === 0
+      ? resumedLedger
       : (await input.ledgerStore.updateLedger((ledger) => {
           const result = migrateLegacyIntakeProvisionalFindings({
             ledger,
@@ -82,13 +84,11 @@ export async function runFindingManagerForStep(
           });
           return { ledger: result.ledger, result: result.migratedFindingIds };
         })).ledger;
-    log.info('Legacy intake migration checked', {
+    log.info('Legacy intake migration checked after pending commit resume', {
       step: input.parentStep.name,
       migratedFindingIds: migration.migratedFindingIds,
       migratedCount: migration.migratedFindingIds.length,
     });
-    const resumed = await resumePendingManagerCommit(input, loadedLedger);
-    const currentLedger = resumed?.ledger ?? loadedLedger;
     if (resumed?.completedRoundMarker === stopBudgetRoundMarker) {
       return {
         status: 'unchanged',
@@ -128,7 +128,9 @@ export async function runFindingManagerForStep(
       reviewScopeSnapshot,
       workflowTask: input.workflowTask,
       presentationLimit: prepared.reviewIntegrityLimits.maxReviewRounds,
-      restatementRequests: collectRestatementRequests(input.subResults.map(({ publication }) => publication)),
+      restatementRequestBindings: collectRestatementRequestBindings(
+        input.subResults.map(({ publication }) => publication),
+      ),
     });
     const managerDecision = await runManagerDecisionStage({
       input,

@@ -142,9 +142,39 @@ export function renderCompactActionableFindingLedgerInstructionSummary(
   }, null, 2);
 }
 
+function buildReviewerAnomalyInstructionSummary(ledger: FindingLedger): Array<{
+  id: string;
+  reviewer: string;
+  title: string;
+  claimedLocation?: string;
+  claimedExcerpt?: string;
+  observationClass: 'claim-bearing' | 'protocol-noise';
+  reasonCodes: string[];
+  missingRequirements: string[];
+}> {
+  return (ledger.reviewerAnomalies ?? [])
+    .filter((anomaly) => (
+      anomaly.kind === 'intake-contract-incomplete'
+      && anomaly.intakeContract !== undefined
+      && isOutstandingReviewerAnomaly(anomaly)
+    ))
+    .map((anomaly) => ({
+      id: anomaly.id,
+      reviewer: anomaly.intakeContract!.presentationOwnerReviewer,
+      title: anomaly.title,
+      ...(anomaly.claimedLocation === undefined ? {} : { claimedLocation: anomaly.claimedLocation }),
+      ...(anomaly.claimedExcerpt === undefined ? {} : { claimedExcerpt: anomaly.claimedExcerpt }),
+      observationClass: anomaly.intakeContract!.observationClass,
+      reasonCodes: anomaly.intakeContract!.reasonCodes,
+      missingRequirements: anomaly.intakeContract!.missingRequirements,
+    }))
+    .sort((left, right) => compareBinaryStrings(left.id, right.id));
+}
+
 export function renderFindingLedgerInstructionSummary(ledger: FindingLedger): string {
   const projection = resolveFindingLedgerInstructionProjection(ledger);
   const familyTagsByRawFindingId = indexRawFindingFamilyTags(projection);
+  const reviewerAnomalies = buildReviewerAnomalyInstructionSummary(projection);
   return JSON.stringify({
     workflowName: projection.workflowName,
     open: projection.findings
@@ -221,6 +251,7 @@ export function renderFindingLedgerInstructionSummary(ledger: FindingLedger): st
       rawFindingIds: conflict.rawFindingIds,
       description: conflict.description,
     })),
+    ...(reviewerAnomalies.length === 0 ? {} : { reviewerAnomalies }),
   }, null, 2);
 }
 

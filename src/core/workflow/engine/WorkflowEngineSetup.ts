@@ -53,6 +53,8 @@ import {
   listFindingReviewPublications,
   type RestatementRequestV1,
 } from '../findings/review-publication.js';
+import { RAW_FINDING_LIMITS } from '../findings/raw-finding-limits.js';
+import type { FindingTarget } from '../../models/finding-types.js';
 import type {
   FindingContractInstructionContext,
   FindingContractReviewerOutputStrategy,
@@ -247,7 +249,7 @@ export function assertFindingReviewPresentationCapacity(input: {
       && anomaly.promotedFindingId === undefined
       && anomaly.settlement === undefined
       && defect.terminalDisposition === undefined
-      && presentedCount < defect.presentationLimit;
+      && presentedCount === 0;
   });
   if (unpresented.length === 0) {
     return;
@@ -277,6 +279,32 @@ export function assertFindingReviewPresentationCapacity(input: {
     requiredInvocations,
     remainingCapacity,
   });
+}
+
+function targetPathsForRestatementRequest(target: FindingTarget): string[] {
+  const sortedUniquePaths = (paths: readonly string[]): string[] => (
+    [...new Set(paths)].sort(compareBinaryStrings)
+  );
+  switch (target.kind) {
+    case 'code':
+      return sortedUniquePaths(target.paths);
+    case 'structure':
+      return sortedUniquePaths([...target.scope.roots, ...target.manifestTargets]);
+    case 'absence':
+      return target.predicate.kind === 'path_state'
+        ? [target.predicate.path]
+        : sortedUniquePaths(target.predicate.roots);
+    case 'review_scope':
+      return [];
+  }
+}
+
+function boundedRestatementClaimExcerpt(
+  anomaly: NonNullable<ReturnType<FindingLedgerStore['loadLedger']>['reviewerAnomalies']>[number],
+  raw: NonNullable<ReturnType<FindingLedgerStore['loadLedger']>['rawFindings']>[number],
+): string {
+  return (anomaly.claimedExcerpt ?? raw.description ?? raw.rawExcerpt ?? '')
+    .slice(0, RAW_FINDING_LIMITS.maxDescriptionChars);
 }
 
 export function createWorkflowEngineServices(params: WorkflowEngineSetupParams): WorkflowEngineServices {
@@ -391,6 +419,9 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
           presentationOrdinal: presentedCount + 1,
           reviewScopeSnapshotId,
           sourceExcerptDigest: raw.sourceBinding.excerptDigest,
+          claimedExcerpt: boundedRestatementClaimExcerpt(anomaly, raw),
+          targetPaths: targetPathsForRestatementRequest(raw.target),
+          missingRequirements: anomaly.intakeContract!.missingRequirements,
           expectedRelation: 'new' as const,
           expectedTargetFindingId: null,
           expectedTargetPreconditionClass: 'absent' as const,

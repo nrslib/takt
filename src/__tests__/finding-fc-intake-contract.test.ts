@@ -17,11 +17,13 @@ import {
   evaluateRawAdmission,
   type ReviewerIntakeResult,
 } from '../core/workflow/findings/manager-admission.js';
+import { intakeReviewerOutputs } from '../core/workflow/findings/manager-intake.js';
 import { captureReviewScopeProofSnapshot } from '../core/workflow/findings/snapshot.js';
 import { applyReviewerAnomalySpecsToLedger, createReviewerAnomalySpec, linkPromotedReviewerAnomalies } from '../core/workflow/findings/reviewer-anomalies.js';
 import {
   assertFindingReviewPresentationContext,
   computeRestatementRequestId,
+  collectRestatementRequestBindings,
   createFindingReviewPresentationContextV2,
   createFindingReviewPublication,
   loadFindingReviewPublication,
@@ -35,7 +37,11 @@ import { computeRawPayloadDigest } from '../core/models/finding-contract-identit
 import { createEmptyFindingContractRegistries } from '../core/models/finding-contract-seed.js';
 import { collectFindingLedgerProjectionInvariantViolations } from '../core/models/finding-ledger-invariants.js';
 import { buildFindingContractInstruction } from '../core/workflow/instruction/finding-contract-instruction.js';
-import { rawCanonicalSnapshotFixture } from './helpers/finding-lifecycle-fixture.js';
+import { renderFindingLedgerInstructionSummary } from '../core/workflow/findings/context.js';
+import {
+  rawCanonicalSnapshotFixture,
+  reviewerRawExtractionFixture,
+} from './helpers/finding-lifecycle-fixture.js';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -309,6 +315,7 @@ describe('FC intake contract', () => {
     const protocolItem = canonicalItem(incompleteRaw('raw-protocol', {
       target: { kind: 'review_scope' },
       rawExcerpt: undefined,
+      relation: null,
     }));
     const undecidableItem = canonicalItem(incompleteRaw('raw-undecidable', {
       target: { kind: 'review_scope' },
@@ -353,7 +360,11 @@ describe('FC intake contract', () => {
       relation: 'new',
       targetFindingId: null,
       target: source.target,
-      sourceBinding: source.sourceBinding,
+      sourceBinding: {
+        ...source.sourceBinding,
+        reportDigest: 'e'.repeat(64),
+        excerptDigest: '2'.repeat(64),
+      },
       evidence: [],
     });
     const sourceItem = canonicalItem(source);
@@ -385,6 +396,9 @@ describe('FC intake contract', () => {
       presentationOrdinal: 1,
       reviewScopeSnapshotId: '2'.repeat(64),
       sourceExcerptDigest: source.sourceBinding.excerptDigest,
+      claimedExcerpt: sourceExcerpt,
+      targetPaths: ['src/example.ts'] as const,
+      missingRequirements: ['description'] as const,
       expectedRelation: 'new' as const,
       expectedTargetFindingId: null,
       expectedTargetPreconditionClass: 'absent' as const,
@@ -413,13 +427,196 @@ describe('FC intake contract', () => {
     }, [{
       lineageKey: 'not-authoritative',
       rawFindingId: admitted.rawFindingId,
-      restatementRequest: {
-        ...requestWithoutId,
-        restatementRequestId: computeRestatementRequestId(requestWithoutId),
-      },
+      restatementRequestBindings: [{
+        request: {
+          ...requestWithoutId,
+          restatementRequestId: computeRestatementRequestId(requestWithoutId),
+        },
+        publicationId: 'publication-direct',
+        reportDigest: admitted.sourceBinding.reportDigest,
+      }],
     }]);
 
     expect(linked.reviewerAnomalies![0]!.promotedFindingId).toBe('F-0001');
+  });
+
+  it('promotes through reviewer output, normalizer, normalization, and admission without source-binding copying', () => {
+    const claim = 'The same defect remains observable.';
+    const snapshot = captureReviewScopeProofSnapshot(process.cwd());
+    const firstPublication = createFindingReviewPublication({
+      identity: {
+        scopeIdentity: 'scope-fc-real-path',
+        callNamespace: '',
+        parentStepName: 'reviewers',
+        stepIteration: 1,
+        reviewerStepName: 'architecture-review',
+        reportName: 'architecture-review-1.md',
+      },
+      protocol: STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+      reportContent: `Initial report\n\n${claim}`,
+      rawFindings: [reviewerRawExtractionFixture({
+        rawFindingId: 'source-weak',
+        familyTag: null,
+        severity: null,
+        title: null,
+        description: null,
+        suggestion: null,
+        relation: 'new',
+        targetFindingId: null,
+        target: { kind: 'code', paths: ['src/core/workflow/findings/intake-contract.ts'] },
+        rawExcerpt: claim,
+      })],
+    });
+    const firstIntake = intakeReviewerOutputs({
+      subResults: [{ subStep: { name: 'architecture-review' } as never, publication: firstPublication }],
+      previousLedger: emptyLedger(),
+      workflowName: 'peer-review',
+      callNamespace: '',
+      parentStepName: 'reviewers',
+      stepIteration: 1,
+      runId: observedAt.runId,
+      workflowTask: 'Review the implementation.',
+      cwd: process.cwd(),
+      scopeIdentity: 'scope-fc-real-path',
+      issuedAt: observedAt.timestamp,
+      reviewScopeSnapshot: snapshot,
+    });
+    const firstAdmission = evaluateRawAdmission({
+      cwd: process.cwd(),
+      reviewScopeSnapshotId: snapshot.reviewScopeSnapshotId,
+      runId: observedAt.runId,
+      scopeIdentity: 'scope-fc-real-path',
+      previousLedger: emptyLedger(),
+      intake: firstIntake,
+      reviewScopeSnapshot: snapshot,
+      workflowTask: 'Review the implementation.',
+      presentationLimit: 2,
+    });
+    expect(firstIntake.items).toHaveLength(1);
+    expect(firstAdmission.ladderAnomalySpecs).toHaveLength(1);
+    expect(firstAdmission.admissionProvisionalSpecs).toHaveLength(0);
+    const source = firstIntake.items[0]!.wire;
+    const withAnomaly = applyReviewerAnomalySpecsToLedger(
+      { ...emptyLedger(), rawFindings: [source] },
+      firstAdmission.ladderAnomalySpecs,
+      {
+        workflowName: 'peer-review',
+        stepName: observedAt.stepName,
+        runId: observedAt.runId,
+        timestamp: observedAt.timestamp,
+      },
+    );
+    const anomaly = withAnomaly.reviewerAnomalies![0]!;
+    const requestWithoutId = {
+      anomalyId: anomaly.id,
+      reviewer: 'architecture-review',
+      presentationOrdinal: 1,
+      reviewScopeSnapshotId: snapshot.reviewScopeSnapshotId,
+      sourceExcerptDigest: source.sourceBinding.excerptDigest,
+      claimedExcerpt: anomaly.claimedExcerpt ?? claim,
+      targetPaths: ['src/core/workflow/findings/intake-contract.ts'] as const,
+      missingRequirements: anomaly.intakeContract!.missingRequirements,
+      expectedRelation: 'new' as const,
+      expectedTargetFindingId: null,
+      expectedTargetPreconditionClass: 'absent' as const,
+    };
+    const context = createFindingReviewPresentationContextV2({
+      reviewScopeSnapshotId: snapshot.reviewScopeSnapshotId,
+      restatementRequests: [{
+        ...requestWithoutId,
+        restatementRequestId: computeRestatementRequestId(requestWithoutId),
+      }],
+    });
+    const secondReport = `Restated report\n\n${claim}`;
+    const secondPublication = createFindingReviewPublication({
+      identity: {
+        scopeIdentity: 'scope-fc-real-path',
+        callNamespace: '',
+        parentStepName: 'reviewers',
+        stepIteration: 2,
+        reviewerStepName: 'architecture-review',
+        reportName: 'architecture-review-2.md',
+      },
+      protocol: STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+      reportContent: secondReport,
+      rawFindings: [reviewerRawExtractionFixture({
+        rawFindingId: 'admitted-restatement',
+        familyTag: 'bug',
+        severity: 'high',
+        title: 'Observed issue',
+        description: claim,
+        suggestion: null,
+        relation: 'new',
+        targetFindingId: null,
+        target: { kind: 'code', paths: ['src/core/workflow/findings/intake-contract.ts'] },
+        evidenceRequests: [{
+          kind: 'file_quote',
+          path: 'src/core/workflow/findings/intake-contract.ts',
+          startLine: 1,
+          endLine: 1,
+        }],
+        rawExcerpt: claim,
+      })],
+      presentationContext: context,
+    });
+    const secondIntake = intakeReviewerOutputs({
+      subResults: [{ subStep: { name: 'architecture-review' } as never, publication: secondPublication }],
+      previousLedger: withAnomaly,
+      workflowName: 'peer-review',
+      callNamespace: '',
+      parentStepName: 'reviewers',
+      stepIteration: 2,
+      runId: observedAt.runId,
+      workflowTask: 'Review the implementation.',
+      cwd: process.cwd(),
+      scopeIdentity: 'scope-fc-real-path',
+      issuedAt: observedAt.timestamp,
+      reviewScopeSnapshot: snapshot,
+    });
+    const secondAdmission = evaluateRawAdmission({
+      cwd: process.cwd(),
+      reviewScopeSnapshotId: snapshot.reviewScopeSnapshotId,
+      runId: observedAt.runId,
+      scopeIdentity: 'scope-fc-real-path',
+      previousLedger: withAnomaly,
+      intake: secondIntake,
+      reviewScopeSnapshot: snapshot,
+      workflowTask: 'Review the implementation.',
+      presentationLimit: 2,
+      restatementRequestBindings: collectRestatementRequestBindings([secondPublication]),
+    });
+    expect(secondAdmission.admissionAnomalySpecs).toHaveLength(0);
+    expect(secondAdmission.cleanAdmitted).toHaveLength(1);
+    expect(secondAdmission.verifiedEvidenceCandidates[0]?.restatementRequestBindings)
+      .toHaveLength(1);
+    const admitted = secondAdmission.cleanAdmitted[0]!.wire;
+    const evidenceIds = secondAdmission.verifiedEvidenceRecordsByRawFindingId
+      .get(admitted.rawFindingId)?.map(({ evidenceId }) => evidenceId) ?? [];
+    const linked = linkPromotedReviewerAnomalies({
+      ...withAnomaly,
+      rawFindings: [...withAnomaly.rawFindings, admitted],
+      findings: [{
+        id: 'F-0001',
+        status: 'open',
+        lifecycle: 'new',
+        target: admitted.target,
+        targetIdentityHash: admitted.targetIdentityHash,
+        claimIdentityHash: admitted.claimIdentityHash,
+        semanticClaimIdentityHash: admitted.semanticClaimIdentityHash,
+        severity: admitted.severity!,
+        title: admitted.title!,
+        description: admitted.description!,
+        evidenceIds,
+        reviewers: [admitted.reviewer],
+        rawFindingIds: [admitted.rawFindingId],
+        firstSeen: observedAt,
+        lastSeen: observedAt,
+        revision: 1,
+      }],
+    }, secondAdmission.verifiedEvidenceCandidates);
+
+    expect(source.sourceBinding.reportDigest).not.toBe(admitted.sourceBinding.reportDigest);
+    expect(linked.reviewerAnomalies?.[0]?.promotedFindingId).toBe('F-0001');
   });
 
   it('promotes a final presentation before applying claim-bearing terminal disposition', () => {
@@ -445,7 +642,11 @@ describe('FC intake contract', () => {
       relation: 'new',
       targetFindingId: null,
       target: source.target,
-      sourceBinding: source.sourceBinding,
+      sourceBinding: {
+        ...source.sourceBinding,
+        reportDigest: 'e'.repeat(64),
+        excerptDigest: '2'.repeat(64),
+      },
       evidence: [],
     });
     const sourceItem = canonicalItem(source);
@@ -495,6 +696,9 @@ describe('FC intake contract', () => {
       presentationOrdinal: 1,
       reviewScopeSnapshotId: '2'.repeat(64),
       sourceExcerptDigest: source.sourceBinding.excerptDigest,
+      claimedExcerpt: sourceExcerpt,
+      targetPaths: ['src/example.ts'] as const,
+      missingRequirements: ['description'] as const,
       expectedRelation: 'new' as const,
       expectedTargetFindingId: null,
       expectedTargetPreconditionClass: 'absent' as const,
@@ -543,10 +747,14 @@ describe('FC intake contract', () => {
       verifiedEvidenceCandidates: [{
         lineageKey: 'not-authoritative',
         rawFindingId: admitted.rawFindingId,
-        restatementRequest: {
-          ...requestWithoutId,
-          restatementRequestId: computeRestatementRequestId(requestWithoutId),
-        },
+        restatementRequestBindings: [{
+          request: {
+            ...requestWithoutId,
+            restatementRequestId: computeRestatementRequestId(requestWithoutId),
+          },
+          publicationId: publication.publicationId,
+          reportDigest: admitted.sourceBinding.reportDigest,
+        }],
       }],
     });
 
@@ -587,6 +795,9 @@ describe('FC intake contract', () => {
         presentationOrdinal: stepIteration,
         reviewScopeSnapshotId: 'a'.repeat(64),
         sourceExcerptDigest: source.sourceBinding.excerptDigest,
+        claimedExcerpt: source.claimedExcerpt ?? source.rawExcerpt ?? '',
+        targetPaths: ['src/example.ts'] as const,
+        missingRequirements: ['description'] as const,
         expectedRelation: 'new' as const,
         expectedTargetFindingId: null,
         expectedTargetPreconditionClass: 'absent' as const,
@@ -645,6 +856,9 @@ describe('FC intake contract', () => {
           presentationOrdinal: 1,
           reviewScopeSnapshotId: '3'.repeat(64),
           sourceExcerptDigest: `${index + 4}`.repeat(64),
+          claimedExcerpt: `Claim ${anomalyId}`,
+          targetPaths: [] as const,
+          missingRequirements: [] as const,
           expectedRelation: 'new' as const,
           expectedTargetFindingId: null,
           expectedTargetPreconditionClass: 'absent' as const,
@@ -775,6 +989,9 @@ describe('FC intake contract', () => {
       presentationOrdinal: 1,
       reviewScopeSnapshotId: '6'.repeat(64),
       sourceExcerptDigest: '7'.repeat(64),
+      claimedExcerpt: 'A bounded reviewer claim.',
+      targetPaths: [] as const,
+      missingRequirements: [] as const,
       expectedRelation: 'new' as const,
       expectedTargetFindingId: null,
       expectedTargetPreconditionClass: 'absent' as const,
@@ -805,6 +1022,50 @@ describe('FC intake contract', () => {
 
     expect(instruction).toContain('RA-REQUEST');
     expect(instruction).toContain('restatementRequestId');
+  });
+
+  it('wires outstanding reviewer anomalies into the reviewer ledger summary', () => {
+    const raw = incompleteRaw('raw-instruction-anomaly', {
+      rawExcerpt: 'The reviewer claim must be restated with evidence.',
+    });
+    const canonical = canonicalItem(raw);
+    const anomaly = applyReviewerAnomalySpecsToLedger(emptyLedger(), [createReviewerAnomalySpec({
+      wire: raw,
+      canonical: canonical.canonical,
+      anomalyKind: 'intake-contract-incomplete',
+      reason: 'The normalized claim omitted evidence.',
+      intakeContract: {
+        observationClass: 'claim-bearing',
+        classificationAuthorityId: 'system/intake_observation_classification_v1',
+        reasonCodes: ['claim-evidence-missing'],
+        missingRequirements: ['claimEvidence'],
+        presentationOwnerReviewer: raw.reviewer,
+        presentationLimit: 2,
+      },
+    })], {
+      workflowName: 'peer-review',
+      stepName: raw.stepName,
+      runId: observedAt.runId,
+      timestamp: observedAt.timestamp,
+    });
+    const summary = JSON.parse(renderFindingLedgerInstructionSummary(anomaly)) as {
+      reviewerAnomalies?: Array<{
+        id: string;
+        reviewer: string;
+        claimedExcerpt?: string;
+        missingRequirements: string[];
+      }>;
+    };
+
+    expect(summary.reviewerAnomalies).toEqual([{
+      id: anomaly.reviewerAnomalies![0]!.id,
+      reviewer: raw.reviewer,
+      title: anomaly.reviewerAnomalies![0]!.title,
+      claimedExcerpt: 'The reviewer claim must be restated with evidence.',
+      observationClass: 'claim-bearing',
+      reasonCodes: ['claim-evidence-missing'],
+      missingRequirements: ['claimEvidence'],
+    }]);
   });
 
   it('fails before publication when remaining workflow capacity cannot present every anomaly', () => {
@@ -1084,18 +1345,27 @@ describe('FC intake contract', () => {
   it('replays the checked-in ledger fixture through current schema and migration guards', () => {
     const archivePath = join(import.meta.dirname, 'fixtures', 'finding-ledger-run-1-archive.json');
     const ledger = parseFindingLedger(JSON.parse(readFileSync(archivePath, 'utf8')));
-    expect(ledger.findings).toHaveLength(1);
-    expect(ledger.rawFindings).toHaveLength(1);
+    const expectedFindingIds = Array.from({ length: 15 }, (_, index) => (
+      `F-${String(index + 1).padStart(4, '0')}`
+    ));
+    expect(ledger.findings.map(({ id }) => id)).toEqual(expectedFindingIds);
+    expect(ledger.rawFindings).toHaveLength(15);
     const migration = migrateLegacyIntakeProvisionalFindings({
       ledger,
       observation: { ...observedAt, timestamp: '2026-08-05T00:04:00.000Z' },
       presentationLimit: 2,
     });
     expect(migration.migratedFindingIds).toEqual(['F-0001']);
-    expect(migration.ledger.findings[0]?.reviewerAnomalyReclassification).toMatchObject({
-      kind: 'reclassified_to_reviewer_anomaly',
-      reason: 'product_claim_not_adjudicated',
-    });
+    expect(migration.ledger.findings.find(({ id }) => id === 'F-0001')?.reviewerAnomalyReclassification)
+      .toMatchObject({
+        kind: 'reclassified_to_reviewer_anomaly',
+        reason: 'product_claim_not_adjudicated',
+      });
+    for (const findingId of expectedFindingIds.slice(1)) {
+      expect(migration.migratedFindingIds).not.toContain(findingId);
+      expect(migration.ledger.findings.find(({ id }) => id === findingId)
+        ?.reviewerAnomalyReclassification).toBeUndefined();
+    }
     expect(() => parseFindingLedger(migration.ledger)).not.toThrow();
   });
 });

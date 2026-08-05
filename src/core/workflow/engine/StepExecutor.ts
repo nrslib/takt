@@ -861,6 +861,24 @@ export class StepExecutor {
       };
     }
     if (
+      initial.invalidDetail !== undefined
+      && initial.invalidKind === 'model_output'
+      && normalized.invalidDetail === undefined
+      && normalized.response.status === 'done'
+      && hasExtractionFidelityFailure(normalized.response)
+    ) {
+      return {
+        ...normalized,
+        response: {
+          ...normalized.response,
+          status: 'error',
+          error: `Finding intake normalizer for reviewer "${input.reviewerStep.name}" extraction-fidelity correction failed: ${
+            normalized.response.error ?? normalized.response.content
+          }`,
+        },
+      };
+    }
+    if (
       extractionFidelityFailure
       && (
         normalized.invalidDetail !== undefined

@@ -150,6 +150,9 @@ function validateEntry(entry: unknown, index: number): ScenarioEntry {
   if (obj.structured_output !== undefined && (typeof obj.structured_output !== 'object' || obj.structured_output === null || Array.isArray(obj.structured_output))) {
     throw new Error(`Scenario entry [${index}] "structured_output" must be an object if provided`);
   }
+  if (obj.mock_task_response !== undefined && obj.mock_task_response !== 'main_manager_raw_decisions') {
+    throw new Error(`Scenario entry [${index}] "mock_task_response" is invalid`);
+  }
 
   // delay_ms is optional
   if (obj.delay_ms !== undefined && typeof obj.delay_ms !== 'number') {
@@ -173,6 +176,7 @@ function validateEntry(entry: unknown, index: number): ScenarioEntry {
     status: status as ScenarioEntry['status'],
     content: obj.content as string,
     structuredOutput: obj.structured_output as Record<string, unknown> | undefined,
+    mockTaskResponse: obj.mock_task_response as ScenarioEntry['mockTaskResponse'],
     error: obj.error as string | undefined,
     failureCategory: obj.failure_category as ScenarioEntry['failureCategory'],
     delayMs: obj.delay_ms as number | undefined,

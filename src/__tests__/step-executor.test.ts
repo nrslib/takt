@@ -600,6 +600,59 @@ describe('StepExecutor', () => {
     ]);
   });
 
+  it('model output訂正後もextraction-fidelity違反を再検査してpublicationしない', async () => {
+    const correctedRawFinding = {
+      rawExcerpt: 'Issue: src/example.ts still bypasses the required boundary.',
+      candidate: {
+        rawFindingId: null,
+        familyTag: null,
+        severity: null,
+        title: null,
+        description: null,
+        suggestion: null,
+        relation: null,
+        targetFindingIds: [],
+        target: null,
+        evidenceRequests: [],
+      },
+    };
+    const harness = createPlainTextPublicationHarness([
+      {
+        persona: 'default',
+        status: 'done',
+        content: '{"rawFindings":"invalid"}',
+        structuredOutput: { rawFindings: 'invalid' },
+        timestamp: new Date('2026-07-31T00:00:01.000Z'),
+      },
+      {
+        persona: 'default',
+        status: 'done',
+        content: '{}',
+        structuredOutput: { rawFindings: [correctedRawFinding] },
+        timestamp: new Date('2026-07-31T00:00:02.000Z'),
+      },
+    ]);
+
+    await expect(harness.executor.prepareFindingReviewPublication({
+      step: harness.step,
+      executableStep: harness.step,
+      reviewerOutputStrategy: PLAIN_TEXT_NORMALIZED_STRATEGY,
+      parentStepName: 'reviewers',
+      stepIteration: 1,
+      state: harness.state,
+      phase1Response: {
+        persona: 'reviewer',
+        status: 'done',
+        content: 'phase 1 investigation',
+        timestamp: new Date('2026-07-31T00:00:00.000Z'),
+      },
+      agentOptions: { resolvedProvider: 'mock' },
+      onProviderAttempt: vi.fn(),
+      updatePersonaSession: harness.updatePersonaSession,
+    })).rejects.toThrow(/extraction-fidelity correction failed/u);
+    expect(harness.normalizeFindingIntake).toHaveBeenCalledTimes(2);
+  });
+
   it('plain-text normalizerの65件出力はcorrectionを消費せず64件とoverflow記録へ着地する', async () => {
     const rawFindings = Array.from({ length: 65 }, (_, index) => {
       const sequence = String(index + 1).padStart(3, '0');

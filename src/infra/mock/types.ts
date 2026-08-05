@@ -36,6 +36,8 @@ export interface ScenarioEntry {
   content: string;
   /** Optional structured output payload (for outputSchema-driven flows) */
   structuredOutput?: Record<string, unknown>;
+  /** Build a valid response from an engine-owned manager task manifest. */
+  mockTaskResponse?: 'main_manager_raw_decisions';
   /** Optional error message */
   error?: string;
   /** Optional machine-readable failure category */

@@ -68,6 +68,8 @@ export function intakeContractDefectFor(
     (input.rawExcerpt !== undefined && input.rawExcerpt.trim().length > 0)
     || (input.description !== undefined && input.description !== null
       && input.description.trim().length > 0)
+    || (input.title !== undefined && input.title !== null && input.title.trim().length > 0)
+    || input.relation !== null
     || input.target.kind !== 'review_scope'
     || input.evidence.length > 0,
   );

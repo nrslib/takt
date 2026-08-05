@@ -34,7 +34,7 @@ import type {
 } from './pre-admission-entity-binding-types.js';
 import { resolvePreAdmissionEntityBindings } from './pre-admission-entity-binding-commit.js';
 import { resolveCurrentLifecycleObservationTarget } from './reviewer-anomaly-policy.js';
-import type { RestatementRequestV1 } from './review-publication.js';
+import type { RestatementRequestBinding } from './review-publication.js';
 import { intakeContractDefectFor as classifyIntakeContractDefect } from './intake-contract.js';
 import { resolveReviewIntegrityLimits } from './review-integrity.js';
 
@@ -195,15 +195,14 @@ interface AdmissionItemEvaluation {
   provisionalOnlyLadderRawId?: string;
 }
 
-function restatementRequestForItem(
+function restatementRequestsForItem(
   item: CanonicalIntakeItem,
-  requests: readonly RestatementRequestV1[],
-): RestatementRequestV1 | undefined {
-  const matching = requests.filter((request) => (
-    request.reviewer === item.wire.reviewer
-    && request.sourceExcerptDigest === item.wire.sourceBinding.excerptDigest
+  bindings: readonly RestatementRequestBinding[],
+): RestatementRequestBinding[] {
+  return bindings.filter((binding) => (
+    binding.request.reviewer === item.wire.reviewer
+    && binding.reportDigest === item.wire.sourceBinding.reportDigest
   ));
-  return matching.length === 1 ? matching[0] : undefined;
 }
 
 function classifyEvidence(input: {
@@ -469,7 +468,7 @@ function evaluateAdmissionItem(input: {
   entityBindings: ReviewerIntakeResult['entityBindings'];
   presentationLimit: number;
   exactEntityAuditRawIds: ReadonlySet<string>;
-  restatementRequests: readonly RestatementRequestV1[];
+  restatementRequestBindings: readonly RestatementRequestBinding[];
 }): AdmissionItemEvaluation {
   if (input.exactEntityAuditRawIds.has(input.item.wire.rawFindingId)) {
     return {
@@ -500,10 +499,9 @@ function evaluateAdmissionItem(input: {
       presentationLimit: input.presentationLimit,
     });
   }
-  const hasEngineEvidenceFailure = input.item.canonical.evidenceCoverageGaps.length > 0
-    || (input.item.canonical.evidenceQuoteFailureReasons?.length ?? 0) > 0
+  const hasProtocolEvidenceFailure = (input.item.canonical.evidenceQuoteFailureReasons?.length ?? 0) > 0
     || input.item.canonical.provenance.ambiguityCodes.includes('invalid-evidence-shape');
-  if (hasEngineEvidenceFailure) {
+  if (hasProtocolEvidenceFailure) {
     const classification = classifyEvidence(input);
     if (!classification.admit) {
       return evaluateRejectedItem({ ...input, classification });
@@ -532,12 +530,15 @@ function evaluateAdmissionItem(input: {
     return evaluateRejectedItem({ ...input, classification });
   }
 
-  const restatementRequest = restatementRequestForItem(item, input.restatementRequests);
+  const restatementRequestBindings = restatementRequestsForItem(
+    item,
+    input.restatementRequestBindings,
+  );
   const verifiedEvidenceCandidate = classification.evidenceRecords.length > 0
     ? {
         lineageKey: item.canonical.lineageKey,
         rawFindingId: item.wire.rawFindingId,
-        ...(restatementRequest === undefined ? {} : { restatementRequest }),
+        ...(restatementRequestBindings.length === 0 ? {} : { restatementRequestBindings }),
       }
     : undefined;
   const provisionalOnlyLadderRawId = pool === 'tainted'
@@ -611,7 +612,7 @@ export function evaluateRawAdmission(input: {
   reviewScopeSnapshot: ReviewScopeProofSnapshot;
   workflowTask: string;
   presentationLimit?: number;
-  restatementRequests?: readonly RestatementRequestV1[];
+  restatementRequestBindings?: readonly RestatementRequestBinding[];
 }): RawAdmissionEvaluation {
   assertCanonicalIntakeRecoveryStates(input.intake.items, input.previousLedger);
   const presentationLimit = input.presentationLimit
@@ -620,7 +621,7 @@ export function evaluateRawAdmission(input: {
     ledger: input.previousLedger,
     intake: input.intake,
   });
-  const restatementRequests = input.restatementRequests ?? [];
+  const restatementRequestBindings = input.restatementRequestBindings ?? [];
   const exactEntityAuditRawIds = new Set(
     resolvedEntityBindings.auditAttachments.map(({ rawFindingId }) => rawFindingId),
   );
@@ -648,7 +649,7 @@ export function evaluateRawAdmission(input: {
       entityBindings: input.intake.entityBindings,
       presentationLimit,
       exactEntityAuditRawIds,
-      restatementRequests,
+      restatementRequestBindings,
     })),
     ...tainted.map((item) => evaluateAdmissionItem({
       cwd: input.cwd,
@@ -663,7 +664,7 @@ export function evaluateRawAdmission(input: {
       entityBindings: input.intake.entityBindings,
       presentationLimit,
       exactEntityAuditRawIds,
-      restatementRequests,
+      restatementRequestBindings,
     })),
   ];
   const cleanAdmitted = definedValues(
