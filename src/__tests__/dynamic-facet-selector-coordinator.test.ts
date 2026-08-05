@@ -128,7 +128,7 @@ describe('DynamicFacetSelectorCoordinator', () => {
     const coordinator = new DynamicFacetSelectorCoordinator(buildDeps());
     await expect(
       coordinator.resolveDynamicFacets(step, makeState(), 'task', pool),
-    ).rejects.toThrow('exceeding max_selected 2');
+    ).rejects.toThrow('must NOT have more than 2 items');
   });
 
   it('restores from snapshot without invoking selector when identity is in resumedDynamicFacetSteps', async () => {

@@ -6,16 +6,23 @@ export interface SelectorResponseLabel {
   readonly label: string;
 }
 
-export function createSelectorOutputSchema(poolIds: readonly string[]): Record<string, unknown> {
+export function createSelectorOutputSchema(
+  poolIds: readonly string[],
+  maxSelected?: number,
+): Record<string, unknown> {
+  const selectedIds: Record<string, unknown> = {
+    type: 'array',
+    uniqueItems: true,
+    items: { type: 'string', enum: poolIds },
+  };
+  if (maxSelected !== undefined) {
+    selectedIds.maxItems = maxSelected;
+  }
   return {
     type: 'object',
     additionalProperties: false,
     properties: {
-      selected_ids: {
-        type: 'array',
-        uniqueItems: true,
-        items: { type: 'string', enum: poolIds },
-      },
+      selected_ids: selectedIds,
       rationale: { type: 'string' },
     },
     required: ['selected_ids', 'rationale'],

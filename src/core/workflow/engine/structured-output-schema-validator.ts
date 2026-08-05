@@ -24,7 +24,7 @@ const RAW_STRUCTURED_OUTPUT_KEYWORDS_BY_TYPE: Record<StrictSchemaType, readonly 
   boolean: [],
   integer: [],
   object: ['properties', 'required', 'additionalProperties'],
-  array: ['items'],
+  array: ['items', 'maxItems'],
   null: [],
 };
 

@@ -40,6 +40,16 @@ describe('CandidateSelector strict ID selection primitive (C-SHARED-SELECTOR, C-
         required: ['selected_ids', 'rationale'],
       });
     });
+
+    it('should include maxItems when maxSelected is specified (C-SELECTOR-OUTPUT: max_selected)', () => {
+      const schema = createSelectorOutputSchema(['a', 'b', 'c'], 2);
+      expect(schema.properties!.selected_ids).toMatchObject({
+        type: 'array',
+        uniqueItems: true,
+        maxItems: 2,
+        items: { type: 'string', enum: ['a', 'b', 'c'] },
+      });
+    });
   });
 
   describe('validateSelectorResponse', () => {

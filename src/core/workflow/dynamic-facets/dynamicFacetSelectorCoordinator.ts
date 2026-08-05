@@ -89,7 +89,7 @@ export class DynamicFacetSelectorCoordinator {
     }
 
     const poolIds = pool.candidates.map((candidate) => candidate.id);
-    const outputSchema = createSelectorOutputSchema(poolIds);
+    const outputSchema = createSelectorOutputSchema(poolIds, step.dynamicFacets.maxSelected);
     const previous = selections.get(identity);
 
     const reportNames = this.deps.getReportNames(step, state);
