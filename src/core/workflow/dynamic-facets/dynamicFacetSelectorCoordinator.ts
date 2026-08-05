@@ -75,11 +75,12 @@ export class DynamicFacetSelectorCoordinator {
 
     if (resumed !== undefined) {
       signal?.throwIfAborted();
+      const result = this.buildResultFromSnapshot(pool, resumed, step);
       state.resumedDynamicFacetSteps.delete(identity);
       state.activeDynamicFacetSelectionIdentity = identity;
       this.logSelection(step, identity, resumed, 'resume');
       signal?.throwIfAborted();
-      return this.buildResultFromSnapshot(pool, resumed, step);
+      return result;
     }
 
     const selectorProvider = this.deps.engineOptions.selectorProvider;

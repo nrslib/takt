@@ -282,4 +282,31 @@ describe('DynamicFacetSelectorCoordinator', () => {
     ).rejects.toThrow();
     expect(mockedExecuteAgent).not.toHaveBeenCalled();
   });
+
+  it('keeps resumedDynamicFacetSteps entry when buildResultFromSnapshot fails so retry restores the same round (C-STATE-RUNTIME: resume failure)', async () => {
+    const pool = makePool([{ id: 'a', description: 'A' }]);
+    const step = makeStep();
+    const identity = buildIdentity('fix');
+    const snapshot: DynamicFacetSelectionSnapshot = {
+      identity,
+      step_name: 'fix',
+      round: 1,
+      selected_ids: ['unknown-id'],
+      selected_policy_refs: [],
+      selected_knowledge_refs: [],
+      rationale: 'prev',
+    };
+    const store = new DynamicFacetSelectionStore(new Map([[identity, snapshot]]));
+    const state = makeState(snapshot, identity);
+    const deps = buildDeps({ selectionStore: store });
+
+    const coordinator = new DynamicFacetSelectorCoordinator(deps);
+    // buildResultFromSnapshot fails because 'unknown-id' is not in the pool.
+    await expect(
+      coordinator.resolveDynamicFacets(step, state, 'task', pool),
+    ).rejects.toThrow(/not in pool/);
+    // The resume marker must remain so a retry can restore the same round.
+    expect(state.resumedDynamicFacetSteps.has(identity)).toBe(true);
+    expect(state.activeDynamicFacetSelectionIdentity).toBeUndefined();
+  });
 });

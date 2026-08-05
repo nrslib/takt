@@ -18,7 +18,7 @@ import type { WorkflowConfig, AgentResponse, WorkflowState, DynamicFacetSelectio
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 import { buildWorkflowResumePointEntry } from '../core/workflow/workflow-reference.js';
 import { buildDynamicParallelSelectionIdentity } from '../core/workflow/dynamic-parallel/identity.js';
-import { cloneWorkflowResumePoint } from '../core/workflow/resume-point-codec.js';
+import { cloneWorkflowResumePoint, parseWorkflowResumePoint } from '../core/workflow/resume-point-codec.js';
 import { cloneDynamicParallelSelectionSnapshot } from '../core/workflow/dynamic-parallel/snapshot.js';
 
 function makeConfig(overrides: Partial<WorkflowConfig> = {}): WorkflowConfig {
@@ -952,6 +952,38 @@ describe('standalone functions', () => {
     it('should return undefined when both are empty', () => {
       const state = makeState();
       expect(getPreviousOutput(state)).toBeUndefined();
+    });
+  });
+
+  describe('parseWorkflowResumePoint legacy key normalization', () => {
+    it('should normalize legacy effective_*_refs to selected_*_refs', () => {
+      const identity = 'test-id';
+      const raw = {
+        version: 2,
+        stack: [{ workflow: 'wf', workflow_ref: 'wf', step: 'fix', kind: 'agent' as const, occurrence: 1 }],
+        iteration: 1,
+        elapsed_ms: 0,
+        dynamic_facet_selections: {
+          [identity]: {
+            identity,
+            step_name: 'fix',
+            round: 1,
+            selected_ids: ['backend'],
+            effective_policy_refs: ['p'],
+            effective_knowledge_refs: ['k'],
+            rationale: 'r',
+          },
+        },
+        workflow_call_invocations: {},
+        workflow_step_participations: {},
+      };
+
+      const parsed = parseWorkflowResumePoint(raw);
+      const snapshot = parsed.dynamic_facet_selections![identity]!;
+      expect(snapshot.selected_policy_refs).toEqual(['p']);
+      expect(snapshot.selected_knowledge_refs).toEqual(['k']);
+      expect(snapshot).not.toHaveProperty('effective_policy_refs');
+      expect(snapshot).not.toHaveProperty('effective_knowledge_refs');
     });
   });
 });

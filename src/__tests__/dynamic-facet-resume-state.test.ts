@@ -23,7 +23,12 @@ function snapshot(identity: string, stepName: string, selectedIds: string[], rou
 function makeConfig(): WorkflowConfig {
   return {
     name: 'wf',
-    steps: [{ name: 'fix', personaDisplayName: 'fix', instruction: 'fix' } as unknown as WorkflowConfig['steps'][number]],
+    steps: [{
+      name: 'fix',
+      personaDisplayName: 'fix',
+      instruction: 'fix',
+      dynamicFacets: { pool: 'fix', maxSelected: 3 },
+    } as unknown as WorkflowConfig['steps'][number]],
     initialStep: 'fix',
     maxSteps: 5,
   } as unknown as WorkflowConfig;
@@ -77,5 +82,15 @@ describe('DynamicFacetResumeState (C-ROUND-RESUME, C-ROUND-REPLACE)', () => {
     expect(restoredSnapshot).toBeDefined();
     restoredSnapshot!.selected_ids.push('backend');
     expect(selections[identity]!.selected_ids).toEqual(['transaction']);
+  });
+
+  it('should reject a snapshot when the step no longer has dynamic_facets (C-ROUND-RESUME: 設定削除後)', () => {
+    const identity = makeIdentity('wf', 'fix');
+    const selections: Record<string, DynamicFacetSelectionSnapshot> = {
+      [identity]: snapshot(identity, 'fix', ['transaction'], 1),
+    };
+    const config = makeConfig();
+    (config.steps[0] as unknown as { dynamicFacets: undefined }).dynamicFacets = undefined;
+    expect(() => restoreAndValidateDynamicFacetSelections(config, makeOptions(selections))).toThrow();
   });
 });

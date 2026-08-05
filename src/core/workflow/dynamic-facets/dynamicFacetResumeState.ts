@@ -74,7 +74,7 @@ function resolveDynamicFacetStep(
   }
   if (parsed.workflow !== getWorkflowReference(workflow)) return undefined;
   const step = workflow.steps.find((candidate) => candidate.name === parsed.step);
-  if (step === undefined || !isNormalAgentWorkflowStep(step)) return undefined;
+  if (step === undefined || !isNormalAgentWorkflowStep(step) || step.dynamicFacets === undefined) return undefined;
   return step;
 }
 
