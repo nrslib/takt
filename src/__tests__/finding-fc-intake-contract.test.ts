@@ -39,7 +39,8 @@ import {
 } from '../core/workflow/findings/review-publication.js';
 import { migrateLegacyIntakeProvisionalFindings } from '../core/workflow/findings/legacy-intake-reclassification.js';
 import { captureFindingLifecycleHead } from '../core/workflow/findings/lifecycle-mutation.js';
-import { computeRawPayloadDigest } from '../core/models/finding-contract-identity.js';
+import { applyFindingLifecycleCommands } from '../core/workflow/findings/lifecycle-transaction.js';
+import { computeRawPayloadDigest, findingContentAddress } from '../core/models/finding-contract-identity.js';
 import { createEmptyFindingContractRegistries } from '../core/models/finding-contract-seed.js';
 import { collectFindingLedgerProjectionInvariantViolations } from '../core/models/finding-ledger-invariants.js';
 import { assertFindingLifecycleAuthorityInvariant } from '../core/models/finding-lifecycle-invariants.js';
@@ -134,12 +135,11 @@ function evidenceLessLegacyHolding(
 } {
   const raw = incompleteRaw(`raw-legacy-${kind}`);
   const snapshot = rawCanonicalSnapshotFixture(raw, observedAt);
-  const stableKeySeed = findingId === 'F-0001' ? 'a' : 'e';
-  const lineageKeySeed = findingId === 'F-0001' ? 'b' : 'f';
   const provisional = {
     kind,
-    stableKey: stableKeySeed.repeat(64),
-    lineageKey: lineageKeySeed.repeat(64),
+    // findingId から決定的に導出し、3件目以降の fixture 追加でも衝突しない。
+    stableKey: findingContentAddress('fixture-legacy-stable-key', { findingId, kind }),
+    lineageKey: findingContentAddress('fixture-legacy-lineage-key', { findingId, kind }),
     sourceRawFindingIds: [raw.rawFindingId],
     reason: 'evidence-less pre-admission holding',
     firstObservedAt: observedAt,
@@ -1553,7 +1553,7 @@ describe('FC intake contract', () => {
     expect(() => assertFindingLifecycleAuthorityInvariant(result.ledger)).not.toThrow();
   });
 
-  it('replays the checked-in ledger fixture through current schema and migration guards', () => {
+  it('should replay the checked-in ledger fixture when current schema and migration guards process it', () => {
     const archivePath = join(import.meta.dirname, 'fixtures', 'finding-ledger-run-1-archive.json');
     // parse は checked-in bytes に対する schema replay。migration は lifecycle event を
     // 発行するため、正準な lifecycle 履歴（run-3 実台帳相当）の上で実行する。
@@ -1591,7 +1591,7 @@ describe('FC intake contract', () => {
     expect(() => normalizeFindingLedger(migration.ledger, migration.ledger.workflowName)).not.toThrow();
   });
 
-  it('persists the inherited-ledger migration through the real store on the first manager round path', async () => {
+  it('should persist the inherited-ledger migration when the first manager round path runs on the real store', async () => {
     // run-3 実走の再現: 継承台帳（移行適格 provisional 持ち）を実 store に seed し、
     // manager round 先頭と同じ「updateLedger 内で migration を実行して CAS 保存」を行う。
     // 旧実装では store 書き込みゲートがこの CAS を拒否して run 全体が abort した。
@@ -1642,7 +1642,7 @@ describe('FC intake contract', () => {
     }
   });
 
-  it('reclassifies multiple eligible legacy holdings with one lifecycle event per finding', () => {
+  it('should reclassify multiple eligible legacy holdings when each finding records one lifecycle event', () => {
     // 複数移行（run-3 実台帳は10件）でも lifecycle event / revision / anomaly が
     // finding ごとに1対1で整合し、store 書き込みゲートを通ることを固定する。
     const first = evidenceLessLegacyHolding('raw-adjudication-unresolved');
@@ -1671,6 +1671,76 @@ describe('FC intake contract', () => {
       (finding) => finding.reviewerAnomalyReclassification !== undefined,
     )).toBe(true);
     expect(() => normalizeFindingLedger(result.ledger, result.ledger.workflowName)).not.toThrow();
+  });
+
+  it('should reject a reclassify_provisional command when it mutates status or provisional state', () => {
+    // findingDelta 契約の固定: reclassify_provisional は marker と revision 以外の
+    // projection 変更（status 遷移・provisional 除去 = product claim の閉鎖）を
+    // 一切許可しない。「移行は false/rejected 判定ではない」を invariant 級で守る。
+    const { ledger, findingId } = evidenceLessLegacyHolding('raw-adjudication-unresolved');
+    const finding = ledger.findings.find(({ id }) => id === findingId)!;
+    const marker = {
+      kind: 'reclassified_to_reviewer_anomaly' as const,
+      migrationId: '9'.repeat(64),
+      authorityId: 'system/intake_contract_reclassification_v1',
+      reason: 'product_claim_not_adjudicated' as const,
+      anomalyId: 'RA-TEST',
+      oldHead: captureFindingLifecycleHead(ledger, 'finding', findingId)!,
+      rawFindingIds: finding.provisional!.sourceRawFindingIds,
+      rawCanonicalSnapshotIds: [ledger.rawCanonicalSnapshots[0]!.rawCanonicalSnapshotId],
+      terminalEpisodeIds: [],
+      terminalAttemptIds: [],
+      scopeBindingIds: [],
+      bindingAuthorizationIds: [],
+      bindingDecisionIds: ['d'.repeat(64)],
+      recordedAt: observedAt,
+    };
+    const commandFor = (mutation: Record<string, unknown>) => ({
+      operation: 'reclassify_provisional' as const,
+      changes: {
+        findings: [{
+          ...finding,
+          reviewerAnomalyReclassification: marker,
+          ...mutation,
+        } as never],
+        conflicts: [],
+      },
+      authority: {
+        kind: 'system' as const,
+        action: 'intake_contract_reclassification' as const,
+        migrationId: '9'.repeat(64),
+        anomalyId: 'RA-TEST',
+      },
+      evidenceSourcesByTarget: new Map<string, never>(),
+    });
+    // status 遷移（resolved 化）は拒否される。
+    expect(() => applyFindingLifecycleCommands({
+      ledger,
+      commands: [commandFor({
+        status: 'resolved',
+        lifecycle: 'resolved',
+        resolvedAt: observedAt.timestamp,
+        resolvedEvidence: 'forged resolution',
+      })],
+      occurredAt: { ...observedAt, timestamp: '2026-08-05T00:08:00.000Z' },
+    })).toThrow(/changed forbidden projection fields/);
+    // provisional の除去（product 化 / 閉鎖）も拒否される。
+    expect(() => applyFindingLifecycleCommands({
+      ledger,
+      commands: [commandFor({
+        provisional: undefined,
+        severity: 'high',
+        title: 'forged product claim',
+        description: 'forged product claim body',
+      })],
+      occurredAt: { ...observedAt, timestamp: '2026-08-05T00:09:00.000Z' },
+    })).toThrow(/changed forbidden projection fields/);
+    // 対照: marker と revision だけの変更は同じ authority で受理される。
+    expect(() => applyFindingLifecycleCommands({
+      ledger,
+      commands: [commandFor({})],
+      occurredAt: { ...observedAt, timestamp: '2026-08-05T00:10:00.000Z' },
+    })).not.toThrow();
   });
 });
 

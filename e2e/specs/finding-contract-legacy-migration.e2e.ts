@@ -180,7 +180,7 @@ describe('E2E: Finding Contract legacy provisional migration (mock)', () => {
     try { isolatedEnv.cleanup(); } catch { /* best-effort */ }
   });
 
-  it('migrates the inherited legacy provisional in the first manager round and completes via promotion', async () => {
+  it('should migrate the inherited legacy provisional and complete via promotion when the first manager round runs on the inherited ledger', async () => {
     const bootstrap = runTakt({
       args: ['--provider', 'mock', '--task', 'Handle the inherited legacy holding.', '--workflow', workflowPath],
       cwd: repo.path,
@@ -204,10 +204,12 @@ describe('E2E: Finding Contract legacy provisional migration (mock)', () => {
       timeout: 120_000,
     });
 
-    const resumedRunSlug = readdirSync(join(repo.path, '.takt', 'runs'))
+    expect(resumed.exitCode).toBe(0);
+    const resumedRunSlug = readdirSync(join(repo.path, '.takt', 'runs'), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
       .filter((runSlug) => runSlug !== sourceRunSlug)[0];
     expect(resumedRunSlug).toBeDefined();
-    expect(resumed.exitCode).toBe(0);
     expect(resumed.stdout).toContain('Provider: mock');
     expect(resumed.stdout).not.toContain('Provider: claude');
     expect(resumed.stdout).toContain('Workflow completed');
