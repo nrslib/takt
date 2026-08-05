@@ -103,4 +103,14 @@ describe('DynamicFacetResumeState (C-ROUND-RESUME, C-ROUND-REPLACE)', () => {
     (config.steps[0] as unknown as { dynamicFacets: undefined }).dynamicFacets = undefined;
     expect(() => restoreAndValidateDynamicFacetSelections(config, makeOptions(selections))).toThrow();
   });
+
+  it('should reject a snapshot whose selected_ids exceeds maxSelected after lowering the limit (C-ROUND-RESUME: max_selected 変更後)', () => {
+    const identity = makeIdentity('wf', 'fix');
+    const selections: Record<string, DynamicFacetSelectionSnapshot> = {
+      [identity]: snapshot(identity, 'fix', ['transaction', 'backend'], 1),
+    };
+    const config = makeConfig();
+    (config.steps[0] as unknown as { dynamicFacets: { pool: string; maxSelected: number } }).dynamicFacets.maxSelected = 1;
+    expect(() => restoreAndValidateDynamicFacetSelections(config, makeOptions(selections))).toThrow(/max_selected/);
+  });
 });
