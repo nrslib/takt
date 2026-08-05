@@ -28,9 +28,7 @@ export function readOnlyRunFindingLedger(repoPath: string): FindingLedger {
   if (source === undefined) {
     throw new Error(`Root Finding Contract authority is missing for run "${runSlug}"`);
   }
-  const parsed = parseInheritedSourceAuthority(source);
-  if (parsed.kind !== 'current') {
-    throw new Error(`Root Finding Contract authority is legacy for run "${runSlug}"`);
-  }
-  return parsed.ledger;
+  // FC 台帳に後方互換は無い: parseInheritedSourceAuthority は現行契約の
+  // FindingLedger をそのまま返し、現行 schema 不一致は parse 時点で throw する。
+  return parseInheritedSourceAuthority(source);
 }
