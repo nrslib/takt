@@ -405,7 +405,6 @@ describe('structured output schema validator', () => {
     ['number', 'maximum', 10],
     ['number', 'exclusiveMaximum', 10],
     ['array', 'minItems', 1],
-    ['array', 'maxItems', 3],
     ['string', 'pattern', '^[a-z]+$'],
   ])('rejects %s schemas using the Claude raw unsupported %s constraint', (type, keyword, value) => {
     const schema = type === 'array'
@@ -415,6 +414,11 @@ describe('structured output schema validator', () => {
       createStrictRoot(schema),
       `$.value uses unsupported keyword ${keyword}`,
     );
+  });
+
+  it('accepts array schemas with maxItems constraint', () => {
+    const schema = createStrictRoot({ type: 'array', items: { type: 'string' }, maxItems: 3 });
+    expect(() => assertStrictStructuredOutputSchema(schema)).not.toThrow();
   });
 
   it('rejects an unsupported raw string format', () => {
