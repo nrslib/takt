@@ -20,6 +20,15 @@ import {
   linkPromotedReviewerAnomalies,
   type ReviewerAnomalySpec,
 } from '../core/workflow/findings/reviewer-anomalies.js';
+import { applyCommitLedgerStates } from '../core/workflow/findings/manager-commit-finalization.js';
+import {
+  createFindingReviewPublication,
+  STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+} from '../core/workflow/findings/review-publication.js';
+import { buildFindingsRuleContext } from '../core/workflow/findings/context.js';
+import {
+  reviewerAnomalySettlementEligibilityViolation,
+} from '../core/models/finding-reviewer-anomaly-settlement-policy.js';
 import {
   DEFAULT_REVIEW_INTEGRITY_BUDGET,
   attachReviewIntegrityState,
@@ -247,7 +256,7 @@ describe('applyReviewerAnomalySpecsToLedger / linkPromotedReviewerAnomalies (rev
   }
 
   it('新規 stableKey は id 採番済みの新規レコードとして追記される（occurrences=1）', () => {
-    const ledger = applyReviewerAnomalySpecsToLedger(makeLedger(), [makeSpec()], context);
+    const ledger = applyReviewerAnomalySpecsToLedger(makeLedger(), [makeSpec()], context, new Set());
     expect(ledger.reviewerAnomalies).toHaveLength(1);
     const anomaly = ledger.reviewerAnomalies![0]!;
     expect(anomaly.id).toMatch(/^RA-[0-9A-F]{12}$/);
@@ -256,12 +265,12 @@ describe('applyReviewerAnomalySpecsToLedger / linkPromotedReviewerAnomalies (rev
   });
 
   it('同じ stableKey が再来すると新規レコードを増やさず既存を更新する（occurrences 加算、sourceRawFindingIds/reviewers は重複排除の和集合）', () => {
-    const first = applyReviewerAnomalySpecsToLedger(makeLedger(), [makeSpec()], context);
+    const first = applyReviewerAnomalySpecsToLedger(makeLedger(), [makeSpec()], context, new Set());
     const second = applyReviewerAnomalySpecsToLedger(first, [makeSpec({
       sourceRawFindingIds: ['raw-2'],
       reviewers: ['another-reviewer'],
       mismatchReason: 'the location changed but still does not exist',
-    })], { ...context, runId: 'run-2', timestamp: '2026-07-12T01:00:00.000Z' });
+    })], { ...context, runId: 'run-2', timestamp: '2026-07-12T01:00:00.000Z' }, new Set());
 
     expect(second.reviewerAnomalies).toHaveLength(1);
     const anomaly = second.reviewerAnomalies![0]!;
@@ -277,7 +286,7 @@ describe('applyReviewerAnomalySpecsToLedger / linkPromotedReviewerAnomalies (rev
   });
 
   it('settle済みstableKeyの新観測はsettlementを継承せず別episodeへ保存する', () => {
-    const first = applyReviewerAnomalySpecsToLedger(makeLedger(), [makeSpec()], context);
+    const first = applyReviewerAnomalySpecsToLedger(makeLedger(), [makeSpec()], context, new Set());
     const settled = {
       ...first,
       reviewerAnomalies: [{
@@ -293,8 +302,8 @@ describe('applyReviewerAnomalySpecsToLedger / linkPromotedReviewerAnomalies (rev
     const observed = applyReviewerAnomalySpecsToLedger(settled, [nextSpec], {
       ...context,
       runId: 'run-2',
-    });
-    const replayed = applyReviewerAnomalySpecsToLedger(observed, [nextSpec], context);
+    }, new Set());
+    const replayed = applyReviewerAnomalySpecsToLedger(observed, [nextSpec], context, new Set());
 
     expect(observed.reviewerAnomalies).toHaveLength(2);
     expect(observed.reviewerAnomalies?.[0]).toEqual(settled.reviewerAnomalies[0]);
@@ -311,22 +320,22 @@ describe('applyReviewerAnomalySpecsToLedger / linkPromotedReviewerAnomalies (rev
   });
 
   it('crash/replay 冪等（codex 検証ブロッカー#3）: 同一 stableKey・同一 sourceRawFindingIds の再適用は occurrences を二重計上せず完全な no-op になる', () => {
-    const first = applyReviewerAnomalySpecsToLedger(makeLedger(), [makeSpec()], context);
+    const first = applyReviewerAnomalySpecsToLedger(makeLedger(), [makeSpec()], context, new Set());
     expect(first.reviewerAnomalies![0]!.occurrences).toBe(1);
     // 同一ラウンドの再コミット（crash/replay）を模す: 同じ raw finding id・
     // 同じ内容を、時刻だけ変えて再適用する。
     const replayed = applyReviewerAnomalySpecsToLedger(first, [makeSpec()], {
       ...context, timestamp: '2026-07-12T02:00:00.000Z',
-    });
+    }, new Set());
     const anomaly = replayed.reviewerAnomalies![0]!;
     // occurrences は据え置き、lastObserved も動かない（no-op）。
     expect(anomaly.occurrences).toBe(1);
     expect(anomaly.lastObserved).toEqual(first.reviewerAnomalies![0]!.lastObserved);
     // 何度再適用しても単調に据え置き。
-    const replayedAgain = applyReviewerAnomalySpecsToLedger(replayed, [makeSpec()], context);
+    const replayedAgain = applyReviewerAnomalySpecsToLedger(replayed, [makeSpec()], context, new Set());
     expect(replayedAgain.reviewerAnomalies![0]!.occurrences).toBe(1);
     // ただし新しい raw finding id を持ち込む別ラウンドはちゃんと +1 される。
-    const nextRound = applyReviewerAnomalySpecsToLedger(replayedAgain, [makeSpec({ sourceRawFindingIds: ['raw-next-round'] })], context);
+    const nextRound = applyReviewerAnomalySpecsToLedger(replayedAgain, [makeSpec({ sourceRawFindingIds: ['raw-next-round'] })], context, new Set());
     expect(nextRound.reviewerAnomalies![0]!.occurrences).toBe(2);
   });
 
@@ -335,15 +344,15 @@ describe('applyReviewerAnomalySpecsToLedger / linkPromotedReviewerAnomalies (rev
       sourceRawFindingIds: [],
       sourceIntakeIds: ['intake-1'],
     });
-    const first = applyReviewerAnomalySpecsToLedger(makeLedger(), [spec], context);
+    const first = applyReviewerAnomalySpecsToLedger(makeLedger(), [spec], context, new Set());
     const replay = applyReviewerAnomalySpecsToLedger(first, [spec], {
       ...context,
       timestamp: '2026-07-12T02:00:00.000Z',
-    });
+    }, new Set());
     const next = applyReviewerAnomalySpecsToLedger(replay, [{
       ...spec,
       sourceIntakeIds: ['intake-2'],
-    }], context);
+    }], context, new Set());
 
     expect(replay.reviewerAnomalies?.[0]).toMatchObject({
       occurrences: 1,
@@ -361,25 +370,25 @@ describe('applyReviewerAnomalySpecsToLedger / linkPromotedReviewerAnomalies (rev
     const ledger = applyReviewerAnomalySpecsToLedger(makeLedger(), [
       makeSpec({ stableKey: 'sk-a', lineageKey: 'lk-a' }),
       makeSpec({ stableKey: 'sk-b', lineageKey: 'lk-b' }),
-    ], context);
+    ], context, new Set());
     expect(ledger.reviewerAnomalies).toHaveLength(2);
   });
 
   it('ledger.findings には一切触れない（別配列への追記適用のみ）', () => {
     const preExisting = makeFinding({ revision: 1 });
     const before = makeLedger({ findings: [preExisting] });
-    const after = applyReviewerAnomalySpecsToLedger(before, [makeSpec()], context);
+    const after = applyReviewerAnomalySpecsToLedger(before, [makeSpec()], context, new Set());
     expect(after.findings).toEqual([preExisting]);
     expect(after.findings).toBe(before.findings); // 参照も変わらない = 触っていない
   });
 
   it('specs が空なら ledger をそのまま返す（no-op）', () => {
     const ledger = makeLedger();
-    expect(applyReviewerAnomalySpecsToLedger(ledger, [], context)).toBe(ledger);
+    expect(applyReviewerAnomalySpecsToLedger(ledger, [], context, new Set())).toBe(ledger);
   });
 
   it('linkPromotedReviewerAnomalies: 同じ lineageKey を持つ product finding が後で見つかると promotedFindingId を張る（レコードは削除しない）', () => {
-    const withAnomaly = applyReviewerAnomalySpecsToLedger(makeLedger(), [makeSpec({ lineageKey: 'lk-shared' })], context);
+    const withAnomaly = applyReviewerAnomalySpecsToLedger(makeLedger(), [makeSpec({ lineageKey: 'lk-shared' })], context, new Set());
     const finding = makeFinding({ revision: 1, id: 'F-0042', rawFindingIds: ['raw-verified'] });
     const reconciled: FindingLedger = { ...withAnomaly, findings: [finding] };
 
@@ -396,7 +405,7 @@ describe('applyReviewerAnomalySpecsToLedger / linkPromotedReviewerAnomalies (rev
   });
 
   it('linkPromotedReviewerAnomalies: 一致する rawFindingId が finding 側に見つからなければ何も変えない', () => {
-    const withAnomaly = applyReviewerAnomalySpecsToLedger(makeLedger(), [makeSpec({ lineageKey: 'lk-shared' })], context);
+    const withAnomaly = applyReviewerAnomalySpecsToLedger(makeLedger(), [makeSpec({ lineageKey: 'lk-shared' })], context, new Set());
     const linked = linkPromotedReviewerAnomalies(withAnomaly, [
       { lineageKey: 'lk-shared', rawFindingId: 'raw-not-in-any-finding' },
     ]);
@@ -404,7 +413,7 @@ describe('applyReviewerAnomalySpecsToLedger / linkPromotedReviewerAnomalies (rev
   });
 
   it('linkPromotedReviewerAnomalies: 既に昇格済みの anomaly は再上書きしない（最初に昇格した finding id を保持する）', () => {
-    const withAnomaly = applyReviewerAnomalySpecsToLedger(makeLedger(), [makeSpec({ lineageKey: 'lk-shared' })], context);
+    const withAnomaly = applyReviewerAnomalySpecsToLedger(makeLedger(), [makeSpec({ lineageKey: 'lk-shared' })], context, new Set());
     const firstFinding = makeFinding({ revision: 1, id: 'F-0001', rawFindingIds: ['raw-first'] });
     const alreadyPromoted = linkPromotedReviewerAnomalies(
       { ...withAnomaly, findings: [firstFinding] },
@@ -427,6 +436,7 @@ describe('applyReviewerAnomalySpecsToLedger / linkPromotedReviewerAnomalies (rev
       makeLedger(),
       [makeSpec({ lineageKey: 'lk-settled' })],
       context,
+      new Set(),
     );
     const settledAnomaly = {
       ...withAnomaly.reviewerAnomalies![0]!,
@@ -460,7 +470,7 @@ describe('applyReviewerAnomalySpecsToLedger / linkPromotedReviewerAnomalies (rev
     const ledger = makeLedger({ findings: [makeFinding({ revision: 1 })] });
     expect(linkPromotedReviewerAnomalies(ledger, [{ lineageKey: 'lk-x', rawFindingId: 'raw-existing' }])).toBe(ledger);
 
-    const withAnomaly = applyReviewerAnomalySpecsToLedger(makeLedger(), [makeSpec()], context);
+    const withAnomaly = applyReviewerAnomalySpecsToLedger(makeLedger(), [makeSpec()], context, new Set());
     expect(linkPromotedReviewerAnomalies(withAnomaly, [])).toBe(withAnomaly);
   });
 });
@@ -532,5 +542,235 @@ describe('review-integrity budget (review-integrity.ts, codex 検証ブロッカ
     const after = attachReviewIntegrityState(makeLedger(), next, limits, 'marker-1', '2026-07-12T00:00:00.000Z');
     expect(reviewIntegrityRoundsCompleted(after)).toBe(0);
     expect(after.reviewIntegrity).toBeUndefined();
+  });
+});
+
+describe('後続レビュー登録による reviewer anomaly の決着ライフサイクル (implicit withdrawal)', () => {
+  const observation = {
+    runId: 'run-2',
+    stepName: 'reviewers',
+    timestamp: '2026-08-06T00:00:00.000Z',
+  };
+
+  function publicationFor(reviewer: string, stepIteration = 2) {
+    return createFindingReviewPublication({
+      identity: {
+        scopeIdentity: 'scope-withdrawal',
+        callNamespace: '',
+        parentStepName: 'reviewers',
+        stepIteration,
+        reviewerStepName: reviewer,
+        reportName: `${reviewer}.md`,
+      },
+      protocol: STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+      reportContent: `# ${reviewer}\n`,
+      rawFindings: [],
+    });
+  }
+
+  function anomalySpec(overrides: Partial<ReviewerAnomalySpec> = {}): ReviewerAnomalySpec {
+    return {
+      kind: 'quote-mismatch',
+      stableKey: 'sk-withdrawal-1',
+      lineageKey: 'lk-withdrawal-1',
+      sourceRawFindingIds: [],
+      sourceIntakeIds: ['intake-1'],
+      reviewers: ['arch-review'],
+      title: 'Unverifiable reviewer claim',
+      mismatchReason: 'the quoted excerpt does not exist',
+      ...overrides,
+    };
+  }
+
+  function seededLedger(overrides: Partial<ReviewerAnomalySpec> = {}): FindingLedger {
+    return applyReviewerAnomalySpecsToLedger(makeLedger(), [anomalySpec(overrides)], {
+      workflowName: 'peer-review',
+      stepName: 'reviewers',
+      runId: 'run-1',
+      timestamp: '2026-08-05T00:00:00.000Z',
+    }, new Set());
+  }
+
+  function commit(input: {
+    ledger: FindingLedger;
+    reviewers: string[];
+    baseAnomalySpecs?: ReviewerAnomalySpec[];
+    verifiedEvidenceCandidates?: Array<{ lineageKey: string; rawFindingId: string }>;
+  }): FindingLedger {
+    return applyCommitLedgerStates({
+      runInput: {
+        workflowName: 'peer-review',
+        parentStep: { name: 'reviewers' },
+        runId: observation.runId,
+        timestamp: observation.timestamp,
+        subResults: input.reviewers.map((reviewer) => ({ publication: publicationFor(reviewer) })),
+      } as never,
+      freshLedger: input.ledger,
+      settledLedger: input.ledger,
+      baseAnomalySpecs: input.baseAnomalySpecs ?? [],
+      pendingRejectedObservations: [],
+      verifiedEvidenceCandidates: input.verifiedEvidenceCandidates ?? [],
+    }).ledger;
+  }
+
+  it('同じレビュアー枠の次の完全なレビューが登録されると、言い直しの echo が無い anomaly は取り下げとして決着する', () => {
+    const seeded = seededLedger();
+    const committed = commit({ ledger: seeded, reviewers: ['arch-review'] });
+
+    // レコードは消えない（観測消去の禁止）。settlement が足されるだけ。
+    expect(committed.reviewerAnomalies).toHaveLength(1);
+    const anomaly = committed.reviewerAnomalies![0]!;
+    expect(anomaly.id).toBe(seeded.reviewerAnomalies![0]!.id);
+    expect(anomaly.occurrences).toBe(1);
+    expect(anomaly.promotedFindingId).toBeUndefined();
+    expect(anomaly.settlement).toEqual({
+      kind: 'withdrawn_by_subsequent_review',
+      reviewer: 'arch-review',
+      supersedingPublicationId: publicationFor('arch-review').publicationId,
+      decidedAt: observation,
+    });
+    expect(isOutstandingReviewerAnomaly(anomaly)).toBe(false);
+  });
+
+  it('決着した anomaly は when() のカウンタから外れ、ゲートを塞がなくなる', () => {
+    const seeded = seededLedger();
+    expect(buildFindingsRuleContext(seeded, '/cwd', new Map()).reviewerAnomalies.count).toBe(1);
+
+    const committed = commit({ ledger: seeded, reviewers: ['arch-review'] });
+    expect(buildFindingsRuleContext(committed, '/cwd', new Map()).reviewerAnomalies.count).toBe(0);
+  });
+
+  it('レビューを登録していないレビュアー枠の anomaly は決着せず生存する', () => {
+    const committed = commit({ ledger: seededLedger(), reviewers: ['security-review'] });
+
+    const anomaly = committed.reviewerAnomalies![0]!;
+    expect(anomaly.settlement).toBeUndefined();
+    expect(isOutstandingReviewerAnomaly(anomaly)).toBe(true);
+  });
+
+  it('複数の観測者を持つ anomaly は全員の後続レビューが登録されるまで決着しない', () => {
+    const seeded = applyReviewerAnomalySpecsToLedger(
+      seededLedger(),
+      [anomalySpec({ sourceIntakeIds: ['intake-2'], reviewers: ['security-review'] })],
+      {
+        workflowName: 'peer-review',
+        stepName: 'reviewers',
+        runId: 'run-1',
+        timestamp: '2026-08-05T00:01:00.000Z',
+      },
+      new Set(),
+    );
+    expect(seeded.reviewerAnomalies![0]!.reviewers.sort()).toEqual(['arch-review', 'security-review']);
+
+    // 片方だけが再レビューした状態では取り下げない（ゲートを緩めない安全側）。
+    const partial = commit({ ledger: seeded, reviewers: ['arch-review'] });
+    expect(partial.reviewerAnomalies![0]!.settlement).toBeUndefined();
+
+    // 全観測者の後続レビューが揃って初めて決着し、記録する reviewer は binary 順の先頭。
+    const complete = commit({ ledger: seeded, reviewers: ['arch-review', 'security-review'] });
+    expect(complete.reviewerAnomalies![0]!.settlement).toMatchObject({
+      kind: 'withdrawn_by_subsequent_review',
+      reviewer: 'arch-review',
+    });
+  });
+
+  it('同ラウンドの再観測は決着する episode へ混ぜず、別 episode として着地してゲートを塞ぎ続ける', () => {
+    const seeded = seededLedger();
+    const committed = commit({
+      ledger: seeded,
+      reviewers: ['arch-review'],
+      baseAnomalySpecs: [anomalySpec({ sourceIntakeIds: ['intake-2'] })],
+    });
+
+    expect(committed.reviewerAnomalies).toHaveLength(2);
+    const [previous, current] = committed.reviewerAnomalies!;
+    expect(previous!.settlement?.kind).toBe('withdrawn_by_subsequent_review');
+    expect(previous!.occurrences).toBe(1);
+    expect(current!.id).not.toBe(previous!.id);
+    expect(current!.stableKey).toBe(previous!.stableKey);
+    expect(current!.sourceIntakeIds).toEqual(['intake-2']);
+    expect(isOutstandingReviewerAnomaly(current!)).toBe(true);
+    expect(buildFindingsRuleContext(committed, '/cwd', new Map()).reviewerAnomalies.count).toBe(1);
+  });
+
+  it('言い直しが product finding として着地した場合は取り下げではなく昇格として決着する', () => {
+    const seeded = seededLedger();
+    const withFinding: FindingLedger = {
+      ...seeded,
+      findings: [makeFinding({ revision: 1, rawFindingIds: ['raw-restated'] })],
+    };
+    const committed = commit({
+      ledger: withFinding,
+      reviewers: ['arch-review'],
+      verifiedEvidenceCandidates: [{
+        lineageKey: 'lk-withdrawal-1',
+        rawFindingId: 'raw-restated',
+      }],
+    });
+
+    const anomaly = committed.reviewerAnomalies![0]!;
+    expect(anomaly.promotedFindingId).toBe('F-0001');
+    expect(anomaly.settlement).toBeUndefined();
+  });
+
+  it('intake-contract anomaly は言い直し契約側の決着経路を保ち、後続レビュー登録では取り下げない', () => {
+    const seeded = seededLedger({
+      kind: 'intake-contract-incomplete',
+      intakeContract: {
+        observationClass: 'claim-bearing',
+        classificationAuthorityId: 'system/intake_observation_classification_v1',
+        reasonCodes: ['claim-evidence-missing'],
+        missingRequirements: ['claimEvidence'],
+        presentationOwnerReviewer: 'arch-review',
+        presentationLimit: 3,
+      },
+    });
+    const committed = commit({ ledger: seeded, reviewers: ['arch-review'] });
+
+    const anomaly = committed.reviewerAnomalies![0]!;
+    expect(anomaly.settlement).toBeUndefined();
+    expect(isOutstandingReviewerAnomaly(anomaly)).toBe(true);
+  });
+
+  it('決着の適格性判定は観測したレビュアーと言い直し契約の有無だけで決まる', () => {
+    const anomaly = seededLedger().reviewerAnomalies![0]!;
+    const settlement = {
+      kind: 'withdrawn_by_subsequent_review' as const,
+      reviewer: 'arch-review',
+      supersedingPublicationId: 'a'.repeat(64),
+      decidedAt: observation,
+    };
+    const projection = {
+      findings: [],
+      rawFindings: [],
+      evidenceRecords: [],
+      evidenceBindings: [],
+      lifecycleReservations: [],
+      lifecycleEvents: [],
+    };
+
+    expect(reviewerAnomalySettlementEligibilityViolation({
+      projection,
+      anomaly,
+      settlement,
+      sourceHead: { kind: 'projection' },
+      workflowTaskDigest: null,
+    })).toBeUndefined();
+
+    expect(reviewerAnomalySettlementEligibilityViolation({
+      projection,
+      anomaly,
+      settlement: { ...settlement, reviewer: 'security-review' },
+      sourceHead: { kind: 'projection' },
+      workflowTaskDigest: null,
+    })).toContain('observed the anomaly');
+
+    expect(reviewerAnomalySettlementEligibilityViolation({
+      projection,
+      anomaly: { ...anomaly, promotedFindingId: 'F-0001' },
+      settlement,
+      sourceHead: { kind: 'projection' },
+      workflowTaskDigest: null,
+    })).toContain('promoted');
   });
 });

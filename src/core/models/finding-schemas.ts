@@ -746,14 +746,24 @@ export const ReviewerAnomalyEntrySchema = z.object({
   lastObserved: FindingObservationSchema,
   occurrences: z.number().int().positive(),
   promotedFindingId: nonEmptyString.optional(),
-  settlement: z.object({
-    kind: z.enum([
-      'target_resolved_by_verified_evidence',
-      'target_dismissed_by_terminal_adjudication',
-    ]),
-    findingId: nonEmptyString,
-    lifecycleEventId: nonEmptyString,
-  }).strict().optional(),
+  settlement: z.discriminatedUnion('kind', [
+    z.object({
+      kind: z.literal('target_resolved_by_verified_evidence'),
+      findingId: nonEmptyString,
+      lifecycleEventId: nonEmptyString,
+    }).strict(),
+    z.object({
+      kind: z.literal('target_dismissed_by_terminal_adjudication'),
+      findingId: nonEmptyString,
+      lifecycleEventId: nonEmptyString,
+    }).strict(),
+    z.object({
+      kind: z.literal('withdrawn_by_subsequent_review'),
+      reviewer: nonEmptyString,
+      supersedingPublicationId: Sha256Schema,
+      decidedAt: FindingObservationSchema,
+    }).strict(),
+  ]).optional(),
 }).strict().superRefine((value, ctx) => {
   if (value.kind === 'intake-contract-incomplete' && value.intakeContract === undefined) {
     ctx.addIssue({ code: 'custom', path: ['intakeContract'], message: 'intake-contract-incomplete requires intakeContract' });

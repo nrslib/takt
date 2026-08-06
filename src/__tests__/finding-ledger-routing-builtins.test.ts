@@ -43,6 +43,7 @@ interface FindingCounts {
   roundBudgetExhausted?: boolean;
   anomalies?: number;
   anomalyBudgetExhausted?: boolean;
+  claimBearingTerminal?: number;
   conflicts?: number;
   unadjudicated?: number;
 }
@@ -97,6 +98,10 @@ function findings(counts: FindingCounts = {}): FindingsRuleContext {
     reviewerAnomalies: {
       count: counts.anomalies ?? 0,
       budgetExhausted: counts.anomalyBudgetExhausted ?? false,
+      requiresGuaranteedPresentationCount: 0,
+      restatementReadyCount: 0,
+      claimBearingTerminalCount: counts.claimBearingTerminal ?? 0,
+      protocolNoiseRejectedCount: 0,
     },
     conflicts: {
       count: counts.conflicts ?? 0,
@@ -252,6 +257,22 @@ describe('builtin Finding ledger routing', () => {
       0,
       'needs_fix',
     )).toBe('need_replan');
+    // 言い直し予算を使い切った claim-bearing anomaly は再レビューへ戻さず、
+    // エンジンの review-integrity ゲート（可視的失敗）へ送る。
+    for (const label of ['approved', 'needs_fix']) {
+      expect(transition(
+        step,
+        { anomalies: 1, claimBearingTerminal: 1 },
+        0,
+        label,
+      )).toBe('COMPLETE');
+      expect(transition(
+        step,
+        { open: 1, anomalies: 1, claimBearingTerminal: 1, anomalyBudgetExhausted: true },
+        0,
+        label,
+      )).toBe('COMPLETE');
+    }
   });
 
   it.each(['en', 'ja'] as const)(
@@ -279,6 +300,12 @@ describe('builtin Finding ledger routing', () => {
           label,
         )).toBe('need_replan');
         expect(transition(step, { open: 1, provisional: 1 }, 0, label)).toBe('need_replan');
+        expect(transition(
+          step,
+          { anomalies: 1, claimBearingTerminal: 1 },
+          0,
+          label,
+        )).toBe('COMPLETE');
       }
     },
   );

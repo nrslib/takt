@@ -284,7 +284,7 @@ describe('FC intake contract', () => {
       stepName: observedAt.stepName,
       runId: observedAt.runId,
       timestamp: observedAt.timestamp,
-    });
+    }, new Set());
     const anomaly = withAnomaly.reviewerAnomalies![0]!;
     const requestWithoutId = {
       anomalyId: anomaly.id,
@@ -398,7 +398,7 @@ describe('FC intake contract', () => {
         stepName: observedAt.stepName,
         runId: observedAt.runId,
         timestamp: observedAt.timestamp,
-      });
+      }, new Set());
       const anomalyOf = (source: ReturnType<typeof incompleteRaw>) => ledger.reviewerAnomalies!
         .find((entry) => entry.sourceRawFindingIds.includes(source.rawFindingId))!;
       return { ledger, anomalyOf };
@@ -625,6 +625,7 @@ describe('FC intake contract', () => {
         runId: observedAt.runId,
         timestamp: observedAt.timestamp,
       },
+      new Set(),
     );
     const anomaly = withAnomaly.reviewerAnomalies![0]!;
     const requestWithoutId = {
@@ -808,7 +809,7 @@ describe('FC intake contract', () => {
       stepName: observedAt.stepName,
       runId: observedAt.runId,
       timestamp: observedAt.timestamp,
-    });
+    }, new Set());
     const anomaly = withAnomaly.reviewerAnomalies![0]!;
     const requestWithoutId = {
       anomalyId: anomaly.id,
@@ -906,7 +907,7 @@ describe('FC intake contract', () => {
       stepName: observedAt.stepName,
       runId: observedAt.runId,
       timestamp: observedAt.timestamp,
-    });
+    }, new Set());
     const anomalyId = withAnomaly.reviewerAnomalies![0]!.id;
     const publications = [1, 2, 3].map((stepIteration) => {
       const requestWithoutId = {
@@ -1167,7 +1168,7 @@ describe('FC intake contract', () => {
       stepName: raw.stepName,
       runId: observedAt.runId,
       timestamp: observedAt.timestamp,
-    });
+    }, new Set());
     const summary = JSON.parse(renderFindingLedgerInstructionSummary(anomaly)) as {
       reviewerAnomalies?: Array<{
         id: string;
@@ -1211,7 +1212,7 @@ describe('FC intake contract', () => {
       stepName: observedAt.stepName,
       runId: observedAt.runId,
       timestamp: observedAt.timestamp,
-    });
+    }, new Set());
     expect(() => assertFindingReviewPresentationCapacity({
       ledger,
       presentationCounts: new Map(),

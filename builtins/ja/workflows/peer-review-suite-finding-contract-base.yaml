@@ -32,7 +32,7 @@ steps:
         - condition: when(findings.reviewerAnomalies.requiresGuaranteedPresentationCount > 0)
           return: needs_review
         - condition: when(findings.reviewerAnomalies.claimBearingTerminalCount > 0)
-          return: need_replan
+          return: needs_terminal_adjudication
         - condition: when(findings.reviewerAnomalies.restatementReadyCount > 0)
           return: needs_review
         - condition: when(findings.provisional.dismissEligible.count > 0 && findings.conflicts.count == 0)

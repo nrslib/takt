@@ -566,7 +566,14 @@ describe('runFindingManagerForStep across rounds: churn that never reaches fixpo
     // provisional fixpoint intentionally ignores that separate ledger.
     expect(context.provisional.fixpoint).toBe(false);
     expect(context.provisional.count).toBe(0);
-    expect(context.reviewerAnomalies.count).toBe(3);
+    // Every round's review registration settles that reviewer's earlier anomalies as
+    // withdrawn, so only the newest observation is still outstanding — the audit records
+    // themselves are never removed.
+    expect(context.reviewerAnomalies.count).toBe(1);
+    const anomalies = harness.currentLedger().reviewerAnomalies ?? [];
+    expect(anomalies).toHaveLength(3);
+    expect(anomalies.filter((anomaly) => anomaly.settlement?.kind === 'withdrawn_by_subsequent_review'))
+      .toHaveLength(2);
     // The bounded stop budget fires independently of reviewer-anomaly intake:
     // 3 completed rounds reached the configured maxRounds.
     expect(context.rounds.budgetExhausted).toBe(true);
@@ -586,7 +593,15 @@ describe('runFindingManagerForStep across rounds: churn that never reaches fixpo
     const context = buildFindingsRuleContext(harness.currentLedger());
     expect(context.provisional.fixpoint).toBe(false);
     expect(context.provisional.count).toBe(0);
-    expect(context.reviewerAnomalies.count).toBe(1);
+    // The repeated claim is re-recorded as a fresh episode every round it is observed and
+    // settled as withdrawn by the next registered review; the two clean rounds at the end
+    // leave nothing outstanding.
+    expect(context.reviewerAnomalies.count).toBe(0);
+    const anomalies = harness.currentLedger().reviewerAnomalies ?? [];
+    expect(anomalies.length).toBeGreaterThanOrEqual(4);
+    expect(anomalies.every((anomaly) => (
+      anomaly.settlement?.kind === 'withdrawn_by_subsequent_review'
+    ))).toBe(true);
     expect(context.rounds.budgetExhausted).toBe(false);
     expect(stopBudgetRoundsCompleted(harness.currentLedger())).toBe(6);
   });

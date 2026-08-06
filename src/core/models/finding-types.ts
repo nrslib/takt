@@ -1579,13 +1579,38 @@ export interface IntakeContractDefect {
   terminalDisposition?: IntakeContractTerminalDisposition;
 }
 
-export interface ReviewerAnomalySettlement {
+/**
+ * anomaly が参照した既存 finding の終端(検証済み解消 / terminal adjudication に
+ * よる却下)による決着。product finding 側の lifecycle event を根拠に持つ。
+ */
+export interface ReviewerAnomalyTargetSettlement {
   kind:
     | 'target_resolved_by_verified_evidence'
     | 'target_dismissed_by_terminal_adjudication';
   findingId: string;
   lifecycleEventId: string;
 }
+
+/**
+ * 同じレビュアー枠の次の完全なレビューが台帳へ登録されたことによる決着
+ * (implicit withdrawal)。product finding を根拠に持たない — 「そのレビュアーは
+ * 次のレビューでこの観測を再提示しなかった」という機械判定可能な事実だけが根拠。
+ *
+ * 明示的な言い直し(RA-ID を echo した restatement)が成立した場合は
+ * promotedFindingId 側で決着するため、この settlement は付かない。
+ */
+export interface ReviewerAnomalyReviewWithdrawalSettlement {
+  kind: 'withdrawn_by_subsequent_review';
+  /** 後続レビューを登録したレビュアー(= anomaly の reviewers に含まれるステップ名)。 */
+  reviewer: string;
+  /** 決着の根拠になった後続レビューの publication id。 */
+  supersedingPublicationId: string;
+  decidedAt: FindingObservation;
+}
+
+export type ReviewerAnomalySettlement =
+  | ReviewerAnomalyTargetSettlement
+  | ReviewerAnomalyReviewWithdrawalSettlement;
 
 /**
  * 二系統台帳(review-integrity protocol)の review-integrity レコード。product finding
@@ -1629,8 +1654,10 @@ export interface ReviewerAnomalyEntry {
    */
   promotedFindingId?: string;
   /**
-   * anomaly が参照した既存 finding が、後続の検証済み証拠によって解消された記録。
+   * anomaly の決着記録。参照先 finding の終端によるもの(target settlement)と、
+   * 同じレビュアー枠の次の完全なレビュー登録によるもの(implicit withdrawal)がある。
    * product finding への昇格とは別の決着なので promotedFindingId と混同しない。
+   * レコード自体は削除しない — 決着後も監査履歴として残る。
    */
   settlement?: ReviewerAnomalySettlement;
 }

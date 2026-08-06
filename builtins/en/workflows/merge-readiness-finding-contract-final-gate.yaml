@@ -44,6 +44,14 @@ steps:
         return: need_replan
       - condition: when(findings.provisional.count > 0)
         return: need_replan
+      # A claim-bearing reviewer anomaly that exhausted its restatement budget cannot be
+      # resolved by another review or by terminal adjudication. Route it to COMPLETE so the
+      # engine review-integrity gate reports review_integrity_unresolved as a visible
+      # failure — returning needs_review here loops between review and the final gate forever.
+      # It precedes the open.count needs_fix rule because the engine review-integrity
+      # invariant forbids completion while this anomaly stands, so a fix loop cannot pay off.
+      - condition: when(findings.reviewerAnomalies.claimBearingTerminalCount > 0)
+        next: COMPLETE
       - condition: when(findings.open.count == 0 && findings.reviewerAnomalies.count > 0 && findings.reviewerAnomalies.budgetExhausted == true)
         return: need_replan
       - condition: when(findings.open.count == 0 && findings.reviewerAnomalies.count > 0)
@@ -75,6 +83,14 @@ steps:
         return: need_replan
       - condition: when(findings.provisional.count > 0)
         return: need_replan
+      # A claim-bearing reviewer anomaly that exhausted its restatement budget cannot be
+      # resolved by another review or by terminal adjudication. Route it to COMPLETE so the
+      # engine review-integrity gate reports review_integrity_unresolved as a visible
+      # failure — returning needs_review here loops between review and the final gate forever.
+      # It precedes the open.count needs_fix rule because the engine review-integrity
+      # invariant forbids completion while this anomaly stands, so a fix loop cannot pay off.
+      - condition: when(findings.reviewerAnomalies.claimBearingTerminalCount > 0)
+        next: COMPLETE
       - condition: when(findings.open.count == 0 && findings.reviewerAnomalies.count > 0 && findings.reviewerAnomalies.budgetExhausted == true)
         return: need_replan
       - condition: when(findings.open.count == 0 && findings.reviewerAnomalies.count > 0)

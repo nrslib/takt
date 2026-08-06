@@ -145,6 +145,7 @@ export type {
   IntakeContractAnomalyReasonCode,
   IntakeContractMissingRequirement,
   ReviewerAnomalySettlement,
+  ReviewerAnomalyTargetSettlement,
   ReviewerOutputOverflowReport,
   RawNormalizationAuditRecord,
   ProvisionalLandingReport,

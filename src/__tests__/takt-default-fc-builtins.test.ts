@@ -254,7 +254,10 @@ function expectedRuleMatch(counts: FindingCounts): ExpectedRuleMatch {
     return { index: 2, returnValue: 'needs_review' };
   }
   if (counts.claimBearingTerminalCount > 0) {
-    return { index: 3, returnValue: 'need_replan' };
+    // 言い直し予算を使い切った claim-bearing anomaly は再計画では直せない
+    // （レビュアーの protocol 違反であってプロダクト側の欠陥ではない）ため、
+    // final gate 経由で review_integrity_unresolved の可視的失敗へ送る。
+    return { index: 3, returnValue: 'needs_terminal_adjudication' };
   }
   if (counts.restatementReadyCount > 0) {
     return { index: 4, returnValue: 'needs_review' };

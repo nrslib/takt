@@ -5,13 +5,13 @@ import type {
   FindingLedger,
   FindingLifecycleEvent,
   ReviewerAnomalyEntry,
-  ReviewerAnomalySettlement,
+  ReviewerAnomalyTargetSettlement,
 } from './types.js';
 import { isOutstandingReviewerAnomaly } from './reviewer-anomalies.js';
 
 function settlementKind(
   event: FindingLifecycleEvent,
-): ReviewerAnomalySettlement['kind'] | undefined {
+): ReviewerAnomalyTargetSettlement['kind'] | undefined {
   if (event.operation === 'resolve_finding') {
     return 'target_resolved_by_verified_evidence';
   }
@@ -25,7 +25,7 @@ function eligibleSettlement(input: {
   nextLedger: FindingLedger;
   anomaly: ReviewerAnomalyEntry;
   workflowTaskDigest: string;
-}): ReviewerAnomalySettlement | undefined {
+}): ReviewerAnomalyTargetSettlement | undefined {
   for (let index = input.nextLedger.lifecycleEvents.length - 1; index >= 0; index -= 1) {
     const event = input.nextLedger.lifecycleEvents[index]!;
     const kind = settlementKind(event);
@@ -36,7 +36,7 @@ function eligibleSettlement(input: {
       if (transition.after.entityKind !== 'finding') {
         continue;
       }
-      const settlement: ReviewerAnomalySettlement = {
+      const settlement: ReviewerAnomalyTargetSettlement = {
         kind,
         findingId: transition.after.entityId,
         lifecycleEventId: event.eventId,

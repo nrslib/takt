@@ -48,6 +48,7 @@ import type {
   FindingLifecycleReservation,
   RawFinding,
   ReviewerAnomalyEntry,
+  ReviewerAnomalySettlement,
 } from './finding-types.js';
 
 const FINDING_ID_PATTERN = /^F-(\d{4})$/;
@@ -1381,6 +1382,22 @@ function collectConflictAndTerminalIdentityViolations(
   });
 }
 
+/** 違反メッセージ用の決着種別ラベル。default 節が kind 追加時の網羅性を型で守る。 */
+function reviewerAnomalySettlementLabel(settlement: ReviewerAnomalySettlement): string {
+  switch (settlement.kind) {
+    case 'target_resolved_by_verified_evidence':
+      return 'verified-resolution';
+    case 'target_dismissed_by_terminal_adjudication':
+      return 'terminal-dismissal';
+    case 'withdrawn_by_subsequent_review':
+      return 'subsequent-review withdrawal';
+    default: {
+      const unexpected: never = settlement;
+      throw new Error(`Unsupported reviewer anomaly settlement: ${JSON.stringify(unexpected)}`);
+    }
+  }
+}
+
 function collectReviewerAnomalyViolations(
   projection: FindingLedgerProjectionInvariantInput,
   rawById: ReadonlyMap<string, RawFinding>,
@@ -1505,9 +1522,7 @@ function collectReviewerAnomalyViolations(
         addViolation(
           violations,
           ['reviewerAnomalies', index, 'settlement'],
-          anomaly.settlement.kind === 'target_resolved_by_verified_evidence'
-            ? `Reviewer anomaly "${anomaly.id}" has an invalid verified-resolution settlement: ${settlementViolation}`
-            : `Reviewer anomaly "${anomaly.id}" has an invalid terminal-dismissal settlement: ${settlementViolation}`,
+          `Reviewer anomaly "${anomaly.id}" has an invalid ${reviewerAnomalySettlementLabel(anomaly.settlement)} settlement: ${settlementViolation}`,
         );
       }
     }

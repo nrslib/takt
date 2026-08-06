@@ -44,6 +44,14 @@ steps:
         return: need_replan
       - condition: when(findings.provisional.count > 0)
         return: need_replan
+      # 言い直し予算を使い切った claim-bearing な reviewer anomaly は、再レビューでも
+      # terminal adjudication でも解消できない。ここで COMPLETE へ送り、エンジンの
+      # review-integrity ゲート(review_integrity_unresolved)に可視的な失敗として
+      # 落とす — needs_review へ戻すと再レビューと最終ゲートを無限に往復する。
+      # open.count の needs_fix より前に置く: この anomaly が残る限りエンジンの
+      # review-integrity 不変条件により完了できないため、修正ループは無駄弾になる。
+      - condition: when(findings.reviewerAnomalies.claimBearingTerminalCount > 0)
+        next: COMPLETE
       - condition: when(findings.open.count == 0 && findings.reviewerAnomalies.count > 0 && findings.reviewerAnomalies.budgetExhausted == true)
         return: need_replan
       - condition: when(findings.open.count == 0 && findings.reviewerAnomalies.count > 0)
@@ -75,6 +83,14 @@ steps:
         return: need_replan
       - condition: when(findings.provisional.count > 0)
         return: need_replan
+      # 言い直し予算を使い切った claim-bearing な reviewer anomaly は、再レビューでも
+      # terminal adjudication でも解消できない。ここで COMPLETE へ送り、エンジンの
+      # review-integrity ゲート(review_integrity_unresolved)に可視的な失敗として
+      # 落とす — needs_review へ戻すと再レビューと最終ゲートを無限に往復する。
+      # open.count の needs_fix より前に置く: この anomaly が残る限りエンジンの
+      # review-integrity 不変条件により完了できないため、修正ループは無駄弾になる。
+      - condition: when(findings.reviewerAnomalies.claimBearingTerminalCount > 0)
+        next: COMPLETE
       - condition: when(findings.open.count == 0 && findings.reviewerAnomalies.count > 0 && findings.reviewerAnomalies.budgetExhausted == true)
         return: need_replan
       - condition: when(findings.open.count == 0 && findings.reviewerAnomalies.count > 0)

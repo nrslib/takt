@@ -12,7 +12,9 @@ import type {
   FindingMutationPrecondition,
   RawFinding,
   ReviewerAnomalyEntry,
+  ReviewerAnomalyReviewWithdrawalSettlement,
   ReviewerAnomalySettlement,
+  ReviewerAnomalyTargetSettlement,
 } from './finding-types.js';
 
 export interface ReviewerAnomalySettlementProjection {
@@ -108,7 +110,7 @@ function sourcesMatchPrecondition(
 function sourcesMatchRequiredHead(input: {
   projection: ReviewerAnomalySettlementProjection;
   anomaly: ReviewerAnomalyEntry;
-  settlement: ReviewerAnomalySettlement;
+  settlement: ReviewerAnomalyTargetSettlement;
   event: FindingLifecycleEvent;
   transition: FindingLifecycleEvent['transitions'][number];
   sourceHead: ReviewerAnomalySettlementSourceHead;
@@ -176,7 +178,7 @@ function sourcesMatchRequiredHead(input: {
 function matchingReservation(input: {
   projection: ReviewerAnomalySettlementProjection;
   event: FindingLifecycleEvent;
-  settlement: ReviewerAnomalySettlement;
+  settlement: ReviewerAnomalyTargetSettlement;
   transition: FindingLifecycleEvent['transitions'][number];
 }): FindingLifecycleReservation | undefined {
   const reservation = input.projection.lifecycleReservations.find(
@@ -247,6 +249,30 @@ function hasTerminalDismissalAuthority(input: {
   return true;
 }
 
+/**
+ * 「同じレビュアー枠の次の完全なレビューが台帳へ登録された」ことによる決着は
+ * product finding を根拠に持たない。成立条件は機械判定できる2点だけ:
+ *   - その anomaly をまだ誰も決着させていない(昇格済みは昇格側が決着)
+ *   - 決着を記録したレビュアーがその anomaly の観測者である
+ * intake-contract anomaly は言い直し(restatement)契約という固有の決着経路を
+ * 持つため、この経路では決着させない — presentation / terminalDisposition と
+ * 二重に決着すると監査記録が矛盾する。
+ */
+function reviewWithdrawalEligibilityViolation(
+  anomaly: ReviewerAnomalyEntry,
+  settlement: ReviewerAnomalyReviewWithdrawalSettlement,
+): string | undefined {
+  if (anomaly.promotedFindingId !== undefined) {
+    return 'promoted anomalies cannot be settled';
+  }
+  if (anomaly.intakeContract !== undefined) {
+    return 'intake-contract anomalies settle through their restatement contract';
+  }
+  return anomaly.reviewers.includes(settlement.reviewer)
+    ? undefined
+    : 'withdrawal must be recorded by a reviewer that observed the anomaly';
+}
+
 export function reviewerAnomalySettlementEligibilityViolation(input: {
   projection: ReviewerAnomalySettlementProjection;
   anomaly: ReviewerAnomalyEntry;
@@ -254,6 +280,10 @@ export function reviewerAnomalySettlementEligibilityViolation(input: {
   sourceHead: ReviewerAnomalySettlementSourceHead;
   workflowTaskDigest: string | null;
 }): string | undefined {
+  const settlement = input.settlement;
+  if (settlement.kind === 'withdrawn_by_subsequent_review') {
+    return reviewWithdrawalEligibilityViolation(input.anomaly, settlement);
+  }
   if (input.anomaly.kind === 'protocol-anomaly') {
     return 'protocol anomalies cannot be settled';
   }
@@ -261,14 +291,14 @@ export function reviewerAnomalySettlementEligibilityViolation(input: {
     return 'promoted anomalies cannot be settled';
   }
   const event = input.projection.lifecycleEvents.find(
-    (candidate) => candidate.eventId === input.settlement.lifecycleEventId,
+    (candidate) => candidate.eventId === settlement.lifecycleEventId,
   );
   const finding = input.projection.findings.find(
-    (candidate) => candidate.id === input.settlement.findingId,
+    (candidate) => candidate.id === settlement.findingId,
   );
   const transition = event?.transitions.find((candidate) => (
     candidate.after.entityKind === 'finding'
-    && candidate.after.entityId === input.settlement.findingId
+    && candidate.after.entityId === settlement.findingId
   ));
   if (event === undefined || finding === undefined || transition === undefined) {
     return 'settlement target event is incomplete';
@@ -276,7 +306,7 @@ export function reviewerAnomalySettlementEligibilityViolation(input: {
   const reservation = matchingReservation({
     projection: input.projection,
     event,
-    settlement: input.settlement,
+    settlement,
     transition,
   });
   if (reservation === undefined) {
@@ -285,14 +315,14 @@ export function reviewerAnomalySettlementEligibilityViolation(input: {
   if (!sourcesMatchRequiredHead({
     projection: input.projection,
     anomaly: input.anomaly,
-    settlement: input.settlement,
+    settlement,
     event,
     transition,
     sourceHead: input.sourceHead,
   })) {
     return 'all source raws must match the required target head';
   }
-  if (input.settlement.kind === 'target_resolved_by_verified_evidence') {
+  if (settlement.kind === 'target_resolved_by_verified_evidence') {
     return event.operation === 'resolve_finding'
       && (
         finding.status === 'resolved'

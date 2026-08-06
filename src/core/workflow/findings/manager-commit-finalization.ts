@@ -5,8 +5,10 @@ import {
 } from './reconciler.js';
 import {
   applyReviewerAnomalySpecsToLedger,
+  collectReviewSupersededReviewerAnomalyIds,
   createReviewerAnomalySpec,
   linkPromotedReviewerAnomalies,
+  withdrawReviewerAnomaliesSupersededByReview,
   type ReviewerAnomalySpec,
 } from './reviewer-anomalies.js';
 import type { ReviewerAnomalyLandingReport } from './store.js';
@@ -396,16 +398,33 @@ export function applyCommitLedgerStates(input: {
     input.pendingRejectedObservations,
     input.settledLedger,
   );
+  const observation = {
+    runId: input.runInput.runId,
+    stepName: input.runInput.parentStep.name,
+    timestamp: input.runInput.timestamp,
+  };
+  // このラウンドでレビューを台帳へ登録したレビュアー枠。publication があること
+  // 自体が「そのレビュアーの完全なレビューが成立した」証跡（ParallelRunner は
+  // 全レビュアーの canonical publication が揃うまで取り込みを始めない）。
+  const publicationIdByReviewer = new Map(
+    input.runInput.subResults.map(({ publication }) => [
+      publication.reviewerStepName,
+      publication.publicationId,
+    ] as const),
+  );
+  const supersededAnomalyIds = collectReviewSupersededReviewerAnomalyIds(
+    input.settledLedger,
+    new Set(publicationIdByReviewer.keys()),
+  );
   const anomalySpecs = [...input.baseAnomalySpecs, ...rejectedObservations.anomalySpecs];
   const withAnomalies = applyReviewerAnomalySpecsToLedger(
     input.settledLedger,
     anomalySpecs,
     {
       workflowName: input.runInput.workflowName,
-      stepName: input.runInput.parentStep.name,
-      runId: input.runInput.runId,
-      timestamp: input.runInput.timestamp,
+      ...observation,
     },
+    supersededAnomalyIds,
   );
   const storedPublications = input.runInput.reviewPublicationDir === undefined
     ? []
@@ -418,16 +437,22 @@ export function applyCommitLedgerStates(input: {
     ledger: withPromotions,
     publications: [
       ...storedPublications,
-      ...(input.runInput.subResults ?? []).map(({ publication }) => publication),
+      ...input.runInput.subResults.map(({ publication }) => publication),
     ],
-    observation: {
-      runId: input.runInput.runId,
-      stepName: input.runInput.parentStep.name,
-      timestamp: input.runInput.timestamp,
-    },
+    observation,
+  });
+  // 昇格（promotedFindingId）が成立しなかった古い anomaly は、そのレビュアーの
+  // 後続レビューが登録された時点で取り下げとして決着する。linkPromotedReviewerAnomalies
+  // の後に置くこと — 取り下げ対象になる非 intake anomaly の昇格は lineageKey 経由で
+  // 判定されるため、先に決着させるとその昇格が記録されない。
+  const withWithdrawals = withdrawReviewerAnomaliesSupersededByReview({
+    ledger: withTerminalDispositions,
+    candidateAnomalyIds: supersededAnomalyIds,
+    publicationIdByReviewer,
+    observation,
   });
   return {
-    ledger: withTerminalDispositions,
+    ledger: withWithdrawals,
     reviewerAnomalyLandings: anomalySpecs.map((spec) => ({
       kind: spec.kind,
       stableKey: spec.stableKey,

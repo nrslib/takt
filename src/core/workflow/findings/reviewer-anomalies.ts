@@ -19,6 +19,7 @@ import { compareBinaryStrings } from '../../../shared/utils/binary-string-compar
 import type {
   CanonicalRawFinding,
   FindingLedger,
+  FindingObservation,
   FindingReconcileContext,
   IntakeContractDefect,
   RawFinding,
@@ -234,6 +235,14 @@ export function applyReviewerAnomalySpecsToLedger(
   ledger: FindingLedger,
   specs: readonly ReviewerAnomalySpec[],
   context: FindingReconcileContext,
+  /**
+   * このコミットで決着させる予定の anomaly id（後続レビュー登録による取り下げ
+   * 候補。決着させるものが無ければ空集合）。upsert 対象から外し、同じ stableKey の
+   * 新しい観測は必ず別 episode として着地させる — 決着する episode へ今ラウンドの
+   * 観測を混ぜると、その観測ごとブロッキング効果が消えて「壊れ続けるレビュアーが
+   * 一度もゲートを塞がない」状態になる。
+   */
+  closingAnomalyIds: ReadonlySet<string>,
 ): FindingLedger {
   if (specs.length === 0) {
     return ledger;
@@ -257,6 +266,7 @@ export function applyReviewerAnomalySpecsToLedger(
     }
     const outstandingIndexes = matchingIndexes.filter((index) => (
       isOutstandingReviewerAnomaly(anomalies[index]!)
+      && !closingAnomalyIds.has(anomalies[index]!.id)
     ));
     if (outstandingIndexes.length > 1) {
       throw new Error(
@@ -451,6 +461,86 @@ export function linkPromotedReviewerAnomalies(
     return { ...anomaly, promotedFindingId };
   });
   return changed ? { ...ledger, reviewerAnomalies: updated } : ledger;
+}
+
+/**
+ * 「同じレビュアー枠の次の完全なレビューが台帳へ登録された」ことで決着させられる
+ * 未決着 anomaly を選ぶ。判定はエンジンの決定的処理で完結する — manager/adjudicator の
+ * 判断は要らない（後続レビューの成立は publication の有無で機械判定できる）。
+ *
+ * intake-contract anomaly は除外する。あちらは言い直し要求の注入 →
+ * restatement 昇格 or terminalDisposition という固有の決着経路を持ち、
+ * その予算（presentationLimit）の途中でここが取り下げると言い直しの機会を奪う。
+ * 除外される他の kind（protocol-anomaly / quote-mismatch / stale-snapshot /
+ * lifecycle-admission-failure）は言い直し経路を一切持たないため、この決着だけが
+ * 唯一の終端になる。
+ *
+ * 複数の観測者を持つ anomaly は、その全員が今ラウンドのレビューを登録している
+ * ときだけ候補にする（every）。一部のレビュアーしか再レビューしていない状態で
+ * 取り下げると、まだ再提示の機会を得ていない観測者の主張ごとゲートを緩めることになる。
+ */
+export function collectReviewSupersededReviewerAnomalyIds(
+  ledger: FindingLedger,
+  reviewers: ReadonlySet<string>,
+): Set<string> {
+  return new Set(
+    (ledger.reviewerAnomalies ?? [])
+      .filter((anomaly) => (
+        isOutstandingReviewerAnomaly(anomaly)
+        && anomaly.intakeContract === undefined
+        && anomaly.reviewers.length > 0
+        && anomaly.reviewers.every((reviewer) => reviewers.has(reviewer))
+      ))
+      .map((anomaly) => anomaly.id),
+  );
+}
+
+/**
+ * 後続レビュー登録による取り下げ（implicit withdrawal）を台帳へ記録する。
+ * レコードは削除・改変しない — settlement を足すだけで、監査記録としては残る
+ * （観測消去の禁止）。settlement が付いた anomaly は isOutstandingReviewerAnomaly が
+ * false になり、when() のカウンタからも外れる（＝ブロッキング効果が消える）。
+ *
+ * candidateAnomalyIds は同じ publicationIdByReviewer から
+ * collectReviewSupersededReviewerAnomalyIds が選んだ集合であること。候補の全観測者が
+ * publication を持つことはそこで保証されるので、ここでは引き直さない。
+ */
+export function withdrawReviewerAnomaliesSupersededByReview(input: {
+  ledger: FindingLedger;
+  candidateAnomalyIds: ReadonlySet<string>;
+  publicationIdByReviewer: ReadonlyMap<string, string>;
+  observation: FindingObservation;
+}): FindingLedger {
+  const anomalies = input.ledger.reviewerAnomalies;
+  if (anomalies === undefined || input.candidateAnomalyIds.size === 0) {
+    return input.ledger;
+  }
+  let changed = false;
+  const updated = anomalies.map((anomaly) => {
+    // 候補選定は取り込み前の台帳で行うため、選定後に昇格した anomaly が混じり得る。
+    // 未決着の再確認だけは必ずここで行う（昇格が取り下げより優先される）。
+    if (
+      !input.candidateAnomalyIds.has(anomaly.id)
+      || !isOutstandingReviewerAnomaly(anomaly)
+    ) {
+      return anomaly;
+    }
+    // 候補は「全観測者が今ラウンドの publication を持つ」もののみ（collect 側の
+    // every 判定）。settlement に記録する reviewer は binary 順の先頭で決定的に選ぶ。
+    const reviewer = [...anomaly.reviewers].sort(compareBinaryStrings)[0]!;
+    const supersedingPublicationId = input.publicationIdByReviewer.get(reviewer)!;
+    changed = true;
+    return {
+      ...anomaly,
+      settlement: {
+        kind: 'withdrawn_by_subsequent_review' as const,
+        reviewer,
+        supersedingPublicationId,
+        decidedAt: input.observation,
+      },
+    };
+  });
+  return changed ? { ...input.ledger, reviewerAnomalies: updated } : input.ledger;
 }
 
 export function isOutstandingReviewerAnomaly(anomaly: ReviewerAnomalyEntry): boolean {

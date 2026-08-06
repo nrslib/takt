@@ -404,17 +404,29 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
     // 台帳: 予算を使い切り、anomaly は監査に残る（消えない）。
     const ledger = loadRootLedger(cwd, config.name) as {
       findings: unknown[];
-      reviewerAnomalies?: Array<{ occurrences: number; promotedFindingId?: string }>;
+      reviewerAnomalies?: Array<{
+        occurrences: number;
+        promotedFindingId?: string;
+        settlement?: { kind: string; reviewer: string };
+      }>;
       reviewIntegrity?: { roundMarkers: string[]; exhausted: boolean };
     };
     expect(ledger.findings).toHaveLength(0);
     expect(ledger.reviewIntegrity?.exhausted).toBe(true);
     expect(ledger.reviewIntegrity?.roundMarkers.length).toBeGreaterThanOrEqual(2);
-    // 再レビューを跨いでも anomaly は消えず、単一の監査レコードとして残る
-    // （観測消去の禁止 — 複数レコードへ増殖もしない）。
-    expect(ledger.reviewerAnomalies).toHaveLength(1);
-    expect(ledger.reviewerAnomalies?.[0]?.promotedFindingId).toBeUndefined();
-    expect(ledger.reviewerAnomalies?.[0]?.occurrences).toBeGreaterThanOrEqual(1);
+    // 再レビューを跨いでも観測は消えない（観測消去の禁止）。ただし各 episode は
+    // 「そのレビュアーの次の完全なレビューが登録された」時点で取り下げとして決着し、
+    // 同じ主張の再観測は新しい episode として記録される — 未決着はつねに 1 件。
+    const anomalies = ledger.reviewerAnomalies ?? [];
+    expect(anomalies.length).toBeGreaterThanOrEqual(2);
+    expect(anomalies.every((anomaly) => anomaly.promotedFindingId === undefined)).toBe(true);
+    expect(anomalies.every((anomaly) => anomaly.occurrences >= 1)).toBe(true);
+    const outstanding = anomalies.filter((anomaly) => anomaly.settlement === undefined);
+    expect(outstanding).toHaveLength(1);
+    for (const settled of anomalies.filter((anomaly) => anomaly.settlement !== undefined)) {
+      expect(settled.settlement?.kind).toBe('withdrawn_by_subsequent_review');
+      expect(settled.settlement?.reviewer).toBe('reviewers');
+    }
   }, 30_000);
 
   it('final-gate supervisor の単一Finding Contract報告を1回だけ取り込み、raw findingを重複保存しない', async () => {
