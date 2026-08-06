@@ -108,6 +108,8 @@ export interface ClaudeCallOptions {
   allowedTools?: string[];
   /** MCP servers configuration */
   mcpServers?: Record<string, McpServerConfig>;
+  /** Provider-prepared MCP material (issue #1137). */
+  preparedMcp?: import('../providers/mcp/types.js').PreparedProviderMcp;
   model?: string;
   effort?: ClaudeEffort;
   skillsEnabled?: boolean;
@@ -148,6 +150,13 @@ export interface ClaudeSpawnOptions {
   allowedTools?: string[];
   /** MCP servers configuration */
   mcpServers?: Record<string, McpServerConfig>;
+  /**
+   * Provider-prepared MCP material (issue #1137). When present, the SDK
+   * options builder merges `sdkOptions.mcpServers`/`strictMcpConfig` on top
+   * of the legacy `mcpServers` field so runtime MCP assignment takes effect
+   * for normal agent steps (not only `strict-readonly`).
+   */
+  preparedMcp?: import('../providers/mcp/types.js').PreparedProviderMcp;
   model?: string;
   effort?: ClaudeEffort;
   skillsEnabled?: boolean;

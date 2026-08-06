@@ -18,9 +18,6 @@ function toCopilotOptions(options: ProviderCallOptions): CopilotCallOptions {
   if (options.allowedTools && options.allowedTools.length > 0) {
     log.info('Copilot provider does not support allowedTools; ignoring');
   }
-  if (options.mcpServers && Object.keys(options.mcpServers).length > 0) {
-    log.info('Copilot provider does not support mcpServers in non-interactive mode; ignoring');
-  }
   if (options.outputSchema) {
     log.info('Copilot provider does not support outputSchema; ignoring');
   }
@@ -39,6 +36,7 @@ function toCopilotOptions(options: ProviderCallOptions): CopilotCallOptions {
     copilotGithubToken: options.copilotGithubToken ?? resolveCopilotGithubToken(),
     copilotCliPath: resolveCopilotCliPath(),
     childProcessEnv: options.childProcessEnv,
+    preparedMcp: options.preparedMcp,
   };
 }
 
@@ -48,6 +46,7 @@ export class CopilotProvider implements Provider {
   readonly supportsIsolatedStructuredExecution = false;
   readonly supportsNativeImageInput = false;
   readonly supportsStrictInternalAgentIsolation = false;
+  readonly supportedMcpTransports: ReadonlySet<'stdio' | 'sse' | 'http'> = new Set(['stdio', 'http']);
 
   getRuntimeInstructions(_allowedTools?: string[]): string | null {
     return null;

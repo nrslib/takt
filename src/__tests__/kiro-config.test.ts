@@ -292,7 +292,8 @@ describe('Kiro provider capabilities', () => {
   it('Given Kiro provider, When capability predicates run, Then unsupported cross-provider options are disabled', () => {
     expect(providerSupportsStructuredOutput('kiro')).toBe(false);
     expect(providerSupportsAllowedTools('kiro')).toBe(false);
-    expect(providerSupportsMcpServers('kiro')).toBe(false);
+    // issue #1137: kiro now declares MCP transports (stdio+http) for runtime assignment.
+    expect(providerSupportsMcpServers('kiro')).toBe(true);
     expect(providerSupportsMaxTurns('kiro')).toBe(false);
   });
 });

@@ -45,6 +45,7 @@ import type { DynamicParallelSelectionStore } from './dynamic-parallel/selection
 import type { WorkflowCallInvocationEvidence } from './workflow-call-invocation-index.js';
 import type { WorkflowStepParticipationIndex } from './workflow-step-participation-index.js';
 import type { SelectorGitCommandRunner } from './dynamic-parallel/selector-git-command-runner.js';
+import type { McpAssignmentSection } from '../../infra/config/runtime-provider/mcp-assignment.js';
 
 import type { ProviderType, StreamCallback, StreamEvent } from '../../shared/types/provider.js';
 
@@ -452,6 +453,12 @@ export interface WorkflowEngineOptions {
   onAskUserQuestion?: AskUserQuestionHandler;
   /** MCP servers supplied by the application boundary for every phase-1 agent step. */
   mcpServers?: Record<string, McpServerConfig>;
+  /**
+   * Runtime MCP assignment section (runtime-v1 only, issue #1137). The engine
+   * resolves effective MCP servers per agent execution via
+   * `OptionsBuilder.resolveMcpServersForStep`. Undefined in legacy mode.
+   */
+  mcpAssignment?: McpAssignmentSection;
   /** Callback when iteration limit is reached - returns additional iterations or null to stop */
   onIterationLimit?: IterationLimitCallback;
   /** Ignore workflow maxSteps and keep running */

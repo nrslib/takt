@@ -415,6 +415,7 @@ async function executeWorkflowInternal(
         providerRoutingTagConflictPolicy: bootstrap.providerRoutingTagConflictPolicy,
         providerProfiles: options.providerProfiles,
         mcpServers: options.mcpServers,
+        mcpAssignment: bootstrap.mcpAssignment,
         interactive: bootstrap.interactiveUserInput,
         structuredCaller: bootstrap.structuredCaller,
         structuredOutputNormalizers: createDefaultStructuredOutputNormalizers(),

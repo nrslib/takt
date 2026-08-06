@@ -39,18 +39,22 @@ describe('provider capabilities module boundary', () => {
     expect(providerSupportsClaudeAllowedTools('claude')).toBe(true);
     expect(providerSupportsClaudeAllowedTools('opencode')).toBe(false);
     expect(providerSupportsMcpServers('claude')).toBe(true);
-    expect(providerSupportsMcpServers('opencode')).toBe(false);
+    // issue #1137: provider capability is now declared per-provider, so opencode also supports MCP servers.
+    expect(providerSupportsMcpServers('opencode')).toBe(true);
   });
 
   it('mcp_servers は allowedTools と同様に provider ごとの明示 capability で管理する', () => {
     expect(providerSupportsAllowedTools('claude')).toBe(true);
     expect(providerSupportsMcpServers('claude')).toBe(true);
     expect(providerSupportsAllowedTools('opencode')).toBe(true);
-    expect(providerSupportsMcpServers('opencode')).toBe(false);
+    // issue #1137: MCP capability is declared per-provider via supportedMcpTransports.
+    expect(providerSupportsMcpServers('opencode')).toBe(true);
     expect(providerSupportsAllowedTools('cursor')).toBe(false);
-    expect(providerSupportsMcpServers('cursor')).toBe(false);
+    // issue #1137: cursor declares MCP transports for runtime assignment.
+    expect(providerSupportsMcpServers('cursor')).toBe(true);
     expect(providerSupportsAllowedTools('codex')).toBe(false);
-    expect(providerSupportsMcpServers('codex')).toBe(false);
+    // issue #1137: codex declares MCP transports for runtime assignment.
+    expect(providerSupportsMcpServers('codex')).toBe(true);
   });
 
   it('maxTurns capability は SDK payload 非対応 provider を明示的に拒否する', () => {

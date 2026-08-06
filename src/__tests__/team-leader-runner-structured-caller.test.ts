@@ -24,6 +24,7 @@ import {
 } from '../agents/team-leader-decomposition-regeneration.js';
 import { OptionsBuilder } from '../core/workflow/engine/OptionsBuilder.js';
 import { TeamLeaderRunner } from '../core/workflow/engine/TeamLeaderRunner.js';
+import * as capabilityModule from '../infra/providers/provider-capabilities.js';
 import {
   buildPartScopedSessionKey,
   runTeamLeaderPart,
@@ -551,6 +552,10 @@ describe('TeamLeaderRunner with structuredCaller', () => {
   });
 
   it('fails before team leader decomposition when session mcpServers are unsupported', async () => {
+    // issue #1137: all real providers now declare MCP transports. Mock the
+    // capability probe to simulate a provider without MCP support and verify
+    // the fail-fast path still works before team leader decomposition.
+    vi.spyOn(capabilityModule, 'providerSupportsMcpServers').mockReturnValue(false);
     const structuredCaller = {
       judgeStatus: vi.fn(),
       evaluateCondition: vi.fn(),
@@ -628,6 +633,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     await expect(runner.runTeamLeaderStep(step, state, 'implement feature', 5, vi.fn()))
       .rejects.toThrow(/Provider "cursor" does not support session MCP servers for step "implement"/);
     expect(structuredCaller.decomposeTask).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
   });
 
   it('should keep an existing team leader part session when the response omits sessionId', async () => {

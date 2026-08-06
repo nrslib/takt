@@ -62,6 +62,7 @@ function toOpenCodeOptions(options: ProviderCallOptions): OpenCodeCallOptions {
     childProcessEnv: options.childProcessEnv,
     outputSchema: options.outputSchema,
     language: options.language,
+    preparedMcp: options.preparedMcp,
   };
 }
 
@@ -91,6 +92,7 @@ export class OpenCodeProvider implements Provider {
   readonly supportsIsolatedStructuredExecution = true;
   readonly supportsNativeImageInput = false;
   readonly supportsStrictInternalAgentIsolation = false;
+  readonly supportedMcpTransports: ReadonlySet<'stdio' | 'sse' | 'http'> = new Set(['stdio', 'http']);
 
   getRuntimeInstructions(allowedTools?: string[], permissionMode?: PermissionMode, networkAccess?: boolean): string | null {
     if (allowedTools === undefined) {

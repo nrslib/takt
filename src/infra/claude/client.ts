@@ -41,6 +41,7 @@ export class ClaudeClient {
       internalAgentIsolation: options.internalAgentIsolation,
       allowedTools: options.allowedTools,
       mcpServers: options.mcpServers,
+      ...(options.preparedMcp !== undefined ? { preparedMcp: options.preparedMcp } : {}),
       model: options.model,
       effort: options.effort,
       skillsEnabled: options.skillsEnabled,

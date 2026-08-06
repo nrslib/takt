@@ -34,7 +34,8 @@ import type { StepProviderOptions } from '../../../core/models/workflow-types.js
 import type { ProviderResolutionSource } from '../../../core/workflow/provider-options-trace.js';
 import { normalizeProviderOptions } from '../providerOptions.js';
 import { validateRuntimeProviderSection, flattenProfiles, type FlatProfile } from './policy.js';
-import type { RuntimeProviderAssignment, RuntimeProviderSection } from './schema.js';
+import type { RuntimeProviderAssignment, RuntimeProviderSection, McpSection } from './schema.js';
+import type { McpAssignmentSection } from './mcp-assignment.js';
 
 /** Provider/model/options resolved for the two internal agents (selector, assistant). */
 export interface InternalAgentEnvironment {
@@ -64,6 +65,12 @@ export interface CompiledProviderEnvironment {
    * and assistant seams resolve the runtime.yaml `targets.internal_agents` ladder.
    */
   internalAgents: InternalAgentEnvironment | undefined;
+  /**
+   * Runtime MCP assignment section (runtime-v1 only). Carries the `mcp`
+   * section from `runtime.yaml` so the engine can resolve effective servers
+   * per agent execution (issue #1137). Undefined in legacy mode.
+   */
+  mcpAssignment?: McpAssignmentSection | undefined;
 }
 
 /** The exact provider engine-options the legacy bootstrap already resolved. */
@@ -86,7 +93,7 @@ export interface LegacyProviderEnvironmentInput {
 
 export type ProviderConfigModel =
   | { kind: 'legacy'; legacy: LegacyProviderEnvironmentInput }
-  | { kind: 'runtime-v1'; section: RuntimeProviderSection };
+  | { kind: 'runtime-v1'; section: RuntimeProviderSection | undefined; mcp: McpSection | undefined };
 
 /** Factory/registry: pick the matching compiler for the loaded configuration format. */
 export function compileProviderEnvironment(
@@ -96,7 +103,7 @@ export function compileProviderEnvironment(
     case 'legacy':
       return compileLegacyProviderEnvironment(model.legacy);
     case 'runtime-v1':
-      return compileRuntimeProviderEnvironment(model.section);
+      return compileRuntimeProviderEnvironment(model.section, model.mcp);
   }
 }
 
@@ -121,11 +128,31 @@ export function compileLegacyProviderEnvironment(
 /**
  * RuntimeProviderPolicyCompiler: map a validated runtime.yaml `provider` section into the
  * shared engine-options bundle. Profile `options`, `pool`/`auto_routing`, and `internal_agents`
- * are all compiled into the bundle here; nothing is left unwired.
+ * are all compiled into the bundle here; nothing is left unwired. When `section` is
+ * undefined the runtime-v1 mode was entered by an active `mcp` section alone
+ * (order.md:36); the bundle then carries no runtime provider/model/options but
+ * still forwards the `mcp` assignment.
  */
 export function compileRuntimeProviderEnvironment(
-  section: RuntimeProviderSection,
+  section: RuntimeProviderSection | undefined,
+  mcp: McpSection | undefined,
 ): CompiledProviderEnvironment {
+  if (section === undefined) {
+    return {
+      provider: undefined,
+      providerSource: 'runtime-v1',
+      model: undefined,
+      modelSource: 'runtime-v1',
+      personaProviders: undefined,
+      providerRouting: undefined,
+      autoRouting: undefined,
+      providerOptions: undefined,
+      tagConflictPolicy: 'fail-fast',
+      internalAgents: undefined,
+      mcpAssignment: mcp as McpAssignmentSection | undefined,
+    };
+  }
+
   // Reuse the runtime section's up-front validation: unknown profile/pool references,
   // cyclic `extends`, and profiles missing provider/model all throw here.
   validateRuntimeProviderSection(section);
@@ -151,6 +178,7 @@ export function compileRuntimeProviderEnvironment(
     providerOptions: defaults?.providerOptions,
     tagConflictPolicy: 'fail-fast',
     internalAgents,
+    mcpAssignment: mcp as McpAssignmentSection | undefined,
   };
 }
 

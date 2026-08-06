@@ -93,6 +93,21 @@ export class SdkOptionsBuilder {
     if (this.options.allowedTools) sdkOptions.allowedTools = this.options.allowedTools;
     if (this.options.agents) sdkOptions.agents = this.options.agents;
     if (this.options.mcpServers) sdkOptions.mcpServers = this.options.mcpServers;
+    // Runtime MCP assignment (issue #1137): when the runner prepared MCP
+    // material, merge `mcpServers`/`strictMcpConfig` so a normal agent step
+    // with a non-empty server set also isolates ambient MCP config
+    // (order.md:159-167). Applied after the legacy `mcpServers` field so
+    // the prepared values win over the legacy field.
+    if (this.options.preparedMcp?.sdkOptions !== undefined) {
+      if (this.options.preparedMcp.sdkOptions.mcpServers !== undefined) {
+        // The adapter materializes the SDK-native MCP server shape; cast to
+        // the SDK's `Record<string, McpServerConfig>` union.
+        sdkOptions.mcpServers = this.options.preparedMcp.sdkOptions.mcpServers as typeof sdkOptions.mcpServers;
+      }
+      if (this.options.preparedMcp.sdkOptions.strictMcpConfig !== undefined) {
+        sdkOptions.strictMcpConfig = this.options.preparedMcp.sdkOptions.strictMcpConfig;
+      }
+    }
     if (this.options.systemPrompt) sdkOptions.systemPrompt = this.options.systemPrompt;
     if (this.options.outputSchema) {
       sdkOptions.outputFormat = {

@@ -21,6 +21,9 @@ import { createLogger } from '../shared/utils/index.js';
 import type { RunAgentOptions } from './types.js';
 import { buildWrappedSystemPrompt } from './runner-prompt.js';
 import { extractPersonaName } from './persona-spec.js';
+import { createMcpAdapter, type PreparedProviderMcp } from '../infra/providers/mcp/index.js';
+import { type ResolvedMcpServers } from '../infra/config/runtime-provider/mcp-assignment.js';
+import { redactMcpServerForLog, buildMcpServerSetIdentity } from '../infra/config/runtime-provider/mcp-schema.js';
 
 export type { RunAgentOptions, StreamCallback } from './types.js';
 
@@ -165,6 +168,7 @@ export class AgentRunner {
   private static buildCallOptions(
     resolution: AgentExecutionResolution,
     options: RunAgentOptions,
+    preparedMcp: PreparedProviderMcp | undefined,
   ): ProviderCallOptions {
     return {
       cwd: options.cwd,
@@ -173,6 +177,7 @@ export class AgentRunner {
       internalAgentIsolation: options.internalAgentIsolation,
       allowedTools: options.allowedTools,
       mcpServers: options.mcpServers,
+      ...(preparedMcp !== undefined ? { preparedMcp } : {}),
       ...(options.maxTurns !== undefined ? { maxTurns: options.maxTurns } : {}),
       model: resolution.model,
       permissionMode: resolution.permissionMode,
@@ -222,7 +227,8 @@ export class AgentRunner {
     );
     const provider = getProvider(resolution.provider);
     const resolvedSystemPrompt = loadAgentPrompt(agentConfig, options.cwd);
-    const callOptions = AgentRunner.buildCallOptions(resolution, customOptions);
+    const preparedMcp = await AgentRunner.prepareMcpAdapter(resolution.provider, customOptions, resolution.permissionMode);
+    const callOptions = AgentRunner.buildCallOptions(resolution, customOptions, preparedMcp);
     const providerRuntimeInstructions = provider.getRuntimeInstructions(customOptions.allowedTools, callOptions.permissionMode, callOptions.providerOptions?.opencode?.networkAccess);
     const systemPrompt = buildWrappedSystemPrompt(resolvedSystemPrompt, {
       ...customOptions,
@@ -245,7 +251,7 @@ export class AgentRunner {
         });
 
     options.onDispatch?.(resolution.permissionMode);
-    return agent.call(task, callOptions);
+    return AgentRunner.callAgentWithMcp(agent, task, callOptions, preparedMcp);
   }
 
   async run(
@@ -268,7 +274,8 @@ export class AgentRunner {
 
     const resolution = AgentRunner.resolveExecution(options.cwd, personaName, options);
     const provider = getProvider(resolution.provider);
-    const callOptions = AgentRunner.buildCallOptions(resolution, options);
+    const preparedMcp = await AgentRunner.prepareMcpAdapter(resolution.provider, options, resolution.permissionMode);
+    const callOptions = AgentRunner.buildCallOptions(resolution, options, preparedMcp);
     const useIsolatedStructured = options.executionProfile === 'isolated-structured';
     const setupAgent = (agentSetup: AgentSetup): ProviderAgent =>
       useIsolatedStructured
@@ -286,7 +293,7 @@ export class AgentRunner {
       });
       const agent = setupAgent({ name: 'takt-internal', systemPrompt });
       options.onDispatch?.(resolution.permissionMode);
-      return agent.call(task, callOptions);
+      return AgentRunner.callAgentWithMcp(agent, task, callOptions, preparedMcp);
     }
 
     if (options.personaPath) {
@@ -305,13 +312,14 @@ export class AgentRunner {
       });
       const agent = setupAgent({ name: personaName, systemPrompt });
       options.onDispatch?.(resolution.permissionMode);
-      return agent.call(task, callOptions);
+      return AgentRunner.callAgentWithMcp(agent, task, callOptions, preparedMcp);
     }
 
     if (personaSpec) {
       const customAgents = loadCustomAgents();
       const agentConfig = customAgents.get(personaName);
       if (agentConfig) {
+        await preparedMcp?.dispose();
         return this.runCustom(agentConfig, task, options);
       }
 
@@ -326,7 +334,7 @@ export class AgentRunner {
       });
       const agent = setupAgent({ name: personaName, systemPrompt });
       options.onDispatch?.(resolution.permissionMode);
-      return agent.call(task, callOptions);
+      return AgentRunner.callAgentWithMcp(agent, task, callOptions, preparedMcp);
     }
 
     const systemPrompt = buildWrappedSystemPrompt('', {
@@ -342,7 +350,115 @@ export class AgentRunner {
       : { name: personaName };
     const agent = setupAgent(agentSetup);
     options.onDispatch?.(resolution.permissionMode);
-    return agent.call(task, callOptions);
+    return AgentRunner.callAgentWithMcp(agent, task, callOptions, preparedMcp);
+  }
+
+  /**
+   * Prepare the provider MCP adapter when the resolved MCP server set is
+   * non-empty, or when runtime MCP mode is active with an empty set for
+   * Claude系 providers so `strictMcpConfig`/`--strict-mcp-config` suppresses
+   * ambient MCP config (order.md:152,160,166,172). Runs `validate`
+   * (fail-fast on unsupported transports) then `prepare` (materialize
+   * provider-specific config / temp files). Returns `undefined` when MCP is
+   * disabled (legacy mode empty server set) so the runner skips adapter work
+   * and cleanup (order.md:152,153).
+   */
+  private static async prepareMcpAdapter(
+    provider: ProviderType,
+    options: RunAgentOptions,
+    permissionMode: RunAgentOptions['permissionMode'],
+  ): Promise<PreparedProviderMcp | undefined> {
+    const mcpServers = options.mcpServers;
+    const isEmpty = mcpServers === undefined || Object.keys(mcpServers).length === 0;
+    const runtimeMcpMode = options.mcpAssignment !== undefined;
+    if (isEmpty) {
+      // Legacy mode (no runtime MCP assignment) with an empty set: MCP is
+      // disabled, skip adapter preparation (order.md:152).
+      if (!runtimeMcpMode) {
+        return undefined;
+      }
+      // Runtime MCP mode active with an empty set: only Claude系 providers
+      // emit `strictMcpConfig`/`--strict-mcp-config` to suppress ambient
+      // project/user/plugin MCP config (order.md:160,166,172). Other
+      // providers have no ambient-config suppression contract, so an empty
+      // set remains a no-op for them.
+      if (provider !== 'claude-sdk' && provider !== 'claude' && provider !== 'claude-terminal') {
+        return undefined;
+      }
+      const adapter = createMcpAdapter(provider);
+      const identity = options.mcpServerIdentity ?? buildMcpServerSetIdentity(mcpServers ?? {});
+      const resolved: ResolvedMcpServers = {
+        enabled: false,
+        servers: {},
+        serverNames: [],
+        identity,
+      };
+      const prepared = await adapter.prepare(resolved, {
+        cwd: options.cwd,
+        ...(options.abortSignal !== undefined ? { abortSignal: options.abortSignal } : {}),
+        ...(options.projectCwd !== undefined ? { sourcePath: options.projectCwd } : {}),
+        ...(options.childProcessEnv !== undefined ? { childProcessEnv: options.childProcessEnv } : {}),
+        ...(permissionMode !== undefined ? { permissionMode } : {}),
+      });
+      log.debug('Prepared MCP adapter (empty set, runtime mode)', {
+        provider,
+        hasArgs: prepared.args !== undefined,
+        hasSdkOptions: prepared.sdkOptions !== undefined,
+      });
+      return prepared;
+    }
+    const adapter = createMcpAdapter(provider);
+    const identity = options.mcpServerIdentity ?? buildMcpServerSetIdentity(mcpServers);
+    const resolved: ResolvedMcpServers = {
+      enabled: true,
+      servers: mcpServers,
+      serverNames: Object.keys(mcpServers).sort(),
+      identity,
+    };
+    adapter.validate(resolved, { sourcePath: options.projectCwd });
+    const prepared = await adapter.prepare(resolved, {
+      cwd: options.cwd,
+      ...(options.abortSignal !== undefined ? { abortSignal: options.abortSignal } : {}),
+      ...(options.projectCwd !== undefined ? { sourcePath: options.projectCwd } : {}),
+      ...(options.childProcessEnv !== undefined ? { childProcessEnv: options.childProcessEnv } : {}),
+      ...(permissionMode !== undefined ? { permissionMode } : {}),
+    });
+    // Log the resolved MCP server configuration through the secret-redaction
+    // helper so env/header secret values are never written to logs
+    // (order.md:110, ARCH-NEW-6). Only server names and transports are
+    // surfaced by the adapter summary fields above; this record adds the
+    // redacted server definitions for debugging.
+    const redactedServers = Object.fromEntries(
+      Object.entries(mcpServers).map(([name, server]) => [name, redactMcpServerForLog(server)]),
+    );
+    log.debug('Prepared MCP adapter', {
+      provider,
+      serverNames: resolved.serverNames,
+      servers: redactedServers,
+      hasArgs: prepared.args !== undefined,
+      hasSdkOptions: prepared.sdkOptions !== undefined,
+      hasConfig: prepared.config !== undefined,
+      hasServerConfig: prepared.serverConfig !== undefined,
+      hasConfigRoot: prepared.configRoot !== undefined,
+    });
+    return prepared;
+  }
+
+  /**
+   * Invoke a provider agent and guarantee the prepared MCP adapter is disposed
+   * on every path — success, failure, abort, and timeout (order.md:151,334).
+   */
+  private static async callAgentWithMcp(
+    agent: ProviderAgent,
+    task: string,
+    callOptions: ProviderCallOptions,
+    preparedMcp: PreparedProviderMcp | undefined,
+  ): Promise<AgentResponse> {
+    try {
+      return await agent.call(task, callOptions);
+    } finally {
+      await preparedMcp?.dispose();
+    }
   }
 }
 

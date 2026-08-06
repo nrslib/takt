@@ -6,6 +6,7 @@ import type {
   FindingContractRuntimeConfig,
   ResolvedObservabilityConfig,
   TagRoutingConflictPolicy,
+  WorkflowMcpServersConfig,
 } from '../../../core/models/config-types.js';
 import { buildRunPaths } from '../../../core/workflow/run/run-paths.js';
 import { readRunMetaBySlug } from '../../../core/workflow/run/run-meta.js';
@@ -73,9 +74,12 @@ import type { WorkflowExecutionOptions } from './types.js';
 import { resolveCompiledProviderEnvironment } from '../../../infra/config/runtime-provider/provider-environment.js';
 import {
   collectLegacyProviderSignals,
+  collectLegacyMcpSignals,
   selectConfigTaktProviders,
 } from '../../../infra/config/runtime-provider/legacy-signals.js';
 import type { LegacyProviderEnvironmentInput } from '../../../infra/config/runtime-provider/environment.js';
+import type { McpAssignmentSection } from '../../../infra/config/runtime-provider/mcp-assignment.js';
+import type { McpServerConfig } from '../../../core/models/index.js';
 import { assertTaskPrefixPair, detectStepType } from './workflowExecutionUtils.js';
 import type { WorkflowRunBootstrap } from './workflowRunLifecycle.js';
 import { inheritWorkflowConfigMetadata } from '../../../shared/workflowConfigMetadata.js';
@@ -130,6 +134,12 @@ export interface WorkflowExecutionBootstrap {
   traceReportMode: TraceReportMode;
   promptLogPath?: string;
   operationJournal: WorkflowOperationJournalContext;
+  /**
+   * Runtime MCP assignment section (runtime-v1 only, issue #1137). Passed to
+   * the workflow engine so `OptionsBuilder` can resolve effective MCP servers
+   * per agent step.
+   */
+  mcpAssignment: McpAssignmentSection | undefined;
 }
 
 export interface WorkflowExecutionResumeLineage {
@@ -433,6 +443,7 @@ export async function createWorkflowExecutionBootstrap(
     'observability',
     'autoRouting',
     'findingContract',
+    'workflowMcpServers',
   ]);
   const traceReportMode = globalConfig.logging?.trace === true ? 'full' : 'redacted';
   const allowSensitiveData = traceReportMode === 'full';
@@ -537,6 +548,26 @@ export async function createWorkflowExecutionBootstrap(
       options.providerOptionsSource,
     ),
   });
+  // Legacy workflow MCP mode (`mcp_servers` / `workflow_mcp_servers`) must not
+  // coexist with an active `runtime.yaml.mcp` section (order.md:112-118).
+  // Collect legacy MCP signals from the workflow and fail-fast on mix.
+  if (providerEnvironment.mcpAssignment !== undefined) {
+    const legacyMcpSignals = collectWorkflowLegacyMcpSignals(
+      workflowConfig,
+      globalConfig.workflowMcpServers,
+    );
+    if (legacyMcpSignals.length > 0) {
+      const lines = legacyMcpSignals.map(
+        (signal) => `  - ${signal.setting} at ${signal.location} → migrate to ${signal.migrateTo}`,
+      );
+      throw new Error([
+        'Mixed MCP configuration detected: an active runtime.yaml mcp section cannot',
+        'coexist with legacy workflow MCP settings. Remove the runtime.yaml mcp section or migrate',
+        'the following legacy settings:',
+        ...lines,
+      ].join('\n'));
+    }
+  }
   const currentProvider = providerEnvironment.provider;
   // Fail fast when neither the legacy config nor a runtime.yaml profile resolves a provider.
   // A runtime-v1 pool default legitimately leaves the fixed provider unset (auto routing
@@ -711,7 +742,52 @@ export async function createWorkflowExecutionBootstrap(
     traceReportMode,
     ...(promptLogPath === undefined ? {} : { promptLogPath }),
     operationJournal,
+    mcpAssignment: providerEnvironment.mcpAssignment,
   };
+}
+
+/**
+ * Collect legacy workflow MCP signals from a workflow config. Reports the
+ * workflow-level `workflow_mcp_servers` policy and each per-step `mcpServers`
+ * map as a distinct signal so the mixed-config gate names every location
+ * (order.md:112-118). The workflow-level policy is read from project/global
+ * `config.yaml` (it is not part of `WorkflowConfig`); step `mcpServers` are
+ * read from the workflow steps. Each step with `mcpServers` produces one
+ * signal carrying the step name, so the error points at the actual step
+ * rather than a flattened workflow-level location.
+ */
+function collectWorkflowLegacyMcpSignals(
+  workflowConfig: WorkflowConfig,
+  workflowMcpServersPolicy: WorkflowMcpServersConfig | undefined,
+): ReturnType<typeof collectLegacyMcpSignals> {
+  const signals: ReturnType<typeof collectLegacyMcpSignals> = [];
+
+  const policySignals = collectLegacyMcpSignals({
+    workflowMcpServersPolicy: workflowMcpServersPolicy as Record<string, unknown> | undefined,
+    workflowStepMcpServers: undefined,
+    workflowName: workflowConfig.name,
+    workflowStepName: undefined,
+  });
+  signals.push(...policySignals);
+
+  for (const step of workflowConfig.steps) {
+    if (!('mcpServers' in step) || step.mcpServers === undefined) {
+      continue;
+    }
+    const servers = step.mcpServers as Record<string, McpServerConfig>;
+    if (Object.keys(servers).length === 0) {
+      continue;
+    }
+    const stepSignals = collectLegacyMcpSignals({
+      workflowMcpServersPolicy: undefined,
+      workflowStepMcpServers: servers,
+      workflowName: workflowConfig.name,
+      workflowStepName: step.name,
+    });
+    signals.push(...stepSignals);
+  }
+
+  return signals;
 }
 
 export { detectStepType, isQuietMode };

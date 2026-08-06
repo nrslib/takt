@@ -33,6 +33,7 @@ function toCodexOptions(options: ProviderCallOptions): CodexCallOptions {
     outputSchema: options.outputSchema,
     imageAttachments: options.imageAttachments,
     childProcessEnv: options.childProcessEnv,
+    preparedMcp: options.preparedMcp,
   };
 }
 
@@ -42,6 +43,7 @@ export class CodexProvider implements Provider {
   readonly supportsIsolatedStructuredExecution = true;
   readonly supportsNativeImageInput = true;
   readonly supportsStrictInternalAgentIsolation = true;
+  readonly supportedMcpTransports: ReadonlySet<'stdio' | 'sse' | 'http'> = new Set(['stdio', 'http']);
 
   getRuntimeInstructions(_allowedTools?: string[]): string | null {
     return null;

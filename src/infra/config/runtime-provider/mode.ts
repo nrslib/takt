@@ -47,10 +47,39 @@ export function hasActiveProviderSection(file: RuntimeProviderFile | undefined):
   return hasDefaults || hasProfiles || hasTargets || hasAutoRouting;
 }
 
+/**
+ * True only when the runtime.yaml carries an `mcp` section with meaningful
+ * content. The `mcp` section is independent from `provider` — it may be active
+ * alone (order.md:36, plan MCP-LEGACY-GATE). `mcp.servers` alone is considered
+ * active because the user has defined servers even if no `defaults`/`targets`
+ * assign them yet (the resolver will simply yield an empty effective set).
+ */
+export function hasActiveMcpSection(file: RuntimeProviderFile | undefined): boolean {
+  const mcp = file?.mcp;
+  if (!mcp) {
+    return false;
+  }
+  const hasServers = mcp.servers !== undefined && Object.keys(mcp.servers).length > 0;
+  const hasDefaults = mcp.defaults !== undefined && mcp.defaults.servers.length > 0;
+  const hasTargets = mcp.targets !== undefined
+    && Object.values(mcp.targets).some((map) => {
+      if (map === undefined) {
+        return false;
+      }
+      if ('selector' in map) {
+        return map.selector?.exclude !== undefined && map.selector.exclude.length > 0;
+      }
+      return Object.keys(map).length > 0;
+    });
+  return hasServers || hasDefaults || hasTargets;
+}
+
 export function determineProviderConfigMode(
   input: DetermineProviderConfigModeInput,
 ): { mode: ProviderConfigMode } {
-  if (!hasActiveProviderSection(input.runtimeFile)) {
+  const hasProvider = hasActiveProviderSection(input.runtimeFile);
+  const hasMcp = hasActiveMcpSection(input.runtimeFile);
+  if (!hasProvider && !hasMcp) {
     return { mode: 'legacy' };
   }
   if (input.legacyProviderSignals.length > 0) {

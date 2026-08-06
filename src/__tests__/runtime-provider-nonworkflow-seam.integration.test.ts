@@ -244,6 +244,31 @@ describe('runtime.yaml non-workflow provider resolution', () => {
     });
   });
 
+  // Unit: mcp-only runtime (active `mcp` section, no `provider` section) must not throw at the
+  // non-workflow seam. The `mcp` assignment flows through the workflow bootstrap; provider/model
+  // resolution stays on the legacy config.yaml path (order.md:36, symmetric with
+  // resolveCompiledProviderEnvironment in provider-environment.ts). With no legacy provider
+  // signals the seam returns `undefined` so the caller keeps legacy resolution.
+  it('returns undefined for an mcp-only runtime so the non-workflow seam keeps legacy config.yaml resolution', () => {
+    writeGlobalConfig(['language: en']);
+    writeGlobalRuntimeFile({
+      version: 1,
+      mcp: {
+        servers: {
+          'common-tools': { type: 'stdio', command: 'common-srv' },
+        },
+        defaults: { servers: ['common-tools'] },
+      },
+    });
+    invalidate();
+
+    expect(resolveRuntimeNonWorkflowProvider(projectCwd)).toBeUndefined();
+    expect(resolveNonWorkflowProviderModel(projectCwd)).toEqual({
+      runtimeManaged: false,
+      provider: 'claude',
+    });
+  });
+
   it('returns undefined runtime resolution for an inactive runtime file (version only)', () => {
     writeGlobalConfig(['language: en', 'provider: claude', 'model: sonnet']);
     writeGlobalRuntimeFile({ version: 1 });

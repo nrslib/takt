@@ -49,6 +49,7 @@ export const mockE2eSpecs = [
   'e2e/specs/clone-branch-resolution.e2e.ts',
   'e2e/specs/resume-report-inheritance.e2e.ts',
   'e2e/specs/workflow-call-budget.e2e.ts',
+  'e2e/specs/runtime-mcp.e2e.ts',
 ];
 
 export const mockE2eShards = [
@@ -109,6 +110,7 @@ export const mockE2eShards = [
     'e2e/specs/repertoire.e2e.ts',
     'e2e/specs/repertoire-real.e2e.ts',
     'e2e/specs/workflow-call-budget.e2e.ts',
+    'e2e/specs/runtime-mcp.e2e.ts',
   ],
 ];
 

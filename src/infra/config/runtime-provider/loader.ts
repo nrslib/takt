@@ -17,6 +17,7 @@ import {
   RuntimeProviderFileSchema,
   type RuntimeProviderFile,
   type RuntimeProviderSection,
+  type McpSection,
 } from './schema.js';
 
 /** Load and validate a single runtime.yaml. Returns undefined when the file is absent or empty. */
@@ -63,9 +64,34 @@ function mergeRuntimeProviderFiles(
   project: RuntimeProviderFile,
 ): RuntimeProviderFile {
   const provider = mergeProviderSections(global.provider, project.provider);
-  return provider
-    ? { version: RUNTIME_PROVIDER_VERSION, provider }
-    : { version: RUNTIME_PROVIDER_VERSION };
+  const mcp = mergeMcpSections(global.mcp, project.mcp);
+  const result: RuntimeProviderFile = { version: RUNTIME_PROVIDER_VERSION };
+  if (provider) {
+    result.provider = provider;
+  }
+  if (mcp) {
+    result.mcp = mcp;
+  }
+  return result;
+}
+
+/**
+ * Merge the `mcp` section across the global and project layers. When both
+ * layers carry an `mcp` section, the project's section replaces the global one
+ * wholesale — same-name servers are not field-merged, and `defaults`/`targets`
+ * take the project value when present (order.md:108, plan MCP-MERGE).
+ */
+function mergeMcpSections(
+  global: McpSection | undefined,
+  project: McpSection | undefined,
+): McpSection | undefined {
+  if (global === undefined) {
+    return project;
+  }
+  if (project === undefined) {
+    return global;
+  }
+  return project;
 }
 
 function mergeProviderSections(

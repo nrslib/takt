@@ -139,6 +139,52 @@ describe('runtime.yaml internal_agents resolution', () => {
     expect(selector.providerSource).toBe('global');
   });
 
+  // Unit: mcp-only runtime (active `mcp` section, no `provider` section) must not throw at the
+  // internal-agent seam. The `mcp` assignment flows through the workflow bootstrap; provider/model
+  // resolution stays on the legacy config.yaml path (order.md:36, symmetric with
+  // resolveCompiledProviderEnvironment in provider-environment.ts). With no legacy provider
+  // signals the seam returns `undefined` so the caller keeps legacy resolution.
+  it('returns undefined for an mcp-only runtime so the selector keeps legacy config.yaml resolution', () => {
+    writeGlobalConfig(['language: en']);
+    writeGlobalRuntimeFile({
+      version: 1,
+      mcp: {
+        servers: {
+          'common-tools': { type: 'stdio', command: 'common-srv' },
+        },
+        defaults: { servers: ['common-tools'] },
+      },
+    });
+    invalidate();
+
+    expect(resolveRuntimeInternalAgentProvider(projectCwd, 'selector')).toBeUndefined();
+
+    // The selector seam falls back to legacy config.yaml resolution (schema default provider).
+    const selector = resolveSelectorProviderForProject(projectCwd);
+    expect(selector.provider).toBe('claude');
+    expect(selector.providerSource).toBe('global');
+  });
+
+  it('returns undefined for an mcp-only runtime so the assistant keeps legacy config.yaml resolution', () => {
+    writeGlobalConfig(['language: en']);
+    writeGlobalRuntimeFile({
+      version: 1,
+      mcp: {
+        servers: {
+          'common-tools': { type: 'stdio', command: 'common-srv' },
+        },
+        defaults: { servers: ['common-tools'] },
+      },
+    });
+    invalidate();
+
+    expect(resolveRuntimeInternalAgentProvider(projectCwd, 'assistant')).toBeUndefined();
+    expect(resolveAssistantProviderModel(projectCwd)).toEqual({
+      runtimeManaged: false,
+      provider: 'claude',
+    });
+  });
+
   // Unit A: the assistant seam carries runtime profile options and drops them symmetrically with
   // the selector seam on a CLI provider override.
   it('carries the assistant profile options and drops them on a provider override', () => {

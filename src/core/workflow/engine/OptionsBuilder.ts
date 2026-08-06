@@ -27,6 +27,7 @@ import {
   providerSupportsStructuredOutput,
 } from '../../../infra/providers/provider-capabilities.js';
 import type { ProviderType, StreamCallback } from '../../../shared/types/provider.js';
+import { resolveMcpAssignment, type AgentExecutionContext } from '../../../infra/config/runtime-provider/mcp-assignment.js';
 import type {
   WorkflowEngineOptions,
   PhaseName,
@@ -330,6 +331,7 @@ export class OptionsBuilder {
       bypassPermissions: this.engineOptions.bypassPermissions,
       workflowMeta,
       childProcessEnv: this.engineOptions.childProcessEnv,
+      mcpAssignment: this.engineOptions.mcpAssignment,
     };
     return baseOptions;
   }
@@ -356,6 +358,7 @@ export class OptionsBuilder {
       onAskUserQuestion: baseOptions.onAskUserQuestion,
       workflowMeta: baseOptions.workflowMeta,
       childProcessEnv: baseOptions.childProcessEnv,
+      mcpAssignment: baseOptions.mcpAssignment,
     };
   }
 
@@ -412,27 +415,86 @@ export class OptionsBuilder {
     step: WorkflowStep,
     provider: ProviderType | undefined,
   ): Record<string, McpServerConfig> | undefined {
+    // runtime MCP mode forbids workflow-sourced `step.mcpServers` (order.md:118,120).
+    // The root-workflow bootstrap gate catches top-level steps, but sub-workflow
+    // engines are constructed via `new WorkflowEngine(...)` and bypass bootstrap,
+    // so this guard runs for every engine level (root + nested). Empty `mcpServers`
+    // is a no-op and allowed; session-boundary `engineOptions.mcpServers` (CLI/ACP)
+    // is not workflow-sourced and remains permitted.
+    if (this.engineOptions.mcpAssignment !== undefined) {
+      const stepMcpServers = step.mcpServers as Record<string, McpServerConfig> | undefined;
+      if (stepMcpServers !== undefined && Object.keys(stepMcpServers).length > 0) {
+        const workflowStack = this.getCurrentWorkflowStack();
+        const workflowName = workflowStack !== undefined && workflowStack.length > 0
+          ? workflowStack[workflowStack.length - 1]?.workflow_ref
+          : this.getWorkflowName();
+        const workflowLabel = workflowName !== undefined ? `"${workflowName}"` : '(unknown workflow)';
+        throw new Error(
+          `Mixed MCP configuration detected: runtime MCP mode is active, but step "${step.name}" of workflow ${workflowLabel} declares workflow-sourced mcp_servers. Remove the step mcp_servers or migrate them to mcp.targets.steps.`,
+        );
+      }
+    }
+    const runtimeServers = this.resolveRuntimeMcpServersForStep(step);
     const sessionServers = resolveSessionMcpServersForProvider(
       this.engineOptions.mcpServers,
       provider,
       step.name,
     );
     const stepServers = resolveMcpServersForProvider(step.mcpServers, provider);
-    if (!sessionServers) {
-      return stepServers;
+    return mergeMcpServerMaps(runtimeServers, sessionServers, stepServers, step.name);
+  }
+
+  /**
+   * Resolve runtime MCP assignment (runtime-v1 only) for a step. Returns
+   * `undefined` when no `mcpAssignment` is configured or the resolved set is
+   * empty (MCP disabled). Fail-fast on unknown server names is handled inside
+   * `resolveMcpAssignment`.
+   */
+  private resolveRuntimeMcpServersForStep(
+    step: WorkflowStep,
+  ): Record<string, McpServerConfig> | undefined {
+    const section = this.engineOptions.mcpAssignment;
+    if (section === undefined) {
+      return undefined;
     }
-    if (!stepServers) {
-      return sessionServers;
+    const context = this.buildMcpAgentExecutionContext(step);
+    const resolved = resolveMcpAssignment(section, context);
+    if (!resolved.enabled) {
+      return undefined;
     }
-    for (const serverName of Object.keys(sessionServers)) {
-      if (Object.prototype.hasOwnProperty.call(stepServers, serverName)) {
-        throw new Error(`MCP server "${serverName}" is defined by both session and step "${step.name}"`);
-      }
-    }
+    return resolved.servers;
+  }
+
+  private buildMcpAgentExecutionContext(step: WorkflowStep): AgentExecutionContext {
+    const workflowStack = this.getCurrentWorkflowStack();
+    const leafWorkflowName = workflowStack !== undefined && workflowStack.length > 0
+      ? workflowStack[workflowStack.length - 1]?.workflow_ref
+      : this.getWorkflowName();
+    const stepQualifiedName = leafWorkflowName !== undefined
+      ? `${leafWorkflowName}/${step.name}`
+      : step.name;
     return {
-      ...sessionServers,
-      ...stepServers,
+      persona: step.persona,
+      tags: step.tags ?? [],
+      stepQualifiedName,
+      isWorkflowCallNode: getWorkflowStepKind(step) === 'workflow_call',
+      isInternalAgent: false,
     };
+  }
+
+  /**
+   * Compute the MCP server set identity for session key isolation. Returns
+   * `undefined` when runtime MCP assignment is not configured or yields an
+   * empty set; the session key then falls back to the legacy form.
+   */
+  private resolveMcpServerIdentityForSession(step: WorkflowStep): string | undefined {
+    const section = this.engineOptions.mcpAssignment;
+    if (section === undefined) {
+      return undefined;
+    }
+    const context = this.buildMcpAgentExecutionContext(step);
+    const resolved = resolveMcpAssignment(section, context);
+    return resolved.enabled ? resolved.identity : undefined;
   }
 
   /** Build RunAgentOptions for Phase 1 (main execution) */
@@ -468,14 +530,19 @@ export class OptionsBuilder {
     const supportsStructuredOutput = providerSupportsStructuredOutput(resolvedProvider);
     const baseOptions = this.buildBaseOptions(step, mergedProviderOptions, runtime);
 
+    const mcpServers = this.resolveMcpServersForStep(step, resolvedProvider);
+    const mcpServerIdentity = this.resolveMcpServerIdentityForSession(step);
+
     return {
       ...baseOptions,
       workflowMeta: this.buildPhase1WorkflowMeta(baseOptions.workflowMeta, runtime),
       sessionId: shouldResumeSession
-        ? this.getSessionId(buildSessionKey(step, { provider: resolvedProvider, model: resolvedModel }))
+        ? this.getSessionId(buildSessionKey(step, { provider: resolvedProvider, model: resolvedModel, mcpServerIdentity }))
         : undefined,
       allowedTools,
-      mcpServers: this.resolveMcpServersForStep(step, resolvedProvider),
+      mcpServers,
+      mcpServerIdentity,
+      mcpAssignment: this.engineOptions.mcpAssignment,
       outputSchema: supportsStructuredOutput === false ? undefined : step.structuredOutput?.schema,
     };
   }
@@ -624,7 +691,11 @@ export class OptionsBuilder {
       getSessionId: (persona: string) => state.personaSessions.get(persona),
       resolveSessionKey: (step) => {
         const providerInfo = this.resolveStepProviderModel(step, runtime);
-        return buildSessionKey(step, { provider: providerInfo.provider, model: providerInfo.model });
+        return buildSessionKey(step, {
+          provider: providerInfo.provider,
+          model: providerInfo.model,
+          mcpServerIdentity: this.resolveMcpServerIdentityForSession(step),
+        });
       },
       buildResumeOptions: (step, sessionId, overrides) => this.buildResumeOptions(step, sessionId, overrides, runtime),
       buildNewSessionReportOptions: (step, overrides) => this.buildNewSessionReportOptions(step, overrides, runtime),
@@ -647,4 +718,40 @@ export class OptionsBuilder {
 
     return this.engineOptions.structuredCaller;
   }
+}
+
+/**
+ * Merge runtime, session, and step MCP server maps. Conflicts between any two
+ * layers fail fast so the user sees a deterministic error instead of a silent
+ * override (order.md:115-118). `undefined` layers are skipped.
+ */
+function mergeMcpServerMaps(
+  runtime: Record<string, McpServerConfig> | undefined,
+  session: Record<string, McpServerConfig> | undefined,
+  step: Record<string, McpServerConfig> | undefined,
+  stepName: string,
+): Record<string, McpServerConfig> | undefined {
+  if (runtime === undefined && session === undefined && step === undefined) {
+    return undefined;
+  }
+  const merged: Record<string, McpServerConfig> = {};
+  for (const [label, map] of [
+    ['runtime', runtime],
+    ['session', session],
+    ['step', step],
+  ] as const) {
+    if (map === undefined) {
+      continue;
+    }
+    for (const serverName of Object.keys(map)) {
+      if (Object.prototype.hasOwnProperty.call(merged, serverName)) {
+        throw new Error(`MCP server "${serverName}" is defined by both ${label} and another source for step "${stepName}"`);
+      }
+      const server = map[serverName];
+      if (server !== undefined) {
+        merged[serverName] = server;
+      }
+    }
+  }
+  return merged;
 }
