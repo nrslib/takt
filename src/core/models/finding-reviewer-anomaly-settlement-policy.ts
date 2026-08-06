@@ -1,4 +1,5 @@
 import { canonicalJson } from '../../shared/utils/canonical-json.js';
+import { compareBinaryStrings } from '../../shared/utils/binary-string-comparator.js';
 import {
   captureFindingMutationPrecondition,
   sameFindingMutationPrecondition,
@@ -251,12 +252,16 @@ function hasTerminalDismissalAuthority(input: {
 
 /**
  * 「同じレビュアー枠の次の完全なレビューが台帳へ登録された」ことによる決着は
- * product finding を根拠に持たない。成立条件は機械判定できる2点だけ:
+ * product finding を根拠に持たない。成立条件は機械判定できる3点だけ:
  *   - その anomaly をまだ誰も決着させていない(昇格済みは昇格側が決着)
- *   - 決着を記録したレビュアーがその anomaly の観測者である
- * intake-contract anomaly は言い直し(restatement)契約という固有の決着経路を
- * 持つため、この経路では決着させない — presentation / terminalDisposition と
- * 二重に決着すると監査記録が矛盾する。
+ *   - intake-contract anomaly ではない(あちらは言い直し契約という固有の決着経路を
+ *     持ち、presentation / terminalDisposition と二重に決着すると監査記録が矛盾する)
+ *   - 決着根拠として記録されたレビュアー集合が anomaly の観測者集合と完全一致する
+ *
+ * 完全一致を要求するのは、取り下げの成立条件が「全観測者の後続レビュー成立」
+ * (collectReviewSupersededReviewerAnomalyIds の every 判定)だからで、部分集合を
+ * 許すと再提示の機会を得ていない観測者の主張ごとゲートが緩む。過剰(観測者でない
+ * レビュアーの混入)も根拠として無効なので拒否する。
  */
 function reviewWithdrawalEligibilityViolation(
   anomaly: ReviewerAnomalyEntry,
@@ -268,9 +273,11 @@ function reviewWithdrawalEligibilityViolation(
   if (anomaly.intakeContract !== undefined) {
     return 'intake-contract anomalies settle through their restatement contract';
   }
-  return anomaly.reviewers.includes(settlement.reviewer)
+  const recorded = settlement.supersedingPublications.map(({ reviewer }) => reviewer);
+  return canonicalJson([...new Set(recorded)].sort(compareBinaryStrings))
+    === canonicalJson([...new Set(anomaly.reviewers)].sort(compareBinaryStrings))
     ? undefined
-    : 'withdrawal must be recorded by a reviewer that observed the anomaly';
+    : 'withdrawal must record a superseding review for every reviewer that observed the anomaly';
 }
 
 export function reviewerAnomalySettlementEligibilityViolation(input: {

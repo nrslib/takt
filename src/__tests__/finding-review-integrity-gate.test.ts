@@ -406,8 +406,12 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
       findings: unknown[];
       reviewerAnomalies?: Array<{
         occurrences: number;
+        reviewers: string[];
         promotedFindingId?: string;
-        settlement?: { kind: string; reviewer: string };
+        settlement?: {
+          kind: string;
+          supersedingPublications?: Array<{ reviewer: string; publicationId: string }>;
+        };
       }>;
       reviewIntegrity?: { roundMarkers: string[]; exhausted: boolean };
     };
@@ -425,7 +429,9 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
     expect(outstanding).toHaveLength(1);
     for (const settled of anomalies.filter((anomaly) => anomaly.settlement !== undefined)) {
       expect(settled.settlement?.kind).toBe('withdrawn_by_subsequent_review');
-      expect(settled.settlement?.reviewer).toBe('reviewers');
+      // 決着根拠は観測者全員分（この構成では単一レビュアー "reviewers"）。
+      expect(settled.settlement?.supersedingPublications?.map(({ reviewer }) => reviewer))
+        .toEqual([...settled.reviewers].sort());
     }
   }, 30_000);
 

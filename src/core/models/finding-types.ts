@@ -1601,10 +1601,18 @@ export interface ReviewerAnomalyTargetSettlement {
  */
 export interface ReviewerAnomalyReviewWithdrawalSettlement {
   kind: 'withdrawn_by_subsequent_review';
-  /** 後続レビューを登録したレビュアー(= anomaly の reviewers に含まれるステップ名)。 */
-  reviewer: string;
-  /** 決着の根拠になった後続レビューの publication id。 */
-  supersedingPublicationId: string;
+  /**
+   * 決着の根拠になった後続レビューの全件。取り下げは「その anomaly の観測者
+   * 全員が後続レビューを登録した」ときにだけ成立するため、記録も観測者全員分を
+   * 持つ(reviewer で binary 順ソート済み・重複なし・非空)。監査時に
+   * anomaly.reviewers と突き合わせるだけで根拠の網羅性を検証できる。
+   */
+  supersedingPublications: readonly {
+    /** 後続レビューを登録したレビュアー(= anomaly.reviewers の要素)。 */
+    reviewer: string;
+    /** そのレビュアーの後続レビュー publication id。 */
+    publicationId: string;
+  }[];
   decidedAt: FindingObservation;
 }
 

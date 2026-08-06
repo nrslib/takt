@@ -276,8 +276,8 @@ describe('applyReviewerAnomalySpecsToLedger / linkPromotedReviewerAnomalies (rev
     const anomaly = second.reviewerAnomalies![0]!;
     expect(anomaly.id).toBe(first.reviewerAnomalies![0]!.id);
     expect(anomaly.occurrences).toBe(2);
-    expect(anomaly.sourceRawFindingIds.sort()).toEqual(['raw-1', 'raw-2']);
-    expect(anomaly.reviewers.sort()).toEqual(['ai-antipattern-reviewer', 'another-reviewer']);
+    expect([...anomaly.sourceRawFindingIds].sort()).toEqual(['raw-1', 'raw-2']);
+    expect([...anomaly.reviewers].sort()).toEqual(['ai-antipattern-reviewer', 'another-reviewer']);
     // 最新の主張だけが監査値として残る（過去の主張を消したことにはならない —
     // firstObserved は変わらず保持されるため、いつ最初に観測されたかは失われない）。
     expect(anomaly.mismatchReason).toBe('the location changed but still does not exist');
@@ -625,8 +625,9 @@ describe('後続レビュー登録による reviewer anomaly の決着ライフ�
     expect(anomaly.promotedFindingId).toBeUndefined();
     expect(anomaly.settlement).toEqual({
       kind: 'withdrawn_by_subsequent_review',
-      reviewer: 'arch-review',
-      supersedingPublicationId: publicationFor('arch-review').publicationId,
+      supersedingPublications: [
+        { reviewer: 'arch-review', publicationId: publicationFor('arch-review').publicationId },
+      ],
       decidedAt: observation,
     });
     expect(isOutstandingReviewerAnomaly(anomaly)).toBe(false);
@@ -660,17 +661,22 @@ describe('後続レビュー登録による reviewer anomaly の決着ライフ�
       },
       new Set(),
     );
-    expect(seeded.reviewerAnomalies![0]!.reviewers.sort()).toEqual(['arch-review', 'security-review']);
+    expect([...seeded.reviewerAnomalies![0]!.reviewers].sort()).toEqual(['arch-review', 'security-review']);
 
     // 片方だけが再レビューした状態では取り下げない（ゲートを緩めない安全側）。
     const partial = commit({ ledger: seeded, reviewers: ['arch-review'] });
     expect(partial.reviewerAnomalies![0]!.settlement).toBeUndefined();
 
-    // 全観測者の後続レビューが揃って初めて決着し、記録する reviewer は binary 順の先頭。
+    // 全観測者の後続レビューが揃って初めて決着する。根拠は観測者全員分を
+    // binary 順で記録し、1人分に間引かない。
     const complete = commit({ ledger: seeded, reviewers: ['arch-review', 'security-review'] });
-    expect(complete.reviewerAnomalies![0]!.settlement).toMatchObject({
+    expect(complete.reviewerAnomalies![0]!.settlement).toEqual({
       kind: 'withdrawn_by_subsequent_review',
-      reviewer: 'arch-review',
+      supersedingPublications: [
+        { reviewer: 'arch-review', publicationId: publicationFor('arch-review').publicationId },
+        { reviewer: 'security-review', publicationId: publicationFor('security-review').publicationId },
+      ],
+      decidedAt: observation,
     });
   });
 
@@ -732,12 +738,13 @@ describe('後続レビュー登録による reviewer anomaly の決着ライフ�
     expect(isOutstandingReviewerAnomaly(anomaly)).toBe(true);
   });
 
-  it('決着の適格性判定は観測したレビュアーと言い直し契約の有無だけで決まる', () => {
+  it('決着の適格性判定は観測者集合の完全一致と言い直し契約の有無だけで決まる', () => {
     const anomaly = seededLedger().reviewerAnomalies![0]!;
     const settlement = {
       kind: 'withdrawn_by_subsequent_review' as const,
-      reviewer: 'arch-review',
-      supersedingPublicationId: 'a'.repeat(64),
+      supersedingPublications: [
+        { reviewer: 'arch-review', publicationId: 'a'.repeat(64) },
+      ],
       decidedAt: observation,
     };
     const projection = {
@@ -757,13 +764,26 @@ describe('後続レビュー登録による reviewer anomaly の決着ライフ�
       workflowTaskDigest: null,
     })).toBeUndefined();
 
+    // 観測者でないレビュアーの根拠（過剰）は無効。
     expect(reviewerAnomalySettlementEligibilityViolation({
       projection,
       anomaly,
-      settlement: { ...settlement, reviewer: 'security-review' },
+      settlement: {
+        ...settlement,
+        supersedingPublications: [{ reviewer: 'security-review', publicationId: 'a'.repeat(64) }],
+      },
       sourceHead: { kind: 'projection' },
       workflowTaskDigest: null,
-    })).toContain('observed the anomaly');
+    })).toContain('every reviewer that observed the anomaly');
+
+    // 観測者が2人いるのに1人分しか根拠が無い（部分集合）も無効。
+    expect(reviewerAnomalySettlementEligibilityViolation({
+      projection,
+      anomaly: { ...anomaly, reviewers: ['arch-review', 'security-review'] },
+      settlement,
+      sourceHead: { kind: 'projection' },
+      workflowTaskDigest: null,
+    })).toContain('every reviewer that observed the anomaly');
 
     expect(reviewerAnomalySettlementEligibilityViolation({
       projection,

@@ -759,8 +759,16 @@ export const ReviewerAnomalyEntrySchema = z.object({
     }).strict(),
     z.object({
       kind: z.literal('withdrawn_by_subsequent_review'),
-      reviewer: nonEmptyString,
-      supersedingPublicationId: Sha256Schema,
+      supersedingPublications: z.array(z.object({
+        reviewer: nonEmptyString,
+        publicationId: Sha256Schema,
+      }).strict())
+        .min(1)
+        .superRefine((publications, ctx) => validateBinarySortedUniqueSet(
+          publications.map(({ reviewer }) => reviewer),
+          ctx,
+          'superseding publication reviewer',
+        )),
       decidedAt: FindingObservationSchema,
     }).strict(),
   ]).optional(),

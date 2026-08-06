@@ -526,16 +526,21 @@ export function withdrawReviewerAnomaliesSupersededByReview(input: {
       return anomaly;
     }
     // 候補は「全観測者が今ラウンドの publication を持つ」もののみ（collect 側の
-    // every 判定）。settlement に記録する reviewer は binary 順の先頭で決定的に選ぶ。
-    const reviewer = [...anomaly.reviewers].sort(compareBinaryStrings)[0]!;
-    const supersedingPublicationId = input.publicationIdByReviewer.get(reviewer)!;
+    // every 判定）。取り下げ根拠は観測者全員分を記録する — 1人分だけ残すと
+    // 「誰の後続レビューで決着したのか」を監査で再構成できない。順序は reviewer の
+    // binary 順で決定的にする。
+    const supersedingPublications = [...anomaly.reviewers]
+      .sort(compareBinaryStrings)
+      .map((reviewer) => ({
+        reviewer,
+        publicationId: input.publicationIdByReviewer.get(reviewer)!,
+      }));
     changed = true;
     return {
       ...anomaly,
       settlement: {
         kind: 'withdrawn_by_subsequent_review' as const,
-        reviewer,
-        supersedingPublicationId,
+        supersedingPublications,
         decidedAt: input.observation,
       },
     };
