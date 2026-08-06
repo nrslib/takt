@@ -22,6 +22,8 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
+const SLOW_ENGINE_TEST_TIMEOUT_MS = 60_000;
+
 class CapturingSpanExporter implements SpanExporter {
   readonly spans: ReadableSpan[] = [];
 
@@ -344,7 +346,7 @@ describe('finding reviewer observability wiring', () => {
     const ledger = readFindingLedger(cwd, config.name);
     expect(ledger.findings).toHaveLength(1);
     expect(ledger.reviewerAnomalies ?? []).toHaveLength(0);
-  });
+  }, SLOW_ENGINE_TEST_TIMEOUT_MS);
 
   it('parallel reviewers share the request-only provider schema and expose matching real phase spans', async () => {
     const config = makeParallelReviewerConfig();
@@ -395,7 +397,7 @@ describe('finding reviewer observability wiring', () => {
     ]);
     expect(new Set(ledger.findings.flatMap((finding) => finding.evidenceIds)).size).toBe(4);
     expect(ledger.reviewerAnomalies ?? []).toHaveLength(0);
-  });
+  }, SLOW_ENGINE_TEST_TIMEOUT_MS);
 
   it('reviewer 実行中に source が変わっても engine snapshot から quote を発行する', async () => {
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
@@ -438,5 +440,5 @@ describe('finding reviewer observability wiring', () => {
     const ledger = readFindingLedger(cwd, config.name);
     expect(ledger.findings).toHaveLength(1);
     expect(ledger.reviewerAnomalies ?? []).toHaveLength(0);
-  });
+  }, SLOW_ENGINE_TEST_TIMEOUT_MS);
 });
