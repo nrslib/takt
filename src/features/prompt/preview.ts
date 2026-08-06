@@ -44,6 +44,7 @@ import { redactProviderOptions } from '../../core/workflow/providerOptionsRedact
 import { header, info, error, blankLine } from '../../shared/ui/index.js';
 import { DEFAULT_WORKFLOW_NAME } from '../../shared/constants.js';
 import { sanitizeTerminalText } from '../../shared/utils/text.js';
+import { getErrorMessage } from '../../shared/utils/error.js';
 import { translateWorkflowConfigError } from '../../shared/workflowConfigMetadata.js';
 
 function printStepExecutionMetadata(step: WorkflowStep): void {
@@ -182,13 +183,33 @@ function printFindingContractMetadata(
   info(`Finding adjudicator model: ${formatConfiguredValue(adjudicatorProviderInfo.model)}`);
 }
 
+/**
+ * レビュー範囲はプレビュー実行ごとに1度だけ解決する。ステップ・並列サブステップごとに
+ * 再解決すると、同じプレビュー出力の中で提示される範囲がずれ得る。
+ *
+ * `takt prompt` は診断ツールであり、レビュー範囲はプレビュー対象の一部でしかない。
+ * git が使えない、リポジトリが壊れている、パスが非 UTF-8 といった理由で範囲を
+ * 解決できなくても、プロンプト本体のプレビューは見せる価値がある。そのため
+ * ここだけ例外を診断値へ変換する。**この変換は preview 経路限定** であり、
+ * 実行時（WorkflowEngineSetup 経由）のスコープ解決は fail-fast のまま変えない。
+ * 範囲が undefined のとき `{review_scope}` は「算出していません」に解決する。
+ */
+function resolvePreviewReviewScope(cwd: string): TaskReviewScope | undefined {
+  try {
+    return collectTaskReviewScope({ cwd, baseRange: resolveReviewScopeBaseRange(cwd) });
+  } catch (err) {
+    info(`Review scope unavailable: ${sanitizeTerminalText(getErrorMessage(err))}`);
+    return undefined;
+  }
+}
+
 function buildInstructionContext(
   cwd: string,
   config: WorkflowConfig,
   stepIndex: number,
   step: WorkflowStep,
   language: Language,
-  reviewScope: TaskReviewScope,
+  reviewScope: TaskReviewScope | undefined,
 ): InstructionContext {
   return {
     task: '<task content>',
@@ -215,7 +236,7 @@ function previewAgentStep(
   stepIndex: number,
   step: WorkflowStep,
   language: Language,
-  reviewScope: TaskReviewScope,
+  reviewScope: TaskReviewScope | undefined,
 ): void {
   printStepExecutionMetadata(step);
 
@@ -300,9 +321,7 @@ export async function previewPrompts(
   printFindingContractMetadata(config, providerResolution);
   blankLine();
 
-  // レビュー範囲はプレビュー実行ごとに1度だけ解決する。ステップ・並列サブステップごとに
-  // 再解決すると、同じプレビュー出力の中で提示される範囲がずれ得る。
-  const reviewScope = collectTaskReviewScope({ cwd, baseRange: resolveReviewScopeBaseRange(cwd) });
+  const reviewScope = resolvePreviewReviewScope(cwd);
 
   for (const [i, step] of config.steps.entries()) {
     const separator = '='.repeat(60);

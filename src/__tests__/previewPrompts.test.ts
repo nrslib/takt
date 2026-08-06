@@ -23,6 +23,8 @@ const {
   mockReportBuild,
   mockJudgmentBuild,
   mockNeedsStatusJudgmentPhase,
+  mockResolveReviewScopeBaseRange,
+  mockCollectTaskReviewScope,
 } = vi.hoisted(() => ({
   mockLoadWorkflowByIdentifier: vi.fn(),
   mockResolveWorkflowConfigValue: vi.fn(),
@@ -37,6 +39,8 @@ const {
   mockReportBuild: vi.fn(() => 'phase2'),
   mockJudgmentBuild: vi.fn(() => 'phase3'),
   mockNeedsStatusJudgmentPhase: vi.fn(() => false),
+  mockResolveReviewScopeBaseRange: vi.fn(),
+  mockCollectTaskReviewScope: vi.fn(),
 }));
 
 vi.mock('../infra/config/index.js', () => ({
@@ -96,6 +100,11 @@ vi.mock('../core/workflow/index.js', () => ({
   needsStatusJudgmentPhase: mockNeedsStatusJudgmentPhase,
 }));
 
+vi.mock('../core/workflow/review-scope.js', () => ({
+  resolveReviewScopeBaseRange: mockResolveReviewScopeBaseRange,
+  collectTaskReviewScope: mockCollectTaskReviewScope,
+}));
+
 vi.mock('../shared/ui/index.js', () => ({
   header: mockHeader,
   info: mockInfo,
@@ -119,6 +128,12 @@ describe('previewPrompts', () => {
       return undefined;
     });
     mockResolveAuxiliaryProviderEnvironment.mockReturnValue(compiledEnvironment());
+    mockResolveReviewScopeBaseRange.mockReturnValue({ kind: 'base_branch_head' });
+    mockCollectTaskReviewScope.mockReturnValue({
+      kind: 'collected',
+      paths: [],
+      source: { kind: 'working_tree', baseRange: { kind: 'base_branch_head' } },
+    });
     mockResolveWorkflowSelector.mockImplementation((workflow: {
       steps?: Array<{ parallel?: { kind?: string } }>;
     }) => workflow.steps?.some((step) => step.parallel?.kind === 'dynamic')
@@ -160,6 +175,20 @@ describe('previewPrompts', () => {
       '/project',
       expect.objectContaining({ name: 'default' }),
     );
+  });
+
+  // takt prompt は診断ツール。レビュー範囲を解決できなくてもプロンプト本体の
+  // プレビューは出す（実行時の fail-fast は変えない）。
+  it('スコープ解決が失敗してもプレビューを継続し理由を表示する', async () => {
+    mockResolveReviewScopeBaseRange.mockImplementationOnce(() => {
+      throw new Error('spawnSync git ENOENT');
+    });
+
+    await expect(previewPrompts('/project', undefined, undefined)).resolves.toBeUndefined();
+
+    expect(mockInfo).toHaveBeenCalledWith('Review scope unavailable: spawnSync git ENOENT');
+    expect(console.log).toHaveBeenCalledWith('Step 1: implement (persona: coder)');
+    expect(console.log).toHaveBeenCalledWith('phase1');
   });
 
   it('step番号の見出しを表示する', async () => {
