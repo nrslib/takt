@@ -60,9 +60,15 @@ export function issueFindingScopeBindings(input: {
   const findingContractDigest = findingContentAddress('finding-contract-config', input.contract);
   const bindings: FindingScopeBinding[] = [];
   // changedPaths は base コミット以降のコミット済み変更も含む（review-scope.ts）。
-  // そのため作業ツリー差分が空になる構成でも allowedRoots が空にならず、
-  // タスク範囲外の finding に対する dismissal 根拠が成立し得る。判定が緩む方向では
-  // なく締まる方向に動くのは意図した挙動である。
+  // binding は述語が outside と判定した finding にだけ発行され、それが
+  // 「タスク範囲外」を根拠とする dismissal の材料になる。したがって
+  // コミット済み変更が加わることの効果は2方向ある。
+  // - allowedRoots が空だった構成（作業ツリー差分が空）では binding がそもそも
+  //   発行されなかった。非空になることで範囲外 finding への dismissal 根拠が
+  //   新たに成立する。
+  // - allowedRoots に path が増えることは、その path 上の finding を outside 判定
+  //   から外し、その finding の dismissal 根拠を成立させなくする。
+  // どちらもレビュー範囲と証拠検証範囲を揃えた結果であり、意図した挙動である。
   const allowedRoots = input.reviewScopeSnapshot.changedPaths === undefined
     ? []
     : binarySortedUnique(input.reviewScopeSnapshot.changedPaths);

@@ -11,7 +11,7 @@
  */
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync, unlinkSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { devNull, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -29,6 +29,10 @@ function git(cwd: string, ...args: string[]): string {
     stdio: 'pipe',
     env: {
       ...process.env,
+      // 実行環境の gitconfig から隔離する。core.excludesFile や init.defaultBranch、
+      // commit.gpgsign のようなユーザー設定が fixture の期待値を壊さないようにする。
+      GIT_CONFIG_GLOBAL: devNull,
+      GIT_CONFIG_SYSTEM: devNull,
       GIT_AUTHOR_NAME: 'TAKT test',
       GIT_AUTHOR_EMAIL: 'takt-test@example.invalid',
       GIT_COMMITTER_NAME: 'TAKT test',

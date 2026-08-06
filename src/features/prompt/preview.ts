@@ -27,6 +27,7 @@ import { buildFindingTerminalAdjudicationStep } from '../../core/workflow/findin
 import {
   collectTaskReviewScope,
   resolveReviewScopeBaseRange,
+  type TaskReviewScope,
 } from '../../core/workflow/review-scope.js';
 import {
   validateFindingContractSyntheticProviderModels,
@@ -187,6 +188,7 @@ function buildInstructionContext(
   stepIndex: number,
   step: WorkflowStep,
   language: Language,
+  reviewScope: TaskReviewScope,
 ): InstructionContext {
   return {
     task: '<task content>',
@@ -203,7 +205,7 @@ function buildInstructionContext(
     // （containment 検証は維持される）。
     validateReportReferences: false,
     language,
-    reviewScope: collectTaskReviewScope({ cwd, baseRange: resolveReviewScopeBaseRange(cwd) }),
+    reviewScope,
   };
 }
 
@@ -213,10 +215,11 @@ function previewAgentStep(
   stepIndex: number,
   step: WorkflowStep,
   language: Language,
+  reviewScope: TaskReviewScope,
 ): void {
   printStepExecutionMetadata(step);
 
-  const context = buildInstructionContext(cwd, config, stepIndex, step, language);
+  const context = buildInstructionContext(cwd, config, stepIndex, step, language, reviewScope);
   const phase1Builder = new InstructionBuilder(step, context);
   console.log('\n--- Phase 1 (Main Execution) ---\n');
   console.log(phase1Builder.build());
@@ -297,6 +300,10 @@ export async function previewPrompts(
   printFindingContractMetadata(config, providerResolution);
   blankLine();
 
+  // レビュー範囲はプレビュー実行ごとに1度だけ解決する。ステップ・並列サブステップごとに
+  // 再解決すると、同じプレビュー出力の中で提示される範囲がずれ得る。
+  const reviewScope = collectTaskReviewScope({ cwd, baseRange: resolveReviewScopeBaseRange(cwd) });
+
   for (const [i, step] of config.steps.entries()) {
     const separator = '='.repeat(60);
     const safeStepName = sanitizeTerminalText(step.name);
@@ -316,10 +323,10 @@ export async function previewPrompts(
           ? step.parallel.fixed.some((fixed) => fixed === substep) ? 'fixed' : 'pool candidate'
           : 'parallel';
         console.log(`\n--- ${role} substep ${subIndex + 1}: ${safeSubstepName} (persona: ${safeSubstepPersonaDisplayName}) ---\n`);
-        previewAgentStep(cwd, config, i, substep, language);
+        previewAgentStep(cwd, config, i, substep, language, reviewScope);
       }
     } else {
-      previewAgentStep(cwd, config, i, step, language);
+      previewAgentStep(cwd, config, i, step, language, reviewScope);
     }
 
     blankLine();
