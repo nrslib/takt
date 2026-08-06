@@ -45,6 +45,9 @@ export function normalizeTaskConfig(input: unknown): unknown {
 
   const exceededMax = resolveExceededMaxValue(record);
   const resumePoint = resolveResumePointValue(record);
+  // v0.55.1 までの serializeTaskConfig が start_step を start_movement という
+  // キー名で書き出していたため、既存の tasks.yaml を読めるようにする。
+  const legacyStartStep = getStringField(record, 'start_movement');
 
   const next: Record<string, unknown> = { ...record };
   if (exceededMax !== undefined) {
@@ -52,6 +55,12 @@ export function normalizeTaskConfig(input: unknown): unknown {
   }
   if (resumePoint !== undefined) {
     next.resume_point = resumePoint;
+  }
+  if (legacyStartStep !== undefined) {
+    delete next.start_movement;
+    if (resolveTaskStartStepValue(record) === undefined) {
+      next.start_step = legacyStartStep;
+    }
   }
 
   return next;
