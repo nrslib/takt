@@ -47,11 +47,15 @@ schema に一致する JSON object を1つだけ返してください。説明�
 
 {{#if correction}}前回の抽出は schema または機械 intake 検証に失敗したか、`rawExcerpt` があるのに
 claim本文を失いました。同じ報告から新規に1回だけ抽出してください。
-{{#if extractionFidelityCorrection}}extraction-fidelity の場合に限り、この例外は規則3を
-`candidate.description` だけについて上書きします。非空の `rawExcerpt` が claim を記述し candidate の
-`description: null` になっているときは、その `rawExcerpt` 全体を `candidate.description` にそのままコピーしてください。
+{{/if}}{{#if extractionFidelityCorrection}}extraction-fidelity の場合に限り、この例外は規則3を
+candidate 自体について上書きします。非空の `rawExcerpt` が claim を記述している item は、必ず
+完全な `candidate` object を持たなければなりません。`candidate: null` も、必須フィールドを欠いた
+candidate も拒否されます。前回の candidate が `null` または不完全だった場合は、その同じ
+`rawExcerpt` だけを根拠に candidate を組み直し、明示されていない scalar は `null`、明示されていない
+list は `[]` にしてください。candidate の `description: null` になっているときは、その
+`rawExcerpt` 全体を `candidate.description` にそのままコピーしてください。
 規則3は他のすべての項目に適用されます。
-{{/if}}他の項目の生成・改善は
+{{/if}}{{#if correction}}他の項目の生成・改善は
 禁止です。前回出力の再利用、議論、修復は禁止です。
 
 {{/if}}## レビュー報告

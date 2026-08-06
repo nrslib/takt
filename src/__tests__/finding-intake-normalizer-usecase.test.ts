@@ -96,11 +96,17 @@ describe('normalizeFindingIntake', () => {
       mode: 'correction',
       extractionFidelityCorrection: true,
     });
+    // setupIsolatedStructured は beforeEach で同じ agent を返すため、2回目の呼び出しは
+    // 同じ call モックの calls[1] に入る。
     const secondCallFn = setupIsolatedStructured.mock.results[1]!.value.call;
-    const [secondPrompt] = secondCallFn.mock.calls[0]!;
+    const [secondPrompt] = secondCallFn.mock.calls[1]!;
     expect(secondPrompt).toContain(
-      'this exception overrides rule 3 for `candidate.description` alone',
+      'this exception overrides rule 3 for the candidate itself',
     );
+    expect(secondPrompt).toContain('`candidate: null` and a candidate missing any required field are both');
+    // 入れ子 {{#if}} は未対応なので、条件分岐は兄弟条件として展開される。
+    expect(secondPrompt).not.toContain('{{#if');
+    expect(prompt).not.toContain('extraction-fidelity case only');
   });
 
   it('removes the isolated working directory when the provider call throws', async () => {

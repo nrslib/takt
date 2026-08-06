@@ -3089,7 +3089,10 @@ const RawFindingsOutputIntakeJsonSchema = {
           },
           candidate: {
             anyOf: [
-              { type: 'null' },
+              {
+                type: 'null',
+                description: 'Use null ONLY when the rawExcerpt does not state a problem or lifecycle claim. Whenever the rawExcerpt states a claim, emit the candidate object instead: leave unstated scalars null and unstated lists empty. A null candidate discards the claim entirely and is rejected.',
+              },
               {
                 type: 'object',
                 additionalProperties: false,

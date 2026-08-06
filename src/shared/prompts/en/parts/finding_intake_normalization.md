@@ -54,9 +54,12 @@ Extraction rules:
 
 {{#if correction}}The previous extraction failed schema or mechanical intake validation, or lost the
 claim text while `rawExcerpt` was available. Perform one fresh extraction from the same report.
-{{#if extractionFidelityCorrection}}For the extraction-fidelity case only, this exception overrides rule 3 for `candidate.description` alone: when a non-empty `rawExcerpt` states a claim and the candidate
-has `description: null`, copy that exact `rawExcerpt` into `candidate.description`. Rule 3 still applies to every other field.
-{{/if}}Do not generate or improve any other field. Do not reuse, discuss, or repair the previous output.
+{{/if}}{{#if extractionFidelityCorrection}}For the extraction-fidelity case only, this exception overrides rule 3 for the candidate itself: whenever a non-empty `rawExcerpt` states a claim, that item MUST carry a
+complete `candidate` object. `candidate: null` and a candidate missing any required field are both
+rejected. If the previous candidate was `null` or incomplete, rebuild it from that same `rawExcerpt`
+alone, leaving unstated scalars `null` and unstated lists `[]`. When the candidate has
+`description: null`, copy that exact `rawExcerpt` into `candidate.description`. Rule 3 still applies to every other field.
+{{/if}}{{#if correction}}Do not generate or improve any other field. Do not reuse, discuss, or repair the previous output.
 
 {{/if}}## Review report
 

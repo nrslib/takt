@@ -88,6 +88,10 @@ import {
   withFindingContractStructuredOutput,
 } from '../findings/contract-intake.js';
 import { resolveFindingContractReviewerOutputStrategy } from '../findings/reviewer-output-strategy.js';
+import {
+  EXTRACTION_FIDELITY_INVALID_DETAIL,
+  hasRawFindingExtractionFidelityFailure,
+} from '../findings/extraction-fidelity.js';
 import { clarifyAmbiguousRawRelationsOnce, type ReviewerRelationClarification } from '../findings/relation-coherence.js';
 import {
   RAW_FINDINGS_SCHEMA_REF,
@@ -826,30 +830,8 @@ export class StepExecutor {
       }
     };
 
-    const hasExtractionFidelityFailure = (response: AgentResponse): boolean => {
-      const rawFindings = response.structuredOutput;
-      if (
-        typeof rawFindings !== 'object'
-        || rawFindings === null
-        || Array.isArray(rawFindings)
-        || !Array.isArray(Reflect.get(rawFindings, 'rawFindings'))
-      ) {
-        return false;
-      }
-      return (Reflect.get(rawFindings, 'rawFindings') as unknown[]).some((item) => {
-        if (typeof item !== 'object' || item === null || Array.isArray(item)) {
-          return false;
-        }
-        const rawExcerpt = Reflect.get(item, 'rawExcerpt');
-        const candidate = Reflect.get(item, 'candidate');
-        return typeof rawExcerpt === 'string'
-          && rawExcerpt.length > 0
-          && typeof candidate === 'object'
-          && candidate !== null
-          && !Array.isArray(candidate)
-          && Reflect.get(candidate, 'description') === null;
-      });
-    };
+    const hasExtractionFidelityFailure = (response: AgentResponse): boolean =>
+      hasRawFindingExtractionFidelityFailure(response.structuredOutput);
 
     const initial = await execute('initial');
     const extractionFidelityFailure = initial.invalidDetail === undefined
@@ -1281,7 +1263,7 @@ export class StepExecutor {
       normalizerProviderInfo = plainNormalization.providerInfo;
       normalizedPlainPublication = plainNormalization.publication;
     } else {
-      normalized = this.normalizeStructuredOutputWithDiagnostics(
+      normalized = this.normalizeStructuredOutputWithExtractionFidelity(
         reportStep,
         reportResponse,
         reportRuntime,
@@ -1309,7 +1291,7 @@ export class StepExecutor {
             sessionId: report.attemptIdentity.sessionId,
           },
         ),
-        normalize: (candidate) => this.normalizeStructuredOutputWithDiagnostics(
+        normalize: (candidate) => this.normalizeStructuredOutputWithExtractionFidelity(
           reportStep,
           candidate,
           reportRuntime,
@@ -1476,6 +1458,33 @@ export class StepExecutor {
       );
     }
     return result.response;
+  }
+
+  /**
+   * structured reviewer 経路（reviewer が publication を直接返す）用。schema 検証を
+   * 通ったあとに抽出忠実性の退行（非空 rawExcerpt に対して candidate が使えない）を
+   * model_output の不正として立てる。これで isolated normalizer 経路と同じく既存の
+   * 1回訂正が発火し、訂正後もなお退行していれば呼び出し側の fail-loud 契約
+   * （invalidDetail での throw / "remained invalid after one correction"）へ載る。
+   */
+  private normalizeStructuredOutputWithExtractionFidelity(
+    step: WorkflowStep,
+    response: AgentResponse,
+    runtime?: RuntimeStepResolution,
+  ): StructuredOutputNormalizationResult {
+    const result = this.normalizeStructuredOutputWithDiagnostics(step, response, runtime);
+    if (
+      result.invalidDetail !== undefined
+      || result.response.status !== 'done'
+      || !hasRawFindingExtractionFidelityFailure(result.response.structuredOutput)
+    ) {
+      return result;
+    }
+    return {
+      ...result,
+      invalidDetail: EXTRACTION_FIDELITY_INVALID_DETAIL,
+      invalidKind: 'model_output',
+    };
   }
 
   /**
