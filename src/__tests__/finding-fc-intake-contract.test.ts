@@ -336,6 +336,120 @@ describe('FC intake contract', () => {
     expect(linked.reviewerAnomalies![0]!.promotedFindingId).toBe('F-0001');
   });
 
+  describe('escalation restatement correspondence', () => {
+    const escalationCase = (admittedReviewer: string, requestReviewer: string) => {
+      const sourceExcerpt = 'The escalated defect remains observable.';
+      const source = incompleteRaw('raw-escalation-source', {
+        rawExcerpt: sourceExcerpt,
+        sourceBinding: {
+          reportDigest: 'f'.repeat(64),
+          startByte: 0,
+          endByte: Buffer.byteLength(sourceExcerpt),
+          excerptDigest: '8'.repeat(64),
+        },
+      });
+      const admitted = canonicalRawFindingFixture({
+        rawFindingId: 'raw-escalation-admitted',
+        stepName: source.stepName,
+        reviewer: admittedReviewer,
+        familyTag: 'bug',
+        severity: 'high',
+        title: 'Escalated issue',
+        description: sourceExcerpt,
+        suggestion: null,
+        relation: 'new',
+        targetFindingId: null,
+        target: source.target,
+        sourceBinding: {
+          ...source.sourceBinding,
+          reportDigest: 'e'.repeat(64),
+          excerptDigest: '9'.repeat(64),
+        },
+        evidence: [],
+      });
+      const sourceItem = canonicalItem(source);
+      const spec = createReviewerAnomalySpec({
+        wire: source,
+        canonical: sourceItem.canonical,
+        anomalyKind: 'intake-contract-incomplete',
+        reason: 'The owner reviewer never restated a complete claim',
+        intakeContract: {
+          observationClass: 'claim-bearing' as const,
+          classificationAuthorityId: 'system/intake_observation_classification_v1',
+          reasonCodes: ['product-identity-incomplete'] as const,
+          missingRequirements: ['title'] as const,
+          presentationOwnerReviewer: source.reviewer,
+          presentationLimit: 2,
+        },
+      });
+      const withAnomaly = applyReviewerAnomalySpecsToLedger(emptyLedger(), [spec], {
+        workflowName: 'peer-review',
+        stepName: observedAt.stepName,
+        runId: observedAt.runId,
+        timestamp: observedAt.timestamp,
+      }, new Set());
+      const anomaly = withAnomaly.reviewerAnomalies![0]!;
+      const requestWithoutId = {
+        anomalyId: anomaly.id,
+        reviewer: requestReviewer,
+        presentationOrdinal: 2,
+        reviewScopeSnapshotId: 'a'.repeat(64),
+        sourceExcerptDigest: source.sourceBinding.excerptDigest,
+        claimedExcerpt: sourceExcerpt,
+        targetPaths: ['src/example.ts'] as const,
+        missingRequirements: ['title'] as const,
+        expectedRelation: 'new' as const,
+        expectedTargetFindingId: null,
+        expectedTargetPreconditionClass: 'absent' as const,
+      };
+      return linkPromotedReviewerAnomalies({
+        ...withAnomaly,
+        rawFindings: [source, admitted],
+        findings: [{
+          id: 'F-0001',
+          status: 'open',
+          lifecycle: 'new',
+          target: admitted.target,
+          targetIdentityHash: admitted.targetIdentityHash,
+          claimIdentityHash: admitted.claimIdentityHash,
+          semanticClaimIdentityHash: admitted.semanticClaimIdentityHash,
+          severity: admitted.severity!,
+          title: admitted.title!,
+          description: admitted.description!,
+          evidenceIds: [],
+          reviewers: [admitted.reviewer],
+          rawFindingIds: [admitted.rawFindingId],
+          firstSeen: observedAt,
+          lastSeen: observedAt,
+          revision: 1,
+        }],
+      }, [{
+        lineageKey: 'not-authoritative',
+        rawFindingId: admitted.rawFindingId,
+        restatementRequestBindings: [{
+          request: {
+            ...requestWithoutId,
+            restatementRequestId: computeRestatementRequestId(requestWithoutId),
+          },
+          publicationId: 'publication-escalation',
+          reportDigest: admitted.sourceBinding.reportDigest,
+        }],
+      }]);
+    };
+
+    it('promotes when the escalation reviewer restates an owner reviewer observation', () => {
+      const linked = escalationCase('escalation-reviewer', 'escalation-reviewer');
+
+      expect(linked.reviewerAnomalies![0]!.promotedFindingId).toBe('F-0001');
+    });
+
+    it('does not promote when a non-escalation request comes from a different reviewer', () => {
+      const linked = escalationCase('escalation-reviewer', 'architecture-review');
+
+      expect(linked.reviewerAnomalies![0]!.promotedFindingId).toBeUndefined();
+    });
+  });
+
   describe('restatement batch promotion (correspondence edges)', () => {
     const batchReportDigest = 'e'.repeat(64);
     const buildBatchCase = (

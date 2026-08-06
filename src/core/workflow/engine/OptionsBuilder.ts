@@ -85,9 +85,14 @@ export class OptionsBuilder {
       step: WorkflowStep,
       reviewerOutputStrategy: FindingContractReviewerOutputStrategy | undefined,
       reviewScopeSnapshotId?: string,
-      parallelContextKey?: string,
+      findingContractFreezeKey?: string,
     ) => FindingContractInstructionContext | undefined,
     private readonly getTask?: () => string,
+    private readonly getFindingEscalationInstructionContext?: (input: {
+      ownerStepNames: readonly string[];
+      reviewScopeSnapshotId: string;
+      findingContractFreezeKey: string;
+    }) => FindingContractInstructionContext | undefined,
   ) {}
 
   /**
@@ -389,14 +394,26 @@ export class OptionsBuilder {
     step: WorkflowStep,
     reviewerOutputStrategy: FindingContractReviewerOutputStrategy | undefined,
     reviewScopeSnapshotId?: string,
-    parallelContextKey?: string,
+    findingContractFreezeKey?: string,
   ): FindingContractInstructionContext | undefined {
     return this.getFindingContractInstructionContext?.(
       step,
       reviewerOutputStrategy,
       reviewScopeSnapshotId,
-      parallelContextKey,
+      findingContractFreezeKey,
     );
+  }
+
+  /**
+   * escalation slot（提示予算の最終1回）用の reviewer context。escalation reviewer が
+   * 未設定、または今ラウンドに格上げ対象の anomaly が無い場合は undefined。
+   */
+  buildFindingEscalationInstructionContext(input: {
+    ownerStepNames: readonly string[];
+    reviewScopeSnapshotId: string;
+    findingContractFreezeKey: string;
+  }): FindingContractInstructionContext | undefined {
+    return this.getFindingEscalationInstructionContext?.(input);
   }
 
   private resolveSupportedMaxTurns(

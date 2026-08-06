@@ -29,6 +29,8 @@ import {
   FINDING_TERMINAL_ADJUDICATION_STEP,
   workflowWiresFindingConflictAdjudication,
 } from '../findings/adjudication-step.js';
+import { buildFindingEscalationReviewerPreflightStep } from '../findings/escalation-reviewer-step.js';
+import { FINDING_ESCALATION_REVIEWER_ROUTING_KEY } from '../../models/finding-types.js';
 import { findFindingContractFormat, hasFindingContractFormat } from '../findings/finding-contract-format.js';
 import {
   resolveAutoRoutingCandidateProviderInfo,
@@ -305,6 +307,11 @@ export function validateFindingContractSyntheticProviderModels(
     buildFindingManagerStep(stepInput),
     buildFindingInterpretationStep(stepInput),
     ...adjudicationSteps,
+    // escalation reviewer は report 形式だけを実行時に owner から継承するため、
+    // provider/model 検証は output contract を持たない preflight 用ステップで足りる。
+    ...(findingContract.escalationReviewer === undefined
+      ? []
+      : [buildFindingEscalationReviewerPreflightStep(stepInput)]),
   ];
   for (const step of syntheticSteps) {
     const providerInfo = resolveStepProviderModel({
@@ -325,10 +332,12 @@ export function validateFindingContractSyntheticProviderModels(
           currentProviderInfo: providerInfo,
         })
       : undefined;
-    const configurationPath = step.name === FINDING_TERMINAL_ADJUDICATION_STEP
-      || step.name === FINDING_CONFLICT_ADJUDICATION_STEP
-      ? 'Configuration error: finding_contract.adjudicator.model'
-      : 'Configuration error: finding_contract.manager.model';
+    const configurationPath = step.name === FINDING_ESCALATION_REVIEWER_ROUTING_KEY
+      ? 'Configuration error: finding_contract.escalation_reviewer.model'
+      : step.name === FINDING_TERMINAL_ADJUDICATION_STEP
+        || step.name === FINDING_CONFLICT_ADJUDICATION_STEP
+        ? 'Configuration error: finding_contract.adjudicator.model'
+        : 'Configuration error: finding_contract.manager.model';
     validateResolvedProviderInfo(
       deterministicInfo ?? providerInfo,
       configurationPath,

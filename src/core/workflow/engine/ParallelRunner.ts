@@ -39,8 +39,11 @@ import type { FindingLedgerStore } from '../findings/store.js';
 import type { FindingManagerRunResult } from '../findings/manager-runner.js';
 import {
   ingestFindingContractResults,
+  resolveFindingContractIntakeStep,
   withFindingContractStructuredOutput,
 } from '../findings/contract-intake.js';
+import type { FindingManagerSubStepResult } from '../findings/manager-runner.js';
+import { runFindingEscalationReviewer } from '../findings/escalation-reviewer-runner.js';
 import type { ReviewerRelationClarification } from '../findings/relation-coherence.js';
 import type { CanonicalFindingReviewPublication } from '../findings/review-publication.js';
 import type { WorkflowCallRunner } from './WorkflowCallRunner.js';
@@ -233,7 +236,7 @@ export interface ParallelRunnerDeps {
 }
 
 export class ParallelRunner {
-  private parallelContextSequence = 0;
+  private findingContractFreezeSequence = 0;
 
   constructor(
     private readonly deps: ParallelRunnerDeps,
@@ -347,14 +350,14 @@ export class ParallelRunner {
       reportGeneration: 'structured',
       intake: 'reviewer_structured',
     };
-    const parallelContextKey = `${step.name}\0${stepIteration}\0${++this.parallelContextSequence}`;
+    const findingContractFreezeKey = `${step.name}\0${stepIteration}\0${++this.findingContractFreezeSequence}`;
     const baseFindingContractContext = this.deps.findingContract
       && agentSubSteps[0] !== undefined
         ? this.deps.optionsBuilder.buildFindingContractInstructionContext(
           agentSubSteps[0],
           structuredReviewerStrategy,
           undefined,
-          parallelContextKey,
+          findingContractFreezeKey,
         )
       : undefined;
     const sharedReviewerContext = baseFindingContractContext?.reviewer;
@@ -458,7 +461,7 @@ export class ParallelRunner {
                   subStep,
                   structuredReviewerStrategy,
                   sharedReviewerContext?.reviewScopeSnapshotId,
-                  parallelContextKey,
+                  findingContractFreezeKey,
                 ),
                 reviewerOutputStrategy,
               )
@@ -1045,6 +1048,34 @@ export class ParallelRunner {
       };
     }
 
+    // 提示予算の最終1回は escalation reviewer へ格上げする。owner の
+    // publication が揃った後・manager の取り込み前に一度だけ実行し、その
+    // publication を owner の集合へ足してから intake へ渡す。
+    const sharedReviewScopeSnapshotId = sharedReviewerContext?.reviewScopeSnapshotId;
+    const escalation = sharedReviewScopeSnapshotId === undefined
+      ? undefined
+      : await this.runEscalationReviewer({
+        step,
+        state,
+        task,
+        maxSteps,
+        stepIteration,
+        subResults,
+        // report 形式の継承元と owner 名の両方を、実際に FC 台帳へ寄稿する
+        // reviewer sub-step だけに絞る（通常 agent sub-step が混在する構成で
+        // 誤継承・不当 throw を起こさない）。
+        ownerReviewerSteps: agentSubSteps.filter(
+          (subStep) => resolveFindingContractIntakeStep(subStep, this.deps.findingContract) !== undefined,
+        ),
+        findingContractFreezeKey,
+        reviewScopeSnapshotId: sharedReviewScopeSnapshotId,
+        updatePersonaSession,
+        runtime,
+      });
+    if (escalation !== undefined && 'terminalResult' in escalation) {
+      return escalation.terminalResult;
+    }
+
     // 全 reviewer の canonical publication が揃った後に一度だけ取り込む。
     // ここより前の失敗では ledger と rules のどちらも動かさない。
     await this.runFindingContractManager(
@@ -1053,6 +1084,7 @@ export class ParallelRunner {
       state.iteration,
       subResults,
       priorStepResponseText,
+      escalation?.reviewerResult,
     );
 
     const postExecutionRuntime = runtime?.fallback === undefined
@@ -1308,12 +1340,108 @@ export class ParallelRunner {
     }
   }
 
+  /**
+   * escalation slot の直接 provider call。escalation reviewer が未設定、または
+   * 今ラウンドに格上げ対象の anomaly も未取り込みの stored publication も無い
+   * 場合は undefined を返して何もしない（§2.5 — 最終1回も owner reviewer への
+   * restatement のままになる）。
+   *
+   * escalation の失敗は既存の step failure 写像に従い、owner publication を
+   * 巻き込まずに parent step を terminal にする。publication 成立前の失敗なので
+   * 提示回数は増えず、次ラウンドで同じ escalation request を再発行する。
+   */
+  private async runEscalationReviewer(input: {
+    step: WorkflowStep;
+    state: WorkflowState;
+    task: string;
+    maxSteps: WorkflowMaxSteps;
+    stepIteration: number;
+    subResults: ParallelSubStepResult[];
+    ownerReviewerSteps: AgentWorkflowStep[];
+    findingContractFreezeKey: string;
+    reviewScopeSnapshotId: string;
+    updatePersonaSession: (persona: string, sessionId: string | undefined) => void;
+    runtime?: RuntimeStepResolution;
+  }): Promise<
+    | { reviewerResult: FindingManagerSubStepResult }
+    | { terminalResult: StepRunResult }
+    | undefined
+  > {
+    const contract = this.deps.findingContract;
+    if (contract?.escalationReviewer === undefined || input.ownerReviewerSteps.length === 0) {
+      return undefined;
+    }
+    const escalationContext = this.deps.optionsBuilder.buildFindingEscalationInstructionContext({
+      ownerStepNames: input.ownerReviewerSteps.map((subStep) => subStep.name),
+      reviewScopeSnapshotId: input.reviewScopeSnapshotId,
+      findingContractFreezeKey: input.findingContractFreezeKey,
+    });
+    const outcome = await runFindingEscalationReviewer({
+      contract,
+      workflowProvider: this.deps.workflowProvider,
+      workflowModel: this.deps.workflowModel,
+      ...(escalationContext === undefined ? {} : { escalationContext }),
+      ownerReviewerSteps: input.ownerReviewerSteps,
+      parentStepName: input.step.name,
+      stepIteration: input.stepIteration,
+      state: input.state,
+      task: input.task,
+      maxSteps: input.maxSteps,
+      optionsBuilder: this.deps.optionsBuilder,
+      stepExecutor: this.deps.stepExecutor,
+      updatePersonaSession: input.updatePersonaSession,
+      runtime: input.runtime,
+    });
+    if (outcome === undefined) {
+      return undefined;
+    }
+    if (outcome.kind === 'published') {
+      return {
+        reviewerResult: {
+          subStep: outcome.step,
+          publication: outcome.publication,
+          ...(outcome.relationClarification === undefined
+            ? {}
+            : { relationClarification: outcome.relationClarification }),
+        },
+      };
+    }
+    const terminalResult: ParallelSubStepResult = {
+      subStep: outcome.step,
+      response: outcome.response,
+      instruction: '',
+      providerInfo: outcome.providerInfo,
+      ...(outcome.terminalOperation === undefined
+        ? {}
+        : { terminalOperation: outcome.terminalOperation }),
+    };
+    return {
+      terminalResult: this.createTerminalParentResult({
+        step: input.step,
+        state: input.state,
+        stepIteration: input.stepIteration,
+        subResults: input.subResults,
+        terminalResults: [terminalResult],
+        status: outcome.response.status === 'blocked'
+          ? 'blocked'
+          : outcome.response.status === 'rate_limited'
+            ? 'rate_limited'
+            : 'error',
+        providerInfo: outcome.providerInfo,
+        ...(outcome.terminalOperation === undefined
+          ? {}
+          : { terminalOperation: outcome.terminalOperation }),
+      }),
+    };
+  }
+
   private async runFindingContractManager(
     step: WorkflowStep,
     stepIteration: number,
     iteration: number,
     subResults: ParallelSubStepResult[],
     priorStepResponseText: string | undefined,
+    escalationResult?: FindingManagerSubStepResult,
   ): Promise<FindingManagerRunResult | undefined> {
     if (!this.deps.findingContract) {
       return undefined;
@@ -1339,6 +1467,9 @@ export class ParallelRunner {
           : {}),
       }];
     });
+    if (escalationResult !== undefined) {
+      reviewerResults.push(escalationResult);
+    }
     if (reviewerResults.length === 0) {
       return undefined;
     }

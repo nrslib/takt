@@ -303,6 +303,36 @@ export interface FindingContractAdjudicatorConfig {
 }
 
 /**
+ * escalation reviewer の provider routing persona key。ユーザーが設定した
+ * persona 名ではなくこの固定キーで routing を解決し、publication identity の
+ * reviewer キーもこの値になる（restatement request との識別子はこれだけ）。
+ */
+export const FINDING_ESCALATION_REVIEWER_ROUTING_KEY = 'escalation-reviewer';
+
+/**
+ * 言い直し予算の最終1回を元レビュアーではなく格上げレビュアーへ回すための設定。
+ * workflow が finding_contract.escalation_reviewer を書いたときだけ解決され、
+ * 省略時は最終1回も元レビュアーへの restatement のままになる。
+ */
+export interface FindingContractEscalationReviewerConfig {
+  persona: string;
+  personaPath?: string;
+  personaDisplayName?: string;
+  /** 常に 'escalation-reviewer'。persona 名と routing key を混同させない。 */
+  providerRoutingPersonaKey: typeof FINDING_ESCALATION_REVIEWER_ROUTING_KEY;
+  /** 省略時は persona 本体を instruction として使う（adjudicator と同形）。 */
+  instruction?: string;
+  /**
+   * 解決済みの report 形式。省略時は owner reviewer step の report 形式を継承する。
+   * 出力 strategy は owner step によらず常に structured raw findings で、
+   * ここで変わるのは report 本文の形式だけ。
+   */
+  outputContract?: string;
+  provider?: ProviderType;
+  model?: string;
+}
+
+/**
  * 有限停止予算の
  * per-workflow 設定。fixpoint 判定だけでは、レビュアーが毎ラウンド
  * 別の架空 provisional を1件でも生成し続けると provisional 集合が毎回変わり
@@ -338,6 +368,8 @@ export interface FindingContractConfig {
   manager: FindingContractManagerConfig;
   /** Present when the supervisor persona was resolved for the finding-conflict-adjudication synthetic step. */
   adjudicator?: FindingContractAdjudicatorConfig;
+  /** Present only when the workflow declares finding_contract.escalation_reviewer; see FindingContractEscalationReviewerConfig. */
+  escalationReviewer?: FindingContractEscalationReviewerConfig;
   /** Optional per-workflow override of the bounded stop budget; see FindingContractStopBudgetConfig. */
   stopBudget?: FindingContractStopBudgetConfig;
   /** Optional per-workflow override of the review-integrity re-review budget; see FindingContractReviewBudgetConfig. */

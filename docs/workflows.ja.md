@@ -865,6 +865,34 @@ finding_contract:
     max_rounds: 40
 ```
 
+### `finding_contract.escalation_reviewer`
+
+任意。各 intake anomaly の**最後の1回**の言い直し提示（`review_budget.max_review_rounds` から決まる `presentationLimit` と同じ ordinal の提示）を、元のレビュアーへもう一度返すのではなく、専用の格上げレビュアーへ回します。
+
+```yaml
+finding_contract:
+  manager:
+    persona: findings-manager
+    instruction: findings-manager
+    output_contract: findings-manager
+  escalation_reviewer:
+    persona: escalation-supervisor
+    instruction: escalation-finding-contract      # 任意。省略時は persona 本体を使う
+    output_contract: escalation-finding-contract  # 任意。省略時は元レビュアーの report 形式を継承
+    provider: codex
+    model: gpt-5.5
+  review_budget:
+    max_review_rounds: 6
+```
+
+- `persona` は必須で、`instruction` / `output_contract` / `provider` / `model` は任意です。未知のフィールドは拒否されます。
+- escalation reviewer は workflow の step では**ありません**。`findings-manager` や terminal adjudication と同じくエンジンが合成して直接 provider call を発行し、その出力を通常の取り込み経路（正規化、canonical publication、byte 一致検証、昇格の対応づけ）へ流します。実行はレビューラウンドごとに1回で、全レビュアーの publication が揃ったあと・manager の取り込み前です。
+- reviewer キーは固定文字列 `escalation-reviewer` です。この値が raw finding の `reviewer`、publication identity、レポート名（`escalation-reviewer.md`）、provider routing の persona キーになります。`provider_routing.personas.escalation-reviewer` は、設定した persona 名にかかわらずこのロールへ効きます。
+- Phase 1 は読み取り専用で動きます。escalation reviewer はリポジトリを自分で読んで byte 一致の引用を作れますが、書き込みはできません。
+- `escalation_reviewer` を設定している間、`escalation-reviewer` は**予約 step 名**です。同名の step（parallel sub-step を含む）を持つ workflow は読み込みに失敗します。
+- `presentationLimit == 1` の場合、最初で最後の1回がそのまま格上げ提示になります。`escalation_reviewer` を省略すれば最後の1回も従来どおり元のレビュアーへ戻ります。
+- 格上げレビューが publication 成立前に失敗した場合は何も計上せず、次のラウンドで同じ escalation request を再発行します。有限停止は従来どおり workflow の `max_steps` が保証します。
+
 ### `interactive_mode`
 
 `takt` を引数なしで起動したときのデフォルト interactive mode。`assistant`（デフォルト） / `passthrough` / `quiet` / `persona` のいずれか。

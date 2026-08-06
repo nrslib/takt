@@ -29,6 +29,7 @@ import type {
 } from './types.js';
 import { computeReviewerAnomalyStableKey } from './raw-canonicalization.js';
 import type { RestatementRequestBinding, RestatementRequestV1 } from './review-publication.js';
+import { FINDING_ESCALATION_REVIEWER_ROUTING_KEY } from '../../models/finding-types.js';
 
 export interface ReviewerAnomalySpec {
   kind: ReviewerAnomalyKind;
@@ -150,16 +151,27 @@ function hasRestatementCorrespondence(input: {
   )));
 }
 
+/**
+ * escalation phase では、元の不完全な観測の所有者（owner reviewer）と、格上げで
+ * clean な claim を出した reviewer が異なる。これが reviewer 一致要件の唯一の
+ * 緩和点で、判別子は request.reviewer === 'escalation-reviewer' だけ。
+ * escalation reviewer 未設定のワークフローでは escalation request が作られないため
+ * この分岐は発火せず、従来の条件式と等価になる。
+ */
 function hasRestatementCandidateShape(
   request: RestatementRequestV1,
   anomaly: ReviewerAnomalyEntry,
   sourceRaw: RawFinding,
   admittedRaw: RawFinding,
 ): boolean {
+  const ownerReviewer = anomaly.intakeContract?.presentationOwnerReviewer;
+  const reviewersMatch = request.reviewer === FINDING_ESCALATION_REVIEWER_ROUTING_KEY
+    ? sourceRaw.reviewer === ownerReviewer && admittedRaw.reviewer === request.reviewer
+    : request.reviewer === ownerReviewer
+      && sourceRaw.reviewer === request.reviewer
+      && admittedRaw.reviewer === request.reviewer;
   return request.anomalyId === anomaly.id
-    && request.reviewer === anomaly.intakeContract?.presentationOwnerReviewer
-    && sourceRaw.reviewer === request.reviewer
-    && admittedRaw.reviewer === request.reviewer
+    && reviewersMatch
     && admittedRaw.relation === 'new'
     && admittedRaw.targetFindingId === null
     && admittedRaw.targetPrecondition === undefined;

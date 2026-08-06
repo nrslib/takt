@@ -176,6 +176,18 @@ export const FindingContractAdjudicatorConfigRawSchema = z.object({
   model: nonEmptyString.optional(),
 }).strict();
 
+/**
+ * 言い直し予算の最終1回を担う格上げレビュアー。省略可 — 省略時は escalation を
+ * 発火させず、最終1回も元レビュアーへの restatement になる。
+ */
+export const FindingContractEscalationReviewerConfigRawSchema = z.object({
+  persona: nonEmptyString,
+  instruction: nonEmptyString.optional(),
+  output_contract: nonEmptyString.optional(),
+  provider: z.enum(PROVIDER_TYPES).optional(),
+  model: nonEmptyString.optional(),
+}).strict();
+
 /** 有限停止予算。両方省略可 — max_rounds は省略時に既定値 40、max_minutes は省略時は時間上限なし（opt-in）。 */
 export const FindingContractStopBudgetRawSchema = z.object({
   max_rounds: z.number().int().positive().optional(),
@@ -190,6 +202,7 @@ export const FindingContractReviewBudgetRawSchema = z.object({
 export const FindingContractConfigRawSchema = z.object({
   manager: FindingContractManagerConfigRawSchema,
   adjudicator: FindingContractAdjudicatorConfigRawSchema.optional(),
+  escalation_reviewer: FindingContractEscalationReviewerConfigRawSchema.optional(),
   stop_budget: FindingContractStopBudgetRawSchema.optional(),
   review_budget: FindingContractReviewBudgetRawSchema.optional(),
 }).strict();

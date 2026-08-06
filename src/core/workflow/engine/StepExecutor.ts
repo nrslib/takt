@@ -21,6 +21,7 @@ import type {
   NormalAgentWorkflowStep,
   ResolvedFacetPool,
   ResolvedFacetContent,
+  WorkflowMaxSteps,
 } from '../../models/types.js';
 import { isNormalAgentWorkflowStep } from '../../models/types.js';
 import type { FindingIntakeNormalizeConfig } from '../../models/config-types.js';
@@ -80,8 +81,12 @@ import type {
 } from '../instruction/instruction-context.js';
 import { compactSessionBeforePhase1 } from './session-compaction.js';
 import type { FindingLedgerStore } from '../findings/store.js';
-import type { FindingManagerRunResult } from '../findings/manager-runner.js';
+import type {
+  FindingManagerRunResult,
+  FindingManagerSubStepResult,
+} from '../findings/manager-runner.js';
 import { createRawFindingsStructuredOutput } from '../findings/manager-runner.js';
+import { runFindingEscalationReviewer } from '../findings/escalation-reviewer-runner.js';
 import {
   ingestFindingContractResults,
   resolveFindingContractIntakeStep,
@@ -274,6 +279,8 @@ export interface StepExecutorDeps {
 export interface PreparedNormalStepExecution {
   readonly executableStep: AgentWorkflowStep;
   readonly findingContractContext?: FindingContractInstructionContext;
+  /** owner context を組んだときの ledger / presentation counts 凍結キー（escalation slot と共有する）。 */
+  readonly findingContractFreezeKey?: string;
   readonly reviewerOutputStrategy?: FindingContractReviewerOutputStrategy;
   readonly phase1Instruction: string;
   readonly priorStepResponseText?: string;
@@ -282,6 +289,8 @@ export interface PreparedNormalStepExecution {
 
 export class StepExecutor {
   private readonly structuredOutputNormalizers: StructuredOutputNormalizerRegistry;
+
+  private findingContractFreezeSequence = 0;
 
   constructor(
     private readonly deps: StepExecutorDeps,
@@ -332,6 +341,122 @@ export class StepExecutor {
     return resolveFindingContractIntakeStep(step, this.deps.findingContract);
   }
 
+  /**
+   * 単独 FC reviewer step の escalation slot。owner publication 成立後・manager
+   * 取り込み前に一度だけ実行する（parallel 経路と同型）。escalation reviewer が
+   * 未設定、または今ラウンドに格上げ対象の anomaly も未取り込みの stored
+   * publication も無い場合は undefined。
+   *
+   * 提示回数の判定は owner context を組んだ時点で凍結した ledger /
+   * presentation counts を使う。owner publication 永続化後に数え直すと、
+   * 同じ iteration で owner の (limit-1) 回目と escalation が二重に走る。
+   */
+  private async runEscalationReviewerForNormalStep(input: {
+    parentStepName: string;
+    ownerReviewerStep: AgentWorkflowStep;
+    findingContractContext: FindingContractInstructionContext | undefined;
+    findingContractFreezeKey: string | undefined;
+    stepIteration: number;
+    state: WorkflowState;
+    task: string;
+    maxSteps: WorkflowMaxSteps;
+    updatePersonaSession: (persona: string, sessionId: string | undefined) => void;
+    runtime?: RuntimeStepResolution;
+  }): Promise<
+    | { reviewerResult: FindingManagerSubStepResult }
+    | {
+        terminalResponse: AgentResponse;
+        providerInfo?: StepProviderInfo;
+        terminalOperation?: NonNullable<StepRunResult['terminalOperation']>;
+      }
+    | undefined
+  > {
+    const contract = this.deps.findingContract;
+    const ownerReviewer = input.findingContractContext?.reviewer;
+    if (
+      contract?.escalationReviewer === undefined
+      || ownerReviewer === undefined
+      || input.findingContractFreezeKey === undefined
+    ) {
+      return undefined;
+    }
+    const escalationContext = this.deps.optionsBuilder.buildFindingEscalationInstructionContext({
+      ownerStepNames: [input.parentStepName],
+      reviewScopeSnapshotId: ownerReviewer.reviewScopeSnapshotId,
+      findingContractFreezeKey: input.findingContractFreezeKey,
+    });
+    const outcome = await runFindingEscalationReviewer({
+      contract,
+      workflowProvider: this.deps.workflowProvider,
+      workflowModel: this.deps.workflowModel,
+      ...(escalationContext === undefined ? {} : { escalationContext }),
+      ownerReviewerSteps: [input.ownerReviewerStep],
+      parentStepName: input.parentStepName,
+      stepIteration: input.stepIteration,
+      state: input.state,
+      task: input.task,
+      maxSteps: input.maxSteps,
+      optionsBuilder: this.deps.optionsBuilder,
+      stepExecutor: this,
+      updatePersonaSession: input.updatePersonaSession,
+      runtime: input.runtime,
+    });
+    if (outcome === undefined) {
+      return undefined;
+    }
+    if (outcome.kind === 'published') {
+      return {
+        reviewerResult: {
+          subStep: outcome.step,
+          publication: outcome.publication,
+          ...(outcome.relationClarification === undefined
+            ? {}
+            : { relationClarification: outcome.relationClarification }),
+        },
+      };
+    }
+    return {
+      terminalResponse: outcome.response,
+      ...(outcome.providerInfo === undefined ? {} : { providerInfo: outcome.providerInfo }),
+      ...(outcome.terminalOperation === undefined
+        ? {}
+        : { terminalOperation: outcome.terminalOperation }),
+    };
+  }
+
+  private escalationTerminalStepResult(input: {
+    step: WorkflowStep;
+    state: WorkflowState;
+    stepIteration: number;
+    instruction: string;
+    fallbackProviderInfo: StepProviderInfo;
+    escalation: {
+      terminalResponse: AgentResponse;
+      providerInfo?: StepProviderInfo;
+      terminalOperation?: NonNullable<StepRunResult['terminalOperation']>;
+    };
+  }): StepRunResult {
+    const response = input.escalation.terminalResponse;
+    input.state.stepOutputs.set(input.step.name, response);
+    input.state.lastOutput = response;
+    if (response.status === 'blocked') {
+      this.persistPreviousResponseSnapshot(
+        input.state,
+        input.step.name,
+        input.stepIteration,
+        response.content,
+      );
+    }
+    return {
+      response,
+      instruction: input.instruction,
+      providerInfo: input.escalation.providerInfo ?? input.fallbackProviderInfo,
+      ...(input.escalation.terminalOperation === undefined
+        ? {}
+        : { terminalOperation: input.escalation.terminalOperation }),
+    };
+  }
+
   private async ingestFindingContractForNormalStep(input: {
     step: AgentWorkflowStep;
     stepIteration: number;
@@ -339,6 +464,7 @@ export class StepExecutor {
     publication: CanonicalFindingReviewPublication;
     priorStepResponseText: string | undefined;
     relationClarification?: ReviewerRelationClarification;
+    escalationResult?: FindingManagerSubStepResult;
   }): Promise<FindingManagerRunResult> {
     if (!this.deps.findingLedgerStore) {
       throw new Error('Finding contract is configured but finding ledger store is not available');
@@ -356,11 +482,14 @@ export class StepExecutor {
       iteration: input.iteration,
       // 単独ステップでは「レビュアー1件」を自分自身として渡す
       // （manager-runner.ts の subResults は並列・単独どちらも同じ形で扱う）。
-      subResults: [{
-        subStep: input.step,
-        publication: input.publication,
-        ...(input.relationClarification !== undefined ? { relationClarification: input.relationClarification } : {}),
-      }],
+      subResults: [
+        {
+          subStep: input.step,
+          publication: input.publication,
+          ...(input.relationClarification !== undefined ? { relationClarification: input.relationClarification } : {}),
+        },
+        ...(input.escalationResult === undefined ? [] : [input.escalationResult]),
+      ],
       // 台帳の workflowName スタンプは店（ledgerStore）が束縛する正準名を使う。
       // workflow_call の子が親の台帳を継承した場合、この engine 自身の
       // getWorkflowName()（子のワークフロー名）を使うと reconcile 後の
@@ -493,10 +622,17 @@ export class StepExecutor {
           reviewerRuntime,
         )
       : undefined;
+    // owner context と escalation slot が同じ ledger / presentation counts を
+    // 見るよう、ここで一度だけ凍結する（parallel の共有 freeze と同じ役割）。
+    const findingContractFreezeKey = findingContractIntakeStep === undefined
+      ? undefined
+      : `${step.name}\0${stepIteration}\0${++this.findingContractFreezeSequence}`;
     const findingContractContext = findingContractIntakeStep
       ? this.deps.optionsBuilder.buildFindingContractInstructionContext(
           findingContractIntakeStep,
           reviewerOutputStrategy,
+          undefined,
+          findingContractFreezeKey,
         )
       : this.buildFindingContractInstructionContext(step, undefined);
     let executableStep = findingContractIntakeStep
@@ -551,6 +687,7 @@ export class StepExecutor {
     return {
       executableStep,
       ...(findingContractContext !== undefined ? { findingContractContext } : {}),
+      ...(findingContractFreezeKey !== undefined ? { findingContractFreezeKey } : {}),
       ...(reviewerOutputStrategy !== undefined ? { reviewerOutputStrategy } : {}),
       phase1Instruction: this.buildPhase1Instruction(
         instruction,
@@ -568,11 +705,21 @@ export class StepExecutor {
    * イベント経由、parallel / team_leader は recordDelegatedAgentUsage 経由で
    * 記録されるが、合成ステップの executeAgent 直呼びはどちらの経路にも
    * 乗らず、トークン集計の死角になっていた。
+   *
+   * `attemptProviderInfo` は、その呼び出しが実際に使った provider/model。
+   * report phase の fallback のように attempt ごとに provider が変わる経路では
+   * これを渡さないと、fallback で走った試行を primary として計上してしまう。
+   * 単発呼び出し（findings-manager 等）は省略でき、ステップ解決結果を使う。
    */
-  recordSynthesizedAgentUsage(step: WorkflowStep, success: boolean, usage: ProviderUsageSnapshot | undefined): void {
+  recordSynthesizedAgentUsage(
+    step: WorkflowStep,
+    success: boolean,
+    usage: ProviderUsageSnapshot | undefined,
+    attemptProviderInfo?: StepProviderInfo,
+  ): void {
     this.deps.recordSynthesizedAgentUsage(
       step.name,
-      this.deps.optionsBuilder.resolveStepProviderModel(step),
+      attemptProviderInfo ?? this.deps.optionsBuilder.resolveStepProviderModel(step),
       success,
       usage,
     );
@@ -1086,6 +1233,14 @@ export class StepExecutor {
     readonly updatePersonaSession: (persona: string, sessionId: string | undefined) => void;
     readonly runtime?: RuntimeStepResolution;
     readonly presentationContext?: FindingReviewPresentationContext;
+    /**
+     * Phase 2 で使う Finding Contract context の明示指定。省略時は Phase 2 が
+     * reviewer step 名から context を組み直す（通常レビュアーの既存挙動）。
+     * escalation slot のように「step 名では引けない reviewer 契約」で走る
+     * publication は、Phase 1 と同じ context をここから渡さないと Phase 2 の
+     * restatement-only 契約が消える。
+     */
+    readonly findingContractContext?: FindingContractInstructionContext;
   }): Promise<
     | {
         readonly publication: CanonicalFindingReviewPublication;
@@ -1114,8 +1269,9 @@ export class StepExecutor {
           structuredOutput: createFindingReviewPublicationStructuredOutput(),
         }
       : input.step;
-    const buildPhaseContext = (phase1Response: AgentResponse) => (
-      this.deps.optionsBuilder.buildPhaseRunnerContext(
+    const explicitFindingContractContext = input.findingContractContext;
+    const buildPhaseContext = (phase1Response: AgentResponse) => {
+      const phaseContext = this.deps.optionsBuilder.buildPhaseRunnerContext(
         reportStep,
         input.state,
         phase1Response.content,
@@ -1126,8 +1282,14 @@ export class StepExecutor {
         input.state.iteration,
         input.runtime,
         input.onProviderAttempt,
-      )
-    );
+      );
+      return explicitFindingContractContext === undefined
+        ? phaseContext
+        : {
+            ...phaseContext,
+            buildFindingContractInstructionContext: () => explicitFindingContractContext,
+          };
+    };
     const phaseContext = buildPhaseContext(input.phase1Response);
     const reportFiles = input.step.outputContracts?.map((entry) => entry.name) ?? [];
     if (reportFiles.length !== 1) {
@@ -1993,6 +2155,28 @@ export class StepExecutor {
             terminalOperation: resumedPublication.terminalOperation,
           };
         }
+        const resumedEscalation = await this.runEscalationReviewerForNormalStep({
+          parentStepName: step.name,
+          ownerReviewerStep: findingContractIntakeStep,
+          findingContractContext,
+          findingContractFreezeKey: preparedExecution?.findingContractFreezeKey,
+          stepIteration,
+          state,
+          task,
+          maxSteps,
+          updatePersonaSession,
+          runtime: executionRuntime,
+        });
+        if (resumedEscalation !== undefined && 'terminalResponse' in resumedEscalation) {
+          return this.escalationTerminalStepResult({
+            step,
+            state,
+            stepIteration,
+            instruction: phase1Instruction,
+            fallbackProviderInfo: resumedPublication.reviewerProviderInfo ?? providerInfo,
+            escalation: resumedEscalation,
+          });
+        }
         await this.ingestFindingContractForNormalStep({
           step: findingContractIntakeStep,
           stepIteration,
@@ -2002,6 +2186,7 @@ export class StepExecutor {
           ...(resumedPublication.relationClarification !== undefined
             ? { relationClarification: resumedPublication.relationClarification }
             : {}),
+          ...(resumedEscalation === undefined ? {} : { escalationResult: resumedEscalation.reviewerResult }),
         });
         const response = await this.applyPostExecutionRulesOnly(
           step,
@@ -2248,6 +2433,28 @@ export class StepExecutor {
         prepared.response,
         phase1ProviderUsage,
       );
+      const escalation = await this.runEscalationReviewerForNormalStep({
+        parentStepName: step.name,
+        ownerReviewerStep: findingContractIntakeStep,
+        findingContractContext,
+        findingContractFreezeKey: preparedExecution?.findingContractFreezeKey,
+        stepIteration,
+        state,
+        task,
+        maxSteps,
+        updatePersonaSession,
+        runtime: executionRuntime,
+      });
+      if (escalation !== undefined && 'terminalResponse' in escalation) {
+        return this.escalationTerminalStepResult({
+          step,
+          state,
+          stepIteration,
+          instruction: phase1Instruction,
+          fallbackProviderInfo: completedReviewerProviderInfo,
+          escalation,
+        });
+      }
       await this.ingestFindingContractForNormalStep({
         step: findingContractIntakeStep,
         stepIteration,
@@ -2255,6 +2462,7 @@ export class StepExecutor {
         publication: prepared.publication,
         priorStepResponseText,
         relationClarification: prepared.relationClarification,
+        ...(escalation === undefined ? {} : { escalationResult: escalation.reviewerResult }),
       });
     }
 

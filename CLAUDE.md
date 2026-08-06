@@ -88,7 +88,7 @@ Verified against `resolveStepProviderModel` / `PROVIDER_MODEL_SOURCE_PRIORITY` a
 7. Auto routing (`auto.rules` / `auto.dynamic` / `auto.fallback`)
 8. Workflow → project (`.takt/config.yaml`) → global (`~/.takt/config.yaml`) → provider default
 
-Synthetic Finding Contract roles route by persona key: `findings-manager`, `supervisor` (adjudication), `loop-judge` (loop monitors).
+Synthetic Finding Contract roles route by persona key: `findings-manager`, `supervisor` (adjudication), `escalation-reviewer` (escalated restatement review), `loop-judge` (loop monitors).
 
 ### Finding Contract (FC)
 
@@ -100,6 +100,7 @@ Optional per-run SQLite ledger (`finding-contract.sqlite`) that makes review fin
 - Lifecycle identity across rounds: `new` / `persists` / `reopened` / `resolved`; resolution is lifecycle-continuity based and requires verified confirmation — "I fixed it" alone never resolves.
 - Provider calls run under persistent leases (reserved→dispatched→settled) with input/output/call budgets in the ledger; `stop_budget.max_rounds` guarantees finite termination.
 - `finding_contract.manager` accepts `persona/instruction/output_contract`, optional `policy`/`knowledge` additions, and `provider`/`model`. `finding_contract.adjudicator` (optional) accepts `persona/instruction/provider/model`; when omitted the supervisor auto-derivation keeps prompts byte-identical (guarded by golden-baseline tests — do not regenerate goldens to make a change pass).
+- `finding_contract.escalation_reviewer` (optional) accepts `persona`, optional `instruction`/`output_contract`/`provider`/`model`. When set, the **last** restatement presentation of each intake anomaly (`presentationOrdinal === presentationLimit`) goes to an engine-synthesized escalation reviewer instead of the owning reviewer — a direct provider call like `findings-manager`, never a workflow step. Its reviewer key is the fixed string `escalation-reviewer` (also its provider-routing persona key and its reserved step name); omit the field and behaviour is unchanged.
 - Manager/adjudicator prompt wire formats (structured output schemas, allowed actions, evidence requirements) are **engine-owned**; facets add judgment guidance only.
 
 Workflows: `takt-default` (non-FC, prompt-adjudication step) and `takt-default-fc` (FC; no adjudication step — manager + terminal adjudication replace it). The FC fix/plan/monitor instructions treat the engine-injected live ledger state as the single source of truth; report files are not authoritative there.

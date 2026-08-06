@@ -866,6 +866,34 @@ finding_contract:
     max_rounds: 40
 ```
 
+### `finding_contract.escalation_reviewer`
+
+Optional. Re-routes the **last** restatement presentation of each intake anomaly (the presentation whose ordinal equals the anomaly's `presentationLimit`, derived from `review_budget.max_review_rounds`) to a dedicated escalation reviewer instead of asking the original reviewer once more.
+
+```yaml
+finding_contract:
+  manager:
+    persona: findings-manager
+    instruction: findings-manager
+    output_contract: findings-manager
+  escalation_reviewer:
+    persona: escalation-supervisor
+    instruction: escalation-finding-contract      # optional; falls back to the persona body
+    output_contract: escalation-finding-contract  # optional; inherits the owning reviewer's report format
+    provider: codex
+    model: gpt-5.5
+  review_budget:
+    max_review_rounds: 6
+```
+
+- `persona` is required; `instruction`, `output_contract`, `provider`, and `model` are optional. Unknown fields are rejected.
+- The escalation reviewer is **not** a workflow step. Like `findings-manager` and terminal adjudication, the engine synthesizes it and issues the provider call directly, then feeds its output through the ordinary intake pipeline (normalization, canonical publication, byte-exact verification, promotion matching). It runs once per review round, after every owning reviewer's publication has landed and before the manager ingests them.
+- Its reviewer key is the fixed string `escalation-reviewer`. That key is the raw findings' `reviewer` value, the publication identity, the report name (`escalation-reviewer.md`), and the provider-routing persona key — `provider_routing.personas.escalation-reviewer` targets it regardless of the configured persona name.
+- Phase 1 runs read-only: the escalation reviewer can read the repository to produce byte-exact quotes, but cannot write.
+- While `escalation_reviewer` is set, `escalation-reviewer` is a **reserved step name**; a workflow that also declares a step (or parallel sub-step) with that name fails to load.
+- With `presentationLimit == 1`, the first and only presentation is already the escalated one. Omit `escalation_reviewer` and the final presentation stays with the original reviewer, exactly as before.
+- When the escalated review fails before its publication lands, nothing is counted and the same escalation request is re-issued next round; the workflow's `max_steps` still bounds the run.
+
 ### `interactive_mode`
 
 Default interactive mode used when `takt` is invoked without arguments. One of `assistant` (default), `passthrough`, `quiet`, `persona`.

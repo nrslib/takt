@@ -9,6 +9,7 @@
 
 {{#if restatementOnly}}## Restatement requests
 これは再提示専用レビューです。以下の request だけを処理してください。各 request の元の claim atom を保ち、リポジトリの証拠からすべての必須項目を裏づけられる場合だけ完全な product claim を返してください。欠けた項目、lifecycle relation、target、evidence を補作しないでください。各 request は最大1件の `new` claim とし、relation は `new`、targetFindingId と target precondition は空にしてください。可能なら request の anomaly ID を `reassertsReviewerAnomalyId` に echo してください。
+言い直す前に、request が指す対象ファイルをリポジトリで実際に読んでください。path と 1-based の行範囲は request の抜粋ではなく現在のファイル内容から取り、code target には その path と行範囲だけを指定した `file_quote` を request してください。engine が現物を読んで byte 一致を検証するため、ソース本文や verbatimExcerpt は自分で書かないでください。現在のファイルが claim を裏づけない場合は、その request に対して claim を返さないでください。
 {{restatementRequestsJson}}
 {{/if}}
 

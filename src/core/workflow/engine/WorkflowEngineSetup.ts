@@ -56,7 +56,12 @@ import {
   type RestatementRequestV1,
 } from '../findings/review-publication.js';
 import { RAW_FINDING_LIMITS } from '../findings/raw-finding-limits.js';
+import {
+  resolveRestatementPresentationPhase,
+  type RestatementPresentationPhase,
+} from '../findings/restatement-presentation-phase.js';
 import type { FindingTarget } from '../../models/finding-types.js';
+import { FINDING_ESCALATION_REVIEWER_ROUTING_KEY } from '../../models/finding-types.js';
 import type {
   FindingContractInstructionContext,
   FindingContractReviewerOutputStrategy,
@@ -310,9 +315,114 @@ function targetPathsForRestatementRequest(target: FindingTarget): string[] {
   }
 }
 
+/**
+ * 提示回数の正本は canonical review publication だけ。V2 context を持つ
+ * publication の `presentedReviewerAnomalyIds` を publication ID 単位で数える。
+ */
+function collectFindingReviewPresentationCounts(reportDir: string): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const publication of listFindingReviewPublications(reportDir)) {
+    if (publication.presentationContext?.revision !== 2) {
+      continue;
+    }
+    for (const anomalyId of publication.presentationContext.presentedReviewerAnomalyIds) {
+      counts.set(anomalyId, (counts.get(anomalyId) ?? 0) + 1);
+    }
+  }
+  return counts;
+}
+
+type LoadedFindingLedger = ReturnType<FindingLedgerStore['loadLedger']>;
+type LoadedReviewerAnomaly = NonNullable<LoadedFindingLedger['reviewerAnomalies']>[number];
+
+interface OutstandingIntakeAnomaly {
+  readonly anomaly: LoadedReviewerAnomaly;
+  readonly presentedCount: number;
+}
+
+/**
+ * 未消化の intake anomaly を、指定した提示フェーズと owner に限って
+ * 決定的な順序（未提示優先 → 最初の観測時刻 → anomaly ID）で列挙する。
+ * owner batch と escalation batch はこの1関数を共有し、同じ anomaly が
+ * 両方の batch に入ることがない。
+ */
+function collectOutstandingIntakeAnomalies(input: {
+  ledger: LoadedFindingLedger;
+  presentationCounts: ReadonlyMap<string, number>;
+  ownerStepNames: ReadonlySet<string>;
+  phase: RestatementPresentationPhase;
+  escalationReviewerConfigured: boolean;
+}): OutstandingIntakeAnomaly[] {
+  return (input.ledger.reviewerAnomalies ?? [])
+    .filter((anomaly) => (
+      anomaly.kind === 'intake-contract-incomplete'
+      && anomaly.intakeContract !== undefined
+      && input.ownerStepNames.has(anomaly.intakeContract.presentationOwnerReviewer)
+      && anomaly.promotedFindingId === undefined
+      && anomaly.settlement === undefined
+    ))
+    .map((anomaly) => ({
+      anomaly,
+      presentedCount: input.presentationCounts.get(anomaly.id) ?? 0,
+    }))
+    .filter(({ anomaly, presentedCount }) => (
+      resolveRestatementPresentationPhase({
+        presentedCount,
+        presentationLimit: anomaly.intakeContract!.presentationLimit,
+        escalationReviewerConfigured: input.escalationReviewerConfigured,
+      }) === input.phase
+    ))
+    .sort((left, right) => (
+      left.presentedCount - right.presentedCount
+      || compareBinaryStrings(left.anomaly.firstObserved.timestamp, right.anomaly.firstObserved.timestamp)
+      || compareBinaryStrings(left.anomaly.id, right.anomaly.id)
+    ));
+}
+
+function buildRestatementRequests(input: {
+  ledger: LoadedFindingLedger;
+  entries: readonly OutstandingIntakeAnomaly[];
+  reviewer: string;
+  reviewScopeSnapshotId: string;
+}): RestatementRequestV1[] {
+  return input.entries.flatMap(({ anomaly, presentedCount }) => {
+    const raw = anomaly.sourceRawFindingIds
+      .map((rawId) => input.ledger.rawFindings.find((candidate) => candidate.rawFindingId === rawId))
+      .find((candidate) => candidate !== undefined);
+    if (raw === undefined) {
+      return [];
+    }
+    const requestWithoutId = {
+      anomalyId: anomaly.id,
+      reviewer: input.reviewer,
+      presentationOrdinal: presentedCount + 1,
+      reviewScopeSnapshotId: input.reviewScopeSnapshotId,
+      sourceExcerptDigest: raw.sourceBinding.excerptDigest,
+      claimedExcerpt: boundedRestatementClaimExcerpt(anomaly, raw),
+      targetPaths: targetPathsForRestatementRequest(raw.target),
+      missingRequirements: anomaly.intakeContract!.missingRequirements,
+      expectedRelation: 'new' as const,
+      expectedTargetFindingId: null,
+      expectedTargetPreconditionClass: 'absent' as const,
+    };
+    return [{
+      ...requestWithoutId,
+      restatementRequestId: computeRestatementRequestId(requestWithoutId),
+    }];
+  });
+}
+
+/** owner batch と escalation batch の合計を 1 step あたりの raw finding 上限内に収める。 */
+function remainingRestatementSlots(allocatedRequestCount: number): number {
+  return Math.min(
+    RAW_FINDING_LIMITS.maxRawFindingsPerReviewer,
+    Math.max(0, RAW_FINDING_LIMITS.maxRawFindingsPerStep - allocatedRequestCount),
+  );
+}
+
 function boundedRestatementClaimExcerpt(
-  anomaly: NonNullable<ReturnType<FindingLedgerStore['loadLedger']>['reviewerAnomalies']>[number],
-  raw: NonNullable<ReturnType<FindingLedgerStore['loadLedger']>['rawFindings']>[number],
+  anomaly: LoadedReviewerAnomaly,
+  raw: NonNullable<LoadedFindingLedger['rawFindings']>[number],
 ): string {
   // フォールバックは「非 blank な最初の候補」を選ぶ。`??` だけだと空白のみの
   // claimedExcerpt が後続の description / rawExcerpt を遮って title まで飛ぶ。
@@ -334,7 +444,8 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     params.options.findingContractConfig?.intakeNormalize,
     params.findingContract,
   );
-  let frozenParallelFindingContractInput: {
+  const escalationReviewerConfigured = params.findingContract?.escalationReviewer !== undefined;
+  let frozenFindingContractInput: {
     contextKey: string;
     ledger: ReturnType<FindingLedgerStore['loadLedger']>;
     presentationCounts: Map<string, number>;
@@ -345,7 +456,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     step: WorkflowStep,
     strategy: FindingContractReviewerOutputStrategy | undefined,
     sharedReviewScopeSnapshotId?: string,
-    parallelContextKey?: string,
+    findingContractFreezeKey?: string,
   ): FindingContractInstructionContext | undefined => {
     if (!params.findingContract) {
       return undefined;
@@ -360,30 +471,22 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     let allocatedRequestCount = 0;
     if (
       sharedReviewScopeSnapshotId !== undefined
-      && parallelContextKey !== undefined
-      && frozenParallelFindingContractInput?.contextKey === parallelContextKey
+      && findingContractFreezeKey !== undefined
+      && frozenFindingContractInput?.contextKey === findingContractFreezeKey
     ) {
-      ({ ledger, presentationCounts, contexts: frozenContexts, allocatedRequestCount } = frozenParallelFindingContractInput);
+      ({ ledger, presentationCounts, contexts: frozenContexts, allocatedRequestCount } = frozenFindingContractInput);
     } else {
       ledger = params.findingLedgerStore.loadLedger();
-      presentationCounts = new Map<string, number>();
-      for (const publication of listFindingReviewPublications(params.getReportDir())) {
-        if (publication.presentationContext?.revision !== 2) {
-          continue;
-        }
-        for (const anomalyId of publication.presentationContext.presentedReviewerAnomalyIds) {
-          presentationCounts.set(anomalyId, (presentationCounts.get(anomalyId) ?? 0) + 1);
-        }
-      }
-      if (parallelContextKey !== undefined) {
-        frozenParallelFindingContractInput = {
-          contextKey: parallelContextKey,
+      presentationCounts = collectFindingReviewPresentationCounts(params.getReportDir());
+      if (findingContractFreezeKey !== undefined) {
+        frozenFindingContractInput = {
+          contextKey: findingContractFreezeKey,
           ledger,
           presentationCounts,
           contexts: new Map(),
           allocatedRequestCount: 0,
         };
-        frozenContexts = frozenParallelFindingContractInput.contexts;
+        frozenContexts = frozenFindingContractInput.contexts;
       }
     }
     if (frozenContexts !== undefined && strategy !== undefined) {
@@ -403,51 +506,17 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
         currentIteration: params.state.iteration,
         stepName: step.name,
       });
-      const requests = (ledger.reviewerAnomalies ?? [])
-        .filter((anomaly) => (
-          anomaly.kind === 'intake-contract-incomplete'
-          && anomaly.intakeContract !== undefined
-          && anomaly.intakeContract.presentationOwnerReviewer === step.name
-          && anomaly.promotedFindingId === undefined
-          && anomaly.settlement === undefined
-        ))
-        .map((anomaly) => ({
-          anomaly,
-          presentedCount: presentationCounts.get(anomaly.id) ?? 0,
-        }))
-        .filter(({ anomaly, presentedCount }) => (
-          presentedCount < anomaly.intakeContract!.presentationLimit
-        ))
-        .sort((left, right) => (
-          left.presentedCount - right.presentedCount
-          || compareBinaryStrings(left.anomaly.firstObserved.timestamp, right.anomaly.firstObserved.timestamp)
-          || compareBinaryStrings(left.anomaly.id, right.anomaly.id)
-        ))
-        .slice(0, Math.min(64, Math.max(0, 128 - allocatedRequestCount)));
-      const restatementRequests: RestatementRequestV1[] = requests.flatMap(({ anomaly, presentedCount }) => {
-        const raw = anomaly.sourceRawFindingIds
-          .map((rawId) => ledger.rawFindings.find((candidate) => candidate.rawFindingId === rawId))
-          .find((candidate) => candidate !== undefined);
-        if (raw === undefined) {
-          return [];
-        }
-        const requestWithoutId = {
-          anomalyId: anomaly.id,
-          reviewer: step.name,
-          presentationOrdinal: presentedCount + 1,
-          reviewScopeSnapshotId,
-          sourceExcerptDigest: raw.sourceBinding.excerptDigest,
-          claimedExcerpt: boundedRestatementClaimExcerpt(anomaly, raw),
-          targetPaths: targetPathsForRestatementRequest(raw.target),
-          missingRequirements: anomaly.intakeContract!.missingRequirements,
-          expectedRelation: 'new' as const,
-          expectedTargetFindingId: null,
-          expectedTargetPreconditionClass: 'absent' as const,
-        };
-        return [{
-          ...requestWithoutId,
-          restatementRequestId: computeRestatementRequestId(requestWithoutId),
-        }];
+      const restatementRequests = buildRestatementRequests({
+        ledger,
+        entries: collectOutstandingIntakeAnomalies({
+          ledger,
+          presentationCounts,
+          ownerStepNames: new Set([step.name]),
+          phase: 'restatement',
+          escalationReviewerConfigured,
+        }).slice(0, remainingRestatementSlots(allocatedRequestCount)),
+        reviewer: step.name,
+        reviewScopeSnapshotId,
       });
       const presentationContext = createFindingReviewPresentationContextV2({
         reviewScopeSnapshotId,
@@ -465,7 +534,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
             reviewScopeSnapshotId,
             presentationContext,
           };
-      if (frozenContexts !== undefined && parallelContextKey !== undefined) {
+      if (frozenContexts !== undefined && findingContractFreezeKey !== undefined) {
         frozenContexts.set(step.name, {
           ledgerSummary: renderFindingLedgerInstructionSummary(ledger),
           reportLedgerSummary: renderFindingLedgerReportSummary(ledger),
@@ -474,8 +543,8 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
           hasDismissedFindings: ledgerHasDismissedFindings(ledger),
           ...(reviewer !== undefined ? { reviewer } : {}),
         });
-        frozenParallelFindingContractInput = {
-          contextKey: parallelContextKey,
+        frozenFindingContractInput = {
+          contextKey: findingContractFreezeKey,
           ledger,
           presentationCounts,
           contexts: frozenContexts,
@@ -494,6 +563,63 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     return context;
   };
 
+  /**
+   * escalation slot（提示予算の最終1回）用の reviewer context を組み立てる。
+   *
+   * owner batch を組んだときに凍結した ledger / presentation counts をそのまま
+   * 使い、owner が使い切った残り枠だけを escalation batch へ割り当てる。
+   * owner publication 永続化後に数え直すと、同じ iteration で owner の
+   * (limit-1) 回目の提示と escalation が二重に走る。
+   *
+   * escalation 対象の anomaly が1件も無い場合は undefined を返す。
+   */
+  const buildFindingEscalationInstructionContext = (input: {
+    ownerStepNames: readonly string[];
+    reviewScopeSnapshotId: string;
+    findingContractFreezeKey: string;
+  }): FindingContractInstructionContext | undefined => {
+    if (!escalationReviewerConfigured) {
+      return undefined;
+    }
+    if (frozenFindingContractInput?.contextKey !== input.findingContractFreezeKey) {
+      throw new Error(
+        'Finding escalation reviewer context requires the frozen reviewer input of the same review round',
+      );
+    }
+    const { ledger, presentationCounts, allocatedRequestCount } = frozenFindingContractInput;
+    const restatementRequests = buildRestatementRequests({
+      ledger,
+      entries: collectOutstandingIntakeAnomalies({
+        ledger,
+        presentationCounts,
+        ownerStepNames: new Set(input.ownerStepNames),
+        phase: 'escalation',
+        escalationReviewerConfigured,
+      }).slice(0, remainingRestatementSlots(allocatedRequestCount)),
+      reviewer: FINDING_ESCALATION_REVIEWER_ROUTING_KEY,
+      reviewScopeSnapshotId: input.reviewScopeSnapshotId,
+    });
+    if (restatementRequests.length === 0) {
+      return undefined;
+    }
+    return {
+      ledgerSummary: renderFindingLedgerInstructionSummary(ledger),
+      reportLedgerSummary: renderFindingLedgerReportSummary(ledger),
+      hasOpenFindings: ledgerHasOpenFindings(ledger),
+      hasWaivedFindings: ledgerHasWaivedFindings(ledger),
+      hasDismissedFindings: ledgerHasDismissedFindings(ledger),
+      reviewer: {
+        mode: 'structured',
+        rawFindingsStructuredOutput: createRawFindingsStructuredOutput(),
+        reviewScopeSnapshotId: input.reviewScopeSnapshotId,
+        presentationContext: createFindingReviewPresentationContextV2({
+          reviewScopeSnapshotId: input.reviewScopeSnapshotId,
+          restatementRequests,
+        }),
+      },
+    };
+  };
+
   const optionsBuilder = new OptionsBuilder(
     params.options,
     params.getCwd,
@@ -507,6 +633,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     params.getCurrentWorkflowStack,
     buildFindingContractInstructionContext,
     () => params.task,
+    buildFindingEscalationInstructionContext,
   );
 
   const dynamicFacetSelector = new DynamicFacetSelectorCoordinator({

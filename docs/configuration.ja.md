@@ -509,7 +509,7 @@ kiro_cli_path: /usr/local/bin/kiro-cli
 
 provider と model の選択には、[Provider Routing](#provider-routing) に記載した単一のフィールド別優先順位を使用します。通常 step、parallel sub-step、合成 step、workflow call は、各種類で利用可能なレイヤーについて同じ契約に従います。parallel sub-step は promotion をサポートしません。
 
-Finding Contract workflow では、`finding_contract.manager.provider` / `model` と `finding_contract.adjudicator.provider` / `model` は、それぞれの合成 step の step レベル provider/model として扱われます。実装上のフィールド別優先順は、CLI/環境変数の明示 override → 実行時にマッチした promotion（通常の agent step のみ）→ step または parallel sub-step の provider/model（これらの直接指定を含む）→ `workflow_call` override → `provider_routing` の step/tag/persona → deprecated の `persona_providers` → auto routing → workflow → project → global → provider default です。両方とも未指定の場合は通常の workflow step と同じ fallback chain を使います。`provider` だけを指定すると下位優先度の model fallback は停止し、明示 model が必須の provider では検証エラーになります。
+Finding Contract workflow では、`finding_contract.manager.provider` / `model`、`finding_contract.adjudicator.provider` / `model`、`finding_contract.escalation_reviewer.provider` / `model` は、それぞれの合成 step の step レベル provider/model として扱われます。実装上のフィールド別優先順は、CLI/環境変数の明示 override → 実行時にマッチした promotion（通常の agent step のみ）→ step または parallel sub-step の provider/model（これらの直接指定を含む）→ `workflow_call` override → `provider_routing` の step/tag/persona → deprecated の `persona_providers` → auto routing → workflow → project → global → provider default です。両方とも未指定の場合は通常の workflow step と同じ fallback chain を使います。`provider` だけを指定すると下位優先度の model fallback は停止し、明示 model が必須の provider では検証エラーになります。
 
 ```yaml
 finding_contract:
@@ -522,6 +522,10 @@ finding_contract:
   adjudicator:
     persona: supervisor
     instruction: adjudicate-finding-contract
+    provider: codex
+    model: <strong-model>
+  escalation_reviewer:
+    persona: escalation-supervisor
     provider: codex
     model: <strong-model>
 ```
@@ -807,6 +811,8 @@ provider と model は各レイヤーで個別に解決されます。provider �
 「有効な promotion」とは、通常の agent step の `promotion` エントリのうち、実行回数条件（`at: <N>`）または `ai()` 条件が現在の実行にマッチしたものを指します。parallel sub-step では promotion を指定できないため、CLI/環境変数の明示 override の次に sub-step YAML の provider/model が優先されます。[Step レベルのプロバイダープロモーション](./workflows.ja.md#step-レベルのプロバイダープロモーション)を参照してください。
 
 Finding Contract manager では、`finding_contract.manager.provider` と `finding_contract.manager.model` が合成 `findings-manager` step の `step YAML provider/model` 位置に入ります。
+
+合成された Finding Contract ロールは、設定した persona 名ではなく固定の persona キーで `provider_routing.personas` を解決します。`findings-manager`（manager）、`supervisor`（conflict / terminal adjudication）、`escalation-reviewer`（格上げ言い直しレビュー）、`loop-judge`（loop monitor の judge）です。`finding_contract.escalation_reviewer.provider` / `model` は合成 `escalation-reviewer` step の `step YAML provider/model` 位置に入ります。`finding_contract.escalation_reviewer` を設定している間、`escalation-reviewer` は workflow の予約 step 名にもなります。
 
 ### Auto Routing
 

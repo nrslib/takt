@@ -9,6 +9,7 @@
 
 {{#if restatementOnly}}## Restatement requests
 This is a restatement-only review. Address only the requests below. Preserve each request's source claim atom and return a complete product claim only when the repository evidence supports every required field. Do not invent missing fields, lifecycle relations, targets, or evidence. Each request may produce at most one `new` claim, and any claim must keep relation `new`, have no targetFindingId or target precondition, and may echo the request's anomaly ID in `reassertsReviewerAnomalyId`.
+Read the request's target files in the repository before restating. Derive every path and bounded 1-based line range from the current file contents, not from the request excerpt, and request a `file_quote` for each code target with that path and line range only — do not supply source text or verbatimExcerpt, because the engine reads and byte-matches the actual file. If the current file no longer supports the claim, return no claim for that request.
 {{restatementRequestsJson}}
 {{/if}}
 
