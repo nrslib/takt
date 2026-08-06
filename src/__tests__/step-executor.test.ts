@@ -745,6 +745,68 @@ describe('StepExecutor', () => {
     ]);
   });
 
+  it('should fire the extraction-fidelity correction when the normalizer returns an incomplete candidate', async () => {
+    // Given: candidate object はあるが必須項目を欠く（reviewer projection が null へ畳む形）
+    const harness = createPlainTextPublicationHarness([
+      {
+        persona: 'default',
+        status: 'done',
+        content: '{}',
+        structuredOutput: {
+          rawFindings: [{
+            rawExcerpt: CLAIM_EXCERPT,
+            candidate: { description: 'src/example.ts still bypasses the required boundary.' },
+          }],
+        },
+        timestamp: new Date('2026-07-31T00:00:01.000Z'),
+      },
+      {
+        persona: 'default',
+        status: 'done',
+        content: '{}',
+        structuredOutput: {
+          rawFindings: [{ rawExcerpt: CLAIM_EXCERPT, candidate: COMPLETE_CANDIDATE }],
+        },
+        timestamp: new Date('2026-07-31T00:00:02.000Z'),
+      },
+    ]);
+
+    // When
+    const result = await harness.executor.prepareFindingReviewPublication({
+      step: harness.step,
+      executableStep: harness.step,
+      reviewerOutputStrategy: PLAIN_TEXT_NORMALIZED_STRATEGY,
+      parentStepName: 'reviewers',
+      stepIteration: 1,
+      state: harness.state,
+      phase1Response: {
+        persona: 'reviewer',
+        status: 'done',
+        content: 'phase 1 investigation',
+        timestamp: new Date('2026-07-31T00:00:00.000Z'),
+      },
+      agentOptions: { resolvedProvider: 'mock' },
+      onProviderAttempt: vi.fn(),
+      updatePersonaSession: harness.updatePersonaSession,
+    });
+
+    // Then
+    expect('publication' in result).toBe(true);
+    if (!('publication' in result)) {
+      throw new Error('Expected publication');
+    }
+    expect(result.publication.rawFindings).toEqual([
+      { rawExcerpt: CLAIM_EXCERPT, candidate: COMPLETE_CANDIDATE },
+    ]);
+    expect(harness.normalizeFindingIntake.mock.calls.map(([, options]) => {
+      const typed = options as { mode: string; extractionFidelityCorrection?: boolean };
+      return { mode: typed.mode, extractionFidelityCorrection: typed.extractionFidelityCorrection };
+    })).toEqual([
+      { mode: 'initial', extractionFidelityCorrection: false },
+      { mode: 'correction', extractionFidelityCorrection: true },
+    ]);
+  });
+
   it('should not publish when the normalizer keeps returning a null candidate after the correction', async () => {
     // Given
     const nullCandidateFinding = { rawExcerpt: CLAIM_EXCERPT, candidate: null };
@@ -851,6 +913,75 @@ describe('StepExecutor', () => {
     ]);
     expect(vi.mocked(executeAgent)).toHaveBeenCalledTimes(2);
     expect(harness.normalizeFindingIntake).not.toHaveBeenCalled();
+  });
+
+  it('should correct a structured reviewer publication once when its candidate is incomplete', async () => {
+    // Given
+    const harness = createPlainTextPublicationHarness(
+      [],
+      PLAIN_TEXT_REPORT_CONTENT,
+      undefined,
+      undefined,
+      {
+        mode: 'structured',
+        agentResponses: [
+          {
+            persona: 'reviewer',
+            status: 'done',
+            content: '',
+            sessionId: 'reviewer-report-session',
+            structuredOutput: {
+              reportContent: PLAIN_TEXT_REPORT_CONTENT,
+              rawFindings: [{
+                rawExcerpt: CLAIM_EXCERPT,
+                candidate: { description: 'src/example.ts still bypasses the required boundary.' },
+              }],
+            },
+            timestamp: new Date('2026-07-31T00:00:00.000Z'),
+          },
+          {
+            persona: 'reviewer',
+            status: 'done',
+            content: '',
+            sessionId: 'reviewer-report-session',
+            structuredOutput: {
+              reportContent: PLAIN_TEXT_REPORT_CONTENT,
+              rawFindings: [{ rawExcerpt: CLAIM_EXCERPT, candidate: COMPLETE_CANDIDATE }],
+            },
+            timestamp: new Date('2026-07-31T00:00:01.000Z'),
+          },
+        ],
+      },
+    );
+
+    // When
+    const result = await harness.executor.prepareFindingReviewPublication({
+      step: harness.step,
+      executableStep: harness.step,
+      reviewerOutputStrategy: STRUCTURED_STRATEGY,
+      parentStepName: 'reviewers',
+      stepIteration: 1,
+      state: harness.state,
+      phase1Response: {
+        persona: 'reviewer',
+        status: 'done',
+        content: 'phase 1 investigation',
+        timestamp: new Date('2026-07-31T00:00:00.000Z'),
+      },
+      agentOptions: { resolvedProvider: 'mock' },
+      onProviderAttempt: vi.fn(),
+      updatePersonaSession: harness.updatePersonaSession,
+    });
+
+    // Then
+    expect('publication' in result).toBe(true);
+    if (!('publication' in result)) {
+      throw new Error('Expected publication');
+    }
+    expect(result.publication.rawFindings).toEqual([
+      { rawExcerpt: CLAIM_EXCERPT, candidate: COMPLETE_CANDIDATE },
+    ]);
+    expect(vi.mocked(executeAgent)).toHaveBeenCalledTimes(2);
   });
 
   it('should fail loudly when a structured reviewer publication keeps a null candidate after the correction', async () => {
