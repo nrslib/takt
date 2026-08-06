@@ -165,6 +165,13 @@ describe('TaskExecutionConfigSchema', () => {
     expect(config.start_movement).toBeUndefined();
   });
 
+  it('should not let the legacy start_movement key mask a non-string start_step', () => {
+    expect(() => TaskExecutionConfigSchema.parse({
+      start_step: 123,
+      start_movement: 'develop',
+    })).toThrow();
+  });
+
   it('should require occurrence and accept omitted or positive integer step iterations', () => {
     const baseResumePoint = {
       version: 2,

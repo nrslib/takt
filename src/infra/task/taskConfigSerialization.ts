@@ -58,7 +58,7 @@ export function normalizeTaskConfig(input: unknown): unknown {
   }
   if (legacyStartStep !== undefined) {
     delete next.start_movement;
-    if (resolveTaskStartStepValue(record) === undefined) {
+    if (record.start_step === undefined) {
       next.start_step = legacyStartStep;
     }
   }
