@@ -16,6 +16,10 @@ subworkflow:
       type: facet_ref
       facet_kind: instruction
       default: plan
+    replan_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: replan-implementation
     testing_policy:
       type: facet_ref[]
       facet_kind: policy
@@ -84,6 +88,31 @@ steps:
       - condition: Requirements are unclear or information is insufficient
         next: ABORT
 
+  - name: replan
+    tags: [plan]
+    edit: false
+    persona: planner
+    policy:
+      - contract-change
+      - $param: plan_policy
+    knowledge:
+      $param: plan_knowledge
+    provider_options:
+      extends: review-readonly
+    instruction:
+      $param: replan_instruction
+    output_contracts:
+      report:
+        - name: plan.md
+          format: plan
+    rules:
+      - condition: An actionable, untried project-scoped change or investigation and its verification steps were defined
+        next: implement
+      - condition: The current implementation meets the requirements and acceptance criteria, required project-scoped verification is complete, and no untried change or investigation remains
+        next: peer-review
+      - condition: Confirmed evidence shows that project-scoped changes or investigation cannot resolve the issue, leaving only external action or mutually unsatisfiable requirements
+        next: ABORT
+
   - name: write_tests
     uses: development-core-write-tests
     with:
@@ -120,7 +149,7 @@ steps:
       - condition: Implementation not started (report only)
         next: peer-review
       - condition: Unable to proceed with implementation
-        next: plan
+        next: replan
       - condition: User input is required
         next: implement
         requires_user_input: true
@@ -149,6 +178,6 @@ steps:
       - condition: COMPLETE
         next: COMPLETE
       - condition: need_replan
-        next: plan
+        next: replan
       - condition: ABORT
         next: ABORT

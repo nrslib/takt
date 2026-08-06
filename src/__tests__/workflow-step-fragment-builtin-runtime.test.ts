@@ -803,6 +803,52 @@ describe('builtin workflow step fragment migration', () => {
     }
   });
 
+  it.each(LANGUAGES)('routes %s development-core rework through replan instead of a full replan-from-plan', (lang) => {
+    mkdirSync(join(projectDir, '.takt'), { recursive: true });
+    writeFileSync(join(projectDir, '.takt', 'config.yaml'), 'language: ' + lang + '\n', 'utf-8');
+    invalidateAllResolvedConfigCache();
+
+    const raw = readBuiltinWorkflow(lang, 'development-core');
+    const replan = getStep(raw, 'replan');
+    // Defined inline: the subworkflow param type system cannot parameterize `uses:`,
+    // so the FC instruction variant is selected through the instruction facet_ref param.
+    expect(replan.uses).toBeUndefined();
+    expect(replan).toMatchObject({
+      persona: 'planner',
+      edit: false,
+      instruction: { $param: 'replan_instruction' },
+      knowledge: { $param: 'plan_knowledge' },
+      output_contracts: { report: [{ name: 'plan.md', format: 'plan' }] },
+    });
+    expect(replan.policy).toEqual(['contract-change', { $param: 'plan_policy' }]);
+    expect((replan.rules as RawRule[]).map((rule) => rule.next))
+      .toEqual(['implement', 'peer-review', 'ABORT']);
+
+    const nextTargets = (stepName: string): (string | undefined)[] =>
+      (getStep(raw, stepName).rules as RawRule[]).map((rule) => rule.next);
+    expect(nextTargets('implement')).toContain('replan');
+    expect(nextTargets('implement')).not.toContain('plan');
+    expect(nextTargets('peer-review')).toContain('replan');
+    expect(nextTargets('peer-review')).not.toContain('plan');
+    // write_tests keeps its escalation to the full plan step.
+    expect(nextTargets('write_tests')).toContain('plan');
+
+    const workflowPath = join(getBuiltinWorkflowsDir(lang), 'development-core.yaml');
+    const loaded = loadWorkflowFromFile(workflowPath, projectDir);
+    const loadedReplan = loaded.steps.find((step) => step.name === 'replan');
+    expect(loadedReplan).toMatchObject({ persona: 'planner', edit: false });
+    expect(loadedReplan?.outputContracts?.[0]).toMatchObject({ name: 'plan.md', formatRef: 'plan' });
+    expect(loadedReplan?.instruction?.trim().length ?? 0).toBeGreaterThan(0);
+
+    invalidateAllResolvedConfigCache();
+    const fcLoaded = loadWorkflowFromFile(workflowPath, projectDir, {
+      callableArgs: { replan_instruction: 'replan-implementation-finding-contract' },
+    });
+    const fcReplan = fcLoaded.steps.find((step) => step.name === 'replan');
+    expect(fcReplan?.instruction).not.toBe(loadedReplan?.instruction);
+    expect(fcReplan?.instruction?.trim().length ?? 0).toBeGreaterThan(0);
+  });
+
   it.each(LANGUAGES)('loads %s lightweight development routines with resolved runtime report contracts', (lang) => {
     mkdirSync(join(projectDir, '.takt'), { recursive: true });
     writeFileSync(join(projectDir, '.takt', 'config.yaml'), 'language: ' + lang + '\n', 'utf-8');

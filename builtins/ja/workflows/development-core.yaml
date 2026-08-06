@@ -16,6 +16,10 @@ subworkflow:
       type: facet_ref
       facet_kind: instruction
       default: plan
+    replan_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: replan-implementation
     testing_policy:
       type: facet_ref[]
       facet_kind: policy
@@ -84,6 +88,31 @@ steps:
       - condition: 要件が不明確、情報不足
         next: ABORT
 
+  - name: replan
+    tags: [plan]
+    edit: false
+    persona: planner
+    policy:
+      - contract-change
+      - $param: plan_policy
+    knowledge:
+      $param: plan_knowledge
+    provider_options:
+      extends: review-readonly
+    instruction:
+      $param: replan_instruction
+    output_contracts:
+      report:
+        - name: plan.md
+          format: plan
+    rules:
+      - condition: プロジェクト内で実行可能な未試行の変更または原因調査と、その検証手順を具体化した
+        next: implement
+      - condition: 現行実装が要件・受入条件を満たし、必要なプロジェクト内検証が完了し、未試行の変更・調査が残っていない
+        next: peer-review
+      - condition: 確認済みの根拠により、プロジェクト内の変更や調査では解消できず、外部操作だけが残るか要件が両立不能である
+        next: ABORT
+
   - name: write_tests
     uses: development-core-write-tests
     with:
@@ -120,7 +149,7 @@ steps:
       - condition: 実装未着手（レポートのみ）
         next: peer-review
       - condition: 実装を進行できない
-        next: plan
+        next: replan
       - condition: ユーザー入力が必要
         next: implement
         requires_user_input: true
@@ -149,6 +178,6 @@ steps:
       - condition: COMPLETE
         next: COMPLETE
       - condition: need_replan
-        next: plan
+        next: replan
       - condition: ABORT
         next: ABORT

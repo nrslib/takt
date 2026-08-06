@@ -340,11 +340,12 @@ afterEach(() => {
 });
 
 describe('takt-default-fc builtins', () => {
-  it.each(LANGUAGES)('%s root owns FC and changes only peer-review call arguments', (language) => {
+  it.each(LANGUAGES)('%s root owns FC and changes only FC-specialized call arguments', (language) => {
     const standard = rawStep(readWorkflow(language, 'takt-default'), 'develop');
     const fc = rawStep(readWorkflow(language, 'takt-default-fc'), 'develop');
     expect(fc.args).toEqual({
       ...standard.args,
+      replan_instruction: 'replan-implementation-finding-contract',
       reviewer_suite: 'peer-review-suite-finding-contract-base',
       peer_review_workflow: 'peer-review-finding-contract',
     });
