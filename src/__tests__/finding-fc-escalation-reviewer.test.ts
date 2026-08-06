@@ -74,6 +74,10 @@ function contractWithEscalationReviewer(
       instruction: 'Manage findings.',
       outputContract: 'Manager output contract.',
     },
+    adjudicator: {
+      persona: 'supervisor',
+      instruction: 'Adjudicate findings.',
+    },
     escalationReviewer: {
       persona: 'escalation-supervisor',
       providerRoutingPersonaKey: FINDING_ESCALATION_REVIEWER_ROUTING_KEY,
@@ -109,23 +113,6 @@ describe('FC escalation reviewer — presentation phase', () => {
     }));
 
     expect(phases).toEqual(['restatement', 'restatement', 'restatement', 'exhausted']);
-  });
-
-  it('stays in the escalation phase while a publication never lands', () => {
-    // publication 成立前の失敗は presentedCount を増やさないため、次ラウンドも
-    // 同じ presentationOrdinal の escalation request を再発行する。
-    const beforeFailedRound = resolveRestatementPresentationPhase({
-      presentedCount: 1,
-      presentationLimit: 2,
-      escalationReviewerConfigured: true,
-    });
-    const afterFailedRound = resolveRestatementPresentationPhase({
-      presentedCount: 1,
-      presentationLimit: 2,
-      escalationReviewerConfigured: true,
-    });
-
-    expect([beforeFailedRound, afterFailedRound]).toEqual(['escalation', 'escalation']);
   });
 
   it('gives the owner request and the escalation request different identities without changing the digest contract', () => {
@@ -294,6 +281,13 @@ describe('FC escalation reviewer — configuration schema', () => {
           instruction: 'findings-manager',
           output_contract: 'findings-manager',
         },
+        // 正規化済み WorkflowConfig を engine が組み立てる際、合成 FC ロールは
+        // 事前検証される（CLAUDE.md）。adjudicator を欠くと検証を素通りする
+        // 構成をテストが作ってしまう。
+        adjudicator: {
+          persona: 'supervisor',
+          instruction: 'adjudicate-finding-contract',
+        },
         escalation_reviewer: {
           persona: 'terminal-supervisor',
           provider: 'codex',
@@ -328,6 +322,13 @@ describe('FC escalation reviewer — configuration schema', () => {
           instruction: 'findings-manager',
           output_contract: 'findings-manager',
         },
+        // 正規化済み WorkflowConfig を engine が組み立てる際、合成 FC ロールは
+        // 事前検証される（CLAUDE.md）。adjudicator を欠くと検証を素通りする
+        // 構成をテストが作ってしまう。
+        adjudicator: {
+          persona: 'supervisor',
+          instruction: 'adjudicate-finding-contract',
+        },
       },
       initial_step: 'review',
       max_steps: 2,
@@ -350,6 +351,13 @@ describe('FC escalation reviewer — configuration schema', () => {
           persona: 'findings-manager',
           instruction: 'findings-manager',
           output_contract: 'findings-manager',
+        },
+        // 正規化済み WorkflowConfig を engine が組み立てる際、合成 FC ロールは
+        // 事前検証される（CLAUDE.md）。adjudicator を欠くと検証を素通りする
+        // 構成をテストが作ってしまう。
+        adjudicator: {
+          persona: 'supervisor',
+          instruction: 'adjudicate-finding-contract',
         },
         ...(withEscalationReviewer
           ? { escalation_reviewer: { persona: 'terminal-supervisor' } }
@@ -386,6 +394,13 @@ describe('FC escalation reviewer — configuration schema', () => {
           persona: 'findings-manager',
           instruction: 'findings-manager',
           output_contract: 'findings-manager',
+        },
+        // 正規化済み WorkflowConfig を engine が組み立てる際、合成 FC ロールは
+        // 事前検証される（CLAUDE.md）。adjudicator を欠くと検証を素通りする
+        // 構成をテストが作ってしまう。
+        adjudicator: {
+          persona: 'supervisor',
+          instruction: 'adjudicate-finding-contract',
         },
         escalation_reviewer: { persona: 'terminal-supervisor' },
       },
@@ -646,15 +661,17 @@ describe('FC escalation reviewer — presentation freeze', () => {
     };
   }
 
-  /** owner reviewer がその anomaly を提示した canonical publication を報告先へ実際に書き込む。 */
-  function persistOwnerPresentation(input: {
+  /** 指定 reviewer がその anomaly を提示した canonical publication を報告先へ実際に書き込む。 */
+  function persistPresentation(input: {
     reportDir: string;
     anomalyId: string;
     presentationOrdinal: number;
+    reviewerStepName: string;
+    reportName: string;
   }): void {
     const requestWithoutId = {
       anomalyId: input.anomalyId,
-      reviewer: reviewerStep.name,
+      reviewer: input.reviewerStepName,
       presentationOrdinal: input.presentationOrdinal,
       reviewScopeSnapshotId,
       sourceExcerptDigest: 'c'.repeat(64),
@@ -680,15 +697,39 @@ describe('FC escalation reviewer — presentation freeze', () => {
           callNamespace: '',
           parentStepName: reviewerStep.name,
           stepIteration: 1,
-          reviewerStepName: reviewerStep.name,
-          reportName: 'architecture-review.md',
+          reviewerStepName: input.reviewerStepName,
+          reportName: input.reportName,
         },
         protocol: STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
-        reportContent: 'Owner restatement report.',
+        reportContent: `${input.reviewerStepName} restatement report.`,
         rawFindings: [],
         presentationContext,
       }),
       reviewerExecutionIdentity: { provider: 'codex' },
+    });
+  }
+
+  function persistOwnerPresentation(input: {
+    reportDir: string;
+    anomalyId: string;
+    presentationOrdinal: number;
+  }): void {
+    persistPresentation({
+      ...input,
+      reviewerStepName: reviewerStep.name,
+      reportName: 'architecture-review.md',
+    });
+  }
+
+  function persistEscalationPresentation(input: {
+    reportDir: string;
+    anomalyId: string;
+    presentationOrdinal: number;
+  }): void {
+    persistPresentation({
+      ...input,
+      reviewerStepName: FINDING_ESCALATION_REVIEWER_ROUTING_KEY,
+      reportName: `${FINDING_ESCALATION_REVIEWER_REPORT_NAME}.md`,
     });
   }
 
@@ -751,6 +792,68 @@ describe('FC escalation reviewer — presentation freeze', () => {
         .toMatchObject([
           { reviewer: FINDING_ESCALATION_REVIEWER_ROUTING_KEY, presentationOrdinal: 1 },
         ]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('re-issues the same escalation request after a round whose publication never landed', () => {
+    const { services, reportDir, anomalyId, cleanup } = makeServices(2);
+    try {
+      // owner が limit-1 回目を提示し、その publication だけが成立している状態。
+      persistOwnerPresentation({ reportDir, anomalyId, presentationOrdinal: 1 });
+
+      const escalationRequestsForRound = (freezeKey: string) => {
+        services.optionsBuilder.buildFindingContractInstructionContext(
+          reviewerStep,
+          structuredStrategy,
+          reviewScopeSnapshotId,
+          freezeKey,
+        );
+        const context = services.optionsBuilder.buildFindingEscalationInstructionContext({
+          ownerStepNames: [reviewerStep.name],
+          reviewScopeSnapshotId,
+          findingContractFreezeKey: freezeKey,
+        });
+        const presentation = context?.reviewer?.presentationContext;
+        return presentation?.revision === 2 ? presentation.restatementRequests : undefined;
+      };
+
+      const firstRound = escalationRequestsForRound('freeze-escalation-round-1');
+      expect(firstRound).toMatchObject([
+        { reviewer: FINDING_ESCALATION_REVIEWER_ROUTING_KEY, presentationOrdinal: 2 },
+      ]);
+
+      // このラウンドは escalation publication を成立させずに失敗した想定。
+      // report dir には owner の publication しか無いままにする。
+      expect(listFindingReviewPublications(reportDir)).toHaveLength(1);
+
+      // 次ラウンドは同じ ordinal・同じ request ID の escalation request を再発行する。
+      const secondRound = escalationRequestsForRound('freeze-escalation-round-2');
+      expect(secondRound).toEqual(firstRound);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('stops issuing escalation requests once the escalation publication lands', () => {
+    const { services, reportDir, anomalyId, cleanup } = makeServices(2);
+    try {
+      persistOwnerPresentation({ reportDir, anomalyId, presentationOrdinal: 1 });
+      persistEscalationPresentation({ reportDir, anomalyId, presentationOrdinal: 2 });
+
+      services.optionsBuilder.buildFindingContractInstructionContext(
+        reviewerStep,
+        structuredStrategy,
+        reviewScopeSnapshotId,
+        'freeze-after-escalation',
+      );
+
+      expect(services.optionsBuilder.buildFindingEscalationInstructionContext({
+        ownerStepNames: [reviewerStep.name],
+        reviewScopeSnapshotId,
+        findingContractFreezeKey: 'freeze-after-escalation',
+      })).toBeUndefined();
     } finally {
       cleanup();
     }

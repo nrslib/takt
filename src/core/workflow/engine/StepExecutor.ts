@@ -381,7 +381,10 @@ export class StepExecutor {
       return undefined;
     }
     const escalationContext = this.deps.optionsBuilder.buildFindingEscalationInstructionContext({
-      ownerStepNames: [input.parentStepName],
+      // owner 名は publication identity の reviewerStepName（= anomaly の
+      // presentationOwnerReviewer）と同じ値でなければならない。単独ステップでは
+      // parent step 名と一致するが、意味が違う値なので reviewer step から取る。
+      ownerStepNames: [input.ownerReviewerStep.name],
       reviewScopeSnapshotId: ownerReviewer.reviewScopeSnapshotId,
       findingContractFreezeKey: input.findingContractFreezeKey,
     });

@@ -257,22 +257,20 @@ export function assertFindingReviewPresentationCapacity(input: {
   currentIteration: number;
   stepName: string;
 }): void {
-  const unpresented = (input.ledger.reviewerAnomalies ?? []).filter((anomaly) => {
-    const defect = anomaly.intakeContract;
-    const presentedCount = input.presentationCounts.get(anomaly.id) ?? 0;
-    return anomaly.kind === 'intake-contract-incomplete'
-      && defect !== undefined
-      && anomaly.promotedFindingId === undefined
+  const unpresented = (input.ledger.reviewerAnomalies ?? [])
+    .filter(hasIntakeContract)
+    .filter((anomaly) => (
+      anomaly.promotedFindingId === undefined
       && anomaly.settlement === undefined
-      && defect.terminalDisposition === undefined
-      && presentedCount === 0;
-  });
+      && anomaly.intakeContract.terminalDisposition === undefined
+      && (input.presentationCounts.get(anomaly.id) ?? 0) === 0
+    ));
   if (unpresented.length === 0) {
     return;
   }
   const countsByOwner = new Map<string, number>();
   for (const anomaly of unpresented) {
-    const owner = anomaly.intakeContract!.presentationOwnerReviewer;
+    const owner = anomaly.intakeContract.presentationOwnerReviewer;
     countsByOwner.set(owner, (countsByOwner.get(owner) ?? 0) + 1);
   }
   const total = unpresented.length;
@@ -290,7 +288,7 @@ export function assertFindingReviewPresentationCapacity(input: {
     stepName: input.stepName,
     anomalyIds: unpresented.map(({ id }) => id),
     classificationAuthorityIds: unpresented.map(
-      ({ intakeContract }) => intakeContract!.classificationAuthorityId,
+      ({ intakeContract }) => intakeContract.classificationAuthorityId,
     ),
     requiredInvocations,
     remainingCapacity,
@@ -335,8 +333,17 @@ function collectFindingReviewPresentationCounts(reportDir: string): Map<string, 
 type LoadedFindingLedger = ReturnType<FindingLedgerStore['loadLedger']>;
 type LoadedReviewerAnomaly = NonNullable<LoadedFindingLedger['reviewerAnomalies']>[number];
 
+/** `intake-contract-incomplete` の anomaly は intakeContract を必ず持つ（台帳 invariant）。 */
+type IntakeContractAnomaly = LoadedReviewerAnomaly & {
+  readonly intakeContract: NonNullable<LoadedReviewerAnomaly['intakeContract']>;
+};
+
+function hasIntakeContract(anomaly: LoadedReviewerAnomaly): anomaly is IntakeContractAnomaly {
+  return anomaly.kind === 'intake-contract-incomplete' && anomaly.intakeContract !== undefined;
+}
+
 interface OutstandingIntakeAnomaly {
-  readonly anomaly: LoadedReviewerAnomaly;
+  readonly anomaly: IntakeContractAnomaly;
   readonly presentedCount: number;
 }
 
@@ -354,10 +361,9 @@ function collectOutstandingIntakeAnomalies(input: {
   escalationReviewerConfigured: boolean;
 }): OutstandingIntakeAnomaly[] {
   return (input.ledger.reviewerAnomalies ?? [])
+    .filter(hasIntakeContract)
     .filter((anomaly) => (
-      anomaly.kind === 'intake-contract-incomplete'
-      && anomaly.intakeContract !== undefined
-      && input.ownerStepNames.has(anomaly.intakeContract.presentationOwnerReviewer)
+      input.ownerStepNames.has(anomaly.intakeContract.presentationOwnerReviewer)
       && anomaly.promotedFindingId === undefined
       && anomaly.settlement === undefined
     ))
@@ -368,7 +374,7 @@ function collectOutstandingIntakeAnomalies(input: {
     .filter(({ anomaly, presentedCount }) => (
       resolveRestatementPresentationPhase({
         presentedCount,
-        presentationLimit: anomaly.intakeContract!.presentationLimit,
+        presentationLimit: anomaly.intakeContract.presentationLimit,
         escalationReviewerConfigured: input.escalationReviewerConfigured,
       }) === input.phase
     ))
@@ -400,7 +406,7 @@ function buildRestatementRequests(input: {
       sourceExcerptDigest: raw.sourceBinding.excerptDigest,
       claimedExcerpt: boundedRestatementClaimExcerpt(anomaly, raw),
       targetPaths: targetPathsForRestatementRequest(raw.target),
-      missingRequirements: anomaly.intakeContract!.missingRequirements,
+      missingRequirements: anomaly.intakeContract.missingRequirements,
       expectedRelation: 'new' as const,
       expectedTargetFindingId: null,
       expectedTargetPreconditionClass: 'absent' as const,

@@ -2364,9 +2364,15 @@ describe('StepExecutor', () => {
         { kind: 'structured', reportGeneration: 'structured', intake: 'reviewer_structured' },
         undefined,
         // owner context と escalation slot が同じ ledger / presentation counts を
-        // 見るための凍結キー。
-        expect.stringMatching(new RegExp(`^${step.name}\\u0000\\d+\\u0000\\d+$`)),
+        // 見るための凍結キー。区切りは固定なので分解して検証する。
+        expect.any(String),
       );
+    const freezeKey = String(buildFindingContractInstructionContext.mock.calls[0]![3]);
+    const freezeKeyParts = freezeKey.split('\u0000');
+    expect(freezeKeyParts).toHaveLength(3);
+    expect(freezeKeyParts[0]).toBe(step.name);
+    expect(Number(freezeKeyParts[1])).toBeGreaterThan(0);
+    expect(Number(freezeKeyParts[2])).toBeGreaterThan(0);
     expect(buildAgentOptions).toHaveBeenCalledWith(expect.objectContaining({
       structuredOutput,
     }), undefined);
