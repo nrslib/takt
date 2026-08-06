@@ -339,40 +339,14 @@ describe('TaskExecutionConfigSchema', () => {
   );
 
 
-  it('should reject conflicting start_step and start_movement values', () => {
+  it('should reject non-string start_step values', () => {
     expect(() => TaskExecutionConfigSchema.parse({
-      start_step: 'plan',
-      start_movement: 'implement',
-    })).toThrow('start_step and start_movement must match when both are set');
-  });
-
-  it('should return safeParse failure instead of throwing for conflicting start_step and start_movement values', () => {
-    const input = {
-      start_step: 'plan',
-      start_movement: 'implement',
-    };
-
-    expect(() => TaskExecutionConfigSchema.safeParse(input)).not.toThrow();
-    const result = TaskExecutionConfigSchema.safeParse(input);
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.issues).toEqual(expect.arrayContaining([
-        expect.objectContaining({
-          message: 'start_step and start_movement must match when both are set',
-          path: ['start_movement'],
-        }),
-      ]));
-    }
-  });
-
-  it('should reject non-string start_movement values', () => {
-    expect(() => TaskExecutionConfigSchema.parse({
-      start_movement: 123,
+      start_step: 123,
     })).toThrow();
   });
 
 
-  it('should serialize canonical task keys as workflow and start_movement', () => {
+  it('should serialize canonical task keys as workflow and start_step', () => {
     const serialized = serializeTaskRecord({
       ...makePendingRecord(),
       workflow: 'unit-test',
@@ -381,7 +355,7 @@ describe('TaskExecutionConfigSchema', () => {
 
     expect(serialized).toMatchObject({
       workflow: 'unit-test',
-      start_movement: 'plan',
+      start_step: 'plan',
     });
   });
 
@@ -400,26 +374,6 @@ describe('TaskExecutionConfigSchema', () => {
 describe('TaskFileSchema', () => {
   it('should accept valid task with required fields', () => {
     expect(() => TaskFileSchema.parse({ task: 'do something' })).not.toThrow();
-  });
-
-  it('should return safeParse failure instead of throwing for conflicting start_step and start_movement values', () => {
-    const input = {
-      task: 'do something',
-      start_step: 'plan',
-      start_movement: 'implement',
-    };
-
-    expect(() => TaskFileSchema.safeParse(input)).not.toThrow();
-    const result = TaskFileSchema.safeParse(input);
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.issues).toEqual(expect.arrayContaining([
-        expect.objectContaining({
-          message: 'start_step and start_movement must match when both are set',
-          path: ['start_movement'],
-        }),
-      ]));
-    }
   });
 
   it('should reject empty task string', () => {
@@ -452,26 +406,6 @@ describe('TaskRecordSchema', () => {
   describe('pending status', () => {
     it('should accept valid pending record', () => {
       expect(() => TaskRecordSchema.parse(makePendingRecord())).not.toThrow();
-    });
-
-    it('should return safeParse failure instead of throwing for conflicting start_step and start_movement values', () => {
-      const input = {
-        ...makePendingRecord(),
-        start_step: 'plan',
-        start_movement: 'implement',
-      };
-
-      expect(() => TaskRecordSchema.safeParse(input)).not.toThrow();
-      const result = TaskRecordSchema.safeParse(input);
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        expect(result.error.issues).toEqual(expect.arrayContaining([
-          expect.objectContaining({
-            message: 'start_step and start_movement must match when both are set',
-            path: ['start_movement'],
-          }),
-        ]));
-      }
     });
 
     it('should reject pending record with started_at', () => {

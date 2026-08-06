@@ -46,8 +46,7 @@ function expectRetryMetadataPreserved(
     resumePoint: Record<string, unknown>;
   },
 ): void {
-  expect(record?.start_movement).toBe(expected.startStep);
-  expect(record?.start_step).toBeUndefined();
+  expect(record?.start_step).toBe(expected.startStep);
   expect(record?.exceeded_current_iteration).toBe(expected.currentIteration);
   expect(record?.exceeded_max_steps).toBe(expected.maxSteps);
   expect(record?.resume_point).toEqual(expected.resumePoint);
@@ -374,8 +373,7 @@ describe('TaskRunner (tasks.yaml)', () => {
     const file = loadTasksFile(testDir);
     expect(file.tasks[0]?.status).toBe('failed');
     expect(file.tasks[0]?.run_slug).toBe('20260413-task-a');
-    expect(file.tasks[0]?.start_movement).toBe('delegate');
-    expect(file.tasks[0]?.start_step).toBeUndefined();
+    expect(file.tasks[0]?.start_step).toBe('delegate');
     expect(file.tasks[0]?.resume_point).toEqual(latestResumePoint);
     expect(file.tasks[0]?.exceeded_current_iteration).toBe(7);
     expect(file.tasks[0]?.exceeded_max_steps).toBeUndefined();
@@ -417,7 +415,6 @@ describe('TaskRunner (tasks.yaml)', () => {
     const file = loadTasksFile(testDir);
     expect(file.tasks[0]?.status).toBe('failed');
     expect(file.tasks[0]?.run_slug).toBeUndefined();
-    expect(file.tasks[0]?.start_movement).toBeUndefined();
     expect(file.tasks[0]?.start_step).toBeUndefined();
     expect(file.tasks[0]?.exceeded_current_iteration).toBeUndefined();
     expect(file.tasks[0]?.exceeded_max_steps).toBeUndefined();
@@ -460,7 +457,6 @@ describe('TaskRunner (tasks.yaml)', () => {
     const file = loadTasksFile(testDir);
     expect(file.tasks[0]?.status).toBe('failed');
     expect(file.tasks[0]?.run_slug).toBe('20260413-task-a');
-    expect(file.tasks[0]?.start_movement).toBeUndefined();
     expect(file.tasks[0]?.start_step).toBeUndefined();
     expect(file.tasks[0]?.exceeded_current_iteration).toBeUndefined();
     expect(file.tasks[0]?.exceeded_max_steps).toBeUndefined();
@@ -544,7 +540,6 @@ describe('TaskRunner (tasks.yaml)', () => {
     const failedTask = loadTasksFile(testDir).tasks[0];
     expect(failedTask?.status).toBe('failed');
     expect(failedTask?.restart_point).toEqual(restartPoint);
-    expect(failedTask?.start_movement).toBeUndefined();
     expect(failedTask?.start_step).toBeUndefined();
     expect(failedTask?.resume_point).toBeUndefined();
   });
@@ -582,7 +577,6 @@ describe('TaskRunner (tasks.yaml)', () => {
     const failedTask = loadTasksFile(testDir).tasks[0];
     expect(failedTask?.status).toBe('failed');
     expect(failedTask?.restart_point).toEqual(restartPoint);
-    expect(failedTask?.start_movement).toBeUndefined();
     expect(failedTask?.start_step).toBeUndefined();
     expect(failedTask?.resume_point).toBeUndefined();
   });
@@ -636,7 +630,7 @@ describe('TaskRunner (tasks.yaml)', () => {
     expect(runner.failInterruptedRunningTasks()).toBe(1);
 
     const failedTask = loadTasksFile(testDir).tasks[0];
-    expect(failedTask?.start_movement).toBe('final-review');
+    expect(failedTask?.start_step).toBe('final-review');
     expect(failedTask?.resume_point).toBeUndefined();
     expect(failedTask?.exceeded_current_iteration).toBe(60);
     expect(failedTask?.exceeded_max_steps).toBeUndefined();
@@ -892,7 +886,7 @@ describe('TaskRunner (tasks.yaml)', () => {
     expect(pending[0]?.data?.retry_note).toBe('retry note');
   });
 
-  it('should persist canonical workflow and start_movement keys when requeueing failed task', () => {
+  it('should persist canonical workflow and start_step keys when requeueing failed task', () => {
     runner.addTask('Task A', { workflow: 'default' });
     const task = runner.claimNextTasks(1)[0]!;
     runner.failTask({
@@ -908,8 +902,7 @@ describe('TaskRunner (tasks.yaml)', () => {
 
     const file = loadTasksFile(testDir);
     expect(file.tasks[0]?.workflow).toBe('default');
-    expect(file.tasks[0]?.start_movement).toBe('implement');
-    expect(file.tasks[0]?.start_step).toBeUndefined();
+    expect(file.tasks[0]?.start_step).toBe('implement');
   });
 
   it('should auto-requeue failed task and persist the first auto_requeue_count', () => {
@@ -929,7 +922,7 @@ describe('TaskRunner (tasks.yaml)', () => {
     expect(file.tasks[0]?.status).toBe('pending');
     expect(file.tasks[0]?.auto_requeue_count).toBe(1);
     expect(file.tasks[0]?.failure).toBeUndefined();
-    expect(file.tasks[0]?.start_movement).toBe('implement');
+    expect(file.tasks[0]?.start_step).toBe('implement');
     expect(file.tasks[0]?.retry_note).toEqual(expect.stringContaining('Auto-requeue'));
     expect(file.tasks[0]?.retry_note).toEqual(expect.stringContaining('1/2'));
   });
@@ -961,7 +954,7 @@ describe('TaskRunner (tasks.yaml)', () => {
     const task = loadTasksFile(testDir).tasks[0];
     expect(result.requeued).toBe(true);
     expect(task?.restart_point).toEqual(restartPoint);
-    expect(task?.start_movement).toBeUndefined();
+    expect(task?.start_step).toBeUndefined();
     expect(task?.resume_point).toBeUndefined();
   });
 
@@ -1421,8 +1414,7 @@ describe('TaskRunner (tasks.yaml)', () => {
     );
 
     const retriedTask = loadTasksFile(testDir).tasks[0];
-    expect(retriedTask?.start_movement).toBe('implement');
-    expect(retriedTask?.start_step).toBeUndefined();
+    expect(retriedTask?.start_step).toBe('implement');
     expect(retriedTask?.restart_point).toBeUndefined();
     expect(retriedTask?.resume_point).toBeUndefined();
   });
@@ -1451,7 +1443,6 @@ describe('TaskRunner (tasks.yaml)', () => {
 
     const retriedTask = loadTasksFile(testDir).tasks[0];
     expect(retriedTask?.restart_point).toEqual(nextRestartPoint);
-    expect(retriedTask?.start_movement).toBeUndefined();
     expect(retriedTask?.start_step).toBeUndefined();
     expect(retriedTask?.resume_point).toBeUndefined();
   });
@@ -1486,7 +1477,7 @@ describe('TaskRunner (tasks.yaml)', () => {
     expect(file.tasks[0]?.content_file).toBeUndefined();
   });
 
-  it('should persist canonical workflow and start_movement keys when starting re-execution', () => {
+  it('should persist canonical workflow and start_step keys when starting re-execution', () => {
     runner.addTask('Task A', { workflow: 'default' });
     const task = runner.claimNextTasks(1)[0]!;
     runner.failTask({
@@ -1516,8 +1507,7 @@ describe('TaskRunner (tasks.yaml)', () => {
     const file = loadTasksFile(testDir);
     expect(file.tasks[0]?.status).toBe('running');
     expect(file.tasks[0]?.workflow).toBe('default');
-    expect(file.tasks[0]?.start_movement).toBe('implement');
-    expect(file.tasks[0]?.start_step).toBeUndefined();
+    expect(file.tasks[0]?.start_step).toBe('implement');
     expect(file.tasks[0]?.retry_note).toBe('retry note');
   });
 
@@ -1648,7 +1638,7 @@ describe('TaskRunner (tasks.yaml)', () => {
       },
     );
     let file = loadTasksFile(testDir);
-    expect(file.tasks[0]?.start_movement).toBe('implement');
+    expect(file.tasks[0]?.start_step).toBe('implement');
     expect(file.tasks[0]?.resume_point).toEqual(resumePoint);
 
     const restarted = runner.startReExecution(
@@ -1665,7 +1655,7 @@ describe('TaskRunner (tasks.yaml)', () => {
     expect(restarted.data?.resume_point).toEqual(resumePoint);
 
     file = loadTasksFile(testDir);
-    expect(file.tasks[0]?.start_movement).toBe('implement');
+    expect(file.tasks[0]?.start_step).toBe('implement');
     expect(file.tasks[0]?.resume_point).toEqual(resumePoint);
   });
 
@@ -1695,7 +1685,6 @@ describe('TaskRunner (tasks.yaml)', () => {
     expect(pending?.data?.start_step).toBeUndefined();
     expect(pending?.data?.restart_point).toBeUndefined();
     expect(persisted?.resume_point).toEqual(resumePoint);
-    expect(persisted?.start_movement).toBeUndefined();
     expect(persisted?.start_step).toBeUndefined();
   });
 
@@ -1725,7 +1714,6 @@ describe('TaskRunner (tasks.yaml)', () => {
     expect(running.data?.start_step).toBeUndefined();
     expect(running.data?.restart_point).toBeUndefined();
     expect(persisted?.resume_point).toEqual(resumePoint);
-    expect(persisted?.start_movement).toBeUndefined();
     expect(persisted?.start_step).toBeUndefined();
   });
 
@@ -1787,8 +1775,7 @@ describe('TaskRunner (tasks.yaml)', () => {
     });
 
     const file = loadTasksFile(testDir);
-    expect(file.tasks[0]?.start_movement).toBe('final-review');
-    expect(file.tasks[0]?.start_step).toBeUndefined();
+    expect(file.tasks[0]?.start_step).toBe('final-review');
     expect(file.tasks[0]?.exceeded_current_iteration).toBe(9);
     expect(file.tasks[0]?.resume_point).toEqual(latestResumePoint);
     expect(file.tasks[0]?.exceeded_max_steps).toBeUndefined();
@@ -1851,8 +1838,7 @@ describe('TaskRunner (tasks.yaml)', () => {
     });
 
     const file = loadTasksFile(testDir);
-    expect(file.tasks[0]?.start_movement).toBe('delegate');
-    expect(file.tasks[0]?.start_step).toBeUndefined();
+    expect(file.tasks[0]?.start_step).toBe('delegate');
     expect(file.tasks[0]?.exceeded_current_iteration).toBe(7);
     expect(file.tasks[0]?.resume_point).toEqual(workflowCallResumePoint);
     expect(file.tasks[0]?.exceeded_max_steps).toBeUndefined();
@@ -1892,7 +1878,6 @@ describe('TaskRunner (tasks.yaml)', () => {
     });
 
     const file = loadTasksFile(testDir);
-    expect(file.tasks[0]?.start_movement).toBeUndefined();
     expect(file.tasks[0]?.start_step).toBeUndefined();
     expect(file.tasks[0]?.exceeded_current_iteration).toBeUndefined();
     expect(file.tasks[0]?.resume_point).toBeUndefined();
@@ -1921,7 +1906,6 @@ describe('TaskRunner (tasks.yaml)', () => {
     const completedTask = loadTasksFile(testDir).tasks[0];
     expect(completedTask?.status).toBe('completed');
     expect(completedTask?.restart_point).toBeUndefined();
-    expect(completedTask?.start_movement).toBeUndefined();
     expect(completedTask?.start_step).toBeUndefined();
     expect(completedTask?.resume_point).toBeUndefined();
     expect(completedTask?.exceeded_current_iteration).toBeUndefined();
@@ -2141,17 +2125,16 @@ describe('TaskRunner (tasks.yaml)', () => {
     });
 
     const file = loadTasksFile(testDir);
-    expect(file.tasks[0]?.start_movement).toBeUndefined();
     expect(file.tasks[0]?.start_step).toBeUndefined();
     expect(file.tasks[0]?.exceeded_current_iteration).toBeUndefined();
     expect(file.tasks[0]?.resume_point).toBeUndefined();
     expect(file.tasks[0]?.exceeded_max_steps).toBeUndefined();
   });
 
-  it('should read workflow and start_movement from tasks.yaml into task data', () => {
+  it('should read workflow and start_step from tasks.yaml into task data', () => {
     writeTasksFile(testDir, [createPendingRecord({
       workflow: 'default',
-      start_movement: 'implement',
+      start_step: 'implement',
     })]);
 
     const tasks = runner.listTasks();

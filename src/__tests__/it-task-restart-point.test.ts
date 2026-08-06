@@ -531,7 +531,6 @@ describe('task restart persistence and execution resolution', () => {
       tasks: Array<Record<string, unknown>>;
     };
     expect(persisted.tasks[0]?.resume_point).toEqual(resumePoint);
-    expect(persisted.tasks[0]?.start_movement).toBeUndefined();
     expect(persisted.tasks[0]?.start_step).toBeUndefined();
 
     writeWorkflow(projectDir, 'default.yaml', [
@@ -599,8 +598,7 @@ describe('task restart persistence and execution resolution', () => {
     ) as { tasks: Array<Record<string, unknown>> };
 
     expect(pending?.data?.start_step).toBe('finalize');
-    expect(tasksYaml.tasks[0]?.start_movement).toBe('finalize');
-    expect(tasksYaml.tasks[0]?.start_step).toBeUndefined();
+    expect(tasksYaml.tasks[0]?.start_step).toBe('finalize');
     expect(tasksYaml.tasks[0]?.restart_point).toBeUndefined();
     expect(tasksYaml.tasks[0]?.resume_point).toBeUndefined();
   });
@@ -640,7 +638,6 @@ describe('task restart persistence and execution resolution', () => {
 
     expect(tasksYaml.tasks[0]?.restart_point).toEqual(restartPoint);
     expect(tasksYaml.tasks[0]?.start_step).toBeUndefined();
-    expect(tasksYaml.tasks[0]?.start_movement).toBeUndefined();
     expect(tasksYaml.tasks[0]?.resume_point).toBeUndefined();
     expect(resolved.startStep).toBe('selected');
     expect(resolved.restartPoint).toEqual(restartPoint);
