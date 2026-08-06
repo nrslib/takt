@@ -429,9 +429,16 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
     expect(outstanding).toHaveLength(1);
     for (const settled of anomalies.filter((anomaly) => anomaly.settlement !== undefined)) {
       expect(settled.settlement?.kind).toBe('withdrawn_by_subsequent_review');
-      // 決着根拠は観測者全員分（この構成では単一レビュアー "reviewers"）。
-      expect(settled.settlement?.supersedingPublications?.map(({ reviewer }) => reviewer))
+      // 決着根拠は観測者全員分（この構成では単一レビュアー "reviewers"）。観測者が
+      // 複数の場合の遷移検証は finding-contract-phase1.test.ts が持つ。
+      const publications = settled.settlement?.supersedingPublications ?? [];
+      expect(publications.map(({ reviewer }) => reviewer))
         .toEqual([...settled.reviewers].sort());
+      // 記録は reviewer の binary 順で、各件が実在の publication id を持つ。
+      expect(publications.map(({ reviewer }) => reviewer))
+        .toEqual([...publications.map(({ reviewer }) => reviewer)].sort());
+      expect(publications.every(({ publicationId }) => /^[0-9a-f]{64}$/u.test(publicationId)))
+        .toBe(true);
     }
   }, 30_000);
 

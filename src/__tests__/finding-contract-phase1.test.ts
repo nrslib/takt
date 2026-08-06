@@ -8,6 +8,7 @@ import { createEmptyFindingContractRegistries } from '../core/models/finding-con
 import { collectFindingLedgerProjectionInvariantViolations } from '../core/models/finding-ledger-invariants.js';
 import { canonicalJson } from '../shared/utils/canonical-json.js';
 import { FindingLedgerSchema } from '../core/models/finding-schemas.js';
+import { assertFindingLedgerAppendOnlyTransition } from '../core/workflow/findings/finding-integrity.js';
 import {
   dispatchFindingManagerProviderCall,
   reserveFindingManagerProviderCall,
@@ -36,6 +37,57 @@ function emptyLedger() {
   };
 }
 
+function withdrawnAnomaly(
+  supersedingPublications: Array<{ reviewer: string; publicationId: string }>,
+  reviewers = ['arch-review', 'security-review'],
+) {
+  return {
+    id: 'RA-000000000001',
+    kind: 'quote-mismatch' as const,
+    stableKey: 'a'.repeat(64),
+    lineageKey: 'b'.repeat(64),
+    sourceRawFindingIds: [],
+    sourceIntakeIds: ['intake-1'],
+    reviewers,
+    title: 'Unverifiable reviewer claim',
+    mismatchReason: 'the quoted excerpt does not exist',
+    firstObserved: observedAt,
+    lastObserved: observedAt,
+    occurrences: 1,
+    settlement: {
+      kind: 'withdrawn_by_subsequent_review' as const,
+      supersedingPublications,
+      decidedAt: observedAt,
+    },
+  };
+}
+
+/** 観測者 arch-review / security-review 全員分の根拠（binary 順）。 */
+function completeWithdrawalPublications(): Array<{ reviewer: string; publicationId: string }> {
+  return [
+    { reviewer: 'arch-review', publicationId: 'c'.repeat(64) },
+    { reviewer: 'security-review', publicationId: 'd'.repeat(64) },
+  ];
+}
+
+/** 決着前（未決着）の台帳。append-only 遷移検証の起点に使う。 */
+function outstandingWithdrawalLedger() {
+  const { settlement: _settlement, ...withoutSettlement } = withdrawnAnomaly(
+    completeWithdrawalPublications(),
+  );
+  return { ...emptyLedger(), reviewerAnomalies: [withoutSettlement] };
+}
+
+function withdrawalInvariantMessages(
+  supersedingPublications: Array<{ reviewer: string; publicationId: string }>,
+  reviewers?: string[],
+): string[] {
+  return collectFindingLedgerProjectionInvariantViolations({
+    ...emptyLedger(),
+    reviewerAnomalies: [withdrawnAnomaly(supersedingPublications, reviewers)],
+  } as never).map(({ message }) => message);
+}
+
 describe('Finding Contract phase 1', () => {
   it('requires every contract registry without defaults', () => {
     const ledger = emptyLedger();
@@ -57,67 +109,92 @@ describe('Finding Contract phase 1', () => {
       .toContain('Interpretation outcome for "raw-unknown" has an unknown kind');
   });
 
-  it('取り下げ settlement は観測者全員分の根拠を要求する（部分集合・過剰・空・重複を拒否）', () => {
-    const withdrawnAnomaly = (
-      supersedingPublications: Array<{ reviewer: string; publicationId: string }>,
-      reviewers = ['arch-review', 'security-review'],
-    ) => ({
-      id: 'RA-000000000001',
-      kind: 'quote-mismatch' as const,
-      stableKey: 'a'.repeat(64),
-      lineageKey: 'b'.repeat(64),
-      sourceRawFindingIds: [],
-      sourceIntakeIds: ['intake-1'],
-      reviewers,
-      title: 'Unverifiable reviewer claim',
-      mismatchReason: 'the quoted excerpt does not exist',
-      firstObserved: observedAt,
-      lastObserved: observedAt,
-      occurrences: 1,
-      settlement: {
-        kind: 'withdrawn_by_subsequent_review' as const,
-        supersedingPublications,
-        decidedAt: observedAt,
-      },
-    });
-    const invariantMessages = (anomaly: ReturnType<typeof withdrawnAnomaly>) => (
-      collectFindingLedgerProjectionInvariantViolations({
-        ...emptyLedger(),
-        reviewerAnomalies: [anomaly],
-      } as never).map(({ message }) => message)
-    );
-    const complete = [
-      { reviewer: 'arch-review', publicationId: 'c'.repeat(64) },
-      { reviewer: 'security-review', publicationId: 'd'.repeat(64) },
-    ];
-
-    // 観測者全員分が揃っていれば適格。
-    expect(invariantMessages(withdrawnAnomaly(complete))).toEqual([]);
+  it('取り下げ settlement は観測者全員分の根拠が揃えば適格', () => {
+    expect(withdrawalInvariantMessages(completeWithdrawalPublications())).toEqual([]);
     expect(() => FindingLedgerSchema.parse({
       ...emptyLedger(),
-      reviewerAnomalies: [withdrawnAnomaly(complete)],
+      reviewerAnomalies: [withdrawnAnomaly(completeWithdrawalPublications())],
     })).not.toThrow();
+  });
 
-    // 部分集合（1人分だけ）は不変条件違反。
-    expect(invariantMessages(withdrawnAnomaly([complete[0]!]))).toContainEqual(
+  it('取り下げ settlement は観測者の部分集合しか記録しない根拠を拒否する', () => {
+    expect(withdrawalInvariantMessages([completeWithdrawalPublications()[0]!])).toContainEqual(
       expect.stringContaining('every reviewer that observed the anomaly'),
     );
-    // 観測者でないレビュアーの混入（過剰）も違反。
-    expect(invariantMessages(withdrawnAnomaly([
-      ...complete,
+  });
+
+  it('取り下げ settlement は観測者でないレビュアーを含む根拠を拒否する', () => {
+    expect(withdrawalInvariantMessages([
+      ...completeWithdrawalPublications(),
       { reviewer: 'testing-review', publicationId: 'e'.repeat(64) },
-    ]))).toContainEqual(
+    ])).toContainEqual(
       expect.stringContaining('every reviewer that observed the anomaly'),
     );
+  });
 
-    // スキーマ側: 空配列と reviewer 重複を拒否する。
-    for (const invalid of [
+  it('取り下げ settlement は同一レビュアーの重複記録を拒否する（不変条件経路）', () => {
+    // 重複を先に潰してから集合比較すると、1人分を二重計上して別の観測者の根拠を
+    // 欠いた記録が完全一致として通ってしまう。スキーマを経由しない不変条件経路でも
+    // 弾けることを固定する。
+    const duplicated = [
+      completeWithdrawalPublications()[0]!,
+      { reviewer: 'arch-review', publicationId: 'f'.repeat(64) },
+    ];
+    expect(withdrawalInvariantMessages(duplicated, ['arch-review', 'security-review']))
+      .toContainEqual(
+        expect.stringContaining('exactly one superseding review per reviewer'),
+      );
+  });
+
+  it('取り下げ settlement の重複記録は台帳の append-only 遷移検証でも拒否される', () => {
+    const duplicated = {
+      ...emptyLedger(),
+      reviewerAnomalies: [withdrawnAnomaly([
+        completeWithdrawalPublications()[0]!,
+        { reviewer: 'arch-review', publicationId: 'f'.repeat(64) },
+      ])],
+    };
+    expect(() => assertFindingLedgerAppendOnlyTransition(
+      outstandingWithdrawalLedger() as never,
+      duplicated as never,
+    )).toThrow(/exactly one superseding review per reviewer/u);
+  });
+
+  it('観測者2人分の根拠を binary 順で持つ取り下げは append-only 遷移検証を通る', () => {
+    const settled = {
+      ...emptyLedger(),
+      reviewerAnomalies: [withdrawnAnomaly(completeWithdrawalPublications())],
+    };
+    expect(() => assertFindingLedgerAppendOnlyTransition(
+      outstandingWithdrawalLedger() as never,
+      settled as never,
+    )).not.toThrow();
+    // 受理された記録には両観測者の {reviewer, publicationId} が binary 順で残る。
+    expect(settled.reviewerAnomalies[0]!.settlement.supersedingPublications).toEqual([
+      { reviewer: 'arch-review', publicationId: 'c'.repeat(64) },
+      { reviewer: 'security-review', publicationId: 'd'.repeat(64) },
+    ]);
+  });
+
+  it('取り下げ settlement のスキーマは空配列・重複 reviewer・binary 順違反を拒否する', () => {
+    const invalidPublications = [
+      // 空配列: 根拠のない取り下げ。
       [],
-      [complete[0]!, { reviewer: 'arch-review', publicationId: 'f'.repeat(64) }],
-    ]) {
+      // 同一 reviewer の重複。
+      [
+        { reviewer: 'arch-review', publicationId: 'c'.repeat(64) },
+        { reviewer: 'arch-review', publicationId: 'f'.repeat(64) },
+      ],
+      // binary 順違反（security-review が arch-review より前）。
+      [
+        { reviewer: 'security-review', publicationId: 'd'.repeat(64) },
+        { reviewer: 'arch-review', publicationId: 'c'.repeat(64) },
+      ],
+    ];
+    for (const publications of invalidPublications) {
       expect(() => FindingLedgerSchema.parse({
         ...emptyLedger(),
-        reviewerAnomalies: [withdrawnAnomaly(invalid, ['arch-review'])],
+        reviewerAnomalies: [withdrawnAnomaly(publications, ['arch-review', 'security-review'])],
       })).toThrow();
     }
   });
