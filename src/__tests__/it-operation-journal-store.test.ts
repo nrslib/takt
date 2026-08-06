@@ -269,6 +269,22 @@ function parseChildError(result: ChildProcessResult): {
   return JSON.parse(result.stderr) as { readonly name: string; readonly message: string };
 }
 
+const LOCK_SWAP_CONFLICT = 'Operation journal lock identity changed while reading';
+
+// 敗者は、勝者の書き込み後の状態を読んで負けることも、読み取り中にロックを
+// 差し替えられて負けることもある。どちらになるかはタイミングで決まる。
+function expectConcurrentLoss(
+  result: ChildProcessResult,
+  expectedDetail: string,
+): void {
+  const { name, message } = parseChildError(result);
+  expect(name).toBe('OperationJournalConflictError');
+  if (message.includes(LOCK_SWAP_CONFLICT)) {
+    return;
+  }
+  expect(message).toContain(expectedDetail);
+}
+
 describe('operation journal store', () => {
   let tempDir: string;
   let journalPath: string;
@@ -870,10 +886,7 @@ describe('operation journal store', () => {
     if (loser === undefined) {
       throw new Error('Concurrent claim did not produce a losing process');
     }
-    expect(parseChildError(loser)).toMatchObject({
-      name: 'OperationJournalConflictError',
-      message: expect.stringContaining('owner changed'),
-    });
+    expectConcurrentLoss(loser, 'owner changed');
     const finalParent = store.getParent('parent-1');
     expect(finalParent.revision).toBe(1);
     expect(finalParent.owner.generation).toBe(1);
@@ -929,10 +942,7 @@ describe('operation journal store', () => {
     if (loser === undefined) {
       throw new Error('Concurrent child CAS did not produce a losing process');
     }
-    expect(parseChildError(loser)).toMatchObject({
-      name: 'OperationJournalConflictError',
-      message: expect.stringContaining('Operation "parent-1" changed'),
-    });
+    expectConcurrentLoss(loser, 'Operation "parent-1" changed');
     expect(store.getParent('parent-1').revision).toBe(2);
     expect(store.getChild('parent-1', 'child-1').revision).toBe(1);
   });
