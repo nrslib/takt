@@ -61,7 +61,7 @@ loop_monitors:
     ignore_steps:
       - fix-verifier
       - fix-retry
-    threshold: 5
+    threshold: 3
     judge:
       persona: supervisor
       instruction: loop-monitor-reviewers-fix
@@ -83,7 +83,7 @@ loop_monitors:
     ignore_steps:
       - fix-verifier
       - fix-retry
-    threshold: 5
+    threshold: 3
     judge:
       persona: supervisor
       instruction: loop-monitor-reviewers-fix
