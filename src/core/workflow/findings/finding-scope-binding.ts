@@ -59,6 +59,10 @@ export function issueFindingScopeBindings(input: {
   const workflowTaskDigest = computeWorkflowTaskDigest(input.workflowTask);
   const findingContractDigest = findingContentAddress('finding-contract-config', input.contract);
   const bindings: FindingScopeBinding[] = [];
+  // changedPaths は base コミット以降のコミット済み変更も含む（review-scope.ts）。
+  // そのため作業ツリー差分が空になる構成でも allowedRoots が空にならず、
+  // タスク範囲外の finding に対する dismissal 根拠が成立し得る。判定が緩む方向では
+  // なく締まる方向に動くのは意図した挙動である。
   const allowedRoots = input.reviewScopeSnapshot.changedPaths === undefined
     ? []
     : binarySortedUnique(input.reviewScopeSnapshot.changedPaths);

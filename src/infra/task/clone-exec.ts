@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import {
+  toCloneBaseRef,
   toLocalBranchRef,
   toPullRequestBaseRef,
   toRemoteTrackingBranchRef,
@@ -183,7 +184,7 @@ export function fetchBaseBranchIntoIsolatedClone(projectDir: string, clonePath: 
       '--force',
       '--no-write-fetch-head',
       projectDir,
-      `${toRemoteTrackingBranchRef(branch)}:refs/takt/base/${branch}`,
+      `${toRemoteTrackingBranchRef(branch)}:${toCloneBaseRef(branch)}`,
     ]);
   } catch {
     throw new Error(REMOTE_BRANCH_FETCH_FAILED_MESSAGE);
@@ -202,7 +203,7 @@ export async function fetchBaseBranchIntoIsolatedCloneAbortable(
       '--force',
       '--no-write-fetch-head',
       projectDir,
-      `${toRemoteTrackingBranchRef(branch)}:refs/takt/base/${branch}`,
+      `${toRemoteTrackingBranchRef(branch)}:${toCloneBaseRef(branch)}`,
     ], abortSignal);
   } catch (err) {
     if (isTaskAbortError(err)) {

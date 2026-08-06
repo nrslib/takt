@@ -107,6 +107,7 @@ import { invalidateExpectedPersonaSession, invalidatePersonaSessionIfExpected } 
 import type { InstructionBuildTransaction } from './instruction-build-transaction.js';
 import { evaluatePostExecutionRules } from './post-execution-rule-evaluator.js';
 import type { PullRequestContext } from '../pr-context.js';
+import type { TaskReviewScope } from '../review-scope.js';
 import { requireWorkflowResumeStackSnapshot } from '../run/resume-point.js';
 import {
   correctStructuredOutputOnce,
@@ -212,6 +213,8 @@ export interface StepExecutorDeps {
   readonly getWorkflowCallVars?: () => Readonly<Record<string, string | number | boolean>> | undefined;
   readonly getRetryNote: () => string | undefined;
   readonly getPrContext?: () => PullRequestContext | undefined;
+  /** Changed file set for this task. Recomputed per instruction build (the working tree moves). */
+  readonly getReviewScope: () => TaskReviewScope;
   readonly getObservabilityRunId?: () => string | undefined;
   readonly observabilityEnabled?: () => boolean;
   readonly sanitizeObservabilityText?: (text: string) => string;
@@ -1895,6 +1898,7 @@ export class StepExecutor {
       workflowCallVars: this.deps.getWorkflowCallVars?.(),
       retryNote: this.deps.getRetryNote(),
       prContext: this.deps.getPrContext?.(),
+      reviewScope: this.deps.getReviewScope(),
       policyContents: policySnapshot
         ? policySnapshot.content.map((content) => ({ content, sourcePath: policySnapshot.sourcePath }))
         : step.policyContents,

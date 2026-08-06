@@ -11,6 +11,7 @@ import type { WorkflowStep } from '../../models/types.js';
 import type { InstructionContext } from './instruction-context.js';
 import { resolveWorkflowStateReference } from '../state/workflow-state-access.js';
 import { REPORT_REFERENCE_PATTERN, resolveReportReference } from './report-reference.js';
+import { renderTaskReviewScope } from '../review-scope.js';
 import { escapeTemplateChars } from 'faceted-prompting';
 
 export { escapeTemplateChars } from 'faceted-prompting';
@@ -78,6 +79,13 @@ export function replaceTemplatePlaceholders(
   result = result.replace(
     /\{user_inputs\}/g,
     escapeTemplateChars(userInputsStr),
+  );
+
+  // Replace {review_scope}. 本文は renderTaskReviewScope 側でエスケープ済みなので
+  // ここでは再エスケープしない。
+  result = result.replace(
+    /\{review_scope\}/g,
+    () => renderTaskReviewScope(context.reviewScope, context.language ?? 'en'),
   );
 
   // Replace {report_dir}

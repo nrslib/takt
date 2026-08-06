@@ -39,6 +39,8 @@ export interface ReportInstructionContext {
   lastResponse?: string;
   /** Finding Contract context available in tool-less report phase. */
   findingContract?: InstructionContext['findingContract'];
+  /** Engine-computed changed file set for `{review_scope}` in output contracts. */
+  reviewScope?: InstructionContext['reviewScope'];
 }
 
 /**
@@ -81,6 +83,7 @@ export class ReportInstructionBuilder {
       reportDir: this.context.reportDir,
       language,
       findingContract: this.context.findingContract,
+      reviewScope: this.context.reviewScope,
       // phase 2 は「これから書く」フェーズ。契約テンプレート内の {report:X} が
       // 自分自身（未作成）を指す構成を存在検証で落とさない。consumer 保護
       // （実行前の欠落検出）は phase 1 のインストラクション側で行われる。

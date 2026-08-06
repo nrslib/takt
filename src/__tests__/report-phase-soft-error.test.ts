@@ -101,6 +101,7 @@ function makeStepExecutor(): StepExecutor {
     getWorkflowName: () => 'test-workflow',
     getWorkflowDescription: () => undefined,
     getRetryNote: () => undefined,
+    getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
     structuredCaller: {
       evaluateCondition: vi.fn(),
       judgeStatus: vi.fn(),

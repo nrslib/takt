@@ -204,6 +204,7 @@ function makeNormalDeps(
     getTask: () => 'task',
     getWorkflowDescription: () => undefined,
     getRetryNote: () => undefined,
+    getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
     structuredCaller: {
       evaluateCondition: vi.fn(),
       judgeStatus: vi.fn(),
@@ -269,6 +270,7 @@ describe('session compaction Phase 1 wiring', () => {
       getWorkflowName: () => 'test-workflow',
       getWorkflowDescription: () => undefined,
       getRetryNote: () => undefined,
+      getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
       structuredCaller: {
         evaluateCondition: vi.fn(),
         judgeStatus: vi.fn(),
@@ -315,6 +317,7 @@ describe('session compaction Phase 1 wiring', () => {
       getWorkflowName: () => 'test-workflow',
       getWorkflowDescription: () => undefined,
       getRetryNote: () => undefined,
+      getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
       structuredCaller: {
         evaluateCondition: vi.fn(), judgeStatus: vi.fn(), decomposeTask: vi.fn(), requestMoreParts: vi.fn(),
       },
@@ -447,6 +450,7 @@ describe('session compaction Phase 1 wiring', () => {
       ],
       getWorkflowDescription: () => undefined,
       getRetryNote: () => undefined,
+      getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
       structuredCaller: {
         evaluateCondition: vi.fn(), judgeStatus: vi.fn(), decomposeTask: vi.fn(), requestMoreParts: vi.fn(),
       },
@@ -615,6 +619,7 @@ describe('session compaction Phase 1 wiring', () => {
       ],
       getWorkflowDescription: () => undefined,
       getRetryNote: () => undefined,
+      getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
       structuredCaller: {
         evaluateCondition: vi.fn(),
         judgeStatus: vi.fn(),

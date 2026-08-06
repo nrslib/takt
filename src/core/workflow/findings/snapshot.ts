@@ -2,6 +2,11 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, readlinkSync, type Stats } from 'node:fs';
 import { truncateUtf8 } from '../../../shared/utils/utf8.js';
+import {
+  collectTaskReviewScope,
+  resolveReviewScopeBaseRange,
+  type ReviewScopeBaseRange,
+} from '../review-scope.js';
 
 const HASH_CHUNK_BYTES = 1024 * 1024;
 const CAPTURE_ATTEMPTS = 3;
@@ -610,6 +615,7 @@ function captureSnapshot(
   cwd: string,
   visitedDirectories: Set<string>,
   includeEvidence: boolean,
+  baseRange: ReviewScopeBaseRange,
 ): CapturedSnapshot {
   const trackedOutput = runGit(cwd, ['ls-files', '--cached', '--stage', '-z']);
   const untrackedOutput = runGit(cwd, ['ls-files', '--others', '--exclude-standard', '-z']);
@@ -621,11 +627,18 @@ function captureSnapshot(
   const tracked = parseNulEntries(trackedOutput, 'git ls-files --cached --stage -z parse', cwd)
     .map((record) => parseTrackedEntry(record, cwd));
   const untracked = parseNulEntries(untrackedOutput, 'git ls-files --others --exclude-standard -z parse', cwd);
-  const trackedChanged = parseNulEntries(
-    runGit(cwd, ['diff', '--name-only', '-z', 'HEAD', '--']),
-    'git diff --name-only -z parse',
+  // 証拠検証のスコープとレビュアーへ提示するスコープは同じ計算でなければならない。
+  // untracked は上で読んだものをそのまま渡し、inventory と changedPaths の由来を
+  // 同一瞬間の読み取りへ揃える。
+  const taskScope = collectTaskReviewScope({
     cwd,
-  );
+    baseRange,
+    untracked: untracked.map((path) => decodeRepositoryPath(path)),
+  });
+  if (taskScope.kind !== 'collected') {
+    return fail('review scope', cwd, new Error('review scope requires a git repository'));
+  }
+  const changedPaths = taskScope.paths;
   const excluded = parseNulEntries(
     excludedOutput,
     'git ls-files --others --ignored --exclude-standard --directory -z parse',
@@ -664,8 +677,7 @@ function captureSnapshot(
   const presentationDigest = createHash('sha256')
     .update(trackedDiff ?? '')
     .update(JSON.stringify(untrackedEvidence))
-    .update(JSON.stringify([...new Set([...trackedChanged, ...untracked]
-      .map((path) => decodeRepositoryPath(path)))].sort()))
+    .update(JSON.stringify(changedPaths))
     .digest('hex');
   return {
     inventory,
@@ -679,8 +691,7 @@ function captureSnapshot(
         ? {}
         : { content: Buffer.from(entry.queryEntry.content) }),
     })),
-    changedPaths: [...new Set([...trackedChanged, ...untracked]
-      .map((path) => decodeRepositoryPath(path)))].sort(),
+    changedPaths: [...changedPaths],
   };
 }
 
@@ -711,10 +722,13 @@ function computeStableSnapshot(
     return fail('capture recursion', cwd, new Error('directory cycle detected'));
   }
   visitedDirectories.add(identity);
+  // base はブランチの分岐点なのでキャプチャ間で動かない。ref 走査を伴うため
+  // この cwd につき一度だけ解決し、2回のキャプチャで共有する。
+  const baseRange = resolveReviewScopeBaseRange(cwd);
   try {
     for (let attempt = 0; attempt < CAPTURE_ATTEMPTS; attempt += 1) {
-      const first = captureSnapshot(cwd, visitedDirectories, includeEvidence);
-      const second = captureSnapshot(cwd, visitedDirectories, includeEvidence);
+      const first = captureSnapshot(cwd, visitedDirectories, includeEvidence, baseRange);
+      const second = captureSnapshot(cwd, visitedDirectories, includeEvidence, baseRange);
       if (first.snapshotId === second.snapshotId
         && first.inventory.equals(second.inventory)
         && first.presentationDigest === second.presentationDigest) {

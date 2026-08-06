@@ -2012,6 +2012,7 @@ describe('StepExecutor', () => {
       getWorkflowName: () => 'test-workflow',
       getWorkflowDescription: () => undefined,
       getRetryNote: () => undefined,
+      getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
       structuredCaller: {
         evaluateCondition: vi.fn(),
         judgeStatus: vi.fn(),
@@ -2243,6 +2244,7 @@ describe('StepExecutor', () => {
       ],
       getWorkflowDescription: () => undefined,
       getRetryNote: () => undefined,
+      getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
       structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
       reviewerOutputStrategy: { kind: 'structured', reportGeneration: 'structured', intake: 'reviewer_structured' },
       findingContract: {
@@ -2454,6 +2456,7 @@ describe('StepExecutor', () => {
       getWorkflowName: () => 'test-workflow',
       getWorkflowDescription: () => undefined,
       getRetryNote: () => undefined,
+      getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
       structuredCaller: {
         evaluateCondition: vi.fn(),
         judgeStatus: vi.fn(),
@@ -2529,6 +2532,7 @@ describe('StepExecutor', () => {
       getWorkflowName: () => 'test-workflow',
       getWorkflowDescription: () => undefined,
       getRetryNote: () => undefined,
+      getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
       structuredCaller: {
         evaluateCondition: vi.fn(), judgeStatus: vi.fn(), decomposeTask: vi.fn(), requestMoreParts: vi.fn(),
       },
@@ -2569,6 +2573,7 @@ describe('StepExecutor', () => {
       getWorkflowName: () => 'test-workflow',
       getWorkflowDescription: () => undefined,
       getRetryNote: () => undefined,
+      getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
       structuredCaller: {
         evaluateCondition: vi.fn(), judgeStatus: vi.fn(), decomposeTask: vi.fn(), requestMoreParts: vi.fn(),
       },
@@ -2639,6 +2644,7 @@ describe('StepExecutor', () => {
       getWorkflowName: () => 'test-workflow',
       getWorkflowDescription: () => undefined,
       getRetryNote: () => undefined,
+      getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
       structuredCaller: {
         evaluateCondition: vi.fn(),
         judgeStatus: vi.fn(),
@@ -2711,6 +2717,7 @@ describe('StepExecutor', () => {
       getWorkflowName: () => 'test-workflow',
       getWorkflowDescription: () => undefined,
       getRetryNote: () => undefined,
+      getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
       structuredCaller: {
         evaluateCondition: vi.fn(),
         judgeStatus: vi.fn(),
@@ -2790,6 +2797,7 @@ describe('StepExecutor', () => {
       getWorkflowName: () => 'test-workflow',
       getWorkflowDescription: () => undefined,
       getRetryNote: () => undefined,
+      getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
       structuredCaller: {
         evaluateCondition: vi.fn(),
         judgeStatus: vi.fn(),
@@ -2864,6 +2872,7 @@ describe('StepExecutor', () => {
       getWorkflowName: () => 'test-workflow',
       getWorkflowDescription: () => undefined,
       getRetryNote: () => undefined,
+      getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
       structuredCaller: {
         evaluateCondition: vi.fn(),
         judgeStatus: vi.fn(),
@@ -2937,6 +2946,7 @@ describe('StepExecutor', () => {
       getWorkflowName: () => 'test-workflow',
       getWorkflowDescription: () => undefined,
       getRetryNote: () => undefined,
+      getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
       structuredCaller: {
         evaluateCondition: vi.fn(),
         judgeStatus: vi.fn(),
@@ -3013,6 +3023,7 @@ describe('StepExecutor', () => {
       getWorkflowName: () => 'test-workflow',
       getWorkflowDescription: () => undefined,
       getRetryNote: () => undefined,
+      getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
       structuredCaller: {
         evaluateCondition: vi.fn(),
         judgeStatus: vi.fn(),
@@ -3104,6 +3115,7 @@ describe('StepExecutor dynamic facet integration', () => {
         getTask: () => 'task',
         getWorkflowDescription: () => undefined,
         getRetryNote: () => undefined,
+        getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
         structuredCaller: {
           evaluateCondition: vi.fn(),
           judgeStatus: vi.fn(),

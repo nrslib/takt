@@ -25,6 +25,10 @@ import { resolveDeterministicAutoRoutingProviderInfo, toAutoRoutingStepMetadata 
 import { buildFindingManagerStep } from '../../core/workflow/findings/manager-step.js';
 import { buildFindingTerminalAdjudicationStep } from '../../core/workflow/findings/adjudication-step.js';
 import {
+  collectTaskReviewScope,
+  resolveReviewScopeBaseRange,
+} from '../../core/workflow/review-scope.js';
+import {
   validateFindingContractSyntheticProviderModels,
   type FindingContractSyntheticProviderValidationOptions,
 } from '../../core/workflow/engine/WorkflowValidator.js';
@@ -199,6 +203,7 @@ function buildInstructionContext(
     // （containment 検証は維持される）。
     validateReportReferences: false,
     language,
+    reviewScope: collectTaskReviewScope({ cwd, baseRange: resolveReviewScopeBaseRange(cwd) }),
   };
 }
 
@@ -223,6 +228,7 @@ function previewAgentStep(
       reportDir: '.takt/runs/preview/reports',
       stepIteration: 1,
       language,
+      reviewScope: context.reviewScope,
     });
     console.log('\n--- Phase 2 (Report Output) ---\n');
     console.log(reportBuilder.build());

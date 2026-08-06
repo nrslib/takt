@@ -164,6 +164,18 @@ steps:
 | `{user_inputs}` | workflow 中に追加で得たユーザー入力（テンプレートに無ければ自動注入） |
 | `{report_dir}` | レポートディレクトリのパス (例: `.takt/runs/20250126-143052-task-summary/reports`) |
 | `{report:filename}` | `{report_dir}/filename` の内容を埋め込む |
+| `{review_scope}` | TAKT が算出した、このタスクの変更ファイル一覧 |
+
+`{review_scope}` は実行の由来によって対象が変わります。
+
+- 作業ツリー計算（常に行われます）: base コミット以降のコミット済み変更、未コミット変更、未追跡ファイル（ignored を除く）の和集合。タスクの変更が既にブランチへコミット済みで working tree 差分が空になる構成でも一覧に出ます
+- PR 由来の実行（`takt --pr N` 等で PR context を持つ実行）: 上の作業ツリー計算に PR の diff range `base...head` を**加えた**和集合になります。`--pr` は PR のレビューコメントを取り込んで修正するフローで、同じ実行の中で作業ツリーが変わるため、両方を対象にします。diff range がローカルに用意されていない場合はその旨を述べ、ローカル変更だけを一覧にします
+
+Finding Contract の証拠検証は上の作業ツリー計算と同じ結果を使います。PR diff range の合成はレビュアーへの指示注入だけの拡張で、証拠検証側には入りません（証拠検証は cwd の実体に対する byte-exact 照合のため）。
+
+作業ディレクトリが Git リポジトリでない場合や変更が検出されない場合も、その事実を述べる文言に解決されます（空文字にはなりません）。ファイル数が 200 件を超える場合は残件数を明示して打ち切ります。組み込みの汎用レビュアーは partial `instructions/review-round-scope` 経由でこの変数を自動的に受け取ります。
+
+base コミットは `refs/takt/pr-base/<branch>` → `refs/takt/base/<branch>` → 検出した default branch の順で最初に存在する ref との merge-base、およびブランチ reflog の分岐点から、より新しい方を採ります。既存ブランチをそのまま clone した resume 実行のように、どの base ref も残らず reflog も分岐点を持たない環境では base を特定できず、コミット済み変更が一覧から外れます。その場合はその旨が文言に明示されます。
 
 > **補足**: `{task}` / `{previous_response}` / `{user_inputs}` は instruction に自動注入されます。テンプレート内の位置を制御したいときだけ明示的なプレースホルダを置いてください。
 

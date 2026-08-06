@@ -49,6 +49,7 @@ import {
 } from '../findings/context.js';
 import { renderLoopMonitorFindingsSummary } from '../findings/loop-monitor-summary.js';
 import { computeReviewScopeSnapshotId } from '../findings/snapshot.js';
+import { createTaskReviewScopeResolver } from '../review-scope.js';
 import {
   computeRestatementRequestId,
   createFindingReviewPresentationContextV2,
@@ -626,6 +627,12 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     };
   };
 
+  // base の解決は ref 走査を伴うため、ラン境界で一度だけ解決して保持する。
+  const getReviewScope = createTaskReviewScopeResolver({
+    getCwd: params.getCwd,
+    getPrContext: () => params.options.prContext,
+  });
+
   const optionsBuilder = new OptionsBuilder(
     params.options,
     params.getCwd,
@@ -640,6 +647,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     buildFindingContractInstructionContext,
     () => params.task,
     buildFindingEscalationInstructionContext,
+    getReviewScope,
   );
 
   const dynamicFacetSelector = new DynamicFacetSelectorCoordinator({
@@ -692,6 +700,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getWorkflowCallVars: () => params.options.workflowCallVars,
     getRetryNote: () => params.options.retryNote,
     getPrContext: () => params.options.prContext,
+    getReviewScope,
     getObservabilityRunId: () => params.options.observabilityRunId,
     observabilityEnabled: () => params.options.observability?.enabled === true,
     sanitizeObservabilityText: params.options.sanitizeObservabilityText,

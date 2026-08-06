@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import type { WorkflowStep, WorkflowState, Language, WorkflowResumePointEntry, McpServerConfig } from '../../models/types.js';
 import type { StepProviderOptions } from '../../models/workflow-types.js';
+import type { TaskReviewScope } from '../review-scope.js';
 import type { RunAgentOptions } from '../../../agents/runner.js';
 import type { WorkflowMeta } from '../../../agents/types.js';
 import type { StructuredCaller } from '../../../agents/structured-caller.js';
@@ -93,6 +94,7 @@ export class OptionsBuilder {
       reviewScopeSnapshotId: string;
       findingContractFreezeKey: string;
     }) => FindingContractInstructionContext | undefined,
+    private readonly getReviewScope?: () => TaskReviewScope,
   ) {}
 
   /**
@@ -614,6 +616,7 @@ export class OptionsBuilder {
     return {
       cwd: this.getCwd(),
       task: this.getTask?.(),
+      reviewScope: this.getReviewScope?.(),
       reportDir: join(this.getCwd(), this.getReportDir()),
       language: this.getLanguage(),
       interactive: this.engineOptions.interactive,

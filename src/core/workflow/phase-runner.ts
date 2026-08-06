@@ -14,6 +14,7 @@ import type {
   FindingContractInstructionContext,
   FindingContractReviewerOutputStrategy,
 } from './instruction/instruction-context.js';
+import type { TaskReviewScope } from './review-scope.js';
 export {
   generateReportPhase,
   runReportPhase,
@@ -35,6 +36,8 @@ export interface BasePhaseRunnerContext {
   cwd: string;
   /** Original workflow task. Phase 2 needs this even after a new-session retry. */
   task?: string;
+  /** Engine-computed changed file set, so Phase 2 output contracts resolve {review_scope}. */
+  reviewScope?: TaskReviewScope;
   /** Report directory path */
   reportDir: string;
   /** Language for instructions */

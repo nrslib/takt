@@ -15,6 +15,7 @@ import type {
 } from '../../models/types.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 import type { PullRequestContext } from '../pr-context.js';
+import type { TaskReviewScope } from '../review-scope.js';
 import type { FindingReviewPresentationContext } from '../findings/review-publication.js';
 
 export type FindingContractReviewerOutputStrategy =
@@ -115,6 +116,11 @@ export interface InstructionContext {
   retryNote?: string;
   /** Structured PR context resolved at the execution boundary. */
   prContext?: PullRequestContext;
+  /**
+   * Engine-computed changed file set for this task, resolved at the execution
+   * boundary and rendered by the `{review_scope}` placeholder.
+   */
+  reviewScope?: TaskReviewScope;
   /** Resolved policy content strings for injection into instruction */
   policyContents?: readonly ResolvedFacetContent[];
   /** Source path for policy snapshot */

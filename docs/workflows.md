@@ -165,6 +165,18 @@ String `quality_gates` remain AI completion directives and are injected into age
 | `{user_inputs}` | Additional user inputs during workflow (auto-injected if not in template) |
 | `{report_dir}` | Report directory path (e.g., `.takt/runs/20250126-143052-task-summary/reports`) |
 | `{report:filename}` | Inline the content of `{report_dir}/filename` |
+| `{review_scope}` | TAKT-computed list of files changed by this task |
+
+What `{review_scope}` covers depends on where the run came from.
+
+- The working-tree computation (always performed): the union of committed changes since the base commit, uncommitted working-tree changes, and untracked files (ignored files excluded). It therefore still lists the changes when the task changes are already committed to the branch and the working-tree diff is empty.
+- PR-derived runs (a run carrying a PR context, e.g. `takt --pr N`): the PR diff range `base...head` is added **on top of** the working-tree computation. `--pr` pulls in PR review comments and fixes them, so the working tree changes within the same run and both belong to the review scope. If the diff range is not available locally, the text says so and lists the local changes only.
+
+The Finding Contract uses the same working-tree computation for evidence verification. Composing in the PR diff range is an instruction-injection-only extension; it does not enter evidence verification, which byte-exactly matches against what exists in the working directory.
+
+When the working directory is not a Git repository, or no change is detected, it resolves to text stating that fact rather than to an empty string. Lists longer than 200 files are truncated with the remaining count stated. Builtin general-purpose reviewers receive this variable automatically through the `instructions/review-round-scope` partial.
+
+The base commit is taken from the merge-base against the first existing ref among `refs/takt/pr-base/<branch>`, `refs/takt/base/<branch>`, and the detected default branch, combined with the branch entry point recorded in the reflog; the newer of the two is used. In environments where no base ref survives and the reflog holds no branch entry point — for example a resume run that clones an existing branch directly — the base cannot be determined and committed changes are left out of the list. That limitation is stated explicitly in the rendered text.
 
 > **Note**: `{task}`, `{previous_response}`, and `{user_inputs}` are auto-injected into instructions. You only need explicit placeholders if you want to control their position in the template.
 
