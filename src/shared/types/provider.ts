@@ -33,6 +33,14 @@ export interface StreamInitEventData {
   sessionId: string;
 }
 
+/**
+ * ネイティブ構造化出力を疑似ツール呼び出しとして表現する provider（OpenCode）が
+ * 使うツール名。エンジン自身が outputSchema で要求した収集機構であり、
+ * エージェントによるツール使用ではない。ツール禁止フェーズはこれを一般ツールとして
+ * 拒否してはならない。
+ */
+export const PROVIDER_NATIVE_STRUCTURED_OUTPUT_TOOL_NAME = 'StructuredOutput';
+
 export interface StreamToolUseEventData {
   tool: string;
   input: Record<string, unknown>;

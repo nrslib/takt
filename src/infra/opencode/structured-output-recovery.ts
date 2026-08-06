@@ -17,9 +17,10 @@
 
 import type { Language } from '../../core/models/types.js';
 import { buildStructuredJsonSchemaInstruction } from '../../shared/prompts/index.js';
+import { PROVIDER_NATIVE_STRUCTURED_OUTPUT_TOOL_NAME } from '../../shared/types/provider.js';
 
 /** OpenCode のネイティブ構造化出力ツールの名前。stale recovery の対象判定に使う。 */
-export const STRUCTURED_OUTPUT_TOOL_NAME = 'StructuredOutput';
+export const STRUCTURED_OUTPUT_TOOL_NAME = PROVIDER_NATIVE_STRUCTURED_OUTPUT_TOOL_NAME;
 
 export type OpenCodeStructuredOutputSessionMode = 'resume' | 'fresh';
 export type OpenCodeStructuredOutputMode = 'native' | 'formatless' | 'plain';

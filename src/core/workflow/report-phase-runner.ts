@@ -4,7 +4,10 @@ import type { RunAgentOptions } from '../../agents/runner.js';
 import { executeAgent } from '../../agents/agent-usecases.js';
 import { parseStructuredOutputObject } from '../../agents/structured-caller/shared.js';
 import { createLogger } from '../../shared/utils/index.js';
-import type { StreamEvent } from '../../shared/types/provider.js';
+import {
+  PROVIDER_NATIVE_STRUCTURED_OUTPUT_TOOL_NAME,
+  type StreamEvent,
+} from '../../shared/types/provider.js';
 import { buildPhaseExecutionId } from '../../shared/utils/phaseExecutionId.js';
 import { buildSessionKey } from './session-key.js';
 import { ReportInstructionBuilder } from './instruction/ReportInstructionBuilder.js';
@@ -445,16 +448,46 @@ function buildReportPhaseToolResultError(): ReportPhaseToolCallError {
   return new ReportPhaseToolCallError('Report phase does not allow tool results.');
 }
 
-function detectReportPhaseToolCall(event: StreamEvent): ReportPhaseToolCallError | undefined {
-  if (event.type === 'tool_use') {
-    return buildReportPhaseToolUseError(event.data.tool);
-  }
+/**
+ * Phase 2 のツール禁止ガード。
+ *
+ * outputSchema を渡した attempt では、provider がネイティブ構造化出力を
+ * 疑似ツール呼び出しとして表現することがある（OpenCode の StructuredOutput）。
+ * これはエンジン自身が要求した収集機構であり、エージェントのツール使用ではないので
+ * 拒否しない。codex は --output-schema、claude は SDK の outputFormat で扱うため
+ * そもそもツールイベントを出さない。
+ *
+ * 構造化出力を要求していない attempt での StructuredOutput 呼び出しは、
+ * 汚染セッション由来の本物の違反なので従来どおり拒否する。
+ */
+function createReportPhaseToolCallDetector(
+  allowsNativeStructuredOutputTool: boolean,
+): (event: StreamEvent) => ReportPhaseToolCallError | undefined {
+  const nativeStructuredOutputToolIds = new Set<string>();
+  return (event) => {
+    if (event.type === 'tool_use') {
+      if (
+        allowsNativeStructuredOutputTool
+        && event.data.tool === PROVIDER_NATIVE_STRUCTURED_OUTPUT_TOOL_NAME
+      ) {
+        nativeStructuredOutputToolIds.add(event.data.id);
+        return undefined;
+      }
+      return buildReportPhaseToolUseError(event.data.tool);
+    }
 
-  if (event.type === 'tool_result') {
-    return buildReportPhaseToolResultError();
-  }
+    if (event.type === 'tool_result') {
+      if (
+        event.data.id !== undefined
+        && nativeStructuredOutputToolIds.has(event.data.id)
+      ) {
+        return undefined;
+      }
+      return buildReportPhaseToolResultError();
+    }
 
-  return undefined;
+    return undefined;
+  };
 }
 
 type ReportAttemptResult =
@@ -511,6 +544,9 @@ async function runSingleReportAttempt(
   let didEmitPhaseStart = false;
   let resolvedPromptParts: PhasePromptParts | undefined;
   let reportToolCallError: ReportPhaseToolCallError | undefined;
+  const detectReportPhaseToolCall = createReportPhaseToolCallDetector(
+    options.outputSchema !== undefined,
+  );
   const callOptions: RunAgentOptions = {
     ...options,
     onPromptResolved: (promptParts) => {
