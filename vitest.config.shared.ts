@@ -24,6 +24,12 @@ export const itSerialTestGlobs = [
   ...itSerialWorkflowLoaderTestGlobs,
 ];
 
+// Windows runners spawn processes and touch the filesystem an order of
+// magnitude slower than the Linux/macOS ones, so tests that pass everywhere
+// else hit the shared 15s ceiling there. Three of the four windows job
+// failures in the last 100 CI runs were "Test timed out in 15000ms".
+const testTimeout = process.platform === 'win32' ? 60_000 : 15_000;
+
 export const commonSrcTestConfig = {
   env: {
     TAKT_CONFIG_DIR: '',
@@ -40,7 +46,7 @@ export const commonSrcTestConfig = {
   globals: false,
   reporters: ['dot'],
   setupFiles: ['src/__tests__/test-setup.ts'],
-  testTimeout: 15000,
+  testTimeout,
   teardownTimeout: 5000,
   coverage: {
     provider: 'v8',
