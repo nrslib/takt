@@ -16,5 +16,6 @@ Procedure:
   - Whether the behavior is intended by `order.md` or `plan.md`
   - Whether explicit selectors or arguments already make the user's intent clear
   - Whether there is an actual trust-boundary break or new attack capability, rather than merely an override relationship
+{{include:instructions/review-investigation-discipline}}
 {{include:instructions/review-family-completion}}
 {{include:instructions/review-pr-context}}

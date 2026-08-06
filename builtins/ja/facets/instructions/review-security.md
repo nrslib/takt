@@ -16,5 +16,6 @@
   - その挙動が `order.md` や `plan.md` で意図された仕様か
   - 明示的な selector や引数指定によりユーザー意図が十分に表現されているか
   - 低信頼側が高信頼側を上書きできること自体ではなく、信頼境界の破壊や新しい攻撃能力があるか
+{{include:instructions/review-investigation-discipline}}
 {{include:instructions/review-family-completion}}
 {{include:instructions/review-pr-context}}

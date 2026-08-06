@@ -16,5 +16,6 @@
 13. 根拠のない推測、好みだけの変更、変更の正しさ・契約・配線に直接関係しない既存問題は指摘しない
 
 {{include:instructions/review-round-scope}}
+{{include:instructions/review-investigation-discipline}}
 {{include:instructions/review-family-completion}}
 {{include:instructions/review-pr-context}}

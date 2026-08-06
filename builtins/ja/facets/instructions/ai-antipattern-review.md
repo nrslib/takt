@@ -8,5 +8,6 @@ AI 特有の問題のレビューを行ってください。
 3. 列挙した各セクションの判定基準を変更差分と照合し、該当する問題を検出する
 4. 本文で懸念に触れた場合は、finding table に入れるか、非 finding として分類と根拠を記録する
 
+{{include:instructions/review-investigation-discipline}}
 {{include:instructions/review-family-completion}}
 {{include:instructions/review-pr-context}}

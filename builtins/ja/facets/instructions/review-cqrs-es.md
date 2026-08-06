@@ -17,5 +17,6 @@
 
 **注意:** このプロジェクトが CQRS+ES パターンを使用していない場合は、一般的なドメイン設計の観点からレビューしてください。
 {{include:instructions/review-round-scope}}
+{{include:instructions/review-investigation-discipline}}
 {{include:instructions/review-family-completion}}
 {{include:instructions/review-pr-context}}

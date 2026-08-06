@@ -17,5 +17,6 @@ Procedure:
 
 **Note:** If this project does not use the CQRS+ES pattern, review from a general domain design perspective instead.
 {{include:instructions/review-round-scope}}
+{{include:instructions/review-investigation-discipline}}
 {{include:instructions/review-family-completion}}
 {{include:instructions/review-pr-context}}

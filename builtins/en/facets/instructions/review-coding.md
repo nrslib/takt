@@ -16,5 +16,6 @@ Procedure:
 13. Do not report unsupported speculation, preference-only changes, or pre-existing issues unrelated to the change's correctness, contracts, or wiring
 
 {{include:instructions/review-round-scope}}
+{{include:instructions/review-investigation-discipline}}
 {{include:instructions/review-family-completion}}
 {{include:instructions/review-pr-context}}

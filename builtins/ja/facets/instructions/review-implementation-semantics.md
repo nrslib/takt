@@ -12,5 +12,6 @@
 4. 根拠のない推測や、好みだけの書き換え要求はしない
 
 {{include:instructions/review-round-scope}}
+{{include:instructions/review-investigation-discipline}}
 {{include:instructions/review-family-completion}}
 {{include:instructions/review-pr-context}}
