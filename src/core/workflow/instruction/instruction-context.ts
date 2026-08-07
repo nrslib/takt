@@ -10,7 +10,6 @@ import type {
   Language,
   WorkflowMaxSteps,
   WorkflowState,
-  WorkflowStructuredOutput,
   ResolvedFacetContent,
 } from '../../models/types.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
@@ -18,30 +17,26 @@ import type { PullRequestContext } from '../pr-context.js';
 import type { TaskReviewScope } from '../review-scope.js';
 import type { FindingReviewPresentationContext } from '../findings/review-publication.js';
 
-export type FindingContractReviewerOutputStrategy =
-  | {
-      readonly kind: 'structured';
-      readonly reportGeneration: 'structured';
-      readonly intake: 'reviewer_structured';
-    }
-  | {
-      readonly kind: 'plain_text_normalized';
-      readonly reportGeneration: 'plain_text';
-      readonly intake: 'isolated_normalizer';
-    };
-
-export type FindingContractReviewerContext =
-  | {
-      mode: 'structured';
-      rawFindingsStructuredOutput: WorkflowStructuredOutput;
-      reviewScopeSnapshotId: string;
-      presentationContext?: FindingReviewPresentationContext;
-    }
-  | {
-      mode: 'plain_text_normalized';
-      reviewScopeSnapshotId: string;
-      presentationContext?: FindingReviewPresentationContext;
-    };
+/**
+ * FC レビュアーの出力契約。経路は1本しかない — レビュアーは常に markdown
+ * レポートだけを書き、raw findings は正規化係の単発呼び出しが取り出す。
+ */
+export interface FindingContractReviewerContext {
+  reviewScopeSnapshotId: string;
+  presentationContext?: FindingReviewPresentationContext;
+  /**
+   * この呼び出しがレビューとして何を要求されているか。呼び出し側が明示する。
+   *
+   * `review`（既定）は通常のレビュー — 言い直し request があれば「レビューに加えて
+   * これにも答えろ」として同梱する。`restatement-only` は言い直しだけを行う
+   * 差し戻し呼び出しで、通常のレビュー指示は出さない。
+   *
+   * request 件数から導出してはならない。導出すると「言い直し request 付きの完全な
+   * 再レビュー」が言い直し専用指示に化け、その publication で後続レビュー成立に
+   * よる取り下げ（withdrawal）が走って未検証のまま anomaly が決着する。
+   */
+  mode?: 'review' | 'restatement-only';
+}
 
 export interface FindingContractInstructionContext {
   ledgerSummary: string;
@@ -52,8 +47,9 @@ export interface FindingContractInstructionContext {
   hasWaivedFindings: boolean;
   hasDismissedFindings: boolean;
   /**
-   * このレビューラウンドで生成した raw findings の provider-facing 契約。
-   * プロンプト表示と実行ステップの structuredOutput に同じオブジェクトを渡す。
+   * レビュアー step のときだけ設定される。この round のレビュー scope 束縛と
+   * 再提示 batch を表す（レビュアーは markdown レポートだけを書くので、
+   * provider へ渡す構造化出力契約はここにない）。
    */
   reviewer?: FindingContractReviewerContext;
 }

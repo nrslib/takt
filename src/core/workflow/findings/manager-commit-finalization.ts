@@ -8,6 +8,7 @@ import {
   collectReviewSupersededReviewerAnomalyIds,
   createReviewerAnomalySpec,
   linkPromotedReviewerAnomalies,
+  selectRestatementSourceClaimAtom,
   withdrawReviewerAnomaliesSupersededByReview,
   type ReviewerAnomalySpec,
 } from './reviewer-anomalies.js';
@@ -84,6 +85,34 @@ function applyIntakeContractTerminalDispositions(input: {
       || defect.terminalDisposition !== undefined
     ) {
       return anomaly;
+    }
+    // 言い直しで再現を要求できる claim 本文を選べない観測は、提示を何度重ねても
+    // 受理され得ない。request 自体が作られないので提示による終端にも到達せず、
+    // 放置すると未決着のまま COMPLETE を永久に塞ぐ。その場で終端する。
+    const sourceRaw = anomaly.sourceRawFindingIds
+      .map((rawFindingId) => input.ledger.rawFindings.find((raw) => raw.rawFindingId === rawFindingId))
+      .find((raw) => raw !== undefined);
+    if (
+      sourceRaw !== undefined
+      && selectRestatementSourceClaimAtom(anomaly, sourceRaw) === undefined
+    ) {
+      changed = true;
+      return {
+        ...anomaly,
+        intakeContract: {
+          ...defect,
+          terminalDisposition: {
+            kind: 'undemandable_claim_atom' as const,
+            // claim-bearing は「主張はあったのに機械可読な形で残らなかった」事実を
+            // 可視的失敗として扱う。protocol-noise だけが静かに却下される。
+            workflowOutcome: defect.observationClass === 'claim-bearing'
+              ? 'review_integrity_unresolved' as const
+              : 'non_claim_observation_rejected' as const,
+            decidedAt: input.observation,
+            reason: 'The recorded observation carries no claim body that a restatement request could ask back',
+          },
+        },
+      };
     }
     const publications = publicationsByAnomalyId.get(anomaly.id) ?? [];
     if (
@@ -406,15 +435,33 @@ export function applyCommitLedgerStates(input: {
   // このラウンドでレビューを台帳へ登録したレビュアー枠。publication があること
   // 自体が「そのレビュアーの完全なレビューが成立した」証跡（ParallelRunner は
   // 全レビュアーの canonical publication が揃うまで取り込みを始めない）。
-  const publicationIdByReviewer = new Map(
-    input.runInput.subResults.map(({ publication }) => [
-      publication.reviewerStepName,
-      publication.publicationId,
-    ] as const),
-  );
+  // 1レビュアー枠が同一ラウンドに複数 publication を持つことがある(格上げ
+  // 再レビューは owner ごとに1呼び出しだが reviewer キーは固定)。Map の値を
+  // 単一 ID にすると後勝ちで1件へ潰れ、取り下げの監査記録に別 owner の
+  // publication ID が入る。全件を保持する。
+  const publicationIdsByReviewer = new Map<string, string[]>();
+  const verdictReviewers = new Set<string>();
+  for (const { publication, reviewEvidence } of input.runInput.subResults) {
+    // 言い直しだけを行った差し戻し publication は「完全なレビューが成立した」
+    // 証跡にならない。ここへ入れると、レビューされていない anomaly が
+    // 「後続レビューがあった」ものとして未検証のまま取り下げられる。
+    if (reviewEvidence === 'none') {
+      continue;
+    }
+    if (reviewEvidence === undefined || reviewEvidence === 'verdict') {
+      verdictReviewers.add(publication.reviewerStepName);
+    }
+    const ids = publicationIdsByReviewer.get(publication.reviewerStepName);
+    if (ids === undefined) {
+      publicationIdsByReviewer.set(publication.reviewerStepName, [publication.publicationId]);
+    } else {
+      ids.push(publication.publicationId);
+    }
+  }
   const supersededAnomalyIds = collectReviewSupersededReviewerAnomalyIds(
     input.settledLedger,
-    new Set(publicationIdByReviewer.keys()),
+    new Set(publicationIdsByReviewer.keys()),
+    verdictReviewers,
   );
   const anomalySpecs = [...input.baseAnomalySpecs, ...rejectedObservations.anomalySpecs];
   const withAnomalies = applyReviewerAnomalySpecsToLedger(
@@ -448,7 +495,7 @@ export function applyCommitLedgerStates(input: {
   const withWithdrawals = withdrawReviewerAnomaliesSupersededByReview({
     ledger: withTerminalDispositions,
     candidateAnomalyIds: supersededAnomalyIds,
-    publicationIdByReviewer,
+    publicationIdsByReviewer,
     observation,
   });
   return {

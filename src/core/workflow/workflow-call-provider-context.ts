@@ -18,16 +18,19 @@ export type WorkflowCallProviderContext = Pick<
   | 'providerSource'
   | 'model'
   | 'modelSource'
+  | 'providerEscalation'
   | 'autoRouting'
   | 'personaProviders'
   | 'providerRouting'
+  | 'intakeNormalizerProvider'
 >;
 
-type WorkflowCallProviderModel = {
+export type WorkflowCallProviderModel = {
   provider: WorkflowEngineOptions['provider'];
   providerSource: WorkflowEngineOptions['providerSource'];
   model: WorkflowEngineOptions['model'];
   modelSource: WorkflowEngineOptions['modelSource'];
+  providerEscalation: WorkflowEngineOptions['providerEscalation'];
 };
 
 export function getWorkflowCallOverrideErrorPath(
@@ -80,6 +83,12 @@ function applyWorkflowCallOverridesToProviderEntries<T extends PersonaProviderEn
       if (entry.providerOptions !== undefined) {
         nextEntry.providerOptions = entry.providerOptions;
       }
+      // escalate 先は provider を供給した profile のもの。provider を上書きしたら
+      // その entry はもう元の profile ではないので落とし、model だけの上書きなら
+      // provider は profile 由来のままなので維持する。
+      if (overrideProvider === undefined && entry.escalation !== undefined) {
+        nextEntry.escalation = entry.escalation;
+      }
 
       return [key, nextEntry];
     }),
@@ -114,7 +123,10 @@ export function applyWorkflowCallOverridesToProviderRouting(
 export function resolveWorkflowCallChildProviderModel(
   childWorkflow: WorkflowConfig,
   overrides: WorkflowCallStep['overrides'],
-  parentContext: Pick<WorkflowCallProviderContext, 'provider' | 'providerSource' | 'model' | 'modelSource'>,
+  parentContext: Pick<
+    WorkflowCallProviderContext,
+    'provider' | 'providerSource' | 'model' | 'modelSource' | 'providerEscalation'
+  >,
 ): WorkflowCallProviderModel {
   const childProviderInfo = resolveWorkflowCallProviderModel({
     workflow: childWorkflow,
@@ -130,11 +142,19 @@ export function resolveWorkflowCallChildProviderModel(
     modelSpecified: overrides?.model !== undefined,
     source: 'workflow_call',
   });
+  // 親の escalate 先は「親の provider を供給した profile」のもの。子の
+  // workflow provider 宣言や overrides.provider で provider の出所が変われば
+  // その profile ではなくなるので落とす。model だけの上書きは provider の出所を
+  // 変えないので維持する。
+  const providerEscalation = resolved.providerSource === parentContext.providerSource
+    ? parentContext.providerEscalation
+    : undefined;
   return {
     provider: resolved.provider,
     providerSource: resolved.providerSource,
     model: resolved.model,
     modelSource: resolved.modelSource,
+    providerEscalation,
   };
 }
 
@@ -161,5 +181,9 @@ export function resolveWorkflowCallChildProviderContext(
       parentContext.providerRouting,
       step.overrides,
     ),
+    // 正規化係の seat は runtime.yaml の internal_agents 割り当てで、
+    // workflow_call の provider/model override の対象ではない（実行時も
+    // WorkflowEngineSetup が engine option をそのまま渡す）。子へ素通しする。
+    intakeNormalizerProvider: parentContext.intakeNormalizerProvider,
   };
 }

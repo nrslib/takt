@@ -7,6 +7,12 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
+// 正規化係は隔離 structured 実行で走り runAgent を通らない。raw findings の
+// 唯一の生成元なのでここで差し替える。
+vi.mock('../agents/finding-intake-normalizer-usecase.js', () => ({
+  normalizeFindingIntake: vi.fn(),
+}));
+
 vi.mock('../core/workflow/evaluation/index.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../core/workflow/evaluation/index.js')>();
   const { MockRuleEvaluator } = await import('./rule-evaluator-test-double.js');
@@ -28,6 +34,10 @@ import { WorkflowEngine } from './helpers/workflow-engine.js';
 import type { WorkflowConfig, WorkflowResumePoint } from '../core/models/types.js';
 import { getWorkflowReference } from '../core/workflow/workflow-reference.js';
 import { runAgent } from '../agents/runner.js';
+import { normalizeFindingIntake } from '../agents/finding-intake-normalizer-usecase.js';
+
+/** レビュアーが書く markdown レポート本文。正規化係へはこの本文がそのまま渡る。 */
+const REVIEW_REPORT_CONTENT = 'A finding emitted by the reviewer.';
 import { resolveWorkflowCallTarget } from '../infra/config/loaders/workflowCallResolver.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
 import {
@@ -44,6 +54,7 @@ import {
 } from './engine-test-helpers.js';
 import { isolateStepFragmentTestConfig } from './helpers/step-fragment-test-helpers.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
+import { DEFAULT_REVIEW_INTEGRITY_BUDGET } from '../core/workflow/findings/review-integrity.js';
 import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 
 function writeFile(root: string, relativePath: string, content: string): string {
@@ -201,38 +212,37 @@ describe('workflow step fragment runtime contract', () => {
       engine.on('step:complete', (step) => transitions.push(step.name));
       engine.on('step:cycle_detected', (_monitor, count) => cycleCounts.push(count));
       engine.on('findings:ledger', (ledger) => ledgers.push(ledger));
+
+      vi.mocked(normalizeFindingIntake).mockReset();
+      vi.mocked(normalizeFindingIntake).mockImplementation(async () => makeResponse({
+        persona: 'finding-intake-normalizer',
+        content: '',
+        structuredOutput: {
+          rawFindings: [{
+            rawExcerpt: REVIEW_REPORT_CONTENT,
+            candidate: {
+              rawFindingId: 'review-issue',
+              familyTag: 'test',
+              severity: 'high',
+              title: 'Test finding',
+              description: REVIEW_REPORT_CONTENT,
+              suggestion: null,
+              relation: 'new',
+              targetFindingIds: [],
+              target: null,
+              evidenceRequests: [],
+            },
+          }],
+        },
+      }));
       vi.mocked(runAgent).mockReset();
       vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
         options?.onPromptResolved?.({
           systemPrompt: 'test system prompt',
           userInstruction: instruction,
         });
-        if (schemaHasProperty(options?.outputSchema, 'rawFindings')) {
-          const reportContent = 'A finding emitted by the reviewer.';
-          return makeResponse({
-            persona,
-            content: reportContent,
-            structuredOutput: {
-              ...(schemaHasProperty(options?.outputSchema, 'reportContent')
-                ? { reportContent }
-                : {}),
-              rawFindings: [{
-                rawExcerpt: reportContent,
-                candidate: {
-                  rawFindingId: 'review-issue',
-                  familyTag: 'test',
-                  severity: 'high',
-                  title: 'Test finding',
-                  description: reportContent,
-                  suggestion: null,
-                  relation: 'new',
-                  targetFindingIds: [],
-                  target: null,
-                  evidenceRequests: [],
-                },
-              }],
-            },
-          });
+        if (persona === 'review' || options?.workflowMeta?.currentStep === 'review') {
+          return makeResponse({ persona, content: REVIEW_REPORT_CONTENT });
         }
         if (schemaHasProperty(options?.outputSchema, 'rawDecisions')) {
           return makeResponse({
@@ -285,9 +295,26 @@ describe('workflow step fragment runtime contract', () => {
       allowedTools: ['Read'],
       requiredPermissionMode: 'edit',
     });
-    expect(inlineResult.ledgers).toHaveLength(1);
-    expect(fragmentResult.ledgers).toHaveLength(1);
+    // このレビュアーは毎回同じ不完全 claim を返すので、差し戻し slot は提示予算を
+    // 使い切る。取り込みは「レビュー本編1回 + slot のパス数」で、上限は
+    // presentationLimit（review_budget 既定 6）。fragment と inline で同数になることが
+    // 契約で、リテラル1件ではない。
+    expect(fragmentResult.ledgers).toHaveLength(inlineResult.ledgers.length);
+    expect(inlineResult.ledgers.length).toBeGreaterThan(0);
+    expect(inlineResult.ledgers.length).toBeLessThanOrEqual(
+      1 + DEFAULT_REVIEW_INTEGRITY_BUDGET.maxReviewRounds,
+    );
+    // 正規化係が受け取るのはレビュアーの markdown レポート本文そのもの。引数を
+    // 検証しないと、実装が空文字や別の本文を渡しても気づけない。mock は execute()
+    // ごとに reset するので、残っているのは最後（fragment 側）の1ステップ分
+    // （レビュー本編 + 差し戻し slot の各パス）。
+    const normalizerReports = vi.mocked(normalizeFindingIntake).mock.calls
+      .map(([report]) => report);
+    expect(normalizerReports.length).toBeGreaterThan(0);
+    expect(new Set(normalizerReports)).toEqual(new Set([REVIEW_REPORT_CONTENT]));
     for (const result of [inlineResult, fragmentResult]) {
+      // 差し戻しを重ねても、決着しない観測は1件の anomaly のままで、product
+      // findings は空を保つ（周回のたびに finding が増えない）。
       // FC intake 契約化後の landing: target 無し（review_scope）の独立 claim は
       // provisional finding ではなく intake-contract-incomplete reviewer anomaly に
       // 隔離され、product findings は空のまま completion を塞ぐ。
@@ -322,7 +349,10 @@ describe('workflow step fragment runtime contract', () => {
     });
     expect(fragmentResult.resumePoint?.stack[0]?.step_iterations)
       .toEqual(inlineResult.resumePoint?.stack[0]?.step_iterations);
-  }, 60_000);
+  // inline と fragment の engine を2本とも実走させる。差し戻し slot が提示予算ぶん
+  // 反復するようになって実行時間が伸びた。実測（単独実行）35s、4 shard 同時実行で
+  // 65s — 60s では足りない。
+  }, 120_000);
 
   it('resumes inline and fragment workflows from the same saved step, iteration, and transition', async () => {
     writeFile(projectDir, '.takt/steps/review.yaml', [

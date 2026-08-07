@@ -195,101 +195,16 @@ function resolveFindingContractAdjudicator(
   };
 }
 
-type RawFindingContractEscalationReviewer = NonNullable<
-  NonNullable<ReturnType<typeof WorkflowConfigRawSchema.parse>['finding_contract']>['escalation_reviewer']
->;
-
-function findingContractEscalationReviewerResolutionError(
-  field: 'persona' | 'instruction' | 'output_contract',
-  ref: string,
-  options?: ErrorOptions,
-): Error {
-  return new Error(
-    `Configuration error: failed to resolve finding_contract.escalation_reviewer.${field} "${ref}"`,
-    options,
-  );
-}
-
-function resolveFindingContractEscalationReviewer(
-  raw: RawFindingContractEscalationReviewer,
-  sections: WorkflowSections,
-  workflowDir: string,
-  context?: FacetResolutionContext,
-): NonNullable<FindingContractConfig['escalationReviewer']> {
-  let resolvedPersona: ReturnType<typeof resolvePersona>;
-  try {
-    resolvedPersona = resolvePersona(raw.persona, sections, workflowDir, context);
-  } catch (error) {
-    throw findingContractEscalationReviewerResolutionError('persona', raw.persona, { cause: error });
-  }
-  if (
-    resolvedPersona.personaSpec === undefined
-    || (isScopeRef(raw.persona) && resolvedPersona.personaPath === undefined)
-  ) {
-    throw findingContractEscalationReviewerResolutionError('persona', raw.persona);
-  }
-
-  const resolveOptionalRef = (
-    field: 'instruction' | 'output_contract',
-    ref: string | undefined,
-    resolved: Record<string, string> | ResolvedSectionMap | undefined,
-    kind: 'instructions' | 'output-contracts',
-  ): string | undefined => {
-    if (ref === undefined) {
-      return undefined;
-    }
-    let content: string | undefined;
-    try {
-      content = resolveRefToContent(ref, resolved, workflowDir, kind, context);
-    } catch (error) {
-      throw findingContractEscalationReviewerResolutionError(field, ref, { cause: error });
-    }
-    if (content === undefined) {
-      throw findingContractEscalationReviewerResolutionError(field, ref);
-    }
-    return content;
-  };
-
-  const instruction = resolveOptionalRef(
-    'instruction',
-    raw.instruction,
-    sections.resolvedInstructionsWithSource ?? sections.resolvedInstructions,
-    'instructions',
-  );
-  const outputContract = resolveOptionalRef(
-    'output_contract',
-    raw.output_contract,
-    sections.resolvedReportFormatsWithSource ?? sections.resolvedReportFormats,
-    'output-contracts',
-  );
-
-  return {
-    persona: resolvedPersona.personaSpec,
-    personaDisplayName: resolvedPersona.personaPath
-      ? extractPersonaDisplayName(resolvedPersona.personaPath)
-      : resolvedPersona.personaSpec,
-    // persona 名ではなく固定キー。escalation_reviewer を書いた時点で
-    // provider_routing.personas['escalation-reviewer'] が唯一の routing 入口になる。
-    providerRoutingPersonaKey: FINDING_ESCALATION_REVIEWER_ROUTING_KEY,
-    ...(resolvedPersona.personaPath ? { personaPath: resolvedPersona.personaPath } : {}),
-    ...(instruction === undefined ? {} : { instruction }),
-    ...(outputContract === undefined ? {} : { outputContract }),
-    ...(raw.provider ? { provider: raw.provider } : {}),
-    ...(raw.model ? { model: raw.model } : {}),
-  };
-}
-
 /**
- * escalation reviewer の publication identity は reviewerStepName
- * 'escalation-reviewer' で owner publication と分かれる。同名の実 step が
- * 存在すると publication identity が衝突し、提示計上が混線する。
- * escalation_reviewer を設定したワークフローに限り予約語として拒否する。
+ * 格上げ再レビューの publication identity は reviewerStepName 'escalation-reviewer' で
+ * owner publication と分かれる。同名の実 step が存在すると publication identity が
+ * 衝突し、提示計上が混線するため、Finding Contract ワークフローでは予約語として拒否する。
  */
 function validateFindingContractEscalationReviewerReservedStepName(
   findingContract: FindingContractConfig | undefined,
   steps: readonly WorkflowStep[],
 ): void {
-  if (findingContract?.escalationReviewer === undefined) {
+  if (findingContract === undefined) {
     return;
   }
   const collectNames = (candidates: readonly WorkflowStep[]): string[] => (
@@ -302,7 +217,7 @@ function validateFindingContractEscalationReviewerReservedStepName(
   );
   if (collectNames(steps).includes(FINDING_ESCALATION_REVIEWER_ROUTING_KEY)) {
     throw new Error(
-      `Configuration error: step name "${FINDING_ESCALATION_REVIEWER_ROUTING_KEY}" is reserved for finding_contract.escalation_reviewer`,
+      `Configuration error: step name "${FINDING_ESCALATION_REVIEWER_ROUTING_KEY}" is reserved for finding contract escalation review`,
     );
   }
 }
@@ -361,9 +276,6 @@ function normalizeFindingContractConfig(
   const adjudicator = raw.adjudicator === undefined
     ? undefined
     : resolveFindingContractAdjudicator(raw.adjudicator, sections, workflowDir, context);
-  const escalationReviewer = raw.escalation_reviewer === undefined
-    ? undefined
-    : resolveFindingContractEscalationReviewer(raw.escalation_reviewer, sections, workflowDir, context);
 
   return {
     manager: {
@@ -379,7 +291,6 @@ function normalizeFindingContractConfig(
       ...(raw.manager.model ? { model: raw.manager.model } : {}),
     },
     ...(adjudicator === undefined ? {} : { adjudicator }),
-    ...(escalationReviewer === undefined ? {} : { escalationReviewer }),
     // 有限停止予算（Finding Contract・対策バッチ B1 の拡張）: ここでは YAML に
     // 書かれた値だけをそのまま写す（未指定フィールドの穴埋めはしない）。
     // max_rounds の既定値適用は stop-budget.ts の resolveStopBudgetLimits が唯一の

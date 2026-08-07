@@ -5,6 +5,21 @@
   },
   {
     "status": "done",
+    "content": "No new issue was observed in this pass."
+  },
+  {
+    "status": "done",
+    "content": "{\"rawFindings\":[]}",
+    "structured_output": {
+      "rawFindings": []
+    }
+  },
+  {
+    "status": "done",
+    "content": "Restatement investigation."
+  },
+  {
+    "status": "done",
     "content": "The target value must be repaired."
   },
   {
@@ -25,7 +40,9 @@
             "targetFindingIds": [],
             "target": {
               "kind": "code",
-              "paths": ["src/target.ts"]
+              "paths": [
+                "src/target.ts"
+              ]
             },
             "evidenceRequests": [
               {

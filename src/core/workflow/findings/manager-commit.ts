@@ -11,6 +11,7 @@ import type {
 import { buildManagerCommitReport } from './manager-report.js';
 import {
   attachReviewIntegrityState,
+  carryReviewIntegrityState,
   resolveReviewIntegrityLimits,
 } from './review-integrity.js';
 import { attachStopBudgetState, resolveStopBudgetLimits } from './stop-budget.js';
@@ -134,6 +135,12 @@ export async function commitFindingManagerRound(params: {
         originStep: params.input.parentStep.name,
         createdAt: params.observation,
       });
+      // 言い直し slot の各パスは「レビューラウンドの内側の差し戻し」であって
+      // 新しいレビューラウンドではない。marker は適用済み集合へ必ず入れる
+      // （二相コミットの staging 不変条件と crash/replay の冪等性がこの集合に依存
+      // する）が、予算カウンタは印付き marker を数えない。review-integrity 側は
+      // 集合そのものが予算なので、追加せず据え置く。
+      const countsAsRound = params.input.budgetAccounting !== 'excluded';
       const withStopBudget = attachStopBudgetState(
         freshLedger,
         withConflictSnapshots,
@@ -141,13 +148,15 @@ export async function commitFindingManagerRound(params: {
         params.stopBudgetRoundMarker,
         params.input.timestamp,
       );
-      const withReviewIntegrity = attachReviewIntegrityState(
-        freshLedger,
-        withStopBudget,
-        params.reviewIntegrityLimits,
-        params.stopBudgetRoundMarker,
-        params.input.timestamp,
-      );
+      const withReviewIntegrity = countsAsRound
+        ? attachReviewIntegrityState(
+          freshLedger,
+          withStopBudget,
+          params.reviewIntegrityLimits,
+          params.stopBudgetRoundMarker,
+          params.input.timestamp,
+        )
+        : carryReviewIntegrityState(freshLedger, withStopBudget);
       const lifecycleMutation = {
         ...commitMutation,
         ledger: attachFixpointState(

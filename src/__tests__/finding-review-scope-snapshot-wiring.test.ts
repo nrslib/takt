@@ -30,10 +30,7 @@ import { StepExecutor, type StepExecutorDeps } from '../core/workflow/engine/Ste
 import { createStructuredOutputNormalizerRegistry } from '../core/workflow/engine/structured-output-normalizer.js';
 import type { AgentResponse, FindingContractConfig, WorkflowState, WorkflowStep } from '../core/models/types.js';
 import type { ProviderUsageSnapshot } from '../core/models/response.js';
-import type {
-  AutoRoutingConfig,
-  FindingIntakeNormalizeConfig,
-} from '../core/models/config-types.js';
+import type { AutoRoutingConfig } from '../core/models/config-types.js';
 import type { StepProviderInfo } from '../core/workflow/types.js';
 import type {
   FindingContractInstructionContext,
@@ -251,7 +248,6 @@ function makeRunner(options: {
   projectCwd?: string;
   reportDir?: string;
   findingContractContext?: FindingContractInstructionContext;
-  intakeNormalize?: FindingIntakeNormalizeConfig;
   reviewerProviderInfoByStep?: Readonly<Record<string, StepProviderInfo>>;
   reportAttempt?: {
     readonly providerInfo: StepProviderInfo;
@@ -310,6 +306,7 @@ function makeRunner(options: {
       }),
     ),
     resumeFindingReviewPublication: vi.fn(() => undefined),
+    recordReviewReportProtocolRejections: vi.fn(async () => {}),
     applyPostExecutionRulesOnly: vi.fn(
       async (_step: WorkflowStep, _state: WorkflowState, response: AgentResponse) => ({
         ...response,
@@ -390,6 +387,7 @@ function makeRunner(options: {
       buildFindingContractInstructionContext: vi.fn().mockReturnValue(
         options.findingContractContext ?? makeFindingContractContext(),
       ),
+      buildFindingRestatementSlotContexts: vi.fn().mockReturnValue(new Map()),
     } as unknown as ParallelRunnerDeps['optionsBuilder'],
     stepExecutor: stepExecutor as unknown as ParallelRunnerDeps['stepExecutor'],
     engineOptions: {
@@ -414,9 +412,6 @@ function makeRunner(options: {
     emitEvent: vi.fn(),
     onPhaseComplete: vi.fn(),
     ...(withFindingContract ? { findingContract: FINDING_CONTRACT } : {}),
-    ...(options.intakeNormalize !== undefined
-      ? { intakeNormalize: options.intakeNormalize }
-      : {}),
     findingLedgerStore,
     runQualityGates: vi.fn().mockResolvedValue({ ok: true }),
     updateMaxSteps: vi.fn(),
@@ -519,14 +514,10 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
       expect(getFileQuoteSnapshotIdConst(findingContractPolicy.context)).toBeUndefined();
     }
 
-    const outputContract = builtContext?.reviewer?.mode === 'structured'
-      ? builtContext.reviewer.rawFindingsStructuredOutput
-      : undefined;
-    expect(outputContract).toBeDefined();
+    // 1本道: レビュアーは markdown レポートしか書かないので構造化出力は載らない。
     for (const call of vi.mocked(deps.optionsBuilder.buildAgentOptions).mock.calls) {
       const executableStep = call[0] as WorkflowStep;
-      expect(executableStep.structuredOutput).toBe(outputContract);
-      expect(executableStep.structuredOutput?.schema).toBe(outputContract?.schema);
+      expect(executableStep.structuredOutput).toBeUndefined();
     }
     expect(executeAgent).toHaveBeenCalledTimes(2);
     expect(ingestFindingContractResults).toHaveBeenCalledOnce();
@@ -538,16 +529,8 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
     );
   });
 
-  it('shares one snapshot across structured and normalized reviewers', async () => {
+  it('shares one snapshot across every reviewer of the round', async () => {
     const { runner, deps } = makeRunner({
-      intakeNormalize: {
-        provider: 'codex',
-        model: 'gpt-5.6-terra',
-        targets: [{
-          provider: 'opencode',
-          model: 'ollama-cloud/gemma4:31b',
-        }],
-      },
       reviewerProviderInfoByStep: {
         'ai-antipattern-review': {
           provider: 'opencode',
@@ -583,20 +566,17 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
     ]);
     const instructionPolicies = vi.mocked(deps.stepExecutor.buildInstruction).mock.calls
       .map((call) => call[6] as FindingContractInstructionPolicy);
-    expect(instructionPolicies.map((policy) => policy.context.reviewer?.mode)).toEqual([
-      'plain_text_normalized',
-      'structured',
-    ]);
     expect(instructionPolicies.map(
       (policy) => policy.context.reviewer?.reviewScopeSnapshotId,
     )).toEqual([
       'round-snapshot-abc123',
       'round-snapshot-abc123',
     ]);
+    // 1本道: どのレビュアーにも構造化出力は載らない。
     const executableSteps = vi.mocked(deps.optionsBuilder.buildAgentOptions).mock.calls
       .map((call) => call[0] as WorkflowStep);
-    expect(executableSteps[0]?.structuredOutput).toBeUndefined();
-    expect(executableSteps[1]?.structuredOutput).toBeDefined();
+    expect(executableSteps.every((executable) => executable.structuredOutput === undefined))
+      .toBe(true);
     expect(ingestFindingContractResults).toHaveBeenCalledOnce();
   });
 
@@ -690,12 +670,7 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
   });
 
   it('does not run manager intake when one normalized reviewer publication fails', async () => {
-    const { runner, deps } = makeRunner({
-      intakeNormalize: {
-        provider: 'codex',
-        model: 'gpt-5.6-terra',
-      },
-    });
+    const { runner, deps } = makeRunner();
     vi.mocked(deps.stepExecutor.prepareFindingReviewPublication)
       .mockRejectedValueOnce(new Error('invalid normalized report'));
     queueAgentResponse(makeAgentResponse({ persona: 'ai-antipattern-review' }));
@@ -719,8 +694,11 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
   it('reuses an already persisted sibling publication without rerunning that reviewer', async () => {
     const { runner, deps } = makeRunner();
     vi.mocked(deps.stepExecutor.resumeFindingReviewPublication)
+      // 言い直し slot の合成ステップは同じ reviewer 名で別の report を出すため、
+      // report 名まで見て owner 本編の publication だけを引き当てる。
       .mockImplementation(({ step: reviewerStep }) => (
         reviewerStep.name === 'ai-antipattern-review'
+          && reviewerStep.outputContracts?.[0]?.name === 'ai-antipattern-review.md'
           ? {
               publication: {
                 publicationId: 'publication-ai-antipattern-review',
@@ -769,18 +747,9 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
     const reportDir = targetPaths.reportsAbs;
     try {
       mkdirSync(sourcePaths.runRootAbs, { recursive: true });
-      const intakeNormalize: FindingIntakeNormalizeConfig = {
-        provider: 'mock',
-        model: 'normalizer-model',
-        targets: [{
-          provider: 'opencode',
-          model: 'openrouter/routed-reviewer-model',
-        }],
-      };
       const { runner, deps } = makeRunner({
         projectCwd,
         reportDir,
-        intakeNormalize,
       });
       const reportContent = [
         '# AI Antipattern Review',
@@ -841,17 +810,18 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
       const resumeExecutor = new StepExecutor({
         optionsBuilder: {
           ...deps.optionsBuilder,
+          // 正規化係は reviewer profile の `escalate` 先から解決される。
           resolveStepProviderModel: vi.fn((resolvedStep, runtime) => (
             runtime?.providerInfo ?? {
               provider: resolvedStep.provider,
               model: resolvedStep.model,
               providerOptions: resolvedStep.providerOptions,
+              escalation: { profile: 'strong', provider: 'mock', model: 'normalizer-model' },
             }
           )),
         } as unknown as StepExecutorDeps['optionsBuilder'],
         structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
         structuredCaller: { normalizeFindingIntake },
-        intakeNormalize,
         findingContract: FINDING_CONTRACT,
         getRunPaths: () => ({ reportsAbs: reportDir }),
         getFindingCallNamespace: () => '',
@@ -1226,5 +1196,187 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
     for (const call of buildInstructionCalls) {
       expect(call[6]).toBeUndefined();
     }
+  });
+});
+
+describe('ParallelRunner report-protocol rejection wiring', () => {
+  beforeEach(() => {
+    // executeAgent はファイル先頭で vi.fn() として定義され、queueAgentResponse が
+    // mockImplementationOnce を積む。resetAllMocks は実装ごと消してキューを壊すので、
+    // このブロックでは呼び出し記録だけを落とす。
+    vi.mocked(executeAgent).mockReset();
+    // module モックは呼び出し記録だけ落とす（実装は残す）。
+    vi.mocked(ingestFindingContractResults).mockClear();
+    vi.mocked(mockRuleEvaluation).mockReturnValue({ index: 0, method: 'phase3_tag' });
+  });
+
+  const REJECTED = 'ai-antipattern-review';
+  const ACCEPTED = 'security-review';
+
+  function rejectionFor(stepName: string) {
+    return {
+      reason: `report text could not be bound after one correction (${stepName})`,
+      reportContent: `{"rawFindings":[{"rawExcerpt":"claim from ${stepName}"}]}`,
+    };
+  }
+
+  /**
+   * BLOCK-1 の回帰: verdict 観測ループは publication が無い sub-step で無条件に
+   * throw していた。報告側原因の sub-step でも applyPostExecutionRulesOnly と
+   * stepOutputs の登録までは通り（そこを飛ばすと親の all()/any() 集計が壊れる）、
+   * 観測だけが外れることを固定する。修正を戻すと、この2本は
+   * 「Finding contract reviewer "..." has no canonical publication」で落ちる。
+   */
+  function expectRejectedReviewerStillRouted(
+    deps: ParallelRunnerDeps,
+    state: WorkflowState,
+  ): void {
+    const ruleSteps = vi.mocked(deps.stepExecutor.applyPostExecutionRulesOnly).mock.calls
+      .map((call) => (call[0] as WorkflowStep).name);
+    expect(ruleSteps).toContain(REJECTED);
+    expect(ruleSteps).toContain(ACCEPTED);
+    // 報告拒否でもルールが確定した応答が残る（親の集計はこれを読む）。
+    expect(state.stepOutputs.get(REJECTED)?.matchedRuleIndex).toBe(0);
+    // ルールが読む本文は「拒否されたその報告」。
+    expect(state.stepOutputs.get(REJECTED)?.content)
+      .toBe(rejectionFor(REJECTED).reportContent);
+  }
+
+  it('rejects a parallel FC reviewer that also declares its own structured_output', async () => {
+    // ロード時 validator と同じ契約を実行経路でも守る（1本道では publication の
+    // 正本は markdown レポートなので、step 独自の構造化出力とは併用できない）。
+    const { runner } = makeRunner();
+    const step = makeParallelStep();
+    const subSteps = step.parallel as WorkflowStep[];
+    subSteps[0] = {
+      ...subSteps[0]!,
+      structuredOutput: { schemaRef: 'test.custom', schema: { type: 'object' } },
+    } as WorkflowStep;
+    queueAgentResponse(makeAgentResponse({ persona: REJECTED }));
+    queueAgentResponse(makeAgentResponse({ persona: ACCEPTED }));
+
+    const result = await runner.runParallelStep(step, makeState(), 'test task', 5, vi.fn());
+
+    expect(result.response.status).toBe('error');
+    expect(result.response.content).toContain(
+      'cannot combine finding_contract review reports with structured_output',
+    );
+  });
+
+  it('records the rejection and keeps the round running on the first pass', async () => {
+    const { runner, deps } = makeRunner();
+    vi.mocked(deps.stepExecutor.prepareFindingReviewPublication).mockImplementation(
+      (async (input: { step: WorkflowStep; phase1Response: AgentResponse; parentStepName: string; stepIteration: number }) => (
+        input.step.name === REJECTED
+          ? { reportRejection: rejectionFor(REJECTED) }
+          : {
+              publication: {
+                publicationId: `publication-${input.step.name}`,
+                scopeIdentity: deps.findingLedgerStore!.ledgerIdentity,
+                callNamespace: '',
+                parentStepName: input.parentStepName,
+                stepIteration: input.stepIteration,
+                reviewerStepName: input.step.name,
+                reportName: `${input.step.name}.md`,
+                reportContent: input.phase1Response.content,
+                reportDigest: `digest-${input.step.name}`,
+                rawFindings: [],
+              },
+              response: input.phase1Response,
+            }
+      )) as never,
+    );
+    const state = makeState();
+    queueAgentResponse(makeAgentResponse({ persona: REJECTED }));
+    queueAgentResponse(makeAgentResponse({ persona: ACCEPTED }));
+
+    const result = await runner.runParallelStep(
+      makeParallelStep(),
+      state,
+      'test task',
+      5,
+      vi.fn(),
+    );
+
+    expect(result.response.status, result.response.content).toBe('done');
+    expectRejectedReviewerStillRouted(deps, state);
+
+    // anomaly は記録され、round marker は成立した publication の集合から導く。
+    const recorded = vi.mocked(deps.stepExecutor.recordReviewReportProtocolRejections);
+    expect(recorded).toHaveBeenCalledOnce();
+    const recordInput = recorded.mock.calls[0]![0];
+    expect(recordInput.rejections.map((entry) => entry.reviewerStepName)).toEqual([REJECTED]);
+    expect(recordInput.publicationIds).toEqual([`publication-${ACCEPTED}`]);
+
+    // manager の取り込みは成立したレビュアーだけ。
+    expect(ingestFindingContractResults).toHaveBeenCalledOnce();
+    const intake = vi.mocked(ingestFindingContractResults).mock.calls[0]![0];
+    expect(intake.subResults.map((entry) => entry.subStep.name)).toEqual([ACCEPTED]);
+  });
+
+  it('records one rejection batch with no publication ids when every reviewer is rejected', async () => {
+    const { runner, deps } = makeRunner();
+    vi.mocked(deps.stepExecutor.prepareFindingReviewPublication).mockImplementation(
+      (async (input: { step: WorkflowStep }) => (
+        { reportRejection: rejectionFor(input.step.name) }
+      )) as never,
+    );
+    const state = makeState();
+    queueAgentResponse(makeAgentResponse({ persona: REJECTED }));
+    queueAgentResponse(makeAgentResponse({ persona: ACCEPTED }));
+
+    const result = await runner.runParallelStep(
+      makeParallelStep(),
+      state,
+      'test task',
+      5,
+      vi.fn(),
+    );
+
+    // 親は done を返し、両サブステップのラベルが確定する。
+    expect(result.response.status, result.response.content).toBe('done');
+    for (const stepName of [REJECTED, ACCEPTED]) {
+      expect(state.stepOutputs.get(stepName)?.matchedRuleIndex).toBe(0);
+    }
+
+    // 成立した publication が1件も無いラウンドは manager が走らない。予算は
+    // ここで進めないと max_steps まで再レビューを焼く。
+    const recorded = vi.mocked(deps.stepExecutor.recordReviewReportProtocolRejections);
+    expect(recorded).toHaveBeenCalledOnce();
+    expect(recorded.mock.calls[0]![0].publicationIds).toEqual([]);
+    expect(recorded.mock.calls[0]![0].rejections.map((entry) => entry.reviewerStepName).sort())
+      .toEqual([REJECTED, ACCEPTED].sort());
+    expect(ingestFindingContractResults).not.toHaveBeenCalled();
+  });
+
+  it('records the rejection and keeps the round running when resuming a stored report', async () => {
+    const { runner, deps } = makeRunner();
+    vi.mocked(deps.stepExecutor.resumeFindingReviewPublication).mockImplementation(
+      ((input: { step: WorkflowStep }) => (
+        input.step.name === REJECTED
+          ? { reportRejection: rejectionFor(REJECTED) }
+          : undefined
+      )) as never,
+    );
+    const state = makeState();
+    queueAgentResponse(makeAgentResponse({ persona: ACCEPTED }));
+
+    const result = await runner.runParallelStep(
+      makeParallelStep(),
+      state,
+      'test task',
+      5,
+      vi.fn(),
+    );
+
+    expect(result.response.status, result.response.content).toBe('done');
+    expectRejectedReviewerStillRouted(deps, state);
+    // resume で拒否されたレビュアーは Phase 1 を走らせ直さない。
+    expect(vi.mocked(executeAgent).mock.calls.map(([persona]) => persona)).toEqual([ACCEPTED]);
+
+    const recorded = vi.mocked(deps.stepExecutor.recordReviewReportProtocolRejections);
+    expect(recorded).toHaveBeenCalledOnce();
+    expect(recorded.mock.calls[0]![0].rejections.map((entry) => entry.reviewerStepName))
+      .toEqual([REJECTED]);
   });
 });

@@ -14,12 +14,19 @@ import type { WorkflowConfig, WorkflowStep } from '../core/models/types.js';
 import { createTestFindingLedgerStore } from './helpers/finding-storage.js';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import { runAgent } from '../agents/runner.js';
+import { normalizeFindingIntake } from '../agents/finding-intake-normalizer-usecase.js';
 import { makeRule, makeStep } from './test-helpers.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
 import { reviewerRawExtractionFixture } from './helpers/finding-lifecycle-fixture.js';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
+}));
+
+// 正規化係は隔離 structured 実行（provider.setupIsolatedStructured）で走り、
+// runAgent を通らない。raw findings の唯一の生成元なのでここで差し替える。
+vi.mock('../agents/finding-intake-normalizer-usecase.js', () => ({
+  normalizeFindingIntake: vi.fn(),
 }));
 
 const SLOW_ENGINE_TEST_TIMEOUT_MS = 60_000;
@@ -68,10 +75,18 @@ function makeFindingContract() {
   };
 }
 
-function makeSourceQuoteFinding(persona: string | undefined, schema: unknown): Record<string, unknown> {
-  if (JSON.stringify(schema).includes('"snapshotId"')) {
-    throw new Error('Reviewer schema must not expose engine-issued snapshotId');
-  }
+const REVIEWER_REPORT_EXCERPT = 'One finding.';
+
+/** レビュアーの markdown レポート。正規化係はこの本文だけから抽出する。 */
+function reviewerReport(persona: string | undefined): string {
+  return `${REVIEWER_REPORT_EXCERPT}\npersona:${persona ?? 'reviewer'}`;
+}
+
+function personaFromReport(report: string): string {
+  return /persona:(.+)/u.exec(report)?.[1]?.trim() ?? 'reviewer';
+}
+
+function makeSourceQuoteFinding(persona: string | undefined): Record<string, unknown> {
   return reviewerRawExtractionFixture({
     rawFindingId: `raw-${persona ?? 'reviewer'}`,
     familyTag: 'snapshot-ordering',
@@ -89,7 +104,7 @@ function makeSourceQuoteFinding(persona: string | undefined, schema: unknown): R
       verbatimExcerpt: 'export const reviewed = true;',
       snapshotId: '0'.repeat(64),
     }],
-    rawExcerpt: 'One finding.',
+    rawExcerpt: REVIEWER_REPORT_EXCERPT,
   });
 }
 
@@ -222,24 +237,16 @@ describe('finding reviewer observability wiring', () => {
     initializeGitFixture(cwd, ['src/reviewed.ts']);
     exporter.spans.length = 0;
     vi.mocked(runAgent).mockReset();
+    vi.mocked(normalizeFindingIntake).mockReset();
+    vi.mocked(normalizeFindingIntake).mockImplementation(async (report) => ({
+      persona: 'finding-intake-normalizer',
+      status: 'done',
+      content: '',
+      structuredOutput: { rawFindings: [makeSourceQuoteFinding(personaFromReport(report))] },
+      timestamp: new Date('2026-07-22T00:00:00.500Z'),
+    }));
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
       options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
-      if (hasSchemaProperty(options?.outputSchema, 'rawFindings')) {
-        const finding = makeSourceQuoteFinding(persona, options?.outputSchema);
-        const reportContent = String(finding.rawExcerpt);
-        return {
-          persona,
-          status: 'done',
-          content: reportContent,
-          structuredOutput: {
-            ...(hasSchemaProperty(options?.outputSchema, 'reportContent')
-              ? { reportContent }
-              : {}),
-            rawFindings: [finding],
-          },
-          timestamp: new Date('2026-07-22T00:00:00.000Z'),
-        };
-      }
       if (hasSchemaProperty(options?.outputSchema, 'rawDecisions')) {
         const rawFindingIds = [...instruction.matchAll(/"rawFindingId":\s*"([^"]+)"/g)]
           .map((match) => match[1])
@@ -268,7 +275,7 @@ describe('finding reviewer observability wiring', () => {
       return {
         persona,
         status: 'done',
-        content: 'Report complete.',
+        content: reviewerReport(persona),
         timestamp: new Date('2026-07-22T00:00:02.000Z'),
       };
     });
@@ -312,16 +319,17 @@ describe('finding reviewer observability wiring', () => {
       await engine.runSingleIteration();
     }
 
-    const reviewerCalls = vi.mocked(runAgent).mock.calls.filter(([, , options]) =>
-      hasSchemaProperty(options?.outputSchema, 'rawFindings')
-      && !hasSchemaProperty(options?.outputSchema, 'reportContent'),
+    const reviewerCalls = vi.mocked(runAgent).mock.calls.filter(
+      ([persona]) => persona === 'reviewer',
     );
-    expect(reviewerCalls).toHaveLength(1);
+    // Phase 1（本作業）と Phase 2（markdown レポート）の2回。構造化出力は載らない。
+    expect(reviewerCalls).toHaveLength(2);
     const [, providerPrompt, providerOptions] = reviewerCalls[0]!;
-    const providerSchema = providerOptions?.outputSchema;
-    expect(JSON.stringify(providerSchema)).not.toContain('"snapshotId"');
-    expect(providerPrompt).toContain('Do not output proofId, snapshotId, runId');
-    expect(providerPrompt).toContain(JSON.stringify(providerSchema, null, 2));
+    expect(providerOptions?.outputSchema).toBeUndefined();
+    expect(providerPrompt).not.toContain('snapshotId');
+    // raw findings は正規化係の単発呼び出しがレポート本文から作る。
+    expect(vi.mocked(normalizeFindingIntake)).toHaveBeenCalledOnce();
+    expect(vi.mocked(normalizeFindingIntake).mock.calls[0]?.[0]).toBe(reviewerReport('reviewer'));
 
     const phaseSpan = exporter.spans.find((span) =>
       span.name === 'phase.review.execute' && span.attributes['takt.phase.number'] === 1,
@@ -359,18 +367,23 @@ describe('finding reviewer observability wiring', () => {
       sanitizeObservabilityText: (text) => text,
     }).run();
 
-    const reviewerCalls = vi.mocked(runAgent).mock.calls.filter(([, , options]) =>
-      hasSchemaProperty(options?.outputSchema, 'rawFindings')
-      && !hasSchemaProperty(options?.outputSchema, 'reportContent'),
+    const reviewerCalls = vi.mocked(runAgent).mock.calls.filter(
+      ([persona]) => persona === 'architecture-reviewer' || persona === 'security-reviewer',
     );
-    expect(reviewerCalls).toHaveLength(2);
-    const sharedProviderSchema = reviewerCalls[0]?.[2]?.outputSchema;
-    expect(JSON.stringify(sharedProviderSchema)).not.toContain('"snapshotId"');
+    // 各レビュアーが Phase 1 + Phase 2 の2回。
+    expect(reviewerCalls).toHaveLength(4);
+    expect(vi.mocked(normalizeFindingIntake)).toHaveBeenCalledTimes(2);
 
-    for (const [persona, providerPrompt, providerOptions] of reviewerCalls) {
-      expect(providerOptions?.outputSchema).toBe(sharedProviderSchema);
-      expect(providerPrompt).toContain(JSON.stringify(sharedProviderSchema, null, 2));
-      expect(providerPrompt).toContain('Do not output proofId, snapshotId, runId');
+    for (const call of reviewerCalls) {
+      expect(call[2]?.outputSchema).toBeUndefined();
+      expect(call[1]).not.toContain('snapshotId');
+    }
+
+    // Phase 1（各 persona の最初の呼び出し）の実 instruction が span に載る。
+    const phase1Calls = ['architecture-reviewer', 'security-reviewer'].map((persona) => (
+      reviewerCalls.find(([callPersona]) => callPersona === persona)!
+    ));
+    for (const [persona, providerPrompt] of phase1Calls) {
       const stepName = persona === 'architecture-reviewer' ? 'architecture-review' : 'security-review';
       const phaseSpan = exporter.spans.find((span) =>
         span.name === `phase.${stepName}.execute` && span.attributes['takt.phase.number'] === 1,
@@ -400,32 +413,15 @@ describe('finding reviewer observability wiring', () => {
   }, SLOW_ENGINE_TEST_TIMEOUT_MS);
 
   it('reviewer 実行中に source が変わっても engine snapshot から quote を発行する', async () => {
-    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
-      options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
-      if (hasSchemaProperty(options?.outputSchema, 'rawFindings')) {
-        const finding = makeSourceQuoteFinding(persona, options?.outputSchema);
-        const reportContent = String(finding.rawExcerpt);
-        if (hasSchemaProperty(options?.outputSchema, 'reportContent')) {
-          writeFileSync(join(cwd, 'src/reviewed.ts'), 'export const reviewed = false;\n');
-        }
-        return {
-          persona,
-          status: 'done',
-          content: reportContent,
-          structuredOutput: {
-            ...(hasSchemaProperty(options?.outputSchema, 'reportContent')
-              ? { reportContent }
-              : {}),
-            rawFindings: [finding],
-          },
-          timestamp: new Date('2026-07-22T00:00:00.000Z'),
-        };
-      }
+    // レビュアーが markdown レポートを書き終えた直後に source が変わる。
+    vi.mocked(normalizeFindingIntake).mockImplementation(async (report) => {
+      writeFileSync(join(cwd, 'src/reviewed.ts'), 'export const reviewed = false;\n');
       return {
-        persona,
+        persona: 'finding-intake-normalizer',
         status: 'done',
-        content: 'Report complete.',
-        timestamp: new Date('2026-07-22T00:00:01.000Z'),
+        content: '',
+        structuredOutput: { rawFindings: [makeSourceQuoteFinding(personaFromReport(report))] },
+        timestamp: new Date('2026-07-22T00:00:00.500Z'),
       };
     });
 

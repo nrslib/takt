@@ -1479,17 +1479,26 @@ function collectReviewerAnomalyViolations(
             `Intake contract metadata for anomaly "${anomaly.id}" is invalid`,
           );
         }
+        // 言い直しで要求できる claim 本文が無い観測の終端は、observationClass 由来の
+        // 対応表の外にある（提示を1回も行わずに決着する唯一の kind）。
+        const undemandableTerminal = defect.terminalDisposition?.kind === 'undemandable_claim_atom';
         if (
           defect.terminalDisposition !== undefined
           && (
             anomaly.promotedFindingId !== undefined
             || anomaly.settlement !== undefined
-            || (defect.observationClass === 'claim-bearing'
+            || (undemandableTerminal
+              && defect.terminalDisposition.workflowOutcome !== (
+                defect.observationClass === 'claim-bearing'
+                  ? 'review_integrity_unresolved'
+                  : 'non_claim_observation_rejected'
+              ))
+            || (!undemandableTerminal && defect.observationClass === 'claim-bearing'
               && (
                 defect.terminalDisposition.workflowOutcome !== 'review_integrity_unresolved'
                 || defect.terminalDisposition.kind !== 'restatement_exhausted_claim_bearing'
               ))
-            || (defect.observationClass === 'protocol-noise'
+            || (!undemandableTerminal && defect.observationClass === 'protocol-noise'
               && (
                 defect.terminalDisposition.workflowOutcome !== 'non_claim_observation_rejected'
                 || defect.terminalDisposition.kind !== 'protocol_noise_rejected_after_presentation'

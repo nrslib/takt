@@ -133,18 +133,6 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 ```yaml
 # ~/.takt/config.yaml（続き）
 
-# Finding Contract plain-text intake normalizer
-# finding_contract:
-#   intake_normalize:
-#     provider: codex
-#     model: gpt-5.6-terra
-#     targets:
-#       - provider: opencode
-#         model: ollama-cloud/gemma4:31b
-#     provider_options:
-#       codex:
-#         reasoning_effort: high
-
 # ワークフローセキュリティポリシー（すべてデフォルト拒否）
 # 信頼されていないワークフロー YAML が実行できる内容を制御
 # workflow_mcp_servers:                  # MCP サーバートランスポートポリシー
@@ -215,7 +203,6 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 | `persona_providers` | object | - | deprecated の旧設定。persona display name ごとの provider / model / provider_options 上書き。新規設定では `provider_routing` を推奨 |
 | `provider_options` | object | - | グローバルな provider 固有オプション |
 | `provider_profiles` | object | - | provider 固有のパーミッションプロファイル |
-| `finding_contract.intake_normalize` | object | - | 選択したreviewer reportからraw findingを隔離sessionで抽出するprovider/model設定。両方必須。`targets`は解決済みreviewer provider/modelの完全一致allowlist |
 | `rate_limit_fallback` | object | - | rate limit 到達時のフォールバック。`switch_chain` に `{provider, model}` を列挙した順に切り替える |
 | `anthropic_api_key` | string | - | Claude 用 Anthropic API キー |
 | `openai_api_key` | string | - | Codex 用 OpenAI API キー |
@@ -302,13 +289,6 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 #     step_permission_overrides:
 #       ai_review: readonly
 
-# finding_contract:
-#   intake_normalize:
-#     provider: codex
-#     model: gpt-5.6-terra
-#     targets:
-#       - provider: opencode
-#         model: ollama-cloud/gemma4:31b
 ```
 
 ### OpenCode 実行ガード
@@ -361,7 +341,6 @@ terminal tool の完全一致反復は、廃止された累積検出ではなく
 | `assistant.init_files` | string[] | - | project config 専用のインタラクティブ assistant 初期コンテキストファイル。パスは project root 相対で指定します。絶対パス、project root 外へ解決されるパス、`.env*` / `.npmrc` / `.pypirc` / `.netrc` / `*.pem` / `*.key` / `.git/**` などの機密ファイルパターンは拒否されます。存在しないパス、ディレクトリ、読めないファイルは分かるエラーになります。最大16ファイルまで指定でき、1ファイルは256KiB、合計本文は1MiBまでです。未設定または空の場合、`CLAUDE.md`、`AGENT.md`、`AGENTS.md`、`TAKT.md` などは自動探索されません。assistant の provider/model だけを制御する `takt_providers.assistant` とは別設定です。 |
 | `provider_options` | object | - | provider 固有オプション |
 | `provider_profiles` | object | - | provider 固有のパーミッションプロファイル |
-| `finding_contract.intake_normalize` | object | global 設定 | Finding Contract plain-text intake normalizerのproject上書き |
 | `vcs_provider` | `"github"` \| `"gitlab"` | 自動検出 | VCS プロバイダー（グローバルを上書き） |
 | `takt_providers` | object | - | TAKT 内部プロバイダー上書き。project の `takt_providers.assistant` は global assistant provider/model を上書きし、assistant 会話（インタラクティブモードの計画会話、既存タスクへの追加指示 (instruct)、リトライ対話）と、OpenCode の report retry 失敗後の Report phase fallback に使われます。project と global の assistant がどちらも未設定の場合、Report phase fallback は無効で、top-level `provider` / `model` は暗黙 fallback として使われません。 |
 | `workflow_mcp_servers` | object | - | MCP サーバートランスポートポリシー（グローバルを上書き） |
@@ -373,15 +352,25 @@ terminal tool の完全一致反復は、廃止された累積検出ではなく
 
 プロジェクト設定の値は、両方が設定されている場合にグローバル設定を上書きします。
 
-`finding_contract.intake_normalize` は、reviewer の解決済み provider/model によって
-intake strategy を選択します。TAKTは通常のMarkdown reviewer
-reportを先に保存し、そのreportだけを設定済みprovider/modelのtoolなし新規structured sessionへ
-渡します。providerはisolated structured executionをサポートしている必要があります。
-`targets`省略時は全Finding Contract reviewerに適用し、指定時は
-`{ provider, model }` が解決済みreviewerと完全一致する場合だけ適用します。それ以外のreviewerは
-native structured outputを使います。normalizer自身のprovider/model/optionsはreviewer routingや
-CLI overrideから隔離され、`finding_intake_normalizer` operationのrate-limit fallbackだけが変更できます。
-project blockがglobal block全体をatomicに置き換える規則は維持します。
+Finding Contract の正規化係に `config.yaml` のキーはありません。Finding Contract の reviewer は
+全員が通常の Markdown report を書き、TAKT はその report を保存して、それだけを tool なしの新規
+structured session へ渡します。呼び出しはレビュアー×ラウンドごとに1回です。その session の
+provider/model は、runtime.yaml の
+`provider.targets.internal_agents['intake-normalizer']` seat → reviewer の profile が宣言する
+`escalate` 先 → 通常の既定解決、の順で決まります。先頭の候補は isolated structured
+execution に対応している必要があり、対応していない場合は黙って続行せずその理由を示して停止します。
+正規化係の出力が検証と訂正1回のどちらも通らなかった場合は、同じチェーンの次の候補（すでに使った
+候補と `(provider, model)` が異なり、isolated structured execution に対応する最初のもの）で
+1度だけやり直します。それでも失敗した場合は候補ごとの具体的な理由を示して停止します。正規化係も合成ステップとして通常どおり解決されるため、CLI や環境変数による明示的な
+provider/model override は正規化係にも適用されます。これは意図した挙動です — 明示 override は
+TAKT のどこでも最優先レイヤだからです。その帰結として、isolated structured execution に対応
+しない provider を明示指定して Finding Contract ランを走らせると、黙って劣化するのではなく
+正規化係の理由を示して停止します。`finding_intake_normalizer` operation に登録された rate-limit
+fallback は、その呼び出しに限って正規化係を差し替えます。
+
+廃止された `finding_contract.intake_normalize` キーはもう存在しません。正規化は組み込み動作に
+なりました。まだこのブロックを書いている workflow は strict スキーマの未知キー拒否で読み込みに
+失敗します。ブロックごと削除してください。
 
 run metadata、session log、trace、report などのrun lifecycle artifactは、
 引き続き `.takt/runs/<run>/` 配下のファイルです。Finding Contractの状態だけは
@@ -509,7 +498,7 @@ kiro_cli_path: /usr/local/bin/kiro-cli
 
 provider と model の選択には、[Provider Routing](#provider-routing) に記載した単一のフィールド別優先順位を使用します。通常 step、parallel sub-step、合成 step、workflow call は、各種類で利用可能なレイヤーについて同じ契約に従います。parallel sub-step は promotion をサポートしません。
 
-Finding Contract workflow では、`finding_contract.manager.provider` / `model`、`finding_contract.adjudicator.provider` / `model`、`finding_contract.escalation_reviewer.provider` / `model` は、それぞれの合成 step の step レベル provider/model として扱われます。実装上のフィールド別優先順は、CLI/環境変数の明示 override → 実行時にマッチした promotion（通常の agent step のみ）→ step または parallel sub-step の provider/model（これらの直接指定を含む）→ `workflow_call` override → `provider_routing` の step/tag/persona → deprecated の `persona_providers` → auto routing → workflow → project → global → provider default です。両方とも未指定の場合は通常の workflow step と同じ fallback chain を使います。`provider` だけを指定すると下位優先度の model fallback は停止し、明示 model が必須の provider では検証エラーになります。
+Finding Contract workflow では、`finding_contract.manager.provider` / `model` と `finding_contract.adjudicator.provider` / `model` は、それぞれの合成 step の step レベル provider/model として扱われます。実装上のフィールド別優先順は、CLI/環境変数の明示 override → 実行時にマッチした promotion（通常の agent step のみ）→ step または parallel sub-step の provider/model（これらの直接指定を含む）→ `workflow_call` override → `provider_routing` の step/tag/persona → deprecated の `persona_providers` → auto routing → workflow → project → global → provider default です。両方とも未指定の場合は通常の workflow step と同じ fallback chain を使います。`provider` だけを指定すると下位優先度の model fallback は停止し、明示 model が必須の provider では検証エラーになります。
 
 ```yaml
 finding_contract:
@@ -522,10 +511,6 @@ finding_contract:
   adjudicator:
     persona: supervisor
     instruction: adjudicate-finding-contract
-    provider: codex
-    model: <strong-model>
-  escalation_reviewer:
-    persona: escalation-supervisor
     provider: codex
     model: <strong-model>
 ```
@@ -599,6 +584,7 @@ provider:
       model: gpt-5.6-sol
       options:
         reasoning_effort: low
+      escalate: sol-high
     router:
       provider: codex
       model: gpt-5.6-luna
@@ -618,6 +604,8 @@ provider:
     internal_agents:
       selector:
         profile: router
+      intake-normalizer:
+        profile: sol-high
 
   auto_routing:
     strategy: balanced
@@ -638,6 +626,28 @@ provider:
 
 `provider.defaults` と各 `provider.targets` エントリは、固定の `profile` か auto routing を行う `pool` のいずれか一方だけを指定します。step は `<leaf-workflow-name>/<step-name>` 形式で指定し、agent を起動しない制御ノード（`workflow_call` など）は解決対象になりません。
 
+### `escalate` — その profile の最後の一手
+
+profile は `escalate` で別の profile を指名できます。「この profile で解決された作業が行き詰まったら、その profile へ渡す」という宣言です。弱い側の profile に1行書くだけで設定は完了し、workflow 側に provider 名やモデル名は一切現れません。
+
+```yaml
+provider:
+  profiles:
+    reviewer-local:
+      provider: opencode
+      model: ollama-cloud/gemma4:31b
+      escalate: strong
+    strong:
+      provider: opencode
+      model: ollama-cloud/glm-5.2
+```
+
+- 参照は agent を実行する前のコンパイル時に検証します。未定義 profile の参照、自己参照、`escalate` の循環はすべて読み込み時エラーです。
+- `escalate` は `provider` / `model` / `options` と同じく `extends` を通じて継承されます。
+- 消費されるのは常に1ホップだけです。`escalate` は作業者の最後の一手であり、段階的な ladder ではありません。
+- `--provider` や step YAML、`workflow_call` の上書きで provider が決まった step は、その profile で動いていないため格上げ先を持ちません。auto routing の `pool` で割り当てられた step も同様です。
+- 現在エンジンが `escalate` を消費するのは Finding Contract の格上げ再レビューです。[workflows.ja.md](workflows.ja.md) を参照してください。
+
 ### 解決の優先順位
 
 workflow agent の provider は次のラダーで解決し、後のエントリが前のエントリを上書きします。
@@ -649,12 +659,15 @@ defaults
   < steps
 ```
 
-内部 agent（`selector` と `assistant`）は別のラダーで解決します。`internal_agents` は step 解決後に汎用的に上書きされる target ではありません。
+内部 agent（`selector` / `assistant` / `intake-normalizer`）は別のラダーで解決します。`internal_agents` は step 解決後に汎用的に上書きされる target ではありません。
 
 ```text
 defaults
   < internal_agents.<agent>
 ```
+
+`intake-normalizer` だけはこの先にも候補が続きます。seat が割り当てられていない場合は
+レビュアーの `escalate` 先 → 通常の既定解決の順で決まります（[workflows.ja.md](workflows.ja.md) 参照）。
 
 同じ優先度の target（例えば複数の一致する tag）が異なる provider を割り当てた場合は、暗黙に一方を選ばず fail-fast します。コマンドラインの `--provider` / `--model` は実行時 override であり、legacy と runtime のどちらのモードでも許可されます。
 
@@ -812,7 +825,7 @@ provider と model は各レイヤーで個別に解決されます。provider �
 
 Finding Contract manager では、`finding_contract.manager.provider` と `finding_contract.manager.model` が合成 `findings-manager` step の `step YAML provider/model` 位置に入ります。
 
-合成された Finding Contract ロールは、設定した persona 名ではなく固定の persona キーで `provider_routing.personas` を解決します。`findings-manager`（manager）、`supervisor`（conflict / terminal adjudication）、`escalation-reviewer`（格上げ言い直しレビュー）、`loop-judge`（loop monitor の judge）です。`finding_contract.escalation_reviewer.provider` / `model` は合成 `escalation-reviewer` step の `step YAML provider/model` 位置に入ります。`finding_contract.escalation_reviewer` を設定している間、`escalation-reviewer` は workflow の予約 step 名にもなります。
+合成された Finding Contract ロールは、設定した persona 名ではなく固定の persona キーで `provider_routing.personas` を解決します。`findings-manager`（manager）、`supervisor`（conflict / terminal adjudication）、`loop-judge`（loop monitor の judge）です。格上げ再レビューはこの方式では設定しません。owner レビュアーの step をそのまま継承し、モデルはそのレビュアーが解決された profile の `escalate` 先から取ります。reviewer キーは固定文字列 `escalation-reviewer` で、Finding Contract workflow では常に予約 step 名です。
 
 ### Auto Routing
 

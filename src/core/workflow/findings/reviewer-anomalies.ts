@@ -110,6 +110,33 @@ function normalizeClaimAtom(value: string): string {
   return value.trim().replace(/\s+/gu, ' ');
 }
 
+/**
+ * correspondence が「言い直しとして受理できる」ために要求する claim atom
+ * （demandable claim atom）。
+ *
+ * request が reviewer へ提示する文字列もこの関数へ委譲する。選択規則を2箇所に
+ * 持つと、提示と要求が別の文字列になり得る — その request は reviewer が提示文を
+ * 1文字も違わずコピーしても correspondence が成立せず、presentationLimit 回だけ
+ * 再提示されて毎回 new finding を増やすだけの充足不能な要求になる。
+ *
+ * undefined を返す anomaly は言い直しでは決着できない。request を作ってはならず、
+ * 提示を1回も行わずにその場で terminal disposition
+ * （undemandable_claim_atom）へ落とす。title へフォールバックして request を
+ * 作ると、まさに上の充足不能な要求になる。
+ */
+export function selectRestatementSourceClaimAtom(
+  anomaly: Pick<ReviewerAnomalyEntry, 'claimedExcerpt'>,
+  sourceRaw: Pick<RawFinding, 'description' | 'rawExcerpt'>,
+): string | undefined {
+  return sourceRaw.description?.trim().length
+    ? sourceRaw.description
+    : anomaly.claimedExcerpt?.trim().length
+      ? anomaly.claimedExcerpt
+      : sourceRaw.rawExcerpt?.trim().length
+        ? sourceRaw.rawExcerpt
+        : undefined;
+}
+
 function hasRestatementCorrespondence(input: {
   anomaly: ReviewerAnomalyEntry;
   sourceRaw: RawFinding;
@@ -122,13 +149,7 @@ function hasRestatementCorrespondence(input: {
   if (!hasRestatementCandidateShape(request, anomaly, sourceRaw, admittedRaw)) {
     return false;
   }
-  const sourceAtom = sourceRaw.description?.trim().length
-    ? sourceRaw.description
-    : anomaly.claimedExcerpt?.trim().length
-      ? anomaly.claimedExcerpt
-      : sourceRaw.rawExcerpt?.trim().length
-        ? sourceRaw.rawExcerpt
-        : undefined;
+  const sourceAtom = selectRestatementSourceClaimAtom(anomaly, sourceRaw);
   const admittedAtom = admittedRaw.description?.trim().length
     ? admittedRaw.description
     : undefined;
@@ -155,8 +176,8 @@ function hasRestatementCorrespondence(input: {
  * escalation phase では、元の不完全な観測の所有者（owner reviewer）と、格上げで
  * clean な claim を出した reviewer が異なる。これが reviewer 一致要件の唯一の
  * 緩和点で、判別子は request.reviewer === 'escalation-reviewer' だけ。
- * escalation reviewer 未設定のワークフローでは escalation request が作られないため
- * この分岐は発火せず、従来の条件式と等価になる。
+ * owner が解決された profile に `escalate` が無ければ escalation request 自体が
+ * 作られないため、この分岐は発火せず従来の条件式と等価になる。
  */
 function hasRestatementCandidateShape(
   request: RestatementRequestV1,
@@ -175,6 +196,52 @@ function hasRestatementCandidateShape(
     && admittedRaw.relation === 'new'
     && admittedRaw.targetFindingId === null
     && admittedRaw.targetPrecondition === undefined;
+}
+
+/**
+ * 「特定の anomaly を言い直した」と自己申告した raw が、照合ゲートを通らなかったか。
+ *
+ * 通らなかった再主張を新規 product finding として鋳造すると、同じ主張が言い直しの
+ * たびに別 finding として積み上がる（実測で findings 膨張の原因）。呼び出し側は
+ * これを admission で弾き、当該 anomaly への再試行の記録（rejected observation）
+ * として残す。
+ */
+export function restatementReassertionFailsCorrespondence(input: {
+  ledger: FindingLedger;
+  admittedRaw: RawFinding;
+  bindings: readonly RestatementRequestBinding[];
+}): boolean {
+  const echoedAnomalyId = input.admittedRaw.reassertsReviewerAnomalyId;
+  if (echoedAnomalyId === undefined) {
+    return false;
+  }
+  const echoedBindings = input.bindings.filter(
+    (binding) => binding.request.anomalyId === echoedAnomalyId,
+  );
+  if (echoedBindings.length === 0) {
+    // その anomaly の言い直しは、この呼び出しでは要求していない。要求していない
+    // ものを「言い直しの失敗」とは判定できないので、echo を落として通常の新規
+    // claim として評価させる（正当な新規指摘を殺さない）。台帳に無い anomaly ID を
+    // 指す echo も、request が無い以上ここに落ちる。
+    return false;
+  }
+  const anomaly = (input.ledger.reviewerAnomalies ?? []).find(
+    (entry) => entry.id === echoedAnomalyId,
+  );
+  const sourceRaw = anomaly?.sourceRawFindingIds
+    .map((rawFindingId) => input.ledger.rawFindings.find((raw) => raw.rawFindingId === rawFindingId))
+    .find((raw) => raw !== undefined);
+  if (anomaly === undefined || sourceRaw === undefined) {
+    // request はあるのに照合対象の観測が台帳から消えている。比較のしようがないので
+    // 同じく echo を落とす。
+    return false;
+  }
+  return !echoedBindings.some((binding) => hasRestatementCorrespondence({
+    anomaly,
+    sourceRaw,
+    admittedRaw: input.admittedRaw,
+    request: binding.request,
+  }));
 }
 
 function hasValidRestatementEcho(
@@ -494,15 +561,30 @@ export function linkPromotedReviewerAnomalies(
 export function collectReviewSupersededReviewerAnomalyIds(
   ledger: FindingLedger,
   reviewers: ReadonlySet<string>,
+  /**
+   * 判定ラダーを通った（verdict を伴う）publication を登録したレビュアー枠。
+   * verdict 由来の anomaly はこちらでしか決着しない。
+   */
+  verdictReviewers: ReadonlySet<string> = reviewers,
 ): Set<string> {
   return new Set(
     (ledger.reviewerAnomalies ?? [])
-      .filter((anomaly) => (
-        isOutstandingReviewerAnomaly(anomaly)
-        && anomaly.intakeContract === undefined
-        && anomaly.reviewers.length > 0
-        && anomaly.reviewers.every((reviewer) => reviewers.has(reviewer))
-      ))
+      .filter((anomaly) => {
+        if (
+          !isOutstandingReviewerAnomaly(anomaly)
+          || anomaly.intakeContract !== undefined
+          || anomaly.reviewers.length === 0
+        ) {
+          return false;
+        }
+        // 「非承認判定 + claim ゼロ件」は verdict そのものを根拠に記録した anomaly。
+        // verdict を伴わない再レビューで取り下げると、そのゲートが再レビューで
+        // 洗い流されて予算に到達しなくなる。
+        const settlingReviewers = anomaly.kind === 'verdict-claims-mismatch'
+          ? verdictReviewers
+          : reviewers;
+        return anomaly.reviewers.every((reviewer) => settlingReviewers.has(reviewer));
+      })
       .map((anomaly) => anomaly.id),
   );
 }
@@ -513,14 +595,15 @@ export function collectReviewSupersededReviewerAnomalyIds(
  * （観測消去の禁止）。settlement が付いた anomaly は isOutstandingReviewerAnomaly が
  * false になり、when() のカウンタからも外れる（＝ブロッキング効果が消える）。
  *
- * candidateAnomalyIds は同じ publicationIdByReviewer から
+ * candidateAnomalyIds は同じ publicationIdsByReviewer から
  * collectReviewSupersededReviewerAnomalyIds が選んだ集合であること。候補の全観測者が
  * publication を持つことはそこで保証されるので、ここでは引き直さない。
  */
 export function withdrawReviewerAnomaliesSupersededByReview(input: {
   ledger: FindingLedger;
   candidateAnomalyIds: ReadonlySet<string>;
-  publicationIdByReviewer: ReadonlyMap<string, string>;
+  /** レビュアー枠 → そのラウンドに登録された publication ID 全件（1件とは限らない）。 */
+  publicationIdsByReviewer: ReadonlyMap<string, readonly string[]>;
   observation: FindingObservation;
 }): FindingLedger {
   const anomalies = input.ledger.reviewerAnomalies;
@@ -539,14 +622,16 @@ export function withdrawReviewerAnomaliesSupersededByReview(input: {
     }
     // 候補は「全観測者が今ラウンドの publication を持つ」もののみ（collect 側の
     // every 判定）。取り下げ根拠は観測者全員分を記録する — 1人分だけ残すと
-    // 「誰の後続レビューで決着したのか」を監査で再構成できない。順序は reviewer の
+    // 「誰の後続レビューで決着したのか」を監査で再構成できない。
+    // 1レビュアー枠が同一ラウンドに複数 publication を持つ場合（格上げ再レビューの
+    // owner 別グループ化）は、その全件を展開する。1件へ潰すと別 owner の
+    // publication ID が根拠として記録され得る。順序は (reviewer, publicationId) の
     // binary 順で決定的にする。
     const supersedingPublications = [...anomaly.reviewers]
       .sort(compareBinaryStrings)
-      .map((reviewer) => ({
-        reviewer,
-        publicationId: input.publicationIdByReviewer.get(reviewer)!,
-      }));
+      .flatMap((reviewer) => [...input.publicationIdsByReviewer.get(reviewer)!]
+        .sort(compareBinaryStrings)
+        .map((publicationId) => ({ reviewer, publicationId })));
     changed = true;
     return {
       ...anomaly,

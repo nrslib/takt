@@ -290,6 +290,15 @@ export interface ReviewerRawIntakeContext {
   runId: string;
   /** reviewer サブステップ名（raw finding id の名前空間に使う既存規約）。 */
   reviewerStepName: string;
+  /**
+   * その raw を載せた canonical publication の report 名。
+   *
+   * 同じレビュアーが同じ step iteration に複数の publication を出すことがある
+   * （言い直し slot のインライン反復）。report 名まで名前空間へ入れないと、
+   * 2件目以降の同じローカル ID が1件目と同じ raw finding id になり、別の観測が
+   * crash/replay の再適用として黙って捨てられる。
+   */
+  reportName: string;
   /** reviewer の persona キー（reviewerStableKey の構成要素）。 */
   reviewerPersonaKey: string;
   /** rawExcerpt を一意な完全一致で束縛する reviewer report 本文。 */
@@ -320,6 +329,7 @@ function namespacedRawFindingId(context: ReviewerRawIntakeContext, rawFindingId:
     context.parentStepName,
     String(context.stepIteration),
     context.reviewerStepName,
+    context.reportName,
     rawFindingId,
   ].join(':');
   const parsed = RawFindingIdSchema.safeParse(wireId);
@@ -691,6 +701,22 @@ function projectReviewerRawItem(
         ].includes(key)
       ) {
         record[key] = null;
+        continue;
+      }
+      // 生成 schema（RawFindingsOutputIntakeJsonSchema）は reassertsReviewerAnomalyId を
+      // required かつ nullable として宣言する。schema を厳密に守る provider
+      // （claude-sdk など）は echo 対象が無ければ必ず null を出す。null は
+      // 「echo なし」＝キー欠落と同義なので record へは載せない — post-hoc の
+      // ReviewerCandidatePayloadSchema は optional な非空文字列しか許さないため。
+      if (key === 'reassertsReviewerAnomalyId') {
+        if (value === null || value === undefined) {
+          continue;
+        }
+        if (typeof value === 'string' && value.length > 0) {
+          record[key] = value;
+        } else {
+          candidateShapeValid = false;
+        }
         continue;
       }
       if (key === 'relation') {

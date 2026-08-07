@@ -16,7 +16,7 @@
  */
 import type { FindingContractStopBudgetConfig, FindingLedger, FindingLedgerStopBudgetState } from './types.js';
 import { rfc3339TimelineMilliseconds } from '../../models/rfc3339.js';
-import { addRoundMarker } from './round-marker.js';
+import { addRoundMarker, budgetCountedRoundMarkers } from './round-marker.js';
 
 /**
  * finding_contract.stop_budget が省略した（または一部だけ省略した）フィールドを
@@ -55,9 +55,14 @@ function elapsedMinutes(firstRoundAt: string, nowIso: string): number {
   return (rfc3339TimelineMilliseconds(nowIso) - rfc3339TimelineMilliseconds(firstRoundAt)) / 60_000;
 }
 
-/** roundMarkers.length から導出する完了ラウンド数。読み取り側の唯一の入口。 */
+/**
+ * roundMarkers から導出する完了ラウンド数。読み取り側の唯一の入口。
+ *
+ * 言い直し slot の各パスは適用済み集合には入るが（二相コミットと冪等性のため）、
+ * 予算ラウンドとしては数えない。
+ */
 export function stopBudgetRoundsCompleted(ledger: FindingLedger): number {
-  return ledger.stopBudget?.roundMarkers.length ?? 0;
+  return budgetCountedRoundMarkers(ledger.stopBudget?.roundMarkers ?? []).length;
 }
 
 /**
@@ -83,7 +88,7 @@ export function attachStopBudgetState(
 ): FindingLedger {
   const roundMarkers = addRoundMarker(previousLedger.stopBudget?.roundMarkers, roundMarker);
   const firstRoundAt = previousLedger.stopBudget?.firstRoundAt ?? nowIso;
-  const exhausted = roundMarkers.length >= limits.maxRounds
+  const exhausted = budgetCountedRoundMarkers(roundMarkers).length >= limits.maxRounds
     || (limits.maxMinutes !== undefined && elapsedMinutes(firstRoundAt, nowIso) >= limits.maxMinutes);
   const stopBudget: FindingLedgerStopBudgetState = { roundMarkers, firstRoundAt, exhausted };
   return { ...nextLedger, stopBudget };

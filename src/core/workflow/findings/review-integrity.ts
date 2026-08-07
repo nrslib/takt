@@ -70,6 +70,19 @@ function hasOutstandingReviewerAnomalies(ledger: FindingLedger): boolean {
  * 出ていない）予算は消費しない。既存の予算状態は据え置く（後続ラウンドで anomaly が
  * 再来したら続きから数える。stop budget と同じ単調累積・巻き戻りなし）。
  */
+/**
+ * 予算へ計上しないラウンド（言い直し slot の各パス）の据え置き。attachStopBudgetState
+ * 側と同じ理由で、reconcile 後の nextLedger へ累積状態を明示的に戻す。
+ */
+export function carryReviewIntegrityState(
+  previousLedger: FindingLedger,
+  nextLedger: FindingLedger,
+): FindingLedger {
+  return previousLedger.reviewIntegrity === undefined
+    ? nextLedger
+    : { ...nextLedger, reviewIntegrity: previousLedger.reviewIntegrity };
+}
+
 export function attachReviewIntegrityState(
   previousLedger: FindingLedger,
   nextLedger: FindingLedger,

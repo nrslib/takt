@@ -1,0 +1,249 @@
+{
+  "cases": [
+    {
+      "caseId": "glm-RA-C5848EE949BE",
+      "sourceKey": "glm",
+      "reviewerModel": "ollama-cloud/glm-5.2",
+      "anomalyId": "RA-C5848EE949BE",
+      "reviewer": "security-review",
+      "missingRequirements": [
+        "familyTag",
+        "relation",
+        "severity",
+        "title"
+      ],
+      "presentationLimit": 6,
+      "title": "`runner.ts:442-444` は `mcp-assignment.ts:237` で補間済みの `mcpServers` を渡すため正規表現がマッチせず、秘密値が `runner.ts:445-448` の `log.debug` へ漏洩。未解決",
+      "claimAtom": "`runner.ts:442-444` は `mcp-assignment.ts:237` で補間済みの `mcpServers` を渡すため正規表現がマッチせず、秘密値が `runner.ts:445-448` の `log.debug` へ漏洩。未解決",
+      "targetPaths": [
+        "src/agents/runner.ts",
+        "src/infra/config/runtime-provider/mcp-assignment.ts",
+        "src/infra/config/runtime-provider/mcp-schema.ts"
+      ],
+      "sourceFileQuotes": [
+        {
+          "path": "src/agents/runner.ts",
+          "startLine": 442,
+          "endLine": 448
+        }
+      ]
+    },
+    {
+      "caseId": "glm-RA-318B6D793CF8",
+      "sourceKey": "glm",
+      "reviewerModel": "ollama-cloud/glm-5.2",
+      "anomalyId": "RA-318B6D793CF8",
+      "reviewer": "coding-review",
+      "missingRequirements": [
+        "relation",
+        "severity"
+      ],
+      "presentationLimit": 6,
+      "title": "`redactMcpServerForLog` の `${...}` redaction は補間後経路で効果がない（item #2 未解決）",
+      "claimAtom": "`src/infra/config/runtime-provider/mcp-schema.ts:173-177` で追加された `redactSecretRefs` は `SECRET_REF_PATTERN = /\\$\\{[^}]+\\}/` で `${...}` パターンを含む文字列を `<redacted>` に置換する。しかし `src/agents/runner.ts:442-443` で `redactMcpServerForLog(server)` に渡る `mcpServers` は `src/core/workflow/engine/OptionsBuilder.ts:437→461` → `src/infra/config/runtime-provider/mcp-assignment.ts:237` の `interpolateMcpEnv(servers[name]!)` を経て既に補間済みである。`${SECRET_TOKEN}` が `abc123` に展開された後の値には `${...}` パターンは残っておらず、`redactSecretRefs` の正規表現はマッチしないため、解決済みの秘密値がそのまま `log.debug` の `servers` フィールド（`runner.ts:448`）へ出力される。`src/__tests__/runtime-mcp-secret-redaction.test.ts:66-100` の追加テストは `command: '${SECRET_TOKEN}'` のような未補間入力で検証しており、実際の補間後経路（`runner.ts:443` が受け取る値）を再現していない。",
+      "targetPaths": [
+        "src/__tests__/runtime-mcp-secret-redaction.test.ts",
+        "src/agents/runner.ts",
+        "src/infra/config/runtime-provider/mcp-schema.ts"
+      ],
+      "sourceFileQuotes": [
+        {
+          "path": "src/__tests__/runtime-mcp-secret-redaction.test.ts",
+          "startLine": 66,
+          "endLine": 100
+        },
+        {
+          "path": "src/infra/config/runtime-provider/mcp-schema.ts",
+          "startLine": 173,
+          "endLine": 177
+        },
+        {
+          "path": "src/agents/runner.ts",
+          "startLine": 442,
+          "endLine": 448
+        }
+      ]
+    },
+    {
+      "caseId": "glm-RA-01347DB26C3B",
+      "sourceKey": "glm",
+      "reviewerModel": "ollama-cloud/glm-5.2",
+      "anomalyId": "RA-01347DB26C3B",
+      "reviewer": "testing-review",
+      "missingRequirements": [
+        "severity"
+      ],
+      "presentationLimit": 6,
+      "title": "CR-2 redaction テストが実経路（補間済み秘密値）を検証していない",
+      "claimAtom": "`src/__tests__/runtime-mcp-secret-redaction.test.ts:73-90` の CR-2 テストは、`redactMcpServerForLog` に未補間の `${SECRET_TOKEN}` 文字列を渡し、それが redact されることを検証している。しかし実経路では補間済み値が渡され、`SECRET_REF_PATTERN` は補間済み値にマッチせず秘密値が漏洩する。テストは実経路では到達しない入力を検証しており、欠陥を検出できない。",
+      "targetPaths": [
+        "src/__tests__/runtime-mcp-secret-redaction.test.ts"
+      ],
+      "sourceFileQuotes": [
+        {
+          "path": "src/__tests__/runtime-mcp-secret-redaction.test.ts",
+          "startLine": 73,
+          "endLine": 90
+        }
+      ]
+    },
+    {
+      "caseId": "glm-RA-154820BF8149",
+      "sourceKey": "glm",
+      "reviewerModel": "ollama-cloud/glm-5.2",
+      "anomalyId": "RA-154820BF8149",
+      "reviewer": "ai-antipattern-review-2nd",
+      "missingRequirements": [
+        "title"
+      ],
+      "presentationLimit": 6,
+      "title": "新規: docs の migration target 記述が order.md item #16 の要求値に未対応。`docs/external-integrations.ja.md:34` は `workflow の mcp_servers ポリシー → mcp.targets`、`docs/external-integrations.md:34` は `workflow mcp_server",
+      "claimAtom": "新規: docs の migration target 記述が order.md item #16 の要求値に未対応。`docs/external-integrations.ja.md:34` は `workflow の mcp_servers ポリシー → mcp.targets`、`docs/external-integrations.md:34` は `workflow mcp_servers policy → mcp.targets` であり、order.md item #16 が要求する `workflow_mcp_servers policy` への修正が未適用。severity: low。family_tag: `legacy-mcp-signal-location-mismatch`。修正案: 両 docs の L34 を `workflow_mcp_servers policy → mcp.targets` に修正する。",
+      "targetPaths": [
+        "docs/external-integrations.ja.md",
+        "docs/external-integrations.md"
+      ],
+      "sourceFileQuotes": [
+        {
+          "path": "docs/external-integrations.ja.md",
+          "startLine": 34,
+          "endLine": 34
+        },
+        {
+          "path": "docs/external-integrations.md",
+          "startLine": 34,
+          "endLine": 34
+        }
+      ]
+    },
+    {
+      "caseId": "glm-RA-E917C3998E32",
+      "sourceKey": "glm",
+      "reviewerModel": "ollama-cloud/glm-5.2",
+      "anomalyId": "RA-E917C3998E32",
+      "reviewer": "security-review",
+      "missingRequirements": [
+        "familyTag",
+        "relation",
+        "severity",
+        "title"
+      ],
+      "presentationLimit": 6,
+      "title": "リテラルを直接渡しており実経路（`interpolateMcpEnv` → `redactMcpServerForLog` の補間済み値）を再現しない。欠陥を検出できない。",
+      "claimAtom": "リテラルを直接渡しており実経路（`interpolateMcpEnv` → `redactMcpServerForLog` の補間済み値）を再現しない。欠陥を検出できない。",
+      "targetPaths": [
+        "src/__tests__/runtime-mcp-secret-redaction.test.ts"
+      ],
+      "sourceFileQuotes": [
+        {
+          "path": "src/__tests__/runtime-mcp-secret-redaction.test.ts",
+          "startLine": 73,
+          "endLine": 90
+        }
+      ]
+    },
+    {
+      "caseId": "gemma-RA-19D0A19E5072",
+      "sourceKey": "gemma",
+      "reviewerModel": "ollama-cloud/gemma4:31b",
+      "anomalyId": "RA-19D0A19E5072",
+      "reviewer": "testing-review",
+      "missingRequirements": [
+        "claimEvidence"
+      ],
+      "presentationLimit": 6,
+      "title": "画像サイズ制限における極小サイズの境界値検証不足",
+      "claimAtom": "合計画像サイズ制限および個別サイズ制限の検証において、上限付近の検証は行われているが、シグネチャのみの極小サイズ画像を入力とした際の動作検証が行われていない。",
+      "targetPaths": [
+        "src/__tests__/github-pr-review-attachments.test.ts"
+      ],
+      "sourceFileQuotes": []
+    },
+    {
+      "caseId": "gemma-RA-20BFBBD20B27",
+      "sourceKey": "gemma",
+      "reviewerModel": "ollama-cloud/gemma4:31b",
+      "anomalyId": "RA-20BFBBD20B27",
+      "reviewer": "testing-review",
+      "missingRequirements": [
+        "claimEvidence",
+        "title"
+      ],
+      "presentationLimit": 6,
+      "title": "`gh` CLI の実行失敗（`execFileSync` の例外スロー）時に、作成済みの一時ディレクトリが `cleanup` によって適切に削除されるかどうかの検証が欠落している。",
+      "claimAtom": "`gh` CLI の実行失敗（`execFileSync` の例外スロー）時に、作成済みの一時ディレクトリが `cleanup` によって適切に削除されるかどうかの検証が欠落している。",
+      "targetPaths": [
+        "src/__tests__/github-review-attachments.test.ts"
+      ],
+      "sourceFileQuotes": []
+    },
+    {
+      "caseId": "gemma-RA-0DC56EE9042E",
+      "sourceKey": "gemma",
+      "reviewerModel": "ollama-cloud/gemma4:31b",
+      "anomalyId": "RA-0DC56EE9042E",
+      "reviewer": "security-review",
+      "missingRequirements": [
+        "familyTag"
+      ],
+      "presentationLimit": 6,
+      "title": "Potential DoS due to missing pre-download size check",
+      "claimAtom": "`src/infra/github/pr-review-attachments.ts:129-132` の実装は `maxBuffer` による制限のみに依存しており、HTTP レスポンスヘッダーの `Content-Length` を事前に検証していない。これにより、巨大なファイルを繰り返し要求させることでメモリリソースを枯渇させる DoS 攻撃への耐性が不十分である。",
+      "targetPaths": [
+        "src/infra/github/pr-review-attachments.ts"
+      ],
+      "sourceFileQuotes": [
+        {
+          "path": "src/infra/github/pr-review-attachments.ts",
+          "startLine": 129,
+          "endLine": 132
+        }
+      ]
+    },
+    {
+      "caseId": "gemma-RA-07D34832E99C",
+      "sourceKey": "gemma",
+      "reviewerModel": "ollama-cloud/gemma4:31b",
+      "anomalyId": "RA-07D34832E99C",
+      "reviewer": "security-review",
+      "missingRequirements": [
+        "familyTag",
+        "relation",
+        "severity",
+        "target",
+        "title"
+      ],
+      "presentationLimit": 6,
+      "title": "HTTP レスポンスの `Content-Length` をダウンロード前に検証する仕組みがないため、`maxBuffer` に達するまでメモリを消費する。実効的な影響は小さいが、将来的により厳格な DoS 対策を検討することを推奨。",
+      "claimAtom": "HTTP レスポンスの `Content-Length` をダウンロード前に検証する仕組みがないため、`maxBuffer` に達するまでメモリを消費する。実効的な影響は小さいが、将来的により厳格な DoS 対策を検討することを推奨。",
+      "targetPaths": [],
+      "sourceFileQuotes": []
+    },
+    {
+      "caseId": "gemma-RA-3DF2DAE128D1",
+      "sourceKey": "gemma",
+      "reviewerModel": "ollama-cloud/gemma4:31b",
+      "anomalyId": "RA-3DF2DAE128D1",
+      "reviewer": "arch-review",
+      "missingRequirements": [
+        "familyTag",
+        "relation",
+        "severity",
+        "title"
+      ],
+      "presentationLimit": 6,
+      "title": "`finally` ブロックでのクリーンアップはあるが、内部の非同期処理における例外伝播時の保証が不十分",
+      "claimAtom": "`finally` ブロックでのクリーンアップはあるが、内部の非同期処理における例外伝播時の保証が不十分",
+      "targetPaths": [
+        "src/app/cli/routing.ts"
+      ],
+      "sourceFileQuotes": [
+        {
+          "path": "src/app/cli/routing.ts",
+          "startLine": 274,
+          "endLine": 341
+        }
+      ]
+    }
+  ]
+}

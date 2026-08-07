@@ -33,7 +33,7 @@ import { computeRoundMarker } from '../core/workflow/findings/round-marker.js';
 import { runFindingManagerForStep, type FindingManagerSubStepResult } from '../core/workflow/findings/manager-runner.js';
 import {
   createFindingReviewPublication,
-  STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+  PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
 } from '../core/workflow/findings/review-publication.js';
 import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
 import { buildFindingsRuleContext as buildFindingsRuleContextWithCwd } from '../core/workflow/findings/context.js';
@@ -383,7 +383,7 @@ function makeRoundHarness(
             reviewerStepName: 'arch-review',
             reportName: 'arch-review.md',
           },
-          protocol: STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+          protocol: PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
           reportContent,
           rawFindings: reviewerRawFindings,
         }),
@@ -738,7 +738,7 @@ describe('runFindingManagerForStep across rounds: churn that never reaches fixpo
         reviewerStepName: 'arch-review',
         reportName: 'arch-review.md',
       },
-      protocol: STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+      protocol: PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
       reportContent: String(sameRoundRawFindings[0]!.rawExcerpt),
       rawFindings: sameRoundRawFindings,
     });

@@ -350,7 +350,7 @@ describe('finding manager filesystem error propagation', () => {
       writeFileSync(sourcePath, 'export const value = 2;\n');
       return findingManagerTaskResponse(instruction as string, {
         rawDecisions: [{
-          rawFindingId: 'run-1:reviewers:1:review:raw-1',
+          rawFindingId: 'run-1:reviewers:1:review:review.md:raw-1',
           decision: 'new',
           findingId: '',
           anchorRelevance: 'not_applicable',
@@ -418,7 +418,7 @@ describe('finding manager filesystem error propagation', () => {
     expect(ledger.reviewerAnomalies).toEqual([
       expect.objectContaining({
         kind: 'quote-mismatch',
-        sourceRawFindingIds: ['run-1:reviewers:1:review:raw-1'],
+        sourceRawFindingIds: ['run-1:reviewers:1:review:review.md:raw-1'],
       }),
     ]);
   });
@@ -594,7 +594,7 @@ describe('finding manager filesystem error propagation', () => {
 
     await expect(run).resolves.toMatchObject({ status: 'updated' });
     const ledger = ledgerStore.loadLedger();
-    const rawFindingId = 'run-1:reviewers:1:review:raw-bind-existing';
+    const rawFindingId = 'run-1:reviewers:1:review:review.md:raw-bind-existing';
     expect(ledger.rawFindings.filter((raw) => raw.rawFindingId === rawFindingId)).toHaveLength(1);
     expect(ledger.rawCanonicalSnapshots.filter(
       (snapshot) => snapshot.rawFindingId === rawFindingId,
@@ -674,7 +674,7 @@ describe('finding manager filesystem error propagation', () => {
 
     await expect(run).resolves.toMatchObject({ status: 'updated' });
     const ledger = ledgerStore.loadLedger();
-    const rawFindingId = 'run-1:reviewers:1:review:raw-quote-mismatch';
+    const rawFindingId = 'run-1:reviewers:1:review:review.md:raw-quote-mismatch';
     expect(ledger.rawFindings.filter((raw) => raw.rawFindingId === rawFindingId)).toHaveLength(1);
     expect(ledger.rawCanonicalSnapshots.filter(
       (snapshot) => snapshot.rawFindingId === rawFindingId,

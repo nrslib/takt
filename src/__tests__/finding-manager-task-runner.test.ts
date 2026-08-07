@@ -24,7 +24,7 @@ import { parseFindingManagerValidationReport } from '../core/workflow/findings/s
 import type { FindingManagerValidationReport } from '../core/workflow/findings/store.js';
 import {
   createFindingReviewPublication,
-  STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+  PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
 } from '../core/workflow/findings/review-publication.js';
 import {
   bindReviewerReportExcerpt,
@@ -171,7 +171,7 @@ function reviewPublication(
       reviewerStepName: 'reviewer',
       reportName: 'reviewer.md',
     },
-    protocol: STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+    protocol: PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
     reportContent,
     rawFindings,
   });
@@ -357,7 +357,7 @@ describe('main manager bounded task runner', () => {
   it('does not bind a local raw id to a namespaced suffix without source proof', () => {
     const finding = {
       ...ledgerFinding(1),
-      rawFindingIds: ['run:reviewers:1:reviewer:raw-1'],
+      rawFindingIds: ['run:reviewers:1:reviewer:reviewer.md:raw-1'],
     };
     const publication = reviewPublication(
       'A local raw-1 observation',
@@ -419,7 +419,7 @@ describe('main manager bounded task runner', () => {
         targetFindingIds: [],
       },
     }]);
-    const namespacedRawId = 'run:reviewers:1:reviewer:raw-1';
+    const namespacedRawId = 'run:reviewers:1:reviewer:reviewer.md:raw-1';
     const ledgerRaw = rawFinding(1, {
       rawFindingId: namespacedRawId,
       sourceBinding: bindReviewerReportExcerpt(

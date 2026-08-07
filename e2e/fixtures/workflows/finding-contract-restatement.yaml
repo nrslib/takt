@@ -1,5 +1,11 @@
 name: e2e-finding-contract-restatement
 description: Verify one-round reviewer anomaly restatement promotion
+# resume は bootstrap の CLI --provider mock を引き継がない。レビュアーと manager に
+# 加えて、正規化係（既定解決＝ワークフロー階層）も mock へ落とすために workflow
+# 既定を明示する。ここが抜けると正規化係だけ実プロバイダへ出ていく。
+workflow_config:
+  provider: mock
+  model: mock-model
 instructions:
   findings-manager: Reconcile Finding Contract claims without inventing changes.
 report_formats:

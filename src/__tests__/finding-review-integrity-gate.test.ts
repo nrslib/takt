@@ -29,7 +29,12 @@ vi.mock('../agents/runner.js', () => ({
 vi.mock('../infra/providers/index.js', () => ({
   getProvider: vi.fn((provider: string) => ({
     supportsStructuredOutput: provider !== 'cursor',
+    // 正規化係は隔離 structured 実行で走る。実 provider（claude）と同じ能力にする。
+    supportsIsolatedStructuredExecution: provider !== 'cursor',
     keepsAllowedToolWithoutEdit: () => false,
+    setupIsolatedStructured: () => ({
+      call: async () => normalizeFindingIntakeMock(),
+    }),
   })),
 }));
 
@@ -57,11 +62,14 @@ vi.mock('../core/workflow/findings/contract-intake.js', async (importOriginal) =
 
 import { WorkflowEngine } from './helpers/workflow-engine.js';
 import type { WorkflowConfig } from '../core/models/index.js';
+import type { AgentResponse } from '../core/models/types.js';
 import { runAgent } from '../agents/runner.js';
 import { makeRule, makeStep } from './test-helpers.js';
 import { createTestFindingLedgerStore } from './helpers/finding-storage.js';
 import { reviewerRawExtractionFixture } from './helpers/finding-lifecycle-fixture.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
+import { stopBudgetRoundsCompleted } from '../core/workflow/findings/stop-budget.js';
+import { isOutstandingReviewerAnomaly } from '../core/workflow/findings/reviewer-anomalies.js';
 
 function createTestTmpDir(): string {
   const dir = mkdtempSync(join(tmpdir(), 'takt-review-integrity-'));
@@ -98,19 +106,29 @@ const HALLUCINATED_RAW = reviewerRawExtractionFixture({
   rawExcerpt: 'Review report body.',
 });
 
+/**
+ * 正規化係（隔離 structured 実行）の応答。レビュアーは markdown しか書かないので、
+ * 幻覚 raw finding はこの抽出結果として現れる。
+ */
+function normalizeFindingIntakeMock(): AgentResponse {
+  return {
+    persona: 'finding-intake-normalizer',
+    status: 'done',
+    content: '',
+    structuredOutput: { rawFindings: [HALLUCINATED_RAW] },
+    timestamp: new Date('2026-06-13T00:00:01.500Z'),
+  };
+}
+
 function mockReviewerEmitsHallucination(): void {
   vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
     options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
-    const schemaText = options?.outputSchema ? JSON.stringify(options.outputSchema) : '';
-    if (schemaText.includes('"rawFindings"')) {
-      const isPublication = schemaText.includes('"reportContent"');
+    // FC レポートを書く役（レビュアー / final gate の supervisor）は markdown 本文を返す。
+    if (persona === 'reviewer' || persona === 'supervisor') {
       return {
         persona,
         status: 'done',
-        content: isPublication ? '' : 'Review report body.',
-        structuredOutput: isPublication
-          ? { reportContent: 'Review report body.', rawFindings: [HALLUCINATED_RAW] }
-          : { rawFindings: [HALLUCINATED_RAW] },
+        content: 'Review report body.',
         timestamp: new Date('2026-06-13T00:00:01.000Z'),
       };
     }
@@ -195,14 +213,21 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
     expect(abortReason).toContain('reviewer anomaly');
 
     // 台帳: product finding 0、未昇格 anomaly 1。
-    const ledger = loadRootLedger(cwd, config.name) as {
-      findings: unknown[];
-      reviewerAnomalies?: Array<{ kind: string; promotedFindingId?: string }>;
-    };
+    const ledger = loadRootLedger(cwd, config.name);
     expect(ledger.findings).toHaveLength(0);
-    expect(ledger.reviewerAnomalies?.filter((a) => a.promotedFindingId === undefined)).toHaveLength(1);
-    expect(ledger.reviewerAnomalies?.[0]?.kind).toBe('quote-mismatch');
-  });
+    // 非 intake anomaly は slot 内の再レビューで1回だけ差し戻される。前の episode は
+    // その publication で取り下げとして決着し、同じ主張の再観測が新しい episode に
+    // なる — 未決着はつねに1件。未決着の判定は本番の定義（isOutstandingReviewerAnomaly）
+    // をそのまま使う。条件を書き下すと本番の定義が変わってもテストが追随しない。
+    const outstanding = (ledger.reviewerAnomalies ?? []).filter(isOutstandingReviewerAnomaly);
+    expect(outstanding).toHaveLength(1);
+    // 生配列の先頭ではなく、絞り込んだ未決着の1件で kind を固定する。先頭は決着済みの
+    // 古い episode になり得る。
+    expect(outstanding[0]?.kind).toBe('quote-mismatch');
+  // engine を実走させる。slot のラウンドを予算から外したことで実際のレビュー
+  // ラウンドが走るようになり、既定の 15s では 4 shard 同時実行に耐えない。
+  // 実測（単独実行）: 4.8-6.9s。4 shard 同時実行の劣化ぶんを見て 60s を取る。
+  }, 60_000);
 
   it('fail-closed: returnValue 終端（return: ...）で完了しようとしても、未昇格 anomaly が残る限り completion gate が拒否して abort する（codex 検証2巡目#1: gate を迂回する完了経路を塞ぐ）', async () => {
     mockReviewerEmitsHallucination();
@@ -241,7 +266,10 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
     expect(result.status).toBe('aborted');
     expect(result.returnValue).toBeUndefined();
     expect(abortReason).toContain('reviewer anomaly');
-  });
+  // engine を実走させる。slot のラウンドを予算から外したことで実際のレビュー
+  // ラウンドが走るようになり、既定の 15s では 4 shard 同時実行に耐えない。
+  // 実測（単独実行）: 4.8-6.9s。4 shard 同時実行の劣化ぶんを見て 60s を取る。
+  }, 60_000);
 
   it('merge-readiness child の need_replan は親の replan → implement → reviewers へ進み write_tests を通らない', async () => {
     mockReviewerEmitsHallucination();
@@ -321,7 +349,10 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
     const personas = vi.mocked(runAgent).mock.calls.map(([persona]) => persona);
     expect(personas).toEqual(expect.arrayContaining(['planner', 'coder', 'reviewer-after-replan']));
     expect(personas).not.toContain('test-writer');
-  });
+  // engine を実走させる。slot のラウンドを予算から外したことで実際のレビュー
+  // ラウンドが走るようになり、既定の 15s では 4 shard 同時実行に耐えない。
+  // 実測（単独実行）: 4.8-6.9s。4 shard 同時実行の劣化ぶんを見て 60s を取る。
+  }, 60_000);
 
   it('review_budget 枯渇後は replan → implement → reviewers へ進み、write_tests を再実行せず loop monitor で有限停止する', async () => {
     mockReviewerEmitsHallucination();
@@ -396,9 +427,9 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
     expect(stepNames).not.toContain('test-writer');
 
     // 初回だけで諦めず再レビューし、その後も再計画した実装をレビューしている。
-    const reviewerCalls = vi.mocked(runAgent).mock.calls.filter(([, , options]) => (
-      options?.outputSchema && JSON.stringify(options.outputSchema).includes('"rawFindings"')
-    ));
+    const reviewerCalls = vi.mocked(runAgent).mock.calls.filter(
+      ([persona]) => persona === 'reviewer',
+    );
     expect(reviewerCalls.length).toBeGreaterThan(2);
 
     // 台帳: 予算を使い切り、anomaly は監査に残る（消えない）。
@@ -440,7 +471,9 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
       expect(publications.every(({ publicationId }) => /^[0-9a-f]{64}$/u.test(publicationId)))
         .toBe(true);
     }
-  }, 30_000);
+  // slot のラウンドを予算から外したことで、予算枯渇までに実際のレビューラウンドが
+  // 走るようになり実行時間が伸びた（39s 実測）。既定の 15s では足りない。
+  }, 60_000);
 
   it('final-gate supervisor の単一Finding Contract報告を1回だけ取り込み、raw findingを重複保存しない', async () => {
     mockReviewerEmitsHallucination();
@@ -473,18 +506,34 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
     });
     await engine.run();
 
-    expect(ingestFindingContractResultsMock).toHaveBeenCalledOnce();
-    const reviewerCalls = vi.mocked(runAgent).mock.calls.filter(([, , options]) => (
-      options?.outputSchema && JSON.stringify(options.outputSchema).includes('"rawFindings"')
-    ));
-    expect(reviewerCalls).toHaveLength(2);
-    const publicationCalls = reviewerCalls.filter(([, , options]) => (
-      JSON.stringify(options?.outputSchema).includes('"reportContent"')
-    ));
-    expect(publicationCalls).toHaveLength(1);
+    // レビュー本編で1回、非 intake anomaly の差し戻し（slot の再レビュー）で1回。
+    expect(ingestFindingContractResultsMock).toHaveBeenCalledTimes(2);
+    // ただし予算ラウンドは1つだけ。slot のパスは適用済み marker 集合には入るが
+    // （二相コミットと冪等性がこの集合に依存する）、review_budget / stop_budget の
+    // カウンタは印付き marker を数えない。ここが2になると1ステップで予算を
+    // 焼き切り、再レビューの機会が残らないまま need_replan へ固定される。
+    const budgetLedger = loadRootLedger(cwd, config.name) as {
+      stopBudget?: { roundMarkers: string[] };
+      reviewIntegrity?: { roundMarkers: string[] };
+    };
+    expect(budgetLedger.stopBudget?.roundMarkers).toHaveLength(2);
+    expect(stopBudgetRoundsCompleted(budgetLedger as never)).toBe(1);
+    expect(budgetLedger.reviewIntegrity?.roundMarkers).toHaveLength(1);
+    // 1本道: supervisor は各呼び出しで Phase 1 と Phase 2 の2回だけ呼ばれ、
+    // どちらにも rawFindings の出力スキーマは載らない。
+    const supervisorCalls = vi.mocked(runAgent).mock.calls.filter(
+      ([persona]) => persona === 'supervisor',
+    );
+    expect(supervisorCalls).toHaveLength(4);
+    expect(supervisorCalls.every(([, , options]) => options?.outputSchema === undefined)).toBe(true);
 
+    // 1 publication につき raw は1件。slot の再レビューは別 publication なので
+    // 別の raw finding id になる（同じ ID に潰れると再観測が黙って捨てられる）。
     const rawFindings = loadRootLedger(cwd, config.name).rawFindings;
-    expect(rawFindings).toHaveLength(1);
+    expect(rawFindings).toHaveLength(2);
     expect(new Set(rawFindings.map((finding) => finding.rawFindingId)).size).toBe(rawFindings.length);
-  });
+  // engine を実走させる。slot のラウンドを予算から外したことで実際のレビュー
+  // ラウンドが走るようになり、既定の 15s では 4 shard 同時実行に耐えない。
+  // 実測（単独実行）: 4.8-6.9s。4 shard 同時実行の劣化ぶんを見て 60s を取る。
+  }, 60_000);
 });

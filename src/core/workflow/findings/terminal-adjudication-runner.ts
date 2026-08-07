@@ -49,6 +49,7 @@ import { issueFindingScopeBindings } from './finding-scope-binding.js';
 import type { ReviewScopeProofSnapshot } from './snapshot.js';
 import { buildFindingTerminalAdjudicationStep } from './adjudication-step.js';
 import { composeFindingAdjudicationInstruction } from './adjudication-instruction.js';
+import { stopBudgetRoundsCompleted } from './stop-budget.js';
 
 function terminalStep(input: RunFindingManagerForStepInput): AgentWorkflowStep {
   return buildFindingTerminalAdjudicationStep({
@@ -421,7 +422,11 @@ export async function runTerminalAdjudication(input: {
   scopeIdentity: string;
   reviewScopeSnapshot: ReviewScopeProofSnapshot;
 }): Promise<{ hadCandidate: boolean; settled: boolean }> {
-  const currentRound = (input.runInput.ledgerStore.loadLedger().stopBudget?.roundMarkers.length ?? 0) + 1;
+  // 刻印側（conflict-claim-landing / manager-utils）と同じ定義を使う。
+  // roundMarkers を直読みすると、予算計上外のラウンド（言い直し slot のパス）まで
+  // 数えて currentRound が先へ飛び、firstObservedRound >= currentRound の
+  // 同一ラウンド保護が効かなくなる（着地直後の暫定 finding が即 dismiss 候補になる）。
+  const currentRound = stopBudgetRoundsCompleted(input.runInput.ledgerStore.loadLedger()) + 1;
   await input.runInput.ledgerStore.updateLedger((ledger) => {
     let providerCalls = ledger.findingManagerProviderCalls;
     const interruptedAttemptIds = new Set<string>();

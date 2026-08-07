@@ -17,7 +17,6 @@ import type {
 import type { FindingManagerAuthority } from '../../models/finding-types.js';
 import type { OptionsBuilder } from '../engine/OptionsBuilder.js';
 import type { StepExecutor } from '../engine/StepExecutor.js';
-import type { FindingContractInstructionContext } from '../instruction/instruction-context.js';
 import { isDelegatedWorkflowStep } from '../step-kind.js';
 import { hasFindingContractFormat } from './finding-contract-format.js';
 import {
@@ -85,6 +84,8 @@ export interface FindingContractIntakeInput {
   priorStepResponseText?: string;
   managerAuthority: FindingManagerAuthority;
   reviewPublicationDir?: string;
+  /** stop budget / review-integrity のラウンド計上対象か（manager-contracts.ts 参照）。 */
+  budgetAccounting?: 'round' | 'excluded';
   refreshFindingsState: () => void;
   emitEvent: (event: string, ...args: unknown[]) => void;
 }
@@ -117,6 +118,7 @@ export async function ingestFindingContractResults(
     priorStepResponseText: input.priorStepResponseText,
     managerAuthority: input.managerAuthority,
     reviewPublicationDir: input.reviewPublicationDir,
+    ...(input.budgetAccounting === undefined ? {} : { budgetAccounting: input.budgetAccounting }),
   });
   if (result.status === 'updated') {
     input.refreshFindingsState();
@@ -129,36 +131,14 @@ export async function ingestFindingContractResults(
   return result;
 }
 
-function assertReviewerStructuredOutputContext(
-  context: FindingContractInstructionContext | undefined,
-): asserts context is FindingContractInstructionContext & {
-  reviewer: Extract<NonNullable<FindingContractInstructionContext['reviewer']>, { mode: 'structured' }>;
-} {
-  if (
-    context?.reviewer?.mode !== 'structured'
-    || context.reviewer.reviewScopeSnapshotId.length === 0
-  ) {
-    throw new Error('Finding contract reviewer context requires raw findings structured output and reviewScopeSnapshotId');
-  }
-}
-
 /**
- * finding_contract のステップに raw findings 構造化出力を強制する。ステップが
- * 既に structuredOutput を持つ場合は併用できないため設定エラーとして拒否する
- * （findings-manager の raw findings 契約と、ステップ独自の構造化出力契約は
- * 同時に満たせない）。
+ * FC レビュアーは markdown レポートしか書かないため、ステップ側の
+ * `structured_output` と競合する契約はもう存在しない。ただし独自の構造化出力を
+ * 持つステップは正規化係が読む「1本のレポート」を持たないので、取り込み対象に
+ * なった時点で設定エラーとして止める。
  */
-export function withFindingContractStructuredOutput(
-  step: AgentWorkflowStep,
-  context: FindingContractInstructionContext | undefined,
-): AgentWorkflowStep {
-  assertReviewerStructuredOutputContext(context);
-  const structuredOutput = context.reviewer.rawFindingsStructuredOutput;
+export function assertFindingContractReviewerStep(step: AgentWorkflowStep): void {
   if (step.structuredOutput) {
-    throw new Error(`Step "${step.name}" cannot combine finding_contract raw findings with structured_output`);
+    throw new Error(`Step "${step.name}" cannot combine finding_contract review reports with structured_output`);
   }
-  return {
-    ...step,
-    structuredOutput,
-  };
 }

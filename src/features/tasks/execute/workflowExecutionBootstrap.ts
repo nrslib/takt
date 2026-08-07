@@ -3,8 +3,9 @@ import { join } from 'node:path';
 import { CapabilityAwareStructuredCaller } from '../../../agents/structured-caller.js';
 import type { WorkflowConfig } from '../../../core/models/index.js';
 import type {
-  FindingContractRuntimeConfig,
+  ProviderEscalationTarget,
   ProviderLadderConfig,
+  ProviderRoutingEntry,
   ResolvedObservabilityConfig,
   TagRoutingConflictPolicy,
 } from '../../../core/models/config-types.js';
@@ -115,10 +116,11 @@ export interface WorkflowExecutionBootstrap {
   personaProviders: WorkflowExecutionOptions['personaProviders'];
   providerRouting: WorkflowExecutionOptions['providerRouting'];
   providerLadders: ProviderLadderConfig | undefined;
+  providerEscalation: ProviderEscalationTarget | undefined;
+  intakeNormalizerProvider: ProviderRoutingEntry | undefined;
   providerRoutingTagConflictPolicy: TagRoutingConflictPolicy;
   providerOptions: WorkflowExecutionOptions['providerOptions'];
   effectiveWorkflowConfig: WorkflowConfig;
-  findingContractConfig?: FindingContractRuntimeConfig;
   autoStrategyOverride: WorkflowExecutionOptions['autoStrategy'];
   onEffectiveAutoRoutingReached: () => void;
   warnIfAutoStrategyUnused: () => void;
@@ -435,7 +437,6 @@ export async function createWorkflowExecutionBootstrap(
     'telemetry',
     'observability',
     'autoRouting',
-    'findingContract',
   ]);
   const traceReportMode = globalConfig.logging?.trace === true ? 'full' : 'redacted';
   const allowSensitiveData = traceReportMode === 'full';
@@ -699,10 +700,11 @@ export async function createWorkflowExecutionBootstrap(
     personaProviders: effectivePersonaProviders,
     providerRouting: effectiveProviderRouting,
     providerLadders: effectiveProviderLadders,
+    providerEscalation: providerEnvironment.escalation,
+    intakeNormalizerProvider: providerEnvironment.internalAgents?.intakeNormalizer,
     providerRoutingTagConflictPolicy,
     providerOptions: effectiveProviderOptions,
     effectiveWorkflowConfig,
-    findingContractConfig: globalConfig.findingContract,
     autoStrategyOverride,
     onEffectiveAutoRoutingReached,
     warnIfAutoStrategyUnused,

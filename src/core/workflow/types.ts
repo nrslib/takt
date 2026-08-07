@@ -20,10 +20,11 @@ import type { FindingManagerAuthority } from '../models/finding-types.js';
 import type {
   AutoRoutingConfig,
   AutoRoutingStrategy,
-  FindingContractRuntimeConfig,
   PersonaProviderEntry,
+  ProviderEscalationTarget,
   ProviderLadderConfig,
   ProviderRoutingConfig,
+  ProviderRoutingEntry,
   ResolvedObservabilityConfig,
   TagRoutingConflictPolicy,
 } from '../models/config-types.js';
@@ -119,6 +120,11 @@ export interface StepProviderInfo {
   modelSource?: ProviderResolutionSource;
   providerOptions?: StepProviderOptions;
   providerOptionsSources?: Readonly<Record<string, ProviderResolutionSource>>;
+  /**
+   * `escalate` target of the runtime.yaml profile this step resolved to. Present only when a
+   * profile-backed layer supplied the provider; consumers treat its presence as the opt-in.
+   */
+  escalation?: ProviderEscalationTarget;
   autoRoutingDecision?: {
     candidateName: string;
     routingTier: 'high' | 'medium' | 'low';
@@ -486,8 +492,6 @@ export interface WorkflowEngineOptions {
   selectorGitCommandRunner?: SelectorGitCommandRunner;
   /** Resolved automatic provider/model routing configuration */
   autoRouting?: AutoRoutingConfig;
-  /** Opt-in reviewer report extraction for effective Finding Contract workflows. */
-  findingContractConfig?: FindingContractRuntimeConfig;
   /** Run-scoped strategy override for automatic provider/model routing. */
   autoStrategyOverride?: AutoRoutingStrategy;
   onEffectiveAutoRoutingReached?: () => void;
@@ -506,6 +510,14 @@ export interface WorkflowEngineOptions {
   personaProviders?: Record<string, PersonaProviderEntry>;
   /** Provider routing by raw persona key, workflow step tag, and workflow step name */
   providerRouting?: ProviderRoutingConfig;
+  /** `escalate` target of the runtime.yaml profile behind the engine-level provider/model. */
+  providerEscalation?: ProviderEscalationTarget;
+  /**
+   * runtime.yaml `provider.targets.internal_agents['intake-normalizer']`. Highest-priority
+   * override for the Finding Contract plain-text intake normalizer; unset means the normalizer
+   * resolves through the reviewer's `escalate` target and then the ordinary defaults.
+   */
+  intakeNormalizerProvider?: ProviderRoutingEntry;
   /**
    * Ordered provider ladders (issue #1208) resolved from runtime.yaml `ladder` assignments. The
    * promotion seam advances a matched target-less `{at:N}` to a later stage of the governing

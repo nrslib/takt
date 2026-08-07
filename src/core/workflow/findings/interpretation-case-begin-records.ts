@@ -16,6 +16,7 @@ import type {
   InterpretationCase,
 } from './types.js';
 import { planInterpretationOriginAttachments } from './interpretation-origin-attachment.js';
+import { stopBudgetRoundsCompleted } from './stop-budget.js';
 import {
   createInterpretationOriginBindings,
   originSnapshotDigestsByRawFindingId,
@@ -132,7 +133,9 @@ export function appendStartedInterpretationAttempt(input: {
   const originPlans = planInterpretationOriginAttachments({
     ledger: input.ledger,
     freshItems: input.items,
-    currentRound: (input.ledger.stopBudget?.roundMarkers.length ?? 0) + 1,
+    // 刻印側と同じ定義（予算計上外のラウンドは数えない）。直読みすると
+    // 同一ラウンド保護が効かなくなる。
+    currentRound: stopBudgetRoundsCompleted(input.ledger) + 1,
   });
   const originDigestsByRawFindingId = originSnapshotDigestsByRawFindingId(originPlans);
   const withRawSnapshots = appendRawFindingsWithCanonicalSnapshots({

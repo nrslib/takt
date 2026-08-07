@@ -51,6 +51,16 @@ export interface RunFindingManagerForStepInput {
   priorStepResponseText?: string;
   managerAuthority: FindingManagerAuthority;
   reviewPublicationDir?: string;
+  /**
+   * このラウンドを stop budget / review-integrity 予算のラウンドとして数えるか。
+   *
+   * `round`（既定）はレビューステップ本体の取り込み。`excluded` は言い直し slot の
+   * 各パス — slot はレビューラウンドの内側で回る差し戻しであり、停止保証は
+   * 提示予算（presentationLimit）とパス上限が既に与えている。ここを数えると
+   * 1ステップで予算を焼き切り、再レビューの機会が残らないまま need_replan へ
+   * 固定される（実測）。
+   */
+  budgetAccounting?: 'round' | 'excluded';
 }
 
 export type FindingManagerRunResult =
@@ -58,10 +68,13 @@ export type FindingManagerRunResult =
       status: 'updated';
       providerInfo: StepProviderInfo;
       ledger: FindingLedger;
+      /** このラウンドの round marker（stop budget / review-integrity 予算の共有キー）。 */
+      roundMarker: string;
     }
   | {
       status: 'unchanged';
       ledger: FindingLedger;
+      roundMarker: string;
     };
 
 export interface InterpretationCaseRunResult {

@@ -37,6 +37,7 @@ import { WorkflowCallRunner } from '../core/workflow/engine/WorkflowCallRunner.j
 import {
   applyWorkflowCallOverridesToPersonaProviders,
   applyWorkflowCallOverridesToProviderRouting,
+  resolveWorkflowCallChildProviderModel,
 } from '../core/workflow/workflow-call-provider-context.js';
 import {
   applyDefaultMocks,
@@ -276,6 +277,52 @@ describe('WorkflowEngine workflow_call integration', () => {
         },
       },
     });
+  });
+
+  it('workflow_call keeps the escalate target while the provider stays profile-derived', () => {
+    const escalation = { profile: 'strong', provider: 'codex' as const, model: 'gpt-strong' };
+
+    // model だけの上書きでは provider の出所は profile のままなので格上げ先を保つ。
+    expect(applyWorkflowCallOverridesToProviderRouting({
+      steps: { review: { provider: 'mock', model: 'child-step-model', escalation } },
+    }, { model: 'call-model' })).toEqual({
+      personas: undefined,
+      tags: undefined,
+      steps: { review: { provider: 'mock', model: 'call-model', escalation } },
+    });
+
+    // provider を上書きした entry はもうその profile ではないので格上げ先を落とす。
+    expect(applyWorkflowCallOverridesToProviderRouting({
+      steps: { review: { provider: 'mock', model: 'child-step-model', escalation } },
+    }, { provider: 'claude' })).toEqual({
+      personas: undefined,
+      tags: undefined,
+      steps: { review: { provider: 'claude' } },
+    });
+  });
+
+  it('workflow_call child defaults keep the escalate target unless the provider source changes', () => {
+    const escalation = { profile: 'strong', provider: 'codex' as const, model: 'gpt-strong' };
+    const parentContext = {
+      provider: 'mock' as const,
+      providerSource: 'runtime-v1' as const,
+      model: 'weak-model',
+      modelSource: 'runtime-v1' as const,
+      providerEscalation: escalation,
+    };
+    const childWorkflow = { name: 'child' } as WorkflowConfig;
+
+    expect(resolveWorkflowCallChildProviderModel(childWorkflow, undefined, parentContext)
+      .providerEscalation).toEqual(escalation);
+    expect(resolveWorkflowCallChildProviderModel(childWorkflow, { model: 'call-model' }, parentContext)
+      .providerEscalation).toEqual(escalation);
+    expect(resolveWorkflowCallChildProviderModel(childWorkflow, { provider: 'claude' }, parentContext)
+      .providerEscalation).toBeUndefined();
+    expect(resolveWorkflowCallChildProviderModel(
+      { name: 'child', provider: 'claude' } as WorkflowConfig,
+      undefined,
+      parentContext,
+    ).providerEscalation).toBeUndefined();
   });
 
   it('workflow_call concrete provider and model override wins over child and inherited auto_routing defaults', async () => {

@@ -52,7 +52,6 @@ import {
 } from '../core/workflow/phase-runner.js';
 import type { WorkflowStep } from '../core/models/types.js';
 import type { StreamEvent } from '../shared/types/provider.js';
-import { createFindingReviewPublicationStructuredOutput } from '../core/workflow/findings/review-publication-structured-output.js';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
@@ -74,10 +73,18 @@ function createStep(fileName: string): WorkflowStep {
   };
 }
 
-function createFindingReviewStep(fileName: string): WorkflowStep {
+function createStructuredOutputStep(fileName: string): WorkflowStep {
   return {
     ...createStep(fileName),
-    structuredOutput: createFindingReviewPublicationStructuredOutput(),
+    structuredOutput: {
+      schemaRef: 'test.report-summary',
+      schema: {
+        type: 'object',
+        properties: { summary: { type: 'string' } },
+        required: ['summary'],
+        additionalProperties: false,
+      },
+    },
   };
 }
 
@@ -265,7 +272,7 @@ describe('runReportPhase retry with new session', () => {
 
   });
 
-  it('plain-text-normalized Finding Contract Phase 2 は本文テキストだけを要求する', async () => {
+  it('Finding Contract Phase 2 は本文テキストだけを要求する', async () => {
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
     const step = createStep('freeform-review.md');
     const ctx = createContext(reportDir);
@@ -276,7 +283,6 @@ describe('runReportPhase retry with new session', () => {
       hasWaivedFindings: false,
       hasDismissedFindings: false,
       reviewer: {
-        mode: 'plain_text_normalized',
         reviewScopeSnapshotId: '1'.repeat(64),
       },
     });
@@ -287,13 +293,7 @@ describe('runReportPhase retry with new session', () => {
       timestamp: new Date('2026-02-11T00:00:02Z'),
     }]);
 
-    await generateReportPhase(step, 1, ctx, {
-      reviewerOutputStrategy: {
-        kind: 'plain_text_normalized',
-        reportGeneration: 'plain_text',
-        intake: 'isolated_normalizer',
-      },
-    });
+    await generateReportPhase(step, 1, ctx, { findingContractReviewer: true });
 
     const prompt = vi.mocked(runAgent).mock.calls[0]?.[1] as string;
     expect(prompt).toContain('Respond with the report content directly as text.');
@@ -898,9 +898,9 @@ describe('runReportPhase retry with new session', () => {
     expect(fallbackOptions.resolvedModel).toBeUndefined();
   });
 
-  it('Finding Contract Phase 2 は全試行へpublication schemaを渡し、異なるcapabilityのfallback実行identityを保持する', async () => {
+  it('Finding Contract Phase 2 は本文のみを要求し、異なるcapabilityのfallback実行identityを保持する', async () => {
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
-    const step = createFindingReviewStep('finding-review.md');
+    const step = createStep('finding-review.md');
     const ctx = createContext(
       reportDir,
       'Phase 1 review draft',
@@ -912,7 +912,7 @@ describe('runReportPhase retry with new session', () => {
       },
     );
     const sessionUpdates: Array<{ key: string; sessionId: string | undefined }> = [];
-    ctx.buildFallbackReportOptions = (reportStep, _failedOptions, overrides) => ({
+    ctx.buildFallbackReportOptions = (_reportStep, _failedOptions, overrides) => ({
       cwd: reportDir,
       permissionMode: 'readonly',
       resolvedProvider: 'codex',
@@ -921,7 +921,6 @@ describe('runReportPhase retry with new session', () => {
       sessionId: undefined,
       allowedTools: overrides.allowedTools,
       maxTurns: overrides.maxTurns,
-      outputSchema: reportStep.structuredOutput?.schema,
     });
     ctx.updatePersonaSession = (key, sessionId) => {
       sessionUpdates.push({ key, sessionId });
@@ -933,8 +932,6 @@ describe('runReportPhase retry with new session', () => {
       hasWaivedFindings: false,
       hasDismissedFindings: false,
       reviewer: {
-        mode: 'structured',
-        rawFindingsStructuredOutput: step.structuredOutput!,
         reviewScopeSnapshotId: '1'.repeat(64),
       },
     });
@@ -949,25 +946,21 @@ describe('runReportPhase retry with new session', () => {
       {
         persona: 'reviewer',
         status: 'error',
-        content: 'retry unavailable',
-        error: 'retry unavailable',
+        content: 'primary unavailable',
+        error: 'primary unavailable',
         timestamp: new Date('2026-02-11T00:01:21Z'),
       },
       {
         persona: 'reviewer',
         status: 'done',
-        content: '',
-        structuredOutput: {
-          reportContent: '# Review\nNo findings.',
-          rawFindings: [],
-        },
+        content: '# Review\nNo findings.',
         sessionId: 'fallback-review-session',
         timestamp: new Date('2026-02-11T00:01:22Z'),
       },
     ]);
 
     const result = await generateReportPhase(step, 1, ctx, {
-      reviewerOutputStrategy: { kind: 'structured', reportGeneration: 'structured', intake: 'reviewer_structured' },
+      findingContractReviewer: true,
     });
 
     expect('reports' in result).toBe(true);
@@ -986,7 +979,6 @@ describe('runReportPhase retry with new session', () => {
           resolvedProvider: 'codex',
           resolvedModel: 'fallback-capability-model',
           resolvedProviderOptions: { codex: { reasoningEffort: 'high' } },
-          outputSchema: step.structuredOutput?.schema,
         },
       },
     });
@@ -1000,102 +992,16 @@ describe('runReportPhase retry with new session', () => {
     const prompts = vi.mocked(runAgent).mock.calls.map(([, instruction]) => instruction);
     expect(prompts).toHaveLength(3);
     for (const prompt of prompts) {
-      expect(prompt).toContain('"reportContent"');
-      expect(prompt).toContain('First write the review report. Then extract each structured entry');
-      expect(prompt).not.toContain('Respond with the report content directly as text.');
-      expect(prompt).not.toContain('Respond with only the report content');
+      expect(prompt).toContain('Respond with the report content directly as text.');
+      expect(prompt).not.toContain('combined Finding Contract publication schema');
+      expect(prompt).toContain('Write an ordinary Markdown review report');
     }
-  });
-
-  it('structured Finding Contract Phase 2 の日本語promptもpublication objectだけを要求する', async () => {
-    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
-    const step = createFindingReviewStep('finding-review-ja.md');
-    const ctx = createContext(reportDir);
-    ctx.language = 'ja';
-    ctx.buildFindingContractInstructionContext = () => ({
-      ledgerSummary: '{"findings":[]}',
-      reportLedgerSummary: '{"findingIds":[]}',
-      hasOpenFindings: false,
-      hasWaivedFindings: false,
-      hasDismissedFindings: false,
-      reviewer: {
-        mode: 'structured',
-        rawFindingsStructuredOutput: step.structuredOutput!,
-        reviewScopeSnapshotId: '1'.repeat(64),
-      },
-    });
-    queueRunAgentResponses([{
-      persona: 'reviewer',
-      status: 'done',
-      content: '',
-      structuredOutput: {
-        reportContent: '# レビュー\n指摘なし。',
-        rawFindings: [],
-      },
-      timestamp: new Date('2026-02-11T00:01:22Z'),
-    }]);
-
-    await generateReportPhase(step, 1, ctx, {
-      reviewerOutputStrategy: { kind: 'structured', reportGeneration: 'structured', intake: 'reviewer_structured' },
-    });
-
-    const prompt = vi.mocked(runAgent).mock.calls[0]?.[1] as string;
-    expect(prompt).toContain('結合 publication schema に一致する構造化オブジェクト');
-    expect(prompt).not.toContain('レポート内容をテキストとして直接回答してください');
-    expect(prompt).not.toContain('レポート本文のみを回答してください');
-  });
-
-  it('Finding Contract Phase 2 は非native structured応答の完全JSONからreportContentだけを抽出する', async () => {
-    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
-    const step = createFindingReviewStep('finding-review-json.md');
-    const ctx = createContext(reportDir);
-    const wireJson = JSON.stringify({
-      reportContent: '# Canonical report',
-      rawFindings: [],
-    });
-    queueRunAgentResponses([{
-      persona: 'reviewer',
-      status: 'done',
-      content: wireJson,
-      timestamp: new Date('2026-02-11T00:01:23Z'),
-      sessionId: 'opencode-review-session',
-    }]);
-
-    const result = await generateReportPhase(step, 1, ctx, {
-      reviewerOutputStrategy: { kind: 'structured', reportGeneration: 'structured', intake: 'reviewer_structured' },
-    });
-
-    expect('reports' in result).toBe(true);
-    if (!('reports' in result)) {
-      throw new Error('Expected generated reports');
-    }
-    expect(result.reports[0]?.reportContent).toBe('# Canonical report');
-    expect(result.reports[0]?.response.content).toBe(wireJson);
-  });
-
-  it('Finding Contract Phase 2 はreportContent欠落時にPhase 1本文へ縮退せずfail-loudする', async () => {
-    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
-    const step = createFindingReviewStep('finding-review-missing-content.md');
-    const ctx = createContext(reportDir, 'This Phase 1 text must not become the report.');
-    queueRunAgentResponses([{
-      persona: 'reviewer',
-      status: 'done',
-      content: JSON.stringify({ rawFindings: [] }),
-      timestamp: new Date('2026-02-11T00:01:24Z'),
-    }]);
-
-    await expect(generateReportPhase(step, 1, ctx, {
-      reviewerOutputStrategy: { kind: 'structured', reportGeneration: 'structured', intake: 'reviewer_structured' },
-    })).rejects.toThrow(
-      'Finding review publication reportContent is missing',
-    );
-    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);
   });
 
   it('should accept the provider-native StructuredOutput tool when phase 2 requested structured output', async () => {
     // Given: OpenCode はネイティブ構造化出力を StructuredOutput 疑似ツールとして流す
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
-    const step = createFindingReviewStep('finding-review-structured-tool.md');
+    const step = createStructuredOutputStep('report-structured-tool.md');
     const ctx = createContext(reportDir, 'Phase 1 review draft', 'structured-tool-session');
     queueRunAgentAttempts([{
       streamEvents: [
@@ -1111,20 +1017,15 @@ describe('runReportPhase retry with new session', () => {
       response: {
         persona: 'reviewer',
         status: 'done',
-        content: '',
-        structuredOutput: {
-          reportContent: '# Review\nNo findings.',
-          rawFindings: [],
-        },
+        content: '# Review\nNo findings.',
+        structuredOutput: { summary: 'No findings.' },
         sessionId: 'structured-tool-session',
         timestamp: new Date('2026-02-11T00:02:00Z'),
       },
     }]);
 
     // When
-    const result = await generateReportPhase(step, 1, ctx, {
-      reviewerOutputStrategy: { kind: 'structured', reportGeneration: 'structured', intake: 'reviewer_structured' },
-    });
+    const result = await generateReportPhase(step, 1, ctx, {});
 
     // Then
     if (!('reports' in result)) {
@@ -1137,7 +1038,7 @@ describe('runReportPhase retry with new session', () => {
   it('should still reject a real tool call when phase 2 requested structured output', async () => {
     // Given
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
-    const step = createFindingReviewStep('finding-review-real-tool.md');
+    const step = createStructuredOutputStep('report-real-tool.md');
     const ctx = createContext(reportDir, undefined, 'structured-real-tool-session');
     queueRunAgentAttempts([{
       streamEvents: [{
@@ -1147,16 +1048,15 @@ describe('runReportPhase retry with new session', () => {
       response: {
         persona: 'reviewer',
         status: 'done',
-        content: '',
-        structuredOutput: { reportContent: '# Review', rawFindings: [] },
+        content: '# Review',
+        structuredOutput: { summary: 'ok' },
         timestamp: new Date('2026-02-11T00:02:01Z'),
       },
     }]);
 
     // When
-    const error = await generateReportPhase(step, 1, ctx, {
-      reviewerOutputStrategy: { kind: 'structured', reportGeneration: 'structured', intake: 'reviewer_structured' },
-    }).catch((caught: unknown) => caught);
+    const error = await generateReportPhase(step, 1, ctx, {})
+      .catch((caught: unknown) => caught);
 
     // Then
     expect(error).toBeInstanceOf(ReportPhaseGenerationError);

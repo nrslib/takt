@@ -32,6 +32,20 @@ export interface FindingManagerSubStepResult {
   subStep: AgentWorkflowStep;
   publication: CanonicalFindingReviewPublication;
   relationClarification?: ReviewerRelationClarification;
+  /**
+   * この publication が後続レビューとして何を成立させたか（既定 `verdict`）。
+   *
+   * - `verdict`: workflow のレビューステップ本体。判定ラダーを通るので verdict を伴う
+   * - `review`: 差し戻し slot のフルレビュー。完全なレビューだが判定ラダーを持たないので
+   *   verdict は無い
+   * - `none`: 言い直しだけの差し戻し呼び出し。レビューとして成立していない
+   *
+   * 後続レビュー成立による取り下げ（withdrawReviewerAnomaliesSupersededByReview）が
+   * これを根拠にする。verdict 由来の anomaly（verdict-claims-mismatch）は verdict を
+   * 伴う publication でしか決着しない — verdict の無い再レビューで取り下げると、
+   * 「非承認判定 + claim ゼロ件」を検出するゲートそのものが再レビューで洗い流される。
+   */
+  reviewEvidence?: 'verdict' | 'review' | 'none';
 }
 
 function recordReviewerOutputOverflow(input: {
@@ -130,6 +144,7 @@ export function intakeReviewerOutputs(input: {
       stepIteration: input.stepIteration,
       runId: input.runId,
       reviewerStepName: subResult.subStep.name,
+      reportName: subResult.publication.reportName,
       reviewerPersonaKey: (subResult.subStep as { persona?: string }).persona ?? subResult.subStep.name,
       reviewReport: subResult.publication.reportContent,
       ledger: input.previousLedger,

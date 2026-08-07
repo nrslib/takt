@@ -2,7 +2,6 @@ import type { AgentResponse, WorkflowStep } from '../models/types.js';
 import { resolveAgentErrorMessage } from '../models/response.js';
 import type { RunAgentOptions } from '../../agents/runner.js';
 import { executeAgent } from '../../agents/agent-usecases.js';
-import { parseStructuredOutputObject } from '../../agents/structured-caller/shared.js';
 import { createLogger } from '../../shared/utils/index.js';
 import {
   PROVIDER_NATIVE_STRUCTURED_OUTPUT_TOOL_NAME,
@@ -14,13 +13,6 @@ import { ReportInstructionBuilder } from './instruction/ReportInstructionBuilder
 import { getReportFiles } from './output-contract-files.js';
 import type { PhasePromptParts, StepProviderInfo } from './types.js';
 import type { ReportPhaseRunnerContext } from './phase-runner.js';
-import type {
-  FindingContractReviewerOutputStrategy,
-} from './instruction/instruction-context.js';
-import {
-  FINDING_REVIEW_PUBLICATION_SCHEMA_REF,
-  findingReviewPublicationReportContent,
-} from './findings/review-publication-structured-output.js';
 import { runWithPhaseSpan } from './observability/workflowSpans.js';
 import { writeReportFile } from './report-writer.js';
 
@@ -57,7 +49,8 @@ export type ReportContentValidator = (
 ) => ReportContentValidationResult;
 
 export interface ReportPhaseGenerationOptions {
-  readonly reviewerOutputStrategy?: FindingContractReviewerOutputStrategy;
+  /** FC レビュアーの Phase 2 か。指示文へレビュアー契約を出すかどうかを決める。 */
+  readonly findingContractReviewer?: boolean;
   readonly validateReportContent?: ReportContentValidator;
   readonly retryMode?: 'standard' | 'single-attempt';
   readonly nextPhaseSequence?: () => number;
@@ -124,31 +117,6 @@ export async function generateReportPhase(
   return result ?? { reports };
 }
 
-function buildReportFindingContractContext(
-  step: WorkflowStep,
-  ctx: ReportPhaseRunnerContext,
-  reviewerOutputStrategy: FindingContractReviewerOutputStrategy | undefined,
-) {
-  const context = ctx.buildFindingContractInstructionContext?.(
-    step,
-    reviewerOutputStrategy,
-  );
-  if (
-    reviewerOutputStrategy?.reportGeneration !== 'structured'
-    || context?.reviewer?.mode !== 'structured'
-    || step.structuredOutput === undefined
-  ) {
-    return context;
-  }
-  return {
-    ...context,
-    reviewer: {
-      ...context.reviewer,
-      rawFindingsStructuredOutput: step.structuredOutput,
-    },
-  };
-}
-
 async function executeReportPhase(
   step: WorkflowStep,
   stepIteration: number,
@@ -156,7 +124,7 @@ async function executeReportPhase(
   options: ReportPhaseGenerationOptions,
   acceptReport: (report: GeneratedReport) => void,
 ): Promise<ReportPhaseBlockedResult | ReportPhaseRateLimitedResult | void> {
-  const reviewerOutputStrategy = options.reviewerOutputStrategy;
+  const findingContractReviewer = options.findingContractReviewer === true;
   const primarySessionKey = ctx.resolveSessionKey(step);
   let currentSessionId = ctx.getSessionId(primarySessionKey);
   const hasLastResponse = ctx.lastResponse != null && ctx.lastResponse.trim().length > 0;
@@ -197,11 +165,7 @@ async function executeReportPhase(
       language: ctx.language,
       targetFile: fileName,
       lastResponse: currentSessionId ? undefined : ctx.lastResponse,
-      findingContract: buildReportFindingContractContext(
-        step,
-        ctx,
-        reviewerOutputStrategy,
-      ),
+      findingContract: ctx.buildFindingContractInstructionContext?.(step, findingContractReviewer),
     }).build();
     let firstAttemptOptions: RunAgentOptions;
     if (currentSessionId === undefined) {
@@ -270,11 +234,7 @@ async function executeReportPhase(
       language: ctx.language,
       targetFile: fileName,
       lastResponse: ctx.lastResponse,
-      findingContract: buildReportFindingContractContext(
-        step,
-        ctx,
-        reviewerOutputStrategy,
-      ),
+      findingContract: ctx.buildFindingContractInstructionContext?.(step, findingContractReviewer),
     }).build();
     const retryInstruction = firstAttempt.failureReason === 'invalid_output'
       ? [
@@ -694,7 +654,7 @@ async function runSingleReportAttempt(
     };
   }
 
-  const finalReportContent = resolveReportContent(step, response);
+  const finalReportContent = response.content.trim();
   if (classifiedFailure !== undefined) {
     ctx.onPhaseComplete?.(
       step,
@@ -770,8 +730,8 @@ function classifyRetryableFailure(
       ),
     };
   }
-  const finalReportContent = resolveReportContent(step, response);
-  if (finalReportContent.trim().length === 0) {
+  const finalReportContent = response.content.trim();
+  if (finalReportContent.length === 0) {
     return {
       failureReason: 'empty_output',
       errorMessage: buildRetryableFailureEventError(
@@ -791,22 +751,6 @@ function classifyRetryableFailure(
     };
   }
   return undefined;
-}
-
-function resolveReportContent(
-  step: WorkflowStep,
-  response: AgentResponse,
-): string {
-  if (step.structuredOutput?.schemaRef !== FINDING_REVIEW_PUBLICATION_SCHEMA_REF) {
-    return response.content.trim();
-  }
-  const structuredOutput = response.structuredOutput
-    ?? parseStructuredOutputObject(response.content);
-  const reportContent = findingReviewPublicationReportContent(structuredOutput);
-  if (reportContent === undefined) {
-    throw new Error('Finding review publication reportContent is missing');
-  }
-  return reportContent;
 }
 
 function buildReportAttemptIdentity(

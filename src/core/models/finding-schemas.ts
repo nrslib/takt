@@ -176,18 +176,6 @@ export const FindingContractAdjudicatorConfigRawSchema = z.object({
   model: nonEmptyString.optional(),
 }).strict();
 
-/**
- * 言い直し予算の最終1回を担う格上げレビュアー。省略可 — 省略時は escalation を
- * 発火させず、最終1回も元レビュアーへの restatement になる。
- */
-export const FindingContractEscalationReviewerConfigRawSchema = z.object({
-  persona: nonEmptyString,
-  instruction: nonEmptyString.optional(),
-  output_contract: nonEmptyString.optional(),
-  provider: z.enum(PROVIDER_TYPES).optional(),
-  model: nonEmptyString.optional(),
-}).strict();
-
 /** 有限停止予算。両方省略可 — max_rounds は省略時に既定値 40、max_minutes は省略時は時間上限なし（opt-in）。 */
 export const FindingContractStopBudgetRawSchema = z.object({
   max_rounds: z.number().int().positive().optional(),
@@ -202,7 +190,6 @@ export const FindingContractReviewBudgetRawSchema = z.object({
 export const FindingContractConfigRawSchema = z.object({
   manager: FindingContractManagerConfigRawSchema,
   adjudicator: FindingContractAdjudicatorConfigRawSchema.optional(),
-  escalation_reviewer: FindingContractEscalationReviewerConfigRawSchema.optional(),
   stop_budget: FindingContractStopBudgetRawSchema.optional(),
   review_budget: FindingContractReviewBudgetRawSchema.optional(),
 }).strict();
@@ -745,13 +732,15 @@ export const ReviewerAnomalyEntrySchema = z.object({
       kind: z.enum([
         'restatement_exhausted_claim_bearing',
         'protocol_noise_rejected_after_presentation',
+        'undemandable_claim_atom',
       ]),
       workflowOutcome: z.enum([
         'review_integrity_unresolved',
         'non_claim_observation_rejected',
       ]),
       decidedAt: FindingObservationSchema,
-      terminalPublicationId: Sha256Schema,
+      // 提示を伴わない終端（undemandable_claim_atom）は根拠 publication を持たない。
+      terminalPublicationId: Sha256Schema.optional(),
       reason: nonEmptyString,
     }).strict().optional(),
   }).strict().optional(),
@@ -772,15 +761,18 @@ export const ReviewerAnomalyEntrySchema = z.object({
     }).strict(),
     z.object({
       kind: z.literal('withdrawn_by_subsequent_review'),
+      // 1レビュアー枠が同一ラウンドに複数 publication を登録し得る
+      // (格上げ再レビューは owner ごとに1呼び出し、reviewer キーは固定)ため、
+      // 一意性は reviewer 単独ではなく (reviewer, publicationId) の組で見る。
       supersedingPublications: z.array(z.object({
         reviewer: nonEmptyString,
         publicationId: Sha256Schema,
       }).strict())
         .min(1)
         .superRefine((publications, ctx) => validateBinarySortedUniqueSet(
-          publications.map(({ reviewer }) => reviewer),
+          publications.map(({ reviewer, publicationId }) => `${reviewer}\u0000${publicationId}`),
           ctx,
-          'superseding publication reviewer',
+          'superseding publication',
         )),
       decidedAt: FindingObservationSchema,
     }).strict(),
@@ -797,7 +789,31 @@ export const ReviewerAnomalyEntrySchema = z.object({
     ctx.addIssue({ code: 'custom', path: ['intakeContract', 'terminalDisposition'], message: 'protocol-noise cannot become review_integrity_unresolved' });
   }
   const terminal = value.intakeContract?.terminalDisposition;
-  if (terminal !== undefined) {
+  // 言い直しで要求できる claim 本文が無い観測は、claim-bearing/protocol-noise の
+  // どちらに分類されていても提示では決着しない。observationClass 由来の対応表から
+  // 外れる唯一の終端で、根拠 publication も持たない。
+  if (terminal !== undefined && terminal.kind === 'undemandable_claim_atom') {
+    const expectedOutcome = value.intakeContract!.observationClass === 'claim-bearing'
+      ? 'review_integrity_unresolved'
+      : 'non_claim_observation_rejected';
+    if (
+      terminal.workflowOutcome !== expectedOutcome
+      || terminal.terminalPublicationId !== undefined
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['intakeContract', 'terminalDisposition'],
+        message: 'undemandable_claim_atom must follow observationClass without a terminal publication',
+      });
+    }
+  } else if (terminal !== undefined) {
+    if (terminal.terminalPublicationId === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['intakeContract', 'terminalDisposition'],
+        message: 'presentation-based terminal disposition requires terminalPublicationId',
+      });
+    }
     const expectedKind = value.intakeContract!.observationClass === 'claim-bearing'
       ? 'restatement_exhausted_claim_bearing'
       : 'protocol_noise_rejected_after_presentation';

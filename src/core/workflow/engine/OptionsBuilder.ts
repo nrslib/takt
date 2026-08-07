@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import type { WorkflowStep, WorkflowState, Language, WorkflowResumePointEntry, McpServerConfig } from '../../models/types.js';
+import type { AgentWorkflowStep, WorkflowStep, WorkflowState, Language, WorkflowResumePointEntry, McpServerConfig } from '../../models/types.js';
 import type { StepProviderOptions } from '../../models/workflow-types.js';
 import type { TaskReviewScope } from '../review-scope.js';
 import type { RunAgentOptions } from '../../../agents/runner.js';
@@ -44,8 +44,8 @@ import { resolveDeterministicAutoRoutingProviderInfo, toAutoRoutingStepMetadata 
 import { buildPhase1WorkflowMeta } from './workflow-meta.js';
 import type {
   FindingContractInstructionContext,
-  FindingContractReviewerOutputStrategy,
 } from '../instruction/instruction-context.js';
+import type { FindingRestatementSlotOwnerContexts } from '../findings/restatement-slot-runner.js';
 
 type ResolvedRunAgentOptions = RunAgentOptions & {
   resolvedProviderOptions?: StepProviderOptions;
@@ -84,16 +84,15 @@ export class OptionsBuilder {
     private readonly getCurrentWorkflowStack: () => WorkflowResumePointEntry[] | undefined = () => undefined,
     private readonly getFindingContractInstructionContext?: (
       step: WorkflowStep,
-      reviewerOutputStrategy: FindingContractReviewerOutputStrategy | undefined,
+      isReviewer: boolean,
       reviewScopeSnapshotId?: string,
       findingContractFreezeKey?: string,
     ) => FindingContractInstructionContext | undefined,
     private readonly getTask?: () => string,
-    private readonly getFindingEscalationInstructionContext?: (input: {
-      ownerStepNames: readonly string[];
+    private readonly getFindingRestatementSlotContexts?: (input: {
+      ownerReviewerSteps: readonly AgentWorkflowStep[];
       reviewScopeSnapshotId: string;
-      findingContractFreezeKey: string;
-    }) => FindingContractInstructionContext | undefined,
+    }) => ReadonlyMap<string, FindingRestatementSlotOwnerContexts>,
     private readonly getReviewScope?: () => TaskReviewScope,
   ) {}
 
@@ -157,6 +156,7 @@ export class OptionsBuilder {
       providerRouting: this.engineOptions.providerRouting,
       tagConflictPolicy: this.engineOptions.providerRoutingTagConflictPolicy,
       personaProviders: this.engineOptions.personaProviders,
+      escalation: this.engineOptions.providerEscalation,
     });
     const providerOptions = this.resolveMergedProviderOptions(step, resolved.provider, runtime);
     const providerOptionsSources = this.resolveProviderOptionsSourcesForStep(step);
@@ -167,6 +167,7 @@ export class OptionsBuilder {
       modelSource: resolved.modelSource,
       providerOptions,
       providerOptionsSources,
+      ...(resolved.escalation !== undefined ? { escalation: resolved.escalation } : {}),
     };
   }
 
@@ -394,28 +395,28 @@ export class OptionsBuilder {
 
   buildFindingContractInstructionContext(
     step: WorkflowStep,
-    reviewerOutputStrategy: FindingContractReviewerOutputStrategy | undefined,
+    isReviewer: boolean,
     reviewScopeSnapshotId?: string,
     findingContractFreezeKey?: string,
   ): FindingContractInstructionContext | undefined {
     return this.getFindingContractInstructionContext?.(
       step,
-      reviewerOutputStrategy,
+      isReviewer,
       reviewScopeSnapshotId,
       findingContractFreezeKey,
     );
   }
 
   /**
-   * escalation slot（提示予算の最終1回）用の reviewer context。escalation reviewer が
-   * 未設定、または今ラウンドに格上げ対象の anomaly が無い場合は undefined。
+   * 言い直し slot の1パス分の owner 別 reviewer context。今のパスで提示する
+   * anomaly が無い owner・フェーズは含まれない。呼ぶたびに台帳と提示回数を
+   * 読み直す。
    */
-  buildFindingEscalationInstructionContext(input: {
-    ownerStepNames: readonly string[];
+  buildFindingRestatementSlotContexts(input: {
+    ownerReviewerSteps: readonly AgentWorkflowStep[];
     reviewScopeSnapshotId: string;
-    findingContractFreezeKey: string;
-  }): FindingContractInstructionContext | undefined {
-    return this.getFindingEscalationInstructionContext?.(input);
+  }): ReadonlyMap<string, FindingRestatementSlotOwnerContexts> {
+    return this.getFindingRestatementSlotContexts?.(input) ?? new Map();
   }
 
   private resolveSupportedMaxTurns(
@@ -636,11 +637,8 @@ export class OptionsBuilder {
       ),
       structuredCaller: this.requireStructuredCaller(),
       resolveStepProviderModel: (step) => this.resolveStepProviderModel(step, runtime),
-      buildFindingContractInstructionContext: (step, reviewerOutputStrategy) =>
-        this.buildFindingContractInstructionContext(
-          step,
-          reviewerOutputStrategy,
-        ),
+      buildFindingContractInstructionContext: (step, isReviewer) =>
+        this.buildFindingContractInstructionContext(step, isReviewer),
       getSessionId: (persona: string) => state.personaSessions.get(persona),
       resolveSessionKey: (step) => {
         const providerInfo = this.resolveStepProviderModel(step, runtime);

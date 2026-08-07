@@ -47,6 +47,7 @@ import {
 import { captureFindingLifecycleHead } from './lifecycle-mutation.js';
 import { classifyConflictTarget } from './conflict-target.js';
 import { independentProvisionalIdentity } from './independent-provisional-identity.js';
+import { stopBudgetRoundsCompleted } from './stop-budget.js';
 import type { ProvisionalFindingSpec } from './reconciler.js';
 import type {
   DeterministicSameProof,
@@ -1319,7 +1320,9 @@ function materializeDirectCaseRecords(input: {
   const originPlans = planInterpretationOriginAttachments({
     ledger: input.ledger,
     freshItems: items,
-    currentRound: (input.ledger.stopBudget?.roundMarkers.length ?? 0) + 1,
+    // 刻印側と同じ定義（予算計上外のラウンドは数えない）。直読みすると
+    // 同一ラウンド保護が効かなくなる。
+    currentRound: stopBudgetRoundsCompleted(input.ledger) + 1,
   });
   const originDigestsByRawFindingId = originSnapshotDigestsByRawFindingId(originPlans);
   const withRawSnapshots = appendRawFindingsWithCanonicalSnapshots({

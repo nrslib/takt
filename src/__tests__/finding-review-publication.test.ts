@@ -17,7 +17,6 @@ import {
   persistPendingFindingReviewNormalization,
   PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
   publishFindingReviewPublication,
-  STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
   type FindingReviewPublicationIdentity,
 } from '../core/workflow/findings/review-publication.js';
 import { bindReviewerReportExcerpt } from '../core/workflow/findings/raw-canonicalization.js';
@@ -67,7 +66,7 @@ describe('Finding review publication', () => {
     const reportContent = '## Result: REJECT\n\nOrdinary review prose.';
     const publication = createFindingReviewPublication({
       identity: identity(),
-      protocol: STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+      protocol: PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
       reportContent,
       rawFindings: [{ rawExcerpt: 'Ordinary review prose.' }],
     });
@@ -79,7 +78,7 @@ describe('Finding review publication', () => {
     expect(loadFindingReviewPublication(
       reportDir,
       identity(),
-      STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+      PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
     )?.publication.reportContent).toBe(reportContent);
   });
 
@@ -273,7 +272,7 @@ describe('Finding review publication', () => {
     }];
     const publication = createFindingReviewPublication({
       identity: identity(),
-      protocol: STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+      protocol: PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
       reportContent: 'Nested issue',
       rawFindings: inputRawFindings,
     });
@@ -305,7 +304,7 @@ describe('Finding review publication', () => {
     const reportDir = createReportDirectory();
     const publication = createFindingReviewPublication({
       identity: identity(),
-      protocol: STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+      protocol: PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
       reportContent: 'Loaded issue',
       rawFindings: [{
         rawExcerpt: 'Loaded issue',
@@ -320,7 +319,7 @@ describe('Finding review publication', () => {
     const loaded = loadFindingReviewPublication(
       reportDir,
       identity(),
-      STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+      PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
     )!.publication;
 
     expect(Object.isFrozen(loaded)).toBe(true);
@@ -339,7 +338,7 @@ describe('Finding review publication', () => {
     const reportContent = '# Review\n\n設計上の問題です。\n';
     const publication = createFindingReviewPublication({
       identity: identity(),
-      protocol: STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+      protocol: PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
       reportContent,
       rawFindings: [{ rawExcerpt: '設計上の問題です。' }],
     });
@@ -366,7 +365,7 @@ describe('Finding review publication', () => {
     expect(loadFindingReviewPublication(
       reportDir,
       identity(),
-      STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+      PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
     )).toEqual(persisted);
     expect(replayed.relationClarification?.flaggedRawFindingIds).toEqual(['raw-1']);
     expect(readFileSync(join(reportDir, 'architecture-review.md'), 'utf8'))
@@ -380,7 +379,7 @@ describe('Finding review publication', () => {
       {
         publication: createFindingReviewPublication({
           identity: identity(),
-          protocol: STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+          protocol: PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
           reportContent: 'first issue',
           rawFindings: [{ rawExcerpt: 'first issue' }],
         }),
@@ -393,7 +392,7 @@ describe('Finding review publication', () => {
       {
         publication: createFindingReviewPublication({
           identity: identity(),
-          protocol: STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+          protocol: PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
           reportContent: 'second issue',
           rawFindings: [{ rawExcerpt: 'second issue' }],
         }),
@@ -405,7 +404,7 @@ describe('Finding review publication', () => {
   it('binds excerpts to exact UTF-8 report bytes before persistence', () => {
     expect(() => createFindingReviewPublication({
       identity: identity(),
-      protocol: STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+      protocol: PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
       reportContent: '実際の指摘',
       rawFindings: [{ rawExcerpt: '存在しない指摘' }],
     })).toThrow(/exactly once/);

@@ -4,6 +4,7 @@ import { createLogger } from '../../../shared/utils/index.js';
 import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
 import type {
   AgentResponse,
+  AgentWorkflowStep,
   FindingContractConfig,
   WorkflowConfig,
   WorkflowMaxSteps,
@@ -39,7 +40,6 @@ import type { WorkflowCallChildEngine } from '../types.js';
 import type { StructuredOutputNormalizerRegistry } from './structured-output-normalizer.js';
 import { runQualityGates } from '../quality-gates/qualityGateRunner.js';
 import type { FindingLedgerStore } from '../findings/store.js';
-import { createRawFindingsStructuredOutput } from '../findings/manager-runner.js';
 import {
   ledgerHasDismissedFindings,
   ledgerHasOpenFindings,
@@ -61,14 +61,17 @@ import {
   resolveRestatementPresentationPhase,
   type RestatementPresentationPhase,
 } from '../findings/restatement-presentation-phase.js';
+import type { FindingRestatementSlotOwnerContexts } from '../findings/restatement-slot-runner.js';
+import {
+  isOutstandingReviewerAnomaly,
+  selectRestatementSourceClaimAtom,
+} from '../findings/reviewer-anomalies.js';
 import type { FindingTarget } from '../../models/finding-types.js';
 import { FINDING_ESCALATION_REVIEWER_ROUTING_KEY } from '../../models/finding-types.js';
 import type {
   FindingContractInstructionContext,
-  FindingContractReviewerOutputStrategy,
 } from '../instruction/instruction-context.js';
 import { requireWorkflowResumeStackSnapshot } from '../run/resume-point.js';
-import { resolveFindingIntakeNormalizeConfig } from '../findings/intake-normalize-policy.js';
 import {
   createReviewReportDiscoveryContext,
   resolveWorkflowStepReportNamesWithDiagnostics,
@@ -359,7 +362,7 @@ function collectOutstandingIntakeAnomalies(input: {
   presentationCounts: ReadonlyMap<string, number>;
   ownerStepNames: ReadonlySet<string>;
   phase: RestatementPresentationPhase;
-  escalationReviewerConfigured: boolean;
+  escalationEnabled: boolean;
 }): OutstandingIntakeAnomaly[] {
   return (input.ledger.reviewerAnomalies ?? [])
     .filter(hasIntakeContract)
@@ -376,7 +379,7 @@ function collectOutstandingIntakeAnomalies(input: {
       resolveRestatementPresentationPhase({
         presentedCount,
         presentationLimit: anomaly.intakeContract.presentationLimit,
-        escalationReviewerConfigured: input.escalationReviewerConfigured,
+        escalationEnabled: input.escalationEnabled,
       }) === input.phase
     ))
     .sort((left, right) => (
@@ -385,6 +388,37 @@ function collectOutstandingIntakeAnomalies(input: {
       || compareBinaryStrings(left.anomaly.id, right.anomaly.id)
     ));
 }
+
+/**
+ * そのレビュアーが観測者に含まれる未決着の非 intake anomaly があるか。
+ *
+ * 非 intake anomaly（protocol-anomaly / verdict-claims-mismatch / 報告拒否由来）は
+ * 言い直し予算に乗らず、決着条件は「観測者全員の後続完全レビュー成立」による
+ * 取り下げ（withdrawReviewerAnomaliesSupersededByReview）だけ。したがって slot は
+ * そのレビュアーの完全な再レビューを1回発行する必要がある。
+ */
+function hasOutstandingNonIntakeAnomalyFor(
+  ledger: LoadedFindingLedger,
+  reviewerStepName: string,
+): boolean {
+  return (ledger.reviewerAnomalies ?? []).some((anomaly) => (
+    isOutstandingReviewerAnomaly(anomaly)
+    && anomaly.intakeContract === undefined
+    // verdict 由来の anomaly は verdict を伴う publication でしか決着しない。
+    // slot のフルレビューは判定ラダーを持たないので verdict を出せず、発行しても
+    // 決着させられない呼び出しになる（ワークフローのレビューステップ本体を待つ）。
+    && anomaly.kind !== 'verdict-claims-mismatch'
+    && anomaly.reviewers.includes(reviewerStepName)
+  ));
+}
+
+/**
+ * 1呼び出しに載せる言い直し request の上限。
+ *
+ * 投与量効果の実測（263試行）: バックログ10件以下で回答率86%、10件超で44%。
+ * 上限を超える分は同じラウンドの次のパスへ回る（提示予算の計上契約は不変）。
+ */
+const MAX_RESTATEMENT_REQUESTS_PER_CALL = 10;
 
 function buildRestatementRequests(input: {
   ledger: LoadedFindingLedger;
@@ -399,13 +433,19 @@ function buildRestatementRequests(input: {
     if (raw === undefined) {
       return [];
     }
+    // 照合ゲートが要求する claim 本文を選べない観測は、どう答えても受理されない。
+    // request を作らずに提示予算を温存する（終端は後続レビュー成立による取り下げ）。
+    const claimAtom = selectRestatementSourceClaimAtom(anomaly, raw);
+    if (claimAtom === undefined) {
+      return [];
+    }
     const requestWithoutId = {
       anomalyId: anomaly.id,
       reviewer: input.reviewer,
       presentationOrdinal: presentedCount + 1,
       reviewScopeSnapshotId: input.reviewScopeSnapshotId,
       sourceExcerptDigest: raw.sourceBinding.excerptDigest,
-      claimedExcerpt: boundedRestatementClaimExcerpt(anomaly, raw),
+      claimedExcerpt: claimAtom.slice(0, RAW_FINDING_LIMITS.maxDescriptionChars),
       targetPaths: targetPathsForRestatementRequest(raw.target),
       missingRequirements: anomaly.intakeContract.missingRequirements,
       expectedRelation: 'new' as const,
@@ -419,27 +459,16 @@ function buildRestatementRequests(input: {
   });
 }
 
-/** owner batch と escalation batch の合計を 1 step あたりの raw finding 上限内に収める。 */
+/**
+ * 1呼び出しに載せられる request 数。投与量上限と、1 step あたりの raw finding
+ * 上限（owner batch と escalation batch の合計）の小さいほうを採る。
+ */
 function remainingRestatementSlots(allocatedRequestCount: number): number {
   return Math.min(
+    MAX_RESTATEMENT_REQUESTS_PER_CALL,
     RAW_FINDING_LIMITS.maxRawFindingsPerReviewer,
     Math.max(0, RAW_FINDING_LIMITS.maxRawFindingsPerStep - allocatedRequestCount),
   );
-}
-
-function boundedRestatementClaimExcerpt(
-  anomaly: LoadedReviewerAnomaly,
-  raw: NonNullable<LoadedFindingLedger['rawFindings']>[number],
-): string {
-  // フォールバックは「非 blank な最初の候補」を選ぶ。`??` だけだと空白のみの
-  // claimedExcerpt が後続の description / rawExcerpt を遮って title まで飛ぶ。
-  // 全候補が blank な観測（protocol-noise 相当）でも request が空文字にならない
-  // よう、最後は必ず非空の anomaly.title へフォールバックする。title は
-  // createReviewerAnomalySpec が常に非空で採番する。
-  const excerpt = [anomaly.claimedExcerpt, raw.description, raw.rawExcerpt]
-    .find((candidate) => candidate !== undefined && candidate !== null && candidate.trim().length > 0)
-    ?? anomaly.title;
-  return excerpt.slice(0, RAW_FINDING_LIMITS.maxDescriptionChars);
 }
 
 export function createWorkflowEngineServices(params: WorkflowEngineSetupParams): WorkflowEngineServices {
@@ -447,21 +476,22 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     (event, ...args) => params.emitEvent(event, ...args),
     params.getCurrentWorkflowStack,
   );
-  const intakeNormalize = resolveFindingIntakeNormalizeConfig(
-    params.options.findingContractConfig?.intakeNormalize,
-    params.findingContract,
-  );
-  const escalationReviewerConfigured = params.findingContract?.escalationReviewer !== undefined;
   let frozenFindingContractInput: {
     contextKey: string;
     ledger: ReturnType<FindingLedgerStore['loadLedger']>;
     presentationCounts: Map<string, number>;
     contexts: Map<string, FindingContractInstructionContext>;
-    allocatedRequestCount: number;
   } | undefined;
+  /**
+   * レビューラウンド本編の reviewer context。
+   *
+   * 言い直し request はここへ載せない。言い直しはレビューラウンドへ相乗りさせず、
+   * manager 取り込み後の専用 slot（buildFindingRestatementSlotContexts）が
+   * レビュアーごとの直接呼び出しとして発行する。
+   */
   const buildFindingContractInstructionContext = (
     step: WorkflowStep,
-    strategy: FindingContractReviewerOutputStrategy | undefined,
+    isReviewer: boolean,
     sharedReviewScopeSnapshotId?: string,
     findingContractFreezeKey?: string,
   ): FindingContractInstructionContext | undefined => {
@@ -475,13 +505,12 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     let ledger: ReturnType<FindingLedgerStore['loadLedger']>;
     let presentationCounts: Map<string, number>;
     let frozenContexts: Map<string, FindingContractInstructionContext> | undefined;
-    let allocatedRequestCount = 0;
     if (
       sharedReviewScopeSnapshotId !== undefined
       && findingContractFreezeKey !== undefined
       && frozenFindingContractInput?.contextKey === findingContractFreezeKey
     ) {
-      ({ ledger, presentationCounts, contexts: frozenContexts, allocatedRequestCount } = frozenFindingContractInput);
+      ({ ledger, presentationCounts, contexts: frozenContexts } = frozenFindingContractInput);
     } else {
       ledger = params.findingLedgerStore.loadLedger();
       presentationCounts = collectFindingReviewPresentationCounts(params.getReportDir());
@@ -491,19 +520,18 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
           ledger,
           presentationCounts,
           contexts: new Map(),
-          allocatedRequestCount: 0,
         };
         frozenContexts = frozenFindingContractInput.contexts;
       }
     }
-    if (frozenContexts !== undefined && strategy !== undefined) {
+    if (frozenContexts !== undefined && isReviewer) {
       const frozenContext = frozenContexts.get(step.name);
       if (frozenContext !== undefined) {
         return frozenContext;
       }
     }
     let reviewer: FindingContractInstructionContext['reviewer'];
-    if (strategy !== undefined) {
+    if (isReviewer) {
       const reviewScopeSnapshotId = sharedReviewScopeSnapshotId
         ?? computeReviewScopeSnapshotId(params.getCwd());
       assertFindingReviewPresentationCapacity({
@@ -513,50 +541,22 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
         currentIteration: params.state.iteration,
         stepName: step.name,
       });
-      const restatementRequests = buildRestatementRequests({
-        ledger,
-        entries: collectOutstandingIntakeAnomalies({
-          ledger,
-          presentationCounts,
-          ownerStepNames: new Set([step.name]),
-          phase: 'restatement',
-          escalationReviewerConfigured,
-        }).slice(0, remainingRestatementSlots(allocatedRequestCount)),
-        reviewer: step.name,
+      reviewer = {
         reviewScopeSnapshotId,
-      });
-      const presentationContext = createFindingReviewPresentationContextV2({
-        reviewScopeSnapshotId,
-        restatementRequests,
-      });
-      reviewer = strategy.reportGeneration === 'structured'
-        ? {
-            mode: 'structured',
-            rawFindingsStructuredOutput: createRawFindingsStructuredOutput(),
-            reviewScopeSnapshotId,
-            presentationContext,
-          }
-        : {
-            mode: strategy.kind,
-            reviewScopeSnapshotId,
-            presentationContext,
-          };
-      if (frozenContexts !== undefined && findingContractFreezeKey !== undefined) {
+        presentationContext: createFindingReviewPresentationContextV2({
+          reviewScopeSnapshotId,
+          restatementRequests: [],
+        }),
+      };
+      if (frozenContexts !== undefined) {
         frozenContexts.set(step.name, {
           ledgerSummary: renderFindingLedgerInstructionSummary(ledger),
           reportLedgerSummary: renderFindingLedgerReportSummary(ledger),
           hasOpenFindings: ledgerHasOpenFindings(ledger),
           hasWaivedFindings: ledgerHasWaivedFindings(ledger),
           hasDismissedFindings: ledgerHasDismissedFindings(ledger),
-          ...(reviewer !== undefined ? { reviewer } : {}),
+          reviewer,
         });
-        frozenFindingContractInput = {
-          contextKey: findingContractFreezeKey,
-          ledger,
-          presentationCounts,
-          contexts: frozenContexts,
-          allocatedRequestCount: allocatedRequestCount + restatementRequests.length,
-        };
       }
     }
     const context = {
@@ -571,60 +571,87 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
   };
 
   /**
-   * escalation slot（提示予算の最終1回）用の reviewer context を組み立てる。
+   * slot の1パス分の reviewer context を owner ごと・枠ごとに組む。
    *
-   * owner batch を組んだときに凍結した ledger / presentation counts をそのまま
-   * 使い、owner が使い切った残り枠だけを escalation batch へ割り当てる。
-   * owner publication 永続化後に数え直すと、同じ iteration で owner の
-   * (limit-1) 回目の提示と escalation が二重に走る。
+   * 呼ばれるたびに台帳と提示回数を読み直す。slot は findings-manager の取り込みが
+   * 終わった後に走るため、前パスの結果を次のパスの判定へ反映しなければ同じ
+   * anomaly を何度も同じ内容で提示し続ける。
    *
-   * escalation 対象の anomaly が1件も無い場合は undefined を返す。
+   * owner ごとに persona / policy / knowledge / report 形式が違うため、1 owner =
+   * 1 context = 1 provider call に分ける。対象が無い owner・枠は結果に含めない。
    */
-  const buildFindingEscalationInstructionContext = (input: {
-    ownerStepNames: readonly string[];
+  const buildFindingRestatementSlotContexts = (input: {
+    ownerReviewerSteps: readonly AgentWorkflowStep[];
     reviewScopeSnapshotId: string;
-    findingContractFreezeKey: string;
-  }): FindingContractInstructionContext | undefined => {
-    if (!escalationReviewerConfigured) {
-      return undefined;
+  }): ReadonlyMap<string, FindingRestatementSlotOwnerContexts> => {
+    const contexts = new Map<string, FindingRestatementSlotOwnerContexts>();
+    if (!params.findingContract) {
+      return contexts;
     }
-    if (frozenFindingContractInput?.contextKey !== input.findingContractFreezeKey) {
-      throw new Error(
-        'Finding escalation reviewer context requires the frozen reviewer input of the same review round',
-      );
+    if (!params.findingLedgerStore) {
+      throw new Error('Finding contract is configured but finding ledger store is not available');
     }
-    const { ledger, presentationCounts, allocatedRequestCount } = frozenFindingContractInput;
-    const restatementRequests = buildRestatementRequests({
-      ledger,
-      entries: collectOutstandingIntakeAnomalies({
-        ledger,
-        presentationCounts,
-        ownerStepNames: new Set(input.ownerStepNames),
-        phase: 'escalation',
-        escalationReviewerConfigured,
-      }).slice(0, remainingRestatementSlots(allocatedRequestCount)),
-      reviewer: FINDING_ESCALATION_REVIEWER_ROUTING_KEY,
-      reviewScopeSnapshotId: input.reviewScopeSnapshotId,
-    });
-    if (restatementRequests.length === 0) {
-      return undefined;
-    }
-    return {
+    const ledger = params.findingLedgerStore.loadLedger();
+    const presentationCounts = collectFindingReviewPresentationCounts(params.getReportDir());
+    // 台帳はこの関数で1回だけ読むので、その要約も owner 数 × 枠数ぶん作り直さない。
+    const ledgerFacts = {
       ledgerSummary: renderFindingLedgerInstructionSummary(ledger),
       reportLedgerSummary: renderFindingLedgerReportSummary(ledger),
       hasOpenFindings: ledgerHasOpenFindings(ledger),
       hasWaivedFindings: ledgerHasWaivedFindings(ledger),
       hasDismissedFindings: ledgerHasDismissedFindings(ledger),
+    };
+    const buildContext = (
+      restatementRequests: readonly RestatementRequestV1[],
+    ): FindingContractInstructionContext => ({
+      ...ledgerFacts,
       reviewer: {
-        mode: 'structured',
-        rawFindingsStructuredOutput: createRawFindingsStructuredOutput(),
         reviewScopeSnapshotId: input.reviewScopeSnapshotId,
         presentationContext: createFindingReviewPresentationContextV2({
           reviewScopeSnapshotId: input.reviewScopeSnapshotId,
-          restatementRequests,
+          restatementRequests: [...restatementRequests],
         }),
       },
-    };
+    });
+    let allocatedRequestCount = 0;
+    for (const ownerStep of input.ownerReviewerSteps) {
+      // 格上げ先を持つ owner だけが最終1回を escalation へ譲る。
+      const escalationEnabled = optionsBuilder.resolveStepProviderModel(ownerStep).escalation !== undefined;
+      const requestsFor = (phase: RestatementPresentationPhase): RestatementRequestV1[] => {
+        const requests = buildRestatementRequests({
+          ledger,
+          entries: collectOutstandingIntakeAnomalies({
+            ledger,
+            presentationCounts,
+            ownerStepNames: new Set([ownerStep.name]),
+            phase,
+            escalationEnabled,
+          }).slice(0, remainingRestatementSlots(allocatedRequestCount)),
+          reviewer: phase === 'escalation'
+            ? FINDING_ESCALATION_REVIEWER_ROUTING_KEY
+            : ownerStep.name,
+          reviewScopeSnapshotId: input.reviewScopeSnapshotId,
+        });
+        allocatedRequestCount += requests.length;
+        return requests;
+      };
+      const ownerRequests = requestsFor('restatement');
+      const escalationRequests = escalationEnabled ? requestsFor('escalation') : [];
+      const ownerNeedsFullReview = hasOutstandingNonIntakeAnomalyFor(ledger, ownerStep.name);
+      if (ownerRequests.length === 0 && escalationRequests.length === 0 && !ownerNeedsFullReview) {
+        continue;
+      }
+      contexts.set(ownerStep.name, {
+        ownerNeedsFullReview,
+        ...(ownerRequests.length === 0 && !ownerNeedsFullReview
+          ? {}
+          : { owner: buildContext(ownerRequests) }),
+        ...(escalationRequests.length === 0
+          ? {}
+          : { escalation: buildContext(escalationRequests) }),
+      });
+    }
+    return contexts;
   };
 
   // base の解決は ref 走査を伴うため、ラン境界で一度だけ解決して保持する。
@@ -646,7 +673,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     params.getCurrentWorkflowStack,
     buildFindingContractInstructionContext,
     () => params.task,
-    buildFindingEscalationInstructionContext,
+    buildFindingRestatementSlotContexts,
     getReviewScope,
   );
 
@@ -707,7 +734,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getCurrentWorkflowStack: params.getCurrentWorkflowStack,
     structuredOutputNormalizers: params.options.structuredOutputNormalizers,
     structuredCaller: params.structuredCaller,
-    intakeNormalize,
+    intakeNormalizerProvider: params.options.intakeNormalizerProvider,
     abortSignal: params.options.abortSignal,
     findingContract: params.findingContract,
     findingManagerAuthority: params.findingManagerAuthority,
@@ -788,7 +815,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     refreshFindingsState: params.refreshFindingsState,
     emitEvent: params.emitEvent,
     findingContract: params.findingContract,
-    intakeNormalize,
+    intakeNormalizerProvider: params.options.intakeNormalizerProvider,
     findingManagerAuthority: params.findingManagerAuthority,
     workflowProvider: params.config.provider,
     workflowModel: params.config.model,

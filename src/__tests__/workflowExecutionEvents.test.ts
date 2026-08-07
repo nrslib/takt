@@ -589,7 +589,7 @@ describe('bindWorkflowExecutionEvents', () => {
             severity: 'high',
             title: 'Analytics write should not abort workflow',
             reviewers: ['architecture-reviewer'],
-            rawFindingIds: ['run:reviewers:1:architecture-review:raw-1'],
+            rawFindingIds: ['run:reviewers:1:architecture-review:architecture-review.md:raw-1'],
             firstSeen: { runId: 'run', stepName: 'reviewers', timestamp: '2026-06-13T02:00:00.000Z' },
             lastSeen: { runId: 'run', stepName: 'reviewers', timestamp: '2026-06-13T02:00:00.000Z' },
           },

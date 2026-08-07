@@ -303,34 +303,11 @@ export interface FindingContractAdjudicatorConfig {
 }
 
 /**
- * escalation reviewer の provider routing persona key。ユーザーが設定した
- * persona 名ではなくこの固定キーで routing を解決し、publication identity の
- * reviewer キーもこの値になる（restatement request との識別子はこれだけ）。
+ * 格上げ再レビューの reviewer 識別子。publication identity の reviewer キーであり、
+ * restatement request が owner への言い直しか格上げかを見分ける唯一の判別子。
+ * ユーザー設定ではなくエンジン内部の固定値で、実 step 名としては予約する。
  */
 export const FINDING_ESCALATION_REVIEWER_ROUTING_KEY = 'escalation-reviewer';
-
-/**
- * 言い直し予算の最終1回を元レビュアーではなく格上げレビュアーへ回すための設定。
- * workflow が finding_contract.escalation_reviewer を書いたときだけ解決され、
- * 省略時は最終1回も元レビュアーへの restatement のままになる。
- */
-export interface FindingContractEscalationReviewerConfig {
-  persona: string;
-  personaPath?: string;
-  personaDisplayName?: string;
-  /** 常に 'escalation-reviewer'。persona 名と routing key を混同させない。 */
-  providerRoutingPersonaKey: typeof FINDING_ESCALATION_REVIEWER_ROUTING_KEY;
-  /** 省略時は persona 本体を instruction として使う（adjudicator と同形）。 */
-  instruction?: string;
-  /**
-   * 解決済みの report 形式。省略時は owner reviewer step の report 形式を継承する。
-   * 出力 strategy は owner step によらず常に structured raw findings で、
-   * ここで変わるのは report 本文の形式だけ。
-   */
-  outputContract?: string;
-  provider?: ProviderType;
-  model?: string;
-}
 
 /**
  * 有限停止予算の
@@ -368,8 +345,6 @@ export interface FindingContractConfig {
   manager: FindingContractManagerConfig;
   /** Present when the supervisor persona was resolved for the finding-conflict-adjudication synthetic step. */
   adjudicator?: FindingContractAdjudicatorConfig;
-  /** Present only when the workflow declares finding_contract.escalation_reviewer; see FindingContractEscalationReviewerConfig. */
-  escalationReviewer?: FindingContractEscalationReviewerConfig;
   /** Optional per-workflow override of the bounded stop budget; see FindingContractStopBudgetConfig. */
   stopBudget?: FindingContractStopBudgetConfig;
   /** Optional per-workflow override of the review-integrity re-review budget; see FindingContractReviewBudgetConfig. */
@@ -1565,6 +1540,13 @@ export const REVIEWER_ANOMALY_KINDS = [
    * admission を完了できなかった。file quote の不一致とは区別する。
    */
   'lifecycle-admission-failure',
+  /**
+   * レビュアーが非承認判定を出したのに、その publication が構造化 claim を
+   * 1件も含んでいない。報告本文の主張が台帳へ一切届かないため、判定だけが
+   * 黙って捨てられる。「主張が虚偽」ではなく「主張が機械可読な形で提出されて
+   * いない」という事実だけを記録する。
+   */
+  'verdict-claims-mismatch',
 ] as const;
 export type ReviewerAnomalyKind = typeof REVIEWER_ANOMALY_KINDS[number];
 
@@ -1592,12 +1574,24 @@ export const INTAKE_CONTRACT_CLASSIFICATION_AUTHORITY_ID =
 export interface IntakeContractTerminalDisposition {
   kind:
     | 'restatement_exhausted_claim_bearing'
-    | 'protocol_noise_rejected_after_presentation';
+    | 'protocol_noise_rejected_after_presentation'
+    /**
+     * 言い直しで再現を要求できる claim 本文を、記録された観測から一切選べない。
+     * request を作っても「見せた文をそのまま写しても受理されない」ものにしかならず、
+     * 提示を重ねても決着しない。提示を1回も行わずにその場で終端する唯一の kind。
+     *
+     * workflowOutcome は observationClass に従う — claim-bearing は
+     * `review_integrity_unresolved`（主張はあったのに機械可読な形で残らなかった
+     * 事実を可視的失敗として扱う）、protocol-noise は
+     * `non_claim_observation_rejected`。
+     */
+    | 'undemandable_claim_atom';
   workflowOutcome:
     | 'review_integrity_unresolved'
     | 'non_claim_observation_rejected';
   decidedAt: FindingObservation;
-  terminalPublicationId: string;
+  /** 終端の根拠になった提示 publication。提示を伴わない終端では持たない。 */
+  terminalPublicationId?: string;
   reason: string;
 }
 
@@ -1636,8 +1630,16 @@ export interface ReviewerAnomalyReviewWithdrawalSettlement {
   /**
    * 決着の根拠になった後続レビューの全件。取り下げは「その anomaly の観測者
    * 全員が後続レビューを登録した」ときにだけ成立するため、記録も観測者全員分を
-   * 持つ(reviewer で binary 順ソート済み・重複なし・非空)。監査時に
-   * anomaly.reviewers と突き合わせるだけで根拠の網羅性を検証できる。
+   * 持つ(非空、`(reviewer, publicationId)` で binary 順ソート済み・重複なし)。
+   * 監査時に reviewer 集合を anomaly.reviewers と突き合わせるだけで根拠の
+   * 網羅性を検証できる。
+   *
+   * 1レビュアー枠が同一ラウンドに複数の publication を登録することがある
+   * — 格上げ再レビューは owner ごとに1呼び出しへ分かれるが reviewer キーは
+   * 固定の 'escalation-reviewer' なので、owner が2人いれば同じ reviewer キーで
+   * 2件の publication が成立する。したがって reviewer は重複し得る。重複を
+   * 潰して1件だけ残すと、監査記録がどの publication で決着したのかを
+   * 再構成できなくなる。
    */
   supersedingPublications: readonly {
     /** 後続レビューを登録したレビュアー(= anomaly.reviewers の要素)。 */

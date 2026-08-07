@@ -17,13 +17,19 @@ const ProviderNameSchema = z.enum(PROVIDER_TYPES);
 /** Flat provider-specific options bag (e.g. `{ reasoning_effort: 'high' }`). */
 const ProfileOptionsSchema = z.record(z.string(), z.unknown());
 
-/** A named provider/model/options definition. `extends` inherits from another profile. */
+/**
+ * A named provider/model/options definition. `extends` inherits from another profile.
+ * `escalate` names the profile this one hands work to when its own attempt runs out of
+ * room; the engine derives role-specific escalation behaviour from it, so a workflow never
+ * names a provider or model.
+ */
 const ProfileSchema = z
   .object({
     provider: ProviderNameSchema.optional(),
     model: z.string().min(1).optional(),
     options: ProfileOptionsSchema.optional(),
     extends: z.string().min(1).optional(),
+    escalate: z.string().min(1).optional(),
   })
   .strict();
 

@@ -20,7 +20,6 @@ import { evaluateWhenExpression } from '../../core/workflow/evaluation/when-eval
 import { splitTopLevelClausesOrThrow } from '../../core/models/workflow-condition-expression.js';
 import {
   resolveWorkflowSelector,
-  resolveWorkflowConfigValues,
   type SelectorProviderOverrides,
 } from '../../infra/config/index.js';
 import { resolveAuxiliaryProviderEnvironment } from '../../infra/config/runtime-provider/provider-environment.js';
@@ -82,9 +81,7 @@ function validateWorkflowRuntimeContract(
     // Validate provider/model/personaProviders/providerRouting/autoRouting through the same
     // compiled bundle as execution and preview, so a runtime-v1 environment validates the
     // runtime.yaml `profiles.default` resolution (and a mixed configuration fails fast here too).
-    // findingContract is not a provider setting, so it keeps the plain config resolution.
     const env = resolveAuxiliaryProviderEnvironment(projectDir, workflow);
-    const config = resolveWorkflowConfigValues(projectDir, ['findingContract']);
     validateWorkflowCallContracts(workflow, projectDir, target.lookupCwd ?? projectDir, {
       providerValidationOptions: {
         provider: env.provider,
@@ -105,7 +102,6 @@ function validateWorkflowRuntimeContract(
       providerRouting: env.providerRouting,
       autoRouting: env.autoRouting,
       providerRoutingTagConflictPolicy: env.tagConflictPolicy,
-      findingContractConfig: config.findingContract,
       workflowCallResolver: () => null,
     });
     warnOnMissingProvisionalRouting(report, workflow);

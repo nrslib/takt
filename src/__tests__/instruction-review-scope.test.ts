@@ -270,4 +270,182 @@ describe('review-round-scope partial supplies the scope to reviewers', () => {
       expect(resolved).toContain('- src/core/workflow/review-scope.ts');
     }
   });
+
+  // 追い掛け実行（実装が run 開始前にコミット済み）では自前の `git diff` が空になる。
+  // 一覧を範囲の正だと明示しないと、レビュアーは「機能が一切未実装」と誤断する。
+  const SCOPE_AUTHORITY_PHRASES = {
+    ja: [
+      // 権威は「一覧に載っているもの」に限定する。
+      '一覧に載っているものは、エンジンが base 分岐点から算出した変更対象の正',
+      '対象から外す根拠には使わないでください',
+      '自前の diff が空でも',
+      'run 開始前にコミット済み',
+      // 補完義務のトリガーは総称条件。個別の開示種別を列挙しない
+      // （isBaseBranchHead / notComputed / notRepository がすり抜ける）。
+      '範囲の限定・不足・算出不能を述べている場合',
+      'その記述に従って不足分を自分で補ってください',
+    ],
+    en: [
+      'authoritative: the engine computed those entries from the base divergence point',
+      'grounds for dropping an entry that the list contains',
+      'even when your own diff is empty',
+      'committed before this run started',
+      'states that the range is limited, incomplete, or could not be computed',
+      'follow that statement and make up the shortfall yourself',
+    ],
+  } as const;
+
+  it.each(['en', 'ja'] as const)('declares the listed targets authoritative without forcing a self-run diff to add them (%s)', (lang) => {
+    for (const name of REVIEWER_INSTRUCTIONS) {
+      const instruction = resolveRefToContent(name, undefined, projectDir, 'instructions', {
+        projectDir,
+        lang,
+      });
+      for (const phrase of SCOPE_AUTHORITY_PHRASES[lang]) {
+        expect(instruction, `${name} (${lang}) is missing: ${phrase}`).toContain(phrase);
+      }
+    }
+  });
+
+  /**
+   * 文言の存在確認だけでは、実際の scope 状態と噛み合っているか分からない。
+   * 各状態を実レンダリングし、「範囲の限定・不足・算出不能」を述べる状態では
+   * 補完義務の文が同じ指示の中に共存することを決定的に確かめる。
+   */
+  const SHORTFALL_RULE = {
+    ja: 'スコープ欄が範囲の限定・不足・算出不能を述べている場合',
+    en: 'states that the range is limited, incomplete, or could not be computed',
+  } as const;
+  const SCOPE_AUTHORITY_RULE = {
+    ja: '一覧に載っているものは、エンジンが base 分岐点から算出した変更対象の正',
+    en: 'authoritative: the engine computed those entries from the base divergence point',
+  } as const;
+
+  const LIMITED_SCOPE_CASES: ReadonlyArray<{
+    name: string;
+    scope: TaskReviewScope | undefined;
+    disclosure: { ja: string; en: string };
+  }> = [
+    {
+      // run-10 同型: base ブランチ上でコミット済み + 別の未コミット変更。
+      name: 'isBaseBranchHead',
+      scope: {
+        kind: 'collected',
+        paths: ['src/a.ts'],
+        source: { kind: 'working_tree', baseRange: { kind: 'base_branch_head' } },
+      },
+      disclosure: {
+        ja: 'コミット済み変更は含みません',
+        en: 'so no committed range is included',
+      },
+    },
+    {
+      name: 'isBaseUnresolved',
+      scope: {
+        kind: 'collected',
+        paths: ['src/a.ts'],
+        source: {
+          kind: 'working_tree',
+          baseRange: { kind: 'unresolved', reason: 'HEAD is detached' },
+        },
+      },
+      disclosure: {
+        ja: 'base コミットを特定できなかった',
+        en: 'The base commit could not be determined',
+      },
+    },
+    {
+      name: 'noPaths',
+      scope: {
+        kind: 'collected',
+        paths: [],
+        source: { kind: 'working_tree', baseRange: { kind: 'base_branch_head' } },
+      },
+      disclosure: {
+        ja: '変更を検出しませんでした',
+        en: 'detected no changes in this working directory',
+      },
+    },
+    {
+      name: 'notRepository',
+      scope: { kind: 'not_a_git_repository' },
+      disclosure: {
+        ja: 'Git リポジトリではありません',
+        en: 'is not a Git repository',
+      },
+    },
+    {
+      name: 'notComputed',
+      scope: undefined,
+      disclosure: {
+        ja: '算出していません',
+        en: 'did not compute the changed files',
+      },
+    },
+    {
+      name: 'hasOmitted',
+      scope: collected(
+        Array.from({ length: REVIEW_SCOPE_MAX_LISTED_PATHS + 3 }, (_, index) => `src/f-${index}.ts`),
+      ),
+      disclosure: { ja: '省略されています', en: 'more are omitted' },
+    },
+  ];
+
+  it.each(['en', 'ja'] as const)('pairs every limited or uncomputed scope state with the shortfall rule (%s)', (lang) => {
+    const instruction = resolveRefToContent('review-arch', undefined, projectDir, 'instructions', {
+      projectDir,
+      lang,
+    });
+
+    for (const scopeCase of LIMITED_SCOPE_CASES) {
+      const resolved = replaceTemplatePlaceholders(
+        instruction!,
+        makeStep(),
+        makeInstructionContext({ language: lang, reviewScope: scopeCase.scope }),
+      );
+      const where = `${scopeCase.name} (${lang})`;
+      // その状態の開示文が実際に出ている。
+      expect(resolved, where).toContain(scopeCase.disclosure[lang]);
+      // 同じ指示の中に補完義務の総称条件が共存している。
+      expect(resolved, where).toContain(SHORTFALL_RULE[lang]);
+      expect(resolved, where).toContain(SCOPE_AUTHORITY_RULE[lang]);
+    }
+  });
+
+  // base が解決した完全な一覧では、限定・不足の開示が出ない = 補完義務は発火しない。
+  it.each(['en', 'ja'] as const)('states no shortfall when the base resolved and the list is complete (%s)', (lang) => {
+    const instruction = resolveRefToContent('review-arch', undefined, projectDir, 'instructions', {
+      projectDir,
+      lang,
+    });
+
+    const resolved = replaceTemplatePlaceholders(
+      instruction!,
+      makeStep(),
+      makeInstructionContext({
+        language: lang,
+        reviewScope: collected(['src/a.ts', 'src/b.ts']),
+      }),
+    );
+
+    expect(resolved).toContain(SCOPE_AUTHORITY_RULE[lang]);
+    for (const scopeCase of LIMITED_SCOPE_CASES) {
+      if (scopeCase.name === 'hasOmitted') continue;
+      expect(resolved, `${scopeCase.name} (${lang})`).not.toContain(scopeCase.disclosure[lang]);
+    }
+    expect(resolved).not.toContain(lang === 'ja' ? '省略されています' : 'more are omitted');
+  });
+
+  it.each(['en', 'ja'] as const)('keeps the review mode split intact (%s)', (lang) => {
+    const instruction = resolveRefToContent('review-arch', undefined, projectDir, 'instructions', {
+      projectDir,
+      lang,
+    });
+
+    expect(instruction).toContain('{var:review_mode}');
+    expect(instruction).toContain('`initial`');
+    expect(instruction).toContain('`follow_up`');
+    expect(instruction).toContain('`unspecified`');
+    expect(instruction).toContain('reviewMode');
+  });
 });

@@ -34,18 +34,25 @@ function renderFindingContractInstruction(input: {
   } = input;
   const reviewer = contract.reviewer;
   const isReviewer = reviewer !== undefined;
-  const structuredReviewer = reviewer?.mode === 'structured';
-  const plainTextNormalizedReviewer = reviewer?.mode === 'plain_text_normalized';
-  const rawFindingsStructuredOutput = structuredReviewer
-    ? reviewer.rawFindingsStructuredOutput
-    : undefined;
   const restatementRequests = reviewer?.presentationContext?.revision === 2
     ? reviewer.presentationContext.restatementRequests
     : [];
+  // テンプレートエンジンは {{#if}} の入れ子を扱えない（{{#unless}} も無い）ため、
+  // 「再提示専用レビューでは通常のレビュー指示を出さない」という入れ子条件は
+  // ここで各フラグへ畳んでから渡す。
+  //
+  // 判定は呼び出し側が渡す mode だけを見る。request 件数から導出すると、
+  // 「言い直し request 付きの完全な再レビュー」が言い直し専用指示に化け、その
+  // publication で withdrawal（後続レビュー成立による取り下げ）が走ってしまう。
+  const hasRestatementRequests = restatementRequests.length > 0;
+  // request が1件も無い呼び出しは、mode が restatement-only でも「言い直しだけ」に
+  // ならない（指示が空になる）。抑止は request が実在するときだけ効かせる。
+  const restatementOnly = reviewer?.mode === 'restatement-only' && hasRestatementRequests;
+  const restatementAlongsideReview = hasRestatementRequests && !restatementOnly;
 
-  // review-integrity protocol: rawFindingsStructuredOutput と reviewScopeSnapshotId は同じ
-  // includeRawFindingsSchema 条件下で必ずセットで生成される（WorkflowEngineSetup.ts
-  // の buildFindingContractInstructionContext 参照）。reviewer 用の
+  // review-integrity protocol: reviewer context は必ず reviewScopeSnapshotId と
+  // セットで生成される（WorkflowEngineSetup.ts の
+  // buildFindingContractInstructionContext 参照）。reviewer 用の
   // FindingContractInstructionContext を組む経路が reviewScopeSnapshotId の配線を
   // 落とすと engine が evidence request を現在の review scope に束縛できない。
   // 引用が完全に正確でも product finding へ絶対に昇格できず、reviewer
@@ -64,12 +71,12 @@ function renderFindingContractInstruction(input: {
     )
   ) {
     throw new Error(
-      'Finding contract reviewer instruction is missing reviewScopeSnapshotId even though '
-      + 'rawFindingsStructuredOutput is present. This is a wiring bug in the caller that built the '
-      + 'FindingContractInstructionContext: rawFindingsStructuredOutput and reviewScopeSnapshotId must '
-      + 'always be set together (see WorkflowEngineSetup.buildFindingContractInstructionContext). '
-      + 'Build the context via optionsBuilder.buildFindingContractInstructionContext(step, true) '
-      + 'instead of constructing it inline.',
+      'Finding contract reviewer instruction is missing reviewScopeSnapshotId. This is a wiring bug '
+      + 'in the caller that built the FindingContractInstructionContext: a reviewer context must '
+      + 'always carry reviewScopeSnapshotId (see '
+      + 'WorkflowEngineSetup.buildFindingContractInstructionContext). Build the context via '
+      + 'optionsBuilder.buildFindingContractInstructionContext(step, true) instead of constructing '
+      + 'it inline.',
     );
   }
 
@@ -78,24 +85,18 @@ function renderFindingContractInstruction(input: {
       reportPhase ? contract.reportLedgerSummary : contract.ledgerSummary,
     ).trimEnd(),
     isReportPhase: reportPhase,
+    // severity/title の明記要求は再提示専用ラウンドでも出す。severity 欠落こそが
+    // 再提示ループの原因なので、再提示のときに消えると狙いが反転する。
     isReviewer,
-    structuredReviewer,
-    plainTextNormalizedReviewer,
-    reviewerHasOpenFindings: isReviewer && contract.hasOpenFindings,
-    structuredReviewerHasOpenFindings: structuredReviewer && contract.hasOpenFindings,
-    plainTextNormalizedReviewerHasOpenFindings:
-      plainTextNormalizedReviewer && contract.hasOpenFindings,
-    reviewerHasWaivedFindings: isReviewer && contract.hasWaivedFindings,
-    reviewerHasDismissedFindings: isReviewer && contract.hasDismissedFindings,
-    rawFindingsJsonSchema: rawFindingsStructuredOutput
-      ? renderFencedJsonBlock(rawFindingsStructuredOutput.schema)
-      : '',
-    // review-integrity protocol: reviewer step のときだけ設定される（instruction-context.ts
-    // 参照）。空文字は「該当なし」— テンプレート側は isReviewer と一緒にしか
-    // 出さない。
-    reviewScopeSnapshotId: reviewer?.reviewScopeSnapshotId ?? '',
-    restatementOnly: restatementRequests.length > 0,
-    restatementRequestsJson: restatementRequests.length > 0
+    reviewerReportGuidance: isReviewer && !restatementOnly,
+    reviewerHasOpenFindings: isReviewer && contract.hasOpenFindings && !restatementOnly,
+    reviewerHasWaivedFindings: isReviewer && contract.hasWaivedFindings && !restatementOnly,
+    reviewerHasDismissedFindings: isReviewer && contract.hasDismissedFindings && !restatementOnly,
+    provisionalGuidance: !restatementOnly,
+    restatementOnly,
+    restatementAlongsideReview,
+    hasRestatementRequests,
+    restatementRequestsJson: hasRestatementRequests
       ? renderFencedJsonBlock(restatementRequests).trimEnd()
       : '',
     // 異議申告のガイドは open な指摘が存在するときだけ注入する。台帳が空の

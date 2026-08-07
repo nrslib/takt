@@ -1,8 +1,12 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   buildFindingContractInstruction,
   buildFindingContractReportInstruction,
 } from '../core/workflow/instruction/finding-contract-instruction.js';
+import { ReportInstructionBuilder } from '../core/workflow/instruction/ReportInstructionBuilder.js';
+import { makeStep } from './test-helpers.js';
 import type { FindingContractInstructionContext } from '../core/workflow/instruction/instruction-context.js';
 import {
   buildManagerInstruction,
@@ -12,6 +16,10 @@ import {
   PROVIDER_ANCHOR_RELEVANCE_INSTRUCTION,
 } from '../core/workflow/findings/manager-raw-decision-adapter.js';
 import type { FindingLedger, FindingLedgerEntry } from '../core/workflow/findings/types.js';
+import {
+  computeRestatementRequestId,
+  createFindingReviewPresentationContextV2,
+} from '../core/workflow/findings/review-publication.js';
 
 const renderFencedJsonBlock = (value: unknown): string => `\`\`\`json\n${JSON.stringify(value)}\n\`\`\``;
 
@@ -47,21 +55,42 @@ function buildReport(overrides: {
   });
 }
 
-const REVIEWER_STRUCTURED_OUTPUT = { schemaRef: 'test.raw-findings', schema: { type: 'object' } };
 // codex 対策#4: 本物の reviewer context では WorkflowEngineSetup が
-// rawFindingsStructuredOutput と同時に必ず設定する（snapshot.ts の
+// reviewScopeSnapshotId を必ず設定する（snapshot.ts の
 // computeReviewScopeSnapshotId）。ここでは実際のハッシュ形状は問わないため
 // 固定文字列を使う。
 const REVIEWER_SNAPSHOT_ID = 'snap-test-0000000000000000000000000000000000000000000000000000000000000000';
 const REVIEWER = {
-  mode: 'structured' as const,
-  rawFindingsStructuredOutput: REVIEWER_STRUCTURED_OUTPUT,
   reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID,
 };
-const PLAIN_TEXT_NORMALIZED_REVIEWER = {
-  mode: 'plain_text_normalized' as const,
-  reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID,
-};
+
+/**
+ * 実型の再提示 request で presentationContext を組む。`as never` の部分 fixture は
+ * 必須項目と restatementRequestId の整合（buildFindingContractInstruction が検証する）
+ * を型検査からも実行時からも落としてしまう。
+ */
+function restatementPresentationContext() {
+  const requestWithoutId = {
+    anomalyId: 'RA-RESTATEMENT',
+    reviewer: 'architecture-review',
+    presentationOrdinal: 1,
+    reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID,
+    sourceExcerptDigest: '2'.repeat(64),
+    claimedExcerpt: 'A bounded reviewer claim.',
+    targetPaths: [] as const,
+    missingRequirements: [] as const,
+    expectedRelation: 'new' as const,
+    expectedTargetFindingId: null,
+    expectedTargetPreconditionClass: 'absent' as const,
+  };
+  return createFindingReviewPresentationContextV2({
+    reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID,
+    restatementRequests: [{
+      ...requestWithoutId,
+      restatementRequestId: computeRestatementRequestId(requestWithoutId),
+    }],
+  });
+}
 
 describe('buildFindingContractInstruction', () => {
   it('never emits blank-line runs left behind by unused conditional blocks', () => {
@@ -70,7 +99,6 @@ describe('buildFindingContractInstruction', () => {
         {},
         { hasOpenFindings: true },
         { reviewer: REVIEWER },
-        { reviewer: PLAIN_TEXT_NORMALIZED_REVIEWER },
         {
           reviewer: REVIEWER,
           hasOpenFindings: true,
@@ -92,31 +120,15 @@ describe('buildFindingContractInstruction', () => {
         language: 'ja',
       });
       expect(rendered).not.toContain('統合台帳のコピー');
-      expect(rendered).toContain('構造化 raw finding として報告してください');
+      expect(rendered).toContain('通常の Markdown レビュー報告を書いてください');
     });
 
-    it('injects the structured finding protocol in both languages', () => {
-      for (const language of ['en', 'ja'] as const) {
-        for (const render of [build, buildReport]) {
-          const structured = render({
-            contract: { reviewer: REVIEWER, hasOpenFindings: true },
-            language,
-          });
-          expect(structured).not.toContain('typed evidence matrix');
-          expect(structured).toContain('structured output');
-          expect(structured).toContain('resolution_confirmation');
-          expect(structured).toContain('targetFindingIds');
-          expect(structured).toMatch(/one-to-one|1対1/u);
-        }
-      }
-    });
-
-    it('asks plain-text-normalized reviewers for ordinary explicit prose without output schemas', () => {
+    it('asks every reviewer for ordinary explicit prose without output schemas', () => {
       for (const language of ['en', 'ja'] as const) {
         for (const render of [build, buildReport]) {
           const rendered = render({
             contract: {
-              reviewer: PLAIN_TEXT_NORMALIZED_REVIEWER,
+              reviewer: REVIEWER,
               hasOpenFindings: true,
             },
             language,
@@ -129,6 +141,44 @@ describe('buildFindingContractInstruction', () => {
           expect(rendered).not.toContain('structured output matching');
         }
       }
+    });
+
+    // 呼び出し側の mode だけが「言い直しのみ」を決める。request 件数から導出すると、
+    // 言い直し request 付きの完全な再レビューが言い直し専用指示に化け、その
+    // publication で後続レビュー成立による取り下げが未検証のまま走る。
+    it('keeps the ordinary review guidance when restatement requests ride along a full review', () => {
+      for (const [language, reviewFragment, alongsideFragment] of [
+        ['en', 'Write an ordinary Markdown review report', 'Alongside the review you are asked to perform'],
+        ['ja', '通常の Markdown レビュー報告を書いてください', '指示されたレビューに加えて'],
+      ] as ReadonlyArray<readonly ['en' | 'ja', string, string]>) {
+        const rendered = build({
+          contract: {
+            reviewer: {
+              ...REVIEWER,
+              presentationContext: restatementPresentationContext(),
+              mode: 'review',
+            },
+            hasOpenFindings: true,
+          },
+          language,
+        });
+
+        expect(rendered, language).toContain('## Restatement requests');
+        expect(rendered, language).toContain('RA-RESTATEMENT');
+        expect(rendered, language).toContain(reviewFragment);
+        expect(rendered, language).toContain(alongsideFragment);
+        // 「これは再提示専用レビューです」は出さない。
+        expect(rendered, language).not.toMatch(/restatement-only review|再提示専用レビュー/u);
+      }
+    });
+
+    it('omits the restatement section entirely when a review carries no requests', () => {
+      const rendered = build({
+        contract: { reviewer: { ...REVIEWER, mode: 'review' }, hasOpenFindings: true },
+      });
+
+      expect(rendered).not.toContain('## Restatement requests');
+      expect(rendered).toContain('Write an ordinary Markdown review report');
     });
 
     it('does not inject the dispute guide into reviewers', () => {
@@ -150,9 +200,9 @@ describe('buildFindingContractInstruction', () => {
       expect(ja).toContain('system finding');
     });
 
-    // rawFindingId / familyTag / relation / targetFindingId は manager-runner /
-    // manager-output-validation が英語リテラルで照合する raw finding のフィールド名。
-    // ja テンプレートでも英語のまま出ることを確認する。
+    // relation / targetFindingId は manager-runner / manager-output-validation が
+    // 英語リテラルで照合する raw finding のフィールド名。ja テンプレートでも
+    // 英語のまま出ることを確認する。
     it('keeps raw finding protocol field names in English for ja', () => {
       const rendered = build({
         contract: {
@@ -162,8 +212,6 @@ describe('buildFindingContractInstruction', () => {
         },
         language: 'ja',
       });
-      expect(rendered).toContain('rawFindingId');
-      expect(rendered).toContain('familyTag');
       expect(rendered).toContain('relation');
       expect(rendered).toContain('targetFindingId');
     });
@@ -189,31 +237,187 @@ describe('buildFindingContractInstruction', () => {
       expect(ja).toContain('relation を "reopened"');
     });
 
-    it('requires current exact evidence requests without reviewer-issued proof fields in both languages', () => {
-      const structuredEn = build({
-        contract: { reviewer: REVIEWER, hasOpenFindings: true },
+    it('never asks reviewers for structured output or echoes the review scope snapshot', () => {
+      for (const language of ['en', 'ja'] as const) {
+        for (const render of [build, buildReport]) {
+          const rendered = render({
+            contract: {
+              reviewer: REVIEWER,
+              hasOpenFindings: true,
+              hasWaivedFindings: true,
+              hasDismissedFindings: true,
+            },
+            language,
+          });
+          expect(rendered).not.toContain(REVIEWER_SNAPSHOT_ID);
+          expect(rendered).not.toContain('rawFindingId');
+          expect(rendered).not.toContain('rawExcerpt');
+          expect(rendered).not.toContain('proofId');
+          expect(rendered).not.toContain('structured raw finding');
+        }
+      }
+    });
+
+    // 再提示専用ラウンドは request だけを処理する。通常のレビュー指示が同時に
+    // 出ると「observe した問題をすべて報告せよ」と矛盾する。
+    it('suppresses the ordinary reviewer guidance during a restatement-only round', () => {
+      const rendered = build({
+        contract: {
+          reviewer: { ...REVIEWER, presentationContext: restatementPresentationContext(), mode: 'restatement-only' as const },
+          hasOpenFindings: true,
+        },
       });
-      const structuredJa = build({
-        contract: { reviewer: REVIEWER, hasOpenFindings: true },
+      expect(rendered).toContain('## Restatement requests');
+      expect(rendered).not.toContain('Write an ordinary Markdown review report');
+      expect(rendered).not.toContain('Each round, verify the open ledger findings');
+      expect(rendered).not.toContain('{{');
+      // severity 欠落こそが再提示ループの原因なので、明記要求は再提示ラウンドでも残す。
+      expect(rendered).toContain('State a short title and a severity');
+    });
+
+    it('keeps the severity requirement in a restatement-only round for ja as well', () => {
+      const rendered = build({
+        contract: {
+          reviewer: { ...REVIEWER, presentationContext: restatementPresentationContext(), mode: 'restatement-only' as const },
+          hasOpenFindings: true,
+        },
         language: 'ja',
       });
-      expect(structuredEn).toContain('code confirmation needs `file_quote`');
-      expect(structuredEn).toContain('structure confirmation needs `repository_manifest`');
-      expect(structuredEn).toContain('absence confirmation needs `repository_query` plus `authoritative_quote`');
-      expect(structuredJa).toContain('code の確認は `file_quote`');
-      expect(structuredJa).toContain('structure の確認は `repository_manifest`');
-      expect(structuredJa).toContain('absence の確認は `repository_query` と `authoritative_quote`');
-      expect(structuredEn).toContain('path and bounded 1-based startLine/endLine only');
-      expect(structuredEn).toContain('do not provide source text or verbatimExcerpt');
-      expect(structuredJa).toContain('path と有界な1始まりの startLine/endLine だけ');
-      expect(structuredJa).toContain('source text や verbatimExcerpt は出力しない');
+      expect(rendered).toContain('## Restatement requests');
+      expect(rendered).toContain('severity（`critical` / `high` / `medium` / `low`');
+      expect(rendered).not.toContain('通常の Markdown レビュー報告を書いてください');
+      expect(rendered).not.toContain('{{');
+    });
 
-      for (const rendered of [
-        structuredEn,
-        structuredJa,
-      ]) {
-        expect(rendered).toMatch(/Do not output snapshotId|snapshotId・runId・proofId/u);
-        expect(rendered).not.toContain(REVIEWER_SNAPSHOT_ID);
+    // 実走行(2026-08)の計測: 言い直しの失敗 263 件中 210 件(80%)が「claim atom を
+    // 書き直した」ことによる correspondence 不成立で、engine は description を
+    // claimedExcerpt と完全一致で照合する。この逐語コピー規則が prompt から
+    // 落ちると受理率はベースラインへ戻る(eval result-set `final`, n=20/arm,
+    // output contract 同梱: baseline-ja 10% → shipped-ja 70%)。
+    it('states the verbatim claim-atom rule in the restatement round', () => {
+      for (const [language, expected] of [
+        ['ja', [
+          '1文字も変えずにコピー',
+          '完全一致で照合',
+          '要約・言い換え・行番号の追記',
+        ]],
+        ['en', [
+          'copied character for character',
+          'matches `Description` against `claimedExcerpt` exactly',
+          'Summarising, rewording, adding line numbers',
+        ]],
+      ] as const) {
+        const rendered = build({
+          contract: {
+            reviewer: { ...REVIEWER, presentationContext: restatementPresentationContext(), mode: 'restatement-only' as const },
+            hasOpenFindings: true,
+          },
+          language,
+        });
+        for (const fragment of expected) {
+          expect(rendered, `${language}: ${fragment}`).toContain(fragment);
+        }
+      }
+    });
+
+    // normalizer は label 付きの行に依存する。書式フェンスを外すと reviewer が
+    // 素の散文を返し、atom を逐語で書いていても normalizer が候補を1件も
+    // 抽出しない(eval a1: 20% が normalizer 側で消えた)。
+    it('shows the labelled response shape fence in the restatement round', () => {
+      for (const [language, expected] of [
+        // プロトコルトークン（label）は ja でも英語のまま。散文だけを訳す。
+        ['ja', ['### 返す形', '- **Reasserts Reviewer Anomaly ID**:', '- **Description**:', '- **Target files**:']],
+        ['en', ['### Response shape', '- **Reasserts Reviewer Anomaly ID**:', '- **Description**:', '- **Target files**:']],
+      ] as const) {
+        const rendered = build({
+          contract: {
+            reviewer: { ...REVIEWER, presentationContext: restatementPresentationContext(), mode: 'restatement-only' as const },
+            hasOpenFindings: true,
+          },
+          language,
+        });
+        for (const fragment of expected) {
+          expect(rendered, `${language}: ${fragment}`).toContain(fragment);
+        }
+      }
+    });
+
+    // quote-mismatch anomaly は実測で 100% が「target.paths に無いファイルを
+    // 引用した」ケース(仕様書・テスト・比較実装を根拠に挙げる)。
+    // issueFindingEvidenceRequests が file_quote.path ∈ target.paths を要求する。
+    /**
+     * 再提示ラウンドの Phase 2 は、output contract の書式（結果行・チェック表・
+     * 検証証跡）と engine の再提示規則が同じメッセージに並ぶ。再提示規則が
+     * 「この応答には再提示エントリ以外を書くな」と言うと契約の必須節と正面から
+     * 矛盾し、reviewer はどちらかを落とす。規則の適用範囲は
+     * `## Finding Contract Claims` 節に限定されていなければならない。
+     */
+    it('does not contradict the output contract in the phase 2 report message', () => {
+      for (const language of ['ja', 'en'] as const) {
+        const contractFormat = readFileSync(
+          join(
+            process.cwd(),
+            'builtins',
+            language,
+            'facets/output-contracts/security-review-finding-contract.md',
+          ),
+          'utf8',
+        );
+        const rendered = new ReportInstructionBuilder(
+          makeStep({ outputContracts: [{ name: 'security-review.md', format: contractFormat }] }),
+          {
+            cwd: '/tmp/test',
+            reportDir: '/tmp/test/reports',
+            stepIteration: 1,
+            language,
+            targetFile: 'security-review.md',
+            // ReportInstructionBuilder は本物の renderFencedJsonBlock を使うので、
+            // このファイル冒頭のスタブと違い reportLedgerSummary の欠落を許さない。
+            findingContract: makeContract({
+              reportLedgerSummary: '[]',
+              reviewer: { ...REVIEWER, presentationContext: restatementPresentationContext(), mode: 'restatement-only' as const },
+              hasOpenFindings: true,
+            }),
+          },
+        ).build();
+
+        // 契約側の必須節が消えていない。
+        expect(rendered, language).toContain('## Finding Contract Claims');
+        expect(rendered, language).toContain(language === 'ja' ? '## 結果: APPROVE / REJECT' : '## Result: APPROVE / REJECT');
+        expect(rendered, language).toContain(language === 'ja' ? '## 検証証跡' : '## Verification Evidence');
+
+        // 再提示規則が Claims 節に限定されている。
+        expect(rendered, language).toContain(
+          language === 'ja'
+            ? '`## Finding Contract Claims` 節には下の再提示エントリだけを書いてください'
+            : 'put only the restatement entries below in its `## Finding Contract Claims` section',
+        );
+
+        // 応答全体を再提示エントリだけに絞る全面禁止が復活していない。
+        expect(rendered, language).not.toContain('Write nothing in this response except');
+        expect(rendered, language).not.toContain('この応答には下の再提示エントリ以外を書かないでください');
+        expect(rendered, language).not.toMatch(/チェック表の記入もしないで|do not fill in checklist tables/u);
+
+        // 逐語コピー規則は Phase 2 でも生きている。
+        expect(rendered, language).toMatch(/1文字も変えずにコピー|copied character for character/u);
+      }
+    });
+
+    it('states the quote/target coupling rule in the restatement round', () => {
+      for (const [language, expected] of [
+        ['ja', ['引用するファイルは必ず `Target files` にも列挙', '対象と無関係とみなし']],
+        ['en', ['must also be listed under `Target files`', 'unrelated to the target']],
+      ] as const) {
+        const rendered = build({
+          contract: {
+            reviewer: { ...REVIEWER, presentationContext: restatementPresentationContext(), mode: 'restatement-only' as const },
+            hasOpenFindings: true,
+          },
+          language,
+        });
+        for (const fragment of expected) {
+          expect(rendered, `${language}: ${fragment}`).toContain(fragment);
+        }
       }
     });
   });

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readdirSync } from 'node:fs';
+import { readdirSync, rmSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import {
   FINDING_REVIEW_PUBLICATIONS_INTERNAL_DIRECTORY,
@@ -33,24 +33,10 @@ import { compareBinaryStrings } from '../../../shared/utils/binary-string-compar
 const PRIVATE_FILE_MODE = 0o600;
 const STORED_PUBLICATION_FILE_PATTERN = /^([a-f0-9]{64})\.json$/;
 
-const LEGACY_STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL = Object.freeze({
-  generationMode: 'structured',
-  format: 'structured-output',
-  protocolRevision: 1,
-} as const);
-
-const LEGACY_PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL = Object.freeze({
-  generationMode: 'freeform',
-  format: 'normalized-plain-text',
-  protocolRevision: 1,
-} as const);
-
-export const STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL = Object.freeze({
-  generationMode: 'structured',
-  format: 'structured-output',
-  protocolRevision: 2,
-} as const);
-
+/**
+ * publication の生成プロトコルは1種類しかない。FC レビュアーは常に markdown
+ * レポートを書き、正規化係がそれを raw findings へ変換する。
+ */
 export const PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL = Object.freeze({
   generationMode: 'freeform',
   format: 'normalized-plain-text',
@@ -58,10 +44,7 @@ export const PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL = Object.
 } as const);
 
 export type FindingReviewPublicationProtocol =
-  | typeof LEGACY_STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL
-  | typeof LEGACY_PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL
-  | typeof STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL
-  | typeof PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL;
+  typeof PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL;
 
 function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
   if (typeof value !== 'object' || value === null || seen.has(value)) {
@@ -150,6 +133,20 @@ export interface FindingReviewPublicationPreparation {
   readonly publication: CanonicalFindingReviewPublication;
   readonly relationClarification?: ReviewerRelationClarification;
   readonly reviewerExecutionIdentity?: ReviewerExecutionIdentity;
+  /**
+   * この publication を出した呼び出しが何として走ったか。書き出し側は通常の
+   * レビューを含め常に設定する（読み取り側だけが、この項目より前に保存された
+   * record として未設定を受け取り得る）。
+   *
+   * `restatement-only` は言い直しだけを行った差し戻し呼び出しで、後続レビュー
+   * 成立による取り下げ（withdrawal）の根拠にならない。resume はこの永続値を
+   * 採用する — 引き当て時点の mode を被せると、言い直しだけで出た publication が
+   * 再開後にフルレビューの証拠として扱われ、未検証のまま anomaly が決着する。
+   *
+   * publication identity（publicationId）には入れない。mode で identity が
+   * 変わると、mode が変わったときに保存済み publication を引き当てられなくなる。
+   */
+  readonly reviewerCallMode?: 'review' | 'restatement-only';
 }
 
 export interface ReviewerExecutionIdentity {
@@ -162,9 +159,7 @@ export interface PendingFindingReviewNormalization
   extends FindingReviewPublicationIdentity {
   readonly workflowName: string;
   readonly publicationId: string;
-  readonly protocol:
-    | typeof LEGACY_PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL
-    | typeof PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL;
+  readonly protocol: FindingReviewPublicationProtocol;
   readonly reportContent: string;
   readonly reportDigest: string;
   readonly reviewerExecutionIdentity: ReviewerExecutionIdentity;
@@ -487,7 +482,6 @@ function preparationContentIdentity(
 function rebindInheritedFindingReviewPublication(
   reportDir: string,
   identity: FindingReviewPublicationIdentity,
-  expectedProtocol?: FindingReviewPublicationProtocol,
 ): FindingReviewPublicationPreparation | undefined {
   if (!inheritedSnapshotExists(reportDir)) {
     return undefined;
@@ -503,7 +497,6 @@ function rebindInheritedFindingReviewPublication(
     ))
     .filter(({ publication }) => (
       samePublicationIdentityExceptScope(publication, identity)
-      && publication.protocol.protocolRevision === 2
       && (
         publication.presentationContext.revision === 1
         || publication.presentationContext.restatementRequests.length === 0
@@ -521,14 +514,6 @@ function rebindInheritedFindingReviewPublication(
   ) {
     throw new Error(
       `Inherited finding review publication is ambiguous for "${identity.reviewerStepName}"`,
-    );
-  }
-  if (
-    expectedProtocol !== undefined
-    && !samePublicationProtocol(first.publication.protocol, expectedProtocol)
-  ) {
-    throw new Error(
-      `Inherited finding review publication protocol mismatch for "${identity.reviewerStepName}"`,
     );
   }
   const rebound: FindingReviewPublicationPreparation = {
@@ -583,7 +568,6 @@ function rebindInheritedPendingFindingReviewNormalization(
       parseStoredPendingNormalization(content, publicationId)
     ))
     .filter((pending) => samePublicationIdentityExceptScope(pending, identity))
-    .filter((pending) => pending.protocol.protocolRevision === 2)
     .filter((pending) => (
       pending.presentationContext.revision === 1
       || pending.presentationContext.restatementRequests.length === 0
@@ -660,57 +644,15 @@ function parsePublicationProtocol(value: unknown): FindingReviewPublicationProto
     throw new Error('Finding review publication requires protocol');
   }
   const record = value as Record<string, unknown>;
-  const legacyStructured = LEGACY_STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL;
+  const protocol = PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL;
   if (
-    record.generationMode === legacyStructured.generationMode
-    && record.format === legacyStructured.format
-    && record.protocolRevision === legacyStructured.protocolRevision
+    record.generationMode === protocol.generationMode
+    && record.format === protocol.format
+    && record.protocolRevision === protocol.protocolRevision
   ) {
-    return legacyStructured;
-  }
-  const legacyPlainTextNormalized = LEGACY_PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL;
-  if (
-    record.generationMode === legacyPlainTextNormalized.generationMode
-    && record.format === legacyPlainTextNormalized.format
-    && record.protocolRevision === legacyPlainTextNormalized.protocolRevision
-  ) {
-    return legacyPlainTextNormalized;
-  }
-  const structured = STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL;
-  if (
-    record.generationMode === structured.generationMode
-    && record.format === structured.format
-    && record.protocolRevision === structured.protocolRevision
-  ) {
-    return structured;
-  }
-  const plainTextNormalized = PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL;
-  if (
-    record.generationMode === plainTextNormalized.generationMode
-    && record.format === plainTextNormalized.format
-    && record.protocolRevision === plainTextNormalized.protocolRevision
-  ) {
-    return plainTextNormalized;
+    return protocol;
   }
   throw new Error('Finding review publication has an unsupported protocol descriptor');
-}
-
-function samePublicationProtocol(
-  left: FindingReviewPublicationProtocol,
-  right: FindingReviewPublicationProtocol,
-): boolean {
-  return left.generationMode === right.generationMode
-    && left.format === right.format
-    && left.protocolRevision === right.protocolRevision;
-}
-
-function assertProtocolPresentationCompatibility(
-  protocol: FindingReviewPublicationProtocol,
-  presentationContext: FindingReviewPresentationContext,
-): void {
-  if (protocol.protocolRevision === 1 && presentationContext.revision !== 1) {
-    throw new Error('Legacy finding review publication protocol cannot carry V2 presentation context');
-  }
 }
 
 function parseStoredRelationClarification(
@@ -927,11 +869,35 @@ function parseStoredPreparation(
       `Finding review publication "${expectedPublicationId}" requires reviewerExecutionIdentity`,
     );
   }
+  const reviewerCallMode = parseStoredReviewerCallMode(
+    record.reviewerCallMode,
+    expectedPublicationId,
+  );
   return {
     publication: freezeCanonicalFindingReviewPublication(publication),
     ...(relationClarification !== undefined ? { relationClarification } : {}),
     ...(reviewerExecutionIdentity !== undefined ? { reviewerExecutionIdentity } : {}),
+    ...(reviewerCallMode !== undefined ? { reviewerCallMode } : {}),
   };
+}
+
+/**
+ * 保存済みの呼び出し mode。この項目より前に保存された publication だけが未設定
+ * になり、読み取り側は通常レビュー扱いへ寄せる。
+ */
+function parseStoredReviewerCallMode(
+  value: unknown,
+  publicationId: string,
+): 'review' | 'restatement-only' | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value !== 'review' && value !== 'restatement-only') {
+    throw new Error(
+      `Finding review publication "${publicationId}" has an unknown reviewerCallMode`,
+    );
+  }
+  return value;
 }
 
 function assertPendingFindingReviewNormalization(
@@ -944,21 +910,12 @@ function assertPendingFindingReviewNormalization(
       `Pending finding review normalization identity mismatch for "${pending.publicationId}"`,
     );
   }
-  if (!samePublicationProtocol(
-    pending.protocol,
-    PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
-  ) && pending.protocol.protocolRevision !== 1) {
-    throw new Error(
-      `Pending finding review normalization protocol mismatch for "${pending.publicationId}"`,
-    );
-  }
   const reportDigest = sha256(Buffer.from(pending.reportContent, 'utf8'));
   if (pending.reportDigest !== reportDigest) {
     throw new Error(
       `Pending finding review normalization digest mismatch for "${pending.publicationId}"`,
     );
   }
-  assertProtocolPresentationCompatibility(pending.protocol, pending.presentationContext);
   parseReviewerExecutionIdentity(pending.reviewerExecutionIdentity);
 }
 
@@ -1225,7 +1182,6 @@ export function assertCanonicalFindingReviewPublication(
   publication: CanonicalFindingReviewPublication,
 ): void {
   parsePublicationProtocol(publication.protocol);
-  assertProtocolPresentationCompatibility(publication.protocol, publication.presentationContext);
   const expectedId = computeFindingReviewPublicationId(publication);
   if (publication.publicationId !== expectedId) {
     throw new Error(`Finding review publication identity mismatch for "${publication.publicationId}"`);
@@ -1346,6 +1302,25 @@ export function loadPendingFindingReviewNormalization(
   return pending;
 }
 
+/**
+ * 保存済みの pending normalization を破棄する。
+ *
+ * 報告側原因（rawExcerpt が報告本文へ束縛できない）で正規化が成立しなかった報告は、
+ * 同じ本文を読み直しても結論が変わらない。記録を残したままだと resume のたびに
+ * 同じ拒否を再生産して枠が永久に塞がるため、拒否時にここで無効化して
+ * 新規レビューの生成経路へ戻す。
+ */
+export function discardPendingFindingReviewNormalization(
+  reportDir: string,
+  identity: FindingReviewPublicationIdentity,
+): void {
+  const publicationId = computeFindingReviewPublicationId(identity);
+  const path = pendingNormalizationRecordPath(reportDir, publicationId);
+  runPrivateFileExclusive(`${path}.lock`, () => {
+    rmSync(path, { force: true });
+  });
+}
+
 export function persistPendingFindingReviewNormalization(
   reportDir: string,
   pending: PendingFindingReviewNormalization,
@@ -1366,7 +1341,6 @@ export function persistPendingFindingReviewNormalization(
       if (
         existing.reportDigest !== pending.reportDigest
         || existing.workflowName !== pending.workflowName
-        || !samePublicationProtocol(existing.protocol, pending.protocol)
         || JSON.stringify(existing.reviewerExecutionIdentity)
           !== JSON.stringify(pending.reviewerExecutionIdentity)
         || JSON.stringify(existing.presentationContext)
@@ -1386,33 +1360,18 @@ export function persistPendingFindingReviewNormalization(
 export function loadFindingReviewPublication(
   reportDir: string,
   identity: FindingReviewPublicationIdentity,
-  expectedProtocol?: FindingReviewPublicationProtocol,
 ): FindingReviewPublicationPreparation | undefined {
   const publicationId = computeFindingReviewPublicationId(identity);
   const path = publicationRecordPath(reportDir, publicationId);
   ensurePrivateDirectory(dirname(path));
   const snapshot = readPrivateFileState(path);
   if (!snapshot.state.exists) {
-    return rebindInheritedFindingReviewPublication(
-      reportDir,
-      identity,
-      expectedProtocol,
-    );
+    return rebindInheritedFindingReviewPublication(reportDir, identity);
   }
   if (!('content' in snapshot)) {
     throw new Error(`Finding review publication content is missing: ${path}`);
   }
-  const preparation = parseStoredPreparation(snapshot.content, publicationId);
-  if (
-    expectedProtocol !== undefined
-    && preparation.publication.protocol.protocolRevision !== 1
-    && !samePublicationProtocol(preparation.publication.protocol, expectedProtocol)
-  ) {
-    throw new Error(
-      `Finding review publication protocol mismatch for "${publicationId}"`,
-    );
-  }
-  return preparation;
+  return parseStoredPreparation(snapshot.content, publicationId);
 }
 
 /** 保存済みの canonical publication だけを監査・提示計上へ利用する。 */
@@ -1454,7 +1413,6 @@ export function persistFindingReviewPublication(
       const existing = parseStoredPreparation(snapshot.content, publication.publicationId);
       if (
         existing.publication.reportDigest !== publication.reportDigest
-        || !samePublicationProtocol(existing.publication.protocol, publication.protocol)
         || JSON.stringify(existing.reviewerExecutionIdentity ?? null)
           !== JSON.stringify(preparation.reviewerExecutionIdentity ?? null)
         || JSON.stringify(existing.publication.presentationContext)

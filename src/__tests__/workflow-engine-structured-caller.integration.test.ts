@@ -11,7 +11,17 @@ vi.mock('../agents/runner.js', () => ({
 vi.mock('../infra/providers/index.js', () => ({
   getProvider: vi.fn((provider: string) => ({
     supportsStructuredOutput: provider === 'claude',
+    // 隔離 structured 実行は structured output 対応とは別軸の能力。実 provider に
+    // 合わせ、cursor 系だけ非対応にする（opencode/codex/claude は対応）。
+    supportsIsolatedStructuredExecution: provider !== 'cursor',
   })),
+}));
+
+// 一本道の FC レビュアーは markdown レポートしか書かない。raw findings は
+// 正規化係の単発呼び出しだけが作り、provider.setupIsolatedStructured 経由なので
+// runAgent を通らない。ここで差し替え、レポート本文をキーに応答を供給する。
+vi.mock('../agents/finding-intake-normalizer-usecase.js', () => ({
+  normalizeFindingIntake: vi.fn(),
 }));
 
 vi.mock('../core/workflow/phase-runner.js', async (importOriginal) => {
@@ -35,6 +45,7 @@ import type {
 } from '../core/models/index.js';
 import type { AutoRoutingConfig } from '../core/models/config-types.js';
 import { runAgent } from '../agents/runner.js';
+import { normalizeFindingIntake } from '../agents/finding-intake-normalizer-usecase.js';
 import { makeRule, makeStep as makeBaseStep } from './test-helpers.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
@@ -172,14 +183,52 @@ function makeFindingReviewerStep(
   });
 }
 
+/**
+ * FC レビュアーの Phase 2（レポート出力フェーズ）か。
+ *
+ * 一本道では Phase 2 に構造化出力契約が載らないので、指示文で判定する。
+ * `runReportPhase` はこのファイルで mock 済みなので、この分岐へ来るのは
+ * generateReportPhase を使う FC レビュアーだけ。
+ */
 function isFindingReviewPublicationCall(
   instruction: string,
   outputSchema: unknown,
 ): boolean {
-  const schemaText = outputSchema === undefined ? '' : JSON.stringify(outputSchema);
-  return schemaText.includes('"reportContent"')
-    || instruction.includes('combined Finding Contract publication schema')
-    || instruction.includes('Finding Contract の結合 publication schema');
+  return outputSchema === undefined
+    && (
+      instruction.includes('Respond with the report content directly as text.')
+      || instruction.includes('レポート内容をテキストとして直接回答してください')
+    );
+}
+
+/** レポート本文 → 正規化係が返す応答列（先頭から消費し、最後の1件は据え置く）。 */
+const normalizerResponsesByReport = new Map<string, AgentResponse[]>();
+
+function normalizerResponse(rawFindings: unknown, timestamp?: Date): AgentResponse {
+  return {
+    persona: 'finding-intake-normalizer',
+    status: 'done',
+    content: '',
+    structuredOutput: { rawFindings },
+    timestamp: timestamp ?? new Date('2026-06-13T00:00:02.500Z'),
+  } as AgentResponse;
+}
+
+function queueNormalizerResponses(reportContent: string, responses: readonly AgentResponse[]): void {
+  normalizerResponsesByReport.set(reportContent, [...responses]);
+}
+
+function resetFindingIntakeNormalizer(): void {
+  normalizerResponsesByReport.clear();
+  vi.mocked(normalizeFindingIntake).mockReset();
+  vi.mocked(normalizeFindingIntake).mockImplementation(async (report: string) => {
+    const queued = normalizerResponsesByReport.get(report);
+    if (queued === undefined || queued.length === 0) {
+      // 明示登録が無いレビュアーは「指摘なし」として扱う。
+      return normalizerResponse([]);
+    }
+    return queued.length > 1 ? queued.shift()! : queued[0]!;
+  });
 }
 
 function findingReviewerPhase1Response(input: {
@@ -198,6 +247,11 @@ function findingReviewerPhase1Response(input: {
   };
 }
 
+/**
+ * FC レビュアーの Phase 2 応答。一本道では本文だけを返し、同じ本文に対する
+ * raw findings を正規化係の応答として登録する（レポート本文をキーにするので、
+ * 並列レビュアーの呼び出し順に依存しない）。
+ */
 function findingReviewerPublicationResponse(input: {
   readonly persona: string;
   readonly reportContent: string;
@@ -205,14 +259,11 @@ function findingReviewerPublicationResponse(input: {
   readonly sessionId: string;
   readonly timestamp: Date;
 }): AgentResponse {
+  queueNormalizerResponses(input.reportContent, [normalizerResponse(input.rawFindings)]);
   return {
     persona: input.persona,
     status: 'done',
     content: input.reportContent,
-    structuredOutput: {
-      reportContent: input.reportContent,
-      rawFindings: input.rawFindings,
-    },
     sessionId: input.sessionId,
     timestamp: input.timestamp,
   };
@@ -340,6 +391,7 @@ describe('WorkflowEngine structured caller defaults', () => {
     cwd = createTestTmpDir();
     vi.clearAllMocks();
     vi.mocked(runAgent).mockReset();
+    resetFindingIntakeNormalizer();
   });
 
   afterEach(() => {
@@ -792,39 +844,27 @@ describe('WorkflowEngine structured caller defaults', () => {
           timestamp: new Date('2026-06-13T00:00:02.000Z'),
         };
       }
-      const schemaText = options?.outputSchema ? JSON.stringify(options.outputSchema) : '';
-      if (
-        schemaText.includes('"reportContent"')
-        || instruction.includes('combined Finding Contract publication schema')
-      ) {
-        return {
-          persona: 'reviewer',
-          status: 'done',
-          content: '',
-          structuredOutput: {
-            reportContent: 'Review report body.\n\n[Finding 1] Secret is logged The code logs a token.',
-            rawFindings: [fileQuoteReviewFinding({
-              rawExcerpt: '[Finding 1] Secret is logged The code logs a token.',
-              rawFindingId: 'raw-1',
-              relation: 'new',
-              targetFindingIds: [],
-              familyTag: 'security',
-              severity: 'high',
-              title: 'Secret is logged',
-              description: 'The code logs a token.',
-              suggestion: 'Mask the token before logging.',
-              path: 'src/secret.ts',
-              startLine: 12,
-            })],
-          },
-          timestamp: new Date('2026-06-13T00:00:01.000Z'),
-        };
-      }
       if (persona === 'reviewer') {
+        // 一本道: Phase 1 も Phase 2 も markdown 本文。raw findings は
+        // 正規化係がこの本文から作る。
+        const reportContent = 'Review report body.\n\n[Finding 1] Secret is logged The code logs a token.';
+        queueNormalizerResponses(reportContent, [normalizerResponse([fileQuoteReviewFinding({
+          rawExcerpt: '[Finding 1] Secret is logged The code logs a token.',
+          rawFindingId: 'raw-1',
+          relation: 'new',
+          targetFindingIds: [],
+          familyTag: 'security',
+          severity: 'high',
+          title: 'Secret is logged',
+          description: 'The code logs a token.',
+          suggestion: 'Mask the token before logging.',
+          path: 'src/secret.ts',
+          startLine: 12,
+        })])]);
         return {
           persona,
           status: 'done',
-          content: 'Review report body.',
+          content: reportContent,
           sessionId: 'review-session-1',
           timestamp: new Date('2026-06-13T00:00:00.000Z'),
         };
@@ -910,10 +950,26 @@ describe('WorkflowEngine structured caller defaults', () => {
       'Original review report body.',
       '[Finding 1] Secret is logged The code logs a token.',
     ].join('\n\n');
-    let reviewerCalls = 0;
     let managerReached = false;
+    // 一本道の訂正は正規化係側の1回訂正。1回目は形の壊れた rawFindings、
+    // 2回目（correction）で正しい claim を返す。
+    queueNormalizerResponses(reportContent, [
+      normalizerResponse('invalid'),
+      normalizerResponse([fileQuoteReviewFinding({
+        rawExcerpt: '[Finding 1] Secret is logged The code logs a token.',
+        rawFindingId: correctedRawFindingId,
+        relation: 'new',
+        targetFindingIds: [],
+        familyTag: 'security',
+        severity: 'high',
+        title: 'Secret is logged',
+        description: 'The code logs a token.',
+        suggestion: 'Mask the token before logging.',
+        path: 'src/secret.ts',
+        startLine: 12,
+      })]),
+    ]);
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
-      const schemaText = options?.outputSchema ? JSON.stringify(options.outputSchema) : '';
       if (persona === 'findings-manager') {
         managerReached = true;
         const manifest = taskManifest(instruction);
@@ -945,56 +1001,6 @@ describe('WorkflowEngine structured caller defaults', () => {
             }],
           },
           timestamp: new Date('2026-06-13T00:00:03.000Z'),
-        };
-      }
-      if (schemaText.includes('"reportContent"')) {
-        reviewerCalls += 1;
-        if (reviewerCalls === 1) {
-          options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
-          // combined publication envelope を意図的に壊し、訂正経路を検証する。
-          expect(schemaText).toContain('"maxLength"');
-          return {
-            persona,
-            status: 'done',
-            content: '',
-            structuredOutput: {
-              reportContent,
-              rawFindings: 'invalid',
-            },
-            sessionId: 'review-session-1',
-            timestamp: new Date('2026-06-13T00:00:01.000Z'),
-          };
-        }
-        expect(instruction).toContain('Finding Contract publication failed structured validation');
-        expect(options).toEqual(expect.objectContaining({
-          permissionMode: 'readonly',
-          allowedTools: [],
-          sessionId: 'review-session-1',
-        }));
-        expect(options?.onPromptResolved).toBeUndefined();
-        expect(options?.onStream).toBeUndefined();
-        return {
-          persona,
-          status: 'done',
-          content: '',
-          structuredOutput: {
-            reportContent,
-            rawFindings: [fileQuoteReviewFinding({
-              rawExcerpt: '[Finding 1] Secret is logged The code logs a token.',
-              rawFindingId: correctedRawFindingId,
-              relation: 'new',
-              targetFindingIds: [],
-              familyTag: 'security',
-              severity: 'high',
-              title: 'Secret is logged',
-              description: 'The code logs a token.',
-              suggestion: 'Mask the token before logging.',
-              path: 'src/secret.ts',
-              startLine: 12,
-            })],
-          },
-          sessionId: 'review-session-1',
-          timestamp: new Date('2026-06-13T00:00:02.000Z'),
         };
       }
       options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
@@ -1053,7 +1059,10 @@ describe('WorkflowEngine structured caller defaults', () => {
     const result = await engine.run();
 
     expect(result.status, abortReasons.join('\n')).toBe('completed');
-    expect(reviewerCalls).toBe(2);
+    // 初回 + 訂正1回。訂正呼び出しは initial ではなく correction モードで走る。
+    const normalizerModes = vi.mocked(normalizeFindingIntake).mock.calls
+      .map(([, options]) => (options as { mode?: string }).mode);
+    expect(normalizerModes).toEqual(['initial', 'correction']);
     expect(managerReached).toBe(true);
     expect(result.stepOutputs.get('review')?.content).toBe(reportContent);
     expect(result.stepOutputs.has('fix')).toBe(true);
@@ -1064,25 +1073,13 @@ describe('WorkflowEngine structured caller defaults', () => {
     expect(ledger.rawFindings[0]?.rawFindingId).toContain(correctedRawFindingId);
   });
 
-  it('単独 Finding Contract reviewer の訂正後も不正なら1回で打ち切る', async () => {
-    let reviewerCalls = 0;
+  it('単独 Finding Contract reviewer の正規化が訂正後も不正なら1回で打ち切る', async () => {
+    // 正規化係が初回も訂正も同じ不正形を返す。やり直し候補（escalate 先）が無い
+    // 構成なので、1回訂正で打ち切って理由付きで停止する。
+    queueNormalizerResponses('Original review report body.', [
+      normalizerResponse('still-invalid'),
+    ]);
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
-      const schemaText = options?.outputSchema ? JSON.stringify(options.outputSchema) : '';
-      if (schemaText.includes('"reportContent"')) {
-        reviewerCalls += 1;
-        options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
-        return {
-          persona,
-          status: 'done',
-          content: '',
-          structuredOutput: {
-            reportContent: 'Original review report body.',
-            rawFindings: 'still-invalid',
-          },
-          sessionId: 'review-session-1',
-          timestamp: new Date(`2026-06-13T00:00:0${reviewerCalls}.000Z`),
-        };
-      }
       options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
       return {
         persona,
@@ -1136,10 +1133,10 @@ describe('WorkflowEngine structured caller defaults', () => {
     });
     const result = await engine.run();
 
-    expect(reviewerCalls).toBe(2);
+    expect(vi.mocked(normalizeFindingIntake)).toHaveBeenCalledTimes(2);
     expect(result.status).toBe('aborted');
     expect(abortReasons).toEqual([
-      expect.stringContaining('structured output remained invalid after one correction'),
+      expect.stringContaining('remained invalid after one correction'),
     ]);
     expect(phaseCompletions).toEqual([{
       step: 'review',
@@ -1166,49 +1163,34 @@ describe('WorkflowEngine structured caller defaults', () => {
         source: 'sdk_error' as const,
       },
     },
-  ])('単独 Finding Contract reviewer の訂正が $status なら初回本文と terminal metadata を保持する', async ({
+  ])('正規化係の訂正が $status ならレビュー本文と terminal metadata を保持する', async ({
     status,
     error,
     errorKind,
     rateLimitInfo,
   }) => {
-    let reviewerCalls = 0;
-    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
-      const schemaText = options?.outputSchema ? JSON.stringify(options.outputSchema) : '';
-      if (!schemaText.includes('"reportContent"')) {
-        options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
-        return {
-          persona,
-          status: 'done',
-          content: 'Original review report body.',
-          sessionId: 'review-session-1',
-          timestamp: new Date('2026-06-13T00:00:00.000Z'),
-        };
-      }
-      reviewerCalls += 1;
-      if (reviewerCalls === 1) {
-        options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
-        return {
-          persona,
-          status: 'done',
-          content: 'Original review report body.',
-          structuredOutput: {
-            reportContent: 'Original review report body.',
-            rawFindings: 'invalid',
-          },
-          sessionId: 'review-session-1',
-          timestamp: new Date('2026-06-13T00:00:01.000Z'),
-        };
-      }
-      return {
-        persona,
+    // 一本道: 訂正は正規化係の呼び出し。その終端応答（blocked / rate_limited）は
+    // メタデータだけを引き継ぎ、本文はレビュアーのレポートを正本のまま残す。
+    queueNormalizerResponses('Original review report body.', [
+      normalizerResponse('invalid', new Date('2026-06-13T00:00:01.000Z')),
+      {
+        persona: 'finding-intake-normalizer',
         status,
         content: 'Correction response body must not replace the report.',
         error,
         ...(errorKind !== undefined ? { errorKind } : {}),
         ...(rateLimitInfo !== undefined ? { rateLimitInfo } : {}),
-        sessionId: 'review-session-1',
         timestamp: new Date('2026-06-13T00:00:02.000Z'),
+      } as AgentResponse,
+    ]);
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+      return {
+        persona,
+        status: 'done',
+        content: 'Original review report body.',
+        sessionId: 'review-session-1',
+        timestamp: new Date('2026-06-13T00:00:00.000Z'),
       };
     });
 
@@ -1242,7 +1224,7 @@ describe('WorkflowEngine structured caller defaults', () => {
     }).run();
 
     const output = result.stepOutputs.get('review');
-    expect(reviewerCalls).toBe(2);
+    expect(vi.mocked(normalizeFindingIntake)).toHaveBeenCalledTimes(2);
     expect(output?.status).toBe(status);
     expect(output?.content).toBe('Original review report body.');
     expect(output?.error).toBe(error);
@@ -1268,27 +1250,19 @@ describe('WorkflowEngine structured caller defaults', () => {
         rules: [makeRule('when(true)', 'COMPLETE')],
       })],
     };
+    // Phase 1 の prompt だけを集める（Phase 2 はレポート出力フェーズ）。
     const prompts: string[] = [];
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
-      const schemaText = options?.outputSchema ? JSON.stringify(options.outputSchema) : '';
-      if (
-        schemaText.includes('"reportContent"')
-        || instruction.includes('combined Finding Contract publication schema')
-      ) {
-        options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+      options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+      if (isFindingReviewPublicationCall(instruction, options?.outputSchema)) {
         return {
           persona,
           status: 'done',
-          content: '',
-          structuredOutput: {
-            reportContent: 'No findings.',
-            rawFindings: [],
-          },
+          content: 'No findings.',
           timestamp: new Date(),
         };
       }
       prompts.push(instruction);
-      options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
       if (prompts.length === 1) {
         return {
           persona,
@@ -1303,7 +1277,6 @@ describe('WorkflowEngine structured caller defaults', () => {
         persona,
         status: 'done',
         content: 'No findings.',
-        structuredOutput: { rawFindings: [] },
         sessionId: 'review-session-fallback',
         timestamp: new Date(),
       };
@@ -1692,51 +1665,18 @@ describe('WorkflowEngine structured caller defaults', () => {
       conflicts: [],
     };
 
-    let reviewerCalls = 0;
+    // 一本道: 是正は正規化係の1回訂正。1回目に形の壊れた出力、2回目で正しい出力。
+    queueNormalizerResponses('Review report body.', [
+      normalizerResponse('invalid', new Date('2026-06-13T00:00:01.000Z')),
+      normalizerResponse([], new Date('2026-06-13T00:00:02.000Z')),
+    ]);
     vi.mocked(runAgent).mockImplementation(async (_persona, instruction, options) => {
       options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
-      const publicationCall = isFindingReviewPublicationCall(instruction, options?.outputSchema);
-      if (publicationCall) {
-        reviewerCalls += 1;
-        if (reviewerCalls === 1) {
-          // 1回目: combined publication の rawFindings 型を意図的に壊す。
-          return {
-            persona: 'reviewer',
-            status: 'done',
-            content: 'Review report body.',
-            structuredOutput: {
-              reportContent: 'Review report body.',
-              rawFindings: 'invalid',
-            },
-            sessionId: 'review-session-1',
-            timestamp: new Date('2026-06-13T00:00:01.000Z'),
-          };
-        }
-        // 2回目（是正コール）: 正しい出力。是正では tools を絞り、
-        // Phase 1 のイベントコールバックを引き継がないことも検証する
-        expect(instruction).toContain('Finding Contract publication failed structured validation');
-        expect(options?.permissionMode).toBe('readonly');
-        expect(options?.allowedTools).toEqual([]);
-        expect(options?.onPromptResolved).toBeUndefined();
+      if (_persona === 'solo-reviewer') {
         return {
           persona: 'reviewer',
           status: 'done',
           content: 'Review report body.',
-          structuredOutput: {
-            reportContent: 'Review report body.',
-            rawFindings: [],
-          },
-          sessionId: 'review-session-1',
-          timestamp: new Date('2026-06-13T00:00:02.000Z'),
-        };
-      }
-      const schemaText = options?.outputSchema ? JSON.stringify(options.outputSchema) : '';
-      if (schemaText.includes('"rawFindings"')) {
-        return {
-          persona: 'reviewer',
-          status: 'done',
-          content: 'Review report body.',
-          structuredOutput: { rawFindings: [] },
           sessionId: 'review-session-1',
           timestamp: new Date('2026-06-13T00:00:00.000Z'),
         };
@@ -1795,8 +1735,10 @@ describe('WorkflowEngine structured caller defaults', () => {
     const result = await engine.run();
 
     expect(result.status, abortReasons.join('\n')).toBe('completed');
-    expect(reviewerCalls).toBe(2);
-    // レポート本文は元の Phase 1 出力が維持される
+    const normalizerModes = vi.mocked(normalizeFindingIntake).mock.calls
+      .map(([, callOptions]) => (callOptions as { mode?: string }).mode);
+    expect(normalizerModes).toEqual(['initial', 'correction']);
+    // レポート本文は元のレビュー出力が維持される
     expect(result.stepOutputs.get('solo-review')?.content).toBe('Review report body.');
   });
 
@@ -1811,47 +1753,30 @@ describe('WorkflowEngine structured caller defaults', () => {
       conflicts: [],
     };
 
-    let reviewerCalls = 0;
+    // 訂正呼び出しが rate_limited を返す。error へ潰さずそのまま伝播する。
+    queueNormalizerResponses('Review report body.', [
+      normalizerResponse('invalid', new Date('2026-06-13T00:00:01.000Z')),
+      {
+        persona: 'finding-intake-normalizer',
+        status: 'rate_limited',
+        content: '',
+        error: 'Rate limited by provider',
+        errorKind: 'rate_limit',
+        rateLimitInfo: {
+          provider: 'claude',
+          detectedAt: new Date('2026-06-13T00:00:02.000Z'),
+          source: 'sdk_error',
+        },
+        timestamp: new Date('2026-06-13T00:00:02.000Z'),
+      } as AgentResponse,
+    ]);
     vi.mocked(runAgent).mockImplementation(async (_persona, instruction, options) => {
       options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
-      const publicationCall = isFindingReviewPublicationCall(instruction, options?.outputSchema);
-      if (publicationCall) {
-        reviewerCalls += 1;
-        if (reviewerCalls === 1) {
-          return {
-            persona: 'reviewer',
-            status: 'done',
-            content: 'Review report body.',
-            structuredOutput: {
-              reportContent: 'Review report body.',
-              rawFindings: 'invalid',
-            },
-            sessionId: 'review-session-1',
-            timestamp: new Date('2026-06-13T00:00:01.000Z'),
-          };
-        }
-        return {
-          persona: 'reviewer',
-          status: 'rate_limited',
-          content: '',
-          error: 'Rate limited by provider',
-          errorKind: 'rate_limit',
-          rateLimitInfo: {
-            provider: 'claude',
-            detectedAt: new Date('2026-06-13T00:00:02.000Z'),
-            source: 'sdk_error',
-          },
-          sessionId: 'review-session-1',
-          timestamp: new Date('2026-06-13T00:00:02.000Z'),
-        };
-      }
-      const schemaText = options?.outputSchema ? JSON.stringify(options.outputSchema) : '';
-      if (schemaText.includes('"rawFindings"')) {
+      if (_persona === 'solo-reviewer') {
         return {
           persona: 'reviewer',
           status: 'done',
           content: 'Review report body.',
-          structuredOutput: { rawFindings: [] },
           sessionId: 'review-session-1',
           timestamp: new Date('2026-06-13T00:00:00.000Z'),
         };
@@ -1938,41 +1863,24 @@ describe('WorkflowEngine structured caller defaults', () => {
       conflicts: [],
     };
 
-    let reviewerCalls = 0;
+    // 訂正呼び出しが blocked を返しても、レポート本文は正本のまま残す。
+    queueNormalizerResponses('Review report body.', [
+      normalizerResponse('invalid', new Date('2026-06-13T00:00:01.000Z')),
+      {
+        persona: 'finding-intake-normalizer',
+        status: 'blocked',
+        content: 'Correction requires user input.',
+        error: 'Permission prompt blocked correction',
+        timestamp: new Date('2026-06-13T00:00:02.000Z'),
+      } as AgentResponse,
+    ]);
     vi.mocked(runAgent).mockImplementation(async (_persona, instruction, options) => {
       options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
-      const publicationCall = isFindingReviewPublicationCall(instruction, options?.outputSchema);
-      if (publicationCall) {
-        reviewerCalls += 1;
-        if (reviewerCalls === 1) {
-          return {
-            persona: 'reviewer',
-            status: 'done',
-            content: 'Review report body.',
-            structuredOutput: {
-              reportContent: 'Review report body.',
-              rawFindings: 'invalid',
-            },
-            sessionId: 'review-session-1',
-            timestamp: new Date('2026-06-13T00:00:01.000Z'),
-          };
-        }
-        return {
-          persona: 'reviewer',
-          status: 'blocked',
-          content: 'Correction requires user input.',
-          error: 'Permission prompt blocked correction',
-          sessionId: 'review-session-1',
-          timestamp: new Date('2026-06-13T00:00:02.000Z'),
-        };
-      }
-      const schemaText = options?.outputSchema ? JSON.stringify(options.outputSchema) : '';
-      if (schemaText.includes('"rawFindings"')) {
+      if (_persona === 'solo-reviewer') {
         return {
           persona: 'reviewer',
           status: 'done',
           content: 'Review report body.',
-          structuredOutput: { rawFindings: [] },
           sessionId: 'review-session-1',
           timestamp: new Date('2026-06-13T00:00:00.000Z'),
         };
@@ -2247,7 +2155,8 @@ describe('WorkflowEngine structured caller defaults', () => {
             timestamp: new Date('2026-06-13T00:00:02.000Z'),
           });
         }
-        expect(options?.outputSchema).toEqual(expect.objectContaining({ required: ['rawFindings'] }));
+        // 一本道: レビュアーの Phase 1 に構造化出力契約は載らない。
+        expect(options?.outputSchema).toBeUndefined();
         return findingReviewerPhase1Response({
           persona,
           reportContent,
@@ -2331,8 +2240,9 @@ describe('WorkflowEngine structured caller defaults', () => {
     }));
     expect(ledger.rawFindings.map((finding) => finding.rawFindingId)).toEqual(
       expect.arrayContaining([
-        expect.stringMatching(/^[^"\s]+:reviewers:\d+:architecture-review:raw-architecture-1$/),
-        expect.stringMatching(/^[^"\s]+:reviewers:\d+:security-review:raw-architecture-1$/),
+        // raw finding id は publication identity（report 名まで含む）で名前空間化する。
+        expect.stringMatching(/^[^"\s]+:reviewers:\d+:architecture-review:[^:]+:raw-architecture-1$/),
+        expect.stringMatching(/^[^"\s]+:reviewers:\d+:security-review:[^:]+:raw-architecture-1$/),
       ]),
     );
     expect(ledger.rawFindings.map((finding) => finding.reviewer)).toEqual([
@@ -3942,20 +3852,15 @@ describe('WorkflowEngine structured caller defaults', () => {
               startLine: 48,
             })]
           : [];
-        const publication = isFindingReviewPublicationCall(instruction, options?.outputSchema);
-        return {
+        // 一本道: レビュアーは markdown レポートだけを書く（JSON schema fallback を
+        // 使うのは manager 側で、そちらは上の分岐が fenced JSON を返している）。
+        return findingReviewerPublicationResponse({
           persona,
-          status: 'done',
-          content: [
-            '```json',
-            JSON.stringify(publication
-              ? { reportContent, rawFindings }
-              : { rawFindings: [] }),
-            '```',
-          ].join('\n'),
+          reportContent,
+          rawFindings,
           sessionId: architecture ? 'architecture-session' : 'security-session',
           timestamp: new Date('2026-06-13T00:00:02.000Z'),
-        };
+        });
       }
       return {
         persona,

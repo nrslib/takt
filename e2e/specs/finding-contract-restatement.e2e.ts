@@ -127,14 +127,6 @@ describe('E2E: Finding Contract restatement recovery (mock)', () => {
       __dirname,
       '../fixtures/workflows/finding-contract-restatement.yaml',
     )));
-    updateIsolatedConfig(isolatedEnv.taktDir, {
-      finding_contract: {
-        intake_normalize: {
-          provider: 'mock',
-          model: 'mock-model',
-        },
-      },
-    });
   });
 
   afterEach(() => {
