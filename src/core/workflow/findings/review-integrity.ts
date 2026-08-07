@@ -22,9 +22,14 @@ import type {
   FindingContractReviewBudgetConfig,
   FindingLedger,
   FindingLedgerReviewIntegrityState,
+  ReviewerAnomalyEntry,
 } from './types.js';
 import { addRoundMarker } from './round-marker.js';
 import { isOutstandingReviewerAnomaly } from './reviewer-anomalies.js';
+import {
+  isConcludedReviewerAnomaly,
+} from '../../models/finding-reviewer-anomaly-settlement-policy.js';
+import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
 
 /**
  * finding_contract.review_budget が省略した場合の既定値。「無制限を許さない」
@@ -58,6 +63,79 @@ export function reviewIntegrityRoundsCompleted(ledger: FindingLedger): number {
 /** 未昇格かつ未settleの reviewer anomaly が1件でも残っているか。 */
 function hasOutstandingReviewerAnomalies(ledger: FindingLedger): boolean {
   return (ledger.reviewerAnomalies ?? []).some(isOutstandingReviewerAnomaly);
+}
+
+export type IntakeReviewIntegrityFailureCode =
+  | 'review_integrity_unresolved_unpresented'
+  | 'restatement_exhausted_claim_bearing';
+
+export interface IntakeReviewIntegrityFailureClassification {
+  readonly code: IntakeReviewIntegrityFailureCode;
+  readonly reason: string;
+  readonly anomalyIds: string[];
+  readonly unpresentedIds: string[];
+  readonly classificationAuthorityIds: string[];
+}
+
+/**
+ * 完了直前の review-integrity ゲートが、残った intake anomaly をどう診断するか。
+ *
+ * 2つの原因を区別する:
+ *   - `unpresented`: 言い直しの機会が一度も与えられていない（ワークフローの配線漏れ）
+ *   - `exhausted`: 提示ラダーが終わり、終端処分として決着している（可視的失敗）
+ *
+ * 終端処分済み（intakeContract.terminalDisposition あり）は unpresented の対象から
+ * 外す。提示回数は終端処分の判定材料であって、決着後の診断材料ではない —
+ * `undemandable_claim_atom` は提示を1回も行わずに終端する正規の kind なので、
+ * 提示回数をどう数え直しても「提示されていない」は真にならない。ここで外さないと、
+ * 決着済みの anomaly が常に配線漏れとして報告され、診断が原因を指さなくなる。
+ *
+ * 純関数。提示回数の収集（IO）は呼び出し側が行う。
+ */
+export function classifyIntakeReviewIntegrityFailure(input: {
+  /** 未決着の reviewer anomaly（isOutstandingReviewerAnomaly で絞り込み済み）。 */
+  readonly anomalies: readonly ReviewerAnomalyEntry[];
+  readonly presentationCounts: ReadonlyMap<string, number>;
+}): IntakeReviewIntegrityFailureClassification | undefined {
+  const intakeAnomalies = input.anomalies.filter((anomaly) => (
+    anomaly.kind === 'intake-contract-incomplete'
+    && anomaly.intakeContract !== undefined
+  ));
+  if (intakeAnomalies.length === 0) {
+    return undefined;
+  }
+  const unpresentedIds = intakeAnomalies
+    .filter((anomaly) => (
+      !isConcludedReviewerAnomaly(anomaly)
+      && (input.presentationCounts.get(anomaly.id) ?? 0) === 0
+    ))
+    .map(({ id }) => id)
+    .sort(compareBinaryStrings);
+  const exhaustedIds = intakeAnomalies
+    .filter((anomaly) => (
+      anomaly.intakeContract!.terminalDisposition?.workflowOutcome === 'review_integrity_unresolved'
+      || (anomaly.intakeContract!.observationClass === 'claim-bearing'
+        && (input.presentationCounts.get(anomaly.id) ?? 0) >= anomaly.intakeContract!.presentationLimit)
+    ))
+    .map(({ id }) => id)
+    .sort(compareBinaryStrings);
+  if (unpresentedIds.length === 0 && exhaustedIds.length === 0) {
+    return undefined;
+  }
+  const code: IntakeReviewIntegrityFailureCode = unpresentedIds.length > 0
+    ? 'review_integrity_unresolved_unpresented'
+    : 'restatement_exhausted_claim_bearing';
+  return {
+    code,
+    reason: code === 'review_integrity_unresolved_unpresented'
+      ? `Review-integrity reviewer anomaly restatement could not be presented for anomaly IDs: ${unpresentedIds.join(', ')}`
+      : `Review-integrity reviewer anomaly restatement limit was exhausted for anomaly IDs: ${exhaustedIds.join(', ')}`,
+    anomalyIds: intakeAnomalies.map(({ id }) => id).sort(compareBinaryStrings),
+    unpresentedIds,
+    classificationAuthorityIds: [...new Set(intakeAnomalies.map(
+      ({ intakeContract }) => intakeContract!.classificationAuthorityId,
+    ))].sort(compareBinaryStrings),
+  };
 }
 
 /**

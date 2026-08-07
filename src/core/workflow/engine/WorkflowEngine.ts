@@ -71,6 +71,9 @@ import { injectFindingConflictAdjudicationStep } from '../findings/adjudication-
 import { createFindingConflictAdjudicationRunner } from '../findings/adjudication-runner.js';
 import { rebindPendingManagerPublicationAtBootstrap } from '../findings/manager-commit.js';
 import { isOutstandingReviewerAnomaly } from '../findings/reviewer-anomalies.js';
+import {
+  classifyIntakeReviewIntegrityFailure,
+} from '../findings/review-integrity.js';
 import { listFindingReviewPublications } from '../findings/review-publication.js';
 import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
 import { ERROR_MESSAGES } from '../constants.js';
@@ -628,17 +631,9 @@ export class WorkflowEngine extends EventEmitter {
     reason: string;
     failure: import('../types.js').WorkflowStepFailureSummary;
   } | undefined {
-    const intakeAnomalies = anomalies.filter((anomaly) => (
-      anomaly.kind === 'intake-contract-incomplete'
-      && anomaly.intakeContract !== undefined
-    ));
-    if (intakeAnomalies.length === 0) {
-      return undefined;
-    }
-    const publications = listFindingReviewPublications(this.runPaths.reportsAbs);
     const presentationCounts = new Map<string, number>();
     const publicationIdsByAnomalyId = new Map<string, string[]>();
-    for (const publication of publications) {
+    for (const publication of listFindingReviewPublications(this.runPaths.reportsAbs)) {
       if (publication.presentationContext?.revision !== 2) continue;
       for (const anomalyId of publication.presentationContext.presentedReviewerAnomalyIds) {
         presentationCounts.set(anomalyId, (presentationCounts.get(anomalyId) ?? 0) + 1);
@@ -649,31 +644,17 @@ export class WorkflowEngine extends EventEmitter {
         publicationIdsByAnomalyId.set(anomalyId, publicationIds);
       }
     }
-    const unpresentedIds = intakeAnomalies
-      .filter((anomaly) => (presentationCounts.get(anomaly.id) ?? 0) === 0)
-      .map(({ id }) => id)
-      .sort(compareBinaryStrings);
-    const exhaustedIds = intakeAnomalies
-      .filter((anomaly) => (
-        anomaly.intakeContract!.terminalDisposition?.workflowOutcome === 'review_integrity_unresolved'
-        || (anomaly.intakeContract!.observationClass === 'claim-bearing'
-          && (presentationCounts.get(anomaly.id) ?? 0) >= anomaly.intakeContract!.presentationLimit)
-      ))
-      .map(({ id }) => id)
-      .sort(compareBinaryStrings);
-    if (unpresentedIds.length === 0 && exhaustedIds.length === 0) {
+    const classification = classifyIntakeReviewIntegrityFailure({
+      anomalies,
+      presentationCounts,
+    });
+    if (classification === undefined) {
       return undefined;
     }
-    const anomalyIds = intakeAnomalies.map(({ id }) => id).sort(compareBinaryStrings);
-    const publicationIds = [...new Set(intakeAnomalies.flatMap(({ id }) => (
+    const { code, reason, anomalyIds, unpresentedIds, classificationAuthorityIds } = classification;
+    const publicationIds = [...new Set(anomalyIds.flatMap((id) => (
       publicationIdsByAnomalyId.get(id) ?? []
     )))].sort(compareBinaryStrings);
-    const code = unpresentedIds.length > 0
-      ? 'review_integrity_unresolved_unpresented' as const
-      : 'restatement_exhausted_claim_bearing' as const;
-    const reason = code === 'review_integrity_unresolved_unpresented'
-      ? `Review-integrity reviewer anomaly restatement could not be presented for anomaly IDs: ${unpresentedIds.join(', ')}`
-      : `Review-integrity reviewer anomaly restatement limit was exhausted for anomaly IDs: ${exhaustedIds.join(', ')}`;
     return {
       reason,
       failure: createRunFailure({
@@ -686,9 +667,7 @@ export class WorkflowEngine extends EventEmitter {
             code,
             anomalyIds,
             unpresentedIds,
-            classificationAuthorityIds: [...new Set(intakeAnomalies.map(
-              ({ intakeContract }) => intakeContract!.classificationAuthorityId,
-            ))].sort(compareBinaryStrings),
+            classificationAuthorityIds,
             publicationIds,
           },
         },

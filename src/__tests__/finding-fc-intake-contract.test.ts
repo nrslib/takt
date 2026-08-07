@@ -67,6 +67,9 @@ import {
 import { createProvisionalClaimBindingAuthorizationReference } from '../core/models/finding-provisional-claim-authorization.js';
 import { createEngineProofRecord } from '../core/models/finding-evidence-record.js';
 import { parseFindingLedger } from '../core/models/finding-schemas.js';
+import {
+  classifyIntakeReviewIntegrityFailure,
+} from '../core/workflow/findings/review-integrity.js';
 
 const observedAt: FindingObservation = {
   runId: 'run-fc-intake',
@@ -1159,6 +1162,87 @@ describe('FC intake contract', () => {
       // 終端はゲートを塞ぎ続け、terminal adjudication ルートへ送る。
       expect(context.claimBearingTerminalCount).toBe(1);
       expect(context.count).toBe(1);
+    });
+
+    /**
+     * 完了ゲートの診断が原因を指すこと。決着済みを「提示されていない（配線漏れ）」と
+     * 報告すると、実際の原因（終端処分が未決着のまま残っている）が隠れる。
+     */
+    describe('completion gate diagnosis', () => {
+      it('reports the exhausted cause for a terminally disposed anomaly instead of an unpresented one', () => {
+        const { ledger } = disposedLedger('raw-closed-diagnosis');
+        const classification = classifyIntakeReviewIntegrityFailure({
+          anomalies: ledger.reviewerAnomalies!,
+          // 提示は別の workflow_call 名前空間で行われたため、このゲートからは0件に見える。
+          presentationCounts: new Map(),
+        });
+
+        expect(classification?.code).toBe('restatement_exhausted_claim_bearing');
+        expect(classification?.unpresentedIds).toEqual([]);
+        expect(classification?.reason).toContain('restatement limit was exhausted');
+        expect(classification?.anomalyIds).toEqual([ledger.reviewerAnomalies![0]!.id]);
+      });
+
+      it('reports the exhausted cause for a terminal that never demanded a presentation', () => {
+        // undemandable_claim_atom は提示を1回も行わずに終端する正規の kind。
+        // 提示回数をどう数え直しても「提示済み」にはならないので、決着済みを
+        // unpresented から外すことでしか正しく診断できない。
+        const { ledger } = disposedLedger('raw-closed-undemandable');
+        const undemandable = {
+          ...ledger,
+          reviewerAnomalies: ledger.reviewerAnomalies!.map((entry) => ({
+            ...entry,
+            intakeContract: {
+              ...entry.intakeContract!,
+              terminalDisposition: {
+                kind: 'undemandable_claim_atom' as const,
+                workflowOutcome: 'review_integrity_unresolved' as const,
+                decidedAt: observedAt,
+                reason: 'The recorded observation carries no claim body that a restatement request could ask back',
+              },
+            },
+          })),
+        };
+
+        expect(classifyIntakeReviewIntegrityFailure({
+          anomalies: undemandable.reviewerAnomalies,
+          presentationCounts: new Map(),
+        })?.code).toBe('restatement_exhausted_claim_bearing');
+      });
+
+      it('still reports the unpresented cause while the anomaly is open', () => {
+        // 正の対照: 終端処分が無い anomaly は「提示されていない」＝配線漏れのまま。
+        const raw = incompleteRaw('raw-open-diagnosis', {
+          rawExcerpt: 'The open defect remains observable.',
+        });
+        const ledger = applyReviewerAnomalySpecsToLedger(emptyLedger(), [createReviewerAnomalySpec({
+          wire: raw,
+          canonical: canonicalItem(raw).canonical,
+          anomalyKind: 'intake-contract-incomplete',
+          reason: 'Independent reviewer observation does not satisfy the product admission contract',
+          intakeContract: {
+            observationClass: 'claim-bearing',
+            classificationAuthorityId: 'system/intake_observation_classification_v1',
+            reasonCodes: ['product-identity-incomplete'],
+            missingRequirements: ['relation', 'severity'],
+            presentationOwnerReviewer: raw.reviewer,
+            presentationLimit: 6,
+          },
+        })], {
+          workflowName: 'peer-review',
+          stepName: observedAt.stepName,
+          runId: observedAt.runId,
+          timestamp: observedAt.timestamp,
+        }, new Set());
+
+        const classification = classifyIntakeReviewIntegrityFailure({
+          anomalies: ledger.reviewerAnomalies!,
+          presentationCounts: new Map(),
+        });
+
+        expect(classification?.code).toBe('review_integrity_unresolved_unpresented');
+        expect(classification?.unpresentedIds).toEqual([ledger.reviewerAnomalies![0]!.id]);
+      });
     });
   });
 
