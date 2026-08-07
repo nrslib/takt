@@ -56,14 +56,30 @@ function readOption(name, fallback) {
   return i === -1 ? fallback : process.argv[i + 1];
 }
 
+/**
+ * An unparseable numeric option must not degrade into NaN: `Math.min(NaN, n)` is
+ * NaN, `Array.from({ length: NaN })` is empty, and the sweep then writes an empty
+ * summary without running or reporting anything.
+ */
+function readIntOption(name, fallback) {
+  const raw = readOption(name, String(fallback));
+  const value = Number.parseInt(raw, 10);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive integer (received ${JSON.stringify(raw)})`);
+  }
+  return value;
+}
+
 const armNames = String(readOption('--arms', 'baseline,shipped')).split(',');
 const languages = String(readOption('--languages', 'ja')).split(',');
 const modelNames = String(readOption('--models', 'glm,gemma')).split(',');
-const caseLimit = Number.parseInt(readOption('--cases', '999'), 10);
-const repeat = Number.parseInt(readOption('--repeat', '1'), 10);
-const resultSet = readOption('--result-set', 'current');
-const timeoutMs = Number.parseInt(readOption('--timeout-ms', '600000'), 10);
-const concurrency = Number.parseInt(readOption('--concurrency', '5'), 10);
+const caseLimit = readIntOption('--cases', 999);
+const repeat = readIntOption('--repeat', 1);
+// Must match the scorer's default, or a default sweep writes one directory and
+// the scorer reads another (ENOENT).
+const resultSet = readOption('--result-set', 'final');
+const timeoutMs = readIntOption('--timeout-ms', 600_000);
+const concurrency = readIntOption('--concurrency', 5);
 
 const norm = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
 
@@ -212,7 +228,15 @@ const ARMS = {
  * Production reviewers always receive their `*-finding-contract` output contract
  * alongside the engine block. Measuring without it hides exactly the failure the
  * adversarial review flagged: a restatement rule that contradicts the contract's
- * mandatory sections. Held constant across arms.
+ * mandatory sections.
+ *
+ * `security-review-finding-contract` is used for every case regardless of
+ * `testCase.reviewer` (cases also come from testing-review, arch-review, ...).
+ * That is deliberate: this eval compares arms, so the contract is a controlled
+ * constant — letting it vary per reviewer would confound the arm delta with
+ * per-contract wording differences. All `*-finding-contract` contracts share the
+ * `## Finding Contract Claims` section the restatement rule scopes itself to, so
+ * the section the arms are measured on is the same either way.
  */
 function outputContractFormat(language) {
   return readFileSync(
@@ -258,6 +282,18 @@ const CANONICAL_REQUEST = (() => {
   return [{ ...withoutId, restatementRequestId: computeRestatementRequestId(withoutId) }];
 })();
 
+/** Digest of everything a case contributes to the prompt. */
+function caseContentDigest(testCase) {
+  return createHash('sha256').update(JSON.stringify([
+    testCase.anomalyId,
+    testCase.reviewer,
+    testCase.title,
+    testCase.claimAtom,
+    testCase.targetPaths,
+    testCase.missingRequirements,
+  ])).digest('hex').slice(0, 8);
+}
+
 const armDigestCache = new Map();
 function armDigest(arm, language) {
   const key = `${arm}/${language}`;
@@ -302,6 +338,7 @@ function scoreTrial({ testCase, candidates }) {
     atomSubstring: false,
     echoOk: false,
     echoExact: false,
+    hasVerifiableEvidence: false,
     quoteTargetConsistent: false,
     accepted: false,
     bindable: false,
@@ -340,12 +377,20 @@ function scoreTrial({ testCase, candidates }) {
   result.echoExact = echo === testCase.anomalyId;
   result.echoOk = echo === undefined || result.echoExact;
 
-  // issueFindingEvidenceRequests: file_quote must sit on the code target's paths
+  // issueFindingEvidenceRequests: file_quote must sit on the code target's paths.
+  //
+  // A claim that names no target and quotes nothing must NOT pass here. Without
+  // the explicit evidence requirement below, `targetOf` degrades a null target to
+  // `review_scope`, `quotes.length === 0` is then trivially "consistent", and a
+  // reply that copies the claim atom and echoes the anomaly id while citing no
+  // file at all scores as a success — inflating the headline metric and skipping
+  // the very rule the shipped prompt adds (every quoted file must be listed under
+  // `Target files`, with a line range under `Evidence`).
   const target = targetOf(c);
   const quotes = (c.evidenceRequests ?? []).filter((e) => e.kind === 'file_quote');
-  result.quoteTargetConsistent = quotes.length === 0
-    ? target.kind !== 'code'
-    : target.kind === 'code' && quotes.every((q) => target.paths.includes(q.path));
+  result.hasVerifiableEvidence = quotes.length > 0 && target.kind === 'code';
+  result.quoteTargetConsistent = result.hasVerifiableEvidence
+    && quotes.every((q) => target.paths.includes(q.path));
 
   // Today's gate: product identity is the reviewer's responsibility.
   result.accepted = result.exactlyOneCandidate
@@ -357,7 +402,9 @@ function scoreTrial({ testCase, candidates }) {
 
   // Observation-only gate: classification moves to the normalizer + manager, so
   // a restatement only has to be bindable back to its anomaly with verifiable
-  // evidence. relation may be absent (the manager assigns it).
+  // evidence. relation may be absent (the manager assigns it). The evidence
+  // requirement rides in via quoteTargetConsistent, which now implies
+  // hasVerifiableEvidence — both gates therefore reject an evidence-less reply.
   result.bindable = result.exactlyOneCandidate
     && result.atomVerbatim
     && result.echoOk
@@ -379,7 +426,10 @@ async function withTimeout(factory, ms) {
   }
 }
 
-async function runReviewer(modelKey, prompt, repoRoot) {
+// The language must follow the arm being measured. Hard-coding 'ja' put a
+// Japanese language setting behind an English prompt for every en trial, so the
+// en numbers were measured under mixed language conditions.
+async function runReviewer(modelKey, prompt, repoRoot, language) {
   const cfg = MODELS[modelKey];
   const response = await withTimeout(
     (abortSignal) => callOpenCodeCustom('restatement-reviewer', prompt, '', {
@@ -389,7 +439,7 @@ async function runReviewer(modelKey, prompt, repoRoot) {
       model: cfg.model,
       permissionMode: 'readonly',
       allowedTools: ['read', 'grep', 'glob', 'list'],
-      language: 'ja',
+      language,
       interactionTimeoutMs: timeoutMs + 5_000,
       abortSignal,
     }),
@@ -398,12 +448,12 @@ async function runReviewer(modelKey, prompt, repoRoot) {
   return response.content ?? response.output ?? '';
 }
 
-async function runNormalizer(report) {
+async function runNormalizer(report, language) {
   const response = await withTimeout(
     (abortSignal) => normalizeFindingIntake(report, {
       provider: NORMALIZER.provider,
       model: NORMALIZER.model,
-      language: 'ja',
+      language,
       mode: 'initial',
       abortSignal,
     }),
@@ -469,7 +519,13 @@ async function main() {
     // renders) changes it and invalidates that arm's cached trials, while the
     // scorer can still pool all cases of one generation into a single row.
     const promptDigest = armDigest(arm, language);
-    const trialId = `${modelKey}--${arm}-${language}--${testCase.caseId}--r${rep}--${promptDigest}`;
+    // The case fixture also feeds the prompt (claim atom, task-context title,
+    // target paths, missing requirements). Regenerating cases keeps caseId stable
+    // while changing what the model is asked, so the case content is a second
+    // cache dimension; without it a re-run silently reuses trials produced from
+    // the previous fixture.
+    const caseDigest = caseContentDigest(testCase);
+    const trialId = `${modelKey}--${arm}-${language}--${testCase.caseId}--r${rep}--${promptDigest}-${caseDigest}`;
     const cachePath = join(resultDir, `${trialId}.json`);
     if (existsSync(cachePath)) {
       process.stdout.write(`. ${trialId} (cached)\n`);
@@ -480,13 +536,13 @@ async function main() {
       throw new Error(`No repoRoot for source key "${testCase.sourceKey}"; check the eval sources file.`);
     }
     const shared = {
-      trialId, modelKey, arm, language, promptDigest, caseId: testCase.caseId,
+      trialId, modelKey, arm, language, promptDigest, caseDigest, caseId: testCase.caseId,
       source: testCase.sourceKey, missing: testCase.missingRequirements,
     };
     let record;
     try {
-      const report = await runReviewer(modelKey, prompt, repoRoot);
-      const candidates = await runNormalizer(report);
+      const report = await runReviewer(modelKey, prompt, repoRoot, language);
+      const candidates = await runNormalizer(report, language);
       record = {
         ...shared,
         reportChars: report.length,

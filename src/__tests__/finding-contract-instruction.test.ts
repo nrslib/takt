@@ -255,7 +255,7 @@ describe('buildFindingContractInstruction', () => {
     // 書き直した」ことによる correspondence 不成立で、engine は description を
     // claimedExcerpt と完全一致で照合する。この逐語コピー規則が prompt から
     // 落ちると受理率はベースラインへ戻る(eval result-set `final`, n=20/arm,
-    // output contract 同梱: baseline-ja 0% → shipped-ja 60%)。
+    // output contract 同梱: baseline-ja 10% → shipped-ja 70%)。
     it('states the verbatim claim-atom rule in the restatement round', () => {
       for (const [language, expected] of [
         ['ja', [

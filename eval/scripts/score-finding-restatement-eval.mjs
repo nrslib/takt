@@ -20,19 +20,23 @@
  * both arms rendered through the engine's own template machinery (baseline from
  * the pre-change snapshot under cases/finding-restatement/baseline-prompt/).
  *
- *   baseline-ja  n=20   bindable  0%   accepted  0%   (glm   0% / gemma  0%)
- *   shipped-ja   n=20   bindable 60%   accepted 60%   (glm  50% / gemma 70%)
- *   shipped-en   n=10   bindable 80%   accepted 80%   (glm 100% / gemma 60%)
+ *   baseline-ja  n=20   bindable 10%   accepted 10%   (glm  0% / gemma 20%)
+ *   shipped-ja   n=20   bindable 70%   accepted 70%   (glm 60% / gemma 80%)
+ *   shipped-en   n=10   bindable 70%   accepted 70%   (glm 60% / gemma 80%)
  *
  * shipped-en covers cases 1-5 only, so it is not directly comparable to the
- * 10-case ja rows; on the matched 5-case subset the two languages track each
- * other. Every row is keyed by prompt generation digest, so trials produced by
- * an older arm wording never blend into a newer row.
+ * 10-case ja rows. Its `normalizer LOST atom` is 30% against 0% for ja: with the
+ * en language setting the normalizer drops a verbatim atom the reviewer did
+ * write, which is a normalizer-side issue rather than a prompt one.
  *
- * Residual loss in the shipped arm is `no candidate` ~20% (some source claims
- * are genuinely stale, and the baseline shows 35%) and `one candidate` ~80%
- * (the normalizer occasionally extracts a second claim from the output
- * contract's other sections).
+ * Every row is keyed by prompt generation digest, so trials produced by an older
+ * arm wording never blend into a newer row. The case fixture is a second cache
+ * dimension (see caseContentDigest in the runner); regenerating cases forces a
+ * re-run rather than silently reusing trials built from the old fixture.
+ *
+ * Residual loss in the shipped-ja arm is `no candidate` 20% (some source claims
+ * are genuinely stale; the baseline shows 30%) and the normalizer occasionally
+ * extracting a second claim from the output contract's other sections.
  *
  * Arms: baseline | a1-observation | a2-observation-form | shipped. A drop
  * toward the baseline means the verbatim claim-atom rule, the labelled response
@@ -56,7 +60,9 @@ function readOption(name, fallback) {
   return i === -1 ? fallback : process.argv[i + 1];
 }
 
-const resultSet = readOption('--result-set', 'main');
+// Must match the runner's default so a default sweep and a default score read
+// the same directory.
+const resultSet = readOption('--result-set', 'final');
 // Cached trials from an older prompt generation carry a different promptDigest.
 // Mixing generations in one row silently averages two different prompts, so the
 // digest is part of every grouping key; --prompt-digest narrows to one.
@@ -69,6 +75,7 @@ const caseById = new Map(cases.map((c) => [c.caseId, c]));
 const norm = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
 
 const trials = [];
+const orphaned = [];
 for (const file of readdirSync(resultDir)) {
   if (!file.endsWith('.json') || file === 'summary.json') continue;
   const t = JSON.parse(readFileSync(join(resultDir, file), 'utf8'));
@@ -77,10 +84,27 @@ for (const file of readdirSync(resultDir)) {
   t.promptDigest = t.promptDigest ?? 'legacy';
   if (digestFilter !== undefined && t.promptDigest !== digestFilter) continue;
   const c = caseById.get(t.caseId);
-  const atom = norm(c?.claimAtom);
+  // A trial whose caseId is absent from the current fixture has no claim atom to
+  // compare against. Keeping it would silently score `reviewer wrote atom` and
+  // `normalizer LOST atom` as false and drag both metrics down, so drop it and
+  // say so rather than reporting a quietly wrong number.
+  if (c === undefined) {
+    orphaned.push(t.trialId ?? file);
+    continue;
+  }
+  const atom = norm(c.claimAtom);
   t.reviewerAtomVerbatim = atom.length > 0 && norm(t.report).includes(atom);
   t.normalizerLoss = t.reviewerAtomVerbatim && !t.score.atomVerbatim;
   trials.push(t);
+}
+
+if (orphaned.length > 0) {
+  console.warn(
+    `WARNING: excluded ${orphaned.length} trial(s) whose caseId is not in the current case fixture `
+    + '(the fixture was regenerated after those trials were produced). Re-run the sweep to replace them:',
+  );
+  for (const id of orphaned.slice(0, 10)) console.warn(`  - ${id}`);
+  if (orphaned.length > 10) console.warn(`  ... and ${orphaned.length - 10} more`);
 }
 
 function table(groupBy) {

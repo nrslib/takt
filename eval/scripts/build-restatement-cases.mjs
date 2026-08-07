@@ -48,12 +48,35 @@ export function loadEvalSources() {
   return sources;
 }
 
-function latestLedger(runsRoot) {
+function latestLedger(runsRoot, sourceKey) {
   const candidates = readdirSync(runsRoot)
     .sort()
     .map((d) => join(runsRoot, d, 'reports', 'findings-ledger.json'))
     .filter((p) => existsSync(p));
-  return candidates[candidates.length - 1];
+  const latest = candidates[candidates.length - 1];
+  if (latest === undefined) {
+    throw new Error(
+      `Source "${sourceKey}" has no reports/findings-ledger.json under any run in ${runsRoot}. `
+      + 'Point runsRoot at a .takt/runs directory that contains at least one finished FC run.',
+    );
+  }
+  return latest;
+}
+
+/**
+ * When intake never produced a usable title, createReviewerAnomalySpec falls back
+ * to `Reviewer evidence anomaly <rawFindingId>` — and a raw finding id embeds the
+ * run id plus the whole workflow stack as JSON. Feeding that into the eval's task
+ * context buries the real subject under workflow digests and weakens the signal
+ * the arms are being compared on, so substitute the claim atom instead.
+ */
+const MACHINE_GENERATED_TITLE = /^Reviewer evidence anomaly /u;
+
+export function taskContextTitle(title, claimAtom) {
+  if (typeof title !== 'string' || MACHINE_GENERATED_TITLE.test(title)) {
+    return claimAtom.slice(0, 200);
+  }
+  return title;
 }
 
 async function main() {
@@ -67,7 +90,7 @@ async function main() {
 
   const cases = [];
   for (const source of loadEvalSources()) {
-    const ledger = JSON.parse(readFileSync(latestLedger(source.runsRoot), 'utf8'));
+    const ledger = JSON.parse(readFileSync(latestLedger(source.runsRoot, source.key), 'utf8'));
     const rawById = new Map(ledger.rawFindings.map((r) => [r.rawFindingId, r]));
     const anomalies = ledger.reviewerAnomalies.filter((a) => a.kind === 'intake-contract-incomplete');
 
@@ -101,7 +124,7 @@ async function main() {
           reviewer: a.intakeContract.presentationOwnerReviewer,
           missingRequirements: [...(a.intakeContract.missingRequirements ?? [])].sort(),
           presentationLimit: a.intakeContract.presentationLimit,
-          title: a.title,
+          title: taskContextTitle(a.title, claimAtom),
           claimAtom,
           targetPaths,
           sourceFileQuotes: (sourceRaw.evidence ?? [])

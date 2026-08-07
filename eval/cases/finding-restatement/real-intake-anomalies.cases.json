@@ -13,7 +13,7 @@
         "title"
       ],
       "presentationLimit": 6,
-      "title": "Reviewer evidence anomaly 20260807-100140-implement-using-only-the-files-if4kqb:{\"stack\":[{\"workflow\":\"takt-default-fc\",\"workflowRef\":\"builtin:sha256:c508968ad78cb4a5d47767093ad9acc15191882a67d4acf217bdb07fc98ba7a2\",\"step\":\"develop\",\"kind\":\"workflow_call\",\"occurrence\":1},{\"workflow\":\"development-core\",\"workflowRef\":\"builtin:sha256:88bc5b4a8c640864982f27ab7874c316343cf68c2874a2ffdca55300719b3c59\",\"step\":\"peer-review\",\"kind\":\"workflow_call\",\"occurrence\":1},{\"workflow\":\"peer-review-finding-contract\",\"workflowRef\":\"builtin:sha256:c3367f6532701631058650ca2e1af31e3157437ad240683810460679c5277f51\",\"step\":\"reviewers\",\"kind\":\"workflow_call\",\"occurrence\":4}],\"childWorkflow\":\"builtin:sha256:01e0ccf6064f0e61251519b3092896d9c3df73ce81e0e5ababd4705609a37e6a\"}:reviewers:1:security-review:item-d5f6fddb10a980ac607c6bab05b8e5bb8186f148394c7f0f61f7a72036f2570d",
+      "title": "`runner.ts:442-444` は `mcp-assignment.ts:237` で補間済みの `mcpServers` を渡すため正規表現がマッチせず、秘密値が `runner.ts:445-448` の `log.debug` へ漏洩。未解決",
       "claimAtom": "`runner.ts:442-444` は `mcp-assignment.ts:237` で補間済みの `mcpServers` を渡すため正規表現がマッチせず、秘密値が `runner.ts:445-448` の `log.debug` へ漏洩。未解決",
       "targetPaths": [
         "src/agents/runner.ts",
@@ -97,7 +97,7 @@
         "title"
       ],
       "presentationLimit": 6,
-      "title": "Reviewer evidence anomaly 20260807-080757-implement-using-only-the-files-3hk4kc:{\"stack\":[{\"workflow\":\"takt-default-fc\",\"workflowRef\":\"builtin:sha256:c508968ad78cb4a5d47767093ad9acc15191882a67d4acf217bdb07fc98ba7a2\",\"step\":\"develop\",\"kind\":\"workflow_call\",\"occurrence\":1},{\"workflow\":\"development-core\",\"workflowRef\":\"builtin:sha256:88bc5b4a8c640864982f27ab7874c316343cf68c2874a2ffdca55300719b3c59\",\"step\":\"peer-review\",\"kind\":\"workflow_call\",\"occurrence\":1},{\"workflow\":\"peer-review-finding-contract\",\"workflowRef\":\"builtin:sha256:c3367f6532701631058650ca2e1af31e3157437ad240683810460679c5277f51\",\"step\":\"initial-reviewers\",\"kind\":\"workflow_call\",\"occurrence\":1}],\"childWorkflow\":\"builtin:sha256:01e0ccf6064f0e61251519b3092896d9c3df73ce81e0e5ababd4705609a37e6a\"}:reviewers:1:ai-antipattern-review-2nd:item-ef2ae2864509a81e54f730d867611c80b9349f3197b5a9b51ee12281114122fd",
+      "title": "新規: docs の migration target 記述が order.md item #16 の要求値に未対応。`docs/external-integrations.ja.md:34` は `workflow の mcp_servers ポリシー → mcp.targets`、`docs/external-integrations.md:34` は `workflow mcp_server",
       "claimAtom": "新規: docs の migration target 記述が order.md item #16 の要求値に未対応。`docs/external-integrations.ja.md:34` は `workflow の mcp_servers ポリシー → mcp.targets`、`docs/external-integrations.md:34` は `workflow mcp_servers policy → mcp.targets` であり、order.md item #16 が要求する `workflow_mcp_servers policy` への修正が未適用。severity: low。family_tag: `legacy-mcp-signal-location-mismatch`。修正案: 両 docs の L34 を `workflow_mcp_servers policy → mcp.targets` に修正する。",
       "targetPaths": [
         "docs/external-integrations.ja.md",
@@ -129,7 +129,7 @@
         "title"
       ],
       "presentationLimit": 6,
-      "title": "Reviewer evidence anomaly 20260807-100140-implement-using-only-the-files-if4kqb:{\"stack\":[{\"workflow\":\"takt-default-fc\",\"workflowRef\":\"builtin:sha256:c508968ad78cb4a5d47767093ad9acc15191882a67d4acf217bdb07fc98ba7a2\",\"step\":\"develop\",\"kind\":\"workflow_call\",\"occurrence\":1},{\"workflow\":\"development-core\",\"workflowRef\":\"builtin:sha256:88bc5b4a8c640864982f27ab7874c316343cf68c2874a2ffdca55300719b3c59\",\"step\":\"peer-review\",\"kind\":\"workflow_call\",\"occurrence\":1},{\"workflow\":\"peer-review-finding-contract\",\"workflowRef\":\"builtin:sha256:c3367f6532701631058650ca2e1af31e3157437ad240683810460679c5277f51\",\"step\":\"reviewers\",\"kind\":\"workflow_call\",\"occurrence\":4}],\"childWorkflow\":\"builtin:sha256:01e0ccf6064f0e61251519b3092896d9c3df73ce81e0e5ababd4705609a37e6a\"}:reviewers:1:security-review:item-68a8c8932a52587b1e053fd546d007393f6e3bf97f746b532fbfa785564a10a5",
+      "title": "リテラルを直接渡しており実経路（`interpolateMcpEnv` → `redactMcpServerForLog` の補間済み値）を再現しない。欠陥を検出できない。",
       "claimAtom": "リテラルを直接渡しており実経路（`interpolateMcpEnv` → `redactMcpServerForLog` の補間済み値）を再現しない。欠陥を検出できない。",
       "targetPaths": [
         "src/__tests__/runtime-mcp-secret-redaction.test.ts"
@@ -170,7 +170,7 @@
         "title"
       ],
       "presentationLimit": 6,
-      "title": "Reviewer evidence anomaly 20260807-081423-implement-using-only-the-files-a2h7cz:{\"stack\":[{\"workflow\":\"takt-default-fc\",\"workflowRef\":\"builtin:sha256:8af73e9a5b7896eea2b8cecb240815f50d0e8ef195ac2ad9dfee2ce853c3b191\",\"step\":\"develop\",\"kind\":\"workflow_call\",\"occurrence\":1},{\"workflow\":\"development-core\",\"workflowRef\":\"builtin:sha256:6a40339c418592ca0291570d17266efdcccb4e30f3c980efca35b719640fbc78\",\"step\":\"peer-review\",\"kind\":\"workflow_call\",\"occurrence\":1},{\"workflow\":\"peer-review-finding-contract\",\"workflowRef\":\"builtin:sha256:af4545030676b097042532dc439029fd810cdc93dbcbb3eb82f2386c305cb4d7\",\"step\":\"initial-reviewers\",\"kind\":\"workflow_call\",\"occurrence\":1}],\"childWorkflow\":\"builtin:sha256:77c7b6c50abe920ff04b464c975adfa55c729107fdb9c4ee376187cb0096a303\"}:reviewers:1:testing-review:NEW-02",
+      "title": "`gh` CLI の実行失敗（`execFileSync` の例外スロー）時に、作成済みの一時ディレクトリが `cleanup` によって適切に削除されるかどうかの検証が欠落している。",
       "claimAtom": "`gh` CLI の実行失敗（`execFileSync` の例外スロー）時に、作成済みの一時ディレクトリが `cleanup` によって適切に削除されるかどうかの検証が欠落している。",
       "targetPaths": [
         "src/__tests__/github-review-attachments.test.ts"
@@ -214,7 +214,7 @@
         "title"
       ],
       "presentationLimit": 6,
-      "title": "Reviewer evidence anomaly 20260807-081423-implement-using-only-the-files-a2h7cz:{\"stack\":[{\"workflow\":\"takt-default-fc\",\"workflowRef\":\"builtin:sha256:8af73e9a5b7896eea2b8cecb240815f50d0e8ef195ac2ad9dfee2ce853c3b191\",\"step\":\"develop\",\"kind\":\"workflow_call\",\"occurrence\":1},{\"workflow\":\"development-core\",\"workflowRef\":\"builtin:sha256:6a40339c418592ca0291570d17266efdcccb4e30f3c980efca35b719640fbc78\",\"step\":\"peer-review\",\"kind\":\"workflow_call\",\"occurrence\":1},{\"workflow\":\"peer-review-finding-contract\",\"workflowRef\":\"builtin:sha256:af4545030676b097042532dc439029fd810cdc93dbcbb3eb82f2386c305cb4d7\",\"step\":\"reviewers\",\"kind\":\"workflow_call\",\"occurrence\":7}],\"childWorkflow\":\"builtin:sha256:77c7b6c50abe920ff04b464c975adfa55c729107fdb9c4ee376187cb0096a303\"}:reviewers:1:security-review:item-d2c63320c6acc4bef93db78e742ffa836fb82d9a26a5ce5ae0e46e370db3eea3",
+      "title": "HTTP レスポンスの `Content-Length` をダウンロード前に検証する仕組みがないため、`maxBuffer` に達するまでメモリを消費する。実効的な影響は小さいが、将来的により厳格な DoS 対策を検討することを推奨。",
       "claimAtom": "HTTP レスポンスの `Content-Length` をダウンロード前に検証する仕組みがないため、`maxBuffer` に達するまでメモリを消費する。実効的な影響は小さいが、将来的により厳格な DoS 対策を検討することを推奨。",
       "targetPaths": [],
       "sourceFileQuotes": []
@@ -232,7 +232,7 @@
         "title"
       ],
       "presentationLimit": 6,
-      "title": "Reviewer evidence anomaly 20260807-081423-implement-using-only-the-files-a2h7cz:{\"stack\":[{\"workflow\":\"takt-default-fc\",\"workflowRef\":\"builtin:sha256:8af73e9a5b7896eea2b8cecb240815f50d0e8ef195ac2ad9dfee2ce853c3b191\",\"step\":\"develop\",\"kind\":\"workflow_call\",\"occurrence\":1},{\"workflow\":\"development-core\",\"workflowRef\":\"builtin:sha256:6a40339c418592ca0291570d17266efdcccb4e30f3c980efca35b719640fbc78\",\"step\":\"peer-review\",\"kind\":\"workflow_call\",\"occurrence\":1},{\"workflow\":\"peer-review-finding-contract\",\"workflowRef\":\"builtin:sha256:af4545030676b097042532dc439029fd810cdc93dbcbb3eb82f2386c305cb4d7\",\"step\":\"reviewers\",\"kind\":\"workflow_call\",\"occurrence\":8}],\"childWorkflow\":\"builtin:sha256:77c7b6c50abe920ff04b464c975adfa55c729107fdb9c4ee376187cb0096a303\"}:reviewers:1:arch-review:rf-1",
+      "title": "`finally` ブロックでのクリーンアップはあるが、内部の非同期処理における例外伝播時の保証が不十分",
       "claimAtom": "`finally` ブロックでのクリーンアップはあるが、内部の非同期処理における例外伝播時の保証が不十分",
       "targetPaths": [
         "src/app/cli/routing.ts"
