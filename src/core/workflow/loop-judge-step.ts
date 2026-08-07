@@ -2,6 +2,7 @@ import type { InternalAgentSeats } from '../models/config-types.js';
 import type { LoopMonitorJudge } from '../models/types.js';
 import type { ProviderType } from '../../shared/types/provider.js';
 import type { StepProviderOptions } from '../models/workflow-types.js';
+import { mergeProviderOptions } from '../../infra/config/providerOptions.js';
 import { internalAgentSeatOverride } from './internal-agent-seat.js';
 
 /**
@@ -16,13 +17,18 @@ export function loopJudgeStepName(cycle: readonly string[]): string {
   return `_loop_judge_${cycle.join('_')}`;
 }
 
-/** judge ステップへ焼き込む provider/model 指定。 */
+/**
+ * judge ステップへ焼き込む provider/model 指定。
+ *
+ * providerOptions はここに含めない。provider が決まるまで既定 providerOptions を作れず、
+ * 検証は provider/model しか見ないため、両者を混ぜると「検証用の下書きステップ」と
+ * 「実行用のステップ」で形が食い違う。合成は loopJudgeProviderOptions が担う。
+ */
 export interface LoopJudgeProviderFields {
   provider?: ProviderType;
   providerSpecified?: true;
   model?: string;
   modelSpecified?: boolean;
-  providerOptions?: StepProviderOptions;
 }
 
 /**
@@ -41,11 +47,33 @@ export function loopJudgeProviderFields(
 ): LoopJudgeProviderFields {
   const seat = internalAgentSeatOverride(seats?.loopJudge);
   if (seat !== undefined) {
-    return seat;
+    return {
+      provider: seat.provider,
+      providerSpecified: true,
+      ...(seat.model === undefined ? {} : { model: seat.model }),
+      modelSpecified: true,
+    };
   }
   return {
     ...(judge.provider === undefined ? {} : { provider: judge.provider }),
     ...(judge.model === undefined ? {} : { model: judge.model }),
     ...(judge.modelSpecified === undefined ? {} : { modelSpecified: judge.modelSpecified }),
   };
+}
+
+/**
+ * judge ステップの providerOptions を合成する。弱い順に「provider 既定 → workflow の
+ * judge 設定 → seat の profile options」で重ねる。provider/model 指定と同じく、
+ * 合成順をここ1箇所に固定する。
+ */
+export function loopJudgeProviderOptions(input: {
+  readonly defaults: StepProviderOptions | undefined;
+  readonly judge: Pick<LoopMonitorJudge, 'providerOptions'>;
+  readonly seats: InternalAgentSeats | undefined;
+}): StepProviderOptions | undefined {
+  const seat = internalAgentSeatOverride(input.seats?.loopJudge);
+  return mergeProviderOptions(
+    mergeProviderOptions(input.defaults, input.judge.providerOptions),
+    seat?.providerOptions,
+  );
 }

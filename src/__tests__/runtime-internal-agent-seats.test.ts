@@ -1,9 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import type { FindingContractConfig, WorkflowConfig } from '../core/models/types.js';
-import type { InternalAgentSeats, ProviderRoutingConfig } from '../core/models/config-types.js';
+import type {
+  InternalAgentSeats,
+  ProviderEscalationTarget,
+  ProviderRoutingConfig,
+} from '../core/models/config-types.js';
 import { buildFindingManagerStep } from '../core/workflow/findings/manager-step.js';
 import { buildFindingTerminalAdjudicationStep } from '../core/workflow/findings/adjudication-step.js';
-import { resolveFindingEscalationTarget } from '../core/workflow/findings/restatement-slot-step.js';
+import {
+  findingRestatementSlotReportName,
+  resolveFindingEscalationTarget,
+} from '../core/workflow/findings/restatement-slot-step.js';
+import { resolveRestatementPresentationPhase } from '../core/workflow/findings/restatement-presentation-phase.js';
 import { loopJudgeProviderFields } from '../core/workflow/loop-judge-step.js';
 import { internalAgentSeatOverride } from '../core/workflow/internal-agent-seat.js';
 import { resolveStepProviderModel } from '../core/workflow/provider-resolution.js';
@@ -180,5 +188,57 @@ describe('escalation-reviewer seat', () => {
   it('enables no escalation slot when neither is present', () => {
     expect(resolveFindingEscalationTarget({ seat: undefined, escalation: undefined }))
       .toBeUndefined();
+  });
+
+  it('does not fire for a reviewer whose profile declares no escalate, seat or not', () => {
+    // 発火条件は profile の `escalate` 宣言だけ。seat は「発火したときの宛先」しか
+    // 変えない。ここが seat 側に漏れると、意図的に格上げ先を持たない最上位 profile の
+    // レビュアーまで最終提示が代打へ移る。
+    expect(resolveFindingEscalationTarget({
+      seat: seats.escalationReviewer,
+      escalation: undefined,
+    })).toBeUndefined();
+  });
+
+  // WorkflowEngineSetup の escalationEnabled と同じ式。提示フェーズと report 名まで
+  // 追って、seat 指定が発火条件を動かさないことを固定する。
+  const escalationEnabledFor = (escalation: ProviderEscalationTarget | undefined): boolean => (
+    resolveFindingEscalationTarget({ seat: seats.escalationReviewer, escalation }) !== undefined
+  );
+
+  it('keeps the last presentation on the owner when the profile has no escalate, even with a seat', () => {
+    expect(escalationEnabledFor(undefined)).toBe(false);
+
+    const phase = resolveRestatementPresentationPhase({
+      presentedCount: 2,
+      presentationLimit: 3,
+      escalationEnabled: escalationEnabledFor(undefined),
+    });
+
+    expect(phase).toBe('restatement');
+    expect(findingRestatementSlotReportName({
+      ownerStepName: 'architecture-review',
+      phase,
+      presentationPass: 3,
+    })).toBe('followup-architecture-review-3');
+  });
+
+  it('sends the last presentation to the seat when the profile declares escalate', () => {
+    expect(escalationEnabledFor(escalation)).toBe(true);
+
+    const phase = resolveRestatementPresentationPhase({
+      presentedCount: 2,
+      presentationLimit: 3,
+      escalationEnabled: escalationEnabledFor(escalation),
+    });
+
+    expect(phase).toBe('escalation');
+    expect(findingRestatementSlotReportName({
+      ownerStepName: 'architecture-review',
+      phase,
+      presentationPass: 3,
+    })).toBe('escalation-reviewer-architecture-review-3');
+    expect(resolveFindingEscalationTarget({ seat: seats.escalationReviewer, escalation }))
+      .toEqual({ provider: 'opencode', model: 'seat-escalation' });
   });
 });

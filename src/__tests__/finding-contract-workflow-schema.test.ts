@@ -254,7 +254,11 @@ describe('workflow finding_contract schema', () => {
       ],
     }, '/tmp/project');
 
-    expect(withManagerProvider).toThrow();
+    // 汎用の throw ではなく、実際に出るメッセージ（未知キー名）まで固定する。
+    // 移行時にユーザーが手掛かりを得られるのはこのキー名だけなので、
+    // 文言が痩せたら気付ける必要がある。
+    expect(withManagerProvider).toThrow(/Unrecognized keys: \\"provider\\", \\"model\\"/u);
+    expect(withManagerProvider).toThrow(/"finding_contract",\s*\n\s*"manager"/u);
 
     const withAdjudicatorProvider = () => normalizeWorkflowConfig({
       name: 'finding-contract-adjudicator-provider-workflow',
@@ -282,7 +286,8 @@ describe('workflow finding_contract schema', () => {
       ],
     }, '/tmp/project');
 
-    expect(withAdjudicatorProvider).toThrow();
+    expect(withAdjudicatorProvider).toThrow(/Unrecognized key: \\"provider\\"/u);
+    expect(withAdjudicatorProvider).toThrow(/"finding_contract",\s*\n\s*"adjudicator"/u);
   });
 
   it('should resolve finding manager facets through the normal facet lookup path', () => {

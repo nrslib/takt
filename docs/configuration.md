@@ -670,24 +670,28 @@ defaults
   < steps
 ```
 
-The internal agents resolve through a separate ladder — `internal_agents` is not a generic override applied after step resolution:
+The internal `selector`, `assistant`, `intake-normalizer`, `findings-manager`,
+`terminal-adjudicator`, `loop-judge`, and `escalation-reviewer` agents resolve through a separate
+ladder — `internal_agents` is not a generic override applied after step resolution:
 
 ```text
 defaults
   < internal_agents.<agent>
 ```
 
-The available seats are `selector`, `assistant`, and the engine-synthesized roles
-`intake-normalizer`, `findings-manager`, `terminal-adjudicator`, `loop-judge`, and
-`escalation-reviewer`. `terminal-adjudicator` is the runtime name of the role whose persona
-facet is `supervisor`; the two are deliberately different names for different things.
+`terminal-adjudicator` is the runtime name of the role whose persona facet is `supervisor`; the
+two are deliberately different names for different things.
 
 **Every seat is optional.** An unassigned seat changes nothing: the role keeps the resolution it
 has always used. For the synthetic Finding Contract roles that means persona routing (the fixed
 keys `findings-manager` / `supervisor` / `loop-judge`) and then the workflow → project → global →
-provider-default chain. `intake-normalizer` and `escalation-reviewer` continue past that into the
-reviewer profile's `escalate` target before the ordinary default resolution (see
-[workflows.md](workflows.md)).
+provider-default chain. `intake-normalizer` continues past that into the reviewer profile's
+`escalate` target before the ordinary default resolution (see [workflows.md](workflows.md)).
+
+`escalation-reviewer` is the one seat that never changes *whether* a role runs. Escalated
+re-review fires only for a reviewer whose resolved profile declares `escalate`; a reviewer without
+that declaration keeps its own last presentation whether or not the seat is assigned. The seat only
+replaces the destination of an escalation that the `escalate` declaration already enabled.
 
 When two targets at the same priority (for example two matching tags) assign different providers, resolution fails fast instead of picking one silently. Explicit `--provider` / `--model` on the command line are runtime overrides and are allowed in both legacy and runtime modes.
 
@@ -706,9 +710,17 @@ Runtime and legacy provider settings must not be mixed. Move each legacy setting
 | `provider_routing.steps` | `provider.targets.steps` |
 | `persona_providers` | `provider.targets.personas` |
 | `takt_providers.selector` / `takt_providers.assistant` | `provider.targets.internal_agents` |
+| `finding_contract.manager.provider` / `model` | `provider.targets.internal_agents.findings-manager` |
+| `finding_contract.adjudicator.provider` / `model` | `provider.targets.internal_agents.terminal-adjudicator` |
 | `auto_routing` | `provider.auto_routing` |
 | auto routing candidates | pool candidates that reference `provider.profiles` |
 | workflow-level provider settings | `provider.targets.steps` |
+
+The last two rows are workflow YAML keys rather than `config.yaml` settings, and they are gone
+rather than deprecated: the `finding_contract` schema is strict, so a leftover `provider` or
+`model` under `manager` / `adjudicator` is rejected at load time as an unrecognized key, naming the
+key and its path. Move the value to the matching `internal_agents` seat, or drop it and let the
+role resolve through the layers below.
 
 ### Mixed configuration error
 
@@ -845,7 +857,7 @@ Provider and model are resolved independently at each layer. A provider-only ove
 
 An assigned `internal_agents` seat occupies the `step YAML provider/model` position for the role's synthetic step. Every seat is optional; an unassigned seat leaves the role on the layers below.
 
-Without a seat, synthetic Finding Contract roles resolve `provider_routing.personas` by a fixed persona key rather than the configured persona name: `findings-manager` (manager), `supervisor` (conflict and terminal adjudication), and `loop-judge` (loop monitor judges). Escalated re-review has no persona routing: it inherits the owning reviewer's step and takes its model from the `escalation-reviewer` seat, or — when that seat is unassigned — from the `escalate` target of the profile that reviewer resolved to. Its reviewer key is the fixed string `escalation-reviewer`, which is a reserved workflow step name in every Finding Contract workflow.
+Without a seat, synthetic Finding Contract roles resolve `provider_routing.personas` by a fixed persona key rather than the configured persona name: `findings-manager` (manager), `supervisor` (conflict and terminal adjudication), and `loop-judge` (loop monitor judges). Escalated re-review has no persona routing. It fires only for a reviewer whose resolved profile declares `escalate` — the `escalation-reviewer` seat does not enable it — and it inherits the owning reviewer's step, taking its model from that seat when one is assigned and otherwise from the `escalate` target itself. Its reviewer key is the fixed string `escalation-reviewer`, which is a reserved workflow step name in every Finding Contract workflow.
 
 ### Auto Routing
 

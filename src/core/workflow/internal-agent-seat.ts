@@ -27,8 +27,9 @@ export interface InternalAgentSeatOverride {
  *
  * `modelSpecified` は model の有無にかかわらず立てる。provider だけを差し替えて model の
  * 解決を下位層へ残すと、別 provider 向けの model（persona routing 等）が混ざった
- * provider/model の組が出来上がるため。runtime.yaml の profile は provider と model を
- * 必ず対で持つので、通常この分岐は「model あり」側だけを通る。
+ * provider/model の組が出来上がるため。runtime.yaml の profile 経由の seat は provider と
+ * model を対で持つのが通常なので、model 無しの枝を通るのは主にプログラム的な組み立て
+ * （テストや将来の別ソース）である。
  */
 export function internalAgentSeatOverride(
   seat: ProviderRoutingEntry | undefined,

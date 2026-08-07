@@ -594,12 +594,16 @@ provider:
 toolなしの新規sessionで渡されます。
 
 **seat の指定はすべて任意です。** 未指定の seat は、そのロールが従来から使ってきた既定解決
-（persona routing → workflow → project → global → provider 既定。正規化係と格上げ枠では
-レビュアー profile の `escalate` 連鎖も含む）へそのまま落ちます。指定した seat はそのロールの
+（persona routing → workflow → project → global → provider 既定。正規化係ではレビュアー
+profile の `escalate` 連鎖も含む）へそのまま落ちます。指定した seat はそのロールの
 step レベル `provider` / `model` として扱われ、`provider_routing`、deprecated の
 `persona_providers`、effective auto routing、workflow/project/global fallback より優先されます。
 CLI と環境変数の明示 override はそれより高い優先順位を維持します。provider だけを指名した seat は
 下位優先度の model fallback を止めるため、provider と model が食い違う組み合わせにはなりません。
+
+`escalation-reviewer` seat だけは**宛先しか決めません**。格上げ再レビューは従来どおり、
+レビュアーが解決された profile が `escalate` を宣言している場合にだけ発火します。seat を置いても、
+格上げ先を持たないレビュアーの最終提示が本人から離れることはありません。
 
 ### Finding Contract の provisional finding と完了ゲート
 

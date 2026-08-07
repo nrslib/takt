@@ -56,17 +56,22 @@ export interface RestatementSlotProviderTarget {
 /**
  * 格上げ枠（最終提示）の宛先を決める。
  *
- * 1. runtime.yaml `provider.targets.internal_agents['escalation-reviewer']` の seat
- * 2. owner が解決された profile の `escalate` 先
+ * **発火条件は owner が解決された profile の `escalate` 宣言だけ**である。宣言が無い
+ * レビュアー（最上位 profile など、意図的に格上げ先を持たない構成）は最終提示も本人が
+ * 受け持ち、格上げ枠は発生しない。`escalation-reviewer` seat はこの発火条件を動かさず、
+ * 「発火したときにどこへ出すか」だけを上書きする。seat を置いた途端に全レビュアーの
+ * 最終枠が代打へ移ると、格上げを持たない構成の意味が消える。
  *
- * どちらも無ければ格上げ枠は発生せず、最終枠も通常の言い直しになる。提示フェーズの
- * 判定（WorkflowEngineSetup の escalationEnabled）と実際の宛先解決
+ * 提示フェーズの判定（WorkflowEngineSetup の escalationEnabled）と実際の宛先解決
  * （restatement-slot-runner）が同じ答えを出すよう、判定はここ1箇所に集約する。
  */
 export function resolveFindingEscalationTarget(input: {
   readonly seat: ProviderRoutingEntry | undefined;
   readonly escalation: ProviderEscalationTarget | undefined;
 }): RestatementSlotProviderTarget | undefined {
+  if (input.escalation === undefined) {
+    return undefined;
+  }
   const seat = internalAgentSeatOverride(input.seat);
   if (seat !== undefined) {
     return {
