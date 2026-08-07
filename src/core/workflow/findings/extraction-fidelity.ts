@@ -60,3 +60,34 @@ export function hasRawFindingExtractionFidelityFailure(
   }
   return rawFindings.some(itemLostTheClaim);
 }
+
+/**
+ * 失敗の内訳（何番目の item が、candidate 全欠けか description 欠けか）を
+ * 1行で返す。判定対象は projection 後の structuredOutput なので、モデルが
+ * 出した生テキストだけを見ても失敗理由が分からない — projection が candidate を
+ * null へ畳んだのか、モデルが本当に claim を落としたのかを切り分けるために
+ * エラーメッセージへ載せる。
+ */
+export function describeRawFindingExtractionFidelityFailure(
+  structuredOutput: unknown,
+): string {
+  if (!isPlainObject(structuredOutput)) {
+    return 'projected structured output is not an object';
+  }
+  const rawFindings = Reflect.get(structuredOutput, 'rawFindings');
+  if (!Array.isArray(rawFindings)) {
+    return 'projected structured output has no rawFindings array';
+  }
+  const reasons = rawFindings.flatMap((item, index) => {
+    if (!itemLostTheClaim(item)) {
+      return [];
+    }
+    const candidate = isPlainObject(item) ? Reflect.get(item, 'candidate') : undefined;
+    return [`#${index}: ${
+      candidate === null || candidate === undefined
+        ? 'candidate is null after projection'
+        : 'candidate description is null'
+    }`];
+  });
+  return `${reasons.length}/${rawFindings.length} projected items lost the claim (${reasons.join('; ')})`;
+}

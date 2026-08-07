@@ -95,6 +95,7 @@ import {
 import { resolveFindingContractReviewerOutputStrategy } from '../findings/reviewer-output-strategy.js';
 import {
   EXTRACTION_FIDELITY_INVALID_DETAIL,
+  describeRawFindingExtractionFidelityFailure,
   hasRawFindingExtractionFidelityFailure,
 } from '../findings/extraction-fidelity.js';
 import { clarifyAmbiguousRawRelationsOnce, type ReviewerRelationClarification } from '../findings/relation-coherence.js';
@@ -1016,6 +1017,18 @@ export class StepExecutor {
 
     const hasExtractionFidelityFailure = (response: AgentResponse): boolean =>
       hasRawFindingExtractionFidelityFailure(response.structuredOutput);
+    /**
+     * 判定は projection 後の structuredOutput に対して行われるため、モデルが
+     * 出した最終テキスト（content）だけをエラーへ載せても失敗理由が読めない。
+     * status と projection 後の内訳を必ず添える。
+     */
+    const extractionFidelityDiagnostics = (response: AgentResponse): string => (
+      hasExtractionFidelityFailure(response)
+        ? `[status=${response.status}; ${
+          describeRawFindingExtractionFidelityFailure(response.structuredOutput)
+        }] `
+        : `[status=${response.status}] `
+    );
 
     const initial = await execute('initial');
     const extractionFidelityFailure = initial.invalidDetail === undefined
@@ -1074,8 +1087,8 @@ export class StepExecutor {
           ...normalized.response,
           status: 'error',
           error: `Finding intake normalizer for reviewer "${input.reviewerStep.name}" extraction-fidelity correction failed: ${
-            normalized.response.error ?? normalized.response.content
-          }`,
+            extractionFidelityDiagnostics(normalized.response)
+          }${normalized.response.error ?? normalized.response.content}`,
         },
       };
     }
@@ -1093,6 +1106,8 @@ export class StepExecutor {
           ...normalized.response,
           status: 'error',
           error: `Finding intake normalizer for reviewer "${input.reviewerStep.name}" extraction-fidelity correction failed: ${
+            extractionFidelityDiagnostics(normalized.response)
+          }${
             normalized.invalidDetail
               ?? normalized.response.error
               ?? normalized.response.content

@@ -693,6 +693,22 @@ function projectReviewerRawItem(
         record[key] = null;
         continue;
       }
+      // 生成 schema（RawFindingsOutputIntakeJsonSchema）は reassertsReviewerAnomalyId を
+      // required かつ nullable として宣言する。schema を厳密に守る provider
+      // （claude-sdk など）は echo 対象が無ければ必ず null を出す。null は
+      // 「echo なし」＝キー欠落と同義なので record へは載せない — post-hoc の
+      // ReviewerCandidatePayloadSchema は optional な非空文字列しか許さないため。
+      if (key === 'reassertsReviewerAnomalyId') {
+        if (value === null || value === undefined) {
+          continue;
+        }
+        if (typeof value === 'string' && value.length > 0) {
+          record[key] = value;
+        } else {
+          candidateShapeValid = false;
+        }
+        continue;
+      }
       if (key === 'relation') {
         const relation = pickRelation(value);
         if (relation !== undefined) {
