@@ -1,15 +1,20 @@
 import type { StructuredCaller } from '../../../agents/structured-caller.js';
 import type { RunAgentOptions } from '../../../agents/runner.js';
 import type { AgentWorkflowStep, WorkflowStep } from '../../models/types.js';
+import type { ProviderLadderConfig, ProviderRoutingEntry } from '../../models/config-types.js';
+import type { ProviderResolutionSource } from '../provider-options-trace.js';
 import type { RuntimeStepResolution, StepProviderInfo } from '../types.js';
 import { isDelegatedWorkflowStep } from '../step-kind.js';
 import { applyProviderModelOverride } from '../provider-resolution.js';
-import { evaluatePromotion } from './PromotionEvaluator.js';
+import { countMatchedLadderStages, evaluatePromotion, isTargetedPromotionEntry } from './PromotionEvaluator.js';
 import {
   isFilePreferredProviderOptionPath,
   mergeProviderOptions,
   PROVIDER_OPTION_PATHS,
 } from '../../../infra/config/providerOptions.js';
+import { createLogger } from '../../../shared/utils/index.js';
+
+const log = createLogger('workflow-promotion');
 
 export interface PromotionRuntimeContext {
   cwd: string;
@@ -17,6 +22,12 @@ export interface PromotionRuntimeContext {
   structuredCaller?: StructuredCaller;
   childProcessEnv?: RunAgentOptions['childProcessEnv'];
   resolveStepProviderModel: (step: WorkflowStep, runtime?: RuntimeStepResolution) => StepProviderInfo;
+  /**
+   * Fully-resolved runtime.yaml `ladder` stages (issue #1208). A matched target-less `{at:N}`
+   * promotion advances the governing ladder to a later stage. Undefined when no ladder is
+   * configured, in which case a target-less promotion is a logged no-op.
+   */
+  providerLadders?: ProviderLadderConfig;
 }
 
 function isPromotionStep(step: WorkflowStep): step is AgentWorkflowStep {
@@ -124,19 +135,77 @@ export async function resolvePromotionRuntime(
     resolvedModel: baseProviderInfo.model,
     childProcessEnv: context.childProcessEnv,
   });
-  if (!promotion) {
-    return runtime;
+
+  if (promotion !== undefined && isTargetedPromotionEntry(promotion)) {
+    return applyPromotionTarget(runtime, baseProviderInfo, {
+      provider: promotion.provider,
+      providerSpecified: promotion.providerSpecified === true || promotion.provider !== undefined,
+      model: promotion.model,
+      modelSpecified: promotion.model !== undefined,
+      providerOptions: promotion.providerOptions,
+    });
   }
 
+  // Target-less `{at:N}` promotion: advance the governing runtime.yaml `ladder` (issue #1208). The
+  // matched `{at}` count is the stage index; stage 0 is already the current assignment.
+  const stageIndex = countMatchedLadderStages(step, stepIteration);
+  if (stageIndex === 0) {
+    return runtime;
+  }
+  const ladder = resolveGoverningLadder(context.providerLadders, step, baseProviderInfo.providerSource);
+  if (ladder === undefined) {
+    // INV-B: a profile/pool direct assignment records no governing ladder, so a target-less
+    // promotion has nothing to advance and stays at the base assignment (INV-3 no-op). Surfaced as
+    // a warning — not a debug log — so a runtime.yaml that silently disables an existing promotion
+    // is visible.
+    log.warn(
+      `Promotion for step "${step.name}" requested ladder stage ${stageIndex} but no ladder governs its assignment; keeping the current provider/model`,
+    );
+    return runtime;
+  }
+  // Promotion is a monotonic escalation. A stage index past the ladder end has no further stage to
+  // apply, so keep the terminal stage rather than downgrading toward the base assignment. The
+  // exhausted depth is still surfaced as a warning — not a debug log — so a ladder that cannot
+  // satisfy the requested promotion depth is visible.
+  const isPastLadderEnd = stageIndex >= ladder.length;
+  if (isPastLadderEnd) {
+    log.warn(
+      `Promotion for step "${step.name}" requested ladder stage ${stageIndex} but the ladder ends at stage ${ladder.length - 1}; keeping the terminal stage`,
+    );
+  }
+  const stageEntry = ladder[isPastLadderEnd ? ladder.length - 1 : stageIndex] as ProviderRoutingEntry;
+  return applyPromotionTarget(runtime, baseProviderInfo, {
+    provider: stageEntry.provider,
+    providerSpecified: stageEntry.provider !== undefined,
+    model: stageEntry.model,
+    modelSpecified: stageEntry.model !== undefined,
+    providerOptions: stageEntry.providerOptions,
+  });
+}
+
+interface PromotionTarget {
+  provider: StepProviderInfo['provider'];
+  providerSpecified: boolean;
+  model: StepProviderInfo['model'];
+  modelSpecified: boolean;
+  providerOptions: StepProviderInfo['providerOptions'];
+}
+
+/** Apply a resolved promotion target (targeted entry or ladder stage) onto the base resolution. */
+function applyPromotionTarget(
+  runtime: RuntimeStepResolution | undefined,
+  baseProviderInfo: StepProviderInfo,
+  target: PromotionTarget,
+): RuntimeStepResolution {
   const promotionProviderOptions = filterPromotionProviderOptions(
     baseProviderInfo.providerOptionsSources,
-    promotion.providerOptions,
+    target.providerOptions,
   );
   const promotedProviderInfo = applyProviderModelOverride(baseProviderInfo, {
-    provider: promotion.provider,
-    providerSpecified: promotion.providerSpecified === true || promotion.provider !== undefined,
-    model: promotion.model,
-    modelSpecified: promotion.model !== undefined,
+    provider: target.provider,
+    providerSpecified: target.providerSpecified,
+    model: target.model,
+    modelSpecified: target.modelSpecified,
     source: 'promotion',
   });
   return {
@@ -150,4 +219,50 @@ export async function resolvePromotionRuntime(
       ),
     },
   };
+}
+
+/**
+ * Resolve the ladder that governs this step's promotion. The base resolution already picked the
+ * initial assignment (stage 0) at a definite priority; its source tells us which assignment path
+ * — and therefore which ladder — to advance, so promotion continues the same ladder rather than
+ * jumping to an unrelated one.
+ */
+function resolveGoverningLadder(
+  ladders: ProviderLadderConfig | undefined,
+  step: AgentWorkflowStep,
+  baseSource: ProviderResolutionSource | undefined,
+): ProviderRoutingEntry[] | undefined {
+  if (ladders === undefined) {
+    return undefined;
+  }
+  switch (baseSource) {
+    case 'provider_routing.steps':
+      return ladders.steps?.[step.name];
+    case 'provider_routing.tags':
+      return resolveTagLadder(ladders.tags, step.tags);
+    case 'persona_providers':
+      return ladders.personas?.[step.personaDisplayName];
+    case 'runtime-v1':
+      return ladders.defaults;
+    default:
+      return undefined;
+  }
+}
+
+/** Mirror the tag routing merge: the last matched tag that carries a ladder governs. */
+function resolveTagLadder(
+  tags: Record<string, ProviderRoutingEntry[]> | undefined,
+  stepTags: readonly string[] | undefined,
+): ProviderRoutingEntry[] | undefined {
+  if (tags === undefined || stepTags === undefined) {
+    return undefined;
+  }
+  let resolved: ProviderRoutingEntry[] | undefined;
+  for (const tag of stepTags) {
+    const ladder = tags[tag];
+    if (ladder !== undefined) {
+      resolved = ladder;
+    }
+  }
+  return resolved;
 }

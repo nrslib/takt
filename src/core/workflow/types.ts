@@ -22,6 +22,7 @@ import type {
   AutoRoutingStrategy,
   FindingContractRuntimeConfig,
   PersonaProviderEntry,
+  ProviderLadderConfig,
   ProviderRoutingConfig,
   ResolvedObservabilityConfig,
   TagRoutingConflictPolicy,
@@ -505,6 +506,12 @@ export interface WorkflowEngineOptions {
   personaProviders?: Record<string, PersonaProviderEntry>;
   /** Provider routing by raw persona key, workflow step tag, and workflow step name */
   providerRouting?: ProviderRoutingConfig;
+  /**
+   * Ordered provider ladders (issue #1208) resolved from runtime.yaml `ladder` assignments. The
+   * promotion seam advances a matched target-less `{at:N}` to a later stage of the governing
+   * ladder; stage 0 is already reflected in provider/model/personaProviders/providerRouting.
+   */
+  providerLadders?: ProviderLadderConfig;
   /**
    * How to resolve same-priority tag routing conflicts. `fail-fast` (runtime-v1) throws
    * before the agent runs; `last-wins` (legacy, the default) merges in tag order.

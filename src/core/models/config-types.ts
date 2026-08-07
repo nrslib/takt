@@ -63,6 +63,21 @@ export interface ProviderRoutingConfig {
 }
 
 /**
+ * Fully-resolved provider ladders (issue #1208), keyed by the same assignment paths as
+ * `ProviderRoutingConfig` plus `defaults`. Each value holds every stage of a `ladder`
+ * assignment in order. Stage 0 is the initial assignment already reflected in
+ * providerRouting/personaProviders/provider-model defaults; a matched target-less `{at:N}`
+ * promotion advances to `stages[index]` at the runtime resolution seam. `personas` is keyed by
+ * persona display name (runtime `targets.personas` compiles into `personaProviders`).
+ */
+export interface ProviderLadderConfig {
+  defaults?: ProviderRoutingEntry[];
+  personas?: Record<string, ProviderRoutingEntry[]>;
+  tags?: Record<string, ProviderRoutingEntry[]>;
+  steps?: Record<string, ProviderRoutingEntry[]>;
+}
+
+/**
  * How to resolve a step whose tag set maps to two or more distinct tag routing
  * assignments at the same priority. `last-wins` merges them field-by-field in tag order
  * (legacy behavior); `fail-fast` throws before the agent runs (runtime-v1 behavior).

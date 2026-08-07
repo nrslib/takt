@@ -37,12 +37,26 @@ import { resolveStructuredOutput } from './workflowStructuredOutputResolver.js';
 import { normalizeWorkflowEffects } from './workflowSystemStepNormalizer.js';
 import { parseAiConditionExpression } from '../../../core/models/workflow-condition-expression.js';
 import { resolveWorkflowProviderOptions } from './workflowProviderOptionsResolver.js';
+import { resolveCapabilitySet } from './capabilitySetResolver.js';
+import { resolveWorkflowMcpReferences } from './workflowMcpReferenceResolver.js';
+import type { McpServerConfig } from '../../../core/models/index.js';
 import { isWorkflowParamReference } from './workflowCallableParamRef.js';
 import { normalizeQualityGates } from '../configNormalizers.js';
 import { withWorkflowConfigErrorPath as withWorkflowStepErrorPath } from '../../../core/workflow/workflow-config-error.js';
 
 type RawStep = z.output<typeof WorkflowStepRawSchema>;
 type RawProviderReference = RawStep['provider'];
+
+/**
+ * Workflow-level inputs threaded down to every step so `capabilities:` / `mcp:` references resolve
+ * (issue #1208 Stage 1). `capabilityOptions` is the workflow-level capability default (a step's own
+ * `capabilities:` replaces it, not merges); `mcpServers` are the top-level definitions that a step
+ * `mcp:` reference resolves against.
+ */
+export interface WorkflowLevelDefinitions {
+  capabilityOptions?: StepProviderOptions;
+  mcpServers?: Record<string, McpServerConfig>;
+}
 type RawPromotionEntry = NonNullable<RawStep['promotion']>[number];
 type NormalizedProviderReference = ReturnType<typeof normalizeProviderReference>;
 
@@ -127,10 +141,16 @@ function normalizePromotionEntry(
   const aiExpression = entry.condition !== undefined
     ? parseAiConditionExpression(entry.condition)
     : undefined;
+  // Issue #1208 Stage 1 (CT-PROMO-1): a target-less `{at:N}` promotion is valid — the ladder in
+  // runtime.yaml supplies the target. Only reject when `provider_options` was explicitly written
+  // but resolved (e.g. via `extends`) to nothing, and no provider/model completes the target — a
+  // targeted promotion whose sole target evaporated is a configuration error, not a ladder request.
+  const providerOptionsSpecifiedButEmpty = entry.provider_options !== undefined
+    && normalizedProvider.providerOptions === undefined;
   if (
     entry.provider === undefined
     && entry.model === undefined
-    && normalizedProvider.providerOptions === undefined
+    && providerOptionsSpecifiedButEmpty
   ) {
     throw new Error('Configuration error: promotion entry requires at least one of "provider", "model", or "provider_options"');
   }
@@ -188,6 +208,7 @@ export function normalizeStepFromRaw(
   globalOverrides?: WorkflowOverrides,
   workflowArpeggioPolicy?: WorkflowArpeggioConfig,
   workflowMcpServersPolicy?: WorkflowMcpServersConfig,
+  workflowDefinitions?: WorkflowLevelDefinitions,
 ): WorkflowStep {
   try {
   const rules = step.rules?.map((rule, index) =>
@@ -196,6 +217,14 @@ export function normalizeStepFromRaw(
   const kind: WorkflowStepKind = getWorkflowStepKind(step);
   const isSystemStep = kind === 'system';
   const isWorkflowCallStep = kind === 'workflow_call';
+  if ((isSystemStep || isWorkflowCallStep) && (step.capabilities !== undefined || step.mcp !== undefined)) {
+    // `capabilities` / `mcp` are agent-only capability declarations; fail fast rather than silently
+    // dropping them on a step kind that never consumes them.
+    throw withWorkflowStepErrorPath(
+      new Error(`Step "${step.name}" cannot use "capabilities"/"mcp" on a ${kind} step`),
+      stepPath,
+    );
+  }
   const rawPersona = (step as Record<string, unknown>).persona as string | undefined;
   if (rawPersona !== undefined && rawPersona.trim().length === 0) {
     const error = new Error(`Step "${step.name}" has an empty persona value`);
@@ -284,7 +313,17 @@ export function normalizeStepFromRaw(
     : undefined;
 
   validateWorkflowArpeggio(step.name, step.arpeggio, stepPath, workflowArpeggioPolicy);
-  validateWorkflowMcpServers(step.name, step.mcp_servers, stepPath, workflowMcpServersPolicy);
+  // Resolve `mcp:` references against the workflow's top-level definitions, then enforce the
+  // deny-by-default transport policy on the merged result (inline + resolved), so a bundled default
+  // pulled in by reference is gated exactly like an inline definition (CT-MCP-5).
+  const resolvedMcpServers = resolveWorkflowMcpReferences(
+    step.name,
+    step.mcp,
+    workflowDefinitions?.mcpServers,
+    step.mcp_servers,
+    stepPath,
+  );
+  validateWorkflowMcpServers(step.name, resolvedMcpServers, stepPath, workflowMcpServersPolicy);
 
   if (isWorkflowCallStep) {
     if (isWorkflowParamReference(step.call)) {
@@ -340,8 +379,18 @@ export function normalizeStepFromRaw(
     globalOverrides,
   ));
 
+  // Capability-set resolution (issue #1208): a step's own `capabilities:` REPLACES the workflow
+  // default (never merges); the purified capability options sit at the lowest layer so an explicit
+  // `provider_options` on the same step still wins.
+  const stepCapabilityOptions = step.capabilities !== undefined
+    ? normalizeStepField(stepPath, ['capabilities'], () => resolveCapabilitySet(step.capabilities!, workflowDir, context))
+    : undefined;
+  const effectiveCapabilityOptions = stepCapabilityOptions ?? workflowDefinitions?.capabilityOptions;
   const directProviderOptions = mergeProviderOptions(inheritedDirectProviderOptions, normalizedProvider.providerOptions);
-  const providerOptions = mergeProviderOptions(inheritedWorkflowProviderOptions, directProviderOptions);
+  const providerOptions = mergeProviderOptions(
+    effectiveCapabilityOptions,
+    mergeProviderOptions(inheritedWorkflowProviderOptions, directProviderOptions),
+  );
   const resolvedModel = normalizedProvider.modelSpecified
     ? normalizedProvider.model
     : (normalizedProvider.providerSpecified ? undefined : inheritedModel);
@@ -363,7 +412,7 @@ export function normalizeStepFromRaw(
     tags: tags && tags.length > 0 ? tags : undefined,
     personaDisplayName: resolvedPersonaDisplayName,
     personaPath,
-    mcpServers: step.mcp_servers,
+    mcpServers: resolvedMcpServers,
     provider: normalizedProvider.provider ?? inheritedProvider,
     providerSpecified: normalizedProvider.providerSpecified
       || (inheritedProvider !== undefined && !inheritedProviderIsWorkflowFallback),
@@ -438,6 +487,7 @@ export function normalizeStepFromRaw(
           globalOverrides,
           workflowArpeggioPolicy,
           workflowMcpServersPolicy,
+          workflowDefinitions,
         ),
       ),
       ...(step.concurrency != null ? { concurrency: step.concurrency } : {}),
@@ -470,6 +520,7 @@ export function normalizeStepFromRaw(
       globalOverrides,
       workflowArpeggioPolicy,
       workflowMcpServersPolicy,
+      workflowDefinitions,
       );
       return normalized as DynamicParallelFixedSubStep;
     };

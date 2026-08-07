@@ -207,6 +207,13 @@ export class WorkflowCallRunner {
     );
   }
 
+  private buildChildProviderLadders(): WorkflowEngineOptions['providerLadders'] {
+    // Ladders come from runtime.yaml, not the workflow, so workflow_call overrides do not
+    // reshape them; the child inherits the same ladders so its steps reach the promotion seam
+    // with the stages the parent resolved (issue #1208).
+    return this.deps.getOptions().providerLadders;
+  }
+
   private buildWorkflowCallResponse(
     step: WorkflowCallStep,
     childState: WorkflowState,
@@ -639,6 +646,7 @@ export class WorkflowCallRunner {
       parentProviderOptions: parentProviderContext.providerOptions,
       personaProviders: this.buildChildPersonaProviders(step),
       providerRouting: this.buildChildProviderRouting(step),
+      providerLadders: this.buildChildProviderLadders(),
     }, {
       syncParentState,
     });

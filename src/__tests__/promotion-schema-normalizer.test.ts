@@ -64,7 +64,10 @@ describe('WorkflowStepRawSchema promotion', () => {
     }
   });
 
-  it('rejects promotion entries without a target override', () => {
+  // Issue #1208 Stage 1 (CT-PROMO-1): a target-less `{at:N}` promotion is now accepted — the
+  // ladder in runtime.yaml decides "what to promote to". This replaces the prior contract that
+  // rejected promotion entries without a provider/model/provider_options target.
+  it('accepts promotion entries with only `at` (no target override)', () => {
     const result = WorkflowStepRawSchema.safeParse({
       name: 'implement',
       promotion: [
@@ -75,11 +78,9 @@ describe('WorkflowStepRawSchema promotion', () => {
       instruction: '{task}',
     });
 
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.issues).toEqual(expect.arrayContaining([
-        expect.objectContaining({ path: ['promotion', 0] }),
-      ]));
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.promotion).toHaveLength(1);
     }
   });
 

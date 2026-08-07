@@ -20,6 +20,45 @@ function matchesAt(entry: WorkflowPromotionEntry, stepIteration: number): boolea
   return entry.at !== undefined && stepIteration >= entry.at;
 }
 
+/**
+ * A promotion entry is "targeted" when it names a concrete provider/model/provider_options. Such
+ * an entry drives provider/model directly (CT-PROMO-2). A target-less `{at:N}` entry names no
+ * target and instead advances the runtime.yaml `ladder` (issue #1208).
+ */
+export function isTargetedPromotionEntry(entry: WorkflowPromotionEntry): boolean {
+  return entry.provider !== undefined
+    || entry.model !== undefined
+    || entry.providerOptions !== undefined;
+}
+
+/**
+ * Count how many target-less `{at:N}` promotion entries the current step iteration has reached
+ * (issue #1208). The count is the ladder stage index the promotion advances to: one matched
+ * `{at}` per stage. Target-less entries carry no condition, so this is deterministic and never
+ * invokes the AI judge (INV-C). Targeted entries are ignored here — they drive provider/model
+ * directly, not the ladder.
+ */
+export function countMatchedLadderStages(
+  step: AgentWorkflowStep,
+  stepIteration: number,
+): number {
+  if (!step.promotion) {
+    return 0;
+  }
+  let count = 0;
+  for (const entry of step.promotion) {
+    if (
+      entry
+      && !isTargetedPromotionEntry(entry)
+      && entry.condition === undefined
+      && matchesAt(entry, stepIteration)
+    ) {
+      count++;
+    }
+  }
+  return count;
+}
+
 async function matchesAiCondition(
   entry: WorkflowPromotionEntry,
   entryIndex: number,

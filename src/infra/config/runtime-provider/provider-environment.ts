@@ -24,6 +24,7 @@ import {
 } from './mode.js';
 import {
   collectLegacyProviderSignals,
+  collectStepPromotionEntries,
   selectConfigTaktProviders,
 } from './legacy-signals.js';
 import {
@@ -87,7 +88,8 @@ export function resolveCompiledProviderEnvironment(
  */
 export function resolveAuxiliaryProviderEnvironment(
   projectCwd: string,
-  workflow: Pick<WorkflowConfig, 'name' | 'provider' | 'model' | 'autoRouting'>,
+  workflow: Pick<WorkflowConfig, 'name' | 'provider' | 'model' | 'autoRouting'>
+    & Partial<Pick<WorkflowConfig, 'steps'>>,
 ): CompiledProviderEnvironment {
   const resolved = resolveWorkflowConfigValues(projectCwd, [
     'personaProviders',
@@ -125,6 +127,7 @@ export function resolveAuxiliaryProviderEnvironment(
         provider: workflow.provider,
         model: workflow.model,
         autoRouting: workflow.autoRouting,
+        promotion: collectStepPromotionEntries(workflow.steps),
       },
       providerOptions.source,
     ),

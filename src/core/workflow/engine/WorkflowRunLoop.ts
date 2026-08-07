@@ -162,6 +162,7 @@ async function resolveStepPromotionRuntime(
     structuredCaller: deps.options.structuredCaller,
     childProcessEnv: deps.options.childProcessEnv,
     resolveStepProviderModel: deps.resolveStepProviderModelBeforeAutoRouting,
+    providerLadders: deps.options.providerLadders,
   }, step, stepIteration, runtime);
 }
 

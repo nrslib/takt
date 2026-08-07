@@ -42,6 +42,12 @@ import { classifyReportRelativePath } from './reserved-report-names.js';
 const RESERVED_WORKFLOW_CALL_RESULTS = ['COMPLETE', 'ABORT'] as const;
 const WorkflowStepNameSchema = z.string().min(1);
 
+// Issue #1208 Stage 1 — additive capability/MCP reference surface.
+// `capabilities` names a capability-set (an existing provider-options named resource, formalized);
+// `mcp` names one or more MCP servers defined at the workflow top level (or, later, in runtime.yaml).
+const WorkflowCapabilitiesRefSchema = z.string().min(1).optional();
+const WorkflowMcpRefListSchema = z.array(z.string().min(1)).min(1).optional();
+
 export const WorkflowParamReferenceRawSchema = z.object({
   $param: z.string().min(1),
 }).strict();
@@ -238,7 +244,32 @@ const WorkflowPromotionRawSchema = z.object({
   model: z.string().optional(),
   provider_options: WorkflowStepProviderOptionsSchema,
 }).strict().superRefine((data, ctx) => {
-  if (data.at === undefined && data.condition === undefined) {
+  const hasProviderOptionsTargetValue = data.provider_options !== undefined
+    && hasProviderOptionsTarget(data.provider_options);
+  const isTargetLess = data.provider === undefined
+    && data.model === undefined
+    && !hasProviderOptionsTargetValue;
+
+  if (isTargetLess) {
+    // Issue #1208 Stage 1 (order.md:99): a target-less promotion delegates "what to promote to" to
+    // the runtime.yaml ladder, which is indexed purely by the count of reached `{at:N}` entries
+    // (countMatchedLadderStages excludes condition entries). The only target-less shape with a
+    // runtime effect is `{at:N}` with no condition; a condition-only or `{at, condition}`
+    // target-less entry would be accepted yet silently dropped at runtime, so reject it at load
+    // time (fail fast) — the accepted shape must equal the shape that has a runtime effect.
+    if (data.at === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'target-less promotion entry requires "at"; only {at:N} advances the runtime.yaml ladder',
+      });
+    }
+    if (data.condition !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'target-less promotion entry must not set "condition"; only {at:N} advances the runtime.yaml ladder',
+      });
+    }
+  } else if (data.at === undefined && data.condition === undefined) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message: 'promotion entry requires at least one of "at" or "condition"',
@@ -250,16 +281,6 @@ const WorkflowPromotionRawSchema = z.object({
       code: z.ZodIssueCode.custom,
       path: ['condition'],
       message: 'promotion condition must be an ai("...") expression',
-    });
-  }
-
-  const hasProviderOptionsTargetValue = data.provider_options !== undefined
-    && hasProviderOptionsTarget(data.provider_options);
-
-  if (data.provider === undefined && data.model === undefined && !hasProviderOptionsTargetValue) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: 'promotion entry requires at least one of "provider", "model", or "provider_options"',
     });
   }
 
@@ -424,6 +445,8 @@ const AgentParallelSubStepRawObjectSchema = z.object({
   knowledge: WorkflowFacetRefListOrParamSchema.optional(),
   allow_git_commit: z.boolean().optional(),
   allowed_tools: z.never().optional(),
+  capabilities: WorkflowCapabilitiesRefSchema,
+  mcp: WorkflowMcpRefListSchema,
   mcp_servers: McpServersSchema,
   provider: ProviderReferenceSchema.optional(),
   model: z.string().nullable().optional(),
@@ -594,6 +617,8 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
     knowledge: WorkflowFacetRefListOrParamSchema.optional(),
     allow_git_commit: z.boolean().optional(),
     allowed_tools: z.never().optional(),
+    capabilities: WorkflowCapabilitiesRefSchema,
+    mcp: WorkflowMcpRefListSchema,
     mcp_servers: McpServersSchema,
     provider: ProviderReferenceSchema.optional(),
     model: z.string().nullable().optional(),
@@ -972,6 +997,10 @@ export const WorkflowConfigRawSchema = z.object({
   subworkflow: WorkflowSubworkflowRawSchema.optional(),
   finding_contract: FindingContractConfigRawSchema.optional(),
   workflow_config: WorkflowProviderOptionsWithExtendsSchema,
+  // Issue #1208: workflow-level capability-set reference (the default for every step) and the
+  // portable, bundled MCP server definitions that step/sub-step `mcp:` references resolve against.
+  capabilities: WorkflowCapabilitiesRefSchema,
+  mcp_servers: McpServersSchema,
   auto_routing: AutoRoutingSchema.optional(),
   rate_limit_fallback: RateLimitFallbackSchema.optional(),
   permission_mode: z.never().optional(),

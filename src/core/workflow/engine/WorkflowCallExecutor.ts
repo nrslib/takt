@@ -167,6 +167,7 @@ interface ExecuteWorkflowCallRequest {
   parentProviderOptions: WorkflowEngineOptions['providerOptions'];
   personaProviders: WorkflowEngineOptions['personaProviders'];
   providerRouting: WorkflowEngineOptions['providerRouting'];
+  providerLadders: WorkflowEngineOptions['providerLadders'];
 }
 
 interface ExecuteWorkflowCallOptions {
@@ -618,6 +619,9 @@ export class WorkflowCallExecutor {
       providerRouting: request.providerRouting === undefined
         ? undefined
         : structuredClone(request.providerRouting),
+      providerLadders: request.providerLadders === undefined
+        ? undefined
+        : structuredClone(request.providerLadders),
       startStep: this.deps.sharedRuntime.restartNavigator === undefined
         ? this.resolveChildResumeStartStep(
             childWorkflow,

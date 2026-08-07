@@ -23,6 +23,43 @@ function isNonEmptyRecord(value: Record<string, unknown> | undefined): boolean {
 }
 
 /**
+ * A promotion entry carries a concrete provider target when any of provider/model/providerOptions
+ * is set. A target-less `{at:N}` promotion (issue #1208) is NOT a legacy signal — its target lives
+ * in the runtime.yaml ladder, so it is exactly what Stage 1 introduces. Detection runs on the
+ * normalized `WorkflowConfig` steps (both production callers pass normalized config), so only the
+ * camelCase `providerOptions` shape exists here.
+ */
+interface LegacyPromotionEntryView {
+  provider?: unknown;
+  model?: unknown;
+  providerOptions?: unknown;
+}
+
+function hasTargetedPromotion(
+  promotion: ReadonlyArray<LegacyPromotionEntryView> | undefined,
+): boolean {
+  return promotion?.some((entry) =>
+    entry.provider !== undefined
+    || entry.model !== undefined
+    || entry.providerOptions !== undefined,
+  ) ?? false;
+}
+
+/** Flatten every step's `promotion` list into a single view for mixed-config signal detection. */
+export function collectStepPromotionEntries(
+  steps: readonly unknown[] | undefined,
+): LegacyPromotionEntryView[] {
+  const entries: LegacyPromotionEntryView[] = [];
+  for (const step of steps ?? []) {
+    const promotion = (step as { promotion?: ReadonlyArray<LegacyPromotionEntryView> }).promotion;
+    if (promotion) {
+      entries.push(...promotion);
+    }
+  }
+  return entries;
+}
+
+/**
  * Reduce project/global `takt_providers` into the subset that counts as a mixed-config signal:
  * a `selector` or `assistant` entry whose `provider` is set in `config.yaml`. Project wins over
  * global so the returned view reflects the effective config the same way the rest of the loader
@@ -51,7 +88,13 @@ export function selectConfigTaktProviders(
  */
 export function collectLegacyProviderSignals(
   legacy: LegacyProviderEnvironmentInput,
-  workflow: { name: string; provider?: unknown; model?: unknown; autoRouting?: unknown },
+  workflow: {
+    name: string;
+    provider?: unknown;
+    model?: unknown;
+    autoRouting?: unknown;
+    promotion?: ReadonlyArray<LegacyPromotionEntryView>;
+  },
   providerOptionsSource: ProviderOptionsSource | undefined,
 ): LegacyProviderSignal[] {
   const signals: LegacyProviderSignal[] = [];
@@ -82,6 +125,16 @@ export function collectLegacyProviderSignals(
       setting: 'model',
       location: `workflow "${workflow.name}":model`,
       migrateTo: 'provider.targets.steps',
+    });
+  }
+  // A workflow step that still names a concrete promotion target (provider/model/provider_options)
+  // is legacy under runtime-v1: the target belongs in the runtime.yaml ladder (issue #1208). A
+  // target-less `{at:N}` promotion is intentionally NOT reported — it is the Stage 1 primitive.
+  if (hasTargetedPromotion(workflow.promotion)) {
+    signals.push({
+      setting: 'promotion',
+      location: `workflow "${workflow.name}":promotion`,
+      migrateTo: 'provider.targets.steps ladder',
     });
   }
   // Only takt_providers with an explicit provider (config.yaml only; never CLI/env/default) count.

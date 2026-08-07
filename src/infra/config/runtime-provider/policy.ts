@@ -101,6 +101,12 @@ function validateReferences(
       assertProfile(assignment.profile, referencedBy);
     } else if (assignment.pool !== undefined) {
       assertPool(assignment.pool, referencedBy);
+    } else if (assignment.ladder !== undefined) {
+      // Every stage of a ladder must resolve to a fully-defined profile up front (CT-LAD-5); an
+      // unresolved or incomplete stage fails fast here, never at the moment a promotion advances.
+      assignment.ladder.forEach((profileName, stage) => {
+        assertProfile(profileName, `${referencedBy} ladder[${stage}]`);
+      });
     }
   };
 

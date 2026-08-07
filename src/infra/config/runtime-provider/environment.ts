@@ -24,6 +24,7 @@ import type {
   AutoRoutingConfig,
   AutoRoutingStrategy,
   PersonaProviderEntry,
+  ProviderLadderConfig,
   ProviderRoutingConfig,
   ProviderRoutingEntry,
   RoutingTier,
@@ -64,6 +65,14 @@ export interface CompiledProviderEnvironment {
    * and assistant seams resolve the runtime.yaml `targets.internal_agents` ladder.
    */
   internalAgents: InternalAgentEnvironment | undefined;
+  /**
+   * Every stage of each `ladder` assignment (issue #1208), so the promotion seam can advance a
+   * matched target-less `{at:N}` to a later stage. Stage 0 is the initial assignment already
+   * carried by provider/model/personaProviders/providerRouting; only the later stages are new
+   * information. Undefined in legacy mode and when no assignment uses a `ladder`. `internal_agents`
+   * ladders are intentionally excluded — those seats are not promotion targets.
+   */
+  providerLadders: ProviderLadderConfig | undefined;
 }
 
 /** The exact provider engine-options the legacy bootstrap already resolved. */
@@ -115,6 +124,7 @@ export function compileLegacyProviderEnvironment(
     providerOptions: legacy.providerOptions,
     tagConflictPolicy: 'last-wins',
     internalAgents: undefined,
+    providerLadders: undefined,
   };
 }
 
@@ -132,13 +142,15 @@ export function compileRuntimeProviderEnvironment(
 
   const flatProfiles = flattenProfiles(section.profiles ?? {});
 
-  const defaults = section.defaults?.profile !== undefined
-    ? resolveProfileEntry(section.defaults.profile, flatProfiles)
+  const defaultProfile = initialAssignmentProfile(section.defaults);
+  const defaults = defaultProfile !== undefined
+    ? resolveProfileEntry(defaultProfile, flatProfiles)
     : undefined;
   const personaProviders = mapTargetEntries(section.targets?.personas, flatProfiles);
   const providerRouting = buildProviderRouting(section, flatProfiles);
   const autoRouting = buildAutoRoutingConfig(section, flatProfiles);
   const internalAgents = buildInternalAgents(section.targets?.internal_agents, flatProfiles);
+  const providerLadders = buildProviderLadders(section, flatProfiles);
 
   return {
     provider: defaults?.provider,
@@ -151,7 +163,73 @@ export function compileRuntimeProviderEnvironment(
     providerOptions: defaults?.providerOptions,
     tagConflictPolicy: 'fail-fast',
     internalAgents,
+    providerLadders,
   };
+}
+
+/**
+ * Resolve every stage of each `ladder` assignment into `ProviderRoutingEntry[]`, keyed by the
+ * same assignment paths (`defaults` / `targets.steps` / `targets.tags` / `targets.personas`)
+ * that carry the stage-0 initial assignment. Profile/pool assignments contribute nothing (they
+ * have no later stages), and `internal_agents` is excluded — those seats are not promotion
+ * targets. Returns undefined when no assignment uses a `ladder`, so non-ladder runtimes stay
+ * unaffected.
+ */
+function buildProviderLadders(
+  section: RuntimeProviderSection,
+  flatProfiles: Map<string, FlatProfile>,
+): ProviderLadderConfig | undefined {
+  const defaults = section.defaults?.ladder !== undefined
+    ? resolveLadderStages(section.defaults.ladder, flatProfiles)
+    : undefined;
+  const steps = mapLadderEntries(section.targets?.steps, flatProfiles);
+  const tags = mapLadderEntries(section.targets?.tags, flatProfiles);
+  const personas = mapLadderEntries(section.targets?.personas, flatProfiles);
+  if (defaults === undefined && steps === undefined && tags === undefined && personas === undefined) {
+    return undefined;
+  }
+  return {
+    ...(defaults !== undefined ? { defaults } : {}),
+    ...(steps !== undefined ? { steps } : {}),
+    ...(tags !== undefined ? { tags } : {}),
+    ...(personas !== undefined ? { personas } : {}),
+  };
+}
+
+function mapLadderEntries(
+  map: Record<string, RuntimeProviderAssignment> | undefined,
+  flatProfiles: Map<string, FlatProfile>,
+): Record<string, ProviderRoutingEntry[]> | undefined {
+  if (map === undefined) {
+    return undefined;
+  }
+  const result: Record<string, ProviderRoutingEntry[]> = {};
+  for (const [key, assignment] of Object.entries(map)) {
+    if (assignment.ladder === undefined) {
+      continue;
+    }
+    result[key] = resolveLadderStages(assignment.ladder, flatProfiles);
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
+function resolveLadderStages(
+  ladder: readonly string[],
+  flatProfiles: Map<string, FlatProfile>,
+): ProviderRoutingEntry[] {
+  return ladder.map((profileName) => resolveProfileEntry(profileName, flatProfiles));
+}
+
+/**
+ * The profile that becomes the initial routing assignment for an assignment slot: a fixed
+ * `profile`, or (issue #1208) a `ladder`'s first stage. Returns undefined for a `pool`
+ * assignment (routed through auto_routing, not the fixed routing map) or an empty slot, so the
+ * three consumers (defaults / targets / internal_agents) resolve the initial stage identically.
+ */
+function initialAssignmentProfile(
+  assignment: RuntimeProviderAssignment | undefined,
+): string | undefined {
+  return assignment?.profile ?? assignment?.ladder?.[0];
 }
 
 function mapTargetEntries(
@@ -163,11 +241,15 @@ function mapTargetEntries(
   }
   const result: Record<string, ProviderRoutingEntry> = {};
   for (const [key, assignment] of Object.entries(map)) {
-    // `pool` assignments route through auto_routing (poolRules), not the fixed ladder.
-    if (assignment.profile === undefined) {
+    // `pool` assignments route through auto_routing (poolRules), not the fixed routing map;
+    // `initialAssignmentProfile` returns undefined for them. A `ladder` resolves here to its
+    // first stage; its later stages are carried separately in `providerLadders` and consumed by
+    // the promotion seam (`resolvePromotionRuntime`) when a target-less `{at:N}` matches.
+    const initialProfile = initialAssignmentProfile(assignment);
+    if (initialProfile === undefined) {
       continue;
     }
-    result[key] = resolveProfileEntry(assignment.profile, flatProfiles);
+    result[key] = resolveProfileEntry(initialProfile, flatProfiles);
   }
   return Object.keys(result).length > 0 ? result : undefined;
 }
@@ -206,10 +288,13 @@ function buildInternalAgents(
         `runtime.yaml \`provider.targets.internal_agents.${key}\` cannot use a \`pool\`; internal agents require a fixed \`profile\``,
       );
     }
-    if (assignment.profile === undefined) {
+    // A `ladder` honors its first stage like every other target (issue #1208); only `pool` is
+    // rejected for internal agents.
+    const initialProfile = initialAssignmentProfile(assignment);
+    if (initialProfile === undefined) {
       continue;
     }
-    result[key] = resolveProfileEntry(assignment.profile, flatProfiles);
+    result[key] = resolveProfileEntry(initialProfile, flatProfiles);
   }
   return Object.keys(result).length > 0 ? result : undefined;
 }

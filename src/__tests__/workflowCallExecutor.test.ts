@@ -413,6 +413,81 @@ describe('WorkflowCallExecutor', () => {
     );
   });
 
+  it('provider ladders を子エンジンへクローンして伝搬する (issue #1208)', async () => {
+    const parentConfig = {
+      name: 'parent',
+      initialStep: 'delegate',
+      maxSteps: 10,
+      steps: [],
+    } as WorkflowConfig;
+    const childConfig = {
+      name: 'child',
+      initialStep: 'fix',
+      maxSteps: 2,
+      steps: [{ name: 'fix' }],
+    } as WorkflowConfig;
+    const step = {
+      name: 'delegate',
+      kind: 'workflow_call',
+      call: 'child',
+      personaDisplayName: 'delegate',
+      instruction: '',
+    } as WorkflowCallStep;
+    const state = makeState(parentConfig.name, 'running', 1);
+    const providerLadders = {
+      steps: { 'child/fix': [{ provider: 'opencode', model: 'ollama-cloud/glm-5.2' }, { provider: 'claude', model: 'opus' }] },
+    };
+    const createdOptions: Array<Record<string, unknown>> = [];
+    const executor = new WorkflowCallExecutor({
+      getConfig: () => parentConfig,
+      getOptions: () => ({
+        projectCwd: '/tmp/project',
+        reportDirName: 'run',
+      }),
+      getMaxSteps: () => 10,
+      updateMaxSteps: vi.fn(),
+      getCwd: () => '/tmp/project',
+      projectCwd: '/tmp/project',
+      task: 'task',
+      sharedRuntime: { startedAtMs: Date.now(), maxSteps: 10 },
+      resumeStackPrefix: [],
+      consumeWorkflowCallContinuation: vi.fn(),
+      runPaths: { slug: 'run' } as never,
+      resolveWorkflowCall: vi.fn(),
+      createEngine: vi.fn((_config, _cwd, _task, options) => {
+        createdOptions.push(options as unknown as Record<string, unknown>);
+        return {
+          on: vi.fn(),
+          runWithResult: vi.fn().mockResolvedValue({
+            state: makeState(childConfig.name, 'completed', 1),
+          }),
+        };
+      }),
+      emit: vi.fn(),
+      state,
+      setActiveResumePoint: vi.fn(),
+      refreshFindingsState: vi.fn(),
+    });
+
+    await executor.execute(
+      prepareExecutionRequest(executor, {
+        step,
+        childWorkflow: childConfig,
+        childProviderInfo: { provider: 'mock', model: 'test-model' },
+        parentProviderOptions: undefined,
+        personaProviders: undefined,
+        providerRouting: undefined,
+        providerLadders,
+      }, 1, []),
+      { syncParentState: false },
+    );
+
+    const childOptions = createdOptions[0]!;
+    expect(childOptions.providerLadders).toEqual(providerLadders);
+    // A silent-no-op regression would drop the ladder; a shared reference would leak parent state.
+    expect(childOptions.providerLadders).not.toBe(providerLadders);
+  });
+
   it('child workflow が abort した理由を呼び出し元へ返す', async () => {
     const parentConfig = {
       name: 'parent',

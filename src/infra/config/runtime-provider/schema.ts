@@ -27,20 +27,24 @@ const ProfileSchema = z
   })
   .strict();
 
-/** `defaults` and every target entry pick exactly one of a fixed profile or an auto-routing pool. */
+/**
+ * `defaults` and every target entry pick exactly one assignment form: a fixed `profile`, an
+ * auto-routing `pool`, or (issue #1208) an ordered `ladder` of profiles. The ladder's first
+ * profile is the initial assignment; a step `promotion` request advances to the next stage.
+ */
 const AssignmentSchema = z
   .object({
     profile: z.string().min(1).optional(),
     pool: z.string().min(1).optional(),
+    ladder: z.array(z.string().min(1)).min(1).optional(),
   })
   .strict()
   .superRefine((value, ctx) => {
-    const hasProfile = value.profile !== undefined;
-    const hasPool = value.pool !== undefined;
-    if (hasProfile === hasPool) {
+    const present = [value.profile, value.pool, value.ladder].filter((form) => form !== undefined);
+    if (present.length !== 1) {
       ctx.addIssue({
         code: 'custom',
-        message: 'assignment must specify exactly one of `profile` or `pool`',
+        message: 'assignment must specify exactly one of `profile`, `pool`, or `ladder`',
       });
     }
   });
