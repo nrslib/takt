@@ -340,7 +340,8 @@ describe('FC restatement slot — synthetic step inherits the owner reviewer', (
     expect(resolveStepProviderModel({
       step,
       providerRouting: {
-        personas: { 'architecture-reviewer': { provider: 'codex', model: 'routed-model' } },
+        // 格上げ枠の routing キーは step 名と同じ 'escalation-reviewer'。
+        personas: { [FINDING_ESCALATION_REVIEWER_ROUTING_KEY]: { provider: 'codex', model: 'routed-model' } },
       },
     })).toMatchObject({ provider: 'mock', model: undefined });
   });
