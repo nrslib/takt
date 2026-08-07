@@ -17,6 +17,7 @@ import {
   stopBudgetRoundsCompleted,
 } from '../core/workflow/findings/stop-budget.js';
 import { computeReviewerStableKey } from '../core/workflow/findings/raw-canonicalization.js';
+import { resolveStepProviderModel } from '../core/workflow/provider-resolution.js';
 import {
   computeRestatementRequestId,
   createFindingReviewPresentationContextV2,
@@ -316,6 +317,32 @@ describe('FC restatement slot — synthetic step inherits the owner reviewer', (
     expect(step.outputContracts?.[0]?.name).toBe('followup-architecture-review-2');
     // owner のレビュー本編 report とは別の identity になる。
     expect(step.outputContracts?.[0]?.name).not.toBe(ownerStep.outputContracts?.[0]?.name);
+  });
+
+  it('pins modelSpecified even when the target has no model so routing cannot resolve one', () => {
+    // provider だけを指名した escalation-reviewer seat がこの経路を通る。
+    // modelSpecified を立てないと model だけが routing 層で再解決され、
+    // 別 provider 向けの model が混ざった組になる。
+    const step = buildFindingRestatementSlotStep({
+      ownerStep,
+      phase: 'escalation',
+      mode: 'restatement-only',
+      presentationPass: 1,
+      target: { provider: 'mock' },
+    });
+
+    expect(step).toMatchObject({
+      provider: 'mock',
+      providerSpecified: true,
+      modelSpecified: true,
+    });
+    expect(step.model).toBeUndefined();
+    expect(resolveStepProviderModel({
+      step,
+      providerRouting: {
+        personas: { 'architecture-reviewer': { provider: 'codex', model: 'routed-model' } },
+      },
+    })).toMatchObject({ provider: 'mock', model: undefined });
   });
 
   it('changes only the model, and drops the owner review procedure', () => {

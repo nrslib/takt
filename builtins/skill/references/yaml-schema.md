@@ -173,7 +173,10 @@ Team Leader はタスクを独立 part に分解する。`initial_max_parts` を
 
 ```yaml
 # runtime.yaml
+version: 1
 provider:
+  profiles:
+    strong: { provider: codex, model: gpt-5.5 }
   targets:
     internal_agents:
       findings-manager:     { profile: strong }

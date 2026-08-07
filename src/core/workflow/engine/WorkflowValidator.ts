@@ -340,8 +340,8 @@ export function validateFindingContractSyntheticProviderModels(
       : undefined;
     const configurationPath = step.name === FINDING_TERMINAL_ADJUDICATION_STEP
       || step.name === FINDING_CONFLICT_ADJUDICATION_STEP
-      ? 'Configuration error: finding_contract.adjudicator.model'
-      : 'Configuration error: finding_contract.manager.model';
+      ? 'Configuration error: terminal-adjudicator model'
+      : 'Configuration error: findings-manager model';
     validateResolvedProviderInfo(
       deterministicInfo ?? providerInfo,
       configurationPath,

@@ -15,8 +15,6 @@ finding_contract:
     persona: findings-manager.md
     instruction: findings-manager
     output_contract: findings-manager
-    provider: mock
-    model: mock-model
 max_steps: 3
 initial_step: review
 steps:

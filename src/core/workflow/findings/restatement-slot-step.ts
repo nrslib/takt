@@ -44,7 +44,8 @@ export function findingRestatementSlotReportName(input: {
 
 /**
  * 言い直し slot の1呼び出しが使う provider/model。呼び出し側が解決済みの値を渡す。
- * `model` は owner 側が model を持たない構成をそのまま引き継ぐため optional。
+ * `model` は owner 側が model を持たない構成をそのまま引き継ぐため optional で、
+ * 未指定は「この provider の既定に任せる」を意味する（下位層で再解決させない）。
  */
 export interface RestatementSlotProviderTarget {
   provider: ProviderType;
@@ -164,11 +165,13 @@ export function buildFindingRestatementSlotStep(input: {
     // owner と同じ道具立てで走る。target が providerOptions を持たない場合
     // （格上げ先 profile が指定していない）は owner のものを引き継ぐ。
     // provider/model は呼び出し側で解決済み。以降の routing 層で再解決させない。
+    // model が undefined でも `modelSpecified` は立てる — 立てないと model だけが
+    // routing 層で再解決され、別 provider 向けの model が混ざった組になる
+    // （provider だけを指名した escalation-reviewer seat がこの経路を通る）。
     provider: input.target.provider,
     providerSpecified: true,
-    ...(input.target.model === undefined
-      ? {}
-      : { model: input.target.model, modelSpecified: true }),
+    ...(input.target.model === undefined ? {} : { model: input.target.model }),
+    modelSpecified: true,
     ...(input.target.providerOptions === undefined
       ? (owner.providerOptions === undefined ? {} : { providerOptions: owner.providerOptions })
       : { providerOptions: input.target.providerOptions }),

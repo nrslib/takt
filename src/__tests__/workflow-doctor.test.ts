@@ -391,7 +391,15 @@ steps:
     expect(mockError).toHaveBeenCalledWith(expect.stringContaining('bash'));
   });
 
-  it('reports invalid finding_contract.manager provider/model from workflow doctor output', async () => {
+  it('reports an unresolvable findings-manager provider/model from workflow doctor output', async () => {
+    // manager の provider/model は workflow に書けない。既定解決（ここでは
+    // persona_providers）が model なしの opencode に着地する構成を doctor が落とす。
+    writeWorkflow(projectDir, '.takt/config.yaml', [
+      'persona_providers:',
+      '  findings-manager:',
+      '    provider: opencode',
+      '',
+    ].join('\n'));
     const filePath = writeWorkflow(projectDir, '.takt/workflows/invalid-finding-manager-provider.yaml', `name: invalid-finding-manager-provider
 max_steps: 10
 initial_step: step1
@@ -400,7 +408,6 @@ finding_contract:
     persona: findings-manager
     instruction: findings-manager
     output_contract: findings-manager
-    provider: opencode
 steps:
   - name: step1
     rules:

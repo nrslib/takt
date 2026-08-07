@@ -1,6 +1,8 @@
 name: e2e-finding-contract-manager-provider
-description: Verify finding_contract.manager provider/model during mock workflow execution
+description: Verify the synthesized finding manager provider/model resolution during mock workflow execution
 workflow_config:
+  provider: mock
+  model: manager-mock-model
   provider_options:
     codex:
       network_access: true
@@ -19,8 +21,6 @@ finding_contract:
     persona: findings-manager.md
     instruction: findings-manager
     output_contract: findings-manager
-    provider: mock
-    model: manager-mock-model
 max_steps: 3
 initial_step: review
 steps:

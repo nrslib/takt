@@ -829,7 +829,7 @@ describe('workflow step fragment provenance', () => {
 
     expect(state.status).toBe('aborted');
     expect(abortReasons).toHaveLength(1);
-    expect(abortReasons[0]).toContain('finding_contract.manager.model must be in \'provider/model\' format');
+    expect(abortReasons[0]).toContain('findings-manager model must be in \'provider/model\' format');
     expect(abortReasons[0]).toContain('step fragment "delegate"');
     expect(abortReasons[0]).toContain(fragmentPath);
   });

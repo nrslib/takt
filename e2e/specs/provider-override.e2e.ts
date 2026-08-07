@@ -220,12 +220,16 @@ describe('E2E: --provider option override (mock)', () => {
     expect(`${result.stdout}\n${result.stderr}`).toContain('base_url');
   }, 240_000);
 
-  it('should execute finding_contract.manager with direct provider/model over persona_providers', () => {
+  it('should execute the finding manager through its resolved provider/model', () => {
+    // manager の provider/model は workflow に書けない。seat 未指定なら
+    // persona routing → workflow 既定、の既定解決へそのまま落ちる。
     updateIsolatedConfig(isolatedEnv.taktDir, {
-      persona_providers: {
-        'findings-manager.md': {
-          provider: 'opencode',
-          model: 'opencode/sentinel-manager-model',
+      provider_routing: {
+        personas: {
+          'findings-manager.md': {
+            provider: 'mock',
+            model: 'routed-manager-model',
+          },
         },
       },
     });
@@ -262,7 +266,7 @@ describe('E2E: --provider option override (mock)', () => {
     expect(ledger.conflicts).toEqual([]);
   }, 240_000);
 
-  it('should display configured finding_contract.manager provider/model in prompt preview', () => {
+  it('should display the resolved finding manager provider/model in prompt preview', () => {
     const workflowPath = resolve(
       __dirname,
       '../fixtures/workflows/finding-contract-manager-provider/finding-contract-manager-provider.yaml',
@@ -280,20 +284,26 @@ describe('E2E: --provider option override (mock)', () => {
     expect(combined).toContain('Finding manager model: manager-mock-model');
   }, 60_000);
 
-  it('should validate finding_contract.manager provider/model before mock execution', () => {
-    const sourceWorkflowPath = resolve(
+  it('should validate the resolved finding manager provider/model before mock execution', () => {
+    // routing が manager だけを「model の無い opencode」へ落とす構成は実行前に落ちる。
+    // 合成ロールの検証は workflow の記述ではなく解決結果に対して働く。
+    updateIsolatedConfig(isolatedEnv.taktDir, {
+      provider_routing: {
+        personas: {
+          'findings-manager.md': { provider: 'opencode' },
+        },
+      },
+    });
+
+    const workflowPath = resolve(
       __dirname,
       '../fixtures/workflows/finding-contract-manager-provider/finding-contract-manager-provider.yaml',
     );
-    const invalidWorkflowPath = join(repo.path, 'finding-contract-manager-provider-invalid.yaml');
-    const invalidWorkflow = readFileSync(sourceWorkflowPath, 'utf-8')
-      .replace('    provider: mock\n    model: manager-mock-model\n', '    provider: opencode\n    model: manager-mock-model\n');
-    writeFileSync(invalidWorkflowPath, invalidWorkflow, 'utf-8');
 
     const result = runTakt({
       args: [
         '--task', 'Reject invalid finding manager provider and model',
-        '--workflow', invalidWorkflowPath,
+        '--workflow', workflowPath,
       ],
       cwd: repo.path,
       env: isolatedEnv.env,
@@ -302,7 +312,7 @@ describe('E2E: --provider option override (mock)', () => {
     });
 
     const combined = `${result.stdout}\n${result.stderr}`;
-    expect(result.exitCode).toBe(1);
-    expect(combined).toContain('finding_contract.manager.model');
+    expect(result.exitCode, combined).toBe(1);
+    expect(combined).toContain("findings-manager model must be in 'provider/model' format");
   }, 60_000);
 });

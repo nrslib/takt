@@ -19,7 +19,27 @@ describe('getWorkflowDescription', () => {
     return root;
   }
 
-  function writeSingleStepFindingContractWorkflow(projectDir: string, managerProviderLines: string[]): void {
+  /**
+   * 合成ロールの provider/model は runtime.yaml の internal_agents seat で指名する
+   * （workflow 側にフィールドは無い）。preview が実行時と同じ解決を通ることを見る。
+   */
+  function writeFindingsManagerSeat(projectDir: string, profileLines: string[]): void {
+    mkdirSync(join(projectDir, '.takt'), { recursive: true });
+    writeFileSync(join(projectDir, '.takt', 'runtime.yaml'), [
+      'version: 1',
+      'provider:',
+      '  profiles:',
+      '    manager:',
+      ...profileLines.map((line) => `      ${line}`),
+      '  targets:',
+      '    internal_agents:',
+      '      findings-manager:',
+      '        profile: manager',
+      '',
+    ].join('\n'));
+  }
+
+  function writeSingleStepFindingContractWorkflow(projectDir: string): void {
     const workflowDir = join(projectDir, '.takt', 'workflows');
     const outputContractsDir = join(projectDir, '.takt', 'facets', 'output-contracts');
     mkdirSync(workflowDir, { recursive: true });
@@ -34,7 +54,6 @@ describe('getWorkflowDescription', () => {
       '    persona: findings-manager',
       '    instruction: findings-manager',
       '    output_contract: findings-manager',
-      ...managerProviderLines.map((line) => `    ${line}`),
       'steps:',
       '  - name: reviewer',
       '    persona: reviewer',
@@ -56,7 +75,7 @@ describe('getWorkflowDescription', () => {
     ].join('\n'));
   }
 
-  function writeFindingManagerWorkflow(projectDir: string, managerProviderLines: string[]): void {
+  function writeFindingManagerWorkflow(projectDir: string): void {
     const workflowDir = join(projectDir, '.takt', 'workflows');
     mkdirSync(workflowDir, { recursive: true });
     writeFileSync(join(workflowDir, 'finding-manager-preview.yaml'), [
@@ -68,7 +87,6 @@ describe('getWorkflowDescription', () => {
       '    persona: findings-manager',
       '    instruction: findings-manager',
       '    output_contract: findings-manager',
-      ...managerProviderLines.map((line) => `    ${line}`),
       'steps:',
       '  - name: reviewers',
       '    parallel:',
@@ -285,7 +303,8 @@ describe('getWorkflowDescription', () => {
 
   it('finding manager の解決済み provider/model を parallel step summary に含める', () => {
     const projectDir = createProject();
-    writeFindingManagerWorkflow(projectDir, ['provider: codex', 'model: gpt-5.5']);
+    writeFindingManagerWorkflow(projectDir);
+    writeFindingsManagerSeat(projectDir, ['provider: codex', 'model: gpt-5.5']);
 
     const description = getWorkflowDescription('finding-manager-preview', projectDir, 1);
     const reviewers = description.stepPreviews[0];
@@ -316,8 +335,6 @@ describe('getWorkflowDescription', () => {
       '    persona: findings-manager',
       '    instruction: findings-manager',
       '    output_contract: findings-manager',
-      '    provider: codex',
-      '    model: gpt-5.5',
       'steps:',
       '  - name: reviewers',
       '    parallel:',
@@ -375,8 +392,6 @@ describe('getWorkflowDescription', () => {
       '    persona: findings-manager',
       '    instruction: findings-manager',
       '    output_contract: findings-manager',
-      '    provider: codex',
-      '    model: gpt-5.5',
       'steps:',
       '  - name: implement',
       '    persona: team-leader',
@@ -425,8 +440,6 @@ describe('getWorkflowDescription', () => {
       '    persona: findings-manager',
       '    instruction: findings-manager',
       '    output_contract: findings-manager',
-      '    provider: codex',
-      '    model: gpt-5.5',
       'steps:',
       '  - name: batch',
       '    persona: worker',
@@ -462,7 +475,8 @@ describe('getWorkflowDescription', () => {
 
   it('並列親でない単独 FC ステップの後にも findings-manager を preview に含める', () => {
     const projectDir = createProject();
-    writeSingleStepFindingContractWorkflow(projectDir, ['provider: codex', 'model: gpt-5.5']);
+    writeSingleStepFindingContractWorkflow(projectDir);
+    writeFindingsManagerSeat(projectDir, ['provider: codex', 'model: gpt-5.5']);
 
     const description = getWorkflowDescription('finding-manager-single-step-preview', projectDir, 1);
     const reviewer = description.stepPreviews[0];
@@ -476,9 +490,11 @@ describe('getWorkflowDescription', () => {
     });
   });
 
-  it('finding manager の provider 直接指定時は persona model を継承しない', () => {
+  it('findings-manager seat 未指定時は persona_providers の provider/model を表示する', () => {
+    // seat を指名しなければ従来どおりの既定解決（ここでは persona_providers）へ落ちる。
     const projectDir = createProject();
-    writeFindingManagerWorkflow(projectDir, ['provider: codex']);
+    writeFindingManagerWorkflow(projectDir);
+    mkdirSync(join(projectDir, '.takt'), { recursive: true });
     writeFileSync(join(projectDir, '.takt', 'config.yaml'), [
       'persona_providers:',
       '  findings-manager:',
@@ -491,10 +507,10 @@ describe('getWorkflowDescription', () => {
       ?.find((substep) => substep.name === 'findings-manager');
 
     expect(manager).toMatchObject({
-      provider: 'codex',
+      provider: 'opencode',
+      model: 'opencode/persona-model',
       allowedTools: [],
       canEdit: false,
     });
-    expect(manager?.model).toBeUndefined();
   });
 });

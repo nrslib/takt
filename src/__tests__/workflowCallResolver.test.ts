@@ -50,8 +50,6 @@ finding_contract:
     persona: findings-manager
     instruction: findings-manager
     output_contract: findings-manager
-    provider: codex
-    model: gpt-5
   adjudicator:
     persona: supervisor
     instruction: adjudicate
@@ -996,8 +994,6 @@ finding_contract:
     persona: findings-manager
     instruction: findings-manager
     output_contract: findings-manager
-    provider: codex
-    model: strong-manager
 initial_step: delegate
 steps:
   - name: delegate
@@ -1046,6 +1042,8 @@ steps:
           providerSource: 'project',
           providerRouting: {
             personas: {
+              // manager の解決先も seat 相当の routing で固定する（subject は adjudicator）。
+              'findings-manager': { provider: 'codex', model: 'strong-manager' },
               supervisor: { provider: 'codex', model: 'strong-adjudicator' },
             },
           },
@@ -1064,6 +1062,8 @@ steps:
       providerValidationOptions: {
         providerRouting: {
           personas: {
+            // manager の解決先も seat 相当の routing で固定する（subject は adjudicator）。
+            'findings-manager': { provider: 'codex', model: 'strong-manager' },
             supervisor: { provider: 'codex', model: 'gpt-5' },
           },
         },
@@ -1082,6 +1082,8 @@ steps:
       providerValidationOptions: {
         providerRouting: {
           personas: {
+            // manager の解決先も seat 相当の routing で固定する（subject は adjudicator）。
+            'findings-manager': { provider: 'codex', model: 'strong-manager' },
             supervisor: { provider: 'opencode' },
           },
         },
@@ -1134,8 +1136,6 @@ finding_contract:
     persona: findings-manager
     instruction: findings-manager
     output_contract: findings-manager
-    provider: codex
-    model: strong-manager
 initial_step: delegate
 steps:
   - name: delegate
@@ -1184,6 +1184,8 @@ steps:
           providerSource: 'project',
           providerRouting: {
             personas: {
+              // manager の解決先も seat 相当の routing で固定する（subject は adjudicator）。
+              'findings-manager': { provider: 'codex', model: 'strong-manager' },
               supervisor: { provider: 'opencode' },
             },
           },
@@ -1219,13 +1221,9 @@ finding_contract:
     persona: findings-manager
     instruction: findings-manager
     output_contract: findings-manager
-    provider: codex
-    model: strong-manager
   adjudicator:
     persona: supervisor
     instruction: adjudicate
-    provider: codex
-    model: strong-adjudicator
 initial_step: review
 steps:
   - name: review
@@ -1253,6 +1251,12 @@ steps:
     expect(() => workflowResolver.validateWorkflowCallContracts(root, projectDir, projectDir, {
       providerValidationOptions: {
         provider: 'claude',
+        // local-fc 自身の合成ロールは seat で固定し、不正な supervisor routing は
+        // 「兄弟にも terminal 検証が及んでいたら落ちる」ための餌として残す。
+        internalAgentSeats: {
+          findingsManager: { provider: 'codex', model: 'strong-manager' },
+          terminalAdjudicator: { provider: 'codex', model: 'strong-adjudicator' },
+        },
         providerRouting: {
           personas: {
             supervisor: { provider: 'opencode' },
