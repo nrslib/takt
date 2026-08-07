@@ -8,6 +8,13 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
+// 正規化係は隔離 structured 実行（provider.setupIsolatedStructured）で走り
+// runAgent を通らない。FC レビュアーの raw findings は正規化係だけが作るので、
+// mock 駆動のテストではここを明示的に供給する。
+vi.mock('../agents/finding-intake-normalizer-usecase.js', () => ({
+  normalizeFindingIntake: vi.fn(),
+}));
+
 vi.mock('../core/workflow/evaluation/index.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../core/workflow/evaluation/index.js')>();
   const { MockRuleEvaluator } = await import('./rule-evaluator-test-double.js');
@@ -26,6 +33,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 }));
 
 import { runAgent } from '../agents/runner.js';
+import { normalizeFindingIntake } from '../agents/finding-intake-normalizer-usecase.js';
 import { WorkflowEngine } from './helpers/workflow-engine.js';
 import { resolveWorkflowCallTarget } from '../infra/config/index.js';
 import { runReportPhase } from '../core/workflow/phase-runner.js';
@@ -121,6 +129,12 @@ function schemaHasProperty(schema: unknown, property: string): boolean {
 function mockFindingContractAgents(
   contentByPersona: Readonly<Record<string, string>> = {},
 ): void {
+  // FC レビュアーは markdown レポートだけを書き、raw findings は正規化係が作る。
+  vi.mocked(normalizeFindingIntake).mockImplementation(async () => makeResponse({
+    persona: 'finding-intake-normalizer',
+    content: '',
+    structuredOutput: { rawFindings: [] },
+  }));
   vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
     options?.onPromptResolved?.({
       systemPrompt: 'test system prompt',

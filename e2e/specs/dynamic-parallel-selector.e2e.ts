@@ -277,8 +277,13 @@ function writeSelectedArtifactsFixture(repoPath: string): { workflowPath: string
     '',
   ].join('\n'), 'utf-8');
 
+  // 一本道では raw findings を作るのは正規化係だけで、並列レビュアーのどの報告に
+  // 対する呼び出しかは実行順に依存する。どの報告へ渡っても source binding が
+  // 成立するよう、抜粋は全レビュアー共通の1文にする（reviewer 名はエンジンが
+  // レビュアー step から付けるので、テストの検証項目はこれで変わらない）。
+  const SHARED_EXCERPT = 'A selected-only finding was observed.';
   const rawFinding = (id: string) => {
-    const rawExcerpt = `${id} observed a selected-only finding.`;
+    const rawExcerpt = SHARED_EXCERPT;
     return {
       rawExcerpt,
       candidate: {
@@ -300,18 +305,19 @@ function writeSelectedArtifactsFixture(repoPath: string): { workflowPath: string
     status: 'done',
     content,
   });
-  const reportResponse = (persona: string, id: string, round: number) => {
-    const finding = rawFinding(id);
-    return {
-      persona: `agents/${persona}`,
-      status: 'done',
-      content: '',
-      structured_output: {
-        reportContent: `${persona} report for round ${round}\n${finding.rawExcerpt}`,
-        rawFindings: [finding],
-      },
-    };
-  };
+  // FC レビュアーは markdown レポートだけを書く。
+  const reportResponse = (persona: string, _id: string, round: number) => ({
+    persona: `agents/${persona}`,
+    status: 'done',
+    content: `${persona} report for round ${round}\n${SHARED_EXCERPT}`,
+  });
+  // raw findings は正規化係の単発呼び出しが作る（レビュアー1人につき1回）。
+  const normalizerResponse = (id: string) => ({
+    persona: 'finding-intake-normalizer',
+    status: 'done',
+    content: '',
+    structured_output: { rawFindings: [rawFinding(id)] },
+  });
   const judgeResponse = (step: number) => ({
     persona: 'conductor',
     status: 'done',
@@ -332,18 +338,22 @@ function writeSelectedArtifactsFixture(repoPath: string): { workflowPath: string
     { status: 'done', content: '', structured_output: { selected_ids: ['frontend'], rationale: 'Initial frontend review.' } },
     executeResponse('architecture', 'approved'),
     reportResponse('architecture', 'architecture-round-1', 1),
+    normalizerResponse('architecture-round-1'),
     judgeResponse(1),
     executeResponse('frontend', 'needs_fix'),
     reportResponse('frontend', 'frontend-round-1', 1),
+    normalizerResponse('frontend-round-1'),
     judgeResponse(2),
     managerResponse,
     { persona: 'agents/fix', status: 'done', content: 'approved' },
     { status: 'done', content: '', structured_output: { selected_ids: ['backend'], rationale: 'Follow-up backend review.' } },
     executeResponse('architecture', 'approved'),
     reportResponse('architecture', 'architecture-round-2', 2),
+    normalizerResponse('architecture-round-2'),
     judgeResponse(1),
     executeResponse('backend', 'approved'),
     reportResponse('backend', 'backend-round-2', 2),
+    normalizerResponse('backend-round-2'),
     judgeResponse(1),
     managerResponse,
   ]), 'utf-8');

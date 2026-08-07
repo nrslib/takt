@@ -21,8 +21,16 @@ vi.mock('../agents/runner.js', () => ({
 vi.mock('../infra/providers/index.js', () => ({
   getProvider: vi.fn((provider: string) => ({
     supportsStructuredOutput: provider !== 'cursor',
+    // 正規化係は隔離 structured 実行で走る。実 provider（claude）と同じ能力にする。
+    supportsIsolatedStructuredExecution: provider !== 'cursor',
     keepsAllowedToolWithoutEdit: () => false,
   })),
+}));
+
+// 正規化係は provider.setupIsolatedStructured 経由で走り runAgent を通らない。
+// FC レビュアーの raw findings はここだけが作る。
+vi.mock('../agents/finding-intake-normalizer-usecase.js', () => ({
+  normalizeFindingIntake: vi.fn(),
 }));
 
 vi.mock('../core/workflow/findings/snapshot.js', async (importOriginal) => ({
@@ -40,6 +48,7 @@ vi.mock('../core/workflow/phase-runner.js', async (importOriginal) => ({
 import { WorkflowEngine } from './helpers/workflow-engine.js';
 import type { WorkflowConfig, WorkflowStep } from '../core/models/index.js';
 import { runAgent } from '../agents/runner.js';
+import { normalizeFindingIntake } from '../agents/finding-intake-normalizer-usecase.js';
 import { makeRule, makeStep } from './test-helpers.js';
 import { createTestFindingLedgerStore } from './helpers/finding-storage.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
@@ -64,21 +73,26 @@ function createTestTmpDir(): string {
   return dir;
 }
 
+const REJECT_REPORT = '# Review\n## Result: REJECT\nThe feature is not wired.';
+
 /** REJECT 相当の散文だけを返し、構造化 claim は1件も出さないレビュアー。 */
 function mockReviewerRejectsWithoutClaims(): void {
+  // レビュアーは markdown レポートしか書かない。claim ゼロ件は正規化係の
+  // 抽出結果が空配列になることとして現れる。
+  vi.mocked(normalizeFindingIntake).mockImplementation(async () => ({
+    persona: 'finding-intake-normalizer',
+    status: 'done',
+    content: '',
+    structuredOutput: { rawFindings: [] },
+    timestamp: new Date('2026-08-01T00:00:01.500Z'),
+  }));
   vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
     options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
-    const schemaText = options?.outputSchema ? JSON.stringify(options.outputSchema) : '';
-    if (schemaText.includes('"rawFindings"')) {
-      const isPublication = schemaText.includes('"reportContent"');
-      const reportContent = '# Review\n## Result: REJECT\nThe feature is not wired.';
+    if (persona === 'architecture-reviewer' || persona === 'reviewer') {
       return {
         persona,
         status: 'done',
-        content: isPublication ? '' : reportContent,
-        structuredOutput: isPublication
-          ? { reportContent, rawFindings: [] }
-          : { rawFindings: [] },
+        content: REJECT_REPORT,
         timestamp: new Date('2026-08-01T00:00:01.000Z'),
       };
     }
@@ -189,11 +203,8 @@ describe('verdict/claims mismatch consumes the review-integrity budget', () => {
     expect((ledger.reviewerAnomalies ?? []).map((anomaly) => anomaly.kind))
       .toContain('verdict-claims-mismatch');
     // 予算ぶんのレビューだけで抜けている（max_steps まで焼いていない）。
-    const reviewRounds = vi.mocked(runAgent).mock.calls.filter(([, , options]) => (
-      options?.outputSchema !== undefined
-      && JSON.stringify(options.outputSchema).includes('"reportContent"')
-    )).length;
-    expect(reviewRounds).toBe(MAX_REVIEW_ROUNDS);
+    // 正規化係はレビュアー1人につきラウンド1回なので、そのままラウンド数になる。
+    expect(vi.mocked(normalizeFindingIntake).mock.calls.length).toBe(MAX_REVIEW_ROUNDS);
   });
 
   /**
