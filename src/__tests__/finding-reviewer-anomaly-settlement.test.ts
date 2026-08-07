@@ -646,6 +646,67 @@ describe('reviewer anomaly settlement', () => {
     ).reviewIntegrity).toBeUndefined();
   });
 
+  /**
+   * 決着判定は候補を選ぶ anomalyLedger（コミット途中のビュー）ではなく、settlement を
+   * 書き込む nextLedger の episode で行う。同じコミット内で先に走る
+   * applyIntakeContractTerminalDispositions が終端処分を付けている場合、古いビューで
+   * 判定すると終端処分と settlement の同居違反を作る。
+   */
+  it('nextLedger側で終端処分を得たanomalyへはsettlementを書かない', () => {
+    const { previous, anomaliesApplied, next } = verifiedResolutionFixture();
+    const intakeContract = {
+      observationClass: 'claim-bearing' as const,
+      classificationAuthorityId: 'system/intake_observation_classification_v1' as const,
+      reasonCodes: ['product-identity-incomplete' as const],
+      // 実データの旧契約語彙（binary 昇順・重複なし）。
+      missingRequirements: ['relation' as const, 'severity' as const],
+      presentationOwnerReviewer: 'architecture',
+      presentationLimit: 6,
+    };
+    const openEpisode: ReviewerAnomalyEntry = {
+      ...anomaliesApplied.reviewerAnomalies![0]!,
+      kind: 'intake-contract-incomplete',
+      intakeContract,
+    };
+    const baselineView = { ...anomaliesApplied, reviewerAnomalies: [openEpisode] };
+    const openNext = { ...next, reviewerAnomalies: [openEpisode] };
+    const disposedNext = {
+      ...next,
+      reviewerAnomalies: [{
+        ...openEpisode,
+        intakeContract: {
+          ...intakeContract,
+          terminalDisposition: {
+            kind: 'restatement_exhausted_claim_bearing' as const,
+            workflowOutcome: 'review_integrity_unresolved' as const,
+            decidedAt: afterObservation,
+            terminalPublicationId: 'publication-closed',
+            reason: 'Restatement presentation limit 6 was reached without verified correspondence',
+          },
+        },
+      }],
+    };
+
+    // 対照: 書き込み先が未決着なら同じ入力で settlement が付く。
+    expect(settleReviewerAnomaliesFromAuthorizedTerminalEvents(
+      previous,
+      baselineView,
+      openNext,
+      WORKFLOW_TASK_DIGEST,
+    ).reviewerAnomalies![0]!.settlement?.kind).toBe('target_resolved_by_verified_evidence');
+
+    const guarded = settleReviewerAnomaliesFromAuthorizedTerminalEvents(
+      previous,
+      baselineView,
+      disposedNext,
+      WORKFLOW_TASK_DIGEST,
+    );
+
+    expect(guarded.reviewerAnomalies![0]!.settlement).toBeUndefined();
+    expect(guarded).toBe(disposedNext);
+    assertFindingLedgerProjectionInvariant(guarded);
+  });
+
   it.each([
     ['revision', (precondition: FindingMutationPrecondition) => ({
       ...precondition,

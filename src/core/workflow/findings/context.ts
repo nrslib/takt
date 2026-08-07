@@ -15,6 +15,9 @@ import {
 } from './evidence-location.js';
 import { computeDismissCandidates } from './manager-utils.js';
 import { isOutstandingReviewerAnomaly } from './reviewer-anomalies.js';
+import {
+  isConcludedReviewerAnomaly,
+} from '../../models/finding-reviewer-anomaly-settlement-policy.js';
 
 function resolveFindingLedgerInstructionProjection(ledger: FindingLedger): FindingLedger {
   const completed = ledger.pendingManagerCommit?.completed;
@@ -441,12 +444,15 @@ export function buildFindingsRuleContext(
       const intake = outstanding.filter((anomaly) => (
         anomaly.kind === 'intake-contract-incomplete' && anomaly.intakeContract !== undefined
       ));
+      // 提示へ送るためのカウンタは終端処分済みを除く。終端後はもう提示されないので、
+      // 残したままだと needs_review へ送り続けて何も進まないループになる。
+      const presentable = intake.filter((anomaly) => !isConcludedReviewerAnomaly(anomaly));
       return {
         count: outstanding.length,
-        requiresGuaranteedPresentationCount: intake.filter((anomaly) => (
+        requiresGuaranteedPresentationCount: presentable.filter((anomaly) => (
           (presentationCounts.get(anomaly.id) ?? 0) === 0
         )).length,
-        restatementReadyCount: intake.filter((anomaly) => {
+        restatementReadyCount: presentable.filter((anomaly) => {
           const count = presentationCounts.get(anomaly.id) ?? 0;
           return count > 0 && count < anomaly.intakeContract!.presentationLimit;
         }).length,

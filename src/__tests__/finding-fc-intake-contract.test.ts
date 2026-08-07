@@ -44,7 +44,10 @@ import { computeRawPayloadDigest } from '../core/models/finding-contract-identit
 import { createEmptyFindingContractRegistries } from '../core/models/finding-contract-seed.js';
 import { collectFindingLedgerProjectionInvariantViolations } from '../core/models/finding-ledger-invariants.js';
 import { buildFindingContractInstruction } from '../core/workflow/instruction/finding-contract-instruction.js';
-import { renderFindingLedgerInstructionSummary } from '../core/workflow/findings/context.js';
+import {
+  buildFindingsRuleContext,
+  renderFindingLedgerInstructionSummary,
+} from '../core/workflow/findings/context.js';
 import {
   rawCanonicalSnapshotFixture,
   reviewerRawExtractionFixture,
@@ -974,6 +977,188 @@ describe('FC intake contract', () => {
         restatementRequestBindings: bindings,
       }]);
       expect(verbatimLinked.reviewerAnomalies![0]!.promotedFindingId).toBe('F-0010');
+    });
+
+    /**
+     * 実走行(2026-08-07)の停止事故。終端処分済みの anomaly が以後のラウンドでも
+     * 提示され続け、最後の言い直しが照合を通った瞬間に promotedFindingId が付いて
+     * 終端処分と同居し、台帳不変条件で run ごと落ちた。
+     *
+     * 形は実データそのまま: intake-contract-incomplete /
+     * restatement_exhausted_claim_bearing / 旧契約語彙の missingRequirements。
+     */
+    it('does not promote an anomaly that already carries a terminal disposition', () => {
+      const claim = 'The legacy signal setting no longer matches the requested contract.';
+      const base = buildBatchCase('terminal', claim, '6', 'b');
+      const { ledger, anomalyOf } = anomaliesFor([base]);
+      const anomaly = anomalyOf(base.source);
+      const bindings = [{
+        request: batchRequestFor(base.source, anomaly.id, claim),
+        publicationId: 'publication-terminal',
+        reportDigest: batchReportDigest,
+      }];
+      const disposedLedger: FindingLedger = {
+        ...ledger,
+        rawFindings: [base.source, base.admitted],
+        findings: [batchFindingFor(base.admitted, 'F-0011')],
+        reviewerAnomalies: ledger.reviewerAnomalies!.map((entry) => ({
+          ...entry,
+          intakeContract: {
+            ...entry.intakeContract!,
+            // 実データの旧契約語彙（binary 昇順・重複なし）。
+            missingRequirements: ['relation', 'severity'] as const,
+            terminalDisposition: {
+              kind: 'restatement_exhausted_claim_bearing' as const,
+              workflowOutcome: 'review_integrity_unresolved' as const,
+              decidedAt: observedAt,
+              terminalPublicationId: 'publication-terminal-source',
+              reason: 'Restatement presentation limit 2 was reached without verified correspondence',
+            },
+          },
+        })),
+      };
+      // fixture は raw canonical snapshot を持たないため、この不変条件だけを見る。
+      const anomalyViolations = (ledgerUnderTest: FindingLedger) => (
+        collectFindingLedgerProjectionInvariantViolations(ledgerUnderTest)
+          .filter((violation) => violation.path[0] === 'reviewerAnomalies')
+      );
+      expect(anomalyViolations(disposedLedger)).toEqual([]);
+
+      const linked = linkPromotedReviewerAnomalies(disposedLedger, [{
+        lineageKey: 'lineage-terminal',
+        rawFindingId: base.admitted.rawFindingId,
+        restatementRequestBindings: bindings,
+      }]);
+
+      expect(linked.reviewerAnomalies![0]!.promotedFindingId).toBeUndefined();
+      expect(anomalyViolations(linked)).toEqual([]);
+
+      // 正の対照: 同じ fixture から終端処分だけを外すと昇格が成立する。上の拒否が
+      // 「終端処分由来」であって fixture 由来でないことの識別。
+      const openLinked = linkPromotedReviewerAnomalies({
+        ...ledger,
+        rawFindings: [base.source, base.admitted],
+        findings: [batchFindingFor(base.admitted, 'F-0011')],
+      }, [{
+        lineageKey: 'lineage-terminal',
+        rawFindingId: base.admitted.rawFindingId,
+        restatementRequestBindings: bindings,
+      }]);
+      expect(openLinked.reviewerAnomalies![0]!.promotedFindingId).toBe('F-0011');
+    });
+  });
+
+  /**
+   * 終端処分は決着であり、以後どの経路も触らない。ここでは「触らない」の残り2面
+   * （upsert の取り込み先選定と、when() へ出す提示系カウンタ）を固定する。
+   */
+  describe('terminal disposition closes the episode', () => {
+    const terminalDisposition = {
+      kind: 'restatement_exhausted_claim_bearing' as const,
+      workflowOutcome: 'review_integrity_unresolved' as const,
+      decidedAt: observedAt,
+      terminalPublicationId: 'publication-closed',
+      reason: 'Restatement presentation limit 6 was reached without verified correspondence',
+    };
+    /** 実データの形の intake anomaly を1件だけ持つ台帳を作る。 */
+    const disposedLedger = (rawFindingId: string) => {
+      const wire = incompleteRaw(rawFindingId, {
+        rawExcerpt: 'The closed defect remains observable.',
+      });
+      const spec = createReviewerAnomalySpec({
+        wire,
+        canonical: canonicalItem(wire).canonical,
+        anomalyKind: 'intake-contract-incomplete',
+        reason: 'Independent reviewer observation does not satisfy the product admission contract',
+        intakeContract: {
+          observationClass: 'claim-bearing',
+          classificationAuthorityId: 'system/intake_observation_classification_v1',
+          reasonCodes: ['product-identity-incomplete'],
+          // 実データの旧契約語彙（binary 昇順・重複なし）。
+          missingRequirements: ['relation', 'severity'],
+          presentationOwnerReviewer: wire.reviewer,
+          presentationLimit: 6,
+        },
+      });
+      const ledger = applyReviewerAnomalySpecsToLedger(emptyLedger(), [spec], {
+        workflowName: 'peer-review',
+        stepName: observedAt.stepName,
+        runId: observedAt.runId,
+        timestamp: observedAt.timestamp,
+      }, new Set());
+      return {
+        wire,
+        spec,
+        ledger: {
+          ...ledger,
+          rawFindings: [wire],
+          reviewerAnomalies: ledger.reviewerAnomalies!.map((entry) => ({
+            ...entry,
+            intakeContract: { ...entry.intakeContract!, terminalDisposition },
+          })),
+        },
+      };
+    };
+
+    it('lands a re-observation as a new episode instead of mutating the closed one', () => {
+      const { wire, spec, ledger } = disposedLedger('raw-closed-source');
+      const closed = ledger.reviewerAnomalies![0]!;
+      // 同じ主張の再観測。stable key は sourceBinding の excerpt digest で決まるので
+      // raw finding id だけが変わる（ラウンドごとの名前空間付き id を再現）。
+      const reobserved = incompleteRaw('raw-closed-reobserved', {
+        rawExcerpt: wire.rawExcerpt,
+        sourceBinding: wire.sourceBinding,
+      });
+      const respec = createReviewerAnomalySpec({
+        wire: reobserved,
+        canonical: canonicalItem(reobserved).canonical,
+        anomalyKind: 'intake-contract-incomplete',
+        reason: 'Independent reviewer observation does not satisfy the product admission contract',
+        // 取り込みが組む defect は分類結果だけを持つ。終端処分は台帳側の決着記録。
+        intakeContract: spec.intakeContract!,
+      });
+      expect(respec.stableKey).toBe(closed.stableKey);
+
+      const applied = applyReviewerAnomalySpecsToLedger({
+        ...ledger,
+        rawFindings: [wire, reobserved],
+      }, [respec], {
+        workflowName: 'peer-review',
+        stepName: observedAt.stepName,
+        runId: observedAt.runId,
+        timestamp: '2026-08-05T01:00:00.000Z',
+      }, new Set());
+
+      // 決着済み episode は1バイトも動かない。
+      expect(applied.reviewerAnomalies![0]).toEqual(closed);
+      // 再観測は別 episode として着地する（観測は消えない）。
+      expect(applied.reviewerAnomalies).toHaveLength(2);
+      const fresh = applied.reviewerAnomalies![1]!;
+      expect(fresh.id).not.toBe(closed.id);
+      expect(fresh.sourceRawFindingIds).toEqual([reobserved.rawFindingId]);
+      expect(fresh.intakeContract?.terminalDisposition).toBeUndefined();
+      // 決着済みは live episode ではないので「未決着が複数」にはならない。
+      expect(collectFindingLedgerProjectionInvariantViolations(applied)
+        .filter((violation) => violation.path[0] === 'reviewerAnomalies'))
+        .toEqual([]);
+    });
+
+    it('keeps a closed anomaly out of the counters that route back to presentation', () => {
+      const { ledger } = disposedLedger('raw-closed-counter');
+      const anomalyId = ledger.reviewerAnomalies![0]!.id;
+      // 提示予算は残っている（1 回だけ提示済み / 上限 6）。修正が無いと
+      // restatementReadyCount が 1 のまま needs_review へ送り続ける。
+      const context = buildFindingsRuleContext(
+        ledger,
+        process.cwd(),
+        new Map([[anomalyId, 1]]),
+      ).reviewerAnomalies;
+
+      expect(context.restatementReadyCount).toBe(0);
+      expect(context.requiresGuaranteedPresentationCount).toBe(0);
+      // 終端はゲートを塞ぎ続け、terminal adjudication ルートへ送る。
+      expect(context.claimBearingTerminalCount).toBe(1);
+      expect(context.count).toBe(1);
     });
   });
 

@@ -30,6 +30,9 @@ import type {
 import { computeReviewerAnomalyStableKey } from './raw-canonicalization.js';
 import type { RestatementRequestBinding, RestatementRequestV1 } from './review-publication.js';
 import { FINDING_ESCALATION_REVIEWER_ROUTING_KEY } from '../../models/finding-types.js';
+import {
+  isConcludedReviewerAnomaly,
+} from '../../models/finding-reviewer-anomaly-settlement-policy.js';
 
 export interface ReviewerAnomalySpec {
   kind: ReviewerAnomalyKind;
@@ -343,16 +346,20 @@ export function applyReviewerAnomalySpecsToLedger(
     for (const index of matchingIndexes) {
       assertSameAnomalyIdentity(anomalies[index]!, spec);
     }
-    const outstandingIndexes = matchingIndexes.filter((index) => (
-      isOutstandingReviewerAnomaly(anomalies[index]!)
+    // upsert 先は「まだ変更を受け付ける episode」だけ。終端処分済みへ新しい観測を
+    // 混ぜると occurrences / lastObserved / sourceRawFindingIds / mismatchReason が
+    // 決着後に書き換わる。終端後の再観測は別 episode として着地させる
+    // （その判定は台帳不変条件の live episode 判定と同じ isConcluded を使う）。
+    const openIndexes = matchingIndexes.filter((index) => (
+      !isConcludedReviewerAnomaly(anomalies[index]!)
       && !closingAnomalyIds.has(anomalies[index]!.id)
     ));
-    if (outstandingIndexes.length > 1) {
+    if (openIndexes.length > 1) {
       throw new Error(
         `Reviewer anomaly stable key "${spec.stableKey}" has multiple outstanding episodes`,
       );
     }
-    const existingIndex = outstandingIndexes[0];
+    const existingIndex = openIndexes[0];
     const existing = existingIndex === undefined ? undefined : anomalies[existingIndex];
     if (existing !== undefined) {
       // crash/replay 冪等（review-integrity requirement）: occurrences は「観測された
@@ -474,8 +481,7 @@ export function linkPromotedReviewerAnomalies(
       if (
         findingId === undefined
         || anomaly?.kind !== 'intake-contract-incomplete'
-        || anomaly.promotedFindingId !== undefined
-        || anomaly.settlement !== undefined
+        || isConcludedReviewerAnomaly(anomaly)
         || sourceRaw === undefined
         || admittedRaw === undefined
         || binding.reportDigest !== admittedRaw.sourceBinding.reportDigest
@@ -521,7 +527,7 @@ export function linkPromotedReviewerAnomalies(
   }
   let changed = false;
   const updated = anomalies.map((anomaly) => {
-    if (!isOutstandingReviewerAnomaly(anomaly)) {
+    if (isConcludedReviewerAnomaly(anomaly)) {
       return anomaly;
     }
     if (anomaly.kind === 'intake-contract-incomplete') {
@@ -553,6 +559,11 @@ export function linkPromotedReviewerAnomalies(
  * 除外される他の kind（protocol-anomaly / quote-mismatch / stale-snapshot /
  * lifecycle-admission-failure）は言い直し経路を一切持たないため、この決着だけが
  * 唯一の終端になる。
+ *
+ * この除外は「終端処分済みへ settlement を付けない」も兼ねている — 終端処分は
+ * intakeContract を持つ anomaly にしか付かないため。isOutstandingReviewerAnomaly
+ * ではなく intakeContract の有無が安全性を担っているので、この除外を緩める場合は
+ * 終端処分の判定（isConcludedReviewerAnomaly）をここへ足すこと。
  *
  * 複数の観測者を持つ anomaly は、その全員が今ラウンドのレビューを登録している
  * ときだけ候補にする（every）。一部のレビュアーしか再レビューしていない状態で

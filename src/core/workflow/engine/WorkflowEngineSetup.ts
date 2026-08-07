@@ -67,6 +67,9 @@ import {
   isOutstandingReviewerAnomaly,
   selectRestatementSourceClaimAtom,
 } from '../findings/reviewer-anomalies.js';
+import {
+  isConcludedReviewerAnomaly,
+} from '../../models/finding-reviewer-anomaly-settlement-policy.js';
 import type { FindingTarget } from '../../models/finding-types.js';
 import { FINDING_ESCALATION_REVIEWER_ROUTING_KEY } from '../../models/finding-types.js';
 import type {
@@ -265,9 +268,7 @@ export function assertFindingReviewPresentationCapacity(input: {
   const unpresented = (input.ledger.reviewerAnomalies ?? [])
     .filter(hasIntakeContract)
     .filter((anomaly) => (
-      anomaly.promotedFindingId === undefined
-      && anomaly.settlement === undefined
-      && anomaly.intakeContract.terminalDisposition === undefined
+      !isConcludedReviewerAnomaly(anomaly)
       && (input.presentationCounts.get(anomaly.id) ?? 0) === 0
     ));
   if (unpresented.length === 0) {
@@ -321,6 +322,13 @@ function targetPathsForRestatementRequest(target: FindingTarget): string[] {
 /**
  * 提示回数の正本は canonical review publication だけ。V2 context を持つ
  * publication の `presentedReviewerAnomalyIds` を publication ID 単位で数える。
+ *
+ * `reportDir` は必ず絶対パス（`runPaths.reportsAbs`）を渡すこと。
+ * `listFindingReviewPublications` は `resolve()` で解決するため、相対パスを渡すと
+ * エンジンの cwd ではなく `process.cwd()` 起点になる。worktree 実行のように両者が
+ * 一致しない構成では別のディレクトリを数え、提示回数が publication を書き込む側
+ * （StepExecutor / findings-manager の `reviewPublicationDir` = reportsAbs）と
+ * 食い違う。提示ラダーが進まないまま終端処分だけが確定する事故の前提条件になる。
  */
 function collectFindingReviewPresentationCounts(reportDir: string): Map<string, number> {
   const counts = new Map<string, number>();
@@ -369,8 +377,10 @@ function collectOutstandingIntakeAnomalies(input: {
     .filter(hasIntakeContract)
     .filter((anomaly) => (
       input.ownerStepNames.has(anomaly.intakeContract.presentationOwnerReviewer)
-      && anomaly.promotedFindingId === undefined
-      && anomaly.settlement === undefined
+      // 終端処分済みは提示予算が残っていても二度と提示しない。提示を続けると
+      // その言い直しが照合を通った瞬間に promotion が付き、終端処分と同居して
+      // 台帳不変条件を破る。終端後の行き先は terminal adjudication ルート。
+      && !isConcludedReviewerAnomaly(anomaly)
     ))
     .map((anomaly) => ({
       anomaly,
@@ -514,7 +524,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
       ({ ledger, presentationCounts, contexts: frozenContexts } = frozenFindingContractInput);
     } else {
       ledger = params.findingLedgerStore.loadLedger();
-      presentationCounts = collectFindingReviewPresentationCounts(params.getReportDir());
+      presentationCounts = collectFindingReviewPresentationCounts(params.runPaths.reportsAbs);
       if (findingContractFreezeKey !== undefined) {
         frozenFindingContractInput = {
           contextKey: findingContractFreezeKey,
@@ -593,7 +603,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
       throw new Error('Finding contract is configured but finding ledger store is not available');
     }
     const ledger = params.findingLedgerStore.loadLedger();
-    const presentationCounts = collectFindingReviewPresentationCounts(params.getReportDir());
+    const presentationCounts = collectFindingReviewPresentationCounts(params.runPaths.reportsAbs);
     // 台帳はこの関数で1回だけ読むので、その要約も owner 数 × 枠数ぶん作り直さない。
     const ledgerFacts = {
       ledgerSummary: renderFindingLedgerInstructionSummary(ledger),

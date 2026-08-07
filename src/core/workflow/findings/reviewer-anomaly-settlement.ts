@@ -1,4 +1,5 @@
 import {
+  isConcludedReviewerAnomaly,
   reviewerAnomalySettlementEligibilityViolation,
 } from '../../models/finding-reviewer-anomaly-settlement-policy.js';
 import type {
@@ -7,7 +8,6 @@ import type {
   ReviewerAnomalyEntry,
   ReviewerAnomalyTargetSettlement,
 } from './types.js';
-import { isOutstandingReviewerAnomaly } from './reviewer-anomalies.js';
 
 function settlementKind(
   event: FindingLifecycleEvent,
@@ -68,9 +68,19 @@ export function settleReviewerAnomaliesFromAuthorizedTerminalEvents(
   if (anomalyLedger.reviewerAnomalies === undefined) {
     return nextLedger;
   }
+  // 決着判定は書き込み先（nextLedger）の episode で行う。候補を選ぶ anomalyLedger は
+  // このコミットの途中ビューであり、同じ id が nextLedger 側で終端処分や昇格を
+  // 得ていることがある。古いビューで判定すると、決着済みへ settlement を書いて
+  // 終端処分との同居違反を作る。
+  const writeTargetById = new Map(
+    (nextLedger.reviewerAnomalies ?? []).map((anomaly) => [anomaly.id, anomaly] as const),
+  );
   const settlementByAnomalyId = new Map(
     anomalyLedger.reviewerAnomalies
-      .filter(isOutstandingReviewerAnomaly)
+      .filter((anomaly) => {
+        const writeTarget = writeTargetById.get(anomaly.id);
+        return writeTarget !== undefined && !isConcludedReviewerAnomaly(writeTarget);
+      })
       .flatMap((anomaly) => {
         const settlement = eligibleSettlement({
           eventBaselineLedger,
