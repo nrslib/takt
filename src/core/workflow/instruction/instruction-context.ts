@@ -35,8 +35,9 @@ export interface FindingContractInstructionContext {
   hasWaivedFindings: boolean;
   hasDismissedFindings: boolean;
   /**
-   * このレビューラウンドで生成した raw findings の provider-facing 契約。
-   * プロンプト表示と実行ステップの structuredOutput に同じオブジェクトを渡す。
+   * レビュアー step のときだけ設定される。この round のレビュー scope 束縛と
+   * 再提示 batch を表す（レビュアーは markdown レポートだけを書くので、
+   * provider へ渡す構造化出力契約はここにない）。
    */
   reviewer?: FindingContractReviewerContext;
 }

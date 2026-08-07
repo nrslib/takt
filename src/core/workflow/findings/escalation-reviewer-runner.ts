@@ -220,7 +220,16 @@ async function runFindingEscalationReviewerForOwner(
       ? {}
       : { presentationContext: escalationContext.reviewer.presentationContext }),
   });
-  if (resumed !== undefined) {
+  if (resumed !== undefined && 'reportRejection' in resumed) {
+    // 保存済みの格上げ報告も報告側の契約を満たさなかった。resume 側で保存記録は
+    // 破棄済みなので、ここで打ち切らず新規生成の経路へ落とす。打ち切ると同じ
+    // stored 報告を読み続けて格上げ枠が永久に塞がる。
+    log.warn('Stored escalated re-review report could not be bound to its own text; regenerating', {
+      step: escalationStep.name,
+      owner: input.ownerStep.name,
+      reason: resumed.reportRejection.reason,
+    });
+  } else if (resumed !== undefined) {
     if ('terminalResponse' in resumed) {
       return {
         kind: 'terminal',
@@ -229,18 +238,10 @@ async function runFindingEscalationReviewerForOwner(
         ...(resumed.reviewerProviderInfo === undefined
           ? {}
           : { providerInfo: resumed.reviewerProviderInfo }),
-        terminalOperation: resumed.terminalOperation,
+        ...(resumed.terminalOperation === undefined
+          ? {}
+          : { terminalOperation: resumed.terminalOperation }),
       };
-    }
-    if ('reportRejection' in resumed) {
-      // 保存済みの格上げ報告も報告側の契約を満たさなかった。owner の anomaly は
-      // 未決着のまま残るので、この枠は何も寄稿せずに終える。
-      log.warn('Stored escalated re-review report could not be bound to its own text', {
-        step: escalationStep.name,
-        owner: input.ownerStep.name,
-        reason: resumed.reportRejection.reason,
-      });
-      return undefined;
     }
     return {
       kind: 'published',

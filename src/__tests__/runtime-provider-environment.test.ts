@@ -350,6 +350,15 @@ describe('compileRuntimeProviderEnvironment (profile escalate)', () => {
     })).toThrow(/must define both `provider` and `model`/);
   });
 
+  it('rejects an empty-string escalate target at the configuration boundary', () => {
+    expect(() => compileRuntimeProviderEnvironment({
+      defaults: { profile: 'weak' },
+      profiles: {
+        weak: { provider: 'opencode', model: 'weak-model', escalate: '' },
+      },
+    })).toThrow();
+  });
+
   it('does not carry an escalation target onto auto-routing pool candidates', () => {
     const env = compileRuntimeProviderEnvironment({
       defaults: { pool: 'review-pool' },
@@ -374,6 +383,8 @@ describe('compileRuntimeProviderEnvironment (profile escalate)', () => {
 
     // pool 割り当ては #1208 の別軸で、格上げ先を運ぶ経路を持たない。
     expect(env.escalation).toBeUndefined();
+    // 件数を先に固定する。空配列だとループ本体が一度も走らず無検証で通る。
+    expect(env.autoRouting!.candidates).toHaveLength(2);
     for (const candidate of env.autoRouting!.candidates) {
       expect(candidate).not.toHaveProperty('escalation');
     }

@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { loadTemplate } from '../shared/prompts/index.js';
 import type { Language } from '../core/models/types.js';
@@ -14,7 +15,9 @@ import type { Language } from '../core/models/types.js';
  * 1つでも残ったら失敗させる。未対応構文とタイポの両方をここで止める。
  */
 
-const PROMPTS_ROOT = join(process.cwd(), 'src', 'shared', 'prompts');
+// 起点はテストファイル自身の位置から解決する。process.cwd() は起動ディレクトリに
+// 依存し、別ディレクトリからの実行で探索が 0 件になる。
+const PROMPTS_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', 'shared', 'prompts');
 const LANGUAGES: readonly Language[] = ['en', 'ja'];
 
 function collectTemplateNames(langRoot: string, prefix = ''): string[] {

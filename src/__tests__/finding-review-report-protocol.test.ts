@@ -155,6 +155,41 @@ describe('recordReviewReportProtocolAnomalies', () => {
     ]);
   });
 
+  it('derives the same round marker as the manager when publications exist', async () => {
+    const { store, current } = makeStore();
+    const publicationIds = ['b'.repeat(64), 'a'.repeat(64)];
+
+    await recordReviewReportProtocolAnomalies({
+      ...roundInput,
+      ledgerStore: store,
+      rejections: [REJECTION],
+      publicationIds,
+      refreshFindingsState: () => {},
+    });
+
+    // 成立した publication があるラウンドは manager も同じ marker を進める。
+    // 値が食い違うと同じラウンドが review_budget に二重計上される。
+    expect(current().reviewIntegrity?.roundMarkers).toEqual([
+      computeRoundMarker({
+        runId: 'run-1',
+        callNamespace: '',
+        parentStepName: 'reviewers',
+        stepIteration: 1,
+        publicationIds,
+      }),
+    ]);
+  });
+
+  it('fails fast when the finding ledger store is unavailable', async () => {
+    await expect(recordReviewReportProtocolAnomalies({
+      ...roundInput,
+      ledgerStore: undefined,
+      rejections: [REJECTION],
+      publicationIds: [],
+      refreshFindingsState: () => {},
+    })).rejects.toThrow(/finding ledger store is not available/u);
+  });
+
   it('is a no-op without rejections', async () => {
     const { store, current } = makeStore();
     let refreshed = 0;

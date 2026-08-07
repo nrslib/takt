@@ -71,8 +71,10 @@ export function buildFindingEscalationReviewerStep(input: {
       ? {}
       : { providerOptions: input.escalation.providerOptions }),
     // 手順はエンジンが注入する restatement-only 契約が担う。owner の通常レビュー
-    // 手順を持ち込むと「言い直しだけ」の契約と矛盾する。
-    instruction: owner.persona,
+    // 手順を持ち込むと「言い直しだけ」の契約と矛盾するので継承しない。
+    // InstructionBuilder は step.instruction をテンプレート本体として扱うため
+    // 空にはできない。役割を1文で述べる固定文にとどめる。
+    instruction: 'Restate the requested claims for the owning reviewer.',
     session: 'refresh',
     edit: false,
     rules: [],

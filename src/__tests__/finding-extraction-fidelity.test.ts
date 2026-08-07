@@ -143,7 +143,8 @@ describe('reassertsReviewerAnomalyId の null（生成 schema 準拠形）', () 
       }).structuredOutput;
 
       expect(projected.rawFindings).toEqual([{ rawExcerpt: CLAIM_EXCERPT, candidate: null }]);
-      expect(describeRawFindingExtractionFidelityFailures(projected)).not.toEqual([]);
+      expect(describeRawFindingExtractionFidelityFailures(projected))
+        .toEqual(['#0: candidate is null after projection']);
     }
   });
 

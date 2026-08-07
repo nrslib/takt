@@ -59,6 +59,7 @@ export type FindingContractSyntheticProviderValidationOptions = Pick<
   | 'providerRoutingTagConflictPolicy'
   | 'personaProviders'
   | 'intakeNormalizerProvider'
+  | 'providerEscalation'
 > & {
   inheritedFindingContract?: Pick<
     NonNullable<WorkflowEngineOptions['inheritedFindingContract']>,
@@ -361,6 +362,10 @@ function validateFindingIntakeNormalizerProviders(
   config: WorkflowConfig,
   options: FindingContractSyntheticProviderValidationOptions,
 ): void {
+  // 実行時（OptionsBuilder.resolveStepProviderModel）と同じ入力で解決する。
+  // `escalation` を落とすと、レビュアーの provider が runtime-v1 defaults 層から
+  // 解決される構成でロード時の escalate 先が常に undefined になり、先頭候補が
+  // 実行時と別物になる（この preflight の目的そのものが崩れる）。
   const resolve = (step: WorkflowStep): ResolvedProviderInfo => resolveStepProviderModel({
     step,
     provider: options.provider,
@@ -371,6 +376,7 @@ function validateFindingIntakeNormalizerProviders(
     providerRouting: options.providerRouting,
     tagConflictPolicy: options.providerRoutingTagConflictPolicy,
     personaProviders: options.personaProviders,
+    escalation: options.providerEscalation,
   });
   for (const reviewerStep of collectFindingContractReviewerSteps(config)) {
     const headCandidate = buildFindingIntakeNormalizerSteps({

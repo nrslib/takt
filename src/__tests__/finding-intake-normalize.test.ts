@@ -210,6 +210,36 @@ describe('finding intake normalizer load-time preflight', () => {
     )).not.toThrow();
   });
 
+  it('validates the escalate target that the runtime would use as the head candidate', () => {
+    // レビュアーの provider が runtime-v1 defaults 層から解決される構成では、
+    // step にも workflow にも escalate は現れない。engine option の
+    // providerEscalation を渡さないとロード時の先頭候補が実行時と別物になる。
+    const defaultsLayer = {
+      provider: 'codex' as const,
+      providerSource: 'runtime-v1' as const,
+    };
+
+    expect(() => validateFindingContractSyntheticProviderModels(
+      findingContractWorkflow(undefined),
+      {
+        ...defaultsLayer,
+        providerEscalation: { profile: 'strong', provider: 'cursor', model: 'cursor-strong' },
+      },
+    )).toThrow(/does not support isolated structured execution/u);
+
+    expect(() => validateFindingContractSyntheticProviderModels(
+      findingContractWorkflow(undefined),
+      {
+        ...defaultsLayer,
+        providerEscalation: {
+          profile: 'strong',
+          provider: 'opencode',
+          model: 'ollama-cloud/glm-5.2',
+        },
+      },
+    )).not.toThrow();
+  });
+
   it('uses the intake-normalizer seat ahead of the workflow default', () => {
     expect(() => validateFindingContractSyntheticProviderModels(
       findingContractWorkflow('codex'),

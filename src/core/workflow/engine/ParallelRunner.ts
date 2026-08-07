@@ -491,29 +491,16 @@ export class ParallelRunner {
                 ),
               };
             }
-            if ('reportRejection' in resumedPublication) {
-              // 保存済み報告の再正規化でも報告側原因。取り込みへは寄稿せず、
-              // 親が anomaly として記録する。
-              const rejectedResponse = reviewReportProtocolRejectionResponse({
-                stepName: subStep.name,
-                reportContent: resumedPublication.reportRejection.reportContent,
-              });
-              state.stepOutputs.set(subStep.name, rejectedResponse);
-              return {
-                subStep,
-                response: rejectedResponse,
-                reportRejection: {
-                  reviewerStepName: subStep.name,
-                  reviewerPersonaKey: subStep.persona ?? subStep.name,
+            // 報告側原因の拒否でも、受理時とまったく同じ後処理を通す。
+            // ここで早期 return すると quality gate 失敗が resume だけ検出されず、
+            // step report も経路依存で欠ける（review-report-protocol.ts の
+            // 「初回でも resume でも同じ扱い」という設計と食い違う）。
+            const resumedResponse = 'reportRejection' in resumedPublication
+              ? reviewReportProtocolRejectionResponse({
+                  stepName: subStep.name,
                   reportContent: resumedPublication.reportRejection.reportContent,
-                  reason: resumedPublication.reportRejection.reason,
-                },
-                instruction: phase1Instruction,
-                providerInfo: resumedPublication.reviewerProviderInfo ?? subPm,
-                reviewerRuntime: resumedPublication.reviewerRuntime,
-                durationMs: Math.max(0, rejectedResponse.timestamp.getTime() - startedAt),
-              };
-            }
+                })
+              : resumedPublication.response;
             const qualityGateResult = await this.deps.runQualityGates({
               qualityGates: subStep.qualityGates,
               projectRoot: this.deps.getCwd(),
@@ -534,7 +521,7 @@ export class ParallelRunner {
                 qualityGateFailure: true,
               };
             }
-            state.stepOutputs.set(subStep.name, resumedPublication.response);
+            state.stepOutputs.set(subStep.name, resumedResponse);
             this.deps.stepExecutor.emitStepReports(
               subStep,
               {
@@ -546,17 +533,28 @@ export class ParallelRunner {
             );
             return {
               subStep,
-              publication: resumedPublication.publication,
-              ...(resumedPublication.relationClarification !== undefined
-                ? { relationClarification: resumedPublication.relationClarification }
-                : {}),
-              response: resumedPublication.response,
+              ...('reportRejection' in resumedPublication
+                ? {
+                    reportRejection: {
+                      reviewerStepName: subStep.name,
+                      reviewerPersonaKey: subStep.persona ?? subStep.name,
+                      reportContent: resumedPublication.reportRejection.reportContent,
+                      reason: resumedPublication.reportRejection.reason,
+                    },
+                  }
+                : {
+                    publication: resumedPublication.publication,
+                    ...(resumedPublication.relationClarification !== undefined
+                      ? { relationClarification: resumedPublication.relationClarification }
+                      : {}),
+                  }),
+              response: resumedResponse,
               instruction: phase1Instruction,
               providerInfo: resumedPublication.reviewerProviderInfo ?? subPm,
               reviewerRuntime: resumedPublication.reviewerRuntime,
               durationMs: Math.max(
                 0,
-                resumedPublication.response.timestamp.getTime() - startedAt,
+                resumedResponse.timestamp.getTime() - startedAt,
               ),
             };
           }
@@ -696,6 +694,9 @@ export class ParallelRunner {
           const prepared = await this.deps.stepExecutor.prepareFindingReviewPublication({
             step: subStep,
             executableStep: executableSubStep,
+            // Phase 1 で凍結した context をそのまま Phase 2 へ渡す。組み直すと
+            // ledger と提示回数を読み直して再提示 batch が Phase 1 とずれる。
+            findingContractContext,
             parentStepName: step.name,
             stepIteration,
             state,

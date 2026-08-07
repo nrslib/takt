@@ -1198,7 +1198,12 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
 
 describe('ParallelRunner report-protocol rejection wiring', () => {
   beforeEach(() => {
-    vi.resetAllMocks();
+    // executeAgent はファイル先頭で vi.fn() として定義され、queueAgentResponse が
+    // mockImplementationOnce を積む。resetAllMocks は実装ごと消してキューを壊すので、
+    // このブロックでは呼び出し記録だけを落とす。
+    vi.mocked(executeAgent).mockReset();
+    // module モックは呼び出し記録だけ落とす（実装は残す）。
+    vi.mocked(ingestFindingContractResults).mockClear();
     vi.mocked(mockRuleEvaluation).mockReturnValue({ index: 0, method: 'phase3_tag' });
   });
 
@@ -1233,6 +1238,27 @@ describe('ParallelRunner report-protocol rejection wiring', () => {
     expect(state.stepOutputs.get(REJECTED)?.content)
       .toBe(rejectionFor(REJECTED).reportContent);
   }
+
+  it('rejects a parallel FC reviewer that also declares its own structured_output', async () => {
+    // ロード時 validator と同じ契約を実行経路でも守る（1本道では publication の
+    // 正本は markdown レポートなので、step 独自の構造化出力とは併用できない）。
+    const { runner } = makeRunner();
+    const step = makeParallelStep();
+    const subSteps = step.parallel as WorkflowStep[];
+    subSteps[0] = {
+      ...subSteps[0]!,
+      structuredOutput: { schemaRef: 'test.custom', schema: { type: 'object' } },
+    } as WorkflowStep;
+    queueAgentResponse(makeAgentResponse({ persona: REJECTED }));
+    queueAgentResponse(makeAgentResponse({ persona: ACCEPTED }));
+
+    const result = await runner.runParallelStep(step, makeState(), 'test task', 5, vi.fn());
+
+    expect(result.response.status).toBe('error');
+    expect(result.response.content).toContain(
+      'cannot combine finding_contract review reports with structured_output',
+    );
+  });
 
   it('records the rejection and keeps the round running on the first pass', async () => {
     const { runner, deps } = makeRunner();
@@ -1283,6 +1309,41 @@ describe('ParallelRunner report-protocol rejection wiring', () => {
     expect(ingestFindingContractResults).toHaveBeenCalledOnce();
     const intake = vi.mocked(ingestFindingContractResults).mock.calls[0]![0];
     expect(intake.subResults.map((entry) => entry.subStep.name)).toEqual([ACCEPTED]);
+  });
+
+  it('records one rejection batch with no publication ids when every reviewer is rejected', async () => {
+    const { runner, deps } = makeRunner();
+    vi.mocked(deps.stepExecutor.prepareFindingReviewPublication).mockImplementation(
+      (async (input: { step: WorkflowStep }) => (
+        { reportRejection: rejectionFor(input.step.name) }
+      )) as never,
+    );
+    const state = makeState();
+    queueAgentResponse(makeAgentResponse({ persona: REJECTED }));
+    queueAgentResponse(makeAgentResponse({ persona: ACCEPTED }));
+
+    const result = await runner.runParallelStep(
+      makeParallelStep(),
+      state,
+      'test task',
+      5,
+      vi.fn(),
+    );
+
+    // 親は done を返し、両サブステップのラベルが確定する。
+    expect(result.response.status, result.response.content).toBe('done');
+    for (const stepName of [REJECTED, ACCEPTED]) {
+      expect(state.stepOutputs.get(stepName)?.matchedRuleIndex).toBe(0);
+    }
+
+    // 成立した publication が1件も無いラウンドは manager が走らない。予算は
+    // ここで進めないと max_steps まで再レビューを焼く。
+    const recorded = vi.mocked(deps.stepExecutor.recordReviewReportProtocolRejections);
+    expect(recorded).toHaveBeenCalledOnce();
+    expect(recorded.mock.calls[0]![0].publicationIds).toEqual([]);
+    expect(recorded.mock.calls[0]![0].rejections.map((entry) => entry.reviewerStepName).sort())
+      .toEqual([REJECTED, ACCEPTED].sort());
+    expect(ingestFindingContractResults).not.toHaveBeenCalled();
   });
 
   it('records the rejection and keeps the round running when resuming a stored report', async () => {

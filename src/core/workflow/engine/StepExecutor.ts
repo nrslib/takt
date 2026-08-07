@@ -123,6 +123,7 @@ import type { RunAgentOptions } from '../../../agents/types.js';
 import {
   createFindingReviewPublication,
   createPendingFindingReviewNormalization,
+  discardPendingFindingReviewNormalization,
   FindingReviewPublicationSourceBindingError,
   loadFindingReviewPublication,
   loadPendingFindingReviewNormalization,
@@ -301,11 +302,10 @@ export interface FindingReviewPublicationPreparationInput {
   readonly runtime?: RuntimeStepResolution;
   readonly presentationContext?: FindingReviewPresentationContext;
   /**
-   * Phase 2 で使う Finding Contract context の明示指定。省略時は Phase 2 が
-   * reviewer step 名から context を組み直す（通常レビュアーの既存挙動）。
-   * escalation slot のように「step 名では引けない reviewer 契約」で走る
-   * publication は、Phase 1 と同じ context をここから渡さないと Phase 2 の
-   * restatement-only 契約が消える。
+   * Phase 2 で使う Finding Contract context。Phase 1 で凍結したものをそのまま
+   * 渡すこと。省略すると Phase 2 が step 名から組み直し、ledger と提示回数を
+   * 読み直して再提示 batch を作り直すため、Phase 1 と Phase 2 で request 集合が
+   * 食い違う（escalation slot では restatement-only 契約そのものが消える）。
    */
   readonly findingContractContext?: FindingContractInstructionContext;
 }
@@ -1345,8 +1345,10 @@ export class StepExecutor {
         };
       }
       if (normalized.reportSourceRejection !== undefined) {
-        // 保存済みの報告を読み直しても同じ結論になる（原因は報告側）。resume でも
-        // ラン全体を落とさず、言い直し経路へ回す。
+        // 保存済みの報告を読み直しても同じ結論になる（原因は報告側）。記録を
+        // 残すと resume のたびに同じ拒否を再生産して枠が塞がるので破棄し、
+        // 次の機会は新規レビューの生成経路から始める。
+        discardPendingFindingReviewNormalization(reportDir, identity);
         return {
           reportRejection: {
             reason: normalized.reportSourceRejection,
@@ -2145,6 +2147,14 @@ export class StepExecutor {
           );
           state.stepOutputs.set(step.name, response);
           state.lastOutput = response;
+          // 拒否された報告本文が後続 step の {previous_response} へ届くよう、
+          // 受理経路・新規実行の拒否経路と同じく snapshot も更新する。
+          this.persistPreviousResponseSnapshot(
+            state,
+            step.name,
+            stepIteration,
+            response.content,
+          );
           return {
             response,
             instruction: phase1Instruction,
@@ -2389,6 +2399,8 @@ export class StepExecutor {
       const prepared = await this.prepareFindingReviewPublication({
         step: findingContractIntakeStep,
         executableStep,
+        // Phase 1 で凍結した context をそのまま Phase 2 へ渡す。
+        findingContractContext,
         parentStepName: step.name,
         stepIteration,
         state,

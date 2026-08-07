@@ -107,9 +107,11 @@ describe('dispute guidance injection', () => {
 });
 
 describe('reviewer duty gating', () => {
-  // 確認義務の有無は義務の文言（lifecycle を明示的に報告する指示）で判定する。
-  // 裸の resolution_confirmation トークンは他の規則文にも現れるため使えない。
+  // 義務ブロックの有無は、その義務にしか現れない特定のフレーズで判定する。
+  // `waived` のような一般語の不在で否定契約を検証すると、無関係な説明文が増える
+  // だけで偽陰性・偽陽性になる。
   const CONFIRMATION_DUTY = "When explicitly reporting an open finding's lifecycle";
+  const WAIVED_DUTY = 'listed as waived in the ledger summary';
 
   it('should omit confirmation and waived duties for reviewers when the ledger is empty', () => {
     const instruction = new InstructionBuilder(
@@ -120,7 +122,7 @@ describe('reviewer duty gating', () => {
     const section = extractFindingContractSection(instruction);
     expect(section).toContain('Write an ordinary Markdown review report');
     expect(section).not.toContain(CONFIRMATION_DUTY);
-    expect(section).not.toContain('waived');
+    expect(section).not.toContain(WAIVED_DUTY);
   });
 
   it('should inject the waived duty independently of open findings', () => {
@@ -129,7 +131,7 @@ describe('reviewer duty gating', () => {
       makeContext({ hasOpenFindings: false, hasWaivedFindings: true, reviewer: true }),
     ).build());
 
-    expect(section).toContain('listed as waived');
+    expect(section).toContain(WAIVED_DUTY);
     expect(section).not.toContain(CONFIRMATION_DUTY);
   });
 
@@ -139,13 +141,13 @@ describe('reviewer duty gating', () => {
       makeContext({ hasOpenFindings: true, reviewer: true }),
     ).build());
     expect(withOpen).toContain(CONFIRMATION_DUTY);
-    expect(withOpen).not.toContain('listed as waived');
+    expect(withOpen).not.toContain(WAIVED_DUTY);
 
     const withWaived = extractFindingContractSection(new InstructionBuilder(
       makeStep(),
       makeContext({ hasOpenFindings: true, hasWaivedFindings: true, reviewer: true }),
     ).build());
-    expect(withWaived).toContain('listed as waived');
+    expect(withWaived).toContain(WAIVED_DUTY);
   });
 });
 

@@ -490,13 +490,13 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
     await engine.run();
 
     expect(ingestFindingContractResultsMock).toHaveBeenCalledOnce();
-    // 1本道: レビュアー役は Phase 1 と Phase 2 の2回だけ呼ばれ、どちらにも
-    // rawFindings の出力スキーマは載らない。
-    const reviewerCalls = vi.mocked(runAgent).mock.calls.filter(
+    // 1本道: final gate の supervisor は Phase 1 と Phase 2 の2回だけ呼ばれ、
+    // どちらにも rawFindings の出力スキーマは載らない。
+    const supervisorCalls = vi.mocked(runAgent).mock.calls.filter(
       ([persona]) => persona === 'supervisor',
     );
-    expect(reviewerCalls).toHaveLength(2);
-    expect(reviewerCalls.every(([, , options]) => options?.outputSchema === undefined)).toBe(true);
+    expect(supervisorCalls).toHaveLength(2);
+    expect(supervisorCalls.every(([, , options]) => options?.outputSchema === undefined)).toBe(true);
 
     const rawFindings = loadRootLedger(cwd, config.name).rawFindings;
     expect(rawFindings).toHaveLength(1);

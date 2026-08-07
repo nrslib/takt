@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readdirSync } from 'node:fs';
+import { readdirSync, rmSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import {
   FINDING_REVIEW_PUBLICATIONS_INTERNAL_DIRECTORY,
@@ -1262,6 +1262,22 @@ export function loadPendingFindingReviewNormalization(
     );
   }
   return pending;
+}
+
+/**
+ * 保存済みの pending normalization を破棄する。
+ *
+ * 報告側原因（rawExcerpt が報告本文へ束縛できない）で正規化が成立しなかった報告は、
+ * 同じ本文を読み直しても結論が変わらない。記録を残したままだと resume のたびに
+ * 同じ拒否を再生産して枠が永久に塞がるため、拒否時にここで無効化して
+ * 新規レビューの生成経路へ戻す。
+ */
+export function discardPendingFindingReviewNormalization(
+  reportDir: string,
+  identity: FindingReviewPublicationIdentity,
+): void {
+  const publicationId = computeFindingReviewPublicationId(identity);
+  rmSync(pendingNormalizationRecordPath(reportDir, publicationId), { force: true });
 }
 
 export function persistPendingFindingReviewNormalization(

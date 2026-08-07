@@ -198,8 +198,9 @@ describe('FC escalation reviewer — synthetic step inherits the owner reviewer'
       modelSpecified: true,
     });
     // 手順はエンジンが注入する restatement-only 契約が担う。
-    expect(step.instruction).toBe(ownerStep.persona);
+    // owner の通常レビュー手順は継承しない（手順はエンジンの restatement-only 契約）。
     expect(step.instruction).not.toBe(ownerStep.instruction);
+    expect(step.instruction).not.toBe(ownerStep.persona);
   });
 
   it('gives each owner its own report name so grouped calls never collide', () => {
@@ -601,7 +602,13 @@ describe('FC escalation reviewer — presentation freeze', () => {
       reviewScopeSnapshotId,
       findingContractFreezeKey: freezeKey,
     });
+    // context の不在（batch を作らない）と revision 違いは別の状態。undefined へ
+    // 畳むと否定契約が緩むので、context がある場合は revision を明示的に固定する。
+    if (!contexts.has(reviewerStep.name)) {
+      return undefined;
+    }
     const presentation = contexts.get(reviewerStep.name)?.reviewer?.presentationContext;
+    expect(presentation?.revision).toBe(2);
     return presentation?.revision === 2 ? presentation.restatementRequests : undefined;
   };
 
@@ -1318,6 +1325,46 @@ describe('FC escalation reviewer — direct provider call wiring', () => {
 
     expect(outcome!.kind === 'published' && outcome.results[0]!.publication)
       .toMatchObject({ publicationId: 'pub-resumed' });
+    expect(executeAgentMock).not.toHaveBeenCalled();
+    expect(stepExecutor.prepareFindingReviewPublication).not.toHaveBeenCalled();
+  });
+
+  it('regenerates the escalated review when the stored report is rejected by the normalizer', async () => {
+    // 壊れた報告は読み直しても直らない。ここで打ち切ると同じ stored 報告を
+    // 読み続けて格上げ枠が永久に塞がる（記録の破棄は resume 側が行う）。
+    executeAgentMock.mockResolvedValue({
+      persona: 'reviewer',
+      status: 'done',
+      content: 'regenerated escalation report',
+      timestamp: new Date(),
+    } satisfies AgentResponse);
+    const { input, stepExecutor } = createRunnerInput({
+      resumeResult: {
+        reportRejection: { reason: 'report text could not be bound', reportContent: '{"rawFindings":[]}' },
+      },
+    });
+
+    const outcome = await runFindingEscalationReviewer(input);
+
+    expect(outcome).toMatchObject({ kind: 'published' });
+    // 新規生成の経路へ落ちる: provider 呼び出しと publication 準備が走る。
+    expect(executeAgentMock).toHaveBeenCalledOnce();
+    expect(stepExecutor.prepareFindingReviewPublication).toHaveBeenCalledOnce();
+  });
+
+  it('contributes nothing when the stored report is rejected and no request remains', async () => {
+    // 今ラウンドに格上げ request が無い（提示計上済み）状態で stored 報告だけが
+    // 壊れている場合は、新規生成の材料も無いのでこの枠は何も寄稿しない。
+    const { input, stepExecutor } = createRunnerInput({
+      withoutEscalationContext: true,
+      resumeResult: {
+        reportRejection: { reason: 'report text could not be bound', reportContent: '{"rawFindings":[]}' },
+      },
+    });
+
+    const outcome = await runFindingEscalationReviewer(input);
+
+    expect(outcome).toBeUndefined();
     expect(executeAgentMock).not.toHaveBeenCalled();
     expect(stepExecutor.prepareFindingReviewPublication).not.toHaveBeenCalled();
   });

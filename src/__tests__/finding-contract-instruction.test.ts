@@ -12,6 +12,10 @@ import {
   PROVIDER_ANCHOR_RELEVANCE_INSTRUCTION,
 } from '../core/workflow/findings/manager-raw-decision-adapter.js';
 import type { FindingLedger, FindingLedgerEntry } from '../core/workflow/findings/types.js';
+import {
+  computeRestatementRequestId,
+  createFindingReviewPresentationContextV2,
+} from '../core/workflow/findings/review-publication.js';
 
 const renderFencedJsonBlock = (value: unknown): string => `\`\`\`json\n${JSON.stringify(value)}\n\`\`\``;
 
@@ -55,6 +59,34 @@ const REVIEWER_SNAPSHOT_ID = 'snap-test-0000000000000000000000000000000000000000
 const REVIEWER = {
   reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID,
 };
+
+/**
+ * 実型の再提示 request で presentationContext を組む。`as never` の部分 fixture は
+ * 必須項目と restatementRequestId の整合（buildFindingContractInstruction が検証する）
+ * を型検査からも実行時からも落としてしまう。
+ */
+function restatementPresentationContext() {
+  const requestWithoutId = {
+    anomalyId: 'RA-RESTATEMENT',
+    reviewer: 'architecture-review',
+    presentationOrdinal: 1,
+    reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID,
+    sourceExcerptDigest: '2'.repeat(64),
+    claimedExcerpt: 'A bounded reviewer claim.',
+    targetPaths: [] as const,
+    missingRequirements: [] as const,
+    expectedRelation: 'new' as const,
+    expectedTargetFindingId: null,
+    expectedTargetPreconditionClass: 'absent' as const,
+  };
+  return createFindingReviewPresentationContextV2({
+    reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID,
+    restatementRequests: [{
+      ...requestWithoutId,
+      restatementRequestId: computeRestatementRequestId(requestWithoutId),
+    }],
+  });
+}
 
 describe('buildFindingContractInstruction', () => {
   it('never emits blank-line runs left behind by unused conditional blocks', () => {
@@ -189,16 +221,9 @@ describe('buildFindingContractInstruction', () => {
     it('suppresses the ordinary reviewer guidance during a restatement-only round', () => {
       const rendered = build({
         contract: {
-          reviewer: {
-            ...REVIEWER,
-            presentationContext: {
-              revision: 2,
-              reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID,
-              restatementRequests: [{ anomalyId: 'A-1' }],
-            },
-          },
+          reviewer: { ...REVIEWER, presentationContext: restatementPresentationContext() },
           hasOpenFindings: true,
-        } as never,
+        },
       });
       expect(rendered).toContain('## Restatement requests');
       expect(rendered).not.toContain('Write an ordinary Markdown review report');
@@ -211,20 +236,13 @@ describe('buildFindingContractInstruction', () => {
     it('keeps the severity requirement in a restatement-only round for ja as well', () => {
       const rendered = build({
         contract: {
-          reviewer: {
-            ...REVIEWER,
-            presentationContext: {
-              revision: 2,
-              reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID,
-              restatementRequests: [{ anomalyId: 'A-1' }],
-            },
-          },
+          reviewer: { ...REVIEWER, presentationContext: restatementPresentationContext() },
           hasOpenFindings: true,
-        } as never,
+        },
         language: 'ja',
       });
       expect(rendered).toContain('## Restatement requests');
-      expect(rendered).toContain('severity');
+      expect(rendered).toContain('severity（`critical` / `high` / `medium` / `low`');
       expect(rendered).not.toContain('通常の Markdown レビュー報告を書いてください');
       expect(rendered).not.toContain('{{');
     });

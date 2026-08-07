@@ -731,7 +731,7 @@ function classifyRetryableFailure(
     };
   }
   const finalReportContent = response.content.trim();
-  if (finalReportContent.trim().length === 0) {
+  if (finalReportContent.length === 0) {
     return {
       failureReason: 'empty_output',
       errorMessage: buildRetryableFailureEventError(

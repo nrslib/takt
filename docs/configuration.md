@@ -666,12 +666,16 @@ defaults
   < steps
 ```
 
-The internal `selector` and `assistant` agents resolve through a separate ladder — `internal_agents` is not a generic override applied after step resolution:
+The internal `selector`, `assistant`, and `intake-normalizer` agents resolve through a separate ladder — `internal_agents` is not a generic override applied after step resolution:
 
 ```text
 defaults
   < internal_agents.<agent>
 ```
+
+`intake-normalizer` is the one seat whose ladder continues past this point: when no
+seat is assigned it falls back to the reviewer's `escalate` target and then to the
+ordinary default resolution (see [workflows.md](workflows.md)).
 
 When two targets at the same priority (for example two matching tags) assign different providers, resolution fails fast instead of picking one silently. Explicit `--provider` / `--model` on the command line are runtime overrides and are allowed in both legacy and runtime modes.
 

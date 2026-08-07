@@ -280,9 +280,19 @@ function reviewWithdrawalEligibilityViolation(
     return 'intake-contract anomalies settle through their restatement contract';
   }
   const publications = settlement.supersedingPublications;
+  if (publications.length === 0) {
+    return 'withdrawal must record at least one superseding publication';
+  }
   const pairs = publications.map(({ reviewer, publicationId }) => `${reviewer}\u0000${publicationId}`);
   if (new Set(pairs).size !== pairs.length) {
     return 'withdrawal must not record the same superseding publication twice';
+  }
+  // 型が宣言する不変条件（非空・(reviewer, publicationId) の binary 順）は
+  // ここでしか強制できない。1レビュアー枠が同一ラウンドに複数 publication を
+  // 持てるようになり並びが揺れる余地が増えたので、順序を強制しないと台帳の
+  // バイト列が非決定的になり監査時の再構成と差分比較が壊れる。
+  if (canonicalJson(pairs) !== canonicalJson([...pairs].sort(compareBinaryStrings))) {
+    return 'withdrawal must record superseding publications in binary order of (reviewer, publicationId)';
   }
   const recordedReviewers = [...new Set(publications.map(({ reviewer }) => reviewer))]
     .sort(compareBinaryStrings);

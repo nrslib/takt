@@ -659,12 +659,15 @@ defaults
   < steps
 ```
 
-内部 agent（`selector` と `assistant`）は別のラダーで解決します。`internal_agents` は step 解決後に汎用的に上書きされる target ではありません。
+内部 agent（`selector` / `assistant` / `intake-normalizer`）は別のラダーで解決します。`internal_agents` は step 解決後に汎用的に上書きされる target ではありません。
 
 ```text
 defaults
   < internal_agents.<agent>
 ```
+
+`intake-normalizer` だけはこの先にも候補が続きます。seat が割り当てられていない場合は
+レビュアーの `escalate` 先 → 通常の既定解決の順で決まります（[workflows.ja.md](workflows.ja.md) 参照）。
 
 同じ優先度の target（例えば複数の一致する tag）が異なる provider を割り当てた場合は、暗黙に一方を選ばず fail-fast します。コマンドラインの `--provider` / `--model` は実行時 override であり、legacy と runtime のどちらのモードでも許可されます。
 

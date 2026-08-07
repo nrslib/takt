@@ -35,6 +35,9 @@ import type { WorkflowConfig, WorkflowResumePoint } from '../core/models/types.j
 import { getWorkflowReference } from '../core/workflow/workflow-reference.js';
 import { runAgent } from '../agents/runner.js';
 import { normalizeFindingIntake } from '../agents/finding-intake-normalizer-usecase.js';
+
+/** レビュアーが書く markdown レポート本文。正規化係へはこの本文がそのまま渡る。 */
+const REVIEW_REPORT_CONTENT = 'A finding emitted by the reviewer.';
 import { resolveWorkflowCallTarget } from '../infra/config/loaders/workflowCallResolver.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
 import {
@@ -209,20 +212,19 @@ describe('workflow step fragment runtime contract', () => {
       engine.on('step:cycle_detected', (_monitor, count) => cycleCounts.push(count));
       engine.on('findings:ledger', (ledger) => ledgers.push(ledger));
 
-      const reviewReportContent = 'A finding emitted by the reviewer.';
       vi.mocked(normalizeFindingIntake).mockReset();
       vi.mocked(normalizeFindingIntake).mockImplementation(async () => makeResponse({
         persona: 'finding-intake-normalizer',
         content: '',
         structuredOutput: {
           rawFindings: [{
-            rawExcerpt: reviewReportContent,
+            rawExcerpt: REVIEW_REPORT_CONTENT,
             candidate: {
               rawFindingId: 'review-issue',
               familyTag: 'test',
               severity: 'high',
               title: 'Test finding',
-              description: reviewReportContent,
+              description: REVIEW_REPORT_CONTENT,
               suggestion: null,
               relation: 'new',
               targetFindingIds: [],
@@ -239,7 +241,7 @@ describe('workflow step fragment runtime contract', () => {
           userInstruction: instruction,
         });
         if (persona === 'review' || options?.workflowMeta?.currentStep === 'review') {
-          return makeResponse({ persona, content: reviewReportContent });
+          return makeResponse({ persona, content: REVIEW_REPORT_CONTENT });
         }
         if (schemaHasProperty(options?.outputSchema, 'rawDecisions')) {
           return makeResponse({
@@ -294,6 +296,11 @@ describe('workflow step fragment runtime contract', () => {
     });
     expect(inlineResult.ledgers).toHaveLength(1);
     expect(fragmentResult.ledgers).toHaveLength(1);
+    // 正規化係が受け取るのはレビュアーの markdown レポート本文そのもの。引数を
+    // 検証しないと、実装が空文字や別の本文を渡しても気づけない。mock は execute()
+    // ごとに reset するので、残っているのは最後（fragment 側）の1ラウンド分。
+    expect(vi.mocked(normalizeFindingIntake).mock.calls.map(([report]) => report))
+      .toEqual([REVIEW_REPORT_CONTENT]);
     for (const result of [inlineResult, fragmentResult]) {
       // FC intake 契約化後の landing: target 無し（review_scope）の独立 claim は
       // provisional finding ではなく intake-contract-incomplete reviewer anomaly に

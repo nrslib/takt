@@ -580,6 +580,14 @@ describe('resolveStepProviderModel — profile escalate target', () => {
         tags: { review: { provider: 'opencode', model: 'weak', escalation } },
       },
     }).escalation).toEqual(escalation);
+
+    // deprecated な persona_providers 層も同じ契約を担う。
+    expect(resolveStepProviderModel({
+      step,
+      personaProviders: {
+        'architecture-reviewer': { provider: 'opencode', model: 'weak', escalation },
+      },
+    }).escalation).toEqual(escalation);
   });
 
   it('carries the defaults escalate target when the provider comes from runtime-v1 defaults', () => {
