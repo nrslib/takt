@@ -3,10 +3,19 @@ import type { AgentResponse, AgentWorkflowStep, FindingContractConfig } from '..
 import type { ProviderEscalationTarget } from '../core/models/config-types.js';
 import { FINDING_ESCALATION_REVIEWER_ROUTING_KEY } from '../core/models/finding-types.js';
 import {
-  buildFindingEscalationReviewerStep,
-  findingEscalationReviewerReportName,
-} from '../core/workflow/findings/escalation-reviewer-step.js';
+  buildFindingRestatementSlotStep,
+  findingRestatementSlotReportName,
+} from '../core/workflow/findings/restatement-slot-step.js';
 import { resolveRestatementPresentationPhase } from '../core/workflow/findings/restatement-presentation-phase.js';
+import {
+  budgetCountedRoundMarkers,
+  isRoundExcludedFromBudget,
+  markRoundExcludedFromBudget,
+} from '../core/workflow/findings/round-marker.js';
+import {
+  attachStopBudgetState,
+  stopBudgetRoundsCompleted,
+} from '../core/workflow/findings/stop-budget.js';
 import { computeReviewerStableKey } from '../core/workflow/findings/raw-canonicalization.js';
 import {
   computeRestatementRequestId,
@@ -42,7 +51,7 @@ import {
   canonicalizeReviewerRawFinding,
 } from '../core/workflow/findings/raw-canonicalization.js';
 import { canonicalRawFindingFixture } from './helpers/finding-lifecycle-fixture.js';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -61,8 +70,8 @@ vi.mock('../core/workflow/findings/contract-intake.js', async (importOriginal) =
 const { executeAgent } = await import('../agents/agent-usecases.js');
 const executeAgentMock = vi.mocked(executeAgent);
 
-const { runFindingEscalationReviewer } = await import(
-  '../core/workflow/findings/escalation-reviewer-runner.js'
+const { runFindingRestatementSlot } = await import(
+  '../core/workflow/findings/restatement-slot-runner.js'
 );
 
 /** 格上げ先。runtime.yaml の `escalate: strong` を解決した結果に相当する。 */
@@ -71,6 +80,8 @@ const ESCALATION_TARGET: ProviderEscalationTarget = {
   provider: 'mock',
   model: 'strong-model',
 };
+
+const OWNER_TARGET = { provider: 'mock' as const, model: 'weak-model' };
 
 const FINDING_CONTRACT: FindingContractConfig = {
   manager: {
@@ -84,7 +95,7 @@ const FINDING_CONTRACT: FindingContractConfig = {
   },
 };
 
-describe('FC escalation reviewer — presentation phase', () => {
+describe('FC restatement slot — presentation phase', () => {
   it('spends the restatement budget on the owner and the last presentation on escalation', () => {
     const phases = [0, 1, 2, 3].map((presentedCount) => resolveRestatementPresentationPhase({
       presentedCount,
@@ -143,7 +154,89 @@ describe('FC escalation reviewer — presentation phase', () => {
   });
 });
 
-describe('FC escalation reviewer — synthetic step inherits the owner reviewer', () => {
+describe('FC restatement slot — budget accounting', () => {
+  const marker = ['run', '', 'reviewers', '1', 'pub-a'].join('\u0000');
+
+  it('keeps an excluded round in the applied marker set but out of the budget count', () => {
+    const excluded = markRoundExcludedFromBudget(marker);
+
+    // 適用済み集合には入る（二相コミットの staging 不変条件と crash/replay の
+    // 冪等性がこの集合に依存する）。
+    expect(excluded).not.toBe(marker);
+    expect(isRoundExcludedFromBudget(excluded)).toBe(true);
+    expect(isRoundExcludedFromBudget(marker)).toBe(false);
+    // 予算カウンタは印付きを数えない。
+    expect(budgetCountedRoundMarkers([marker, excluded])).toEqual([marker]);
+  });
+
+  it('does not exhaust the stop budget on excluded rounds', () => {
+    const limits = { maxRounds: 2, maxMinutes: undefined };
+    const withReviewRound = attachStopBudgetState(
+      {} as never,
+      {} as never,
+      limits,
+      marker,
+      '2026-08-07T00:00:00.000Z',
+    );
+    const withSlotPass = attachStopBudgetState(
+      withReviewRound,
+      {} as never,
+      limits,
+      markRoundExcludedFromBudget(`${marker}-slot`),
+      '2026-08-07T00:00:01.000Z',
+    );
+
+    // 1ステップで予算を焼き切らない: marker は2件でも予算ラウンドは1回。
+    expect(withSlotPass.stopBudget?.roundMarkers).toHaveLength(2);
+    expect(stopBudgetRoundsCompleted(withSlotPass)).toBe(1);
+    expect(withSlotPass.stopBudget?.exhausted).toBe(false);
+  });
+});
+
+describe('FC restatement slot — round number definition', () => {
+  /**
+   * 刻印側（firstObservedRound を打つ側）と読み側（同一ラウンド保護を判定する側）が
+   * 同じ「現在ラウンド」定義を使っていることを固定する。
+   *
+   * suffix 付き marker の導入で `stopBudget.roundMarkers.length`（生値）と
+   * `stopBudgetRoundsCompleted()`（計上値）が乖離した。生値を直読みすると
+   * currentRound が言い直し slot のパスぶん先へ飛び、着地したばかりの暫定 finding が
+   * その場で dismiss 候補になる（同一ラウンド保護の恒久無効化）。
+   */
+  it('counts the current round without the budget-excluded passes', () => {
+    const ledger = {
+      stopBudget: {
+        roundMarkers: [
+          'run\u0000\u0000reviewers\u00001\u0000pub-review',
+          markRoundExcludedFromBudget('run\u0000\u0000reviewers\u00001\u0000pub-slot'),
+        ],
+        firstRoundAt: '2026-08-07T00:00:00.000Z',
+        exhausted: false,
+      },
+    } as never;
+
+    // 生値と計上値が乖離する。刻印側（conflict-claim-landing / manager-utils）は
+    // 計上値+1 を firstObservedRound に打つので、読み側が生値+1 を使うと
+    // firstObservedRound < currentRound になり、着地したばかりの暫定 finding が
+    // その場で dismiss 候補になる。
+    expect(ledger.stopBudget.roundMarkers.length).toBe(2);
+    expect(stopBudgetRoundsCompleted(ledger)).toBe(1);
+  });
+
+  it('has no production reader left on the raw marker array', () => {
+    // 定義の分岐は「どこか1箇所が生値を読む」形で再発する。読み口を
+    // stopBudgetRoundsCompleted に一本化したことをソースで固定する。
+    const findingsDir = join(process.cwd(), 'src', 'core', 'workflow', 'findings');
+    const offenders = readdirSync(findingsDir)
+      .filter((name) => name.endsWith('.ts') && name !== 'stop-budget.ts')
+      .filter((name) => readFileSync(join(findingsDir, name), 'utf-8')
+        .includes('stopBudget?.roundMarkers.length'));
+
+    expect(offenders).toEqual([]);
+  });
+});
+
+describe('FC restatement slot — synthetic step inherits the owner reviewer', () => {
   const ownerStep = {
     kind: 'agent' as const,
     name: 'architecture-review',
@@ -158,9 +251,12 @@ describe('FC escalation reviewer — synthetic step inherits the owner reviewer'
   } as unknown as AgentWorkflowStep;
 
   it('keeps the owner persona, policy, knowledge and report format', () => {
-    const step = buildFindingEscalationReviewerStep({
+    const step = buildFindingRestatementSlotStep({
       ownerStep,
-      escalation: ESCALATION_TARGET,
+      phase: 'escalation',
+      mode: 'restatement-only',
+      presentationPass: 1,
+      target: ESCALATION_TARGET,
     });
 
     expect(step).toMatchObject({
@@ -168,7 +264,6 @@ describe('FC escalation reviewer — synthetic step inherits the owner reviewer'
       name: FINDING_ESCALATION_REVIEWER_ROUTING_KEY,
       engineSynthesized: true,
       providerRoutingPersonaKey: FINDING_ESCALATION_REVIEWER_ROUTING_KEY,
-      sessionKey: findingEscalationReviewerReportName(ownerStep.name),
       persona: 'architecture-reviewer',
       personaPath: '/facets/personas/architecture-reviewer.md',
       personaDisplayName: 'architecture-reviewer',
@@ -179,16 +274,42 @@ describe('FC escalation reviewer — synthetic step inherits the owner reviewer'
       rules: [],
     });
     expect(step.outputContracts).toEqual([{
-      name: findingEscalationReviewerReportName(ownerStep.name),
+      name: findingRestatementSlotReportName({
+        ownerStepName: ownerStep.name,
+        phase: 'escalation',
+        presentationPass: 1,
+      }),
       format: 'Owner report format.',
     }]);
+    expect(step.sessionKey).toBe(step.outputContracts?.[0]?.name);
     expect(step.structuredOutput).toBeUndefined();
   });
 
-  it('changes only the model, and drops the owner review procedure', () => {
-    const step = buildFindingEscalationReviewerStep({
+  it('keeps the reviewer key on the owner for the restatement phase so the publication invariant holds', () => {
+    const step = buildFindingRestatementSlotStep({
       ownerStep,
-      escalation: ESCALATION_TARGET,
+      phase: 'restatement',
+      mode: 'restatement-only',
+      presentationPass: 2,
+      target: OWNER_TARGET,
+    });
+
+    // publication の reviewerStepName は step 名から決まる。restatement request の
+    // reviewer（= owner 名）と一致していないと publication invariant を破る。
+    expect(step.name).toBe(ownerStep.name);
+    expect(step).toMatchObject({ provider: 'mock', model: 'weak-model' });
+    expect(step.outputContracts?.[0]?.name).toBe('followup-architecture-review-2');
+    // owner のレビュー本編 report とは別の identity になる。
+    expect(step.outputContracts?.[0]?.name).not.toBe(ownerStep.outputContracts?.[0]?.name);
+  });
+
+  it('changes only the model, and drops the owner review procedure', () => {
+    const step = buildFindingRestatementSlotStep({
+      ownerStep,
+      phase: 'escalation',
+      mode: 'restatement-only',
+      presentationPass: 1,
+      target: ESCALATION_TARGET,
     });
 
     expect(step).toMatchObject({
@@ -198,33 +319,55 @@ describe('FC escalation reviewer — synthetic step inherits the owner reviewer'
       modelSpecified: true,
     });
     // 手順はエンジンが注入する restatement-only 契約が担う。
-    // owner の通常レビュー手順は継承しない（手順はエンジンの restatement-only 契約）。
     expect(step.instruction).not.toBe(ownerStep.instruction);
     expect(step.instruction).not.toBe(ownerStep.persona);
   });
 
-  it('gives each owner its own report name so grouped calls never collide', () => {
-    const first = buildFindingEscalationReviewerStep({ ownerStep, escalation: ESCALATION_TARGET });
-    const second = buildFindingEscalationReviewerStep({
+  it('gives each owner and each presentation pass its own report name', () => {
+    const passOne = buildFindingRestatementSlotStep({
+      ownerStep,
+      phase: 'restatement',
+      mode: 'restatement-only',
+      presentationPass: 1,
+      target: OWNER_TARGET,
+    });
+    const passTwo = buildFindingRestatementSlotStep({
+      ownerStep,
+      phase: 'restatement',
+      mode: 'restatement-only',
+      presentationPass: 2,
+      target: OWNER_TARGET,
+    });
+    const otherOwner = buildFindingRestatementSlotStep({
       ownerStep: { ...ownerStep, name: 'security-review' },
-      escalation: ESCALATION_TARGET,
+      phase: 'restatement',
+      mode: 'restatement-only',
+      presentationPass: 1,
+      target: OWNER_TARGET,
     });
 
-    expect(first.name).toBe(second.name);
-    expect(first.outputContracts?.[0]?.name).not.toBe(second.outputContracts?.[0]?.name);
+    // 同じラウンド内の反復も別の publication にならないと提示が計上されない。
+    expect(passOne.outputContracts?.[0]?.name).not.toBe(passTwo.outputContracts?.[0]?.name);
+    expect(passOne.outputContracts?.[0]?.name).not.toBe(otherOwner.outputContracts?.[0]?.name);
   });
 
   it('fails loudly when no owner output contract can be inherited', () => {
-    expect(() => buildFindingEscalationReviewerStep({
+    expect(() => buildFindingRestatementSlotStep({
       ownerStep: { kind: 'agent', name: 'review', instruction: 'Review.' } as AgentWorkflowStep,
-      escalation: ESCALATION_TARGET,
+      phase: 'restatement',
+      mode: 'restatement-only',
+      presentationPass: 1,
+      target: OWNER_TARGET,
     })).toThrow(/output contract/);
   });
 
   it('inherits the owner lifecycle identity while keeping a separate publication identity', () => {
-    const escalationStep = buildFindingEscalationReviewerStep({
+    const escalationStep = buildFindingRestatementSlotStep({
       ownerStep,
-      escalation: ESCALATION_TARGET,
+      phase: 'escalation',
+      mode: 'restatement-only',
+      presentationPass: 1,
+      target: ESCALATION_TARGET,
     });
     const stableKeyOf = (step: AgentWorkflowStep) => computeReviewerStableKey({
       workflowName: 'peer-review',
@@ -237,7 +380,6 @@ describe('FC escalation reviewer — synthetic step inherits the owner reviewer'
     // 代打の主張は owner の lifecycle をそのまま継ぐ（別人の新規観測として
     // 二重計上されない）。persona を継承した帰結であり、意図した挙動。
     expect(stableKeyOf(escalationStep)).toBe(stableKeyOf(ownerStep));
-    // publication identity だけは reviewer キーと owner 別 report 名で分かれる。
     expect(escalationStep.name).not.toBe(ownerStep.name);
     expect(escalationStep.outputContracts?.[0]?.name).not.toBe(ownerStep.outputContracts?.[0]?.name);
   });
@@ -248,24 +390,30 @@ describe('FC escalation reviewer — synthetic step inherits the owner reviewer'
       mcpServers: { docs: { command: 'docs-server' } },
     } as unknown as AgentWorkflowStep;
 
-    expect(buildFindingEscalationReviewerStep({
+    expect(buildFindingRestatementSlotStep({
       ownerStep: withMcp,
-      escalation: ESCALATION_TARGET,
+      phase: 'escalation',
+      mode: 'restatement-only',
+      presentationPass: 1,
+      target: ESCALATION_TARGET,
     }).mcpServers).toEqual({ docs: { command: 'docs-server' } });
   });
 
   it('fails loudly when the owner reviewer has no persona to inherit', () => {
-    expect(() => buildFindingEscalationReviewerStep({
+    expect(() => buildFindingRestatementSlotStep({
       ownerStep: {
         ...ownerStep,
         persona: undefined,
       } as unknown as AgentWorkflowStep,
-      escalation: ESCALATION_TARGET,
+      phase: 'restatement',
+      mode: 'restatement-only',
+      presentationPass: 1,
+      target: OWNER_TARGET,
     })).toThrow(/persona/);
   });
 });
 
-describe('FC escalation reviewer — workflow configuration', () => {
+describe('FC restatement slot — workflow configuration', () => {
   const findingContractRaw = {
     manager: {
       persona: 'findings-manager',
@@ -353,7 +501,7 @@ describe('FC escalation reviewer — workflow configuration', () => {
   });
 });
 
-describe('FC escalation reviewer — restatement instruction', () => {
+describe('FC restatement slot — restatement instruction', () => {
   it.each(['en', 'ja'] as const)(
     'tells the %s restatement reviewer to read the target files and request quotes from them',
     (language) => {
@@ -398,7 +546,7 @@ describe('FC escalation reviewer — restatement instruction', () => {
     },
   );
 
-  it('keeps phase 2 restatement-only for the escalation context and loses it for a rebuilt empty one', () => {
+  it('keeps phase 2 restatement-only for the slot context and loses it for a rebuilt empty one', () => {
     const requestWithoutId = {
       anomalyId: 'RA-PHASE2',
       reviewer: FINDING_ESCALATION_REVIEWER_ROUTING_KEY,
@@ -412,7 +560,7 @@ describe('FC escalation reviewer — restatement instruction', () => {
       expectedTargetFindingId: null,
       expectedTargetPreconditionClass: 'absent' as const,
     };
-    const escalationPresentationContext = createFindingReviewPresentationContextV2({
+    const slotPresentationContext = createFindingReviewPresentationContextV2({
       reviewScopeSnapshotId: requestWithoutId.reviewScopeSnapshotId,
       restatementRequests: [{
         ...requestWithoutId,
@@ -431,6 +579,7 @@ describe('FC escalation reviewer — restatement instruction', () => {
         reviewer: {
           reviewScopeSnapshotId: presentationContext.reviewScopeSnapshotId,
           presentationContext,
+          mode: 'restatement-only' as const,
         },
       },
       language: 'en',
@@ -438,9 +587,9 @@ describe('FC escalation reviewer — restatement instruction', () => {
     });
 
     // Phase 1 と同じ context を渡した Phase 2 は restatement-only のまま。
-    const escalationReportInstruction = reportInstruction(escalationPresentationContext);
-    expect(escalationReportInstruction).toContain('restatement-only review');
-    expect(escalationReportInstruction).toContain('RA-PHASE2');
+    const slotReportInstruction = reportInstruction(slotPresentationContext);
+    expect(slotReportInstruction).toContain('restatement-only review');
+    expect(slotReportInstruction).toContain('RA-PHASE2');
     // reviewer 名から組み直した context（request 0件）は通常レビュー契約へ化ける。
     const rebuiltReportInstruction = reportInstruction(createFindingReviewPresentationContextV2({
       reviewScopeSnapshotId: requestWithoutId.reviewScopeSnapshotId,
@@ -450,7 +599,7 @@ describe('FC escalation reviewer — restatement instruction', () => {
   });
 });
 
-describe('FC escalation reviewer — presentation freeze', () => {
+describe('FC restatement slot — per-pass request batches', () => {
   const reviewerStep: WorkflowStep = {
     name: 'architecture-review',
     persona: 'reviewer',
@@ -459,15 +608,19 @@ describe('FC escalation reviewer — presentation freeze', () => {
     rules: [],
   };
   const reviewScopeSnapshotId = 'b'.repeat(64);
-  function makeServices(presentationLimit: number, options: { escalates?: boolean } = {}) {
+
+  function makeServices(
+    presentationLimit: number,
+    options: { escalates?: boolean; nonIntakeAnomaly?: boolean } = {},
+  ) {
     const escalates = options.escalates ?? true;
     const cwd = process.cwd();
-    const runPaths = buildRunPaths(cwd, `escalation-freeze-${presentationLimit}`);
-    // 提示回数の正本は report dir の canonical publication。凍結が効いているかを
-    // 見るため、実際に publication を書き込める隔離ディレクトリを使う。
-    const reportDir = mkdtempSync(join(tmpdir(), 'takt-fc-escalation-freeze-'));
+    const runPaths = buildRunPaths(cwd, `restatement-slot-${presentationLimit}`);
+    // 提示回数の正本は report dir の canonical publication。パスごとに数え直すため、
+    // 実際に publication を書き込める隔離ディレクトリを使う。
+    const reportDir = mkdtempSync(join(tmpdir(), 'takt-fc-restatement-slot-'));
     const raw = canonicalRawFindingFixture({
-      rawFindingId: 'raw-freeze',
+      rawFindingId: 'raw-slot',
       stepName: reviewerStep.name,
       reviewer: reviewerStep.name,
       familyTag: null,
@@ -482,7 +635,7 @@ describe('FC escalation reviewer — presentation freeze', () => {
       evidence: [],
     });
     const observedAt = {
-      runId: 'run-escalation-freeze',
+      runId: 'run-restatement-slot',
       stepName: reviewerStep.name,
       timestamp: '2026-08-07T00:00:00.000Z',
     };
@@ -498,23 +651,36 @@ describe('FC escalation reviewer — presentation freeze', () => {
       lifecycleEvents: [],
       ...createEmptyFindingContractRegistries(),
     };
-    const ledger = applyReviewerAnomalySpecsToLedger(emptyLedger, [createReviewerAnomalySpec({
-      wire: raw,
-      canonical: canonicalizeReviewerRawFinding(
-        candidateFromStoredRawFinding(raw, 'reviewer-stable-key'),
-        { ledger: emptyLedger },
-      ).canonical,
-      anomalyKind: 'intake-contract-incomplete',
-      reason: 'The normalized claim omitted product identity.',
-      intakeContract: {
-        observationClass: 'claim-bearing',
-        classificationAuthorityId: 'system/intake_observation_classification_v1',
-        reasonCodes: ['product-identity-incomplete'],
-        missingRequirements: ['title'],
-        presentationOwnerReviewer: reviewerStep.name,
-        presentationLimit,
-      },
-    })], {
+    const canonical = canonicalizeReviewerRawFinding(
+      candidateFromStoredRawFinding(raw, 'reviewer-stable-key'),
+      { ledger: emptyLedger },
+    ).canonical;
+    const ledger = applyReviewerAnomalySpecsToLedger(emptyLedger, [
+      createReviewerAnomalySpec({
+        wire: raw,
+        canonical,
+        anomalyKind: 'intake-contract-incomplete',
+        reason: 'The normalized claim omitted product identity.',
+        intakeContract: {
+          observationClass: 'claim-bearing',
+          classificationAuthorityId: 'system/intake_observation_classification_v1',
+          reasonCodes: ['product-identity-incomplete'],
+          missingRequirements: ['title'],
+          presentationOwnerReviewer: reviewerStep.name,
+          presentationLimit,
+        },
+      }),
+      // 言い直し予算に乗らない anomaly。決着条件は「そのレビュアーの後続
+      // 完全レビュー成立」による取り下げだけ。
+      ...(options.nonIntakeAnomaly === true
+        ? [createReviewerAnomalySpec({
+          wire: raw,
+          canonical,
+          anomalyKind: 'verdict-claims-mismatch',
+          reason: 'The reviewer rejected the change but published no claim.',
+        })]
+        : []),
+    ], {
       workflowName: 'peer-review',
       stepName: observedAt.stepName,
       runId: observedAt.runId,
@@ -593,23 +759,22 @@ describe('FC escalation reviewer — presentation freeze', () => {
     };
   }
 
-  const escalationRequests = (
+  const slotRequests = (
     services: ReturnType<typeof makeServices>['services'],
-    freezeKey: string,
+    slot: 'owner' | 'escalation',
   ) => {
-    const contexts = services.optionsBuilder.buildFindingEscalationInstructionContexts({
+    const contexts = services.optionsBuilder.buildFindingRestatementSlotContexts({
       ownerReviewerSteps: [reviewerStep as AgentWorkflowStep],
       reviewScopeSnapshotId,
-      findingContractFreezeKey: freezeKey,
     });
-    // context の不在（batch を作らない）と revision 違いは別の状態。undefined へ
-    // 畳むと否定契約が緩むので、context がある場合は revision を明示的に固定する。
-    if (!contexts.has(reviewerStep.name)) {
+    const presentation = contexts.get(reviewerStep.name)?.[slot]?.reviewer?.presentationContext;
+    if (presentation === undefined) {
       return undefined;
     }
-    const presentation = contexts.get(reviewerStep.name)?.reviewer?.presentationContext;
-    expect(presentation?.revision).toBe(2);
-    return presentation?.revision === 2 ? presentation.restatementRequests : undefined;
+    // context の不在（batch を作らない）と revision 違いは別の状態。undefined へ
+    // 畳むと否定契約が緩むので、context がある場合は revision を明示的に固定する。
+    expect(presentation.revision).toBe(2);
+    return presentation.revision === 2 ? presentation.restatementRequests : undefined;
   };
 
   /** 指定 reviewer がその anomaly を提示した canonical publication を報告先へ実際に書き込む。 */
@@ -644,7 +809,7 @@ describe('FC escalation reviewer — presentation freeze', () => {
     persistFindingReviewPublication(input.reportDir, {
       publication: createFindingReviewPublication({
         identity: {
-          scopeIdentity: 'scope-fc-escalation-freeze',
+          scopeIdentity: 'scope-fc-restatement-slot',
           callNamespace: '',
           parentStepName: reviewerStep.name,
           stepIteration: 1,
@@ -660,76 +825,79 @@ describe('FC escalation reviewer — presentation freeze', () => {
     });
   }
 
-  function persistOwnerPresentation(input: {
-    reportDir: string;
-    anomalyId: string;
-    presentationOrdinal: number;
-  }): void {
-    persistPresentation({
-      ...input,
-      reviewerStepName: reviewerStep.name,
-      reportName: 'architecture-review.md',
-    });
-  }
-
-  function persistEscalationPresentation(input: {
-    reportDir: string;
-    anomalyId: string;
-    presentationOrdinal: number;
-  }): void {
-    persistPresentation({
-      ...input,
-      reviewerStepName: FINDING_ESCALATION_REVIEWER_ROUTING_KEY,
-      reportName: `${findingEscalationReviewerReportName(reviewerStep.name)}.md`,
-    });
-  }
-
-  it('does not escalate in the same round the owner reviewer spends its (limit-1) presentation', () => {
-    const { services, reportDir, anomalyId, cleanup } = makeServices(2);
+  it('keeps the review round itself free of restatement requests', () => {
+    const { services, cleanup } = makeServices(2);
     try {
-      const freezeKey = 'freeze-limit-2';
-
       const ownerContext = services.optionsBuilder.buildFindingContractInstructionContext(
         reviewerStep,
         true,
         reviewScopeSnapshotId,
-        freezeKey,
+        'freeze-round',
       );
-      const ownerPresentation = ownerContext?.reviewer?.presentationContext;
-      // owner が limit-1 回目（ordinal 1）を提示するラウンド。
-      expect(ownerPresentation?.revision === 2 && ownerPresentation.restatementRequests).toMatchObject([
-        { reviewer: reviewerStep.name, presentationOrdinal: 1 },
-      ]);
+      const presentation = ownerContext?.reviewer?.presentationContext;
 
-      // owner の canonical publication が実際に成立した状態を作る。ここで
-      // presentation counts を数え直すと presentedCount=1 → ordinal 2 =
-      // escalation になり、同じ iteration で二重提示になる。
-      persistOwnerPresentation({ reportDir, anomalyId, presentationOrdinal: 1 });
-      expect(listFindingReviewPublications(reportDir)[0]!.presentationContext.presentedReviewerAnomalyIds)
-        .toEqual([anomalyId]);
-
-      // 凍結した presentation counts を使う限り、同じラウンドでは発火しない。
-      expect(escalationRequests(services, freezeKey)).toBeUndefined();
+      // 相乗り経路の廃止: レビュー本編の publication は何も提示しない。
+      expect(presentation?.revision).toBe(2);
+      expect(presentation?.revision === 2 && presentation.restatementRequests).toEqual([]);
+      expect(presentation?.revision === 2 && presentation.presentedReviewerAnomalyIds).toEqual([]);
     } finally {
       cleanup();
     }
   });
 
-  it('escalates the only presentation when presentationLimit is 1 and leaves the owner batch empty', () => {
+  it('walks the presentation budget one pass at a time and ends on the escalation slot', () => {
+    const { services, reportDir, anomalyId, cleanup } = makeServices(2);
+    try {
+      // パス1: owner への通常言い直し。
+      expect(slotRequests(services, 'owner')).toMatchObject([
+        { reviewer: reviewerStep.name, presentationOrdinal: 1 },
+      ]);
+      expect(slotRequests(services, 'escalation')).toBeUndefined();
+
+      persistPresentation({
+        reportDir,
+        anomalyId,
+        presentationOrdinal: 1,
+        reviewerStepName: reviewerStep.name,
+        reportName: findingRestatementSlotReportName({
+          ownerStepName: reviewerStep.name,
+          phase: 'restatement',
+          presentationPass: 1,
+        }),
+      });
+
+      // パス2: 最終枠なので格上げへ回る。
+      expect(slotRequests(services, 'owner')).toBeUndefined();
+      expect(slotRequests(services, 'escalation')).toMatchObject([
+        { reviewer: FINDING_ESCALATION_REVIEWER_ROUTING_KEY, presentationOrdinal: 2 },
+      ]);
+
+      persistPresentation({
+        reportDir,
+        anomalyId,
+        presentationOrdinal: 2,
+        reviewerStepName: FINDING_ESCALATION_REVIEWER_ROUTING_KEY,
+        reportName: findingRestatementSlotReportName({
+          ownerStepName: reviewerStep.name,
+          phase: 'escalation',
+          presentationPass: 2,
+        }),
+      });
+
+      // 予算を使い切ったら request は作られない。
+      expect(listFindingReviewPublications(reportDir)).toHaveLength(2);
+      expect(slotRequests(services, 'owner')).toBeUndefined();
+      expect(slotRequests(services, 'escalation')).toBeUndefined();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('escalates the only presentation when presentationLimit is 1', () => {
     const { services, cleanup } = makeServices(1);
     try {
-      const freezeKey = 'freeze-limit-1';
-
-      const ownerContext = services.optionsBuilder.buildFindingContractInstructionContext(
-        reviewerStep,
-        true,
-        reviewScopeSnapshotId,
-        freezeKey,
-      );
-      const ownerPresentation = ownerContext?.reviewer?.presentationContext;
-      expect(ownerPresentation?.revision === 2 && ownerPresentation.restatementRequests).toEqual([]);
-
-      expect(escalationRequests(services, freezeKey)).toMatchObject([
+      expect(slotRequests(services, 'owner')).toBeUndefined();
+      expect(slotRequests(services, 'escalation')).toMatchObject([
         { reviewer: FINDING_ESCALATION_REVIEWER_ROUTING_KEY, presentationOrdinal: 1 },
       ]);
     } finally {
@@ -740,96 +908,79 @@ describe('FC escalation reviewer — presentation freeze', () => {
   it('keeps the last presentation on the owner when the owner profile declares no escalate', () => {
     const { services, cleanup } = makeServices(1, { escalates: false });
     try {
-      const freezeKey = 'freeze-no-escalate';
-
-      const ownerContext = services.optionsBuilder.buildFindingContractInstructionContext(
-        reviewerStep,
-        true,
-        reviewScopeSnapshotId,
-        freezeKey,
-      );
-      const ownerPresentation = ownerContext?.reviewer?.presentationContext;
-      expect(ownerPresentation?.revision === 2 && ownerPresentation.restatementRequests).toMatchObject([
+      expect(slotRequests(services, 'owner')).toMatchObject([
         { reviewer: reviewerStep.name, presentationOrdinal: 1 },
       ]);
-
-      expect(escalationRequests(services, freezeKey)).toBeUndefined();
+      expect(slotRequests(services, 'escalation')).toBeUndefined();
     } finally {
       cleanup();
     }
   });
 
-  it('re-issues the same escalation request after a round whose publication never landed', () => {
-    const { services, reportDir, anomalyId, cleanup } = makeServices(2);
+  it('marks the owner call as a full re-review while a non-intake anomaly is outstanding', () => {
+    const { services, cleanup } = makeServices(2, { nonIntakeAnomaly: true });
     try {
-      // owner が limit-1 回目を提示し、その publication だけが成立している状態。
-      persistOwnerPresentation({ reportDir, anomalyId, presentationOrdinal: 1 });
+      const contexts = services.optionsBuilder.buildFindingRestatementSlotContexts({
+        ownerReviewerSteps: [reviewerStep as AgentWorkflowStep],
+        reviewScopeSnapshotId,
+      });
+      const ownerContexts = contexts.get(reviewerStep.name);
 
-      const escalationRequestsForRound = (freezeKey: string) => {
-        services.optionsBuilder.buildFindingContractInstructionContext(
-          reviewerStep,
-          true,
-          reviewScopeSnapshotId,
-          freezeKey,
-        );
-        return escalationRequests(services, freezeKey);
-      };
-
-      const firstRound = escalationRequestsForRound('freeze-escalation-round-1');
-      expect(firstRound).toMatchObject([
-        { reviewer: FINDING_ESCALATION_REVIEWER_ROUTING_KEY, presentationOrdinal: 2 },
+      // 非 intake anomaly の決着条件は「そのレビュアーの後続完全レビュー成立」。
+      // 言い直しだけの publication で取り下げると決着の前提が偽になる。
+      expect(ownerContexts?.ownerNeedsFullReview).toBe(true);
+      // 兼務: 言い直し request も同じ owner 呼び出しへ載る。
+      const presentation = ownerContexts?.owner?.reviewer?.presentationContext;
+      expect(presentation?.revision === 2 && presentation.restatementRequests).toMatchObject([
+        { reviewer: reviewerStep.name, presentationOrdinal: 1 },
       ]);
-
-      // このラウンドは escalation publication を成立させずに失敗した想定。
-      // report dir には owner の publication しか無いままにする。
-      expect(listFindingReviewPublications(reportDir)).toHaveLength(1);
-
-      // 次ラウンドは同じ ordinal・同じ request ID の escalation request を再発行する。
-      const secondRound = escalationRequestsForRound('freeze-escalation-round-2');
-      expect(secondRound).toEqual(firstRound);
     } finally {
       cleanup();
     }
   });
 
-  it('stops issuing escalation requests once the escalation publication lands', () => {
-    const { services, reportDir, anomalyId, cleanup } = makeServices(2);
+  it('still builds an owner call for a non-intake anomaly with no restatement request left', () => {
+    const { services, reportDir, anomalyId, cleanup } = makeServices(1, { nonIntakeAnomaly: true });
     try {
-      persistOwnerPresentation({ reportDir, anomalyId, presentationOrdinal: 1 });
-      persistEscalationPresentation({ reportDir, anomalyId, presentationOrdinal: 2 });
-
-      services.optionsBuilder.buildFindingContractInstructionContext(
-        reviewerStep,
-        true,
+      // 言い直し予算を使い切らせる（intake 側の request は0件になる）。
+      persistPresentation({
+        reportDir,
+        anomalyId,
+        presentationOrdinal: 1,
+        reviewerStepName: FINDING_ESCALATION_REVIEWER_ROUTING_KEY,
+        reportName: findingRestatementSlotReportName({
+          ownerStepName: reviewerStep.name,
+          phase: 'escalation',
+          presentationPass: 1,
+        }),
+      });
+      const ownerContexts = services.optionsBuilder.buildFindingRestatementSlotContexts({
+        ownerReviewerSteps: [reviewerStep as AgentWorkflowStep],
         reviewScopeSnapshotId,
-        'freeze-after-escalation',
-      );
+      }).get(reviewerStep.name);
 
-      expect(escalationRequests(services, 'freeze-after-escalation')).toBeUndefined();
+      expect(ownerContexts?.ownerNeedsFullReview).toBe(true);
+      const presentation = ownerContexts?.owner?.reviewer?.presentationContext;
+      expect(presentation?.revision === 2 && presentation.restatementRequests).toEqual([]);
     } finally {
       cleanup();
     }
   });
 
-  it('refuses to build an escalation batch from anything but the frozen input of the same round', () => {
-    const { services, cleanup } = makeServices(1);
+  it('re-issues the same request when a pass produced no publication', () => {
+    const { services, cleanup } = makeServices(2);
     try {
-      services.optionsBuilder.buildFindingContractInstructionContext(
-        reviewerStep,
-        true,
-        reviewScopeSnapshotId,
-        'freeze-current-round',
-      );
-
-      expect(() => escalationRequests(services, 'freeze-other-round'))
-        .toThrow(/frozen reviewer input of the same review round/);
+      const first = slotRequests(services, 'owner');
+      expect(first).toMatchObject([{ presentationOrdinal: 1 }]);
+      // publication が成立しなかったパスの後も、同じ ordinal・同じ request ID。
+      expect(slotRequests(services, 'owner')).toEqual(first);
     } finally {
       cleanup();
     }
   });
 });
 
-describe('FC escalation reviewer — owner 別 batch の枠按分と strategy 射影', () => {
+describe('FC restatement slot — owner 別 batch の枠按分', () => {
   const reviewScopeSnapshotId = 'f'.repeat(64);
 
   function ownerStepFor(name: string): AgentWorkflowStep {
@@ -844,12 +995,16 @@ describe('FC escalation reviewer — owner 別 batch の枠按分と strategy �
   }
 
   /** owner ごとに `anomaliesPerOwner` 件の未提示 intake anomaly（limit 1）を積む。 */
-  function makeServices(ownerNames: readonly string[], anomaliesPerOwner: number) {
+  function makeServices(
+    ownerNames: readonly string[],
+    anomaliesPerOwner: number,
+    options: { blankClaimAtom?: boolean } = {},
+  ) {
     const cwd = process.cwd();
-    const runPaths = buildRunPaths(cwd, 'escalation-allocation');
-    const reportDir = mkdtempSync(join(tmpdir(), 'takt-fc-escalation-allocation-'));
+    const runPaths = buildRunPaths(cwd, 'restatement-slot-allocation');
+    const reportDir = mkdtempSync(join(tmpdir(), 'takt-fc-restatement-allocation-'));
     const observedAt = {
-      runId: 'run-escalation-allocation',
+      runId: 'run-restatement-allocation',
       stepName: ownerNames[0]!,
       timestamp: '2026-08-07T00:00:00.000Z',
     };
@@ -866,7 +1021,9 @@ describe('FC escalation reviewer — owner 別 batch の枠按分と strategy �
         relation: 'new',
         targetFindingId: null,
         target: { kind: 'code', paths: [`src/${owner}-${index}.ts`] },
-        rawExcerpt: `Claim ${owner} ${index} must be restated.`,
+        rawExcerpt: options.blankClaimAtom === true
+          ? '   '
+          : `Claim ${owner} ${index} must be restated.`,
         evidence: [],
       }))
     ));
@@ -972,107 +1129,92 @@ describe('FC escalation reviewer — owner 別 batch の枠按分と strategy �
     };
   }
 
-  it('owner 別 batch は 1 step あたりの raw finding 上限を共有し、按分は先着順で決定的', () => {
-    const ownerNames = ['review-a', 'review-b', 'review-c'];
+  it('1呼び出しに載せる言い直し要求は10件まで（残りは同じラウンドの次のパスへ）', () => {
+    const ownerNames = ['review-a', 'review-b'];
     const { services, cleanup } = makeServices(ownerNames, 64);
     try {
-      const freezeKey = 'freeze-allocation';
-      for (const name of ownerNames) {
-        services.optionsBuilder.buildFindingContractInstructionContext(
-          ownerStepFor(name) as unknown as WorkflowStep,
-          true,
-          reviewScopeSnapshotId,
-          freezeKey,
-        );
-      }
-
-      const contexts = services.optionsBuilder.buildFindingEscalationInstructionContexts({
+      const contexts = services.optionsBuilder.buildFindingRestatementSlotContexts({
         ownerReviewerSteps: ownerNames.map(ownerStepFor),
         reviewScopeSnapshotId,
-        findingContractFreezeKey: freezeKey,
       });
 
-      const requestCountFor = (owner: string) => {
-        const presentation = contexts.get(owner)?.reviewer?.presentationContext;
-        return presentation?.revision === 2 ? presentation.restatementRequests.length : 0;
+      const requestsFor = (owner: string) => {
+        const presentation = contexts.get(owner)?.escalation?.reviewer?.presentationContext;
+        return presentation?.revision === 2 ? presentation.restatementRequests : [];
       };
-      // reviewer あたり 64 件・step 合計 128 件が上限。3人目は残り枠 0 なので
-      // batch が作られない（context ごと存在しない）。
-      expect([
-        requestCountFor('review-a'),
-        requestCountFor('review-b'),
-        requestCountFor('review-c'),
-      ]).toEqual([64, 64, 0]);
-      expect(contexts.has('review-c')).toBe(false);
+      // 投与量効果の実測（10件超で回答率が半減）に合わせた上限。
+      expect(requestsFor('review-a')).toHaveLength(10);
+      expect(requestsFor('review-b')).toHaveLength(10);
 
       // 各 batch は自分の owner の anomaly だけを載せる。
-      for (const owner of ['review-a', 'review-b']) {
-        const presentation = contexts.get(owner)!.reviewer!.presentationContext!;
-        expect(presentation.revision).toBe(2);
-        if (presentation.revision !== 2) {
-          throw new Error('expected a v2 presentation context');
-        }
-        expect(presentation.restatementRequests.every(
+      for (const owner of ownerNames) {
+        const requests = requestsFor(owner);
+        expect(requests.every(
           (request) => request.reviewer === FINDING_ESCALATION_REVIEWER_ROUTING_KEY,
         )).toBe(true);
-        expect(new Set(presentation.restatementRequests.map(({ anomalyId }) => anomalyId)).size)
-          .toBe(64);
+        expect(new Set(requests.map(({ anomalyId }) => anomalyId)).size).toBe(requests.length);
       }
     } finally {
       cleanup();
     }
   });
 
-  it('同じラウンドで同じ reviewer を組み直しても提示 batch を作り直さない', () => {
-    const { services, cleanup } = makeServices(['review-a'], 1);
+  it('照合できる claim 本文を選べない観測には言い直し要求を作らない', () => {
+    // description も rawExcerpt も claimedExcerpt も持たない観測。request の文面
+    // （title へのフォールバック）と照合ゲートが要求する文字列が乖離するため、
+    // どう答えても受理されない request になってしまう。
+    const { services, cleanup } = makeServices(['review-a'], 1, { blankClaimAtom: true });
     try {
-      const freezeKey = 'freeze-projection';
-      const step = ownerStepFor('review-a') as unknown as WorkflowStep;
-      const phase1 = services.optionsBuilder.buildFindingContractInstructionContext(
-        step,
-        true,
+      const contexts = services.optionsBuilder.buildFindingRestatementSlotContexts({
+        ownerReviewerSteps: [ownerStepFor('review-a')],
         reviewScopeSnapshotId,
-        freezeKey,
-      );
-      // Phase 2 が同じ freeze キーで組み直しても凍結値をそのまま返す。
-      const phase2 = services.optionsBuilder.buildFindingContractInstructionContext(
-        step,
-        true,
-        reviewScopeSnapshotId,
-        freezeKey,
-      );
+      });
 
-      // 提示 batch を作り直すと同じラウンドで二重計上になる。
-      expect(phase2?.reviewer?.presentationContext)
-        .toBe(phase1?.reviewer?.presentationContext);
-      expect(phase2?.reviewer?.reviewScopeSnapshotId)
-        .toBe(phase1?.reviewer?.reviewScopeSnapshotId);
+      expect(contexts.has('review-a')).toBe(false);
     } finally {
       cleanup();
     }
   });
 });
 
-describe('FC escalation reviewer — direct provider call wiring', () => {
-  const makeEscalationContext = (anomalyId: string) => ({
-    ledgerSummary: { findings: [] },
-    reportLedgerSummary: { findings: [] },
-    hasOpenFindings: false,
-    hasWaivedFindings: false,
-    hasDismissedFindings: false,
-    reviewer: {
+describe('FC restatement slot — direct provider call wiring', () => {
+  // 実際の owner context は必ず request を載せている（載っていない context は
+  // 呼び出し自体が発行されない）。空 request の fixture を使うと「request が
+  // 無ければ呼ばない」という実装契約を素通りする。
+  const makeSlotContext = (anomalyId: string) => {
+    const requestWithoutId = {
+      anomalyId,
+      reviewer: 'architecture-review',
+      presentationOrdinal: 1,
       reviewScopeSnapshotId: '5'.repeat(64),
-      presentationContext: {
-        revision: 2 as const,
+      sourceExcerptDigest: '7'.repeat(64),
+      claimedExcerpt: 'A bounded reviewer claim.',
+      targetPaths: [] as const,
+      missingRequirements: [] as const,
+      expectedRelation: 'new' as const,
+      expectedTargetFindingId: null,
+      expectedTargetPreconditionClass: 'absent' as const,
+    };
+    return {
+      ledgerSummary: { findings: [] },
+      reportLedgerSummary: { findings: [] },
+      hasOpenFindings: false,
+      hasWaivedFindings: false,
+      hasDismissedFindings: false,
+      reviewer: {
         reviewScopeSnapshotId: '5'.repeat(64),
-        restatementRequests: [],
-        presentedReviewerAnomalyIds: [anomalyId],
-        contextDigest: '6'.repeat(64),
+        presentationContext: createFindingReviewPresentationContextV2({
+          reviewScopeSnapshotId: '5'.repeat(64),
+          restatementRequests: [{
+            ...requestWithoutId,
+            restatementRequestId: computeRestatementRequestId(requestWithoutId),
+          }],
+        }),
       },
-    },
-  });
+    };
+  };
 
-  const escalationContext = makeEscalationContext('RA-1');
+  const slotContext = makeSlotContext('RA-1');
 
   const makeOwnerStep = (name: string) => ({
     kind: 'agent' as const,
@@ -1084,13 +1226,22 @@ describe('FC escalation reviewer — direct provider call wiring', () => {
 
   const ownerReviewerStep = makeOwnerStep('architecture-review');
 
+  type OwnerContexts = {
+    owner?: unknown;
+    ownerNeedsFullReview: boolean;
+    escalation?: unknown;
+  };
+
   function createRunnerInput(overrides: {
     resumeResult?: unknown;
+    /** report 名ごとの保存済み publication（中断した run の再開を模す）。 */
+    resumeByReportName?: Record<string, unknown>;
     prepareResult?: unknown;
-    withoutEscalationContext?: boolean;
     ownerReviewerSteps?: readonly AgentWorkflowStep[];
-    escalationContexts?: ReadonlyMap<string, unknown>;
+    /** パスごとの context。省略時は「毎パス escalation 枠あり」。 */
+    contextsPerPass?: readonly ReadonlyMap<string, OwnerContexts>[];
     escalatingOwners?: readonly string[];
+    presentationLimit?: number;
   } = {}) {
     const ownerReviewerSteps = overrides.ownerReviewerSteps ?? [ownerReviewerStep];
     const escalatingOwners = new Set(
@@ -1099,13 +1250,22 @@ describe('FC escalation reviewer — direct provider call wiring', () => {
     const recordSynthesizedAgentUsage = vi.fn();
     const prepareFindingReviewPublication = vi.fn().mockImplementation((call: { step: { outputContracts?: { name: string }[] } }) => Promise.resolve(
       overrides.prepareResult ?? {
-        publication: { publicationId: `pub-${call.step.outputContracts?.[0]?.name ?? 'escalation'}` },
+        publication: { publicationId: `pub-${call.step.outputContracts?.[0]?.name ?? 'slot'}` },
       },
     ));
     const stepExecutor = {
       recordSynthesizedAgentUsage,
-      resumeFindingReviewPublication: vi.fn().mockResolvedValue(overrides.resumeResult),
-      buildInstruction: vi.fn().mockReturnValue('escalation instruction'),
+      resumeFindingReviewPublication: vi.fn().mockImplementation(
+        (call: { step: { outputContracts?: { name: string }[] } }) => {
+          const reportName = call.step.outputContracts?.[0]?.name ?? '';
+          return Promise.resolve(
+            overrides.resumeByReportName === undefined
+              ? overrides.resumeResult
+              : overrides.resumeByReportName[reportName],
+          );
+        },
+      ),
+      buildInstruction: vi.fn().mockReturnValue('restatement instruction'),
       buildPhase1Instruction: vi.fn((instruction: string) => instruction),
       prepareFindingReviewPublication,
     };
@@ -1122,22 +1282,36 @@ describe('FC escalation reviewer — direct provider call wiring', () => {
           providerProfiles: { mock: { defaultPermissionMode: 'edit' } },
         },
       }),
-      resolveStepProviderModel: vi.fn((step: { name: string }) => (
-        escalatingOwners.has(step.name)
-          ? { provider: 'mock', model: 'weak-model', escalation: ESCALATION_TARGET }
-          : { provider: 'mock', model: 'strong-model' }
-      )),
+      // 合成ステップは provider/model を直接指定して組まれるので、解決結果は
+      // その値になる。owner ステップ（未指定）は profile 解決を模す。
+      resolveStepProviderModel: vi.fn((step: { name: string; model?: string }) => ({
+        provider: 'mock',
+        model: step.model ?? 'weak-model',
+        ...(escalatingOwners.has(step.name) ? { escalation: ESCALATION_TARGET } : {}),
+      })),
     };
-    const escalationContexts = overrides.escalationContexts
-      ?? new Map(
-        overrides.withoutEscalationContext === true
-          ? []
-          : ownerReviewerSteps.map((step) => [step.name, escalationContext] as const),
-      );
+    const defaultContexts: ReadonlyMap<string, OwnerContexts> = new Map(
+      ownerReviewerSteps.map((step) => [
+        step.name,
+        { escalation: slotContext, ownerNeedsFullReview: false },
+      ] as const),
+    );
+    let pass = 0;
+    const buildSlotContexts = vi.fn(() => {
+      const perPass = overrides.contextsPerPass;
+      const contexts = perPass === undefined
+        ? defaultContexts
+        : perPass[pass] ?? new Map<string, OwnerContexts>();
+      pass += 1;
+      return contexts;
+    });
+    const ingest = vi.fn().mockResolvedValue(undefined);
     return {
       input: {
-        escalationContexts,
         ownerReviewerSteps,
+        buildSlotContexts,
+        ingest,
+        reviewScopeSnapshotId: '5'.repeat(64),
         parentStepName: 'reviewers',
         stepIteration: 1,
         state: { iteration: 1 },
@@ -1146,9 +1320,12 @@ describe('FC escalation reviewer — direct provider call wiring', () => {
         optionsBuilder,
         stepExecutor,
         updatePersonaSession: vi.fn(),
-      } as unknown as Parameters<typeof runFindingEscalationReviewer>[0],
+        presentationLimit: overrides.presentationLimit ?? 1,
+      } as unknown as Parameters<typeof runFindingRestatementSlot>[0],
       stepExecutor,
       optionsBuilder,
+      buildSlotContexts,
+      ingest,
     };
   }
 
@@ -1156,25 +1333,28 @@ describe('FC escalation reviewer — direct provider call wiring', () => {
     executeAgentMock.mockReset();
   });
 
-  it('publishes through the ordinary intake pipeline and records synthesized usage', async () => {
-    const doneResponse: AgentResponse = {
-      persona: 'architecture-review-persona',
-      status: 'done',
-      content: '{}',
-      sessionId: 'session-escalation',
-      timestamp: new Date(),
-    };
-    executeAgentMock.mockResolvedValue(doneResponse);
-    const { input, stepExecutor } = createRunnerInput();
+  const doneResponse = (persona: string): AgentResponse => ({
+    persona,
+    status: 'done',
+    content: '{}',
+    timestamp: new Date(),
+  });
 
-    const outcome = await runFindingEscalationReviewer(input);
+  it('publishes through the ordinary intake pipeline, ingests the pass and records synthesized usage', async () => {
+    executeAgentMock.mockResolvedValue({
+      ...doneResponse('architecture-review-persona'),
+      sessionId: 'session-slot',
+    });
+    const { input, stepExecutor, ingest } = createRunnerInput();
 
-    expect(outcome).toMatchObject({ kind: 'published' });
-    const results = outcome!.kind === 'published' ? outcome.results : [];
-    expect(results).toHaveLength(1);
-    expect(results[0]!.step.name).toBe(FINDING_ESCALATION_REVIEWER_ROUTING_KEY);
-    // 格上げ枠も1本道: markdown レポート + 正規化係。構造化出力は載らない。
-    expect(results[0]!.step.structuredOutput).toBeUndefined();
+    expect(await runFindingRestatementSlot(input)).toBeUndefined();
+
+    expect(ingest).toHaveBeenCalledTimes(1);
+    const ingested = ingest.mock.calls[0]![0] as { subStep: AgentWorkflowStep }[];
+    expect(ingested).toHaveLength(1);
+    expect(ingested[0]!.subStep.name).toBe(FINDING_ESCALATION_REVIEWER_ROUTING_KEY);
+    // slot も1本道: markdown レポート + 正規化係。構造化出力は載らない。
+    expect(ingested[0]!.subStep.structuredOutput).toBeUndefined();
     // 実際に走った attempt の provider/model をそのまま計上する。
     expect(stepExecutor.recordSynthesizedAgentUsage).toHaveBeenCalledWith(
       expect.objectContaining({ name: FINDING_ESCALATION_REVIEWER_ROUTING_KEY }),
@@ -1186,25 +1366,177 @@ describe('FC escalation reviewer — direct provider call wiring', () => {
       expect.objectContaining({
         parentStepName: 'reviewers',
         stepIteration: 1,
-        presentationContext: escalationContext.reviewer.presentationContext,
+        presentationContext: slotContext.reviewer.presentationContext,
         // Phase 2 が step 名から context を組み直すと restatement-only 契約が
-        // 消えるため、Phase 1 と同じ context を明示的に渡す。
-        findingContractContext: escalationContext,
+        // 消えるため、Phase 1 と同じ context を明示的に渡す。mode も同じ値でなければ
+        // Phase 2 だけ通常レビュー契約に化ける。
+        findingContractContext: expect.objectContaining({
+          reviewer: expect.objectContaining({
+            presentationContext: slotContext.reviewer.presentationContext,
+            mode: 'restatement-only',
+          }),
+        }),
       }),
     );
   });
 
-  it('issues one call per owner reviewer and keeps each owner persona and report separate', async () => {
-    executeAgentMock.mockResolvedValue({
-      persona: 'reviewer',
-      status: 'done',
-      content: '{}',
-      timestamp: new Date(),
-    } satisfies AgentResponse);
-    const owners = [makeOwnerStep('architecture-review'), makeOwnerStep('security-review')];
-    const { input, stepExecutor } = createRunnerInput({ ownerReviewerSteps: owners });
+  it('stops after one pass when the restatement resolved the anomaly', async () => {
+    executeAgentMock.mockResolvedValue(doneResponse('architecture-review-persona'));
+    const { input, ingest, buildSlotContexts } = createRunnerInput({
+      presentationLimit: 4,
+      contextsPerPass: [
+        new Map([[ownerReviewerStep.name, { owner: slotContext, ownerNeedsFullReview: false }]]),
+        new Map(),
+      ],
+    });
 
-    const outcome = await runFindingEscalationReviewer(input);
+    expect(await runFindingRestatementSlot(input)).toBeUndefined();
+
+    expect(executeAgentMock).toHaveBeenCalledTimes(1);
+    expect(ingest).toHaveBeenCalledTimes(1);
+    // 2パス目は提示対象が無く、stored publication も無いので終了する。
+    expect(buildSlotContexts).toHaveBeenCalledTimes(2);
+  });
+
+  it('iterates inline until the presentation budget and hands the last slot to the escalation target', async () => {
+    executeAgentMock.mockResolvedValue(doneResponse('architecture-review-persona'));
+    const { input, ingest, stepExecutor } = createRunnerInput({
+      presentationLimit: 3,
+      contextsPerPass: [
+        new Map([[ownerReviewerStep.name, { owner: slotContext, ownerNeedsFullReview: false }]]),
+        new Map([[ownerReviewerStep.name, { owner: slotContext, ownerNeedsFullReview: false }]]),
+        new Map([[ownerReviewerStep.name, { escalation: slotContext, ownerNeedsFullReview: false }]]),
+      ],
+    });
+
+    expect(await runFindingRestatementSlot(input)).toBeUndefined();
+
+    expect(executeAgentMock).toHaveBeenCalledTimes(3);
+    expect(ingest).toHaveBeenCalledTimes(3);
+    const preparedSteps = stepExecutor.prepareFindingReviewPublication.mock.calls
+      .map((call) => (call[0] as { step: AgentWorkflowStep }).step);
+    expect(preparedSteps.map((step) => step.name)).toEqual([
+      ownerReviewerStep.name,
+      ownerReviewerStep.name,
+      FINDING_ESCALATION_REVIEWER_ROUTING_KEY,
+    ]);
+    // 反復ごとに別の publication identity になる（同じ report 名だと計上されない）。
+    expect(preparedSteps.map((step) => step.outputContracts?.[0]?.name)).toEqual([
+      'followup-architecture-review-1',
+      'followup-architecture-review-2',
+      'escalation-reviewer-architecture-review-3',
+    ]);
+    // 最終枠だけ格上げ先モデルへ回る。
+    expect(preparedSteps.map((step) => step.model)).toEqual([
+      'weak-model',
+      'weak-model',
+      'strong-model',
+    ]);
+  });
+
+  it('issues a full re-review under the owner name so the withdrawal condition can be met', async () => {
+    executeAgentMock.mockResolvedValue(doneResponse('architecture-review-persona'));
+    const { input, stepExecutor, ingest } = createRunnerInput({
+      presentationLimit: 3,
+      contextsPerPass: [
+        new Map([[ownerReviewerStep.name, { owner: slotContext, ownerNeedsFullReview: true }]]),
+        new Map(),
+      ],
+    });
+
+    expect(await runFindingRestatementSlot(input)).toBeUndefined();
+
+    const preparedStep = (stepExecutor.prepareFindingReviewPublication.mock.calls[0]![0] as {
+      step: AgentWorkflowStep;
+    }).step;
+    // 取り下げ根拠は publication の reviewerStepName で照合されるため、owner 名で
+    // 公開されなければならない。
+    expect(preparedStep.name).toBe(ownerReviewerStep.name);
+    // 完全な再レビューなので owner のレビュー手順をそのまま使う。
+    expect(preparedStep.instruction).toBe(ownerReviewerStep.instruction);
+    expect(ingest).toHaveBeenCalledTimes(1);
+    // withdrawal の根拠になるのはこの publication だけ。
+    expect((ingest.mock.calls[0]![0] as { establishesCompleteReview?: boolean }[])[0])
+      .toMatchObject({ establishesCompleteReview: true });
+  });
+
+  it('issues the owner full re-review at most once per round', async () => {
+    executeAgentMock.mockResolvedValue(doneResponse('architecture-review-persona'));
+    const fullReviewContexts = new Map([
+      [ownerReviewerStep.name, { owner: slotContext, ownerNeedsFullReview: true }],
+    ]);
+    const { input, stepExecutor, ingest } = createRunnerInput({
+      presentationLimit: 3,
+      // 非 intake anomaly が決着しないまま毎パス残っている状況。
+      contextsPerPass: [fullReviewContexts, fullReviewContexts, fullReviewContexts],
+    });
+
+    expect(await runFindingRestatementSlot(input)).toBeUndefined();
+
+    const prepared = stepExecutor.prepareFindingReviewPublication.mock.calls
+      .map((call) => call[0] as {
+        step: AgentWorkflowStep;
+        findingContractContext: { reviewer?: { mode?: string } };
+      });
+    // フルレビューは1パス目だけ。2パス目以降も言い直しは出るが、
+    // restatement-only へ格下げされる。
+    expect(prepared).toHaveLength(3);
+    expect(prepared.map((call) => call.findingContractContext.reviewer?.mode)).toEqual([
+      'review',
+      'restatement-only',
+      'restatement-only',
+    ]);
+    expect(prepared.map((call) => call.step.instruction)).toEqual([
+      ownerReviewerStep.instruction,
+      'Restate the requested claims for the owning reviewer.',
+      'Restate the requested claims for the owning reviewer.',
+    ]);
+    // 取り下げの根拠になるのはフルレビューの publication だけ。言い直しだけの
+    // publication で withdrawal が走ると、未検証のまま anomaly が決着する。
+    const ingested = ingest.mock.calls.map(
+      (call) => (call[0] as { establishesCompleteReview?: boolean }[])[0]!.establishesCompleteReview,
+    );
+    expect(ingested).toEqual([true, false, false]);
+  });
+
+  it('keeps the restatement-only instruction when no non-intake anomaly is outstanding', async () => {
+    executeAgentMock.mockResolvedValue(doneResponse('architecture-review-persona'));
+    const { input, stepExecutor, ingest } = createRunnerInput({
+      presentationLimit: 2,
+      contextsPerPass: [
+        new Map([[ownerReviewerStep.name, { owner: slotContext, ownerNeedsFullReview: false }]]),
+        new Map(),
+      ],
+    });
+
+    await runFindingRestatementSlot(input);
+
+    const preparedStep = (stepExecutor.prepareFindingReviewPublication.mock.calls[0]![0] as {
+      step: AgentWorkflowStep;
+    }).step;
+    expect(preparedStep.name).toBe(ownerReviewerStep.name);
+    expect(preparedStep.instruction).not.toBe(ownerReviewerStep.instruction);
+    // 言い直しだけの publication は「完全なレビューが成立した」証跡にならない。
+    expect((ingest.mock.calls[0]![0] as { establishesCompleteReview?: boolean }[])[0])
+      .toMatchObject({ establishesCompleteReview: false });
+  });
+
+  it('stops at the presentation budget even when requests keep coming', async () => {
+    executeAgentMock.mockResolvedValue(doneResponse('architecture-review-persona'));
+    const { input, ingest } = createRunnerInput({ presentationLimit: 2 });
+
+    expect(await runFindingRestatementSlot(input)).toBeUndefined();
+
+    expect(executeAgentMock).toHaveBeenCalledTimes(2);
+    expect(ingest).toHaveBeenCalledTimes(2);
+  });
+
+  it('issues one call per owner reviewer and keeps each owner persona and report separate', async () => {
+    executeAgentMock.mockResolvedValue(doneResponse('reviewer'));
+    const owners = [makeOwnerStep('architecture-review'), makeOwnerStep('security-review')];
+    const { input, stepExecutor, ingest } = createRunnerInput({ ownerReviewerSteps: owners });
+
+    await runFindingRestatementSlot(input);
 
     expect(executeAgentMock).toHaveBeenCalledTimes(2);
     expect(executeAgentMock.mock.calls.map((call) => call[0])).toEqual([
@@ -1214,26 +1546,23 @@ describe('FC escalation reviewer — direct provider call wiring', () => {
     const preparedSteps = stepExecutor.prepareFindingReviewPublication.mock.calls
       .map((call) => (call[0] as { step: AgentWorkflowStep }).step);
     expect(preparedSteps.map((step) => step.outputContracts?.[0]?.name)).toEqual([
-      findingEscalationReviewerReportName('architecture-review'),
-      findingEscalationReviewerReportName('security-review'),
+      'escalation-reviewer-architecture-review-1',
+      'escalation-reviewer-security-review-1',
     ]);
     expect(preparedSteps.map((step) => step.outputContracts?.[0]?.format)).toEqual([
       'architecture-review report format.',
       'security-review report format.',
     ]);
-    expect(outcome!.kind === 'published' && outcome.results).toHaveLength(2);
+    // 1パスの publication はまとめて1回の manager 取り込みへ渡す。
+    expect(ingest).toHaveBeenCalledTimes(1);
+    expect(ingest.mock.calls[0]![0]).toHaveLength(2);
   });
 
-  it('drops already-published owner results when a later owner escalation goes terminal', async () => {
+  it('drops already-published results of the same pass when a later owner goes terminal', async () => {
     const owners = [makeOwnerStep('architecture-review'), makeOwnerStep('security-review')];
-    const { input, stepExecutor } = createRunnerInput({ ownerReviewerSteps: owners });
+    const { input, stepExecutor, ingest } = createRunnerInput({ ownerReviewerSteps: owners });
     executeAgentMock
-      .mockResolvedValueOnce({
-        persona: 'architecture-review-persona',
-        status: 'done',
-        content: '{}',
-        timestamp: new Date(),
-      } satisfies AgentResponse)
+      .mockResolvedValueOnce(doneResponse('architecture-review-persona'))
       .mockResolvedValueOnce({
         persona: 'security-review-persona',
         status: 'error',
@@ -1242,45 +1571,42 @@ describe('FC escalation reviewer — direct provider call wiring', () => {
         timestamp: new Date(),
       } satisfies AgentResponse);
 
-    const outcome = await runFindingEscalationReviewer(input);
+    const outcome = await runFindingRestatementSlot(input);
 
     // 親ステップが terminal になる = manager の取り込み自体が走らないので、
-    // 先行 owner の publication を published として返さない。次ラウンドは
-    // stored publication の resume で拾い直す。
+    // 先行 owner の publication も渡さない。次の機会に stored publication の
+    // resume で拾い直す。
     expect(outcome).toMatchObject({ kind: 'terminal', response: { status: 'error' } });
     expect(stepExecutor.prepareFindingReviewPublication).toHaveBeenCalledTimes(1);
+    expect(ingest).not.toHaveBeenCalled();
   });
 
-  it('skips owners whose profile declares no escalate', async () => {
+  it('skips the escalation slot for owners whose profile declares no escalate', async () => {
     const owners = [makeOwnerStep('architecture-review'), makeOwnerStep('security-review')];
     const { input, stepExecutor } = createRunnerInput({
       ownerReviewerSteps: owners,
       escalatingOwners: ['security-review'],
     });
-    executeAgentMock.mockResolvedValue({
-      persona: 'reviewer',
-      status: 'done',
-      content: '{}',
-      timestamp: new Date(),
-    } satisfies AgentResponse);
+    executeAgentMock.mockResolvedValue(doneResponse('reviewer'));
 
-    await runFindingEscalationReviewer(input);
+    await runFindingRestatementSlot(input);
 
     expect(executeAgentMock).toHaveBeenCalledTimes(1);
     expect(executeAgentMock.mock.calls[0]![0]).toBe('security-review-persona');
-    expect(stepExecutor.resumeFindingReviewPublication).toHaveBeenCalledTimes(1);
+    // 格上げ先を持たない owner は escalation 枠の resume 探索すら行わない。
+    const escalationProbes = stepExecutor.resumeFindingReviewPublication.mock.calls
+      .map((call) => (call[0] as { step: AgentWorkflowStep }).step)
+      .filter((step) => step.name === FINDING_ESCALATION_REVIEWER_ROUTING_KEY);
+    expect(escalationProbes.map((step) => step.outputContracts?.[0]?.name)).toEqual([
+      'escalation-reviewer-security-review-1',
+    ]);
   });
 
   it('runs phase 1 with read-only tools so it can read the code it must quote', async () => {
-    executeAgentMock.mockResolvedValue({
-      persona: 'architecture-review-persona',
-      status: 'done',
-      content: '{}',
-      timestamp: new Date(),
-    } satisfies AgentResponse);
+    executeAgentMock.mockResolvedValue(doneResponse('architecture-review-persona'));
     const { input, optionsBuilder } = createRunnerInput();
 
-    await runFindingEscalationReviewer(input);
+    await runFindingRestatementSlot(input);
 
     expect(optionsBuilder.buildAgentOptions).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1310,32 +1636,90 @@ describe('FC escalation reviewer — direct provider call wiring', () => {
     } satisfies AgentResponse);
     const { input, stepExecutor } = createRunnerInput();
 
-    const outcome = await runFindingEscalationReviewer(input);
+    const outcome = await runFindingRestatementSlot(input);
 
     expect(outcome).toMatchObject({ kind: 'terminal', response: { status: 'error' } });
     expect(stepExecutor.prepareFindingReviewPublication).not.toHaveBeenCalled();
   });
 
-  it('resumes a stored escalation publication without issuing a provider call', async () => {
-    const { input, stepExecutor } = createRunnerInput({
-      resumeResult: { publication: { publicationId: 'pub-resumed' }, response: { status: 'done' } },
+  it('collects every stored slot publication across passes without issuing a provider call', async () => {
+    // 中断した run: パス1と2の publication は永続化済みで、まだ manager へ
+    // 渡っていない。パス1だけ回収して止めると、パス2の証拠が恒久的に孤児化する
+    // （提示予算は消費済みなのに台帳へ届かない）。
+    const { input, stepExecutor, ingest } = createRunnerInput({
+      presentationLimit: 4,
+      contextsPerPass: [new Map(), new Map(), new Map(), new Map()],
+      resumeByReportName: {
+        'followup-architecture-review-1': {
+          publication: { publicationId: 'pub-resumed-1' },
+          response: { status: 'done' },
+        },
+        'followup-architecture-review-2': {
+          publication: { publicationId: 'pub-resumed-2' },
+          response: { status: 'done' },
+        },
+      },
     });
 
-    const outcome = await runFindingEscalationReviewer(input);
+    expect(await runFindingRestatementSlot(input)).toBeUndefined();
 
-    expect(outcome!.kind === 'published' && outcome.results[0]!.publication)
-      .toMatchObject({ publicationId: 'pub-resumed' });
+    expect(ingest).toHaveBeenCalledTimes(2);
+    expect(ingest.mock.calls.map(
+      (call) => (call[0] as { publication: { publicationId: string } }[])[0]!.publication.publicationId,
+    )).toEqual(['pub-resumed-1', 'pub-resumed-2']);
     expect(executeAgentMock).not.toHaveBeenCalled();
     expect(stepExecutor.prepareFindingReviewPublication).not.toHaveBeenCalled();
   });
 
-  it('regenerates the escalated review when the stored report is rejected by the normalizer', async () => {
+  it('adopts the persisted call mode when resuming, not the mode of the resuming pass', async () => {
+    // 中断前は言い直しだけで走った publication。再開時に「今回はフルレビュー枠」と
+    // 判定されても、その publication がフルレビューの証拠に化けてはならない
+    // （化けると未レビューの anomaly が withdrawal で未検証のまま決着する）。
+    const { input, ingest } = createRunnerInput({
+      contextsPerPass: [
+        new Map([[ownerReviewerStep.name, { ownerNeedsFullReview: true }]]),
+        new Map(),
+      ],
+      resumeByReportName: {
+        'followup-architecture-review-1': {
+          publication: { publicationId: 'pub-resumed-restatement' },
+          response: { status: 'done' },
+          reviewerCallMode: 'restatement-only',
+        },
+      },
+    });
+
+    expect(await runFindingRestatementSlot(input)).toBeUndefined();
+
+    expect(ingest).toHaveBeenCalledTimes(1);
+    expect((ingest.mock.calls[0]![0] as { establishesCompleteReview?: boolean }[])[0])
+      .toMatchObject({ establishesCompleteReview: false });
+  });
+
+  it('stamps the call mode onto the publication it prepares', async () => {
+    executeAgentMock.mockResolvedValue(doneResponse('architecture-review-persona'));
+    const { input, stepExecutor } = createRunnerInput({
+      presentationLimit: 2,
+      contextsPerPass: [
+        new Map([[ownerReviewerStep.name, { owner: slotContext, ownerNeedsFullReview: true }]]),
+        new Map(),
+      ],
+    });
+
+    await runFindingRestatementSlot(input);
+
+    expect(stepExecutor.prepareFindingReviewPublication).toHaveBeenCalledWith(
+      expect.objectContaining({ reviewerCallMode: 'review' }),
+    );
+  });
+
+  it('regenerates the restatement when the stored report is rejected by the normalizer', async () => {
     // 壊れた報告は読み直しても直らない。ここで打ち切ると同じ stored 報告を
-    // 読み続けて格上げ枠が永久に塞がる（記録の破棄は resume 側が行う）。
+    // 読み続けて提示枠が永久に塞がる（記録の破棄は resume 側が行う）。
     executeAgentMock.mockResolvedValue({
       persona: 'reviewer',
       status: 'done',
-      content: 'regenerated escalation report',
+      content: 'regenerated restatement report',
       timestamp: new Date(),
     } satisfies AgentResponse);
     const { input, stepExecutor } = createRunnerInput({
@@ -1344,64 +1728,38 @@ describe('FC escalation reviewer — direct provider call wiring', () => {
       },
     });
 
-    const outcome = await runFindingEscalationReviewer(input);
+    await runFindingRestatementSlot(input);
 
-    expect(outcome).toMatchObject({ kind: 'published' });
     // 新規生成の経路へ落ちる: provider 呼び出しと publication 準備が走る。
     expect(executeAgentMock).toHaveBeenCalledOnce();
     expect(stepExecutor.prepareFindingReviewPublication).toHaveBeenCalledOnce();
   });
 
   it('contributes nothing when the stored report is rejected and no request remains', async () => {
-    // 今ラウンドに格上げ request が無い（提示計上済み）状態で stored 報告だけが
-    // 壊れている場合は、新規生成の材料も無いのでこの枠は何も寄稿しない。
-    const { input, stepExecutor } = createRunnerInput({
-      withoutEscalationContext: true,
+    const { input, stepExecutor, ingest } = createRunnerInput({
+      contextsPerPass: [new Map()],
       resumeResult: {
         reportRejection: { reason: 'report text could not be bound', reportContent: '{"rawFindings":[]}' },
       },
     });
 
-    const outcome = await runFindingEscalationReviewer(input);
-
-    expect(outcome).toBeUndefined();
+    expect(await runFindingRestatementSlot(input)).toBeUndefined();
     expect(executeAgentMock).not.toHaveBeenCalled();
     expect(stepExecutor.prepareFindingReviewPublication).not.toHaveBeenCalled();
+    expect(ingest).not.toHaveBeenCalled();
   });
 
-  it('hands a stored escalation publication to the manager even when the budget is spent', async () => {
-    // 前ラウンドで publication が成立していれば提示は計上済みで、今ラウンドの
-    // escalation request は0件になる。それでも raw findings がまだ intake されて
-    // いない可能性があるため、request の有無より先に stored publication を引く。
-    const { input, stepExecutor } = createRunnerInput({
-      withoutEscalationContext: true,
-      resumeResult: { publication: { publicationId: 'pub-carried-over' }, response: { status: 'done' } },
-    });
+  it('does nothing when there is neither a request nor a stored publication', async () => {
+    const { input, stepExecutor, ingest } = createRunnerInput({ contextsPerPass: [new Map()] });
 
-    const outcome = await runFindingEscalationReviewer(input);
-
-    expect(outcome!.kind === 'published' && outcome.results[0]!.publication)
-      .toMatchObject({ publicationId: 'pub-carried-over' });
-    expect(stepExecutor.resumeFindingReviewPublication).toHaveBeenCalledWith(
-      expect.objectContaining({
-        parentStepName: 'reviewers',
-        stepIteration: 1,
-        step: expect.objectContaining({ name: FINDING_ESCALATION_REVIEWER_ROUTING_KEY }),
-      }),
-    );
-    expect(executeAgentMock).not.toHaveBeenCalled();
-  });
-
-  it('does nothing when there is neither an escalation request nor a stored publication', async () => {
-    const { input, stepExecutor } = createRunnerInput({ withoutEscalationContext: true });
-
-    expect(await runFindingEscalationReviewer(input)).toBeUndefined();
+    expect(await runFindingRestatementSlot(input)).toBeUndefined();
     expect(executeAgentMock).not.toHaveBeenCalled();
     expect(stepExecutor.prepareFindingReviewPublication).not.toHaveBeenCalled();
+    expect(ingest).not.toHaveBeenCalled();
   });
 });
 
-describe('FC escalation reviewer — caller reaches the runner without a request batch', () => {
+describe('FC restatement slot — caller reaches the runner after the manager round', () => {
   const reviewerSubStep = {
     kind: 'agent' as const,
     name: 'architecture-review',
@@ -1413,7 +1771,7 @@ describe('FC escalation reviewer — caller reaches the runner without a request
     rules: [makeRule('approved', 'COMPLETE')],
   };
 
-  it('calls the escalation runner even when this round has no escalation request', async () => {
+  it('calls the slot runner even when this round has no restatement request', async () => {
     const publication = { publicationId: 'pub-owner', rawFindings: [] };
     const resumeFindingReviewPublication = vi.fn().mockResolvedValue({
       publication,
@@ -1434,8 +1792,8 @@ describe('FC escalation reviewer — caller reaches the runner without a request
         reviewScopeSnapshotId: 'd'.repeat(64),
       },
     };
-    // 今ラウンドは格上げ対象の anomaly が0件 = escalation context は空。
-    const buildFindingEscalationInstructionContexts = vi.fn().mockReturnValue(new Map());
+    // 今ラウンドは言い直し対象の anomaly が0件 = slot context は空。
+    const buildFindingRestatementSlotContexts = vi.fn().mockReturnValue(new Map());
     const deps = {
       optionsBuilder: {
         buildAgentOptions: vi.fn().mockReturnValue({}),
@@ -1447,7 +1805,7 @@ describe('FC escalation reviewer — caller reaches the runner without a request
           escalation: ESCALATION_TARGET,
         }),
         buildFindingContractInstructionContext: vi.fn().mockReturnValue(findingContractContext),
-        buildFindingEscalationInstructionContexts,
+        buildFindingRestatementSlotContexts,
       },
       stepExecutor: {
         buildInstruction: vi.fn((step: { name: string }) => `instruction:${step.name}`),
@@ -1474,7 +1832,7 @@ describe('FC escalation reviewer — caller reaches the runner without a request
       findingManagerAuthority: 'standard',
       findingContract: FINDING_CONTRACT,
       findingLedgerStore: {
-        ledgerIdentity: 'scope-escalation-caller',
+        ledgerIdentity: 'scope-restatement-caller',
         workflowName: 'test-workflow',
         runId: 'test-run',
         loadLedger: () => ({ findings: [] }),
@@ -1514,19 +1872,26 @@ describe('FC escalation reviewer — caller reaches the runner without a request
       vi.fn(),
     );
 
-    expect(buildFindingEscalationInstructionContexts).toHaveBeenCalledWith(
+    expect(buildFindingRestatementSlotContexts).toHaveBeenCalledWith(
       expect.objectContaining({
         ownerReviewerSteps: [expect.objectContaining({ name: reviewerSubStep.name })],
       }),
     );
-    // request が0件でも runner へ到達し、未取り込みの stored escalation publication を
+    // request が0件でも runner へ到達し、未取り込みの stored publication を
     // resume で引き当てにいく。ここで早期 return すると raw findings が永久に
     // intake されない。
-    const escalationResumeCalls = resumeFindingReviewPublication.mock.calls.filter(
-      ([call]) => call.step.name === FINDING_ESCALATION_REVIEWER_ROUTING_KEY,
+    const slotResumeReports = resumeFindingReviewPublication.mock.calls
+      .map(([call]) => call.step.outputContracts?.[0]?.name as string | undefined)
+      .filter((name): name is string => name !== undefined);
+    // owner 側と格上げ側の両方を実際に引き当てにいく。owner 側だけ落とすと、
+    // 中断した run の言い直し publication が恒久的に孤児化する。
+    expect(slotResumeReports).toContain('followup-architecture-review-1');
+    expect(slotResumeReports).toContain('escalation-reviewer-architecture-review-1');
+    const slotResumeCalls = resumeFindingReviewPublication.mock.calls.filter(
+      ([call]) => call.step.outputContracts?.[0]?.name?.startsWith('followup-')
+        || call.step.name === FINDING_ESCALATION_REVIEWER_ROUTING_KEY,
     );
-    expect(escalationResumeCalls).toHaveLength(1);
-    expect(escalationResumeCalls[0]![0]).toMatchObject({
+    expect(slotResumeCalls[0]![0]).toMatchObject({
       parentStepName: 'reviewers',
       stepIteration: 1,
     });

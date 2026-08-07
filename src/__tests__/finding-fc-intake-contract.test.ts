@@ -22,10 +22,11 @@ import { captureReviewScopeProofSnapshot } from '../core/workflow/findings/snaps
 import {
   applyReviewerAnomalySpecsToLedger,
   createReviewerAnomalySpec,
+  isOutstandingReviewerAnomaly,
   linkPromotedReviewerAnomalies,
+  restatementReassertionFailsCorrespondence,
   selectRestatementSourceClaimAtom,
 } from '../core/workflow/findings/reviewer-anomalies.js';
-import { boundedRestatementClaimExcerpt } from '../core/workflow/engine/WorkflowEngineSetup.js';
 import {
   assertFindingReviewPresentationContext,
   computeRestatementRequestId,
@@ -340,6 +341,194 @@ describe('FC intake contract', () => {
     }]);
 
     expect(linked.reviewerAnomalies![0]!.promotedFindingId).toBe('F-0001');
+  });
+
+  it('terminates an intake anomaly whose observation carries no demandable claim atom', () => {
+    // description も rawExcerpt も持たない観測。言い直し要求が作られないため提示に
+    // よる終端にも到達せず、放置すると未決着のまま COMPLETE を永久に塞ぐ。
+    const source = incompleteRaw('raw-undemandable', {
+      description: null,
+      rawExcerpt: '   ',
+    });
+    const spec = createReviewerAnomalySpec({
+      wire: source,
+      canonical: canonicalItem(source).canonical,
+      anomalyKind: 'intake-contract-incomplete',
+      reason: 'The normalized claim omitted every claim body',
+      intakeContract: {
+        observationClass: 'claim-bearing' as const,
+        classificationAuthorityId: 'system/intake_observation_classification_v1',
+        reasonCodes: ['normalizer-extraction-loss'] as const,
+        missingRequirements: ['description'] as const,
+        presentationOwnerReviewer: source.reviewer,
+        presentationLimit: 3,
+      },
+    });
+    const withAnomaly = applyReviewerAnomalySpecsToLedger(emptyLedger(), [spec], {
+      workflowName: 'peer-review',
+      stepName: observedAt.stepName,
+      runId: observedAt.runId,
+      timestamp: observedAt.timestamp,
+    }, new Set());
+    const ledgerWithSource = { ...withAnomaly, rawFindings: [source] };
+
+    const committed = applyCommitLedgerStates({
+      runInput: {
+        workflowName: 'peer-review',
+        parentStep: { name: 'reviewers' },
+        runId: observedAt.runId,
+        timestamp: observedAt.timestamp,
+        subResults: [],
+      } as never,
+      freshLedger: ledgerWithSource,
+      settledLedger: ledgerWithSource,
+      baseAnomalySpecs: [],
+      pendingRejectedObservations: [],
+      verifiedEvidenceCandidates: [],
+    });
+
+    const terminal = committed.ledger.reviewerAnomalies![0]!.intakeContract!.terminalDisposition;
+    // 提示を1回も行わずにその場で終端し、gate を塞がなくなる。
+    // claim-bearing は「主張はあったのに機械可読な形で残らなかった」事実を
+    // 可視的失敗として扱う（protocol-noise だけが静かに却下される）。
+    expect(terminal).toMatchObject({
+      kind: 'undemandable_claim_atom',
+      workflowOutcome: 'review_integrity_unresolved',
+    });
+    expect(terminal?.terminalPublicationId).toBeUndefined();
+    // claim-bearing は握りつぶさない。終端した（= 提示予算を待たずに決着経路へ
+    // 入った）が未決着のままで、review-integrity gate の可視的失敗へ送られる。
+    // 静かに落ちるのは protocol-noise だけ。
+    expect(isOutstandingReviewerAnomaly(committed.ledger.reviewerAnomalies![0]!)).toBe(true);
+  });
+
+  describe('failed restatement reassertion', () => {
+    const reassertionCase = (admittedDescription: string) => {
+      const sourceExcerpt = 'The reasserted defect remains observable.';
+      const source = incompleteRaw('raw-reassert-source', {
+        rawExcerpt: sourceExcerpt,
+        sourceBinding: {
+          reportDigest: 'f'.repeat(64),
+          startByte: 0,
+          endByte: Buffer.byteLength(sourceExcerpt),
+          excerptDigest: '3'.repeat(64),
+        },
+      });
+      const spec = createReviewerAnomalySpec({
+        wire: source,
+        canonical: canonicalItem(source).canonical,
+        anomalyKind: 'intake-contract-incomplete',
+        reason: 'Normalizer lost the source-bound description',
+        intakeContract: {
+          observationClass: 'claim-bearing' as const,
+          classificationAuthorityId: 'system/intake_observation_classification_v1',
+          reasonCodes: ['normalizer-extraction-loss'] as const,
+          missingRequirements: ['description'] as const,
+          presentationOwnerReviewer: source.reviewer,
+          presentationLimit: 2,
+        },
+      });
+      const withAnomaly = applyReviewerAnomalySpecsToLedger(emptyLedger(), [spec], {
+        workflowName: 'peer-review',
+        stepName: observedAt.stepName,
+        runId: observedAt.runId,
+        timestamp: observedAt.timestamp,
+      }, new Set());
+      const anomaly = withAnomaly.reviewerAnomalies![0]!;
+      const admitted = canonicalRawFindingFixture({
+        rawFindingId: 'raw-reassert-admitted',
+        stepName: source.stepName,
+        reviewer: source.reviewer,
+        familyTag: 'bug',
+        severity: 'high',
+        title: 'Observed issue',
+        description: admittedDescription,
+        suggestion: null,
+        relation: 'new',
+        targetFindingId: null,
+        target: source.target,
+        sourceBinding: {
+          ...source.sourceBinding,
+          reportDigest: 'e'.repeat(64),
+          excerptDigest: '4'.repeat(64),
+        },
+        evidence: [],
+        reassertsReviewerAnomalyId: anomaly.id,
+      });
+      const requestWithoutId = {
+        anomalyId: anomaly.id,
+        reviewer: source.reviewer,
+        presentationOrdinal: 1,
+        reviewScopeSnapshotId: '2'.repeat(64),
+        sourceExcerptDigest: source.sourceBinding.excerptDigest,
+        claimedExcerpt: sourceExcerpt,
+        targetPaths: ['src/example.ts'] as const,
+        missingRequirements: ['description'] as const,
+        expectedRelation: 'new' as const,
+        expectedTargetFindingId: null,
+        expectedTargetPreconditionClass: 'absent' as const,
+      };
+      return {
+        ledger: { ...withAnomaly, rawFindings: [source] },
+        admitted,
+        bindings: [{
+          request: {
+            ...requestWithoutId,
+            restatementRequestId: computeRestatementRequestId(requestWithoutId),
+          },
+          publicationId: 'publication-reassert',
+          reportDigest: admitted.sourceBinding.reportDigest,
+        }],
+      };
+    };
+
+    it('flags a reassertion whose claim atom does not reproduce the request', () => {
+      const { ledger, admitted, bindings } = reassertionCase('A different claim entirely.');
+
+      // 照合に失敗した再主張を新規 finding として鋳造すると、同じ主張が言い直しの
+      // たびに別 finding として積み上がる。admission はこれを弾く。
+      expect(restatementReassertionFailsCorrespondence({
+        ledger,
+        admittedRaw: admitted,
+        bindings,
+      })).toBe(true);
+    });
+
+    it('drops the echo when this call requested no restatement for that anomaly', () => {
+      // anomaly は実在するが、この呼び出しではその言い直しを要求していない。
+      // 要求していないものを「言い直しの失敗」とは判定できないので、echo を落として
+      // 通常の新規 claim として評価させる（正当な新規指摘を殺さない）。
+      const { ledger, admitted } = reassertionCase('A different claim entirely.');
+
+      expect(restatementReassertionFailsCorrespondence({
+        ledger,
+        admittedRaw: admitted,
+        bindings: [],
+      })).toBe(false);
+    });
+
+    it('lets an exact reassertion through so it can still be promoted', () => {
+      const { ledger, admitted, bindings } = reassertionCase('The reasserted defect remains observable.');
+
+      expect(restatementReassertionFailsCorrespondence({
+        ledger,
+        admittedRaw: admitted,
+        bindings,
+      })).toBe(false);
+    });
+
+    it('has no demandable atom when the observation carries neither description nor excerpt', () => {
+      // 言い直しの照合が要求する claim 本文を選べない観測。request を作ると
+      // 「見せた文をそのまま写しても受理されない」充足不能な要求になる。
+      expect(selectRestatementSourceClaimAtom(
+        { claimedExcerpt: '   ' },
+        { description: undefined, rawExcerpt: '  ' },
+      )).toBeUndefined();
+      expect(selectRestatementSourceClaimAtom(
+        { claimedExcerpt: undefined },
+        { description: 'A claim body.', rawExcerpt: undefined },
+      )).toBe('A claim body.');
+    });
   });
 
   describe('escalation restatement correspondence', () => {
@@ -742,13 +931,12 @@ describe('FC intake contract', () => {
   /**
    * 充足不能な再提示要求の芽を潰す。
    *
-   * request が reviewer へ提示する claim atom（boundedRestatementClaimExcerpt）と
-   * correspondence が要求する claim atom（selectRestatementSourceClaimAtom）が
-   * 別々に選ばれると、reviewer が提示文を1文字も違わずコピーしても昇格せず、
-   * presentationLimit 回だけ再提示されて毎回 new finding を増やす。prompt では
-   * 絶対に直せない種類の破綻なので、選択規則は selectRestatementSourceClaimAtom
-   * 1箇所に集約してある。ここで固定するのは委譲が外れていないことと、委譲後も
-   * request が空文字にならないこと。
+   * request が reviewer へ提示する claim atom と correspondence が要求する
+   * claim atom が別々に選ばれると、reviewer が提示文を1文字も違わずコピーしても
+   * 昇格せず、presentationLimit 回だけ再提示されて毎回 new finding を増やす。
+   * prompt では絶対に直せない種類の破綻なので、選択規則は
+   * selectRestatementSourceClaimAtom 1箇所だけが持ち、request 構築
+   * （buildRestatementRequests）もそこへ委譲する。
    */
   describe('restatement claim atom source agreement', () => {
     const anomalyFor = (description: string | null, rawExcerpt: string | null) => {
@@ -778,31 +966,31 @@ describe('FC intake contract', () => {
       }, new Set());
       return { wire, anomaly: ledger.reviewerAnomalies![0]! };
     };
-    it('presents exactly the atom the correspondence check demands', () => {
-      for (const [description, rawExcerpt] of [
-        ['A stated defect.', 'A different stated defect.'],
-        [null, 'Only the excerpt carries the claim.'],
-        ['   ', 'Blank description falls through to the excerpt.'],
-      ] as ReadonlyArray<readonly [string | null, string]>) {
+    it('selects the claim body in one place for both the request and the gate', () => {
+      for (const [description, rawExcerpt, expected] of [
+        ['A stated defect.', 'A different stated defect.', 'A stated defect.'],
+        [null, 'Only the excerpt carries the claim.', 'Only the excerpt carries the claim.'],
+        ['   ', 'Blank description falls through to the excerpt.', 'Blank description falls through to the excerpt.'],
+      ] as ReadonlyArray<readonly [string | null, string, string]>) {
         const { wire, anomaly } = anomalyFor(description, rawExcerpt);
         const label = `description=${JSON.stringify(description)}`;
 
-        expect(boundedRestatementClaimExcerpt(anomaly, wire), label)
-          .toBe(selectRestatementSourceClaimAtom(anomaly, wire));
+        // request 側（buildRestatementRequests）はこの値をそのまま claimedExcerpt に
+        // 使う。別経路で選び直すと提示文と要求文が食い違う。
+        expect(selectRestatementSourceClaimAtom(anomaly, wire), label).toBe(expected);
       }
     });
 
-    // 委譲した結果、claim 本文が一切無い観測では selector が undefined を返す。
-    // request を空文字にしないための title フォールバックだけは bounded 側に残る。
-    // この anomaly へ request を出すこと自体が誤り（correspondence が要求できる
-    // atom を持たない）だが、それを弾くのは buildRestatementRequests 側の仕事で、
-    // slot トラックが対応する。弾くようになったらこのテストを「request が
-    // 作られないこと」の検証へ差し替える。
-    it('falls back to the title only when no claim text exists at all', () => {
+    // claim 本文が一切無い観測には title へフォールバックしない。title で request を
+    // 作ると「見せた文をそのまま写しても受理されない」充足不能な要求になるため、
+    // request を作らず、その場で terminal disposition へ落とす（この describe の
+    // 上にある undemandable_claim_atom のテストが終端側を固定する。request が
+    // 作られないことは finding-fc-restatement-slot.test.ts が固定する）。
+    it('demands nothing when no claim text exists at all', () => {
       const { wire, anomaly } = anomalyFor(null, null);
 
       expect(selectRestatementSourceClaimAtom(anomaly, wire)).toBeUndefined();
-      expect(boundedRestatementClaimExcerpt(anomaly, wire)).toBe(anomaly.title);
+      expect(anomaly.title.length).toBeGreaterThan(0);
     });
   });
 

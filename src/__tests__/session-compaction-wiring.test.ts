@@ -444,7 +444,7 @@ describe('session compaction Phase 1 wiring', () => {
         buildFindingContractInstructionContext: vi.fn().mockReturnValue(
           findingContractInstructionContext,
         ),
-        buildFindingEscalationInstructionContexts: vi.fn().mockReturnValue(new Map()),
+        buildFindingRestatementSlotContexts: vi.fn().mockReturnValue(new Map()),
         resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'opencode', model: 'opencode/big-pickle' }),
       } as unknown as StepExecutorDeps['optionsBuilder'],
       getCwd: () => cwd,

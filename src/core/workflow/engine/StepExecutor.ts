@@ -84,7 +84,11 @@ import type {
   FindingManagerRunResult,
   FindingManagerSubStepResult,
 } from '../findings/manager-runner.js';
-import { runFindingEscalationReviewer } from '../findings/escalation-reviewer-runner.js';
+import {
+  runFindingRestatementSlot,
+  type FindingRestatementSlotTerminalOutcome,
+} from '../findings/restatement-slot-runner.js';
+import { resolveReviewIntegrityLimits } from '../findings/review-integrity.js';
 import type { ProviderRoutingEntry } from '../../models/config-types.js';
 import {
   assertFindingIntakeNormalizerProvider,
@@ -280,8 +284,6 @@ export interface StepExecutorDeps {
 export interface PreparedNormalStepExecution {
   readonly executableStep: AgentWorkflowStep;
   readonly findingContractContext?: FindingContractInstructionContext;
-  /** owner context を組んだときの ledger / presentation counts 凍結キー（escalation slot と共有する）。 */
-  readonly findingContractFreezeKey?: string;
   readonly phase1Instruction: string;
   readonly priorStepResponseText?: string;
   readonly stepIteration: number;
@@ -309,6 +311,12 @@ export interface FindingReviewPublicationPreparationInput {
    * 食い違う（escalation slot では restatement-only 契約そのものが消える）。
    */
   readonly findingContractContext?: FindingContractInstructionContext;
+  /**
+   * この呼び出しが何として走ったか。publication へ永続化し、resume はその値を
+   * 採用する（引き当て時点の mode を被せると、言い直しだけで出た publication が
+   * 再開後にフルレビューの証拠として扱われる）。
+   */
+  readonly reviewerCallMode?: 'review' | 'restatement-only';
 }
 
 /** 正規化係の1候補（解決チェーンの1段）。 */
@@ -363,6 +371,8 @@ export type FindingReviewPublicationPreparation =
       readonly relationClarification?: ReviewerRelationClarification;
       readonly reviewerProviderInfo?: StepProviderInfo;
       readonly reviewerRuntime?: RuntimeStepResolution;
+      /** その publication を出した呼び出しの mode（永続値）。 */
+      readonly reviewerCallMode?: 'review' | 'restatement-only';
     }
   | {
       readonly terminalResponse: AgentResponse;
@@ -373,8 +383,6 @@ export type FindingReviewPublicationPreparation =
 
 export class StepExecutor {
   private readonly structuredOutputNormalizers: StructuredOutputNormalizerRegistry;
-
-  private findingContractFreezeSequence = 0;
 
   constructor(
     private readonly deps: StepExecutorDeps,
@@ -423,54 +431,46 @@ export class StepExecutor {
   }
 
   /**
-   * 単独 FC reviewer step の格上げ再レビュー。owner publication 成立後・manager
-   * 取り込み前に一度だけ実行する（parallel 経路と同型）。owner が格上げ先を
-   * 持たない、または今ラウンドに格上げ対象の anomaly も未取り込みの stored
-   * publication も無い場合は undefined。
-   *
-   * 提示回数の判定は owner context を組んだ時点で凍結した ledger /
-   * presentation counts を使う。owner publication 永続化後に数え直すと、
-   * 同じ iteration で owner の (limit-1) 回目と escalation が二重に走る。
+   * 単独 FC reviewer step の言い直し slot。owner publication の manager 取り込みが
+   * 終わった直後に実行する（parallel 経路と同型）。言い直し待ちの anomaly も
+   * 未取り込みの stored publication も無い場合は何も起きない。
    */
-  private async runEscalationReviewerForNormalStep(input: {
+  private async runRestatementSlotForNormalStep(input: {
     parentStepName: string;
     ownerReviewerStep: AgentWorkflowStep;
     findingContractContext: FindingContractInstructionContext | undefined;
-    findingContractFreezeKey: string | undefined;
     stepIteration: number;
     state: WorkflowState;
     task: string;
     maxSteps: WorkflowMaxSteps;
+    priorStepResponseText: string | undefined;
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void;
     runtime?: RuntimeStepResolution;
-  }): Promise<
-    | { reviewerResults: readonly FindingManagerSubStepResult[] }
-    | {
-        terminalResponse: AgentResponse;
-        providerInfo?: StepProviderInfo;
-        terminalOperation?: NonNullable<StepRunResult['terminalOperation']>;
-      }
-    | undefined
-  > {
+  }): Promise<FindingRestatementSlotTerminalOutcome | undefined> {
     const ownerReviewer = input.findingContractContext?.reviewer;
-    if (
-      this.deps.findingContract === undefined
-      || ownerReviewer === undefined
-      || input.findingContractFreezeKey === undefined
-    ) {
+    const findingContract = this.deps.findingContract;
+    if (findingContract === undefined || ownerReviewer === undefined) {
       return undefined;
     }
-    const escalationContexts = this.deps.optionsBuilder.buildFindingEscalationInstructionContexts({
+    return runFindingRestatementSlot({
       // owner 名は publication identity の reviewerStepName（= anomaly の
       // presentationOwnerReviewer）と同じ値でなければならない。単独ステップでは
       // parent step 名と一致するが、意味が違う値なので reviewer step から取る。
       ownerReviewerSteps: [input.ownerReviewerStep],
+      buildSlotContexts: (contextInput) => (
+        this.deps.optionsBuilder.buildFindingRestatementSlotContexts(contextInput)
+      ),
+      ingest: async (results) => {
+        await this.ingestFindingContractSubResults({
+          step: input.ownerReviewerStep,
+          stepIteration: input.stepIteration,
+          iteration: input.state.iteration,
+          subResults: results,
+          priorStepResponseText: input.priorStepResponseText,
+          budgetAccounting: 'excluded',
+        });
+      },
       reviewScopeSnapshotId: ownerReviewer.reviewScopeSnapshotId,
-      findingContractFreezeKey: input.findingContractFreezeKey,
-    });
-    const outcome = await runFindingEscalationReviewer({
-      escalationContexts,
-      ownerReviewerSteps: [input.ownerReviewerStep],
       parentStepName: input.parentStepName,
       stepIteration: input.stepIteration,
       state: input.state,
@@ -480,43 +480,22 @@ export class StepExecutor {
       stepExecutor: this,
       updatePersonaSession: input.updatePersonaSession,
       runtime: input.runtime,
+      presentationLimit: Math.max(
+        1,
+        resolveReviewIntegrityLimits(findingContract.reviewBudget).maxReviewRounds,
+      ),
     });
-    if (outcome === undefined) {
-      return undefined;
-    }
-    if (outcome.kind === 'published') {
-      return {
-        reviewerResults: outcome.results.map((result) => ({
-          subStep: result.step,
-          publication: result.publication,
-          ...(result.relationClarification === undefined
-            ? {}
-            : { relationClarification: result.relationClarification }),
-        })),
-      };
-    }
-    return {
-      terminalResponse: outcome.response,
-      ...(outcome.providerInfo === undefined ? {} : { providerInfo: outcome.providerInfo }),
-      ...(outcome.terminalOperation === undefined
-        ? {}
-        : { terminalOperation: outcome.terminalOperation }),
-    };
   }
 
-  private escalationTerminalStepResult(input: {
+  private restatementSlotTerminalStepResult(input: {
     step: WorkflowStep;
     state: WorkflowState;
     stepIteration: number;
     instruction: string;
     fallbackProviderInfo: StepProviderInfo;
-    escalation: {
-      terminalResponse: AgentResponse;
-      providerInfo?: StepProviderInfo;
-      terminalOperation?: NonNullable<StepRunResult['terminalOperation']>;
-    };
+    slot: FindingRestatementSlotTerminalOutcome;
   }): StepRunResult {
-    const response = input.escalation.terminalResponse;
+    const response = input.slot.response;
     input.state.stepOutputs.set(input.step.name, response);
     input.state.lastOutput = response;
     if (response.status === 'blocked') {
@@ -530,10 +509,10 @@ export class StepExecutor {
     return {
       response,
       instruction: input.instruction,
-      providerInfo: input.escalation.providerInfo ?? input.fallbackProviderInfo,
-      ...(input.escalation.terminalOperation === undefined
+      providerInfo: input.slot.providerInfo ?? input.fallbackProviderInfo,
+      ...(input.slot.terminalOperation === undefined
         ? {}
-        : { terminalOperation: input.escalation.terminalOperation }),
+        : { terminalOperation: input.slot.terminalOperation }),
     };
   }
 
@@ -572,7 +551,35 @@ export class StepExecutor {
     publication: CanonicalFindingReviewPublication;
     priorStepResponseText: string | undefined;
     relationClarification?: ReviewerRelationClarification;
-    escalationResults?: readonly FindingManagerSubStepResult[];
+  }): Promise<FindingManagerRunResult> {
+    return this.ingestFindingContractSubResults({
+      step: input.step,
+      stepIteration: input.stepIteration,
+      iteration: input.iteration,
+      priorStepResponseText: input.priorStepResponseText,
+      // 単独ステップでは「レビュアー1件」を自分自身として渡す
+      // （manager-runner.ts の subResults は並列・単独どちらも同じ形で扱う）。
+      subResults: [{
+        subStep: input.step,
+        publication: input.publication,
+        ...(input.relationClarification !== undefined
+          ? { relationClarification: input.relationClarification }
+          : {}),
+      }],
+    });
+  }
+
+  /**
+   * 1ラウンド分の canonical publication を findings-manager へ渡す共通入口。
+   * レビュー本編と言い直し slot の各パスが同じ手順を通る。
+   */
+  private async ingestFindingContractSubResults(input: {
+    step: AgentWorkflowStep;
+    stepIteration: number;
+    iteration: number;
+    subResults: readonly FindingManagerSubStepResult[];
+    priorStepResponseText: string | undefined;
+    budgetAccounting?: 'round' | 'excluded';
   }): Promise<FindingManagerRunResult> {
     if (!this.deps.findingLedgerStore) {
       throw new Error('Finding contract is configured but finding ledger store is not available');
@@ -588,16 +595,8 @@ export class StepExecutor {
       parentStep: input.step,
       stepIteration: input.stepIteration,
       iteration: input.iteration,
-      // 単独ステップでは「レビュアー1件」を自分自身として渡す
-      // （manager-runner.ts の subResults は並列・単独どちらも同じ形で扱う）。
-      subResults: [
-        {
-          subStep: input.step,
-          publication: input.publication,
-          ...(input.relationClarification !== undefined ? { relationClarification: input.relationClarification } : {}),
-        },
-        ...(input.escalationResults ?? []),
-      ],
+      subResults: [...input.subResults],
+      ...(input.budgetAccounting === undefined ? {} : { budgetAccounting: input.budgetAccounting }),
       // 台帳の workflowName スタンプは店（ledgerStore）が束縛する正準名を使う。
       // workflow_call の子が親の台帳を継承した場合、この engine 自身の
       // getWorkflowName()（子のワークフロー名）を使うと reconcile 後の
@@ -757,17 +756,10 @@ export class StepExecutor {
     if (findingContractIntakeStep !== undefined) {
       assertFindingContractReviewerStep(findingContractIntakeStep);
     }
-    // owner context と escalation slot が同じ ledger / presentation counts を
-    // 見るよう、ここで一度だけ凍結する（parallel の共有 freeze と同じ役割）。
-    const findingContractFreezeKey = findingContractIntakeStep === undefined
-      ? undefined
-      : `${step.name}\0${stepIteration}\0${++this.findingContractFreezeSequence}`;
     const findingContractContext = findingContractIntakeStep
       ? this.deps.optionsBuilder.buildFindingContractInstructionContext(
           findingContractIntakeStep,
           true,
-          undefined,
-          findingContractFreezeKey,
         )
       : this.buildFindingContractInstructionContext(step, undefined);
     let executableStep = step as AgentWorkflowStep;
@@ -816,7 +808,6 @@ export class StepExecutor {
     return {
       executableStep,
       ...(findingContractContext !== undefined ? { findingContractContext } : {}),
-      ...(findingContractFreezeKey !== undefined ? { findingContractFreezeKey } : {}),
       phase1Instruction: this.buildPhase1Instruction(
         instruction,
         executableStep,
@@ -1290,12 +1281,16 @@ export class StepExecutor {
     readonly state: WorkflowState;
     readonly runtime?: RuntimeStepResolution;
     readonly presentationContext?: FindingReviewPresentationContext;
+    /** 保留中の正規化を再開して publication を作る場合に刻む呼び出し mode。 */
+    readonly reviewerCallMode?: 'review' | 'restatement-only';
   }): Promise<{
     readonly publication: CanonicalFindingReviewPublication;
     readonly response: AgentResponse;
     readonly relationClarification?: ReviewerRelationClarification;
     readonly reviewerProviderInfo?: StepProviderInfo;
     readonly reviewerRuntime?: RuntimeStepResolution;
+    /** その publication を出した呼び出しの mode（永続値）。 */
+    readonly reviewerCallMode?: 'review' | 'restatement-only';
   } | {
     readonly terminalResponse: AgentResponse;
     readonly reviewerProviderInfo?: StepProviderInfo;
@@ -1396,6 +1391,9 @@ export class StepExecutor {
       const persisted = persistFindingReviewPublication(reportDir, {
         publication: normalized.publication,
         reviewerExecutionIdentity: pending.reviewerExecutionIdentity,
+        ...(input.reviewerCallMode === undefined
+          ? {}
+          : { reviewerCallMode: input.reviewerCallMode }),
       });
       publishFindingReviewPublication(reportDir, persisted.publication);
       return {
@@ -1409,6 +1407,9 @@ export class StepExecutor {
         },
         reviewerProviderInfo: persistedReviewerRuntime.providerInfo,
         reviewerRuntime: persistedReviewerRuntime,
+        ...(persisted.reviewerCallMode === undefined
+          ? {}
+          : { reviewerCallMode: persisted.reviewerCallMode }),
       };
     }
     if (preparation === undefined) {
@@ -1425,6 +1426,10 @@ export class StepExecutor {
         structuredOutput: { rawFindings: [...publication.rawFindings] },
         timestamp: new Date(),
       },
+      // 引き当て時点の mode ではなく、その publication を出した呼び出しの mode。
+      ...(preparation.reviewerCallMode === undefined
+        ? {}
+        : { reviewerCallMode: preparation.reviewerCallMode }),
       ...(preparation.relationClarification !== undefined
         ? { relationClarification: preparation.relationClarification }
         : {}),
@@ -1494,6 +1499,9 @@ export class StepExecutor {
           content: stored.publication.reportContent,
           structuredOutput: { rawFindings: [...stored.publication.rawFindings] },
         },
+        ...(stored.reviewerCallMode === undefined
+          ? {}
+          : { reviewerCallMode: stored.reviewerCallMode }),
         ...(stored.relationClarification !== undefined
           ? { relationClarification: stored.relationClarification }
           : {}),
@@ -1650,6 +1658,9 @@ export class StepExecutor {
       {
         publication,
         reviewerExecutionIdentity: reviewerSelectionIdentity,
+        ...(input.reviewerCallMode === undefined
+          ? {}
+          : { reviewerCallMode: input.reviewerCallMode }),
       },
     );
     const finalPublication = persisted.publication;
@@ -1663,6 +1674,9 @@ export class StepExecutor {
       },
       reviewerProviderInfo: report.attemptIdentity.providerInfo,
       reviewerRuntime: completedReviewerRuntime,
+      ...(persisted.reviewerCallMode === undefined
+        ? {}
+        : { reviewerCallMode: persisted.reviewerCallMode }),
     };
   }
 
@@ -2161,6 +2175,31 @@ export class StepExecutor {
               reason: resumedPublication.reportRejection.reason,
             }],
           });
+          // 報告拒否は「そのレビュアーの差し戻し対象が1件増えた」状態。取り込みが
+          // 走らない経路でも slot は回す — ここを飛ばすと、記録した protocol
+          // anomaly の差し戻しが次のワークフローラウンドまで届かない。
+          const rejectedSlot = await this.runRestatementSlotForNormalStep({
+            parentStepName: step.name,
+            ownerReviewerStep: executableStep,
+            findingContractContext,
+            stepIteration,
+            state,
+            task,
+            maxSteps,
+            priorStepResponseText,
+            updatePersonaSession,
+            runtime: executionRuntime,
+          });
+          if (rejectedSlot !== undefined) {
+            return this.restatementSlotTerminalStepResult({
+              step,
+              state,
+              stepIteration,
+              instruction: phase1Instruction,
+              fallbackProviderInfo: resumedPublication.reviewerProviderInfo ?? providerInfo,
+              slot: rejectedSlot,
+            });
+          }
           const rejectedResponse = reviewReportProtocolRejectionResponse({
             stepName: step.name,
             reportContent: resumedPublication.reportRejection.reportContent,
@@ -2188,31 +2227,6 @@ export class StepExecutor {
             providerInfo: resumedPublication.reviewerProviderInfo ?? providerInfo,
           };
         }
-        const resumedEscalation = await this.runEscalationReviewerForNormalStep({
-          parentStepName: step.name,
-          // dynamic facets 適用後の実行用ステップを owner として渡す。設定上の
-          // step を渡すと、その回の owner が実際に使った facet 集合と代打の
-          // 判断基準がずれる（名前は同一なので publication identity は不変）。
-          ownerReviewerStep: executableStep,
-          findingContractContext,
-          findingContractFreezeKey: preparedExecution?.findingContractFreezeKey,
-          stepIteration,
-          state,
-          task,
-          maxSteps,
-          updatePersonaSession,
-          runtime: executionRuntime,
-        });
-        if (resumedEscalation !== undefined && 'terminalResponse' in resumedEscalation) {
-          return this.escalationTerminalStepResult({
-            step,
-            state,
-            stepIteration,
-            instruction: phase1Instruction,
-            fallbackProviderInfo: resumedPublication.reviewerProviderInfo ?? providerInfo,
-            escalation: resumedEscalation,
-          });
-        }
         const resumedIngest = await this.ingestFindingContractForNormalStep({
           step: findingContractIntakeStep,
           stepIteration,
@@ -2222,7 +2236,6 @@ export class StepExecutor {
           ...(resumedPublication.relationClarification !== undefined
             ? { relationClarification: resumedPublication.relationClarification }
             : {}),
-          ...(resumedEscalation === undefined ? {} : { escalationResults: resumedEscalation.reviewerResults }),
         });
         const response = await this.applyPostExecutionRulesOnly(
           step,
@@ -2244,6 +2257,32 @@ export class StepExecutor {
           publication: resumedPublication.publication,
           roundMarker: resumedIngest.roundMarker,
         });
+        // 差し戻し slot は verdict/claims の記録より後（parallel 経路と同じ順序）。
+        const resumedSlot = await this.runRestatementSlotForNormalStep({
+          parentStepName: step.name,
+          // dynamic facets 適用後の実行用ステップを owner として渡す。設定上の
+          // step を渡すと、その回の owner が実際に使った facet 集合と代打の
+          // 判断基準がずれる（名前は同一なので publication identity は不変）。
+          ownerReviewerStep: executableStep,
+          findingContractContext,
+          stepIteration,
+          state,
+          task,
+          maxSteps,
+          priorStepResponseText,
+          updatePersonaSession,
+          runtime: executionRuntime,
+        });
+        if (resumedSlot !== undefined) {
+          return this.restatementSlotTerminalStepResult({
+            step,
+            state,
+            stepIteration,
+            instruction: phase1Instruction,
+            fallbackProviderInfo: resumedPublication.reviewerProviderInfo ?? providerInfo,
+            slot: resumedSlot,
+          });
+        }
         state.stepOutputs.set(step.name, response);
         state.lastOutput = response;
         this.persistPreviousResponseSnapshot(
@@ -2498,29 +2537,6 @@ export class StepExecutor {
           prepared.response,
           phase1ProviderUsage,
         );
-        const escalation = await this.runEscalationReviewerForNormalStep({
-          parentStepName: step.name,
-          // dynamic facets 適用後の実行用ステップを owner として渡す（上と同じ理由）。
-          ownerReviewerStep: executableStep,
-          findingContractContext,
-          findingContractFreezeKey: preparedExecution?.findingContractFreezeKey,
-          stepIteration,
-          state,
-          task,
-          maxSteps,
-          updatePersonaSession,
-          runtime: executionRuntime,
-        });
-        if (escalation !== undefined && 'terminalResponse' in escalation) {
-          return this.escalationTerminalStepResult({
-            step,
-            state,
-            stepIteration,
-            instruction: phase1Instruction,
-            fallbackProviderInfo: completedReviewerProviderInfo,
-            escalation,
-          });
-        }
         reviewerRoundMarker = (await this.ingestFindingContractForNormalStep({
           step: findingContractIntakeStep,
           stepIteration,
@@ -2528,7 +2544,6 @@ export class StepExecutor {
           publication: prepared.publication,
           priorStepResponseText,
           relationClarification: prepared.relationClarification,
-          ...(escalation === undefined ? {} : { escalationResults: escalation.reviewerResults }),
         })).roundMarker;
       }
     }
@@ -2577,6 +2592,35 @@ export class StepExecutor {
         publication: reviewerPublication,
         roundMarker: reviewerRoundMarker,
       });
+    }
+
+    // 差し戻し slot は「判定確定 + verdict/claims 記録」の後に回す（parallel 経路と
+    // 同じ順序）。先に回すとこのラウンドで積んだ verdict-claims-mismatch が
+    // slot の判定に入らず、差し戻しが1ラウンド遅れる。
+    if (findingContractIntakeStep !== undefined && findingContractContext !== undefined) {
+      const slot = await this.runRestatementSlotForNormalStep({
+        parentStepName: step.name,
+        // dynamic facets 適用後の実行用ステップを owner として渡す（上と同じ理由）。
+        ownerReviewerStep: executableStep,
+        findingContractContext,
+        stepIteration,
+        state,
+        task,
+        maxSteps,
+        priorStepResponseText,
+        updatePersonaSession,
+        runtime: executionRuntime,
+      });
+      if (slot !== undefined) {
+        return this.restatementSlotTerminalStepResult({
+          step,
+          state,
+          stepIteration,
+          instruction: phase1Instruction,
+          fallbackProviderInfo: completedReviewerProviderInfo,
+          slot,
+        });
+      }
     }
 
     state.stepOutputs.set(step.name, response);

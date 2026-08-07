@@ -387,7 +387,7 @@ function makeRunner(options: {
       buildFindingContractInstructionContext: vi.fn().mockReturnValue(
         options.findingContractContext ?? makeFindingContractContext(),
       ),
-      buildFindingEscalationInstructionContexts: vi.fn().mockReturnValue(new Map()),
+      buildFindingRestatementSlotContexts: vi.fn().mockReturnValue(new Map()),
     } as unknown as ParallelRunnerDeps['optionsBuilder'],
     stepExecutor: stepExecutor as unknown as ParallelRunnerDeps['stepExecutor'],
     engineOptions: {
@@ -694,8 +694,11 @@ describe('ParallelRunner finding-contract instruction wiring', () => {
   it('reuses an already persisted sibling publication without rerunning that reviewer', async () => {
     const { runner, deps } = makeRunner();
     vi.mocked(deps.stepExecutor.resumeFindingReviewPublication)
+      // 言い直し slot の合成ステップは同じ reviewer 名で別の report を出すため、
+      // report 名まで見て owner 本編の publication だけを引き当てる。
       .mockImplementation(({ step: reviewerStep }) => (
         reviewerStep.name === 'ai-antipattern-review'
+          && reviewerStep.outputContracts?.[0]?.name === 'ai-antipattern-review.md'
           ? {
               publication: {
                 publicationId: 'publication-ai-antipattern-review',

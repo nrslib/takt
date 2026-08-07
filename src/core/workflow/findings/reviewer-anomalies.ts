@@ -111,13 +111,18 @@ function normalizeClaimAtom(value: string): string {
 }
 
 /**
- * correspondence が「言い直しとして受理できる」ために要求する claim atom。
+ * correspondence が「言い直しとして受理できる」ために要求する claim atom
+ * （demandable claim atom）。
  *
- * WorkflowEngineSetup の boundedRestatementClaimExcerpt（request が reviewer へ
- * 提示する文字列）もこの関数へ委譲する。選択規則を2箇所に持つと、提示と要求が
- * 別の文字列になり得る — その request は reviewer が提示文を1文字も違わず
- * コピーしても correspondence が成立せず、presentationLimit 回だけ再提示されて
- * 毎回 new finding を増やすだけの充足不能な要求になる。
+ * request が reviewer へ提示する文字列もこの関数へ委譲する。選択規則を2箇所に
+ * 持つと、提示と要求が別の文字列になり得る — その request は reviewer が提示文を
+ * 1文字も違わずコピーしても correspondence が成立せず、presentationLimit 回だけ
+ * 再提示されて毎回 new finding を増やすだけの充足不能な要求になる。
+ *
+ * undefined を返す anomaly は言い直しでは決着できない。request を作ってはならず、
+ * 提示を1回も行わずにその場で terminal disposition
+ * （undemandable_claim_atom）へ落とす。title へフォールバックして request を
+ * 作ると、まさに上の充足不能な要求になる。
  */
 export function selectRestatementSourceClaimAtom(
   anomaly: Pick<ReviewerAnomalyEntry, 'claimedExcerpt'>,
@@ -191,6 +196,52 @@ function hasRestatementCandidateShape(
     && admittedRaw.relation === 'new'
     && admittedRaw.targetFindingId === null
     && admittedRaw.targetPrecondition === undefined;
+}
+
+/**
+ * 「特定の anomaly を言い直した」と自己申告した raw が、照合ゲートを通らなかったか。
+ *
+ * 通らなかった再主張を新規 product finding として鋳造すると、同じ主張が言い直しの
+ * たびに別 finding として積み上がる（実測で findings 膨張の原因）。呼び出し側は
+ * これを admission で弾き、当該 anomaly への再試行の記録（rejected observation）
+ * として残す。
+ */
+export function restatementReassertionFailsCorrespondence(input: {
+  ledger: FindingLedger;
+  admittedRaw: RawFinding;
+  bindings: readonly RestatementRequestBinding[];
+}): boolean {
+  const echoedAnomalyId = input.admittedRaw.reassertsReviewerAnomalyId;
+  if (echoedAnomalyId === undefined) {
+    return false;
+  }
+  const echoedBindings = input.bindings.filter(
+    (binding) => binding.request.anomalyId === echoedAnomalyId,
+  );
+  if (echoedBindings.length === 0) {
+    // その anomaly の言い直しは、この呼び出しでは要求していない。要求していない
+    // ものを「言い直しの失敗」とは判定できないので、echo を落として通常の新規
+    // claim として評価させる（正当な新規指摘を殺さない）。台帳に無い anomaly ID を
+    // 指す echo も、request が無い以上ここに落ちる。
+    return false;
+  }
+  const anomaly = (input.ledger.reviewerAnomalies ?? []).find(
+    (entry) => entry.id === echoedAnomalyId,
+  );
+  const sourceRaw = anomaly?.sourceRawFindingIds
+    .map((rawFindingId) => input.ledger.rawFindings.find((raw) => raw.rawFindingId === rawFindingId))
+    .find((raw) => raw !== undefined);
+  if (anomaly === undefined || sourceRaw === undefined) {
+    // request はあるのに照合対象の観測が台帳から消えている。比較のしようがないので
+    // 同じく echo を落とす。
+    return false;
+  }
+  return !echoedBindings.some((binding) => hasRestatementCorrespondence({
+    anomaly,
+    sourceRaw,
+    admittedRaw: input.admittedRaw,
+    request: binding.request,
+  }));
 }
 
 function hasValidRestatementEcho(

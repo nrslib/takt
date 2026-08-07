@@ -45,6 +45,7 @@ import { buildPhase1WorkflowMeta } from './workflow-meta.js';
 import type {
   FindingContractInstructionContext,
 } from '../instruction/instruction-context.js';
+import type { FindingRestatementSlotOwnerContexts } from '../findings/restatement-slot-runner.js';
 
 type ResolvedRunAgentOptions = RunAgentOptions & {
   resolvedProviderOptions?: StepProviderOptions;
@@ -88,11 +89,10 @@ export class OptionsBuilder {
       findingContractFreezeKey?: string,
     ) => FindingContractInstructionContext | undefined,
     private readonly getTask?: () => string,
-    private readonly getFindingEscalationInstructionContexts?: (input: {
+    private readonly getFindingRestatementSlotContexts?: (input: {
       ownerReviewerSteps: readonly AgentWorkflowStep[];
       reviewScopeSnapshotId: string;
-      findingContractFreezeKey: string;
-    }) => ReadonlyMap<string, FindingContractInstructionContext>,
+    }) => ReadonlyMap<string, FindingRestatementSlotOwnerContexts>,
     private readonly getReviewScope?: () => TaskReviewScope,
   ) {}
 
@@ -408,16 +408,15 @@ export class OptionsBuilder {
   }
 
   /**
-   * 格上げ再レビュー（提示予算の最終1回）用の owner 別 reviewer context。
-   * 格上げ先を持たない owner と、今ラウンドに格上げ対象の anomaly が無い owner は
-   * 含まれない。
+   * 言い直し slot の1パス分の owner 別 reviewer context。今のパスで提示する
+   * anomaly が無い owner・フェーズは含まれない。呼ぶたびに台帳と提示回数を
+   * 読み直す。
    */
-  buildFindingEscalationInstructionContexts(input: {
+  buildFindingRestatementSlotContexts(input: {
     ownerReviewerSteps: readonly AgentWorkflowStep[];
     reviewScopeSnapshotId: string;
-    findingContractFreezeKey: string;
-  }): ReadonlyMap<string, FindingContractInstructionContext> {
-    return this.getFindingEscalationInstructionContexts?.(input) ?? new Map();
+  }): ReadonlyMap<string, FindingRestatementSlotOwnerContexts> {
+    return this.getFindingRestatementSlotContexts?.(input) ?? new Map();
   }
 
   private resolveSupportedMaxTurns(

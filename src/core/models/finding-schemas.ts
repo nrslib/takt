@@ -732,13 +732,15 @@ export const ReviewerAnomalyEntrySchema = z.object({
       kind: z.enum([
         'restatement_exhausted_claim_bearing',
         'protocol_noise_rejected_after_presentation',
+        'undemandable_claim_atom',
       ]),
       workflowOutcome: z.enum([
         'review_integrity_unresolved',
         'non_claim_observation_rejected',
       ]),
       decidedAt: FindingObservationSchema,
-      terminalPublicationId: Sha256Schema,
+      // 提示を伴わない終端（undemandable_claim_atom）は根拠 publication を持たない。
+      terminalPublicationId: Sha256Schema.optional(),
       reason: nonEmptyString,
     }).strict().optional(),
   }).strict().optional(),
@@ -787,7 +789,31 @@ export const ReviewerAnomalyEntrySchema = z.object({
     ctx.addIssue({ code: 'custom', path: ['intakeContract', 'terminalDisposition'], message: 'protocol-noise cannot become review_integrity_unresolved' });
   }
   const terminal = value.intakeContract?.terminalDisposition;
-  if (terminal !== undefined) {
+  // 言い直しで要求できる claim 本文が無い観測は、claim-bearing/protocol-noise の
+  // どちらに分類されていても提示では決着しない。observationClass 由来の対応表から
+  // 外れる唯一の終端で、根拠 publication も持たない。
+  if (terminal !== undefined && terminal.kind === 'undemandable_claim_atom') {
+    const expectedOutcome = value.intakeContract!.observationClass === 'claim-bearing'
+      ? 'review_integrity_unresolved'
+      : 'non_claim_observation_rejected';
+    if (
+      terminal.workflowOutcome !== expectedOutcome
+      || terminal.terminalPublicationId !== undefined
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['intakeContract', 'terminalDisposition'],
+        message: 'undemandable_claim_atom must follow observationClass without a terminal publication',
+      });
+    }
+  } else if (terminal !== undefined) {
+    if (terminal.terminalPublicationId === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['intakeContract', 'terminalDisposition'],
+        message: 'presentation-based terminal disposition requires terminalPublicationId',
+      });
+    }
     const expectedKind = value.intakeContract!.observationClass === 'claim-bearing'
       ? 'restatement_exhausted_claim_bearing'
       : 'protocol_noise_rejected_after_presentation';

@@ -9,7 +9,9 @@
 
 {{#if restatementOnly}}## Restatement requests
 これは再提示専用レビューです。下の request だけを処理してください。新しい調査も、新しい問題の報告もしないでください。レポートの書式は output contract のとおりに保ち、`## Finding Contract Claims` 節には下の再提示エントリだけを書いてください。
-
+{{/if}}{{#if restatementAlongsideReview}}## Restatement requests
+指示されたレビューに加えて、下の request にも答えてください。再提示エントリはレポートの `## Finding Contract Claims` 節へ、他の claim と一緒に書きます。レビューの代わりではありません。
+{{/if}}{{#if hasRestatementRequests}}
 ### 返す形
 
 ```markdown

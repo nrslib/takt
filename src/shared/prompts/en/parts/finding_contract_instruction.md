@@ -9,7 +9,9 @@
 
 {{#if restatementOnly}}## Restatement requests
 This is a restatement-only review. Address only the requests below. Do not investigate anything else and do not report new issues. Keep your report in the shape your output contract specifies, and put only the restatement entries below in its `## Finding Contract Claims` section.
-
+{{/if}}{{#if restatementAlongsideReview}}## Restatement requests
+Alongside the review you are asked to perform, also answer the restatement requests below. Put their entries in your report's `## Finding Contract Claims` section together with your other claims; they do not replace the review.
+{{/if}}{{#if hasRestatementRequests}}
 ### Response shape
 
 ```markdown

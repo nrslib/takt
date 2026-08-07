@@ -237,7 +237,7 @@ describe('StepExecutor', () => {
         buildFindingContractInstructionContext: vi.fn().mockReturnValue(
           findingContractContext,
         ),
-        buildFindingEscalationInstructionContexts: vi.fn().mockReturnValue(new Map()),
+        buildFindingRestatementSlotContexts: vi.fn().mockReturnValue(new Map()),
       },
       getCwd: () => cwd,
       getProjectCwd: () => cwd,
@@ -447,6 +447,8 @@ describe('StepExecutor', () => {
       reviewer: {
         reviewScopeSnapshotId: requestWithoutId.reviewScopeSnapshotId,
         presentationContext,
+        // mode は呼び出し側が明示する契約。落とすと Phase 2 だけ通常レビュー契約へ化ける。
+        mode: 'restatement-only' as const,
       },
     };
 
@@ -2204,7 +2206,7 @@ describe('StepExecutor', () => {
           resolveStepProviderModel: () => ({ provider: 'mock', model: 'primary-capability-model' }),
         }),
         buildFindingContractInstructionContext,
-        buildFindingEscalationInstructionContexts: vi.fn().mockReturnValue(new Map()),
+        buildFindingRestatementSlotContexts: vi.fn().mockReturnValue(new Map()),
         resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'mock', model: 'primary-capability-model' }),
       } as unknown as StepExecutorDeps['optionsBuilder'],
       getCwd: () => cwd,
@@ -2337,21 +2339,9 @@ describe('StepExecutor', () => {
       preparedExecution,
     );
 
-    expect(buildFindingContractInstructionContext)
-      .toHaveBeenCalledWith(
-        step,
-        true,
-        undefined,
-        // owner context と escalation slot が同じ ledger / presentation counts を
-        // 見るための凍結キー。区切りは固定なので分解して検証する。
-        expect.any(String),
-      );
-    const freezeKey = String(buildFindingContractInstructionContext.mock.calls[0]![3]);
-    const freezeKeyParts = freezeKey.split('\u0000');
-    expect(freezeKeyParts).toHaveLength(3);
-    expect(freezeKeyParts[0]).toBe(step.name);
-    expect(Number(freezeKeyParts[1])).toBeGreaterThan(0);
-    expect(Number(freezeKeyParts[2])).toBeGreaterThan(0);
+    // 単独ステップは1レビュアーなので、owner context の凍結キーは要らない。
+    // 言い直しは manager 取り込み後の slot が自前で台帳を読み直す。
+    expect(buildFindingContractInstructionContext).toHaveBeenCalledWith(step, true);
     // レビュアーは markdown レポートしか書かない。raw findings のスキーマも
     // snapshot ID も、レビュアー側のプロンプトと provider options には載らない。
     expect(buildAgentOptions).toHaveBeenCalledWith(

@@ -1574,12 +1574,24 @@ export const INTAKE_CONTRACT_CLASSIFICATION_AUTHORITY_ID =
 export interface IntakeContractTerminalDisposition {
   kind:
     | 'restatement_exhausted_claim_bearing'
-    | 'protocol_noise_rejected_after_presentation';
+    | 'protocol_noise_rejected_after_presentation'
+    /**
+     * 言い直しで再現を要求できる claim 本文を、記録された観測から一切選べない。
+     * request を作っても「見せた文をそのまま写しても受理されない」ものにしかならず、
+     * 提示を重ねても決着しない。提示を1回も行わずにその場で終端する唯一の kind。
+     *
+     * workflowOutcome は observationClass に従う — claim-bearing は
+     * `review_integrity_unresolved`（主張はあったのに機械可読な形で残らなかった
+     * 事実を可視的失敗として扱う）、protocol-noise は
+     * `non_claim_observation_rejected`。
+     */
+    | 'undemandable_claim_atom';
   workflowOutcome:
     | 'review_integrity_unresolved'
     | 'non_claim_observation_rejected';
   decidedAt: FindingObservation;
-  terminalPublicationId: string;
+  /** 終端の根拠になった提示 publication。提示を伴わない終端では持たない。 */
+  terminalPublicationId?: string;
   reason: string;
 }
 

@@ -43,7 +43,11 @@ import {
   resolveFindingContractIntakeStep,
 } from '../findings/contract-intake.js';
 import type { FindingManagerSubStepResult } from '../findings/manager-runner.js';
-import { runFindingEscalationReviewer } from '../findings/escalation-reviewer-runner.js';
+import {
+  runFindingRestatementSlot,
+  type FindingRestatementSlotTerminalOutcome,
+} from '../findings/restatement-slot-runner.js';
+import { resolveReviewIntegrityLimits } from '../findings/review-integrity.js';
 import type { ReviewerRelationClarification } from '../findings/relation-coherence.js';
 import {
   reviewReportProtocolRejectionResponse,
@@ -1043,33 +1047,7 @@ export class ParallelRunner {
       };
     }
 
-    // 提示予算の最終1回は escalation reviewer へ格上げする。owner の
-    // publication が揃った後・manager の取り込み前に一度だけ実行し、その
-    // publication を owner の集合へ足してから intake へ渡す。
     const sharedReviewScopeSnapshotId = sharedReviewerContext?.reviewScopeSnapshotId;
-    const escalation = sharedReviewScopeSnapshotId === undefined
-      ? undefined
-      : await this.runEscalationReviewer({
-        step,
-        state,
-        task,
-        maxSteps,
-        stepIteration,
-        subResults,
-        // report 形式の継承元と owner 名の両方を、実際に FC 台帳へ寄稿する
-        // reviewer sub-step だけに絞る（通常 agent sub-step が混在する構成で
-        // 誤継承・不当 throw を起こさない）。
-        ownerReviewerSteps: agentSubSteps.filter(
-          (subStep) => resolveFindingContractIntakeStep(subStep, this.deps.findingContract) !== undefined,
-        ),
-        findingContractFreezeKey,
-        reviewScopeSnapshotId: sharedReviewScopeSnapshotId,
-        updatePersonaSession,
-        runtime,
-      });
-    if (escalation !== undefined && 'terminalResult' in escalation) {
-      return escalation.terminalResult;
-    }
 
     // 報告側原因で取り込めなかったレビュアーは、manager の取り込みより先に
     // anomaly として記録する。round marker は成立した publication の ID から
@@ -1081,17 +1059,9 @@ export class ParallelRunner {
       await this.deps.stepExecutor.recordReviewReportProtocolRejections({
         parentStepName: step.name,
         stepIteration,
-        // manager が使う round marker は owner と格上げ枠の publication を
-        // ひとつの集合として数える。ここで格上げ分を落とすと別の marker になり、
-        // 同じラウンドが review_budget に二重計上される。
-        publicationIds: [
-          ...subResults.flatMap((result) => (
-            result.publication === undefined ? [] : [result.publication.publicationId]
-          )),
-          ...(escalation?.reviewerResults ?? []).map(
-            (result) => result.publication.publicationId,
-          ),
-        ],
+        publicationIds: subResults.flatMap((result) => (
+          result.publication === undefined ? [] : [result.publication.publicationId]
+        )),
         rejections: reportRejections,
       });
     }
@@ -1104,7 +1074,6 @@ export class ParallelRunner {
       state.iteration,
       subResults,
       priorStepResponseText,
-      escalation?.reviewerResults,
     );
 
     const postExecutionRuntime = runtime?.fallback === undefined
@@ -1171,6 +1140,57 @@ export class ParallelRunner {
           refreshFindingsState: this.deps.refreshFindingsState,
         });
       }
+    }
+
+    // 言い直しはレビューラウンドへ相乗りさせず、manager 取り込みが終わった
+    // 直後に、言い直し待ちの anomaly を持つレビュアーごとの直接呼び出しとして
+    // 発行する。提示予算の範囲で同一ラウンド内をインライン反復し、最終枠だけ
+    // 格上げ先モデルへ回す。親の集約ルール（when(findings.*)）はこの反復が
+    // 終わった後の台帳を読む。
+    const restatementSlot = sharedReviewScopeSnapshotId === undefined
+      ? undefined
+      : await this.runRestatementSlot({
+        step,
+        state,
+        task,
+        maxSteps,
+        stepIteration,
+        // owner 名と report 形式の継承元の両方を、実際に FC 台帳へ寄稿する
+        // reviewer sub-step だけに絞る（通常 agent sub-step が混在する構成で
+        // 誤継承・不当 throw を起こさない）。
+        ownerReviewerSteps: agentSubSteps.filter(
+          (subStep) => resolveFindingContractIntakeStep(subStep, this.deps.findingContract) !== undefined,
+        ),
+        reviewScopeSnapshotId: sharedReviewScopeSnapshotId,
+        priorStepResponseText,
+        updatePersonaSession,
+        runtime,
+      });
+    if (restatementSlot !== undefined) {
+      return this.createTerminalParentResult({
+        step,
+        state,
+        stepIteration,
+        subResults,
+        terminalResults: [{
+          subStep: restatementSlot.step,
+          response: restatementSlot.response,
+          instruction: '',
+          providerInfo: restatementSlot.providerInfo,
+          ...(restatementSlot.terminalOperation === undefined
+            ? {}
+            : { terminalOperation: restatementSlot.terminalOperation }),
+        }],
+        status: restatementSlot.response.status === 'blocked'
+          ? 'blocked'
+          : restatementSlot.response.status === 'rate_limited'
+            ? 'rate_limited'
+            : 'error',
+        providerInfo: restatementSlot.providerInfo,
+        ...(restatementSlot.terminalOperation === undefined
+          ? {}
+          : { terminalOperation: restatementSlot.terminalOperation }),
+      });
     }
 
     // Print completion summary
@@ -1394,43 +1414,45 @@ export class ParallelRunner {
   }
 
   /**
-   * 格上げ再レビューの直接 provider call。格上げ先を持つ owner が無い、または
-   * 今ラウンドに格上げ対象の anomaly も未取り込みの stored publication も無い
-   * 場合は undefined を返して何もしない（最終1回も owner reviewer への
-   * restatement のままになる）。
+   * 言い直し slot の直接 provider call。言い直し待ちの anomaly も未取り込みの
+   * stored publication も無ければ何も起きない。
    *
-   * escalation の失敗は既存の step failure 写像に従い、owner publication を
-   * 巻き込まずに parent step を terminal にする。publication 成立前の失敗なので
-   * 提示回数は増えず、次ラウンドで同じ escalation request を再発行する。
+   * 戻り値があるのは terminal（provider error / blocked / rate limited）のときだけ。
+   * publication 成立前の失敗なので提示回数は増えず、次の機会に同じ request を
+   * 再発行する。
    */
-  private async runEscalationReviewer(input: {
+  private async runRestatementSlot(input: {
     step: WorkflowStep;
     state: WorkflowState;
     task: string;
     maxSteps: WorkflowMaxSteps;
     stepIteration: number;
-    subResults: ParallelSubStepResult[];
     ownerReviewerSteps: AgentWorkflowStep[];
-    findingContractFreezeKey: string;
     reviewScopeSnapshotId: string;
+    priorStepResponseText: string | undefined;
     updatePersonaSession: (persona: string, sessionId: string | undefined) => void;
     runtime?: RuntimeStepResolution;
-  }): Promise<
-    | { reviewerResults: readonly FindingManagerSubStepResult[] }
-    | { terminalResult: StepRunResult }
-    | undefined
-  > {
-    if (this.deps.findingContract === undefined || input.ownerReviewerSteps.length === 0) {
+  }): Promise<FindingRestatementSlotTerminalOutcome | undefined> {
+    const findingContract = this.deps.findingContract;
+    if (findingContract === undefined || input.ownerReviewerSteps.length === 0) {
       return undefined;
     }
-    const escalationContexts = this.deps.optionsBuilder.buildFindingEscalationInstructionContexts({
+    return runFindingRestatementSlot({
       ownerReviewerSteps: input.ownerReviewerSteps,
+      buildSlotContexts: (contextInput) => (
+        this.deps.optionsBuilder.buildFindingRestatementSlotContexts(contextInput)
+      ),
+      ingest: async (results) => {
+        await this.ingestFindingContractSubResults(
+          input.step,
+          input.stepIteration,
+          input.state.iteration,
+          results,
+          input.priorStepResponseText,
+          'excluded',
+        );
+      },
       reviewScopeSnapshotId: input.reviewScopeSnapshotId,
-      findingContractFreezeKey: input.findingContractFreezeKey,
-    });
-    const outcome = await runFindingEscalationReviewer({
-      escalationContexts,
-      ownerReviewerSteps: input.ownerReviewerSteps,
       parentStepName: input.step.name,
       stepIteration: input.stepIteration,
       state: input.state,
@@ -1440,48 +1462,11 @@ export class ParallelRunner {
       stepExecutor: this.deps.stepExecutor,
       updatePersonaSession: input.updatePersonaSession,
       runtime: input.runtime,
+      presentationLimit: Math.max(
+        1,
+        resolveReviewIntegrityLimits(findingContract.reviewBudget).maxReviewRounds,
+      ),
     });
-    if (outcome === undefined) {
-      return undefined;
-    }
-    if (outcome.kind === 'published') {
-      return {
-        reviewerResults: outcome.results.map((result) => ({
-          subStep: result.step,
-          publication: result.publication,
-          ...(result.relationClarification === undefined
-            ? {}
-            : { relationClarification: result.relationClarification }),
-        })),
-      };
-    }
-    const terminalResult: ParallelSubStepResult = {
-      subStep: outcome.step,
-      response: outcome.response,
-      instruction: '',
-      providerInfo: outcome.providerInfo,
-      ...(outcome.terminalOperation === undefined
-        ? {}
-        : { terminalOperation: outcome.terminalOperation }),
-    };
-    return {
-      terminalResult: this.createTerminalParentResult({
-        step: input.step,
-        state: input.state,
-        stepIteration: input.stepIteration,
-        subResults: input.subResults,
-        terminalResults: [terminalResult],
-        status: outcome.response.status === 'blocked'
-          ? 'blocked'
-          : outcome.response.status === 'rate_limited'
-            ? 'rate_limited'
-            : 'error',
-        providerInfo: outcome.providerInfo,
-        ...(outcome.terminalOperation === undefined
-          ? {}
-          : { terminalOperation: outcome.terminalOperation }),
-      }),
-    };
   }
 
   private async runFindingContractManager(
@@ -1490,7 +1475,6 @@ export class ParallelRunner {
     iteration: number,
     subResults: ParallelSubStepResult[],
     priorStepResponseText: string | undefined,
-    escalationResults: readonly FindingManagerSubStepResult[] = [],
   ): Promise<FindingManagerRunResult | undefined> {
     if (!this.deps.findingContract) {
       return undefined;
@@ -1521,9 +1505,34 @@ export class ParallelRunner {
           : {}),
       }];
     });
-    reviewerResults.push(...escalationResults);
     if (reviewerResults.length === 0) {
       return undefined;
+    }
+    return this.ingestFindingContractSubResults(
+      step,
+      stepIteration,
+      iteration,
+      reviewerResults,
+      priorStepResponseText,
+    );
+  }
+
+  /**
+   * 1ラウンド分の canonical publication を findings-manager へ渡す共通入口。
+   * レビュー本編（owner の publication 集合）と、言い直し slot の各パスが
+   * 同じ手順を通る。
+   */
+  private async ingestFindingContractSubResults(
+    step: WorkflowStep,
+    stepIteration: number,
+    iteration: number,
+    reviewerResults: readonly FindingManagerSubStepResult[],
+    priorStepResponseText: string | undefined,
+    budgetAccounting: 'round' | 'excluded' = 'round',
+  ): Promise<FindingManagerRunResult> {
+    const ledgerStore = this.deps.findingLedgerStore;
+    if (!this.deps.findingContract || !ledgerStore) {
+      throw new Error('Finding contract is configured but finding ledger store is not available');
     }
     return ingestFindingContractResults({
       contract: this.deps.findingContract,
@@ -1536,7 +1545,8 @@ export class ParallelRunner {
       parentStep: step,
       stepIteration,
       iteration,
-      subResults: reviewerResults,
+      subResults: [...reviewerResults],
+      budgetAccounting,
       // 台帳の workflowName スタンプは店（ledgerStore）が束縛する正準名を使う。
       // workflow_call の子が親の台帳を継承した場合、この engine 自身の
       // getWorkflowName()（子のワークフロー名）を使うと reconcile 後の

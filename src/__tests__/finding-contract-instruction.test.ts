@@ -143,6 +143,44 @@ describe('buildFindingContractInstruction', () => {
       }
     });
 
+    // 呼び出し側の mode だけが「言い直しのみ」を決める。request 件数から導出すると、
+    // 言い直し request 付きの完全な再レビューが言い直し専用指示に化け、その
+    // publication で後続レビュー成立による取り下げが未検証のまま走る。
+    it('keeps the ordinary review guidance when restatement requests ride along a full review', () => {
+      for (const [language, reviewFragment, alongsideFragment] of [
+        ['en', 'Write an ordinary Markdown review report', 'Alongside the review you are asked to perform'],
+        ['ja', '通常の Markdown レビュー報告を書いてください', '指示されたレビューに加えて'],
+      ] as ReadonlyArray<readonly ['en' | 'ja', string, string]>) {
+        const rendered = build({
+          contract: {
+            reviewer: {
+              ...REVIEWER,
+              presentationContext: restatementPresentationContext(),
+              mode: 'review',
+            },
+            hasOpenFindings: true,
+          },
+          language,
+        });
+
+        expect(rendered, language).toContain('## Restatement requests');
+        expect(rendered, language).toContain('RA-RESTATEMENT');
+        expect(rendered, language).toContain(reviewFragment);
+        expect(rendered, language).toContain(alongsideFragment);
+        // 「これは再提示専用レビューです」は出さない。
+        expect(rendered, language).not.toMatch(/restatement-only review|再提示専用レビュー/u);
+      }
+    });
+
+    it('omits the restatement section entirely when a review carries no requests', () => {
+      const rendered = build({
+        contract: { reviewer: { ...REVIEWER, mode: 'review' }, hasOpenFindings: true },
+      });
+
+      expect(rendered).not.toContain('## Restatement requests');
+      expect(rendered).toContain('Write an ordinary Markdown review report');
+    });
+
     it('does not inject the dispute guide into reviewers', () => {
       const rendered = build({
         contract: { reviewer: REVIEWER, hasOpenFindings: true },
@@ -225,7 +263,7 @@ describe('buildFindingContractInstruction', () => {
     it('suppresses the ordinary reviewer guidance during a restatement-only round', () => {
       const rendered = build({
         contract: {
-          reviewer: { ...REVIEWER, presentationContext: restatementPresentationContext() },
+          reviewer: { ...REVIEWER, presentationContext: restatementPresentationContext(), mode: 'restatement-only' as const },
           hasOpenFindings: true,
         },
       });
@@ -240,7 +278,7 @@ describe('buildFindingContractInstruction', () => {
     it('keeps the severity requirement in a restatement-only round for ja as well', () => {
       const rendered = build({
         contract: {
-          reviewer: { ...REVIEWER, presentationContext: restatementPresentationContext() },
+          reviewer: { ...REVIEWER, presentationContext: restatementPresentationContext(), mode: 'restatement-only' as const },
           hasOpenFindings: true,
         },
         language: 'ja',
@@ -271,7 +309,7 @@ describe('buildFindingContractInstruction', () => {
       ] as const) {
         const rendered = build({
           contract: {
-            reviewer: { ...REVIEWER, presentationContext: restatementPresentationContext() },
+            reviewer: { ...REVIEWER, presentationContext: restatementPresentationContext(), mode: 'restatement-only' as const },
             hasOpenFindings: true,
           },
           language,
@@ -293,7 +331,7 @@ describe('buildFindingContractInstruction', () => {
       ] as const) {
         const rendered = build({
           contract: {
-            reviewer: { ...REVIEWER, presentationContext: restatementPresentationContext() },
+            reviewer: { ...REVIEWER, presentationContext: restatementPresentationContext(), mode: 'restatement-only' as const },
             hasOpenFindings: true,
           },
           language,
@@ -337,7 +375,7 @@ describe('buildFindingContractInstruction', () => {
             // このファイル冒頭のスタブと違い reportLedgerSummary の欠落を許さない。
             findingContract: makeContract({
               reportLedgerSummary: '[]',
-              reviewer: { ...REVIEWER, presentationContext: restatementPresentationContext() },
+              reviewer: { ...REVIEWER, presentationContext: restatementPresentationContext(), mode: 'restatement-only' as const },
               hasOpenFindings: true,
             }),
           },
@@ -372,7 +410,7 @@ describe('buildFindingContractInstruction', () => {
       ] as const) {
         const rendered = build({
           contract: {
-            reviewer: { ...REVIEWER, presentationContext: restatementPresentationContext() },
+            reviewer: { ...REVIEWER, presentationContext: restatementPresentationContext(), mode: 'restatement-only' as const },
             hasOpenFindings: true,
           },
           language,

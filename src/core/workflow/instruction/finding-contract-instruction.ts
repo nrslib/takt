@@ -40,7 +40,15 @@ function renderFindingContractInstruction(input: {
   // テンプレートエンジンは {{#if}} の入れ子を扱えない（{{#unless}} も無い）ため、
   // 「再提示専用レビューでは通常のレビュー指示を出さない」という入れ子条件は
   // ここで各フラグへ畳んでから渡す。
-  const restatementOnly = restatementRequests.length > 0;
+  //
+  // 判定は呼び出し側が渡す mode だけを見る。request 件数から導出すると、
+  // 「言い直し request 付きの完全な再レビュー」が言い直し専用指示に化け、その
+  // publication で withdrawal（後続レビュー成立による取り下げ）が走ってしまう。
+  const hasRestatementRequests = restatementRequests.length > 0;
+  // request が1件も無い呼び出しは、mode が restatement-only でも「言い直しだけ」に
+  // ならない（指示が空になる）。抑止は request が実在するときだけ効かせる。
+  const restatementOnly = reviewer?.mode === 'restatement-only' && hasRestatementRequests;
+  const restatementAlongsideReview = hasRestatementRequests && !restatementOnly;
 
   // review-integrity protocol: reviewer context は必ず reviewScopeSnapshotId と
   // セットで生成される（WorkflowEngineSetup.ts の
@@ -86,7 +94,9 @@ function renderFindingContractInstruction(input: {
     reviewerHasDismissedFindings: isReviewer && contract.hasDismissedFindings && !restatementOnly,
     provisionalGuidance: !restatementOnly,
     restatementOnly,
-    restatementRequestsJson: restatementOnly
+    restatementAlongsideReview,
+    hasRestatementRequests,
+    restatementRequestsJson: hasRestatementRequests
       ? renderFencedJsonBlock(restatementRequests).trimEnd()
       : '',
     // 異議申告のガイドは open な指摘が存在するときだけ注入する。台帳が空の

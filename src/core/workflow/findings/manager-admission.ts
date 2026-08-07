@@ -13,6 +13,7 @@ import type {
 import type { ProvisionalFindingSpec } from './reconciler.js';
 import {
   createReviewerAnomalySpec,
+  restatementReassertionFailsCorrespondence,
   type ReviewerAnomalyPromotionCandidate,
   type ReviewerAnomalySpec,
 } from './reviewer-anomalies.js';
@@ -534,6 +535,25 @@ function evaluateAdmissionItem(input: {
     item,
     input.restatementRequestBindings,
   );
+  // 「この anomaly を言い直した」と自己申告したのに照合ゲートを通らない再主張は、
+  // 新規 product finding にしない。鋳造すると同じ主張が言い直しのたびに別 finding
+  // として積み上がる。当該 anomaly への再試行の記録として残す（提示計上は
+  // publication 側で従来どおり進む）。
+  if (restatementReassertionFailsCorrespondence({
+    ledger: input.previousLedger,
+    admittedRaw: item.wire,
+    bindings: restatementRequestBindings,
+  })) {
+    return {
+      pool,
+      rejection: {
+        rawFindingId: item.wire.rawFindingId,
+        location: '',
+        reason: `Restatement of reviewer anomaly "${item.wire.reassertsReviewerAnomalyId}" did not reproduce the requested claim; recorded as a retry of that anomaly instead of a new finding`,
+      },
+      rejectedItem: item,
+    };
+  }
   const verifiedEvidenceCandidate = classification.evidenceRecords.length > 0
     ? {
         lineageKey: item.canonical.lineageKey,
