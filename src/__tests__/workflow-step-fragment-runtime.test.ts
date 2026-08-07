@@ -54,6 +54,7 @@ import {
 } from './engine-test-helpers.js';
 import { isolateStepFragmentTestConfig } from './helpers/step-fragment-test-helpers.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
+import { DEFAULT_REVIEW_INTEGRITY_BUDGET } from '../core/workflow/findings/review-integrity.js';
 import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 
 function writeFile(root: string, relativePath: string, content: string): string {
@@ -294,14 +295,26 @@ describe('workflow step fragment runtime contract', () => {
       allowedTools: ['Read'],
       requiredPermissionMode: 'edit',
     });
-    expect(inlineResult.ledgers).toHaveLength(1);
-    expect(fragmentResult.ledgers).toHaveLength(1);
+    // このレビュアーは毎回同じ不完全 claim を返すので、差し戻し slot は提示予算を
+    // 使い切る。取り込みは「レビュー本編1回 + slot のパス数」で、上限は
+    // presentationLimit（review_budget 既定 6）。fragment と inline で同数になることが
+    // 契約で、リテラル1件ではない。
+    expect(fragmentResult.ledgers).toHaveLength(inlineResult.ledgers.length);
+    expect(inlineResult.ledgers.length).toBeGreaterThan(0);
+    expect(inlineResult.ledgers.length).toBeLessThanOrEqual(
+      1 + DEFAULT_REVIEW_INTEGRITY_BUDGET.maxReviewRounds,
+    );
     // 正規化係が受け取るのはレビュアーの markdown レポート本文そのもの。引数を
     // 検証しないと、実装が空文字や別の本文を渡しても気づけない。mock は execute()
-    // ごとに reset するので、残っているのは最後（fragment 側）の1ラウンド分。
-    expect(vi.mocked(normalizeFindingIntake).mock.calls.map(([report]) => report))
-      .toEqual([REVIEW_REPORT_CONTENT]);
+    // ごとに reset するので、残っているのは最後（fragment 側）の1ステップ分
+    // （レビュー本編 + 差し戻し slot の各パス）。
+    const normalizerReports = vi.mocked(normalizeFindingIntake).mock.calls
+      .map(([report]) => report);
+    expect(normalizerReports.length).toBeGreaterThan(0);
+    expect(new Set(normalizerReports)).toEqual(new Set([REVIEW_REPORT_CONTENT]));
     for (const result of [inlineResult, fragmentResult]) {
+      // 差し戻しを重ねても、決着しない観測は1件の anomaly のままで、product
+      // findings は空を保つ（周回のたびに finding が増えない）。
       // FC intake 契約化後の landing: target 無し（review_scope）の独立 claim は
       // provisional finding ではなく intake-contract-incomplete reviewer anomaly に
       // 隔離され、product findings は空のまま completion を塞ぐ。

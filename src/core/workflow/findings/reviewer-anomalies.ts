@@ -561,15 +561,30 @@ export function linkPromotedReviewerAnomalies(
 export function collectReviewSupersededReviewerAnomalyIds(
   ledger: FindingLedger,
   reviewers: ReadonlySet<string>,
+  /**
+   * 判定ラダーを通った（verdict を伴う）publication を登録したレビュアー枠。
+   * verdict 由来の anomaly はこちらでしか決着しない。
+   */
+  verdictReviewers: ReadonlySet<string> = reviewers,
 ): Set<string> {
   return new Set(
     (ledger.reviewerAnomalies ?? [])
-      .filter((anomaly) => (
-        isOutstandingReviewerAnomaly(anomaly)
-        && anomaly.intakeContract === undefined
-        && anomaly.reviewers.length > 0
-        && anomaly.reviewers.every((reviewer) => reviewers.has(reviewer))
-      ))
+      .filter((anomaly) => {
+        if (
+          !isOutstandingReviewerAnomaly(anomaly)
+          || anomaly.intakeContract !== undefined
+          || anomaly.reviewers.length === 0
+        ) {
+          return false;
+        }
+        // 「非承認判定 + claim ゼロ件」は verdict そのものを根拠に記録した anomaly。
+        // verdict を伴わない再レビューで取り下げると、そのゲートが再レビューで
+        // 洗い流されて予算に到達しなくなる。
+        const settlingReviewers = anomaly.kind === 'verdict-claims-mismatch'
+          ? verdictReviewers
+          : reviewers;
+        return anomaly.reviewers.every((reviewer) => settlingReviewers.has(reviewer));
+      })
       .map((anomaly) => anomaly.id),
   );
 }

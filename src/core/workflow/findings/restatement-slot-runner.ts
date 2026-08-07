@@ -287,9 +287,14 @@ function instructionModeFor(mode: RestatementSlotMode): 'review' | 'restatement-
   return mode === 'full-review' ? 'review' : 'restatement-only';
 }
 
-/** その呼び出しの publication が「完全なレビューが成立した」証跡になるか。 */
-function establishesCompleteReview(mode: 'review' | 'restatement-only'): boolean {
-  return mode === 'review';
+/**
+ * その呼び出しの publication が後続レビューとして何を成立させたか。
+ *
+ * slot のフルレビューは判定ラダーを持たない（rules: []）ので verdict を伴わない。
+ * verdict 由来の anomaly はここでは決着しない。
+ */
+function reviewEvidenceFor(mode: 'review' | 'restatement-only'): 'review' | 'none' {
+  return mode === 'review' ? 'review' : 'none';
 }
 
 type SlotPresentationOutcome =
@@ -365,7 +370,7 @@ async function runSlotPresentation(
         // 引き当てた publication を出した呼び出しの mode を採用する。今回の
         // input.mode を被せると、言い直しだけで出た publication が再開後に
         // フルレビューの証拠として withdrawal を発火し得る。
-        establishesCompleteReview: establishesCompleteReview(
+        reviewEvidence: reviewEvidenceFor(
           resumed.reviewerCallMode ?? instructionModeFor(input.mode),
         ),
         ...(resumed.relationClarification === undefined
@@ -497,7 +502,7 @@ async function runSlotPresentation(
       publication: prepared.publication,
       // 言い直しだけの publication は withdrawal の根拠にしない。保存済みを
       // 引き当てた場合も、その publication を出した呼び出しの mode に従う。
-      establishesCompleteReview: establishesCompleteReview(
+      reviewEvidence: reviewEvidenceFor(
         prepared.reviewerCallMode ?? instructionModeFor(input.mode),
       ),
       ...(prepared.relationClarification === undefined

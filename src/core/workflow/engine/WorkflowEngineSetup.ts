@@ -404,6 +404,10 @@ function hasOutstandingNonIntakeAnomalyFor(
   return (ledger.reviewerAnomalies ?? []).some((anomaly) => (
     isOutstandingReviewerAnomaly(anomaly)
     && anomaly.intakeContract === undefined
+    // verdict 由来の anomaly は verdict を伴う publication でしか決着しない。
+    // slot のフルレビューは判定ラダーを持たないので verdict を出せず、発行しても
+    // 決着させられない呼び出しになる（ワークフローのレビューステップ本体を待つ）。
+    && anomaly.kind !== 'verdict-claims-mismatch'
     && anomaly.reviewers.includes(reviewerStepName)
   ));
 }

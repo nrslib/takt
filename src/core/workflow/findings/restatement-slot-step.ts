@@ -85,11 +85,27 @@ export function buildFindingRestatementSlotStep(input: {
       `Finding contract reviewer "${owner.name}" has no output contract to inherit for restatement`,
     );
   }
-  if (owner.persona === undefined) {
+  // persona 未指定のレビュアーは正当な構成なので、そのまま undefined を継承する。
+  //
+  // 例外は格上げ枠だけ。lifecycle 上の観測者キーは `persona ?? step 名` で導出され、
+  // 格上げ枠は step 名が 'escalation-reviewer' に変わる。persona を共有できないと
+  // 代打の主張が owner の lifecycle を継がず別人の新規観測として二重計上される
+  // ため、その構成は fail loud にする（言い直し枠は step 名が owner と同じなので
+  // persona 無しでも観測者キーは一致する）。
+  if (input.phase === 'escalation' && owner.persona === undefined) {
     throw new Error(
-      `Finding contract reviewer "${owner.name}" has no persona to inherit for restatement`,
+      `Finding contract reviewer "${owner.name}" has no persona to inherit for escalated re-review`,
     );
   }
+  // full-review はレビュー手順そのものが決着条件（後続の完全レビュー成立）なので、
+  // 手順が無いまま「完全な再レビュー」を名乗らせない。persona / report 形式と同じく
+  // 継承元の欠落は fail loud にする。
+  if (input.mode === 'full-review' && (owner.instruction ?? '').trim().length === 0) {
+    throw new Error(
+      `Finding contract reviewer "${owner.name}" has no instruction to inherit for a full re-review`,
+    );
+  }
+  const ownerInstruction = owner.instruction;
   const reportName = findingRestatementSlotReportName({
     ownerStepName: owner.name,
     phase: input.phase,
@@ -101,7 +117,7 @@ export function buildFindingRestatementSlotStep(input: {
       ? FINDING_ESCALATION_REVIEWER_ROUTING_KEY
       : owner.name,
     engineSynthesized: true,
-    persona: owner.persona,
+    ...(owner.persona === undefined ? {} : { persona: owner.persona }),
     ...(owner.personaPath === undefined ? {} : { personaPath: owner.personaPath }),
     personaDisplayName: owner.personaDisplayName,
     ...(input.phase === 'escalation'
@@ -137,7 +153,7 @@ export function buildFindingRestatementSlotStep(input: {
     // 「そのレビュアーの後続完全レビュー成立」なので、手順を落とすと決着の前提が
     // 崩れる。
     instruction: input.mode === 'full-review'
-      ? owner.instruction
+      ? ownerInstruction
       : 'Restate the requested claims for the owning reviewer.',
     session: 'refresh',
     edit: false,

@@ -440,12 +440,16 @@ export function applyCommitLedgerStates(input: {
   // 単一 ID にすると後勝ちで1件へ潰れ、取り下げの監査記録に別 owner の
   // publication ID が入る。全件を保持する。
   const publicationIdsByReviewer = new Map<string, string[]>();
-  for (const { publication, establishesCompleteReview } of input.runInput.subResults) {
+  const verdictReviewers = new Set<string>();
+  for (const { publication, reviewEvidence } of input.runInput.subResults) {
     // 言い直しだけを行った差し戻し publication は「完全なレビューが成立した」
     // 証跡にならない。ここへ入れると、レビューされていない anomaly が
     // 「後続レビューがあった」ものとして未検証のまま取り下げられる。
-    if (establishesCompleteReview === false) {
+    if (reviewEvidence === 'none') {
       continue;
+    }
+    if (reviewEvidence === undefined || reviewEvidence === 'verdict') {
+      verdictReviewers.add(publication.reviewerStepName);
     }
     const ids = publicationIdsByReviewer.get(publication.reviewerStepName);
     if (ids === undefined) {
@@ -457,6 +461,7 @@ export function applyCommitLedgerStates(input: {
   const supersededAnomalyIds = collectReviewSupersededReviewerAnomalyIds(
     input.settledLedger,
     new Set(publicationIdsByReviewer.keys()),
+    verdictReviewers,
   );
   const anomalySpecs = [...input.baseAnomalySpecs, ...rejectedObservations.anomalySpecs];
   const withAnomalies = applyReviewerAnomalySpecsToLedger(

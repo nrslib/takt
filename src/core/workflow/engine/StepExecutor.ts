@@ -2237,6 +2237,29 @@ export class StepExecutor {
             ? { relationClarification: resumedPublication.relationClarification }
             : {}),
         });
+        // 遷移判定（applyPostExecutionRulesOnly）より前に回す。理由は新規実行側と同じ。
+        const resumedSlotOutcome = await this.runRestatementSlotForNormalStep({
+          parentStepName: step.name,
+          ownerReviewerStep: executableStep,
+          findingContractContext,
+          stepIteration,
+          state,
+          task,
+          maxSteps,
+          priorStepResponseText,
+          updatePersonaSession,
+          runtime: executionRuntime,
+        });
+        if (resumedSlotOutcome !== undefined) {
+          return this.restatementSlotTerminalStepResult({
+            step,
+            state,
+            stepIteration,
+            instruction: phase1Instruction,
+            fallbackProviderInfo: resumedPublication.reviewerProviderInfo ?? providerInfo,
+            slot: resumedSlotOutcome,
+          });
+        }
         const response = await this.applyPostExecutionRulesOnly(
           step,
           state,
@@ -2257,32 +2280,6 @@ export class StepExecutor {
           publication: resumedPublication.publication,
           roundMarker: resumedIngest.roundMarker,
         });
-        // 差し戻し slot は verdict/claims の記録より後（parallel 経路と同じ順序）。
-        const resumedSlot = await this.runRestatementSlotForNormalStep({
-          parentStepName: step.name,
-          // dynamic facets 適用後の実行用ステップを owner として渡す。設定上の
-          // step を渡すと、その回の owner が実際に使った facet 集合と代打の
-          // 判断基準がずれる（名前は同一なので publication identity は不変）。
-          ownerReviewerStep: executableStep,
-          findingContractContext,
-          stepIteration,
-          state,
-          task,
-          maxSteps,
-          priorStepResponseText,
-          updatePersonaSession,
-          runtime: executionRuntime,
-        });
-        if (resumedSlot !== undefined) {
-          return this.restatementSlotTerminalStepResult({
-            step,
-            state,
-            stepIteration,
-            instruction: phase1Instruction,
-            fallbackProviderInfo: resumedPublication.reviewerProviderInfo ?? providerInfo,
-            slot: resumedSlot,
-          });
-        }
         state.stepOutputs.set(step.name, response);
         state.lastOutput = response;
         this.persistPreviousResponseSnapshot(
@@ -2545,6 +2542,35 @@ export class StepExecutor {
           priorStepResponseText,
           relationClarification: prepared.relationClarification,
         })).roundMarker;
+        // 差し戻し slot は post-execution rules より前に回す。単独ステップでは
+        // その rules 評価がこのステップの遷移判定そのものなので、後に回すと
+        // when(findings.*) が slot の取り込み前の台帳を読む（parallel では親の
+        // 集約 rules が slot の後に評価されるので同じ順序になる）。
+        // verdict-claims-mismatch は slot の発火条件から外してあるため、
+        // 記録との前後関係は slot の挙動を変えない。
+        const slot = await this.runRestatementSlotForNormalStep({
+          parentStepName: step.name,
+          // dynamic facets 適用後の実行用ステップを owner として渡す（上と同じ理由）。
+          ownerReviewerStep: executableStep,
+          findingContractContext,
+          stepIteration,
+          state,
+          task,
+          maxSteps,
+          priorStepResponseText,
+          updatePersonaSession,
+          runtime: executionRuntime,
+        });
+        if (slot !== undefined) {
+          return this.restatementSlotTerminalStepResult({
+            step,
+            state,
+            stepIteration,
+            instruction: phase1Instruction,
+            fallbackProviderInfo: completedReviewerProviderInfo,
+            slot,
+          });
+        }
       }
     }
 
@@ -2592,35 +2618,6 @@ export class StepExecutor {
         publication: reviewerPublication,
         roundMarker: reviewerRoundMarker,
       });
-    }
-
-    // 差し戻し slot は「判定確定 + verdict/claims 記録」の後に回す（parallel 経路と
-    // 同じ順序）。先に回すとこのラウンドで積んだ verdict-claims-mismatch が
-    // slot の判定に入らず、差し戻しが1ラウンド遅れる。
-    if (findingContractIntakeStep !== undefined && findingContractContext !== undefined) {
-      const slot = await this.runRestatementSlotForNormalStep({
-        parentStepName: step.name,
-        // dynamic facets 適用後の実行用ステップを owner として渡す（上と同じ理由）。
-        ownerReviewerStep: executableStep,
-        findingContractContext,
-        stepIteration,
-        state,
-        task,
-        maxSteps,
-        priorStepResponseText,
-        updatePersonaSession,
-        runtime: executionRuntime,
-      });
-      if (slot !== undefined) {
-        return this.restatementSlotTerminalStepResult({
-          step,
-          state,
-          stepIteration,
-          instruction: phase1Instruction,
-          fallbackProviderInfo: completedReviewerProviderInfo,
-          slot,
-        });
-      }
     }
 
     state.stepOutputs.set(step.name, response);

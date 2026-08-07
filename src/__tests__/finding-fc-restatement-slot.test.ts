@@ -399,17 +399,48 @@ describe('FC restatement slot — synthetic step inherits the owner reviewer', (
     }).mcpServers).toEqual({ docs: { command: 'docs-server' } });
   });
 
-  it('fails loudly when the owner reviewer has no persona to inherit', () => {
+  // persona 未指定のレビュアーは正当な構成。言い直し枠は step 名が owner と同じ
+  // なので、観測者キー（persona ?? step 名）は persona 無しでも一致する。
+  it('inherits an absent persona for the restatement slot instead of failing', () => {
+    const ownerWithoutPersona = { ...ownerStep, persona: undefined } as unknown as AgentWorkflowStep;
+    const step = buildFindingRestatementSlotStep({
+      ownerStep: ownerWithoutPersona,
+      phase: 'restatement',
+      mode: 'restatement-only',
+      presentationPass: 1,
+      target: OWNER_TARGET,
+    });
+
+    expect(step.persona).toBeUndefined();
+    const reviewerKeyOf = (candidate: AgentWorkflowStep) => candidate.persona ?? candidate.name;
+    expect(reviewerKeyOf(step)).toBe(reviewerKeyOf(ownerWithoutPersona));
+  });
+
+  // 格上げ枠だけは step 名が 'escalation-reviewer' へ変わるため、persona を
+  // 共有できないと代打の主張が owner の lifecycle を継がない。
+  it('fails loudly when an escalated re-review has no persona to inherit', () => {
     expect(() => buildFindingRestatementSlotStep({
       ownerStep: {
         ...ownerStep,
         persona: undefined,
       } as unknown as AgentWorkflowStep,
-      phase: 'restatement',
+      phase: 'escalation',
       mode: 'restatement-only',
       presentationPass: 1,
-      target: OWNER_TARGET,
+      target: ESCALATION_TARGET,
     })).toThrow(/persona/);
+  });
+
+  // full-review は「レビュー手順そのもの」が決着条件なので、手順が無いまま
+  // 完全な再レビューを名乗らせない。
+  it('fails loudly when a full re-review has no owner instruction to inherit', () => {
+    expect(() => buildFindingRestatementSlotStep({
+      ownerStep: { ...ownerStep, instruction: '  ' } as unknown as AgentWorkflowStep,
+      phase: 'restatement',
+      mode: 'full-review',
+      presentationPass: 1,
+      target: OWNER_TARGET,
+    })).toThrow(/instruction/);
   });
 });
 
@@ -676,8 +707,10 @@ describe('FC restatement slot — per-pass request batches', () => {
         ? [createReviewerAnomalySpec({
           wire: raw,
           canonical,
-          anomalyKind: 'verdict-claims-mismatch',
-          reason: 'The reviewer rejected the change but published no claim.',
+          // slot が決着させられる非 intake anomaly を使う。verdict-claims-mismatch は
+          // verdict を伴う publication でしか決着しないので slot の発火条件に入らない。
+          anomalyKind: 'protocol-anomaly',
+          reason: 'The report could not be bound to its own text.',
         })]
         : []),
     ], {
@@ -1456,8 +1489,8 @@ describe('FC restatement slot — direct provider call wiring', () => {
     expect(preparedStep.instruction).toBe(ownerReviewerStep.instruction);
     expect(ingest).toHaveBeenCalledTimes(1);
     // withdrawal の根拠になるのはこの publication だけ。
-    expect((ingest.mock.calls[0]![0] as { establishesCompleteReview?: boolean }[])[0])
-      .toMatchObject({ establishesCompleteReview: true });
+    expect((ingest.mock.calls[0]![0] as { reviewEvidence?: string }[])[0])
+      .toMatchObject({ reviewEvidence: 'review' });
   });
 
   it('issues the owner full re-review at most once per round', async () => {
@@ -1494,9 +1527,9 @@ describe('FC restatement slot — direct provider call wiring', () => {
     // 取り下げの根拠になるのはフルレビューの publication だけ。言い直しだけの
     // publication で withdrawal が走ると、未検証のまま anomaly が決着する。
     const ingested = ingest.mock.calls.map(
-      (call) => (call[0] as { establishesCompleteReview?: boolean }[])[0]!.establishesCompleteReview,
+      (call) => (call[0] as { reviewEvidence?: string }[])[0]!.reviewEvidence,
     );
-    expect(ingested).toEqual([true, false, false]);
+    expect(ingested).toEqual(['review', 'none', 'none']);
   });
 
   it('keeps the restatement-only instruction when no non-intake anomaly is outstanding', async () => {
@@ -1517,8 +1550,8 @@ describe('FC restatement slot — direct provider call wiring', () => {
     expect(preparedStep.name).toBe(ownerReviewerStep.name);
     expect(preparedStep.instruction).not.toBe(ownerReviewerStep.instruction);
     // 言い直しだけの publication は「完全なレビューが成立した」証跡にならない。
-    expect((ingest.mock.calls[0]![0] as { establishesCompleteReview?: boolean }[])[0])
-      .toMatchObject({ establishesCompleteReview: false });
+    expect((ingest.mock.calls[0]![0] as { reviewEvidence?: string }[])[0])
+      .toMatchObject({ reviewEvidence: 'none' });
   });
 
   it('stops at the presentation budget even when requests keep coming', async () => {
@@ -1692,8 +1725,8 @@ describe('FC restatement slot — direct provider call wiring', () => {
     expect(await runFindingRestatementSlot(input)).toBeUndefined();
 
     expect(ingest).toHaveBeenCalledTimes(1);
-    expect((ingest.mock.calls[0]![0] as { establishesCompleteReview?: boolean }[])[0])
-      .toMatchObject({ establishesCompleteReview: false });
+    expect((ingest.mock.calls[0]![0] as { reviewEvidence?: string }[])[0])
+      .toMatchObject({ reviewEvidence: 'none' });
   });
 
   it('stamps the call mode onto the publication it prepares', async () => {
