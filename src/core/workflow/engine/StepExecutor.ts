@@ -2543,35 +2543,39 @@ export class StepExecutor {
           priorStepResponseText,
           relationClarification: prepared.relationClarification,
         })).roundMarker;
-        // 差し戻し slot は post-execution rules より前に回す。単独ステップでは
-        // その rules 評価がこのステップの遷移判定そのものなので、後に回すと
-        // when(findings.*) が slot の取り込み前の台帳を読む（parallel では親の
-        // 集約 rules が slot の後に評価されるので同じ順序になる）。
-        // verdict-claims-mismatch は slot の発火条件から外してあるため、
-        // 記録との前後関係は slot の挙動を変えない。
-        const slot = await this.runRestatementSlotForNormalStep({
-          parentStepName: step.name,
-          // dynamic facets 適用後の実行用ステップを owner として渡す（上と同じ理由）。
-          ownerReviewerStep: executableStep,
-          findingContractContext,
-          stepIteration,
+      }
+      // 差し戻し slot は受理・報告拒否のどちらでも回す（resume 経路と parallel 経路も
+      // 同じ）。報告拒否は「そのレビュアーの差し戻し対象が1件増えた」状態なので、
+      // ここを取り込み成功時だけにすると、記録した protocol anomaly の差し戻しが
+      // 次のワークフローラウンドまで届かない。
+      //
+      // 呼ぶのは post-execution rules より前。単独ステップではその rules 評価が
+      // このステップの遷移判定そのものなので、後に回すと when(findings.*) が slot の
+      // 取り込み前の台帳を読む（parallel では親の集約 rules が slot の後に評価される
+      // ので同じ順序になる）。verdict-claims-mismatch は slot の発火条件から外して
+      // あるため、verdict/claims の記録との前後関係は slot の挙動を変えない。
+      const slot = await this.runRestatementSlotForNormalStep({
+        parentStepName: step.name,
+        // dynamic facets 適用後の実行用ステップを owner として渡す（上と同じ理由）。
+        ownerReviewerStep: executableStep,
+        findingContractContext,
+        stepIteration,
+        state,
+        task,
+        maxSteps,
+        priorStepResponseText,
+        updatePersonaSession,
+        runtime: executionRuntime,
+      });
+      if (slot !== undefined) {
+        return this.restatementSlotTerminalStepResult({
+          step,
           state,
-          task,
-          maxSteps,
-          priorStepResponseText,
-          updatePersonaSession,
-          runtime: executionRuntime,
+          stepIteration,
+          instruction: phase1Instruction,
+          fallbackProviderInfo: completedReviewerProviderInfo,
+          slot,
         });
-        if (slot !== undefined) {
-          return this.restatementSlotTerminalStepResult({
-            step,
-            state,
-            stepIteration,
-            instruction: phase1Instruction,
-            fallbackProviderInfo: completedReviewerProviderInfo,
-            slot,
-          });
-        }
       }
     }
 
