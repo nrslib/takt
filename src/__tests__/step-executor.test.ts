@@ -32,8 +32,24 @@ vi.mock('../core/workflow/findings/contract-intake.js', async (importOriginal) =
   };
 });
 
+// slot 本体の反復は finding-fc-restatement-slot.test.ts が持つ。ここで固定するのは
+// 単独ステップ経路が slot へ渡す配線（owner / 提示予算 / 取り込み契約 / terminal 置換）。
+vi.mock('../core/workflow/findings/restatement-slot-runner.js', async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import('../core/workflow/findings/restatement-slot-runner.js')
+  >();
+  return {
+    ...actual,
+    runFindingRestatementSlot: vi.fn().mockResolvedValue(undefined),
+  };
+});
+
 import { executeAgent } from '../agents/agent-usecases.js';
 import { ingestFindingContractResults } from '../core/workflow/findings/contract-intake.js';
+import {
+  runFindingRestatementSlot,
+  type FindingRestatementSlotInput,
+} from '../core/workflow/findings/restatement-slot-runner.js';
 import { createRawFindingsStructuredOutput } from '../core/workflow/findings/manager-agent.js';
 import { RawFindingsOutputValidationJsonSchema } from '../core/models/finding-schemas.js';
 import type { FindingManagerValidationReport } from '../core/workflow/findings/store.js';
@@ -120,6 +136,8 @@ describe('StepExecutor', () => {
     reviewerOverrides?: {
       readonly agentResponses?: readonly AgentResponse[];
     },
+    /** finding_contract.review_budget。差し戻し slot の提示予算の出所。 */
+    reviewBudgetOverride?: { readonly maxReviewRounds: number },
   ) {
     const reportContent = reportContentOverride ?? [
       '# Architecture Review',
@@ -264,6 +282,7 @@ describe('StepExecutor', () => {
           instruction: 'Reconcile.',
           outputContract: 'Return JSON.',
         },
+        ...(reviewBudgetOverride === undefined ? {} : { reviewBudget: reviewBudgetOverride }),
       },
       findingLedgerStore: {
         ledgerIdentity: 'scope-plain-text',
@@ -1793,6 +1812,113 @@ describe('StepExecutor', () => {
     expect(executeAgent).not.toHaveBeenCalled();
     expect(harness.normalizeFindingIntake).not.toHaveBeenCalled();
     expect(ingestFindingContractResults).toHaveBeenCalledOnce();
+  });
+
+  /** 単独ステップ経路で slot 呼び出しに渡された input を1件だけ取り出す。 */
+  function singleSlotInput(): FindingRestatementSlotInput {
+    const calls = vi.mocked(runFindingRestatementSlot).mock.calls;
+    expect(calls).toHaveLength(1);
+    return calls[0]![0];
+  }
+
+  it('単独ステップ経路は実行用ステップと設定の提示予算で差し戻し slot を回す', async () => {
+    const harness = createPlainTextPublicationHarness(
+      [{
+        persona: 'default',
+        status: 'done',
+        content: '{"rawFindings":[]}',
+        structuredOutput: { rawFindings: [] },
+        timestamp: new Date('2026-07-31T00:01:00.000Z'),
+      }],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { maxReviewRounds: 3 },
+    );
+    // dynamic facets 適用後の実行用ステップ。設定上の step を owner に渡すと、
+    // その回の owner が実際に使った facet 集合と代打の判断基準がずれる。
+    const executableStep = {
+      ...harness.step,
+      knowledgeContents: [{ name: 'dynamic', content: 'Dynamic knowledge.' }],
+    };
+
+    await harness.executor.runNormalStep(
+      harness.step,
+      harness.state,
+      'test task',
+      5,
+      harness.updatePersonaSession,
+      undefined,
+      undefined,
+      {
+        executableStep,
+        findingContractContext: harness.findingContractContext,
+        phase1Instruction: 'Review.',
+        stepIteration: 1,
+      },
+    );
+
+    const slotInput = singleSlotInput();
+    expect(slotInput.ownerReviewerSteps).toEqual([executableStep]);
+    // 提示予算は finding_contract.review_budget から来る。既定値へ落ちると
+    // 壊れたレビュアーが1ステップで6パス回る。
+    expect(slotInput.presentationLimit).toBe(3);
+    expect(slotInput.parentStepName).toBe(harness.step.name);
+    expect(slotInput.stepIteration).toBe(1);
+
+    // slot のパスはレビューラウンドとして数えない。数えると review_budget を
+    // 1ステップで使い切り、再レビューの機会がゼロになる。
+    vi.mocked(ingestFindingContractResults).mockClear();
+    await slotInput.ingest([{
+      publication: { reviewerStepName: harness.step.name } as never,
+      reviewEvidence: 'none',
+    }]);
+    expect(ingestFindingContractResults).toHaveBeenCalledOnce();
+    expect(vi.mocked(ingestFindingContractResults).mock.calls[0]![0])
+      .toMatchObject({ budgetAccounting: 'excluded' });
+  });
+
+  it('単独ステップ経路は slot の terminal をそのままステップ結果へ差し替える', async () => {
+    const harness = createPlainTextPublicationHarness([{
+      persona: 'default',
+      status: 'done',
+      content: '{"rawFindings":[]}',
+      structuredOutput: { rawFindings: [] },
+      timestamp: new Date('2026-07-31T00:01:00.000Z'),
+    }]);
+    const terminalResponse: AgentResponse = {
+      persona: 'reviewer',
+      status: 'rate_limited',
+      content: 'Slot call hit the provider limit.',
+      timestamp: new Date('2026-07-31T00:02:00.000Z'),
+    };
+    vi.mocked(runFindingRestatementSlot).mockResolvedValueOnce({
+      kind: 'terminal',
+      step: harness.step,
+      response: terminalResponse,
+      providerInfo: { provider: 'mock', model: 'slot-model' },
+    });
+
+    const result = await harness.executor.runNormalStep(
+      harness.step,
+      harness.state,
+      'test task',
+      5,
+      harness.updatePersonaSession,
+      undefined,
+      undefined,
+      {
+        executableStep: harness.step,
+        findingContractContext: harness.findingContractContext,
+        phase1Instruction: 'Review.',
+        stepIteration: 1,
+      },
+    );
+
+    expect(result.response).toBe(terminalResponse);
+    expect(result.providerInfo).toEqual({ provider: 'mock', model: 'slot-model' });
+    expect(harness.state.lastOutput).toBe(terminalResponse);
   });
 
   it.each([

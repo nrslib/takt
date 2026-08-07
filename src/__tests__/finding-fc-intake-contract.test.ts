@@ -8,6 +8,7 @@ import type {
   ReviewerAnomalyEntry,
   RawFinding,
 } from '../core/workflow/findings/types.js';
+import type { FileQuoteEvidence } from '../core/models/finding-types.js';
 import {
   candidateFromStoredRawFinding,
   canonicalizeReviewerRawFinding,
@@ -403,10 +404,23 @@ describe('FC intake contract', () => {
   });
 
   describe('failed restatement reassertion', () => {
-    const reassertionCase = (admittedDescription: string) => {
+    const fileQuote = (overrides: Partial<FileQuoteEvidence> = {}): FileQuoteEvidence => ({
+      kind: 'file_quote',
+      path: 'src/example.ts',
+      startLine: 10,
+      endLine: 12,
+      verbatimExcerpt: 'const target = false;',
+      snapshotId: '5'.repeat(64),
+      ...overrides,
+    });
+    const reassertionCase = (
+      admittedDescription: string,
+      quotes: { source?: readonly FileQuoteEvidence[]; admitted?: readonly FileQuoteEvidence[] } = {},
+    ) => {
       const sourceExcerpt = 'The reasserted defect remains observable.';
       const source = incompleteRaw('raw-reassert-source', {
         rawExcerpt: sourceExcerpt,
+        evidence: [...(quotes.source ?? [])],
         sourceBinding: {
           reportDigest: 'f'.repeat(64),
           startByte: 0,
@@ -452,7 +466,7 @@ describe('FC intake contract', () => {
           reportDigest: 'e'.repeat(64),
           excerptDigest: '4'.repeat(64),
         },
-        evidence: [],
+        evidence: [...(quotes.admitted ?? [])],
         reassertsReviewerAnomalyId: anomaly.id,
       });
       const requestWithoutId = {
@@ -515,6 +529,41 @@ describe('FC intake contract', () => {
         admittedRaw: admitted,
         bindings,
       })).toBe(false);
+    });
+
+    it('lets a reassertion through when it reproduces every source file quote', () => {
+      // 元の観測が file_quote を持つ場合、claim atom が一致しても quote を写して
+      // いなければ言い直しとして受理しない。まず「全部写した」側を固定する。
+      const { ledger, admitted, bindings } = reassertionCase(
+        'The reasserted defect remains observable.',
+        { source: [fileQuote()], admitted: [fileQuote()] },
+      );
+
+      expect(restatementReassertionFailsCorrespondence({
+        ledger,
+        admittedRaw: admitted,
+        bindings,
+      })).toBe(false);
+    });
+
+    // quote 照合は4項目すべての完全一致を要求する。どれか1つでも緩むと、別の場所を
+    // 指す再主張が言い直しとして受理される。
+    it.each([
+      ['path', { path: 'src/other.ts' }],
+      ['startLine', { startLine: 11 }],
+      ['endLine', { endLine: 13 }],
+      ['verbatimExcerpt', { verbatimExcerpt: 'const target = true;' }],
+    ] as const)('flags a reassertion whose file quote differs in %s', (_field, override) => {
+      const { ledger, admitted, bindings } = reassertionCase(
+        'The reasserted defect remains observable.',
+        { source: [fileQuote()], admitted: [fileQuote(override)] },
+      );
+
+      expect(restatementReassertionFailsCorrespondence({
+        ledger,
+        admittedRaw: admitted,
+        bindings,
+      })).toBe(true);
     });
 
     it('has no demandable atom when the observation carries neither description nor excerpt', () => {

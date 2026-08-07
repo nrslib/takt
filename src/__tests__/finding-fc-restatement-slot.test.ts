@@ -226,11 +226,26 @@ describe('FC restatement slot — round number definition', () => {
   it('has no production reader left on the raw marker array', () => {
     // 定義の分岐は「どこか1箇所が生値を読む」形で再発する。読み口を
     // stopBudgetRoundsCompleted に一本化したことをソースで固定する。
-    const findingsDir = join(process.cwd(), 'src', 'core', 'workflow', 'findings');
-    const offenders = readdirSync(findingsDir)
-      .filter((name) => name.endsWith('.ts') && name !== 'stop-budget.ts')
-      .filter((name) => readFileSync(join(findingsDir, name), 'utf-8')
-        .includes('stopBudget?.roundMarkers.length'));
+    //
+    // 走査は再帰で、slot の呼び出し側（engine/）も含める。表記は optional chain の
+    // 有無・空白・改行を吸収する正規表現で見る。完全一致だと
+    // `stopBudget?.roundMarkers?.length` ひとつで抜ける。
+    const rawMarkerRead = /\bstopBudget\s*\??\s*\.\s*roundMarkers\s*\??\s*\.\s*length\b/u;
+    const collectSources = (dir: string): string[] => readdirSync(dir, { withFileTypes: true })
+      .flatMap((entry) => {
+        const path = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          return collectSources(path);
+        }
+        return entry.name.endsWith('.ts') && entry.name !== 'stop-budget.ts' ? [path] : [];
+      });
+    const scanRoots = [
+      join(process.cwd(), 'src', 'core', 'workflow', 'findings'),
+      join(process.cwd(), 'src', 'core', 'workflow', 'engine'),
+    ];
+    const offenders = scanRoots
+      .flatMap(collectSources)
+      .filter((path) => rawMarkerRead.test(readFileSync(path, 'utf-8')));
 
     expect(offenders).toEqual([]);
   });

@@ -13,6 +13,7 @@ import type {
   WorkflowStep,
 } from '../core/models/index.js';
 import { RuleEvaluator } from '../core/workflow/evaluation/RuleEvaluator.js';
+import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDetectionExhaustedError.js';
 import { determineRuleTransition } from '../core/workflow/engine/transitions.js';
 import {
   invalidateAllResolvedConfigCache,
@@ -616,10 +617,20 @@ describe('takt-default-fc builtins', () => {
     // 実測（run-13）: 予算枯渇の出口が open.count == 0 を前提にしていたため、
     // open が残る限りどの出口にも入れず reviewers を13周し、最後は
     // rule_no_match で abort した。全域性が保てていれば本番で fail-fast は起きない。
-    const unmatched = states.filter((counts) => (
-      new RuleEvaluator(reviewers, { state: workflowState(reviewers, counts) })
-        .evaluate(undefined) === undefined
-    ));
+    // 1件も一致しないラダー穴は undefined ではなく RuleDetectionExhaustedError で出る
+    // （undefined は rules 自体が空のときだけ）。捕捉しないと filter の中で例外が
+    // 伝播し、どの FindingCounts が抜けたのか分からないまま落ちる。
+    const unmatched = states.filter((counts) => {
+      try {
+        return new RuleEvaluator(reviewers, { state: workflowState(reviewers, counts) })
+          .evaluate(undefined) === undefined;
+      } catch (error) {
+        if (error instanceof RuleDetectionExhaustedError) {
+          return true;
+        }
+        throw error;
+      }
+    });
     expect(unmatched.slice(0, 3).map((counts) => JSON.stringify(counts))).toEqual([]);
 
     // 予算枯渇状態は open の有無によらず必ず前進する出口を持つ。

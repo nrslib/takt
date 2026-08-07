@@ -69,6 +69,7 @@ import { createTestFindingLedgerStore } from './helpers/finding-storage.js';
 import { reviewerRawExtractionFixture } from './helpers/finding-lifecycle-fixture.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
 import { stopBudgetRoundsCompleted } from '../core/workflow/findings/stop-budget.js';
+import { isOutstandingReviewerAnomaly } from '../core/workflow/findings/reviewer-anomalies.js';
 
 function createTestTmpDir(): string {
   const dir = mkdtempSync(join(tmpdir(), 'takt-review-integrity-'));
@@ -212,18 +213,17 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
     expect(abortReason).toContain('reviewer anomaly');
 
     // 台帳: product finding 0、未昇格 anomaly 1。
-    const ledger = loadRootLedger(cwd, config.name) as {
-      findings: unknown[];
-      reviewerAnomalies?: Array<{ kind: string; promotedFindingId?: string }>;
-    };
+    const ledger = loadRootLedger(cwd, config.name);
     expect(ledger.findings).toHaveLength(0);
     // 非 intake anomaly は slot 内の再レビューで1回だけ差し戻される。前の episode は
     // その publication で取り下げとして決着し、同じ主張の再観測が新しい episode に
-    // なる — 未決着はつねに1件。
-    expect(ledger.reviewerAnomalies?.filter((a) => (
-      a.promotedFindingId === undefined && a.settlement === undefined
-    ))).toHaveLength(1);
-    expect(ledger.reviewerAnomalies?.[0]?.kind).toBe('quote-mismatch');
+    // なる — 未決着はつねに1件。未決着の判定は本番の定義（isOutstandingReviewerAnomaly）
+    // をそのまま使う。条件を書き下すと本番の定義が変わってもテストが追随しない。
+    const outstanding = (ledger.reviewerAnomalies ?? []).filter(isOutstandingReviewerAnomaly);
+    expect(outstanding).toHaveLength(1);
+    // 生配列の先頭ではなく、絞り込んだ未決着の1件で kind を固定する。先頭は決着済みの
+    // 古い episode になり得る。
+    expect(outstanding[0]?.kind).toBe('quote-mismatch');
   // engine を実走させる。slot のラウンドを予算から外したことで実際のレビュー
   // ラウンドが走るようになり、既定の 15s では 4 shard 同時実行に耐えない。
   }, 60_000);
