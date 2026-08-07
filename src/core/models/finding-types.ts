@@ -1565,6 +1565,13 @@ export const REVIEWER_ANOMALY_KINDS = [
    * admission を完了できなかった。file quote の不一致とは区別する。
    */
   'lifecycle-admission-failure',
+  /**
+   * レビュアーが非承認判定を出したのに、その publication が構造化 claim を
+   * 1件も含んでいない。報告本文の主張が台帳へ一切届かないため、判定だけが
+   * 黙って捨てられる。「主張が虚偽」ではなく「主張が機械可読な形で提出されて
+   * いない」という事実だけを記録する。
+   */
+  'verdict-claims-mismatch',
 ] as const;
 export type ReviewerAnomalyKind = typeof REVIEWER_ANOMALY_KINDS[number];
 

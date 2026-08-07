@@ -1294,13 +1294,84 @@ describe('FC intake contract', () => {
 
     expect(summary.reviewerAnomalies).toEqual([{
       id: anomaly.reviewerAnomalies![0]!.id,
+      kind: 'intake-contract-incomplete',
       reviewer: raw.reviewer,
       title: anomaly.reviewerAnomalies![0]!.title,
+      mismatchReason: 'The normalized claim omitted evidence.',
       claimedExcerpt: 'The reviewer claim must be restated with evidence.',
       observationClass: 'claim-bearing',
       reasonCodes: ['claim-evidence-missing'],
       missingRequirements: ['claimEvidence'],
     }]);
+  });
+
+  // 言い直し予算に乗らない kind でも、是正信号（kind と mismatchReason）は届ける。
+  // 届かないと、レビュアーは同じ壊れ方を毎ラウンド繰り返す。ただし claim 本文は
+  // 出さない — 予算の無い経路へ REJECT レポート全文を毎ラウンド流さないため。
+  it('wires non-restatement reviewer anomalies into the summary without their claim body', () => {
+    const raw = incompleteRaw('raw-instruction-non-intake', {
+      rawExcerpt: 'verdict: needs_fix\n\nA very long REJECT report body.',
+    });
+    const canonical = canonicalItem(raw);
+    const anomaly = applyReviewerAnomalySpecsToLedger(emptyLedger(), [createReviewerAnomalySpec({
+      wire: raw,
+      canonical: canonical.canonical,
+      anomalyKind: 'verdict-claims-mismatch',
+      reason: 'The non-approving verdict published zero structured raw findings.',
+    })], {
+      workflowName: 'peer-review',
+      stepName: raw.stepName,
+      runId: observedAt.runId,
+      timestamp: observedAt.timestamp,
+    }, new Set());
+    const rendered = renderFindingLedgerInstructionSummary(anomaly);
+    const summary = JSON.parse(rendered) as {
+      reviewerAnomalies?: Array<Record<string, unknown>>;
+      reviewerAnomaliesOmittedCount?: number;
+    };
+
+    expect(summary.reviewerAnomalies).toEqual([{
+      id: anomaly.reviewerAnomalies![0]!.id,
+      kind: 'verdict-claims-mismatch',
+      reviewers: [raw.reviewer],
+      title: anomaly.reviewerAnomalies![0]!.title,
+      mismatchReason: 'The non-approving verdict published zero structured raw findings.',
+    }]);
+    expect(rendered).not.toContain('A very long REJECT report body.');
+    expect(summary.reviewerAnomaliesOmittedCount).toBeUndefined();
+  });
+
+  // 非 intake は提示予算にも restatement 枠にも乗らないので、件数を独自に縛る。
+  // 縛りは黙って落とさず、切り捨て件数を開示する。
+  it('bounds the number of non-restatement reviewer anomalies and discloses the omitted count', () => {
+    const total = 20;
+    const specs = Array.from({ length: total }, (_, index) => {
+      const suffix = String(index).padStart(2, '0');
+      return {
+        kind: 'quote-mismatch' as const,
+        stableKey: `sk-bulk-${suffix}`,
+        lineageKey: `lk-bulk-${suffix}`,
+        sourceRawFindingIds: [],
+        sourceIntakeIds: [`intake-bulk-${suffix}`],
+        reviewers: ['arch-review'],
+        title: `Quote mismatch ${suffix}`,
+        mismatchReason: `Quote ${suffix} did not match.`,
+      };
+    });
+    const anomaly = applyReviewerAnomalySpecsToLedger(emptyLedger(), specs, {
+      workflowName: 'peer-review',
+      stepName: 'reviewers',
+      runId: observedAt.runId,
+      timestamp: observedAt.timestamp,
+    }, new Set());
+    const summary = JSON.parse(renderFindingLedgerInstructionSummary(anomaly)) as {
+      reviewerAnomalies?: Array<Record<string, unknown>>;
+      reviewerAnomaliesOmittedCount?: number;
+    };
+
+    expect(anomaly.reviewerAnomalies).toHaveLength(total);
+    expect(summary.reviewerAnomalies).toHaveLength(16);
+    expect(summary.reviewerAnomaliesOmittedCount).toBe(total - 16);
   });
 
   it('fails before publication when remaining workflow capacity cannot present every anomaly', () => {

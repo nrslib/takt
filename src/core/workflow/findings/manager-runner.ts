@@ -65,12 +65,14 @@ export async function runFindingManagerForStep(
       return {
         status: 'unchanged',
         ledger: currentLedger,
+        roundMarker: stopBudgetRoundMarker,
       };
     }
     if (currentLedger.stopBudget?.roundMarkers.includes(stopBudgetRoundMarker) === true) {
       return {
         status: 'unchanged',
         ledger: currentLedger,
+        roundMarker: stopBudgetRoundMarker,
       };
     }
 
@@ -134,6 +136,7 @@ export async function runFindingManagerForStep(
         status: 'unchanged',
         providerInfo: prepared.providerInfo,
         ledger: committed.nextLedger,
+        roundMarker: stopBudgetRoundMarker,
       };
     }
 
@@ -151,6 +154,7 @@ export async function runFindingManagerForStep(
       status: 'updated',
       providerInfo: prepared.providerInfo,
       ledger: committed.nextLedger,
+      roundMarker: stopBudgetRoundMarker,
     };
   });
 }

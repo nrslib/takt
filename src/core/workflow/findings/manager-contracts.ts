@@ -58,10 +58,13 @@ export type FindingManagerRunResult =
       status: 'updated';
       providerInfo: StepProviderInfo;
       ledger: FindingLedger;
+      /** このラウンドの round marker（stop budget / review-integrity 予算の共有キー）。 */
+      roundMarker: string;
     }
   | {
       status: 'unchanged';
       ledger: FindingLedger;
+      roundMarker: string;
     };
 
 export interface InterpretationCaseRunResult {

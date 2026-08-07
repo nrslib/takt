@@ -143,6 +143,7 @@ import {
   createFindingReviewPublicationStructuredOutput,
   findingReviewPublicationReportContent,
 } from '../findings/review-publication-structured-output.js';
+import { recordVerdictClaimsMismatchAnomalies } from '../findings/verdict-claims-integrity.js';
 import type {
   FindingReviewPublicationCorrectionInput,
 } from '../findings/review-publication-correction.js';
@@ -510,6 +511,36 @@ export class StepExecutor {
       reviewPublicationDir: this.deps.getRunPaths().reportsAbs,
       refreshFindingsState: this.deps.refreshFindingsState,
       emitEvent: this.deps.emitEvent,
+    });
+  }
+
+  /**
+   * 単独 FC レビュアーの判定/claim 整合ゲート。新規実行と保存済み publication の
+   * 再開で共有する — 片方だけに配線すると、その副経路でだけ非承認判定が黙殺される。
+   */
+  private async recordVerdictClaimsMismatch(input: {
+    step: WorkflowStep;
+    response: AgentResponse;
+    publication: CanonicalFindingReviewPublication;
+    roundMarker: string;
+  }): Promise<void> {
+    if (this.deps.findingContract === undefined) {
+      return;
+    }
+    await recordVerdictClaimsMismatchAnomalies({
+      ledgerStore: this.deps.findingLedgerStore,
+      findingContract: this.deps.findingContract,
+      observations: [{
+        step: input.step,
+        response: input.response,
+        publication: input.publication,
+      }],
+      interactive: this.deps.getInteractive(),
+      runId: this.deps.getRunId(),
+      parentStepName: input.step.name,
+      roundMarker: input.roundMarker,
+      timestamp: new Date().toISOString(),
+      refreshFindingsState: this.deps.refreshFindingsState,
     });
   }
 
@@ -2184,7 +2215,7 @@ export class StepExecutor {
             escalation: resumedEscalation,
           });
         }
-        await this.ingestFindingContractForNormalStep({
+        const resumedIngest = await this.ingestFindingContractForNormalStep({
           step: findingContractIntakeStep,
           stepIteration,
           iteration: state.iteration,
@@ -2207,6 +2238,14 @@ export class StepExecutor {
                 : { providerInfo: resumedPublication.reviewerProviderInfo }
             ),
         );
+        // 保存済み publication からの再開でも判定は今ここで確定する。この分岐を
+        // 飛ばすと、resume 経路だけ非承認判定が台帳に何も残さず消える。
+        await this.recordVerdictClaimsMismatch({
+          step,
+          response,
+          publication: resumedPublication.publication,
+          roundMarker: resumedIngest.roundMarker,
+        });
         state.stepOutputs.set(step.name, response);
         state.lastOutput = response;
         this.persistPreviousResponseSnapshot(
@@ -2382,6 +2421,8 @@ export class StepExecutor {
     let completedReviewerRuntime: RuntimeStepResolution = {
       providerInfo,
     };
+    let reviewerPublication: CanonicalFindingReviewPublication | undefined;
+    let reviewerRoundMarker: string | undefined;
     if (findingContractIntakeStep && findingContractContext) {
       if (reviewerOutputStrategy === undefined) {
         throw new Error(`Prepared reviewer step "${step.name}" is missing reviewer output strategy`);
@@ -2436,6 +2477,7 @@ export class StepExecutor {
       completedReviewerRuntime = prepared.reviewerRuntime ?? {
         providerInfo: completedReviewerProviderInfo,
       };
+      reviewerPublication = prepared.publication;
       response = replaceResponseProviderUsage(
         prepared.response,
         phase1ProviderUsage,
@@ -2462,7 +2504,7 @@ export class StepExecutor {
           escalation,
         });
       }
-      await this.ingestFindingContractForNormalStep({
+      reviewerRoundMarker = (await this.ingestFindingContractForNormalStep({
         step: findingContractIntakeStep,
         stepIteration,
         iteration: state.iteration,
@@ -2470,7 +2512,7 @@ export class StepExecutor {
         priorStepResponseText,
         relationClarification: prepared.relationClarification,
         ...(escalation === undefined ? {} : { escalationResult: escalation.reviewerResult }),
-      });
+      })).roundMarker;
     }
 
     let terminalOperation: StepRunResult['terminalOperation'];
@@ -2506,6 +2548,17 @@ export class StepExecutor {
         );
       }
       throw error;
+    }
+
+    if (reviewerPublication !== undefined && reviewerRoundMarker !== undefined) {
+      // 判定が確定した直後に、非承認判定 + claim ゼロ件を台帳へ残す。
+      // ここを逃すと非承認判定は台帳に何の痕跡も残さずに消える。
+      await this.recordVerdictClaimsMismatch({
+        step,
+        response,
+        publication: reviewerPublication,
+        roundMarker: reviewerRoundMarker,
+      });
     }
 
     state.stepOutputs.set(step.name, response);

@@ -142,39 +142,81 @@ export function renderCompactActionableFindingLedgerInstructionSummary(
   }, null, 2);
 }
 
-function buildReviewerAnomalyInstructionSummary(ledger: FindingLedger): Array<{
+/**
+ * 非 intake anomaly の提示件数上限。intake-contract anomaly は提示予算
+ * （presentationLimit）と restatement request の枠で件数が縛られるが、非 intake は
+ * どちらの枠にも乗らないため、ここで独自に縛らないとレビュアー1人あたり最大 64 件が
+ * 毎ラウンド全 FC ロールのプロンプトへ流れる。manager プロンプトの
+ * COMPACT_FINDING_COLLECTION_LIMIT と同じ値にし、切り捨てた件数は必ず開示する。
+ */
+const REVIEWER_ANOMALY_NON_INTAKE_SUMMARY_LIMIT = 16;
+
+interface ReviewerAnomalyInstructionEntry {
   id: string;
-  reviewer: string;
+  kind: string;
   title: string;
+  mismatchReason: string;
+  /** intake-contract anomaly の言い直し要求先（単一のレビュアー枠）。 */
+  reviewer?: string;
+  /** 非 intake anomaly の観測者集合。 */
+  reviewers?: string[];
   claimedLocation?: string;
   claimedExcerpt?: string;
-  observationClass: 'claim-bearing' | 'protocol-noise';
-  reasonCodes: string[];
-  missingRequirements: string[];
-}> {
-  return (ledger.reviewerAnomalies ?? [])
-    .filter((anomaly) => (
-      anomaly.kind === 'intake-contract-incomplete'
-      && anomaly.intakeContract !== undefined
-      && isOutstandingReviewerAnomaly(anomaly)
-    ))
-    .map((anomaly) => ({
+  observationClass?: 'claim-bearing' | 'protocol-noise';
+  reasonCodes?: string[];
+  missingRequirements?: string[];
+}
+
+/**
+ * レビュアーへ提示する未決着 anomaly。
+ *
+ * intake-contract anomaly は言い直し要求の対象なので、契約欠落の内訳と、
+ * 何を言い直すのかを示す claim（claimedExcerpt / claimedLocation）まで出す。
+ * その露出は提示予算（presentationLimit）で有限に縛られている。
+ *
+ * それ以外の kind は言い直し予算に乗らない。「自分の出力がこう記録されている」
+ * という是正信号が届かないと同じ壊れ方を繰り返すため kind と mismatchReason は
+ * 出すが、claim 本文は出さない — 予算の無い経路へ REJECT レポート全文を毎ラウンド
+ * 流すと、提示予算を迂回したまま全 FC ロールのプロンプトを膨らませる。
+ */
+function buildReviewerAnomalyInstructionSummary(ledger: FindingLedger): {
+  entries: ReviewerAnomalyInstructionEntry[];
+  omittedCount: number;
+} {
+  const outstanding = (ledger.reviewerAnomalies ?? [])
+    .filter(isOutstandingReviewerAnomaly)
+    .sort((left, right) => compareBinaryStrings(left.id, right.id));
+  const intake = outstanding.filter((anomaly) => anomaly.intakeContract !== undefined);
+  const nonIntake = outstanding.filter((anomaly) => anomaly.intakeContract === undefined);
+  const presentedNonIntake = nonIntake.slice(0, REVIEWER_ANOMALY_NON_INTAKE_SUMMARY_LIMIT);
+  const entries = [
+    ...intake.map((anomaly) => ({
       id: anomaly.id,
+      kind: anomaly.kind,
       reviewer: anomaly.intakeContract!.presentationOwnerReviewer,
       title: anomaly.title,
+      mismatchReason: anomaly.mismatchReason,
       ...(anomaly.claimedLocation === undefined ? {} : { claimedLocation: anomaly.claimedLocation }),
       ...(anomaly.claimedExcerpt === undefined ? {} : { claimedExcerpt: anomaly.claimedExcerpt }),
       observationClass: anomaly.intakeContract!.observationClass,
       reasonCodes: anomaly.intakeContract!.reasonCodes,
       missingRequirements: anomaly.intakeContract!.missingRequirements,
-    }))
-    .sort((left, right) => compareBinaryStrings(left.id, right.id));
+    })),
+    ...presentedNonIntake.map((anomaly) => ({
+      id: anomaly.id,
+      kind: anomaly.kind,
+      reviewers: [...anomaly.reviewers],
+      title: anomaly.title,
+      mismatchReason: anomaly.mismatchReason,
+    })),
+  ].sort((left, right) => compareBinaryStrings(left.id, right.id));
+  return { entries, omittedCount: nonIntake.length - presentedNonIntake.length };
 }
 
 export function renderFindingLedgerInstructionSummary(ledger: FindingLedger): string {
   const projection = resolveFindingLedgerInstructionProjection(ledger);
   const familyTagsByRawFindingId = indexRawFindingFamilyTags(projection);
-  const reviewerAnomalies = buildReviewerAnomalyInstructionSummary(projection);
+  const anomalySummary = buildReviewerAnomalyInstructionSummary(projection);
   return JSON.stringify({
     workflowName: projection.workflowName,
     open: projection.findings
@@ -251,7 +293,13 @@ export function renderFindingLedgerInstructionSummary(ledger: FindingLedger): st
       rawFindingIds: conflict.rawFindingIds,
       description: conflict.description,
     })),
-    ...(reviewerAnomalies.length === 0 ? {} : { reviewerAnomalies }),
+    ...(anomalySummary.entries.length === 0
+      ? {}
+      : { reviewerAnomalies: anomalySummary.entries }),
+    // 切り捨ては黙って落とさず、件数を開示する。
+    ...(anomalySummary.omittedCount === 0
+      ? {}
+      : { reviewerAnomaliesOmittedCount: anomalySummary.omittedCount }),
   }, null, 2);
 }
 

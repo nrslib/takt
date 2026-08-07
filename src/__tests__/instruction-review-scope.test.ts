@@ -270,4 +270,53 @@ describe('review-round-scope partial supplies the scope to reviewers', () => {
       expect(resolved).toContain('- src/core/workflow/review-scope.ts');
     }
   });
+
+  // 追い掛け実行（実装が run 開始前にコミット済み）では自前の `git diff` が空になる。
+  // 一覧を範囲の正だと明示しないと、レビュアーは「機能が一切未実装」と誤断する。
+  const SCOPE_AUTHORITY_PHRASES = {
+    ja: [
+      // 権威は「一覧に載っているもの」に限定する。
+      '一覧に載っているものは、エンジンが base 分岐点から算出した変更対象の正',
+      '対象から外す根拠には使わないでください',
+      '自前の diff が空でも',
+      'run 開始前にコミット済み',
+      // 補完義務のトリガーは総称条件。個別の開示種別を列挙しない
+      // （isBaseBranchHead / notComputed / notRepository がすり抜ける）。
+      '範囲の限定・不足・算出不能を述べている場合',
+      'その記述に従って不足分を自分で補ってください',
+    ],
+    en: [
+      'authoritative: the engine computed those entries from the base divergence point',
+      'grounds for dropping an entry that the list contains',
+      'even when your own diff is empty',
+      'committed before this run started',
+      'states that the range is limited, incomplete, or could not be computed',
+      'follow that statement and make up the shortfall yourself',
+    ],
+  } as const;
+
+  it.each(['en', 'ja'] as const)('declares the listed targets authoritative without forcing a self-run diff to add them (%s)', (lang) => {
+    for (const name of REVIEWER_INSTRUCTIONS) {
+      const instruction = resolveRefToContent(name, undefined, projectDir, 'instructions', {
+        projectDir,
+        lang,
+      });
+      for (const phrase of SCOPE_AUTHORITY_PHRASES[lang]) {
+        expect(instruction, `${name} (${lang}) is missing: ${phrase}`).toContain(phrase);
+      }
+    }
+  });
+
+  it.each(['en', 'ja'] as const)('keeps the review mode split intact (%s)', (lang) => {
+    const instruction = resolveRefToContent('review-arch', undefined, projectDir, 'instructions', {
+      projectDir,
+      lang,
+    });
+
+    expect(instruction).toContain('{var:review_mode}');
+    expect(instruction).toContain('`initial`');
+    expect(instruction).toContain('`follow_up`');
+    expect(instruction).toContain('`unspecified`');
+    expect(instruction).toContain('reviewMode');
+  });
 });
