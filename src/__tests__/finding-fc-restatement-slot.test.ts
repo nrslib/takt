@@ -657,7 +657,12 @@ describe('FC restatement slot — per-pass request batches', () => {
 
   function makeServices(
     presentationLimit: number,
-    options: { escalates?: boolean; nonIntakeAnomaly?: boolean } = {},
+    options: {
+      escalates?: boolean;
+      nonIntakeAnomaly?: boolean;
+      /** 提示予算を残したまま終端処分された intake anomaly を再現する。 */
+      terminallyDisposed?: boolean;
+    } = {},
   ) {
     const escalates = options.escalates ?? true;
     const cwd = process.cwd();
@@ -701,7 +706,7 @@ describe('FC restatement slot — per-pass request batches', () => {
       candidateFromStoredRawFinding(raw, 'reviewer-stable-key'),
       { ledger: emptyLedger },
     ).canonical;
-    const ledger = applyReviewerAnomalySpecsToLedger(emptyLedger, [
+    const anomalyLedger = applyReviewerAnomalySpecsToLedger(emptyLedger, [
       createReviewerAnomalySpec({
         wire: raw,
         canonical,
@@ -734,6 +739,28 @@ describe('FC restatement slot — per-pass request batches', () => {
       runId: observedAt.runId,
       timestamp: observedAt.timestamp,
     }, new Set());
+    const ledger = options.terminallyDisposed === true
+      ? {
+        ...anomalyLedger,
+        reviewerAnomalies: anomalyLedger.reviewerAnomalies!.map((entry) => (
+          entry.intakeContract === undefined
+            ? entry
+            : {
+              ...entry,
+              intakeContract: {
+                ...entry.intakeContract,
+                terminalDisposition: {
+                  kind: 'restatement_exhausted_claim_bearing' as const,
+                  workflowOutcome: 'review_integrity_unresolved' as const,
+                  decidedAt: observedAt,
+                  terminalPublicationId: 'publication-terminal',
+                  reason: `Restatement presentation limit ${presentationLimit} was reached without verified correspondence`,
+                },
+              },
+            }
+        )),
+      }
+      : anomalyLedger;
 
     const services = createWorkflowEngineServices({
       config: {
@@ -1010,6 +1037,22 @@ describe('FC restatement slot — per-pass request batches', () => {
       expect(ownerContexts?.ownerNeedsFullReview).toBe(true);
       const presentation = ownerContexts?.owner?.reviewer?.presentationContext;
       expect(presentation?.revision === 2 && presentation.restatementRequests).toEqual([]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  /**
+   * 実走行(2026-08-07)の停止事故の入口。終端処分は提示回数が正本と食い違えば
+   * 予算を残したまま確定し得る。その状態で提示を続けると、言い直しが照合を通った
+   * 瞬間に promotion が付いて終端処分と同居し、台帳不変条件で run ごと落ちる。
+   * 終端後は owner 枠も格上げ枠も request を作らない。
+   */
+  it('stops presenting an intake anomaly once it carries a terminal disposition', () => {
+    const { services, cleanup } = makeServices(2, { terminallyDisposed: true });
+    try {
+      expect(slotRequests(services, 'owner')).toBeUndefined();
+      expect(slotRequests(services, 'escalation')).toBeUndefined();
     } finally {
       cleanup();
     }

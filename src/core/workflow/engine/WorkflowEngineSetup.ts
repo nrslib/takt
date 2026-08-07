@@ -63,6 +63,7 @@ import {
 } from '../findings/restatement-presentation-phase.js';
 import type { FindingRestatementSlotOwnerContexts } from '../findings/restatement-slot-runner.js';
 import {
+  isConcludedReviewerAnomaly,
   isOutstandingReviewerAnomaly,
   selectRestatementSourceClaimAtom,
 } from '../findings/reviewer-anomalies.js';
@@ -264,9 +265,7 @@ export function assertFindingReviewPresentationCapacity(input: {
   const unpresented = (input.ledger.reviewerAnomalies ?? [])
     .filter(hasIntakeContract)
     .filter((anomaly) => (
-      anomaly.promotedFindingId === undefined
-      && anomaly.settlement === undefined
-      && anomaly.intakeContract.terminalDisposition === undefined
+      !isConcludedReviewerAnomaly(anomaly)
       && (input.presentationCounts.get(anomaly.id) ?? 0) === 0
     ));
   if (unpresented.length === 0) {
@@ -368,8 +367,10 @@ function collectOutstandingIntakeAnomalies(input: {
     .filter(hasIntakeContract)
     .filter((anomaly) => (
       input.ownerStepNames.has(anomaly.intakeContract.presentationOwnerReviewer)
-      && anomaly.promotedFindingId === undefined
-      && anomaly.settlement === undefined
+      // 終端処分済みは提示予算が残っていても二度と提示しない。提示を続けると
+      // その言い直しが照合を通った瞬間に promotion が付き、終端処分と同居して
+      // 台帳不変条件を破る。終端後の行き先は terminal adjudication ルート。
+      && !isConcludedReviewerAnomaly(anomaly)
     ))
     .map((anomaly) => ({
       anomaly,

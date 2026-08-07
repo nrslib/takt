@@ -975,6 +975,74 @@ describe('FC intake contract', () => {
       }]);
       expect(verbatimLinked.reviewerAnomalies![0]!.promotedFindingId).toBe('F-0010');
     });
+
+    /**
+     * 実走行(2026-08-07)の停止事故。終端処分済みの anomaly が以後のラウンドでも
+     * 提示され続け、最後の言い直しが照合を通った瞬間に promotedFindingId が付いて
+     * 終端処分と同居し、台帳不変条件で run ごと落ちた。
+     *
+     * 形は実データそのまま: intake-contract-incomplete /
+     * restatement_exhausted_claim_bearing / 旧契約語彙の missingRequirements。
+     */
+    it('does not promote an anomaly that already carries a terminal disposition', () => {
+      const claim = 'The legacy signal setting no longer matches the requested contract.';
+      const base = buildBatchCase('terminal', claim, '6', 'b');
+      const { ledger, anomalyOf } = anomaliesFor([base]);
+      const anomaly = anomalyOf(base.source);
+      const bindings = [{
+        request: batchRequestFor(base.source, anomaly.id, claim),
+        publicationId: 'publication-terminal',
+        reportDigest: batchReportDigest,
+      }];
+      const disposedLedger: FindingLedger = {
+        ...ledger,
+        rawFindings: [base.source, base.admitted],
+        findings: [batchFindingFor(base.admitted, 'F-0011')],
+        reviewerAnomalies: ledger.reviewerAnomalies!.map((entry) => ({
+          ...entry,
+          intakeContract: {
+            ...entry.intakeContract!,
+            // 実データの旧契約語彙（binary 昇順・重複なし）。
+            missingRequirements: ['relation', 'severity'] as const,
+            terminalDisposition: {
+              kind: 'restatement_exhausted_claim_bearing' as const,
+              workflowOutcome: 'review_integrity_unresolved' as const,
+              decidedAt: observedAt,
+              terminalPublicationId: 'publication-terminal-source',
+              reason: 'Restatement presentation limit 2 was reached without verified correspondence',
+            },
+          },
+        })),
+      };
+      // fixture は raw canonical snapshot を持たないため、この不変条件だけを見る。
+      const anomalyViolations = (ledgerUnderTest: FindingLedger) => (
+        collectFindingLedgerProjectionInvariantViolations(ledgerUnderTest)
+          .filter((violation) => violation.path[0] === 'reviewerAnomalies')
+      );
+      expect(anomalyViolations(disposedLedger)).toEqual([]);
+
+      const linked = linkPromotedReviewerAnomalies(disposedLedger, [{
+        lineageKey: 'lineage-terminal',
+        rawFindingId: base.admitted.rawFindingId,
+        restatementRequestBindings: bindings,
+      }]);
+
+      expect(linked.reviewerAnomalies![0]!.promotedFindingId).toBeUndefined();
+      expect(anomalyViolations(linked)).toEqual([]);
+
+      // 正の対照: 同じ fixture から終端処分だけを外すと昇格が成立する。上の拒否が
+      // 「終端処分由来」であって fixture 由来でないことの識別。
+      const openLinked = linkPromotedReviewerAnomalies({
+        ...ledger,
+        rawFindings: [base.source, base.admitted],
+        findings: [batchFindingFor(base.admitted, 'F-0011')],
+      }, [{
+        lineageKey: 'lineage-terminal',
+        rawFindingId: base.admitted.rawFindingId,
+        restatementRequestBindings: bindings,
+      }]);
+      expect(openLinked.reviewerAnomalies![0]!.promotedFindingId).toBe('F-0011');
+    });
   });
 
   /**

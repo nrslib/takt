@@ -7,7 +7,7 @@ import type {
   ReviewerAnomalyEntry,
   ReviewerAnomalyTargetSettlement,
 } from './types.js';
-import { isOutstandingReviewerAnomaly } from './reviewer-anomalies.js';
+import { isConcludedReviewerAnomaly } from './reviewer-anomalies.js';
 
 function settlementKind(
   event: FindingLifecycleEvent,
@@ -70,7 +70,7 @@ export function settleReviewerAnomaliesFromAuthorizedTerminalEvents(
   }
   const settlementByAnomalyId = new Map(
     anomalyLedger.reviewerAnomalies
-      .filter(isOutstandingReviewerAnomaly)
+      .filter((anomaly) => !isConcludedReviewerAnomaly(anomaly))
       .flatMap((anomaly) => {
         const settlement = eligibleSettlement({
           eventBaselineLedger,

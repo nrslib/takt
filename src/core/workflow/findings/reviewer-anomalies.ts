@@ -474,8 +474,7 @@ export function linkPromotedReviewerAnomalies(
       if (
         findingId === undefined
         || anomaly?.kind !== 'intake-contract-incomplete'
-        || anomaly.promotedFindingId !== undefined
-        || anomaly.settlement !== undefined
+        || isConcludedReviewerAnomaly(anomaly)
         || sourceRaw === undefined
         || admittedRaw === undefined
         || binding.reportDigest !== admittedRaw.sourceBinding.reportDigest
@@ -521,7 +520,7 @@ export function linkPromotedReviewerAnomalies(
   }
   let changed = false;
   const updated = anomalies.map((anomaly) => {
-    if (!isOutstandingReviewerAnomaly(anomaly)) {
+    if (isConcludedReviewerAnomaly(anomaly)) {
       return anomaly;
     }
     if (anomaly.kind === 'intake-contract-incomplete') {
@@ -650,4 +649,20 @@ export function isOutstandingReviewerAnomaly(anomaly: ReviewerAnomalyEntry): boo
     && anomaly.settlement === undefined
     && anomaly.intakeContract?.terminalDisposition?.workflowOutcome
       !== 'non_claim_observation_rejected';
+}
+
+/**
+ * 決着が確定し、以後どの経路も変更してはならない anomaly か。
+ *
+ * `isOutstandingReviewerAnomaly` とは別の述語である点が重要。claim-bearing の
+ * 終端（restatement_exhausted_claim_bearing）は「未決着として COMPLETE を塞ぎ
+ * 続ける」ため outstanding のまま残るが、それは決着の効果であって「まだ変更を
+ * 受け付ける」という意味ではない。書き込み側が outstanding を可変性の判定に
+ * 流用すると、終端処分済みの anomaly へ settlement / promotion が後から付き、
+ * 台帳不変条件（終端処分と settlement / promotion の同居禁止）を破る。
+ */
+export function isConcludedReviewerAnomaly(anomaly: ReviewerAnomalyEntry): boolean {
+  return anomaly.promotedFindingId !== undefined
+    || anomaly.settlement !== undefined
+    || anomaly.intakeContract?.terminalDisposition !== undefined;
 }
