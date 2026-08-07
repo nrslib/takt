@@ -1277,7 +1277,10 @@ export function discardPendingFindingReviewNormalization(
   identity: FindingReviewPublicationIdentity,
 ): void {
   const publicationId = computeFindingReviewPublicationId(identity);
-  rmSync(pendingNormalizationRecordPath(reportDir, publicationId), { force: true });
+  const path = pendingNormalizationRecordPath(reportDir, publicationId);
+  runPrivateFileExclusive(`${path}.lock`, () => {
+    rmSync(path, { force: true });
+  });
 }
 
 export function persistPendingFindingReviewNormalization(
