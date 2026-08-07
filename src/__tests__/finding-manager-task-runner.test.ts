@@ -357,7 +357,7 @@ describe('main manager bounded task runner', () => {
   it('does not bind a local raw id to a namespaced suffix without source proof', () => {
     const finding = {
       ...ledgerFinding(1),
-      rawFindingIds: ['run:reviewers:1:reviewer:raw-1'],
+      rawFindingIds: ['run:reviewers:1:reviewer:reviewer.md:raw-1'],
     };
     const publication = reviewPublication(
       'A local raw-1 observation',
@@ -419,7 +419,7 @@ describe('main manager bounded task runner', () => {
         targetFindingIds: [],
       },
     }]);
-    const namespacedRawId = 'run:reviewers:1:reviewer:raw-1';
+    const namespacedRawId = 'run:reviewers:1:reviewer:reviewer.md:raw-1';
     const ledgerRaw = rawFinding(1, {
       rawFindingId: namespacedRawId,
       sourceBinding: bindReviewerReportExcerpt(

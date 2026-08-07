@@ -34,7 +34,7 @@ const NEXT_OBSERVATION = {
 };
 
 const RAW = canonicalRawFindingFixture({
-  rawFindingId: 'run-terminal-provenance:reviewers:1:robustness-review:item-a50bebae',
+  rawFindingId: 'run-terminal-provenance:reviewers:1:robustness-review:robustness-review.md:item-a50bebae',
   stepName: 'robustness-review',
   reviewer: 'robustness-review',
   familyTag: null,
@@ -249,7 +249,7 @@ describe('terminal candidate provenance', () => {
 
   it('binds an evidence-less null-target raw when updating an existing provisional', () => {
     const current = initialLanding();
-    const raw = sameClaimRaw('run-terminal-provenance:reviewers:2:robustness-review:item-repeat');
+    const raw = sameClaimRaw('run-terminal-provenance:reviewers:2:robustness-review:robustness-review.md:item-repeat');
     const withRaw = withRawFinding(current, raw);
     const before = withRaw.findings[0]!;
     const after: FindingLedgerEntry = {
@@ -291,7 +291,7 @@ describe('terminal candidate provenance', () => {
 
   it('rejects a command source raw outside the after provisional projection', () => {
     const current = initialLanding();
-    const otherRaw = sameClaimRaw('run-terminal-provenance:reviewers:2:robustness-review:item-other');
+    const otherRaw = sameClaimRaw('run-terminal-provenance:reviewers:2:robustness-review:robustness-review.md:item-other');
     const withOtherRaw = withRawFinding(current, otherRaw);
     const before = withOtherRaw.findings[0]!;
     const after: FindingLedgerEntry = {
@@ -324,7 +324,7 @@ describe('terminal candidate provenance', () => {
 
   it('rejects an isolation proof issued for a stale provisional head', () => {
     const current = initialLanding();
-    const firstRaw = sameClaimRaw('run-terminal-provenance:reviewers:2:robustness-review:item-first-update');
+    const firstRaw = sameClaimRaw('run-terminal-provenance:reviewers:2:robustness-review:robustness-review.md:item-first-update');
     const withFirstRaw = withRawFinding(current, firstRaw);
     const beforeFirst = withFirstRaw.findings[0]!;
     const afterFirst: FindingLedgerEntry = {
@@ -401,7 +401,7 @@ describe('terminal candidate provenance', () => {
 
   it('binds an existing provisional raw through manager proof issuance and assembly', () => {
     const current = initialLanding();
-    const raw = sameClaimRaw('run-terminal-provenance:reviewers:2:robustness-review:item-production');
+    const raw = sameClaimRaw('run-terminal-provenance:reviewers:2:robustness-review:robustness-review.md:item-production');
     const proposedBase = withRawFinding(current, raw);
     const before = current.findings[0]!;
     const after: FindingLedgerEntry = {
@@ -476,7 +476,7 @@ describe('terminal candidate provenance', () => {
     const before = current.findings[0]!;
     const cleanRaw = canonicalRawFindingFixture({
       ...RAW,
-      rawFindingId: 'run-terminal-provenance:reviewers:2:robustness-review:item-clean-match',
+      rawFindingId: 'run-terminal-provenance:reviewers:2:robustness-review:robustness-review.md:item-clean-match',
       relation: 'persists',
       targetFindingId: before.id,
       evidence: [{
@@ -502,7 +502,7 @@ describe('terminal candidate provenance', () => {
       ...cleanEvidencePayload,
     };
     const provisionalRaw = sameClaimRaw(
-      'run-terminal-provenance:reviewers:2:robustness-review:item-compound-provisional',
+      'run-terminal-provenance:reviewers:2:robustness-review:robustness-review.md:item-compound-provisional',
     );
     const proposedBase = {
       ...withRawFinding(withRawFinding(current, cleanRaw), provisionalRaw),

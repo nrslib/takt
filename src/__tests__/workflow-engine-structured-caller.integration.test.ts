@@ -2240,8 +2240,9 @@ describe('WorkflowEngine structured caller defaults', () => {
     }));
     expect(ledger.rawFindings.map((finding) => finding.rawFindingId)).toEqual(
       expect.arrayContaining([
-        expect.stringMatching(/^[^"\s]+:reviewers:\d+:architecture-review:raw-architecture-1$/),
-        expect.stringMatching(/^[^"\s]+:reviewers:\d+:security-review:raw-architecture-1$/),
+        // raw finding id は publication identity（report 名まで含む）で名前空間化する。
+        expect.stringMatching(/^[^"\s]+:reviewers:\d+:architecture-review:[^:]+:raw-architecture-1$/),
+        expect.stringMatching(/^[^"\s]+:reviewers:\d+:security-review:[^:]+:raw-architecture-1$/),
       ]),
     );
     expect(ledger.rawFindings.map((finding) => finding.reviewer)).toEqual([

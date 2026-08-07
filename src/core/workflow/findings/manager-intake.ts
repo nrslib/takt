@@ -32,6 +32,15 @@ export interface FindingManagerSubStepResult {
   subStep: AgentWorkflowStep;
   publication: CanonicalFindingReviewPublication;
   relationClarification?: ReviewerRelationClarification;
+  /**
+   * この publication が「そのレビュアーの完全なレビューが成立した」証跡になるか
+   * （既定 true）。言い直しだけを行った差し戻し呼び出しは false。
+   *
+   * 後続レビュー成立による取り下げ（withdrawReviewerAnomaliesSupersededByReview）は
+   * これを根拠にする。言い直しだけの publication で取り下げると、レビューされて
+   * いない anomaly が「後続レビューがあった」ものとして未検証のまま決着する。
+   */
+  establishesCompleteReview?: boolean;
 }
 
 function recordReviewerOutputOverflow(input: {
@@ -130,6 +139,7 @@ export function intakeReviewerOutputs(input: {
       stepIteration: input.stepIteration,
       runId: input.runId,
       reviewerStepName: subResult.subStep.name,
+      reportName: subResult.publication.reportName,
       reviewerPersonaKey: (subResult.subStep as { persona?: string }).persona ?? subResult.subStep.name,
       reviewReport: subResult.publication.reportContent,
       ledger: input.previousLedger,
