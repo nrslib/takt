@@ -18,6 +18,7 @@
 {{/if}}{{#if plainTextNormalizedReviewer}}- 通常の Markdown レビュー報告を書いてください。JSON や structured output は返さないでください。
 - 観測した各問題と明示的な台帳 lifecycle claim を、通常の文章で1件ずつ分けて明確に記述してください。隔離された抽出器が見るのはこの最終報告だけであり、リポジトリ調査や暗黙の主張の推論は行いません。
 - 利用できる場合は path と有界な1始まりの行範囲を記載してください。欠けている locator を捏造しないでください。対象構造を明確に特定できるリポジトリ全体またはアーキテクチャ上の問題は、行範囲がなくても有効です。
+- 各問題には短い title と severity（`critical` / `high` / `medium` / `low` のいずれか）を明記してください。normalizer は本文に無い severity を補作できないため、書かれていない問題は受理されず再提示に回ります。「blocking」などの別語彙は severity として抽出できません。
 - 承認、要約、検証表、スコープ説明を問題として記述しないでください。
 {{/if}}{{#if reviewerHasOpenFindings}}- 毎ラウンド、自分のレビュー範囲に入る open な台帳の指摘を検証してください。
 {{/if}}{{#if structuredReviewerHasOpenFindings}}- open な指摘が修正済みだと確認できたら、relation を `resolution_confirmation`、`targetFindingIds` にその台帳 ID だけを入れた structured raw finding を1件出力してください。指摘が resolved になる経路はこの確認だけです。
@@ -29,6 +30,7 @@
 {{/if}}{{#if reviewerHasDismissedFindings}}- 台帳サマリで dismissed になっている指摘を new として再報告しないでください。dismiss の前提が成立しなくなったと観測した場合は、relation を "reopened"、targetFindingId にその dismissed finding ID を設定して報告してください。
 {{/if}}{{#if structuredReviewer}}- rawFindingId はこの応答の中で一意にしてください。
 - まずレビュー報告本文を書き、その後で各 structured entry を本文から追加主張なしに抽出してください。`rawExcerpt` は issue または lifecycle claim 全体を記述した、報告本文中の一意かつ完全一致の文章、`candidate` はその excerpt を欠落なく構造化したもの、忠実に抽出できない場合は `null` にしてください。欠けている title・description・severity・target・relation・evidence request を補わないでください。
+- 報告本文の各 issue claim には、短い title と severity（`critical` / `high` / `medium` / `low` のいずれか）を明記してください。severity は product 昇格の必須項目であり、本文に無い severity を抽出で補うことは許されないため、書かれていない claim は受理されず再提示に回ります。「blocking」などの別語彙は severity として抽出できません。
 - target は必ず1種類にしてください。既存コードの欠陥は `code` と binary-sorted unique な paths、必須のリポジトリ構造は `structure` と明示的な review-scope roots / manifest targets、存在すべき path の不存在または明示 roots 配下での UTF-8 完全一致 literal 0件は `absence` を使います。regex・glob・semantic depth・暗黙/default root は使わず、一般的な manifest を元の義務の根拠にしないでください。
 - 証拠はリクエストするだけで、発行・検証済みだと主張しないでください。`code` target は path と有界な1始まりの startLine/endLine だけを指定した `file_quote` を使い、source text や verbatimExcerpt は出力しないでください。`structure` target は `repository_manifest`、`absence` target は対応する `repository_query`（`path_state` または `exact_literal_search`）と、元の義務を定める登録済み task / public declaration の `authoritative_quote` の両方をリクエストしてください。エンジンが確認するのは quote の存在までで、その quote が主張する義務に関連するかは findings manager が別に裁定します。
 - 必須 path/root が除外・読取不能・非 UTF-8・上限超過・未対応などで完全探索できない場合は coverage gap であり、ゼロ件の証拠ではありません。不完全な探索を absence claim に変換しないでください。
