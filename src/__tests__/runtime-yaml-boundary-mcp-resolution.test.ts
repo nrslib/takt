@@ -41,7 +41,7 @@ function normalizeDenyByDefault(extra: Record<string, unknown>, steps: Array<Rec
 }
 
 describe('CT-MCP-3 mcp reference resolution', () => {
-  it('Given a step `mcp:` reference and a matching top-level definition, When normalized, Then it resolves onto the step', () => {
+  it('should resolve the definition onto the step when a step `mcp:` reference matches a top-level definition', () => {
     const config = normalize({ mcp_servers: { browser: BROWSER } }, [
       { name: 'implement', instruction: '{task}', mcp: ['browser'] },
     ]);
@@ -49,19 +49,19 @@ describe('CT-MCP-3 mcp reference resolution', () => {
     expect(step.mcpServers?.browser).toEqual(BROWSER);
   });
 
-  it('Given a step `mcp:` reference with no matching definition, When normalized, Then it fails fast naming the server', () => {
+  it('should fail fast naming the server when a step `mcp:` reference has no matching definition', () => {
     expect(() => normalize({ mcp_servers: { browser: BROWSER } }, [
       { name: 'implement', instruction: '{task}', mcp: ['ghost'] },
     ])).toThrow(/ghost|not defined/i);
   });
 
-  it('Given a reference with no top-level definitions at all, When normalized, Then it fails fast', () => {
+  it('should fail fast when a `mcp:` reference is present and no top-level definitions exist', () => {
     expect(() => normalize({}, [
       { name: 'implement', instruction: '{task}', mcp: ['browser'] },
     ])).toThrow(/browser|not defined/i);
   });
 
-  it('Given a parallel sub-step `mcp:` reference, When normalized, Then it resolves onto the sub-step', () => {
+  it('should resolve the definition onto the sub-step when a parallel sub-step declares a `mcp:` reference', () => {
     const config = normalize({ mcp_servers: { browser: BROWSER } }, [
       {
         name: 'reviewers',
@@ -75,7 +75,7 @@ describe('CT-MCP-3 mcp reference resolution', () => {
 });
 
 describe('CT-MCP-5 resolved references pass through the deny-by-default transport gate', () => {
-  it('Given a resolved stdio reference and no transport policy, When normalized, Then it fails fast as disabled-by-default', () => {
+  it('should fail fast as disabled-by-default when a resolved stdio reference has no transport policy', () => {
     // BROWSER has no `type`, so it resolves as a stdio transport; with no policy, stdio is denied.
     // Regression guard: a bundled default pulled in by `mcp:` reference must hit the SAME deny gate
     // as an inline `mcp_servers` definition, not slip through because it arrived via a reference.
@@ -86,11 +86,42 @@ describe('CT-MCP-5 resolved references pass through the deny-by-default transpor
 });
 
 describe('CT-MCP-4 inline mcp_servers preserved alongside references', () => {
-  it('Given a step with an inline `mcp_servers`, When normalized, Then the inline definition survives', () => {
+  it('should keep the inline definition when a step declares an inline `mcp_servers`', () => {
     const config = normalize({}, [
       { name: 'implement', instruction: '{task}', mcp_servers: { local: { command: 'node' } } },
     ]);
     const step = config.steps[0] as AgentWorkflowStep;
     expect(step.mcpServers?.local?.command).toBe('node');
+  });
+
+  it('should let the inline definition win when it collides with a referenced definition of the same name', () => {
+    // The resolution contract is `{ ...resolved, ...inline }`: an explicit inline override must not
+    // be shadowed by the workflow-bundled default it shares a name with.
+    const config = normalize({ mcp_servers: { browser: BROWSER } }, [
+      {
+        name: 'implement',
+        instruction: '{task}',
+        mcp: ['browser'],
+        mcp_servers: { browser: { command: 'inline-browser' } },
+      },
+    ]);
+    const step = config.steps[0] as AgentWorkflowStep;
+    expect(step.mcpServers?.browser).toEqual({ command: 'inline-browser' });
+  });
+});
+
+describe('mcp reference lookup is own-property only', () => {
+  it('should fail fast when a `mcp:` reference names an Object.prototype member', () => {
+    // `definitions[name]` would hand back `Object.prototype.toString` — a function silently
+    // installed as an MCP server. The reference must be unresolved instead.
+    expect(() => normalize({ mcp_servers: { browser: BROWSER } }, [
+      { name: 'implement', instruction: '{task}', mcp: ['toString'] },
+    ])).toThrow(/toString|not defined/i);
+  });
+
+  it('should fail fast when a `mcp:` reference names a prototype member and no definitions exist', () => {
+    expect(() => normalize({}, [
+      { name: 'implement', instruction: '{task}', mcp: ['constructor'] },
+    ])).toThrow(/constructor|not defined/i);
   });
 });

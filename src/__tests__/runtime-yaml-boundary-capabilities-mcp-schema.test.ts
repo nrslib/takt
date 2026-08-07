@@ -32,7 +32,7 @@ function minimalWorkflow(extra: LooseRecord): LooseRecord {
 }
 
 describe('CT-CAP-1 capabilities key is accepted and retained', () => {
-  it('Given a workflow-level `capabilities` name, When parsed, Then it is accepted and retained', () => {
+  it('should accept and retain the name when a workflow declares `capabilities`', () => {
     const result = WorkflowConfigRawSchema.safeParse(
       minimalWorkflow({ capabilities: 'backend-default' }),
     );
@@ -42,7 +42,7 @@ describe('CT-CAP-1 capabilities key is accepted and retained', () => {
     }
   });
 
-  it('Given a step-level `capabilities` name, When parsed, Then it is accepted and retained (not stripped)', () => {
+  it('should accept and retain the name when a step declares `capabilities` (not stripped)', () => {
     const result = WorkflowStepRawSchema.safeParse({
       ...MINIMAL_STEP,
       name: 'review',
@@ -54,7 +54,7 @@ describe('CT-CAP-1 capabilities key is accepted and retained', () => {
     }
   });
 
-  it('Given a parallel sub-step `capabilities` name, When parsed, Then it is accepted and retained (not stripped)', () => {
+  it('should accept and retain the name when a parallel sub-step declares `capabilities` (not stripped)', () => {
     const result = WorkflowStepRawSchema.safeParse({
       name: 'reviewers',
       parallel: [{ name: 'arch-review', instruction: 'Review architecture', capabilities: 'review-readonly' }],
@@ -68,7 +68,7 @@ describe('CT-CAP-1 capabilities key is accepted and retained', () => {
 });
 
 describe('CT-MCP-1 workflow top-level mcp_servers definition', () => {
-  it('Given a workflow top-level `mcp_servers` definition, When parsed, Then it is accepted and retained', () => {
+  it('should accept and retain the definition when a workflow declares top-level `mcp_servers`', () => {
     const servers = {
       browser: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-browser'] },
     };
@@ -81,7 +81,7 @@ describe('CT-MCP-1 workflow top-level mcp_servers definition', () => {
 });
 
 describe('CT-MCP-2 step / sub-step mcp reference key', () => {
-  it('Given a step `mcp:` reference list, When parsed, Then it is accepted and retained (not stripped)', () => {
+  it('should accept and retain the reference list when a step declares `mcp:` (not stripped)', () => {
     const result = WorkflowStepRawSchema.safeParse({ ...MINIMAL_STEP, mcp: ['browser'] });
     expect(result.success).toBe(true);
     if (result.success) {
@@ -89,7 +89,7 @@ describe('CT-MCP-2 step / sub-step mcp reference key', () => {
     }
   });
 
-  it('Given a parallel sub-step `mcp:` reference list, When parsed, Then it is accepted and retained (not stripped)', () => {
+  it('should accept and retain the reference list when a parallel sub-step declares `mcp:` (not stripped)', () => {
     const result = WorkflowStepRawSchema.safeParse({
       name: 'reviewers',
       parallel: [{ name: 'arch-review', instruction: 'Review architecture', mcp: ['browser'] }],
@@ -103,7 +103,7 @@ describe('CT-MCP-2 step / sub-step mcp reference key', () => {
 });
 
 describe('CT-MCP-4 pre-existing inline step mcp_servers is preserved', () => {
-  it('Given a step with an inline `mcp_servers` stdio definition, When parsed, Then it stays accepted and retained', () => {
+  it('should keep accepting and retaining the definition when a step declares an inline `mcp_servers` stdio entry', () => {
     const result = WorkflowStepRawSchema.safeParse({
       ...MINIMAL_STEP,
       mcp_servers: { browser: { command: 'npx' } },
@@ -132,7 +132,7 @@ function normalizeSingleStep(step: LooseRecord) {
 }
 
 describe('capabilities/mcp are rejected on system and workflow_call steps', () => {
-  it('Given a system step with `capabilities`, When normalized, Then it fails fast (not silently dropped)', () => {
+  it('should fail fast when a system step declares `capabilities` (not silently dropped)', () => {
     expect(() => normalizeSingleStep({
       name: 'route',
       mode: 'system',
@@ -141,7 +141,7 @@ describe('capabilities/mcp are rejected on system and workflow_call steps', () =
     })).toThrow(REJECTION_REGEX);
   });
 
-  it('Given a workflow_call step with `mcp`, When normalized, Then it fails fast (not silently dropped)', () => {
+  it('should fail fast when a workflow_call step declares `mcp` (not silently dropped)', () => {
     expect(() => normalizeSingleStep({
       name: 'delegate',
       kind: 'workflow_call',
@@ -151,7 +151,7 @@ describe('capabilities/mcp are rejected on system and workflow_call steps', () =
     })).toThrow(REJECTION_REGEX);
   });
 
-  it('Given a system step with `mcp`, When normalized, Then it fails fast (symmetric guard)', () => {
+  it('should fail fast when a system step declares `mcp` (symmetric guard)', () => {
     expect(() => normalizeSingleStep({
       name: 'route',
       mode: 'system',
@@ -160,7 +160,7 @@ describe('capabilities/mcp are rejected on system and workflow_call steps', () =
     })).toThrow(REJECTION_REGEX);
   });
 
-  it('Given a workflow_call step with `capabilities`, When normalized, Then it fails fast (symmetric guard)', () => {
+  it('should fail fast when a workflow_call step declares `capabilities` (symmetric guard)', () => {
     expect(() => normalizeSingleStep({
       name: 'delegate',
       kind: 'workflow_call',

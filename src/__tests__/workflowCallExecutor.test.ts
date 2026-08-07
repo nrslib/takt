@@ -413,7 +413,7 @@ describe('WorkflowCallExecutor', () => {
     );
   });
 
-  it('provider ladders を子エンジンへクローンして伝搬する (issue #1208)', async () => {
+  it('should clone provider ladders into the child engine when creating it (issue #1208)', async () => {
     const parentConfig = {
       name: 'parent',
       initialStep: 'delegate',
@@ -486,6 +486,11 @@ describe('WorkflowCallExecutor', () => {
     expect(childOptions.providerLadders).toEqual(providerLadders);
     // A silent-no-op regression would drop the ladder; a shared reference would leak parent state.
     expect(childOptions.providerLadders).not.toBe(providerLadders);
+    // A shallow copy passes the identity check above while still sharing every stage entry, so the
+    // child mutating a stage would rewrite the parent's assignment. Probe the nested value.
+    const childLadders = childOptions.providerLadders as typeof providerLadders;
+    childLadders.steps['child/fix']![0]!.model = 'mutated-model';
+    expect(providerLadders.steps['child/fix']![0]!.model).toBe('ollama-cloud/glm-5.2');
   });
 
   it('child workflow が abort した理由を呼び出し元へ返す', async () => {

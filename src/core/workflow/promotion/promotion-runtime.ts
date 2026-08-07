@@ -1,11 +1,11 @@
 import type { StructuredCaller } from '../../../agents/structured-caller.js';
 import type { RunAgentOptions } from '../../../agents/runner.js';
 import type { AgentWorkflowStep, WorkflowStep } from '../../models/types.js';
-import type { ProviderLadderConfig, ProviderRoutingEntry } from '../../models/config-types.js';
+import type { ProviderLadderConfig, ProviderRoutingEntry, TagRoutingConflictPolicy } from '../../models/config-types.js';
 import type { ProviderResolutionSource } from '../provider-options-trace.js';
 import type { RuntimeStepResolution, StepProviderInfo } from '../types.js';
 import { isDelegatedWorkflowStep } from '../step-kind.js';
-import { applyProviderModelOverride } from '../provider-resolution.js';
+import { applyProviderModelOverride, tagRoutingEntryIdentity } from '../provider-resolution.js';
 import { countMatchedLadderStages, evaluatePromotion, isTargetedPromotionEntry } from './PromotionEvaluator.js';
 import {
   isFilePreferredProviderOptionPath,
@@ -28,6 +28,11 @@ export interface PromotionRuntimeContext {
    * configured, in which case a target-less promotion is a logged no-op.
    */
   providerLadders?: ProviderLadderConfig;
+  /**
+   * The same `tags` conflict policy the base resolution applies. A ladder selected off
+   * `provider_routing.tags` must judge equal-priority conflicts identically to stage 0.
+   */
+  providerRoutingTagConflictPolicy?: TagRoutingConflictPolicy;
 }
 
 function isPromotionStep(step: WorkflowStep): step is AgentWorkflowStep {
@@ -152,7 +157,12 @@ export async function resolvePromotionRuntime(
   if (stageIndex === 0) {
     return runtime;
   }
-  const ladder = resolveGoverningLadder(context.providerLadders, step, baseProviderInfo.providerSource);
+  const ladder = resolveGoverningLadder(
+    context.providerLadders,
+    step,
+    baseProviderInfo.providerSource,
+    context.providerRoutingTagConflictPolicy,
+  );
   if (ladder === undefined) {
     // INV-B: a profile/pool direct assignment records no governing ladder, so a target-less
     // promotion has nothing to advance and stays at the base assignment (INV-3 no-op). Surfaced as
@@ -231,6 +241,7 @@ function resolveGoverningLadder(
   ladders: ProviderLadderConfig | undefined,
   step: AgentWorkflowStep,
   baseSource: ProviderResolutionSource | undefined,
+  tagConflictPolicy: TagRoutingConflictPolicy | undefined,
 ): ProviderRoutingEntry[] | undefined {
   if (ladders === undefined) {
     return undefined;
@@ -239,7 +250,7 @@ function resolveGoverningLadder(
     case 'provider_routing.steps':
       return ladders.steps?.[step.name];
     case 'provider_routing.tags':
-      return resolveTagLadder(ladders.tags, step.tags);
+      return resolveTagLadder(ladders.tags, step.tags, tagConflictPolicy);
     case 'persona_providers':
       return ladders.personas?.[step.personaDisplayName];
     case 'runtime-v1':
@@ -249,20 +260,33 @@ function resolveGoverningLadder(
   }
 }
 
-/** Mirror the tag routing merge: the last matched tag that carries a ladder governs. */
+/**
+ * Mirror the tag routing merge: the last matched tag that carries a ladder governs, and under
+ * `fail-fast` two equal-priority tags carrying different ladders are a conflict. Without the
+ * conflict check the stage-0 assignment could fail fast while the later stages silently picked a
+ * winner, so the two ends of the same ladder would disagree about which tag governs.
+ */
 function resolveTagLadder(
   tags: Record<string, ProviderRoutingEntry[]> | undefined,
   stepTags: readonly string[] | undefined,
+  conflictPolicy: TagRoutingConflictPolicy | undefined,
 ): ProviderRoutingEntry[] | undefined {
   if (tags === undefined || stepTags === undefined) {
     return undefined;
   }
-  let resolved: ProviderRoutingEntry[] | undefined;
-  for (const tag of stepTags) {
-    const ladder = tags[tag];
-    if (ladder !== undefined) {
-      resolved = ladder;
+  const matchedTags = stepTags.filter((tag) => tags[tag] !== undefined);
+  if (matchedTags.length === 0) {
+    return undefined;
+  }
+  if (conflictPolicy === 'fail-fast') {
+    const distinct = new Set(
+      matchedTags.map((tag) => (tags[tag] as ProviderRoutingEntry[]).map(tagRoutingEntryIdentity).join('|')),
+    );
+    if (distinct.size > 1) {
+      throw new Error(
+        `Conflicting provider ladders for tags [${matchedTags.join(', ')}] at the same priority`,
+      );
     }
   }
-  return resolved;
+  return tags[matchedTags[matchedTags.length - 1] as string];
 }

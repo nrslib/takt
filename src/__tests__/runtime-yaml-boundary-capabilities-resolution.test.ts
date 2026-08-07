@@ -43,7 +43,7 @@ function normalize(extra: Record<string, unknown>, steps: Array<Record<string, u
 }
 
 describe('CT-CAP-2 capabilities reference resolution', () => {
-  it('Given a resolvable capability-set, When normalized, Then the step carries its capability options', () => {
+  it('should carry the capability options onto the step when the capability-set resolves', () => {
     writeCapabilitySet('backend', 'claude:\n  allowed_tools:\n    - Read\n    - Grep\n');
     const config = normalize({}, [
       { name: 'implement', instruction: '{task}', capabilities: 'provider-options/backend.yaml' },
@@ -52,7 +52,7 @@ describe('CT-CAP-2 capabilities reference resolution', () => {
     expect(step.providerOptions?.claude?.allowedTools).toEqual(['Read', 'Grep']);
   });
 
-  it('Given an unresolvable capability-set name, When normalized, Then it fails fast', () => {
+  it('should fail fast when the capability-set name does not resolve', () => {
     expect(() => normalize({}, [
       { name: 'implement', instruction: '{task}', capabilities: 'provider-options/ghost.yaml' },
     ])).toThrow(/capabilities|not found/i);
@@ -60,14 +60,14 @@ describe('CT-CAP-2 capabilities reference resolution', () => {
 });
 
 describe('CT-CAP-3 capability-set leaf purification', () => {
-  it('Given a capability-set with a non-capability leaf (claude.effort), When normalized, Then it fails fast', () => {
+  it('should fail fast when a capability-set carries a non-capability leaf (claude.effort)', () => {
     writeCapabilitySet('quality', 'claude:\n  effort: high\n');
     expect(() => normalize({}, [
       { name: 'implement', instruction: '{task}', capabilities: 'provider-options/quality.yaml' },
     ])).toThrow(/capabilit|effort|capability leaf/i);
   });
 
-  it('Given a capability-set with only capability leaves, When normalized, Then it is accepted', () => {
+  it('should accept a capability-set when it carries only capability leaves', () => {
     writeCapabilitySet('caps', 'codex:\n  network_access: true\n  skills:\n    repo: true\n');
     expect(() => normalize({}, [
       { name: 'implement', instruction: '{task}', capabilities: 'provider-options/caps.yaml' },
@@ -76,7 +76,7 @@ describe('CT-CAP-3 capability-set leaf purification', () => {
 });
 
 describe('CT-CAP-4 step capabilities replace the workflow default', () => {
-  it('Given a workflow default and a step override, When normalized, Then the step replaces (does not merge) the default', () => {
+  it('should replace and not merge the workflow default when a step overrides `capabilities`', () => {
     writeCapabilitySet('wide', 'claude:\n  allowed_tools:\n    - Read\n    - Grep\n    - Bash\n');
     writeCapabilitySet('narrow', 'claude:\n  allowed_tools:\n    - Read\n');
     const config = normalize({ capabilities: 'provider-options/wide.yaml' }, [
@@ -93,7 +93,7 @@ describe('CT-CAP-4 step capabilities replace the workflow default', () => {
 });
 
 describe('CT-CAP-5 capabilities and direct provider_options coexist on the same step', () => {
-  it('Given a step with both capabilities and provider_options, When normalized, Then provider_options wins (replace, not union)', () => {
+  it('should let provider_options win by replacement when a step declares both `capabilities` and `provider_options`', () => {
     writeCapabilitySet('caps-read-grep', 'claude:\n  allowed_tools:\n    - Read\n    - Grep\n');
     const config = normalize({}, [
       {

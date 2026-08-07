@@ -23,10 +23,11 @@ export function resolveWorkflowMcpReferences(
   if (refs === undefined || refs.length === 0) {
     return inline;
   }
-  const resolved: Record<string, McpServerConfig> = {};
+  // Null prototype so a reference named after an `Object.prototype` member (`toString`, ...) is an
+  // unresolved reference rather than a silently injected function.
+  const resolved = Object.create(null) as Record<string, McpServerConfig>;
   refs.forEach((name, index) => {
-    const definition = definitions?.[name];
-    if (definition === undefined) {
+    if (definitions === undefined || !Object.hasOwn(definitions, name)) {
       throw withWorkflowConfigErrorPath(
         new Error(
           `Configuration error: step "${stepName}" references MCP server "${name}", `
@@ -35,7 +36,7 @@ export function resolveWorkflowMcpReferences(
         [...stepPath, 'mcp', index],
       );
     }
-    resolved[name] = definition;
+    resolved[name] = definitions[name] as McpServerConfig;
   });
   return { ...resolved, ...(inline ?? {}) };
 }

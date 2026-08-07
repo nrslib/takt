@@ -18,7 +18,7 @@ import { WorkflowStepRawSchema } from '../core/models/index.js';
  */
 
 describe('CT-PROMO-1 target-less promotion is accepted', () => {
-  it('Given a step with `promotion: [{at:3},{at:6}]`, When parsed, Then it is accepted', () => {
+  it('should accept a step when it declares `promotion: [{at:3},{at:6}]`', () => {
     const result = WorkflowStepRawSchema.safeParse({
       name: 'fix',
       instruction: '{task}',
@@ -30,7 +30,7 @@ describe('CT-PROMO-1 target-less promotion is accepted', () => {
     }
   });
 
-  it('Given a bare `promotion: [{}]` (no at/condition and no target), When parsed, Then it is still rejected', () => {
+  it('should still reject a step when it declares a bare `promotion: [{}]` (no at/condition and no target)', () => {
     const result = WorkflowStepRawSchema.safeParse({
       name: 'fix',
       instruction: '{task}',
@@ -46,7 +46,7 @@ describe('CT-PROMO-1 target-less promotion is accepted', () => {
 });
 
 describe('CT-PROMO-2 targeted promotion remains accepted', () => {
-  it('Given `{at:3, model, provider_options}` targeted promotion, When parsed, Then it is still accepted', () => {
+  it('should still accept a step when it declares a targeted `{at:3, model, provider_options}` promotion', () => {
     const result = WorkflowStepRawSchema.safeParse({
       name: 'fix',
       instruction: '{task}',
@@ -60,7 +60,7 @@ describe('CT-PROMO-2 targeted promotion remains accepted', () => {
     }
   });
 
-  it('Given a targeted condition `{condition, provider}`, When parsed, Then it is still accepted', () => {
+  it('should still accept a step when it declares a targeted `{condition, provider}` promotion', () => {
     // A condition-driven promotion that names a concrete target is untouched by the target-less
     // restriction — its target says "what to promote to", so it has a runtime effect.
     const result = WorkflowStepRawSchema.safeParse({
@@ -76,7 +76,7 @@ describe('CT-PROMO-2 targeted promotion remains accepted', () => {
 });
 
 describe('FAM-2 target-less promotion must be `{at:N}` only (order.md:99/159)', () => {
-  it('Given a target-less condition-only `promotion: [{condition}]`, When parsed, Then it is rejected', () => {
+  it('should reject a step when it declares a target-less condition-only `promotion: [{condition}]`', () => {
     // A target-less condition entry has no runtime effect: the ladder stage count ignores
     // condition entries, so accepting it would silently drop the promotion. Reject it at load time.
     const result = WorkflowStepRawSchema.safeParse({
@@ -92,7 +92,7 @@ describe('FAM-2 target-less promotion must be `{at:N}` only (order.md:99/159)', 
     }
   });
 
-  it('Given a target-less `{at, condition}` entry, When parsed, Then it is rejected', () => {
+  it('should reject a step when it declares a target-less `{at, condition}` entry', () => {
     const result = WorkflowStepRawSchema.safeParse({
       name: 'fix',
       instruction: '{task}',

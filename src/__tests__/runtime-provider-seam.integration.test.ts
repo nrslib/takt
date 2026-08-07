@@ -356,7 +356,7 @@ describe('providerLadders end-to-end from runtime.yaml (issue #1208)', () => {
     rmSync(engineTmpDir, { recursive: true, force: true });
   });
 
-  it('surfaces every ladder stage and the stage-0 routing entry from a real runtime.yaml file', () => {
+  it('should surface every ladder stage and the stage-0 routing entry when a real runtime.yaml declares a ladder', () => {
     const env = resolveCompiledProviderEnvironment({
       projectCwd: ladderProjectCwd,
       legacy: legacyInput,
@@ -374,7 +374,7 @@ describe('providerLadders end-to-end from runtime.yaml (issue #1208)', () => {
     expect(env.model).toBe('base-model');
   });
 
-  it('advances a target-less {at:N} promotion along the runtime.yaml ladder inside a real WorkflowEngine', async () => {
+  it('should advance a target-less {at:N} promotion along the runtime.yaml ladder when run inside a real WorkflowEngine', async () => {
     const env = resolveCompiledProviderEnvironment({
       projectCwd: ladderProjectCwd,
       legacy: legacyInput,

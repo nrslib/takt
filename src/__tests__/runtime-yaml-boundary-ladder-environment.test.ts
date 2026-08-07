@@ -30,28 +30,28 @@ function section(overrides: Partial<RuntimeProviderSection>): RuntimeProviderSec
 }
 
 describe('ladder initial-stage honoring across every assignment path', () => {
-  it('Given a ladder step assignment, When compiled, Then the step routes to the ladder first profile', () => {
+  it('should route the step to the ladder first profile when a step assignment declares a ladder', () => {
     const env = compileRuntimeProviderEnvironment(
       section({ targets: { steps: { 'development-core/fix': { ladder: ['main', 'strong'] } } } }),
     );
     expect(env.providerRouting?.steps?.['development-core/fix']).toEqual(MAIN_ENTRY);
   });
 
-  it('Given a ladder tag assignment, When compiled, Then the tag routes to the ladder first profile', () => {
+  it('should route the tag to the ladder first profile when a tag assignment declares a ladder', () => {
     const env = compileRuntimeProviderEnvironment(
       section({ targets: { tags: { heavy: { ladder: ['strong', 'main'] } } } }),
     );
     expect(env.providerRouting?.tags?.heavy).toEqual(STRONG_ENTRY);
   });
 
-  it('Given a ladder persona assignment, When compiled, Then the persona routes to the ladder first profile', () => {
+  it('should route the persona to the ladder first profile when a persona assignment declares a ladder', () => {
     const env = compileRuntimeProviderEnvironment(
       section({ targets: { personas: { coder: { ladder: ['main', 'strong'] } } } }),
     );
     expect(env.personaProviders?.coder).toEqual(MAIN_ENTRY);
   });
 
-  it('Given a ladder defaults assignment, When compiled, Then provider/model resolve to the ladder first profile', () => {
+  it('should resolve provider/model to the ladder first profile when `defaults` declares a ladder', () => {
     const env = compileRuntimeProviderEnvironment(section({ defaults: { ladder: ['main', 'strong'] } }));
     // Regression guard: before the fix, defaults consulted only `.profile`, so a `ladder` silently
     // fell back to the built-in defaults instead of ladder[0].
@@ -59,7 +59,7 @@ describe('ladder initial-stage honoring across every assignment path', () => {
     expect(env.model).toBe('ollama-cloud/glm-5.2');
   });
 
-  it('Given a ladder internal_agents.selector assignment, When compiled, Then the selector resolves to the ladder first profile', () => {
+  it('should resolve the selector to the ladder first profile when `internal_agents.selector` declares a ladder', () => {
     const env = compileRuntimeProviderEnvironment(
       section({ targets: { internal_agents: { selector: { ladder: ['strong', 'main'] } } } }),
     );
@@ -68,14 +68,14 @@ describe('ladder initial-stage honoring across every assignment path', () => {
     expect(env.internalAgents?.selector).toEqual(STRONG_ENTRY);
   });
 
-  it('Given a ladder internal_agents.assistant assignment, When compiled, Then the assistant resolves to the ladder first profile', () => {
+  it('should resolve the assistant to the ladder first profile when `internal_agents.assistant` declares a ladder', () => {
     const env = compileRuntimeProviderEnvironment(
       section({ targets: { internal_agents: { assistant: { ladder: ['main', 'strong'] } } } }),
     );
     expect(env.internalAgents?.assistant).toEqual(MAIN_ENTRY);
   });
 
-  it('Given a ladder step assignment, When compiled, Then the default profile still resolves independently', () => {
+  it('should still resolve the default profile independently when a step assignment declares a ladder', () => {
     const env = compileRuntimeProviderEnvironment(
       section({
         defaults: { profile: 'base' },
@@ -88,7 +88,7 @@ describe('ladder initial-stage honoring across every assignment path', () => {
 });
 
 describe('every ladder stage is preserved for the promotion seam (issue #1208)', () => {
-  it('Given ladders on defaults/steps/tags/personas, When compiled, Then all stages are kept in order', () => {
+  it('should keep every stage in order when defaults/steps/tags/personas all declare ladders', () => {
     const env = compileRuntimeProviderEnvironment(
       section({
         defaults: { ladder: ['main', 'strong'] },
@@ -105,14 +105,14 @@ describe('every ladder stage is preserved for the promotion seam (issue #1208)',
     expect(env.providerLadders?.personas?.coder).toEqual([MAIN_ENTRY, STRONG_ENTRY]);
   });
 
-  it('Given no ladder assignment anywhere, When compiled, Then providerLadders is undefined', () => {
+  it('should leave providerLadders undefined when no assignment declares a ladder', () => {
     const env = compileRuntimeProviderEnvironment(
       section({ defaults: { profile: 'base' }, targets: { steps: { 'a/b': { profile: 'main' } } } }),
     );
     expect(env.providerLadders).toBeUndefined();
   });
 
-  it('Given a profile assignment beside a ladder, When compiled, Then only the ladder key is recorded', () => {
+  it('should record only the ladder key when a profile assignment sits beside a ladder', () => {
     const env = compileRuntimeProviderEnvironment(
       section({
         targets: {
@@ -126,7 +126,7 @@ describe('every ladder stage is preserved for the promotion seam (issue #1208)',
     expect(env.providerLadders?.steps).toEqual({ 'development-core/fix': [MAIN_ENTRY, STRONG_ENTRY] });
   });
 
-  it('Given an internal_agents ladder, When compiled, Then it is excluded from providerLadders (not a promotion target)', () => {
+  it('should exclude an internal_agents ladder from providerLadders when compiled (not a promotion target)', () => {
     const env = compileRuntimeProviderEnvironment(
       section({ targets: { internal_agents: { selector: { ladder: ['strong', 'main'] } } } }),
     );
@@ -145,14 +145,14 @@ describe('ladder honoring preserves the `pool` assignment contracts', () => {
     });
   }
 
-  it('Given a `defaults: { pool }`, When compiled, Then provider/model stay unset and auto_routing is built', () => {
+  it('should leave provider/model unset and build auto_routing when `defaults` declares a pool', () => {
     const env = compileRuntimeProviderEnvironment(autoRoutingSection({ defaults: { pool: 'general' } }));
     expect(env.provider).toBeUndefined();
     expect(env.model).toBeUndefined();
     expect(env.autoRouting?.defaultPool).toBe('general');
   });
 
-  it('Given an `internal_agents.selector: { pool }`, When compiled, Then it throws (pools are not allowed for internal agents)', () => {
+  it('should throw when `internal_agents.selector` declares a pool (pools are not allowed for internal agents)', () => {
     expect(() =>
       compileRuntimeProviderEnvironment(
         autoRoutingSection({
@@ -163,7 +163,7 @@ describe('ladder honoring preserves the `pool` assignment contracts', () => {
     ).toThrow(/internal_agents\.selector` cannot use a `pool`/);
   });
 
-  it('Given an `internal_agents.selector: { profile }`, When compiled, Then the fixed profile is still honored', () => {
+  it('should honor the fixed profile when `internal_agents.selector` declares a profile', () => {
     const env = compileRuntimeProviderEnvironment(
       section({ targets: { internal_agents: { selector: { profile: 'strong' } } } }),
     );

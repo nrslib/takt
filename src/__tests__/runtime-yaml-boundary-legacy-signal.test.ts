@@ -49,7 +49,7 @@ const ACTIVE_RUNTIME_FILE: RuntimeProviderFile = {
 } as unknown as RuntimeProviderFile;
 
 describe('CT-MIX-2 targeted promotion is a legacy signal', () => {
-  it('Given a workflow with a targeted promotion and otherwise-clean legacy config, When collecting signals, Then a promotion signal is reported', () => {
+  it('should report a promotion signal when a workflow carries a targeted promotion and the rest of the config is clean', () => {
     const signals = collectLegacyProviderSignals(
       CLEAN_LEGACY,
       workflowWithPromotion([{ at: 3, model: 'opus' }]),
@@ -58,7 +58,7 @@ describe('CT-MIX-2 targeted promotion is a legacy signal', () => {
     expect(signals.some((s) => /promotion/i.test(s.setting) || /promotion/i.test(s.location))).toBe(true);
   });
 
-  it('Given a workflow with only a target-less `{at:N}` promotion, When collecting signals, Then it is NOT reported as legacy', () => {
+  it('should not report a promotion signal when a workflow carries only a target-less `{at:N}` promotion', () => {
     const signals = collectLegacyProviderSignals(
       CLEAN_LEGACY,
       workflowWithPromotion([{ at: 3 }]),
@@ -67,7 +67,7 @@ describe('CT-MIX-2 targeted promotion is a legacy signal', () => {
     expect(signals.some((s) => /promotion/i.test(s.setting) || /promotion/i.test(s.location))).toBe(false);
   });
 
-  it('Given an active runtime.yaml and the targeted-promotion signal, When determining the mode, Then it hard-errors', () => {
+  it('should hard-error when an active runtime.yaml coexists with the targeted-promotion signal', () => {
     const signals = collectLegacyProviderSignals(
       CLEAN_LEGACY,
       workflowWithPromotion([{ at: 3, model: 'opus' }]),
@@ -92,7 +92,7 @@ describe('CT-MIX-2 targeted promotion is a legacy signal', () => {
  * target-less-promotion step, so a partial-traversal / early-terminating flattener fails.
  */
 describe('CT-MIX-2 steps-flattening seam feeds the mixed-config signal', () => {
-  it('Given steps where a targeted promotion sits behind promotion-less and target-less steps, When flattening via collectStepPromotionEntries and collecting signals, Then a promotion signal is reported', () => {
+  it('should report a promotion signal when a targeted promotion sits behind promotion-less and target-less steps', () => {
     const steps = [
       { name: 'plan' },
       { name: 'review', promotion: [{ at: 2 }] },
@@ -103,7 +103,7 @@ describe('CT-MIX-2 steps-flattening seam feeds the mixed-config signal', () => {
     expect(signals.some((s) => /promotion/i.test(s.setting) || /promotion/i.test(s.location))).toBe(true);
   });
 
-  it('Given steps whose only promotions are target-less `{at:N}`, When flattening and collecting signals, Then no promotion signal is reported', () => {
+  it('should not report a promotion signal when every step promotion is a target-less `{at:N}`', () => {
     const steps = [
       { name: 'plan' },
       { name: 'fix', promotion: [{ at: 3 }] },
@@ -113,7 +113,7 @@ describe('CT-MIX-2 steps-flattening seam feeds the mixed-config signal', () => {
     expect(signals.some((s) => /promotion/i.test(s.setting) || /promotion/i.test(s.location))).toBe(false);
   });
 
-  it('Given mixed steps, When flattening, Then promotion-less steps are skipped and every promotion-bearing step contributes its entries', () => {
+  it('should skip promotion-less steps and collect every promotion-bearing step entry when flattening mixed steps', () => {
     const steps = [
       { name: 'a', promotion: [{ at: 2 }] },
       { name: 'b' },
@@ -127,7 +127,7 @@ describe('CT-MIX-2 steps-flattening seam feeds the mixed-config signal', () => {
     expect(signals.filter((s) => /promotion/i.test(s.setting)).length).toBe(1);
   });
 
-  it('Given an active runtime.yaml and steps carrying a targeted promotion, When flattening and determining the mode, Then it hard-errors', () => {
+  it('should hard-error when an active runtime.yaml coexists with steps carrying a targeted promotion', () => {
     const steps = [
       { name: 'plan' },
       { name: 'fix', promotion: [{ at: 3, provider: 'codex' }] },

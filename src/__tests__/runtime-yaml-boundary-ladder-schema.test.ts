@@ -41,7 +41,7 @@ function ladderDoc(): LooseRuntimeDoc {
 }
 
 describe('CT-LAD-1 runtime.yaml ladder assignment', () => {
-  it('Given a `ladder: [main, strong]` step assignment, When parsed, Then it is accepted and retained in order', () => {
+  it('should accept and retain the stage order when a step assignment declares `ladder: [main, strong]`', () => {
     const result = RuntimeProviderFileSchema.safeParse(ladderDoc());
     expect(result.success).toBe(true);
     if (result.success) {
@@ -50,25 +50,25 @@ describe('CT-LAD-1 runtime.yaml ladder assignment', () => {
     }
   });
 
-  it('Given an assignment with both `profile` and `ladder`, When parsed, Then the three-way XOR rejects it', () => {
+  it('should reject an assignment when it declares both `profile` and `ladder`', () => {
     const doc = ladderDoc();
     doc.provider.targets.steps['development-core/fix'] = { profile: 'main', ladder: ['main', 'strong'] };
     expect(RuntimeProviderFileSchema.safeParse(doc).success).toBe(false);
   });
 
-  it('Given an assignment with both `pool` and `ladder`, When parsed, Then the three-way XOR rejects it', () => {
+  it('should reject an assignment when it declares both `pool` and `ladder`', () => {
     const doc = ladderDoc();
     doc.provider.targets.steps['development-core/fix'] = { pool: 'sol-pool', ladder: ['main', 'strong'] };
     expect(RuntimeProviderFileSchema.safeParse(doc).success).toBe(false);
   });
 
-  it('Given an empty `ladder: []`, When parsed, Then the non-empty boundary rejects it', () => {
+  it('should reject an assignment when `ladder` is empty', () => {
     const doc = ladderDoc();
     doc.provider.targets.steps['development-core/fix'] = { ladder: [] };
     expect(RuntimeProviderFileSchema.safeParse(doc).success).toBe(false);
   });
 
-  it('Given a `ladder` entry that is not a string, When parsed, Then it is rejected', () => {
+  it('should reject an assignment when a `ladder` entry is not a string', () => {
     const doc = ladderDoc();
     doc.provider.targets.steps['development-core/fix'] = { ladder: ['main', 42] };
     expect(RuntimeProviderFileSchema.safeParse(doc).success).toBe(false);

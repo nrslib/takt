@@ -25,18 +25,33 @@ function sectionWithLadder(ladder: readonly string[], profiles: Record<string, {
 }
 
 describe('CT-LAD-5 ladder profile references validated at load time', () => {
-  it('Given a ladder that references a fully-defined profile, When validated, Then it does not throw', () => {
+  it('should accept a ladder when every stage references a fully-defined profile', () => {
     const section = sectionWithLadder(['real', 'strong'], { strong: { provider: 'claude', model: 'opus' } });
     expect(() => validateRuntimeProviderSection(section)).not.toThrow();
   });
 
-  it('Given a ladder that references an unknown profile, When validated, Then it fails fast naming the missing profile', () => {
+  it('should fail fast naming the missing profile when a ladder references an unknown profile', () => {
     const section = sectionWithLadder(['real', 'ghost'], {});
     expect(() => validateRuntimeProviderSection(section)).toThrow(/ghost|unknown profile/i);
   });
 
-  it('Given a ladder profile missing `model`, When validated, Then it fails fast', () => {
+  it('should fail fast when a ladder profile is missing `model`', () => {
     const section = sectionWithLadder(['real', 'half'], { half: { provider: 'claude' } });
     expect(() => validateRuntimeProviderSection(section)).toThrow(/half|provider|model/i);
+  });
+});
+
+describe('a ladder must escalate to a different profile at every stage', () => {
+  it('should fail fast when a ladder repeats its own profile in the next stage', () => {
+    // `['real', 'real']` is a self-reference: the promotion "escalates" to what it already runs.
+    const section = sectionWithLadder(['real', 'real'], {});
+    expect(() => validateRuntimeProviderSection(section)).toThrow(/real/i);
+  });
+
+  it('should fail fast when a ladder cycles back to an earlier profile', () => {
+    const section = sectionWithLadder(['real', 'strong', 'real'], {
+      strong: { provider: 'claude', model: 'opus' },
+    });
+    expect(() => validateRuntimeProviderSection(section)).toThrow(/real/i);
   });
 });
