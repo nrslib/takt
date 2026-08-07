@@ -29,10 +29,12 @@ steps:
           next: finding-conflict-adjudication
         - condition: when(findings.conflicts.count > 0)
           next: ABORT
-        - condition: when(findings.reviewerAnomalies.requiresGuaranteedPresentationCount > 0)
-          return: needs_review
         - condition: when(findings.reviewerAnomalies.claimBearingTerminalCount > 0)
           return: needs_terminal_adjudication
+        - condition: when(findings.open.count > 0 && findings.provisional.count == 0 && findings.conflicts.count == 0)
+          return: needs_fix
+        - condition: when(findings.reviewerAnomalies.requiresGuaranteedPresentationCount > 0)
+          return: needs_review
         - condition: when(findings.reviewerAnomalies.restatementReadyCount > 0)
           return: needs_review
         - condition: when(findings.provisional.dismissEligible.count > 0 && findings.conflicts.count == 0)
@@ -43,14 +45,12 @@ steps:
           return: need_replan
         - condition: when(findings.provisional.count > 0 && findings.conflicts.count == 0)
           return: need_replan
-        - condition: when(findings.open.count == 0 && findings.reviewerAnomalies.count > 0 && findings.reviewerAnomalies.budgetExhausted == true)
+        - condition: when(findings.reviewerAnomalies.count > 0 && findings.reviewerAnomalies.budgetExhausted == true)
           return: need_replan
-        - condition: when(findings.open.count == 0 && findings.reviewerAnomalies.count > 0)
+        - condition: when(findings.reviewerAnomalies.count > 0)
           return: needs_review
         - condition: when(findings.open.count == 0 && findings.provisional.count == 0 && findings.conflicts.count == 0)
           next: COMPLETE
-        - condition: when(findings.open.count > 0 && findings.provisional.count == 0 && findings.conflicts.count == 0)
-          return: needs_fix
       parallel:
         arch-review: [{ condition: approved }, { condition: needs_fix }]
         security-review: [{ condition: approved }, { condition: needs_fix }]

@@ -250,34 +250,90 @@ function expectedRuleMatch(counts: FindingCounts): ExpectedRuleMatch {
     return { index: 0, nextStep: 'finding-conflict-adjudication' };
   }
   if (counts.conflicts > 0) return { index: 1, nextStep: 'ABORT' };
-  if (counts.requiresGuaranteedPresentationCount > 0) {
-    return { index: 2, returnValue: 'needs_review' };
-  }
   if (counts.claimBearingTerminalCount > 0) {
     // 言い直し予算を使い切った claim-bearing anomaly は再計画では直せない
     // （レビュアーの protocol 違反であってプロダクト側の欠陥ではない）ため、
     // final gate 経由で review_integrity_unresolved の可視的失敗へ送る。
-    return { index: 3, returnValue: 'needs_terminal_adjudication' };
+    return { index: 2, returnValue: 'needs_terminal_adjudication' };
   }
-  if (counts.restatementReadyCount > 0) {
+  // 言い直しは slot 内で消化されるため、レビュー step 終了時に言い直し待ちが
+  // 残るのは予算枯渇系だけ。修正可能な open finding があるならそちらを先に回す。
+  if (counts.open > 0 && counts.provisional === 0) {
+    return { index: 3, returnValue: 'needs_fix' };
+  }
+  if (counts.requiresGuaranteedPresentationCount > 0) {
     return { index: 4, returnValue: 'needs_review' };
   }
+  if (counts.restatementReadyCount > 0) {
+    return { index: 5, returnValue: 'needs_review' };
+  }
   if (counts.dismissEligible > 0) {
-    return { index: 5, returnValue: 'needs_terminal_adjudication' };
+    return { index: 6, returnValue: 'needs_terminal_adjudication' };
   }
-  if (counts.provisionalFixpoint) return { index: 6, returnValue: 'need_replan' };
+  if (counts.provisionalFixpoint) return { index: 7, returnValue: 'need_replan' };
   if (counts.roundBudgetExhausted && counts.provisional > 0) {
-    return { index: 7, returnValue: 'need_replan' };
+    return { index: 8, returnValue: 'need_replan' };
   }
-  if (counts.provisional > 0) return { index: 8, returnValue: 'need_replan' };
-  if (counts.open === 0 && counts.anomalies > 0 && counts.anomalyBudgetExhausted) {
-    return { index: 9, returnValue: 'need_replan' };
+  if (counts.provisional > 0) return { index: 9, returnValue: 'need_replan' };
+  // 予算枯渇の出口は open の有無で塞がない。open が残っている状態は上の
+  // needs_fix / need_replan がすでに拾っているので、ここへ来る時点で open は 0。
+  if (counts.anomalies > 0 && counts.anomalyBudgetExhausted) {
+    return { index: 10, returnValue: 'need_replan' };
   }
-  if (counts.open === 0 && counts.anomalies > 0) {
-    return { index: 10, returnValue: 'needs_review' };
+  if (counts.anomalies > 0) {
+    return { index: 11, returnValue: 'needs_review' };
   }
-  if (counts.open === 0) return { index: 11, nextStep: 'COMPLETE' };
-  return { index: 12, returnValue: 'needs_fix' };
+  return { index: 12, nextStep: 'COMPLETE' };
+}
+
+/**
+ * 全域性検証用の状態空間。`enumerateFindingCounts` と違い、次元間の含意
+ * （provisional <= open など）を一切課さない直積を列挙する。到達不能な組合せまで
+ * 含めて必ずどれかのルールに一致することを示せば、実行時の rule_no_match は
+ * 「ラダー定義のバグ」だけを表す検出器になる。
+ */
+function enumerateFindingCountProduct(): FindingCounts[] {
+  const states: FindingCounts[] = [];
+  for (const open of [0, 1, 2]) {
+    for (const provisional of [0, 1, 2]) {
+      for (const dismissEligible of [0, 1, 2]) {
+        for (const conflicts of [0, 1, 2]) {
+          for (const unadjudicated of [0, 1, 2]) {
+            for (const anomalies of [0, 1, 2]) {
+              for (const provisionalFixpoint of [false, true]) {
+                for (const roundBudgetExhausted of [false, true]) {
+                  for (const anomalyBudgetExhausted of [false, true]) {
+                    for (const requiresGuaranteedPresentationCount of [0, 1]) {
+                      for (const restatementReadyCount of [0, 1]) {
+                        for (const claimBearingTerminalCount of [0, 1]) {
+                          states.push({
+                            open,
+                            provisional,
+                            dismissEligible,
+                            provisionalFixpoint,
+                            roundBudgetExhausted,
+                            anomalies,
+                            anomalyBudgetExhausted,
+                            requiresGuaranteedPresentationCount,
+                            restatementReadyCount,
+                            claimBearingTerminalCount,
+                            protocolNoiseRejectedCount: 0,
+                            conflicts,
+                            unadjudicated,
+                          });
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return states;
 }
 
 function enumerateFindingCounts(): FindingCounts[] {
@@ -547,6 +603,35 @@ describe('takt-default-fc builtins', () => {
     expect([...reached].sort((left, right) => left - right)).toEqual(
       rules.map((_, index) => index),
     );
+  });
+
+  it.each(LANGUAGES)('%s suite ladder is total over the finding state product', (language) => {
+    const reviewers = loadedStep(
+      loadWorkflow(language, 'peer-review-suite-finding-contract-base'),
+      'reviewers',
+    );
+    const states = enumerateFindingCountProduct();
+    expect(states).toHaveLength(46656);
+
+    // 実測（run-13）: 予算枯渇の出口が open.count == 0 を前提にしていたため、
+    // open が残る限りどの出口にも入れず reviewers を13周し、最後は
+    // rule_no_match で abort した。全域性が保てていれば本番で fail-fast は起きない。
+    const unmatched = states.filter((counts) => (
+      new RuleEvaluator(reviewers, { state: workflowState(reviewers, counts) })
+        .evaluate(undefined) === undefined
+    ));
+    expect(unmatched.slice(0, 3).map((counts) => JSON.stringify(counts))).toEqual([]);
+
+    // 予算枯渇状態は open の有無によらず必ず前進する出口を持つ。
+    for (const counts of states.filter((state) => (
+      state.conflicts === 0 && state.anomalies > 0 && state.anomalyBudgetExhausted
+    ))) {
+      const match = new RuleEvaluator(reviewers, { state: workflowState(reviewers, counts) })
+        .evaluate(undefined);
+      if (match === undefined) throw new Error(`Missing rule match: ${JSON.stringify(counts)}`);
+      const transition = determineRuleTransition(reviewers, match.index);
+      expect(transition, JSON.stringify(counts)).not.toEqual({ nextStep: 'COMPLETE' });
+    }
   });
 
   it.each(LANGUAGES)('%s category, discovery, and catalog contain one entry', (language) => {
