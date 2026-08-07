@@ -60,15 +60,35 @@ export function resolveCompiledProviderEnvironment(
     return compileProviderEnvironment({ kind: 'legacy', legacy: input.legacy });
   }
   const section = runtimeFile?.provider;
+  // Runtime-v1 mode may be entered by an active `mcp` section alone (order.md:36:
+  // `mcp` is independent from `provider`). When no `provider` section is present
+  // the provider bundle carries no runtime provider/model/options, but the mcp
+  // assignment still flows through `mcpAssignment` so the engine resolves
+  // effective servers per agent execution.
   if (section === undefined) {
-    // Unreachable: runtime-v1 mode requires an active provider section.
-    throw new Error('runtime-v1 mode resolved without a provider section');
+    return applyRuntimeProviderOverride(
+      compileProviderEnvironment({
+        kind: 'runtime-v1',
+        section: undefined,
+        mcp: runtimeFile?.mcp,
+      }),
+      {
+        provider: input.legacy.provider,
+        providerSource: input.legacy.providerSource,
+        model: input.legacy.model,
+        modelSource: input.legacy.modelSource,
+      },
+    );
   }
   // The runtime-v1 bundle carries only the runtime.yaml `profiles.default`; re-apply the CLI/env
   // provider/model override the bootstrap already resolved so the main execution path honors an
   // explicit `--provider`/`--model` the same way the selector seam does.
   return applyRuntimeProviderOverride(
-    compileProviderEnvironment({ kind: 'runtime-v1', section }),
+    compileProviderEnvironment({
+      kind: 'runtime-v1',
+      section,
+      mcp: runtimeFile?.mcp,
+    }),
     {
       provider: input.legacy.provider,
       providerSource: input.legacy.providerSource,

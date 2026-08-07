@@ -15,6 +15,8 @@ import type { ProviderType } from '../../shared/types/provider.js';
 export interface ResolvedSessionTarget {
   provider?: ProviderType;
   model?: string;
+  /** Deterministic MCP server set identity (server name + transport only). */
+  mcpServerIdentity?: string;
 }
 
 /**
@@ -37,7 +39,23 @@ export function buildSessionKey(step: WorkflowStep, resolvedTarget?: ResolvedSes
   const base = step.sessionKey ?? step.persona ?? step.name;
   const provider = resolvedTarget === undefined ? step.provider : resolvedTarget.provider;
   const model = resolvedTarget === undefined ? step.model : resolvedTarget.model;
-  if (provider === undefined) return JSON.stringify([base]);
-  if (model === undefined) return JSON.stringify([base, provider]);
-  return JSON.stringify([base, provider, model]);
+  const rawMcpIdentity = resolvedTarget?.mcpServerIdentity;
+  // Normalize the MCP identity so the session key is order-independent: the
+  // identity is a comma-separated `name:transport` list and is sorted before
+  // being folded into the key (order.md:269,333).
+  const mcpIdentity = rawMcpIdentity !== undefined && rawMcpIdentity.length > 0
+    ? rawMcpIdentity.split(',').map((part) => part.trim()).filter((part) => part.length > 0).sort().join(',')
+    : undefined;
+  if (provider === undefined && mcpIdentity === undefined) return JSON.stringify([base]);
+  const components: unknown[] = [base];
+  if (provider !== undefined) {
+    components.push(provider);
+    if (model !== undefined) {
+      components.push(model);
+    }
+  }
+  if (mcpIdentity !== undefined && mcpIdentity.length > 0) {
+    components.push(mcpIdentity);
+  }
+  return JSON.stringify(components);
 }

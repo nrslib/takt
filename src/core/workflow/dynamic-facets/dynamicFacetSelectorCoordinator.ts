@@ -148,6 +148,7 @@ export class DynamicFacetSelectorCoordinator {
             model: selectorProvider.model,
             providerOptions: selectorProvider.providerOptions,
           },
+          mcpAssignment: this.deps.engineOptions.mcpAssignment,
         },
       );
       signal?.throwIfAborted();

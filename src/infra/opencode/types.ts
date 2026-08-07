@@ -443,6 +443,8 @@ export interface OpenCodeCallOptions {
   /** JSON schema for native structured output (OpenCode format: json_schema). */
   outputSchema?: Record<string, unknown>;
   language?: Language;
+  /** Provider-prepared MCP material (issue #1137). */
+  preparedMcp?: import('../providers/mcp/types.js').PreparedProviderMcp;
 }
 
 export interface OpenCodeCompactSessionOptions {

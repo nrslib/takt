@@ -378,6 +378,18 @@ export class CodexClient {
       );
       return errorResponse;
     }
+    // Runtime MCP adapter route (issue #1137): merge prepared MCP `mcp_servers`
+    // into the Codex CLI config so resolved servers become the thread's
+    // effective MCP set (order.md:177-182). The adapter materializes the
+    // provider-native config shape; cast through `unknown` because the SDK's
+    // `CodexConfigValue` is not exported and the structure is provider-native.
+    const preparedMcpConfig = options.preparedMcp?.config;
+    if (preparedMcpConfig?.mcp_servers !== undefined) {
+      skillConfig = {
+        ...(skillConfig ?? {}),
+        mcp_servers: preparedMcpConfig.mcp_servers,
+      } as unknown as CodexOptions['config'];
+    }
 
     while (true) {
       const attempt = standardRetryCount + timeoutRetryCount + refusalRetryCount + 1;

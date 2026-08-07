@@ -11,6 +11,7 @@ import type {
   ProviderPermissionProfiles,
 } from '../core/models/index.js';
 import type { InternalAgentIsolation, ProviderType } from '../shared/types/provider.js';
+import type { McpAssignmentSection } from '../infra/config/runtime-provider/mcp-assignment.js';
 
 export type { StreamCallback };
 
@@ -51,6 +52,23 @@ export interface RunAgentOptions {
   internalAgentIsolation?: InternalAgentIsolation;
   allowedTools?: string[];
   mcpServers?: Record<string, McpServerConfig>;
+  /**
+   * Runtime MCP assignment section (runtime-v1). When set, runtime MCP mode
+   * is active and the runner boundary resolves whether to invoke the provider
+   * MCP adapter even for an empty server set (e.g. Claude系 providers emit
+   * `strictMcpConfig`/`--strict-mcp-config` to suppress ambient MCP config,
+   * order.md:160,166,172). When unset, legacy mode applies and an empty
+   * server set skips adapter preparation entirely (order.md:152).
+   */
+  mcpAssignment?: McpAssignmentSection;
+  /**
+   * Deterministic identity for the resolved MCP server set, computed by
+   * `OptionsBuilder` from the runtime MCP assignment. Propagated to the
+   * runner so the OpenCode shared server pool keys differ for different
+   * server sets, preventing silent server drops (order.md:191-195,269,333).
+   * When unset, the runner computes a fallback identity from `mcpServers`.
+   */
+  mcpServerIdentity?: string;
   maxTurns?: number;
   permissionMode?: PermissionMode;
   permissionResolution?: {

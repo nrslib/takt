@@ -11,6 +11,7 @@
 import { z } from 'zod';
 import { PROVIDER_TYPES } from '../../../shared/types/provider.js';
 import { RUNTIME_PROVIDER_VERSION } from './constants.js';
+import { McpSectionSchema } from './mcp-schema.js';
 
 const ProviderNameSchema = z.enum(PROVIDER_TYPES);
 
@@ -91,6 +92,7 @@ export const RuntimeProviderFileSchema = z
   .object({
     version: z.literal(RUNTIME_PROVIDER_VERSION),
     provider: ProviderSectionSchema.optional(),
+    mcp: McpSectionSchema.optional(),
   })
   .strict();
 
@@ -99,3 +101,4 @@ export type RuntimeProviderSection = z.infer<typeof ProviderSectionSchema>;
 export type RuntimeProviderProfile = z.infer<typeof ProfileSchema>;
 export type RuntimeProviderAssignment = z.infer<typeof AssignmentSchema>;
 export type RuntimeProviderAutoRouting = z.infer<typeof AutoRoutingSchema>;
+export type { McpSection } from './mcp-schema.js';

@@ -23,6 +23,7 @@ function toMockOptions(options: ProviderCallOptions): MockCallOptions {
     model: options.model,
     onStream: options.onStream,
     allowedTools: options.allowedTools,
+    preparedMcp: options.preparedMcp,
   };
 }
 
@@ -32,6 +33,7 @@ export class MockProvider implements Provider {
   readonly supportsIsolatedStructuredExecution = true;
   readonly supportsNativeImageInput = false;
   readonly supportsStrictInternalAgentIsolation = true;
+  readonly supportedMcpTransports: ReadonlySet<'stdio' | 'sse' | 'http'> = new Set(['stdio']);
 
   getRuntimeInstructions(_allowedTools?: string[]): string | null {
     return null;

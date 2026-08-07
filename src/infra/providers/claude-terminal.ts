@@ -57,6 +57,7 @@ function toTerminalOptions(options: ProviderCallOptions): ClaudeTerminalCallOpti
     skillsEnabled,
     allowedTools: options.allowedTools,
     mcpServers: options.mcpServers,
+    preparedMcp: options.preparedMcp,
     ...(options.maxTurns !== undefined ? { maxTurns: options.maxTurns } : {}),
     permissionMode: options.permissionMode,
     bypassPermissions: options.bypassPermissions,
@@ -78,6 +79,7 @@ export class ClaudeTerminalProvider implements Provider {
   readonly supportsIsolatedStructuredExecution = true;
   readonly supportsNativeImageInput = false;
   readonly supportsStrictInternalAgentIsolation = true;
+  readonly supportedMcpTransports: ReadonlySet<'stdio' | 'sse' | 'http'> = new Set(['stdio', 'sse', 'http']);
 
   getRuntimeInstructions(_allowedTools?: string[]): string | null {
     return null;

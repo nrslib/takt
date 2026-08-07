@@ -693,6 +693,124 @@ the following legacy settings:
 
 初回起動時、TAKT は `~/.takt/runtime.yaml` を atomic に生成し、既存ファイルは上書きしません。project 側の `.takt/runtime.yaml` は自動生成されません。新規環境では、選択された provider/model を `provider.profiles.default` と `provider.defaults.profile: default` として書き込みます。legacy provider 設定が既に存在する環境には inactive な `version: 1` ファイルだけを生成し、移行するまで動作は変わりません。
 
+## Runtime MCP 設定（runtime.yaml.mcp）
+
+`runtime.yaml` は MCP server の定義と agent への割り当ても管理します。`mcp` セクションは `provider` と並ぶトップレベルの兄弟です（order.md:36）。`provider` セクションなしで単独で有効化でき、provider/model 解析は legacy `config.yaml` 経路のまま MCP server を注入できます。
+
+### 設定例
+
+```yaml
+version: 1
+
+mcp:
+  servers:
+    common-tools:
+      type: stdio
+      command: common-mcp-server
+      args: []
+      env:
+        API_TOKEN: "${COMMON_MCP_API_TOKEN}"
+    github:
+      type: http
+      url: https://api.githubcopilot.com/mcp/
+      headers:
+        Authorization: "Bearer ${GITHUB_TOKEN}"
+
+  defaults:
+    servers:
+      - common-tools
+
+  targets:
+    personas:
+      release-manager:
+        servers:
+          - github
+    tags:
+      github:
+        servers:
+          - github
+    steps:
+      release/create-pr:
+        servers:
+          - github
+    internal_agents:
+      selector:
+        exclude:
+          - common-tools
+```
+
+### スキーマ
+
+| フィールド | 型 | 説明 |
+|---|---|---|
+| `mcp.servers` | `{ <名前>: ServerEntry }` | 名前付き MCP server 定義（`stdio` / `sse` / `http`）。ここで定義しただけでは有効化せず、`defaults` または `targets` で割り当てる必要があります。 |
+| `mcp.defaults.servers` | `string[]` | すべての agent 実行（通常 step、parallel agent、fan-in、内部 agent、サブワークフロー内の leaf step）へ適用される server。 |
+| `mcp.targets.personas` | `{ <persona>: { servers?, exclude? } }` | persona 単位の追加/除外。 |
+| `mcp.targets.tags` | `{ <tag>: { servers?, exclude? } }` | tag 単位の追加/除外。 |
+| `mcp.targets.steps` | `{ <leaf-workflow>/<step>: { servers?, exclude? } }` | step 単位の追加/除外。制御ノード（`workflow_call` など）は解決対象外です。 |
+| `mcp.targets.internal_agents` | `{ selector: { exclude? } }` | 両内部 agent（`selector` と `assistant`）へ適用する除外。`selector.exclude` のみ受け付けます。 |
+
+server エントリ:
+
+| transport | 必須フィールド | 任意フィールド |
+|---|---|---|
+| `stdio` | `command` | `args`, `env` |
+| `sse` | `url` | `headers` |
+| `http` | `url` | `headers` |
+
+### 実効 server 解決
+
+```text
+effective servers
+  = defaults.servers
+  + matched targets.servers
+  - matched targets.exclude
+```
+
+- server 名は重複を除去します。
+- `exclude` は追加より優先します。
+- `targets` に未知の server 名が含まれる場合、agent 実行前に fail-fast します。
+- `mcp.servers` に定義しただけでは有効化せず、`defaults` または `targets` で割り当てる必要があります。
+
+### global/project のマージ
+
+global と project 両方の `runtime.yaml` が `mcp` セクションを持つ場合、project 側のセクションが global 側を全体置換します。同名 server を field 単位で暗黙に混ぜることはなく、`defaults`/`targets` は project 側の値が優先します。これは `provider` セクションのマージ規則と同じです。
+
+### 環境変数補間
+
+`command`、`args`、`env`、`url`、`headers` 内の `${NAME}` 参照は agent 起動前に `process.env` で解決します。未定義の必須環境変数は fail-fast し、空文字列で黙に置換しません。解決済みの秘密値（env, headers）はログやエラーメッセージへ出力しません。
+
+### provider 別 transport 対応
+
+各 provider は対応する transport を宣言します。解決した server が未対応 transport を使う場合、TAKT は agent 起動前に fail-fast し、provider 名、server 名、transport、対応 transport、runtime.yaml のソースパスを報告します。
+
+| Provider | 対応 transport |
+|---|---|
+| `claude` / `claude-sdk` / `claude-terminal` | `stdio`, `sse`, `http` |
+| `codex` | `stdio`, `http` |
+| `opencode` | `stdio`, `http` |
+| `cursor` | `stdio`, `http` |
+| `copilot` | `stdio`, `http` |
+| `kiro` | `stdio`, `http` |
+| `mock` | `stdio` |
+
+互換性のない transport を別 transport へ推測変換すること、server を黙に除外することはありません。
+
+### legacy workflow MCP モードと移行
+
+MCP 設定も legacy と runtime の混在を許しません。
+
+- 有効な `runtime.yaml.mcp` がない場合: workflow の `mcp_servers` と `workflow_mcp_servers` ポリシーを使用します。
+- 有効な `runtime.yaml.mcp` がある場合: runtime MCP assignment だけを使用します。
+- runtime MCP と workflow `mcp_servers` が同時に存在する場合: 該当 workflow/step と移行先を示して fail-fast します。
+
+runtime MCP モードでは、workflow から MCP server の command、URL、header、env を指定できません。これらは `runtime.yaml.mcp` が所有します。
+
+| 既存設定 | 移行先 |
+|---|---|
+| workflow の `mcp_servers` ポリシー | `mcp.targets` |
+| step の `mcp_servers` マップ | `mcp.targets.steps` |
+
 ## Provider プロファイル
 
 Provider プロファイルを使用すると、各 provider にデフォルトのパーミッションモードと step ごとのパーミッション上書きを設定できます。異なる provider を異なるセキュリティポリシーで運用する場合に便利です。

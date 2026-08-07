@@ -15,6 +15,8 @@ export interface ClaudeHeadlessCallOptions {
   skillsEnabled?: boolean;
   allowedTools?: string[];
   mcpServers?: Record<string, McpServerConfig>;
+  /** Provider-prepared MCP material (issue #1137). */
+  preparedMcp?: import('../providers/mcp/types.js').PreparedProviderMcp;
   permissionMode?: PermissionMode;
   bypassPermissions?: boolean;
   sandbox?: ClaudeSandboxSettings;

@@ -77,7 +77,14 @@ async function buildSpawnArgs(
   options: ClaudeHeadlessCallOptions,
 ): Promise<{ args: string[]; expectedSessionId: string; cleanup: () => Promise<void> }> {
   const session = resolveSessionArgs(options);
-  const preparedMcpConfig = await prepareClaudeMcpConfig(options.mcpServers);
+  // Runtime MCP adapter route (issue #1137): when the runner prepared MCP
+  // material, consume `preparedMcp.args` (`--strict-mcp-config`/`--mcp-config`)
+  // so temp-file ownership and cleanup live in the adapter. Fall back to the
+  // legacy `prepareClaudeMcpConfig` only when runtime MCP is not in use.
+  const preparedMcp = options.preparedMcp;
+  const legacyMcpConfig = preparedMcp === undefined
+    ? await prepareClaudeMcpConfig(options.mcpServers)
+    : { path: undefined, cleanup: async () => {} };
   const args: string[] = [
     '-p',
     '--verbose',
@@ -118,8 +125,10 @@ async function buildSpawnArgs(
     args.push('--json-schema', JSON.stringify(options.outputSchema));
   }
 
-  if (preparedMcpConfig.path) {
-    args.push('--mcp-config', preparedMcpConfig.path);
+  if (preparedMcp?.args && preparedMcp.args.length > 0) {
+    args.push(...preparedMcp.args);
+  } else if (legacyMcpConfig.path) {
+    args.push('--mcp-config', legacyMcpConfig.path);
   }
 
   const settings = buildSettingsArg(options);
@@ -129,10 +138,15 @@ async function buildSpawnArgs(
 
   args.push(...session.args);
   args.push('--', prompt);
+  const adapterCleanup = preparedMcp?.dispose ?? (async () => {});
+  const cleanup = async () => {
+    await legacyMcpConfig.cleanup();
+    await adapterCleanup();
+  };
   return {
     args,
     expectedSessionId: session.sessionId,
-    cleanup: preparedMcpConfig.cleanup,
+    cleanup,
   };
 }
 

@@ -93,6 +93,8 @@ export interface ClaudeTerminalCallOptions {
   skillsEnabled?: boolean;
   allowedTools?: string[];
   mcpServers?: Record<string, McpServerConfig>;
+  /** Provider-prepared MCP material (issue #1137). */
+  preparedMcp?: import('../providers/mcp/types.js').PreparedProviderMcp;
   maxTurns?: number;
   permissionMode?: PermissionMode;
   bypassPermissions?: boolean;
@@ -125,4 +127,6 @@ export interface BuildClaudeTerminalCommandOptions {
   newSessionId?: string;
   systemPrompt?: string;
   outputSchema?: Record<string, unknown>;
+  /** Provider-prepared MCP args (`--strict-mcp-config`/`--mcp-config`, issue #1137). */
+  preparedMcpArgs?: string[];
 }

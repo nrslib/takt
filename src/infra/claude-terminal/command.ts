@@ -43,6 +43,9 @@ export function buildClaudeTerminalCommand(
   if (options.mcpConfigPath) {
     args.push('--mcp-config', options.mcpConfigPath);
   }
+  if (options.preparedMcpArgs && options.preparedMcpArgs.length > 0) {
+    args.push(...options.preparedMcpArgs);
+  }
   if (permissionMode) {
     args.push('--permission-mode', permissionMode);
   }

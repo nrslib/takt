@@ -254,8 +254,15 @@ export async function callClaudeTerminal(
         options.abortSignal,
       );
     }
-    const prepared = await prepareClaudeMcpConfig(options.mcpServers);
-    cleanup = prepared.cleanup;
+    const preparedMcpConfig = options.preparedMcp === undefined
+      ? await prepareClaudeMcpConfig(options.mcpServers)
+      : { path: undefined, cleanup: async () => {} };
+    const legacyCleanup = preparedMcpConfig.cleanup;
+    const adapterCleanup = options.preparedMcp?.dispose ?? (async () => {});
+    cleanup = async () => {
+      await legacyCleanup();
+      await adapterCleanup();
+    };
     if (options.abortSignal?.aborted) {
       throw new ClaudeTerminalAbortError(options.abortSignal.reason);
     }
@@ -266,7 +273,8 @@ export async function callClaudeTerminal(
       effort: options.effort,
       skillsEnabled: options.skillsEnabled,
       allowedTools: options.allowedTools,
-      mcpConfigPath: prepared.path,
+      mcpConfigPath: preparedMcpConfig.path,
+      preparedMcpArgs: options.preparedMcp?.args,
       permissionMode: options.permissionMode,
       bypassPermissions: options.bypassPermissions,
       sessionId: options.sessionId,

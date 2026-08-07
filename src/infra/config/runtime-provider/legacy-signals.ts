@@ -10,6 +10,7 @@
  */
 
 import type { TaktProvidersConfig } from '../../../core/models/config-types.js';
+import type { McpServerConfig } from '../../../core/models/index.js';
 import type { ProviderOptionsSource } from '../../../core/workflow/provider-options-trace.js';
 import { loadGlobalConfig } from '../global/globalConfig.js';
 import { loadProjectConfig } from '../project/projectConfig.js';
@@ -169,4 +170,53 @@ export function collectProjectLegacyProviderSignals(projectCwd: string): LegacyP
     ),
   };
   return collectLegacyProviderSignals(legacy, { name: 'internal-agent' }, providerOptions.source);
+}
+
+/**
+ * Input for legacy MCP signal collection. `workflow_mcp_servers` is the workflow
+ * policy that enables MCP servers globally; `workflowStepMcpServers` is the
+ * per-step `mcp_servers` map (order.md:112-118).
+ */
+export interface LegacyMcpSignalInput {
+  /** The workflow-level `mcp_servers` policy (e.g. `{ stdio: true }`). */
+  workflowMcpServersPolicy: Record<string, unknown> | undefined;
+  /** The per-step `mcp_servers` map (`{ name: McpServerConfig }`). */
+  workflowStepMcpServers: Record<string, McpServerConfig> | undefined;
+  /** Workflow name for error messages. */
+  workflowName: string;
+  /** Step name when the signal is step-scoped (undefined for workflow-scoped). */
+  workflowStepName: string | undefined;
+}
+
+/**
+ * Detect legacy workflow MCP settings that must not coexist with an active
+ * `runtime.yaml.mcp` section. Both the `workflow_mcp_servers` policy and the
+ * per-step `mcp_servers` map are reported so the mixed-config error names
+ * every legacy location and its migration target (order.md:112-118).
+ */
+export function collectLegacyMcpSignals(input: LegacyMcpSignalInput): LegacyProviderSignal[] {
+  const signals: LegacyProviderSignal[] = [];
+
+  if (input.workflowMcpServersPolicy !== undefined
+    && Object.keys(input.workflowMcpServersPolicy).length > 0) {
+    signals.push({
+      setting: 'workflow_mcp_servers',
+      location: `workflow "${input.workflowName}":mcp_servers policy`,
+      migrateTo: 'mcp.targets',
+    });
+  }
+
+  if (input.workflowStepMcpServers !== undefined
+    && Object.keys(input.workflowStepMcpServers).length > 0) {
+    const stepSuffix = input.workflowStepName !== undefined
+      ? `:${input.workflowStepName}`
+      : '';
+    signals.push({
+      setting: 'workflow_mcp_servers',
+      location: `workflow "${input.workflowName}"${stepSuffix}:mcp_servers`,
+      migrateTo: 'mcp.targets.steps',
+    });
+  }
+
+  return signals;
 }

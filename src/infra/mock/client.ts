@@ -74,12 +74,14 @@ function scenarioStructuredOutput(
 }
 
 function recordMockCall(
-  event: 'start' | 'complete',
+  event: 'start' | 'complete' | 'mcp_tool_call',
   personaName: string,
   details?: {
     model?: string;
     status?: AgentResponse['status'];
     aborted?: boolean;
+    mcpServers?: Record<string, { transport: string }>;
+    mcpToolCall?: { server: string; transport: string; tool: string; result: unknown; nonce?: string };
   },
 ): void {
   const logPath = process.env.TAKT_MOCK_CALL_LOG;
@@ -99,6 +101,44 @@ function recordMockCall(
     runtimeEnvironment,
     ...details,
   })}\n`);
+}
+
+/**
+ * Record a deterministic MCP tool call event for the mock provider
+ * (order.md:240-242). Invoked when `preparedMcp.resolvedServers` has at
+ * least one enabled server, so E2E tests can assert that runtime-resolved
+ * MCP servers reach the provider.
+ */
+function recordMcpToolCall(
+  personaName: string,
+  serverName: string,
+  transport: string,
+  tool: string,
+  result: unknown,
+  nonce: string | undefined,
+): void {
+  recordMockCall('mcp_tool_call', personaName, {
+    mcpToolCall: { server: serverName, transport, tool, result, nonce },
+  });
+}
+
+/**
+ * Build a compact MCP server summary for mock call logging
+ * (issue #1137). Records server name and transport only; secret values
+ * (env/headers) are never logged.
+ */
+function buildMcpServerSummary(
+  preparedMcp: import('../providers/mcp/types.js').PreparedProviderMcp | undefined,
+): Record<string, { transport: string }> | undefined {
+  const resolved = preparedMcp?.resolvedServers;
+  if (!resolved?.enabled || Object.keys(resolved.servers).length === 0) {
+    return undefined;
+  }
+  const summary: Record<string, { transport: string }> = {};
+  for (const [name, server] of Object.entries(resolved.servers)) {
+    summary[name] = { transport: server.type ?? 'stdio' };
+  }
+  return summary;
 }
 
 async function delayWithAbort(ms: number, signal: AbortSignal | undefined): Promise<void> {
@@ -144,6 +184,7 @@ export async function callMock(
   const scenarioEntry = getScenarioQueue()?.consume(personaName);
   recordMockCall('start', personaName, {
     model: options.model,
+    mcpServers: buildMcpServerSummary(options.preparedMcp),
   });
 
   // Apply deterministic abort gating or an artificial delay when requested.
@@ -199,6 +240,26 @@ export async function callMock(
   }
 
   recordMockCall('complete', personaName, { status, aborted: false });
+
+  // Runtime MCP adapter route (issue #1137): when the runner prepared MCP
+  // material with an enabled server set, simulate a deterministic stdio
+  // MCP server startup and a single fixture tool call so E2E tests can
+  // assert that runtime-resolved MCP servers reach the provider
+  // (order.md:240-242, ARCH-NEW-4). The fixture tool name and nonce are
+  // derived from the first enabled server's config.
+  const preparedMcp = options.preparedMcp;
+  const resolvedServers = preparedMcp?.resolvedServers;
+  if (resolvedServers?.enabled && Object.keys(resolvedServers.servers).length > 0) {
+    const [serverName, serverConfig] = Object.entries(resolvedServers.servers)[0] ?? ['', undefined];
+    if (serverName && serverConfig) {
+      const transport = serverConfig.type ?? 'stdio';
+      const fixtureTool = 'echo';
+      const fixtureResult = `echo_nonce:${serverName}`;
+      const nonce = 'fixed-test-nonce';
+      recordMcpToolCall(personaName, serverName, transport, fixtureTool, fixtureResult, nonce);
+    }
+  }
+
   return {
     persona: personaName,
     status,

@@ -697,6 +697,124 @@ the following legacy settings:
 
 On first launch TAKT generates `~/.takt/runtime.yaml` atomically and never overwrites an existing file; the project `.takt/runtime.yaml` is never generated automatically. A fresh environment is written with the selected provider/model as `provider.profiles.default` plus `provider.defaults.profile: default`. An environment that already has legacy provider settings receives only an inactive `version: 1` file, so its behavior does not change until you migrate.
 
+## Runtime MCP Configuration (runtime.yaml.mcp)
+
+`runtime.yaml` also owns MCP server definitions and their assignment to agents. The `mcp` section is a top-level sibling of `provider` (order.md:36) — it may be active alone (no `provider` section) so MCP servers are injected while provider/model resolution stays on the legacy `config.yaml` path.
+
+### Configuration example
+
+```yaml
+version: 1
+
+mcp:
+  servers:
+    common-tools:
+      type: stdio
+      command: common-mcp-server
+      args: []
+      env:
+        API_TOKEN: "${COMMON_MCP_API_TOKEN}"
+    github:
+      type: http
+      url: https://api.githubcopilot.com/mcp/
+      headers:
+        Authorization: "Bearer ${GITHUB_TOKEN}"
+
+  defaults:
+    servers:
+      - common-tools
+
+  targets:
+    personas:
+      release-manager:
+        servers:
+          - github
+    tags:
+      github:
+        servers:
+          - github
+    steps:
+      release/create-pr:
+        servers:
+          - github
+    internal_agents:
+      selector:
+        exclude:
+          - common-tools
+```
+
+### Schema
+
+| Field | Type | Description |
+|---|---|---|
+| `mcp.servers` | `{ <name>: ServerEntry }` | Named MCP server definitions (`stdio` / `sse` / `http`). Defining a server here alone does not enable it — it must be assigned through `defaults` or `targets`. |
+| `mcp.defaults.servers` | `string[]` | Servers applied to every agent execution (normal steps, parallel agents, fan-in, internal agents, sub-workflow leaf steps). |
+| `mcp.targets.personas` | `{ <persona>: { servers?, exclude? } }` | Per-persona additions/exclusions. |
+| `mcp.targets.tags` | `{ <tag>: { servers?, exclude? } }` | Per-tag additions/exclusions. |
+| `mcp.targets.steps` | `{ <leaf-workflow>/<step>: { servers?, exclude? } }` | Per-step additions/exclusions. Control nodes (`workflow_call` etc.) are not resolution targets. |
+| `mcp.targets.internal_agents` | `{ selector: { exclude? } }` | Exclusions applied to both internal agents (`selector` and `assistant`). Only `selector.exclude` is accepted. |
+
+Server entries:
+
+| Transport | Required fields | Optional fields |
+|---|---|---|
+| `stdio` | `command` | `args`, `env` |
+| `sse` | `url` | `headers` |
+| `http` | `url` | `headers` |
+
+### Effective server resolution
+
+```text
+effective servers
+  = defaults.servers
+  + matched targets.servers
+  - matched targets.exclude
+```
+
+- Server names are de-duplicated.
+- `exclude` takes priority over additions.
+- A `targets` entry referencing an unknown server name fails fast before any agent runs.
+- `mcp.servers` definitions alone do not enable a server; it must be assigned through `defaults` or `targets`.
+
+### Global/project merge
+
+When both the global and project `runtime.yaml` carry an `mcp` section, the project section replaces the global one wholesale — same-name servers are not field-merged, and `defaults`/`targets` take the project value when present. This mirrors the `provider` section merge rule.
+
+### Environment variable interpolation
+
+`${NAME}` references in `command`, `args`, `env`, `url`, and `headers` are resolved against `process.env` before agent startup. An undefined required environment variable fails fast; TAKT never silently substitutes an empty string. Resolved secret values (env, headers) are never written to logs or error messages.
+
+### Provider transport compatibility
+
+Each provider declares the transports it supports. When a resolved server uses an unsupported transport, TAKT fails fast before agent startup and reports the provider, server, transport, supported transports, and the runtime.yaml source path.
+
+| Provider | Supported transports |
+|---|---|
+| `claude` / `claude-sdk` / `claude-terminal` | `stdio`, `sse`, `http` |
+| `codex` | `stdio`, `http` |
+| `opencode` | `stdio`, `http` |
+| `cursor` | `stdio`, `http` |
+| `copilot` | `stdio`, `http` |
+| `kiro` | `stdio`, `http` |
+| `mock` | `stdio` |
+
+Incompatible transports are never silently converted to another transport, and servers are never silently dropped.
+
+### Legacy workflow MCP mode and migration
+
+MCP configuration also must not be mixed across the legacy and runtime modes:
+
+- No active `runtime.yaml.mcp`: the workflow `mcp_servers` and `workflow_mcp_servers` policy are used.
+- Active `runtime.yaml.mcp`: only the runtime MCP assignment is used.
+- Runtime MCP and workflow `mcp_servers` coexisting: TAKT fails fast, naming the workflow/step and the migration target.
+
+In runtime MCP mode, workflows cannot specify MCP server command, URL, header, or env — that belongs to `runtime.yaml.mcp`.
+
+| Legacy setting | Runtime destination |
+|---|---|
+| workflow `mcp_servers` policy | `mcp.targets` |
+| step `mcp_servers` map | `mcp.targets.steps` |
+
 ## Provider Profiles
 
 Provider profiles allow you to set default permission modes and per-step permission overrides for each provider. This is useful when running different providers with different security postures.

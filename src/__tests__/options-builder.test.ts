@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { OptionsBuilder } from '../core/workflow/engine/OptionsBuilder.js';
 import { buildFindingManagerStep } from '../core/workflow/findings/manager-step.js';
+import * as capabilityModule from '../infra/providers/provider-capabilities.js';
 import type { WorkflowStep } from '../core/models/types.js';
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 
@@ -1020,7 +1021,11 @@ describe('OptionsBuilder.buildAgentOptions', () => {
     expect(builder.buildAgentOptions(step).allowedTools).toEqual(['Read', 'Edit']);
   });
 
-  it('drops mcpServers silently for providers without MCP support', () => {
+  it('drops mcpServers silently for providers without MCP support', async () => {
+    // issue #1137: all real providers now declare MCP transports. To verify
+    // the silent-drop path still works for a hypothetical MCP-incapable
+    // provider, mock the capability probe to return false.
+    vi.spyOn(capabilityModule, 'providerSupportsMcpServers').mockReturnValue(false);
     const step = createStep({
       provider: 'cursor',
       mcpServers: {
@@ -1037,6 +1042,7 @@ describe('OptionsBuilder.buildAgentOptions', () => {
     const options = builder.buildAgentOptions(step);
 
     expect(options.mcpServers).toBeUndefined();
+    vi.restoreAllMocks();
   });
 
   it('keeps mcpServers when provider supports MCP', () => {
@@ -1116,11 +1122,15 @@ describe('OptionsBuilder.buildAgentOptions', () => {
     });
 
     expect(() => builder.buildAgentOptions(step)).toThrow(
-      /MCP server "docs" is defined by both session and step "reviewers"/,
+      /MCP server "docs" is defined by both step and another source for step "reviewers"/,
     );
   });
 
   it('fails fast for session mcpServers when provider does not support MCP', () => {
+    // issue #1137: all real providers now declare MCP transports. Mock the
+    // capability probe to simulate a provider without MCP support and verify
+    // the fail-fast path still works.
+    vi.spyOn(capabilityModule, 'providerSupportsMcpServers').mockReturnValue(false);
     const step = createStep({ provider: 'cursor' });
     const builder = createBuilder(step, {
       provider: 'cursor',
@@ -1132,6 +1142,7 @@ describe('OptionsBuilder.buildAgentOptions', () => {
     expect(() => builder.buildAgentOptions(step)).toThrow(
       /Provider "cursor" does not support session MCP servers for step "reviewers"/,
     );
+    vi.restoreAllMocks();
   });
 
   it('resolves mcpServers for structured team leader planning calls', () => {
@@ -1155,6 +1166,10 @@ describe('OptionsBuilder.buildAgentOptions', () => {
   });
 
   it('fails fast for structured team leader planning when session mcpServers are unsupported', () => {
+    // issue #1137: all real providers now declare MCP transports. Mock the
+    // capability probe to simulate a provider without MCP support and verify
+    // the fail-fast path still works for structured team leader planning.
+    vi.spyOn(capabilityModule, 'providerSupportsMcpServers').mockReturnValue(false);
     const step = createStep({ provider: 'cursor' });
     const builder = createBuilder(step, {
       provider: 'cursor',
@@ -1166,6 +1181,7 @@ describe('OptionsBuilder.buildAgentOptions', () => {
     expect(() => builder.resolveMcpServersForStep(step, 'cursor')).toThrow(
       /Provider "cursor" does not support session MCP servers for step "reviewers"/,
     );
+    vi.restoreAllMocks();
   });
 
   it('fails fast when structured_output is used without a resolved provider', () => {

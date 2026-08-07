@@ -76,6 +76,13 @@ function buildArgs(options: KiroCallOptions, prompt: string): string[] {
     args.push('--resume-id', options.sessionId);
   }
 
+  // Runtime MCP adapter route (issue #1137): pass the adapter-prepared
+  // `--require-mcp-startup --mcp-config <path>` args so runtime-resolved
+  // servers become the headless session's effective set (order.md:228-232).
+  if (options.preparedMcp?.args && options.preparedMcp.args.length > 0) {
+    args.push(...options.preparedMcp.args);
+  }
+
   args.push(buildInputArg(prompt));
 
   return args;
@@ -291,6 +298,12 @@ export class KiroClient {
         timestamp: new Date(),
         sessionId: options.sessionId,
       };
+    } finally {
+      try {
+        await options.preparedMcp?.dispose?.();
+      } catch (error) {
+        log.debug('Failed to clean up Kiro MCP config', { error: getErrorMessage(error) });
+      }
     }
   }
 }

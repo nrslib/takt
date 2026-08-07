@@ -50,4 +50,6 @@ export interface CodexCallOptions {
   outputSchema?: Record<string, unknown>;
   imageAttachments?: ProviderImageAttachment[];
   childProcessEnv?: Readonly<Record<string, string>>;
+  /** Provider-prepared MCP material (issue #1137). */
+  preparedMcp?: import('../providers/mcp/types.js').PreparedProviderMcp;
 }

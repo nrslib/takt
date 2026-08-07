@@ -21,4 +21,6 @@ export interface CopilotCallOptions {
   /** Custom path to copilot executable */
   copilotCliPath?: string;
   childProcessEnv?: Readonly<Record<string, string>>;
+  /** Provider-prepared MCP material (issue #1137). */
+  preparedMcp?: import('../providers/mcp/types.js').PreparedProviderMcp;
 }
