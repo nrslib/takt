@@ -5,7 +5,7 @@ import type { ProviderLadderConfig, ProviderRoutingEntry, TagRoutingConflictPoli
 import type { ProviderResolutionSource } from '../provider-options-trace.js';
 import type { RuntimeStepResolution, StepProviderInfo } from '../types.js';
 import { isDelegatedWorkflowStep } from '../step-kind.js';
-import { applyProviderModelOverride, tagRoutingEntryIdentity } from '../provider-resolution.js';
+import { applyProviderModelOverride, assertTagMatchesAgree, tagRoutingEntryIdentity } from '../provider-resolution.js';
 import { countMatchedLadderStages, evaluatePromotion, isTargetedPromotionEntry } from './PromotionEvaluator.js';
 import {
   isFilePreferredProviderOptionPath,
@@ -261,10 +261,9 @@ function resolveGoverningLadder(
 }
 
 /**
- * Mirror the tag routing merge: the last matched tag that carries a ladder governs, and under
- * `fail-fast` two equal-priority tags carrying different ladders are a conflict. Without the
- * conflict check the stage-0 assignment could fail fast while the later stages silently picked a
- * winner, so the two ends of the same ladder would disagree about which tag governs.
+ * Mirror the tag routing merge: the last matched tag that carries a ladder governs. The conflict
+ * judgment is shared with the base resolution — deciding it here on its own would let stage 0
+ * fail fast on an input whose later stages silently picked a winner.
  */
 function resolveTagLadder(
   tags: Record<string, ProviderRoutingEntry[]> | undefined,
@@ -274,19 +273,19 @@ function resolveTagLadder(
   if (tags === undefined || stepTags === undefined) {
     return undefined;
   }
-  const matchedTags = stepTags.filter((tag) => tags[tag] !== undefined);
-  if (matchedTags.length === 0) {
+  const matched = stepTags.flatMap((tag) => {
+    const ladder = tags[tag];
+    return ladder === undefined ? [] : [{ tag, ladder }];
+  });
+  const governing = matched[matched.length - 1];
+  if (governing === undefined) {
     return undefined;
   }
-  if (conflictPolicy === 'fail-fast') {
-    const distinct = new Set(
-      matchedTags.map((tag) => (tags[tag] as ProviderRoutingEntry[]).map(tagRoutingEntryIdentity).join('|')),
-    );
-    if (distinct.size > 1) {
-      throw new Error(
-        `Conflicting provider ladders for tags [${matchedTags.join(', ')}] at the same priority`,
-      );
-    }
-  }
-  return tags[matchedTags[matchedTags.length - 1] as string];
+  assertTagMatchesAgree(
+    // A ladder is one assignment, so its identity is the ordered identity of every stage.
+    matched.map(({ tag, ladder }) => ({ tag, identity: ladder.map(tagRoutingEntryIdentity).join('|') })),
+    conflictPolicy,
+    'provider ladders',
+  );
+  return governing.ladder;
 }

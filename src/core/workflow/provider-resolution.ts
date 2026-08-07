@@ -198,10 +198,6 @@ function stableSerialize(value: unknown): string {
   return `{${entries.join(',')}}`;
 }
 
-/**
- * Identity of one tag routing assignment. Exported so that every equal-priority tag merge — the
- * base resolution here and the promotion ladder selection — judges "same assignment?" the same way.
- */
 export function tagRoutingEntryIdentity(
   entry: Pick<ProviderRoutingEntry, 'provider' | 'model' | 'providerOptions' | 'escalation'>,
 ): string {
@@ -209,6 +205,26 @@ export function tagRoutingEntryIdentity(
   // escalate 先が違えば別の割り当てである。identity から外すと、格上げ先だけが
   // 異なる2つの tag 割り当てが「同じ」と判定され、fail-fast を素通りする。
   return `${entry.provider ?? ''}::${entry.model ?? ''}::${options}::${entry.escalation?.profile ?? ''}`;
+}
+
+/**
+ * 同一優先度で複数の tag が一致したとき、それらが同じ割り当てを指しているかを判定する。
+ * stage 0 の割り当てと promotion の ladder 選択が同じ判定を共有するために公開している。
+ * 別実装にすると、片方が fail-fast する入力をもう片方が黙って last-wins で解決する。
+ */
+export function assertTagMatchesAgree(
+  matches: readonly { tag: string; identity: string }[],
+  policy: TagRoutingConflictPolicy | undefined,
+  conflictSubject: string,
+): void {
+  if (policy !== 'fail-fast') {
+    return;
+  }
+  if (new Set(matches.map((match) => match.identity)).size <= 1) {
+    return;
+  }
+  const tags = matches.map((match) => match.tag).join(', ');
+  throw new Error(`Conflicting ${conflictSubject} for tags [${tags}] at the same priority`);
 }
 
 function resolveTagProviderRoutingEntry(
@@ -226,16 +242,14 @@ function resolveTagProviderRoutingEntry(
     return undefined;
   }
 
-  if (tagConflictPolicy === 'fail-fast') {
-    const distinct = new Set(
-      matchedTags.map((tag) => tagRoutingEntryIdentity(routingTags[tag] as ProviderRoutingEntry)),
-    );
-    if (distinct.size > 1) {
-      throw new Error(
-        `Conflicting provider routing for tags [${matchedTags.join(', ')}] at the same priority`,
-      );
-    }
-  }
+  assertTagMatchesAgree(
+    matchedTags.map((tag) => ({
+      tag,
+      identity: tagRoutingEntryIdentity(routingTags[tag] as ProviderRoutingEntry),
+    })),
+    tagConflictPolicy,
+    'provider routing',
+  );
 
   let resolved: ProviderRoutingEntry | undefined;
   for (const tag of matchedTags) {

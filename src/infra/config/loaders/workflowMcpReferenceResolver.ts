@@ -23,11 +23,14 @@ export function resolveWorkflowMcpReferences(
   if (refs === undefined || refs.length === 0) {
     return inline;
   }
-  // Null prototype so a reference named after an `Object.prototype` member (`toString`, ...) is an
-  // unresolved reference rather than a silently injected function.
-  const resolved = Object.create(null) as Record<string, McpServerConfig>;
+  const resolved: Record<string, McpServerConfig> = {};
   refs.forEach((name, index) => {
-    if (definitions === undefined || !Object.hasOwn(definitions, name)) {
+    // 自前プロパティに限定する。素の索引では `toString` 等が `Object.prototype` 経由で
+    // 解決され、関数が MCP サーバー定義として通ってしまう。
+    const definition = definitions !== undefined && Object.hasOwn(definitions, name)
+      ? definitions[name]
+      : undefined;
+    if (definition === undefined) {
       throw withWorkflowConfigErrorPath(
         new Error(
           `Configuration error: step "${stepName}" references MCP server "${name}", `
@@ -36,7 +39,7 @@ export function resolveWorkflowMcpReferences(
         [...stepPath, 'mcp', index],
       );
     }
-    resolved[name] = definitions[name] as McpServerConfig;
+    resolved[name] = definition;
   });
   return { ...resolved, ...(inline ?? {}) };
 }
