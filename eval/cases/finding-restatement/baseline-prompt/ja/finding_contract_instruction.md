@@ -8,29 +8,8 @@
 {{/if}}{{ledgerSummary}}
 
 {{#if restatementOnly}}## Restatement requests
-これは再提示専用レビューです。下の request だけを処理してください。新しい調査も、新しい問題の報告もしないでください。レポートの書式は output contract のとおりに保ち、`## Finding Contract Claims` 節には下の再提示エントリだけを書いてください。
-
-### 返す形
-
-```markdown
-#### 再提示 <request の anomalyId>
-- **Reasserts Reviewer Anomaly ID**: `<request の anomalyId をそのまま>`
-- **Title**: <1行の見出し>
-- **Severity**: <critical | high | medium | low>
-- **Family Tag**: `<問題系列の識別子>`
-- **Relation**: `new`
-- **Target files**: `<path1>`, `<path2>` …（下の Evidence で引用する path をすべて列挙する）
-- **Description**: <request の claimedExcerpt を1文字も変えずにコピー>
-- **Evidence**: `<path>` の <開始行>-<終了行>
-```
-
-- `Description` は engine が `claimedExcerpt` と完全一致で照合します。一致しない claim は元の指摘と同一と判定できないため、同じ指摘が別件として二重登録され、この request は次のラウンドでもう一度出てきます。要約・言い換え・行番号の追記・語句の補足・記号の変更はすべて不一致になります。文章として不自然でもそのままコピーしてください。
-- 新しく判明した精度は `Description` ではなく `Target files` と `Evidence` に置いてください。
-- **引用するファイルは必ず `Target files` にも列挙してください。** `Evidence` の path が対象ファイル一覧に無いと、engine はその引用を対象と無関係とみなし、claim ごと棄却します。仕様書・テスト・比較用の別実装を根拠にするなら、それらも対象ファイルに含めてください。
-- request の `missingRequirements` に挙がった項目が、前回この claim が受理されなかった理由です。今回は必ず明記してください。ただし現在のファイルが裏づける範囲でのみ書き、裏づけられない項目は補作しないでください。裏づけられない項目があるなら、その request に対して claim を返さないでください。
-- 各 request は最大1件の `new` claim とし、relation は `new`、targetFindingId と target precondition は空にしてください。
-- 言い直す前に、request が指す対象ファイルをリポジトリで実際に読んでください。path と 1-based の行範囲は request の抜粋ではなく現在のファイル内容から取り、code target には その path と行範囲だけを指定した `file_quote` を request してください。engine が現物を読んで byte 一致を検証するため、ソース本文や verbatimExcerpt は自分で書かないでください。現在のファイルが claim を裏づけない場合は、その request に対して claim を返さないでください。
-
+これは再提示専用レビューです。以下の request だけを処理してください。各 request の元の claim atom を保ち、リポジトリの証拠からすべての必須項目を裏づけられる場合だけ完全な product claim を返してください。欠けた項目、lifecycle relation、target、evidence を補作しないでください。各 request は最大1件の `new` claim とし、relation は `new`、targetFindingId と target precondition は空にしてください。可能なら request の anomaly ID を `reassertsReviewerAnomalyId` に echo してください。
+言い直す前に、request が指す対象ファイルをリポジトリで実際に読んでください。path と 1-based の行範囲は request の抜粋ではなく現在のファイル内容から取り、code target には その path と行範囲だけを指定した `file_quote` を request してください。engine が現物を読んで byte 一致を検証するため、ソース本文や verbatimExcerpt は自分で書かないでください。現在のファイルが claim を裏づけない場合は、その request に対して claim を返さないでください。
 {{restatementRequestsJson}}
 {{/if}}
 

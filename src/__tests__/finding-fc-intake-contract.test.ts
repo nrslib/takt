@@ -19,7 +19,13 @@ import {
 } from '../core/workflow/findings/manager-admission.js';
 import { intakeReviewerOutputs } from '../core/workflow/findings/manager-intake.js';
 import { captureReviewScopeProofSnapshot } from '../core/workflow/findings/snapshot.js';
-import { applyReviewerAnomalySpecsToLedger, createReviewerAnomalySpec, linkPromotedReviewerAnomalies } from '../core/workflow/findings/reviewer-anomalies.js';
+import {
+  applyReviewerAnomalySpecsToLedger,
+  createReviewerAnomalySpec,
+  linkPromotedReviewerAnomalies,
+  selectRestatementSourceClaimAtom,
+} from '../core/workflow/findings/reviewer-anomalies.js';
+import { boundedRestatementClaimExcerpt } from '../core/workflow/engine/WorkflowEngineSetup.js';
 import {
   assertFindingReviewPresentationContext,
   computeRestatementRequestId,
@@ -671,6 +677,132 @@ describe('FC intake contract', () => {
       ]);
       expect(singleCandidateLinked.reviewerAnomalies!.find((entry) => entry.id === dupAnomalyA.id)!.promotedFindingId)
         .toBe('F-0004');
+    });
+
+    // 実走行(2026-08)の言い直し失敗 263 件のうち 210 件(80%)がこれ: reviewer は
+    // claim atom を「より正確に」書き直す。glm の実例は 400 字の atom へ
+    // `（L113-116）` を挿入しただけで correspondence が落ちていた。
+    //
+    // この厳密さは意図的なもので、ここを substring 一致や類似度に緩めると別の
+    // 指摘が同じ anomaly に吸着して lifecycle 同一性が壊れる。再提示ループを
+    // 「緩めて直った」ことにできないよう、near-miss が落ちることを固定する。
+    // 正しい対処は prompt 側の逐語コピー規則
+    // (src/shared/prompts/{ja,en}/parts/finding_contract_instruction.md)。
+    it('does not promote when the restatement only inserts a parenthetical into the claim atom', () => {
+      const claim = 'The redaction regexp no longer matches the interpolated value.';
+      const nearMiss = 'The redaction regexp (L113-116) no longer matches the interpolated value.';
+      const base = buildBatchCase('near-miss', claim, '5', 'a');
+      const { ledger, anomalyOf } = anomaliesFor([base]);
+      const anomaly = anomalyOf(base.source);
+      const bindings = [{
+        request: batchRequestFor(base.source, anomaly.id, claim),
+        publicationId: 'publication-near-miss',
+        reportDigest: batchReportDigest,
+      }];
+      // echo 無し / echo 付きの両方で落ちることを見る。echo 無しだけだと、
+      // hasValidRestatementEcho に「echo が一致したら correspondence を省略する」
+      // ショートカットが入っても発火せず、near-miss の緩みを見逃す。
+      for (const reassertsReviewerAnomalyId of [undefined, anomaly.id]) {
+        const nearMissAdmitted = canonicalRawFindingFixture({
+          ...base.admitted,
+          description: nearMiss,
+          ...(reassertsReviewerAnomalyId === undefined ? {} : { reassertsReviewerAnomalyId }),
+        });
+
+        const linked = linkPromotedReviewerAnomalies({
+          ...ledger,
+          rawFindings: [base.source, nearMissAdmitted],
+          findings: [batchFindingFor(nearMissAdmitted, 'F-0010')],
+        }, [{
+          lineageKey: 'lineage-near-miss',
+          rawFindingId: nearMissAdmitted.rawFindingId,
+          restatementRequestBindings: bindings,
+        }]);
+        expect(
+          linked.reviewerAnomalies![0]!.promotedFindingId,
+          `echo=${String(reassertsReviewerAnomalyId)}`,
+        ).toBeUndefined();
+      }
+
+      // 正の対照: 同じ fixture のまま description を逐語に戻すと昇格する。
+      // 上の拒否が「atom 不一致由来」であって shape 由来でないことの識別。
+      const verbatimLinked = linkPromotedReviewerAnomalies({
+        ...ledger,
+        rawFindings: [base.source, base.admitted],
+        findings: [batchFindingFor(base.admitted, 'F-0010')],
+      }, [{
+        lineageKey: 'lineage-near-miss',
+        rawFindingId: base.admitted.rawFindingId,
+        restatementRequestBindings: bindings,
+      }]);
+      expect(verbatimLinked.reviewerAnomalies![0]!.promotedFindingId).toBe('F-0010');
+    });
+  });
+
+  /**
+   * 充足不能な再提示要求の芽を潰す。
+   *
+   * request が reviewer へ提示する claim atom（boundedRestatementClaimExcerpt）と
+   * correspondence が要求する claim atom（selectRestatementSourceClaimAtom）が
+   * 別々に選ばれると、reviewer が提示文を1文字も違わずコピーしても昇格せず、
+   * presentationLimit 回だけ再提示されて毎回 new finding を増やす。prompt では
+   * 絶対に直せない種類の破綻なので、選択規則は selectRestatementSourceClaimAtom
+   * 1箇所に集約してある。ここで固定するのは委譲が外れていないことと、委譲後も
+   * request が空文字にならないこと。
+   */
+  describe('restatement claim atom source agreement', () => {
+    const anomalyFor = (description: string | null, rawExcerpt: string | null) => {
+      const wire = incompleteRaw('raw-atom-agreement', {
+        description,
+        ...(rawExcerpt === null ? {} : { rawExcerpt }),
+      });
+      const spec = createReviewerAnomalySpec({
+        wire,
+        canonical: canonicalItem(wire).canonical,
+        anomalyKind: 'intake-contract-incomplete',
+        reason: 'Independent reviewer observation does not satisfy the product admission contract',
+        intakeContract: {
+          observationClass: 'claim-bearing',
+          classificationAuthorityId: 'system/intake_observation_classification_v1',
+          reasonCodes: ['product-identity-incomplete'],
+          missingRequirements: ['severity'],
+          presentationOwnerReviewer: wire.reviewer,
+          presentationLimit: 6,
+        },
+      });
+      const ledger = applyReviewerAnomalySpecsToLedger(emptyLedger(), [spec], {
+        workflowName: 'peer-review',
+        stepName: observedAt.stepName,
+        runId: observedAt.runId,
+        timestamp: observedAt.timestamp,
+      }, new Set());
+      return { wire, anomaly: ledger.reviewerAnomalies![0]! };
+    };
+    it('presents exactly the atom the correspondence check demands', () => {
+      for (const [description, rawExcerpt] of [
+        ['A stated defect.', 'A different stated defect.'],
+        [null, 'Only the excerpt carries the claim.'],
+        ['   ', 'Blank description falls through to the excerpt.'],
+      ] as ReadonlyArray<readonly [string | null, string]>) {
+        const { wire, anomaly } = anomalyFor(description, rawExcerpt);
+        const label = `description=${JSON.stringify(description)}`;
+
+        expect(boundedRestatementClaimExcerpt(anomaly, wire), label)
+          .toBe(selectRestatementSourceClaimAtom(anomaly, wire));
+      }
+    });
+
+    // 委譲した結果、claim 本文が一切無い観測では selector が undefined を返す。
+    // request を空文字にしないための title フォールバックだけは bounded 側に残る。
+    // この anomaly へ request を出すこと自体が誤り（correspondence が要求できる
+    // atom を持たない）だが、それを弾くのは buildRestatementRequests 側の仕事で、
+    // slot トラックが対応する。弾くようになったらこのテストを「request が
+    // 作られないこと」の検証へ差し替える。
+    it('falls back to the title only when no claim text exists at all', () => {
+      const { wire, anomaly } = anomalyFor(null, null);
+
+      expect(selectRestatementSourceClaimAtom(anomaly, wire)).toBeUndefined();
+      expect(boundedRestatementClaimExcerpt(anomaly, wire)).toBe(anomaly.title);
     });
   });
 

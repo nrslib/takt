@@ -110,6 +110,28 @@ function normalizeClaimAtom(value: string): string {
   return value.trim().replace(/\s+/gu, ' ');
 }
 
+/**
+ * correspondence が「言い直しとして受理できる」ために要求する claim atom。
+ *
+ * WorkflowEngineSetup の boundedRestatementClaimExcerpt（request が reviewer へ
+ * 提示する文字列）もこの関数へ委譲する。選択規則を2箇所に持つと、提示と要求が
+ * 別の文字列になり得る — その request は reviewer が提示文を1文字も違わず
+ * コピーしても correspondence が成立せず、presentationLimit 回だけ再提示されて
+ * 毎回 new finding を増やすだけの充足不能な要求になる。
+ */
+export function selectRestatementSourceClaimAtom(
+  anomaly: Pick<ReviewerAnomalyEntry, 'claimedExcerpt'>,
+  sourceRaw: Pick<RawFinding, 'description' | 'rawExcerpt'>,
+): string | undefined {
+  return sourceRaw.description?.trim().length
+    ? sourceRaw.description
+    : anomaly.claimedExcerpt?.trim().length
+      ? anomaly.claimedExcerpt
+      : sourceRaw.rawExcerpt?.trim().length
+        ? sourceRaw.rawExcerpt
+        : undefined;
+}
+
 function hasRestatementCorrespondence(input: {
   anomaly: ReviewerAnomalyEntry;
   sourceRaw: RawFinding;
@@ -122,13 +144,7 @@ function hasRestatementCorrespondence(input: {
   if (!hasRestatementCandidateShape(request, anomaly, sourceRaw, admittedRaw)) {
     return false;
   }
-  const sourceAtom = sourceRaw.description?.trim().length
-    ? sourceRaw.description
-    : anomaly.claimedExcerpt?.trim().length
-      ? anomaly.claimedExcerpt
-      : sourceRaw.rawExcerpt?.trim().length
-        ? sourceRaw.rawExcerpt
-        : undefined;
+  const sourceAtom = selectRestatementSourceClaimAtom(anomaly, sourceRaw);
   const admittedAtom = admittedRaw.description?.trim().length
     ? admittedRaw.description
     : undefined;

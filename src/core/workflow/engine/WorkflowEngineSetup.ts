@@ -57,6 +57,7 @@ import {
   type RestatementRequestV1,
 } from '../findings/review-publication.js';
 import { RAW_FINDING_LIMITS } from '../findings/raw-finding-limits.js';
+import { selectRestatementSourceClaimAtom } from '../findings/reviewer-anomalies.js';
 import {
   resolveRestatementPresentationPhase,
   type RestatementPresentationPhase,
@@ -425,18 +426,21 @@ function remainingRestatementSlots(allocatedRequestCount: number): number {
   );
 }
 
-function boundedRestatementClaimExcerpt(
+/**
+ * restatement request が reviewer へ提示する claim atom。
+ *
+ * 選択そのものは correspondence 側の selectRestatementSourceClaimAtom へ委譲する。
+ * 提示する文字列と correspondence が要求する文字列が別々に選ばれると、reviewer が
+ * 提示文を1文字も違わずコピーしても昇格しない充足不能な request になるため、
+ * 選択規則は1箇所しか持たない。ここが足すのは request を空文字にしないための
+ * title フォールバック（title は createReviewerAnomalySpec が常に非空で採番する）
+ * と長さ上限だけ。
+ */
+export function boundedRestatementClaimExcerpt(
   anomaly: LoadedReviewerAnomaly,
   raw: NonNullable<LoadedFindingLedger['rawFindings']>[number],
 ): string {
-  // フォールバックは「非 blank な最初の候補」を選ぶ。`??` だけだと空白のみの
-  // claimedExcerpt が後続の description / rawExcerpt を遮って title まで飛ぶ。
-  // 全候補が blank な観測（protocol-noise 相当）でも request が空文字にならない
-  // よう、最後は必ず非空の anomaly.title へフォールバックする。title は
-  // createReviewerAnomalySpec が常に非空で採番する。
-  const excerpt = [anomaly.claimedExcerpt, raw.description, raw.rawExcerpt]
-    .find((candidate) => candidate !== undefined && candidate !== null && candidate.trim().length > 0)
-    ?? anomaly.title;
+  const excerpt = selectRestatementSourceClaimAtom(anomaly, raw) ?? anomaly.title;
   return excerpt.slice(0, RAW_FINDING_LIMITS.maxDescriptionChars);
 }
 

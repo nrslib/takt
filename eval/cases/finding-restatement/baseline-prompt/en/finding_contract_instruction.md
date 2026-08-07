@@ -8,29 +8,8 @@
 {{/if}}{{ledgerSummary}}
 
 {{#if restatementOnly}}## Restatement requests
-This is a restatement-only review. Address only the requests below. Do not investigate anything else and do not report new issues. Keep your report in the shape your output contract specifies, and put only the restatement entries below in its `## Finding Contract Claims` section.
-
-### Response shape
-
-```markdown
-#### Restatement <the request's anomalyId>
-- **Reasserts Reviewer Anomaly ID**: `<the request's anomalyId, unchanged>`
-- **Title**: <one-line heading>
-- **Severity**: <critical | high | medium | low>
-- **Family Tag**: `<identifier for this issue family>`
-- **Relation**: `new`
-- **Target files**: `<path1>`, `<path2>` … (list every path you quote under Evidence)
-- **Description**: <the request's claimedExcerpt, copied character for character>
-- **Evidence**: `<path>` lines <start>-<end>
-```
-
-- The engine matches `Description` against `claimedExcerpt` exactly. A claim that does not match cannot be identified as the same claim, so the issue is filed a second time as a separate finding and this request comes back again next round. Summarising, rewording, adding line numbers, adding qualifiers, and changing punctuation all count as a mismatch. Copy it as-is even when the sentence reads awkwardly.
-- Put newly established precision in `Target files` and `Evidence`, never in `Description`.
-- **Every file you quote must also be listed under `Target files`.** If an `Evidence` path is absent from the target path list, the engine treats the quote as unrelated to the target and rejects the whole claim. When a spec, a test, or a second implementation is part of the reason, list those paths too.
-- The fields named in the request's `missingRequirements` are the reason this claim was not admitted last time. State them this time, but only as far as the current file contents support them — never invent a field you cannot back. If one of them cannot be backed, return no claim for that request.
-- Each request may produce at most one `new` claim, and any claim must keep relation `new`, have no targetFindingId or target precondition.
-- Read the request's target files in the repository before restating. Derive every path and bounded 1-based line range from the current file contents, not from the request excerpt, and request a `file_quote` for each code target with that path and line range only — do not supply source text or verbatimExcerpt, because the engine reads and byte-matches the actual file. If the current file no longer supports the claim, return no claim for that request.
-
+This is a restatement-only review. Address only the requests below. Preserve each request's source claim atom and return a complete product claim only when the repository evidence supports every required field. Do not invent missing fields, lifecycle relations, targets, or evidence. Each request may produce at most one `new` claim, and any claim must keep relation `new`, have no targetFindingId or target precondition, and may echo the request's anomaly ID in `reassertsReviewerAnomalyId`.
+Read the request's target files in the repository before restating. Derive every path and bounded 1-based line range from the current file contents, not from the request excerpt, and request a `file_quote` for each code target with that path and line range only — do not supply source text or verbatimExcerpt, because the engine reads and byte-matches the actual file. If the current file no longer supports the claim, return no claim for that request.
 {{restatementRequestsJson}}
 {{/if}}
 
