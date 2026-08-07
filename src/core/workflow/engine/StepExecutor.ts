@@ -44,6 +44,7 @@ import {
   runReportPhase,
   ReportPhaseGenerationError,
 } from '../phase-runner.js';
+import { writeReportFile } from '../report-writer.js';
 import { RuleDetectionExhaustedError } from '../evaluation/RuleDetectionExhaustedError.js';
 import type {
   BasePhaseRunnerContext,
@@ -1339,6 +1340,9 @@ export class StepExecutor {
       const persistedReviewerRuntime = reviewerRuntime(
         pending.reviewerExecutionIdentity,
       );
+      // 保存済みの報告も「レポートは在る」状態にそろえる。正規化が拒否・失敗して
+      // publication が成立しない経路でも、Phase 3 と後続 step は同じファイルを読む。
+      writeReportFile(reportDir, pending.reportName, pending.reportContent);
       const normalized = await this.normalizePlainTextFindingReview({
         reviewerStep: input.step,
         reportResponse,
@@ -1562,6 +1566,11 @@ export class StepExecutor {
     const completedReviewerRuntime = reviewerRuntime(
       completedReviewerExecutionIdentity,
     );
+    // レビュアーの markdown レポートはこの時点で実在する。取り込み（正規化）の
+    // 成否はレポートの有無と関係ないので、publication の成立を待たずに書き出す。
+    // Phase 3 の use_judge も後続 step のレポート参照もこのファイルを読むため、
+    // 拒否・失敗した報告でも「レポートは在る」状態にそろえる。
+    writeReportFile(publicationReportDir, report.reportName, report.reportContent);
     persistPendingFindingReviewNormalization(
       publicationReportDir,
       createPendingFindingReviewNormalization({

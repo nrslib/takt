@@ -16,6 +16,8 @@ import {
   makeWorkflowResumePointEntry,
 } from './test-helpers.js';
 import { createTeamLeaderPlanningStep } from '../core/workflow/engine/team-leader-common.js';
+import { runStatusJudgmentPhase } from '../core/workflow/status-judgment-phase.js';
+import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 import { PHASE1_EMPTY_OUTPUT_ERROR } from '../core/workflow/engine/phase1-empty-recovery.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
@@ -932,6 +934,94 @@ describe('StepExecutor', () => {
     expect(harness.normalizeFindingIntake).toHaveBeenCalledTimes(2);
   });
 
+  /**
+   * 実走行の回帰: 報告拒否のレビュアーは publication を持たないまま
+   * applyPostExecutionRulesOnly（= Phase 3）へ進む。レポートファイルを
+   * publication 成立時にしか書いていなかったため、use_judge の Phase 3 が
+   * 「Status judgment requires existing use_judge reports」で run ごと落ちた。
+   * 取り込みの成否とレポートの実在は別物なので、拒否された本文もファイルに残す。
+   */
+  it('報告拒否でもレポートは実在し、use_judge の Phase 3 がその本文を読む', async () => {
+    const unboundFinding = {
+      rawExcerpt: 'This sentence never appears in the report body.',
+      candidate: COMPLETE_CANDIDATE,
+    };
+    const unboundResponse = {
+      persona: 'default',
+      status: 'done' as const,
+      content: '{}',
+      structuredOutput: { rawFindings: [unboundFinding] },
+      timestamp: new Date('2026-07-31T00:00:01.000Z'),
+    };
+    const harness = createPlainTextPublicationHarness(
+      [unboundResponse, unboundResponse],
+      PLAIN_TEXT_REPORT_CONTENT,
+    );
+
+    const result = await harness.executor.prepareFindingReviewPublication({
+      step: harness.step,
+      executableStep: harness.step,
+      parentStepName: 'reviewers',
+      stepIteration: 1,
+      state: harness.state,
+      phase1Response: {
+        persona: 'reviewer',
+        status: 'done',
+        content: 'phase 1 investigation',
+        timestamp: new Date('2026-07-31T00:00:00.000Z'),
+      },
+      agentOptions: { resolvedProvider: 'mock' },
+      onProviderAttempt: vi.fn(),
+      updatePersonaSession: harness.updatePersonaSession,
+    });
+    expect('reportRejection' in result).toBe(true);
+
+    // レポートを読む Phase 3 は throw せず、拒否された本文で判定できる。
+    const judgedStep = makeStep({
+      name: 'review',
+      persona: 'reviewer',
+      instruction: 'Review.',
+      outputContracts: [
+        { name: 'review.md', format: 'review', formatRef: 'review-finding-contract' },
+      ],
+      rules: [
+        normalizeRule({ condition: 'needs_fix', next: 'fix' }),
+        normalizeRule({ condition: 'approved', next: 'COMPLETE' }),
+      ],
+    });
+    const judgeStatus = vi.fn(async (
+      structuredInstruction: string,
+      _tagInstruction: string,
+      _candidates: unknown[],
+      options: {
+        onStructuredPromptResolved?: (parts: {
+          systemPrompt: string;
+          userInstruction: string;
+        }) => void;
+      },
+    ) => {
+      options.onStructuredPromptResolved?.({
+        systemPrompt: 'judge system',
+        userInstruction: structuredInstruction,
+      });
+      return { candidateIndex: 0, method: 'structured_output' as const };
+    });
+    const judgment = await runStatusJudgmentPhase(judgedStep, {
+      cwd,
+      reportDir: runPaths.reportsAbs,
+      iteration: 1,
+      resolveStepProviderModel: () => ({ provider: 'mock', model: 'judge-model' }),
+      structuredCaller: { judgeStatus },
+    } as unknown as Parameters<typeof runStatusJudgmentPhase>[1]);
+
+    expect(judgment.label).toBe('needs_fix');
+    expect(judgeStatus.mock.calls[0]![0]).toContain(harness.reportContent);
+
+    // publication の成否と無関係に、レポートは拒否された本文のまま実在する。
+    expect(readFileSync(join(runPaths.reportsAbs, 'review.md'), 'utf-8'))
+      .toBe(harness.reportContent);
+  });
+
   it('正規化係の出力形の失敗は report rejection にせず次候補へ後退する', async () => {
     // Given: binding ではなく candidate 喪失（正規化係側の問題）。
     const lostClaimResponse = {
@@ -1126,8 +1216,9 @@ describe('StepExecutor', () => {
 
     expect(harness.normalizeFindingIntake).toHaveBeenCalledTimes(2);
     expect(executeAgent).toHaveBeenCalledOnce();
-    expect(() => readFileSync(join(runPaths.reportsAbs, 'review.md'), 'utf8'))
-      .toThrow();
+    // レポートは正規化の成否と無関係に実在する（publication は成立していない）。
+    expect(readFileSync(join(runPaths.reportsAbs, 'review.md'), 'utf8'))
+      .toBe(harness.reportContent);
     expect(loadPendingFindingReviewNormalization(
       runPaths.reportsAbs,
       {
