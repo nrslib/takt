@@ -11,7 +11,7 @@ import type {
 import { runManagerDecisionStage } from './manager-decision.js';
 import { prepareFindingManagerRound } from './manager-preparation.js';
 import { captureReviewScopeProofSnapshot } from './snapshot.js';
-import { computeRoundMarker } from './round-marker.js';
+import { computeRoundMarker, markRoundExcludedFromBudget } from './round-marker.js';
 import { runManagerRoundExclusive } from './manager-round-lock.js';
 import { bindPreAdmissionEntities } from './pre-admission-entity-binding.js';
 import { collectRestatementRequestBindings } from './review-publication.js';
@@ -49,13 +49,18 @@ export async function runFindingManagerForStep(
   if (new Set(publicationIds).size !== publicationIds.length) {
     throw new Error('Finding manager round contains duplicate review publications');
   }
-  const stopBudgetRoundMarker = computeRoundMarker({
+  const roundMarker = computeRoundMarker({
     runId: input.runId,
     callNamespace: input.callNamespace,
     parentStepName: input.parentStep.name,
     stepIteration: input.stepIteration,
     publicationIds,
   });
+  // 予算へ計上しないラウンドは marker 自体に印を付ける。適用済み集合には入れる
+  // （二相コミットと冪等性がこの集合に依存する）が、予算カウンタは数えない。
+  const stopBudgetRoundMarker = input.budgetAccounting === 'excluded'
+    ? markRoundExcludedFromBudget(roundMarker)
+    : roundMarker;
 
   return runManagerRoundExclusive(input.ledgerStore, async () => {
     const loadedLedger = input.ledgerStore.loadLedger();

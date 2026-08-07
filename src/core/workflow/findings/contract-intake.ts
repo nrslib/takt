@@ -84,6 +84,8 @@ export interface FindingContractIntakeInput {
   priorStepResponseText?: string;
   managerAuthority: FindingManagerAuthority;
   reviewPublicationDir?: string;
+  /** stop budget / review-integrity のラウンド計上対象か（manager-contracts.ts 参照）。 */
+  budgetAccounting?: 'round' | 'excluded';
   refreshFindingsState: () => void;
   emitEvent: (event: string, ...args: unknown[]) => void;
 }
@@ -116,6 +118,7 @@ export async function ingestFindingContractResults(
     priorStepResponseText: input.priorStepResponseText,
     managerAuthority: input.managerAuthority,
     reviewPublicationDir: input.reviewPublicationDir,
+    ...(input.budgetAccounting === undefined ? {} : { budgetAccounting: input.budgetAccounting }),
   });
   if (result.status === 'updated') {
     input.refreshFindingsState();
