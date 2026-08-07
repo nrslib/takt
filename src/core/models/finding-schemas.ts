@@ -1,5 +1,4 @@
 import { z } from 'zod/v4';
-import { PROVIDER_TYPES } from '../../shared/types/provider.js';
 import { compareBinaryStrings } from '../../shared/utils/binary-string-comparator.js';
 import { compareRfc3339Timestamps, normalizeRfc3339Timestamp } from './rfc3339.js';
 import { collectFindingLedgerProjectionInvariantViolations } from './finding-ledger-invariants.js';
@@ -159,21 +158,23 @@ export const Rfc3339TimestampSchema = z.string().min(1).transform((timestamp, ct
 
 const FindingFacetRefListRawSchema = z.array(nonEmptyString).min(1);
 
+/**
+ * manager / adjudicator はワークフローから provider / model を名指ししない。
+ * 合成ロールの宛先は runtime.yaml `provider.targets.internal_agents` の seat
+ * （`findings-manager` / `terminal-adjudicator`）で指定し、未指定なら既定解決へ落ちる。
+ * strict スキーマなので、旧キーが残った設定は未知キーとして拒否される。
+ */
 export const FindingContractManagerConfigRawSchema = z.object({
   persona: nonEmptyString,
   instruction: nonEmptyString,
   output_contract: nonEmptyString,
   policy: FindingFacetRefListRawSchema.optional(),
   knowledge: FindingFacetRefListRawSchema.optional(),
-  provider: z.enum(PROVIDER_TYPES).optional(),
-  model: nonEmptyString.optional(),
 }).strict();
 
 export const FindingContractAdjudicatorConfigRawSchema = z.object({
   persona: nonEmptyString,
   instruction: nonEmptyString,
-  provider: z.enum(PROVIDER_TYPES).optional(),
-  model: nonEmptyString.optional(),
 }).strict();
 
 /** 有限停止予算。両方省略可 — max_rounds は省略時に既定値 40、max_minutes は省略時は時間上限なし（opt-in）。 */

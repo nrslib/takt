@@ -5,8 +5,6 @@ import { getProviderValidationErrorSource } from '../core/workflow/provider-vali
 
 const VALID_ADJUDICATOR = {
   persona: 'supervisor',
-  provider: 'codex' as const,
-  model: 'gpt-5',
 };
 
 const {
@@ -443,14 +441,10 @@ describe('previewPrompts', () => {
           personaDisplayName: 'Findings Manager',
           instruction: 'manager instruction',
           outputContract: 'manager output contract',
-          provider: 'codex',
-          model: 'gpt-5.5',
         },
         adjudicator: {
           persona: 'supervisor',
           personaDisplayName: 'Finding Adjudicator',
-          provider: 'codex',
-          model: 'gpt-5.5',
         },
       },
       steps: [

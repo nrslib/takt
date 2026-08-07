@@ -228,8 +228,10 @@ describe('workflow finding_contract schema', () => {
     }
   });
 
-  it('should preserve finding manager provider and model through workflow normalization', () => {
-    const workflow = normalizeWorkflowConfig({
+  // provider/model はワークフローの語彙から外れ、runtime.yaml の internal_agents seat が
+  // 唯一の指定口になった。strict スキーマなので書き残しは未知キーとして拒否される。
+  it('should reject provider/model on the finding manager and adjudicator', () => {
+    const withManagerProvider = () => normalizeWorkflowConfig({
       name: 'finding-contract-manager-provider-workflow',
       finding_contract: {
         manager: {
@@ -252,14 +254,35 @@ describe('workflow finding_contract schema', () => {
       ],
     }, '/tmp/project');
 
-    expect(workflow.findingContract?.manager).toMatchObject({
-      persona: 'findings-manager',
-      providerRoutingPersonaKey: 'findings-manager',
-      instruction: 'findings-manager',
-      outputContract: 'findings-manager',
-      provider: 'codex',
-      model: 'gpt-5.5',
-    });
+    expect(withManagerProvider).toThrow();
+
+    const withAdjudicatorProvider = () => normalizeWorkflowConfig({
+      name: 'finding-contract-adjudicator-provider-workflow',
+      finding_contract: {
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          output_contract: 'findings-manager',
+        },
+        adjudicator: {
+          persona: 'supervisor',
+          instruction: 'adjudicate',
+          provider: 'codex',
+        },
+      },
+      initial_step: 'peer-review',
+      max_steps: 2,
+      steps: [
+        {
+          name: 'peer-review',
+          persona: 'reviewer',
+          instruction: 'Review the change.',
+          rules: [{ condition: 'when(findings.open.count == 0)', next: 'COMPLETE' }],
+        },
+      ],
+    }, '/tmp/project');
+
+    expect(withAdjudicatorProvider).toThrow();
   });
 
   it('should resolve finding manager facets through the normal facet lookup path', () => {
@@ -660,8 +683,6 @@ describe('workflow finding_contract schema', () => {
           adjudicator: {
             persona: 'terminal-supervisor',
             instruction: 'adjudicate',
-            provider: 'codex',
-            model: 'gpt-test',
           },
         },
         initial_step: 'review',
@@ -680,8 +701,6 @@ describe('workflow finding_contract schema', () => {
         persona: 'terminal-supervisor',
         providerRoutingPersonaKey: 'terminal-supervisor',
         instruction: 'Adjudication guidance',
-        provider: 'codex',
-        model: 'gpt-test',
       });
     } finally {
       rmSync(tempDir, { recursive: true, force: true });

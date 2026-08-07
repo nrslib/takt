@@ -505,21 +505,21 @@ Paths must be absolute paths to executable files. Environment variables take pre
 
 Provider and model selection uses the single, field-by-field precedence contract documented under [Provider Routing](#provider-routing). Normal steps, parallel sub-steps, synthetic steps, and workflow calls follow that contract for the layers available to each kind. Parallel sub-steps do not support promotion.
 
-For Finding Contract workflows, `finding_contract.manager.provider` / `model` and `finding_contract.adjudicator.provider` / `model` are treated as step-level values for their synthetic steps. The implementation's field-by-field order is explicit CLI/environment override → promotion matching the current execution (normal agent steps only) → step or parallel sub-step provider/model (including these direct values) → `workflow_call` override → `provider_routing` step/tag/persona → deprecated `persona_providers` → auto routing → workflow → project → global → provider default. When neither field is set, the role uses the normal workflow-step fallback chain. Setting only `provider` stops lower-priority model fallback; providers that require an explicit model fail validation.
+Finding Contract workflows never name a provider or model. The synthetic roles are assigned in `runtime.yaml` through the optional `provider.targets.internal_agents` seats, and an assigned seat is treated as a step-level value for that role's synthetic step. The implementation's field-by-field order is explicit CLI/environment override → promotion matching the current execution (normal agent steps only) → step or parallel sub-step provider/model (including an assigned seat) → `workflow_call` override → `provider_routing` step/tag/persona → deprecated `persona_providers` → auto routing → workflow → project → global → provider default. An unassigned seat uses the normal workflow-step fallback chain. A seat that names only a provider stops lower-priority model fallback; providers that require an explicit model fail validation.
 
 ```yaml
-finding_contract:
-  manager:
-    persona: findings-manager
-    instruction: findings-manager
-    output_contract: findings-manager
-    provider: codex
-    model: <strong-model>
-  adjudicator:
-    persona: supervisor
-    instruction: adjudicate-finding-contract
-    provider: codex
-    model: <strong-model>
+# runtime.yaml
+version: 1
+provider:
+  profiles:
+    strong: { provider: codex, model: <strong-model> }
+  targets:
+    internal_agents:
+      findings-manager:     { profile: strong }
+      terminal-adjudicator: { profile: strong }
+      loop-judge:           { profile: strong }
+      escalation-reviewer:  { profile: strong }
+      intake-normalizer:    { profile: strong }
 ```
 
 In workflow YAML, `model: null` is an explicit model omission for a normal step, parallel sub-step, or `loop_monitors.judge`. It differs from leaving `model` unspecified: an unspecified model continues to applicable lower-priority sources such as routing, workflow, the triggering step for loop monitor judges, and input sources, while `model: null` stops model resolution at that entry and leaves the effective model undefined. Use it when the resolved provider should use its own CLI or provider default instead of inheriting another model source. Providers that require an explicit model still fail validation when no model is supplied.
@@ -613,6 +613,10 @@ provider:
         profile: router
       intake-normalizer:
         profile: sol-high
+      findings-manager:
+        profile: sol-high
+      terminal-adjudicator:
+        profile: sol-high
 
   auto_routing:
     strategy: balanced
@@ -666,16 +670,24 @@ defaults
   < steps
 ```
 
-The internal `selector`, `assistant`, and `intake-normalizer` agents resolve through a separate ladder — `internal_agents` is not a generic override applied after step resolution:
+The internal agents resolve through a separate ladder — `internal_agents` is not a generic override applied after step resolution:
 
 ```text
 defaults
   < internal_agents.<agent>
 ```
 
-`intake-normalizer` is the one seat whose ladder continues past this point: when no
-seat is assigned it falls back to the reviewer's `escalate` target and then to the
-ordinary default resolution (see [workflows.md](workflows.md)).
+The available seats are `selector`, `assistant`, and the engine-synthesized roles
+`intake-normalizer`, `findings-manager`, `terminal-adjudicator`, `loop-judge`, and
+`escalation-reviewer`. `terminal-adjudicator` is the runtime name of the role whose persona
+facet is `supervisor`; the two are deliberately different names for different things.
+
+**Every seat is optional.** An unassigned seat changes nothing: the role keeps the resolution it
+has always used. For the synthetic Finding Contract roles that means persona routing (the fixed
+keys `findings-manager` / `supervisor` / `loop-judge`) and then the workflow → project → global →
+provider-default chain. `intake-normalizer` and `escalation-reviewer` continue past that into the
+reviewer profile's `escalate` target before the ordinary default resolution (see
+[workflows.md](workflows.md)).
 
 When two targets at the same priority (for example two matching tags) assign different providers, resolution fails fast instead of picking one silently. Explicit `--provider` / `--model` on the command line are runtime overrides and are allowed in both legacy and runtime modes.
 
@@ -831,9 +843,9 @@ Provider and model are resolved independently at each layer. A provider-only ove
 
 `active promotion` means a normal agent step `promotion` entry whose execution-count (`at: <N>`) or `ai()` condition matched for the current execution. Parallel sub-steps cannot specify promotion, so their YAML provider/model follows an explicit CLI/environment override directly; see [Step-level Provider Promotion](./workflows.md#step-level-provider-promotion).
 
-For the Finding Contract manager, `finding_contract.manager.provider` and `finding_contract.manager.model` occupy the `step YAML provider/model` position for the synthetic `findings-manager` step.
+An assigned `internal_agents` seat occupies the `step YAML provider/model` position for the role's synthetic step. Every seat is optional; an unassigned seat leaves the role on the layers below.
 
-Synthetic Finding Contract roles resolve `provider_routing.personas` by a fixed persona key rather than the configured persona name: `findings-manager` (manager), `supervisor` (conflict and terminal adjudication), and `loop-judge` (loop monitor judges). Escalated re-review is not configured this way: it inherits the owning reviewer's step and takes its model from the `escalate` target of the profile that reviewer resolved to. Its reviewer key is the fixed string `escalation-reviewer`, which is a reserved workflow step name in every Finding Contract workflow.
+Without a seat, synthetic Finding Contract roles resolve `provider_routing.personas` by a fixed persona key rather than the configured persona name: `findings-manager` (manager), `supervisor` (conflict and terminal adjudication), and `loop-judge` (loop monitor judges). Escalated re-review has no persona routing: it inherits the owning reviewer's step and takes its model from the `escalation-reviewer` seat, or — when that seat is unassigned — from the `escalate` target of the profile that reviewer resolved to. Its reviewer key is the fixed string `escalation-reviewer`, which is a reserved workflow step name in every Finding Contract workflow.
 
 ### Auto Routing
 

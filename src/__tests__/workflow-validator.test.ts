@@ -286,15 +286,16 @@ describe('validateWorkflowConfig', () => {
       findingContract: {
         manager: {
           persona: 'findings-manager',
+          providerRoutingPersonaKey: 'findings-manager',
           instruction: 'findings-manager',
           outputContract: 'findings-manager',
-          model: 'sonnet',
         },
       },
     });
 
     expect(() => validateWorkflowConfig(workflow, {
       projectCwd: process.cwd(),
+      providerRouting: { personas: { 'findings-manager': { model: 'sonnet' } } },
       autoRouting: createValidatorAutoRouting({ steps: { 'findings-manager': 'codex' } }),
     })).toThrow(/auto_routing resolved model 'sonnet'.*provider is 'codex'/i);
   });
@@ -335,15 +336,16 @@ describe('validateWorkflowConfig', () => {
       findingContract: {
         manager: {
           persona: 'findings-manager',
+          providerRoutingPersonaKey: 'findings-manager',
           instruction: 'findings-manager',
           outputContract: 'findings-manager',
-          model: 'sonnet',
         },
       },
     });
 
     expect(() => validateWorkflowConfig(workflow, {
       projectCwd: process.cwd(),
+      providerRouting: { personas: { 'findings-manager': { model: 'sonnet' } } },
       autoRouting: createValidatorAutoRouting({ steps: { 'findings-interpreter': 'codex' } }),
     })).toThrow(/auto_routing resolved model 'sonnet'.*provider is 'codex'/i);
   });
@@ -383,15 +385,16 @@ describe('validateWorkflowConfig', () => {
       findingContract: {
         manager: {
           persona: 'findings-manager',
+          providerRoutingPersonaKey: 'findings-manager',
           instruction: 'findings-manager',
           outputContract: 'findings-manager',
-          model: 'sonnet',
         },
       },
     });
 
     expect(() => validateWorkflowConfig(workflow, {
       projectCwd: process.cwd(),
+      providerRouting: { personas: { 'findings-manager': { model: 'sonnet' } } },
       autoRouting: createValidatorAutoRouting(),
     })).not.toThrow();
   });
@@ -633,14 +636,13 @@ describe('validateWorkflowConfig', () => {
     expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).not.toThrow();
   });
 
-  it('fails fast when finding_contract.manager uses opencode without a model', () => {
+  it('fails fast when the findings-manager seat uses opencode without a model', () => {
     const workflow = createWorkflow({
       findingContract: {
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
           outputContract: 'findings-manager',
-          provider: 'opencode',
         },
       },
     });
@@ -648,6 +650,7 @@ describe('validateWorkflowConfig', () => {
     expect(() => validateWorkflowConfig(workflow, {
       projectCwd: process.cwd(),
       provider: 'claude',
+      internalAgentSeats: { findingsManager: { provider: 'opencode' } },
       personaProviders: {
         'findings-manager': {
           provider: 'claude',
@@ -657,7 +660,7 @@ describe('validateWorkflowConfig', () => {
     })).toThrow(/provider 'opencode' requires model/);
   });
 
-  it('validates finding_contract.manager through workflow provider fallback when manager provider is not direct', () => {
+  it('validates finding_contract.manager through workflow provider fallback when no seat is assigned', () => {
     const workflow = createWorkflow({
       provider: 'opencode',
       findingContract: {
@@ -698,7 +701,7 @@ describe('validateWorkflowConfig', () => {
     })).toThrow(/provider 'opencode' requires model/);
   });
 
-  it('prefers finding_contract.manager provider/model over provider_routing and persona_providers', () => {
+  it('prefers the findings-manager seat over provider_routing and persona_providers', () => {
     const workflow = createWorkflow({
       findingContract: {
         manager: {
@@ -706,8 +709,6 @@ describe('validateWorkflowConfig', () => {
           providerRoutingPersonaKey: 'findings-manager',
           instruction: 'findings-manager',
           outputContract: 'findings-manager',
-          provider: 'codex',
-          model: 'gpt-5.5',
         },
       },
     });
@@ -715,6 +716,7 @@ describe('validateWorkflowConfig', () => {
     expect(() => validateWorkflowConfig(workflow, {
       projectCwd: process.cwd(),
       provider: 'claude',
+      internalAgentSeats: { findingsManager: { provider: 'codex', model: 'gpt-5.5' } },
       providerRouting: {
         steps: {
           'findings-manager': { provider: 'opencode' },
@@ -743,16 +745,15 @@ describe('validateWorkflowConfig', () => {
               persona: 'findings-manager',
               instruction: 'findings-manager',
               outputContract: 'findings-manager',
-              provider: 'codex',
-              model: 'strong-manager',
             },
-            adjudicator: {
-              persona: 'supervisor',
-              provider: 'opencode',
-            },
+            adjudicator: { persona: 'supervisor' },
           },
           ledgerStore: createFakeLedgerStore(),
           managerAuthority,
+        },
+        internalAgentSeats: {
+          findingsManager: { provider: 'codex', model: 'strong-manager' },
+          terminalAdjudicator: { provider: 'opencode' },
         },
       })).toThrow(/provider 'opencode' requires model/);
     },
@@ -772,12 +773,13 @@ describe('validateWorkflowConfig', () => {
               persona: 'findings-manager',
               instruction: 'findings-manager',
               outputContract: 'findings-manager',
-              provider: 'codex',
-              model: 'strong-manager',
             },
           },
           ledgerStore: createFakeLedgerStore(),
           managerAuthority,
+        },
+        internalAgentSeats: {
+          findingsManager: { provider: 'codex', model: 'strong-manager' },
         },
       })).toThrow('Finding adjudication requires finding_contract.adjudicator');
     },
@@ -1891,13 +1893,13 @@ describe('validateWorkflowConfig', () => {
       expect(() => validateWorkflowConfig(workflow, {
         projectCwd: process.cwd(),
         provider: 'claude',
+        internalAgentSeats: { findingsManager: { provider: 'opencode' } },
         inheritedFindingContract: {
           contract: {
             manager: {
               persona: 'findings-manager',
               instruction: 'findings-manager',
               outputContract: 'findings-manager',
-              provider: 'opencode',
             },
             adjudicator: { persona: 'supervisor' },
           },
@@ -1907,20 +1909,19 @@ describe('validateWorkflowConfig', () => {
       })).toThrow(/provider 'opencode' requires model/);
     });
 
-    it('accepts a valid finding_contract.manager provider/model inherited from a workflow_call parent', () => {
+    it('accepts a valid findings-manager seat when the contract is inherited from a workflow_call parent', () => {
       const workflow = createWorkflow();
 
       expect(() => validateWorkflowConfig(workflow, {
         projectCwd: process.cwd(),
         provider: 'claude',
+        internalAgentSeats: { findingsManager: { provider: 'codex', model: 'gpt-5.5' } },
         inheritedFindingContract: {
           contract: {
             manager: {
               persona: 'findings-manager',
               instruction: 'findings-manager',
               outputContract: 'findings-manager',
-              provider: 'codex',
-              model: 'gpt-5.5',
             },
             adjudicator: { persona: 'supervisor' },
           },

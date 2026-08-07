@@ -577,24 +577,37 @@ There is no implicit fallback.
 - `takt workflow preview` shows the dynamic pool name, candidate IDs, referenced facets, and source.
 - When builtin ja/en pools are provided, their candidate ID sets are kept identical.
 
-### Finding Contract manager provider/model
+### Finding Contract synthetic role provider/model
 
-`finding_contract.manager` can set a dedicated provider and model for the synthetic Finding Manager step:
+A workflow never names a provider or model for a synthetic role. `finding_contract.manager` and
+`finding_contract.adjudicator` accept no `provider` / `model` field; the schema is strict, so a
+leftover key is rejected at load time. The destination is assigned in `runtime.yaml` through the
+`internal_agents` seats:
 
 ```yaml
-finding_contract:
-  manager:
-    persona: findings-manager
-    instruction: findings-manager
-    output_contract: findings-manager
-    provider: codex
-    model: gpt-5.5
+# runtime.yaml
+provider:
+  profiles:
+    strong: { provider: codex, model: gpt-5.5 }
+  targets:
+    internal_agents:
+      findings-manager:     { profile: strong }
+      terminal-adjudicator: { profile: strong }
+      loop-judge:           { profile: strong }
+      escalation-reviewer:  { profile: strong }
+      intake-normalizer:    { profile: strong }
 ```
 
 The report is saved before normalization, and the normalizer receives only that
 single report in a fresh, tool-free session.
 
-When set, these values are applied as step-level `provider` / `model` for the Finding Manager. Explicit CLI and environment overrides remain higher priority. The manager values take priority over `provider_routing`, deprecated `persona_providers.findings-manager`, effective auto routing, and workflow/project/global fallbacks. When neither field is set, the manager keeps the normal workflow step provider/model resolution behavior. Setting only `provider` stops lower-priority model fallback, so the selected provider uses its own default; providers that require an explicit model fail validation.
+**Every seat is optional.** An unassigned seat keeps the ordinary resolution the role has always
+used (persona routing → workflow → project → global → provider default, plus the reviewer profile's
+`escalate` chain for the normalizer and the escalation slot). An assigned seat is applied as a
+step-level `provider` / `model` for that role, so it takes priority over `provider_routing`,
+deprecated `persona_providers`, effective auto routing, and workflow/project/global fallbacks;
+explicit CLI and environment overrides stay higher. A seat that names only a provider stops
+lower-priority model fallback so the resolved pair never mixes providers.
 
 ### Finding Contract provisional findings and the completion gate
 
@@ -900,7 +913,7 @@ Workflow-level automatic provider routing: an AI `router` (provider + model) pic
 
 ### `finding_contract`
 
-Declares a Finding Contract for the workflow (see the Finding Contract sections above for runtime semantics). `ledger_path`, `raw_findings_path`, and `manager` are required; `manager` requires `persona`, `instruction`, and `output_contract`, with optional `provider` / `model`. Optional budgets: `stop_budget` (`max_rounds`, default 40; `max_minutes`, no time limit unless set) and `review_budget` (`max_review_rounds`).
+Declares a Finding Contract for the workflow (see the Finding Contract sections above for runtime semantics). `ledger_path`, `raw_findings_path`, and `manager` are required; `manager` requires `persona`, `instruction`, and `output_contract`, with optional `policy` / `knowledge` additions. Neither `manager` nor `adjudicator` accepts a `provider` / `model` field — assign the `findings-manager` and `terminal-adjudicator` seats in `runtime.yaml` instead. Optional budgets: `stop_budget` (`max_rounds`, default 40; `max_minutes`, no time limit unless set) and `review_budget` (`max_review_rounds`).
 
 ```yaml
 finding_contract:

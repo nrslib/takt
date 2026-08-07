@@ -133,24 +133,23 @@ provider_routing:
 
 The `final-gate` tag is applied after `review`, so final-gate steps return to the strong model while regular reviews remain local. The Finding Manager uses `findings-manager`; loop judges use the fixed `loop-judge` routing key regardless of the configured judge persona; and the adjudicator automatically derived by the current engine uses `supervisor`. Without a `loop-judge` route, a loop judge inherits the resolved provider and model of the step that triggered the cycle.
 
-To pin the Finding Manager and adjudicator for one custom workflow, specify them directly in the workflow YAML.
+To pin a synthetic role outright, assign its `internal_agents` seat in `runtime.yaml`. Workflow YAML has no provider/model field for these roles.
 
 ```yaml
-finding_contract:
-  manager:
-    persona: findings-manager
-    instruction: findings-manager
-    output_contract: findings-manager
-    provider: codex
-    model: <strong-model>
-  adjudicator:
-    persona: supervisor
-    instruction: adjudicate-finding-contract
-    provider: codex
-    model: <strong-model>
+# runtime.yaml
+provider:
+  profiles:
+    strong: { provider: codex, model: <strong-model> }
+  targets:
+    internal_agents:
+      findings-manager:     { profile: strong }
+      terminal-adjudicator: { profile: strong }
+      loop-judge:           { profile: strong }
+      escalation-reviewer:  { profile: strong }
+      intake-normalizer:    { profile: strong }
 ```
 
-At runtime, provider and model are resolved field by field in this order: explicit CLI/environment override → promotion matching the current execution (normal agent steps only) → step or parallel sub-step provider/model (including these direct values) → `workflow_call` override → `provider_routing` step/tag/persona → deprecated `persona_providers` → auto routing → workflow → project → global → provider default. Parallel sub-steps do not support promotion, so their direct values come immediately after an explicit CLI/environment override. Specifying only `provider` stops lower-priority model fallback.
+Every seat is optional: leave one out and that role keeps the persona-routing chain above. At runtime, provider and model are resolved field by field in this order: explicit CLI/environment override → promotion matching the current execution (normal agent steps only) → step or parallel sub-step provider/model (including an assigned seat) → `workflow_call` override → `provider_routing` step/tag/persona → deprecated `persona_providers` → auto routing → workflow → project → global → provider default. Parallel sub-steps do not support promotion, so their direct values come immediately after an explicit CLI/environment override. A seat that names only a provider stops lower-priority model fallback.
 
 Run `takt` to choose a workflow interactively.
 
@@ -234,4 +233,4 @@ persona_providers:
 
 This configuration applies globally to all workflows. Any step using the specified persona will be routed to the corresponding provider, regardless of which workflow is being executed.
 
-For Finding Contract manager routing, prefer the workflow-local `finding_contract.manager.provider` and `finding_contract.manager.model` fields. They are explicit to the ledger adjudicator and take priority over `persona_providers.findings-manager`.
+For Finding Contract manager routing, prefer the `runtime.yaml` `provider.targets.internal_agents.findings-manager` seat. It is explicit to the ledger manager and takes priority over `persona_providers.findings-manager`.

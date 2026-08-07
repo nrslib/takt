@@ -1,4 +1,3 @@
-import type { ProviderType } from '../../shared/types/provider.js';
 import type {
   FindingContractLedgerRegistries,
   InterpretationRecoveryOriginSettlement,
@@ -282,15 +281,15 @@ export interface FindingContractManagerConfig {
   outputContract: string;
   policyContents?: readonly ResolvedFacetContent[];
   knowledgeContents?: readonly ResolvedFacetContent[];
-  provider?: ProviderType;
-  model?: string;
 }
 
 /**
- * The persona and optional guidance/provider routing used by engine-synthesized
- * conflict and terminal adjudication steps. The loader resolves explicit
- * configuration eagerly; omitted configuration preserves the supervisor
- * derivation used by existing workflows.
+ * The persona and optional guidance used by engine-synthesized conflict and
+ * terminal adjudication steps. The loader resolves explicit configuration
+ * eagerly; omitted configuration preserves the supervisor derivation used by
+ * existing workflows. provider/model are not workflow-configurable: the
+ * `terminal-adjudicator` seat in runtime.yaml names them, and an unassigned seat
+ * falls back to the ordinary resolution.
  */
 export interface FindingContractAdjudicatorConfig {
   persona: string;
@@ -298,8 +297,6 @@ export interface FindingContractAdjudicatorConfig {
   personaDisplayName?: string;
   providerRoutingPersonaKey?: string;
   instruction?: string;
-  provider?: ProviderType;
-  model?: string;
 }
 
 /**

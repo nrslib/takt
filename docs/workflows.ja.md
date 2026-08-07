@@ -570,24 +570,36 @@ selector 実行時に次のいずれかが成立すると main agent 起動前�
 - `takt workflow preview` は dynamic pool 名、候補 ID、参照 facet、source を表示します。
 - builtin の ja/en pool を提供する場合、候補 ID 集合を一致させます。
 
-### Finding Contract manager の provider/model
+### Finding Contract 合成ロールの provider/model
 
-`finding_contract.manager` では、合成 Finding Manager step 専用の provider と model を指定できます。
+workflow に provider や model の名前は書きません。`finding_contract.manager` と
+`finding_contract.adjudicator` は `provider` / `model` フィールドを受け付けず、strict スキーマなので
+書き残しはロード時に拒否されます。宛先は `runtime.yaml` の `internal_agents` seat で指名します。
 
 ```yaml
-finding_contract:
-  manager:
-    persona: findings-manager
-    instruction: findings-manager
-    output_contract: findings-manager
-    provider: codex
-    model: gpt-5.5
+# runtime.yaml
+provider:
+  profiles:
+    strong: { provider: codex, model: gpt-5.5 }
+  targets:
+    internal_agents:
+      findings-manager:     { profile: strong }
+      terminal-adjudicator: { profile: strong }
+      loop-judge:           { profile: strong }
+      escalation-reviewer:  { profile: strong }
+      intake-normalizer:    { profile: strong }
 ```
 
 レポートはnormalizationより先に保存され、normalizerにはその1件のレポートだけが
 toolなしの新規sessionで渡されます。
 
-指定した値は Finding Manager の step レベル `provider` / `model` として扱われます。CLI と環境変数の明示 override は、これらより高い優先順位を維持します。manager の値は `provider_routing`、deprecated の `persona_providers.findings-manager`、effective auto routing、workflow/project/global fallback より優先されます。両方とも未指定の場合、manager は通常の workflow step provider/model 解決を維持します。`provider` だけを指定すると、下位優先度の model fallback は停止し、選択した provider 自身のデフォルトを使います。明示 model が必須の provider では検証エラーになります。
+**seat の指定はすべて任意です。** 未指定の seat は、そのロールが従来から使ってきた既定解決
+（persona routing → workflow → project → global → provider 既定。正規化係と格上げ枠では
+レビュアー profile の `escalate` 連鎖も含む）へそのまま落ちます。指定した seat はそのロールの
+step レベル `provider` / `model` として扱われ、`provider_routing`、deprecated の
+`persona_providers`、effective auto routing、workflow/project/global fallback より優先されます。
+CLI と環境変数の明示 override はそれより高い優先順位を維持します。provider だけを指名した seat は
+下位優先度の model fallback を止めるため、provider と model が食い違う組み合わせにはなりません。
 
 ### Finding Contract の provisional finding と完了ゲート
 
@@ -893,7 +905,7 @@ workflow レベルの自動 provider ルーティングです。AI の `router`�
 
 ### `finding_contract`
 
-workflow の Finding Contract を宣言します（実行時のセマンティクスは前述の Finding Contract 各節を参照）。`ledger_path`、`raw_findings_path`、`manager` は必須です。`manager` は `persona`、`instruction`、`output_contract` が必須で、`provider` / `model` は任意です。任意の予算として `stop_budget`（`max_rounds`、デフォルト 40。`max_minutes` は未指定時は時間上限なし）と `review_budget`（`max_review_rounds`）を指定できます。
+workflow の Finding Contract を宣言します（実行時のセマンティクスは前述の Finding Contract 各節を参照）。`ledger_path`、`raw_findings_path`、`manager` は必須です。`manager` は `persona`、`instruction`、`output_contract` が必須で、`policy` / `knowledge` の追加は任意です。`manager` も `adjudicator` も `provider` / `model` フィールドは受け付けません（runtime.yaml の `findings-manager` / `terminal-adjudicator` seat で指名します）。任意の予算として `stop_budget`（`max_rounds`、デフォルト 40。`max_minutes` は未指定時は時間上限なし）と `review_budget`（`max_review_rounds`）を指定できます。
 
 ```yaml
 finding_contract:

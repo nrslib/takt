@@ -3517,7 +3517,7 @@ describe('WorkflowEngine structured caller defaults', () => {
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);
   });
 
-  it('finding_contract.manager の provider/model は personaProviders より優先して manager 実行へ渡す', async () => {
+  it('findings-manager seat は personaProviders より優先して manager 実行へ渡す', async () => {
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
       options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
       if (persona === 'findings-manager') {
@@ -3586,8 +3586,6 @@ describe('WorkflowEngine structured caller defaults', () => {
           persona: 'findings-manager',
           instruction: 'findings-manager',
           outputContract: 'findings-manager',
-          provider: 'codex',
-          model: 'gpt-5.5',
         },
         adjudicator: { persona: 'supervisor' },
       },
@@ -3619,6 +3617,7 @@ describe('WorkflowEngine structured caller defaults', () => {
       projectCwd: cwd,
       provider: 'claude',
       reportDirName: 'test-report-dir',
+      internalAgentSeats: { findingsManager: { provider: 'codex', model: 'gpt-5.5' } },
       personaProviders: {
         'findings-manager': {
           provider: 'opencode',
@@ -3642,7 +3641,7 @@ describe('WorkflowEngine structured caller defaults', () => {
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(3);
   });
 
-  it('finding_contract.manager 未指定時は workflow provider/model fallback を manager 実行へ渡す', async () => {
+  it('findings-manager seat 未指定時は workflow provider/model fallback を manager 実行へ渡す', async () => {
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
       options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
       if (persona === 'findings-manager') {
@@ -3719,7 +3718,7 @@ describe('WorkflowEngine structured caller defaults', () => {
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(3);
   });
 
-  it('finding_contract.manager 未指定時は provider_routing.personas を manager 実行へ渡す', async () => {
+  it('findings-manager seat 未指定時は provider_routing.personas を manager 実行へ渡す', async () => {
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
       options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
       if (persona === 'findings-manager') {

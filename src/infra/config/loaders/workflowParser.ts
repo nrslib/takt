@@ -190,8 +190,6 @@ function resolveFindingContractAdjudicator(
     ...(routingKey ? { providerRoutingPersonaKey: routingKey } : {}),
     ...(resolvedPersona.personaPath ? { personaPath: resolvedPersona.personaPath } : {}),
     instruction: resolvedInstruction,
-    ...(raw.provider ? { provider: raw.provider } : {}),
-    ...(raw.model ? { model: raw.model } : {}),
   };
 }
 
@@ -287,8 +285,6 @@ function normalizeFindingContractConfig(
       outputContract,
       ...(policyContents === undefined ? {} : { policyContents }),
       ...(knowledgeContents === undefined ? {} : { knowledgeContents }),
-      ...(raw.manager.provider ? { provider: raw.manager.provider } : {}),
-      ...(raw.manager.model ? { model: raw.manager.model } : {}),
     },
     ...(adjudicator === undefined ? {} : { adjudicator }),
     // 有限停止予算（Finding Contract・対策バッチ B1 の拡張）: ここでは YAML に

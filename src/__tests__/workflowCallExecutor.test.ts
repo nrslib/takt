@@ -3,6 +3,7 @@ import { WorkflowCallExecutor } from '../core/workflow/engine/WorkflowCallExecut
 import type { AgentResponse, FindingContractConfig, FindingLedger, WorkflowConfig, WorkflowResumePointEntry, WorkflowState, WorkflowCallStep } from '../core/models/index.js';
 import type { WorkflowCallChildEngine, WorkflowRunResult, WorkflowSharedRuntimeState } from '../core/workflow/types.js';
 import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
+import type { InternalAgentSeats } from '../core/models/config-types.js';
 
 function makeResponse(overrides: Partial<AgentResponse> = {}): AgentResponse {
   return {
@@ -88,42 +89,19 @@ const FAKE_FINDING_CONTRACT: FindingContractConfig = {
     instruction: 'findings-manager',
     outputContract: 'findings-manager',
   },
-  adjudicator: {
-    persona: 'supervisor',
-    provider: 'codex',
-    model: 'strong-adjudicator',
-  },
+  adjudicator: { persona: 'supervisor' },
 };
 
-const FAKE_FINDING_CONTRACT_WITH_INVALID_MANAGER_PROVIDER: FindingContractConfig = {
-  manager: {
-    persona: 'findings-manager',
-    instruction: 'findings-manager',
-    outputContract: 'findings-manager',
-    // opencode は model 必須。manager.provider を直接指定すると workflow の
-    // provider/model フォールバックが働かなくなる（buildFindingManagerStep 参照）
-    // ため、この組み合わせは常に不正になる。
-    provider: 'opencode',
-  },
-  adjudicator: {
-    persona: 'supervisor',
-    provider: 'codex',
-    model: 'strong-adjudicator',
-  },
+// opencode は model 必須。seat で provider だけを指名すると workflow の provider/model
+// フォールバックが働かなくなる（internalAgentSeatOverride 参照）ため常に不正になる。
+const INVALID_MANAGER_SEATS: InternalAgentSeats = {
+  findingsManager: { provider: 'opencode' },
+  terminalAdjudicator: { provider: 'codex', model: 'strong-adjudicator' },
 };
 
-const FAKE_FINDING_CONTRACT_WITH_INVALID_ADJUDICATOR_PROVIDER: FindingContractConfig = {
-  manager: {
-    persona: 'findings-manager',
-    instruction: 'findings-manager',
-    outputContract: 'findings-manager',
-    provider: 'codex',
-    model: 'strong-manager',
-  },
-  adjudicator: {
-    persona: 'supervisor',
-    provider: 'opencode',
-  },
+const INVALID_ADJUDICATOR_SEATS: InternalAgentSeats = {
+  findingsManager: { provider: 'codex', model: 'strong-manager' },
+  terminalAdjudicator: { provider: 'opencode' },
 };
 
 describe('WorkflowCallExecutor', () => {
@@ -902,9 +880,9 @@ describe('WorkflowCallExecutor', () => {
   });
 
   it.each([
-    ['manager', FAKE_FINDING_CONTRACT_WITH_INVALID_MANAGER_PROVIDER],
-    ['adjudicator', FAKE_FINDING_CONTRACT_WITH_INVALID_ADJUDICATOR_PROVIDER],
-  ] as const)('子が継承した finding_contract.%s の provider/model が不正なとき、子 engine を作る前に fail-fast する', async (_role, findingContract) => {
+    ['findings-manager', INVALID_MANAGER_SEATS],
+    ['terminal-adjudicator', INVALID_ADJUDICATOR_SEATS],
+  ] as const)('継承した finding_contract の %s seat が不正なとき、子 engine を作る前に fail-fast する', async (_role, internalAgentSeats) => {
     const parentConfig = {
       name: 'parent',
       initialStep: 'delegate',
@@ -932,6 +910,7 @@ describe('WorkflowCallExecutor', () => {
       getOptions: () => ({
         projectCwd: '/tmp/project',
         reportDirName: 'run',
+        internalAgentSeats,
       }),
       getMaxSteps: () => 10,
       updateMaxSteps: vi.fn(),
@@ -950,7 +929,7 @@ describe('WorkflowCallExecutor', () => {
       state,
       setActiveResumePoint: vi.fn(),
       refreshFindingsState: vi.fn(),
-      findingContract,
+      findingContract: FAKE_FINDING_CONTRACT,
       findingLedgerStore: createFakeLedgerStore(),
     });
 

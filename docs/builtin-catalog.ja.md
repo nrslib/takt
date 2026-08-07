@@ -133,24 +133,23 @@ provider_routing:
 
 `final-gate` タグは `review` より後に適用されるため、通常レビューをローカルに保ったまま final gate を強いモデルへ戻せます。Finding Manager は `findings-manager`、loop judge は judge の persona 設定にかかわらず固定キー `loop-judge`、現行エンジンが自動導出する adjudicator は `supervisor` の persona routing を使います。`loop-judge` の routing がない場合、loop judge は cycle を発火させた step の解決済み provider/model を引き継ぎます。
 
-特定の custom workflow で Finding Manager と adjudicator を完全に固定する場合は、workflow YAML に直接指定できます。
+合成ロールを完全に固定する場合は、`runtime.yaml` の `internal_agents` seat を割り当てます。workflow YAML にこれらの provider/model フィールドはありません。
 
 ```yaml
-finding_contract:
-  manager:
-    persona: findings-manager
-    instruction: findings-manager
-    output_contract: findings-manager
-    provider: codex
-    model: <strong-model>
-  adjudicator:
-    persona: supervisor
-    instruction: adjudicate-finding-contract
-    provider: codex
-    model: <strong-model>
+# runtime.yaml
+provider:
+  profiles:
+    strong: { provider: codex, model: <strong-model> }
+  targets:
+    internal_agents:
+      findings-manager:     { profile: strong }
+      terminal-adjudicator: { profile: strong }
+      loop-judge:           { profile: strong }
+      escalation-reviewer:  { profile: strong }
+      intake-normalizer:    { profile: strong }
 ```
 
-実装上、provider と model はフィールドごとに、CLI/環境変数の明示 override → 実行時にマッチした promotion（通常の agent step のみ）→ step または parallel sub-step の provider/model（この直接指定を含む）→ `workflow_call` override → `provider_routing` の step/tag/persona → deprecated の `persona_providers` → auto routing → workflow → project → global → provider default の順で解決されます。parallel sub-step は promotion をサポートしないため、その場合は CLI/環境変数の明示 override の次に sub-step の直接指定が優先されます。`provider` だけを直接指定すると、下位優先度の model fallback は停止します。
+seat の指定はすべて任意です。書かなければそのロールは上記の persona routing 経路のままです。実装上、provider と model はフィールドごとに、CLI/環境変数の明示 override → 実行時にマッチした promotion（通常の agent step のみ）→ step または parallel sub-step の provider/model（seat 指定を含む）→ `workflow_call` override → `provider_routing` の step/tag/persona → deprecated の `persona_providers` → auto routing → workflow → project → global → provider default の順で解決されます。parallel sub-step は promotion をサポートしないため、その場合は CLI/環境変数の明示 override の次に sub-step の直接指定が優先されます。provider だけを指名した seat は、下位優先度の model fallback を停止します。
 
 `takt` を実行すると workflow をインタラクティブに選択できます。
 
@@ -234,4 +233,4 @@ persona_providers:
 
 この設定はすべての workflow にグローバルに適用されます。指定された persona を使用する step は、実行中の workflow に関係なく、対応する provider にルーティングされます。
 
-Finding Contract manager のルーティングには、workflow 内の `finding_contract.manager.provider` と `finding_contract.manager.model` を優先してください。台帳裁定者専用の明示設定であり、`persona_providers.findings-manager` より優先されます。
+Finding Contract manager のルーティングには、`runtime.yaml` の `provider.targets.internal_agents.findings-manager` seat を優先してください。台帳マネージャ専用の明示設定であり、`persona_providers.findings-manager` より優先されます。

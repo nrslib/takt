@@ -153,21 +153,20 @@ Team Leader はタスクを独立 part に分解する。`initial_max_parts` を
 
 `mode: finding_contract_fix` は Finding Contract の修正専用契約を有効にする。有効な `finding_contract` が必須で、part ごとの finding assignment、明示的な `continue | complete | replan` decision、全 actionable finding の `fixCoverage`、latest batch 全体で bounded な raw excerpt と検証済み finding 単位 claim digest を使用する。過去 batch は finding ごとの最新 digest だけを渡す。Team Leader 用の actionable summary は既存項目を維持したまま raw finding ID だけを除外する。worker の割当詳細と ledger には raw finding ID を残し、完全な provenance を保持する。assignment の `readPaths` は調査対象の目安となる作業ディレクトリからのリテラルな相対パスであり、completion の `changedPaths` は実際の変更ファイルを申告する。どちらにもワイルドカードの `*` と `?` は使えない。`[]` などその他の文字は展開されず、パスの一部として扱われる。part は通常の編集権限で動作し、変更が重なった場合は Team Leader が後続の repair または verify part を計画する。bounded index の `omittedPartCount` またはいずれかの `omittedChangedPathCount` が1以上なら `complete` にせず、後続の集約した repair または verify part で最終状態を確認する。`complete` は reviewer へ引き渡せるという step-local な判断で、ledger lifecycle は Finding Manager が更新する。遷移は `when(structured.fix.decision == "complete")` / `when(structured.fix.decision == "replan")` で定義する。
 
-### Finding Contract manager の provider/model
+### Finding Contract 合成ロールの provider/model
 
-`finding_contract.manager` は、Finding Manager 合成 step 専用の `provider` / `model` を指定できる。
+`finding_contract.manager` / `finding_contract.adjudicator` に `provider` / `model` は書けない（strict スキーマなので未知キーとして拒否される）。合成ロールの宛先は runtime.yaml の seat で指名する。
 
 ```yaml
-finding_contract:
-  manager:
-    persona: findings-manager
-    instruction: findings-manager
-    output_contract: findings-manager
-    provider: codex
-    model: gpt-5.5
+# runtime.yaml
+provider:
+  targets:
+    internal_agents:
+      findings-manager:     { profile: strong }
+      terminal-adjudicator: { profile: strong }
 ```
 
-指定値は step レベル provider/model として扱われ、`provider_routing`、deprecated の `persona_providers.findings-manager`、workflow 既定値、解決済み入力より優先される。両方とも未指定の場合は通常の workflow step provider/model 解決を使う。`provider` だけを指定すると下位優先度の model fallback は停止し、明示 model が必須の provider では検証エラーになる。
+seat の指定は任意である。指定した seat は step レベル provider/model として扱われ、`provider_routing`、deprecated の `persona_providers.findings-manager`、workflow 既定値より優先される（CLI/環境変数の明示 override だけが上位）。未指定の seat は通常の workflow step provider/model 解決へそのまま落ちる。
 
 ### Finding Contract provisional finding の明示的 route
 
