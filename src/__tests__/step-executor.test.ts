@@ -1308,9 +1308,13 @@ describe('StepExecutor', () => {
       });
 
       expect(resumed).toMatchObject({
+        // 終端メタデータは正規化係の応答から、本文はレビュアーのレポートから。
+        // 正規化係の終端メッセージが本文を置き換えると、後続 step の
+        // {previous_response} と snapshot にレビュー結果でない文字列が流れる。
         terminalResponse: expect.objectContaining({
           status,
-          content: `normalizer ${status}`,
+          content: harness.reportContent,
+          timestamp: new Date('2026-07-31T00:01:00.000Z'),
         }),
         reviewerProviderInfo: {
           provider: 'mock',

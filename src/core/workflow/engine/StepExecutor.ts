@@ -1214,7 +1214,25 @@ export class StepExecutor {
       });
       lastResult = attempt.result;
       if (attempt.kind === 'terminal') {
-        return attempt.result;
+        // 終端メタデータ（status / error / errorKind / rateLimitInfo / timestamp）は
+        // 正規化係の応答から取るが、本文はレビュアーのレポートを正本のまま残す。
+        // 正規化係の終端メッセージが本文を置き換えると、後続 step の
+        // {previous_response} と snapshot にレビュー結果でない文字列が流れる。
+        const terminal = attempt.result.response;
+        return {
+          ...attempt.result,
+          response: {
+            ...input.reportResponse,
+            content: input.reportContent,
+            status: terminal.status,
+            timestamp: terminal.timestamp,
+            ...(terminal.error === undefined ? {} : { error: terminal.error }),
+            ...(terminal.errorKind === undefined ? {} : { errorKind: terminal.errorKind }),
+            ...(terminal.rateLimitInfo === undefined
+              ? {}
+              : { rateLimitInfo: terminal.rateLimitInfo }),
+          },
+        };
       }
       if (attempt.kind === 'report_source') {
         return {
