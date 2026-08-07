@@ -907,6 +907,46 @@ finding_contract:
     max_rounds: 40
 ```
 
+### レビュアーの差し戻し（言い直し slot）
+
+レビュアー由来の未決着（言い直し待ちの intake anomaly、および protocol-anomaly /
+verdict-claims-mismatch のように後続の完全レビュー成立でしか決着しない anomaly）は、
+**次のレビューラウンドへ回さず、同じラウンド内でそのレビュアーへ直接差し戻します**。
+workflow YAML には何も現れません（step ではありません）。
+
+- 発火点は「レビューラウンドの findings-manager 取り込みが終わった直後」です。対象の
+  anomaly を持つレビュアーごとに、そのレビュアーの persona / policy / knowledge /
+  MCP サーバ / report 形式を継承した合成ステップで provider call を1回発行します。
+- 1回の差し戻しは「呼び出し → 正規化 → manager 取り込み」で1パスです。まだ言い直し待ちが
+  残っていれば同じラウンド内で次のパスへ進み、提示予算（`presentationLimit` =
+  `review_budget.max_review_rounds`）の範囲で反復します。提示は従来の
+  「次ラウンドでの提示」と同じく `presentedReviewerAnomalyIds` へ計上されますが、
+  slot のパスは `review_budget` / `stop_budget` のラウンドとしては数えません —
+  レビューラウンドの内側の差し戻しであって新しいレビューラウンドではないためです。
+- 言い直し要求は**1呼び出しあたり10件まで**です。超過分は同じラウンドの次のパスへ回ります。
+- 照合ゲートが要求する claim 本文を選べない観測（description も抜粋も持たない）は、
+  言い直し要求を作りません。どう答えても受理されないためです。この anomaly は提示を
+  1回も行わずにその場で終端し（`undemandable_claim_atom` /
+  `non_claim_observation_rejected`）、以後ゲートを塞ぎません。
+- 終端経路の整理: intake anomaly は「言い直しの照合成立による昇格」「提示予算の枯渇」
+  「言い直しで要求できる claim 本文が無い」のいずれかで終端します。後続の完全レビュー
+  成立による取り下げ（withdrawal）が終端になるのは、言い直し予算を持たない非 intake
+  anomaly（protocol-anomaly / verdict-claims-mismatch など）だけです。
+- 後続の完全レビュー成立でしか決着しない anomaly を持つレビュアーには、言い直し専用では
+  なく**完全な再レビュー**を発行します。レビュアー自身の指示文とツール集合をそのまま使い、
+  言い直し要求があれば「レビューに加えてこれにも答える」形で同じ呼び出しに同梱します。この枠は
+  1ラウンドにつきレビュアーごと1回までで、以降のパスは言い直し専用へ格下げされます。
+  取り下げの根拠になるのは完全な再レビューだけで、言い直し専用の呼び出しは根拠になりません。
+- 「この anomaly を言い直した」と申告した主張が照合ゲートを通らなかった場合、新規の
+  product finding は作りません。当該 anomaly への再試行として記録します。
+
+`withdrawn_by_subsequent_review` は「その anomaly を出したレビュアーが後続の完全な
+レビューを成立させた」ことによる決着であって、元の観測の当否を判定したものではありません。
+同じ検証不能な主張を出し続けるレビュアーでは、毎ラウンド「前の episode を取り下げて
+同じ stable key の新しい episode を記録する」循環になります。これは意図した読み方です —
+台帳は全 episode を監査記録として残し、未決着はつねに1件で、循環は review-integrity 予算が
+有界にします。主張が受理されたという意味ではありません。
+
 ### 格上げ再レビュー（`escalate`）
 
 各 intake anomaly の**最後の1回**の言い直し提示（`review_budget.max_review_rounds` から決まる `presentationLimit` と同じ ordinal の提示）を、元のレビュアーへもう一度返す代わりに、より強いモデルへ回せます。workflow 側に設定は必要ありません。レビュアーが `escalate` を宣言した `runtime.yaml` の profile へ解決されたときに有効になり、格上げ先モデルはその `escalate` が指す profile です。
@@ -930,13 +970,13 @@ provider:
 
 - 格上げレビュアーは owner レビュアーの完全な代打です。persona / policy / knowledge / MCP サーバ / report 形式を、その回に実際に走った step のもの（動的に選択された facet を含む）からそのまま継承し、変わるのはモデル（`escalate` 先）と指示文だけです。指示文は通常のレビュー手順ではなく、エンジンが持つ「言い直しのみ」の契約になります。専用の persona facet も workflow 設定ブロックもありません。
 - persona を owner と共有する帰結として、格上げの主張は lifecycle 上 **owner のレビュアー識別**を引き継ぎます（別人の新規観測として着地せず、owner の finding lifecycle を継続します）。異なるのは publication identity だけです（reviewer キー `escalation-reviewer` と owner 別の report 名）。
-- workflow の step では**ありません**。`findings-manager` や terminal adjudication と同じくエンジンが合成して直接 provider call を発行し、その出力を通常の取り込み経路（正規化、canonical publication、byte 一致検証、昇格の対応づけ）へ流します。実行は全 owner レビュアーの publication が揃ったあと・manager の取り込み前です。
-- 同じラウンドで複数のレビュアーが最終提示に到達した場合、エンジンは owner ごとに request をまとめ、owner ごとに1回ずつ呼び出します。1回の格上げ呼び出しが持つ persona と report 形式は常に1レビュアー分だけです。
-- reviewer キーはどの格上げ呼び出しでも固定文字列 `escalation-reviewer` です。この値が raw finding の `reviewer` と publication identity になります。owner は anomaly の `presentationOwnerReviewer` と言い直しの対応づけを通じて保持されます。レポートは owner ごとに `escalation-reviewer-<owner-step>.md` として出力されます。
+- workflow の step では**ありません**。言い直し slot の最終枠として、`findings-manager` や terminal adjudication と同じくエンジンが合成して直接 provider call を発行し、その出力を通常の取り込み経路（正規化、canonical publication、byte 一致検証、昇格の対応づけ）へ流します。
+- 同じパスで複数のレビュアーが最終提示に到達した場合、エンジンは owner ごとに request をまとめ、owner ごとに1回ずつ呼び出します。1回の格上げ呼び出しが持つ persona と report 形式は常に1レビュアー分だけです。
+- reviewer キーはどの格上げ呼び出しでも固定文字列 `escalation-reviewer` です。この値が raw finding の `reviewer` と publication identity になります。owner は anomaly の `presentationOwnerReviewer` と言い直しの対応づけを通じて保持されます。レポートは owner とパスごとに `escalation-reviewer-<owner-step>-<pass>.md` として出力されます（言い直し slot の owner 宛呼び出しは `followup-<owner-step>-<pass>.md`）。
 - Phase 1 は読み取り専用で動きます。格上げレビュアーはリポジトリを自分で読んで byte 一致の引用を作れますが、書き込みはできません。
 - Finding Contract workflow では `escalation-reviewer` は常に**予約 step 名**です。同名の step（parallel sub-step を含む）を持つ workflow は読み込みに失敗します。
 - `presentationLimit == 1` の場合、最初で最後の1回がそのまま格上げ提示になります。profile に `escalate` が無いレビュアーは、最後の1回も従来どおり元のレビュアーへ戻ります。
-- 格上げレビューが publication 成立前に失敗した場合は何も計上せず、次のラウンドで同じ escalation request を再発行します。有限停止は従来どおり workflow の `max_steps` が保証します。
+- 格上げレビューが publication 成立前に失敗した場合は何も計上せず、次の機会に同じ escalation request を再発行します。有限停止は提示予算と workflow の `max_steps` が保証します。
 
 ### `interactive_mode`
 

@@ -914,6 +914,53 @@ finding_contract:
     max_rounds: 40
 ```
 
+### Reviewer follow-up (the restatement slot)
+
+Everything a reviewer left unresolved — intake anomalies waiting for a restatement, and
+anomalies such as `protocol-anomaly` / `verdict-claims-mismatch` that only settle when
+that reviewer produces a subsequent complete review — is handed **back to that reviewer
+inside the same round**, instead of riding along on the next review round. None of this
+appears in workflow YAML; it is not a step.
+
+- It fires right after the review round's `findings-manager` ingest. For each reviewer
+  that owns such an anomaly, the engine issues one provider call through a synthesized
+  step that inherits that reviewer's persona, policy, knowledge, MCP servers, and report
+  format.
+- One follow-up is one pass: call → normalization → manager ingest. If restatements are
+  still pending, the next pass runs in the same round, up to the presentation budget
+  (`presentationLimit` = `review_budget.max_review_rounds`). A presentation still counts
+  into `presentedReviewerAnomalyIds` exactly as a "next round" presentation did before,
+  but a slot pass is **not** counted as a `review_budget` / `stop_budget` round — it is a
+  hand-back inside the review round, not a new review round.
+- A single call carries **at most 10 restatement requests**; the rest move to the next
+  pass of the same round.
+- An observation from which the correspondence gate cannot select a claim body (no
+  description and no excerpt) gets no restatement request at all — no answer could ever
+  be accepted. Such an anomaly is terminated in place without any presentation
+  (`undemandable_claim_atom` / `non_claim_observation_rejected`) and stops blocking the
+  gate.
+- Termination paths, precisely: an intake anomaly ends through a verified restatement
+  correspondence (promotion), through presentation-budget exhaustion, or because no claim
+  body could be demanded back. Withdrawal by a subsequent complete review terminates only
+  the non-intake anomalies (`protocol-anomaly`, `verdict-claims-mismatch`, …), which carry
+  no restatement budget.
+- A reviewer holding an anomaly that only settles by a subsequent complete review gets a
+  **full re-review** rather than a restatement-only call: it keeps the reviewer's own
+  instruction and tool set, and pending restatement requests ride along in the same call as
+  "answer these as well". That slot fires at most once per reviewer per round; later passes
+  fall back to restatement-only. Only a full re-review counts as the subsequent complete
+  review that withdraws such an anomaly — a restatement-only call never does.
+- A claim that declares it restates a given anomaly but fails the correspondence gate no
+  longer mints a new product finding; it is recorded as a retry of that anomaly.
+
+`withdrawn_by_subsequent_review` settles an anomaly because the reviewer that raised it
+produced a later complete review, not because the underlying observation was judged sound
+or unsound. A reviewer that keeps making the same unverifiable claim therefore produces a
+withdraw-and-refile cycle: each round withdraws the previous episode and records a new one
+under the same stable key. That is the intended reading — the ledger keeps every episode as
+an audit record, exactly one stays outstanding, and the review-integrity budget bounds the
+cycle. It is not a sign that the claim was accepted.
+
 ### Escalated re-review (`escalate`)
 
 The **last** restatement presentation of each intake anomaly (the presentation whose ordinal equals the anomaly's `presentationLimit`, derived from `review_budget.max_review_rounds`) can go to a stronger model instead of asking the original reviewer once more. There is nothing to configure in the workflow: escalation turns on when the reviewer resolves to a `runtime.yaml` profile that declares `escalate`, and the escalated model is that `escalate` target.
@@ -937,13 +984,13 @@ provider:
 
 - The escalated reviewer is the owning reviewer's stand-in: it inherits that reviewer's persona, policy, knowledge, MCP servers, and report format (from the step as it actually ran, including dynamically selected facets). Only two things change — the model (the `escalate` target) and the instruction, which is the engine's restatement-only contract instead of the reviewer's normal review procedure. There is no escalation persona facet and no workflow configuration block.
 - Because it shares the owner's persona, an escalated claim carries the **owner's reviewer identity** for lifecycle purposes: it continues the owner's finding lifecycle instead of landing as a different observer's new observation. Only the publication identity differs (reviewer key `escalation-reviewer`, per-owner report name).
-- It is **not** a workflow step. Like `findings-manager` and terminal adjudication, the engine synthesizes it and issues the provider call directly, then feeds its output through the ordinary intake pipeline (normalization, canonical publication, byte-exact verification, promotion matching). It runs after every owning reviewer's publication has landed and before the manager ingests them.
-- When several reviewers reach their final presentation in the same round, the engine groups the requests by owning reviewer and issues one call per owner, so each escalated call carries exactly one reviewer's persona and report format.
-- The reviewer key is the fixed string `escalation-reviewer` for every escalated call. That key is the raw findings' `reviewer` value and the publication identity; the owning reviewer stays recorded through the anomaly's `presentationOwnerReviewer` and the restatement correspondence. Reports are written per owner as `escalation-reviewer-<owner-step>.md`.
+- It is **not** a workflow step. It is the restatement slot's final slot: like `findings-manager` and terminal adjudication, the engine synthesizes it and issues the provider call directly, then feeds its output through the ordinary intake pipeline (normalization, canonical publication, byte-exact verification, promotion matching).
+- When several reviewers reach their final presentation in the same pass, the engine groups the requests by owning reviewer and issues one call per owner, so each escalated call carries exactly one reviewer's persona and report format.
+- The reviewer key is the fixed string `escalation-reviewer` for every escalated call. That key is the raw findings' `reviewer` value and the publication identity; the owning reviewer stays recorded through the anomaly's `presentationOwnerReviewer` and the restatement correspondence. Reports are written per owner and pass as `escalation-reviewer-<owner-step>-<pass>.md` (the slot's owner-side call writes `followup-<owner-step>-<pass>.md`).
 - Phase 1 runs read-only: the escalated reviewer can read the repository to produce byte-exact quotes, but cannot write.
 - `escalation-reviewer` is a **reserved step name** in every Finding Contract workflow; a workflow that also declares a step (or parallel sub-step) with that name fails to load.
 - With `presentationLimit == 1`, the first and only presentation is already the escalated one. A reviewer whose profile declares no `escalate` keeps the final presentation with the original reviewer.
-- When the escalated review fails before its publication lands, nothing is counted and the same escalation request is re-issued next round; the workflow's `max_steps` still bounds the run.
+- When the escalated review fails before its publication lands, nothing is counted and the same escalation request is re-issued at the next opportunity; the presentation budget and the workflow's `max_steps` bound the run.
 
 ### `interactive_mode`
 
