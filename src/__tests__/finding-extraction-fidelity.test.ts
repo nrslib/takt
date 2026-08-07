@@ -112,6 +112,40 @@ describe('reassertsReviewerAnomalyId の null（生成 schema 準拠形）', () 
     expect(item.candidate.reassertsReviewerAnomalyId).toBe('anomaly-1');
   });
 
+  it('should keep the candidate when reassertsReviewerAnomalyId is absent or undefined', () => {
+    // required を緩く扱う provider はキーごと省略する。null 修正の前後で
+    // この経路が変わっていないことを固定する。
+    for (const candidate of [
+      { ...COMPLETE_CANDIDATE },
+      { ...COMPLETE_CANDIDATE, reassertsReviewerAnomalyId: undefined },
+    ]) {
+      const projected = projectReviewerRawStructuredOutputWithEnvelope({
+        rawFindings: [{ rawExcerpt: CLAIM_EXCERPT, candidate }],
+      }).structuredOutput;
+
+      expect(hasRawFindingExtractionFidelityFailure(projected)).toBe(false);
+      const item = (projected.rawFindings as { candidate: Record<string, unknown> }[])[0]!;
+      expect(Object.hasOwn(item.candidate, 'reassertsReviewerAnomalyId')).toBe(false);
+      expect(() => ReviewerRawFindingSchema.parse(item)).not.toThrow();
+    }
+  });
+
+  it('should collapse the candidate when reassertsReviewerAnomalyId is a non-string value', () => {
+    // null / undefined だけを「echo なし」として通し、それ以外の非文字列は
+    // 従来どおり shape 不正として candidate を破棄する。
+    for (const invalid of [1, 0, true, false, {}, [], { id: 'anomaly-1' }]) {
+      const projected = projectReviewerRawStructuredOutputWithEnvelope({
+        rawFindings: [{
+          rawExcerpt: CLAIM_EXCERPT,
+          candidate: { ...COMPLETE_CANDIDATE, reassertsReviewerAnomalyId: invalid },
+        }],
+      }).structuredOutput;
+
+      expect(projected.rawFindings).toEqual([{ rawExcerpt: CLAIM_EXCERPT, candidate: null }]);
+      expect(hasRawFindingExtractionFidelityFailure(projected)).toBe(true);
+    }
+  });
+
   it('should collapse the candidate when reassertsReviewerAnomalyId is an empty string', () => {
     const projected = projectReviewerRawStructuredOutputWithEnvelope({
       rawFindings: [{
