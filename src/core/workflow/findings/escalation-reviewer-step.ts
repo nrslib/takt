@@ -1,102 +1,81 @@
-import type {
-  AgentWorkflowStep,
-  FindingContractConfig,
-  WorkflowConfig,
-} from '../../models/types.js';
+import type { AgentWorkflowStep } from '../../models/types.js';
+import type { ProviderEscalationTarget } from '../../models/config-types.js';
 import { FINDING_ESCALATION_REVIEWER_ROUTING_KEY } from '../../models/finding-types.js';
 
 /**
- * escalation reviewer が公開する report 名。owner reviewer の report 名を
- * 継承すると、別 identity の publication が同じ report ファイルへ別内容を
- * 公開して衝突する。escalation_reviewer.output_contract の有無によらず固定する。
+ * 格上げ再レビューが公開する report 名。owner reviewer の report 名を継承すると
+ * 別 identity の publication が同じ report ファイルへ別内容を公開して衝突する。
+ * owner ごとに1呼び出しへ分けるため、report 名も owner で分ける。
  */
-export const FINDING_ESCALATION_REVIEWER_REPORT_NAME = FINDING_ESCALATION_REVIEWER_ROUTING_KEY;
-
-interface FindingEscalationReviewerStepInput {
-  contract: FindingContractConfig;
-  workflowProvider?: WorkflowConfig['provider'];
-  workflowModel?: WorkflowConfig['model'];
+export function findingEscalationReviewerReportName(ownerStepName: string): string {
+  return `${FINDING_ESCALATION_REVIEWER_ROUTING_KEY}-${ownerStepName}`;
 }
 
 /**
- * escalation_reviewer.output_contract を省略したときに継承する report 形式。
- * FC reviewer step は必ず1件の output contract を持つ（publication 準備の前提）
- * ため、先頭の owner reviewer から決定的に取る。
+ * escalation reviewer は owner レビュアーの完全な代打であり、専用の persona も
+ * workflow 設定ブロックも持たない。owner step の persona / policy / knowledge /
+ * MCP サーバ / report 形式をそのまま継承し、変わるのは provider/model（owner が
+ * 解決された profile の `escalate` 先）と、エンジンが注入する restatement-only
+ * 指示だけ。`ownerStep` には dynamic facets 適用後の実行用ステップを渡すこと —
+ * 設定上の step を渡すと、その回の owner が実際に使った facet 集合と代打の
+ * 判断基準がずれる。
+ *
+ * persona を owner と共有する帰結として、格上げが出した raw finding の
+ * reviewerStableKey は owner のものと一致する。これは意図した挙動で、代打の
+ * 主張が owner の lifecycle をそのまま継ぐ（別人の新規観測として二重計上され
+ * ない）ために必要。publication identity だけは reviewer キー
+ * 'escalation-reviewer' と owner 別 report 名で owner と分かれる。
+ *
+ * workflow の step ではなく、findings-manager / terminal adjudication と同じく
+ * engine が直接 provider call を発行するための AgentWorkflowStep で、
+ * config.steps へは注入しない。
  */
-export function requireEscalationOwnerOutputContractFormat(
-  ownerReviewerSteps: readonly AgentWorkflowStep[],
-): string {
-  const format = ownerReviewerSteps[0]?.outputContracts?.[0]?.format;
-  if (format === undefined) {
+export function buildFindingEscalationReviewerStep(input: {
+  ownerStep: AgentWorkflowStep;
+  escalation: ProviderEscalationTarget;
+}): AgentWorkflowStep {
+  const owner = input.ownerStep;
+  const reportFormat = owner.outputContracts?.[0]?.format;
+  if (reportFormat === undefined) {
     throw new Error(
-      'Finding contract reviewer has no output contract to inherit for escalation review',
+      `Finding contract reviewer "${owner.name}" has no output contract to inherit for escalation review`,
     );
   }
-  return format;
-}
-
-/**
- * provider/model 解決の検証だけに使う escalation reviewer ステップ。
- * report 形式は実行時に owner step から継承するため検証には不要で、
- * 検証のためだけの空ダミー契約を実行用 builder へ持ち込まないよう分けている。
- *
- * provider/model の優先順位は adjudicator と同形（直接指定 > workflow）。
- * routing key は persona 名ではなく固定の 'escalation-reviewer' で、
- * provider_routing.personas はこのキーで解決する。
- */
-export function buildFindingEscalationReviewerPreflightStep(
-  input: FindingEscalationReviewerStepInput,
-): AgentWorkflowStep {
-  const escalationReviewer = input.contract.escalationReviewer;
-  if (escalationReviewer === undefined) {
-    throw new Error('Finding escalation review requires finding_contract.escalation_reviewer');
+  if (owner.persona === undefined) {
+    throw new Error(
+      `Finding contract reviewer "${owner.name}" has no persona to inherit for escalation review`,
+    );
   }
-  const providerIsDirect = escalationReviewer.provider !== undefined;
-  const modelIsDirect = escalationReviewer.model !== undefined;
+  const reportName = findingEscalationReviewerReportName(owner.name);
   return {
     kind: 'agent',
     name: FINDING_ESCALATION_REVIEWER_ROUTING_KEY,
     engineSynthesized: true,
-    persona: escalationReviewer.persona,
-    personaDisplayName: escalationReviewer.personaDisplayName ?? FINDING_ESCALATION_REVIEWER_ROUTING_KEY,
-    providerRoutingPersonaKey: escalationReviewer.providerRoutingPersonaKey,
-    // owner reviewer と persona を共有していてもセッションを混ぜない。
-    sessionKey: FINDING_ESCALATION_REVIEWER_ROUTING_KEY,
-    ...(escalationReviewer.personaPath !== undefined ? { personaPath: escalationReviewer.personaPath } : {}),
-    provider: providerIsDirect ? escalationReviewer.provider : input.workflowProvider,
-    providerSpecified: providerIsDirect,
-    model: modelIsDirect ? escalationReviewer.model : providerIsDirect ? undefined : input.workflowModel,
-    modelSpecified: modelIsDirect || providerIsDirect,
-    instruction: escalationReviewer.instruction ?? escalationReviewer.persona,
+    persona: owner.persona,
+    ...(owner.personaPath === undefined ? {} : { personaPath: owner.personaPath }),
+    personaDisplayName: owner.personaDisplayName,
+    providerRoutingPersonaKey: FINDING_ESCALATION_REVIEWER_ROUTING_KEY,
+    // owner と persona を共有するため、セッションを owner のものと混ぜない。
+    sessionKey: reportName,
+    ...(owner.policyContents === undefined ? {} : { policyContents: owner.policyContents }),
+    ...(owner.knowledgeContents === undefined ? {} : { knowledgeContents: owner.knowledgeContents }),
+    // MCP 経由でしか読めない証拠を owner が引用していた場合、代打がそれを
+    // 再取得できないと格上げの意味がないので MCP サーバも継承する。
+    ...(owner.mcpServers === undefined ? {} : { mcpServers: owner.mcpServers }),
+    // 格上げ先は解決済みの provider/model。以降の routing 層で再解決させない。
+    provider: input.escalation.provider,
+    providerSpecified: true,
+    model: input.escalation.model,
+    modelSpecified: true,
+    ...(input.escalation.providerOptions === undefined
+      ? {}
+      : { providerOptions: input.escalation.providerOptions }),
+    // 手順はエンジンが注入する restatement-only 契約が担う。owner の通常レビュー
+    // 手順を持ち込むと「言い直しだけ」の契約と矛盾する。
+    instruction: owner.persona,
     session: 'refresh',
     edit: false,
     rules: [],
-  };
-}
-
-/**
- * escalation reviewer の実行用合成ステップ。workflow の step ではなく、
- * findings-manager / terminal adjudication と同じく engine が直接 provider call を
- * 発行するための AgentWorkflowStep で、config.steps へは注入しない。
- *
- * report 形式（outputContracts[].format）だけは owner reviewer step から継承でき、
- * report 名は衝突回避のため常に FINDING_ESCALATION_REVIEWER_REPORT_NAME。
- * 出力 strategy は owner step によらず常に structured raw findings
- * （呼び出し側が withFindingContractStructuredOutput で付与する）。
- */
-export function buildFindingEscalationReviewerStep(
-  input: FindingEscalationReviewerStepInput & {
-    /** owner reviewer step の report 形式。escalation_reviewer.output_contract 未設定時に継承する。 */
-    ownerOutputContractFormat: string;
-  },
-): AgentWorkflowStep {
-  const step = buildFindingEscalationReviewerPreflightStep(input);
-  const configuredOutputContract = input.contract.escalationReviewer?.outputContract;
-  return {
-    ...step,
-    outputContracts: [{
-      name: FINDING_ESCALATION_REVIEWER_REPORT_NAME,
-      format: configuredOutputContract ?? input.ownerOutputContractFormat,
-    }],
+    outputContracts: [{ name: reportName, format: reportFormat }],
   };
 }

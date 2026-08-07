@@ -303,34 +303,11 @@ export interface FindingContractAdjudicatorConfig {
 }
 
 /**
- * escalation reviewer の provider routing persona key。ユーザーが設定した
- * persona 名ではなくこの固定キーで routing を解決し、publication identity の
- * reviewer キーもこの値になる（restatement request との識別子はこれだけ）。
+ * 格上げ再レビューの reviewer 識別子。publication identity の reviewer キーであり、
+ * restatement request が owner への言い直しか格上げかを見分ける唯一の判別子。
+ * ユーザー設定ではなくエンジン内部の固定値で、実 step 名としては予約する。
  */
 export const FINDING_ESCALATION_REVIEWER_ROUTING_KEY = 'escalation-reviewer';
-
-/**
- * 言い直し予算の最終1回を元レビュアーではなく格上げレビュアーへ回すための設定。
- * workflow が finding_contract.escalation_reviewer を書いたときだけ解決され、
- * 省略時は最終1回も元レビュアーへの restatement のままになる。
- */
-export interface FindingContractEscalationReviewerConfig {
-  persona: string;
-  personaPath?: string;
-  personaDisplayName?: string;
-  /** 常に 'escalation-reviewer'。persona 名と routing key を混同させない。 */
-  providerRoutingPersonaKey: typeof FINDING_ESCALATION_REVIEWER_ROUTING_KEY;
-  /** 省略時は persona 本体を instruction として使う（adjudicator と同形）。 */
-  instruction?: string;
-  /**
-   * 解決済みの report 形式。省略時は owner reviewer step の report 形式を継承する。
-   * 出力 strategy は owner step によらず常に structured raw findings で、
-   * ここで変わるのは report 本文の形式だけ。
-   */
-  outputContract?: string;
-  provider?: ProviderType;
-  model?: string;
-}
 
 /**
  * 有限停止予算の
@@ -368,8 +345,6 @@ export interface FindingContractConfig {
   manager: FindingContractManagerConfig;
   /** Present when the supervisor persona was resolved for the finding-conflict-adjudication synthetic step. */
   adjudicator?: FindingContractAdjudicatorConfig;
-  /** Present only when the workflow declares finding_contract.escalation_reviewer; see FindingContractEscalationReviewerConfig. */
-  escalationReviewer?: FindingContractEscalationReviewerConfig;
   /** Optional per-workflow override of the bounded stop budget; see FindingContractStopBudgetConfig. */
   stopBudget?: FindingContractStopBudgetConfig;
   /** Optional per-workflow override of the review-integrity re-review budget; see FindingContractReviewBudgetConfig. */
@@ -1643,8 +1618,16 @@ export interface ReviewerAnomalyReviewWithdrawalSettlement {
   /**
    * 決着の根拠になった後続レビューの全件。取り下げは「その anomaly の観測者
    * 全員が後続レビューを登録した」ときにだけ成立するため、記録も観測者全員分を
-   * 持つ(reviewer で binary 順ソート済み・重複なし・非空)。監査時に
-   * anomaly.reviewers と突き合わせるだけで根拠の網羅性を検証できる。
+   * 持つ(非空、`(reviewer, publicationId)` で binary 順ソート済み・重複なし)。
+   * 監査時に reviewer 集合を anomaly.reviewers と突き合わせるだけで根拠の
+   * 網羅性を検証できる。
+   *
+   * 1レビュアー枠が同一ラウンドに複数の publication を登録することがある
+   * — 格上げ再レビューは owner ごとに1呼び出しへ分かれるが reviewer キーは
+   * 固定の 'escalation-reviewer' なので、owner が2人いれば同じ reviewer キーで
+   * 2件の publication が成立する。したがって reviewer は重複し得る。重複を
+   * 潰して1件だけ残すと、監査記録がどの publication で決着したのかを
+   * 再構成できなくなる。
    */
   supersedingPublications: readonly {
     /** 後続レビューを登録したレビュアー(= anomaly.reviewers の要素)。 */

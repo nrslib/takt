@@ -26,47 +26,69 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function itemLostTheClaim(item: unknown): boolean {
+/** 退行の理由。undefined は「この item は退行していない」。 */
+function itemClaimLossReason(item: unknown): string | undefined {
   if (!isPlainObject(item)) {
-    return false;
+    return undefined;
   }
   const rawExcerpt = Reflect.get(item, 'rawExcerpt');
   if (typeof rawExcerpt !== 'string' || rawExcerpt.length === 0) {
-    return false;
+    return undefined;
   }
   const candidate = Reflect.get(item, 'candidate');
   if (candidate === null || candidate === undefined) {
-    return true;
+    return 'candidate is null after projection';
   }
   if (!isPlainObject(candidate)) {
-    return false;
+    return undefined;
   }
-  return Reflect.get(candidate, 'description') === null;
+  return Reflect.get(candidate, 'description') === null
+    ? 'candidate description is null'
+    : undefined;
+}
+
+function rawFindingIdOf(item: unknown, index: number): string {
+  if (isPlainObject(item)) {
+    const rawFindingId = Reflect.get(item, 'rawFindingId');
+    if (typeof rawFindingId === 'string' && rawFindingId.length > 0) {
+      return rawFindingId;
+    }
+  }
+  return `#${index}`;
 }
 
 /**
- * `{ rawFindings: [...] }` を含む構造化出力（raw findings / publication のどちらでも
- * 同じ形）を受け取り、抽出忠実性の退行が1件でもあれば true を返す。
+ * 退行した item を「どの item がどの検証に落ちたか」の形で列挙する。
+ *
+ * 空配列は退行なし。エラーメッセージはこの列挙を必ず含める — 理由のない
+ * 「correction failed:」だけの表面化は、実走で失敗理由が空文字になる事故を
+ * 起こした（provider 応答の error / content が両方空になる経路がある）。
  */
-export function hasRawFindingExtractionFidelityFailure(
+export function describeRawFindingExtractionFidelityFailures(
   structuredOutput: unknown,
-): boolean {
+): readonly string[] {
   if (!isPlainObject(structuredOutput)) {
-    return false;
+    return [];
   }
   const rawFindings = Reflect.get(structuredOutput, 'rawFindings');
   if (!Array.isArray(rawFindings)) {
-    return false;
+    return [];
   }
-  return rawFindings.some(itemLostTheClaim);
+  const failures: string[] = [];
+  rawFindings.forEach((item, index) => {
+    const reason = itemClaimLossReason(item);
+    if (reason !== undefined) {
+      failures.push(`${rawFindingIdOf(item, index)}: ${reason}`);
+    }
+  });
+  return failures;
 }
 
 /**
- * 失敗の内訳（何番目の item が、candidate 全欠けか description 欠けか）を
- * 1行で返す。判定対象は projection 後の structuredOutput なので、モデルが
- * 出した生テキストだけを見ても失敗理由が分からない — projection が candidate を
- * null へ畳んだのか、モデルが本当に claim を落としたのかを切り分けるために
- * エラーメッセージへ載せる。
+ * 失敗の内訳（どの item が、candidate 全欠けか description 欠けか）を1行で返す。
+ * 判定対象は projection 後の structuredOutput なので、モデルが出した生テキストだけを
+ * 見ても失敗理由が分からない — projection が candidate を null へ畳んだのか、モデルが
+ * 本当に claim を落としたのかを切り分けるためにエラーメッセージへ載せる。
  */
 export function describeRawFindingExtractionFidelityFailure(
   structuredOutput: unknown,
@@ -78,16 +100,6 @@ export function describeRawFindingExtractionFidelityFailure(
   if (!Array.isArray(rawFindings)) {
     return 'projected structured output has no rawFindings array';
   }
-  const reasons = rawFindings.flatMap((item, index) => {
-    if (!itemLostTheClaim(item)) {
-      return [];
-    }
-    const candidate = isPlainObject(item) ? Reflect.get(item, 'candidate') : undefined;
-    return [`#${index}: ${
-      candidate === null || candidate === undefined
-        ? 'candidate is null after projection'
-        : 'candidate description is null'
-    }`];
-  });
+  const reasons = describeRawFindingExtractionFidelityFailures(structuredOutput);
   return `${reasons.length}/${rawFindings.length} projected items lost the claim (${reasons.join('; ')})`;
 }

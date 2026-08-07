@@ -18,6 +18,7 @@ import {
   applyWorkflowCallOverridesToPersonaProviders,
   applyWorkflowCallOverridesToProviderRouting,
   resolveWorkflowCallChildProviderModel,
+  type WorkflowCallProviderModel,
 } from '../workflow-call-provider-context.js';
 import {
   buildWorkflowResumePointEntry,
@@ -30,7 +31,6 @@ import { withWorkflowConfigErrorPath } from '../workflow-config-error.js';
 import { findWorkflowStepLocation } from '../workflow-step-location.js';
 import type {
   RuntimeStepResolution,
-  StepProviderInfo,
   StepRunResult,
   WorkflowCallChildEngine,
   WorkflowCallCompleteLifecycle,
@@ -132,6 +132,7 @@ export class WorkflowCallRunner {
     providerSource: WorkflowEngineOptions['providerSource'];
     model: string | undefined;
     modelSource: WorkflowEngineOptions['modelSource'];
+    providerEscalation: WorkflowEngineOptions['providerEscalation'];
     providerOptions: WorkflowEngineOptions['providerOptions'];
   } {
     const options = this.deps.getOptions();
@@ -155,6 +156,11 @@ export class WorkflowCallRunner {
       providerSource: providerInfo.providerSource,
       model: providerInfo.model,
       modelSource: providerInfo.modelSource,
+      // 親 workflow 自身の provider 宣言が勝った場合、engine 既定 profile の
+      // 格上げ先はもうその provider のものではないので引き継がない。
+      providerEscalation: providerInfo.providerSource === options.providerSource
+        ? options.providerEscalation
+        : undefined,
       providerOptions,
     };
   }
@@ -162,7 +168,7 @@ export class WorkflowCallRunner {
   private resolveChildProviderModel(
     step: WorkflowCallStep,
     childWorkflow: WorkflowConfig,
-  ): StepProviderInfo {
+  ): WorkflowCallProviderModel {
     return resolveWorkflowCallChildProviderModel(
       childWorkflow,
       step.overrides,
@@ -628,17 +634,26 @@ export class WorkflowCallRunner {
         step.overrides === undefined ? ['call'] : ['overrides'],
       );
     }
-    const childProviderInfo = runtime.fallback
-      ? runtimeProviderInfo
+    // rate-limit fallback で provider が差し替わった場合、その provider は
+    // profile 由来ではないので格上げ先も引き継がない。
+    const childProviderModel: WorkflowCallProviderModel = runtime.fallback
+      ? {
+          provider: runtimeProviderInfo.provider,
+          providerSource: runtimeProviderInfo.providerSource,
+          model: runtimeProviderInfo.model,
+          modelSource: runtimeProviderInfo.modelSource,
+          providerEscalation: undefined,
+        }
       : this.resolveChildProviderModel(step, childWorkflow);
     const parentProviderContext = this.resolveParentWorkflowProviderContext();
     const childResult = await this.executor.execute({
       step,
       preparedExecution,
-      childProviderInfo,
+      childProviderInfo: childProviderModel,
       parentProviderOptions: parentProviderContext.providerOptions,
       personaProviders: this.buildChildPersonaProviders(step),
       providerRouting: this.buildChildProviderRouting(step),
+      providerEscalation: childProviderModel.providerEscalation,
     }, {
       syncParentState,
     });

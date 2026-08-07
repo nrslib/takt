@@ -33,24 +33,10 @@ import { compareBinaryStrings } from '../../../shared/utils/binary-string-compar
 const PRIVATE_FILE_MODE = 0o600;
 const STORED_PUBLICATION_FILE_PATTERN = /^([a-f0-9]{64})\.json$/;
 
-const LEGACY_STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL = Object.freeze({
-  generationMode: 'structured',
-  format: 'structured-output',
-  protocolRevision: 1,
-} as const);
-
-const LEGACY_PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL = Object.freeze({
-  generationMode: 'freeform',
-  format: 'normalized-plain-text',
-  protocolRevision: 1,
-} as const);
-
-export const STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL = Object.freeze({
-  generationMode: 'structured',
-  format: 'structured-output',
-  protocolRevision: 2,
-} as const);
-
+/**
+ * publication の生成プロトコルは1種類しかない。FC レビュアーは常に markdown
+ * レポートを書き、正規化係がそれを raw findings へ変換する。
+ */
 export const PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL = Object.freeze({
   generationMode: 'freeform',
   format: 'normalized-plain-text',
@@ -58,10 +44,7 @@ export const PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL = Object.
 } as const);
 
 export type FindingReviewPublicationProtocol =
-  | typeof LEGACY_STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL
-  | typeof LEGACY_PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL
-  | typeof STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL
-  | typeof PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL;
+  typeof PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL;
 
 function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
   if (typeof value !== 'object' || value === null || seen.has(value)) {
@@ -162,9 +145,7 @@ export interface PendingFindingReviewNormalization
   extends FindingReviewPublicationIdentity {
   readonly workflowName: string;
   readonly publicationId: string;
-  readonly protocol:
-    | typeof LEGACY_PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL
-    | typeof PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL;
+  readonly protocol: FindingReviewPublicationProtocol;
   readonly reportContent: string;
   readonly reportDigest: string;
   readonly reviewerExecutionIdentity: ReviewerExecutionIdentity;
@@ -487,7 +468,6 @@ function preparationContentIdentity(
 function rebindInheritedFindingReviewPublication(
   reportDir: string,
   identity: FindingReviewPublicationIdentity,
-  expectedProtocol?: FindingReviewPublicationProtocol,
 ): FindingReviewPublicationPreparation | undefined {
   if (!inheritedSnapshotExists(reportDir)) {
     return undefined;
@@ -503,7 +483,6 @@ function rebindInheritedFindingReviewPublication(
     ))
     .filter(({ publication }) => (
       samePublicationIdentityExceptScope(publication, identity)
-      && publication.protocol.protocolRevision === 2
       && (
         publication.presentationContext.revision === 1
         || publication.presentationContext.restatementRequests.length === 0
@@ -521,14 +500,6 @@ function rebindInheritedFindingReviewPublication(
   ) {
     throw new Error(
       `Inherited finding review publication is ambiguous for "${identity.reviewerStepName}"`,
-    );
-  }
-  if (
-    expectedProtocol !== undefined
-    && !samePublicationProtocol(first.publication.protocol, expectedProtocol)
-  ) {
-    throw new Error(
-      `Inherited finding review publication protocol mismatch for "${identity.reviewerStepName}"`,
     );
   }
   const rebound: FindingReviewPublicationPreparation = {
@@ -583,7 +554,6 @@ function rebindInheritedPendingFindingReviewNormalization(
       parseStoredPendingNormalization(content, publicationId)
     ))
     .filter((pending) => samePublicationIdentityExceptScope(pending, identity))
-    .filter((pending) => pending.protocol.protocolRevision === 2)
     .filter((pending) => (
       pending.presentationContext.revision === 1
       || pending.presentationContext.restatementRequests.length === 0
@@ -660,57 +630,15 @@ function parsePublicationProtocol(value: unknown): FindingReviewPublicationProto
     throw new Error('Finding review publication requires protocol');
   }
   const record = value as Record<string, unknown>;
-  const legacyStructured = LEGACY_STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL;
+  const protocol = PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL;
   if (
-    record.generationMode === legacyStructured.generationMode
-    && record.format === legacyStructured.format
-    && record.protocolRevision === legacyStructured.protocolRevision
+    record.generationMode === protocol.generationMode
+    && record.format === protocol.format
+    && record.protocolRevision === protocol.protocolRevision
   ) {
-    return legacyStructured;
-  }
-  const legacyPlainTextNormalized = LEGACY_PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL;
-  if (
-    record.generationMode === legacyPlainTextNormalized.generationMode
-    && record.format === legacyPlainTextNormalized.format
-    && record.protocolRevision === legacyPlainTextNormalized.protocolRevision
-  ) {
-    return legacyPlainTextNormalized;
-  }
-  const structured = STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL;
-  if (
-    record.generationMode === structured.generationMode
-    && record.format === structured.format
-    && record.protocolRevision === structured.protocolRevision
-  ) {
-    return structured;
-  }
-  const plainTextNormalized = PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL;
-  if (
-    record.generationMode === plainTextNormalized.generationMode
-    && record.format === plainTextNormalized.format
-    && record.protocolRevision === plainTextNormalized.protocolRevision
-  ) {
-    return plainTextNormalized;
+    return protocol;
   }
   throw new Error('Finding review publication has an unsupported protocol descriptor');
-}
-
-function samePublicationProtocol(
-  left: FindingReviewPublicationProtocol,
-  right: FindingReviewPublicationProtocol,
-): boolean {
-  return left.generationMode === right.generationMode
-    && left.format === right.format
-    && left.protocolRevision === right.protocolRevision;
-}
-
-function assertProtocolPresentationCompatibility(
-  protocol: FindingReviewPublicationProtocol,
-  presentationContext: FindingReviewPresentationContext,
-): void {
-  if (protocol.protocolRevision === 1 && presentationContext.revision !== 1) {
-    throw new Error('Legacy finding review publication protocol cannot carry V2 presentation context');
-  }
 }
 
 function parseStoredRelationClarification(
@@ -944,21 +872,12 @@ function assertPendingFindingReviewNormalization(
       `Pending finding review normalization identity mismatch for "${pending.publicationId}"`,
     );
   }
-  if (!samePublicationProtocol(
-    pending.protocol,
-    PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
-  ) && pending.protocol.protocolRevision !== 1) {
-    throw new Error(
-      `Pending finding review normalization protocol mismatch for "${pending.publicationId}"`,
-    );
-  }
   const reportDigest = sha256(Buffer.from(pending.reportContent, 'utf8'));
   if (pending.reportDigest !== reportDigest) {
     throw new Error(
       `Pending finding review normalization digest mismatch for "${pending.publicationId}"`,
     );
   }
-  assertProtocolPresentationCompatibility(pending.protocol, pending.presentationContext);
   parseReviewerExecutionIdentity(pending.reviewerExecutionIdentity);
 }
 
@@ -1225,7 +1144,6 @@ export function assertCanonicalFindingReviewPublication(
   publication: CanonicalFindingReviewPublication,
 ): void {
   parsePublicationProtocol(publication.protocol);
-  assertProtocolPresentationCompatibility(publication.protocol, publication.presentationContext);
   const expectedId = computeFindingReviewPublicationId(publication);
   if (publication.publicationId !== expectedId) {
     throw new Error(`Finding review publication identity mismatch for "${publication.publicationId}"`);
@@ -1366,7 +1284,6 @@ export function persistPendingFindingReviewNormalization(
       if (
         existing.reportDigest !== pending.reportDigest
         || existing.workflowName !== pending.workflowName
-        || !samePublicationProtocol(existing.protocol, pending.protocol)
         || JSON.stringify(existing.reviewerExecutionIdentity)
           !== JSON.stringify(pending.reviewerExecutionIdentity)
         || JSON.stringify(existing.presentationContext)
@@ -1386,33 +1303,18 @@ export function persistPendingFindingReviewNormalization(
 export function loadFindingReviewPublication(
   reportDir: string,
   identity: FindingReviewPublicationIdentity,
-  expectedProtocol?: FindingReviewPublicationProtocol,
 ): FindingReviewPublicationPreparation | undefined {
   const publicationId = computeFindingReviewPublicationId(identity);
   const path = publicationRecordPath(reportDir, publicationId);
   ensurePrivateDirectory(dirname(path));
   const snapshot = readPrivateFileState(path);
   if (!snapshot.state.exists) {
-    return rebindInheritedFindingReviewPublication(
-      reportDir,
-      identity,
-      expectedProtocol,
-    );
+    return rebindInheritedFindingReviewPublication(reportDir, identity);
   }
   if (!('content' in snapshot)) {
     throw new Error(`Finding review publication content is missing: ${path}`);
   }
-  const preparation = parseStoredPreparation(snapshot.content, publicationId);
-  if (
-    expectedProtocol !== undefined
-    && preparation.publication.protocol.protocolRevision !== 1
-    && !samePublicationProtocol(preparation.publication.protocol, expectedProtocol)
-  ) {
-    throw new Error(
-      `Finding review publication protocol mismatch for "${publicationId}"`,
-    );
-  }
-  return preparation;
+  return parseStoredPreparation(snapshot.content, publicationId);
 }
 
 /** 保存済みの canonical publication だけを監査・提示計上へ利用する。 */
@@ -1454,7 +1356,6 @@ export function persistFindingReviewPublication(
       const existing = parseStoredPreparation(snapshot.content, publication.publicationId);
       if (
         existing.publication.reportDigest !== publication.reportDigest
-        || !samePublicationProtocol(existing.publication.protocol, publication.protocol)
         || JSON.stringify(existing.reviewerExecutionIdentity ?? null)
           !== JSON.stringify(preparation.reviewerExecutionIdentity ?? null)
         || JSON.stringify(existing.publication.presentationContext)

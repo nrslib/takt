@@ -4,6 +4,7 @@ import { createLogger } from '../../../shared/utils/index.js';
 import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
 import type {
   AgentResponse,
+  AgentWorkflowStep,
   FindingContractConfig,
   WorkflowConfig,
   WorkflowMaxSteps,
@@ -39,7 +40,6 @@ import type { WorkflowCallChildEngine } from '../types.js';
 import type { StructuredOutputNormalizerRegistry } from './structured-output-normalizer.js';
 import { runQualityGates } from '../quality-gates/qualityGateRunner.js';
 import type { FindingLedgerStore } from '../findings/store.js';
-import { createRawFindingsStructuredOutput } from '../findings/manager-runner.js';
 import {
   ledgerHasDismissedFindings,
   ledgerHasOpenFindings,
@@ -65,10 +65,8 @@ import type { FindingTarget } from '../../models/finding-types.js';
 import { FINDING_ESCALATION_REVIEWER_ROUTING_KEY } from '../../models/finding-types.js';
 import type {
   FindingContractInstructionContext,
-  FindingContractReviewerOutputStrategy,
 } from '../instruction/instruction-context.js';
 import { requireWorkflowResumeStackSnapshot } from '../run/resume-point.js';
-import { resolveFindingIntakeNormalizeConfig } from '../findings/intake-normalize-policy.js';
 import {
   createReviewReportDiscoveryContext,
   resolveWorkflowStepReportNamesWithDiagnostics,
@@ -359,7 +357,7 @@ function collectOutstandingIntakeAnomalies(input: {
   presentationCounts: ReadonlyMap<string, number>;
   ownerStepNames: ReadonlySet<string>;
   phase: RestatementPresentationPhase;
-  escalationReviewerConfigured: boolean;
+  escalationEnabled: boolean;
 }): OutstandingIntakeAnomaly[] {
   return (input.ledger.reviewerAnomalies ?? [])
     .filter(hasIntakeContract)
@@ -376,7 +374,7 @@ function collectOutstandingIntakeAnomalies(input: {
       resolveRestatementPresentationPhase({
         presentedCount,
         presentationLimit: anomaly.intakeContract.presentationLimit,
-        escalationReviewerConfigured: input.escalationReviewerConfigured,
+        escalationEnabled: input.escalationEnabled,
       }) === input.phase
     ))
     .sort((left, right) => (
@@ -447,11 +445,6 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     (event, ...args) => params.emitEvent(event, ...args),
     params.getCurrentWorkflowStack,
   );
-  const intakeNormalize = resolveFindingIntakeNormalizeConfig(
-    params.options.findingContractConfig?.intakeNormalize,
-    params.findingContract,
-  );
-  const escalationReviewerConfigured = params.findingContract?.escalationReviewer !== undefined;
   let frozenFindingContractInput: {
     contextKey: string;
     ledger: ReturnType<FindingLedgerStore['loadLedger']>;
@@ -461,7 +454,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
   } | undefined;
   const buildFindingContractInstructionContext = (
     step: WorkflowStep,
-    strategy: FindingContractReviewerOutputStrategy | undefined,
+    isReviewer: boolean,
     sharedReviewScopeSnapshotId?: string,
     findingContractFreezeKey?: string,
   ): FindingContractInstructionContext | undefined => {
@@ -496,14 +489,14 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
         frozenContexts = frozenFindingContractInput.contexts;
       }
     }
-    if (frozenContexts !== undefined && strategy !== undefined) {
+    if (frozenContexts !== undefined && isReviewer) {
       const frozenContext = frozenContexts.get(step.name);
       if (frozenContext !== undefined) {
         return frozenContext;
       }
     }
     let reviewer: FindingContractInstructionContext['reviewer'];
-    if (strategy !== undefined) {
+    if (isReviewer) {
       const reviewScopeSnapshotId = sharedReviewScopeSnapshotId
         ?? computeReviewScopeSnapshotId(params.getCwd());
       assertFindingReviewPresentationCapacity({
@@ -520,7 +513,8 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
           presentationCounts,
           ownerStepNames: new Set([step.name]),
           phase: 'restatement',
-          escalationReviewerConfigured,
+          // 格上げ先を持つ owner だけが最終1回を escalation へ譲る。
+          escalationEnabled: optionsBuilder.resolveStepProviderModel(step).escalation !== undefined,
         }).slice(0, remainingRestatementSlots(allocatedRequestCount)),
         reviewer: step.name,
         reviewScopeSnapshotId,
@@ -529,18 +523,10 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
         reviewScopeSnapshotId,
         restatementRequests,
       });
-      reviewer = strategy.reportGeneration === 'structured'
-        ? {
-            mode: 'structured',
-            rawFindingsStructuredOutput: createRawFindingsStructuredOutput(),
-            reviewScopeSnapshotId,
-            presentationContext,
-          }
-        : {
-            mode: strategy.kind,
-            reviewScopeSnapshotId,
-            presentationContext,
-          };
+      reviewer = {
+        reviewScopeSnapshotId,
+        presentationContext,
+      };
       if (frozenContexts !== undefined && findingContractFreezeKey !== undefined) {
         frozenContexts.set(step.name, {
           ledgerSummary: renderFindingLedgerInstructionSummary(ledger),
@@ -571,60 +557,69 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
   };
 
   /**
-   * escalation slot（提示予算の最終1回）用の reviewer context を組み立てる。
+   * 格上げ再レビュー（提示予算の最終1回）用の reviewer context を owner ごとに組む。
    *
    * owner batch を組んだときに凍結した ledger / presentation counts をそのまま
    * 使い、owner が使い切った残り枠だけを escalation batch へ割り当てる。
    * owner publication 永続化後に数え直すと、同じ iteration で owner の
    * (limit-1) 回目の提示と escalation が二重に走る。
    *
-   * escalation 対象の anomaly が1件も無い場合は undefined を返す。
+   * owner ごとに persona / policy / knowledge / report 形式が違うため、1 owner =
+   * 1 context = 1 provider call に分ける。格上げ対象の anomaly が無い owner は
+   * 結果に含めない。
    */
-  const buildFindingEscalationInstructionContext = (input: {
-    ownerStepNames: readonly string[];
+  const buildFindingEscalationInstructionContexts = (input: {
+    ownerReviewerSteps: readonly AgentWorkflowStep[];
     reviewScopeSnapshotId: string;
     findingContractFreezeKey: string;
-  }): FindingContractInstructionContext | undefined => {
-    if (!escalationReviewerConfigured) {
-      return undefined;
+  }): ReadonlyMap<string, FindingContractInstructionContext> => {
+    const contexts = new Map<string, FindingContractInstructionContext>();
+    const escalationOwners = input.ownerReviewerSteps.filter(
+      (ownerStep) => optionsBuilder.resolveStepProviderModel(ownerStep).escalation !== undefined,
+    );
+    if (escalationOwners.length === 0) {
+      return contexts;
     }
     if (frozenFindingContractInput?.contextKey !== input.findingContractFreezeKey) {
       throw new Error(
         'Finding escalation reviewer context requires the frozen reviewer input of the same review round',
       );
     }
-    const { ledger, presentationCounts, allocatedRequestCount } = frozenFindingContractInput;
-    const restatementRequests = buildRestatementRequests({
-      ledger,
-      entries: collectOutstandingIntakeAnomalies({
+    const { ledger, presentationCounts } = frozenFindingContractInput;
+    let allocatedRequestCount = frozenFindingContractInput.allocatedRequestCount;
+    for (const ownerStep of escalationOwners) {
+      const restatementRequests = buildRestatementRequests({
         ledger,
-        presentationCounts,
-        ownerStepNames: new Set(input.ownerStepNames),
-        phase: 'escalation',
-        escalationReviewerConfigured,
-      }).slice(0, remainingRestatementSlots(allocatedRequestCount)),
-      reviewer: FINDING_ESCALATION_REVIEWER_ROUTING_KEY,
-      reviewScopeSnapshotId: input.reviewScopeSnapshotId,
-    });
-    if (restatementRequests.length === 0) {
-      return undefined;
-    }
-    return {
-      ledgerSummary: renderFindingLedgerInstructionSummary(ledger),
-      reportLedgerSummary: renderFindingLedgerReportSummary(ledger),
-      hasOpenFindings: ledgerHasOpenFindings(ledger),
-      hasWaivedFindings: ledgerHasWaivedFindings(ledger),
-      hasDismissedFindings: ledgerHasDismissedFindings(ledger),
-      reviewer: {
-        mode: 'structured',
-        rawFindingsStructuredOutput: createRawFindingsStructuredOutput(),
+        entries: collectOutstandingIntakeAnomalies({
+          ledger,
+          presentationCounts,
+          ownerStepNames: new Set([ownerStep.name]),
+          phase: 'escalation',
+          escalationEnabled: true,
+        }).slice(0, remainingRestatementSlots(allocatedRequestCount)),
+        reviewer: FINDING_ESCALATION_REVIEWER_ROUTING_KEY,
         reviewScopeSnapshotId: input.reviewScopeSnapshotId,
-        presentationContext: createFindingReviewPresentationContextV2({
+      });
+      if (restatementRequests.length === 0) {
+        continue;
+      }
+      allocatedRequestCount += restatementRequests.length;
+      contexts.set(ownerStep.name, {
+        ledgerSummary: renderFindingLedgerInstructionSummary(ledger),
+        reportLedgerSummary: renderFindingLedgerReportSummary(ledger),
+        hasOpenFindings: ledgerHasOpenFindings(ledger),
+        hasWaivedFindings: ledgerHasWaivedFindings(ledger),
+        hasDismissedFindings: ledgerHasDismissedFindings(ledger),
+        reviewer: {
           reviewScopeSnapshotId: input.reviewScopeSnapshotId,
-          restatementRequests,
-        }),
-      },
-    };
+          presentationContext: createFindingReviewPresentationContextV2({
+            reviewScopeSnapshotId: input.reviewScopeSnapshotId,
+            restatementRequests,
+          }),
+        },
+      });
+    }
+    return contexts;
   };
 
   // base の解決は ref 走査を伴うため、ラン境界で一度だけ解決して保持する。
@@ -646,7 +641,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     params.getCurrentWorkflowStack,
     buildFindingContractInstructionContext,
     () => params.task,
-    buildFindingEscalationInstructionContext,
+    buildFindingEscalationInstructionContexts,
     getReviewScope,
   );
 
@@ -707,7 +702,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getCurrentWorkflowStack: params.getCurrentWorkflowStack,
     structuredOutputNormalizers: params.options.structuredOutputNormalizers,
     structuredCaller: params.structuredCaller,
-    intakeNormalize,
+    intakeNormalizerProvider: params.options.intakeNormalizerProvider,
     abortSignal: params.options.abortSignal,
     findingContract: params.findingContract,
     findingManagerAuthority: params.findingManagerAuthority,
@@ -788,7 +783,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     refreshFindingsState: params.refreshFindingsState,
     emitEvent: params.emitEvent,
     findingContract: params.findingContract,
-    intakeNormalize,
+    intakeNormalizerProvider: params.options.intakeNormalizerProvider,
     findingManagerAuthority: params.findingManagerAuthority,
     workflowProvider: params.config.provider,
     workflowModel: params.config.model,

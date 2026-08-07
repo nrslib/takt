@@ -29,7 +29,7 @@ import {
   loadFindingReviewPublication,
   listFindingReviewPublications,
   persistFindingReviewPublication,
-  STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+  PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
 } from '../core/workflow/findings/review-publication.js';
 import { captureFindingLifecycleHead } from '../core/workflow/findings/lifecycle-mutation.js';
 import { computeRawPayloadDigest } from '../core/models/finding-contract-identity.js';
@@ -686,7 +686,7 @@ describe('FC intake contract', () => {
         reviewerStepName: 'architecture-review',
         reportName: 'architecture-review-1.md',
       },
-      protocol: STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+      protocol: PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
       reportContent: `Initial report\n\n${claim}`,
       rawFindings: [reviewerRawExtractionFixture({
         rawFindingId: 'source-weak',
@@ -772,7 +772,7 @@ describe('FC intake contract', () => {
         reviewerStepName: 'architecture-review',
         reportName: 'architecture-review-2.md',
       },
-      protocol: STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+      protocol: PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
       reportContent: secondReport,
       rawFindings: [reviewerRawExtractionFixture({
         rawFindingId: 'admitted-restatement',
@@ -954,7 +954,7 @@ describe('FC intake contract', () => {
         reviewerStepName: source.reviewer,
         reportName: 'architecture-review.md',
       },
-      protocol: STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+      protocol: PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
       reportContent: sourceReport(context),
       rawFindings: [],
       presentationContext: context,
@@ -1053,7 +1053,7 @@ describe('FC intake contract', () => {
           reviewerStepName: source.reviewer,
           reportName: `architecture-review-${stepIteration}.md`,
         },
-        protocol: STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+        protocol: PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
         reportContent: sourceReport(context),
         rawFindings: [],
         presentationContext: context,
@@ -1136,7 +1136,7 @@ describe('FC intake contract', () => {
           reviewerStepName: 'architecture-review',
           reportName: 'architecture-review.md',
         },
-        protocol: STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+        protocol: PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
         reportContent: sourceReport(context),
         rawFindings: [],
         presentationContext: context,
@@ -1151,7 +1151,7 @@ describe('FC intake contract', () => {
     }
   });
 
-  it('reads revision-1 publications only as empty legacy context and rejects mixed V1/V2 records', () => {
+  it('rejects any publication whose protocol descriptor is not the single supported one', () => {
     const reportDir = mkdtempSync(join(tmpdir(), 'takt-fc-legacy-publication-'));
     try {
       const identity = {
@@ -1168,7 +1168,7 @@ describe('FC intake contract', () => {
       });
       const publication = createFindingReviewPublication({
         identity,
-        protocol: STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+        protocol: PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
         reportContent: sourceReport(context),
         rawFindings: [],
         presentationContext: context,
@@ -1185,33 +1185,22 @@ describe('FC intake contract', () => {
       );
       const stored = JSON.parse(readFileSync(path, 'utf8')) as {
         publication: {
-          protocol: { protocolRevision: number };
-          presentationContext: unknown;
+          protocol: { protocolRevision: number; format: string; generationMode: string };
         };
       };
-      stored.publication.protocol.protocolRevision = 1;
-      stored.publication.presentationContext = context;
-      writeFileSync(path, JSON.stringify(stored));
-      expect(() => loadFindingReviewPublication(
-        reportDir,
-        identity,
-        STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
-      )).toThrow(/Legacy finding review publication protocol/);
 
-      stored.publication.presentationContext = {
-        revision: 1,
-        restatementRequests: [],
-        presentedReviewerAnomalyIds: [],
-      };
+      // 旧 revision も structured 形式も受け付けない。プロトコルは1種類だけ。
+      stored.publication.protocol.protocolRevision = 1;
       writeFileSync(path, JSON.stringify(stored));
-      const loaded = loadFindingReviewPublication(
-        reportDir,
-        identity,
-        STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
-      );
-      expect(loaded?.publication.protocol.protocolRevision).toBe(1);
-      expect(loaded?.publication.presentationContext.revision).toBe(1);
-      expect(listFindingReviewPublications(reportDir)[0]?.presentationContext.revision).toBe(1);
+      expect(() => loadFindingReviewPublication(reportDir, identity))
+        .toThrow(/unsupported protocol descriptor/u);
+
+      stored.publication.protocol.protocolRevision = 2;
+      stored.publication.protocol.generationMode = 'structured';
+      stored.publication.protocol.format = 'structured-output';
+      writeFileSync(path, JSON.stringify(stored));
+      expect(() => loadFindingReviewPublication(reportDir, identity))
+        .toThrow(/unsupported protocol descriptor/u);
     } finally {
       rmSync(reportDir, { recursive: true, force: true });
     }

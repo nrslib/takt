@@ -23,7 +23,7 @@ import { intakeReviewerOutputs } from '../core/workflow/findings/manager-intake.
 import { evaluateRawAdmission } from '../core/workflow/findings/manager-admission.js';
 import {
   createFindingReviewPublication,
-  STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+  PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
 } from '../core/workflow/findings/review-publication.js';
 
 function emptyLedger(): FindingLedger {
@@ -106,7 +106,7 @@ describe('finding evidence request issuer I/O failure', () => {
             reviewerStepName: 'reviewer',
             reportName: 'reviewer.md',
           },
-          protocol: STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+          protocol: PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
           reportContent: rawExcerpt,
           rawFindings: [{
             rawExcerpt,

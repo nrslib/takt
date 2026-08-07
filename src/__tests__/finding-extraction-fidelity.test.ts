@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   describeRawFindingExtractionFidelityFailure,
-  hasRawFindingExtractionFidelityFailure,
+  describeRawFindingExtractionFidelityFailures,
 } from '../core/workflow/findings/extraction-fidelity.js';
 import { projectReviewerRawStructuredOutputWithEnvelope } from '../core/workflow/findings/raw-canonicalization.js';
 import { ReviewerRawFindingSchema } from '../core/models/finding-schemas.js';
@@ -20,45 +20,45 @@ const COMPLETE_CANDIDATE = {
   evidenceRequests: [],
 };
 
-describe('hasRawFindingExtractionFidelityFailure', () => {
+describe('describeRawFindingExtractionFidelityFailures', () => {
   it('should report a failure when an item has a non-empty rawExcerpt and a null candidate', () => {
-    expect(hasRawFindingExtractionFidelityFailure({
+    expect(describeRawFindingExtractionFidelityFailures({
       rawFindings: [{ rawExcerpt: CLAIM_EXCERPT, candidate: null }],
-    })).toBe(true);
+    })).toEqual(['#0: candidate is null after projection']);
   });
 
   it('should report a failure when an item has a non-empty rawExcerpt and no candidate key', () => {
-    expect(hasRawFindingExtractionFidelityFailure({
+    expect(describeRawFindingExtractionFidelityFailures({
       rawFindings: [{ rawExcerpt: CLAIM_EXCERPT }],
-    })).toBe(true);
+    })).toEqual(['#0: candidate is null after projection']);
   });
 
   it('should report a failure when the candidate description is null', () => {
-    expect(hasRawFindingExtractionFidelityFailure({
+    expect(describeRawFindingExtractionFidelityFailures({
       rawFindings: [{
         rawExcerpt: CLAIM_EXCERPT,
         candidate: { ...COMPLETE_CANDIDATE, description: null },
       }],
-    })).toBe(true);
+    })).toEqual(['#0: candidate description is null']);
   });
 
-  it('should report a failure when only one item among several lost its claim', () => {
-    expect(hasRawFindingExtractionFidelityFailure({
+  it('should name the failing item, using its rawFindingId when present', () => {
+    expect(describeRawFindingExtractionFidelityFailures({
       rawFindings: [
         { rawExcerpt: CLAIM_EXCERPT, candidate: COMPLETE_CANDIDATE },
-        { rawExcerpt: 'Another stated problem.', candidate: null },
+        { rawFindingId: 'raw-7', rawExcerpt: 'Another stated problem.', candidate: null },
       ],
-    })).toBe(true);
+    })).toEqual(['raw-7: candidate is null after projection']);
   });
 
   it('should report no failure for a complete candidate, an empty list, or a non-publication value', () => {
-    expect(hasRawFindingExtractionFidelityFailure({
+    expect(describeRawFindingExtractionFidelityFailures({
       rawFindings: [{ rawExcerpt: CLAIM_EXCERPT, candidate: COMPLETE_CANDIDATE }],
-    })).toBe(false);
-    expect(hasRawFindingExtractionFidelityFailure({ rawFindings: [] })).toBe(false);
-    expect(hasRawFindingExtractionFidelityFailure({ rawFindings: 'invalid' })).toBe(false);
-    expect(hasRawFindingExtractionFidelityFailure(undefined)).toBe(false);
-    expect(hasRawFindingExtractionFidelityFailure(null)).toBe(false);
+    })).toEqual([]);
+    expect(describeRawFindingExtractionFidelityFailures({ rawFindings: [] })).toEqual([]);
+    expect(describeRawFindingExtractionFidelityFailures({ rawFindings: 'invalid' })).toEqual([]);
+    expect(describeRawFindingExtractionFidelityFailures(undefined)).toEqual([]);
+    expect(describeRawFindingExtractionFidelityFailures(null)).toEqual([]);
   });
 
   it('should report a failure for an incomplete candidate once the reviewer projection collapses it to null', () => {
@@ -72,7 +72,8 @@ describe('hasRawFindingExtractionFidelityFailure', () => {
     }).structuredOutput;
 
     expect(projected.rawFindings).toEqual([{ rawExcerpt: CLAIM_EXCERPT, candidate: null }]);
-    expect(hasRawFindingExtractionFidelityFailure(projected)).toBe(true);
+    expect(describeRawFindingExtractionFidelityFailures(projected))
+      .toEqual(['#0: candidate is null after projection']);
   });
 });
 
@@ -91,7 +92,7 @@ describe('reassertsReviewerAnomalyId の null（生成 schema 準拠形）', () 
       rawFindings: [{ rawExcerpt: CLAIM_EXCERPT, candidate: SCHEMA_CONFORMANT_CANDIDATE }],
     }).structuredOutput;
 
-    expect(hasRawFindingExtractionFidelityFailure(projected)).toBe(false);
+    expect(describeRawFindingExtractionFidelityFailures(projected)).toEqual([]);
     const item = (projected.rawFindings as { candidate: Record<string, unknown> }[])[0]!;
     // null は「echo なし」＝キー欠落として畳む。post-hoc 検証は非空文字列の
     // optional しか許さないため、null を record へ残してはいけない。
@@ -107,7 +108,7 @@ describe('reassertsReviewerAnomalyId の null（生成 schema 準拠形）', () 
       }],
     }).structuredOutput;
 
-    expect(hasRawFindingExtractionFidelityFailure(projected)).toBe(false);
+    expect(describeRawFindingExtractionFidelityFailures(projected)).toEqual([]);
     const item = (projected.rawFindings as { candidate: Record<string, unknown> }[])[0]!;
     expect(item.candidate.reassertsReviewerAnomalyId).toBe('anomaly-1');
   });
@@ -123,7 +124,7 @@ describe('reassertsReviewerAnomalyId の null（生成 schema 準拠形）', () 
         rawFindings: [{ rawExcerpt: CLAIM_EXCERPT, candidate }],
       }).structuredOutput;
 
-      expect(hasRawFindingExtractionFidelityFailure(projected)).toBe(false);
+      expect(describeRawFindingExtractionFidelityFailures(projected)).toEqual([]);
       const item = (projected.rawFindings as { candidate: Record<string, unknown> }[])[0]!;
       expect(Object.hasOwn(item.candidate, 'reassertsReviewerAnomalyId')).toBe(false);
       expect(() => ReviewerRawFindingSchema.parse(item)).not.toThrow();
@@ -142,7 +143,7 @@ describe('reassertsReviewerAnomalyId の null（生成 schema 準拠形）', () 
       }).structuredOutput;
 
       expect(projected.rawFindings).toEqual([{ rawExcerpt: CLAIM_EXCERPT, candidate: null }]);
-      expect(hasRawFindingExtractionFidelityFailure(projected)).toBe(true);
+      expect(describeRawFindingExtractionFidelityFailures(projected)).not.toEqual([]);
     }
   });
 

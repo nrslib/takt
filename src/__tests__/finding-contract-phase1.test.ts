@@ -132,32 +132,51 @@ describe('Finding Contract phase 1', () => {
     );
   });
 
-  it('取り下げ settlement は同一レビュアーの重複記録を拒否する（不変条件経路）', () => {
-    // 重複を先に潰してから集合比較すると、1人分を二重計上して別の観測者の根拠を
-    // 欠いた記録が完全一致として通ってしまう。スキーマを経由しない不変条件経路でも
-    // 弾けることを固定する。
+  it('同一レビュアーを二重計上しても欠けた観測者の根拠は補えない（不変条件経路）', () => {
+    // 1レビュアー枠が同一ラウンドに複数 publication を持つことは正当（格上げ
+    // 再レビューの owner 別グループ化）。ただし網羅性は reviewer 集合の完全一致で
+    // 判定するので、片方を二重計上して別の観測者の根拠を欠く記録は通らない。
     const duplicated = [
       completeWithdrawalPublications()[0]!,
       { reviewer: 'arch-review', publicationId: 'f'.repeat(64) },
     ];
     expect(withdrawalInvariantMessages(duplicated, ['arch-review', 'security-review']))
       .toContainEqual(
-        expect.stringContaining('exactly one superseding review per reviewer'),
+        expect.stringContaining('every reviewer that observed the anomaly'),
       );
   });
 
-  it('取り下げ settlement の重複記録は台帳の append-only 遷移検証でも拒否される', () => {
-    const duplicated = {
+  it('同一レビュアー枠の複数 publication は、そのレビュアーが唯一の観測者なら適格', () => {
+    // 格上げ再レビューは owner ごとに1呼び出しへ分かれるが reviewer キーは固定。
+    // 1ラウンドで同じ reviewer キーの publication が複数成立し得る。
+    const multiplePublications = [
+      { reviewer: 'escalation-reviewer', publicationId: 'c'.repeat(64) },
+      { reviewer: 'escalation-reviewer', publicationId: 'd'.repeat(64) },
+    ];
+    expect(withdrawalInvariantMessages(multiplePublications, ['escalation-reviewer']))
+      .toEqual([]);
+    expect(() => FindingLedgerSchema.parse({
       ...emptyLedger(),
-      reviewerAnomalies: [withdrawnAnomaly([
-        completeWithdrawalPublications()[0]!,
-        { reviewer: 'arch-review', publicationId: 'f'.repeat(64) },
-      ])],
-    };
+      reviewerAnomalies: [withdrawnAnomaly(multiplePublications, ['escalation-reviewer'])],
+    })).not.toThrow();
+  });
+
+  it('同じ publication の二重計上は根拠の水増しとして拒否される', () => {
+    const sameTwice = [
+      { reviewer: 'escalation-reviewer', publicationId: 'c'.repeat(64) },
+      { reviewer: 'escalation-reviewer', publicationId: 'c'.repeat(64) },
+    ];
+    expect(withdrawalInvariantMessages(sameTwice, ['escalation-reviewer']))
+      .toContainEqual(
+        expect.stringContaining('must not record the same superseding publication twice'),
+      );
     expect(() => assertFindingLedgerAppendOnlyTransition(
       outstandingWithdrawalLedger() as never,
-      duplicated as never,
-    )).toThrow(/exactly one superseding review per reviewer/u);
+      {
+        ...emptyLedger(),
+        reviewerAnomalies: [withdrawnAnomaly(sameTwice, ['escalation-reviewer'])],
+      } as never,
+    )).toThrow();
   });
 
   it('観測者2人分の根拠を binary 順で持つ取り下げは append-only 遷移検証を通る', () => {
@@ -176,14 +195,14 @@ describe('Finding Contract phase 1', () => {
     ]);
   });
 
-  it('取り下げ settlement のスキーマは空配列・重複 reviewer・binary 順違反を拒否する', () => {
+  it('取り下げ settlement のスキーマは空配列・同一 publication の重複・binary 順違反を拒否する', () => {
     const invalidPublications = [
       // 空配列: 根拠のない取り下げ。
       [],
-      // 同一 reviewer の重複。
+      // 同じ (reviewer, publicationId) の重複。
       [
         { reviewer: 'arch-review', publicationId: 'c'.repeat(64) },
-        { reviewer: 'arch-review', publicationId: 'f'.repeat(64) },
+        { reviewer: 'arch-review', publicationId: 'c'.repeat(64) },
       ],
       // binary 順違反（security-review が arch-review より前）。
       [

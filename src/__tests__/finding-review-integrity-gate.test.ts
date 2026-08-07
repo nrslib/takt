@@ -29,7 +29,12 @@ vi.mock('../agents/runner.js', () => ({
 vi.mock('../infra/providers/index.js', () => ({
   getProvider: vi.fn((provider: string) => ({
     supportsStructuredOutput: provider !== 'cursor',
+    // 正規化係は隔離 structured 実行で走る。実 provider（claude）と同じ能力にする。
+    supportsIsolatedStructuredExecution: provider !== 'cursor',
     keepsAllowedToolWithoutEdit: () => false,
+    setupIsolatedStructured: () => ({
+      call: async () => normalizeFindingIntakeMock(),
+    }),
   })),
 }));
 
@@ -57,6 +62,7 @@ vi.mock('../core/workflow/findings/contract-intake.js', async (importOriginal) =
 
 import { WorkflowEngine } from './helpers/workflow-engine.js';
 import type { WorkflowConfig } from '../core/models/index.js';
+import type { AgentResponse } from '../core/models/types.js';
 import { runAgent } from '../agents/runner.js';
 import { makeRule, makeStep } from './test-helpers.js';
 import { createTestFindingLedgerStore } from './helpers/finding-storage.js';
@@ -98,19 +104,29 @@ const HALLUCINATED_RAW = reviewerRawExtractionFixture({
   rawExcerpt: 'Review report body.',
 });
 
+/**
+ * 正規化係（隔離 structured 実行）の応答。レビュアーは markdown しか書かないので、
+ * 幻覚 raw finding はこの抽出結果として現れる。
+ */
+function normalizeFindingIntakeMock(): AgentResponse {
+  return {
+    persona: 'finding-intake-normalizer',
+    status: 'done',
+    content: '',
+    structuredOutput: { rawFindings: [HALLUCINATED_RAW] },
+    timestamp: new Date('2026-06-13T00:00:01.500Z'),
+  };
+}
+
 function mockReviewerEmitsHallucination(): void {
   vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
     options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
-    const schemaText = options?.outputSchema ? JSON.stringify(options.outputSchema) : '';
-    if (schemaText.includes('"rawFindings"')) {
-      const isPublication = schemaText.includes('"reportContent"');
+    // FC レポートを書く役（レビュアー / final gate の supervisor）は markdown 本文を返す。
+    if (persona === 'reviewer' || persona === 'supervisor') {
       return {
         persona,
         status: 'done',
-        content: isPublication ? '' : 'Review report body.',
-        structuredOutput: isPublication
-          ? { reportContent: 'Review report body.', rawFindings: [HALLUCINATED_RAW] }
-          : { rawFindings: [HALLUCINATED_RAW] },
+        content: 'Review report body.',
         timestamp: new Date('2026-06-13T00:00:01.000Z'),
       };
     }
@@ -396,9 +412,9 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
     expect(stepNames).not.toContain('test-writer');
 
     // 初回だけで諦めず再レビューし、その後も再計画した実装をレビューしている。
-    const reviewerCalls = vi.mocked(runAgent).mock.calls.filter(([, , options]) => (
-      options?.outputSchema && JSON.stringify(options.outputSchema).includes('"rawFindings"')
-    ));
+    const reviewerCalls = vi.mocked(runAgent).mock.calls.filter(
+      ([persona]) => persona === 'reviewer',
+    );
     expect(reviewerCalls.length).toBeGreaterThan(2);
 
     // 台帳: 予算を使い切り、anomaly は監査に残る（消えない）。
@@ -474,14 +490,13 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
     await engine.run();
 
     expect(ingestFindingContractResultsMock).toHaveBeenCalledOnce();
-    const reviewerCalls = vi.mocked(runAgent).mock.calls.filter(([, , options]) => (
-      options?.outputSchema && JSON.stringify(options.outputSchema).includes('"rawFindings"')
-    ));
+    // 1本道: レビュアー役は Phase 1 と Phase 2 の2回だけ呼ばれ、どちらにも
+    // rawFindings の出力スキーマは載らない。
+    const reviewerCalls = vi.mocked(runAgent).mock.calls.filter(
+      ([persona]) => persona === 'supervisor',
+    );
     expect(reviewerCalls).toHaveLength(2);
-    const publicationCalls = reviewerCalls.filter(([, , options]) => (
-      JSON.stringify(options?.outputSchema).includes('"reportContent"')
-    ));
-    expect(publicationCalls).toHaveLength(1);
+    expect(reviewerCalls.every(([, , options]) => options?.outputSchema === undefined)).toBe(true);
 
     const rawFindings = loadRootLedger(cwd, config.name).rawFindings;
     expect(rawFindings).toHaveLength(1);

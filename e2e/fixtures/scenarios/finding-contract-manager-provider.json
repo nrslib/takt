@@ -7,9 +7,13 @@
   {
     "persona": "agents/architecture-review",
     "status": "done",
-    "content": "",
+    "content": "Architecture review approved."
+  },
+  {
+    "persona": "finding-intake-normalizer",
+    "status": "done",
+    "content": "{\"rawFindings\":[]}",
     "structured_output": {
-      "reportContent": "Architecture review approved.",
       "rawFindings": []
     }
   },
@@ -30,9 +34,13 @@
   {
     "persona": "agents/security-review",
     "status": "done",
-    "content": "",
+    "content": "Security review approved."
+  },
+  {
+    "persona": "finding-intake-normalizer",
+    "status": "done",
+    "content": "{\"rawFindings\":[]}",
     "structured_output": {
-      "reportContent": "Security review approved.",
       "rawFindings": []
     }
   },

@@ -7,7 +7,6 @@ import type { RunPaths } from '../core/workflow/run/run-paths.js';
 import type { StepExecutorDeps } from '../core/workflow/engine/StepExecutor.js';
 import type { ParallelRunnerDeps } from '../core/workflow/engine/ParallelRunner.js';
 import { createStructuredOutputNormalizerRegistry } from '../core/workflow/engine/structured-output-normalizer.js';
-import { createRawFindingsStructuredOutput } from '../core/workflow/findings/manager-agent.js';
 import { parseFindingLedger } from '../core/workflow/findings/schemas.js';
 import type { FindingLedger } from '../core/workflow/findings/types.js';
 import { emptyFindingAuthorityProjection } from './helpers/finding-lifecycle-fixture.js';
@@ -374,13 +373,24 @@ describe('session compaction Phase 1 wiring', () => {
       hasWaivedFindings: false,
       hasDismissedFindings: false,
       reviewer: {
-        mode: 'structured' as const,
-        rawFindingsStructuredOutput: createRawFindingsStructuredOutput(
-          reviewScopeSnapshotId,
-        ),
         reviewScopeSnapshotId,
       },
     };
+    const normalizedRawFindings = [{
+      rawExcerpt: 'A finding',
+      candidate: {
+        rawFindingId: 'raw-1',
+        familyTag: 'bug',
+        severity: 'high',
+        title: 'A finding',
+        description: 'A finding',
+        relation: 'new',
+        targetFindingIds: [],
+        suggestion: null,
+        target: { kind: 'code', paths: ['src/a.ts'] },
+        evidenceRequests: [],
+      },
+    }];
     const deps: StepExecutorDeps = {
       optionsBuilder: {
         buildAgentOptions: vi.fn().mockReturnValue(phase1Options),
@@ -434,6 +444,7 @@ describe('session compaction Phase 1 wiring', () => {
         buildFindingContractInstructionContext: vi.fn().mockReturnValue(
           findingContractInstructionContext,
         ),
+        buildFindingEscalationInstructionContexts: vi.fn().mockReturnValue(new Map()),
         resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'opencode', model: 'opencode/big-pickle' }),
       } as unknown as StepExecutorDeps['optionsBuilder'],
       getCwd: () => cwd,
@@ -452,10 +463,19 @@ describe('session compaction Phase 1 wiring', () => {
       getRetryNote: () => undefined,
       getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
       structuredCaller: {
-        evaluateCondition: vi.fn(), judgeStatus: vi.fn(), decomposeTask: vi.fn(), requestMoreParts: vi.fn(),
+        evaluateCondition: vi.fn(),
+        judgeStatus: vi.fn(),
+        decomposeTask: vi.fn(),
+        requestMoreParts: vi.fn(),
+        normalizeFindingIntake: vi.fn().mockResolvedValue({
+          persona: 'finding-intake-normalizer',
+          status: 'done',
+          content: '',
+          structuredOutput: { rawFindings: normalizedRawFindings },
+          timestamp: new Date('2026-07-16T00:00:00.000Z'),
+        }),
       },
       structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
-      reviewerOutputStrategy: { kind: 'structured', reportGeneration: 'structured', intake: 'reviewer_structured' },
       findingContract: {
         manager: {
           persona: 'findings-manager',
@@ -500,69 +520,10 @@ describe('session compaction Phase 1 wiring', () => {
     compactSessionBeforePhase1Mock.mockResolvedValueOnce('fresh');
     mkdirSync(runPaths.reportsAbs, { recursive: true });
     writeFileSync(join(runPaths.reportsAbs, 'findings.json'), '{}');
+    queueAgentResponse(makeDoneResponse({ sessionId: undefined }));
     queueAgentResponse(makeDoneResponse({
       sessionId: undefined,
-      structuredOutput: {
-        rawFindings: [{
-          rawExcerpt: 'A finding',
-          candidate: {
-            rawFindingId: 'raw-1',
-            familyTag: 'bug',
-            severity: 'high',
-            title: 'A finding',
-            description: 'A finding',
-            relation: 'persists',
-            targetFindingIds: ['F-9999'],
-            suggestion: null,
-            target: { kind: 'code', paths: ['src/a.ts'] },
-            evidenceRequests: [],
-          },
-        }],
-      },
-    }));
-    queueAgentResponse(makeDoneResponse({
-      sessionId: undefined,
-      content: '{"reportContent":"A finding","rawFindings":[]}',
-      structuredOutput: {
-        reportContent: 'A finding',
-        rawFindings: [{
-          rawExcerpt: 'A finding',
-          candidate: {
-            rawFindingId: 'raw-1',
-            familyTag: 'bug',
-            severity: 'high',
-            title: 'A finding',
-            description: 'A finding',
-            relation: 'persists',
-            targetFindingIds: ['F-9999'],
-            suggestion: null,
-            target: { kind: 'code', paths: ['src/a.ts'] },
-            evidenceRequests: [],
-          },
-        }],
-      },
-    }));
-    queueAgentResponse(makeDoneResponse({
-      sessionId: undefined,
-      content: '{"reportContent":"A finding","rawFindings":[]}',
-      structuredOutput: {
-        reportContent: 'A finding',
-        rawFindings: [{
-          rawExcerpt: 'A finding',
-          candidate: {
-            rawFindingId: 'raw-1',
-            familyTag: 'bug',
-            severity: 'high',
-            title: 'A finding',
-            description: 'A finding',
-            relation: 'new',
-            targetFindingIds: [],
-            suggestion: null,
-            target: { kind: 'code', paths: ['src/a.ts'] },
-            evidenceRequests: [],
-          },
-        }],
-      },
+      content: 'A finding',
     }));
 
     const executor = new StepExecutor(deps);
@@ -578,10 +539,10 @@ describe('session compaction Phase 1 wiring', () => {
       preparedExecution,
     );
 
-    expect(vi.mocked(executeAgent)).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(executeAgent)).toHaveBeenCalledTimes(2);
     expect(
       vi.mocked(executeAgent).mock.calls.map(([, , options]) => options.sessionId),
-    ).toEqual([undefined, undefined, undefined]);
+    ).toEqual([undefined, undefined]);
     expect(ingestFindingContractResultsMock).toHaveBeenCalledOnce();
   });
 

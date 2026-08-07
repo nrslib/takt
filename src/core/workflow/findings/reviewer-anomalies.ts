@@ -155,8 +155,8 @@ function hasRestatementCorrespondence(input: {
  * escalation phase では、元の不完全な観測の所有者（owner reviewer）と、格上げで
  * clean な claim を出した reviewer が異なる。これが reviewer 一致要件の唯一の
  * 緩和点で、判別子は request.reviewer === 'escalation-reviewer' だけ。
- * escalation reviewer 未設定のワークフローでは escalation request が作られないため
- * この分岐は発火せず、従来の条件式と等価になる。
+ * owner が解決された profile に `escalate` が無ければ escalation request 自体が
+ * 作られないため、この分岐は発火せず従来の条件式と等価になる。
  */
 function hasRestatementCandidateShape(
   request: RestatementRequestV1,
@@ -513,14 +513,15 @@ export function collectReviewSupersededReviewerAnomalyIds(
  * （観測消去の禁止）。settlement が付いた anomaly は isOutstandingReviewerAnomaly が
  * false になり、when() のカウンタからも外れる（＝ブロッキング効果が消える）。
  *
- * candidateAnomalyIds は同じ publicationIdByReviewer から
+ * candidateAnomalyIds は同じ publicationIdsByReviewer から
  * collectReviewSupersededReviewerAnomalyIds が選んだ集合であること。候補の全観測者が
  * publication を持つことはそこで保証されるので、ここでは引き直さない。
  */
 export function withdrawReviewerAnomaliesSupersededByReview(input: {
   ledger: FindingLedger;
   candidateAnomalyIds: ReadonlySet<string>;
-  publicationIdByReviewer: ReadonlyMap<string, string>;
+  /** レビュアー枠 → そのラウンドに登録された publication ID 全件（1件とは限らない）。 */
+  publicationIdsByReviewer: ReadonlyMap<string, readonly string[]>;
   observation: FindingObservation;
 }): FindingLedger {
   const anomalies = input.ledger.reviewerAnomalies;
@@ -539,14 +540,16 @@ export function withdrawReviewerAnomaliesSupersededByReview(input: {
     }
     // 候補は「全観測者が今ラウンドの publication を持つ」もののみ（collect 側の
     // every 判定）。取り下げ根拠は観測者全員分を記録する — 1人分だけ残すと
-    // 「誰の後続レビューで決着したのか」を監査で再構成できない。順序は reviewer の
+    // 「誰の後続レビューで決着したのか」を監査で再構成できない。
+    // 1レビュアー枠が同一ラウンドに複数 publication を持つ場合（格上げ再レビューの
+    // owner 別グループ化）は、その全件を展開する。1件へ潰すと別 owner の
+    // publication ID が根拠として記録され得る。順序は (reviewer, publicationId) の
     // binary 順で決定的にする。
     const supersedingPublications = [...anomaly.reviewers]
       .sort(compareBinaryStrings)
-      .map((reviewer) => ({
-        reviewer,
-        publicationId: input.publicationIdByReviewer.get(reviewer)!,
-      }));
+      .flatMap((reviewer) => [...input.publicationIdsByReviewer.get(reviewer)!]
+        .sort(compareBinaryStrings)
+        .map((publicationId) => ({ reviewer, publicationId })));
     changed = true;
     return {
       ...anomaly,

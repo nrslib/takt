@@ -133,18 +133,6 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 ```yaml
 # ~/.takt/config.yaml (continued)
 
-# Finding Contract plain-text intake normalizer
-# finding_contract:
-#   intake_normalize:
-#     provider: codex
-#     model: gpt-5.6-terra
-#     targets:
-#       - provider: opencode
-#         model: ollama-cloud/gemma4:31b
-#     provider_options:
-#       codex:
-#         reasoning_effort: high
-
 # Workflow security policies (all default to deny)
 # These settings control what untrusted workflow YAMLs are allowed to do.
 # workflow_mcp_servers:                  # MCP server transport policy
@@ -215,7 +203,6 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 | `persona_providers` | object | - | Deprecated legacy per-display-name provider/model/provider_options overrides. Prefer `provider_routing` for new settings |
 | `provider_options` | object | - | Global provider-specific options |
 | `provider_profiles` | object | - | Provider-specific permission profiles |
-| `finding_contract.intake_normalize` | object | - | Provider/model used to extract raw findings from selected reviewer reports in an isolated session. Both are required; `targets` is an optional exact resolved reviewer provider/model allowlist |
 | `rate_limit_fallback` | object | - | Rate-limit fallback; `switch_chain` lists `{provider, model}` entries switched to in order when a provider is rate limited |
 | `anthropic_api_key` | string | - | Anthropic API key for Claude |
 | `openai_api_key` | string | - | OpenAI API key for Codex |
@@ -302,13 +289,6 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 #     step_permission_overrides:
 #       ai_review: readonly
 
-# finding_contract:
-#   intake_normalize:
-#     provider: codex
-#     model: gpt-5.6-terra
-#     targets:
-#       - provider: opencode
-#         model: ollama-cloud/gemma4:31b
 ```
 
 ### OpenCode execution guards
@@ -363,7 +343,6 @@ Project config accepts most global keys and overrides their global values (e.g. 
 | `assistant.init_files` | string[] | - | Project-only interactive assistant initial context files. Paths must be relative to the project root; absolute paths, paths resolving outside the project root, and sensitive file patterns such as `.env*`, `.npmrc`, `.pypirc`, `.netrc`, `*.pem`, `*.key`, and `.git/**` are rejected. Missing paths, directories, and unreadable files fail with a clear error. At most 16 files are allowed; each file is limited to 256 KiB and the combined content is limited to 1 MiB. When unset or empty, TAKT does not auto-discover `CLAUDE.md`, `AGENT.md`, `AGENTS.md`, `TAKT.md`, or other files. This is separate from `takt_providers.assistant`, which only controls the assistant provider/model. |
 | `provider_options` | object | - | Provider-specific options |
 | `provider_profiles` | object | - | Provider-specific permission profiles |
-| `finding_contract.intake_normalize` | object | global setting | Project override for the Finding Contract plain-text intake normalizer |
 | `vcs_provider` | `"github"` \| `"gitlab"` | auto-detect | VCS provider (overrides global) |
 | `takt_providers` | object | - | TAKT internal provider overrides. Project `takt_providers.assistant` overrides the global assistant provider/model and is used for assistant conversations (interactive planning, instruct on existing tasks, and retry dialogue) and Report phase fallback after an OpenCode report retry fails. If project and global assistant are both unset, Report phase fallback is disabled and top-level `provider` / `model` are not used as an implicit fallback. |
 | `workflow_mcp_servers` | object | - | MCP server transport policy (overrides global) |
@@ -375,16 +354,29 @@ Project config accepts most global keys and overrides their global values (e.g. 
 
 Project config values override global config when both are set.
 
-`finding_contract.intake_normalize` selects reviewer intake by the reviewer's
-resolved provider/model. TAKT saves each ordinary Markdown reviewer report, then
-passes only that report to the configured provider/model in a fresh tool-free
-structured session. The provider must support isolated structured execution.
-When `targets` is omitted, normalization applies to every Finding Contract
-reviewer. When present, it applies only when a `{ provider, model }` entry exactly
-matches the resolved reviewer. Other reviewers keep native structured output.
-The normalizer provider/model/options are isolated from reviewer routing and CLI
-overrides; only a rate-limit fallback for the `finding_intake_normalizer`
-operation may replace them. The project block atomically replaces the global block.
+The Finding Contract intake normalizer has no `config.yaml` key. Every Finding
+Contract reviewer writes an ordinary Markdown report; TAKT saves that report and
+passes only it to a fresh tool-free structured session, once per reviewer per round.
+That session's provider/model resolve in this order: the runtime.yaml
+`provider.targets.internal_agents['intake-normalizer']` seat, then the reviewer's
+`escalate` target when its profile declares one, then the ordinary default
+resolution. The first candidate must support isolated structured execution; when it
+does not, the run fails with that reason instead of silently continuing. When the
+normalizer's output survives neither validation nor its single correction, TAKT
+retries the normalization once on the next candidate of that same chain that
+resolves to a different `(provider, model)` and can run isolated structured
+execution; if that also fails, the run stops with each candidate's concrete reason.
+The normalizer is a synthetic step and resolves like any other one, so an explicit
+CLI or environment provider/model override applies to it too. That is deliberate —
+an explicit override is the highest-priority layer everywhere in TAKT. The
+consequence is that overriding a Finding Contract run onto a provider without
+isolated structured execution stops the run with the normalizer's reason instead of
+silently degrading. A rate-limit fallback registered for the
+`finding_intake_normalizer` operation replaces the normalizer for that call only.
+
+The removed `finding_contract.intake_normalize` key no longer exists: normalization
+is built-in behavior now. A workflow that still declares it fails to load on the
+strict schema's unknown-key rejection — delete the block.
 
 Run metadata, session logs, traces, reports, and other run lifecycle artifacts
 are files under `.takt/runs/<run>/`. Finding Contract state is separate: TAKT
@@ -513,7 +505,7 @@ Paths must be absolute paths to executable files. Environment variables take pre
 
 Provider and model selection uses the single, field-by-field precedence contract documented under [Provider Routing](#provider-routing). Normal steps, parallel sub-steps, synthetic steps, and workflow calls follow that contract for the layers available to each kind. Parallel sub-steps do not support promotion.
 
-For Finding Contract workflows, `finding_contract.manager.provider` / `model`, `finding_contract.adjudicator.provider` / `model`, and `finding_contract.escalation_reviewer.provider` / `model` are treated as step-level values for their synthetic steps. The implementation's field-by-field order is explicit CLI/environment override → promotion matching the current execution (normal agent steps only) → step or parallel sub-step provider/model (including these direct values) → `workflow_call` override → `provider_routing` step/tag/persona → deprecated `persona_providers` → auto routing → workflow → project → global → provider default. When neither field is set, the role uses the normal workflow-step fallback chain. Setting only `provider` stops lower-priority model fallback; providers that require an explicit model fail validation.
+For Finding Contract workflows, `finding_contract.manager.provider` / `model` and `finding_contract.adjudicator.provider` / `model` are treated as step-level values for their synthetic steps. The implementation's field-by-field order is explicit CLI/environment override → promotion matching the current execution (normal agent steps only) → step or parallel sub-step provider/model (including these direct values) → `workflow_call` override → `provider_routing` step/tag/persona → deprecated `persona_providers` → auto routing → workflow → project → global → provider default. When neither field is set, the role uses the normal workflow-step fallback chain. Setting only `provider` stops lower-priority model fallback; providers that require an explicit model fail validation.
 
 ```yaml
 finding_contract:
@@ -526,10 +518,6 @@ finding_contract:
   adjudicator:
     persona: supervisor
     instruction: adjudicate-finding-contract
-    provider: codex
-    model: <strong-model>
-  escalation_reviewer:
-    persona: escalation-supervisor
     provider: codex
     model: <strong-model>
 ```
@@ -603,6 +591,7 @@ provider:
       model: gpt-5.6-sol
       options:
         reasoning_effort: low
+      escalate: sol-high
     router:
       provider: codex
       model: gpt-5.6-luna
@@ -622,6 +611,8 @@ provider:
     internal_agents:
       selector:
         profile: router
+      intake-normalizer:
+        profile: sol-high
 
   auto_routing:
     strategy: balanced
@@ -641,6 +632,28 @@ provider:
 `provider.profiles` holds named provider/model/options definitions. A profile's flat `options` bag applies to that profile's provider (for example `reasoning_effort` maps to the Codex `reasoning_effort` option). Profiles may reuse another profile with an explicit `extends`; there is no field-level merge between same-name profiles across the global and project files — the project definition replaces the whole profile.
 
 `provider.defaults` and every `provider.targets` entry choose exactly one of a fixed `profile` or an auto-routing `pool`. Steps are named `<leaf-workflow-name>/<step-name>`; control nodes that do not run an agent (such as `workflow_call`) are not resolution targets.
+
+### `escalate` — this profile's last move
+
+A profile may name another profile with `escalate`. It declares "when work resolved to this profile runs out of room, hand it to that profile instead". One line on the weaker profile is the whole configuration; workflows never name a provider or a model.
+
+```yaml
+provider:
+  profiles:
+    reviewer-local:
+      provider: opencode
+      model: ollama-cloud/gemma4:31b
+      escalate: strong
+    strong:
+      provider: opencode
+      model: ollama-cloud/glm-5.2
+```
+
+- References are validated when the configuration is compiled, before any agent runs: an unknown target, a profile that escalates to itself, and a cyclic `escalate` chain are all load-time errors.
+- `escalate` is inherited through `extends`, like `provider` / `model` / `options`.
+- Only one hop is ever consumed. `escalate` is a worker's last move, not a ladder.
+- A step whose provider comes from an explicit `--provider`, step YAML, or `workflow_call` override is no longer running on that profile, so it has no escalation target. Steps assigned through an auto-routing `pool` do not carry one either.
+- Today the engine consumes `escalate` for Finding Contract escalated re-review; see [workflows.md](workflows.md).
 
 ### Resolution priority
 
@@ -816,7 +829,7 @@ Provider and model are resolved independently at each layer. A provider-only ove
 
 For the Finding Contract manager, `finding_contract.manager.provider` and `finding_contract.manager.model` occupy the `step YAML provider/model` position for the synthetic `findings-manager` step.
 
-Synthetic Finding Contract roles resolve `provider_routing.personas` by a fixed persona key rather than the configured persona name: `findings-manager` (manager), `supervisor` (conflict and terminal adjudication), `escalation-reviewer` (escalated restatement review), and `loop-judge` (loop monitor judges). `finding_contract.escalation_reviewer.provider` / `model` occupy the `step YAML provider/model` position for the synthetic `escalation-reviewer` step. While `finding_contract.escalation_reviewer` is set, `escalation-reviewer` is also a reserved workflow step name.
+Synthetic Finding Contract roles resolve `provider_routing.personas` by a fixed persona key rather than the configured persona name: `findings-manager` (manager), `supervisor` (conflict and terminal adjudication), and `loop-judge` (loop monitor judges). Escalated re-review is not configured this way: it inherits the owning reviewer's step and takes its model from the `escalate` target of the profile that reviewer resolved to. Its reviewer key is the fixed string `escalation-reviewer`, which is a reserved workflow step name in every Finding Contract workflow.
 
 ### Auto Routing
 

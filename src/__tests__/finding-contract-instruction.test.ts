@@ -47,19 +47,12 @@ function buildReport(overrides: {
   });
 }
 
-const REVIEWER_STRUCTURED_OUTPUT = { schemaRef: 'test.raw-findings', schema: { type: 'object' } };
 // codex 対策#4: 本物の reviewer context では WorkflowEngineSetup が
-// rawFindingsStructuredOutput と同時に必ず設定する（snapshot.ts の
+// reviewScopeSnapshotId を必ず設定する（snapshot.ts の
 // computeReviewScopeSnapshotId）。ここでは実際のハッシュ形状は問わないため
 // 固定文字列を使う。
 const REVIEWER_SNAPSHOT_ID = 'snap-test-0000000000000000000000000000000000000000000000000000000000000000';
 const REVIEWER = {
-  mode: 'structured' as const,
-  rawFindingsStructuredOutput: REVIEWER_STRUCTURED_OUTPUT,
-  reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID,
-};
-const PLAIN_TEXT_NORMALIZED_REVIEWER = {
-  mode: 'plain_text_normalized' as const,
   reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID,
 };
 
@@ -70,7 +63,6 @@ describe('buildFindingContractInstruction', () => {
         {},
         { hasOpenFindings: true },
         { reviewer: REVIEWER },
-        { reviewer: PLAIN_TEXT_NORMALIZED_REVIEWER },
         {
           reviewer: REVIEWER,
           hasOpenFindings: true,
@@ -92,31 +84,15 @@ describe('buildFindingContractInstruction', () => {
         language: 'ja',
       });
       expect(rendered).not.toContain('統合台帳のコピー');
-      expect(rendered).toContain('構造化 raw finding として報告してください');
+      expect(rendered).toContain('通常の Markdown レビュー報告を書いてください');
     });
 
-    it('injects the structured finding protocol in both languages', () => {
-      for (const language of ['en', 'ja'] as const) {
-        for (const render of [build, buildReport]) {
-          const structured = render({
-            contract: { reviewer: REVIEWER, hasOpenFindings: true },
-            language,
-          });
-          expect(structured).not.toContain('typed evidence matrix');
-          expect(structured).toContain('structured output');
-          expect(structured).toContain('resolution_confirmation');
-          expect(structured).toContain('targetFindingIds');
-          expect(structured).toMatch(/one-to-one|1対1/u);
-        }
-      }
-    });
-
-    it('asks plain-text-normalized reviewers for ordinary explicit prose without output schemas', () => {
+    it('asks every reviewer for ordinary explicit prose without output schemas', () => {
       for (const language of ['en', 'ja'] as const) {
         for (const render of [build, buildReport]) {
           const rendered = render({
             contract: {
-              reviewer: PLAIN_TEXT_NORMALIZED_REVIEWER,
+              reviewer: REVIEWER,
               hasOpenFindings: true,
             },
             language,
@@ -150,9 +126,9 @@ describe('buildFindingContractInstruction', () => {
       expect(ja).toContain('system finding');
     });
 
-    // rawFindingId / familyTag / relation / targetFindingId は manager-runner /
-    // manager-output-validation が英語リテラルで照合する raw finding のフィールド名。
-    // ja テンプレートでも英語のまま出ることを確認する。
+    // relation / targetFindingId は manager-runner / manager-output-validation が
+    // 英語リテラルで照合する raw finding のフィールド名。ja テンプレートでも
+    // 英語のまま出ることを確認する。
     it('keeps raw finding protocol field names in English for ja', () => {
       const rendered = build({
         contract: {
@@ -162,8 +138,6 @@ describe('buildFindingContractInstruction', () => {
         },
         language: 'ja',
       });
-      expect(rendered).toContain('rawFindingId');
-      expect(rendered).toContain('familyTag');
       expect(rendered).toContain('relation');
       expect(rendered).toContain('targetFindingId');
     });
@@ -189,32 +163,70 @@ describe('buildFindingContractInstruction', () => {
       expect(ja).toContain('relation を "reopened"');
     });
 
-    it('requires current exact evidence requests without reviewer-issued proof fields in both languages', () => {
-      const structuredEn = build({
-        contract: { reviewer: REVIEWER, hasOpenFindings: true },
+    it('never asks reviewers for structured output or echoes the review scope snapshot', () => {
+      for (const language of ['en', 'ja'] as const) {
+        for (const render of [build, buildReport]) {
+          const rendered = render({
+            contract: {
+              reviewer: REVIEWER,
+              hasOpenFindings: true,
+              hasWaivedFindings: true,
+              hasDismissedFindings: true,
+            },
+            language,
+          });
+          expect(rendered).not.toContain(REVIEWER_SNAPSHOT_ID);
+          expect(rendered).not.toContain('rawFindingId');
+          expect(rendered).not.toContain('rawExcerpt');
+          expect(rendered).not.toContain('proofId');
+          expect(rendered).not.toContain('structured raw finding');
+        }
+      }
+    });
+
+    // 再提示専用ラウンドは request だけを処理する。通常のレビュー指示が同時に
+    // 出ると「observe した問題をすべて報告せよ」と矛盾する。
+    it('suppresses the ordinary reviewer guidance during a restatement-only round', () => {
+      const rendered = build({
+        contract: {
+          reviewer: {
+            ...REVIEWER,
+            presentationContext: {
+              revision: 2,
+              reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID,
+              restatementRequests: [{ anomalyId: 'A-1' }],
+            },
+          },
+          hasOpenFindings: true,
+        } as never,
       });
-      const structuredJa = build({
-        contract: { reviewer: REVIEWER, hasOpenFindings: true },
+      expect(rendered).toContain('## Restatement requests');
+      expect(rendered).not.toContain('Write an ordinary Markdown review report');
+      expect(rendered).not.toContain('Each round, verify the open ledger findings');
+      expect(rendered).not.toContain('{{');
+      // severity 欠落こそが再提示ループの原因なので、明記要求は再提示ラウンドでも残す。
+      expect(rendered).toContain('State a short title and a severity');
+    });
+
+    it('keeps the severity requirement in a restatement-only round for ja as well', () => {
+      const rendered = build({
+        contract: {
+          reviewer: {
+            ...REVIEWER,
+            presentationContext: {
+              revision: 2,
+              reviewScopeSnapshotId: REVIEWER_SNAPSHOT_ID,
+              restatementRequests: [{ anomalyId: 'A-1' }],
+            },
+          },
+          hasOpenFindings: true,
+        } as never,
         language: 'ja',
       });
-      expect(structuredEn).toContain('code confirmation needs `file_quote`');
-      expect(structuredEn).toContain('structure confirmation needs `repository_manifest`');
-      expect(structuredEn).toContain('absence confirmation needs `repository_query` plus `authoritative_quote`');
-      expect(structuredJa).toContain('code の確認は `file_quote`');
-      expect(structuredJa).toContain('structure の確認は `repository_manifest`');
-      expect(structuredJa).toContain('absence の確認は `repository_query` と `authoritative_quote`');
-      expect(structuredEn).toContain('path and bounded 1-based startLine/endLine only');
-      expect(structuredEn).toContain('do not provide source text or verbatimExcerpt');
-      expect(structuredJa).toContain('path と有界な1始まりの startLine/endLine だけ');
-      expect(structuredJa).toContain('source text や verbatimExcerpt は出力しない');
-
-      for (const rendered of [
-        structuredEn,
-        structuredJa,
-      ]) {
-        expect(rendered).toMatch(/Do not output snapshotId|snapshotId・runId・proofId/u);
-        expect(rendered).not.toContain(REVIEWER_SNAPSHOT_ID);
-      }
+      expect(rendered).toContain('## Restatement requests');
+      expect(rendered).toContain('severity');
+      expect(rendered).not.toContain('通常の Markdown レビュー報告を書いてください');
+      expect(rendered).not.toContain('{{');
     });
   });
 

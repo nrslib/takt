@@ -1,6 +1,6 @@
 import {
   createFindingReviewPublication,
-  STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+  PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
   type CanonicalFindingReviewPublication,
 } from '../../core/workflow/findings/review-publication.js';
 import type { ReviewerRawResourceEnvelope } from '../../core/workflow/findings/raw-canonicalization.js';
@@ -34,7 +34,7 @@ export function findingReviewPublicationFixture(input: {
       reviewerStepName: input.reviewerStepName,
       reportName: input.reportName ?? `${input.reviewerStepName}.md`,
     },
-    protocol: STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+    protocol: PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
     reportContent,
     rawFindings: input.rawFindings,
     ...(input.reviewerRawResourceEnvelope !== undefined

@@ -547,6 +547,108 @@ describe('resolveStepProviderModel — tag routing conflict policy', () => {
   });
 });
 
+describe('resolveStepProviderModel — profile escalate target', () => {
+  const escalation = {
+    profile: 'strong',
+    provider: 'codex' as const,
+    model: 'gpt-strong',
+  };
+  const step = {
+    name: 'architecture-review',
+    personaDisplayName: 'architecture-reviewer',
+    providerRoutingPersonaKey: 'architecture-reviewer',
+  };
+
+  it('carries the escalate target of the layer that supplied the provider', () => {
+    expect(resolveStepProviderModel({
+      step,
+      providerRouting: {
+        steps: { 'architecture-review': { provider: 'opencode', model: 'weak', escalation } },
+      },
+    })).toMatchObject({ provider: 'opencode', model: 'weak', escalation });
+
+    expect(resolveStepProviderModel({
+      step,
+      providerRouting: {
+        personas: { 'architecture-reviewer': { provider: 'opencode', model: 'weak', escalation } },
+      },
+    }).escalation).toEqual(escalation);
+
+    expect(resolveStepProviderModel({
+      step: { ...step, tags: ['review'] },
+      providerRouting: {
+        tags: { review: { provider: 'opencode', model: 'weak', escalation } },
+      },
+    }).escalation).toEqual(escalation);
+  });
+
+  it('carries the defaults escalate target when the provider comes from runtime-v1 defaults', () => {
+    expect(resolveStepProviderModel({
+      step,
+      provider: 'opencode',
+      providerSource: 'runtime-v1',
+      model: 'weak',
+      modelSource: 'runtime-v1',
+      escalation,
+    }).escalation).toEqual(escalation);
+  });
+
+  it('drops the escalate target when an explicit override replaces the profile', () => {
+    expect(resolveStepProviderModel({
+      step: { ...step, provider: 'claude', providerSpecified: true, model: 'sonnet' },
+      providerRouting: {
+        steps: { 'architecture-review': { provider: 'opencode', model: 'weak', escalation } },
+      },
+    }).escalation).toBeUndefined();
+
+    expect(resolveStepProviderModel({
+      step,
+      provider: 'claude',
+      providerSource: 'cli',
+      escalation,
+    }).escalation).toBeUndefined();
+  });
+
+  it('fails fast when two tags at the same priority differ only in their escalate target', () => {
+    const other = { profile: 'stronger', provider: 'codex' as const, model: 'gpt-stronger' };
+
+    expect(() => resolveStepProviderModel({
+      step: { ...step, tags: ['review', 'deep'] },
+      tagConflictPolicy: 'fail-fast',
+      providerRouting: {
+        tags: {
+          review: { provider: 'opencode', model: 'weak', escalation },
+          deep: { provider: 'opencode', model: 'weak', escalation: other },
+        },
+      },
+    })).toThrow(/Conflicting provider routing for tags/);
+  });
+
+  it('drops a previous tag escalate target when a later tag supplies the provider without one', () => {
+    const resolved = resolveStepProviderModel({
+      step: { ...step, tags: ['review', 'deep'] },
+      providerRouting: {
+        tags: {
+          review: { provider: 'opencode', model: 'weak', escalation },
+          deep: { provider: 'claude', model: 'sonnet' },
+        },
+      },
+    });
+
+    expect(resolved).toMatchObject({ provider: 'claude', model: 'sonnet' });
+    expect(resolved.escalation).toBeUndefined();
+  });
+
+  it('has no escalate target when the resolved profile declares none', () => {
+    expect(resolveStepProviderModel({
+      step,
+      providerRouting: {
+        steps: { 'architecture-review': { provider: 'opencode', model: 'weak' } },
+      },
+    }).escalation).toBeUndefined();
+  });
+});
+
 describe('resolveWorkflowCallProviderModel', () => {
   it('should prefer workflow fallback over resolved project input', () => {
     const result = resolveWorkflowCallProviderModel({

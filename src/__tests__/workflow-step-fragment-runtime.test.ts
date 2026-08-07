@@ -7,6 +7,12 @@ vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
 }));
 
+// 正規化係は隔離 structured 実行で走り runAgent を通らない。raw findings の
+// 唯一の生成元なのでここで差し替える。
+vi.mock('../agents/finding-intake-normalizer-usecase.js', () => ({
+  normalizeFindingIntake: vi.fn(),
+}));
+
 vi.mock('../core/workflow/evaluation/index.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../core/workflow/evaluation/index.js')>();
   const { MockRuleEvaluator } = await import('./rule-evaluator-test-double.js');
@@ -28,6 +34,7 @@ import { WorkflowEngine } from './helpers/workflow-engine.js';
 import type { WorkflowConfig, WorkflowResumePoint } from '../core/models/types.js';
 import { getWorkflowReference } from '../core/workflow/workflow-reference.js';
 import { runAgent } from '../agents/runner.js';
+import { normalizeFindingIntake } from '../agents/finding-intake-normalizer-usecase.js';
 import { resolveWorkflowCallTarget } from '../infra/config/loaders/workflowCallResolver.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
 import {
@@ -201,38 +208,38 @@ describe('workflow step fragment runtime contract', () => {
       engine.on('step:complete', (step) => transitions.push(step.name));
       engine.on('step:cycle_detected', (_monitor, count) => cycleCounts.push(count));
       engine.on('findings:ledger', (ledger) => ledgers.push(ledger));
+
+      const reviewReportContent = 'A finding emitted by the reviewer.';
+      vi.mocked(normalizeFindingIntake).mockReset();
+      vi.mocked(normalizeFindingIntake).mockImplementation(async () => makeResponse({
+        persona: 'finding-intake-normalizer',
+        content: '',
+        structuredOutput: {
+          rawFindings: [{
+            rawExcerpt: reviewReportContent,
+            candidate: {
+              rawFindingId: 'review-issue',
+              familyTag: 'test',
+              severity: 'high',
+              title: 'Test finding',
+              description: reviewReportContent,
+              suggestion: null,
+              relation: 'new',
+              targetFindingIds: [],
+              target: null,
+              evidenceRequests: [],
+            },
+          }],
+        },
+      }));
       vi.mocked(runAgent).mockReset();
       vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
         options?.onPromptResolved?.({
           systemPrompt: 'test system prompt',
           userInstruction: instruction,
         });
-        if (schemaHasProperty(options?.outputSchema, 'rawFindings')) {
-          const reportContent = 'A finding emitted by the reviewer.';
-          return makeResponse({
-            persona,
-            content: reportContent,
-            structuredOutput: {
-              ...(schemaHasProperty(options?.outputSchema, 'reportContent')
-                ? { reportContent }
-                : {}),
-              rawFindings: [{
-                rawExcerpt: reportContent,
-                candidate: {
-                  rawFindingId: 'review-issue',
-                  familyTag: 'test',
-                  severity: 'high',
-                  title: 'Test finding',
-                  description: reportContent,
-                  suggestion: null,
-                  relation: 'new',
-                  targetFindingIds: [],
-                  target: null,
-                  evidenceRequests: [],
-                },
-              }],
-            },
-          });
+        if (persona === 'review' || options?.workflowMeta?.currentStep === 'review') {
+          return makeResponse({ persona, content: reviewReportContent });
         }
         if (schemaHasProperty(options?.outputSchema, 'rawDecisions')) {
           return makeResponse({

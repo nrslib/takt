@@ -48,10 +48,24 @@ export interface AutoRoutingConfig {
   };
 }
 
+/**
+ * The resolved `escalate` target of the runtime.yaml profile an agent was resolved to.
+ * Carried on the resolution result so consumers (Finding Contract escalation) act on a
+ * resolved provider/model instead of re-reading configuration or matching model names.
+ */
+export interface ProviderEscalationTarget {
+  profile: string;
+  provider: ProviderType;
+  model: string;
+  providerOptions?: StepProviderOptions;
+}
+
 export interface PersonaProviderEntry {
   provider?: ProviderType;
   model?: string;
   providerOptions?: StepProviderOptions;
+  /** Set only by the runtime.yaml compiler, from the referenced profile's `escalate`. */
+  escalation?: ProviderEscalationTarget;
 }
 
 export type ProviderRoutingEntry = PersonaProviderEntry;
@@ -94,24 +108,6 @@ export interface TaktProvidersConfig {
 
 export interface AssistantConfig {
   initFiles?: string[];
-}
-
-/** Finding Contract reviewer report extraction configuration. */
-export interface FindingIntakeNormalizeTarget {
-  provider: ProviderType;
-  model: string;
-}
-
-export interface FindingIntakeNormalizeConfig {
-  provider: ProviderType;
-  model: string;
-  targets?: FindingIntakeNormalizeTarget[];
-  providerOptions?: StepProviderOptions;
-}
-
-/** Engine-side Finding Contract settings from global/project config. */
-export interface FindingContractRuntimeConfig {
-  intakeNormalize?: FindingIntakeNormalizeConfig;
 }
 
 /** Step-specific quality gates override */
@@ -314,8 +310,6 @@ export interface ProjectConfig {
   providerOptions?: StepProviderOptions;
   /** Automatic provider/model routing configuration. */
   autoRouting?: AutoRoutingConfig;
-  /** Engine-side Finding Contract settings. */
-  findingContract?: FindingContractRuntimeConfig;
   /** Rate limit fallback provider switch chain */
   rateLimitFallback?: RateLimitFallbackConfig;
   /** Provider-specific permission profiles (project-level override) */

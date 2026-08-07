@@ -23,7 +23,7 @@ import {
 import { applyCommitLedgerStates } from '../core/workflow/findings/manager-commit-finalization.js';
 import {
   createFindingReviewPublication,
-  STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+  PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
 } from '../core/workflow/findings/review-publication.js';
 import { buildFindingsRuleContext } from '../core/workflow/findings/context.js';
 import {
@@ -35,6 +35,7 @@ import {
   resolveReviewIntegrityLimits,
   reviewIntegrityRoundsCompleted,
 } from '../core/workflow/findings/review-integrity.js';
+import { ReviewerAnomalyEntrySchema } from '../core/models/finding-schemas.js';
 import type { FindingLedger, FindingLedgerEntry, ReviewerAnomalyEntry } from '../core/workflow/findings/types.js';
 
 function makeFinding(
@@ -552,7 +553,7 @@ describe('後続レビュー登録による reviewer anomaly の決着ライフ�
     timestamp: '2026-08-06T00:00:00.000Z',
   };
 
-  function publicationFor(reviewer: string, stepIteration = 2) {
+  function publicationFor(reviewer: string, stepIteration = 2, reportName = `${reviewer}.md`) {
     return createFindingReviewPublication({
       identity: {
         scopeIdentity: 'scope-withdrawal',
@@ -560,10 +561,10 @@ describe('後続レビュー登録による reviewer anomaly の決着ライフ�
         parentStepName: 'reviewers',
         stepIteration,
         reviewerStepName: reviewer,
-        reportName: `${reviewer}.md`,
+        reportName,
       },
-      protocol: STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
-      reportContent: `# ${reviewer}\n`,
+      protocol: PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+      reportContent: `# ${reportName}\n`,
       rawFindings: [],
     });
   }
@@ -593,17 +594,21 @@ describe('後続レビュー登録による reviewer anomaly の決着ライフ�
 
   function commit(input: {
     ledger: FindingLedger;
-    reviewers: string[];
+    reviewers?: string[];
+    /** 同一 reviewer キーで複数 publication が成立するラウンドを直接組むための入口。 */
+    publications?: ReturnType<typeof publicationFor>[];
     baseAnomalySpecs?: ReviewerAnomalySpec[];
     verifiedEvidenceCandidates?: Array<{ lineageKey: string; rawFindingId: string }>;
   }): FindingLedger {
+    const publications = input.publications
+      ?? (input.reviewers ?? []).map((reviewer) => publicationFor(reviewer));
     return applyCommitLedgerStates({
       runInput: {
         workflowName: 'peer-review',
         parentStep: { name: 'reviewers' },
         runId: observation.runId,
         timestamp: observation.timestamp,
-        subResults: input.reviewers.map((reviewer) => ({ publication: publicationFor(reviewer) })),
+        subResults: publications.map((publication) => ({ publication })),
       } as never,
       freshLedger: input.ledger,
       settledLedger: input.ledger,
@@ -631,6 +636,72 @@ describe('後続レビュー登録による reviewer anomaly の決着ライフ�
       decidedAt: observation,
     });
     expect(isOutstandingReviewerAnomaly(anomaly)).toBe(false);
+  });
+
+  it('1レビュアー枠が同一ラウンドに複数 publication を登録しても取り下げ根拠は全件残る', () => {
+    // 格上げ再レビューは owner ごとに1呼び出しへ分かれるが reviewer キーは固定の
+    // 'escalation-reviewer'。publication を reviewer キーで1件に潰すと、別 owner の
+    // publication ID が根拠として記録され、監査でどちらの再レビューが決着させたのか
+    // 再構成できなくなる。
+    const seeded = seededLedger({ reviewers: ['escalation-reviewer'] });
+    const forArchitecture = publicationFor(
+      'escalation-reviewer',
+      2,
+      'escalation-reviewer-architecture-review.md',
+    );
+    const forSecurity = publicationFor(
+      'escalation-reviewer',
+      2,
+      'escalation-reviewer-security-review.md',
+    );
+    expect(forArchitecture.publicationId).not.toBe(forSecurity.publicationId);
+
+    const committed = commit({
+      ledger: seeded,
+      publications: [forArchitecture, forSecurity],
+    });
+
+    const anomaly = committed.reviewerAnomalies![0]!;
+    const expectedIds = [forArchitecture.publicationId, forSecurity.publicationId].sort();
+    expect(anomaly.settlement).toEqual({
+      kind: 'withdrawn_by_subsequent_review',
+      supersedingPublications: expectedIds.map((publicationId) => ({
+        reviewer: 'escalation-reviewer',
+        publicationId,
+      })),
+      decidedAt: observation,
+    });
+    // 台帳へ書ける形（schema）であり、settlement policy の適格性も満たす。
+    expect(ReviewerAnomalyEntrySchema.safeParse(anomaly).success).toBe(true);
+    expect(reviewerAnomalySettlementEligibilityViolation({
+      projection: { anomalies: committed.reviewerAnomalies ?? [], findings: committed.findings },
+      anomaly: { ...anomaly, settlement: undefined },
+      settlement: anomaly.settlement!,
+      sourceHead: { anomalies: committed.reviewerAnomalies ?? [] },
+      workflowTaskDigest: null,
+    } as never)).toBeUndefined();
+  });
+
+  it('同じ publication を二重計上した取り下げ根拠は settlement policy が拒否する', () => {
+    const seeded = seededLedger({ reviewers: ['escalation-reviewer'] });
+    const publication = publicationFor('escalation-reviewer');
+    const committed = commit({ ledger: seeded, publications: [publication] });
+    const anomaly = committed.reviewerAnomalies![0]!;
+
+    expect(reviewerAnomalySettlementEligibilityViolation({
+      projection: { anomalies: committed.reviewerAnomalies ?? [], findings: committed.findings },
+      anomaly: { ...anomaly, settlement: undefined },
+      settlement: {
+        kind: 'withdrawn_by_subsequent_review',
+        supersedingPublications: [
+          { reviewer: 'escalation-reviewer', publicationId: publication.publicationId },
+          { reviewer: 'escalation-reviewer', publicationId: publication.publicationId },
+        ],
+        decidedAt: observation,
+      },
+      sourceHead: { anomalies: committed.reviewerAnomalies ?? [] },
+      workflowTaskDigest: null,
+    } as never)).toBe('withdrawal must not record the same superseding publication twice');
   });
 
   it('決着した anomaly は when() のカウンタから外れ、ゲートを塞がなくなる', () => {

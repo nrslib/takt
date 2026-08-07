@@ -24,7 +24,7 @@ import { parseFindingManagerValidationReport } from '../core/workflow/findings/s
 import type { FindingManagerValidationReport } from '../core/workflow/findings/store.js';
 import {
   createFindingReviewPublication,
-  STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+  PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
 } from '../core/workflow/findings/review-publication.js';
 import {
   bindReviewerReportExcerpt,
@@ -171,7 +171,7 @@ function reviewPublication(
       reviewerStepName: 'reviewer',
       reportName: 'reviewer.md',
     },
-    protocol: STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+    protocol: PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
     reportContent,
     rawFindings,
   });

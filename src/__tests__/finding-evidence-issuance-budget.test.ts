@@ -8,7 +8,7 @@ import { evaluateRawAdmission } from '../core/workflow/findings/manager-admissio
 import { intakeReviewerOutputs } from '../core/workflow/findings/manager-intake.js';
 import {
   createFindingReviewPublication,
-  STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+  PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
 } from '../core/workflow/findings/review-publication.js';
 import type { FindingLedger, RawFindingEvidence } from '../core/workflow/findings/types.js';
 import type { ReviewScopeProofSnapshot } from '../core/workflow/findings/snapshot.js';
@@ -130,7 +130,7 @@ function reviewerResult(
         reviewerStepName: name,
         reportName: `${name}.md`,
       },
-      protocol: STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+      protocol: PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
       reportContent: excerpts.join('\n'),
       rawFindings: rawIds.map((rawId, index) => ({
         rawExcerpt: excerpts[index],
@@ -170,7 +170,7 @@ function singleReviewerResult(name: string, candidate: Record<string, unknown>) 
         reviewerStepName: name,
         reportName: `${name}.md`,
       },
-      protocol: STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+      protocol: PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
       reportContent: rawExcerpt,
       rawFindings: [{ rawExcerpt, candidate }],
     }),
@@ -682,7 +682,7 @@ describe('finding evidence issuance byte budgets', () => {
             reviewerStepName: 'reviewer',
             reportName: 'reviewer.md',
           },
-          protocol: STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+          protocol: PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
           reportContent: excerpt,
           rawFindings: [{
             rawExcerpt: excerpt,

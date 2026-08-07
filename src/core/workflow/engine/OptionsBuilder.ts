@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import type { WorkflowStep, WorkflowState, Language, WorkflowResumePointEntry, McpServerConfig } from '../../models/types.js';
+import type { AgentWorkflowStep, WorkflowStep, WorkflowState, Language, WorkflowResumePointEntry, McpServerConfig } from '../../models/types.js';
 import type { StepProviderOptions } from '../../models/workflow-types.js';
 import type { TaskReviewScope } from '../review-scope.js';
 import type { RunAgentOptions } from '../../../agents/runner.js';
@@ -44,7 +44,6 @@ import { resolveDeterministicAutoRoutingProviderInfo, toAutoRoutingStepMetadata 
 import { buildPhase1WorkflowMeta } from './workflow-meta.js';
 import type {
   FindingContractInstructionContext,
-  FindingContractReviewerOutputStrategy,
 } from '../instruction/instruction-context.js';
 
 type ResolvedRunAgentOptions = RunAgentOptions & {
@@ -84,16 +83,16 @@ export class OptionsBuilder {
     private readonly getCurrentWorkflowStack: () => WorkflowResumePointEntry[] | undefined = () => undefined,
     private readonly getFindingContractInstructionContext?: (
       step: WorkflowStep,
-      reviewerOutputStrategy: FindingContractReviewerOutputStrategy | undefined,
+      isReviewer: boolean,
       reviewScopeSnapshotId?: string,
       findingContractFreezeKey?: string,
     ) => FindingContractInstructionContext | undefined,
     private readonly getTask?: () => string,
-    private readonly getFindingEscalationInstructionContext?: (input: {
-      ownerStepNames: readonly string[];
+    private readonly getFindingEscalationInstructionContexts?: (input: {
+      ownerReviewerSteps: readonly AgentWorkflowStep[];
       reviewScopeSnapshotId: string;
       findingContractFreezeKey: string;
-    }) => FindingContractInstructionContext | undefined,
+    }) => ReadonlyMap<string, FindingContractInstructionContext>,
     private readonly getReviewScope?: () => TaskReviewScope,
   ) {}
 
@@ -157,6 +156,7 @@ export class OptionsBuilder {
       providerRouting: this.engineOptions.providerRouting,
       tagConflictPolicy: this.engineOptions.providerRoutingTagConflictPolicy,
       personaProviders: this.engineOptions.personaProviders,
+      escalation: this.engineOptions.providerEscalation,
     });
     const providerOptions = this.resolveMergedProviderOptions(step, resolved.provider, runtime);
     const providerOptionsSources = this.resolveProviderOptionsSourcesForStep(step);
@@ -167,6 +167,7 @@ export class OptionsBuilder {
       modelSource: resolved.modelSource,
       providerOptions,
       providerOptionsSources,
+      ...(resolved.escalation !== undefined ? { escalation: resolved.escalation } : {}),
     };
   }
 
@@ -394,28 +395,29 @@ export class OptionsBuilder {
 
   buildFindingContractInstructionContext(
     step: WorkflowStep,
-    reviewerOutputStrategy: FindingContractReviewerOutputStrategy | undefined,
+    isReviewer: boolean,
     reviewScopeSnapshotId?: string,
     findingContractFreezeKey?: string,
   ): FindingContractInstructionContext | undefined {
     return this.getFindingContractInstructionContext?.(
       step,
-      reviewerOutputStrategy,
+      isReviewer,
       reviewScopeSnapshotId,
       findingContractFreezeKey,
     );
   }
 
   /**
-   * escalation slot（提示予算の最終1回）用の reviewer context。escalation reviewer が
-   * 未設定、または今ラウンドに格上げ対象の anomaly が無い場合は undefined。
+   * 格上げ再レビュー（提示予算の最終1回）用の owner 別 reviewer context。
+   * 格上げ先を持たない owner と、今ラウンドに格上げ対象の anomaly が無い owner は
+   * 含まれない。
    */
-  buildFindingEscalationInstructionContext(input: {
-    ownerStepNames: readonly string[];
+  buildFindingEscalationInstructionContexts(input: {
+    ownerReviewerSteps: readonly AgentWorkflowStep[];
     reviewScopeSnapshotId: string;
     findingContractFreezeKey: string;
-  }): FindingContractInstructionContext | undefined {
-    return this.getFindingEscalationInstructionContext?.(input);
+  }): ReadonlyMap<string, FindingContractInstructionContext> {
+    return this.getFindingEscalationInstructionContexts?.(input) ?? new Map();
   }
 
   private resolveSupportedMaxTurns(
@@ -636,11 +638,8 @@ export class OptionsBuilder {
       ),
       structuredCaller: this.requireStructuredCaller(),
       resolveStepProviderModel: (step) => this.resolveStepProviderModel(step, runtime),
-      buildFindingContractInstructionContext: (step, reviewerOutputStrategy) =>
-        this.buildFindingContractInstructionContext(
-          step,
-          reviewerOutputStrategy,
-        ),
+      buildFindingContractInstructionContext: (step, isReviewer) =>
+        this.buildFindingContractInstructionContext(step, isReviewer),
       getSessionId: (persona: string) => state.personaSessions.get(persona),
       resolveSessionKey: (step) => {
         const providerInfo = this.resolveStepProviderModel(step, runtime);

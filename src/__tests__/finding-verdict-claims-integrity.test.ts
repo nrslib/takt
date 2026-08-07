@@ -19,7 +19,7 @@ import {
   withdrawReviewerAnomaliesSupersededByReview,
 } from '../core/workflow/findings/reviewer-anomalies.js';
 import type { CanonicalFindingReviewPublication } from '../core/workflow/findings/review-publication.js';
-import { STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL } from '../core/workflow/findings/review-publication.js';
+import { PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL } from '../core/workflow/findings/review-publication.js';
 import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
 import type { FindingLedger } from '../core/workflow/findings/types.js';
 import {
@@ -89,7 +89,7 @@ function makePublication(
     reviewerStepName: REVIEWER,
     reportName: 'architect-review.md',
     publicationId,
-    protocol: STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+    protocol: PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
     reportContent: REPORT,
     reportDigest: 'b'.repeat(64),
     rawFindings,
@@ -274,7 +274,7 @@ describe('recordVerdictClaimsMismatchAnomalies', () => {
     const withdrawn = withdrawReviewerAnomaliesSupersededByReview({
       ledger,
       candidateAnomalyIds: superseded,
-      publicationIdByReviewer: new Map([[REVIEWER, 'c'.repeat(64)]]),
+      publicationIdsByReviewer: new Map([[REVIEWER, ['c'.repeat(64)]]]),
       observation: { runId: 'run-2', stepName: 'reviewers', timestamp: '2026-08-01T01:00:00.000Z' },
     });
 
@@ -293,7 +293,7 @@ describe('recordVerdictClaimsMismatchAnomalies', () => {
     const withdrawn = withdrawReviewerAnomaliesSupersededByReview({
       ledger: first.ledger,
       candidateAnomalyIds: new Set([anomalyId]),
-      publicationIdByReviewer: new Map([[REVIEWER, 'c'.repeat(64)]]),
+      publicationIdsByReviewer: new Map([[REVIEWER, ['c'.repeat(64)]]]),
       observation: { runId: 'run-2', stepName: 'reviewers', timestamp: '2026-08-01T01:00:00.000Z' },
     });
 
@@ -345,7 +345,7 @@ describe('recordVerdictClaimsMismatchAnomalies', () => {
         ledger = withdrawReviewerAnomaliesSupersededByReview({
           ledger,
           candidateAnomalyIds: supersededIds,
-          publicationIdByReviewer: new Map([[REVIEWER, publicationId]]),
+          publicationIdsByReviewer: new Map([[REVIEWER, [publicationId]]]),
           observation: {
             runId: 'run-1',
             stepName: 'reviewers',

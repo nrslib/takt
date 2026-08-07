@@ -406,15 +406,22 @@ export function applyCommitLedgerStates(input: {
   // このラウンドでレビューを台帳へ登録したレビュアー枠。publication があること
   // 自体が「そのレビュアーの完全なレビューが成立した」証跡（ParallelRunner は
   // 全レビュアーの canonical publication が揃うまで取り込みを始めない）。
-  const publicationIdByReviewer = new Map(
-    input.runInput.subResults.map(({ publication }) => [
-      publication.reviewerStepName,
-      publication.publicationId,
-    ] as const),
-  );
+  // 1レビュアー枠が同一ラウンドに複数 publication を持つことがある(格上げ
+  // 再レビューは owner ごとに1呼び出しだが reviewer キーは固定)。Map の値を
+  // 単一 ID にすると後勝ちで1件へ潰れ、取り下げの監査記録に別 owner の
+  // publication ID が入る。全件を保持する。
+  const publicationIdsByReviewer = new Map<string, string[]>();
+  for (const { publication } of input.runInput.subResults) {
+    const ids = publicationIdsByReviewer.get(publication.reviewerStepName);
+    if (ids === undefined) {
+      publicationIdsByReviewer.set(publication.reviewerStepName, [publication.publicationId]);
+    } else {
+      ids.push(publication.publicationId);
+    }
+  }
   const supersededAnomalyIds = collectReviewSupersededReviewerAnomalyIds(
     input.settledLedger,
-    new Set(publicationIdByReviewer.keys()),
+    new Set(publicationIdsByReviewer.keys()),
   );
   const anomalySpecs = [...input.baseAnomalySpecs, ...rejectedObservations.anomalySpecs];
   const withAnomalies = applyReviewerAnomalySpecsToLedger(
@@ -448,7 +455,7 @@ export function applyCommitLedgerStates(input: {
   const withWithdrawals = withdrawReviewerAnomaliesSupersededByReview({
     ledger: withTerminalDispositions,
     candidateAnomalyIds: supersededAnomalyIds,
-    publicationIdByReviewer,
+    publicationIdsByReviewer,
     observation,
   });
   return {

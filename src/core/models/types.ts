@@ -141,7 +141,6 @@ export type {
   AutoRoutingStrategy,
   AutoRoutingCandidate,
   AutoRoutingConfig,
-  FindingIntakeNormalizeConfig,
   ProviderRoutingConfig,
   ProviderRoutingEntry,
   CustomAgentConfig,

@@ -256,16 +256,18 @@ function hasTerminalDismissalAuthority(input: {
  *   - その anomaly をまだ誰も決着させていない(昇格済みは昇格側が決着)
  *   - intake-contract anomaly ではない(あちらは言い直し契約という固有の決着経路を
  *     持ち、presentation / terminalDisposition と二重に決着すると監査記録が矛盾する)
- *   - 決着根拠が観測者ごとに1件ずつで、その集合が anomaly の観測者集合と完全一致する
+ *   - 決着根拠の reviewer 集合が anomaly の観測者集合と完全一致する
  *
  * 完全一致を要求するのは、取り下げの成立条件が「全観測者の後続レビュー成立」
  * (collectReviewSupersededReviewerAnomalyIds の every 判定)だからで、部分集合を
  * 許すと再提示の機会を得ていない観測者の主張ごとゲートが緩む。過剰(観測者でない
  * レビュアーの混入)も根拠として無効なので拒否する。
  *
- * 重複は集合比較の前に弾く。先に重複を潰してから比較すると、同一レビュアーを
- * 2件記録して別の観測者の1件を欠いた根拠(例: [a, a, b] と観測者 [a, b, c])が
- * 完全一致として通ってしまい、欠けた観測者の主張ごとゲートが緩む。
+ * 1レビュアー枠は同一ラウンドに複数 publication を登録し得る(格上げ再レビューは
+ * owner ごとに1呼び出しだが reviewer キーは固定)ので、reviewer の重複そのものは
+ * 許す。ただし同じ publication の二重計上は根拠を水増しするため、
+ * (reviewer, publicationId) の組の重複は拒否する。網羅性は reviewer 集合の
+ * 完全一致で判定するため、重複が観測者の欠落を隠すことはない。
  */
 function reviewWithdrawalEligibilityViolation(
   anomaly: ReviewerAnomalyEntry,
@@ -277,11 +279,14 @@ function reviewWithdrawalEligibilityViolation(
   if (anomaly.intakeContract !== undefined) {
     return 'intake-contract anomalies settle through their restatement contract';
   }
-  const recorded = settlement.supersedingPublications.map(({ reviewer }) => reviewer);
-  if (new Set(recorded).size !== recorded.length) {
-    return 'withdrawal must record exactly one superseding review per reviewer';
+  const publications = settlement.supersedingPublications;
+  const pairs = publications.map(({ reviewer, publicationId }) => `${reviewer}\u0000${publicationId}`);
+  if (new Set(pairs).size !== pairs.length) {
+    return 'withdrawal must not record the same superseding publication twice';
   }
-  return canonicalJson([...recorded].sort(compareBinaryStrings))
+  const recordedReviewers = [...new Set(publications.map(({ reviewer }) => reviewer))]
+    .sort(compareBinaryStrings);
+  return canonicalJson(recordedReviewers)
     === canonicalJson([...new Set(anomaly.reviewers)].sort(compareBinaryStrings))
     ? undefined
     : 'withdrawal must record a superseding review for every reviewer that observed the anomaly';

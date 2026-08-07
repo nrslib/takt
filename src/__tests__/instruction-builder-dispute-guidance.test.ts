@@ -4,7 +4,6 @@ import { ledgerHasOpenFindings, ledgerHasWaivedFindings } from '../core/workflow
 import type { FindingLedger } from '../core/models/finding-types.js';
 import type { InstructionContext } from '../core/workflow/instruction/instruction-context.js';
 import type { WorkflowStep } from '../core/models/types.js';
-import type { WorkflowStructuredOutput } from '../core/models/types.js';
 
 function makeStep(): WorkflowStep {
   return {
@@ -20,7 +19,8 @@ function makeContext(options: {
   hasOpenFindings: boolean;
   hasWaivedFindings?: boolean;
   hasDismissedFindings?: boolean;
-  rawFindingsStructuredOutput?: WorkflowStructuredOutput;
+  /** レビュアー契約（markdown レポート + 正規化係）として組むかどうか。 */
+  reviewer?: boolean;
   language?: 'en' | 'ja';
 }): InstructionContext {
   return {
@@ -38,18 +38,12 @@ function makeContext(options: {
       hasOpenFindings: options.hasOpenFindings,
       hasWaivedFindings: options.hasWaivedFindings ?? false,
       hasDismissedFindings: options.hasDismissedFindings ?? false,
-      // codex 対策#4: rawFindingsStructuredOutput と reviewScopeSnapshotId は常に
-      // セットで生成される（WorkflowEngineSetup.buildFindingContractInstructionContext
-      // 参照）。片方だけの fixture は finding-contract-instruction.ts の
-      // fail-loud ガードに引っかかるため、実際の生成規則に合わせて両方立てる。
-      ...(options.rawFindingsStructuredOutput !== undefined
-        ? {
-            reviewer: {
-              mode: 'structured',
-              rawFindingsStructuredOutput: options.rawFindingsStructuredOutput,
-              reviewScopeSnapshotId: 'test-snapshot-id',
-            },
-          }
+      // codex 対策#4: reviewer context は常に reviewScopeSnapshotId とセットで
+      // 生成される（WorkflowEngineSetup.buildFindingContractInstructionContext 参照）。
+      // 欠けた fixture は finding-contract-instruction.ts の fail-loud ガードに
+      // 引っかかるため、実際の生成規則に合わせる。
+      ...(options.reviewer === true
+        ? { reviewer: { reviewScopeSnapshotId: 'test-snapshot-id' } }
         : {}),
     },
   } as unknown as InstructionContext;
@@ -82,14 +76,14 @@ describe('dispute guidance injection', () => {
     expect(section).toContain('evidence: file:line references from the current code backing the reason');
   });
 
-  it('should not inject dispute guidance when rawFindingsStructuredOutput is present (reviewer branch wins)', () => {
+  it('should not inject dispute guidance for a reviewer context (reviewer branch wins)', () => {
     const instruction = new InstructionBuilder(
       makeStep(),
-      makeContext({ hasOpenFindings: true, rawFindingsStructuredOutput: { schemaRef: 'test', schema: { type: 'object' } } }),
+      makeContext({ hasOpenFindings: true, reviewer: true }),
     ).build();
 
     const section = extractFindingContractSection(instruction);
-    expect(section).toContain('raw findings schema');
+    expect(section).toContain('Write an ordinary Markdown review report');
     expect(section).not.toContain('Disputed Findings');
     expect(section).not.toContain('dispute claim');
   });
@@ -113,19 +107,18 @@ describe('dispute guidance injection', () => {
 });
 
 describe('reviewer duty gating', () => {
-  // 確認義務の有無は義務の文言（with relation `resolution_confirmation`）で判定する。
-  // 裸の resolution_confirmation トークンは、レビュアー共通の kind 設定規則
-  // （kind と relation の整合）にも現れるため、義務の存在判定には使えない。
-  const CONFIRMATION_DUTY = 'with relation `resolution_confirmation`';
+  // 確認義務の有無は義務の文言（lifecycle を明示的に報告する指示）で判定する。
+  // 裸の resolution_confirmation トークンは他の規則文にも現れるため使えない。
+  const CONFIRMATION_DUTY = "When explicitly reporting an open finding's lifecycle";
 
   it('should omit confirmation and waived duties for reviewers when the ledger is empty', () => {
     const instruction = new InstructionBuilder(
       makeStep(),
-      makeContext({ hasOpenFindings: false, rawFindingsStructuredOutput: { schemaRef: 'test', schema: { type: 'object' } } }),
+      makeContext({ hasOpenFindings: false, reviewer: true }),
     ).build();
 
     const section = extractFindingContractSection(instruction);
-    expect(section).toContain('relation "new"');
+    expect(section).toContain('Write an ordinary Markdown review report');
     expect(section).not.toContain(CONFIRMATION_DUTY);
     expect(section).not.toContain('waived');
   });
@@ -133,7 +126,7 @@ describe('reviewer duty gating', () => {
   it('should inject the waived duty independently of open findings', () => {
     const section = extractFindingContractSection(new InstructionBuilder(
       makeStep(),
-      makeContext({ hasOpenFindings: false, hasWaivedFindings: true, rawFindingsStructuredOutput: { schemaRef: 'test', schema: { type: 'object' } } }),
+      makeContext({ hasOpenFindings: false, hasWaivedFindings: true, reviewer: true }),
     ).build());
 
     expect(section).toContain('listed as waived');
@@ -143,14 +136,14 @@ describe('reviewer duty gating', () => {
   it('should inject confirmation duties when open findings exist and waived duty only with waived findings', () => {
     const withOpen = extractFindingContractSection(new InstructionBuilder(
       makeStep(),
-      makeContext({ hasOpenFindings: true, rawFindingsStructuredOutput: { schemaRef: 'test', schema: { type: 'object' } } }),
+      makeContext({ hasOpenFindings: true, reviewer: true }),
     ).build());
     expect(withOpen).toContain(CONFIRMATION_DUTY);
     expect(withOpen).not.toContain('listed as waived');
 
     const withWaived = extractFindingContractSection(new InstructionBuilder(
       makeStep(),
-      makeContext({ hasOpenFindings: true, hasWaivedFindings: true, rawFindingsStructuredOutput: { schemaRef: 'test', schema: { type: 'object' } } }),
+      makeContext({ hasOpenFindings: true, hasWaivedFindings: true, reviewer: true }),
     ).build());
     expect(withWaived).toContain('listed as waived');
   });

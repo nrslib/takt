@@ -267,9 +267,39 @@ TAKT は Normal / Parallel / Dynamic Parallel / Arpeggio / Team Leader / Workflo
 
 ### Finding Contract reviewer 出力の normalization
 
-Finding Contract reviewer は既定でnative structured outputを使います。
-runtime configの`finding_contract.intake_normalize`により、解決済みreviewerの
-provider/model完全一致を条件として、通常Markdownと隔離extractorを選択できます。
+経路は1本だけで、Finding Contract の reviewer は全員そこを通ります。reviewer は常に
+通常の Markdown レビュー報告だけを書き（JSON も構造化出力契約も持ちません）、正規化係の
+単発呼び出しがその報告を raw findings へ変換します。格上げ再レビューも同じ1本道です。
+どのモデルが構造化契約を守れるかを宣言する仕組みはありません。reviewer に構造化契約を
+持たせないからです。
+
+コスト特性は「レビュアー×ラウンドごとに正規化1呼び出し」です。reviewer 自身のフェーズに
+加えて毎ラウンド固定でかかる費用であり、失敗後に発生する追加費用ではありません。
+
+正規化係の provider/model は、runtime.yaml の
+`provider.targets.internal_agents['intake-normalizer']` seat → reviewer の profile が宣言する
+`escalate` 先 → 通常の既定解決、の順で決まります。「通常の既定解決」は `findings-manager` と
+同じ優先度ティアであり、`provider_routing` は従来どおり効きます。CLI や環境変数の明示 override は
+他のステップと同じくこれらより上位です。先頭の候補は isolated structured execution に対応して
+いる必要があり、対応していない場合は黙って続行せずその理由を示して停止します。ワークフローの
+読み込みと `takt workflow doctor` も、agent を1つも起動する前にその構成を拒否します。
+
+正規化係がラウンド唯一の関門になったため、失敗は原因で切り分けます。
+
+**正規化係の出力側**に原因がある場合（スキーマ不成立、`rawExcerpt` と `candidate` の間で
+claim を失う等）で、既存の訂正1回でも直らないときは、TAKT は同じ解決チェーンの**次の候補**
+——すでに使った候補と `(provider, model)` が異なり、かつ isolated structured execution に
+対応する最初のもの——で正規化をもう一度だけ実行します。やり直しはこの1回だけで、エンジン側
+スキーマの不備は別 provider でやり直しません。それでも失敗した場合は、候補ごとの具体的な
+理由（どの item がどの検証に落ちたか）をメッセージに含めて停止します。
+
+**報告側**に原因がある場合、ランは止まりません。markdown の契約を無視したレビュアー——たとえば
+報告本文そのものを JSON で出力したレビュアー——の抽出結果は、自分の報告本文に byte-exact で
+見つからない引用になります。どの正規化係が読んでも同じ結論になるので、TAKT はそのレビュアーの
+`protocol-anomaly` として台帳へ記録します。anomaly には報告本文を claim 抜粋として持たせ、
+「通常の markdown 散文で書き直せ」という是正指示を添えて、既存の言い直し経路へ載せます。その
+ラウンドのそのレビュアーからは台帳へ何も届きませんが、ラウンド自体は `review_budget` に計上され、
+同じラウンドの他のレビュアーには影響しません。
 
 ### Dynamic Parallel Step
 
@@ -877,32 +907,35 @@ finding_contract:
     max_rounds: 40
 ```
 
-### `finding_contract.escalation_reviewer`
+### 格上げ再レビュー（`escalate`）
 
-任意。各 intake anomaly の**最後の1回**の言い直し提示（`review_budget.max_review_rounds` から決まる `presentationLimit` と同じ ordinal の提示）を、元のレビュアーへもう一度返すのではなく、専用の格上げレビュアーへ回します。
+各 intake anomaly の**最後の1回**の言い直し提示（`review_budget.max_review_rounds` から決まる `presentationLimit` と同じ ordinal の提示）を、元のレビュアーへもう一度返す代わりに、より強いモデルへ回せます。workflow 側に設定は必要ありません。レビュアーが `escalate` を宣言した `runtime.yaml` の profile へ解決されたときに有効になり、格上げ先モデルはその `escalate` が指す profile です。
 
 ```yaml
-finding_contract:
-  manager:
-    persona: findings-manager
-    instruction: findings-manager
-    output_contract: findings-manager
-  escalation_reviewer:
-    persona: escalation-supervisor
-    instruction: escalation-finding-contract      # 任意。省略時は persona 本体を使う
-    output_contract: escalation-finding-contract  # 任意。省略時は元レビュアーの report 形式を継承
-    provider: codex
-    model: gpt-5.5
-  review_budget:
-    max_review_rounds: 6
+# runtime.yaml
+provider:
+  profiles:
+    reviewer-local:
+      provider: opencode
+      model: ollama-cloud/gemma4:31b
+      escalate: strong
+    strong:
+      provider: opencode
+      model: ollama-cloud/glm-5.2
+  targets:
+    steps:
+      peer-review/architecture-review:
+        profile: reviewer-local
 ```
 
-- `persona` は必須で、`instruction` / `output_contract` / `provider` / `model` は任意です。未知のフィールドは拒否されます。
-- escalation reviewer は workflow の step では**ありません**。`findings-manager` や terminal adjudication と同じくエンジンが合成して直接 provider call を発行し、その出力を通常の取り込み経路（正規化、canonical publication、byte 一致検証、昇格の対応づけ）へ流します。実行はレビューラウンドごとに1回で、全レビュアーの publication が揃ったあと・manager の取り込み前です。
-- reviewer キーは固定文字列 `escalation-reviewer` です。この値が raw finding の `reviewer`、publication identity、レポート名（`escalation-reviewer.md`）、provider routing の persona キーになります。`provider_routing.personas.escalation-reviewer` は、設定した persona 名にかかわらずこのロールへ効きます。
-- Phase 1 は読み取り専用で動きます。escalation reviewer はリポジトリを自分で読んで byte 一致の引用を作れますが、書き込みはできません。
-- `escalation_reviewer` を設定している間、`escalation-reviewer` は**予約 step 名**です。同名の step（parallel sub-step を含む）を持つ workflow は読み込みに失敗します。
-- `presentationLimit == 1` の場合、最初で最後の1回がそのまま格上げ提示になります。`escalation_reviewer` を省略すれば最後の1回も従来どおり元のレビュアーへ戻ります。
+- 格上げレビュアーは owner レビュアーの完全な代打です。persona / policy / knowledge / MCP サーバ / report 形式を、その回に実際に走った step のもの（動的に選択された facet を含む）からそのまま継承し、変わるのはモデル（`escalate` 先）と指示文だけです。指示文は通常のレビュー手順ではなく、エンジンが持つ「言い直しのみ」の契約になります。専用の persona facet も workflow 設定ブロックもありません。
+- persona を owner と共有する帰結として、格上げの主張は lifecycle 上 **owner のレビュアー識別**を引き継ぎます（別人の新規観測として着地せず、owner の finding lifecycle を継続します）。異なるのは publication identity だけです（reviewer キー `escalation-reviewer` と owner 別の report 名）。
+- workflow の step では**ありません**。`findings-manager` や terminal adjudication と同じくエンジンが合成して直接 provider call を発行し、その出力を通常の取り込み経路（正規化、canonical publication、byte 一致検証、昇格の対応づけ）へ流します。実行は全 owner レビュアーの publication が揃ったあと・manager の取り込み前です。
+- 同じラウンドで複数のレビュアーが最終提示に到達した場合、エンジンは owner ごとに request をまとめ、owner ごとに1回ずつ呼び出します。1回の格上げ呼び出しが持つ persona と report 形式は常に1レビュアー分だけです。
+- reviewer キーはどの格上げ呼び出しでも固定文字列 `escalation-reviewer` です。この値が raw finding の `reviewer` と publication identity になります。owner は anomaly の `presentationOwnerReviewer` と言い直しの対応づけを通じて保持されます。レポートは owner ごとに `escalation-reviewer-<owner-step>.md` として出力されます。
+- Phase 1 は読み取り専用で動きます。格上げレビュアーはリポジトリを自分で読んで byte 一致の引用を作れますが、書き込みはできません。
+- Finding Contract workflow では `escalation-reviewer` は常に**予約 step 名**です。同名の step（parallel sub-step を含む）を持つ workflow は読み込みに失敗します。
+- `presentationLimit == 1` の場合、最初で最後の1回がそのまま格上げ提示になります。profile に `escalate` が無いレビュアーは、最後の1回も従来どおり元のレビュアーへ戻ります。
 - 格上げレビューが publication 成立前に失敗した場合は何も計上せず、次のラウンドで同じ escalation request を再発行します。有限停止は従来どおり workflow の `max_steps` が保証します。
 
 ### `interactive_mode`

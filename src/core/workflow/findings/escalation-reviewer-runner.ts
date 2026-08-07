@@ -1,9 +1,14 @@
 /**
- * escalation reviewer の実行。findings-manager / terminal adjudication と同じく、
+ * 格上げ再レビューの実行。findings-manager / terminal adjudication と同じく、
  * workflow の step としてではなく engine が合成ステップ経由で直接 provider call を
  * 発行し、その出力を通常の intake pipeline
  * （StepExecutor.prepareFindingReviewPublication → canonical publication →
  * findings-manager の取り込み）へ載せる。
+ *
+ * 起動条件は owner レビュアーが解決された runtime.yaml profile の `escalate` で、
+ * 格上げ先モデルもその profile が指す先。owner ごとに persona / policy / knowledge /
+ * report 形式が違うため、1ラウンドに複数 owner の最終枠が来た場合は owner ごとに
+ * 1呼び出しへ分ける。
  *
  * 呼び出しタイミングは「全 owner reviewer の canonical publication が揃った後、
  * findings-manager の取り込み前」。owner publication は既に成立しているため、
@@ -12,12 +17,11 @@
 import type {
   AgentResponse,
   AgentWorkflowStep,
-  FindingContractConfig,
-  WorkflowConfig,
   WorkflowMaxSteps,
   WorkflowState,
 } from '../../models/types.js';
 import { executeAgent } from '../../../agents/agent-usecases.js';
+import { createLogger } from '../../../shared/utils/index.js';
 import { FINDING_ESCALATION_REVIEWER_ROUTING_KEY } from '../../models/finding-types.js';
 import type { OptionsBuilder } from '../engine/OptionsBuilder.js';
 import type { StepExecutor } from '../engine/StepExecutor.js';
@@ -25,27 +29,18 @@ import { reviewerOperationOrigin, runtimeForOperation } from '../engine/fallback
 import type { RuntimeStepResolution, StepProviderInfo, StepRunResult } from '../types.js';
 import { buildSessionKey } from '../session-key.js';
 import type { FindingContractInstructionContext } from '../instruction/instruction-context.js';
-import { withFindingContractStructuredOutput } from './contract-intake.js';
-import {
-  buildFindingEscalationReviewerStep,
-  requireEscalationOwnerOutputContractFormat,
-} from './escalation-reviewer-step.js';
+import { buildFindingEscalationReviewerStep } from './escalation-reviewer-step.js';
 import type { CanonicalFindingReviewPublication } from './review-publication.js';
 import type { ReviewerRelationClarification } from './relation-coherence.js';
 import type { RunAgentOptions } from '../../../agents/runner.js';
 
-/** escalation reviewer の出力 strategy は owner step によらず structured raw findings で固定。 */
-const ESCALATION_REVIEWER_OUTPUT_STRATEGY = Object.freeze({
-  kind: 'structured',
-  reportGeneration: 'structured',
-  intake: 'reviewer_structured',
-} as const);
+const log = createLogger('finding-escalation-reviewer');
 
 /**
  * escalation reviewer は「レビュアー」であって manager ではない。対象コードを
  * 自分で読み、新規の byte-exact な引用証拠を作れなければ格上げの意味がないため、
  * 通常レビュアーの Phase 1 と同じ読み取り専用ツールセットを与える
- * （2026-08-07 裁定。findings-manager の allowedTools: [] は流用しない）。
+ * （findings-manager の allowedTools: [] は流用しない）。
  *
  * permission mode だけは provider profile の既定に委ねず readonly で固定する。
  * 合成ステップは `edit: false` なので profile が edit を既定にしていても
@@ -69,10 +64,10 @@ function buildEscalationReviewerAgentOptions(
 /**
  * 親ステップの runtime から escalation slot 用の runtime を導く。
  *
- * provider/model は escalation reviewer の routing persona key で解決させたいので、
- * 親（owner reviewer / parallel 親）が持つ `providerInfo` の上書きは引き継がない。
- * 一方 rate-limit fallback は透過させる — escalation reviewer 自身の operation を
- * 対象とする fallback だけが `runtimeForOperation` によって providerInfo へ反映され、
+ * provider/model は格上げ先 profile で確定しているため、親（owner reviewer /
+ * parallel 親）が持つ `providerInfo` の上書きは引き継がない。一方 rate-limit
+ * fallback は透過させる — escalation reviewer 自身の operation を対象とする
+ * fallback だけが `runtimeForOperation` によって providerInfo へ反映され、
  * 他 operation 向けの fallback はここで落ちる。
  */
 function escalationReviewerRuntime(
@@ -84,12 +79,16 @@ function escalationReviewerRuntime(
   );
 }
 
+export interface FindingEscalationPublishedResult {
+  readonly step: AgentWorkflowStep;
+  readonly publication: CanonicalFindingReviewPublication;
+  readonly relationClarification?: ReviewerRelationClarification;
+}
+
 export type FindingEscalationReviewerOutcome =
   | {
       readonly kind: 'published';
-      readonly step: AgentWorkflowStep;
-      readonly publication: CanonicalFindingReviewPublication;
-      readonly relationClarification?: ReviewerRelationClarification;
+      readonly results: readonly FindingEscalationPublishedResult[];
     }
   | {
       readonly kind: 'terminal';
@@ -100,19 +99,16 @@ export type FindingEscalationReviewerOutcome =
     };
 
 export interface FindingEscalationReviewerInput {
-  readonly contract: FindingContractConfig;
-  readonly workflowProvider?: WorkflowConfig['provider'];
-  readonly workflowModel?: WorkflowConfig['model'];
+  /** FC 台帳へ寄稿する owner reviewer step 群。格上げ先は各 step の解決結果から決まる。 */
+  readonly ownerReviewerSteps: readonly AgentWorkflowStep[];
   /**
-   * buildFindingEscalationInstructionContext が返した escalation slot 専用 context。
-   * 今ラウンドに格上げ対象の anomaly が無ければ undefined。その場合でも、
-   * 前ラウンドで永続化済みの escalation publication があれば resume して返す
+   * owner step 名ごとの escalation slot 専用 context。今ラウンドに格上げ対象の
+   * anomaly が無い owner は含まれない。含まれない owner でも、前ラウンドで
+   * 永続化済みの escalation publication があれば resume して返す
    * （提示は計上済みなので request は作られないが、raw findings はまだ
    * manager へ渡っていない）。
    */
-  readonly escalationContext?: FindingContractInstructionContext;
-  /** owner reviewer step。escalation_reviewer.output_contract 未設定時に report 形式を継承する。 */
-  readonly ownerReviewerSteps: readonly AgentWorkflowStep[];
+  readonly escalationContexts: ReadonlyMap<string, FindingContractInstructionContext>;
   readonly parentStepName: string;
   readonly stepIteration: number;
   readonly state: WorkflowState;
@@ -167,57 +163,100 @@ export async function runEscalationReviewerAttempt(input: {
   return response;
 }
 
+/**
+ * owner ごとの格上げ再レビューを順に実行する。1件でも terminal になった時点で
+ * 打ち切り、それまでに成立した publication は返さない（親ステップが terminal に
+ * なるため manager 取り込み自体が走らない）。
+ */
 export async function runFindingEscalationReviewer(
   input: FindingEscalationReviewerInput,
 ): Promise<FindingEscalationReviewerOutcome | undefined> {
-  const baseStep = buildFindingEscalationReviewerStep({
-    contract: input.contract,
-    workflowProvider: input.workflowProvider,
-    workflowModel: input.workflowModel,
-    ownerOutputContractFormat: requireEscalationOwnerOutputContractFormat(input.ownerReviewerSteps),
+  const results: FindingEscalationPublishedResult[] = [];
+  for (const ownerStep of input.ownerReviewerSteps) {
+    const escalation = input.optionsBuilder.resolveStepProviderModel(ownerStep).escalation;
+    if (escalation === undefined) {
+      continue;
+    }
+    const outcome = await runFindingEscalationReviewerForOwner({
+      ...input,
+      ownerStep,
+      escalation,
+    });
+    if (outcome === undefined) {
+      continue;
+    }
+    if (outcome.kind === 'terminal') {
+      return outcome;
+    }
+    results.push(...outcome.results);
+  }
+  return results.length === 0 ? undefined : { kind: 'published', results };
+}
+
+async function runFindingEscalationReviewerForOwner(
+  input: FindingEscalationReviewerInput & {
+    readonly ownerStep: AgentWorkflowStep;
+    readonly escalation: NonNullable<StepProviderInfo['escalation']>;
+  },
+): Promise<FindingEscalationReviewerOutcome | undefined> {
+  const escalationStep = buildFindingEscalationReviewerStep({
+    ownerStep: input.ownerStep,
+    escalation: input.escalation,
   });
   const runtime = escalationReviewerRuntime(input.runtime);
+  const escalationContext = input.escalationContexts.get(input.ownerStep.name);
 
   // 提示予算を使い切った anomaly でも、前ラウンドの escalation publication が
   // 未取り込みのまま残ることがある（publication 成立後 / manager commit 前の crash）。
   // request の有無より先に stored publication を引き当てないと、
   // 「予算は消費済みなのに証拠は一度も intake されない」状態で終端する。
   const resumed = await input.stepExecutor.resumeFindingReviewPublication({
-    step: baseStep,
+    step: escalationStep,
     parentStepName: input.parentStepName,
     stepIteration: input.stepIteration,
     state: input.state,
     runtime,
-    ...(input.escalationContext?.reviewer?.presentationContext === undefined
+    ...(escalationContext?.reviewer?.presentationContext === undefined
       ? {}
-      : { presentationContext: input.escalationContext.reviewer.presentationContext }),
+      : { presentationContext: escalationContext.reviewer.presentationContext }),
   });
   if (resumed !== undefined) {
-    return 'terminalResponse' in resumed
-      ? {
-          kind: 'terminal',
-          step: baseStep,
-          response: resumed.terminalResponse,
-          ...(resumed.reviewerProviderInfo === undefined
-            ? {}
-            : { providerInfo: resumed.reviewerProviderInfo }),
-          terminalOperation: resumed.terminalOperation,
-        }
-      : {
-          kind: 'published',
-          step: baseStep,
-          publication: resumed.publication,
-          ...(resumed.relationClarification === undefined
-            ? {}
-            : { relationClarification: resumed.relationClarification }),
-        };
+    if ('terminalResponse' in resumed) {
+      return {
+        kind: 'terminal',
+        step: escalationStep,
+        response: resumed.terminalResponse,
+        ...(resumed.reviewerProviderInfo === undefined
+          ? {}
+          : { providerInfo: resumed.reviewerProviderInfo }),
+        terminalOperation: resumed.terminalOperation,
+      };
+    }
+    if ('reportRejection' in resumed) {
+      // 保存済みの格上げ報告も報告側の契約を満たさなかった。owner の anomaly は
+      // 未決着のまま残るので、この枠は何も寄稿せずに終える。
+      log.warn('Stored escalated re-review report could not be bound to its own text', {
+        step: escalationStep.name,
+        owner: input.ownerStep.name,
+        reason: resumed.reportRejection.reason,
+      });
+      return undefined;
+    }
+    return {
+      kind: 'published',
+      results: [{
+        step: escalationStep,
+        publication: resumed.publication,
+        ...(resumed.relationClarification === undefined
+          ? {}
+          : { relationClarification: resumed.relationClarification }),
+      }],
+    };
   }
-  if (input.escalationContext === undefined) {
+  if (escalationContext === undefined) {
     return undefined;
   }
 
-  const escalationContext = input.escalationContext;
-  const escalationStep = withFindingContractStructuredOutput(baseStep, escalationContext);
   const presentationContext = escalationContext.reviewer?.presentationContext;
   const instruction = input.stepExecutor.buildInstruction(
     escalationStep,
@@ -274,7 +313,6 @@ export async function runFindingEscalationReviewer(
   const prepared = await input.stepExecutor.prepareFindingReviewPublication({
     step: escalationStep,
     executableStep: escalationStep,
-    reviewerOutputStrategy: ESCALATION_REVIEWER_OUTPUT_STRATEGY,
     parentStepName: input.parentStepName,
     stepIteration: input.stepIteration,
     state: input.state,
@@ -309,12 +347,30 @@ export async function runFindingEscalationReviewer(
         : { terminalOperation: prepared.terminalOperation }),
     };
   }
+  if ('reportRejection' in prepared) {
+    // 格上げ先も報告側の契約（通常の markdown 散文）を満たさなかった。owner 側と
+    // 違って専用の anomaly は積まない（意図的な非対称）:
+    //   - 格上げは owner anomaly の最終提示枠なので、寄稿ゼロなら presentedCount が
+    //     増えず、同じ request が次ラウンドで再発行される（stop_budget と
+    //     review_budget が有限停止を保証する）。
+    //   - 是正文言（「通常の markdown 散文で書き直せ」）は owner の anomaly サマリ
+    //     経由で届くため、ここで別 anomaly を積むと同じラウンドの同じ主張が
+    //     二重計上される。
+    log.warn('Escalated re-review report could not be bound to its own text; contributing nothing', {
+      step: escalationStep.name,
+      owner: input.ownerStep.name,
+      reason: prepared.reportRejection.reason,
+    });
+    return undefined;
+  }
   return {
     kind: 'published',
-    step: escalationStep,
-    publication: prepared.publication,
-    ...(prepared.relationClarification === undefined
-      ? {}
-      : { relationClarification: prepared.relationClarification }),
+    results: [{
+      step: escalationStep,
+      publication: prepared.publication,
+      ...(prepared.relationClarification === undefined
+        ? {}
+        : { relationClarification: prepared.relationClarification }),
+    }],
   };
 }

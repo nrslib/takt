@@ -29,9 +29,11 @@ import {
   FINDING_TERMINAL_ADJUDICATION_STEP,
   workflowWiresFindingConflictAdjudication,
 } from '../findings/adjudication-step.js';
-import { buildFindingEscalationReviewerPreflightStep } from '../findings/escalation-reviewer-step.js';
-import { FINDING_ESCALATION_REVIEWER_ROUTING_KEY } from '../../models/finding-types.js';
 import { findFindingContractFormat, hasFindingContractFormat } from '../findings/finding-contract-format.js';
+import {
+  assertFindingIntakeNormalizerProvider,
+  buildFindingIntakeNormalizerSteps,
+} from '../findings/intake-normalize-policy.js';
 import {
   resolveAutoRoutingCandidateProviderInfo,
   resolveDeterministicAutoRoutingProviderInfo,
@@ -43,7 +45,6 @@ import { findDuplicateWorkflowStepName } from '../../../shared/workflowStepNameV
 import { withWorkflowConfigErrorPath } from '../workflow-config-error.js';
 import { findWorkflowStepLocation } from '../workflow-step-location.js';
 import { getProviderValidationErrorSource, withProviderValidationErrorSource } from '../provider-validation-error.js';
-import { resolveFindingIntakeNormalizeConfig } from '../findings/intake-normalize-policy.js';
 import { validateDynamicParallelContracts } from '../dynamic-parallel/validator.js';
 
 type ResolvedProviderInfo = ReturnType<typeof resolveStepProviderModel>;
@@ -57,6 +58,7 @@ export type FindingContractSyntheticProviderValidationOptions = Pick<
   | 'providerRouting'
   | 'providerRoutingTagConflictPolicy'
   | 'personaProviders'
+  | 'intakeNormalizerProvider'
 > & {
   inheritedFindingContract?: Pick<
     NonNullable<WorkflowEngineOptions['inheritedFindingContract']>,
@@ -307,11 +309,6 @@ export function validateFindingContractSyntheticProviderModels(
     buildFindingManagerStep(stepInput),
     buildFindingInterpretationStep(stepInput),
     ...adjudicationSteps,
-    // escalation reviewer は report 形式だけを実行時に owner から継承するため、
-    // provider/model 検証は output contract を持たない preflight 用ステップで足りる。
-    ...(findingContract.escalationReviewer === undefined
-      ? []
-      : [buildFindingEscalationReviewerPreflightStep(stepInput)]),
   ];
   for (const step of syntheticSteps) {
     const providerInfo = resolveStepProviderModel({
@@ -332,18 +329,86 @@ export function validateFindingContractSyntheticProviderModels(
           currentProviderInfo: providerInfo,
         })
       : undefined;
-    const configurationPath = step.name === FINDING_ESCALATION_REVIEWER_ROUTING_KEY
-      ? 'Configuration error: finding_contract.escalation_reviewer.model'
-      : step.name === FINDING_TERMINAL_ADJUDICATION_STEP
-        || step.name === FINDING_CONFLICT_ADJUDICATION_STEP
-        ? 'Configuration error: finding_contract.adjudicator.model'
-        : 'Configuration error: finding_contract.manager.model';
+    const configurationPath = step.name === FINDING_TERMINAL_ADJUDICATION_STEP
+      || step.name === FINDING_CONFLICT_ADJUDICATION_STEP
+      ? 'Configuration error: finding_contract.adjudicator.model'
+      : 'Configuration error: finding_contract.manager.model';
     validateResolvedProviderInfo(
       deterministicInfo ?? providerInfo,
       configurationPath,
       deterministicInfo !== undefined,
     );
   }
+  validateFindingIntakeNormalizerProviders(config, options);
+}
+
+/**
+ * Finding Contract レビュアーは1本道で、markdown レポートを正規化係が JSON 化する。
+ * 正規化係は隔離 structured 実行でしか成立しないため、その解決先が対応していない
+ * 構成は「レビュー1周ぶんの provider 呼び出しを捨ててから落ちる」ことになる。
+ * 実行前に同じ判定（assertFindingIntakeNormalizerProvider）をかけて fail-fast する。
+ *
+ * 検証するのは解決チェーンの**先頭候補**だけ。やり直し候補は実行時に「先頭と
+ * provider/model が異なり、かつ対応しているもの」だけを選ぶので、ロード時に
+ * 存在を要求すると有効な構成を拒否してしまう。
+ *
+ * provider がロード時に確定しない場合は判定しない。ここで見えるのは engine option
+ * と workflow の値だけで、実行時解決はさらに下位のレイヤ（project / global /
+ * provider 既定）を持つ。未確定を設定エラー扱いにすると、実行時には解決できる
+ * 構成をロード時に拒否することになる。未解決そのものは実行時に fail-loud する。
+ */
+function validateFindingIntakeNormalizerProviders(
+  config: WorkflowConfig,
+  options: FindingContractSyntheticProviderValidationOptions,
+): void {
+  const resolve = (step: WorkflowStep): ResolvedProviderInfo => resolveStepProviderModel({
+    step,
+    provider: options.provider,
+    providerSource: options.providerSource,
+    model: options.model,
+    modelSource: options.modelSource,
+    autoRouting: options.autoRouting,
+    providerRouting: options.providerRouting,
+    tagConflictPolicy: options.providerRoutingTagConflictPolicy,
+    personaProviders: options.personaProviders,
+  });
+  for (const reviewerStep of collectFindingContractReviewerSteps(config)) {
+    const headCandidate = buildFindingIntakeNormalizerSteps({
+      reviewerStepName: reviewerStep.name,
+      seat: options.intakeNormalizerProvider,
+      escalation: resolve(reviewerStep).escalation,
+      workflowProvider: config.provider,
+      workflowModel: config.model,
+    })[0];
+    if (headCandidate === undefined) {
+      continue;
+    }
+    const headProvider = resolve(headCandidate).provider;
+    if (headProvider === undefined) {
+      continue;
+    }
+    assertFindingIntakeNormalizerProvider(headProvider, reviewerStep.name);
+  }
+}
+
+/**
+ * 実行時に正規化係を起動するレビュアー step（通常 agent step と parallel sub-step）。
+ * 判定は StepExecutor / ParallelRunner の取り込み判定と同じ述語を共有する。
+ */
+function collectFindingContractReviewerSteps(config: WorkflowConfig): WorkflowStep[] {
+  const reviewers: WorkflowStep[] = [];
+  for (const step of config.steps) {
+    if (!isDelegatedWorkflowStep(step) && !isWorkflowCallStep(step) && hasFindingContractFormat(step)) {
+      reviewers.push(step);
+    }
+    const subSteps = step.parallel === undefined ? [] : getAllParallelSubSteps(step.parallel);
+    for (const subStep of subSteps) {
+      if (!isWorkflowCallStep(subStep) && hasFindingContractFormat(subStep)) {
+        reviewers.push(subStep);
+      }
+    }
+  }
+  return reviewers;
 }
 
 /**
@@ -691,10 +756,6 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
   // ここでの検証もランタイムと同じ判定基準を使わないと validate 時は素通り
   // したのに実行時に落ちる、という食い違いが生まれる。
   const findingContractEnabled = config.findingContract !== undefined || options.inheritedFindingContract !== undefined;
-  resolveFindingIntakeNormalizeConfig(
-    options.findingContractConfig?.intakeNormalize,
-    config.findingContract ?? options.inheritedFindingContract?.contract,
-  );
   validateFindingContractStructuredOutput(config, findingContractEnabled);
   validateFindingContractSyntheticProviderModels(config, options);
   validateFindingConflictAdjudicationReservedName(config);

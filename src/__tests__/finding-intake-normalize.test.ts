@@ -3,19 +3,19 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ProjectConfigSchema } from '../core/models/config-schemas.js';
-import type { FindingContractConfig } from '../core/models/finding-types.js';
-import { resolveFindingIntakeNormalizeConfig } from '../core/workflow/findings/intake-normalize-policy.js';
 import {
-  resolveFindingContractReviewerOutputStrategy,
-} from '../core/workflow/findings/reviewer-output-strategy.js';
+  assertFindingIntakeNormalizerProvider,
+  buildFindingIntakeNormalizerSteps,
+  findingIntakeNormalizerOverrideChain,
+  supportsFindingIntakeNormalizerExecution,
+} from '../core/workflow/findings/intake-normalize-policy.js';
+import { resolveStepProviderModel } from '../core/workflow/provider-resolution.js';
+import { validateFindingContractSyntheticProviderModels } from '../core/workflow/engine/WorkflowValidator.js';
+import type { WorkflowConfig } from '../core/models/types.js';
 import {
   buildFindingIntakeCorrectionPrompt,
   buildFindingIntakeExtractionPrompt,
 } from '../shared/prompts/finding-intake-extraction.js';
-import {
-  denormalizeFindingIntakeNormalize,
-  normalizeFindingIntakeNormalize,
-} from '../infra/config/configNormalizers.js';
 import { loadProjectConfig, saveProjectConfig } from '../infra/config/project/projectConfig.js';
 import { serializeGlobalConfig } from '../infra/config/global/globalConfigSerializer.js';
 import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig.js';
@@ -26,13 +26,6 @@ import {
 import { clearTaktEnv, restoreTaktEnv, type TaktEnvSnapshot } from './helpers/taktEnv.js';
 
 const dirs: string[] = [];
-const findingContract: FindingContractConfig = {
-  manager: {
-    persona: 'findings-manager',
-    instruction: 'findings-manager',
-    outputContract: 'findings-manager',
-  },
-};
 let taktEnv: TaktEnvSnapshot;
 
 beforeEach(() => {
@@ -46,170 +39,182 @@ afterEach(() => {
   restoreTaktEnv(taktEnv);
 });
 
-describe('finding_contract.intake_normalize config', () => {
-  it('rejects the removed top-level key and malformed or duplicate targets', () => {
-    expect(() => ProjectConfigSchema.parse({
-      intake_normalize: { provider: 'codex', model: 'gpt' },
-    })).toThrow();
-    expect(() => ProjectConfigSchema.parse({
-      finding_contract: { intake_normalize: { provider: 'codex', model: 'gpt', targets: [] } },
-    })).toThrow();
-    expect(() => ProjectConfigSchema.parse({
-      finding_contract: {
-        intake_normalize: {
-          provider: 'codex',
-          model: 'gpt',
-          targets: [
-            { provider: 'opencode', model: 'gemma4' },
-            { provider: 'opencode', model: 'gemma4' },
-          ],
-        },
-      },
-    })).toThrow(/must not contain duplicates/);
+describe('finding intake normalizer executor', () => {
+  const escalation = {
+    profile: 'strong',
+    provider: 'codex' as const,
+    model: 'gpt-5.6-terra',
+    providerOptions: { codex: { reasoningEffort: 'high' as const } },
+  };
+
+  const seat = { provider: 'opencode' as const, model: 'ollama-cloud/glm-5.2' };
+
+  const seatOverride = {
+    provider: 'opencode',
+    providerSpecified: true,
+    model: 'ollama-cloud/glm-5.2',
+    modelSpecified: true,
+  };
+  const escalationOverride = {
+    provider: 'codex',
+    providerSpecified: true,
+    model: 'gpt-5.6-terra',
+    modelSpecified: true,
+    providerOptions: { codex: { reasoningEffort: 'high' } },
+  };
+
+  it('orders the chain as seat, reviewer escalate target, then the ordinary default resolution', () => {
+    expect(findingIntakeNormalizerOverrideChain({ seat, escalation }))
+      .toEqual([seatOverride, escalationOverride, {}]);
   });
 
-  it('normalizes and serializes strict provider/model targets', () => {
-    const normalized = normalizeFindingIntakeNormalize({
-      provider: {
-        type: 'codex',
-        model: 'gpt-5.6-terra',
-        network_access: false,
-      },
-      targets: [{ provider: 'opencode', model: 'ollama-cloud/gemma4:31b' }],
-      provider_options: {
-        codex: { reasoning_effort: 'high' },
-      },
-    });
-    expect(normalized).toEqual({
-      provider: 'codex',
-      model: 'gpt-5.6-terra',
-      targets: [{ provider: 'opencode', model: 'ollama-cloud/gemma4:31b' }],
-      providerOptions: {
-        codex: {
-          networkAccess: false,
-          reasoningEffort: 'high',
-        },
-      },
-    });
-    expect(denormalizeFindingIntakeNormalize(normalized)).toEqual({
-      provider: 'codex',
-      model: 'gpt-5.6-terra',
-      targets: [{ provider: 'opencode', model: 'ollama-cloud/gemma4:31b' }],
-      provider_options: {
-        codex: {
-          network_access: false,
-          reasoning_effort: 'high',
-        },
-      },
-    });
+  it('starts at the reviewer escalate target when there is no seat', () => {
+    expect(findingIntakeNormalizerOverrideChain({ seat: undefined, escalation }))
+      .toEqual([escalationOverride, {}]);
   });
 
-  it('loads, saves, and resolves the namespaced project/global setting', () => {
-    const projectDir = mkdtempSync(join(tmpdir(), 'takt-intake-project-'));
-    const globalDir = mkdtempSync(join(tmpdir(), 'takt-intake-global-'));
-    dirs.push(projectDir, globalDir);
-    mkdirSync(join(projectDir, '.takt'), { recursive: true });
-    process.env.TAKT_CONFIG_DIR = globalDir;
-    writeFileSync(join(globalDir, 'config.yaml'), [
-      'language: en',
-      'finding_contract:',
-      '  intake_normalize:',
-      '    provider: codex',
-      '    model: gpt-5.6-terra',
-      '',
-    ].join('\n'));
-    writeFileSync(join(projectDir, '.takt', 'config.yaml'), [
-      'finding_contract:',
-      '  intake_normalize:',
-      '    provider: mock',
-      '    model: project-model',
-      '    targets:',
-      '      - provider: opencode',
-      '        model: ollama-cloud/gemma4:31b',
-      '',
-    ].join('\n'));
-    invalidateGlobalConfigCache();
-    invalidateAllResolvedConfigCache();
+  it('leaves the normalizer step to the ordinary default resolution without seat or escalate', () => {
+    // 空の override = provider/model を直接指定しない = 通常の既定解決に委ねる。
+    expect(findingIntakeNormalizerOverrideChain({ seat: undefined, escalation: undefined }))
+      .toEqual([{}]);
+  });
 
-    const loaded = loadProjectConfig(projectDir);
-    expect(loaded.findingContract?.intakeNormalize).toEqual({
-      provider: 'mock',
-      model: 'project-model',
-      targets: [{ provider: 'opencode', model: 'ollama-cloud/gemma4:31b' }],
+  it('falls back from the seat straight to the default resolution without escalate', () => {
+    expect(findingIntakeNormalizerOverrideChain({ seat, escalation: undefined }))
+      .toEqual([seatOverride, {}]);
+  });
+
+  it('accepts a resolved provider that implements isolated structured execution', () => {
+    expect(() => assertFindingIntakeNormalizerProvider('codex', 'review')).not.toThrow();
+    expect(() => assertFindingIntakeNormalizerProvider('opencode', 'review')).not.toThrow();
+  });
+
+  it('fails loudly when the resolved provider cannot run isolated structured execution', () => {
+    expect(() => assertFindingIntakeNormalizerProvider('cursor', 'review'))
+      .toThrow(/does not support isolated structured execution/);
+    expect(() => assertFindingIntakeNormalizerProvider(undefined, 'review'))
+      .toThrow(/could not be resolved for reviewer "review"/);
+  });
+
+  it('reports which providers can carry a retry candidate', () => {
+    expect(supportsFindingIntakeNormalizerExecution('codex')).toBe(true);
+    expect(supportsFindingIntakeNormalizerExecution('cursor')).toBe(false);
+    expect(supportsFindingIntakeNormalizerExecution(undefined)).toBe(false);
+  });
+});
+
+describe('finding intake normalizer resolution tiers', () => {
+  // provider_routing.steps のキーは実運用と同じ `<leaf-workflow>/<step-name>` 形式
+  // （runtime.yaml `provider.targets.steps` はこの形のキーをそのまま持ち越す）。
+  const REVIEWER_STEP_NAME = 'peer-review/architecture-review';
+  const routing = {
+    steps: {
+      [`${REVIEWER_STEP_NAME}:intake-normalize`]: {
+        provider: 'codex' as const,
+        model: 'routed-model',
+      },
+    },
+  };
+
+  function resolve(step: Parameters<typeof resolveStepProviderModel>[0]['step']) {
+    return resolveStepProviderModel({ step, providerRouting: routing });
+  }
+
+  it('treats the default candidate as the workflow tier, not a step-direct one', () => {
+    const [defaultCandidate] = buildFindingIntakeNormalizerSteps({
+      reviewerStepName: REVIEWER_STEP_NAME,
+      seat: undefined,
+      escalation: undefined,
+      workflowProvider: 'claude',
+      workflowModel: 'sonnet',
     });
-    expect(resolveConfigValue(projectDir, 'findingContract')).toEqual(loaded.findingContract);
-    saveProjectConfig(projectDir, loaded);
-    expect(readFileSync(join(projectDir, '.takt', 'config.yaml'), 'utf8'))
-      .toContain('finding_contract:');
-    expect(serializeGlobalConfig({
-      language: 'en',
+
+    // findings-manager と同じ形: 「直指定ではない」を明示する。省略すると
+    // provider-resolution が step 直指定（priority 2）として扱い、routing 層を
+    // 飛び越える。
+    expect(defaultCandidate).toMatchObject({
       provider: 'claude',
-      findingContract: loaded.findingContract,
-    })).toMatchObject({
-      finding_contract: {
-        intake_normalize: {
-          provider: 'mock',
-          model: 'project-model',
-        },
-      },
+      providerSpecified: false,
+      model: 'sonnet',
+      modelSpecified: false,
+    });
+    // provider_routing.steps（priority 4）がワークフロー既定（priority 9）に勝つ。
+    expect(resolve(defaultCandidate!)).toMatchObject({
+      provider: 'codex',
+      model: 'routed-model',
+    });
+  });
+
+  it('keeps the seat candidate above provider routing', () => {
+    const [seatCandidate] = buildFindingIntakeNormalizerSteps({
+      reviewerStepName: REVIEWER_STEP_NAME,
+      seat: { provider: 'opencode', model: 'seat-model' },
+      escalation: undefined,
+      workflowProvider: 'claude',
+      workflowModel: 'sonnet',
+    });
+
+    expect(seatCandidate).toMatchObject({ providerSpecified: true, modelSpecified: true });
+    expect(resolve(seatCandidate!)).toMatchObject({
+      provider: 'opencode',
+      model: 'seat-model',
     });
   });
 });
 
-describe('reviewer output strategy', () => {
-  const normalizer = {
-    provider: 'codex',
-    model: 'gpt-5.6-terra',
-    targets: [{ provider: 'opencode', model: 'ollama-cloud/gemma4:31b' }],
-  } as const;
+describe('finding intake normalizer load-time preflight', () => {
+  function findingContractWorkflow(reviewerProvider?: 'cursor' | 'codex'): WorkflowConfig {
+    return {
+      name: 'fc-preflight',
+      initialStep: 'review',
+      maxSteps: 4,
+      provider: reviewerProvider,
+      findingContract: {
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+        adjudicator: { persona: 'supervisor' },
+      },
+      steps: [{
+        name: 'review',
+        persona: 'reviewer',
+        instruction: 'Review.',
+        outputContracts: [{ name: 'review.md', formatRef: 'review-finding-contract' }],
+        rules: [{ condition: 'approved', next: 'COMPLETE' }],
+      }],
+    } as unknown as WorkflowConfig;
+  }
 
-  it('matches the resolved reviewer provider and model exactly', () => {
-    expect(resolveFindingContractReviewerOutputStrategy(
-      findingContract,
-      normalizer,
-      { provider: 'opencode', model: 'ollama-cloud/gemma4:31b' },
-    )?.kind).toBe('plain_text_normalized');
-    expect(resolveFindingContractReviewerOutputStrategy(
-      findingContract,
-      normalizer,
-      { provider: 'opencode', model: 'ollama-cloud/gemma4:27b' },
-    )?.kind).toBe('structured');
-    expect(resolveFindingContractReviewerOutputStrategy(
-      findingContract,
-      normalizer,
-      { provider: 'codex', model: 'gpt-5.6-sol' },
-    )?.kind).toBe('structured');
+  it('rejects a reviewer whose normalizer head candidate cannot run isolated structured execution', () => {
+    expect(() => validateFindingContractSyntheticProviderModels(
+      findingContractWorkflow('cursor'),
+      {},
+    )).toThrow(/does not support isolated structured execution/u);
   });
 
-  it('targets every Finding reviewer only when targets is omitted', () => {
-    expect(resolveFindingContractReviewerOutputStrategy(
-      findingContract,
-      { provider: 'codex', model: 'gpt-5.6-terra' },
-      { provider: 'codex', model: 'gpt-5.6-sol' },
-    )?.kind).toBe('plain_text_normalized');
-    expect(resolveFindingContractReviewerOutputStrategy(
-      findingContract,
-      undefined,
-      { provider: 'codex', model: 'gpt-5.6-sol' },
-    )?.kind).toBe('structured');
+  it('accepts a reviewer whose normalizer head candidate supports it', () => {
+    expect(() => validateFindingContractSyntheticProviderModels(
+      findingContractWorkflow('codex'),
+      {},
+    )).not.toThrow();
   });
 
-  it('accepts providers that implement isolated structured execution', () => {
-    expect(resolveFindingIntakeNormalizeConfig(
-      { provider: 'codex', model: 'gpt-5.6-terra' },
-      findingContract,
-    )).toBeDefined();
-    expect(resolveFindingIntakeNormalizeConfig(
-      { provider: 'opencode', model: 'ollama-cloud/glm-5.2' },
-      findingContract,
-    )).toBeDefined();
+  it('leaves an unresolved provider to the runtime instead of rejecting at load time', () => {
+    // ロード時に見えるのは engine option と workflow の値だけ。未確定を設定エラーに
+    // すると、project / global / provider 既定で解決できる構成を拒否してしまう。
+    expect(() => validateFindingContractSyntheticProviderModels(
+      findingContractWorkflow(undefined),
+      {},
+    )).not.toThrow();
   });
 
-  it('rejects providers without isolated structured execution at load time', () => {
-    expect(() => resolveFindingIntakeNormalizeConfig(
-      { provider: 'cursor', model: 'auto' },
-      findingContract,
-    )).toThrow('does not support isolated structured execution');
+  it('uses the intake-normalizer seat ahead of the workflow default', () => {
+    expect(() => validateFindingContractSyntheticProviderModels(
+      findingContractWorkflow('codex'),
+      { intakeNormalizerProvider: { provider: 'cursor' } },
+    )).toThrow(/does not support isolated structured execution/u);
   });
 });
 

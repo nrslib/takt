@@ -1,25 +1,25 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import type { AgentResponse, AgentWorkflowStep, FindingContractConfig } from '../core/models/types.js';
+import type { ProviderEscalationTarget } from '../core/models/config-types.js';
 import { FINDING_ESCALATION_REVIEWER_ROUTING_KEY } from '../core/models/finding-types.js';
 import {
   buildFindingEscalationReviewerStep,
-  requireEscalationOwnerOutputContractFormat,
-  FINDING_ESCALATION_REVIEWER_REPORT_NAME,
+  findingEscalationReviewerReportName,
 } from '../core/workflow/findings/escalation-reviewer-step.js';
 import { resolveRestatementPresentationPhase } from '../core/workflow/findings/restatement-presentation-phase.js';
+import { computeReviewerStableKey } from '../core/workflow/findings/raw-canonicalization.js';
 import {
   computeRestatementRequestId,
   createFindingReviewPresentationContextV2,
   createFindingReviewPublication,
   listFindingReviewPublications,
   persistFindingReviewPublication,
-  STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+  PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
 } from '../core/workflow/findings/review-publication.js';
 import {
   buildFindingContractInstruction,
   buildFindingContractReportInstruction,
 } from '../core/workflow/instruction/finding-contract-instruction.js';
-import { resolveStepProviderModel } from '../core/workflow/provider-resolution.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 import { FindingContractConfigRawSchema } from '../core/models/finding-schemas.js';
 import type { WorkflowStep } from '../core/models/types.js';
@@ -65,33 +65,31 @@ const { runFindingEscalationReviewer } = await import(
   '../core/workflow/findings/escalation-reviewer-runner.js'
 );
 
-function contractWithEscalationReviewer(
-  overrides: Partial<NonNullable<FindingContractConfig['escalationReviewer']>> = {},
-): FindingContractConfig {
-  return {
-    manager: {
-      persona: 'findings-manager',
-      instruction: 'Manage findings.',
-      outputContract: 'Manager output contract.',
-    },
-    adjudicator: {
-      persona: 'supervisor',
-      instruction: 'Adjudicate findings.',
-    },
-    escalationReviewer: {
-      persona: 'escalation-supervisor',
-      providerRoutingPersonaKey: FINDING_ESCALATION_REVIEWER_ROUTING_KEY,
-      ...overrides,
-    },
-  };
-}
+/** 格上げ先。runtime.yaml の `escalate: strong` を解決した結果に相当する。 */
+const ESCALATION_TARGET: ProviderEscalationTarget = {
+  profile: 'strong',
+  provider: 'mock',
+  model: 'strong-model',
+};
+
+const FINDING_CONTRACT: FindingContractConfig = {
+  manager: {
+    persona: 'findings-manager',
+    instruction: 'Manage findings.',
+    outputContract: 'Manager output contract.',
+  },
+  adjudicator: {
+    persona: 'supervisor',
+    instruction: 'Adjudicate findings.',
+  },
+};
 
 describe('FC escalation reviewer — presentation phase', () => {
   it('spends the restatement budget on the owner and the last presentation on escalation', () => {
     const phases = [0, 1, 2, 3].map((presentedCount) => resolveRestatementPresentationPhase({
       presentedCount,
       presentationLimit: 3,
-      escalationReviewerConfigured: true,
+      escalationEnabled: true,
     }));
 
     expect(phases).toEqual(['restatement', 'restatement', 'escalation', 'exhausted']);
@@ -101,15 +99,15 @@ describe('FC escalation reviewer — presentation phase', () => {
     expect(resolveRestatementPresentationPhase({
       presentedCount: 0,
       presentationLimit: 1,
-      escalationReviewerConfigured: true,
+      escalationEnabled: true,
     })).toBe('escalation');
   });
 
-  it('keeps every presentation on the owner reviewer when no escalation reviewer is configured', () => {
+  it('keeps every presentation on the owner reviewer when the owner profile has no escalate', () => {
     const phases = [0, 1, 2, 3].map((presentedCount) => resolveRestatementPresentationPhase({
       presentedCount,
       presentationLimit: 3,
-      escalationReviewerConfigured: false,
+      escalationEnabled: false,
     }));
 
     expect(phases).toEqual(['restatement', 'restatement', 'restatement', 'exhausted']);
@@ -118,38 +116,51 @@ describe('FC escalation reviewer — presentation phase', () => {
   it('gives the owner request and the escalation request different identities without changing the digest contract', () => {
     const requestWithoutId = {
       anomalyId: 'RA-ESCALATION',
-      presentationOrdinal: 2,
-      reviewScopeSnapshotId: '3'.repeat(64),
-      sourceExcerptDigest: '4'.repeat(64),
+      presentationOrdinal: 3,
+      reviewScopeSnapshotId: '1'.repeat(64),
+      sourceExcerptDigest: '2'.repeat(64),
       claimedExcerpt: 'A bounded reviewer claim.',
       targetPaths: ['src/example.ts'],
-      missingRequirements: ['description'] as const,
+      missingRequirements: ['title'] as const,
       expectedRelation: 'new' as const,
       expectedTargetFindingId: null,
       expectedTargetPreconditionClass: 'absent' as const,
     };
-    const ownerRequestId = computeRestatementRequestId({
+    const ownerId = computeRestatementRequestId({
       ...requestWithoutId,
       reviewer: 'architecture-review',
     });
-    const escalationRequestId = computeRestatementRequestId({
+    const escalationId = computeRestatementRequestId({
       ...requestWithoutId,
       reviewer: FINDING_ESCALATION_REVIEWER_ROUTING_KEY,
     });
 
-    expect(escalationRequestId).not.toBe(ownerRequestId);
+    expect(ownerId).not.toBe(escalationId);
     expect(computeRestatementRequestId({
       ...requestWithoutId,
       reviewer: FINDING_ESCALATION_REVIEWER_ROUTING_KEY,
-    })).toBe(escalationRequestId);
+    })).toBe(escalationId);
   });
 });
 
-describe('FC escalation reviewer — synthetic step', () => {
-  it('builds a read-only reviewer step with a fixed name, routing key and report name', () => {
+describe('FC escalation reviewer — synthetic step inherits the owner reviewer', () => {
+  const ownerStep = {
+    kind: 'agent' as const,
+    name: 'architecture-review',
+    persona: 'architecture-reviewer',
+    personaPath: '/facets/personas/architecture-reviewer.md',
+    personaDisplayName: 'architecture-reviewer',
+    instruction: 'Review the architecture.',
+    policyContents: [{ name: 'coding', content: 'Coding policy.' }],
+    knowledgeContents: [{ name: 'architecture', content: 'Architecture knowledge.' }],
+    outputContracts: [{ name: 'architecture-review', format: 'Owner report format.' }],
+    rules: [makeRule('approved', 'COMPLETE')],
+  } as unknown as AgentWorkflowStep;
+
+  it('keeps the owner persona, policy, knowledge and report format', () => {
     const step = buildFindingEscalationReviewerStep({
-      contract: contractWithEscalationReviewer(),
-      ownerOutputContractFormat: 'Owner report format.',
+      ownerStep,
+      escalation: ESCALATION_TARGET,
     });
 
     expect(step).toMatchObject({
@@ -157,142 +168,129 @@ describe('FC escalation reviewer — synthetic step', () => {
       name: FINDING_ESCALATION_REVIEWER_ROUTING_KEY,
       engineSynthesized: true,
       providerRoutingPersonaKey: FINDING_ESCALATION_REVIEWER_ROUTING_KEY,
-      sessionKey: FINDING_ESCALATION_REVIEWER_ROUTING_KEY,
+      sessionKey: findingEscalationReviewerReportName(ownerStep.name),
+      persona: 'architecture-reviewer',
+      personaPath: '/facets/personas/architecture-reviewer.md',
+      personaDisplayName: 'architecture-reviewer',
+      policyContents: ownerStep.policyContents,
+      knowledgeContents: ownerStep.knowledgeContents,
       session: 'refresh',
       edit: false,
       rules: [],
     });
     expect(step.outputContracts).toEqual([{
-      name: FINDING_ESCALATION_REVIEWER_REPORT_NAME,
+      name: findingEscalationReviewerReportName(ownerStep.name),
       format: 'Owner report format.',
     }]);
     expect(step.structuredOutput).toBeUndefined();
   });
 
-  it('falls back to the persona body as instruction and keeps a configured output contract', () => {
-    const inherited = buildFindingEscalationReviewerStep({
-      contract: contractWithEscalationReviewer(),
-      ownerOutputContractFormat: 'Owner report format.',
-    });
-    const configured = buildFindingEscalationReviewerStep({
-      contract: contractWithEscalationReviewer({
-        instruction: 'Restate the escalated claims.',
-        outputContract: 'Escalation report format.',
-      }),
-      ownerOutputContractFormat: 'Owner report format.',
+  it('changes only the model, and drops the owner review procedure', () => {
+    const step = buildFindingEscalationReviewerStep({
+      ownerStep,
+      escalation: ESCALATION_TARGET,
     });
 
-    expect(inherited.instruction).toBe('escalation-supervisor');
-    expect(configured.instruction).toBe('Restate the escalated claims.');
-    expect(configured.outputContracts).toEqual([{
-      name: FINDING_ESCALATION_REVIEWER_REPORT_NAME,
-      format: 'Escalation report format.',
-    }]);
-  });
-
-  it('prefers the direct provider/model over the workflow defaults', () => {
-    const direct = buildFindingEscalationReviewerStep({
-      contract: contractWithEscalationReviewer({ provider: 'codex', model: 'gpt-test' }),
-      workflowProvider: 'claude',
-      workflowModel: 'workflow-model',
-      ownerOutputContractFormat: 'Owner report format.',
-    });
-    const inherited = buildFindingEscalationReviewerStep({
-      contract: contractWithEscalationReviewer(),
-      workflowProvider: 'claude',
-      workflowModel: 'workflow-model',
-      ownerOutputContractFormat: 'Owner report format.',
-    });
-
-    expect(direct).toMatchObject({
-      provider: 'codex',
+    expect(step).toMatchObject({
+      provider: 'mock',
       providerSpecified: true,
-      model: 'gpt-test',
+      model: 'strong-model',
       modelSpecified: true,
     });
-    expect(inherited).toMatchObject({
-      provider: 'claude',
-      providerSpecified: false,
-      model: 'workflow-model',
-      modelSpecified: false,
-    });
+    // 手順はエンジンが注入する restatement-only 契約が担う。
+    expect(step.instruction).toBe(ownerStep.persona);
+    expect(step.instruction).not.toBe(ownerStep.instruction);
   });
 
-  it('refuses to build a step when no escalation reviewer is configured', () => {
-    expect(() => buildFindingEscalationReviewerStep({
-      contract: { manager: contractWithEscalationReviewer().manager },
-      ownerOutputContractFormat: 'Owner report format.',
-    })).toThrow(/finding_contract\.escalation_reviewer/);
+  it('gives each owner its own report name so grouped calls never collide', () => {
+    const first = buildFindingEscalationReviewerStep({ ownerStep, escalation: ESCALATION_TARGET });
+    const second = buildFindingEscalationReviewerStep({
+      ownerStep: { ...ownerStep, name: 'security-review' },
+      escalation: ESCALATION_TARGET,
+    });
+
+    expect(first.name).toBe(second.name);
+    expect(first.outputContracts?.[0]?.name).not.toBe(second.outputContracts?.[0]?.name);
   });
 
   it('fails loudly when no owner output contract can be inherited', () => {
-    expect(() => requireEscalationOwnerOutputContractFormat([
-      { kind: 'agent', name: 'review', instruction: 'Review.' } as AgentWorkflowStep,
-    ])).toThrow(/output contract/);
+    expect(() => buildFindingEscalationReviewerStep({
+      ownerStep: { kind: 'agent', name: 'review', instruction: 'Review.' } as AgentWorkflowStep,
+      escalation: ESCALATION_TARGET,
+    })).toThrow(/output contract/);
   });
 
-  it('routes provider/model through the escalation-reviewer persona key', () => {
-    const step = buildFindingEscalationReviewerStep({
-      contract: contractWithEscalationReviewer(),
-      ownerOutputContractFormat: 'Owner report format.',
+  it('inherits the owner lifecycle identity while keeping a separate publication identity', () => {
+    const escalationStep = buildFindingEscalationReviewerStep({
+      ownerStep,
+      escalation: ESCALATION_TARGET,
+    });
+    const stableKeyOf = (step: AgentWorkflowStep) => computeReviewerStableKey({
+      workflowName: 'peer-review',
+      callNamespace: '',
+      parentStepName: 'reviewers',
+      // manager-intake.ts と同じ導出（persona 優先、無ければ step 名）。
+      reviewerPersonaKey: step.persona ?? step.name,
     });
 
-    expect(resolveStepProviderModel({
-      step,
-      provider: 'mock',
-      model: 'project-model',
-      providerRouting: {
-        personas: {
-          [FINDING_ESCALATION_REVIEWER_ROUTING_KEY]: { provider: 'codex', model: 'gpt-5' },
-          'escalation-supervisor': { provider: 'cursor', model: 'persona-name-model' },
-        },
-      },
-    } as Parameters<typeof resolveStepProviderModel>[0])).toMatchObject({
-      provider: 'codex',
-      model: 'gpt-5',
-      providerSource: 'provider_routing.personas',
-      modelSource: 'provider_routing.personas',
-    });
+    // 代打の主張は owner の lifecycle をそのまま継ぐ（別人の新規観測として
+    // 二重計上されない）。persona を継承した帰結であり、意図した挙動。
+    expect(stableKeyOf(escalationStep)).toBe(stableKeyOf(ownerStep));
+    // publication identity だけは reviewer キーと owner 別 report 名で分かれる。
+    expect(escalationStep.name).not.toBe(ownerStep.name);
+    expect(escalationStep.outputContracts?.[0]?.name).not.toBe(ownerStep.outputContracts?.[0]?.name);
+  });
+
+  it('inherits the owner MCP servers so the stand-in can re-fetch the same evidence', () => {
+    const withMcp = {
+      ...ownerStep,
+      mcpServers: { docs: { command: 'docs-server' } },
+    } as unknown as AgentWorkflowStep;
+
+    expect(buildFindingEscalationReviewerStep({
+      ownerStep: withMcp,
+      escalation: ESCALATION_TARGET,
+    }).mcpServers).toEqual({ docs: { command: 'docs-server' } });
+  });
+
+  it('fails loudly when the owner reviewer has no persona to inherit', () => {
+    expect(() => buildFindingEscalationReviewerStep({
+      ownerStep: {
+        ...ownerStep,
+        persona: undefined,
+      } as unknown as AgentWorkflowStep,
+      escalation: ESCALATION_TARGET,
+    })).toThrow(/persona/);
   });
 });
 
-describe('FC escalation reviewer — configuration schema', () => {
-  it('requires only the persona and rejects unknown fields', () => {
+describe('FC escalation reviewer — workflow configuration', () => {
+  const findingContractRaw = {
+    manager: {
+      persona: 'findings-manager',
+      instruction: 'findings-manager',
+      output_contract: 'findings-manager',
+    },
+    // 正規化済み WorkflowConfig を engine が組み立てる際、合成 FC ロールは
+    // 事前検証される（CLAUDE.md）。adjudicator を欠くと検証を素通りする
+    // 構成をテストが作ってしまう。
+    adjudicator: {
+      persona: 'supervisor',
+      instruction: 'adjudicate-finding-contract',
+    },
+  };
+
+  it('rejects the removed escalation_reviewer block at load time', () => {
+    expect(FindingContractConfigRawSchema.safeParse(findingContractRaw).success).toBe(true);
     expect(FindingContractConfigRawSchema.safeParse({
-      manager: { persona: 'm', instruction: 'i', output_contract: 'o' },
+      ...findingContractRaw,
       escalation_reviewer: { persona: 'escalation-supervisor' },
-    }).success).toBe(true);
-    expect(FindingContractConfigRawSchema.safeParse({
-      manager: { persona: 'm', instruction: 'i', output_contract: 'o' },
-      escalation_reviewer: {},
     }).success).toBe(false);
-    expect(FindingContractConfigRawSchema.safeParse({
-      manager: { persona: 'm', instruction: 'i', output_contract: 'o' },
-      escalation_reviewer: { persona: 'escalation-supervisor', unknown_field: true },
-    }).success).toBe(false);
-  });
-
-  it('normalizes the routing key to escalation-reviewer regardless of the persona name', () => {
-    const workflow = normalizeWorkflowConfig({
-      name: 'escalation-workflow',
+    expect(() => normalizeWorkflowConfig({
+      name: 'legacy-escalation-workflow',
       finding_contract: {
-        manager: {
-          persona: 'findings-manager',
-          instruction: 'findings-manager',
-          output_contract: 'findings-manager',
-        },
-        // 正規化済み WorkflowConfig を engine が組み立てる際、合成 FC ロールは
-        // 事前検証される（CLAUDE.md）。adjudicator を欠くと検証を素通りする
-        // 構成をテストが作ってしまう。
-        adjudicator: {
-          persona: 'supervisor',
-          instruction: 'adjudicate-finding-contract',
-        },
-        escalation_reviewer: {
-          persona: 'terminal-supervisor',
-          provider: 'codex',
-          model: 'gpt-test',
-        },
+        ...findingContractRaw,
+        escalation_reviewer: { persona: 'escalation-supervisor' },
       },
       initial_step: 'review',
       max_steps: 2,
@@ -302,67 +300,13 @@ describe('FC escalation reviewer — configuration schema', () => {
         instruction: 'Review.',
         rules: [{ condition: 'done', next: 'COMPLETE' }],
       }],
-    }, '/tmp/project');
-
-    expect(workflow.findingContract?.escalationReviewer).toEqual({
-      persona: 'terminal-supervisor',
-      personaDisplayName: 'terminal-supervisor',
-      providerRoutingPersonaKey: FINDING_ESCALATION_REVIEWER_ROUTING_KEY,
-      provider: 'codex',
-      model: 'gpt-test',
-    });
+    }, '/tmp/project')).toThrow();
   });
 
-  it('leaves escalationReviewer undefined when the workflow omits it', () => {
-    const workflow = normalizeWorkflowConfig({
-      name: 'plain-fc-workflow',
-      finding_contract: {
-        manager: {
-          persona: 'findings-manager',
-          instruction: 'findings-manager',
-          output_contract: 'findings-manager',
-        },
-        // 正規化済み WorkflowConfig を engine が組み立てる際、合成 FC ロールは
-        // 事前検証される（CLAUDE.md）。adjudicator を欠くと検証を素通りする
-        // 構成をテストが作ってしまう。
-        adjudicator: {
-          persona: 'supervisor',
-          instruction: 'adjudicate-finding-contract',
-        },
-      },
-      initial_step: 'review',
-      max_steps: 2,
-      steps: [{
-        name: 'review',
-        persona: 'reviewer',
-        instruction: 'Review.',
-        rules: [{ condition: 'done', next: 'COMPLETE' }],
-      }],
-    }, '/tmp/project');
-
-    expect(workflow.findingContract?.escalationReviewer).toBeUndefined();
-  });
-
-  it('reserves the escalation-reviewer step name only while the role is configured', () => {
-    const workflowRaw = (withEscalationReviewer: boolean) => ({
+  it('reserves the escalation-reviewer step name for every finding contract workflow', () => {
+    const workflowRaw = (withFindingContract: boolean) => ({
       name: 'reserved-name-workflow',
-      finding_contract: {
-        manager: {
-          persona: 'findings-manager',
-          instruction: 'findings-manager',
-          output_contract: 'findings-manager',
-        },
-        // 正規化済み WorkflowConfig を engine が組み立てる際、合成 FC ロールは
-        // 事前検証される（CLAUDE.md）。adjudicator を欠くと検証を素通りする
-        // 構成をテストが作ってしまう。
-        adjudicator: {
-          persona: 'supervisor',
-          instruction: 'adjudicate-finding-contract',
-        },
-        ...(withEscalationReviewer
-          ? { escalation_reviewer: { persona: 'terminal-supervisor' } }
-          : {}),
-      },
+      ...(withFindingContract ? { finding_contract: findingContractRaw } : {}),
       initial_step: 'review',
       max_steps: 2,
       steps: [
@@ -389,21 +333,7 @@ describe('FC escalation reviewer — configuration schema', () => {
   it('reserves the escalation-reviewer name for parallel sub-steps too', () => {
     expect(() => normalizeWorkflowConfig({
       name: 'reserved-parallel-workflow',
-      finding_contract: {
-        manager: {
-          persona: 'findings-manager',
-          instruction: 'findings-manager',
-          output_contract: 'findings-manager',
-        },
-        // 正規化済み WorkflowConfig を engine が組み立てる際、合成 FC ロールは
-        // 事前検証される（CLAUDE.md）。adjudicator を欠くと検証を素通りする
-        // 構成をテストが作ってしまう。
-        adjudicator: {
-          persona: 'supervisor',
-          instruction: 'adjudicate-finding-contract',
-        },
-        escalation_reviewer: { persona: 'terminal-supervisor' },
-      },
+      finding_contract: findingContractRaw,
       initial_step: 'reviewers',
       max_steps: 2,
       steps: [{
@@ -453,8 +383,6 @@ describe('FC escalation reviewer — restatement instruction', () => {
           hasWaivedFindings: false,
           hasDismissedFindings: false,
           reviewer: {
-            mode: 'structured',
-            rawFindingsStructuredOutput: { schemaRef: 'test', schema: { type: 'object' } },
             reviewScopeSnapshotId: context.reviewScopeSnapshotId,
             presentationContext: context,
           },
@@ -500,8 +428,6 @@ describe('FC escalation reviewer — restatement instruction', () => {
         hasWaivedFindings: false,
         hasDismissedFindings: false,
         reviewer: {
-          mode: 'structured',
-          rawFindingsStructuredOutput: { schemaRef: 'test', schema: { type: 'object' } },
           reviewScopeSnapshotId: presentationContext.reviewScopeSnapshotId,
           presentationContext,
         },
@@ -519,7 +445,7 @@ describe('FC escalation reviewer — restatement instruction', () => {
       reviewScopeSnapshotId: requestWithoutId.reviewScopeSnapshotId,
     }));
     expect(rebuiltReportInstruction).not.toContain('restatement-only review');
-    expect(rebuiltReportInstruction).toContain('Report every fresh issue you observe');
+    expect(rebuiltReportInstruction).toContain('Write an ordinary Markdown review report');
   });
 });
 
@@ -532,13 +458,8 @@ describe('FC escalation reviewer — presentation freeze', () => {
     rules: [],
   };
   const reviewScopeSnapshotId = 'b'.repeat(64);
-  const structuredStrategy = {
-    kind: 'structured',
-    reportGeneration: 'structured',
-    intake: 'reviewer_structured',
-  } as const;
-
-  function makeServices(presentationLimit: number) {
+  function makeServices(presentationLimit: number, options: { escalates?: boolean } = {}) {
+    const escalates = options.escalates ?? true;
     const cwd = process.cwd();
     const runPaths = buildRunPaths(cwd, `escalation-freeze-${presentationLimit}`);
     // 提示回数の正本は report dir の canonical publication。凍結が効いているかを
@@ -631,6 +552,16 @@ describe('FC escalation reviewer — presentation freeze', () => {
       options: {
         projectCwd: cwd,
         structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
+        // runtime.yaml の `escalate` 付き profile へ解決されたレビュアーを再現する。
+        providerRouting: {
+          steps: {
+            [reviewerStep.name]: {
+              provider: 'mock' as const,
+              model: 'weak-model',
+              ...(escalates ? { escalation: ESCALATION_TARGET } : {}),
+            },
+          },
+        },
       },
       structuredCaller: {
         evaluateCondition: vi.fn(),
@@ -645,7 +576,7 @@ describe('FC escalation reviewer — presentation freeze', () => {
       setActiveResumePoint: vi.fn(),
       persistDynamicParallelSelection: vi.fn(),
       refreshFindingsState: vi.fn(),
-      findingContract: contractWithEscalationReviewer() as never,
+      findingContract: FINDING_CONTRACT as never,
       findingLedgerStore: { loadLedger: () => ledger } as never,
       updatePersonaSession: vi.fn(),
       resolveNextStepFromDone: vi.fn(),
@@ -660,6 +591,19 @@ describe('FC escalation reviewer — presentation freeze', () => {
       cleanup: () => rmSync(reportDir, { recursive: true, force: true }),
     };
   }
+
+  const escalationRequests = (
+    services: ReturnType<typeof makeServices>['services'],
+    freezeKey: string,
+  ) => {
+    const contexts = services.optionsBuilder.buildFindingEscalationInstructionContexts({
+      ownerReviewerSteps: [reviewerStep as AgentWorkflowStep],
+      reviewScopeSnapshotId,
+      findingContractFreezeKey: freezeKey,
+    });
+    const presentation = contexts.get(reviewerStep.name)?.reviewer?.presentationContext;
+    return presentation?.revision === 2 ? presentation.restatementRequests : undefined;
+  };
 
   /** 指定 reviewer がその anomaly を提示した canonical publication を報告先へ実際に書き込む。 */
   function persistPresentation(input: {
@@ -700,7 +644,7 @@ describe('FC escalation reviewer — presentation freeze', () => {
           reviewerStepName: input.reviewerStepName,
           reportName: input.reportName,
         },
-        protocol: STRUCTURED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+        protocol: PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
         reportContent: `${input.reviewerStepName} restatement report.`,
         rawFindings: [],
         presentationContext,
@@ -729,7 +673,7 @@ describe('FC escalation reviewer — presentation freeze', () => {
     persistPresentation({
       ...input,
       reviewerStepName: FINDING_ESCALATION_REVIEWER_ROUTING_KEY,
-      reportName: `${FINDING_ESCALATION_REVIEWER_REPORT_NAME}.md`,
+      reportName: `${findingEscalationReviewerReportName(reviewerStep.name)}.md`,
     });
   }
 
@@ -740,7 +684,7 @@ describe('FC escalation reviewer — presentation freeze', () => {
 
       const ownerContext = services.optionsBuilder.buildFindingContractInstructionContext(
         reviewerStep,
-        structuredStrategy,
+        true,
         reviewScopeSnapshotId,
         freezeKey,
       );
@@ -758,11 +702,7 @@ describe('FC escalation reviewer — presentation freeze', () => {
         .toEqual([anomalyId]);
 
       // 凍結した presentation counts を使う限り、同じラウンドでは発火しない。
-      expect(services.optionsBuilder.buildFindingEscalationInstructionContext({
-        ownerStepNames: [reviewerStep.name],
-        reviewScopeSnapshotId,
-        findingContractFreezeKey: freezeKey,
-      })).toBeUndefined();
+      expect(escalationRequests(services, freezeKey)).toBeUndefined();
     } finally {
       cleanup();
     }
@@ -775,23 +715,38 @@ describe('FC escalation reviewer — presentation freeze', () => {
 
       const ownerContext = services.optionsBuilder.buildFindingContractInstructionContext(
         reviewerStep,
-        structuredStrategy,
+        true,
         reviewScopeSnapshotId,
         freezeKey,
       );
       const ownerPresentation = ownerContext?.reviewer?.presentationContext;
       expect(ownerPresentation?.revision === 2 && ownerPresentation.restatementRequests).toEqual([]);
 
-      const escalationContext = services.optionsBuilder.buildFindingEscalationInstructionContext({
-        ownerStepNames: [reviewerStep.name],
+      expect(escalationRequests(services, freezeKey)).toMatchObject([
+        { reviewer: FINDING_ESCALATION_REVIEWER_ROUTING_KEY, presentationOrdinal: 1 },
+      ]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('keeps the last presentation on the owner when the owner profile declares no escalate', () => {
+    const { services, cleanup } = makeServices(1, { escalates: false });
+    try {
+      const freezeKey = 'freeze-no-escalate';
+
+      const ownerContext = services.optionsBuilder.buildFindingContractInstructionContext(
+        reviewerStep,
+        true,
         reviewScopeSnapshotId,
-        findingContractFreezeKey: freezeKey,
-      });
-      const escalationPresentation = escalationContext?.reviewer?.presentationContext;
-      expect(escalationPresentation?.revision === 2 && escalationPresentation.restatementRequests)
-        .toMatchObject([
-          { reviewer: FINDING_ESCALATION_REVIEWER_ROUTING_KEY, presentationOrdinal: 1 },
-        ]);
+        freezeKey,
+      );
+      const ownerPresentation = ownerContext?.reviewer?.presentationContext;
+      expect(ownerPresentation?.revision === 2 && ownerPresentation.restatementRequests).toMatchObject([
+        { reviewer: reviewerStep.name, presentationOrdinal: 1 },
+      ]);
+
+      expect(escalationRequests(services, freezeKey)).toBeUndefined();
     } finally {
       cleanup();
     }
@@ -806,17 +761,11 @@ describe('FC escalation reviewer — presentation freeze', () => {
       const escalationRequestsForRound = (freezeKey: string) => {
         services.optionsBuilder.buildFindingContractInstructionContext(
           reviewerStep,
-          structuredStrategy,
+          true,
           reviewScopeSnapshotId,
           freezeKey,
         );
-        const context = services.optionsBuilder.buildFindingEscalationInstructionContext({
-          ownerStepNames: [reviewerStep.name],
-          reviewScopeSnapshotId,
-          findingContractFreezeKey: freezeKey,
-        });
-        const presentation = context?.reviewer?.presentationContext;
-        return presentation?.revision === 2 ? presentation.restatementRequests : undefined;
+        return escalationRequests(services, freezeKey);
       };
 
       const firstRound = escalationRequestsForRound('freeze-escalation-round-1');
@@ -844,16 +793,12 @@ describe('FC escalation reviewer — presentation freeze', () => {
 
       services.optionsBuilder.buildFindingContractInstructionContext(
         reviewerStep,
-        structuredStrategy,
+        true,
         reviewScopeSnapshotId,
         'freeze-after-escalation',
       );
 
-      expect(services.optionsBuilder.buildFindingEscalationInstructionContext({
-        ownerStepNames: [reviewerStep.name],
-        reviewScopeSnapshotId,
-        findingContractFreezeKey: 'freeze-after-escalation',
-      })).toBeUndefined();
+      expect(escalationRequests(services, 'freeze-after-escalation')).toBeUndefined();
     } finally {
       cleanup();
     }
@@ -864,16 +809,237 @@ describe('FC escalation reviewer — presentation freeze', () => {
     try {
       services.optionsBuilder.buildFindingContractInstructionContext(
         reviewerStep,
-        structuredStrategy,
+        true,
         reviewScopeSnapshotId,
         'freeze-current-round',
       );
 
-      expect(() => services.optionsBuilder.buildFindingEscalationInstructionContext({
-        ownerStepNames: [reviewerStep.name],
+      expect(() => escalationRequests(services, 'freeze-other-round'))
+        .toThrow(/frozen reviewer input of the same review round/);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe('FC escalation reviewer — owner 別 batch の枠按分と strategy 射影', () => {
+  const reviewScopeSnapshotId = 'f'.repeat(64);
+
+  function ownerStepFor(name: string): AgentWorkflowStep {
+    return {
+      kind: 'agent',
+      name,
+      persona: 'reviewer',
+      instruction: 'Review.',
+      outputContracts: [{ name, format: 'Owner report format.' }],
+      rules: [],
+    } as unknown as AgentWorkflowStep;
+  }
+
+  /** owner ごとに `anomaliesPerOwner` 件の未提示 intake anomaly（limit 1）を積む。 */
+  function makeServices(ownerNames: readonly string[], anomaliesPerOwner: number) {
+    const cwd = process.cwd();
+    const runPaths = buildRunPaths(cwd, 'escalation-allocation');
+    const reportDir = mkdtempSync(join(tmpdir(), 'takt-fc-escalation-allocation-'));
+    const observedAt = {
+      runId: 'run-escalation-allocation',
+      stepName: ownerNames[0]!,
+      timestamp: '2026-08-07T00:00:00.000Z',
+    };
+    const rawFindings = ownerNames.flatMap((owner) => (
+      Array.from({ length: anomaliesPerOwner }, (_, index) => canonicalRawFindingFixture({
+        rawFindingId: `raw-${owner}-${index}`,
+        stepName: owner,
+        reviewer: owner,
+        familyTag: null,
+        severity: null,
+        title: null,
+        description: null,
+        suggestion: null,
+        relation: 'new',
+        targetFindingId: null,
+        target: { kind: 'code', paths: [`src/${owner}-${index}.ts`] },
+        rawExcerpt: `Claim ${owner} ${index} must be restated.`,
+        evidence: [],
+      }))
+    ));
+    const emptyLedger: FindingLedger = {
+      workflowName: 'peer-review',
+      nextId: 1,
+      updatedAt: observedAt.timestamp,
+      findings: [],
+      evidenceRecords: [],
+      rawFindings,
+      conflicts: [],
+      lifecycleReservations: [],
+      lifecycleEvents: [],
+      ...createEmptyFindingContractRegistries(),
+    };
+    const specs = rawFindings.map((raw) => createReviewerAnomalySpec({
+      wire: raw,
+      canonical: canonicalizeReviewerRawFinding(
+        candidateFromStoredRawFinding(raw, `stable-${raw.rawFindingId}`),
+        { ledger: emptyLedger },
+      ).canonical,
+      anomalyKind: 'intake-contract-incomplete',
+      reason: 'The normalized claim omitted product identity.',
+      intakeContract: {
+        observationClass: 'claim-bearing',
+        classificationAuthorityId: 'system/intake_observation_classification_v1',
+        reasonCodes: ['product-identity-incomplete'],
+        missingRequirements: ['title'],
+        presentationOwnerReviewer: raw.reviewer,
+        presentationLimit: 1,
+      },
+    }));
+    const ledger = applyReviewerAnomalySpecsToLedger(emptyLedger, specs, {
+      workflowName: 'peer-review',
+      stepName: observedAt.stepName,
+      runId: observedAt.runId,
+      timestamp: observedAt.timestamp,
+    }, new Set());
+
+    const services = createWorkflowEngineServices({
+      config: {
+        name: 'test-workflow',
+        initialStep: ownerNames[0]!,
+        maxSteps: 10,
+        steps: ownerNames.map((name) => ownerStepFor(name) as unknown as WorkflowStep),
+      },
+      state: {
+        workflowName: 'test-workflow',
+        currentStep: ownerNames[0]!,
+        iteration: 1,
+        stepOutputs: new Map(),
+        structuredOutputs: new Map(),
+        systemContexts: new Map(),
+        effectResults: new Map(),
+        userInputs: [],
+        personaSessions: new Map(),
+        stepIterations: new Map(),
+        restoredStepIterationNames: new Set(),
+        dynamicParallelSelections: new Map(),
+        resumedDynamicParallelSteps: new Set(),
+        status: 'running',
+      },
+      task: 'test task',
+      projectCwd: cwd,
+      getCwd: () => cwd,
+      getReportDir: () => reportDir,
+      getRunPaths: () => runPaths,
+      getMaxSteps: () => 1000,
+      options: {
+        projectCwd: cwd,
+        structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
+        providerRouting: {
+          steps: Object.fromEntries(ownerNames.map((name) => [
+            name,
+            { provider: 'mock' as const, model: 'weak-model', escalation: ESCALATION_TARGET },
+          ])),
+        },
+      },
+      structuredCaller: {
+        evaluateCondition: vi.fn(),
+        judgeStatus: vi.fn(),
+        decomposeTask: vi.fn(),
+        requestMoreParts: vi.fn(),
+      },
+      sharedRuntime: createSharedRuntime(undefined, 1000),
+      resumeStackPrefix: [],
+      runPaths,
+      updateMaxSteps: vi.fn(),
+      setActiveResumePoint: vi.fn(),
+      persistDynamicParallelSelection: vi.fn(),
+      refreshFindingsState: vi.fn(),
+      findingContract: FINDING_CONTRACT as never,
+      findingLedgerStore: { loadLedger: () => ledger } as never,
+      updatePersonaSession: vi.fn(),
+      resolveNextStepFromDone: vi.fn(),
+      resetCycleDetector: vi.fn(),
+      emitEvent: vi.fn(),
+      createEngine: vi.fn(),
+    });
+    return {
+      services,
+      cleanup: () => rmSync(reportDir, { recursive: true, force: true }),
+    };
+  }
+
+  it('owner 別 batch は 1 step あたりの raw finding 上限を共有し、按分は先着順で決定的', () => {
+    const ownerNames = ['review-a', 'review-b', 'review-c'];
+    const { services, cleanup } = makeServices(ownerNames, 64);
+    try {
+      const freezeKey = 'freeze-allocation';
+      for (const name of ownerNames) {
+        services.optionsBuilder.buildFindingContractInstructionContext(
+          ownerStepFor(name) as unknown as WorkflowStep,
+          true,
+          reviewScopeSnapshotId,
+          freezeKey,
+        );
+      }
+
+      const contexts = services.optionsBuilder.buildFindingEscalationInstructionContexts({
+        ownerReviewerSteps: ownerNames.map(ownerStepFor),
         reviewScopeSnapshotId,
-        findingContractFreezeKey: 'freeze-other-round',
-      })).toThrow(/frozen reviewer input of the same review round/);
+        findingContractFreezeKey: freezeKey,
+      });
+
+      const requestCountFor = (owner: string) => {
+        const presentation = contexts.get(owner)?.reviewer?.presentationContext;
+        return presentation?.revision === 2 ? presentation.restatementRequests.length : 0;
+      };
+      // reviewer あたり 64 件・step 合計 128 件が上限。3人目は残り枠 0 なので
+      // batch が作られない（context ごと存在しない）。
+      expect([
+        requestCountFor('review-a'),
+        requestCountFor('review-b'),
+        requestCountFor('review-c'),
+      ]).toEqual([64, 64, 0]);
+      expect(contexts.has('review-c')).toBe(false);
+
+      // 各 batch は自分の owner の anomaly だけを載せる。
+      for (const owner of ['review-a', 'review-b']) {
+        const presentation = contexts.get(owner)!.reviewer!.presentationContext!;
+        expect(presentation.revision).toBe(2);
+        if (presentation.revision !== 2) {
+          throw new Error('expected a v2 presentation context');
+        }
+        expect(presentation.restatementRequests.every(
+          (request) => request.reviewer === FINDING_ESCALATION_REVIEWER_ROUTING_KEY,
+        )).toBe(true);
+        expect(new Set(presentation.restatementRequests.map(({ anomalyId }) => anomalyId)).size)
+          .toBe(64);
+      }
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('同じラウンドで同じ reviewer を組み直しても提示 batch を作り直さない', () => {
+    const { services, cleanup } = makeServices(['review-a'], 1);
+    try {
+      const freezeKey = 'freeze-projection';
+      const step = ownerStepFor('review-a') as unknown as WorkflowStep;
+      const phase1 = services.optionsBuilder.buildFindingContractInstructionContext(
+        step,
+        true,
+        reviewScopeSnapshotId,
+        freezeKey,
+      );
+      // Phase 2 が同じ freeze キーで組み直しても凍結値をそのまま返す。
+      const phase2 = services.optionsBuilder.buildFindingContractInstructionContext(
+        step,
+        true,
+        reviewScopeSnapshotId,
+        freezeKey,
+      );
+
+      // 提示 batch を作り直すと同じラウンドで二重計上になる。
+      expect(phase2?.reviewer?.presentationContext)
+        .toBe(phase1?.reviewer?.presentationContext);
+      expect(phase2?.reviewer?.reviewScopeSnapshotId)
+        .toBe(phase1?.reviewer?.reviewScopeSnapshotId);
     } finally {
       cleanup();
     }
@@ -881,42 +1047,54 @@ describe('FC escalation reviewer — presentation freeze', () => {
 });
 
 describe('FC escalation reviewer — direct provider call wiring', () => {
-  const escalationContext = {
+  const makeEscalationContext = (anomalyId: string) => ({
     ledgerSummary: { findings: [] },
     reportLedgerSummary: { findings: [] },
     hasOpenFindings: false,
     hasWaivedFindings: false,
     hasDismissedFindings: false,
     reviewer: {
-      mode: 'structured' as const,
-      rawFindingsStructuredOutput: { schemaRef: 'takt.findings.raw', schema: { type: 'object' } },
       reviewScopeSnapshotId: '5'.repeat(64),
       presentationContext: {
         revision: 2 as const,
         reviewScopeSnapshotId: '5'.repeat(64),
         restatementRequests: [],
-        presentedReviewerAnomalyIds: [],
+        presentedReviewerAnomalyIds: [anomalyId],
         contextDigest: '6'.repeat(64),
       },
     },
-  };
+  });
 
-  const ownerReviewerStep = {
+  const escalationContext = makeEscalationContext('RA-1');
+
+  const makeOwnerStep = (name: string) => ({
     kind: 'agent' as const,
-    name: 'architecture-review',
+    name,
+    persona: `${name}-persona`,
     instruction: 'Review.',
-    outputContracts: [{ name: 'architecture-review', format: 'Owner report format.' }],
-  };
+    outputContracts: [{ name, format: `${name} report format.` }],
+  }) as unknown as AgentWorkflowStep;
+
+  const ownerReviewerStep = makeOwnerStep('architecture-review');
 
   function createRunnerInput(overrides: {
     resumeResult?: unknown;
     prepareResult?: unknown;
     withoutEscalationContext?: boolean;
+    ownerReviewerSteps?: readonly AgentWorkflowStep[];
+    escalationContexts?: ReadonlyMap<string, unknown>;
+    escalatingOwners?: readonly string[];
   } = {}) {
-    const recordSynthesizedAgentUsage = vi.fn();
-    const prepareFindingReviewPublication = vi.fn().mockResolvedValue(
-      overrides.prepareResult ?? { publication: { publicationId: 'pub-escalation' } },
+    const ownerReviewerSteps = overrides.ownerReviewerSteps ?? [ownerReviewerStep];
+    const escalatingOwners = new Set(
+      overrides.escalatingOwners ?? ownerReviewerSteps.map((step) => step.name),
     );
+    const recordSynthesizedAgentUsage = vi.fn();
+    const prepareFindingReviewPublication = vi.fn().mockImplementation((call: { step: { outputContracts?: { name: string }[] } }) => Promise.resolve(
+      overrides.prepareResult ?? {
+        publication: { publicationId: `pub-${call.step.outputContracts?.[0]?.name ?? 'escalation'}` },
+      },
+    ));
     const stepExecutor = {
       recordSynthesizedAgentUsage,
       resumeFindingReviewPublication: vi.fn().mockResolvedValue(overrides.resumeResult),
@@ -937,13 +1115,22 @@ describe('FC escalation reviewer — direct provider call wiring', () => {
           providerProfiles: { mock: { defaultPermissionMode: 'edit' } },
         },
       }),
-      resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'mock', model: 'mock-model' }),
+      resolveStepProviderModel: vi.fn((step: { name: string }) => (
+        escalatingOwners.has(step.name)
+          ? { provider: 'mock', model: 'weak-model', escalation: ESCALATION_TARGET }
+          : { provider: 'mock', model: 'strong-model' }
+      )),
     };
+    const escalationContexts = overrides.escalationContexts
+      ?? new Map(
+        overrides.withoutEscalationContext === true
+          ? []
+          : ownerReviewerSteps.map((step) => [step.name, escalationContext] as const),
+      );
     return {
       input: {
-        contract: contractWithEscalationReviewer(),
-        ...(overrides.withoutEscalationContext === true ? {} : { escalationContext }),
-        ownerReviewerSteps: [ownerReviewerStep],
+        escalationContexts,
+        ownerReviewerSteps,
         parentStepName: 'reviewers',
         stepIteration: 1,
         state: { iteration: 1 },
@@ -964,7 +1151,7 @@ describe('FC escalation reviewer — direct provider call wiring', () => {
 
   it('publishes through the ordinary intake pipeline and records synthesized usage', async () => {
     const doneResponse: AgentResponse = {
-      persona: 'escalation-supervisor',
+      persona: 'architecture-review-persona',
       status: 'done',
       content: '{}',
       sessionId: 'session-escalation',
@@ -975,20 +1162,18 @@ describe('FC escalation reviewer — direct provider call wiring', () => {
 
     const outcome = await runFindingEscalationReviewer(input);
 
-    expect(outcome).toMatchObject({
-      kind: 'published',
-      publication: { publicationId: 'pub-escalation' },
-    });
-    expect(outcome!.step.name).toBe(FINDING_ESCALATION_REVIEWER_ROUTING_KEY);
-    expect(outcome!.step.structuredOutput).toBe(
-      escalationContext.reviewer.rawFindingsStructuredOutput,
-    );
+    expect(outcome).toMatchObject({ kind: 'published' });
+    const results = outcome!.kind === 'published' ? outcome.results : [];
+    expect(results).toHaveLength(1);
+    expect(results[0]!.step.name).toBe(FINDING_ESCALATION_REVIEWER_ROUTING_KEY);
+    // 格上げ枠も1本道: markdown レポート + 正規化係。構造化出力は載らない。
+    expect(results[0]!.step.structuredOutput).toBeUndefined();
     // 実際に走った attempt の provider/model をそのまま計上する。
     expect(stepExecutor.recordSynthesizedAgentUsage).toHaveBeenCalledWith(
       expect.objectContaining({ name: FINDING_ESCALATION_REVIEWER_ROUTING_KEY }),
       true,
       undefined,
-      { provider: 'mock', model: 'mock-model' },
+      { provider: 'mock', model: 'strong-model' },
     );
     expect(stepExecutor.prepareFindingReviewPublication).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -998,18 +1183,90 @@ describe('FC escalation reviewer — direct provider call wiring', () => {
         // Phase 2 が step 名から context を組み直すと restatement-only 契約が
         // 消えるため、Phase 1 と同じ context を明示的に渡す。
         findingContractContext: escalationContext,
-        reviewerOutputStrategy: {
-          kind: 'structured',
-          reportGeneration: 'structured',
-          intake: 'reviewer_structured',
-        },
       }),
     );
   });
 
+  it('issues one call per owner reviewer and keeps each owner persona and report separate', async () => {
+    executeAgentMock.mockResolvedValue({
+      persona: 'reviewer',
+      status: 'done',
+      content: '{}',
+      timestamp: new Date(),
+    } satisfies AgentResponse);
+    const owners = [makeOwnerStep('architecture-review'), makeOwnerStep('security-review')];
+    const { input, stepExecutor } = createRunnerInput({ ownerReviewerSteps: owners });
+
+    const outcome = await runFindingEscalationReviewer(input);
+
+    expect(executeAgentMock).toHaveBeenCalledTimes(2);
+    expect(executeAgentMock.mock.calls.map((call) => call[0])).toEqual([
+      'architecture-review-persona',
+      'security-review-persona',
+    ]);
+    const preparedSteps = stepExecutor.prepareFindingReviewPublication.mock.calls
+      .map((call) => (call[0] as { step: AgentWorkflowStep }).step);
+    expect(preparedSteps.map((step) => step.outputContracts?.[0]?.name)).toEqual([
+      findingEscalationReviewerReportName('architecture-review'),
+      findingEscalationReviewerReportName('security-review'),
+    ]);
+    expect(preparedSteps.map((step) => step.outputContracts?.[0]?.format)).toEqual([
+      'architecture-review report format.',
+      'security-review report format.',
+    ]);
+    expect(outcome!.kind === 'published' && outcome.results).toHaveLength(2);
+  });
+
+  it('drops already-published owner results when a later owner escalation goes terminal', async () => {
+    const owners = [makeOwnerStep('architecture-review'), makeOwnerStep('security-review')];
+    const { input, stepExecutor } = createRunnerInput({ ownerReviewerSteps: owners });
+    executeAgentMock
+      .mockResolvedValueOnce({
+        persona: 'architecture-review-persona',
+        status: 'done',
+        content: '{}',
+        timestamp: new Date(),
+      } satisfies AgentResponse)
+      .mockResolvedValueOnce({
+        persona: 'security-review-persona',
+        status: 'error',
+        content: '',
+        error: 'provider exploded',
+        timestamp: new Date(),
+      } satisfies AgentResponse);
+
+    const outcome = await runFindingEscalationReviewer(input);
+
+    // 親ステップが terminal になる = manager の取り込み自体が走らないので、
+    // 先行 owner の publication を published として返さない。次ラウンドは
+    // stored publication の resume で拾い直す。
+    expect(outcome).toMatchObject({ kind: 'terminal', response: { status: 'error' } });
+    expect(stepExecutor.prepareFindingReviewPublication).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips owners whose profile declares no escalate', async () => {
+    const owners = [makeOwnerStep('architecture-review'), makeOwnerStep('security-review')];
+    const { input, stepExecutor } = createRunnerInput({
+      ownerReviewerSteps: owners,
+      escalatingOwners: ['security-review'],
+    });
+    executeAgentMock.mockResolvedValue({
+      persona: 'reviewer',
+      status: 'done',
+      content: '{}',
+      timestamp: new Date(),
+    } satisfies AgentResponse);
+
+    await runFindingEscalationReviewer(input);
+
+    expect(executeAgentMock).toHaveBeenCalledTimes(1);
+    expect(executeAgentMock.mock.calls[0]![0]).toBe('security-review-persona');
+    expect(stepExecutor.resumeFindingReviewPublication).toHaveBeenCalledTimes(1);
+  });
+
   it('runs phase 1 with read-only tools so it can read the code it must quote', async () => {
     executeAgentMock.mockResolvedValue({
-      persona: 'escalation-supervisor',
+      persona: 'architecture-review-persona',
       status: 'done',
       content: '{}',
       timestamp: new Date(),
@@ -1038,7 +1295,7 @@ describe('FC escalation reviewer — direct provider call wiring', () => {
 
   it('maps a failed phase 1 to a terminal outcome without preparing a publication', async () => {
     executeAgentMock.mockResolvedValue({
-      persona: 'escalation-supervisor',
+      persona: 'architecture-review-persona',
       status: 'error',
       content: '',
       error: 'provider exploded',
@@ -1059,10 +1316,8 @@ describe('FC escalation reviewer — direct provider call wiring', () => {
 
     const outcome = await runFindingEscalationReviewer(input);
 
-    expect(outcome).toMatchObject({
-      kind: 'published',
-      publication: { publicationId: 'pub-resumed' },
-    });
+    expect(outcome!.kind === 'published' && outcome.results[0]!.publication)
+      .toMatchObject({ publicationId: 'pub-resumed' });
     expect(executeAgentMock).not.toHaveBeenCalled();
     expect(stepExecutor.prepareFindingReviewPublication).not.toHaveBeenCalled();
   });
@@ -1078,10 +1333,8 @@ describe('FC escalation reviewer — direct provider call wiring', () => {
 
     const outcome = await runFindingEscalationReviewer(input);
 
-    expect(outcome).toMatchObject({
-      kind: 'published',
-      publication: { publicationId: 'pub-carried-over' },
-    });
+    expect(outcome!.kind === 'published' && outcome.results[0]!.publication)
+      .toMatchObject({ publicationId: 'pub-carried-over' });
     expect(stepExecutor.resumeFindingReviewPublication).toHaveBeenCalledWith(
       expect.objectContaining({
         parentStepName: 'reviewers',
@@ -1131,21 +1384,23 @@ describe('FC escalation reviewer — caller reaches the runner without a request
       hasWaivedFindings: false,
       hasDismissedFindings: false,
       reviewer: {
-        mode: 'structured' as const,
-        rawFindingsStructuredOutput: { schemaRef: 'takt.findings.raw', schema: { type: 'object' } },
         reviewScopeSnapshotId: 'd'.repeat(64),
       },
     };
-    // 今ラウンドは格上げ対象の anomaly が0件 = escalation context は undefined。
-    const buildFindingEscalationInstructionContext = vi.fn().mockReturnValue(undefined);
+    // 今ラウンドは格上げ対象の anomaly が0件 = escalation context は空。
+    const buildFindingEscalationInstructionContexts = vi.fn().mockReturnValue(new Map());
     const deps = {
       optionsBuilder: {
         buildAgentOptions: vi.fn().mockReturnValue({}),
         buildPhaseRunnerContext: vi.fn().mockReturnValue({}),
         resolveStepProviderModelBeforeAutoRouting: vi.fn().mockReturnValue({ provider: 'mock', model: 'mock-model' }),
-        resolveStepProviderModel: vi.fn().mockReturnValue({ provider: 'mock', model: 'mock-model' }),
+        resolveStepProviderModel: vi.fn().mockReturnValue({
+          provider: 'mock',
+          model: 'weak-model',
+          escalation: ESCALATION_TARGET,
+        }),
         buildFindingContractInstructionContext: vi.fn().mockReturnValue(findingContractContext),
-        buildFindingEscalationInstructionContext,
+        buildFindingEscalationInstructionContexts,
       },
       stepExecutor: {
         buildInstruction: vi.fn((step: { name: string }) => `instruction:${step.name}`),
@@ -1170,7 +1425,7 @@ describe('FC escalation reviewer — caller reaches the runner without a request
       getFindingCallNamespace: () => '',
       reviewPublicationDir: '/tmp/project/reports',
       findingManagerAuthority: 'standard',
-      findingContract: contractWithEscalationReviewer(),
+      findingContract: FINDING_CONTRACT,
       findingLedgerStore: {
         ledgerIdentity: 'scope-escalation-caller',
         workflowName: 'test-workflow',
@@ -1212,8 +1467,10 @@ describe('FC escalation reviewer — caller reaches the runner without a request
       vi.fn(),
     );
 
-    expect(buildFindingEscalationInstructionContext).toHaveBeenCalledWith(
-      expect.objectContaining({ ownerStepNames: [reviewerSubStep.name] }),
+    expect(buildFindingEscalationInstructionContexts).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ownerReviewerSteps: [expect.objectContaining({ name: reviewerSubStep.name })],
+      }),
     );
     // request が0件でも runner へ到達し、未取り込みの stored escalation publication を
     // resume で引き当てにいく。ここで早期 return すると raw findings が永久に

@@ -176,18 +176,6 @@ export const FindingContractAdjudicatorConfigRawSchema = z.object({
   model: nonEmptyString.optional(),
 }).strict();
 
-/**
- * 言い直し予算の最終1回を担う格上げレビュアー。省略可 — 省略時は escalation を
- * 発火させず、最終1回も元レビュアーへの restatement になる。
- */
-export const FindingContractEscalationReviewerConfigRawSchema = z.object({
-  persona: nonEmptyString,
-  instruction: nonEmptyString.optional(),
-  output_contract: nonEmptyString.optional(),
-  provider: z.enum(PROVIDER_TYPES).optional(),
-  model: nonEmptyString.optional(),
-}).strict();
-
 /** 有限停止予算。両方省略可 — max_rounds は省略時に既定値 40、max_minutes は省略時は時間上限なし（opt-in）。 */
 export const FindingContractStopBudgetRawSchema = z.object({
   max_rounds: z.number().int().positive().optional(),
@@ -202,7 +190,6 @@ export const FindingContractReviewBudgetRawSchema = z.object({
 export const FindingContractConfigRawSchema = z.object({
   manager: FindingContractManagerConfigRawSchema,
   adjudicator: FindingContractAdjudicatorConfigRawSchema.optional(),
-  escalation_reviewer: FindingContractEscalationReviewerConfigRawSchema.optional(),
   stop_budget: FindingContractStopBudgetRawSchema.optional(),
   review_budget: FindingContractReviewBudgetRawSchema.optional(),
 }).strict();
@@ -772,15 +759,18 @@ export const ReviewerAnomalyEntrySchema = z.object({
     }).strict(),
     z.object({
       kind: z.literal('withdrawn_by_subsequent_review'),
+      // 1レビュアー枠が同一ラウンドに複数 publication を登録し得る
+      // (格上げ再レビューは owner ごとに1呼び出し、reviewer キーは固定)ため、
+      // 一意性は reviewer 単独ではなく (reviewer, publicationId) の組で見る。
       supersedingPublications: z.array(z.object({
         reviewer: nonEmptyString,
         publicationId: Sha256Schema,
       }).strict())
         .min(1)
         .superRefine((publications, ctx) => validateBinarySortedUniqueSet(
-          publications.map(({ reviewer }) => reviewer),
+          publications.map(({ reviewer, publicationId }) => `${reviewer}\u0000${publicationId}`),
           ctx,
-          'superseding publication reviewer',
+          'superseding publication',
         )),
       decidedAt: FindingObservationSchema,
     }).strict(),
