@@ -251,6 +251,10 @@ function resolveGoverningLadder(
       return ladders.steps?.[step.name];
     case 'provider_routing.tags':
       return resolveTagLadder(ladders.tags, step.tags, tagConflictPolicy);
+    // runtime.yaml `targets.personas` compiles into `personaProviders`, not
+    // `providerRouting.personas` (environment.ts), so `persona_providers` is the source a runtime
+    // persona ladder resolves under. `provider_routing.personas` only ever comes from config.yaml,
+    // which is a legacy signal — it cannot coexist with the runtime.yaml that produces ladders.
     case 'persona_providers':
       return ladders.personas?.[step.personaDisplayName];
     case 'runtime-v1':

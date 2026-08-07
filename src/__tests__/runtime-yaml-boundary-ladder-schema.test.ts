@@ -73,4 +73,12 @@ describe('CT-LAD-1 runtime.yaml ladder assignment', () => {
     doc.provider.targets.steps['development-core/fix'] = { ladder: ['main', 42] };
     expect(RuntimeProviderFileSchema.safeParse(doc).success).toBe(false);
   });
+
+  it('should reject an assignment when a `ladder` entry is an empty string', () => {
+    // An empty stage name would resolve against the profile map as a missing reference at load
+    // time; the schema rejects it earlier so the error names the shape, not a phantom profile.
+    const doc = ladderDoc();
+    doc.provider.targets.steps['development-core/fix'] = { ladder: ['main', ''] };
+    expect(RuntimeProviderFileSchema.safeParse(doc).success).toBe(false);
+  });
 });
