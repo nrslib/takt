@@ -14,10 +14,10 @@ import {
   formatFileQuoteLocation,
 } from './evidence-location.js';
 import { computeDismissCandidates } from './manager-utils.js';
+import { isOutstandingReviewerAnomaly } from './reviewer-anomalies.js';
 import {
   isConcludedReviewerAnomaly,
-  isOutstandingReviewerAnomaly,
-} from './reviewer-anomalies.js';
+} from '../../models/finding-reviewer-anomaly-settlement-policy.js';
 
 function resolveFindingLedgerInstructionProjection(ledger: FindingLedger): FindingLedger {
   const completed = ledger.pendingManagerCommit?.completed;

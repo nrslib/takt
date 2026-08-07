@@ -666,10 +666,14 @@ describe('FC restatement slot — per-pass request batches', () => {
   ) {
     const escalates = options.escalates ?? true;
     const cwd = process.cwd();
-    const runPaths = buildRunPaths(cwd, `restatement-slot-${presentationLimit}`);
     // 提示回数の正本は report dir の canonical publication。パスごとに数え直すため、
-    // 実際に publication を書き込める隔離ディレクトリを使う。
+    // 実際に publication を書き込める隔離ディレクトリを使う。エンジンは
+    // runPaths.reportsAbs から数えるので、隔離先をそこへ束ねる。
     const reportDir = mkdtempSync(join(tmpdir(), 'takt-fc-restatement-slot-'));
+    const runPaths = {
+      ...buildRunPaths(cwd, `restatement-slot-${presentationLimit}`),
+      reportsAbs: reportDir,
+    };
     const raw = canonicalRawFindingFixture({
       rawFindingId: 'raw-slot',
       stepName: reviewerStep.name,
@@ -1092,8 +1096,11 @@ describe('FC restatement slot — owner 別 batch の枠按分', () => {
     options: { blankClaimAtom?: boolean } = {},
   ) {
     const cwd = process.cwd();
-    const runPaths = buildRunPaths(cwd, 'restatement-slot-allocation');
     const reportDir = mkdtempSync(join(tmpdir(), 'takt-fc-restatement-allocation-'));
+    const runPaths = {
+      ...buildRunPaths(cwd, 'restatement-slot-allocation'),
+      reportsAbs: reportDir,
+    };
     const observedAt = {
       runId: 'run-restatement-allocation',
       stepName: ownerNames[0]!,

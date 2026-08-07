@@ -18,6 +18,26 @@ import type {
   ReviewerAnomalyTargetSettlement,
 } from './finding-types.js';
 
+/**
+ * 決着が確定し、以後どの経路も変更してはならない anomaly か。
+ *
+ * 「未決着（COMPLETE を塞ぐ）」を表す isOutstandingReviewerAnomaly とは別の述語
+ * である点が重要。claim-bearing の終端（restatement_exhausted_claim_bearing）は
+ * ゲートを塞ぎ続けるために outstanding のまま残るが、それは決着の効果であって
+ * 「まだ変更を受け付ける」という意味ではない。書き込み側が outstanding を可変性の
+ * 判定に流用すると、終端処分済みの anomaly へ settlement / promotion が後から付き、
+ * 台帳不変条件（終端処分と settlement / promotion の同居禁止）を破る。
+ *
+ * 書き込み側（reviewer-anomalies.ts / reviewer-anomaly-settlement.ts）と検証側
+ * （finding-ledger-invariants.ts）が同じ述語を共有するために models 層へ置く。
+ * 片方だけが「決着」の定義を変えると、書けるのに保存できない状態が生まれる。
+ */
+export function isConcludedReviewerAnomaly(anomaly: ReviewerAnomalyEntry): boolean {
+  return anomaly.promotedFindingId !== undefined
+    || anomaly.settlement !== undefined
+    || anomaly.intakeContract?.terminalDisposition !== undefined;
+}
+
 export interface ReviewerAnomalySettlementProjection {
   findings: readonly FindingLedgerEntry[];
   rawFindings: readonly RawFinding[];

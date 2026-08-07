@@ -33,6 +33,7 @@ import type {
 import { formatConflictId, type ConflictIdentity } from './finding-conflict-identity.js';
 import { computeInterpretationAttemptId } from './finding-interpretation-identity.js';
 import {
+  isConcludedReviewerAnomaly,
   reviewerAnomalySettlementEligibilityViolation,
 } from './finding-reviewer-anomaly-settlement-policy.js';
 import {
@@ -1428,7 +1429,11 @@ function collectReviewerAnomalyViolations(
       );
     }
     anomalyIdentityByStableKey.set(anomaly.stableKey, stableIdentity);
-    if (anomaly.promotedFindingId === undefined && anomaly.settlement === undefined) {
+    // 終端処分も決着なので live episode ではない。決着済みを live として数えると、
+    // 同じ観測が終端後に再び現れたときに新しい episode を起こせなくなり、観測を
+    // 捨てるか決着済み episode を書き換えるかの二択になる。判定は書き込み側
+    // （applyReviewerAnomalySpecsToLedger の upsert 対象選定）と同じ述語を使う。
+    if (!isConcludedReviewerAnomaly(anomaly)) {
       if (outstandingStableKeys.has(anomaly.stableKey)) {
         addViolation(
           violations,
