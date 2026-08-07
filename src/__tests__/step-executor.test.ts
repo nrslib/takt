@@ -57,6 +57,7 @@ import { createTestFindingLedgerStore } from './helpers/finding-storage.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
 import { verifiedSourceQuoteFields } from './helpers/finding-evidence.js';
 import { authorizeFindingLedgerFixture } from './helpers/finding-lifecycle-fixture.js';
+import type { CanonicalFindingReviewPublication } from '../core/workflow/findings/review-publication.js';
 import {
   computeRestatementRequestId,
   createFindingReviewPresentationContextV2,
@@ -1871,7 +1872,10 @@ describe('StepExecutor', () => {
     // 1ステップで使い切り、再レビューの機会がゼロになる。
     vi.mocked(ingestFindingContractResults).mockClear();
     await slotInput.ingest([{
-      publication: { reviewerStepName: harness.step.name } as never,
+      // 取り込みの記帳区分だけを見るので、publication は宛先レビュアーだけ持てば足りる。
+      publication: {
+        reviewerStepName: harness.step.name,
+      } as unknown as CanonicalFindingReviewPublication,
       reviewEvidence: 'none',
     }]);
     expect(ingestFindingContractResults).toHaveBeenCalledOnce();
