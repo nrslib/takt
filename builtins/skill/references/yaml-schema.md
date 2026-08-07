@@ -149,7 +149,7 @@ rules:
 
 ラベル語彙は自由（`No AI-specific issues` / `AI-specific issues found` でもよい）。エンジンは語彙ではなく宣言順で承認枝を同定するため、**順序を入れ替えてはならない**。
 
-この形のとき、エンジンは「非承認判定なのに構造化 claim が0件」の publication を `verdict-claims-mismatch` の reviewer anomaly として台帳へ記録し、COMPLETE を塞ぐ。`when(...)` を混ぜた rules や `next` / `return` を持つ rules（例: 最終ゲートのように `needs_fix` を `approved` より前に宣言するラダー）は承認枝を同定できないため、この整合ゲートの対象外になる。
+この形のとき、エンジンは「非承認判定なのに構造化 claim が0件」の publication を `verdict-claims-mismatch` の reviewer anomaly として台帳へ記録する。エンジンがするのは記録だけで、遷移そのものは変えない。COMPLETE を回避できるのは、ワークフローが `when(findings.reviewerAnomalies.count > 0)` 系の rule を `COMPLETE` の rule より前に宣言している場合だけである（builtin の FC スイートは宣言済み）。`when(...)` を混ぜた rules や `next` / `return` を持つ rules（例: 最終ゲートのように `needs_fix` を `approved` より前に宣言するラダー）は承認枝を同定できないため、この整合ゲートの対象外になる。
 
 ### Team Leader step
 

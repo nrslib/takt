@@ -1094,7 +1094,8 @@ export class ParallelRunner {
     const postExecutionRuntime = runtime?.fallback === undefined
       ? runtime
       : { ...runtime, fallback: undefined };
-    if (this.deps.findingContract !== undefined && managerResult !== undefined) {
+    const findingContract = this.deps.findingContract;
+    if (findingContract !== undefined) {
       const reviewerObservations: VerdictClaimsMismatchObservation[] = [];
       for (const result of subResults) {
         if (!isAgentParallelSubStep(result.subStep)) {
@@ -1131,18 +1132,21 @@ export class ParallelRunner {
       }
       // 判定が確定した直後に、非承認判定 + claim ゼロ件を台帳へ残す。親の
       // 集約ルール（when(findings.*)）より前でなければ、非承認判定が
-      // COMPLETE で上書きされる。
-      await recordVerdictClaimsMismatchAnomalies({
-        ledgerStore: this.deps.findingLedgerStore,
-        findingContract: this.deps.findingContract,
-        observations: reviewerObservations,
-        interactive: this.deps.getInteractive(),
-        runId: this.deps.getRunId(),
-        parentStepName: step.name,
-        roundMarker: managerResult.roundMarker,
-        timestamp: new Date().toISOString(),
-        refreshFindingsState: this.deps.refreshFindingsState,
-      });
+      // COMPLETE で上書きされる。取り込みが走らなかったラウンド
+      // （FC レビュアー 0 件）は round marker が無いので記録対象も無い。
+      if (managerResult !== undefined) {
+        await recordVerdictClaimsMismatchAnomalies({
+          ledgerStore: this.deps.findingLedgerStore,
+          findingContract,
+          observations: reviewerObservations,
+          interactive: this.deps.getInteractive(),
+          runId: this.deps.getRunId(),
+          parentStepName: step.name,
+          roundMarker: managerResult.roundMarker,
+          timestamp: new Date().toISOString(),
+          refreshFindingsState: this.deps.refreshFindingsState,
+        });
+      }
     }
 
     // Print completion summary

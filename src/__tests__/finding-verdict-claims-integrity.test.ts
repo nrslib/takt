@@ -246,7 +246,7 @@ describe('recordVerdictClaimsMismatchAnomalies', () => {
     expect(refreshed).toBe(0);
   });
 
-  it('未決着の間は COMPLETE を塞ぎ、再レビュー経路へルーティングされる', async () => {
+  it('未決着の間はワークフローの anomaly rule が COMPLETE より先に成立する', async () => {
     const { ledger } = await record({ matchedRuleIndex: 1, rawFindings: [] });
     const context = buildFindingsRuleContext(ledger, '/cwd', new Map());
 
@@ -381,6 +381,60 @@ describe('recordVerdictClaimsMismatchAnomalies', () => {
     const context = buildFindingsRuleContext(ledger, '/cwd', new Map());
     expect(context.open.count).toBe(0);
     expect(context.reviewerAnomalies.count).toBe(1);
+  });
+
+  /**
+   * 並列レビュアーは1ラウンド分の observation をまとめて渡す。spec ごとに
+   * updateLedger を回すと、同じラウンドの marker が複数回・別トランザクションで
+   * 積まれかねない。1回の排他区間で全件適用し marker は1件、が契約。
+   */
+  it('複数レビュアー分の observation を1回の updateLedger で適用し marker は1件だけ進める', async () => {
+    const reviewers = ['arch-review', 'security-review', 'coding-review'] as const;
+    const { store, current } = makeStore(makeLedger());
+    let updateCalls = 0;
+    const wrapped = new Proxy(store, {
+      get: (target, key: string | symbol) => {
+        if (key !== 'updateLedger') {
+          return Reflect.get(target, key) as unknown;
+        }
+        return async (...args: Parameters<FindingLedgerStore['updateLedger']>) => {
+          updateCalls += 1;
+          return store.updateLedger(...args);
+        };
+      },
+    });
+
+    const specs = await recordVerdictClaimsMismatchAnomalies({
+      ledgerStore: wrapped,
+      findingContract: FINDING_CONTRACT,
+      observations: reviewers.map((reviewer, index) => ({
+        // 判定は非承認、claim はゼロ件。承認のレビュアーを1件混ぜて選別も見る。
+        step: makeStep({ name: reviewer, persona: `${reviewer}-persona` } as Partial<WorkflowStep>),
+        response: makeResponse(reviewer === 'coding-review' ? 0 : 1),
+        publication: {
+          ...makePublication([], String(index + 1).repeat(64).slice(0, 64)),
+          reviewerStepName: reviewer,
+        },
+      })),
+      interactive: false,
+      runId: 'run-1',
+      parentStepName: 'reviewers',
+      roundMarker: 'round-parallel-1',
+      timestamp: '2026-08-01T00:00:00.000Z',
+      refreshFindingsState: () => {},
+    });
+
+    // 承認判定の1件は spec にならない。
+    expect(specs).toHaveLength(2);
+    expect(updateCalls).toBe(1);
+    const ledger = current();
+    expect(ledger.reviewerAnomalies).toHaveLength(2);
+    expect(ledger.reviewerAnomalies!.map((anomaly) => anomaly.reviewers).flat().sort())
+      .toEqual(['arch-review', 'security-review']);
+    // レビュアーごとに別 stableKey（persona キーが違うため）。
+    expect(new Set(ledger.reviewerAnomalies!.map((anomaly) => anomaly.stableKey)).size).toBe(2);
+    // 同じラウンドなので marker は1件だけ。
+    expect(ledger.reviewIntegrity?.roundMarkers).toEqual(['round-parallel-1']);
   });
 
   it('同じラウンドキーの再適用は marker を二重計上しない（crash/replay 冪等）', async () => {

@@ -11,8 +11,10 @@
  * product finding は作らない — 「何が壊れているか」は engine には分からず、
  * 分かるのは「非承認判定に対応する機械可読な claim が提出されていない」という
  * 事実だけである。記録された anomaly は他の非 intake anomaly と同じライフサイクル
- * （outstanding の間は COMPLETE を塞ぎ、同じレビュアー枠の次のレビューが台帳へ
- * 登録された時点で withdrawal 決着）に乗る。
+ * （同じレビュアー枠の次のレビューが台帳へ登録された時点で withdrawal 決着）に乗る。
+ * エンジンがするのは記録だけで、遷移そのものは変えない — COMPLETE を回避できるのは、
+ * ワークフローが `when(findings.reviewerAnomalies.count > 0)` 系の rule を COMPLETE の
+ * rule より前に宣言している場合だけである（builtin の FC スイートは宣言済み）。
  *
  * 追記は findings-manager のコミット後に走るため、そのラウンドの
  * review-integrity 予算マーカーはここで進める。manager コミット時点では

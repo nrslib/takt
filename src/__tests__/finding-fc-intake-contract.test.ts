@@ -1330,6 +1330,9 @@ describe('FC intake contract', () => {
       reviewerAnomaliesOmittedCount?: number;
     };
 
+    // 露出制限は「特定文字列が出ない」ではなく、公開フィールド集合の完全一致で
+    // 縛る。claim 本文を運ぶキー（claimedExcerpt / claimedLocation）や intake 専用の
+    // 契約内訳が新設・再導入されたら、この一致で必ず落ちる。
     expect(summary.reviewerAnomalies).toEqual([{
       id: anomaly.reviewerAnomalies![0]!.id,
       kind: 'verdict-claims-mismatch',
@@ -1337,6 +1340,15 @@ describe('FC intake contract', () => {
       title: anomaly.reviewerAnomalies![0]!.title,
       mismatchReason: 'The non-approving verdict published zero structured raw findings.',
     }]);
+    expect(Object.keys(summary.reviewerAnomalies![0]!).sort()).toEqual([
+      'id',
+      'kind',
+      'mismatchReason',
+      'reviewers',
+      'title',
+    ]);
+    // 台帳側には claim が保持されているのに、提示側には出ていないことを対にして示す。
+    expect(anomaly.reviewerAnomalies![0]!.claimedExcerpt).toContain('A very long REJECT report body.');
     expect(rendered).not.toContain('A very long REJECT report body.');
     expect(summary.reviewerAnomaliesOmittedCount).toBeUndefined();
   });
