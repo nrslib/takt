@@ -593,14 +593,18 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     }
     const ledger = params.findingLedgerStore.loadLedger();
     const presentationCounts = collectFindingReviewPresentationCounts(params.getReportDir());
-    const buildContext = (
-      restatementRequests: readonly RestatementRequestV1[],
-    ): FindingContractInstructionContext => ({
+    // 台帳はこの関数で1回だけ読むので、その要約も owner 数 × 枠数ぶん作り直さない。
+    const ledgerFacts = {
       ledgerSummary: renderFindingLedgerInstructionSummary(ledger),
       reportLedgerSummary: renderFindingLedgerReportSummary(ledger),
       hasOpenFindings: ledgerHasOpenFindings(ledger),
       hasWaivedFindings: ledgerHasWaivedFindings(ledger),
       hasDismissedFindings: ledgerHasDismissedFindings(ledger),
+    };
+    const buildContext = (
+      restatementRequests: readonly RestatementRequestV1[],
+    ): FindingContractInstructionContext => ({
+      ...ledgerFacts,
       reviewer: {
         reviewScopeSnapshotId: input.reviewScopeSnapshotId,
         presentationContext: createFindingReviewPresentationContextV2({
