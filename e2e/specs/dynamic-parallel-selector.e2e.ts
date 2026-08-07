@@ -249,6 +249,8 @@ function writeSelectedArtifactsFixture(repoPath: string): { workflowPath: string
     '  review-finding-contract: Return a concise E2E review report.',
     '  findings-manager: Return the finding manager JSON contract.',
     'finding_contract:',
+    '  review_budget:',
+    '    max_review_rounds: 1',
     '  manager:',
     '    persona: ./agents/findings-manager.md',
     '    instruction: findings-manager',
@@ -318,6 +320,17 @@ function writeSelectedArtifactsFixture(repoPath: string): { workflowPath: string
     content: '',
     structured_output: { rawFindings: [rawFinding(id)] },
   });
+  // 差し戻し slot はレビュアーごとに「呼び出し + レポート + 正規化」を1組使う。
+  // 言い直しでは新しい観測を出さないので、正規化係は空の rawFindings を返す。
+  const followupResponses = (persona: string, round: number) => [
+    executeResponse(persona, `${persona} restated round ${round}`),
+    {
+      persona: `agents/${persona}`,
+      status: 'done',
+      content: `${persona} restatement for round ${round} added no new observation`,
+    },
+    { persona: 'finding-intake-normalizer', status: 'done', content: '', structured_output: { rawFindings: [] } },
+  ];
   const judgeResponse = (step: number) => ({
     persona: 'conductor',
     status: 'done',
@@ -345,6 +358,8 @@ function writeSelectedArtifactsFixture(repoPath: string): { workflowPath: string
     normalizerResponse('frontend-round-1'),
     judgeResponse(2),
     managerResponse,
+    ...followupResponses('architecture', 1),
+    ...followupResponses('frontend', 1),
     { persona: 'agents/fix', status: 'done', content: 'approved' },
     { status: 'done', content: '', structured_output: { selected_ids: ['backend'], rationale: 'Follow-up backend review.' } },
     executeResponse('architecture', 'approved'),
@@ -356,6 +371,7 @@ function writeSelectedArtifactsFixture(repoPath: string): { workflowPath: string
     normalizerResponse('backend-round-2'),
     judgeResponse(1),
     managerResponse,
+    ...followupResponses('backend', 2),
   ]), 'utf-8');
 
   return { workflowPath, scenarioPath };
@@ -654,7 +670,7 @@ describe('E2E: dynamic parallel selector (mock)', () => {
       timeout: 240_000,
     });
 
-    expect(result.exitCode).toBe(1);
+    expect(result.exitCode, `${result.stdout}\n${result.stderr}`).toBe(1);
 
     const reportDir = join(onlyRunRoot(testRepo.path), 'reports');
     expect(readFileSync(join(reportDir, 'architecture-review.md'), 'utf-8')).toContain('round 2');
@@ -679,7 +695,11 @@ describe('E2E: dynamic parallel selector (mock)', () => {
     ].flatMap((content): Array<Array<{ reviewer: string }>> => {
       try {
         const parsed: unknown = JSON.parse(content);
+        // 差し戻し slot のパスも manager 取り込みを通るので、言い直しが新しい観測を
+        // 出さなかったパスは空の raw batch を残す。ここで見たいのはレビューラウンド
+        // ごとの観測なので、空の batch は raw スナップショットとして数えない。
         return Array.isArray(parsed)
+          && parsed.length > 0
           && parsed.every((entry) => (
             typeof entry === 'object'
             && entry !== null
