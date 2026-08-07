@@ -609,11 +609,10 @@ effective auto routing, and workflow/project/global fallbacks; explicit CLI and 
 overrides stay higher. A seat that names only a provider stops lower-priority model fallback so the
 resolved pair never mixes providers.
 
-`escalation-reviewer` is the exception to "a seat decides the destination and nothing else only
-matters when the role runs": it decides *only* the destination and never the firing condition.
-Escalated re-review still fires exclusively for reviewers whose resolved profile declares
-`escalate`, so assigning the seat does not move the last presentation of a non-escalating reviewer
-away from that reviewer.
+`escalation-reviewer` decides only the destination of an escalation that is already enabled; it
+never changes the firing condition. Escalated re-review still fires exclusively for reviewers whose
+resolved profile declares `escalate`, so assigning the seat does not move the last presentation of a
+non-escalating reviewer away from that reviewer.
 
 ### Finding Contract provisional findings and the completion gate
 
