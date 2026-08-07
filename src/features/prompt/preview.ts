@@ -35,7 +35,7 @@ import {
 } from '../../core/workflow/engine/WorkflowValidator.js';
 import type { InstructionContext } from '../../core/workflow/instruction/instruction-context.js';
 import type { WorkflowConfig, WorkflowStep } from '../../core/models/index.js';
-import type { TagRoutingConflictPolicy } from '../../core/models/config-types.js';
+import type { InternalAgentSeats, TagRoutingConflictPolicy } from '../../core/models/config-types.js';
 import { getAllParallelSubSteps, isDynamicParallelSubSteps } from '../../core/models/types.js';
 import type { Language } from '../../core/models/types.js';
 import type { ProviderResolutionSource } from '../../core/workflow/provider-options-trace.js';
@@ -103,6 +103,8 @@ type PreviewProviderResolution = ProviderModelResolutionContext & {
   providerSource: ProviderResolutionSource;
   modelSource: ProviderResolutionSource;
   tagConflictPolicy: TagRoutingConflictPolicy;
+  /** runtime.yaml internal_agents の解決済み seat。合成ロールの表示を実行時と一致させる。 */
+  internalAgentSeats: InternalAgentSeats | undefined;
 };
 
 function resolvePreviewProviderResolution(
@@ -119,6 +121,7 @@ function resolvePreviewProviderResolution(
     personaProviders: env.personaProviders,
     providerRouting: env.providerRouting,
     tagConflictPolicy: env.tagConflictPolicy,
+    internalAgentSeats: env.internalAgents,
   };
 }
 
@@ -162,6 +165,9 @@ function printFindingContractMetadata(
     contract,
     workflowProvider: config.provider,
     workflowModel: config.model,
+    ...(resolution.internalAgentSeats === undefined
+      ? {}
+      : { internalAgentSeats: resolution.internalAgentSeats }),
   });
   const providerInfo = resolveSyntheticProviderModel(managerStep, resolution);
 
@@ -176,6 +182,9 @@ function printFindingContractMetadata(
     contract,
     workflowProvider: config.provider,
     workflowModel: config.model,
+    ...(resolution.internalAgentSeats === undefined
+      ? {}
+      : { internalAgentSeats: resolution.internalAgentSeats }),
   });
   const adjudicatorProviderInfo = resolveSyntheticProviderModel(adjudicatorStep, resolution);
   info(`Finding adjudicator: ${sanitizeTerminalText(adjudicator.personaDisplayName ?? adjudicator.persona)}`);
@@ -296,6 +305,9 @@ export async function previewPrompts(
     personaProviders: providerResolution.personaProviders,
     providerRouting: providerResolution.providerRouting,
     providerRoutingTagConflictPolicy: providerResolution.tagConflictPolicy,
+    ...(providerResolution.internalAgentSeats === undefined
+      ? {}
+      : { internalAgentSeats: providerResolution.internalAgentSeats }),
   };
   try {
     validateFindingContractSyntheticProviderModels(config, providerValidationOptions);

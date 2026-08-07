@@ -23,6 +23,7 @@ import type {
   AutoRoutingCandidate,
   AutoRoutingConfig,
   AutoRoutingStrategy,
+  InternalAgentSeats,
   PersonaProviderEntry,
   ProviderEscalationTarget,
   ProviderLadderConfig,
@@ -38,13 +39,11 @@ import { normalizeProviderOptions } from '../providerOptions.js';
 import { validateRuntimeProviderSection, flattenProfiles, type FlatProfile } from './policy.js';
 import type { RuntimeProviderAssignment, RuntimeProviderSection } from './schema.js';
 
-/** Provider/model/options resolved for the internal agents. */
-export interface InternalAgentEnvironment {
-  selector?: ProviderRoutingEntry;
-  assistant?: ProviderRoutingEntry;
-  /** `intake-normalizer` seat: the Finding Contract plain-text intake normalizer. */
-  intakeNormalizer?: ProviderRoutingEntry;
-}
+/**
+ * Provider/model/options resolved for the internal agents. The seat set is defined once in
+ * `core/models/config-types.ts` so the compiler and the engine consumers cannot drift apart.
+ */
+export type InternalAgentEnvironment = InternalAgentSeats;
 
 /** Format-agnostic provider engine-options bundle consumed by the engine. */
 export interface CompiledProviderEnvironment {
@@ -290,6 +289,10 @@ function buildInternalAgents(
     selector: 'selector',
     assistant: 'assistant',
     'intake-normalizer': 'intakeNormalizer',
+    'findings-manager': 'findingsManager',
+    'terminal-adjudicator': 'terminalAdjudicator',
+    'loop-judge': 'loopJudge',
+    'escalation-reviewer': 'escalationReviewer',
   };
   const result: InternalAgentEnvironment = {};
   for (const [key, assignment] of Object.entries(map)) {

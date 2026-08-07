@@ -171,6 +171,7 @@ export class WorkflowEngine extends EventEmitter {
     this.config = injectFindingConflictAdjudicationStep(
       config,
       options.inheritedFindingContract?.contract ?? config.findingContract,
+      options.internalAgentSeats,
     );
     inheritWorkflowConfigMetadata(config, this.config);
     const restartNavigator = restartPoint === undefined

@@ -1,3 +1,4 @@
+import type { InternalAgentSeats } from '../../models/config-types.js';
 import type { FindingContractConfig, WorkflowConfig } from '../../models/types.js';
 import type { OptionsBuilder } from '../engine/OptionsBuilder.js';
 import type { StepExecutor } from '../engine/StepExecutor.js';
@@ -84,6 +85,8 @@ export function prepareInterpretationCaseProviderRequest(input: {
   contract: FindingContractConfig;
   workflowProvider?: WorkflowConfig['provider'];
   workflowModel?: WorkflowConfig['model'];
+  /** runtime.yaml internal_agents の解決済み seat。未指定 seat は既定解決へ落ちる。 */
+  internalAgentSeats?: InternalAgentSeats;
   optionsBuilder: ManagerOptionsBuilder;
   stepExecutor: Pick<StepExecutor, 'buildPhase1Instruction'>;
   ledger: FindingLedger;
@@ -96,6 +99,7 @@ export function prepareInterpretationCaseProviderRequest(input: {
     contract: input.contract,
     workflowProvider: input.workflowProvider,
     workflowModel: input.workflowModel,
+    internalAgentSeats: input.internalAgentSeats,
   });
   const phase1Instruction = input.stepExecutor.buildPhase1Instruction(
     composeFindingManagerInstruction({
@@ -135,6 +139,8 @@ export async function requestInterpretationCases(input: {
   contract: FindingContractConfig;
   workflowProvider?: WorkflowConfig['provider'];
   workflowModel?: WorkflowConfig['model'];
+  /** runtime.yaml internal_agents の解決済み seat。未指定 seat は既定解決へ落ちる。 */
+  internalAgentSeats?: InternalAgentSeats;
   optionsBuilder: ManagerOptionsBuilder;
   stepExecutor: Pick<StepExecutor, 'buildPhase1Instruction' | 'normalizeStructuredOutput' | 'recordSynthesizedAgentUsage'>;
   ledger: FindingLedger;
@@ -148,6 +154,7 @@ export async function requestInterpretationCases(input: {
     contract: input.contract,
     workflowProvider: input.workflowProvider,
     workflowModel: input.workflowModel,
+    internalAgentSeats: input.internalAgentSeats,
     optionsBuilder: input.optionsBuilder,
     stepExecutor: input.stepExecutor,
     ledger: input.ledger,

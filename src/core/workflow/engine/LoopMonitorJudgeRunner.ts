@@ -10,6 +10,12 @@ import type {
 import { mergeProviderOptions } from '../../../infra/config/providerOptions.js';
 import { providerSupportsClaudeAllowedTools } from '../../../infra/providers/provider-capabilities.js';
 import { resolveLoopMonitorJudgeProviderModel } from '../provider-resolution.js';
+import type { InternalAgentSeats } from '../../models/config-types.js';
+import {
+  LOOP_JUDGE_ROUTING_KEY,
+  loopJudgeProviderFields,
+  loopJudgeStepName,
+} from '../loop-judge-step.js';
 import type { RuntimeStepResolution, StepProviderInfo } from '../types.js';
 import { incrementStepIteration } from './state-manager.js';
 import type { OptionsBuilder } from './OptionsBuilder.js';
@@ -44,6 +50,8 @@ interface LoopMonitorJudgeRunnerDeps {
   ) => void;
   emitCollectedReports: () => void;
   resetCycleDetector: () => void;
+  /** runtime.yaml internal_agents の解決済み seat。`loop-judge` seat だけを消費する。 */
+  internalAgentSeats?: InternalAgentSeats;
   /**
    * finding contract 有効時のみ。エンジン計算済みの findings 状態
    * （完了ゲートの充足状況・暫定の滞留ラウンド数・解消経路）を judge の
@@ -148,22 +156,23 @@ export class LoopMonitorJudgeRunner {
       .replace(/\{cycle_count\}/g, String(cycleCount));
     const defaultProviderOptions = this.buildDefaultProviderOptions(providerInfo?.provider);
 
+    const judgeProviderFields = loopJudgeProviderFields(
+      monitor.judge,
+      this.deps.internalAgentSeats,
+    );
+
     return {
-      name: `_loop_judge_${monitor.cycle.join('_')}`,
+      name: loopJudgeStepName(monitor.cycle),
       sessionKey: monitor.judge.sessionKey,
       persona: monitor.judge.persona,
       personaPath: monitor.judge.personaPath,
-      personaDisplayName: 'loop-judge',
-      // provider_routing.personas.loop-judge を効かせるためのキー。personaDisplayName は
-      // セッションキー等にも使う表示名で、ルーティング専用のキーとは役割が違うため分けている。
-      providerRoutingPersonaKey: 'loop-judge',
-      provider: monitor.judge.provider,
-      model: monitor.judge.model,
-      modelSpecified: monitor.judge.modelSpecified,
+      personaDisplayName: LOOP_JUDGE_ROUTING_KEY,
+      providerRoutingPersonaKey: LOOP_JUDGE_ROUTING_KEY,
+      ...judgeProviderFields,
       edit: false,
       providerOptions: mergeProviderOptions(
-        defaultProviderOptions,
-        monitor.judge.providerOptions,
+        mergeProviderOptions(defaultProviderOptions, monitor.judge.providerOptions),
+        judgeProviderFields.providerOptions,
       ),
       instruction,
       rules: monitor.judge.rules,

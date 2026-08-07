@@ -243,7 +243,7 @@ describe('finding intake normalizer load-time preflight', () => {
   it('uses the intake-normalizer seat ahead of the workflow default', () => {
     expect(() => validateFindingContractSyntheticProviderModels(
       findingContractWorkflow('codex'),
-      { intakeNormalizerProvider: { provider: 'cursor' } },
+      { internalAgentSeats: { intakeNormalizer: { provider: 'cursor' } } },
     )).toThrow(/does not support isolated structured execution/u);
   });
 });

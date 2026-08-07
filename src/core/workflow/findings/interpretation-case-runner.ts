@@ -1,3 +1,4 @@
+import type { InternalAgentSeats } from '../../models/config-types.js';
 import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
 import type { FindingContractConfig, WorkflowConfig } from '../../models/types.js';
 import type { OptionsBuilder } from '../engine/OptionsBuilder.js';
@@ -31,6 +32,8 @@ export async function runInterpretationCases(input: {
   contract: FindingContractConfig;
   workflowProvider?: WorkflowConfig['provider'];
   workflowModel?: WorkflowConfig['model'];
+  /** runtime.yaml internal_agents の解決済み seat。未指定 seat は既定解決へ落ちる。 */
+  internalAgentSeats?: InternalAgentSeats;
   optionsBuilder: OptionsBuilder;
   stepExecutor: Pick<StepExecutor, 'buildPhase1Instruction' | 'normalizeStructuredOutput' | 'recordSynthesizedAgentUsage'>;
   observation: FindingObservation;
@@ -47,6 +50,7 @@ export async function runInterpretationCases(input: {
       contract: input.contract,
       workflowProvider: input.workflowProvider,
       workflowModel: input.workflowModel,
+      internalAgentSeats: input.internalAgentSeats,
       optionsBuilder: input.optionsBuilder,
       stepExecutor: input.stepExecutor,
       ledger,
@@ -137,6 +141,7 @@ export async function runInterpretationCases(input: {
         contract: input.contract,
         workflowProvider: input.workflowProvider,
         workflowModel: input.workflowModel,
+        internalAgentSeats: input.internalAgentSeats,
         optionsBuilder: input.optionsBuilder,
         stepExecutor: input.stepExecutor,
         ledger: input.ledgerStore.loadLedger(),

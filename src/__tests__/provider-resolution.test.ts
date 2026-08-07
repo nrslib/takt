@@ -194,16 +194,16 @@ describe('resolveStepProviderModel', () => {
     });
   });
 
-  it('should not inherit a persona model when the finding manager provider is direct', () => {
+  it('should not inherit a persona model when the findings-manager seat is provider-only', () => {
     const step = buildFindingManagerStep({
       contract: {
         manager: {
           persona: 'findings-manager',
           instruction: 'findings-manager',
           outputContract: 'findings-manager',
-          provider: 'codex',
         },
       },
+      internalAgentSeats: { findingsManager: { provider: 'codex' } },
     });
 
     const result = resolveStepProviderModel({
@@ -222,7 +222,7 @@ describe('resolveStepProviderModel', () => {
     });
   });
 
-  it('should resolve conflict and terminal adjudicators through the same direct provider/model rules', () => {
+  it('should resolve conflict and terminal adjudicators through the same seat rules', () => {
     const input = {
       contract: {
         manager: {
@@ -233,11 +233,11 @@ describe('resolveStepProviderModel', () => {
         adjudicator: {
           persona: 'terminal-supervisor',
           providerRoutingPersonaKey: 'terminal-supervisor',
-          provider: 'codex' as const,
         },
       },
       workflowProvider: 'claude' as const,
       workflowModel: 'workflow-model',
+      internalAgentSeats: { terminalAdjudicator: { provider: 'codex' as const } },
     };
 
     for (const step of [

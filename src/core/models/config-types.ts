@@ -70,6 +70,36 @@ export interface PersonaProviderEntry {
 
 export type ProviderRoutingEntry = PersonaProviderEntry;
 
+/**
+ * runtime.yaml `provider.targets.internal_agents` の seat 割り当て（解決済み）。
+ *
+ * seat はエンジンが自前で合成するエージェント（ワークフローの step として書けない
+ * 役職）の宛先を runtime 側から名指しするための口である。`targets.personas` が
+ * 人間定義 persona の表示名照合であるのに対し、ここは固定のロールキーで引く。
+ *
+ * すべて **オプショナル**。未指定の seat は従来どおりの既定解決
+ * （persona routing → workflow → project → global → provider 既定、および profile の
+ * `escalate` 連鎖）に落ちる。指定された seat だけが合成ステップへ焼き込まれ、
+ * step 直指定と同じ層（CLI/環境変数の明示 override より下、`provider_routing` より上）
+ * で効く。
+ */
+export interface InternalAgentSeats {
+  /** `selector`: 動的 facet / 動的 parallel のセレクタ。 */
+  selector?: ProviderRoutingEntry;
+  /** `assistant`: 対話モードのアシスタント。 */
+  assistant?: ProviderRoutingEntry;
+  /** `intake-normalizer`: Finding Contract のレビュー報告を raw findings へ正規化する係。 */
+  intakeNormalizer?: ProviderRoutingEntry;
+  /** `findings-manager`: Finding Contract の台帳マネージャ（取り込み・同一性判定）。 */
+  findingsManager?: ProviderRoutingEntry;
+  /** `terminal-adjudicator`: Finding Contract の終端／衝突裁定役（persona facet は supervisor）。 */
+  terminalAdjudicator?: ProviderRoutingEntry;
+  /** `loop-judge`: loop_monitors の判定役。 */
+  loopJudge?: ProviderRoutingEntry;
+  /** `escalation-reviewer`: Finding Contract 言い直しの最終枠（格上げ先）。 */
+  escalationReviewer?: ProviderRoutingEntry;
+}
+
 export interface ProviderRoutingConfig {
   personas?: Record<string, ProviderRoutingEntry>;
   tags?: Record<string, ProviderRoutingEntry>;

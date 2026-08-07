@@ -22,7 +22,7 @@ export type WorkflowCallProviderContext = Pick<
   | 'autoRouting'
   | 'personaProviders'
   | 'providerRouting'
-  | 'intakeNormalizerProvider'
+  | 'internalAgentSeats'
 >;
 
 export type WorkflowCallProviderModel = {
@@ -181,9 +181,9 @@ export function resolveWorkflowCallChildProviderContext(
       parentContext.providerRouting,
       step.overrides,
     ),
-    // 正規化係の seat は runtime.yaml の internal_agents 割り当てで、
-    // workflow_call の provider/model override の対象ではない（実行時も
-    // WorkflowEngineSetup が engine option をそのまま渡す）。子へ素通しする。
-    intakeNormalizerProvider: parentContext.intakeNormalizerProvider,
+    // internal_agents の seat は runtime.yaml の割り当てで、workflow_call の
+    // provider/model override の対象ではない（実行時も WorkflowEngineSetup が
+    // engine option をそのまま渡す）。子へ素通しする。
+    internalAgentSeats: parentContext.internalAgentSeats,
   };
 }

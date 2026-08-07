@@ -6,6 +6,7 @@
  * Phase 3: Status judgment (no tools, optional)
  */
 
+import type { InternalAgentSeats } from '../../models/config-types.js';
 import { existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type {
@@ -89,7 +90,6 @@ import {
   type FindingRestatementSlotTerminalOutcome,
 } from '../findings/restatement-slot-runner.js';
 import { resolveReviewIntegrityLimits } from '../findings/review-integrity.js';
-import type { ProviderRoutingEntry } from '../../models/config-types.js';
 import {
   assertFindingIntakeNormalizerProvider,
   buildFindingIntakeNormalizerSteps,
@@ -222,8 +222,8 @@ export interface StepExecutorDeps {
   readonly getCurrentWorkflowStack?: () => WorkflowResumePointEntry[] | undefined;
   readonly structuredOutputNormalizers: StructuredOutputNormalizerRegistry;
   readonly structuredCaller?: StructuredCaller;
-  /** runtime.yaml の `intake-normalizer` seat。正規化係の最優先上書き。 */
-  readonly intakeNormalizerProvider?: ProviderRoutingEntry;
+  /** runtime.yaml `provider.targets.internal_agents` の解決済み seat。未指定 seat は既定解決。 */
+  readonly internalAgentSeats?: InternalAgentSeats;
   readonly abortSignal?: AbortSignal;
   /** 自前 or workflow_call 親から継承した、この engine で有効な Finding Contract。 */
   readonly findingContract?: FindingContractConfig;
@@ -482,6 +482,7 @@ export class StepExecutor {
       optionsBuilder: this.deps.optionsBuilder,
       stepExecutor: this,
       updatePersonaSession: input.updatePersonaSession,
+      internalAgentSeats: this.deps.internalAgentSeats,
       runtime: input.runtime,
       presentationLimit: Math.max(
         1,
@@ -591,6 +592,7 @@ export class StepExecutor {
       contract: this.deps.findingContract!,
       workflowProvider: this.deps.workflowProvider,
       workflowModel: this.deps.workflowModel,
+      internalAgentSeats: this.deps.internalAgentSeats,
       ledgerStore: this.deps.findingLedgerStore,
       optionsBuilder: this.deps.optionsBuilder,
       stepExecutor: this,
@@ -909,7 +911,7 @@ export class StepExecutor {
   ): readonly AgentWorkflowStep[] {
     return buildFindingIntakeNormalizerSteps({
       reviewerStepName: reviewerStep.name,
-      seat: this.deps.intakeNormalizerProvider,
+      seat: this.deps.internalAgentSeats?.intakeNormalizer,
       escalation: this.deps.optionsBuilder.resolveStepProviderModel(reviewerStep).escalation,
       workflowProvider: this.deps.workflowProvider,
       workflowModel: this.deps.workflowModel,

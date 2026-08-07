@@ -1,6 +1,8 @@
 import type { AgentWorkflowStep } from '../../models/types.js';
+import type { ProviderEscalationTarget, ProviderRoutingEntry } from '../../models/config-types.js';
 import type { StepProviderOptions } from '../../models/workflow-types.js';
 import type { ProviderType } from '../../../shared/types/provider.js';
+import { internalAgentSeatOverride } from '../internal-agent-seat.js';
 import { FINDING_ESCALATION_REVIEWER_ROUTING_KEY } from '../../models/finding-types.js';
 import type { RestatementPresentationPhase } from './restatement-presentation-phase.js';
 
@@ -48,6 +50,31 @@ export interface RestatementSlotProviderTarget {
   provider: ProviderType;
   model?: string;
   providerOptions?: StepProviderOptions;
+}
+
+/**
+ * 格上げ枠（最終提示）の宛先を決める。
+ *
+ * 1. runtime.yaml `provider.targets.internal_agents['escalation-reviewer']` の seat
+ * 2. owner が解決された profile の `escalate` 先
+ *
+ * どちらも無ければ格上げ枠は発生せず、最終枠も通常の言い直しになる。提示フェーズの
+ * 判定（WorkflowEngineSetup の escalationEnabled）と実際の宛先解決
+ * （restatement-slot-runner）が同じ答えを出すよう、判定はここ1箇所に集約する。
+ */
+export function resolveFindingEscalationTarget(input: {
+  readonly seat: ProviderRoutingEntry | undefined;
+  readonly escalation: ProviderEscalationTarget | undefined;
+}): RestatementSlotProviderTarget | undefined {
+  const seat = internalAgentSeatOverride(input.seat);
+  if (seat !== undefined) {
+    return {
+      provider: seat.provider,
+      ...(seat.model === undefined ? {} : { model: seat.model }),
+      ...(seat.providerOptions === undefined ? {} : { providerOptions: seat.providerOptions }),
+    };
+  }
+  return input.escalation;
 }
 
 /**

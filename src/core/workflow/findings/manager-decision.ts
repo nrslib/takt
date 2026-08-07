@@ -198,6 +198,7 @@ export async function runManagerDecisionStage(params: {
       contract: input.contract,
       workflowProvider: input.workflowProvider,
       workflowModel: input.workflowModel,
+      internalAgentSeats: input.internalAgentSeats,
       optionsBuilder: input.optionsBuilder,
       stepExecutor: input.stepExecutor,
       observation,

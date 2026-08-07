@@ -62,6 +62,7 @@ import {
   type RestatementPresentationPhase,
 } from '../findings/restatement-presentation-phase.js';
 import type { FindingRestatementSlotOwnerContexts } from '../findings/restatement-slot-runner.js';
+import { resolveFindingEscalationTarget } from '../findings/restatement-slot-step.js';
 import {
   isOutstandingReviewerAnomaly,
   selectRestatementSourceClaimAtom,
@@ -615,8 +616,12 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     });
     let allocatedRequestCount = 0;
     for (const ownerStep of input.ownerReviewerSteps) {
-      // 格上げ先を持つ owner だけが最終1回を escalation へ譲る。
-      const escalationEnabled = optionsBuilder.resolveStepProviderModel(ownerStep).escalation !== undefined;
+      // 格上げ先を持つ owner だけが最終1回を escalation へ譲る。宛先の解決は
+      // slot 実行側（resolveSlotProviderTarget）と同じ関数を通す。
+      const escalationEnabled = resolveFindingEscalationTarget({
+        seat: params.options.internalAgentSeats?.escalationReviewer,
+        escalation: optionsBuilder.resolveStepProviderModel(ownerStep).escalation,
+      }) !== undefined;
       const requestsFor = (phase: RestatementPresentationPhase): RestatementRequestV1[] => {
         const requests = buildRestatementRequests({
           ledger,
@@ -734,7 +739,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getCurrentWorkflowStack: params.getCurrentWorkflowStack,
     structuredOutputNormalizers: params.options.structuredOutputNormalizers,
     structuredCaller: params.structuredCaller,
-    intakeNormalizerProvider: params.options.intakeNormalizerProvider,
+    internalAgentSeats: params.options.internalAgentSeats,
     abortSignal: params.options.abortSignal,
     findingContract: params.findingContract,
     findingManagerAuthority: params.findingManagerAuthority,
@@ -815,7 +820,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     refreshFindingsState: params.refreshFindingsState,
     emitEvent: params.emitEvent,
     findingContract: params.findingContract,
-    intakeNormalizerProvider: params.options.intakeNormalizerProvider,
+    internalAgentSeats: params.options.internalAgentSeats,
     findingManagerAuthority: params.findingManagerAuthority,
     workflowProvider: params.config.provider,
     workflowModel: params.config.model,
@@ -904,6 +909,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     task: params.task,
     getMaxSteps: params.getMaxSteps,
     language: params.options.language,
+    internalAgentSeats: params.options.internalAgentSeats,
     updatePersonaSession: params.updatePersonaSession,
     resolveNextStepFromDone: params.resolveNextStepFromDone as never,
     onStepStart: (step, iteration, instruction, providerInfo, resumeStepName, stepIteration) => {

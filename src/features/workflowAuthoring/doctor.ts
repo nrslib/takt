@@ -92,6 +92,7 @@ function validateWorkflowRuntimeContract(
         providerRouting: env.providerRouting,
         autoRouting: env.autoRouting,
         providerRoutingTagConflictPolicy: env.tagConflictPolicy,
+        ...(env.internalAgents === undefined ? {} : { internalAgentSeats: env.internalAgents }),
       },
     });
     validateWorkflowConfig(workflow, {
@@ -102,6 +103,7 @@ function validateWorkflowRuntimeContract(
       providerRouting: env.providerRouting,
       autoRouting: env.autoRouting,
       providerRoutingTagConflictPolicy: env.tagConflictPolicy,
+      ...(env.internalAgents === undefined ? {} : { internalAgentSeats: env.internalAgents }),
       workflowCallResolver: () => null,
     });
     warnOnMissingProvisionalRouting(report, workflow);

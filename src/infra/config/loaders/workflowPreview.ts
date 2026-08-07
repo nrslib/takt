@@ -1,7 +1,7 @@
 import type { InteractiveMode, WorkflowConfig, WorkflowStep } from '../../../core/models/index.js';
 import { getAllParallelSubSteps, isDynamicParallelSubSteps } from '../../../core/models/types.js';
 import type { StepProviderOptions } from '../../../core/models/workflow-types.js';
-import type { TagRoutingConflictPolicy } from '../../../core/models/config-types.js';
+import type { InternalAgentSeats, TagRoutingConflictPolicy } from '../../../core/models/config-types.js';
 import {
   resolveStepProviderModel,
   type ProviderModelResolutionContext,
@@ -83,6 +83,8 @@ interface PreviewProviderResolution extends ProviderModelResolutionContext {
   providerOptions: StepProviderOptions | undefined;
   providerOptionsSource: ReturnType<typeof resolveProviderOptionsWithTrace>['source'];
   providerOptionsOriginResolver: ReturnType<typeof resolveProviderOptionsWithTrace>['originResolver'];
+  /** runtime.yaml internal_agents の解決済み seat。合成ロールの表示を実行時と一致させる。 */
+  internalAgentSeats: InternalAgentSeats | undefined;
   selectorProvider?: SelectorProviderInfo;
 }
 
@@ -176,6 +178,9 @@ function buildFindingManagerPreview(
     contract: workflow.findingContract,
     workflowProvider: workflow.provider,
     workflowModel: workflow.model,
+    ...(resolution.internalAgentSeats === undefined
+      ? {}
+      : { internalAgentSeats: resolution.internalAgentSeats }),
   });
   // findings-manager は AI ルーターを通らないため、rules 不一致でも実行時
   // （OptionsBuilder）と同じ strategy デフォルトまで確定して表示する。
@@ -361,6 +366,7 @@ function resolvePreviewProviderResolution(
     providerOptions: env.providerOptions,
     providerOptionsSource,
     providerOptionsOriginResolver,
+    internalAgentSeats: env.internalAgents,
     ...(selectorResolution.applies
       ? { selectorProvider: selectorResolution.selectorProvider }
       : {}),

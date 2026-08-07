@@ -1,3 +1,4 @@
+import type { InternalAgentSeats } from '../../models/config-types.js';
 import type {
   FindingContractConfig,
   WorkflowConfig,
@@ -37,6 +38,8 @@ export interface RunFindingManagerForStepInput {
   cwd: string;
   workflowProvider?: WorkflowConfig['provider'];
   workflowModel?: WorkflowConfig['model'];
+  /** runtime.yaml internal_agents の解決済み seat。未指定 seat は既定解決へ落ちる。 */
+  internalAgentSeats?: InternalAgentSeats;
   ledgerStore: FindingManagerStore;
   optionsBuilder: OptionsBuilder;
   stepExecutor: Pick<StepExecutor, 'buildPhase1Instruction' | 'normalizeStructuredOutput' | 'recordSynthesizedAgentUsage'>;

@@ -413,7 +413,7 @@ async function executeWorkflowInternal(
         providerRouting: bootstrap.providerRouting,
         providerLadders: bootstrap.providerLadders,
         providerEscalation: bootstrap.providerEscalation,
-        intakeNormalizerProvider: bootstrap.intakeNormalizerProvider,
+        internalAgentSeats: bootstrap.internalAgentSeats,
         providerRoutingTagConflictPolicy: bootstrap.providerRoutingTagConflictPolicy,
         providerProfiles: options.providerProfiles,
         mcpServers: options.mcpServers,

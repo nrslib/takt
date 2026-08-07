@@ -34,10 +34,12 @@ import { buildSessionKey } from '../session-key.js';
 import type { FindingContractInstructionContext } from '../instruction/instruction-context.js';
 import {
   buildFindingRestatementSlotStep,
+  resolveFindingEscalationTarget,
   type RestatementSlotMode,
   type RestatementSlotPhase,
   type RestatementSlotProviderTarget,
 } from './restatement-slot-step.js';
+import type { InternalAgentSeats } from '../../models/config-types.js';
 import type { FindingManagerSubStepResult } from './manager-intake.js';
 import type { RunAgentOptions } from '../../../agents/runner.js';
 
@@ -137,6 +139,8 @@ export interface FindingRestatementSlotInput {
   readonly stepExecutor: StepExecutor;
   readonly updatePersonaSession: (persona: string, sessionId: string | undefined) => void;
   readonly runtime?: RuntimeStepResolution;
+  /** runtime.yaml internal_agents の解決済み seat。`escalation-reviewer` seat を消費する。 */
+  readonly internalAgentSeats?: InternalAgentSeats;
   /** 提示予算。1 anomaly はこの回数までしか提示されないので、パス数の上限でもある。 */
   readonly presentationLimit: number;
 }
@@ -516,8 +520,9 @@ async function runSlotPresentation(
  * その提示が使う provider/model。
  *
  * - `restatement`: owner が解決した provider/model をそのまま使う
- * - `escalation`: owner が解決された profile の `escalate` 先。持たない owner は
- *   最終枠も通常の言い直しになるので、この提示自体が発生しない
+ * - `escalation`: `escalation-reviewer` seat、無ければ owner が解決された profile の
+ *   `escalate` 先。どちらも持たない owner は最終枠も通常の言い直しになるので、
+ *   この提示自体が発生しない
  *
  * どちらも runtime を渡さずに解決する。rate-limit fallback で一時的に別 provider
  * へ振られていても、代打の宛先は構成上の解決結果から決まる値であり、提示フェーズの
@@ -527,10 +532,14 @@ function resolveSlotProviderTarget(input: {
   readonly ownerStep: AgentWorkflowStep;
   readonly phase: RestatementSlotPhase;
   readonly optionsBuilder: OptionsBuilder;
+  readonly internalAgentSeats?: InternalAgentSeats;
 }): RestatementSlotProviderTarget | undefined {
   const ownerProviderInfo = input.optionsBuilder.resolveStepProviderModel(input.ownerStep);
   if (input.phase === 'escalation') {
-    return ownerProviderInfo.escalation;
+    return resolveFindingEscalationTarget({
+      seat: input.internalAgentSeats?.escalationReviewer,
+      escalation: ownerProviderInfo.escalation,
+    });
   }
   if (ownerProviderInfo.provider === undefined) {
     throw new Error(

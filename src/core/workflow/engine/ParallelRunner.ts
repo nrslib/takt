@@ -5,6 +5,7 @@
  * sub-step output with `[name]` for readable interleaved display.
  */
 
+import type { InternalAgentSeats } from '../../models/config-types.js';
 import type {
   WorkflowStep,
   AgentWorkflowStep,
@@ -77,9 +78,6 @@ import {
   PHASE1_EMPTY_OUTPUT_ERROR,
   runPhase1WithEmptyRecovery,
 } from './phase1-empty-recovery.js';
-import type {
-} from '../../models/config-types.js';
-import type { ProviderRoutingEntry } from '../../models/config-types.js';
 import {
   fallbackContextForOperation,
   findingIntakeNormalizerOperationOrigin,
@@ -163,8 +161,8 @@ export interface ParallelRunnerDeps {
   readonly refreshFindingsState: () => void;
   readonly emitEvent: (event: string, ...args: unknown[]) => void;
   readonly findingContract?: FindingContractConfig;
-  /** runtime.yaml の `intake-normalizer` seat。StepExecutor へそのまま渡る。 */
-  readonly intakeNormalizerProvider?: ProviderRoutingEntry;
+  /** runtime.yaml `provider.targets.internal_agents` の解決済み seat。StepExecutor へそのまま渡る。 */
+  readonly internalAgentSeats?: InternalAgentSeats;
   readonly findingManagerAuthority: FindingManagerAuthority;
   /** findings-manager の provider/model 未指定時の fallback（manager-runner.ts 参照）。 */
   readonly workflowProvider?: WorkflowConfig['provider'];
@@ -1463,6 +1461,7 @@ export class ParallelRunner {
       optionsBuilder: this.deps.optionsBuilder,
       stepExecutor: this.deps.stepExecutor,
       updatePersonaSession: input.updatePersonaSession,
+      internalAgentSeats: this.deps.internalAgentSeats,
       runtime: input.runtime,
       presentationLimit: Math.max(
         1,
@@ -1540,6 +1539,7 @@ export class ParallelRunner {
       contract: this.deps.findingContract,
       workflowProvider: this.deps.workflowProvider,
       workflowModel: this.deps.workflowModel,
+      internalAgentSeats: this.deps.internalAgentSeats,
       cwd: this.deps.getCwd(),
       ledgerStore,
       optionsBuilder: this.deps.optionsBuilder,

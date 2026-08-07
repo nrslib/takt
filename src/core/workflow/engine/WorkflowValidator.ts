@@ -16,6 +16,11 @@ import {
   resolveStepProviderModel,
 } from '../provider-resolution.js';
 import { validateProviderModelRequirements } from '../provider-model-requirements.js';
+import {
+  LOOP_JUDGE_ROUTING_KEY,
+  loopJudgeProviderFields,
+  loopJudgeStepName,
+} from '../loop-judge-step.js';
 import { getWorkflowStepKind, isDelegatedWorkflowStep, isWorkflowCallStep } from '../step-kind.js';
 import {
   findSemanticAppendixConflicts,
@@ -58,7 +63,7 @@ export type FindingContractSyntheticProviderValidationOptions = Pick<
   | 'providerRouting'
   | 'providerRoutingTagConflictPolicy'
   | 'personaProviders'
-  | 'intakeNormalizerProvider'
+  | 'internalAgentSeats'
   | 'providerEscalation'
 > & {
   inheritedFindingContract?: Pick<
@@ -290,6 +295,9 @@ export function validateFindingContractSyntheticProviderModels(
     contract: findingContract,
     workflowProvider: config.provider,
     workflowModel: config.model,
+    ...(options.internalAgentSeats === undefined
+      ? {}
+      : { internalAgentSeats: options.internalAgentSeats }),
   };
   // synthetic roles は実行ループの AI ルーターを
   // 通らず、実行時は OptionsBuilder.resolveStepProviderModel が rules →
@@ -381,7 +389,7 @@ function validateFindingIntakeNormalizerProviders(
   for (const reviewerStep of collectFindingContractReviewerSteps(config)) {
     const headCandidate = buildFindingIntakeNormalizerSteps({
       reviewerStepName: reviewerStep.name,
-      seat: options.intakeNormalizerProvider,
+      seat: options.internalAgentSeats?.intakeNormalizer,
       escalation: resolve(reviewerStep).escalation,
       workflowProvider: config.provider,
       workflowModel: config.model,
@@ -951,12 +959,10 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
     // judge ステップ（_loop_judge_<cycle> / providerRoutingPersonaKey: 'loop-judge'）と揃える。
     const judgeStepProviderInfo = resolveStepProviderModel({
       step: {
-        name: `_loop_judge_${monitor.cycle.join('_')}`,
-        provider: monitor.judge.provider,
-        model: monitor.judge.model,
-        modelSpecified: monitor.judge.modelSpecified,
-        personaDisplayName: 'loop-judge',
-        providerRoutingPersonaKey: 'loop-judge',
+        name: loopJudgeStepName(monitor.cycle),
+        ...loopJudgeProviderFields(monitor.judge, options.internalAgentSeats),
+        personaDisplayName: LOOP_JUDGE_ROUTING_KEY,
+        providerRoutingPersonaKey: LOOP_JUDGE_ROUTING_KEY,
       },
       provider: options.provider,
       providerSource: options.providerSource,

@@ -7,6 +7,8 @@ import type {
   WorkflowStep,
 } from '../../models/types.js';
 import { getAllParallelSubSteps } from '../../models/types.js';
+import type { InternalAgentSeats } from '../../models/config-types.js';
+import { internalAgentSeatOverride } from '../internal-agent-seat.js';
 import { parseWorkflowRuleCondition } from '../../models/workflow-rule-condition.js';
 import { FINDING_CONFLICT_ADJUDICATION_STEP } from '../constants.js';
 import {
@@ -54,6 +56,8 @@ function buildFindingAdjudicatorStep(input: {
   contract: FindingContractConfig;
   workflowProvider?: WorkflowConfig['provider'];
   workflowModel?: WorkflowConfig['model'];
+  /** runtime.yaml internal_agents の解決済み seat。未指定 seat は既定解決へ落ちる。 */
+  internalAgentSeats?: InternalAgentSeats;
   name: string;
   instruction: string;
   schemaRef: string;
@@ -63,8 +67,9 @@ function buildFindingAdjudicatorStep(input: {
   if (adjudicator === undefined) {
     throw new Error('Finding adjudication requires finding_contract.adjudicator');
   }
-  const providerIsDirect = adjudicator.provider !== undefined;
-  const modelIsDirect = adjudicator.model !== undefined;
+  // provider/model は runtime.yaml の `internal_agents['terminal-adjudicator']` seat で
+  // 名指しする。seat が無ければワークフローの provider/model を既定解決へ委ねる。
+  const seat = internalAgentSeatOverride(input.internalAgentSeats?.terminalAdjudicator);
   return {
     kind: 'agent',
     name: input.name,
@@ -73,10 +78,12 @@ function buildFindingAdjudicatorStep(input: {
     personaDisplayName: adjudicator.personaDisplayName ?? FINDING_ADJUDICATION_PERSONA,
     providerRoutingPersonaKey: adjudicator.providerRoutingPersonaKey ?? FINDING_ADJUDICATION_PERSONA,
     ...(adjudicator.personaPath !== undefined ? { personaPath: adjudicator.personaPath } : {}),
-    provider: providerIsDirect ? adjudicator.provider : input.workflowProvider,
-    providerSpecified: providerIsDirect,
-    model: modelIsDirect ? adjudicator.model : providerIsDirect ? undefined : input.workflowModel,
-    modelSpecified: modelIsDirect || providerIsDirect,
+    ...(seat ?? {
+      provider: input.workflowProvider,
+      providerSpecified: false,
+      model: input.workflowModel,
+      modelSpecified: false,
+    }),
     instruction: input.instruction,
     session: 'refresh',
     edit: false,
@@ -92,6 +99,8 @@ export function buildFindingTerminalAdjudicationStep(input: {
   contract: FindingContractConfig;
   workflowProvider?: WorkflowConfig['provider'];
   workflowModel?: WorkflowConfig['model'];
+  /** runtime.yaml internal_agents の解決済み seat。未指定 seat は既定解決へ落ちる。 */
+  internalAgentSeats?: InternalAgentSeats;
 }): AgentWorkflowStep {
   return buildFindingAdjudicatorStep({
     ...input,
@@ -111,7 +120,8 @@ export function buildFindingTerminalAdjudicationStep(input: {
  *
  * The instruction here is a static placeholder describing the step; the real
  * per-conflict prompt is built at execution time by adjudication-runner.ts.
- * provider/model fall back to the workflow's own configuration
+ * provider/model come from the `terminal-adjudicator` seat when runtime.yaml
+ * assigns one, and otherwise fall back to the workflow's own configuration
  * (providerSpecified/modelSpecified are explicitly false so persona_providers
  * and other lower-priority layers still apply).
  */
@@ -119,6 +129,8 @@ export function buildFindingConflictAdjudicationStep(input: {
   contract: FindingContractConfig;
   workflowProvider?: WorkflowConfig['provider'];
   workflowModel?: WorkflowConfig['model'];
+  /** runtime.yaml internal_agents の解決済み seat。未指定 seat は既定解決へ落ちる。 */
+  internalAgentSeats?: InternalAgentSeats;
 }): AgentWorkflowStep {
   if (!input.contract.adjudicator) {
     throw new Error(
@@ -174,6 +186,7 @@ export function workflowWiresFindingConflictAdjudication(
 export function injectFindingConflictAdjudicationStep(
   config: WorkflowConfig,
   contract: FindingContractConfig | undefined,
+  internalAgentSeats?: InternalAgentSeats,
 ): WorkflowConfig {
   if (!contract || !workflowWiresFindingConflictAdjudication(config.steps, config.loopMonitors)) {
     return config;
@@ -186,6 +199,7 @@ export function injectFindingConflictAdjudicationStep(
         contract,
         workflowProvider: config.provider,
         workflowModel: config.model,
+        ...(internalAgentSeats === undefined ? {} : { internalAgentSeats }),
       }),
     ],
   };

@@ -20,11 +20,11 @@ import type { FindingManagerAuthority } from '../models/finding-types.js';
 import type {
   AutoRoutingConfig,
   AutoRoutingStrategy,
+  InternalAgentSeats,
   PersonaProviderEntry,
   ProviderEscalationTarget,
   ProviderLadderConfig,
   ProviderRoutingConfig,
-  ProviderRoutingEntry,
   ResolvedObservabilityConfig,
   TagRoutingConflictPolicy,
 } from '../models/config-types.js';
@@ -513,11 +513,13 @@ export interface WorkflowEngineOptions {
   /** `escalate` target of the runtime.yaml profile behind the engine-level provider/model. */
   providerEscalation?: ProviderEscalationTarget;
   /**
-   * runtime.yaml `provider.targets.internal_agents['intake-normalizer']`. Highest-priority
-   * override for the Finding Contract plain-text intake normalizer; unset means the normalizer
-   * resolves through the reviewer's `escalate` target and then the ordinary defaults.
+   * runtime.yaml `provider.targets.internal_agents` の解決済み seat。エンジンが自前で
+   * 合成する役職（正規化係 / findings-manager / terminal adjudicator / loop judge /
+   * 格上げ枠）の宛先を runtime 側から名指しする。
+   *
+   * どの seat も指定は任意で、未指定の seat は従来どおりの既定解決へ落ちる。
    */
-  intakeNormalizerProvider?: ProviderRoutingEntry;
+  internalAgentSeats?: InternalAgentSeats;
   /**
    * Ordered provider ladders (issue #1208) resolved from runtime.yaml `ladder` assignments. The
    * promotion seam advances a matched target-less `{at:N}` to a later stage of the governing

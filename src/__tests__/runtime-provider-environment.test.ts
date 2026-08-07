@@ -407,6 +407,41 @@ describe('compileRuntimeProviderEnvironment (profile escalate)', () => {
     });
   });
 
+  it('compiles every synthetic-role seat', () => {
+    const env = compileRuntimeProviderEnvironment({
+      defaults: { profile: 'weak' },
+      profiles: {
+        weak: { provider: 'codex', model: 'weak-model' },
+        strong: { provider: 'codex', model: 'strong-model' },
+      },
+      targets: {
+        internal_agents: {
+          'findings-manager': { profile: 'strong' },
+          'terminal-adjudicator': { profile: 'strong' },
+          'loop-judge': { profile: 'strong' },
+          'escalation-reviewer': { profile: 'strong' },
+        },
+      },
+    });
+
+    const strong = { provider: 'codex', model: 'strong-model' };
+    expect(env.internalAgents).toEqual({
+      findingsManager: strong,
+      terminalAdjudicator: strong,
+      loopJudge: strong,
+      escalationReviewer: strong,
+    });
+  });
+
+  it('leaves every seat unset when internal_agents is omitted', () => {
+    const env = compileRuntimeProviderEnvironment({
+      defaults: { profile: 'weak' },
+      profiles: { weak: { provider: 'codex', model: 'weak-model' } },
+    });
+
+    expect(env.internalAgents).toBeUndefined();
+  });
+
   it('still rejects an unknown internal_agents seat', () => {
     expect(() => compileRuntimeProviderEnvironment({
       defaults: { profile: 'weak' },

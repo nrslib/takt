@@ -1,4 +1,6 @@
 import type { AgentWorkflowStep, FindingContractConfig, WorkflowConfig } from '../../models/types.js';
+import type { InternalAgentSeats } from '../../models/config-types.js';
+import { internalAgentSeatOverride } from '../internal-agent-seat.js';
 import { InterpretationCaseDecisionsOutputJsonSchema } from './schemas.js';
 import {
   FindingEntityBindingTaskOutputJsonSchema,
@@ -21,22 +23,21 @@ const FINDING_INTERPRETATION_INSTRUCTION =
  * 同じ形のステップを見ないと、検証やプレビューでは通る provider/model が
  * 実行時に別の値へ解決される食い違いが生まれるため、ここへ一本化する。
  *
- * finding_contract.manager の直接指定は workflow 構成層内で最優先とし、
- * providerSpecified/modelSpecified を立てて persona_providers 等の後段解決を
- * 抑止する。CLI/環境変数の実行時 override はこの直接指定より優先する。
- * 未指定時はワークフローの provider/model を fallback として載せる。
- * provider だけが直接指定された場合、workflow model を引き継ぐと provider と
- * model の組み合わせが食い違うため model は載せない（modelSpecified は立てて
- * 後段の model 解決も抑止する）。
+ * provider/model は runtime.yaml の `internal_agents['findings-manager']` seat で
+ * 名指しする。seat があれば step 直指定と同じ層で焼き込み（CLI/環境変数の実行時
+ * override だけがそれより上）、無ければワークフローの provider/model を
+ * `providerSpecified: false` で載せて既定解決（provider_routing → workflow →
+ * project → global → provider 既定）へ委ねる。
  */
 export function buildFindingManagerStep(input: {
   contract: FindingContractConfig;
   workflowProvider?: WorkflowConfig['provider'];
   workflowModel?: WorkflowConfig['model'];
+  /** runtime.yaml internal_agents の解決済み seat。未指定 seat は既定解決へ落ちる。 */
+  internalAgentSeats?: InternalAgentSeats;
 }): AgentWorkflowStep {
   const manager = input.contract.manager;
-  const providerIsDirect = manager.provider !== undefined;
-  const modelIsDirect = manager.model !== undefined;
+  const seat = internalAgentSeatOverride(input.internalAgentSeats?.findingsManager);
 
   return {
     kind: 'agent',
@@ -45,10 +46,12 @@ export function buildFindingManagerStep(input: {
     personaDisplayName: manager.personaDisplayName ?? manager.persona,
     providerRoutingPersonaKey: manager.providerRoutingPersonaKey,
     personaPath: manager.personaPath,
-    provider: providerIsDirect ? manager.provider : input.workflowProvider,
-    providerSpecified: providerIsDirect,
-    model: modelIsDirect ? manager.model : providerIsDirect ? undefined : input.workflowModel,
-    modelSpecified: modelIsDirect || providerIsDirect,
+    ...(seat ?? {
+      provider: input.workflowProvider,
+      providerSpecified: false,
+      model: input.workflowModel,
+      modelSpecified: false,
+    }),
     instruction: manager.instruction,
     ...(manager.policyContents === undefined ? {} : { policyContents: manager.policyContents }),
     ...(manager.knowledgeContents === undefined ? {} : { knowledgeContents: manager.knowledgeContents }),
@@ -97,6 +100,8 @@ export function buildFindingInterpretationStep(input: {
   contract: FindingContractConfig;
   workflowProvider?: WorkflowConfig['provider'];
   workflowModel?: WorkflowConfig['model'];
+  /** runtime.yaml internal_agents の解決済み seat。未指定 seat は既定解決へ落ちる。 */
+  internalAgentSeats?: InternalAgentSeats;
 }): AgentWorkflowStep {
   const base = buildFindingManagerStep(input);
   return {

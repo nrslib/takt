@@ -77,6 +77,7 @@ export function prepareFindingManagerRound(
     contract: input.contract,
     workflowProvider: input.workflowProvider,
     workflowModel: input.workflowModel,
+    internalAgentSeats: input.internalAgentSeats,
   });
   return {
     previousLedger,

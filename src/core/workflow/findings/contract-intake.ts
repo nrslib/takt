@@ -8,6 +8,7 @@
  * この形式を許すが、取り込み経路自体が無かった）。
  */
 
+import type { InternalAgentSeats } from '../../models/config-types.js';
 import type {
   AgentWorkflowStep,
   FindingContractConfig,
@@ -66,6 +67,8 @@ export interface FindingContractIntakeInput {
   /** manager の provider/model 未指定時の fallback（manager-runner.ts 参照）。 */
   workflowProvider?: WorkflowConfig['provider'];
   workflowModel?: WorkflowConfig['model'];
+  /** runtime.yaml internal_agents の解決済み seat。未指定 seat は既定解決へ落ちる。 */
+  internalAgentSeats?: InternalAgentSeats;
   ledgerStore: FindingManagerStore;
   optionsBuilder: OptionsBuilder;
   stepExecutor: Pick<StepExecutor, 'buildPhase1Instruction' | 'normalizeStructuredOutput' | 'recordSynthesizedAgentUsage'>;
@@ -103,6 +106,7 @@ export async function ingestFindingContractResults(
     contract: input.contract,
     workflowProvider: input.workflowProvider,
     workflowModel: input.workflowModel,
+    internalAgentSeats: input.internalAgentSeats,
     ledgerStore: input.ledgerStore,
     optionsBuilder: input.optionsBuilder,
     stepExecutor: input.stepExecutor,

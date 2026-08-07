@@ -3,9 +3,9 @@ import { join } from 'node:path';
 import { CapabilityAwareStructuredCaller } from '../../../agents/structured-caller.js';
 import type { WorkflowConfig } from '../../../core/models/index.js';
 import type {
+  InternalAgentSeats,
   ProviderEscalationTarget,
   ProviderLadderConfig,
-  ProviderRoutingEntry,
   ResolvedObservabilityConfig,
   TagRoutingConflictPolicy,
 } from '../../../core/models/config-types.js';
@@ -117,7 +117,7 @@ export interface WorkflowExecutionBootstrap {
   providerRouting: WorkflowExecutionOptions['providerRouting'];
   providerLadders: ProviderLadderConfig | undefined;
   providerEscalation: ProviderEscalationTarget | undefined;
-  intakeNormalizerProvider: ProviderRoutingEntry | undefined;
+  internalAgentSeats: InternalAgentSeats | undefined;
   providerRoutingTagConflictPolicy: TagRoutingConflictPolicy;
   providerOptions: WorkflowExecutionOptions['providerOptions'];
   effectiveWorkflowConfig: WorkflowConfig;
@@ -589,6 +589,9 @@ export async function createWorkflowExecutionBootstrap(
       personaProviders: effectivePersonaProviders,
       providerRouting: effectiveProviderRouting,
       providerRoutingTagConflictPolicy,
+      ...(providerEnvironment.internalAgents === undefined
+        ? {}
+        : { internalAgentSeats: providerEnvironment.internalAgents }),
     },
   });
   const providerEventLogger = createProviderEventLogger({
@@ -701,7 +704,7 @@ export async function createWorkflowExecutionBootstrap(
     providerRouting: effectiveProviderRouting,
     providerLadders: effectiveProviderLadders,
     providerEscalation: providerEnvironment.escalation,
-    intakeNormalizerProvider: providerEnvironment.internalAgents?.intakeNormalizer,
+    internalAgentSeats: providerEnvironment.internalAgents,
     providerRoutingTagConflictPolicy,
     providerOptions: effectiveProviderOptions,
     effectiveWorkflowConfig,

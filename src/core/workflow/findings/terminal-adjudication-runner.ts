@@ -56,6 +56,7 @@ function terminalStep(input: RunFindingManagerForStepInput): AgentWorkflowStep {
     contract: input.contract,
     workflowProvider: input.workflowProvider,
     workflowModel: input.workflowModel,
+    internalAgentSeats: input.internalAgentSeats,
   });
 }
 
