@@ -926,8 +926,10 @@ workflow YAML には何も現れません（step ではありません）。
 - 言い直し要求は**1呼び出しあたり10件まで**です。超過分は同じラウンドの次のパスへ回ります。
 - 照合ゲートが要求する claim 本文を選べない観測（description も抜粋も持たない）は、
   言い直し要求を作りません。どう答えても受理されないためです。この anomaly は提示を
-  1回も行わずにその場で終端し（`undemandable_claim_atom` /
-  `non_claim_observation_rejected`）、以後ゲートを塞ぎません。
+  1回も行わずに kind `undemandable_claim_atom` でその場で終端します。outcome は
+  observationClass に従い、`claim-bearing` なら `review_integrity_unresolved`、
+  `protocol-noise` なら `non_claim_observation_rejected` です。どちらでも以後ゲートを
+  塞ぎません。
 - 終端経路の整理: intake anomaly は「言い直しの照合成立による昇格」「提示予算の枯渇」
   「言い直しで要求できる claim 本文が無い」のいずれかで終端します。後続の完全レビュー
   成立による取り下げ（withdrawal）が終端になるのは、言い直し予算を持たない非 intake

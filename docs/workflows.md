@@ -936,9 +936,10 @@ appears in workflow YAML; it is not a step.
   pass of the same round.
 - An observation from which the correspondence gate cannot select a claim body (no
   description and no excerpt) gets no restatement request at all — no answer could ever
-  be accepted. Such an anomaly is terminated in place without any presentation
-  (`undemandable_claim_atom` / `non_claim_observation_rejected`) and stops blocking the
-  gate.
+  be accepted. Such an anomaly is terminated in place without any presentation, under kind
+  `undemandable_claim_atom`; its outcome follows the observation class (`claim-bearing` →
+  `review_integrity_unresolved`, `protocol-noise` → `non_claim_observation_rejected`).
+  Either outcome stops blocking the gate.
 - Termination paths, precisely: an intake anomaly ends through a verified restatement
   correspondence (promotion), through presentation-budget exhaustion, or because no claim
   body could be demanded back. Withdrawal by a subsequent complete review terminates only
