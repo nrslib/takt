@@ -475,6 +475,7 @@ export class ParallelRunner {
               state,
               runtime: publicationResumeRuntime,
               presentationContext: findingContractContext?.reviewer?.presentationContext,
+              reviewerCallMode: 'review',
             });
           if (resumedPublication !== undefined) {
             if ('terminalResponse' in resumedPublication) {
@@ -719,6 +720,7 @@ export class ParallelRunner {
             updatePersonaSession,
             runtime: subRuntime,
             presentationContext: findingContractContext?.reviewer?.presentationContext,
+            reviewerCallMode: 'review',
           });
           if ('terminalResponse' in prepared) {
             state.stepOutputs.set(subStep.name, prepared.terminalResponse);

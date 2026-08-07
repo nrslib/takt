@@ -134,13 +134,14 @@ export interface FindingReviewPublicationPreparation {
   readonly relationClarification?: ReviewerRelationClarification;
   readonly reviewerExecutionIdentity?: ReviewerExecutionIdentity;
   /**
-   * この publication を出した呼び出しが何として走ったか。
+   * この publication を出した呼び出しが何として走ったか。書き出し側は通常の
+   * レビューを含め常に設定する（読み取り側だけが、この項目より前に保存された
+   * record として未設定を受け取り得る）。
    *
-   * 未設定は通常のレビュー（既定）。`restatement-only` は言い直しだけを行った
-   * 差し戻し呼び出しで、後続レビュー成立による取り下げ（withdrawal）の根拠に
-   * ならない。resume はこの永続値を採用する — 引き当て時点の mode を被せると、
-   * 言い直しだけで出た publication が再開後にフルレビューの証拠として扱われ、
-   * 未検証のまま anomaly が決着する。
+   * `restatement-only` は言い直しだけを行った差し戻し呼び出しで、後続レビュー
+   * 成立による取り下げ（withdrawal）の根拠にならない。resume はこの永続値を
+   * 採用する — 引き当て時点の mode を被せると、言い直しだけで出た publication が
+   * 再開後にフルレビューの証拠として扱われ、未検証のまま anomaly が決着する。
    *
    * publication identity（publicationId）には入れない。mode で identity が
    * 変わると、mode が変わったときに保存済み publication を引き当てられなくなる。
@@ -881,8 +882,8 @@ function parseStoredPreparation(
 }
 
 /**
- * 保存済みの呼び出し mode。未設定（この機構より前に保存された publication と、
- * 通常のレビュー）は undefined = 通常レビュー扱い。
+ * 保存済みの呼び出し mode。この項目より前に保存された publication だけが未設定
+ * になり、読み取り側は通常レビュー扱いへ寄せる。
  */
 function parseStoredReviewerCallMode(
   value: unknown,

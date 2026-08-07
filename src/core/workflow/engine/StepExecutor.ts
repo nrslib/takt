@@ -315,8 +315,11 @@ export interface FindingReviewPublicationPreparationInput {
    * この呼び出しが何として走ったか。publication へ永続化し、resume はその値を
    * 採用する（引き当て時点の mode を被せると、言い直しだけで出た publication が
    * 再開後にフルレビューの証拠として扱われる）。
+   *
+   * 通常のレビューステップも `review` を明示して渡す。省略を「通常レビュー」の
+   * 意味に流用すると、保存済み record の欠落と区別できなくなる。
    */
-  readonly reviewerCallMode?: 'review' | 'restatement-only';
+  readonly reviewerCallMode: 'review' | 'restatement-only';
 }
 
 /** 正規化係の1候補（解決チェーンの1段）。 */
@@ -1282,7 +1285,7 @@ export class StepExecutor {
     readonly runtime?: RuntimeStepResolution;
     readonly presentationContext?: FindingReviewPresentationContext;
     /** 保留中の正規化を再開して publication を作る場合に刻む呼び出し mode。 */
-    readonly reviewerCallMode?: 'review' | 'restatement-only';
+    readonly reviewerCallMode: 'review' | 'restatement-only';
   }): Promise<{
     readonly publication: CanonicalFindingReviewPublication;
     readonly response: AgentResponse;
@@ -1391,9 +1394,7 @@ export class StepExecutor {
       const persisted = persistFindingReviewPublication(reportDir, {
         publication: normalized.publication,
         reviewerExecutionIdentity: pending.reviewerExecutionIdentity,
-        ...(input.reviewerCallMode === undefined
-          ? {}
-          : { reviewerCallMode: input.reviewerCallMode }),
+        reviewerCallMode: input.reviewerCallMode,
       });
       publishFindingReviewPublication(reportDir, persisted.publication);
       return {
@@ -1658,9 +1659,7 @@ export class StepExecutor {
       {
         publication,
         reviewerExecutionIdentity: reviewerSelectionIdentity,
-        ...(input.reviewerCallMode === undefined
-          ? {}
-          : { reviewerCallMode: input.reviewerCallMode }),
+        reviewerCallMode: input.reviewerCallMode,
       },
     );
     const finalPublication = persisted.publication;
@@ -2140,6 +2139,7 @@ export class StepExecutor {
         state,
         runtime: publicationResumeRuntime,
         presentationContext: findingContractContext?.reviewer?.presentationContext,
+        reviewerCallMode: 'review',
       });
       if (resumedPublication !== undefined) {
         if ('terminalResponse' in resumedPublication) {
@@ -2480,6 +2480,7 @@ export class StepExecutor {
         updatePersonaSession,
         runtime: executionRuntime,
         presentationContext: findingContractContext?.reviewer?.presentationContext,
+        reviewerCallMode: 'review',
       });
       if ('terminalResponse' in prepared) {
         response = replaceResponseProviderUsage(
