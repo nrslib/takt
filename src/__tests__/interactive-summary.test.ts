@@ -2,7 +2,9 @@
  * Tests for task history context formatting in interactive summary.
  */
 
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { renderTemplate } from '../shared/prompts/index.js';
 
 import {
   buildSummaryPrompt,
@@ -105,6 +107,19 @@ describe('buildSummaryPrompt', () => {
 
   it('should leave the existing summary prompt unchanged when Gherkin mode is false or unset', () => {
     const history = [{ role: 'user' as const, content: 'Improve parser' }];
+    const legacyTemplate = readFileSync(
+      new URL('./fixtures/score-summary-system-prompt-legacy-en.md', import.meta.url),
+      'utf-8',
+    );
+    const legacyPrompt = renderTemplate(legacyTemplate, {
+      hasWorkflowPreview: false,
+      workflowName: '',
+      workflowDescription: '',
+      stepDetails: '',
+      taskHistory: '',
+      sourceContext: '',
+      conversation: 'Conversation:\nUser: Improve parser',
+    });
     const unset = buildSummaryPrompt(
       history,
       false,
@@ -124,8 +139,21 @@ describe('buildSummaryPrompt', () => {
       false,
     );
 
-    expect(disabled).toBe(unset);
+    expect(unset).toBe(legacyPrompt);
+    expect(disabled).toBe(legacyPrompt);
     expect(unset).not.toContain('Markdown + Gherkin Output Format');
+  });
+
+  it('should forward Gherkin mode through the string overload', () => {
+    const summary = buildSummaryPrompt(
+      [{ role: 'user', content: 'Improve parser' }],
+      'Keep existing behavior',
+      'en',
+      undefined,
+      true,
+    );
+
+    expect(summary).toContain('Markdown + Gherkin Output Format');
   });
 
   it.each([

@@ -158,6 +158,31 @@ describe('projectConfig', () => {
   });
 
   describe('assistant Gherkin task instructions', () => {
+    it.each([
+      ['absent assistant config', ''],
+      ['assistant config without Gherkin', 'assistant: {}'],
+    ])('should keep assistant undefined for %s', (_label, yaml) => {
+      if (yaml) {
+        writeFileSync(join(testDir, '.takt', 'config.yaml'), yaml, 'utf-8');
+      }
+
+      const loaded = loadProjectConfig(testDir) as ProjectConfigWithAssistant;
+
+      expect(loaded.assistant).toBeUndefined();
+    });
+
+    it.each([
+      ['absent assistant config', undefined],
+      ['assistant config without Gherkin', {}],
+    ] as const)('should not save a Gherkin key for %s', (_label, assistant) => {
+      const config: ProjectConfigWithAssistant = assistant === undefined ? {} : { assistant };
+
+      saveProjectConfig(testDir, config);
+
+      const raw = readFileSync(join(testDir, '.takt', 'config.yaml'), 'utf-8');
+      expect(raw).not.toContain('gherkin:');
+    });
+
     it('should load assistant.gherkin from project config', () => {
       writeFileSync(
         join(testDir, '.takt', 'config.yaml'),

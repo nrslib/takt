@@ -125,6 +125,7 @@ import { getProvider } from '../infra/providers/index.js';
 import { selectOption } from '../shared/prompt/index.js';
 import { error as logError, info as logInfo } from '../shared/ui/index.js';
 import { callAIWithRetry, runConversationLoop, type SessionContext } from '../features/interactive/conversationLoop.js';
+import * as interactiveModule from '../features/interactive/interactive.js';
 import { initializeSession } from '../features/interactive/sessionInitialization.js';
 
 const mockGetProvider = vi.mocked(getProvider);
@@ -519,6 +520,7 @@ describe('/resume command', () => {
 // =================================================================
 describe('/go command', () => {
   it('should include Markdown and Gherkin rules in assistant summaries when project config enables them', async () => {
+    const buildSummaryPromptSpy = vi.spyOn(interactiveModule, 'buildSummaryPrompt');
     const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-gherkin-assistant-'));
     fs.mkdirSync(path.join(projectDir, '.takt'), { recursive: true });
     fs.writeFileSync(
@@ -527,7 +529,7 @@ describe('/go command', () => {
       'utf-8',
     );
     setupRawStdin(toRawInputs(['/go improve parser behavior']));
-    const { provider, capture } = createScenarioProvider([
+    const { provider } = createScenarioProvider([
       { content: 'Generated task instruction.' },
     ]);
     const ctx: SessionContext = {
@@ -543,8 +545,17 @@ describe('/go command', () => {
       const result = await runConversationLoop(projectDir, ctx, defaultStrategy, undefined, undefined);
 
       expect(result.action).toBe('execute');
-      expect(capture.prompts[0]).toContain('Markdown + Gherkin Output Format');
-      expect(capture.prompts[0]).toContain('Explicitly requested implementation details');
+      expect(buildSummaryPromptSpy).toHaveBeenCalledWith(
+        expect.any(Array),
+        false,
+        'en',
+        expect.any(String),
+        expect.any(String),
+        undefined,
+        undefined,
+        undefined,
+        true,
+      );
     } finally {
       fs.rmSync(projectDir, { recursive: true, force: true });
     }

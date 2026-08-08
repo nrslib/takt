@@ -123,6 +123,7 @@ export function buildSummaryPrompt(
   userNote: string,
   lang: 'en' | 'ja',
   promptContext?: string,
+  gherkin?: boolean,
 ): string;
 export function buildSummaryPrompt(
   history: ConversationMessage[],
@@ -140,7 +141,7 @@ export function buildSummaryPrompt(
   userNoteOrHasSession: string | boolean,
   lang: 'en' | 'ja',
   promptContextOrNoTranscript?: string,
-  conversationLabel?: string,
+  conversationLabelOrGherkin?: string | boolean,
   workflowContext?: WorkflowContext,
   sourceContext?: string,
   promptContext?: string,
@@ -152,7 +153,7 @@ export function buildSummaryPrompt(
       userNoteOrHasSession,
       lang,
       promptContextOrNoTranscript ?? '',
-      conversationLabel ?? '',
+      typeof conversationLabelOrGherkin === 'string' ? conversationLabelOrGherkin : '',
       workflowContext,
       sourceContext,
       promptContext,
@@ -165,6 +166,7 @@ export function buildSummaryPrompt(
     userNoteOrHasSession,
     lang,
     promptContextOrNoTranscript,
+    typeof conversationLabelOrGherkin === 'boolean' ? conversationLabelOrGherkin : false,
   );
 }
 

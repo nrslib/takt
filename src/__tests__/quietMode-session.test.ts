@@ -98,14 +98,20 @@ beforeEach(() => {
 // =================================================================
 
 describe('quietMode: summary AI session isolation', () => {
-  it('should pass enabled project Gherkin mode to quiet summary generation', async () => {
+  it.each([
+    ['unset', undefined, false],
+    ['enabled', true, true],
+    ['disabled', false, false],
+  ] as const)('should pass %s project Gherkin mode to quiet summary generation', async (_label, configured, expected) => {
     const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-gherkin-quiet-'));
-    fs.mkdirSync(path.join(projectDir, '.takt'), { recursive: true });
-    fs.writeFileSync(
-      path.join(projectDir, '.takt', 'config.yaml'),
-      ['assistant:', '  gherkin: true'].join('\n'),
-      'utf-8',
-    );
+    if (configured !== undefined) {
+      fs.mkdirSync(path.join(projectDir, '.takt'), { recursive: true });
+      fs.writeFileSync(
+        path.join(projectDir, '.takt', 'config.yaml'),
+        ['assistant:', `  gherkin: ${configured}`].join('\n'),
+        'utf-8',
+      );
+    }
     mockInitializeSession.mockReturnValue(createMockSessionContext(undefined));
     mockBuildSummaryPrompt.mockReturnValue('Summary prompt');
     mockCallAIWithRetry.mockResolvedValue({
@@ -117,7 +123,7 @@ describe('quietMode: summary AI session isolation', () => {
     try {
       await quietMode(projectDir, { userMessage: 'improve parser behavior' });
 
-      expect(mockBuildSummaryPrompt.mock.calls[0]?.[8]).toBe(true);
+      expect(mockBuildSummaryPrompt.mock.calls[0]?.[8]).toBe(expected);
     } finally {
       fs.rmSync(projectDir, { recursive: true, force: true });
     }

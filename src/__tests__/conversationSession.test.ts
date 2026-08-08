@@ -158,20 +158,26 @@ describe('conversation session application API', () => {
     });
   });
 
-  it('should pass enabled project Gherkin mode to ACP task instruction generation', async () => {
+  it.each([
+    ['unset', undefined, false],
+    ['enabled', true, true],
+    ['disabled', false, false],
+  ] as const)('should pass %s project Gherkin mode to ACP task instruction generation', async (_label, configured, expected) => {
     const projectDir = mkdtempSync(join(tmpdir(), 'takt-gherkin-acp-'));
-    mkdirSync(join(projectDir, '.takt'), { recursive: true });
-    writeFileSync(
-      join(projectDir, '.takt', 'config.yaml'),
-      ['assistant:', '  gherkin: true'].join('\n'),
-      'utf-8',
-    );
+    if (configured !== undefined) {
+      mkdirSync(join(projectDir, '.takt'), { recursive: true });
+      writeFileSync(
+        join(projectDir, '.takt', 'config.yaml'),
+        ['assistant:', `  gherkin: ${configured}`].join('\n'),
+        'utf-8',
+      );
+    }
     const session = createSession(projectDir);
 
     try {
       await session.createTaskInstruction({ userNote: 'implement ACP support' });
 
-      expect(mockBuildSummaryPrompt.mock.calls[0]?.[4]).toBe(true);
+      expect(mockBuildSummaryPrompt.mock.calls[0]?.[4]).toBe(expected);
     } finally {
       rmSync(projectDir, { recursive: true, force: true });
     }
