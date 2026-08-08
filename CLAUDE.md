@@ -28,6 +28,7 @@ TAKT (TAKT Agent Koordination Topology) is a multi-agent orchestration CLI. It r
 
 - Serial-group membership lives in `scripts/test-classification.mjs` (`serialGitTestFiles`). Membership is about **measured IO interference** (fsync/spawnSync storms that block a worker past vitest's 60s birpc deadline), not correctness. Add files only with a measured reason; `releaseVerificationWiring.test.ts` fails if a listed file does not exist.
 - `dangerouslyIgnoreUnhandledErrors: !process.env.CI` (vitest.config.shared.ts): the spurious `[vitest-worker]: Timeout calling "onTaskUpdate"` error is tolerated locally (4 concurrent shards on one machine) but **fatal on CI**. The parallel IT slice runs single-worker on CI (`maxWorkers: process.env.CI ? 1 : 4`) for the same reason.
+- Because that noise still makes a shard exit non-zero locally, `npm test` re-measures such a shard **once** (`scripts/vitest-birpc-noise.mjs`): only when the shard's own output shows zero failed tests, at least one passed test, and no reported error other than `[vitest-worker]: Timeout calling "onTaskUpdate"`. One real test failure, one unrecognized error headline, or `CI` set → no re-measurement, exit code stands. The re-measurement is announced on stderr; a silent shard exit is never rescued.
 - `src/__tests__/test-setup.ts` clears `TAKT_CONFIG_DIR` / `TAKT_NOTIFY_WEBHOOK` per test and provides an isolated config root — don't add per-suite env overrides that fight it.
 
 ## CLI Surface

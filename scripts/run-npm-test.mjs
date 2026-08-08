@@ -8,6 +8,7 @@ import {
   serialWorkflowTestFiles,
 } from './test-classification.mjs';
 import { resolveNpmInvocation } from './npm-invocation.mjs';
+import { isBirpcNoiseOnlyFailure } from './vitest-birpc-noise.mjs';
 
 const UNIT_SHARDS = ['1/4', '2/4', '3/4', '4/4'];
 const NO_ARG_UNIT_RUN_OPTIONS = ['--maxWorkers=1'];
@@ -207,15 +208,28 @@ function normalizeTestTarget(arg) {
 async function runNpmCommand(npmArgs) {
   return new Promise((resolve) => {
     const invocation = resolveNpmInvocation(process.execPath, process.env.npm_execpath);
+    // Shard output is teed rather than inherited so a non-zero exit can be
+    // read back and classified before it is reported as a failure.
     const child = spawn(invocation.executable, [...invocation.args, ...npmArgs], {
-      stdio: 'inherit',
+      stdio: ['inherit', 'pipe', 'pipe'],
       shell: false,
     });
+    const chunks = [];
 
-    child.on('exit', (code, signal) => {
+    child.stdout.on('data', (chunk) => {
+      chunks.push(chunk);
+      process.stdout.write(chunk);
+    });
+    child.stderr.on('data', (chunk) => {
+      chunks.push(chunk);
+      process.stderr.write(chunk);
+    });
+
+    child.on('close', (code, signal) => {
       resolve({
         code: code ?? 1,
         signal,
+        output: Buffer.concat(chunks).toString('utf8'),
       });
     });
 
@@ -224,9 +238,26 @@ async function runNpmCommand(npmArgs) {
       resolve({
         code: 1,
         signal: null,
+        output: '',
       });
     });
   });
+}
+
+async function remeasureBirpcNoiseShards(results, runCommand) {
+  const isCI = Boolean(process.env.CI);
+  const settled = [];
+  for (const { run, result } of results) {
+    if (result.code === 0 || !isBirpcNoiseOnlyFailure({ output: result.output, isCI })) {
+      settled.push({ run, result });
+      continue;
+    }
+    console.error(
+      `[takt] npm ${run.npmArgs.join(' ')} exited ${result.code} with every test passed and only birpc noise; re-measuring this shard once`,
+    );
+    settled.push({ run, result: await runCommand(run.npmArgs) });
+  }
+  return settled;
 }
 
 export async function runNpmTest(args, runCommand = runNpmCommand) {
@@ -236,7 +267,8 @@ export async function runNpmTest(args, runCommand = runNpmCommand) {
     return { run, result };
   }));
 
-  const failed = results.filter(({ result }) => result.code !== 0);
+  const failed = (await remeasureBirpcNoiseShards(results, runCommand))
+    .filter(({ result }) => result.code !== 0);
   for (const { run, result } of failed) {
     const suffix = result.signal ? ` signal=${result.signal}` : '';
     console.error(`[takt] npm ${run.npmArgs.join(' ')} failed with exit=${result.code}${suffix}`);

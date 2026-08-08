@@ -4,6 +4,7 @@ import {
   runNpmTest,
   selectNpmTestRuns,
 } from '../../scripts/run-npm-test.mjs';
+import { isBirpcNoiseOnlyFailure } from '../../scripts/vitest-birpc-noise.mjs';
 import { resolveNpmInvocation } from '../../scripts/npm-invocation.mjs';
 import parallelIntegrationConfig from '../../vitest.config.it.parallel.js';
 import serialGitConfig from '../../vitest.config.it.serial.git.js';
@@ -20,6 +21,7 @@ import {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 describe('parallel test runner configuration', () => {
@@ -71,7 +73,7 @@ describe('npm test execution', () => {
       events.push(`start:${script}`);
       await Promise.resolve();
       events.push(`finish:${script}`);
-      return { code: 0, signal: null };
+      return { code: 0, signal: null, output: '' };
     });
 
     const code = await runNpmTest([], run);
@@ -100,7 +102,7 @@ describe('npm test execution', () => {
       events.push(`start:${script}`);
       await Promise.resolve();
       events.push(`finish:${script}`);
-      return { code: script === 'test:unit:parallel' ? 7 : 0, signal: null };
+      return { code: script === 'test:unit:parallel' ? 7 : 0, signal: null, output: '' };
     });
 
     const code = await runNpmTest([
@@ -138,6 +140,105 @@ describe('npm test execution', () => {
       '[takt] npm run test:unit:parallel -- --reporter verbose src/__tests__/acpAgent.test.ts failed with exit=7',
     );
     expect(code).toBe(7);
+  });
+});
+
+const birpcNoiseOutput = [
+  ' ✓ src/__tests__/config.test.ts (42 tests) 1200ms',
+  '',
+  '⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯ Unhandled Errors ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯',
+  '',
+  'Vitest caught 1 unhandled error during the test run.',
+  '',
+  '⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯ Unhandled Error ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯',
+  'Error: [vitest-worker]: Timeout calling "onTaskUpdate"',
+  ' ❯ Timeout.<anonymous> node_modules/vitest/dist/chunks/rpc.js:49:10',
+  '',
+  ' Test Files  120 passed (120)',
+  '      Tests  3330 passed (3330)',
+  '     Errors  1 error',
+  '   Start at  12:00:00',
+  '   Duration  62.00s',
+].join('\n');
+
+describe('birpc noise classification', () => {
+  it('should treat an all-passed shard whose only error is the birpc timeout as noise', () => {
+    expect(isBirpcNoiseOnlyFailure({ output: birpcNoiseOutput, isCI: false })).toBe(true);
+  });
+
+  it('should treat a shard with a failed test as a real failure even alongside birpc noise', () => {
+    const output = birpcNoiseOutput
+      .replace('      Tests  3330 passed (3330)', '      Tests  1 failed | 3329 passed (3330)')
+      .replace(
+        ' ❯ Timeout.<anonymous> node_modules/vitest/dist/chunks/rpc.js:49:10',
+        'AssertionError: expected 1 to be 2',
+      );
+
+    expect(isBirpcNoiseOnlyFailure({ output, isCI: false })).toBe(false);
+  });
+
+  it('should treat an all-passed shard carrying any other error as a real failure', () => {
+    const output = birpcNoiseOutput.replace(
+      'Error: [vitest-worker]: Timeout calling "onTaskUpdate"',
+      'Error: connect ECONNREFUSED 127.0.0.1:5432',
+    );
+
+    expect(isBirpcNoiseOnlyFailure({ output, isCI: false })).toBe(false);
+  });
+
+  it('should treat an all-passed shard with no reported error as a real failure', () => {
+    const output = [
+      ' Test Files  120 passed (120)',
+      '      Tests  3330 passed (3330)',
+      '   Duration  62.00s',
+    ].join('\n');
+
+    expect(isBirpcNoiseOnlyFailure({ output, isCI: false })).toBe(false);
+  });
+
+  it('should never rescue on CI where the shard has the machine to itself', () => {
+    expect(isBirpcNoiseOnlyFailure({ output: birpcNoiseOutput, isCI: true })).toBe(false);
+  });
+});
+
+describe('birpc noise re-measurement', () => {
+  it('should re-measure a noisy shard once and adopt the re-measured result', async () => {
+    vi.stubEnv('CI', '');
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const attempts = [
+      { code: 1, signal: null, output: birpcNoiseOutput },
+      { code: 0, signal: null, output: '' },
+    ];
+    let attempt = 0;
+    const run = vi.fn(async () => attempts[attempt++]!);
+
+    const code = await runNpmTest(['src/__tests__/config.test.ts'], run);
+
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(code).toBe(0);
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('re-measuring this shard once'));
+  });
+
+  it('should keep the failure when the re-measured shard is noisy again', async () => {
+    vi.stubEnv('CI', '');
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const run = vi.fn(async () => ({ code: 1, signal: null, output: birpcNoiseOutput }));
+
+    const code = await runNpmTest(['src/__tests__/config.test.ts'], run);
+
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(code).toBe(1);
+  });
+
+  it('should not re-measure on CI', async () => {
+    vi.stubEnv('CI', 'true');
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const run = vi.fn(async () => ({ code: 1, signal: null, output: birpcNoiseOutput }));
+
+    const code = await runNpmTest(['src/__tests__/config.test.ts'], run);
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(code).toBe(1);
   });
 });
 
