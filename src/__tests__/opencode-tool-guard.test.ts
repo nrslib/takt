@@ -579,14 +579,40 @@ describe('OpenCode guard suite', () => {
     suite.stopCall();
   });
 
-  it('object でない part を持つ message.part.updated は tool part として読まない', () => {
-    for (const part of [undefined, null, 'tool', 42]) {
-      const event = {
-        type: 'message.part.updated',
-        properties: { sessionID: 'session-1', part },
-      } as OpenCodeStreamEvent;
-      expect(readOpenCodeToolPart(event)).toBeUndefined();
-    }
+  it.each([
+    ['object でない part', undefined],
+    ['null の part', null],
+    ['文字列の part', 'tool'],
+    ['state を欠く tool part', { type: 'tool', tool: 'bash', callID: 'call-1' }],
+    ['state が null の tool part', { type: 'tool', tool: 'bash', callID: 'call-1', state: null }],
+    ['status を欠く tool part', {
+      type: 'tool',
+      tool: 'bash',
+      callID: 'call-1',
+      state: { input: {} },
+    }],
+    ['tool 名を欠く tool part', {
+      type: 'tool',
+      callID: 'call-1',
+      state: { status: 'running', input: {} },
+    }],
+    ['呼び出し識別子を欠く tool part', {
+      type: 'tool',
+      tool: 'bash',
+      state: { status: 'running', input: {} },
+    }],
+  ])('%s は tool part として読まない', (_label, part) => {
+    const event = {
+      type: 'message.part.updated',
+      properties: { sessionID: 'session-1', part },
+    } as OpenCodeStreamEvent;
+
+    expect(readOpenCodeToolPart(event)).toBeUndefined();
+  });
+
+  it('必要なフィールドが揃った tool part は読み取れる', () => {
+    expect(readOpenCodeToolPart(runningTool('call-1', { command: 'ls' })))
+      .toMatchObject({ type: 'tool', tool: 'bash', callID: 'call-1' });
   });
 
   it('idle-timeout の in-flight は attempt 境界で持ち越さない', () => {

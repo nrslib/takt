@@ -1,12 +1,21 @@
-import type {
-  OpenCodePart,
-  OpenCodeStreamEvent,
-  OpenCodeToolPart,
-} from '../OpenCodeStreamHandler.js';
+import type { OpenCodeStreamEvent, OpenCodeToolPart } from '../OpenCodeStreamHandler.js';
 
 export interface OpenCodeToolRejection {
   tool: string;
   error: string;
+}
+
+/**
+ * 下流（ledger / guard）が無条件に触るフィールドだけを検証する。sessionID は
+ * イベント側にしか載らない場合があるため要求しない（キー生成にしか使わない）。
+ */
+function isOpenCodeToolPart(part: object): part is OpenCodeToolPart {
+  const candidate = part as Partial<OpenCodeToolPart>;
+  if (candidate.type !== 'tool' || typeof candidate.tool !== 'string') return false;
+  if (typeof candidate.callID !== 'string' && typeof candidate.id !== 'string') return false;
+  const state: unknown = candidate.state;
+  if (typeof state !== 'object' || state === null) return false;
+  return typeof (state as { status?: unknown }).status === 'string';
 }
 
 export function readOpenCodeToolPart(event: OpenCodeStreamEvent): OpenCodeToolPart | undefined {
@@ -14,7 +23,7 @@ export function readOpenCodeToolPart(event: OpenCodeStreamEvent): OpenCodeToolPa
   // part は provider から来る値なので、型に合わない payload でも落ちない。
   const part: unknown = event.properties.part;
   if (typeof part !== 'object' || part === null) return undefined;
-  return (part as OpenCodePart).type === 'tool' ? (part as OpenCodeToolPart) : undefined;
+  return isOpenCodeToolPart(part) ? part : undefined;
 }
 
 /**
