@@ -1012,7 +1012,7 @@ steps:
   });
 
   it('should return interactiveMode for each valid mode value', () => {
-    for (const mode of ['assistant', 'persona', 'quiet', 'passthrough'] as const) {
+    for (const mode of ['assistant', 'grill-me', 'persona', 'quiet', 'passthrough'] as const) {
       const workflowYaml = `name: test-${mode}
 initial_step: step1
 max_steps: 1

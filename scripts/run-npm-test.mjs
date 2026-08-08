@@ -3,6 +3,8 @@
 import { basename, isAbsolute, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
+  heavyParallelIntegrationTestFiles,
+  lightIntegrationTestFiles,
   parallelIntegrationTestFiles,
   serialGitTestFiles,
   serialWorkflowTestFiles,
@@ -13,7 +15,7 @@ import { isBirpcNoiseOnlyFailure } from './vitest-birpc-noise.mjs';
 
 const UNIT_SHARDS = ['1/4', '2/4', '3/4', '4/4'];
 const NO_ARG_UNIT_RUN_OPTIONS = ['--maxWorkers=1'];
-const INTEGRATION_NOTICE = '[takt] Fast unit gate only: integration tests are excluded. Run "npm run test:it" when the changed area crosses process, Git, or workflow-engine boundaries; "npm run check:release" runs it after the 4 shards.';
+const INTEGRATION_NOTICE = '[takt] Fast unit gate only. After implementation run "npm run test:it" for light integration coverage. If you add or change an integration test, run the classification contract by itself with "npm test -- src/__tests__/releaseVerificationWiring.test.ts". Pull requests and "npm run check:release" run heavy integration coverage too. If you add or change a heavy integration test, run that file directly with "npm test -- <test-file>" before handoff.';
 const VITEST_OPTIONS_WITH_REQUIRED_VALUE = new Set([
   '-c',
   '-r',
@@ -77,9 +79,10 @@ export function selectNpmTestRuns(args) {
   }
   return [
     buildTargetedRun('test:unit:parallel', targets.shared, targets.unit),
-    buildTargetedRun('test:it:parallel', targets.shared, targets.integration),
-    buildTargetedRun('test:it:serial:git', targets.shared, targets.serialGit),
-    buildTargetedRun('test:it:serial:workflow', targets.shared, targets.serialWorkflow),
+    buildTargetedRun('test:it:light', targets.shared, targets.lightIntegration),
+    buildTargetedRun('test:it:heavy:parallel', targets.shared, targets.heavyIntegration),
+    buildTargetedRun('test:it:heavy:serial:git', targets.shared, targets.serialGit),
+    buildTargetedRun('test:it:heavy:serial:workflow', targets.shared, targets.serialWorkflow),
   ].filter((run) => run !== undefined);
 }
 
@@ -90,7 +93,8 @@ function buildDefaultRuns(shared) {
 
 function hasExplicitTargets(targets) {
   return targets.unit.length > 0
-    || targets.integration.length > 0
+    || targets.lightIntegration.length > 0
+    || targets.heavyIntegration.length > 0
     || targets.serialGit.length > 0
     || targets.serialWorkflow.length > 0;
 }
@@ -98,7 +102,8 @@ function hasExplicitTargets(targets) {
 function splitTestTargets(args) {
   const shared = [];
   const unit = [];
-  const integration = [];
+  const lightIntegration = [];
+  const heavyIntegration = [];
   const serialGit = [];
   const serialWorkflow = [];
 
@@ -122,14 +127,16 @@ function splitTestTargets(args) {
       serialGit.push(normalizeTestTarget(arg));
     } else if (isSerialWorkflowTarget(arg)) {
       serialWorkflow.push(normalizeTestTarget(arg));
-    } else if (isIntegrationTestTarget(arg)) {
-      integration.push(normalizeTestTarget(arg));
+    } else if (isHeavyIntegrationTestTarget(arg)) {
+      heavyIntegration.push(normalizeTestTarget(arg));
+    } else if (isLightIntegrationTestTarget(arg)) {
+      lightIntegration.push(normalizeTestTarget(arg));
     } else {
       unit.push(normalizeTestTarget(arg));
     }
   }
 
-  return { shared, unit, integration, serialGit, serialWorkflow };
+  return { shared, unit, lightIntegration, heavyIntegration, serialGit, serialWorkflow };
 }
 
 function buildTargetedRun(script, shared, targets) {
@@ -172,8 +179,13 @@ function isTestFileTarget(arg) {
     || fileName.endsWith('.spec.tsx');
 }
 
-function isIntegrationTestTarget(arg) {
+function isHeavyIntegrationTestTarget(arg) {
   if (arg.startsWith('-')) {
+    return false;
+  }
+
+  const normalizedTarget = normalizeTestTarget(arg);
+  if (lightIntegrationTestFiles.includes(normalizedTarget)) {
     return false;
   }
 
@@ -183,7 +195,14 @@ function isIntegrationTestTarget(arg) {
     || fileName.endsWith('-integration.test.ts')
     || fileName.endsWith('.regression.test.ts')
     || fileName.endsWith('.performance.test.ts')
-    || parallelIntegrationTestFiles.includes(normalizeTestTarget(arg));
+    || heavyParallelIntegrationTestFiles.includes(normalizedTarget);
+}
+
+function isLightIntegrationTestTarget(arg) {
+  if (arg.startsWith('-')) {
+    return false;
+  }
+  return lightIntegrationTestFiles.includes(normalizeTestTarget(arg));
 }
 
 function isSerialGitTarget(arg) {

@@ -18,6 +18,8 @@ export {
   type InteractiveSeedInput,
 } from './interactive.js';
 
+export { getAssistantSessionPersona, type AssistantSessionPersona } from './assistantMode.js';
+
 export { selectInteractiveMode } from './modeSelection.js';
 export { selectRecentSession } from './sessionSelector.js';
 export { passthroughMode } from './passthroughMode.js';

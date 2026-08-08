@@ -10,7 +10,7 @@
  *   /cancel - Cancel and exit
  */
 
-import type { Language } from '../../core/models/index.js';
+import type { AssistantInteractiveMode, Language } from '../../core/models/index.js';
 import type { ProviderType } from '../../infra/providers/index.js';
 import {
   type SessionState,
@@ -41,10 +41,14 @@ import {
 } from './interactiveApplication.js';
 import { type RunSessionContext, formatRunSessionForPrompt } from './runSessionReader.js';
 import type { ImageAttachmentCleanupOwner, InteractiveImageAttachment } from './imageAttachments.js';
+import { getAssistantSessionPersona } from './assistantMode.js';
+
+const GRILL_ME_INTERACTIVE_TOOLS = ['Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch'];
 
 /** Shape of interactive UI text */
 export interface InteractiveUIText {
   intro: string;
+  introGrillMe: string;
   resume: string;
   noConversation: string;
   summarizeFailed: string;
@@ -123,6 +127,7 @@ export function buildSummaryPrompt(
   userNote: string,
   lang: 'en' | 'ja',
   promptContext?: string,
+  gherkin?: boolean,
 ): string;
 export function buildSummaryPrompt(
   history: ConversationMessage[],
@@ -133,16 +138,18 @@ export function buildSummaryPrompt(
   workflowContext?: WorkflowContext,
   sourceContext?: string,
   promptContext?: string,
+  gherkin?: boolean,
 ): string;
 export function buildSummaryPrompt(
   history: ConversationMessage[],
   userNoteOrHasSession: string | boolean,
   lang: 'en' | 'ja',
   promptContextOrNoTranscript?: string,
-  conversationLabel?: string,
+  conversationLabelOrGherkin?: string | boolean,
   workflowContext?: WorkflowContext,
   sourceContext?: string,
   promptContext?: string,
+  gherkin?: boolean,
 ): string {
   if (typeof userNoteOrHasSession === 'boolean') {
     return buildInteractiveSummaryPrompt(
@@ -150,10 +157,11 @@ export function buildSummaryPrompt(
       userNoteOrHasSession,
       lang,
       promptContextOrNoTranscript ?? '',
-      conversationLabel ?? '',
+      typeof conversationLabelOrGherkin === 'string' ? conversationLabelOrGherkin : '',
       workflowContext,
       sourceContext,
       promptContext,
+      gherkin,
     );
   }
 
@@ -162,6 +170,7 @@ export function buildSummaryPrompt(
     userNoteOrHasSession,
     lang,
     promptContextOrNoTranscript,
+    typeof conversationLabelOrGherkin === 'boolean' ? conversationLabelOrGherkin : false,
   );
 }
 
@@ -182,6 +191,8 @@ export interface InteractiveModeOptions {
   provider?: ProviderType;
   /** CLI model override for assistant mode */
   model?: string;
+  /** Assistant conversation behavior. */
+  assistantMode?: AssistantInteractiveMode;
 }
 
 export interface InteractiveSeedInput {
@@ -201,7 +212,8 @@ export async function interactiveMode(
   runSessionContext?: RunSessionContext,
   options?: InteractiveModeOptions,
 ): Promise<InteractiveModeResult> {
-  const baseCtx = initializeSession(cwd, 'interactive', {
+  const assistantMode = options?.assistantMode ?? 'assistant';
+  const baseCtx = initializeSession(cwd, getAssistantSessionPersona(assistantMode), {
     provider: options?.provider,
     model: options?.model,
   });
@@ -216,6 +228,7 @@ export async function interactiveMode(
     : { runTask: '', runWorkflow: '', runStatus: '', runStepLogs: '', runReports: '' };
 
   const systemPrompt = loadTemplate('score_interactive_system_prompt', ctx.lang, {
+    grillMe: assistantMode === 'grill-me',
     hasWorkflowPreview: hasPreview,
     workflowStructure: workflowContext?.workflowStructure ?? '',
     stepDetails: hasPreview ? formatStepPreviews(workflowContext!.stepPreviews!, ctx.lang) : '',
@@ -247,10 +260,13 @@ export async function interactiveMode(
 
   return runConversationLoop(cwd, ctx, {
     systemPrompt,
-    allowedTools: DEFAULT_INTERACTIVE_TOOLS,
+    allowedTools: assistantMode === 'grill-me'
+      ? GRILL_ME_INTERACTIVE_TOOLS
+      : DEFAULT_INTERACTIVE_TOOLS,
+    ...(assistantMode === 'grill-me' ? { permissionMode: 'readonly' as const } : {}),
     transformPrompt: (userMessage: string, sourceContext?: string) =>
       prependSourceContext(ctx.lang, userMessage, sourceContext),
-    introMessage: ui.intro,
+    introMessage: assistantMode === 'grill-me' ? ui.introGrillMe : ui.intro,
     selectAction,
     initialPromptContext: assistantInitContext,
     summaryPromptContext: assistantInitContext,

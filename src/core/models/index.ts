@@ -119,7 +119,12 @@ export * from './config.js';
 export * from './schemas.js';
 
 // Re-export from interactive-mode.ts
-export { INTERACTIVE_MODES, DEFAULT_INTERACTIVE_MODE, type InteractiveMode } from './interactive-mode.js';
+export {
+  INTERACTIVE_MODES,
+  DEFAULT_INTERACTIVE_MODE,
+  type InteractiveMode,
+  type AssistantInteractiveMode,
+} from './interactive-mode.js';
 
 // Re-export from session.ts (functions only, not types)
 export {

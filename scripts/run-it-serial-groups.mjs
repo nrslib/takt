@@ -3,8 +3,8 @@ import { pathToFileURL } from 'node:url';
 import { resolveNpmInvocation } from './npm-invocation.mjs';
 
 const serialIntegrationGroups = Object.freeze([
-  Object.freeze(['test:it:serial:git']),
-  Object.freeze(['test:it:serial:workflow']),
+  Object.freeze(['test:it:heavy:serial:git']),
+  Object.freeze(['test:it:heavy:serial:workflow']),
 ]);
 
 function buildNpmArgs(group, passthroughArgs) {

@@ -35,6 +35,13 @@ describe('getLabel', () => {
     expect(passthroughIntro).not.toContain('/cancel');
   });
 
+  it('returns Grill Me labels with completion guidance', () => {
+    expect(getLabel('interactive.modeSelection.grill-me', 'en')).toBe('Grill Me');
+    expect(getLabel('interactive.modeSelection.grill-me', 'ja')).toBe('Grill Me');
+    expect(getLabel('interactive.ui.introGrillMe', 'en')).toContain('Commands: /go (create instruction & run)');
+    expect(getLabel('interactive.ui.introGrillMe', 'ja')).toContain('コマンド: /go（指示書作成・実行）');
+  });
+
   it('returns English quiet and passthrough intro labels without slash command guidance', () => {
     const quietIntro = getLabel('interactive.ui.introQuiet', 'en');
     const passthroughIntro = getLabel('interactive.ui.introPassthrough', 'en');
@@ -111,6 +118,7 @@ describe('label integrity', () => {
   it('contains all expected interactive UI keys in en', () => {
     const ui = getLabelObject<Record<string, string>>('interactive.ui', 'en');
     expect(ui).toHaveProperty('intro');
+    expect(ui).toHaveProperty('introGrillMe');
     expect(ui).toHaveProperty('introQuiet');
     expect(ui).toHaveProperty('introPassthrough');
     expect(ui).toHaveProperty('resume');
@@ -144,6 +152,7 @@ describe('label integrity', () => {
   it('en and ja have the same key structure', () => {
     const stringKeys = [
       'interactive.ui.intro',
+      'interactive.ui.introGrillMe',
       'interactive.ui.introQuiet',
       'interactive.ui.introPassthrough',
       'interactive.ui.cancelled',

@@ -121,15 +121,28 @@ Project `.takt/` → User `~/.takt/` → Builtin `builtins/{lang}/`
 
 Same-named facets are overridden by higher-priority layers. Customize builtins by overriding in upper layers.
 
-## Testing Patterns
+## Test Layers and Execution Gates
 
-Uses vitest. Test file naming conventions distinguish test types.
+TAKT classifies unit, light integration, heavy integration, and E2E tests by the boundaries they actually cross, not by filename or duration. A test that starts a real child process is still heavy integration rather than E2E when it calls a local fake CLI from an internal client instead of entering through a user-facing command.
 
-| Prefix | Type | Content |
-|--------|------|---------|
-| None | Unit test | Individual function/class verification |
-| `it-` | Integration test | Workflow execution simulation |
-| `engine-` | Engine test | WorkflowEngine scenario verification |
+| Layer | Boundary | Standard Gate |
+|-------|----------|---------------|
+| Unit | Individual function or class; direct dependencies are test doubles, with no real process, Git, filesystem, SQLite, or workflow engine | `npm test` |
+| Light integration | Real filesystem, SQLite, bounded storage, or multiple production components, without resource-heavy process or engine execution | `npm run test:it` |
+| Heavy integration | Real child process, Git, complete WorkflowEngine or TeamLeader execution, or a measured resource-heavy case requiring serial execution | `npm run test:it:heavy` |
+| E2E | Runs the application from a user-facing entry point such as the CLI and observes user-visible results | Provider-specific E2E gate |
+
+### Development Execution Order
+
+| State | Execution |
+|-------|-----------|
+| During implementation | Repeat the unit gate |
+| After implementation | Run the light integration gate after the unit gate |
+| Added or changed an integration test | Run the `releaseVerificationWiring.test.ts` classification contract by itself |
+| Added or changed a heavy integration test | Run the changed file yourself as a target instead of waiting for the full heavy suite |
+| Pull request or release | Run the complete light and heavy integration suites |
+
+Heavy integration runners use one worker to avoid process, Git, and synchronous I/O contention. Full local execution is serial, while pull-request CI splits heavy parallel integration across four isolated runners and isolates each serial group on its own runner. `npm test -- <test-file>` routes a classified target to the corresponding runner. The owner of a new or changed heavy integration test must leave this targeted run as completion evidence and must not delegate its first execution to the pull-request-wide heavy gate. `npm run check:release` runs unit, light integration, heavy integration, prompt evaluation, and E2E in order.
 
 ### Mock Provider
 

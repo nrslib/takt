@@ -123,6 +123,74 @@ describe('interactiveMode', () => {
     );
   });
 
+  it('should set up the Grill Me persona when selected', async () => {
+    setupRawStdin(toRawInputs(['design an approval flow', '/cancel']));
+    const { provider } = createMockProvider(['Which roles may approve?']);
+    mockGetProvider.mockReturnValue(provider as ReturnType<typeof getProvider>);
+
+    await interactiveMode('/project', undefined, undefined, undefined, undefined, {
+      assistantMode: 'grill-me',
+    });
+
+    expect(provider.setup).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'grill-me-interactive',
+    }));
+  });
+
+  it('should restrict Grill Me provider calls to read-only tools', async () => {
+    setupRawStdin(toRawInputs(['design an approval flow', '/cancel']));
+    const { provider } = createMockProvider(['Which roles may approve?']);
+    mockGetProvider.mockReturnValue(provider as ReturnType<typeof getProvider>);
+
+    await interactiveMode('/project', undefined, undefined, undefined, undefined, {
+      assistantMode: 'grill-me',
+    });
+
+    expect((provider as { _call: ReturnType<typeof vi.fn> })._call).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        allowedTools: ['Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch'],
+      }),
+    );
+  });
+
+  it('should propagate readonly permission mode for Grill Me calls', async () => {
+    setupRawStdin(toRawInputs(['design an approval flow', '/cancel']));
+    const { provider, capture } = createMockProvider(['Which roles may approve?']);
+    mockGetProvider.mockReturnValue(provider as ReturnType<typeof getProvider>);
+
+    await interactiveMode('/project', undefined, undefined, undefined, undefined, {
+      assistantMode: 'grill-me',
+    });
+
+    expect(capture.permissionModes).toEqual(['readonly']);
+  });
+
+  it('should show the Grill Me intro when selected', async () => {
+    setupRawStdin(toRawInputs(['/cancel']));
+    setupMockProvider([]);
+
+    await interactiveMode('/project', undefined, undefined, undefined, undefined, {
+      assistantMode: 'grill-me',
+    });
+
+    expect(mockInfo).toHaveBeenCalledWith(getLabel('interactive.ui.introGrillMe', 'en'));
+  });
+
+  it('should return action=execute on /go after a Grill Me conversation', async () => {
+    setupRawStdin(toRawInputs(['design an approval flow', '/go']));
+    setupMockProvider(['Which roles may approve?', 'Require explicit approval from repository maintainers.']);
+
+    const result = await interactiveMode('/project', undefined, undefined, undefined, undefined, {
+      assistantMode: 'grill-me',
+    });
+
+    expect(result).toEqual({
+      action: 'execute',
+      task: 'Require explicit approval from repository maintainers.',
+    });
+  });
+
   it('should return action=execute with task on /go after conversation', async () => {
     // Given
     setupRawStdin(toRawInputs(['add auth feature', '/go']));

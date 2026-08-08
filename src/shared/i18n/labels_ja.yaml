@@ -12,6 +12,7 @@ interactive:
   noTranscript: "（ローカル履歴なし。現在のセッション文脈を要約してください。）"
   ui:
     intro: "対話モード - タスク内容を入力してください。コマンド: /go（指示書作成・実行）, /play（即実行）, /accept（最新のアシスタント発言を採用）, /paste-image（クリップボード画像を添付）, /resume（セッション読込）, /cancel（終了）"
+    introGrillMe: "Grill Meモード - 要件の判断分岐を1問ずつ掘り下げます。要件が固まるとアシスタントが /go を案内します。コマンド: /go（指示書作成・実行）, /play（即実行）, /accept（最新のアシスタント発言を採用）, /paste-image（クリップボード画像を添付）, /resume（セッション読込）, /cancel（終了）"
     introQuiet: "クワイエットモード - タスク内容を入力してください。追加質問なしで指示書を生成します。"
     introPassthrough: "パススルーモード - タスク内容を入力してください。入力内容をそのまま実行します。"
     resume: "前回のセッションを再開します"
@@ -38,6 +39,8 @@ interactive:
     prompt: "対話モードを選択してください:"
     assistant: "アシスタント"
     assistantDescription: "確認質問をしてから指示書を作成"
+    grill-me: "Grill Me"
+    grill-meDescription: "推奨案付きの質問を1問ずつ行い、要件を固める"
     persona: "ペルソナ"
     personaDescription: "先頭エージェントのペルソナで対話"
     quiet: "クワイエット"

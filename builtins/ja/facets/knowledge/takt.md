@@ -121,15 +121,28 @@ compose(facets, options) → ComposedPrompt { systemPrompt, userMessage }
 
 同名ファセットは上位が優先。ビルトインのカスタマイズは上位層でオーバーライドする。
 
-## テストパターン
+## テストレイヤーと実行ゲート
 
-vitest を使用。テストファイルの命名規約で種別を区別する。
+TAKT は、テスト名や所要時間ではなく実際にまたぐ境界で unit、軽い IT、重い IT、E2E を分類する。実子プロセスを起動しても、利用者の入口ではなく内部 client からローカルの偽 CLI を呼ぶ検証なら E2E ではなく重い IT である。
 
-| プレフィックス | 種別 | 内容 |
-|--------------|------|------|
-| なし | ユニットテスト | 個別関数・クラスの検証 |
-| `it-` | 統合テスト | ワークフロー実行のシミュレーション |
-| `engine-` | エンジンテスト | WorkflowEngine シナリオ検証 |
+| レイヤー | 境界 | 標準ゲート |
+|---------|------|-----------|
+| unit | 個別関数・クラス。直接依存を test double に置き換え、実 process・Git・filesystem・SQLite・workflow engine を使わない | `npm test` |
+| 軽い IT | 実 filesystem・SQLite・bounded storage、または複数の本番コンポーネントを結合するが、高負荷な process / engine 実行を伴わない | `npm run test:it` |
+| 重い IT | 実 child process・Git・完全な WorkflowEngine / TeamLeader、または計測上 serial 実行が必要な高負荷ケース | `npm run test:it:heavy` |
+| E2E | 利用者が使う CLI などの公開入口からアプリケーション全体を実行し、利用者から見える結果を観測する | provider 別 E2E gate |
+
+### 開発時の実行順
+
+| 状態 | 実行 |
+|------|------|
+| 実装中 | unit gate を反復する |
+| 実装完了時 | unit gate の後に軽い IT gate を実行する |
+| IT を追加・変更した | 分類契約テスト `releaseVerificationWiring.test.ts` を単体実行する |
+| 重い IT を追加・変更した | 全重い IT を待たず、変更したファイルを target 指定で自分で実行する |
+| Pull Request / release | 軽い IT と重い IT の全件を実行する |
+
+重い IT runner は、process・Git・同期 I/O の競合を避けるため1 workerで動く。ローカルの全件実行は直列であり、PR CI は重い parallel IT を独立 runner の4シャードへ分割し、serial groupも別 runnerへ分離する。`npm test -- <test-file>` は分類済みの対象を対応 runner へ送る。重い IT を追加・変更した担当者は、この target 実行を完了証拠として残し、PR での全重い IT だけに初回検証を委ねない。`npm run check:release` は unit、軽い IT、重い IT、prompt evaluation、E2E を順に実行する。
 
 ### Mock プロバイダー
 

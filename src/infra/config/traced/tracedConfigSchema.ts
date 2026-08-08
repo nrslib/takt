@@ -48,6 +48,7 @@ const PROJECT_TRACKED_KEYS = [
   'pipeline.pr_body_template',
   'assistant',
   'assistant.init_files',
+  'assistant.gherkin',
   'takt_providers',
   'persona_providers',
   'provider_routing',

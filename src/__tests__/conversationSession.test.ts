@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const {
   mockCallAIWithRetry,
@@ -19,9 +22,9 @@ vi.mock('../features/interactive/interactiveApplication.js', async (importOrigin
 
 import { createConversationSession } from '../features/interactive/conversationSession.js';
 
-function createSession() {
+function createSession(cwd = '/repo') {
   return createConversationSession({
-    cwd: '/repo',
+    cwd,
     ctx: {
       provider: {
         setup: vi.fn(),
@@ -142,6 +145,7 @@ describe('conversation session application API', () => {
       'include progress updates',
       'en',
       'summary context',
+      false,
     );
     expect(result).toEqual({
       kind: 'workflow_execution_requested',
@@ -152,6 +156,31 @@ describe('conversation session application API', () => {
       },
       sessionId: 'provider-session-2',
     });
+  });
+
+  it.each([
+    ['unset', undefined, false],
+    ['enabled', true, true],
+    ['disabled', false, false],
+  ] as const)('should pass %s project Gherkin mode to ACP task instruction generation', async (_label, configured, expected) => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-gherkin-acp-'));
+    if (configured !== undefined) {
+      mkdirSync(join(projectDir, '.takt'), { recursive: true });
+      writeFileSync(
+        join(projectDir, '.takt', 'config.yaml'),
+        ['assistant:', `  gherkin: ${configured}`].join('\n'),
+        'utf-8',
+      );
+    }
+    const session = createSession(projectDir);
+
+    try {
+      await session.createTaskInstruction({ userNote: 'implement ACP support' });
+
+      expect(mockBuildSummaryPrompt.mock.calls[0]?.[4]).toBe(expected);
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
   });
 
   it('should create a task instruction through the semantic API without a slash command', async () => {
@@ -177,6 +206,7 @@ describe('conversation session application API', () => {
       'worktree で実行できるように積んで',
       'en',
       'summary context',
+      false,
     );
     expect(mockCallAIWithRetry).toHaveBeenCalledWith(
       'summary prompt',
@@ -188,6 +218,7 @@ describe('conversation session application API', () => {
       }),
       expect.objectContaining({
         abortSignal: abortController.signal,
+        persistSession: false,
       }),
     );
     expect(result).toEqual({
@@ -376,6 +407,7 @@ describe('conversation session application API', () => {
       'summarize',
       'en',
       'summary context',
+      false,
     );
   });
 });
