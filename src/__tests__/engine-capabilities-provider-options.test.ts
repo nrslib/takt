@@ -297,4 +297,40 @@ describe('capabilities reach the final provider call', () => {
     });
     expect(byName.has('pool-unselected')).toBe(false);
   });
+
+  it('should pass the merged list options including skills to runAgent when a step declares a capabilities list', async () => {
+    writeFileSync(
+      join(tmpDir, 'provider-options', 'skills-grant.yaml'),
+      'codex:\n  skills:\n    repo: true\n    user: true\n',
+    );
+    const config = normalizeWorkflowConfig(
+      {
+        name: 'wf',
+        max_steps: 2,
+        initial_step: 'implement',
+        steps: [
+          {
+            name: 'implement',
+            instruction: '{task}',
+            capabilities: ['provider-options/writer.yaml', 'provider-options/skills-grant.yaml'],
+            rules: [{ condition: 'done', next: 'COMPLETE' }],
+          },
+        ],
+      },
+      tmpDir,
+    );
+    mockRunAgentSequence([makeResponse({ persona: 'agent', content: 'done' })]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
+
+    const state = await new WorkflowEngine(config, tmpDir, 'task', {
+      projectCwd: tmpDir,
+      provider: 'claude',
+    }).run();
+
+    expect(state.status).toBe('completed');
+    expect(agentOptionsOfCall(0).providerOptions).toEqual({
+      claude: { allowedTools: ['Read', 'Edit', 'Write'] },
+      codex: { skills: { repo: true, user: true } },
+    });
+  });
 });
