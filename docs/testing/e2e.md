@@ -298,6 +298,8 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
   - 目的: 実 GitHub 上の fixture リポジトリに対する `repertoire add` の取得、lock 記録、manifest 欠落などのエラー系を確認。
 - Report file output（`e2e/specs/report-file-output.e2e.ts`）
   - 目的: report が `.takt/runs/*/reports` に期待内容で出力されることを確認。
+- structured_output + report output contract（`e2e/specs/structured-output-report.e2e.ts`）
+  - 目的: `structured_output` と `output_contracts.report` を併用した step で、report file が Phase 2 の Markdown（Phase 1 の JSON ではない）になり、`when(structured.<step>.…)` の遷移が効くことを確認（issue #1242 の組合せをリリースゲートで踏む）。
 - Resume report inheritance（`e2e/specs/resume-report-inheritance.e2e.ts`）
   - 目的: resume 時に中断元 run の report スナップショットが引き継がれることを確認。
 - SIGINT during AI wait（`e2e/specs/run-sigint-ai-wait.e2e.ts`）

@@ -647,7 +647,11 @@ describe('OptionsBuilder.buildResumeOptions', () => {
   it('never requests the step structured output on report/status phases', () => {
     // Given: structured_output は Phase 1 の遷移判定用。Phase 2 で要求すると provider が
     // スキーマどおりの JSON を返し、それが report file になる（issue #1242）
+    // report fallback は primary が opencode のときだけ成立するので、fallback 分岐まで
+    // 到達させるために step provider を opencode にする
     const step = createStep({
+      provider: 'opencode',
+      model: 'opencode/qwen3-coder-next',
       structuredOutput: {
         schemaRef: 'researcher-status',
         schema: {
@@ -674,9 +678,15 @@ describe('OptionsBuilder.buildResumeOptions', () => {
     });
 
     // Then
+    // fallback 分岐が実際に実行されたことを先に固定する。optional chaining のままだと
+    // buildFallbackReportOptions が undefined を返しても outputSchema の検証が通ってしまう。
+    if (fallbackOptions === undefined) {
+      throw new Error('Expected fallback report options');
+    }
+    expect(fallbackOptions.resolvedProvider).toBe('mock');
     expect(resumeOptions.outputSchema).toBeUndefined();
     expect(newSessionOptions.outputSchema).toBeUndefined();
-    expect(fallbackOptions?.outputSchema).toBeUndefined();
+    expect(fallbackOptions.outputSchema).toBeUndefined();
   });
 
   it('removes report/status phase maxTurns when provider does not support it', () => {

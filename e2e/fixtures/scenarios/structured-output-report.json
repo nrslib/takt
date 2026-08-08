@@ -1,0 +1,11 @@
+[
+  {
+    "status": "done",
+    "content": "{\"status\":\"COMPLETE\"}",
+    "structured_output": { "status": "COMPLETE" }
+  },
+  {
+    "status": "done",
+    "content": "# Research Result (v2)\n\n## Summary\n\nstructured_output plus Markdown report reproduction test."
+  }
+]

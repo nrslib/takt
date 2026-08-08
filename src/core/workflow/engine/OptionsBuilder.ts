@@ -342,6 +342,12 @@ export class OptionsBuilder {
     return baseOptions;
   }
 
+  /**
+   * report / status phase 用の base options。capability に依存する値（outputSchema、
+   * allowedTools、mcpServers）を一切載せないので、provider が未解決のままでも安全に
+   * 組み立てられる。capability 検査は Phase 1 の buildAgentOptions と
+   * StepExecutor の structured output 実行判定に残る。
+   */
   private buildReadonlyPhaseBaseOptions(
     step: WorkflowStep,
     mergedProviderOptions?: StepProviderOptions,

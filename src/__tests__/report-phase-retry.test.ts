@@ -980,6 +980,11 @@ describe('runReportPhase retry with new session', () => {
     }
   });
 
+  // #1242 で Phase 2 が step の structured_output スキーマを要求しなくなったため、
+  // #1203 の「スキーマを要求した attempt に限り疑似ツールを許可する」条件分岐は
+  // 到達不能になり削除した（許可・拒否を出し分けていた2テストも一緒に削除）。
+  // 汚染セッション由来の StructuredOutput 拒否はこの無条件拒否テストが包含する。
+  // 将来 Phase 2 へ再びスキーマを渡す場合は、この前提から見直すこと。
   it('should reject the provider-native StructuredOutput tool in phase 2', async () => {
     // Given: report phase は構造化出力を要求しないので StructuredOutput は汚染セッション由来の違反
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
