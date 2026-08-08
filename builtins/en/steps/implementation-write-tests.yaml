@@ -14,8 +14,7 @@ policy:
   - testing
 knowledge:
   $param: test_knowledge
-provider_options:
-  extends: edit
+capabilities: edit
 required_permission_mode: edit
 instruction: write-tests-first
 output_contracts:

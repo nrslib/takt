@@ -1,35 +1,23 @@
 name: deep-research
 description: Deep research workflow - discovery-driven investigation that follows emerging questions with multi-perspective analysis
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
 max_steps: 15
 initial_step: plan
 steps:
   - name: plan
+    capabilities: readonly
     tags:
       - plan
     persona: research-planner
     policy: research
     knowledge: research
     instruction: research-plan
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - WebSearch
-          - WebFetch
     rules:
       - condition: Planning is complete
         next: dig
       - condition: Insufficient information to create a plan
         next: ABORT
   - name: dig
+    capabilities: edit
     tags:
       - plan
     persona: research-digger
@@ -49,22 +37,13 @@ steps:
         - Grep
         - WebSearch
         - WebFetch
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Write
-          - Bash
-          - Glob
-          - Grep
-          - WebSearch
-          - WebFetch
     rules:
       - condition: Research is complete
         next: analyze
       - condition: Unable to conduct research
         next: ABORT
   - name: analyze
+    capabilities: edit
     tags:
       - plan
     persona: research-analyzer
@@ -72,21 +51,13 @@ steps:
     knowledge: research
     instruction: research-analyze
     edit: true
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Write
-          - Glob
-          - Grep
-          - WebSearch
-          - WebFetch
     rules:
       - condition: New questions exist and additional research is needed
         next: dig
       - condition: Sufficiently investigated
         next: supervise
   - name: supervise
+    capabilities: readonly
     tags:
       - review
       - supervise
@@ -94,14 +65,6 @@ steps:
     policy: research
     knowledge: research
     instruction: research-supervise
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - WebSearch
-          - WebFetch
     output_contracts:
       report:
         - name: research-report.md

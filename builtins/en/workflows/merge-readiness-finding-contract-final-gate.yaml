@@ -16,12 +16,7 @@ subworkflow:
       default:
         - architecture
         - takt
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
+capabilities: readonly
 initial_step: merge-readiness-review
 steps:
   - name: merge-readiness-review

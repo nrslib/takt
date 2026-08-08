@@ -6,6 +6,7 @@ params:
     type: facet_ref[]
     facet_kind: knowledge
 name: final-gate
+capabilities: readonly
 tags:
   - review
   - final-gate
@@ -18,8 +19,6 @@ policy:
   - $param: merge_readiness_policy
 knowledge:
   $param: review_knowledge
-provider_options:
-  extends: review-readonly
 pass_previous_response: false
 instruction: supervise-merge-readiness
 output_contracts:

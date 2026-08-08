@@ -1,18 +1,11 @@
 name: simple-mini
 description: A lightweight development workflow that trusts a capable model's judgment (plan → implement → review ⇄ fix → COMPLETE). It omits dedicated test writing and final supervision while letting the model select relevant available skills.
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-      skills:
-        repo: true
-        user: true
-    opencode:
-      network_access: true
+capabilities: [readonly, enable-skills]
 max_steps: 20
 initial_step: plan
 steps:
   - name: plan
+    capabilities: [readonly, enable-skills]
     uses: development-core-plan
     with:
       plan_policy: [design-planning]
@@ -32,6 +25,7 @@ steps:
           - {Question 2}
 
   - name: implement
+    capabilities: [edit, enable-skills]
     uses: development-core-implement
     with:
       development_policy: [coding, testing]
@@ -63,8 +57,6 @@ steps:
       - architecture
       - unit-testing
       - e2e-testing
-    provider_options:
-      extends: review-readonly
     pass_previous_response: false
     instruction: simple-review-coding
     output_contracts:

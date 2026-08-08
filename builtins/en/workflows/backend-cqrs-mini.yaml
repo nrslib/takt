@@ -1,11 +1,5 @@
 name: backend-cqrs-mini
 description: CQRS+ES-focused mini development workflow (plan -> implement -> parallel review -> fix if needed -> complete)
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
 max_steps: 21
 initial_step: develop
 steps:

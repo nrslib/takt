@@ -1,11 +1,5 @@
 name: review-fix-default
 description: Multi-perspective review + fix loop (architecture, security, testing, and coding in parallel, followed by merge-readiness review and then supervision)
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
 max_steps: 30
 initial_step: gather
 loop_monitors:
@@ -43,6 +37,7 @@ steps:
       - review
     parallel:
       - name: arch-review
+        capabilities: readonly
         tags:
           - review
         edit: false
@@ -51,15 +46,6 @@ steps:
           - contract-change
           - review
         knowledge: architecture
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
         instruction: review-arch
         output_contracts:
           report:
@@ -70,6 +56,7 @@ steps:
           - condition: needs_fix
 
       - name: security-review
+        capabilities: readonly
         tags:
           - review
         edit: false
@@ -78,15 +65,6 @@ steps:
           - contract-change
           - review
         knowledge: security
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
         instruction: review-security
         output_contracts:
           report:
@@ -97,6 +75,7 @@ steps:
           - condition: needs_fix
 
       - name: testing-review
+        capabilities: readonly
         tags:
           - review
         edit: false
@@ -108,15 +87,6 @@ steps:
         knowledge:
           - unit-testing
           - e2e-testing
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
         instruction: review-test
         output_contracts:
           report:
@@ -127,6 +97,7 @@ steps:
           - condition: needs_fix
 
       - name: coding-review
+        capabilities: readonly
         tags:
           - review
         edit: false
@@ -135,15 +106,6 @@ steps:
           - contract-change
           - review
           - coding
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
         instruction: review-coding
         output_contracts:
           report:

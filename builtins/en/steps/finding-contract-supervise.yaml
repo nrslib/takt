@@ -3,6 +3,7 @@ params:
     type: facet_ref[]
     facet_kind: knowledge
 name: supervise
+capabilities: readonly
 tags: [review, final-gate, supervise]
 edit: false
 session: compact

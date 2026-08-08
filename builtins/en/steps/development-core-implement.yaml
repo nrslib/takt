@@ -9,6 +9,7 @@ params:
     type: facet_ref
     facet_kind: instruction
 name: implement
+capabilities: edit
 tags:
   - coding
 edit: true
@@ -18,8 +19,6 @@ policy:
   - $param: development_policy
 knowledge:
   $param: development_knowledge
-provider_options:
-  extends: edit
 required_permission_mode: edit
 instruction:
   $param: implementation_instruction

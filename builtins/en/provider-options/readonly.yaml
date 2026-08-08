@@ -1,3 +1,4 @@
+# Inspect the repository without changing it: read, search, shell, and web lookup.
 claude:
   allowed_tools:
     - Read
@@ -14,3 +15,6 @@ opencode:
     - bash
     - websearch
     - webfetch
+  network_access: true
+codex:
+  network_access: true

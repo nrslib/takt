@@ -33,12 +33,6 @@ subworkflow:
       type: facet_ref[]
       facet_kind: policy
       default: [coding, testing, review]
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
 initial_step: initial-reviewers
 loop_monitors:
   - cycle: [fix-plan, fix, reviewers]
