@@ -37,6 +37,7 @@ import {
   createSessionLogMeta,
 } from './conversationLogMeta.js';
 import { prependInitialPromptContext } from './promptSections.js';
+import type { PermissionMode } from '../../core/models/index.js';
 import {
   buildInteractiveResultWithAttachments,
   cleanupImageAttachmentStore,
@@ -97,6 +98,8 @@ export interface ConversationStrategy {
   systemPrompt: string;
   /** Allowed tools for AI calls */
   allowedTools: string[];
+  /** Permission mode for AI calls. */
+  permissionMode?: PermissionMode;
   /** Transform user message before sending to AI (e.g., policy injection) */
   transformPrompt: (userMessage: string, sourceContext?: string) => string;
   /** Intro message displayed at start */
@@ -155,7 +158,12 @@ export async function runConversationLoop(
         return null;
       }
       const { result, sessionId: newSessionId } = await callAIWithRetry(
-        prompt, sysPrompt, tools, cwd, { ...ctx, sessionId }, { imageAttachments },
+        prompt,
+        sysPrompt,
+        tools,
+        cwd,
+        { ...ctx, sessionId },
+        { imageAttachments, permissionMode: strategy.permissionMode },
       );
       sessionId = newSessionId;
       return result;
@@ -306,7 +314,11 @@ export async function runConversationLoop(
           const { result: summaryResult } = await callAIWithRetry(
             summaryPrompt, summaryPrompt, strategy.allowedTools, cwd,
             { ...ctx, sessionId: undefined },
-            { imageAttachments: summaryImageAttachments },
+            {
+              imageAttachments: summaryImageAttachments,
+              permissionMode: strategy.permissionMode,
+              persistSession: false,
+            },
           );
           if (!summaryResult) {
             info(ui.summarizeFailed);

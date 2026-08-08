@@ -45,7 +45,7 @@ takt hello
 ### フロー
 
 1. workflow を選択
-2. インタラクティブモードを選択（assistant / persona / quiet / passthrough）
+2. インタラクティブモードを選択（assistant / grill-me / persona / quiet / passthrough）
 3. AI との会話でタスク内容を精緻化
 4. `/go` でタスク指示を確定（`/go 追加の指示` のように追記も可能）、または `/play <task>` でタスクを即座に実行
 5. 実行（workflow 実行、PR 作成）
@@ -55,6 +55,7 @@ takt hello
 | モード | 説明 |
 |--------|------|
 | `assistant` | デフォルト。AI がタスク指示を生成する前に明確化のための質問を行う。 |
+| `grill-me` | 推奨案付きの質問を1問ずつ行い、重要な判断分岐を解決する。要件が固まると `/go` を案内する。 |
 | `persona` | 最初の step の persona と会話（そのシステムプロンプトとツールを使用）。 |
 | `quiet` | 質問なしでタスク指示を生成（ベストエフォート）。 |
 | `passthrough` | AI 処理なしでユーザー入力をそのままタスクテキストとして使用。 |

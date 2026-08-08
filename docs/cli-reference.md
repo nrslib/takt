@@ -45,7 +45,7 @@ takt hello
 ### Flow
 
 1. Select workflow
-2. Select interactive mode (assistant / persona / quiet / passthrough)
+2. Select interactive mode (assistant / grill-me / persona / quiet / passthrough)
 3. Refine task content through conversation with AI
 4. Finalize task instructions with `/go` (you can also add additional instructions like `/go additional instructions`), or use `/play <task>` to execute a task immediately
 5. Execute (run workflow, create PR)
@@ -55,6 +55,7 @@ takt hello
 | Mode | Description |
 |------|-------------|
 | `assistant` | Default. AI asks clarifying questions before generating task instructions. |
+| `grill-me` | Resolves material decision branches one recommended question at a time, then suggests `/go` when the requirements are ready. |
 | `persona` | Conversation with the first step's persona (uses its system prompt and tools). |
 | `quiet` | Generates task instructions without asking questions (best-effort). |
 | `passthrough` | Passes user input directly as task text without AI processing. |

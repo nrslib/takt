@@ -45,6 +45,8 @@ interface CallAIWithRetryOptions {
   permissionMode?: PermissionMode;
   outputMode?: 'terminal' | 'silent';
   abortSignal?: AbortSignal;
+  /** Persist a returned session ID for later resume. Defaults to true. */
+  persistSession?: boolean;
 }
 
 /**
@@ -144,7 +146,9 @@ export async function callAIWithRetry(
       retryDisplay?.flush();
       if (retry.sessionId) {
         sessionId = retry.sessionId;
-        updatePersonaSession(cwd, ctx.personaName, sessionId, ctx.providerType);
+        if (options.persistSession !== false) {
+          updatePersonaSession(cwd, ctx.personaName, sessionId, ctx.providerType);
+        }
       }
       return {
         result: { content: retry.content, sessionId: retry.sessionId, success: retry.status !== 'blocked' && retry.status !== 'error' },
@@ -154,7 +158,9 @@ export async function callAIWithRetry(
 
     if (response.sessionId) {
       sessionId = response.sessionId;
-      updatePersonaSession(cwd, ctx.personaName, sessionId, ctx.providerType);
+      if (options.persistSession !== false) {
+        updatePersonaSession(cwd, ctx.personaName, sessionId, ctx.providerType);
+      }
     }
     return {
       result: { content: response.content, sessionId: response.sessionId, success },

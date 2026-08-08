@@ -1,5 +1,5 @@
 /**
- * Tests for interactive mode variants (assistant, persona, quiet, passthrough)
+ * Tests for interactive mode variants (assistant, grill-me, persona, quiet, passthrough)
  */
 
 import * as fs from 'node:fs';
@@ -240,8 +240,8 @@ function expectNoNewTaktTempSessionDirs(previous: Set<string>): void {
 // ── InteractiveMode type & constants tests ──
 
 describe('InteractiveMode type', () => {
-  it('should define all four modes', () => {
-    expect(INTERACTIVE_MODES).toEqual(['assistant', 'persona', 'quiet', 'passthrough']);
+  it('should define all five modes', () => {
+    expect(INTERACTIVE_MODES).toEqual(['assistant', 'grill-me', 'persona', 'quiet', 'passthrough']);
   });
 
   it('should have assistant as default mode', () => {
@@ -252,7 +252,7 @@ describe('InteractiveMode type', () => {
 // ── Mode selection tests ──
 
 describe('selectInteractiveMode', () => {
-  it('should call selectOptionWithDefault with four mode options', async () => {
+  it('should call selectOptionWithDefault with five mode options', async () => {
     // When
     await selectInteractiveMode('en');
 
@@ -261,6 +261,7 @@ describe('selectInteractiveMode', () => {
       expect.any(String),
       expect.arrayContaining([
         expect.objectContaining({ value: 'assistant' }),
+        expect.objectContaining({ value: 'grill-me' }),
         expect.objectContaining({ value: 'persona' }),
         expect.objectContaining({ value: 'quiet' }),
         expect.objectContaining({ value: 'passthrough' }),
@@ -326,9 +327,10 @@ describe('selectInteractiveMode', () => {
     // Then
     const options = mockSelectOptionWithDefault.mock.calls[0]?.[1] as Array<{ value: string }>;
     expect(options?.[0]?.value).toBe('assistant');
-    expect(options?.[1]?.value).toBe('persona');
-    expect(options?.[2]?.value).toBe('quiet');
-    expect(options?.[3]?.value).toBe('passthrough');
+    expect(options?.[1]?.value).toBe('grill-me');
+    expect(options?.[2]?.value).toBe('persona');
+    expect(options?.[3]?.value).toBe('quiet');
+    expect(options?.[4]?.value).toBe('passthrough');
   });
 });
 

@@ -1031,7 +1031,7 @@ provider:
 
 ### `interactive_mode`
 
-Default interactive mode used when `takt` is invoked without arguments. One of `assistant` (default), `passthrough`, `quiet`, `persona`.
+Default interactive mode used when `takt` is invoked without arguments. One of `assistant` (default), `grill-me`, `passthrough`, `quiet`, `persona`. `grill-me` resolves requirements one recommended question at a time and suggests `/go` when they are ready.
 
 ```yaml
 interactive_mode: assistant

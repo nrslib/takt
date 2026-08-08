@@ -547,7 +547,7 @@ describe('PR resolution in routing', () => {
       expect(mockSelectInteractiveMode).toHaveBeenCalledWith(
         'en',
         undefined,
-        ['assistant', 'persona', 'quiet'],
+        ['assistant', 'grill-me', 'persona', 'quiet'],
       );
       expect(mockInteractiveMode).toHaveBeenCalledWith(
         '/test/cwd',

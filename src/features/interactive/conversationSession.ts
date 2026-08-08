@@ -147,6 +147,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
       {
         outputMode: options.outputMode,
         abortSignal,
+        persistSession: false,
       },
     );
 

@@ -556,7 +556,7 @@ describe('Issue resolution in routing', () => {
       expect(mockSelectInteractiveMode).toHaveBeenCalledWith(
         'en',
         undefined,
-        ['assistant', 'persona', 'quiet'],
+        ['assistant', 'grill-me', 'persona', 'quiet'],
       );
       expect(mockPassthroughMode).not.toHaveBeenCalled();
       expect(mockInteractiveMode).toHaveBeenCalledWith(
@@ -762,6 +762,28 @@ describe('Issue resolution in routing', () => {
   });
 
   describe('--continue option', () => {
+    it('should resume the Grill Me session independently from the standard assistant', async () => {
+      mockOpts.continue = true;
+      mockSelectInteractiveMode.mockResolvedValue('grill-me');
+      mockResolveConfigValues.mockReturnValue({ language: 'en', interactivePreviewSteps: 3, provider: 'claude' });
+      mockResolveAssistantConfigLayers.mockReturnValue({ local: { provider: 'claude' }, global: {} });
+      mockLoadPersonaSessions.mockReturnValue({
+        interactive: 'assistant-session',
+        'grill-me-interactive': 'grill-session',
+      });
+
+      await executeDefaultAction();
+
+      expect(mockInteractiveMode).toHaveBeenCalledWith(
+        '/test/cwd',
+        undefined,
+        expect.anything(),
+        'grill-session',
+        undefined,
+        { assistantMode: 'grill-me' },
+      );
+    });
+
     it('should load saved session and pass to interactiveMode when --continue is specified', async () => {
       // Given
       mockOpts.continue = true;

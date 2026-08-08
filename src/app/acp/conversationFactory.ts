@@ -14,6 +14,7 @@ import type { AcpConversationSessionOptions } from './types.js';
 export function createDefaultConversationSession(options: AcpConversationSessionOptions): ConversationSession {
   const baseCtx = initializeSession(options.cwd, 'interactive');
   const systemPrompt = loadTemplate('score_interactive_system_prompt', baseCtx.lang, {
+    grillMe: false,
     hasWorkflowPreview: false,
     workflowStructure: '',
     stepDetails: '',

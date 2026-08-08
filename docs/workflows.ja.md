@@ -1012,7 +1012,7 @@ provider:
 
 ### `interactive_mode`
 
-`takt` を引数なしで起動したときのデフォルト interactive mode。`assistant`（デフォルト） / `passthrough` / `quiet` / `persona` のいずれか。
+`takt` を引数なしで起動したときのデフォルト interactive mode。`assistant`（デフォルト） / `grill-me` / `passthrough` / `quiet` / `persona` のいずれか。`grill-me` は推奨案付きの質問を1問ずつ行い、要件が固まると `/go` を案内する。
 
 ```yaml
 interactive_mode: assistant

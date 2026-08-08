@@ -123,6 +123,52 @@ describe('interactiveMode', () => {
     );
   });
 
+  it('should use the Grill Me persona and interview protocol when selected', async () => {
+    setupRawStdin(toRawInputs(['design an approval flow', '/cancel']));
+    const { provider, capture } = createMockProvider(['Recommended: require explicit approval. Which roles may approve?']);
+    mockGetProvider.mockReturnValue(provider as ReturnType<typeof getProvider>);
+
+    const workflowContext = {
+      name: 'default',
+      description: 'Default workflow',
+      workflowStructure: '1. Implement',
+      stepPreviews: [{
+        name: 'implement',
+        personaDisplayName: 'Coder',
+        personaContent: 'Implement the task.',
+        instructionContent: 'Follow the agreed requirements.',
+        allowedTools: ['Read', 'Edit'],
+        canEdit: true,
+      }],
+    };
+
+    await interactiveMode('/project', undefined, workflowContext, undefined, undefined, {
+      assistantMode: 'grill-me',
+    });
+
+    expect(provider.setup).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'grill-me-interactive',
+    }));
+    expect((provider as { _call: ReturnType<typeof vi.fn> })._call).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        allowedTools: ['Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch'],
+      }),
+    );
+    expect(capture.permissionModes).toEqual(['readonly']);
+    expect(capture.systemPrompts[0]).toContain('Ask exactly one question in each response');
+    expect(capture.systemPrompts[0]).toContain('Recommended:');
+    expect(capture.systemPrompts[0]).toContain('enter `/go`');
+    expect(capture.systemPrompts[0]).toContain('Investigate facts available from the codebase instead of asking the user');
+    expect(capture.systemPrompts[0]).toContain(
+      'Delegate implementation details and dependency analysis that do not affect those requirements',
+    );
+    expect(capture.systemPrompts[0]).not.toContain(
+      'Delegate codebase investigation, implementation details, and dependency analysis to the agents',
+    );
+    expect(mockInfo).toHaveBeenCalledWith(expect.stringContaining('Grill Me mode'));
+  });
+
   it('should return action=execute with task on /go after conversation', async () => {
     // Given
     setupRawStdin(toRawInputs(['add auth feature', '/go']));

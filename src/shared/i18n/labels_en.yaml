@@ -12,6 +12,7 @@ interactive:
   noTranscript: "(No local transcript. Summarize the current session context.)"
   ui:
     intro: "Interactive mode - describe your task. Commands: /go (create instruction & run), /play (run now), /accept (use latest assistant response), /paste-image (attach clipboard image), /resume (load session), /cancel (exit)"
+    introGrillMe: "Grill Me mode - resolve requirement decisions one question at a time. The assistant will suggest /go when the requirements are ready. Commands: /play (run now), /accept (use latest assistant response), /paste-image (attach clipboard image), /resume (load session), /cancel (exit)"
     introQuiet: "Quiet mode - describe your task. Instructions will be generated without further questions."
     introPassthrough: "Passthrough mode - describe your task. Your input will be passed directly as the task."
     resume: "Resuming previous session"
@@ -38,6 +39,8 @@ interactive:
     prompt: "Select interactive mode:"
     assistant: "Assistant"
     assistantDescription: "Ask clarifying questions before generating instructions"
+    grill-me: "Grill Me"
+    grill-meDescription: "Resolve requirements one recommended question at a time"
     persona: "Persona"
     personaDescription: "Converse as the first agent's persona"
     quiet: "Quiet"
