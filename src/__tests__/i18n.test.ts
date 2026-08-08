@@ -38,8 +38,8 @@ describe('getLabel', () => {
   it('returns Grill Me labels with completion guidance', () => {
     expect(getLabel('interactive.modeSelection.grill-me', 'en')).toBe('Grill Me');
     expect(getLabel('interactive.modeSelection.grill-me', 'ja')).toBe('Grill Me');
-    expect(getLabel('interactive.ui.introGrillMe', 'en')).toContain('/go');
-    expect(getLabel('interactive.ui.introGrillMe', 'ja')).toContain('/go');
+    expect(getLabel('interactive.ui.introGrillMe', 'en')).toContain('Commands: /go (create instruction & run)');
+    expect(getLabel('interactive.ui.introGrillMe', 'ja')).toContain('コマンド: /go（指示書作成・実行）');
   });
 
   it('returns English quiet and passthrough intro labels without slash command guidance', () => {
