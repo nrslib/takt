@@ -17,7 +17,10 @@ import type {
 import { RuleEvaluator } from '../core/workflow/evaluation/RuleEvaluator.js';
 import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDetectionExhaustedError.js';
 import { determineRuleTransition } from '../core/workflow/engine/transitions.js';
-import { hasFindingsReference } from '../core/models/workflow-rule-condition.js';
+import {
+  hasFindingsReference,
+  type WorkflowRuleCondition,
+} from '../core/models/workflow-rule-condition.js';
 import {
   invalidateAllResolvedConfigCache,
   invalidateGlobalConfigCache,
@@ -99,14 +102,30 @@ interface ExpectedRuleMatch {
 }
 
 const LANGUAGES = ['en', 'ja'] as const;
-const EXPECTED_FC_LADDER_WORKFLOWS = [
-  'finding-contract-boundary-review',
-  'finding-contract-local-review',
-  'merge-readiness-finding-contract-final-gate',
-  'peer-review-suite-finding-contract-base',
-  'review-fix-takt-default-high',
-  'takt-default-high',
-  'takt-default-team-high',
+const EXPECTED_FC_LADDER_STEPS = [
+  ['finding-contract-boundary-review', 'boundary-reviewers'],
+  ['finding-contract-local-review', 'reviewers'],
+  ['merge-readiness-finding-contract-final-gate', 'merge-readiness-review'],
+  ['merge-readiness-finding-contract-final-gate', 'supervise'],
+  ['peer-review-suite-finding-contract-base', 'reviewers'],
+  ['review-fix-takt-default-high', 'reviewers'],
+  ['takt-default-high', 'reviewers'],
+  ['takt-default-team-high', 'reviewers'],
+] as const;
+const EXPECTED_RESTATEMENT_LADDER_STEPS = [
+  ['merge-readiness-finding-contract-final-gate', 'merge-readiness-review'],
+  ['merge-readiness-finding-contract-final-gate', 'supervise'],
+  ['peer-review-suite-finding-contract-base', 'reviewers'],
+] as const;
+const EXPECTED_RESTATEMENT_RULES = [
+  {
+    countKey: 'requiresGuaranteedPresentationCount',
+    expression: 'findings.reviewerAnomalies.requiresGuaranteedPresentationCount > 0',
+  },
+  {
+    countKey: 'restatementReadyCount',
+    expression: 'findings.reviewerAnomalies.restatementReadyCount > 0',
+  },
 ] as const;
 const REVIEWERS = [
   ['arch-review', 'architecture-review-finding-contract'],
@@ -188,10 +207,12 @@ function loadedStep(workflow: WorkflowConfig, name: string): WorkflowStep {
   return step;
 }
 
-function collectBuiltinFindingLadderSteps(language: Language): Array<{
+interface BuiltinFindingLadderStep {
   workflow: string;
   step: WorkflowStep;
-}> {
+}
+
+function collectBuiltinFindingLadderSteps(language: Language): BuiltinFindingLadderStep[] {
   return readdirSync(builtinPath(language, 'workflows'))
     .filter((file) => file.endsWith('.yaml'))
     .flatMap((file) => {
@@ -201,13 +222,48 @@ function collectBuiltinFindingLadderSteps(language: Language): Array<{
         return [];
       }
       const workflow = loadWorkflow(language, workflowName);
-      const step = workflow.steps.find((candidate) => (
-          candidate.rules !== undefined
-          && candidate.rules[0] !== undefined
-          && hasFindingsReference(candidate.rules[0].condition)
-        ));
-      return step === undefined ? [] : [{ workflow: workflowName, step }];
+      return workflow.steps
+        .filter((candidate) => candidate.rules?.some((rule) => hasFindingsReference(rule.condition)))
+        .map((step) => ({ workflow: workflowName, step }));
     });
+}
+
+function conditionShape(condition: WorkflowRuleCondition): string {
+  switch (condition.kind) {
+    case 'semantic':
+      return 'semantic';
+    case 'when':
+      return `when(${condition.expression})`;
+    case 'aggregate':
+      return `${condition.aggregate}(${condition.targetConditions.map(conditionShape).join(',')})`;
+    case 'and':
+      return `${conditionShape(condition.left)}&&${conditionShape(condition.right)}`;
+  }
+}
+
+function ladderSignature(step: WorkflowStep): Array<{
+  condition: string;
+  transition: ReturnType<typeof determineRuleTransition>;
+}> {
+  return (step.rules ?? []).map((rule, index) => ({
+    condition: conditionShape(rule.condition),
+    transition: determineRuleTransition(step, index),
+  }));
+}
+
+function findBuiltinLadderStep(
+  targets: readonly BuiltinFindingLadderStep[],
+  workflow: string,
+  stepName: string,
+  language: Language,
+): WorkflowStep {
+  const target = targets.find((candidate) => (
+    candidate.workflow === workflow && candidate.step.name === stepName
+  ));
+  if (target === undefined) {
+    throw new Error(`Missing ${language} finding ladder step: ${workflow}:${stepName}`);
+  }
+  return target.step;
 }
 
 function resolveInstruction(language: Language, name: string): string {
@@ -720,10 +776,24 @@ describe('takt-default-fc builtins', () => {
     }
   });
 
+  it('en/ja all builtin FC control ladders keep condition and transition symmetry', () => {
+    const targetsByLanguage = Object.fromEntries(
+      LANGUAGES.map((language) => [language, collectBuiltinFindingLadderSteps(language)]),
+    ) as Record<Language, BuiltinFindingLadderStep[]>;
+
+    for (const [workflow, stepName] of EXPECTED_FC_LADDER_STEPS) {
+      const enStep = findBuiltinLadderStep(targetsByLanguage.en, workflow, stepName, 'en');
+      const jaStep = findBuiltinLadderStep(targetsByLanguage.ja, workflow, stepName, 'ja');
+      expect(ladderSignature(jaStep), `${workflow}:${stepName}`).toEqual(ladderSignature(enStep));
+    }
+  });
+
   it.each(LANGUAGES)('%s all builtin FC control ladders are total over the finding state product', (language) => {
     const states = enumerateFindingCountProduct();
     const targets = collectBuiltinFindingLadderSteps(language);
-    expect(targets.map(({ workflow }) => workflow).sort()).toEqual([...EXPECTED_FC_LADDER_WORKFLOWS]);
+    expect(targets.map(({ workflow, step }) => `${workflow}:${step.name}`).sort()).toEqual(
+      EXPECTED_FC_LADDER_STEPS.map(([workflow, step]) => `${workflow}:${step}`).sort(),
+    );
 
     for (const { workflow, step } of targets) {
       const unmatched = states.filter((counts) => {
@@ -747,6 +817,36 @@ describe('takt-default-fc builtins', () => {
       });
       expect(unmatched.slice(0, 3).map((counts) => JSON.stringify(counts)), workflow)
         .toEqual([]);
+    }
+  });
+
+  it.each(LANGUAGES)('%s restatement conditions return needs_review on every applicable ladder', (language) => {
+    const targets = collectBuiltinFindingLadderSteps(language);
+
+    for (const [workflow, stepName] of EXPECTED_RESTATEMENT_LADDER_STEPS) {
+      const step = findBuiltinLadderStep(targets, workflow, stepName, language);
+      for (const { countKey, expression } of EXPECTED_RESTATEMENT_RULES) {
+        const matchingRuleIndexes = (step.rules ?? []).flatMap((rule, index) => (
+          rule.condition.kind === 'when' && rule.condition.expression === expression
+            ? [index]
+            : []
+        ));
+        expect(matchingRuleIndexes, `${language}:${workflow}:${stepName}`).toHaveLength(1);
+        const ruleIndex = matchingRuleIndexes[0];
+        if (ruleIndex === undefined) throw new Error(`Missing restatement rule: ${expression}`);
+        expect(step.rules?.[ruleIndex]?.condition).toEqual({ kind: 'when', expression });
+        expect(determineRuleTransition(step, ruleIndex)).toEqual({ returnValue: 'needs_review' });
+
+        const counts: FindingCounts = {
+          ...EMPTY_FINDING_COUNTS,
+          [countKey]: 1,
+        };
+        const match = new RuleEvaluator(step, { state: ladderWorkflowState(step, counts) })
+          .evaluate(undefined);
+        expect(match?.index, `${language}:${workflow}:${stepName}:${countKey}`).toBe(ruleIndex);
+        if (match === undefined) throw new Error(`Missing restatement match: ${expression}`);
+        expect(determineRuleTransition(step, match.index)).toEqual({ returnValue: 'needs_review' });
+      }
     }
   });
 
