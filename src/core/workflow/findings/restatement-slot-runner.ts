@@ -238,6 +238,11 @@ export async function runFindingRestatementSlot(
     for (const request of requests) {
       const ownerStep = ownerStepsByName.get(request.ownerReviewerStepName);
       if (ownerStep === undefined) {
+        log.warn('Dropping an evidence-search request whose owner step is not in the active review set', {
+          ownerReviewerStepName: request.ownerReviewerStepName,
+          anomalyId: request.request.anomalyId,
+          restatementRequestId: request.request.restatementRequestId,
+        });
         continue;
       }
       const outcome: FindingEvidenceSearchRunResult = await input.stepExecutor.runFindingEvidenceSearch({

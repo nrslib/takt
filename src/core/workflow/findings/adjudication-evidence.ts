@@ -242,6 +242,8 @@ export function renderConflictAdjudicationInstruction(
     '## Engine-provided target snapshot windows',
     `reviewScopeSnapshotId: ${grounding.reviewScopeSnapshotId}`,
     'Use these immutable windows to verify the disputed target. Do not read the live working tree or infer content outside the supplied windows.',
-    renderFindingEvidenceSearchWindows(grounding.windows),
+    grounding.windows.length === 0
+      ? '(target files are unavailable in the supplied snapshot; verification is undetermined and the proposal must not infer source content)'
+      : renderFindingEvidenceSearchWindows(grounding.windows),
   ].join('\n');
 }

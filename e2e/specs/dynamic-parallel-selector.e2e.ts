@@ -360,6 +360,10 @@ function writeSelectedArtifactsFixture(repoPath: string): { workflowPath: string
     managerResponse,
     ...followupResponses('architecture', 1),
     ...followupResponses('frontend', 1),
+    // 言い直し枠の消尽後に evidence-search が1回ずつ走る。対象 fixture に
+    // 引用可能な実ファイルは無いため、両方とも空の rawFindings を返す。
+    { persona: 'finding-intake-normalizer', status: 'done', content: '', structured_output: { rawFindings: [] } },
+    { persona: 'finding-intake-normalizer', status: 'done', content: '', structured_output: { rawFindings: [] } },
     { persona: 'agents/fix', status: 'done', content: 'approved' },
     { status: 'done', content: '', structured_output: { selected_ids: ['backend'], rationale: 'Follow-up backend review.' } },
     executeResponse('architecture', 'approved'),

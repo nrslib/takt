@@ -1443,18 +1443,23 @@ export class ParallelRunner {
         this.deps.optionsBuilder.buildFindingRestatementSlotContexts(contextInput)
       ),
       buildEvidenceSearchRequests: (contextInput) => (
-        this.deps.optionsBuilder.buildFindingEvidenceSearchRequests?.(contextInput) ?? []
+        this.deps.optionsBuilder.buildFindingEvidenceSearchRequests(contextInput)
       ),
       ingest: async (results, ingestOptions) => {
-        await this.ingestFindingContractSubResults(
-          input.step,
-          input.stepIteration,
-          input.state.iteration,
-          results,
-          input.priorStepResponseText,
-          'excluded',
-          ingestOptions?.deferClaimBearingTerminalDispositions,
-        );
+        await this.ingestFindingContractSubResults({
+          step: input.step,
+          stepIteration: input.stepIteration,
+          iteration: input.state.iteration,
+          reviewerResults: results,
+          priorStepResponseText: input.priorStepResponseText,
+          budgetAccounting: 'excluded',
+          ...(ingestOptions?.deferClaimBearingTerminalDispositions === undefined
+            ? {}
+            : {
+                deferClaimBearingTerminalDispositions:
+                  ingestOptions.deferClaimBearingTerminalDispositions,
+              }),
+        });
       },
       reviewScopeSnapshotId: input.reviewScopeSnapshotId,
       parentStepName: input.step.name,
@@ -1513,13 +1518,13 @@ export class ParallelRunner {
     if (reviewerResults.length === 0) {
       return undefined;
     }
-    return this.ingestFindingContractSubResults(
+    return this.ingestFindingContractSubResults({
       step,
       stepIteration,
       iteration,
       reviewerResults,
       priorStepResponseText,
-    );
+    });
   }
 
   /**
@@ -1527,15 +1532,15 @@ export class ParallelRunner {
    * レビュー本編（owner の publication 集合）と、言い直し slot の各パスが
    * 同じ手順を通る。
    */
-  private async ingestFindingContractSubResults(
-    step: WorkflowStep,
-    stepIteration: number,
-    iteration: number,
-    reviewerResults: readonly FindingManagerSubStepResult[],
-    priorStepResponseText: string | undefined,
-    budgetAccounting: 'round' | 'excluded' = 'round',
-    deferClaimBearingTerminalDispositions?: boolean,
-  ): Promise<FindingManagerRunResult> {
+  private async ingestFindingContractSubResults(input: {
+    step: WorkflowStep;
+    stepIteration: number;
+    iteration: number;
+    reviewerResults: readonly FindingManagerSubStepResult[];
+    priorStepResponseText: string | undefined;
+    budgetAccounting?: 'round' | 'excluded';
+    deferClaimBearingTerminalDispositions?: boolean;
+  }): Promise<FindingManagerRunResult> {
     const ledgerStore = this.deps.findingLedgerStore;
     if (!this.deps.findingContract || !ledgerStore) {
       throw new Error('Finding contract is configured but finding ledger store is not available');
@@ -1549,14 +1554,16 @@ export class ParallelRunner {
       ledgerStore,
       optionsBuilder: this.deps.optionsBuilder,
       stepExecutor: this.deps.stepExecutor,
-      parentStep: step,
-      stepIteration,
-      iteration,
-      subResults: [...reviewerResults],
-      budgetAccounting,
-      ...(deferClaimBearingTerminalDispositions === undefined
+      parentStep: input.step,
+      stepIteration: input.stepIteration,
+      iteration: input.iteration,
+      subResults: [...input.reviewerResults],
+      ...(input.budgetAccounting === undefined
         ? {}
-        : { deferClaimBearingTerminalDispositions }),
+        : { budgetAccounting: input.budgetAccounting }),
+      ...(input.deferClaimBearingTerminalDispositions === undefined
+        ? {}
+        : { deferClaimBearingTerminalDispositions: input.deferClaimBearingTerminalDispositions }),
       // 台帳の workflowName スタンプは店（ledgerStore）が束縛する正準名を使う。
       // workflow_call の子が親の台帳を継承した場合、この engine 自身の
       // getWorkflowName()（子のワークフロー名）を使うと reconcile 後の
@@ -1567,7 +1574,7 @@ export class ParallelRunner {
       analyticsWorkflowName: this.deps.getWorkflowName(),
       callNamespace: this.deps.getFindingCallNamespace(),
       timestamp: new Date().toISOString(),
-      priorStepResponseText,
+      priorStepResponseText: input.priorStepResponseText,
       managerAuthority: this.deps.findingManagerAuthority,
       reviewPublicationDir: this.deps.reviewPublicationDir,
       refreshFindingsState: this.deps.refreshFindingsState,

@@ -7,6 +7,7 @@ import {
 import { dirname, join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { getAllParallelSubSteps } from '../core/models/index.js';
 import type {
   AgentResponse,
   FindingsRuleContext,
@@ -117,15 +118,9 @@ const EXPECTED_RESTATEMENT_LADDER_STEPS = [
   ['merge-readiness-finding-contract-final-gate', 'supervise'],
   ['peer-review-suite-finding-contract-base', 'reviewers'],
 ] as const;
-const EXPECTED_RESTATEMENT_RULES = [
-  {
-    countKey: 'requiresGuaranteedPresentationCount',
-    expression: 'findings.reviewerAnomalies.requiresGuaranteedPresentationCount > 0',
-  },
-  {
-    countKey: 'restatementReadyCount',
-    expression: 'findings.reviewerAnomalies.restatementReadyCount > 0',
-  },
+const RESTATEMENT_COUNT_KEYS = [
+  'requiresGuaranteedPresentationCount',
+  'restatementReadyCount',
 ] as const;
 const REVIEWERS = [
   ['arch-review', 'architecture-review-finding-contract'],
@@ -338,15 +333,15 @@ function workflowState(step: WorkflowStep, counts: FindingCounts): WorkflowState
 
 function ladderWorkflowState(step: WorkflowStep, counts: FindingCounts): WorkflowState {
   const state = workflowState(step, counts);
-  if (Array.isArray(step.parallel)) {
-    for (const subStep of step.parallel) {
+  if (step.parallel !== undefined) {
+    for (const subStep of getAllParallelSubSteps(step.parallel)) {
       state.stepOutputs.set(subStep.name, {
-        persona: subStep.personaDisplayName,
-        status: 'done',
-        content: '',
-        timestamp: new Date(0),
-        matchedRuleIndex: 0,
-      } satisfies AgentResponse);
+          persona: subStep.personaDisplayName,
+          status: 'done',
+          content: '',
+          timestamp: new Date(0),
+          matchedRuleIndex: 0,
+        } satisfies AgentResponse);
     }
   }
   return state;
@@ -825,16 +820,32 @@ describe('takt-default-fc builtins', () => {
 
     for (const [workflow, stepName] of EXPECTED_RESTATEMENT_LADDER_STEPS) {
       const step = findBuiltinLadderStep(targets, workflow, stepName, language);
-      for (const { countKey, expression } of EXPECTED_RESTATEMENT_RULES) {
-        const matchingRuleIndexes = (step.rules ?? []).flatMap((rule, index) => (
-          rule.condition.kind === 'when' && rule.condition.expression === expression
+      const matchingRuleIndexes = RESTATEMENT_COUNT_KEYS.map((countKey) => {
+        const indexes = (step.rules ?? []).flatMap((rule, index) => (
+          rule.condition.kind === 'when'
+            && rule.condition.expression.includes(`findings.reviewerAnomalies.${countKey} > 0`)
+            && rule.returnValue === 'needs_review'
             ? [index]
             : []
         ));
-        expect(matchingRuleIndexes, `${language}:${workflow}:${stepName}`).toHaveLength(1);
-        const ruleIndex = matchingRuleIndexes[0];
-        if (ruleIndex === undefined) throw new Error(`Missing restatement rule: ${expression}`);
-        expect(step.rules?.[ruleIndex]?.condition).toEqual({ kind: 'when', expression });
+        expect(indexes, `${language}:${workflow}:${stepName}:${countKey}`).toHaveLength(1);
+        return { countKey, ruleIndex: indexes[0]! };
+      });
+      const openRuleIndex = (step.rules ?? []).findIndex((rule) => (
+        rule.condition.kind === 'when'
+        && rule.condition.expression.includes('findings.open.count > 0')
+        && rule.returnValue === 'needs_fix'
+      ));
+      expect(openRuleIndex, `${language}:${workflow}:${stepName}`).toBeGreaterThanOrEqual(0);
+      for (const { countKey, ruleIndex } of matchingRuleIndexes) {
+        const condition = step.rules?.[ruleIndex]?.condition;
+        if (condition?.kind !== 'when') {
+          throw new Error(`Missing restatement condition: ${language}:${workflow}:${stepName}:${countKey}`);
+        }
+        if (workflow === 'merge-readiness-finding-contract-final-gate') {
+          expect(condition.expression).toContain('findings.reviewerAnomalies.budgetExhausted == false');
+          expect(ruleIndex).toBeGreaterThan(openRuleIndex);
+        }
         expect(determineRuleTransition(step, ruleIndex)).toEqual({ returnValue: 'needs_review' });
 
         const counts: FindingCounts = {
@@ -844,8 +855,31 @@ describe('takt-default-fc builtins', () => {
         const match = new RuleEvaluator(step, { state: ladderWorkflowState(step, counts) })
           .evaluate(undefined);
         expect(match?.index, `${language}:${workflow}:${stepName}:${countKey}`).toBe(ruleIndex);
-        if (match === undefined) throw new Error(`Missing restatement match: ${expression}`);
+        if (match === undefined) {
+          throw new Error(`Missing restatement match: ${language}:${workflow}:${stepName}:${countKey}`);
+        }
         expect(determineRuleTransition(step, match.index)).toEqual({ returnValue: 'needs_review' });
+
+        if (workflow === 'merge-readiness-finding-contract-final-gate') {
+          const openMatch = new RuleEvaluator(step, {
+            state: ladderWorkflowState(step, {
+              ...EMPTY_FINDING_COUNTS,
+              open: 1,
+              anomalies: 1,
+              [countKey]: 1,
+            }),
+          }).evaluate(undefined);
+          expect(openMatch?.index, `${language}:${workflow}:${stepName}:open-precedence`).toBe(openRuleIndex);
+          const exhaustedMatch = new RuleEvaluator(step, {
+            state: ladderWorkflowState(step, {
+              ...EMPTY_FINDING_COUNTS,
+              anomalies: 1,
+              anomalyBudgetExhausted: true,
+              [countKey]: 1,
+            }),
+          }).evaluate(undefined);
+          expect(exhaustedMatch?.index, `${language}:${workflow}:${stepName}:budget-guard`).not.toBe(ruleIndex);
+        }
       }
     }
   });

@@ -47,12 +47,18 @@ function windowForLines(
   startLine: number,
 ): FindingEvidenceSearchWindow | undefined {
   const selectedLines: string[] = [];
+  let content = '';
+  let contentBytes = 0;
   for (const line of lines) {
-    const candidate = renderLines([...selectedLines, line], startLine);
-    if (Buffer.byteLength(candidate, 'utf8') > FINDING_EVIDENCE_ISSUANCE_LIMITS.maxFileQuoteBytes) {
+    const renderedLine = `${startLine + selectedLines.length}: ${line}`;
+    const renderedBytes = Buffer.byteLength(renderedLine, 'utf8')
+      + (selectedLines.length === 0 ? 0 : 1);
+    if (contentBytes + renderedBytes > FINDING_EVIDENCE_ISSUANCE_LIMITS.maxFileQuoteBytes) {
       break;
     }
     selectedLines.push(line);
+    content = selectedLines.length === 1 ? renderedLine : `${content}\n${renderedLine}`;
+    contentBytes += renderedBytes;
   }
   if (selectedLines.length === 0) {
     return undefined;
@@ -61,8 +67,54 @@ function windowForLines(
     path,
     startLine,
     endLine: startLine + selectedLines.length - 1,
-    content: renderLines(selectedLines, startLine),
+    content,
   };
+}
+
+function anchoredWindowForLines(
+  path: string,
+  lines: readonly string[],
+  anchorLine: number,
+  maxLines: number,
+): FindingEvidenceSearchWindow | undefined {
+  const anchorIndex = Math.min(
+    Math.max(anchorLine - 1, 0),
+    Math.max(lines.length - 1, 0),
+  );
+  let start = anchorIndex;
+  let end = anchorIndex;
+  let selected = windowForLines(path, lines.slice(start, end + 1), start + 1);
+  if (selected === undefined) {
+    return undefined;
+  }
+  const includesAnchor = (window: FindingEvidenceSearchWindow | undefined): window is FindingEvidenceSearchWindow => (
+    window !== undefined
+    && window.startLine <= anchorLine
+    && window.endLine >= anchorLine
+  );
+  while (end - start + 1 < Math.min(maxLines, lines.length)) {
+    const left = start > 0
+      ? windowForLines(path, lines.slice(start - 1, end + 1), start)
+      : undefined;
+    const right = end + 1 < lines.length
+      ? windowForLines(path, lines.slice(start, end + 2), start + 1)
+      : undefined;
+    const canAddLeft = includesAnchor(left);
+    const canAddRight = includesAnchor(right);
+    if (!canAddLeft && !canAddRight) {
+      break;
+    }
+    const leftDistance = anchorIndex - start;
+    const rightDistance = end - anchorIndex;
+    if (canAddLeft && (!canAddRight || leftDistance <= rightDistance)) {
+      start -= 1;
+      selected = left;
+    } else {
+      end += 1;
+      selected = right;
+    }
+  }
+  return selected;
 }
 
 function windowsForFile(
@@ -87,10 +139,7 @@ function windowsForFile(
   const maxLines = FINDING_EVIDENCE_ISSUANCE_LIMITS.maxFileQuoteLines;
   if (anchorLine !== undefined) {
     const center = Math.min(Math.max(anchorLine, 1), Math.max(totalLines, 1));
-    let startLine = Math.max(1, center - Math.floor(maxLines / 2));
-    const endLine = Math.min(totalLines, startLine + maxLines - 1);
-    startLine = Math.max(1, endLine - maxLines + 1);
-    const window = windowForLines(path, lines.slice(startLine - 1, endLine), startLine);
+    const window = anchoredWindowForLines(path, lines, center, maxLines);
     return window === undefined ? undefined : [window];
   }
 
@@ -115,11 +164,11 @@ function windowsForFile(
 }
 
 function snapshotWindow(
-  snapshot: ReviewScopeProofSnapshot,
+  inventoryByPath: ReadonlyMap<string, ReviewScopeProofSnapshot['queryInventory'][number]>,
   path: string,
   anchorLine: number | undefined,
 ): readonly FindingEvidenceSearchWindow[] | undefined {
-  const entry = snapshot.queryInventory.find((candidate) => candidate.path === path);
+  const entry = inventoryByPath.get(path);
   if (
     entry === undefined
     || entry.kind !== 'file'
@@ -152,8 +201,9 @@ export function buildFindingEvidenceSearchWindows(input: {
   targetPaths: readonly string[];
   anchorLines?: ReadonlyMap<string, number | undefined>;
 }): readonly FindingEvidenceSearchWindow[] {
+  const inventoryByPath = new Map(input.snapshot.queryInventory.map((entry) => [entry.path, entry]));
   const windowsByPath = input.targetPaths.map((path) => (
-    snapshotWindow(input.snapshot, path, input.anchorLines?.get(path))
+    snapshotWindow(inventoryByPath, path, input.anchorLines?.get(path))
   ));
   return windowsByPath.every((pathWindows) => pathWindows !== undefined)
     ? windowsByPath.flatMap((pathWindows) => pathWindows)

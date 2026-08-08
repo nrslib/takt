@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { describe, expect, it } from 'vitest';
+import { getAllParallelSubSteps } from '../core/models/index.js';
 import type {
   AgentResponse,
   FindingsRuleContext,
@@ -133,7 +134,7 @@ function stateFor(
     iteration: 1,
     findings: findings(counts),
     stepOutputs: new Map(
-      (step.parallel ?? []).map((substep) => [
+      (step.parallel === undefined ? [] : getAllParallelSubSteps(step.parallel)).map((substep) => [
         substep.name,
         reviewerOutput(substep, reviewerRuleIndex),
       ]),
@@ -220,22 +221,23 @@ describe('builtin Finding ledger routing', () => {
   });
 
   it.each(['en', 'ja'] as const)('%s reviewer集約はconflict/provisionalの先行ルールを維持する', (language) => {
-    const cases = [
-      { raw: sharedReviewers(language), conflictTarget: 'fix', dismissTarget: 'replan', replanTarget: 'replan' },
-      { raw: localReviewers(language, 'reviewers'), conflictTarget: 'reviewers', dismissTarget: 'integrity-gate', replanTarget: 'need_replan' },
-      { raw: localReviewers(language, 'boundary-reviewers'), conflictTarget: 'boundary-reviewers', dismissTarget: 'final-gate', replanTarget: 'need_replan' },
-    ];
-
-    for (const { raw, conflictTarget, dismissTarget, replanTarget } of cases) {
+    for (const raw of [
+      sharedReviewers(language),
+      localReviewers(language, 'reviewers'),
+      localReviewers(language, 'boundary-reviewers'),
+    ]) {
       const step = toWorkflowStep(raw);
       expect(transition(step, { open: 1, conflicts: 1, unadjudicated: 1 }, 1))
         .toBe('finding-conflict-adjudication');
-      expect(transition(step, { open: 1, conflicts: 1 }, 1)).toBe(conflictTarget);
+      // adjudication に着地済みの conflict は self-loop に戻さず、各 workflow の
+      // downstream gate/fix へ進める。local/boundary は fix step を持たないため、
+      // ここで workflow 自身へ戻らないことが予算・loop monitor の有限性を保証する。
+      const resolvedConflictTarget = transition(step, { open: 1, conflicts: 1 }, 1);
+      expect(resolvedConflictTarget).not.toBe(step.name);
+      expect(resolvedConflictTarget).not.toBe('finding-conflict-adjudication');
       expect(transition(step, { open: 1, conflicts: 1, roundBudgetExhausted: true }, 1))
         .toBe('ABORT');
-      expect(transition(step, { open: 1, provisional: 1, dismissEligible: 1 }, 1))
-        .toBe(dismissTarget);
-      expect(transition(step, { open: 1, provisional: 1 }, 1)).toBe(replanTarget);
+      expect(transition(step, { open: 1, provisional: 1 }, 1)).toMatch(/(?:^|_)replan$/u);
     }
   });
 

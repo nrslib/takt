@@ -208,7 +208,11 @@ describe('workflow step fragment runtime contract', () => {
       engines.push(engine);
       const transitions: string[] = [];
       const cycleCounts: number[] = [];
-      const ledgers: Array<{ findings: unknown[]; rawFindings: unknown[] }> = [];
+      const ledgers: Array<{
+        findings: unknown[];
+        rawFindings: unknown[];
+        reviewIntegrity?: { roundMarkers: string[] };
+      }> = [];
       engine.on('step:complete', (step) => transitions.push(step.name));
       engine.on('step:cycle_detected', (_monitor, count) => cycleCounts.push(count));
       engine.on('findings:ledger', (ledger) => ledgers.push(ledger));
@@ -296,22 +300,26 @@ describe('workflow step fragment runtime contract', () => {
       requiredPermissionMode: 'edit',
     });
     // このレビュアーは毎回同じ不完全 claim を返すので、差し戻し slot は提示予算を
-    // 使い切る。取り込みは「レビュー本編1回 + slot のパス数」で、上限は
-    // presentationLimit（review_budget 既定 6）。fragment と inline で同数になることが
-    // 契約で、リテラル1件ではない。
+    // 使い切る。ledger event 数には publication・manager commit・terminal disposition
+    // が含まれるため、上限は event 数ではなく永続化された round marker で検証する。
     expect(fragmentResult.ledgers).toHaveLength(inlineResult.ledgers.length);
     expect(inlineResult.ledgers.length).toBeGreaterThan(0);
-    expect(inlineResult.ledgers.length).toBeLessThanOrEqual(
-      1 + DEFAULT_REVIEW_INTEGRITY_BUDGET.maxReviewRounds,
-    );
-    // 正規化係が受け取るのはレビュアーの markdown レポート本文そのもの。引数を
-    // 検証しないと、実装が空文字や別の本文を渡しても気づけない。mock は execute()
-    // ごとに reset するので、残っているのは最後（fragment 側）の1ステップ分
-    // （レビュー本編 + 差し戻し slot の各パス）。
+    for (const result of [inlineResult, fragmentResult]) {
+      const finalLedger = result.ledgers.at(-1);
+      expect(finalLedger?.reviewIntegrity?.roundMarkers.length).toBeLessThanOrEqual(
+        DEFAULT_REVIEW_INTEGRITY_BUDGET.maxReviewRounds,
+      );
+    }
+    // 通常レビューの正規化係にはレビュアーの markdown レポート本文そのものを渡す。
+    // 提示予算を使い切った後の evidence-search は engine 指示文を入力する別経路なので、
+    // その経路も空文字や本編本文の誤転送になっていないことを分けて検証する。
     const normalizerReports = vi.mocked(normalizeFindingIntake).mock.calls
       .map(([report]) => report);
     expect(normalizerReports.length).toBeGreaterThan(0);
-    expect(new Set(normalizerReports)).toEqual(new Set([REVIEW_REPORT_CONTENT]));
+    expect(normalizerReports).toContain(REVIEW_REPORT_CONTENT);
+    expect(normalizerReports.some((report) => report.startsWith('Evidence-search request (engine-provided source only)')))
+      .toBe(true);
+    expect(normalizerReports.every((report) => report.length > 0)).toBe(true);
     for (const result of [inlineResult, fragmentResult]) {
       // 差し戻しを重ねても、決着しない観測は1件の anomaly のままで、product
       // findings は空を保つ（周回のたびに finding が増えない）。

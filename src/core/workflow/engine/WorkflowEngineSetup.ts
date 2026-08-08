@@ -714,13 +714,28 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     const ledger = params.findingLedgerStore.loadLedger();
     const publications = listFindingReviewPublications(params.runPaths.reportsAbs);
     const presentationCounts = collectFindingReviewPresentationCounts(params.runPaths.reportsAbs);
+    const rawFindingsById = new Map(ledger.rawFindings.map((raw) => [raw.rawFindingId, raw]));
+    const presentationHistoryByAnomalyId = new Map<string, string[]>();
+    for (const publication of publications) {
+      if (publication.presentationContext.revision !== 2) {
+        continue;
+      }
+      for (const request of publication.presentationContext.restatementRequests) {
+        const history = presentationHistoryByAnomalyId.get(request.anomalyId) ?? [];
+        history.push(
+          `publication=${publication.publicationId} reviewer=${publication.reviewerStepName} ordinal=${request.presentationOrdinal} digest=${publication.reportDigest}`,
+        );
+        presentationHistoryByAnomalyId.set(request.anomalyId, history);
+      }
+    }
     const appliedRoundMarkers = [
       ...(ledger.stopBudget?.roundMarkers ?? []),
       ...(ledger.pendingManagerCommit?.completed.stopBudget?.roundMarkers ?? []),
     ];
-    const isPublicationApplied = (publicationId: string): boolean => appliedRoundMarkers.some((marker) => (
-      marker.split('\0').includes(publicationId)
-    ));
+    const appliedPublicationIds = new Set(
+      appliedRoundMarkers.flatMap((marker) => marker.split('\0').filter((token) => token.length > 0)),
+    );
+    const isPublicationApplied = (publicationId: string): boolean => appliedPublicationIds.has(publicationId);
     const evidencePublications = publications.filter((publication) => (
       publication.repairOrigin === 'evidence-search'
       && publication.presentationContext.revision === 2
@@ -773,7 +788,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
       for (const request of restatementRequests) {
         const anomaly = entries.find(({ anomaly: entry }) => entry.id === request.anomalyId)?.anomaly;
         const sourceRaw = anomaly?.sourceRawFindingIds
-          .map((rawId) => ledger.rawFindings.find((candidate) => candidate.rawFindingId === rawId))
+          .map((rawId) => rawFindingsById.get(rawId))
           .find((candidate) => candidate !== undefined);
         if (anomaly === undefined || sourceRaw === undefined) {
           continue;
@@ -785,17 +800,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
           request,
           presentationCount: presentationCounts.get(anomaly.id) ?? 0,
           ownerReviewerStepName: ownerStep.name,
-          presentationHistory: publications.flatMap((publication) => {
-            if (publication.presentationContext.revision !== 2) {
-              return [];
-            }
-            const requestForAnomaly = publication.presentationContext.restatementRequests.find(
-              (candidate) => candidate.anomalyId === anomaly.id,
-            );
-            return requestForAnomaly === undefined
-              ? []
-              : [`publication=${publication.publicationId} reviewer=${publication.reviewerStepName} ordinal=${requestForAnomaly.presentationOrdinal} digest=${publication.reportDigest}`];
-          }),
+          presentationHistory: presentationHistoryByAnomalyId.get(anomaly.id) ?? [],
         });
         if (searchRequest !== undefined) {
           requests.push(searchRequest);
