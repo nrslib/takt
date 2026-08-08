@@ -20,6 +20,7 @@ import {
   computeToolInputHash,
   computeToolResultHash,
 } from '../infra/opencode/tool-call-tuple.js';
+import { readOpenCodeToolPart } from '../infra/opencode/guards/tool-events.js';
 import { ExactLoopGuard } from '../infra/opencode/guards/integrity-guards.js';
 import { SensitiveBudgetGuard } from '../infra/opencode/guards/resource-guards.js';
 import { createBoundedSensitiveValues } from '../shared/utils/sensitiveText.js';
@@ -486,7 +487,7 @@ describe('OpenCode guard suite', () => {
 
     const input = { command: 'npm run test:it' };
     expect(suite.onEvent(runningTool('call-1', input)).failure).toBeUndefined();
-    vi.advanceTimersByTime(60 * 60 * 1000);
+    vi.advanceTimersByTime(5 * 60_000);
     expect(failures).toEqual([]);
 
     expect(suite.onEvent(completedTool('call-1', input, 'passed', { tool: 'bash' })).failure)
@@ -510,13 +511,82 @@ describe('OpenCode guard suite', () => {
     suite.onEvent(runningTool('call-1', first));
     suite.onEvent(runningTool('call-2', second));
     suite.onEvent(completedTool('call-1', first, 'passed', { tool: 'bash' }));
-    vi.advanceTimersByTime(60 * 60 * 1000);
+    vi.advanceTimersByTime(5 * 60_000);
     expect(failures).toEqual([]);
 
     suite.onEvent(completedTool('call-2', second, 'passed', { tool: 'bash' }));
     vi.advanceTimersByTime(60_000);
     expect(failures).toEqual(['idle-timeout']);
     suite.stopAttempt();
+  });
+
+  it('idle-timeout は error 終端でも計測を再開する', () => {
+    vi.useFakeTimers();
+    process.env.TAKT_OPENCODE_STREAM_IDLE_TIMEOUT_MS = '60000';
+    const suite = resolveOpenCodeGuardSuite(undefined, 'opencode/big-pickle');
+    const failures: string[] = [];
+    suite.startAttempt((failure) => failures.push(failure.guardId));
+
+    suite.onEvent(runningTool('call-1', { command: 'npm run test:it' }));
+    vi.advanceTimersByTime(5 * 60_000);
+    expect(failures).toEqual([]);
+
+    suite.onEvent(errorTool('call-1', 'bash', 'command failed', { command: 'npm run test:it' }));
+    vi.advanceTimersByTime(59_999);
+    expect(failures).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(failures).toEqual(['idle-timeout']);
+    suite.stopAttempt();
+  });
+
+  it('idle-timeout は terminal を取りこぼした in-flight を stale として捨て、劣化を有界にする', () => {
+    vi.useFakeTimers();
+    process.env.TAKT_OPENCODE_STREAM_IDLE_TIMEOUT_MS = '60000';
+    const suite = resolveOpenCodeGuardSuite(undefined, 'opencode/big-pickle');
+    const failures: string[] = [];
+    suite.startAttempt((failure) => failures.push(failure.guardId));
+
+    // terminal イベントが来ないまま無音が続く（取りこぼし）。
+    suite.onEvent(runningTool('call-1', { command: 'npm run test:it' }));
+    vi.advanceTimersByTime(6 * 60_000 - 1);
+    expect(failures).toEqual([]);
+
+    // stale 期限で in-flight を捨て、そこから通常のアイドル計測が再開する。
+    vi.advanceTimersByTime(1);
+    expect(failures).toEqual([]);
+    vi.advanceTimersByTime(59_999);
+    expect(failures).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(failures).toEqual(['idle-timeout']);
+    suite.stopAttempt();
+  });
+
+  it('終端イベントが来ないツールは wall-clock が拾う', () => {
+    vi.useFakeTimers();
+    process.env.TAKT_OPENCODE_STREAM_IDLE_TIMEOUT_MS = '60000';
+    const suite = resolveOpenCodeGuardSuite({ callTimeoutMs: 60_000 }, 'opencode/big-pickle');
+    const failures: string[] = [];
+    suite.startCall((failure) => failures.push(failure.guardId));
+    suite.startAttempt((failure) => failures.push(failure.guardId));
+
+    suite.onEvent(runningTool('call-1', { command: 'npm run test:it' }));
+    vi.advanceTimersByTime(59_999);
+    expect(failures).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(failures).toEqual(['wall-clock']);
+    expect(suite.getCallFailure()).toMatchObject({ guardId: 'wall-clock' });
+    suite.stopAttempt();
+    suite.stopCall();
+  });
+
+  it('object でない part を持つ message.part.updated は tool part として読まない', () => {
+    for (const part of [undefined, null, 'tool', 42]) {
+      const event = {
+        type: 'message.part.updated',
+        properties: { sessionID: 'session-1', part },
+      } as OpenCodeStreamEvent;
+      expect(readOpenCodeToolPart(event)).toBeUndefined();
+    }
   });
 
   it('idle-timeout の in-flight は attempt 境界で持ち越さない', () => {

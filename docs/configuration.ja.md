@@ -311,7 +311,11 @@ OpenCode の単一 call には既定で 3,600,000 ms（60分）の wall-clock �
 idle timeout として扱われますが、ツール呼び出しが in-flight の間は計測しません。
 OpenCode は tool_use から tool_result までイベントを流さないため、テストスイート
 実行のような長時間のツールを無音と判定すると健全な実行を切ってしまうからです。
-結果が返らないツールは `call_timeout_ms` の wall-clock 上限が受け持ちます。
+結果が返らないツールは `call_timeout_ms` の wall-clock 上限が受け持ちます。運用上の
+帰結として、ツール実行中に本当に処理が止まった場合の検知は既定 10 分ではなく
+`call_timeout_ms`（既定 60 分、引き上げればさらに）まで伸びます。ツール結果イベントを
+取りこぼした場合も、in-flight 登録から idle timeout の6倍を過ぎた時点で stale として
+捨てるため、検知が止まったままにはなりません。
 
 数値上限の不正値は入力経路で扱いが異なります。`guards.*` に書いた値（および
 `TAKT_PROVIDER_OPTIONS_*` 由来の値）は宣言された設定なので、正の整数でなければ

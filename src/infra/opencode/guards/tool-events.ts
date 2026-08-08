@@ -11,10 +11,18 @@ export interface OpenCodeToolRejection {
 
 export function readOpenCodeToolPart(event: OpenCodeStreamEvent): OpenCodeToolPart | undefined {
   if (event.type !== 'message.part.updated') return undefined;
-  const part = event.properties.part as OpenCodePart;
-  return part.type === 'tool' ? (part as OpenCodeToolPart) : undefined;
+  // part は provider から来る値なので、型に合わない payload でも落ちない。
+  const part: unknown = event.properties.part;
+  if (typeof part !== 'object' || part === null) return undefined;
+  return (part as OpenCodePart).type === 'tool' ? (part as OpenCodeToolPart) : undefined;
 }
 
+/**
+ * ツール呼び出しの同一性キー。用途で影響度が違うので、片方の都合で緩めない。
+ * ToolOutcomeLedger では terminal の重複排除（誤れば outcome の二重計上）、
+ * IdleTimeoutGuard では安全装置を止める判断（誤れば健全な実行の切断、または
+ * アイドル検知の停止）に使う。
+ */
 export function openCodeToolCallKey(toolPart: OpenCodeToolPart): string {
   return `${toolPart.sessionID}\0${toolPart.callID || toolPart.id}`;
 }

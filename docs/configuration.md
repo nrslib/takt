@@ -313,7 +313,12 @@ Stream silence counts as an idle timeout after 10 minutes
 running while a tool call is in flight. OpenCode emits no events between
 tool_use and tool_result, so treating a long-running tool — a test suite run,
 for example — as inactivity would cut a healthy execution. A tool that never
-returns is handled by the `call_timeout_ms` wall-clock limit.
+returns is handled by the `call_timeout_ms` wall-clock limit. The operational
+consequence: while a tool is in flight, a genuinely stuck run is detected after
+`call_timeout_ms` (60 minutes by default, longer if you raise it) rather than
+after 10 minutes. A dropped tool-result event does not disable detection either
+— an in-flight call is discarded as stale once six times the idle timeout has
+passed since it was registered.
 
 Invalid numeric limits are treated differently per input path. Values written
 under `guards.*` (including those from `TAKT_PROVIDER_OPTIONS_*`) are declared
