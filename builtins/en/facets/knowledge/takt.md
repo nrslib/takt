@@ -138,10 +138,11 @@ TAKT classifies unit, light integration, heavy integration, and E2E tests by the
 |-------|-----------|
 | During implementation | Repeat the unit gate |
 | After implementation | Run the light integration gate after the unit gate |
+| Added or changed an integration test | Run the `releaseVerificationWiring.test.ts` classification contract by itself |
 | Added or changed a heavy integration test | Run the changed file yourself as a target instead of waiting for the full heavy suite |
 | Pull request or release | Run the complete light and heavy integration suites |
 
-`npm test -- <test-file>` routes a classified target to the corresponding runner. The owner of a new or changed heavy integration test must leave this targeted run as completion evidence and must not delegate its first execution to the pull-request-wide heavy gate. `npm run check:release` runs unit, light integration, heavy integration, prompt evaluation, and E2E in order.
+Heavy integration runners use one worker to avoid process, Git, and synchronous I/O contention. Full local execution is serial, while pull-request CI splits heavy parallel integration across four isolated runners and isolates each serial group on its own runner. `npm test -- <test-file>` routes a classified target to the corresponding runner. The owner of a new or changed heavy integration test must leave this targeted run as completion evidence and must not delegate its first execution to the pull-request-wide heavy gate. `npm run check:release` runs unit, light integration, heavy integration, prompt evaluation, and E2E in order.
 
 ### Mock Provider
 
