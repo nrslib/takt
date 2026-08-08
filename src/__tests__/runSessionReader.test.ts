@@ -6,6 +6,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, symlinkSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import {
+  OTEL_SESSION_SHADOW_LOG_FILE_SUFFIX,
+  PHASE_USAGE_EVENTS_LOG_FILE_SUFFIX,
+  PROVIDER_EVENTS_LOG_FILE_SUFFIX,
+  USAGE_EVENTS_LOG_FILE_SUFFIX,
+} from '../core/logging/contracts.js';
 
 vi.mock('../infra/fs/session.js', () => ({
   loadNdjsonLog: vi.fn(),
@@ -620,6 +626,70 @@ describe('loadRunSessionContext', () => {
     const context = loadRunSessionContext(tmpDir, slug);
     expect(mockLoadNdjsonLog).not.toHaveBeenCalled();
     expect(context.stepLogs).toEqual([]);
+  });
+
+  it('should load the session log when provider, usage, phase usage, and OTEL shadow logs coexist', () => {
+    const slug = 'mixed-log-run';
+    const runDir = createRunDir(tmpDir, slug, {
+      task: 'Mixed log test',
+      workflow: 'default',
+      status: 'completed',
+      startTime: '2026-02-01T00:00:00.000Z',
+      logsDirectory: `.takt/runs/${slug}/logs`,
+      reportDirectory: `.takt/runs/${slug}/reports`,
+      runSlug: slug,
+    });
+    const sessionId = '20260205-120000-abc123';
+    const sessionLogName = `${sessionId}.jsonl`;
+    const sessionLogPath = join(runDir, 'logs', sessionLogName);
+
+    for (const filename of [
+      `${sessionId}${OTEL_SESSION_SHADOW_LOG_FILE_SUFFIX}`,
+      `${sessionId}${PHASE_USAGE_EVENTS_LOG_FILE_SUFFIX}`,
+      `${sessionId}${PROVIDER_EVENTS_LOG_FILE_SUFFIX}`,
+      `${sessionId}${USAGE_EVENTS_LOG_FILE_SUFFIX}`,
+      sessionLogName,
+    ]) {
+      writeFileSync(join(runDir, 'logs', filename), '{}', 'utf-8');
+    }
+
+    const sessionLog = {
+      task: 'Mixed log test',
+      projectDir: '',
+      workflowName: 'default',
+      iterations: 1,
+      startTime: '2026-02-01T00:00:00.000Z',
+      status: 'completed' as const,
+      history: [
+        {
+          step: 'retry',
+          persona: 'coder',
+          instruction: 'Retry the task',
+          status: 'completed',
+          timestamp: '2026-02-01T00:01:00.000Z',
+          content: 'Loaded the main session log',
+        },
+      ],
+    };
+    mockLoadNdjsonLog.mockImplementation((filepath) => {
+      if (filepath !== sessionLogPath) {
+        throw new Error('NDJSON session record type is invalid');
+      }
+      return sessionLog;
+    });
+
+    const context = loadRunSessionContext(tmpDir, slug);
+
+    expect(mockLoadNdjsonLog).toHaveBeenCalledTimes(1);
+    expect(mockLoadNdjsonLog).toHaveBeenCalledWith(sessionLogPath);
+    expect(context.stepLogs).toEqual([
+      {
+        step: 'retry',
+        persona: 'coder',
+        status: 'completed',
+        content: 'Loaded the main session log',
+      },
+    ]);
   });
 
   afterEach(() => {
