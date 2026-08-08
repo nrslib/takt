@@ -674,7 +674,7 @@ describe('TeamLeaderRunner finding_contract_fix', () => {
     expect(
       operation.children.find((child) => child.id === 'part:repair-first:completion')?.attempts,
     ).toHaveLength(3);
-  }, 60_000);
+  }, 120_000);
 
   it('redispatches a rate-limited part with the fallback provider instead of replaying it', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'takt-finding-contract-rate-limit-'));

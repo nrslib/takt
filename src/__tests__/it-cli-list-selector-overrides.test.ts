@@ -315,7 +315,7 @@ describe('IT: CLI list selector overrides', () => {
       expect.objectContaining({ personaName: 'architecture', provider: 'mock', model: CLI_MODEL }),
       expect.objectContaining({ personaName: 'frontend', provider: 'mock', model: CLI_MODEL }),
     ]));
-  }, 60_000);
+  }, 120_000);
 
   it('should use one CLI override for instruct preview, selector, and participants from the list command', async () => {
     createTerminalTask(environment.projectDir, 'completed');
@@ -337,5 +337,5 @@ describe('IT: CLI list selector overrides', () => {
       expect.objectContaining({ personaName: 'architecture', provider: 'mock', model: CLI_MODEL }),
       expect.objectContaining({ personaName: 'frontend', provider: 'mock', model: CLI_MODEL }),
     ]));
-  }, 60_000);
+  }, 120_000);
 });

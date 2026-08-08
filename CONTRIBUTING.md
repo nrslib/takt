@@ -46,7 +46,7 @@ npm run test:prompt-evals
 npm run test:e2e:mock
 ```
 
-`npm test` is the unit gate. Integration, regression, and performance tests run through `npm run test:it`; the deterministic OpenCode prompt smoke suite runs through `npm run test:prompt-evals`. `npm test -- <test-file>` routes each specified source test to exactly one unit, parallel integration, serial Git, or serial workflow runner. Routed runners execute sequentially, attempt every selected runner, and return the first failing child exit code. Release maintainers can run `npm run check:release` for the complete release path, including all provider E2E suites.
+`npm test` is the fast unit gate: it runs four concurrent shards and reports the resource-heavy unit files it excludes. Run `npm run test:unit:heavy` when the changed area needs those tests. Integration, regression, and performance tests run through `npm run test:it`; the deterministic OpenCode prompt smoke suite runs through `npm run test:prompt-evals`. `npm test -- <test-file>` routes each specified source test to exactly one fast-unit, heavy-unit, parallel integration, serial Git, or serial workflow runner. Selected runners execute concurrently and return the first failing child exit code. Release maintainers can run `npm run check:release` for the complete path: fast unit shards, heavy unit tests, integration tests, prompt smoke tests, and all provider E2E suites.
 
 See the [E2E testing overview](./docs/testing/e2e.md) for how to run the E2E suites and their prerequisites.
 

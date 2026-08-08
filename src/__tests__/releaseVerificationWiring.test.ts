@@ -12,11 +12,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  heavyUnitTestFiles,
   parallelIntegrationTestGlobs,
   serialGitTestFiles,
   serialWorkflowTestFiles,
 } from '../../scripts/test-classification.mjs';
 import parallelIntegrationConfig from '../../vitest.config.it.parallel.js';
+import heavyUnitConfig from '../../vitest.config.unit.heavy.js';
 import unitConfig from '../../vitest.config.unit.parallel.js';
 
 interface PackageManifest {
@@ -74,6 +76,7 @@ describe('release verification wiring', () => {
       test: 'npm run test:type-contracts && node scripts/run-npm-test.mjs',
       'test:unit': 'vitest run --config vitest.config.unit.parallel.ts',
       'test:unit:parallel': 'vitest run --config vitest.config.unit.parallel.ts',
+      'test:unit:heavy': 'vitest run --config vitest.config.unit.heavy.ts',
       'test:it': 'npm run test:it:parallel && npm run test:it:serial',
       'test:it:parallel': 'vitest run --config vitest.config.it.parallel.ts',
       'test:it:serial': 'node scripts/run-it-serial-groups.mjs',
@@ -90,6 +93,7 @@ describe('release verification wiring', () => {
       'npm run build',
       'npm run lint',
       'npm run test',
+      'npm run test:unit:heavy',
       'npm run test:it',
       'npm run test:prompt-evals',
       'npm run test:e2e:all',
@@ -104,6 +108,7 @@ describe('release verification wiring', () => {
       'run build',
       'run lint',
       'run test',
+      'run test:unit:heavy',
       'run test:it',
       'run test:prompt-evals',
       'run test:e2e:all',
@@ -118,11 +123,16 @@ describe('release verification wiring', () => {
       expectedCommands: ['run build', 'run lint'],
     },
     {
+      failingCommand: 'run test:unit:heavy',
+      expectedCommands: ['run build', 'run lint', 'run test', 'run test:unit:heavy'],
+    },
+    {
       failingCommand: 'run test:prompt-evals',
       expectedCommands: [
         'run build',
         'run lint',
         'run test',
+        'run test:unit:heavy',
         'run test:it',
         'run test:prompt-evals',
       ],
@@ -138,7 +148,8 @@ describe('release verification wiring', () => {
     expect(result.stdout).toContain('[takt] check:release failed (exit=23)');
   });
 
-  it('should keep the parallel and serial integration classifications disjoint', () => {
+  it('should keep fast unit, heavy unit, and integration classifications disjoint', () => {
+    const heavyUnit = new Set(heavyUnitTestFiles);
     const serialGit = new Set(serialGitTestFiles);
     const serialWorkflow = new Set(serialWorkflowTestFiles);
     const serialFiles = [...serialGit, ...serialWorkflow];
@@ -147,10 +158,17 @@ describe('release verification wiring', () => {
     for (const testFile of serialFiles) {
       expect(existsSync(new URL(`../../${testFile}`, import.meta.url))).toBe(true);
     }
+    for (const testFile of heavyUnit) {
+      expect(existsSync(new URL(`../../${testFile}`, import.meta.url))).toBe(true);
+      expect(serialGit.has(testFile)).toBe(false);
+      expect(serialWorkflow.has(testFile)).toBe(false);
+    }
+    expect(heavyUnitConfig.test?.include).toEqual(heavyUnitTestFiles);
     expect(parallelIntegrationConfig.test?.exclude).toEqual(serialFiles);
     expect(unitConfig.test?.exclude).toEqual([
       ...parallelIntegrationTestGlobs,
       ...serialFiles,
+      ...heavyUnitTestFiles,
     ]);
   });
 });

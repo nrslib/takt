@@ -298,7 +298,7 @@ describe('review-integrity gate failure payload (engine level)', () => {
       classificationAuthorityIds: ['system/intake_observation_classification_v1'],
       publicationIds: [],
     });
-  }, 60_000);
+  }, 120_000);
 });
 
 describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', () => {
@@ -362,9 +362,8 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
     // 古い episode になり得る。
     expect(outstanding[0]?.kind).toBe('quote-mismatch');
   // engine を実走させる。slot のラウンドを予算から外したことで実際のレビュー
-  // ラウンドが走るようになり、既定の 15s では 4 shard 同時実行に耐えない。
-  // 実測（単独実行）: 4.8-6.9s。4 shard 同時実行の劣化ぶんを見て 60s を取る。
-  }, 60_000);
+  // ラウンドが走るようになり、4 shard 同時実行時の遅延を見込んで共有タイムアウトを 120s とする。
+  }, 120_000);
 
   it('fail-closed: returnValue 終端（return: ...）で完了しようとしても、未昇格 anomaly が残る限り completion gate が拒否して abort する（codex 検証2巡目#1: gate を迂回する完了経路を塞ぐ）', async () => {
     mockReviewerEmitsHallucination();
@@ -404,9 +403,8 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
     expect(result.returnValue).toBeUndefined();
     expect(abortReason).toContain('reviewer anomaly');
   // engine を実走させる。slot のラウンドを予算から外したことで実際のレビュー
-  // ラウンドが走るようになり、既定の 15s では 4 shard 同時実行に耐えない。
-  // 実測（単独実行）: 4.8-6.9s。4 shard 同時実行の劣化ぶんを見て 60s を取る。
-  }, 60_000);
+  // ラウンドが走るようになり、4 shard 同時実行時の遅延を見込んで共有タイムアウトを 120s とする。
+  }, 120_000);
 
   it('merge-readiness child の need_replan は親の replan → implement → reviewers へ進み write_tests を通らない', async () => {
     mockReviewerEmitsHallucination();
@@ -487,9 +485,8 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
     expect(personas).toEqual(expect.arrayContaining(['planner', 'coder', 'reviewer-after-replan']));
     expect(personas).not.toContain('test-writer');
   // engine を実走させる。slot のラウンドを予算から外したことで実際のレビュー
-  // ラウンドが走るようになり、既定の 15s では 4 shard 同時実行に耐えない。
-  // 実測（単独実行）: 4.8-6.9s。4 shard 同時実行の劣化ぶんを見て 60s を取る。
-  }, 60_000);
+  // ラウンドが走るようになり、4 shard 同時実行時の遅延を見込んで共有タイムアウトを 120s とする。
+  }, 120_000);
 
   it('review_budget 枯渇後は replan → implement → reviewers へ進み、write_tests を再実行せず loop monitor で有限停止する', async () => {
     mockReviewerEmitsHallucination();
@@ -609,8 +606,8 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
         .toBe(true);
     }
   // slot のラウンドを予算から外したことで、予算枯渇までに実際のレビューラウンドが
-  // 走るようになり実行時間が伸びた（39s 実測）。既定の 15s では足りない。
-  }, 60_000);
+  // 走るようになり実行時間が伸びた（39s 実測）。共有タイムアウトを 120s とする。
+  }, 120_000);
 
   it('final-gate supervisor の単一Finding Contract報告を1回だけ取り込み、raw findingを重複保存しない', async () => {
     mockReviewerEmitsHallucination();
@@ -670,7 +667,6 @@ describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', 
     expect(rawFindings).toHaveLength(2);
     expect(new Set(rawFindings.map((finding) => finding.rawFindingId)).size).toBe(rawFindings.length);
   // engine を実走させる。slot のラウンドを予算から外したことで実際のレビュー
-  // ラウンドが走るようになり、既定の 15s では 4 shard 同時実行に耐えない。
-  // 実測（単独実行）: 4.8-6.9s。4 shard 同時実行の劣化ぶんを見て 60s を取る。
-  }, 60_000);
+  // ラウンドが走るようになり、4 shard 同時実行時の遅延を見込んで共有タイムアウトを 120s とする。
+  }, 120_000);
 });

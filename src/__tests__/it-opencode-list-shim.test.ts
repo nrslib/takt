@@ -211,7 +211,7 @@ describe.skipIf(!shouldRun)('IT: opencode list tool shim against the real binary
     const versionAllowsShim = versionAllowsListToolShim(opencodeVersion!);
     const registryAllowsShim = registryAllowsListToolShim(shimlessRegistry);
     expect(versionAllowsShim && !registryAllowsShim).toBe(false);
-  }, 60_000);
+  }, 120_000);
 
   it('exposes list to the model when read is enabled and executes it end to end', async () => {
     recorder.captured.length = 0;
@@ -234,7 +234,7 @@ describe.skipIf(!shouldRun)('IT: opencode list tool shim against the real binary
       .filter((message) => message.role === 'tool')
       .map((message) => String(message.content));
     expect(toolMessages.join('\n')).toContain('seeded-marker.txt');
-  }, 60_000);
+  }, 120_000);
 
   it('hides list from the model when the read-shaped tools are disabled', async () => {
     recorder.captured.length = 0;
@@ -254,7 +254,7 @@ describe.skipIf(!shouldRun)('IT: opencode list tool shim against the real binary
     expect(toolNames).not.toContain('list');
     // 全ツールが消えたのではなく、read 系だけが隠れたことの対照。
     expect(toolNames).toContain('todowrite');
-  }, 60_000);
+  }, 120_000);
 });
 
 describe.skipIf(shouldRun)('IT: opencode list tool shim (skipped)', () => {

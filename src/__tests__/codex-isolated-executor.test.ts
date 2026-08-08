@@ -862,7 +862,7 @@ describe('CodexClient strict read-only isolation', () => {
         server.close((error) => error ? reject(error) : resolve());
       });
     }
-  }, 15_000);
+  }, 120_000);
 
   it('should disable strict selector features and expose no plugins in the isolated profile', () => {
     const fake = createFakeCodex();

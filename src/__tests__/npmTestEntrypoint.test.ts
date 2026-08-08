@@ -17,6 +17,7 @@ import {
   itTestGlobs,
   parallelSrcRunnerConfig,
   srcTestInclude,
+  unitHeavyTestGlobs,
 } from '../../vitest.config.shared.js';
 
 afterEach(() => {
@@ -35,7 +36,7 @@ describe('parallel test runner configuration', () => {
     expect(unitConfig).toMatchObject({
       test: {
         include: srcTestInclude,
-        exclude: [...itTestGlobs, ...itSerialTestGlobs],
+        exclude: [...itTestGlobs, ...itSerialTestGlobs, ...unitHeavyTestGlobs],
       },
     });
     expect(parallelIntegrationConfig).toMatchObject({
@@ -68,6 +69,7 @@ describe('npm test execution', () => {
 
   it('should run unit shards concurrently when no target is provided', async () => {
     const events: string[] = [];
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     const run = vi.fn(async (npmArgs: string[]) => {
       const script = npmArgs[1]!;
       events.push(`start:${script}`);
@@ -89,6 +91,9 @@ describe('npm test execution', () => {
       'finish:test:unit:parallel',
     ]);
     expect(run).toHaveBeenCalledTimes(4);
+    expect(log).toHaveBeenCalledWith(
+      `[takt] Fast unit gate only: ${unitHeavyTestGlobs.length} heavy test files are excluded. Run "npm run test:unit:heavy" when needed; "npm run check:release" runs them after the 4 shards.`,
+    );
     expect(code).toBe(0);
   });
 
@@ -372,6 +377,19 @@ describe('npm test entrypoint routing', () => {
     ]);
   });
 
+  it('should route a targeted heavy unit file to the single-worker runner', () => {
+    expect(selectNpmTestRuns(['finding-review-integrity-gate.test.ts'])).toEqual([
+      {
+        npmArgs: [
+          'run',
+          'test:unit:heavy',
+          '--',
+          'src/__tests__/finding-review-integrity-gate.test.ts',
+        ],
+      },
+    ]);
+  });
+
   it('should route former serial workflow members to the unit runner', () => {
     const args = ['src/__tests__/workflowLoader.test.ts'];
 
@@ -380,18 +398,20 @@ describe('npm test entrypoint routing', () => {
     ]);
   });
 
-  it('should route mixed unit, parallel IT, and serial targets exactly once', () => {
+  it('should route mixed unit, heavy unit, parallel IT, and serial targets exactly once', () => {
     const args = [
       'src/__tests__/acpAgent.test.ts',
+      'src/__tests__/finding-review-integrity-gate.test.ts',
       'src/__tests__/it-acp-workflow-bridge.test.ts',
       'src/__tests__/finding-evidence-protocol.integration.test.ts',
       'src/__tests__/config.test.ts',
     ];
 
     expect(selectNpmTestRuns(args)).toEqual([
-      { npmArgs: ['run', 'test:unit:parallel', '--', args[0], args[3]] },
-      { npmArgs: ['run', 'test:it:parallel', '--', args[1]] },
-      { npmArgs: ['run', 'test:it:serial:git', '--', args[2]] },
+      { npmArgs: ['run', 'test:unit:parallel', '--', args[0], args[4]] },
+      { npmArgs: ['run', 'test:unit:heavy', '--', args[1]] },
+      { npmArgs: ['run', 'test:it:parallel', '--', args[2]] },
+      { npmArgs: ['run', 'test:it:serial:git', '--', args[3]] },
     ]);
   });
 

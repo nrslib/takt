@@ -14,9 +14,10 @@
 - `npm run build`: compile TypeScript and copy runtime prompts, i18n files, and presets into `dist/`.
 - `npm run watch`: run the TypeScript compiler in incremental watch mode.
 - `npm run lint`: run ESLint on `src/`.
-- `npm test`: run the unit gate; targeted source tests are routed to their unit or integration runner.
+- `npm test`: run the fast unit gate in four concurrent shards. Resource-heavy unit tests are excluded and announced in the output; targeted source tests are routed to their unit, heavy-unit, or integration runner.
+- `npm run test:unit:heavy`: run the resource-heavy unit slice with one worker when the changed area needs it.
 - `npm run test:e2e:mock`: run E2E tests against the mock provider.
-- `npm run check:release`: run the full release verification path: build, lint, unit, integration, prompt-eval, and all E2E suites.
+- `npm run check:release`: run the full release verification path: build, lint, fast unit (four shards), heavy unit, integration, prompt-eval, and all E2E suites.
 
 ## Coding Style & Naming Conventions
 

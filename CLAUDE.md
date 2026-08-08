@@ -15,18 +15,19 @@ TAKT (TAKT Agent Koordination Topology) is a multi-agent orchestration CLI. It r
 | `npm run build` | `tsc` (+ prompt-evals tsconfig) plus copies of `src/shared/prompts/{en,ja}/**/*.md`, `src/shared/i18n/*.yaml`, and `src/core/runtime/presets/*.sh` into `dist/`. Skipping any copy breaks runtime resolution. |
 | `npm run watch` | TypeScript incremental build (no asset copy). |
 | `npm run lint` | ESLint on `src/`. `no-explicit-any` is error; unused vars must be prefixed `_`. |
-| `npm test` | Fast unit gate: type-contracts tsc, then 4 shards launched **concurrently** (`Promise.all` in `scripts/run-npm-test.mjs`, each shard `--maxWorkers=1`). Excludes integration/regression/performance tests. |
+| `npm test` | Fast unit gate: type-contracts tsc, then 4 shards launched **concurrently** (`Promise.all` in `scripts/run-npm-test.mjs`, each shard `--maxWorkers=1`). Excludes integration/regression/performance and resource-heavy unit tests; the output names the follow-up command. |
+| `npm run test:unit:heavy` | Resource-heavy unit slice, run with one worker when relevant. `check:release` always runs it after the fast 4-shard gate. |
 | `npm run test:it` | Integration gate: parallel IT slice (`it-*`, `*.integration/regression/performance.test.ts`), then the serial group. |
-| `npm test -- src/__tests__/<file>.test.ts` | Route a single file to the correct runner (unit, parallel-IT, or serial). Multiple routed runners execute sequentially and return the first failing exit code. |
+| `npm test -- src/__tests__/<file>.test.ts` | Route a single file to the correct runner (unit, heavy-unit, parallel-IT, or serial). Multiple routed runners execute concurrently and return the first failing exit code. |
 | `npm test -- -t "<pattern>"` | Run unit tests whose name matches `<pattern>`. |
 | `npm run test:prompt-evals` | Deterministic OpenCode prompt-eval smoke gate (11 cases, no API cost). Part of `check:release`; not part of routine gates. |
 | `npm run test:e2e:mock` | Full mock-provider E2E suite (parallel shards). Single spec: `npx vitest run --config vitest.config.e2e.mock.ts e2e/specs/<file>.e2e.ts`. |
 | `npm run test:e2e:provider:{claude,claude-sdk,codex,opencode,cursor}` | E2E against a real provider (slow, costs API credits). |
-| `npm run check:release` | Full pre-release gate: build + lint + test + test:it + prompt-evals + e2e. |
+| `npm run check:release` | Full pre-release gate: build + lint + fast 4-shard unit + heavy unit + test:it + prompt-evals + e2e. |
 
 ### Test pool behavior (worth knowing before "fixing" flakes)
 
-- Serial-group membership lives in `scripts/test-classification.mjs` (`serialGitTestFiles`). Membership is about **measured IO interference** (fsync/spawnSync storms that block a worker past vitest's 60s birpc deadline), not correctness. Add files only with a measured reason; `releaseVerificationWiring.test.ts` fails if a listed file does not exist.
+- Heavy-unit and serial-IT membership lives in `scripts/test-classification.mjs` (`heavyUnitTestFiles`, `serialGitTestFiles`). Membership is about **measured IO interference** (fsync/spawnSync storms that block a worker past vitest's birpc deadline), not correctness. Add files only with a measured reason; `releaseVerificationWiring.test.ts` fails if a listed file does not exist.
 - `dangerouslyIgnoreUnhandledErrors: !process.env.CI` (vitest.config.shared.ts): the spurious `[vitest-worker]: Timeout calling "onTaskUpdate"` error is tolerated locally (4 concurrent shards on one machine) but **fatal on CI**. The parallel IT slice runs single-worker on CI (`maxWorkers: process.env.CI ? 1 : 4`) for the same reason.
 - Because that noise still makes a shard exit non-zero locally, `npm test` re-measures such a shard **once** (`scripts/vitest-birpc-noise.mjs`): only when the shard's own output shows zero failed tests, at least one passed test, and no reported error other than `[vitest-worker]: Timeout calling "onTaskUpdate"`. One real test failure, one unrecognized error headline, or `CI` set → no re-measurement, exit code stands. The re-measurement is announced on stderr; a silent shard exit is never rescued.
 - Reading that output means shards run through a pipe (`scripts/teed-command.mjs`) instead of inheriting the terminal, so **`npm test` output is now non-TTY: no color and no live progress rewriting**. That module takes the exit code from `exit` and gives `close` only a short deadline — a shard's grandchild can hold the stdout pipe open forever, and waiting on `close` alone hangs the gate.

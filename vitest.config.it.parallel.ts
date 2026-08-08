@@ -12,8 +12,8 @@ export default defineConfig({
     ...parallelSrcRunnerConfig,
     // Integration tests drive real engines, git repositories, and fsync-heavy
     // stores; under a loaded worker pool individual tests can legitimately
-    // exceed the 15s unit default.
-    testTimeout: 60_000,
+    // use the shared 120s test timeout.
+    testTimeout: 120_000,
     // fsync and spawnSync serialize at the device/kernel level, so extra
     // workers only add contention: a worker stuck >60s in synchronous IO
     // trips the vitest worker RPC timeout as a spurious unhandled error.

@@ -3,6 +3,7 @@
 import { basename, isAbsolute, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
+  heavyUnitTestFiles,
   serialGitTestFiles,
   serialWorkflowTestFiles,
 } from './test-classification.mjs';
@@ -12,6 +13,7 @@ import { isBirpcNoiseOnlyFailure } from './vitest-birpc-noise.mjs';
 
 const UNIT_SHARDS = ['1/4', '2/4', '3/4', '4/4'];
 const NO_ARG_UNIT_RUN_OPTIONS = ['--maxWorkers=1'];
+const HEAVY_UNIT_NOTICE = `[takt] Fast unit gate only: ${heavyUnitTestFiles.length} heavy test files are excluded. Run "npm run test:unit:heavy" when needed; "npm run check:release" runs them after the 4 shards.`;
 const VITEST_OPTIONS_WITH_REQUIRED_VALUE = new Set([
   '-c',
   '-r',
@@ -75,6 +77,7 @@ export function selectNpmTestRuns(args) {
   }
   return [
     buildTargetedRun('test:unit:parallel', targets.shared, targets.unit),
+    buildTargetedRun('test:unit:heavy', targets.shared, targets.heavyUnit),
     buildTargetedRun('test:it:parallel', targets.shared, targets.integration),
     buildTargetedRun('test:it:serial:git', targets.shared, targets.serialGit),
     buildTargetedRun('test:it:serial:workflow', targets.shared, targets.serialWorkflow),
@@ -88,6 +91,7 @@ function buildDefaultRuns(shared) {
 
 function hasExplicitTargets(targets) {
   return targets.unit.length > 0
+    || targets.heavyUnit.length > 0
     || targets.integration.length > 0
     || targets.serialGit.length > 0
     || targets.serialWorkflow.length > 0;
@@ -96,6 +100,7 @@ function hasExplicitTargets(targets) {
 function splitTestTargets(args) {
   const shared = [];
   const unit = [];
+  const heavyUnit = [];
   const integration = [];
   const serialGit = [];
   const serialWorkflow = [];
@@ -116,6 +121,8 @@ function splitTestTargets(args) {
           shared[shared.length - 1] = normalizeOptionalOptionWithoutValue(arg);
         }
       }
+    } else if (isHeavyUnitTarget(arg)) {
+      heavyUnit.push(normalizeTestTarget(arg));
     } else if (isSerialGitTarget(arg)) {
       serialGit.push(normalizeTestTarget(arg));
     } else if (isSerialWorkflowTarget(arg)) {
@@ -127,7 +134,7 @@ function splitTestTargets(args) {
     }
   }
 
-  return { shared, unit, integration, serialGit, serialWorkflow };
+  return { shared, unit, heavyUnit, integration, serialGit, serialWorkflow };
 }
 
 function buildTargetedRun(script, shared, targets) {
@@ -186,6 +193,10 @@ function isSerialGitTarget(arg) {
   return serialGitTestFiles.includes(normalizeTestTarget(arg));
 }
 
+function isHeavyUnitTarget(arg) {
+  return heavyUnitTestFiles.includes(normalizeTestTarget(arg));
+}
+
 function isSerialWorkflowTarget(arg) {
   return serialWorkflowTestFiles.includes(normalizeTestTarget(arg));
 }
@@ -198,7 +209,11 @@ function normalizeTestTarget(arg) {
   if (workspaceRelative.includes('/')) {
     return workspaceRelative;
   }
-  const matchingClassifiedTargets = [...serialGitTestFiles, ...serialWorkflowTestFiles]
+  const matchingClassifiedTargets = [
+    ...heavyUnitTestFiles,
+    ...serialGitTestFiles,
+    ...serialWorkflowTestFiles,
+  ]
     .filter((target) => basename(target) === workspaceRelative);
   return matchingClassifiedTargets.length === 1
     ? matchingClassifiedTargets[0]
@@ -238,6 +253,9 @@ async function remeasureBirpcNoiseShards(results, runCommand) {
 }
 
 export async function runNpmTest(args, runCommand = runNpmCommand) {
+  if (!hasExplicitTargets(splitTestTargets(args))) {
+    console.log(HEAVY_UNIT_NOTICE);
+  }
   const runs = selectNpmTestRuns(args);
   const results = await Promise.all(runs.map(async (run) => {
     const result = await runCommand(run.npmArgs);

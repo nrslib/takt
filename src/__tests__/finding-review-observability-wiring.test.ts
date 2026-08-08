@@ -29,7 +29,7 @@ vi.mock('../agents/finding-intake-normalizer-usecase.js', () => ({
   normalizeFindingIntake: vi.fn(),
 }));
 
-const SLOW_ENGINE_TEST_TIMEOUT_MS = 60_000;
+const SLOW_ENGINE_TEST_TIMEOUT_MS = 120_000;
 
 class CapturingSpanExporter implements SpanExporter {
   readonly spans: ReadableSpan[] = [];

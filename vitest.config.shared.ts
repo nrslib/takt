@@ -1,11 +1,14 @@
 import type { UserConfig } from 'vitest/config';
 import {
+  heavyUnitTestFiles,
   parallelIntegrationTestGlobs,
   serialGitTestFiles,
   serialWorkflowTestFiles,
 } from './scripts/test-classification.mjs';
 
 export const srcTestInclude = ['src/__tests__/**/*.test.ts'];
+
+export const unitHeavyTestGlobs = [...heavyUnitTestFiles];
 
 export const itTestGlobs = [...parallelIntegrationTestGlobs];
 
@@ -24,11 +27,9 @@ export const itSerialTestGlobs = [
   ...itSerialWorkflowLoaderTestGlobs,
 ];
 
-// Windows runners spawn processes and touch the filesystem an order of
-// magnitude slower than the Linux/macOS ones, so tests that pass everywhere
-// else hit the shared 15s ceiling there. Three of the four windows job
-// failures in the last 100 CI runs were "Test timed out in 15000ms".
-const testTimeout = process.platform === 'win32' ? 60_000 : 15_000;
+// Some workflow tests spawn processes and perform fsync-heavy persistence.
+// Keep one sufficiently large ceiling for every platform and runner.
+const testTimeout = 120_000;
 
 export const commonSrcTestConfig = {
   env: {
@@ -64,7 +65,7 @@ export const parallelSrcRunnerConfig = {
 } satisfies UserConfig['test'];
 
 export const serialSrcRunnerConfig = {
-  testTimeout: 60_000,
+  testTimeout: 120_000,
   passWithNoTests: true,
   pool: 'threads',
   poolOptions: {

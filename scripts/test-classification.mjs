@@ -5,6 +5,18 @@ export const parallelIntegrationTestGlobs = Object.freeze([
   'src/__tests__/**/*.performance.test.ts',
 ]);
 
+// These unit tests run full workflow engines, create repositories, or spawn
+// child processes. Under the four-shard unit gate they have repeatedly
+// exceeded the per-test ceiling or starved vitest's worker RPC. Keep them out
+// of the routine gate and run them with the dedicated single-worker runner.
+export const heavyUnitTestFiles = Object.freeze([
+  'src/__tests__/codex-isolated-executor.test.ts',
+  'src/__tests__/finding-review-integrity-gate.test.ts',
+  'src/__tests__/team-leader-finding-contract-runner.test.ts',
+  'src/__tests__/workflow-step-fragment-builtin-runtime.test.ts',
+  'src/__tests__/workflow-step-fragment-runtime.test.ts',
+]);
+
 // Escape hatch for tests that must not run concurrently with the rest of the
 // IT slice. A 2026-08 audit found zero files with shared mutable state (all
 // use mkdtemp isolation under pool:'forks'), so membership is not about
