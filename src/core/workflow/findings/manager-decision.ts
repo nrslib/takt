@@ -17,7 +17,10 @@ import type {
 import type { ManagerDecisionStageResult, RunFindingManagerForStepInput } from './manager-contracts.js';
 import { runInterpretationCases } from './interpretation-case-runner.js';
 import { assembleCleanManagerDecision } from './manager-clean-decision.js';
-import { runMainManagerTasks } from './manager-task-runner.js';
+import {
+  adjudicableReviewerAnomalies,
+  runMainManagerTasks,
+} from './manager-task-runner.js';
 import {
   hasLifecycleProductTransitionCapability,
   hasLifecycleTransitionIntent,
@@ -95,11 +98,20 @@ export async function runManagerDecisionStage(params: {
     });
     const hasDisputeClaims = hasDisputeClaimsHeading(input.priorStepResponseText);
     const hasActiveConflict = previousLedger.conflicts.some((conflict) => conflict.status === 'active');
+    // 裁定対象の anomaly も provider を呼ぶ理由になる。ここに含めないと、raw も
+    // dispute も conflict も無い最終ゲートのラウンド（＝裁定だけが用のある典型）で
+    // runMainManagerTasks が呼ばれず、権限があっても reviewer_anomaly task が
+    // 一度も生成されない。
+    const hasAdjudicableAnomaly = adjudicableReviewerAnomalies({
+      ledger: previousLedger,
+      managerAuthority: input.managerAuthority,
+    }).length > 0;
     const needsAgent = mechanical.residualRawFindings.length > 0
       || hasDisputeClaims
       || hasActiveConflict
       || invalidLocationCandidateFindingIds.size > 0
-      || dismissCandidateFindingIds.size > 0;
+      || dismissCandidateFindingIds.size > 0
+      || hasAdjudicableAnomaly;
 
     let initialInvalidAttempts: FindingManagerValidationAttemptReport[] = [];
     let taskExecution: Awaited<ReturnType<typeof runMainManagerTasks>> | undefined;

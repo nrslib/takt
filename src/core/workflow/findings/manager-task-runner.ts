@@ -19,6 +19,7 @@ import {
 } from './manager-agent.js';
 import { buildFindingManagerControlTaskStep } from './manager-step.js';
 import {
+  isAdjudicableReviewerAnomaly,
   reviewerAnomalyAdjudicationClaimTexts,
 } from '../../models/finding-reviewer-anomaly-settlement-policy.js';
 import {
@@ -824,20 +825,21 @@ function boundedPriorTextForFinding(
 }
 
 /**
- * 裁定にかけられる anomaly。「言い直しラダーを使い切った claim-bearing」だけで、
- * 決着済み（昇格・settlement・非 claim-bearing の終端）は含めない。
- * 台帳側の成立条件（reviewerAnomalySettlementEligibilityViolation）と同じ集合。
+ * このラウンドで裁定へ出す anomaly。権限の判定込みの唯一の入口で、
+ * manifest（task を作るか）と needsAgent（そもそも provider を呼ぶか）が共有する。
+ * 片方だけが条件を持つと、権限があるのに task が作られないラウンドが生まれる。
+ *
+ * 適格性そのものは台帳側の成立条件と同じ述語（isAdjudicableReviewerAnomaly）を使う。
  */
-export function adjudicableReviewerAnomalies(
-  ledger: FindingLedger,
-): ReviewerAnomalyEntry[] {
-  return (ledger.reviewerAnomalies ?? [])
-    .filter((anomaly) => (
-      anomaly.kind === 'intake-contract-incomplete'
-      && anomaly.intakeContract?.terminalDisposition?.workflowOutcome === 'review_integrity_unresolved'
-      && anomaly.promotedFindingId === undefined
-      && anomaly.settlement === undefined
-    ))
+export function adjudicableReviewerAnomalies(input: {
+  ledger: FindingLedger;
+  managerAuthority: RunFindingManagerForStepInput['managerAuthority'];
+}): ReviewerAnomalyEntry[] {
+  if (input.managerAuthority !== 'terminal_adjudication') {
+    return [];
+  }
+  return (input.ledger.reviewerAnomalies ?? [])
+    .filter(isAdjudicableReviewerAnomaly)
     .sort((left, right) => compareBinaryStrings(left.id, right.id));
 }
 
@@ -1009,8 +1011,11 @@ export function createMainManagerControlTaskManifest(input: {
   // 終端処分済み claim-bearing anomaly の裁定枠。terminal adjudication 権限が
   // 無いラウンドでは task 自体を作らない — 権限の無い呼び出しに「却下してよいか」を
   // 問うと、返せない答えを毎ラウンド要求することになる。
-  if (input.managerAuthority === 'terminal_adjudication') {
-    for (const anomaly of adjudicableReviewerAnomalies(input.previousLedger)) {
+  {
+    for (const anomaly of adjudicableReviewerAnomalies({
+      ledger: input.previousLedger,
+      managerAuthority: input.managerAuthority,
+    })) {
       tasks.push(controlTask(
         input.previousLedger,
         input.reviewScopeSnapshotId,
@@ -1022,7 +1027,7 @@ export function createMainManagerControlTaskManifest(input: {
           `Restatement ladder terminated unresolved: ${anomaly.intakeContract!.terminalDisposition!.reason}`,
         )],
         {
-          managerAuthority: input.managerAuthority,
+          managerAuthority: 'terminal_adjudication',
           workflowTaskDigest: computeWorkflowTaskDigest(input.workflowTask),
           workflowTask: input.workflowTask,
           reportExcerpts: [],
@@ -1109,7 +1114,11 @@ function buildControlTaskInstruction(input: {
     'The Finding Manager instruction above may describe a legacy rawDecisions/dismissDecisions envelope. That envelope is disabled for this control task.',
     'Return exactly one object whose only top-level fields are taskId, evaluations, and selectedIntentId. Do not return rawDecisions, dismissDecisions, or any other legacy envelope field.',
     'Each evaluations entry must contain exactly intentId and result. Exact-cover every candidate intent.',
-    'An outside_task_scope result has exactly this shape: {"kind":"dismiss","findingId":"<intent entityId>","basis":"outside_task_scope","reason":"<separate reason>","taskQuote":"<non-empty byte-exact workflow task substring>"}. It has no evidence field.',
+    // findingId 形式の却下は product finding 用。reviewer anomaly の task で併記すると
+    // 必ず validation で落ちる形状を同時に提示することになるので出さない。
+    ...(input.task.kind === 'reviewer_anomaly' ? [] : [
+      'An outside_task_scope result has exactly this shape: {"kind":"dismiss","findingId":"<intent entityId>","basis":"outside_task_scope","reason":"<separate reason>","taskQuote":"<non-empty byte-exact workflow task substring>"}. It has no evidence field.',
+    ]),
     ...(input.task.kind !== 'reviewer_anomaly' ? [] : [
       '',
       '## Reviewer anomaly adjudication',

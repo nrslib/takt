@@ -348,6 +348,21 @@ export function reviewerAnomalyAdjudicationClaimTexts(
 }
 
 /**
+ * 裁定にかけられる anomaly か。「言い直しラダーを使い切った claim-bearing」だけで、
+ * 決着済み（昇格・settlement）は含めない。
+ *
+ * 候補選定（どの anomaly を裁定へ出すか）と成立条件（どの settlement を受理するか）が
+ * 同じ集合を指すよう、両者がこの1つの述語を共有する。片方だけ広いと「出したのに
+ * 受理されない」または「出していないのに書ける」が生まれる。
+ */
+export function isAdjudicableReviewerAnomaly(anomaly: ReviewerAnomalyEntry): boolean {
+  return anomaly.kind === 'intake-contract-incomplete'
+    && anomaly.intakeContract?.terminalDisposition?.workflowOutcome === 'review_integrity_unresolved'
+    && anomaly.promotedFindingId === undefined
+    && anomaly.settlement === undefined;
+}
+
+/**
  * 終端処分済み anomaly の裁定却下が成立する条件。
  *
  * 対象は「言い直しラダーを使い切った claim-bearing」だけ。可視的失敗が既定で、
@@ -363,10 +378,14 @@ function adjudicationEligibilityViolation(input: {
   if (anomaly.promotedFindingId !== undefined) {
     return 'promoted anomalies cannot be settled';
   }
-  if (
-    anomaly.kind !== 'intake-contract-incomplete'
-    || anomaly.intakeContract?.terminalDisposition?.workflowOutcome !== 'review_integrity_unresolved'
-  ) {
+  // 二重決着の明示拒否。現在の呼び出し側は書き込み前に決着済みを外すため到達しないが、
+  // 到達不能性に寄りかからず構造で保証する（決着済みの上書きは監査記録を壊す）。
+  if (anomaly.settlement !== undefined && anomaly.settlement !== input.settlement) {
+    return 'already settled anomalies cannot be settled again';
+  }
+  // 既に settlement を持つ anomaly はここへ来ない（呼び出し側が書き込み前に判定する）
+  // ため、候補述語からは settlement 条件だけ外して評価する。
+  if (!isAdjudicableReviewerAnomaly({ ...anomaly, settlement: undefined })) {
     return 'terminal adjudication may only dismiss a claim-bearing anomaly whose restatement ladder terminated unresolved';
   }
   if (

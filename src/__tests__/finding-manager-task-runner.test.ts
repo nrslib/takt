@@ -1583,4 +1583,80 @@ describe('reviewer anomaly adjudication control task', () => {
     expect(result.anomalyAdjudications).toEqual([]);
     expect(result.invalidAttemptMessages.join('\n')).toContain('byte-exact quote of the recorded claim');
   });
+
+  it('rejects a dismissal whose task quote is not in the workflow task', async () => {
+    executeAgentMock.mockImplementation(async (_persona, instruction) => {
+      const manifest = sectionJson<ControlManifestView>(instruction, '## Task manifest');
+      return response({
+        taskId: manifest.taskId,
+        evaluations: manifest.candidateIntents.map((intent) => ({
+          intentId: intent.intentId,
+          result: {
+            kind: 'dismiss',
+            anomalyId: intent.entityId,
+            basis: 'outside_task_scope',
+            reason: 'The claim targets a module the task never asked to change',
+            taskQuote: 'Delete every legacy signal field',
+            claimQuote: recordedClaim.slice(0, 24),
+          },
+        })),
+        selectedIntentId: manifest.candidateIntents[0]!.intentId,
+      });
+    });
+    const result = await runMainManagerTasks({
+      contract,
+      previousLedger: terminalAnomalyLedger(),
+      reviewScopeSnapshotId: 'scope-test',
+      residualRawFindings: [],
+      mechanicallyClassifiedCount: 0,
+      priorStepResponseText: undefined,
+      invalidLocationCandidates: new Map(),
+      dismissCandidates: new Map(),
+      evidenceRecordsByRawFindingId: new Map(),
+      managerStep,
+      runInput,
+      managerAuthority: 'terminal_adjudication',
+      workflowTask,
+      subResults: [],
+    });
+
+    expect(result.anomalyAdjudications).toEqual([]);
+    expect(result.invalidAttemptMessages.join('\n')).toContain('outside_task_scope taskQuote');
+  });
+
+  it('does not offer the product-finding dismissal shape in the adjudication prompt', async () => {
+    // findingId 形式を併記すると、必ず validation で落ちる形状を同時に提示することになる。
+    let prompt = '';
+    executeAgentMock.mockImplementation(async (_persona, instruction) => {
+      prompt = instruction;
+      const manifest = sectionJson<ControlManifestView>(instruction, '## Task manifest');
+      return response({
+        taskId: manifest.taskId,
+        evaluations: manifest.candidateIntents.map((intent) => ({
+          intentId: intent.intentId,
+          result: { kind: 'no_action', reason: 'in scope' },
+        })),
+        selectedIntentId: null,
+      });
+    });
+    await runMainManagerTasks({
+      contract,
+      previousLedger: terminalAnomalyLedger(),
+      reviewScopeSnapshotId: 'scope-test',
+      residualRawFindings: [],
+      mechanicallyClassifiedCount: 0,
+      priorStepResponseText: undefined,
+      invalidLocationCandidates: new Map(),
+      dismissCandidates: new Map(),
+      evidenceRecordsByRawFindingId: new Map(),
+      managerStep,
+      runInput,
+      managerAuthority: 'terminal_adjudication',
+      workflowTask,
+      subResults: [],
+    });
+
+    expect(prompt).toContain('"anomalyId"');
+    expect(prompt).not.toContain('"findingId":"<intent entityId>"');
+  });
 });

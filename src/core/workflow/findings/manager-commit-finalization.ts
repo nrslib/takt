@@ -180,6 +180,8 @@ function applyReviewerAnomalyAdjudications(input: {
   adjudications: readonly ReviewerAnomalyAdjudicationDecision[];
   workflowTask: string;
   observation: FindingObservation;
+  /** 不採用になった裁定の理由。監査レポートへ載せるため呼び出し側が受け取る。 */
+  rejections: string[];
 }): FindingLedger {
   const anomalies = input.ledger.reviewerAnomalies;
   if (anomalies === undefined || input.adjudications.length === 0) {
@@ -205,13 +207,18 @@ function applyReviewerAnomalyAdjudications(input: {
       reason: adjudication.reason,
       decidedAt: input.observation,
     };
-    if (reviewerAnomalySettlementEligibilityViolation({
+    const violation = reviewerAnomalySettlementEligibilityViolation({
       projection: input.ledger,
       anomaly,
       settlement,
       sourceHead: { kind: 'projection' },
       workflowTaskDigest,
-    }) !== undefined) {
+    });
+    if (violation !== undefined) {
+      // 無言で捨てない。裁定が出たのに保存されなかった事実と理由を監査へ残す。
+      input.rejections.push(
+        `reviewerAnomalyAdjudications: anomaly "${anomaly.id}" rejected at save time: ${violation}`,
+      );
       return anomaly;
     }
     changed = true;
@@ -482,7 +489,10 @@ export function applyCommitLedgerStates(input: {
   ledger: FindingLedger;
   reviewerAnomalyLandings: ReviewerAnomalyLandingReport[];
   rejectedObservationAttachments: RejectedObservationAttachment[];
+  /** 保存時に不採用となった裁定の理由。manager validation report へ載せる。 */
+  adjudicationRejections: string[];
 } {
+  const adjudicationRejections: string[] = [];
   const rejectedObservations = classifyRejectedObservations(
     input.pendingRejectedObservations,
     input.settledLedger,
@@ -565,9 +575,11 @@ export function applyCommitLedgerStates(input: {
     adjudications: input.anomalyAdjudications,
     workflowTask: input.runInput.workflowTask,
     observation,
+    rejections: adjudicationRejections,
   });
   return {
     ledger: withAdjudications,
+    adjudicationRejections,
     reviewerAnomalyLandings: anomalySpecs.map((spec) => ({
       kind: spec.kind,
       stableKey: spec.stableKey,

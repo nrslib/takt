@@ -1295,18 +1295,28 @@ describe('FC intake contract', () => {
         const { ledger } = disposedLedger('raw-closed-forbidden');
         const anomaly = ledger.reviewerAnomalies![0]!;
 
-        expect(collectFindingLedgerProjectionInvariantViolations({
-          ...ledger,
-          reviewerAnomalies: [{
-            ...anomaly,
-            settlement: {
-              kind: 'withdrawn_by_subsequent_review',
-              supersedingPublications: [{ reviewer: anomaly.reviewers[0]!, publicationId: 'a'.repeat(64) }],
-              decidedAt: observedAt,
-            },
-          }],
-        }).filter((violation) => violation.path.at(-1) === 'terminalDisposition'))
-          .toHaveLength(1);
+        const withSettlement = (settlement: NonNullable<typeof anomaly.settlement>) => (
+          collectFindingLedgerProjectionInvariantViolations({
+            ...ledger,
+            reviewerAnomalies: [{ ...anomaly, settlement }],
+          }).filter((violation) => violation.path.at(-1) === 'terminalDisposition')
+        );
+
+        expect(withSettlement({
+          kind: 'withdrawn_by_subsequent_review',
+          supersedingPublications: [{ reviewer: anomaly.reviewers[0]!, publicationId: 'a'.repeat(64) }],
+          decidedAt: observedAt,
+        })).toHaveLength(1);
+        expect(withSettlement({
+          kind: 'target_resolved_by_verified_evidence',
+          findingId: 'F-0001',
+          lifecycleEventId: 'event-1',
+        })).toHaveLength(1);
+        expect(withSettlement({
+          kind: 'target_dismissed_by_terminal_adjudication',
+          findingId: 'F-0001',
+          lifecycleEventId: 'event-1',
+        })).toHaveLength(1);
       });
 
       it('refuses to adjudicate an anomaly whose restatement ladder is still open', () => {
@@ -1351,7 +1361,43 @@ describe('FC intake contract', () => {
           },
           sourceHead: { kind: 'projection' },
           workflowTaskDigest: computeWorkflowTaskDigest(workflowTask),
-        })).toBeDefined();
+        })).toBe('terminal adjudication may only dismiss a claim-bearing anomaly whose restatement ladder terminated unresolved');
+      });
+
+      it('refuses to settle an anomaly that is already settled', () => {
+        // 二重決着の禁止。決着済みの上書きは監査記録を壊す。
+        const { wire, ledger } = disposedLedger('raw-closed-twice');
+        const workflowTask = 'Rename the legacy signal fields under src/infra/config/runtime-provider/.';
+        const settled = {
+          ...ledger.reviewerAnomalies![0]!,
+          settlement: {
+            kind: 'dismissed_by_terminal_adjudication' as const,
+            basis: 'outside_task_scope' as const,
+            taskQuote: 'Rename the legacy signal fields',
+            workflowTaskDigest: computeWorkflowTaskDigest(workflowTask),
+            claimQuote: wire.rawExcerpt!.slice(0, 20),
+            adjudicationTaskId: 'd'.repeat(64),
+            reason: 'already decided',
+            decidedAt: observedAt,
+          },
+        };
+
+        expect(reviewerAnomalySettlementEligibilityViolation({
+          projection: ledger,
+          anomaly: settled,
+          settlement: {
+            kind: 'dismissed_by_terminal_adjudication',
+            basis: 'outside_task_scope',
+            taskQuote: 'Rename the legacy signal fields',
+            workflowTaskDigest: computeWorkflowTaskDigest(workflowTask),
+            claimQuote: wire.rawExcerpt!.slice(0, 20),
+            adjudicationTaskId: 'e'.repeat(64),
+            reason: 'a second decision',
+            decidedAt: observedAt,
+          },
+          sourceHead: { kind: 'projection' },
+          workflowTaskDigest: computeWorkflowTaskDigest(workflowTask),
+        })).toBe('already settled anomalies cannot be settled again');
       });
 
       it('still reports the unpresented cause while the anomaly is open', () => {

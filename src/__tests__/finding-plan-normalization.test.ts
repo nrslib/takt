@@ -1694,6 +1694,7 @@ describe('relation 別 intake と target atomization', () => {
             interpretationIntegrityDigests: new Map(),
             observation,
             verifiedEvidenceCandidates: [],
+            anomalyAdjudications: [],
             stopBudgetLimits: resolveStopBudgetLimits(undefined),
             stopBudgetRoundMarker: 'stale-round',
           });
@@ -1719,6 +1720,7 @@ describe('relation 別 intake と target atomization', () => {
           interpretationIntegrityDigests: new Map(),
           observation,
           verifiedEvidenceCandidates: [],
+          anomalyAdjudications: [],
           stopBudgetLimits: resolveStopBudgetLimits(undefined),
           stopBudgetRoundMarker: `round-${round}`,
         });

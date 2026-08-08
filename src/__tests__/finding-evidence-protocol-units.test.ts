@@ -615,6 +615,7 @@ describe('後続レビュー登録による reviewer anomaly の決着ライフ�
       baseAnomalySpecs: input.baseAnomalySpecs ?? [],
       pendingRejectedObservations: [],
       verifiedEvidenceCandidates: input.verifiedEvidenceCandidates ?? [],
+      anomalyAdjudications: [],
     }).ledger;
   }
 

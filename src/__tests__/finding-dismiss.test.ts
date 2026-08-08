@@ -32,6 +32,9 @@ import {
 } from './helpers/finding-manager-publication.js';
 import { findingManagerTaskResponse } from './helpers/finding-manager-task-response.js';
 import { processInterpretationLiveClaims } from '../core/workflow/findings/interpretation-live-claims.js';
+import { isOutstandingReviewerAnomaly } from '../core/workflow/findings/reviewer-anomalies.js';
+import { applyCommitLedgerStates } from '../core/workflow/findings/manager-commit-finalization.js';
+import { computeWorkflowTaskDigest } from '../core/workflow/findings/task-scope-adjudication.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({
   executeAgent: vi.fn(),
@@ -669,5 +672,213 @@ describe('runFindingManagerForStep dismiss round trip', () => {
     } finally {
       rmSync(reportDir, { recursive: true, force: true });
     }
+  });
+});
+
+
+/**
+ * 実走行(2026-08)の最終ゲートの形。raw も dispute も conflict も無く、用があるのは
+ * 終端処分済み anomaly の裁定だけ、というラウンド。provider を呼ぶ条件に裁定対象を
+ * 含めないと、権限があっても reviewer_anomaly task が一度も作られない。
+ */
+describe('runFindingManagerForStep reviewer anomaly adjudication round', () => {
+  const workflowTask = 'Rename the legacy signal fields under src/infra/config/runtime-provider/.';
+  const recordedClaim = 'The legacy signal setting no longer matches the requested contract.';
+
+  function terminalAnomalyLedger(): FindingLedger {
+    const source = canonicalRawFindingFixture({
+      rawFindingId: 'raw-anomaly-source',
+      stepName: 'reviewers',
+      reviewer: 'arch-review',
+      familyTag: null,
+      severity: null,
+      title: null,
+      description: recordedClaim,
+      suggestion: null,
+      relation: 'new',
+      targetFindingId: null,
+      rawExcerpt: recordedClaim,
+      evidence: [],
+    });
+    return makeLedger([], {
+      rawFindings: [source],
+      reviewerAnomalies: [{
+        id: 'RA-TERMINAL',
+        kind: 'intake-contract-incomplete',
+        stableKey: 'stable-terminal',
+        lineageKey: 'lineage-terminal',
+        sourceRawFindingIds: [source.rawFindingId],
+        sourceIntakeIds: [],
+        reviewers: ['arch-review'],
+        title: 'Reviewer evidence anomaly',
+        claimedExcerpt: recordedClaim,
+        mismatchReason: 'Independent reviewer observation does not satisfy the product admission contract',
+        intakeContract: {
+          observationClass: 'claim-bearing',
+          classificationAuthorityId: 'system/intake_observation_classification_v1',
+          reasonCodes: ['product-identity-incomplete'],
+          missingRequirements: ['relation', 'severity'],
+          presentationOwnerReviewer: 'arch-review',
+          presentationLimit: 6,
+          terminalDisposition: {
+            kind: 'restatement_exhausted_claim_bearing',
+            workflowOutcome: 'review_integrity_unresolved',
+            decidedAt: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
+            terminalPublicationId: 'b'.repeat(64),
+            reason: 'Restatement presentation limit 6 was reached without verified correspondence',
+          },
+        },
+        firstObserved: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
+        lastObserved: { runId: 'run-1', stepName: 'reviewers', timestamp: '2026-07-01T00:00:00.000Z' },
+        occurrences: 1,
+      }],
+    });
+  }
+
+  /** 裁定が出た後に昇格が確定した anomaly（保存時に不適格になるケース）。 */
+  function promotedAnomalyLedger(): FindingLedger {
+    const base = terminalAnomalyLedger();
+    return {
+      ...base,
+      reviewerAnomalies: base.reviewerAnomalies!.map((anomaly) => ({
+        ...anomaly,
+        promotedFindingId: 'F-0001',
+      })),
+    };
+  }
+
+  const runRound = async (
+    managerAuthority: 'standard' | 'terminal_adjudication',
+  ): Promise<FindingLedger> => {
+    const repository = new RevisionedFindingLedgerTestRepository(terminalAnomalyLedger());
+    const reportDir = mkdtempSync(join(tmpdir(), 'takt-anomaly-adjudication-'));
+    const publicationDouble = createFindingManagerPublicationDouble(
+      (report) => join(reportDir, `findings-manager-validation.${report.stepName}.json`),
+      repository,
+    );
+    const ledgerStore: FindingLedgerStore = {
+      ledgerIdentity: '/test/anomaly-adjudication/ledger.json',
+      workflowName: 'peer-review',
+      loadLedger: () => repository.loadLedger(),
+      updateLedger: (mutator, revalidateBeforeSave) => (
+        repository.updateLedger(mutator, revalidateBeforeSave)
+      ),
+      interpretationLiveClaims: processInterpretationLiveClaims,
+      saveLedgerSnapshot: () => {},
+      saveRawFindings: () => {},
+      saveManagerValidationReport: () => {},
+      ...publicationDouble,
+    };
+    executeAgentMock.mockClear();
+    executeAgentMock.mockImplementation(async (_persona, instruction) => {
+      const manifest = JSON.parse(
+        /## Task manifest\n```json\n([\s\S]*?)\n```/.exec(instruction as string)![1]!,
+      ) as { taskId: string; candidateIntents: Array<{ intentId: string; entityId: string }> };
+      return {
+        status: 'done',
+        content: '',
+        structuredOutput: {
+          taskId: manifest.taskId,
+          evaluations: manifest.candidateIntents.map((intent) => ({
+            intentId: intent.intentId,
+            result: {
+              kind: 'dismiss',
+              anomalyId: intent.entityId,
+              basis: 'outside_task_scope',
+              reason: 'The claim targets a module the task never asked to change',
+              taskQuote: 'Rename the legacy signal fields',
+              claimQuote: recordedClaim.slice(0, 24),
+            },
+          })),
+          selectedIntentId: manifest.candidateIntents[0]!.intentId,
+        },
+      } as unknown as AgentResponse;
+    });
+
+    try {
+      const result = await runFindingManagerForStep({
+        contract: {
+          manager: { persona: 'findings-manager', instruction: 'Reconcile findings.', outputContract: 'Return JSON.' },
+        } as never,
+        ledgerStore,
+        optionsBuilder: {
+          buildAgentOptions: () => ({}),
+          resolveStepProviderModel: () => ({ provider: 'codex', model: 'gpt-test' }),
+        } as never,
+        stepExecutor: {
+          buildPhase1Instruction: (instruction: string) => instruction,
+          recordSynthesizedAgentUsage: () => {},
+          normalizeStructuredOutput: (_step: WorkflowStep, response: AgentResponse) => response,
+        } as never,
+        cwd: process.cwd(),
+        parentStep: { kind: 'agent', name: 'merge-readiness-review', persona: 'reviewer', edit: false } as WorkflowStep,
+        stepIteration: 1,
+        subResults: [],
+        workflowName: 'peer-review',
+        runId: 'run-adjudication',
+        callNamespace: '',
+        timestamp: '2026-07-02T00:00:00.000Z',
+        managerAuthority,
+        workflowTask,
+      });
+      return result.ledger;
+    } finally {
+      rmSync(reportDir, { recursive: true, force: true });
+    }
+  };
+
+  it('runs the adjudication round when the only work is a terminally disposed anomaly', async () => {
+    const ledger = await runRound('terminal_adjudication');
+
+    // raw も dispute も conflict も無いラウンドでも provider が呼ばれる。
+    expect(executeAgentMock).toHaveBeenCalled();
+    expect(ledger.reviewerAnomalies![0]!.settlement).toMatchObject({
+      kind: 'dismissed_by_terminal_adjudication',
+      basis: 'outside_task_scope',
+      claimQuote: recordedClaim.slice(0, 24),
+    });
+    // 決着したのでゲートを塞がなくなる。
+    expect(isOutstandingReviewerAnomaly(ledger.reviewerAnomalies![0]!)).toBe(false);
+  });
+
+  it('records why an ineligible adjudication was not saved', async () => {
+    // 保存時に不採用になった裁定を無言で捨てない。ここでは裁定が出た後に同ラウンドで
+    // 昇格が確定した場合を再現する（決着済みは裁定で上書きしない）。
+    const rejections = applyCommitLedgerStates({
+      runInput: {
+        workflowName: 'peer-review',
+        parentStep: { name: 'merge-readiness-review' },
+        runId: 'run-adjudication',
+        timestamp: '2026-07-02T00:00:00.000Z',
+        subResults: [],
+        workflowTask,
+      } as never,
+      freshLedger: promotedAnomalyLedger(),
+      settledLedger: promotedAnomalyLedger(),
+      baseAnomalySpecs: [],
+      pendingRejectedObservations: [],
+      verifiedEvidenceCandidates: [],
+      anomalyAdjudications: [{
+        anomalyId: 'RA-TERMINAL',
+        basis: 'outside_task_scope',
+        reason: 'out of scope',
+        taskQuote: 'Rename the legacy signal fields',
+        claimQuote: recordedClaim.slice(0, 24),
+        workflowTaskDigest: computeWorkflowTaskDigest(workflowTask),
+        adjudicationTaskId: 'd'.repeat(64),
+      }],
+    }).adjudicationRejections;
+
+    expect(rejections).toHaveLength(1);
+    expect(rejections[0]).toContain('RA-TERMINAL');
+    expect(rejections[0]).toContain('promoted anomalies cannot be settled');
+  });
+
+  it('leaves the anomaly outstanding when the call holds no terminal authority', async () => {
+    const ledger = await runRound('standard');
+
+    expect(executeAgentMock).not.toHaveBeenCalled();
+    expect(ledger.reviewerAnomalies![0]!.settlement).toBeUndefined();
+    expect(isOutstandingReviewerAnomaly(ledger.reviewerAnomalies![0]!)).toBe(true);
   });
 });

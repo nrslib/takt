@@ -66,7 +66,11 @@ import type { AgentResponse } from '../core/models/types.js';
 import { runAgent } from '../agents/runner.js';
 import { makeRule, makeStep } from './test-helpers.js';
 import { createTestFindingLedgerStore } from './helpers/finding-storage.js';
-import { reviewerRawExtractionFixture } from './helpers/finding-lifecycle-fixture.js';
+import {
+  canonicalRawFindingFixture,
+  rawCanonicalSnapshotFixture,
+  reviewerRawExtractionFixture,
+} from './helpers/finding-lifecycle-fixture.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
 import { stopBudgetRoundsCompleted } from '../core/workflow/findings/stop-budget.js';
 import { isOutstandingReviewerAnomaly } from '../core/workflow/findings/reviewer-anomalies.js';
@@ -163,6 +167,139 @@ function loadRootLedger(cwd: string, workflowName: string) {
     workflowName,
   }).loadLedger();
 }
+
+/**
+ * 終端処分済み anomaly を持つ台帳を先に置き、実 engine の COMPLETE ゲートが
+ * どう診断するかを failure payload まで固定する。提示は別 namespace で行われた
+ * 想定なので、このゲートから見た提示回数は 0 件。
+ */
+describe('review-integrity gate failure payload (engine level)', () => {
+  let cwd: string;
+
+  beforeEach(() => {
+    cwd = createTestTmpDir();
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+      return {
+        persona,
+        status: 'done',
+        content: 'approved',
+        timestamp: new Date('2026-06-13T00:00:02.000Z'),
+      };
+    });
+  });
+
+  afterEach(() => {
+    if (existsSync(cwd)) {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('reports the exhausted code with the anomaly identity for a terminally disposed claim', async () => {
+    const workflowName = 'review-integrity-payload';
+    const store = createTestFindingLedgerStore({
+      projectCwd: cwd,
+      runId: 'test-report-dir',
+      reportDir: join(cwd, '.takt', 'runs', 'test-report-dir', 'reports'),
+      workflowName,
+    });
+    const observation = { runId: 'seed', stepName: 'reviewers', timestamp: '2026-06-13T00:00:00.000Z' };
+    const source = canonicalRawFindingFixture({
+      rawFindingId: 'raw-terminal-seed',
+      stepName: 'reviewers',
+      reviewer: 'reviewers',
+      familyTag: null,
+      severity: null,
+      title: null,
+      description: 'The legacy signal setting no longer matches the requested contract.',
+      suggestion: null,
+      relation: 'new',
+      targetFindingId: null,
+      evidence: [],
+      rawExcerpt: 'The legacy signal setting no longer matches the requested contract.',
+    });
+    await store.updateLedger((ledger) => ({
+      ledger: {
+        ...ledger,
+        rawFindings: [source],
+        rawCanonicalSnapshots: [rawCanonicalSnapshotFixture(source, observation)],
+        reviewerAnomalies: [{
+          id: 'RA-SEEDTERMINAL',
+          kind: 'intake-contract-incomplete',
+          stableKey: 'stable-seed-terminal',
+          lineageKey: 'lineage-seed-terminal',
+          sourceRawFindingIds: [source.rawFindingId],
+          sourceIntakeIds: [],
+          reviewers: ['reviewers'],
+          title: 'Reviewer evidence anomaly',
+          claimedExcerpt: source.rawExcerpt!,
+          mismatchReason: 'Independent reviewer observation does not satisfy the product admission contract',
+          intakeContract: {
+            observationClass: 'claim-bearing',
+            classificationAuthorityId: 'system/intake_observation_classification_v1',
+            reasonCodes: ['product-identity-incomplete'],
+            missingRequirements: ['relation', 'severity'],
+            presentationOwnerReviewer: 'reviewers',
+            presentationLimit: 6,
+            terminalDisposition: {
+              kind: 'restatement_exhausted_claim_bearing',
+              workflowOutcome: 'review_integrity_unresolved',
+              decidedAt: observation,
+              terminalPublicationId: 'b'.repeat(64),
+              reason: 'Restatement presentation limit 6 was reached without verified correspondence',
+            },
+          },
+          firstObserved: observation,
+          lastObserved: observation,
+          occurrences: 1,
+        }],
+      },
+      result: undefined,
+    }));
+
+    const config: WorkflowConfig = {
+      name: workflowName,
+      maxSteps: 2,
+      initialStep: 'gate',
+      provider: 'claude',
+      findingContract: {
+        manager: { persona: 'findings-manager', instruction: 'findings-manager', outputContract: 'findings-manager' },
+        adjudicator: { persona: 'supervisor' },
+      },
+      steps: [makeStep({
+        name: 'gate',
+        persona: 'gatekeeper',
+        instruction: 'Gate.',
+        rules: [makeRule('when(true)', 'COMPLETE')],
+      })],
+    };
+    const engine = new WorkflowEngine(config, cwd, 'task', {
+      projectCwd: cwd,
+      provider: 'claude',
+      reportDirName: 'test-report-dir',
+    });
+    let failure: { kind: string; details?: { reviewIntegrity?: Record<string, unknown> } } | undefined;
+    engine.on('workflow:abort', (
+      _state: unknown,
+      _reason: string,
+      _kind: string,
+      abortFailure?: typeof failure,
+    ) => { failure = abortFailure; });
+
+    const result = await engine.run();
+
+    expect(result.status).toBe('aborted');
+    expect(failure?.kind).toBe('review_integrity_unresolved');
+    // 決着済みは「提示されていない（配線漏れ）」ではなく exhausted として報告される。
+    expect(failure?.details?.reviewIntegrity).toEqual({
+      code: 'restatement_exhausted_claim_bearing',
+      anomalyIds: ['RA-SEEDTERMINAL'],
+      unpresentedIds: [],
+      classificationAuthorityIds: ['system/intake_observation_classification_v1'],
+      publicationIds: [],
+    });
+  }, 60_000);
+});
 
 describe('review-integrity gate (engine level, codex 検証ブロッカー#1)', () => {
   let cwd: string;
