@@ -989,6 +989,21 @@ appears in workflow YAML; it is not a step.
   review that withdraws such an anomaly — a restatement-only call never does.
 - A claim that declares it restates a given anomaly but fails the correspondence gate no
   longer mints a new product finding; it is recorded as a retry of that anomaly.
+- When a claim-bearing anomaly reaches `presentationLimit`, the engine inserts one
+  **evidence-search attempt per anomaly for the lifetime of that anomaly** immediately
+  before terminal disposition. The engine reads the real files in `target.paths`; for a
+  large file it supplies a simple window around the claimed line range. It passes that
+  content, the original claim, and the presentation history to the existing isolated
+  structured intake-normalizer resolution chain (`intake-normalizer` seat → `escalate` →
+  default). The normalizer receives no tools.
+- Evidence-search is not a workflow step. Its output is still an ordinary `evidenceRequests`
+  candidate: the existing evidence issuer and byte-exact gate are the final authority. A
+  verified candidate follows the existing promotion path and the ledger records
+  `promotionOrigin: evidence-search`. A null candidate, a mismatch, or a target mismatch
+  keeps the existing `restatement_exhausted_claim_bearing` terminal disposition.
+- The evidence-search call and its manager ingest use the slot's `budget-excluded` accounting;
+  they do not extend the presentation budget. The publication is persisted before ingest, so
+  interruption and resume cannot fire a second attempt for the same anomaly.
 
 `withdrawn_by_subsequent_review` settles an anomaly because the reviewer that raised it
 produced a later complete review, not because the underlying observation was judged sound

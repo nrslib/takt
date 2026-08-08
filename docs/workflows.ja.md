@@ -971,6 +971,20 @@ workflow YAML には何も現れません（step ではありません）。
   取り下げの根拠になるのは完全な再レビューだけで、言い直し専用の呼び出しは根拠になりません。
 - 「この anomaly を言い直した」と申告した主張が照合ゲートを通らなかった場合、新規の
   product finding は作りません。当該 anomaly への再試行として記録します。
+- 言い直し提示数が `presentationLimit` に達した claim-bearing anomaly は、終端処分の
+  直前に **evidence-search を1 anomaly につき生涯1回だけ**実行します。エンジンが
+  `target.paths` の実ファイルを読み、ファイルが大きい場合は主張された行範囲の周辺窓に
+  絞り、元の claim・提示履歴とともに既存の isolated structured 正規化係へ渡します。
+  正規化係にはツールを与えず、解決順も `intake-normalizer` seat → `escalate` → 既定値の
+  既存チェーンを使います。
+- evidence-search は新しい workflow step ではありません。正規化係が返す候補は既存の
+  `evidenceRequests` として通常の evidence issuer / byte-exact 照合を通り、成立したとき
+  だけ既存の昇格経路へ入り、anomaly の台帳へ `promotionOrigin: evidence-search` を記録
+  します。候補なし、照合不一致、対象不一致は従来どおり
+  `restatement_exhausted_claim_bearing` です。
+- evidence-search の呼び出しと manager 取り込みは slot と同じく `budget-excluded` で、
+  提示予算を増やしません。publication を先に永続化するため、中断・再開でも同じ anomaly
+  に2回目を発火しません。
 
 `withdrawn_by_subsequent_review` は「その anomaly を出したレビュアーが後続の完全な
 レビューを成立させた」ことによる決着であって、元の観測の当否を判定したものではありません。
