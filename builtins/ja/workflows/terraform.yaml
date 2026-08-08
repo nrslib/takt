@@ -1,30 +1,16 @@
 name: terraform
 description: Terraform IaC 開発ワークフロー（plan → implement → 並列レビュー → 最終ゲート → 修正 → 完了）
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
 max_steps: 15
 initial_step: plan
 steps:
   - name: plan
+    capabilities: readonly
     tags:
       - plan
     edit: false
     persona: planner
     policy: contract-change
     knowledge: terraform-aws
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Bash
-          - WebSearch
-          - WebFetch
     rules:
       - condition: 要件が明確で実装可能
         next: implement
@@ -38,6 +24,7 @@ steps:
         - name: plan.md
           format: plan
   - name: implement
+    capabilities: edit
     tags:
       - coding
     edit: true
@@ -46,17 +33,6 @@ steps:
       - contract-change
       - terraform
     knowledge: terraform-aws
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Edit
-          - Write
-          - Bash
-          - WebSearch
-          - WebFetch
     quality_gates:
       - terraform fmt -check がエラーなし
       - terraform validate が成功
@@ -84,6 +60,7 @@ steps:
       - review
     parallel:
       - name: tf_review
+        capabilities: readonly
         tags:
           - review
         edit: false
@@ -93,15 +70,6 @@ steps:
           - review
           - terraform
         knowledge: terraform-aws
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
         instruction: review-terraform
         rules:
           - condition: Terraform規約に準拠
@@ -111,6 +79,7 @@ steps:
             - name: terraform-review.md
               format: terraform-review
       - name: ai-antipattern-review-2nd
+        capabilities: readonly
         tags:
           - review
         edit: false
@@ -119,14 +88,6 @@ steps:
           - contract-change
           - review
           - ai-antipattern
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - WebSearch
-              - WebFetch
         instruction: ai-antipattern-review
         rules:
           - condition: AI特有の問題なし
@@ -136,6 +97,7 @@ steps:
             - name: ai-antipattern-review.md
               format: ai-antipattern-review
       - name: coding-review
+        capabilities: readonly
         tags:
           - review
         edit: false
@@ -144,15 +106,6 @@ steps:
           - contract-change
           - review
           - coding
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
         instruction: review-coding
         output_contracts:
           report:
@@ -167,6 +120,7 @@ steps:
       - condition: any("規約違反あり", "AI特有の問題あり", "needs_fix")
         next: supervise
   - name: merge-readiness-review
+    capabilities: readonly
     tags:
       - review
       - final-gate
@@ -176,15 +130,6 @@ steps:
     policy:
       - contract-change
       - review
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Bash
-          - WebSearch
-          - WebFetch
     rules:
       - condition: approved
         next: final-supervise
@@ -197,21 +142,13 @@ steps:
           format: merge-readiness-review
 
   - name: final-supervise
+    capabilities: readonly
     tags:
       - review
     edit: &terraform_supervise_edit false
     persona: &terraform_supervise_persona supervisor
     policy: &terraform_supervise_policy [contract-change, review]
     knowledge: &terraform_supervise_knowledge terraform-aws
-    provider_options: &terraform_supervise_provider_options
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Bash
-          - WebSearch
-          - WebFetch
     instruction: &terraform_supervise_instruction supervise
     rules:
       - condition: BLOCKED
@@ -235,6 +172,7 @@ steps:
           use_judge: false
 
   - name: supervise
+    capabilities: readonly
     tags:
       - review
       - supervise
@@ -242,7 +180,6 @@ steps:
     persona: *terraform_supervise_persona
     policy: *terraform_supervise_policy
     knowledge: *terraform_supervise_knowledge
-    provider_options: *terraform_supervise_provider_options
     instruction: *terraform_supervise_instruction
     rules:
       - condition: BLOCKED
@@ -263,6 +200,7 @@ steps:
       - coding
     parallel:
       - name: ai-antipattern-fix-parallel
+        capabilities: edit
         tags:
           - coding
         edit: true
@@ -272,16 +210,6 @@ steps:
           - terraform
           - testing
         knowledge: terraform-aws
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Edit
-              - Bash
-              - WebSearch
-              - WebFetch
         rules:
           - condition: AI問題の修正完了
           - condition: 修正不要（指摘対象ファイル/仕様の確認済み）
@@ -293,6 +221,7 @@ steps:
               format: fix-report
               use_judge: false
       - name: supervise_fix_parallel
+        capabilities: edit
         tags:
           - coding
         edit: true
@@ -302,16 +231,6 @@ steps:
           - terraform
           - testing
         knowledge: terraform-aws
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Edit
-              - Bash
-              - WebSearch
-              - WebFetch
         rules:
           - condition: 監督者の指摘に対する修正が完了した
           - condition: 修正を進行できない
@@ -322,6 +241,7 @@ steps:
       - condition: any("修正不要（指摘対象ファイル/仕様の確認済み）", "判断できない、情報不足", "修正を進行できない")
         next: implement
   - name: ai-antipattern-fix
+    capabilities: edit
     tags:
       - coding
     edit: true
@@ -331,17 +251,6 @@ steps:
       - terraform
       - testing
     knowledge: terraform-aws
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Edit
-          - Write
-          - Bash
-          - WebSearch
-          - WebFetch
     pass_previous_response: false
     rules:
       - condition: AI問題の修正完了
@@ -357,6 +266,7 @@ steps:
           format: fix-report
           use_judge: false
   - name: supervise_fix
+    capabilities: edit
     tags:
       - coding
     edit: true
@@ -366,17 +276,6 @@ steps:
       - terraform
       - testing
     knowledge: terraform-aws
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Edit
-          - Write
-          - Bash
-          - WebSearch
-          - WebFetch
     pass_previous_response: false
     rules:
       - condition: 監督者の指摘に対する修正が完了した

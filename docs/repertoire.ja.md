@@ -43,7 +43,7 @@ my-takt-repertoire/
   workflows/
     expert.yaml
   provider-options/
-    review-readonly.yaml
+    readonly.yaml
   steps/
     final-gate.yaml
   facet-pools/
@@ -186,7 +186,7 @@ takt repertoire remove @{owner}/{repo}
       workflows/              # repertoire パッケージ内の workflow 定義
         expert.yaml
       provider-options/        # 共有 provider_options プリセット
-        review-readonly.yaml
+        readonly.yaml
       steps/                   # 再利用可能な step fragment
         final-gate.yaml
       facet-pools/             # 再利用可能な dynamic facet pool resource

@@ -12,12 +12,6 @@ subworkflow:
       facet_kind: knowledge
       default:
         - architecture
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
 initial_step: merge-readiness-review
 steps:
   - name: merge-readiness-review

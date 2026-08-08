@@ -1,17 +1,9 @@
 name: gather
+capabilities: readonly
 tags:
   - plan
 edit: false
 persona: planner
-provider_options:
-  claude:
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - Bash
-      - WebSearch
-      - WebFetch
 instruction: gather-review
 output_contracts:
   report:

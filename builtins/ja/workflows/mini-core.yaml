@@ -33,12 +33,6 @@ subworkflow:
       type: facet_ref
       facet_kind: persona
       default: supervisor
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
 initial_step: plan
 loop_monitors:
   - cycle:
@@ -96,6 +90,7 @@ steps:
       - review
     parallel:
       - name: ai-antipattern-review-2nd
+        capabilities: readonly
         tags:
           - review
         edit: false
@@ -104,14 +99,6 @@ steps:
           - contract-change
           - review
           - ai-antipattern
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - WebSearch
-              - WebFetch
         instruction: ai-antipattern-review
         rules:
           - condition: AI特有の問題なし
@@ -121,6 +108,7 @@ steps:
             - name: ai-antipattern-review.md
               format: ai-antipattern-review
       - name: supervise
+        capabilities: readonly
         tags:
           - review
           - supervise
@@ -132,15 +120,6 @@ steps:
           - review
         knowledge:
           $param: development_knowledge
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
         instruction: supervise
         rules:
           - condition: BLOCKED
@@ -188,6 +167,7 @@ steps:
           - condition: 修正を進行できない
 
   - name: ai-antipattern-fix
+    capabilities: edit
     tags:
       - coding
     edit: true
@@ -197,17 +177,6 @@ steps:
       - $param: development_policy
     knowledge:
       $param: development_knowledge
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Edit
-          - Write
-          - Bash
-          - WebSearch
-          - WebFetch
     required_permission_mode: edit
     pass_previous_response: false
     rules:
@@ -225,6 +194,7 @@ steps:
           use_judge: false
 
   - name: supervise_fix
+    capabilities: edit
     tags:
       - coding
     edit: true
@@ -234,17 +204,6 @@ steps:
       - $param: development_policy
     knowledge:
       $param: development_knowledge
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - Edit
-          - Write
-          - Bash
-          - WebSearch
-          - WebFetch
     required_permission_mode: edit
     pass_previous_response: false
     rules:

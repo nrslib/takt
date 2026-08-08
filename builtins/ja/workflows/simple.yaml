@@ -1,14 +1,5 @@
 name: simple
 description: 強いモデルの判断力を信頼するシンプルな開発ワークフロー。利用可能な関連SKILLをモデル自身が選び、テスト先行の実装、レビュー、修正、最終監督を最小限の構成で行う。
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-      skills:
-        repo: true
-        user: true
-    opencode:
-      network_access: true
 max_steps: 30
 initial_step: develop
 steps:

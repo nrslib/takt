@@ -7,14 +7,7 @@ policy:
   - contract-change
   - review
   - ai-antipattern
-provider_options:
-  claude:
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - WebSearch
-      - WebFetch
+capabilities: readonly
 instruction: ai-antipattern-review
 output_contracts:
   report:

@@ -9,6 +9,7 @@ params:
     type: facet_ref
     facet_kind: instruction
 name: write_tests
+capabilities: edit
 tags:
   - coding
   - test-planning
@@ -19,8 +20,6 @@ policy:
   - $param: testing_policy
 knowledge:
   $param: testing_knowledge
-provider_options:
-  extends: edit
 required_permission_mode: edit
 instruction:
   $param: testing_instruction

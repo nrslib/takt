@@ -1,11 +1,5 @@
 name: backend-mini
 description: バックエンド向けMini開発ワークフロー（plan → implement → 並列レビュー → 修正 → 完了）
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
 max_steps: 21
 initial_step: develop
 steps:

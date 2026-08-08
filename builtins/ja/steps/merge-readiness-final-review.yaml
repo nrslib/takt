@@ -1,4 +1,5 @@
 name: merge-readiness-review
+capabilities: readonly
 tags:
   - review
   - final-gate
@@ -8,8 +9,6 @@ persona: merge-readiness-reviewer
 policy:
   - contract-change
   - review
-provider_options:
-  extends: review-readonly
 pass_previous_response: false
 instruction: review-merge-readiness
 output_contracts:

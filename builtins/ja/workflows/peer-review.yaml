@@ -45,12 +45,6 @@ subworkflow:
         - coding
         - testing
         - review
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
 initial_step: initial-reviewers
 loop_monitors:
   - cycle:

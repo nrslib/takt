@@ -1,11 +1,5 @@
 name: review-dual-cqrs
 description: フロントエンド＋CQRS+ES特化レビュー（構造・モジュール化・ドメインモデル・コンポーネント設計・セキュリティ・コーディング）
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
 max_steps: 10
 initial_step: gather
 
@@ -23,6 +17,7 @@ steps:
       - review
     parallel:
       - name: arch-review
+        capabilities: readonly
         tags:
           - review
         edit: false
@@ -34,14 +29,6 @@ steps:
           - architecture
           - frontend
           - backend
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - WebSearch
-              - WebFetch
         instruction: review-arch
         output_contracts:
           report:
@@ -52,6 +39,7 @@ steps:
           - condition: needs_fix
 
       - name: cqrs-es-review
+        capabilities: readonly
         tags:
           - review
         edit: false
@@ -62,14 +50,6 @@ steps:
         knowledge:
           - cqrs-es
           - backend
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - WebSearch
-              - WebFetch
         instruction: review-cqrs-es
         output_contracts:
           report:
@@ -80,6 +60,7 @@ steps:
           - condition: needs_fix
 
       - name: frontend-review
+        capabilities: readonly
         tags:
           - review
         edit: false
@@ -89,14 +70,6 @@ steps:
           - review
           - design-fidelity
         knowledge: frontend
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - WebSearch
-              - WebFetch
         instruction: review-frontend
         output_contracts:
           report:
@@ -107,6 +80,7 @@ steps:
           - condition: needs_fix
 
       - name: security-review
+        capabilities: readonly
         tags:
           - review
         edit: false
@@ -115,14 +89,6 @@ steps:
           - contract-change
           - review
         knowledge: security
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - WebSearch
-              - WebFetch
         instruction: review-security
         output_contracts:
           report:
@@ -133,6 +99,7 @@ steps:
           - condition: needs_fix
 
       - name: coding-review
+        capabilities: readonly
         tags:
           - review
         edit: false
@@ -141,15 +108,6 @@ steps:
           - contract-change
           - review
           - coding
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
         instruction: review-coding
         output_contracts:
           report:

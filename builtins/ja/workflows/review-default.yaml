@@ -1,11 +1,5 @@
 name: review-default
 description: 多角レビュー - 専門レビュアーで並列レビューした後、merge-readiness review の証跡を使ってレビュー結果を統合する
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
 max_steps: 10
 initial_step: gather
 
@@ -27,6 +21,7 @@ steps:
       - review
     parallel:
       - name: arch-review
+        capabilities: readonly
         tags:
           - review
         edit: false
@@ -35,15 +30,6 @@ steps:
           - contract-change
           - review
         knowledge: architecture
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
         instruction: review-arch
         output_contracts:
           report:
@@ -54,6 +40,7 @@ steps:
           - condition: needs_fix
 
       - name: security-review
+        capabilities: readonly
         tags:
           - review
         edit: false
@@ -62,15 +49,6 @@ steps:
           - contract-change
           - review
         knowledge: security
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
         instruction: review-security
         output_contracts:
           report:
@@ -81,6 +59,7 @@ steps:
           - condition: needs_fix
 
       - name: testing-review
+        capabilities: readonly
         tags:
           - review
         edit: false
@@ -92,15 +71,6 @@ steps:
         knowledge:
           - unit-testing
           - e2e-testing
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
         instruction: review-test
         output_contracts:
           report:
@@ -111,6 +81,7 @@ steps:
           - condition: needs_fix
 
       - name: coding-review
+        capabilities: readonly
         tags:
           - review
         edit: false
@@ -119,15 +90,6 @@ steps:
           - contract-change
           - review
           - coding
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
         instruction: review-coding
         output_contracts:
           report:
@@ -152,6 +114,7 @@ steps:
         next: review-synthesis
 
   - name: review-synthesis
+    capabilities: readonly
     tags:
       - review
       - final-gate
@@ -161,14 +124,6 @@ steps:
     policy:
       - contract-change
       - review
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - WebSearch
-          - WebFetch
     pass_previous_response: false
     rules:
       - condition: approved
@@ -233,6 +188,7 @@ steps:
             ```
 
   - name: supervise
+    capabilities: readonly
     tags:
       - review
       - supervise
@@ -241,14 +197,6 @@ steps:
     policy:
       - contract-change
       - review
-    provider_options:
-      claude:
-        allowed_tools:
-          - Read
-          - Glob
-          - Grep
-          - WebSearch
-          - WebFetch
     pass_previous_response: false
     rules:
       - condition: レビュー統合完了
