@@ -62,6 +62,7 @@ export async function reserveFindingConflictAdjudication(input: {
   scopeIdentity: string;
   workflowName: string;
   roundMarker: string;
+  allowGroundingRetry?: boolean;
 }): Promise<FindingLedgerMutation<AdjudicationAttemptReservation>> {
   return input.ledgerStore.updateLedger<AdjudicationAttemptReservation>((fresh) => {
     const conflict = fresh.conflicts.find((candidate) => candidate.id === input.conflictId);
@@ -123,7 +124,25 @@ export async function reserveFindingConflictAdjudication(input: {
         )),
       };
     }
-    if (isConflictSnapshotAdjudicated(fresh, snapshot)) {
+    const groundingRetryAlreadyUsed = episodeAttempts.some((attempt) => (
+      attempt.attemptOrdinal === 2
+      && fresh.findingManagerProviderCalls
+        .filter((call) => call.providerCallId === attempt.providerCallId)
+        .some((call) => (
+          fresh.findingManagerProviderBudgetScopes.some((scope) => (
+            scope.budgetScopeId === call.budgetScopeId
+            && scope.roundMarker === input.roundMarker
+          ))
+        ))
+    ));
+    const groundingRetryAllowed = input.allowGroundingRetry === true
+      && !groundingRetryAlreadyUsed
+      && episodeAttempts.some((attempt) => (
+        attempt.stage === 'completed'
+        && attempt.attemptOrdinal === 1
+        && attempt.result.kind === 'verification_undetermined'
+      ));
+    if (isConflictSnapshotAdjudicated(fresh, snapshot) && !groundingRetryAllowed) {
       return { ledger: fresh, result: { started: false } };
     }
     const used = fresh.conflictAdjudicationAttempts.filter(

@@ -250,41 +250,44 @@ function expectedRuleMatch(counts: FindingCounts): ExpectedRuleMatch {
   if (counts.conflicts > 0 && counts.unadjudicated > 0) {
     return { index: 0, nextStep: 'finding-conflict-adjudication' };
   }
-  if (counts.conflicts > 0) return { index: 1, nextStep: 'ABORT' };
+  if (counts.conflicts > 0 && !counts.roundBudgetExhausted) {
+    return { index: 1, returnValue: 'needs_review' };
+  }
+  if (counts.conflicts > 0) return { index: 2, nextStep: 'ABORT' };
   if (counts.claimBearingTerminalCount > 0) {
     // 言い直し予算を使い切った claim-bearing anomaly は再計画では直せない
     // （レビュアーの protocol 違反であってプロダクト側の欠陥ではない）ため、
     // final gate 経由で review_integrity_unresolved の可視的失敗へ送る。
-    return { index: 2, returnValue: 'needs_terminal_adjudication' };
+    return { index: 3, returnValue: 'needs_terminal_adjudication' };
   }
   // 言い直しは slot 内で消化されるため、レビュー step 終了時に言い直し待ちが
   // 残るのは予算枯渇系だけ。修正可能な open finding があるならそちらを先に回す。
   if (counts.open > 0 && counts.provisional === 0) {
-    return { index: 3, returnValue: 'needs_fix' };
+    return { index: 4, returnValue: 'needs_fix' };
   }
   if (counts.requiresGuaranteedPresentationCount > 0) {
-    return { index: 4, returnValue: 'needs_review' };
-  }
-  if (counts.restatementReadyCount > 0) {
     return { index: 5, returnValue: 'needs_review' };
   }
+  if (counts.restatementReadyCount > 0) {
+    return { index: 6, returnValue: 'needs_review' };
+  }
   if (counts.dismissEligible > 0) {
-    return { index: 6, returnValue: 'needs_terminal_adjudication' };
+    return { index: 7, returnValue: 'needs_terminal_adjudication' };
   }
-  if (counts.provisionalFixpoint) return { index: 7, returnValue: 'need_replan' };
+  if (counts.provisionalFixpoint) return { index: 8, returnValue: 'need_replan' };
   if (counts.roundBudgetExhausted && counts.provisional > 0) {
-    return { index: 8, returnValue: 'need_replan' };
+    return { index: 9, returnValue: 'need_replan' };
   }
-  if (counts.provisional > 0) return { index: 9, returnValue: 'need_replan' };
+  if (counts.provisional > 0) return { index: 10, returnValue: 'need_replan' };
   // 予算枯渇の出口は open の有無で塞がない。open が残っている状態は上の
   // needs_fix / need_replan がすでに拾っているので、ここへ来る時点で open は 0。
   if (counts.anomalies > 0 && counts.anomalyBudgetExhausted) {
-    return { index: 10, returnValue: 'need_replan' };
+    return { index: 11, returnValue: 'need_replan' };
   }
   if (counts.anomalies > 0) {
-    return { index: 11, returnValue: 'needs_review' };
+    return { index: 12, returnValue: 'needs_review' };
   }
-  return { index: 12, nextStep: 'COMPLETE' };
+  return { index: 13, nextStep: 'COMPLETE' };
 }
 
 /**
@@ -587,7 +590,7 @@ describe('takt-default-fc builtins', () => {
     expect(states).toHaveLength(38880);
     const rules = reviewers.rules;
     if (rules === undefined) throw new Error('Missing suite self rules');
-    expect(rules).toHaveLength(13);
+    expect(rules).toHaveLength(14);
 
     for (const counts of states) {
       const match = new RuleEvaluator(reviewers, { state: workflowState(reviewers, counts) })
@@ -604,6 +607,28 @@ describe('takt-default-fc builtins', () => {
     expect([...reached].sort((left, right) => left - right)).toEqual(
       rules.map((_, index) => index),
     );
+  });
+
+  it.each(LANGUAGES)('%s keeps unresolved conflicts in review while stop budget remains', (language) => {
+    const reviewers = loadedStep(
+      loadWorkflow(language, 'peer-review-suite-finding-contract-base'),
+      'reviewers',
+    );
+    for (const [roundBudgetExhausted, expected] of [
+      [false, { returnValue: 'needs_review' }],
+      [true, { nextStep: 'ABORT' }],
+    ] as const) {
+      const counts = {
+        ...EMPTY_FINDING_COUNTS,
+        conflicts: 1,
+        unadjudicated: 0,
+        roundBudgetExhausted,
+      };
+      const match = new RuleEvaluator(reviewers, { state: workflowState(reviewers, counts) })
+        .evaluate(undefined);
+      if (match === undefined) throw new Error(`Missing rule match: ${JSON.stringify(counts)}`);
+      expect(determineRuleTransition(reviewers, match.index)).toEqual(expected);
+    }
   });
 
   it.each(LANGUAGES)('%s suite ladder is total over the finding state product', (language) => {

@@ -41,10 +41,8 @@ export const FINDING_ADJUDICATION_PERSONA = 'supervisor';
  * - ACTIONABLE_FIX: finding_valid with a concrete fix — route to the origin
  *   step's fix path (also dynamic).
  * - UNRESOLVED: undetermined / finding_valid without a fix / no eligible
- *   target while conflicts stay active — static ABORT (the simplest of the two
- *   options allowed by the design; bouncing through the origin only to hit its
- *   own when(conflicts>0) -> ABORT would spend an extra full step execution to
- *   reach the same terminal state).
+ *   target while conflicts stay active — return to the origin so its conflict
+ *   ladder can decide whether the stop budget is exhausted.
  */
 export const FINDING_CONFLICT_ADJUDICATION_RULE_INDEX = {
   FINDING_CLOSED: 0,
@@ -154,7 +152,7 @@ export function buildFindingConflictAdjudicationStep(input: {
       // WorkflowEngineStepCoordinator.resolveTransitionFromDone.
       { condition: parseWorkflowRuleCondition('finding_closed') },
       { condition: parseWorkflowRuleCondition('actionable_fix') },
-      { condition: parseWorkflowRuleCondition('unresolved'), next: 'ABORT' },
+      { condition: parseWorkflowRuleCondition('unresolved') },
     ],
   };
 }

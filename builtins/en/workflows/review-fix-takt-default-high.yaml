@@ -141,6 +141,8 @@ steps:
       self:
         - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)
           next: finding-conflict-adjudication
+        - condition: when(findings.conflicts.count > 0 && findings.rounds.budgetExhausted == false)
+          next: fix
         - condition: when(findings.conflicts.count > 0)
           next: ABORT
         - condition: when(findings.provisional.fixpoint == true && findings.conflicts.count == 0)

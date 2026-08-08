@@ -641,6 +641,24 @@ ledger が既に存在しない raw finding を参照している場合、その
 
 invalid・欠落した Finding Manager の判断は provisional finding として台帳へ着地し、run は継続します。`COMPLETE` の rule より*前*に `when(findings.provisional.count > 0 && findings.conflicts.count == 0)` を再計画ステップへ向ける rule を追加してください（配線の参考は builtin の `takt-default-high` workflow）。`finding_contract` を使う workflow が `findings.provisional` を一切参照していない場合、`takt workflow doctor` が警告します。
 
+### conflict の裁定と接地再裁定
+
+active conflict はまずエンジン合成の `finding-conflict-adjudication` step へ入ります。裁定結果が
+`verification_undetermined` のとき、エンジンはその conflict についてそのラウンドに1回だけ、同じ
+`terminal-adjudicator` seat、persona 解決、provider 予算、lease 経路で接地再裁定を行います。
+workflow の step や新しい role は追加しません。
+
+再裁定の prompt には immutable な review-scope snapshot から作った bounded window を添付します。
+window は争点の finding の `target.paths` と file-quote evidence の行アンカーから構成し、
+`evidence-search` と同じ digest 束縛の窓機構を使います。裁定者はその窓だけを根拠にし、live な作業
+ツリーへ戻る fallback はありません。provider call の予約は呼び出し前に永続化するため、crash / replay
+時も同じ attempt を再開し、重複呼び出しを発行しません。2回目も `verification_undetermined` なら
+そのラウンドを未確定として確定し、元のレビューステップへ戻ります。
+
+conflict の ladder は `findings.rounds.budgetExhausted == false` の間、active conflict を fix / 再レビュー
+ループへ戻さなければなりません。最後の `when(findings.conflicts.count > 0)` → `ABORT` は予算枯渇後だけの
+出口であり、予算付きのループ rule より後ろに置きます。
+
 ### Arpeggio Step（データ駆動バッチ）
 
 CSV / JSON などのデータソースを反復し、同じ step テンプレートを各行に適用します。並列度には上限があります。

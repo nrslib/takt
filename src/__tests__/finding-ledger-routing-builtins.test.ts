@@ -221,16 +221,18 @@ describe('builtin Finding ledger routing', () => {
 
   it.each(['en', 'ja'] as const)('%s reviewer集約はconflict/provisionalの先行ルールを維持する', (language) => {
     const cases = [
-      { raw: sharedReviewers(language), dismissTarget: 'replan', replanTarget: 'replan' },
-      { raw: localReviewers(language, 'reviewers'), dismissTarget: 'integrity-gate', replanTarget: 'need_replan' },
-      { raw: localReviewers(language, 'boundary-reviewers'), dismissTarget: 'final-gate', replanTarget: 'need_replan' },
+      { raw: sharedReviewers(language), conflictTarget: 'fix', dismissTarget: 'replan', replanTarget: 'replan' },
+      { raw: localReviewers(language, 'reviewers'), conflictTarget: 'reviewers', dismissTarget: 'integrity-gate', replanTarget: 'need_replan' },
+      { raw: localReviewers(language, 'boundary-reviewers'), conflictTarget: 'boundary-reviewers', dismissTarget: 'final-gate', replanTarget: 'need_replan' },
     ];
 
-    for (const { raw, dismissTarget, replanTarget } of cases) {
+    for (const { raw, conflictTarget, dismissTarget, replanTarget } of cases) {
       const step = toWorkflowStep(raw);
       expect(transition(step, { open: 1, conflicts: 1, unadjudicated: 1 }, 1))
         .toBe('finding-conflict-adjudication');
-      expect(transition(step, { open: 1, conflicts: 1 }, 1)).toBe('ABORT');
+      expect(transition(step, { open: 1, conflicts: 1 }, 1)).toBe(conflictTarget);
+      expect(transition(step, { open: 1, conflicts: 1, roundBudgetExhausted: true }, 1))
+        .toBe('ABORT');
       expect(transition(step, { open: 1, provisional: 1, dismissEligible: 1 }, 1))
         .toBe(dismissTarget);
       expect(transition(step, { open: 1, provisional: 1 }, 1)).toBe(replanTarget);

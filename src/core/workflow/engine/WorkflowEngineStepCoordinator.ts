@@ -275,7 +275,7 @@ export class WorkflowEngineStepCoordinator {
   /**
    * Dynamic transitions of the engine-synthesized finding-conflict-adjudication
    * step. The originating step (whose rule routed here) is only known at run
-   * time, so the FINDING_CLOSED / ACTIONABLE_FIX rules carry no static `next`
+   * time, so the FINDING_CLOSED / ACTIONABLE_FIX / UNRESOLVED rules carry no static `next`
    * (see adjudication-step.ts) and are resolved from WorkflowState.previousStep:
    *
    * - FINDING_CLOSED — return to the origin step so it re-evaluates the updated
@@ -285,6 +285,8 @@ export class WorkflowEngineStepCoordinator {
    *   selectInvalidManagerOutputRuleIndex precedent); when absent, return to
    *   the origin whose own `when(findings.conflicts.count == 0 &&
    *   findings.open.count > 0)`-style rule routes to the fix path next round.
+   * - UNRESOLVED — return to the origin so its conflict ladder can continue
+   *   while stop budget remains, or select its terminal ABORT arm.
    *
    * Origin resolution order (origin-step requirement):
    * 1. WorkflowState.previousStep (normal in-run entry),
@@ -295,13 +297,12 @@ export class WorkflowEngineStepCoordinator {
    *    guessing among multiple wiring steps such as reviewers vs final-gate
    *    would misroute),
    * 4. otherwise ABORT.
-   * UNRESOLVED keeps its static `next: ABORT` and never reaches this method's
-   * dynamic branch (returns undefined).
    */
   private resolveAdjudicationDynamicNextStep(matchedRuleIndex: number): string | undefined {
     if (
       matchedRuleIndex !== FINDING_CONFLICT_ADJUDICATION_RULE_INDEX.FINDING_CLOSED
       && matchedRuleIndex !== FINDING_CONFLICT_ADJUDICATION_RULE_INDEX.ACTIONABLE_FIX
+      && matchedRuleIndex !== FINDING_CONFLICT_ADJUDICATION_RULE_INDEX.UNRESOLVED
     ) {
       return undefined;
     }
@@ -310,6 +311,9 @@ export class WorkflowEngineStepCoordinator {
       return ABORT_STEP;
     }
     if (matchedRuleIndex === FINDING_CONFLICT_ADJUDICATION_RULE_INDEX.FINDING_CLOSED) {
+      return originName;
+    }
+    if (matchedRuleIndex === FINDING_CONFLICT_ADJUDICATION_RULE_INDEX.UNRESOLVED) {
       return originName;
     }
     const originStep = this.deps.config.steps.find((candidate) => candidate.name === originName);

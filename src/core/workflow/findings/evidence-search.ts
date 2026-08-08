@@ -23,7 +23,7 @@ export function findingEvidenceSearchReportName(
   return `evidence-search-${ownerReviewerStepName}-${anomalyId}`;
 }
 
-interface EvidenceSearchWindow {
+export interface FindingEvidenceSearchWindow {
   readonly path: string;
   readonly startLine: number;
   readonly endLine: number;
@@ -45,7 +45,7 @@ function windowForLines(
   path: string,
   lines: readonly string[],
   startLine: number,
-): EvidenceSearchWindow | undefined {
+): FindingEvidenceSearchWindow | undefined {
   const selectedLines: string[] = [];
   for (const line of lines) {
     const candidate = renderLines([...selectedLines, line], startLine);
@@ -69,7 +69,7 @@ function windowsForFile(
   path: string,
   content: string,
   anchorLine: number | undefined,
-): readonly EvidenceSearchWindow[] | undefined {
+): readonly FindingEvidenceSearchWindow[] | undefined {
   const lines = content.split('\n');
   if (lines.at(-1) === '') {
     lines.pop();
@@ -94,7 +94,7 @@ function windowsForFile(
     return window === undefined ? undefined : [window];
   }
 
-  const windows: EvidenceSearchWindow[] = [];
+  const windows: FindingEvidenceSearchWindow[] = [];
   let startLine = 1;
   while (startLine <= totalLines) {
     if (windows.length >= MAX_WINDOWS_PER_FILE) {
@@ -118,7 +118,7 @@ function snapshotWindow(
   snapshot: ReviewScopeProofSnapshot,
   path: string,
   anchorLine: number | undefined,
-): readonly EvidenceSearchWindow[] | undefined {
+): readonly FindingEvidenceSearchWindow[] | undefined {
   const entry = snapshot.queryInventory.find((candidate) => candidate.path === path);
   if (
     entry === undefined
@@ -136,11 +136,28 @@ function snapshotWindow(
   }
 }
 
-function anchorLineFor(raw: RawFinding, path: string): number | undefined {
+export function findingEvidenceAnchorLineFor(raw: RawFinding, path: string): number | undefined {
   const quote = raw.evidence.find((evidence) => (
     evidence.kind === 'file_quote' && evidence.path === path
   ));
   return quote?.kind === 'file_quote' ? quote.startLine : undefined;
+}
+
+/**
+ * Immutable review-scope snapshot から、指定された target path の bounded window を作る。
+ * 1 path でも snapshot から取得できなければ全体を unavailable とする。
+ */
+export function buildFindingEvidenceSearchWindows(input: {
+  snapshot: ReviewScopeProofSnapshot;
+  targetPaths: readonly string[];
+  anchorLines?: ReadonlyMap<string, number | undefined>;
+}): readonly FindingEvidenceSearchWindow[] {
+  const windowsByPath = input.targetPaths.map((path) => (
+    snapshotWindow(input.snapshot, path, input.anchorLines?.get(path))
+  ));
+  return windowsByPath.every((pathWindows) => pathWindows !== undefined)
+    ? windowsByPath.flatMap((pathWindows) => pathWindows)
+    : [];
 }
 
 /**
@@ -161,19 +178,21 @@ export function buildFindingEvidenceSearchRequest(input: {
   if (claim === undefined) {
     return undefined;
   }
-  const windowsByPath = input.request.targetPaths.map((path) => (
-    snapshotWindow(input.snapshot, path, anchorLineFor(input.sourceRaw, path))
-  ));
+  const anchorLines = new Map(input.request.targetPaths.map((path) => (
+    [path, findingEvidenceAnchorLineFor(input.sourceRaw, path)] as const
+  )));
   // target path の一部だけを見せて候補を作ると、見えていないファイルについての
   // claim を誤って採用し得る。1ファイルでも snapshot 不在・窓数超過なら、全体を
   // unavailable として従来の null 候補へ倒す。
-  const windows = windowsByPath.every((pathWindows) => pathWindows !== undefined)
-    ? windowsByPath.flatMap((pathWindows) => pathWindows)
-    : [];
+  const windows = buildFindingEvidenceSearchWindows({
+    snapshot: input.snapshot,
+    targetPaths: input.request.targetPaths,
+    anchorLines,
+  });
   const history = input.presentationHistory === undefined || input.presentationHistory.length === 0
     ? '(none)'
     : input.presentationHistory.join('\n');
-  const renderedWindows = renderBoundedWindows(windows);
+  const renderedWindows = renderFindingEvidenceSearchWindows(windows);
   const reportContent = [
     'Evidence-search request (engine-provided source only)',
     `Anomaly ID: ${input.anomaly.id}`,
@@ -206,11 +225,13 @@ export function buildFindingEvidenceSearchRequest(input: {
   };
 }
 
-function renderWindow(window: EvidenceSearchWindow): string {
+function renderWindow(window: FindingEvidenceSearchWindow): string {
   return `[FILE ${window.path} lines ${window.startLine}-${window.endLine}]\n${window.content}`;
 }
 
-function renderBoundedWindows(windows: readonly EvidenceSearchWindow[]): string {
+export function renderFindingEvidenceSearchWindows(
+  windows: readonly FindingEvidenceSearchWindow[],
+): string {
   if (windows.length === 0) {
     return '(target files are unavailable in the supplied snapshot; return rawFindings: [])';
   }

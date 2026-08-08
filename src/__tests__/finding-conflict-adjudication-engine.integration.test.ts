@@ -91,6 +91,10 @@ function workflowConfig(cwd: string): WorkflowConfig {
           'when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)',
           'finding-conflict-adjudication',
         ),
+        makeRule(
+          'when(findings.conflicts.count > 0 && findings.rounds.budgetExhausted == false)',
+          'reviewers',
+        ),
         makeRule('when(findings.conflicts.count > 0)', 'ABORT'),
         makeRule('approved', 'COMPLETE'),
       ],
@@ -222,12 +226,19 @@ describe('finding-conflict-adjudication engine registry contract', () => {
     expect(ledger.conflicts[0]).not.toHaveProperty('adjudications');
     expect(ledger.conflictAdjudicationSnapshots).toHaveLength(1);
     expect(ledger.conflictAdjudicationEpisodes).toHaveLength(1);
-    expect(ledger.conflictAdjudicationAttempts).toEqual([
+    expect(ledger.conflictAdjudicationAttempts).toHaveLength(2);
+    expect(ledger.conflictAdjudicationAttempts).toEqual(expect.arrayContaining([
       expect.objectContaining({
+        attemptOrdinal: 1,
         stage: 'completed',
         result: expect.objectContaining({ kind: 'verification_undetermined' }),
       }),
-    ]);
+      expect.objectContaining({
+        attemptOrdinal: 2,
+        stage: 'completed',
+        result: expect.objectContaining({ kind: 'verification_undetermined' }),
+      }),
+    ]));
     expect(ledger.conflictClaimSettlements).toEqual([]);
   });
 

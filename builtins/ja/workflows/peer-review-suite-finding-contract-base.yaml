@@ -27,6 +27,8 @@ steps:
       self:
         - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)
           next: finding-conflict-adjudication
+        - condition: when(findings.conflicts.count > 0 && findings.rounds.budgetExhausted == false)
+          return: needs_review
         - condition: when(findings.conflicts.count > 0)
           next: ABORT
         - condition: when(findings.reviewerAnomalies.claimBearingTerminalCount > 0)

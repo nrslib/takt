@@ -223,17 +223,109 @@ describe('finding-conflict-adjudication runner registry contract', () => {
     expect(ledger.conflicts[0]).not.toHaveProperty('adjudications');
     expect(ledger.conflictAdjudicationSnapshots).toHaveLength(1);
     expect(ledger.conflictAdjudicationEpisodes).toHaveLength(1);
-    expect(ledger.conflictAdjudicationAttempts).toEqual([
+    expect(ledger.conflictAdjudicationAttempts).toHaveLength(2);
+    expect(ledger.conflictAdjudicationAttempts).toEqual(expect.arrayContaining([
       expect.objectContaining({
         conflictSnapshotId: snapshot.conflictSnapshotId,
+        attemptOrdinal: 1,
         stage: 'completed',
         result: expect.objectContaining({ kind: 'verification_undetermined' }),
       }),
-    ]);
+      expect.objectContaining({
+        conflictSnapshotId: snapshot.conflictSnapshotId,
+        attemptOrdinal: 2,
+        stage: 'completed',
+        result: expect.objectContaining({ kind: 'verification_undetermined' }),
+      }),
+    ]));
     expect(ledger.conflictClaimSettlements).toEqual([]);
-    expect(ledger.findingManagerProviderCalls).toEqual([
+    expect(ledger.findingManagerProviderCalls).toHaveLength(2);
+    expect(ledger.findingManagerProviderCalls).toEqual(expect.arrayContaining([
       expect.objectContaining({ state: 'settled', purpose: 'conflict_adjudication' }),
+    ]));
+    expect(executeAgentMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('re-adjudicates once with digest-bound target windows and applies a verified result', async () => {
+    const ledger = ledgerStore.loadLedger();
+    const snapshot = freshConflictAdjudicationSnapshot(ledger, 'C-FA2947446963');
+    const holding = snapshot.subjects.find(({ role }) => role === 'holding_provisional')!;
+    const proof = createEngineProofRecord({
+      kind: 'engine_proof',
+      purpose: 'lifecycle_authority',
+      verifierId: 'takt.finding-lifecycle-policy',
+      verifierVersion: '1',
+      workflowName: ledger.workflowName,
+      runId: 'run-1',
+      scopeIdentity: SCOPE_IDENTITY,
+      snapshotId: snapshot.conflictSnapshotId,
+      claimIdentityHash: null,
+      targetFindingId: holding.findingId,
+      subject: {
+        kind: 'finding_no_issue_after_verification',
+        adjudicationKind: 'conflict',
+        subjectId: holding.subjectId,
+        findingId: holding.findingId,
+        expectedHead: holding.expectedHead,
+        claimSnapshotDigest: holding.claimSnapshotDigest,
+        rawClaimRefIds: holding.rawClaimLandingIds,
+      },
+      dependencyDigests: [snapshot.conflictSnapshotId],
+      resultDigest: '3'.repeat(64),
+      issuedAt: OBSERVATION.timestamp,
+    });
+    await ledgerStore.updateLedger((current) => ({
+      ledger: { ...current, evidenceRecords: [...current.evidenceRecords, proof] },
+      result: undefined,
+    }));
+    const undetermined = {
+      persona: 'supervisor' as const,
+      status: 'done' as const,
+      content: '{}',
+      structuredOutput: {
+        proposal: {
+          kind: 'undetermined' as const,
+          subjectIds: snapshot.subjects.map(({ subjectId }) => subjectId).sort(),
+          rationale: 'No verified terminal authority is available.',
+        },
+      },
+      timestamp: new Date(),
+    };
+    executeAgentMock
+      .mockResolvedValueOnce(undetermined)
+      .mockResolvedValueOnce({
+        persona: 'supervisor',
+        status: 'done',
+        content: '{}',
+        structuredOutput: {
+          proposal: {
+            kind: 'terminate_subject',
+            subjectId: holding.subjectId,
+            basis: 'finding_no_issue_after_verification',
+            authorityRefIds: [proof.evidenceId],
+            rationale: 'The target window and engine proof support termination.',
+          },
+        },
+        timestamp: new Date(),
+      });
+
+    const target = runner();
+    await target.runner.run(target.step, state());
+
+    const applied = ledgerStore.loadLedger();
+    expect(executeAgentMock).toHaveBeenCalledTimes(2);
+    expect(executeAgentMock.mock.calls[0]?.[1]).not.toContain('Engine-provided target snapshot windows');
+    expect(executeAgentMock.mock.calls[1]?.[1]).toContain('Engine-provided target snapshot windows');
+    expect(executeAgentMock.mock.calls[1]?.[1]).toContain('reviewScopeSnapshotId:');
+    expect(executeAgentMock.mock.calls[1]?.[1]).toContain('[FILE src/a.ts lines 1-1]');
+    expect(applied.conflictAdjudicationAttempts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ attemptOrdinal: 1, result: expect.objectContaining({ kind: 'verification_undetermined' }) }),
+      expect.objectContaining({ attemptOrdinal: 2, stage: 'applied' }),
+    ]));
+    expect(applied.conflictClaimSettlements).toEqual([
+      expect.objectContaining({ outcome: 'resolved' }),
     ]);
+    expect(applied.conflicts[0]).toMatchObject({ status: 'resolved' });
   });
 
   it('places configured guidance once before the engine-owned conflict instruction', async () => {
@@ -391,6 +483,74 @@ describe('finding-conflict-adjudication runner registry contract', () => {
       requestByteLength: reserved.requestByteLength,
       state: 'settled',
       resultKind: 'accepted',
+    });
+    expect(executeAgentMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('replays a grounded reservation after a crash before its provider call', async () => {
+    const snapshot = freshConflictAdjudicationSnapshot(
+      ledgerStore.loadLedger(),
+      'C-FA2947446963',
+    );
+    const undetermined = {
+      persona: 'supervisor',
+      status: 'done' as const,
+      content: '{}',
+      structuredOutput: {
+        proposal: {
+          kind: 'undetermined' as const,
+          subjectIds: snapshot.subjects.map(({ subjectId }) => subjectId).sort(),
+          rationale: 'No authority.',
+        },
+      },
+      timestamp: new Date(OBSERVATION.timestamp),
+    };
+    executeAgentMock.mockResolvedValue(undetermined);
+    let crashed = false;
+    const crashingStore = new Proxy(ledgerStore, {
+      get(target, property, receiver) {
+        if (property !== 'updateLedger') {
+          const value = Reflect.get(target, property, receiver) as unknown;
+          return typeof value === 'function' ? value.bind(target) : value;
+        }
+        return async (...args: Parameters<FindingLedgerStore['updateLedger']>) => {
+          const mutation = await target.updateLedger(...args);
+          const groundingReserved = mutation.ledger.conflictAdjudicationAttempts.some((attempt) => (
+            attempt.stage === 'started' && attempt.attemptOrdinal === 2
+          ));
+          if (!crashed && groundingReserved) {
+            crashed = true;
+            throw new Error('simulated crash after grounded conflict WAL reservation');
+          }
+          return mutation;
+        };
+      },
+    });
+    const crashingTarget = runner(undefined, crashingStore);
+    await expect(crashingTarget.runner.run(crashingTarget.step, state()))
+      .rejects.toThrow('simulated crash after grounded conflict WAL reservation');
+
+    const reservedAttempt = ledgerStore.loadLedger().conflictAdjudicationAttempts.find(
+      (attempt) => attempt.attemptOrdinal === 2,
+    );
+    const reservedCall = ledgerStore.loadLedger().findingManagerProviderCalls.find(
+      (call) => call.providerCallId === reservedAttempt?.providerCallId,
+    );
+    expect(reservedAttempt?.stage).toBe('started');
+    expect(reservedCall?.state).toBe('reserved');
+    executeAgentMock.mockClear();
+    ledgerStore = reopenStore();
+
+    const resumedTarget = runner(undefined, ledgerStore);
+    await resumedTarget.runner.run(resumedTarget.step, state());
+
+    const replayedCall = ledgerStore.loadLedger().findingManagerProviderCalls.find(
+      (call) => call.providerCallId === reservedCall?.providerCallId,
+    );
+    expect(replayedCall).toMatchObject({
+      providerCallId: reservedCall?.providerCallId,
+      requestDigest: reservedCall?.requestDigest,
+      state: 'settled',
     });
     expect(executeAgentMock).toHaveBeenCalledOnce();
   });

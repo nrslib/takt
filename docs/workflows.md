@@ -654,6 +654,25 @@ If a ledger references a raw finding that is no longer present, its id is expose
 
 Invalid or missing Finding Manager decisions land as provisional findings and the run continues. Add a rule such as `when(findings.provisional.count > 0 && findings.conflicts.count == 0)` routed to your replan step *before* the `COMPLETE` rule (see the builtin `takt-default-high` workflow for the reference wiring). `takt workflow doctor` warns when a `finding_contract` workflow has no rule referencing `findings.provisional`.
 
+### Conflict adjudication and grounded re-adjudication
+
+An active conflict first enters the engine-synthesized `finding-conflict-adjudication` step. If its
+verification is `verification_undetermined`, the engine makes one grounded re-adjudication attempt
+for that conflict in that round through the same `terminal-adjudicator` seat, persona resolution,
+provider budget, and lease path. It does not add a workflow step or role.
+
+The re-adjudication prompt contains bounded windows from the immutable review-scope snapshot. The
+windows are built from the disputed finding's `target.paths` and the line anchors in its file-quote
+evidence, using the same digest-bound window mechanism as `evidence-search`. The adjudicator must
+use only those windows; it never gets a live working-tree fallback. The reservation is persisted
+before the provider call, so a crash or replay resumes the exact attempt rather than issuing a
+duplicate one. A second `verification_undetermined` settles that round and returns to the originating
+review step.
+
+Conflict ladders must keep an active conflict in the fix/review loop while
+`findings.rounds.budgetExhausted == false`. The final `when(findings.conflicts.count > 0)` → `ABORT`
+arm is only the exhausted-budget exit; it must follow the budget-aware loop arm.
+
 ### Arpeggio Step (data-driven batch)
 
 Iterate over a data source (CSV, JSON, etc.) and apply the same step template to each row with bounded concurrency:

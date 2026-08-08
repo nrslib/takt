@@ -14,6 +14,10 @@ import type {
 } from './types.js';
 import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
 import { canonicalJson } from '../../../shared/utils/canonical-json.js';
+import {
+  renderFindingEvidenceSearchWindows,
+  type FindingEvidenceSearchWindow,
+} from './evidence-search.js';
 
 interface AdjudicationConflictEvidence {
   id: string;
@@ -216,13 +220,28 @@ export function renderAdjudicationInstruction(snapshot: AdjudicationEvidenceSnap
 
 export function renderConflictAdjudicationInstruction(
   snapshot: ConflictAdjudicationSnapshot,
+  grounding?: {
+    reviewScopeSnapshotId: string;
+    windows: readonly FindingEvidenceSearchWindow[];
+  },
 ): string {
-  return [
+  const instruction = [
     'Adjudicate the durable finding conflict snapshot below. You are read-only.',
     'Return exactly one configured proposal. References must use subjectId values from the snapshot and authorityRefIds must identify exact engine-proof records.',
     'Use merge_holding only for a verified identical claim, promote_holding only with verification supporting the complete product projection, terminate_subject only with verification supporting no-issue or refutation, and undetermined otherwise.',
     '',
     '## Durable conflict snapshot',
     renderFencedJsonBlock(snapshot),
+  ];
+  if (grounding === undefined) {
+    return instruction.join('\n');
+  }
+  return [
+    ...instruction,
+    '',
+    '## Engine-provided target snapshot windows',
+    `reviewScopeSnapshotId: ${grounding.reviewScopeSnapshotId}`,
+    'Use these immutable windows to verify the disputed target. Do not read the live working tree or infer content outside the supplied windows.',
+    renderFindingEvidenceSearchWindows(grounding.windows),
   ].join('\n');
 }
