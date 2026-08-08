@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { WorkflowStep } from '../core/models/index.js';
+import {
+  getAllParallelSubSteps,
+  type WorkflowConfig,
+  type WorkflowStep,
+} from '../core/models/index.js';
 import { semanticRuleCandidatesOf } from '../core/models/workflow-rule-condition.js';
 import { WorkflowEngine } from '../core/workflow/index.js';
 import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDetectionExhaustedError.js';
@@ -69,7 +73,31 @@ const SELECTOR_GIT_COMMAND_RUNNER: SelectorGitCommandRunner = {
   run: async () => ({ output: Buffer.alloc(0), bytes: 0 }),
 };
 
-function response(persona: string, ruleIndex: number): ScenarioEntry {
+function findWorkflowStep(workflow: WorkflowConfig, stepName: string): WorkflowStep {
+  const pending = [...workflow.steps];
+  for (const step of pending) {
+    if (step.name === stepName) return step;
+    if (step.parallel !== undefined) pending.push(...getAllParallelSubSteps(step.parallel));
+  }
+  throw new Error(`Workflow step not found: ${stepName}`);
+}
+
+function findRuleIndex(step: WorkflowStep, ruleLabel: string): number {
+  const ruleIndex = semanticRuleCandidatesOf(step.rules ?? [], false)
+    .findIndex((candidate) => candidate.label === ruleLabel);
+  if (ruleIndex < 0) {
+    throw new Error(`Rule label not found for step "${step.name}": ${ruleLabel}`);
+  }
+  return ruleIndex;
+}
+
+function response(
+  workflow: WorkflowConfig,
+  stepName: string,
+  persona: string,
+  ruleLabel: string,
+): ScenarioEntry {
+  const ruleIndex = findRuleIndex(findWorkflowStep(workflow, stepName), ruleLabel);
   return {
     persona,
     status: 'done',
@@ -97,15 +125,10 @@ function reviewReportCalls(): WorkflowStep[] {
 
 describe('experimental builtin workflow', () => {
   let projectDir: string;
-  let globalConfigDir: string;
-  let previousConfigDir: string | undefined;
   let engines: WorkflowEngine[];
 
   beforeEach(() => {
     projectDir = mkdtempSync(join(tmpdir(), 'takt-experimental-workflow-'));
-    globalConfigDir = mkdtempSync(join(tmpdir(), 'takt-experimental-workflow-global-'));
-    previousConfigDir = process.env.TAKT_CONFIG_DIR;
-    process.env.TAKT_CONFIG_DIR = globalConfigDir;
     engines = [];
     vi.clearAllMocks();
     invalidateGlobalConfigCache();
@@ -118,15 +141,12 @@ describe('experimental builtin workflow', () => {
     for (const engine of engines) cleanupWorkflowEngine(engine);
     resetScenario();
     rmSync(projectDir, { recursive: true, force: true });
-    rmSync(globalConfigDir, { recursive: true, force: true });
-    if (previousConfigDir === undefined) delete process.env.TAKT_CONFIG_DIR;
-    else process.env.TAKT_CONFIG_DIR = previousConfigDir;
     invalidateGlobalConfigCache();
     invalidateAllResolvedConfigCache();
   });
 
   it(
-    'runs fixed reviewers on every English review round and replaces the selected reviewer pool',
+    'should run the full English workflow and replace the selected reviewer pool when review requires fixes',
     async () => {
       const language = 'en';
       writeFileSync(join(projectDir, '.takt', 'config.yaml'), `language: ${language}\n`);
@@ -135,19 +155,22 @@ describe('experimental builtin workflow', () => {
         join(getBuiltinWorkflowsDir(language), 'experimental.yaml'),
         projectDir,
       );
-      workflow.initialStep = 'review';
       setMockScenario([
+        response(workflow, 'plan', 'planner', 'Requirements are clear and implementation is feasible'),
+        response(workflow, 'write_tests', 'coder', 'Test creation completed'),
+        selection(['frontend'], 'Frontend implementation facets are required.'),
+        response(workflow, 'implement', 'coder', 'Implementation completed'),
         selection(['frontend-review'], 'The first review round covers frontend changes.'),
-        response('coding-reviewer', 1),
-        response('ai-antipattern-reviewer', 1),
-        response('frontend-reviewer', 1),
+        response(workflow, 'coding-review', 'coding-reviewer', 'needs_fix'),
+        response(workflow, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'needs_fix'),
+        response(workflow, 'frontend-review', 'frontend-reviewer', 'needs_fix'),
         selection([], 'No additional remediation facets are needed.'),
-        response('coder', 0),
+        response(workflow, 'fix', 'coder', 'Fix complete'),
         selection(['security-review'], 'The second review round covers security changes.'),
-        response('coding-reviewer', 0),
-        response('ai-antipattern-reviewer', 0),
-        response('security-reviewer', 0),
-        response('supervisor', 1),
+        response(workflow, 'coding-review', 'coding-reviewer', 'approved'),
+        response(workflow, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'approved'),
+        response(workflow, 'security-review', 'security-reviewer', 'approved'),
+        response(workflow, 'supervise', 'supervisor', 'approved'),
       ]);
       const engine = new WorkflowEngine(workflow, projectDir, 'Implement and review a frontend security change', {
         projectCwd: projectDir,
@@ -168,8 +191,17 @@ describe('experimental builtin workflow', () => {
         iteration: state.iteration,
         remainingScenarios: getScenarioQueue()?.remaining,
       })).toBe('completed');
+      expect(state.stepIterations.get('plan')).toBe(1);
+      expect(state.stepIterations.get('write_tests')).toBe(1);
+      expect(state.stepIterations.get('implement')).toBe(1);
       expect(state.stepIterations.get('review')).toBe(2);
       expect(state.stepIterations.get('fix')).toBe(1);
+      const implementSelection = [...state.dynamicFacetSelections.values()]
+        .find((snapshot) => snapshot.step_name === 'implement');
+      expect(implementSelection).toMatchObject({
+        round: 1,
+        selected_ids: ['frontend'],
+      });
       const reviewSelection = [...state.dynamicParallelSelections.values()]
         .find((snapshot) => snapshot.step_name === 'review');
       expect(reviewSelection).toMatchObject({
@@ -208,7 +240,7 @@ describe('experimental builtin workflow', () => {
   );
 
   it(
-    'routes the Japanese experimental review rejection through fix and aborts when remediation cannot proceed',
+    'should abort when the Japanese experimental review rejection cannot be remediated',
     async () => {
       const language = 'ja';
       writeFileSync(join(projectDir, '.takt', 'config.yaml'), `language: ${language}\n`);
@@ -220,11 +252,11 @@ describe('experimental builtin workflow', () => {
       workflow.initialStep = 'review';
       setMockScenario([
         selection(['testing-review'], 'Testing review is required.'),
-        response('coding-reviewer', 1),
-        response('ai-antipattern-reviewer', 1),
-        response('testing-reviewer', 1),
+        response(workflow, 'coding-review', 'coding-reviewer', 'needs_fix'),
+        response(workflow, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'needs_fix'),
+        response(workflow, 'testing-review', 'testing-reviewer', 'needs_fix'),
         selection([], 'No additional remediation facets are needed.'),
-        response('coder', 3),
+        response(workflow, 'fix', 'coder', '修正を進行できない'),
       ]);
       const engine = new WorkflowEngine(workflow, projectDir, 'Implement a change that cannot be remediated', {
         projectCwd: projectDir,
@@ -247,6 +279,7 @@ describe('experimental builtin workflow', () => {
         remainingScenarios: getScenarioQueue()?.remaining,
       })).toBe(1);
       expect(state.stepIterations.get('fix')).toBe(1);
+      expect(abortReasons).toEqual(['Workflow aborted by step transition']);
       expect(reviewReportCalls().filter((step) => step.name === 'ai-antipattern-review')).toHaveLength(1);
       expect(getScenarioQueue()?.remaining).toBe(0);
     },
