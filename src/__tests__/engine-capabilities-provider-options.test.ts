@@ -1,9 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { runAgent } from '../agents/runner.js';
 import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 import { WorkflowEngine } from '../core/workflow/engine/WorkflowEngine.js';
+import { GitSelectorCommandRunner } from '../infra/task/selector-git-command-runner.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 import { applyDefaultMocks, createTestTmpDir, makeResponse, mockRuleEvaluationSequence, mockRunAgentSequence } from './engine-test-helpers.js';
 
@@ -35,6 +37,12 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
  * 届いて初めて意味を持つ。ロード時の畳み込みだけを検証すると、エンジンが読まない
  * フィールドに乗ったまま実行時 no-op になる後退（実際に起きた）を見逃す。
  */
+
+const MOCK_SELECTOR_PROVIDER = {
+  provider: 'mock' as const,
+  providerOptions: {},
+  nativeTools: [],
+};
 
 let tmpDir: string;
 
@@ -201,5 +209,92 @@ describe('capabilities reach the final provider call', () => {
       claude: { allowedTools: ['Read', 'Grep'] },
       opencode: { networkAccess: true },
     });
+  });
+
+  it('should pass inherited and own capability options to runAgent when dynamic parallel runs fixed and pool sub-steps', async () => {
+    const config = normalizeWorkflowConfig(
+      {
+        name: 'wf',
+        max_steps: 2,
+        initial_step: 'reviewers',
+        steps: [
+          {
+            name: 'reviewers',
+            capabilities: 'provider-options/inspect.yaml',
+            parallel: {
+              fixed: [
+                {
+                  name: 'fixed-inherits',
+                  persona: 'architecture',
+                  instruction: 'review architecture',
+                  rules: [{ condition: 'approved', next: 'COMPLETE' }],
+                },
+              ],
+              pool: [
+                {
+                  name: 'pool-declares-own',
+                  persona: 'frontend',
+                  description: 'frontend review',
+                  instruction: 'review frontend',
+                  capabilities: 'provider-options/writer.yaml',
+                  rules: [{ condition: 'approved', next: 'COMPLETE' }],
+                },
+                {
+                  name: 'pool-unselected',
+                  persona: 'backend',
+                  description: 'backend review',
+                  instruction: 'review backend',
+                  rules: [{ condition: 'approved', next: 'COMPLETE' }],
+                },
+              ],
+              selection: { mode: 'replace' },
+            },
+            rules: [{ condition: 'all("approved")', next: 'COMPLETE' }],
+          },
+        ],
+      },
+      tmpDir,
+    );
+    vi.mocked(runAgent).mockImplementation(async (persona, task, options) => {
+      if (options?.outputSchema) {
+        return makeResponse({
+          persona: persona ?? 'selector',
+          structuredOutput: { selected_ids: ['pool-declares-own'], rationale: 'frontend changed' },
+        });
+      }
+      options?.onPromptResolved?.({ systemPrompt: '', userInstruction: task });
+      return makeResponse({ persona: persona ?? 'reviewer', content: 'approved' });
+    });
+    vi.mocked(mockRuleEvaluation).mockReturnValue({ index: 0, method: 'phase3_tag' });
+
+    // dynamic parallel の selection snapshot は git 管理下の作業ツリーを前提とする
+    execFileSync('git', ['init', '--quiet'], { cwd: tmpDir });
+    writeFileSync(join(tmpDir, 'tracked.ts'), 'const x = 1;\n', 'utf-8');
+    execFileSync('git', ['add', 'tracked.ts'], { cwd: tmpDir });
+    execFileSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=T', 'commit', '--quiet', '-m', 'init'], { cwd: tmpDir });
+
+    const engine = new WorkflowEngine(config, tmpDir, 'task', {
+      projectCwd: tmpDir,
+      provider: 'claude',
+      selectorProvider: MOCK_SELECTOR_PROVIDER,
+      selectorGitCommandRunner: new GitSelectorCommandRunner(),
+    });
+    const ran = await engine.run();
+
+    expect(ran.status).toBe('completed');
+    const byName = new Map(
+      vi.mocked(runAgent).mock.calls.map((call) => [
+        call[2].permissionResolution?.stepName,
+        call[2].providerOptions,
+      ]),
+    );
+    expect(byName.get('fixed-inherits')).toEqual({
+      claude: { allowedTools: ['Read', 'Grep'] },
+      opencode: { networkAccess: true },
+    });
+    expect(byName.get('pool-declares-own')).toEqual({
+      claude: { allowedTools: ['Read', 'Edit', 'Write'] },
+    });
+    expect(byName.has('pool-unselected')).toBe(false);
   });
 });
