@@ -13,6 +13,23 @@ import {
   USAGE_EVENTS_LOG_FILE_SUFFIX,
 } from '../core/logging/contracts.js';
 
+const fsControl = vi.hoisted(() => ({
+  reverseLogDirectory: undefined as string | undefined,
+}));
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return {
+    ...actual,
+    readdirSync: ((...args: Parameters<typeof actual.readdirSync>) => {
+      const entries = actual.readdirSync(...args);
+      return String(args[0]) === fsControl.reverseLogDirectory && args.length === 1
+        ? [...entries].reverse()
+        : entries;
+    }) as typeof actual.readdirSync,
+  };
+});
+
 vi.mock('../infra/fs/session.js', () => ({
   loadNdjsonLog: vi.fn(),
 }));
@@ -641,9 +658,12 @@ describe('loadRunSessionContext', () => {
     });
     const sessionId = '20260205-120000-abc123';
     const sessionLogName = `${sessionId}.jsonl`;
+    const laterSessionLogName = `${sessionId}z.jsonl`;
     const sessionLogPath = join(runDir, 'logs', sessionLogName);
+    fsControl.reverseLogDirectory = join(runDir, 'logs');
 
     for (const filename of [
+      laterSessionLogName,
       `${sessionId}${OTEL_SESSION_SHADOW_LOG_FILE_SUFFIX}`,
       `${sessionId}${PHASE_USAGE_EVENTS_LOG_FILE_SUFFIX}`,
       `${sessionId}${PROVIDER_EVENTS_LOG_FILE_SUFFIX}`,
@@ -693,6 +713,7 @@ describe('loadRunSessionContext', () => {
   });
 
   afterEach(() => {
+    fsControl.reverseLogDirectory = undefined;
     rmSync(tmpDir, { recursive: true, force: true });
   });
 });
