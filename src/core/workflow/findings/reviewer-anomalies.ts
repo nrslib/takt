@@ -160,7 +160,10 @@ function hasRestatementCorrespondence(input: {
   if (sourceAtom === undefined || admittedAtom === undefined) {
     return false;
   }
-  if (normalizeClaimAtom(sourceAtom) !== normalizeClaimAtom(admittedAtom)) {
+  const claimsMatch = input.repairOrigin === 'evidence-search'
+    ? sourceAtom === admittedAtom
+    : normalizeClaimAtom(sourceAtom) === normalizeClaimAtom(admittedAtom);
+  if (!claimsMatch) {
     return false;
   }
   if (input.repairOrigin === 'evidence-search') {

@@ -1,10 +1,14 @@
-import { readRegularFileNoFollow } from '../../../shared/utils/private-file.js';
 import { decodeSourceUtf8 } from './source-quote.js';
-import { resolveRealPathWithinProject } from './admission-validation.js';
 import { FINDING_EVIDENCE_ISSUANCE_LIMITS } from '../../models/finding-contract-limits.js';
 import type { RawFinding, ReviewerAnomalyEntry } from './types.js';
+import type { ReviewScopeProofSnapshot } from './snapshot.js';
 import type { RestatementRequestV1 } from './review-publication.js';
 import { selectRestatementSourceClaimAtom } from './reviewer-anomalies.js';
+
+const MAX_WINDOWS_PER_FILE = Math.floor(
+  FINDING_EVIDENCE_ISSUANCE_LIMITS.maxReviewerBytes
+    / FINDING_EVIDENCE_ISSUANCE_LIMITS.maxFileQuoteBytes,
+);
 
 export interface FindingEvidenceSearchRequest {
   readonly ownerReviewerStepName: string;
@@ -30,56 +34,103 @@ function lineCount(lines: readonly string[]): number {
   return lines.length === 1 && lines[0] === '' ? 0 : lines.length;
 }
 
-function windowForFile(
+function renderLines(
+  lines: readonly string[],
+  startLine: number,
+): string {
+  return lines.map((line, index) => `${startLine + index}: ${line}`).join('\n');
+}
+
+function windowForLines(
   path: string,
-  content: string,
-  anchorLine: number | undefined,
-): EvidenceSearchWindow {
-  const lines = content.split('\n');
-  if (lines.at(-1) === '') {
-    lines.pop();
-  }
-  const totalLines = lineCount(lines);
-  const maxLines = FINDING_EVIDENCE_ISSUANCE_LIMITS.maxFileQuoteLines;
-  if (Buffer.byteLength(content, 'utf8') <= FINDING_EVIDENCE_ISSUANCE_LIMITS.maxFileQuoteBytes) {
-    return {
-      path,
-      startLine: 1,
-      endLine: totalLines,
-      content: lines.map((line, index) => `${index + 1}: ${line}`).join('\n'),
-    };
-  }
-  const center = Math.min(Math.max(anchorLine ?? 1, 1), Math.max(totalLines, 1));
-  let startLine = Math.max(1, center - Math.floor(maxLines / 2));
-  const endLine = Math.min(totalLines, startLine + maxLines - 1);
-  startLine = Math.max(1, endLine - maxLines + 1);
+  lines: readonly string[],
+  startLine: number,
+): EvidenceSearchWindow | undefined {
   const selectedLines: string[] = [];
-  for (const line of lines.slice(startLine - 1, endLine)) {
-    const candidate = [...selectedLines, line].join('\n');
+  for (const line of lines) {
+    const candidate = renderLines([...selectedLines, line], startLine);
     if (Buffer.byteLength(candidate, 'utf8') > FINDING_EVIDENCE_ISSUANCE_LIMITS.maxFileQuoteBytes) {
       break;
     }
     selectedLines.push(line);
   }
-  const boundedEndLine = startLine + selectedLines.length - 1;
+  if (selectedLines.length === 0) {
+    return undefined;
+  }
   return {
     path,
     startLine,
-    endLine: boundedEndLine,
-    content: selectedLines
-      .map((line, index) => `${startLine + index}: ${line}`)
-      .join('\n'),
+    endLine: startLine + selectedLines.length - 1,
+    content: renderLines(selectedLines, startLine),
   };
 }
 
-function readWindow(cwd: string, path: string, anchorLine: number | undefined): EvidenceSearchWindow | undefined {
-  const resolution = resolveRealPathWithinProject(cwd, path);
-  if (!resolution.ok || resolution.stat.size > FINDING_EVIDENCE_ISSUANCE_LIMITS.maxSourceFileBytes) {
+function windowsForFile(
+  path: string,
+  content: string,
+  anchorLine: number | undefined,
+): readonly EvidenceSearchWindow[] | undefined {
+  const lines = content.split('\n');
+  if (lines.at(-1) === '') {
+    lines.pop();
+  }
+  const totalLines = lineCount(lines);
+  if (Buffer.byteLength(content, 'utf8') <= FINDING_EVIDENCE_ISSUANCE_LIMITS.maxFileQuoteBytes) {
+    return [{
+      path,
+      startLine: 1,
+      endLine: totalLines,
+      content: renderLines(lines, 1),
+    }];
+  }
+
+  const maxLines = FINDING_EVIDENCE_ISSUANCE_LIMITS.maxFileQuoteLines;
+  if (anchorLine !== undefined) {
+    const center = Math.min(Math.max(anchorLine, 1), Math.max(totalLines, 1));
+    let startLine = Math.max(1, center - Math.floor(maxLines / 2));
+    const endLine = Math.min(totalLines, startLine + maxLines - 1);
+    startLine = Math.max(1, endLine - maxLines + 1);
+    const window = windowForLines(path, lines.slice(startLine - 1, endLine), startLine);
+    return window === undefined ? undefined : [window];
+  }
+
+  const windows: EvidenceSearchWindow[] = [];
+  let startLine = 1;
+  while (startLine <= totalLines) {
+    if (windows.length >= MAX_WINDOWS_PER_FILE) {
+      return undefined;
+    }
+    const window = windowForLines(
+      path,
+      lines.slice(startLine - 1, startLine - 1 + maxLines),
+      startLine,
+    );
+    if (window === undefined) {
+      return undefined;
+    }
+    windows.push(window);
+    startLine = window.endLine + 1;
+  }
+  return windows;
+}
+
+function snapshotWindow(
+  snapshot: ReviewScopeProofSnapshot,
+  path: string,
+  anchorLine: number | undefined,
+): readonly EvidenceSearchWindow[] | undefined {
+  const entry = snapshot.queryInventory.find((candidate) => candidate.path === path);
+  if (
+    entry === undefined
+    || entry.kind !== 'file'
+    || entry.coverage !== 'complete'
+    || entry.content === undefined
+    || entry.content.length > FINDING_EVIDENCE_ISSUANCE_LIMITS.maxSourceFileBytes
+  ) {
     return undefined;
   }
   try {
-    const content = decodeSourceUtf8(readRegularFileNoFollow(resolution.realPath, resolution.stat));
-    return windowForFile(path, content, anchorLine);
+    return windowsForFile(path, decodeSourceUtf8(entry.content), anchorLine);
   } catch {
     return undefined;
   }
@@ -93,12 +144,12 @@ function anchorLineFor(raw: RawFinding, path: string): number | undefined {
 }
 
 /**
- * エンジンが選んだ claim・要求履歴・実ファイル窓を、単発 normalizer の入力へ
- * まとめる。窓の行番号を本文へ付けるため、normalizer は source text を返さず
- * `file_quote` の path/range だけを提案できる。
+ * claim と request に対応する immutable snapshot の内容だけを normalizer へ渡す。
+ * 現行ファイルを読み直さないことで、publication の evidence と同じ digest 束縛を
+ * 維持する。元 quote が無い場合は全窓が context に収まるときだけ探索する。
  */
 export function buildFindingEvidenceSearchRequest(input: {
-  cwd: string;
+  snapshot: ReviewScopeProofSnapshot;
   ownerReviewerStepName: string;
   anomaly: ReviewerAnomalyEntry;
   sourceRaw: RawFinding;
@@ -110,16 +161,19 @@ export function buildFindingEvidenceSearchRequest(input: {
   if (claim === undefined) {
     return undefined;
   }
-  const windows = input.request.targetPaths.flatMap((path) => {
-    const window = readWindow(input.cwd, path, anchorLineFor(input.sourceRaw, path));
-    return window === undefined ? [] : [window];
-  });
+  const windowsByPath = input.request.targetPaths.map((path) => (
+    snapshotWindow(input.snapshot, path, anchorLineFor(input.sourceRaw, path))
+  ));
+  // target path の一部だけを見せて候補を作ると、見えていないファイルについての
+  // claim を誤って採用し得る。1ファイルでも snapshot 不在・窓数超過なら、全体を
+  // unavailable として従来の null 候補へ倒す。
+  const windows = windowsByPath.every((pathWindows) => pathWindows !== undefined)
+    ? windowsByPath.flatMap((pathWindows) => pathWindows)
+    : [];
   const history = input.presentationHistory === undefined || input.presentationHistory.length === 0
     ? '(none)'
     : input.presentationHistory.join('\n');
-  const renderedWindows = windows.length === 0
-    ? '(target files could not be read; return rawFindings: [])'
-    : boundRenderedWindows(windows);
+  const renderedWindows = renderBoundedWindows(windows);
   const reportContent = [
     'Evidence-search request (engine-provided source only)',
     `Anomaly ID: ${input.anomaly.id}`,
@@ -140,7 +194,7 @@ export function buildFindingEvidenceSearchRequest(input: {
     'Target paths:',
     input.request.targetPaths.length === 0 ? '(none)' : input.request.targetPaths.join('\n'),
     '',
-    'Source windows (line numbers are part of the engine-provided context):',
+    `Source windows (snapshot ${input.snapshot.reviewScopeSnapshotId}; line numbers are engine-provided):`,
     renderedWindows,
     '',
     'Return one candidate only when a source window supports the original claim. The engine will materialize and byte-check any file_quote request.',
@@ -156,19 +210,20 @@ function renderWindow(window: EvidenceSearchWindow): string {
   return `[FILE ${window.path} lines ${window.startLine}-${window.endLine}]\n${window.content}`;
 }
 
-function boundRenderedWindows(windows: readonly EvidenceSearchWindow[]): string {
+function renderBoundedWindows(windows: readonly EvidenceSearchWindow[]): string {
+  if (windows.length === 0) {
+    return '(target files are unavailable in the supplied snapshot; return rawFindings: [])';
+  }
   const rendered: string[] = [];
   let bytes = 0;
   for (const window of windows) {
     const next = renderWindow(window);
     const nextBytes = Buffer.byteLength(next, 'utf8') + (rendered.length === 0 ? 0 : 2);
     if (bytes + nextBytes > FINDING_EVIDENCE_ISSUANCE_LIMITS.maxReviewerBytes) {
-      break;
+      return '(target files exceed the evidence-search context limit; return rawFindings: [])';
     }
     rendered.push(next);
     bytes += nextBytes;
   }
-  return rendered.length === 0
-    ? '(target windows exceed the evidence-search context limit; return rawFindings: [])'
-    : rendered.join('\n\n');
+  return rendered.join('\n\n');
 }

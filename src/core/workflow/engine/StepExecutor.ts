@@ -136,6 +136,8 @@ import {
   persistFindingReviewPublication,
   persistPendingFindingReviewNormalization,
   publishFindingReviewPublication,
+  releaseFindingEvidenceSearchAttempt,
+  reserveFindingEvidenceSearchAttempt,
   PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
   type CanonicalFindingReviewPublication,
   type FindingReviewPresentationContext,
@@ -336,6 +338,7 @@ interface FindingIntakeNormalizerCandidate {
 type FindingIntakeNormalizationResult = StructuredOutputNormalizationResult & {
   readonly providerInfo: StepProviderInfo;
   readonly publication?: CanonicalFindingReviewPublication;
+  readonly terminal?: true;
   /**
    * 失敗の原因がレビュアーの報告側にある（rawExcerpt が報告本文に byte-exact で
    * 束縛できない）。正規化係を乗り換えても解消しない種類の失敗。
@@ -360,6 +363,15 @@ type FindingIntakeNormalizerAttempt =
       readonly engineFault: boolean;
       readonly result: FindingIntakeNormalizationResult;
     };
+
+export type FindingEvidenceSearchRunResult =
+  | { readonly kind: 'published'; readonly result: FindingManagerSubStepResult }
+  | {
+      readonly kind: 'terminal';
+      readonly response: AgentResponse;
+      readonly providerInfo: StepProviderInfo;
+    }
+  | { readonly kind: 'already-attempted' };
 
 /** 報告側原因で publication が成立しなかった1レビュアー分の結果。 */
 export interface FindingReviewPublicationReportRejection {
@@ -868,10 +880,8 @@ export class StepExecutor {
   }
 
   /**
-   * 言い直し枯渇直前の単発 evidence-search。対象ファイルは request 側で既に
-   * engine が読み、normalizer にはその内容を含む report だけを渡す。候補が
-   * 不成立・応答失敗・byte-exact 束縛失敗のいずれでも空 publication を保存し、
-   * 同じ anomaly の再呼び出しを防いだうえで通常 admission へ進める。
+   * 言い直し枯渇直前の単発 evidence-search。attempt 予約を provider 呼び出し
+   * より先に作り、通常の intake-normalizer 候補チェーンへ通す。
    */
   async runFindingEvidenceSearch(input: {
     ownerStep: AgentWorkflowStep;
@@ -881,7 +891,7 @@ export class StepExecutor {
     reviewScopeSnapshotId: string;
     request: FindingEvidenceSearchRequest;
     runtime?: RuntimeStepResolution;
-  }): Promise<FindingManagerSubStepResult> {
+  }): Promise<FindingEvidenceSearchRunResult> {
     const identity = this.findingReviewPublicationIdentity({
       parentStepName: input.parentStepName,
       stepIteration: input.stepIteration,
@@ -899,109 +909,71 @@ export class StepExecutor {
     const stored = loadFindingReviewPublication(reportDir, identity);
     if (stored !== undefined) {
       publishFindingReviewPublication(reportDir, stored.publication);
+      releaseFindingEvidenceSearchAttempt({
+        reportDir,
+        identity,
+        anomalyId: input.request.request.anomalyId,
+      });
       return {
-        subStep: input.ownerStep,
-        publication: stored.publication,
-        reviewEvidence: 'none',
-        ...(stored.publication.repairOrigin === undefined
-          ? { repairOrigin: 'evidence-search' as const }
-          : { repairOrigin: stored.publication.repairOrigin }),
+        kind: 'published',
+        result: {
+          subStep: input.ownerStep,
+          publication: stored.publication,
+          reviewEvidence: 'none',
+          ...(stored.publication.repairOrigin === undefined
+            ? { repairOrigin: 'evidence-search' as const }
+            : { repairOrigin: stored.publication.repairOrigin }),
+        },
       };
     }
 
-    const candidate = this.resolveFindingIntakeNormalizerCandidates(
+    const candidates = this.resolveFindingIntakeNormalizerCandidates(
       input.ownerStep,
       input.runtime,
-    )[0]!;
-    const normalizerStep = candidate.step;
-    const providerInfo = candidate.providerInfo;
-    assertFindingIntakeNormalizerProvider(providerInfo.provider, input.ownerStep.name);
-    let rawFindings: readonly unknown[] = [];
-    let usageRecorded = false;
-    try {
-      const structuredCaller = this.requireStructuredCaller();
-      let promptParts: PhasePromptParts | undefined;
-      const response = await structuredCaller.normalizeFindingIntake(
-        input.request.reportContent,
-        {
-          provider: providerInfo.provider,
-          model: providerInfo.model,
-          providerOptions: providerInfo.providerOptions,
-          language: this.deps.getLanguage(),
-          abortSignal: this.deps.abortSignal,
-          mode: 'evidence-search',
-          onPromptResolved: (resolved) => {
-            promptParts = resolved;
-            this.deps.onPhaseStart?.(
-              normalizerStep,
-              1,
-              'execute',
-              resolved.userInstruction,
-              resolved,
-              undefined,
-              input.state.iteration,
-            );
-          },
-        },
-      );
-      if (promptParts !== undefined) {
-        this.deps.onPhaseComplete?.(
-          normalizerStep,
-          1,
-          'execute',
-          response.content,
-          response.status,
-          response.error,
-          undefined,
-          input.state.iteration,
-        );
-      }
-      this.recordSynthesizedAgentUsage(
-        normalizerStep,
-        response.status === 'done',
-        response.providerUsage,
-        providerInfo,
-      );
-      usageRecorded = true;
-      const normalized = this.normalizeStructuredOutputWithDiagnostics(
-        normalizerStep,
-        response,
-        { providerInfo },
-      );
-      if (normalized.invalidDetail === undefined && normalized.response.status === 'done') {
-        const extracted = normalized.response.structuredOutput?.rawFindings;
-        if (Array.isArray(extracted)) {
-          rawFindings = extracted;
-        }
-      }
-    } catch (error) {
-      if (!usageRecorded) {
-        this.recordSynthesizedAgentUsage(normalizerStep, false, undefined, providerInfo);
-      }
-      log.warn('Evidence-search normalizer did not produce a candidate', {
-        reviewer: input.ownerStep.name,
-        anomalyId: input.request.request.anomalyId,
-        reason: getErrorMessage(error),
-      });
+    );
+    const primaryProviderInfo = candidates[0]!.providerInfo;
+    assertFindingIntakeNormalizerProvider(primaryProviderInfo.provider, input.ownerStep.name);
+    const reserved = reserveFindingEvidenceSearchAttempt({
+      reportDir,
+      identity,
+      anomalyId: input.request.request.anomalyId,
+      restatementRequestId: input.request.request.restatementRequestId,
+      reportContent: input.request.reportContent,
+    });
+    if (!reserved) {
+      return { kind: 'already-attempted' };
     }
 
-    let publication: CanonicalFindingReviewPublication;
     try {
-      publication = createFindingReviewPublication({
-        identity,
-        protocol: PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+      const normalized = await this.normalizePlainTextFindingReview({
+        reviewerStep: input.ownerStep,
+        reportResponse: {
+          persona: input.ownerStep.name,
+          status: 'done',
+          content: input.request.reportContent,
+          timestamp: new Date(),
+        },
         reportContent: input.request.reportContent,
-        rawFindings,
+        state: input.state,
+        identity,
+        runtime: input.runtime,
         presentationContext,
+        initialMode: 'evidence-search',
         repairOrigin: 'evidence-search',
       });
-    } catch (error) {
-      log.warn('Evidence-search candidate failed publication binding', {
-        reviewer: input.ownerStep.name,
-        anomalyId: input.request.request.anomalyId,
-        reason: getErrorMessage(error),
-      });
-      publication = createFindingReviewPublication({
+      if (normalized.terminal === true) {
+        releaseFindingEvidenceSearchAttempt({
+          reportDir,
+          identity,
+          anomalyId: input.request.request.anomalyId,
+        });
+        return {
+          kind: 'terminal',
+          response: normalized.response,
+          providerInfo: normalized.providerInfo,
+        };
+      }
+      const publication = normalized.publication ?? createFindingReviewPublication({
         identity,
         protocol: PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
         reportContent: input.request.reportContent,
@@ -1009,19 +981,47 @@ export class StepExecutor {
         presentationContext,
         repairOrigin: 'evidence-search',
       });
+      const persisted = persistFindingReviewPublication(reportDir, {
+        publication,
+        reviewerExecutionIdentity: reviewerExecutionIdentity(normalized.providerInfo),
+        reviewerCallMode: 'restatement-only',
+      });
+      publishFindingReviewPublication(reportDir, persisted.publication);
+      releaseFindingEvidenceSearchAttempt({
+        reportDir,
+        identity,
+        anomalyId: input.request.request.anomalyId,
+      });
+      return {
+        kind: 'published',
+        result: {
+          subStep: input.ownerStep,
+          publication: persisted.publication,
+          reviewEvidence: 'none',
+          repairOrigin: 'evidence-search',
+        },
+      };
+    } catch (error) {
+      // 例外は provider 応答を受け取れたか不明であり、予約を消費済みのまま残す。
+      // 明示的な rate_limited/blocked/error 応答だけは未実行と確定できるため、上の
+      // terminal 分岐で予約を解放して再試行可能にする。
+      log.warn('Evidence-search normalizer attempt ended without a settled response', {
+        reviewer: input.ownerStep.name,
+        anomalyId: input.request.request.anomalyId,
+        reason: getErrorMessage(error),
+      });
+      return {
+        kind: 'terminal',
+        response: {
+          persona: input.ownerStep.name,
+          status: 'error',
+          content: input.request.reportContent,
+          timestamp: new Date(),
+          error: getErrorMessage(error),
+        },
+        providerInfo: primaryProviderInfo,
+      };
     }
-    const persisted = persistFindingReviewPublication(reportDir, {
-      publication,
-      reviewerExecutionIdentity: reviewerExecutionIdentity(providerInfo),
-      reviewerCallMode: 'restatement-only',
-    });
-    publishFindingReviewPublication(reportDir, persisted.publication);
-    return {
-      subStep: input.ownerStep,
-      publication: persisted.publication,
-      reviewEvidence: 'none',
-      repairOrigin: 'evidence-search',
-    };
   }
 
   private findingReviewPublicationIdentity(input: {
@@ -1206,6 +1206,8 @@ export class StepExecutor {
     readonly state: WorkflowState;
     readonly identity: FindingReviewPublicationIdentity;
     readonly presentationContext?: FindingReviewPresentationContext;
+    readonly initialMode?: 'initial' | 'evidence-search';
+    readonly repairOrigin?: 'evidence-search';
     readonly candidate: FindingIntakeNormalizerCandidate;
   }): Promise<FindingIntakeNormalizerAttempt> {
     const structuredCaller = this.requireStructuredCaller();
@@ -1227,7 +1229,7 @@ export class StepExecutor {
           providerOptions: providerInfo.providerOptions,
           language: this.deps.getLanguage(),
           abortSignal: this.deps.abortSignal,
-          mode,
+          mode: mode === 'initial' ? input.initialMode ?? 'initial' : 'correction',
           extractionFidelityCorrection,
           onPromptResolved: (resolved) => {
             promptParts = resolved;
@@ -1295,6 +1297,7 @@ export class StepExecutor {
               normalized.response,
             ),
             reviewerRawResourceEnvelope: normalized.reviewerRawResourceEnvelope,
+            ...(input.repairOrigin === undefined ? {} : { repairOrigin: input.repairOrigin }),
             ...(input.presentationContext === undefined
               ? {}
               : { presentationContext: input.presentationContext }),
@@ -1316,8 +1319,11 @@ export class StepExecutor {
     };
 
     const initial = await execute('initial');
-    if (StepExecutor.isTerminalNormalizerResponse(initial.response)) {
-      return { kind: 'terminal', result: initial };
+    if (
+      StepExecutor.isTerminalNormalizerResponse(initial.response)
+      || (input.initialMode === 'evidence-search' && initial.response.status !== 'done')
+    ) {
+      return { kind: 'terminal', result: { ...initial, terminal: true } };
     }
     const initialFailure = StepExecutor.describeNormalizerAttemptFailure(initial);
     if (initialFailure === undefined) {
@@ -1329,8 +1335,11 @@ export class StepExecutor {
     const extractionFidelityCorrection = initial.invalidDetail === undefined
       && initial.response.status === 'done';
     const corrected = await execute('correction', extractionFidelityCorrection);
-    if (StepExecutor.isTerminalNormalizerResponse(corrected.response)) {
-      return { kind: 'terminal', result: corrected };
+    if (
+      StepExecutor.isTerminalNormalizerResponse(corrected.response)
+      || (input.initialMode === 'evidence-search' && corrected.response.status !== 'done')
+    ) {
+      return { kind: 'terminal', result: { ...corrected, terminal: true } };
     }
     const correctedFailure = StepExecutor.describeNormalizerAttemptFailure(corrected);
     if (correctedFailure === undefined) {
@@ -1366,6 +1375,8 @@ export class StepExecutor {
     readonly identity: FindingReviewPublicationIdentity;
     readonly runtime?: RuntimeStepResolution;
     readonly presentationContext?: FindingReviewPresentationContext;
+    readonly initialMode?: 'initial' | 'evidence-search';
+    readonly repairOrigin?: 'evidence-search';
   }): Promise<FindingIntakeNormalizationResult> {
     const candidates = this.resolveFindingIntakeNormalizerCandidates(
       input.reviewerStep,
@@ -1382,6 +1393,8 @@ export class StepExecutor {
         ...(input.presentationContext === undefined
           ? {}
           : { presentationContext: input.presentationContext }),
+        ...(input.initialMode === undefined ? {} : { initialMode: input.initialMode }),
+        ...(input.repairOrigin === undefined ? {} : { repairOrigin: input.repairOrigin }),
         candidate,
       });
       lastResult = attempt.result;

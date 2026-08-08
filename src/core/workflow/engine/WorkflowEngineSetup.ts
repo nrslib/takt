@@ -48,7 +48,11 @@ import {
   renderFindingLedgerReportSummary,
 } from '../findings/context.js';
 import { renderLoopMonitorFindingsSummary } from '../findings/loop-monitor-summary.js';
-import { computeReviewScopeSnapshotId } from '../findings/snapshot.js';
+import {
+  captureReviewScopeProofSnapshot,
+  computeReviewScopeSnapshotId,
+  type ReviewScopeProofSnapshot,
+} from '../findings/snapshot.js';
 import { createTaskReviewScopeResolver } from '../review-scope.js';
 import {
   computeRestatementRequestId,
@@ -686,6 +690,27 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     if (!params.findingContract || !params.findingLedgerStore) {
       return [];
     }
+    let evidenceSnapshot: ReviewScopeProofSnapshot;
+    try {
+      const captured = captureReviewScopeProofSnapshot(params.getCwd());
+      evidenceSnapshot = captured.reviewScopeSnapshotId === input.reviewScopeSnapshotId
+        ? captured
+        : {
+            reviewScopeSnapshotId: input.reviewScopeSnapshotId,
+            trackedDiff: undefined,
+            untrackedEvidence: [],
+            queryInventory: [],
+            changedPaths: [],
+          };
+    } catch {
+      evidenceSnapshot = {
+        reviewScopeSnapshotId: input.reviewScopeSnapshotId,
+        trackedDiff: undefined,
+        untrackedEvidence: [],
+        queryInventory: [],
+        changedPaths: [],
+      };
+    }
     const ledger = params.findingLedgerStore.loadLedger();
     const publications = listFindingReviewPublications(params.runPaths.reportsAbs);
     const presentationCounts = collectFindingReviewPresentationCounts(params.runPaths.reportsAbs);
@@ -724,7 +749,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
           continue;
         }
         const searchRequest = buildFindingEvidenceSearchRequest({
-          cwd: params.getCwd(),
+          snapshot: evidenceSnapshot,
           anomaly,
           sourceRaw,
           request,

@@ -43,6 +43,7 @@ import type { InternalAgentSeats } from '../../models/config-types.js';
 import type { FindingManagerSubStepResult } from './manager-intake.js';
 import type { RunAgentOptions } from '../../../agents/runner.js';
 import type { FindingEvidenceSearchRequest } from './evidence-search.js';
+import type { FindingEvidenceSearchRunResult } from '../engine/StepExecutor.js';
 
 const log = createLogger('finding-restatement-slot');
 
@@ -224,7 +225,7 @@ export async function runFindingRestatementSlot(
   // レビュアーごと1回までに制限する。1回で決着しなかった分は次ラウンドの slot へ
   // 回り、全体の有限性は review_budget が保つ。
   const fullReviewIssued = new Set<string>();
-  const runEvidenceSearch = async (): Promise<void> => {
+  const runEvidenceSearch = async (): Promise<FindingRestatementSlotTerminalOutcome | undefined> => {
     const requests = input.buildEvidenceSearchRequests?.({
       ownerReviewerSteps: input.ownerReviewerSteps,
       reviewScopeSnapshotId: input.reviewScopeSnapshotId,
@@ -239,7 +240,7 @@ export async function runFindingRestatementSlot(
       if (ownerStep === undefined) {
         continue;
       }
-      results.push(await input.stepExecutor.runFindingEvidenceSearch({
+      const outcome: FindingEvidenceSearchRunResult = await input.stepExecutor.runFindingEvidenceSearch({
         ownerStep,
         parentStepName: input.parentStepName,
         stepIteration: input.stepIteration,
@@ -247,11 +248,23 @@ export async function runFindingRestatementSlot(
         reviewScopeSnapshotId: input.reviewScopeSnapshotId,
         request,
         runtime: input.runtime,
-      }));
+      });
+      if (outcome.kind === 'terminal') {
+        return {
+          kind: 'terminal',
+          step: ownerStep,
+          response: outcome.response,
+          providerInfo: outcome.providerInfo,
+        };
+      }
+      if (outcome.kind === 'published') {
+        results.push(outcome.result);
+      }
     }
     if (results.length > 0) {
       await input.ingest(results, { deferClaimBearingTerminalDispositions: false });
     }
+    return undefined;
   };
   for (let pass = 1; pass <= input.presentationLimit; pass += 1) {
     const contexts = input.buildSlotContexts({
@@ -315,13 +328,11 @@ export async function runFindingRestatementSlot(
     // 残った publication が恒久的に孤児化する（提示予算は消費済みなのに証拠が
     // 台帳へ届かない）。
     if (passResults.length === 0) {
-      await runEvidenceSearch();
-      return undefined;
+      return await runEvidenceSearch();
     }
     await input.ingest(passResults, { deferClaimBearingTerminalDispositions: true });
   }
-  await runEvidenceSearch();
-  return undefined;
+  return await runEvidenceSearch();
 }
 
 /** その context が実際に載せている言い直し request の件数。 */
