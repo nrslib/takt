@@ -12,7 +12,10 @@ import type {
   WorkflowStep,
 } from '../core/models/types.js';
 import { buildManagerInstruction } from '../core/workflow/findings/manager-agent.js';
-import { renderConflictAdjudicationInstruction } from '../core/workflow/findings/adjudication-evidence.js';
+import {
+  buildConflictAdjudicationHistoryOrder,
+  renderConflictAdjudicationInstruction,
+} from '../core/workflow/findings/adjudication-evidence.js';
 import {
   freshConflictAdjudicationSnapshot,
   refreshActiveConflictAdjudicationSnapshots,
@@ -274,7 +277,10 @@ function conflictPromptGolden(): { bytes: number; sha256: string } {
     createdAt: observation,
   });
   const snapshot = freshConflictAdjudicationSnapshot(ledger, 'C-FA2947446963');
-  return byteGolden(renderConflictAdjudicationInstruction(snapshot));
+  return byteGolden(renderConflictAdjudicationInstruction(
+    snapshot,
+    buildConflictAdjudicationHistoryOrder(ledger),
+  ));
 }
 
 async function collectManagerPrompts(

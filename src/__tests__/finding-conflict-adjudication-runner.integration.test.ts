@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -7,12 +7,17 @@ import { createEngineProofRecord } from '../core/models/finding-evidence-record.
 import type { WorkflowState } from '../core/models/types.js';
 import { createFindingConflictAdjudicationRunner } from '../core/workflow/findings/adjudication-runner.js';
 import { buildFindingConflictAdjudicationStep } from '../core/workflow/findings/adjudication-step.js';
-import { renderConflictAdjudicationInstruction } from '../core/workflow/findings/adjudication-evidence.js';
+import {
+  renderConflictAdjudicationInstruction,
+  type ConflictAdjudicationHistoryOrder,
+} from '../core/workflow/findings/adjudication-evidence.js';
 import { landUnownedConflictRawClaims } from '../core/workflow/findings/conflict-claim-landing.js';
 import { applyFindingLifecycleCommands } from '../core/workflow/findings/lifecycle-transaction.js';
 import {
   buildConflictAdjudicationSnapshot,
   freshConflictAdjudicationSnapshot,
+  hasAlwaysChangingConflictTarget,
+  isActiveConflictUnadjudicated,
   refreshActiveConflictAdjudicationSnapshots,
 } from '../core/workflow/findings/conflict-adjudication-model.js';
 import { reserveFindingConflictAdjudication } from '../core/workflow/findings/adjudication-reservation.js';
@@ -429,6 +434,37 @@ describe('finding-conflict-adjudication runner registry contract', () => {
     expect(ledgerStore.loadLedger().conflictAdjudicationAttempts).toHaveLength(4);
   });
 
+  it('re-adjudicates a non-regular target even when its content digest is unavailable', async () => {
+    rmSync(join(cwd, 'src', 'a.ts'));
+    writeFileSync(join(cwd, 'src', 'target.ts'), 'export const value = true;\n');
+    symlinkSync('target.ts', join(cwd, 'src', 'a.ts'));
+    executeAgentMock.mockResolvedValue({
+      persona: 'supervisor',
+      status: 'done',
+      content: '{}',
+      structuredOutput: { invalid: true },
+      timestamp: new Date(),
+    });
+
+    const first = runner();
+    await first.runner.run(first.step, state());
+    const firstSnapshot = freshConflictAdjudicationSnapshot(
+      ledgerStore.loadLedger(),
+      'C-FA2947446963',
+    );
+    expect(firstSnapshot.targetContentDigests).toEqual([
+      expect.objectContaining({ kind: 'symlink', contentDigest: null }),
+    ]);
+    expect(hasAlwaysChangingConflictTarget(firstSnapshot)).toBe(true);
+    expect(isActiveConflictUnadjudicated(ledgerStore.loadLedger(), 'C-FA2947446963')).toBe(true);
+
+    const second = runner();
+    await second.runner.run(second.step, state());
+
+    expect(executeAgentMock).toHaveBeenCalledTimes(2);
+    expect(ledgerStore.loadLedger().conflictAdjudicationAttempts).toHaveLength(2);
+  });
+
   it('keeps the adjudication wire bounded when durable snapshot collections grow', async () => {
     const snapshot = freshConflictAdjudicationSnapshot(
       ledgerStore.loadLedger(),
@@ -445,14 +481,34 @@ describe('finding-conflict-adjudication runner registry contract', () => {
         : [],
     }));
 
-    const instruction = renderConflictAdjudicationInstruction(inflated);
+    const observedAt = {
+      runId: 'history-test',
+      stepName: 'reviewers',
+      timestamp: '2026-08-08T00:00:00.000Z',
+    };
+    const history = Object.fromEntries([
+      'sourceRawFindingIds',
+      'sourceRawPayloadDigests',
+      'evidenceBindingIds',
+      'rawClaimLandingIds',
+      'priorSettlementIds',
+    ].map((key) => [
+      key,
+      new Map(inflated.subjects.flatMap((subject) => [
+        ...subject.sourceRawFindingIds,
+        ...subject.sourceRawPayloadDigests,
+        ...subject.evidenceBindingIds,
+        ...subject.rawClaimLandingIds,
+      ].map((value) => [value, observedAt] as const))),
+    ])) as ConflictAdjudicationHistoryOrder;
+    const instruction = renderConflictAdjudicationInstruction(inflated, history);
 
     expect(Buffer.byteLength(instruction, 'utf8'))
       .toBeLessThanOrEqual(MANAGER_INTERPRETATION_LIMITS.maxInputBytesPerCall);
     expect(instruction).toContain('"snapshotFormat": "reference-v1"');
     expect(instruction).toContain('sourceRawFindingCount');
     expect(instruction).toContain('sourceRawFindingIds');
-    expect(instruction).toContain('0-raw-4093');
+    expect(instruction).toContain('0-raw-999');
     expect(instruction).toContain('evidenceBindingIds');
   });
 
@@ -876,6 +932,72 @@ describe('finding-conflict-adjudication runner registry contract', () => {
     expect(executeAgentMock).toHaveBeenCalledOnce();
   });
 
+  it('rebuilds a released second attempt without consuming its ordinal', async () => {
+    const snapshot = freshConflictAdjudicationSnapshot(
+      ledgerStore.loadLedger(),
+      'C-FA2947446963',
+    );
+    const undetermined = {
+      persona: 'supervisor' as const,
+      status: 'done' as const,
+      content: '{}',
+      structuredOutput: {
+        proposal: {
+          kind: 'undetermined' as const,
+          subjectIds: snapshot.subjects.map(({ subjectId }) => subjectId).sort(),
+          rationale: 'No authority.',
+        },
+      },
+      timestamp: new Date(OBSERVATION.timestamp),
+    };
+    executeAgentMock.mockResolvedValueOnce(undetermined);
+    let crashed = false;
+    const crashingStore = new Proxy(ledgerStore, {
+      get(target, property, receiver) {
+        if (property !== 'updateLedger') {
+          const value = Reflect.get(target, property, receiver) as unknown;
+          return typeof value === 'function' ? value.bind(target) : value;
+        }
+        return async (...args: Parameters<FindingLedgerStore['updateLedger']>) => {
+          const mutation = await target.updateLedger(...args);
+          const groundedReservation = mutation.ledger.conflictAdjudicationAttempts.some((attempt) => (
+            attempt.stage === 'started' && attempt.attemptOrdinal === 2
+          ));
+          if (!crashed && groundedReservation) {
+            crashed = true;
+            throw new Error('simulated crash after second conflict WAL reservation');
+          }
+          return mutation;
+        };
+      },
+    });
+    const crashingTarget = runner('Original guidance.', crashingStore);
+    await expect(crashingTarget.runner.run(crashingTarget.step, state()))
+      .rejects.toThrow('simulated crash after second conflict WAL reservation');
+
+    ledgerStore = reopenStore();
+    executeAgentMock.mockClear();
+    executeAgentMock.mockResolvedValue(undetermined);
+    const resumedTarget = runner('Changed guidance.', ledgerStore);
+    await resumedTarget.runner.run(resumedTarget.step, state());
+
+    const ledger = ledgerStore.loadLedger();
+    expect(ledger.conflictAdjudicationAttempts).toHaveLength(2);
+    expect(ledger.conflictAdjudicationAttempts.map(({ attemptOrdinal }) => attemptOrdinal))
+      .toEqual([1, 2]);
+    expect(ledger.conflictAdjudicationAttempts).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({
+        stage: 'interrupted',
+        reason: 'reservation_released',
+      })]),
+    );
+    expect(ledger.findingManagerProviderCalls).toEqual(expect.arrayContaining([
+      expect.objectContaining({ state: 'released' }),
+      expect.objectContaining({ state: 'settled' }),
+    ]));
+    expect(executeAgentMock).toHaveBeenCalledOnce();
+  });
+
   it('releases a reserved call when its request digest changes and rebuilds the reservation', async () => {
     const crashingStore = crashAfterAdjudicationReservation({
       store: ledgerStore,
@@ -906,7 +1028,7 @@ describe('finding-conflict-adjudication runner registry contract', () => {
     });
 
     await changedTarget.runner.run(changedTarget.step, state());
-    expect(executeAgentMock).toHaveBeenCalledOnce();
+    expect(executeAgentMock).toHaveBeenCalledTimes(2);
     expect(ledgerStore.loadLedger().findingManagerProviderCalls[0]).toMatchObject({
       providerCallId: reserved.providerCallId,
       state: 'released',

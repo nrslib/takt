@@ -632,9 +632,12 @@ function collectProviderAndAttemptViolations(
     );
     call.attemptIds.forEach((attemptId) => {
       const attempt = attemptsById.get(attemptId);
+      const historicalReleasedReservation = call.state === 'released'
+        && attempt !== undefined
+        && attempt.providerCallId !== call.providerCallId;
       if (
         attempt?.kind !== call.purpose
-        || attempt.providerCallId !== call.providerCallId
+        || (attempt.providerCallId !== call.providerCallId && !historicalReleasedReservation)
       ) {
         addViolation(
           violations,
@@ -679,7 +682,9 @@ function collectProviderAndAttemptViolations(
       call !== undefined
       && (
         (call.state !== 'settled' && call.state !== 'released' && attempt.stage !== 'started')
-        || (call.state === 'released' && attempt.stage !== 'interrupted')
+        || (call.state === 'released'
+          && attempt.stage !== 'interrupted'
+          && call.providerCallId === attempt.providerCallId)
         || (call.state === 'settled'
           && call.resultKind === 'interrupted_unknown'
           && attempt.stage !== 'interrupted'

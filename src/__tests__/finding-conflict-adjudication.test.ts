@@ -16,6 +16,9 @@ import {
   hasSubstantiveVerifiedSettlementWitness,
   isConflictResolved,
 } from '../core/workflow/findings/conflict-adjudication-model.js';
+import {
+  buildConflictAdjudicationSnapshotReference,
+} from '../core/workflow/findings/adjudication-evidence.js';
 import { resolveConflictAdjudicationPlan } from '../core/workflow/findings/conflict-adjudication-verifier.js';
 
 const OBSERVATION = {
@@ -144,6 +147,72 @@ describe('finding lifecycle continuity', () => {
 });
 
 describe('verified conflict adjudication', () => {
+  it('selects the recent reference window by observation order and keeps set digests deterministic', () => {
+    const claim = {
+      ...subject('F-0001', head('finding', 'F-0001', 1)),
+      sourceRawFindingIds: ['raw-a', 'raw-b', 'raw-c', 'raw-d'],
+      sourceRawPayloadDigests: ['payload-a', 'payload-b', 'payload-c', 'payload-d'],
+      evidenceBindingIds: ['binding-a', 'binding-b', 'binding-c', 'binding-d'],
+      rawClaimLandingIds: ['landing-a', 'landing-b', 'landing-c', 'landing-d'],
+      role: 'holding_provisional' as const,
+    };
+    const current = snapshot([claim]);
+    current.rawClaimLandingIds = ['landing-a', 'landing-b', 'landing-c', 'landing-d'];
+    current.priorSettlementIds = ['settlement-a', 'settlement-b', 'settlement-c', 'settlement-d'];
+    const observation = (timestamp: string) => ({
+      runId: 'run-history',
+      stepName: 'reviewers',
+      timestamp,
+    });
+    const history = {
+      sourceRawFindingIds: new Map([
+        ['raw-a', observation('2026-08-04T00:00:04.000Z')],
+        ['raw-b', observation('2026-08-04T00:00:01.000Z')],
+        ['raw-c', observation('2026-08-04T00:00:03.000Z')],
+        ['raw-d', observation('2026-08-04T00:00:02.000Z')],
+      ]),
+      sourceRawPayloadDigests: new Map([
+        ['payload-a', observation('2026-08-04T00:00:04.000Z')],
+        ['payload-b', observation('2026-08-04T00:00:01.000Z')],
+        ['payload-c', observation('2026-08-04T00:00:03.000Z')],
+        ['payload-d', observation('2026-08-04T00:00:02.000Z')],
+      ]),
+      evidenceBindingIds: new Map([
+        ['binding-a', observation('2026-08-04T00:00:04.000Z')],
+        ['binding-b', observation('2026-08-04T00:00:01.000Z')],
+        ['binding-c', observation('2026-08-04T00:00:03.000Z')],
+        ['binding-d', observation('2026-08-04T00:00:02.000Z')],
+      ]),
+      rawClaimLandingIds: new Map([
+        ['landing-a', observation('2026-08-04T00:00:04.000Z')],
+        ['landing-b', observation('2026-08-04T00:00:01.000Z')],
+        ['landing-c', observation('2026-08-04T00:00:03.000Z')],
+        ['landing-d', observation('2026-08-04T00:00:02.000Z')],
+      ]),
+      priorSettlementIds: new Map([
+        ['settlement-a', observation('2026-08-04T00:00:04.000Z')],
+        ['settlement-b', observation('2026-08-04T00:00:01.000Z')],
+        ['settlement-c', observation('2026-08-04T00:00:03.000Z')],
+        ['settlement-d', observation('2026-08-04T00:00:02.000Z')],
+      ]),
+    };
+
+    const reference = buildConflictAdjudicationSnapshotReference(current, history);
+
+    expect(reference.rawClaimLandingIds).toEqual(['landing-d', 'landing-c', 'landing-a']);
+    expect(reference.priorSettlementIds).toEqual(['settlement-d', 'settlement-c', 'settlement-a']);
+    expect(reference.subjects[0]?.sourceRawFindingIds)
+      .toEqual(['raw-d', 'raw-c', 'raw-a']);
+    expect(reference.subjects[0]?.evidenceBindingIds)
+      .toEqual(['binding-d', 'binding-c', 'binding-a']);
+    expect(reference.rawClaimLandingDigest).toBe(
+      buildConflictAdjudicationSnapshotReference(current, {
+        ...history,
+        rawClaimLandingIds: new Map([...history.rawClaimLandingIds].reverse()),
+      }).rawClaimLandingDigest,
+    );
+  });
+
   it('issues branded terminate authority only for an exactly bound engine proof', () => {
     const findingHead = head('finding', 'F-0001', 1);
     const conflictHead = head('conflict', 'C-0001', 1);

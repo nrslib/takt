@@ -13,7 +13,10 @@ import {
   commitFindingConflictAdjudication,
   completeFailedConflictAdjudication,
 } from './adjudication-commit.js';
-import { renderConflictAdjudicationInstruction } from './adjudication-evidence.js';
+import {
+  buildConflictAdjudicationHistoryOrder,
+  renderConflictAdjudicationInstruction,
+} from './adjudication-evidence.js';
 import {
   buildFindingEvidenceSearchWindows,
   findingEvidenceAnchorLineFor,
@@ -289,6 +292,7 @@ export function createFindingConflictAdjudicationRunner(deps: FindingConflictAdj
         };
       });
       const current = refreshed.ledger;
+      const history = buildConflictAdjudicationHistoryOrder(current);
       const conflict = selectConflictForAdjudication(
         current,
         (candidate) => (
@@ -316,12 +320,12 @@ export function createFindingConflictAdjudicationRunner(deps: FindingConflictAdj
               targetPaths: target.targetPaths,
               anchorLines: target.anchorLines,
             });
-            return renderConflictAdjudicationInstruction(snapshot, {
+            return renderConflictAdjudicationInstruction(snapshot, history, {
               reviewScopeSnapshotId: reviewScopeSnapshot.reviewScopeSnapshotId,
               windows,
             });
           })()
-        : renderConflictAdjudicationInstruction(snapshot);
+        : renderConflictAdjudicationInstruction(snapshot, history);
       const instruction = deps.stepExecutor.buildPhase1Instruction(
         composeFindingAdjudicationInstruction(deps.guidance, groundingInstruction),
         step,

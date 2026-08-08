@@ -11,6 +11,7 @@ import type {
 import {
   createConflictAdjudicationEpisode,
   freshConflictAdjudicationSnapshot,
+  hasAlwaysChangingConflictTarget,
   isConflictSnapshotAdjudicated,
 } from './conflict-adjudication-model.js';
 import {
@@ -74,6 +75,7 @@ export async function reserveFindingConflictAdjudication(input: {
     const started = fresh.conflictAdjudicationAttempts.find((attempt) => (
       attempt.conflictId === conflict.id && attempt.stage === 'started'
     ));
+    let rebuildingAttempt: Extract<ConflictAdjudicationAttempt, { stage: 'started' }> | undefined;
     if (started?.stage === 'started') {
       const call = fresh.findingManagerProviderCalls.find(
         (candidate) => candidate.providerCallId === started.providerCallId,
@@ -117,17 +119,24 @@ export async function reserveFindingConflictAdjudication(input: {
           fresh = {
             ...fresh,
             findingManagerProviderCalls: released.calls,
-            conflictAdjudicationAttempts: fresh.conflictAdjudicationAttempts.map((attempt) => (
-              attempt.attemptId === started.attemptId
-                ? {
-                    ...started,
-                    stage: 'interrupted' as const,
-                    interruptedAt: structuredClone(input.observation),
-                    reason: 'reservation_released' as const,
-                  }
-                : attempt
-            )),
           };
+          if (started.conflictSnapshotId === snapshot.conflictSnapshotId && requestChanged) {
+            rebuildingAttempt = started;
+          } else {
+            fresh = {
+              ...fresh,
+              conflictAdjudicationAttempts: fresh.conflictAdjudicationAttempts.map((attempt) => (
+                attempt.attemptId === started.attemptId
+                  ? {
+                      ...started,
+                      stage: 'interrupted' as const,
+                      interruptedAt: structuredClone(input.observation),
+                      reason: 'reservation_released' as const,
+                    }
+                  : attempt
+              )),
+            };
+          }
         } else {
           if (snapshot.conflictSnapshotId !== input.expectedSnapshotId) {
             return { ledger: fresh, result: { started: false } };
@@ -175,25 +184,34 @@ export async function reserveFindingConflictAdjudication(input: {
           ))
         ))
     ));
-    const groundingRetryAllowed = input.allowGroundingRetry === true
+    const groundingRetryAllowed = rebuildingAttempt === undefined
+      && input.allowGroundingRetry === true
       && !groundingRetryAlreadyUsed
       && episodeAttempts.some((attempt) => (
         attempt.stage === 'completed'
         && attempt.attemptOrdinal === 1
         && attempt.result.kind === 'verification_undetermined'
       ));
-    if (isConflictSnapshotAdjudicated(fresh, snapshot) && !groundingRetryAllowed) {
+    const alwaysChangingTarget = hasAlwaysChangingConflictTarget(snapshot);
+    if (rebuildingAttempt === undefined
+      && isConflictSnapshotAdjudicated(fresh, snapshot)
+      && !groundingRetryAllowed
+      && !alwaysChangingTarget) {
       return { ledger: fresh, result: { started: false } };
     }
+    // 予約解放は provider 実行前なので attempt を消費しない。同じ snapshot digest の
+    // 予約を同じ ordinal で再構築し、次回に snapshot digest が一致すればこの経路を
+    // 再度通らないことを停止保証とする。
     const used = fresh.conflictAdjudicationAttempts.filter(
-      (attempt) => attempt.episodeId === ensured.episode.episodeId,
+      (attempt) => attempt.episodeId === ensured.episode.episodeId
+        && attempt.attemptId !== rebuildingAttempt?.attemptId,
     ).length;
     if (used >= ensured.episode.maxAttempts) {
       return { ledger: fresh, result: { started: false } };
     }
-    const attemptOrdinal = (used + 1) as 1 | 2;
-    const retryOrdinal = used as 0 | 1;
-    const attemptId = computeConflictAttemptId({
+    const attemptOrdinal = rebuildingAttempt?.attemptOrdinal ?? (used + 1) as 1 | 2;
+    const retryOrdinal = rebuildingAttempt?.retryOrdinal ?? used as 0 | 1;
+    const attemptId = rebuildingAttempt?.attemptId ?? computeConflictAttemptId({
       episodeId: ensured.episode.episodeId,
       attemptOrdinal,
       retryOrdinal,
@@ -239,7 +257,11 @@ export async function reserveFindingConflictAdjudication(input: {
       findingManagerProviderBudgetScopes: reserved.scopes,
       findingManagerProviderCalls: reserved.calls,
       conflictAdjudicationEpisodes: ensured.episodes,
-      conflictAdjudicationAttempts: [...fresh.conflictAdjudicationAttempts, attempt],
+      conflictAdjudicationAttempts: rebuildingAttempt === undefined
+        ? [...fresh.conflictAdjudicationAttempts, attempt]
+        : fresh.conflictAdjudicationAttempts.map((candidate) => (
+            candidate.attemptId === rebuildingAttempt.attemptId ? attempt : candidate
+          )),
     };
     return {
       ledger,

@@ -434,6 +434,30 @@ export function isConflictSnapshotAdjudicated(
   ));
 }
 
+export function hasAlwaysChangingConflictTarget(
+  snapshot: ConflictAdjudicationSnapshot,
+): boolean {
+  return (snapshot.targetContentDigests ?? []).some((target) => (
+    target.kind !== 'file' || target.contentDigest === null
+  ));
+}
+
+function hasRemainingConflictAttempts(
+  ledger: FindingLedger,
+  snapshot: ConflictAdjudicationSnapshot,
+): boolean {
+  const episode = ledger.conflictAdjudicationEpisodes.find((candidate) => (
+    candidate.episodeId === computeConflictEpisodeId({
+      conflictId: snapshot.conflictId,
+      expectedConflictHead: snapshot.expectedConflictHead,
+      conflictSnapshotId: snapshot.conflictSnapshotId,
+    })
+  ));
+  return episode === undefined || ledger.conflictAdjudicationAttempts.filter(
+    (attempt) => attempt.episodeId === episode.episodeId,
+  ).length < episode.maxAttempts;
+}
+
 export function isActiveConflictUnadjudicated(
   ledger: FindingLedger,
   conflictId: string,
@@ -442,13 +466,15 @@ export function isActiveConflictUnadjudicated(
   if (conflict === undefined || conflict.status !== 'active') {
     return false;
   }
-  // An unchanged conflict does not consume stop-budget rounds. The loop
-  // monitor (or the workflow max_steps boundary) is the finite escape hatch
-  // for repeated unresolved, code-unchanged rounds.
-  return !isConflictSnapshotAdjudicated(
-    ledger,
-    freshConflictAdjudicationSnapshot(ledger, conflictId),
-  );
+  const snapshot = freshConflictAdjudicationSnapshot(ledger, conflictId);
+  if (!hasRemainingConflictAttempts(ledger, snapshot)) {
+    return false;
+  }
+  // An unchanged regular file does not consume stop-budget rounds. Non-regular
+  // targets intentionally have no content digest; they are always eligible for
+  // another bounded adjudication so a null digest cannot create a false negative.
+  return hasAlwaysChangingConflictTarget(snapshot)
+    || !isConflictSnapshotAdjudicated(ledger, snapshot);
 }
 
 function allProductClaimsDurablyCovered(
