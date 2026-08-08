@@ -284,6 +284,20 @@ describe('Claude terminal provider contract', () => {
 });
 
 describe('Schemas accept opencode provider', () => {
+  it('should accept assistant.gherkin in GlobalConfigSchema', () => {
+    const result = GlobalConfigSchema.parse({
+      assistant: { gherkin: true },
+    });
+
+    expect(result.assistant).toEqual({ gherkin: true });
+  });
+
+  it('should reject assistant.init_files in GlobalConfigSchema', () => {
+    expect(() => GlobalConfigSchema.parse({
+      assistant: { init_files: ['docs/context.md'] },
+    })).toThrow(/init_files|unrecognized/i);
+  });
+
   it('should accept opencode in GlobalConfigSchema provider field', () => {
     const result = GlobalConfigSchema.parse({ provider: 'opencode' });
     expect(result.provider).toBe('opencode');

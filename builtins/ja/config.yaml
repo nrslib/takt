@@ -64,6 +64,8 @@ language: ja         # 表示言語: ja | en
 
 # インタラクティブモード
 # interactive_preview_steps: 3 # インタラクティブモードでの step プレビュー数 (0-10)
+# assistant:
+#   gherkin: true              # 最終指示書を Markdown + 要所の Gherkin で生成
 
 # workflow step の provider routing（推奨）
 # provider_routing:

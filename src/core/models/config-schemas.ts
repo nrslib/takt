@@ -62,6 +62,10 @@ export const AssistantConfigSchema = z.object({
   gherkin: z.boolean().optional(),
 }).strict();
 
+export const GlobalAssistantConfigSchema = z.object({
+  gherkin: z.boolean().optional(),
+}).strict();
+
 export const ProviderRoutingSchema = z.object({
   personas: z.record(z.string(), PersonaProviderReferenceSchema).optional(),
   tags: z.record(z.string(), PersonaProviderReferenceSchema).optional(),
@@ -181,6 +185,7 @@ export const GlobalConfigSchema = ProjectConfigObjectBaseSchema
   .omit({ submodules: true, with_submodules: true, assistant: true })
   .merge(GlobalOnlyConfigSchema)
   .extend({
+    assistant: GlobalAssistantConfigSchema.optional(),
     provider: ProviderReferenceSchema.optional().default('claude'),
   })
   .strict();

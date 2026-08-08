@@ -157,6 +157,11 @@ export interface AssistantConfig {
   gherkin?: boolean;
 }
 
+export interface GlobalAssistantConfig {
+  /** Generate final task instructions as human-readable Markdown with focused Gherkin scenarios. */
+  gherkin?: boolean;
+}
+
 /** Step-specific quality gates override */
 export interface StepQualityGatesOverride {
   qualityGates?: QualityGate[];
@@ -385,6 +390,8 @@ export interface ProjectConfig {
  * — handled by the resolution layer.
  */
 export interface GlobalConfig extends Omit<ProjectConfig, 'submodules' | 'withSubmodules' | 'assistant'> {
+  /** Global default for assistant task-instruction formatting. */
+  assistant?: GlobalAssistantConfig;
   /** @globalOnly */
   language: Language;
   /** @globalOnly */

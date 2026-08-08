@@ -19,6 +19,7 @@ vi.mock('../infra/config/paths.js', async (importOriginal) => {
 });
 
 const { resolveAssistantConfigLayers } = await import('../features/interactive/assistantConfig.js');
+const { shouldUseGherkinTaskInstructions } = await import('../features/interactive/taskInstructionFormat.js');
 const { invalidateGlobalConfigCache } = await import('../infra/config/global/globalConfig.js');
 const { invalidateAllResolvedConfigCache } = await import('../infra/config/resolveConfigValue.js');
 const { getProjectConfigDir } = await import('../infra/config/paths.js');
@@ -96,6 +97,33 @@ describe('assistantConfig', () => {
       },
     });
   });
+
+  it.each([
+    ['global value', true, undefined, true],
+    ['project false override', true, false, false],
+    ['project true override', false, true, true],
+  ] as const)(
+    'should resolve Gherkin task instructions from %s',
+    (_label, globalGherkin, projectGherkin, expected) => {
+      writeFileSync(
+        globalConfigPath,
+        ['language: en', 'assistant:', `  gherkin: ${globalGherkin}`].join('\n'),
+        'utf-8',
+      );
+
+      if (projectGherkin !== undefined) {
+        const configDir = getProjectConfigDir(projectDir);
+        mkdirSync(configDir, { recursive: true });
+        writeFileSync(
+          join(configDir, 'config.yaml'),
+          ['assistant:', `  gherkin: ${projectGherkin}`].join('\n'),
+          'utf-8',
+        );
+      }
+
+      expect(shouldUseGherkinTaskInstructions(projectDir)).toBe(expected);
+    },
+  );
 
   it('should keep assistant-only resolver out of infra config public exports', async () => {
     const infraConfig = await import('../infra/config/index.js');

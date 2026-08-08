@@ -8,6 +8,7 @@ import {
   denormalizeRateLimitFallback,
   denormalizeTelemetryConfig,
   denormalizeAutoRoutingConfig,
+  denormalizeAssistantConfig,
 } from '../configNormalizers.js';
 import { denormalizeObservabilityConfig } from '../observabilityConfig.js';
 
@@ -222,6 +223,10 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
       pipelineRaw.pr_body_template = config.pipeline.prBodyTemplate;
     }
     if (Object.keys(pipelineRaw).length > 0) raw.pipeline = pipelineRaw;
+  }
+  const rawAssistant = denormalizeAssistantConfig(config.assistant);
+  if (rawAssistant) {
+    raw.assistant = rawAssistant;
   }
   const rawPersonaProviders = denormalizePersonaProviders(config.personaProviders);
   if (rawPersonaProviders && Object.keys(rawPersonaProviders).length > 0) {

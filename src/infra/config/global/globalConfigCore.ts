@@ -18,6 +18,7 @@ import {
   normalizeRateLimitFallback,
   normalizeAutoRoutingConfig,
   normalizeTelemetryConfig,
+  normalizeAssistantConfig,
 } from '../configNormalizers.js';
 import {
   resolveAliasedPreviewCount,
@@ -211,6 +212,7 @@ export class GlobalConfigManager {
       pipeline: normalizePipelineConfig(
         parsed.pipeline as { default_branch_prefix?: string; commit_message_template?: string; pr_body_template?: string } | undefined,
       ),
+      assistant: normalizeAssistantConfig(parsed.assistant),
       taktProviders: normalizeTaktProviders(
         parsed.takt_providers as {
           assistant?: {

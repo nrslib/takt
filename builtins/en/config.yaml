@@ -64,6 +64,8 @@ language: en        # UI language: en | ja
 
 # Interactive mode
 # interactive_preview_steps: 3 # Number of step previews in interactive mode (0-10)
+# assistant:
+#   gherkin: true              # Generate final task instructions as Markdown + focused Gherkin
 
 # Provider routing for workflow steps (recommended)
 # provider_routing:

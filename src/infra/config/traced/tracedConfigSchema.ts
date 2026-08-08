@@ -153,6 +153,8 @@ const GLOBAL_TRACKED_KEYS = [
   'rate_limit_fallback.switch_chain',
   'workflow_overrides',
   'pipeline',
+  'assistant',
+  'assistant.gherkin',
   'takt_providers',
   'persona_providers',
   'provider_routing',

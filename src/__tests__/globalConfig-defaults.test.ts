@@ -71,6 +71,17 @@ describe('loadGlobalConfig', () => {
     expect(config.interactivePreviewSteps).toBeUndefined();
   });
 
+  it.each([true, false])('should load assistant.gherkin=%s from global config.yaml', (gherkin) => {
+    mkdirSync(join(testHomeDir, '.takt'), { recursive: true });
+    writeFileSync(
+      getGlobalConfigPath(),
+      ['assistant:', `  gherkin: ${gherkin}`].join('\n'),
+      'utf-8',
+    );
+
+    expect(loadGlobalConfig().assistant).toEqual({ gherkin });
+  });
+
   it.each(['codex', 'claude'])('should accept an external %s selector base_url in global config', (provider) => {
     mkdirSync(join(testHomeDir, '.takt'), { recursive: true });
     writeFileSync(getGlobalConfigPath(), [
@@ -390,6 +401,21 @@ describe('loadGlobalConfig', () => {
     expect(raw).toContain('assistant:');
     expect(raw).toContain('provider: claude');
     expect(raw).toContain('model: haiku');
+  });
+
+  it.each([true, false])('should preserve assistant.gherkin=%s when saving global config', (gherkin) => {
+    const taktDir = join(testHomeDir, '.takt');
+    mkdirSync(taktDir, { recursive: true });
+    writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
+
+    saveGlobalConfig({
+      ...loadGlobalConfig(),
+      assistant: { gherkin },
+    });
+    invalidateGlobalConfigCache();
+
+    expect(loadGlobalConfig().assistant).toEqual({ gherkin });
+    expect(readFileSync(getGlobalConfigPath(), 'utf-8')).toContain(`gherkin: ${gherkin}`);
   });
 
   it('should persist selector provider options when saving global config', () => {
