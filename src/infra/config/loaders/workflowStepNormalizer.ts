@@ -459,6 +459,12 @@ export function normalizeStepFromRaw(
     knowledgeContents,
   };
 
+  // parallel 親の capabilities は sub-step の既定になる（sub-step 自身の宣言が置換する）。
+  // 渡さないと、親が readonly を宣言していても無宣言の子が workflow 既定へ落ちて広くなる。
+  const subStepWorkflowDefinitions = effectiveCapabilityOptions === undefined
+    ? workflowDefinitions
+    : { ...workflowDefinitions, capabilityOptions: effectiveCapabilityOptions };
+
   if (step.parallel && Array.isArray(step.parallel) && step.parallel.length > 0) {
     const normalizedStep: AgentWorkflowStep = {
       ...normalizedAgentFields,
@@ -482,7 +488,7 @@ export function normalizeStepFromRaw(
           globalOverrides,
           workflowArpeggioPolicy,
           workflowMcpServersPolicy,
-          workflowDefinitions,
+          subStepWorkflowDefinitions,
         ),
       ),
       ...(step.concurrency != null ? { concurrency: step.concurrency } : {}),
@@ -515,7 +521,7 @@ export function normalizeStepFromRaw(
       globalOverrides,
       workflowArpeggioPolicy,
       workflowMcpServersPolicy,
-      workflowDefinitions,
+      subStepWorkflowDefinitions,
       );
       return normalized as DynamicParallelFixedSubStep;
     };

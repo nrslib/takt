@@ -116,7 +116,7 @@ describe('CT-CAP-5 capabilities and direct provider_options coexist on the same 
 describe('capabilities reach the engine provider-options layers', () => {
   // 検出済みの後退: capabilities は step.providerOptions にだけ畳み込まれ、エンジンが実際に
   // 読む layer 側に乗らず実行時 no-op になっていた。このテストは実行時経路そのものを固定する。
-  it('should expose the resolved capability options on the runtime layer merge', async () => {
+  it('should expose the resolved capability options on the runtime layer merge when a step declares capabilities', async () => {
     const { mergeStepProviderOptionsLayers, resolveStepCapabilityProviderOptions } = await import(
       '../infra/config/providerOptions.js'
     );
@@ -133,7 +133,7 @@ describe('capabilities reach the engine provider-options layers', () => {
       .toEqual({ claude: { allowedTools: ['Read'] }, opencode: { networkAccess: true } });
   });
 
-  it('should let the workflow provider_options layer override the capabilities layer', async () => {
+  it('should let the workflow provider_options layer override the capabilities layer when both declare the same leaf', async () => {
     const { mergeStepProviderOptionsLayers } = await import('../infra/config/providerOptions.js');
     writeCapabilitySet('base-tools', 'claude:\n  allowed_tools:\n    - Read\n');
     const config = normalize(
@@ -147,7 +147,7 @@ describe('capabilities reach the engine provider-options layers', () => {
 });
 
 describe('capabilities accepts a list of set names', () => {
-  it('should merge listed sets left to right onto the step', () => {
+  it('should merge listed sets left to right onto the step when capabilities is a list', () => {
     writeCapabilitySet('tools', 'claude:\n  allowed_tools:\n    - Read\n');
     writeCapabilitySet('skills-grant', 'codex:\n  skills:\n    repo: true\n    user: true\n');
     const config = normalize({}, [
@@ -164,7 +164,7 @@ describe('capabilities accepts a list of set names', () => {
     });
   });
 
-  it('should let a later listed set win on a leaf both declare', () => {
+  it('should let a later listed set win when multiple listed sets declare the same leaf', () => {
     writeCapabilitySet('narrow', 'claude:\n  allowed_tools:\n    - Read\n');
     writeCapabilitySet('wide', 'claude:\n  allowed_tools:\n    - Read\n    - Edit\n');
     const config = normalize({}, [

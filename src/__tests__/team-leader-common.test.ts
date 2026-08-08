@@ -104,7 +104,7 @@ describe('createPartStep', () => {
     expect(partStep.providerOptions).toEqual(step.providerOptions);
   });
 
-  it('carries every provider-options field the runtime layer merge reads onto the part step', () => {
+  it('should carry every provider-options field the runtime layer merge reads when creating a part step', () => {
     // resolveDirectStepProviderOptions / resolveStepWorkflowProviderOptions /
     // resolveStepCapabilityProviderOptions は step 上のフィールド有無で読む対象を切り替える。
     // part step がどれかを落とすと、親では効いていたオプションが part だけ黙って消える。
