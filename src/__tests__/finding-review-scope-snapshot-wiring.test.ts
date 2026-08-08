@@ -388,6 +388,7 @@ function makeRunner(options: {
         options.findingContractContext ?? makeFindingContractContext(),
       ),
       buildFindingRestatementSlotContexts: vi.fn().mockReturnValue(new Map()),
+      buildFindingEvidenceSearchRequests: vi.fn().mockReturnValue([]),
     } as unknown as ParallelRunnerDeps['optionsBuilder'],
     stepExecutor: stepExecutor as unknown as ParallelRunnerDeps['stepExecutor'],
     engineOptions: {

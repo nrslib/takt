@@ -30,7 +30,10 @@ import { captureReviewScopeProofSnapshot } from '../core/workflow/findings/snaps
 import { createEmptyFindingContractRegistries } from '../core/models/finding-contract-seed.js';
 import { applyCommitLedgerStates } from '../core/workflow/findings/manager-commit-finalization.js';
 import { runFindingRestatementSlot } from '../core/workflow/findings/restatement-slot-runner.js';
-import { buildFindingEvidenceSearchRequest } from '../core/workflow/findings/evidence-search.js';
+import {
+  buildFindingEvidenceSearchRequest,
+  buildFindingEvidenceSearchWindows,
+} from '../core/workflow/findings/evidence-search.js';
 import { StepExecutor } from '../core/workflow/engine/StepExecutor.js';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import { createStructuredOutputNormalizerRegistry } from '../core/workflow/engine/structured-output-normalizer.js';
@@ -150,6 +153,38 @@ function evidenceSearchPublication(input: {
 }
 
 describe('FC evidence-search fallback', () => {
+  it('keeps adding left context when the next right line exceeds the byte limit', () => {
+    const path = 'src/example.ts';
+    const lines = [
+      'l'.repeat(2800),
+      'l'.repeat(2800),
+      'a'.repeat(1800),
+      'r'.repeat(4800),
+    ];
+    const windows = buildFindingEvidenceSearchWindows({
+      snapshot: {
+        reviewScopeSnapshotId: 'a'.repeat(64),
+        trackedDiff: undefined,
+        untrackedEvidence: [],
+        queryInventory: [{
+          path,
+          kind: 'file',
+          content: Buffer.from(lines.join('\n'), 'utf8'),
+          contentDigest: 'b'.repeat(64),
+          coverage: 'complete' as const,
+        }],
+        changedPaths: [path],
+      },
+      targetPaths: [path],
+      anchorLines: new Map([[path, 3]]),
+    });
+
+    expect(windows).toHaveLength(1);
+    expect(windows[0]).toMatchObject({ startLine: 1, endLine: 3 });
+    expect(windows[0]?.content).toContain('1: ');
+    expect(windows[0]?.content).not.toContain('4: ');
+  });
+
   it('uses only the digest-bound snapshot and presents every window when the source has no anchor', () => {
     const { source, anomalyId } = buildAnomaly();
     const snapshotContent = Array.from(

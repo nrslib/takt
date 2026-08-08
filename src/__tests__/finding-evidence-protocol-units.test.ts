@@ -506,7 +506,7 @@ describe('review-integrity budget (review-integrity.ts, codex 検証ブロッカ
     expect(resolveReviewIntegrityLimits({ maxReviewRounds: 2 }).maxReviewRounds).toBe(2);
   });
 
-  it('should require promotedFindingId for promotionOrigin on every anomaly kind', () => {
+  it('promotionOrigin が設定されているとき、全 anomaly kind で promotedFindingId を要求する', () => {
     const anomaly = makeAnomaly({ promotionOrigin: 'evidence-search' });
     expect(ReviewerAnomalyEntrySchema.safeParse(anomaly).success).toBe(false);
     expect(ReviewerAnomalyEntrySchema.safeParse({

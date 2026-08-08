@@ -1965,6 +1965,7 @@ describe('FC restatement slot — caller reaches the runner after the manager ro
         }),
         buildFindingContractInstructionContext: vi.fn().mockReturnValue(findingContractContext),
         buildFindingRestatementSlotContexts,
+        buildFindingEvidenceSearchRequests: vi.fn().mockReturnValue([]),
       },
       stepExecutor: {
         buildInstruction: vi.fn((step: { name: string }) => `instruction:${step.name}`),

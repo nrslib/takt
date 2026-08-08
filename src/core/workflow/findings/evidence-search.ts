@@ -100,7 +100,7 @@ function anchoredWindowForLines(
       ? windowForLines(path, lines.slice(start, end + 2), start + 1)
       : undefined;
     const canAddLeft = includesAnchor(left);
-    const canAddRight = includesAnchor(right);
+    const canAddRight = includesAnchor(right) && right.endLine > end + 1;
     if (!canAddLeft && !canAddRight) {
       break;
     }
