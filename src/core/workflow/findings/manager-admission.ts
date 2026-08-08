@@ -557,6 +557,9 @@ function evaluateAdmissionItem(input: {
         lineageKey: item.canonical.lineageKey,
         rawFindingId: item.wire.rawFindingId,
         ...(restatementRequestBindings.length === 0 ? {} : { restatementRequestBindings }),
+        ...(restatementRequestBindings.some((binding) => binding.repairOrigin === 'evidence-search')
+          ? { promotionOrigin: 'evidence-search' as const }
+          : {}),
       }
     : undefined;
   const provisionalOnlyLadderRawId = pool === 'tainted'

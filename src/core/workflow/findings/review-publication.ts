@@ -90,6 +90,7 @@ export interface CanonicalFindingReviewPublication extends FindingReviewPublicat
   readonly rawFindings: readonly unknown[];
   readonly presentationContext: FindingReviewPresentationContext;
   readonly reviewerOutputOverflow?: FindingReviewPublicationOverflow;
+  readonly repairOrigin?: 'evidence-search';
 }
 
 export interface RestatementRequestV1 {
@@ -111,6 +112,7 @@ export interface RestatementRequestBinding {
   readonly request: RestatementRequestV1;
   readonly publicationId: string;
   readonly reportDigest: string;
+  readonly repairOrigin?: 'evidence-search';
 }
 
 export interface FindingReviewPresentationContextV1 {
@@ -290,7 +292,7 @@ export function collectRestatementRequests(
 }
 
 export function collectRestatementRequestBindings(
-  publications: readonly Pick<CanonicalFindingReviewPublication, 'presentationContext' | 'publicationId' | 'reportDigest'>[],
+  publications: readonly Pick<CanonicalFindingReviewPublication, 'presentationContext' | 'publicationId' | 'reportDigest' | 'repairOrigin'>[],
 ): RestatementRequestBinding[] {
   const bindingsById = new Map<string, RestatementRequestBinding>();
   for (const publication of publications) {
@@ -302,6 +304,7 @@ export function collectRestatementRequestBindings(
         request,
         publicationId: publication.publicationId,
         reportDigest: publication.reportDigest,
+        ...(publication.repairOrigin === undefined ? {} : { repairOrigin: publication.repairOrigin }),
       };
       const existing = bindingsById.get(request.restatementRequestId);
       if (existing !== undefined) {
@@ -530,6 +533,9 @@ function rebindInheritedFindingReviewPublication(
       ...(first.publication.reviewerOutputOverflow === undefined
         ? {}
         : { reviewerOutputOverflow: first.publication.reviewerOutputOverflow }),
+      ...(first.publication.repairOrigin === undefined
+        ? {}
+        : { repairOrigin: first.publication.repairOrigin }),
     }),
     ...(first.relationClarification === undefined
       ? {}
@@ -881,6 +887,11 @@ function parseStoredPreparation(
             publicationRecord.reviewerOutputOverflow,
           )!,
         }),
+    ...(publicationRecord.repairOrigin === undefined
+      ? {}
+      : publicationRecord.repairOrigin === 'evidence-search'
+        ? { repairOrigin: 'evidence-search' as const }
+        : (() => { throw new Error(`Finding review publication "${expectedPublicationId}" has an unknown repairOrigin`); })()),
   };
   assertCanonicalFindingReviewPublication(publication);
   if (publication.publicationId !== expectedPublicationId) {
@@ -1239,6 +1250,7 @@ export function createFindingReviewPublication(input: {
   readonly presentationContext?: FindingReviewPresentationContext;
   readonly reviewerRawResourceEnvelope?: ReviewerRawResourceEnvelope;
   readonly reviewerOutputOverflow?: FindingReviewPublicationOverflow;
+  readonly repairOrigin?: 'evidence-search';
 }): CanonicalFindingReviewPublication {
   const sourceEnvelope = input.reviewerRawResourceEnvelope
     ?? projectReviewerRawStructuredOutputWithEnvelope({
@@ -1268,6 +1280,7 @@ export function createFindingReviewPublication(input: {
     ...(reviewerOutputOverflow === undefined
       ? {}
       : { reviewerOutputOverflow }),
+    ...(input.repairOrigin === undefined ? {} : { repairOrigin: input.repairOrigin }),
   };
   assertPublicationRawFindings(
     publication.reportContent,
@@ -1445,6 +1458,7 @@ export function persistFindingReviewPublication(
           !== JSON.stringify(preparation.reviewerExecutionIdentity ?? null)
         || JSON.stringify(existing.publication.presentationContext)
           !== JSON.stringify(publication.presentationContext)
+        || existing.publication.repairOrigin !== publication.repairOrigin
       ) {
         throw new Error(
           `Finding review publication conflict for "${publication.publicationId}"`,

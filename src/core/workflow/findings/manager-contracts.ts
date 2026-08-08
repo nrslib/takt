@@ -64,6 +64,8 @@ export interface RunFindingManagerForStepInput {
    * 固定される（実測）。
    */
   budgetAccounting?: 'round' | 'excluded';
+  /** claim-bearing anomaly の終端処分を、この slot 取り込みでは次段へ保留する。 */
+  deferClaimBearingTerminalDispositions?: boolean;
 }
 
 export type FindingManagerRunResult =

@@ -89,6 +89,8 @@ export interface FindingContractIntakeInput {
   reviewPublicationDir?: string;
   /** stop budget / review-integrity のラウンド計上対象か（manager-contracts.ts 参照）。 */
   budgetAccounting?: 'round' | 'excluded';
+  /** slot の最後に evidence-search を挟むため、claim-bearing の終端を保留する。 */
+  deferClaimBearingTerminalDispositions?: boolean;
   refreshFindingsState: () => void;
   emitEvent: (event: string, ...args: unknown[]) => void;
 }
@@ -123,6 +125,9 @@ export async function ingestFindingContractResults(
     managerAuthority: input.managerAuthority,
     reviewPublicationDir: input.reviewPublicationDir,
     ...(input.budgetAccounting === undefined ? {} : { budgetAccounting: input.budgetAccounting }),
+    ...(input.deferClaimBearingTerminalDispositions === undefined
+      ? {}
+      : { deferClaimBearingTerminalDispositions: input.deferClaimBearingTerminalDispositions }),
   });
   if (result.status === 'updated') {
     input.refreshFindingsState();

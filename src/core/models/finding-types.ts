@@ -1727,10 +1727,12 @@ export interface ReviewerAnomalyEntry {
   /** この episode で観測された回数(upsert のたびに +1)。 */
   occurrences: number;
   /**
-   * 後続ラウンドの clean な verbatimExcerpt 一致で product finding へ昇格した
-   * 場合の参照先。設定後もこのレコード自体は削除・改変しない(観測消去の禁止)。
+   * 後続ラウンドの claim correspondence と検証済み evidence で product finding へ
+   * 昇格した場合の参照先。設定後もこのレコード自体は削除・改変しない(観測消去の禁止)。
    */
   promotedFindingId?: string;
+  /** 言い直し枯渇直前の evidence-search で引用を補修して昇格した場合の帰属。 */
+  promotionOrigin?: 'evidence-search';
   /**
    * anomaly の決着記録。参照先 finding の終端によるもの(target settlement)と、
    * 同じレビュアー枠の次の完全なレビュー登録によるもの(implicit withdrawal)がある。

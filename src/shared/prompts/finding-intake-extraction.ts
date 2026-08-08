@@ -28,3 +28,10 @@ export function buildFindingIntakeCorrectionPrompt(
 ): string {
   return buildFindingIntakePrompt(report, language, true, extractionFidelityCorrection);
 }
+
+export function buildFindingEvidenceSearchPrompt(
+  report: string,
+  language: Language,
+): string {
+  return loadTemplate('parts/finding_evidence_search', language, { report }).trimEnd();
+}

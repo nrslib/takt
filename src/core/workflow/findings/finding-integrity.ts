@@ -244,6 +244,12 @@ function assertReviewerAnomalyAppendOnlyUpdate(
   ) {
     throw new Error(`Reviewer anomaly "${current.id}" promotion cannot be removed or replaced`);
   }
+  if (
+    current.promotionOrigin !== undefined
+    && current.promotionOrigin !== next.promotionOrigin
+  ) {
+    throw new Error(`Reviewer anomaly "${current.id}" promotion origin cannot be removed or replaced`);
+  }
   if (current.settlement !== undefined) {
     const currentEpisode = { ...current, settlement: undefined };
     const nextEpisode = { ...next, settlement: undefined };

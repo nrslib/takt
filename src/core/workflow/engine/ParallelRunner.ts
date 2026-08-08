@@ -1442,7 +1442,10 @@ export class ParallelRunner {
       buildSlotContexts: (contextInput) => (
         this.deps.optionsBuilder.buildFindingRestatementSlotContexts(contextInput)
       ),
-      ingest: async (results) => {
+      buildEvidenceSearchRequests: (contextInput) => (
+        this.deps.optionsBuilder.buildFindingEvidenceSearchRequests?.(contextInput) ?? []
+      ),
+      ingest: async (results, ingestOptions) => {
         await this.ingestFindingContractSubResults(
           input.step,
           input.stepIteration,
@@ -1450,6 +1453,7 @@ export class ParallelRunner {
           results,
           input.priorStepResponseText,
           'excluded',
+          ingestOptions?.deferClaimBearingTerminalDispositions,
         );
       },
       reviewScopeSnapshotId: input.reviewScopeSnapshotId,
@@ -1530,6 +1534,7 @@ export class ParallelRunner {
     reviewerResults: readonly FindingManagerSubStepResult[],
     priorStepResponseText: string | undefined,
     budgetAccounting: 'round' | 'excluded' = 'round',
+    deferClaimBearingTerminalDispositions?: boolean,
   ): Promise<FindingManagerRunResult> {
     const ledgerStore = this.deps.findingLedgerStore;
     if (!this.deps.findingContract || !ledgerStore) {
@@ -1549,6 +1554,9 @@ export class ParallelRunner {
       iteration,
       subResults: [...reviewerResults],
       budgetAccounting,
+      ...(deferClaimBearingTerminalDispositions === undefined
+        ? {}
+        : { deferClaimBearingTerminalDispositions }),
       // 台帳の workflowName スタンプは店（ledgerStore）が束縛する正準名を使う。
       // workflow_call の子が親の台帳を継承した場合、この engine 自身の
       // getWorkflowName()（子のワークフロー名）を使うと reconcile 後の

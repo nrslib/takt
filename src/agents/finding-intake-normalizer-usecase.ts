@@ -5,6 +5,7 @@ import type { AgentResponse, Language, StepProviderOptions } from '../core/model
 import { createRawFindingsOutputJsonSchema } from '../core/models/finding-schemas.js';
 import type { ProviderType } from '../shared/types/provider.js';
 import {
+  buildFindingEvidenceSearchPrompt,
   buildFindingIntakeCorrectionPrompt,
   buildFindingIntakeExtractionPrompt,
 } from '../shared/prompts/finding-intake-extraction.js';
@@ -20,7 +21,7 @@ export interface NormalizeFindingIntakeOptions {
     systemPrompt: string;
     userInstruction: string;
   }) => void;
-  mode?: 'initial' | 'correction';
+  mode?: 'initial' | 'correction' | 'evidence-search';
   extractionFidelityCorrection?: boolean;
 }
 
@@ -36,7 +37,9 @@ export async function normalizeFindingIntake(
           options.language ?? 'en',
           options.extractionFidelityCorrection ?? false,
         )
-      : buildFindingIntakeExtractionPrompt(report, options.language ?? 'en');
+      : options.mode === 'evidence-search'
+        ? buildFindingEvidenceSearchPrompt(report, options.language ?? 'en')
+        : buildFindingIntakeExtractionPrompt(report, options.language ?? 'en');
     const provider = getProvider(options.provider);
     const callOptions = {
       cwd: isolatedCwd,

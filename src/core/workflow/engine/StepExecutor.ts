@@ -127,6 +127,7 @@ import {
 import type { RunAgentOptions } from '../../../agents/types.js';
 import {
   createFindingReviewPublication,
+  createFindingReviewPresentationContextV2,
   createPendingFindingReviewNormalization,
   discardPendingFindingReviewNormalization,
   FindingReviewPublicationSourceBindingError,
@@ -141,6 +142,10 @@ import {
   type FindingReviewPublicationIdentity,
   type ReviewerExecutionIdentity,
 } from '../findings/review-publication.js';
+import {
+  findingEvidenceSearchReportName,
+  type FindingEvidenceSearchRequest,
+} from '../findings/evidence-search.js';
 import { recordVerdictClaimsMismatchAnomalies } from '../findings/verdict-claims-integrity.js';
 import {
   recordReviewReportProtocolAnomalies,
@@ -463,7 +468,10 @@ export class StepExecutor {
       buildSlotContexts: (contextInput) => (
         this.deps.optionsBuilder.buildFindingRestatementSlotContexts(contextInput)
       ),
-      ingest: async (results) => {
+      buildEvidenceSearchRequests: (contextInput) => (
+        this.deps.optionsBuilder.buildFindingEvidenceSearchRequests?.(contextInput) ?? []
+      ),
+      ingest: async (results, ingestOptions) => {
         await this.ingestFindingContractSubResults({
           step: input.ownerReviewerStep,
           stepIteration: input.stepIteration,
@@ -471,6 +479,12 @@ export class StepExecutor {
           subResults: results,
           priorStepResponseText: input.priorStepResponseText,
           budgetAccounting: 'excluded',
+          ...(ingestOptions?.deferClaimBearingTerminalDispositions === undefined
+            ? {}
+            : {
+                deferClaimBearingTerminalDispositions:
+                  ingestOptions.deferClaimBearingTerminalDispositions,
+              }),
         });
       },
       reviewScopeSnapshotId: ownerReviewer.reviewScopeSnapshotId,
@@ -584,6 +598,7 @@ export class StepExecutor {
     subResults: readonly FindingManagerSubStepResult[];
     priorStepResponseText: string | undefined;
     budgetAccounting?: 'round' | 'excluded';
+    deferClaimBearingTerminalDispositions?: boolean;
   }): Promise<FindingManagerRunResult> {
     if (!this.deps.findingLedgerStore) {
       throw new Error('Finding contract is configured but finding ledger store is not available');
@@ -602,6 +617,9 @@ export class StepExecutor {
       iteration: input.iteration,
       subResults: [...input.subResults],
       ...(input.budgetAccounting === undefined ? {} : { budgetAccounting: input.budgetAccounting }),
+      ...(input.deferClaimBearingTerminalDispositions === undefined
+        ? {}
+        : { deferClaimBearingTerminalDispositions: input.deferClaimBearingTerminalDispositions }),
       // 台帳の workflowName スタンプは店（ledgerStore）が束縛する正準名を使う。
       // workflow_call の子が親の台帳を継承した場合、この engine 自身の
       // getWorkflowName()（子のワークフロー名）を使うと reconcile 後の
@@ -847,6 +865,163 @@ export class StepExecutor {
       success,
       usage,
     );
+  }
+
+  /**
+   * 言い直し枯渇直前の単発 evidence-search。対象ファイルは request 側で既に
+   * engine が読み、normalizer にはその内容を含む report だけを渡す。候補が
+   * 不成立・応答失敗・byte-exact 束縛失敗のいずれでも空 publication を保存し、
+   * 同じ anomaly の再呼び出しを防いだうえで通常 admission へ進める。
+   */
+  async runFindingEvidenceSearch(input: {
+    ownerStep: AgentWorkflowStep;
+    parentStepName: string;
+    stepIteration: number;
+    state: WorkflowState;
+    reviewScopeSnapshotId: string;
+    request: FindingEvidenceSearchRequest;
+    runtime?: RuntimeStepResolution;
+  }): Promise<FindingManagerSubStepResult> {
+    const identity = this.findingReviewPublicationIdentity({
+      parentStepName: input.parentStepName,
+      stepIteration: input.stepIteration,
+      reviewerStepName: input.ownerStep.name,
+      reportName: findingEvidenceSearchReportName(
+        input.ownerStep.name,
+        input.request.request.anomalyId,
+      ),
+    });
+    const presentationContext = createFindingReviewPresentationContextV2({
+      reviewScopeSnapshotId: input.reviewScopeSnapshotId,
+      restatementRequests: [input.request.request],
+    });
+    const reportDir = this.deps.getRunPaths().reportsAbs;
+    const stored = loadFindingReviewPublication(reportDir, identity);
+    if (stored !== undefined) {
+      publishFindingReviewPublication(reportDir, stored.publication);
+      return {
+        subStep: input.ownerStep,
+        publication: stored.publication,
+        reviewEvidence: 'none',
+        ...(stored.publication.repairOrigin === undefined
+          ? { repairOrigin: 'evidence-search' as const }
+          : { repairOrigin: stored.publication.repairOrigin }),
+      };
+    }
+
+    const candidate = this.resolveFindingIntakeNormalizerCandidates(
+      input.ownerStep,
+      input.runtime,
+    )[0]!;
+    const normalizerStep = candidate.step;
+    const providerInfo = candidate.providerInfo;
+    assertFindingIntakeNormalizerProvider(providerInfo.provider, input.ownerStep.name);
+    let rawFindings: readonly unknown[] = [];
+    let usageRecorded = false;
+    try {
+      const structuredCaller = this.requireStructuredCaller();
+      let promptParts: PhasePromptParts | undefined;
+      const response = await structuredCaller.normalizeFindingIntake(
+        input.request.reportContent,
+        {
+          provider: providerInfo.provider,
+          model: providerInfo.model,
+          providerOptions: providerInfo.providerOptions,
+          language: this.deps.getLanguage(),
+          abortSignal: this.deps.abortSignal,
+          mode: 'evidence-search',
+          onPromptResolved: (resolved) => {
+            promptParts = resolved;
+            this.deps.onPhaseStart?.(
+              normalizerStep,
+              1,
+              'execute',
+              resolved.userInstruction,
+              resolved,
+              undefined,
+              input.state.iteration,
+            );
+          },
+        },
+      );
+      if (promptParts !== undefined) {
+        this.deps.onPhaseComplete?.(
+          normalizerStep,
+          1,
+          'execute',
+          response.content,
+          response.status,
+          response.error,
+          undefined,
+          input.state.iteration,
+        );
+      }
+      this.recordSynthesizedAgentUsage(
+        normalizerStep,
+        response.status === 'done',
+        response.providerUsage,
+        providerInfo,
+      );
+      usageRecorded = true;
+      const normalized = this.normalizeStructuredOutputWithDiagnostics(
+        normalizerStep,
+        response,
+        { providerInfo },
+      );
+      if (normalized.invalidDetail === undefined && normalized.response.status === 'done') {
+        const extracted = normalized.response.structuredOutput?.rawFindings;
+        if (Array.isArray(extracted)) {
+          rawFindings = extracted;
+        }
+      }
+    } catch (error) {
+      if (!usageRecorded) {
+        this.recordSynthesizedAgentUsage(normalizerStep, false, undefined, providerInfo);
+      }
+      log.warn('Evidence-search normalizer did not produce a candidate', {
+        reviewer: input.ownerStep.name,
+        anomalyId: input.request.request.anomalyId,
+        reason: getErrorMessage(error),
+      });
+    }
+
+    let publication: CanonicalFindingReviewPublication;
+    try {
+      publication = createFindingReviewPublication({
+        identity,
+        protocol: PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+        reportContent: input.request.reportContent,
+        rawFindings,
+        presentationContext,
+        repairOrigin: 'evidence-search',
+      });
+    } catch (error) {
+      log.warn('Evidence-search candidate failed publication binding', {
+        reviewer: input.ownerStep.name,
+        anomalyId: input.request.request.anomalyId,
+        reason: getErrorMessage(error),
+      });
+      publication = createFindingReviewPublication({
+        identity,
+        protocol: PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
+        reportContent: input.request.reportContent,
+        rawFindings: [],
+        presentationContext,
+        repairOrigin: 'evidence-search',
+      });
+    }
+    const persisted = persistFindingReviewPublication(reportDir, {
+      publication,
+      reviewerExecutionIdentity: reviewerExecutionIdentity(providerInfo),
+      reviewerCallMode: 'restatement-only',
+    });
+    publishFindingReviewPublication(reportDir, persisted.publication);
+    return {
+      subStep: input.ownerStep,
+      publication: persisted.publication,
+      reviewEvidence: 'none',
+      repairOrigin: 'evidence-search',
+    };
   }
 
   private findingReviewPublicationIdentity(input: {

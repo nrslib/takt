@@ -145,6 +145,7 @@ function hasRestatementCorrespondence(input: {
   sourceRaw: RawFinding;
   admittedRaw: RawFinding;
   request: RestatementRequestV1;
+  repairOrigin?: 'evidence-search';
 }): boolean {
   const { anomaly, sourceRaw, admittedRaw, request } = input;
   // 前段の shape 判定は候補計数と共通の1関数に集約する — 複製すると片方だけが
@@ -161,6 +162,9 @@ function hasRestatementCorrespondence(input: {
   }
   if (normalizeClaimAtom(sourceAtom) !== normalizeClaimAtom(admittedAtom)) {
     return false;
+  }
+  if (input.repairOrigin === 'evidence-search') {
+    return sourceRaw.targetIdentityHash === admittedRaw.targetIdentityHash;
   }
   const sourceQuotes = sourceRaw.evidence.filter((evidence) => evidence.kind === 'file_quote');
   if (sourceQuotes.length === 0) {
@@ -212,7 +216,7 @@ function hasRestatementCandidateShape(
 export function restatementReassertionFailsCorrespondence(input: {
   ledger: FindingLedger;
   admittedRaw: RawFinding;
-  bindings: readonly RestatementRequestBinding[];
+    bindings: readonly RestatementRequestBinding[];
 }): boolean {
   const echoedAnomalyId = input.admittedRaw.reassertsReviewerAnomalyId;
   if (echoedAnomalyId === undefined) {
@@ -244,6 +248,7 @@ export function restatementReassertionFailsCorrespondence(input: {
     sourceRaw,
     admittedRaw: input.admittedRaw,
     request: binding.request,
+    ...(binding.repairOrigin === undefined ? {} : { repairOrigin: binding.repairOrigin }),
   }));
 }
 
@@ -432,11 +437,13 @@ export interface ReviewerAnomalyPromotionCandidate {
   rawFindingId: string;
   /** engine-owned request binding for intake-contract correspondence */
   restatementRequestBindings?: readonly RestatementRequestBinding[];
+  /** 通常の再提示か、終端直前の証拠探しか。 */
+  promotionOrigin?: 'evidence-search';
 }
 
 /**
- * 後続ラウンドの clean な verbatimExcerpt 一致が product finding を確定させた
- * 場合に、同じ lineageKey を持つ未決着の reviewer anomaly へ promotedFindingId を
+ * 後続ラウンドの claim correspondence と機械検証済み evidence が product finding を
+ * 確定させた場合に、同じ lineageKey を持つ未決着の reviewer anomaly へ promotedFindingId を
  * 記録する。レコード自体は削除・改変しない — 昇格後も監査履歴として
  * 残る（観測消去の禁止）。呼び出し元は reconcile 完了後の最終 ledger（finding id
  * 割当済み）を渡すこと — このタイミングでしか「どの finding id に着地したか」が
@@ -466,6 +473,7 @@ export function linkPromotedReviewerAnomalies(
     anomalyId: string;
     rawFindingId: string;
     findingId: string;
+    promotionOrigin?: 'evidence-search';
   }> = [];
   const correspondingRawFindingIds = new Set<string>();
   for (const candidate of candidates) {
@@ -487,7 +495,13 @@ export function linkPromotedReviewerAnomalies(
         || binding.reportDigest !== admittedRaw.sourceBinding.reportDigest
         || !hasValidRestatementEcho(admittedRaw, anomaly, requestBindings)
         || edgeAnomalyIds.has(anomaly.id)
-        || !hasRestatementCorrespondence({ anomaly, sourceRaw, admittedRaw, request: binding.request })
+        || !hasRestatementCorrespondence({
+          anomaly,
+          sourceRaw,
+          admittedRaw,
+          request: binding.request,
+          ...(binding.repairOrigin === undefined ? {} : { repairOrigin: binding.repairOrigin }),
+        })
       ) {
         continue;
       }
@@ -496,6 +510,9 @@ export function linkPromotedReviewerAnomalies(
         anomalyId: anomaly.id,
         rawFindingId: candidate.rawFindingId,
         findingId,
+        ...(candidate.promotionOrigin === undefined
+          ? {}
+          : { promotionOrigin: candidate.promotionOrigin }),
       });
       correspondingRawFindingIds.add(candidate.rawFindingId);
     }
@@ -514,12 +531,16 @@ export function linkPromotedReviewerAnomalies(
     rawEdgeCounts.set(edge.rawFindingId, (rawEdgeCounts.get(edge.rawFindingId) ?? 0) + 1);
   }
   const restatementPromotionByAnomalyId = new Map<string, string>();
+  const restatementPromotionOriginByAnomalyId = new Map<string, 'evidence-search'>();
   for (const edge of restatementEdges) {
     if (
       anomalyEdgeCounts.get(edge.anomalyId) === 1
       && rawEdgeCounts.get(edge.rawFindingId) === 1
     ) {
       restatementPromotionByAnomalyId.set(edge.anomalyId, edge.findingId);
+      if (edge.promotionOrigin !== undefined) {
+        restatementPromotionOriginByAnomalyId.set(edge.anomalyId, edge.promotionOrigin);
+      }
     }
   }
   if (promotedFindingIdByLineageKey.size === 0 && restatementPromotionByAnomalyId.size === 0) {
@@ -534,7 +555,12 @@ export function linkPromotedReviewerAnomalies(
       const promotedFindingId = restatementPromotionByAnomalyId.get(anomaly.id);
       if (promotedFindingId !== undefined) {
         changed = true;
-        return { ...anomaly, promotedFindingId };
+        const promotionOrigin = restatementPromotionOriginByAnomalyId.get(anomaly.id);
+        return {
+          ...anomaly,
+          promotedFindingId,
+          ...(promotionOrigin === undefined ? {} : { promotionOrigin }),
+        };
       }
       return anomaly;
     }

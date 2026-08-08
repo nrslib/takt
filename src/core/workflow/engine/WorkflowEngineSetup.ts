@@ -62,6 +62,10 @@ import {
   type RestatementPresentationPhase,
 } from '../findings/restatement-presentation-phase.js';
 import type { FindingRestatementSlotOwnerContexts } from '../findings/restatement-slot-runner.js';
+import {
+  buildFindingEvidenceSearchRequest,
+  type FindingEvidenceSearchRequest,
+} from '../findings/evidence-search.js';
 import { resolveFindingEscalationTarget } from '../findings/restatement-slot-step.js';
 import {
   isOutstandingReviewerAnomaly,
@@ -669,6 +673,83 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     return contexts;
   };
 
+  /**
+   * 言い直し提示数を使い切った claim-bearing anomaly の evidence-search 入力を
+   * 作る。evidence-search publication 自体も提示履歴へ保存するため、保存済みの
+   * 試行は先に除外する（manager 取り込み前の crash/resume でも二重呼び出しに
+   * ならない）。
+   */
+  const buildFindingEvidenceSearchRequests = (input: {
+    ownerReviewerSteps: readonly AgentWorkflowStep[];
+    reviewScopeSnapshotId: string;
+  }): readonly FindingEvidenceSearchRequest[] => {
+    if (!params.findingContract || !params.findingLedgerStore) {
+      return [];
+    }
+    const ledger = params.findingLedgerStore.loadLedger();
+    const publications = listFindingReviewPublications(params.runPaths.reportsAbs);
+    const presentationCounts = collectFindingReviewPresentationCounts(params.runPaths.reportsAbs);
+    const attempted = new Set(
+      publications
+        .filter((publication) => publication.repairOrigin === 'evidence-search')
+        .flatMap((publication) => publication.presentationContext.presentedReviewerAnomalyIds),
+    );
+    const requests: FindingEvidenceSearchRequest[] = [];
+    for (const ownerStep of input.ownerReviewerSteps) {
+      const entries = (ledger.reviewerAnomalies ?? [])
+        .filter(hasIntakeContract)
+        .filter((anomaly) => (
+          anomaly.intakeContract.observationClass === 'claim-bearing'
+          && anomaly.intakeContract.presentationOwnerReviewer === ownerStep.name
+          && !isConcludedReviewerAnomaly(anomaly)
+          && !attempted.has(anomaly.id)
+          && (presentationCounts.get(anomaly.id) ?? 0) >= anomaly.intakeContract.presentationLimit
+        ))
+        .map((anomaly) => ({
+          anomaly,
+          presentedCount: presentationCounts.get(anomaly.id) ?? 0,
+        }));
+      const restatementRequests = buildRestatementRequests({
+        ledger,
+        entries,
+        reviewer: ownerStep.name,
+        reviewScopeSnapshotId: input.reviewScopeSnapshotId,
+      });
+      for (const request of restatementRequests) {
+        const anomaly = entries.find(({ anomaly: entry }) => entry.id === request.anomalyId)?.anomaly;
+        const sourceRaw = anomaly?.sourceRawFindingIds
+          .map((rawId) => ledger.rawFindings.find((candidate) => candidate.rawFindingId === rawId))
+          .find((candidate) => candidate !== undefined);
+        if (anomaly === undefined || sourceRaw === undefined) {
+          continue;
+        }
+        const searchRequest = buildFindingEvidenceSearchRequest({
+          cwd: params.getCwd(),
+          anomaly,
+          sourceRaw,
+          request,
+          presentationCount: presentationCounts.get(anomaly.id) ?? 0,
+          ownerReviewerStepName: ownerStep.name,
+          presentationHistory: publications.flatMap((publication) => {
+            if (publication.presentationContext.revision !== 2) {
+              return [];
+            }
+            const requestForAnomaly = publication.presentationContext.restatementRequests.find(
+              (candidate) => candidate.anomalyId === anomaly.id,
+            );
+            return requestForAnomaly === undefined
+              ? []
+              : [`publication=${publication.publicationId} reviewer=${publication.reviewerStepName} ordinal=${requestForAnomaly.presentationOrdinal} digest=${publication.reportDigest}`];
+          }),
+        });
+        if (searchRequest !== undefined) {
+          requests.push(searchRequest);
+        }
+      }
+    }
+    return requests;
+  };
+
   // base の解決は ref 走査を伴うため、ラン境界で一度だけ解決して保持する。
   const getReviewScope = createTaskReviewScopeResolver({
     getCwd: params.getCwd,
@@ -690,6 +771,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     () => params.task,
     buildFindingRestatementSlotContexts,
     getReviewScope,
+    buildFindingEvidenceSearchRequests,
   );
 
   const dynamicFacetSelector = new DynamicFacetSelectorCoordinator({

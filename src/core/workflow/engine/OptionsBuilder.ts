@@ -46,6 +46,7 @@ import type {
   FindingContractInstructionContext,
 } from '../instruction/instruction-context.js';
 import type { FindingRestatementSlotOwnerContexts } from '../findings/restatement-slot-runner.js';
+import type { FindingEvidenceSearchRequest } from '../findings/evidence-search.js';
 
 type ResolvedRunAgentOptions = RunAgentOptions & {
   resolvedProviderOptions?: StepProviderOptions;
@@ -94,6 +95,10 @@ export class OptionsBuilder {
       reviewScopeSnapshotId: string;
     }) => ReadonlyMap<string, FindingRestatementSlotOwnerContexts>,
     private readonly getReviewScope?: () => TaskReviewScope,
+    private readonly getFindingEvidenceSearchRequests?: (input: {
+      ownerReviewerSteps: readonly AgentWorkflowStep[];
+      reviewScopeSnapshotId: string;
+    }) => readonly FindingEvidenceSearchRequest[],
   ) {}
 
   /**
@@ -410,6 +415,13 @@ export class OptionsBuilder {
     reviewScopeSnapshotId: string;
   }): ReadonlyMap<string, FindingRestatementSlotOwnerContexts> {
     return this.getFindingRestatementSlotContexts?.(input) ?? new Map();
+  }
+
+  buildFindingEvidenceSearchRequests(input: {
+    ownerReviewerSteps: readonly AgentWorkflowStep[];
+    reviewScopeSnapshotId: string;
+  }): readonly FindingEvidenceSearchRequest[] {
+    return this.getFindingEvidenceSearchRequests?.(input) ?? [];
   }
 
   private resolveSupportedMaxTurns(

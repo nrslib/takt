@@ -66,6 +66,8 @@ export interface FindingManagerSubStepResult {
   subStep: AgentWorkflowStep;
   publication: CanonicalFindingReviewPublication;
   relationClarification?: ReviewerRelationClarification;
+  /** 引用の言い直しではなく、終端直前の evidence-search による補修。 */
+  repairOrigin?: 'evidence-search';
   /**
    * この publication が後続レビューとして何を成立させたか（既定 `verdict`）。
    *
