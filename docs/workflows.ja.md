@@ -276,6 +276,18 @@ TAKT は Normal / Parallel / Dynamic Parallel / Arpeggio / Team Leader / Workflo
 コスト特性は「レビュアー×ラウンドごとに正規化1呼び出し」です。reviewer 自身のフェーズに
 加えて毎ラウンド固定でかかる費用であり、失敗後に発生する追加費用ではありません。
 
+3つの役割は別々の判断を持ちます。**reviewer は観察専任**です。何が・どこで・なぜ壊れて
+いるかと、証拠として引用できる場所だけを、報告の `## Finding Contract Claims` 節へ
+ラベル付きフィールド（Target files / Description / Evidence）で書きます。severity・
+title・問題系列タグ・台帳 relation は書きません。**正規化係**はその観察を抽出し、
+`severity`・`title`・`familyTag` の分類を claim の内容から付与します。捏造が禁止されるのは
+観測事実（path、行範囲、引用、finding ID、lifecycle 判定）であり、この分類は対象外です。
+publication には `classificationAuthority: intake-normalizer` が記録されるので、台帳の
+severity を誰が付けたのかを後から追えます。**findings-manager** は台帳と照らして同一性を
+裁定します（新規か、open な指摘の再主張か、解消の確認か）。したがって intake 契約が
+reviewer に要求するのは観察の実質——claim 本文・対象・提示された証拠——だけで、severity や
+タグの欠落が言い直しの差し戻し理由になることはありません。
+
 正規化係の provider/model は、runtime.yaml の
 `provider.targets.internal_agents['intake-normalizer']` seat → reviewer の profile が宣言する
 `escalate` 先 → 通常の既定解決、の順で決まります。「通常の既定解決」は `findings-manager` と

@@ -85,9 +85,6 @@ function renderFindingContractInstruction(input: {
       reportPhase ? contract.reportLedgerSummary : contract.ledgerSummary,
     ).trimEnd(),
     isReportPhase: reportPhase,
-    // severity/title の明記要求は再提示専用ラウンドでも出す。severity 欠落こそが
-    // 再提示ループの原因なので、再提示のときに消えると狙いが反転する。
-    isReviewer,
     reviewerReportGuidance: isReviewer && !restatementOnly,
     reviewerHasOpenFindings: isReviewer && contract.hasOpenFindings && !restatementOnly,
     reviewerHasWaivedFindings: isReviewer && contract.hasWaivedFindings && !restatementOnly,

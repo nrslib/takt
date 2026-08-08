@@ -659,7 +659,7 @@ describe('reviewer anomaly settlement', () => {
       classificationAuthorityId: 'system/intake_observation_classification_v1' as const,
       reasonCodes: ['product-identity-incomplete' as const],
       // 実データの旧契約語彙（binary 昇順・重複なし）。
-      missingRequirements: ['relation' as const, 'severity' as const],
+      missingRequirements: ['description' as const, 'target' as const],
       presentationOwnerReviewer: 'architecture',
       presentationLimit: 6,
     };

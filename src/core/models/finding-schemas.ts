@@ -3181,7 +3181,7 @@ const RawFindingsOutputIntakeJsonSchema = {
                   },
                   relation: {
                     enum: [...RAW_FINDING_RELATIONS, null],
-                    description: 'Extract the stated ledger relation, or null when the report does not state one. Null remains an unresolved relation and is handled by canonical ambiguity admission.',
+                    description: 'Use a lifecycle relation only when one contiguous claim passage states both the literal relation token and an explicit target finding ID; every other claim takes "new". Whether a "new" claim repeats an existing finding is adjudicated by the findings-manager against the ledger. Null remains an unresolved relation and is handled by canonical ambiguity admission.',
                   },
                   targetFindingIds: {
                     type: 'array',
@@ -3196,12 +3196,17 @@ const RawFindingsOutputIntakeJsonSchema = {
                   familyTag: {
                     type: ['string', 'null'],
                     maxLength: RAW_FINDING_FIELD_LIMITS.maxFamilyTagChars,
+                    description: 'Classification you assign: a short kebab-case identifier grouping this family of issues, derived from the claim. The reviewer does not state it, so do not leave it null because the report lacks the word.',
                   },
-                  severity: { enum: [...FINDING_SEVERITIES, null] },
+                  severity: {
+                    enum: [...FINDING_SEVERITIES, null],
+                    description: 'Classification you assign from the impact the claim states. The reviewer does not state a severity, so judge it from the claim instead of leaving it null.',
+                  },
                   title: {
                     type: ['string', 'null'],
                     minLength: 1,
                     maxLength: RAW_FINDING_FIELD_LIMITS.maxTitleChars,
+                    description: 'Classification you assign: a one-line heading naming the defect, derived from the claim text.',
                   },
                   description: {
                     type: ['string', 'null'],

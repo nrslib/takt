@@ -19,7 +19,7 @@
 | {問題系列または確認対象契約} | {守るべき条件} | {確認した場所} | {確認した場所} | {確認した経路} | {確認したテスト資産} | {なし、または未確認理由} | {問題なし / Finding Contract claim} |
 
 ## Finding Contract Claims
-{観測した欠陥または明示的な台帳 lifecycle claim を、ここに1件ずつ分けて記載する。注入された指示が structured output を要求するときは、その schema を機械形式として使い、要求がなければ Markdown report だけを返す。指摘表は使わない。claim がなければ `None` と記載する。}
+{観測した欠陥または明示的な台帳 lifecycle claim を、ここに1件1エントリで記載する。各エントリは注入された Finding Contract 指示のラベル付きフィールド形式（Target files / Description / Evidence）に従う。severity・重大度ラベル・問題系列タグは書かない。指摘表は使わない。claim がなければ `None` と記載する。}
 
 ## 解消確認
 | 台帳参照 | 元の受入条件 | 確認証跡 |

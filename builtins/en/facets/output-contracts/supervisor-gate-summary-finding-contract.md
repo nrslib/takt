@@ -10,10 +10,10 @@
 {For APPROVE, the next progression; for REJECT, the required fix; for NEED_REPLAN, the unverified item and reason to replan}
 
 ## Finding Contract Claims
-{Describe every observed defect or explicit ledger lifecycle claim here separately. If the injected instructions require structured output, use that schema as the machine format; otherwise return only the Markdown report. Do not use a findings table. If there are no claims, write `None`.}
+{Describe every observed defect or explicit ledger lifecycle claim here as its own entry, using the labelled fields of the injected Finding Contract instructions (Target files / Description / Evidence). Do not state a severity, a severity-like label, or an issue-family tag. Do not use a findings table. If there are no claims, write `None`.}
 
 ## Output Consistency
-- When an injected structured-output schema is present, every issue described in the report must also appear in that structured output. Otherwise use ordinary report prose only. Do not assign final finding IDs.
+- Return ordinary Markdown report prose only. Do not return JSON or structured output. Do not assign final finding IDs.
 - APPROVE means zero issues; REJECT means one or more issues. NEED_REPLAN keeps zero issues and records the unverified item in Next Action or Unfinished Reason. Do not make approvals or summaries issues.
 ```
 

@@ -271,11 +271,12 @@ describe('buildFindingContractInstruction', () => {
       expect(rendered).not.toContain('Write an ordinary Markdown review report');
       expect(rendered).not.toContain('Each round, verify the open ledger findings');
       expect(rendered).not.toContain('{{');
-      // severity 欠落こそが再提示ループの原因なので、明記要求は再提示ラウンドでも残す。
-      expect(rendered).toContain('State a short title and a severity');
+      // レビュアーは観察専任。分類は正規化係が付けるので、言い直し枠でも severity を
+      // 書かせない（書かせた結果が事務欠落による anomaly 量産だった）。
+      expect(rendered).toContain('Do not state a severity');
     });
 
-    it('keeps the severity requirement in a restatement-only round for ja as well', () => {
+    it('forbids reviewer-side classification in a restatement-only round for ja as well', () => {
       const rendered = build({
         contract: {
           reviewer: { ...REVIEWER, presentationContext: restatementPresentationContext(), mode: 'restatement-only' as const },
@@ -284,7 +285,7 @@ describe('buildFindingContractInstruction', () => {
         language: 'ja',
       });
       expect(rendered).toContain('## Restatement requests');
-      expect(rendered).toContain('severity（`critical` / `high` / `medium` / `low`');
+      expect(rendered).toContain('severity・重大度ラベル・問題系列タグは書かないでください');
       expect(rendered).not.toContain('通常の Markdown レビュー報告を書いてください');
       expect(rendered).not.toContain('{{');
     });

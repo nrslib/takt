@@ -238,7 +238,7 @@ describe('review-integrity gate failure payload (engine level)', () => {
             observationClass: 'claim-bearing',
             classificationAuthorityId: 'system/intake_observation_classification_v1',
             reasonCodes: ['product-identity-incomplete'],
-            missingRequirements: ['relation', 'severity'],
+            missingRequirements: ['description', 'target'],
             presentationOwnerReviewer: 'reviewers',
             presentationLimit: 6,
             terminalDisposition: {

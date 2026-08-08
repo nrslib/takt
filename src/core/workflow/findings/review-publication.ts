@@ -27,7 +27,10 @@ import {
 import type { ReviewerRelationClarification } from './relation-coherence.js';
 import { isProviderType, type ProviderType } from '../../../shared/types/provider.js';
 import type { StepProviderOptions } from '../../models/workflow-types.js';
-import type { IntakeContractMissingRequirement } from '../../models/finding-types.js';
+import {
+  INTAKE_CONTRACT_MISSING_REQUIREMENTS,
+  type IntakeContractMissingRequirement,
+} from '../../models/finding-types.js';
 import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
 
 const PRIVATE_FILE_MODE = 0o600;
@@ -36,11 +39,18 @@ const STORED_PUBLICATION_FILE_PATTERN = /^([a-f0-9]{64})\.json$/;
 /**
  * publication の生成プロトコルは1種類しかない。FC レビュアーは常に markdown
  * レポートを書き、正規化係がそれを raw findings へ変換する。
+ *
+ * `classificationAuthority` は「この publication の raw findings に付いている
+ * severity / title / familyTag を誰が決めたか」の帰属記録。レビュアーは観察専任で
+ * 分類を書かないため、分類は正規化係の提案であって報告本文の引用ではない — 台帳の
+ * 分類値を後から説明するには、どの権威が付けたかが publication 単位で残っている
+ * 必要がある。revision 3 はこの帰属を含む契約。
  */
 export const PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL = Object.freeze({
   generationMode: 'freeform',
   format: 'normalized-plain-text',
-  protocolRevision: 2,
+  classificationAuthority: 'intake-normalizer',
+  protocolRevision: 3,
 } as const);
 
 export type FindingReviewPublicationProtocol =
@@ -343,13 +353,7 @@ export function assertFindingReviewPresentationContext(
       || JSON.stringify(sortedUnique(request.targetPaths)) !== JSON.stringify(request.targetPaths)
       || !Array.isArray(request.missingRequirements)
       || !request.missingRequirements.every((requirement) => (
-        requirement === 'relation'
-        || requirement === 'target'
-        || requirement === 'familyTag'
-        || requirement === 'severity'
-        || requirement === 'title'
-        || requirement === 'description'
-        || requirement === 'claimEvidence'
+        (INTAKE_CONTRACT_MISSING_REQUIREMENTS as readonly string[]).includes(requirement)
       ))
       || JSON.stringify(sortedUnique(request.missingRequirements))
         !== JSON.stringify(request.missingRequirements)
@@ -648,6 +652,7 @@ function parsePublicationProtocol(value: unknown): FindingReviewPublicationProto
   if (
     record.generationMode === protocol.generationMode
     && record.format === protocol.format
+    && record.classificationAuthority === protocol.classificationAuthority
     && record.protocolRevision === protocol.protocolRevision
   ) {
     return protocol;

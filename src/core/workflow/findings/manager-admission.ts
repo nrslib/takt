@@ -51,8 +51,6 @@ function intakeContractDefectFor(input: {
   return classifyIntakeContractDefect({
     relation: canonical.relation,
     target: canonical.target,
-    familyTag: canonical.familyTag,
-    severity: canonical.severity,
     title: canonical.title,
     description: canonical.description,
     rawExcerpt: canonical.rawExcerpt,

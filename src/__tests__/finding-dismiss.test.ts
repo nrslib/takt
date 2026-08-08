@@ -717,7 +717,7 @@ describe('runFindingManagerForStep reviewer anomaly adjudication round', () => {
           observationClass: 'claim-bearing',
           classificationAuthorityId: 'system/intake_observation_classification_v1',
           reasonCodes: ['product-identity-incomplete'],
-          missingRequirements: ['relation', 'severity'],
+          missingRequirements: ['description', 'target'],
           presentationOwnerReviewer: 'arch-review',
           presentationLimit: 6,
           terminalDisposition: {

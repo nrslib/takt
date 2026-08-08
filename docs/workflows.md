@@ -278,6 +278,22 @@ Cost characteristic: one normalizer call per reviewer per round, on top of the
 reviewer's own phases. It is a fixed per-round cost, not a penalty paid after a
 failure.
 
+The three roles own separate decisions. The **reviewer only observes**: what is
+broken, where, why, and where the evidence can be quoted, written as labelled
+fields (target files, description, evidence) in its report's
+`## Finding Contract Claims` section. It never states a severity, a title, an
+issue-family tag, or a ledger relation. The **normalizer** extracts those
+observations and assigns the classification — `severity`, `title`, `familyTag` —
+from the claim's own content; the ban on fabrication applies to observed facts
+(paths, line ranges, quotes, finding IDs, lifecycle decisions), not to that
+classification, and each publication records `classificationAuthority:
+intake-normalizer` so a ledger severity can be traced to who chose it. The
+**findings-manager** decides identity against the ledger: whether a claim is new,
+repeats an open finding, or confirms one resolved. Consequently the intake
+contract asks a reviewer for the substance of the observation only — claim text,
+target, and offered evidence — and a missing severity or tag is never a reason to
+send a report back for restatement.
+
 The normalizer's provider/model resolve from the runtime.yaml
 `provider.targets.internal_agents['intake-normalizer']` seat, then the reviewer's
 `escalate` target when its profile declares one, then the ordinary default

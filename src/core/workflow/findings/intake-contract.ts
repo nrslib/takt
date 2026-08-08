@@ -1,6 +1,5 @@
 import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
 import type {
-  FindingSeverity,
   FindingTarget,
   IntakeContractAnomalyReasonCode,
   IntakeContractDefect,
@@ -10,11 +9,18 @@ import type {
 } from './types.js';
 import { INTAKE_CONTRACT_CLASSIFICATION_AUTHORITY_ID } from '../../models/finding-types.js';
 
+/**
+ * intake 契約の検査対象。
+ *
+ * レビュアーは観察専任なので、要件は「観察の実質」だけ — claim 本文
+ * （description）、対象（target）、証拠の提示（claimEvidence）。severity /
+ * title / familyTag は正規化係が claim 内容から付与する分類であり、relation は
+ * 台帳を見る manager が裁定するため、どちらもレビュアーへ差し戻す理由にしない。
+ * relation と title は claim の手がかり（hasClaimAnchor）としてだけ読む。
+ */
 export interface IntakeContractObservation {
   relation: RawFindingRelation | null;
   target: FindingTarget;
-  familyTag: string | null | undefined;
-  severity: FindingSeverity | null | undefined;
   title: string | null | undefined;
   description: string | null | undefined;
   rawExcerpt?: string;
@@ -38,11 +44,7 @@ export function intakeContractDefectFor(
     return undefined;
   }
   const missingRequirements: IntakeContractMissingRequirement[] = [
-    ...(input.relation === null ? ['relation' as const] : []),
     ...(input.target.kind === 'review_scope' ? ['target' as const] : []),
-    ...(input.familyTag === null || input.familyTag === undefined ? ['familyTag' as const] : []),
-    ...(input.severity === null || input.severity === undefined ? ['severity' as const] : []),
-    ...(input.title === null || input.title === undefined ? ['title' as const] : []),
     ...(input.description === null || input.description === undefined ? ['description' as const] : []),
     // claimEvidence は「レビュアーが claim evidence を一切提示しなかった」ときだけ欠落と
     // みなす。evidenceCoverageGaps は engine 側の issuance 診断（byte budget 枯渇・

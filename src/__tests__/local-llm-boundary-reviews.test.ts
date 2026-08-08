@@ -318,7 +318,11 @@ describe('takt-default-localllm composition', () => {
     for (const name of names) {
       const contract = readFileSync(join(dir, name), 'utf-8');
       expect(contract.match(/^## Finding Contract Claims$/gmu)).toHaveLength(1);
-      expect(contract).toContain('structured');
+      // claim の機械形式は1つだけ: 注入された指示のラベル付きフィールド。
+      // レビュアーは観察専任なので、分類欄はこの形に含めない。
+      expect(contract).toContain(locale === 'ja'
+        ? 'ラベル付きフィールド形式（Target files / Description / Evidence）'
+        : 'labelled fields of the injected Finding Contract instructions (Target files / Description / Evidence)');
       expect(contract).not.toMatch(/^## (?:Observed Findings|観測した指摘)$/mu);
     }
 

@@ -255,7 +255,28 @@ describe('finding intake extraction prompt', () => {
     expect(prompt).toContain(report);
     expect(prompt.match(/## Finding\nIssue: broken/g)).toHaveLength(1);
     expect(prompt).toContain('report below is your only source');
-    expect(prompt).toContain('missing or ambiguous scalar fields as `null`');
+    expect(prompt).toContain('missing or ambiguous observational scalars as `null`');
+  });
+
+  // レビュアーは観察専任になったので、分類を付けるのは正規化係の職務。ここが
+  // プロンプトから落ちると severity/title/familyTag が null のまま台帳へ流れ、
+  // 曖昧 raw として provisional に沈む。
+  it.each([
+    ['en' as const, [
+      '`title`, `severity`, and `familyTag` are classification, and you MUST assign\n   them from the claim',
+      'The ban on\n   fabrication covers observed facts only',
+      'Every other claim takes\n   `relation: "new"`',
+    ]],
+    ['ja' as const, [
+      '`title`・`severity`・`familyTag` は分類であり、claim の内容から**必ず**付与して',
+      '捏造が禁止されるのは観測事実',
+      'それ以外のclaimはすべて `relation: "new"`',
+    ]],
+  ])('%s: 分類の付与を正規化係の職務として要求する', (language, requiredInstructions) => {
+    const prompt = buildFindingIntakeExtractionPrompt('Issue: the guard is missing.', language);
+    for (const instruction of requiredInstructions) {
+      expect(prompt).toContain(instruction);
+    }
   });
 
   it('localizes correction without carrying previous output', () => {
@@ -310,12 +331,12 @@ describe('finding intake extraction prompt', () => {
     [
       'en' as const,
       'F-0003 relation=resolution_confirmation',
-      'only when one contiguous claim passage contains both the\n   literal relation token and an explicit target finding ID',
+      'only when one contiguous claim passage contains both the literal\n   relation token and an explicit target finding ID',
     ],
     [
       'ja' as const,
       'F-0003 relation=resolution_confirmation',
-      '1つの連続したclaim箇所にrelationのliteral tokenと明示的な対象finding IDの両方が\n   ある場合だけ',
+      '（`persists`・`resolution_confirmation`・`reopened`）と明示的な対象finding IDの\n   両方がある場合だけ',
     ],
   ])('%s: 同じclaim箇所にrelation tokenとtarget IDを要求する', (
     language,
@@ -332,7 +353,7 @@ describe('finding intake extraction prompt', () => {
     [
       'en' as const,
       'The repository architecture creates a dependency cycle.',
-      'an issue without a\n   path or line still uses a candidate object with `target: null`; do not turn\n   it into `candidate: null` or discard it',
+      'an issue without a path or line still\n   uses a candidate object with `target: null`; do not turn it into\n   `candidate: null` or discard it',
     ],
     [
       'ja' as const,

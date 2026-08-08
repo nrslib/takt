@@ -1549,19 +1549,27 @@ export const REVIEWER_ANOMALY_KINDS = [
 export type ReviewerAnomalyKind = typeof REVIEWER_ANOMALY_KINDS[number];
 
 export const INTAKE_CONTRACT_ANOMALY_REASON_CODES = [
+  /**
+   * 観測の実質（何が壊れているかの本文・どこで壊れているかの対象）が欠けている。
+   *
+   * 分類事務（severity / title / familyTag / relation）は要件から外れている —
+   * レビュアーは観察専任で、分類は正規化係が claim 内容から付与し、同一性と
+   * lifecycle relation は台帳を見る manager が裁定するため。分類の書き忘れが
+   * intake 失敗になる経路はこの契約には無い。
+   */
   'product-identity-incomplete',
   'claim-evidence-missing',
   'normalizer-extraction-loss',
 ] as const;
 export type IntakeContractAnomalyReasonCode = typeof INTAKE_CONTRACT_ANOMALY_REASON_CODES[number];
 
+/**
+ * intake 契約が要求するのは観察の実質だけ。分類事務（severity / title /
+ * familyTag / relation）はレビュアーの義務ではないので要件に含めない。
+ */
 export const INTAKE_CONTRACT_MISSING_REQUIREMENTS = [
-  'familyTag',
-  'severity',
-  'title',
   'description',
   'target',
-  'relation',
   'claimEvidence',
 ] as const;
 export type IntakeContractMissingRequirement = typeof INTAKE_CONTRACT_MISSING_REQUIREMENTS[number];
