@@ -97,6 +97,7 @@ TAKT に同梱されているすべてのビルトイン workflow と persona �
 | その他 | `research` | リサーチ workflow: planner -> digger -> supervisor。質問せずに自律的にリサーチを実行。 |
 | | `deep-research` | ディープリサーチ workflow: plan -> dig -> analyze -> supervise。発見駆動型の調査で、浮上した疑問を多角的に分析。 |
 | | `magi` | エヴァンゲリオンにインスパイアされた合議システム。3つの AI persona (MELCHIOR, BALTHASAR, CASPER) が分析・投票。 |
+| | `compound-eye` | 複眼レビュー。同じ指示を2つの eye に同時に投げ、両者の回答を統合する。eye ごとのプロバイダーは runtime.yaml（`provider.targets.steps` -> `eye1` / `eye2`）で割り当てる。 |
 
 ローカルモデルだけで既存workflowを動かす場合は、各workflowへ provider/model を設定してください。ハイブリッド構成では、`review` をローカル provider へ、`boundary-review` と `final-gate` を commercial provider へルーティングしてください。タグは step の記載順に適用されるため、`merge-readiness-review` と `supervise` では後ろの `final-gate` が先の `review` を上書きします。`finding-contract-local-review` の integrity gate と `finding-contract-boundary-review` の final gate は同じ `merge-readiness-finding-contract-final-gate` subworkflow を呼ぶため、この1つの routing で両 stage を保証でき、workflow 自体へ provider/model を固定する必要はありません。
 

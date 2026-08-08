@@ -1,0 +1,162 @@
+name: compound-eye
+description: Multi-eye review - send the same instruction to two independently assigned eyes and synthesize both responses. Assign a different provider to each eye via runtime.yaml (provider.targets.steps -> eye1 / eye2); the workflow itself names no provider.
+capabilities: readonly
+max_steps: 10
+initial_step: evaluate
+steps:
+  - name: evaluate
+    tags:
+      - review
+    parallel:
+      - name: eye1
+        tags:
+          - review
+        edit: false
+        persona: coder
+        session: refresh
+        knowledge: architecture
+        rules:
+          - condition: done
+          - condition: failed
+        output_contracts:
+          report:
+            - name: eye1-review.md
+              format: |
+                ```markdown
+                # Eye 1 Review Result
+
+                ## Conclusion
+                {One-line conclusion}
+
+                ## Key Findings
+                - {finding 1}
+                - {finding 2}
+
+                ## Evidence
+                - {file:line and rationale}
+
+                ## Risks / Caveats
+                - {risk}
+
+                ## Recommended Next Step
+                - {action}
+                ```
+      - name: eye2
+        tags:
+          - review
+        edit: false
+        persona: coder
+        session: refresh
+        knowledge: architecture
+        rules:
+          - condition: done
+          - condition: failed
+        output_contracts:
+          report:
+            - name: eye2-review.md
+              format: |
+                ```markdown
+                # Eye 2 Review Result
+
+                ## Conclusion
+                {One-line conclusion}
+
+                ## Key Findings
+                - {finding 1}
+                - {finding 2}
+
+                ## Evidence
+                - {file:line and rationale}
+
+                ## Risks / Caveats
+                - {risk}
+
+                ## Recommended Next Step
+                - {action}
+                ```
+    rules:
+      - condition: any("done")
+        next: synthesize
+  - name: synthesize
+    tags:
+      - review
+    edit: false
+    persona: supervisor
+    rules:
+      - condition: synthesis complete
+        next: COMPLETE
+    instruction: |
+      Two eyes independently answered the same instruction. Depending on the
+      runtime.yaml assignment they may be different providers or models.
+      Synthesize their responses.
+
+      **Tasks:**
+      1. Read reports in the Report Directory
+         - `eye1-review.md` (eye 1's response)
+         - `eye2-review.md` (eye 2's response)
+         Note: If one report is missing (that eye failed), synthesize from the available report only
+      2. If both reports exist, compare and clarify:
+         - Points of agreement
+         - Points of disagreement
+         - Points mentioned by only one eye
+      3. Produce a synthesized conclusion
+
+      **Output format:**
+      ```markdown
+      # Multi-Eye Review Synthesis
+
+      ## Conclusion
+      {Synthesized conclusion}
+
+      ## Response Status
+      | Eye | Status |
+      |-----|--------|
+      | Eye 1 | ✅ / ❌ |
+      | Eye 2 | ✅ / ❌ |
+
+      ## Agreements
+      - {Points where both eyes agree}
+
+      ## Disagreements
+      | Topic | Eye 1 | Eye 2 |
+      |-------|-------|-------|
+      | {topic} | {eye 1's view} | {eye 2's view} |
+
+      ## Unique Findings
+      - **Eye 1 only:** {Points only eye 1 mentioned}
+      - **Eye 2 only:** {Points only eye 2 mentioned}
+
+      ## Overall Assessment
+      {Overall assessment considering both responses}
+      ```
+    output_contracts:
+      report:
+        - name: synthesis.md
+          format: |
+            ```markdown
+            # Multi-Eye Review Synthesis
+
+            ## Conclusion
+            {Synthesized conclusion}
+
+            ## Response Status
+            | Eye | Status |
+            |-----|--------|
+            | Eye 1 | ✅ / ❌ |
+            | Eye 2 | ✅ / ❌ |
+
+            ## Agreements
+            - {Points where both eyes agree}
+
+            ## Disagreements
+            | Topic | Eye 1 | Eye 2 |
+            |-------|-------|-------|
+            | {topic} | {eye 1's view} | {eye 2's view} |
+
+            ## Unique Findings
+            - **Eye 1 only:** {Points only eye 1 mentioned}
+            - **Eye 2 only:** {Points only eye 2 mentioned}
+
+            ## Overall Assessment
+            {Overall assessment considering both responses}
+            ```
