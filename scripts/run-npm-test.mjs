@@ -15,7 +15,7 @@ import { isBirpcNoiseOnlyFailure } from './vitest-birpc-noise.mjs';
 
 const UNIT_SHARDS = ['1/4', '2/4', '3/4', '4/4'];
 const NO_ARG_UNIT_RUN_OPTIONS = ['--maxWorkers=1'];
-const INTEGRATION_NOTICE = '[takt] Fast unit gate only. After implementation run "npm run test:it" for light integration coverage. Pull requests and "npm run check:release" run heavy integration coverage too. If you add or change a heavy integration test, run that file directly with "npm test -- <test-file>" before handoff.';
+const INTEGRATION_NOTICE = '[takt] Fast unit gate only. After implementation run "npm run test:it" for light integration coverage. If you add or change an integration test, run the classification contract by itself with "npm test -- src/__tests__/releaseVerificationWiring.test.ts". Pull requests and "npm run check:release" run heavy integration coverage too. If you add or change a heavy integration test, run that file directly with "npm test -- <test-file>" before handoff.';
 const VITEST_OPTIONS_WITH_REQUIRED_VALUE = new Set([
   '-c',
   '-r',

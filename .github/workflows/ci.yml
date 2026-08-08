@@ -64,12 +64,8 @@ jobs:
           fi
 
   it:
-    name: ${{ matrix.gate }}
+    name: test:it
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        gate: [test:it, test:it:heavy]
     permissions:
       contents: read
     steps:
@@ -82,7 +78,67 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      - run: npm run ${{ matrix.gate }}
+      - run: npm run test:it
+
+  heavy_it_shard:
+    name: test:it:heavy parallel shard (${{ matrix.shard }}/4)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run test:it:heavy:parallel -- --shard=${{ matrix.shard }}/4
+
+  heavy_it_serial:
+    name: test:it:heavy serial (${{ matrix.group }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - group: git
+            script: test:it:heavy:serial:git
+          - group: workflow
+            script: test:it:heavy:serial:workflow
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run ${{ matrix.script }}
+
+  heavy_it:
+    name: test:it:heavy
+    runs-on: ubuntu-latest
+    needs: [heavy_it_shard, heavy_it_serial]
+    if: ${{ always() }}
+    permissions:
+      contents: read
+    steps:
+      - run: |
+          if [ "${{ needs.heavy_it_shard.result }}" != "success" ] || [ "${{ needs.heavy_it_serial.result }}" != "success" ]; then
+            echo "Heavy integration jobs did not all succeed"
+            exit 1
+          fi
 
   windows-private-artifacts:
     runs-on: windows-latest

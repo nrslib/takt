@@ -519,21 +519,29 @@ export function normalizePipelineConfig(raw: {
 }
 
 export function normalizeAssistantConfig(
-  raw: { init_files?: string[] } | undefined,
+  raw: { init_files?: string[]; gherkin?: boolean } | undefined,
 ): AssistantConfig | undefined {
-  if (!raw?.init_files || raw.init_files.length === 0) {
+  const initFiles = raw?.init_files?.length ? raw.init_files : undefined;
+  if (initFiles === undefined && raw?.gherkin === undefined) {
     return undefined;
   }
-  return { initFiles: raw.init_files };
+  return {
+    ...(initFiles !== undefined ? { initFiles } : {}),
+    ...(raw?.gherkin !== undefined ? { gherkin: raw.gherkin } : {}),
+  };
 }
 
 export function denormalizeAssistantConfig(
   config: AssistantConfig | undefined,
-): { init_files: string[] } | undefined {
-  if (!config?.initFiles || config.initFiles.length === 0) {
+): { init_files?: string[]; gherkin?: boolean } | undefined {
+  const initFiles = config?.initFiles?.length ? config.initFiles : undefined;
+  if (initFiles === undefined && config?.gherkin === undefined) {
     return undefined;
   }
-  return { init_files: config.initFiles };
+  return {
+    ...(initFiles !== undefined ? { init_files: initFiles } : {}),
+    ...(config?.gherkin !== undefined ? { gherkin: config.gherkin } : {}),
+  };
 }
 
 export function normalizeTaktProviders(raw: {

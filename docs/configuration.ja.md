@@ -254,6 +254,7 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 
 # インタラクティブ assistant モード専用の明示的な初期コンテキストファイル（project config 専用）
 # assistant:
+#   gherkin: true              # 最終指示書を Markdown + 要所の Gherkin で生成
 #   init_files:
 #     - docs/assistant-context.md
 #     - .takt/assistant-notes.md
@@ -354,6 +355,7 @@ terminal tool の完全一致反復は、廃止された累積検出ではなく
 | `ignore_exceed` | boolean | `false`（global 設定またはデフォルト由来） | `takt run` / `takt watch` の iteration 上限無視を設定します。CLI で `--ignore-exceed` を指定した場合は CLI 指定が優先されます |
 | `base_branch` | string | - | クローン作成のベースブランチ（グローバルを上書き、デフォルト: リモートのデフォルトブランチ） |
 | `assistant.init_files` | string[] | - | project config 専用のインタラクティブ assistant 初期コンテキストファイル。パスは project root 相対で指定します。絶対パス、project root 外へ解決されるパス、`.env*` / `.npmrc` / `.pypirc` / `.netrc` / `*.pem` / `*.key` / `.git/**` などの機密ファイルパターンは拒否されます。存在しないパス、ディレクトリ、読めないファイルは分かるエラーになります。最大16ファイルまで指定でき、1ファイルは256KiB、合計本文は1MiBまでです。未設定または空の場合、`CLAUDE.md`、`AGENT.md`、`AGENTS.md`、`TAKT.md` などは自動探索されません。assistant の provider/model だけを制御する `takt_providers.assistant` とは別設定です。 |
+| `assistant.gherkin` | boolean | `false` | project config 専用の opt-in 設定です。quiet モードを含む assistant 対話から最終指示書を生成するとき、背景、範囲、実装詳細、設計意図、制約、確認方法は Markdown に残し、重要な観測可能動作、状態遷移、境界、失敗、不変条件だけを最小数の Gherkin Scenario で整理するよう要約エージェントへ指示します。未設定または `false` の場合は既存の Markdown 指示書プロンプトを維持します。 |
 | `provider_options` | object | - | provider 固有オプション |
 | `provider_profiles` | object | - | provider 固有のパーミッションプロファイル |
 | `vcs_provider` | `"github"` \| `"gitlab"` | 自動検出 | VCS プロバイダー（グローバルを上書き） |

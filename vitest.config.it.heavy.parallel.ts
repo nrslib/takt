@@ -11,9 +11,9 @@ export default defineConfig({
     ...commonSrcTestConfig,
     ...parallelSrcRunnerConfig,
     // Heavy ITs drive real engines, Git repositories, child processes, and
-    // fsync-heavy stores. On CI, extra workers create enough synchronous IO
-    // contention to starve Vitest's worker RPC, so keep one worker there.
-    maxWorkers: process.env.CI ? 1 : 4,
+    // fsync-heavy stores. Keep one worker per runner to avoid synchronous IO
+    // contention; CI scales out with isolated job-level shards instead.
+    maxWorkers: 1,
     include: heavyParallelItTestGlobs,
     exclude: heavyParallelItTestExcludes,
   },

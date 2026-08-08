@@ -254,6 +254,7 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 
 # Explicit initial context files for interactive assistant mode only (project config only)
 # assistant:
+#   gherkin: true              # Generate final task instructions as Markdown + focused Gherkin
 #   init_files:
 #     - docs/assistant-context.md
 #     - .takt/assistant-notes.md
@@ -359,6 +360,7 @@ Project config accepts most global keys and overrides their global values (e.g. 
 | `ignore_exceed` | boolean | `false` (from global/default) | Configures iteration-limit bypass for `takt run` and `takt watch`; a CLI `--ignore-exceed` flag takes precedence when specified |
 | `base_branch` | string | - | Base branch for clone creation (overrides global, default: remote default branch) |
 | `assistant.init_files` | string[] | - | Project-only interactive assistant initial context files. Paths must be relative to the project root; absolute paths, paths resolving outside the project root, and sensitive file patterns such as `.env*`, `.npmrc`, `.pypirc`, `.netrc`, `*.pem`, `*.key`, and `.git/**` are rejected. Missing paths, directories, and unreadable files fail with a clear error. At most 16 files are allowed; each file is limited to 256 KiB and the combined content is limited to 1 MiB. When unset or empty, TAKT does not auto-discover `CLAUDE.md`, `AGENT.md`, `AGENTS.md`, `TAKT.md`, or other files. This is separate from `takt_providers.assistant`, which only controls the assistant provider/model. |
+| `assistant.gherkin` | boolean | `false` | Project-only opt-in for final task instructions generated from assistant conversations, including quiet mode. When enabled, TAKT keeps background, scope, implementation details, design intent, constraints, and verification in Markdown, and asks the summarizer to use a minimal number of Gherkin scenarios only for important observable behavior, state transitions, boundaries, failures, and invariants. Unset or `false` preserves the existing Markdown instruction prompt. |
 | `provider_options` | object | - | Provider-specific options |
 | `provider_profiles` | object | - | Provider-specific permission profiles |
 | `vcs_provider` | `"github"` \| `"gitlab"` | auto-detect | VCS provider (overrides global) |

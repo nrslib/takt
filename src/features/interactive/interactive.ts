@@ -127,6 +127,7 @@ export function buildSummaryPrompt(
   userNote: string,
   lang: 'en' | 'ja',
   promptContext?: string,
+  gherkin?: boolean,
 ): string;
 export function buildSummaryPrompt(
   history: ConversationMessage[],
@@ -137,16 +138,18 @@ export function buildSummaryPrompt(
   workflowContext?: WorkflowContext,
   sourceContext?: string,
   promptContext?: string,
+  gherkin?: boolean,
 ): string;
 export function buildSummaryPrompt(
   history: ConversationMessage[],
   userNoteOrHasSession: string | boolean,
   lang: 'en' | 'ja',
   promptContextOrNoTranscript?: string,
-  conversationLabel?: string,
+  conversationLabelOrGherkin?: string | boolean,
   workflowContext?: WorkflowContext,
   sourceContext?: string,
   promptContext?: string,
+  gherkin?: boolean,
 ): string {
   if (typeof userNoteOrHasSession === 'boolean') {
     return buildInteractiveSummaryPrompt(
@@ -154,10 +157,11 @@ export function buildSummaryPrompt(
       userNoteOrHasSession,
       lang,
       promptContextOrNoTranscript ?? '',
-      conversationLabel ?? '',
+      typeof conversationLabelOrGherkin === 'string' ? conversationLabelOrGherkin : '',
       workflowContext,
       sourceContext,
       promptContext,
+      gherkin,
     );
   }
 
@@ -166,6 +170,7 @@ export function buildSummaryPrompt(
     userNoteOrHasSession,
     lang,
     promptContextOrNoTranscript,
+    typeof conversationLabelOrGherkin === 'boolean' ? conversationLabelOrGherkin : false,
   );
 }
 

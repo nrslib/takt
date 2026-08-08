@@ -15,6 +15,7 @@ import { basename, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
+import { parse as parseYaml } from 'yaml';
 import {
   auditedIntegrationBoundaryTestFiles,
   fileSystemIntegrationTestFiles,
@@ -36,10 +37,36 @@ interface PackageManifest {
   scripts: Record<string, string>;
 }
 
+interface CiWorkflowStep {
+  run?: string;
+}
+
+interface CiWorkflowJob {
+  if?: string;
+  name?: string;
+  needs?: string[];
+  strategy?: {
+    matrix?: {
+      shard?: number[];
+      include?: Array<{
+        group: string;
+        script: string;
+      }>;
+    };
+  };
+  steps?: CiWorkflowStep[];
+}
+
+interface CiWorkflow {
+  jobs?: Record<string, CiWorkflowJob>;
+}
+
 const manifest = JSON.parse(
   readFileSync(new URL('../../package.json', import.meta.url), 'utf8'),
 ) as PackageManifest;
-const ciWorkflow = readFileSync(new URL('../../.github/workflows/ci.yml', import.meta.url), 'utf8');
+const ciWorkflow = parseYaml(
+  readFileSync(new URL('../../.github/workflows/ci.yml', import.meta.url), 'utf8'),
+) as CiWorkflow;
 
 const integrationBoundaryNames = new Set([
   'WorkflowEngine',
@@ -222,9 +249,41 @@ describe('release verification wiring', () => {
     expect(new Set(commands).size).toBe(commands.length);
   });
 
-  it('should run light and heavy integration as pull-request gates', () => {
-    expect(ciWorkflow).toContain('gate: [test:it, test:it:heavy]');
-    expect(ciWorkflow).toContain('- run: npm run ${{ matrix.gate }}');
+  it('should run light integration and isolated heavy integration shards as pull-request gates', () => {
+    const lightIntegrationJob = ciWorkflow.jobs?.it;
+    const heavyShardJob = ciWorkflow.jobs?.heavy_it_shard;
+    const heavySerialJob = ciWorkflow.jobs?.heavy_it_serial;
+    const heavyAggregateJob = ciWorkflow.jobs?.heavy_it;
+
+    expect(lightIntegrationJob?.name).toBe('test:it');
+    expect(lightIntegrationJob?.steps?.map((step) => step.run).filter(Boolean)).toContain(
+      'npm run test:it',
+    );
+
+    expect(heavyShardJob?.strategy?.matrix?.shard).toEqual([1, 2, 3, 4]);
+    expect(heavyShardJob?.steps?.map((step) => step.run).filter(Boolean)).toContain(
+      'npm run test:it:heavy:parallel -- --shard=${{ matrix.shard }}/4',
+    );
+
+    expect(heavySerialJob?.strategy?.matrix?.include).toEqual([
+      { group: 'git', script: 'test:it:heavy:serial:git' },
+      { group: 'workflow', script: 'test:it:heavy:serial:workflow' },
+    ]);
+    expect(heavySerialJob?.steps?.map((step) => step.run).filter(Boolean)).toContain(
+      'npm run ${{ matrix.script }}',
+    );
+
+    expect(heavyAggregateJob?.name).toBe('test:it:heavy');
+    expect(heavyAggregateJob?.needs).toEqual(['heavy_it_shard', 'heavy_it_serial']);
+    expect(heavyAggregateJob?.if).toBe('${{ always() }}');
+    const aggregateCommand = heavyAggregateJob?.steps
+      ?.map((step) => step.run)
+      .filter(Boolean)
+      .join('\n');
+    expect(aggregateCommand).toContain('needs.heavy_it_shard.result');
+    expect(aggregateCommand).toContain('needs.heavy_it_serial.result');
+    expect(aggregateCommand).toContain('!= "success"');
+    expect(aggregateCommand).toContain('exit 1');
   });
 
   it('should execute the complete release path when every gate succeeds', () => {

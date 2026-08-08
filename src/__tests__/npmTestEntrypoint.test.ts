@@ -49,6 +49,7 @@ describe('parallel test runner configuration', () => {
     });
     expect(heavyParallelIntegrationConfig).toMatchObject({
       test: {
+        maxWorkers: 1,
         include: heavyParallelItTestGlobs,
         exclude: heavyParallelItTestExcludes,
       },
@@ -100,7 +101,7 @@ describe('npm test execution', () => {
     ]);
     expect(run).toHaveBeenCalledTimes(4);
     expect(log).toHaveBeenCalledWith(
-      '[takt] Fast unit gate only. After implementation run "npm run test:it" for light integration coverage. Pull requests and "npm run check:release" run heavy integration coverage too. If you add or change a heavy integration test, run that file directly with "npm test -- <test-file>" before handoff.',
+      '[takt] Fast unit gate only. After implementation run "npm run test:it" for light integration coverage. If you add or change an integration test, run the classification contract by itself with "npm test -- src/__tests__/releaseVerificationWiring.test.ts". Pull requests and "npm run check:release" run heavy integration coverage too. If you add or change a heavy integration test, run that file directly with "npm test -- <test-file>" before handoff.',
     );
     expect(code).toBe(0);
   });

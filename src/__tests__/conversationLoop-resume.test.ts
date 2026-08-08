@@ -130,6 +130,7 @@ import { getProvider } from '../infra/providers/index.js';
 import { selectOption } from '../shared/prompt/index.js';
 import { error as logError, info as logInfo } from '../shared/ui/index.js';
 import { callAIWithRetry, runConversationLoop, type SessionContext } from '../features/interactive/conversationLoop.js';
+import * as interactiveModule from '../features/interactive/interactive.js';
 import { initializeSession } from '../features/interactive/sessionInitialization.js';
 
 const mockGetProvider = vi.mocked(getProvider);
@@ -549,6 +550,48 @@ describe('/resume command', () => {
 // /go command: summary AI session isolation
 // =================================================================
 describe('/go command', () => {
+  it('should include Markdown and Gherkin rules in assistant summaries when project config enables them', async () => {
+    const buildSummaryPromptSpy = vi.spyOn(interactiveModule, 'buildSummaryPrompt');
+    const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-gherkin-assistant-'));
+    fs.mkdirSync(path.join(projectDir, '.takt'), { recursive: true });
+    fs.writeFileSync(
+      path.join(projectDir, '.takt', 'config.yaml'),
+      ['assistant:', '  gherkin: true'].join('\n'),
+      'utf-8',
+    );
+    setupRawStdin(toRawInputs(['/go improve parser behavior']));
+    const { provider } = createScenarioProvider([
+      { content: 'Generated task instruction.' },
+    ]);
+    const ctx: SessionContext = {
+      provider: provider as SessionContext['provider'],
+      providerType: 'mock',
+      model: undefined,
+      lang: 'en',
+      personaName: 'interactive',
+      sessionId: undefined,
+    };
+
+    try {
+      const result = await runConversationLoop(projectDir, ctx, defaultStrategy, undefined, undefined);
+
+      expect(result.action).toBe('execute');
+      expect(buildSummaryPromptSpy).toHaveBeenCalledWith(
+        expect.any(Array),
+        false,
+        'en',
+        expect.any(String),
+        expect.any(String),
+        undefined,
+        undefined,
+        undefined,
+        true,
+      );
+    } finally {
+      fs.rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
   it('should isolate the summary AI without replacing the resumable conversation session', async () => {
     // Given: send message (AI responds with sessionId) → /go triggers summary
     setupRawStdin(toRawInputs(['hello', '/go']));
