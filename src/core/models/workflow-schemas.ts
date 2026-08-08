@@ -374,7 +374,7 @@ export const FacetPoolRawSchema = z.union([
 
 export const DynamicFacetsRawSchema = z.object({
   pool: z.string().min(1),
-  max_selected: z.number().int().positive(),
+  max_selected: z.number().int().positive().optional(),
 }).strict();
 
 /** Team leader configuration schema for dynamic part decomposition */

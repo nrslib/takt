@@ -154,7 +154,10 @@ export class DynamicFacetSelectorCoordinator {
       selectorResult = validateSelectorResponse(response, outputSchema, step.name, redact, { label: 'Dynamic facet' });
       signal?.throwIfAborted();
       selectedIds = selectorResult.selectedIds;
-      if (selectedIds.length > step.dynamicFacets.maxSelected) {
+      if (
+        step.dynamicFacets.maxSelected !== undefined
+        && selectedIds.length > step.dynamicFacets.maxSelected
+      ) {
         throw new Error(
           `Dynamic facet selector for "${step.name}" selected ${selectedIds.length} candidates, exceeding max_selected ${step.dynamicFacets.maxSelected}`,
         );

@@ -3,6 +3,7 @@ workflow_categories:
     workflows:
       - simple
       - default
+      - experimental
       - default-mini
       - default-high
       - cli

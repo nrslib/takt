@@ -1,0 +1,117 @@
+name: review
+tags: [review]
+parallel:
+  fixed:
+    - name: coding-review
+      capabilities: readonly
+      tags: [review]
+      edit: false
+      persona: coding-reviewer
+      policy: [contract-change, review, coding, testing]
+      knowledge: [architecture, unit-testing, e2e-testing]
+      instruction: review-coding
+      pass_previous_response: false
+      output_contracts:
+        report:
+          - name: coding-review.md
+            format: coding-review
+    - name: ai-antipattern-review
+      capabilities: readonly
+      tags: [review]
+      edit: false
+      persona: ai-antipattern-reviewer
+      policy: [contract-change, review, ai-antipattern]
+      knowledge: architecture
+      instruction: ai-antipattern-review
+      pass_previous_response: false
+      output_contracts:
+        report:
+          - name: ai-antipattern-review.md
+            format: ai-antipattern-review
+  pool:
+    - name: architecture-review
+      description: Review module structure, responsibility boundaries, dependency direction, and call paths.
+      capabilities: readonly
+      tags: [review]
+      edit: false
+      persona: architecture-reviewer
+      policy: [contract-change, review]
+      knowledge: architecture
+      instruction: review-arch
+      pass_previous_response: false
+      output_contracts:
+        report:
+          - name: architecture-review.md
+            format: architecture-review
+    - name: frontend-review
+      description: Review UI, components, state management, accessibility, and presentation.
+      capabilities: readonly
+      tags: [review]
+      edit: false
+      persona: frontend-reviewer
+      policy: [contract-change, review]
+      knowledge: [frontend, react]
+      instruction: review-frontend
+      pass_previous_response: false
+      output_contracts:
+        report:
+          - name: frontend-review.md
+            format: frontend-review
+    - name: backend-review
+      description: Review APIs, domain logic, server-side processing, and persistence.
+      capabilities: readonly
+      tags: [review]
+      edit: false
+      persona: coding-reviewer
+      policy: [contract-change, review, coding]
+      knowledge: [backend, architecture]
+      instruction: review-coding
+      pass_previous_response: false
+      output_contracts:
+        report:
+          - name: backend-review.md
+            format: coding-review
+    - name: cli-review
+      description: Review CLI commands, arguments, exit codes, configuration, logging, and existing CLI structure.
+      capabilities: readonly
+      tags: [review]
+      edit: false
+      persona: coding-reviewer
+      policy: [contract-change, review, coding]
+      knowledge: [architecture, existing-system]
+      instruction: review-coding
+      pass_previous_response: false
+      output_contracts:
+        report:
+          - name: cli-review.md
+            format: coding-review
+    - name: security-review
+      description: Review authentication, authorization, input validation, secrets, dependencies, and security boundaries.
+      capabilities: readonly
+      tags: [review]
+      edit: false
+      persona: security-reviewer
+      policy: [contract-change, review]
+      knowledge: security
+      instruction: review-security
+      pass_previous_response: false
+      output_contracts:
+        report:
+          - name: security-review.md
+            format: security-review
+    - name: testing-review
+      description: Review test coverage, test design, integration boundaries, and E2E boundaries.
+      capabilities: readonly
+      tags: [review]
+      edit: false
+      persona: testing-reviewer
+      policy: [contract-change, review, testing]
+      knowledge: [unit-testing, e2e-testing]
+      instruction: review-test
+      pass_previous_response: false
+      output_contracts:
+        report:
+          - name: testing-review.md
+            format: testing-review
+  selection:
+    mode: replace

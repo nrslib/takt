@@ -576,7 +576,10 @@ function validateDynamicFacetsReferences(
       );
     }
     const candidateCount = pool.candidates.length;
-    if (step.dynamic_facets.max_selected > candidateCount) {
+    if (
+      step.dynamic_facets.max_selected !== undefined
+      && step.dynamic_facets.max_selected > candidateCount
+    ) {
       throw withWorkflowStepErrorPath(
         new Error(
           `Configuration error: step "${step.name}" dynamic_facets.max_selected (${step.dynamic_facets.max_selected}) exceeds candidate count (${candidateCount}) of pool "${poolName}"`,

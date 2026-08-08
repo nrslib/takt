@@ -1,0 +1,117 @@
+name: review
+tags: [review]
+parallel:
+  fixed:
+    - name: coding-review
+      capabilities: readonly
+      tags: [review]
+      edit: false
+      persona: coding-reviewer
+      policy: [contract-change, review, coding, testing]
+      knowledge: [architecture, unit-testing, e2e-testing]
+      instruction: review-coding
+      pass_previous_response: false
+      output_contracts:
+        report:
+          - name: coding-review.md
+            format: coding-review
+    - name: ai-antipattern-review
+      capabilities: readonly
+      tags: [review]
+      edit: false
+      persona: ai-antipattern-reviewer
+      policy: [contract-change, review, ai-antipattern]
+      knowledge: architecture
+      instruction: ai-antipattern-review
+      pass_previous_response: false
+      output_contracts:
+        report:
+          - name: ai-antipattern-review.md
+            format: ai-antipattern-review
+  pool:
+    - name: architecture-review
+      description: モジュール構造、責務分割、依存方向、呼び出し経路をレビューする
+      capabilities: readonly
+      tags: [review]
+      edit: false
+      persona: architecture-reviewer
+      policy: [contract-change, review]
+      knowledge: architecture
+      instruction: review-arch
+      pass_previous_response: false
+      output_contracts:
+        report:
+          - name: architecture-review.md
+            format: architecture-review
+    - name: frontend-review
+      description: UI、コンポーネント、状態管理、アクセシビリティをレビューする
+      capabilities: readonly
+      tags: [review]
+      edit: false
+      persona: frontend-reviewer
+      policy: [contract-change, review]
+      knowledge: [frontend, react]
+      instruction: review-frontend
+      pass_previous_response: false
+      output_contracts:
+        report:
+          - name: frontend-review.md
+            format: frontend-review
+    - name: backend-review
+      description: API、ドメインロジック、サーバー側処理、永続化をレビューする
+      capabilities: readonly
+      tags: [review]
+      edit: false
+      persona: coding-reviewer
+      policy: [contract-change, review, coding]
+      knowledge: [backend, architecture]
+      instruction: review-coding
+      pass_previous_response: false
+      output_contracts:
+        report:
+          - name: backend-review.md
+            format: coding-review
+    - name: cli-review
+      description: CLIコマンド、引数、終了コード、設定、ログ、既存CLI構造をレビューする
+      capabilities: readonly
+      tags: [review]
+      edit: false
+      persona: coding-reviewer
+      policy: [contract-change, review, coding]
+      knowledge: [architecture, existing-system]
+      instruction: review-coding
+      pass_previous_response: false
+      output_contracts:
+        report:
+          - name: cli-review.md
+            format: coding-review
+    - name: security-review
+      description: 認証認可、入力検証、機密情報、依存関係、セキュリティ境界をレビューする
+      capabilities: readonly
+      tags: [review]
+      edit: false
+      persona: security-reviewer
+      policy: [contract-change, review]
+      knowledge: security
+      instruction: review-security
+      pass_previous_response: false
+      output_contracts:
+        report:
+          - name: security-review.md
+            format: security-review
+    - name: testing-review
+      description: テストカバレッジ、テスト設計、統合境界、E2E境界をレビューする
+      capabilities: readonly
+      tags: [review]
+      edit: false
+      persona: testing-reviewer
+      policy: [contract-change, review, testing]
+      knowledge: [unit-testing, e2e-testing]
+      instruction: review-test
+      pass_previous_response: false
+      output_contracts:
+        report:
+          - name: testing-review.md
+            format: testing-review
+  selection:
+    mode: replace

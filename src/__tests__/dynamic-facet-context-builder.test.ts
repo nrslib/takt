@@ -109,4 +109,21 @@ describe('DynamicFacetContextBuilder (C-SELECTOR-INPUT, C-SELECTOR-INVOKE)', () 
     expect(instruction).not.toContain('(root)');
     expect(instruction).toContain('Max selected:\n4');
   });
+
+  it('should render unlimited when maxSelected is omitted', () => {
+    const instruction = buildDynamicFacetSelectorInstruction({
+      task: 'task',
+      workflowName: 'wf',
+      stepName: 'fix',
+      workflowCallPath: [],
+      isReentry: false,
+      stepIteration: 1,
+      reports: '',
+      unresolvedFindings: '',
+      cumulativeDiff: '',
+      pool,
+    });
+
+    expect(instruction).toContain('Max selected:\nunlimited');
+  });
 });

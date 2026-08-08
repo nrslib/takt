@@ -59,7 +59,7 @@ export interface StepPreview {
   dynamicSelectionMode?: 'replace' | 'cumulative';
   dynamicFacets?: {
     readonly pool: string;
-    readonly maxSelected: number;
+    readonly maxSelected?: number;
     readonly candidates: readonly {
       readonly id: string;
       readonly description: string;
@@ -312,7 +312,7 @@ function resolveDynamicFacetsPreview(
   workflow: WorkflowConfig,
   step: WorkflowStep,
 ): { dynamicFacets: NonNullable<StepPreview['dynamicFacets']> } | Record<string, never> {
-  const dynamicFacets = (step as { dynamicFacets?: { readonly pool: string; readonly maxSelected: number } }).dynamicFacets;
+  const dynamicFacets = (step as { dynamicFacets?: { readonly pool: string; readonly maxSelected?: number } }).dynamicFacets;
   if (dynamicFacets === undefined) return {};
   const pool = workflow.facetPools?.[dynamicFacets.pool];
   if (pool === undefined) return {};

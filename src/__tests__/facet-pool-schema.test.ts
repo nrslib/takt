@@ -56,6 +56,25 @@ describe('facet_pools schema (C-CANDIDATE-SCHEMA, C-USES-INLINE-MIX, C-EXTERNAL-
       expect(() => WorkflowConfigRawSchema.parse(raw)).not.toThrow();
     });
 
+    it('should accept dynamic_facets without max_selected (unlimited selection)', () => {
+      const raw = baseWorkflowWithFacetPools({
+        fix: {
+          candidates: [
+            { id: 'backend', description: 'API、repository、server-side実装を扱う', knowledge: 'backend-api' },
+          ],
+        },
+      }, [{
+        name: 'fix',
+        persona: 'coder',
+        policy: ['coding'],
+        dynamic_facets: { pool: 'fix' },
+        instruction: 'fix',
+        edit: true,
+        rules: [{ condition: 'done', next: 'COMPLETE' }],
+      }]);
+      expect(() => WorkflowConfigRawSchema.parse(raw)).not.toThrow();
+    });
+
     it('should accept a candidate that bundles multiple facets as arrays (C-CANDIDATE-SCHEMA bundle)', () => {
       const raw = baseWorkflowWithFacetPools({
         fix: {

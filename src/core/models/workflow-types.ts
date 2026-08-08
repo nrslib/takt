@@ -225,7 +225,7 @@ export interface ResolvedFacetPool {
 
 export interface DynamicFacetsConfig {
   readonly pool: string;
-  readonly maxSelected: number;
+  readonly maxSelected?: number;
 }
 
 export interface DynamicFacetSelectionSnapshot {

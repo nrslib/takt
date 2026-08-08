@@ -107,7 +107,10 @@ function validateDynamicFacetSelections(
           `Dynamic facet selection snapshot for step "${step.name}" references candidate id "${missingId}" that is not in pool "${pool.name}"`,
         );
       }
-      if (snapshot.selected_ids.length > step.dynamicFacets.maxSelected) {
+      if (
+        step.dynamicFacets.maxSelected !== undefined
+        && snapshot.selected_ids.length > step.dynamicFacets.maxSelected
+      ) {
         throw new Error(
           `Dynamic facet selection snapshot for step "${step.name}" has ${snapshot.selected_ids.length} selected ids but max_selected is ${step.dynamicFacets.maxSelected}`,
         );

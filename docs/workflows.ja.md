@@ -350,6 +350,8 @@ claim を失う等）で、既存の訂正1回でも直らないときは、TAKT
 
 pool はトップレベルの `facet_pools` map に定義し、step から `dynamic_facets` で参照します。pool は workflow 内に inline で定義するか、外部 resource ファイルとして定義できます。
 
+`dynamic_facets.max_selected` は任意です。指定した場合は選択数の上限として扱い、省略した場合は pool の全候補数まで選択できます。selector の失敗時に全候補へ自動 fallback する挙動ではありません。
+
 #### inline pool
 
 inline pool は workflow YAML 内に直接記述します。候補の `policy` / `knowledge` 参照は、通常の step と同じ workflow-local facet namespace で解決します。workflow の `policies` / `knowledge` section map による alias と、通常の bare facet lookup の両方が使えます。
@@ -492,7 +494,7 @@ selector には少なくとも次を渡します。
 - タスク開始時点からの累積差分
 - 候補 ID と description
 
-facet 本文は selector に渡しません。selector は厳格な structured output schema（`additionalProperties: false`、`selected_ids` は pool の候補 ID を `enum` とする unique array、加えて必須の `rationale` 文字列）に対して候補 ID と理由だけを返します。pool 外 ID、重複 ID、`max_selected` 超過は拒否します。selector 失敗時は main agent を起動せず fail-fast し、全候補や空選択への暗黙 fallback はありません。selector 自身を dynamic facet selection や auto routing の対象にしません。
+facet 本文は selector に渡しません。selector は厳格な structured output schema（`additionalProperties: false`、`selected_ids` は pool の候補 ID を `enum` とする unique array、加えて必須の `rationale` 文字列）に対して候補 ID と理由だけを返します。pool 外 ID、重複 ID、指定した `max_selected` の超過は拒否します。selector 失敗時は main agent を起動せず fail-fast し、全候補や空選択への暗黙 fallback はありません。selector 自身を dynamic facet selection や auto routing の対象にしません。
 
 selector provider は #1136 の `runtime.yaml` の `provider.targets.internal_agents.selector` で解決します。未指定時は runtime の通常 default を使います。
 
@@ -549,7 +551,7 @@ MVP では実行途中の facet hot swap を行いません。必要領域が変
 - 外部 pool での nested `uses`、`params`、`$param`
 - 外部 resource の探索、trust、file validation 違反
 - `dynamic_facets.pool` が未知
-- `max_selected` が不正または候補数を超える
+- 指定した `max_selected` が不正または候補数を超える
 - 通常 agent step 以外への `dynamic_facets` 指定
 
 selector 実行時に次のいずれかが成立すると main agent 起動前に失敗します。
@@ -558,7 +560,7 @@ selector 実行時に次のいずれかが成立すると main agent 起動前�
 - structured output が不成立
 - `selected_ids` が配列でない
 - 非文字列、重複、未知 ID
-- `max_selected` 超過
+- 指定した `max_selected` の超過
 
 暗黙 fallback はありません。
 

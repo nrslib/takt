@@ -357,6 +357,8 @@ A normal agent step can dynamically select additional `policy` and `knowledge` f
 
 Define a pool under the top-level `facet_pools` map, then reference it from a step with `dynamic_facets`. Pools can be defined inline in the workflow or as external resource files.
 
+`dynamic_facets.max_selected` is optional. When specified, it limits the number of selected candidates; when omitted, the selector may select up to every candidate in the pool. This does not add an all-candidate fallback when selector execution fails.
+
 #### Inline pool
 
 An inline pool lives in the workflow YAML. Its candidate `policy` / `knowledge` references resolve through the same workflow-local facet namespace as ordinary steps: the workflow `policies` / `knowledge` section maps and bare facet lookup both work.
@@ -499,7 +501,7 @@ The selector receives at least:
 - The cumulative diff since the task started
 - Candidate IDs and descriptions
 
-Facet bodies are not sent to the selector. The selector returns only candidate IDs and a rationale against a strict structured output schema (`additionalProperties: false`, `selected_ids` as a unique array whose items are an `enum` of the pool's candidate IDs, plus a required `rationale` string). Pool-external IDs, duplicate IDs, and selections exceeding `max_selected` are rejected. Selector failure stops the run before the main agent starts; there is no implicit fallback to all candidates or to an empty selection. The selector itself is not subject to dynamic facet selection or auto routing.
+Facet bodies are not sent to the selector. The selector returns only candidate IDs and a rationale against a strict structured output schema (`additionalProperties: false`, `selected_ids` as a unique array whose items are an `enum` of the pool's candidate IDs, plus a required `rationale` string). Pool-external IDs, duplicate IDs, and selections exceeding a specified `max_selected` are rejected. Selector failure stops the run before the main agent starts; there is no implicit fallback to all candidates or to an empty selection. The selector itself is not subject to dynamic facet selection or auto routing.
 
 The selector provider is resolved through #1136's `provider.targets.internal_agents.selector` in `runtime.yaml`. When left unspecified, the runtime's normal default is used.
 
@@ -556,7 +558,7 @@ Loading fails before execution when any of these hold:
 - An external pool uses nested `uses`, `params`, or `$param`
 - External resource lookup, trust, or file validation fails
 - `dynamic_facets.pool` is unknown
-- `max_selected` is invalid or exceeds the candidate count
+- A specified `max_selected` is invalid or exceeds the candidate count
 - `dynamic_facets` is declared on a non-agent step
 
 Selector execution fails before the main agent starts when:
@@ -565,7 +567,7 @@ Selector execution fails before the main agent starts when:
 - Structured output is not established
 - `selected_ids` is not an array
 - An ID is non-string, duplicate, or unknown
-- `max_selected` is exceeded
+- A specified `max_selected` is exceeded
 
 There is no implicit fallback.
 

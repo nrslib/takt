@@ -11,7 +11,7 @@ export interface DynamicFacetSelectorInstructionInput {
   readonly unresolvedFindings: string;
   readonly cumulativeDiff: string;
   readonly pool: ResolvedFacetPool;
-  readonly maxSelected: number;
+  readonly maxSelected?: number;
 }
 
 export function buildDynamicFacetSelectorInstruction(input: DynamicFacetSelectorInstructionInput): string {
@@ -42,6 +42,6 @@ export function buildDynamicFacetSelectorInstruction(input: DynamicFacetSelector
     '',
     `Candidates:\n${candidates}`,
     '',
-    `Max selected:\n${input.maxSelected}`,
+    `Max selected:\n${input.maxSelected ?? 'unlimited'}`,
   ].join('\n');
 }

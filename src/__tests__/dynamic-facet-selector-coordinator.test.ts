@@ -37,12 +37,24 @@ function makePool(candidates: { id: string; description: string }[]): ResolvedFa
   };
 }
 
-function makeStep(maxSelected = 4): NormalAgentWorkflowStep {
+function makeStep(maxSelected: number | undefined = 4): NormalAgentWorkflowStep {
   return {
     name: 'fix',
     personaDisplayName: 'coder',
     instruction: 'Fix',
-    dynamicFacets: { pool: 'fix', maxSelected },
+    dynamicFacets: {
+      pool: 'fix',
+      ...(maxSelected === undefined ? {} : { maxSelected }),
+    },
+  };
+}
+
+function makeUnlimitedStep(): NormalAgentWorkflowStep {
+  return {
+    name: 'fix',
+    personaDisplayName: 'coder',
+    instruction: 'Fix',
+    dynamicFacets: { pool: 'fix' },
   };
 }
 
@@ -129,6 +141,30 @@ describe('DynamicFacetSelectorCoordinator', () => {
     await expect(
       coordinator.resolveDynamicFacets(step, makeState(), 'task', pool),
     ).rejects.toThrow('must NOT have more than 2 items');
+  });
+
+  it('accepts all pool candidates when max_selected is omitted', async () => {
+    const pool = makePool([
+      { id: 'a', description: 'A' },
+      { id: 'b', description: 'B' },
+      { id: 'c', description: 'C' },
+    ]);
+    const step = makeUnlimitedStep();
+    const response: AgentResponse = {
+      persona: 'selector',
+      status: 'done',
+      content: '',
+      timestamp: new Date(),
+      structuredOutput: { selected_ids: ['a', 'b', 'c'], rationale: 'all facets are relevant' },
+    };
+    mockedExecuteAgent.mockResolvedValueOnce(response);
+
+    const coordinator = new DynamicFacetSelectorCoordinator(buildDeps());
+    const result = await coordinator.resolveDynamicFacets(step, makeState(), 'task', pool);
+
+    expect(result.selectedIds).toEqual(['a', 'b', 'c']);
+    const executeOptions = mockedExecuteAgent.mock.calls[0]?.[2] as { properties?: { selected_ids?: { maxItems?: number } } };
+    expect(executeOptions.properties?.selected_ids?.maxItems).toBeUndefined();
   });
 
   it('restores from snapshot without invoking selector when identity is in resumedDynamicFacetSteps', async () => {

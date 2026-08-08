@@ -125,7 +125,7 @@ function normalizeDynamicFacets(
   }
   return normalizeStepField(stepPath, ['dynamic_facets'], () => ({
     pool: raw.pool,
-    maxSelected: raw.max_selected,
+    ...(raw.max_selected === undefined ? {} : { maxSelected: raw.max_selected }),
   }));
 }
 
