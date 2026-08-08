@@ -1,6 +1,6 @@
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { afterAll, describe, expect, it } from 'vitest';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
@@ -107,7 +107,7 @@ describe('builtin capability declarations (parsed contract)', () => {
       const allowed = allowedEffectiveValues(lang);
       for (const filePath of workflowFiles(lang)) {
         const config = loadBuiltinWorkflow(lang, filePath);
-        const workflowName = `${lang}/${filePath.split('/').pop()}`;
+        const workflowName = `${lang}/${basename(filePath)}`;
         for (const leaf of agentLeaves(config.steps)) {
           expect
             .soft(allowed.has(canon(leaf.providerOptions)), `${workflowName} step ${leaf.name}`)
@@ -123,8 +123,8 @@ describe('builtin capability declarations (parsed contract)', () => {
   });
 
   it('should resolve en and ja workflows to identical per-step effective options', () => {
-    const enFiles = workflowFiles('en').map((file) => file.split('/').pop()!).sort();
-    const jaFiles = workflowFiles('ja').map((file) => file.split('/').pop()!).sort();
+    const enFiles = workflowFiles('en').map((file) => basename(file)).sort();
+    const jaFiles = workflowFiles('ja').map((file) => basename(file)).sort();
     expect(jaFiles).toEqual(enFiles);
     for (const name of enFiles) {
       const en = loadBuiltinWorkflow('en', join(REPO_ROOT, 'builtins', 'en', 'workflows', name));
