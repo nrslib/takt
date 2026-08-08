@@ -1,6 +1,6 @@
 import type { UserConfig } from 'vitest/config';
 import {
-  heavyUnitTestFiles,
+  parallelIntegrationTestFiles,
   parallelIntegrationTestGlobs,
   serialGitTestFiles,
   serialWorkflowTestFiles,
@@ -8,9 +8,10 @@ import {
 
 export const srcTestInclude = ['src/__tests__/**/*.test.ts'];
 
-export const unitHeavyTestGlobs = [...heavyUnitTestFiles];
-
-export const itTestGlobs = [...parallelIntegrationTestGlobs];
+export const itTestGlobs = [
+  ...parallelIntegrationTestGlobs,
+  ...parallelIntegrationTestFiles,
+];
 
 // These files create real repositories and mutate branches/commits. Keep them
 // serial to avoid IO-heavy git operations competing inside the same pool.

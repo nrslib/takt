@@ -17,7 +17,6 @@ import {
   itTestGlobs,
   parallelSrcRunnerConfig,
   srcTestInclude,
-  unitHeavyTestGlobs,
 } from '../../vitest.config.shared.js';
 
 afterEach(() => {
@@ -36,7 +35,7 @@ describe('parallel test runner configuration', () => {
     expect(unitConfig).toMatchObject({
       test: {
         include: srcTestInclude,
-        exclude: [...itTestGlobs, ...itSerialTestGlobs, ...unitHeavyTestGlobs],
+        exclude: [...itTestGlobs, ...itSerialTestGlobs],
       },
     });
     expect(parallelIntegrationConfig).toMatchObject({
@@ -92,7 +91,7 @@ describe('npm test execution', () => {
     ]);
     expect(run).toHaveBeenCalledTimes(4);
     expect(log).toHaveBeenCalledWith(
-      `[takt] Fast unit gate only: ${unitHeavyTestGlobs.length} heavy test files are excluded. Run "npm run test:unit:heavy" when needed; "npm run check:release" runs them after the 4 shards.`,
+      '[takt] Fast unit gate only: integration tests are excluded. Run "npm run test:it" when the changed area crosses process, Git, or workflow-engine boundaries; "npm run check:release" runs it after the 4 shards.',
     );
     expect(code).toBe(0);
   });
@@ -377,12 +376,12 @@ describe('npm test entrypoint routing', () => {
     ]);
   });
 
-  it('should route a targeted heavy unit file to the single-worker runner', () => {
+  it('should route a resource-heavy integration file to the serial workflow runner', () => {
     expect(selectNpmTestRuns(['finding-review-integrity-gate.test.ts'])).toEqual([
       {
         npmArgs: [
           'run',
-          'test:unit:heavy',
+          'test:it:serial:workflow',
           '--',
           'src/__tests__/finding-review-integrity-gate.test.ts',
         ],
@@ -398,7 +397,7 @@ describe('npm test entrypoint routing', () => {
     ]);
   });
 
-  it('should route mixed unit, heavy unit, parallel IT, and serial targets exactly once', () => {
+  it('should route mixed unit, parallel IT, and serial IT targets exactly once', () => {
     const args = [
       'src/__tests__/acpAgent.test.ts',
       'src/__tests__/finding-review-integrity-gate.test.ts',
@@ -409,9 +408,32 @@ describe('npm test entrypoint routing', () => {
 
     expect(selectNpmTestRuns(args)).toEqual([
       { npmArgs: ['run', 'test:unit:parallel', '--', args[0], args[4]] },
-      { npmArgs: ['run', 'test:unit:heavy', '--', args[1]] },
       { npmArgs: ['run', 'test:it:parallel', '--', args[2]] },
       { npmArgs: ['run', 'test:it:serial:git', '--', args[3]] },
+      { npmArgs: ['run', 'test:it:serial:workflow', '--', args[1]] },
+    ]);
+  });
+
+  it('should route an explicitly classified legacy filename to the IT runner', () => {
+    const args = ['engine-happy-path.test.ts'];
+
+    expect(selectNpmTestRuns(args)).toEqual([
+      {
+        npmArgs: [
+          'run',
+          'test:it:parallel',
+          '--',
+          'src/__tests__/engine-happy-path.test.ts',
+        ],
+      },
+    ]);
+  });
+
+  it('should route a legacy integration suffix to the IT runner', () => {
+    const args = ['src/__tests__/facet-includes-integration.test.ts'];
+
+    expect(selectNpmTestRuns(args)).toEqual([
+      { npmArgs: ['run', 'test:it:parallel', '--', ...args] },
     ]);
   });
 

@@ -46,7 +46,7 @@ npm run test:prompt-evals
 npm run test:e2e:mock
 ```
 
-`npm test` は fast unit gate です。4シャードを並列実行し、除外した高負荷unitファイルを出力で通知します。変更範囲が該当する場合は `npm run test:unit:heavy` を実行してください。integration・regression・performance テストは `npm run test:it`、決定的な OpenCode prompt smoke suite は `npm run test:prompt-evals` で実行します。`npm test -- <test-file>` は、指定した各 source test を fast unit、heavy unit、parallel integration、serial Git、serial workflow のいずれか1つへ振り分けます。選択されたrunnerは並列実行され、最初に失敗した子プロセスの終了コードを返します。リリース担当者は、fast unit 4シャード、heavy unit、integration、prompt smoke、全providerのE2E suiteを含む完全なrelease pathを `npm run check:release` で検証できます。
+`npm test` は fast unit gate です。4シャードを並列実行し、integrationテストを除外していることを出力で通知します。変更範囲が子プロセス・Git・workflow engineの境界をまたぐ場合は `npm run test:it` を実行してください。integration・regression・performanceテストはこのgateで実行し、高負荷なintegrationテストはそのserial groupで実行します。決定的なOpenCode prompt smoke suiteは `npm run test:prompt-evals` で実行します。`npm test -- <test-file>` は、指定した各source testをfast unit、parallel integration、serial Git、serial workflowのいずれか1つへ振り分けます。選択されたrunnerは並列実行され、最初に失敗した子プロセスの終了コードを返します。リリース担当者は、fast unit 4シャード、integration、prompt smoke、全providerのE2E suiteを含む完全なrelease pathを `npm run check:release` で検証できます。
 
 E2E テストの実行方法と前提条件は [E2E テスト概要](./testing/e2e.md) を参照してください。
 

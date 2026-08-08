@@ -5,20 +5,23 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 import {
-  heavyUnitTestFiles,
+  parallelIntegrationTestFiles,
   parallelIntegrationTestGlobs,
   serialGitTestFiles,
   serialWorkflowTestFiles,
 } from '../../scripts/test-classification.mjs';
 import parallelIntegrationConfig from '../../vitest.config.it.parallel.js';
-import heavyUnitConfig from '../../vitest.config.unit.heavy.js';
 import unitConfig from '../../vitest.config.unit.parallel.js';
 
 interface PackageManifest {
@@ -28,6 +31,95 @@ interface PackageManifest {
 const manifest = JSON.parse(
   readFileSync(new URL('../../package.json', import.meta.url), 'utf8'),
 ) as PackageManifest;
+
+const integrationBoundaryNames = new Set([
+  'WorkflowEngine',
+  'TeamLeaderRunner',
+  'runAllTasks',
+  'spawnManagedProcess',
+  'runProbeProcess',
+  'runSmokeScript',
+  'initializeGitFixture',
+  'createTestFindingLedgerStore',
+]);
+
+function listTestFiles(directory: string): string[] {
+  return readdirSync(directory).flatMap((entry) => {
+    const path = join(directory, entry);
+    return statSync(path).isDirectory()
+      ? listTestFiles(path)
+      : path.endsWith('.test.ts') ? [path] : [];
+  });
+}
+
+function hasIntegrationBoundary(filePath: string): boolean {
+  const sourceText = readFileSync(filePath, 'utf8');
+  const sourceFile = ts.createSourceFile(filePath, sourceText, ts.ScriptTarget.Latest, true);
+  const importedBoundaryNames = new Set<string>();
+  let importsChildProcess = false;
+  let mocksChildProcess = false;
+  let invokesBoundary = false;
+
+  for (const statement of sourceFile.statements) {
+    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) {
+      continue;
+    }
+    const importClause = statement.importClause;
+    if (statement.moduleSpecifier.text === 'node:child_process' && !importClause?.isTypeOnly) {
+      importsChildProcess = true;
+    }
+    const namedBindings = importClause?.namedBindings;
+    if (!namedBindings || !ts.isNamedImports(namedBindings)) {
+      continue;
+    }
+    for (const element of namedBindings.elements) {
+      const importedName = element.propertyName?.text ?? element.name.text;
+      if (!element.isTypeOnly && integrationBoundaryNames.has(importedName)) {
+        importedBoundaryNames.add(element.name.text);
+      }
+    }
+  }
+
+  function visit(node: ts.Node): void {
+    if (ts.isCallExpression(node)) {
+      const firstArgument = node.arguments[0];
+      if (
+        ts.isPropertyAccessExpression(node.expression)
+        && ts.isIdentifier(node.expression.expression)
+        && ['vi', 'jest'].includes(node.expression.expression.text)
+        && node.expression.name.text === 'mock'
+        && firstArgument !== undefined
+        && ts.isStringLiteral(firstArgument)
+        && firstArgument.text === 'node:child_process'
+      ) {
+        mocksChildProcess = true;
+      }
+      if (ts.isIdentifier(node.expression) && importedBoundaryNames.has(node.expression.text)) {
+        invokesBoundary = true;
+      }
+    }
+    if (
+      ts.isNewExpression(node)
+      && ts.isIdentifier(node.expression)
+      && importedBoundaryNames.has(node.expression.text)
+    ) {
+      invokesBoundary = true;
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(sourceFile);
+
+  return invokesBoundary || (importsChildProcess && !mocksChildProcess);
+}
+
+function hasIntegrationFileName(filePath: string): boolean {
+  const fileName = basename(filePath);
+  return fileName.startsWith('it-')
+    || fileName.endsWith('.integration.test.ts')
+    || fileName.endsWith('-integration.test.ts')
+    || fileName.endsWith('.regression.test.ts')
+    || fileName.endsWith('.performance.test.ts');
+}
 
 function releaseCommands(): string[] {
   const [gateCommands, notification] = manifest.scripts['check:release'].split('; code=$?;');
@@ -76,7 +168,6 @@ describe('release verification wiring', () => {
       test: 'npm run test:type-contracts && node scripts/run-npm-test.mjs',
       'test:unit': 'vitest run --config vitest.config.unit.parallel.ts',
       'test:unit:parallel': 'vitest run --config vitest.config.unit.parallel.ts',
-      'test:unit:heavy': 'vitest run --config vitest.config.unit.heavy.ts',
       'test:it': 'npm run test:it:parallel && npm run test:it:serial',
       'test:it:parallel': 'vitest run --config vitest.config.it.parallel.ts',
       'test:it:serial': 'node scripts/run-it-serial-groups.mjs',
@@ -93,7 +184,6 @@ describe('release verification wiring', () => {
       'npm run build',
       'npm run lint',
       'npm run test',
-      'npm run test:unit:heavy',
       'npm run test:it',
       'npm run test:prompt-evals',
       'npm run test:e2e:all',
@@ -108,7 +198,6 @@ describe('release verification wiring', () => {
       'run build',
       'run lint',
       'run test',
-      'run test:unit:heavy',
       'run test:it',
       'run test:prompt-evals',
       'run test:e2e:all',
@@ -123,8 +212,8 @@ describe('release verification wiring', () => {
       expectedCommands: ['run build', 'run lint'],
     },
     {
-      failingCommand: 'run test:unit:heavy',
-      expectedCommands: ['run build', 'run lint', 'run test', 'run test:unit:heavy'],
+      failingCommand: 'run test:it',
+      expectedCommands: ['run build', 'run lint', 'run test', 'run test:it'],
     },
     {
       failingCommand: 'run test:prompt-evals',
@@ -132,7 +221,6 @@ describe('release verification wiring', () => {
         'run build',
         'run lint',
         'run test',
-        'run test:unit:heavy',
         'run test:it',
         'run test:prompt-evals',
       ],
@@ -148,27 +236,44 @@ describe('release verification wiring', () => {
     expect(result.stdout).toContain('[takt] check:release failed (exit=23)');
   });
 
-  it('should keep fast unit, heavy unit, and integration classifications disjoint', () => {
-    const heavyUnit = new Set(heavyUnitTestFiles);
+  it('should keep fast unit and integration classifications disjoint', () => {
+    const parallelIntegration = new Set(parallelIntegrationTestFiles);
     const serialGit = new Set(serialGitTestFiles);
     const serialWorkflow = new Set(serialWorkflowTestFiles);
     const serialFiles = [...serialGit, ...serialWorkflow];
 
     expect(new Set(serialFiles).size).toBe(serialFiles.length);
+    expect(parallelIntegration.size).toBe(parallelIntegrationTestFiles.length);
     for (const testFile of serialFiles) {
       expect(existsSync(new URL(`../../${testFile}`, import.meta.url))).toBe(true);
+      expect(parallelIntegration.has(testFile)).toBe(false);
     }
-    for (const testFile of heavyUnit) {
+    for (const testFile of parallelIntegration) {
       expect(existsSync(new URL(`../../${testFile}`, import.meta.url))).toBe(true);
       expect(serialGit.has(testFile)).toBe(false);
       expect(serialWorkflow.has(testFile)).toBe(false);
     }
-    expect(heavyUnitConfig.test?.include).toEqual(heavyUnitTestFiles);
     expect(parallelIntegrationConfig.test?.exclude).toEqual(serialFiles);
     expect(unitConfig.test?.exclude).toEqual([
       ...parallelIntegrationTestGlobs,
+      ...parallelIntegrationTestFiles,
       ...serialFiles,
-      ...heavyUnitTestFiles,
     ]);
+  });
+
+  it('should keep process, Git, storage, and workflow-engine boundaries out of unit tests', () => {
+    const explicitlyClassified = new Set([
+      ...parallelIntegrationTestFiles,
+      ...serialGitTestFiles,
+      ...serialWorkflowTestFiles,
+    ]);
+    const testRoot = fileURLToPath(new URL('.', import.meta.url));
+    const unclassifiedBoundaryFiles = listTestFiles(testRoot)
+      .filter(hasIntegrationBoundary)
+      .map((filePath) => relative(process.cwd(), filePath).replaceAll('\\', '/'))
+      .filter((filePath) => !hasIntegrationFileName(filePath) && !explicitlyClassified.has(filePath))
+      .sort();
+
+    expect(unclassifiedBoundaryFiles).toEqual([]);
   });
 });

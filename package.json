@@ -48,7 +48,6 @@
     "test:type-contracts": "tsc --noEmit -p tsconfig.type-contracts.json",
     "test:unit": "vitest run --config vitest.config.unit.parallel.ts",
     "test:unit:parallel": "vitest run --config vitest.config.unit.parallel.ts",
-    "test:unit:heavy": "vitest run --config vitest.config.unit.heavy.ts",
     "test:it": "npm run test:it:parallel && npm run test:it:serial",
     "test:it:parallel": "vitest run --config vitest.config.it.parallel.ts",
     "test:it:serial": "node scripts/run-it-serial-groups.mjs",
@@ -72,7 +71,7 @@
     "test:e2e:opencode": "npm run test:e2e:provider:opencode",
     "test:e2e:cursor": "npm run test:e2e:provider:cursor",
     "lint": "eslint src/",
-    "check:release": "npm run build && npm run lint && npm run test && npm run test:unit:heavy && npm run test:it && npm run test:prompt-evals && npm run test:e2e:all; code=$?; if [ \"$code\" -eq 0 ]; then msg='check:release passed'; else msg=\"check:release failed (exit=$code)\"; fi; if command -v osascript >/dev/null 2>&1; then osascript -e \"display notification \\\"$msg\\\" with title \\\"takt\\\" subtitle \\\"Release Check\\\"\" >/dev/null 2>&1 || true; fi; echo \"[takt] $msg\"; exit $code",
+    "check:release": "npm run build && npm run lint && npm run test && npm run test:it && npm run test:prompt-evals && npm run test:e2e:all; code=$?; if [ \"$code\" -eq 0 ]; then msg='check:release passed'; else msg=\"check:release failed (exit=$code)\"; fi; if command -v osascript >/dev/null 2>&1; then osascript -e \"display notification \\\"$msg\\\" with title \\\"takt\\\" subtitle \\\"Release Check\\\"\" >/dev/null 2>&1 || true; fi; echo \"[takt] $msg\"; exit $code",
     "prepublishOnly": "npm run lint && npm run build",
     "canary:coder": "node scripts/canary-coder.mjs"
   },
