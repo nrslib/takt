@@ -112,3 +112,92 @@ describe('CT-CAP-5 capabilities and direct provider_options coexist on the same 
     expect(step.providerOptions?.claude?.allowedTools).toEqual(['Read', 'Bash']);
   });
 });
+
+describe('capabilities reach the engine provider-options layers', () => {
+  // 検出済みの後退: capabilities は step.providerOptions にだけ畳み込まれ、エンジンが実際に
+  // 読む layer 側に乗らず実行時 no-op になっていた。このテストは実行時経路そのものを固定する。
+  it('should expose the resolved capability options on the runtime layer merge', async () => {
+    const { mergeStepProviderOptionsLayers, resolveStepCapabilityProviderOptions } = await import(
+      '../infra/config/providerOptions.js'
+    );
+    writeCapabilitySet('runtime-check', 'claude:\n  allowed_tools:\n    - Read\nopencode:\n  network_access: true\n');
+    const config = normalize({}, [
+      { name: 'implement', instruction: '{task}', capabilities: 'provider-options/runtime-check.yaml' },
+    ]);
+    const step = config.steps[0] as AgentWorkflowStep;
+    expect(resolveStepCapabilityProviderOptions(step)).toEqual({
+      claude: { allowedTools: ['Read'] },
+      opencode: { networkAccess: true },
+    });
+    expect(mergeStepProviderOptionsLayers(step, { providerRouting: undefined, personaProviders: undefined }))
+      .toEqual({ claude: { allowedTools: ['Read'] }, opencode: { networkAccess: true } });
+  });
+
+  it('should let the workflow provider_options layer override the capabilities layer', async () => {
+    const { mergeStepProviderOptionsLayers } = await import('../infra/config/providerOptions.js');
+    writeCapabilitySet('base-tools', 'claude:\n  allowed_tools:\n    - Read\n');
+    const config = normalize(
+      { workflow_config: { provider_options: { claude: { allowed_tools: ['Read', 'Edit'] } } } },
+      [{ name: 'implement', instruction: '{task}', capabilities: 'provider-options/base-tools.yaml' }],
+    );
+    const step = config.steps[0] as AgentWorkflowStep;
+    expect(mergeStepProviderOptionsLayers(step, { providerRouting: undefined, personaProviders: undefined }))
+      .toEqual({ claude: { allowedTools: ['Read', 'Edit'] } });
+  });
+});
+
+describe('capabilities accepts a list of set names', () => {
+  it('should merge listed sets left to right onto the step', () => {
+    writeCapabilitySet('tools', 'claude:\n  allowed_tools:\n    - Read\n');
+    writeCapabilitySet('skills-grant', 'codex:\n  skills:\n    repo: true\n    user: true\n');
+    const config = normalize({}, [
+      {
+        name: 'implement',
+        instruction: '{task}',
+        capabilities: ['provider-options/tools.yaml', 'provider-options/skills-grant.yaml'],
+      },
+    ]);
+    const step = config.steps[0] as AgentWorkflowStep;
+    expect(step.providerOptions).toEqual({
+      claude: { allowedTools: ['Read'] },
+      codex: { skills: { repo: true, user: true } },
+    });
+  });
+
+  it('should let a later listed set win on a leaf both declare', () => {
+    writeCapabilitySet('narrow', 'claude:\n  allowed_tools:\n    - Read\n');
+    writeCapabilitySet('wide', 'claude:\n  allowed_tools:\n    - Read\n    - Edit\n');
+    const config = normalize({}, [
+      {
+        name: 'implement',
+        instruction: '{task}',
+        capabilities: ['provider-options/narrow.yaml', 'provider-options/wide.yaml'],
+      },
+    ]);
+    const step = config.steps[0] as AgentWorkflowStep;
+    expect(step.providerOptions?.claude?.allowedTools).toEqual(['Read', 'Edit']);
+  });
+
+  it('should fail fast when any listed set does not resolve', () => {
+    writeCapabilitySet('tools', 'claude:\n  allowed_tools:\n    - Read\n');
+    expect(() => normalize({}, [
+      {
+        name: 'implement',
+        instruction: '{task}',
+        capabilities: ['provider-options/tools.yaml', 'provider-options/ghost.yaml'],
+      },
+    ])).toThrow(/capabilities|not found/i);
+  });
+
+  it('should fail fast when any listed set carries a non-capability leaf', () => {
+    writeCapabilitySet('tools', 'claude:\n  allowed_tools:\n    - Read\n');
+    writeCapabilitySet('impure', 'claude:\n  effort: high\n');
+    expect(() => normalize({}, [
+      {
+        name: 'implement',
+        instruction: '{task}',
+        capabilities: ['provider-options/tools.yaml', 'provider-options/impure.yaml'],
+      },
+    ])).toThrow(/not a capability leaf/);
+  });
+});

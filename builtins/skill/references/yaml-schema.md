@@ -16,6 +16,11 @@ workflow_config:
     codex:
       network_access: true
 
+# 能力プリセット参照（任意）。全 step の既定。step / parallel サブステップにも書け、
+# step 側は既定を置換する。リストは左から右へマージし後勝ち。
+# 同梱プリセット: readonly / edit / enable-skills
+capabilities: readonly
+
 # セクションマップ（キー → ファイルパスの対応表）
 policies:                     # ポリシー定義（任意）
   coding: ../policies/coding.md
@@ -66,6 +71,7 @@ fragment root の `params` は必須の型付き parameter を宣言し、`uses`
   session: refresh             # セッション管理: continue / refresh / compact（任意）
   pass_previous_response: true # 前の出力を渡すか（デフォルト: true）
   allowed_tools: [...]         # 許可ツール一覧（任意、参考情報）
+  capabilities: readonly       # 能力プリセット参照（任意）。名前かリスト。workflow 既定を置換する
   output_contracts: [...]      # 出力契約設定（任意）
   quality_gates: [...]         # agent step 用の品質 gate（文字列指示 / command gate、任意）
   rules: [...]                 # 遷移ルール（必須）

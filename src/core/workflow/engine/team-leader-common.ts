@@ -50,6 +50,7 @@ export function createPartStep(step: WorkflowStep, part: PartDefinition): Workfl
       ? { directProviderOptions: step.directProviderOptions }
       : {}),
     ...('workflowProviderOptions' in step ? { workflowProviderOptions: step.workflowProviderOptions } : {}),
+    ...('capabilityProviderOptions' in step ? { capabilityProviderOptions: step.capabilityProviderOptions } : {}),
     mcpServers: step.mcpServers,
     provider: step.provider,
     providerSpecified: step.providerSpecified,

@@ -1032,7 +1032,7 @@ workflow_config:
 ```yaml
 workflow_config:
   provider_options:
-    extends: review-readonly
+    extends: readonly
 
 steps:
   - name: implement
@@ -1052,6 +1052,23 @@ claude:
 opencode:
   allowed_tools: [read, glob, grep, bash, websearch, webfetch]
 ```
+
+### `capabilities`
+
+`capabilities` names one or more provider-options presets that grant a step its abilities: tool allowlists, network access, sandbox, and skills. It is the reference-only form of `provider_options` — the value is a preset name (or a list of names), never an inline options block, and only capability leaves (`allowed_tools` / `network_access` / `sandbox` / `skills`) are accepted. A preset carrying a quality or machine leaf (`effort`, `base_url`, `guards`, ...) fails fast at load time; those belong in `runtime.yaml`.
+
+The key is available at the workflow top level (the default for every step), on a step, and on a parallel sub-step. A step's own `capabilities` replaces the workflow default rather than merging with it. A list merges its entries left to right, so a later name wins on a leaf both declare:
+
+```yaml
+capabilities: readonly
+
+steps:
+  - name: implement
+    capabilities: [edit, enable-skills]
+```
+
+Presets resolve exactly like `provider_options.extends` (project → global → builtins, with repertoire package scoping). The bundled presets are `readonly` (read, search, shell, and web lookup plus network access), `edit` (`readonly` plus file creation and editing), and `enable-skills` (Codex repo/user skills). An unresolved name fails fast. `system` and `workflow_call` steps reject `capabilities`.
+
 
 ### `workflow_config.runtime`
 

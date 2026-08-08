@@ -524,11 +524,22 @@ export function resolveStepWorkflowProviderOptions(step: WorkflowStep): StepProv
   return undefined;
 }
 
+export function resolveStepCapabilityProviderOptions(step: WorkflowStep): StepProviderOptions | undefined {
+  if ('capabilityProviderOptions' in step) {
+    return step.capabilityProviderOptions;
+  }
+  return undefined;
+}
+
 export function resolveStepProviderOptionsLayers(
   step: WorkflowStep,
   context: StepProviderOptionsLayerContext,
 ): ProviderOptionsLayer[] {
   const layers: ProviderOptionsLayer[] = [
+    {
+      source: 'capabilities',
+      options: resolveStepCapabilityProviderOptions(step),
+    },
     {
       source: 'workflow',
       options: resolveStepWorkflowProviderOptions(step),

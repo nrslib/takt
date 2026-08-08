@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { PartDefinition, WorkflowStep } from '../core/models/types.js';
 import { createPartStep, createTeamLeaderPlanningStep } from '../core/workflow/engine/team-leader-common.js';
+import {
+  resolveDirectStepProviderOptions,
+  resolveStepCapabilityProviderOptions,
+  resolveStepWorkflowProviderOptions,
+} from '../infra/config/providerOptions.js';
 import { InstructionBuilder } from '../core/workflow/instruction/InstructionBuilder.js';
 import { makeInstructionContext } from './test-helpers.js';
 
@@ -97,6 +102,34 @@ describe('createPartStep', () => {
 
     // Then
     expect(partStep.providerOptions).toEqual(step.providerOptions);
+  });
+
+  it('carries every provider-options field the runtime layer merge reads onto the part step', () => {
+    // resolveDirectStepProviderOptions / resolveStepWorkflowProviderOptions /
+    // resolveStepCapabilityProviderOptions は step 上のフィールド有無で読む対象を切り替える。
+    // part step がどれかを落とすと、親では効いていたオプションが part だけ黙って消える。
+    const step: WorkflowStep = {
+      name: 'implement',
+      persona: 'coder',
+      personaDisplayName: 'Coder',
+      instruction: 'do work',
+      passPreviousResponse: false,
+      providerOptions: { codex: { networkAccess: true } },
+      directProviderOptions: { codex: { networkAccess: true } },
+      workflowProviderOptions: { opencode: { networkAccess: true } },
+      capabilityProviderOptions: { claude: { allowedTools: ['Read'] } },
+      teamLeader: {
+        persona: 'leader',
+        maxConcurrency: 3,
+        timeoutMs: 900000,
+      },
+    };
+
+    const partStep = createPartStep(step, { id: 'part-1', title: 'API', instruction: 'implement api' });
+
+    expect(resolveDirectStepProviderOptions(partStep)).toEqual({ codex: { networkAccess: true } });
+    expect(resolveStepWorkflowProviderOptions(partStep)).toEqual({ opencode: { networkAccess: true } });
+    expect(resolveStepCapabilityProviderOptions(partStep)).toEqual({ claude: { allowedTools: ['Read'] } });
   });
 
   it('keeps part personaDisplayName aligned with the part persona for personaProviders lookup', () => {

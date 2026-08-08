@@ -116,6 +116,8 @@ const PROVIDER_MODEL_SOURCE_PRIORITY: Record<ProviderResolutionSource, number> =
   'auto.dynamic': 8,
   'auto.fallback': 8,
   workflow: 9,
+  // Listed only to satisfy the shared source union; a capability set never carries provider/model.
+  capabilities: 9,
   project: 10,
   global: 11,
   'runtime-v1': 11,

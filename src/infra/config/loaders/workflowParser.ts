@@ -43,7 +43,7 @@ import {
 } from './workflowNormalizationPolicies.js';
 import { normalizeLoopMonitors } from './workflowLoopMonitorNormalizer.js';
 import { normalizeProviderReference, normalizeStepFromRaw, type WorkflowLevelDefinitions } from './workflowStepNormalizer.js';
-import { resolveCapabilitySet } from './capabilitySetResolver.js';
+import { resolveCapabilitySets } from './capabilitySetResolver.js';
 import { compileFacetPool, type FacetPoolCompilationInput } from './facetPoolCompiler.js';
 import type { ResolvedFacetPool } from '../../../core/models/index.js';
 import {
@@ -483,11 +483,9 @@ export function normalizeWorkflowConfig(
     workflowDir,
     context,
   );
-  // Issue #1208: resolve the workflow-level capability default once, and expose the top-level
-  // `mcp_servers` definitions, so every step's `capabilities:` / `mcp:` reference resolves.
   const workflowDefinitions: WorkflowLevelDefinitions = {
     ...(parsed.capabilities !== undefined
-      ? { capabilityOptions: resolveCapabilitySet(parsed.capabilities, workflowDir, context) }
+      ? { capabilityOptions: resolveCapabilitySets(parsed.capabilities, workflowDir, context) }
       : {}),
     ...(parsed.mcp_servers !== undefined ? { mcpServers: parsed.mcp_servers } : {}),
   };

@@ -45,7 +45,9 @@ const WorkflowStepNameSchema = z.string().min(1);
 // Issue #1208 Stage 1 — additive capability/MCP reference surface.
 // `capabilities` names a capability-set (an existing provider-options named resource, formalized);
 // `mcp` names one or more MCP servers defined at the workflow top level (or, later, in runtime.yaml).
-const WorkflowCapabilitiesRefSchema = z.string().min(1).optional();
+const WorkflowCapabilitiesRefSchema = z
+  .union([z.string().min(1), z.array(z.string().min(1)).min(1)])
+  .optional();
 const WorkflowMcpRefListSchema = z.array(z.string().min(1)).min(1).optional();
 
 export const WorkflowParamReferenceRawSchema = z.object({

@@ -1019,7 +1019,7 @@ workflow_config:
 ```yaml
 workflow_config:
   provider_options:
-    extends: review-readonly
+    extends: readonly
 
 steps:
   - name: implement
@@ -1039,6 +1039,23 @@ claude:
 opencode:
   allowed_tools: [read, glob, grep, bash, websearch, webfetch]
 ```
+
+### `capabilities`
+
+`capabilities` は、step の能力（ツール許可リスト・network access・sandbox・skills）を与える provider-options プリセットを1つ以上名前で参照します。`provider_options` の参照専用形で、値はプリセット名（または名前のリスト）のみで、inline の options block は書けません。受理されるのは能力 leaf（`allowed_tools` / `network_access` / `sandbox` / `skills`）だけで、品質系・マシン固有系の leaf（`effort`、`base_url`、`guards` など）を含むプリセットはロード時に fail fast します。それらは `runtime.yaml` に置きます。
+
+このキーは workflow トップレベル（全 step の既定）、step、parallel サブステップの3箇所に書けます。step 自身の `capabilities` は workflow 既定とマージせず置換します。リストは左から右へマージされ、同じ leaf を宣言している場合は後の名前が勝ちます。
+
+```yaml
+capabilities: readonly
+
+steps:
+  - name: implement
+    capabilities: [edit, enable-skills]
+```
+
+プリセットの解決は `provider_options.extends` と同一です（project → global → builtins、repertoire package スコープ対応）。同梱プリセットは `readonly`（読み取り・検索・シェル・Web 検索 + network access）、`edit`（`readonly` + ファイルの作成・編集）、`enable-skills`（Codex の repo/user skills）です。未解決の名前は fail fast します。`system` / `workflow_call` step は `capabilities` を拒否します。
+
 
 ### `workflow_config.runtime`
 

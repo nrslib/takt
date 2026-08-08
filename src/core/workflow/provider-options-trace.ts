@@ -34,6 +34,7 @@ export type ProviderResolutionSource =
   | 'step'
   | 'workflow_call'
   | 'workflow'
+  | 'capabilities'
   | 'project'
   | 'global'
   | 'runtime-v1'

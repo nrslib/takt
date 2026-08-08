@@ -292,6 +292,7 @@ interface AgentWorkflowStepBase extends WorkflowStepBase {
   providerOptions?: StepProviderOptions;
   directProviderOptions?: StepProviderOptions;
   workflowProviderOptions?: StepProviderOptions;
+  capabilityProviderOptions?: StepProviderOptions;
   edit?: boolean;
   qualityGates?: QualityGate[];
   structuredOutput?: WorkflowStructuredOutput;

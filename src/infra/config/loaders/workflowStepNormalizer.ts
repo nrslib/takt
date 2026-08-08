@@ -37,7 +37,7 @@ import { resolveStructuredOutput } from './workflowStructuredOutputResolver.js';
 import { normalizeWorkflowEffects } from './workflowSystemStepNormalizer.js';
 import { parseAiConditionExpression } from '../../../core/models/workflow-condition-expression.js';
 import { resolveWorkflowProviderOptions } from './workflowProviderOptionsResolver.js';
-import { resolveCapabilitySet } from './capabilitySetResolver.js';
+import { resolveCapabilitySets } from './capabilitySetResolver.js';
 import { resolveWorkflowMcpReferences } from './workflowMcpReferenceResolver.js';
 import type { McpServerConfig } from '../../../core/models/index.js';
 import { isWorkflowParamReference } from './workflowCallableParamRef.js';
@@ -47,12 +47,7 @@ import { withWorkflowConfigErrorPath as withWorkflowStepErrorPath } from '../../
 type RawStep = z.output<typeof WorkflowStepRawSchema>;
 type RawProviderReference = RawStep['provider'];
 
-/**
- * Workflow-level inputs threaded down to every step so `capabilities:` / `mcp:` references resolve
- * (issue #1208 Stage 1). `capabilityOptions` is the workflow-level capability default (a step's own
- * `capabilities:` replaces it, not merges); `mcpServers` are the top-level definitions that a step
- * `mcp:` reference resolves against.
- */
+/** Workflow-level inputs threaded down to every step so `capabilities:` / `mcp:` references resolve. */
 export interface WorkflowLevelDefinitions {
   capabilityOptions?: StepProviderOptions;
   mcpServers?: Record<string, McpServerConfig>;
@@ -379,11 +374,10 @@ export function normalizeStepFromRaw(
     globalOverrides,
   ));
 
-  // Capability-set resolution (issue #1208): a step's own `capabilities:` REPLACES the workflow
-  // default (never merges); the purified capability options sit at the lowest layer so an explicit
-  // `provider_options` on the same step still wins.
+  // A step's own `capabilities:` replaces the workflow default rather than merging, and sits below
+  // `provider_options` so an explicit option on the same step still wins.
   const stepCapabilityOptions = step.capabilities !== undefined
-    ? normalizeStepField(stepPath, ['capabilities'], () => resolveCapabilitySet(step.capabilities!, workflowDir, context))
+    ? normalizeStepField(stepPath, ['capabilities'], () => resolveCapabilitySets(step.capabilities!, workflowDir, context))
     : undefined;
   const effectiveCapabilityOptions = stepCapabilityOptions ?? workflowDefinitions?.capabilityOptions;
   const directProviderOptions = mergeProviderOptions(inheritedDirectProviderOptions, normalizedProvider.providerOptions);
@@ -424,6 +418,7 @@ export function normalizeStepFromRaw(
     providerOptions,
     directProviderOptions,
     workflowProviderOptions: inheritedWorkflowProviderOptions,
+    capabilityProviderOptions: effectiveCapabilityOptions,
     edit: step.edit,
     allowGitCommit: step.allow_git_commit ?? inheritedAllowGitCommit ?? false,
     instruction: instruction || '{task}',
