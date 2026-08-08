@@ -129,7 +129,10 @@ export function ensureFindingManagerBudgetScope(input: {
   return { scopes: [...input.scopes, scope], scope };
 }
 
-function reservedCharge(call: FindingManagerProviderCall): FindingManagerTokenCharge {
+function reservedCharge(call: FindingManagerProviderCall): FindingManagerTokenCharge | undefined {
+  if (call.state === 'released') {
+    return undefined;
+  }
   if (call.state === 'settled') {
     return call.charge;
   }
@@ -148,7 +151,8 @@ export function deriveFindingManagerProviderCharge(input: {
 }): { callCount: number; inputTokens: number; outputTokens: number } {
   const charges = input.calls
     .filter((call) => call.budgetScopeId === input.budgetScopeId)
-    .map(reservedCharge);
+    .map(reservedCharge)
+    .filter((charge): charge is FindingManagerTokenCharge => charge !== undefined);
   return {
     callCount: charges.length,
     inputTokens: charges.reduce((total, charge) => total + charge.inputTokens, 0),
@@ -192,7 +196,7 @@ function assertReservationFits(input: {
     budgetScopeId: input.scope.budgetScopeId,
   });
   const scopeCallCount = input.calls.filter(
-    (call) => call.budgetScopeId === input.scope.budgetScopeId,
+    (call) => call.budgetScopeId === input.scope.budgetScopeId && call.state !== 'released',
   ).length;
   if (scopeCallCount + 1 > limits.maxCallsPerRound) {
     throw new FindingManagerProviderBudgetExhaustedError(
@@ -281,6 +285,7 @@ export function reserveFindingManagerProviderCall(input: {
     ownerAttemptKind: input.ownerAttemptKind,
     ownerAttemptId,
     attemptIds,
+    requestBytes: input.requestBytes,
     ...measurement,
     reservedInputTokens: measurement.measuredAdapterVisibleInputTokens,
     reservedOutputTokens: ensured.scope.limits.maxOutputTokensPerCall,
@@ -291,6 +296,28 @@ export function reserveFindingManagerProviderCall(input: {
     scopes: ensured.scopes,
     calls: [...input.calls, call],
     scope: ensured.scope,
+    call,
+  };
+}
+
+export function releaseFindingManagerProviderCall(input: {
+  calls: readonly FindingManagerProviderCall[];
+  providerCallId: string;
+  releasedAt: FindingObservation;
+}): { calls: FindingManagerProviderCall[]; call: FindingManagerProviderCall } {
+  const current = findExactCall(input.calls, input.providerCallId);
+  if (current.state !== 'reserved') {
+    throw new Error(`Provider call "${input.providerCallId}" cannot release from ${current.state}`);
+  }
+  const call: FindingManagerProviderCall = {
+    ...current,
+    state: 'released',
+    releasedAt: structuredClone(input.releasedAt),
+  };
+  return {
+    calls: input.calls.map((candidate) => (
+      candidate.providerCallId === call.providerCallId ? call : candidate
+    )),
     call,
   };
 }

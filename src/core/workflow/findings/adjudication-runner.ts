@@ -75,6 +75,19 @@ function requestBytes(input: {
   phase1Instruction: string;
   agentOptions: ReturnType<OptionsBuilder['buildAgentOptions']>;
 }): string {
+  const replayAgentOptions = Object.fromEntries(
+    Object.entries(input.agentOptions).filter(([key, value]) => (
+      value !== undefined
+      && ![
+        'abortSignal',
+        'onStream',
+        'onPermissionRequest',
+        'onAskUserQuestion',
+        'onDispatch',
+        'onPromptResolved',
+      ].includes(key)
+    )),
+  );
   return JSON.stringify({
     persona: input.step.persona,
     provider: input.step.provider ?? null,
@@ -92,12 +105,36 @@ function requestBytes(input: {
       resolvedProvider: input.agentOptions.resolvedProvider ?? null,
       resolvedProviderOptions: input.agentOptions.resolvedProviderOptions ?? null,
     },
+    replayAgentOptions,
   });
 }
 
+function replayRequest(requestBytes: string): {
+  phase1Instruction: string;
+  agentOptions: Record<string, unknown>;
+} {
+  const parsed: unknown = JSON.parse(requestBytes);
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error('Saved conflict adjudication request is not an object');
+  }
+  const record = parsed as Record<string, unknown>;
+  if (
+    typeof record.phase1Instruction !== 'string'
+    || typeof record.replayAgentOptions !== 'object'
+    || record.replayAgentOptions === null
+    || Array.isArray(record.replayAgentOptions)
+  ) {
+    throw new Error('Saved conflict adjudication request cannot be replayed');
+  }
+  return {
+    phase1Instruction: record.phase1Instruction,
+    agentOptions: record.replayAgentOptions as Record<string, unknown>,
+  };
+}
+
 // A crash after WAL reservation leaves a started attempt that the normal
-// unadjudicated predicate excludes; selecting the reserved call resumes it.
-function reservedConflictAttempt(
+// unadjudicated predicate excludes; selecting the pending call resumes or replays it.
+function pendingConflictAttempt(
   ledger: FindingLedger,
   conflictId: string,
 ): Extract<FindingLedger['conflictAdjudicationAttempts'][number], { stage: 'started' }> | undefined {
@@ -108,13 +145,13 @@ function reservedConflictAttempt(
       call.providerCallId === attempt.providerCallId
       && call.ownerAttemptId === attempt.attemptId
       && call.purpose === 'conflict_adjudication'
-      && call.state === 'reserved'
+      && (call.state === 'reserved' || call.state === 'dispatched')
     ))
   )) as Extract<FindingLedger['conflictAdjudicationAttempts'][number], { stage: 'started' }> | undefined;
 }
 
-function hasReservedConflictAttempt(ledger: FindingLedger, conflictId: string): boolean {
-  return reservedConflictAttempt(ledger, conflictId) !== undefined;
+function hasPendingConflictAttempt(ledger: FindingLedger, conflictId: string): boolean {
+  return pendingConflictAttempt(ledger, conflictId) !== undefined;
 }
 
 function hasGroundingRetryCandidate(
@@ -229,7 +266,7 @@ export function createFindingConflictAdjudicationRunner(deps: FindingConflictAdj
       const conflict = selectConflictForAdjudication(
         current,
         (candidate) => (
-          hasReservedConflictAttempt(current, candidate.id)
+          hasPendingConflictAttempt(current, candidate.id)
           || isActiveConflictUnadjudicated(current, candidate.id)
           || hasGroundingRetryCandidate(current, candidate.id)
         ),
@@ -238,9 +275,9 @@ export function createFindingConflictAdjudicationRunner(deps: FindingConflictAdj
         return noTarget(current, 'No conflict is eligible for adjudication.');
       }
       const snapshot = freshConflictAdjudicationSnapshot(current, conflict.id);
-      const existingReserved = reservedConflictAttempt(current, conflict.id);
+      const existingPending = pendingConflictAttempt(current, conflict.id);
       const grounding = groundingRequested
-        || existingReserved?.attemptOrdinal === 2
+        || existingPending?.attemptOrdinal === 2
         || hasGroundingRetryCandidate(current, conflict.id);
       const groundingInstruction = grounding
         ? (() => {
@@ -282,24 +319,49 @@ export function createFindingConflictAdjudicationRunner(deps: FindingConflictAdj
       if (!reserved.result.started) {
         return noTarget(reserved.ledger, `Conflict "${conflict.id}" became ineligible.`);
       }
+      const reservedAttemptId = reserved.result.attempt.providerCallId;
       lastOriginStep = reserved.result.originStep;
-      await deps.ledgerStore.updateLedger((ledger) => {
-        const dispatched = dispatchFindingManagerProviderCall({
-          calls: ledger.findingManagerProviderCalls,
-          providerCallId: reserved.result.started ? reserved.result.attempt.providerCallId : '',
-          requestBytes: exactRequestBytes,
-          adapterSupportsUtf8ByteUpperBound: true,
-          dispatchedAt: observation,
+      const replayed = reserved.result.providerCall.state === 'dispatched'
+        ? (() => {
+            const savedRequestBytes = reserved.result.providerCall.requestBytes;
+            if (savedRequestBytes === undefined) {
+              throw new Error(`Dispatched conflict provider call "${reserved.result.providerCall.providerCallId}" has no saved request`);
+            }
+            return replayRequest(savedRequestBytes);
+          })()
+        : undefined;
+      const executionInstruction = replayed?.phase1Instruction ?? instruction;
+      const executionAgentOptions = replayed === undefined
+        ? agentOptions
+        : {
+            ...agentOptions,
+            ...replayed.agentOptions,
+            abortSignal: agentOptions.abortSignal,
+            onStream: agentOptions.onStream,
+            onPermissionRequest: agentOptions.onPermissionRequest,
+            onAskUserQuestion: agentOptions.onAskUserQuestion,
+            onDispatch: agentOptions.onDispatch,
+            onPromptResolved: agentOptions.onPromptResolved,
+          };
+      if (reserved.result.providerCall.state === 'reserved') {
+        await deps.ledgerStore.updateLedger((ledger) => {
+          const dispatched = dispatchFindingManagerProviderCall({
+            calls: ledger.findingManagerProviderCalls,
+            providerCallId: reservedAttemptId,
+            requestBytes: exactRequestBytes,
+            adapterSupportsUtf8ByteUpperBound: true,
+            dispatchedAt: observation,
+          });
+          return {
+            ledger: {
+              ...ledger,
+              updatedAt: observation.timestamp,
+              findingManagerProviderCalls: dispatched.calls,
+            },
+            result: undefined,
+          };
         });
-        return {
-          ledger: {
-            ...ledger,
-            updatedAt: observation.timestamp,
-            findingManagerProviderCalls: dispatched.calls,
-          },
-          result: undefined,
-        };
-      });
+      }
       deps.emitEvent('findings:ledger', structuredClone(deps.ledgerStore.loadLedger()), {
         iteration: state.iteration,
         workflowName: deps.analyticsWorkflowName,
@@ -310,7 +372,7 @@ export function createFindingConflictAdjudicationRunner(deps: FindingConflictAdj
       try {
         agentResponse = deps.stepExecutor.normalizeStructuredOutput(
           step,
-          await executeAgent(step.persona, instruction, agentOptions),
+          await executeAgent(step.persona, executionInstruction, executionAgentOptions),
           runtime,
         );
       } catch (error) {
@@ -329,7 +391,7 @@ export function createFindingConflictAdjudicationRunner(deps: FindingConflictAdj
           code: 'provider_failed',
           observation,
         });
-        return { response: finish(state, step, agentResponse), instruction, providerInfo };
+        return { response: finish(state, step, agentResponse), instruction: executionInstruction, providerInfo };
       }
       const outputBytes = JSON.stringify(agentResponse.structuredOutput ?? {});
       if (responseUpperBound({ responseBytes: outputBytes }).tokens > reserved.result.providerCall.reservedOutputTokens) {
@@ -390,7 +452,7 @@ export function createFindingConflictAdjudicationRunner(deps: FindingConflictAdj
         matchedRuleIndex: DISPOSITION_RULE_INDEX[disposition],
         structuredOutput: proposal as unknown as Record<string, unknown>,
       });
-      return { response: finish(state, step, value), instruction, providerInfo };
+      return { response: finish(state, step, value), instruction: executionInstruction, providerInfo };
     };
     return runAttempt(false);
   };

@@ -212,8 +212,8 @@ export async function runRestatementSlotAttempt(input: {
  * evidence-search を1 anomaly 1回だけ挿入する。これは slot の budget-excluded
  * 取り込みとして通常 admission へ渡される。
  *
- * terminal は即座に返し、その時点までの publication は manager へ渡さない
- * （親ステップが terminal になるため取り込み自体が走らない）。
+ * terminal はその時点までの publication を manager へ渡してから返す
+ * （親ステップが terminal になっても、永続化済みの成功分は失わない）。
  */
 export async function runFindingRestatementSlot(
   input: FindingRestatementSlotInput,
@@ -250,11 +250,17 @@ export async function runFindingRestatementSlot(
         runtime: input.runtime,
       });
       if (outcome.kind === 'terminal') {
+        if (results.length > 0) {
+          await input.ingest(results, { deferClaimBearingTerminalDispositions: false });
+        }
         return {
           kind: 'terminal',
           step: ownerStep,
           response: outcome.response,
           providerInfo: outcome.providerInfo,
+          ...(outcome.terminalOperation === undefined
+            ? {}
+            : { terminalOperation: outcome.terminalOperation }),
         };
       }
       if (outcome.kind === 'published') {
@@ -296,6 +302,9 @@ export async function runFindingRestatementSlot(
         ...(ownerContext === undefined ? {} : { context: ownerContext }),
       });
       if (ownerOutcome?.kind === 'terminal') {
+        if (passResults.length > 0) {
+          await input.ingest(passResults, { deferClaimBearingTerminalDispositions: true });
+        }
         return ownerOutcome;
       }
       if (ownerOutcome !== undefined) {
@@ -317,6 +326,9 @@ export async function runFindingRestatementSlot(
         ...(escalationContext === undefined ? {} : { context: escalationContext }),
       });
       if (escalationOutcome?.kind === 'terminal') {
+        if (passResults.length > 0) {
+          await input.ingest(passResults, { deferClaimBearingTerminalDispositions: true });
+        }
         return escalationOutcome;
       }
       if (escalationOutcome !== undefined) {

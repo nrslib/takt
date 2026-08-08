@@ -427,9 +427,20 @@ describe('FC evidence-search fallback', () => {
         structuredOutput: { rawFindings: [] },
         timestamp: new Date('2026-08-09T00:00:01.000Z'),
       });
-      const makeExecutor = (structuredCaller: typeof normalizeFindingIntake) => new StepExecutor({
+      const makeExecutor = (
+        structuredCaller: typeof normalizeFindingIntake,
+        withNormalizerFallback = false,
+      ) => new StepExecutor({
         optionsBuilder: {
-          resolveStepProviderModel: () => ({ provider: 'mock', model: 'test-model' }),
+          resolveStepProviderModel: (step: AgentWorkflowStep) => ({
+            provider: 'mock',
+            model: step.name === ownerStep.name && withNormalizerFallback
+              ? 'owner-model'
+              : step.model ?? 'test-model',
+            ...(step.name === ownerStep.name && withNormalizerFallback
+              ? { escalation: { provider: 'mock' as const, model: 'fallback-model' } }
+              : {}),
+          }),
         } as never,
         getCwd: () => projectCwd,
         getProjectCwd: () => projectCwd,
@@ -508,16 +519,53 @@ describe('FC evidence-search fallback', () => {
           }),
         },
       };
-      const rateLimitedNormalizer = vi.fn().mockResolvedValue({
+      const rateLimitedNormalizer = vi.fn()
+        .mockResolvedValueOnce({
+          persona: 'finding-intake-normalizer',
+          status: 'rate_limited',
+          content: 'retry later',
+          timestamp: new Date(),
+        })
+        .mockResolvedValueOnce({
+          persona: 'finding-intake-normalizer',
+          status: 'done',
+          content: '',
+          structuredOutput: { rawFindings: [] },
+          timestamp: new Date(),
+        });
+      const transientInput = { ...input, request: transientRequest } as never;
+      const rateLimited = await makeExecutor(rateLimitedNormalizer, true)
+        .runFindingEvidenceSearch(transientInput);
+      expect(rateLimited.kind).toBe('published');
+      expect(rateLimitedNormalizer).toHaveBeenCalledTimes(2);
+
+      const exhaustedRateNormalizer = vi.fn().mockResolvedValue({
         persona: 'finding-intake-normalizer',
         status: 'rate_limited',
         content: 'retry later',
         timestamp: new Date(),
       });
-      const transientInput = { ...input, request: transientRequest } as never;
-      const rateLimited = await makeExecutor(rateLimitedNormalizer)
-        .runFindingEvidenceSearch(transientInput);
-      expect(rateLimited).toMatchObject({ kind: 'terminal', response: { status: 'rate_limited' } });
+      const exhausted = await makeExecutor(exhaustedRateNormalizer)
+        .runFindingEvidenceSearch({
+          ...transientInput,
+          request: {
+            ...transientRequest,
+            request: {
+              ...transientRequest.request,
+              anomalyId: 'RA-STEP-EXECUTOR-RATE-LIMITED-EXHAUSTED',
+              restatementRequestId: computeRestatementRequestId({
+                ...requestWithoutId,
+                anomalyId: 'RA-STEP-EXECUTOR-RATE-LIMITED-EXHAUSTED',
+              }),
+            },
+          },
+        });
+      expect(exhausted).toMatchObject({ kind: 'terminal', response: { status: 'error' } });
+      expect(exhausted).toMatchObject({
+        terminalOperation: {
+          origin: { stage: 'finding_intake_normalizer', reviewerStepName: ownerStep.name },
+        },
+      });
 
       const retriedNormalizer = vi.fn().mockResolvedValue({
         persona: 'finding-intake-normalizer',
@@ -526,8 +574,20 @@ describe('FC evidence-search fallback', () => {
         structuredOutput: { rawFindings: [] },
         timestamp: new Date(),
       });
-      const retried = await makeExecutor(retriedNormalizer)
-        .runFindingEvidenceSearch(transientInput);
+      const retried = await makeExecutor(retriedNormalizer).runFindingEvidenceSearch({
+        ...transientInput,
+        request: {
+          ...transientRequest,
+          request: {
+            ...transientRequest.request,
+            anomalyId: 'RA-STEP-EXECUTOR-RATE-LIMITED-EXHAUSTED',
+            restatementRequestId: computeRestatementRequestId({
+              ...requestWithoutId,
+              anomalyId: 'RA-STEP-EXECUTOR-RATE-LIMITED-EXHAUSTED',
+            }),
+          },
+        },
+      });
       expect(retried.kind).toBe('published');
       expect(retriedNormalizer).toHaveBeenCalledTimes(1);
     } finally {
@@ -634,5 +694,60 @@ describe('FC evidence-search fallback', () => {
 
     expect(runFindingEvidenceSearch).toHaveBeenCalledTimes(1);
     expect(ingest).toHaveBeenCalledTimes(1);
+  });
+
+  it('ingests earlier evidence-search publications before returning a later terminal result', async () => {
+    const ownerStep = {
+      name: 'architecture-review',
+      kind: 'agent',
+      persona: 'architecture-review',
+      outputContracts: [{ name: 'architecture-review.md', format: 'Owner report format.' }],
+    } as AgentWorkflowStep;
+    const firstResult = {
+      subStep: ownerStep,
+      publication: { publicationId: 'evidence-publication-1' },
+      reviewEvidence: 'none',
+      repairOrigin: 'evidence-search',
+    };
+    const runFindingEvidenceSearch = vi.fn()
+      .mockResolvedValueOnce({ kind: 'published', result: firstResult })
+      .mockResolvedValueOnce({
+        kind: 'terminal',
+        response: { persona: ownerStep.name, status: 'rate_limited', content: '', timestamp: new Date() },
+        providerInfo: { provider: 'mock', model: 'test-model' },
+        terminalOperation: {
+          origin: { kind: 'reviewer', stepName: ownerStep.name },
+          providerInfo: { provider: 'mock', model: 'test-model' },
+        },
+      });
+    const ingest = vi.fn().mockResolvedValue(undefined);
+    const outcome = await runFindingRestatementSlot({
+      ownerReviewerSteps: [ownerStep],
+      buildSlotContexts: () => new Map(),
+      buildEvidenceSearchRequests: () => [
+        { ownerReviewerStepName: ownerStep.name, request: {} as never, reportContent: 'first' },
+        { ownerReviewerStepName: ownerStep.name, request: {} as never, reportContent: 'second' },
+      ],
+      ingest,
+      reviewScopeSnapshotId: 'a'.repeat(64),
+      parentStepName: 'reviewers',
+      stepIteration: 1,
+      state: { iteration: 1 } as never,
+      task: 'Review',
+      maxSteps: 5,
+      optionsBuilder: {
+        resolveStepProviderModel: () => ({ provider: 'mock', model: 'test-model' }),
+      } as never,
+      stepExecutor: {
+        runFindingEvidenceSearch,
+        resumeFindingReviewPublication: vi.fn().mockResolvedValue(undefined),
+      } as never,
+      updatePersonaSession: vi.fn(),
+      presentationLimit: 1,
+    });
+
+    expect(outcome).toMatchObject({ kind: 'terminal', response: { status: 'rate_limited' } });
+    expect(ingest).toHaveBeenCalledTimes(1);
+    expect(ingest.mock.calls[0]![0]).toEqual([firstResult]);
   });
 });

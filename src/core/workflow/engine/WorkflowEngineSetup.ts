@@ -714,13 +714,42 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     const ledger = params.findingLedgerStore.loadLedger();
     const publications = listFindingReviewPublications(params.runPaths.reportsAbs);
     const presentationCounts = collectFindingReviewPresentationCounts(params.runPaths.reportsAbs);
+    const appliedRoundMarkers = [
+      ...(ledger.stopBudget?.roundMarkers ?? []),
+      ...(ledger.pendingManagerCommit?.completed.stopBudget?.roundMarkers ?? []),
+    ];
+    const isPublicationApplied = (publicationId: string): boolean => appliedRoundMarkers.some((marker) => (
+      marker.split('\0').includes(publicationId)
+    ));
+    const evidencePublications = publications.filter((publication) => (
+      publication.repairOrigin === 'evidence-search'
+      && publication.presentationContext.revision === 2
+    ));
     const attempted = new Set(
-      publications
-        .filter((publication) => publication.repairOrigin === 'evidence-search')
+      evidencePublications
+        .filter((publication) => isPublicationApplied(publication.publicationId))
         .flatMap((publication) => publication.presentationContext.presentedReviewerAnomalyIds),
     );
     const requests: FindingEvidenceSearchRequest[] = [];
     for (const ownerStep of input.ownerReviewerSteps) {
+      const pendingPublications = evidencePublications.filter((publication) => (
+        publication.reviewerStepName === ownerStep.name
+        && !isPublicationApplied(publication.publicationId)
+      ));
+      const pendingRecoveryAnomalyIds = new Set(
+        pendingPublications.flatMap((publication) => (
+          publication.presentationContext.restatementRequests.map((request) => request.anomalyId)
+        )),
+      );
+      for (const publication of pendingPublications) {
+        for (const request of publication.presentationContext.restatementRequests) {
+          requests.push({
+            ownerReviewerStepName: ownerStep.name,
+            request,
+            reportContent: publication.reportContent,
+          });
+        }
+      }
       const entries = (ledger.reviewerAnomalies ?? [])
         .filter(hasIntakeContract)
         .filter((anomaly) => (
@@ -728,6 +757,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
           && anomaly.intakeContract.presentationOwnerReviewer === ownerStep.name
           && !isConcludedReviewerAnomaly(anomaly)
           && !attempted.has(anomaly.id)
+          && !pendingRecoveryAnomalyIds.has(anomaly.id)
           && (presentationCounts.get(anomaly.id) ?? 0) >= anomaly.intakeContract.presentationLimit
         ))
         .map((anomaly) => ({

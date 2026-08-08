@@ -1545,6 +1545,7 @@ const FindingManagerProviderCallBaseSchema = z.object({
   ownerAttemptKind: FindingManagerAttemptKindSchema,
   ownerAttemptId: Sha256Schema,
   attemptIds: BinarySortedUniqueStringSetSchema,
+  requestBytes: z.string().optional(),
   requestDigest: Sha256Schema,
   requestByteLength: z.number().int().nonnegative(),
   measuredAdapterVisibleInputTokens: z.number().int().nonnegative(),
@@ -1556,6 +1557,10 @@ const FindingManagerProviderCallBaseSchema = z.object({
 
 export const FindingManagerProviderCallSchema = z.discriminatedUnion('state', [
   FindingManagerProviderCallBaseSchema.extend({ state: z.literal('reserved') }).strict(),
+  FindingManagerProviderCallBaseSchema.extend({
+    state: z.literal('released'),
+    releasedAt: FindingObservationSchema,
+  }).strict(),
   FindingManagerProviderCallBaseSchema.extend({
     state: z.literal('dispatched'),
     dispatchedAt: FindingObservationSchema,
@@ -2091,7 +2096,7 @@ export const ConflictAdjudicationAttemptSchema = z.discriminatedUnion('stage', [
     stage: z.literal('interrupted'),
     startedAt: FindingObservationSchema,
     interruptedAt: FindingObservationSchema,
-    reason: z.literal('provider_result_unknown'),
+    reason: z.enum(['provider_result_unknown', 'reservation_released']),
   }).strict(),
   ConflictAttemptBaseSchema.extend({
     stage: z.literal('proposed'),

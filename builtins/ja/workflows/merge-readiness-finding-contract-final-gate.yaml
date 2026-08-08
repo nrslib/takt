@@ -49,6 +49,10 @@ steps:
       # review-integrity 不変条件により完了できないため、修正ループは無駄弾になる。
       - condition: when(findings.reviewerAnomalies.claimBearingTerminalCount > 0)
         next: COMPLETE
+      - condition: when(findings.reviewerAnomalies.requiresGuaranteedPresentationCount > 0)
+        return: needs_review
+      - condition: when(findings.reviewerAnomalies.restatementReadyCount > 0)
+        return: needs_review
       - condition: when(findings.open.count == 0 && findings.reviewerAnomalies.count > 0 && findings.reviewerAnomalies.budgetExhausted == true)
         return: need_replan
       - condition: when(findings.open.count == 0 && findings.reviewerAnomalies.count > 0)

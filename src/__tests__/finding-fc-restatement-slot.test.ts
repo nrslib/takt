@@ -894,6 +894,7 @@ describe('FC restatement slot — per-pass request batches', () => {
     presentationOrdinal: number;
     reviewerStepName: string;
     reportName: string;
+    repairOrigin?: 'evidence-search';
   }): void {
     const requestWithoutId = {
       anomalyId: input.anomalyId,
@@ -928,6 +929,7 @@ describe('FC restatement slot — per-pass request batches', () => {
         },
         protocol: PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL,
         reportContent: `${input.reviewerStepName} restatement report.`,
+        ...(input.repairOrigin === undefined ? {} : { repairOrigin: input.repairOrigin }),
         rawFindings: [],
         presentationContext,
       }),
@@ -998,6 +1000,34 @@ describe('FC restatement slot — per-pass request batches', () => {
       expect(listFindingReviewPublications(reportDir)).toHaveLength(2);
       expect(slotRequests(services, 'owner')).toBeUndefined();
       expect(slotRequests(services, 'escalation')).toBeUndefined();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('recovers an evidence-search publication that was persisted before manager ingest', () => {
+    const { services, reportDir, anomalyId, cleanup } = makeServices(2);
+    try {
+      persistPresentation({
+        reportDir,
+        anomalyId,
+        presentationOrdinal: 2,
+        reviewerStepName: reviewerStep.name,
+        reportName: 'evidence-search-recovery',
+        repairOrigin: 'evidence-search',
+      });
+
+      const requests = services.optionsBuilder.buildFindingEvidenceSearchRequests({
+        ownerReviewerSteps: [reviewerStep as AgentWorkflowStep],
+        reviewScopeSnapshotId,
+      });
+
+      expect(requests).toHaveLength(1);
+      expect(requests[0]).toMatchObject({
+        ownerReviewerStepName: reviewerStep.name,
+        reportContent: expect.stringContaining('architecture-review restatement report.'),
+        request: expect.objectContaining({ anomalyId }),
+      });
     } finally {
       cleanup();
     }
@@ -1687,7 +1717,7 @@ describe('FC restatement slot — direct provider call wiring', () => {
     expect(ingest.mock.calls[0]![0]).toHaveLength(2);
   });
 
-  it('drops already-published results of the same pass when a later owner goes terminal', async () => {
+  it('ingests already-published results of the same pass when a later owner goes terminal', async () => {
     const owners = [makeOwnerStep('architecture-review'), makeOwnerStep('security-review')];
     const { input, stepExecutor, ingest } = createRunnerInput({ ownerReviewerSteps: owners });
     executeAgentMock
@@ -1702,12 +1732,12 @@ describe('FC restatement slot — direct provider call wiring', () => {
 
     const outcome = await runFindingRestatementSlot(input);
 
-    // 親ステップが terminal になる = manager の取り込み自体が走らないので、
-    // 先行 owner の publication も渡さない。次の機会に stored publication の
-    // resume で拾い直す。
+    // 親ステップが terminal になっても、先行 owner の永続化済み publication は
+    // 台帳へ到達させる。次の機会の resume はこの取り込みの代替ではない。
     expect(outcome).toMatchObject({ kind: 'terminal', response: { status: 'error' } });
     expect(stepExecutor.prepareFindingReviewPublication).toHaveBeenCalledTimes(1);
-    expect(ingest).not.toHaveBeenCalled();
+    expect(ingest).toHaveBeenCalledTimes(1);
+    expect(ingest.mock.calls[0]![0]).toHaveLength(1);
   });
 
   it('skips the escalation slot for owners whose profile declares no escalate', async () => {

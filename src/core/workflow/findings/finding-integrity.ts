@@ -458,6 +458,7 @@ function assertContractRegistryTransitions(
     identityOf: (call) => stateIdentity(call, [
       'state',
       'dispatchedAt',
+      'releasedAt',
       'settledAt',
       'resultKind',
       'failurePhase',
@@ -466,6 +467,7 @@ function assertContractRegistryTransitions(
     ]),
     canTransition: (from, to) => from === to
       || (from === 'reserved' && to === 'dispatched')
+      || (from === 'reserved' && to === 'released')
       || (from === 'dispatched' && to === 'settled'),
     initialState: 'reserved',
     label: 'Finding manager provider call',

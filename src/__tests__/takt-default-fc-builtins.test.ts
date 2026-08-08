@@ -1,5 +1,6 @@
 import {
   mkdirSync,
+  readdirSync,
   readFileSync,
   writeFileSync,
 } from 'node:fs';
@@ -7,6 +8,7 @@ import { dirname, join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type {
+  AgentResponse,
   FindingsRuleContext,
   WorkflowConfig,
   WorkflowState,
@@ -15,6 +17,7 @@ import type {
 import { RuleEvaluator } from '../core/workflow/evaluation/RuleEvaluator.js';
 import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDetectionExhaustedError.js';
 import { determineRuleTransition } from '../core/workflow/engine/transitions.js';
+import { hasFindingsReference } from '../core/models/workflow-rule-condition.js';
 import {
   invalidateAllResolvedConfigCache,
   invalidateGlobalConfigCache,
@@ -96,6 +99,15 @@ interface ExpectedRuleMatch {
 }
 
 const LANGUAGES = ['en', 'ja'] as const;
+const EXPECTED_FC_LADDER_WORKFLOWS = [
+  'finding-contract-boundary-review',
+  'finding-contract-local-review',
+  'merge-readiness-finding-contract-final-gate',
+  'peer-review-suite-finding-contract-base',
+  'review-fix-takt-default-high',
+  'takt-default-high',
+  'takt-default-team-high',
+] as const;
 const REVIEWERS = [
   ['arch-review', 'architecture-review-finding-contract'],
   ['security-review', 'security-review-finding-contract'],
@@ -176,6 +188,28 @@ function loadedStep(workflow: WorkflowConfig, name: string): WorkflowStep {
   return step;
 }
 
+function collectBuiltinFindingLadderSteps(language: Language): Array<{
+  workflow: string;
+  step: WorkflowStep;
+}> {
+  return readdirSync(builtinPath(language, 'workflows'))
+    .filter((file) => file.endsWith('.yaml'))
+    .flatMap((file) => {
+      const workflowName = file.replace(/\.yaml$/u, '');
+      const raw = readWorkflow(language, workflowName);
+      if (raw.finding_contract === undefined && raw.subworkflow?.requires_finding_contract !== true) {
+        return [];
+      }
+      const workflow = loadWorkflow(language, workflowName);
+      const step = workflow.steps.find((candidate) => (
+          candidate.rules !== undefined
+          && candidate.rules[0] !== undefined
+          && hasFindingsReference(candidate.rules[0].condition)
+        ));
+      return step === undefined ? [] : [{ workflow: workflowName, step }];
+    });
+}
+
 function resolveInstruction(language: Language, name: string): string {
   const projectDir = join(testRoot, `project-${language}`);
   const content = resolveRefToContent(name, undefined, projectDir, 'instructions', {
@@ -244,6 +278,22 @@ function workflowState(step: WorkflowStep, counts: FindingCounts): WorkflowState
     stepIterations: new Map(),
     status: 'running',
   };
+}
+
+function ladderWorkflowState(step: WorkflowStep, counts: FindingCounts): WorkflowState {
+  const state = workflowState(step, counts);
+  if (Array.isArray(step.parallel)) {
+    for (const subStep of step.parallel) {
+      state.stepOutputs.set(subStep.name, {
+        persona: subStep.personaDisplayName,
+        status: 'done',
+        content: '',
+        timestamp: new Date(0),
+        matchedRuleIndex: 0,
+      } satisfies AgentResponse);
+    }
+  }
+  return state;
 }
 
 function expectedRuleMatch(counts: FindingCounts): ExpectedRuleMatch {
@@ -667,6 +717,36 @@ describe('takt-default-fc builtins', () => {
       if (match === undefined) throw new Error(`Missing rule match: ${JSON.stringify(counts)}`);
       const transition = determineRuleTransition(reviewers, match.index);
       expect(transition, JSON.stringify(counts)).not.toEqual({ nextStep: 'COMPLETE' });
+    }
+  });
+
+  it.each(LANGUAGES)('%s all builtin FC control ladders are total over the finding state product', (language) => {
+    const states = enumerateFindingCountProduct();
+    const targets = collectBuiltinFindingLadderSteps(language);
+    expect(targets.map(({ workflow }) => workflow).sort()).toEqual([...EXPECTED_FC_LADDER_WORKFLOWS]);
+
+    for (const { workflow, step } of targets) {
+      const unmatched = states.filter((counts) => {
+        const selections = [
+          undefined,
+          { label: 'approved', method: 'auto_select' as const },
+        ];
+        for (const selection of selections) {
+          try {
+            if (new RuleEvaluator(step, { state: ladderWorkflowState(step, counts) })
+              .evaluate(selection) !== undefined) {
+              return false;
+            }
+          } catch (error) {
+            if (!(error instanceof RuleDetectionExhaustedError)) {
+              throw error;
+            }
+          }
+        }
+        return true;
+      });
+      expect(unmatched.slice(0, 3).map((counts) => JSON.stringify(counts)), workflow)
+        .toEqual([]);
     }
   });
 

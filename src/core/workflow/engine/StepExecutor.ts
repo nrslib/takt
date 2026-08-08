@@ -370,6 +370,7 @@ export type FindingEvidenceSearchRunResult =
       readonly kind: 'terminal';
       readonly response: AgentResponse;
       readonly providerInfo: StepProviderInfo;
+      readonly terminalOperation: NonNullable<StepRunResult['terminalOperation']>;
     }
   | { readonly kind: 'already-attempted' };
 
@@ -961,7 +962,7 @@ export class StepExecutor {
         initialMode: 'evidence-search',
         repairOrigin: 'evidence-search',
       });
-      if (normalized.terminal === true) {
+      if (normalized.terminal === true || normalized.response.status !== 'done') {
         releaseFindingEvidenceSearchAttempt({
           reportDir,
           identity,
@@ -971,6 +972,10 @@ export class StepExecutor {
           kind: 'terminal',
           response: normalized.response,
           providerInfo: normalized.providerInfo,
+          terminalOperation: {
+            origin: findingIntakeNormalizerOperationOrigin(input.ownerStep.name),
+            providerInfo: normalized.providerInfo,
+          },
         };
       }
       const publication = normalized.publication ?? createFindingReviewPublication({
@@ -1020,6 +1025,10 @@ export class StepExecutor {
           error: getErrorMessage(error),
         },
         providerInfo: primaryProviderInfo,
+        terminalOperation: {
+          origin: findingIntakeNormalizerOperationOrigin(input.ownerStep.name),
+          providerInfo: primaryProviderInfo,
+        },
       };
     }
   }
@@ -1319,10 +1328,15 @@ export class StepExecutor {
     };
 
     const initial = await execute('initial');
-    if (
-      StepExecutor.isTerminalNormalizerResponse(initial.response)
-      || (input.initialMode === 'evidence-search' && initial.response.status !== 'done')
-    ) {
+    if (input.initialMode === 'evidence-search' && initial.response.status !== 'done') {
+      return {
+        kind: 'failed',
+        reason: StepExecutor.describeNormalizerAttemptFailure(initial) ?? 'normalizer returned a non-done response',
+        engineFault: false,
+        result: initial,
+      };
+    }
+    if (StepExecutor.isTerminalNormalizerResponse(initial.response)) {
       return { kind: 'terminal', result: { ...initial, terminal: true } };
     }
     const initialFailure = StepExecutor.describeNormalizerAttemptFailure(initial);
@@ -1335,10 +1349,15 @@ export class StepExecutor {
     const extractionFidelityCorrection = initial.invalidDetail === undefined
       && initial.response.status === 'done';
     const corrected = await execute('correction', extractionFidelityCorrection);
-    if (
-      StepExecutor.isTerminalNormalizerResponse(corrected.response)
-      || (input.initialMode === 'evidence-search' && corrected.response.status !== 'done')
-    ) {
+    if (input.initialMode === 'evidence-search' && corrected.response.status !== 'done') {
+      return {
+        kind: 'failed',
+        reason: StepExecutor.describeNormalizerAttemptFailure(corrected) ?? 'normalizer returned a non-done response',
+        engineFault: false,
+        result: corrected,
+      };
+    }
+    if (StepExecutor.isTerminalNormalizerResponse(corrected.response)) {
       return { kind: 'terminal', result: { ...corrected, terminal: true } };
     }
     const correctedFailure = StepExecutor.describeNormalizerAttemptFailure(corrected);
