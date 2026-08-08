@@ -171,7 +171,12 @@ describe('finding-conflict-adjudication runner registry contract', () => {
       runner: createFindingConflictAdjudicationRunner({
         ledgerStore: store,
         optionsBuilder: {
-          buildAgentOptions: () => ({ provider: 'claude', cwd }),
+          buildAgentOptions: () => ({
+            provider: 'claude',
+            cwd,
+            providerOptions: { claude: {} },
+            resolvedProviderOptions: { claude: {} },
+          }),
           resolveStepProviderModel: () => ({ provider: 'claude', providerSource: 'workflow' }),
         },
         stepExecutor: {
@@ -521,6 +526,8 @@ describe('finding-conflict-adjudication runner registry contract', () => {
     const dispatched = ledgerStore.loadLedger().findingManagerProviderCalls[0]!;
     expect(dispatched.state).toBe('dispatched');
     expect(dispatched.requestBytes).toBeTypeOf('string');
+    expect(dispatched.requestBytes).not.toContain('providerOptions');
+    expect(dispatched.requestBytes).not.toContain('resolvedProviderOptions');
     const savedInstruction = JSON.parse(dispatched.requestBytes!) as { phase1Instruction: string };
 
     executeAgentMock.mockClear();

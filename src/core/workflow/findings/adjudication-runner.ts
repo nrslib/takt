@@ -1,4 +1,5 @@
 import { executeAgent } from '../../../agents/agent-usecases.js';
+import type { RunAgentOptions } from '../../../agents/types.js';
 import type { AgentResponse, WorkflowState, WorkflowStep } from '../../models/types.js';
 import type { ConflictAdjudicationProposal } from '../../models/finding-contract-types.js';
 import type { OptionsBuilder } from '../engine/OptionsBuilder.js';
@@ -75,17 +76,34 @@ function requestBytes(input: {
   phase1Instruction: string;
   agentOptions: ReturnType<OptionsBuilder['buildAgentOptions']>;
 }): string {
+  // WAL に保存するのは、同じ prompt を再実行するための実行形だけに限定する。
+  // providerOptions / MCP / 子プロセス環境には資格情報が入り得るため、除外リスト
+  // ではなく明示的な許可リストで境界を固定する。
+  const replayableKeys = [
+    'cwd',
+    'executionProfile',
+    'projectCwd',
+    'model',
+    'provider',
+    'resolvedModel',
+    'resolvedProvider',
+    'personaPath',
+    'workflowBundleResourceRoot',
+    'internalSystemPrompt',
+    'internalAgentIsolation',
+    'allowedTools',
+    'maxTurns',
+    'permissionMode',
+    'bypassPermissions',
+    'language',
+    'workflowMeta',
+    'outputSchema',
+  ] as const satisfies readonly (keyof RunAgentOptions)[];
   const replayAgentOptions = Object.fromEntries(
-    Object.entries(input.agentOptions).filter(([key, value]) => (
-      value !== undefined
-      && ![
-        'abortSignal',
-        'onStream',
-        'onPermissionRequest',
-        'onAskUserQuestion',
-        'onDispatch',
-        'onPromptResolved',
-      ].includes(key)
+    replayableKeys.flatMap((key) => (
+      input.agentOptions[key] === undefined
+        ? []
+        : [[key, input.agentOptions[key]]]
     )),
   );
   return JSON.stringify({
@@ -95,16 +113,6 @@ function requestBytes(input: {
     phase1Instruction: input.phase1Instruction,
     structuredOutput: input.step.structuredOutput,
     tools: input.agentOptions.allowedTools ?? [],
-    applicationTokenOptions: {
-      internalSystemPrompt: input.agentOptions.internalSystemPrompt ?? null,
-      maxTurns: input.agentOptions.maxTurns ?? null,
-      model: input.agentOptions.model ?? null,
-      provider: input.agentOptions.provider ?? null,
-      providerOptions: input.agentOptions.providerOptions ?? null,
-      resolvedModel: input.agentOptions.resolvedModel ?? null,
-      resolvedProvider: input.agentOptions.resolvedProvider ?? null,
-      resolvedProviderOptions: input.agentOptions.resolvedProviderOptions ?? null,
-    },
     replayAgentOptions,
   });
 }
@@ -276,6 +284,9 @@ export function createFindingConflictAdjudicationRunner(deps: FindingConflictAdj
       }
       const snapshot = freshConflictAdjudicationSnapshot(current, conflict.id);
       const existingPending = pendingConflictAttempt(current, conflict.id);
+      // 既存の started attempt の2回目だけでなく、grounding retry 候補も同じ
+      // snapshot windows を要求する。再開時に通常 prompt を再構成すると、最初の
+      // 予約時に保存した request と実行 prompt の意味がずれるためである。
       const grounding = groundingRequested
         || existingPending?.attemptOrdinal === 2
         || hasGroundingRetryCandidate(current, conflict.id);
@@ -321,6 +332,9 @@ export function createFindingConflictAdjudicationRunner(deps: FindingConflictAdj
       }
       const reservedAttemptId = reserved.result.attempt.providerCallId;
       lastOriginStep = reserved.result.originStep;
+      // dispatched まで WAL に残っている場合は、現在の guidance/options ではなく
+      // 予約済み request を再生する。これにより crash 後の再実行で digest-bound の
+      // request が変わらない。
       const replayed = reserved.result.providerCall.state === 'dispatched'
         ? (() => {
             const savedRequestBytes = reserved.result.providerCall.requestBytes;
