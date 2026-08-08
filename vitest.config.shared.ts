@@ -1,5 +1,7 @@
 import type { UserConfig } from 'vitest/config';
 import {
+  heavyParallelIntegrationTestFiles,
+  lightIntegrationTestFiles,
   parallelIntegrationTestFiles,
   parallelIntegrationTestGlobs,
   serialGitTestFiles,
@@ -11,6 +13,21 @@ export const srcTestInclude = ['src/__tests__/**/*.test.ts'];
 export const itTestGlobs = [
   ...parallelIntegrationTestGlobs,
   ...parallelIntegrationTestFiles,
+];
+
+export const lightItTestGlobs = [
+  ...lightIntegrationTestFiles,
+];
+
+export const heavyParallelItTestGlobs = [
+  ...parallelIntegrationTestGlobs,
+  ...heavyParallelIntegrationTestFiles,
+];
+
+export const heavyParallelItTestExcludes = [
+  ...lightIntegrationTestFiles,
+  ...serialGitTestFiles,
+  ...serialWorkflowTestFiles,
 ];
 
 // These files create real repositories and mutate branches/commits. Keep them

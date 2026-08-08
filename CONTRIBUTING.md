@@ -46,7 +46,7 @@ npm run test:prompt-evals
 npm run test:e2e:mock
 ```
 
-`npm test` is the fast unit gate: it runs four concurrent shards and reports that integration tests are excluded. Run `npm run test:it` when the changed area crosses process, Git, or workflow-engine boundaries. Integration, regression, and performance tests run through that gate; resource-heavy integration tests use its serial groups. The deterministic OpenCode prompt smoke suite runs through `npm run test:prompt-evals`. `npm test -- <test-file>` routes each specified source test to exactly one fast-unit, parallel integration, serial Git, or serial workflow runner. Selected runners execute concurrently and return the first failing child exit code. Release maintainers can run `npm run check:release` for the complete path: fast unit shards, integration tests, prompt smoke tests, and all provider E2E suites.
+`npm test` is the fast unit gate for the development loop. Run `npm run test:it` after implementation for light integration coverage of real filesystem, SQLite, bounded storage, and multi-component contracts. Pull-request CI runs `npm run test:it:heavy` for real child processes, Git, complete engines, integration/regression/performance suites, and measured resource-heavy serial groups. If you add or change a heavy IT, run that file yourself with `npm test -- <test-file>` before submitting; PR-wide execution must not be its first run. The deterministic OpenCode prompt smoke suite runs through `npm run test:prompt-evals`. Release maintainers can run `npm run check:release` for the complete path: fast unit shards, light IT, heavy IT, prompt smoke tests, and all provider E2E suites.
 
 See the [E2E testing overview](./docs/testing/e2e.md) for how to run the E2E suites and their prerequisites.
 

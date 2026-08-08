@@ -28,6 +28,10 @@ const { mockResolveAssistantConfigLayers } = vi.hoisted(() => ({
   })),
 }));
 
+const { mockUpdatePersonaSession } = vi.hoisted(() => ({
+  mockUpdatePersonaSession: vi.fn(),
+}));
+
 // --- Infrastructure mocks ---
 
 vi.mock('../infra/config/global/globalConfig.js', () => ({
@@ -41,6 +45,7 @@ vi.mock('../infra/config/index.js', () => ({
     codex: { skills: { repo: false, user: false } },
   })),
   takeSessionState: vi.fn(() => null),
+  updatePersonaSession: mockUpdatePersonaSession,
 }));
 
 vi.mock('../features/interactive/assistantConfig.js', () => ({
@@ -242,6 +247,32 @@ describe('initializeSession', () => {
 });
 
 describe('callAIWithRetry', () => {
+  it('does not persist a returned session when persistence is disabled', async () => {
+    const { provider } = createScenarioProvider([
+      { content: 'summary', sessionId: 'summary-session' },
+    ]);
+    const ctx: SessionContext = {
+      provider: provider as SessionContext['provider'],
+      providerType: 'mock' as SessionContext['providerType'],
+      model: undefined,
+      lang: 'en',
+      personaName: 'grill-me-interactive',
+      sessionId: undefined,
+    };
+
+    const { sessionId } = await callAIWithRetry(
+      'summarize',
+      'summary prompt',
+      [],
+      '/repo',
+      ctx,
+      { persistSession: false },
+    );
+
+    expect(sessionId).toBe('summary-session');
+    expect(mockUpdatePersonaSession).not.toHaveBeenCalled();
+  });
+
   it('passes session provider options to the initial call and stale-session retry', async () => {
     const { provider, capture } = createScenarioProvider([
       { content: 'stale', status: 'error' },
@@ -561,7 +592,7 @@ describe('/go command', () => {
     }
   });
 
-  it('should pass sessionId as undefined to summary AI even when conversation has an active session', async () => {
+  it('should isolate the summary AI without replacing the resumable conversation session', async () => {
     // Given: send message (AI responds with sessionId) → /go triggers summary
     setupRawStdin(toRawInputs(['hello', '/go']));
 
@@ -569,7 +600,7 @@ describe('/go command', () => {
       // Call 0: user message → AI responds and sets sessionId
       { content: 'AI response', sessionId: 'session-abc' },
       // Call 1: /go summary → should NOT inherit sessionId
-      { content: '## Fix broken title\nDetails here' },
+      { content: '## Fix broken title\nDetails here', sessionId: 'summary-session' },
     ]);
 
     const ctx: SessionContext = {
@@ -588,6 +619,13 @@ describe('/go command', () => {
     expect(capture.sessionIds[0]).toBeUndefined();
     // Then: summary call must NOT inherit the conversation session
     expect(capture.sessionIds[1]).toBeUndefined();
+    expect(mockUpdatePersonaSession).toHaveBeenCalledTimes(1);
+    expect(mockUpdatePersonaSession).toHaveBeenCalledWith(
+      '/test',
+      'interactive',
+      'session-abc',
+      'mock',
+    );
     expect(result.action).toBe('execute');
   });
 

@@ -35,6 +35,7 @@ import { loadTaskHistory } from './taskHistory.js';
 import { resolveIssueInput, resolvePrInput } from './routing-inputs.js';
 import { createPullRequestContext } from '../../core/workflow/pr-context.js';
 import { toLocalBranchRef } from '../../shared/utils/gitBranchValidation.js';
+import { getAssistantSessionPersona } from '../../features/interactive/assistantMode.js';
 
 export async function executeDefaultAction(task?: string): Promise<void> {
   const { cwd: resolvedCwd, pipelineMode } = getCliExecutionContext();
@@ -210,7 +211,9 @@ export async function executeDefaultAction(task?: string): Promise<void> {
   const assistantOverrideProvider = agentOverrides?.provider;
 
   switch (selectedMode) {
-    case 'assistant': {
+    case 'assistant':
+    case 'grill-me': {
+      const assistantMode = selectedMode;
       let selectedSessionId: string | undefined;
       if (opts.continue === true) {
         const { provider } = resolveAssistantProviderModel(resolvedCwd, {
@@ -221,7 +224,11 @@ export async function executeDefaultAction(task?: string): Promise<void> {
           throw new Error('Provider is not configured.');
         }
         const savedSessions = loadPersonaSessions(resolvedCwd, provider);
-        const savedSessionId = resolvePersonaSessionId(savedSessions, 'interactive', provider);
+        const savedSessionId = resolvePersonaSessionId(
+          savedSessions,
+          getAssistantSessionPersona(assistantMode),
+          provider,
+        );
         if (savedSessionId) {
           selectedSessionId = savedSessionId;
         } else {
@@ -233,6 +240,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
         ...interactiveOpts,
         ...(assistantOverrideProvider ? { provider: assistantOverrideProvider } : {}),
         ...(agentOverrides?.model ? { model: agentOverrides.model } : {}),
+        ...(assistantMode === 'grill-me' ? { assistantMode } : {}),
       };
       result = await interactiveMode(
         resolvedCwd,

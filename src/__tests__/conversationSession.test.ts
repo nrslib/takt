@@ -218,6 +218,7 @@ describe('conversation session application API', () => {
       }),
       expect.objectContaining({
         abortSignal: abortController.signal,
+        persistSession: false,
       }),
     );
     expect(result).toEqual({

@@ -113,7 +113,7 @@ export async function quietMode(
   const { result } = await callAIWithRetry(
     summaryPrompt, summaryPrompt, DEFAULT_INTERACTIVE_TOOLS, cwd,
     { ...ctx, sessionId: undefined },
-    { imageAttachments },
+    { imageAttachments, persistSession: false },
   );
 
   if (!result) {
