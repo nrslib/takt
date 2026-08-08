@@ -24,13 +24,17 @@ import { issueManagerLifecycleAuthority } from './manager-lifecycle-authority.js
 import { assembleAndApplyManagerLifecycleTransactions } from './manager-lifecycle-assembly.js';
 import { applyRejectedObservationAttachments } from './manager-provisional-settlement.js';
 import { attachFixpointState } from './fixpoint.js';
-import type { ReviewScopeProofSnapshot } from './snapshot.js';
+import {
+  captureConflictTargetContentDigests,
+  type ReviewScopeProofSnapshot,
+} from './snapshot.js';
 import {
   settleReviewerAnomaliesFromAuthorizedTerminalEvents,
 } from './reviewer-anomaly-settlement.js';
 import { computeWorkflowTaskDigest } from './task-scope-adjudication.js';
 import { finalizeInterpretationCaseProjection } from './interpretation-case-finalizer.js';
 import { refreshActiveConflictAdjudicationSnapshots } from './conflict-adjudication-model.js';
+import { conflictTargetPaths } from './conflict-target.js';
 import {
   landUnownedConflictRawClaims,
 } from './conflict-claim-landing.js';
@@ -130,10 +134,22 @@ export async function commitFindingManagerRound(params: {
         ledger: interpretationFinalized,
         observation: params.observation,
       });
+      const targetContentDigestsByConflict = new Map(
+        withConflictLandings.conflicts
+          .filter((conflict) => conflict.status === 'active')
+          .map((conflict) => [
+            conflict.id,
+            captureConflictTargetContentDigests(
+              params.reviewScopeSnapshot,
+              conflictTargetPaths({ ledger: withConflictLandings, conflictId: conflict.id }),
+            ),
+          ] as const),
+      );
       const withConflictSnapshots = refreshActiveConflictAdjudicationSnapshots({
         ledger: withConflictLandings,
         originStep: params.input.parentStep.name,
         createdAt: params.observation,
+        targetContentDigestsByConflict,
       });
       // 言い直し slot の各パスは「レビューラウンドの内側の差し戻し」であって
       // 新しいレビューラウンドではない。marker は適用済み集合へ必ず入れる

@@ -2014,6 +2014,11 @@ const ConflictClaimSubjectSchema = z.discriminatedUnion('role', [
   ConflictProductSubjectSchema,
   ConflictHoldingSubjectSchema,
 ]);
+const ConflictTargetContentDigestSchema = z.object({
+  path: nonEmptyString,
+  kind: nonEmptyString,
+  contentDigest: Sha256Schema.nullable(),
+}).strict();
 export const ConflictAdjudicationSnapshotSchema = z.object({
   conflictSnapshotId: Sha256Schema,
   conflictId: nonEmptyString,
@@ -2024,6 +2029,7 @@ export const ConflictAdjudicationSnapshotSchema = z.object({
   rawClaimLandingIds: BinarySortedUniqueStringSetSchema,
   priorSettlementIds: BinarySortedUniqueStringSetSchema,
   subjects: z.array(ConflictClaimSubjectSchema),
+  targetContentDigests: z.array(ConflictTargetContentDigestSchema).optional(),
   originStep: nonEmptyString.nullable(),
   createdAt: FindingObservationSchema,
 }).strict();

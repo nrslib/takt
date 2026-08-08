@@ -655,6 +655,15 @@ window は争点の finding の `target.paths` と file-quote evidence の行ア
 時も同じ attempt を再開し、重複呼び出しを発行しません。2回目も `verification_undetermined` なら
 そのラウンドを未確定として確定し、元のレビューステップへ戻ります。
 
+裁定 prompt の履歴参照は直近3件を本文として残し、それ以前は件数と digest に縮約します。
+これにより異議対応の関係を判断できる参照を残しながら、入力サイズを有界に保ちます。
+
+再裁定の snapshot identity には、争点の `target.paths` について review-scope capture が取得した
+現在内容の digest も含まれます。台帳の射影が同じでも fix によって対象コードの digest が変われば、
+新しい snapshot として再裁定できます。逆に対象コードも台帳射影も変わらない場合は再裁定しません。
+未確定かつコード無変化の反復では stop budget は進まないため、loop monitor または workflow の
+`max_steps` が有限停止を担います。
+
 conflict の ladder は `findings.rounds.budgetExhausted == false` の間、active conflict を fix / 再レビュー
 ループへ戻さなければなりません。最後の `when(findings.conflicts.count > 0)` → `ABORT` は予算枯渇後だけの
 出口であり、予算付きのループ rule より後ろに置きます。

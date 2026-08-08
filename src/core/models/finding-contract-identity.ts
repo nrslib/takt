@@ -369,6 +369,7 @@ export function computeConflictSnapshotId(
     coverageSnapshotDigest: snapshot.coverageSnapshotDigest,
     evidenceSnapshotDigest: snapshot.evidenceSnapshotDigest,
     subjects: binarySortedUnique(snapshot.subjects.map(({ subjectId }) => subjectId)),
+    targetContentDigests: binarySortedObjects(snapshot.targetContentDigests ?? []),
     originStep: snapshot.originStep,
   });
 }

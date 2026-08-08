@@ -15,6 +15,7 @@ import type {
   ConflictAdjudicationSnapshot,
   ConflictClaimSettlement,
   ConflictClaimSubject,
+  ConflictTargetContentDigest,
 } from '../../models/finding-contract-types.js';
 import type {
   FindingLedger,
@@ -24,6 +25,29 @@ import type {
 } from './types.js';
 import { captureFindingLifecycleHead } from './lifecycle-mutation.js';
 import { hasVerifiedOrdinaryLifecycleCoverage } from '../../models/finding-lifecycle-continuity.js';
+
+function existingTargetContentDigests(
+  ledger: FindingLedger,
+  conflictId: string,
+): ConflictTargetContentDigest[] {
+  const existing = [...ledger.conflictAdjudicationSnapshots]
+    .reverse()
+    .find((snapshot) => snapshot.conflictId === conflictId);
+  return structuredClone(existing?.targetContentDigests ?? []);
+}
+
+function resolveTargetContentDigests(input: {
+  ledger: FindingLedger;
+  conflictId: string;
+  targetContentDigests?: readonly ConflictTargetContentDigest[];
+}): ConflictTargetContentDigest[] {
+  if (input.targetContentDigests !== undefined) {
+    return structuredClone([...input.targetContentDigests]);
+  }
+  // Lifecycle-only refreshes cannot recapture the working tree. Preserve the
+  // last engine-captured target digest until a review-scope capture replaces it.
+  return existingTargetContentDigests(input.ledger, input.conflictId);
+}
 
 function findingClaimSnapshotDigest(finding: FindingLedgerEntry): string {
   return findingContentAddress('conflict-finding-claim-snapshot', {
@@ -186,6 +210,7 @@ export function buildConflictAdjudicationSnapshot(input: {
   conflictId: string;
   originStep: string | null;
   createdAt: FindingObservation;
+  targetContentDigests?: readonly ConflictTargetContentDigest[];
 }): ConflictAdjudicationSnapshot {
   const conflict = input.ledger.conflicts.find((candidate) => candidate.id === input.conflictId);
   if (conflict === undefined || conflict.status !== 'active') {
@@ -255,6 +280,7 @@ export function buildConflictAdjudicationSnapshot(input: {
       evidenceSetDigest: subject.evidenceSetDigest,
     })),
   });
+  const targetContentDigests = resolveTargetContentDigests(input);
   const withoutId = {
     conflictId: conflict.id,
     expectedConflictHead,
@@ -264,6 +290,7 @@ export function buildConflictAdjudicationSnapshot(input: {
     rawClaimLandingIds,
     priorSettlementIds,
     subjects,
+    targetContentDigests,
     originStep: input.originStep,
   };
   return {
@@ -278,10 +305,11 @@ export function appendFreshConflictAdjudicationSnapshot(input: {
   conflictId: string;
   originStep: string | null;
   createdAt: FindingObservation;
+  targetContentDigests?: readonly ConflictTargetContentDigest[];
 }): { ledger: FindingLedger; snapshot: ConflictAdjudicationSnapshot } {
   const current = input.ledger.conflictAdjudicationSnapshots.find((snapshot) => (
     snapshot.conflictId === input.conflictId
-    && snapshotMatchesCurrentProjection(input.ledger, snapshot)
+    && snapshotMatchesCurrentProjection(input.ledger, snapshot, input.targetContentDigests)
   ));
   if (current !== undefined) {
     return { ledger: input.ledger, snapshot: current };
@@ -305,12 +333,14 @@ export function appendFreshConflictAdjudicationSnapshot(input: {
 function snapshotMatchesCurrentProjection(
   ledger: FindingLedger,
   snapshot: ConflictAdjudicationSnapshot,
+  targetContentDigests?: readonly ConflictTargetContentDigest[],
 ): boolean {
   const rebuilt = buildConflictAdjudicationSnapshot({
     ledger,
     conflictId: snapshot.conflictId,
     originStep: snapshot.originStep,
     createdAt: snapshot.createdAt,
+    targetContentDigests: targetContentDigests ?? snapshot.targetContentDigests ?? [],
   });
   return rebuilt.conflictSnapshotId === snapshot.conflictSnapshotId;
 }
@@ -319,6 +349,7 @@ export function refreshActiveConflictAdjudicationSnapshots(input: {
   ledger: FindingLedger;
   originStep: string | null;
   createdAt: FindingObservation;
+  targetContentDigestsByConflict?: ReadonlyMap<string, readonly ConflictTargetContentDigest[]>;
 }): FindingLedger {
   let ledger = input.ledger;
   for (const conflict of ledger.conflicts) {
@@ -330,6 +361,7 @@ export function refreshActiveConflictAdjudicationSnapshots(input: {
       conflictId: conflict.id,
       originStep: input.originStep,
       createdAt: input.createdAt,
+      targetContentDigests: input.targetContentDigestsByConflict?.get(conflict.id),
     }).ledger;
   }
   return ledger;
@@ -346,12 +378,13 @@ export function freshConflictAdjudicationSnapshot(
   const snapshots = ledger.conflictAdjudicationSnapshots.filter((snapshot) => (
     snapshot.conflictId === conflictId
     && canonicalJson(snapshot.expectedConflictHead) === canonicalJson(head)
-    && snapshotMatchesCurrentProjection(ledger, snapshot)
+    && snapshotMatchesCurrentProjection(ledger, snapshot, snapshot.targetContentDigests ?? [])
   ));
-  if (snapshots.length !== 1) {
-    throw new Error(`Active conflict "${conflictId}" must have exactly one fresh adjudication snapshot`);
+  const current = snapshots.at(-1);
+  if (current === undefined) {
+    throw new Error(`Active conflict "${conflictId}" must have a fresh adjudication snapshot`);
   }
-  return snapshots[0]!;
+  return current;
 }
 
 export function computeConflictAdjudicationRequestDigest(
@@ -362,6 +395,7 @@ export function computeConflictAdjudicationRequestDigest(
     coverageSnapshotDigest: snapshot.coverageSnapshotDigest,
     evidenceSnapshotDigest: snapshot.evidenceSnapshotDigest,
     subjects: snapshot.subjects,
+    targetContentDigests: snapshot.targetContentDigests ?? [],
   });
 }
 
@@ -408,6 +442,9 @@ export function isActiveConflictUnadjudicated(
   if (conflict === undefined || conflict.status !== 'active') {
     return false;
   }
+  // An unchanged conflict does not consume stop-budget rounds. The loop
+  // monitor (or the workflow max_steps boundary) is the finite escape hatch
+  // for repeated unresolved, code-unchanged rounds.
   return !isConflictSnapshotAdjudicated(
     ledger,
     freshConflictAdjudicationSnapshot(ledger, conflictId),

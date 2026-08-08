@@ -520,6 +520,12 @@ export type TerminalAdjudicationSettlement =
 
 export type ConflictClaimRole = 'product_finding' | 'holding_provisional';
 
+export interface ConflictTargetContentDigest {
+  path: string;
+  kind: string;
+  contentDigest: string | null;
+}
+
 interface ConflictClaimSubjectBase {
   subjectId: string;
   conflictId: string;
@@ -556,6 +562,7 @@ export interface ConflictAdjudicationSnapshot {
   rawClaimLandingIds: string[];
   priorSettlementIds: string[];
   subjects: ConflictClaimSubject[];
+  targetContentDigests?: ConflictTargetContentDigest[];
   originStep: string | null;
   createdAt: FindingObservation;
 }

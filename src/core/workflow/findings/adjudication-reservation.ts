@@ -1,4 +1,5 @@
 import {
+  computeFindingManagerRequestDigest,
   computeConflictAttemptId,
 } from '../../models/finding-contract-identity.js';
 import type {
@@ -106,7 +107,8 @@ export async function reserveFindingConflictAdjudication(input: {
         };
       }
       if (call.state === 'reserved') {
-        if (started.conflictSnapshotId !== snapshot.conflictSnapshotId) {
+        const requestChanged = call.requestDigest !== computeFindingManagerRequestDigest(input.requestBytes);
+        if (started.conflictSnapshotId !== snapshot.conflictSnapshotId || requestChanged) {
           const released = releaseFindingManagerProviderCall({
             calls: fresh.findingManagerProviderCalls,
             providerCallId: call.providerCallId,

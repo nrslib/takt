@@ -4,6 +4,39 @@ import type {
   FindingProvisionalKind,
 } from './types.js';
 import { captureFindingLifecycleHead } from './lifecycle-mutation.js';
+import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
+
+export function conflictTargetPaths(input: {
+  ledger: FindingLedger;
+  conflictId: string;
+}): string[] {
+  const conflict = input.ledger.conflicts.find((candidate) => candidate.id === input.conflictId);
+  if (conflict === undefined) {
+    return [];
+  }
+  const findings = conflict.findingIds
+    .map((findingId) => input.ledger.findings.find((finding) => finding.id === findingId))
+    .filter((finding): finding is NonNullable<typeof finding> => finding !== undefined);
+  const rawFindingIds = [
+    ...new Set([
+      ...conflict.rawFindingIds,
+      ...findings.flatMap((finding) => finding.rawFindingIds),
+    ]),
+  ];
+  const rawFindings = rawFindingIds
+    .map((rawFindingId) => input.ledger.rawFindings.find((raw) => raw.rawFindingId === rawFindingId))
+    .filter((raw): raw is NonNullable<typeof raw> => raw !== undefined);
+  const paths = new Set<string>();
+  for (const target of [
+    ...findings.map((finding) => finding.target),
+    ...rawFindings.map((raw) => raw.target),
+  ]) {
+    if (target?.kind === 'code') {
+      target.paths.forEach((path) => paths.add(path));
+    }
+  }
+  return [...paths].sort(compareBinaryStrings);
+}
 
 export type ConflictTargetClassification =
   | {

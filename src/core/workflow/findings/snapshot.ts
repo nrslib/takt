@@ -8,6 +8,8 @@ import {
   type ReviewScopeBaseRange,
   type TaskReviewScope,
 } from '../review-scope.js';
+import type { ConflictTargetContentDigest } from '../../models/finding-contract-types.js';
+import { compareBinaryStrings } from '../../../shared/utils/binary-string-comparator.js';
 
 const HASH_CHUNK_BYTES = 1024 * 1024;
 const CAPTURE_ATTEMPTS = 3;
@@ -85,6 +87,22 @@ export interface ReviewScopeProofSnapshot extends ReviewScopeSnapshot {
   queryInventory: ReviewScopeQueryInventoryEntry[];
   /** Engine-captured tracked/untracked paths that define the current task review scope. */
   changedPaths?: string[];
+}
+
+export function captureConflictTargetContentDigests(
+  snapshot: ReviewScopeProofSnapshot,
+  targetPaths: readonly string[],
+): ConflictTargetContentDigest[] {
+  const inventoryByPath = new Map(snapshot.queryInventory.map((entry) => [entry.path, entry]));
+  const uniquePaths = [...new Set(targetPaths)].sort(compareBinaryStrings);
+  return uniquePaths.map((path) => {
+    const entry = inventoryByPath.get(path);
+    return {
+      path,
+      kind: entry?.kind ?? 'missing',
+      contentDigest: entry?.contentDigest ?? null,
+    };
+  });
 }
 
 interface FileSnapshot {

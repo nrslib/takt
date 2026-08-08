@@ -1058,7 +1058,14 @@ function collectConflictAndTerminalIdentityViolations(
         return sameValue(subject.expectedHead, subjectHead);
       })
     ));
-    if (freshSnapshots.length !== 1) {
+    const latestSnapshot = [...projection.conflictAdjudicationSnapshots]
+      .reverse()
+      .find((snapshot) => snapshot.conflictId === conflict.id);
+    const latestFreshSnapshot = freshSnapshots.at(-1);
+    if (
+      latestFreshSnapshot === undefined
+      || latestSnapshot?.conflictSnapshotId !== latestFreshSnapshot.conflictSnapshotId
+    ) {
       addViolation(
         violations,
         ['conflicts', index],

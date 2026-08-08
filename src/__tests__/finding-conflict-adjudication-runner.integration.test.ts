@@ -24,6 +24,11 @@ import { initializeGitFixture } from './helpers/git-fixture.js';
 import { authorizeFindingLedgerFixture } from './helpers/finding-lifecycle-fixture.js';
 import { verifiedFindingEvidenceFixture } from './helpers/finding-evidence.js';
 import { MANAGER_INTERPRETATION_LIMITS } from '../core/workflow/findings/raw-finding-limits.js';
+import {
+  captureConflictTargetContentDigests,
+  captureReviewScopeProofSnapshot,
+} from '../core/workflow/findings/snapshot.js';
+import { conflictTargetPaths } from '../core/workflow/findings/conflict-target.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({ executeAgent: vi.fn() }));
 const executeAgentMock = vi.mocked(executeAgent);
@@ -129,10 +134,19 @@ function seededLedger(cwd: string): FindingLedger {
     lifecycleReservations: [],
     lifecycleEvents: [],
   });
+  const landed = landUnownedConflictRawClaims({ ledger, observation: OBSERVATION });
+  const reviewScopeSnapshot = captureReviewScopeProofSnapshot(cwd);
   return refreshActiveConflictAdjudicationSnapshots({
-    ledger: landUnownedConflictRawClaims({ ledger, observation: OBSERVATION }),
+    ledger: landed,
     originStep: 'reviewers',
     createdAt: OBSERVATION,
+    targetContentDigestsByConflict: new Map([[
+      'C-FA2947446963',
+      captureConflictTargetContentDigests(
+        reviewScopeSnapshot,
+        conflictTargetPaths({ ledger: landed, conflictId: 'C-FA2947446963' }),
+      ),
+    ]]),
   });
 }
 
@@ -289,6 +303,45 @@ describe('finding-conflict-adjudication runner registry contract', () => {
     expect(ledgerStore.loadLedger().conflictAdjudicationAttempts).toHaveLength(2);
   });
 
+  it('re-adjudicates when a fix changes the conflict target code with the same ledger projection', async () => {
+    executeAgentMock.mockImplementation(async () => {
+      const snapshot = freshConflictAdjudicationSnapshot(
+        ledgerStore.loadLedger(),
+        'C-FA2947446963',
+      );
+      return {
+        persona: 'supervisor',
+        status: 'done' as const,
+        content: '{}',
+        structuredOutput: {
+          proposal: {
+            kind: 'undetermined' as const,
+            subjectIds: snapshot.subjects.map(({ subjectId }) => subjectId).sort(),
+            rationale: 'The target needs another adjudication after the fix.',
+          },
+        },
+        timestamp: new Date(),
+      };
+    });
+
+    const first = runner();
+    await first.runner.run(first.step, state());
+    const original = freshConflictAdjudicationSnapshot(ledgerStore.loadLedger(), 'C-FA2947446963');
+    const before = ledgerStore.loadLedger();
+    writeFileSync(join(cwd, 'src', 'a.ts'), 'export const value = false;\n');
+    expect(ledgerStore.loadLedger().conflicts).toEqual(before.conflicts);
+
+    executeAgentMock.mockClear();
+    const second = runner();
+    await second.runner.run(second.step, state());
+
+    const changed = freshConflictAdjudicationSnapshot(ledgerStore.loadLedger(), 'C-FA2947446963');
+    expect(changed.conflictSnapshotId).not.toBe(original.conflictSnapshotId);
+    expect(changed.targetContentDigests).not.toEqual(original.targetContentDigests);
+    expect(executeAgentMock).toHaveBeenCalledTimes(2);
+    expect(ledgerStore.loadLedger().conflictAdjudicationSnapshots).toHaveLength(2);
+  });
+
   it('re-adjudicates only after the conflict subject snapshot changes', async () => {
     executeAgentMock.mockImplementation(async () => {
       const snapshot = freshConflictAdjudicationSnapshot(
@@ -398,8 +451,9 @@ describe('finding-conflict-adjudication runner registry contract', () => {
       .toBeLessThanOrEqual(MANAGER_INTERPRETATION_LIMITS.maxInputBytesPerCall);
     expect(instruction).toContain('"snapshotFormat": "reference-v1"');
     expect(instruction).toContain('sourceRawFindingCount');
-    expect(instruction).not.toContain('sourceRawFindingIds');
-    expect(instruction).not.toContain('evidenceBindingIds');
+    expect(instruction).toContain('sourceRawFindingIds');
+    expect(instruction).toContain('0-raw-4093');
+    expect(instruction).toContain('evidenceBindingIds');
   });
 
   it('re-adjudicates once with digest-bound target windows and applies a verified result', async () => {
@@ -822,7 +876,7 @@ describe('finding-conflict-adjudication runner registry contract', () => {
     expect(executeAgentMock).toHaveBeenCalledOnce();
   });
 
-  it('rejects changed conflict guidance without dispatching or replacing the real reservation', async () => {
+  it('releases a reserved call when its request digest changes and rebuilds the reservation', async () => {
     const crashingStore = crashAfterAdjudicationReservation({
       store: ledgerStore,
       purpose: 'conflict_adjudication',
@@ -834,14 +888,32 @@ describe('finding-conflict-adjudication runner registry contract', () => {
     const reserved = ledgerStore.loadLedger().findingManagerProviderCalls[0]!;
     ledgerStore = reopenStore();
     const changedTarget = runner('Changed guidance.', ledgerStore);
+    executeAgentMock.mockImplementation(async () => {
+      const snapshot = freshConflictAdjudicationSnapshot(ledgerStore.loadLedger(), 'C-FA2947446963');
+      return {
+        persona: 'supervisor',
+        status: 'done' as const,
+        content: '{}',
+        structuredOutput: {
+          proposal: {
+            kind: 'undetermined' as const,
+            subjectIds: snapshot.subjects.map(({ subjectId }) => subjectId).sort(),
+            rationale: 'No authority.',
+          },
+        },
+        timestamp: new Date(),
+      };
+    });
 
-    await expect(changedTarget.runner.run(changedTarget.step, state()))
-      .rejects.toThrow(/request changed/i);
-    expect(executeAgentMock).not.toHaveBeenCalled();
+    await changedTarget.runner.run(changedTarget.step, state());
+    expect(executeAgentMock).toHaveBeenCalledOnce();
     expect(ledgerStore.loadLedger().findingManagerProviderCalls[0]).toMatchObject({
       providerCallId: reserved.providerCallId,
-      state: 'reserved',
+      state: 'released',
     });
+    expect(ledgerStore.loadLedger().findingManagerProviderCalls).toEqual(expect.arrayContaining([
+      expect.objectContaining({ state: 'settled', purpose: 'conflict_adjudication' }),
+    ]));
   });
 
   it('rejects additional conflict wire fields even when guidance requests them', async () => {

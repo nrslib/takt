@@ -228,11 +228,15 @@ interface ConflictAdjudicationSubjectReference {
   semanticClaimIdentityHash: string | null;
   claimSnapshotDigest: string;
   evidenceSetDigest: string;
+  sourceRawFindingIds: string[];
   sourceRawFindingCount: number;
   sourceRawFindingDigest: string;
   sourceRawPayloadDigest: string;
+  sourceRawPayloadDigests: string[];
+  evidenceBindingIds: string[];
   evidenceBindingCount: number;
   evidenceBindingDigest: string;
+  rawClaimLandingIds: string[];
   rawClaimLandingCount: number;
   rawClaimLandingDigest: string;
 }
@@ -245,12 +249,23 @@ interface ConflictAdjudicationSnapshotReference {
   claimUniverseDigest: string;
   coverageSnapshotDigest: string;
   evidenceSnapshotDigest: string;
+  targetContentDigests: ConflictAdjudicationSnapshot['targetContentDigests'];
+  rawClaimLandingIds: string[];
   rawClaimLandingCount: number;
   rawClaimLandingDigest: string;
+  priorSettlementIds: string[];
   priorSettlementCount: number;
   priorSettlementDigest: string;
   subjects: ConflictAdjudicationSubjectReference[];
   originStep: string | null;
+}
+
+const INLINE_HISTORY_LIMIT = 3;
+
+function inlineHistory(values: readonly string[]): string[] {
+  // Keep a small recent reference window for dispute relations; older history
+  // remains bounded by its count and digest instead of disappearing entirely.
+  return values.slice(-INLINE_HISTORY_LIMIT);
 }
 
 function digestStringSet(values: readonly string[]): string {
@@ -272,19 +287,23 @@ function subjectReference(
     semanticClaimIdentityHash: subject.semanticClaimIdentityHash,
     claimSnapshotDigest: subject.claimSnapshotDigest,
     evidenceSetDigest: subject.evidenceSetDigest,
+    sourceRawFindingIds: inlineHistory(subject.sourceRawFindingIds),
     sourceRawFindingCount: subject.sourceRawFindingIds.length,
     sourceRawFindingDigest: digestStringSet(subject.sourceRawFindingIds),
     sourceRawPayloadDigest: digestStringSet(subject.sourceRawPayloadDigests),
+    sourceRawPayloadDigests: inlineHistory(subject.sourceRawPayloadDigests),
+    evidenceBindingIds: inlineHistory(subject.evidenceBindingIds),
     evidenceBindingCount: subject.evidenceBindingIds.length,
     evidenceBindingDigest: digestStringSet(subject.evidenceBindingIds),
+    rawClaimLandingIds: inlineHistory(subject.rawClaimLandingIds),
     rawClaimLandingCount: subject.rawClaimLandingIds.length,
     rawClaimLandingDigest: digestStringSet(subject.rawClaimLandingIds),
   };
 }
 
 /**
- * Durable snapshot は台帳側の完全な入力を保持するが、provider には履歴配列を再送しない。
- * subjectId と digest/count の参照だけを渡し、検証時の完全な snapshot は engine が解決する。
+ * Durable snapshot は台帳側の完全な入力を保持するが、provider には履歴全体を再送しない。
+ * 直近の少数参照と、それ以前を表す count/digest を渡し、完全な snapshot は engine が解決する。
  */
 export function buildConflictAdjudicationSnapshotReference(
   snapshot: ConflictAdjudicationSnapshot,
@@ -297,8 +316,11 @@ export function buildConflictAdjudicationSnapshotReference(
     claimUniverseDigest: snapshot.claimUniverseDigest,
     coverageSnapshotDigest: snapshot.coverageSnapshotDigest,
     evidenceSnapshotDigest: snapshot.evidenceSnapshotDigest,
+    targetContentDigests: snapshot.targetContentDigests ?? [],
+    rawClaimLandingIds: inlineHistory(snapshot.rawClaimLandingIds),
     rawClaimLandingCount: snapshot.rawClaimLandingIds.length,
     rawClaimLandingDigest: digestStringSet(snapshot.rawClaimLandingIds),
+    priorSettlementIds: inlineHistory(snapshot.priorSettlementIds),
     priorSettlementCount: snapshot.priorSettlementIds.length,
     priorSettlementDigest: digestStringSet(snapshot.priorSettlementIds),
     subjects: snapshot.subjects.map(subjectReference),
@@ -317,7 +339,7 @@ export function renderConflictAdjudicationInstruction(
     'Adjudicate the durable finding conflict snapshot below. You are read-only.',
     'Return exactly one configured proposal. References must use subjectId values from the snapshot and authorityRefIds must identify exact engine-proof records.',
     'Use merge_holding only for a verified identical claim, promote_holding only with verification supporting the complete product projection, terminate_subject only with verification supporting no-issue or refutation, and undetermined otherwise.',
-    'The snapshot below is an engine-owned reference. Historical ID collections are represented by count and digest; do not infer omitted members.',
+    'The snapshot below is an engine-owned reference. Historical ID collections retain a recent reference window and use count/digest for older members; do not infer omitted members.',
     '',
     '## Durable conflict snapshot',
     renderFencedJsonBlock(buildConflictAdjudicationSnapshotReference(snapshot)),

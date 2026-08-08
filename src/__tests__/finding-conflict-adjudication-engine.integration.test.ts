@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runAgent } from '../agents/runner.js';
+import { runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
 import type { WorkflowConfig } from '../core/models/index.js';
 import {
   freshConflictAdjudicationSnapshot,
@@ -16,6 +17,11 @@ import { verifiedFindingEvidenceFixture } from './helpers/finding-evidence.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
 import { authorizeFindingLedgerFixture } from './helpers/finding-lifecycle-fixture.js';
 import { makeRule, makeStep } from './test-helpers.js';
+import {
+  captureConflictTargetContentDigests,
+  captureReviewScopeProofSnapshot,
+} from '../core/workflow/findings/snapshot.js';
+import { conflictTargetPaths } from '../core/workflow/findings/conflict-target.js';
 
 vi.mock('../agents/runner.js', () => ({ runAgent: vi.fn() }));
 
@@ -35,7 +41,7 @@ const OBSERVATION = {
 };
 
 function isAdjudicationSchema(outputSchema: unknown): boolean {
-  const schemaText = JSON.stringify(outputSchema);
+  const schemaText = JSON.stringify(outputSchema) ?? '';
   return schemaText.includes('terminate_subject') && schemaText.includes('undetermined');
 }
 
@@ -97,6 +103,33 @@ function workflowConfig(cwd: string): WorkflowConfig {
         ),
         makeRule('when(findings.conflicts.count > 0)', 'ABORT'),
         makeRule('approved', 'COMPLETE'),
+      ],
+    })],
+  };
+}
+
+function loopingWorkflowConfig(cwd: string): WorkflowConfig {
+  const config = workflowConfig(cwd);
+  return {
+    ...config,
+    initialStep: 'reviewers',
+    maxSteps: 10,
+    loopMonitors: [{
+      cycle: ['reviewers', 'finding-conflict-adjudication'],
+      threshold: 1,
+      judge: {
+        persona: 'supervisor',
+        rules: [makeRule('when(true)', 'ABORT')],
+      },
+    }],
+    steps: [makeStep({
+      name: 'reviewers',
+      persona: 'coding-reviewer',
+      instruction: 'Review the code.',
+      rules: [
+        // The fixture already contains one active unresolved conflict; keep
+        // returning to adjudication so the loop monitor owns the finite exit.
+        makeRule('approved', 'finding-conflict-adjudication'),
       ],
     })],
   };
@@ -164,10 +197,19 @@ async function seedLedger(cwd: string): Promise<FindingLedgerStore> {
     lifecycleReservations: [],
     lifecycleEvents: [],
   });
+  const landed = landUnownedConflictRawClaims({ ledger: authorized, observation: OBSERVATION });
+  const reviewScopeSnapshot = captureReviewScopeProofSnapshot(cwd);
   const ledger = refreshActiveConflictAdjudicationSnapshots({
-    ledger: landUnownedConflictRawClaims({ ledger: authorized, observation: OBSERVATION }),
+    ledger: landed,
     originStep: 'reviewers',
     createdAt: OBSERVATION,
+    targetContentDigestsByConflict: new Map([[
+      'C-FA2947446963',
+      captureConflictTargetContentDigests(
+        reviewScopeSnapshot,
+        conflictTargetPaths({ ledger: landed, conflictId: 'C-FA2947446963' }),
+      ),
+    ]]),
   });
   const store = createLedgerStore(cwd);
   await store.updateLedger(() => ({ ledger, result: undefined }));
@@ -240,6 +282,50 @@ describe('finding-conflict-adjudication engine registry contract', () => {
       }),
     ]));
     expect(ledger.conflictClaimSettlements).toEqual([]);
+  });
+
+  it('stops an unchanged unresolved conflict loop through the loop monitor', async () => {
+    const store = await seedLedger(cwd);
+    vi.mocked(runStatusJudgmentPhase).mockResolvedValue({ label: 'approved', method: 'auto_select' });
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      options?.onPromptResolved?.({ systemPrompt: 'system', userInstruction: instruction });
+      return isAdjudicationSchema(options?.outputSchema)
+        ? {
+            persona,
+            status: 'done',
+            content: '{}',
+            structuredOutput: {
+              proposal: {
+                kind: 'undetermined',
+                subjectIds: freshConflictAdjudicationSnapshot(
+                  store.loadLedger(),
+                  'C-FA2947446963',
+                ).subjects.map(({ subjectId }) => subjectId).sort(),
+                rationale: 'No verified terminal authority is available.',
+              },
+            },
+            timestamp: new Date('2026-06-13T02:00:00.000Z'),
+          }
+        : {
+            persona,
+            status: 'done',
+            content: 'approved',
+            timestamp: new Date('2026-06-13T00:00:01.000Z'),
+          };
+    });
+    const cycleDetected = vi.fn();
+    const engine = new WorkflowEngine(loopingWorkflowConfig(cwd), cwd, 'task', {
+      projectCwd: cwd,
+      provider: 'claude',
+      reportDirName: 'test-report-dir',
+    });
+    engine.on('step:cycle_detected', cycleDetected);
+
+    const result = await engine.run();
+
+    expect(result.status).toBe('aborted');
+    expect(cycleDetected).toHaveBeenCalledOnce();
+    expect(vi.mocked(runAgent).mock.calls.some(([persona]) => persona === 'supervisor')).toBe(true);
   });
 
   it('records legacy-shaped provider output as a diagnostic attempt without recreating adjudications', async () => {
