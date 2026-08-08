@@ -46,7 +46,7 @@ npm run test:prompt-evals
 npm run test:e2e:mock
 ```
 
-`npm test` は開発中に反復する fast unit gate です。実装完了時は `npm run test:it` を実行し、実 filesystem・SQLite・bounded storage・複数コンポーネント契約を扱う軽いITを確認してください。重いITはローカルでは1 workerで実行し、Pull Request の CI では独立 runner にシャード分割して、実 child process・Git・完全な engine・integration/regression/performance suite・計測済みの高負荷 serial group を確認します。ITを追加・変更した場合は `npm test -- src/__tests__/releaseVerificationWiring.test.ts` を単体実行してください。重いITの場合は、PRへ渡す前に `npm test -- <test-file>` でそのファイルも自分で実行し、PR全件実行を初回確認にしてはいけません。決定的なOpenCode prompt smoke suiteは `npm run test:prompt-evals` で実行します。リリース担当者は、fast unit 4シャード、軽いIT、重いIT、prompt smoke、全providerのE2E suiteを含む完全なrelease pathを `npm run check:release` で検証できます。
+`npm test` は開発中に反復する fast unit gate です。実装完了時は `npm run test:it` を実行し、実 filesystem・SQLite・bounded storage・複数コンポーネント契約を扱う軽いITを確認してください。重いITはローカルでは1 workerで実行し、Pull Request の CI では独立 runner にシャード分割して、実 child process・Git・完全な engine・integration/regression/performance suite・計測済みの高負荷 serial group を確認します。ITを追加・変更した場合は `npm test -- src/__tests__/releaseVerificationWiring.test.ts` を単体実行してください。重いITの場合は、PRへ渡す前に `npm test -- <test-file>` でそのファイルも自分で実行し、PR全件実行を初回確認にしてはいけません。決定的なOpenCode prompt smoke suiteは `npm run test:prompt-evals` で実行します。リリース担当者は、fast unit 4シャード、軽いIT、重いIT、全providerのE2E suiteを含む完全なrelease pathを `npm run check:release` で検証できます。
 
 E2E テストの実行方法と前提条件は [E2E テスト概要](./testing/e2e.md) を参照してください。
 

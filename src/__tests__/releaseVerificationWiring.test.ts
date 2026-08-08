@@ -243,7 +243,6 @@ describe('release verification wiring', () => {
       'npm run lint',
       'npm run test',
       'npm run test:it:all',
-      'npm run test:prompt-evals',
       'npm run test:e2e:all',
     ]);
     expect(new Set(commands).size).toBe(commands.length);
@@ -294,7 +293,6 @@ describe('release verification wiring', () => {
       'run lint',
       'run test',
       'run test:it:all',
-      'run test:prompt-evals',
       'run test:e2e:all',
     ]);
     expect(result.status).toBe(0);
@@ -311,13 +309,13 @@ describe('release verification wiring', () => {
       expectedCommands: ['run build', 'run lint', 'run test', 'run test:it:all'],
     },
     {
-      failingCommand: 'run test:prompt-evals',
+      failingCommand: 'run test:e2e:all',
       expectedCommands: [
         'run build',
         'run lint',
         'run test',
         'run test:it:all',
-        'run test:prompt-evals',
+        'run test:e2e:all',
       ],
     },
   ])('should stop at a failing $failingCommand release gate and preserve its exit code', ({

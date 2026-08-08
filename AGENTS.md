@@ -19,7 +19,7 @@
 - `npm run test:it:heavy`: run all child-process, Git, full-engine, and measured resource-heavy integration tests locally with one worker. Pull-request CI splits it across isolated runners; do not run it routinely during development.
 - `npm test -- <test-file>`: run a classified test through its unit, light-IT, or heavy-IT runner. When adding or changing an IT, also run `npm test -- src/__tests__/releaseVerificationWiring.test.ts` by itself. Always run an added or changed heavy IT before handoff; the PR-wide heavy gate is not its first execution.
 - `npm run test:e2e:mock`: run E2E tests against the mock provider.
-- `npm run check:release`: run the full release verification path: build, lint, fast unit (four shards), light IT, heavy IT, prompt-eval, and all E2E suites.
+- `npm run check:release`: run the full release verification path: build, lint, fast unit (four shards), light IT, heavy IT, and all E2E suites.
 
 ## Coding Style & Naming Conventions
 
