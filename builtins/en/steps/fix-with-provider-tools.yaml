@@ -14,17 +14,7 @@ policy:
   - $param: fix_policy
 knowledge:
   $param: fix_knowledge
-provider_options:
-  claude:
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - Edit
-      - Write
-      - Bash
-      - WebSearch
-      - WebFetch
+capabilities: edit
 required_permission_mode: edit
 pass_previous_response: false
 instruction: fix

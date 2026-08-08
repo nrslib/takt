@@ -2,13 +2,12 @@ name: boundary-reviewers
 tags: [review, boundary-review]
 parallel:
   - name: contract-wiring-review
+    capabilities: readonly
     session_key: contract-wiring-review
     tags: [review, boundary-review]
     edit: false
     session: compact
     pass_previous_response: false
-    provider_options:
-      extends: review-readonly
     persona: contract-lifecycle-reviewer
     policy: review
     knowledge: contract-lifecycle
@@ -18,13 +17,12 @@ parallel:
         - name: contract-wiring-review.md
           format: contract-wiring-review-finding-contract
   - name: resource-ownership-review
+    capabilities: readonly
     session_key: resource-ownership-review
     tags: [review, boundary-review]
     edit: false
     session: compact
     pass_previous_response: false
-    provider_options:
-      extends: review-readonly
     persona: resource-ownership-reviewer
     policy: review
     knowledge: resource-ownership
@@ -34,13 +32,12 @@ parallel:
         - name: resource-ownership-review.md
           format: resource-ownership-review-finding-contract
   - name: failure-boundary-review
+    capabilities: readonly
     session_key: failure-boundary-review
     tags: [review, boundary-review]
     edit: false
     session: compact
     pass_previous_response: false
-    provider_options:
-      extends: review-readonly
     persona: failure-boundary-reviewer
     policy: review
     knowledge: failure-boundary

@@ -26,12 +26,7 @@ subworkflow:
       type: facet_ref
       facet_kind: persona
       default: dual-supervisor
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
+capabilities: readonly
 initial_step: merge-readiness-review
 steps:
   - name: merge-readiness-review
@@ -46,8 +41,6 @@ steps:
       - $param: merge_readiness_policy
     knowledge:
       $param: merge_readiness_knowledge
-    provider_options:
-      extends: review-readonly
     pass_previous_response: false
     instruction: review-merge-readiness
     output_contracts:
@@ -73,8 +66,6 @@ steps:
       - review
     knowledge:
       $param: supervise_knowledge
-    provider_options:
-      extends: review-readonly
     pass_previous_response: false
     instruction: supervise
     output_contracts:

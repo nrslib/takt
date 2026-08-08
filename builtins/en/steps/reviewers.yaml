@@ -2,11 +2,10 @@ name: reviewers
 tags: [review]
 parallel:
   - name: arch-review
+    capabilities: readonly
     tags: [review]
     edit: false
     session: compact
-    provider_options:
-      extends: review-readonly
     persona: architecture-reviewer
     policy:
       - contract-change
@@ -18,11 +17,10 @@ parallel:
         - name: architect-review.md
           format: architecture-review-finding-contract
   - name: ai-antipattern-review
+    capabilities: readonly
     tags: [review]
     edit: false
     session: compact
-    provider_options:
-      extends: review-readonly
     persona: ai-antipattern-reviewer
     policy:
       - contract-change
@@ -34,11 +32,10 @@ parallel:
         - name: ai-antipattern-review.md
           format: ai-antipattern-review-finding-contract
   - name: coding-review
+    capabilities: readonly
     tags: [review]
     edit: false
     session: compact
-    provider_options:
-      extends: review-readonly
     persona: coding-reviewer
     policy:
       - contract-change
@@ -50,11 +47,10 @@ parallel:
         - name: coding-review.md
           format: coding-review-finding-contract
   - name: implementation-semantics-review
+    capabilities: readonly
     tags: [review]
     edit: false
     session: compact
-    provider_options:
-      extends: review-readonly
     persona: implementation-semantics-reviewer
     policy:
       - contract-change
@@ -66,11 +62,10 @@ parallel:
         - name: implementation-semantics-review.md
           format: implementation-semantics-review-finding-contract
   - name: contract-lifecycle-review
+    capabilities: readonly
     tags: [review]
     edit: false
     session: compact
-    provider_options:
-      extends: review-readonly
     persona: contract-lifecycle-reviewer
     policy:
       - contract-change
@@ -82,11 +77,10 @@ parallel:
         - name: contract-lifecycle-review.md
           format: contract-lifecycle-review-finding-contract
   - name: robustness-review
+    capabilities: readonly
     tags: [review]
     edit: false
     session: compact
-    provider_options:
-      extends: review-readonly
     persona: robustness-reviewer
     policy:
       - contract-change

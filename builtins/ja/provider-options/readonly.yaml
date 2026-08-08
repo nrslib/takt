@@ -1,11 +1,9 @@
-# Everything `readonly` grants, plus creating and editing files.
+# リポジトリを変更せずに調べる。読み取り・検索・シェル・Web 検索。
 claude:
   allowed_tools:
     - Read
     - Glob
     - Grep
-    - Edit
-    - Write
     - Bash
     - WebSearch
     - WebFetch
@@ -14,10 +12,7 @@ opencode:
     - read
     - glob
     - grep
-    - edit
-    - write
     - bash
-    - todowrite
     - websearch
     - webfetch
   network_access: true

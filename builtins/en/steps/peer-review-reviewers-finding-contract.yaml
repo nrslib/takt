@@ -10,6 +10,7 @@ tags:
   - review
 parallel:
   - name: arch-review
+    capabilities: readonly
     tags:
       - review
     edit: false
@@ -21,14 +22,13 @@ parallel:
     knowledge:
       - architecture
       - $param: review_knowledge_additions
-    provider_options:
-      extends: review-readonly
     instruction: review-arch
     output_contracts:
       report:
         - name: architect-review.md
           format: architecture-review-finding-contract
   - name: security-review
+    capabilities: readonly
     tags:
       - review
     edit: false
@@ -41,14 +41,13 @@ parallel:
       - security
       - takt
       - $param: review_knowledge_additions
-    provider_options:
-      extends: review-readonly
     instruction: review-security
     output_contracts:
       report:
         - name: security-review.md
           format: security-review-finding-contract
   - name: testing-review
+    capabilities: readonly
     tags:
       - review
     edit: false
@@ -63,14 +62,13 @@ parallel:
       - e2e-testing
       - takt
       - $param: review_knowledge_additions
-    provider_options:
-      extends: review-readonly
     instruction: review-test
     output_contracts:
       report:
         - name: testing-review.md
           format: testing-review-finding-contract
   - name: coding-review
+    capabilities: readonly
     tags:
       - review
     edit: false
@@ -84,14 +82,13 @@ parallel:
       - takt
       - $param: review_knowledge_additions
     pass_previous_response: false
-    provider_options:
-      extends: review-readonly
     instruction: review-coding
     output_contracts:
       report:
         - name: coding-review.md
           format: coding-review-finding-contract
   - name: ai-antipattern-review-2nd
+    capabilities: readonly
     tags:
       - review
     edit: false
@@ -104,8 +101,6 @@ parallel:
     knowledge:
       - takt
       - $param: review_knowledge_additions
-    provider_options:
-      extends: review-readonly
     instruction: ai-antipattern-review
     output_contracts:
       report:

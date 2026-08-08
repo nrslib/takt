@@ -6,10 +6,5 @@ persona: architecture-reviewer
 policy:
   - contract-change
   - review
-provider_options:
-  claude:
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
+capabilities: readonly
 instruction: arbitrate

@@ -1,0 +1,5 @@
+# Let the provider load the repository's and the user's own skills.
+codex:
+  skills:
+    repo: true
+    user: true

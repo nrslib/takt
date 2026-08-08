@@ -1,14 +1,5 @@
 name: simple
 description: A simple development workflow that trusts a capable model's judgment. The model selects relevant available skills and performs test-first implementation, review, fixes, and final supervision with minimal orchestration.
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-      skills:
-        repo: true
-        user: true
-    opencode:
-      network_access: true
 max_steps: 30
 initial_step: develop
 steps:

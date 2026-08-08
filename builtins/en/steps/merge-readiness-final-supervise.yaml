@@ -3,6 +3,7 @@ params:
     type: facet_ref[]
     facet_kind: knowledge
 name: supervise
+capabilities: readonly
 tags:
   - review
   - final-gate
@@ -14,8 +15,6 @@ policy:
   - review
 knowledge:
   $param: supervise_knowledge
-provider_options:
-  extends: review-readonly
 pass_previous_response: false
 instruction: supervise
 output_contracts:

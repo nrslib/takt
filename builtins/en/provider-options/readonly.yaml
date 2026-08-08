@@ -1,11 +1,9 @@
-# Everything `readonly` grants, plus creating and editing files.
+# Inspect the repository without changing it: read, search, shell, and web lookup.
 claude:
   allowed_tools:
     - Read
     - Glob
     - Grep
-    - Edit
-    - Write
     - Bash
     - WebSearch
     - WebFetch
@@ -14,10 +12,7 @@ opencode:
     - read
     - glob
     - grep
-    - edit
-    - write
     - bash
-    - todowrite
     - websearch
     - webfetch
   network_access: true

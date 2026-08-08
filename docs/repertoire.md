@@ -43,7 +43,7 @@ my-takt-repertoire/
   workflows/
     expert.yaml
   provider-options/
-    review-readonly.yaml
+    readonly.yaml
   steps/
     final-gate.yaml
   facet-pools/
@@ -186,7 +186,7 @@ Installed packages are stored under `~/.takt/repertoire/`:
       workflows/              # Workflow definitions in repertoire packages
         expert.yaml
       provider-options/        # Shared provider_options presets
-        review-readonly.yaml
+        readonly.yaml
       steps/                   # Reusable step fragments
         final-gate.yaml
       facet-pools/             # Reusable dynamic facet pool resources

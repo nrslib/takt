@@ -815,7 +815,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
         name: 'named-provider-options-builtin',
         workflow_config: {
           provider_options: {
-            extends: 'review-files',
+            extends: 'enable-skills',
           },
         },
         steps: [
@@ -834,8 +834,7 @@ describe('normalizeWorkflowConfig provider_options', () => {
       }));
 
       expect(config.providerOptions).toEqual({
-        claude: { allowedTools: ['Read', 'Glob', 'Grep'] },
-        opencode: { allowedTools: ['read', 'glob', 'grep'] },
+        codex: { skills: { repo: true, user: true } },
       });
     } finally {
       rmSync(projectDir, { recursive: true, force: true });

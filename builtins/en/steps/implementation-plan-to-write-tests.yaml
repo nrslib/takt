@@ -5,8 +5,7 @@ edit: false
 persona: planner
 policy: contract-change
 knowledge: architecture
-provider_options:
-  extends: review-readonly
+capabilities: readonly
 instruction: plan
 output_contracts:
   report:

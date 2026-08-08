@@ -1,11 +1,5 @@
 name: review-fix-frontend
 description: Frontend-focused review + fix loop (structure, modularization, component design, security, coding)
-workflow_config:
-  provider_options:
-    codex:
-      network_access: true
-    opencode:
-      network_access: true
 max_steps: 30
 initial_step: gather
 loop_monitors:
@@ -39,6 +33,7 @@ steps:
       - review
     parallel:
       - name: arch-review
+        capabilities: readonly
         tags:
           - review
         edit: false
@@ -49,14 +44,6 @@ steps:
         knowledge:
           - architecture
           - frontend
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - WebSearch
-              - WebFetch
         instruction: review-arch
         output_contracts:
           report:
@@ -67,6 +54,7 @@ steps:
           - condition: needs_fix
 
       - name: frontend-review
+        capabilities: readonly
         tags:
           - review
         edit: false
@@ -76,14 +64,6 @@ steps:
           - review
           - design-fidelity
         knowledge: frontend
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - WebSearch
-              - WebFetch
         instruction: review-frontend
         output_contracts:
           report:
@@ -94,6 +74,7 @@ steps:
           - condition: needs_fix
 
       - name: security-review
+        capabilities: readonly
         tags:
           - review
         edit: false
@@ -102,14 +83,6 @@ steps:
           - contract-change
           - review
         knowledge: security
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - WebSearch
-              - WebFetch
         instruction: review-security
         output_contracts:
           report:
@@ -120,6 +93,7 @@ steps:
           - condition: needs_fix
 
       - name: coding-review
+        capabilities: readonly
         tags:
           - review
         edit: false
@@ -128,15 +102,6 @@ steps:
           - contract-change
           - review
           - coding
-        provider_options:
-          claude:
-            allowed_tools:
-              - Read
-              - Glob
-              - Grep
-              - Bash
-              - WebSearch
-              - WebFetch
         instruction: review-coding
         output_contracts:
           report:
