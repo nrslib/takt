@@ -6,12 +6,17 @@ export interface OpenCodeToolRejection {
 }
 
 /**
- * 下流（ledger / guard）が無条件に触るフィールドだけを検証する。sessionID は
- * イベント側にしか載らない場合があるため要求しない（キー生成にしか使わない）。
+ * 下流（ledger / guard）が無条件に触るフィールドを検証する。
+ *
+ * sessionID は「あれば string」までしか要求しない。イベント側（
+ * `properties.sessionID`）にしか載らない payload を落とすと、ツール呼び出しが
+ * in-flight として観測されなくなり、アイドル誤爆や outcome の取りこぼしという
+ * より重い壊れ方になる。欠けている場合のキーは call 内で callID により一意。
  */
 function isOpenCodeToolPart(part: object): part is OpenCodeToolPart {
   const candidate = part as Partial<OpenCodeToolPart>;
   if (candidate.type !== 'tool' || typeof candidate.tool !== 'string') return false;
+  if (candidate.sessionID !== undefined && typeof candidate.sessionID !== 'string') return false;
   if (typeof candidate.callID !== 'string' && typeof candidate.id !== 'string') return false;
   const state: unknown = candidate.state;
   if (typeof state !== 'object' || state === null) return false;
@@ -20,8 +25,10 @@ function isOpenCodeToolPart(part: object): part is OpenCodeToolPart {
 
 export function readOpenCodeToolPart(event: OpenCodeStreamEvent): OpenCodeToolPart | undefined {
   if (event.type !== 'message.part.updated') return undefined;
-  // part は provider から来る値なので、型に合わない payload でも落ちない。
-  const part: unknown = event.properties.part;
+  // properties / part は provider から来る値なので、型に合わない payload でも落ちない。
+  const properties: unknown = event.properties;
+  if (typeof properties !== 'object' || properties === null) return undefined;
+  const part: unknown = (properties as { part?: unknown }).part;
   if (typeof part !== 'object' || part === null) return undefined;
   return isOpenCodeToolPart(part) ? part : undefined;
 }

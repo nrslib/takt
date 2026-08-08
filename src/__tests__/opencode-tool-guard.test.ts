@@ -601,6 +601,13 @@ describe('OpenCode guard suite', () => {
       tool: 'bash',
       state: { status: 'running', input: {} },
     }],
+    ['sessionID が string でない tool part', {
+      type: 'tool',
+      tool: 'bash',
+      callID: 'call-1',
+      sessionID: 42,
+      state: { status: 'running', input: {} },
+    }],
   ])('%s は tool part として読まない', (_label, part) => {
     const event = {
       type: 'message.part.updated',
@@ -608,6 +615,27 @@ describe('OpenCode guard suite', () => {
     } as OpenCodeStreamEvent;
 
     expect(readOpenCodeToolPart(event)).toBeUndefined();
+  });
+
+  it.each([undefined, null, 'properties'])(
+    'properties が object でない message.part.updated は無視する (%s)',
+    (properties) => {
+      const event = { type: 'message.part.updated', properties } as OpenCodeStreamEvent;
+
+      expect(readOpenCodeToolPart(event)).toBeUndefined();
+    },
+  );
+
+  it('sessionID を欠く tool part は call 内で識別できるので読み取れる', () => {
+    const event = {
+      type: 'message.part.updated',
+      properties: {
+        sessionID: 'session-1',
+        part: { type: 'tool', tool: 'bash', callID: 'call-1', state: { status: 'running', input: {} } },
+      },
+    } as OpenCodeStreamEvent;
+
+    expect(readOpenCodeToolPart(event)).toMatchObject({ callID: 'call-1' });
   });
 
   it('必要なフィールドが揃った tool part は読み取れる', () => {
