@@ -7,7 +7,9 @@ import { createEngineProofRecord } from '../core/models/finding-evidence-record.
 import type { WorkflowState } from '../core/models/types.js';
 import { createFindingConflictAdjudicationRunner } from '../core/workflow/findings/adjudication-runner.js';
 import { buildFindingConflictAdjudicationStep } from '../core/workflow/findings/adjudication-step.js';
+import { renderConflictAdjudicationInstruction } from '../core/workflow/findings/adjudication-evidence.js';
 import { landUnownedConflictRawClaims } from '../core/workflow/findings/conflict-claim-landing.js';
+import { applyFindingLifecycleCommands } from '../core/workflow/findings/lifecycle-transaction.js';
 import {
   buildConflictAdjudicationSnapshot,
   freshConflictAdjudicationSnapshot,
@@ -21,6 +23,7 @@ import { createTestFindingLedgerStore } from './helpers/finding-storage.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
 import { authorizeFindingLedgerFixture } from './helpers/finding-lifecycle-fixture.js';
 import { verifiedFindingEvidenceFixture } from './helpers/finding-evidence.js';
+import { MANAGER_INTERPRETATION_LIMITS } from '../core/workflow/findings/raw-finding-limits.js';
 
 vi.mock('../agents/agent-usecases.js', () => ({ executeAgent: vi.fn() }));
 const executeAgentMock = vi.mocked(executeAgent);
@@ -250,7 +253,153 @@ describe('finding-conflict-adjudication runner registry contract', () => {
     expect(ledger.findingManagerProviderCalls).toEqual(expect.arrayContaining([
       expect.objectContaining({ state: 'settled', purpose: 'conflict_adjudication' }),
     ]));
+    expect(ledger.findingManagerProviderCalls.every((call) => (
+      call.requestByteLength <= MANAGER_INTERPRETATION_LIMITS.maxInputBytesPerCall
+    ))).toBe(true);
     expect(executeAgentMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not re-adjudicate an unchanged conflict snapshot', async () => {
+    const snapshot = freshConflictAdjudicationSnapshot(
+      ledgerStore.loadLedger(),
+      'C-FA2947446963',
+    );
+    executeAgentMock.mockResolvedValue({
+      persona: 'supervisor',
+      status: 'done',
+      content: '{}',
+      structuredOutput: {
+        proposal: {
+          kind: 'undetermined',
+          subjectIds: snapshot.subjects.map(({ subjectId }) => subjectId).sort(),
+          rationale: 'No verified terminal authority is available.',
+        },
+      },
+      timestamp: new Date(),
+    });
+
+    const first = runner();
+    await first.runner.run(first.step, state());
+    executeAgentMock.mockClear();
+
+    const second = runner();
+    await second.runner.run(second.step, state());
+
+    expect(executeAgentMock).not.toHaveBeenCalled();
+    expect(ledgerStore.loadLedger().conflictAdjudicationAttempts).toHaveLength(2);
+  });
+
+  it('re-adjudicates only after the conflict subject snapshot changes', async () => {
+    executeAgentMock.mockImplementation(async () => {
+      const snapshot = freshConflictAdjudicationSnapshot(
+        ledgerStore.loadLedger(),
+        'C-FA2947446963',
+      );
+      return {
+        persona: 'supervisor',
+        status: 'done' as const,
+        content: '{}',
+        structuredOutput: {
+          proposal: {
+            kind: 'undetermined' as const,
+            subjectIds: snapshot.subjects.map(({ subjectId }) => subjectId).sort(),
+            rationale: 'No verified terminal authority is available.',
+          },
+        },
+        timestamp: new Date(),
+      };
+    });
+
+    const first = runner();
+    await first.runner.run(first.step, state());
+    const originalSnapshot = freshConflictAdjudicationSnapshot(
+      ledgerStore.loadLedger(),
+      'C-FA2947446963',
+    );
+    await ledgerStore.updateLedger((current) => {
+      const holding = current.findings.find((finding) => finding.provisional !== undefined);
+      if (holding?.provisional === undefined) {
+        throw new Error('Expected a conflict holding in the changed-snapshot fixture');
+      }
+      const { revision: _revision, ...holdingWithoutRevision } = holding;
+      void _revision;
+      const changed = applyFindingLifecycleCommands({
+        ledger: current,
+        commands: [{
+          operation: 'update_provisional',
+          changes: {
+            findings: [{
+              ...holdingWithoutRevision,
+              provisional: {
+                ...holding.provisional,
+                lastObservedAt: {
+                  ...OBSERVATION,
+                  timestamp: '2026-06-13T00:01:00.000Z',
+                },
+              },
+            }],
+            conflicts: [],
+          },
+          authority: { kind: 'verified_evidence' },
+          evidenceSourcesByTarget: new Map([[
+            `finding\0${holding.id}`,
+            { sourceRawFindingIds: holding.provisional.sourceRawFindingIds, authorityEvidenceIds: [] },
+          ]]),
+        }],
+        occurredAt: {
+          ...OBSERVATION,
+          timestamp: '2026-06-13T00:01:00.000Z',
+        },
+      });
+      return {
+        ledger: refreshActiveConflictAdjudicationSnapshots({
+          ledger: changed,
+          originStep: 'reviewers',
+          createdAt: OBSERVATION,
+        }),
+        result: undefined,
+      };
+    });
+    const changedSnapshot = freshConflictAdjudicationSnapshot(
+      ledgerStore.loadLedger(),
+      'C-FA2947446963',
+    );
+    expect(changedSnapshot.conflictSnapshotId).not.toBe(originalSnapshot.conflictSnapshotId);
+
+    executeAgentMock.mockClear();
+    const second = runner();
+    await second.runner.run(second.step, state());
+
+    expect(executeAgentMock).toHaveBeenCalledTimes(2);
+    expect(ledgerStore.loadLedger().conflictAdjudicationSnapshots).toHaveLength(2);
+    expect(ledgerStore.loadLedger().conflictAdjudicationEpisodes).toHaveLength(2);
+    expect(ledgerStore.loadLedger().conflictAdjudicationAttempts).toHaveLength(4);
+  });
+
+  it('keeps the adjudication wire bounded when durable snapshot collections grow', async () => {
+    const snapshot = freshConflictAdjudicationSnapshot(
+      ledgerStore.loadLedger(),
+      'C-FA2947446963',
+    );
+    const inflated = structuredClone(snapshot);
+    inflated.subjects = inflated.subjects.map((subject, subjectIndex) => ({
+      ...subject,
+      sourceRawFindingIds: Array.from({ length: 4096 }, (_, index) => `${subjectIndex}-raw-${index}`),
+      sourceRawPayloadDigests: Array.from({ length: 4096 }, (_, index) => `${subjectIndex}-payload-${index}`),
+      evidenceBindingIds: Array.from({ length: 4096 }, (_, index) => `${subjectIndex}-binding-${index}`),
+      rawClaimLandingIds: subject.role === 'holding_provisional'
+        ? Array.from({ length: 4096 }, (_, index) => `${subjectIndex}-landing-${index}`)
+        : [],
+    }));
+
+    const instruction = renderConflictAdjudicationInstruction(inflated);
+
+    expect(Buffer.byteLength(instruction, 'utf8'))
+      .toBeLessThanOrEqual(MANAGER_INTERPRETATION_LIMITS.maxInputBytesPerCall);
+    expect(instruction).toContain('"snapshotFormat": "reference-v1"');
+    expect(instruction).toContain('sourceRawFindingCount');
+    expect(instruction).not.toContain('sourceRawFindingIds');
+    expect(instruction).not.toContain('evidenceBindingIds');
   });
 
   it('re-adjudicates once with digest-bound target windows and applies a verified result', async () => {

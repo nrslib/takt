@@ -10,8 +10,8 @@
   },
   "adjudicatorPrompts": {
     "conflict": {
-      "bytes": 2774,
-      "sha256": "1988df324b72fb7f161a12c4cb58b42d2d638bb30cdca178ab1b9e765c15d37c"
+      "bytes": 3139,
+      "sha256": "8bbc2a6c8b9a96143117520ebc50357a23c7244820e83a212913c0793e97dd65"
     }
   },
   "managerPrompts": {

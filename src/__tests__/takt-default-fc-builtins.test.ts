@@ -352,7 +352,7 @@ function expectedRuleMatch(counts: FindingCounts): ExpectedRuleMatch {
     return { index: 0, nextStep: 'finding-conflict-adjudication' };
   }
   if (counts.conflicts > 0 && !counts.roundBudgetExhausted) {
-    return { index: 1, returnValue: 'needs_review' };
+    return { index: 1, returnValue: 'needs_fix' };
   }
   if (counts.conflicts > 0) return { index: 2, nextStep: 'ABORT' };
   if (counts.claimBearingTerminalCount > 0) {
@@ -710,13 +710,13 @@ describe('takt-default-fc builtins', () => {
     );
   });
 
-  it.each(LANGUAGES)('%s keeps unresolved conflicts in review while stop budget remains', (language) => {
+  it.each(LANGUAGES)('%s routes adjudicated unresolved conflicts to fix while stop budget remains', (language) => {
     const reviewers = loadedStep(
       loadWorkflow(language, 'peer-review-suite-finding-contract-base'),
       'reviewers',
     );
     for (const [roundBudgetExhausted, expected] of [
-      [false, { returnValue: 'needs_review' }],
+      [false, { returnValue: 'needs_fix' }],
       [true, { nextStep: 'ABORT' }],
     ] as const) {
       const counts = {
@@ -780,6 +780,36 @@ describe('takt-default-fc builtins', () => {
       const enStep = findBuiltinLadderStep(targetsByLanguage.en, workflow, stepName, 'en');
       const jaStep = findBuiltinLadderStep(targetsByLanguage.ja, workflow, stepName, 'ja');
       expect(ladderSignature(jaStep), `${workflow}:${stepName}`).toEqual(ladderSignature(enStep));
+    }
+  });
+
+  it.each(LANGUAGES)('%s routes every adjudicated unresolved FC conflict to fix or its downstream gate', (language) => {
+    const targets = collectBuiltinFindingLadderSteps(language);
+    const expectedTargets = new Map([
+      ['finding-contract-boundary-review:boundary-reviewers', { nextStep: 'final-gate' }],
+      ['finding-contract-local-review:reviewers', { nextStep: 'integrity-gate' }],
+      ['merge-readiness-finding-contract-final-gate:merge-readiness-review', { returnValue: 'needs_fix' }],
+      ['merge-readiness-finding-contract-final-gate:supervise', { returnValue: 'needs_fix' }],
+      ['peer-review-suite-finding-contract-base:reviewers', { returnValue: 'needs_fix' }],
+      ['review-fix-takt-default-high:reviewers', { nextStep: 'fix' }],
+      ['takt-default-high:reviewers', { nextStep: 'fix' }],
+      ['takt-default-team-high:reviewers', { nextStep: 'fix' }],
+    ] as const);
+
+    for (const [workflow, stepName] of EXPECTED_FC_LADDER_STEPS) {
+      const step = findBuiltinLadderStep(targets, workflow, stepName, language);
+      const match = new RuleEvaluator(step, {
+        state: workflowState(step, {
+          ...EMPTY_FINDING_COUNTS,
+          open: 1,
+          conflicts: 1,
+          unadjudicated: 0,
+        }),
+      }).evaluate(undefined);
+      const key = `${workflow}:${stepName}`;
+      expect(match?.index, key).toBe(1);
+      expect(determineRuleTransition(step, match?.index ?? -1), key)
+        .toEqual(expectedTargets.get(key));
     }
   });
 

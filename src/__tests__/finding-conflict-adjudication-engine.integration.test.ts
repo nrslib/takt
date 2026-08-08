@@ -92,8 +92,8 @@ function workflowConfig(cwd: string): WorkflowConfig {
           'finding-conflict-adjudication',
         ),
         makeRule(
-          'when(findings.conflicts.count > 0 && findings.rounds.budgetExhausted == false)',
-          'reviewers',
+          'when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count == 0 && findings.rounds.budgetExhausted == false)',
+          'ABORT',
         ),
         makeRule('when(findings.conflicts.count > 0)', 'ABORT'),
         makeRule('approved', 'COMPLETE'),

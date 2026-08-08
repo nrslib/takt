@@ -218,6 +218,94 @@ export function renderAdjudicationInstruction(snapshot: AdjudicationEvidenceSnap
   });
 }
 
+interface ConflictAdjudicationSubjectReference {
+  subjectId: string;
+  role: ConflictAdjudicationSnapshot['subjects'][number]['role'];
+  findingId: string;
+  expectedHead: ConflictAdjudicationSnapshot['subjects'][number]['expectedHead'];
+  targetIdentityHash: string | null;
+  claimIdentityHash: string | null;
+  semanticClaimIdentityHash: string | null;
+  claimSnapshotDigest: string;
+  evidenceSetDigest: string;
+  sourceRawFindingCount: number;
+  sourceRawFindingDigest: string;
+  sourceRawPayloadDigest: string;
+  evidenceBindingCount: number;
+  evidenceBindingDigest: string;
+  rawClaimLandingCount: number;
+  rawClaimLandingDigest: string;
+}
+
+interface ConflictAdjudicationSnapshotReference {
+  snapshotFormat: 'reference-v1';
+  conflictSnapshotId: string;
+  conflictId: string;
+  expectedConflictHead: ConflictAdjudicationSnapshot['expectedConflictHead'];
+  claimUniverseDigest: string;
+  coverageSnapshotDigest: string;
+  evidenceSnapshotDigest: string;
+  rawClaimLandingCount: number;
+  rawClaimLandingDigest: string;
+  priorSettlementCount: number;
+  priorSettlementDigest: string;
+  subjects: ConflictAdjudicationSubjectReference[];
+  originStep: string | null;
+}
+
+function digestStringSet(values: readonly string[]): string {
+  return createHash('sha256')
+    .update(canonicalJson([...values].sort(compareBinaryStrings)))
+    .digest('hex');
+}
+
+function subjectReference(
+  subject: ConflictAdjudicationSnapshot['subjects'][number],
+): ConflictAdjudicationSubjectReference {
+  return {
+    subjectId: subject.subjectId,
+    role: subject.role,
+    findingId: subject.findingId,
+    expectedHead: structuredClone(subject.expectedHead),
+    targetIdentityHash: subject.targetIdentityHash,
+    claimIdentityHash: subject.claimIdentityHash,
+    semanticClaimIdentityHash: subject.semanticClaimIdentityHash,
+    claimSnapshotDigest: subject.claimSnapshotDigest,
+    evidenceSetDigest: subject.evidenceSetDigest,
+    sourceRawFindingCount: subject.sourceRawFindingIds.length,
+    sourceRawFindingDigest: digestStringSet(subject.sourceRawFindingIds),
+    sourceRawPayloadDigest: digestStringSet(subject.sourceRawPayloadDigests),
+    evidenceBindingCount: subject.evidenceBindingIds.length,
+    evidenceBindingDigest: digestStringSet(subject.evidenceBindingIds),
+    rawClaimLandingCount: subject.rawClaimLandingIds.length,
+    rawClaimLandingDigest: digestStringSet(subject.rawClaimLandingIds),
+  };
+}
+
+/**
+ * Durable snapshot は台帳側の完全な入力を保持するが、provider には履歴配列を再送しない。
+ * subjectId と digest/count の参照だけを渡し、検証時の完全な snapshot は engine が解決する。
+ */
+export function buildConflictAdjudicationSnapshotReference(
+  snapshot: ConflictAdjudicationSnapshot,
+): ConflictAdjudicationSnapshotReference {
+  return {
+    snapshotFormat: 'reference-v1',
+    conflictSnapshotId: snapshot.conflictSnapshotId,
+    conflictId: snapshot.conflictId,
+    expectedConflictHead: structuredClone(snapshot.expectedConflictHead),
+    claimUniverseDigest: snapshot.claimUniverseDigest,
+    coverageSnapshotDigest: snapshot.coverageSnapshotDigest,
+    evidenceSnapshotDigest: snapshot.evidenceSnapshotDigest,
+    rawClaimLandingCount: snapshot.rawClaimLandingIds.length,
+    rawClaimLandingDigest: digestStringSet(snapshot.rawClaimLandingIds),
+    priorSettlementCount: snapshot.priorSettlementIds.length,
+    priorSettlementDigest: digestStringSet(snapshot.priorSettlementIds),
+    subjects: snapshot.subjects.map(subjectReference),
+    originStep: snapshot.originStep,
+  };
+}
+
 export function renderConflictAdjudicationInstruction(
   snapshot: ConflictAdjudicationSnapshot,
   grounding?: {
@@ -229,9 +317,10 @@ export function renderConflictAdjudicationInstruction(
     'Adjudicate the durable finding conflict snapshot below. You are read-only.',
     'Return exactly one configured proposal. References must use subjectId values from the snapshot and authorityRefIds must identify exact engine-proof records.',
     'Use merge_holding only for a verified identical claim, promote_holding only with verification supporting the complete product projection, terminate_subject only with verification supporting no-issue or refutation, and undetermined otherwise.',
+    'The snapshot below is an engine-owned reference. Historical ID collections are represented by count and digest; do not infer omitted members.',
     '',
     '## Durable conflict snapshot',
-    renderFencedJsonBlock(snapshot),
+    renderFencedJsonBlock(buildConflictAdjudicationSnapshotReference(snapshot)),
   ];
   if (grounding === undefined) {
     return instruction.join('\n');

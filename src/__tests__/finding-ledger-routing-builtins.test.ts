@@ -221,19 +221,19 @@ describe('builtin Finding ledger routing', () => {
   });
 
   it.each(['en', 'ja'] as const)('%s reviewer集約はconflict/provisionalの先行ルールを維持する', (language) => {
-    for (const raw of [
-      sharedReviewers(language),
-      localReviewers(language, 'reviewers'),
-      localReviewers(language, 'boundary-reviewers'),
-    ]) {
+    for (const [raw, expectedConflictTarget] of [
+      [sharedReviewers(language), 'fix'],
+      [localReviewers(language, 'reviewers'), 'integrity-gate'],
+      [localReviewers(language, 'boundary-reviewers'), 'final-gate'],
+    ] as const) {
       const step = toWorkflowStep(raw);
       expect(transition(step, { open: 1, conflicts: 1, unadjudicated: 1 }, 1))
         .toBe('finding-conflict-adjudication');
-      // adjudication に着地済みの conflict は self-loop に戻さず、各 workflow の
-      // downstream gate/fix へ進める。local/boundary は fix step を持たないため、
-      // ここで workflow 自身へ戻らないことが予算・loop monitor の有限性を保証する。
+      // 接地を含む裁定後も未確定な conflict は reviewers では解消できないため、
+      // fix または subworkflow の downstream gate へ進める。同一 snapshot は
+      // unadjudicated ではないので、ここで再裁定しないことも同時に保証する。
       const resolvedConflictTarget = transition(step, { open: 1, conflicts: 1 }, 1);
-      expect(resolvedConflictTarget).not.toBe(step.name);
+      expect(resolvedConflictTarget).toBe(expectedConflictTarget);
       expect(resolvedConflictTarget).not.toBe('finding-conflict-adjudication');
       expect(transition(step, { open: 1, conflicts: 1, roundBudgetExhausted: true }, 1))
         .toBe('ABORT');

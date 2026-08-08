@@ -31,8 +31,8 @@ steps:
     rules:
       - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)
         return: needs_conflict_adjudication
-      - condition: when(findings.conflicts.count > 0 && findings.rounds.budgetExhausted == false)
-        return: needs_review
+      - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count == 0 && findings.rounds.budgetExhausted == false)
+        return: needs_fix
       - condition: when(findings.conflicts.count > 0)
         next: ABORT
       - condition: when(findings.provisional.fixpoint == true)
@@ -81,8 +81,8 @@ steps:
     rules:
       - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)
         return: needs_conflict_adjudication
-      - condition: when(findings.conflicts.count > 0 && findings.rounds.budgetExhausted == false)
-        return: needs_review
+      - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count == 0 && findings.rounds.budgetExhausted == false)
+        return: needs_fix
       - condition: when(findings.conflicts.count > 0)
         next: ABORT
       - condition: when(findings.provisional.fixpoint == true)

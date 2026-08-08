@@ -27,7 +27,7 @@ steps:
       self:
         - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count > 0)
           next: finding-conflict-adjudication
-        - condition: when(findings.conflicts.count > 0 && findings.rounds.budgetExhausted == false)
+        - condition: when(findings.conflicts.count > 0 && findings.conflicts.unadjudicated.count == 0 && findings.rounds.budgetExhausted == false)
           next: final-gate
         - condition: when(findings.conflicts.count > 0)
           next: ABORT
