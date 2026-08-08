@@ -133,6 +133,7 @@ export function buildSummaryPrompt(
   workflowContext?: WorkflowContext,
   sourceContext?: string,
   promptContext?: string,
+  gherkin?: boolean,
 ): string;
 export function buildSummaryPrompt(
   history: ConversationMessage[],
@@ -143,6 +144,7 @@ export function buildSummaryPrompt(
   workflowContext?: WorkflowContext,
   sourceContext?: string,
   promptContext?: string,
+  gherkin?: boolean,
 ): string {
   if (typeof userNoteOrHasSession === 'boolean') {
     return buildInteractiveSummaryPrompt(
@@ -154,6 +156,7 @@ export function buildSummaryPrompt(
       workflowContext,
       sourceContext,
       promptContext,
+      gherkin,
     );
   }
 

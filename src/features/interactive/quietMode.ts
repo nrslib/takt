@@ -34,6 +34,7 @@ import {
   resolvePromptImageAttachments,
 } from './imageAttachments.js';
 import { reportClipboardImagePasteError } from './clipboardImageFeedback.js';
+import { shouldUseGherkinTaskInstructions } from './taskInstructionFormat.js';
 
 const log = createLogger('quiet-mode');
 
@@ -91,6 +92,8 @@ export async function quietMode(
 
   const summaryPrompt = buildSummaryPrompt(
     history, !!ctx.sessionId, ctx.lang, noTranscript, conversationLabel, workflowContext, sourceContext,
+    undefined,
+    shouldUseGherkinTaskInstructions(cwd),
   );
 
   if (!summaryPrompt) {

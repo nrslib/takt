@@ -98,6 +98,31 @@ beforeEach(() => {
 // =================================================================
 
 describe('quietMode: summary AI session isolation', () => {
+  it('should pass enabled project Gherkin mode to quiet summary generation', async () => {
+    const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-gherkin-quiet-'));
+    fs.mkdirSync(path.join(projectDir, '.takt'), { recursive: true });
+    fs.writeFileSync(
+      path.join(projectDir, '.takt', 'config.yaml'),
+      ['assistant:', '  gherkin: true'].join('\n'),
+      'utf-8',
+    );
+    mockInitializeSession.mockReturnValue(createMockSessionContext(undefined));
+    mockBuildSummaryPrompt.mockReturnValue('Summary prompt');
+    mockCallAIWithRetry.mockResolvedValue({
+      result: { content: 'Generated task', success: true, sessionId: undefined },
+      sessionId: undefined,
+    });
+    mockSelectPostSummaryAction.mockResolvedValue('execute');
+
+    try {
+      await quietMode(projectDir, { userMessage: 'improve parser behavior' });
+
+      expect(mockBuildSummaryPrompt.mock.calls[0]?.[8]).toBe(true);
+    } finally {
+      fs.rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
   it('should pass sessionId as undefined to callAIWithRetry even when ctx carries an active sessionId', async () => {
     // Given: initializeSession returns a ctx with an active session
     const ctxWithSession = createMockSessionContext('active-session-123');

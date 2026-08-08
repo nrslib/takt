@@ -153,6 +153,8 @@ export interface TaktProvidersConfig {
 
 export interface AssistantConfig {
   initFiles?: string[];
+  /** Generate final task instructions as human-readable Markdown with focused Gherkin scenarios. */
+  gherkin?: boolean;
 }
 
 /** Step-specific quality gates override */

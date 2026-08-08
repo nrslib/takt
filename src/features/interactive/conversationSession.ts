@@ -8,6 +8,7 @@ import {
 import { callAIWithRetry, type SessionContext } from './aiCaller.js';
 import type { WorkflowContext } from './interactive-summary-types.js';
 import type { InteractiveMetadata } from '../tasks/execute/types.js';
+import { shouldUseGherkinTaskInstructions } from './taskInstructionFormat.js';
 
 export interface ConversationSessionStrategy {
   systemPrompt: string;
@@ -85,6 +86,7 @@ function resolveWorkflowIdentifierFromUserInputs(history: ConversationMessage[],
 }
 
 export function createConversationSession(options: ConversationSessionOptions): ConversationSession {
+  const gherkin = shouldUseGherkinTaskInstructions(options.cwd);
   let history: ConversationMessage[] = [];
   let sessionId = options.ctx.sessionId;
   let shouldSendInitialPromptContext = !!options.strategy.initialPromptContext;
@@ -133,6 +135,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
       userNote,
       options.ctx.lang,
       options.strategy.summaryPromptContext,
+      gherkin,
     );
     if (!summaryPrompt) {
       return { kind: 'error', message: 'No conversation to summarize' };

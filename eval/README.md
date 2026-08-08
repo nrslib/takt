@@ -55,6 +55,7 @@ results, not one pass/fail summary.
 | `implementation-report-contract-traceability` | default / implementation report | implement-contract-traceability | whether the report preserves the same contract identities and evidence |
 | `follow-up-review-repair-regression` | peer-review / follow-up coding-review | follow-up-review-repair-regression | whether follow-up review independently falsifies completion claims and distinguishes repair-induced defects from adjacent omissions |
 | `review-adjudication` | peer-review / review-adjudication | review-adjudication | whether real defects remain actionable while duplicates, overreach, false positives, and environment-only gaps are separated by evidence |
+| `task-instruction-gherkin` | interactive task summarization | direct English and Japanese conversations | whether implementation details and abstraction intent remain in Markdown while focused Gherkin captures only externally observable behavior |
 | `final-readiness-supervision` | peer-review / final-gate | final-readiness-supervision | whether the final supervisor catches a merge-blocking unmet requirement without reopening an adjudicated non-actionable finding |
 | `final-readiness-precision` | peer-review / final-gate | final-readiness-precision | whether the final supervisor accepts a complete change without reopening an adjudicated documentation improvement |
 
@@ -186,6 +187,7 @@ npm run eval:prompts:write-tests-contract-traceability
 npm run eval:prompts:implement-contract-traceability
 npm run eval:prompts:follow-up-review-repair-regression
 npm run eval:prompts:review-adjudication
+npm run eval:prompts:task-instruction-gherkin
 npm run eval:prompts:final-readiness-supervision
 npm run eval:prompts:final-readiness-precision
 npm run eval:finding-normalizer -- --models luna --batch-size 1 --repeat 3

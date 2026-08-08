@@ -103,6 +103,56 @@ describe('buildSummaryPrompt', () => {
     expect(summary).toContain('User: Improve parser');
   });
 
+  it('should leave the existing summary prompt unchanged when Gherkin mode is false or unset', () => {
+    const history = [{ role: 'user' as const, content: 'Improve parser' }];
+    const unset = buildSummaryPrompt(
+      history,
+      false,
+      'en',
+      'No transcript',
+      'Conversation:',
+    );
+    const disabled = buildSummaryPrompt(
+      history,
+      false,
+      'en',
+      'No transcript',
+      'Conversation:',
+      undefined,
+      undefined,
+      undefined,
+      false,
+    );
+
+    expect(disabled).toBe(unset);
+    expect(unset).not.toContain('Markdown + Gherkin Output Format');
+  });
+
+  it.each([
+    ['en' as const, 'Markdown + Gherkin Output Format', 'Explicitly requested implementation details'],
+    ['ja' as const, 'Markdown + Gherkin 出力形式', '明示された実装詳細や設計意図'],
+  ])('should inject localized Markdown and Gherkin rules for %s when enabled', (lang, heading, implementationDetails) => {
+    const summary = buildSummaryPrompt(
+      [{ role: 'user', content: 'Improve parser behavior' }],
+      false,
+      lang,
+      'No transcript',
+      'Conversation:',
+      undefined,
+      undefined,
+      undefined,
+      true,
+    );
+
+    expect(summary).toContain(heading);
+    expect(summary).toContain(implementationDetails);
+    expect(summary).toContain('gherkin');
+    expect(summary).toMatch(/Gherkin[\s\S]*(files|ファイル)[\s\S]*(Markdown|Markdown 側)/);
+    expect(summary).toContain('Feature');
+    expect(summary).toContain('Rule');
+    expect(summary).toContain('Scenario');
+  });
+
 });
 
 describe('formatStepPreviews', () => {

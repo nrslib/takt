@@ -37,6 +37,7 @@ import {
   createSessionLogMeta,
 } from './conversationLogMeta.js';
 import { prependInitialPromptContext } from './promptSections.js';
+import { shouldUseGherkinTaskInstructions } from './taskInstructionFormat.js';
 import {
   buildInteractiveResultWithAttachments,
   cleanupImageAttachmentStore,
@@ -126,6 +127,7 @@ export async function runConversationLoop(
   workflowContext: WorkflowContext | undefined,
   initialInput: InteractiveSeedInput | undefined,
 ): Promise<InteractiveModeResult> {
+  const gherkin = shouldUseGherkinTaskInstructions(cwd);
   const history: ConversationMessage[] = initialInput?.userMessage
     ? [{ role: 'user', content: initialInput.userMessage }]
     : [];
@@ -284,6 +286,7 @@ export async function runConversationLoop(
             workflowContext,
             sourceContext,
             strategy.summaryPromptContext,
+            gherkin,
           );
           if (!summaryPrompt) {
             info(ui.noConversation);

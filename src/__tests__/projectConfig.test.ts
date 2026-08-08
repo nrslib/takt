@@ -26,6 +26,7 @@ type ObservabilityConfigForTest = {
 type ProjectConfigWithAssistant = ProjectLocalConfig & {
   assistant?: {
     initFiles?: string[];
+    gherkin?: boolean;
   };
 };
 
@@ -153,6 +154,33 @@ describe('projectConfig', () => {
       );
 
       expect(() => loadProjectConfig(testDir)).toThrow(/init_files|string/i);
+    });
+  });
+
+  describe('assistant Gherkin task instructions', () => {
+    it('should load assistant.gherkin from project config', () => {
+      writeFileSync(
+        join(testDir, '.takt', 'config.yaml'),
+        ['assistant:', '  gherkin: true'].join('\n'),
+        'utf-8',
+      );
+
+      const loaded = loadProjectConfig(testDir) as ProjectConfigWithAssistant;
+
+      expect(loaded.assistant).toEqual({ gherkin: true });
+    });
+
+    it.each([true, false])('should preserve assistant.gherkin=%s in save/load cycle', (gherkin) => {
+      const config: ProjectConfigWithAssistant = {
+        assistant: { gherkin },
+      };
+
+      saveProjectConfig(testDir, config);
+
+      const raw = readFileSync(join(testDir, '.takt', 'config.yaml'), 'utf-8');
+      const reloaded = loadProjectConfig(testDir) as ProjectConfigWithAssistant;
+      expect(raw).toContain(`gherkin: ${gherkin}`);
+      expect(reloaded.assistant?.gherkin).toBe(gherkin);
     });
   });
 

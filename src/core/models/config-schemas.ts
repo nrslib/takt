@@ -59,6 +59,7 @@ export const WorkflowMcpServersConfigSchema = z.object({
 
 export const AssistantConfigSchema = z.object({
   init_files: z.array(z.string().min(1)).max(MAX_ASSISTANT_INIT_FILES).optional(),
+  gherkin: z.boolean().optional(),
 }).strict();
 
 export const ProviderRoutingSchema = z.object({

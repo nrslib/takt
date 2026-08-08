@@ -195,6 +195,7 @@ export function buildSummaryPrompt(
   workflowContext?: WorkflowContext,
   sourceContext?: string,
   promptContext?: string,
+  gherkin = false,
 ): string {
   let conversation = '';
   if (history.length > 0) {
@@ -219,6 +220,9 @@ export function buildSummaryPrompt(
     ? formatTaskHistorySummary(workflowContext.taskHistory, lang)
     : '';
 
+  const taskInstructionFormat = gherkin
+    ? `\n${loadTemplate('score_summary_gherkin_instructions', lang).trim()}`
+    : '';
   const summaryPrompt = loadTemplate('score_summary_system_prompt', lang, {
     hasWorkflowPreview: hasWorkflow,
     workflowName: workflowContext?.name ?? '',
@@ -227,6 +231,7 @@ export function buildSummaryPrompt(
     taskHistory: summaryTaskHistory,
     sourceContext: formattedSourceContext,
     conversation,
+    taskInstructionFormat,
   });
   return prependInitialPromptContext(summaryPrompt, promptContext);
 }

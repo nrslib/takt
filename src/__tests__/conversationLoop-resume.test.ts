@@ -518,6 +518,38 @@ describe('/resume command', () => {
 // /go command: summary AI session isolation
 // =================================================================
 describe('/go command', () => {
+  it('should include Markdown and Gherkin rules in assistant summaries when project config enables them', async () => {
+    const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-gherkin-assistant-'));
+    fs.mkdirSync(path.join(projectDir, '.takt'), { recursive: true });
+    fs.writeFileSync(
+      path.join(projectDir, '.takt', 'config.yaml'),
+      ['assistant:', '  gherkin: true'].join('\n'),
+      'utf-8',
+    );
+    setupRawStdin(toRawInputs(['/go improve parser behavior']));
+    const { provider, capture } = createScenarioProvider([
+      { content: 'Generated task instruction.' },
+    ]);
+    const ctx: SessionContext = {
+      provider: provider as SessionContext['provider'],
+      providerType: 'mock',
+      model: undefined,
+      lang: 'en',
+      personaName: 'interactive',
+      sessionId: undefined,
+    };
+
+    try {
+      const result = await runConversationLoop(projectDir, ctx, defaultStrategy, undefined, undefined);
+
+      expect(result.action).toBe('execute');
+      expect(capture.prompts[0]).toContain('Markdown + Gherkin Output Format');
+      expect(capture.prompts[0]).toContain('Explicitly requested implementation details');
+    } finally {
+      fs.rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
   it('should pass sessionId as undefined to summary AI even when conversation has an active session', async () => {
     // Given: send message (AI responds with sessionId) → /go triggers summary
     setupRawStdin(toRawInputs(['hello', '/go']));
