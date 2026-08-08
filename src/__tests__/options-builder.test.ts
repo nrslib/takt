@@ -644,6 +644,41 @@ describe('OptionsBuilder.buildResumeOptions', () => {
     expect(options.workflowMeta?.processSafety).toBeUndefined();
   });
 
+  it('never requests the step structured output on report/status phases', () => {
+    // Given: structured_output は Phase 1 の遷移判定用。Phase 2 で要求すると provider が
+    // スキーマどおりの JSON を返し、それが report file になる（issue #1242）
+    const step = createStep({
+      structuredOutput: {
+        schemaRef: 'researcher-status',
+        schema: {
+          type: 'object',
+          properties: { status: { type: 'string' } },
+          required: ['status'],
+          additionalProperties: false,
+        },
+      },
+    });
+    const builder = createBuilder(step, {
+      reportFallbackProvider: { provider: 'mock', model: 'mock-report-model' },
+    });
+
+    // When
+    const resumeOptions = builder.buildResumeOptions(step, 'session-123', { maxTurns: 3 });
+    const newSessionOptions = builder.buildNewSessionReportOptions(step, {
+      allowedTools: [],
+      maxTurns: 3,
+    });
+    const fallbackOptions = builder.buildFallbackReportOptions(step, newSessionOptions, {
+      allowedTools: [],
+      maxTurns: 3,
+    });
+
+    // Then
+    expect(resumeOptions.outputSchema).toBeUndefined();
+    expect(newSessionOptions.outputSchema).toBeUndefined();
+    expect(fallbackOptions?.outputSchema).toBeUndefined();
+  });
+
   it('removes report/status phase maxTurns when provider does not support it', () => {
     const step = createStep({ provider: 'claude-terminal' });
     const builder = createBuilder(step);

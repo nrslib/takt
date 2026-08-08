@@ -395,7 +395,7 @@ describe('session compaction Phase 1 wiring', () => {
       optionsBuilder: {
         buildAgentOptions: vi.fn().mockReturnValue(phase1Options),
         buildPhaseRunnerContext: vi.fn((
-          reportStep,
+          _reportStep,
           workflowState,
           lastResponse,
           updatePersonaSession,
@@ -425,7 +425,6 @@ describe('session compaction Phase 1 wiring', () => {
             sessionId: undefined,
             allowedTools: overrides.allowedTools,
             maxTurns: overrides.maxTurns,
-            outputSchema: reportStep.structuredOutput?.schema,
           }),
           buildFallbackReportOptions: () => undefined,
           resolveReportFallbackProviderModel: () => undefined,

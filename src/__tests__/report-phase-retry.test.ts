@@ -73,21 +73,6 @@ function createStep(fileName: string): WorkflowStep {
   };
 }
 
-function createStructuredOutputStep(fileName: string): WorkflowStep {
-  return {
-    ...createStep(fileName),
-    structuredOutput: {
-      schemaRef: 'test.report-summary',
-      schema: {
-        type: 'object',
-        properties: { summary: { type: 'string' } },
-        required: ['summary'],
-        additionalProperties: false,
-      },
-    },
-  };
-}
-
 function createContext(
   reportDir: string,
   lastResponse?: string,
@@ -111,23 +96,21 @@ function createContext(
     resolveSessionKey: (step) => step.persona ?? step.name,
     getSessionId: (_persona: string) => currentSessionId,
     // 本番の OptionsBuilder.buildResumeOptions / buildNewSessionReportOptions と同じく
-    // step の structuredOutput を Phase 2 の outputSchema として渡す。
-    buildResumeOptions: (step, sessionId, overrides) => ({
+    // report phase では outputSchema を渡さない。
+    buildResumeOptions: (_step, sessionId, overrides) => ({
       cwd: reportDir,
       resolvedProvider: primaryProvider,
       sessionId,
       allowedTools: overrides.allowedTools,
       maxTurns: overrides.maxTurns,
-      outputSchema: step.structuredOutput?.schema,
     }),
-    buildNewSessionReportOptions: (step, overrides) => ({
+    buildNewSessionReportOptions: (_step, overrides) => ({
       cwd: reportDir,
       resolvedProvider: primaryProvider,
       allowedTools: overrides.allowedTools,
       maxTurns: overrides.maxTurns,
-      outputSchema: step.structuredOutput?.schema,
     }),
-    buildFallbackReportOptions: (step, failedPrimaryOptions, overrides) => {
+    buildFallbackReportOptions: (_step, failedPrimaryOptions, overrides) => {
       if (
         failedPrimaryOptions.resolvedProvider !== 'opencode'
         || fallbackProvider === failedPrimaryOptions.resolvedProvider
@@ -146,7 +129,6 @@ function createContext(
         sessionId: undefined,
         allowedTools: overrides.allowedTools,
         maxTurns: overrides.maxTurns,
-        outputSchema: step.structuredOutput?.schema,
       };
     },
     updatePersonaSession: (_persona, sessionId) => {
@@ -998,74 +980,8 @@ describe('runReportPhase retry with new session', () => {
     }
   });
 
-  it('should accept the provider-native StructuredOutput tool when phase 2 requested structured output', async () => {
-    // Given: OpenCode はネイティブ構造化出力を StructuredOutput 疑似ツールとして流す
-    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
-    const step = createStructuredOutputStep('report-structured-tool.md');
-    const ctx = createContext(reportDir, 'Phase 1 review draft', 'structured-tool-session');
-    queueRunAgentAttempts([{
-      streamEvents: [
-        {
-          type: 'tool_use',
-          data: { tool: 'StructuredOutput', input: {}, id: 'structured-output-1' },
-        },
-        {
-          type: 'tool_result',
-          data: { id: 'structured-output-1', content: 'Structured output captured successfully.', isError: false },
-        },
-      ],
-      response: {
-        persona: 'reviewer',
-        status: 'done',
-        content: '# Review\nNo findings.',
-        structuredOutput: { summary: 'No findings.' },
-        sessionId: 'structured-tool-session',
-        timestamp: new Date('2026-02-11T00:02:00Z'),
-      },
-    }]);
-
-    // When
-    const result = await generateReportPhase(step, 1, ctx, {});
-
-    // Then
-    if (!('reports' in result)) {
-      throw new Error('Expected generated reports');
-    }
-    expect(result.reports[0]?.reportContent).toBe('# Review\nNo findings.');
-    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);
-  });
-
-  it('should still reject a real tool call when phase 2 requested structured output', async () => {
-    // Given
-    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
-    const step = createStructuredOutputStep('report-real-tool.md');
-    const ctx = createContext(reportDir, undefined, 'structured-real-tool-session');
-    queueRunAgentAttempts([{
-      streamEvents: [{
-        type: 'tool_use',
-        data: { tool: 'read', input: {}, id: 'tool-read-1' },
-      }],
-      response: {
-        persona: 'reviewer',
-        status: 'done',
-        content: '# Review',
-        structuredOutput: { summary: 'ok' },
-        timestamp: new Date('2026-02-11T00:02:01Z'),
-      },
-    }]);
-
-    // When
-    const error = await generateReportPhase(step, 1, ctx, {})
-      .catch((caught: unknown) => caught);
-
-    // Then
-    expect(error).toBeInstanceOf(ReportPhaseGenerationError);
-    expect(error).toMatchObject({ failureReason: 'tool_call' });
-    expect((error as Error).message).toContain('provider emitted tool "read"');
-  });
-
-  it('should reject the StructuredOutput tool when phase 2 did not request structured output', async () => {
-    // Given: schema を要求していない Phase 2 での StructuredOutput は汚染セッション由来の違反
+  it('should reject the provider-native StructuredOutput tool in phase 2', async () => {
+    // Given: report phase は構造化出力を要求しないので StructuredOutput は汚染セッション由来の違反
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
     const step = createStep('plain-report-structured-tool.md');
     const ctx = createContext(reportDir, undefined, 'plain-structured-tool-session');

@@ -2378,11 +2378,10 @@ describe('StepExecutor', () => {
             resolvedProvider: 'mock',
             resolvedModel: 'primary-capability-model',
           }),
-          buildFallbackReportOptions: (reportStep) => ({
+          buildFallbackReportOptions: () => ({
             resolvedProvider: 'codex',
             resolvedModel: 'fallback-capability-model',
             resolvedProviderOptions: { codex: { reasoningEffort: 'high' } },
-            outputSchema: reportStep.structuredOutput?.schema,
           }),
           resolveReportFallbackProviderModel: () => ({
             provider: 'codex',
