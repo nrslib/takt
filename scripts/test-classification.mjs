@@ -72,7 +72,6 @@ const legacyParallelIntegrationTestFiles = Object.freeze([
   'src/__tests__/workflow-step-fragment-provider-provenance.test.ts',
   'src/__tests__/workflow-step-fragments.test.ts',
   'src/__tests__/workflowEngine-restart.test.ts',
-  'src/__tests__/workflowExecution-claude-terminal.test.ts',
 ]);
 
 // These tests were audited against their actual runtime behavior rather than
@@ -426,4 +425,5 @@ export const serialWorkflowTestFiles = Object.freeze([
   'src/__tests__/team-leader-finding-contract-runner.test.ts',
   'src/__tests__/workflow-step-fragment-builtin-runtime.test.ts',
   'src/__tests__/workflow-step-fragment-runtime.test.ts',
+  'src/__tests__/workflowExecution-claude-terminal.test.ts',
 ]);

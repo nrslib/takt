@@ -387,13 +387,13 @@ describe('npm test entrypoint routing', () => {
   });
 
   it('should route a resource-heavy integration file to the serial workflow runner', () => {
-    expect(selectNpmTestRuns(['finding-review-integrity-gate.test.ts'])).toEqual([
+    expect(selectNpmTestRuns(['workflowExecution-claude-terminal.test.ts'])).toEqual([
       {
         npmArgs: [
           'run',
           'test:it:heavy:serial:workflow',
           '--',
-          'src/__tests__/finding-review-integrity-gate.test.ts',
+          'src/__tests__/workflowExecution-claude-terminal.test.ts',
         ],
       },
     ]);

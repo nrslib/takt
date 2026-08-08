@@ -349,10 +349,9 @@ describe('workflow step fragment runtime contract', () => {
     });
     expect(fragmentResult.resumePoint?.stack[0]?.step_iterations)
       .toEqual(inlineResult.resumePoint?.stack[0]?.step_iterations);
-  // inline と fragment の engine を2本とも実走させる。差し戻し slot が提示予算ぶん
-  // 反復するようになって実行時間が伸びた。実測（単独実行）35s、4 shard 同時実行で
-  // 65s — 60s では足りない。
-  }, 120_000);
+  // inline と fragment の engine を2本とも実走させるため、ローカルの cold run では
+  // 既定の120秒を超える。処理停止ではなく完走することを確認できる余裕を持たせる。
+  }, 240_000);
 
   it('resumes inline and fragment workflows from the same saved step, iteration, and transition', async () => {
     writeFile(projectDir, '.takt/steps/review.yaml', [
