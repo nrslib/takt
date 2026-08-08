@@ -506,6 +506,15 @@ describe('review-integrity budget (review-integrity.ts, codex 検証ブロッカ
     expect(resolveReviewIntegrityLimits({ maxReviewRounds: 2 }).maxReviewRounds).toBe(2);
   });
 
+  it('should require promotedFindingId for promotionOrigin on every anomaly kind', () => {
+    const anomaly = makeAnomaly({ promotionOrigin: 'evidence-search' });
+    expect(ReviewerAnomalyEntrySchema.safeParse(anomaly).success).toBe(false);
+    expect(ReviewerAnomalyEntrySchema.safeParse({
+      ...anomaly,
+      promotedFindingId: 'F-0001',
+    }).success).toBe(true);
+  });
+
   it('未昇格 anomaly が残るラウンドはマーカーを記録し、上限に達すると exhausted になる', () => {
     const smallLimits = resolveReviewIntegrityLimits({ maxReviewRounds: 2 });
     const next = makeLedger({ reviewerAnomalies: [makeAnomaly()] });

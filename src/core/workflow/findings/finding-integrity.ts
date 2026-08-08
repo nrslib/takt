@@ -486,6 +486,9 @@ function assertContractRegistryTransitions(
     'claimSettlementIds',
     'lifecycleEventIds',
   ] as const;
+  // provider_result_unknown と reservation_released は、どちらも provider の
+  // terminal result を確定できないまま終わった attempt の着地点であり、started
+  // から interrupted への同じ一方向遷移として扱う。
   const canAttemptTransition = (from: string, to: string): boolean => from === to
     || (from === 'started' && ['interrupted', 'proposed', 'applied', 'completed'].includes(to))
     || (from === 'proposed' && ['applied', 'completed'].includes(to));

@@ -339,6 +339,8 @@ type FindingIntakeNormalizationResult = StructuredOutputNormalizationResult & {
   readonly providerInfo: StepProviderInfo;
   readonly publication?: CanonicalFindingReviewPublication;
   readonly terminal?: true;
+  /** 全候補が provider 未実行の明示応答だった場合だけ付与する。 */
+  readonly providerNotExecuted?: true;
   /**
    * 失敗の原因がレビュアーの報告側にある（rawExcerpt が報告本文に byte-exact で
    * 束縛できない）。正規化係を乗り換えても解消しない種類の失敗。
@@ -963,11 +965,16 @@ export class StepExecutor {
         repairOrigin: 'evidence-search',
       });
       if (normalized.terminal === true || normalized.response.status !== 'done') {
-        releaseFindingEvidenceSearchAttempt({
-          reportDir,
-          identity,
-          anomalyId: input.request.request.anomalyId,
-        });
+        // blocked/rate_limited は provider が実行されなかった明示応答なので再試行用に
+        // 解放できる。error は provider 応答を受け取ったか判定できないため、予約を
+        // 消費済みのまま残して 1 anomaly 1 回の保証を守る。
+        if (normalized.terminal === true || normalized.providerNotExecuted === true) {
+          releaseFindingEvidenceSearchAttempt({
+            reportDir,
+            identity,
+            anomalyId: input.request.request.anomalyId,
+          });
+        }
         return {
           kind: 'terminal',
           response: normalized.response,
@@ -1008,8 +1015,8 @@ export class StepExecutor {
       };
     } catch (error) {
       // 例外は provider 応答を受け取れたか不明であり、予約を消費済みのまま残す。
-      // 明示的な rate_limited/blocked/error 応答だけは未実行と確定できるため、上の
-      // terminal 分岐で予約を解放して再試行可能にする。
+      // blocked/rate_limited の明示応答だけが未実行と確定できるため、上の terminal
+      // 分岐で予約を解放して再試行可能にする。error は解放しない。
       log.warn('Evidence-search normalizer attempt ended without a settled response', {
         reviewer: input.ownerStep.name,
         anomalyId: input.request.request.anomalyId,
@@ -1403,6 +1410,7 @@ export class StepExecutor {
     );
     const failures: string[] = [];
     let lastResult: FindingIntakeNormalizationResult | undefined;
+    let allAttemptsProviderNotExecuted = true;
     for (const candidate of candidates) {
       const attempt = await this.runFindingIntakeNormalizerCandidate({
         reviewerStep: input.reviewerStep,
@@ -1417,6 +1425,12 @@ export class StepExecutor {
         candidate,
       });
       lastResult = attempt.result;
+      if (
+        attempt.result.response.status !== 'blocked'
+        && attempt.result.response.status !== 'rate_limited'
+      ) {
+        allAttemptsProviderNotExecuted = false;
+      }
       if (attempt.kind === 'terminal') {
         // 終端メタデータ（status / error / errorKind / rateLimitInfo / timestamp）は
         // 正規化係の応答から取るが、本文はレビュアーのレポートを正本のまま残す。
@@ -1483,6 +1497,7 @@ export class StepExecutor {
       },
       providerInfo: lastResult.providerInfo,
       reviewerRawResourceEnvelope: lastResult.reviewerRawResourceEnvelope,
+      ...(allAttemptsProviderNotExecuted ? { providerNotExecuted: true as const } : {}),
     };
   }
 

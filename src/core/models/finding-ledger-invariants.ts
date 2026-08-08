@@ -1455,6 +1455,13 @@ function collectReviewerAnomalyViolations(
         );
       }
     });
+    if (anomaly.promotionOrigin !== undefined && anomaly.promotedFindingId === undefined) {
+      addViolation(
+        violations,
+        ['reviewerAnomalies', index, 'promotionOrigin'],
+        `Reviewer anomaly "${anomaly.id}" has a promotion origin without a promoted finding`,
+      );
+    }
     if (anomaly.kind === 'intake-contract-incomplete') {
       const defect = anomaly.intakeContract;
       if (defect === undefined) {
@@ -1464,13 +1471,6 @@ function collectReviewerAnomalyViolations(
           'intake-contract-incomplete requires intakeContract',
         );
       } else {
-        if (anomaly.promotionOrigin !== undefined && anomaly.promotedFindingId === undefined) {
-          addViolation(
-            violations,
-            ['reviewerAnomalies', index, 'promotionOrigin'],
-            `Reviewer anomaly "${anomaly.id}" has a promotion origin without a promoted finding`,
-          );
-        }
         if (
           defect.classificationAuthorityId !== 'system/intake_observation_classification_v1'
           || defect.presentationOwnerReviewer.length === 0

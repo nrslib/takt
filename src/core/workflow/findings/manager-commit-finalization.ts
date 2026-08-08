@@ -125,6 +125,9 @@ function applyIntakeContractTerminalDispositions(input: {
       input.deferClaimBearingTerminalDispositions === true
       && defect.observationClass === 'claim-bearing'
     ) {
+      // 除外扱いの restatement slot では、この時点の未成立 publication を終端化しない。
+      // slot の evidence-search 結果を同じ manager commit に取り込んでから、通常の
+      // presentation limit / terminal disposition 判定へ進める必要がある。
       return anomaly;
     }
     const publications = publicationsByAnomalyId.get(anomaly.id) ?? [];

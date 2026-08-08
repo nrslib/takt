@@ -77,7 +77,10 @@ export async function reserveFindingConflictAdjudication(input: {
       const call = fresh.findingManagerProviderCalls.find(
         (candidate) => candidate.providerCallId === started.providerCallId,
       );
-      if (call?.state === 'dispatched') {
+      if (call === undefined) {
+        throw new Error(`Started conflict attempt "${started.attemptId}" has no provider call`);
+      }
+      if (call.state === 'dispatched') {
         const replaySnapshot = fresh.conflictAdjudicationSnapshots.find(
           (candidate) => candidate.conflictSnapshotId === started.conflictSnapshotId,
         );
@@ -102,7 +105,7 @@ export async function reserveFindingConflictAdjudication(input: {
           },
         };
       }
-      if (call?.state === 'reserved') {
+      if (call.state === 'reserved') {
         if (started.conflictSnapshotId !== snapshot.conflictSnapshotId) {
           const released = releaseFindingManagerProviderCall({
             calls: fresh.findingManagerProviderCalls,
@@ -144,7 +147,7 @@ export async function reserveFindingConflictAdjudication(input: {
             },
           };
         }
-      } else if (call?.state !== 'released') {
+      } else if (call.state !== 'released') {
         throw new Error(`Started conflict attempt "${started.attemptId}" has no live provider call`);
       }
     }

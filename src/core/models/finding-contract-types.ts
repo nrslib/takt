@@ -421,7 +421,7 @@ export type TerminalAdjudicationAttempt =
       stage: 'interrupted';
       startedAt: FindingObservation;
       interruptedAt: FindingObservation;
-      reason: 'provider_result_unknown';
+      reason: 'provider_result_unknown' | 'reservation_released';
     }
   | TerminalAttemptBase & {
       stage: 'proposed';

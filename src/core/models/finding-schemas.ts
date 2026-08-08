@@ -790,6 +790,13 @@ export const ReviewerAnomalyEntrySchema = z.object({
     }).strict(),
   ]).optional(),
 }).strict().superRefine((value, ctx) => {
+  if (value.promotionOrigin !== undefined && value.promotedFindingId === undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['promotionOrigin'],
+      message: 'promotionOrigin requires promotedFindingId',
+    });
+  }
   if (value.kind === 'intake-contract-incomplete' && value.intakeContract === undefined) {
     ctx.addIssue({ code: 'custom', path: ['intakeContract'], message: 'intake-contract-incomplete requires intakeContract' });
   }
@@ -1901,7 +1908,7 @@ export const TerminalAdjudicationAttemptSchema = z.discriminatedUnion('stage', [
     stage: z.literal('interrupted'),
     startedAt: FindingObservationSchema,
     interruptedAt: FindingObservationSchema,
-    reason: z.literal('provider_result_unknown'),
+    reason: z.enum(['provider_result_unknown', 'reservation_released']),
   }).strict(),
   TerminalAttemptBaseSchema.extend({
     stage: z.literal('proposed'),

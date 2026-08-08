@@ -206,6 +206,7 @@ describe('FC evidence-search fallback', () => {
     const { ledger, source, anomalyId } = buildAnomaly();
     const snapshot = captureReviewScopeProofSnapshot(process.cwd());
     const firstLine = readFileSync(targetPath, 'utf8').split('\n')[0]!;
+    expect(firstLine).toBeTruthy();
     const publication = evidenceSearchPublication({
       anomalyId,
       snapshotId: snapshot.reviewScopeSnapshotId,
