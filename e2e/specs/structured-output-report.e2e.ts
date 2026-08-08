@@ -82,6 +82,7 @@ describe('E2E: structured_output + report output contract (mock)', () => {
 
     const runsDir = join(repo.path, '.takt', 'runs');
     const runDirs = readdirSync(runsDir).sort();
+    expect(runDirs.length).toBeGreaterThan(0);
     const latestRun = runDirs[runDirs.length - 1]!;
     const reportPath = join(runsDir, latestRun, 'reports', 'repro.md');
 
