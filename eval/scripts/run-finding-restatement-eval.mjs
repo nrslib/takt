@@ -274,7 +274,7 @@ const CANONICAL_REQUEST = (() => {
     sourceExcerptDigest: '1'.repeat(64),
     claimedExcerpt: 'A canonical claim atom.',
     targetPaths: ['src/example.ts'],
-    missingRequirements: ['severity'],
+    missingRequirements: ['claimEvidence'],
     expectedRelation: 'new',
     expectedTargetFindingId: null,
     expectedTargetPreconditionClass: 'absent',

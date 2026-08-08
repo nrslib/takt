@@ -266,11 +266,16 @@ describe('finding intake extraction prompt', () => {
       '`title`, `severity`, and `familyTag` are classification, and you MUST assign\n   them from the claim',
       'The ban on\n   fabrication covers observed facts only',
       'Every other claim takes\n   `relation: "new"`',
+      // critical は waive 不能なので、正規化係の自己判断では high 止まり。
+      'On your own judgment you may assign at most `high`.',
+      'exploitable vulnerability, data destruction, violated public',
     ]],
     ['ja' as const, [
       '`title`・`severity`・`familyTag` は分類であり、claim の内容から**必ず**付与して',
       '捏造が禁止されるのは観測事実',
       'それ以外のclaimはすべて `relation: "new"`',
+      '**あなたが自分の判断で付けられるのは `high` までです。**',
+      '悪用可能な脆弱性・データ破壊・公開保証の違反',
     ]],
   ])('%s: 分類の付与を正規化係の職務として要求する', (language, requiredInstructions) => {
     const prompt = buildFindingIntakeExtractionPrompt('Issue: the guard is missing.', language);

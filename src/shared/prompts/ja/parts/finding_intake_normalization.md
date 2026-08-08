@@ -27,9 +27,15 @@ severity・title・familyTag・relation は書きません。抽出だけでな�
 4. `title`・`severity`・`familyTag` は分類であり、claim の内容から**必ず**付与して
    ください。報告にその語が書かれていなくても `null` にしないでください。
    - `title`: その claim が何の欠陥かを表す1行の見出し。claim 本文から作ります。
-   - `severity`: claim が述べる影響から `critical` / `high` / `medium` / `low` の
-     いずれかを選びます。報告に severity 語彙が無くても、述べられた影響から
-     判断してください。
+   - `severity`: claim が述べる影響から選びます。基準は
+     `critical`（悪用可能な脆弱性・データ破壊・公開保証の違反）/
+     `high`（正当性の欠陥。誤った結果・壊れた経路）/
+     `medium`（品質・保守性・限定条件下の欠陥）/ `low`（軽微）です。
+     報告に severity 語彙が無くても、述べられた影響から判断してください。
+     **あなたが自分の判断で付けられるのは `high` までです。** `critical` は、
+     報告本文そのものが上記 critical 相当の深刻性を明示的に主張している場合に
+     だけ付けてください。判断に迷う深刻な claim は `high` にします
+     （`critical` は waive できない終端の重さを持つため、推測で付けません）。
    - `familyTag`: 同種の問題をまとめる短い識別子（kebab-case）。claim の主題から
      作ります。
    分類はあなたの判断として付与するものであり、観測事実の捏造ではありません。

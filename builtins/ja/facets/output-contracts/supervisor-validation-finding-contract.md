@@ -14,7 +14,7 @@
 |------|----------------------------|------|------------------|
 | {テスト・ビルド・動作確認} | {現在コードと一致する実行ログ・レポート、または理由} | ✅ / ❌ / 未確認 | {NEED_REPLAN 時の検証またはなし} |
 ## Finding Contract Claims
-{観測した欠陥または明示的な台帳 lifecycle claim を、ここに1件1エントリで記載する。各エントリは注入された Finding Contract 指示のラベル付きフィールド形式（Target files / Description / Evidence）に従う。severity・重大度ラベル・問題系列タグは書かない。指摘表は使わない。claim がなければ `None` と記載する。}
+{観測した欠陥または明示的な台帳 lifecycle claim を、ここに1件1エントリで記載する。各エントリは注入された Finding Contract 指示のラベル付きフィールド形式（Target files / Description / Evidence）に従う。claim に分類フィールド（Severity / Title / Family Tag / Relation）を書かない。分類と同一性は下流が決める。指摘表は使わない。claim がなければ `None` と記載する。}
 
 ## 出力整合性
 - 通常の Markdown report 本文だけを返す。JSON や structured output は返さない。最終 finding ID は採番しない。

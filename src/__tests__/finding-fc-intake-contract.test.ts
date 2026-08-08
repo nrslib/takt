@@ -97,6 +97,17 @@ function emptyLedger(): FindingLedger {
   };
 }
 
+/**
+ * review scope snapshot はリポジトリ全体を走査する。この suite の全テストが同じ
+ * `process.cwd()` を対象にするので、1回だけ取って共有する（テストごとに取り直すと
+ * 走査コストで worker が vitest の birpc 期限を越え、無関係なテストがタイムアウトする）。
+ */
+let sharedReviewScopeSnapshot: ReturnType<typeof captureReviewScopeProofSnapshot> | undefined;
+function reviewScopeSnapshot(): ReturnType<typeof captureReviewScopeProofSnapshot> {
+  sharedReviewScopeSnapshot ??= captureReviewScopeProofSnapshot(process.cwd());
+  return sharedReviewScopeSnapshot;
+}
+
 function canonicalItem(raw: RawFinding, ledger = emptyLedger()) {
   const candidate = candidateFromStoredRawFinding(raw, 'reviewer-stable-key');
   const result = canonicalizeReviewerRawFinding(candidate, { ledger });
@@ -193,7 +204,7 @@ describe('FC intake contract', () => {
       scopeIdentity: 'scope-fc-intake',
       previousLedger: emptyLedger(),
       intake: intake(item),
-      reviewScopeSnapshot: captureReviewScopeProofSnapshot(process.cwd()),
+      reviewScopeSnapshot: reviewScopeSnapshot(),
       workflowTask: 'Review the implementation.',
       presentationLimit: 2,
     });
@@ -257,7 +268,7 @@ describe('FC intake contract', () => {
         groupRawFindingIds: [raw.rawFindingId],
         reason: 'No authoritative evidence was available',
       }]])),
-      reviewScopeSnapshot: captureReviewScopeProofSnapshot(process.cwd()),
+      reviewScopeSnapshot: reviewScopeSnapshot(),
       workflowTask: 'Review the implementation.',
       presentationLimit: 2,
     });
@@ -289,7 +300,7 @@ describe('FC intake contract', () => {
       scopeIdentity: 'scope-fc-intake',
       previousLedger: emptyLedger(),
       intake: intake(item),
-      reviewScopeSnapshot: captureReviewScopeProofSnapshot(process.cwd()),
+      reviewScopeSnapshot: reviewScopeSnapshot(),
       workflowTask: 'Review the implementation.',
       presentationLimit: 2,
     }).ladderAnomalySpecs[0]!.intakeContract;
@@ -1562,7 +1573,7 @@ describe('FC intake contract', () => {
     for (const bookkeeping of ['severity', 'family', 'relation', 'critical', 'high']) {
       expect(reportContent.toLowerCase()).not.toContain(bookkeeping);
     }
-    const snapshot = captureReviewScopeProofSnapshot(process.cwd());
+    const snapshot = reviewScopeSnapshot();
     const publication = createFindingReviewPublication({
       identity: {
         scopeIdentity: 'scope-fc-observation-only',
@@ -1696,6 +1707,14 @@ describe('FC intake contract', () => {
       ...unclassifiedAdmission.ladderAnomalySpecs,
       ...unclassifiedAdmission.admissionAnomalySpecs,
     ]).toHaveLength(0);
+    // 分類が無い claim は product finding にはできない。落ちる先は既存の曖昧 raw
+    // 経路（tainted → provisional）であって、破棄でも clean admission でもない。
+    expect(unclassifiedAdmission.cleanAdmitted).toHaveLength(0);
+    expect(unclassifiedAdmission.tainted).toHaveLength(1);
+    expect(unclassifiedAdmission.tainted[0]!.canonical.provenance.ambiguityCodes)
+      .toContain('missing-required-field');
+    expect(unclassifiedAdmission.taintedAdmitted).toHaveLength(1);
+    expect(unclassifiedAdmission.admissionRejections).toHaveLength(0);
   });
 
   it('records the classification authority on the publication protocol', () => {
@@ -1705,7 +1724,7 @@ describe('FC intake contract', () => {
 
   it('promotes through reviewer output, normalizer, normalization, and admission without source-binding copying', () => {
     const claim = 'The same defect remains observable.';
-    const snapshot = captureReviewScopeProofSnapshot(process.cwd());
+    const snapshot = reviewScopeSnapshot();
     const firstPublication = createFindingReviewPublication({
       identity: {
         scopeIdentity: 'scope-fc-real-path',
@@ -2230,6 +2249,13 @@ describe('FC intake contract', () => {
       writeFileSync(path, JSON.stringify(stored));
       expect(() => loadFindingReviewPublication(reportDir, identity))
         .toThrow(/unsupported protocol descriptor/u);
+
+      // revision 2 の記録は resume の入口で止める。互換 decode は置かない代わりに、
+      // 何が合わないかと「新しい run を始めよ」を message で言い切る。
+      stored.publication.protocol.protocolRevision = 2;
+      writeFileSync(path, JSON.stringify(stored));
+      expect(() => loadFindingReviewPublication(reportDir, identity))
+        .toThrow(/revision 2.*cannot be \n?resumed|revision 2[\s\S]*cannot be resumed/u);
 
       stored.publication.protocol.protocolRevision = 2;
       stored.publication.protocol.generationMode = 'structured';

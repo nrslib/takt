@@ -3181,7 +3181,7 @@ const RawFindingsOutputIntakeJsonSchema = {
                   },
                   relation: {
                     enum: [...RAW_FINDING_RELATIONS, null],
-                    description: 'Use a lifecycle relation only when one contiguous claim passage states both the literal relation token and an explicit target finding ID; every other claim takes "new". Whether a "new" claim repeats an existing finding is adjudicated by the findings-manager against the ledger. Null remains an unresolved relation and is handled by canonical ambiguity admission.',
+                    description: 'Three cases, in order. (1) One contiguous claim passage states both a literal lifecycle token ("persists" / "resolution_confirmation" / "reopened") and an explicit target finding ID: use that token. (2) The passage states a problem but no lifecycle: use "new" — whether it repeats an existing finding is adjudicated by the findings-manager against the ledger, not by you. (3) Only when the passage is a claim you cannot resolve into either case: null. Null is not a substitute for "new"; it withholds the claim from identity judgment and sends it to ambiguity admission instead.',
                   },
                   targetFindingIds: {
                     type: 'array',
@@ -3195,12 +3195,19 @@ const RawFindingsOutputIntakeJsonSchema = {
                   },
                   familyTag: {
                     type: ['string', 'null'],
+                    // 空文字は projection が candidate ごと不正にするので、wire 側でも
+                    // 最初から禁止して契約を一致させる。kebab-case は規約であって
+                    // pattern では縛らない — 表記ゆれ1件で publication 全体を無効に
+                    // すると、正しい観察が体裁の理由で台帳へ届かなくなる。
+                    minLength: 1,
                     maxLength: RAW_FINDING_FIELD_LIMITS.maxFamilyTagChars,
-                    description: 'Classification you assign: a short kebab-case identifier grouping this family of issues, derived from the claim. The reviewer does not state it, so do not leave it null because the report lacks the word.',
+                    description: 'Classification you assign: a short identifier grouping this family of issues, derived from the claim. Write it in kebab-case. The reviewer does not state it, so do not leave it null because the report lacks the word.',
                   },
                   severity: {
                     enum: [...FINDING_SEVERITIES, null],
-                    description: 'Classification you assign from the impact the claim states. The reviewer does not state a severity, so judge it from the claim instead of leaving it null.',
+                    // critical は waive 不能（reconciler が拒否する）。推測で付けられると
+                    // 異議経路が詰まるので、付与できる上限を wire 側でも言い切る。
+                    description: 'Classification you assign from the impact the claim states: "critical" = exploitable vulnerability, data destruction, or a violated public guarantee; "high" = a correctness defect; "medium" = quality, maintainability, or a defect under narrow conditions; "low" = minor. The reviewer does not state a severity, so judge it from the claim instead of leaving it null. On your own judgment assign at most "high"; use "critical" only when the report text itself explicitly asserts severity of that kind, because a critical finding can never be waived.',
                   },
                   title: {
                     type: ['string', 'null'],

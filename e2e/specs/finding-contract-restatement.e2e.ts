@@ -81,12 +81,14 @@ async function seedRestatementAnomaly(repoPath: string, runSlug: string): Promis
     reviewers: ['review'],
     title: 'Incomplete reviewer claim',
     claimedExcerpt: claim,
-    mismatchReason: 'The reviewer claim omitted product identity fields.',
+    mismatchReason: 'The reviewer claim carried no claim text and offered no evidence.',
     intakeContract: {
       observationClass: 'claim-bearing',
       classificationAuthorityId: 'system/intake_observation_classification_v1',
       reasonCodes: ['product-identity-incomplete'],
-      missingRequirements: ['claimEvidence', 'description', 'familyTag', 'severity', 'title'],
+      // seed した raw は description なし・evidence なし・code target。分類事務
+      // （severity / title / familyTag）は契約の要件ではないので入らない。
+      missingRequirements: ['claimEvidence', 'description'],
       presentationOwnerReviewer: 'review',
       presentationLimit: 2,
     },

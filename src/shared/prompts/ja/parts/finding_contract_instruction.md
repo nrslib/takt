@@ -28,7 +28,7 @@
 - request の `missingRequirements` に挙がった項目が、前回この claim が受理されなかった理由です（`description` は claim 本文、`target` は対象ファイル、`claimEvidence` は引用の提示）。今回は必ず埋めてください。ただし現在のファイルが裏づける範囲でのみ書き、裏づけられない項目は補作しないでください。裏づけられない項目があるなら、その request に対して claim を返さないでください。
 - 各 request に対する claim は最大1件です。台帳 finding ID への参照は書かないでください。
 - severity・重大度ラベル・問題系列タグは書かないでください。分類は抽出器が claim 本文から付与します。
-- 言い直す前に、request が指す対象ファイルをリポジトリで実際に読んでください。path と 1-based の行範囲は request の抜粋ではなく現在のファイル内容から取り、code target には その path と行範囲だけを指定した `file_quote` を request してください。engine が現物を読んで byte 一致を検証するため、ソース本文や verbatimExcerpt は自分で書かないでください。現在のファイルが claim を裏づけない場合は、その request に対して claim を返さないでください。
+- 言い直す前に、request が指す対象ファイルをリポジトリで実際に読んでください。`Evidence` の path と 1-based の行範囲は、request の抜粋ではなく現在のファイル内容から取ってください。engine が現物を読んで byte 一致を検証するため、ソース本文を引用として貼り付けないでください。現在のファイルが claim を裏づけない場合は、その request に対して claim を返さないでください。
 
 {{restatementRequestsJson}}
 {{/if}}
@@ -48,10 +48,10 @@
 - 利用できる場合は path と有界な1始まりの行範囲を記載してください。欠けている locator を捏造しないでください。対象構造を明確に特定できるリポジトリ全体またはアーキテクチャ上の問題は、行範囲がなくても有効です。
 - 承認、要約、検証表、スコープ説明を問題として記述しないでください。
 {{/if}}{{#if reviewerHasOpenFindings}}- 毎ラウンド、自分のレビュー範囲に入る open な台帳の指摘を検証してください。
-- open な指摘の lifecycle を明示的に報告するときは、台帳 finding ID と、継続中（`persists`）・修正済み（`resolution_confirmation`）・再発（`reopened`）のどれかを文章中に記載してください。最終 lifecycle 判定は findings-manager とエンジンが行います。
-- 変化のない open finding を新規問題として再登録しないでください。残存なら `persists`、修正済みなら `resolution_confirmation`、閉じた前提が再び成立したなら `reopened` と明記してください。
-{{/if}}{{#if reviewerHasWaivedFindings}}- 台帳サマリで waived になっている指摘を再報告しないでください。waive の前提が崩れていると観測した場合は、relation を "reopened"、targetFindingId にその waived finding ID を設定して報告してください。
-{{/if}}{{#if reviewerHasDismissedFindings}}- 台帳サマリで dismissed になっている指摘を new として再報告しないでください。dismiss の前提が成立しなくなったと観測した場合は、relation を "reopened"、targetFindingId にその dismissed finding ID を設定して報告してください。
+- open な指摘の lifecycle を明示的に報告するときは、上と同じ形のエントリを立て、その `Description` の中に台帳 finding ID と lifecycle の語（`persists` / `resolution_confirmation` / `reopened`）の**両方を、途切れのない同じ文**として書いてください。抽出器が lifecycle claim と認識するのは、1つの連続した claim 箇所に両方が揃っているときだけです。離れた場所に書くと、通常の新規指摘として扱われます。最終 lifecycle 判定は findings-manager とエンジンが行います。
+- 変化のない open finding を新規問題として再登録しないでください。残存なら `persists`、修正済みなら `resolution_confirmation`、閉じた前提が再び成立したなら `reopened` を、その finding ID と同じ文に書いてください。
+{{/if}}{{#if reviewerHasWaivedFindings}}- 台帳サマリで waived になっている指摘を再報告しないでください。waive の前提が崩れていると観測した場合は、その waived finding ID と `reopened` を同じ文に書いた lifecycle エントリとして報告してください。
+{{/if}}{{#if reviewerHasDismissedFindings}}- 台帳サマリで dismissed になっている指摘を新規問題として再報告しないでください。dismiss の前提が成立しなくなったと観測した場合は、その dismissed finding ID と `reopened` を同じ文に書いた lifecycle エントリとして報告してください。
 {{/if}}{{#if reviewerReportGuidance}}- normalizer が抽出するのは、この報告で明示した claim だけです。証拠と location を補作せず、不確実性は文章中にそのまま残してください。
 - 修正アクションを要する現在の欠陥は、アーキテクチャ上・リポジトリ全体・単一行に対応しない問題でもレビュー issue です。
 {{/if}}{{#if provisionalGuidance}}- 台帳で `provisional` が付いたエントリは system finding です: 意味を確定できなかった観測（ラベリングの矛盾、reviewer 出力の上限超過、解釈の中断など）を表し、コード変更では修正できず、異議申告の対象にもなりません。後続ラウンドの clean なレビュー証拠が確定・解消するまで final gate を塞ぎ続けます。provisional finding を「修正」しようとしないでください。

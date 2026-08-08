@@ -716,8 +716,10 @@ describe('runFindingManagerForStep reviewer anomaly adjudication round', () => {
         intakeContract: {
           observationClass: 'claim-bearing',
           classificationAuthorityId: 'system/intake_observation_classification_v1',
-          reasonCodes: ['product-identity-incomplete'],
-          missingRequirements: ['description', 'target'],
+          // source raw は description 済み・code target・evidence 空。
+          // intakeContractDefectFor が同じ観測から導く欠落と一致させる。
+          reasonCodes: ['claim-evidence-missing'],
+          missingRequirements: ['claimEvidence'],
           presentationOwnerReviewer: 'arch-review',
           presentationLimit: 6,
           terminalDisposition: {

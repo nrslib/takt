@@ -1359,10 +1359,22 @@ describe('finding schemas', () => {
       .toBe(RAW_FINDING_NORMALIZER_LIMITS.maxTargetFindingIdsPerCandidate);
     expect(candidateSchema.properties.targetFindingIds.items.maxLength)
       .toBe(RAW_FINDING_FIELD_LIMITS.maxFindingIdChars);
-    expect(candidateSchema.properties.familyTag).toEqual({
+    // familyTag は正規化係が付ける分類。空文字は projection が candidate ごと
+    // 不正にするので wire 側でも禁止する。kebab-case は description の規約に留め、
+    // pattern では縛らない（表記ゆれで publication 全体を落とさないため）。
+    expect(candidateSchema.properties.familyTag).toMatchObject({
       type: ['string', 'null'],
+      minLength: 1,
       maxLength: RAW_FINDING_FIELD_LIMITS.maxFamilyTagChars,
     });
+    expect(candidateSchema.properties.familyTag).not.toHaveProperty('pattern');
+    expect(() => ReviewerRawFindingSchema.parse({
+      ...reviewerRawFinding,
+      candidate: {
+        ...reviewerRawFinding.candidate,
+        familyTag: '',
+      },
+    })).toThrow();
     expect(candidateSchema.properties.reassertsReviewerAnomalyId.type).toEqual(['string', 'null']);
   });
 

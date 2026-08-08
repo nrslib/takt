@@ -614,8 +614,11 @@ describe('FC restatement slot — restatement instruction', () => {
         renderFencedJsonBlock: (value) => `\`\`\`json\n${JSON.stringify(value)}\n\`\`\``,
       });
 
-      expect(instruction).toContain('file_quote');
-      expect(instruction).toContain('verbatimExcerpt');
+      // 引用は現物のファイルから取らせる。ただし観察専任のレビュアーに
+      // normalizer の wire フィールド（file_quote / verbatimExcerpt）は書かせない。
+      expect(instruction).toContain('Evidence');
+      expect(instruction).not.toContain('file_quote');
+      expect(instruction).not.toContain('verbatimExcerpt');
       expect(instruction).toMatch(language === 'en' ? /Read the request's target files/ : /対象ファイルをリポジトリで実際に読/);
     },
   );

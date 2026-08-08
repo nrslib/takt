@@ -643,9 +643,21 @@ function assertIdentityField(value: unknown, field: string): asserts value is st
   }
 }
 
-function parsePublicationProtocol(value: unknown): FindingReviewPublicationProtocol {
+function describeProtocolDescriptor(record: Record<string, unknown>): string {
+  return [
+    `generationMode=${JSON.stringify(record.generationMode)}`,
+    `format=${JSON.stringify(record.format)}`,
+    `classificationAuthority=${JSON.stringify(record.classificationAuthority)}`,
+    `protocolRevision=${JSON.stringify(record.protocolRevision)}`,
+  ].join(', ');
+}
+
+function parsePublicationProtocol(
+  value: unknown,
+  publicationId: string,
+): FindingReviewPublicationProtocol {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new Error('Finding review publication requires protocol');
+    throw new Error(`Finding review publication "${publicationId}" requires protocol`);
   }
   const record = value as Record<string, unknown>;
   const protocol = PLAIN_TEXT_NORMALIZED_FINDING_REVIEW_PUBLICATION_PROTOCOL;
@@ -657,7 +669,18 @@ function parsePublicationProtocol(value: unknown): FindingReviewPublicationProto
   ) {
     return protocol;
   }
-  throw new Error('Finding review publication has an unsupported protocol descriptor');
+  // 旧 revision の decode 分岐は置かない。分類の帰属が記録されていない publication を
+  // 現行の意味で読み直すと、レビュアーが書いた分類と正規化係が付けた分類が同じ扱いに
+  // なってしまう。resume 前にここで止め、何が合わないかを言って上げる。
+  const stored = typeof record.protocolRevision === 'number'
+    ? `revision ${record.protocolRevision}`
+    : 'an unknown revision';
+  throw new Error(
+    `Finding review publication "${publicationId}" has an unsupported protocol descriptor (${stored}). `
+    + `observed: ${describeProtocolDescriptor(record)}. `
+    + `expected: ${describeProtocolDescriptor(protocol as unknown as Record<string, unknown>)}. `
+    + "This run's reports predate the current publication protocol and cannot be resumed; start a new run.",
+  );
 }
 
 function parseStoredRelationClarification(
@@ -846,7 +869,7 @@ function parseStoredPreparation(
     stepIteration: Number(publicationRecord.stepIteration),
     reviewerStepName: publicationRecord.reviewerStepName,
     reportName: publicationRecord.reportName,
-    protocol: parsePublicationProtocol(publicationRecord.protocol),
+    protocol: parsePublicationProtocol(publicationRecord.protocol, expectedPublicationId),
     reportContent: publicationRecord.reportContent,
     reportDigest: publicationRecord.reportDigest,
     rawFindings: publicationRecord.rawFindings,
@@ -951,7 +974,7 @@ function parseStoredPendingNormalization(
   assertIdentityField(record.reportName, 'reportName');
   assertIdentityField(record.reportContent, 'reportContent');
   assertIdentityField(record.reportDigest, 'reportDigest');
-  const protocol = parsePublicationProtocol(record.protocol);
+  const protocol = parsePublicationProtocol(record.protocol, expectedPublicationId);
   if (protocol.format !== 'normalized-plain-text') {
     throw new Error(
       `Pending finding review normalization "${expectedPublicationId}" has an unsupported protocol`,
@@ -1186,7 +1209,7 @@ export function assertFindingReviewPublicationSourceBindings(
 export function assertCanonicalFindingReviewPublication(
   publication: CanonicalFindingReviewPublication,
 ): void {
-  parsePublicationProtocol(publication.protocol);
+  parsePublicationProtocol(publication.protocol, publication.publicationId);
   const expectedId = computeFindingReviewPublicationId(publication);
   if (publication.publicationId !== expectedId) {
     throw new Error(`Finding review publication identity mismatch for "${publication.publicationId}"`);

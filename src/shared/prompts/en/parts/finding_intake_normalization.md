@@ -30,9 +30,15 @@ Extraction rules:
    them from the claim's content. Never leave them `null` because the report
    does not use those words.
    - `title`: a one-line heading naming the defect, derived from the claim text.
-   - `severity`: pick `critical`, `high`, `medium`, or `low` from the impact the
-     claim states. Judge from the stated impact even when the report contains no
-     severity vocabulary.
+   - `severity`: pick from the impact the claim states. The scale is
+     `critical` (exploitable vulnerability, data destruction, violated public
+     guarantee), `high` (a correctness defect — wrong results or a broken path),
+     `medium` (quality, maintainability, or a defect under narrow conditions),
+     `low` (minor). Judge from the stated impact even when the report contains no
+     severity vocabulary. **On your own judgment you may assign at most `high`.**
+     Use `critical` only when the report text itself explicitly asserts severity
+     of that kind. A severe claim you are unsure about is `high` — `critical`
+     cannot be waived, so never reach it by inference.
    - `familyTag`: a short kebab-case identifier grouping this family of issues,
      derived from the claim's subject.
    Classification is your judgment, not a fabricated observation. The ban on
