@@ -5,16 +5,26 @@
 // gate reports what the machine measured instead of a scheduling artifact.
 // CI runs one shard per runner and has no such contention: a timeout there is
 // real, so it is never re-measured.
-const BIRPC_NOISE_MESSAGE = /^\[vitest-worker\]: Timeout calling "onTaskUpdate"/;
+// Anchored at both ends: vitest appends ` with "<args>"` for fetch, transform,
+// resolveId, and onUnhandledError timeouts, and those carry real information
+// about what stalled. Only the bare onTaskUpdate report is the known artifact.
+const BIRPC_NOISE_MESSAGE = /^\[vitest-worker\]: Timeout calling "onTaskUpdate"$/;
 
-// vitest prints every error it reports as `<ErrorName>: <message>` at column 0
-// (`printErrorMessage`), so an unrecognized headline means the shard failed for
-// a reason this rescue does not cover.
-const ERROR_HEADLINE = /^((?:[A-Za-z_$][\w$]*)?(?:Error|Exception)|Unknown Error): (.*)$/;
+// vitest prints every error it reports as `<Name>: <message>` at column 0
+// (`printErrorMessage`). The name is matched as any bare token rather than
+// `*Error` / `*Exception`, so an error class named `DatabaseFailure` is
+// whitelisted against too instead of being invisible here. Matching only
+// column 0 is deliberate: indented text is stack frames, diffs, and code
+// frames, which repeat error wording without being a separate error.
+const ERROR_HEADLINE = /^([A-Za-z_$][\w$.]*|Unknown Error): (.*)$/;
 
 const TESTS_SUMMARY_LINE = /^[ \t]*Tests[ \t]+(.+) \(\d+\)$/m;
 const SUMMARY_STATE_SEGMENT = /^(\d+) (failed|passed|skipped|todo)$/;
 
+// `output` is stdout and stderr concatenated in arrival order, so a chunk
+// boundary can interleave the two and break a summary or headline line apart.
+// Every such case fails one of the checks below and the shard is reported as a
+// failure — interleaving can only cost a rescue, never grant one.
 export function isBirpcNoiseOnlyFailure({ output, isCI }) {
   if (isCI) {
     return false;
@@ -26,9 +36,9 @@ export function isBirpcNoiseOnlyFailure({ output, isCI }) {
     return false;
   }
 
-  const errorMessages = collectErrorMessages(plainOutput);
-  return errorMessages.length > 0
-    && errorMessages.every((message) => BIRPC_NOISE_MESSAGE.test(message));
+  const headlines = collectHeadlineMessages(plainOutput);
+  return headlines.length > 0
+    && headlines.every((message) => BIRPC_NOISE_MESSAGE.test(message));
 }
 
 function stripAnsi(output) {
@@ -52,7 +62,7 @@ function parseTestsSummary(plainOutput) {
   return counts;
 }
 
-function collectErrorMessages(plainOutput) {
+function collectHeadlineMessages(plainOutput) {
   const messages = [];
   for (const line of plainOutput.split('\n')) {
     const headline = ERROR_HEADLINE.exec(line.trimEnd());

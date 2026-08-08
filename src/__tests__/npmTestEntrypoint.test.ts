@@ -186,6 +186,32 @@ describe('birpc noise classification', () => {
     expect(isBirpcNoiseOnlyFailure({ output, isCI: false })).toBe(false);
   });
 
+  it('should treat an error whose name does not end in Error as a real failure', () => {
+    const output = birpcNoiseOutput.replace(
+      ' ❯ Timeout.<anonymous> node_modules/vitest/dist/chunks/rpc.js:49:10',
+      'DatabaseFailure: connection lost',
+    );
+
+    expect(isBirpcNoiseOnlyFailure({ output, isCI: false })).toBe(false);
+  });
+
+  it('should treat a timeout carrying call arguments as a real failure', () => {
+    const output = birpcNoiseOutput.replace(
+      'Error: [vitest-worker]: Timeout calling "onTaskUpdate"',
+      'Error: [vitest-worker]: Timeout calling "onTaskUpdate" with "[{}]"',
+    );
+
+    expect(isBirpcNoiseOnlyFailure({ output, isCI: false })).toBe(false);
+  });
+
+  it('should treat a shard that passed no test as a real failure', () => {
+    const output = birpcNoiseOutput
+      .replace(' Test Files  120 passed (120)', ' Test Files  0 passed (0)')
+      .replace('      Tests  3330 passed (3330)', '      Tests  0 passed (0)');
+
+    expect(isBirpcNoiseOnlyFailure({ output, isCI: false })).toBe(false);
+  });
+
   it('should treat an all-passed shard with no reported error as a real failure', () => {
     const output = [
       ' Test Files  120 passed (120)',
@@ -228,6 +254,54 @@ describe('birpc noise re-measurement', () => {
 
     expect(run).toHaveBeenCalledTimes(2);
     expect(code).toBe(1);
+  });
+
+  it('should keep an ordinary failing shard untouched', async () => {
+    vi.stubEnv('CI', '');
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const output = birpcNoiseOutput
+      .replace('      Tests  3330 passed (3330)', '      Tests  2 failed | 3328 passed (3330)');
+    const run = vi.fn(async () => ({ code: 1, signal: null, output }));
+
+    const code = await runNpmTest(['src/__tests__/config.test.ts'], run);
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(code).toBe(1);
+    expect(error).not.toHaveBeenCalledWith(expect.stringContaining('re-measuring'));
+  });
+
+  it('should start re-measuring only after every shard finished its first run', async () => {
+    vi.stubEnv('CI', '');
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const events: string[] = [];
+    let started = 0;
+    const run = vi.fn(async () => {
+      const attempt = started;
+      started += 1;
+      events.push(`start:${attempt}`);
+      await Promise.resolve();
+      await Promise.resolve();
+      events.push(`finish:${attempt}`);
+      return attempt === 1
+        ? { code: 1, signal: null, output: birpcNoiseOutput }
+        : { code: 0, signal: null, output: '' };
+    });
+
+    const code = await runNpmTest([], run);
+
+    expect(run).toHaveBeenCalledTimes(5);
+    expect(events.slice(0, 8)).toEqual([
+      'start:0',
+      'start:1',
+      'start:2',
+      'start:3',
+      'finish:0',
+      'finish:1',
+      'finish:2',
+      'finish:3',
+    ]);
+    expect(events.slice(8)).toEqual(['start:4', 'finish:4']);
+    expect(code).toBe(0);
   });
 
   it('should not re-measure on CI', async () => {

@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-import { spawn } from 'node:child_process';
 import { basename, isAbsolute, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
@@ -8,6 +7,7 @@ import {
   serialWorkflowTestFiles,
 } from './test-classification.mjs';
 import { resolveNpmInvocation } from './npm-invocation.mjs';
+import { runTeedCommand } from './teed-command.mjs';
 import { isBirpcNoiseOnlyFailure } from './vitest-birpc-noise.mjs';
 
 const UNIT_SHARDS = ['1/4', '2/4', '3/4', '4/4'];
@@ -206,42 +206,19 @@ function normalizeTestTarget(arg) {
 }
 
 async function runNpmCommand(npmArgs) {
-  return new Promise((resolve) => {
-    const invocation = resolveNpmInvocation(process.execPath, process.env.npm_execpath);
-    // Shard output is teed rather than inherited so a non-zero exit can be
-    // read back and classified before it is reported as a failure.
-    const child = spawn(invocation.executable, [...invocation.args, ...npmArgs], {
-      stdio: ['inherit', 'pipe', 'pipe'],
-      shell: false,
-    });
-    const chunks = [];
-
-    child.stdout.on('data', (chunk) => {
-      chunks.push(chunk);
-      process.stdout.write(chunk);
-    });
-    child.stderr.on('data', (chunk) => {
-      chunks.push(chunk);
-      process.stderr.write(chunk);
-    });
-
-    child.on('close', (code, signal) => {
-      resolve({
-        code: code ?? 1,
-        signal,
-        output: Buffer.concat(chunks).toString('utf8'),
-      });
-    });
-
-    child.on('error', (error) => {
-      console.error(`[takt] Failed to start npm ${npmArgs.join(' ')}: ${error.message}`);
-      resolve({
-        code: 1,
-        signal: null,
-        output: '',
-      });
-    });
-  });
+  const invocation = resolveNpmInvocation(process.execPath, process.env.npm_execpath);
+  // Shard output is teed rather than inherited so a non-zero exit can be read
+  // back and classified before it is reported as a failure.
+  try {
+    return await runTeedCommand(invocation.executable, [...invocation.args, ...npmArgs]);
+  } catch (error) {
+    console.error(`[takt] Failed to start npm ${npmArgs.join(' ')}: ${error.message}`);
+    return {
+      code: 1,
+      signal: null,
+      output: '',
+    };
+  }
 }
 
 async function remeasureBirpcNoiseShards(results, runCommand) {
