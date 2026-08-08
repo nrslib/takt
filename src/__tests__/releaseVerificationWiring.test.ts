@@ -16,12 +16,20 @@ import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 import {
+  auditedIntegrationBoundaryTestFiles,
+  fileSystemIntegrationTestFiles,
+  heavyParallelIntegrationTestFiles,
+  lightContractIntegrationTestFiles,
+  lightIntegrationTestFiles,
+  lightNamedIntegrationTestFiles,
   parallelIntegrationTestFiles,
   parallelIntegrationTestGlobs,
+  publicContractIntegrationTestFiles,
   serialGitTestFiles,
   serialWorkflowTestFiles,
 } from '../../scripts/test-classification.mjs';
-import parallelIntegrationConfig from '../../vitest.config.it.parallel.js';
+import heavyParallelIntegrationConfig from '../../vitest.config.it.heavy.parallel.js';
+import lightIntegrationConfig from '../../vitest.config.it.parallel.js';
 import unitConfig from '../../vitest.config.unit.parallel.js';
 
 interface PackageManifest {
@@ -31,16 +39,30 @@ interface PackageManifest {
 const manifest = JSON.parse(
   readFileSync(new URL('../../package.json', import.meta.url), 'utf8'),
 ) as PackageManifest;
+const ciWorkflow = readFileSync(new URL('../../.github/workflows/ci.yml', import.meta.url), 'utf8');
 
 const integrationBoundaryNames = new Set([
   'WorkflowEngine',
   'TeamLeaderRunner',
+  'captureReviewScopeProofSnapshot',
+  'createWorkflowRunLifecycle',
   'runAllTasks',
+  'runCommandQualityGate',
   'spawnManagedProcess',
   'runProbeProcess',
   'runSmokeScript',
+  'prepareRuntimeEnvironment',
+  'resolveTask',
   'initializeGitFixture',
   'createTestFindingLedgerStore',
+]);
+
+const integrationBuiltinModules = new Set([
+  'node:child_process',
+  'node:fs',
+  'node:fs/promises',
+  'node:net',
+  'node:sqlite',
 ]);
 
 function listTestFiles(directory: string): string[] {
@@ -56,8 +78,8 @@ function hasIntegrationBoundary(filePath: string): boolean {
   const sourceText = readFileSync(filePath, 'utf8');
   const sourceFile = ts.createSourceFile(filePath, sourceText, ts.ScriptTarget.Latest, true);
   const importedBoundaryNames = new Set<string>();
-  let importsChildProcess = false;
-  let mocksChildProcess = false;
+  const importedBuiltinModules = new Set<string>();
+  const mockedModules = new Set<string>();
   let invokesBoundary = false;
 
   for (const statement of sourceFile.statements) {
@@ -65,8 +87,11 @@ function hasIntegrationBoundary(filePath: string): boolean {
       continue;
     }
     const importClause = statement.importClause;
-    if (statement.moduleSpecifier.text === 'node:child_process' && !importClause?.isTypeOnly) {
-      importsChildProcess = true;
+    if (
+      integrationBuiltinModules.has(statement.moduleSpecifier.text)
+      && !importClause?.isTypeOnly
+    ) {
+      importedBuiltinModules.add(statement.moduleSpecifier.text);
     }
     const namedBindings = importClause?.namedBindings;
     if (!namedBindings || !ts.isNamedImports(namedBindings)) {
@@ -90,9 +115,8 @@ function hasIntegrationBoundary(filePath: string): boolean {
         && node.expression.name.text === 'mock'
         && firstArgument !== undefined
         && ts.isStringLiteral(firstArgument)
-        && firstArgument.text === 'node:child_process'
       ) {
-        mocksChildProcess = true;
+        mockedModules.add(firstArgument.text);
       }
       if (ts.isIdentifier(node.expression) && importedBoundaryNames.has(node.expression.text)) {
         invokesBoundary = true;
@@ -109,7 +133,9 @@ function hasIntegrationBoundary(filePath: string): boolean {
   }
   visit(sourceFile);
 
-  return invokesBoundary || (importsChildProcess && !mocksChildProcess);
+  const importsUnmockedBuiltin = [...importedBuiltinModules]
+    .some((moduleName) => !mockedModules.has(moduleName));
+  return invokesBoundary || importsUnmockedBuiltin;
 }
 
 function hasIntegrationFileName(filePath: string): boolean {
@@ -168,11 +194,16 @@ describe('release verification wiring', () => {
       test: 'npm run test:type-contracts && node scripts/run-npm-test.mjs',
       'test:unit': 'vitest run --config vitest.config.unit.parallel.ts',
       'test:unit:parallel': 'vitest run --config vitest.config.unit.parallel.ts',
-      'test:it': 'npm run test:it:parallel && npm run test:it:serial',
-      'test:it:parallel': 'vitest run --config vitest.config.it.parallel.ts',
-      'test:it:serial': 'node scripts/run-it-serial-groups.mjs',
-      'test:it:serial:git': 'vitest run --config vitest.config.it.serial.git.ts',
-      'test:it:serial:workflow': 'vitest run --config vitest.config.it.serial.workflow.ts',
+      'test:it': 'npm run test:it:light',
+      'test:it:light': 'vitest run --config vitest.config.it.parallel.ts',
+      'test:it:heavy': 'npm run test:it:heavy:parallel && npm run test:it:heavy:serial',
+      'test:it:heavy:parallel': 'vitest run --config vitest.config.it.heavy.parallel.ts',
+      'test:it:heavy:serial': 'node scripts/run-it-serial-groups.mjs',
+      'test:it:heavy:serial:git': 'vitest run --config vitest.config.it.serial.git.ts',
+      'test:it:heavy:serial:workflow': 'vitest run --config vitest.config.it.serial.workflow.ts',
+      'test:it:all': 'npm run test:it && npm run test:it:heavy',
+      'test:it:serial:git': 'npm run test:it:heavy:serial:git',
+      'test:it:serial:workflow': 'npm run test:it:heavy:serial:workflow',
       'test:prompt-evals': 'node prompt-evals/run-smoke.mjs',
     });
   });
@@ -184,11 +215,16 @@ describe('release verification wiring', () => {
       'npm run build',
       'npm run lint',
       'npm run test',
-      'npm run test:it',
+      'npm run test:it:all',
       'npm run test:prompt-evals',
       'npm run test:e2e:all',
     ]);
     expect(new Set(commands).size).toBe(commands.length);
+  });
+
+  it('should run light and heavy integration as pull-request gates', () => {
+    expect(ciWorkflow).toContain('gate: [test:it, test:it:heavy]');
+    expect(ciWorkflow).toContain('- run: npm run ${{ matrix.gate }}');
   });
 
   it('should execute the complete release path when every gate succeeds', () => {
@@ -198,7 +234,7 @@ describe('release verification wiring', () => {
       'run build',
       'run lint',
       'run test',
-      'run test:it',
+      'run test:it:all',
       'run test:prompt-evals',
       'run test:e2e:all',
     ]);
@@ -212,8 +248,8 @@ describe('release verification wiring', () => {
       expectedCommands: ['run build', 'run lint'],
     },
     {
-      failingCommand: 'run test:it',
-      expectedCommands: ['run build', 'run lint', 'run test', 'run test:it'],
+      failingCommand: 'run test:it:all',
+      expectedCommands: ['run build', 'run lint', 'run test', 'run test:it:all'],
     },
     {
       failingCommand: 'run test:prompt-evals',
@@ -221,7 +257,7 @@ describe('release verification wiring', () => {
         'run build',
         'run lint',
         'run test',
-        'run test:it',
+        'run test:it:all',
         'run test:prompt-evals',
       ],
     },
@@ -238,12 +274,34 @@ describe('release verification wiring', () => {
 
   it('should keep fast unit and integration classifications disjoint', () => {
     const parallelIntegration = new Set(parallelIntegrationTestFiles);
+    const lightIntegration = new Set(lightIntegrationTestFiles);
+    const heavyParallelIntegration = new Set(heavyParallelIntegrationTestFiles);
     const serialGit = new Set(serialGitTestFiles);
     const serialWorkflow = new Set(serialWorkflowTestFiles);
     const serialFiles = [...serialGit, ...serialWorkflow];
 
     expect(new Set(serialFiles).size).toBe(serialFiles.length);
     expect(parallelIntegration.size).toBe(parallelIntegrationTestFiles.length);
+    expect(lightIntegration.size).toBe(lightIntegrationTestFiles.length);
+    expect(heavyParallelIntegration.size).toBe(heavyParallelIntegrationTestFiles.length);
+    expect(auditedIntegrationBoundaryTestFiles).toEqual(
+      [...auditedIntegrationBoundaryTestFiles].sort(),
+    );
+    expect(fileSystemIntegrationTestFiles).toEqual(
+      [...fileSystemIntegrationTestFiles].sort(),
+    );
+    expect(publicContractIntegrationTestFiles).toEqual(
+      [...publicContractIntegrationTestFiles].sort(),
+    );
+    expect(lightContractIntegrationTestFiles).toEqual(
+      [...lightContractIntegrationTestFiles].sort(),
+    );
+    expect(lightNamedIntegrationTestFiles).toEqual(
+      [...lightNamedIntegrationTestFiles].sort(),
+    );
+    for (const testFile of lightIntegration) {
+      expect(heavyParallelIntegration.has(testFile)).toBe(false);
+    }
     for (const testFile of serialFiles) {
       expect(existsSync(new URL(`../../${testFile}`, import.meta.url))).toBe(true);
       expect(parallelIntegration.has(testFile)).toBe(false);
@@ -253,7 +311,15 @@ describe('release verification wiring', () => {
       expect(serialGit.has(testFile)).toBe(false);
       expect(serialWorkflow.has(testFile)).toBe(false);
     }
-    expect(parallelIntegrationConfig.test?.exclude).toEqual(serialFiles);
+    expect(lightIntegrationConfig.test?.include).toEqual(lightIntegrationTestFiles);
+    expect(heavyParallelIntegrationConfig.test?.include).toEqual([
+      ...parallelIntegrationTestGlobs,
+      ...heavyParallelIntegrationTestFiles,
+    ]);
+    expect(heavyParallelIntegrationConfig.test?.exclude).toEqual([
+      ...lightIntegrationTestFiles,
+      ...serialFiles,
+    ]);
     expect(unitConfig.test?.exclude).toEqual([
       ...parallelIntegrationTestGlobs,
       ...parallelIntegrationTestFiles,

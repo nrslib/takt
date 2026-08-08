@@ -1,5 +1,5 @@
 /**
- * E2E test: Run session loading → interactive instruct mode → prompt injection.
+ * Integration test: Run session loading → interactive instruct mode → prompt injection.
  *
  * Simulates the full interactive flow:
  * 1. Create .takt/runs/ fixtures on real file system
@@ -175,7 +175,7 @@ function setupProvider(responses: string[]): MockProviderCapture {
 
 // --- Tests ---
 
-describe('E2E: Run session → instruct mode with interactive flow', () => {
+describe('Integration: Run session → instruct mode with interactive flow', () => {
   let tmpDir: string;
 
   beforeEach(() => {

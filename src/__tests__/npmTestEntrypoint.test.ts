@@ -6,15 +6,19 @@ import {
 } from '../../scripts/run-npm-test.mjs';
 import { isBirpcNoiseOnlyFailure } from '../../scripts/vitest-birpc-noise.mjs';
 import { resolveNpmInvocation } from '../../scripts/npm-invocation.mjs';
-import parallelIntegrationConfig from '../../vitest.config.it.parallel.js';
+import heavyParallelIntegrationConfig from '../../vitest.config.it.heavy.parallel.js';
+import lightIntegrationConfig from '../../vitest.config.it.parallel.js';
 import serialGitConfig from '../../vitest.config.it.serial.git.js';
 import serialWorkflowConfig from '../../vitest.config.it.serial.workflow.js';
 import unitConfig from '../../vitest.config.unit.parallel.js';
 import {
+  heavyParallelItTestGlobs,
+  heavyParallelItTestExcludes,
   itSerialGitTestGlobs,
   itSerialTestGlobs,
   itSerialWorkflowLoaderTestGlobs,
   itTestGlobs,
+  lightItTestGlobs,
   parallelSrcRunnerConfig,
   srcTestInclude,
 } from '../../vitest.config.shared.js';
@@ -31,17 +35,22 @@ describe('parallel test runner configuration', () => {
     expect(parallelSrcRunnerConfig.maxWorkers).not.toBe('1%');
   });
 
-  it('should keep unit, parallel integration, and serial integration gates exclusive', () => {
+  it('should keep unit, light integration, heavy integration, and serial gates exclusive', () => {
     expect(unitConfig).toMatchObject({
       test: {
         include: srcTestInclude,
         exclude: [...itTestGlobs, ...itSerialTestGlobs],
       },
     });
-    expect(parallelIntegrationConfig).toMatchObject({
+    expect(lightIntegrationConfig).toMatchObject({
       test: {
-        include: itTestGlobs,
-        exclude: itSerialTestGlobs,
+        include: lightItTestGlobs,
+      },
+    });
+    expect(heavyParallelIntegrationConfig).toMatchObject({
+      test: {
+        include: heavyParallelItTestGlobs,
+        exclude: heavyParallelItTestExcludes,
       },
     });
     expect(serialGitConfig).toMatchObject({
@@ -91,7 +100,7 @@ describe('npm test execution', () => {
     ]);
     expect(run).toHaveBeenCalledTimes(4);
     expect(log).toHaveBeenCalledWith(
-      '[takt] Fast unit gate only: integration tests are excluded. Run "npm run test:it" when the changed area crosses process, Git, or workflow-engine boundaries; "npm run check:release" runs it after the 4 shards.',
+      '[takt] Fast unit gate only. After implementation run "npm run test:it" for light integration coverage. Pull requests and "npm run check:release" run heavy integration coverage too. If you add or change a heavy integration test, run that file directly with "npm test -- <test-file>" before handoff.',
     );
     expect(code).toBe(0);
   });
@@ -112,8 +121,8 @@ describe('npm test execution', () => {
     const code = await runNpmTest([
       '--reporter',
       'verbose',
-      'src/__tests__/acpAgent.test.ts',
-      'src/__tests__/it-acp-workflow-bridge.test.ts',
+      'src/__tests__/git-detect.test.ts',
+      'src/__tests__/it-teed-command.test.ts',
     ], run);
 
     expect(commands).toEqual([
@@ -123,32 +132,32 @@ describe('npm test execution', () => {
         '--',
         '--reporter',
         'verbose',
-        'src/__tests__/acpAgent.test.ts',
+        'src/__tests__/git-detect.test.ts',
       ],
       [
         'run',
-        'test:it:parallel',
+        'test:it:heavy:parallel',
         '--',
         '--reporter',
         'verbose',
-        'src/__tests__/it-acp-workflow-bridge.test.ts',
+        'src/__tests__/it-teed-command.test.ts',
       ],
     ]);
     expect(events).toEqual([
       'start:test:unit:parallel',
-      'start:test:it:parallel',
+      'start:test:it:heavy:parallel',
       'finish:test:unit:parallel',
-      'finish:test:it:parallel',
+      'finish:test:it:heavy:parallel',
     ]);
     expect(error).toHaveBeenCalledWith(
-      '[takt] npm run test:unit:parallel -- --reporter verbose src/__tests__/acpAgent.test.ts failed with exit=7',
+      '[takt] npm run test:unit:parallel -- --reporter verbose src/__tests__/git-detect.test.ts failed with exit=7',
     );
     expect(code).toBe(7);
   });
 });
 
 const birpcNoiseOutput = [
-  ' ✓ src/__tests__/config.test.ts (42 tests) 1200ms',
+  ' ✓ src/__tests__/option-resolution-order.test.ts (42 tests) 1200ms',
   '',
   '⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯ Unhandled Errors ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯',
   '',
@@ -242,7 +251,7 @@ describe('birpc noise re-measurement', () => {
     let attempt = 0;
     const run = vi.fn(async () => attempts[attempt++]!);
 
-    const code = await runNpmTest(['src/__tests__/config.test.ts'], run);
+    const code = await runNpmTest(['src/__tests__/option-resolution-order.test.ts'], run);
 
     expect(run).toHaveBeenCalledTimes(2);
     expect(code).toBe(0);
@@ -254,7 +263,7 @@ describe('birpc noise re-measurement', () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const run = vi.fn(async () => ({ code: 1, signal: null, output: birpcNoiseOutput }));
 
-    const code = await runNpmTest(['src/__tests__/config.test.ts'], run);
+    const code = await runNpmTest(['src/__tests__/option-resolution-order.test.ts'], run);
 
     expect(run).toHaveBeenCalledTimes(2);
     expect(code).toBe(1);
@@ -267,7 +276,7 @@ describe('birpc noise re-measurement', () => {
       .replace('      Tests  3330 passed (3330)', '      Tests  2 failed | 3328 passed (3330)');
     const run = vi.fn(async () => ({ code: 1, signal: null, output }));
 
-    const code = await runNpmTest(['src/__tests__/config.test.ts'], run);
+    const code = await runNpmTest(['src/__tests__/option-resolution-order.test.ts'], run);
 
     expect(run).toHaveBeenCalledTimes(1);
     expect(code).toBe(1);
@@ -313,7 +322,7 @@ describe('birpc noise re-measurement', () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const run = vi.fn(async () => ({ code: 1, signal: null, output: birpcNoiseOutput }));
 
-    const code = await runNpmTest(['src/__tests__/config.test.ts'], run);
+    const code = await runNpmTest(['src/__tests__/option-resolution-order.test.ts'], run);
 
     expect(run).toHaveBeenCalledTimes(1);
     expect(code).toBe(1);
@@ -346,7 +355,7 @@ describe('npm test entrypoint routing', () => {
     const args = ['src/__tests__/finding-ladder-robustness.integration.test.ts'];
 
     expect(selectNpmTestRuns(args)).toEqual([
-      { npmArgs: ['run', 'test:it:serial:git', '--', ...args] },
+      { npmArgs: ['run', 'test:it:heavy:serial:git', '--', ...args] },
     ]);
   });
 
@@ -355,7 +364,7 @@ describe('npm test entrypoint routing', () => {
       {
         npmArgs: [
           'run',
-          'test:it:serial:git',
+          'test:it:heavy:serial:git',
           '--',
           'src/__tests__/finding-conflict-adjudication-runner.integration.test.ts',
         ],
@@ -364,13 +373,13 @@ describe('npm test entrypoint routing', () => {
   });
 
   it('should normalize an absolute unit path before routing', () => {
-    expect(selectNpmTestRuns([resolve('src/__tests__/workflowLoader.test.ts')])).toEqual([
+    expect(selectNpmTestRuns([resolve('src/__tests__/git-detect.test.ts')])).toEqual([
       {
         npmArgs: [
           'run',
           'test:unit:parallel',
           '--',
-          'src/__tests__/workflowLoader.test.ts',
+          'src/__tests__/git-detect.test.ts',
         ],
       },
     ]);
@@ -381,7 +390,7 @@ describe('npm test entrypoint routing', () => {
       {
         npmArgs: [
           'run',
-          'test:it:serial:workflow',
+          'test:it:heavy:serial:workflow',
           '--',
           'src/__tests__/finding-review-integrity-gate.test.ts',
         ],
@@ -389,28 +398,30 @@ describe('npm test entrypoint routing', () => {
     ]);
   });
 
-  it('should route former serial workflow members to the unit runner', () => {
-    const args = ['src/__tests__/workflowLoader.test.ts'];
+  it('should keep ordinary unit members on the unit runner', () => {
+    const args = ['src/__tests__/git-detect.test.ts'];
 
     expect(selectNpmTestRuns(args)).toEqual([
       { npmArgs: ['run', 'test:unit:parallel', '--', ...args] },
     ]);
   });
 
-  it('should route mixed unit, parallel IT, and serial IT targets exactly once', () => {
+  it('should route mixed unit, light IT, heavy IT, and serial IT targets exactly once', () => {
     const args = [
-      'src/__tests__/acpAgent.test.ts',
+      'src/__tests__/git-detect.test.ts',
       'src/__tests__/finding-review-integrity-gate.test.ts',
-      'src/__tests__/it-acp-workflow-bridge.test.ts',
+      'src/__tests__/it-teed-command.test.ts',
       'src/__tests__/finding-evidence-protocol.integration.test.ts',
-      'src/__tests__/config.test.ts',
+      'src/__tests__/option-resolution-order.test.ts',
+      'src/__tests__/workflowExecutionEvents.test.ts',
     ];
 
     expect(selectNpmTestRuns(args)).toEqual([
       { npmArgs: ['run', 'test:unit:parallel', '--', args[0], args[4]] },
-      { npmArgs: ['run', 'test:it:parallel', '--', args[2]] },
-      { npmArgs: ['run', 'test:it:serial:git', '--', args[3]] },
-      { npmArgs: ['run', 'test:it:serial:workflow', '--', args[1]] },
+      { npmArgs: ['run', 'test:it:light', '--', args[5]] },
+      { npmArgs: ['run', 'test:it:heavy:parallel', '--', args[2]] },
+      { npmArgs: ['run', 'test:it:heavy:serial:git', '--', args[3]] },
+      { npmArgs: ['run', 'test:it:heavy:serial:workflow', '--', args[1]] },
     ]);
   });
 
@@ -421,7 +432,7 @@ describe('npm test entrypoint routing', () => {
       {
         npmArgs: [
           'run',
-          'test:it:parallel',
+          'test:it:heavy:parallel',
           '--',
           'src/__tests__/engine-happy-path.test.ts',
         ],
@@ -429,24 +440,32 @@ describe('npm test entrypoint routing', () => {
     ]);
   });
 
-  it('should route a legacy integration suffix to the IT runner', () => {
+  it('should route a bounded legacy integration suffix to the light IT runner', () => {
     const args = ['src/__tests__/facet-includes-integration.test.ts'];
 
     expect(selectNpmTestRuns(args)).toEqual([
-      { npmArgs: ['run', 'test:it:parallel', '--', ...args] },
+      { npmArgs: ['run', 'test:it:light', '--', ...args] },
     ]);
   });
 
-  it('should route targeted integration tests to the IT runner', () => {
+  it('should let an explicit light classification override the it filename', () => {
     const args = ['src/__tests__/it-acp-workflow-bridge.test.ts'];
 
     expect(selectNpmTestRuns(args)).toEqual([
-      { npmArgs: ['run', 'test:it:parallel', '--', ...args] },
+      { npmArgs: ['run', 'test:it:light', '--', ...args] },
+    ]);
+  });
+
+  it('should route a light integration target to the light runner', () => {
+    const args = ['src/__tests__/workflowExecutionEvents.test.ts'];
+
+    expect(selectNpmTestRuns(args)).toEqual([
+      { npmArgs: ['run', 'test:it:light', '--', ...args] },
     ]);
   });
 
   it('should keep targeted unit tests on the unit runner', () => {
-    const args = ['src/__tests__/workflowExecutionEvents.test.ts'];
+    const args = ['src/__tests__/option-resolution-order.test.ts'];
 
     expect(selectNpmTestRuns(args)).toEqual([
       { npmArgs: ['run', 'test:unit:parallel', '--', ...args] },
@@ -454,32 +473,32 @@ describe('npm test entrypoint routing', () => {
   });
 
   it('should split mixed unit and integration test targets across both runners', () => {
-    const unitTarget = 'src/__tests__/acpAgent.test.ts';
-    const integrationTarget = 'src/__tests__/it-acp-workflow-bridge.test.ts';
+    const unitTarget = 'src/__tests__/git-detect.test.ts';
+    const integrationTarget = 'src/__tests__/it-teed-command.test.ts';
 
     expect(selectNpmTestRuns([unitTarget, integrationTarget])).toEqual([
       {
         npmArgs: ['run', 'test:unit:parallel', '--', unitTarget],
       },
       {
-        npmArgs: ['run', 'test:it:parallel', '--', integrationTarget],
+        npmArgs: ['run', 'test:it:heavy:parallel', '--', integrationTarget],
       },
     ]);
   });
 
   it('should keep test name filters with targeted integration tests', () => {
-    const args = ['-t', 'workflow', 'src/__tests__/it-acp-workflow-bridge.test.ts'];
+    const args = ['-t', 'workflow', 'src/__tests__/it-teed-command.test.ts'];
 
     expect(selectNpmTestRuns(args)).toEqual([
       {
-        npmArgs: ['run', 'test:it:parallel', '--', ...args],
+        npmArgs: ['run', 'test:it:heavy:parallel', '--', ...args],
       },
     ]);
   });
 
   it('should share test name filters when splitting mixed test targets', () => {
-    const unitTarget = 'src/__tests__/acpAgent.test.ts';
-    const integrationTarget = 'src/__tests__/it-acp-workflow-bridge.test.ts';
+    const unitTarget = 'src/__tests__/git-detect.test.ts';
+    const integrationTarget = 'src/__tests__/it-teed-command.test.ts';
     const sharedArgs = ['--testNamePattern', 'workflow'];
 
     expect(selectNpmTestRuns([...sharedArgs, unitTarget, integrationTarget])).toEqual([
@@ -487,14 +506,14 @@ describe('npm test entrypoint routing', () => {
         npmArgs: ['run', 'test:unit:parallel', '--', ...sharedArgs, unitTarget],
       },
       {
-        npmArgs: ['run', 'test:it:parallel', '--', ...sharedArgs, integrationTarget],
+        npmArgs: ['run', 'test:it:heavy:parallel', '--', ...sharedArgs, integrationTarget],
       },
     ]);
   });
 
   it('should share reporter options when splitting mixed test targets', () => {
-    const unitTarget = 'src/__tests__/acpAgent.test.ts';
-    const integrationTarget = 'src/__tests__/it-acp-workflow-bridge.test.ts';
+    const unitTarget = 'src/__tests__/git-detect.test.ts';
+    const integrationTarget = 'src/__tests__/it-teed-command.test.ts';
     const sharedArgs = ['--reporter', 'verbose'];
 
     expect(selectNpmTestRuns([...sharedArgs, unitTarget, integrationTarget])).toEqual([
@@ -502,14 +521,14 @@ describe('npm test entrypoint routing', () => {
         npmArgs: ['run', 'test:unit:parallel', '--', ...sharedArgs, unitTarget],
       },
       {
-        npmArgs: ['run', 'test:it:parallel', '--', ...sharedArgs, integrationTarget],
+        npmArgs: ['run', 'test:it:heavy:parallel', '--', ...sharedArgs, integrationTarget],
       },
     ]);
   });
 
   it('should share config options when splitting mixed test targets', () => {
-    const unitTarget = 'src/__tests__/acpAgent.test.ts';
-    const integrationTarget = 'src/__tests__/it-acp-workflow-bridge.test.ts';
+    const unitTarget = 'src/__tests__/git-detect.test.ts';
+    const integrationTarget = 'src/__tests__/it-teed-command.test.ts';
     const sharedArgs = ['--config', 'vitest.custom.ts'];
 
     expect(selectNpmTestRuns([...sharedArgs, unitTarget, integrationTarget])).toEqual([
@@ -517,14 +536,14 @@ describe('npm test entrypoint routing', () => {
         npmArgs: ['run', 'test:unit:parallel', '--', ...sharedArgs, unitTarget],
       },
       {
-        npmArgs: ['run', 'test:it:parallel', '--', ...sharedArgs, integrationTarget],
+        npmArgs: ['run', 'test:it:heavy:parallel', '--', ...sharedArgs, integrationTarget],
       },
     ]);
   });
 
   it('should share changed options when splitting mixed test targets', () => {
     const unitTarget = 'src/__tests__/npmTestEntrypoint.test.ts';
-    const integrationTarget = 'src/__tests__/it-acp-workflow-bridge.test.ts';
+    const integrationTarget = 'src/__tests__/it-teed-command.test.ts';
     const sharedArgs = ['--changed', 'main'];
 
     expect(selectNpmTestRuns([...sharedArgs, unitTarget, integrationTarget])).toEqual([
@@ -532,24 +551,24 @@ describe('npm test entrypoint routing', () => {
         npmArgs: ['run', 'test:unit:parallel', '--', ...sharedArgs, unitTarget],
       },
       {
-        npmArgs: ['run', 'test:it:parallel', '--', ...sharedArgs, integrationTarget],
+        npmArgs: ['run', 'test:it:heavy:parallel', '--', ...sharedArgs, integrationTarget],
       },
     ]);
   });
 
   it('should not consume an integration target as the optional changed value', () => {
-    const args = ['--changed', 'src/__tests__/it-acp-workflow-bridge.test.ts'];
+    const args = ['--changed', 'src/__tests__/it-teed-command.test.ts'];
 
     expect(selectNpmTestRuns(args)).toEqual([
       {
-        npmArgs: ['run', 'test:it:parallel', '--', '--changed=true', args[1]],
+        npmArgs: ['run', 'test:it:heavy:parallel', '--', '--changed=true', args[1]],
       },
     ]);
   });
 
   it('should preserve optional vitest options with explicit boolean defaults when splitting mixed targets', () => {
     const unitTarget = 'src/__tests__/npmTestEntrypoint.test.ts';
-    const integrationTarget = 'src/__tests__/it-acp-workflow-bridge.test.ts';
+    const integrationTarget = 'src/__tests__/it-teed-command.test.ts';
     const args = ['--silent', unitTarget, '--api', integrationTarget];
 
     expect(selectNpmTestRuns(args)).toEqual([
@@ -557,14 +576,14 @@ describe('npm test entrypoint routing', () => {
         npmArgs: ['run', 'test:unit:parallel', '--', '--silent=true', '--api=true', unitTarget],
       },
       {
-        npmArgs: ['run', 'test:it:parallel', '--', '--silent=true', '--api=true', integrationTarget],
+        npmArgs: ['run', 'test:it:heavy:parallel', '--', '--silent=true', '--api=true', integrationTarget],
       },
     ]);
   });
 
   it('should not consume targeted test files as inspector option values', () => {
     const unitTarget = 'src/__tests__/npmTestEntrypoint.test.ts';
-    const integrationTarget = 'src/__tests__/it-acp-workflow-bridge.test.ts';
+    const integrationTarget = 'src/__tests__/it-teed-command.test.ts';
     const args = ['--inspect', unitTarget, '--inspectBrk', integrationTarget];
 
     expect(selectNpmTestRuns(args)).toEqual([
@@ -572,7 +591,7 @@ describe('npm test entrypoint routing', () => {
         npmArgs: ['run', 'test:unit:parallel', '--', '--inspect=true', '--inspectBrk=true', unitTarget],
       },
       {
-        npmArgs: ['run', 'test:it:parallel', '--', '--inspect=true', '--inspectBrk=true', integrationTarget],
+        npmArgs: ['run', 'test:it:heavy:parallel', '--', '--inspect=true', '--inspectBrk=true', integrationTarget],
       },
     ]);
   });
