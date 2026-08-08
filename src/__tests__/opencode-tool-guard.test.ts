@@ -24,17 +24,22 @@ import { ExactLoopGuard } from '../infra/opencode/guards/integrity-guards.js';
 import { SensitiveBudgetGuard } from '../infra/opencode/guards/resource-guards.js';
 import { createBoundedSensitiveValues } from '../shared/utils/sensitiveText.js';
 
-const ENV_KEYS = [
-  'TAKT_OPENCODE_MESSAGE_CYCLE_BUDGET',
-  'TAKT_OPENCODE_TOOL_ERROR_CONSECUTIVE',
-  'TAKT_OPENCODE_TOOL_ERROR_WINDOW',
-  'TAKT_OPENCODE_TOOL_ERROR_WINDOW_RATE',
+const DEPRECATED_ENV_KEYS = [
   'TAKT_OPENCODE_TOOL_ERROR_BUDGET',
   'TAKT_OPENCODE_TOOL_SIGNATURE_ABSOLUTE',
   'TAKT_OPENCODE_TOOL_SIGNATURE_REPEATS',
   'TAKT_OPENCODE_TOOL_SUCCESS_REPEATS',
   'TAKT_OPENCODE_TOOL_RESULT_STAGNATION_REPEATS',
+] as const;
+
+const ENV_KEYS = [
+  'TAKT_OPENCODE_MESSAGE_CYCLE_BUDGET',
+  'TAKT_OPENCODE_TOOL_ERROR_CONSECUTIVE',
+  'TAKT_OPENCODE_TOOL_ERROR_WINDOW',
+  'TAKT_OPENCODE_TOOL_ERROR_WINDOW_RATE',
+  ...DEPRECATED_ENV_KEYS,
   'TAKT_OPENCODE_STREAM_EVENT_LIMIT',
+  'TAKT_OPENCODE_STREAM_IDLE_TIMEOUT_MS',
 ] as const;
 
 afterEach(() => {
@@ -87,6 +92,26 @@ function errorTool(
         callID: callId,
         tool,
         state: { status: 'error', input, error },
+      },
+    },
+  };
+}
+
+function runningTool(
+  callId: string,
+  input: Record<string, unknown>,
+  tool = 'bash',
+): OpenCodeStreamEvent {
+  return {
+    type: 'message.part.updated',
+    properties: {
+      part: {
+        id: `part-${callId}`,
+        sessionID: 'session-1',
+        type: 'tool',
+        callID: callId,
+        tool,
+        state: { status: 'running', input, title: tool },
       },
     },
   };
@@ -438,6 +463,77 @@ describe('OpenCode guard suite', () => {
     suite.stopCall();
   });
 
+  it('idle-timeout はツール実行外の無音では従来どおり発火する', () => {
+    vi.useFakeTimers();
+    process.env.TAKT_OPENCODE_STREAM_IDLE_TIMEOUT_MS = '60000';
+    const suite = resolveOpenCodeGuardSuite(undefined, 'opencode/big-pickle');
+    const failures: string[] = [];
+    suite.startAttempt((failure) => failures.push(failure.guardId));
+
+    vi.advanceTimersByTime(59_999);
+    expect(failures).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(failures).toEqual(['idle-timeout']);
+    suite.stopAttempt();
+  });
+
+  it('idle-timeout は in-flight ツールがある間は発火せず、結果受信で再開する', () => {
+    vi.useFakeTimers();
+    process.env.TAKT_OPENCODE_STREAM_IDLE_TIMEOUT_MS = '60000';
+    const suite = resolveOpenCodeGuardSuite(undefined, 'opencode/big-pickle');
+    const failures: string[] = [];
+    suite.startAttempt((failure) => failures.push(failure.guardId));
+
+    const input = { command: 'npm run test:it' };
+    expect(suite.onEvent(runningTool('call-1', input)).failure).toBeUndefined();
+    vi.advanceTimersByTime(60 * 60 * 1000);
+    expect(failures).toEqual([]);
+
+    expect(suite.onEvent(completedTool('call-1', input, 'passed', { tool: 'bash' })).failure)
+      .toBeUndefined();
+    vi.advanceTimersByTime(59_999);
+    expect(failures).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(failures).toEqual(['idle-timeout']);
+    suite.stopAttempt();
+  });
+
+  it('idle-timeout は並行ツールが1つでも in-flight なら停止したままになる', () => {
+    vi.useFakeTimers();
+    process.env.TAKT_OPENCODE_STREAM_IDLE_TIMEOUT_MS = '60000';
+    const suite = resolveOpenCodeGuardSuite(undefined, 'opencode/big-pickle');
+    const failures: string[] = [];
+    suite.startAttempt((failure) => failures.push(failure.guardId));
+
+    const first = { command: 'npm run test:it' };
+    const second = { command: 'npm run test:e2e:mock' };
+    suite.onEvent(runningTool('call-1', first));
+    suite.onEvent(runningTool('call-2', second));
+    suite.onEvent(completedTool('call-1', first, 'passed', { tool: 'bash' }));
+    vi.advanceTimersByTime(60 * 60 * 1000);
+    expect(failures).toEqual([]);
+
+    suite.onEvent(completedTool('call-2', second, 'passed', { tool: 'bash' }));
+    vi.advanceTimersByTime(60_000);
+    expect(failures).toEqual(['idle-timeout']);
+    suite.stopAttempt();
+  });
+
+  it('idle-timeout の in-flight は attempt 境界で持ち越さない', () => {
+    vi.useFakeTimers();
+    process.env.TAKT_OPENCODE_STREAM_IDLE_TIMEOUT_MS = '60000';
+    const suite = resolveOpenCodeGuardSuite(undefined, 'opencode/big-pickle');
+    const failures: string[] = [];
+    suite.startAttempt(() => undefined);
+    suite.onEvent(runningTool('call-1', { command: 'npm run test:it' }));
+    suite.stopAttempt();
+
+    suite.startAttempt((failure) => failures.push(failure.guardId));
+    vi.advanceTimersByTime(60_000);
+    expect(failures).toEqual(['idle-timeout']);
+    suite.stopAttempt();
+  });
+
   it('新しい call deadline guard はレジストリ登録だけで共通 abort 契約に参加する', () => {
     const additionalTimeGuard: OpenCodeGuardDescriptor = {
       id: 'registry-only-deadline',
@@ -520,7 +616,7 @@ describe('OpenCode guard suite', () => {
   );
 
   it('廃止済み tool guard env は値を無視して各変数につき一度だけ警告する', () => {
-    const deprecated = ENV_KEYS.slice(4, -1);
+    const deprecated = DEPRECATED_ENV_KEYS;
     for (const key of deprecated) process.env[key] = '1';
     const emitWarning = vi.spyOn(process, 'emitWarning').mockImplementation(() => undefined);
 

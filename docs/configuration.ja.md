@@ -302,9 +302,16 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 
 OpenCode の単一 call には既定で 3,600,000 ms（60分）の wall-clock 上限があります。
 60分を超える可能性がある call は、60,000〜86,400,000 の
-`call_timeout_ms` を明示してください。`event_limit` の既定値は 500,000 で、
+`call_timeout_ms` を明示してください。テストスイートの実行のような長時間の作業を
+含む step は、この上限に達して切断されます。`event_limit` の既定値は 500,000 で、
 `TAKT_OPENCODE_STREAM_EVENT_LIMIT` でも上書きできます。`text_byte_limit` の既定値は 1 MiB、
 `reasoning_byte_limit` は 4 MiB です。
+
+ストリームの無音は 10 分（`TAKT_OPENCODE_STREAM_IDLE_TIMEOUT_MS` で上書き可）で
+idle timeout として扱われますが、ツール呼び出しが in-flight の間は計測しません。
+OpenCode は tool_use から tool_result までイベントを流さないため、テストスイート
+実行のような長時間のツールを無音と判定すると健全な実行を切ってしまうからです。
+結果が返らないツールは `call_timeout_ms` の wall-clock 上限が受け持ちます。
 
 数値上限の不正値は入力経路で扱いが異なります。`guards.*` に書いた値（および
 `TAKT_PROVIDER_OPTIONS_*` 由来の値）は宣言された設定なので、正の整数でなければ

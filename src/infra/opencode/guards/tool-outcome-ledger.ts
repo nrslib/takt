@@ -1,8 +1,4 @@
-import type {
-  OpenCodePart,
-  OpenCodeStreamEvent,
-  OpenCodeToolPart,
-} from '../OpenCodeStreamHandler.js';
+import type { OpenCodeStreamEvent, OpenCodeToolPart } from '../OpenCodeStreamHandler.js';
 import {
   computeToolInputHash,
   computeToolResultHash,
@@ -12,6 +8,9 @@ import type { ToolHealthStats } from '../tool-guard.js';
 import {
   extractOpenCodeToolRejection,
   isCompletedToolFailure,
+  isOpenCodeToolTerminal,
+  openCodeToolCallKey,
+  readOpenCodeToolPart,
   toolTerminalResult,
 } from './tool-events.js';
 import type { ToolOutcomeTuple } from './types.js';
@@ -31,18 +30,16 @@ export class ToolOutcomeLedger {
   private readonly toolCalls = new Map<string, ToolCallRecord>();
 
   observe(event: OpenCodeStreamEvent): ToolOutcomeLedgerResult {
-    if (event.type !== 'message.part.updated') return { duplicate: false };
-    const part = event.properties.part as OpenCodePart;
-    if (part.type !== 'tool') return { duplicate: false };
-    return this.observeToolPart(part as OpenCodeToolPart);
+    const toolPart = readOpenCodeToolPart(event);
+    return toolPart === undefined ? { duplicate: false } : this.observeToolPart(toolPart);
   }
 
   private observeToolPart(toolPart: OpenCodeToolPart): ToolOutcomeLedgerResult {
-    const namespace = `${toolPart.sessionID}\0${toolPart.callID || toolPart.id}`;
+    const namespace = openCodeToolCallKey(toolPart);
     const record = this.toolCalls.get(namespace) ?? {};
     const inputHash = computeToolInputHash(toolPart.state.input);
     if (inputHash !== undefined) record.inputHash = inputHash;
-    if (toolPart.state.status !== 'completed' && toolPart.state.status !== 'error') {
+    if (!isOpenCodeToolTerminal(toolPart)) {
       this.toolCalls.set(namespace, record);
       return { duplicate: false };
     }

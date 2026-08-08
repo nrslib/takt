@@ -1,4 +1,9 @@
 import type { OpenCodeStreamEvent } from '../OpenCodeStreamHandler.js';
+import {
+  isOpenCodeToolTerminal,
+  openCodeToolCallKey,
+  readOpenCodeToolPart,
+} from './tool-events.js';
 import type { OpenCodeGuard, OpenCodeGuardLifecycleScope, OpenCodeGuardVerdict } from './types.js';
 
 export function describeOpenCodeIdleTimeout(timeoutMs: number): string {
@@ -38,35 +43,61 @@ export class IdleTimeoutGuard implements OpenCodeGuard {
   readonly layer = 'time' as const;
   private timeoutId: ReturnType<typeof setTimeout> | undefined;
   private onVerdict: ((verdict: OpenCodeGuardVerdict) => void) | undefined;
+  private readonly inFlightToolCalls = new Set<string>();
 
   constructor(private readonly timeoutMs: number) {}
 
   start(scope: OpenCodeGuardLifecycleScope, onVerdict: (verdict: OpenCodeGuardVerdict) => void): void {
     if (scope !== 'attempt') return;
+    this.inFlightToolCalls.clear();
     this.onVerdict = onVerdict;
     this.arm();
   }
 
-  onEvent(_event: OpenCodeStreamEvent): OpenCodeGuardVerdict | undefined {
+  onEvent(event: OpenCodeStreamEvent): OpenCodeGuardVerdict | undefined {
+    this.trackToolFlight(event);
     this.arm();
     return undefined;
   }
 
   stop(scope: OpenCodeGuardLifecycleScope): void {
     if (scope !== 'attempt') return;
-    if (this.timeoutId !== undefined) clearTimeout(this.timeoutId);
-    this.timeoutId = undefined;
+    this.disarm();
+    this.inFlightToolCalls.clear();
     this.onVerdict = undefined;
+  }
+
+  private trackToolFlight(event: OpenCodeStreamEvent): void {
+    const toolPart = readOpenCodeToolPart(event);
+    if (toolPart === undefined) return;
+    const key = openCodeToolCallKey(toolPart);
+    if (isOpenCodeToolTerminal(toolPart)) {
+      this.inFlightToolCalls.delete(key);
+      return;
+    }
+    this.inFlightToolCalls.add(key);
   }
 
   private arm(): void {
     if (this.onVerdict === undefined) return;
-    if (this.timeoutId !== undefined) clearTimeout(this.timeoutId);
+    this.disarm();
+    // テストスイート実行のような長時間のツール呼び出しの間、OpenCode は
+    // tool_use から tool_result までイベントを1つも流さない。この無音を
+    // アイドルと判定すると健全な実行を切ってしまうため、in-flight のツール
+    // 呼び出しが1つでもある間は計測しない。結果が返らないツールは call scope の
+    // wall-clock guard が受け持つ。
+    if (this.inFlightToolCalls.size > 0) return;
     this.timeoutId = setTimeout(() => {
       this.onVerdict?.({
         action: 'fail',
         reason: describeOpenCodeIdleTimeout(this.timeoutMs),
       });
     }, this.timeoutMs);
+  }
+
+  private disarm(): void {
+    if (this.timeoutId === undefined) return;
+    clearTimeout(this.timeoutId);
+    this.timeoutId = undefined;
   }
 }

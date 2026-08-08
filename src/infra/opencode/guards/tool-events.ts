@@ -1,8 +1,26 @@
-import type { OpenCodeToolPart } from '../OpenCodeStreamHandler.js';
+import type {
+  OpenCodePart,
+  OpenCodeStreamEvent,
+  OpenCodeToolPart,
+} from '../OpenCodeStreamHandler.js';
 
 export interface OpenCodeToolRejection {
   tool: string;
   error: string;
+}
+
+export function readOpenCodeToolPart(event: OpenCodeStreamEvent): OpenCodeToolPart | undefined {
+  if (event.type !== 'message.part.updated') return undefined;
+  const part = event.properties.part as OpenCodePart;
+  return part.type === 'tool' ? (part as OpenCodeToolPart) : undefined;
+}
+
+export function openCodeToolCallKey(toolPart: OpenCodeToolPart): string {
+  return `${toolPart.sessionID}\0${toolPart.callID || toolPart.id}`;
+}
+
+export function isOpenCodeToolTerminal(toolPart: OpenCodeToolPart): boolean {
+  return toolPart.state.status === 'completed' || toolPart.state.status === 'error';
 }
 
 export function extractOpenCodeToolRejection(

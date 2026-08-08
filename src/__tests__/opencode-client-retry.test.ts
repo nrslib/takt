@@ -267,8 +267,13 @@ describe('OpenCodeClient retry', () => {
     expect(result.content).toBe('');
   });
 
-  it('ストリームの idle timeout を retry して成功を返す', async () => {
+  it('ストリームの idle timeout は in-flight ツールの間は待ち、結果受信後に retry して成功を返す', async () => {
     vi.useFakeTimers();
+
+    let releaseToolResult: (() => void) | undefined;
+    const toolResultReleased = new Promise<void>((resolve) => {
+      releaseToolResult = resolve;
+    });
 
     runPlans = [
       {
@@ -284,6 +289,26 @@ describe('OpenCodeClient retry', () => {
                 callID: 'call-timeout-tool',
                 tool: 'remote',
                 state: { status: 'running', input: { token: 'timeout-secret' } },
+              },
+            },
+          };
+          // 長時間ツールの実測挙動: 結果が返るまでイベントは1つも流れない。
+          await toolResultReleased;
+          yield {
+            type: 'message.part.updated',
+            properties: {
+              part: {
+                id: 'timeout-tool',
+                sessionID: 'session-timeout-retry-1',
+                type: 'tool',
+                callID: 'call-timeout-tool',
+                tool: 'remote',
+                state: {
+                  status: 'completed',
+                  input: { token: 'timeout-secret' },
+                  output: 'remote finished',
+                  title: 'remote',
+                },
               },
             },
           };
@@ -352,15 +377,21 @@ describe('OpenCodeClient retry', () => {
       expect(sessionCreate).toHaveBeenCalledTimes(1);
       expect(promptAsync).toHaveBeenCalledTimes(1);
     });
-    await vi.advanceTimersByTimeAsync(OPENCODE_STREAM_IDLE_TIMEOUT_MS - 1);
+    await vi.advanceTimersByTimeAsync(OPENCODE_STREAM_IDLE_TIMEOUT_MS * 3);
     expect(sessionCreate).toHaveBeenCalledTimes(1);
     expect(promptAsync).toHaveBeenCalledTimes(1);
 
-    await vi.advanceTimersByTimeAsync(1);
+    releaseToolResult?.();
+    await vi.waitFor(() => {
+      expect(onStream.mock.calls.some(([event]) => (
+        event.type === 'tool_result' && event.data.id === 'call-timeout-tool'
+      ))).toBe(true);
+    });
+    expect(sessionCreate).toHaveBeenCalledTimes(1);
 
-    await vi.advanceTimersByTimeAsync(249);
+    await vi.advanceTimersByTimeAsync(OPENCODE_STREAM_IDLE_TIMEOUT_MS);
 
-    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(250);
     const result = await resultPromise;
 
     expect(result.status, JSON.stringify(result)).toBe('done');
