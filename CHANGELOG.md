@@ -6,6 +6,35 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.57.0] - 2026-08-09
+
+### Added
+
+- `capabilities` references (#1231, #1237). A workflow, step, or parallel sub-step can declare `capabilities: <name>` (or a list, merged left to right with later names winning per leaf) referencing a semantic provider-options preset instead of writing inline `provider_options`. The bundled presets are `readonly` (read, search, shell, and web lookup plus network access), `edit` (`readonly` plus file creation and editing), and `enable-skills` (Codex repo/user skills). Only capability leaves (`allowed_tools` / `network_access` / `sandbox` / `skills`) are accepted — a preset carrying a quality or machine leaf fails fast at load time, as does an unresolved name. A step's own declaration replaces the workflow default, and a parallel parent's resolved capabilities become the sub-steps' default.
+- Profile ladders in `runtime.yaml` (#1231). `defaults` and every `provider.targets` entry now pick exactly one assignment form: a fixed `profile`, an auto-routing `pool`, or an ordered `ladder` of profiles whose first profile is the initial assignment and whose later stages are advanced by a step `promotion`. Self-referencing and cyclic ladders are rejected at load time. Steps can also reference workflow-level `mcp_servers` definitions by name via `mcp: [name, ...]`, with unresolved names failing fast.
+- Grill Me interactive mode (#1251). The new `grill-me` mode refines a task by resolving material decision branches one recommended question at a time, then suggests `/go` when the requirements are ready. It is offered in the interactive mode prompt and selectable as the default via `interactive_mode: grill-me`.
+- Markdown + Gherkin task instructions (#1252). The project-only `assistant.gherkin: true` setting makes final task instructions generated from assistant conversations (including quiet mode) keep background, scope, design intent, constraints, and verification in Markdown while expressing important observable behavior, state transitions, boundaries, failures, and invariants as a minimal number of Gherkin scenarios. Unset preserves the existing Markdown-only instructions.
+- An experimental dynamic coding workflow (#1247). The `experimental` builtin composes a coding flow around dynamic facet pools with a shared `experimental-review` step fragment. `dynamic_facets.max_selected` is now optional: when omitted, the selector may select up to every candidate in the pool; selector failure still stops the run with no all-candidate fallback.
+
+### Changed
+
+- **BREAKING:** Finding Contract synthetic roles are no longer assigned a provider or model in the workflow (#1234). `finding_contract.manager` / `finding_contract.adjudicator` accept persona/instruction customization only; leftover `provider` / `model` keys are rejected at load time. Assign the roles through the new `runtime.yaml` `provider.targets.internal_agents` seats instead — `findings-manager`, `terminal-adjudicator`, `loop-judge`, `escalation-reviewer`, and `intake-normalizer`. Every seat is optional: an unassigned seat keeps the role's existing default resolution, and the `escalation-reviewer` seat only replaces the destination of an escalation that the reviewer profile's `escalate` declaration already enabled.
+- **BREAKING:** The builtin workflows migrated from inline `provider_options` to `capabilities` references, and the provider-options presets were reworked to match (#1238, #1239): `review-readonly` was renamed to `readonly`, `review-files` was removed, and `enable-skills` was added alongside the existing `edit`. User workflows or fragments using `extends: review-readonly` / `review-files` must switch to `readonly` / `edit`.
+- The `compound-eye` review workflow is provider-neutral now (#1239, #1241). Its parallel reviewers, previously the provider-pinned `claude-eye` (claude-sdk) and `codex-eye` (codex) sub-steps, are the neutral sub-steps `eye1` / `eye2` with no provider names in the workflow YAML. Both eyes run on the default provider until each is assigned a different provider in `runtime.yaml` (`provider.targets.steps`), which is what produces the multi-engine review; routing rules targeting the old sub-step names must switch to `eye1` / `eye2`.
+- Finding Contract review (experimental) was reworked around a single Markdown intake path (#1219, #1221, #1222, #1226, #1227, #1229, #1230, #1232, #1235, #1246). Every FC reviewer — including the escalation slot — writes an ordinary Markdown report, and one isolated intake-normalizer call turns it into findings whose quotes and anchors are verified byte-exact against the files; the structured and legacy publication descriptors are gone. Reviewers are observation-only: they report what is broken, where, why, and where evidence can be quoted, while the normalizer assigns severity, title, and family classification — so a correct observation can no longer die over classification bookkeeping. The engine now computes each reviewer's review scope and injects it as a `review_scope` variable, and a REJECT-consistency gate keeps a REJECT verdict with no surviving claims from being silently swallowed. Restatement moved from next-round piggybacking to per-reviewer slots inside the same round, so follow-ups no longer burn the review budget, and a reviewer profile may declare `escalate: <profile>` in `runtime.yaml` to hand the final presentation to a stronger model for a full re-review.
+- The builtin review facets gained three investigation-discipline principles, raising finding detection (#1220).
+
+### Fixed
+
+- Steps combining `structured_output` with a report output contract write the Phase 2 Markdown report again instead of the Phase 1 structured-output JSON (#1242, #1245). A regression from the 0.56.0 Finding Contract overhaul passed the step's structured-output schema to the report phase, so the report file contained schema-shaped JSON.
+- OpenCode's idle-timeout guard no longer misfires during long silent tool executions (#1243). OpenCode emits no stream events between `tool_use` and `tool_result`, so a long-running tool call such as a test suite looked idle and healthy runs were cut off after 10 minutes; in-flight tool calls now pause the idle measurement.
+- Retrying a task now selects the correct session log (#1254). Phase-usage and OTel shadow logs are excluded from the candidate set and the selection is deterministic.
+
+### Internal
+
+- The test gates were restructured (#1249, #1250, #1253, #1255): a light integration gate (`npm run test:it`) was split from the heavy one (`npm run test:it:heavy`), observed integration boundaries moved out of the unit gate, and the heavy integration jobs are sharded across isolated CI runners.
+- A unit shard that fails only due to the spurious vitest birpc `onTaskUpdate` timeout noise is re-measured once locally instead of failing the gate (#1244); CI remains strict.
+
 ## [0.56.0] - 2026-08-07
 
 ### Added

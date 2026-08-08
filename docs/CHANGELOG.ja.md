@@ -6,6 +6,35 @@
 
 フォーマットは [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) に基づいています。
 
+## [0.57.0] - 2026-08-09
+
+### Added
+
+- `capabilities` 参照を追加しました (#1231, #1237)。ワークフロー・ステップ・parallel の子ステップに `capabilities: <name>`（またはリスト。左から右へマージし、同じ leaf は後の名前が勝つ）を宣言すると、inline の `provider_options` の代わりに意味ベースのプリセットを参照できます。同梱プリセットは `readonly`（読み取り・検索・シェル・Web 参照とネットワークアクセス）、`edit`（`readonly` + ファイル作成・編集）、`enable-skills`（Codex の repo/user スキル）です。受理されるのは能力系 leaf（`allowed_tools` / `network_access` / `sandbox` / `skills`）のみで、品質系・マシン系 leaf を含むプリセットや未解決の名前はロード時に fail fast します。ステップ自身の宣言はワークフロー既定を置換し、parallel 親の解決済み capabilities は子ステップの既定になります。
+- `runtime.yaml` の profile ladder を追加しました (#1231)。`defaults` と各 `provider.targets` エントリは、固定の `profile`・自動ルーティングの `pool`・順序付き `ladder` のいずれか1つを指定します。ladder は先頭 profile が初期割り当てで、ステップの `promotion` が次の段へ進めます。自己参照・循環 ladder はロード時に拒否されます。あわせて、ステップからワークフロー最上位の `mcp_servers` 定義を `mcp: [name, ...]` で名前参照でき、未解決の名前は fail fast します。
+- インタラクティブモード Grill Me を追加しました (#1251)。新モード `grill-me` は、判断が分かれる論点を1問ずつ推奨付きの質問で解消しながらタスクを詰め、要件が揃ったところで `/go` を提案します。モード選択プロンプトに加わり、`interactive_mode: grill-me` で既定にもできます。
+- Markdown + Gherkin のタスク指示を追加しました (#1252)。プロジェクト専用設定 `assistant.gherkin: true` を有効にすると、アシスタント対話（quiet モード含む）から生成される最終タスク指示が、背景・スコープ・設計意図・制約・検証を Markdown に保ちつつ、重要な観測可能挙動・状態遷移・境界・失敗・不変条件だけを最小限の Gherkin シナリオで表現するようになります。未設定なら従来の Markdown 指示のままです。
+- 実験的な動的コーディングワークフローを追加しました (#1247)。ビルトイン `experimental` は動的ファセットプールを軸にしたコーディングフローで、共有の `experimental-review` ステップフラグメントを使います。`dynamic_facets.max_selected` は省略可能になり、省略時はセレクターがプール内の全候補まで選択できます。セレクター失敗は従来どおり実行を停止し、全候補への暗黙フォールバックはありません。
+
+### Changed
+
+- **BREAKING:** Finding Contract の合成ロールはワークフローから provider / model を指定しなくなりました (#1234)。`finding_contract.manager` / `finding_contract.adjudicator` は persona / instruction 等のカスタマイズのみを受け付け、残存する `provider` / `model` キーはロード時に拒否されます。ロールの割り当ては新設の `runtime.yaml` `provider.targets.internal_agents` seat（`findings-manager`・`terminal-adjudicator`・`loop-judge`・`escalation-reviewer`・`intake-normalizer`）で行います。seat はすべてオプショナルで、未指定 seat はそのロールの従来の既定解決を維持します。`escalation-reviewer` seat は、レビュアー profile の `escalate` 宣言が既に有効化した格上げの宛先だけを差し替え、発火の有無は変えません。
+- **BREAKING:** ビルトインワークフローを inline `provider_options` から `capabilities` 参照へ移行し、provider-options プリセットもあわせて再編しました (#1238, #1239)。`review-readonly` は `readonly` へ改名、`review-files` は削除、`enable-skills` を新設し、`edit` は従来どおりです。`extends: review-readonly` / `review-files` を使っているユーザーワークフローやフラグメントは `readonly` / `edit` へ切り替えてください。
+- レビューワークフロー `compound-eye` がプロバイダ中立になりました (#1239, #1241)。プロバイダ固定だった子ステップ `claude-eye`（claude-sdk）/ `codex-eye`（codex）は中立名の `eye1` / `eye2` になり、ワークフロー YAML からプロバイダ名が消えました。`runtime.yaml`（`provider.targets.steps`）で各 eye に異なるプロバイダを割り当てて初めて複眼レビューになり、割り当てるまでは両 eye とも既定プロバイダで動きます。旧子ステップ名を対象にしたルーティング設定は `eye1` / `eye2` へ切り替えてください。
+- Finding Contract レビュー（実験的機能）を Markdown 一本道の intake へ作り直しました (#1219, #1221, #1222, #1226, #1227, #1229, #1230, #1232, #1235, #1246)。すべての FC レビュアー（格上げ枠含む）は通常の Markdown レポートを書き、隔離された正規化係の1回の呼び出しがそれを指摘へ変換して、引用とアンカーをファイルとバイト一致で機械検証します。構造化・レガシーの publication 記述子は廃止しました。レビュアーは観察専任になり、何が・どこで・なぜ壊れているかと引用可能な証拠の場所だけを報告し、severity・title・family の分類は正規化係が付与します。正しい観察が分類事務の書き忘れで死ぬことはなくなりました。エンジンがレビュースコープを算出して `review_scope` 変数としてレビュアー指示へ注入し、REJECT 整合ゲートにより claim ゼロの REJECT 判定が黙って握り潰されることも防ぎます。言い直しは次ラウンド相乗りからラウンド内のレビュアー別 slot へ移り、フォローアップがレビュー予算を消費しなくなりました。レビュアーの profile に `escalate: <profile>` を宣言すると、最終提示をより強いモデルの完全な再レビューへ委ねられます。
+- ビルトインのレビューファセットに調査規律3原則を追加し、指摘の検出力を引き上げました (#1220)。
+
+### Fixed
+
+- `structured_output` とレポート出力契約を併用したステップが、Phase 1 の structured output JSON ではなく Phase 2 の Markdown レポートを再び書くようになりました (#1242, #1245)。0.56.0 の Finding Contract 刷新でステップのスキーマがレポートフェーズへ渡るようになり、レポートファイルがスキーマ形の JSON になっていました。
+- OpenCode の idle timeout ガードが、長い無音のツール実行中に誤発火しなくなりました (#1243)。OpenCode は `tool_use` から `tool_result` までストリームイベントを流さないため、テストスイート実行のような長いツール呼び出しがアイドルとみなされ、健全な実行が10分で切断されていました。in-flight のツール呼び出し中はアイドル計測を止めます。
+- タスクのリトライ時に正しいセッションログを選択するようになりました (#1254)。phase-usage / OTel shadow ログを候補から除外し、選択を決定的にしました。
+
+### Internal
+
+- テストゲートを再編しました (#1249, #1250, #1253, #1255)。軽量統合ゲート（`npm run test:it`）を重量ゲート（`npm run test:it:heavy`）から分離し、観測された統合境界をユニットゲートから移し、重量統合ジョブを CI の独立ランナーへシャーディングしました。
+- vitest の birpc `onTaskUpdate` タイムアウトノイズだけで落ちたユニットシャードは、ローカルでは1回だけ再測定するようにしました (#1244)。CI では従来どおり厳格です。
+
 ## [0.56.0] - 2026-08-07
 
 ### Added
