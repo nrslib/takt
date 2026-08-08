@@ -1455,3 +1455,132 @@ describe('main manager bounded task runner', () => {
     }]);
   });
 });
+
+describe('reviewer anomaly adjudication control task', () => {
+  const workflowTask = 'Rename the legacy signal fields under src/infra/config/runtime-provider/.';
+  const recordedClaim = 'The legacy signal setting no longer matches the requested contract.';
+
+  function terminalAnomalyLedger(): FindingLedger {
+    const source = rawFinding(1, {
+      rawFindingId: 'raw-anomaly-source',
+      rawExcerpt: recordedClaim,
+      description: recordedClaim,
+    });
+    return emptyLedger({
+      rawFindings: [source],
+      reviewerAnomalies: [{
+        id: 'RA-TERMINAL',
+        kind: 'intake-contract-incomplete',
+        stableKey: 'stable-terminal',
+        lineageKey: 'lineage-terminal',
+        sourceRawFindingIds: [source.rawFindingId],
+        sourceIntakeIds: [],
+        reviewers: ['reviewer'],
+        title: 'Reviewer evidence anomaly',
+        claimedExcerpt: recordedClaim,
+        mismatchReason: 'Independent reviewer observation does not satisfy the product admission contract',
+        intakeContract: {
+          observationClass: 'claim-bearing',
+          classificationAuthorityId: 'system/intake_observation_classification_v1',
+          reasonCodes: ['product-identity-incomplete'],
+          missingRequirements: ['relation', 'severity'],
+          presentationOwnerReviewer: 'reviewer',
+          presentationLimit: 6,
+          terminalDisposition: {
+            kind: 'restatement_exhausted_claim_bearing',
+            workflowOutcome: 'review_integrity_unresolved',
+            decidedAt: { runId: 'run', stepName: 'reviewers', timestamp: '2026-07-29T00:00:00.000Z' },
+            terminalPublicationId: 'b'.repeat(64),
+            reason: 'Restatement presentation limit 6 was reached without verified correspondence',
+          },
+        },
+        firstObserved: { runId: 'run', stepName: 'reviewers', timestamp: '2026-07-29T00:00:00.000Z' },
+        lastObserved: { runId: 'run', stepName: 'reviewers', timestamp: '2026-07-29T00:00:00.000Z' },
+        occurrences: 1,
+      }],
+    });
+  }
+
+  const manifestFor = (
+    managerAuthority: RunFindingManagerForStepInput['managerAuthority'],
+  ) => createMainManagerControlTaskManifest({
+    previousLedger: terminalAnomalyLedger(),
+    reviewScopeSnapshotId: 'scope-test',
+    priorStepResponseText: undefined,
+    invalidLocationCandidates: new Map(),
+    dismissCandidates: new Map(),
+    managerAuthority,
+    workflowTask,
+    subResults: [],
+  });
+
+  it('issues the adjudication task only when the call holds terminal authority', () => {
+    // 権限の無いラウンドで問うと、返せない答えを毎ラウンド要求することになる。
+    expect(manifestFor('standard')).toHaveLength(0);
+
+    const tasks = manifestFor('terminal_adjudication');
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]!.task.kind).toBe('reviewer_anomaly');
+    expect(tasks[0]!.task.ownedEntityIds).toEqual(['RA-TERMINAL']);
+    expect(tasks[0]!.task.candidateIntents.map((intent) => intent.kind)).toEqual(['adjudicate_anomaly']);
+    // 権限の出所は task に束縛される。
+    expect(tasks[0]!.task.taskScopeContext?.managerAuthority).toBe('terminal_adjudication');
+  });
+
+  const runAdjudication = async (claimQuote: string) => {
+    executeAgentMock.mockImplementation(async (_persona, instruction) => {
+      const manifest = sectionJson<ControlManifestView>(instruction, '## Task manifest');
+      return response({
+        taskId: manifest.taskId,
+        evaluations: manifest.candidateIntents.map((intent) => ({
+          intentId: intent.intentId,
+          result: {
+            kind: 'dismiss',
+            anomalyId: intent.entityId,
+            basis: 'outside_task_scope',
+            reason: 'The claim targets a module the task never asked to change',
+            taskQuote: 'Rename the legacy signal fields',
+            claimQuote,
+          },
+        })),
+        selectedIntentId: manifest.candidateIntents[0]!.intentId,
+      });
+    });
+    return runMainManagerTasks({
+      contract,
+      previousLedger: terminalAnomalyLedger(),
+      reviewScopeSnapshotId: 'scope-test',
+      residualRawFindings: [],
+      mechanicallyClassifiedCount: 0,
+      priorStepResponseText: undefined,
+      invalidLocationCandidates: new Map(),
+      dismissCandidates: new Map(),
+      evidenceRecordsByRawFindingId: new Map(),
+      managerStep,
+      runInput,
+      managerAuthority: 'terminal_adjudication',
+      workflowTask,
+      subResults: [],
+    });
+  };
+
+  it('accepts a dismissal whose quotes are byte-exact', async () => {
+    const result = await runAdjudication(recordedClaim.slice(0, 24));
+
+    expect(result.anomalyAdjudications).toEqual([expect.objectContaining({
+      anomalyId: 'RA-TERMINAL',
+      basis: 'outside_task_scope',
+      taskQuote: 'Rename the legacy signal fields',
+      claimQuote: recordedClaim.slice(0, 24),
+    })]);
+    // product finding の決定系へは一切合流しない。
+    expect(result.decisions.dismissDecisions).toEqual([]);
+  });
+
+  it('rejects a dismissal whose claim quote is a paraphrase', async () => {
+    const result = await runAdjudication('a paraphrase the reviewer never wrote');
+
+    expect(result.anomalyAdjudications).toEqual([]);
+    expect(result.invalidAttemptMessages.join('\n')).toContain('byte-exact quote of the recorded claim');
+  });
+});

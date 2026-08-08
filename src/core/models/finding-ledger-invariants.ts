@@ -1392,6 +1392,8 @@ function reviewerAnomalySettlementLabel(settlement: ReviewerAnomalySettlement): 
       return 'terminal-dismissal';
     case 'withdrawn_by_subsequent_review':
       return 'subsequent-review withdrawal';
+    case 'dismissed_by_terminal_adjudication':
+      return 'terminal-adjudication dismissal';
     default: {
       const unexpected: never = settlement;
       throw new Error(`Unsupported reviewer anomaly settlement: ${JSON.stringify(unexpected)}`);
@@ -1487,11 +1489,16 @@ function collectReviewerAnomalyViolations(
         // 言い直しで要求できる claim 本文が無い観測の終端は、observationClass 由来の
         // 対応表の外にある（提示を1回も行わずに決着する唯一の kind）。
         const undemandableTerminal = defect.terminalDisposition?.kind === 'undemandable_claim_atom';
+        // 終端処分と同居してよい決着は、終端処分を成立条件に持つ裁定却下だけ。
+        // 昇格・検証済み解消・後続レビューによる取り下げは「ラダーが終端したのに
+        // ラダー由来の決着も付いた」という矛盾記録になるので同居を禁じ続ける
+        // （提示が止まらず昇格が後付けされた実事故を捕まえたのがこの検査）。
+        const adjudicatedTerminal = anomaly.settlement?.kind === 'dismissed_by_terminal_adjudication';
         if (
           defect.terminalDisposition !== undefined
           && (
             anomaly.promotedFindingId !== undefined
-            || anomaly.settlement !== undefined
+            || (anomaly.settlement !== undefined && !adjudicatedTerminal)
             || (undemandableTerminal
               && defect.terminalDisposition.workflowOutcome !== (
                 defect.observationClass === 'claim-bearing'

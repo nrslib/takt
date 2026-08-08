@@ -44,10 +44,14 @@ steps:
         return: need_replan
       - condition: when(findings.provisional.count > 0)
         return: need_replan
-      # 言い直し予算を使い切った claim-bearing な reviewer anomaly は、再レビューでも
-      # terminal adjudication でも解消できない。ここで COMPLETE へ送り、エンジンの
+      # 言い直し予算を使い切った claim-bearing な reviewer anomaly。このステップは
+      # terminal_adjudication 権限を持つので、ルール評価より前に走る findings-manager
+      # ラウンドで reviewer_anomaly control task が回り、task 範囲外と機械検証できた
+      # ものは裁定却下として決着済みになる。ここへ残るのは裁定が却下しなかったもの
+      # だけ — 再レビューでは解消しないので COMPLETE へ送り、エンジンの
       # review-integrity ゲート(review_integrity_unresolved)に可視的な失敗として
-      # 落とす — needs_review へ戻すと再レビューと最終ゲートを無限に往復する。
+      # 落とす。needs_review へ戻すと再レビューと最終ゲートを無限に往復する。
+      # 自動救済はしない: 決着は裁定だけで、裁定が却下しなければ run は失敗する。
       # open.count の needs_fix より前に置く: この anomaly が残る限りエンジンの
       # review-integrity 不変条件により完了できないため、修正ループは無駄弾になる。
       - condition: when(findings.reviewerAnomalies.claimBearingTerminalCount > 0)
@@ -83,10 +87,14 @@ steps:
         return: need_replan
       - condition: when(findings.provisional.count > 0)
         return: need_replan
-      # 言い直し予算を使い切った claim-bearing な reviewer anomaly は、再レビューでも
-      # terminal adjudication でも解消できない。ここで COMPLETE へ送り、エンジンの
+      # 言い直し予算を使い切った claim-bearing な reviewer anomaly。このステップは
+      # terminal_adjudication 権限を持つので、ルール評価より前に走る findings-manager
+      # ラウンドで reviewer_anomaly control task が回り、task 範囲外と機械検証できた
+      # ものは裁定却下として決着済みになる。ここへ残るのは裁定が却下しなかったもの
+      # だけ — 再レビューでは解消しないので COMPLETE へ送り、エンジンの
       # review-integrity ゲート(review_integrity_unresolved)に可視的な失敗として
-      # 落とす — needs_review へ戻すと再レビューと最終ゲートを無限に往復する。
+      # 落とす。needs_review へ戻すと再レビューと最終ゲートを無限に往復する。
+      # 自動救済はしない: 決着は裁定だけで、裁定が却下しなければ run は失敗する。
       # open.count の needs_fix より前に置く: この anomaly が残る限りエンジンの
       # review-integrity 不変条件により完了できないため、修正ループは無駄弾になる。
       - condition: when(findings.reviewerAnomalies.claimBearingTerminalCount > 0)

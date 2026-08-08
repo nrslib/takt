@@ -1187,7 +1187,8 @@ export type FindingManagerTaskKind =
   | 'conflict'
   | 'invalidate'
   | 'duplicate'
-  | 'dismiss';
+  | 'dismiss'
+  | 'reviewer_anomaly';
 
 /** Provider task の非権威監査。台帳変更権限や lifecycle head の正本には使わない。 */
 export type FindingManagerTaskAudit =
@@ -1650,9 +1651,39 @@ export interface ReviewerAnomalyReviewWithdrawalSettlement {
   decidedAt: FindingObservation;
 }
 
+/**
+ * 終端処分済み(restatement_exhausted_claim_bearing / undemandable_claim_atom)の
+ * claim-bearing anomaly を、terminal adjudication 権限を持つ裁定が却下したことによる
+ * 決着。
+ *
+ * 言い直しラダーを使い切った claim-bearing の観測は、可視的失敗が既定であって
+ * 自動では決着しない。救済はこの裁定だけで、根拠は機械検証可能な2つの逐語引用に
+ * 限る:
+ *   - taskQuote: workflow task の byte-exact 部分文字列。「この主張は今回の task の
+ *     範囲外である」という判断の根拠。product finding の outside_task_scope 却下と
+ *     同じ流儀で、後から workflowTaskDigest によって束縛を再検証できる。
+ *   - claimQuote: anomaly が記録した claim 本文の byte-exact 部分文字列。裁定が
+ *     実在の主張を読んだ証跡。台帳だけで再検証できる。
+ *
+ * adjudicationTaskId は権限の出所になった control task。engine が
+ * managerAuthority === 'terminal_adjudication' のときにしか発行しないため、
+ * 設定だけでこの決着へ到達する経路は無い。
+ */
+export interface ReviewerAnomalyAdjudicationSettlement {
+  kind: 'dismissed_by_terminal_adjudication';
+  basis: 'outside_task_scope';
+  taskQuote: string;
+  workflowTaskDigest: string;
+  claimQuote: string;
+  adjudicationTaskId: string;
+  reason: string;
+  decidedAt: FindingObservation;
+}
+
 export type ReviewerAnomalySettlement =
   | ReviewerAnomalyTargetSettlement
-  | ReviewerAnomalyReviewWithdrawalSettlement;
+  | ReviewerAnomalyReviewWithdrawalSettlement
+  | ReviewerAnomalyAdjudicationSettlement;
 
 /**
  * 二系統台帳(review-integrity protocol)の review-integrity レコード。product finding

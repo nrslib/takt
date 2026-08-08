@@ -208,6 +208,7 @@ export async function runManagerDecisionStage(params: {
 
   return {
     managerOutput,
+    anomalyAdjudications: taskExecution?.anomalyAdjudications ?? [],
     conflictTargetHeads: taskExecution?.conflictTargetHeads ?? new Map(),
     invalidAttempts,
     cleanProvisionalSpecs,

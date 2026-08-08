@@ -12,6 +12,7 @@ import type {
   FindingLifecycleReservation,
   FindingMutationPrecondition,
   RawFinding,
+  ReviewerAnomalyAdjudicationSettlement,
   ReviewerAnomalyEntry,
   ReviewerAnomalyReviewWithdrawalSettlement,
   ReviewerAnomalySettlement,
@@ -322,6 +323,66 @@ function reviewWithdrawalEligibilityViolation(
     : 'withdrawal must record a superseding review for every reviewer that observed the anomaly';
 }
 
+/**
+ * 裁定が読んだと主張する claim 本文。台帳だけで再検証できる範囲に限る
+ * （anomaly の記録済み claim と、その出所 raw の本文）。
+ */
+export function reviewerAnomalyAdjudicationClaimTexts(
+  projection: Pick<ReviewerAnomalySettlementProjection, 'rawFindings'>,
+  anomaly: ReviewerAnomalyEntry,
+): string[] {
+  const sourceTexts = anomaly.sourceRawFindingIds.flatMap((rawFindingId) => {
+    const raw = projection.rawFindings.find(
+      (candidate) => candidate.rawFindingId === rawFindingId,
+    );
+    return raw === undefined
+      ? []
+      : [raw.description, raw.rawExcerpt].flatMap((text) => (
+        typeof text === 'string' && text.length > 0 ? [text] : []
+      ));
+  });
+  return [
+    ...(anomaly.claimedExcerpt === undefined ? [] : [anomaly.claimedExcerpt]),
+    ...sourceTexts,
+  ];
+}
+
+/**
+ * 終端処分済み anomaly の裁定却下が成立する条件。
+ *
+ * 対象は「言い直しラダーを使い切った claim-bearing」だけ。可視的失敗が既定で、
+ * 救済はこの裁定に限る建付けなので、対象外へ広げない。
+ */
+function adjudicationEligibilityViolation(input: {
+  projection: ReviewerAnomalySettlementProjection;
+  anomaly: ReviewerAnomalyEntry;
+  settlement: ReviewerAnomalyAdjudicationSettlement;
+  workflowTaskDigest: string | null;
+}): string | undefined {
+  const anomaly = input.anomaly;
+  if (anomaly.promotedFindingId !== undefined) {
+    return 'promoted anomalies cannot be settled';
+  }
+  if (
+    anomaly.kind !== 'intake-contract-incomplete'
+    || anomaly.intakeContract?.terminalDisposition?.workflowOutcome !== 'review_integrity_unresolved'
+  ) {
+    return 'terminal adjudication may only dismiss a claim-bearing anomaly whose restatement ladder terminated unresolved';
+  }
+  if (
+    input.workflowTaskDigest !== null
+    && input.settlement.workflowTaskDigest !== input.workflowTaskDigest
+  ) {
+    return 'adjudication is bound to a different workflow task';
+  }
+  // 記録済みの claim 本文に対する byte-exact 部分文字列であること。裁定が実在の
+  // 主張を読んだ証跡で、台帳だけで再検証できる唯一の根拠。
+  return reviewerAnomalyAdjudicationClaimTexts(input.projection, anomaly)
+    .some((text) => text.includes(input.settlement.claimQuote))
+    ? undefined
+    : 'adjudication claimQuote is not a byte-exact quote of the recorded claim';
+}
+
 export function reviewerAnomalySettlementEligibilityViolation(input: {
   projection: ReviewerAnomalySettlementProjection;
   anomaly: ReviewerAnomalyEntry;
@@ -332,6 +393,14 @@ export function reviewerAnomalySettlementEligibilityViolation(input: {
   const settlement = input.settlement;
   if (settlement.kind === 'withdrawn_by_subsequent_review') {
     return reviewWithdrawalEligibilityViolation(input.anomaly, settlement);
+  }
+  if (settlement.kind === 'dismissed_by_terminal_adjudication') {
+    return adjudicationEligibilityViolation({
+      projection: input.projection,
+      anomaly: input.anomaly,
+      settlement,
+      workflowTaskDigest: input.workflowTaskDigest,
+    });
   }
   if (input.anomaly.kind === 'protocol-anomaly') {
     return 'protocol anomalies cannot be settled';

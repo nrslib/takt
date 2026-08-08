@@ -44,10 +44,15 @@ steps:
         return: need_replan
       - condition: when(findings.provisional.count > 0)
         return: need_replan
-      # A claim-bearing reviewer anomaly that exhausted its restatement budget cannot be
-      # resolved by another review or by terminal adjudication. Route it to COMPLETE so the
-      # engine review-integrity gate reports review_integrity_unresolved as a visible
-      # failure — returning needs_review here loops between review and the final gate forever.
+      # A claim-bearing reviewer anomaly that exhausted its restatement budget. This step
+      # holds terminal_adjudication authority, so the findings-manager round that runs before
+      # rule evaluation issues a reviewer_anomaly control task; anomalies the adjudicator can
+      # machine-verify as outside the task scope are already settled by the time this rule is
+      # evaluated. What remains is what the adjudicator did not dismiss — another review will
+      # not resolve it, so route it to COMPLETE and let the engine review-integrity gate report
+      # review_integrity_unresolved as a visible failure. Returning needs_review here loops
+      # between review and the final gate forever. There is no automatic rescue: only an
+      # adjudication settles this, and the run fails when the adjudicator declines.
       # It precedes the open.count needs_fix rule because the engine review-integrity
       # invariant forbids completion while this anomaly stands, so a fix loop cannot pay off.
       - condition: when(findings.reviewerAnomalies.claimBearingTerminalCount > 0)
@@ -83,10 +88,15 @@ steps:
         return: need_replan
       - condition: when(findings.provisional.count > 0)
         return: need_replan
-      # A claim-bearing reviewer anomaly that exhausted its restatement budget cannot be
-      # resolved by another review or by terminal adjudication. Route it to COMPLETE so the
-      # engine review-integrity gate reports review_integrity_unresolved as a visible
-      # failure — returning needs_review here loops between review and the final gate forever.
+      # A claim-bearing reviewer anomaly that exhausted its restatement budget. This step
+      # holds terminal_adjudication authority, so the findings-manager round that runs before
+      # rule evaluation issues a reviewer_anomaly control task; anomalies the adjudicator can
+      # machine-verify as outside the task scope are already settled by the time this rule is
+      # evaluated. What remains is what the adjudicator did not dismiss — another review will
+      # not resolve it, so route it to COMPLETE and let the engine review-integrity gate report
+      # review_integrity_unresolved as a visible failure. Returning needs_review here loops
+      # between review and the final gate forever. There is no automatic rescue: only an
+      # adjudication settles this, and the run fails when the adjudicator declines.
       # It precedes the open.count needs_fix rule because the engine review-integrity
       # invariant forbids completion while this anomaly stands, so a fix loop cannot pay off.
       - condition: when(findings.reviewerAnomalies.claimBearingTerminalCount > 0)

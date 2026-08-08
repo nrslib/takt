@@ -86,8 +86,18 @@ export interface InterpretationCaseRunResult {
   stats: InterpretationStatsReport;
 }
 
+import type {
+  ReviewerAnomalyAdjudicationDecision,
+} from './manager-task-contracts.js';
+
 export interface ManagerDecisionStageResult {
   managerOutput: FindingManagerOutput;
+  /**
+   * 終端処分済み reviewer anomaly の裁定却下。product finding の決定系
+   * （managerOutput）とは別系統なので合流させない — anomaly は findings 配列に
+   * 一切現れないレコードで、reconciler の不変条件も別物。
+   */
+  anomalyAdjudications: ReviewerAnomalyAdjudicationDecision[];
   conflictTargetHeads: Map<string, CapturedManagerConflictHead>;
   invalidAttempts: FindingManagerValidationAttemptReport[];
   cleanProvisionalSpecs: ProvisionalFindingSpec[];

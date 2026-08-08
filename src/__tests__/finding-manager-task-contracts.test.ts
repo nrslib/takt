@@ -36,7 +36,7 @@ function enumValues(
 describe('finding manager task contracts', () => {
   it.each([
     ['raw task', MainManagerRawTaskOutputJsonSchema, 3],
-    ['control task', MainManagerControlTaskOutputJsonSchema, 8],
+    ['control task', MainManagerControlTaskOutputJsonSchema, 10],
     ['entity binding task', FindingEntityBindingTaskOutputJsonSchema, 1],
   ])('declares matching string types for every enum in the projected %s output schema', (
     _name,
@@ -153,6 +153,22 @@ describe('finding manager task contracts', () => {
                 "kind",
                 "findingId",
                 "evidence",
+              ],
+            },
+            {
+              "basis": [
+                "outside_task_scope",
+              ],
+              "kind": [
+                "dismiss",
+              ],
+              "required": [
+                "kind",
+                "anomalyId",
+                "basis",
+                "reason",
+                "taskQuote",
+                "claimQuote",
               ],
             },
             {

@@ -1388,6 +1388,7 @@ export function buildFindingManagerCommitMutation(
     baseAnomalySpecs: prepared.anomalySpecs,
     pendingRejectedObservations: admission.pendingRejectedObservations,
     verifiedEvidenceCandidates: admission.verifiedEvidenceCandidates,
+    anomalyAdjudications: params.managerDecision.anomalyAdjudications,
   });
   const finalizedLedger = appendRawFindingsWithCanonicalSnapshots({
     ledger: finalized.ledger,

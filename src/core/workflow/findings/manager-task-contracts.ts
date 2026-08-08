@@ -222,6 +222,9 @@ export function parseFindingEntityBindingTaskOutput(
 export const MAIN_MANAGER_CONTROL_TASK_KINDS = [
   'finding_control',
   'conflict',
+  // 終端処分済み claim-bearing anomaly の裁定。terminal adjudication 権限が
+  // あるときだけ engine が発行する（権限が無ければ task 自体が作られない）。
+  'reviewer_anomaly',
 ] as const;
 
 export type MainManagerControlTaskKind = typeof MAIN_MANAGER_CONTROL_TASK_KINDS[number];
@@ -231,6 +234,7 @@ export const MAIN_MANAGER_CONTROL_INTENT_KINDS = [
   'conflict',
   'invalidate',
   'dismiss',
+  'adjudicate_anomaly',
 ] as const;
 
 export type MainManagerControlIntentKind =
@@ -314,11 +318,26 @@ const otherDismissResultSchema = z.object({
   evidence: z.string().min(1).max(2_048),
 }).strict();
 
+/**
+ * 終端処分済み anomaly の裁定却下。product finding の却下とは payload が別物
+ * （findingId ではなく anomalyId、根拠は task 引用と claim 引用の2本立て）なので
+ * union の別枝として持つ。findingId を要求する枝とは必須フィールドで排他になる。
+ */
+const reviewerAnomalyDismissResultSchema = z.object({
+  kind: z.literal('dismiss'),
+  anomalyId: z.string().min(1),
+  basis: z.literal('outside_task_scope'),
+  reason: z.string().min(1).max(2_048),
+  taskQuote: z.string().min(1).max(2_048),
+  claimQuote: z.string().min(1).max(2_048),
+}).strict();
+
 export const MainManagerControlTaskResultSchema = z.union([
   noActionResultSchema,
   disputeResultSchema,
   conflictResultSchema,
   invalidateResultSchema,
+  reviewerAnomalyDismissResultSchema,
   taskScopeDismissResultSchema,
   otherDismissResultSchema,
 ]);
@@ -326,6 +345,20 @@ export const MainManagerControlTaskResultSchema = z.union([
 export type MainManagerControlTaskResult = z.infer<
   typeof MainManagerControlTaskResultSchema
 >;
+
+/**
+ * 裁定が terminal adjudication 権限で下した anomaly 却下。engine が検証済みの
+ * 逐語引用と権限の出所（adjudicationTaskId）をそのまま台帳の settlement へ写す。
+ */
+export interface ReviewerAnomalyAdjudicationDecision {
+  anomalyId: string;
+  basis: 'outside_task_scope';
+  reason: string;
+  taskQuote: string;
+  claimQuote: string;
+  workflowTaskDigest: string;
+  adjudicationTaskId: string;
+}
 
 export interface MainManagerControlTaskOutput {
   taskId: string;
@@ -384,6 +417,19 @@ const controlResultJsonSchemas = [
       kind: { type: 'string', const: 'invalidate' },
       findingId: { type: 'string', minLength: 1 },
       evidence: { type: 'string', minLength: 1, maxLength: 2_048 },
+    },
+  },
+  {
+    type: 'object',
+    additionalProperties: false,
+    required: ['kind', 'anomalyId', 'basis', 'reason', 'taskQuote', 'claimQuote'],
+    properties: {
+      kind: { type: 'string', const: 'dismiss' },
+      anomalyId: { type: 'string', minLength: 1 },
+      basis: { type: 'string', const: 'outside_task_scope' },
+      reason: { type: 'string', minLength: 1, maxLength: 2_048 },
+      taskQuote: { type: 'string', minLength: 1, maxLength: 2_048 },
+      claimQuote: { type: 'string', minLength: 1, maxLength: 2_048 },
     },
   },
   {

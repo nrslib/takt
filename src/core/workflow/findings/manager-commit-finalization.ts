@@ -47,6 +47,12 @@ import {
 } from './resolution-renotification.js';
 import { resolveCurrentLifecycleObservationTarget } from './reviewer-anomaly-policy.js';
 import {
+  reviewerAnomalySettlementEligibilityViolation,
+} from '../../models/finding-reviewer-anomaly-settlement-policy.js';
+import type { ReviewerAnomalyAdjudicationSettlement } from '../../models/finding-types.js';
+import type { ReviewerAnomalyAdjudicationDecision } from './manager-task-contracts.js';
+import { computeWorkflowTaskDigest } from './task-scope-adjudication.js';
+import {
   listFindingReviewPublications,
   type CanonicalFindingReviewPublication,
 } from './review-publication.js';
@@ -159,6 +165,59 @@ function applyIntakeContractTerminalDispositions(input: {
     };
   });
   return changed ? { ...input.ledger, reviewerAnomalies } : input.ledger;
+}
+
+/**
+ * 裁定が却下した終端処分済み anomaly へ settlement を書き込む。
+ *
+ * 成立判定は書き込み先の台帳（このコミットで出来上がる配列）で行い、台帳側の
+ * 成立条件（reviewerAnomalySettlementEligibilityViolation）をそのまま使う。裁定を
+ * 出した時点と保存時点で状態がずれた anomaly（同ラウンドで昇格した等）は黙って
+ * 落とす — 決着済みを二重に決着させない。
+ */
+function applyReviewerAnomalyAdjudications(input: {
+  ledger: FindingLedger;
+  adjudications: readonly ReviewerAnomalyAdjudicationDecision[];
+  workflowTask: string;
+  observation: FindingObservation;
+}): FindingLedger {
+  const anomalies = input.ledger.reviewerAnomalies;
+  if (anomalies === undefined || input.adjudications.length === 0) {
+    return input.ledger;
+  }
+  const workflowTaskDigest = computeWorkflowTaskDigest(input.workflowTask);
+  const adjudicationByAnomalyId = new Map(
+    input.adjudications.map((adjudication) => [adjudication.anomalyId, adjudication] as const),
+  );
+  let changed = false;
+  const updated = anomalies.map((anomaly) => {
+    const adjudication = adjudicationByAnomalyId.get(anomaly.id);
+    if (adjudication === undefined) {
+      return anomaly;
+    }
+    const settlement: ReviewerAnomalyAdjudicationSettlement = {
+      kind: 'dismissed_by_terminal_adjudication',
+      basis: adjudication.basis,
+      taskQuote: adjudication.taskQuote,
+      workflowTaskDigest: adjudication.workflowTaskDigest,
+      claimQuote: adjudication.claimQuote,
+      adjudicationTaskId: adjudication.adjudicationTaskId,
+      reason: adjudication.reason,
+      decidedAt: input.observation,
+    };
+    if (reviewerAnomalySettlementEligibilityViolation({
+      projection: input.ledger,
+      anomaly,
+      settlement,
+      sourceHead: { kind: 'projection' },
+      workflowTaskDigest,
+    }) !== undefined) {
+      return anomaly;
+    }
+    changed = true;
+    return { ...anomaly, settlement };
+  });
+  return changed ? { ...input.ledger, reviewerAnomalies: updated } : input.ledger;
 }
 
 function classifyRejectedObservations(
@@ -418,6 +477,7 @@ export function applyCommitLedgerStates(input: {
   baseAnomalySpecs: ReviewerAnomalySpec[];
   pendingRejectedObservations: RawAdmissionEvaluation['pendingRejectedObservations'];
   verifiedEvidenceCandidates: RawAdmissionEvaluation['verifiedEvidenceCandidates'];
+  anomalyAdjudications: readonly ReviewerAnomalyAdjudicationDecision[];
 }): {
   ledger: FindingLedger;
   reviewerAnomalyLandings: ReviewerAnomalyLandingReport[];
@@ -498,8 +558,16 @@ export function applyCommitLedgerStates(input: {
     publicationIdsByReviewer,
     observation,
   });
-  return {
+  // 裁定は決着済みを触らないので、他の決着経路が全て終わった後の台帳で成立を
+  // 判定する（このコミットで昇格・取り下げになった anomaly は対象から落ちる）。
+  const withAdjudications = applyReviewerAnomalyAdjudications({
     ledger: withWithdrawals,
+    adjudications: input.anomalyAdjudications,
+    workflowTask: input.runInput.workflowTask,
+    observation,
+  });
+  return {
+    ledger: withAdjudications,
     reviewerAnomalyLandings: anomalySpecs.map((spec) => ({
       kind: spec.kind,
       stableKey: spec.stableKey,
