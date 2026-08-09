@@ -183,7 +183,6 @@ export const auditedIntegrationBoundaryTestFiles = Object.freeze([
   'src/__tests__/workflowCallResolver.test.ts',
   'src/__tests__/workflowDiscovery.test.ts',
   'src/__tests__/workflowExecution-debug-prompts.test.ts',
-  'src/__tests__/workflowExecution-finding-storage.integration.test.ts',
   'src/__tests__/workflowExecutionApi.test.ts',
   'src/__tests__/workflowExecutionBootstrapDirectResume.test.ts',
   'src/__tests__/workflowExecutionReporting.test.ts',
@@ -402,6 +401,8 @@ export const parallelIntegrationTestFiles = Object.freeze([
 // RPC timeout (spurious "Timeout calling onTaskUpdate" unhandled errors).
 // Add a file here only with a measured interference reason.
 export const serialGitTestFiles = Object.freeze([
+  // 2026-08-09: heavy 並列スライスで birpc onTaskUpdate 期限超過が CI 2コアランナーで2連続再現(#1264)。SQLite+fsync 負荷の実測干渉のため serial へ。
+  'src/__tests__/workflowExecution-finding-storage.integration.test.ts',
   'src/__tests__/finding-conflict-adjudication-engine.integration.test.ts',
   'src/__tests__/finding-conflict-adjudication-runner.integration.test.ts',
   'src/__tests__/finding-evidence-protocol.integration.test.ts',
