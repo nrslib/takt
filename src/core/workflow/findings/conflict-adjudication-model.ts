@@ -11,6 +11,7 @@ import {
 } from '../../models/finding-contract-identity.js';
 import type {
   AdjudicatedConflictClaimSettlement,
+  ConflictAdjudicationAttempt,
   ConflictAdjudicationEpisode,
   ConflictAdjudicationSnapshot,
   ConflictClaimSettlement,
@@ -22,6 +23,7 @@ import type {
   FindingLedgerConflict,
   FindingLedgerEntry,
   FindingObservation,
+  FindingLifecycleOperation,
 } from './types.js';
 import { captureFindingLifecycleHead } from './lifecycle-mutation.js';
 import { hasVerifiedOrdinaryLifecycleCoverage } from '../../models/finding-lifecycle-continuity.js';
@@ -362,11 +364,26 @@ function sameConflictSubjectBasis(
     && left.claimSnapshotDigest === right.claimSnapshotDigest;
 }
 
-function lifecycleOperationAtHead(
+function lifecycleOperationsBetweenHeads(
   ledger: FindingLedger,
-  head: ConflictClaimSubject['expectedHead'],
-): string | undefined {
-  return ledger.lifecycleEvents.find((event) => event.eventId === head.eventId)?.operation;
+  previous: ConflictClaimSubject['expectedHead'],
+  current: ConflictClaimSubject['expectedHead'],
+): FindingLifecycleOperation[] | undefined {
+  const revisionGap = current.revision - previous.revision;
+  if (revisionGap !== 1) {
+    return undefined;
+  }
+  const operations = ledger.lifecycleEvents.flatMap((event) => (
+    event.transitions
+      .filter((transition) => (
+        transition.after.entityKind === current.entityKind
+        && transition.after.entityId === current.entityId
+        && transition.after.revision > previous.revision
+        && transition.after.revision <= current.revision
+      ))
+      .map(() => event.operation)
+  ));
+  return operations.length === revisionGap ? operations : undefined;
 }
 
 /**
@@ -424,17 +441,30 @@ function isObservationOnlyConflictProjectionRefresh(input: {
     if (canonicalJson(previous.expectedHead) === canonicalJson(current.expectedHead)) {
       continue;
     }
-    headChanged = true;
-    const operation = lifecycleOperationAtHead(input.ledger, current.expectedHead);
-    const observationOnly = operation === 'record_rejected_observation'
-      || (current.role === 'product_finding' && operation === 'persist_finding');
-    if (!observationOnly) {
+    const operations = lifecycleOperationsBetweenHeads(
+      input.ledger,
+      previous.expectedHead,
+      current.expectedHead,
+    );
+    if (
+      operations === undefined
+      || operations.some((operation) => (
+        operation !== 'record_rejected_observation'
+        && !(current.role === 'product_finding' && operation === 'persist_finding')
+      ))
+    ) {
       return false;
     }
+    headChanged = true;
   }
   return headChanged;
 }
 
+/**
+ * `previous` must be the ledger candidate snapshot and `current` must be the
+ * latest projection snapshot. The observation-only check reads the lifecycle
+ * head on `current`, so swapping the arguments can change the result.
+ */
 export function sharesConflictAdjudicationBasis(
   ledger: FindingLedger,
   previous: ConflictAdjudicationSnapshot,
@@ -442,6 +472,27 @@ export function sharesConflictAdjudicationBasis(
 ): boolean {
   return previous.conflictSnapshotId === current.conflictSnapshotId
     || isObservationOnlyConflictProjectionRefresh({ ledger, previous, current });
+}
+
+export function conflictAdjudicationAttemptsForBasis(
+  ledger: FindingLedger,
+  snapshot: ConflictAdjudicationSnapshot,
+): ConflictAdjudicationAttempt[] {
+  const equivalentSnapshotIds = new Set(ledger.conflictAdjudicationSnapshots
+    .filter((candidate) => (
+      candidate.conflictId === snapshot.conflictId
+      && sharesConflictAdjudicationBasis(ledger, candidate, snapshot)
+    ))
+    .map((candidate) => candidate.conflictSnapshotId));
+  const episodeIds = new Set(ledger.conflictAdjudicationEpisodes
+    .filter((episode) => (
+      episode.conflictId === snapshot.conflictId
+      && equivalentSnapshotIds.has(episode.conflictSnapshotId)
+    ))
+    .map((episode) => episode.episodeId));
+  return ledger.conflictAdjudicationAttempts.filter((attempt) => (
+    episodeIds.has(attempt.episodeId)
+  ));
 }
 
 export function refreshActiveConflictAdjudicationSnapshots(input: {

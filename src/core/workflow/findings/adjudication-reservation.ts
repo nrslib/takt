@@ -10,10 +10,10 @@ import type {
 } from '../../models/finding-contract-types.js';
 import {
   createConflictAdjudicationEpisode,
+  conflictAdjudicationAttemptsForBasis,
   freshConflictAdjudicationSnapshot,
   hasAlwaysChangingConflictTarget,
   isConflictSnapshotAdjudicated,
-  sharesConflictAdjudicationBasis,
 } from './conflict-adjudication-model.js';
 import {
   releaseFindingManagerProviderCall,
@@ -171,21 +171,7 @@ export async function reserveFindingConflictAdjudication(input: {
       snapshot,
       input.observation,
     );
-    const equivalentSnapshotIds = new Set(fresh.conflictAdjudicationSnapshots
-      .filter((candidate) => (
-        candidate.conflictId === conflict.id
-        && sharesConflictAdjudicationBasis(fresh, candidate, snapshot)
-      ))
-      .map((candidate) => candidate.conflictSnapshotId));
-    const episodeIds = new Set(fresh.conflictAdjudicationEpisodes
-      .filter((candidate) => (
-        candidate.conflictId === conflict.id
-        && equivalentSnapshotIds.has(candidate.conflictSnapshotId)
-      ))
-      .map((candidate) => candidate.episodeId));
-    const episodeAttempts = fresh.conflictAdjudicationAttempts.filter(
-      (attempt) => episodeIds.has(attempt.episodeId),
-    );
+    const episodeAttempts = conflictAdjudicationAttemptsForBasis(fresh, snapshot);
     const groundingRetryAlreadyUsed = episodeAttempts.some((attempt) => (
       attempt.attemptOrdinal === 2
       && fresh.findingManagerProviderCalls
@@ -215,9 +201,8 @@ export async function reserveFindingConflictAdjudication(input: {
     // 予約解放は provider 実行前なので attempt を消費しない。同じ snapshot digest の
     // 予約を同じ ordinal で再構築し、次回に snapshot digest が一致すればこの経路を
     // 再度通らないことを停止保証とする。
-    const used = fresh.conflictAdjudicationAttempts.filter(
-      (attempt) => episodeIds.has(attempt.episodeId)
-        && attempt.attemptId !== rebuildingAttempt?.attemptId,
+    const used = episodeAttempts.filter(
+      (attempt) => attempt.attemptId !== rebuildingAttempt?.attemptId,
     ).length;
     if (used >= ensured.episode.maxAttempts) {
       return { ledger: fresh, result: { started: false } };

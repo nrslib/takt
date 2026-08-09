@@ -26,9 +26,9 @@ import {
   captureReviewScopeProofSnapshot,
 } from './snapshot.js';
 import {
+  conflictAdjudicationAttemptsForBasis,
   freshConflictAdjudicationSnapshot,
   isActiveConflictUnadjudicated,
-  sharesConflictAdjudicationBasis,
 } from './conflict-adjudication-model.js';
 import {
   dispatchFindingManagerProviderCall,
@@ -180,21 +180,7 @@ function hasGroundingRetryCandidate(
     return false;
   }
   const snapshot = freshConflictAdjudicationSnapshot(ledger, conflictId);
-  const equivalentSnapshotIds = new Set(ledger.conflictAdjudicationSnapshots
-    .filter((candidate) => (
-      candidate.conflictId === conflictId
-      && sharesConflictAdjudicationBasis(ledger, candidate, snapshot)
-    ))
-    .map((candidate) => candidate.conflictSnapshotId));
-  const episodeIds = new Set(ledger.conflictAdjudicationEpisodes
-    .filter((candidate) => (
-      candidate.conflictId === conflictId
-      && equivalentSnapshotIds.has(candidate.conflictSnapshotId)
-    ))
-    .map((candidate) => candidate.episodeId));
-  const attempts = ledger.conflictAdjudicationAttempts.filter((attempt) => (
-    episodeIds.has(attempt.episodeId)
-  ));
+  const attempts = conflictAdjudicationAttemptsForBasis(ledger, snapshot);
   return attempts.some((attempt) => (
     attempt.stage === 'completed'
     && attempt.attemptOrdinal === 1

@@ -23,6 +23,7 @@ import {
   hasAlwaysChangingConflictTarget,
   isActiveConflictUnadjudicated,
   refreshActiveConflictAdjudicationSnapshots,
+  sharesConflictAdjudicationBasis,
 } from '../core/workflow/findings/conflict-adjudication-model.js';
 import { reserveFindingConflictAdjudication } from '../core/workflow/findings/adjudication-reservation.js';
 import type { FindingContractConfig, FindingLedger } from '../core/workflow/findings/types.js';
@@ -593,6 +594,7 @@ describe('finding-conflict-adjudication runner registry contract', () => {
     expect(executeAgentMock).toHaveBeenCalledTimes(1);
     expect(executeAgentMock.mock.calls[0]?.[1])
       .toContain('Engine-provided target snapshot windows');
+    expect(ledgerStore.loadLedger().conflictAdjudicationAttempts).toHaveLength(2);
     expect(ledgerStore.loadLedger().conflictAdjudicationAttempts).toEqual(expect.arrayContaining([
       expect.objectContaining({ attemptOrdinal: 1, result: expect.objectContaining({ kind: 'verification_undetermined' }) }),
       expect.objectContaining({ attemptOrdinal: 2, result: expect.objectContaining({ kind: 'verification_undetermined' }) }),
@@ -702,6 +704,11 @@ describe('finding-conflict-adjudication runner registry contract', () => {
       .not.toBe(originalProductSubject?.claimSnapshotDigest);
     expect(afterProductSubject?.evidenceBindingIds)
       .not.toEqual(originalProductSubject?.evidenceBindingIds);
+    expect(sharesConflictAdjudicationBasis(
+      ledgerStore.loadLedger(),
+      originalSnapshot,
+      afterObservation,
+    )).toBe(true);
     expect(isActiveConflictUnadjudicated(ledgerStore.loadLedger(), 'C-FA2947446963')).toBe(false);
 
     executeAgentMock.mockClear();
@@ -841,6 +848,10 @@ describe('finding-conflict-adjudication runner registry contract', () => {
 
     const first = runner();
     await first.runner.run(first.step, state());
+    const originalSnapshot = freshConflictAdjudicationSnapshot(
+      ledgerStore.loadLedger(),
+      'C-FA2947446963',
+    );
     await ledgerStore.updateLedger((current) => ({
       ledger: refreshActiveConflictAdjudicationSnapshots({
         ledger: applyRejectedObservationAttachments(
@@ -862,6 +873,15 @@ describe('finding-conflict-adjudication runner registry contract', () => {
       result: undefined,
     }));
 
+    const afterObservation = freshConflictAdjudicationSnapshot(
+      ledgerStore.loadLedger(),
+      'C-FA2947446963',
+    );
+    expect(sharesConflictAdjudicationBasis(
+      ledgerStore.loadLedger(),
+      originalSnapshot,
+      afterObservation,
+    )).toBe(true);
     expect(isActiveConflictUnadjudicated(ledgerStore.loadLedger(), 'C-FA2947446963')).toBe(false);
     executeAgentMock.mockClear();
     const second = runner();
@@ -893,24 +913,62 @@ describe('finding-conflict-adjudication runner registry contract', () => {
     const first = runner();
     await first.runner.run(first.step, state());
 
-    const current = ledgerStore.loadLedger();
-    const changed = {
-      ...current,
-      findings: current.findings.map((finding) => finding.id === 'F-0001'
-        ? {
-            ...finding,
-            claimIdentityHash: 'd'.repeat(64),
-            semanticClaimIdentityHash: 'e'.repeat(64),
-          }
-        : finding),
-    };
-    const refreshed = refreshActiveConflictAdjudicationSnapshots({
-      ledger: changed,
-      originStep: 'reviewers',
-      createdAt: OBSERVATION,
+    await ledgerStore.updateLedger((current) => {
+      const product = current.findings.find((finding) => (
+        finding.id === 'F-0001' && finding.provisional === undefined
+      ));
+      if (product === undefined) {
+        throw new Error('Expected a product finding in the identity fixture');
+      }
+      const { revision: _revision, ...productWithoutRevision } = product;
+      void _revision;
+      const changed = applyFindingLifecycleCommands({
+        ledger: current,
+        commands: [{
+          operation: 'update_provisional',
+          changes: {
+            findings: [{
+              ...productWithoutRevision,
+              claimIdentityHash: 'd'.repeat(64),
+              semanticClaimIdentityHash: 'e'.repeat(64),
+              lifecycle: 'persists',
+              provisional: {
+                kind: 'raw-meaning-ambiguous',
+                stableKey: 'identity-change-stable-key',
+                lineageKey: 'identity-change-lineage-key',
+                sourceRawFindingIds: ['raw-1'],
+                reason: 'The claim identity changed during the test.',
+                firstObservedAt: OBSERVATION,
+                lastObservedAt: OBSERVATION,
+                gateEffect: 'block',
+                firstObservedRound: 1,
+              },
+            }],
+            conflicts: [],
+          },
+          authority: { kind: 'verified_evidence' },
+          evidenceSourcesByTarget: new Map([[
+            `finding\0${product.id}`,
+            { sourceRawFindingIds: ['raw-1'], authorityEvidenceIds: [] },
+          ]]),
+        }],
+        occurredAt: OBSERVATION,
+      });
+      return {
+        ledger: refreshActiveConflictAdjudicationSnapshots({
+          ledger: changed,
+          originStep: 'reviewers',
+          createdAt: OBSERVATION,
+        }),
+        result: undefined,
+      };
     });
 
-    expect(isActiveConflictUnadjudicated(refreshed, 'C-FA2947446963')).toBe(true);
+    executeAgentMock.mockClear();
+    const second = runner();
+    await second.runner.run(second.step, state());
+
+    expect(executeAgentMock).toHaveBeenCalled();
   });
 
   it('re-adjudicates a non-regular target even when its content digest is unavailable', async () => {
