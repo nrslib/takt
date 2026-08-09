@@ -1,6 +1,7 @@
 import type { z } from 'zod/v4';
 import type { WorkflowCallArgValue } from '../../../core/models/index.js';
 import { WorkflowConfigRawSchema } from '../../../core/models/index.js';
+import { hasOwnFacetPool } from './workflowFacetPoolLookup.js';
 
 type RawWorkflowConfig = z.output<typeof WorkflowConfigRawSchema>;
 
@@ -47,7 +48,7 @@ function ensureDiscoveryFacetPool(raw: RawWorkflowConfig, paramName: string): st
   const baseName = buildDiscoveryFacetPoolName(paramName);
   let poolName = baseName;
   let suffix = 1;
-  while ((raw.facet_pools ?? {})[poolName] !== undefined) {
+  while (hasOwnFacetPool(raw.facet_pools, poolName)) {
     poolName = baseName + '_' + suffix;
     suffix += 1;
   }

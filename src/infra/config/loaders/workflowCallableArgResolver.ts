@@ -16,6 +16,7 @@ import {
 import { isWorkflowParamReference, type WorkflowParamReference } from './workflowCallableParamRef.js';
 import { assertNoParamReferences, validateReturnRules } from './workflowCallableRuleValidation.js';
 import { withWorkflowConfigErrorPath as withWorkflowStepErrorPath } from '../../../core/workflow/workflow-config-error.js';
+import { hasOwnFacetPool } from './workflowFacetPoolLookup.js';
 
 type RawWorkflowConfig = z.output<typeof WorkflowConfigRawSchema>;
 type RawWorkflowStep = RawWorkflowConfig['steps'][number];
@@ -154,7 +155,7 @@ function validateWorkflowCallArgValue(
         `workflow_call arg "${paramName}" must be a scalar ${definition.type === 'workflow_ref' ? 'workflow_ref' : 'facet_pool_ref'}`,
       );
     }
-    if (definition.type === 'facet_pool_ref' && facetPools?.[value] === undefined) {
+    if (definition.type === 'facet_pool_ref' && !hasOwnFacetPool(facetPools, value)) {
       throw new Error(`workflow_call arg "${paramName}" references unknown facet pool "${value}"`);
     }
     return;
@@ -273,7 +274,7 @@ function resolveExpandedFacetPoolValue(
       errorPath,
     );
   }
-  if (facetPools?.[value] === undefined) {
+  if (!hasOwnFacetPool(facetPools, value)) {
     throw withWorkflowStepErrorPath(
       new Error(`Step "${stepName}" references unknown facet pool "${value}"`),
       errorPath,

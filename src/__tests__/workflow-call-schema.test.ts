@@ -378,6 +378,23 @@ describe('workflow_call schema', () => {
     expect((thrown as Error).message).toContain(expectedMessage);
   });
 
+  it.each(['constructor', 'toString', '__proto__'])(
+    'should reject an undeclared facet pool when a callable arg uses the inherited key %s',
+    (poolName) => {
+      expect(() => normalizeWorkflowConfig(
+        createCallableFacetPoolWorkflow(),
+        '/tmp',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { callableArgs: { implementation_pool: poolName } },
+      )).toThrow(`workflow_call arg "implementation_pool" references unknown facet pool "${poolName}"`);
+    },
+  );
+
   it('accepts scalar vars only on workflow_call steps and preserves them after normalization', () => {
     const raw = {
       name: 'parent',
