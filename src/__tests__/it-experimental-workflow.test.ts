@@ -179,7 +179,7 @@ describe('experimental builtin workflow', () => {
     invalidateAllResolvedConfigCache();
   });
 
-  it.each(['en', 'ja'] as const)('keeps the %s variants thin and isolates their injected pools', (language) => {
+  it.each(['en', 'ja'] as const)('should keep the %s variants thin and isolate their injected pools when loading generic and TAKT wrappers', (language) => {
     writeFileSync(join(projectDir, '.takt', 'config.yaml'), `language: ${language}\n`);
     invalidateAllResolvedConfigCache();
     const generic = loadWorkflowFromFile(
@@ -216,7 +216,7 @@ describe('experimental builtin workflow', () => {
     expect(findWorkflowStep(taktCore, 'review').call).toBe('takt-experimental-review');
   });
 
-  it('fails fast for missing, wrongly typed, and unknown facet pool bindings', () => {
+  it('should fail fast when facet pool bindings are missing, wrongly typed, or unknown', () => {
     writeFileSync(join(projectDir, '.takt', 'config.yaml'), 'language: en\n');
     invalidateAllResolvedConfigCache();
     const corePath = join(getBuiltinWorkflowsDir('en'), 'experimental-core.yaml');
@@ -265,7 +265,7 @@ steps:
   });
 
   it(
-    'should run the full English workflow and replace the selected reviewer pool when review requires fixes',
+    'should complete the English experimental wrapper after reviewer fixes when review requires remediation',
     async () => {
       const language = 'en';
       writeFileSync(join(projectDir, '.takt', 'config.yaml'), `language: ${language}\n`);
@@ -352,7 +352,7 @@ steps:
   );
 
   it(
-    'should run the TAKT experimental workflow with TAKT-aware implementation and review candidates',
+    'should complete the TAKT experimental wrapper when TAKT testing facets and reviewers are selected',
     async () => {
       const language = 'en';
       writeFileSync(join(projectDir, '.takt', 'config.yaml'), `language: ${language}\n`);
@@ -444,7 +444,7 @@ steps:
   );
 
   it(
-    'should abort when the Japanese experimental review rejection cannot be remediated',
+    'should abort the Japanese experimental wrapper when review findings cannot be remediated',
     async () => {
       const language = 'ja';
       writeFileSync(join(projectDir, '.takt', 'config.yaml'), `language: ${language}\n`);

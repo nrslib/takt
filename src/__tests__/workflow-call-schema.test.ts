@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { WorkflowConfigRawSchema, WorkflowStepRawSchema } from '../core/models/index.js';
+import { getWorkflowConfigErrorPath } from '../core/workflow/workflow-config-error.js';
 import { prepareCallableSubworkflowDiscoveryArgs } from '../infra/config/loaders/workflowCallableDiscoveryArgs.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 
@@ -173,7 +174,8 @@ describe('workflow_call schema', () => {
     expect(workflow.maxSteps).toBe(10);
   });
 
-  it('should use a synthetic pool for required facet_pool_ref discovery args', () => {
+  it('should use a suffixed synthetic discovery pool when the default pool name collides', () => {
+    const syntheticPoolName = '__takt_discovery_pool__implementation_pool';
     const raw = WorkflowConfigRawSchema.parse({
       name: 'pool-discovery',
       subworkflow: {
@@ -191,6 +193,13 @@ describe('workflow_call schema', () => {
         knowledge: 'Discovery knowledge',
       },
       facet_pools: {
+        [syntheticPoolName]: {
+          candidates: [{
+            id: 'existing-candidate',
+            description: 'Existing pool candidate',
+            policy: 'policy',
+          }],
+        },
         first: {
           candidates: [{
             id: 'first-candidate',
@@ -220,13 +229,20 @@ describe('workflow_call schema', () => {
     });
 
     const prepared = prepareCallableSubworkflowDiscoveryArgs(raw);
-    const syntheticPoolName = '__takt_discovery_pool__implementation_pool';
-    expect(prepared.callableArgs).toEqual({ implementation_pool: syntheticPoolName });
-    expect(prepared.raw.facet_pools?.first).toBeDefined();
-    expect(prepared.raw.facet_pools?.second).toBeDefined();
+    const suffixedPoolName = `${syntheticPoolName}_1`;
+    expect(prepared.callableArgs).toEqual({ implementation_pool: suffixedPoolName });
     expect(prepared.raw.facet_pools?.[syntheticPoolName]).toEqual({
       candidates: [{
-        id: syntheticPoolName + '-candidate',
+        id: 'existing-candidate',
+        description: 'Existing pool candidate',
+        policy: 'policy',
+      }],
+    });
+    expect(prepared.raw.facet_pools?.first).toBeDefined();
+    expect(prepared.raw.facet_pools?.second).toBeDefined();
+    expect(prepared.raw.facet_pools?.[suffixedPoolName]).toEqual({
+      candidates: [{
+        id: suffixedPoolName + '-candidate',
         description: '[discovery placeholder candidate for facet pool param "implementation_pool"]',
         policy: '__takt_discovery_param___policy_implementation_pool',
         knowledge: '__takt_discovery_param___knowledge_implementation_pool',
@@ -234,6 +250,35 @@ describe('workflow_call schema', () => {
     });
     expect(prepared.raw.policies?.['__takt_discovery_param___policy_implementation_pool']).toBeDefined();
     expect(prepared.raw.knowledge?.['__takt_discovery_param___knowledge_implementation_pool']).toBeDefined();
+  });
+
+  it('should report the dynamic pool field path when a non-string pool reaches normalization', () => {
+    let thrown: unknown;
+    try {
+      normalizeWorkflowConfig({
+        name: 'invalid-dynamic-pool',
+        steps: [{
+          name: 'implement',
+          persona: 'coder',
+          instruction: 'Implement',
+          dynamic_facets: {
+            pool: { $param: 'implementation_pool' },
+          },
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        }],
+      }, '/tmp');
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect(getWorkflowConfigErrorPath(thrown)).toEqual([
+      'steps',
+      0,
+      'dynamic_facets',
+      'pool',
+    ]);
+    expect((thrown as Error).message).toContain('dynamic_facets.pool has an unresolved parameter reference');
   });
 
   it('accepts scalar vars only on workflow_call steps and preserves them after normalization', () => {

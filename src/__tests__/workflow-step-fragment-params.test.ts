@@ -145,7 +145,7 @@ parallel:
     expect(result.raw).toHaveProperty('steps.0.parallel.0.knowledge', ['reviewing']);
   });
 
-  it('binds params recursively in dynamic parallel branches', () => {
+  it('should bind params recursively in dynamic parallel branches when a fragment contains dynamic parallel substeps', () => {
     write(projectDir, '.takt/steps/dynamic-parallel.yaml', `params:
   child_knowledge:
     type: facet_ref[]
@@ -192,7 +192,7 @@ parallel:
     );
   });
 
-  it('binds a facet_pool_ref into dynamic_facets.pool', () => {
+  it('should bind a facet_pool_ref into dynamic_facets.pool when the caller supplies a scalar pool name', () => {
     write(projectDir, '.takt/steps/pool-step.yaml', [
       'params:',
       '  implementation_pool:',
@@ -213,7 +213,7 @@ parallel:
     );
   });
 
-  it('passes a facet_pool_ref through a nested fragment scope', () => {
+  it('should preserve a facet_pool_ref through a nested fragment when the outer scope maps the child parameter', () => {
     write(projectDir, '.takt/steps/inner-pool.yaml', [
       'params:',
       '  child_pool:',
@@ -656,7 +656,7 @@ instruction:
       path: ['parallel', 0, 'params'],
       source: 'fragment',
     },
-  ])('rejects $name with a structured source path', ({ fragment, step, path, source }) => {
+  ])('should reject $name with a structured source path when the fragment parameter contract is invalid', ({ fragment, step, path, source }) => {
     const fragmentPath = write(projectDir, '.takt/steps/invalid.yaml', fragment);
 
     let thrown: unknown;
