@@ -75,6 +75,16 @@ describe('review adjudication assertion', () => {
     expect(result.pass, result.reason).toBe(true);
   });
 
+  it('allows a non-actionable finding to be mentioned without assigning it to the family', () => {
+    const output = adjudicationOutput().replace(
+      '- Existing contract: preserve the existing observable contract and behavior.',
+      `- Existing contract: preserve the existing observable contract and behavior. ${findings.testing} remains excluded.`,
+    );
+    const result = assertReviewAdjudication(output);
+
+    expect(result.pass, result.reason).toBe(true);
+  });
+
   it('rejects an output that promotes the reviewer-suggested transaction mechanism', () => {
     const output = adjudicationOutput().replace(
       'the reviewer-suggested transaction is out of scope',

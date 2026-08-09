@@ -180,6 +180,18 @@ function hasDispositionSchema(table) {
     && /(?:evidence|reason|根拠|理由)/i.test(header);
 }
 
+function isActionableFamilyMember(actionableSection, findingId) {
+  const table = parseTable(actionableSection);
+  const findingColumn = table.header.findIndex((cell) => /(?:finding|指摘).*(?:id|ID|出典|source)/i.test(cell));
+  if (findingColumn >= 0) {
+    return table.rows.some((row) => row[findingColumn]?.includes(findingId));
+  }
+
+  return actionableSection.split('\n').some((line) =>
+    /(?:finding\s*IDs?|source\s+findings?|主\s*finding|統合\s*finding|指摘\s*ID)/i.test(line)
+      && line.includes(findingId));
+}
+
 export default function assertReviewAdjudication(output) {
   const actionableSection = extractHeadingSection(output, ACTIONABLE_HEADING);
   const titledDispositionSection = extractSection(output, DISPOSITION_HEADING, /^#{2,3}\s+/);
@@ -216,7 +228,8 @@ export default function assertReviewAdjudication(output) {
       || NORMALIZATION_EXAMPLE.test(acceptanceEvidence)],
     ['acceptance-invalid-fail-fast', INVALID_FAIL_FAST.test(acceptanceEvidence)],
     ['acceptance-no-legacy-alias', NO_LEGACY_ALIAS.test(actionableEvidence)],
-    ['non-actionable-excluded-from-family', nonActionableIds.every((id) => !actionableSection.includes(id))],
+    ['non-actionable-excluded-from-family', nonActionableIds.every((id) =>
+      !isActionableFamilyMember(actionableSection, id))],
     ['suggested-mechanism-not-promoted', doesNotPromoteMechanism([
       acceptanceEvidence,
       dispositionSection,

@@ -1000,6 +1000,11 @@ describe('builtin workflow step fragment migration', () => {
       'contract-change',
       { $param: 'review_policy_additions' },
     ]);
+    expect(adjudicationFragment.knowledge).toEqual([
+      'architecture',
+      'takt',
+      { $param: 'review_knowledge_additions' },
+    ]);
     expect(adjudicationFragment.output_contracts).toEqual({
       report: [{ name: 'review-resolution.md', format: 'review-decision' }],
     });
@@ -1039,7 +1044,11 @@ describe('builtin workflow step fragment migration', () => {
     expect(policy).toMatch(
       /(?:atomicity|transaction|rollback|資源上限|resource caps?|互換経路|compatibility routes?)/isu,
     );
-    expect(persona).not.toMatch(/実在する欠陥は軽微でも修正対象から外さない|Never exclude a real defect merely because it is minor/u);
+    if (lang === 'ja') {
+      expect(persona).toMatch(/変更箇所.*DRY.*見逃さない/su);
+    } else {
+      expect(persona).toMatch(/Retain.*DRY.*changed area/isu);
+    }
   });
 
   it.each(LANGUAGES)('detects every %s peer-review remediation cycle at its configured threshold', (lang) => {
