@@ -1047,7 +1047,7 @@ describe('takt-default-fc builtins', () => {
           timestamp: new Date('2026-08-09T00:00:04.000Z'),
         };
       }
-      if ((JSON.stringify(outputSchema) ?? '').includes('terminate_subject')) {
+      if (persona === 'supervisor') {
         adjudicationCalls += 1;
         const adjudicationSnapshot = freshConflictAdjudicationSnapshot(
           store.loadLedger(),

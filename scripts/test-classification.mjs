@@ -157,7 +157,6 @@ export const auditedIntegrationBoundaryTestFiles = Object.freeze([
   'src/__tests__/sessionState.test.ts',
   'src/__tests__/summarize-non-workflow-provider.test.ts',
   'src/__tests__/system-workflow-schema.test.ts',
-  'src/__tests__/takt-default-fc-builtins.test.ts',
   'src/__tests__/takt-default-fc-compatibility-baseline.test.ts',
   'src/__tests__/taskForceFailActions.test.ts',
   'src/__tests__/team-leader-finding-contract-recovery.test.ts',
@@ -401,6 +400,8 @@ export const parallelIntegrationTestFiles = Object.freeze([
 // RPC timeout (spurious "Timeout calling onTaskUpdate" unhandled errors).
 // Add a file here only with a measured interference reason.
 export const serialGitTestFiles = Object.freeze([
+  // 2026-08-09: ラウンド9で遷移表→実 WorkflowEngine シナリオへ置換した結果、Git fixture+SQLite I/O の重量級になった(#1264 shard 飽和の主因)。
+  'src/__tests__/takt-default-fc-builtins.test.ts',
   // 2026-08-09: heavy 並列スライスで birpc onTaskUpdate 期限超過が CI 2コアランナーで2連続再現(#1264)。SQLite+fsync 負荷の実測干渉のため serial へ。
   'src/__tests__/workflowExecution-finding-storage.integration.test.ts',
   'src/__tests__/finding-conflict-adjudication-engine.integration.test.ts',
