@@ -1494,8 +1494,7 @@ export function finalizeInterpretationCaseProjection(input: {
   return {
     ...settledLedger,
     updatedAt: input.observation.timestamp,
-    conflictRawClaimLandings: [...landingsByRawFindingId.values()]
-      .sort((left, right) => compareBinaryStrings(left.rawClaimLandingId, right.rawClaimLandingId)),
+    conflictRawClaimLandings: [...landingsByRawFindingId.values()],
     rawInterpretationOutcomes: [...existingByRawFindingId.values()]
       .sort((left, right) => compareBinaryStrings(left.rawFindingId, right.rawFindingId)),
     interpretationAttempts: settledLedger.interpretationAttempts.map((attempt) => {

@@ -175,8 +175,7 @@ export function landUnownedConflictRawClaims(input: {
       });
       ledger = {
         ...landed.ledger,
-        conflictRawClaimLandings: [...landed.ledger.conflictRawClaimLandings, landed.landing]
-          .sort((left, right) => compareBinaryStrings(left.rawClaimLandingId, right.rawClaimLandingId)),
+        conflictRawClaimLandings: [...landed.ledger.conflictRawClaimLandings, landed.landing],
       };
       ownersByRawId.set(rawFindingId, landed.landing);
     }

@@ -77,7 +77,11 @@ function makeManagerOutput(rawFindingId: string): FindingManagerOutput {
   };
 }
 
-function makeLedger(cwd: string): FindingLedger {
+function makeUnlandedLedger(
+  cwd: string,
+  conflictRawFindingIds: readonly string[] = ['raw-previous', 'raw-generated'],
+  rawRelation: 'new' | 'persists' = 'new',
+): FindingLedger {
   const leapSecondObservation = {
     runId: 'run-0',
     stepName: 'reviewers',
@@ -102,9 +106,7 @@ function makeLedger(cwd: string): FindingLedger {
     targetFindingId: 'F-0001',
   });
 
-  return refreshActiveConflictAdjudicationSnapshots({
-    ledger: landUnownedConflictRawClaims({
-      ledger: authorizeFindingLedgerFixture({
+  const fixture = {
     workflowName: WORKFLOW_NAME,
     nextId: 2,
     updatedAt: nextMinuteObservation.timestamp,
@@ -129,22 +131,57 @@ function makeLedger(cwd: string): FindingLedger {
     rawFindings: [
       makeRawFinding('raw-previous', [evidence.evidence]),
       makeRawFinding('raw-generated', [evidence.evidence]),
-    ],
+    ].map((raw) => rawRelation === 'new'
+      ? raw
+      : { ...raw, relation: rawRelation, targetFindingId: 'F-0001' }),
     conflicts: [{
       id: conflictId,
       status: 'active',
       findingIds: ['F-0001'],
-      rawFindingIds: ['raw-previous', 'raw-generated'],
+      rawFindingIds: [...conflictRawFindingIds],
       description: 'Existing conflict.',
       firstSeen: leapSecondObservation,
       lastSeen: nextMinuteObservation,
       revision: 1,
     }],
-      }),
-      observation: nextMinuteObservation,
+  };
+  const authorized = authorizeFindingLedgerFixture(fixture);
+  if (rawRelation === 'new') {
+    return authorized;
+  }
+  const targetPrecondition = captureFindingMutationPrecondition(authorized, 'F-0001');
+  if (targetPrecondition === undefined) {
+    throw new Error('Fixture finding F-0001 has no target precondition');
+  }
+  const rawFindings = authorized.rawFindings.map((raw) => ({
+    ...raw,
+    relation: rawRelation,
+    targetFindingId: 'F-0001',
+    targetPrecondition,
+  }));
+  return authorizeFindingLedgerFixture({
+    ...fixture,
+    rawFindings,
+  });
+}
+
+function makeLedger(cwd: string): FindingLedger {
+  const unlanded = makeUnlandedLedger(cwd);
+  return refreshActiveConflictAdjudicationSnapshots({
+    ledger: landUnownedConflictRawClaims({
+      ledger: unlanded,
+      observation: {
+        runId: 'run-1',
+        stepName: 'final-gate',
+        timestamp: '2017-01-01T00:00:00.000Z',
+      },
     }),
     originStep: 'final-gate',
-    createdAt: nextMinuteObservation,
+    createdAt: {
+      runId: 'run-1',
+      stepName: 'final-gate',
+      timestamp: '2017-01-01T00:00:00.000Z',
+    },
   });
 }
 
@@ -210,6 +247,66 @@ describe('reconciled conflict lifecycle history order', () => {
     if (existsSync(cwd)) {
       rmSync(cwd, { recursive: true, force: true });
     }
+  });
+
+  it('appends a later conflict landing after the first-round landing', () => {
+    const unlanded = makeUnlandedLedger(cwd);
+    const sortedLandings = landUnownedConflictRawClaims({
+      ledger: unlanded,
+      observation: {
+        runId: 'run-order-probe',
+        stepName: 'reviewers',
+        timestamp: '2017-01-01T00:00:00.000Z',
+      },
+    }).conflictRawClaimLandings;
+    const firstRawFindingId = sortedLandings[1]!.rawFindingId;
+    const secondRawFindingId = sortedLandings[0]!.rawFindingId;
+    const firstRound = landUnownedConflictRawClaims({
+      ledger: makeUnlandedLedger(cwd, [firstRawFindingId], 'persists'),
+      observation: {
+        runId: 'run-1',
+        stepName: 'reviewers',
+        timestamp: '2017-01-01T00:00:00.000Z',
+      },
+    });
+    const conflict = firstRound.conflicts[0]!;
+    const secondRoundObservation = {
+      runId: 'run-2',
+      stepName: 'reviewers',
+      timestamp: '2017-01-01T00:01:00.000Z',
+    };
+    const updatedConflict = {
+      ...conflict,
+      rawFindingIds: [firstRawFindingId, secondRawFindingId],
+      lastSeen: secondRoundObservation,
+      revision: conflict.revision + 1,
+    };
+    const { revision: _revision, ...conflictProjection } = updatedConflict;
+    void _revision;
+    const afterFix = applyManagerDecisionLifecycleCommands({
+      current: firstRound,
+      proposed: {
+        ...firstRound,
+        conflicts: [updatedConflict],
+      },
+      commands: [{
+        operation: 'observe_conflict',
+        changes: { findings: [], conflicts: [conflictProjection] },
+        authority: { kind: 'verified_evidence' },
+        evidenceSourcesByTarget: new Map([[
+          `conflict\0${conflict.id}`,
+          { sourceRawFindingIds: [secondRawFindingId], authorityEvidenceIds: [] },
+        ]]),
+      }],
+      occurredAt: secondRoundObservation,
+    });
+    const secondRound = landUnownedConflictRawClaims({
+      ledger: afterFix,
+      observation: secondRoundObservation,
+    });
+
+    expect(secondRound.conflictRawClaimLandings.map((landing) => landing.rawFindingId))
+      .toEqual([firstRawFindingId, secondRawFindingId]);
   });
 
   it('preserves completed decisions and appends lifecycle authority through reconcile, persistence, and reservation', async () => {
