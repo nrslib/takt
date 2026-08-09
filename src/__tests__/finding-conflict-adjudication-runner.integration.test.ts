@@ -3,7 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { executeAgent } from '../agents/agent-usecases.js';
-import { createEngineProofRecord } from '../core/models/finding-evidence-record.js';
+import {
+  computeFileQuoteEvidenceRecordId,
+  createEngineProofRecord,
+} from '../core/models/finding-evidence-record.js';
 import type { WorkflowState } from '../core/models/types.js';
 import { createFindingConflictAdjudicationRunner } from '../core/workflow/findings/adjudication-runner.js';
 import { buildFindingConflictAdjudicationStep } from '../core/workflow/findings/adjudication-step.js';
@@ -13,6 +16,7 @@ import {
 } from '../core/workflow/findings/adjudication-evidence.js';
 import { landUnownedConflictRawClaims } from '../core/workflow/findings/conflict-claim-landing.js';
 import { applyFindingLifecycleCommands } from '../core/workflow/findings/lifecycle-transaction.js';
+import { applyRejectedObservationAttachments } from '../core/workflow/findings/manager-provisional-settlement.js';
 import {
   buildConflictAdjudicationSnapshot,
   freshConflictAdjudicationSnapshot,
@@ -26,7 +30,11 @@ import type { FindingLedgerStore } from '../core/workflow/findings/store.js';
 import { crashAfterAdjudicationReservation } from './helpers/finding-adjudication-reservation.js';
 import { createTestFindingLedgerStore } from './helpers/finding-storage.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
-import { authorizeFindingLedgerFixture } from './helpers/finding-lifecycle-fixture.js';
+import {
+  authorizeFindingLedgerFixture,
+  canonicalRawFindingFixture,
+  rawCanonicalSnapshotFixture,
+} from './helpers/finding-lifecycle-fixture.js';
 import { verifiedFindingEvidenceFixture } from './helpers/finding-evidence.js';
 import { MANAGER_INTERPRETATION_LIMITS } from '../core/workflow/findings/raw-finding-limits.js';
 import {
@@ -437,6 +445,160 @@ describe('finding-conflict-adjudication runner registry contract', () => {
     expect(ledgerStore.loadLedger().conflictAdjudicationAttempts).toHaveLength(4);
   });
 
+  it('resumes a grounding retry across a same-basis persisted snapshot after restart', async () => {
+    const initialSnapshot = freshConflictAdjudicationSnapshot(
+      ledgerStore.loadLedger(),
+      'C-FA2947446963',
+    );
+    const initialLedger = ledgerStore.loadLedger();
+    const product = initialLedger.findings.find((finding) => (
+      finding.id === 'F-0001' && finding.provisional === undefined
+    ));
+    const raw = initialLedger.rawFindings.find((finding) => finding.rawFindingId === 'raw-1');
+    const quote = raw?.evidence[0];
+    if (product === undefined || raw === undefined || quote?.kind !== 'file_quote') {
+      throw new Error('Expected a product finding with a file quote in the retry fixture');
+    }
+    const additionalEvidencePayload = {
+      ...quote,
+      claimIdentityHash: product.claimIdentityHash,
+      fileHash: 'a'.repeat(64),
+    };
+    const additionalEvidence = {
+      evidenceId: computeFileQuoteEvidenceRecordId(additionalEvidencePayload),
+      ...additionalEvidencePayload,
+    };
+    const undeterminedResponse = async () => {
+      const snapshot = freshConflictAdjudicationSnapshot(
+        ledgerStore.loadLedger(),
+        'C-FA2947446963',
+      );
+      return {
+        persona: 'supervisor',
+        status: 'done' as const,
+        content: '{}',
+        structuredOutput: {
+          proposal: {
+            kind: 'undetermined' as const,
+            subjectIds: snapshot.subjects.map(({ subjectId }) => subjectId).sort(),
+            rationale: 'No verified terminal authority is available.',
+          },
+        },
+        timestamp: new Date(),
+      };
+    };
+    executeAgentMock.mockImplementation(undeterminedResponse);
+
+    let crashed = false;
+    const crashingStore = new Proxy(ledgerStore, {
+      get(target, property, receiver) {
+        if (property === 'updateLedger') {
+          return async (...args: Parameters<FindingLedgerStore['updateLedger']>) => {
+            const mutation = await target.updateLedger(...args);
+            const hasFirstUndetermined = mutation.ledger.conflictAdjudicationAttempts.some((attempt) => (
+              attempt.attemptOrdinal === 1
+              && attempt.stage === 'completed'
+              && attempt.result.kind === 'verification_undetermined'
+            ));
+            const hasSecondAttempt = mutation.ledger.conflictAdjudicationAttempts.some((attempt) => (
+              attempt.attemptOrdinal === 2
+            ));
+            if (!crashed && hasFirstUndetermined && !hasSecondAttempt) {
+              crashed = true;
+              const persisted = await target.updateLedger((current) => {
+                const currentProduct = current.findings.find((finding) => (
+                  finding.id === 'F-0001' && finding.provisional === undefined
+                ));
+                if (currentProduct === undefined) {
+                  throw new Error('Expected a product finding while persisting new evidence');
+                }
+                const withEvidence = {
+                  ...current,
+                  evidenceRecords: [...current.evidenceRecords, additionalEvidence],
+                };
+                const { revision: _revision, ...productWithoutRevision } = currentProduct;
+                void _revision;
+                const changed = applyFindingLifecycleCommands({
+                  ledger: withEvidence,
+                  commands: [{
+                    operation: 'persist_finding',
+                    changes: {
+                      findings: [{
+                        ...productWithoutRevision,
+                        evidenceIds: [...currentProduct.evidenceIds, additionalEvidence.evidenceId],
+                        lifecycle: 'persists',
+                        lastSeen: {
+                          ...OBSERVATION,
+                          timestamp: '2026-06-13T00:01:00.000Z',
+                        },
+                      }],
+                      conflicts: [],
+                    },
+                    authority: { kind: 'verified_evidence' },
+                    evidenceSourcesByTarget: new Map([[
+                      `finding\0${currentProduct.id}`,
+                      { sourceRawFindingIds: currentProduct.rawFindingIds, authorityEvidenceIds: [] },
+                    ]]),
+                  }],
+                  occurredAt: {
+                    ...OBSERVATION,
+                    timestamp: '2026-06-13T00:01:00.000Z',
+                  },
+                });
+                return {
+                  ledger: refreshActiveConflictAdjudicationSnapshots({
+                    ledger: changed,
+                    originStep: 'reviewers',
+                    createdAt: OBSERVATION,
+                  }),
+                  result: undefined,
+                };
+              });
+              throw new Error('simulated crash after persisted observation');
+            }
+            return mutation;
+          };
+        }
+        const value = Reflect.get(target, property, receiver) as unknown;
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+
+    const first = runner(undefined, crashingStore);
+    await expect(first.runner.run(first.step, state()))
+      .rejects.toThrow('simulated crash after persisted observation');
+
+    const interrupted = ledgerStore.loadLedger();
+    const persistedSnapshot = freshConflictAdjudicationSnapshot(
+      interrupted,
+      'C-FA2947446963',
+    );
+    expect(persistedSnapshot.conflictSnapshotId).not.toBe(initialSnapshot.conflictSnapshotId);
+    const initialProductSubject = initialSnapshot.subjects.find(({ findingId }) => findingId === 'F-0001');
+    const persistedProductSubject = persistedSnapshot.subjects.find(({ findingId }) => findingId === 'F-0001');
+    expect(persistedProductSubject?.claimSnapshotDigest)
+      .not.toBe(initialProductSubject?.claimSnapshotDigest);
+    expect(persistedProductSubject?.evidenceBindingIds)
+      .not.toEqual(initialProductSubject?.evidenceBindingIds);
+    expect(interrupted.conflictAdjudicationAttempts).toEqual([
+      expect.objectContaining({ attemptOrdinal: 1, result: expect.objectContaining({ kind: 'verification_undetermined' }) }),
+    ]);
+
+    ledgerStore = reopenStore();
+    executeAgentMock.mockClear();
+    executeAgentMock.mockImplementation(undeterminedResponse);
+    const resumed = runner(undefined, ledgerStore);
+    await resumed.runner.run(resumed.step, state());
+
+    expect(executeAgentMock).toHaveBeenCalledTimes(1);
+    expect(executeAgentMock.mock.calls[0]?.[1])
+      .toContain('Engine-provided target snapshot windows');
+    expect(ledgerStore.loadLedger().conflictAdjudicationAttempts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ attemptOrdinal: 1, result: expect.objectContaining({ kind: 'verification_undetermined' }) }),
+      expect.objectContaining({ attemptOrdinal: 2, result: expect.objectContaining({ kind: 'verification_undetermined' }) }),
+    ]));
+  });
+
   it('does not re-adjudicate after a same-claim persisted observation', async () => {
     executeAgentMock.mockImplementation(async () => {
       const snapshot = freshConflictAdjudicationSnapshot(
@@ -472,15 +634,34 @@ describe('finding-conflict-adjudication runner registry contract', () => {
       if (product === undefined) {
         throw new Error('Expected a product finding in the persisted-observation fixture');
       }
+      const raw = current.rawFindings.find((finding) => finding.rawFindingId === 'raw-1');
+      const quote = raw?.evidence[0];
+      if (raw === undefined || quote?.kind !== 'file_quote') {
+        throw new Error('Expected a file quote for the persisted-observation fixture');
+      }
+      const additionalEvidencePayload = {
+        ...quote,
+        claimIdentityHash: product.claimIdentityHash,
+        fileHash: 'b'.repeat(64),
+      };
+      const additionalEvidence = {
+        evidenceId: computeFileQuoteEvidenceRecordId(additionalEvidencePayload),
+        ...additionalEvidencePayload,
+      };
+      const withEvidence = {
+        ...current,
+        evidenceRecords: [...current.evidenceRecords, additionalEvidence],
+      };
       const { revision: _revision, ...productWithoutRevision } = product;
       void _revision;
       const changed = applyFindingLifecycleCommands({
-        ledger: current,
+        ledger: withEvidence,
         commands: [{
           operation: 'persist_finding',
           changes: {
             findings: [{
               ...productWithoutRevision,
+              evidenceIds: [...product.evidenceIds, additionalEvidence.evidenceId],
               lifecycle: 'persists',
               lastSeen: {
                 ...OBSERVATION,
@@ -515,6 +696,12 @@ describe('finding-conflict-adjudication runner registry contract', () => {
       'C-FA2947446963',
     );
     expect(afterObservation.conflictSnapshotId).not.toBe(originalSnapshot.conflictSnapshotId);
+    const originalProductSubject = originalSnapshot.subjects.find(({ findingId }) => findingId === 'F-0001');
+    const afterProductSubject = afterObservation.subjects.find(({ findingId }) => findingId === 'F-0001');
+    expect(afterProductSubject?.claimSnapshotDigest)
+      .not.toBe(originalProductSubject?.claimSnapshotDigest);
+    expect(afterProductSubject?.evidenceBindingIds)
+      .not.toEqual(originalProductSubject?.evidenceBindingIds);
     expect(isActiveConflictUnadjudicated(ledgerStore.loadLedger(), 'C-FA2947446963')).toBe(false);
 
     executeAgentMock.mockClear();
@@ -524,6 +711,206 @@ describe('finding-conflict-adjudication runner registry contract', () => {
     expect(executeAgentMock).not.toHaveBeenCalled();
     expect(ledgerStore.loadLedger().conflictAdjudicationSnapshots).toHaveLength(2);
     expect(ledgerStore.loadLedger().conflictAdjudicationAttempts).toHaveLength(2);
+  });
+
+  it('re-adjudicates after a new conflict claim landing is added', async () => {
+    executeAgentMock.mockImplementation(async () => {
+      const snapshot = freshConflictAdjudicationSnapshot(
+        ledgerStore.loadLedger(),
+        'C-FA2947446963',
+      );
+      return {
+        persona: 'supervisor',
+        status: 'done' as const,
+        content: '{}',
+        structuredOutput: {
+          proposal: {
+            kind: 'undetermined' as const,
+            subjectIds: snapshot.subjects.map(({ subjectId }) => subjectId).sort(),
+            rationale: 'No verified terminal authority is available.',
+          },
+        },
+        timestamp: new Date(),
+      };
+    });
+
+    const first = runner();
+    await first.runner.run(first.step, state());
+    await ledgerStore.updateLedger((current) => {
+      const raw = current.rawFindings.find((finding) => finding.rawFindingId === 'raw-1');
+      const conflict = current.conflicts.find((candidate) => candidate.id === 'C-FA2947446963');
+      if (raw === undefined || conflict === undefined) {
+        throw new Error('Expected the original raw claim and conflict');
+      }
+      const additionalRaw = canonicalRawFindingFixture({
+        rawFindingId: 'raw-landing-addition',
+        stepName: raw.stepName,
+        reviewer: 'security-review',
+        familyTag: raw.familyTag,
+        severity: raw.severity,
+        title: raw.title,
+        description: raw.description,
+        suggestion: raw.suggestion,
+        relation: 'persists',
+        targetFindingId: 'F-0001',
+        targetPrecondition: raw.targetPrecondition,
+        evidence: raw.evidence,
+      });
+      const withRaw = {
+        ...current,
+        rawFindings: [...current.rawFindings, additionalRaw],
+        rawCanonicalSnapshots: [
+          ...current.rawCanonicalSnapshots,
+          rawCanonicalSnapshotFixture(additionalRaw, OBSERVATION),
+        ],
+      };
+      const { revision: _revision, ...conflictWithoutRevision } = conflict;
+      void _revision;
+      const observed = applyFindingLifecycleCommands({
+        ledger: withRaw,
+        commands: [{
+          operation: 'observe_conflict',
+          changes: {
+            findings: [],
+            conflicts: [{
+              ...conflictWithoutRevision,
+              rawFindingIds: [...conflict.rawFindingIds, additionalRaw.rawFindingId],
+              lastSeen: {
+                ...OBSERVATION,
+                timestamp: '2026-06-13T00:02:00.000Z',
+              },
+            }],
+          },
+          authority: { kind: 'verified_evidence' },
+          evidenceSourcesByTarget: new Map([[
+            `conflict\0${conflict.id}`,
+            { sourceRawFindingIds: [additionalRaw.rawFindingId], authorityEvidenceIds: [] },
+          ]]),
+        }],
+        occurredAt: {
+          ...OBSERVATION,
+          timestamp: '2026-06-13T00:02:00.000Z',
+        },
+      });
+      const landed = landUnownedConflictRawClaims({
+        ledger: observed,
+        observation: {
+          ...OBSERVATION,
+          timestamp: '2026-06-13T00:02:00.000Z',
+        },
+      });
+      return {
+        ledger: refreshActiveConflictAdjudicationSnapshots({
+          ledger: landed,
+          originStep: 'reviewers',
+          createdAt: OBSERVATION,
+        }),
+        result: undefined,
+      };
+    });
+
+    expect(ledgerStore.loadLedger().conflictRawClaimLandings).toHaveLength(2);
+    expect(isActiveConflictUnadjudicated(ledgerStore.loadLedger(), 'C-FA2947446963')).toBe(true);
+    executeAgentMock.mockClear();
+    const second = runner();
+    await second.runner.run(second.step, state());
+
+    expect(executeAgentMock).toHaveBeenCalled();
+  });
+
+  it('does not re-adjudicate after recording a rejected observation', async () => {
+    executeAgentMock.mockImplementation(async () => {
+      const snapshot = freshConflictAdjudicationSnapshot(
+        ledgerStore.loadLedger(),
+        'C-FA2947446963',
+      );
+      return {
+        persona: 'supervisor',
+        status: 'done' as const,
+        content: '{}',
+        structuredOutput: {
+          proposal: {
+            kind: 'undetermined' as const,
+            subjectIds: snapshot.subjects.map(({ subjectId }) => subjectId).sort(),
+            rationale: 'No verified terminal authority is available.',
+          },
+        },
+        timestamp: new Date(),
+      };
+    });
+
+    const first = runner();
+    await first.runner.run(first.step, state());
+    await ledgerStore.updateLedger((current) => ({
+      ledger: refreshActiveConflictAdjudicationSnapshots({
+        ledger: applyRejectedObservationAttachments(
+          current,
+          [{
+            targetFindingId: 'F-0001',
+            rawFindingId: 'raw-1',
+            reason: 'The repeated observation did not pass evidence admission.',
+            rejectionCode: 'evidence_admission_failed',
+          }],
+          {
+            ...OBSERVATION,
+            timestamp: '2026-06-13T00:02:00.000Z',
+          },
+        ),
+        originStep: 'reviewers',
+        createdAt: OBSERVATION,
+      }),
+      result: undefined,
+    }));
+
+    expect(isActiveConflictUnadjudicated(ledgerStore.loadLedger(), 'C-FA2947446963')).toBe(false);
+    executeAgentMock.mockClear();
+    const second = runner();
+    await second.runner.run(second.step, state());
+
+    expect(executeAgentMock).not.toHaveBeenCalled();
+  });
+
+  it('requires re-adjudication after the product claim identity changes', async () => {
+    executeAgentMock.mockImplementation(async () => {
+      const snapshot = freshConflictAdjudicationSnapshot(
+        ledgerStore.loadLedger(),
+        'C-FA2947446963',
+      );
+      return {
+        persona: 'supervisor',
+        status: 'done' as const,
+        content: '{}',
+        structuredOutput: {
+          proposal: {
+            kind: 'undetermined' as const,
+            subjectIds: snapshot.subjects.map(({ subjectId }) => subjectId).sort(),
+            rationale: 'No verified terminal authority is available.',
+          },
+        },
+        timestamp: new Date(),
+      };
+    });
+    const first = runner();
+    await first.runner.run(first.step, state());
+
+    const current = ledgerStore.loadLedger();
+    const changed = {
+      ...current,
+      findings: current.findings.map((finding) => finding.id === 'F-0001'
+        ? {
+            ...finding,
+            claimIdentityHash: 'd'.repeat(64),
+            semanticClaimIdentityHash: 'e'.repeat(64),
+          }
+        : finding),
+    };
+    const refreshed = refreshActiveConflictAdjudicationSnapshots({
+      ledger: changed,
+      originStep: 'reviewers',
+      createdAt: OBSERVATION,
+    });
+
+    expect(isActiveConflictUnadjudicated(refreshed, 'C-FA2947446963')).toBe(true);
   });
 
   it('re-adjudicates a non-regular target even when its content digest is unavailable', async () => {

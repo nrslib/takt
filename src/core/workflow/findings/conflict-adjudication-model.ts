@@ -435,7 +435,7 @@ function isObservationOnlyConflictProjectionRefresh(input: {
   return headChanged;
 }
 
-function sharesConflictAdjudicationBasis(
+export function sharesConflictAdjudicationBasis(
   ledger: FindingLedger,
   previous: ConflictAdjudicationSnapshot,
   current: ConflictAdjudicationSnapshot,
