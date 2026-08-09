@@ -5,6 +5,7 @@ import {
   EXEC_EFFORTS,
   providerSupportsExecEffort,
   getSupportedExecEfforts,
+  resolveExecProviderEffort,
 } from '../features/exec/configValidation.js';
 import type { ExecEffort } from '../features/exec/types.js';
 
@@ -86,6 +87,17 @@ describe('assertExecProviderEffort provider capability checks', () => {
     expect(() =>
       assertExecProviderEffort('copilot', 'vendor-level', 'test'),
     ).not.toThrow();
+  });
+
+  it.each(['', '   '] as const)('should reject blank effort values', (effort) => {
+    expect(() => resolveExecProviderEffort('codex', effort, 'test'))
+      .toThrow(`does not support effort "${effort}"`);
+  });
+
+  it('should return the canonical trimmed effort value', () => {
+    expect(resolveExecProviderEffort('codex', '  custom-level  ', 'test')).toBe('custom-level');
+    expect(resolveExecProviderEffort('claude', '  experimental  ', 'test')).toBe('experimental');
+    expect(resolveExecProviderEffort('copilot', '  vendor-level  ', 'test')).toBe('vendor-level');
   });
 
   it('should reject effort for providers without effort support', () => {

@@ -7,6 +7,7 @@ import {
   assertExecProviderModel,
   assertExecProviderEffort,
   assertResolvedExecConfig,
+  normalizeExecEffort,
 } from './configValidation.js';
 import { resolveExecConfigProviderModel, resolveExecProviderModel, type ExecProviderModelDefaults } from './runtimeConfig.js';
 import type { ExecActorConfig, ExecConfig, ExecEffort, ResolvedExecActorConfig } from './types.js';
@@ -46,10 +47,14 @@ export function resolveEffortAfterProviderModelOverride(
   if (effort === undefined) {
     return undefined;
   }
-  if (currentProvider === nextProvider && currentModel === nextModel) {
-    return effort;
+  const normalizedEffort = normalizeExecEffort(effort);
+  if (normalizedEffort.length === 0) {
+    return normalizedEffort;
   }
-  return canKeepEffortForProvider(nextProvider, effort) ? effort : undefined;
+  if (currentProvider === nextProvider && currentModel === nextModel) {
+    return normalizedEffort;
+  }
+  return canKeepEffortForProvider(nextProvider, normalizedEffort) ? normalizedEffort : undefined;
 }
 
 export function resolveModelAfterProviderOverride(

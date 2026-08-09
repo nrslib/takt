@@ -593,7 +593,7 @@ unexpected_overrides:
       const configContent = [
         'provider_options:',
         '  codex:',
-        '    reasoning_effort: extreme',
+        "    reasoning_effort: '  extreme  '",
       ].join('\n');
       writeFileSync(configPath, configContent, 'utf-8');
 
@@ -646,13 +646,30 @@ unexpected_overrides:
       const configContent = [
         'provider_options:',
         '  claude:',
-        '    effort: impossible',
+        "    effort: '  impossible  '",
       ].join('\n');
       writeFileSync(configPath, configContent, 'utf-8');
 
       expect(loadProjectConfig(testDir).providerOptions).toEqual({
         claude: { effort: 'impossible' },
       });
+    });
+
+    it.each([
+      ['codex reasoning_effort', 'empty', '  codex:', '    reasoning_effort:', "''"],
+      ['codex reasoning_effort', 'whitespace-only', '  codex:', '    reasoning_effort:', "'   '"],
+      ['claude effort', 'empty', '  claude:', '    effort:', "''"],
+      ['claude effort', 'whitespace-only', '  claude:', '    effort:', "'   '"],
+    ])('should reject %s values that are %s', (_name, _valueKind, providerLine, effortLine, value) => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      const configContent = [
+        'provider_options:',
+        providerLine,
+        `${effortLine} ${value}`,
+      ].join('\n');
+      writeFileSync(configPath, configContent, 'utf-8');
+
+      expect(() => loadProjectConfig(testDir)).toThrow(/effort/i);
     });
 
     it('should load project-local fields from project config yaml', () => {

@@ -167,6 +167,12 @@ describe('SdkOptionsBuilder — outputFormat 変換', () => {
     expect(sdkOptions.effort).toBe('medium');
   });
 
+  it('provider が定義する effort 文字列を SDK options へそのまま渡す', () => {
+    const sdkOptions = buildSdkOptions({ cwd: '/tmp', effort: 'provider-defined' });
+
+    expect(sdkOptions.effort).toBe('provider-defined');
+  });
+
   it('outputSchema が outputFormat に変換される', () => {
     const schema = { type: 'object', properties: { step: { type: 'integer' } } };
     const sdkOptions = buildSdkOptions({ cwd: '/tmp', outputSchema: schema });

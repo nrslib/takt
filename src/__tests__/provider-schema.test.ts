@@ -189,7 +189,7 @@ describe('provider effort values', () => {
     expect(StepProviderOptionsSchema.parse(options)).toEqual(options);
   });
 
-  it('trims provider-specific effort strings and rejects blank values', () => {
+  it('trims provider-specific effort strings', () => {
     expect(StepProviderOptionsSchema.parse({
       codex: { reasoning_effort: '  custom-level  ' },
       claude: { effort: '  custom-level  ' },
@@ -199,7 +199,17 @@ describe('provider effort values', () => {
       claude: { effort: 'custom-level' },
       copilot: { effort: 'custom-level' },
     });
-    expect(() => StepProviderOptionsSchema.parse({ codex: { reasoning_effort: '   ' } })).toThrow(/effort/);
+  });
+
+  it.each([
+    ['codex', '', { codex: { reasoning_effort: '' } }],
+    ['codex', 'whitespace-only', { codex: { reasoning_effort: '   ' } }],
+    ['claude', '', { claude: { effort: '' } }],
+    ['claude', 'whitespace-only', { claude: { effort: '   ' } }],
+    ['copilot', '', { copilot: { effort: '' } }],
+    ['copilot', 'whitespace-only', { copilot: { effort: '   ' } }],
+  ])('rejects %s %s effort values', (_provider, _valueKind, options) => {
+    expect(() => StepProviderOptionsSchema.parse(options)).toThrow(/effort/);
   });
 });
 

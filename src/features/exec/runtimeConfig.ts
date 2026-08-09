@@ -2,7 +2,7 @@ import { resolveNonWorkflowProviderOptions } from '../../infra/config/index.js';
 import { resolveAuxiliaryProviderEnvironment } from '../../infra/config/runtime-provider/provider-environment.js';
 import type { WorkflowConfig } from '../../core/models/index.js';
 import type { ProviderType } from '../../infra/providers/index.js';
-import { assertResolvedExecConfig } from './configValidation.js';
+import { assertResolvedExecConfig, resolveExecProviderEffort } from './configValidation.js';
 import type {
   ExecActorConfig,
   ExecCodexSkillInheritance,
@@ -95,9 +95,11 @@ function resolveSessionConfig(
   session: ExecSessionConfig,
   defaults: ExecProviderModelDefaults,
 ): ResolvedExecSessionConfig {
+  const providerModel = resolveExecProviderModel(session.provider, session.model, defaults, 'exec.session.provider');
   return {
     ...session,
-    ...resolveExecProviderModel(session.provider, session.model, defaults, 'exec.session.provider'),
+    ...providerModel,
+    effort: resolveExecProviderEffort(providerModel.provider, session.effort, 'exec.session.effort'),
   };
 }
 
@@ -106,9 +108,11 @@ function resolveActorConfig(
   defaults: ExecProviderModelDefaults,
   path: string,
 ): ResolvedExecActorConfig {
+  const providerModel = resolveExecProviderModel(actor.provider, actor.model, defaults, `${path}.provider`);
   return {
     ...actor,
-    ...resolveExecProviderModel(actor.provider, actor.model, defaults, path),
+    ...providerModel,
+    effort: resolveExecProviderEffort(providerModel.provider, actor.effort, `${path}.effort`),
   };
 }
 
@@ -119,8 +123,8 @@ export function resolveExecConfigProviderModel(
   const resolved = {
     ...config,
     session: resolveSessionConfig(config.session, defaults),
-    workers: config.workers.map((worker, index) => resolveActorConfig(worker, defaults, `exec.workers[${index}].provider`)),
-    reviews: config.reviews.map((review, index) => resolveActorConfig(review, defaults, `exec.reviews[${index}].provider`)),
+    workers: config.workers.map((worker, index) => resolveActorConfig(worker, defaults, `exec.workers[${index}]`)),
+    reviews: config.reviews.map((review, index) => resolveActorConfig(review, defaults, `exec.reviews[${index}]`)),
   };
   assertResolvedExecConfig(resolved);
   return resolved;

@@ -24,6 +24,10 @@ const EXEC_EFFORT_PROVIDERS: ReadonlySet<ProviderType> = new Set([
   'copilot',
 ]);
 
+export function normalizeExecEffort(effort: ExecEffort): ExecEffort {
+  return effort.trim();
+}
+
 const EXEC_ACTOR_NAME_REGEX = /^[A-Za-z0-9_-]+$/;
 const RESERVED_EXEC_SESSION_KEY_BASES = new Set([
   'execute',
@@ -38,7 +42,7 @@ const RESERVED_EXEC_SESSION_KEY_BASES = new Set([
 ]);
 
 export function providerSupportsExecEffort(provider: ProviderType, effort: ExecEffort): boolean {
-  return EXEC_EFFORT_PROVIDERS.has(provider) && effort.trim().length > 0;
+  return EXEC_EFFORT_PROVIDERS.has(provider) && normalizeExecEffort(effort).length > 0;
 }
 
 export function getSupportedExecEfforts(provider: ProviderType): ExecEffort[] {
@@ -67,12 +71,22 @@ export function assertExecProviderEffort(
   effort: ExecEffort | undefined,
   path: string,
 ): void {
+  resolveExecProviderEffort(provider, effort, path);
+}
+
+export function resolveExecProviderEffort(
+  provider: ProviderType,
+  effort: ExecEffort | undefined,
+  path: string,
+): ExecEffort | undefined {
   if (effort === undefined) {
-    return;
+    return undefined;
   }
-  if (!providerSupportsExecEffort(provider, effort)) {
+  const normalizedEffort = normalizeExecEffort(effort);
+  if (!providerSupportsExecEffort(provider, normalizedEffort)) {
     throw new Error(`Invalid exec config at ${path}: provider "${provider}" does not support effort "${effort}"`);
   }
+  return normalizedEffort;
 }
 
 function assertUniqueActorSessionKeys(actors: ExecActorConfig[]): void {

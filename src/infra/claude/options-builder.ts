@@ -85,6 +85,7 @@ export class SdkOptionsBuilder {
       sdkOptions.skills = [];
     }
     if (this.options.model) sdkOptions.model = this.options.model;
+    // The SDK's TypeScript union can lag values accepted by the Claude CLI runtime.
     if (this.options.effort) sdkOptions.effort = this.options.effort as Options['effort'];
     if (this.options.internalAgentIsolation !== 'strict-readonly' && this.options.skillsEnabled === false) {
       sdkOptions.skills = [];

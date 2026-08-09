@@ -5,6 +5,7 @@ import { parse as parseYaml } from 'yaml';
 import { describe, expect, it } from 'vitest';
 import type { AgentWorkflowStep } from '../core/models/index.js';
 import { resolveLoopMonitorJudgeProviderModel, resolveStepProviderModel } from '../core/workflow/provider-resolution.js';
+import { resolveExecConfigProviderModel } from '../features/exec/runtimeConfig.js';
 import type { ExecConfig } from '../features/exec/types.js';
 import { buildExecWorkflowYaml as buildExecWorkflowYamlRaw } from '../features/exec/workflowTemplate.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowFileLoader.js';
@@ -57,7 +58,10 @@ type RawWorkflow = {
     judge: Record<string, unknown> & { provider_options?: RawProviderOptions };
   }>;
   report_formats?: Record<string, string>;
-  steps: Array<Record<string, unknown> & { parallel?: RawParallelStep[] }>;
+  steps: Array<Record<string, unknown> & {
+    provider_options?: RawProviderOptions;
+    parallel?: RawParallelStep[];
+  }>;
 };
 
 function createExecConfig(overrides: ExecConfigOverrides = {}): ExecConfig {
@@ -595,18 +599,18 @@ describe('exec workflow template', () => {
   });
 
   it('should pass through arbitrary effort values to the selected provider', () => {
-    const raw = parseRawWorkflow(buildExecWorkflowYaml(createExecConfig({
+    const config = resolveExecConfigProviderModel(createExecConfig({
       session: {
         provider: 'codex',
         model: 'gpt-5',
-        effort: 'max',
+        effort: '  max  ',
       },
       workers: [
         {
           name: 'codex-worker',
           provider: 'claude',
           model: 'opus',
-          effort: 'experimental',
+          effort: '  experimental  ',
           instruction: 'exec-worker',
           knowledge: ['architecture'],
           policy: ['coding'],
@@ -617,20 +621,23 @@ describe('exec workflow template', () => {
           name: 'copilot-reviewer',
           provider: 'copilot',
           model: 'gpt-5',
-          effort: 'vendor-level',
+          effort: '  vendor-level  ',
           instruction: 'exec-review',
           knowledge: ['architecture'],
           policy: ['review'],
         },
       ],
-    }), {
+    }), {});
+    const raw = parseRawWorkflow(buildExecWorkflowYaml(config, {
       workflowName: 'exec-custom-effort-test',
       taskDescription: 'Pass through custom effort',
     }));
 
     expect(raw.steps[0]?.parallel[0]?.provider_options?.claude?.effort).toBe('experimental');
     expect(raw.steps[1]?.parallel[0]?.provider_options?.copilot?.effort).toBe('vendor-level');
+    expect(raw.steps[2]?.provider_options?.codex?.reasoning_effort).toBe('max');
     expect(raw.loop_monitors?.[0]?.judge.provider_options?.codex?.reasoning_effort).toBe('max');
+    expect(raw.loop_monitors?.[1]?.judge.provider_options?.codex?.reasoning_effort).toBe('max');
   });
 
   it('should reject effort for providers without effort support', () => {
