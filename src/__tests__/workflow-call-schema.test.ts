@@ -19,6 +19,50 @@ function createWorkflowCallStep(overrides: Record<string, unknown> = {}): Record
   };
 }
 
+function createDynamicPoolWorkflow(pool: unknown): Record<string, unknown> {
+  return {
+    name: 'invalid-dynamic-pool',
+    steps: [{
+      name: 'implement',
+      persona: 'coder',
+      instruction: 'Implement',
+      dynamic_facets: { pool },
+      rules: [{ condition: 'done', next: 'COMPLETE' }],
+    }],
+  };
+}
+
+function createCallableFacetPoolWorkflow(): Record<string, unknown> {
+  return {
+    name: 'invalid-callable-pool',
+    subworkflow: {
+      callable: true,
+      params: {
+        implementation_pool: { type: 'facet_pool_ref' },
+      },
+    },
+    policies: { policy: 'Policy' },
+    facet_pools: {
+      available: {
+        candidates: [{
+          id: 'candidate',
+          description: 'Candidate',
+          policy: 'policy',
+        }],
+      },
+    },
+    steps: [{
+      name: 'implement',
+      persona: 'coder',
+      instruction: 'Implement',
+      dynamic_facets: {
+        pool: { $param: 'implementation_pool' },
+      },
+      rules: [{ condition: 'done', next: 'COMPLETE' }],
+    }],
+  };
+}
+
 const workflowCallForbiddenFieldCases = [
   { field: 'persona', value: 'coder' },
   { field: 'persona_name', value: 'Coder' },
@@ -279,6 +323,59 @@ describe('workflow_call schema', () => {
       'pool',
     ]);
     expect((thrown as Error).message).toContain('dynamic_facets.pool has an unresolved parameter reference');
+  });
+
+  it.each([
+    { label: 'an array', value: ['available'] },
+    { label: 'null', value: null },
+  ])('should report the dynamic pool path when $label is supplied', ({ value }) => {
+    let thrown: unknown;
+    try {
+      normalizeWorkflowConfig(createDynamicPoolWorkflow(value), '/tmp');
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeDefined();
+    expect(getWorkflowConfigErrorPath(thrown)).toEqual([
+      'steps',
+      0,
+      'dynamic_facets',
+      'pool',
+    ]);
+    expect((thrown as { message: string }).message).toContain(
+      `Invalid input: expected string, received ${value === null ? 'null' : 'array'}`,
+    );
+  });
+
+  it.each([
+    { label: 'an array', value: ['available'], expectedMessage: 'must be a scalar facet_pool_ref' },
+    { label: 'null', value: null, expectedMessage: 'references unknown facet pool "null"' },
+  ])('should report the callable argument path when $label is supplied', ({ value, expectedMessage }) => {
+    let thrown: unknown;
+    try {
+      normalizeWorkflowConfig(
+        createCallableFacetPoolWorkflow(),
+        '/tmp',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        {
+          callableArgs: {
+            implementation_pool: value as unknown as string | string[],
+          },
+        },
+      );
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect(getWorkflowConfigErrorPath(thrown)).toEqual(['callableArgs', 'implementation_pool']);
+    expect((thrown as Error).message).toContain(expectedMessage);
   });
 
   it('accepts scalar vars only on workflow_call steps and preserves them after normalization', () => {

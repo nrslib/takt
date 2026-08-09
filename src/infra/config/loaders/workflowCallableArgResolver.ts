@@ -184,11 +184,15 @@ function resolveCallableArgs(
   const resolvedArgs = new Map<string, WorkflowCallArgValue>();
 
   for (const [name, value] of Object.entries(args ?? {})) {
-    const definition = params[name];
-    if (!definition) {
-      throw new Error(`workflow_call arg "${name}" is not declared by child workflow "${raw.name}"`);
+    try {
+      const definition = params[name];
+      if (!definition) {
+        throw new Error(`workflow_call arg "${name}" is not declared by child workflow "${raw.name}"`);
+      }
+      validateWorkflowCallArgValue(name, definition, value, workflowDir, sections, raw.facet_pools, context, argPolicy);
+    } catch (error) {
+      throw withWorkflowStepErrorPath(error, ['callableArgs', name]);
     }
-    validateWorkflowCallArgValue(name, definition, value, workflowDir, sections, raw.facet_pools, context, argPolicy);
     resolvedArgs.set(name, value);
   }
 
