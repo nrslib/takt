@@ -77,7 +77,7 @@ function normalizeSubworkflowConfig(
       ? Object.fromEntries(
         Object.entries(raw.params).map(([name, param]) => [
           name,
-          param.type === 'workflow_ref'
+          param.type === 'workflow_ref' || param.type === 'facet_pool_ref'
             ? {
                 type: param.type,
                 default: param.default,
@@ -568,6 +568,12 @@ function validateDynamicFacetsReferences(
   for (const [index, step] of steps.entries()) {
     if (step.dynamic_facets === undefined) continue;
     const poolName = step.dynamic_facets.pool;
+    if (typeof poolName !== 'string') {
+      throw withWorkflowStepErrorPath(
+        new Error(`Configuration error: step "${step.name}" has an unresolved facet pool parameter`),
+        ['steps', index, 'dynamic_facets', 'pool'],
+      );
+    }
     const pool = facetPools?.[poolName];
     if (pool === undefined) {
       throw withWorkflowStepErrorPath(

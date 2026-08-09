@@ -121,11 +121,41 @@ call: merge-readiness-finding-contract-final-gate
 
 Every concrete workflow step that declares `uses`, including a parallel sub-step, must declare its own non-empty rule specification. A non-parallel fragment caller uses a `rules` array; a parallel fragment caller uses the rule tree described below. A fragment cannot declare `rules` at its root or on any parallel sub-step. This keeps routing owned by the workflow that knows the destination step names; fragment-to-fragment `uses` is exempt until a concrete workflow calls the chain. The loader does not copy, inherit, or synthesize fallback rules.
 
-Step fragments may declare required typed parameters in root-level `params`, and each `uses` caller binds them with `with`. Facet parameters use `type: facet_ref` or `facet_ref[]` with `facet_kind: policy`, `knowledge`, `instruction`, `persona`, or `report_format`. Workflow target parameters use `type: workflow_ref` without `facet_kind`. Defaults and optional parameters are not supported in fragments.
+Step fragments may declare required typed parameters in root-level `params`, and each `uses` caller binds them with `with`. Facet parameters use `type: facet_ref` or `facet_ref[]` with `facet_kind: policy`, `knowledge`, `instruction`, `persona`, or `report_format`. Workflow target parameters use `type: workflow_ref` without `facet_kind`. A fragment that receives a dynamic facet pool name may use `type: facet_pool_ref` without `facet_kind`. Defaults and optional parameters are not supported in fragments.
 
-Use `{ $param: name }` in the field that matches its declaration: `policy`, `knowledge`, `persona`, `instruction`, `output_contracts.report[].format`, or `workflow_call.call`. A `facet_ref` or `facet_ref[]` parameter may also be an item within a `policy` or `knowledge` list; list values are spliced in place while preserving order, and an empty `facet_ref[]` contributes no item. Any parameter type may be passed as a direct `workflow_call.args` value or in a nested fragment caller's `with`. Nested fragments use lexical scope and cannot capture an outer parameter implicitly: pass it explicitly as `with: { child_param: { $param: outer_param } }`. A callable workflow parameter may be passed the same way and is resolved after fragment expansion. The resolver rejects unknown or missing bindings, cardinality or kind mismatches, undeclared references, and parameter references in unsupported fields. It consumes `params` and `with` before schema validation, preserves and expands a `workflow_call` fragment's own `args`, and applies ordinary caller overlays after parameter expansion.
+Use `{ $param: name }` in the field that matches its declaration: `policy`, `knowledge`, `persona`, `instruction`, `output_contracts.report[].format`, `workflow_call.call`, or `dynamic_facets.pool` for `facet_pool_ref`. A `facet_ref` or `facet_ref[]` parameter may also be an item within a `policy` or `knowledge` list; list values are spliced in place while preserving order, and an empty `facet_ref[]` contributes no item. A `facet_pool_ref` is a scalar key in the containing callable workflow's top-level `facet_pools` map, not a policy or knowledge facet. Any parameter type may be passed as a direct `workflow_call.args` value or in a nested fragment caller's `with`. Nested fragments use lexical scope and cannot capture an outer parameter implicitly: pass it explicitly as `with: { child_param: { $param: outer_param } }`. A callable workflow parameter may be passed the same way and is resolved after fragment expansion. The resolver rejects unknown or missing bindings, cardinality or kind mismatches, undeclared references, and parameter references in unsupported fields. It consumes `params` and `with` before schema validation, preserves and expands a `workflow_call` fragment's own `args`, and applies ordinary caller overlays after parameter expansion.
 
 When a fragment resolves to a parallel step, the caller supplies a strict rule tree instead of a plain array. `self` contains the parallel parent's non-empty rule array, and `parallel` maps every explicit, unique final child name to a non-empty rule array. Child rule trees are invalid because workflow parallel steps cannot be nested. The mapping must list all children exactly once and cannot contain unknown children. The loader applies the tree after fragment expansion and converts it to ordinary per-step `rules` arrays before schema validation.
+
+For example, a callable workflow can select a child-local implementation pool through a fragment without copying the fragment's step definition:
+
+```yaml
+subworkflow:
+  callable: true
+  params:
+    implementation_pool:
+      type: facet_pool_ref
+      default: coding-facets
+
+facet_pools:
+  coding-facets:
+    candidates:
+      - id: backend
+        description: Handle backend changes
+        knowledge: backend
+
+steps:
+  - name: implement
+    uses: implementation-step
+    with:
+      implementation_pool:
+        $param: implementation_pool
+    dynamic_facets:
+      pool:
+        $param: implementation_pool
+```
+
+`facet_pool_ref` arguments and defaults must be scalar names of pools declared by the callable child. A missing required argument, a list value, an unknown pool name, or an unresolved/undeclared `$param` in `dynamic_facets.pool` fails during loading before an agent or selector starts. The loader does not fall back to another pool or to all candidates.
 
 ```yaml
 steps:
@@ -374,6 +404,8 @@ A normal agent step can dynamically select additional `policy` and `knowledge` f
 Define a pool under the top-level `facet_pools` map, then reference it from a step with `dynamic_facets`. Pools can be defined inline in the workflow or as external resource files.
 
 `dynamic_facets.max_selected` is optional. When specified, it limits the number of selected candidates; when omitted, the selector may select up to every candidate in the pool. This does not add an all-candidate fallback when selector execution fails.
+
+`dynamic_facets.pool` may also use `{ $param: implementation_pool }` when the containing callable workflow declares `implementation_pool` with `type: facet_pool_ref`. The value is resolved before dynamic-facet validation and must name a pool in that callable workflow's top-level `facet_pools` map. An unset required parameter, a list or other non-scalar value, an unknown pool, or an unexpanded parameter reference fails before an agent or selector starts.
 
 #### Inline pool
 
@@ -1218,9 +1250,9 @@ subworkflow:
       default: peer-review-suite-base
 ```
 
-Do not set `max_steps` on a callable workflow. The loader rejects an explicit value because the root workflow's budget applies to the complete call tree. A callable workflow must be entered through `workflow_call`; use a standalone root wrapper when the same implementation also needs a direct entry point.
+Builtin callable workflows should omit `max_steps` because the root workflow owns the budget for the complete call tree. Keep `max_steps` on the standalone root wrapper when the shared implementation also needs a direct entry point; the callable child is intended to be entered through `workflow_call`.
 
-Callable workflow facet parameters use `facet_ref` or `facet_ref[]` and one of the five `facet_kind` values: `policy`, `knowledge`, `instruction`, `persona`, or `report_format`. A `workflow_ref` parameter identifies a callable workflow and omits `facet_kind`; it may be used as `call: { $param: reviewer_suite }`. Defaults are optional. A `facet_ref[]` argument or default may be empty, which is useful for optional additions. In `policy` and `knowledge`, scalar or list parameters can be mixed with fixed references; list values are flattened at their position while preserving the field's written order. Parameters can also be forwarded through `workflow_call.args`.
+Callable workflow facet parameters use `facet_ref` or `facet_ref[]` and one of the five `facet_kind` values: `policy`, `knowledge`, `instruction`, `persona`, or `report_format`. A `workflow_ref` parameter identifies a callable workflow and omits `facet_kind`; it may be used as `call: { $param: reviewer_suite }`. A `facet_pool_ref` parameter also omits `facet_kind` and identifies a scalar key in the callable child's top-level `facet_pools` map; it may be used as `dynamic_facets.pool: { $param: implementation_pool }`. Defaults are optional. A `facet_ref[]` argument or default may be empty, which is useful for optional additions. In `policy` and `knowledge`, scalar or list parameters can be mixed with fixed references; list values are flattened at their position while preserving the field's written order. Parameters can also be forwarded through `workflow_call.args`. For `facet_pool_ref`, a missing required argument, a list value, an unknown child-local pool, or an unexpanded `$param` fails before execution; there is no implicit pool fallback.
 
 Set `requires_finding_contract: true` when the child consumes inherited `findings.*` state or Finding Contract output formats, or delegates to another subworkflow with the same requirement. The immediate caller must either declare `finding_contract` or require it from its own caller. Every child in the chain uses the owning caller's contract and the same ledger rather than creating its own ledger.
 

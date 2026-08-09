@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { WorkflowConfigRawSchema, WorkflowStepRawSchema } from '../core/models/index.js';
+import { prepareCallableSubworkflowDiscoveryArgs } from '../infra/config/loaders/workflowCallableDiscoveryArgs.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 
 function createWorkflowCallStep(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -170,6 +171,69 @@ describe('workflow_call schema', () => {
     }, '/tmp');
 
     expect(workflow.maxSteps).toBe(10);
+  });
+
+  it('should use a synthetic pool for required facet_pool_ref discovery args', () => {
+    const raw = WorkflowConfigRawSchema.parse({
+      name: 'pool-discovery',
+      subworkflow: {
+        callable: true,
+        params: {
+          implementation_pool: {
+            type: 'facet_pool_ref',
+          },
+        },
+      },
+      policies: {
+        policy: 'Discovery policy',
+      },
+      knowledge: {
+        knowledge: 'Discovery knowledge',
+      },
+      facet_pools: {
+        first: {
+          candidates: [{
+            id: 'first-candidate',
+            description: 'First candidate',
+            policy: 'policy',
+          }],
+        },
+        second: {
+          candidates: [{
+            id: 'second-candidate',
+            description: 'Second candidate',
+            knowledge: 'knowledge',
+          }],
+        },
+      },
+      steps: [{
+        name: 'implement',
+        persona: 'reviewer',
+        instruction: 'Review',
+        dynamic_facets: {
+          pool: {
+            $param: 'implementation_pool',
+          },
+        },
+        rules: [{ condition: 'done', next: 'COMPLETE' }],
+      }],
+    });
+
+    const prepared = prepareCallableSubworkflowDiscoveryArgs(raw);
+    const syntheticPoolName = '__takt_discovery_pool__implementation_pool';
+    expect(prepared.callableArgs).toEqual({ implementation_pool: syntheticPoolName });
+    expect(prepared.raw.facet_pools?.first).toBeDefined();
+    expect(prepared.raw.facet_pools?.second).toBeDefined();
+    expect(prepared.raw.facet_pools?.[syntheticPoolName]).toEqual({
+      candidates: [{
+        id: syntheticPoolName + '-candidate',
+        description: '[discovery placeholder candidate for facet pool param "implementation_pool"]',
+        policy: '__takt_discovery_param___policy_implementation_pool',
+        knowledge: '__takt_discovery_param___knowledge_implementation_pool',
+      }],
+    });
+    expect(prepared.raw.policies?.['__takt_discovery_param___policy_implementation_pool']).toBeDefined();
+    expect(prepared.raw.knowledge?.['__takt_discovery_param___knowledge_implementation_pool']).toBeDefined();
   });
 
   it('accepts scalar vars only on workflow_call steps and preserves them after normalization', () => {

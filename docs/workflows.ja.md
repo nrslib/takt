@@ -121,11 +121,41 @@ call: merge-readiness-finding-contract-final-gate
 
 `uses` を宣言する concrete workflow step は、parallel sub-step を含め、呼び出し側に空でない rule 定義を必ず持ちます。非 parallel fragment の呼び出し側は `rules` 配列を、parallel fragment の呼び出し側は次に示す rule tree を使います。fragment は root と parallel sub-step のどちらにも `rules` を定義できません。これにより、遷移先の step 名を知る workflow が routing を所有します。fragment から別 fragment を参照する中間 `uses` は、concrete workflow がその参照 chain を呼び出すまではこの必須条件の対象外です。loader は rule のコピー、継承、fallback の自動生成を行いません。
 
-step fragment は root の `params` で必須の型付き parameter を宣言し、各 `uses` caller は `with` で値を束縛できます。facet parameter は `type: facet_ref` / `facet_ref[]` と、`policy` / `knowledge` / `instruction` / `persona` / `report_format` のいずれかの `facet_kind` を指定します。workflow の呼び出し先を表す parameter は `type: workflow_ref` とし、`facet_kind` は指定しません。fragment では default と optional parameter は利用できません。
+step fragment は root の `params` で必須の型付き parameter を宣言し、各 `uses` caller は `with` で値を束縛できます。facet parameter は `type: facet_ref` / `facet_ref[]` と、`policy` / `knowledge` / `instruction` / `persona` / `report_format` のいずれかの `facet_kind` を指定します。workflow の呼び出し先を表す parameter は `type: workflow_ref` とし、`facet_kind` は指定しません。dynamic facet pool 名を受け取る fragment は `facet_pool_ref` を `facet_kind` なしで指定できます。fragment では default と optional parameter は利用できません。
 
-`{ $param: name }` は宣言と対応する `policy`、`knowledge`、`persona`、`instruction`、`output_contracts.report[].format`、または `workflow_call.call` に配置します。`facet_ref` / `facet_ref[]` parameter は `policy` / `knowledge` の配列要素として固定参照と混在でき、配列値は順序を保ってその位置へ展開されます。空の `facet_ref[]` は要素を追加しません。すべての parameter 型は `workflow_call.args` の直接の値、または nested fragment caller の `with` に渡せます。nested fragment は lexical scope を使い、outer parameter を暗黙 capture できません。`with: { child_param: { $param: outer_param } }` と明示的に渡します。callable workflow parameter も同じ方法で渡せ、fragment 展開後に解決されます。resolver は未知・不足 binding、scalar/list 不一致、kind 不一致、未宣言参照、未対応 field の参照を拒否します。`params` と `with` は schema 検証前に消費され、`workflow_call` fragment 自身の `args` は保持・展開され、通常の caller overlay は parameter 展開後に適用されます。
+`{ $param: name }` は宣言と対応する `policy`、`knowledge`、`persona`、`instruction`、`output_contracts.report[].format`、`workflow_call.call`、または `facet_pool_ref` の `dynamic_facets.pool` に配置します。`facet_ref` / `facet_ref[]` parameter は `policy` / `knowledge` の配列要素として固定参照と混在でき、配列値は順序を保ってその位置へ展開されます。空の `facet_ref[]` は要素を追加しません。`facet_pool_ref` は policy や knowledge facet ではなく、呼び出される callable workflow のトップレベル `facet_pools` map にある pool 名の scalar です。すべての parameter 型は `workflow_call.args` の直接の値、または nested fragment caller の `with` に渡せます。nested fragment は lexical scope を使い、outer parameter を暗黙 capture できません。`with: { child_param: { $param: outer_param } }` と明示的に渡します。callable workflow parameter も同じ方法で渡せ、fragment 展開後に解決されます。resolver は未知・不足 binding、scalar/list 不一致、kind 不一致、未宣言参照、未対応 field の参照を拒否します。`params` と `with` は schema 検証前に消費され、`workflow_call` fragment 自身の `args` は保持・展開され、通常の caller overlay は parameter 展開後に適用されます。
 
 fragment が parallel step に解決される場合、呼び出し側は通常の配列ではなく strict な rule tree を指定します。`self` に parallel parent の空でない rule 配列を、`parallel` に明示的かつ一意な全 final child 名と各 child の空でない rule 配列を定義します。workflow の parallel step は nested にできないため、child rule tree は無効です。全 child を過不足なく1回ずつ列挙する必要があり、不明な child は指定できません。loader は fragment の展開後に rule tree を適用し、schema 検証前に各 step の通常の `rules` 配列へ変換します。
+
+例えば callable workflow は、step 定義を複製せず、fragment が使う実装 pool を child-local に差し替えられます。
+
+```yaml
+subworkflow:
+  callable: true
+  params:
+    implementation_pool:
+      type: facet_pool_ref
+      default: coding-facets
+
+facet_pools:
+  coding-facets:
+    candidates:
+      - id: backend
+        description: バックエンド変更を扱う
+        knowledge: backend
+
+steps:
+  - name: implement
+    uses: implementation-step
+    with:
+      implementation_pool:
+        $param: implementation_pool
+    dynamic_facets:
+      pool:
+        $param: implementation_pool
+```
+
+`facet_pool_ref` の引数と default は、callable child が宣言した pool 名の scalar でなければなりません。必須引数の未設定、配列値、未知の pool 名、`dynamic_facets.pool` の未解決・未宣言 `$param` は agent や selector の起動前にロードエラーになります。別 pool や全候補への暗黙 fallback はありません。
 
 ```yaml
 steps:
@@ -363,6 +393,8 @@ claim を失う等）で、既存の訂正1回でも直らないときは、TAKT
 pool はトップレベルの `facet_pools` map に定義し、step から `dynamic_facets` で参照します。pool は workflow 内に inline で定義するか、外部 resource ファイルとして定義できます。
 
 `dynamic_facets.max_selected` は任意です。指定した場合は選択数の上限として扱い、省略した場合は pool の全候補数まで選択できます。selector の失敗時に全候補へ自動 fallback する挙動ではありません。
+
+`dynamic_facets.pool` には、callable workflow が `type: facet_pool_ref` で宣言した parameter を `{ $param: implementation_pool }` として指定することもできます。値は通常の dynamic facet 検証前に解決されるため、その callable workflow の `facet_pools` map に存在する pool を指定する必要があります。未設定、scalar 以外、未知、未展開の値は agent や selector の起動前に fail-fast します。
 
 #### inline pool
 
@@ -1197,9 +1229,9 @@ subworkflow:
       default: peer-review-suite-base
 ```
 
-callable workflow に `max_steps` を指定しないでください。call tree 全体にはルート workflow の予算が適用されるため、明示的な指定は loader が拒否します。callable workflow は `workflow_call` からのみ開始できます。同じ実装に直接実行の入口も必要な場合は、callable workflow を呼び出す standalone のルート wrapper を用意します。
+builtin callable workflow では、call tree 全体の予算を root workflow が所有するため `max_steps` を省略します。同じ実装に直接実行の入口も必要な場合は standalone の root wrapper に `max_steps` を指定し、callable child は `workflow_call` から呼び出す設計にします。
 
-callable workflow の facet parameter は `facet_ref` / `facet_ref[]` と、`policy` / `knowledge` / `instruction` / `persona` / `report_format` の5種の `facet_kind` を使います。呼び出す callable workflow を表す `workflow_ref` parameter には `facet_kind` を指定せず、`call: { $param: reviewer_suite }` の形で利用できます。default は省略可能です。`facet_ref[]` の引数と default には空配列を指定でき、任意の追加 facet を表現できます。`policy` / `knowledge` では固定参照と scalar/list parameter を混在でき、list parameter は field の記載順を保ってその位置へ平坦化されます。parameter は `workflow_call.args` を通じてさらに下位へ渡すこともできます。
+callable workflow の facet parameter は `facet_ref` / `facet_ref[]` と、`policy` / `knowledge` / `instruction` / `persona` / `report_format` の5種の `facet_kind` を使います。呼び出す callable workflow を表す `workflow_ref` parameter には `facet_kind` を指定せず、`call: { $param: reviewer_suite }` の形で利用できます。`facet_pool_ref` parameter も `facet_kind` を指定せず、callable child のトップレベル `facet_pools` map にある pool 名の scalar を表します。`dynamic_facets.pool: { $param: implementation_pool }` の形で使用できます。default は省略可能です。`facet_ref[]` の引数と default には空配列を指定でき、任意の追加 facet を表現できます。`policy` / `knowledge` では固定参照と scalar/list parameter を混在でき、list parameter は field の記載順を保ってその位置へ平坦化されます。`facet_pool_ref` の必須引数未設定、配列などの型不一致、child-local でない pool、未展開 `$param` は実行前に fail-fast し、暗黙の pool fallback はありません。parameter は `workflow_call.args` を通じてさらに下位へ渡すこともできます。
 
 子が継承した `findings.*` 状態や Finding Contract 用出力形式を使う場合、または同じ要件を持つ別のサブワークフローへ委譲する場合は、`requires_finding_contract: true` を指定します。直近の呼出元は `finding_contract` を宣言するか、さらに上位の呼出元へ同じ要件を宣言する必要があります。連鎖内の各子は独自の台帳を作らず、契約所有元と同じ契約・台帳を使用します。
 

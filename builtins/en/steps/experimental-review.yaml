@@ -1,4 +1,7 @@
 params:
+  review_policy_additions:
+    type: facet_ref[]
+    facet_kind: policy
   review_knowledge_additions:
     type: facet_ref[]
     facet_kind: knowledge
@@ -12,7 +15,12 @@ parallel:
       tags: [review]
       edit: false
       persona: coding-reviewer
-      policy: [contract-change, review, coding, testing]
+      policy:
+        - contract-change
+        - review
+        - coding
+        - testing
+        - $param: review_policy_additions
       knowledge:
         - architecture
         - unit-testing
@@ -29,7 +37,11 @@ parallel:
       tags: [review]
       edit: false
       persona: ai-antipattern-reviewer
-      policy: [contract-change, review, ai-antipattern]
+      policy:
+        - contract-change
+        - review
+        - ai-antipattern
+        - $param: review_policy_additions
       knowledge:
         - architecture
         - $param: review_knowledge_additions

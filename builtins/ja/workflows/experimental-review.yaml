@@ -1,0 +1,40 @@
+name: experimental-review
+description: 実験的ワークフローの共通レビュー実行部。レビュー知識とポリシーを注入して結果を返す。
+subworkflow:
+  callable: true
+  visibility: internal
+  returns:
+    - needs_fix
+  params:
+    review_policy_additions:
+      type: facet_ref[]
+      facet_kind: policy
+      default: []
+    review_knowledge_additions:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default: []
+initial_step: review
+steps:
+  - name: review
+    uses: experimental-review
+    with:
+      review_policy_additions:
+        $param: review_policy_additions
+      review_knowledge_additions:
+        $param: review_knowledge_additions
+    rules:
+      self:
+        - condition: all("approved")
+          next: COMPLETE
+        - condition: any("needs_fix")
+          return: needs_fix
+      parallel:
+        coding-review: [{ condition: approved }, { condition: needs_fix }]
+        ai-antipattern-review: [{ condition: approved }, { condition: needs_fix }]
+        architecture-review: [{ condition: approved }, { condition: needs_fix }]
+        frontend-review: [{ condition: approved }, { condition: needs_fix }]
+        backend-review: [{ condition: approved }, { condition: needs_fix }]
+        cli-review: [{ condition: approved }, { condition: needs_fix }]
+        security-review: [{ condition: approved }, { condition: needs_fix }]
+        testing-review: [{ condition: approved }, { condition: needs_fix }]

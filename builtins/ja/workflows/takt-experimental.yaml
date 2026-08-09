@@ -1,190 +1,28 @@
 name: takt-experimental
-description: TAKT固有の知識とテストポリシーを注入し、タスクと直前のレポートに応じて実装ファセットとレビューエージェントを動的に選択する実験的な開発ワークフロー。
+description: TAKT固有の知識とテストポリシーを共通実験コアへ注入し、TAKT候補だけで実装とレビューを行うワークフロー。
 max_steps: 51
-initial_step: plan
-
-facet_pools:
-  coding-facets:
-    candidates:
-      - id: cli
-        description: CLIコマンド、引数、終了コード、設定、ログ、既存CLI構造を扱う
-        policy: existing-system-respect
-        knowledge: [takt, existing-system]
-      - id: testing
-        description: テスト設計、テストカバレッジ、統合境界、E2E境界を扱う
-        policy: [testing, takt-testing]
-        knowledge: [takt, unit-testing, e2e-testing]
-      - id: security
-        description: 認証認可、入力検証、機密情報、依存関係、セキュリティ境界を扱う
-        knowledge: [takt, security]
-      - id: implementation-semantics
-        description: 実装の意味、契約、状態遷移、戻り値、副作用を扱う
-        knowledge: [takt, implementation-semantics]
+initial_step: develop
 
 steps:
-  - name: plan
-    capabilities: [readonly, enable-skills]
-    uses: development-core-plan
-    with:
-      plan_policy: [design-planning]
+  - name: develop
+    kind: workflow_call
+    call: experimental-core
+    args:
+      implementation_pool: takt-coding-facets
+      review_workflow: takt-experimental-review
+      review_policy_additions: [takt-testing]
+      review_knowledge_additions: [takt]
       plan_knowledge: [takt, architecture, task-decomposition]
-      plan_instruction: plan
-      plan_report_format: plan
-    rules:
-      - condition: 要件が明確で実装可能
-        next: write_tests
-      - condition: ユーザーが質問をしている（実装タスクではない）
-        next: COMPLETE
-      - condition: 要件が不明確、情報不足
-        next: ABORT
-
-  - name: write_tests
-    capabilities: [edit, enable-skills]
-    uses: development-core-write-tests
-    with:
       testing_policy: [coding, testing, takt-testing]
       testing_knowledge: [takt, architecture, unit-testing, e2e-testing]
-      testing_instruction: write-tests-first
-    rules:
-      - condition: テスト作成が完了した
-        next: implement
-      - condition: テスト対象が未実装のためテスト作成をスキップする
-        next: implement
-      - condition: テスト作成を進行できない
-        next: plan
-      - condition: ユーザーへの確認事項があるためユーザー入力が必要
-        next: write_tests
-        requires_user_input: true
-        interactive_only: true
-
-  - name: implement
-    capabilities: [edit, enable-skills]
-    uses: development-core-implement
-    with:
       development_policy: [coding, testing, takt-testing]
       development_knowledge: [takt, architecture, task-decomposition]
-      implementation_instruction: implement
-    dynamic_facets:
-      pool: coding-facets
+      fix_policy: [contract-change, coding, testing, takt-testing, review, ai-antipattern]
+      fix_knowledge: [takt, architecture]
+      supervise_policy: [contract-change, coding, testing, takt-testing, review, ai-antipattern]
+      supervise_knowledge: [takt, architecture, unit-testing, e2e-testing]
     rules:
-      - condition: 実装が完了した
-        next: review
-      - condition: 実装未着手（レポートのみ）
-        next: review
-      - condition: 実装を進行できない
-        next: plan
-      - condition: ユーザー入力が必要
-        next: implement
-        requires_user_input: true
-        interactive_only: true
-
-  - name: review
-    uses: experimental-review
-    with:
-      review_knowledge_additions: [takt]
-    parallel:
-      pool:
-        - name: architecture-review
-          description: モジュール構造、責務分割、依存方向、呼び出し経路をレビューする
-          capabilities: readonly
-          tags: [review]
-          edit: false
-          persona: architecture-reviewer
-          policy: [contract-change, review]
-          knowledge: [takt, architecture]
-          instruction: review-arch
-          pass_previous_response: false
-          output_contracts:
-            report:
-              - name: architecture-review.md
-                format: architecture-review
-        - name: cli-review
-          description: CLIコマンド、引数、終了コード、設定、ログ、既存CLI構造をレビューする
-          capabilities: readonly
-          tags: [review]
-          edit: false
-          persona: coding-reviewer
-          policy: [contract-change, review, coding]
-          knowledge: [takt, architecture, existing-system]
-          instruction: review-coding
-          pass_previous_response: false
-          output_contracts:
-            report:
-              - name: cli-review.md
-                format: coding-review
-        - name: security-review
-          description: 認証認可、入力検証、機密情報、依存関係、セキュリティ境界をレビューする
-          capabilities: readonly
-          tags: [review]
-          edit: false
-          persona: security-reviewer
-          policy: [contract-change, review]
-          knowledge: [takt, security]
-          instruction: review-security
-          pass_previous_response: false
-          output_contracts:
-            report:
-              - name: security-review.md
-                format: security-review
-        - name: testing-review
-          description: テストカバレッジ、テスト設計、統合境界、E2E境界をレビューする
-          capabilities: readonly
-          tags: [review]
-          edit: false
-          persona: testing-reviewer
-          policy: [contract-change, review, testing]
-          knowledge: [takt, unit-testing, e2e-testing]
-          instruction: review-test
-          pass_previous_response: false
-          output_contracts:
-            report:
-              - name: testing-review.md
-                format: testing-review
-    rules:
-      self:
-        - condition: all("approved")
-          next: supervise
-        - condition: any("needs_fix")
-          next: fix
-      parallel:
-        coding-review: &reviewer-rules
-          - condition: approved
-          - condition: needs_fix
-        ai-antipattern-review: *reviewer-rules
-        architecture-review: *reviewer-rules
-        cli-review: *reviewer-rules
-        security-review: *reviewer-rules
-        testing-review: *reviewer-rules
-
-  - name: fix
-    capabilities: [edit, enable-skills]
-    uses: fix
-    policy: [contract-change, coding, testing, takt-testing, review, ai-antipattern]
-    knowledge: [takt, architecture]
-    dynamic_facets:
-      pool: coding-facets
-    rules:
-      - condition: 修正完了
-        next: review
-      - condition: 修正方針の見直しが必要
-        next: plan
-      - condition: タスク全体の再計画が必要
-        next: plan
-      - condition: 修正を進行できない
-        next: ABORT
-
-  - name: supervise
-    capabilities: [readonly, enable-skills]
-    uses: review-supervise-to-complete
-    tags: [review, final-gate, supervise]
-    policy: [contract-change, coding, testing, review, ai-antipattern]
-    knowledge: [takt, architecture, unit-testing, e2e-testing]
-    rules:
-      - condition: BLOCKED
-        next: ABORT
-      - condition: approved
+      - condition: COMPLETE
         next: COMPLETE
-      - condition: need_replan
-        next: plan
-      - condition: needs_fix
-        next: fix
+      - condition: ABORT
+        next: ABORT

@@ -192,6 +192,58 @@ parallel:
     );
   });
 
+  it('binds a facet_pool_ref into dynamic_facets.pool', () => {
+    write(projectDir, '.takt/steps/pool-step.yaml', [
+      'params:',
+      '  implementation_pool:',
+      '    type: facet_pool_ref',
+      'dynamic_facets:',
+      '  pool:',
+      '    $param: implementation_pool',
+      '',
+    ].join('\n'));
+
+    const result = resolve({
+      steps: [caller('pool-step', { implementation_pool: 'takt-coding-facets' })],
+    });
+
+    expect(result.raw).toHaveProperty(
+      'steps.0.dynamic_facets.pool',
+      'takt-coding-facets',
+    );
+  });
+
+  it('passes a facet_pool_ref through a nested fragment scope', () => {
+    write(projectDir, '.takt/steps/inner-pool.yaml', [
+      'params:',
+      '  child_pool:',
+      '    type: facet_pool_ref',
+      'dynamic_facets:',
+      '  pool:',
+      '    $param: child_pool',
+      '',
+    ].join('\n'));
+    write(projectDir, '.takt/steps/outer-pool.yaml', [
+      'params:',
+      '  parent_pool:',
+      '    type: facet_pool_ref',
+      'uses: inner-pool',
+      'with:',
+      '  child_pool:',
+      '    $param: parent_pool',
+      '',
+    ].join('\n'));
+
+    const result = resolve({
+      steps: [caller('outer-pool', { parent_pool: 'coding-facets' })],
+    });
+
+    expect(result.raw).toHaveProperty(
+      'steps.0.dynamic_facets.pool',
+      'coding-facets',
+    );
+  });
+
   it('splices empty and populated facet_ref arrays into mixed facet lists', () => {
     write(projectDir, '.takt/steps/composed.yaml', `params:
   policy_additions:
@@ -549,10 +601,24 @@ instruction:
       source: 'fragment',
     },
     {
+      name: 'facet_ref used as a dynamic pool',
+      fragment: 'params:\n  wrong:\n    type: facet_ref\n    facet_kind: policy\ndynamic_facets:\n  pool:\n    $param: wrong\n',
+      step: caller('invalid', { wrong: 'strict' }),
+      path: ['dynamic_facets', 'pool'],
+      source: 'fragment',
+    },
+    {
       name: 'undeclared reference',
       fragment: 'instruction:\n  $param: missing\n',
       step: caller('invalid', {}),
       path: ['instruction'],
+      source: 'fragment',
+    },
+    {
+      name: 'undeclared dynamic pool reference',
+      fragment: 'dynamic_facets:\n  pool:\n    $param: missing\n',
+      step: caller('invalid', {}),
+      path: ['dynamic_facets', 'pool'],
       source: 'fragment',
     },
     {

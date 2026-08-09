@@ -1,0 +1,249 @@
+name: experimental-core
+description: 汎用・TAKT固有の差分を注入して計画、テスト、実装、レビュー、修正、最終監督を実行する実験的な共通開発フロー。
+subworkflow:
+  callable: true
+  visibility: internal
+  params:
+    implementation_pool:
+      type: facet_pool_ref
+      default: coding-facets
+    review_workflow:
+      type: workflow_ref
+      default: experimental-review
+    plan_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default: [design-planning]
+    plan_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default: [architecture, task-decomposition]
+    plan_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: plan
+    testing_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default: [coding, testing]
+    testing_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default: [architecture, unit-testing, e2e-testing]
+    testing_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: write-tests-first
+    development_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default: [coding, testing]
+    development_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default: [architecture, existing-system]
+    implementation_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: implement
+    review_policy_additions:
+      type: facet_ref[]
+      facet_kind: policy
+      default: []
+    review_knowledge_additions:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default: []
+    fix_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default: [contract-change, coding, testing, review, ai-antipattern]
+    fix_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default: [architecture]
+    fix_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: fix
+    supervise_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default: [contract-change, coding, testing, review, ai-antipattern]
+    supervise_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default: [architecture, unit-testing, e2e-testing]
+    supervise_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: supervise
+initial_step: plan
+
+facet_pools:
+  coding-facets:
+    candidates:
+      - id: frontend
+        description: UI、コンポーネント、状態管理、アクセシビリティ、画面表示を扱う
+        policy: design-fidelity
+        knowledge: [frontend, react]
+      - id: backend
+        description: API、ドメインロジック、サーバー側処理、永続化を扱う
+        knowledge: backend
+      - id: cli
+        description: CLIコマンド、引数、終了コード、設定、ログ、既存CLI構造を扱う
+        policy: existing-system-respect
+        knowledge: existing-system
+      - id: testing
+        description: テスト設計、テストカバレッジ、統合境界、E2E境界を扱う
+        policy: testing
+        knowledge: [unit-testing, e2e-testing]
+      - id: security
+        description: 認証認可、入力検証、機密情報、依存関係、セキュリティ境界を扱う
+        knowledge: security
+      - id: implementation-semantics
+        description: 実装の意味、契約、状態遷移、戻り値、副作用を扱う
+        knowledge: implementation-semantics
+  takt-coding-facets:
+    candidates:
+      - id: cli
+        description: TAKTのCLIコマンド、引数、終了コード、設定、ログ、既存CLI構造を扱う
+        policy: existing-system-respect
+        knowledge: [takt, existing-system]
+      - id: testing
+        description: TAKTのテスト設計、カバレッジ、統合境界、E2E境界を扱う
+        policy: [testing, takt-testing]
+        knowledge: [takt, unit-testing, e2e-testing]
+      - id: security
+        description: TAKTの認証認可、入力検証、機密情報、依存関係、セキュリティ境界を扱う
+        knowledge: [takt, security]
+      - id: implementation-semantics
+        description: TAKT実装の意味、契約、状態遷移、戻り値、副作用を扱う
+        knowledge: [takt, implementation-semantics]
+
+steps:
+  - name: plan
+    capabilities: [readonly, enable-skills]
+    uses: development-core-plan
+    with:
+      plan_policy:
+        $param: plan_policy
+      plan_knowledge:
+        $param: plan_knowledge
+      plan_instruction:
+        $param: plan_instruction
+      plan_report_format: plan
+    rules:
+      - condition: 要件が明確で実装可能
+        next: write_tests
+      - condition: ユーザーが質問をしている（実装タスクではない）
+        next: COMPLETE
+      - condition: 要件が不明確、情報不足
+        next: ABORT
+
+  - name: write_tests
+    capabilities: [edit, enable-skills]
+    uses: development-core-write-tests
+    with:
+      testing_policy:
+        $param: testing_policy
+      testing_knowledge:
+        $param: testing_knowledge
+      testing_instruction:
+        $param: testing_instruction
+    rules:
+      - condition: テスト作成が完了した
+        next: implement
+      - condition: テスト対象が未実装のためテスト作成をスキップする
+        next: implement
+      - condition: テスト作成を進行できない
+        next: plan
+      - condition: ユーザーへの確認事項があるためユーザー入力が必要
+        next: write_tests
+        requires_user_input: true
+        interactive_only: true
+
+  - name: implement
+    capabilities: [edit, enable-skills]
+    uses: development-core-implement
+    with:
+      development_policy:
+        $param: development_policy
+      development_knowledge:
+        $param: development_knowledge
+      implementation_instruction:
+        $param: implementation_instruction
+    dynamic_facets:
+      pool:
+        $param: implementation_pool
+    rules:
+      - condition: 実装が完了した
+        next: review
+      - condition: 実装未着手（レポートのみ）
+        next: review
+      - condition: 実装を進行できない
+        next: plan
+      - condition: ユーザー入力が必要
+        next: implement
+        requires_user_input: true
+        interactive_only: true
+
+  - name: review
+    kind: workflow_call
+    call:
+      $param: review_workflow
+    args:
+      review_policy_additions:
+        $param: review_policy_additions
+      review_knowledge_additions:
+        $param: review_knowledge_additions
+    rules:
+      - condition: COMPLETE
+        next: supervise
+      - condition: needs_fix
+        next: fix
+      - condition: ABORT
+        next: ABORT
+
+  - name: fix
+    capabilities: [edit, enable-skills]
+    uses: experimental-fix
+    with:
+      fix_policy:
+        $param: fix_policy
+      fix_knowledge:
+        $param: fix_knowledge
+      fix_instruction:
+        $param: fix_instruction
+    dynamic_facets:
+      pool:
+        $param: implementation_pool
+    rules:
+      - condition: 修正完了
+        next: review
+      - condition: 修正方針の見直しが必要
+        next: plan
+      - condition: タスク全体の再計画が必要
+        next: plan
+      - condition: 修正を進行できない
+        next: ABORT
+
+  - name: supervise
+    capabilities: [readonly, enable-skills]
+    uses: experimental-supervise
+    with:
+      supervise_policy:
+        $param: supervise_policy
+      supervise_knowledge:
+        $param: supervise_knowledge
+      supervise_instruction:
+        $param: supervise_instruction
+    rules:
+      - condition: BLOCKED
+        next: ABORT
+      - condition: approved
+        next: COMPLETE
+      - condition: need_replan
+        next: plan
+      - condition: needs_fix
+        next: fix

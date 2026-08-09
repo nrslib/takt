@@ -123,9 +123,15 @@ const WorkflowReferenceParamDeclarationRawSchema = z.object({
   default: WorkflowFacetRefScalarSchema.optional(),
 }).strict();
 
+const WorkflowFacetPoolParamDeclarationRawSchema = z.object({
+  type: z.literal('facet_pool_ref'),
+  default: WorkflowFacetRefScalarSchema.optional(),
+}).strict();
+
 const WorkflowParamDeclarationRawSchema = z.union([
   WorkflowFacetParamDeclarationRawSchema,
   WorkflowReferenceParamDeclarationRawSchema,
+  WorkflowFacetPoolParamDeclarationRawSchema,
 ]);
 
 const WorkflowRuleConditionRawSchema = z.string().trim().min(1).superRefine((condition, ctx) => {
@@ -373,7 +379,7 @@ export const FacetPoolRawSchema = z.union([
 });
 
 export const DynamicFacetsRawSchema = z.object({
-  pool: z.string().min(1),
+  pool: z.union([z.string().min(1), WorkflowParamReferenceRawSchema]),
   max_selected: z.number().int().positive().optional(),
 }).strict();
 

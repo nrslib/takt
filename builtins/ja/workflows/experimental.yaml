@@ -1,141 +1,19 @@
 name: experimental
-description: タスクと直前のレポートに応じてレビューエージェント数と修正用ファセットを動的に選択する実験的な汎用コーディングワークフロー。
+description: 汎用の計画、テスト、実装、レビュー、修正、最終監督を共通コアへ委譲する実験的なコーディングワークフロー。
 max_steps: 51
-initial_step: plan
-
-facet_pools:
-  coding-facets:
-    candidates:
-      - id: frontend
-        description: UI、コンポーネント、状態管理、アクセシビリティ、画面表示を扱う
-        policy: design-fidelity
-        knowledge: [frontend, react]
-      - id: backend
-        description: API、ドメインロジック、サーバー側処理、永続化を扱う
-        knowledge: backend
-      - id: cli
-        description: CLIコマンド、引数、終了コード、設定、ログ、既存CLI構造を扱う
-        policy: existing-system-respect
-        knowledge: existing-system
-      - id: testing
-        description: テスト設計、テストカバレッジ、統合境界、E2E境界を扱う
-        policy: testing
-        knowledge: [unit-testing, e2e-testing]
-      - id: security
-        description: 認証認可、入力検証、機密情報、依存関係、セキュリティ境界を扱う
-        knowledge: security
-      - id: implementation-semantics
-        description: 実装の意味、契約、状態遷移、戻り値、副作用を扱う
-        knowledge: implementation-semantics
+initial_step: develop
 
 steps:
-  - name: plan
-    capabilities: [readonly, enable-skills]
-    uses: development-core-plan
-    with:
-      plan_policy: [design-planning]
-      plan_knowledge: [architecture, task-decomposition]
-      plan_instruction: plan
-      plan_report_format: plan
-    rules:
-      - condition: 要件が明確で実装可能
-        next: write_tests
-      - condition: ユーザーが質問をしている（実装タスクではない）
-        next: COMPLETE
-      - condition: 要件が不明確、情報不足
-        next: ABORT
-
-  - name: write_tests
-    capabilities: [edit, enable-skills]
-    uses: development-core-write-tests
-    with:
-      testing_policy: [coding, testing]
-      testing_knowledge: [architecture, unit-testing, e2e-testing]
-      testing_instruction: write-tests-first
-    rules:
-      - condition: テスト作成が完了した
-        next: implement
-      - condition: テスト対象が未実装のためテスト作成をスキップする
-        next: implement
-      - condition: テスト作成を進行できない
-        next: plan
-      - condition: ユーザーへの確認事項があるためユーザー入力が必要
-        next: write_tests
-        requires_user_input: true
-        interactive_only: true
-
-  - name: implement
-    capabilities: [edit, enable-skills]
-    uses: development-core-implement
-    with:
-      development_policy: [coding, testing]
-      development_knowledge: [architecture, existing-system]
-      implementation_instruction: implement
-    dynamic_facets:
-      pool: coding-facets
-    rules:
-      - condition: 実装が完了した
-        next: review
-      - condition: 実装未着手（レポートのみ）
-        next: review
-      - condition: 実装を進行できない
-        next: plan
-      - condition: ユーザー入力が必要
-        next: implement
-        requires_user_input: true
-        interactive_only: true
-
-  - name: review
-    uses: experimental-review
-    with:
+  - name: develop
+    kind: workflow_call
+    call: experimental-core
+    args:
+      implementation_pool: coding-facets
+      review_workflow: experimental-review
+      review_policy_additions: []
       review_knowledge_additions: []
     rules:
-      self:
-        - condition: all("approved")
-          next: supervise
-        - condition: any("needs_fix")
-          next: fix
-      parallel:
-        coding-review: &reviewer-rules
-          - condition: approved
-          - condition: needs_fix
-        ai-antipattern-review: *reviewer-rules
-        architecture-review: *reviewer-rules
-        frontend-review: *reviewer-rules
-        backend-review: *reviewer-rules
-        cli-review: *reviewer-rules
-        security-review: *reviewer-rules
-        testing-review: *reviewer-rules
-
-  - name: fix
-    capabilities: [edit, enable-skills]
-    uses: fix
-    policy: [contract-change, coding, testing, review, ai-antipattern]
-    knowledge: architecture
-    dynamic_facets:
-      pool: coding-facets
-    rules:
-      - condition: 修正完了
-        next: review
-      - condition: 修正方針の見直しが必要
-        next: plan
-      - condition: タスク全体の再計画が必要
-        next: plan
-      - condition: 修正を進行できない
-        next: ABORT
-
-  - name: supervise
-    capabilities: [readonly, enable-skills]
-    uses: review-supervise-to-complete
-    tags: [review, final-gate, supervise]
-    policy: [contract-change, coding, testing, review, ai-antipattern]
-    knowledge: [architecture, unit-testing, e2e-testing]
-    rules:
-      - condition: BLOCKED
-        next: ABORT
-      - condition: approved
+      - condition: COMPLETE
         next: COMPLETE
-      - condition: need_replan
-        next: plan
-      - condition: needs_fix
-        next: fix
+      - condition: ABORT
+        next: ABORT

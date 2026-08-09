@@ -1,0 +1,32 @@
+params:
+  supervise_policy:
+    type: facet_ref[]
+    facet_kind: policy
+  supervise_knowledge:
+    type: facet_ref[]
+    facet_kind: knowledge
+  supervise_instruction:
+    type: facet_ref
+    facet_kind: instruction
+
+name: supervise
+capabilities: readonly
+tags:
+  - review
+  - supervise
+edit: false
+persona: supervisor
+policy:
+  $param: supervise_policy
+knowledge:
+  $param: supervise_knowledge
+pass_previous_response: false
+instruction:
+  $param: supervise_instruction
+output_contracts:
+  report:
+    - name: supervisor-validation.md
+      format: supervisor-validation
+    - name: summary.md
+      format: supervisor-summary
+      use_judge: false

@@ -123,8 +123,12 @@ function normalizeDynamicFacets(
   if (raw === undefined) {
     return undefined;
   }
+  const pool = raw.pool;
+  if (typeof pool !== 'string') {
+    throw new Error('dynamic_facets.pool has an unresolved parameter reference');
+  }
   return normalizeStepField(stepPath, ['dynamic_facets'], () => ({
-    pool: raw.pool,
+    pool,
     ...(raw.max_selected === undefined ? {} : { maxSelected: raw.max_selected }),
   }));
 }
