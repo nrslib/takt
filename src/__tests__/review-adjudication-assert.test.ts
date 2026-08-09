@@ -76,9 +76,37 @@ describe('review adjudication assertion', () => {
   });
 
   it('allows a non-actionable finding to be mentioned without assigning it to the family', () => {
+    const baseOutput = adjudicationOutput();
+    const contractLine = '- Existing contract: preserve the existing observable contract and behavior.';
+    expect(baseOutput).toContain(contractLine);
+    const output = baseOutput.replace(
+      contractLine,
+      `${contractLine} ${findings.testing} remains excluded.`,
+    );
+    expect(output).toContain(`${findings.testing} remains excluded.`);
+    const result = assertReviewAdjudication(output);
+
+    expect(result.pass, result.reason).toBe(true);
+  });
+
+  it('ignores excluded English finding ownership and shared ID prefixes', () => {
     const output = adjudicationOutput().replace(
       '- Existing contract: preserve the existing observable contract and behavior.',
-      `- Existing contract: preserve the existing observable contract and behavior. ${findings.testing} remains excluded.`,
+      [
+        '- Existing contract: preserve the existing observable contract and behavior.',
+        `- Source findings: ${findings.testing} (excluded from this family)`,
+        `- Source findings: ${findings.testing}-10`,
+      ].join('\n'),
+    );
+    const result = assertReviewAdjudication(output);
+
+    expect(result.pass, result.reason).toBe(true);
+  });
+
+  it('ignores a Japanese finding ownership line marked out of scope', () => {
+    const output = compactJapaneseAdjudicationOutput().replace(
+      '- 根本原因: 正規化の責務境界を複製している。',
+      `- 根本原因: 正規化の責務境界を複製している。\n- 指摘 ID: ${findings.testing}（対象外）`,
     );
     const result = assertReviewAdjudication(output);
 
@@ -98,6 +126,21 @@ describe('review adjudication assertion', () => {
 
   it('accepts a compact Japanese disposition table with combined family and reason', () => {
     const result = assertReviewAdjudication(compactJapaneseAdjudicationOutput());
+
+    expect(result.pass, result.reason).toBe(true);
+  });
+
+  it('accepts a generic adjudication detail column containing family and evidence', () => {
+    const output = compactJapaneseAdjudicationOutput()
+      .replace('統合先／理由', '裁定')
+      .replace(
+        '- " LOCAL " は "local"、"Cloud" は "cloud" として受理する。',
+        '- `local`、`LOCAL`、" local " は `local` として受理する。\n- `cloud`、`CLOUD`、" cloud " は `cloud` として受理する。',
+      )
+      .replace('不正値は即座に例外とする。', 'local / cloud 以外は実行オブジェクト生成前に失敗する。');
+    expect(output).toContain('| Finding ID | 裁定 | 裁定 |');
+
+    const result = assertReviewAdjudication(output);
 
     expect(result.pass, result.reason).toBe(true);
   });

@@ -18,7 +18,9 @@ const INTERNAL_REPAIR = /(?:normalizeChannel|normalize(?:d|s)?[^\n。.!?]{0,40}(
 const ACCEPTED_CHANNELS = /\blocal\b[^\n]{0,100}\bcloud\b|\bcloud\b[^\n]{0,100}\blocal\b/i;
 const NORMALIZATION_BEHAVIOR = /(?:case[-\s]?insensitiv|ignore[^\n。.!?]{0,50}(?:case|大小文字)|大小文字|大文字小文字|surrounding\s+whitespace|trim(?:ming)?|前後[^\n。.!?]{0,30}空白|空白[^\n。.!?]{0,30}(?:除去|無視|trim))/i;
 const NORMALIZATION_EXAMPLE = /["'`]\s+[A-Z][A-Za-z]*\s+["'`][^\n]{0,160}["'`][a-z]+["'`]/;
-const INVALID_FAIL_FAST = /(?:invalid|unsupported|reject(?:ed)?|fail\s+fast|throw|error|不正|無効|拒否|即時|早期[^\n。.!?]{0,20}失敗|例外)/i;
+const NORMALIZATION_CASE_VARIANTS = /(?:`local`[^\n]{0,80}`LOCAL`|`LOCAL`[^\n]{0,80}`local`|`cloud`[^\n]{0,80}`CLOUD`|`CLOUD`[^\n]{0,80}`cloud`)/;
+const NORMALIZATION_WHITESPACE_VARIANT = /["'`]\s+(?:local|cloud)\s+["'`]/i;
+const INVALID_FAIL_FAST = /(?:invalid|unsupported|reject(?:ed)?|fail\s+fast|throw|error|不正|無効|拒否|即時|早期[^\n。.!?]{0,20}失敗|例外|(?:以外|other\s+than|outside)[^\n。.!?]{0,60}(?:fail|reject|error|失敗|拒否|例外))/i;
 const NO_LEGACY_ALIAS = /(?:(?:no|without|do\s+not|must\s+not|not\s+add|reject)[^\n。.!?]{0,80}(?:legacy|compatibility)?\s*aliases?|(?:legacy|compatibility)\s+aliases?[^\n。.!?]{0,80}(?:not|required|forbidden)|(?:旧|レガシー|互換)[^\n。.!?]{0,60}(?:alias|エイリアス|別名)[^\n。.!?]{0,40}(?:追加しない|禁止|不要|なし)|(?:alias|エイリアス|別名)[^\n。.!?]{0,60}(?:追加しない|禁止|不要|なし))/i;
 
 function extractSection(output, startPattern, endPattern) {
@@ -74,8 +76,19 @@ function rowForFinding(rows, findingId) {
   return rows.filter((cells) => cells.some((cell) => cell.includes(findingId)));
 }
 
+function isDispositionValue(value) {
+  return /^(actionable|duplicate|false_positive|overreach|out_of_scope|no_issue_after_verification|environment_unverified)$/i.test(value ?? '');
+}
+
+function dispositionColumnIndex(table) {
+  const explicitIndex = table.header.findIndex((cell) => /disposition/i.test(cell));
+  if (explicitIndex >= 0) return explicitIndex;
+  return table.header.findIndex((_cell, index) =>
+    table.rows.length > 0 && table.rows.every((row) => isDispositionValue(row[index])));
+}
+
 function dispositionOf(row) {
-  return row.find((cell) => /^(actionable|duplicate|false_positive|overreach|out_of_scope|no_issue_after_verification|environment_unverified)$/i.test(cell)) ?? '';
+  return row.find((cell) => isDispositionValue(cell)) ?? '';
 }
 
 function familyRefs(value) {
@@ -84,8 +97,11 @@ function familyRefs(value) {
 }
 
 function targetOf(table, row) {
-  const targetIndex = table.header.findIndex((cell) =>
-    /(?:target|family|統合先)/i.test(cell) && !/(?:finding|出典)/i.test(cell));
+  const dispositionIndex = dispositionColumnIndex(table);
+  const targetIndex = table.header.findIndex((cell, index) =>
+    index !== dispositionIndex
+      && /(?:target|family|統合先|根拠|理由|evidence|rationale|reason|裁定|decision|judgment)/i.test(cell)
+      && !/(?:finding|出典|disposition)/i.test(cell));
   if (targetIndex < 0) return '';
 
   const header = table.header[targetIndex] ?? '';
@@ -94,8 +110,10 @@ function targetOf(table, row) {
 
   const explicitFamily = familyRefs(cell)[0];
   if (explicitFamily) return explicitFamily;
-  const isCombinedTargetAndReason = /(?:target|family|統合先)/i.test(header)
-    && /(?:根拠|理由|evidence|rationale|reason)/i.test(header);
+  const isCombinedTargetAndReason = (
+    /(?:target|family|統合先)/i.test(header)
+      && /(?:根拠|理由|evidence|rationale|reason)/i.test(header)
+  ) || /(?:裁定|decision|judgment)/i.test(header);
   if (isCombinedTargetAndReason) {
     const leadingFamily = cell.match(/^([A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)+)\b/);
     return leadingFamily ? leadingFamily[1].toLowerCase() : null;
@@ -173,23 +191,36 @@ function hasNoExplicitTarget(table, row) {
 }
 
 function hasDispositionSchema(table) {
-  const header = table.header.join(' ');
-  return /(?:finding|指摘)/i.test(header)
-    && /(?:disposition|裁定)/i.test(header)
-    && /(?:target|family|統合先)/i.test(header)
-    && /(?:evidence|reason|根拠|理由)/i.test(header);
+  const findingIndex = table.header.findIndex((cell) => /(?:finding|指摘)/i.test(cell));
+  const dispositionIndex = dispositionColumnIndex(table);
+  const detailIndex = table.header.findIndex((cell, index) =>
+    index !== findingIndex
+      && index !== dispositionIndex
+      && /(?:target|family|統合先|evidence|reason|根拠|理由|裁定|decision|judgment)/i.test(cell));
+  return findingIndex >= 0 && dispositionIndex >= 0 && detailIndex >= 0;
+}
+
+function escapeRegex(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function hasIncludedFindingId(value, findingId) {
+  const exactId = new RegExp(`(?:^|[^A-Za-z0-9_-])${escapeRegex(findingId)}(?=$|[^A-Za-z0-9_-])`);
+  return value.split(/[,;；\n]/u).some((part) =>
+    exactId.test(part)
+      && !/(?:excluded|not\s+included|除外|対象外)/i.test(part));
 }
 
 function isActionableFamilyMember(actionableSection, findingId) {
   const table = parseTable(actionableSection);
   const findingColumn = table.header.findIndex((cell) => /(?:finding|指摘).*(?:id|ID|出典|source)/i.test(cell));
   if (findingColumn >= 0) {
-    return table.rows.some((row) => row[findingColumn]?.includes(findingId));
+    return table.rows.some((row) => hasIncludedFindingId(row[findingColumn] ?? '', findingId));
   }
 
   return actionableSection.split('\n').some((line) =>
     /(?:finding\s*IDs?|source\s+findings?|主\s*finding|統合\s*finding|指摘\s*ID)/i.test(line)
-      && line.includes(findingId));
+      && hasIncludedFindingId(line, findingId));
 }
 
 export default function assertReviewAdjudication(output) {
@@ -225,7 +256,9 @@ export default function assertReviewAdjudication(output) {
     ['minimal-internal-repair-retained', INTERNAL_REPAIR.test(actionableEvidence)],
     ['acceptance-values', ACCEPTED_CHANNELS.test(acceptanceEvidence)],
     ['acceptance-normalization', NORMALIZATION_BEHAVIOR.test(acceptanceEvidence)
-      || NORMALIZATION_EXAMPLE.test(acceptanceEvidence)],
+      || NORMALIZATION_EXAMPLE.test(acceptanceEvidence)
+      || (NORMALIZATION_CASE_VARIANTS.test(acceptanceEvidence)
+        && NORMALIZATION_WHITESPACE_VARIANT.test(acceptanceEvidence))],
     ['acceptance-invalid-fail-fast', INVALID_FAIL_FAST.test(acceptanceEvidence)],
     ['acceptance-no-legacy-alias', NO_LEGACY_ALIAS.test(actionableEvidence)],
     ['non-actionable-excluded-from-family', nonActionableIds.every((id) =>
