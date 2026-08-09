@@ -437,6 +437,95 @@ describe('finding-conflict-adjudication runner registry contract', () => {
     expect(ledgerStore.loadLedger().conflictAdjudicationAttempts).toHaveLength(4);
   });
 
+  it('does not re-adjudicate after a same-claim persisted observation', async () => {
+    executeAgentMock.mockImplementation(async () => {
+      const snapshot = freshConflictAdjudicationSnapshot(
+        ledgerStore.loadLedger(),
+        'C-FA2947446963',
+      );
+      return {
+        persona: 'supervisor',
+        status: 'done' as const,
+        content: '{}',
+        structuredOutput: {
+          proposal: {
+            kind: 'undetermined' as const,
+            subjectIds: snapshot.subjects.map(({ subjectId }) => subjectId).sort(),
+            rationale: 'No verified terminal authority is available.',
+          },
+        },
+        timestamp: new Date(),
+      };
+    });
+
+    const first = runner();
+    await first.runner.run(first.step, state());
+    const originalSnapshot = freshConflictAdjudicationSnapshot(
+      ledgerStore.loadLedger(),
+      'C-FA2947446963',
+    );
+
+    await ledgerStore.updateLedger((current) => {
+      const product = current.findings.find((finding) => (
+        finding.id === 'F-0001' && finding.provisional === undefined
+      ));
+      if (product === undefined) {
+        throw new Error('Expected a product finding in the persisted-observation fixture');
+      }
+      const { revision: _revision, ...productWithoutRevision } = product;
+      void _revision;
+      const changed = applyFindingLifecycleCommands({
+        ledger: current,
+        commands: [{
+          operation: 'persist_finding',
+          changes: {
+            findings: [{
+              ...productWithoutRevision,
+              lifecycle: 'persists',
+              lastSeen: {
+                ...OBSERVATION,
+                timestamp: '2026-06-13T00:02:00.000Z',
+              },
+            }],
+            conflicts: [],
+          },
+          authority: { kind: 'verified_evidence' },
+          evidenceSourcesByTarget: new Map([[
+            `finding\0${product.id}`,
+            { sourceRawFindingIds: product.rawFindingIds, authorityEvidenceIds: [] },
+          ]]),
+        }],
+        occurredAt: {
+          ...OBSERVATION,
+          timestamp: '2026-06-13T00:02:00.000Z',
+        },
+      });
+      return {
+        ledger: refreshActiveConflictAdjudicationSnapshots({
+          ledger: changed,
+          originStep: 'reviewers',
+          createdAt: OBSERVATION,
+        }),
+        result: undefined,
+      };
+    });
+
+    const afterObservation = freshConflictAdjudicationSnapshot(
+      ledgerStore.loadLedger(),
+      'C-FA2947446963',
+    );
+    expect(afterObservation.conflictSnapshotId).not.toBe(originalSnapshot.conflictSnapshotId);
+    expect(isActiveConflictUnadjudicated(ledgerStore.loadLedger(), 'C-FA2947446963')).toBe(false);
+
+    executeAgentMock.mockClear();
+    const second = runner();
+    await second.runner.run(second.step, state());
+
+    expect(executeAgentMock).not.toHaveBeenCalled();
+    expect(ledgerStore.loadLedger().conflictAdjudicationSnapshots).toHaveLength(2);
+    expect(ledgerStore.loadLedger().conflictAdjudicationAttempts).toHaveLength(2);
+  });
+
   it('re-adjudicates a non-regular target even when its content digest is unavailable', async () => {
     rmSync(join(cwd, 'src', 'a.ts'));
     writeFileSync(join(cwd, 'src', 'target.ts'), 'export const value = true;\n');
