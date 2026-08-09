@@ -141,6 +141,9 @@ function seededLedger(cwd: string): FindingLedger {
   });
   const landed = landUnownedConflictRawClaims({ ledger, observation: OBSERVATION });
   const reviewScopeSnapshot = captureReviewScopeProofSnapshot(cwd);
+  const queryInventoryByPath = new Map(
+    reviewScopeSnapshot.queryInventory.map((entry) => [entry.path, entry]),
+  );
   return refreshActiveConflictAdjudicationSnapshots({
     ledger: landed,
     originStep: 'reviewers',
@@ -148,7 +151,7 @@ function seededLedger(cwd: string): FindingLedger {
     targetContentDigestsByConflict: new Map([[
       'C-FA2947446963',
       captureConflictTargetContentDigests(
-        reviewScopeSnapshot,
+        queryInventoryByPath,
         conflictTargetPaths({ ledger: landed, conflictId: 'C-FA2947446963' }),
       ),
     ]]),
@@ -486,21 +489,22 @@ describe('finding-conflict-adjudication runner registry contract', () => {
       stepName: 'reviewers',
       timestamp: '2026-08-08T00:00:00.000Z',
     };
-    const history = Object.fromEntries([
-      'sourceRawFindingIds',
-      'sourceRawPayloadDigests',
-      'evidenceBindingIds',
-      'rawClaimLandingIds',
-      'priorSettlementIds',
-    ].map((key) => [
-      key,
-      new Map(inflated.subjects.flatMap((subject) => [
-        ...subject.sourceRawFindingIds,
-        ...subject.sourceRawPayloadDigests,
-        ...subject.evidenceBindingIds,
-        ...subject.rawClaimLandingIds,
-      ].map((value) => [value, observedAt] as const))),
-    ])) as ConflictAdjudicationHistoryOrder;
+    const historyValues = {
+      sourceRawFindingIds: inflated.subjects.flatMap(({ sourceRawFindingIds }) => sourceRawFindingIds),
+      sourceRawPayloadDigests: inflated.subjects.flatMap(({ sourceRawPayloadDigests }) => sourceRawPayloadDigests),
+      evidenceBindingIds: inflated.subjects.flatMap(({ evidenceBindingIds }) => evidenceBindingIds),
+      rawClaimLandingIds: [
+        ...inflated.rawClaimLandingIds,
+        ...inflated.subjects.flatMap(({ rawClaimLandingIds }) => rawClaimLandingIds),
+      ],
+      priorSettlementIds: inflated.priorSettlementIds,
+    } as const;
+    const history = Object.fromEntries(
+      Object.entries(historyValues).map(([key, values]) => [
+        key,
+        new Map(values.map((value) => [value, observedAt] as const)),
+      ]),
+    ) as ConflictAdjudicationHistoryOrder;
     const instruction = renderConflictAdjudicationInstruction(inflated, history);
 
     expect(Buffer.byteLength(instruction, 'utf8'))
@@ -508,6 +512,8 @@ describe('finding-conflict-adjudication runner registry contract', () => {
     expect(instruction).toContain('"snapshotFormat": "reference-v1"');
     expect(instruction).toContain('sourceRawFindingCount');
     expect(instruction).toContain('sourceRawFindingIds');
+    expect(instruction).toContain('sourceRawPayloadCount');
+    expect(instruction).toContain('sourceRawPayloadIds');
     expect(instruction).toContain('0-raw-999');
     expect(instruction).toContain('evidenceBindingIds');
   });

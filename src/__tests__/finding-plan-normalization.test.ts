@@ -681,7 +681,7 @@ describe('reconcileCommitPlan の conflict registry 契約', () => {
       resolutionRenotifications: [],
       unsupportedRawFindingReports: [],
       healthyReviewerStableKeys: new Set(),
-    })).toThrow('must have exactly one fresh adjudication snapshot');
+    })).toThrow('must have the latest fresh adjudication snapshot');
   });
 });
 

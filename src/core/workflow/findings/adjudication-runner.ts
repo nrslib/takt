@@ -268,6 +268,9 @@ export function createFindingConflictAdjudicationRunner(deps: FindingConflictAdj
       return { response: finish(state, step, value), instruction: '', providerInfo };
     };
     const reviewScopeSnapshot = captureReviewScopeProofSnapshot(deps.getCwd());
+    const queryInventoryByPath = new Map(
+      reviewScopeSnapshot.queryInventory.map((entry) => [entry.path, entry]),
+    );
     const runAttempt = async (groundingRequested: boolean): Promise<StepRunResult> => {
       const refreshed = await deps.ledgerStore.updateLedger((fresh) => {
         const targetContentDigestsByConflict = new Map(
@@ -276,7 +279,7 @@ export function createFindingConflictAdjudicationRunner(deps: FindingConflictAdj
             .map((candidate) => [
               candidate.id,
               captureConflictTargetContentDigests(
-                reviewScopeSnapshot,
+                queryInventoryByPath,
                 conflictTargetPaths({ ledger: fresh, conflictId: candidate.id }),
               ),
             ] as const),

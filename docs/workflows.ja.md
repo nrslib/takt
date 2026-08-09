@@ -661,6 +661,7 @@ window は争点の finding の `target.paths` と file-quote evidence の行ア
 再裁定の snapshot identity には、争点の `target.paths` について review-scope capture が取得した
 現在内容の digest も含まれます。台帳の射影が同じでも fix によって対象コードの digest が変われば、
 新しい snapshot として再裁定できます。逆に対象コードも台帳射影も変わらない場合は再裁定しません。
+非 regular file は例外です。安定した通常ファイル内容 digest を取得できないため、capture ごとに常に変化扱いとなり、fresh snapshot を追加して再裁定できます。ただし再裁定回数と workflow の上限による有限性は維持されます。
 未確定かつコード無変化の反復では stop budget は進まないため、loop monitor または workflow の
 `max_steps` が有限停止を担います。
 

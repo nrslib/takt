@@ -1074,7 +1074,7 @@ function collectConflictAndTerminalIdentityViolations(
       addViolation(
         violations,
         ['conflicts', index],
-        `Active conflict "${conflict.id}" must have exactly one fresh adjudication snapshot`,
+        `Active conflict "${conflict.id}" must have the latest fresh adjudication snapshot`,
       );
     }
   });

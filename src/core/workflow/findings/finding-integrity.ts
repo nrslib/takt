@@ -340,12 +340,15 @@ function assertStatefulRegistryTransition<Value>(input: {
     }
     const existingState = input.stateOf(existing);
     const candidateState = input.stateOf(candidate);
-    const allowedReplacement = input.allowSameStateReplacement?.(existing, candidate) === true;
-    if (
-      (!sameCanonicalValue(input.identityOf(existing), input.identityOf(candidate))
-        || !input.canTransition(existingState, candidateState))
-      && !allowedReplacement
-    ) {
+    const allowedReplacement = existingState === candidateState
+      && input.allowSameStateReplacement?.(existing, candidate) === true;
+    if (!input.canTransition(existingState, candidateState)) {
+      throw new Error(
+        `${input.label} "${input.idOf(existing)}" cannot transition from ${existingState} to ${candidateState}`,
+      );
+    }
+    if (!sameCanonicalValue(input.identityOf(existing), input.identityOf(candidate))
+      && !allowedReplacement) {
       throw new Error(
         `${input.label} "${input.idOf(existing)}" cannot transition from ${existingState} to ${candidateState}`,
       );
@@ -491,6 +494,12 @@ function assertContractRegistryTransitions(
     'claimSettlementIds',
     'lifecycleEventIds',
   ] as const;
+  const rebuildExcludedAttemptFields = [
+    ...attemptStateFields,
+    'providerCallId',
+    'requestDigest',
+    'startedAt',
+  ] as const;
   // provider_result_unknown と reservation_released は、どちらも provider の
   // terminal result を確定できないまま終わった attempt の着地点であり、started
   // から interrupted への同じ一方向遷移として扱う。
@@ -519,6 +528,10 @@ function assertContractRegistryTransitions(
       && candidate.providerCallId !== existing.providerCallId
       && releasedCall?.state === 'released'
       && replacementCall?.state === 'reserved'
+      && sameCanonicalValue(
+        stateIdentity(existing, rebuildExcludedAttemptFields),
+        stateIdentity(candidate, rebuildExcludedAttemptFields),
+      )
     ) {
       rebuiltConflictAttemptIds.add(existing.attemptId);
     }

@@ -90,10 +90,9 @@ export interface ReviewScopeProofSnapshot extends ReviewScopeSnapshot {
 }
 
 export function captureConflictTargetContentDigests(
-  snapshot: ReviewScopeProofSnapshot,
+  inventoryByPath: ReadonlyMap<string, ReviewScopeQueryInventoryEntry>,
   targetPaths: readonly string[],
 ): ConflictTargetContentDigest[] {
-  const inventoryByPath = new Map(snapshot.queryInventory.map((entry) => [entry.path, entry]));
   const uniquePaths = [...new Set(targetPaths)].sort(compareBinaryStrings);
   return uniquePaths.map((path) => {
     const entry = inventoryByPath.get(path);

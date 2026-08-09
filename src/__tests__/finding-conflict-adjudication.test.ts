@@ -205,11 +205,27 @@ describe('verified conflict adjudication', () => {
       .toEqual(['raw-d', 'raw-c', 'raw-a']);
     expect(reference.subjects[0]?.evidenceBindingIds)
       .toEqual(['binding-d', 'binding-c', 'binding-a']);
+    const reordered = {
+      ...current,
+      rawClaimLandingIds: [...current.rawClaimLandingIds].reverse(),
+      priorSettlementIds: [...current.priorSettlementIds].reverse(),
+      subjects: current.subjects.map((subject) => ({
+        ...subject,
+        sourceRawFindingIds: [...subject.sourceRawFindingIds].reverse(),
+        sourceRawPayloadDigests: [...subject.sourceRawPayloadDigests].reverse(),
+        evidenceBindingIds: [...subject.evidenceBindingIds].reverse(),
+        rawClaimLandingIds: [...subject.rawClaimLandingIds].reverse(),
+      })),
+    };
     expect(reference.rawClaimLandingDigest).toBe(
-      buildConflictAdjudicationSnapshotReference(current, {
-        ...history,
-        rawClaimLandingIds: new Map([...history.rawClaimLandingIds].reverse()),
-      }).rawClaimLandingDigest,
+      buildConflictAdjudicationSnapshotReference(reordered, history).rawClaimLandingDigest,
+    );
+    expect(reference.subjects[0]?.sourceRawPayloadDigest).toBe(
+      buildConflictAdjudicationSnapshotReference(reordered, history)
+        .subjects[0]?.sourceRawPayloadDigest,
+    );
+    expect(reference.subjects[0]?.sourceRawPayloadIds).toEqual(
+      ['payload-d', 'payload-c', 'payload-a'],
     );
   });
 

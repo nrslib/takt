@@ -134,13 +134,16 @@ export async function commitFindingManagerRound(params: {
         ledger: interpretationFinalized,
         observation: params.observation,
       });
+      const queryInventoryByPath = new Map(
+        params.reviewScopeSnapshot.queryInventory.map((entry) => [entry.path, entry]),
+      );
       const targetContentDigestsByConflict = new Map(
         withConflictLandings.conflicts
           .filter((conflict) => conflict.status === 'active')
           .map((conflict) => [
             conflict.id,
             captureConflictTargetContentDigests(
-              params.reviewScopeSnapshot,
+              queryInventoryByPath,
               conflictTargetPaths({ ledger: withConflictLandings, conflictId: conflict.id }),
             ),
           ] as const),

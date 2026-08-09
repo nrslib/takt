@@ -669,6 +669,13 @@ before the provider call, so a crash or replay resumes the exact attempt rather 
 duplicate one. A second `verification_undetermined` settles that round and returns to the originating
 review step.
 
+The re-adjudication snapshot identity also includes the current content digest captured for the
+disputed `target.paths`. If a fix changes the target code digest while the ledger projection stays
+the same, the engine can create a fresh snapshot and adjudicate again. If neither the target code
+nor the ledger projection changes, it does not re-adjudicate. Non-regular targets are the exception:
+because they have no stable regular-file content digest, every capture is treated as changed and may
+create a fresh snapshot; the bounded adjudication and workflow limits still apply.
+
 Conflict ladders must keep an active conflict in the fix/review loop while
 `findings.rounds.budgetExhausted == false`. The final `when(findings.conflicts.count > 0)` → `ABORT`
 arm is only the exhausted-budget exit; it must follow the budget-aware loop arm.

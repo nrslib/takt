@@ -232,8 +232,9 @@ interface ConflictAdjudicationSubjectReference {
   sourceRawFindingIds: string[];
   sourceRawFindingCount: number;
   sourceRawFindingDigest: string;
+  sourceRawPayloadIds: string[];
+  sourceRawPayloadCount: number;
   sourceRawPayloadDigest: string;
-  sourceRawPayloadDigests: string[];
   evidenceBindingIds: string[];
   evidenceBindingCount: number;
   evidenceBindingDigest: string;
@@ -327,16 +328,16 @@ function inlineHistory(
   values: readonly string[],
   observedAtByValue: ReadonlyMap<string, FindingObservation>,
 ): string[] {
-  const ordered = [...values].sort((left, right) => {
-    const leftObservedAt = observedAtByValue.get(left);
-    const rightObservedAt = observedAtByValue.get(right);
-    if (leftObservedAt === undefined || rightObservedAt === undefined) {
-      throw new Error(`Conflict adjudication history is missing an observation for ${leftObservedAt === undefined ? left : right}`);
-    }
-    return compareObservations(leftObservedAt, rightObservedAt)
-      || compareBinaryStrings(left, right);
-  });
-  return ordered.slice(-INLINE_HISTORY_LIMIT);
+  const missingValue = values.find((value) => !observedAtByValue.has(value));
+  if (missingValue !== undefined) {
+    throw new Error(`Conflict adjudication history is missing an observation for ${missingValue}`);
+  }
+  return values
+    .map((value) => ({ value, observedAt: observedAtByValue.get(value)! }))
+    .sort((left, right) => compareObservations(left.observedAt, right.observedAt)
+      || compareBinaryStrings(left.value, right.value))
+    .slice(-INLINE_HISTORY_LIMIT)
+    .map(({ value }) => value);
 }
 
 function digestStringSet(values: readonly string[]): string {
@@ -362,8 +363,9 @@ function subjectReference(
     sourceRawFindingIds: inlineHistory(subject.sourceRawFindingIds, history.sourceRawFindingIds),
     sourceRawFindingCount: subject.sourceRawFindingIds.length,
     sourceRawFindingDigest: digestStringSet(subject.sourceRawFindingIds),
+    sourceRawPayloadIds: inlineHistory(subject.sourceRawPayloadDigests, history.sourceRawPayloadDigests),
+    sourceRawPayloadCount: subject.sourceRawPayloadDigests.length,
     sourceRawPayloadDigest: digestStringSet(subject.sourceRawPayloadDigests),
-    sourceRawPayloadDigests: inlineHistory(subject.sourceRawPayloadDigests, history.sourceRawPayloadDigests),
     evidenceBindingIds: inlineHistory(subject.evidenceBindingIds, history.evidenceBindingIds),
     evidenceBindingCount: subject.evidenceBindingIds.length,
     evidenceBindingDigest: digestStringSet(subject.evidenceBindingIds),

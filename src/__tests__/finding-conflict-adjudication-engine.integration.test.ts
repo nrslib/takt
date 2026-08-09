@@ -199,6 +199,9 @@ async function seedLedger(cwd: string): Promise<FindingLedgerStore> {
   });
   const landed = landUnownedConflictRawClaims({ ledger: authorized, observation: OBSERVATION });
   const reviewScopeSnapshot = captureReviewScopeProofSnapshot(cwd);
+  const queryInventoryByPath = new Map(
+    reviewScopeSnapshot.queryInventory.map((entry) => [entry.path, entry]),
+  );
   const ledger = refreshActiveConflictAdjudicationSnapshots({
     ledger: landed,
     originStep: 'reviewers',
@@ -206,7 +209,7 @@ async function seedLedger(cwd: string): Promise<FindingLedgerStore> {
     targetContentDigestsByConflict: new Map([[
       'C-FA2947446963',
       captureConflictTargetContentDigests(
-        reviewScopeSnapshot,
+        queryInventoryByPath,
         conflictTargetPaths({ ledger: landed, conflictId: 'C-FA2947446963' }),
       ),
     ]]),
