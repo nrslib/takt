@@ -213,7 +213,8 @@ function hasIncludedFindingId(value, findingId) {
 
 function isActionableFamilyMember(actionableSection, findingId) {
   const table = parseTable(actionableSection);
-  const findingColumn = table.header.findIndex((cell) => /(?:finding|指摘).*(?:id|ID|出典|source)/i.test(cell));
+  const findingColumn = table.header.findIndex((cell) =>
+    /(?:(?:finding|指摘).*(?:id|出典|source)|(?:source|出典).*(?:finding|指摘))/i.test(cell));
   if (findingColumn >= 0) {
     return table.rows.some((row) => hasIncludedFindingId(row[findingColumn] ?? '', findingId));
   }

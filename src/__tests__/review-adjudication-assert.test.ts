@@ -68,6 +68,19 @@ function compactJapaneseAdjudicationOutput(): string {
   ].join('\n');
 }
 
+function withSourceFindingsTable(output: string, sourceFindings: string): string {
+  return output.replace(
+    '### FAM-channel-normalization',
+    [
+      '| family | Source findings | Evidence |',
+      '|---|---|---|',
+      `| FAM-channel-normalization | ${sourceFindings} | Confirmed at the changed boundary. |`,
+      '',
+      '### FAM-channel-normalization',
+    ].join('\n'),
+  );
+}
+
 describe('review adjudication assertion', () => {
   it('accepts a directly related quality defect while separating non-actionable findings', () => {
     const result = assertReviewAdjudication(adjudicationOutput());
@@ -101,6 +114,22 @@ describe('review adjudication assertion', () => {
     const result = assertReviewAdjudication(output);
 
     expect(result.pass, result.reason).toBe(true);
+  });
+
+  it('parses source-first finding columns and rejects non-actionable membership', () => {
+    const validOutput = withSourceFindingsTable(
+      adjudicationOutput(),
+      `${findings.code}, ${findings.architecture}`,
+    );
+    const invalidOutput = withSourceFindingsTable(
+      adjudicationOutput(),
+      `${findings.code}, ${findings.architecture}, ${findings.testing}`,
+    );
+
+    expect(assertReviewAdjudication(validOutput).pass).toBe(true);
+    const invalidResult = assertReviewAdjudication(invalidOutput);
+    expect(invalidResult.pass).toBe(false);
+    expect(invalidResult.reason).toContain('non-actionable-excluded-from-family');
   });
 
   it('ignores a Japanese finding ownership line marked out of scope', () => {
