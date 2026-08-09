@@ -176,7 +176,7 @@ describe('loadScenarioFile', () => {
     expect(() => loadScenarioFile(filePath)).toThrow('must have a "content" string');
   });
 
-  it('should reject an empty file_writes path with its entry and write indexes', () => {
+  it('should reject with entry and write indexes when file_writes path is empty', () => {
     const filePath = join(tempDir, 'empty-write-path.json');
     writeFileSync(filePath, JSON.stringify([{
       content: 'response',

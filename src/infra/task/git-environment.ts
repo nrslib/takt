@@ -18,6 +18,10 @@ export async function buildSafeGitEnvironment(
   delete environment.GIT_GLOB_PATHSPECS;
   delete environment.GIT_NOGLOB_PATHSPECS;
   delete environment.GIT_ICASE_PATHSPECS;
+  delete environment.GIT_DIR;
+  delete environment.GIT_WORK_TREE;
+  delete environment.GIT_COMMON_DIR;
+  delete environment.GIT_INDEX_FILE;
   const configEntries: Array<readonly [string, string]> = [];
 
   if (!options.allowGitHooks) {

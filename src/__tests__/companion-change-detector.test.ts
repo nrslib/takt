@@ -59,7 +59,7 @@ describe('CT-COMP-05 event-driven companion change detection', () => {
     expect(readDiff).not.toHaveBeenCalled();
   });
 
-  it.each(['edit', 'write'])('should recognize an OpenCode %s stream event as mutating', (toolName) => {
+  it.each(['edit', 'write'])('should recognize a stream event as mutating when the OpenCode tool name is %s', (toolName) => {
     const detector = new CompanionChangeDetector({
       intervalMs: 100,
       minimumChangedLines: 10,

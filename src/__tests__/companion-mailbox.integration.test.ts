@@ -325,7 +325,7 @@ describe('CT-COMP-06 stateless review and append-only mailbox', () => {
     },
   );
 
-  it('should reject a cached path requested for another companion without changing state or projection', () => {
+  it('should reject without changing state or projection when another companion requests a cached path', () => {
     const store = new CompanionReviewStateStore();
     store.apply({
       path: mailboxPath,

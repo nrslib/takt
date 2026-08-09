@@ -10,8 +10,15 @@
  * while ignoring runtime directories (tasks, logs, runs, completed, .runtime).
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, readFileSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -39,6 +46,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   if (existsSync(testDir)) {
     rmSync(testDir, { recursive: true, force: true });
   }
@@ -85,6 +93,52 @@ describe('stageAndCommit', () => {
     }).trim();
 
     expect(committedFiles).toBe('app.ts');
+  });
+
+  it('should use the cwd repository when inherited Git repository variables point to a decoy', async () => {
+    const decoyDir = mkdtempSync(join(tmpdir(), 'takt-stage-commit-decoy-'));
+    try {
+      execFileSync('git', ['init'], { cwd: decoyDir });
+      execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: decoyDir });
+      execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: decoyDir });
+      writeFileSync(join(decoyDir, 'README.md'), '# Decoy');
+      execFileSync('git', ['add', '.'], { cwd: decoyDir });
+      execFileSync('git', ['commit', '-m', 'Decoy baseline'], { cwd: decoyDir });
+      const decoyHead = execFileSync('git', ['rev-parse', 'HEAD'], {
+        cwd: decoyDir,
+        encoding: 'utf-8',
+      }).trim();
+
+      execFileSync('git', ['config', '--local', 'filter.observer.clean', 'false'], { cwd: testDir });
+      execFileSync('git', ['config', '--local', 'filter.observer.required', 'true'], { cwd: testDir });
+      writeFileSync(join(testDir, '.gitattributes'), 'app.ts filter=observer\n');
+      writeFileSync(join(testDir, 'app.ts'), 'export const target = true;');
+
+      const decoyGitDir = join(decoyDir, '.git');
+      vi.stubEnv('GIT_DIR', decoyGitDir);
+      vi.stubEnv('GIT_WORK_TREE', decoyDir);
+      vi.stubEnv('GIT_COMMON_DIR', decoyGitDir);
+      vi.stubEnv('GIT_INDEX_FILE', join(decoyGitDir, 'index'));
+
+      let hash: string | undefined;
+      try {
+        hash = await stageAndCommit(testDir, 'commit target repository');
+      } finally {
+        vi.unstubAllEnvs();
+      }
+
+      expect(hash).toBeDefined();
+      expect(execFileSync('git', ['show', '--format=', '--name-only', 'HEAD'], {
+        cwd: testDir,
+        encoding: 'utf-8',
+      })).toContain('app.ts');
+      expect(execFileSync('git', ['rev-parse', 'HEAD'], {
+        cwd: decoyDir,
+        encoding: 'utf-8',
+      }).trim()).toBe(decoyHead);
+    } finally {
+      rmSync(decoyDir, { recursive: true, force: true });
+    }
   });
 
   it('should commit .takt/.gitignore while leaving runtime artifacts uncommitted', async () => {

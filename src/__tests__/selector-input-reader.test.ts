@@ -473,7 +473,7 @@ describe('SelectorInputReader', () => {
     );
   });
 
-  itWithUnixFileModes('should use only the owner execute bit for untracked file modes', async () => {
+  itWithUnixFileModes('should use only the owner execute bit when determining untracked file modes', async () => {
     const cwd = createGitDirectory();
     const ownerExecutablePath = join(cwd, 'owner-executable.txt');
     const groupExecutablePath = join(cwd, 'group-executable.txt');

@@ -426,7 +426,7 @@ describe('CT-COMP-05 companion cumulative diff reader', () => {
     expect(existsSync(markerPath)).toBe(false);
   });
 
-  it('should ignore inherited GIT_CONFIG_PARAMETERS before enumerating and overriding filters', async () => {
+  it('should ignore inherited GIT_CONFIG_PARAMETERS when enumerating and overriding filters', async () => {
     const { root, baseline } = createRepositoryFixture('inherited-filter-parameters');
     const markerPath = join(root, 'inherited-filter-marker');
     const filterPath = join(root, 'inherited-filter.sh');
@@ -485,7 +485,7 @@ describe('CT-COMP-05 companion cumulative diff reader', () => {
     expect(result).toMatchObject({ status: 'error', failure: { code: 'file_count_limit' } });
   });
 
-  it('should reject many long ordinary paths by file count without constructing an unbounded argv', async () => {
+  it('should reject by file count without an unbounded argv when many long paths exceed the limit', async () => {
     const { root, baseline } = createRepositoryFixture('many-long-paths');
     for (let index = 0; index < 1_025; index += 1) {
       const suffix = index.toString().padStart(4, '0');
@@ -497,7 +497,7 @@ describe('CT-COMP-05 companion cumulative diff reader', () => {
     expect(result).toMatchObject({ status: 'error', failure: { code: 'file_count_limit' } });
   });
 
-  itWithUnixFileModes('should accept a single gitlink path at the 16 KiB argv budget', async () => {
+  itWithUnixFileModes('should accept a single gitlink path when its argv cost is exactly 16 KiB', async () => {
     const { root, baseline } = createRepositoryFixture('exact-gitlink-path-budget');
     const markerPath = join(root, 'gitlink-command-marker');
     installPathListGit(root, 'p'.repeat(16 * 1024 - 1), markerPath);
@@ -508,7 +508,7 @@ describe('CT-COMP-05 companion cumulative diff reader', () => {
     expect(existsSync(markerPath)).toBe(true);
   });
 
-  itWithUnixFileModes('should reject a single path one byte above the 16 KiB argv budget', async () => {
+  itWithUnixFileModes('should reject a single path when its argv cost exceeds 16 KiB by one byte', async () => {
     const { root, baseline } = createRepositoryFixture('oversized-gitlink-path-budget');
     const markerPath = join(root, 'gitlink-command-marker');
     installPathListGit(root, 'p'.repeat(16 * 1024), markerPath);
