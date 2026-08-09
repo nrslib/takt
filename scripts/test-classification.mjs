@@ -115,7 +115,6 @@ export const auditedIntegrationBoundaryTestFiles = Object.freeze([
   'src/__tests__/interactive-mode.test.ts',
   'src/__tests__/interactive.test.ts',
   'src/__tests__/it-report-inheritance-task-resume.test.ts',
-  'src/__tests__/it-team-leader-finding-contract-operation-journal.test.ts',
   'src/__tests__/kiro-config.test.ts',
   'src/__tests__/local-llm-boundary-reviews.test.ts',
   'src/__tests__/mock-call-log.test.ts',
@@ -400,6 +399,7 @@ export const parallelIntegrationTestFiles = Object.freeze([
 // RPC timeout (spurious "Timeout calling onTaskUpdate" unhandled errors).
 // Add a file here only with a measured interference reason.
 export const serialGitTestFiles = Object.freeze([
+  'src/__tests__/companion-diff-runtime.integration.test.ts',
   // 2026-08-09: ラウンド9で遷移表→実 WorkflowEngine シナリオへ置換した結果、Git fixture+SQLite I/O の重量級になった(#1264 shard 飽和の主因)。
   'src/__tests__/takt-default-fc-builtins.test.ts',
   // 2026-08-09: heavy 並列スライスで birpc onTaskUpdate 期限超過が CI 2コアランナーで2連続再現(#1264)。SQLite+fsync 負荷の実測干渉のため serial へ。
@@ -410,6 +410,7 @@ export const serialGitTestFiles = Object.freeze([
   'src/__tests__/finding-ladder-robustness.integration.test.ts',
   'src/__tests__/finding-manager-filesystem.integration.test.ts',
   'src/__tests__/it-operation-journal-store.test.ts',
+  'src/__tests__/it-team-leader-finding-contract-operation-journal.test.ts',
   // Spawns full runAllTasks engine runs (real child processes); on 2-core CI
   // runners it blocked a parallel worker past the 60s RPC deadline in two
   // consecutive runs (2026-08-04), failing the it job with "Timeout calling

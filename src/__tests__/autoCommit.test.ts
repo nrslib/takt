@@ -2,7 +2,7 @@
  * Tests for autoCommitAndPush
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { autoCommitAndPush } from '../infra/task/autoCommit.js';
 
 // Mock child_process.execFileSync
@@ -39,6 +39,10 @@ function includesCommand(args: readonly string[], command: string): boolean {
 beforeEach(() => {
   vi.clearAllMocks();
   mockResolveConfigValue.mockReturnValue(undefined);
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe('autoCommitAndPush', () => {
@@ -253,7 +257,10 @@ describe('autoCommitAndPush', () => {
     expect(args[args.indexOf('-m') + 1]).toBe('takt: 認証機能を追加する');
   });
 
-  it('should allow hooks and filters only when explicitly configured', () => {
+  it('should allow hooks and filters only when explicitly configured while retaining literal path handling', () => {
+    vi.stubEnv('GIT_GLOB_PATHSPECS', '1');
+    vi.stubEnv('GIT_NOGLOB_PATHSPECS', '1');
+    vi.stubEnv('GIT_ICASE_PATHSPECS', '1');
     mockResolveConfigValue.mockImplementation((_projectDir: string, key: string) => {
       if (key === 'allowGitHooks' || key === 'allowGitFilters') {
         return true;
@@ -276,12 +283,24 @@ describe('autoCommitAndPush', () => {
     expect(mockExecFileSync).toHaveBeenCalledWith(
       'git',
       ['add', '-A'],
-      expect.objectContaining({ cwd: '/tmp/clone', env: undefined })
+      expect.objectContaining({
+        cwd: '/tmp/clone',
+        env: expect.objectContaining({ GIT_LITERAL_PATHSPECS: '1' }),
+      })
     );
+    const addEnvironment = mockExecFileSync.mock.calls.find(
+      call => includesCommand(call[1] as string[], 'add')
+    )?.[2]?.env;
+    expect(addEnvironment).not.toHaveProperty('GIT_GLOB_PATHSPECS');
+    expect(addEnvironment).not.toHaveProperty('GIT_NOGLOB_PATHSPECS');
+    expect(addEnvironment).not.toHaveProperty('GIT_ICASE_PATHSPECS');
     expect(mockExecFileSync).toHaveBeenCalledWith(
       'git',
       ['commit', '-m', 'takt: my-task'],
-      expect.objectContaining({ cwd: '/tmp/clone', env: undefined })
+      expect.objectContaining({
+        cwd: '/tmp/clone',
+        env: expect.objectContaining({ GIT_LITERAL_PATHSPECS: '1' }),
+      })
     );
     expect(
       mockExecFileSync.mock.calls.some(call => includesCommand(call[1] as string[], 'config'))

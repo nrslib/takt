@@ -101,6 +101,7 @@ describe('agent-usecases', () => {
       schema,
       {
         cwd: '/tmp',
+        agentName: 'security-reviewer',
         sessionId: 'ambient-session',
         resolution: {
           provider: 'mock',
@@ -123,6 +124,7 @@ describe('agent-usecases', () => {
       'select reviewers',
       expect.objectContaining({
         internalAgentIsolation: 'strict-readonly',
+        internalAgentName: 'security-reviewer',
         allowedTools: [],
         mcpServers: {},
         bypassPermissions: false,

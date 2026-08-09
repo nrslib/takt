@@ -91,6 +91,7 @@ function createBridgeHarness(options?: {
     onFindingLedgerUpdated: vi.fn(),
     setFindingContractFindingIds: vi.fn(),
     onRoutingDecision: vi.fn(),
+    onCompanionEvent: vi.fn(),
   };
   const usageEventLogger = {
     logUsageFor: vi.fn(),
@@ -1769,6 +1770,74 @@ describe('bindWorkflowExecutionEvents', () => {
         name: 'RunLiveDeliveryError',
         cause: eventSinkError,
       }),
+    ]);
+  });
+
+  it('CT-COMP-11 should preserve all companion actions in event sink and analytics payloads', async () => {
+    const eventSink = vi.fn().mockResolvedValue(undefined);
+    const { bridge, engine, analyticsEmitter, out } = createBridgeHarness({ eventSink });
+    const events = [
+      ['companion:start', { step: 'implement', companion: 'security-reviewer' }],
+      ['companion:pool_selected', {
+        step: 'implement',
+        selected: ['design-reviewer'],
+        rationale: 'design files changed',
+      }],
+      ['companion:finding', {
+        step: 'implement',
+        companion: 'security-reviewer',
+        findingId: 'security-reviewer-1',
+        severity: 'must_fix',
+      }],
+      ['companion:fix_round', { step: 'implement', sequence: 2, openMustFixCount: 1 }],
+      ['companion:complete', { step: 'implement', openMustFixCount: 0, escalated: false }],
+    ] as const;
+
+    for (const [name, payload] of events) {
+      engine.emit(name, payload);
+    }
+    await bridge.flushEventSink();
+
+    expect(eventSink.mock.calls.map(([event]) => event)).toEqual([
+      { type: 'companion', action: 'start', step: 'implement', companion: 'security-reviewer' },
+      {
+        type: 'companion',
+        action: 'pool_selected',
+        step: 'implement',
+        selected: ['design-reviewer'],
+        rationale: 'design files changed',
+      },
+      {
+        type: 'companion',
+        action: 'finding',
+        step: 'implement',
+        companion: 'security-reviewer',
+        findingId: 'security-reviewer-1',
+        severity: 'must_fix',
+      },
+      {
+        type: 'companion',
+        action: 'fix_round',
+        step: 'implement',
+        sequence: 2,
+        openMustFixCount: 1,
+      },
+      {
+        type: 'companion',
+        action: 'complete',
+        step: 'implement',
+        openMustFixCount: 0,
+        escalated: false,
+      },
+    ]);
+    expect(analyticsEmitter.onCompanionEvent.mock.calls.map(([name, payload]) => [name, payload]))
+      .toEqual(events);
+    expect(out.info.mock.calls.map(([message]) => message)).toEqual([
+      'Companion start for step "implement"',
+      'Companion pool_selected for step "implement"',
+      'Companion finding for step "implement"',
+      'Companion fix_round for step "implement"',
+      'Companion complete for step "implement"',
     ]);
   });
 });

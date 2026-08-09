@@ -13,6 +13,8 @@ import {
 } from '../../infra/config/index.js';
 import { validateWorkflowCallContracts } from '../../infra/config/loaders/workflowResolver.js';
 import { resolveAuxiliaryProviderEnvironment } from '../../infra/config/runtime-provider/provider-environment.js';
+import type { CompiledProviderEnvironment } from '../../infra/config/runtime-provider/environment.js';
+import { resolveWorkflowCompanions } from '../../infra/config/workflowCompanionResolution.js';
 import { InstructionBuilder } from '../../core/workflow/instruction/InstructionBuilder.js';
 import { ReportInstructionBuilder } from '../../core/workflow/instruction/ReportInstructionBuilder.js';
 import { StatusJudgmentBuilder } from '../../core/workflow/instruction/StatusJudgmentBuilder.js';
@@ -99,7 +101,7 @@ function formatProviderOptions(
   return sanitizeTerminalText(JSON.stringify(redactProviderOptions(providerOptions)));
 }
 
-type PreviewProviderResolution = ProviderModelResolutionContext & {
+type PreviewProviderResolution = CompiledProviderEnvironment & ProviderModelResolutionContext & {
   providerSource: ProviderResolutionSource;
   modelSource: ProviderResolutionSource;
   tagConflictPolicy: TagRoutingConflictPolicy;
@@ -113,14 +115,7 @@ function resolvePreviewProviderResolution(
 ): PreviewProviderResolution {
   const env = resolveAuxiliaryProviderEnvironment(cwd, config);
   return {
-    provider: env.provider,
-    providerSource: env.providerSource,
-    model: env.model,
-    modelSource: env.modelSource,
-    autoRouting: env.autoRouting,
-    personaProviders: env.personaProviders,
-    providerRouting: env.providerRouting,
-    tagConflictPolicy: env.tagConflictPolicy,
+    ...env,
     internalAgentSeats: env.internalAgents,
   };
 }
@@ -321,6 +316,10 @@ export async function previewPrompts(
     projectCwd: cwd,
     lookupCwd: cwd,
     overrides: selectorOverrides,
+  });
+  resolveWorkflowCompanions(config, providerResolution, {
+    projectCwd: cwd,
+    lookupCwd: cwd,
   });
   const selectorProvider = selectorResolution.applies
     ? selectorResolution.selectorProvider

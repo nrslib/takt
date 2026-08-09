@@ -966,6 +966,46 @@ describe('callClaudeHeadless', () => {
     });
   });
 
+  it('CT-COMP-12 streams assistant tool_use blocks before the final result', async () => {
+    stubSpawn({
+      stdoutChunks: [
+        `${JSON.stringify({
+          type: 'assistant',
+          message: {
+            content: [{
+              type: 'tool_use',
+              id: 'tool-1',
+              name: 'Edit',
+              input: { file_path: 'src/a.ts' },
+            }],
+          },
+        })}\n`,
+        `${JSON.stringify({
+          type: 'result',
+          subtype: 'success',
+          result: 'done',
+        })}\n`,
+      ],
+      closeCode: 0,
+    });
+    const onStream = vi.fn();
+
+    await callClaudeHeadless('agent', 'p', { cwd: '/tmp', onStream });
+
+    expect(onStream).toHaveBeenNthCalledWith(1, {
+      type: 'tool_use',
+      data: { tool: 'Edit', id: 'tool-1', input: { file_path: 'src/a.ts' } },
+    });
+    expect(onStream).toHaveBeenNthCalledWith(2, {
+      type: 'result',
+      data: {
+        result: 'done',
+        success: true,
+        sessionId: '11111111-1111-4111-8111-111111111111',
+      },
+    });
+  });
+
   it('omits --mcp-config when mcpServers is an empty object', async () => {
     stubSpawn({
       stdoutChunks: [`${JSON.stringify({ type: 'text', text: 'x' })}\n`],

@@ -23,6 +23,9 @@ import {
 } from './workflowSourceMetadata.js';
 import type { WorkflowCallArgResolutionPolicy } from './workflowCallableArgResolver.js';
 import { resolveWorkflowTrustInfo, type WorkflowTrustInfo } from './workflowTrustSource.js';
+import { buildConfiguredCompanionLookupDirs } from './companionLookupDirectories.js';
+import { loadCompanionDefinition } from './companionDefinitionLoader.js';
+import { isNormalAgentWorkflowStep } from '../../../core/models/types.js';
 
 interface LoadWorkflowFromFileOptions {
   trustInfo?: WorkflowTrustInfo;
@@ -99,6 +102,24 @@ function loadWorkflowFromFileInternal(
       workflowTrustInfo: trustInfo,
     },
   );
+  const companionNames = new Set<string>();
+  for (const step of config.steps) {
+    if (!isNormalAgentWorkflowStep(step) || step.companion === undefined) continue;
+    for (const name of step.companion.fixed) companionNames.add(name);
+    for (const name of step.companion.pool) companionNames.add(name);
+    if (step.companion.moderator !== undefined) companionNames.add(step.companion.moderator);
+  }
+  if (companionNames.size > 0) {
+    const candidateDirs = buildConfiguredCompanionLookupDirs(projectDir, context.lang);
+    config.companions = Object.fromEntries([...companionNames].map((name) => [
+      name,
+      loadCompanionDefinition(name, {
+        candidateDirs,
+        language: context.lang,
+        facetContext: context,
+      }),
+    ]));
+  }
   attachWorkflowOpaqueRef(config, buildOpaqueWorkflowRef(canonicalFilePath, trustInfo));
   attachWorkflowSourcePath(config, canonicalFilePath);
   attachWorkflowTrustInfo(config, trustInfo);

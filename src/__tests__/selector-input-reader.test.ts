@@ -22,6 +22,8 @@ import {
 import { GitSelectorCommandRunner } from '../infra/task/selector-git-command-runner.js';
 
 const temporaryDirectories: string[] = [];
+const itWithGitMagicFileNames = process.platform === 'win32' ? it.skip : it;
+const itWithUnixFileModes = process.platform === 'win32' ? it.skip : it;
 
 function createGitDirectory(): string {
   const directory = mkdtempSync(join(tmpdir(), 'takt-selector-input-'));
@@ -118,6 +120,34 @@ describe('SelectorInputReader', () => {
     expect(result.workingTreeDiff).toContain('after unstaged');
     expect(result.workingTreeDiff).toContain('to be deleted');
     expect(result.workingTreeDiff).toContain('new untracked');
+  });
+
+  itWithGitMagicFileNames('should preserve normal and literal Git path names in selector payloads', async () => {
+    const cwd = createRepository();
+    const normalPath = 'normal.txt';
+    const specialTrackedPath = ':(glob)tracked-*.txt';
+    const specialUntrackedPath = ':(exclude)untracked.txt';
+    writeFileSync(join(cwd, normalPath), 'normal before\n');
+    writeFileSync(join(cwd, specialTrackedPath), 'special before\n');
+    execFileSync('git', ['add', '-A'], { cwd });
+    execFileSync('git', ['commit', '--quiet', '-m', 'baseline'], { cwd });
+    writeFileSync(join(cwd, normalPath), 'normal after\n');
+    writeFileSync(join(cwd, specialTrackedPath), 'special tracked after\n');
+    writeFileSync(join(cwd, specialUntrackedPath), 'special untracked content\n');
+
+    const result = await new SelectorInputReader(new GitSelectorCommandRunner()).readInputs(
+      join(cwd, 'reports'),
+      [],
+      cwd,
+      undefined,
+    );
+
+    expect(result.workingTreeDiff).toContain(`## ${normalPath}`);
+    expect(result.workingTreeDiff).toContain(`## ${specialTrackedPath}`);
+    expect(result.workingTreeDiff).toContain(`## ${specialUntrackedPath}`);
+    expect(result.workingTreeDiff).toContain('normal after');
+    expect(result.workingTreeDiff).toContain('special tracked after');
+    expect(result.workingTreeDiff).toContain('special untracked content');
   });
 
   it('should use the current HEAD as its evidence boundary on each read', async () => {
@@ -413,7 +443,34 @@ describe('SelectorInputReader', () => {
     );
 
     expect(result.workingTreeDiff).toContain(`Symbolic link target: ${externalFile}`);
+    expect(result.workingTreeDiff).toContain('new file mode 120000');
     expect(result.workingTreeDiff).not.toContain('external secret');
+  });
+
+  itWithUnixFileModes('should represent regular and executable untracked file modes', async () => {
+    const cwd = createGitDirectory();
+    writeFileSync(join(cwd, 'regular.txt'), 'regular', { mode: 0o644 });
+    writeFileSync(join(cwd, 'executable.txt'), 'executable', { mode: 0o755 });
+    const runner = new FakeGitCommandRunner(
+      [],
+      0,
+      () => Buffer.alloc(0),
+      ['regular.txt', 'executable.txt'],
+    );
+
+    const result = await new SelectorInputReader(runner).readInputs(
+      join(cwd, 'reports'),
+      [],
+      cwd,
+      undefined,
+    );
+
+    expect(result.workingTreeDiff).toContain(
+      'new file mode 100644\n--- /dev/null\n+++ b/regular.txt',
+    );
+    expect(result.workingTreeDiff).toContain(
+      'new file mode 100755\n--- /dev/null\n+++ b/executable.txt',
+    );
   });
 
   it('should represent a dangling untracked symlink without dereferencing it', async () => {

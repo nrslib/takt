@@ -22,6 +22,7 @@ import type {
   AutoRoutingStrategy,
   InternalAgentSeats,
   PersonaProviderEntry,
+  ProviderRoutingEntry,
   ProviderEscalationTarget,
   ProviderLadderConfig,
   ProviderRoutingConfig,
@@ -47,6 +48,8 @@ import type { DynamicParallelSelectionStore } from './dynamic-parallel/selection
 import type { WorkflowCallInvocationEvidence } from './workflow-call-invocation-index.js';
 import type { WorkflowStepParticipationIndex } from './workflow-step-participation-index.js';
 import type { SelectorGitCommandRunner } from './dynamic-parallel/selector-git-command-runner.js';
+import type { CompanionDiffReader } from './companion/diff-reader.js';
+import type { CompanionReviewAuthority } from './companion/review-state-store.js';
 
 import type { ProviderType, StreamCallback, StreamEvent } from '../../shared/types/provider.js';
 
@@ -204,6 +207,7 @@ export interface WorkflowSharedRuntimeState {
   dynamicFacetSelectionStore?: import('./dynamic-facets/dynamicFacetSelectionStore.js').DynamicFacetSelectionStore;
   workflowCallInvocationEvidence?: WorkflowCallInvocationEvidence;
   workflowStepParticipationIndex?: WorkflowStepParticipationIndex;
+  companionReviewAuthority?: CompanionReviewAuthority;
 }
 
 export type WorkflowAbortKind =
@@ -359,6 +363,31 @@ export interface WorkflowEvents {
       readonly scopeIdentity: string;
     },
   ) => void;
+  'companion:start': (payload: {
+    step: string;
+    companion: string;
+  }) => void;
+  'companion:pool_selected': (payload: {
+    step: string;
+    selected: string[];
+    rationale: string;
+  }) => void;
+  'companion:finding': (payload: {
+    step: string;
+    companion: string;
+    findingId: string;
+    severity: 'must_fix' | 'should_fix' | 'nit';
+  }) => void;
+  'companion:fix_round': (payload: {
+    step: string;
+    sequence: number;
+    openMustFixCount: number;
+  }) => void;
+  'companion:complete': (payload: {
+    step: string;
+    openMustFixCount: number;
+    escalated: boolean;
+  }) => void;
   'step:blocked': (step: WorkflowStep, response: AgentResponse) => void;
   'step:rate_limited': (step: WorkflowStep, response: AgentResponse, rateLimitInfo: AgentResponse['rateLimitInfo']) => void;
   'step:user_input': (step: WorkflowStep, userInput: string) => void;
@@ -520,6 +549,9 @@ export interface WorkflowEngineOptions {
    * どの seat も指定は任意で、未指定の seat は従来どおりの既定解決へ落ちる。
    */
   internalAgentSeats?: InternalAgentSeats;
+  /** runtime.yaml から解決済みの companion ごとの実行環境。 */
+  companionProviders?: Readonly<Record<string, ProviderRoutingEntry>>;
+  companionDiffReader?: CompanionDiffReader;
   /**
    * Ordered provider ladders (issue #1208) resolved from runtime.yaml `ladder` assignments. The
    * promotion seam advances a matched target-less `{at:N}` to a later stage of the governing

@@ -3,6 +3,7 @@ import type { AgentWorkflowStep, LoopMonitorRule, WorkflowConfig, WorkflowRule, 
 import {
   getAllParallelSubSteps,
   isDynamicParallelSubSteps,
+  isNormalAgentWorkflowStep,
 } from '../../models/types.js';
 import {
   SESSION_AGENT_STEP_REQUIRED_MESSAGE,
@@ -51,6 +52,7 @@ import { withWorkflowConfigErrorPath } from '../workflow-config-error.js';
 import { findWorkflowStepLocation } from '../workflow-step-location.js';
 import { getProviderValidationErrorSource, withProviderValidationErrorSource } from '../provider-validation-error.js';
 import { validateDynamicParallelContracts } from '../dynamic-parallel/validator.js';
+import { parseWhenConditionExpression } from '../../models/workflow-when-expression.js';
 
 type ResolvedProviderInfo = ReturnType<typeof resolveStepProviderModel>;
 export type FindingContractSyntheticProviderValidationOptions = Pick<
@@ -737,6 +739,40 @@ function validateWorkflowStepNamesUnique(config: WorkflowConfig): void {
   );
 }
 
+function validateCompanionEscalationRule(step: WorkflowStep): void {
+  if (!isNormalAgentWorkflowStep(step) || step.companion === undefined) return;
+  const firstRule = step.rules?.[0];
+  if (
+    firstRule?.condition.kind !== 'when'
+    || !guaranteesCompanionEscalationCatch(firstRule.condition.expression)
+  ) {
+    throw new Error(
+      `Configuration error: companion step "${step.name}" first rule must catch when(companion.escalated)`,
+    );
+  }
+}
+
+function guaranteesCompanionEscalationCatch(expression: string): boolean {
+  const parsed = parseWhenConditionExpression(expression);
+  if (parsed.alternatives.length !== 1 || parsed.alternatives[0]?.length !== 1) return false;
+  const clause = parsed.alternatives[0][0];
+  if (clause?.kind === 'operand') {
+    return clause.operand.reference === 'companion.escalated';
+  }
+  if (clause?.kind !== 'comparison' || clause.operator !== '==') return false;
+  return (
+    clause.left.kind === 'state'
+    && clause.left.reference === 'companion.escalated'
+    && clause.right.kind === 'literal'
+    && clause.right.value === true
+  ) || (
+    clause.right.kind === 'state'
+    && clause.right.reference === 'companion.escalated'
+    && clause.left.kind === 'literal'
+    && clause.left.value === true
+  );
+}
+
 function findWorkflowCallStep(
   steps: readonly WorkflowStep[],
   parentPath: readonly PropertyKey[] = ['steps'],
@@ -806,6 +842,11 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
   for (const [stepIndex, step] of config.steps.entries()) {
     try {
       const stepPath = findWorkflowStepLocation(config, step) ?? ['steps', stepIndex];
+      try {
+        validateCompanionEscalationRule(step);
+      } catch (error) {
+        throw withWorkflowStepErrorPath(error, [...stepPath, 'rules', 0, 'condition']);
+      }
       try {
         validateSessionEntrypoint(step, `Configuration error: step "${step.name}"`);
       } catch (error) {

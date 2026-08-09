@@ -305,6 +305,29 @@ describe('workflow selector resolution', () => {
     })).toEqual({ applies: false });
   });
 
+  it('should resolve selector configuration for a companion pool', () => {
+    const projectDir = createProject('provider: codex\nmodel: gpt-selector\n');
+    const workflow: WorkflowConfig = {
+      name: 'companion-pool',
+      initialStep: 'implement',
+      maxSteps: 1,
+      steps: [{
+        name: 'implement',
+        instruction: 'Implement',
+        companion: { fixed: [], pool: ['security-reviewer'] },
+        rules: [{ condition: 'when(companion.escalated)', next: 'COMPLETE' }],
+      }],
+    };
+
+    expect(resolveWorkflowSelector(workflow, {
+      projectCwd: projectDir,
+      lookupCwd: projectDir,
+    })).toMatchObject({
+      applies: true,
+      selectorProvider: { provider: 'codex', model: 'gpt-selector' },
+    });
+  });
+
   it('should resolve selector configuration when only a called workflow is dynamic', () => {
     const projectDir = createProject('provider: codex\nmodel: gpt-selector\n');
     const workflowDir = join(projectDir, '.takt', 'workflows');

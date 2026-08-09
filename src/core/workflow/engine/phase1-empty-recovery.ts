@@ -25,7 +25,8 @@ export type Phase1AttemptReason =
   | 'provider_error_fresh'
   | 'empty_continuation'
   | 'empty_fresh'
-  | 'publication_retry_fresh';
+  | 'publication_retry_fresh'
+  | 'companion_fix';
 
 export interface Phase1Attempt {
   readonly sequence: number;

@@ -1370,6 +1370,28 @@ steps:
       {previous_response}
 ```
 
+## Companion reviewers
+
+Add `companion` to a normal agent step to run stateless, read-only reviewers while the agent edits. A shorthand list selects fixed reviewers. Use the object form to combine fixed reviewers with a pool selected once at step startup and an optional moderator. At most three reviewers run together.
+
+```yaml
+- name: implement
+  persona: coder
+  companion:
+    fixed: [security-reviewer]
+    pool: [design-reviewer, frontend-reviewer]
+    moderator: adjudicator
+  rules:
+    - condition: when(companion.escalated)
+      next: needs-fix
+    - condition: implementation complete
+      next: final-review
+```
+
+Definitions are YAML files resolved from `.takt/companions/`, `~/.takt/companions/`, then `builtins/{language}/companions/`. They may contain `name`, `description`, facet references (`persona`, `policy`, `knowledge`, `instruction`), and `interval_ms`; provider and tool settings are not allowed. `interval_ms` must be a positive integer no greater than `2,147,483,647`. A companion step must put its `when(companion.escalated)` rule first.
+
+TAKT observes mutating tool events and reviews a cumulative diff after a quiet period or forced interval. At implementer completion it checks for unreviewed changes and reviews only when some remain; running and pending reviews are still stopped or awaited before completion can finish. Findings are appended to `.takt/runs/{run}/companion/{step}/{companion}.jsonl`. Each companion JSONL file is a read-only projection for the implementer and an independent transaction boundary: its cache, finding sequence, and finding events are committed only after that file is appended successfully. When a round updates multiple companions, a later mailbox failure does not roll back an earlier mailbox that was already committed; retry resumes only the unfinished mailbox updates. External changes to the projection are rejected and do not change engine-owned finding state. The implementer must resolve open `must_fix` findings in the same session before Phase 2. Companion failures are fail-soft; workflow or step cancellation stops companion work.
+
 ## Best Practices
 
 1. **Keep iterations reasonable** — 10-30 is typical for development workflows

@@ -284,7 +284,7 @@ export class AgentRunner {
         systemPrompt,
         userInstruction: task,
       });
-      const agent = setupAgent({ name: 'takt-internal', systemPrompt });
+      const agent = setupAgent({ name: options.internalAgentName ?? 'takt-internal', systemPrompt });
       options.onDispatch?.(resolution.permissionMode);
       return agent.call(task, callOptions);
     }

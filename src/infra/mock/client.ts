@@ -5,12 +5,15 @@
  * Useful for testing workflows without incurring costs or latency.
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import type { AgentResponse } from '../../core/models/index.js';
 import type { StreamEvent } from '../../shared/types/provider.js';
 import { appendPrivateFile } from '../../shared/utils/private-file.js';
 import { getScenarioQueue } from './scenario.js';
 import type { MockCallOptions, ScenarioEntry } from './types.js';
+import { assertPathSegmentsAreSafe } from '../../shared/utils/pathBoundary.js';
 
 export type { MockCallOptions };
 
@@ -80,6 +83,8 @@ function recordMockCall(
     model?: string;
     status?: AgentResponse['status'];
     aborted?: boolean;
+    inputSessionId?: string;
+    returnedSessionId?: string;
   },
 ): void {
   const logPath = process.env.TAKT_MOCK_CALL_LOG;
@@ -98,7 +103,17 @@ function recordMockCall(
     personaName,
     runtimeEnvironment,
     ...details,
+    ...(details?.inputSessionId === undefined ? {} : {
+      inputSessionId: mockSessionIdentity(details.inputSessionId),
+    }),
+    ...(details?.returnedSessionId === undefined ? {} : {
+      returnedSessionId: mockSessionIdentity(details.returnedSessionId),
+    }),
   })}\n`);
+}
+
+function mockSessionIdentity(sessionId: string): string {
+  return createHash('sha256').update(sessionId).digest('hex');
 }
 
 async function delayWithAbort(ms: number, signal: AbortSignal | undefined): Promise<void> {
@@ -130,6 +145,20 @@ async function waitForAbort(signal: AbortSignal | undefined): Promise<void> {
   });
 }
 
+function applyScenarioFileWrites(entry: ScenarioEntry | undefined, cwd: string): void {
+  for (const write of entry?.fileWrites ?? []) {
+    const target = resolve(cwd, write.path);
+    assertPathSegmentsAreSafe(
+      cwd,
+      target,
+      (violation, path) => new Error(`Mock scenario file_writes path violates cwd boundary (${violation}): ${path}`),
+      { rejectSamePath: true },
+    );
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, write.content, 'utf-8');
+  }
+}
+
 /**
  * Call mock agent - returns immediate fixed response
  */
@@ -144,6 +173,7 @@ export async function callMock(
   const scenarioEntry = getScenarioQueue()?.consume(personaName);
   recordMockCall('start', personaName, {
     model: options.model,
+    inputSessionId: options.sessionId,
   });
 
   // Apply deterministic abort gating or an artificial delay when requested.
@@ -156,7 +186,11 @@ export async function callMock(
       }
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') {
-        recordMockCall('complete', personaName, { status: 'blocked', aborted: true });
+        recordMockCall('complete', personaName, {
+          status: 'blocked',
+          aborted: true,
+          returnedSessionId: sessionId,
+        });
         return {
           persona: personaName,
           status: 'blocked',
@@ -177,6 +211,8 @@ export async function callMock(
   const content = scenarioEntry?.content ?? options.mockResponse ??
     `${statusMarker}\n\nMock response for persona "${personaName}".\nPrompt: ${prompt.slice(0, 100)}${prompt.length > 100 ? '...' : ''}${allowedToolsSuffix}`;
 
+  applyScenarioFileWrites(scenarioEntry, options.cwd);
+
   // Emit stream events if callback is provided
   if (options.onStream) {
     const initEvent: StreamEvent = {
@@ -184,6 +220,13 @@ export async function callMock(
       data: { model: 'mock-model', sessionId },
     };
     options.onStream(initEvent);
+
+    for (const event of scenarioEntry?.streamEvents ?? []) {
+      options.onStream({
+        type: 'tool_use',
+        data: { tool: event.tool, id: event.id, input: { ...event.input } },
+      });
+    }
 
     const textEvent: StreamEvent = {
       type: 'text',
@@ -198,7 +241,11 @@ export async function callMock(
     options.onStream(resultEvent);
   }
 
-  recordMockCall('complete', personaName, { status, aborted: false });
+  recordMockCall('complete', personaName, {
+    status,
+    aborted: false,
+    returnedSessionId: sessionId,
+  });
   return {
     persona: personaName,
     status,

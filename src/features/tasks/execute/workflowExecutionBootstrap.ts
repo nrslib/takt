@@ -4,6 +4,7 @@ import { CapabilityAwareStructuredCaller } from '../../../agents/structured-call
 import type { WorkflowConfig } from '../../../core/models/index.js';
 import type {
   InternalAgentSeats,
+  ProviderRoutingEntry,
   ProviderEscalationTarget,
   ProviderLadderConfig,
   ResolvedObservabilityConfig,
@@ -83,6 +84,7 @@ import { assertTaskPrefixPair, detectStepType } from './workflowExecutionUtils.j
 import type { WorkflowRunBootstrap } from './workflowRunLifecycle.js';
 import { inheritWorkflowConfigMetadata } from '../../../shared/workflowConfigMetadata.js';
 import { validateWorkflowCallContracts } from '../../../infra/config/loaders/workflowResolver.js';
+import { resolveWorkflowCompanions } from '../../../infra/config/workflowCompanionResolution.js';
 
 const log = createLogger('workflow');
 
@@ -118,6 +120,7 @@ export interface WorkflowExecutionBootstrap {
   providerLadders: ProviderLadderConfig | undefined;
   providerEscalation: ProviderEscalationTarget | undefined;
   internalAgentSeats: InternalAgentSeats | undefined;
+  companionProviders: Readonly<Record<string, ProviderRoutingEntry>>;
   providerRoutingTagConflictPolicy: TagRoutingConflictPolicy;
   providerOptions: WorkflowExecutionOptions['providerOptions'];
   effectiveWorkflowConfig: WorkflowConfig;
@@ -579,6 +582,13 @@ export async function createWorkflowExecutionBootstrap(
     maxSteps: effectiveMaxSteps,
   };
   inheritWorkflowConfigMetadata(workflowConfig, effectiveWorkflowConfig);
+  const companionProviders = Object.fromEntries(
+    resolveWorkflowCompanions(effectiveWorkflowConfig, providerEnvironment, {
+      projectCwd,
+      lookupCwd: cwd,
+      workflowCallResolver: options.workflowCallResolver,
+    }),
+  );
   validateWorkflowCallContracts(effectiveWorkflowConfig, projectCwd, cwd, {
     providerValidationOptions: {
       provider: currentProvider,
@@ -705,6 +715,7 @@ export async function createWorkflowExecutionBootstrap(
     providerLadders: effectiveProviderLadders,
     providerEscalation: providerEnvironment.escalation,
     internalAgentSeats: providerEnvironment.internalAgents,
+    companionProviders,
     providerRoutingTagConflictPolicy,
     providerOptions: effectiveProviderOptions,
     effectiveWorkflowConfig,

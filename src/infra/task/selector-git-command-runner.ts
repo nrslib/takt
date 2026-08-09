@@ -1,6 +1,7 @@
 import type { SelectorGitCommandRunner, SelectorGitOutput } from '../../core/workflow/dynamic-parallel/selector-git-command-runner.js';
 import { formatProcessExitCause } from '../../shared/utils/process-exit.js';
 import { spawnManagedProcess } from '../../shared/utils/spawn.js';
+import { buildSafeGitEnvironment } from './git-environment.js';
 
 const MAX_SELECTOR_GIT_ERROR_BYTES = 64 * 1024;
 
@@ -52,6 +53,10 @@ export class GitSelectorCommandRunner implements SelectorGitCommandRunner {
     signal?.throwIfAborted();
     const managed = spawnManagedProcess('git', safeSelectorArgs(args), {
       cwd,
+      env: buildSafeGitEnvironment(cwd, {
+        allowGitHooks: false,
+        allowGitFilters: false,
+      }),
       stdio: ['ignore', 'pipe', 'pipe'],
     }, signal);
     const { child } = managed;

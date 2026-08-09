@@ -31,6 +31,7 @@ import { getAllParallelSubSteps } from '../../core/models/types.js';
 import type { WorkflowDoctorReport, WorkflowDoctorTarget } from '../../infra/config/loaders/workflowDoctor.js';
 import { translateWorkflowConfigError } from '../../shared/workflowConfigMetadata.js';
 import { validateWorkflowCallContracts } from '../../infra/config/loaders/workflowResolver.js';
+import { resolveWorkflowCompanions } from '../../infra/config/workflowCompanionResolution.js';
 
 function reportHasErrors(report: WorkflowDoctorReport): boolean {
   return report.diagnostics.some((diagnostic) => diagnostic.level === 'error');
@@ -82,6 +83,10 @@ function validateWorkflowRuntimeContract(
     // compiled bundle as execution and preview, so a runtime-v1 environment validates the
     // runtime.yaml `profiles.default` resolution (and a mixed configuration fails fast here too).
     const env = resolveAuxiliaryProviderEnvironment(projectDir, workflow);
+    resolveWorkflowCompanions(workflow, env, {
+      projectCwd: projectDir,
+      lookupCwd: target.lookupCwd ?? projectDir,
+    });
     validateWorkflowCallContracts(workflow, projectDir, target.lookupCwd ?? projectDir, {
       providerValidationOptions: {
         provider: env.provider,

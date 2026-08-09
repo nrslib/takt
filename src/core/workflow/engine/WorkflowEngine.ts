@@ -26,6 +26,7 @@ import {
   serializeWorkflowCallInvocationEvidence,
   snapshotWorkflowCallInvocationEvidence,
 } from '../workflow-call-invocation-index.js';
+import { CompanionReviewAuthority } from '../companion/review-state-store.js';
 import { restoreWorkflowStepParticipationIndex } from '../workflow-step-participation-index.js';
 import { buildRunPaths, type RunPaths } from '../run/run-paths.js';
 import { createRunFailure } from '../run/run-failure.js';
@@ -109,6 +110,14 @@ const FIX_STEP_NAME = 'fix';
 function snapshotWorkflowState(state: WorkflowState): WorkflowState {
   return {
     ...state,
+    ...(state.companion === undefined
+      ? {}
+      : {
+          companion: {
+            ...state.companion,
+            openMustFix: state.companion.openMustFix.map((finding) => ({ ...finding })),
+          },
+        }),
     dynamicParallelSelections: cloneDynamicParallelSelections(state.dynamicParallelSelections),
     resumedDynamicParallelSteps: new Set(state.resumedDynamicParallelSteps),
     dynamicFacetSelections: cloneDynamicFacetSelections(state.dynamicFacetSelections),
@@ -285,6 +294,7 @@ export class WorkflowEngine extends EventEmitter {
       restoreWorkflowCallInvocationEvidence(this.options.resumePoint);
     this.sharedRuntime.workflowStepParticipationIndex ??=
       restoreWorkflowStepParticipationIndex(this.options.resumePoint);
+    this.sharedRuntime.companionReviewAuthority ??= new CompanionReviewAuthority();
     restoreActiveResumePoint(
       this.sharedRuntime,
       this.options.resumePoint,

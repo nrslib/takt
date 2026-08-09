@@ -37,7 +37,11 @@ import type { StepProviderOptions } from '../../../core/models/workflow-types.js
 import type { ProviderResolutionSource } from '../../../core/workflow/provider-options-trace.js';
 import { normalizeProviderOptions } from '../providerOptions.js';
 import { validateRuntimeProviderSection, flattenProfiles, type FlatProfile } from './policy.js';
-import type { RuntimeProviderAssignment, RuntimeProviderSection } from './schema.js';
+import type {
+  RuntimeCompanionProviderAssignment,
+  RuntimeProviderAssignment,
+  RuntimeProviderSection,
+} from './schema.js';
 
 /**
  * Provider/model/options resolved for the internal agents. The seat set is defined once in
@@ -72,6 +76,7 @@ export interface CompiledProviderEnvironment {
    * and assistant seams resolve the runtime.yaml `targets.internal_agents` ladder.
    */
   internalAgents: InternalAgentEnvironment | undefined;
+  companions?: Record<string, ProviderRoutingEntry>;
   /**
    * Every stage of each `ladder` assignment (issue #1208), so the promotion seam can advance a
    * matched target-less `{at:N}` to a later stage. Stage 0 is the initial assignment already
@@ -158,6 +163,7 @@ export function compileRuntimeProviderEnvironment(
   const providerRouting = buildProviderRouting(section, flatProfiles);
   const autoRouting = buildAutoRoutingConfig(section, flatProfiles);
   const internalAgents = buildInternalAgents(section.targets?.internal_agents, flatProfiles);
+  const companions = buildCompanions(section.targets?.companions, flatProfiles);
   const providerLadders = buildProviderLadders(section, flatProfiles);
 
   return {
@@ -172,8 +178,22 @@ export function compileRuntimeProviderEnvironment(
     escalation: defaults?.escalation,
     tagConflictPolicy: 'fail-fast',
     internalAgents,
+    ...(companions === undefined ? {} : { companions }),
     providerLadders,
   };
+}
+
+function buildCompanions(
+  map: Record<string, RuntimeCompanionProviderAssignment> | undefined,
+  flatProfiles: Map<string, FlatProfile>,
+): Record<string, ProviderRoutingEntry> | undefined {
+  if (map === undefined) return undefined;
+  return Object.fromEntries(
+    Object.entries(map).map(([name, assignment]) => [
+      name,
+      resolveProfileEntry(assignment.profile, flatProfiles),
+    ]),
+  );
 }
 
 /**

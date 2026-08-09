@@ -34,6 +34,7 @@ import type {
   RuntimeStepResolution,
   StepProviderInfo,
   StepRunResult,
+  WorkflowEngineOptions,
   WorkflowStepExecutionEventContext,
 } from '../types.js';
 import type { ProviderUsageSnapshot } from '../../models/response.js';
@@ -124,6 +125,14 @@ import {
   PHASE1_EMPTY_OUTPUT_ERROR,
   runPhase1WithEmptyRecovery,
 } from './phase1-empty-recovery.js';
+import { buildCompanionMailboxDirectory } from '../companion/mailbox.js';
+import { runCompanionFixLoop } from '../companion/fix-loop.js';
+import { CompanionStepRuntime } from '../companion/step-runtime.js';
+import { buildCompanionEscalationSummary } from '../companion/evidence.js';
+import {
+  CompanionReviewStateStore,
+  type CompanionReviewAuthority,
+} from '../companion/review-state-store.js';
 import type { RunAgentOptions } from '../../../agents/types.js';
 import {
   createFindingReviewPublication,
@@ -162,6 +171,16 @@ import {
 } from './fallback-operation.js';
 
 const log = createLogger('step-executor');
+
+function requireActiveCompanionState(
+  state: WorkflowState,
+  stepName: string,
+): NonNullable<WorkflowState['companion']> {
+  if (state.companion === undefined) {
+    throw new Error(`Missing companion workflow state for active step "${stepName}"`);
+  }
+  return state.companion;
+}
 
 function reviewerExecutionIdentity(
   providerInfo: StepProviderInfo,
@@ -251,6 +270,12 @@ export interface StepExecutorDeps {
     usage: ProviderUsageSnapshot | undefined,
   ) => void;
   readonly getRunId: () => string;
+  readonly getRunPathNamespace: () => readonly string[];
+  readonly companionDefinitions?: WorkflowConfig['companions'];
+  readonly companionProviders?: WorkflowEngineOptions['companionProviders'];
+  readonly companionSelectorProvider?: WorkflowEngineOptions['selectorProvider'];
+  readonly companionDiffReader?: WorkflowEngineOptions['companionDiffReader'];
+  readonly companionReviewAuthority?: CompanionReviewAuthority;
   /** raw finding id 衝突対策の呼び出し名前空間。トップレベルでは空文字列。 */
   readonly getFindingCallNamespace: () => string;
   readonly onPhaseStart?: (
@@ -406,11 +431,15 @@ export type FindingReviewPublicationPreparation =
 
 export class StepExecutor {
   private readonly structuredOutputNormalizers: StructuredOutputNormalizerRegistry;
+  private readonly companionReviewState: CompanionReviewStateStore | undefined;
 
   constructor(
     private readonly deps: StepExecutorDeps,
   ) {
     this.structuredOutputNormalizers = deps.structuredOutputNormalizers;
+    this.companionReviewState = deps.companionReviewAuthority === undefined
+      ? undefined
+      : new CompanionReviewStateStore(deps.companionReviewAuthority);
   }
 
   private static buildTimestamp(): string {
@@ -2150,6 +2179,18 @@ export class StepExecutor {
       fallbackContext,
       workflowState: state,
       findingContract: this.buildFindingContractInstructionContext(step, findingContractPolicy),
+      ...(!isNormalAgentWorkflowStep(step) || step.companion === undefined
+        ? {}
+        : {
+            companion: {
+              mailboxDirectory: buildCompanionMailboxDirectory({
+                cwd: this.deps.getCwd(),
+                runSlug: this.deps.getRunId(),
+                runPathNamespace: this.deps.getRunPathNamespace(),
+                stepName: step.name,
+              }),
+            },
+          }),
     }).build();
     return instruction;
   }
@@ -2537,10 +2578,68 @@ export class StepExecutor {
     });
 
     // Phase 1: main execution (Write excluded if step has report)
-    const baseAgentOptions = this.deps.optionsBuilder.buildAgentOptions(
+    let companionRuntime: CompanionStepRuntime | undefined;
+    if (isNormalAgentWorkflowStep(executableStep) && executableStep.companion !== undefined) {
+      const companionDefinitions = this.deps.companionDefinitions;
+      const companionProviders = this.deps.companionProviders;
+      const companionDiffReader = this.deps.companionDiffReader;
+      const companionReviewState = this.companionReviewState;
+      if (
+        companionDefinitions === undefined
+        || companionProviders === undefined
+        || companionDiffReader === undefined
+        || companionReviewState === undefined
+      ) {
+        throw new Error(`Companion runtime configuration is missing for step "${step.name}"`);
+      }
+      state.companion = {
+        escalated: false,
+        openMustFixCount: 0,
+        openMustFix: [],
+      };
+      try {
+        companionRuntime = await CompanionStepRuntime.create({
+          cwd: this.deps.getCwd(),
+          projectCwd: this.deps.getProjectCwd(),
+          runSlug: this.deps.getRunId(),
+          runPathNamespace: this.deps.getRunPathNamespace(),
+          language: this.deps.getLanguage() ?? 'en',
+          task,
+          step: executableStep,
+          definitions: companionDefinitions,
+          providers: companionProviders,
+          selectorProvider: this.deps.companionSelectorProvider,
+          diffReader: companionDiffReader,
+          abortSignal: this.deps.abortSignal,
+          stateStore: companionReviewState,
+          emitEvent: this.deps.emitEvent,
+          recordUsage: (name, companionProvider, success, usage) => {
+            this.deps.recordSynthesizedAgentUsage(
+              `companion:${name}`,
+              {
+                provider: companionProvider.provider,
+                model: companionProvider.model,
+                providerOptions: companionProvider.providerOptions,
+              },
+              success,
+              usage,
+            );
+          },
+        });
+      } catch (error) {
+        this.deps.abortSignal?.throwIfAborted();
+        log.warn(
+          `Companion startup failed for "${step.name}"; continuing main step: ${getErrorMessage(error)}`,
+        );
+      }
+    }
+    using activeCompanionRuntime = companionRuntime;
+    const builtAgentOptions = this.deps.optionsBuilder.buildAgentOptions(
       executableStep,
       executionRuntime,
     );
+    const baseAgentOptions = activeCompanionRuntime?.composeOptions(builtAgentOptions)
+      ?? builtAgentOptions;
     const compactionOutcome = await compactSessionBeforePhase1(executableStep, baseAgentOptions);
     if (compactionOutcome === 'fresh') {
       invalidatePersonaSessionIfExpected(
@@ -2673,6 +2772,102 @@ export class StepExecutor {
       state.lastOutput = response;
       this.persistPreviousResponseSnapshot(state, step.name, stepIteration, response.content);
       return { response, instruction: phase1Instruction, providerInfo };
+    }
+
+    if (activeCompanionRuntime !== undefined) {
+      const fixLoop = await runCompanionFixLoop({
+        initialResponse: response,
+        phase1Options: agentOptions,
+        completeReview: async ({ implementerResponse }) => {
+          const review = await activeCompanionRuntime.complete(state, implementerResponse);
+          requireActiveCompanionState(state, step.name);
+          return review;
+        },
+        executeFix: async (attempt) => {
+          activeCompanionRuntime.beginFixRound(
+            attempt.sequence,
+            requireActiveCompanionState(state, step.name).openMustFixCount,
+          );
+          const phaseAttempt = {
+            sequence: attempt.sequence,
+            reason: 'companion_fix' as const,
+            instruction: attempt.instruction,
+            sessionId: attempt.sessionId,
+          };
+          const observed = await executeObservedPhase1Attempt({
+            enabled: this.deps.observabilityEnabled?.() === true,
+            runId: this.deps.getObservabilityRunId?.(),
+            workflowName: this.deps.getWorkflowName(),
+            eventStep: step,
+            spanStep: executableStep,
+            iteration: state.iteration,
+            attempt: phaseAttempt,
+            workflowStack: this.deps.getCurrentWorkflowStack?.(),
+            sanitizeText: this.deps.sanitizeObservabilityText,
+            providerInfo,
+            execute: (attemptInstruction, sessionId, onPromptResolved) => executeAgent(
+              executableStep.persona,
+              attemptInstruction,
+              {
+                ...attempt.options,
+                sessionId,
+                onPromptResolved,
+              },
+            ),
+            onPhaseStart: this.deps.onPhaseStart,
+          });
+          if (!observed.promptResolved) {
+            throw new Error(`Missing prompt parts for companion fix: ${step.name}:1:${attempt.sequence}`);
+          }
+          completeObservedPhase1Attempt({
+            eventStep: step,
+            iteration: state.iteration,
+            attempt: phaseAttempt,
+            response: observed.response,
+            onPhaseComplete: this.deps.onPhaseComplete,
+          });
+          this.deps.recordSynthesizedAgentUsage(
+            step.name,
+            providerInfo,
+            observed.response.status === 'done',
+            observed.response.providerUsage,
+          );
+          return observed.response;
+        },
+        abortSignal: this.deps.abortSignal,
+      });
+      if (fixLoop.latestSessionId !== undefined) {
+        updatePersonaSession(sessionKey, fixLoop.latestSessionId);
+      }
+      response = fixLoop.phaseResponse;
+      if (response.status === 'error' || response.status === 'rate_limited') {
+        state.stepOutputs.set(step.name, response);
+        state.lastOutput = response;
+        return { response, instruction: phase1Instruction, providerInfo };
+      }
+      if (response.status === 'blocked') {
+        state.stepOutputs.set(step.name, response);
+        state.lastOutput = response;
+        this.persistPreviousResponseSnapshot(state, step.name, stepIteration, response.content);
+        return { response, instruction: phase1Instruction, providerInfo };
+      }
+      if (fixLoop.escalated) {
+        const companionState = requireActiveCompanionState(state, step.name);
+        if (companionState.reason === undefined) {
+          throw new Error(`Missing companion escalation reason for active step "${step.name}"`);
+        }
+        response = {
+          ...response,
+          content: [
+            response.content,
+            '',
+            buildCompanionEscalationSummary({
+              reason: companionState.reason,
+              openMustFix: companionState.openMustFix,
+            }),
+          ].join('\n'),
+        };
+      }
     }
 
     let completedReviewerProviderInfo = providerInfo;

@@ -786,6 +786,57 @@ export function bindWorkflowExecutionEvents(
     deps.analyticsEmitter.onFindingLedgerUpdated(ledger, context);
   });
 
+  deps.engine.on('companion:start', (payload) => {
+    deps.analyticsEmitter.onCompanionEvent('companion:start', payload);
+    deps.out.info(`Companion start for step "${sanitizeTerminalText(payload.step)}"`);
+    emitWorkflowExecutionEvent(
+      deps.eventSink,
+      { type: 'companion', action: 'start', ...payload },
+      onEventSinkFailure,
+      eventSinkDispatchState,
+    );
+  });
+  deps.engine.on('companion:pool_selected', (payload) => {
+    deps.analyticsEmitter.onCompanionEvent('companion:pool_selected', payload);
+    deps.out.info(`Companion pool_selected for step "${sanitizeTerminalText(payload.step)}"`);
+    emitWorkflowExecutionEvent(
+      deps.eventSink,
+      { type: 'companion', action: 'pool_selected', ...payload },
+      onEventSinkFailure,
+      eventSinkDispatchState,
+    );
+  });
+  deps.engine.on('companion:finding', (payload) => {
+    deps.analyticsEmitter.onCompanionEvent('companion:finding', payload);
+    deps.out.info(`Companion finding for step "${sanitizeTerminalText(payload.step)}"`);
+    emitWorkflowExecutionEvent(
+      deps.eventSink,
+      { type: 'companion', action: 'finding', ...payload },
+      onEventSinkFailure,
+      eventSinkDispatchState,
+    );
+  });
+  deps.engine.on('companion:fix_round', (payload) => {
+    deps.analyticsEmitter.onCompanionEvent('companion:fix_round', payload);
+    deps.out.info(`Companion fix_round for step "${sanitizeTerminalText(payload.step)}"`);
+    emitWorkflowExecutionEvent(
+      deps.eventSink,
+      { type: 'companion', action: 'fix_round', ...payload },
+      onEventSinkFailure,
+      eventSinkDispatchState,
+    );
+  });
+  deps.engine.on('companion:complete', (payload) => {
+    deps.analyticsEmitter.onCompanionEvent('companion:complete', payload);
+    deps.out.info(`Companion complete for step "${sanitizeTerminalText(payload.step)}"`);
+    emitWorkflowExecutionEvent(
+      deps.eventSink,
+      { type: 'companion', action: 'complete', ...payload },
+      onEventSinkFailure,
+      eventSinkDispatchState,
+    );
+  });
+
   deps.engine.on('workflow:complete', (workflowState) => {
     if (terminalIntent === undefined) {
       terminalIntent = {

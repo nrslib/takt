@@ -99,9 +99,26 @@ export interface RoutingDecisionEvent {
   timestamp: string;
 }
 
+export interface CompanionAnalyticsEvent {
+  type: 'companion';
+  action: 'start' | 'pool_selected' | 'finding' | 'fix_round' | 'complete';
+  step: string;
+  companion?: string;
+  selected?: string[];
+  rationale?: string;
+  findingId?: string;
+  severity?: 'must_fix' | 'should_fix' | 'nit';
+  sequence?: number;
+  openMustFixCount?: number;
+  escalated?: boolean;
+  runId: string;
+  timestamp: string;
+}
+
 /** Union of all analytics event types */
 export type AnalyticsEvent =
   | ReviewFindingEvent
   | FixActionEvent
   | StepResultEvent
-  | RoutingDecisionEvent;
+  | RoutingDecisionEvent
+  | CompanionAnalyticsEvent;

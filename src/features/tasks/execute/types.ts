@@ -117,6 +117,41 @@ export type WorkflowExecutionEvent =
       success: false;
       reason: string;
       reportDirectory?: string;
+    }
+  | {
+      type: 'companion';
+      action: 'start';
+      step: string;
+      companion: string;
+    }
+  | {
+      type: 'companion';
+      action: 'pool_selected';
+      step: string;
+      selected: string[];
+      rationale: string;
+    }
+  | {
+      type: 'companion';
+      action: 'finding';
+      step: string;
+      companion: string;
+      findingId: string;
+      severity: 'must_fix' | 'should_fix' | 'nit';
+    }
+  | {
+      type: 'companion';
+      action: 'fix_round';
+      step: string;
+      sequence: number;
+      openMustFixCount: number;
+    }
+  | {
+      type: 'companion';
+      action: 'complete';
+      step: string;
+      openMustFixCount: number;
+      escalated: boolean;
     };
 
 /** Live-only workflow feedback. Delivery failure never changes run outcome. */

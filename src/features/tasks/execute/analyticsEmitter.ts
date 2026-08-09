@@ -265,6 +265,20 @@ export class AnalyticsEmitter {
       });
     }
   }
+
+  onCompanionEvent(
+    eventName: 'companion:start' | 'companion:pool_selected' | 'companion:finding' | 'companion:fix_round' | 'companion:complete',
+    payload: Record<string, unknown> & { step: string },
+  ): void {
+    writeAnalyticsEvent({
+      type: 'companion',
+      action: eventName.slice('companion:'.length) as
+        'start' | 'pool_selected' | 'finding' | 'fix_round' | 'complete',
+      ...payload,
+      runId: this.runSlug,
+      timestamp: new Date().toISOString(),
+    });
+  }
 }
 
 export interface AnalyticsStepContext {

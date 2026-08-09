@@ -12,9 +12,9 @@ import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { recordAgentUsageEvent } from '../engine/agent-usage-event.js';
 import { buildDynamicParallelSelectionIdentityFromPath } from '../dynamic-parallel/identity.js';
 import {
-  createSelectorOutputSchema,
+  createSelectorContract,
   validateSelectorResponse,
-} from '../dynamic-parallel/selector-contract.js';
+} from '../selector-contract.js';
 import { buildDynamicFacetSelectorInstruction } from './dynamicFacetContextBuilder.js';
 import { composeDynamicFacets, type FixedFacets } from './dynamicFacetComposer.js';
 import type { DynamicFacetSelectionStore } from './dynamicFacetSelectionStore.js';
@@ -89,7 +89,10 @@ export class DynamicFacetSelectorCoordinator {
     }
 
     const poolIds = pool.candidates.map((candidate) => candidate.id);
-    const outputSchema = createSelectorOutputSchema(poolIds, step.dynamicFacets.maxSelected);
+    const selectorContract = createSelectorContract(
+      pool.candidates.map(({ id, description }) => ({ name: id, description })),
+      step.dynamicFacets.maxSelected,
+    );
     const previous = selections.get(identity);
 
     const reportNames = this.deps.getReportNames(step, state);
@@ -137,7 +140,7 @@ export class DynamicFacetSelectorCoordinator {
       response = await executeIsolatedStructuredInternalAgent(
         'You are TAKT\'s internal dynamic facet selector. Select only candidate IDs from the provided pool.',
         instruction,
-        outputSchema,
+        selectorContract.providerSchema,
         {
           cwd: this.deps.getCwd(),
           projectCwd: this.deps.engineOptions.projectCwd,
@@ -151,7 +154,13 @@ export class DynamicFacetSelectorCoordinator {
         },
       );
       signal?.throwIfAborted();
-      selectorResult = validateSelectorResponse(response, outputSchema, step.name, redact, { label: 'Dynamic facet' });
+      selectorResult = validateSelectorResponse(
+        response,
+        selectorContract.validationSchema,
+        step.name,
+        redact,
+        { label: 'Dynamic facet' },
+      );
       signal?.throwIfAborted();
       selectedIds = selectorResult.selectedIds;
       if (

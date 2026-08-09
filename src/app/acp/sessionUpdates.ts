@@ -59,6 +59,8 @@ function workflowEventToText(event: WorkflowExecutionEvent): string {
       return event.success
         ? formatWorkflowResult({ success: true, reportDirectory: event.reportDirectory })
         : `Workflow failed: ${event.reason}`;
+    case 'companion':
+      return `Companion ${event.action} for step "${event.step}"`;
   }
 }
 

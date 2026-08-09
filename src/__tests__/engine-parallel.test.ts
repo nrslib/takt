@@ -63,7 +63,10 @@ import { runAgent } from '../agents/runner.js';
 import { runReportPhase, runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
 import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDetectionExhaustedError.js';
-import { StructuredOutputSchemaError } from '../core/workflow/engine/structured-output-schema-validator.js';
+import {
+  assertStrictStructuredOutputSchema,
+  StructuredOutputSchemaError,
+} from '../core/workflow/engine/structured-output-schema-validator.js';
 import { initDebugLogger, resetDebugLogger } from '../shared/utils/index.js';
 import type { AgentResponse } from '../core/models/index.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
@@ -71,9 +74,9 @@ import { buildDynamicParallelSelectionIdentity } from '../core/workflow/dynamic-
 import { SelectorInputReader } from '../core/workflow/dynamic-parallel/selector-input-reader.js';
 import { GitSelectorCommandRunner } from '../infra/task/selector-git-command-runner.js';
 import {
-  createSelectorOutputSchema,
+  createSelectorContract,
   validateSelectorResponse,
-} from '../core/workflow/dynamic-parallel/selector-contract.js';
+} from '../core/workflow/selector-contract.js';
 import { buildWorkflowCallInvocationIdentity } from '../core/workflow/workflow-call-invocation-index.js';
 import { getWorkflowReference } from '../core/workflow/workflow-reference.js';
 import {
@@ -510,6 +513,10 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       .map((call) => call.persona);
 
     expect(state.status).toBe('completed');
+    const selectorOutputSchema = selectorCall?.outputSchema;
+    if (selectorOutputSchema === undefined) throw new Error('Selector output schema was not sent');
+    expect(() => assertStrictStructuredOutputSchema(selectorOutputSchema)).not.toThrow();
+    expect(selectorOutputSchema).not.toHaveProperty('properties.selected_ids.uniqueItems');
     expect(selectorCall).toMatchObject({
       persona: undefined,
       allowedTools: [],
@@ -528,7 +535,6 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
         required: ['selected_ids', 'rationale'],
         properties: expect.objectContaining({
           selected_ids: expect.objectContaining({
-            uniqueItems: true,
             items: expect.objectContaining({ enum: ['frontend', 'backend'] }),
           }),
         }),
@@ -1108,7 +1114,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
   );
 
   it('should preserve provider diagnostics when a selector response fails', () => {
-    const schema = createSelectorOutputSchema(['frontend']);
+    const contract = createSelectorContract([{ name: 'frontend', description: 'frontend review' }]);
     const response = makeResponse({
       persona: 'selector',
       status: 'error',
@@ -1117,7 +1123,13 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       failureCategory: 'provider_error',
     });
 
-    expect(() => validateSelectorResponse(response, schema, 'reviewers', (text) => text, { label: 'Dynamic parallel' }))
+    expect(() => validateSelectorResponse(
+      response,
+      contract.validationSchema,
+      'reviewers',
+      (text) => text,
+      { label: 'Dynamic parallel' },
+    ))
       .toThrow('status "error": category "provider_error": provider rate-limit detail');
   });
 

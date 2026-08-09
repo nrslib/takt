@@ -68,6 +68,10 @@ export function getGlobalStepsDir(): string {
   return join(getGlobalConfigDir(), 'steps');
 }
 
+export function getGlobalCompanionsDir(): string {
+  return join(getGlobalConfigDir(), 'companions');
+}
+
 /** Get takt global facet-pools directory (~/.takt/facet-pools) */
 export function getGlobalFacetPoolsDir(): string {
   return join(getGlobalConfigDir(), 'facet-pools');
@@ -111,6 +115,10 @@ export function getBuiltinLanguageResourcesDir(lang: Language): string {
   return getLanguageResourcesDir(lang);
 }
 
+export function getBuiltinCompanionsDir(lang: Language): string {
+  return join(getLanguageResourcesDir(lang), 'companions');
+}
+
 /** Get builtin shared facet-pools directory (builtins/facet-pools) */
 export function getBuiltinSharedFacetPoolsDir(): string {
   return join(getResourcesDir(), 'facet-pools');
@@ -147,6 +155,10 @@ export function getProjectProviderOptionsDir(projectDir: string): string {
 
 export function getProjectStepsDir(projectDir: string): string {
   return join(getProjectConfigDir(projectDir), 'steps');
+}
+
+export function getProjectCompanionsDir(projectDir: string): string {
+  return join(getProjectConfigDir(projectDir), 'companions');
 }
 
 /** Get project facet-pools directory (.takt/facet-pools in project) */
