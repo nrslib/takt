@@ -660,6 +660,8 @@ unexpected_overrides:
       ['codex reasoning_effort', 'whitespace-only', '  codex:', '    reasoning_effort:', "'   '"],
       ['claude effort', 'empty', '  claude:', '    effort:', "''"],
       ['claude effort', 'whitespace-only', '  claude:', '    effort:', "'   '"],
+      ['copilot effort', 'empty', '  copilot:', '    effort:', "''"],
+      ['copilot effort', 'whitespace-only', '  copilot:', '    effort:', "'   '"],
     ])('should reject %s values that are %s', (_name, _valueKind, providerLine, effortLine, value) => {
       const configPath = join(testDir, '.takt', 'config.yaml');
       const configContent = [

@@ -89,8 +89,11 @@ describe('assertExecProviderEffort provider capability checks', () => {
     ).not.toThrow();
   });
 
-  it.each(['', '   '] as const)('should reject blank effort values', (effort) => {
-    expect(() => resolveExecProviderEffort('codex', effort, 'test'))
+  it.each(
+    (['codex', 'claude', 'copilot'] as const).flatMap((provider) =>
+      (['', '   '] as const).map((effort) => [provider, effort] as const)),
+  )('should reject blank effort values for %s', (provider, effort) => {
+    expect(() => resolveExecProviderEffort(provider, effort, 'test'))
       .toThrow(`does not support effort "${effort}"`);
   });
 
