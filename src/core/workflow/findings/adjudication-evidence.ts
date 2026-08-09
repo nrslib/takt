@@ -346,9 +346,10 @@ function compactInlineRawFindingId(rawFindingId: string): string {
     return rawFindingId;
   }
   const digest = createHash('sha256').update(rawFindingId).digest('hex');
-  // 12 characters on each side keeps the rendered reference below the 192-byte
+  // 12 code points on each side keeps the rendered reference below the 192-byte
   // cap even when an ID contains four-byte UTF-8 characters.
-  return `raw-ref:${rawFindingId.slice(0, 12)}…${rawFindingId.slice(-12)}#sha256:${digest}`;
+  const codePoints = [...rawFindingId];
+  return `raw-ref:${codePoints.slice(0, 12).join('')}…${codePoints.slice(-12).join('')}#sha256:${digest}`;
 }
 
 function inlineRawFindingHistory(
