@@ -19,7 +19,10 @@ import {
   releaseFindingManagerProviderCall,
   reserveFindingManagerProviderCall,
 } from './finding-manager-provider-call.js';
-import { MANAGER_INTERPRETATION_LIMITS } from './raw-finding-limits.js';
+import {
+  CONFLICT_ADJUDICATION_INPUT_MAX_BYTES,
+  MANAGER_INTERPRETATION_LIMITS,
+} from './raw-finding-limits.js';
 import type { FindingAdjudicationStore, FindingLedgerMutation } from './store.js';
 import type { FindingObservation } from './types.js';
 
@@ -222,7 +225,7 @@ export async function reserveFindingConflictAdjudication(input: {
       roundMarker: input.roundMarker,
       limits: {
         maxCallsPerRound: MANAGER_INTERPRETATION_LIMITS.maxManagerCallsPerStep,
-        maxAdapterVisibleInputBytesPerCall: MANAGER_INTERPRETATION_LIMITS.maxInputBytesPerCall,
+        maxAdapterVisibleInputBytesPerCall: CONFLICT_ADJUDICATION_INPUT_MAX_BYTES,
         maxOutputTokensPerCall: MANAGER_INTERPRETATION_LIMITS.maxOutputTokensPerCall,
         maxChargedInputTokensPerRound: MANAGER_INTERPRETATION_LIMITS.maxInputTokensPerStep,
         maxChargedOutputTokensPerRound: MANAGER_INTERPRETATION_LIMITS.maxOutputTokensPerStep,
