@@ -319,7 +319,7 @@ describe('buildRawTaktProvidersOrThrow', () => {
     ['an unknown nested selector option', {
       providerOptions: { codex: { skills: { repo: true, unknownSkill: true } } },
     }],
-    ['an invalid selector enum value', { providerOptions: { codex: { reasoningEffort: 'turbo' } } }],
+    ['an invalid selector effort type', { providerOptions: { codex: { reasoningEffort: 42 } } }],
     ['a blank selector model', { model: '   ' }],
     ['a snake_case selector alias', { provider_options: { codex: { reasoning_effort: 'medium' } } }],
     ['a snake_case nested option alias', { providerOptions: { codex: { reasoning_effort: 'medium' } } }],

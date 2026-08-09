@@ -4,7 +4,13 @@
  * Uses @openai/codex-sdk for native TypeScript integration.
  */
 
-import { Codex, type CodexOptions, type Input, type Thread, type TurnOptions } from '@openai/codex-sdk';
+import {
+  Codex,
+  type CodexOptions,
+  type Input,
+  type Thread,
+  type TurnOptions,
+} from '@openai/codex-sdk';
 import { USAGE_MISSING_REASONS } from '../../core/logging/contracts.js';
 import type { AgentResponse, ProviderUsageSnapshot } from '../../core/models/index.js';
 import { buildEnvWithNestedObservabilitySnapshot } from '../../shared/telemetry/index.js';
@@ -335,7 +341,6 @@ export class CodexClient {
       // back to its configured approval policy (e.g. on-request + approvals_reviewer=auto_review),
       // which auto-approves escalation past a read-only sandbox and lets writes through.
       approvalPolicy: 'never' as const,
-      ...(options.reasoningEffort ? { modelReasoningEffort: options.reasoningEffort } : {}),
       ...(options.networkAccess === undefined ? {} : { networkAccessEnabled: options.networkAccess }),
     };
     let threadId = options.sessionId;
@@ -379,6 +384,13 @@ export class CodexClient {
       return errorResponse;
     }
 
+    const codexConfig: CodexOptions['config'] = options.reasoningEffort === undefined
+      ? skillConfig
+      : {
+          ...(skillConfig ?? {}),
+          model_reasoning_effort: options.reasoningEffort,
+        };
+
     while (true) {
       const attempt = standardRetryCount + timeoutRetryCount + refusalRetryCount + 1;
       let currentThreadId = threadId;
@@ -392,7 +404,7 @@ export class CodexClient {
           ...(options.openaiApiKey ? { apiKey: options.openaiApiKey } : {}),
           ...(options.baseUrl !== undefined ? { baseUrl: options.baseUrl } : {}),
           ...(options.codexPathOverride ? { codexPathOverride: options.codexPathOverride } : {}),
-          ...(skillConfig !== undefined ? { config: skillConfig } : {}),
+          ...(codexConfig !== undefined ? { config: codexConfig } : {}),
         };
         const codex = new Codex(codexClientOptions);
         thread = threadId

@@ -1,8 +1,3 @@
-import {
-  CLAUDE_EFFORT_VALUES,
-  CODEX_REASONING_EFFORT_VALUES,
-  COPILOT_EFFORT_VALUES,
-} from '../../core/models/workflow-types.js';
 import { validateProviderModelRequirements } from '../../core/workflow/provider-model-requirements.js';
 import type { ProviderType } from '../../infra/providers/index.js';
 import type { ExecActorConfig, ExecConfig, ExecEffort, ResolvedExecConfig } from './types.js';
@@ -23,6 +18,11 @@ export const EXEC_EFFORTS: readonly ExecEffort[] = ['minimal', 'low', 'medium', 
 const EXEC_OPTIONAL_MODEL_PROVIDERS: ReadonlySet<ProviderType> = new Set(['cursor', 'copilot', 'kiro']);
 
 export const CLAUDE_TOOL_PROVIDERS: ReadonlySet<ProviderType> = new Set(['claude', 'claude-sdk', 'claude-terminal']);
+const EXEC_EFFORT_PROVIDERS: ReadonlySet<ProviderType> = new Set([
+  ...CLAUDE_TOOL_PROVIDERS,
+  'codex',
+  'copilot',
+]);
 
 const EXEC_ACTOR_NAME_REGEX = /^[A-Za-z0-9_-]+$/;
 const RESERVED_EXEC_SESSION_KEY_BASES = new Set([
@@ -38,20 +38,11 @@ const RESERVED_EXEC_SESSION_KEY_BASES = new Set([
 ]);
 
 export function providerSupportsExecEffort(provider: ProviderType, effort: ExecEffort): boolean {
-  if (CLAUDE_TOOL_PROVIDERS.has(provider)) {
-    return CLAUDE_EFFORT_VALUES.includes(effort as typeof CLAUDE_EFFORT_VALUES[number]);
-  }
-  if (provider === 'codex') {
-    return CODEX_REASONING_EFFORT_VALUES.includes(effort as typeof CODEX_REASONING_EFFORT_VALUES[number]);
-  }
-  if (provider === 'copilot') {
-    return COPILOT_EFFORT_VALUES.includes(effort as typeof COPILOT_EFFORT_VALUES[number]);
-  }
-  return false;
+  return EXEC_EFFORT_PROVIDERS.has(provider) && effort.trim().length > 0;
 }
 
 export function getSupportedExecEfforts(provider: ProviderType): ExecEffort[] {
-  return EXEC_EFFORTS.filter((effort) => providerSupportsExecEffort(provider, effort));
+  return EXEC_EFFORT_PROVIDERS.has(provider) ? [...EXEC_EFFORTS] : [];
 }
 
 export function providerAllowsOmittedExecModel(provider: ProviderType): boolean {

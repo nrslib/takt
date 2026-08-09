@@ -6,11 +6,6 @@ import {
 } from '../../infra/config/index.js';
 import type { PermissionMode, StepProviderOptions } from '../../core/models/index.js';
 import type { ImageAttachmentReference } from '../../shared/types/image-attachments.js';
-import type {
-  ClaudeEffort,
-  CodexReasoningEffort,
-  CopilotEffort,
-} from '../../core/models/workflow-types.js';
 import { callAIWithRetry, type SessionContext } from '../interactive/aiCaller.js';
 import type { FacetLookupConfig } from '../catalog/catalogFacets.js';
 import type {
@@ -37,13 +32,13 @@ function buildSessionProviderOptions(session: ResolvedExecSessionConfig): StepPr
     return undefined;
   }
   if (CLAUDE_TOOL_PROVIDERS.has(session.provider)) {
-    return { claude: { effort: session.effort as ClaudeEffort } };
+    return { claude: { effort: session.effort } };
   }
   if (session.provider === 'codex') {
-    return { codex: { reasoningEffort: session.effort as CodexReasoningEffort } };
+    return { codex: { reasoningEffort: session.effort } };
   }
   if (session.provider === 'copilot') {
-    return { copilot: { effort: session.effort as CopilotEffort } };
+    return { copilot: { effort: session.effort } };
   }
   throw new Error(`Unreachable: assertExecProviderEffort should have rejected provider "${session.provider}" with effort "${session.effort}"`);
 }

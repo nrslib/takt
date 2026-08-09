@@ -206,7 +206,7 @@ function buildStrictArgs(
     ...(model === undefined ? [] : ['--model', model]),
     ...(options.reasoningEffort === undefined
       ? []
-      : ['--config', `model_reasoning_effort="${options.reasoningEffort}"`]),
+      : ['--config', `model_reasoning_effort=${JSON.stringify(options.reasoningEffort)}`]),
     ...(options.baseUrl === undefined
       ? []
       : ['--config', `openai_base_url=${JSON.stringify(options.baseUrl)}`]),

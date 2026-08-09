@@ -15,6 +15,16 @@ type ExecConfigOverrides = Omit<Partial<ExecConfig>, 'session' | 'replan' | 'loo
   loop?: Partial<ExecConfig['loop']>;
 };
 
+type RawProviderOptions = {
+  claude?: { effort?: string };
+  codex?: { reasoning_effort?: string };
+  copilot?: { effort?: string };
+};
+
+type RawParallelStep = {
+  provider_options?: RawProviderOptions;
+};
+
 const defaultExecWorkflowSkillOptions = {
   codex: { skills: { repo: true, user: true } },
 } as const;
@@ -44,10 +54,10 @@ type RawWorkflow = {
   loop_monitors?: Array<{
     cycle: string[];
     threshold: number;
-    judge: Record<string, unknown>;
+    judge: Record<string, unknown> & { provider_options?: RawProviderOptions };
   }>;
   report_formats?: Record<string, string>;
-  steps: Array<Record<string, unknown>>;
+  steps: Array<Record<string, unknown> & { parallel?: RawParallelStep[] }>;
 };
 
 function createExecConfig(overrides: ExecConfigOverrides = {}): ExecConfig {
@@ -584,23 +594,43 @@ describe('exec workflow template', () => {
     }
   });
 
-  it('should reject effort values that the selected provider cannot use', () => {
-    expect(() => buildExecWorkflowYaml(createExecConfig({
+  it('should pass through arbitrary effort values to the selected provider', () => {
+    const raw = parseRawWorkflow(buildExecWorkflowYaml(createExecConfig({
+      session: {
+        provider: 'codex',
+        model: 'gpt-5',
+        effort: 'max',
+      },
       workers: [
         {
           name: 'codex-worker',
-          provider: 'codex',
-          model: 'gpt-5',
-          effort: 'max',
+          provider: 'claude',
+          model: 'opus',
+          effort: 'experimental',
           instruction: 'exec-worker',
           knowledge: ['architecture'],
           policy: ['coding'],
         },
       ],
+      reviews: [
+        {
+          name: 'copilot-reviewer',
+          provider: 'copilot',
+          model: 'gpt-5',
+          effort: 'vendor-level',
+          instruction: 'exec-review',
+          knowledge: ['architecture'],
+          policy: ['review'],
+        },
+      ],
     }), {
-      workflowName: 'exec-invalid-effort-test',
-      taskDescription: 'Reject invalid effort',
-    })).toThrow(/does not support effort "max"/);
+      workflowName: 'exec-custom-effort-test',
+      taskDescription: 'Pass through custom effort',
+    }));
+
+    expect(raw.steps[0]?.parallel[0]?.provider_options?.claude?.effort).toBe('experimental');
+    expect(raw.steps[1]?.parallel[0]?.provider_options?.copilot?.effort).toBe('vendor-level');
+    expect(raw.loop_monitors?.[0]?.judge.provider_options?.codex?.reasoning_effort).toBe('max');
   });
 
   it('should reject effort for providers without effort support', () => {

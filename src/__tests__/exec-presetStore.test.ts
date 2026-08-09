@@ -396,6 +396,24 @@ describe('exec preset store', () => {
     }
   });
 
+  it('should save and reload provider-defined effort strings for every effort provider', () => {
+    const globalConfigDir = mkdtempSync(join(tmpdir(), 'takt-exec-custom-effort-'));
+    const baseConfig = createExecConfig('custom-effort-worker');
+    const config: ExecConfig = {
+      ...baseConfig,
+      session: { ...baseConfig.session, provider: 'codex', effort: 'max' },
+      workers: [{ ...baseConfig.workers[0]!, provider: 'claude', effort: 'experimental' }],
+      reviews: [{ ...baseConfig.reviews[0]!, provider: 'copilot', effort: 'vendor-level' }],
+    };
+    try {
+      saveLastUsedExecConfig(config, { globalConfigDir });
+
+      expect(loadLastUsedExecConfig({ globalConfigDir })).toEqual(config);
+    } finally {
+      rmSync(globalConfigDir, { recursive: true, force: true });
+    }
+  });
+
   it('should save and delete project exec presets', () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'takt-exec-project-preset-'));
     const config = createExecConfig('saved-worker');
@@ -700,16 +718,16 @@ describe('exec preset store', () => {
         /exec\.session\.provider: unsupported provider/,
       ],
       [
-        'bad-effort',
-        buildPresetYaml('bad-effort', {
+        'blank-effort',
+        buildPresetYaml('blank-effort', {
           session: [
             'session:',
             '  provider: claude',
             '  model: opus',
-            '  effort: impossible',
+            '  effort: "   "',
           ],
         }),
-        /exec\.session\.effort: unsupported effort/,
+        /exec\.session\.effort: expected non-empty string/,
       ],
       [
         'bad-actor-name',

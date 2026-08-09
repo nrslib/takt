@@ -588,7 +588,7 @@ unexpected_overrides:
   });
 
   describe('migrated project-local fields', () => {
-    it('should fail fast when codex reasoning_effort is outside SDK enum', () => {
+    it('should pass through arbitrary codex reasoning_effort values', () => {
       const configPath = join(testDir, '.takt', 'config.yaml');
       const configContent = [
         'provider_options:',
@@ -597,7 +597,9 @@ unexpected_overrides:
       ].join('\n');
       writeFileSync(configPath, configContent, 'utf-8');
 
-      expect(() => loadProjectConfig(testDir)).toThrow(/reasoning_effort/);
+      expect(loadProjectConfig(testDir).providerOptions).toEqual({
+        codex: { reasoningEffort: 'extreme' },
+      });
     });
 
     it('should fail fast when Codex Skill inheritance is not boolean', () => {
@@ -639,7 +641,7 @@ unexpected_overrides:
       );
     });
 
-    it('should fail fast when claude effort is outside SDK enum', () => {
+    it('should pass through arbitrary claude effort values', () => {
       const configPath = join(testDir, '.takt', 'config.yaml');
       const configContent = [
         'provider_options:',
@@ -648,7 +650,9 @@ unexpected_overrides:
       ].join('\n');
       writeFileSync(configPath, configContent, 'utf-8');
 
-      expect(() => loadProjectConfig(testDir)).toThrow(/effort/);
+      expect(loadProjectConfig(testDir).providerOptions).toEqual({
+        claude: { effort: 'impossible' },
+      });
     });
 
     it('should load project-local fields from project config yaml', () => {
@@ -1273,13 +1277,13 @@ unexpected_overrides:
         ],
       ],
       [
-        'invalid selector enum',
+        'invalid selector effort type',
         [
           'takt_providers:',
           '  selector:',
           '    provider_options:',
           '      codex:',
-          '        reasoning_effort: turbo',
+          '        reasoning_effort: 42',
         ],
       ],
     ])('should reject %s in project config', (_name, lines) => {
@@ -1442,7 +1446,7 @@ unexpected_overrides:
       ['an unknown nested selector option', {
         providerOptions: { codex: { skills: { repo: true, unknownSkill: true } } },
       }],
-      ['an invalid selector enum', { providerOptions: { codex: { reasoningEffort: 'turbo' } } }],
+      ['an invalid selector effort type', { providerOptions: { codex: { reasoningEffort: 42 } } }],
     ])('should reject %s when saving project config', (_label, selector) => {
       const invalidConfig = {
         taktProviders: { selector },

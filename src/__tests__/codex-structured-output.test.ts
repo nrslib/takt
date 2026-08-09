@@ -319,7 +319,7 @@ describe('CodexClient — structuredOutput 抽出', () => {
     });
   });
 
-  it('provider_options.codex.reasoningEffort が ThreadOptions に反映される', async () => {
+  it('provider_options.codex.reasoningEffort が安全な config override に反映される', async () => {
     mockEvents = [
       { type: 'thread.started', thread_id: 'thread-1' },
       { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
@@ -328,12 +328,15 @@ describe('CodexClient — structuredOutput 抽出', () => {
     const client = new CodexClient();
     await client.call('coder', 'prompt', {
       cwd: '/tmp',
-      reasoningEffort: 'medium',
+      reasoningEffort: 'vendor"level',
     });
 
-    expect(lastThreadOptions).toMatchObject({
-      modelReasoningEffort: 'medium',
+    expect(lastCodexConstructorOptions).toMatchObject({
+      config: {
+        model_reasoning_effort: 'vendor"level',
+      },
     });
+    expect(lastThreadOptions).not.toHaveProperty('modelReasoningEffort');
   });
 
   it('codexPathOverride が Codex constructor options に反映される', async () => {

@@ -12,9 +12,6 @@ import { z } from 'zod/v4';
 import { PROVIDER_TYPES } from '../../shared/types/provider.js';
 import { STATUS_VALUES } from './status.js';
 import {
-  CLAUDE_EFFORT_VALUES,
-  CODEX_REASONING_EFFORT_VALUES,
-  COPILOT_EFFORT_VALUES,
   OPENCODE_GUARD_PROFILES,
   RUNTIME_PREPARE_PRESETS,
 } from './workflow-types.js';
@@ -74,10 +71,12 @@ const CodexSkillsShape = {
   user: z.boolean().optional(),
 };
 
+const ProviderEffortSchema = z.string().trim().min(1, 'effort must not be empty');
+
 const CodexProviderOptionShape = {
   base_url: z.string().min(1).optional(),
   network_access: z.boolean().optional(),
-  reasoning_effort: z.enum(CODEX_REASONING_EFFORT_VALUES).optional(),
+  reasoning_effort: ProviderEffortSchema.optional(),
   skills: z.object(CodexSkillsShape).optional(),
 };
 
@@ -120,7 +119,7 @@ const ClaudeSkillsSchema = z.object(ClaudeSkillsShape).strict();
 const ClaudeProviderOptionShape = {
   base_url: z.string().min(1).optional(),
   allowed_tools: z.array(z.string()).optional(),
-  effort: z.enum(CLAUDE_EFFORT_VALUES).optional(),
+  effort: ProviderEffortSchema.optional(),
   skills: ClaudeSkillsSchema.optional(),
   sandbox: z.object(ClaudeSandboxShape).optional(),
 };
@@ -140,7 +139,7 @@ const ClaudeTerminalProviderOptionsSchema = z.object({
 }).strict();
 
 const CopilotProviderOptionsSchema = z.object({
-  effort: z.enum(COPILOT_EFFORT_VALUES).optional(),
+  effort: ProviderEffortSchema.optional(),
 });
 
 const KiroProviderOptionsSchema = z.object({
@@ -566,7 +565,7 @@ const NormalizedStepProviderOptionsSchema = z.object({
   codex: z.object({
     baseUrl: z.string().min(1).optional(),
     networkAccess: z.boolean().optional(),
-    reasoningEffort: z.enum(CODEX_REASONING_EFFORT_VALUES).optional(),
+    reasoningEffort: ProviderEffortSchema.optional(),
     skills: z.object(CodexSkillsShape).strict().optional(),
   }).strict().optional(),
   opencode: z.object({
@@ -588,7 +587,7 @@ const NormalizedStepProviderOptionsSchema = z.object({
   claude: z.object({
     baseUrl: z.string().min(1).optional(),
     allowedTools: z.array(z.string()).optional(),
-    effort: z.enum(CLAUDE_EFFORT_VALUES).optional(),
+    effort: ProviderEffortSchema.optional(),
     skills: z.object(ClaudeSkillsShape).strict().optional(),
     sandbox: z.object({
       allowUnsandboxedCommands: z.boolean().optional(),
@@ -602,7 +601,7 @@ const NormalizedStepProviderOptionsSchema = z.object({
     transcriptPollIntervalMs: z.number().int().positive().optional(),
   }).strict().optional(),
   copilot: z.object({
-    effort: z.enum(COPILOT_EFFORT_VALUES).optional(),
+    effort: ProviderEffortSchema.optional(),
   }).strict().optional(),
   kiro: z.object({
     agent: z.string().min(1).optional(),

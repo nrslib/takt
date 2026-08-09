@@ -231,12 +231,12 @@ describe('loadGlobalConfig', () => {
       '          repo: true',
       '          unknown_skill: true',
     ]],
-    ['an invalid selector enum', [
+    ['an invalid selector effort type', [
       'takt_providers:',
       '  selector:',
       '    provider_options:',
       '      codex:',
-      '        reasoning_effort: turbo',
+      '        reasoning_effort: 42',
     ]],
   ])('should reject %s when loading global config', (_label, lines) => {
     mkdirSync(join(testHomeDir, '.takt'), { recursive: true });
@@ -489,7 +489,7 @@ describe('loadGlobalConfig', () => {
     ['an unknown nested selector option', {
       providerOptions: { codex: { skills: { repo: true, unknownSkill: true } } },
     }],
-    ['an invalid selector enum', { providerOptions: { codex: { reasoningEffort: 'turbo' } } }],
+    ['an invalid selector effort type', { providerOptions: { codex: { reasoningEffort: 42 } } }],
   ])('should reject %s when saving global config', (_label, selector) => {
     const taktDir = join(testHomeDir, '.takt');
     mkdirSync(taktDir, { recursive: true });

@@ -222,6 +222,7 @@ function isolatedOptions(
   fake: ReturnType<typeof createFakeCodex>,
   mode: 'success' | 'error' | 'abort' | 'retry' | 'invalid-json' | 'leader-exit-error' | 'leader-exit-success',
   abortSignal?: AbortSignal,
+  reasoningEffort = 'medium',
 ) {
   writeFileSync(fake.modePath, mode);
   return {
@@ -235,7 +236,7 @@ function isolatedOptions(
       required: ['selected_ids', 'rationale'],
     },
     model: 'gpt-test',
-    reasoningEffort: 'medium' as const,
+    reasoningEffort,
     baseUrl: 'https://example.test/v1',
     networkAccess: true,
     openaiApiKey: 'explicit-test-key',
@@ -340,6 +341,22 @@ describe('CodexClient strict read-only isolation', () => {
     }
     expect(existsSync(call!.workspacePath)).toBe(false);
     expect(existsSync(dirname(call!.workspacePath))).toBe(false);
+  });
+
+  it('should preserve provider-defined effort strings in strict Codex CLI config', async () => {
+    const fake = createFakeCodex();
+    const effort = 'vendor"level';
+
+    const result = await new CodexClient().callCustom(
+      'selector',
+      'Choose reviewers.',
+      'Return only the schema.',
+      isolatedOptions(fake, 'success', undefined, effort),
+    );
+
+    expect(result.status).toBe('done');
+    const [call] = readObservations(fake.logPath);
+    expect(call?.args).toContain(`model_reasoning_effort=${JSON.stringify(effort)}`);
   });
 
   it('should clean private assets after a terminal provider error', async () => {

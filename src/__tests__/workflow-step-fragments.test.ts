@@ -838,7 +838,7 @@ provider_options:
     const workflowPath = writeWorkflow(projectDir, 'nested-override-schema-error', `  - uses: valid-options
     provider_options:
       codex:
-        reasoning_effort: invalid${COMPLETE_CALLER_RULES}`, 'valid-options');
+        reasoning_effort: 42${COMPLETE_CALLER_RULES}`, 'valid-options');
 
     let error: unknown;
     try {
@@ -857,7 +857,7 @@ provider_options:
     writeProjectFragment(projectDir, 'invalid-options', `instruction: valid
 provider_options:
   codex:
-    reasoning_effort: invalid
+    reasoning_effort: 42
     network_access: false
 `);
     const workflowPath = writeWorkflow(projectDir, 'fragment-leaf-provenance', `  - uses: invalid-options

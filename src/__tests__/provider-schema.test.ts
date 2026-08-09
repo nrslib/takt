@@ -180,6 +180,29 @@ describe('Claude provider split (Zod)', () => {
   });
 });
 
+describe('provider effort values', () => {
+  it.each([
+    ['codex', { codex: { reasoning_effort: 'max' } }],
+    ['claude', { claude: { effort: 'vendor-level' } }],
+    ['copilot', { copilot: { effort: 'vendor-level' } }],
+  ])('accepts provider-specific effort strings for %s', (_provider, options) => {
+    expect(StepProviderOptionsSchema.parse(options)).toEqual(options);
+  });
+
+  it('trims provider-specific effort strings and rejects blank values', () => {
+    expect(StepProviderOptionsSchema.parse({
+      codex: { reasoning_effort: '  custom-level  ' },
+      claude: { effort: '  custom-level  ' },
+      copilot: { effort: '  custom-level  ' },
+    })).toEqual({
+      codex: { reasoning_effort: 'custom-level' },
+      claude: { effort: 'custom-level' },
+      copilot: { effort: 'custom-level' },
+    });
+    expect(() => StepProviderOptionsSchema.parse({ codex: { reasoning_effort: '   ' } })).toThrow(/effort/);
+  });
+});
+
 describe('Claude terminal provider contract', () => {
   beforeEach(() => {
     ProviderRegistry.resetInstance();

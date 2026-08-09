@@ -54,7 +54,7 @@ describe('assertExecProviderEffort and providerSupportsExecEffort consistency', 
   );
 });
 
-describe('assertExecProviderEffort sufficiency for type narrowing', () => {
+describe('assertExecProviderEffort provider capability checks', () => {
   it('should pass validation for claude provider with valid effort — no redundant check needed', () => {
     const effort: ExecEffort = 'high';
     expect(() =>
@@ -76,10 +76,22 @@ describe('assertExecProviderEffort sufficiency for type narrowing', () => {
     ).not.toThrow();
   });
 
-  it('should reject provider with unsupported effort before any downstream code runs', () => {
+  it('should accept arbitrary effort values and leave support to the provider', () => {
     expect(() =>
       assertExecProviderEffort('codex', 'max', 'test'),
-    ).toThrow('does not support effort "max"');
+    ).not.toThrow();
+    expect(() =>
+      assertExecProviderEffort('claude', 'experimental', 'test'),
+    ).not.toThrow();
+    expect(() =>
+      assertExecProviderEffort('copilot', 'vendor-level', 'test'),
+    ).not.toThrow();
+  });
+
+  it('should reject effort for providers without effort support', () => {
+    expect(() =>
+      assertExecProviderEffort('opencode', 'high', 'test'),
+    ).toThrow('does not support effort "high"');
   });
 
   it('should allow codex provider when effort is undefined', () => {

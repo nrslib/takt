@@ -1419,7 +1419,7 @@ describe('exec command setup', () => {
       .map((call) => call[1]);
     expect(effortOptionSets).toHaveLength(3);
     for (const options of effortOptionSets) {
-      expect(options.map((option) => option.value)).toEqual(['__default_effort__', 'low', 'medium', 'high', 'xhigh', 'max']);
+      expect(options.map((option) => option.value)).toEqual(['__default_effort__', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
       expect(options[0]?.label).toContain('Default');
     }
   });

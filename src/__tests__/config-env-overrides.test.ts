@@ -866,24 +866,40 @@ describe('config traced env overrides', () => {
     });
   });
 
-  it('project config は不正な codex reasoning_effort env override を拒否する', () => {
-    const projectDir = join(testRoot, 'project-invalid-codex-effort-env');
+  it('project config は任意の codex reasoning_effort env override を反映する', () => {
+    const projectDir = join(testRoot, 'project-custom-codex-effort-env');
     const configDir = getProjectConfigDir(projectDir);
     mkdirSync(configDir, { recursive: true });
     writeFileSync(join(configDir, 'config.yaml'), 'provider: claude\n', 'utf-8');
     process.env.TAKT_PROVIDER_OPTIONS_CODEX_REASONING_EFFORT = 'extreme';
 
-    expect(() => loadProjectConfig(projectDir)).toThrow(/reasoning_effort/);
+    expect(loadProjectConfig(projectDir).providerOptions).toEqual({
+      codex: { reasoningEffort: 'extreme' },
+    });
   });
 
-  it('project config は不正な claude effort env override を拒否する', () => {
-    const projectDir = join(testRoot, 'project-invalid-claude-effort-env');
+  it('project config は任意の claude effort env override を反映する', () => {
+    const projectDir = join(testRoot, 'project-custom-claude-effort-env');
     const configDir = getProjectConfigDir(projectDir);
     mkdirSync(configDir, { recursive: true });
     writeFileSync(join(configDir, 'config.yaml'), 'provider: claude\n', 'utf-8');
     process.env.TAKT_PROVIDER_OPTIONS_CLAUDE_EFFORT = 'impossible';
 
-    expect(() => loadProjectConfig(projectDir)).toThrow(/effort/);
+    expect(loadProjectConfig(projectDir).providerOptions).toEqual({
+      claude: { effort: 'impossible' },
+    });
+  });
+
+  it('project config は任意の copilot effort env override を反映する', () => {
+    const projectDir = join(testRoot, 'project-custom-copilot-effort-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), 'provider: copilot\n', 'utf-8');
+    process.env.TAKT_PROVIDER_OPTIONS_COPILOT_EFFORT = 'experimental';
+
+    expect(loadProjectConfig(projectDir).providerOptions).toEqual({
+      copilot: { effort: 'experimental' },
+    });
   });
 
   it('current logging env は global logging に反映する', () => {
