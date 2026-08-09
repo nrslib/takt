@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   getAllParallelSubSteps,
+  isDynamicParallelSubSteps,
   type WorkflowConfig,
   type WorkflowStep,
 } from '../core/models/index.js';
@@ -237,6 +238,93 @@ describe('experimental builtin workflow', () => {
       expect(getScenarioQueue()?.remaining).toBe(0);
     },
     60_000,
+  );
+
+  it(
+    'should run the TAKT experimental workflow with TAKT-aware implementation and review candidates',
+    async () => {
+      const language = 'en';
+      writeFileSync(join(projectDir, '.takt', 'config.yaml'), `language: ${language}\n`);
+      invalidateAllResolvedConfigCache();
+      const workflow = loadWorkflowFromFile(
+        join(getBuiltinWorkflowsDir(language), 'takt-experimental.yaml'),
+        projectDir,
+      );
+      const reviewStep = findWorkflowStep(workflow, 'review');
+      if (reviewStep.parallel === undefined || !isDynamicParallelSubSteps(reviewStep.parallel)) {
+        throw new Error('TAKT experimental review must use a dynamic parallel pool');
+      }
+      expect(reviewStep.parallel.pool.some((step) => step.name === 'testing-review')).toBe(true);
+      expect(reviewStep.parallel.pool.some((step) => step.name === 'frontend-review')).toBe(false);
+      expect(reviewStep.parallel.pool.some((step) => step.name === 'backend-review')).toBe(false);
+      const fixedReviewers = reviewStep.parallel.fixed.filter((step) =>
+        step.name === 'coding-review' || step.name === 'ai-antipattern-review',
+      );
+      expect(fixedReviewers).toHaveLength(2);
+      expect(fixedReviewers.every((step) => step.knowledgeContents?.some(({ content }) =>
+        content.includes('# TAKT Architecture Knowledge')) === true)).toBe(true);
+      const implementStep = findWorkflowStep(workflow, 'implement');
+      expect(implementStep.policyContents?.some(({ content }) =>
+        content.includes('# TAKT Test Execution Policy'))).toBe(true);
+      setMockScenario([
+        response(workflow, 'plan', 'planner', 'Requirements are clear and implementation is feasible'),
+        response(workflow, 'write_tests', 'coder', 'Test creation completed'),
+        selection(['testing'], 'The implementation changes test boundaries.'),
+        response(workflow, 'implement', 'coder', 'Implementation completed'),
+        selection([], 'The fixed reviewers cover the changed test path.'),
+        response(workflow, 'coding-review', 'coding-reviewer', 'approved'),
+        response(workflow, 'ai-antipattern-review', 'ai-antipattern-reviewer', 'approved'),
+        response(workflow, 'supervise', 'supervisor', 'approved'),
+      ]);
+      const engine = new WorkflowEngine(workflow, projectDir, 'Implement a TAKT testing change', {
+        projectCwd: projectDir,
+        provider: 'mock',
+        selectorProvider: SELECTOR_PROVIDER,
+        selectorGitCommandRunner: SELECTOR_GIT_COMMAND_RUNNER,
+        structuredCaller: new DefaultStructuredCaller(),
+      });
+      engines.push(engine);
+
+      const state = await engine.run();
+
+      expect(state.status, JSON.stringify({
+        currentStep: state.currentStep,
+        iteration: state.iteration,
+        remainingScenarios: getScenarioQueue()?.remaining,
+      })).toBe('completed');
+      const implementSelection = [...state.dynamicFacetSelections.values()]
+        .find((snapshot) => snapshot.step_name === 'implement');
+      expect(implementSelection).toMatchObject({
+        selected_ids: ['testing'],
+        selected_policy_refs: ['testing', 'takt-testing'],
+        selected_knowledge_refs: ['takt', 'unit-testing', 'e2e-testing'],
+      });
+      const reviewSelection = [...state.dynamicParallelSelections.values()]
+        .find((snapshot) => snapshot.step_name === 'review');
+      expect(reviewSelection).toMatchObject({
+        selected_pool_ids: [],
+        effective_selection_ids: [
+          'coding-review',
+          'ai-antipattern-review',
+        ],
+      });
+      const reportCalls = reviewReportCalls();
+      const fixedReviewReportCalls = reportCalls.filter((step) =>
+        step.name === 'coding-review' || step.name === 'ai-antipattern-review',
+      );
+      expect(fixedReviewReportCalls.map((step) => step.name).sort()).toEqual([
+        'ai-antipattern-review',
+        'coding-review',
+      ]);
+      expect(fixedReviewReportCalls.every((step) => step.knowledgeContents?.some(({ content }) =>
+        content.includes('# TAKT Architecture Knowledge')) === true)).toBe(true);
+      const implementReportStep = vi.mocked(runReportPhase).mock.calls
+        .map(([step]) => step)
+        .find((step) => step.name === 'implement');
+      expect(implementReportStep?.policyContents?.some(({ content }) =>
+        content.includes('# TAKT Test Execution Policy'))).toBe(true);
+      expect(getScenarioQueue()?.remaining).toBe(0);
+    },
   );
 
   it(

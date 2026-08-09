@@ -1,32 +1,25 @@
-name: experimental
-description: An experimental general-purpose coding workflow that dynamically selects review agents and remediation facets from the task and preceding reports.
+name: takt-experimental
+description: An experimental development workflow that injects TAKT-specific knowledge and testing policy, then dynamically selects implementation facets and review agents from the task and preceding reports.
 max_steps: 51
 initial_step: plan
 
 facet_pools:
   coding-facets:
     candidates:
-      - id: frontend
-        description: Handle UI, components, state management, accessibility, and presentation.
-        policy: design-fidelity
-        knowledge: [frontend, react]
-      - id: backend
-        description: Handle APIs, domain logic, server-side processing, and persistence.
-        knowledge: backend
       - id: cli
         description: Handle CLI commands, arguments, exit codes, configuration, logging, and existing CLI structure.
         policy: existing-system-respect
-        knowledge: existing-system
+        knowledge: [takt, existing-system]
       - id: testing
         description: Handle test design, test coverage, integration boundaries, and E2E boundaries.
-        policy: testing
-        knowledge: [unit-testing, e2e-testing]
+        policy: [testing, takt-testing]
+        knowledge: [takt, unit-testing, e2e-testing]
       - id: security
         description: Handle authentication, authorization, input validation, secrets, dependencies, and security boundaries.
-        knowledge: security
+        knowledge: [takt, security]
       - id: implementation-semantics
         description: Handle implementation semantics, contracts, state transitions, return values, and side effects.
-        knowledge: implementation-semantics
+        knowledge: [takt, implementation-semantics]
 
 steps:
   - name: plan
@@ -34,7 +27,7 @@ steps:
     uses: development-core-plan
     with:
       plan_policy: [design-planning]
-      plan_knowledge: [architecture, task-decomposition]
+      plan_knowledge: [takt, architecture, task-decomposition]
       plan_instruction: plan
       plan_report_format: plan
     rules:
@@ -49,8 +42,8 @@ steps:
     capabilities: [edit, enable-skills]
     uses: development-core-write-tests
     with:
-      testing_policy: [coding, testing]
-      testing_knowledge: [architecture, unit-testing, e2e-testing]
+      testing_policy: [coding, testing, takt-testing]
+      testing_knowledge: [takt, architecture, unit-testing, e2e-testing]
       testing_instruction: write-tests-first
     rules:
       - condition: Test creation completed
@@ -68,8 +61,8 @@ steps:
     capabilities: [edit, enable-skills]
     uses: development-core-implement
     with:
-      development_policy: [coding, testing]
-      development_knowledge: [architecture, existing-system]
+      development_policy: [coding, testing, takt-testing]
+      development_knowledge: [takt, architecture, task-decomposition]
       implementation_instruction: implement
     dynamic_facets:
       pool: coding-facets
@@ -88,7 +81,65 @@ steps:
   - name: review
     uses: experimental-review
     with:
-      review_knowledge_additions: []
+      review_knowledge_additions: [takt]
+    parallel:
+      pool:
+        - name: architecture-review
+          description: Review module structure, responsibility boundaries, dependency direction, and call paths.
+          capabilities: readonly
+          tags: [review]
+          edit: false
+          persona: architecture-reviewer
+          policy: [contract-change, review]
+          knowledge: [takt, architecture]
+          instruction: review-arch
+          pass_previous_response: false
+          output_contracts:
+            report:
+              - name: architecture-review.md
+                format: architecture-review
+        - name: cli-review
+          description: Review CLI commands, arguments, exit codes, configuration, logging, and existing CLI structure.
+          capabilities: readonly
+          tags: [review]
+          edit: false
+          persona: coding-reviewer
+          policy: [contract-change, review, coding]
+          knowledge: [takt, architecture, existing-system]
+          instruction: review-coding
+          pass_previous_response: false
+          output_contracts:
+            report:
+              - name: cli-review.md
+                format: coding-review
+        - name: security-review
+          description: Review authentication, authorization, input validation, secrets, dependencies, and security boundaries.
+          capabilities: readonly
+          tags: [review]
+          edit: false
+          persona: security-reviewer
+          policy: [contract-change, review]
+          knowledge: [takt, security]
+          instruction: review-security
+          pass_previous_response: false
+          output_contracts:
+            report:
+              - name: security-review.md
+                format: security-review
+        - name: testing-review
+          description: Review test coverage, test design, integration boundaries, and E2E boundaries.
+          capabilities: readonly
+          tags: [review]
+          edit: false
+          persona: testing-reviewer
+          policy: [contract-change, review, testing]
+          knowledge: [takt, unit-testing, e2e-testing]
+          instruction: review-test
+          pass_previous_response: false
+          output_contracts:
+            report:
+              - name: testing-review.md
+                format: testing-review
     rules:
       self:
         - condition: all("approved")
@@ -101,8 +152,6 @@ steps:
           - condition: needs_fix
         ai-antipattern-review: *reviewer-rules
         architecture-review: *reviewer-rules
-        frontend-review: *reviewer-rules
-        backend-review: *reviewer-rules
         cli-review: *reviewer-rules
         security-review: *reviewer-rules
         testing-review: *reviewer-rules
@@ -110,8 +159,8 @@ steps:
   - name: fix
     capabilities: [edit, enable-skills]
     uses: fix
-    policy: [contract-change, coding, testing, review, ai-antipattern]
-    knowledge: architecture
+    policy: [contract-change, coding, testing, takt-testing, review, ai-antipattern]
+    knowledge: [takt, architecture]
     dynamic_facets:
       pool: coding-facets
     rules:
@@ -129,7 +178,7 @@ steps:
     uses: review-supervise-to-complete
     tags: [review, final-gate, supervise]
     policy: [contract-change, coding, testing, review, ai-antipattern]
-    knowledge: [architecture, unit-testing, e2e-testing]
+    knowledge: [takt, architecture, unit-testing, e2e-testing]
     rules:
       - condition: BLOCKED
         next: ABORT

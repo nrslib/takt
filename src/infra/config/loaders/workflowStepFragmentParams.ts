@@ -495,16 +495,35 @@ function bindStepFields(
         ]));
         break;
       case 'parallel':
-        if (!Array.isArray(value)) {
+        if (!Array.isArray(value) && !isPlainObject(value)) {
           assertNoParamReferences(value, options, fieldPath);
           expanded[key] = value;
           break;
         }
-        expanded[key] = value.map((child, index) => (
-          isPlainObject(child)
-            ? bindStepFields(child, declarations, bindings, options, [...fieldPath, index])
-            : (assertNoParamReferences(child, options, [...fieldPath, index]), child)
-        ));
+        if (Array.isArray(value)) {
+          expanded[key] = value.map((child, index) => (
+            isPlainObject(child)
+              ? bindStepFields(child, declarations, bindings, options, [...fieldPath, index])
+              : (assertNoParamReferences(child, options, [...fieldPath, index]), child)
+          ));
+          break;
+        }
+        expanded[key] = Object.fromEntries(Object.entries(value).map(([branch, children]) => {
+          const branchPath = [...fieldPath, branch];
+          if (branch !== 'fixed' && branch !== 'pool') {
+            assertNoParamReferences(children, options, branchPath);
+            return [branch, children];
+          }
+          if (!Array.isArray(children)) {
+            assertNoParamReferences(children, options, branchPath);
+            return [branch, children];
+          }
+          return [branch, children.map((child, index) => (
+            isPlainObject(child)
+              ? bindStepFields(child, declarations, bindings, options, [...branchPath, index])
+              : (assertNoParamReferences(child, options, [...branchPath, index]), child)
+          ))];
+        }));
         break;
       default:
         assertNoParamReferences(value, options, fieldPath);

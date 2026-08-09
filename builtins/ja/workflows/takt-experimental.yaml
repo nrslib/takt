@@ -1,32 +1,25 @@
-name: experimental
-description: タスクと直前のレポートに応じてレビューエージェント数と修正用ファセットを動的に選択する実験的な汎用コーディングワークフロー。
+name: takt-experimental
+description: TAKT固有の知識とテストポリシーを注入し、タスクと直前のレポートに応じて実装ファセットとレビューエージェントを動的に選択する実験的な開発ワークフロー。
 max_steps: 51
 initial_step: plan
 
 facet_pools:
   coding-facets:
     candidates:
-      - id: frontend
-        description: UI、コンポーネント、状態管理、アクセシビリティ、画面表示を扱う
-        policy: design-fidelity
-        knowledge: [frontend, react]
-      - id: backend
-        description: API、ドメインロジック、サーバー側処理、永続化を扱う
-        knowledge: backend
       - id: cli
         description: CLIコマンド、引数、終了コード、設定、ログ、既存CLI構造を扱う
         policy: existing-system-respect
-        knowledge: existing-system
+        knowledge: [takt, existing-system]
       - id: testing
         description: テスト設計、テストカバレッジ、統合境界、E2E境界を扱う
-        policy: testing
-        knowledge: [unit-testing, e2e-testing]
+        policy: [testing, takt-testing]
+        knowledge: [takt, unit-testing, e2e-testing]
       - id: security
         description: 認証認可、入力検証、機密情報、依存関係、セキュリティ境界を扱う
-        knowledge: security
+        knowledge: [takt, security]
       - id: implementation-semantics
         description: 実装の意味、契約、状態遷移、戻り値、副作用を扱う
-        knowledge: implementation-semantics
+        knowledge: [takt, implementation-semantics]
 
 steps:
   - name: plan
@@ -34,7 +27,7 @@ steps:
     uses: development-core-plan
     with:
       plan_policy: [design-planning]
-      plan_knowledge: [architecture, task-decomposition]
+      plan_knowledge: [takt, architecture, task-decomposition]
       plan_instruction: plan
       plan_report_format: plan
     rules:
@@ -49,8 +42,8 @@ steps:
     capabilities: [edit, enable-skills]
     uses: development-core-write-tests
     with:
-      testing_policy: [coding, testing]
-      testing_knowledge: [architecture, unit-testing, e2e-testing]
+      testing_policy: [coding, testing, takt-testing]
+      testing_knowledge: [takt, architecture, unit-testing, e2e-testing]
       testing_instruction: write-tests-first
     rules:
       - condition: テスト作成が完了した
@@ -68,8 +61,8 @@ steps:
     capabilities: [edit, enable-skills]
     uses: development-core-implement
     with:
-      development_policy: [coding, testing]
-      development_knowledge: [architecture, existing-system]
+      development_policy: [coding, testing, takt-testing]
+      development_knowledge: [takt, architecture, task-decomposition]
       implementation_instruction: implement
     dynamic_facets:
       pool: coding-facets
@@ -88,7 +81,65 @@ steps:
   - name: review
     uses: experimental-review
     with:
-      review_knowledge_additions: []
+      review_knowledge_additions: [takt]
+    parallel:
+      pool:
+        - name: architecture-review
+          description: モジュール構造、責務分割、依存方向、呼び出し経路をレビューする
+          capabilities: readonly
+          tags: [review]
+          edit: false
+          persona: architecture-reviewer
+          policy: [contract-change, review]
+          knowledge: [takt, architecture]
+          instruction: review-arch
+          pass_previous_response: false
+          output_contracts:
+            report:
+              - name: architecture-review.md
+                format: architecture-review
+        - name: cli-review
+          description: CLIコマンド、引数、終了コード、設定、ログ、既存CLI構造をレビューする
+          capabilities: readonly
+          tags: [review]
+          edit: false
+          persona: coding-reviewer
+          policy: [contract-change, review, coding]
+          knowledge: [takt, architecture, existing-system]
+          instruction: review-coding
+          pass_previous_response: false
+          output_contracts:
+            report:
+              - name: cli-review.md
+                format: coding-review
+        - name: security-review
+          description: 認証認可、入力検証、機密情報、依存関係、セキュリティ境界をレビューする
+          capabilities: readonly
+          tags: [review]
+          edit: false
+          persona: security-reviewer
+          policy: [contract-change, review]
+          knowledge: [takt, security]
+          instruction: review-security
+          pass_previous_response: false
+          output_contracts:
+            report:
+              - name: security-review.md
+                format: security-review
+        - name: testing-review
+          description: テストカバレッジ、テスト設計、統合境界、E2E境界をレビューする
+          capabilities: readonly
+          tags: [review]
+          edit: false
+          persona: testing-reviewer
+          policy: [contract-change, review, testing]
+          knowledge: [takt, unit-testing, e2e-testing]
+          instruction: review-test
+          pass_previous_response: false
+          output_contracts:
+            report:
+              - name: testing-review.md
+                format: testing-review
     rules:
       self:
         - condition: all("approved")
@@ -101,8 +152,6 @@ steps:
           - condition: needs_fix
         ai-antipattern-review: *reviewer-rules
         architecture-review: *reviewer-rules
-        frontend-review: *reviewer-rules
-        backend-review: *reviewer-rules
         cli-review: *reviewer-rules
         security-review: *reviewer-rules
         testing-review: *reviewer-rules
@@ -110,8 +159,8 @@ steps:
   - name: fix
     capabilities: [edit, enable-skills]
     uses: fix
-    policy: [contract-change, coding, testing, review, ai-antipattern]
-    knowledge: architecture
+    policy: [contract-change, coding, testing, takt-testing, review, ai-antipattern]
+    knowledge: [takt, architecture]
     dynamic_facets:
       pool: coding-facets
     rules:
@@ -129,7 +178,7 @@ steps:
     uses: review-supervise-to-complete
     tags: [review, final-gate, supervise]
     policy: [contract-change, coding, testing, review, ai-antipattern]
-    knowledge: [architecture, unit-testing, e2e-testing]
+    knowledge: [takt, architecture, unit-testing, e2e-testing]
     rules:
       - condition: BLOCKED
         next: ABORT

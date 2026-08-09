@@ -1,3 +1,8 @@
+params:
+  review_knowledge_additions:
+    type: facet_ref[]
+    facet_kind: knowledge
+
 name: review
 tags: [review]
 parallel:
@@ -8,7 +13,11 @@ parallel:
       edit: false
       persona: coding-reviewer
       policy: [contract-change, review, coding, testing]
-      knowledge: [architecture, unit-testing, e2e-testing]
+      knowledge:
+        - architecture
+        - unit-testing
+        - e2e-testing
+        - $param: review_knowledge_additions
       instruction: review-coding
       pass_previous_response: false
       output_contracts:
@@ -21,7 +30,9 @@ parallel:
       edit: false
       persona: ai-antipattern-reviewer
       policy: [contract-change, review, ai-antipattern]
-      knowledge: architecture
+      knowledge:
+        - architecture
+        - $param: review_knowledge_additions
       instruction: ai-antipattern-review
       pass_previous_response: false
       output_contracts:

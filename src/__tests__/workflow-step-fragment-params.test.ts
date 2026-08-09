@@ -145,6 +145,53 @@ parallel:
     expect(result.raw).toHaveProperty('steps.0.parallel.0.knowledge', ['reviewing']);
   });
 
+  it('binds params recursively in dynamic parallel branches', () => {
+    write(projectDir, '.takt/steps/dynamic-parallel.yaml', `params:
+  child_knowledge:
+    type: facet_ref[]
+    facet_kind: knowledge
+parallel:
+  fixed:
+    - name: fixed-review
+      instruction: review
+      knowledge:
+        - $param: child_knowledge
+  pool:
+    - name: pool-review
+      instruction: review
+      knowledge:
+        - base-knowledge
+        - $param: child_knowledge
+  selection:
+    mode: replace
+`);
+
+    const result = resolve({
+      steps: [caller(
+        'dynamic-parallel',
+        { child_knowledge: ['reviewing'] },
+        {
+          rules: {
+            self: RULES,
+            parallel: {
+              'fixed-review': RULES,
+              'pool-review': RULES,
+            },
+          },
+        },
+      )],
+    });
+
+    expect(result.raw).toHaveProperty(
+      'steps.0.parallel.fixed.0.knowledge',
+      ['reviewing'],
+    );
+    expect(result.raw).toHaveProperty(
+      'steps.0.parallel.pool.0.knowledge',
+      ['base-knowledge', 'reviewing'],
+    );
+  });
+
   it('splices empty and populated facet_ref arrays into mixed facet lists', () => {
     write(projectDir, '.takt/steps/composed.yaml', `params:
   policy_additions:
