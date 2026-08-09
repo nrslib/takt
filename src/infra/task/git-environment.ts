@@ -14,7 +14,7 @@ export async function buildSafeGitEnvironment(
     ...process.env,
     GIT_LITERAL_PATHSPECS: '1',
   };
-  delete environment.GIT_CONFIG_PARAMETERS;
+  removeInheritedGitCommandConfig(environment);
   delete environment.GIT_GLOB_PATHSPECS;
   delete environment.GIT_NOGLOB_PATHSPECS;
   delete environment.GIT_ICASE_PATHSPECS;
@@ -43,6 +43,19 @@ export async function buildSafeGitEnvironment(
     environment[`GIT_CONFIG_VALUE_${index}`] = value;
   });
   return environment;
+}
+
+function removeInheritedGitCommandConfig(environment: NodeJS.ProcessEnv): void {
+  for (const key of Object.keys(environment)) {
+    const normalizedKey = key.toUpperCase();
+    if (normalizedKey === 'GIT_CONFIG'
+      || normalizedKey === 'GIT_CONFIG_COUNT'
+      || normalizedKey === 'GIT_CONFIG_PARAMETERS'
+      || normalizedKey.startsWith('GIT_CONFIG_KEY_')
+      || normalizedKey.startsWith('GIT_CONFIG_VALUE_')) {
+      delete environment[key];
+    }
+  }
 }
 
 async function getFilterConfigNames(

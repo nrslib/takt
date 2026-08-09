@@ -23,6 +23,7 @@ import { dirname, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { stageAndCommit } from '../infra/task/git.js';
+import { buildSafeGitEnvironment } from '../infra/task/git-environment.js';
 import { getProjectWorkflowsDir, getProjectFacetDir } from '../infra/config/paths.js';
 import { VALID_FACET_TYPES, parseFacetType } from '../features/config/facetTypes.js';
 import { ensureWorktreeTaktRuntimeProtection } from '../infra/task/projectLocalTaktSync.js';
@@ -139,6 +140,51 @@ describe('stageAndCommit', () => {
     } finally {
       rmSync(decoyDir, { recursive: true, force: true });
     }
+  });
+
+  it('should commit successfully when inherited indexed Git config is incomplete', async () => {
+    writeFileSync(join(testDir, 'app.ts'), 'export const complete = true;');
+    vi.stubEnv('GIT_CONFIG_COUNT', '3');
+    vi.stubEnv('GIT_CONFIG_KEY_2', undefined);
+    vi.stubEnv('GIT_CONFIG_VALUE_2', undefined);
+
+    const hash = await stageAndCommit(testDir, 'ignore incomplete inherited config');
+
+    expect(hash).toBeDefined();
+  });
+
+  it('should return only generated command config pairs when inherited keys use mixed case', async () => {
+    const globalConfig = join(testDir, 'global-git-config');
+    const systemConfig = join(testDir, 'system-git-config');
+    writeFileSync(globalConfig, '');
+    writeFileSync(systemConfig, '');
+    vi.stubEnv('GIT_CONFIG_GLOBAL', globalConfig);
+    vi.stubEnv('GIT_CONFIG_SYSTEM', systemConfig);
+    vi.stubEnv('GIT_CONFIG_NOSYSTEM', '1');
+    vi.stubEnv('gIt_CoNfIg', join(testDir, 'stale-config'));
+    vi.stubEnv('gIt_CoNfIg_CoUnT', '43');
+    vi.stubEnv('gIt_CoNfIg_PaRaMeTeRs', "'unsafe.key=value'");
+    vi.stubEnv('gIt_CoNfIg_KeY_42', 'unsafe.key');
+    vi.stubEnv('gIt_CoNfIg_VaLuE_42', 'unsafe-value');
+
+    const environment = await buildSafeGitEnvironment(testDir, { allowGitFilters: true });
+    const commandConfigKeys = Object.keys(environment)
+      .filter((key) => /^GIT_CONFIG(?:$|_COUNT$|_PARAMETERS$|_(?:KEY|VALUE)_)/iu.test(key))
+      .sort();
+
+    expect(commandConfigKeys).toEqual([
+      'GIT_CONFIG_COUNT',
+      'GIT_CONFIG_KEY_0',
+      'GIT_CONFIG_VALUE_0',
+    ]);
+    expect(environment).toMatchObject({
+      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: 'core.hooksPath',
+      GIT_CONFIG_GLOBAL: globalConfig,
+      GIT_CONFIG_NOSYSTEM: '1',
+      GIT_CONFIG_SYSTEM: systemConfig,
+    });
+    expect(environment.GIT_CONFIG_VALUE_0).toBeDefined();
   });
 
   it('should commit .takt/.gitignore while leaving runtime artifacts uncommitted', async () => {

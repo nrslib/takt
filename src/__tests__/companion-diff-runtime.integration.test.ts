@@ -442,6 +442,25 @@ describe('CT-COMP-05 companion cumulative diff reader', () => {
     expect(existsSync(markerPath)).toBe(false);
   });
 
+  it('should use cwd filter isolation when inherited GIT_CONFIG points to an alternate config', async () => {
+    const { root, baseline } = createRepositoryFixture('inherited-alternate-config');
+    const alternateConfig = join(root, 'alternate-git-config');
+    const markerPath = join(root, 'alternate-config-filter-marker');
+    const filterPath = join(root, 'alternate-config-filter.sh');
+    writeFileSync(alternateConfig, '[core]\n\tbare = true\n', 'utf8');
+    writeFileSync(filterPath, `#!/bin/sh\ntouch "${markerPath}"\ncat\n`, { mode: 0o700 });
+    execFileSync('git', ['config', '--local', 'filter.observer.clean', filterPath], { cwd: root });
+    execFileSync('git', ['config', '--local', 'filter.observer.required', 'true'], { cwd: root });
+    writeFileSync(join(root, '.gitattributes'), 'tracked.txt filter=observer\n', 'utf8');
+    writeFileSync(join(root, 'tracked.txt'), 'after\n', 'utf8');
+    vi.stubEnv('GIT_CONFIG', alternateConfig);
+
+    const snapshot = await readSnapshot(new GitCompanionDiffReader(), root, baseline);
+
+    expect(snapshot.content).toContain('+after');
+    expect(existsSync(markerPath)).toBe(false);
+  });
+
   it('should preserve content at the byte limit and truncate only above it', async () => {
     const root = mkdtempSync(join(tmpdir(), 'takt-companion-boundary-diff-'));
     roots.push(root);
