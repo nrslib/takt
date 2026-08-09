@@ -23,12 +23,26 @@ import { compareBinaryStrings } from '../shared/utils/binary-string-comparator.j
 import { verifiedFindingEvidenceFixture } from './helpers/finding-evidence.js';
 import { storedRawReconcileProvenance } from './helpers/finding-integrity.js';
 import {
+  applyFindingLedgerFixtureRevision,
   authorizeFindingLedgerFixture,
   canonicalRawFindingFixture,
   rawCanonicalSnapshotFixture,
 } from './helpers/finding-lifecycle-fixture.js';
 import { landUnownedConflictRawClaims } from '../core/workflow/findings/conflict-claim-landing.js';
 import { refreshActiveConflictAdjudicationSnapshots } from '../core/workflow/findings/conflict-adjudication-model.js';
+import {
+  computeConflictRawClaimLandingId,
+  computeConflictRawClaimSnapshotDigest,
+} from '../core/models/finding-contract-identity.js';
+import { finalizeInterpretationCaseProjection } from '../core/workflow/findings/interpretation-case-finalizer.js';
+import {
+  appendRawFindingsWithCanonicalSnapshots,
+  createRawCanonicalSnapshot,
+} from '../core/workflow/findings/raw-canonical-snapshot.js';
+import {
+  OBSERVATION,
+  taintedItems,
+} from './helpers/finding-interpretation-case-store-fixture.js';
 
 const WORKFLOW_NAME = 'peer-review';
 function makeRawFinding(
@@ -307,6 +321,168 @@ describe('reconciled conflict lifecycle history order', () => {
 
     expect(secondRound.conflictRawClaimLandings.map((landing) => landing.rawFindingId))
       .toEqual([firstRawFindingId, secondRawFindingId]);
+  });
+
+  it('preserves existing interpretation landings and appends a later case landing', () => {
+    const existingLedger = makeLedger(cwd);
+    const conflict = existingLedger.conflicts[0]!;
+    const existingLandings = existingLedger.conflictRawClaimLandings;
+    const candidateItems = Array.from({ length: 64 }, (_, index) => `raw-new-${index}`)
+      .map((rawFindingId) => taintedItems({
+        rawFindingIds: [rawFindingId],
+        ledger: existingLedger,
+        reviewerPersonaKey: 'conflict-history-reviewer-new',
+      })[0]!);
+    const newItem = candidateItems.find((item) => {
+      const snapshot = createRawCanonicalSnapshot({
+        item,
+        capturedAt: OBSERVATION,
+      });
+      const landingId = computeConflictRawClaimLandingId({
+        conflictId: conflict.id,
+        rawFindingId: item.canonical.rawFindingId,
+        rawCanonicalSnapshotId: snapshot.rawCanonicalSnapshotId,
+        rawPayloadDigest: snapshot.rawPayloadDigest,
+        claimSnapshotDigest: computeConflictRawClaimSnapshotDigest(snapshot),
+      });
+      return compareBinaryStrings(landingId, existingLandings[0]!.rawClaimLandingId) < 0;
+    });
+    if (newItem === undefined) {
+      throw new Error('Could not create a later landing that sorts before the existing history');
+    }
+
+    const caseId = 'conflict-history-finalize-case';
+    const existingHolding = existingLedger.findings.find(
+      (finding) => finding.id === existingLandings[0]!.holdingFindingId,
+    );
+    if (existingHolding?.provisional === undefined) {
+      throw new Error('Expected an existing conflict holding provisional');
+    }
+    const newHolding = {
+      ...existingHolding,
+      id: 'F-0099',
+      lifecycle: 'new' as const,
+      revision: 1,
+      evidenceIds: [],
+      rawFindingIds: [newItem.canonical.rawFindingId],
+      firstSeen: { ...OBSERVATION },
+      lastSeen: { ...OBSERVATION },
+      reviewers: [newItem.canonical.reviewer],
+      title: newItem.canonical.title ?? 'Interpretation conflict holding',
+      description: newItem.canonical.description ?? 'Interpretation conflict holding.',
+      target: newItem.wire.target,
+      targetIdentityHash: newItem.canonical.targetIdentityHash,
+      claimIdentityHash: newItem.canonical.claimIdentityHash,
+      semanticClaimIdentityHash: newItem.canonical.semanticClaimIdentityHash,
+      provisional: {
+        ...existingHolding.provisional,
+        stableKey: `${conflict.id}-${newItem.canonical.rawFindingId}`,
+        lineageKey: newItem.canonical.lineageKey,
+        sourceRawFindingIds: [newItem.canonical.rawFindingId],
+        reason: `Interpretation case conflicts with finding "${conflict.findingIds[0]}".`,
+        recoveryReviewerStableKey: newItem.canonical.reviewerStableKey,
+        firstObservedAt: { ...OBSERVATION },
+        lastObservedAt: { ...OBSERVATION },
+      },
+    };
+    const provisionalFinding = {
+      kind: 'raw-adjudication-unresolved' as const,
+      stableKey: newHolding.provisional.stableKey,
+      lineageKey: newHolding.provisional.lineageKey,
+      sourceRawFindingIds: [newItem.canonical.rawFindingId],
+      reason: `Interpretation case conflicts with finding "${conflict.findingIds[0]}".`,
+      title: newItem.canonical.title,
+      severity: newItem.canonical.severity,
+      ...(newItem.canonical.description === undefined
+        ? {}
+        : { description: newItem.canonical.description }),
+      ...(newItem.canonical.suggestion === undefined
+        ? {}
+        : { suggestion: newItem.canonical.suggestion }),
+      reviewers: [newItem.canonical.reviewer],
+      target: newItem.wire.target,
+      targetIdentityHash: newItem.canonical.targetIdentityHash,
+      claimIdentityHash: newItem.canonical.claimIdentityHash,
+      semanticClaimIdentityHash: newItem.canonical.semanticClaimIdentityHash,
+      recoveryReviewerStableKey: newItem.canonical.reviewerStableKey,
+    };
+    const prepared = {
+      cases: [{
+        caseId,
+        lineageKey: newItem.canonical.lineageKey,
+        semanticProjectionDigest: newItem.canonical.semanticClaimIdentityHash,
+        rawFindingIds: [newItem.canonical.rawFindingId],
+        attemptId: null,
+        decision: {
+          kind: 'open_conflict' as const,
+          targetFindingId: conflict.findingIds[0]!,
+        },
+        directSnapshot: {
+          roundIdentity: '1'.repeat(64),
+          policyClass: 'general' as const,
+        },
+        directItems: [newItem],
+        action: {
+          kind: 'open_product_conflict' as const,
+          conflict: {
+            findingIds: [...conflict.findingIds],
+            rawFindingIds: [newItem.canonical.rawFindingId],
+            description: provisionalFinding.reason,
+          },
+          provisionalFinding,
+        },
+      }],
+      managerOutput: makeManagerOutput(newItem.canonical.rawFindingId),
+      provisionalFindings: [provisionalFinding],
+    };
+    let settled = appendRawFindingsWithCanonicalSnapshots({
+      ledger: existingLedger,
+      items: [newItem],
+      capturedAt: OBSERVATION,
+    });
+    settled = applyFindingLedgerFixtureRevision({
+      ledger: settled,
+      entityKind: 'finding',
+      entity: newHolding,
+      contributionOrigin: {
+        kind: 'interpretation_case',
+        caseId,
+      },
+      sourceRawFindingId: newItem.canonical.rawFindingId,
+    });
+    const currentConflict = settled.conflicts.find(({ id }) => id === conflict.id);
+    if (currentConflict === undefined) {
+      throw new Error(`Existing conflict "${conflict.id}" is missing`);
+    }
+    settled = applyFindingLedgerFixtureRevision({
+      ledger: settled,
+      entityKind: 'conflict',
+      entity: {
+        ...currentConflict,
+        rawFindingIds: [
+          ...currentConflict.rawFindingIds,
+          newItem.canonical.rawFindingId,
+        ],
+        lastSeen: { ...OBSERVATION },
+        revision: currentConflict.revision + 1,
+      },
+      contributionOrigin: {
+        kind: 'interpretation_case',
+        caseId,
+      },
+      sourceRawFindingId: newItem.canonical.rawFindingId,
+    });
+    const finalized = finalizeInterpretationCaseProjection({
+      ledger: settled,
+      prepared,
+      observation: OBSERVATION,
+    });
+
+    expect(finalized.conflictRawClaimLandings.map((landing) => landing.rawFindingId))
+      .toEqual([
+        ...existingLandings.map((landing) => landing.rawFindingId),
+        newItem.canonical.rawFindingId,
+      ]);
   });
 
   it('preserves completed decisions and appends lifecycle authority through reconcile, persistence, and reservation', async () => {
