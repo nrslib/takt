@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { devNull } from 'node:os';
 
 interface SafeGitEnvironmentOptions {
@@ -6,10 +6,10 @@ interface SafeGitEnvironmentOptions {
   readonly allowGitFilters?: boolean;
 }
 
-export function buildSafeGitEnvironment(
+export async function buildSafeGitEnvironment(
   cwd: string,
   options: SafeGitEnvironmentOptions,
-): NodeJS.ProcessEnv {
+): Promise<NodeJS.ProcessEnv> {
   const configEntries: Array<readonly [string, string]> = [];
 
   if (!options.allowGitHooks) {
@@ -17,9 +17,9 @@ export function buildSafeGitEnvironment(
   }
 
   if (!options.allowGitFilters) {
-    configEntries.push(...getFilterConfigNames(cwd).map((configName) => [
+    configEntries.push(...(await getFilterConfigNames(cwd)).map((configName) => [
       configName,
-      configName.endsWith('.required') ? 'false' : '',
+      configName.toLowerCase().endsWith('.required') ? 'false' : '',
     ] as const));
   }
 
@@ -40,20 +40,31 @@ export function buildSafeGitEnvironment(
   return environment;
 }
 
-function getFilterConfigNames(cwd: string): string[] {
+async function getFilterConfigNames(cwd: string): Promise<string[]> {
   try {
-    const output = execFileSync(
-      'git',
-      ['config', '--local', '--name-only', '--get-regexp', '^filter\\..*\\.(clean|smudge|process|required)$'],
-      { cwd, stdio: 'pipe', encoding: 'utf-8' },
-    );
-    return output.trim().split('\n').filter(Boolean);
+    const stdout = await readGitConfigNames(cwd);
+    const names = stdout.trim().split('\n').filter(Boolean);
+    return [...new Map(names.map((name) => [name.toLowerCase(), name])).values()];
   } catch (error) {
     if (isNoMatchingGitConfig(error)) return [];
     throw error;
   }
 }
 
+function readGitConfigNames(cwd: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      'git',
+      ['config', '--name-only', '--get-regexp', '^filter\\..*\\.(clean|smudge|process|required)$'],
+      { cwd, encoding: 'utf-8' },
+      (error, stdout) => {
+        if (error !== null) reject(error);
+        else resolve(stdout);
+      },
+    );
+  });
+}
+
 function isNoMatchingGitConfig(error: unknown): boolean {
-  return error instanceof Error && 'status' in error && error.status === 1;
+  return error instanceof Error && 'code' in error && error.code === 1;
 }

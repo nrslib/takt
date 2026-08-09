@@ -10,6 +10,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('node:child_process', () => ({
+  execFile: vi.fn((
+    _file: string,
+    _args: readonly string[],
+    _options: object,
+    callback: (error: Error | null, stdout: string, stderr: string) => void,
+  ) => callback(null, '', '')),
   execFileSync: vi.fn(),
 }));
 
@@ -55,12 +61,12 @@ beforeEach(() => {
 });
 
 describe('autoCommitAndPush — branch parameter', () => {
-  it('uses materializeCloneHeadToRootBranch when branch is provided', () => {
+  it('uses materializeCloneHeadToRootBranch when branch is provided', async () => {
     // Given: changes exist
     setupSuccessfulCommit();
 
     // When: called with a branch
-    const result = autoCommitAndPush('/tmp/clone', 'my-task', '/project', 'feat/my-branch');
+    const result = await autoCommitAndPush('/tmp/clone', 'my-task', '/project', 'feat/my-branch');
 
     // Then: relay push is used
     expect(mockMaterializeCloneHeadToRootBranch).toHaveBeenCalledWith(
@@ -73,12 +79,12 @@ describe('autoCommitAndPush — branch parameter', () => {
     expect(result.localPushFailed).toBeUndefined();
   });
 
-  it('does not call git push <projectDir> HEAD when branch is provided', () => {
+  it('does not call git push <projectDir> HEAD when branch is provided', async () => {
     // Given
     setupSuccessfulCommit();
 
     // When
-    autoCommitAndPush('/tmp/clone', 'my-task', '/project', 'feat/my-branch');
+    await autoCommitAndPush('/tmp/clone', 'my-task', '/project', 'feat/my-branch');
 
     // Then: the old unsafe push pattern is NOT used
     const hasDirectPush = mockExecFileSync.mock.calls.some(call => {
@@ -88,12 +94,12 @@ describe('autoCommitAndPush — branch parameter', () => {
     expect(hasDirectPush).toBe(false);
   });
 
-  it('falls back to git push <projectDir> HEAD when branch is not provided', () => {
+  it('falls back to git push <projectDir> HEAD when branch is not provided', async () => {
     // Given
     setupSuccessfulCommit();
 
     // When: called without branch (backward-compat path)
-    const result = autoCommitAndPush('/tmp/clone', 'my-task', '/project');
+    const result = await autoCommitAndPush('/tmp/clone', 'my-task', '/project');
 
     // Then: relay is NOT used
     expect(mockMaterializeCloneHeadToRootBranch).not.toHaveBeenCalled();
@@ -107,7 +113,7 @@ describe('autoCommitAndPush — branch parameter', () => {
     expect(result.success).toBe(true);
   });
 
-  it('returns localPushFailed: true when root branch materialization fails after commit creation', () => {
+  it('returns localPushFailed: true when root branch materialization fails after commit creation', async () => {
     // Given: commit succeeds but materialization throws
     setupSuccessfulCommit();
     mockMaterializeCloneHeadToRootBranch.mockImplementation(() => {
@@ -115,7 +121,7 @@ describe('autoCommitAndPush — branch parameter', () => {
     });
 
     // When
-    const result = autoCommitAndPush('/tmp/clone', 'my-task', '/project', 'feat/my-branch');
+    const result = await autoCommitAndPush('/tmp/clone', 'my-task', '/project', 'feat/my-branch');
 
     // Then: commit is preserved, but push failure is reported
     expect(result.success).toBe(true);
@@ -125,21 +131,21 @@ describe('autoCommitAndPush — branch parameter', () => {
     expect(result.message).not.toContain('Auto-commit failed');
   });
 
-  it('returns success: false when commit itself fails (with or without branch)', () => {
+  it('returns success: false when commit itself fails (with or without branch)', async () => {
     // Given: git add throws
     mockExecFileSync.mockImplementation(() => {
       throw new Error('fatal: not a git repository');
     });
 
     // When
-    const result = autoCommitAndPush('/tmp/clone', 'my-task', '/project', 'feat/my-branch');
+    const result = await autoCommitAndPush('/tmp/clone', 'my-task', '/project', 'feat/my-branch');
 
     // Then: failure is reported, relay is never attempted
     expect(result.success).toBe(false);
     expect(mockMaterializeCloneHeadToRootBranch).not.toHaveBeenCalled();
   });
 
-  it('skips root branch materialization when there are no changes to commit', () => {
+  it('skips root branch materialization when there are no changes to commit', async () => {
     // Given: no staged changes
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
@@ -149,7 +155,7 @@ describe('autoCommitAndPush — branch parameter', () => {
     });
 
     // When
-    const result = autoCommitAndPush('/tmp/clone', 'my-task', '/project', 'feat/my-branch');
+    const result = await autoCommitAndPush('/tmp/clone', 'my-task', '/project', 'feat/my-branch');
 
     // Then: no push attempted
     expect(mockMaterializeCloneHeadToRootBranch).not.toHaveBeenCalled();

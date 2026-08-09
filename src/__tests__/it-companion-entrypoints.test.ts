@@ -123,7 +123,7 @@ function runEntrypoint(
   return new Promise((resolveResult, reject) => {
     const child = spawn(VITE_NODE, args, {
       cwd: PROJECT_ROOT,
-      timeout: 60_000,
+      timeout: 45_000,
       env: {
         ...process.env,
         TAKT_CONFIG_DIR: fixture.configDir,

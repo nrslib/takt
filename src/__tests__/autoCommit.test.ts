@@ -7,6 +7,14 @@ import { autoCommitAndPush } from '../infra/task/autoCommit.js';
 
 // Mock child_process.execFileSync
 vi.mock('node:child_process', () => ({
+  execFile: vi.fn((
+    _file: string,
+    _args: readonly string[],
+    _options: object,
+    callback: (error: Error | null, stdout: string, stderr: string) => void,
+  ) => {
+    callback(null, '', '');
+  }),
   execFileSync: vi.fn(),
 }));
 
@@ -29,7 +37,8 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   }),
 }));
 
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
+const mockExecFile = vi.mocked(execFile);
 const mockExecFileSync = vi.mocked(execFileSync);
 
 function includesCommand(args: readonly string[], command: string): boolean {
@@ -38,6 +47,9 @@ function includesCommand(args: readonly string[], command: string): boolean {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockExecFile.mockImplementation(((_file, _args, _options, callback) => {
+    callback(null, '', '');
+  }) as typeof execFile);
   mockResolveConfigValue.mockReturnValue(undefined);
 });
 
@@ -46,7 +58,10 @@ afterEach(() => {
 });
 
 describe('autoCommitAndPush', () => {
-  it('should create a commit and push when there are changes', () => {
+  it('should create a commit and push when there are changes', async () => {
+    mockExecFile.mockImplementation(((_file, _args, _options, callback) => {
+      callback(null, 'filter.test.clean\nfilter.test.required\n', '');
+    }) as typeof execFile);
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
       if (includesCommand(argsArr, 'status')) {
@@ -61,7 +76,7 @@ describe('autoCommitAndPush', () => {
       return Buffer.from('');
     });
 
-    const result = autoCommitAndPush('/tmp/clone', 'my-task', '/project');
+    const result = await autoCommitAndPush('/tmp/clone', 'my-task', '/project');
 
     expect(result.success).toBe(true);
     expect(result.commitHash).toBe('abc1234');
@@ -105,7 +120,7 @@ describe('autoCommitAndPush', () => {
     );
   });
 
-  it('should return success with no commit when there are no changes', () => {
+  it('should return success with no commit when there are no changes', async () => {
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
       if (includesCommand(argsArr, 'status')) {
@@ -117,7 +132,7 @@ describe('autoCommitAndPush', () => {
       return Buffer.from('');
     });
 
-    const result = autoCommitAndPush('/tmp/clone', 'my-task', '/project');
+    const result = await autoCommitAndPush('/tmp/clone', 'my-task', '/project');
 
     expect(result.success).toBe(true);
     expect(result.commitHash).toBeUndefined();
@@ -148,12 +163,12 @@ describe('autoCommitAndPush', () => {
     );
   });
 
-  it('should return failure when git command fails', () => {
+  it('should return failure when git command fails', async () => {
     mockExecFileSync.mockImplementation(() => {
       throw new Error('git error: not a git repository');
     });
 
-    const result = autoCommitAndPush('/tmp/clone', 'my-task', '/project');
+    const result = await autoCommitAndPush('/tmp/clone', 'my-task', '/project');
 
     expect(result.success).toBe(false);
     expect(result.commitHash).toBeUndefined();
@@ -161,7 +176,7 @@ describe('autoCommitAndPush', () => {
     expect(result.message).toContain('not a git repository');
   });
 
-  it('should keep commitHash when push to projectDir fails after commit creation', () => {
+  it('should keep commitHash when push to projectDir fails after commit creation', async () => {
     // Given: commit creation succeeds, but the local push back to projectDir fails.
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
@@ -181,7 +196,7 @@ describe('autoCommitAndPush', () => {
     });
 
     // When: auto-commit runs in clone mode.
-    const result = autoCommitAndPush('/tmp/clone', 'my-task', '/project');
+    const result = await autoCommitAndPush('/tmp/clone', 'my-task', '/project');
 
     // Then: the created commit should still be reported so postExecution can continue.
     expect(result.success).toBe(true);
@@ -204,7 +219,7 @@ describe('autoCommitAndPush', () => {
     );
   });
 
-  it('should not include co-author in commit message', () => {
+  it('should not include co-author in commit message', async () => {
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
       if (includesCommand(argsArr, 'status')) {
@@ -219,7 +234,7 @@ describe('autoCommitAndPush', () => {
       return Buffer.from('');
     });
 
-    autoCommitAndPush('/tmp/clone', 'test-task', '/project');
+    await autoCommitAndPush('/tmp/clone', 'test-task', '/project');
 
     // Find the commit call
     const commitCall = mockExecFileSync.mock.calls.find(
@@ -233,7 +248,7 @@ describe('autoCommitAndPush', () => {
     expect(commitMessage).not.toContain('Co-Authored-By');
   });
 
-  it('should use the correct commit message format', () => {
+  it('should use the correct commit message format', async () => {
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
       if (includesCommand(argsArr, 'status')) {
@@ -248,7 +263,7 @@ describe('autoCommitAndPush', () => {
       return Buffer.from('');
     });
 
-    autoCommitAndPush('/tmp/clone', '認証機能を追加する', '/project');
+    await autoCommitAndPush('/tmp/clone', '認証機能を追加する', '/project');
 
     const commitCall = mockExecFileSync.mock.calls.find(
       call => includesCommand(call[1] as string[], 'commit')
@@ -257,7 +272,7 @@ describe('autoCommitAndPush', () => {
     expect(args[args.indexOf('-m') + 1]).toBe('takt: 認証機能を追加する');
   });
 
-  it('should allow hooks and filters only when explicitly configured while retaining literal path handling', () => {
+  it('should allow hooks and filters only when explicitly configured while retaining literal path handling', async () => {
     vi.stubEnv('GIT_GLOB_PATHSPECS', '1');
     vi.stubEnv('GIT_NOGLOB_PATHSPECS', '1');
     vi.stubEnv('GIT_ICASE_PATHSPECS', '1');
@@ -278,7 +293,7 @@ describe('autoCommitAndPush', () => {
       return Buffer.from('');
     });
 
-    autoCommitAndPush('/tmp/clone', 'my-task', '/project');
+    await autoCommitAndPush('/tmp/clone', 'my-task', '/project');
 
     expect(mockExecFileSync).toHaveBeenCalledWith(
       'git',
@@ -307,12 +322,12 @@ describe('autoCommitAndPush', () => {
     ).toBe(false);
   });
 
-  it('should not pass raw git errors to logger data when auto-commit fails', () => {
+  it('should not pass raw git errors to logger data when auto-commit fails', async () => {
     mockExecFileSync.mockImplementation(() => {
       throw new Error('fatal: could not read Password for https://token@example.com/org/repo from /tmp/project');
     });
 
-    const result = autoCommitAndPush('/tmp/clone', 'my-task', '/project');
+    const result = await autoCommitAndPush('/tmp/clone', 'my-task', '/project');
 
     expect(result.success).toBe(false);
     expect(mockLogError).toHaveBeenCalledWith('Auto-commit failed', {

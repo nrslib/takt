@@ -53,7 +53,7 @@ export class GitSelectorCommandRunner implements SelectorGitCommandRunner {
     signal?.throwIfAborted();
     const managed = spawnManagedProcess('git', safeSelectorArgs(args), {
       cwd,
-      env: buildSafeGitEnvironment(cwd, {
+      env: await buildSafeGitEnvironment(cwd, {
         allowGitHooks: false,
         allowGitFilters: false,
       }),

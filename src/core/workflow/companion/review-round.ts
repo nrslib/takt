@@ -257,7 +257,10 @@ function validateUpdates(
   for (const update of updates) {
     const ownerName = ownersByFindingId.get(update.id);
     if (ownerName === undefined) {
-      throw new Error(`Moderator references unknown companion finding "${update.id}"`);
+      const actor = input.moderatorName === undefined
+        ? `Companion "${input.companionName}"`
+        : `Moderator "${input.moderatorName}"`;
+      throw new Error(`${actor} references unknown companion finding "${update.id}"`);
     }
     if (input.moderatorName === undefined && ownerName !== input.companionName) {
       throw new Error(

@@ -5,6 +5,12 @@ export function isGitCommitCommand(command: string): boolean {
     while (tokens[index] === 'command' || /^[A-Za-z_][A-Za-z0-9_]*=/u.test(tokens[index] ?? '')) {
       index += 1;
     }
+    if (tokens[index] === 'env') {
+      index += 1;
+      while (tokens[index] === '-i' || tokens[index] === '--ignore-environment') index += 1;
+      while (/^[A-Za-z_][A-Za-z0-9_]*=/u.test(tokens[index] ?? '')) index += 1;
+      if (tokens[index] === '--') index += 1;
+    }
     if (tokens[index] !== 'git') return false;
     index += 1;
     for (;;) {

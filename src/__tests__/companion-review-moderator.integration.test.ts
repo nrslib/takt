@@ -90,6 +90,52 @@ function createEvaluateRound() {
 
 describe('CT-COMP-10 companion review terminal lifecycle', () => {
   it.each([
+    { moderatorName: undefined, actor: 'Companion "security-reviewer"' },
+    { moderatorName: 'moderator', actor: 'Moderator "moderator"' },
+  ])('should identify $actor when an update references an unknown finding', async ({ moderatorName, actor }) => {
+    const root = mkdtempSync(join(tmpdir(), 'takt-companion-unknown-update-'));
+    try {
+      await expect(executeCompanionReviewRound({
+        companionName: 'security-reviewer',
+        diff: {
+          content: 'diff',
+          digest: 'digest',
+          changedLines: 1,
+          changedFiles: ['src/a.ts'],
+          fileFingerprints: {},
+          hunkFingerprints: {},
+          omittedBytes: 0,
+          truncated: false,
+        },
+        observedGeneration: 1,
+        changedRegionsSincePreviousReview: [],
+        diffSummary: 'summary',
+        signal: new AbortController().signal,
+        task: 'task',
+        stepName: 'implement',
+        stepInstruction: 'implement',
+        activeNames: ['security-reviewer'],
+        ...(moderatorName === undefined ? {} : { moderatorName }),
+        stateStore: new CompanionReviewStateStore(),
+        mailboxPath: () => join(root, 'security-reviewer.jsonl'),
+        systemPrompt: () => 'review',
+        openFindings: () => [],
+        callStructured: vi.fn(async (_purpose) => ({
+          status: 'done' as const,
+          content: '',
+          structuredOutput: { findings: [], updates: [{ id: 'missing-1', status: 'resolved' }] },
+        })),
+        emitFinding: vi.fn(),
+        markReviewed: vi.fn(),
+        evaluateRound: createEvaluateRound(),
+        applyRoundDecision: vi.fn(),
+      })).rejects.toThrow(`${actor} references unknown companion finding "missing-1"`);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
     ['without moderator and without notes', false, false],
     ['without moderator and with notes', false, true],
     ['with moderator and without notes', true, false],

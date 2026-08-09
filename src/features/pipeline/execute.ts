@@ -61,7 +61,7 @@ async function runPipeline(options: PipelineExecutionOptions): Promise<PipelineO
 
   if (!skipGit && context.branch) {
     const commitMessage = buildCommitMessage(pipelineConfig, taskContent.issue, options.task);
-    if (!commitAndPush(context.execCwd, cwd, context.branch, commitMessage, context.isWorktree)) {
+    if (!await commitAndPush(context.execCwd, cwd, context.branch, commitMessage, context.isWorktree)) {
       return { exitCode: EXIT_GIT_OPERATION_FAILED, result: buildResult({ branch: context.branch }) };
     }
   }

@@ -144,4 +144,65 @@ describe('CT-COMP-05 companion review queue lifecycle', () => {
     expect(starts).toEqual(['failing', 'completion', 'after-failure']);
     expect(maximumConcurrency).toBe(1);
   });
+
+  it('should abort the active review and reject pending work when stopped', async () => {
+    const started = deferred<void>();
+    let activeSignal: AbortSignal | undefined;
+    const queue = new CompanionReviewQueue({
+      runReview: vi.fn(async ({ signal }: { signal: AbortSignal }) => {
+        activeSignal = signal;
+        started.resolve();
+        await new Promise<void>((_resolve, reject) => signal.addEventListener(
+          'abort',
+          () => reject(new DOMException('Aborted', 'AbortError')),
+          { once: true },
+        ));
+      }),
+    });
+    const active = queue.enqueue(request('active'));
+    const activeRejected = expect(active).rejects.toMatchObject({ name: 'AbortError' });
+    await started.promise;
+    const pending = queue.enqueue(request('pending', 'forced'));
+    const pendingRejected = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+
+    queue.stop(new Error('shutdown'));
+
+    await Promise.all([activeRejected, pendingRejected]);
+    expect(activeSignal?.aborted).toBe(true);
+    expect(() => queue.enqueue(request('later'))).toThrow(/Abort/);
+  });
+
+  it('should settle only after active abort cleanup and reject pending waiters immediately', async () => {
+    const started = deferred<void>();
+    const releaseCleanup = deferred<void>();
+    const queue = new CompanionReviewQueue({
+      runReview: vi.fn(async ({ signal }: { signal: AbortSignal }) => {
+        started.resolve();
+        await new Promise<void>((_resolve, reject) => signal.addEventListener(
+          'abort',
+          async () => {
+            await releaseCleanup.promise;
+            reject(new DOMException('Aborted', 'AbortError'));
+          },
+          { once: true },
+        ));
+      }),
+    });
+    const active = queue.enqueue(request('active'));
+    const activeRejected = expect(active).rejects.toMatchObject({ name: 'AbortError' });
+    await started.promise;
+    const pending = queue.enqueue(request('pending', 'forced'));
+    const pendingRejected = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    let settled = false;
+
+    const settlement = queue.settle('security-reviewer').then(() => { settled = true; });
+    await pendingRejected;
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    releaseCleanup.resolve();
+
+    await Promise.all([activeRejected, settlement]);
+    expect(settled).toBe(true);
+    await expect(queue.settle('security-reviewer')).resolves.toBeUndefined();
+  });
 });

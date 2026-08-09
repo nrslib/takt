@@ -271,7 +271,7 @@ describe('npm test execution', () => {
 
     await expect(executeNpmTestRuns([
       { npmArgs: ['run', 'test:unknown'] },
-    ], run)).rejects.toThrow('Unknown npm test runner classification');
+    ], run)).rejects.toThrow('Unknown npm test runner classification: test:unknown');
 
     expect(run).not.toHaveBeenCalled();
   });

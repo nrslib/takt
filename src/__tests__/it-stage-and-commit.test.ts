@@ -45,7 +45,7 @@ afterEach(() => {
 });
 
 describe('stageAndCommit', () => {
-  it('should not commit gitignored .takt/runs/ files', () => {
+  it('should not commit gitignored .takt/runs/ files', async () => {
     // Setup: .takt/ is gitignored
     writeFileSync(join(testDir, '.gitignore'), '.takt/\n');
     execFileSync('git', ['add', '.gitignore'], { cwd: testDir });
@@ -58,7 +58,7 @@ describe('stageAndCommit', () => {
     // Also create a tracked file change to ensure commit happens
     writeFileSync(join(testDir, 'src.ts'), 'export const x = 1;');
 
-    const hash = stageAndCommit(testDir, 'test commit');
+    const hash = await stageAndCommit(testDir, 'test commit');
     expect(hash).toBeDefined();
 
     // Verify .takt/runs/ is NOT in the commit
@@ -72,10 +72,10 @@ describe('stageAndCommit', () => {
     expect(committedFiles).not.toContain('.takt/runs/');
   });
 
-  it('should commit normally when no gitignored files exist', () => {
+  it('should commit normally when no gitignored files exist', async () => {
     writeFileSync(join(testDir, 'app.ts'), 'console.log("hello");');
 
-    const hash = stageAndCommit(testDir, 'add app');
+    const hash = await stageAndCommit(testDir, 'add app');
     expect(hash).toBeDefined();
 
     const committedFiles = execFileSync('git', ['diff-tree', '--no-commit-id', '-r', '--name-only', 'HEAD'], {
@@ -87,7 +87,7 @@ describe('stageAndCommit', () => {
     expect(committedFiles).toBe('app.ts');
   });
 
-  it('should commit .takt/.gitignore while leaving runtime artifacts uncommitted', () => {
+  it('should commit .takt/.gitignore while leaving runtime artifacts uncommitted', async () => {
     const dotgitignore = readFileSync(dotgitignorePath, 'utf-8');
     mkdirSync(join(testDir, '.takt', '.runtime', 'tmp'), { recursive: true });
     mkdirSync(join(testDir, '.takt', 'runs', 'test-run', 'reports'), { recursive: true });
@@ -96,7 +96,7 @@ describe('stageAndCommit', () => {
     writeFileSync(join(testDir, '.takt', 'runs', 'test-run', 'reports', 'test-report.md'), '# Report', 'utf-8');
     writeFileSync(join(testDir, 'src.ts'), 'export const x = 1;', 'utf-8');
 
-    const hash = stageAndCommit(testDir, 'add worktree gitignore');
+    const hash = await stageAndCommit(testDir, 'add worktree gitignore');
     expect(hash).toBeDefined();
 
     const committedFiles = execFileSync('git', ['diff-tree', '--no-commit-id', '-r', '--name-only', 'HEAD'], {
@@ -111,8 +111,8 @@ describe('stageAndCommit', () => {
     expect(committedFiles).not.toContain('.takt/runs/test-run/reports/test-report.md');
   });
 
-  it('should return undefined when there are no changes', () => {
-    const hash = stageAndCommit(testDir, 'empty');
+  it('should return undefined when there are no changes', async () => {
+    const hash = await stageAndCommit(testDir, 'empty');
     expect(hash).toBeUndefined();
   });
 });

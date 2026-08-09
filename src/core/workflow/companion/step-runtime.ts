@@ -42,6 +42,7 @@ import { CompanionCompletionCoordinator } from './completion-coordinator.js';
 import { CompanionTerminalDecisionTracker } from './terminal-decision.js';
 import { createSelectorContract, validateSelectorResponse } from '../selector-contract.js';
 import { toCompanionFindingEvidence } from './evidence.js';
+import { safeExternalErrorMessage } from '../../../shared/utils/safeExternalErrorMessage.js';
 
 const MINIMUM_CHANGED_LINES = 10;
 const ROUND_CONTEXT_MAX_BYTES = 4 * 1024;
@@ -444,7 +445,9 @@ export class CompanionStepRuntime {
     );
     if (result.status === 'ok') return result.snapshot;
     if (result.failure.code === 'aborted') throw createAbortError();
-    throw new Error(`Companion diff unavailable (${result.failure.code})`);
+    throw new Error(
+      `Companion diff unavailable (${result.failure.code}): ${safeExternalErrorMessage(result.failure.message)}`,
+    );
   }
 
   private requireProvider(name: string): ProviderRoutingEntry {

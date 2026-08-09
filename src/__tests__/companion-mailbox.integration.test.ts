@@ -202,14 +202,38 @@ describe('CT-COMP-06 stateless review and append-only mailbox', () => {
     expect(design.records[0]).toMatchObject({ id: 'design-reviewer-1' });
   });
 
-  it('should reject malformed, out-of-order, and unknown-update projection records', () => {
-    writeFileSync(mailboxPath, [
-      JSON.stringify({ id: 'security-reviewer-2', severity: 'must_fix', file: 'a', line: 1, finding: 'bad', status: 'open' }),
-      JSON.stringify({ id: 'security-reviewer-1', status: 'resolved' }),
-      '',
-    ].join('\n'));
+  it('should reject a malformed projection record for its own parse failure', () => {
+    writeFileSync(mailboxPath, '{not-json}\n');
 
-    expect(() => loadCompanionMailbox(mailboxPath, 'security-reviewer')).toThrow();
+    expect(() => loadCompanionMailbox(mailboxPath, 'security-reviewer')).toThrow(
+      'Invalid companion mailbox record at line 1',
+    );
+  });
+
+  it('should reject an out-of-order finding for its sequence mismatch', () => {
+    writeFileSync(mailboxPath, `${JSON.stringify({
+      id: 'security-reviewer-2',
+      severity: 'must_fix',
+      file: 'a',
+      line: 1,
+      finding: 'bad',
+      status: 'open',
+    })}\n`);
+
+    expect(() => loadCompanionMailbox(mailboxPath, 'security-reviewer')).toThrow(
+      'Companion mailbox expected finding "security-reviewer-1" but received "security-reviewer-2"',
+    );
+  });
+
+  it('should reject an update whose finding does not exist', () => {
+    writeFileSync(mailboxPath, `${JSON.stringify({
+      id: 'security-reviewer-1',
+      status: 'resolved',
+    })}\n`);
+
+    expect(() => loadCompanionMailbox(mailboxPath, 'security-reviewer')).toThrow(
+      'Companion mailbox update references unknown finding "security-reviewer-1"',
+    );
   });
 
   it('should reject an external projection change without changing authoritative state', () => {

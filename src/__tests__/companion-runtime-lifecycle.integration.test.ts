@@ -73,6 +73,31 @@ function dependencies(input: {
 }
 
 describe('companion runtime lifecycle', () => {
+  it('should preserve the diff failure code and sanitized message in its error', async () => {
+    const runtime = await CompanionStepRuntime.create(dependencies({
+      diffReader: {
+        readBaselineSha: vi.fn().mockResolvedValue('baseline'),
+        readDiff: vi.fn().mockResolvedValue({
+          status: 'error',
+          failure: {
+            code: 'git_failure',
+            message: 'git diff failed in /private/secret/repository',
+          },
+        }),
+      },
+    }));
+
+    try {
+      const readSnapshot = (runtime as unknown as { readSnapshot: () => Promise<unknown> }).readSnapshot
+        .bind(runtime);
+      await expect(readSnapshot()).rejects.toThrow(
+        'Companion diff unavailable (git_failure): git diff failed in [path]',
+      );
+    } finally {
+      runtime.stop();
+    }
+  });
+
   it('should pass the maximum platform-safe interval to the scheduler unchanged', async () => {
     vi.useFakeTimers();
     const setIntervalSpy = vi.spyOn(globalThis, 'setInterval');

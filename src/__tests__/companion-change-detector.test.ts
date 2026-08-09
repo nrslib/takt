@@ -2,6 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { CompanionChangeDetector } from '../core/workflow/companion/change-detector.js';
 import type { CompanionDiff } from '../core/workflow/companion/diff-reader.js';
 import { isGitCommitCommand } from '../core/workflow/companion/git-command.js';
+import { CompanionTriggerScheduler } from '../core/workflow/companion/trigger-scheduler.js';
+import type { CompanionReviewQueue } from '../core/workflow/companion/review-queue.js';
+import { createAbortError } from '../core/workflow/companion/abort.js';
 
 function tool(toolName: string) {
   return { type: 'tool_use' as const, data: { tool: toolName, input: {}, id: `tool-${toolName}` } };
@@ -303,6 +306,9 @@ describe('CT-COMP-05 event-driven companion change detection', () => {
     'git -C . commit -m change',
     'git -c user.name=Test commit -m change',
     'command git --no-pager -C . commit -m change',
+    'env TAKT_TEST=1 git commit -m change',
+    'env -i TAKT_TEST=1 -- git --git-dir=.git commit -m change',
+    'git --git-dir=.git commit -m change',
   ])('should recognize valid Git global options before commit: %s', (command) => {
     expect(isGitCommitCommand(command)).toBe(true);
   });
@@ -336,5 +342,34 @@ describe('CT-COMP-05 event-driven companion change detection', () => {
     });
 
     expect(detector.isDirty()).toBe(true);
+  });
+
+  it.each([
+    { error: createAbortError(), reports: false },
+    { error: new Error('review failed'), reports: true },
+  ])('should report scheduler failures except completion-derived AbortError', async ({ error, reports }) => {
+    let now = 1_000;
+    const detector = new CompanionChangeDetector({
+      intervalMs: 100,
+      minimumChangedLines: 10,
+      now: () => now,
+      readDiff: vi.fn(),
+    });
+    detector.observe(tool('Edit'));
+    now = 1_100;
+    const onError = vi.fn();
+    const scheduler = new CompanionTriggerScheduler({
+      detectors: new Map([['security-reviewer', detector]]),
+      intervals: [100],
+      allowGitCommit: false,
+      queue: { enqueue: vi.fn().mockRejectedValue(error) } as unknown as CompanionReviewQueue,
+      readSnapshot: vi.fn().mockResolvedValue(diff('current', 10)),
+      isAborted: () => false,
+      onError,
+    });
+
+    await scheduler.evaluateNow();
+
+    expect(onError).toHaveBeenCalledTimes(reports ? 1 : 0);
   });
 });

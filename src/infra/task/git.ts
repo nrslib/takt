@@ -32,8 +32,12 @@ export function getCurrentBranch(cwd: string): string {
 /**
  * Returns the short commit hash if changes were committed, undefined if no changes.
  */
-export function stageAndCommit(cwd: string, message: string, options: StageAndCommitOptions = {}): string | undefined {
-  const env = buildSafeGitEnvironment(cwd, options);
+export async function stageAndCommit(
+  cwd: string,
+  message: string,
+  options: StageAndCommitOptions = {},
+): Promise<string | undefined> {
+  const env = await buildSafeGitEnvironment(cwd, options);
 
   execFileSync('git', ['add', '-A'], { cwd, stdio: 'pipe', env });
 

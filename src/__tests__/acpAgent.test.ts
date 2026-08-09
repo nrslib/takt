@@ -194,11 +194,11 @@ describe('TAKT ACP agent adapter', () => {
   });
 
   it.each([
-    { type: 'companion' as const, action: 'start' as const, step: 'implement', companion: 'security' },
-    { type: 'companion' as const, action: 'pool_selected' as const, step: 'implement', selected: ['security'], rationale: 'selected' },
-    { type: 'companion' as const, action: 'finding' as const, step: 'implement', companion: 'security', findingId: 'security-1', severity: 'must_fix' as const },
-    { type: 'companion' as const, action: 'fix_round' as const, step: 'implement', sequence: 2, openMustFixCount: 1 },
-    { type: 'companion' as const, action: 'complete' as const, step: 'implement', openMustFixCount: 0, escalated: false },
+    { type: 'companion' as const, action: 'start' as const, step: 'prepare', companion: 'security' },
+    { type: 'companion' as const, action: 'pool_selected' as const, step: 'select', selected: ['security'], rationale: 'selected' },
+    { type: 'companion' as const, action: 'finding' as const, step: 'review', companion: 'security', findingId: 'security-1', severity: 'must_fix' as const },
+    { type: 'companion' as const, action: 'fix_round' as const, step: 'repair', sequence: 2, openMustFixCount: 1 },
+    { type: 'companion' as const, action: 'complete' as const, step: 'finalize', openMustFixCount: 0, escalated: false },
   ])(
     'should map companion $action events to ACP updates while preserving the step',
     (event) => {
@@ -209,7 +209,7 @@ describe('TAKT ACP agent adapter', () => {
 
       expect(update).toEqual({
         sessionUpdate: 'agent_message_chunk',
-        content: { type: 'text', text: `Companion ${event.action} for step "implement"` },
+        content: { type: 'text', text: `Companion ${event.action} for step "${event.step}"` },
       });
     },
   );

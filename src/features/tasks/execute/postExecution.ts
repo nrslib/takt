@@ -77,7 +77,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
   } = options;
   const emitStatusLog = outputMode !== 'silent';
 
-  const commitResult = autoCommitAndPush(execCwd, task, projectCwd, branch);
+  const commitResult = await autoCommitAndPush(execCwd, task, projectCwd, branch);
   if (commitResult.commitHash) {
     if (emitStatusLog) {
       success(`Auto-committed: ${commitResult.commitHash}`);

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -79,6 +79,23 @@ describe('CT-COMP-02 companion definition loading', () => {
 
     expect(definition.sourcePath).toBe(userPath);
     expect(definition.description).toBe('user-reviewer');
+  });
+
+  it('should reject a symlinked companion lookup directory before loading a candidate', () => {
+    const realDirectory = join(root, 'real-companions');
+    mkdirSync(realDirectory);
+    writeFileSync(join(realDirectory, 'security-reviewer.yaml'), [
+      'name: security-reviewer',
+      'description: linked reviewer',
+      '',
+    ].join('\n'), 'utf8');
+    mkdirSync(join(projectDir, '.takt'), { recursive: true });
+    symlinkSync(realDirectory, join(projectDir, '.takt', 'companions'));
+
+    expect(() => loadCompanionDefinition('security-reviewer', {
+      candidateDirs: buildCompanionLookupDirs({ projectDir, userDir, builtinDir }),
+      language: 'en',
+    })).toThrow(/symlink/i);
   });
 
   it('should reject provider execution fields instead of silently discarding them', () => {

@@ -6,6 +6,7 @@ import {
 } from './change-detector.js';
 import { isGitCommitCommand } from './git-command.js';
 import type { CompanionReviewQueue } from './review-queue.js';
+import { isAbortError } from './abort.js';
 
 export class CompanionTriggerScheduler {
   private timer: ReturnType<typeof setInterval> | undefined;
@@ -66,8 +67,8 @@ export class CompanionTriggerScheduler {
         if (trigger === undefined || this.completing) return;
         await this.input.queue.enqueue({ companionName: name, ...trigger });
       }));
-    } catch {
-      if (!this.input.isAborted()) this.input.onError();
+    } catch (error) {
+      if (!this.input.isAborted() && !isAbortError(error)) this.input.onError();
     } finally {
       this.evaluating = false;
     }

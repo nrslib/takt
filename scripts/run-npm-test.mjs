@@ -279,7 +279,10 @@ export async function executeNpmTestRuns(runs, runCommand) {
   const serialRuns = SERIAL_TEST_SCRIPTS.flatMap((script) =>
     indexedRuns.filter(({ run }) => run.npmArgs[1] === script));
   if (parallelRuns.length + serialRuns.length !== runs.length) {
-    throw new Error('Unknown npm test runner classification');
+    const unknownScripts = indexedRuns
+      .filter(({ run }) => !PARALLEL_TEST_SCRIPTS.has(run.npmArgs[1]) && !SERIAL_TEST_SCRIPTS.includes(run.npmArgs[1]))
+      .map(({ run }) => run.npmArgs[1] ?? '(missing)');
+    throw new Error(`Unknown npm test runner classification: ${[...new Set(unknownScripts)].join(', ')}`);
   }
   const executeRun = async (run) => ({
     ...run,

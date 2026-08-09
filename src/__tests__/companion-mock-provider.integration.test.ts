@@ -51,12 +51,16 @@ describe('CT-COMP-12 mock provider companion scenarios', () => {
     ['absolute path', '/tmp/escape.ts'],
     ['parent traversal', '../escape.ts'],
   ])('should reject a %s file write outside the test cwd', async (_label, path) => {
+    const onStream = vi.fn();
     setMockScenario(load([{
       content: 'unsafe write',
       file_writes: [{ path, content: 'escape' }],
     }]));
 
-    await expect(callMock('coder', 'implement', { cwd })).rejects.toThrow(/file_writes|cwd|path/i);
+    await expect(callMock('coder', 'implement', { cwd, onStream })).rejects.toThrow(
+      'Mock scenario file_writes path violates cwd boundary (outside)',
+    );
+    expect(onStream).not.toHaveBeenCalled();
   });
 
   it('should reject a file write that escapes through a symlink', async () => {
@@ -68,7 +72,9 @@ describe('CT-COMP-12 mock provider companion scenarios', () => {
     }]));
 
     try {
-      await expect(callMock('coder', 'implement', { cwd })).rejects.toThrow(/symlink|cwd|path/i);
+      await expect(callMock('coder', 'implement', { cwd })).rejects.toThrow(
+        'Mock scenario file_writes path violates cwd boundary (symlink)',
+      );
       expect(existsSync(join(outside, 'escape.ts'))).toBe(false);
     } finally {
       rmSync(outside, { recursive: true, force: true });

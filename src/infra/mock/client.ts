@@ -151,7 +151,7 @@ function applyScenarioFileWrites(entry: ScenarioEntry | undefined, cwd: string):
     assertPathSegmentsAreSafe(
       cwd,
       target,
-      (violation, path) => new Error(`Mock scenario file_writes path violates cwd boundary (${violation}): ${path}`),
+      (violation) => new Error(`Mock scenario file_writes path violates cwd boundary (${violation})`),
       { rejectSamePath: true },
     );
     mkdirSync(dirname(target), { recursive: true });

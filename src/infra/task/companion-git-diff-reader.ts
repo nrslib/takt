@@ -113,12 +113,6 @@ interface FileMetadata {
   readonly hunkFingerprints: Readonly<Record<string, string>>;
 }
 
-interface FrozenIndexEntry {
-  readonly path: string;
-  readonly mode: '100644' | '100755' | '120000';
-  readonly oid: string;
-}
-
 interface CompanionDiffObservation {
   readonly afterFrozenIndex?: (root: string) => Promise<void>;
 }
@@ -134,12 +128,9 @@ class BoundedGitRunner {
     private readonly cwd: string,
     private readonly limits: CompanionDiffLimits,
     private readonly signal: AbortSignal | undefined,
+    environment: NodeJS.ProcessEnv,
   ) {
     this.deadline = Date.now() + limits.timeoutMs;
-    const environment = buildSafeGitEnvironment(cwd, {
-      allowGitHooks: false,
-      allowGitFilters: false,
-    });
     this.environment = environment;
   }
 
@@ -266,7 +257,7 @@ export class GitCompanionDiffReader implements CompanionDiffReader {
   }
 
   async readBaselineSha(cwd: string, signal?: AbortSignal): Promise<string> {
-    const runner = new BoundedGitRunner(cwd, this.limits, signal);
+    const runner = await this.createRunner(cwd, signal);
     return (await runner.text(['rev-parse', '--verify', 'HEAD'])).trim();
   }
 
@@ -275,10 +266,15 @@ export class GitCompanionDiffReader implements CompanionDiffReader {
     baselineSha: string,
     signal?: AbortSignal,
   ): Promise<CompanionDiffReadResult> {
-    const runner = new BoundedGitRunner(cwd, this.limits, signal);
+    const runner = await this.createRunner(cwd, signal);
     let frozen: FrozenIndex | undefined;
     try {
-      const changedPaths = await collectChangedPaths(runner, baselineSha);
+      const changedPaths = await excludeGitlinks(
+        runner,
+        cwd,
+        baselineSha,
+        await collectChangedPaths(runner, baselineSha),
+      );
       await validateInputs(runner, cwd, baselineSha, changedPaths, this.limits);
       frozen = await createFrozenIndex(runner, cwd, baselineSha, changedPaths);
       await this.observation.afterFrozenIndex?.(frozen.root);
@@ -293,6 +289,48 @@ export class GitCompanionDiffReader implements CompanionDiffReader {
       if (frozen !== undefined) await rm(frozen.root, { recursive: true, force: true });
     }
   }
+
+  private async createRunner(cwd: string, signal: AbortSignal | undefined): Promise<BoundedGitRunner> {
+    const environment = await buildSafeGitEnvironment(cwd, {
+      allowGitHooks: false,
+      allowGitFilters: false,
+    });
+    return new BoundedGitRunner(cwd, this.limits, signal, environment);
+  }
+}
+
+async function excludeGitlinks(
+  runner: BoundedGitRunner,
+  cwd: string,
+  baselineSha: string,
+  paths: readonly string[],
+): Promise<string[]> {
+  if (paths.length === 0) return [];
+  const baselineGitlinks = gitlinkPaths(await runner.text([
+    'ls-tree', '-z', baselineSha, '--', ...paths,
+  ]));
+  const indexGitlinks = gitlinkPaths(await runner.text([
+    'ls-files', '--stage', '-z', '--', ...paths,
+  ]));
+  const ordinaryPaths: string[] = [];
+  for (const path of paths) {
+    if (baselineGitlinks.has(path) || indexGitlinks.has(path)) continue;
+    try {
+      if ((await lstat(join(cwd, path))).isDirectory()) continue;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    ordinaryPaths.push(path);
+  }
+  return ordinaryPaths;
+}
+
+function gitlinkPaths(output: string): ReadonlySet<string> {
+  return new Set(splitNull(output).flatMap((entry) => {
+    if (!entry.startsWith('160000 ')) return [];
+    const separator = entry.indexOf('\t');
+    return separator === -1 ? [] : [entry.slice(separator + 1)];
+  }));
 }
 
 async function collectChangedPaths(
@@ -466,7 +504,7 @@ async function readFrozenDiff(
   const hunkFingerprints: Record<string, string> = {};
   for (const path of changedFiles) {
     if (addedFiles.has(path)) {
-      const added = await appendAddedFile(runner, path, environment, accumulator);
+      const added = await appendAddedFile(runner, baselineSha, path, environment, accumulator);
       fileFingerprints[path] = added.fingerprint;
       Object.assign(hunkFingerprints, added.hunkFingerprints);
       continue;
@@ -487,100 +525,27 @@ async function readFrozenDiff(
 
 async function appendAddedFile(
   runner: BoundedGitRunner,
+  baselineSha: string,
   path: string,
   environment: NodeJS.ProcessEnv,
   accumulator: BoundedDiffAccumulator,
 ): Promise<FileMetadata> {
-  const entry = await resolveStageZeroBlobEntry(runner, path, environment);
   if (accumulator.totalBytes > 0) accumulator.append('\n');
-  accumulator.append([
-    `diff --git a/${entry.path} b/${entry.path}`,
-    `new file mode ${entry.mode}`,
-    '--- /dev/null',
-    `+++ b/${entry.path}`,
-    '',
-  ].join('\n'));
-  const fingerprint = createHash('sha256')
-    .update(entry.path)
-    .update('\0')
-    .update(entry.mode)
-    .update('\0')
-    .update(entry.oid)
-    .update('\0');
-  const lineCounter = { lines: 0, sawBytes: false, endedWithNewline: true };
-  await appendPrefixedBlob(runner, entry, environment, accumulator, fingerprint, lineCounter);
-  const changedLineCount = lineCounter.sawBytes ? Math.max(1, lineCounter.lines) : 0;
-  const digest = fingerprint.digest('hex');
-  return {
-    fingerprint: digest,
-    hunkFingerprints: changedLineCount === 0 ? {} : {
-      [`${path}:1-${changedLineCount}`]: createHash('sha256')
-        .update(`${digest}:${changedLineCount}`)
-        .digest('hex'),
-    },
-  };
-}
-
-async function appendPrefixedBlob(
-  runner: BoundedGitRunner,
-  entry: FrozenIndexEntry,
-  environment: NodeJS.ProcessEnv,
-  accumulator: BoundedDiffAccumulator,
-  fingerprint: Hash,
-  lineCounter: { lines: number; sawBytes: boolean; endedWithNewline: boolean },
-): Promise<void> {
-  let atLineStart = true;
-  await runner.stream(['cat-file', 'blob', entry.oid], environment, (chunk) => {
+  const args = [
+    'diff', '--cached', '--no-renames', '--no-ext-diff', '--no-textconv', '--binary',
+    '--unified=3', baselineSha, '--', path,
+  ];
+  const fingerprint = createHash('sha256');
+  const hunks = new HunkFingerprintCollector(path);
+  await runner.stream(args, environment, (chunk) => {
+    accumulator.append(chunk);
     fingerprint.update(chunk);
-    lineCounter.sawBytes ||= chunk.length > 0;
-    let start = 0;
-    for (let index = 0; index < chunk.length; index += 1) {
-      if (atLineStart) {
-        accumulator.append('+');
-        atLineStart = false;
-      }
-      if (chunk[index] !== 0x0a) continue;
-      accumulator.append(chunk.subarray(start, index + 1));
-      lineCounter.lines += 1;
-      start = index + 1;
-      atLineStart = true;
-    }
-    if (start < chunk.length) accumulator.append(chunk.subarray(start));
-    lineCounter.endedWithNewline = chunk.at(-1) === 0x0a;
+    hunks.append(chunk);
   });
-  if (lineCounter.sawBytes && !lineCounter.endedWithNewline) {
-    accumulator.append('\n');
-    lineCounter.lines += 1;
-  }
-}
-
-async function resolveStageZeroBlobEntry(
-  runner: BoundedGitRunner,
-  path: string,
-  environment: NodeJS.ProcessEnv,
-): Promise<FrozenIndexEntry> {
-  const entries = splitNull(await runner.text(
-    ['ls-files', '--stage', '-z', '--', path],
-    environment,
-  ));
-  const [entry] = entries;
-  if (entry === undefined || entries.length !== 1) {
-    throw new CompanionDiffResourceError(
-      'git_failure',
-      `Frozen companion index must contain exactly one entry for added path: ${path}`,
-    );
-  }
-  const separator = entry.indexOf('\t');
-  if (separator === -1 || entry.slice(separator + 1) !== path) {
-    throw new CompanionDiffResourceError('git_failure', 'Malformed frozen Git index output');
-  }
-  const [mode, oid, stage, ...unexpected] = entry.slice(0, separator).split(' ');
-  const supportedMode = mode === '100644' || mode === '100755' || mode === '120000';
-  const validOid = oid !== undefined && (/^[0-9a-f]{40}$/u.test(oid) || /^[0-9a-f]{64}$/u.test(oid));
-  if (!supportedMode || !validOid || stage !== '0' || unexpected.length > 0) {
-    throw new CompanionDiffResourceError('git_failure', 'Malformed frozen Git index entry');
-  }
-  return { path, mode, oid };
+  return {
+    fingerprint: fingerprint.digest('hex'),
+    hunkFingerprints: hunks.finish(),
+  };
 }
 
 class HunkFingerprintCollector {

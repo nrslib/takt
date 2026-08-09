@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   rmSync,
   symlinkSync,
@@ -22,6 +23,7 @@ const itWithUnixFileModes = process.platform === 'win32' ? it.skip : it;
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  vi.unstubAllEnvs();
 });
 
 async function readSnapshot(
@@ -67,6 +69,58 @@ describe('CT-COMP-05 companion cumulative diff reader', () => {
     expect(withUntracked.fileFingerprints['tracked.txt']).toBe(
       diff.fileFingerprints['tracked.txt'],
     );
+  });
+
+  it('should project added text with a real hunk and matching line and fingerprint metadata', async () => {
+    const { root, baseline } = createRepositoryFixture('added-text');
+    writeFileSync(join(root, 'added.txt'), 'first\nsecond\n', 'utf8');
+    const reader = new GitCompanionDiffReader();
+
+    const first = await readSnapshot(reader, root, baseline);
+    writeFileSync(join(root, 'added.txt'), 'first\nchanged\n', 'utf8');
+    const changed = await readSnapshot(reader, root, baseline);
+
+    expect(first.content).toContain('@@ -0,0 +1,2 @@');
+    expect(first.changedLines).toBe(2);
+    expect(first.hunkFingerprints['added.txt:1-2']).toMatch(/^[0-9a-f]{64}$/u);
+    expect(changed.fileFingerprints['added.txt']).not.toBe(first.fileFingerprints['added.txt']);
+    expect(changed.hunkFingerprints['added.txt:1-2']).not.toBe(
+      first.hunkFingerprints['added.txt:1-2'],
+    );
+  });
+
+  it('should project an added binary as a Git binary patch without prefixing raw bytes', async () => {
+    const { root, baseline } = createRepositoryFixture('added-binary');
+    writeFileSync(join(root, 'added.bin'), Buffer.from([0, 1, 2, 3, 255]));
+
+    const snapshot = await readSnapshot(new GitCompanionDiffReader(), root, baseline);
+
+    expect(snapshot.changedFiles).toEqual(['added.bin']);
+    expect(snapshot.content).toContain('GIT binary patch');
+    expect(snapshot.content).toContain('literal 5');
+    expect(snapshot.content).not.toContain('\0');
+    expect(snapshot.changedLines).toBe(0);
+    expect(snapshot.hunkFingerprints).toEqual({});
+  });
+
+  it('should omit a changed gitlink while preserving ordinary file changes', async () => {
+    const { root, baseline } = createRepositoryFixture('gitlink');
+    const modulePath = join(root, 'module');
+    mkdirSync(modulePath);
+    execFileSync('git', ['init'], { cwd: modulePath });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: modulePath });
+    execFileSync('git', ['config', 'user.name', 'Test'], { cwd: modulePath });
+    writeFileSync(join(modulePath, 'module.txt'), 'module\n', 'utf8');
+    execFileSync('git', ['add', 'module.txt'], { cwd: modulePath });
+    execFileSync('git', ['commit', '-m', 'module'], { cwd: modulePath });
+    writeFileSync(join(root, 'ordinary.txt'), 'ordinary\n', 'utf8');
+    execFileSync('git', ['add', 'module', 'ordinary.txt'], { cwd: root });
+
+    const snapshot = await readSnapshot(new GitCompanionDiffReader(), root, baseline);
+
+    expect(snapshot.changedFiles).toEqual(['ordinary.txt']);
+    expect(snapshot.content).toContain('+ordinary');
+    expect(snapshot.content).not.toContain('module');
   });
 
   itWithGitMagicFileNames('should preserve literal tracked and untracked Git path names in every snapshot projection', async () => {
@@ -145,12 +199,12 @@ describe('CT-COMP-05 companion cumulative diff reader', () => {
     chmodSync(join(root, 'executable.txt'), 0o644);
     const modeChanged = await readSnapshot(reader, root, baseline);
 
-    expect(first.content).toContain('new file mode 100644\n--- /dev/null\n+++ b/regular.txt');
-    expect(first.content).toContain('new file mode 100755\n--- /dev/null\n+++ b/executable.txt');
-    expect(first.content).toContain('new file mode 120000\n--- /dev/null\n+++ b/link.txt');
+    expect(first.content).toMatch(/new file mode 100644[\s\S]*?\+\+\+ b\/regular\.txt/u);
+    expect(first.content).toMatch(/new file mode 100755[\s\S]*?\+\+\+ b\/executable\.txt/u);
+    expect(first.content).toMatch(/new file mode 120000[\s\S]*?\+\+\+ b\/link\.txt/u);
     expect(stable.digest).toBe(first.digest);
     expect(stable.fileFingerprints).toEqual(first.fileFingerprints);
-    expect(modeChanged.content).toContain('new file mode 100644\n--- /dev/null\n+++ b/executable.txt');
+    expect(modeChanged.content).toMatch(/new file mode 100644[\s\S]*?\+\+\+ b\/executable\.txt/u);
     expect(modeChanged.digest).not.toBe(first.digest);
     expect(modeChanged.fileFingerprints['executable.txt']).not.toBe(
       first.fileFingerprints['executable.txt'],
@@ -334,6 +388,35 @@ describe('CT-COMP-05 companion cumulative diff reader', () => {
     const baseline = await reader.readBaselineSha(root);
 
     const snapshot = await readSnapshot(reader, root, baseline);
+
+    expect(snapshot.content).toContain('+after');
+    expect(existsSync(markerPath)).toBe(false);
+  });
+
+  it('should disable effective global and duplicate local filters while freezing the snapshot', async () => {
+    const { root, baseline } = createRepositoryFixture('global-filter');
+    const globalConfig = join(root, 'isolated-global-config');
+    const markerPath = join(root, 'global-filter-marker');
+    const filterPath = join(root, 'global-filter.sh');
+    writeFileSync(filterPath, `#!/bin/sh\ntouch "${markerPath}"\ncat\n`, { mode: 0o700 });
+    vi.stubEnv('GIT_CONFIG_GLOBAL', globalConfig);
+    vi.stubEnv('GIT_CONFIG_NOSYSTEM', '1');
+    const gitEnvironment = { ...process.env, GIT_CONFIG_GLOBAL: globalConfig, GIT_CONFIG_NOSYSTEM: '1' };
+    for (const key of ['clean', 'smudge', 'process']) {
+      execFileSync('git', ['config', '--global', `filter.observer.${key}`, filterPath], {
+        cwd: root,
+        env: gitEnvironment,
+      });
+    }
+    execFileSync('git', ['config', '--global', 'filter.observer.required', 'true'], {
+      cwd: root,
+      env: gitEnvironment,
+    });
+    execFileSync('git', ['config', '--local', 'filter.observer.clean', filterPath], { cwd: root });
+    writeFileSync(join(root, '.gitattributes'), 'tracked.txt filter=observer\n', 'utf8');
+    writeFileSync(join(root, 'tracked.txt'), 'after\n', 'utf8');
+
+    const snapshot = await readSnapshot(new GitCompanionDiffReader(), root, baseline);
 
     expect(snapshot.content).toContain('+after');
     expect(existsSync(markerPath)).toBe(false);

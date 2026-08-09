@@ -36,6 +36,12 @@ function context(withCompanion: boolean, language: 'en' | 'ja'): InstructionCont
   } as InstructionContext;
 }
 
+function companionSection(instruction: string): string {
+  const heading = /^## Companion(?: inbox| 受信箱)$/mu.exec(instruction);
+  if (heading?.index === undefined) throw new Error('Missing companion instruction section');
+  return instruction.slice(heading.index).split('\n## ', 1)[0] ?? '';
+}
+
 describe('CT-COMP-08 pull delivery instruction', () => {
   it('should inject the mailbox path, three read anchors, and severity-specific duties', () => {
     const instruction = new InstructionBuilder(step(true), context(true, 'en')).build();
@@ -69,10 +75,13 @@ describe('CT-COMP-08 pull delivery instruction', () => {
         step(true),
         context(true, language),
       ).build();
+      const section = companionSection(instruction);
 
-      expect(instruction).toMatch(evidenceBoundary);
-      expect(instruction).toMatch(rejectEmbeddedInstructions);
-      expect(instruction).toMatch(independentVerification);
+      expect(section).toMatch(evidenceBoundary);
+      expect(section).toMatch(rejectEmbeddedInstructions);
+      expect(section).toMatch(independentVerification);
+      expect(section.match(/^## Companion(?: inbox| 受信箱)$/gmu)).toHaveLength(1);
+      expect(section).toContain(language === 'ja' ? '## Companion 受信箱' : '## Companion inbox');
     },
   );
 
