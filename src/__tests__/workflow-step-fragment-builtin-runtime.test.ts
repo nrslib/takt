@@ -996,6 +996,7 @@ describe('builtin workflow step fragment migration', () => {
       plan_instruction: 'fix-plan-from-review-resolution',
     });
     expect(adjudicationFragment.policy).toEqual([
+      'review-adjudication',
       'contract-change',
       { $param: 'review_policy_additions' },
     ]);
@@ -1020,9 +1021,23 @@ describe('builtin workflow step fragment migration', () => {
       join(facetRoot, 'personas', 'review-adjudicator.md'),
       'utf-8',
     );
+    const policy = readFileSync(
+      join(facetRoot, 'policies', 'review-adjudication.md'),
+      'utf-8',
+    );
 
-    expect(instruction).toMatch(
-      /reviewer.*(?:重大度|severity).*REJECT.*(?:修正案|suggested remediation).*(?:根拠にしない|not authority)/isu,
+    expect(policy).toMatch(
+      /reviewer.*(?:重大度|severity).*REJECT.*(?:修正案|suggested remediation).*(?:根拠にしない|not authority|authorize remediation)/isu,
+    );
+    expect(instruction).toMatch(/(?:Review Finding Adjudication Policy|レビュー指摘裁定ポリシー)/isu);
+    expect(policy).toMatch(
+      /(?:DRY|責務|responsibility|boundary|型安全|type safety|デッドコード|dead code|テスト品質|test quality)/isu,
+    );
+    expect(policy).toMatch(
+      /(?:最小.*内部修正|最小の内部|minimal internal|smallest internal)/isu,
+    );
+    expect(policy).toMatch(
+      /(?:atomicity|transaction|rollback|資源上限|resource caps?|互換経路|compatibility routes?)/isu,
     );
     expect(persona).not.toMatch(/実在する欠陥は軽微でも修正対象から外さない|Never exclude a real defect merely because it is minor/u);
   });

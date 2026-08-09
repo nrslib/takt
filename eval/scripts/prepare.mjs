@@ -285,7 +285,13 @@ for (const {
   function writeFacetSnapshot(kind, contents) {
     if (!contents || contents.length === 0) return undefined;
     const path = join(snapshotDir, `${id}-${kind}.md`);
-    writeFileSync(path, contents.join('\n\n---\n\n'));
+    const text = contents.map((entry) => {
+      if (entry === null || typeof entry !== 'object' || typeof entry.content !== 'string') {
+        throw new Error(`Invalid ${kind} facet content for eval target "${id}"`);
+      }
+      return entry.content;
+    }).join('\n\n---\n\n');
+    writeFileSync(path, text);
     return path;
   }
 

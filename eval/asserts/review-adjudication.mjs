@@ -6,18 +6,39 @@ const FINDINGS = {
   antipattern: 'AI-NEW-windows-proof-L1',
 };
 
-const ACTIONABLE_HEADING = /^#{2,3}\s+(?:修正対象\s*family|Actionable Families)$/i;
+const ACTIONABLE_HEADING = /^#{2,3}\s+(?:修正対象\s*family|Actionable Famil(?:y|ies))(?:\s*[:：].*)?$/i;
 const DISPOSITION_HEADING = /^#{2,3}\s+(?:指摘|finding).*?(?:裁定|dispositions?)$/i;
 const MECHANISM = /(?:atomic|transaction|rollback|アトミック|トランザクション|ロールバック)/i;
-const MECHANISM_REJECTION = /(?:含めない|不要|根拠がない|必要(?:性)?[^\n。.!?]*(?:ない|なく)|not (?:included|required|promoted)|no (?:evidence|requirement))/i;
-const MECHANISM_REQUIREMENT = /(?:(?:implement|add|use|introduce|enforce|create|construct|require|make|build|adopt|provide|ensure|establish|wrap|surround|enclose)\b[^\n。.!?]{0,80}(?:atomic|transaction|rollback)|(?:atomic|transaction|rollback|アトミック|トランザクション|ロールバック)[^\n。.!?]{0,80}(?:\b(?:is required|must|should|needs? to be)\b|(?:を|が)(?:実装|追加|使用|導入|使う|作る|構築|必須|必要)))/i;
-const CONTRASTED_REQUIREMENT = /(?:\b(?:but|however|yet)\b|ただし|一方|ものの|にもかかわらず)/i;
+const MECHANISM_REJECTION = /(?:含めない|不要|根拠がない|対象外|過剰|不採用|採用しない|要求しない|追加しない|実装しない|導入しない|必要(?:性)?[^\n。.!?]*(?:ない|なく)|(?:not|never|without)[^\n。.!?]{0,80}(?:add|use|implement|introduce|require|promote|atomic|transaction|rollback)|(?:atomic|transaction|rollback|アトミック|トランザクション|ロールバック)[^\n。.!?]{0,80}(?:not\b|unnecessary|out\s+of\s+scope|overreach|not\s+part|not\s+warranted|not\s+justified|not\s+needed|not\s+necessary)|unnecessary|out\s+of\s+scope|overreach|not\s+part\s+of\s+the\s+task|no\s+(?:evidence|requirement|authority|need))/i;
+const MECHANISM_REQUIREMENT = /(?:(?<!\bnot\s)(?<!\bnever\s)(?:implement|add|use|introduce|enforce|create|construct|require|make|build|adopt|provide|ensure|establish|wrap|surround|enclose)\b[^\n。.!?]{0,80}(?:atomic|transaction|rollback)|(?:atomic|transaction|rollback|アトミック|トランザクション|ロールバック)[^\n。.!?]{0,80}(?:\b(?:is required|must|should|needs? to be)\b|(?:を|が)(?:実装|追加|使用|導入|採用|構築)(?:する|せよ|してください|すべき)|(?:実装|追加|使用|導入|採用|構築)(?:が)?(?:必要|必須)))/i;
+const CONTRASTED_REQUIREMENT = /(?:\b(?:but|however|yet)\b|それでも|ただし|一方|ものの|にもかかわらず)/i;
+const QUALITY_DUPLICATION = /(?:\bDRY\b|\bduplicat(?:e|ed|es|ion)\b|重複|複製)/i;
+const QUALITY_BOUNDARY = /(?:responsibility(?:[-\s]+boundary)?|boundary|責務|境界)/i;
+const INTERNAL_REPAIR = /(?:normalizeChannel|normalize(?:d|s)?[^\n。.!?]{0,40}(?:once|一度|単一)|shared\s+(?:boundary|normalizer)|remove\s+(?:the\s+)?duplication|deduplicat|delegate[^\n。.!?]{0,40}(?:validation|normaliz)|local(?:\s+internal)?\s+fix|共有(?:の)?(?:境界|正規化)|重複(?:を|の)?(?:除去|解消)|単一(?:の)?正規化|局所(?:的)?(?:な)?修正|入口[^\n。.!?]{0,50}normalizeChannel|独自判定[^\n。.!?]{0,40}残さない)/i;
+const ACCEPTED_CHANNELS = /\blocal\b[^\n]{0,100}\bcloud\b|\bcloud\b[^\n]{0,100}\blocal\b/i;
+const NORMALIZATION_BEHAVIOR = /(?:case[-\s]?insensitiv|ignore[^\n。.!?]{0,50}(?:case|大小文字)|大小文字|大文字小文字|surrounding\s+whitespace|trim(?:ming)?|前後[^\n。.!?]{0,30}空白|空白[^\n。.!?]{0,30}(?:除去|無視|trim))/i;
+const NORMALIZATION_EXAMPLE = /["'`]\s+[A-Z][A-Za-z]*\s+["'`][^\n]{0,160}["'`][a-z]+["'`]/;
+const INVALID_FAIL_FAST = /(?:invalid|unsupported|reject(?:ed)?|fail\s+fast|throw|error|不正|無効|拒否|即時|早期[^\n。.!?]{0,20}失敗|例外)/i;
+const NO_LEGACY_ALIAS = /(?:(?:no|without|do\s+not|must\s+not|not\s+add|reject)[^\n。.!?]{0,80}(?:legacy|compatibility)?\s*aliases?|(?:legacy|compatibility)\s+aliases?[^\n。.!?]{0,80}(?:not|required|forbidden)|(?:旧|レガシー|互換)[^\n。.!?]{0,60}(?:alias|エイリアス|別名)[^\n。.!?]{0,40}(?:追加しない|禁止|不要|なし)|(?:alias|エイリアス|別名)[^\n。.!?]{0,60}(?:追加しない|禁止|不要|なし))/i;
 
 function extractSection(output, startPattern, endPattern) {
   const lines = output.split('\n');
   const start = lines.findIndex((line) => startPattern.test(line.trim()));
   if (start < 0) return '';
   const endOffset = lines.slice(start + 1).findIndex((line) => endPattern.test(line.trim()));
+  const end = endOffset < 0 ? lines.length : start + 1 + endOffset;
+  return lines.slice(start + 1, end).join('\n');
+}
+
+function extractHeadingSection(output, startPattern) {
+  const lines = output.split('\n');
+  const start = lines.findIndex((line) => startPattern.test(line.trim()));
+  if (start < 0) return '';
+  const headingDepth = lines[start].trim().match(/^#+/)?.[0].length ?? 0;
+  const endOffset = lines.slice(start + 1).findIndex((line) => {
+    const depth = line.trim().match(/^#+/)?.[0].length;
+    return depth !== undefined && depth <= headingDepth;
+  });
   const end = endOffset < 0 ? lines.length : start + 1 + endOffset;
   return lines.slice(start + 1, end).join('\n');
 }
@@ -34,6 +55,21 @@ function parseTable(section) {
   };
 }
 
+function findDispositionTableSection(output) {
+  const lines = output.split('\n');
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!/^\s*\|.*\|\s*$/.test(lines[index])) continue;
+    const tableLines = [];
+    while (index < lines.length && /^\s*\|.*\|\s*$/.test(lines[index])) {
+      tableLines.push(lines[index]);
+      index += 1;
+    }
+    const section = tableLines.join('\n');
+    if (hasDispositionSchema(parseTable(section))) return section;
+  }
+  return '';
+}
+
 function rowForFinding(rows, findingId) {
   return rows.filter((cells) => cells.some((cell) => cell.includes(findingId)));
 }
@@ -43,7 +79,7 @@ function dispositionOf(row) {
 }
 
 function familyRefs(value) {
-  return [...value.matchAll(/\b(?:FAM(?:ILY)?-[A-Za-z0-9-]+|F-\d+[A-Za-z0-9-]*)\b/g)]
+  return [...value.matchAll(/\b(?:FAM(?:ILY)?-[A-Za-z0-9-]+|F-[A-Za-z0-9][A-Za-z0-9-]*)\b/g)]
     .map((match) => match[0].toLowerCase());
 }
 
@@ -54,10 +90,21 @@ function targetOf(table, row) {
 
   const header = table.header[targetIndex] ?? '';
   const cell = row[targetIndex] ?? '';
-  if (/^(?:none|なし|-|—)$/i.test(cell)) return '';
+  if (/^(?:none|no\s+target|not\s+applicable|n\/a|なし|該当なし|-|—)(?:\s*\([^)]*\))?$/i.test(cell)) return '';
 
   const explicitFamily = familyRefs(cell)[0];
   if (explicitFamily) return explicitFamily;
+  const isCombinedTargetAndReason = /(?:target|family|統合先)/i.test(header)
+    && /(?:根拠|理由|evidence|rationale|reason)/i.test(header);
+  if (isCombinedTargetAndReason) {
+    const leadingFamily = cell.match(/^([A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)+)\b/);
+    return leadingFamily ? leadingFamily[1].toLowerCase() : null;
+  }
+  if (/(?:理由|reason)/i.test(header)) {
+    const leadingFamily = cell.match(/^([A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)+)\b/);
+    if (leadingFamily) return leadingFamily[1].toLowerCase();
+    return null;
+  }
   if (/(?:根拠|evidence|rationale)/i.test(header)) {
     const isShortTarget = !/[。.!?;；]/u.test(cell) && cell.trim().split(/\s+/u).length <= 4;
     return isShortTarget ? cell.trim().toLowerCase() : null;
@@ -69,28 +116,34 @@ function targetOf(table, row) {
 function sameActionableFamily(actionableSection, dispositionTable, codeRow, architectureRow) {
   const codeTarget = targetOf(dispositionTable, codeRow);
   const architectureTarget = targetOf(dispositionTable, architectureRow);
-  if (typeof codeTarget === 'string'
+  const sameTarget = typeof codeTarget === 'string'
     && typeof architectureTarget === 'string'
     && codeTarget.length > 0
-    && codeTarget === architectureTarget) return true;
+    && codeTarget === architectureTarget;
+
+  if (sameTarget) return true;
 
   const actionableTable = parseTable(actionableSection);
-  if (actionableTable.rows.some((row) =>
+  const sameTableFamily = actionableTable.rows.some((row) =>
     row.some((cell) => cell.includes(FINDINGS.code))
-    && row.some((cell) => cell.includes(FINDINGS.architecture)))) {
-    return true;
-  }
+    && row.some((cell) => cell.includes(FINDINGS.architecture)));
 
-  if (!/^###\s+/m.test(actionableSection)) return false;
+  const sameHeadingFamily = /^###\s+/m.test(actionableSection)
+    && actionableSection.split(/(?=^###\s+)/m).some((block) =>
+      block.includes(FINDINGS.code) && block.includes(FINDINGS.architecture));
+  const sameNarrativeFamily = actionableTable.rows.length === 0
+    && actionableSection.includes(FINDINGS.code)
+    && actionableSection.includes(FINDINGS.architecture);
 
-  return actionableSection.split(/(?=^###\s+)/m).some((block) =>
-    block.includes(FINDINGS.code) && block.includes(FINDINGS.architecture));
+  return sameTableFamily || sameHeadingFamily || sameNarrativeFamily;
 }
 
 function acceptanceContexts(actionableSection) {
   const contexts = [];
   const lines = actionableSection.split('\n');
-  const start = lines.findIndex((line) => /^(?:-\s*)?(?:受入条件|Acceptance criteria)\s*:?$/i.test(line.trim()));
+  const start = lines.findIndex((line) => /^(?:-\s*)?(?:受入条件|Acceptance criteria)\s*:?$/i.test(
+    line.trim().replace(/^\*\*|\*\*$/g, ''),
+  ));
   if (start >= 0) {
     const endOffset = lines.slice(start + 1).findIndex((line) => /^#{2,3}\s+/.test(line.trim()));
     const end = endOffset < 0 ? lines.length : start + 1 + endOffset;
@@ -107,12 +160,11 @@ function acceptanceContexts(actionableSection) {
 }
 
 function doesNotPromoteMechanism(contexts) {
-  return contexts.length > 0 && contexts.every((context) =>
-    context.split(/\n|[;；]|(?<=[。.!?])\s+/u)
-      .filter((unit) => MECHANISM.test(unit))
-      .every((unit) => MECHANISM_REJECTION.test(unit)
-        && !MECHANISM_REQUIREMENT.test(unit)
-        && !CONTRASTED_REQUIREMENT.test(unit)));
+  const mechanismUnits = contexts.flatMap((context) =>
+    context.split(/\n|[;；]|(?<=[。.!?])\s+/u).filter((unit) => MECHANISM.test(unit)));
+  return mechanismUnits.length > 0 && mechanismUnits.every((unit) =>
+    MECHANISM_REJECTION.test(unit)
+      && !(CONTRASTED_REQUIREMENT.test(unit) && MECHANISM_REQUIREMENT.test(unit)));
 }
 
 function hasNoExplicitTarget(table, row) {
@@ -120,9 +172,18 @@ function hasNoExplicitTarget(table, row) {
   return target === '' || target === null;
 }
 
+function hasDispositionSchema(table) {
+  const header = table.header.join(' ');
+  return /(?:finding|指摘)/i.test(header)
+    && /(?:disposition|裁定)/i.test(header)
+    && /(?:target|family|統合先)/i.test(header)
+    && /(?:evidence|reason|根拠|理由)/i.test(header);
+}
+
 export default function assertReviewAdjudication(output) {
-  const actionableSection = extractSection(output, ACTIONABLE_HEADING, DISPOSITION_HEADING);
-  const dispositionSection = extractSection(output, DISPOSITION_HEADING, /^#{2,3}\s+/);
+  const actionableSection = extractHeadingSection(output, ACTIONABLE_HEADING);
+  const titledDispositionSection = extractSection(output, DISPOSITION_HEADING, /^#{2,3}\s+/);
+  const dispositionSection = titledDispositionSection || findDispositionTableSection(output);
   const dispositionTable = parseTable(dispositionSection);
 
   const codeRows = rowForFinding(dispositionTable.rows, FINDINGS.code);
@@ -136,21 +197,35 @@ export default function assertReviewAdjudication(output) {
   const securityRow = securityRows[0] ?? [];
   const antipatternRow = antipatternRows[0] ?? [];
   const nonActionableIds = [FINDINGS.testing, FINDINGS.security, FINDINGS.antipattern];
+  const actionableEvidence = `${actionableSection}\n${codeRow.join(' ')}\n${architectureRow.join(' ')}`;
+  const acceptanceEvidence = acceptanceContexts(actionableSection).join('\n');
 
   const checks = [
-    ['actionable-result', /(結果:\s*修正対象あり|Result:\s*ACTIONABLE FINDINGS|(?:修正対象は\s*[1-9]\d*|[1-9]\d*つの修正対象)\s*family)/i.test(output)],
+    ['actionable-result', /(結果\s*[:：]\s*修正対象あり|Result\s*[:：]\s*ACTIONABLE FINDINGS|(?:修正対象は\s*[1-9]\d*|[1-9]\d*つの修正対象)\s*family)/i.test(output)],
+    ['disposition-schema', hasDispositionSchema(dispositionTable)],
     ['one-disposition-per-finding', [codeRows, architectureRows, testingRows, securityRows, antipatternRows]
       .every((rows) => rows.length === 1)],
     ['code-actionable', /^actionable$/i.test(dispositionOf(codeRow))],
     ['architecture-duplicate', /^duplicate$/i.test(dispositionOf(architectureRow))],
     ['same-actionable-family', sameActionableFamily(actionableSection, dispositionTable, codeRow, architectureRow)],
+    ['quality-defect-retained', QUALITY_DUPLICATION.test(actionableSection)
+      && QUALITY_BOUNDARY.test(actionableSection)],
+    ['minimal-internal-repair-retained', INTERNAL_REPAIR.test(actionableEvidence)],
+    ['acceptance-values', ACCEPTED_CHANNELS.test(acceptanceEvidence)],
+    ['acceptance-normalization', NORMALIZATION_BEHAVIOR.test(acceptanceEvidence)
+      || NORMALIZATION_EXAMPLE.test(acceptanceEvidence)],
+    ['acceptance-invalid-fail-fast', INVALID_FAIL_FAST.test(acceptanceEvidence)],
+    ['acceptance-no-legacy-alias', NO_LEGACY_ALIAS.test(actionableEvidence)],
     ['non-actionable-excluded-from-family', nonActionableIds.every((id) => !actionableSection.includes(id))],
-    ['suggested-mechanism-not-promoted', doesNotPromoteMechanism(acceptanceContexts(actionableSection))],
+    ['suggested-mechanism-not-promoted', doesNotPromoteMechanism([
+      acceptanceEvidence,
+      dispositionSection,
+    ])],
     ['testing-overreach', /^(overreach|out_of_scope)$/i.test(dispositionOf(testingRow))
       && hasNoExplicitTarget(dispositionTable, testingRow)],
     ['security-false-positive', /^(false_positive|no_issue_after_verification)$/i.test(dispositionOf(securityRow))
       && hasNoExplicitTarget(dispositionTable, securityRow)],
-    ['antipattern-out-of-scope', /^(overreach|out_of_scope)$/i.test(dispositionOf(antipatternRow))
+    ['antipattern-out-of-scope', /^(environment_unverified|overreach|out_of_scope)$/i.test(dispositionOf(antipatternRow))
       && hasNoExplicitTarget(dispositionTable, antipatternRow)],
   ];
   const failed = checks.filter(([, pass]) => !pass).map(([name]) => name);
