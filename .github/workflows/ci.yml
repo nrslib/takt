@@ -81,12 +81,12 @@ jobs:
       - run: npm run test:it
 
   heavy_it_shard:
-    name: test:it:heavy parallel shard (${{ matrix.shard }}/4)
+    name: test:it:heavy parallel shard (${{ matrix.shard }}/6)
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6]
     permissions:
       contents: read
     steps:
@@ -99,7 +99,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      - run: npm run test:it:heavy:parallel -- --shard=${{ matrix.shard }}/4
+      - run: npm run test:it:heavy:parallel -- --shard=${{ matrix.shard }}/6
 
   heavy_it_serial:
     name: test:it:heavy serial (${{ matrix.group }})
