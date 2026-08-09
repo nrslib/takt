@@ -118,7 +118,7 @@ app.get('/user/:id', authorize('read:user'), (req, res) => {
 
 **データ検証**
 
-- 入力値の未検証 → REJECT
+- 入力値の未検証（サイズ制限の未設定だけの場合を除く）→ REJECT
 - 型チェックの欠如 → REJECT
 - サイズ制限の未設定はリソース枯渇につながり得るため、具体的な経路を Security 専用 policy に従って確認する
 

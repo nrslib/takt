@@ -5,6 +5,7 @@
  * - include expansion in instruction, policy, knowledge facets
  * - include after inheritance (extends + include)
  * - missing include error
+ * - cyclic include error
  * - inline content (no sourcePath) skips include expansion
  * - project partial overrides builtin partial
  */
@@ -204,6 +205,20 @@ describe('facet include expansion', () => {
 
     expect(() => resolveRefToContent('broken', undefined, tempDir, 'instructions', context))
       .toThrow(/Missing facet include/);
+  });
+
+  it('should throw on cyclic includes', () => {
+    const instructionsDir = join(tempDir, '.takt', 'facets', 'instructions');
+    const partialsDir = join(tempDir, '.takt', 'facets', 'partials', 'instructions');
+    mkdirSync(instructionsDir, { recursive: true });
+    mkdirSync(partialsDir, { recursive: true });
+
+    writeFileSync(join(instructionsDir, 'cyclic.md'), '{{include:instructions/first}}');
+    writeFileSync(join(partialsDir, 'first.md'), '{{include:instructions/second}}');
+    writeFileSync(join(partialsDir, 'second.md'), '{{include:instructions/first}}');
+
+    expect(() => resolveRefToContent('cyclic', undefined, tempDir, 'instructions', context))
+      .toThrow(/Cyclic facet include/);
   });
 
   it('should NOT expand includes in inline content (no sourcePath)', () => {

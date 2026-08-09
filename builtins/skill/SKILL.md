@@ -96,6 +96,7 @@ YAML から以下を抽出する（→ references/yaml-schema.md 参照）:
 → 絶対パスは `~/.claude/skills/takt/facets/personas/coder.md`
 
 ファセット本文に `{{include:<kind>/<name>}}` がある場合は、同じ言語の `facets/partials/<kind>/<name>.md` を Read で取得し、参照先の include も再帰的に展開してからプロンプトへ結合する。
+参照先が存在しない場合、または include が循環する場合はエラーとして扱い、別言語の partial へフォールバックしない。
 
 重複を除いて Read で全て読み込む。読み込んだ内容はチームメイトへのプロンプト構築に使う。
 

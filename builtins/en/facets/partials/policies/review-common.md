@@ -198,7 +198,7 @@ When the same kind of problem appears in multiple locations, report one represen
 - **How to fix it**
 - **If requesting abstraction or consolidation, why that placement is the natural one**
 
-```
+```text
 ❌ "Review the structure"
 ❌ "Clean this up a bit"
 ❌ "Refactoring is needed"

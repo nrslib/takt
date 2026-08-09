@@ -118,7 +118,7 @@ app.get('/user/:id', authorize('read:user'), (req, res) => {
 
 **Data validation:**
 
-- Unvalidated input values → REJECT
+- Unvalidated input values → REJECT, except when the only missing validation is an input size limit
 - Missing type checks → REJECT
 - Missing size limits can contribute to resource exhaustion; evaluate the concrete path under the Security policy
 
