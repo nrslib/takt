@@ -32,6 +32,22 @@ function createDynamicPoolWorkflow(pool: unknown): Record<string, unknown> {
   };
 }
 
+function createRootDynamicFacetPoolWorkflow(poolName: string): Record<string, unknown> {
+  return {
+    ...createDynamicPoolWorkflow(poolName),
+    policies: { policy: 'Policy' },
+    facet_pools: {
+      available: {
+        candidates: [{
+          id: 'candidate',
+          description: 'Candidate',
+          policy: 'policy',
+        }],
+      },
+    },
+  };
+}
+
 function createCallableFacetPoolWorkflow(): Record<string, unknown> {
   return {
     name: 'invalid-callable-pool',
@@ -296,6 +312,49 @@ describe('workflow_call schema', () => {
     expect(prepared.raw.knowledge?.['__takt_discovery_param___knowledge_implementation_pool']).toBeDefined();
   });
 
+  it('should use the base synthetic pool name when the default name is inherited', () => {
+    const poolName = '__takt_discovery_pool__implementation_pool';
+    const raw = WorkflowConfigRawSchema.parse({
+      name: 'inherited-pool-discovery',
+      subworkflow: {
+        callable: true,
+        params: {
+          implementation_pool: { type: 'facet_pool_ref' },
+        },
+      },
+      policies: { policy: 'Discovery policy' },
+      knowledge: { knowledge: 'Discovery knowledge' },
+      steps: [{
+        name: 'implement',
+        persona: 'reviewer',
+        instruction: 'Review',
+        dynamic_facets: { pool: { $param: 'implementation_pool' } },
+        rules: [{ condition: 'done', next: 'COMPLETE' }],
+      }],
+    });
+    const previousDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, poolName);
+
+    try {
+      Object.defineProperty(Object.prototype, poolName, {
+        configurable: true,
+        enumerable: false,
+        value: { inherited: true },
+        writable: true,
+      });
+
+      const prepared = prepareCallableSubworkflowDiscoveryArgs(raw);
+      expect(prepared.callableArgs).toEqual({ implementation_pool: poolName });
+      expect(Object.hasOwn(prepared.raw.facet_pools ?? {}, poolName)).toBe(true);
+      expect(prepared.raw.facet_pools?.[poolName]?.candidates).toHaveLength(1);
+    } finally {
+      if (previousDescriptor === undefined) {
+        delete Object.prototype[poolName];
+      } else {
+        Object.defineProperty(Object.prototype, poolName, previousDescriptor);
+      }
+    }
+  });
+
   it('should report the dynamic pool field path when a non-string pool reaches normalization', () => {
     let thrown: unknown;
     try {
@@ -381,17 +440,51 @@ describe('workflow_call schema', () => {
   it.each(['constructor', 'toString', '__proto__'])(
     'should reject an undeclared facet pool when a callable arg uses the inherited key %s',
     (poolName) => {
-      expect(() => normalizeWorkflowConfig(
-        createCallableFacetPoolWorkflow(),
-        '/tmp',
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        { callableArgs: { implementation_pool: poolName } },
-      )).toThrow(`workflow_call arg "implementation_pool" references unknown facet pool "${poolName}"`);
+      let thrown: unknown;
+      try {
+        normalizeWorkflowConfig(
+          createCallableFacetPoolWorkflow(),
+          '/tmp',
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          { callableArgs: { implementation_pool: poolName } },
+        );
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).message).toContain(
+        `workflow_call arg "implementation_pool" references unknown facet pool "${poolName}"`,
+      );
+      expect(getWorkflowConfigErrorPath(thrown)).toEqual(['callableArgs', 'implementation_pool']);
+    },
+  );
+
+  it.each(['constructor', 'toString', '__proto__'])(
+    'should reject an inherited root facet pool name when dynamic facets use %s',
+    (poolName) => {
+      let thrown: unknown;
+      try {
+        normalizeWorkflowConfig(createRootDynamicFacetPoolWorkflow(poolName), '/tmp');
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).message).toContain(
+        `Configuration error: step "implement" references unknown facet pool "${poolName}"`,
+      );
+      expect(getWorkflowConfigErrorPath(thrown)).toEqual([
+        'steps',
+        0,
+        'dynamic_facets',
+        'pool',
+      ]);
     },
   );
 

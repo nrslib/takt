@@ -45,6 +45,7 @@ import { normalizeLoopMonitors } from './workflowLoopMonitorNormalizer.js';
 import { normalizeProviderReference, normalizeStepFromRaw, type WorkflowLevelDefinitions } from './workflowStepNormalizer.js';
 import { resolveCapabilitySets } from './capabilitySetResolver.js';
 import { compileFacetPool, type FacetPoolCompilationInput } from './facetPoolCompiler.js';
+import { hasOwnFacetPool } from './workflowFacetPoolLookup.js';
 import type { ResolvedFacetPool } from '../../../core/models/index.js';
 import {
   expandCallableSubworkflowRaw,
@@ -574,13 +575,13 @@ function validateDynamicFacetsReferences(
         ['steps', index, 'dynamic_facets', 'pool'],
       );
     }
-    const pool = facetPools?.[poolName];
-    if (pool === undefined) {
+    if (!hasOwnFacetPool(facetPools, poolName)) {
       throw withWorkflowStepErrorPath(
         new Error(`Configuration error: step "${step.name}" references unknown facet pool "${poolName}"`),
         ['steps', index, 'dynamic_facets', 'pool'],
       );
     }
+    const pool = facetPools![poolName]!;
     const candidateCount = pool.candidates.length;
     if (
       step.dynamic_facets.max_selected !== undefined
