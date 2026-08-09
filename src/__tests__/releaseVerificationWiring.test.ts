@@ -260,9 +260,9 @@ describe('release verification wiring', () => {
       'npm run test:it',
     );
 
-    expect(heavyShardJob?.strategy?.matrix?.shard).toEqual([1, 2, 3, 4]);
+    expect(heavyShardJob?.strategy?.matrix?.shard).toEqual([1, 2, 3, 4, 5, 6]);
     expect(heavyShardJob?.steps?.map((step) => step.run).filter(Boolean)).toContain(
-      'npm run test:it:heavy:parallel -- --shard=${{ matrix.shard }}/4',
+      'npm run test:it:heavy:parallel -- --shard=${{ matrix.shard }}/6',
     );
 
     expect(heavySerialJob?.strategy?.matrix?.include).toEqual([
