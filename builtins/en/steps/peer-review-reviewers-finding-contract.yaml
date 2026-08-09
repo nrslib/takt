@@ -35,8 +35,8 @@ parallel:
     persona: security-reviewer
     policy:
       - contract-change
-      - review
       - $param: review_policy_additions
+      - security-review
     knowledge:
       - security
       - takt

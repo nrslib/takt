@@ -10,9 +10,18 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { parse as parseYaml } from 'yaml';
 import {
   resolveRefToContent,
   type FacetResolutionContext,
@@ -236,4 +245,83 @@ describe('facet include expansion', () => {
     const content = resolveRefToContent('test', undefined, workflowDir, 'instructions', context);
     expect(content).toBe('Project version');
   });
+
+  it.each(['en', 'ja'] as const)('should share the common review policy and add the security boundary once in %s', (lang) => {
+    const languageRoot = getLanguageResourcesDir(lang);
+    const common = readFileSync(
+      join(languageRoot, 'facets', 'partials', 'policies', 'review-common.md'),
+      'utf-8',
+    ).trim();
+    const review = resolveRefToContent(
+      'review',
+      undefined,
+      tempDir,
+      'policies',
+      { projectDir: tempDir, lang },
+    );
+    const securityReview = resolveRefToContent(
+      'security-review',
+      undefined,
+      tempDir,
+      'policies',
+      { projectDir: tempDir, lang },
+    );
+
+    const resolvedReview = review?.trim();
+    const resolvedSecurityReview = securityReview?.trim();
+    expect(resolvedReview).toBe(common);
+    expect(resolvedSecurityReview).toContain(common);
+    expect(resolvedSecurityReview?.split(common)).toHaveLength(2);
+    expect(resolvedSecurityReview).toContain('blocking finding');
+
+    const warningOnlyApproval = lang === 'ja'
+      ? 'Warning または対象外の事項だけが残る場合は APPROVE'
+      : 'When only warnings or out-of-scope items remain, return APPROVE';
+    expect(resolvedSecurityReview).toContain(warningOnlyApproval);
+  });
+
+  it.each(['en', 'ja'] as const)('should route every builtin review-security entry through the security policy in %s', (lang) => {
+    const roots = ['steps', 'workflows'].map((directory) => join(getLanguageResourcesDir(lang), directory));
+    const yamlFiles = roots.flatMap((root) => listYamlFiles(root));
+    const routes = yamlFiles.flatMap((filePath) => {
+      const parsed = parseYaml(readFileSync(filePath, 'utf-8')) as unknown;
+      return collectRecords(parsed).filter((record) => (
+        record.persona === 'security-reviewer' && record.instruction === 'review-security'
+      )).map((record) => ({ filePath, record }));
+    });
+
+    expect(routes.length).toBeGreaterThan(0);
+    for (const { filePath, record } of routes) {
+      const policies = collectStrings(record.policy);
+      expect(policies, filePath).toContain('security-review');
+      expect(policies, filePath).not.toContain('review');
+      const additionsIndex = policies.indexOf('$param: review_policy_additions');
+      if (additionsIndex >= 0) {
+        expect(policies.indexOf('security-review'), filePath).toBeGreaterThan(additionsIndex);
+      }
+    }
+  });
 });
+
+function listYamlFiles(root: string): string[] {
+  return readdirSync(root).flatMap((entry) => {
+    const filePath = join(root, entry);
+    return statSync(filePath).isDirectory()
+      ? listYamlFiles(filePath)
+      : filePath.endsWith('.yaml') || filePath.endsWith('.yml') ? [filePath] : [];
+  });
+}
+
+function collectRecords(value: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(value)) return value.flatMap(collectRecords);
+  if (typeof value !== 'object' || value === null) return [];
+  const record = value as Record<string, unknown>;
+  return [record, ...Object.values(record).flatMap(collectRecords)];
+}
+
+function collectStrings(value: unknown): string[] {
+  if (typeof value === 'string') return [value];
+  if (Array.isArray(value)) return value.flatMap(collectStrings);
+  if (typeof value !== 'object' || value === null) return [];
+  return Object.values(value).flatMap(collectStrings);
+}

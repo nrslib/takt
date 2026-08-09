@@ -120,7 +120,7 @@ app.get('/user/:id', authorize('read:user'), (req, res) => {
 
 - Unvalidated input values → REJECT
 - Missing type checks → REJECT
-- No size limits set → REJECT
+- Missing size limits can contribute to resource exhaustion; evaluate the concrete path under the Security policy
 
 ## Logging & Masking
 
@@ -201,7 +201,7 @@ if (!safePath.startsWith(path.resolve(baseDir))) {
 **File Upload:**
 
 - No file type validation → REJECT
-- No file size limits → REJECT
+- Missing file-size limits can contribute to resource exhaustion; evaluate the concrete path under the Security policy
 - Allowing executable file uploads → REJECT
 
 ## Dependencies
@@ -220,7 +220,7 @@ if (!safePath.startsWith(path.resolve(baseDir))) {
 
 - No rate limiting (auth endpoints) → Warning
 - Resource exhaustion attack possibility → Warning
-- Infinite loop possibility → REJECT
+- Infinite loop patterns can cause denial of service; evaluate the verified path and impact under the Security policy
 
 ## Multi-Tenant Data Isolation
 

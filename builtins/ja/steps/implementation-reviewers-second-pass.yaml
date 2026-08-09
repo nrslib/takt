@@ -9,7 +9,7 @@ parallel:
     persona: security-reviewer
     policy:
       - contract-change
-      - review
+      - security-review
     knowledge: security
     capabilities: readonly
     instruction: review-security

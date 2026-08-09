@@ -120,7 +120,7 @@ app.get('/user/:id', authorize('read:user'), (req, res) => {
 
 - 入力値の未検証 → REJECT
 - 型チェックの欠如 → REJECT
-- サイズ制限の未設定 → REJECT
+- サイズ制限の未設定はリソース枯渇につながり得るため、具体的な経路を Security 専用 policy に従って確認する
 
 ## ログとマスキング
 
@@ -201,7 +201,7 @@ if (!safePath.startsWith(path.resolve(baseDir))) {
 **ファイルアップロード**
 
 - ファイルタイプの未検証 → REJECT
-- ファイルサイズ制限なし → REJECT
+- ファイルサイズ制限なしはリソース枯渇につながり得るため、具体的な経路を Security 専用 policy に従って確認する
 - 実行可能ファイルのアップロード許可 → REJECT
 
 ## 依存関係
@@ -220,7 +220,7 @@ if (!safePath.startsWith(path.resolve(baseDir))) {
 
 - レート制限の欠如（認証エンドポイント） → 警告
 - リソース枯渇攻撃の可能性 → 警告
-- 無限ループの可能性 → REJECT
+- 無限ループのパターンはサービス拒否につながり得るため、確認できた経路と影響を Security 専用 policy に従って評価する
 
 ## マルチテナントデータ分離
 

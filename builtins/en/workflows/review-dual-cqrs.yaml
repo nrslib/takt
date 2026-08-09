@@ -87,7 +87,7 @@ steps:
         persona: security-reviewer
         policy:
           - contract-change
-          - review
+          - security-review
         knowledge: security
         instruction: review-security
         output_contracts:

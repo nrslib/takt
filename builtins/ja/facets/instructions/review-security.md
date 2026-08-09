@@ -1,5 +1,7 @@
 **セキュリティ**のレビューに集中してください。
 
+Security 専用 policy の finding / warning 境界を最終判定の正本として扱ってください。
+
 手順:
 1. Knowledge と Policy の Source Path を Read ツールで開き、全文を取得する
 2. それぞれの `##` セクションをすべて列挙する（取捨選択しない）

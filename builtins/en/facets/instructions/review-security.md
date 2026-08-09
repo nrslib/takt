@@ -1,5 +1,7 @@
 Focus on reviewing **security**.
 
+Treat the Security-specific policy's finding and warning boundary as the source of truth for the final classification.
+
 Procedure:
 1. Open the Knowledge and Policy Source paths with the Read tool and obtain the full content
 2. List every `##` section in each of them (do not cherry-pick)

@@ -75,6 +75,7 @@ describe('deploySkillCodex', () => {
     mkdirSync(join(langDir, 'facets', 'instructions'), { recursive: true });
     mkdirSync(join(langDir, 'facets', 'knowledge'), { recursive: true });
     mkdirSync(join(langDir, 'facets', 'output-contracts'), { recursive: true });
+    mkdirSync(join(langDir, 'facets', 'partials', 'policies'), { recursive: true });
     mkdirSync(join(langDir, 'templates'), { recursive: true });
 
     writeFileSync(join(langDir, 'workflows', 'default.yaml'), 'name: default');
@@ -83,6 +84,7 @@ describe('deploySkillCodex', () => {
     writeFileSync(join(langDir, 'facets', 'instructions', 'init.md'), '# Init');
     writeFileSync(join(langDir, 'facets', 'knowledge', 'patterns.md'), '# Patterns');
     writeFileSync(join(langDir, 'facets', 'output-contracts', 'summary.md'), '# Summary');
+    writeFileSync(join(langDir, 'facets', 'partials', 'policies', 'review-common.md'), '# Shared review policy');
     writeFileSync(join(langDir, 'templates', 'task.md'), '# legacy template');
 
     skillDir = join(testHomeDir, '.agents', 'skills', 'takt');
@@ -133,6 +135,7 @@ describe('deploySkillCodex', () => {
       expect(existsSync(join(skillDir, 'facets', 'instructions', 'init.md'))).toBe(true);
       expect(existsSync(join(skillDir, 'facets', 'knowledge', 'patterns.md'))).toBe(true);
       expect(existsSync(join(skillDir, 'facets', 'output-contracts', 'summary.md'))).toBe(true);
+      expect(existsSync(join(skillDir, 'facets', 'partials', 'policies', 'review-common.md'))).toBe(true);
       expect(existsSync(join(skillDir, 'templates'))).toBe(false);
       expect(info).not.toHaveBeenCalledWith(expect.stringContaining('テンプレート'));
     });

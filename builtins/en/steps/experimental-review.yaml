@@ -114,7 +114,7 @@ parallel:
       tags: [review]
       edit: false
       persona: security-reviewer
-      policy: [contract-change, review]
+      policy: [contract-change, security-review]
       knowledge: security
       instruction: review-security
       pass_previous_response: false

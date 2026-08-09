@@ -9,6 +9,7 @@
  * - builtins/{lang}/facets/instructions/ - Builtin instructions
  * - builtins/{lang}/facets/knowledge/ - Builtin knowledge files
  * - builtins/{lang}/facets/output-contracts/ - Builtin output contracts
+ * - builtins/{lang}/facets/partials/ - Shared facet partials
  * - builtins/project/          - Project-level template files (.gitignore)
  * - builtins/skill/            - Claude Code skill files
  */
