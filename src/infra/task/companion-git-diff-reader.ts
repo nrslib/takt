@@ -12,6 +12,8 @@ import type {
 import { buildSafeGitEnvironment } from './git-environment.js';
 
 const MAX_COMPANION_DIFF_BYTES = 512 * 1024;
+const MAX_GITLINK_PATHS_PER_COMMAND = 64;
+const MAX_GITLINK_PATH_BYTES_PER_COMMAND = 16 * 1024;
 const DEFAULT_LIMITS = Object.freeze({
   maxChangedFiles: 1_024,
   maxBlobBytes: 4 * 1024 * 1024,
@@ -274,6 +276,7 @@ export class GitCompanionDiffReader implements CompanionDiffReader {
         cwd,
         baselineSha,
         await collectChangedPaths(runner, baselineSha),
+        this.limits.maxChangedFiles,
       );
       await validateInputs(runner, cwd, baselineSha, changedPaths, this.limits);
       frozen = await createFrozenIndex(runner, cwd, baselineSha, changedPaths);
@@ -304,25 +307,62 @@ async function excludeGitlinks(
   cwd: string,
   baselineSha: string,
   paths: readonly string[],
+  maxChangedFiles: number,
 ): Promise<string[]> {
   if (paths.length === 0) return [];
-  const baselineGitlinks = gitlinkPaths(await runner.text([
-    'ls-tree', '-z', baselineSha, '--', ...paths,
-  ]));
-  const indexGitlinks = gitlinkPaths(await runner.text([
-    'ls-files', '--stage', '-z', '--', ...paths,
-  ]));
   const ordinaryPaths: string[] = [];
-  for (const path of paths) {
-    if (baselineGitlinks.has(path) || indexGitlinks.has(path)) continue;
-    try {
-      if ((await lstat(join(cwd, path))).isDirectory()) continue;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  for (const chunk of chunkGitlinkPaths(paths)) {
+    const baselineGitlinks = gitlinkPaths(await runner.text([
+      'ls-tree', '-z', baselineSha, '--', ...chunk,
+    ]));
+    const indexGitlinks = gitlinkPaths(await runner.text([
+      'ls-files', '--stage', '-z', '--', ...chunk,
+    ]));
+    for (const path of chunk) {
+      if (baselineGitlinks.has(path) || indexGitlinks.has(path)) continue;
+      try {
+        if ((await lstat(join(cwd, path))).isDirectory()) continue;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+      ordinaryPaths.push(path);
+      if (ordinaryPaths.length > maxChangedFiles) {
+        throw new CompanionDiffResourceError(
+          'file_count_limit',
+          `Companion changed file count exceeds ${maxChangedFiles}`,
+        );
+      }
     }
-    ordinaryPaths.push(path);
   }
   return ordinaryPaths;
+}
+
+function chunkGitlinkPaths(paths: readonly string[]): string[][] {
+  const chunks: string[][] = [];
+  let chunk: string[] = [];
+  let bytes = 0;
+  for (const path of paths) {
+    const pathBytes = Buffer.byteLength(path) + 1;
+    if (pathBytes > MAX_GITLINK_PATH_BYTES_PER_COMMAND) {
+      throw new CompanionDiffResourceError(
+        'input_limit',
+        `Companion Git path exceeds ${MAX_GITLINK_PATH_BYTES_PER_COMMAND} bytes`,
+      );
+    }
+    if (
+      chunk.length > 0
+      && (chunk.length >= MAX_GITLINK_PATHS_PER_COMMAND
+        || bytes + pathBytes > MAX_GITLINK_PATH_BYTES_PER_COMMAND)
+    ) {
+      chunks.push(chunk);
+      chunk = [];
+      bytes = 0;
+    }
+    chunk.push(path);
+    bytes += pathBytes;
+  }
+  if (chunk.length > 0) chunks.push(chunk);
+  return chunks;
 }
 
 function gitlinkPaths(output: string): ReadonlySet<string> {

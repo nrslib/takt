@@ -233,7 +233,11 @@ function validateFileWrites(
       throw new Error(`Scenario entry [${entryIndex}] file_writes[${writeIndex}] must be an object`);
     }
     const record = write as Record<string, unknown>;
-    if (typeof record.path !== 'string' || typeof record.content !== 'string') {
+    if (
+      typeof record.path !== 'string'
+      || record.path.length === 0
+      || typeof record.content !== 'string'
+    ) {
       throw new Error(`Scenario entry [${entryIndex}] file_writes[${writeIndex}] is invalid`);
     }
     return { path: record.path, content: record.content };

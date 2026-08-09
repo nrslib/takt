@@ -59,6 +59,51 @@ describe('CT-COMP-05 event-driven companion change detection', () => {
     expect(readDiff).not.toHaveBeenCalled();
   });
 
+  it.each(['edit', 'write'])('should recognize an OpenCode %s stream event as mutating', (toolName) => {
+    const detector = new CompanionChangeDetector({
+      intervalMs: 100,
+      minimumChangedLines: 10,
+      now: () => 1_000,
+      readDiff: vi.fn(),
+    });
+
+    detector.observe({
+      type: 'tool_use',
+      data: {
+        tool: toolName,
+        input: { filePath: 'src/a.ts', content: 'changed' },
+        id: `opencode-${toolName}`,
+      },
+    });
+
+    expect(detector.isDirty()).toBe(true);
+  });
+
+  it('should recognize an OpenCode lowercase bash event only when it carries a command', () => {
+    const detector = new CompanionChangeDetector({
+      intervalMs: 100,
+      minimumChangedLines: 10,
+      now: () => 1_000,
+      readDiff: vi.fn(),
+    });
+
+    detector.observe({
+      type: 'tool_use',
+      data: { tool: 'bash', input: {}, id: 'opencode-bash-without-command' },
+    });
+    expect(detector.isDirty()).toBe(false);
+
+    detector.observe({
+      type: 'tool_use',
+      data: {
+        tool: 'bash',
+        input: { command: 'git add src/a.ts' },
+        id: 'opencode-bash-command',
+      },
+    });
+    expect(detector.isDirty()).toBe(true);
+  });
+
   it('should ignore read-only tool events', () => {
     const detector = new CompanionChangeDetector({
       intervalMs: 100,

@@ -2,7 +2,7 @@ import type { StreamEvent } from '../../../shared/types/provider.js';
 import type { CompanionDiff } from './diff-reader.js';
 
 const FORCE_INTERVAL_MULTIPLIER = 4;
-const MUTATING_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'apply_patch']);
+const MUTATING_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'apply_patch', 'write', 'edit']);
 
 export interface CompanionChangeCandidate {
   readonly reason: 'quiet' | 'forced' | 'completion' | 'commit';
@@ -135,7 +135,7 @@ export class CompanionChangeDetector {
 
   private isMutatingTool(tool: string, input: Record<string, unknown>): boolean {
     if (MUTATING_TOOLS.has(tool)) return true;
-    return tool === 'Bash' && typeof input.command === 'string';
+    return (tool === 'Bash' || tool === 'bash') && typeof input.command === 'string';
   }
 }
 

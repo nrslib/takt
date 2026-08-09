@@ -10,6 +10,14 @@ export async function buildSafeGitEnvironment(
   cwd: string,
   options: SafeGitEnvironmentOptions,
 ): Promise<NodeJS.ProcessEnv> {
+  const environment: NodeJS.ProcessEnv = {
+    ...process.env,
+    GIT_LITERAL_PATHSPECS: '1',
+  };
+  delete environment.GIT_CONFIG_PARAMETERS;
+  delete environment.GIT_GLOB_PATHSPECS;
+  delete environment.GIT_NOGLOB_PATHSPECS;
+  delete environment.GIT_ICASE_PATHSPECS;
   const configEntries: Array<readonly [string, string]> = [];
 
   if (!options.allowGitHooks) {
@@ -17,19 +25,12 @@ export async function buildSafeGitEnvironment(
   }
 
   if (!options.allowGitFilters) {
-    configEntries.push(...(await getFilterConfigNames(cwd)).map((configName) => [
+    configEntries.push(...(await getFilterConfigNames(cwd, environment)).map((configName) => [
       configName,
       configName.toLowerCase().endsWith('.required') ? 'false' : '',
     ] as const));
   }
 
-  const environment: NodeJS.ProcessEnv = {
-    ...process.env,
-    GIT_LITERAL_PATHSPECS: '1',
-  };
-  delete environment.GIT_GLOB_PATHSPECS;
-  delete environment.GIT_NOGLOB_PATHSPECS;
-  delete environment.GIT_ICASE_PATHSPECS;
   if (configEntries.length === 0) return environment;
 
   environment.GIT_CONFIG_COUNT = String(configEntries.length);
@@ -40,9 +41,12 @@ export async function buildSafeGitEnvironment(
   return environment;
 }
 
-async function getFilterConfigNames(cwd: string): Promise<string[]> {
+async function getFilterConfigNames(
+  cwd: string,
+  environment: NodeJS.ProcessEnv,
+): Promise<string[]> {
   try {
-    const stdout = await readGitConfigNames(cwd);
+    const stdout = await readGitConfigNames(cwd, environment);
     const names = stdout.trim().split('\n').filter(Boolean);
     return [...new Map(names.map((name) => [name.toLowerCase(), name])).values()];
   } catch (error) {
@@ -51,12 +55,12 @@ async function getFilterConfigNames(cwd: string): Promise<string[]> {
   }
 }
 
-function readGitConfigNames(cwd: string): Promise<string> {
+function readGitConfigNames(cwd: string, environment: NodeJS.ProcessEnv): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(
       'git',
       ['config', '--name-only', '--get-regexp', '^filter\\..*\\.(clean|smudge|process|required)$'],
-      { cwd, encoding: 'utf-8' },
+      { cwd, encoding: 'utf-8', env: environment },
       (error, stdout) => {
         if (error !== null) reject(error);
         else resolve(stdout);

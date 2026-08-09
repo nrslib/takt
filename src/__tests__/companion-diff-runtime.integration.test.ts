@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { NormalAgentWorkflowStep } from '../core/models/index.js';
 import { CompanionStepRuntime } from '../core/workflow/companion/step-runtime.js';
@@ -116,7 +116,11 @@ describe('CT-COMP-05 companion cumulative diff reader', () => {
     writeFileSync(join(root, 'ordinary.txt'), 'ordinary\n', 'utf8');
     execFileSync('git', ['add', 'module', 'ordinary.txt'], { cwd: root });
 
-    const snapshot = await readSnapshot(new GitCompanionDiffReader(), root, baseline);
+    const snapshot = await readSnapshot(
+      new GitCompanionDiffReader({ maxChangedFiles: 1 }),
+      root,
+      baseline,
+    );
 
     expect(snapshot.changedFiles).toEqual(['ordinary.txt']);
     expect(snapshot.content).toContain('+ordinary');
@@ -422,6 +426,22 @@ describe('CT-COMP-05 companion cumulative diff reader', () => {
     expect(existsSync(markerPath)).toBe(false);
   });
 
+  it('should ignore inherited GIT_CONFIG_PARAMETERS before enumerating and overriding filters', async () => {
+    const { root, baseline } = createRepositoryFixture('inherited-filter-parameters');
+    const markerPath = join(root, 'inherited-filter-marker');
+    const filterPath = join(root, 'inherited-filter.sh');
+    writeFileSync(filterPath, `#!/bin/sh\ntouch "${markerPath}"\ncat\n`, { mode: 0o700 });
+    execFileSync('git', ['config', '--local', 'filter.observer.clean', 'cat'], { cwd: root });
+    writeFileSync(join(root, '.gitattributes'), 'tracked.txt filter=observer\n', 'utf8');
+    writeFileSync(join(root, 'tracked.txt'), 'after\n', 'utf8');
+    vi.stubEnv('GIT_CONFIG_PARAMETERS', `'filter.observer.clean=${filterPath}'`);
+
+    const snapshot = await readSnapshot(new GitCompanionDiffReader(), root, baseline);
+
+    expect(snapshot.content).toContain('+after');
+    expect(existsSync(markerPath)).toBe(false);
+  });
+
   it('should preserve content at the byte limit and truncate only above it', async () => {
     const root = mkdtempSync(join(tmpdir(), 'takt-companion-boundary-diff-'));
     roots.push(root);
@@ -463,6 +483,46 @@ describe('CT-COMP-05 companion cumulative diff reader', () => {
     const result = await reader.readDiff(root, baseline);
 
     expect(result).toMatchObject({ status: 'error', failure: { code: 'file_count_limit' } });
+  });
+
+  it('should reject many long ordinary paths by file count without constructing an unbounded argv', async () => {
+    const { root, baseline } = createRepositoryFixture('many-long-paths');
+    for (let index = 0; index < 1_025; index += 1) {
+      const suffix = index.toString().padStart(4, '0');
+      writeFileSync(join(root, `${'long-'.repeat(38)}${suffix}.txt`), suffix, 'utf8');
+    }
+
+    const result = await new GitCompanionDiffReader().readDiff(root, baseline);
+
+    expect(result).toMatchObject({ status: 'error', failure: { code: 'file_count_limit' } });
+  });
+
+  itWithUnixFileModes('should accept a single gitlink path at the 16 KiB argv budget', async () => {
+    const { root, baseline } = createRepositoryFixture('exact-gitlink-path-budget');
+    const markerPath = join(root, 'gitlink-command-marker');
+    installPathListGit(root, 'p'.repeat(16 * 1024 - 1), markerPath);
+
+    const result = await new GitCompanionDiffReader().readDiff(root, baseline);
+
+    expect(result.status).toBe('ok');
+    expect(existsSync(markerPath)).toBe(true);
+  });
+
+  itWithUnixFileModes('should reject a single path one byte above the 16 KiB argv budget', async () => {
+    const { root, baseline } = createRepositoryFixture('oversized-gitlink-path-budget');
+    const markerPath = join(root, 'gitlink-command-marker');
+    installPathListGit(root, 'p'.repeat(16 * 1024), markerPath);
+
+    const result = await new GitCompanionDiffReader().readDiff(root, baseline);
+
+    expect(result).toMatchObject({
+      status: 'error',
+      failure: {
+        code: 'input_limit',
+        message: 'Companion Git path exceeds 16384 bytes',
+      },
+    });
+    expect(existsSync(markerPath)).toBe(false);
   });
 
   it('should accept a blob at the byte limit and reject one byte above it', async () => {
@@ -627,4 +687,31 @@ function createRepositoryFixture(name: string): { root: string; baseline: string
     root,
     baseline: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(),
   };
+}
+
+function installPathListGit(root: string, path: string, markerPath: string): void {
+  const fakeBin = join(root, 'fake-bin');
+  mkdirSync(fakeBin);
+  const gitPath = join(fakeBin, 'git');
+  const objectId = '0'.repeat(40);
+  writeFileSync(gitPath, `#!/bin/sh
+if [ "$1" = "config" ]; then
+  exit 1
+fi
+if [ "$1" = "diff" ] && [ "$2" = "--no-renames" ] && [ "$3" = "--name-only" ]; then
+  printf '${path}\\0'
+  exit 0
+fi
+if [ "$1" = "ls-tree" ] && [ "$2" = "-z" ]; then
+  : > '${markerPath}'
+  printf '160000 commit ${objectId}\\t${path}\\0'
+  exit 0
+fi
+if [ "$1" = "rev-parse" ] && [ "$2" = "--git-path" ]; then
+  printf '.git/objects\\n'
+fi
+`, { mode: 0o700 });
+  const currentPath = process.env.PATH;
+  if (currentPath === undefined) throw new Error('PATH is required for the Git boundary test');
+  vi.stubEnv('PATH', `${fakeBin}${delimiter}${currentPath}`);
 }

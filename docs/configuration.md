@@ -1227,4 +1227,6 @@ provider:
 | `opencode` | No | Live |
 | `cursor`, `copilot`, `kiro` | No | Unavailable |
 
+`No` means the workflow is rejected during loading; TAKT does not run a degraded, non-isolated companion.
+
 When live tool events are unavailable, completion review and the same-session fix loop still run.

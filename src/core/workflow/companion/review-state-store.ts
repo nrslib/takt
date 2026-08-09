@@ -258,7 +258,14 @@ export class CompanionReviewStateStore {
 
   private getMutable(path: string, companionName: string): CompanionReviewState {
     const existing = this.shared.states.get(path);
-    if (existing !== undefined) return existing;
+    if (existing !== undefined) {
+      if (existing.mailbox.companionName !== companionName) {
+        throw new Error(
+          `Companion review state path is already owned by "${existing.mailbox.companionName}": ${path}`,
+        );
+      }
+      return existing;
+    }
     const created = loadState(path, companionName);
     this.shared.states.set(path, created);
     return created;

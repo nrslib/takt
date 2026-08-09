@@ -165,7 +165,7 @@ export class SelectorInputReader {
     if (stat.isSymbolicLink()) {
       mode = '120000';
     } else if (stat.isFile()) {
-      mode = (stat.mode & 0o111) === 0 ? '100644' : '100755';
+      mode = (stat.mode & 0o100) === 0 ? '100644' : '100755';
     } else {
       throw new Error(`Selector input is not a regular file: ${path}`);
     }

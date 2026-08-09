@@ -281,45 +281,70 @@ describe('CT-COMP-06 stateless review and append-only mailbox', () => {
     expect(loadCompanionMailbox(mailboxPath, 'security-reviewer').openMustFixCount).toBe(0);
   });
 
-  it('should preserve file, memory state, and numbering when append fails', () => {
+  it.skipIf(process.platform === 'win32')(
+    'should preserve file, memory state, and numbering when append fails',
+    () => {
+      const store = new CompanionReviewStateStore();
+      const blockedDirectory = join(root, 'blocked');
+      const outside = join(root, 'outside');
+      const blockedPath = join(blockedDirectory, 'security-reviewer.jsonl');
+      mkdirSync(outside);
+      const before = store.get(blockedPath, 'security-reviewer');
+      symlinkSync(outside, blockedDirectory, 'dir');
+
+      expect(() => store.apply({
+        path: blockedPath,
+        companionName: 'security-reviewer',
+        maxOpenMustFix: 5,
+        result: {
+          findings: [{ severity: 'must_fix', file: 'src/a.ts', line: 1, finding: 'first' }],
+          updates: [],
+          notes: 'next notes',
+        },
+      })).toThrow(/symbolic link/);
+
+      expect(store.get(blockedPath, 'security-reviewer')).toEqual(before);
+      expect(existsSync(join(outside, 'security-reviewer.jsonl'))).toBe(false);
+
+      unlinkSync(blockedDirectory);
+      const retried = store.apply({
+        path: blockedPath,
+        companionName: 'security-reviewer',
+        maxOpenMustFix: 5,
+        result: {
+          findings: [{ severity: 'must_fix', file: 'src/a.ts', line: 1, finding: 'first' }],
+          updates: [],
+          notes: 'next notes',
+        },
+      });
+
+      expect(retried.records).toEqual([
+        expect.objectContaining({ id: 'security-reviewer-1', finding: 'first' }),
+      ]);
+      expect(loadCompanionMailbox(blockedPath, 'security-reviewer').findings).toHaveLength(1);
+    },
+  );
+
+  it('should reject a cached path requested for another companion without changing state or projection', () => {
     const store = new CompanionReviewStateStore();
-    const blockedDirectory = join(root, 'blocked');
-    const outside = join(root, 'outside');
-    const blockedPath = join(blockedDirectory, 'security-reviewer.jsonl');
-    mkdirSync(outside);
-    const before = store.get(blockedPath, 'security-reviewer');
-    symlinkSync(outside, blockedDirectory, 'dir');
-
-    expect(() => store.apply({
-      path: blockedPath,
+    store.apply({
+      path: mailboxPath,
       companionName: 'security-reviewer',
       maxOpenMustFix: 5,
       result: {
-        findings: [{ severity: 'must_fix', file: 'src/a.ts', line: 1, finding: 'first' }],
+        findings: [{ severity: 'must_fix', file: 'src/a.ts', line: 1, finding: 'unsafe' }],
         updates: [],
-        notes: 'next notes',
-      },
-    })).toThrow(/symbolic link/);
-
-    expect(store.get(blockedPath, 'security-reviewer')).toEqual(before);
-    expect(existsSync(join(outside, 'security-reviewer.jsonl'))).toBe(false);
-
-    unlinkSync(blockedDirectory);
-    const retried = store.apply({
-      path: blockedPath,
-      companionName: 'security-reviewer',
-      maxOpenMustFix: 5,
-      result: {
-        findings: [{ severity: 'must_fix', file: 'src/a.ts', line: 1, finding: 'first' }],
-        updates: [],
-        notes: 'next notes',
       },
     });
+    const beforeState = store.get(mailboxPath, 'security-reviewer');
+    const beforeProjection = readFileSync(mailboxPath, 'utf-8');
 
-    expect(retried.records).toEqual([
-      expect.objectContaining({ id: 'security-reviewer-1', finding: 'first' }),
-    ]);
-    expect(loadCompanionMailbox(blockedPath, 'security-reviewer').findings).toHaveLength(1);
+    expect(() => store.get(mailboxPath, 'architecture-reviewer')).toThrow(
+      /already owned by "security-reviewer"/,
+    );
+
+    expect(store.get(mailboxPath, 'security-reviewer')).toEqual(beforeState);
+    expect(readFileSync(mailboxPath, 'utf-8')).toBe(beforeProjection);
   });
 
   it('should publish an update and deferred finding together only after a successful retry', () => {
@@ -695,35 +720,41 @@ describe('CT-COMP-06 stateless review and append-only mailbox', () => {
     },
   );
 
-  it('should reject a symlink inside the companion mailbox root', () => {
-    const outside = join(root, 'outside');
-    const companionRoot = join(root, '.takt', 'runs', 'run', 'companion');
-    mkdirSync(outside, { recursive: true });
-    mkdirSync(companionRoot, { recursive: true });
-    symlinkSync(outside, join(companionRoot, 'implement'));
-    const path = buildCompanionMailboxPath({
-      cwd: root,
-      runSlug: 'run',
-      runPathNamespace: [],
-      stepName: 'implement',
-      companionName: 'security-reviewer',
-    });
+  it.skipIf(process.platform === 'win32')(
+    'should reject a symlink inside the companion mailbox root',
+    () => {
+      const outside = join(root, 'outside');
+      const companionRoot = join(root, '.takt', 'runs', 'run', 'companion');
+      mkdirSync(outside, { recursive: true });
+      mkdirSync(companionRoot, { recursive: true });
+      symlinkSync(outside, join(companionRoot, 'implement'));
+      const path = buildCompanionMailboxPath({
+        cwd: root,
+        runSlug: 'run',
+        runPathNamespace: [],
+        stepName: 'implement',
+        companionName: 'security-reviewer',
+      });
 
-    expect(() => appendCompanionMailboxRecords(path, '', [])).toThrow(/symbolic link/);
-  });
+      expect(() => appendCompanionMailboxRecords(path, '', [])).toThrow(/symbolic link/);
+    },
+  );
 
-  it('should reject a symlink used as the .takt mailbox ancestor', () => {
-    const outside = join(root, 'outside');
-    mkdirSync(join(outside, 'runs'), { recursive: true });
-    symlinkSync(outside, join(root, '.takt'));
-    const path = buildCompanionMailboxPath({
-      cwd: root,
-      runSlug: 'run',
-      runPathNamespace: [],
-      stepName: 'implement',
-      companionName: 'security-reviewer',
-    });
+  it.skipIf(process.platform === 'win32')(
+    'should reject a symlink used as the .takt mailbox ancestor',
+    () => {
+      const outside = join(root, 'outside');
+      mkdirSync(join(outside, 'runs'), { recursive: true });
+      symlinkSync(outside, join(root, '.takt'));
+      const path = buildCompanionMailboxPath({
+        cwd: root,
+        runSlug: 'run',
+        runPathNamespace: [],
+        stepName: 'implement',
+        companionName: 'security-reviewer',
+      });
 
-    expect(() => appendCompanionMailboxRecords(path, '', [])).toThrow(/symbolic link/);
-  });
+      expect(() => appendCompanionMailboxRecords(path, '', [])).toThrow(/symbolic link/);
+    },
+  );
 });

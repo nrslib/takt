@@ -15,6 +15,16 @@ type StructuredCallerSchema = Parameters<
   CompanionStructuredCaller['call']
 >[0]['outputSchema'];
 
+const reviewRoundRecordSchema: ReviewRoundSchema = { type: 'object' };
+const reviewRunnerRecordSchema: ReviewRunnerSchema = { type: 'object' };
+const reviewRunnerCallRecordSchema: ReviewRunnerCallSchema = { type: 'object' };
+const structuredCallerRecordSchema: StructuredCallerSchema = { type: 'object' };
+
+void reviewRoundRecordSchema;
+void reviewRunnerRecordSchema;
+void reviewRunnerCallRecordSchema;
+void structuredCallerRecordSchema;
+
 // @ts-expect-error Companion review round schemas must be records, not arrays.
 const reviewRoundArraySchema: ReviewRoundSchema = [];
 // @ts-expect-error Companion review round schemas must be records, not functions.

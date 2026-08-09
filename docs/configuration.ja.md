@@ -1216,4 +1216,6 @@ provider:
 | `opencode` | 不可 | ライブ |
 | `cursor`、`copilot`、`kiro` | 不可 | 利用不可 |
 
+`不可` の provider を指定した workflow はロード時に拒否され、隔離を弱めた縮退実行は行いません。
+
 ライブの tool event がない場合も、完了レビューと同一 session の修正ループは動作します。

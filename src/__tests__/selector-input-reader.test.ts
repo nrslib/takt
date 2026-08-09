@@ -473,6 +473,36 @@ describe('SelectorInputReader', () => {
     );
   });
 
+  itWithUnixFileModes('should use only the owner execute bit for untracked file modes', async () => {
+    const cwd = createGitDirectory();
+    const ownerExecutablePath = join(cwd, 'owner-executable.txt');
+    const groupExecutablePath = join(cwd, 'group-executable.txt');
+    writeFileSync(ownerExecutablePath, 'owner executable');
+    writeFileSync(groupExecutablePath, 'group executable');
+    chmodSync(ownerExecutablePath, 0o700);
+    chmodSync(groupExecutablePath, 0o610);
+    const runner = new FakeGitCommandRunner(
+      [],
+      0,
+      () => Buffer.alloc(0),
+      ['owner-executable.txt', 'group-executable.txt'],
+    );
+
+    const result = await new SelectorInputReader(runner).readInputs(
+      join(cwd, 'reports'),
+      [],
+      cwd,
+      undefined,
+    );
+
+    expect(result.workingTreeDiff).toContain(
+      'new file mode 100755\n--- /dev/null\n+++ b/owner-executable.txt',
+    );
+    expect(result.workingTreeDiff).toContain(
+      'new file mode 100644\n--- /dev/null\n+++ b/group-executable.txt',
+    );
+  });
+
   it('should represent a dangling untracked symlink without dereferencing it', async () => {
     const cwd = createGitDirectory();
     const missingTarget = join(cwd, 'missing-target.txt');
