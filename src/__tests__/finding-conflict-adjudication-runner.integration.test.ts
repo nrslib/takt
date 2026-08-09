@@ -8,9 +8,13 @@ import {
   createEngineProofRecord,
 } from '../core/models/finding-evidence-record.js';
 import type { WorkflowState } from '../core/models/types.js';
-import { createFindingConflictAdjudicationRunner } from '../core/workflow/findings/adjudication-runner.js';
+import {
+  createFindingConflictAdjudicationRunner,
+  serializeFindingConflictAdjudicationRequest,
+} from '../core/workflow/findings/adjudication-runner.js';
 import { buildFindingConflictAdjudicationStep } from '../core/workflow/findings/adjudication-step.js';
 import {
+  buildConflictAdjudicationSnapshotReference,
   renderConflictAdjudicationInstruction,
   type ConflictAdjudicationHistoryOrder,
 } from '../core/workflow/findings/adjudication-evidence.js';
@@ -1010,11 +1014,23 @@ describe('finding-conflict-adjudication runner registry contract', () => {
     const inflated = structuredClone(snapshot);
     inflated.subjects = inflated.subjects.map((subject, subjectIndex) => ({
       ...subject,
-      sourceRawFindingIds: Array.from({ length: 4096 }, (_, index) => `${subjectIndex}-raw-${index}`),
-      sourceRawPayloadDigests: Array.from({ length: 4096 }, (_, index) => `${subjectIndex}-payload-${index}`),
-      evidenceBindingIds: Array.from({ length: 4096 }, (_, index) => `${subjectIndex}-binding-${index}`),
+      sourceRawFindingIds: Array.from(
+        { length: 4096 },
+        (_, index) => `${subjectIndex}-raw-${index}-${'finding-context/'.repeat(50)}${index}`,
+      ),
+      sourceRawPayloadDigests: Array.from(
+        { length: 4096 },
+        (_, index) => `${subjectIndex.toString(16)}${index.toString(16).padStart(8, '0')}${'p'.repeat(55)}`,
+      ),
+      evidenceBindingIds: Array.from(
+        { length: 4096 },
+        (_, index) => `${subjectIndex.toString(16)}${index.toString(16).padStart(8, '0')}${'b'.repeat(55)}`,
+      ),
       rawClaimLandingIds: subject.role === 'holding_provisional'
-        ? Array.from({ length: 4096 }, (_, index) => `${subjectIndex}-landing-${index}`)
+        ? Array.from(
+            { length: 4096 },
+            (_, index) => `${subjectIndex.toString(16)}${index.toString(16).padStart(8, '0')}${'l'.repeat(55)}`,
+          )
         : [],
     }));
 
@@ -1040,8 +1056,51 @@ describe('finding-conflict-adjudication runner registry contract', () => {
       ]),
     ) as ConflictAdjudicationHistoryOrder;
     const instruction = renderConflictAdjudicationInstruction(inflated, history);
+    const reference = buildConflictAdjudicationSnapshotReference(inflated, history);
+    const compactRawFindingId = reference.subjects
+      .flatMap(({ sourceRawFindingIds }) => sourceRawFindingIds)
+      .find((value) => value.startsWith('raw-ref:'));
+    const step = runner().step;
+    const phase1Instruction = [
+      '# Finding Contract adjudication',
+      '',
+      'Judge only the supplied ledger subject and the engine-issued proofs and scope bindings.',
+      '',
+      'Do not dismiss or terminate without claim-specific verified evidence or a matching scope binding. Choose the undetermined outcome when evidence does not correspond byte-for-byte to the candidate, when the scope differs, or when the result cannot be determined.',
+      '',
+      'Do not perform a new review, edit code, or invent evidence, authority, or findings. Do not treat reviewer or coder confidence, or their silence, as evidence.',
+      '',
+      '---',
+      '',
+      instruction,
+    ].join('\n');
+    const request = serializeFindingConflictAdjudicationRequest({
+      step,
+      phase1Instruction,
+      agentOptions: {
+        cwd: '/Users/nrs/work/git/takt-worktrees/20260807T1751-pr-komento-no-wodaunroodoshite-4bcef608f0695f48',
+        projectCwd: '/Users/nrs/work/git/takt-worktrees/20260807T1751-pr-komento-no-wodaunroodoshite-4bcef608f0695f48',
+        provider: 'claude',
+        model: 'claude-sonnet',
+        resolvedProvider: 'claude',
+        resolvedModel: 'claude-sonnet',
+        personaPath: '/Users/nrs/work/git/takt/builtins/ja/facets/personas/supervisor.md',
+        workflowBundleResourceRoot: '/Users/nrs/work/git/takt/builtins',
+        language: 'ja',
+        allowedTools: [],
+        workflowMeta: {
+          workflowName: 'peer-review-suite-finding-contract-base',
+          currentStep: 'finding-conflict-adjudication',
+          stepsList: [{ name: 'reviewers' }, { name: 'finding-conflict-adjudication' }],
+          currentPosition: '2/2',
+        },
+        outputSchema: step.structuredOutput?.schema,
+      },
+    });
 
     expect(Buffer.byteLength(instruction, 'utf8'))
+      .toBeLessThanOrEqual(MANAGER_INTERPRETATION_LIMITS.maxInputBytesPerCall);
+    expect(Buffer.byteLength(request, 'utf8'))
       .toBeLessThanOrEqual(MANAGER_INTERPRETATION_LIMITS.maxInputBytesPerCall);
     expect(instruction).toContain('"snapshotFormat": "reference-v1"');
     expect(instruction).toContain('sourceRawFindingCount');
@@ -1050,6 +1109,10 @@ describe('finding-conflict-adjudication runner registry contract', () => {
     expect(instruction).toContain('sourceRawPayloadIds');
     expect(instruction).toContain('0-raw-999');
     expect(instruction).toContain('evidenceBindingIds');
+    expect(compactRawFindingId).toMatch(/^raw-ref:.*….*#sha256:[0-9a-f]{64}$/);
+    expect(reference.subjects[0]?.sourceRawFindingCount).toBe(4096);
+    expect(reference.subjects[0]?.sourceRawFindingDigest).toMatch(/^[0-9a-f]{64}$/);
+    expect(request).not.toContain(inflated.subjects[0]?.sourceRawFindingIds[0] ?? '');
   });
 
   it('re-adjudicates once with digest-bound target windows and applies a verified result', async () => {

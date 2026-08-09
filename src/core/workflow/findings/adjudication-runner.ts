@@ -80,7 +80,7 @@ function response(input: {
   };
 }
 
-function requestBytes(input: {
+export function serializeFindingConflictAdjudicationRequest(input: {
   step: WorkflowStep;
   phase1Instruction: string;
   agentOptions: ReturnType<OptionsBuilder['buildAgentOptions']>;
@@ -331,7 +331,11 @@ export function createFindingConflictAdjudicationRunner(deps: FindingConflictAdj
         ...deps.optionsBuilder.buildAgentOptions(step, runtime),
         sessionId: undefined,
       };
-      const exactRequestBytes = requestBytes({ step, phase1Instruction: instruction, agentOptions });
+      const exactRequestBytes = serializeFindingConflictAdjudicationRequest({
+        step,
+        phase1Instruction: instruction,
+        agentOptions,
+      });
       const reserved = await reserveFindingConflictAdjudication({
         ledgerStore: deps.ledgerStore,
         conflictId: conflict.id,

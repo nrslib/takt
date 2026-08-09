@@ -263,6 +263,7 @@ interface ConflictAdjudicationSnapshotReference {
 }
 
 const INLINE_HISTORY_LIMIT = 3;
+const INLINE_RAW_FINDING_ID_LIMIT_BYTES = 192;
 
 export interface ConflictAdjudicationHistoryOrder {
   sourceRawFindingIds: ReadonlyMap<string, FindingObservation>;
@@ -340,6 +341,23 @@ function inlineHistory(
     .map(({ value }) => value);
 }
 
+function compactInlineRawFindingId(rawFindingId: string): string {
+  if (Buffer.byteLength(rawFindingId, 'utf8') <= INLINE_RAW_FINDING_ID_LIMIT_BYTES) {
+    return rawFindingId;
+  }
+  const digest = createHash('sha256').update(rawFindingId).digest('hex');
+  // 12 characters on each side keeps the rendered reference below the 192-byte
+  // cap even when an ID contains four-byte UTF-8 characters.
+  return `raw-ref:${rawFindingId.slice(0, 12)}…${rawFindingId.slice(-12)}#sha256:${digest}`;
+}
+
+function inlineRawFindingHistory(
+  values: readonly string[],
+  observedAtByValue: ReadonlyMap<string, FindingObservation>,
+): string[] {
+  return inlineHistory(values, observedAtByValue).map(compactInlineRawFindingId);
+}
+
 function digestStringSet(values: readonly string[]): string {
   return createHash('sha256')
     .update(canonicalJson([...values].sort(compareBinaryStrings)))
@@ -360,7 +378,9 @@ function subjectReference(
     semanticClaimIdentityHash: subject.semanticClaimIdentityHash,
     claimSnapshotDigest: subject.claimSnapshotDigest,
     evidenceSetDigest: subject.evidenceSetDigest,
-    sourceRawFindingIds: inlineHistory(subject.sourceRawFindingIds, history.sourceRawFindingIds),
+    // Composite raw finding IDs include serialized run context. Keep a bounded
+    // member reference; the complete ID set remains covered by count + digest.
+    sourceRawFindingIds: inlineRawFindingHistory(subject.sourceRawFindingIds, history.sourceRawFindingIds),
     sourceRawFindingCount: subject.sourceRawFindingIds.length,
     sourceRawFindingDigest: digestStringSet(subject.sourceRawFindingIds),
     sourceRawPayloadIds: inlineHistory(subject.sourceRawPayloadDigests, history.sourceRawPayloadDigests),
@@ -378,6 +398,7 @@ function subjectReference(
 /**
  * Durable snapshot は台帳側の完全な入力を保持するが、provider には履歴全体を再送しない。
  * 直近の少数参照と、それ以前を表す count/digest を渡し、完全な snapshot は engine が解決する。
+ * 長大な raw finding ID は個別 digest 付きの代表参照に縮約する。
  */
 export function buildConflictAdjudicationSnapshotReference(
   snapshot: ConflictAdjudicationSnapshot,
