@@ -13,7 +13,6 @@ edit: false
 persona: review-adjudicator
 policy:
   - contract-change
-  - review
   - $param: review_policy_additions
 knowledge:
   - architecture

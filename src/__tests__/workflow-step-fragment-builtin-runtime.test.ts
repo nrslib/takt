@@ -48,6 +48,7 @@ import {
 import { initializeGitFixture } from './helpers/git-fixture.js';
 import { invalidateAllResolvedConfigCache, invalidateGlobalConfigCache } from '../infra/config/index.js';
 import {
+  getBuiltinLanguageResourcesDir,
   getBuiltinLanguageStepsDir,
   getBuiltinWorkflowsDir,
 } from '../infra/config/paths.js';
@@ -963,6 +964,12 @@ describe('builtin workflow step fragment migration', () => {
     }
 
     const peerReview = readBuiltinWorkflow(lang, 'peer-review');
+    for (const reviewerStepName of ['initial-reviewers', 'reviewers']) {
+      expect(getStep(peerReview, reviewerStepName).rules).toEqual([
+        { condition: 'COMPLETE', next: 'review-adjudication' },
+        { condition: 'needs_fix', next: 'review-adjudication' },
+      ]);
+    }
     const finalGate = getStep(peerReview, 'final-gate');
     expect(finalGate.with).toMatchObject({
       merge_readiness_policy: { $param: 'verification_policy' },
@@ -981,9 +988,17 @@ describe('builtin workflow step fragment migration', () => {
     )) as RawStep;
 
     expect(adjudication.rules).toEqual(expect.any(Array));
+    expect(adjudication.with).toEqual({
+      review_policy_additions: { $param: 'review_policy_additions' },
+      review_knowledge_additions: { $param: 'review_knowledge_additions' },
+    });
     expect(fixPlan.with).toMatchObject({
       plan_instruction: 'fix-plan-from-review-resolution',
     });
+    expect(adjudicationFragment.policy).toEqual([
+      'contract-change',
+      { $param: 'review_policy_additions' },
+    ]);
     expect(adjudicationFragment.output_contracts).toEqual({
       report: [{ name: 'review-resolution.md', format: 'review-decision' }],
     });
@@ -993,6 +1008,23 @@ describe('builtin workflow step fragment migration', () => {
         report: [{ name: 'review-resolution.md', format: 'merge-readiness-supervision' }],
       },
     });
+  });
+
+  it.each(LANGUAGES)('keeps %s remediation authority separate from reviewer verdicts', (lang) => {
+    const facetRoot = join(getBuiltinLanguageResourcesDir(lang), 'facets');
+    const instruction = readFileSync(
+      join(facetRoot, 'instructions', 'adjudicate-review-findings.md'),
+      'utf-8',
+    );
+    const persona = readFileSync(
+      join(facetRoot, 'personas', 'review-adjudicator.md'),
+      'utf-8',
+    );
+
+    expect(instruction).toMatch(
+      /reviewer.*(?:重大度|severity).*REJECT.*(?:修正案|suggested remediation).*(?:根拠にしない|not authority)/isu,
+    );
+    expect(persona).not.toMatch(/実在する欠陥は軽微でも修正対象から外さない|Never exclude a real defect merely because it is minor/u);
   });
 
   it.each(LANGUAGES)('detects every %s peer-review remediation cycle at its configured threshold', (lang) => {

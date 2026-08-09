@@ -4,7 +4,7 @@ Adjudicate the review findings from evidence and establish the authoritative rem
 
 **Tasks:**
 1. For each finding, verify the claim, concrete failure scenario, file:line or reproduction evidence, and relationship to the requirements
-2. Treat every defect confirmed in the current code as actionable regardless of severity or remediation size
+2. Treat a defect confirmed in the current code as actionable only when it violates a requirement or acceptance criterion, breaks a required execution path, or regresses an observable existing contract outside the requested change scope that must be preserved. Reviewer severity, REJECT, or suggested remediation is not authority by itself
 3. Consolidate findings with the same root cause and acceptance criteria into one family while preserving every source finding ID and report
 4. Limit non-actionable findings to `duplicate` with the same cause and acceptance criteria, `false_positive` or `no_issue_after_verification` contradicted by current code, `overreach` without an observable defect or contract basis, `out_of_scope` unrelated to the change's correctness, contract, or wiring, or `environment_unverified`; provide counter-evidence or applicable criteria and name the target family for `duplicate`
 5. Use `environment_unverified` only when every applicable Policy condition holds, and never use environment limitations to dismiss evidence of an implementation defect
