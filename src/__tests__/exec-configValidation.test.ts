@@ -77,31 +77,37 @@ describe('assertExecProviderEffort provider capability checks', () => {
     ).not.toThrow();
   });
 
-  it('should accept arbitrary effort values and leave support to the provider', () => {
-    expect(() =>
-      assertExecProviderEffort('codex', 'max', 'test'),
-    ).not.toThrow();
-    expect(() =>
-      assertExecProviderEffort('claude', 'experimental', 'test'),
-    ).not.toThrow();
-    expect(() =>
-      assertExecProviderEffort('copilot', 'vendor-level', 'test'),
-    ).not.toThrow();
-  });
+  it.each([
+    ['codex', 'max'],
+    ['claude', 'experimental'],
+    ['copilot', 'vendor-level'],
+  ] as const)(
+    'should accept arbitrary effort values for %s/%s and leave support to the provider',
+    (provider, effort) => {
+      expect(() =>
+        assertExecProviderEffort(provider, effort, 'test'),
+      ).not.toThrow();
+    },
+  );
 
   it.each(
     (['codex', 'claude', 'copilot'] as const).flatMap((provider) =>
       (['', '   '] as const).map((effort) => [provider, effort] as const)),
-  )('should reject blank effort values for %s', (provider, effort) => {
+  )('should reject blank effort values for %s/%s', (provider, effort) => {
     expect(() => resolveExecProviderEffort(provider, effort, 'test'))
       .toThrow(`does not support effort "${effort}"`);
   });
 
-  it('should return the canonical trimmed effort value', () => {
-    expect(resolveExecProviderEffort('codex', '  custom-level  ', 'test')).toBe('custom-level');
-    expect(resolveExecProviderEffort('claude', '  experimental  ', 'test')).toBe('experimental');
-    expect(resolveExecProviderEffort('copilot', '  vendor-level  ', 'test')).toBe('vendor-level');
-  });
+  it.each([
+    ['codex', '  custom-level  ', 'custom-level'],
+    ['claude', '  experimental  ', 'experimental'],
+    ['copilot', '  vendor-level  ', 'vendor-level'],
+  ] as const)(
+    'should return the canonical trimmed effort value for %s/%s',
+    (provider, effort, expected) => {
+      expect(resolveExecProviderEffort(provider, effort, 'test')).toBe(expected);
+    },
+  );
 
   it('should reject effort for providers without effort support', () => {
     expect(() =>
