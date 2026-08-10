@@ -885,6 +885,7 @@ describe('main manager bounded task runner', () => {
       selectedFindingIds: string[];
     }>(firstInstruction, '## Context coverage');
     expect(manifest.rawFindings.length).toBeLessThan(16);
+    expect(coverage.candidateFindingCount).toBeGreaterThan(0);
     expect(coverage.selectedFindingIds.length).toBe(coverage.candidateFindingCount);
     expect(result.decisions.rawDecisions).toHaveLength(16);
   });

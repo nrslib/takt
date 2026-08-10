@@ -4184,6 +4184,9 @@ describe('WorkflowEngine structured caller defaults', () => {
     for (const namespace of reportNamespaces) {
       expect(rawFindingIds.filter((id) => id.includes(namespace))).toHaveLength(1);
     }
+    for (const id of rawFindingIds) {
+      expect(reportNamespaces.filter((namespace) => id.includes(namespace))).toHaveLength(1);
+    }
     expect(reportNamespaces.map((namespace) => (
       readFileSync(join(reportsRoot, namespace, 'review.md'), 'utf-8')
     ))).toEqual([
