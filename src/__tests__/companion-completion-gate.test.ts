@@ -36,9 +36,7 @@ function state(companion: WorkflowState['companion']): WorkflowState {
     stepIterations: new Map(),
     restoredStepIterationNames: new Set(),
     dynamicParallelSelections: new Map(),
-    resumedDynamicParallelSteps: new Set(),
     dynamicFacetSelections: new Map(),
-    resumedDynamicFacetSteps: new Set(),
     status: 'running',
     companion,
   };

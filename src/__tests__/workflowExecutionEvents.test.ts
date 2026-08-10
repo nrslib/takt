@@ -246,7 +246,6 @@ describe('bindWorkflowExecutionEvents', () => {
         personaSessions: new Map(),
         stepIterations: new Map([['delegate', 1]]),
         dynamicParallelSelections: new Map(),
-        resumedDynamicParallelSteps: new Set(),
         status: 'running',
       };
       const childState = {
