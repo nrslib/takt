@@ -1862,24 +1862,22 @@ describe('reviewer anomaly adjudication control task', () => {
     const result = await run([raw], emptyLedger({ findings: [finding] }));
 
     expect(result.decisions.rawDecisions.length + result.rawFailures.size).toBe(1);
-    if (executeAgentMock.mock.calls.length > 0) {
-      const manifest = sectionJson<{
-        rawFindings: Array<{
-          rawFindingId: string;
-          relation: string;
-          targetFindingId: string | null;
-          target: unknown;
-        }>;
-      }>(prompt, '## Task manifest');
-      expect(manifest.rawFindings[0]).toMatchObject({
-        rawFindingId: raw.rawFindingId,
-        relation: 'persists',
-        targetFindingId: finding.id,
-        target: { kind: 'code' },
-      });
-      expect(manifest.rawFindings[0]).not.toHaveProperty('targetIdentityHash');
-      expect(manifest.rawFindings[0]).not.toHaveProperty('claimIdentityHash');
-    }
+    const manifest = sectionJson<{
+      rawFindings: Array<{
+        rawFindingId: string;
+        relation: string;
+        targetFindingId: string | null;
+        target: unknown;
+      }>;
+    }>(prompt, '## Task manifest');
+    expect(manifest.rawFindings[0]).toMatchObject({
+      rawFindingId: raw.rawFindingId,
+      relation: 'persists',
+      targetFindingId: finding.id,
+      target: { kind: 'code' },
+    });
+    expect(manifest.rawFindings[0]).not.toHaveProperty('targetIdentityHash');
+    expect(manifest.rawFindings[0]).not.toHaveProperty('claimIdentityHash');
   });
 
   it('keeps byte-exact quote text as an original substring without a truncation marker', async () => {

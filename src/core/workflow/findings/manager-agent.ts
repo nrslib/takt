@@ -42,7 +42,6 @@ import {
   promptArrayView,
   boundPromptString,
   FINDING_MANAGER_PROMPT_FIELD_LIMITS,
-  promptJsonUtf8Bytes,
   type PromptTruncationMarker,
 } from './prompt-bounds.js';
 
@@ -178,88 +177,74 @@ function boundedTargetCollection(input: {
 }
 
 function boundFindingTarget(target: RawFinding['target']): unknown {
-  let smallestResult: unknown;
-  for (let collectionBytes = 768; collectionBytes >= 64; collectionBytes -= 16) {
-    let result: unknown;
-    switch (target.kind) {
-      case 'review_scope':
-        result = { kind: target.kind };
-        break;
-      case 'code':
-        result = {
-          kind: target.kind,
-          paths: boundedTargetCollection({
-            values: target.paths,
-            fieldPath: 'target.paths',
-            maxRenderedBytes: collectionBytes,
+  switch (target.kind) {
+    case 'review_scope':
+      return { kind: target.kind };
+    case 'code':
+      return {
+        kind: target.kind,
+        paths: boundedTargetCollection({
+          values: target.paths,
+          fieldPath: 'target.paths',
+          maxRenderedBytes: TARGET_CODE_PATHS_MAX_RENDERED_BYTES,
+        }),
+      };
+    case 'structure':
+      return {
+        kind: target.kind,
+        scope: {
+          kind: target.scope.kind,
+          roots: boundedTargetCollection({
+            values: target.scope.roots,
+            fieldPath: 'target.scope.roots',
+            maxRenderedBytes: TARGET_STRUCTURE_COLLECTION_MAX_RENDERED_BYTES,
           }),
-        };
-        break;
-      case 'structure':
-        result = {
+        },
+        manifestTargets: boundedTargetCollection({
+          values: target.manifestTargets,
+          fieldPath: 'target.manifestTargets',
+          maxRenderedBytes: TARGET_STRUCTURE_COLLECTION_MAX_RENDERED_BYTES,
+        }),
+      };
+    case 'absence': {
+      if (target.predicate.kind === 'path_state') {
+        const path = boundPromptString({
+          value: target.predicate.path,
+          fieldPath: 'target.predicate.path',
+          maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.targetCollectionItemMaxBytes,
+        });
+        return {
           kind: target.kind,
-          scope: {
-            kind: target.scope.kind,
-            roots: boundedTargetCollection({
-              values: target.scope.roots,
-              fieldPath: 'target.scope.roots',
-              maxRenderedBytes: collectionBytes,
-            }),
+          predicate: {
+            kind: target.predicate.kind,
+            path: path.text,
+            expected: target.predicate.expected,
+            ...(path.truncation === undefined ? {} : { pathTruncation: path.truncation }),
           },
-          manifestTargets: boundedTargetCollection({
-            values: target.manifestTargets,
-            fieldPath: 'target.manifestTargets',
-            maxRenderedBytes: collectionBytes,
-          }),
         };
-        break;
-      case 'absence': {
-        if (target.predicate.kind === 'path_state') {
-          const path = boundPromptString({
-            value: target.predicate.path,
-            fieldPath: 'target.predicate.path',
-            maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.targetCollectionItemMaxBytes,
-          });
-          result = {
-            kind: target.kind,
-            predicate: {
-              kind: target.predicate.kind,
-              path: path.text,
-              expected: target.predicate.expected,
-              ...(path.truncation === undefined ? {} : { pathTruncation: path.truncation }),
-            },
-          };
-        } else {
-          const roots = boundedTargetCollection({
-            values: target.predicate.roots,
-            fieldPath: 'target.predicate.roots',
-            maxRenderedBytes: collectionBytes,
-          });
-          const literal = boundPromptString({
-            value: target.predicate.literal,
-            fieldPath: 'target.predicate.literal',
-            maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.targetLiteralMaxBytes,
-          });
-          result = {
-            kind: target.kind,
-            predicate: {
-              kind: target.predicate.kind,
-              roots,
-              literal: literal.text,
-              textDomain: target.predicate.textDomain,
-              ...(literal.truncation === undefined ? {} : { literalTruncation: literal.truncation }),
-            },
-          };
-        }
-        break;
       }
+      const roots = boundedTargetCollection({
+        values: target.predicate.roots,
+        fieldPath: 'target.predicate.roots',
+        maxRenderedBytes: TARGET_ABSENCE_ROOTS_MAX_RENDERED_BYTES,
+      });
+      const literal = boundPromptString({
+        value: target.predicate.literal,
+        fieldPath: 'target.predicate.literal',
+        maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.targetLiteralMaxBytes,
+      });
+      return {
+        kind: target.kind,
+        predicate: {
+          kind: target.predicate.kind,
+          roots,
+          literal: literal.text,
+          textDomain: target.predicate.textDomain,
+          ...(literal.truncation === undefined ? {} : { literalTruncation: literal.truncation }),
+        },
+      };
     }
-    if (promptJsonUtf8Bytes(result) <= FINDING_MANAGER_PROMPT_FIELD_LIMITS.targetMaxBytes) {
-      return result;
-    }
-    smallestResult = result;
   }
-  return smallestResult;
 }
 
 export function managerPromptTargetView(target: RawFinding['target']): unknown {
@@ -396,6 +381,9 @@ function digestCompactValue(value: unknown): string {
 }
 
 const COMPACT_FINDING_COLLECTION_LIMIT = 16;
+const TARGET_CODE_PATHS_MAX_RENDERED_BYTES = 768;
+const TARGET_STRUCTURE_COLLECTION_MAX_RENDERED_BYTES = 384;
+const TARGET_ABSENCE_ROOTS_MAX_RENDERED_BYTES = 256;
 
 function compactFindingCollection<T>(fullSet: readonly T[]): {
   items: T[];
@@ -521,7 +509,9 @@ function boundedLedgerLocations(
     items: boundedLocations,
     fieldPath: `${finding.id}.locations`,
     maxItems: FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerMaxLocations,
-    maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerLocationMaxBytes,
+    maxRenderedBytes:
+      FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerMaxLocations
+      * FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerLocationMaxBytes,
   });
   const retainedItemTruncations = itemTruncations
     .filter(({ index }) => index < bounded.items.length)
@@ -561,13 +551,19 @@ function boundedLedgerEvidenceDetails(
       maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerEvidenceVerbatimExcerptMaxBytes,
     });
     return {
-      ...record,
+      kind: record.kind,
+      evidenceId: record.evidenceId,
+      claimIdentityHash: record.claimIdentityHash,
       path: path.text,
       ...(path.truncation === undefined ? {} : { pathTruncation: path.truncation }),
+      startLine: record.startLine,
+      endLine: record.endLine,
       verbatimExcerpt: excerpt.text,
       ...(excerpt.truncation === undefined
         ? {}
         : { verbatimExcerptTruncation: excerpt.truncation }),
+      snapshotId: record.snapshotId,
+      fileHash: record.fileHash,
     };
   });
   return promptArrayView(boundPromptArray({

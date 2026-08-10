@@ -83,6 +83,13 @@ export interface MainManagerRawFailure {
   reason: string;
 }
 
+class FindingManagerPromptOverflowError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'FindingManagerPromptOverflowError';
+  }
+}
+
 export function buildRawTaskInputOverflow(input: {
   taskId: string;
   ownedRawFindingIds: readonly string[];
@@ -555,6 +562,12 @@ function rawTaskManifestView(input: {
       if (raw === undefined) {
         throw new Error(`Raw task manifest is missing raw finding "${rawFindingId}"`);
       }
+      const componentId = input.task.componentIdByRawFindingId.get(rawFindingId);
+      if (componentId === undefined) {
+        throw new Error(
+          `Finding manager engine bug: raw task "${input.task.taskId}" is missing componentId for raw finding "${rawFindingId}"`,
+        );
+      }
       const reviewer = boundPromptString({
         value: raw.reviewer,
         fieldPath: `${rawFindingId}.reviewer`,
@@ -562,7 +575,7 @@ function rawTaskManifestView(input: {
       });
       return {
         rawFindingId,
-        componentId: input.task.componentIdByRawFindingId.get(rawFindingId)!,
+        componentId,
         reviewer: reviewer.text,
         ...(reviewer.truncation === undefined
           ? {}
@@ -584,7 +597,9 @@ function promptSection(
   const rendered = [label, render(value)].join('\n');
   const bytes = Buffer.byteLength(rendered, 'utf8');
   if (bytes > maxBytes) {
-    throw new Error(`Finding manager prompt section "${label}" exceeds ${maxBytes} UTF-8 bytes (${bytes})`);
+    throw new FindingManagerPromptOverflowError(
+      `Finding manager prompt section "${label}" exceeds ${maxBytes} UTF-8 bytes (${bytes})`,
+    );
   }
   return rendered;
 }
@@ -718,7 +733,7 @@ function buildRawTaskInstruction(input: {
     '',
   ].join('\n');
   if (Buffer.byteLength(structure, 'utf8') > FINDING_MANAGER_PROMPT_BUDGETS.structureMaxBytes) {
-    throw new Error(
+    throw new FindingManagerPromptOverflowError(
       `Finding manager prompt structure exceeds ${FINDING_MANAGER_PROMPT_BUDGETS.structureMaxBytes} UTF-8 bytes`,
     );
   }
@@ -742,7 +757,7 @@ function buildRawTaskInstruction(input: {
     ),
   ].join('\n');
   if (Buffer.byteLength(manifest, 'utf8') > manifestBudget) {
-    throw new Error(
+    throw new FindingManagerPromptOverflowError(
       `Finding manager prompt manifest exceeds ${manifestBudget} UTF-8 bytes`,
     );
   }
@@ -977,7 +992,7 @@ async function executeRawTasks(input: {
         const inputBytes = Buffer.byteLength(phase1Instruction, 'utf8');
         renderedInputBytes = inputBytes;
         if (inputBytes > FINDING_MANAGER_PROMPT_BUDGETS.totalMaxBytes) {
-          throw new Error(
+          throw new FindingManagerPromptOverflowError(
             `Finding manager prompt exceeds the prompt budget of ${FINDING_MANAGER_PROMPT_BUDGETS.totalMaxBytes} UTF-8 bytes (${inputBytes})`,
           );
         }
@@ -986,7 +1001,10 @@ async function executeRawTasks(input: {
           break;
         }
       } catch (error) {
-        lastRenderError = error instanceof Error ? error.message : String(error);
+        if (!(error instanceof FindingManagerPromptOverflowError)) {
+          throw error;
+        }
+        lastRenderError = error.message;
       }
     }
     if (prepared === undefined) {

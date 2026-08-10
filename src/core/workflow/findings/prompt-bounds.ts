@@ -77,37 +77,48 @@ function truncationMarkerBytes(marker: PromptTruncationMarker): number {
   return promptJsonUtf8Bytes(marker);
 }
 
-function promptStringCandidate(
-  codePoints: readonly string[],
-  retainedCount: number,
-): string {
-  return codePoints.slice(0, retainedCount).join('');
-}
-
 export function boundPromptString(input: {
   value: string;
   fieldPath: string;
   maxRenderedBytes: number;
 }): { text: string; truncation?: PromptTruncationMarker } {
   const originalUtf8Bytes = Buffer.byteLength(input.value, 'utf8');
-  if (promptJsonUtf8Bytes(input.value) <= input.maxRenderedBytes) {
-    return { text: input.value };
+  const codePoints = [...input.value];
+  let retainedUtf8Bytes = 0;
+  let renderedStringBytes = 2;
+  let bestRetainedCount = 0;
+  let bestTruncation: PromptTruncationMarker = {
+    kind: PROMPT_TRUNCATION_MARKER_KIND,
+    omittedUtf8Bytes: originalUtf8Bytes,
+  };
+  if (renderedStringBytes + truncationMarkerBytes(bestTruncation) > input.maxRenderedBytes) {
+    bestRetainedCount = -1;
   }
 
-  const codePoints = [...input.value];
-  for (let retainedCount = codePoints.length; retainedCount >= 0; retainedCount -= 1) {
-    const text = promptStringCandidate(codePoints, retainedCount);
-    const retainedUtf8Bytes = Buffer.byteLength(text, 'utf8');
+  for (const [index, codePoint] of codePoints.entries()) {
+    retainedUtf8Bytes += Buffer.byteLength(codePoint, 'utf8');
+    renderedStringBytes += promptJsonUtf8Bytes(codePoint) - 2;
     const truncation: PromptTruncationMarker = {
       kind: PROMPT_TRUNCATION_MARKER_KIND,
       omittedUtf8Bytes: originalUtf8Bytes - retainedUtf8Bytes,
     };
     if (
-      promptJsonUtf8Bytes(text) + truncationMarkerBytes(truncation)
+      renderedStringBytes + truncationMarkerBytes(truncation)
       <= input.maxRenderedBytes
     ) {
-      return { text, truncation };
+      bestRetainedCount = index + 1;
+      bestTruncation = truncation;
     }
+  }
+
+  if (renderedStringBytes <= input.maxRenderedBytes) {
+    return { text: input.value };
+  }
+  if (bestRetainedCount >= 0) {
+    return {
+      text: codePoints.slice(0, bestRetainedCount).join(''),
+      truncation: bestTruncation,
+    };
   }
 
   return {

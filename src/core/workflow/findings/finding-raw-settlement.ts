@@ -144,7 +144,13 @@ export function assertFindingRawObservationExactCover(input: {
   }
 
   const failuresByRawFindingId = new Map<string, FindingRawObservationFailure>();
-  for (const failure of input.failures) {
+  // 同一 raw の failure は phase、次に reason の binary 順で最初の1件を残す。
+  const orderedFailures = [...input.failures].sort((left, right) => (
+    compareBinaryStrings(left.rawFindingId, right.rawFindingId)
+    || compareBinaryStrings(left.phase, right.phase)
+    || compareBinaryStrings(left.reason, right.reason)
+  ));
+  for (const failure of orderedFailures) {
     if (failure.phase.trim().length === 0 || failure.reason.trim().length === 0) {
       diagnostics.push(
         `explicit failure for rawFindingId "${failure.rawFindingId}" must include a phase and non-empty reason`,
@@ -284,6 +290,9 @@ export function buildFindingRawObservationSettlementSummary(input: {
   const conflictByRawFindingId = new Map<string, string>();
   const conflictById = new Map(ledger.conflicts.map((conflict) => [conflict.id, conflict]));
   for (const landing of ledger.conflictRawClaimLandings) {
+    if (!expectedRawFindingIds.has(landing.rawFindingId)) {
+      continue;
+    }
     const prior = conflictByRawFindingId.get(landing.rawFindingId);
     if (prior !== undefined) {
       throw new FindingRawObservationExactCoverError([

@@ -195,7 +195,9 @@ export async function commitFindingManagerRound(params: {
               .map((rawFindingId) => ({
                 rawFindingId,
                 phase: `manager-task:${audit.taskKind}`,
-                reason: audit.reason,
+                reason: audit.reason.trim().length > 0
+                  ? audit.reason
+                  : `Manager task ended with status "${audit.status}"`,
               }))),
         ],
       });

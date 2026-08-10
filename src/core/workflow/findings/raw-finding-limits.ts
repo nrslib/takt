@@ -7,6 +7,7 @@
  * step envelope 違反は reviewer 全体を単一 overflow provisional に置き換える。
  */
 import {
+  isVerbatimExcerptWithinByteLimit,
   RAW_FINDING_FIELD_LIMITS,
   RAW_FINDING_NORMALIZER_LIMITS,
 } from '../../models/finding-contract-limits.js';
@@ -183,14 +184,20 @@ export function findRawFieldLimitViolation(fields: {
       continue;
     }
     const record = evidence as Record<string, unknown>;
-    const evidenceChecks: Array<[string, unknown, number]> = record.kind === 'file_quote'
+    const evidenceChecks: Array<[string, unknown, number, boolean]> = record.kind === 'file_quote'
       ? [
-          [`evidence[${index}].path`, record.path, RAW_FINDING_LIMITS.maxEvidencePathChars],
-          [`evidence[${index}].verbatimExcerpt`, record.verbatimExcerpt, RAW_FINDING_LIMITS.maxVerbatimExcerptBytes],
+          [`evidence[${index}].path`, record.path, RAW_FINDING_LIMITS.maxEvidencePathChars, false],
+          [`evidence[${index}].verbatimExcerpt`, record.verbatimExcerpt, RAW_FINDING_LIMITS.maxVerbatimExcerptBytes, true],
         ]
       : [];
-    for (const [name, value, limit] of evidenceChecks) {
-      if (typeof value === 'string' && Buffer.byteLength(value, 'utf8') > limit) {
+    for (const [name, value, limit, isVerbatimExcerpt] of evidenceChecks) {
+      if (typeof value !== 'string') {
+        continue;
+      }
+      const withinLimit = isVerbatimExcerpt
+        ? isVerbatimExcerptWithinByteLimit(value, limit)
+        : Buffer.byteLength(value, 'utf8') <= limit;
+      if (!withinLimit) {
         return `${name} is ${Buffer.byteLength(value, 'utf8')} UTF-8 bytes, exceeding the limit of ${limit}`;
       }
     }

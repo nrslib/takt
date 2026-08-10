@@ -34,3 +34,7 @@ export const FINDING_EVIDENCE_ISSUANCE_LIMITS = {
   maxReviewerBytes: 256 * 1024,
   maxStepBytes: 512 * 1024,
 } as const;
+
+export function isVerbatimExcerptWithinByteLimit(value: string, maxBytes: number): boolean {
+  return Buffer.byteLength(value, 'utf8') <= maxBytes;
+}
