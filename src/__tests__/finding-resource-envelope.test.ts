@@ -7,9 +7,15 @@ import {
   projectReviewerRawStructuredOutputWithEnvelope,
   toLedgerRawFinding,
 } from '../core/workflow/findings/raw-canonicalization.js';
-import { RawFindingSchema } from '../core/models/finding-schemas.js';
+import {
+  RawFindingEvidenceSchema,
+  RawFindingSchema,
+} from '../core/models/finding-schemas.js';
 import { intakeReviewerOutputs } from '../core/workflow/findings/manager-intake.js';
-import { RAW_FINDING_LIMITS } from '../core/workflow/findings/raw-finding-limits.js';
+import {
+  findRawFieldLimitViolation,
+  RAW_FINDING_LIMITS,
+} from '../core/workflow/findings/raw-finding-limits.js';
 import type { AgentResponse, WorkflowStep } from '../core/models/types.js';
 import type { FindingLedger } from '../core/workflow/findings/types.js';
 import { reviewerRawExtractionFixture } from './helpers/finding-lifecycle-fixture.js';
@@ -404,6 +410,30 @@ describe('reviewer raw resource envelope', () => {
         `rawFindingId is ${RAW_FINDING_LIMITS.maxProviderRawFindingIdChars + 1} characters, `
         + `exceeding the limit of ${RAW_FINDING_LIMITS.maxProviderRawFindingIdChars}`,
       );
+  });
+
+  it('uses the schema character limit for non-ASCII evidence paths at the boundary', () => {
+    const path = '日'.repeat(RAW_FINDING_LIMITS.maxEvidencePathChars);
+    const evidence = {
+      kind: 'file_quote' as const,
+      path,
+      startLine: 1,
+      endLine: 1,
+      verbatimExcerpt: 'quote',
+      snapshotId: 'a'.repeat(64),
+    };
+    expect(RawFindingEvidenceSchema.safeParse(evidence).success).toBe(true);
+    expect(findRawFieldLimitViolation({ evidence: [evidence] })).toBeUndefined();
+
+    const overLimitPath = `${path}日`;
+    expect(RawFindingEvidenceSchema.safeParse({ ...evidence, path: overLimitPath }).success)
+      .toBe(false);
+    expect(findRawFieldLimitViolation({
+      evidence: [{ ...evidence, path: overLimitPath }],
+    })).toBe(
+      `evidence[0].path is ${RAW_FINDING_LIMITS.maxEvidencePathChars + 1} characters, `
+      + `exceeding the limit of ${RAW_FINDING_LIMITS.maxEvidencePathChars} characters`,
+    );
   });
 
   it('deduplicates target ids before enforcing the atomized boundary', () => {

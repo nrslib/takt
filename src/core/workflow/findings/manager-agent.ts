@@ -41,6 +41,7 @@ import {
   boundPromptArray,
   promptArrayView,
   boundPromptString,
+  FINDING_MANAGER_PROMPT_LEDGER_LOCATIONS_ARRAY_MAX_BYTES,
   FINDING_MANAGER_PROMPT_FIELD_LIMITS,
   type PromptTruncationMarker,
 } from './prompt-bounds.js';
@@ -509,9 +510,7 @@ function boundedLedgerLocations(
     items: boundedLocations,
     fieldPath: `${finding.id}.locations`,
     maxItems: FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerMaxLocations,
-    maxRenderedBytes:
-      FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerMaxLocations
-      * FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerLocationMaxBytes,
+    maxRenderedBytes: FINDING_MANAGER_PROMPT_LEDGER_LOCATIONS_ARRAY_MAX_BYTES,
   });
   const retainedItemTruncations = itemTruncations
     .filter(({ index }) => index < bounded.items.length)

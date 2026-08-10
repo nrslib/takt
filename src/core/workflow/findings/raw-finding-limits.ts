@@ -12,6 +12,8 @@ import {
   RAW_FINDING_NORMALIZER_LIMITS,
 } from '../../models/finding-contract-limits.js';
 
+type RawFindingFieldMeasurementUnit = 'characters' | 'UTF-8 bytes';
+
 export const RAW_FINDING_LIMITS = {
   /** raw 件数 / reviewer / review invocation */
   maxRawFindingsPerReviewer: 64,
@@ -184,21 +186,26 @@ export function findRawFieldLimitViolation(fields: {
       continue;
     }
     const record = evidence as Record<string, unknown>;
-    const evidenceChecks: Array<[string, unknown, number, boolean]> = record.kind === 'file_quote'
+    const evidenceChecks: Array<[string, unknown, number, RawFindingFieldMeasurementUnit]> = record.kind === 'file_quote'
       ? [
-          [`evidence[${index}].path`, record.path, RAW_FINDING_LIMITS.maxEvidencePathChars, false],
-          [`evidence[${index}].verbatimExcerpt`, record.verbatimExcerpt, RAW_FINDING_LIMITS.maxVerbatimExcerptBytes, true],
+          [`evidence[${index}].path`, record.path, RAW_FINDING_LIMITS.maxEvidencePathChars, 'characters'],
+          [`evidence[${index}].verbatimExcerpt`, record.verbatimExcerpt, RAW_FINDING_LIMITS.maxVerbatimExcerptBytes, 'UTF-8 bytes'],
         ]
       : [];
-    for (const [name, value, limit, isVerbatimExcerpt] of evidenceChecks) {
+    for (const [name, value, limit, unit] of evidenceChecks) {
       if (typeof value !== 'string') {
         continue;
       }
-      const withinLimit = isVerbatimExcerpt
+      const measured = unit === 'UTF-8 bytes'
+        ? Buffer.byteLength(value, 'utf8')
+        : value.length;
+      const withinLimit = unit === 'UTF-8 bytes'
         ? isVerbatimExcerptWithinByteLimit(value, limit)
-        : Buffer.byteLength(value, 'utf8') <= limit;
+        : measured <= limit;
       if (!withinLimit) {
-        return `${name} is ${Buffer.byteLength(value, 'utf8')} UTF-8 bytes, exceeding the limit of ${limit}`;
+        return unit === 'UTF-8 bytes'
+          ? `${name} is ${measured} UTF-8 bytes, exceeding the limit of ${limit}`
+          : `${name} is ${measured} characters, exceeding the limit of ${limit} characters`;
       }
     }
   }

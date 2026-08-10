@@ -961,6 +961,7 @@ async function executeRawTasks(input: {
       ? [CONTEXT_CANDIDATE_LIMITS[0]]
       : CONTEXT_CANDIDATE_LIMITS;
     for (const candidateLimit of candidateLimits) {
+      renderedInputBytes = undefined;
       const context = rawTaskContext(
         input.previousLedger,
         item.rawFindings,

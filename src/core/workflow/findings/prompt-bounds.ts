@@ -9,8 +9,8 @@ export const FINDING_MANAGER_INPUT_MAX_BYTES = 24_000;
 export const FINDING_MANAGER_PROMPT_FIELD_LIMITS = {
   rawTitleMaxBytes: 640,
   rawDescriptionMaxBytes: 1_152,
-  rawSuggestionMaxBytes: 512,
-  rawExcerptMaxBytes: 768,
+  rawSuggestionMaxBytes: 384,
+  rawExcerptMaxBytes: 512,
   targetLiteralMaxBytes: 512,
   targetMaxBytes: 1_024,
   targetCollectionItemMaxBytes: 256,
@@ -24,7 +24,7 @@ export const FINDING_MANAGER_PROMPT_FIELD_LIMITS = {
   ledgerTitleMaxBytes: 512,
   ledgerDescriptionMaxBytes: 768,
   ledgerSuggestionMaxBytes: 384,
-  ledgerLocationMaxBytes: 512,
+  ledgerLocationMaxBytes: 256,
   ledgerMaxLocations: 4,
   provisionalReasonMaxBytes: 384,
   conflictReasonMaxBytes: 384,
@@ -62,6 +62,22 @@ export function renderCompactJsonBlock(value: unknown): string {
 }
 
 export const renderQuoteWindowsJsonBlock = renderCompactJsonBlock;
+
+const PROMPT_JSON_STRING_DELIMITER_BYTES = 2;
+
+function maximumLedgerLocationBudgetItems(): string[] {
+  return Array.from(
+    { length: FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerMaxLocations },
+    () => 'x'.repeat(
+      FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerLocationMaxBytes
+      - PROMPT_JSON_STRING_DELIMITER_BYTES,
+    ),
+  );
+}
+
+export const FINDING_MANAGER_PROMPT_LEDGER_LOCATIONS_ARRAY_MAX_BYTES = promptJsonUtf8Bytes({
+  items: maximumLedgerLocationBudgetItems(),
+});
 
 export const MIN_PROMPT_STRING_TRUNCATION_MARKER_BYTES = promptJsonUtf8Bytes({
   kind: PROMPT_TRUNCATION_MARKER_KIND,
@@ -456,6 +472,12 @@ function fullDetailFindingBudget(): Record<string, unknown> {
     maxItems: FINDING_MANAGER_PROMPT_FIELD_LIMITS.evidenceMaxItems,
     maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.taskLedgerEvidenceArrayMaxBytes,
   });
+  const boundedLocations = boundPromptArray({
+    items: maximumLedgerLocationBudgetItems(),
+    fieldPath: 'budget.locations',
+    maxItems: FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerMaxLocations,
+    maxRenderedBytes: FINDING_MANAGER_PROMPT_LEDGER_LOCATIONS_ARRAY_MAX_BYTES,
+  });
   return {
     id: 'F'.repeat(RAW_FINDING_FIELD_LIMITS.maxFindingIdChars),
     revision: 1,
@@ -472,6 +494,7 @@ function fullDetailFindingBudget(): Record<string, unknown> {
     },
     ...boundedText('description', FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerDescriptionMaxBytes),
     ...boundedText('suggestion', FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerSuggestionMaxBytes),
+    locations: promptArrayView(boundedLocations),
     evidenceDetails: boundedEvidenceDetails.truncation === undefined
       ? boundedEvidenceDetails.items
       : boundedEvidenceDetails,
@@ -491,7 +514,7 @@ function ledgerProjectionBudget(): number {
 const RAW_FINDING_ID_EMPTY_JSON_BYTES = promptJsonUtf8Bytes('');
 
 export const FINDING_MANAGER_PROMPT_BUDGETS = {
-  fixedPrefixMaxBytes: 9_000,
+  fixedPrefixMaxBytes: 8_500,
   structureMaxBytes: 1_000,
   // Sections are allocated for the smallest split unit: one raw task item.
   manifestMaxBytes: rawManifestBudget() + FINDING_MANAGER_PROMPT_CONTEXT_COVERAGE_MAX_BYTES,

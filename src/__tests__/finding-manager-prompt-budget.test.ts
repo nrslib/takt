@@ -3,6 +3,7 @@ import type { AgentResponse, AgentWorkflowStep, FindingContractConfig } from '..
 import type { FindingLedger, RawFinding } from '../core/workflow/findings/types.js';
 import type { RunFindingManagerForStepInput } from '../core/workflow/findings/manager-contracts.js';
 import {
+  buildManagerInputLedger,
   managerPromptTargetView,
   managerRawFindingView,
 } from '../core/workflow/findings/manager-agent.js';
@@ -12,6 +13,7 @@ import {
   boundPromptArray,
   boundPromptString,
   FINDING_MANAGER_INPUT_MAX_BYTES,
+  FINDING_MANAGER_PROMPT_LEDGER_LOCATIONS_ARRAY_MAX_BYTES,
   FINDING_MANAGER_PROMPT_BUDGETS,
   FINDING_MANAGER_PROMPT_FIELD_LIMITS,
   FINDING_MANAGER_PROMPT_BUDGET_ITEM_COUNT,
@@ -19,6 +21,7 @@ import {
   MIN_PROMPT_STRING_TRUNCATION_MARKER_BYTES,
   promptJsonUtf8Bytes,
   rawTaskSectionBudget,
+  renderCompactJsonBlock,
 } from '../core/workflow/findings/prompt-bounds.js';
 import { canonicalRawFindingFixture } from './helpers/finding-lifecycle-fixture.js';
 
@@ -42,7 +45,7 @@ const managerStep: AgentWorkflowStep = {
   edit: false,
 };
 
-function emptyLedger(): FindingLedger {
+function emptyLedger(overrides: Partial<FindingLedger> = {}): FindingLedger {
   return {
     workflowName: 'prompt-budget-test',
     nextId: 1,
@@ -54,6 +57,7 @@ function emptyLedger(): FindingLedger {
     lifecycleEvents: [],
     rawFindings: [],
     conflicts: [],
+    ...overrides,
   };
 }
 
@@ -152,6 +156,7 @@ describe('finding manager prompt budget', () => {
       FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerEvidenceArrayMaxBytes,
       FINDING_MANAGER_PROMPT_FIELD_LIMITS.taskLedgerEvidenceArrayMaxBytes,
       FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerLocationMaxBytes,
+      FINDING_MANAGER_PROMPT_LEDGER_LOCATIONS_ARRAY_MAX_BYTES,
     ];
 
     expect(Math.min(...stringBudgets)).toBeGreaterThanOrEqual(
@@ -159,6 +164,62 @@ describe('finding manager prompt budget', () => {
     );
     expect(Math.min(...arrayBudgets)).toBeGreaterThanOrEqual(
       MIN_PROMPT_ARRAY_TRUNCATION_MARKER_BYTES,
+    );
+  });
+
+  it('retains four maximum-shape ledger locations within the ledger section budget', () => {
+    const evidenceIds = Array.from(
+      { length: FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerMaxLocations },
+      (_, index) => `evidence-${index}`,
+    );
+    const ledger = emptyLedger({
+      findings: [{
+        id: 'F-0001',
+        status: 'open',
+        lifecycle: 'new',
+        revision: 1,
+        target: { kind: 'code', paths: ['src/a.ts'] },
+        targetIdentityHash: 'a'.repeat(64),
+        claimIdentityHash: 'b'.repeat(64),
+        semanticClaimIdentityHash: 'c'.repeat(64),
+        severity: 'high',
+        title: 'Finding',
+        evidenceIds,
+        description: 'Description',
+        reviewers: ['reviewer'],
+        rawFindingIds: [],
+        firstSeen: { runId: 'run', stepName: 'review', timestamp: '2026-08-10T00:00:00.000Z' },
+        lastSeen: { runId: 'run', stepName: 'review', timestamp: '2026-08-10T00:00:00.000Z' },
+      }],
+      evidenceRecords: evidenceIds.map((evidenceId, index) => ({
+        evidenceId,
+        kind: 'file_quote' as const,
+        path: `${'x'.repeat(230)}${index}`,
+        startLine: 1,
+        endLine: 1,
+        verbatimExcerpt: 'x',
+        snapshotId: 'd'.repeat(64),
+        claimIdentityHash: 'e'.repeat(64),
+        fileHash: 'f'.repeat(64),
+      })),
+    });
+    const projection = buildManagerInputLedger(
+      ledger,
+      new Set(['F-0001']),
+      { includeRawFindingDetails: false },
+    ) as { findings: Array<{ locations: string[] }> };
+    const locations = projection.findings[0]!.locations;
+    const section = [
+      '## Relevant ledger projection',
+      renderCompactJsonBlock({ findings: [{ locations }], conflicts: [] }),
+    ].join('\n');
+
+    expect(locations).toHaveLength(FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerMaxLocations);
+    expect(promptJsonUtf8Bytes({ items: locations })).toBeLessThanOrEqual(
+      FINDING_MANAGER_PROMPT_LEDGER_LOCATIONS_ARRAY_MAX_BYTES,
+    );
+    expect(Buffer.byteLength(section, 'utf8')).toBeLessThanOrEqual(
+      FINDING_MANAGER_PROMPT_BUDGETS.ledgerProjectionMaxBytes,
     );
   });
 
