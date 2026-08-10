@@ -28,7 +28,7 @@ import {
   isProvisionalFindingEntry,
   materializeProvisionalFinding,
 } from './finding-entry.js';
-import { hasUnsettledActiveConflictOwnership } from './conflict-ownership.js';
+import { collectUnsettledActiveConflictHoldingFindingIds } from './conflict-ownership.js';
 
 export interface ProvisionalSettlement {
   output: FindingManagerOutput;
@@ -113,11 +113,7 @@ export function settleProvisionalsWithCleanEvidence(input: {
     };
   }
   const provisionalById = new Map(openProvisionals.map((finding) => [finding.id, finding]));
-  const unsettledConflictHoldingFindingIds = new Set(
-    openProvisionals
-      .filter((finding) => hasUnsettledActiveConflictOwnership(input.freshLedger, finding.id))
-      .map((finding) => finding.id),
-  );
+  const unsettledConflictHoldingFindingIds = collectUnsettledActiveConflictHoldingFindingIds(input.freshLedger);
   const ineligibleConfirmationRawIds = new Set(
     input.output.resolvedFindings.flatMap((resolved) => {
       const provisional = provisionalById.get(resolved.findingId);

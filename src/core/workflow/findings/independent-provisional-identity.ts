@@ -13,7 +13,6 @@ import type {
 } from './types.js';
 import type { ProvisionalFindingSpec } from './reconciler.js';
 import { captureFindingLifecycleHead } from './lifecycle-mutation.js';
-import { hasUnsettledActiveConflictOwnership } from './conflict-ownership.js';
 
 export interface IndependentProvisionalIdentity {
   independentClaimKey: string;
@@ -72,12 +71,13 @@ export function independentProvisionalIdentity(
 export function findIndependentProvisionalDestination(input: {
   ledger: FindingLedger;
   stableKey: string;
+  unsettledConflictHoldingFindingIds: ReadonlySet<string>;
 }): { finding: ProvisionalFindingEntry; expectedHead: FindingLifecycleEntityHead } | null {
   const matches = input.ledger.findings.filter((finding): finding is ProvisionalFindingEntry => (
     finding.status === 'open'
     && finding.provisional?.kind === 'raw-adjudication-unresolved'
     && finding.provisional.stableKey === input.stableKey
-    && !hasUnsettledActiveConflictOwnership(input.ledger, finding.id)
+    && !input.unsettledConflictHoldingFindingIds.has(finding.id)
   )).sort((left, right) => compareBinaryStrings(left.id, right.id));
   if (matches.length > 1) {
     throw new Error(

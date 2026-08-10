@@ -443,7 +443,10 @@ export function reconcileCommitPlan(input: {
     managerOutput: settledOutput,
     landedSpecs,
     entityMutationResults,
-    normalizationRejections,
+    normalizationRejections: [
+      ...normalizationRejections,
+      ...reconciledPlan.deferredResolutionRejections,
+    ],
     rejectedObservationAttachments,
     settlementCommands,
   };
