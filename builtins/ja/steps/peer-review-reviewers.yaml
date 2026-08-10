@@ -5,10 +5,6 @@ params:
   review_knowledge_additions:
     type: facet_ref[]
     facet_kind: knowledge
-  security_review_knowledge:
-    type: facet_ref[]
-    facet_kind: knowledge
-    default: [security, security-web, security-api, security-local, security-data, security-dependencies]
 name: reviewers
 tags:
   - review
@@ -42,7 +38,13 @@ parallel:
       - $param: review_policy_additions
       - security-review
     knowledge:
-      - $param: security_review_knowledge
+      - security
+      - security-web
+      - security-api
+      - security-local
+      - security-data
+      - security-dependencies
+      - takt
       - $param: review_knowledge_additions
     instruction: review-security
     output_contracts:

@@ -13,7 +13,6 @@ steps:
       testing_knowledge: [backend, architecture, unit-testing, e2e-testing]
       development_policy: [coding, testing]
       development_knowledge: [backend, security, architecture]
-      reviewer_suite: peer-review-suite-backend
       review_policy: [coding, testing, review]
       review_knowledge: [backend, security, architecture, unit-testing, e2e-testing]
     rules:

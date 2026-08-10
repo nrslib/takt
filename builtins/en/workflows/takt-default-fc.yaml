@@ -27,7 +27,7 @@ steps:
       development_knowledge: [takt, architecture, task-decomposition]
       implementation_instruction: implement
       replan_instruction: replan-implementation-finding-contract
-      reviewer_suite: peer-review-suite-finding-contract-takt
+      reviewer_suite: peer-review-suite-finding-contract-base
       peer_review_workflow: peer-review-finding-contract
       review_policy: [coding, testing, review]
       review_knowledge: [takt, architecture, unit-testing, e2e-testing]

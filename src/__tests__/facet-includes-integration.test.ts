@@ -398,37 +398,21 @@ describe('facet include expansion', () => {
     }
   });
 
-  it.each(['en', 'ja'] as const)('should configure one security reviewer for each peer-review suite in %s', (lang) => {
+  it.each(['en', 'ja'] as const)('should keep shared peer-review security routing generic in %s', (lang) => {
     const languageRoot = getLanguageResourcesDir(lang);
-    const mappings: Record<string, string[]> = {
-      'peer-review-suite-frontend.yaml': ['security', 'security-web', 'security-data', 'security-dependencies'],
-      'peer-review-suite-backend.yaml': ['security', 'security-api', 'security-data', 'security-dependencies'],
-      'peer-review-suite-cqrs.yaml': ['security', 'security-api', 'security-data', 'security-dependencies'],
-      'peer-review-suite-dual.yaml': ['security', 'security-web', 'security-api', 'security-data', 'security-dependencies'],
-      'peer-review-suite-frontend-cqrs.yaml': ['security', 'security-web', 'security-api', 'security-data', 'security-dependencies'],
-      'peer-review-suite-finding-contract-takt.yaml': ['takt', 'security', 'security-local', 'security-data', 'security-dependencies'],
-    };
-
-    for (const [fileName, expectedKnowledge] of Object.entries(mappings)) {
-      const parsed = parseYaml(readFileSync(join(languageRoot, 'workflows', fileName), 'utf-8')) as unknown;
-      const args = collectRecords(parsed).find((record) => Array.isArray(record.security_review_knowledge));
-      expect(args, fileName).toBeDefined();
-      expect(collectStrings(args?.security_review_knowledge), fileName).toEqual(expectedKnowledge);
-    }
-
-    const workflowSuites: Record<string, string> = {
-      'backend.yaml': 'peer-review-suite-backend',
-      'backend-maintenance.yaml': 'peer-review-suite-backend',
-      'frontend.yaml': 'peer-review-suite-frontend',
-      'frontend-maintenance.yaml': 'peer-review-suite-frontend',
-      'dual.yaml': 'peer-review-suite-dual',
-      'backend-cqrs.yaml': 'peer-review-suite-cqrs',
-      'dual-cqrs.yaml': 'peer-review-suite-frontend-cqrs',
-      'takt-default-fc.yaml': 'peer-review-suite-finding-contract-takt',
-    };
-    for (const [fileName, suite] of Object.entries(workflowSuites)) {
-      const parsed = parseYaml(readFileSync(join(languageRoot, 'workflows', fileName), 'utf-8')) as unknown;
-      expect(collectRecords(parsed).some((record) => record.reviewer_suite === suite), fileName).toBe(true);
+    for (const fileName of ['peer-review-reviewers.yaml', 'peer-review-reviewers-finding-contract.yaml']) {
+      const parsed = parseYaml(readFileSync(join(languageRoot, 'steps', fileName), 'utf-8')) as unknown;
+      const route = collectRecords(parsed).find((record) => record.instruction === 'review-security');
+      expect(collectStrings(route?.knowledge), fileName).toEqual([
+        'security',
+        'security-web',
+        'security-api',
+        'security-local',
+        'security-data',
+        'security-dependencies',
+        'takt',
+        'review_knowledge_additions',
+      ]);
     }
   });
 
