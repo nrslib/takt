@@ -55,6 +55,7 @@ export type FindingLifecycleOperation =
 export const FINDING_REJECTED_OBSERVATION_CODES = [
   'evidence_admission_failed',
   'dismissed_same_round',
+  'conflict_resolution_deferred',
 ] as const;
 export type FindingRejectedObservationCode =
   typeof FINDING_REJECTED_OBSERVATION_CODES[number];

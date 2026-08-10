@@ -73,6 +73,7 @@ import type {
 } from './pre-admission-entity-binding-types.js';
 import { entityBindingDigest } from './pre-admission-entity-binding-identity.js';
 import { isEngineDerivedWaiverConflict } from './waiver-conflict.js';
+import type { RejectedObservationAttachment } from './manager-provisional-settlement.js';
 
 /**
  * provisional finding の upsert 指示。stableKey が同じ
@@ -683,6 +684,7 @@ export interface ReconcileFindingLedgerPlan {
   lifecycleCommands: FindingLifecycleCommand[];
   entityMutationResults: PreAdmissionEntityMutationResult[];
   deferredResolutionRejections: string[];
+  rejectedObservationAttachments: RejectedObservationAttachment[];
 }
 
 export function reconcileFindingLedgerPlan(
@@ -976,6 +978,7 @@ function reconcileFindingLedgerWithValidator(
     input.previousLedger,
   );
   const deferredResolutionRejections: string[] = [];
+  const rejectedObservationAttachments: RejectedObservationAttachment[] = [];
 
   const updatedById = new Map<string, FindingRecord>(
     input.previousLedger.findings.map((finding) => [finding.id, { ...finding }]),
@@ -1089,41 +1092,15 @@ function reconcileFindingLedgerWithValidator(
         (rawFindingId) => currentRawFindingsById.has(rawFindingId),
       );
       markRawFindingIdsUsed(usedRawFindingIds, observedRawFindingIds);
-      const evidence = foldFindingObservation({
-        finding,
-        rawFindings: getRawFindings(input.rawFindings, observedRawFindingIds),
-        observation: observationFromContext(input.context),
-      });
-      const updated: FindingRecord = {
-        ...finding,
-        revision: bumpRevision(finding),
-        evidenceIds: mergeBinarySortedUniqueStrings(
-          finding.evidenceIds,
-          evidenceIdsForRawFindings(
-            resolved.rawFindingIds,
-            input.verifiedEvidenceRecordsByRawFindingId,
-          ),
-        ),
-        ...evidence,
-      };
-      updatedById.set(resolved.findingId, updated);
-      findingCommand(
-        'update_provisional',
-        [updated],
-        rawFindingLifecycleAuthority({
-          operation: 'update_provisional',
-          rawFindingIds: finding.provisional.sourceRawFindingIds,
-          rawFindings: input.rawFindings,
-          adjudications: input.managerOutput.anchorAdjudications,
-        }),
-        verifiedFindingSources(
-          [finding.id],
-          finding.provisional.sourceRawFindingIds,
-        ),
-      );
-      deferredResolutionRejections.push(
-        `Resolution for provisional finding "${finding.id}" deferred while waiting for an unsettled conflict landing to settle (raw findings: ${resolved.rawFindingIds.join(', ')})`,
-      );
+      const deferredReason =
+        `Resolution for provisional finding "${finding.id}" deferred while waiting for an unsettled conflict landing to settle (raw findings: ${resolved.rawFindingIds.join(', ')})`;
+      deferredResolutionRejections.push(deferredReason);
+      rejectedObservationAttachments.push(...observedRawFindingIds.map((rawFindingId) => ({
+        targetFindingId: finding.id,
+        rawFindingId,
+        reason: `${deferredReason}; recorded without lifecycle or evidence authority`,
+        rejectionCode: 'conflict_resolution_deferred' as const,
+      })));
       continue;
     }
     assertFindingStatus(finding, 'open', 'resolve');
@@ -1539,6 +1516,7 @@ function reconcileFindingLedgerWithValidator(
     lifecycleCommands,
     entityMutationResults: entityMutationApplication.results,
     deferredResolutionRejections,
+    rejectedObservationAttachments,
   };
 }
 

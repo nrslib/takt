@@ -560,7 +560,24 @@ describe('finding-conflict-adjudication runner registry contract', () => {
       status: 'open',
       provisional: expect.any(Object),
     });
-    expect(deferredHolding.rawFindingIds).toContain(deferredRaw.rawFindingId);
+    expect(deferredHolding.rawFindingIds).toEqual(holding.rawFindingIds);
+    expect(deferredHolding.evidenceIds).toEqual(holding.evidenceIds);
+    expect(deferredHolding.rejectedObservations).toEqual([
+      expect.objectContaining({
+        rawFindingId: deferredRaw.rawFindingId,
+        reason: expect.stringContaining('deferred while waiting for an unsettled conflict landing'),
+      }),
+    ]);
+    expect(deferredLedger.lifecycleReservations).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        operation: 'record_rejected_observation',
+        authority: expect.objectContaining({
+          kind: 'rejected_observation',
+          rawFindingId: deferredRaw.rawFindingId,
+          rejectionCode: 'conflict_resolution_deferred',
+        }),
+      }),
+    ]));
 
     const adjudicationSnapshot = freshConflictAdjudicationSnapshot(
       deferredLedger,
@@ -704,9 +721,73 @@ describe('finding-conflict-adjudication runner registry contract', () => {
       lifecycle: 'resolved',
     });
     expect(resolvedHolding.rawFindingIds).toEqual(expect.arrayContaining([
-      deferredRaw.rawFindingId,
       afterAdjudicationRaw.rawFindingId,
     ]));
+    expect(resolvedHolding.rawFindingIds).not.toContain(deferredRaw.rawFindingId);
+  });
+
+  it('does not re-arm adjudication after deferring a resolution as an audit observation', async () => {
+    const initialLedger = ledgerStore.loadLedger();
+    const conflict = initialLedger.conflicts[0];
+    const landing = initialLedger.conflictRawClaimLandings[0];
+    const holding = initialLedger.findings.find((finding) => (
+      landing !== undefined
+      && finding.id === landing.holdingFindingId
+      && finding.provisional !== undefined
+    ));
+    if (conflict === undefined || landing === undefined || holding === undefined) {
+      throw new Error('Expected an active conflict with a provisional holding in the fixture');
+    }
+
+    const snapshot = freshConflictAdjudicationSnapshot(initialLedger, conflict.id);
+    executeAgentMock.mockResolvedValue({
+      persona: 'supervisor',
+      status: 'done',
+      content: '{}',
+      structuredOutput: {
+        proposal: {
+          kind: 'undetermined',
+          subjectIds: snapshot.subjects.map(({ subjectId }) => subjectId).sort(),
+          rationale: 'No verified terminal authority is available.',
+        },
+      },
+      timestamp: new Date(OBSERVATION.timestamp),
+    });
+    const adjudication = runner();
+    await adjudication.runner.run(adjudication.step, state());
+    const adjudicated = ledgerStore.loadLedger();
+    const priorSnapshot = freshConflictAdjudicationSnapshot(adjudicated, conflict.id);
+
+    executeAgentMock.mockReset();
+    executeAgentMock.mockImplementation(async (_persona, instruction) => (
+      managerResolutionResponse(String(instruction), holding.id)
+    ));
+    const resolutionRaw = reviewerRawExtractionFixture({
+      rawFindingId: 'resolution-deferred-audit-only',
+      familyTag: 'bug',
+      severity: 'high',
+      title: 'Disputed issue',
+      description: 'The materialized code no longer exhibits the reported failure mode.',
+      suggestion: null,
+      relation: 'resolution_confirmation',
+      targetFindingId: holding.id,
+      target: { kind: 'code', paths: ['src/a.ts'] },
+      evidence: [verifiedSourceQuoteFields(cwd, 'src/a.ts', 1)],
+    });
+    await managerRound([resolutionRaw], 1);
+
+    const deferred = ledgerStore.loadLedger();
+    const currentSnapshot = freshConflictAdjudicationSnapshot(deferred, conflict.id);
+    expect(sharesConflictAdjudicationBasis(deferred, priorSnapshot, currentSnapshot)).toBe(true);
+    expect(isActiveConflictUnadjudicated(deferred, conflict.id)).toBe(false);
+    const attemptCount = deferred.conflictAdjudicationAttempts.length;
+
+    executeAgentMock.mockClear();
+    const repeated = runner();
+    await repeated.runner.run(repeated.step, state());
+
+    expect(executeAgentMock).not.toHaveBeenCalled();
+    expect(ledgerStore.loadLedger().conflictAdjudicationAttempts).toHaveLength(attemptCount);
   });
 
   it('re-adjudicates when a fix changes the conflict target code with the same ledger projection', async () => {
