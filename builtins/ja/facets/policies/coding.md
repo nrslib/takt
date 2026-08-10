@@ -170,9 +170,9 @@ for (const step of context.steps) {
 
 ### 条件分岐を追加する前に考える
 
-- 同じ条件が他にもあるか → あればパターンで抽象化
-- 今後も分岐が増えそうか → Strategy/Mapパターンを使う
-- 型で分岐しているか → ポリモーフィズムで置換
+- 同じ意味・契約・変更理由を持つ条件が他にもあるか → 共通所有者または抽象化の候補
+- 今後も分岐が増えそうか → 将来予測だけでは抽象化せず、実在する変更軸を確認する
+- 型ごとに独立した名前付き責務があり、同じ差し替え契約を持つか → ポリモーフィズムを検討する
 
 ```typescript
 // ❌ 条件分岐を増やす
@@ -180,9 +180,9 @@ if (type === 'A') { ... }
 else if (type === 'B') { ... }
 else if (type === 'C') { ... }  // また増えた
 
-// ✅ Mapで抽象化
-const handlers = { A: handleA, B: handleB, C: handleC };
-handlers[type]?.();
+// ✅ 実在する差し替え契約を業務概念として表現
+const paymentMethods = { card: cardPaymentMethod, bankTransfer: bankTransferPaymentMethod };
+paymentMethods[type]?.pay(order);
 ```
 
 ### 抽象化しすぎない

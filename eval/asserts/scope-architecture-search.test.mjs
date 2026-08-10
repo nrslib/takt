@@ -57,15 +57,28 @@ test('rejects an unrelated path promoted to a finding', () => {
 
 test('rejects prefixed paths instead of accepting suffix matches', () => {
   const cases = [
-    (telemetry) => { telemetry.boundaryFamilies[0].members[0] = 'other/src/report-path.ts'; },
-    (telemetry) => { telemetry.boundaryFamilies[0].behaviorEvidence[0] = 'other/test/attachment-path.test.ts'; },
-    (telemetry) => { telemetry.findingPaths[1] = 'other/src/attachment-path.ts'; },
+    {
+      mutate: (telemetry) => { telemetry.boundaryFamilies[0].members[0] = 'other/src/report-path.ts'; },
+      expectedCheck: 'shared-boundary-family',
+    },
+    {
+      mutate: (telemetry) => { telemetry.boundaryFamilies[0].behaviorEvidence[0] = 'other/test/attachment-path.test.ts'; },
+      expectedCheck: 'shared-boundary-family',
+    },
+    {
+      mutate: (telemetry) => { telemetry.findingPaths[1] = 'other/src/attachment-path.ts'; },
+      expectedCheck: 'same-family-finding',
+    },
   ];
 
-  for (const changePath of cases) {
+  assert.equal(assertArchitectureSearch(outputWithTelemetry(validTelemetry())).pass, true);
+
+  for (const { mutate, expectedCheck } of cases) {
     const telemetry = validTelemetry();
-    changePath(telemetry);
-    assert.equal(assertArchitectureSearch(outputWithTelemetry(telemetry)).pass, false);
+    mutate(telemetry);
+    const result = assertArchitectureSearch(outputWithTelemetry(telemetry));
+    assert.equal(result.pass, false);
+    assert.equal(result.reason.includes(expectedCheck), true);
   }
 });
 

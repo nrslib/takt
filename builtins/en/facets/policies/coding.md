@@ -170,9 +170,9 @@ Decision criteria:
 
 ### Think Before Adding Conditionals
 
-- Does the same condition exist elsewhere? → Abstract with a pattern
-- Will more branches be added? → Use Strategy/Map pattern
-- Branching on type? → Replace with polymorphism
+- Does the same condition exist elsewhere with the same meaning, contract, and reason to change? → Candidate for a common owner or abstraction
+- Might more branches be added later? → Do not abstract from prediction alone; confirm a real axis of change
+- Do type variants have independent named responsibilities under one replacement contract? → Consider polymorphism
 
 ```typescript
 // ❌ Growing conditionals
@@ -180,9 +180,9 @@ if (type === 'A') { ... }
 else if (type === 'B') { ... }
 else if (type === 'C') { ... }  // Yet another branch
 
-// ✅ Abstract with a Map
-const handlers = { A: handleA, B: handleB, C: handleC };
-handlers[type]?.();
+// ✅ Express a real replacement contract as a domain concept
+const paymentMethods = { card: cardPaymentMethod, bankTransfer: bankTransferPaymentMethod };
+paymentMethods[type]?.pay(order);
 ```
 
 ### Do Not Over-Abstract
