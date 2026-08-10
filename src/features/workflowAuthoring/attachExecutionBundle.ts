@@ -4,13 +4,17 @@ import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { buildRunPaths } from '../../core/workflow/run/run-paths.js';
 import { readRunMetaBySlug } from '../../core/workflow/run/run-meta.js';
-import { parseWorkflowExecutionIdentity } from '../../core/workflow/workflow-execution-identity-codec.js';
+import {
+  parseWorkflowCallInvocationIdentity,
+  parseWorkflowExecutionIdentity,
+  type WorkflowExecutionIdentity,
+} from '../../core/workflow/workflow-execution-identity-codec.js';
 import { getWorkflowReference } from '../../core/workflow/workflow-reference.js';
 import { restoreWorkflowCallInvocationEvidence } from '../../core/workflow/workflow-call-invocation-index.js';
 import { restoreWorkflowStepParticipationIndex } from '../../core/workflow/workflow-step-participation-index.js';
 import { parseWorkflowCallNamespaceSegment } from '../../core/workflow/workflow-call-namespace.js';
 import type { WorkflowStep } from '../../core/models/index.js';
-import { getAllParallelSubSteps, isDynamicParallelSubSteps } from '../../core/models/index.js';
+import { getAllParallelSubSteps } from '../../core/models/index.js';
 import { getWorkflowResumeFrameKind, isWorkflowCallStep } from '../../core/workflow/step-kind.js';
 import { canonicalJson } from '../../shared/utils/canonical-json.js';
 import { trimResumePointStackForWorkflow } from '../../core/workflow/run/resume-point.js';
@@ -63,9 +67,7 @@ function hashFile(path: string): string | null {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
 
-function collectIdentityRefs(identity: string, refs: Set<string>): void {
-  const parsed = parseWorkflowExecutionIdentity(identity);
-  if (parsed === undefined) throw new Error(`Legacy run contains invalid workflow execution identity: ${identity}`);
+function collectIdentityRefs(parsed: WorkflowExecutionIdentity, refs: Set<string>): void {
   refs.add(parsed.workflow);
   parsed.calls.forEach((call) => refs.add(call.workflow));
 }
@@ -74,7 +76,6 @@ function collectHistoricalEvidence(meta: NonNullable<ReturnType<typeof readRunMe
   readonly refs: Set<string>;
   readonly identities: Set<string>;
   readonly invocationTargets: ReadonlyMap<string, string>;
-  readonly dynamicIdentities: ReadonlySet<string>;
   readonly rootRef: string;
   readonly childByCall: Map<string, { readonly workflowName: string; readonly workflowRef: string }>;
 } {
@@ -85,7 +86,6 @@ function collectHistoricalEvidence(meta: NonNullable<ReturnType<typeof readRunMe
   const refs = new Set<string>();
   const identities = new Set<string>();
   const invocationTargets = new Map<string, string>();
-  const dynamicIdentities = new Set<string>();
   restoreWorkflowCallInvocationEvidence(resumePoint).index.validateResumePoint(resumePoint);
   restoreWorkflowStepParticipationIndex(resumePoint);
   const refsByWorkflowName = new Map<string, string>();
@@ -99,30 +99,23 @@ function collectHistoricalEvidence(meta: NonNullable<ReturnType<typeof readRunMe
   }
   Object.entries(resumePoint.workflow_call_invocations).forEach(([identity, invocation]) => {
     identities.add(identity);
-    collectIdentityRefs(identity, refs);
+    const parsed = parseWorkflowCallInvocationIdentity(identity);
+    if (parsed === undefined) throw new Error(`Legacy run contains invalid workflow-call invocation identity: ${identity}`);
+    collectIdentityRefs(parsed, refs);
     const namespace = parseWorkflowCallNamespaceSegment(invocation.report_namespace_segment);
     if (namespace === undefined) throw new Error(`Legacy run has invalid workflow-call namespace for "${identity}"`);
     invocationTargets.set(identity, namespace.workflowName);
   });
   Object.keys(resumePoint.workflow_step_participations).forEach((identity) => {
     identities.add(identity);
-    collectIdentityRefs(identity, refs);
-  });
-  Object.entries(resumePoint.dynamic_parallel_selections ?? {}).forEach(([key, selection]) => {
-    if (key !== selection.identity) {
-      throw new Error(`Legacy dynamic selection key does not match its identity: ${key}`);
-    }
-    const parsed = parseWorkflowExecutionIdentity(selection.identity);
-    if (parsed === undefined || parsed.step !== selection.step_name) {
-      throw new Error(`Legacy dynamic selection step does not match its identity: ${key}`);
-    }
-    identities.add(selection.identity);
-    dynamicIdentities.add(selection.identity);
-    collectIdentityRefs(selection.identity, refs);
+    const parsed = parseWorkflowExecutionIdentity(identity);
+    if (parsed === undefined) throw new Error(`Legacy run contains invalid workflow execution identity: ${identity}`);
+    collectIdentityRefs(parsed, refs);
   });
   const childByCall = new Map<string, { workflowName: string; workflowRef: string }>();
   for (const [identity, invocation] of Object.entries(resumePoint.workflow_call_invocations)) {
-    const parent = parseWorkflowExecutionIdentity(identity)!;
+    const parent = parseWorkflowCallInvocationIdentity(identity);
+    if (parent === undefined) throw new Error(`Legacy run contains invalid workflow-call invocation identity: ${identity}`);
     const namespace = parseWorkflowCallNamespaceSegment(invocation.report_namespace_segment);
     if (namespace === undefined) throw new Error(`Legacy run has invalid workflow-call namespace for "${identity}"`);
     const matchingChildRefs = new Set<string>();
@@ -155,7 +148,6 @@ function collectHistoricalEvidence(meta: NonNullable<ReturnType<typeof readRunMe
     refs,
     identities,
     invocationTargets,
-    dynamicIdentities,
     rootRef: resumePoint.stack[0]!.workflow_ref,
     childByCall,
   };
@@ -178,7 +170,6 @@ function validateFullResumeStack(
   resumePoint: NonNullable<NonNullable<ReturnType<typeof readRunMetaBySlug>>['resumePoint']>,
   identities: ReadonlySet<string>,
   invocationTargets: ReadonlyMap<string, string>,
-  dynamicIdentities: ReadonlySet<string>,
 ): void {
   const validationRoot = mkdtempSync(join(tmpdir(), 'takt-legacy-bundle-validation-'));
   try {
@@ -199,7 +190,12 @@ function validateFullResumeStack(
       throw new Error('Legacy resume stack cannot be preserved without trimming by the supplied source graph');
     }
     for (const identity of identities) {
-      const parsed = parseWorkflowExecutionIdentity(identity)!;
+      const parsed = invocationTargets.has(identity)
+        ? parseWorkflowCallInvocationIdentity(identity)
+        : parseWorkflowExecutionIdentity(identity);
+      if (parsed === undefined) {
+        throw new Error(`Historical identity is invalid: ${identity}`);
+      }
       let currentWorkflow = loaded.rootWorkflow;
       let candidateSteps: readonly WorkflowStep[] = currentWorkflow.steps;
       for (const frame of parsed.calls) {
@@ -227,7 +223,18 @@ function validateFullResumeStack(
           throw new Error(`Historical identity call path terminates before its target: ${identity}`);
         }
       }
-      const targetSteps = candidateSteps.filter((step) => step.name === parsed.step);
+      const targetSteps = parsed.parallel_parent === undefined
+        ? candidateSteps.filter((step) => step.name === parsed.step)
+        : (() => {
+            const parallelParents = currentWorkflow.steps.filter(
+              (step) => step.name === parsed.parallel_parent,
+            );
+            if (parallelParents.length !== 1 || parallelParents[0]?.parallel === undefined) {
+              throw new Error(`Historical identity parallel parent does not exist in supplied graph: ${identity}`);
+            }
+            return getAllParallelSubSteps(parallelParents[0].parallel)
+              .filter((step) => step.name === parsed.step);
+          })();
       if (getWorkflowReference(currentWorkflow) !== parsed.workflow || targetSteps.length !== 1) {
         throw new Error(`Historical identity target does not exist in supplied graph: ${identity}`);
       }
@@ -246,10 +253,6 @@ function validateFullResumeStack(
         if (child === null || child.name !== expectedChildName) {
           throw new Error(`Historical invocation child does not match its namespace evidence: ${identity}`);
         }
-      }
-      if (dynamicIdentities.has(identity)
-        && (target.parallel === undefined || !isDynamicParallelSubSteps(target.parallel))) {
-        throw new Error(`Historical dynamic selection target is not dynamic parallel: ${identity}`);
       }
     }
   } finally {
@@ -366,7 +369,6 @@ export function attachLegacyWorkflowExecutionBundle(
     meta.resumePoint!,
     evidence.identities,
     evidence.invocationTargets,
-    evidence.dynamicIdentities,
   );
   const identityAfterPreparation = {
     meta: hashFile(runPaths.metaAbs),

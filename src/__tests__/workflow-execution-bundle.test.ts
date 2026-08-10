@@ -16,6 +16,7 @@ import {
 } from '../features/tasks/execute/workflowExecutionBundle.js';
 import { attachLegacyWorkflowExecutionBundle } from '../features/workflowAuthoring/attachExecutionBundle.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
+import { buildWorkflowStepParticipationIdentity } from '../core/workflow/workflow-step-participation-index.js';
 
 const roots: string[] = [];
 
@@ -334,6 +335,122 @@ describe('workflow execution bundle', () => {
       sourceRoot: source,
       rootWorkflow: '.takt/workflows/legacy.yaml',
     })).toThrow(/already exists/);
+  });
+
+  it('attaches qualified participation identities for same-named static parallel sub-steps', () => {
+    const project = mkdtempSync(join(tmpdir(), 'takt-workflow-bundle-parallel-project-'));
+    const source = mkdtempSync(join(tmpdir(), 'takt-workflow-bundle-parallel-source-'));
+    roots.push(project, source);
+    mkdirSync(join(source, 'builtins', 'en', 'workflows'), { recursive: true });
+    mkdirSync(join(source, 'builtins', 'en', 'facets'), { recursive: true });
+    mkdirSync(join(source, '.takt', 'workflows'), { recursive: true });
+    writeFileSync(join(source, '.takt', 'workflows', 'legacy.yaml'), [
+      'name: legacy',
+      'initial_step: first',
+      'max_steps: 3',
+      'steps:',
+      '  - name: first',
+      '    parallel:',
+      '      - name: shared',
+      '        persona: first shared prompt',
+      '        instruction: "{task}"',
+      '    rules:',
+      '      - condition: COMPLETE',
+      '        next: second',
+      '  - name: second',
+      '    parallel:',
+      '      - name: shared',
+      '        persona: second shared prompt',
+      '        instruction: "{task}"',
+      '    rules:',
+      '      - condition: COMPLETE',
+      '        next: COMPLETE',
+      '  - name: shared',
+      '    persona: top-level shared prompt',
+      '    instruction: "{task}"',
+      '    rules:',
+      '      - condition: COMPLETE',
+      '        next: COMPLETE',
+    ].join('\n'));
+    const paths = buildRunPaths(project, 'parallel-run');
+    mkdirSync(paths.runRootAbs, { recursive: true });
+    const historicalRef = `project:sha256:${'d'.repeat(64)}`;
+    const firstIdentity = buildWorkflowStepParticipationIdentity(historicalRef, 'shared', [], 'first');
+    const secondIdentity = buildWorkflowStepParticipationIdentity(historicalRef, 'shared', [], 'second');
+    const topLevelIdentity = buildWorkflowStepParticipationIdentity(historicalRef, 'shared', []);
+    writeFileSync(paths.metaAbs, JSON.stringify({
+      task: 'parallel legacy task',
+      workflow: 'legacy',
+      runSlug: 'parallel-run',
+      runRoot: paths.runRootRel,
+      reportDirectory: paths.reportsRel,
+      contextDirectory: paths.contextRel,
+      logsDirectory: paths.logsRel,
+      status: 'failed',
+      startTime: '2026-01-01T00:00:00.000Z',
+      resume_point: {
+        version: 2,
+        stack: [{
+          workflow: 'legacy', workflow_ref: historicalRef, step: 'first', kind: 'parallel', occurrence: 1,
+        }],
+        iteration: 1,
+        elapsed_ms: 1,
+        workflow_call_invocations: {},
+        workflow_step_participations: {
+          [firstIdentity]: { report_names: [] },
+          [secondIdentity]: { report_names: [] },
+          [topLevelIdentity]: { report_names: [] },
+        },
+      },
+    }));
+    const findingDatabase = new DatabaseSync(paths.findingContractDatabaseAbs);
+    findingDatabase.exec(`
+      CREATE TABLE database_identity (
+        singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+        database_instance_id TEXT NOT NULL,
+        run_id TEXT NOT NULL
+      ) STRICT;
+      CREATE TABLE finding_authorities (
+        authority_key TEXT PRIMARY KEY CHECK (length(authority_key) > 0),
+        workflow_name TEXT NOT NULL CHECK (length(workflow_name) > 0),
+        revision INTEGER NOT NULL CHECK (revision >= 1),
+        ledger_json TEXT NOT NULL CHECK (json_valid(ledger_json)),
+        updated_at TEXT NOT NULL
+      ) STRICT;
+    `);
+    findingDatabase.prepare(`
+      INSERT INTO database_identity (
+        singleton_id, database_instance_id, run_id
+      ) VALUES (1, 'parallel-attach-instance', 'parallel-run')
+    `).run();
+    findingDatabase.prepare(`
+      INSERT INTO finding_authorities (
+        authority_key, workflow_name, revision, ledger_json, updated_at
+      ) VALUES ('root', 'legacy', 1, ?, '2026-01-01T00:00:00.000Z')
+    `).run(JSON.stringify({
+      workflowName: 'legacy',
+      nextId: 1,
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      findings: [],
+      evidenceRecords: [],
+      evidenceBindings: [],
+      lifecycleReservations: [],
+      lifecycleEvents: [],
+      rawFindings: [],
+      conflicts: [],
+    }));
+    findingDatabase.close();
+
+    const result = attachLegacyWorkflowExecutionBundle({
+      projectDir: project,
+      runSlug: 'parallel-run',
+      sourceRoot: source,
+      rootWorkflow: '.takt/workflows/legacy.yaml',
+      dryRun: true,
+    });
+
+    expect(result.rootWorkflowRef).toBe(historicalRef);
+    expect(result.published).toBe(false);
   });
 
   it('rejects reusing one historical child ref for distinct same-name source workflows', () => {

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentResponse, WorkflowState, WorkflowStep } from '../core/models/types.js';
 import {
   DynamicParallelSelectorCoordinator,
@@ -45,9 +45,7 @@ function workflowState(): WorkflowState {
     stepIterations: new Map(),
     restoredStepIterationNames: new Set(),
     dynamicParallelSelections: new Map(),
-    resumedDynamicParallelSteps: new Set(),
     dynamicFacetSelections: new Map(),
-    resumedDynamicFacetSteps: new Set(),
     status: 'running',
   };
 }
@@ -78,6 +76,10 @@ function dependencies(): DynamicParallelSelectorCoordinatorDeps {
 }
 
 describe('DynamicParallelSelectorCoordinator', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it('should send a provider-compatible schema and validate the returned selection', async () => {
     const response: AgentResponse = {
       persona: 'selector',
@@ -102,5 +104,27 @@ describe('DynamicParallelSelectorCoordinator', () => {
     expect(outputSchema).not.toHaveProperty('properties.selected_ids.uniqueItems');
     expect(participants.map(({ name }) => name)).toEqual(['architecture', 'frontend']);
     expect(deps.commitSelection).toHaveBeenCalledOnce();
+  });
+
+  it('should run the selector when run-local state has no resume selection', async () => {
+    const response: AgentResponse = {
+      persona: 'selector',
+      status: 'done',
+      content: '',
+      timestamp: new Date(),
+      structuredOutput: { selected_ids: ['backend'], rationale: 'backend is relevant' },
+    };
+    mockedExecuteAgent.mockResolvedValueOnce(response);
+    const deps = dependencies();
+    const coordinator = new DynamicParallelSelectorCoordinator(deps);
+
+    const participants = await coordinator.selectParticipants(
+      dynamicParallelStep(),
+      workflowState(),
+      'review backend changes',
+    );
+
+    expect(mockedExecuteAgent).toHaveBeenCalledOnce();
+    expect(participants.map(({ name }) => name)).toEqual(['architecture', 'backend']);
   });
 });

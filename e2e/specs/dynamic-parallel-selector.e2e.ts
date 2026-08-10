@@ -10,6 +10,7 @@ import { readOnlyRunFindingLedger } from '../helpers/finding-ledger';
 function writeDynamicParallelFixture(
   repoPath: string,
   selectedIds: readonly string[] = ['frontend'],
+  poolIds: readonly string[] = ['frontend', 'backend'],
 ): { workflowPath: string; scenarioPath: string } {
   const workflowDir = join(repoPath, '.takt', 'workflows');
   const agentsDir = join(workflowDir, 'agents');
@@ -33,19 +34,15 @@ function writeDynamicParallelFixture(
     '          rules:',
     '            - condition: approved',
     '      pool:',
-    '        - name: frontend',
-    '          persona: ./agents/frontend.md',
-    '          description: Review frontend changes',
-    '          instruction: Review frontend',
-    '          rules:',
-    '            - condition: approved',
-        '        - name: backend',
-        '          persona: ./agents/backend.md',
-        '          model: mock-backend-unselected',
-        '          description: Review backend changes',
-    '          instruction: Review backend',
-    '          rules:',
-    '            - condition: approved',
+    ...poolIds.flatMap((poolId) => [
+      `        - name: ${poolId}`,
+      `          persona: ./agents/${poolId}.md`,
+      ...(poolId === 'backend' ? ['          model: mock-backend-unselected'] : []),
+      `          description: Review ${poolId} changes`,
+      `          instruction: Review ${poolId}`,
+      '          rules:',
+      '            - condition: approved',
+    ]),
     '    rules:',
     '      - condition: all("approved")',
     '        next: COMPLETE',
@@ -198,6 +195,121 @@ function writeReentryFixture(
     ...cumulativeShrinkRound,
   ]), 'utf-8');
   return { workflowPath, scenarioPath };
+}
+
+function writeProcessResumeReplaceFixture(
+  repoPath: string,
+): { workflowPath: string; firstScenarioPath: string; resumedScenarioPath: string } {
+  const workflowDir = join(repoPath, '.takt', 'workflows');
+  const agentsDir = join(workflowDir, 'agents');
+  mkdirSync(agentsDir, { recursive: true });
+  for (const name of ['architecture', 'frontend', 'backend', 'fix']) {
+    writeFileSync(join(agentsDir, `${name}.md`), `You are the ${name} agent.\n`, 'utf-8');
+  }
+
+  const workflowPath = join(workflowDir, 'dynamic-parallel-process-resume.yaml');
+  writeFileSync(workflowPath, [
+    'name: dynamic-parallel-process-resume',
+    'initial_step: reviewers',
+    'max_steps: 4',
+    'report_formats:',
+    '  review: Return the current reviewer report.',
+    'steps:',
+    '  - name: reviewers',
+    '    parallel:',
+    '      fixed:',
+    '        - name: architecture',
+    '          persona: ./agents/architecture.md',
+    '          instruction: Review architecture',
+    '          output_contracts:',
+    '            report:',
+    '              - name: architecture-review.md',
+    '                format: review',
+    '          rules:',
+    '            - condition: approved',
+    '            - condition: needs_fix',
+    '      pool:',
+    '        - name: frontend',
+    '          persona: ./agents/frontend.md',
+    '          description: Review frontend changes',
+    '          instruction: Review frontend',
+    '          output_contracts:',
+    '            report:',
+    '              - name: frontend-review.md',
+    '                format: review',
+    '          rules:',
+    '            - condition: approved',
+    '            - condition: needs_fix',
+    '        - name: backend',
+    '          persona: ./agents/backend.md',
+    '          description: Review backend changes',
+    '          instruction: Review backend',
+    '          output_contracts:',
+    '            report:',
+    '              - name: backend-review.md',
+    '                format: review',
+    '          rules:',
+    '            - condition: approved',
+    '            - condition: needs_fix',
+    '      selection:',
+    '        mode: replace',
+    '    rules:',
+    '      - condition: any("needs_fix")',
+    '        next: fix',
+    '      - condition: all("approved")',
+    '        next: COMPLETE',
+    '  - name: fix',
+    '    persona: ./agents/fix.md',
+    '    instruction: "Fix: {report:architecture-review.md} {report:backend-review.md}"',
+    '    rules:',
+    '      - condition: approved',
+    '        next: reviewers',
+    '',
+  ].join('\n'), 'utf-8');
+
+  const judgeResponse = (step: number, reason: string) => ({
+    persona: 'conductor',
+    status: 'done',
+    content: '',
+    structured_output: { step, reason },
+  });
+  const firstScenarioPath = join(repoPath, '.takt', 'dynamic-parallel-process-resume-first.json');
+  writeFileSync(firstScenarioPath, JSON.stringify([
+    { status: 'done', content: '', structured_output: { selected_ids: ['frontend', 'backend'], rationale: 'Frontend review.' } },
+    { persona: 'agents/architecture', status: 'done', content: '[STEP:1]\napproved' },
+    { persona: 'agents/architecture', status: 'done', content: 'architecture report round 1' },
+    judgeResponse(1, 'Architecture round 1 approved.'),
+    { persona: 'agents/frontend', status: 'done', content: '[STEP:2]\nneeds_fix' },
+    { persona: 'agents/frontend', status: 'done', content: 'frontend report round 1' },
+    judgeResponse(2, 'Frontend round 1 needs a fix.'),
+    { persona: 'agents/backend', status: 'done', content: '[STEP:2]\napproved' },
+    { persona: 'agents/backend', status: 'done', content: 'backend report round 1' },
+    judgeResponse(2, 'Backend round 1 approved.'),
+    { persona: 'agents/fix', status: 'done', content: 'approved' },
+    { status: 'done', content: '', structured_output: { selected_ids: ['backend'], rationale: 'Backend review.' } },
+    { persona: 'agents/architecture', status: 'done', content: '[STEP:1]\napproved' },
+    { persona: 'agents/architecture', status: 'done', content: 'architecture report round 2' },
+    judgeResponse(1, 'Architecture round 2 approved.'),
+    { persona: 'agents/backend', status: 'done', content: '[STEP:2]\nneeds_fix' },
+    { persona: 'agents/backend', status: 'done', content: 'backend report round 2' },
+    judgeResponse(2, 'Backend round 2 needs a fix.'),
+    ...Array.from({ length: 5 }, () => ({
+      persona: 'agents/fix',
+      status: 'error',
+      content: 'interrupt after the second replace round',
+    })),
+  ]), 'utf-8');
+
+  const resumedScenarioPath = join(repoPath, '.takt', 'dynamic-parallel-process-resume-resumed.json');
+  writeFileSync(resumedScenarioPath, JSON.stringify([
+    { persona: 'agents/fix', status: 'done', content: 'approved' },
+    { status: 'done', content: '', structured_output: { selected_ids: [], rationale: 'No further pool review.' } },
+    { persona: 'agents/architecture', status: 'done', content: '[STEP:1]\napproved' },
+    { persona: 'agents/architecture', status: 'done', content: 'architecture report after resume' },
+    judgeResponse(1, 'Architecture after resume approved.'),
+  ]), 'utf-8');
+
+  return { workflowPath, firstScenarioPath, resumedScenarioPath };
 }
 
 function readJsonl(path: string): Array<Record<string, unknown>> {
@@ -569,26 +681,85 @@ describe('E2E: dynamic parallel selector (mock)', () => {
       const meta = JSON.parse(
         readFileSync(join(onlyRunRoot(testRepo.path), 'meta.json'), 'utf-8'),
       ) as {
-        resume_point?: {
-          dynamic_parallel_selections?: Record<string, {
-            round: number;
-            selected_pool_ids: string[];
-            effective_selection_ids: string[];
-          }>;
-        };
+        resume_point?: Record<string, unknown>;
       };
-      const selections = Object.values(meta.resume_point?.dynamic_parallel_selections ?? {});
-      expect(selections).toEqual([
-        expect.objectContaining({
-          round: 3,
-          selected_pool_ids: ['frontend', 'backend'],
-          effective_selection_ids: ['architecture', 'frontend', 'backend'],
-        }),
-      ]);
+      expect(meta.resume_point).toBeDefined();
+      expect(meta.resume_point).not.toHaveProperty('dynamic_parallel_selections');
     }
   }, 240_000);
 
-  it('should resume with the saved selection without invoking the selector again', () => {
+  it('should inherit only the current replace round after a process resume', () => {
+    const { workflowPath, firstScenarioPath, resumedScenarioPath } =
+      writeProcessResumeReplaceFixture(testRepo.path);
+    updateIsolatedConfig(isolatedEnv.taktDir, { provider: 'mock', model: 'mock-default' });
+
+    const firstRun = runTakt({
+      args: ['--task', 'Review frontend then backend changes', '--workflow', workflowPath, '--provider', 'mock'],
+      cwd: testRepo.path,
+      env: { ...isolatedEnv.env, TAKT_MOCK_SCENARIO: firstScenarioPath },
+      timeout: 240_000,
+    });
+    expect(firstRun.exitCode, `${firstRun.stdout}\n${firstRun.stderr}`).not.toBe(0);
+
+    const resumedRun = runTakt({
+      args: ['--provider', 'mock', 'resume'],
+      cwd: testRepo.path,
+      env: { ...isolatedEnv.env, TAKT_MOCK_SCENARIO: resumedScenarioPath },
+      timeout: 240_000,
+    });
+    expect(resumedRun.exitCode, `${resumedRun.stdout}\n${resumedRun.stderr}`).toBe(0);
+
+    const runIds = readdirSync(join(testRepo.path, '.takt', 'runs')).sort();
+    expect(runIds).toHaveLength(2);
+    const resumedReportDirectory = join(testRepo.path, '.takt', 'runs', runIds.at(-1)!, 'reports');
+    expect(readFileSync(join(resumedReportDirectory, 'architecture-review.md'), 'utf-8'))
+      .toContain('architecture report after resume');
+
+    const inheritanceDiagnostic = JSON.parse(
+      readFileSync(join(resumedReportDirectory, 'review-report-inheritance.json'), 'utf-8'),
+    ) as {
+      copied: Array<{ reportName: string }>;
+      skipped: Array<{ reportName: string }>;
+    };
+    const copiedReportNames = inheritanceDiagnostic.copied.map(({ reportName }) => reportName);
+    const resumeArtifacts = JSON.parse(
+      readFileSync(join(resumedReportDirectory, 'resume-artifacts.json'), 'utf-8'),
+    ) as { files: Array<{ path: string }> };
+    const snapshotReportNames = resumeArtifacts.files.map(({ path }) => path.split('/').at(-1));
+    const inheritedReportNames = [...new Set([...copiedReportNames, ...snapshotReportNames])];
+    expect(inheritedReportNames, JSON.stringify({ inheritanceDiagnostic, resumeArtifacts }))
+      .toEqual(expect.arrayContaining([
+        'architecture-review.md',
+        'backend-review.md',
+      ]));
+
+    const resumedRunRoot = join(testRepo.path, '.takt', 'runs', runIds.at(-1)!);
+    const resumedLogsDir = join(resumedRunRoot, 'logs');
+    const resumedLogFile = readdirSync(resumedLogsDir)
+      .filter((file) => file.endsWith('.jsonl')
+        && !file.endsWith('-otel-session-shadow.jsonl')
+        && !file.endsWith('-usage-events.jsonl'))
+      .find((file) => {
+        const firstRecord = readFileSync(join(resumedLogsDir, file), 'utf-8').trim().split('\n')[0];
+        return firstRecord !== undefined
+          && (JSON.parse(firstRecord) as Record<string, unknown>).type === 'workflow_start';
+      });
+    expect(resumedLogFile).toBeDefined();
+    const resumedRecords = readFileSync(join(resumedLogsDir, resumedLogFile!), 'utf-8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const resumedFix = resumedRecords.find((record) => record.type === 'phase_start'
+      && record.step === 'fix'
+      && record.phaseName === 'execute');
+    expect(resumedFix).toBeDefined();
+    const resumedFixInstruction = resumedFix?.instruction ?? resumedFix?.userInstruction;
+    expect(resumedFixInstruction).toContain('architecture report round 2');
+    expect(resumedFixInstruction).toContain('backend report round 2');
+    expect(resumedFixInstruction).not.toContain('frontend report round 1');
+  }, 480_000);
+
+  it('should re-run the selector when resuming a previously interrupted dynamic parallel step', () => {
     const { workflowPath } = writeDynamicParallelFixture(testRepo.path);
     const firstScenarioPath = join(testRepo.path, '.takt', 'dynamic-parallel-resume-first.json');
     const resumedScenarioPath = join(testRepo.path, '.takt', 'dynamic-parallel-resume-second.json');
@@ -635,6 +806,21 @@ describe('E2E: dynamic parallel selector (mock)', () => {
     });
     expect(firstRun.exitCode, `${firstRun.stdout}\n${firstRun.stderr}`).not.toBe(0);
 
+    writeDynamicParallelFixture(testRepo.path, ['backend'], ['backend']);
+
+    writeFileSync(resumedScenarioPath, JSON.stringify([
+      {
+        status: 'done',
+        content: '',
+        structured_output: {
+          selected_ids: ['backend'],
+          rationale: 'Re-evaluate the changed pool on resume.',
+        },
+      },
+      { persona: 'agents/architecture', status: 'done', content: 'approved' },
+      { persona: 'agents/backend', status: 'done', content: 'approved' },
+    ]), 'utf-8');
+
     const resumedRun = runTakt({
       args: ['--provider', 'mock', '--model', 'cli-resume-model', 'resume'],
       cwd: testRepo.path,
@@ -650,11 +836,11 @@ describe('E2E: dynamic parallel selector (mock)', () => {
     const resumedStarts = readJsonl(resumedCallLogPath)
       .filter((record) => record.event === 'start');
     const personaNames = resumedStarts.map((record) => record.personaName);
-    expect(personaNames).toHaveLength(2);
+    expect(personaNames).toHaveLength(3);
     expect(personaNames.filter((name) => name === 'agents/architecture')).toHaveLength(1);
-    expect(personaNames.filter((name) => name === 'agents/frontend')).toHaveLength(1);
-    expect(personaNames.filter((name) => name === 'agents/backend')).toHaveLength(0);
-    expect(personaNames.filter((name) => name === 'takt-internal')).toHaveLength(0);
+    expect(personaNames.filter((name) => name === 'agents/frontend')).toHaveLength(0);
+    expect(personaNames.filter((name) => name === 'agents/backend')).toHaveLength(1);
+    expect(personaNames.filter((name) => name === 'takt-internal')).toHaveLength(1);
     expect(resumedStarts.every((record) => record.model === 'cli-resume-model')).toBe(true);
   }, 480_000);
 

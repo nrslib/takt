@@ -22,17 +22,48 @@ candidates:
     policy: backward-compatibility
 `;
 
-function writeSharedExternalPool(repoPath: string): void {
-  // Place a shared external pool in project .takt/facet-pools/ with its own facets dir alongside.
+function writeExternalPool(
+  repoPath: string,
+  poolBody: string,
+  facetFiles: Readonly<Record<string, string>>,
+): void {
   const poolDir = join(repoPath, '.takt', 'facet-pools');
   mkdirSync(poolDir, { recursive: true });
-  writeFileSync(join(poolDir, 'implementation-fix.yaml'), FIXTURE_POOL_BODY, 'utf-8');
-  mkdirSync(join(poolDir, 'facets', 'policies'), { recursive: true });
-  mkdirSync(join(poolDir, 'facets', 'knowledge'), { recursive: true });
-  writeFileSync(join(poolDir, 'facets', 'policies', 'transaction-correctness.md'), '# transaction-correctness policy\n', 'utf-8');
-  writeFileSync(join(poolDir, 'facets', 'policies', 'backward-compatibility.md'), '# backward-compatibility policy\n', 'utf-8');
-  writeFileSync(join(poolDir, 'facets', 'knowledge', 'backend-api.md'), '# backend-api knowledge\n', 'utf-8');
-  writeFileSync(join(poolDir, 'facets', 'knowledge', 'database-transaction.md'), '# database-transaction knowledge\n', 'utf-8');
+  writeFileSync(join(poolDir, 'implementation-fix.yaml'), poolBody, 'utf-8');
+  for (const [relativePath, content] of Object.entries(facetFiles)) {
+    const path = join(poolDir, 'facets', relativePath);
+    mkdirSync(join(path, '..'), { recursive: true });
+    writeFileSync(path, content, 'utf-8');
+  }
+}
+
+function writeSharedExternalPool(repoPath: string): void {
+  writeExternalPool(repoPath, FIXTURE_POOL_BODY, {
+    'policies/transaction-correctness.md': '# transaction-correctness policy\n',
+    'policies/backward-compatibility.md': '# backward-compatibility policy\n',
+    'knowledge/backend-api.md': '# backend-api knowledge\n',
+    'knowledge/database-transaction.md': '# database-transaction knowledge\n',
+  });
+}
+
+function writeChangedExternalPool(repoPath: string): void {
+  writeExternalPool(repoPath, `policies:
+  database-correctness: ./facets/policies/database-correctness.md
+knowledge:
+  database-transaction: ./facets/knowledge/database-transaction.md
+candidates:
+  - id: database
+    description: database transaction boundaries
+    policy: database-correctness
+    knowledge: database-transaction
+  - id: query
+    description: query performance boundaries
+    policy: database-correctness
+    knowledge: database-transaction
+`, {
+    'policies/database-correctness.md': '# database-correctness policy\n',
+    'knowledge/database-transaction.md': '# database-transaction knowledge\n',
+  });
 }
 
 function writeFixedFacets(repoPath: string): void {
@@ -277,23 +308,118 @@ describe('E2E: dynamic facet pool selector (mock)', () => {
 
     expect(result.exitCode, `${result.stdout}\n${result.stderr}`).toBe(0);
 
+    const selectorStarts = readJsonl(mockCallLogPath)
+      .filter((record) => record.event === 'start' && record.personaName === 'takt-internal');
+    expect(selectorStarts).toHaveLength(2);
+
+    const fixPhaseStarts = readSessionRecords(testRepo.path)
+      .filter((record) => record.type === 'phase_start'
+        && record.step === 'fix'
+        && record.phaseName === 'execute');
+    expect(fixPhaseStarts).toHaveLength(2);
+    expect(fixPhaseStarts[0]?.instruction).toContain('# transaction-correctness policy');
+    expect(fixPhaseStarts[0]?.instruction).toContain('# backward-compatibility policy');
+    expect(fixPhaseStarts[1]?.instruction).not.toContain('# transaction-correctness policy');
+    expect(fixPhaseStarts[1]?.instruction).not.toContain('# backward-compatibility policy');
+
     // Round 2 selected [] (empty); the session must not carry over backward-compatibility from round 1.
-    // Verify by inspecting the run's persisted dynamic facet selection snapshot.
+    // The selector was re-run for the new round, and no selection was persisted in the resume point.
     const meta = JSON.parse(
       readFileSync(join(onlyRunRoot(testRepo.path), 'meta.json'), 'utf-8'),
     ) as {
-      resume_point?: {
-        dynamic_facet_selections?: Record<string, {
-          round: number;
-          selected_ids: string[];
-        }>;
-      };
+      resume_point?: Record<string, unknown>;
     };
-    const selections = Object.values(meta.resume_point?.dynamic_facet_selections ?? {});
-    expect(selections).toHaveLength(1);
-    expect(selections[0]?.round).toBe(2);
-    expect(selections[0]?.selected_ids).toEqual([]);
+    expect(meta.resume_point).toBeDefined();
+    expect(meta.resume_point).not.toHaveProperty('dynamic_facet_selections');
   }, 240_000);
+
+  it('should reselect the changed facet pool when resuming an interrupted step', () => {
+    writeSharedExternalPool(testRepo.path);
+    writeFixedFacets(testRepo.path);
+    const workflowPath = writeFixWorkflow(testRepo.path, 'dynamic-facet-pool-resume');
+    const firstScenarioPath = join(testRepo.path, '.takt', 'dynamic-facet-resume-first.json');
+    const resumedScenarioPath = join(testRepo.path, '.takt', 'dynamic-facet-resume-second.json');
+    const resumedCallLogPath = join(testRepo.path, '.takt-mock-facet-resume-calls.ndjson');
+    updateIsolatedConfig(isolatedEnv.taktDir, { provider: 'mock', model: 'mock-default' });
+
+    writeFileSync(firstScenarioPath, JSON.stringify([
+      {
+        status: 'done',
+        content: '',
+        structured_output: {
+          selected_ids: ['transaction'],
+          rationale: 'The interrupted run used the original pool.',
+        },
+      },
+      { persona: 'coder', status: 'error', content: 'interrupted after selection' },
+    ]), 'utf-8');
+
+    const firstRun = runTakt({
+      args: [
+        '--task', 'Resume a dynamic facet selection after the pool changes',
+        '--workflow', workflowPath,
+      ],
+      cwd: testRepo.path,
+      env: { ...isolatedEnv.env, TAKT_MOCK_SCENARIO: firstScenarioPath },
+      timeout: 240_000,
+      injectProvider: false,
+    });
+    expect(firstRun.exitCode, `${firstRun.stdout}\n${firstRun.stderr}`).not.toBe(0);
+
+    writeChangedExternalPool(testRepo.path);
+    writeFileSync(resumedScenarioPath, JSON.stringify([
+      {
+        status: 'done',
+        content: '',
+        structured_output: {
+          selected_ids: ['database'],
+          rationale: 'Use the current pool after resume.',
+        },
+      },
+      { persona: 'coder', status: 'done', content: '[STEP:1]\ndone' },
+    ]), 'utf-8');
+
+    const resumedRun = runTakt({
+      args: ['--provider', 'mock', 'resume'],
+      cwd: testRepo.path,
+      env: {
+        ...isolatedEnv.env,
+        TAKT_MOCK_SCENARIO: resumedScenarioPath,
+        TAKT_MOCK_CALL_LOG: resumedCallLogPath,
+      },
+      timeout: 240_000,
+      injectProvider: false,
+    });
+
+    expect(resumedRun.exitCode, `${resumedRun.stdout}\n${resumedRun.stderr}`).toBe(0);
+    const resumedStarts = readJsonl(resumedCallLogPath)
+      .filter((record) => record.event === 'start');
+    const personaNames = resumedStarts.map((record) => record.personaName);
+    expect(personaNames.filter((name) => name === 'takt-internal')).toHaveLength(1);
+    expect(personaNames.filter((name) => name === 'coder').length).toBeGreaterThan(0);
+
+    const runIds = readdirSync(join(testRepo.path, '.takt', 'runs')).sort();
+    const resumedRunRoot = join(testRepo.path, '.takt', 'runs', runIds.at(-1)!);
+    const logsDir = join(resumedRunRoot, 'logs');
+    const logFile = readdirSync(logsDir)
+      .filter((file) => file.endsWith('.jsonl') && !file.endsWith('-otel-session-shadow.jsonl') && !file.endsWith('-usage-events.jsonl'))
+      .find((file) => {
+        const firstRecord = readFileSync(join(logsDir, file), 'utf-8').trim().split('\n')[0];
+        return firstRecord !== undefined && (JSON.parse(firstRecord) as Record<string, unknown>).type === 'workflow_start';
+      });
+    expect(logFile).toBeDefined();
+    const records = readFileSync(join(resumedRunRoot, 'logs', logFile!), 'utf-8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const fixExecute = records.find((record) => record.type === 'phase_start'
+      && record.step === 'fix'
+      && record.phaseName === 'execute');
+    expect(fixExecute).toBeDefined();
+    const fixInstruction = fixExecute?.instruction ?? fixExecute?.userInstruction;
+    expect(fixInstruction).toContain('# database-transaction knowledge');
+    expect(fixInstruction).not.toContain('# transaction-correctness policy');
+  }, 480_000);
 
   it('should not start the fix agent when the selector fails and fail-fast (C-TEST-MOCK-E2E: 6)', () => {
     writeSharedExternalPool(testRepo.path);

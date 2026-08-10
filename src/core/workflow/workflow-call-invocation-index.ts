@@ -14,7 +14,7 @@ import {
   workflowCallNamespaceSegmentMatchesInvocation,
 } from './workflow-call-namespace.js';
 import {
-  parseWorkflowExecutionIdentity,
+  parseWorkflowCallInvocationIdentity,
   serializeWorkflowExecutionIdentity,
   type WorkflowExecutionIdentity,
 } from './workflow-execution-identity-codec.js';
@@ -53,7 +53,7 @@ export function buildWorkflowCallInvocationIdentity(
 }
 
 function parseIdentity(identity: string): WorkflowExecutionIdentity {
-  const parsedIdentity = parseWorkflowExecutionIdentity(identity);
+  const parsedIdentity = parseWorkflowCallInvocationIdentity(identity);
   if (parsedIdentity === undefined) {
     throw new Error(`Invalid workflow-call invocation identity "${identity}"`);
   }

@@ -107,7 +107,6 @@ describe('WorkflowEngineSetup finding instruction context', () => {
       stepIterations: new Map(),
       restoredStepIterationNames: new Set(),
       dynamicParallelSelections: new Map(),
-      resumedDynamicParallelSteps: new Set(),
       status: 'running',
     };
     const services = createWorkflowEngineServices({
@@ -139,7 +138,7 @@ describe('WorkflowEngineSetup finding instruction context', () => {
       runPaths,
       updateMaxSteps: vi.fn(),
       setActiveResumePoint: vi.fn(),
-      persistDynamicParallelSelection: vi.fn(),
+      commitDynamicParallelSelection: vi.fn(),
       refreshFindingsState: vi.fn(),
       findingContract: {} as never,
       findingLedgerStore: {

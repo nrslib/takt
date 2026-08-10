@@ -377,10 +377,10 @@ claim を失う等）で、既存の訂正1回でも直らないときは、TAKT
 - `fixed` または `pool` の項目で `uses` を宣言する場合、`rules` はその呼び出し箇所に定義します。参照先 fragment には定義できません。
 - `fixed` は必ず実行されます。selector は展開後の `pool` step 名だけを選べ、実行順は YAML の定義順です。
 - `replace`（既定）は新しい round で以前の pool 選択を置き換えます。`cumulative` は過去の round で選んだ候補を維持します。
-- 同じ round の resume は保存済み effective selection を復元し、selector を再実行しません。
+- プロセスの resume は保存済みの選択を復元せず、現在の pool に対して selector を再実行します。
 - `all()` と `any()` は当該 round で実行する fixed と選択済み pool だけを集約します。固定位置に依存する aggregate 式は dynamic parallel では使えません。
-- 不正な selector 出力、pool 外の ID、保存済み選択の不整合は fixed/pool agent の起動前に失敗します。全 pool を実行する fallback はありません。
-- ロード時には、`pool` の未指定・空配列、pool の空 `description`、fragment 展開失敗、展開後の名前重複、agent sub-step 以外の fixed/pool、無効な `selection.mode`、または全候補が定義しない aggregate 結果ラベルを検出して実行前に失敗します。selector の provider 未解決・strict 出力不正、fixed と選択済み pool を結合した実行対象の空集合、resume 時の identity・保存 ID 不整合も reviewer 起動前に失敗します。
+- 不正な selector 出力や pool 外の ID は fixed/pool agent の起動前に失敗します。全 pool を実行する fallback はありません。
+- ロード時には、`pool` の未指定・空配列、pool の空 `description`、fragment 展開失敗、展開後の名前重複、agent sub-step 以外の fixed/pool、無効な `selection.mode`、または全候補が定義しない aggregate 結果ラベルを検出して実行前に失敗します。selector の provider 未解決・strict 出力不正、fixed と選択済み pool を結合した実行対象の空集合も reviewer 起動前に失敗します。削除された dynamic selection fields を含む resume point はサポートしません。
 - selector には、タスク、現在の workflow-call scope で参照できるレポート、`HEAD` に対する現在の staged・unstaged・削除・未追跡変更、候補 ID と説明、`cumulative` の過去の選択、および初回か新しい round かを渡します。出力は `selected_ids` と `rationale` だけを持つ完了済み JSON object でなければならず、非配列・非文字列 ID・重複 ID・追加プロパティは拒否します。
 - selector の証拠入力は、成功時には全文を含み、上限は UTF-8 byte 数で判定します。各 report と各変更 path の payload は 64 KiB 以下、変更 path は 1,024 件以下、各 Git path list は 1 MiB 以下、render 済み report と現在の diff の合計は 1 MiB 以下です。上限ちょうどは受理し、1 byte または 1 path でも超えると selector と全 participant の起動前に失敗します。`.takt/runs/` 配下は除外します。未追跡 symbolic link は link target の文字列だけを入力し、参照先を読みません。それ以外の非通常ファイルは拒否します。
 - 現在の diff には run 開始前から存在する変更も含まれます。run 中に commit された変更は `HEAD` との差分ではなくなるため、後続の selector 入力へ残ることを保証しません。前段レポートは別の証拠として引き続き参照できます。正常な空差分は明示的に渡します。非 Git directory、Git command の取得失敗、または `HEAD` が存在しない repository は agent 起動前に失敗します。
@@ -573,7 +573,7 @@ round 2 effective facets:
 round 1 の frontend facet は round 2 に残りません。
 
 - dynamic facet を使う main agent session は round ごとに分離します。
-- 同一 round 内の provider retry/resume はその round の実効 facet 集合と session を復元し、selector を再実行しません。
+- プロセスの resume は空の run-local 選択状態から始まり、現在の facet pool に対して selector を再実行します。中断のない同一 run のメモリ状態だけを保持します。
 - 新しい workflow 遷移として step へ再到達した場合は新しい round として再選択します。
 - selector 結果と解決済み実効 facet 集合は main agent 起動前に runtime state へ渡します。
 - ロード時に inline/external pool を同じ `ResolvedFacetPool` へ正規化するため、実行層は inline/external を区別しません。外部 pool ファイルを実行中に再読込しません。

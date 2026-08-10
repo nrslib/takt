@@ -18,12 +18,6 @@ export function cloneDynamicFacetSelections(
   ]));
 }
 
-function serializeDynamicFacetSelections(
-  selections: ReadonlyMap<string, DynamicFacetSelectionSnapshot>,
-): Record<string, DynamicFacetSelectionSnapshot> {
-  return Object.fromEntries(cloneDynamicFacetSelections(selections));
-}
-
 export class DynamicFacetSelectionStore {
   private selections: Map<string, DynamicFacetSelectionSnapshot>;
   private pending = Promise.resolve();
@@ -36,19 +30,13 @@ export class DynamicFacetSelectionStore {
     return cloneDynamicFacetSelections(this.selections);
   }
 
-  serialized(): Record<string, DynamicFacetSelectionSnapshot> | undefined {
-    return this.selections.size === 0 ? undefined : serializeDynamicFacetSelections(this.selections);
-  }
-
   async commit(
     identity: string,
     selection: DynamicFacetSelectionSnapshot,
-    persist: (selections: ReadonlyMap<string, DynamicFacetSelectionSnapshot>) => Promise<void>,
   ): Promise<Map<string, DynamicFacetSelectionSnapshot>> {
     const operation = this.pending.then(async () => {
       const candidate = this.snapshot();
       candidate.set(identity, cloneDynamicFacetSelectionSnapshot(selection));
-      await persist(cloneDynamicFacetSelections(candidate));
       this.selections = candidate;
       return this.snapshot();
     });

@@ -28,7 +28,6 @@ import { WorkflowEngine } from '../core/workflow/index.js';
 import { runAgent } from '../agents/runner.js';
 import type { WorkflowCallInvocationRecord, WorkflowConfig } from '../core/models/index.js';
 import { MAX_WORKFLOW_CALL_DEPTH } from '../core/workflow/workflow-call-depth.js';
-import { buildDynamicParallelSelectionIdentity } from '../core/workflow/dynamic-parallel/identity.js';
 import { buildWorkflowResumePointEntry } from '../core/workflow/workflow-reference.js';
 import { buildWorkflowCallInvocationIdentity } from '../core/workflow/workflow-call-invocation-index.js';
 import { WorkflowStepParticipationIndex } from '../core/workflow/workflow-step-participation-index.js';
@@ -383,7 +382,7 @@ describe('WorkflowEngine report inheritance', () => {
     expect(instruction).not.toContain(sourceReportPath);
   });
 
-  it('inherits only the selected child dynamic reports for the resumed workflow-call instance', async () => {
+  it('inherits only the participating child dynamic reports for the resumed workflow-call instance', async () => {
     const fixed = makeStep('architecture', {
       outputContracts: [{ name: 'architecture.md', format: '# Architecture' }],
       rules: [makeRule('approved', 'COMPLETE')],
@@ -442,11 +441,10 @@ describe('WorkflowEngine report inheritance', () => {
       undefined,
       2,
     );
-    const identity = buildDynamicParallelSelectionIdentity(child, 'reviewers', [delegateEntry]);
     const stepParticipationIndex = new WorkflowStepParticipationIndex(new Map());
     stepParticipationIndex.record(child, 'reviewers', [delegateEntry], []);
-    stepParticipationIndex.record(child, 'architecture', [delegateEntry], ['architecture.md']);
-    stepParticipationIndex.record(child, 'frontend', [delegateEntry], ['frontend.md']);
+    stepParticipationIndex.record(child, 'architecture', [delegateEntry], ['architecture.md'], 'reviewers');
+    stepParticipationIndex.record(child, 'frontend', [delegateEntry], ['frontend.md'], 'reviewers');
     const sourceReportDir = join(cwd, '.takt', 'runs', sourceRunSlug, 'reports');
     for (const [reportName, content] of [
       [architectureReport, 'architecture finding'],
@@ -474,15 +472,6 @@ describe('WorkflowEngine report inheritance', () => {
         }],
         iteration: 2,
         elapsed_ms: 0,
-        dynamic_parallel_selections: {
-          [identity]: {
-            identity,
-            step_name: 'reviewers',
-            round: 1,
-            selected_pool_ids: ['frontend'],
-            effective_selection_ids: ['architecture', 'frontend'],
-          },
-        },
         workflow_call_invocations: {
           [buildWorkflowCallInvocationIdentity(workflow.name, 'delegate', [])]: {
             call_instance: 2,
@@ -529,7 +518,6 @@ describe('WorkflowEngine report inheritance', () => {
         }),
       ],
     };
-    const persisted = vi.fn();
     expect(() => new WorkflowEngine(workflow, cwd, 'test task', {
       projectCwd,
       startStep: 'fix',
@@ -550,91 +538,10 @@ describe('WorkflowEngine report inheritance', () => {
         workflow_step_participations: {},
       },
       workflowCallResolver: ({ step }) => step.call === 'child-review' ? child : null,
-      onDynamicParallelSelectionPersisted: persisted,
     })).toThrow(
       'Invalid review report discovery state: workflow_call_invocation_missing:delegate',
     );
     expect(runAgent).not.toHaveBeenCalled();
-    expect(persisted).not.toHaveBeenCalled();
-  });
-
-  it('rejects a missing nested dynamic selection snapshot before a resumed fix agent starts', () => {
-    const reviewers = makeStep('reviewers', {
-      parallel: {
-        kind: 'dynamic',
-        fixed: [],
-        pool: [makeStep('frontend', {
-          description: 'Review frontend changes',
-          outputContracts: [{ name: 'frontend.md', format: '# Frontend' }],
-          rules: [makeRule('approved', 'COMPLETE')],
-        })],
-        selection: { mode: 'replace' as const },
-      },
-      rules: [makeRule('approved', 'COMPLETE')],
-    });
-    const child: WorkflowConfig = {
-      name: 'child-review',
-      subworkflow: { callable: true },
-      maxSteps: 1,
-      initialStep: 'reviewers',
-      steps: [reviewers],
-    };
-    const workflow: WorkflowConfig = {
-      name: 'parent',
-      maxSteps: 2,
-      initialStep: 'delegate',
-      steps: [
-        makeWorkflowCallStep('delegate', 'child-review', 'fix'),
-        makeStep('fix', {
-          rules: [makeRule('fix complete', 'COMPLETE')],
-        }),
-      ],
-    };
-    const persisted = vi.fn();
-    const delegateEntry = buildWorkflowResumePointEntry(
-      workflow,
-      'delegate',
-      'workflow_call',
-      1,
-      undefined,
-      2,
-    );
-    const stepParticipationIndex = new WorkflowStepParticipationIndex(new Map());
-    stepParticipationIndex.record(child, 'reviewers', [delegateEntry], []);
-
-    expect(() => new WorkflowEngine(workflow, cwd, 'test task', {
-      projectCwd,
-      startStep: 'fix',
-      resumeSource: { sourceRunSlug, resumeMode: 'retry' },
-      resumePoint: {
-        version: 2,
-        stack: [{
-          workflow: workflow.name,
-          workflow_ref: workflow.name,
-          step: 'fix',
-          kind: 'agent',
-          occurrence: 1,
-          step_iterations: { delegate: 2 },
-        }],
-        iteration: 2,
-        elapsed_ms: 0,
-        workflow_call_invocations: {
-          [buildWorkflowCallInvocationIdentity(workflow.name, 'delegate', [])]: {
-            call_instance: 2,
-            report_namespace_segment: 'iteration-2--step-delegate--workflow-child-review',
-          },
-        },
-        workflow_step_participations: Object.fromEntries(stepParticipationIndex.snapshot()),
-      },
-      workflowCallResolver: ({ step }) => step.call === 'child-review' ? child : null,
-      onDynamicParallelSelectionPersisted: persisted,
-    })).toThrow(
-      'Invalid review report discovery state: dynamic_parallel_report_identity_unresolved:'
-      + 'Dynamic parallel report selection snapshot is missing',
-    );
-
-    expect(runAgent).not.toHaveBeenCalled();
-    expect(persisted).not.toHaveBeenCalled();
   });
 
   it('preserves available reports and writes partial discovery diagnostics', async () => {

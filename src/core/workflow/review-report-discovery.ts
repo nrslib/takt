@@ -49,9 +49,9 @@ export interface ReviewReportDiscoveryContextOptions {
   readonly resumeStackPrefix: readonly WorkflowResumePointEntry[];
   readonly stepOutputNames: ReadonlySet<string>;
   readonly restoredStepIterationNames: ReadonlySet<string>;
-  readonly dynamicParallelSelections: ReadonlyMap<string, DynamicParallelSelectionSnapshot>;
   readonly workflowCallInvocations: ReviewReportParticipationEvidence['workflowCallInvocations'];
   readonly workflowStepParticipations?: ReviewReportParticipationEvidence['workflowStepParticipations'];
+  readonly dynamicParallelSelections?: ReadonlyMap<string, DynamicParallelSelectionSnapshot>;
 }
 
 export function createReviewReportDiscoveryContext(
@@ -68,9 +68,9 @@ export function createReviewReportDiscoveryContext(
       activeWorkflowReference: getWorkflowReference(options.workflow),
       stepOutputNames: options.stepOutputNames,
       restoredStepIterationNames: options.restoredStepIterationNames,
-      dynamicParallelSelections: options.dynamicParallelSelections,
       workflowCallInvocations: options.workflowCallInvocations,
       workflowStepParticipations: options.workflowStepParticipations ?? new Map(),
+      dynamicParallelSelections: options.dynamicParallelSelections ?? new Map(),
     },
   };
 }
@@ -85,12 +85,13 @@ export function resolveInheritedReviewReportNamesWithDiagnostics(
   );
   const failures = [...sourceResolution.failures];
   for (const sources of sourceResolution.groups) {
-    const result = combineReportNameResults(sources.map((source) => resolveParticipatedWorkflowStepReportNames(
+    const result = combineReportNameResults(sources.steps.map((source) => resolveParticipatedWorkflowStepReportNames(
       source,
       context,
       [],
       new Set([getWorkflowReference(context.workflow)]),
       context.resumeStackPrefix.length + 1,
+      sources.parallelParentStepName,
     )));
     failures.push(...result.failures);
     if (result.reportNames.length > 0) {
@@ -112,12 +113,18 @@ export function resolveWorkflowStepReportNamesWithDiagnostics(
     [],
     new Set([getWorkflowReference(context.workflow)]),
     context.resumeStackPrefix.length + 1,
+    undefined,
   );
 }
 
 interface ReviewReportSourceStepGroups {
-  readonly groups: WorkflowStep[][];
+  readonly groups: ReviewReportSourceGroup[];
   readonly failures: ReviewReportDiscoveryFailure[];
+}
+
+interface ReviewReportSourceGroup {
+  readonly steps: WorkflowStep[];
+  readonly parallelParentStepName?: string;
 }
 
 function resolveReviewReportSourceStepGroups(
@@ -128,7 +135,7 @@ function resolveReviewReportSourceStepGroups(
   const parallelParent = workflowSteps.find((candidate) =>
     candidate.parallel !== undefined
       && getAllParallelSubSteps(candidate.parallel)
-        .some((parallelStep) => parallelStep.name === step.name),
+        .some((parallelStep) => parallelStep === step),
   );
   if (parallelParent?.parallel) {
     const participation = resolveParticipation(parallelParent, context);
@@ -142,10 +149,13 @@ function resolveReviewReportSourceStepGroups(
       return { groups: [], failures: [] };
     }
     return {
-      groups: [[
-        ...participation.parallelParticipants
-          .filter((peerStep) => peerStep.name !== step.name),
-      ]],
+      groups: [{
+        steps: [
+          ...participation.parallelParticipants
+            .filter((peerStep) => peerStep !== step),
+        ],
+        parallelParentStepName: parallelParent.name,
+      }],
       failures: [],
     };
   }
@@ -155,7 +165,7 @@ function resolveReviewReportSourceStepGroups(
     return { groups: [], failures: [] };
   }
 
-  const candidates: WorkflowStep[][] = [];
+  const candidates: ReviewReportSourceGroup[] = [];
   const failures: ReviewReportDiscoveryFailure[] = [];
   for (let index = currentIndex - 1; index >= 0; index -= 1) {
     const candidate = workflowSteps[index]!;
@@ -167,17 +177,19 @@ function resolveReviewReportSourceStepGroups(
     }
     const peerSteps = candidate.parallel === undefined
       ? undefined
-      : participation.parallelParticipants.filter(hasReportOutputs);
+      : participation.parallelParticipants.filter(
+          (peerStep) => hasReportOutputs(peerStep) || peerStep.kind === 'workflow_call',
+        );
     if (peerSteps && peerSteps.length > 0) {
-      candidates.push(peerSteps);
+      candidates.push({ steps: peerSteps, parallelParentStepName: candidate.name });
       break;
     }
     if (hasReportOutputs(candidate)) {
-      candidates.push([candidate]);
+      candidates.push({ steps: [candidate] });
       break;
     }
     if (candidate.kind === 'workflow_call') {
-      candidates.push([candidate]);
+      candidates.push({ steps: [candidate] });
     }
   }
 
@@ -257,7 +269,7 @@ function resolveWorkflowCallReportNames(
       ...context,
       workflow: childWorkflow,
       resumeStackPrefix: [
-        ...context.resumeStackPrefix,
+        ...reportParticipation.resumeStackPrefix,
         buildWorkflowResumePointEntry(
           context.workflow,
           step.name,
@@ -280,8 +292,9 @@ function resolveWorkflowStepReportNames(
   namespace: readonly string[],
   workflowReferences: ReadonlySet<string>,
   depth: number,
+  parallelParentStepName?: string,
 ): InheritedReviewReportNamesResult {
-  const participation = resolveParticipation(step, context);
+  const participation = resolveParticipation(step, context, parallelParentStepName);
   if (participation.kind === 'not-participated') {
     return { reportNames: [], failures: [] };
   }
@@ -302,6 +315,7 @@ function resolveWorkflowStepReportNames(
       namespace,
       workflowReferences,
       depth,
+      step.name,
     ));
   const nestedWorkflowCallResult = step.kind === 'workflow_call'
     && participation.workflowCallReport !== undefined
@@ -327,6 +341,7 @@ function resolveParticipatedWorkflowStepReportNames(
   namespace: readonly string[],
   workflowReferences: ReadonlySet<string>,
   depth: number,
+  parallelParentStepName?: string,
 ): InheritedReviewReportNamesResult {
   return resolveWorkflowStepReportNames(
     step,
@@ -334,18 +349,21 @@ function resolveParticipatedWorkflowStepReportNames(
     namespace,
     workflowReferences,
     depth,
+    parallelParentStepName,
   );
 }
 
 function resolveParticipation(
   step: WorkflowStep,
   context: InheritedReportSourceResolverContext,
+  parallelParentStepName?: string,
 ): ReviewReportStepParticipation {
   return resolveReviewReportStepParticipation(
     step,
     context.workflow,
     context.resumeStackPrefix,
     context.participation,
+    parallelParentStepName,
   );
 }
 

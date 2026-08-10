@@ -34,8 +34,6 @@ export interface DynamicFacetSelectorCoordinatorDeps {
   readonly getWorkflowReference: () => string;
   readonly workflowCallPath: readonly WorkflowResumePointEntry[];
   readonly commitSelection: (
-    step: NormalAgentWorkflowStep,
-    iteration: number,
     identity: string,
     snapshot: DynamicFacetSelectionSnapshot,
   ) => Promise<void>;
@@ -69,20 +67,6 @@ export class DynamicFacetSelectorCoordinator {
     }
     const identity = this.resolveIdentity(step.name);
     const selections = this.deps.selectionStore.snapshot();
-    const resumed = state.resumedDynamicFacetSteps.has(identity)
-      ? selections.get(identity)
-      : undefined;
-
-    if (resumed !== undefined) {
-      signal?.throwIfAborted();
-      const result = this.buildResultFromSnapshot(pool, resumed, step);
-      state.resumedDynamicFacetSteps.delete(identity);
-      state.activeDynamicFacetSelectionIdentity = identity;
-      this.logSelection(step, identity, resumed, 'resume');
-      signal?.throwIfAborted();
-      return result;
-    }
-
     const selectorProvider = this.deps.engineOptions.selectorProvider;
     if (selectorProvider?.provider === undefined) {
       throw new Error(`Dynamic facet selector for "${step.name}" has no resolved provider`);
@@ -201,7 +185,7 @@ export class DynamicFacetSelectorCoordinator {
       response.providerUsage,
     );
     signal?.throwIfAborted();
-    await this.deps.commitSelection(step, state.iteration, identity, snapshot);
+    await this.deps.commitSelection(identity, snapshot);
     signal?.throwIfAborted();
     state.activeDynamicFacetSelectionIdentity = identity;
     this.logSelection(step, identity, snapshot, 'selector', {
@@ -259,21 +243,6 @@ export class DynamicFacetSelectorCoordinator {
     };
   }
 
-  private buildResultFromSnapshot(
-    pool: ResolvedFacetPool,
-    snapshot: DynamicFacetSelectionSnapshot,
-    step: NormalAgentWorkflowStep,
-  ): DynamicFacetSelectionResult {
-    const knownIds = new Set(pool.candidates.map((candidate) => candidate.id));
-    const missingId = snapshot.selected_ids.find((id) => !knownIds.has(id));
-    if (missingId !== undefined) {
-      throw new Error(
-        `Restored dynamic facet selection for step "${snapshot.step_name}" references candidate id "${missingId}" that is not in pool "${pool.name}"`,
-      );
-    }
-    return this.buildResult(pool, snapshot, snapshot.selected_ids, step);
-  }
-
   private resolveIdentity(stepName: string): string {
     return buildDynamicParallelSelectionIdentityFromPath(
       this.deps.getWorkflowReference(),
@@ -286,7 +255,7 @@ export class DynamicFacetSelectorCoordinator {
     step: NormalAgentWorkflowStep,
     identity: string,
     snapshot: DynamicFacetSelectionSnapshot,
-    selectionSource: 'selector' | 'resume',
+    selectionSource: 'selector',
     selectorDetails?: {
       readonly selectorProvider: string;
       readonly selectorProviderSource: string | undefined;

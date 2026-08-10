@@ -50,7 +50,6 @@ function state(indexes: Record<string, number>): WorkflowState {
     stepIterations: new Map(),
     restoredStepIterationNames: new Set(),
     dynamicParallelSelections: new Map(),
-    resumedDynamicParallelSteps: new Set(),
     personaSessions: new Map(),
     userInputs: [],
   };

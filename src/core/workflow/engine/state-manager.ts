@@ -6,8 +6,6 @@
  */
 
 import {
-  isDynamicParallelSubSteps,
-  isNormalAgentWorkflowStep,
   type WorkflowState,
   type WorkflowConfig,
   type AgentResponse,
@@ -20,9 +18,6 @@ import type { WorkflowEngineOptions } from '../types.js';
 import {
   workflowEntryMatchesWorkflow,
 } from '../workflow-reference.js';
-import { buildDynamicParallelSelectionIdentity } from '../dynamic-parallel/identity.js';
-import { restoreAndValidateDynamicParallelSelections } from '../dynamic-parallel/resume-state.js';
-import { restoreAndValidateDynamicFacetSelections } from '../dynamic-facets/dynamicFacetResumeState.js';
 
 /**
  * Manages workflow execution state.
@@ -53,71 +48,6 @@ export class StateManager {
       && workflowEntryMatchesWorkflow(resumeEntry, config)
       ? new Map(Object.entries(resumeEntry.step_iterations ?? {}))
       : new Map<string, number>();
-    const dynamicParallelSelections = restoreAndValidateDynamicParallelSelections(config, options);
-    const dynamicFacetSelections = restoreAndValidateDynamicFacetSelections(config, options);
-    const isResumeTarget = resumeEntry !== undefined
-      && resumeEntry.step === currentStep
-      && workflowEntryMatchesWorkflow(resumeEntry, config);
-    const currentStepConfig = config.steps.find((step) => step.name === currentStep);
-    const dynamicParallelSelectionIdentity = currentStepConfig?.parallel !== undefined
-      && isDynamicParallelSubSteps(currentStepConfig.parallel)
-      ? buildDynamicParallelSelectionIdentity(config, currentStep, options.resumeStackPrefix ?? [])
-      : undefined;
-    const savedSelectionForCurrentStep = dynamicParallelSelectionIdentity === undefined
-      ? undefined
-      : dynamicParallelSelections.get(dynamicParallelSelectionIdentity);
-    if (
-      isResumeTarget
-      && currentStepConfig?.parallel !== undefined
-      && isDynamicParallelSubSteps(currentStepConfig.parallel)
-      && savedSelectionForCurrentStep === undefined
-    ) {
-      throw new Error(
-        `Dynamic parallel selection snapshot is required to resume "${currentStep}"`,
-      );
-    }
-    if (
-      savedSelectionForCurrentStep !== undefined
-      && savedSelectionForCurrentStep.step_name !== currentStep
-    ) {
-      throw new Error(
-        `Dynamic parallel selection snapshot step_name does not match resumed step "${currentStep}"`,
-      );
-    }
-
-    const dynamicFacetSelectionIdentity = currentStepConfig !== undefined
-      && isNormalAgentWorkflowStep(currentStepConfig)
-      && currentStepConfig.dynamicFacets !== undefined
-      ? buildDynamicParallelSelectionIdentity(config, currentStep, options.resumeStackPrefix ?? [])
-      : undefined;
-    const savedFacetSelectionForCurrentStep = dynamicFacetSelectionIdentity === undefined
-      ? undefined
-      : dynamicFacetSelections.get(dynamicFacetSelectionIdentity);
-    if (
-      isResumeTarget
-      && currentStepConfig !== undefined
-      && isNormalAgentWorkflowStep(currentStepConfig)
-      && currentStepConfig.dynamicFacets !== undefined
-      && savedFacetSelectionForCurrentStep === undefined
-    ) {
-      throw new Error(
-        `Dynamic facet selection snapshot is required to resume "${currentStep}"`,
-      );
-    }
-    if (
-      savedFacetSelectionForCurrentStep !== undefined
-      && savedFacetSelectionForCurrentStep.step_name !== currentStep
-    ) {
-      throw new Error(
-        `Dynamic facet selection snapshot step_name does not match resumed step "${currentStep}"`,
-      );
-    }
-    const dynamicFacetResumeSeed = isResumeTarget
-      && dynamicFacetSelectionIdentity !== undefined
-      && savedFacetSelectionForCurrentStep !== undefined
-      ? new Set([dynamicFacetSelectionIdentity])
-      : new Set<string>();
-
     this.state = {
       workflowName: config.name,
       currentStep,
@@ -132,24 +62,8 @@ export class StateManager {
       personaSessions,
       stepIterations,
       restoredStepIterationNames: new Set(stepIterations.keys()),
-      dynamicParallelSelections,
-      resumedDynamicParallelSteps: isResumeTarget
-        && dynamicParallelSelectionIdentity !== undefined
-        && savedSelectionForCurrentStep !== undefined
-        ? new Set([dynamicParallelSelectionIdentity])
-        : new Set(),
-      ...(!isResumeTarget
-        || dynamicParallelSelectionIdentity === undefined
-        || savedSelectionForCurrentStep === undefined
-        ? {}
-        : { activeDynamicParallelSelectionIdentity: dynamicParallelSelectionIdentity }),
-      dynamicFacetSelections,
-      resumedDynamicFacetSteps: dynamicFacetResumeSeed,
-      ...(!isResumeTarget
-        || dynamicFacetSelectionIdentity === undefined
-        || savedFacetSelectionForCurrentStep === undefined
-        ? {}
-        : { activeDynamicFacetSelectionIdentity: dynamicFacetSelectionIdentity }),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
       status: 'running',
     };
   }

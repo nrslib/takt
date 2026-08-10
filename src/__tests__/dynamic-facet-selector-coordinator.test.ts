@@ -58,7 +58,23 @@ function makeUnlimitedStep(): NormalAgentWorkflowStep {
   };
 }
 
-function makeState(snapshot?: DynamicFacetSelectionSnapshot, resumedIdentity?: string): WorkflowState {
+function snapshot(
+  identity: string,
+  selectedIds: string[],
+  round: number,
+): DynamicFacetSelectionSnapshot {
+  return {
+    identity,
+    step_name: 'fix',
+    round,
+    selected_ids: selectedIds,
+    selected_policy_refs: [],
+    selected_knowledge_refs: [],
+    rationale: `round ${round}`,
+  };
+}
+
+function makeState(snapshot?: DynamicFacetSelectionSnapshot): WorkflowState {
   const selections = new Map<string, DynamicFacetSelectionSnapshot>();
   if (snapshot) selections.set(snapshot.identity, snapshot);
   return {
@@ -72,8 +88,8 @@ function makeState(snapshot?: DynamicFacetSelectionSnapshot, resumedIdentity?: s
     userInputs: [],
     personaSessions: new Map(),
     stepIterations: new Map(),
+    dynamicParallelSelections: new Map(),
     dynamicFacetSelections: selections,
-    resumedDynamicFacetSteps: resumedIdentity ? new Set([resumedIdentity]) : new Set(),
     status: 'running',
   };
 }
@@ -191,30 +207,69 @@ describe('DynamicFacetSelectorCoordinator', () => {
     expect(outputSchema).toHaveProperty('properties.selected_ids.maxItems', 1);
   });
 
-  it('restores from snapshot without invoking selector when identity is in resumedDynamicFacetSteps', async () => {
-    const pool = makePool([{ id: 'backend', description: 'backend' }]);
+  it('should run the selector instead of restoring a run-local selection as a resume snapshot', async () => {
+    const pool = makePool([
+      { id: 'frontend', description: 'frontend' },
+      { id: 'backend', description: 'backend' },
+    ]);
     const step = makeStep();
     const identity = buildIdentity('fix');
-    const snapshot: DynamicFacetSelectionSnapshot = {
-      identity,
-      step_name: 'fix',
-      round: 1,
-      selected_ids: ['backend'],
-      selected_policy_refs: [],
-      selected_knowledge_refs: [],
-      rationale: 'prev',
-    };
-    const store = new DynamicFacetSelectionStore(new Map([[identity, snapshot]]));
-    const state = makeState(snapshot, identity);
-    const deps = buildDeps({ selectionStore: store });
+    const previous = snapshot(identity, ['frontend'], 1);
+    const deps = buildDeps({
+      selectionStore: new DynamicFacetSelectionStore(new Map([[identity, previous]])),
+    });
+    mockedExecuteAgent.mockResolvedValueOnce({
+      persona: 'selector',
+      status: 'done',
+      content: '',
+      timestamp: new Date(),
+      structuredOutput: { selected_ids: ['backend'], rationale: 'backend is relevant now' },
+    });
 
-    const coordinator = new DynamicFacetSelectorCoordinator(deps);
-    const result = await coordinator.resolveDynamicFacets(step, state, 'task', pool);
+    const result = await new DynamicFacetSelectorCoordinator(deps)
+      .resolveDynamicFacets(step, makeState(), 'task', pool);
 
-    expect(mockedExecuteAgent).not.toHaveBeenCalled();
+    expect(mockedExecuteAgent).toHaveBeenCalledOnce();
     expect(result.selectedIds).toEqual(['backend']);
-    expect(state.activeDynamicFacetSelectionIdentity).toBe(identity);
-    expect(state.resumedDynamicFacetSteps.has(identity)).toBe(false);
+    expect(result.snapshot.round).toBe(2);
+  });
+
+  it('should start a resumed selector at round one with no re-entry history', async () => {
+    const pool = makePool([
+      { id: 'transaction', description: 'transaction' },
+      { id: 'database', description: 'database' },
+    ]);
+    const step = makeStep();
+    const getReportNames = vi.fn().mockReturnValue([]);
+    const deps = buildDeps({ getReportNames });
+    mockedExecuteAgent.mockResolvedValueOnce({
+      persona: 'selector',
+      status: 'done',
+      content: '',
+      timestamp: new Date(),
+      structuredOutput: { selected_ids: ['database'], rationale: 'database is relevant now' },
+    });
+    const instructionSpy = vi.spyOn(contextBuilder, 'buildDynamicFacetSelectorInstruction');
+
+    const result = await new DynamicFacetSelectorCoordinator(deps)
+      .resolveDynamicFacets(step, makeState(), 'task', pool);
+
+    expect(result.snapshot.round).toBe(1);
+    expect(getReportNames).toHaveBeenCalledWith(step, expect.any(Object));
+    expect(deps.inputReader?.readInputs).toHaveBeenCalledWith(
+      '.takt/reports',
+      [],
+      '/tmp/project',
+      undefined,
+    );
+    expect(instructionSpy).toHaveBeenCalledOnce();
+    const instructionInput = instructionSpy.mock.calls[0]![0] as {
+      isReentry: boolean;
+      reports: string;
+    };
+    expect(instructionInput.isReentry).toBe(false);
+    expect(instructionInput.reports).toBe('');
+    instructionSpy.mockRestore();
   });
 
   it('throws when selector provider is not resolved', async () => {
@@ -267,7 +322,7 @@ describe('DynamicFacetSelectorCoordinator', () => {
     // commitSelection receives the new snapshot with round=2 (previous round 1 + 1).
     const commit = deps.commitSelection as unknown as { mock: { calls: unknown[][] } };
     expect(commit.mock.calls).toHaveLength(1);
-    const committed = commit.mock.calls[0]![3] as DynamicFacetSelectionSnapshot;
+    const committed = commit.mock.calls[0]![1] as DynamicFacetSelectionSnapshot;
     expect(committed.round).toBe(2);
     expect(committed.selected_ids).toEqual(['b']);
     // isReentry is true when previous selection exists (coordinator L117).
@@ -294,7 +349,7 @@ describe('DynamicFacetSelectorCoordinator', () => {
     ).rejects.toThrow(/invalid structured output/);
   });
 
-  it('propagates commitSelection failure and leaves activeDynamicFacetSelectionIdentity unset (C-STATE-RUNTIME: persistence failure)', async () => {
+  it('propagates run-local selection commit failure and leaves active identity unset', async () => {
     const pool = makePool([{ id: 'a', description: 'A' }]);
     const step = makeStep();
     const response: AgentResponse = {
@@ -333,30 +388,4 @@ describe('DynamicFacetSelectorCoordinator', () => {
     expect(mockedExecuteAgent).not.toHaveBeenCalled();
   });
 
-  it('keeps resumedDynamicFacetSteps entry when buildResultFromSnapshot fails so retry restores the same round (C-STATE-RUNTIME: resume failure)', async () => {
-    const pool = makePool([{ id: 'a', description: 'A' }]);
-    const step = makeStep();
-    const identity = buildIdentity('fix');
-    const snapshot: DynamicFacetSelectionSnapshot = {
-      identity,
-      step_name: 'fix',
-      round: 1,
-      selected_ids: ['unknown-id'],
-      selected_policy_refs: [],
-      selected_knowledge_refs: [],
-      rationale: 'prev',
-    };
-    const store = new DynamicFacetSelectionStore(new Map([[identity, snapshot]]));
-    const state = makeState(snapshot, identity);
-    const deps = buildDeps({ selectionStore: store });
-
-    const coordinator = new DynamicFacetSelectorCoordinator(deps);
-    // buildResultFromSnapshot fails because 'unknown-id' is not in the pool.
-    await expect(
-      coordinator.resolveDynamicFacets(step, state, 'task', pool),
-    ).rejects.toThrow(/not in pool/);
-    // The resume marker must remain so a retry can restore the same round.
-    expect(state.resumedDynamicFacetSteps.has(identity)).toBe(true);
-    expect(state.activeDynamicFacetSelectionIdentity).toBeUndefined();
-  });
 });

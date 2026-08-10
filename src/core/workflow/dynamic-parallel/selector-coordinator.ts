@@ -34,8 +34,6 @@ export interface DynamicParallelSelectorCoordinatorDeps {
   readonly getWorkflowReference: () => string;
   readonly workflowCallPath: readonly WorkflowResumePointEntry[];
   readonly commitSelection: (
-    step: WorkflowStep,
-    iteration: number,
     identity: string,
     snapshot: import('../../models/types.js').DynamicParallelSelectionSnapshot,
   ) => Promise<void>;
@@ -57,18 +55,6 @@ export class DynamicParallelSelectorCoordinator {
     }
     const identity = this.resolveIdentity(step.name);
     const selections = this.deps.selectionStore.snapshot();
-    const resumed = state.resumedDynamicParallelSteps.has(identity)
-      ? selections.get(identity)
-      : undefined;
-    if (resumed !== undefined) {
-      const effective = resolveDynamicParallelSelection(step.parallel, resumed);
-      signal?.throwIfAborted();
-      state.resumedDynamicParallelSteps.delete(identity);
-      state.activeDynamicParallelSelectionIdentity = identity;
-      this.logSelection(step, identity, resumed, 'resume');
-      signal?.throwIfAborted();
-      return effective;
-    }
     const selectorProvider = this.deps.engineOptions.selectorProvider;
     if (selectorProvider?.provider === undefined) {
       throw new Error(`Dynamic parallel selector for "${step.name}" has no resolved provider`);
@@ -170,7 +156,7 @@ export class DynamicParallelSelectorCoordinator {
       response.providerUsage,
     );
     signal?.throwIfAborted();
-    await this.deps.commitSelection(step, state.iteration, identity, snapshot);
+    await this.deps.commitSelection(identity, snapshot);
     signal?.throwIfAborted();
     state.activeDynamicParallelSelectionIdentity = identity;
     this.logSelection(step, identity, snapshot, 'selector', {
@@ -194,7 +180,7 @@ export class DynamicParallelSelectorCoordinator {
     step: WorkflowStep,
     identity: string,
     snapshot: DynamicParallelSelectionSnapshot,
-    selectionSource: 'selector' | 'resume',
+    selectionSource: 'selector',
     selectorDetails?: {
       readonly selectorProvider: string;
       readonly selectorProviderSource: string | undefined;

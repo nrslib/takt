@@ -165,8 +165,7 @@ describe('TaskRunner - exceedTask', () => {
     expect(exceededTask.owner_pid).toBeNull();
   });
 
-  it('should preserve dynamic selection snapshots through exceed, requeue, and claim', () => {
-    const identity = '{"workflow":"default","step":"reviewers","calls":[]}' as const;
+  it('should preserve resume metadata through exceed, requeue, and claim', () => {
     const resumePoint = {
       version: 2 as const,
       stack: [{
@@ -178,15 +177,6 @@ describe('TaskRunner - exceedTask', () => {
       }],
       iteration: 30,
       elapsed_ms: 183245,
-      dynamic_parallel_selections: {
-        [identity]: {
-          identity,
-          step_name: 'reviewers',
-          round: 2,
-          selected_pool_ids: ['frontend'],
-          effective_selection_ids: ['architecture', 'frontend'],
-        },
-      },
       workflow_call_invocations: {},
       workflow_step_participations: {},
     };

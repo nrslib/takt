@@ -153,6 +153,10 @@ describe('WorkflowCallInvocationIndex', () => {
       label: 'a non-canonical JSON representation',
       identity: '{ "workflow":"parent","step":"delegate","calls":[]}',
     },
+    {
+      label: 'a qualified parallel participation identity',
+      identity: '{"workflow":"parent","step":"delegate","calls":[],"parallel_parent":"reviewers"}',
+    },
   ])('should reject persisted invocation identity with $label', ({ identity }) => {
     expect(() => new WorkflowCallInvocationIndex(new Map([[identity, {
       call_instance: 1,

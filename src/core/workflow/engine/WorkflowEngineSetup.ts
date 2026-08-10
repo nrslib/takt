@@ -163,15 +163,11 @@ interface WorkflowEngineSetupParams {
     occurrence: number,
     resumeStackPrefix: readonly WorkflowResumePointEntry[],
   ) => void;
-  persistDynamicParallelSelection: (
-    step: WorkflowStep,
-    iteration: number,
+  commitDynamicParallelSelection: (
     identity: string,
     selection: import('../../models/types.js').DynamicParallelSelectionSnapshot,
   ) => Promise<void>;
-  persistDynamicFacetSelection: (
-    step: WorkflowStep,
-    iteration: number,
+  commitDynamicFacetSelection: (
     identity: string,
     selection: import('../../models/types.js').DynamicFacetSelectionSnapshot,
   ) => Promise<void>;
@@ -219,12 +215,8 @@ export function createSharedRuntime(
   return {
     startedAtMs: resumePoint ? now - resumePoint.elapsed_ms : now,
     maxSteps,
-    dynamicParallelSelectionStore: new DynamicParallelSelectionStore(
-      new Map(Object.entries(resumePoint?.dynamic_parallel_selections ?? {})),
-    ),
-    dynamicFacetSelectionStore: new DynamicFacetSelectionStore(
-      new Map(Object.entries(resumePoint?.dynamic_facet_selections ?? {})),
-    ),
+    dynamicParallelSelectionStore: new DynamicParallelSelectionStore(new Map()),
+    dynamicFacetSelectionStore: new DynamicFacetSelectionStore(new Map()),
     workflowCallInvocationEvidence: restoreWorkflowCallInvocationEvidence(resumePoint),
     workflowStepParticipationIndex: restoreWorkflowStepParticipationIndex(resumePoint),
     companionReviewAuthority: new CompanionReviewAuthority(),
@@ -850,10 +842,11 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
       params.getCwd(),
       params.sharedRuntime.workflowCallInvocationEvidence!,
       params.sharedRuntime.workflowStepParticipationIndex!,
+      params.sharedRuntime.dynamicParallelSelectionStore!.snapshot(),
     ),
     getWorkflowReference: () => getWorkflowReference(params.config),
     workflowCallPath: params.resumeStackPrefix,
-    commitSelection: params.persistDynamicFacetSelection,
+    commitSelection: params.commitDynamicFacetSelection,
     ...(params.options.selectorGitCommandRunner === undefined
       ? {}
       : { inputReader: new SelectorInputReader(params.options.selectorGitCommandRunner) }),
@@ -959,10 +952,11 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
       params.getCwd(),
       params.sharedRuntime.workflowCallInvocationEvidence!,
       params.sharedRuntime.workflowStepParticipationIndex!,
+      params.sharedRuntime.dynamicParallelSelectionStore!.snapshot(),
     ),
     getWorkflowReference: () => getWorkflowReference(params.config),
     workflowCallPath: params.resumeStackPrefix,
-    commitSelection: params.persistDynamicParallelSelection,
+    commitSelection: params.commitDynamicParallelSelection,
     ...(params.options.selectorGitCommandRunner === undefined
       ? {}
       : { inputReader: new SelectorInputReader(params.options.selectorGitCommandRunner) }),
@@ -1154,6 +1148,7 @@ function getSelectorReportNames(
   lookupCwd: string,
   workflowCallInvocationEvidence: WorkflowCallInvocationEvidence,
   workflowStepParticipationIndex: import('../workflow-step-participation-index.js').WorkflowStepParticipationIndex,
+  dynamicParallelSelections: ReadonlyMap<string, import('../../models/types.js').DynamicParallelSelectionSnapshot>,
 ): readonly string[] {
   const results = config.steps
     .map((step) => resolveWorkflowStepReportNamesWithDiagnostics(step, createReviewReportDiscoveryContext({
@@ -1165,11 +1160,11 @@ function getSelectorReportNames(
       resumeStackPrefix,
       stepOutputNames: new Set(state.stepOutputs.keys()),
       restoredStepIterationNames: state.restoredStepIterationNames,
-      dynamicParallelSelections: state.dynamicParallelSelections,
       workflowCallInvocations: snapshotWorkflowCallInvocationEvidence(
         workflowCallInvocationEvidence,
       ),
       workflowStepParticipations: workflowStepParticipationIndex.snapshot(),
+      dynamicParallelSelections,
     })));
   const failures = results.flatMap((result) => result.failures);
   if (failures.length > 0) {

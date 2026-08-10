@@ -79,6 +79,7 @@ import {
 } from '../core/workflow/selector-contract.js';
 import { buildWorkflowCallInvocationIdentity } from '../core/workflow/workflow-call-invocation-index.js';
 import { getWorkflowReference } from '../core/workflow/workflow-reference.js';
+import { buildWorkflowStepParticipationIdentity } from '../core/workflow/workflow-step-participation-index.js';
 import {
   makeResponse,
   makeStep,
@@ -425,6 +426,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
 
   it('should execute fixed and selected pool reviewers only through the dynamic parallel workflow path', async () => {
     const config = normalizeWorkflowConfig(dynamicParallelWorkflowRaw(true), tmpDir);
+    const identity = dynamicSelectionIdentity(config);
     const parallel = config.steps.find((step) => step.name === 'reviewers')?.parallel;
     if (parallel === undefined || !isDynamicParallelSubSteps(parallel)) {
       throw new Error('Expected normalized dynamic parallel step');
@@ -545,6 +547,14 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     expect(state.stepOutputs.has('architecture')).toBe(true);
     expect(state.stepOutputs.has('frontend')).toBe(true);
     expect(state.stepOutputs.has('backend')).toBe(false);
+    expect(state.dynamicParallelSelections.get(identity)).toMatchObject({
+      round: 1,
+      selected_pool_ids: ['frontend'],
+      effective_selection_ids: ['architecture', 'frontend'],
+    });
+    const resumePoint = engine.getResumePoint();
+    expect(resumePoint).toBeDefined();
+    expect(resumePoint).not.toHaveProperty('dynamic_parallel_selections');
     expect(selectorCall?.instruction).not.toContain('\uFFFD');
     expect(selectorCall?.instruction).toContain('界');
     expect(selectorCall?.instruction).not.toContain('unrelated report must not reach the selector');
@@ -711,17 +721,81 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     expect(reportedSteps.some((step) => step.name === 'backend')).toBe(false);
   });
 
-  it('should reject more than 1,024 changed paths before selector, persistence, or participants start', async () => {
-    const config = normalizeWorkflowConfig(dynamicParallelWorkflowRaw(), tmpDir);
-    execFileSync('git', ['-c', 'user.email=test@example.com', '-c', 'user.name=Test', 'commit', '--allow-empty', '--quiet', '-m', 'initial'], {
-      cwd: tmpDir,
+  it('should record same-named parallel parent and child participation separately', async () => {
+    const raw = dynamicParallelWorkflowRaw();
+    raw.initial_step = 'architecture';
+    const parent = raw.steps[0] as Record<string, unknown>;
+    parent.name = 'architecture';
+    const dynamicParallel = parent.parallel as {
+      fixed: Array<Record<string, unknown>>;
+      pool: Array<Record<string, unknown>>;
+    };
+    dynamicParallel.fixed[0]!.output_contracts = {
+      report: [{ name: 'architecture-review.md', format: 'review' }],
+    };
+    dynamicParallel.pool[0]!.output_contracts = {
+      report: [{ name: 'frontend-review.md', format: 'review' }],
+    };
+    const config = normalizeWorkflowConfig(raw, tmpDir);
+    vi.mocked(runReportPhase).mockImplementation(async (step) => {
+      const reportDir = join(tmpDir, '.takt', 'runs', 'test-report-dir', 'reports');
+      mkdirSync(reportDir, { recursive: true });
+      for (const contract of step.outputContracts ?? []) {
+        writeFileSync(join(reportDir, contract.name), `${step.name} report`, 'utf-8');
+      }
     });
-    const persisted = vi.fn();
+    vi.mocked(runAgent).mockImplementation(async (persona, _instruction, options) => {
+      if (options?.outputSchema) {
+        return makeResponse({
+          persona: persona ?? 'selector',
+          structuredOutput: { selected_ids: ['frontend'], rationale: 'frontend is relevant' },
+        });
+      }
+      options?.onPromptResolved?.({ systemPrompt: persona ?? '', userInstruction: 'review' });
+      return makeResponse({ persona: persona ?? 'reviewer', content: 'approved' });
+    });
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'aggregate' },
+    ]);
+
     const engine = new WorkflowEngine(config, tmpDir, 'Review changes', {
       projectCwd: tmpDir,
       provider: 'mock',
       selectorProvider: MOCK_SELECTOR_PROVIDER,
-      onDynamicParallelSelectionPersisted: persisted,
+    });
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    const resumePoint = engine.getResumePoint();
+    expect(resumePoint).toBeDefined();
+    const parentIdentity = buildWorkflowStepParticipationIdentity(
+      getWorkflowReference(config),
+      'architecture',
+      [],
+    );
+    const childIdentity = buildWorkflowStepParticipationIdentity(
+      getWorkflowReference(config),
+      'architecture',
+      [],
+      'architecture',
+    );
+    expect(resumePoint?.workflow_step_participations[parentIdentity]).toEqual({ report_names: [] });
+    expect(resumePoint?.workflow_step_participations[childIdentity]).toEqual({
+      report_names: ['architecture-review.md'],
+    });
+  });
+
+  it('should reject more than 1,024 changed paths before selector or participants start', async () => {
+    const config = normalizeWorkflowConfig(dynamicParallelWorkflowRaw(), tmpDir);
+    execFileSync('git', ['-c', 'user.email=test@example.com', '-c', 'user.name=Test', 'commit', '--allow-empty', '--quiet', '-m', 'initial'], {
+      cwd: tmpDir,
+    });
+    const engine = new WorkflowEngine(config, tmpDir, 'Review changes', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+      selectorProvider: MOCK_SELECTOR_PROVIDER,
     });
     const changedDirectory = join(tmpDir, 'changed');
     mkdirSync(changedDirectory);
@@ -733,7 +807,6 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
 
     expect(state.status).toBe('aborted');
     expect(runAgent).not.toHaveBeenCalled();
-    expect(persisted).not.toHaveBeenCalled();
     expect(state.dynamicParallelSelections).toEqual(new Map());
   });
 
@@ -850,14 +923,20 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     ]);
   });
 
-  it('should resume a cumulative round without selecting again and execute its full effective selection', async () => {
+  it('should reselect a cumulative dynamic parallel step after resume from an empty run-local store', async () => {
     const config = normalizeWorkflowConfig(dynamicParallelWorkflowRaw(false, 'cumulative'), tmpDir);
     const identity = dynamicSelectionIdentity(config);
     const agentCalls: Array<{ persona: string | undefined; outputSchema: Record<string, unknown> | undefined }> = [];
     vi.mocked(runAgent).mockImplementation(async (persona, _instruction, options) => {
       agentCalls.push({ persona, outputSchema: options?.outputSchema });
       if (options?.outputSchema) {
-        throw new Error('The selector must not run when resuming a saved dynamic selection');
+        return makeResponse({
+          persona: persona ?? 'selector',
+          structuredOutput: {
+            selected_ids: ['frontend', 'backend'],
+            rationale: 'The current pool requires both reviewers.',
+          },
+        });
       }
       options?.onPromptResolved?.({ systemPrompt: 'review', userInstruction: 'review' });
       return makeResponse({ persona: persona ?? 'reviewer', content: 'approved' });
@@ -879,15 +958,6 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
         stack: [{ workflow: 'dynamic-parallel-execution', workflow_ref: 'dynamic-parallel-execution', step: 'reviewers', kind: 'parallel', occurrence: 1 }],
         iteration: 2,
         elapsed_ms: 0,
-        dynamic_parallel_selections: {
-          [identity]: {
-            identity,
-            step_name: 'reviewers',
-            round: 2,
-            selected_pool_ids: ['frontend', 'backend'],
-            effective_selection_ids: ['architecture', 'frontend', 'backend'],
-          },
-        },
         workflow_call_invocations: {},
         workflow_step_participations: {},
       },
@@ -896,12 +966,13 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
 
     expect(state.status).toBe('completed');
     expect(agentCalls).toEqual([
+      { persona: undefined, outputSchema: expect.any(Object) },
       { persona: 'architecture', outputSchema: undefined },
       { persona: 'frontend', outputSchema: undefined },
       { persona: 'backend', outputSchema: undefined },
     ]);
     expect(state.dynamicParallelSelections.get(identity)).toMatchObject({
-      round: 2,
+      round: 1,
       selected_pool_ids: ['frontend', 'backend'],
       effective_selection_ids: ['architecture', 'frontend', 'backend'],
     });
@@ -910,93 +981,17 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       {
         step: 'reviewers',
         identity,
-        round: 2,
+        round: 1,
         mode: 'cumulative',
-        selectionSource: 'resume',
+        selectionSource: 'selector',
+        selectorProvider: 'mock',
+        selectorProviderSource: undefined,
+        rationale: 'The current pool requires both reviewers.',
         fixed: ['architecture'],
         selected: ['frontend', 'backend'],
         unselected: [],
       },
     );
-  });
-
-  it('should return defensive copies of dynamic selection state, resume snapshots, abort events, and run results', async () => {
-    const config = normalizeWorkflowConfig(dynamicParallelWorkflowRaw(), tmpDir);
-    const identity = dynamicSelectionIdentity(config);
-    const engine = new WorkflowEngine(config, tmpDir, 'Review changes', {
-      projectCwd: tmpDir,
-      provider: 'mock',
-      selectorProvider: MOCK_SELECTOR_PROVIDER,
-      startStep: 'reviewers',
-      resumePoint: {
-        version: 2,
-        stack: [{ workflow: 'dynamic-parallel-execution', workflow_ref: 'dynamic-parallel-execution', step: 'reviewers', kind: 'parallel', occurrence: 1 }],
-        iteration: 1,
-        elapsed_ms: 0,
-        dynamic_parallel_selections: {
-          [identity]: {
-            identity,
-            step_name: 'reviewers',
-            round: 1,
-            selected_pool_ids: ['frontend'],
-            effective_selection_ids: ['architecture', 'frontend'],
-          },
-        },
-        workflow_call_invocations: {},
-        workflow_step_participations: {},
-      },
-    });
-    engine.on('workflow:abort', (exportedState) => {
-      exportedState.dynamicParallelSelections.get(identity)!.selected_pool_ids.push('backend');
-    });
-    engine.on('step:start', () => {
-      const exportedState = engine.getState();
-      exportedState.dynamicParallelSelections.get(identity)!.selected_pool_ids.push('backend');
-      const exportedResumePoint = engine.getResumePoint()!;
-      exportedResumePoint.dynamic_parallel_selections![identity]!.selected_pool_ids.push('backend');
-
-      expect(engine.getState().dynamicParallelSelections.get(identity)?.selected_pool_ids)
-        .toEqual(['frontend']);
-      expect(engine.getResumePoint()?.dynamic_parallel_selections?.[identity]?.selected_pool_ids)
-        .toEqual(['frontend']);
-      engine.abort();
-    });
-
-    const returnedState = await engine.run();
-    returnedState.dynamicParallelSelections.get(identity)!.selected_pool_ids.push('backend');
-
-    expect(engine.getState().dynamicParallelSelections.get(identity)?.selected_pool_ids)
-      .toEqual(['frontend']);
-  });
-
-  it('should reject an unknown resume snapshot property before selector startup', () => {
-    const config = normalizeWorkflowConfig(dynamicParallelWorkflowRaw(), tmpDir);
-    const identity = dynamicSelectionIdentity(config);
-
-    expect(() => new WorkflowEngine(config, tmpDir, 'Review changes', {
-      projectCwd: tmpDir,
-      provider: 'mock',
-      selectorProvider: MOCK_SELECTOR_PROVIDER,
-      startStep: 'reviewers',
-      resumePoint: {
-        version: 2,
-        stack: [{ workflow: 'dynamic-parallel-execution', workflow_ref: 'dynamic-parallel-execution', step: 'reviewers', kind: 'parallel', occurrence: 1 }],
-        iteration: 1,
-        elapsed_ms: 0,
-        dynamic_parallel_selections: {
-          [identity]: {
-            identity,
-            step_name: 'reviewers',
-            round: 1,
-            selected_pool_ids: ['frontend'],
-            effective_selection_ids: ['architecture', 'frontend'],
-          },
-        },
-        workflow_call_invocations: {},
-        workflow_step_participations: {},
-        unexpected: true,
-      } as unknown as import('../core/models/types.js').WorkflowResumePoint,
-    })).toThrow();
   });
 
   it('should return defensive copies of dynamic selection state to completion events and run results', async () => {
@@ -1048,7 +1043,6 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     const config = normalizeWorkflowConfig(dynamicParallelWorkflowRaw(), tmpDir);
     const agentCalls: Array<{ persona: string | undefined; outputSchema: Record<string, unknown> | undefined }> = [];
     const selectorUsage: boolean[] = [];
-    const persisted = vi.fn();
     vi.mocked(runAgent).mockImplementation(async (persona, _instruction, options) => {
       agentCalls.push({ persona, outputSchema: options?.outputSchema });
       return makeResponse({
@@ -1062,7 +1056,6 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       projectCwd: tmpDir,
       provider: 'mock',
       selectorProvider: MOCK_SELECTOR_PROVIDER,
-      onDynamicParallelSelectionPersisted: persisted,
       onDelegatedAgentUsage: (context, result) => {
         if (context.step.startsWith('dynamic-selector:')) {
           selectorUsage.push(result.success);
@@ -1073,10 +1066,8 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
 
     expect(state.status).toBe('aborted');
     expect(agentCalls.filter((call) => call.outputSchema === undefined)).toEqual([]);
-    expect(persisted).not.toHaveBeenCalled();
     expect(state.dynamicParallelSelections).toEqual(new Map());
     expect(engine.getState().dynamicParallelSelections).toEqual(new Map());
-    expect(engine.getResumePoint()?.dynamic_parallel_selections).toBeUndefined();
     expect(selectorUsage).toEqual([false]);
   });
 
@@ -1378,10 +1369,9 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     expect(state.stepOutputs.has('security')).toBe(false);
   });
 
-  it('should reject a mismatched workflow-call invocation before agent start or selection persistence', () => {
+  it('should reject a mismatched workflow-call invocation before agent start', () => {
     const config = normalizeWorkflowConfig(dynamicParallelWorkflowRaw(), tmpDir);
     const invocationIdentity = buildWorkflowCallInvocationIdentity(config.name, 'delegate', []);
-    const persisted = vi.fn();
 
     expect(() => new WorkflowEngine(config, tmpDir, 'Review changes', {
       projectCwd: tmpDir,
@@ -1407,59 +1397,16 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
         },
         workflow_step_participations: {},
       },
-      onDynamicParallelSelectionPersisted: persisted,
     })).toThrow('Workflow-call invocation identity does not match resume entry "delegate"');
 
     expect(runAgent).not.toHaveBeenCalled();
-    expect(persisted).not.toHaveBeenCalled();
-  });
-
-  it('should reject a snapshot with an internal identity mismatch before agent start or selection persistence', () => {
-    const config = normalizeWorkflowConfig(dynamicParallelWorkflowRaw(), tmpDir);
-    const identity = buildDynamicParallelSelectionIdentity(config, 'reviewers', []);
-    const persisted = vi.fn();
-
-    expect(() => new WorkflowEngine(config, tmpDir, 'Review changes', {
-      projectCwd: tmpDir,
-      provider: 'mock',
-      selectorProvider: MOCK_SELECTOR_PROVIDER,
-      startStep: 'reviewers',
-      resumePoint: {
-        version: 2,
-        stack: [{
-          workflow: config.name,
-          workflow_ref: getWorkflowReference(config),
-          step: 'reviewers',
-          kind: 'parallel',
-          occurrence: 1,
-        }],
-        iteration: 1,
-        elapsed_ms: 0,
-        dynamic_parallel_selections: {
-          [identity]: {
-            identity: `${identity}-different`,
-            step_name: 'reviewers',
-            round: 1,
-            selected_pool_ids: ['frontend'],
-            effective_selection_ids: ['architecture', 'frontend'],
-          },
-        },
-        workflow_call_invocations: {},
-        workflow_step_participations: {},
-      },
-      onDynamicParallelSelectionPersisted: persisted,
-    })).toThrow(`Invalid dynamic parallel selection snapshot for identity "${identity}"`);
-
-    expect(runAgent).not.toHaveBeenCalled();
-    expect(persisted).not.toHaveBeenCalled();
   });
 
   it.each([
     ['throws', async () => { throw new Error('selector transport failed'); }],
     ['returns an error status', async () => makeResponse({ persona: 'selector', status: 'error', content: 'selector failed' })],
-  ])('should leave participant state and selection persistence empty when the selector %s', async (_label, selectorResponse) => {
+  ])('should leave participant state and run-local selection empty when the selector %s', async (_label, selectorResponse) => {
     const config = normalizeWorkflowConfig(dynamicParallelWorkflowRaw(), tmpDir);
-    const persisted: string[] = [];
     const usage: Array<{ step: string; success: boolean }> = [];
     vi.mocked(runAgent).mockImplementation(async (_persona, _instruction, options) => {
       if (options?.outputSchema) {
@@ -1472,10 +1419,6 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       projectCwd: tmpDir,
       provider: 'mock',
       selectorProvider: MOCK_SELECTOR_PROVIDER,
-      onDynamicParallelSelectionPersisted: () => {
-        persisted.push('persisted');
-        return Promise.resolve();
-      },
       onDelegatedAgentUsage: (context, result) => {
         usage.push({ step: context.step, success: result.success });
       },
@@ -1485,17 +1428,14 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     expect(state.status).toBe('aborted');
     expect(state.stepOutputs.size).toBe(0);
     expect(state.dynamicParallelSelections.size).toBe(0);
-    expect(engine.getResumePoint()?.dynamic_parallel_selections).toBeUndefined();
-    expect(persisted).toEqual([]);
     expect(usage).toEqual([
       { step: expect.stringMatching(/^dynamic-selector:/), success: false },
     ]);
   });
 
-  it('should stop before provider, usage, persistence, and participants when input collection aborts', async () => {
+  it('should stop before provider, usage, and participants when input collection aborts', async () => {
     const config = normalizeWorkflowConfig(dynamicParallelWorkflowRaw(), tmpDir);
     const controller = new AbortController();
-    const persisted = vi.fn();
     const usage = vi.fn();
     vi.spyOn(SelectorInputReader.prototype, 'readInputs').mockImplementationOnce(async () => {
       controller.abort(new Error('input collection aborted'));
@@ -1510,22 +1450,19 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       provider: 'mock',
       selectorProvider: MOCK_SELECTOR_PROVIDER,
       abortSignal: controller.signal,
-      onDynamicParallelSelectionPersisted: persisted,
       onDelegatedAgentUsage: usage,
     }).run();
 
     expect(state.status).toBe('aborted');
     expect(runAgent).not.toHaveBeenCalled();
     expect(usage).not.toHaveBeenCalled();
-    expect(persisted).not.toHaveBeenCalled();
     expect(state.dynamicParallelSelections).toEqual(new Map());
     expect(state.stepOutputs).toEqual(new Map());
   });
 
-  it('should stop before usage, persistence, and participants when the provider aborts', async () => {
+  it('should stop before usage and participants when the provider aborts', async () => {
     const config = normalizeWorkflowConfig(dynamicParallelWorkflowRaw(), tmpDir);
     const controller = new AbortController();
-    const persisted = vi.fn();
     const usage = vi.fn();
     vi.mocked(runAgent).mockImplementation(async (_persona, _instruction, options) => {
       if (options?.abortSignal !== controller.signal) {
@@ -1546,7 +1483,6 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       provider: 'mock',
       selectorProvider: MOCK_SELECTOR_PROVIDER,
       abortSignal: controller.signal,
-      onDynamicParallelSelectionPersisted: persisted,
       onDelegatedAgentUsage: usage,
     });
     const run = engine.run();
@@ -1559,15 +1495,13 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     expect(runAgent).toHaveBeenCalledTimes(1);
     expect(usage).toHaveBeenCalledTimes(1);
     expect(usage.mock.calls[0]?.[1]).toMatchObject({ success: false });
-    expect(persisted).not.toHaveBeenCalled();
     expect(state.dynamicParallelSelections).toEqual(new Map());
     expect(state.stepOutputs).toEqual(new Map());
   });
 
-  it('should stop before persistence and participants when usage publication aborts', async () => {
+  it('should stop before participants when usage publication aborts', async () => {
     const config = normalizeWorkflowConfig(dynamicParallelWorkflowRaw(), tmpDir);
     const controller = new AbortController();
-    const persisted = vi.fn();
     const usage = vi.fn(() => {
       controller.abort(new Error('selector usage publication aborted'));
     });
@@ -1581,84 +1515,36 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       provider: 'mock',
       selectorProvider: MOCK_SELECTOR_PROVIDER,
       abortSignal: controller.signal,
-      onDynamicParallelSelectionPersisted: persisted,
       onDelegatedAgentUsage: usage,
     }).run();
 
     expect(state.status).toBe('aborted');
     expect(runAgent).toHaveBeenCalledTimes(1);
     expect(usage).toHaveBeenCalledTimes(1);
-    expect(persisted).not.toHaveBeenCalled();
     expect(state.dynamicParallelSelections).toEqual(new Map());
     expect(state.stepOutputs).toEqual(new Map());
   });
 
-  it('should retain one consistent snapshot without starting participants when persistence aborts', async () => {
+  it('should fail before any agent when the selector provider is unresolved', async () => {
     const config = normalizeWorkflowConfig(dynamicParallelWorkflowRaw(), tmpDir);
-    const identity = dynamicSelectionIdentity(config);
-    const controller = new AbortController();
-    let releasePersistence: (() => void) | undefined;
-    const persistence = new Promise<void>((resolve) => {
-      releasePersistence = resolve;
-    });
-    const persisted = vi.fn(() => persistence);
-    vi.mocked(runAgent).mockResolvedValue(makeResponse({
-      persona: 'selector',
-      structuredOutput: { selected_ids: ['frontend'], rationale: 'Frontend review is required.' },
-    }));
-
     const engine = new WorkflowEngine(config, tmpDir, 'Review changes', {
       projectCwd: tmpDir,
       provider: 'mock',
-      selectorProvider: MOCK_SELECTOR_PROVIDER,
-      abortSignal: controller.signal,
-      onDynamicParallelSelectionPersisted: persisted,
-    });
-    const run = engine.run();
-    await vi.waitFor(() => expect(persisted).toHaveBeenCalledTimes(1));
-    controller.abort(new Error('selection persistence aborted'));
-    releasePersistence?.();
-    const state = await run;
-
-    expect(state.status).toBe('aborted');
-    expect(runAgent).toHaveBeenCalledTimes(1);
-    expect(persisted).toHaveBeenCalledTimes(1);
-    expect(state.dynamicParallelSelections.get(identity)).toMatchObject({
-      identity,
-      step_name: 'reviewers',
-      selected_pool_ids: ['frontend'],
-      effective_selection_ids: ['architecture', 'frontend'],
-    });
-    expect(engine.getResumePoint()?.dynamic_parallel_selections?.[identity]).toEqual(
-      state.dynamicParallelSelections.get(identity),
-    );
-    expect(state.stepOutputs).toEqual(new Map());
-  });
-
-  it('should fail before any agent or persistence when the selector provider is unresolved', async () => {
-    const config = normalizeWorkflowConfig(dynamicParallelWorkflowRaw(), tmpDir);
-    const persist = vi.fn();
-    const engine = new WorkflowEngine(config, tmpDir, 'Review changes', {
-      projectCwd: tmpDir,
-      provider: 'mock',
-      onDynamicParallelSelectionPersisted: persist,
     });
 
     const state = await engine.run();
 
     expect(state.status).toBe('aborted');
     expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
-    expect(persist).not.toHaveBeenCalled();
     expect(state.stepOutputs.size).toBe(0);
     expect(state.dynamicParallelSelections.size).toBe(0);
   });
 
-  it('should fail before persistence and participant execution when selection has no effective sub-steps', async () => {
+  it('should fail before participant execution when selection has no effective sub-steps', async () => {
     const raw = dynamicParallelWorkflowRaw();
     const reviewers = raw.steps[0] as { parallel: { fixed: unknown[] } };
     reviewers.parallel.fixed = [];
     const config = normalizeWorkflowConfig(raw, tmpDir);
-    const persist = vi.fn();
     const selectorUsage: boolean[] = [];
     vi.mocked(runAgent).mockResolvedValue(makeResponse({
       persona: 'selector',
@@ -1668,7 +1554,6 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       projectCwd: tmpDir,
       provider: 'mock',
       selectorProvider: MOCK_SELECTOR_PROVIDER,
-      onDynamicParallelSelectionPersisted: persist,
       onDelegatedAgentUsage: (context, result) => {
         if (context.step.startsWith('dynamic-selector:')) {
           selectorUsage.push(result.success);
@@ -1680,76 +1565,9 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
 
     expect(state.status).toBe('aborted');
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);
-    expect(persist).not.toHaveBeenCalled();
     expect(state.stepOutputs.size).toBe(0);
     expect(state.dynamicParallelSelections.size).toBe(0);
     expect(selectorUsage).toEqual([false]);
-  });
-
-  it('should wait for selection persistence before starting selected reviewers', async () => {
-    const config = normalizeWorkflowConfig(dynamicParallelWorkflowRaw(), tmpDir);
-    let releasePersistence: (() => void) | undefined;
-    const persistence = new Promise<void>((resolve) => {
-      releasePersistence = resolve;
-    });
-    const calls: Array<{ outputSchema: Record<string, unknown> | undefined }> = [];
-    vi.mocked(runAgent).mockImplementation(async (_persona, _instruction, options) => {
-      calls.push({ outputSchema: options?.outputSchema });
-      return makeResponse({
-        persona: options?.outputSchema ? 'selector' : 'reviewer',
-        structuredOutput: options?.outputSchema
-          ? { selected_ids: ['frontend'], rationale: 'Frontend review is required.' }
-          : undefined,
-        content: 'approved',
-      });
-    });
-    mockRuleEvaluationSequence([
-      { index: 0, method: 'phase3_tag' },
-      { index: 0, method: 'phase3_tag' },
-      { index: 0, method: 'aggregate' },
-    ]);
-
-    const engine = new WorkflowEngine(config, tmpDir, 'Review changes', {
-      projectCwd: tmpDir,
-      provider: 'mock',
-      selectorProvider: MOCK_SELECTOR_PROVIDER,
-      onDynamicParallelSelectionPersisted: () => persistence,
-    });
-    const run = engine.run();
-
-    await vi.waitFor(() => expect(calls).toHaveLength(1));
-    expect(calls[0]?.outputSchema).toBeDefined();
-    releasePersistence?.();
-    await run;
-  });
-
-  it('should not retain a selection or start reviewers when persistence rejects', async () => {
-    const config = normalizeWorkflowConfig(dynamicParallelWorkflowRaw(), tmpDir);
-    const identity = dynamicSelectionIdentity(config);
-    const calls: Array<{ outputSchema: Record<string, unknown> | undefined }> = [];
-    vi.mocked(runAgent).mockImplementation(async (_persona, _instruction, options) => {
-      calls.push({ outputSchema: options?.outputSchema });
-      return makeResponse({
-        persona: 'selector',
-        structuredOutput: { selected_ids: ['frontend'], rationale: 'Frontend review is required.' },
-      });
-    });
-
-    const engine = new WorkflowEngine(config, tmpDir, 'Review changes', {
-      projectCwd: tmpDir,
-      provider: 'mock',
-      selectorProvider: MOCK_SELECTOR_PROVIDER,
-      onDynamicParallelSelectionPersisted: async () => {
-        throw new Error('meta write failed');
-      },
-    });
-
-    const state = await engine.run();
-
-    expect(state.status).toBe('aborted');
-    expect(calls).toHaveLength(1);
-    expect(engine.getState().dynamicParallelSelections.has(identity)).toBe(false);
-    expect(engine.getResumePoint()?.dynamic_parallel_selections).toBeUndefined();
   });
 
   it('should fail before selector and reviewer execution when report scanning exceeds the entry limit', async () => {
@@ -1777,13 +1595,11 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
 
   it('should leave selector and workflow side effects empty when current diff input is invalid UTF-8', async () => {
     const config = normalizeWorkflowConfig(dynamicParallelWorkflowRaw(), tmpDir);
-    const persisted = vi.fn();
     const delegatedUsage = vi.fn();
     const engine = new WorkflowEngine(config, tmpDir, 'Review changes', {
       projectCwd: tmpDir,
       provider: 'mock',
       selectorProvider: MOCK_SELECTOR_PROVIDER,
-      onDynamicParallelSelectionPersisted: persisted,
       onDelegatedAgentUsage: delegatedUsage,
     });
     writeFileSync(join(tmpDir, 'invalid-selector-input.txt'), Buffer.from([0xc3, 0x28]));
@@ -1793,51 +1609,11 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
 
     expect(state.status).toBe('aborted');
     expect(runAgent).not.toHaveBeenCalled();
-    expect(persisted).not.toHaveBeenCalled();
     expect(delegatedUsage).not.toHaveBeenCalled();
     expect(state.stepOutputs).toEqual(new Map());
     expect(state.dynamicParallelSelections).toEqual(new Map());
     expect(state.personaSessions).toEqual(new Map());
     expect(readdirSync(reportDirectory)).toEqual([]);
-  });
-
-  it.each([
-    ['an unknown pool ID', ['outside-pool'], ['architecture', 'outside-pool']],
-    ['an inconsistent effective selection', ['frontend'], ['architecture']],
-  ] as const)('should reject resumed dynamic selection with %s before any agent starts', async (_label, selectedPoolIds, effectiveSelectionIds) => {
-    const config = normalizeWorkflowConfig(dynamicParallelWorkflowRaw(), tmpDir);
-    const identity = dynamicSelectionIdentity(config);
-    const agentCalls: Array<{ persona: string | undefined; outputSchema: Record<string, unknown> | undefined }> = [];
-    vi.mocked(runAgent).mockImplementation(async (persona, _instruction, options) => {
-      agentCalls.push({ persona, outputSchema: options?.outputSchema });
-      return makeResponse({ persona: persona ?? 'selector', content: 'approved' });
-    });
-
-    expect(() => new WorkflowEngine(config, tmpDir, 'Review changes', {
-      projectCwd: tmpDir,
-      provider: 'mock',
-      selectorProvider: MOCK_SELECTOR_PROVIDER,
-      startStep: 'reviewers',
-      resumePoint: {
-        version: 2,
-        stack: [{ workflow: 'dynamic-parallel-execution', workflow_ref: 'dynamic-parallel-execution', step: 'reviewers', kind: 'parallel', occurrence: 1 }],
-        iteration: 1,
-        elapsed_ms: 0,
-        dynamic_parallel_selections: {
-          [identity]: {
-            identity,
-            step_name: 'reviewers',
-            round: 1,
-            selected_pool_ids: selectedPoolIds,
-            effective_selection_ids: effectiveSelectionIds,
-          },
-        },
-        workflow_call_invocations: {},
-        workflow_step_participations: {},
-      },
-    })).toThrow();
-
-    expect(agentCalls).toEqual([]);
   });
 
   it('should save routed parallel sub-step sessions with the resolved provider key', async () => {

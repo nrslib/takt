@@ -2,6 +2,7 @@ export interface WorkflowExecutionIdentity {
   readonly workflow: string;
   readonly step: string;
   readonly calls: readonly WorkflowExecutionCallIdentity[];
+  readonly parallel_parent?: string;
 }
 
 export interface WorkflowExecutionCallIdentity {
@@ -12,6 +13,7 @@ export interface WorkflowExecutionCallIdentity {
 }
 
 const ROOT_KEYS = ['workflow', 'step', 'calls'] as const;
+const ROOT_KEYS_WITH_PARALLEL_PARENT = ['workflow', 'step', 'calls', 'parallel_parent'] as const;
 const CALL_KEYS = ['workflow', 'step', 'kind', 'instance'] as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -38,13 +40,19 @@ function isValidCallIdentity(value: unknown): value is WorkflowExecutionCallIden
 }
 
 function isValidIdentity(value: unknown): value is WorkflowExecutionIdentity {
-  if (!isRecord(value) || !hasExactKeys(value, ROOT_KEYS)) {
+  if (!isRecord(value)) {
+    return false;
+  }
+  const hasParallelParent = hasExactKeys(value, ROOT_KEYS_WITH_PARALLEL_PARENT);
+  if (!hasParallelParent && !hasExactKeys(value, ROOT_KEYS)) {
     return false;
   }
   return typeof value.workflow === 'string'
     && value.workflow.length > 0
     && typeof value.step === 'string'
     && value.step.length > 0
+    && (!hasParallelParent
+      || typeof value.parallel_parent === 'string' && value.parallel_parent.length > 0)
     && Array.isArray(value.calls)
     && value.calls.every(isValidCallIdentity);
 }
@@ -64,6 +72,7 @@ export function serializeWorkflowExecutionIdentity(
       kind: call.kind,
       instance: call.instance,
     })),
+    ...(identity.parallel_parent === undefined ? {} : { parallel_parent: identity.parallel_parent }),
   });
 }
 
@@ -79,5 +88,12 @@ export function parseWorkflowExecutionIdentity(
   } catch {
     return undefined;
   }
+}
+
+export function parseWorkflowCallInvocationIdentity(
+  identity: string,
+): WorkflowExecutionIdentity | undefined {
+  const parsed = parseWorkflowExecutionIdentity(identity);
+  return parsed?.parallel_parent === undefined ? parsed : undefined;
 }
 import type { WorkflowResumeFrameKind } from '../models/types.js';

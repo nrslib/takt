@@ -199,8 +199,6 @@ export interface WorkflowResumePoint {
   stack: WorkflowResumePointEntry[];
   iteration: number;
   elapsed_ms: number;
-  dynamic_parallel_selections?: Record<string, DynamicParallelSelectionSnapshot>;
-  dynamic_facet_selections?: Record<string, DynamicFacetSelectionSnapshot>;
   workflow_call_invocations: Record<string, WorkflowCallInvocationRecord>;
   workflow_step_participations: Record<string, WorkflowStepParticipationRecord>;
 }
@@ -614,10 +612,8 @@ export interface WorkflowState {
   stepIterations: Map<string, number>;
   restoredStepIterationNames: Set<string>;
   dynamicParallelSelections: Map<string, DynamicParallelSelectionSnapshot>;
-  resumedDynamicParallelSteps: Set<string>;
   activeDynamicParallelSelectionIdentity?: string;
   dynamicFacetSelections: Map<string, DynamicFacetSelectionSnapshot>;
-  resumedDynamicFacetSteps: Set<string>;
   activeDynamicFacetSelectionIdentity?: string;
   pendingFallback?: FallbackContext;
   rateLimitFallbackState?: RateLimitFallbackState;

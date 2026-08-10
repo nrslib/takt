@@ -125,7 +125,11 @@ interface WorkflowEngineStepCoordinatorDeps {
     fileName: string,
     context: WorkflowStepExecutionEventContext,
   ) => void;
-  recordParticipation: (step: WorkflowStep, reportNames: readonly string[]) => void;
+  recordParticipation: (
+    step: WorkflowStep,
+    reportNames: readonly string[],
+    parallelParentStepName?: string,
+  ) => void;
   /** Present only when the workflow has an effective finding_contract and the finding-conflict-adjudication step was injected (see WorkflowEngine). */
   findingConflictAdjudicationRunner?: {
     run: (step: WorkflowStep, state: WorkflowState, runtime?: RuntimeStepResolution) => Promise<StepRunResult>;
@@ -225,17 +229,21 @@ export class WorkflowEngineStepCoordinator {
     for (const { step: reportedStep, filePath, fileName, context } of reports) {
       this.deps.emitReport(reportedStep, filePath, fileName, context);
     }
-    const reportedSteps = new Map<string, WorkflowStep>();
-    for (const report of reports) {
-      reportedSteps.set(report.step.name, report.step);
-    }
-    reportedSteps.set(step.name, step);
-    for (const [stepName, participatedStep] of reportedSteps) {
+    const reportedSteps = new Set<WorkflowStep>([
+      step,
+      ...reports.map(({ step: reportedStep }) => reportedStep),
+    ]);
+    for (const participatedStep of reportedSteps) {
+      const parallelParentStepName = step.parallel !== undefined
+        && getAllParallelSubSteps(step.parallel).some((subStep) => subStep === participatedStep)
+        ? step.name
+        : undefined;
       this.deps.recordParticipation(
         participatedStep,
         reports
-          .filter((report) => report.step.name === stepName)
+          .filter((report) => report.step === participatedStep)
           .map((report) => report.fileName),
+        parallelParentStepName,
       );
     }
     return result;

@@ -52,14 +52,11 @@ import type {
   WorkflowConfig,
 } from '../core/models/index.js';
 import { resetAnalyticsWriter } from '../features/analytics/writer.js';
-import type { WorkflowExecutionScope } from '../core/workflow/workflow-execution-scope.js';
-import { parseWorkflowResumePoint } from '../core/workflow/resume-point-codec.js';
 
 import {
   createParentWorkflow,
   createWorkflowCallOptions,
   loadWorkflowOrThrow,
-  mockPersonaResponses,
   writeWorkflow,
 } from './helpers/engine-workflow-call-shared.js';
 
@@ -846,7 +843,7 @@ steps:
     expect(sessionUpdates).toHaveBeenCalledWith('["child-reviewer","mock","parent-model"]', 'updated-session');
   });
 
-  it('workflow_call の実 child Engine が commit した selection を親 resume point に保持する', async () => {
+  it('workflow_call の実 child Engine が commit した selection を親の run-local state に保持する', async () => {
     writeWorkflow(tmpDir, 'shared/dynamic.yaml', `name: shared/dynamic
 subworkflow:
   callable: true
@@ -901,7 +898,7 @@ steps:
     }));
 
     const state = await engine.run();
-    const selections = Object.values(engine.getResumePoint()?.dynamic_parallel_selections ?? {});
+    const selections = [...state.dynamicParallelSelections.values()];
 
     expect(state.status, state.lastOutput?.content).toBe('completed');
     expect(selections).toHaveLength(1);
@@ -911,137 +908,104 @@ steps:
     });
   });
 
-  it('親子の dynamic selection を child round の resume 後も個別に復元する', async () => {
-    writeWorkflow(tmpDir, 'shared/child-dynamic.yaml', `name: shared/child-dynamic
+  it('workflow_call の resumed child Engine が現在の pool で selector を再実行する', async () => {
+    const writeDynamicChild = (poolId: string) => writeWorkflow(tmpDir, 'shared/dynamic-resume.yaml', `name: shared/dynamic-resume
 subworkflow:
   callable: true
-initial_step: child-reviewers
-max_steps: 1
+initial_step: reviewers
+max_steps: 3
 steps:
-  - name: child-reviewers
+  - name: reviewers
     parallel:
       fixed:
-        - name: child-architecture
-          persona: child-architecture
-          instruction: Review child architecture
+        - name: architecture
+          persona: architecture
+          instruction: Review architecture
           rules:
             - condition: approved
       pool:
-        - name: frontend
-          persona: frontend
-          description: Review frontend changes
-          instruction: Review frontend
+        - name: ${poolId}
+          persona: ${poolId}
+          description: Review ${poolId} changes
+          instruction: Review ${poolId}
           rules:
             - condition: approved
     rules:
       - condition: all("approved")
         next: COMPLETE
 `);
+    writeDynamicChild('frontend');
     const config = createParentWorkflow(tmpDir, {
-      name: 'parent-and-child-dynamic',
-      initial_step: 'parent-reviewers',
+      name: 'parent-dynamic-resume',
+      initial_step: 'delegate',
       max_steps: 5,
-      steps: [
-        {
-          name: 'parent-reviewers',
-          parallel: {
-            fixed: [{
-              name: 'parent-architecture',
-              persona: 'parent-architecture',
-              instruction: 'Review parent architecture',
-              rules: [{ condition: 'approved' }],
-            }],
-            pool: [{
-              name: 'api',
-              persona: 'api',
-              description: 'Review API changes',
-              instruction: 'Review API',
-              rules: [{ condition: 'approved' }],
-            }],
-          },
-          rules: [{ condition: 'all("approved")', next: 'delegate' }],
-        },
-        {
-          name: 'delegate',
-          kind: 'workflow_call',
-          call: 'shared/child-dynamic',
-          rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
-        },
-      ],
+      steps: [{
+        name: 'delegate',
+        kind: 'workflow_call',
+        call: 'shared/dynamic-resume',
+        rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+      }],
     });
-    const childConfig = loadWorkflowOrThrow('shared/child-dynamic', tmpDir);
-    const persisted: import('../core/models/types.js').WorkflowResumePoint[] = [];
-    vi.mocked(runAgent).mockImplementation(async (persona, prompt, options) => {
-      options?.onPromptResolved?.({
-        systemPrompt: typeof persona === 'string' ? persona : '',
-        userInstruction: prompt,
-      });
-      const selectedId = options?.outputSchema === undefined
-        ? undefined
-        : JSON.stringify(options.outputSchema).includes('"api"') ? 'api' : 'frontend';
-      return makeResponse({
-        persona: typeof persona === 'string' ? persona : 'selector',
-        content: 'approved',
-        ...(selectedId === undefined
-          ? {}
-          : { structuredOutput: { selected_ids: [selectedId], rationale: 'Required review.' } }),
-      });
-    });
+    const selectorProvider = { provider: 'mock', providerOptions: {}, nativeTools: [] };
     vi.mocked(mockRuleEvaluation).mockImplementation((_step, selection) => ({
       index: 0,
       method: selection === undefined ? 'aggregate' : 'phase3_tag',
     }));
-    engine = new WorkflowEngine(config, tmpDir, 'Review parent and child changes', createWorkflowCallOptions(tmpDir, {
-      selectorProvider: { provider: 'mock', providerOptions: {}, nativeTools: [] },
-      onDynamicParallelSelectionPersisted: (resumePoint) => {
-        persisted.push(resumePoint);
-      },
+    mockRunAgentSequence([
+      makeResponse({
+        content: '',
+        structuredOutput: { selected_ids: ['frontend'], rationale: 'Use frontend before interruption.' },
+      }),
+      makeResponse({ persona: 'architecture', content: 'approved' }),
+      makeResponse({ persona: 'frontend', status: 'error', content: 'interrupted after selection' }),
+    ]);
+    engine = new WorkflowEngine(config, tmpDir, 'Resume nested dynamic selection', createWorkflowCallOptions(tmpDir, {
+      selectorProvider,
     }));
 
     const firstState = await engine.run();
-    const childRoundResumePoint = persisted.at(-1);
-    if (childRoundResumePoint === undefined) {
-      throw new Error('Expected the child dynamic round resume point');
-    }
+    const firstResumePoint = engine.getResumePoint();
+    expect(firstState.status).toBe('aborted');
+    expect(firstResumePoint?.stack.map((entry) => entry.step)).toEqual(['delegate', 'reviewers']);
 
-    expect(firstState.status, firstState.lastOutput?.content).toBe('completed');
-    expect(Object.values(childRoundResumePoint.dynamic_parallel_selections ?? {})).toHaveLength(2);
-    expect(childRoundResumePoint.stack.map((entry) => entry.step)).toEqual([
-      'delegate',
-      'child-reviewers',
-    ]);
-    expect(Object.values(childRoundResumePoint.workflow_call_invocations ?? {})).toEqual([
-      expect.objectContaining({
-        call_instance: 1,
-        report_namespace_segment: expectedWorkflowCallNamespace(
-          config,
-          'delegate',
-          1,
-          childConfig,
-        )[1],
-      }),
-    ]);
-
-    vi.mocked(runAgent).mockClear();
-    engine = new WorkflowEngine(config, tmpDir, 'Resume child review', createWorkflowCallOptions(tmpDir, {
-      selectorProvider: { provider: 'mock', providerOptions: {}, nativeTools: [] },
-      resumePoint: childRoundResumePoint,
-      startStep: childRoundResumePoint.stack[0]?.step,
-      initialIteration: childRoundResumePoint.iteration,
+    cleanupWorkflowEngine(engine);
+    engine = null;
+    writeDynamicChild('backend');
+    vi.resetAllMocks();
+    applyDefaultMocks();
+    vi.mocked(mockRuleEvaluation).mockImplementation((_step, selection) => ({
+      index: 0,
+      method: selection === undefined ? 'aggregate' : 'phase3_tag',
     }));
+    mockRunAgentSequence([
+      makeResponse({
+        content: '',
+        structuredOutput: { selected_ids: ['backend'], rationale: 'Use the current pool after resume.' },
+      }),
+      makeResponse({ persona: 'architecture', content: 'approved' }),
+      makeResponse({ persona: 'backend', content: 'approved' }),
+    ]);
+    engine = new WorkflowEngine(config, tmpDir, 'Resume nested dynamic selection', createWorkflowCallOptions(tmpDir, {
+      initialIteration: firstState.iteration,
+      startStep: 'delegate',
+      resumePoint: firstResumePoint,
+      selectorProvider,
+    }));
+
     const resumedState = await engine.run();
     const resumedSelections = [...resumedState.dynamicParallelSelections.values()];
-    const selectorCalls = vi.mocked(runAgent).mock.calls
-      .filter(([, , options]) => options?.outputSchema !== undefined);
+    const calledPersonas = vi.mocked(runAgent).mock.calls.map(([persona]) => persona);
 
     expect(resumedState.status, resumedState.lastOutput?.content).toBe('completed');
-    expect(selectorCalls).toHaveLength(0);
-    expect(resumedSelections).toHaveLength(2);
-    expect(resumedSelections.map((selection) => selection.selected_pool_ids))
-      .toEqual(expect.arrayContaining([['api'], ['frontend']]));
+    expect(calledPersonas).toEqual([undefined, 'architecture', 'backend']);
+    expect(resumedSelections).toHaveLength(1);
+    expect(resumedSelections[0]).toMatchObject({
+      selected_pool_ids: ['backend'],
+      effective_selection_ids: ['architecture', 'backend'],
+    });
   });
 
-  it('parallel sibling workflow_call child Engines retain both canonical selections in the parent resume point', async () => {
+  it('parallel sibling workflow_call child Engines retain both canonical selections in run-local state', async () => {
     const writeDynamicChild = (name: string, selectedPoolId: string) => writeWorkflow(tmpDir, `shared/${name}.yaml`, `name: shared/${name}
 subworkflow:
   callable: true
@@ -1103,7 +1067,7 @@ steps:
       selectorProvider: { provider: 'mock', providerOptions: {}, nativeTools: [] },
     }));
     const state = await engine.run();
-    const selections = Object.values(engine.getResumePoint()?.dynamic_parallel_selections ?? {});
+    const selections = [...state.dynamicParallelSelections.values()];
 
     expect(state.status, state.lastOutput?.content).toBe('completed');
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(6);

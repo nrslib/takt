@@ -1606,15 +1606,6 @@ describe('TaskRunner (tasks.yaml)', () => {
       elapsed_ms: 183245,
       workflow_call_invocations: {},
       workflow_step_participations: {},
-      dynamic_parallel_selections: {
-        '{"workflow":"takt/coding","step":"review","calls":[]}': {
-          identity: '{"workflow":"takt/coding","step":"review","calls":[]}',
-          step_name: 'review',
-          round: 1,
-          selected_pool_ids: ['frontend'],
-          effective_selection_ids: ['architecture', 'frontend'],
-        },
-      },
     };
 
     runner.addTask('Task A', { workflow: 'default' });
