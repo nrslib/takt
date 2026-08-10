@@ -266,11 +266,14 @@ describe('experimental builtin workflow', () => {
     });
     const genericCandidates = genericCore.facetPools?.['coding-facets']?.candidates ?? [];
     const genericCandidateIds = genericCandidates.map(({ id }) => id);
-    expect(genericCandidateIds).toEqual(expect.arrayContaining(['frontend', 'backend']));
+    expect(genericCandidateIds).toEqual(
+      expect.arrayContaining(['frontend', 'backend', 'testing', 'security']),
+    );
     expect(genericCandidateIds).not.toContain('cli');
     expect(genericCandidateIds).not.toContain('implementation-semantics');
     const taktCandidates = taktCore.facetPools?.['takt-coding-facets']?.candidates ?? [];
     const taktCandidateIds = taktCandidates.map(({ id }) => id);
+    expect(taktCandidateIds).toEqual(expect.arrayContaining(['testing', 'security']));
     expect(taktCandidateIds).not.toContain('cli');
     expect(taktCandidateIds).not.toContain('frontend');
     expect(taktCandidateIds).not.toContain('backend');
