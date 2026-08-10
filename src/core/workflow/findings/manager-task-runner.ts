@@ -555,9 +555,18 @@ function rawTaskManifestView(input: {
       if (raw === undefined) {
         throw new Error(`Raw task manifest is missing raw finding "${rawFindingId}"`);
       }
+      const reviewer = boundPromptString({
+        value: raw.reviewer,
+        fieldPath: `${rawFindingId}.reviewer`,
+        maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.reviewerMaxBytes,
+      });
       return {
         rawFindingId,
         componentId: input.task.componentIdByRawFindingId.get(rawFindingId)!,
+        reviewer: reviewer.text,
+        ...(reviewer.truncation === undefined
+          ? {}
+          : { reviewerTruncation: reviewer.truncation }),
         relation: raw.relation,
         targetFindingId: raw.targetFindingId,
         target: managerPromptTargetView(raw.target),
@@ -591,6 +600,7 @@ function boundedRawClaimItems(input: {
     ['description', FINDING_MANAGER_PROMPT_FIELD_LIMITS.rawDescriptionMaxBytes],
     ['suggestion', FINDING_MANAGER_PROMPT_FIELD_LIMITS.rawSuggestionMaxBytes],
     ['rawExcerpt', FINDING_MANAGER_PROMPT_FIELD_LIMITS.rawExcerptMaxBytes],
+    ['familyTag', FINDING_MANAGER_PROMPT_FIELD_LIMITS.familyTagMaxBytes],
   ] as const;
   for (const [field, maxFieldBytes] of fields) {
     input.rawFindings.forEach((raw, index) => {
@@ -624,13 +634,21 @@ function rawEvidenceView(
         fieldPath: `${rawFinding.rawFindingId}.evidence[${index}].path`,
         maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.quoteWindowPathMaxBytes,
       });
+      const verbatimExcerpt = boundPromptString({
+        value: entry.verbatimExcerpt,
+        fieldPath: `${rawFinding.rawFindingId}.evidence[${index}].verbatimExcerpt`,
+        maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.evidenceVerbatimExcerptMaxBytes,
+      });
       return {
         kind: entry.kind,
         path: path.text,
         ...(path.truncation === undefined ? {} : { pathTruncation: path.truncation }),
         startLine: entry.startLine,
         endLine: entry.endLine,
-        verbatimExcerpt: entry.verbatimExcerpt,
+        verbatimExcerpt: verbatimExcerpt.text,
+        ...(verbatimExcerpt.truncation === undefined
+          ? {}
+          : { verbatimExcerptTruncation: verbatimExcerpt.truncation }),
         snapshotId: entry.snapshotId,
       };
     }
@@ -649,6 +667,8 @@ function rawEvidenceView(
           verifier: { id: record.verifierId, version: record.verifierVersion },
           claimIdentityHash: record.claimIdentityHash,
           targetFindingId: record.targetFindingId,
+          subject: record.subject,
+          dependencyDigests: record.dependencyDigests,
           resultDigest: record.resultDigest,
           snapshotId: record.snapshotId,
         };
@@ -711,6 +731,7 @@ function buildRawTaskInstruction(input: {
       rawFindings: input.rawFindings,
     }),
     manifestBudget,
+    renderFencedJsonBlock,
   );
   const manifest = [
     manifestTask,

@@ -2,12 +2,13 @@ import {
   FINDING_EVIDENCE_ISSUANCE_LIMITS,
   RAW_FINDING_FIELD_LIMITS,
 } from '../../models/finding-contract-limits.js';
+import { renderFencedJsonBlock } from '../instruction/fenced-block.js';
 
 export const FINDING_MANAGER_INPUT_MAX_BYTES = 24_000;
 
 export const FINDING_MANAGER_PROMPT_FIELD_LIMITS = {
   rawTitleMaxBytes: 640,
-  rawDescriptionMaxBytes: 1_536,
+  rawDescriptionMaxBytes: 1_152,
   rawSuggestionMaxBytes: 512,
   rawExcerptMaxBytes: 768,
   targetLiteralMaxBytes: 512,
@@ -27,7 +28,7 @@ export const FINDING_MANAGER_PROMPT_FIELD_LIMITS = {
   ledgerMaxLocations: 4,
   provisionalReasonMaxBytes: 384,
   conflictReasonMaxBytes: 384,
-  reviewerMaxBytes: 256,
+  reviewerMaxBytes: 64,
   stepNameMaxBytes: 256,
   familyTagMaxBytes: 256,
 } as const;
@@ -165,6 +166,13 @@ function promptSectionBytes(label: string, value: unknown): number {
   );
 }
 
+function fencedJsonSectionBytes(label: string, value: unknown): number {
+  return Buffer.byteLength(
+    [label, renderFencedJsonBlock(value)].join('\n'),
+    'utf8',
+  );
+}
+
 function quoteWindowsSectionBytes(label: string, value: unknown): number {
   return Buffer.byteLength(
     [label, renderQuoteWindowsJsonBlock(value)].join('\n'),
@@ -211,11 +219,16 @@ function rawReportExcerptBudget(): number {
       '\0'.repeat(RAW_FINDING_FIELD_LIMITS.maxDescriptionChars),
       FINDING_MANAGER_PROMPT_FIELD_LIMITS.rawExcerptMaxBytes,
     ),
+    ...boundedPromptProperty(
+      'familyTag',
+      '\0'.repeat(RAW_FINDING_FIELD_LIMITS.maxFamilyTagChars),
+      FINDING_MANAGER_PROMPT_FIELD_LIMITS.familyTagMaxBytes,
+    ),
   };
   return promptSectionBytes('## Report excerpts', { items: [item] });
 }
 
-const QUOTE_WINDOW_EXCERPT = 'x'.repeat(RAW_FINDING_FIELD_LIMITS.maxVerbatimExcerptBytes);
+const QUOTE_WINDOW_EXCERPT = 'x'.repeat(FINDING_EVIDENCE_ISSUANCE_LIMITS.maxFileQuoteBytes);
 
 function rawQuoteWindowEvidenceEntry(
   verbatimExcerpt = QUOTE_WINDOW_EXCERPT,
@@ -225,13 +238,21 @@ function rawQuoteWindowEvidenceEntry(
     fieldPath: 'budget.path',
     maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.quoteWindowPathMaxBytes,
   });
+  const boundedExcerpt = boundPromptString({
+    value: verbatimExcerpt,
+    fieldPath: 'budget.verbatimExcerpt',
+    maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.evidenceVerbatimExcerptMaxBytes,
+  });
   return {
     kind: 'file_quote',
     path: path.text,
     ...(path.truncation === undefined ? {} : { pathTruncation: path.truncation }),
     startLine: FINDING_EVIDENCE_ISSUANCE_LIMITS.maxSourceFileBytes,
     endLine: FINDING_EVIDENCE_ISSUANCE_LIMITS.maxSourceFileBytes,
-    verbatimExcerpt,
+    verbatimExcerpt: boundedExcerpt.text,
+    ...(boundedExcerpt.truncation === undefined
+      ? {}
+      : { verbatimExcerptTruncation: boundedExcerpt.truncation }),
     snapshotId: '0'.repeat(64),
   };
 }
@@ -240,7 +261,7 @@ function quoteWindowsEvidenceArrayMaxBytes(): number {
   return Math.max(
     ...[
       QUOTE_WINDOW_EXCERPT,
-      String.fromCodePoint(0x60).repeat(RAW_FINDING_FIELD_LIMITS.maxVerbatimExcerptBytes),
+      String.fromCodePoint(0x60).repeat(FINDING_EVIDENCE_ISSUANCE_LIMITS.maxFileQuoteBytes),
     ].map((verbatimExcerpt) => promptJsonUtf8Bytes({
       items: Array.from(
         { length: FINDING_MANAGER_PROMPT_FIELD_LIMITS.evidenceMaxItems },
@@ -261,7 +282,7 @@ export const FINDING_MANAGER_PROMPT_QUOTE_WINDOWS_ARRAY_MAX_BYTES = (
 function rawQuoteWindowBudget(): number {
   const evidenceEntry = rawQuoteWindowEvidenceEntry();
   const fenceStretchEvidenceEntry = rawQuoteWindowEvidenceEntry(
-    String.fromCodePoint(0x60).repeat(RAW_FINDING_FIELD_LIMITS.maxVerbatimExcerptBytes),
+    String.fromCodePoint(0x60).repeat(FINDING_EVIDENCE_ISSUANCE_LIMITS.maxFileQuoteBytes),
   );
   return Math.max(
     quoteWindowsSectionBytes(
@@ -292,20 +313,75 @@ function rawQuoteWindowBudget(): number {
 }
 
 function rawManifestViewBudget(itemCount: number): number {
+  const targetCollection = (values: readonly string[], maxRenderedBytes: number): unknown => {
+    const itemTruncations: Array<{ index: number; marker: PromptTruncationMarker }> = [];
+    const boundedItems = values.map((value, index) => {
+      const bounded = boundPromptString({
+        value,
+        fieldPath: `budget.target.paths[${index}]`,
+        maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.targetCollectionItemMaxBytes,
+      });
+      if (bounded.truncation !== undefined) {
+        itemTruncations.push({ index, marker: bounded.truncation });
+      }
+      return bounded.text;
+    });
+    const bounded = boundPromptArray({
+      items: boundedItems,
+      fieldPath: 'budget.target.paths',
+      maxItems: 8,
+      maxRenderedBytes,
+    });
+    const retainedItemTruncations = itemTruncations
+      .filter(({ index }) => index < bounded.items.length)
+      .map(({ marker }) => marker);
+    if (bounded.truncation === undefined && retainedItemTruncations.length === 0) {
+      return bounded.items;
+    }
+    return {
+      items: bounded.items,
+      ...(bounded.truncation === undefined ? {} : { truncation: bounded.truncation }),
+      ...(retainedItemTruncations.length === 0
+        ? {}
+        : { itemTruncations: retainedItemTruncations }),
+    };
+  };
+
+  let target: unknown;
+  for (let collectionBytes = 768; collectionBytes >= 64; collectionBytes -= 16) {
+    const candidate = {
+      kind: 'code',
+      paths: targetCollection(
+        Array.from({ length: 8 }, () => 'x'.repeat(RAW_FINDING_FIELD_LIMITS.maxEvidencePathChars)),
+        collectionBytes,
+      ),
+    };
+    if (promptJsonUtf8Bytes(candidate) <= FINDING_MANAGER_PROMPT_FIELD_LIMITS.targetMaxBytes) {
+      target = candidate;
+      break;
+    }
+  }
+  if (target === undefined) {
+    throw new Error('Finding manager manifest target budget fixture cannot be bounded');
+  }
+  const reviewer = boundPromptString({
+    value: 'r'.repeat(FINDING_MANAGER_PROMPT_FIELD_LIMITS.reviewerMaxBytes * 4),
+    fieldPath: 'budget.reviewer',
+    maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.reviewerMaxBytes,
+  });
   const item = {
     rawFindingId: '',
     componentId: '0'.repeat(64),
+    reviewer: reviewer.text,
+    ...(reviewer.truncation === undefined ? {} : { reviewerTruncation: reviewer.truncation }),
     relation: 'resolution_confirmation',
     targetFindingId: 'F'.repeat(RAW_FINDING_FIELD_LIMITS.maxFindingIdChars),
-    target: {
-      kind: 'code',
-      paths: Array.from(
-        { length: 3 },
-        () => 'x'.repeat(FINDING_MANAGER_PROMPT_FIELD_LIMITS.targetCollectionItemMaxBytes - 16),
-      ),
-    },
+    targetIdentityHash: '0'.repeat(64),
+    claimIdentityHash: '0'.repeat(64),
+    candidateIdentityHash: '0'.repeat(64),
+    target,
   };
-  return promptSectionBytes(
+  return fencedJsonSectionBytes(
     '## Task manifest',
     {
       taskId: '0'.repeat(64),
@@ -359,7 +435,7 @@ function fullDetailFindingBudget(): Record<string, unknown> {
     endLine: FINDING_EVIDENCE_ISSUANCE_LIMITS.maxFileQuoteLines,
     ...boundedPromptProperty(
       'verbatimExcerpt',
-      'x'.repeat(RAW_FINDING_FIELD_LIMITS.maxVerbatimExcerptBytes),
+      'x'.repeat(FINDING_EVIDENCE_ISSUANCE_LIMITS.maxFileQuoteBytes),
       FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerEvidenceVerbatimExcerptMaxBytes,
     ),
   }));

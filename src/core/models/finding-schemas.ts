@@ -4,6 +4,7 @@ import { compareRfc3339Timestamps, normalizeRfc3339Timestamp } from './rfc3339.j
 import { collectFindingLedgerProjectionInvariantViolations } from './finding-ledger-invariants.js';
 import { computeInterpretationBatchId } from './finding-interpretation-identity.js';
 import {
+  FINDING_EVIDENCE_ISSUANCE_LIMITS,
   RAW_FINDING_FIELD_LIMITS,
   RAW_FINDING_NORMALIZER_LIMITS,
 } from './finding-contract-limits.js';
@@ -443,8 +444,8 @@ export const FileQuoteEvidenceSchema = z.object({
   verbatimExcerpt: nonEmptyString
     .max(RAW_FINDING_FIELD_LIMITS.maxVerbatimExcerptChars)
     .refine(
-      (value) => Buffer.byteLength(value, 'utf8') <= RAW_FINDING_FIELD_LIMITS.maxVerbatimExcerptBytes,
-      `verbatimExcerpt must be at most ${RAW_FINDING_FIELD_LIMITS.maxVerbatimExcerptBytes} UTF-8 bytes`,
+      (value) => Buffer.byteLength(value, 'utf8') <= FINDING_EVIDENCE_ISSUANCE_LIMITS.maxFileQuoteBytes,
+      `verbatimExcerpt must be at most ${FINDING_EVIDENCE_ISSUANCE_LIMITS.maxFileQuoteBytes} UTF-8 bytes`,
     ),
   snapshotId: Sha256Schema.max(RAW_FINDING_FIELD_LIMITS.maxSnapshotIdChars),
 }).strict();

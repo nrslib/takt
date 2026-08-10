@@ -2105,7 +2105,7 @@ describe('WorkflowEngine structured caller defaults', () => {
         }
         expect(instruction).toContain('"reviewer": "architecture-review"');
         expect(instruction).toContain('"reviewer": "security-review"');
-        expect(instruction).toContain('"familyTag": "bug"');
+        expect(instruction).toMatch(/"familyTag":\s*"bug"/);
         expect(options?.sessionId).toBeUndefined();
         expect(options?.permissionMode).toBe('readonly');
         expect(options?.allowedTools).toEqual([]);

@@ -275,7 +275,7 @@ function boundedEvidenceDetails(
     items: details,
     fieldPath: `${rawFinding.rawFindingId}.evidenceDetails`,
     maxItems: FINDING_MANAGER_PROMPT_FIELD_LIMITS.evidenceMaxItems,
-    maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.evidenceArrayMaxBytes,
+    maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerEvidenceArrayMaxBytes,
   }));
 }
 

@@ -14,6 +14,7 @@ export const RAW_FINDING_FIELD_LIMITS = {
   maxDescriptionChars: 8192,
   maxSuggestionChars: 8192,
   maxVerbatimExcerptChars: 8192,
+  /** reviewer publication の受理検査 / evidence-search の生成だけで使う入口上限。 */
   maxVerbatimExcerptBytes: 1024,
   /** snapshotId / proofId は SHA-256 content address の64桁 hex。 */
   maxSnapshotIdChars: 64,
@@ -27,7 +28,8 @@ export const RAW_FINDING_NORMALIZER_LIMITS = {
 
 export const FINDING_EVIDENCE_ISSUANCE_LIMITS = {
   maxFileQuoteLines: 200,
-  maxFileQuoteBytes: RAW_FINDING_FIELD_LIMITS.maxVerbatimExcerptBytes,
+  /** reviewer の1,024B入口制限とは別の、engine 内部の逐語引用発行上限。 */
+  maxFileQuoteBytes: 8 * 1024,
   maxSourceFileBytes: 1024 * 1024,
   maxReviewerBytes: 256 * 1024,
   maxStepBytes: 512 * 1024,
