@@ -27,7 +27,15 @@ vi.mock('../agents/agent-usecases.js', () => ({
 }));
 
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentResponse, FindingContractConfig, WorkflowStep } from '../core/models/types.js';
@@ -89,15 +97,21 @@ function createDeferredSignal(): DeferredSignal {
 }
 
 function semanticLifecycleResponse(instruction: string): AgentResponse {
-  const match = /## Owned raw findings\n(`{3,})json\n([\s\S]*?)\n\1/.exec(instruction);
+  const match = /## Task manifest\n(`{3,})json\n([\s\S]*?)\n\1/.exec(instruction);
   if (match?.[2] === undefined) {
-    throw new Error('Test setup error: semantic lifecycle task input is missing');
+    throw new Error('Test setup error: semantic lifecycle task manifest is missing');
   }
-  const rawFindings = JSON.parse(match[2]) as Array<{
-    rawFindingId: string;
-    relation: string;
-    targetFindingId: string | null;
-  }>;
+  const manifest = JSON.parse(match[2]) as {
+    rawFindings?: Array<{
+      rawFindingId: string;
+      relation: string;
+      targetFindingId: string | null;
+    }>;
+  };
+  if (manifest.rawFindings === undefined) {
+    throw new Error('Test setup error: semantic lifecycle task has no raw findings');
+  }
+  const rawFindings = manifest.rawFindings;
   return findingManagerTaskResponse(instruction, {
     rawDecisions: rawFindings.map((rawFinding) => ({
       decision: rawFinding.relation === 'resolution_confirmation'
@@ -1235,5 +1249,118 @@ describe('finding manager filesystem error propagation', () => {
     assertConflictLandingCoverage(resolutionThenPersists);
     assertConflictLandingCoverage(persistsThenResolution);
     expect(executeAgentMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('24KB近傍のrawを有界描画し、lifecycleのsettlementを検証レポートへ記録する', async () => {
+    const exampleLines = Array.from({ length: 5 }, (_, index) => `line-${index + 1}-😀`.repeat(40));
+    writeFileSync(join(cwd, 'src', 'example.ts'), `${exampleLines.join('\n')}\n`);
+    const ledgerStore = createTestFindingLedgerStore({
+      projectCwd: cwd,
+      runId: 'run-1',
+      reportDir,
+      workflowName: 'peer-review',
+    });
+    const snapshotId = computeReviewScopeSnapshotId(cwd);
+    await ledgerStore.updateLedger(() => ({
+      ledger: openFindingLedger(snapshotId),
+      result: undefined,
+    }));
+    let prompt = '';
+    executeAgentMock.mockImplementation(async (_persona, instruction) => {
+      prompt = instruction as string;
+      const manifest = findingManagerTaskManifest(prompt);
+      const rawFindingId = manifest.rawFindings?.[0]?.rawFindingId;
+      if (rawFindingId === undefined) {
+        throw new Error('integration fixture did not produce a raw task');
+      }
+      return findingManagerTaskResponse(prompt, {
+        rawDecisions: [{
+          rawFindingId,
+          decision: 'same',
+          findingId: 'F-0001',
+          evidence: 'The lifecycle target remains the same.',
+        }],
+        disputeDecisions: [],
+        conflictDecisions: [],
+        invalidateDecisions: [],
+        duplicateDecisions: [],
+        dismissDecisions: [],
+      });
+    });
+
+    await expect(runFindingManagerForStep({
+      contract: FINDING_CONTRACT,
+      ledgerStore,
+      optionsBuilder: {
+        buildAgentOptions: () => ({}),
+        resolveStepProviderModel: () => ({ provider: 'claude', model: 'claude-sonnet' }),
+      } as never,
+      stepExecutor: {
+        buildPhase1Instruction: (instruction: string) => instruction,
+        normalizeStructuredOutput: (_step: WorkflowStep, response: AgentResponse) => response,
+        recordSynthesizedAgentUsage,
+      },
+      cwd,
+      parentStep: { kind: 'agent', name: 'reviewers', persona: 'reviewer', edit: false },
+      stepIteration: 1,
+      subResults: [{
+        subStep: { kind: 'agent', name: 'review', persona: 'reviewer', edit: false },
+        publication: findingReviewPublicationFixture({
+          scopeIdentity: ledgerStore.ledgerIdentity,
+          parentStepName: 'reviewers',
+          stepIteration: 1,
+          reviewerStepName: 'review',
+          rawFindings: [reviewerRawExtractionFixture({
+            rawFindingId: 'raw-near-limit',
+            familyTag: 'near-limit-lifecycle',
+            severity: 'high',
+            title: 'Lifecycle claim'.repeat(30),
+            description: 'Large description😀'.repeat(430),
+            suggestion: 'Large suggestion😀'.repeat(420),
+            relation: 'new',
+            targetFindingId: null,
+            evidence: Array.from({ length: 4 }, (_, index) => ({
+              kind: 'file_quote' as const,
+              path: 'src/example.ts',
+              startLine: index + 1,
+              endLine: index + 2,
+              verbatimExcerpt: `${exampleLines[index]}\n${exampleLines[index + 1]}`,
+              snapshotId,
+            })),
+          })],
+        }),
+      }],
+      workflowName: 'peer-review',
+      workflowTask: 'Fix the source issue.',
+      runId: 'run-1',
+      callNamespace: '',
+      timestamp: '2026-07-17T00:00:01.000Z',
+    })).resolves.toMatchObject({ status: 'updated' });
+
+    const rawFindingId = 'run-1:reviewers:1:review:review.md:raw-near-limit';
+    expect(Buffer.byteLength(prompt, 'utf8')).toBeLessThanOrEqual(24_000);
+    expect(prompt).toContain(rawFindingId);
+    expect(prompt).toContain('F-0001');
+    expect(prompt).toContain('src/example.ts');
+    expect(executeAgentMock).toHaveBeenCalled();
+    const reportFile = readdirSync(reportDir).find((name) => (
+      name.startsWith('findings-manager-validation.') && name.endsWith('.json')
+    ));
+    expect(reportFile).toBeDefined();
+    const report = JSON.parse(readFileSync(join(reportDir, reportFile!), 'utf8')) as {
+      settlement: {
+        expectedRawFindingIds: string[];
+        settlements: Array<{ rawFindingIds: string[] }>;
+        failures: Array<{ rawFindingId: string; phase: string; reason: string }>;
+      };
+    };
+    expect(report.settlement.expectedRawFindingIds).toContain(rawFindingId);
+    expect([
+      ...report.settlement.settlements.flatMap((entry) => entry.rawFindingIds),
+      ...report.settlement.failures.map((failure) => failure.rawFindingId),
+    ]).toEqual([rawFindingId]);
+    expect(report.settlement.failures.every((failure) => (
+      failure.phase.length > 0 && failure.reason.length > 0
+    ))).toBe(true);
   });
 });

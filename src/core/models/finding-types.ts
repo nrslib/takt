@@ -1146,6 +1146,32 @@ export interface ReviewerAnomalyLandingReport {
   sourceIntakeIds: string[];
 }
 
+export type FindingRawObservationSettlementDestinationKind =
+  | 'finding'
+  | 'conflict'
+  | 'rejected-observation'
+  | 'reviewer-anomaly';
+
+export interface FindingRawObservationSettlement {
+  rawFindingIds: string[];
+  destination: {
+    kind: FindingRawObservationSettlementDestinationKind;
+    id: string;
+  };
+}
+
+export interface FindingRawObservationFailure {
+  rawFindingId: string;
+  phase: string;
+  reason: string;
+}
+
+export interface FindingRawObservationSettlementSummary {
+  expectedRawFindingIds: string[];
+  settlements: FindingRawObservationSettlement[];
+  failures: FindingRawObservationFailure[];
+}
+
 export interface InterpretationStatsReport {
   ambiguousRawCount: number;
   managerCalls: number;
@@ -1174,6 +1200,7 @@ export interface FindingManagerValidationReport {
   relationClarifications?: Array<{ reviewer: string; flaggedRawFindingIds: string[] }>;
   interpretationRecoverySettlements?: InterpretationRecoveryOriginSettlement[];
   managerTaskAudits?: FindingManagerTaskAudit[];
+  settlement?: FindingRawObservationSettlementSummary;
 }
 
 export type FindingManagerTaskKind =

@@ -18,6 +18,7 @@ import { attachStopBudgetState, resolveStopBudgetLimits } from './stop-budget.js
 import type { ProvisionalLandingReport, RawAdmissionRejectionReport, ReviewerAnomalyLandingReport } from './store.js';
 import type { FindingLedger, FindingObservation } from './types.js';
 import type {
+  FindingRawObservationSettlementSummary,
   InterpretationRecoveryOriginSettlement,
 } from './types.js';
 import { issueManagerLifecycleAuthority } from './manager-lifecycle-authority.js';
@@ -38,6 +39,9 @@ import { conflictTargetPaths } from './conflict-target.js';
 import {
   landUnownedConflictRawClaims,
 } from './conflict-claim-landing.js';
+import {
+  buildFindingRawObservationSettlementSummary,
+} from './finding-raw-settlement.js';
 
 export interface CommitFindingManagerRoundResult {
   applied: boolean;
@@ -154,6 +158,47 @@ export async function commitFindingManagerRound(params: {
         createdAt: params.observation,
         targetContentDigestsByConflict,
       });
+      const expectedRawFindingIds = params.intake.items.map((item) => item.wire.rawFindingId);
+      const expectedRawFindingIdSet = new Set(expectedRawFindingIds);
+      const settlement = buildFindingRawObservationSettlementSummary({
+        expectedRawFindingIds,
+        ledger: withConflictSnapshots,
+        explicitFailures: [
+          ...params.managerDecision.unsupportedRawFindingReports.map((report) => ({
+            rawFindingId: report.rawFindingId,
+            phase: 'manager-commit:unsupported-raw-finding',
+            reason: report.evidence.trim().length === 0
+              ? `Unsupported lifecycle raw finding targeted ${report.targetFindingId}`
+              : report.evidence,
+          })),
+          ...commitMutation.result.unsupportedRawFindingReports.map((report) => ({
+            rawFindingId: report.rawFindingId,
+            phase: 'manager-commit:unsupported-raw-finding',
+            reason: report.evidence.trim().length === 0
+              ? `Unsupported lifecycle raw finding targeted ${report.targetFindingId}`
+              : report.evidence,
+          })),
+          ...commitMutation.result.admissionRejections.map((rejection) => ({
+            rawFindingId: rejection.rawFindingId,
+            phase: 'manager-admission',
+            reason: `${rejection.location}: ${rejection.reason}`,
+          })),
+          ...[...params.intake.overflowRawFindingIds].map((rawFindingId) => ({
+            rawFindingId,
+            phase: 'manager-admission:output-overflow',
+            reason: 'Reviewer output exceeded the configured raw finding capacity',
+          })),
+          ...params.managerDecision.taskAudits
+            .filter((audit) => audit.status !== 'succeeded')
+            .flatMap((audit) => audit.ownedIds
+              .filter((ownedId) => expectedRawFindingIdSet.has(ownedId))
+              .map((rawFindingId) => ({
+                rawFindingId,
+                phase: `manager-task:${audit.taskKind}`,
+                reason: audit.reason,
+              }))),
+        ],
+      });
       // 言い直し slot の各パスは「レビューラウンドの内側の差し戻し」であって
       // 新しいレビューラウンドではない。marker は適用済み集合へ必ず入れる
       // （二相コミットの staging 不変条件と crash/replay の冪等性がこの集合に依存
@@ -184,10 +229,7 @@ export async function commitFindingManagerRound(params: {
           params.input.cwd,
         ),
       };
-      const report = buildCommitReport(params, commitMutation.result);
-      if (report === undefined) {
-        return lifecycleMutation;
-      }
+      const report = buildCommitReport(params, commitMutation.result, settlement);
       return {
         ...lifecycleMutation,
         publication: {
@@ -224,6 +266,7 @@ export async function commitFindingManagerRound(params: {
 function buildCommitReport(
   params: FindingManagerCommitPlanInput,
   committed: CommitMutationResult,
+  settlement: FindingRawObservationSettlementSummary,
 ) {
   const { input, intake, managerDecision } = params;
   return buildManagerCommitReport({
@@ -247,6 +290,7 @@ function buildCommitReport(
     interpretationStats: managerDecision.interpretation.stats,
     interpretationRecoverySettlements: committed.interpretationRecoverySettlements,
     managerTaskAudits: managerDecision.taskAudits,
+    settlement,
   });
 }
 

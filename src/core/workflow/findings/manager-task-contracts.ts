@@ -9,13 +9,14 @@ import {
   type FindingMutationPrecondition,
   type RawDecisionKind,
 } from './types.js';
+import { FINDING_MANAGER_INPUT_MAX_BYTES } from './prompt-bounds.js';
 import type {
   FindingAnchorRelevanceDecision,
 } from '../../models/finding-types.js';
 
 export const MAIN_MANAGER_RAW_TASK_MAX_ITEMS = 16;
 export const ENTITY_BINDING_TASK_MAX_ITEMS = 128;
-export const MAIN_MANAGER_INPUT_MAX_BYTES = 24_000;
+export { FINDING_MANAGER_INPUT_MAX_BYTES as MAIN_MANAGER_INPUT_MAX_BYTES };
 
 const taskIdSchema = z.string().regex(/^[0-9a-f]{64}$/);
 const componentIdSchema = z.string().regex(/^[0-9a-f]{64}$/);

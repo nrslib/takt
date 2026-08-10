@@ -16,8 +16,8 @@
   },
   "managerPrompts": {
     "raw": {
-      "bytes": 4694,
-      "sha256": "f241689dc0b5b128dc81a4c63371b7429930b020d718d415dafc889b65634b01"
+      "bytes": 3837,
+      "sha256": "1e3f0d1d72aa44e152a55222b4ab412f25343d1a89da6abc2563cadebb57757c"
     },
     "control": {
       "bytes": 3364,
@@ -29,7 +29,7 @@
     },
     "legacy": {
       "bytes": 10293,
-      "sha256": "bbf39da9343e6a3bef70cd250414c1b0259c4da388b50ec3e6a4cb4cb4d48ec7"
+      "sha256": "a76c0471a0a2db6e9c87d7d8cd82ea846bef661f8c16889a7528204353b271d0"
     },
     "interpretation": {
       "bytes": 817,

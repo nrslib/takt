@@ -482,15 +482,21 @@ function entityBindingRunAgentResponse(instruction: string): AgentResponse {
 }
 
 function semanticLifecycleRunAgentResponse(instruction: string): AgentResponse {
-  const match = /## Owned raw findings\n(`{3,})json\n([\s\S]*?)\n\1/.exec(instruction);
+  const match = /## Task manifest\n(`{3,})json\n([\s\S]*?)\n\1/.exec(instruction);
   if (match?.[2] === undefined) {
-    throw new Error('Test setup error: semantic lifecycle task input is missing');
+    throw new Error('Test setup error: semantic lifecycle task manifest is missing');
   }
-  const rawFindings = JSON.parse(match[2]) as Array<{
-    rawFindingId: string;
-    relation: string;
-    targetFindingId: string | null;
-  }>;
+  const manifest = JSON.parse(match[2]) as {
+    rawFindings?: Array<{
+      rawFindingId: string;
+      relation: string;
+      targetFindingId: string | null;
+    }>;
+  };
+  if (manifest.rawFindings === undefined) {
+    throw new Error('Test setup error: semantic lifecycle task has no raw findings');
+  }
+  const rawFindings = manifest.rawFindings;
   return findingManagerTaskResponse(instruction, {
     rawDecisions: rawFindings.map((rawFinding) => {
       if (
@@ -532,7 +538,7 @@ function managerRunAgentResponse(instruction: string): AgentResponse {
   if (instruction.includes('entity-binding contract below replaces')) {
     return entityBindingRunAgentResponse(instruction);
   }
-  if (instruction.includes('## Owned raw findings')) {
+  if (instruction.includes('This is one engine-owned raw adjudication task')) {
     return semanticLifecycleRunAgentResponse(instruction);
   }
   return interpretationRunAgentResponse(instruction);

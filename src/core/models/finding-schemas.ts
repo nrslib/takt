@@ -2261,6 +2261,31 @@ const InterpretationStatsReportSchema = z.object({
   budgetExhaustedLineages: z.number().int().nonnegative(),
 }).strict();
 
+const FindingRawObservationSettlementSchema = z.object({
+  rawFindingIds: z.array(rawFindingIdString).min(1),
+  destination: z.object({
+    kind: z.enum([
+      'finding',
+      'conflict',
+      'rejected-observation',
+      'reviewer-anomaly',
+    ]),
+    id: nonEmptyString,
+  }).strict(),
+}).strict();
+
+const FindingRawObservationFailureSchema = z.object({
+  rawFindingId: rawFindingIdString,
+  phase: nonEmptyString,
+  reason: nonEmptyString,
+}).strict();
+
+const FindingRawObservationSettlementSummarySchema = z.object({
+  expectedRawFindingIds: z.array(rawFindingIdString),
+  settlements: z.array(FindingRawObservationSettlementSchema),
+  failures: z.array(FindingRawObservationFailureSchema),
+}).strict();
+
 const FindingManagerValidationReportSchema = z.object({
   version: z.literal(1),
   runId: nonEmptyString,
@@ -2321,6 +2346,7 @@ const FindingManagerValidationReportSchema = z.object({
       reason: nonEmptyString,
     }).strict(),
   ])).optional(),
+  settlement: FindingRawObservationSettlementSummarySchema.optional(),
 }).strict();
 
 const FindingManagerCommitProjectionSchema = z.object({

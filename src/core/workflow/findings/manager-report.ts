@@ -13,6 +13,7 @@ import type {
   FindingManagerTaskAudit,
   FindingManagerValidationReport,
   InterpretationRecoveryOriginSettlement,
+  FindingRawObservationSettlementSummary,
 } from './types.js';
 
 interface ManagerCommitReportInput {
@@ -31,26 +32,12 @@ interface ManagerCommitReportInput {
   interpretationStats: InterpretationStatsReport;
   interpretationRecoverySettlements: InterpretationRecoveryOriginSettlement[];
   managerTaskAudits: FindingManagerTaskAudit[];
+  settlement: FindingRawObservationSettlementSummary;
 }
 
 export function buildManagerCommitReport(
   input: ManagerCommitReportInput,
-): FindingManagerValidationReport | undefined {
-  const reportNeeded = input.invalidAttempts.length > 0
-    || input.staleRejections.length > 0
-    || input.admissionRejections.length > 0
-    || input.unsupportedRawFindingReports.length > 0
-    || input.overflowReports.length > 0
-    || input.provisionalLandings.length > 0
-    || input.reviewerAnomalyLandings.length > 0
-    || input.clarifications.length > 0
-    || input.rawNormalizations.length > 0
-    || input.interpretationRecoverySettlements.length > 0
-    || input.managerTaskAudits.length > 0;
-  if (!reportNeeded) {
-    return undefined;
-  }
-
+): FindingManagerValidationReport {
   return {
     version: 1,
     runId: input.runId,
@@ -75,6 +62,7 @@ export function buildManagerCommitReport(
     ...(input.managerTaskAudits.length > 0
       ? { managerTaskAudits: input.managerTaskAudits }
       : {}),
+    settlement: input.settlement,
     interpretationStats: input.interpretationStats,
     attempts: input.staleRejections.length > 0
       ? [

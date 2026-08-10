@@ -37,6 +37,15 @@ import {
 import { computeFindingLifecycleProjectionDigest } from '../../models/finding-lifecycle-identity.js';
 import { selectActionableFindingEntries } from './context.js';
 import { composeFindingManagerInstruction } from './manager-instruction-composer.js';
+import {
+  boundPromptArray,
+  promptArrayView,
+  boundPromptString,
+  FINDING_MANAGER_PROMPT_FIELD_LIMITS,
+  promptJsonUtf8Bytes,
+  type PromptArrayTruncationMarker,
+  type PromptTruncationMarker,
+} from './prompt-bounds.js';
 
 type ManagerOptionsBuilder = Pick<OptionsBuilder, 'buildAgentOptions'>;
 
@@ -64,12 +73,26 @@ function managerEvidenceDetails(
   );
   return rawFinding.evidence.map((evidence) => {
     if (evidence.kind === 'file_quote') {
+      const path = boundPromptString({
+        value: evidence.path,
+        fieldPath: `${rawFinding.rawFindingId}.evidence.path`,
+        maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.targetCollectionItemMaxBytes,
+      });
+      const verbatimExcerpt = boundPromptString({
+        value: evidence.verbatimExcerpt,
+        fieldPath: `${rawFinding.rawFindingId}.evidence.verbatimExcerpt`,
+        maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.evidenceVerbatimExcerptMaxBytes,
+      });
       return {
         kind: evidence.kind,
-        path: evidence.path,
+        path: path.text,
+        ...(path.truncation === undefined ? {} : { pathTruncation: path.truncation }),
         startLine: evidence.startLine,
         endLine: evidence.endLine,
-        verbatimExcerpt: evidence.verbatimExcerpt,
+        verbatimExcerpt: verbatimExcerpt.text,
+        ...(verbatimExcerpt.truncation === undefined
+          ? {}
+          : { verbatimExcerptTruncation: verbatimExcerpt.truncation }),
         snapshotId: evidence.snapshotId,
       };
     }
@@ -100,18 +123,272 @@ function managerEvidenceDetails(
   });
 }
 
+function boundedTextField(input: {
+  value: string | null | undefined;
+  fieldPath: string;
+  maxRenderedBytes: number;
+}): { value: string | null | undefined; truncation?: PromptTruncationMarker } {
+  const value = input.value;
+  if (value === undefined || value === null) {
+    return { value };
+  }
+  const bounded = boundPromptString({
+    value,
+    fieldPath: input.fieldPath,
+    maxRenderedBytes: input.maxRenderedBytes,
+  });
+  return { value: bounded.text, truncation: bounded.truncation };
+}
+
+function boundedTargetCollection(input: {
+  values: readonly string[];
+  fieldPath: string;
+  maxRenderedBytes: number;
+}): unknown {
+  const itemTruncations: Array<{ index: number; marker: PromptTruncationMarker }> = [];
+  const boundedItems = input.values.map((value, index) => {
+    const bounded = boundPromptString({
+      value,
+      fieldPath: `${input.fieldPath}[${index}]`,
+      maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.targetCollectionItemMaxBytes,
+    });
+    if (bounded.truncation !== undefined) {
+      itemTruncations.push({ index, marker: bounded.truncation });
+    }
+    return bounded.text;
+  });
+  const bounded = boundPromptArray({
+    items: boundedItems,
+    fieldPath: input.fieldPath,
+    maxItems: 8,
+    maxRenderedBytes: input.maxRenderedBytes,
+  });
+  const retainedItemTruncations = itemTruncations
+    .filter(({ index }) => index < bounded.items.length)
+    .map(({ marker }) => marker);
+  if (bounded.truncation === undefined && retainedItemTruncations.length === 0) {
+    return bounded.items;
+  }
+  return {
+    items: bounded.items,
+    ...(bounded.truncation === undefined ? {} : { truncation: bounded.truncation }),
+    ...(retainedItemTruncations.length === 0
+      ? {}
+      : { itemTruncations: retainedItemTruncations }),
+  };
+}
+
+function boundFindingTarget(target: RawFinding['target']): unknown {
+  let smallestResult: unknown;
+  for (let collectionBytes = 768; collectionBytes >= 64; collectionBytes -= 16) {
+    let result: unknown;
+    switch (target.kind) {
+      case 'review_scope':
+        result = { kind: target.kind };
+        break;
+      case 'code':
+        result = {
+          kind: target.kind,
+          paths: boundedTargetCollection({
+            values: target.paths,
+            fieldPath: 'target.paths',
+            maxRenderedBytes: collectionBytes,
+          }),
+        };
+        break;
+      case 'structure':
+        result = {
+          kind: target.kind,
+          scope: {
+            kind: target.scope.kind,
+            roots: boundedTargetCollection({
+              values: target.scope.roots,
+              fieldPath: 'target.scope.roots',
+              maxRenderedBytes: collectionBytes,
+            }),
+          },
+          manifestTargets: boundedTargetCollection({
+            values: target.manifestTargets,
+            fieldPath: 'target.manifestTargets',
+            maxRenderedBytes: collectionBytes,
+          }),
+        };
+        break;
+      case 'absence': {
+        if (target.predicate.kind === 'path_state') {
+          const path = boundPromptString({
+            value: target.predicate.path,
+            fieldPath: 'target.predicate.path',
+            maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.targetCollectionItemMaxBytes,
+          });
+          result = {
+            kind: target.kind,
+            predicate: {
+              kind: target.predicate.kind,
+              path: path.text,
+              expected: target.predicate.expected,
+              ...(path.truncation === undefined ? {} : { pathTruncation: path.truncation }),
+            },
+          };
+        } else {
+          const roots = boundedTargetCollection({
+            values: target.predicate.roots,
+            fieldPath: 'target.predicate.roots',
+            maxRenderedBytes: collectionBytes,
+          });
+          const literal = boundPromptString({
+            value: target.predicate.literal,
+            fieldPath: 'target.predicate.literal',
+            maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.targetLiteralMaxBytes,
+          });
+          result = {
+            kind: target.kind,
+            predicate: {
+              kind: target.predicate.kind,
+              roots,
+              literal: literal.text,
+              textDomain: target.predicate.textDomain,
+              ...(literal.truncation === undefined ? {} : { literalTruncation: literal.truncation }),
+            },
+          };
+        }
+        break;
+      }
+    }
+    if (promptJsonUtf8Bytes(result) <= FINDING_MANAGER_PROMPT_FIELD_LIMITS.targetMaxBytes) {
+      return result;
+    }
+    smallestResult = result;
+  }
+  return smallestResult;
+}
+
+export function managerPromptTargetView(target: RawFinding['target']): unknown {
+  return boundFindingTarget(target);
+}
+
+function boundedEvidenceDetails(
+  rawFinding: RawFinding,
+  evidenceRecords: readonly FindingEvidenceRecord[],
+): unknown {
+  const details = managerEvidenceDetails(rawFinding, evidenceRecords);
+  return promptArrayView(boundPromptArray({
+    items: details,
+    fieldPath: `${rawFinding.rawFindingId}.evidenceDetails`,
+    maxItems: FINDING_MANAGER_PROMPT_FIELD_LIMITS.evidenceMaxItems,
+    maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.evidenceArrayMaxBytes,
+  }));
+}
+
 export function managerRawFindingView(
   rawFinding: RawFinding,
   evidenceRecords: readonly FindingEvidenceRecord[],
 ): unknown {
+  const stepName = boundedTextField({
+    value: rawFinding.stepName,
+    fieldPath: `${rawFinding.rawFindingId}.stepName`,
+    maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.stepNameMaxBytes,
+  });
+  const reviewer = boundedTextField({
+    value: rawFinding.reviewer,
+    fieldPath: `${rawFinding.rawFindingId}.reviewer`,
+    maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.reviewerMaxBytes,
+  });
+  const familyTag = boundedTextField({
+    value: rawFinding.familyTag,
+    fieldPath: `${rawFinding.rawFindingId}.familyTag`,
+    maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.familyTagMaxBytes,
+  });
+  const title = boundedTextField({
+    value: rawFinding.title,
+    fieldPath: `${rawFinding.rawFindingId}.title`,
+    maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.rawTitleMaxBytes,
+  });
+  const description = boundedTextField({
+    value: rawFinding.description,
+    fieldPath: `${rawFinding.rawFindingId}.description`,
+    maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.rawDescriptionMaxBytes,
+  });
+  const suggestion = boundedTextField({
+    value: rawFinding.suggestion,
+    fieldPath: `${rawFinding.rawFindingId}.suggestion`,
+    maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.rawSuggestionMaxBytes,
+  });
+  const rawExcerpt = boundedTextField({
+    value: rawFinding.rawExcerpt,
+    fieldPath: `${rawFinding.rawFindingId}.rawExcerpt`,
+    maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.rawExcerptMaxBytes,
+  });
   return {
-    ...rawFinding,
-    target: rawFinding.target,
+    rawFindingId: rawFinding.rawFindingId,
+    stepName: stepName.value,
+    ...(stepName.truncation === undefined ? {} : { stepNameTruncation: stepName.truncation }),
+    reviewer: reviewer.value,
+    ...(reviewer.truncation === undefined ? {} : { reviewerTruncation: reviewer.truncation }),
+    familyTag: familyTag.value,
+    ...(familyTag.truncation === undefined ? {} : { familyTagTruncation: familyTag.truncation }),
+    severity: rawFinding.severity,
+    title: title.value,
+    ...(title.truncation === undefined ? {} : { titleTruncation: title.truncation }),
+    description: description.value,
+    ...(description.truncation === undefined ? {} : { descriptionTruncation: description.truncation }),
+    suggestion: suggestion.value,
+    ...(suggestion.truncation === undefined ? {} : { suggestionTruncation: suggestion.truncation }),
+    target: boundFindingTarget(rawFinding.target),
     targetIdentityHash: rawFinding.targetIdentityHash,
     claimIdentityHash: rawFinding.claimIdentityHash,
     semanticClaimIdentityHash: rawFinding.semanticClaimIdentityHash,
     candidateIdentityHash: rawFinding.candidateIdentityHash,
-    evidenceDetails: managerEvidenceDetails(rawFinding, evidenceRecords),
+    ...(rawFinding.reassertsReviewerAnomalyId === undefined
+      ? {}
+      : { reassertsReviewerAnomalyId: rawFinding.reassertsReviewerAnomalyId }),
+    rawExcerpt: rawExcerpt.value,
+    ...(rawExcerpt.truncation === undefined ? {} : { rawExcerptTruncation: rawExcerpt.truncation }),
+    sourceBinding: {
+      reportDigest: rawFinding.sourceBinding.reportDigest,
+      startByte: rawFinding.sourceBinding.startByte,
+      endByte: rawFinding.sourceBinding.endByte,
+      excerptDigest: rawFinding.sourceBinding.excerptDigest,
+    },
+    relation: rawFinding.relation,
+    targetFindingId: rawFinding.targetFindingId,
+    ...(rawFinding.targetPrecondition === undefined
+      ? {}
+      : { targetPrecondition: rawFinding.targetPrecondition }),
+    evidence: promptArrayView(boundPromptArray({
+      items: rawFinding.evidence.map((evidence, index) => (
+        evidence.kind === 'file_quote'
+          ? (() => {
+              const path = boundPromptString({
+                value: evidence.path,
+                fieldPath: `${rawFinding.rawFindingId}.evidence[${index}].path`,
+                maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.targetCollectionItemMaxBytes,
+              });
+              const verbatimExcerpt = boundPromptString({
+                value: evidence.verbatimExcerpt,
+                fieldPath: `${rawFinding.rawFindingId}.evidence[${index}].verbatimExcerpt`,
+                maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.evidenceVerbatimExcerptMaxBytes,
+              });
+              return {
+                kind: evidence.kind,
+                path: path.text,
+                ...(path.truncation === undefined ? {} : { pathTruncation: path.truncation }),
+                startLine: evidence.startLine,
+                endLine: evidence.endLine,
+                verbatimExcerpt: verbatimExcerpt.text,
+                ...(verbatimExcerpt.truncation === undefined
+                  ? {}
+                  : { verbatimExcerptTruncation: verbatimExcerpt.truncation }),
+                snapshotId: evidence.snapshotId,
+              };
+            })()
+          : { kind: evidence.kind, proofId: evidence.proofId }
+      )),
+      fieldPath: `${rawFinding.rawFindingId}.evidence`,
+      maxItems: FINDING_MANAGER_PROMPT_FIELD_LIMITS.evidenceMaxItems,
+      maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.evidenceArrayMaxBytes,
+    })),
+    evidenceDetails: boundedEvidenceDetails(rawFinding, evidenceRecords),
   };
 }
 
@@ -213,6 +490,76 @@ function compactEvidenceSummary(record: FindingEvidenceRecord | undefined, evide
   };
 }
 
+function boundedLedgerTextField(input: {
+  value: string | null | undefined;
+  fieldPath: string;
+  maxRenderedBytes: number;
+}): Record<string, unknown> {
+  const bounded = boundedTextField(input);
+  return {
+    ...(input.value === undefined ? {} : { value: bounded.value }),
+    ...(bounded.truncation === undefined ? {} : { truncation: bounded.truncation }),
+  };
+}
+
+function boundedLedgerLocations(
+  ledger: FindingLedger,
+  finding: FindingLedger['findings'][number],
+): unknown {
+  const itemTruncations: Array<{ index: number; marker: PromptTruncationMarker }> = [];
+  const boundedLocations = findingFileQuoteLocations(ledger, finding).map((location, index) => {
+    const bounded = boundPromptString({
+      value: formatFileQuoteLocation(location),
+      fieldPath: `${finding.id}.locations[${index}]`,
+      maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerLocationMaxBytes,
+    });
+    if (bounded.truncation !== undefined) {
+      itemTruncations.push({ index, marker: bounded.truncation });
+    }
+    return bounded.text;
+  });
+  const bounded = boundPromptArray({
+    items: boundedLocations,
+    fieldPath: `${finding.id}.locations`,
+    maxItems: FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerMaxLocations,
+    maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerLocationMaxBytes,
+  });
+  const retainedItemTruncations = itemTruncations
+    .filter(({ index }) => index < bounded.items.length)
+    .map(({ marker }) => marker);
+  if (bounded.truncation === undefined && retainedItemTruncations.length === 0) {
+    return bounded.items;
+  }
+  return {
+    items: bounded.items,
+    ...(bounded.truncation === undefined ? {} : { truncation: bounded.truncation }),
+    ...(retainedItemTruncations.length === 0
+      ? {}
+      : { itemTruncations: retainedItemTruncations }),
+  };
+}
+
+function boundedLedgerEvidenceDetails(
+  ledger: FindingLedger,
+  finding: FindingLedger['findings'][number],
+): unknown {
+  return promptArrayView(boundPromptArray({
+    items: finding.evidenceIds.map((evidenceId) => (
+      ledger.evidenceRecords.find((record) => record.evidenceId === evidenceId) ?? {
+        evidenceId,
+        protocolError: 'finding evidence record is missing',
+      }
+    )),
+    fieldPath: `${finding.id}.evidenceDetails`,
+    maxItems: FINDING_MANAGER_PROMPT_FIELD_LIMITS.evidenceMaxItems,
+    maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.evidenceArrayMaxBytes,
+  }));
+}
+
+function boundedLedgerTarget(target: FindingLedger['findings'][number]['target']): unknown {
+  return target === null ? null : boundFindingTarget(target);
+}
+
 /**
  * run-level の invalid_manager_output は存在しない。manager の壊れた応答・
  * 予算超過・解釈不能はすべて provisional として台帳へ着地し、run は継続する
@@ -243,14 +590,44 @@ export function buildManagerInputLedger(
         status: finding.status,
         lifecycle: finding.lifecycle,
         severity: finding.severity,
-        title: finding.title,
-        target: finding.target,
+        ...(() => {
+          const title = boundedLedgerTextField({
+            value: finding.title,
+            fieldPath: `${finding.id}.title`,
+            maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerTitleMaxBytes,
+          });
+          return {
+            title: title.value,
+            ...(title.truncation === undefined ? {} : { titleTruncation: title.truncation }),
+          };
+        })(),
+        target: boundedLedgerTarget(finding.target),
         targetIdentityHash: finding.targetIdentityHash,
         claimIdentityHash: finding.claimIdentityHash,
         semanticClaimIdentityHash: finding.semanticClaimIdentityHash,
-        locations: findingFileQuoteLocations(ledger, finding).map(formatFileQuoteLocation),
-        description: finding.description,
-        suggestion: finding.suggestion,
+        locations: boundedLedgerLocations(ledger, finding),
+        ...(() => {
+          const description = boundedLedgerTextField({
+            value: finding.description,
+            fieldPath: `${finding.id}.description`,
+            maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerDescriptionMaxBytes,
+          });
+          const suggestion = boundedLedgerTextField({
+            value: finding.suggestion,
+            fieldPath: `${finding.id}.suggestion`,
+            maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerSuggestionMaxBytes,
+          });
+          return {
+            description: description.value,
+            suggestion: suggestion.value,
+            ...(description.truncation === undefined
+              ? {}
+              : { descriptionTruncation: description.truncation }),
+            ...(suggestion.truncation === undefined
+              ? {}
+              : { suggestionTruncation: suggestion.truncation }),
+          };
+        })(),
         reviewers: finding.reviewers,
         rawFindingIds: finding.rawFindingIds,
         ...(includeRawFindingDetails
@@ -261,18 +638,26 @@ export function buildManagerInputLedger(
                 .map((rawFinding) => managerRawFindingView(rawFinding, ledger.evidenceRecords)),
             }
           : {}),
-        evidenceDetails: finding.evidenceIds.map((evidenceId) => (
-          ledger.evidenceRecords.find((record) => record.evidenceId === evidenceId) ?? {
-            evidenceId,
-            protocolError: 'finding evidence record is missing',
-          }
-        )),
+        evidenceDetails: boundedLedgerEvidenceDetails(ledger, finding),
         firstSeen: finding.firstSeen,
         lastSeen: finding.lastSeen,
         waivers: finding.waivers,
         disputes: finding.disputes,
         ...(finding.provisional !== undefined
-          ? { provisional: { kind: finding.provisional.kind, reason: finding.provisional.reason } }
+          ? (() => {
+              const reason = boundPromptString({
+                value: finding.provisional.reason,
+                fieldPath: `${finding.id}.provisional.reason`,
+                maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.provisionalReasonMaxBytes,
+              });
+              return {
+                provisional: {
+                  kind: finding.provisional.kind,
+                  reason: reason.text,
+                  ...(reason.truncation === undefined ? {} : { reasonTruncation: reason.truncation }),
+                },
+              };
+            })()
           : {}),
       }
       : (() => {
@@ -292,24 +677,50 @@ export function buildManagerInputLedger(
           evidenceId,
         ));
         const locations = findingFileQuoteLocations(ledger, finding).map(formatFileQuoteLocation);
+        const title = boundedLedgerTextField({
+          value: finding.title,
+          fieldPath: `${finding.id}.title`,
+          maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerTitleMaxBytes,
+        });
         return {
           id: finding.id,
           revision: finding.revision,
           status: finding.status,
           lifecycle: finding.lifecycle,
           severity: finding.severity,
-          title: finding.title,
-          target: finding.target,
+          title: title.value,
+          ...(title.truncation === undefined ? {} : { titleTruncation: title.truncation }),
+          target: boundedLedgerTarget(finding.target),
           targetIdentityHash: finding.targetIdentityHash,
           claimIdentityHash: finding.claimIdentityHash,
           semanticClaimIdentityHash: finding.semanticClaimIdentityHash,
           projectionDigest: computeFindingLifecycleProjectionDigest(finding),
           sourceBindings: compactFindingCollection(sourceBindings),
           evidenceSummaries: compactFindingCollection(evidenceSummaries),
-          locations: compactFindingCollection(locations),
+          locations: compactFindingCollection(locations.map((location, index) => {
+            const bounded = boundPromptString({
+              value: location,
+              fieldPath: `${finding.id}.locations[${index}]`,
+              maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.ledgerLocationMaxBytes,
+            });
+            return bounded.text;
+          })),
           lastSeen: finding.lastSeen,
           ...(finding.provisional !== undefined
-            ? { provisional: { kind: finding.provisional.kind, reason: finding.provisional.reason } }
+            ? (() => {
+                const reason = boundPromptString({
+                  value: finding.provisional.reason,
+                  fieldPath: `${finding.id}.provisional.reason`,
+                  maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.provisionalReasonMaxBytes,
+                });
+                return {
+                  provisional: {
+                    kind: finding.provisional.kind,
+                    reason: reason.text,
+                    ...(reason.truncation === undefined ? {} : { reasonTruncation: reason.truncation }),
+                  },
+                };
+              })()
             : {}),
         };
       })())),
@@ -318,7 +729,19 @@ export function buildManagerInputLedger(
       status: conflict.status,
       findingIds: conflict.findingIds,
       rawFindingIds: conflict.rawFindingIds,
-      description: conflict.description,
+      ...(() => {
+        const description = boundPromptString({
+          value: conflict.description,
+          fieldPath: `${conflict.id}.description`,
+          maxRenderedBytes: FINDING_MANAGER_PROMPT_FIELD_LIMITS.conflictReasonMaxBytes,
+        });
+        return {
+          description: description.text,
+          ...(description.truncation === undefined
+            ? {}
+            : { descriptionTruncation: description.truncation }),
+        };
+      })(),
       firstSeen: conflict.firstSeen,
       lastSeen: conflict.lastSeen,
     })),

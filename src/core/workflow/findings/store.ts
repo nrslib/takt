@@ -117,6 +117,10 @@ export interface FindingLedgerPublicationDecision<Result> {
 export type {
   FindingManagerValidationAttemptReport,
   FindingManagerValidationReport,
+  FindingRawObservationFailure,
+  FindingRawObservationSettlement,
+  FindingRawObservationSettlementDestinationKind,
+  FindingRawObservationSettlementSummary,
   InterpretationStatsReport,
   ProvisionalLandingReport,
   RawAdmissionRejectionReport,

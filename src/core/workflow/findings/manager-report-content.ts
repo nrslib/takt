@@ -52,6 +52,26 @@ function canonicalizeReport(
       compareBinaryStrings(left.taskId, right.taskId)
       || compareCanonicalJsonValues(left, right)
     ));
+  const settlement = report.settlement === undefined
+    ? undefined
+    : {
+        expectedRawFindingIds: sortStrings(report.settlement.expectedRawFindingIds),
+        settlements: report.settlement.settlements
+          .map((entry) => ({
+            ...entry,
+            rawFindingIds: sortStrings(entry.rawFindingIds),
+          }))
+          .sort((left, right) => (
+            compareBinaryStrings(left.destination.kind, right.destination.kind)
+            || compareBinaryStrings(left.destination.id, right.destination.id)
+            || compareCanonicalJsonValues(left, right)
+          )),
+        failures: [...report.settlement.failures].sort((left, right) => (
+          compareBinaryStrings(left.rawFindingId, right.rawFindingId)
+          || compareBinaryStrings(left.phase, right.phase)
+          || compareBinaryStrings(left.reason, right.reason)
+        )),
+      };
   return {
     ...report,
     finalErrors: [...report.finalErrors],
@@ -80,6 +100,7 @@ function canonicalizeReport(
           )),
         }),
     ...(managerTaskAudits === undefined ? {} : { managerTaskAudits }),
+    ...(settlement === undefined ? {} : { settlement }),
   };
 }
 
