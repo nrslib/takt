@@ -418,6 +418,7 @@ describe('E2E: dynamic facet pool selector (mock)', () => {
     expect(fixExecute).toBeDefined();
     const fixInstruction = fixExecute?.instruction ?? fixExecute?.userInstruction;
     expect(fixInstruction).toContain('# database-transaction knowledge');
+    expect(fixInstruction).toContain('# database-correctness policy');
     expect(fixInstruction).not.toContain('# transaction-correctness policy');
   }, 480_000);
 

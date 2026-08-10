@@ -139,6 +139,7 @@ describe('WorkflowEngineSetup finding instruction context', () => {
       updateMaxSteps: vi.fn(),
       setActiveResumePoint: vi.fn(),
       commitDynamicParallelSelection: vi.fn(),
+      commitDynamicFacetSelection: vi.fn(),
       refreshFindingsState: vi.fn(),
       findingContract: {} as never,
       findingLedgerStore: {

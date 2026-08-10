@@ -875,7 +875,7 @@ describe('review report discovery', () => {
     });
   });
 
-  it('does not fail report discovery when selection persistence is absent', () => {
+  it('does not fail report discovery when run-local dynamic selections are empty', () => {
     const reviewers = {
       ...makeStep({ name: 'reviewers' }),
       parallel: {

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   DynamicFacetSelectorCoordinator,
   type DynamicFacetSelectorCoordinatorDeps,
@@ -22,6 +22,10 @@ import { executeIsolatedStructuredInternalAgent } from '../agents/agent-usecases
 import * as contextBuilder from '../core/workflow/dynamic-facets/dynamicFacetContextBuilder.js';
 
 const mockedExecuteAgent = vi.mocked(executeIsolatedStructuredInternalAgent);
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 function makePool(candidates: { id: string; description: string }[]): ResolvedFacetPool {
   return {
@@ -269,7 +273,6 @@ describe('DynamicFacetSelectorCoordinator', () => {
     };
     expect(instructionInput.isReentry).toBe(false);
     expect(instructionInput.reports).toBe('');
-    instructionSpy.mockRestore();
   });
 
   it('throws when selector provider is not resolved', async () => {
@@ -329,7 +332,6 @@ describe('DynamicFacetSelectorCoordinator', () => {
     expect(instructionSpy).toHaveBeenCalledOnce();
     const instructionInput = instructionSpy.mock.calls[0]![0] as { isReentry: boolean };
     expect(instructionInput.isReentry).toBe(true);
-    instructionSpy.mockRestore();
   });
 
   it('throws when selector returns an unknown candidate id through the shared contract', async () => {

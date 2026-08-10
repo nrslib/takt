@@ -151,45 +151,44 @@ function resolveWorkflowCallInvocation(
   parallelParentStepName: string | undefined,
   records: ReadonlyMap<string, WorkflowCallInvocationRecord>,
 ): ResolvedWorkflowCallInvocation | undefined {
-  const directIdentity = buildWorkflowCallInvocationIdentity(
-    getWorkflowReference(workflow),
-    stepName,
-    resumeStackPrefix,
-  );
-  const directInvocation = records.get(directIdentity);
   if (parallelParentStepName === undefined) {
+    const directIdentity = buildWorkflowCallInvocationIdentity(
+      getWorkflowReference(workflow),
+      stepName,
+      resumeStackPrefix,
+    );
+    const directInvocation = records.get(directIdentity);
     return directInvocation === undefined
       ? undefined
       : { invocation: directInvocation, resumeStackPrefix };
   }
 
-  const candidates = [...records.entries()].filter(([identity]) => {
+  const workflowReference = getWorkflowReference(workflow);
+  const candidates = [...records.entries()].flatMap(([identity, invocation]) => {
     const parsed = parseWorkflowCallInvocationIdentity(identity);
     if (
       parsed === undefined
-      || parsed.workflow !== getWorkflowReference(workflow)
+      || parsed.workflow !== workflowReference
       || parsed.step !== stepName
       || parsed.calls.length !== resumeStackPrefix.length + 1
     ) {
-      return false;
+      return [];
     }
     const parentCall = parsed.calls.at(-1);
-    return parentCall?.workflow === getWorkflowReference(workflow)
+    const matches = parentCall?.workflow === workflowReference
       && parentCall.step === parallelParentStepName
       && parentCall.kind === 'parallel'
       && parsed.calls.slice(0, -1).every((call, index) =>
         workflowExecutionCallMatchesEntry(call, resumeStackPrefix[index]!));
+    return matches ? [{ invocation, parsed }] : [];
   });
   if (candidates.length !== 1) {
     return undefined;
   }
-  const parsed = parseWorkflowCallInvocationIdentity(candidates[0]![0]);
-  if (parsed === undefined) {
-    return undefined;
-  }
+  const candidate = candidates[0]!;
   return {
-    invocation: candidates[0]![1],
-    resumeStackPrefix: parsed.calls.map(workflowExecutionCallToResumePointEntry),
+    invocation: candidate.invocation,
+    resumeStackPrefix: candidate.parsed.calls.map(workflowExecutionCallToResumePointEntry),
   };
 }
 
@@ -209,6 +208,8 @@ function workflowExecutionCallMatchesEntry(
 function workflowExecutionCallToResumePointEntry(
   call: WorkflowExecutionCallIdentity,
 ): WorkflowResumePointEntry {
+  // Execution identities retain stable workflow refs rather than display names.
+  // Downstream identity matching reads workflow_ref; workflow mirrors it to satisfy the resume schema.
   return {
     workflow: call.workflow,
     workflow_ref: call.workflow,

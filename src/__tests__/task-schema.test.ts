@@ -279,7 +279,7 @@ describe('TaskExecutionConfigSchema', () => {
       },
     }],
   ] as const)('should reject legacy resume point field %s', (field, value) => {
-    expect(() => TaskExecutionConfigSchema.parse({
+    const result = TaskExecutionConfigSchema.safeParse({
       resume_point: {
         version: 2,
         stack: [{
@@ -295,7 +295,18 @@ describe('TaskExecutionConfigSchema', () => {
         workflow_call_invocations: {},
         workflow_step_participations: {},
       },
-    })).toThrow();
+    });
+
+    expect(result.success).toBe(false);
+    if (result.success) throw new Error(`Expected legacy field ${field} to be rejected`);
+    const issue = result.error.issues.find(({ code, path }) =>
+      code === 'custom' && path.length === 1 && path[0] === 'resume_point');
+    expect(issue).toMatchObject({
+      code: 'custom',
+      path: ['resume_point'],
+    });
+    expect(issue?.message).toContain('Unrecognized key');
+    expect(issue?.message).toContain(`"${field}"`);
   });
 
   it('should round-trip the canonical workflow-call invocation index', () => {

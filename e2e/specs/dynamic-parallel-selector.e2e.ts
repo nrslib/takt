@@ -37,7 +37,7 @@ function writeDynamicParallelFixture(
     ...poolIds.flatMap((poolId) => [
       `        - name: ${poolId}`,
       `          persona: ./agents/${poolId}.md`,
-      ...(poolId === 'backend' ? ['          model: mock-backend-unselected'] : []),
+      ...(poolId === 'backend' ? ['          model: mock-backend'] : []),
       `          description: Review ${poolId} changes`,
       `          instruction: Review ${poolId}`,
       '          rules:',
@@ -542,7 +542,7 @@ describe('E2E: dynamic parallel selector (mock)', () => {
       expect.objectContaining({ provider: 'mock', personaName: 'agents/frontend' }),
     ]));
     expect(providerStarts.some((record) => record.personaName === 'agents/backend')).toBe(false);
-    expect(providerStarts.some((record) => record.model === 'mock-backend-unselected')).toBe(false);
+    expect(providerStarts.some((record) => record.model === 'mock-backend')).toBe(false);
 
     const sessionRecords = readSessionRecords(testRepo.path);
     expect(sessionRecords.some((record) => record.type === 'step_start' && record.step === 'backend')).toBe(false);
