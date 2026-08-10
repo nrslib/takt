@@ -174,6 +174,15 @@ function reviewReportCalls(): WorkflowStep[] {
     .filter((step) => step.tags?.includes('review') === true);
 }
 
+function facetSourceFileNames(
+  contents: readonly { sourcePath?: string }[] | undefined,
+): string[] {
+  return (contents ?? []).flatMap(({ sourcePath }) => {
+    const fileName = sourcePath?.split(/[/\\]/u).at(-1);
+    return fileName === undefined ? [] : [fileName];
+  });
+}
+
 describe('experimental builtin workflow', () => {
   let projectDir: string;
   let engines: WorkflowEngine[];
@@ -222,8 +231,21 @@ describe('experimental builtin workflow', () => {
     const taktCore = loadCoreForWrapper(language, takt, projectDir);
     const genericImplement = findWorkflowStep(genericCore, 'implement');
     const taktImplement = findWorkflowStep(taktCore, 'implement');
+    const genericFix = findWorkflowStep(genericCore, 'fix');
+    const taktFix = findWorkflowStep(taktCore, 'fix');
     expect(genericImplement.dynamicFacets?.pool).toBe('coding-facets');
     expect(taktImplement.dynamicFacets?.pool).toBe('takt-coding-facets');
+    for (const step of [genericImplement, genericFix, taktImplement, taktFix]) {
+      const policyFiles = facetSourceFileNames(step.policyContents);
+      const knowledgeFiles = facetSourceFileNames(step.knowledgeContents);
+      expect(policyFiles).toContain('ai-antipattern.md');
+      expect(policyFiles).not.toContain('existing-system-respect.md');
+      expect(knowledgeFiles).toEqual(expect.arrayContaining([
+        'architecture.md',
+        'implementation-semantics.md',
+      ]));
+      expect(knowledgeFiles).not.toContain('existing-system.md');
+    }
     expect(genericImplement.companion).toBeUndefined();
     expect(genericImplement.rules?.[0]?.condition.kind).toBe('semantic');
     expect(taktImplement.companion).toEqual({
@@ -242,13 +264,47 @@ describe('experimental builtin workflow', () => {
       policy: ['contract-change', 'review', 'ai-antipattern'],
       knowledge: ['architecture'],
     });
-    expect(genericCore.facetPools?.['coding-facets']?.candidates.map(({ id }) => id))
-      .toEqual(expect.arrayContaining(['frontend', 'backend']));
-    const taktCandidateIds = taktCore.facetPools?.['takt-coding-facets']?.candidates.map(({ id }) => id) ?? [];
+    const genericCandidates = genericCore.facetPools?.['coding-facets']?.candidates ?? [];
+    const genericCandidateIds = genericCandidates.map(({ id }) => id);
+    expect(genericCandidateIds).toEqual(expect.arrayContaining(['frontend', 'backend']));
+    expect(genericCandidateIds).not.toContain('cli');
+    expect(genericCandidateIds).not.toContain('implementation-semantics');
+    const taktCandidates = taktCore.facetPools?.['takt-coding-facets']?.candidates ?? [];
+    const taktCandidateIds = taktCandidates.map(({ id }) => id);
+    expect(taktCandidateIds).not.toContain('cli');
     expect(taktCandidateIds).not.toContain('frontend');
     expect(taktCandidateIds).not.toContain('backend');
+    expect(taktCandidateIds).not.toContain('implementation-semantics');
+    for (const candidate of [...genericCandidates, ...taktCandidates]) {
+      for (const disallowedDynamicPolicy of ['testing', 'takt-testing', 'existing-system-respect']) {
+        expect(candidate.policyRefs).not.toContain(disallowedDynamicPolicy);
+      }
+      for (const disallowedDynamicKnowledge of [
+        'takt',
+        'architecture',
+        'implementation-semantics',
+        'existing-system',
+      ]) {
+        expect(candidate.knowledgeRefs).not.toContain(disallowedDynamicKnowledge);
+      }
+    }
     expect(findWorkflowStep(genericCore, 'review').call).toBe('experimental-review');
     expect(findWorkflowStep(taktCore, 'review').call).toBe('takt-experimental-review');
+    for (const reviewWorkflow of [
+      loadReviewForCore(language, genericCore, projectDir),
+      loadReviewForCore(language, taktCore, projectDir),
+    ]) {
+      const reviewStep = findWorkflowStep(reviewWorkflow, 'review');
+      if (reviewStep.parallel === undefined) {
+        throw new Error('Experimental review must define reviewers');
+      }
+      for (const reviewer of getAllParallelSubSteps(reviewStep.parallel)) {
+        expect(facetSourceFileNames(reviewer.policyContents))
+          .not.toContain('existing-system-respect.md');
+        expect(facetSourceFileNames(reviewer.knowledgeContents))
+          .not.toContain('existing-system.md');
+      }
+    }
   });
 
   it('should fail fast when facet pool bindings are missing, wrongly typed, or unknown', () => {
@@ -454,8 +510,8 @@ steps:
         .find((snapshot) => snapshot.step_name === 'implement');
       expect(implementSelection).toMatchObject({
         selected_ids: ['testing'],
-        selected_policy_refs: ['testing', 'takt-testing'],
-        selected_knowledge_refs: ['takt', 'unit-testing', 'e2e-testing'],
+        selected_policy_refs: [],
+        selected_knowledge_refs: ['unit-testing', 'e2e-testing'],
       });
       const reviewSelection = Object.values(resumePoint?.dynamic_parallel_selections ?? {})
         .find((snapshot) => snapshot.step_name === 'review');

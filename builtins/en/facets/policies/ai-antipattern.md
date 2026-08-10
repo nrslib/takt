@@ -1,6 +1,6 @@
 # AI Antipattern Detection Criteria
 
-Detect assumptions, over-implementation, and superficial fixes that AI-generated changes commonly introduce.
+Avoid assumptions, over-implementation, and superficial fixes during implementation, and detect them during review.
 
 ## Principles
 

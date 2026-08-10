@@ -40,11 +40,11 @@ subworkflow:
     development_policy:
       type: facet_ref[]
       facet_kind: policy
-      default: [coding, testing]
+      default: [coding, testing, ai-antipattern]
     development_knowledge:
       type: facet_ref[]
       facet_kind: knowledge
-      default: [architecture, existing-system]
+      default: [architecture, implementation-semantics]
     implementation_instruction:
       type: facet_ref
       facet_kind: instruction
@@ -64,7 +64,7 @@ subworkflow:
     fix_knowledge:
       type: facet_ref[]
       facet_kind: knowledge
-      default: [architecture]
+      default: [architecture, implementation-semantics]
     fix_instruction:
       type: facet_ref
       facet_kind: instruction
@@ -93,36 +93,20 @@ facet_pools:
       - id: backend
         description: API、ドメインロジック、サーバー側処理、永続化を扱う
         knowledge: backend
-      - id: cli
-        description: CLIコマンド、引数、終了コード、設定、ログ、既存CLI構造を扱う
-        policy: existing-system-respect
-        knowledge: existing-system
       - id: testing
         description: テスト設計、テストカバレッジ、統合境界、E2E境界を扱う
-        policy: testing
         knowledge: [unit-testing, e2e-testing]
       - id: security
         description: 認証認可、入力検証、機密情報、依存関係、セキュリティ境界を扱う
         knowledge: [security, security-web, security-api, security-local, security-data, security-dependencies]
-      - id: implementation-semantics
-        description: 実装の意味、契約、状態遷移、戻り値、副作用を扱う
-        knowledge: implementation-semantics
   takt-coding-facets:
     candidates:
-      - id: cli
-        description: TAKTのCLIコマンド、引数、終了コード、設定、ログ、既存CLI構造を扱う
-        policy: existing-system-respect
-        knowledge: [takt, existing-system]
       - id: testing
         description: TAKTのテスト設計、カバレッジ、統合境界、E2E境界を扱う
-        policy: [testing, takt-testing]
-        knowledge: [takt, unit-testing, e2e-testing]
+        knowledge: [unit-testing, e2e-testing]
       - id: security
         description: TAKTの認証認可、入力検証、機密情報、依存関係、セキュリティ境界を扱う
-        knowledge: [takt, security, security-web, security-api, security-local, security-data, security-dependencies]
-      - id: implementation-semantics
-        description: TAKT実装の意味、契約、状態遷移、戻り値、副作用を扱う
-        knowledge: [takt, implementation-semantics]
+        knowledge: [security, security-web, security-api, security-local, security-data, security-dependencies]
 
 steps:
   - name: plan

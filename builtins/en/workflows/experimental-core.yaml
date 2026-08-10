@@ -40,11 +40,11 @@ subworkflow:
     development_policy:
       type: facet_ref[]
       facet_kind: policy
-      default: [coding, testing]
+      default: [coding, testing, ai-antipattern]
     development_knowledge:
       type: facet_ref[]
       facet_kind: knowledge
-      default: [architecture, existing-system]
+      default: [architecture, implementation-semantics]
     implementation_instruction:
       type: facet_ref
       facet_kind: instruction
@@ -64,7 +64,7 @@ subworkflow:
     fix_knowledge:
       type: facet_ref[]
       facet_kind: knowledge
-      default: [architecture]
+      default: [architecture, implementation-semantics]
     fix_instruction:
       type: facet_ref
       facet_kind: instruction
@@ -93,36 +93,20 @@ facet_pools:
       - id: backend
         description: Handle APIs, domain logic, server-side processing, and persistence.
         knowledge: backend
-      - id: cli
-        description: Handle CLI commands, arguments, exit codes, configuration, logging, and existing CLI structure.
-        policy: existing-system-respect
-        knowledge: existing-system
       - id: testing
         description: Handle test design, coverage, integration boundaries, and E2E boundaries.
-        policy: testing
         knowledge: [unit-testing, e2e-testing]
       - id: security
         description: Handle authentication, authorization, input validation, secrets, dependencies, and security boundaries.
         knowledge: [security, security-web, security-api, security-local, security-data, security-dependencies]
-      - id: implementation-semantics
-        description: Handle implementation meaning, contracts, state transitions, return values, and side effects.
-        knowledge: implementation-semantics
   takt-coding-facets:
     candidates:
-      - id: cli
-        description: Handle TAKT CLI commands, arguments, exit codes, configuration, logging, and existing CLI structure.
-        policy: existing-system-respect
-        knowledge: [takt, existing-system]
       - id: testing
         description: Handle TAKT test design, coverage, integration boundaries, and E2E boundaries.
-        policy: [testing, takt-testing]
-        knowledge: [takt, unit-testing, e2e-testing]
+        knowledge: [unit-testing, e2e-testing]
       - id: security
         description: Handle TAKT authentication, authorization, input validation, secrets, dependencies, and security boundaries.
-        knowledge: [takt, security, security-web, security-api, security-local, security-data, security-dependencies]
-      - id: implementation-semantics
-        description: Handle TAKT implementation meaning, contracts, state transitions, return values, and side effects.
-        knowledge: [takt, implementation-semantics]
+        knowledge: [security, security-web, security-api, security-local, security-data, security-dependencies]
 
 steps:
   - name: plan

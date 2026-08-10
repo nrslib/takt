@@ -101,7 +101,7 @@ parallel:
       edit: false
       persona: coding-reviewer
       policy: [contract-change, review, coding]
-      knowledge: [architecture, existing-system]
+      knowledge: architecture
       instruction: review-coding
       pass_previous_response: false
       output_contracts:

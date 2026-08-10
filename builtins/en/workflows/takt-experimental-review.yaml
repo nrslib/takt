@@ -46,7 +46,7 @@ steps:
           edit: false
           persona: coding-reviewer
           policy: [contract-change, review, coding]
-          knowledge: [takt, architecture, existing-system]
+          knowledge: [takt, architecture]
           instruction: review-coding
           pass_previous_response: false
           output_contracts:
