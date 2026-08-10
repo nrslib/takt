@@ -96,10 +96,7 @@ function createCallableCompanionWorkflow(): Record<string, unknown> {
       name: 'implement',
       instruction: 'Implement',
       companion: { $param: 'implementation_companions' },
-      rules: [
-        { condition: 'when(companion.escalated)', next: 'fix' },
-        { condition: 'done', next: 'COMPLETE' },
-      ],
+      rules: [{ condition: 'done', next: 'COMPLETE' }],
     }, {
       name: 'fix',
       instruction: 'Fix',
@@ -295,7 +292,7 @@ describe('workflow_call schema', () => {
     expect(workflow.maxSteps).toBe(10);
   });
 
-  it('should omit an empty companion_ref[] and its optional escalation rule', () => {
+  it('should omit an empty companion_ref[] while preserving ordinary rules', () => {
     const workflow = normalizeWorkflowConfig(createCallableCompanionWorkflow(), '/tmp');
     const implement = workflow.steps.find((step) => step.name === 'implement');
 
@@ -305,7 +302,7 @@ describe('workflow_call schema', () => {
     expect(implement?.rules?.[0]?.next).toBe('COMPLETE');
   });
 
-  it('should expand companion_ref[] to fixed companions and keep escalation first', () => {
+  it('should expand companion_ref[] to fixed companions without adding rules', () => {
     const workflow = normalizeWorkflowConfig(createCallableCompanionWorkflow(), '/tmp', undefined, undefined, undefined, undefined, undefined, undefined, {
       callableArgs: {
         implementation_companions: ['first-reviewer', 'second-reviewer'],
@@ -317,13 +314,8 @@ describe('workflow_call schema', () => {
       fixed: ['first-reviewer', 'second-reviewer'],
       pool: [],
     });
-    expect(implement?.rules?.[0]).toMatchObject({
-      condition: {
-        kind: 'when',
-        expression: 'companion.escalated',
-      },
-      next: 'fix',
-    });
+    expect(implement?.rules).toHaveLength(1);
+    expect(implement?.rules?.[0]?.next).toBe('COMPLETE');
   });
 
   it('should preserve scalar facet params while expanding callable steps', () => {
@@ -341,19 +333,15 @@ describe('workflow_call schema', () => {
     'when(companion.escalated)',
     'when(companion.escalated == true)',
     'when(true == companion.escalated)',
-  ])('should omit a recognized empty-companion escalation rule: %s', (condition) => {
+  ])('should reject an unquoted empty-companion state rule: %s', (condition) => {
     const workflow = createCallableCompanionWorkflow();
     (workflow.steps as Array<Record<string, unknown>>)[0]!.rules = [
       { condition, next: 'fix' },
       { condition: 'done', next: 'COMPLETE' },
     ];
 
-    const normalized = normalizeWorkflowConfig(workflow, '/tmp');
-    const implement = normalized.steps.find((step) => step.name === 'implement');
-
-    expect(implement?.companion).toBeUndefined();
-    expect(implement?.rules).toHaveLength(1);
-    expect(implement?.rules?.[0]?.next).toBe('COMPLETE');
+    expect(() => normalizeWorkflowConfig(workflow, '/tmp'))
+      .toThrow('unquoted companion state reference');
   });
 
   it('should retain an unrelated first when rule instead of removing it', () => {
@@ -393,9 +381,8 @@ describe('workflow_call schema', () => {
   it('should reject a later companion state rule when an empty companion is expanded', () => {
     const workflow = createCallableCompanionWorkflow();
     (workflow.steps as Array<Record<string, unknown>>)[0]!.rules = [
-      { condition: 'when(companion.escalated)', next: 'fix' },
-      { condition: 'when(companion.openMustFixCount == 0)', next: 'fix' },
       { condition: 'done', next: 'COMPLETE' },
+      { condition: 'when(companion.openMustFixCount == 0)', next: 'fix' },
     ];
 
     let error: unknown;
@@ -415,9 +402,8 @@ describe('workflow_call schema', () => {
   it('should reject a companion state in a semantic-and-when rule when empty', () => {
     const workflow = createCallableCompanionWorkflow();
     (workflow.steps as Array<Record<string, unknown>>)[0]!.rules = [
-      { condition: 'when(companion.escalated)', next: 'fix' },
-      { condition: 'complete && when(companion.openMustFixCount == 0)', next: 'fix' },
       { condition: 'done', next: 'COMPLETE' },
+      { condition: 'complete && when(companion.openMustFixCount == 0)', next: 'fix' },
     ];
 
     let error: unknown;
@@ -469,7 +455,7 @@ describe('workflow_call schema', () => {
   it('should not reject a quoted companion string in a remaining when rule', () => {
     const workflow = createCallableCompanionWorkflow();
     (workflow.steps as Array<Record<string, unknown>>)[0]!.rules = [
-      { condition: 'when(companion.escalated)', next: 'fix' },
+      { condition: 'when(true)', next: 'fix' },
       { condition: 'when(context.status == "companion.openMustFixCount")', next: 'fix' },
       { condition: 'done', next: 'COMPLETE' },
     ];
@@ -478,8 +464,8 @@ describe('workflow_call schema', () => {
     const implement = normalized.steps.find((step) => step.name === 'implement');
 
     expect(implement?.companion).toBeUndefined();
-    expect(implement?.rules).toHaveLength(2);
-    expect(implement?.rules?.[0]?.condition).toMatchObject({
+    expect(implement?.rules).toHaveLength(3);
+    expect(implement?.rules?.[1]?.condition).toMatchObject({
       kind: 'when',
       expression: 'context.status == "companion.openMustFixCount"',
     });

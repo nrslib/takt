@@ -1017,6 +1017,41 @@ describe('validateWorkflowConfig', () => {
       .toThrow('Finding Contract reviewer "plan" requires exactly one Finding Contract report');
   });
 
+  it('rejects a Finding Contract reviewer that declares a companion', () => {
+    const workflow = createWorkflow({
+      findingContract: {
+        manager: {
+          persona: 'findings-manager',
+          instruction: 'findings-manager',
+          outputContract: 'findings-manager',
+        },
+      },
+      steps: [createPlanAgent({
+        companion: { fixed: ['ai-antipattern-review-companion'], pool: [] },
+        outputContracts: [{
+          name: 'review.md',
+          format: 'review',
+          formatRef: 'review-finding-contract',
+        }],
+      })],
+    });
+
+    let failure: unknown;
+    try {
+      validateWorkflowConfig(workflow, { projectCwd: process.cwd() });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeDefined();
+    expect(failure).toMatchObject({
+      message: expect.stringContaining(
+        'Finding Contract reviewer "plan" cannot declare companion',
+      ),
+    });
+    expect(getWorkflowConfigErrorPath(failure)).toEqual(['steps', 0, 'companion']);
+  });
+
   it('rejects duplicate Finding Contract report names under the same parallel parent', () => {
     const reviewer = (name: string) => createPlanAgent({
       name,

@@ -9,7 +9,6 @@ steps:
     call: experimental-core
     args:
       implementation_pool: coding-facets
-      implementation_companions: []
       review_workflow: experimental-review
       review_policy_additions: []
       review_knowledge_additions: []

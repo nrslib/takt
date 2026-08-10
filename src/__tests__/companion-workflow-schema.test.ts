@@ -2,11 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { WorkflowStepRawSchema } from '../core/models/index.js';
 import { validateWorkflowConfig } from '../core/workflow/engine/WorkflowValidator.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
-import { getWorkflowConfigErrorPath } from '../core/workflow/workflow-config-error.js';
 
 function validRules() {
   return [
-    { condition: 'when(companion.escalated)', next: 'needs-fix' },
     { condition: 'done', next: 'COMPLETE' },
   ];
 }
@@ -165,54 +163,9 @@ describe('CT-COMP-01 workflow companion schema', () => {
     expect(result.success).toBe(false);
   });
 
-  it('should accept a companion step whose first rule catches companion escalation', () => {
+  it('should accept a companion step without a declarative escalation route', () => {
     expect(() => validateWorkflowConfig(workflowWithCompanion(), {
       projectCwd: process.cwd(),
     })).not.toThrow();
-  });
-
-  it('should accept an explicit true comparison for the companion escalation catch', () => {
-    const workflow = workflowWithCompanion([
-      { condition: 'when(companion.escalated == true)', next: 'needs-fix' },
-      { condition: 'done', next: 'COMPLETE' },
-    ]);
-
-    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() })).not.toThrow();
-  });
-
-  it('should reject a conditional expression that does not guarantee the escalation catch', () => {
-    const workflow = workflowWithCompanion([
-      { condition: 'when(companion.escalated && companion.openMustFixCount > 0)', next: 'needs-fix' },
-      { condition: 'done', next: 'COMPLETE' },
-    ]);
-    let failure: unknown;
-
-    try {
-      validateWorkflowConfig(workflow, { projectCwd: process.cwd() });
-    } catch (error) {
-      failure = error;
-    }
-
-    expect(failure).toBeDefined();
-    expect(getWorkflowConfigErrorPath(failure)).toEqual(['steps', 0, 'rules', 0, 'condition']);
-  });
-
-  it('should reject a companion step without an escalation catch rule', () => {
-    const workflow = workflowWithCompanion([
-      { condition: 'done', next: 'COMPLETE' },
-    ]);
-
-    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() }))
-      .toThrow(/companion\.escalated/);
-  });
-
-  it('should reject a later escalation rule because an earlier semantic rule can route first', () => {
-    const workflow = workflowWithCompanion([
-      { condition: 'done', next: 'COMPLETE' },
-      { condition: 'when(companion.escalated)', next: 'needs-fix' },
-    ]);
-
-    expect(() => validateWorkflowConfig(workflow, { projectCwd: process.cwd() }))
-      .toThrow(/first rule|先頭/u);
   });
 });

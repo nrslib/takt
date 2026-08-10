@@ -52,7 +52,6 @@ import { withWorkflowConfigErrorPath } from '../workflow-config-error.js';
 import { findWorkflowStepLocation } from '../workflow-step-location.js';
 import { getProviderValidationErrorSource, withProviderValidationErrorSource } from '../provider-validation-error.js';
 import { validateDynamicParallelContracts } from '../dynamic-parallel/validator.js';
-import { guaranteesCompanionEscalationCatch } from '../companion/escalation-rule.js';
 
 type ResolvedProviderInfo = ReturnType<typeof resolveStepProviderModel>;
 export type FindingContractSyntheticProviderValidationOptions = Pick<
@@ -550,6 +549,57 @@ function validateFindingContractReviewerReports(
   }
 }
 
+/**
+ * Finding Contract reviewers resume from persisted markdown publications and
+ * therefore do not execute an implementer session on that path. A companion
+ * cannot establish or re-verify its same-session completion state there, so
+ * the two responsibilities must not be combined on one reviewer step.
+ */
+function validateFindingContractCompanionCompatibility(
+  config: WorkflowConfig,
+  findingContractEnabled: boolean,
+): void {
+  if (!findingContractEnabled) return;
+
+  const visit = (
+    step: WorkflowStep,
+    fallbackPath: readonly PropertyKey[],
+  ): void => {
+    if (
+      isNormalAgentWorkflowStep(step)
+      && step.companion !== undefined
+      && hasFindingContractFormat(step)
+    ) {
+      throw withConfigStepErrorPath(
+        config,
+        step,
+        fallbackPath,
+        ['companion'],
+        new Error(
+          `Configuration error: Finding Contract reviewer "${step.name}" cannot declare companion; `
+          + 'publication resume and same-session Companion completion are incompatible',
+        ),
+      );
+    }
+
+    const parallelEntries = step.parallel === undefined
+      ? []
+      : isDynamicParallelSubSteps(step.parallel)
+        ? [
+            ...step.parallel.fixed.map((subStep, index) => ({ subStep, path: ['fixed', index] as const })),
+            ...step.parallel.pool.map((subStep, index) => ({ subStep, path: ['pool', index] as const })),
+          ]
+        : step.parallel.map((subStep, index) => ({ subStep, path: [index] as const }));
+    for (const { subStep, path } of parallelEntries) {
+      visit(subStep, [...fallbackPath, 'parallel', ...path]);
+    }
+  };
+
+  for (const [index, step] of config.steps.entries()) {
+    visit(step, ['steps', index]);
+  }
+}
+
 function delegatedExecutionFieldPath(step: WorkflowStep): readonly PropertyKey[] {
   if (step.teamLeader !== undefined) {
     return ['team_leader'];
@@ -739,19 +789,6 @@ function validateWorkflowStepNamesUnique(config: WorkflowConfig): void {
   );
 }
 
-function validateCompanionEscalationRule(step: WorkflowStep): void {
-  if (!isNormalAgentWorkflowStep(step) || step.companion === undefined) return;
-  const firstRule = step.rules?.[0];
-  if (
-    firstRule?.condition.kind !== 'when'
-    || !guaranteesCompanionEscalationCatch(firstRule.condition.expression)
-  ) {
-    throw new Error(
-      `Configuration error: companion step "${step.name}" first rule must catch when(companion.escalated)`,
-    );
-  }
-}
-
 function findWorkflowCallStep(
   steps: readonly WorkflowStep[],
   parentPath: readonly PropertyKey[] = ['steps'],
@@ -792,6 +829,7 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
   validateRequiredInheritedFindingContract(config, options);
   validateFindingContractOutputFormatRequiresContract(config, findingContractEnabled);
   validateFindingContractReviewerReports(config, findingContractEnabled);
+  validateFindingContractCompanionCompatibility(config, findingContractEnabled);
   validateFindingContractDelegatedIntake(config, findingContractEnabled);
   validateFindingContractTeamLeaderMode(config, findingContractEnabled);
 
@@ -821,11 +859,6 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
   for (const [stepIndex, step] of config.steps.entries()) {
     try {
       const stepPath = findWorkflowStepLocation(config, step) ?? ['steps', stepIndex];
-      try {
-        validateCompanionEscalationRule(step);
-      } catch (error) {
-        throw withWorkflowStepErrorPath(error, [...stepPath, 'rules', 0, 'condition']);
-      }
       try {
         validateSessionEntrypoint(step, `Configuration error: step "${step.name}"`);
       } catch (error) {

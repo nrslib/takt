@@ -129,6 +129,7 @@ import { buildCompanionMailboxDirectory } from '../companion/mailbox.js';
 import { runCompanionFixLoop } from '../companion/fix-loop.js';
 import { CompanionStepRuntime } from '../companion/step-runtime.js';
 import { buildCompanionEscalationSummary } from '../companion/evidence.js';
+import { guardCompanionCompletion } from '../companion/completion-gate.js';
 import {
   CompanionReviewStateStore,
   type CompanionReviewAuthority,
@@ -2219,6 +2220,11 @@ export class StepExecutor {
       return nextResponse;
     }
 
+    nextResponse = guardCompanionCompletion(step, state, nextResponse);
+    if (nextResponse.status === 'blocked') {
+      return nextResponse;
+    }
+
     const recordPhaseProviderAttempt = onProviderAttempt
       ?? ((providerInfo, success, usage) => {
         this.deps.recordSynthesizedAgentUsage(
@@ -2285,6 +2291,10 @@ export class StepExecutor {
     response: AgentResponse,
     phaseContext: () => StatusJudgmentPhaseContext,
   ): Promise<AgentResponse> {
+    const companionCompletion = guardCompanionCompletion(step, state, response);
+    if (companionCompletion.status === 'blocked') {
+      return companionCompletion;
+    }
     if (response.structuredOutput) {
       state.structuredOutputs.set(step.name, response.structuredOutput);
     }

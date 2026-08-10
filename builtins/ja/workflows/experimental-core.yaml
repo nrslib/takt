@@ -7,9 +7,6 @@ subworkflow:
     implementation_pool:
       type: facet_pool_ref
       default: coding-facets
-    implementation_companions:
-      type: companion_ref[]
-      default: []
     review_workflow:
       type: workflow_ref
       default: experimental-review
@@ -163,11 +160,8 @@ steps:
     dynamic_facets:
       pool:
         $param: implementation_pool
-    companion:
-      $param: implementation_companions
+    companion: [ai-antipattern-review-companion]
     rules:
-      - condition: when(companion.escalated)
-        next: review
       - condition: 実装が完了した
         next: review
       - condition: 実装未着手（レポートのみ）
@@ -230,6 +224,7 @@ steps:
     dynamic_facets:
       pool:
         $param: implementation_pool
+    companion: [ai-antipattern-review-companion]
     rules:
       - condition: 修正完了
         next: follow-up-review

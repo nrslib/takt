@@ -19,7 +19,6 @@ import { assertNoParamReferences, validateReturnRules } from './workflowCallable
 import { withWorkflowConfigErrorPath as withWorkflowStepErrorPath } from '../../../core/workflow/workflow-config-error.js';
 import { hasOwnFacetPool } from './workflowFacetPoolLookup.js';
 import { hasCompanionReference } from '../../../core/models/workflow-rule-condition.js';
-import { guaranteesCompanionEscalationRawCondition } from '../../../core/workflow/companion/escalation-rule.js';
 
 type RawWorkflowConfig = z.output<typeof WorkflowConfigRawSchema>;
 type RawWorkflowStep = RawWorkflowConfig['steps'][number];
@@ -505,14 +504,6 @@ function expandStepFields(
     );
     if (companions.length === 0) {
       delete expandedStep.companion;
-      const rules = expandedStep.rules;
-      const removedEscalationRule = (
-        rules?.[0]?.condition !== undefined
-        && guaranteesCompanionEscalationRawCondition(rules[0].condition)
-      );
-      if (removedEscalationRule && rules !== undefined) {
-        expandedStep.rules = rules.slice(1);
-      }
       for (const [ruleIndex, rule] of (expandedStep.rules ?? []).entries()) {
         if (!hasCompanionReference(parseWorkflowRuleCondition(rule.condition))) continue;
         throw withWorkflowStepErrorPath(
@@ -520,7 +511,7 @@ function expandStepFields(
             `Step "${step.name}" cannot retain an unquoted companion state reference `
             + `when companion parameter "${step.companion.$param}" resolves to an empty list`,
           ),
-          [...stepPath, 'rules', ruleIndex + (removedEscalationRule ? 1 : 0), 'condition'],
+          [...stepPath, 'rules', ruleIndex, 'condition'],
         );
       }
     } else {

@@ -269,13 +269,19 @@ steps:
         provider: 'mock',
         selectorProvider: SELECTOR_PROVIDER,
         selectorGitCommandRunner: SELECTOR_GIT_COMMAND_RUNNER,
+        companionProviders: {
+          'ai-antipattern-review-companion': { provider: 'mock' },
+        },
+        companionDiffReader: COMPANION_DIFF_READER,
         structuredCaller: new DefaultStructuredCaller(),
         workflowCallResolver: ({ parentWorkflow, step, projectCwd, lookupCwd }) =>
           resolveWorkflowCallTarget(parentWorkflow, step, projectCwd, lookupCwd),
       });
       engines.push(engine);
       const abortReasons: string[] = [];
+      const companionSteps: string[] = [];
       engine.on('workflow:abort', (_state, reason) => abortReasons.push(reason));
+      engine.on('companion:start', ({ step }) => companionSteps.push(step));
 
       const state = await engine.run();
 
@@ -286,6 +292,7 @@ steps:
         remainingScenarios: getScenarioQueue()?.remaining,
       })).toBe('completed');
       expect(getScenarioQueue()?.remaining).toBe(0);
+      expect(companionSteps).toEqual(['implement', 'fix']);
     },
     60_000,
   );
@@ -327,7 +334,9 @@ steps:
       });
       engines.push(engine);
       const abortReasons: string[] = [];
+      const companionSteps: string[] = [];
       engine.on('workflow:abort', (_state, reason) => abortReasons.push(reason));
+      engine.on('companion:start', ({ step }) => companionSteps.push(step));
 
       const state = await engine.run();
 
@@ -338,6 +347,7 @@ steps:
         remainingScenarios: getScenarioQueue()?.remaining,
       })).toBe('completed');
       expect(getScenarioQueue()?.remaining).toBe(0);
+      expect(companionSteps).toEqual(['implement']);
     },
   );
 
@@ -370,6 +380,10 @@ steps:
         provider: 'mock',
         selectorProvider: SELECTOR_PROVIDER,
         selectorGitCommandRunner: SELECTOR_GIT_COMMAND_RUNNER,
+        companionProviders: {
+          'ai-antipattern-review-companion': { provider: 'mock' },
+        },
+        companionDiffReader: COMPANION_DIFF_READER,
         structuredCaller: new DefaultStructuredCaller(),
         workflowCallResolver: ({ parentWorkflow, step, projectCwd, lookupCwd }) =>
           resolveWorkflowCallTarget(parentWorkflow, step, projectCwd, lookupCwd),
