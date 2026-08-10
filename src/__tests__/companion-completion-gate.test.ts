@@ -3,7 +3,7 @@ import type { AgentResponse, WorkflowState } from '../core/models/index.js';
 import { guardCompanionCompletion } from '../core/workflow/companion/completion-gate.js';
 import { StepExecutor, type StepExecutorDeps } from '../core/workflow/engine/StepExecutor.js';
 import { createStructuredOutputNormalizerRegistry } from '../core/workflow/engine/structured-output-normalizer.js';
-import { makeStep } from './test-helpers.js';
+import { makeRule, makeStep } from './test-helpers.js';
 
 function response(): AgentResponse {
   return {
@@ -49,23 +49,25 @@ function companionStep() {
     name: 'implement',
     persona: 'coder',
     companion: { fixed: ['ai-antipattern-review-companion'], pool: [] },
-    rules: [{ condition: 'Implementation is complete', next: 'COMPLETE' }],
+    rules: [makeRule('Implementation is complete', 'COMPLETE')],
   });
 }
 
 describe('companion completion gate', () => {
-  it('should stop an escalated companion step before condition evaluation', async () => {
+  it('should send a verified escalation to ordinary condition evaluation', async () => {
     const step = companionStep();
     const workflowState = state({
       escalated: true,
+      completionVerified: true,
       openMustFixCount: 0,
       openMustFix: [],
-      reason: 'completion review could not verify the final diff',
+      reason: 'the same must-fix finding made no progress across fix rounds',
     });
     const buildPhaseRunnerContext = vi.fn();
     const executor = new StepExecutor({
       structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),
       optionsBuilder: { buildPhaseRunnerContext } as unknown as StepExecutorDeps['optionsBuilder'],
+      getInteractive: () => false,
     } as unknown as StepExecutorDeps);
 
     const result = await executor.applyPostExecutionPhases(
@@ -76,9 +78,9 @@ describe('companion completion gate', () => {
       vi.fn(),
     );
 
-    expect(result.status).toBe('blocked');
+    expect(result.status).toBe('done');
     expect(result.content).toBe('implementation');
-    expect(buildPhaseRunnerContext).not.toHaveBeenCalled();
+    expect(result.matchedRuleIndex).toBe(0);
   });
 
   it('should fail closed when a resumed companion step has no completion state', async () => {
@@ -106,6 +108,7 @@ describe('companion completion gate', () => {
       step,
       state({
         escalated: false,
+        completionVerified: true,
         openMustFixCount: 1,
         openMustFix,
       }),
@@ -121,6 +124,7 @@ describe('companion completion gate', () => {
       companionStep(),
       state({
         escalated: false,
+        completionVerified: true,
         openMustFixCount: 0,
         openMustFix: [],
       }),
@@ -128,5 +132,21 @@ describe('companion completion gate', () => {
     );
 
     expect(result).toBe(original);
+  });
+
+  it('should fail closed when completion review could not be verified', () => {
+    const result = guardCompanionCompletion(
+      companionStep(),
+      state({
+        escalated: true,
+        completionVerified: false,
+        openMustFixCount: 0,
+        openMustFix: [],
+        reason: 'completion review could not verify the final diff',
+      }),
+      response(),
+    );
+
+    expect(result.status).toBe('blocked');
   });
 });

@@ -471,9 +471,10 @@ describe('companion runtime lifecycle', () => {
 
       expect(result).toMatchObject({
         escalated: true,
+        completionVerified: true,
         reason: expect.stringContaining('cumulative capacity'),
       });
-      expect(state.companion).toMatchObject({ escalated: true });
+      expect(state.companion).toMatchObject({ escalated: true, completionVerified: true });
       expect(callSpy).not.toHaveBeenCalled();
     } finally {
       runtime?.stop();
@@ -528,6 +529,7 @@ describe('companion runtime lifecycle', () => {
 
       expect(result).toMatchObject({
         escalated: true,
+        completionVerified: true,
         openMustFix: [{
           id: 'security-reviewer-1', severity: 'must_fix', file: 'src/a.ts', line: 1,
           finding: 'confirmed-1',
@@ -536,6 +538,7 @@ describe('companion runtime lifecycle', () => {
       });
       expect(state.companion).toMatchObject({
         escalated: true,
+        completionVerified: true,
         openMustFixCount: 1,
         openMustFix: [{
           id: 'security-reviewer-1', severity: 'must_fix', file: 'src/a.ts', line: 1,

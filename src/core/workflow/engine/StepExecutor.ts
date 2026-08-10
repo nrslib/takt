@@ -2604,6 +2604,7 @@ export class StepExecutor {
       }
       state.companion = {
         escalated: false,
+        completionVerified: false,
         openMustFixCount: 0,
         openMustFix: [],
       };

@@ -9,6 +9,7 @@ import type { CompanionTerminalDecisionTracker } from './terminal-decision.js';
 export interface CompanionCompletionResult {
   readonly openMustFix: CompanionFindingEvidence[];
   readonly escalated: boolean;
+  readonly completionVerified: boolean;
   readonly reason?: string;
 }
 
@@ -34,6 +35,7 @@ export class CompanionCompletionCoordinator {
       detector.getCompletionCandidate(),
     ]));
     let reviewedSnapshot: CompanionDiff | undefined;
+    let completionVerified = false;
     try {
       const snapshot = await this.input.readSnapshot();
       await this.completeQueues(snapshot, candidates);
@@ -49,6 +51,7 @@ export class CompanionCompletionCoordinator {
     if (reviewedSnapshot !== undefined) {
       try {
         await this.input.recordCompletionRound(reviewedSnapshot);
+        completionVerified = true;
       } catch (error) {
         if (isAbortError(error) || this.input.abortSignal?.aborted) throw error;
         this.preserveCompletionFailure();
@@ -57,6 +60,7 @@ export class CompanionCompletionCoordinator {
     const decision = this.input.decision.get();
     state.companion = {
       escalated: decision.decision === 'escalate',
+      completionVerified,
       openMustFixCount: openMustFix.length,
       openMustFix,
       ...(decision.reason === undefined ? {} : { reason: decision.reason }),
@@ -67,6 +71,7 @@ export class CompanionCompletionCoordinator {
     return {
       openMustFix,
       escalated: decision.decision === 'escalate',
+      completionVerified,
       ...(decision.reason === undefined ? {} : { reason: decision.reason }),
     };
   }

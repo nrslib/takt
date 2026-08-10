@@ -3,7 +3,9 @@ import { isNormalAgentWorkflowStep } from '../../models/types.js';
 
 /**
  * Prevents a companion step from entering post-execution condition evaluation
- * while its completion review is unresolved or could not be verified.
+ * while its completion review is unresolved or could not be verified. A
+ * verified loop escalation is evidence for the step's ordinary condition
+ * judgment, not a request for user intervention.
  */
 export function guardCompanionCompletion(
   step: WorkflowStep,
@@ -25,7 +27,13 @@ export function guardCompanionCompletion(
       status: 'blocked',
     };
   }
-  if (!companion.escalated && companion.openMustFixCount === 0) {
+  if (companion.completionVerified !== true) {
+    return {
+      ...response,
+      status: 'blocked',
+    };
+  }
+  if (companion.escalated || companion.openMustFixCount === 0) {
     return response;
   }
 

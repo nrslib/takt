@@ -40,6 +40,7 @@ export type CompanionFindingEvidence = Pick<
 
 export interface CompanionWorkflowState {
   escalated: boolean;
+  completionVerified: boolean;
   openMustFixCount: number;
   openMustFix: CompanionFindingEvidence[];
   reason?: string;
